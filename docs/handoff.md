@@ -41,8 +41,8 @@ changes and earlier unverified component checks.
 
 ## Board state and recovery
 
-This page describes the merged startup, host-tool and application interfaces
-and recorded board results from 2026-10-31. Evidence paths are relative to
+This page describes the combined application kit and recorded board results
+from 2026-10-31. Evidence paths are relative to
 `~/.cache/sunstoneos/evidence/`. Saved USB identities do not establish live
 access. Only the coordinator checks identity, permissions, locks and failure
 records under [AGENTS.md](../AGENTS.md#hardware-access). Preserve both microSD
@@ -85,12 +85,11 @@ cards. Neither board has populated eMMC or UFS; keep the failed UFS probe disabl
   under `~/.cache/sunstoneos/board-queue/entries/`; the two preceding
   diagnostic entries identify the setter and raw PLL word. Three-start
   repeatability, thermal coverage and full CPU qualification remain open.
-- **GPU firmware diagnostic — failed.** Image `2-firmware` from `ladder-wdt3`
-  stopped in the compatibility callback at
-  `platform/a733/gpu_backend.c:375` in its frozen build. Evidence:
-  `dev-runs-1031/3-1-gpu-return-204909/run/watchdog-report.json`.
-  That image uses the unmerged GPU-reference branch. The cause remains under
-  investigation; the record does not prove a firmware ABI mismatch.
+- **GPU firmware diagnostic — native return verified on the earlier image.**
+  The reference startup fixes at `fed5813f` started and stopped firmware with
+  zero jobs and the reference transcript on 3-1. Evidence:
+  `dev-runs-1031/3-1-gpu-return-210941/`. The native return reached `RETURN_ROM`
+  with watchdog mode 0. The later combined image stops in CPU clock close.
 - **Earlier 3-3 host cleanup — failed.** A host-side missing
   `bundle/return-review.json` error followed a normal native return with
   `RETURN_ROM` and mode 0. Evidence:
@@ -150,7 +149,7 @@ The component documents identify source files and narrower evidence boundaries.
 | Crypto, entropy and identity | **Implemented:** native crypto modes, MD5/SM3 and CPU-staging erasure; host checks pass. Prior CE exclusion, secure access, IRQ/drain, raw entropy and physical qualification remain open. The existing crypto image parks and is ineligible for returning runs. | [Security inventory and evidence](security-engines.md), [entropy](entropy.md), [identity](board-application.md) |
 | Always-on management processor | **Implemented:** remote-writer ownership accounting; native management-core control and sleep/wake qualification remain open. | [Remote writers](remote-writers.md), [SCP reference](vendor-firmware/scp-firmware.md) |
 | Autonomous microSD OS boot | **Host-verified only:** packaging, cold-entry and slot/update checks; no physical installation or autonomous OS boot is established. | [Cold entry](cold-entry.md), [resident OS design](designs/autonomous-card-os.md) |
-| Generic GPU compute queue | **Not started in the merged tree:** design and prototype headers only. The implementation remains on an unmerged branch. | [Queue design](designs/gpu-compute-queue.md), [layering audit](layering-audit.md) |
+| Generic GPU compute queue | **Host-verified only:** one shared context, one program, four leases, two caller slots, interrupt completion, retained reopen and bounded reset recovery. Physical queue execution and recovery remain unverified. | [Queue design](designs/gpu-compute-queue.md), [layering audit](layering-audit.md) |
 
 Earlier board results in this table retain their exact input scope. CPU, GPU
 and NPU evidence is indexed in [the preserved board results](handoff-history-20261031.md#qualified-on-the-boards)
@@ -266,7 +265,7 @@ Physical device operation, DMA visibility and VBUS behavior remain unqualified.
 
 Mimus lives in its own repository under `sunstoneos/`.
 [apps/mimus/source.json](../apps/mimus/source.json) pins
-`port/sunstoneos-split` at `c0872ac1`. The application owns recognition,
+the integration branch `port/sunstoneos-gpu-integrate`. The application owns recognition,
 models, manifests, capture wrappers and recognition checks. The merged
 reference cleanup supplies explicit OS admission inputs and the shared USB
 emulator; OS-only and hello-compute builds require no mimus sources.
@@ -309,8 +308,18 @@ port. The [source record](../apps/mimus/source.json) pins the example above.
 SunstoneOS owns device services and the [application kit](designs/app-abi.md);
 the external application owns recognition, models, manifests and capture tools.
 [The image guide](os-image.md) describes output layout and optional profiles.
-The compatibility GPU path requires `SUNSTONE_A733_OS_GPU_LINEAR=ON` and
-`SUNSTONE_A733_OS_LEGACY_MIMUS_GPU=ON`; it has the unresolved gaps below.
+`SUNSTONE_A733_OS_GPU=ON` selects the generic compute queue. Applications own
+their programs and tensor placement; `apps/queue-add` supplies an independent
+vector-add consumer. Data pages stop at 256 KiB. The GPU map is built once,
+and completion uses interrupts with the retained 4 ms backup poll.
+The optional second GPU application has its own admitted manifest, task and
+completion queue, with explicit consent to the same program and memory map.
+The primary owns device lifecycle. Host checks cover ten open/close cycles,
+reset recovery preserving a queued peer, native reset access policy and final
+quiescence for returning and resident completion. The frozen mimus recognition
+proposal keeps exhaustive GPU sum checks enabled. These software checks
+establish no new physical GPU qualification.
+
 
 ## Coordinator launch and capture
 
@@ -357,8 +366,11 @@ initialized and the next launch normalizes rails. `--no-normalize-rails` and
 
 The corrected hello-compute control returned normally in the recorded 3-1
 run above. Repeated startup and broader reliability remain unqualified.
-Current `gpu-return` is refused because the existing ladder uses the pre-split application layout;
-its runner is `tools/dev-run.py` at `6a714bcf`. NPU development supports startup,
+The runner accepts generic GPU images with image-bound GPU and thermal receipt
+capture and strict binary result decoding. Current frozen proposals and exact
+commands are in `~/.cache/sunstoneos/build/gpu-integrate-1031/images-lifecycle/`.
+They contain the known CPU clock close defect and require rebuild and refreeze
+with the separate correction before qualification. NPU development supports startup,
 single inference, runtime, local restart, model switching, SDK access and
 domain OFF/restart through its native session template and exact image marker.
 `--check-only` reads the board unless `--state FILE`
@@ -402,13 +414,12 @@ reuse.
 
 ## Open problems and files
 
-- **CPU reliability:** the first reliability launch failed with the CPU clock
-  driver in RETAINED at `return-cpu.c:159`. Another worker owns the defect;
-  repeated startup, sustained work and full restoration remain unqualified.
-- **GPU service:** the latest compatibility stop belongs to the frozen
-  unmerged diagnostic. The merged service still has the health-binding,
-  vendor-setup, MMUCACHE, page-size and SLC gaps in
-  [the reference comparison](reference-backsolve-gpu.md).
+- **CPU reliability:** repeated startup, sustained work, thermal coverage and
+  full restoration remain unqualified beyond the recorded corrected run.
+- **GPU queue qualification:** startup uses the executed-command health count,
+  vendor secure writes, initial timer correlation and MMU-cache completion before
+  READY. Shared mutable mappings bypass the GPU system cache. Physical queue
+  jobs, complete application GPU recognition and recovery remain unverified.
 - **NPU and hardware qualification:** repeated NPU start/stop, SDK access and domain OFF/restart,
   sustained CPU load, thermal protection, accelerator concurrency, autonomous
   card boot and accessories remain outstanding in [the hardware matrix](hardware.md).
@@ -420,9 +431,10 @@ reuse.
 
 ## Open branches
 
-- `work/board-runner-1031`: returning-image and runner changes; unmerged.
-- `work/gpu-integrate-1031`: GPU integration; unmerged.
-- `work/gpu-ref-fixes-1031`: align the GPU service with the reference sequence; diagnosis and fixes in progress, unmerged.
+- `work/gpu-integrate-1031`: combines the reference startup fixes and generic
+  compute queue on the current application kit, including two trusted callers,
+  retained restart, reset recovery and final quiescence. Host checks and three
+  lifecycle reviews pass; physical qualification waits for CPU clock close.
 - `work/gpu-queue-1031`, with mimus `port/sunstoneos-gpu-queue`: supply a generic GPU compute queue and application port; unmerged.
 
 ## Review and validation

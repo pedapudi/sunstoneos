@@ -69,6 +69,19 @@ the SDK diagnostic does not qualify full OS EL0 mappings.
 
 ## Current software integration
 
+- The [GPU compute queue](designs/gpu-compute-queue.md) accepts application
+  programs and manifest-region leases with a GPU page cap of 256 KiB. Host
+  checks cover 204 exact-sum jobs, interrupts, deadlines, thermal reopen,
+  retained failures and returning-image proofs. Two admitted applications have
+  independent slots and sequences in one trusted shared context. Host checks
+  cover ten powered open/close cycles, reset/readback/OFF recovery with queued
+  peer preservation, and bounded quiescence before return or resident completion.
+    The mimus shader passes the host exact-sum and readout parity checks, with
+  exhaustive sum qualification enabled. Frozen proposals are under `gpu-integrate-1031/images-lifecycle/` in the
+  build cache; rebuild them with the separate CPU clock fix before physical
+  qualification. Physical queue execution, interrupt delivery, recovery and
+  application GPU recognition remain unqualified.
+
 The shared PMIC decoder preserves raw DCDC8/DCDC9 selectors 88–127 without
 publishing a programmed voltage. The pinned references disagree in that range.
 The [source comparison](designs/pmic-reference-reconciliation.md) and finite

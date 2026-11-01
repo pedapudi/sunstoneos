@@ -33,7 +33,7 @@ set(acc_gpu_sources
   drivers/gpu/pvr_render_programs.c drivers/gpu/pvr_render_draw.c
   drivers/gpu/pvr_render_texture.c drivers/gpu/pvr_render_context.c
   drivers/gpu/pvr_render_job.c drivers/gpu/pvr_render_service.c
-  drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_firmware.c drivers/gpu/pvr_mips.c
+  drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_gpu_flush.c drivers/gpu/pvr_firmware.c drivers/gpu/pvr_mips.c
   drivers/gpu/pvr_fw_state.c drivers/gpu/pvr_ccb.c drivers/gpu/pvr_gpu_start.c
   drivers/gpu/pvr_gpu_control.c drivers/gpu/pvr_gpu_stop.c
   drivers/gpu/pvr_free_list.c drivers/gpu/pvr_gpu_events.c

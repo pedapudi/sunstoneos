@@ -1,16 +1,190 @@
 # GPU compute queue
 
-Status: **design; not implemented.** Revised after its first review.
-Prototype headers:
-[`include/gpu_queue.h`](../../include/gpu_queue.h) (application interface),
-[`include/pvr_compute_queue.h`](../../include/pvr_compute_queue.h) (the
-worker's calls into the queue) and
-[`apps/mimus/gpu_linear_job.h`](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/gpu_linear_job.h) (the
-context and job that mimus passes). They compile with
-`clang -std=c11 -Wall -Wextra -Wpedantic` for the host and for
-`aarch64-none-elf`; nothing calls them. Links to `app-abi.md` refer to the
-application-interface design on branch `work/app-abi-1031`, commit
-`23c40c9e`, whose commit numbers this document cites.
+Status: **implemented and host-tested; physical queue qualification pending.**
+
+The application interface is [`include/gpu_queue.h`](../../include/gpu_queue.h).
+The service worker uses
+[`include/pvr_compute_queue.h`](../../include/pvr_compute_queue.h), and the A733
+constructor uses [`platform/a733/gpu_queue.c`](../../platform/a733/gpu_queue.c).
+`SUNSTONE_A733_OS_GPU` selects the service. The external mimus application and
+[`apps/queue-add`](../../apps/queue-add/README.md) use the same application kit.
+The reviewed migration comparisons below describe the separation base
+`cc8a7957`; their legacy paths identify that historical tree.
+
+## Retained close, shared clients and fault recovery
+
+One GPU context retains one program, up to four leases and one published memory map.
+Two explicitly admitted application tasks may share it. Each has one submission
+slot and one completion queue; only one job executes at a time. The worker
+selects submitted slots in round-robin order. Application sequence numbers are
+independent. A separate increasing firmware serial prevents equal sequence
+numbers from satisfying the wrong job's timeline.
+
+The primary controls device-wide lifecycle. `gpu_queue_close` seals admission,
+drains its owed record and returns `GPU_QUEUE_BUSY` while the peer still owns work. It
+preserves the peer's queued job. Successful close includes acknowledged firmware
+stop, idle checks and platform OFF. `gpu_queue_open` reconstructs firmware context
+state and repeats startup, health and MMU-cache completion. Program bytes, leases
+and GPU page tables remain retained. Explicit close stays closed until explicit
+open; thermal parking retains its automatic reopen policy.
+
+A READY job timeout or decoded reset event starts automatic recovery when the
+native backend's clock, power ownership and session remain valid. The worker
+masks interrupts and stops kernel traffic. It runs the existing unacknowledged
+stop plan: mandatory Sidekick, BIF and SLC idle polls, full soft reset, exact reset
+readback and platform OFF. Only completed isolation and firmware-memory reclaim
+permit the failed job's FAULT record. The failed job is never replayed.
+
+Recovery reconstructs retained firmware state, increments the service epoch and
+requires fresh health and MMU-cache completion before another kick. The peer's
+submitted job, buffers and original kick deadline survive reconstruction. An
+expired queued deadline produces REFUSED. `gpu_queue_recover` waits for this
+bounded recovery; it does not consume a caller's owed record.
+
+Stop is bounded by 300 ms and READY by one second from first fault detection.
+Both bounds are clipped to the admitted session and returning-image workload
+cutoff. A failed idle check, reset readback, OFF, restart, clock or session check
+leaves the service failed and its backing retained. No fault record returns
+buffer ownership after unproven isolation. Recovery does not force reset through
+an idle failure, so arbitrary stuck hardware still requires external recovery.
+
+Final application completion drains work and seals the context before the CPU
+return or resident task suspension. All caller slots, records, service replies,
+IRQ wakes and recovery work must be quiescent. A successful reversible close
+provides the same GPU quiescence prerequisite for a future system sleep path;
+complete system suspend and wake are not qualified by these GPU checks.
+
+The fixed sharing composition is defined in [the application interface](app-abi.md).
+The second application at [`apps/gpu-queue-peer`](../../apps/gpu-queue-peer/README.md)
+uses independent mutable ranges. Separate application address spaces and GPU
+programs are outside this shared-context implementation.
+
+The vendor power, voltage, operating point and firmware-start sequence remain
+unchanged. The reset path uses `pvr_gpu_stop_init_unacknowledged`, derived from
+the pinned open driver's `pvr_power_reset` and `pvr_fw_stop`. Three design reviews
+cover simplicity, hardware behavior and correctness before implementation.
+Physical restart, recovery and shared-client execution remain unqualified.
+
+## Implementation evidence and departures from the reviewed plan
+
+Current lifecycle evidence is under
+`~/.cache/sunstoneos/build/gpu-integrate-1031/lifecycle/`. It includes fourteen
+new queue cases, ten public open/close cycles, two admitted callers, preserved
+peer jobs through timeout and reset, serial exhaustion and failed-isolation
+retention. The actual native backend passes eleven reset-policy scenarios, and
+the stop sanitizer check covers 123 retained failures. Native quiescence checks
+cover returning and resident images, including late peer admission, unchanged
+close deadlines and the actual recovery-limit producer. The native peer fixture
+executes application admission, real static queue construction and submission
+through the OS readiness hook. Device effects and scheduling remain modeled.
+
+The three baseline builds and recorded QEMU recognition pass. Mimus shader,
+program, readout, placement and qualification-mode checks pass; the compiled
+shader occupies 7,576 bytes and uses 107 temporary registers. The frozen
+recognition image enables exhaustive sum comparison. Three lifecycle reviewers
+approved the implementation. These results establish software behavior only.
+
+
+Review corrections cover zero-job shutdown and cold return, SLC bypass for
+CPU/GPU-shared mappings, rounded lease isolation, program-source bounds and
+application-supplied startup initialization. Program copies are confined to
+the immutable `sunstone_gpu_program` section admitted from application objects.
+The manifest and runtime independently refuse lease tails that intersect
+another region, including an unleased one. The correction evidence is under
+`review-fixes/` in the cache directory below.
+
+Returning images also produce an untouched receipt when GPU construction was
+skipped. This path requires an admitted application, its current task, entirely
+zero GPU state and an unexpired return deadline. It covers applications without
+a GPU grant and applications that never use their grant. The ordinary finish
+and CPU-return paths still require the receipt. Native regression cases run
+both paths in hello-compute and mimus images; evidence is under
+`review-followup/` in the same cache directory.
+
+The original single-caller host queue model passes 38 service cases and an external 204-job replay
+with 5,870,398 checked sums. Native instruction models pass 16 thermal cases,
+10 public-client cases, 18 returning-image cases, and 71 constructor-refusal
+and cold-return cases. Output-permission checks cover two applications.
+The VM check covers four
+admitted page sizes and 36 refusals. It compares tables with the pinned driver.
+The ring trace records 23 aligned stores per job, plus five stores when a
+padding record wraps the ring. No buffer data is copied.
+
+Raw commands, input snapshots, image hashes and results are under
+`~/.cache/sunstoneos/build/gpu-queue-1031/`. The `checks/` subdirectory holds
+queue and native fixtures; `program/` holds compiler and vector checks;
+`mimus-client/` holds application arithmetic and recorded-recognition evidence.
+These models establish software behavior. They do not establish physical GPU
+interrupt delivery, performance or recovery.
+
+- **Page size:** BRN 71317 makes 1 MiB and 2 MiB pages unsafe on this GPU.
+  The queue maps data with 256 KiB pages, and the shared A733 planner refuses
+  larger pages. Lease alignment remains 2 MiB. The mimus map still needs
+  24 table pages because table allocation follows 2 MiB virtual regions.
+- **CPU storage:** the shared-client queue occupies 2,632 bytes on AArch64,
+  including a 360-byte peer slot and completion queue. GPU images also reserve
+  a fixed 16 KiB peer task stack. The original single-client queue occupied
+  2,240 bytes; the prototype estimate omitted retained buffer descriptors,
+  tickets and completion storage. Device allocations remain
+  79 write-back pages and 51 uncached pages for the mimus layout.
+- **Protected return files:** the build keeps the private preprocessor name
+  `SUNSTONE_A733_OS_GPU_LINEAR` for `apps/os/cpu-return.c` and
+  `apps/os/cpu-return/terminal.patch`. Their separate owner must rename those
+  guards. It is not a CMake option. The compatibility option and application
+  GPU session are removed.
+- **Physical migration step:** the coordinator receives the requests below.
+  Board operations were prohibited, so legacy removal follows host evidence.
+  Physical qualification remains open; independent integration review passes.
+- **Build selection:** the generic option lands with runtime ownership in
+  migration commit 3, so independent applications can select the service.
+  Migration commit 7 removes the legacy sources and worker configuration.
+- **Host followup scope:** the OS check validates native retirement captures
+  and the generic decoder. Compound transport, backup and restoration checks
+  belong to the external application launcher.
+
+## Coordinator board requests
+
+Three frozen qualification packages live under
+`~/.cache/sunstoneos/build/gpu-integrate-1031/images-lifecycle/`. Each README gives
+its ELF SHA-256, session template, exact bringup-runner command, inputs, expected
+result, breadcrumbs and failure signatures:
+
+1. `cycle10`: ten powered open/job/close cycles, with one independently verified
+   peer job. The final GPU receipt counts eleven successful jobs.
+2. `timeout-recovery`: withhold the first owner's completion until its ordinary
+   200 ms deadline. The test requires the peer slot to be submitted when recovery
+   starts. Reset and resume preserve that job, and the owner verifies a fresh
+   second job. The final receipt counts two successful jobs and excludes the
+   isolated failed job.
+3. `recognition`: full mimus recognition with exhaustive sum qualification ON,
+   using the merged application shader and placement. Inputs and exact transcript
+   expectations are pinned in its README.
+
+The frozen images retain the CPU clock failure while lowering CPU-B to 1014 MHz
+during return.
+The CPU-only reliability image reproduces it. The separate CPU clock worker owns
+that correction; no CPU clock driver change belongs to this GPU integration.
+Rebuild and refreeze these packages with that fix before attempting successful
+return qualification. Landing a source correction does not change frozen bytes.
+The coordinator runs the requested images; no board was accessed for these host
+checks. Stop after the first transport, watchdog or functional failure.
+
+The runner uses the bringup worktree's `tools/dev-run.py`, after the coordinator
+integrates this branch. It captures the image-bound GPU receipt and thermal
+window before restoring RAM. Payload and telemetry classification follow normal
+return and cleanup. The recovery-test marker is immutable and validated against
+its exact version, size, one withheld completion and 200 ms job bound. The
+lifecycle decoder checks every fixed field and bounds all timing words.
+
+Job stages `0x0410` and `0x0411` identify the owner; `0x0412` and `0x0413` identify
+the peer. Values retain the low 16 bits of the application sequence. Recovery
+stages `0x0450` through `0x0453` identify stop, reset readback, restart and READY,
+with the failed firmware serial. No terminal marker is emitted for an unisolated
+fault. CPU-return stage `0x0204` retains each clock phase and driver state.
+
+Physical queue interrupts, shared-client execution, power cycling, recovery and
+performance remain unqualified. The timeout image tests recovery after a withheld
+completion. It does not test recovery from a shader that never becomes idle.
 
 The GPU compute queue is the OS service through which an application runs a
 compute program on the A733 GPU. The application creates one context with
@@ -34,11 +208,12 @@ The qualification service (`drivers/gpu/pvr_compute_service.c`), with its
 (`include/pvr_compute_package.h:7-8`), stays as it is. Moving its images onto
 the queue is a later change.
 
-## The first version holds one context with one job
+## One context serves two caller slots with one active job
 
 | Capacity | Value | Why |
 | --- | --- | --- |
-| Contexts | 1 | One GPU application per image |
+| Contexts | 1 | Two trusted applications explicitly share the program and map |
+| Caller tasks | 2 | Each caller owns one copied job slot and completion queue |
 | Jobs in flight per context | 1 | mimus jobs share the output region; the client ring allows one KICK outstanding (`include/pvr_cccb.h`, `pvr_cccb_begin`) |
 | Programs per context | 1 | mimus has one kernel |
 | Leases per context | 4 | mimus maps its output region, two model files and its arena |
@@ -46,8 +221,8 @@ the queue is a later change.
 | Argument bytes per job | 64 | mimus passes 16 |
 | Job record | 160 bytes | 32-byte header, 4 bindings of 16 bytes, 64 argument bytes |
 
-Each limit is a constant in `include/gpu_queue.h`. A second application that
-needs more raises the constant, and for more contexts or a deeper queue adds
+Each limit is a constant in `include/gpu_queue.h`. A consumer that
+needs another capacity raises the corresponding constant, and for more contexts or a deeper queue adds
 the per-context and per-slot storage that these limits leave out.
 
 ## The application interface
@@ -84,11 +259,11 @@ The worker, with the device COLD:
    the mimus session;
 6. runs the existing OPEN sequence and replies when the device is READY.
 
-A context is created once per boot. `gpu_queue_close` refuses new jobs, waits
-for an owed record and closes the device. It is final: every page stays
-retained, as the GPU service retains them today
-(`drivers/gpu/pvr_gpu_service.c:172-192`), and the context cannot be created
-again in that boot.
+A context is created once per boot. `gpu_queue_close` seals new submissions
+and drains the primary's owed record. It returns BUSY while the peer still
+owns work or a record. Successful close stops the device and retains every
+page. `gpu_queue_open` reuses the context for another powered lifetime in the
+same boot. Final application completion permanently seals it.
 
 ### Submit and wait bypass the request queue
 
@@ -188,7 +363,7 @@ review step (`include/pvr_compute_package.h:26-31`).
 | Context open | Submit, worker | REFUSED, `CLOSED` |
 | 1 to 4 bindings, each lease index below the lease count | Submit, worker | REFUSED, `BINDING` |
 | Binding address and maintenance range inside the lease | Worker | REFUSED, `RANGE` |
-| Sequence above the context's last sequence and below 2^32 - 1 | Worker | REFUSED, `SEQUENCE` |
+| Sequence above the caller's last sequence and below 2^32 - 1 | Worker | REFUSED, `SEQUENCE` |
 | Each group count nonzero | Submit, worker | REFUSED, `GRID` |
 | Argument bytes at most 64, and the argument block at most 88 bytes | Submit, worker | REFUSED, `ARGUMENTS` |
 | `not_after_us` not passed at the kick | Worker | REFUSED, `DEADLINE` |
@@ -207,15 +382,15 @@ The queue never computes a job on the CPU. Results follow section 1.8 of
 - **REFUSED:** nothing reached the device. The context stays usable. The
   application may run the work on the CPU; mimus does so today when the
   session refuses a job (`apps/os/gpu_hook.cc:42-46`).
-- **PARKED:** the OS has closed the device for thermal throttling or image
-  return. Nothing was queued. The context accepts jobs again after the OS
-  reopens the device.
-- **FAULT:** a hang past `job_us`, a firmware context-reset event, an
-  unexpected timeline value, a failed cache operation or a transport fault.
-  The worker cannot prove the device state, so the whole service fails and
-  retains every resource, as it does today
-  (`drivers/gpu/pvr_gpu_service.c:172-192`). An owed record arrives as FAULT,
-  and every later call returns FAULT.
+- **PARKED:** explicit close, thermal parking, recovery or final retirement
+  prevents submission. Nothing was queued by this call. Explicit owner OPEN
+  ends manual close; thermal policy ends thermal parking.
+- **FAULT:** an isolated failed job produces its own FAULT record. Successful
+  recovery leaves the context usable, and preserves the peer's queued work.
+  Permanent isolation or restart failure retains every resource and any
+    unpublished owed record. A scalar FAULT result alone does not prove device
+  isolation or return buffer ownership.
+  The application may end the session; mimus retains that policy on FAULT.
 
 ### Each context has a hang bound, and each job may have a kick deadline
 
@@ -234,9 +409,9 @@ The queue never computes a job on the CPU. Results follow section 1.8 of
 | Upstream (`linux-orangepi` `2ac08e8c7`, `bsp/drivers/gpu/imagination`) | Queue |
 | --- | --- |
 | `DRM_IOCTL_PVR_CREATE_CONTEXT` with a VM context handle and priority (`include/pvr_drm.h:764`, `pvr_context.c:280-311`) | `gpu_queue_context_create`; one address space per context; no priority |
-| GEM object mapped by `DRM_IOCTL_PVR_VM_MAP` (`include/pvr_drm.h:645`, `pvr_vm.c:735`), MMU flush on change (`pvr_mmu.c:124`) | Leases mapped once at creation; the map never changes, so no flush follows |
+| GEM object mapped by `DRM_IOCTL_PVR_VM_MAP` (`include/pvr_drm.h:645`, `pvr_vm.c:735`), MMU flush on change (`pvr_mmu.c:124`) | Leases mapped once at creation; no per-job map flush, and startup flush repeats after restart |
 | `struct drm_pvr_job` with a caller-built command stream (`include/pvr_drm.h:1229`) | `struct gpu_queue_job`; the worker builds the CDM command from the program and grid, so applications never write firmware commands |
-| Done fence signalled when the queue's timeline UFO reaches the job's seqno, signed compare (`pvr_queue.c:942-962`) | Record posted when the context's timeline word reaches the job's sequence |
+| Done fence signalled when the queue's timeline UFO reaches the job's seqno, signed compare (`pvr_queue.c:942-962`) | Record posted when the timeline reaches the worker's internal serial, retaining the caller's job sequence |
 
 This design uses the upstream driver source only, and no information from
 the firmware binary.
@@ -312,11 +487,11 @@ creation with `pvr_compute_job_command`.
 ### Completion reads one timeline word
 
 On each READY step after an interrupt, the queue reads the context's
-timeline word, one uncached load. When it equals the job's sequence, the
-worker cleans and invalidates the job's GPU-written ranges, checks the job
-bound once more and posts the record. A timeline value that matches neither
-the previous sequence nor the job's is FAULT `TIMELINE`, the rule the mimus
-session applies today (`drivers/gpu/pvr_mimus_service.c:270-282`).
+timeline word, one uncached load. When it equals the active job's internal
+firmware serial, the worker cleans and invalidates the job's GPU-written
+ranges, checks the job bound once more and posts the caller's sequence in
+the record. A value matching neither the previous nor the active firmware
+serial produces FAULT `TIMELINE`.
 
 ### The wake cannot be lost
 
@@ -369,9 +544,10 @@ deadline.
 
 ### Device OPEN and CLOSE belong to the OS GPU runtime
 
-Applications never send OPEN or CLOSE. The OS GPU runtime, the successor of
-the lifecycle half of `apps/os/gpu.c`, owns the device session on its own
-client slot:
+The primary application requests reversible device transitions through
+`gpu_queue_close` and `gpu_queue_open`. The OS GPU runtime performs privileged
+device sequencing and thermal transitions. The peer cannot request lifecycle
+changes:
 
 - the context creation runs the OPEN sequence before its reply;
 - thermal throttling calls `pvr_compute_queue_close` and then CLOSE; jobs
@@ -379,9 +555,8 @@ client slot:
 - return to normal reopens the device. `pvr_compute_queue_reopen` restores
   the firmware memory-context record and the firmware context, as
   `a733_gpu_mimus_reopen` does (`platform/a733/gpu_mimus.c:190-197`). The
-  timeline restarts at the last sequence, as `pvr_mimus_service_prepare`
-  does (`drivers/gpu/pvr_mimus_service.c:158-161`). The GPU tables stay
-  published and unchanged;
+    timeline restarts at the last internal firmware serial. Each caller keeps
+  its own application sequence. The GPU tables stay published and unchanged;
 - the image's return path closes and parks the device, as
   `a733_gpu_mimus_return` does today (`apps/os/gpu.c:438-469`).
 
@@ -430,8 +605,8 @@ and general heaps start at `0xda00000000`, `0xe000000000` and
 collide with internal mappings. A program's pointers equal the application's
 CPU pointers, and no GPU address allocator is needed.
 
-Every lease maps with 2 MiB GPU pages, since the base and the rounded size
-are 2 MiB multiples. One 2 MiB GPU region uses one page size
+Every lease maps with 256 KiB GPU pages. BRN 71317 excludes the hardware
+encodings for 1 MiB and 2 MiB pages. One 2 MiB GPU region uses one page size
 (`include/pvr_gpu_vm.h:12-17`).
 
 ### The map is built once
@@ -453,13 +628,13 @@ the map once, at creation, while the device is COLD:
 3. `pvr_gpu_vm_build` writes the tables and the memory-context record;
    `a733_gpu_vm_memory_publish_begin` and `_poll` clean the table pages.
 
-The map then never changes. Reopen after a thermal close restores the
-memory-context record from the saved root page without rebuilding the tables,
-as `a733_gpu_mimus_reopen` does (`platform/a733/gpu_mimus.c:190-195`). No
-MMU cache flush is needed, because no mapping changes after the first kick.
+The map then never changes. Reopen restores the memory-context record from
+the saved root page without rebuilding the tables. Startup still requires
+MMU-cache completion before READY after reopen or recovery. Unchanged mappings
+avoid a per-job flush.
 
 The mimus mappings keep today's table size. The session maps two 8 MiB
-model spans, a 12 MiB arena and a 2 MiB output region with 2 MiB pages, all
+model spans, a 12 MiB arena and a 2 MiB output region with 256 KiB pages, all
 inside one 1 GiB catalogue entry (`platform/a733/gpu_mimus.c:105-111`). The
 queue maps the same spans at different addresses in the same catalogue entry,
 so it needs the same 15 data leaves and the planner's 24 table pages
@@ -482,7 +657,7 @@ a pool, so no application buffer is cleared through a write-back alias.
 | Uncached firmware pages | 6 | 6 |
 | Write-back payload pages | 21 (`include/a733_gpu_mimus.h:11-13`) | 21 |
 | GPU table pages | 24 | 24, at most 32 for another application |
-| CPU-side state | Session, slot and record queue | `struct pvr_compute_queue`, 1,216 bytes on AArch64, and a record queue of one entry |
+| CPU-side state | Session, slot and record queue | `struct pvr_compute_queue`, 2,632 bytes on AArch64, including two caller slots and completion queues; GPU images also reserve a fixed 16 KiB peer task stack |
 
 Today the GPU holds 79 write-back pages (34 firmware, 21 payload, 24 table)
 and 51 uncached pages for one session
@@ -567,14 +742,19 @@ mimus keeps every policy that the OS carries for it today:
 The queue's REFUSED record takes the place of the session's REFUSED record
 (`include/pvr_mimus_job.h:15-20`), and FAULT takes the place of LOST.
 
-### The tag area clear stays at EL3
+### The application registers startup initialization
 
-The EL3 identity step zeroes the 64 KiB tag area with translation off and
-publishes it, under `SUNSTONE_A733_OS_GPU_LINEAR`
-(`apps/os/identity.c:34-47`). The application-interface design does not yet
-say where this clear goes once EL3 publication reads the region table. Until
-it does, the clear stays where it is, and the build option that selects it
-becomes `SUNSTONE_A733_OS_GPU`.
+An application may place `ss_region_initializer` records in the immutable
+`sunstone_region_initializers` section. A record names a manifest region and a
+prefix length. EL3 validates every record before the first store, clears each
+prefix with aligned 64-bit stores and publishes it before CPU read-only
+mappings take effect. Prefixes must fit CPU-readable, GPU-written WORK regions
+that the CPU cannot write. An absent registration clears nothing.
+
+Mimus registers its GPU output region and 64 KiB tag prefix in
+`sunstoneos/apps/mimus/gpu_linear.c`. The OS contains neither that output
+address nor its tag geometry. The image check verifies that registration data
+comes from application objects and remains immutable.
 
 ## Performance
 
@@ -676,7 +856,8 @@ because that batch is already known to be pending
 | Kick deadline passed in the slot | Refused before device access | Nothing |
 | Creation refused (region, program, pool) | Refused before device access | Pages acquired so far, retained for the boot |
 | Device CLOSE with acknowledged stop | Known terminal state | Context pages and tables, for reopen |
-| Hang, reset event, timeline mismatch, failed cache operation, transport fault | State unknown | Every resource; service FAILED |
+| Job timeout or reset with proved idle/reset/OFF | Isolated failed job | Context, leases and queued peer job survive restart |
+| Failed isolation, timeline mismatch, cache or I/O fault, failed restart | State unknown | Every resource and any unpublished owed record; service FAILED |
 
 ### Measurement
 
@@ -748,8 +929,9 @@ image building and its host checks passing.
 - **GPU read-only mappings are not shown to be enforced.** The board has not
   shown that the GPU MMU refuses a store through a read-only mapping
   (`apps/os/dispatch.c:228-230`). The queue does not rely on it.
-- **One fault stops GPU use for the rest of the boot.** The service has no
-  per-context recovery.
+- **Recovery requires hardware idle.** A timeout or reset can resume the
+  retained queue only after the reset and OFF proof described above. A failed
+  isolation or restart keeps every resource retained.
 - **Programs are trusted.** A program can reach every lease of its context;
   the queue checks descriptors only.
 - **The design depends on another design's commits.** Commit 5 needs the
@@ -761,21 +943,20 @@ image building and its host checks passing.
 - One address space per context.
 - A region with both CPU write and GPU write is refused.
 - No priority field.
-- A fault fails the whole service, as today.
+- A recoverable timeout or reset isolates the failed job and restarts the
+  retained context. Unproven isolation keeps the service failed.
 - The device opens at the first context creation.
 - Binding 0 goes in the second pointer register.
 - No zero fill of leases.
-- One context, one job in flight, one program, four leases, four bindings
-  and 64 argument bytes.
+- One context, two admitted callers, one job in flight, one program, four
+  leases, four bindings and 64 argument bytes.
 - The worker calls the queue directly; no component table.
 - The 4 ms backup poll stays until the GPU interrupt is qualified on a board.
 
 ## Open decisions
 
-1. **The tag area clear.** It stays in the EL3 identity step. The
-   application-interface design decides whether a region declares a cleared
-   prefix, or whether mimus clears the tags another way.
-2. **Removing the backup poll.** Which board measurement qualifies the GPU
+1. **Removing the backup poll.** Which board measurement qualifies the GPU
    interrupt, and therefore removes the 4 ms cap.
-3. **The second application.** Which capacity it needs first: a second
-   context, a deeper queue, or a second program.
+2. **Separate application programs or address spaces.** The fixed shared
+   capability serves two current consumers. A consumer requiring independent
+   programs or maps needs another reviewed capacity extension.

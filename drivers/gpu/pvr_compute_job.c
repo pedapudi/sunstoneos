@@ -132,7 +132,7 @@ static int valid(const struct pvr_compute_job_config *c,const void *out,size_t o
     return 1;
 }
 /* Shared encoders: the job builder inlines each one, and images without the
- * mimus session drop the external copies. */
+ * compute queue drop the external copies. */
 /* Writes only the fields it names; the caller zeroes the command first. */
 void pvr_compute_job_command(unsigned char compute[96],uint64_t border,uint64_t cdm,uint64_t resume)
 {

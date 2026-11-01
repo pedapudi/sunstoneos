@@ -10,8 +10,7 @@ unresolved failure.
 Kinds:
   cpu-return  one CPU-return application image, by default the hello-compute
               control image, through apps/os/cpu-return-host.py
-  gpu-return  refused: the GPU ladder images are pre-split recognition images
-              (see GPU_REFUSAL)
+  gpu-return  one manifest-based GPU-capable returning image, with --image
   npu         finite startup/inference/runtime image with an NPU session template
   rail-helper only the CPU rail helper (board bundle 33): DCDC3 and then DCDC5
               to 800 mV, refused unless the CPU clocks read their boot words
@@ -57,6 +56,13 @@ application in this tree) is a Python module with:
   inputs()          the inputs used when no --input is given; optional
 A run passes when the image returns normally (RETURN_ROM breadcrumb, WDT0
 mode 0) and, when the decoder has expected(), the decoded result equals it.
+GPU receipts are copied before RAM restoration and checked against the image's
+capability markers. A gpu-return run requires completed GPU work, except for an
+image carrying an exact diagnostic stage/limit marker. Thermal windows, when
+linked, must decode as complete. Payload or telemetry errors remain failures
+after DRAM and CPU rail restoration; a transport error stops immediately.
+--expect-result JSON_VALUE overrides expected(inputs), which permits exact
+comparison of fixed binary result fields while a decoder bounds variable times.
 Without a decoder the runner prints the raw payload.
 """
 import argparse
@@ -98,10 +104,6 @@ RAIL_CONTROLLED = [('REFUSED', text) for text in (
     'thermal level', 'speed bin', 'CPU-B rate', 'CPU rate not on its PLL', 'pattern or LFM enabled',
     'boot clock words', "voltage above the bin's top point", "bin top points differ from the rail helper's",
     'CPU supplies')] + [('STOPPED', 'thermal limit')]
-GPU_REFUSAL = ('gpu-return is refused: the GPU ladder images are pre-split mimus recognition images that need '
-               'the fixed-layout session template and the three recognition inputs, which this runner no longer '
-               'prepares, and the generic return path does not copy the GPU retirement report. Run them with '
-               'the pre-split runner, tools/dev-run.py at revision 6a714bcf.')
 # The read-only words of the existing CPU/thermal state capture
 # (sol-resume-20261031/port-3-3/cpu-thermal-state): CCU, R_CCU, SID, CPU PLLs, RTC.
 WORDS = (0x2002000, 0x20020a0, 0x20020a8, 0x20020ac, 0x2002518, 0x2002fc0, 0x2002fe4, 0x2003908,
@@ -269,7 +271,7 @@ def kit():
             load('dev_os_launcher', ROOT / 'apps/os/prepare.py'))
 
 
-def image_check(host, image, inputs):
+def image_check(host, image, inputs, devices=None):
     """(image bytes, watchdog marker, manifest, manifest facts) of a CPU-return image with these inputs.
 
     Every refusal here depends only on the image and the inputs, so main()
@@ -280,22 +282,25 @@ def image_check(host, image, inputs):
     require(watchdog is not None, 'Image carries no host-armed watchdog marker; a hang would strand the board.')
     symbols = host.linked_symbols(image)
     require('ss_result_record' in symbols, 'Image has no result record; it is not a CPU-return application image.')
-    require('os_gpu_configuration' not in symbols, 'Image links the GPU return; the generic return path does not '
-            'copy its GPU retirement report.')
+    require('os_gpu_configuration' not in symbols or 'os_gpu_return_report' in symbols,
+            'Legacy fixed-layout GPU images are not supported; rebuild against the current application kit.')
     info = os_host.image_manifest(data)
     require(info['manifest'] is not None, 'Image has no application manifest.')
     manifest = info['manifest']
-    devices = manifest['devices_required']
+    devices = manifest['devices_required'] if devices is None else devices
+    require(devices & manifest['devices_required'] == manifest['devices_required'] and
+            not devices & ~(manifest['devices_required'] | manifest['devices_optional']),
+            'Requested device grant differs from the image manifest.')
     require(not devices & STORAGE, 'The CPU return admits only sessions without USB storage (workload 2).')
     os_host.input_facts(manifest, [bytes(v) for v in inputs])
     return data, watchdog, manifest, info
 
 
-def prepare(host, launcher, image, records, inputs, output, live):
+def prepare(host, launcher, image, records, inputs, output, live, *, devices=None):
     """Board bundle from a CPU-return image, a reviewed session's records and the inputs."""
     os_host = host.host
-    data, watchdog, manifest, info = image_check(host, image, inputs)
-    devices = manifest['devices_required']
+    data, watchdog, manifest, info = image_check(host, image, inputs, devices)
+    devices = manifest['devices_required'] if devices is None else devices
     findings, derived = state_check(live['words'])
     prefix, thermal, grant = session_records(records, os_host)
     prefix, thermal, grant = bytearray(prefix), bytearray(thermal), bytearray(grant)
@@ -414,13 +419,26 @@ def run_return(args, host, bundle, live, out, access=None, guard=None):
                                   return_timeout=90, watchdog=watchdog, access=access, guard=guard)
 
 
-def judge(decoder, payload, inputs, session):
+def judge(decoder, payload, inputs, session, *, result=None, require_gpu=False, expected_result=None):
     """(outcome, detail, decoded) of a run that returned with this payload."""
     w = session.get('watchdog', {})
     last = w.get('breadcrumbs', {}).get('last', {}).get('name')
     if w.get('mode_after_return') != 0 or last != 'RETURN_ROM':
         return 'failed', f'return not normal: WDT0 mode {w.get("mode_after_return")}, last breadcrumb {last}', None
+    result = result or {}
+    errors = [result[key] for key in ('output_error', 'gpu_error', 'thermal_error') if key in result]
+    gpu = result.get('gpu')
+    if require_gpu and gpu is None and not result.get('gpu_error'):
+        errors.append('GPU retirement receipt absent')
+    if require_gpu and gpu is not None and not gpu.get('gpu_bisect') and not gpu.get('completed_gpu_work'):
+        errors.append('GPU receipt proves no completed GPU job')
+    if 'thermal' in result and result['thermal'].get('classification') != 'complete':
+        errors.append('thermal window is ' + str(result['thermal'].get('classification')))
+    if errors:
+        return 'result-invalid', '; '.join(errors), None
     if decoder is None:
+        if expected_result is not None:
+            return 'result-invalid', '--expect-result requires a result decoder', None
         shown = payload[:64].hex() + ('...' if len(payload) > 64 else '')
         return 'returned', f'raw result {len(payload)} bytes {shown}', None
     try:
@@ -431,9 +449,9 @@ def judge(decoder, payload, inputs, session):
         found = decoder.failures(decoded)
         if found:
             return 'result-failed', 'decoder reports ' + '; '.join(found), decoded
-    if not hasattr(decoder, 'expected'):
+    if expected_result is None and not hasattr(decoder, 'expected'):
         return 'returned', 'result ' + json.dumps(decoded, sort_keys=True), decoded
-    expected = decoder.expected(inputs)
+    expected = expected_result if expected_result is not None else decoder.expected(inputs)
     if decoded != expected:
         return 'result-mismatch', 'result %s, expected %s' % (json.dumps(decoded, sort_keys=True),
                                                              json.dumps(expected, sort_keys=True)), decoded
@@ -721,6 +739,8 @@ def main(argv=None):
                         help="An INPUT region's content, once per region in manifest order")
     parser.add_argument('--decoder', type=Path, help='Python module that decodes the result payload '
                         '(default: apps/<name>/host.py in this tree when present; otherwise the raw payload)')
+    parser.add_argument('--expect-result', type=json.loads, metavar='JSON_VALUE',
+                        help='Require this decoded result, overriding decoder.expected(inputs)')
     parser.add_argument('--records', type=Path, default=RECORDS,
                         help='CPU reviewed prefix/thermal/grant session; for NPU, its native 456-byte session template')
     parser.add_argument('--port', help='Physical USB port, for example 3-1 (else SUNSTONE_USB_PORT)')
@@ -739,9 +759,18 @@ def main(argv=None):
     args = parser.parse_args(argv)
     os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
     sys.dont_write_bytecode = True
-    if args.kind == 'gpu-return':
-        parser.exit(2, GPU_REFUSAL + '\n')
     host, launcher = kit()
+    if args.kind == 'gpu-return':
+        try:
+            require(args.image is not None, 'gpu-return requires --image.')
+            symbols = host.linked_symbols(args.image)
+            info = host.host.image_manifest(args.image)
+            require('ss_result_record' in symbols and 'os_gpu_return_report' in symbols and
+                    info['manifest'] is not None and
+                    (info['manifest']['devices_required'] | info['manifest']['devices_optional']) & 16,
+                    'gpu-return requires a current manifest-based GPU-capable returning image.')
+        except ValueError as error:
+            parser.exit(2, str(error) + '\n')
     if args.port:
         os.environ['SUNSTONE_USB_PORT'] = args.port
     port = os.environ.get('SUNSTONE_USB_PORT')
@@ -768,6 +797,7 @@ def main(argv=None):
     info = host.host.image_manifest(image)
     require(info['manifest'] is not None, 'Image has no application manifest.')
     name = info['manifest']['name']
+    devices = info['manifest']['devices_required'] | (16 if args.kind == 'gpu-return' else 0)
     decoder_path = args.decoder or (ROOT / 'apps' / name / 'host.py')
     decoder = load('dev_decoder', decoder_path) if args.decoder or decoder_path.is_file() else None
     if args.input:
@@ -779,7 +809,7 @@ def main(argv=None):
     evidence = args.evidence or EVIDENCE / 'dev-runs-1031' / f"{port or 'offline'}-{args.kind}-{time.strftime('%H%M%S')}"
     evidence.mkdir(parents=True, exist_ok=False)
     try:
-        image_check(host, image, inputs)
+        image_check(host, image, inputs, devices)
     except ValueError as error:
         record = {'kind': args.kind, 'port': port, 'image': str(Path(image).resolve()), 'application': name,
                   'launched': False, 'outcome': 'refused-before-launch',
@@ -822,7 +852,7 @@ def main(argv=None):
               'bundle': str(evidence / 'bundle'), 'launched': False, 'normalize_rails': normalized,
               'rail_helper_sha256': RAIL_HELPER_SHA256}
     try:
-        meta = prepare(host, launcher, image, args.records, inputs, evidence / 'bundle', live)
+        meta = prepare(host, launcher, image, args.records, inputs, evidence / 'bundle', live, devices=devices)
     except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
         meta = None
         record.update(outcome='refused-before-launch', summary=summary_of(args.kind, 'not launched', str(error)))
@@ -846,8 +876,10 @@ def main(argv=None):
         try:
             result = run_return(args, host, evidence / 'bundle', live, out)
             session = json.loads((out / 'session.json').read_text())
-            payload = (out / 'result.bin').read_bytes()
-            outcome, detail, decoded = judge(decoder, payload, inputs, session)
+            payload = (out / 'result.bin').read_bytes() if (out / 'result.bin').exists() else b''
+            outcome, detail, decoded = judge(decoder, payload, inputs, session, result=result,
+                                             require_gpu=args.kind == 'gpu-return',
+                                             expected_result=args.expect_result)
             record.update(outcome=outcome, result=result, payload=str(out / 'result.bin'), decoded=decoded)
             record['summary'] = summary_of(args.kind, outcome, 'secondaries off %d; %s' % (
                 result['secondaries_off'], detail))

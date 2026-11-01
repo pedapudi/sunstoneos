@@ -1,33 +1,27 @@
 #!/usr/bin/env python3
-"""Run the GPU service with its mimus session over the bench recording in QEMU.
+"""Run the GPU compute queue and native memory path in two-core FreeRTOS QEMU.
 
-Builds checks/pvr-mimus-service.c into a two-core FreeRTOS composition with
-the real firmware memory and session constructors, the production pools and
-platform/a733/gpu_memory.c, and runs the selected cases. The bench placement
-(apps/os/placement.py, A76 pair) supplies the admitted tensors, the 204 jobs
-and each job's modeled duration. With --trace, cases also run with QEMU's
-one-instruction translation blocks and an execution log filtered to every
-DSB SY and to the entries of the counted functions; the runner splits the
-log into job windows at the fixture's marker calls. Instrumented runs use
-QEMU's instruction counter as the guest clock (one nanosecond per
-instruction), so the slow logging does not move guest deadlines and reports counts per
-job and per source. No hardware is accessed.
+A synthetic linear-grid fixture checks buffer bindings, exact sums, client-ring
+commands, interrupts, deadlines, refusal and retained lifecycle. --fixture accepts
+an external workload's tensor and job JSON for replay, including the optional
+mimus bench recording. Shader execution, register effects and time are modeled;
+no hardware is accessed.
 """
 import argparse
 import collections
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import statistics
+from harness import environment
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-CASES = {1: 'bench, exact sums', 2: 'bench, pattern sums', 3: 'bench, jobs complete at once',
-         4: 'as 3 with one firmware event per job', 5: 'refused jobs', 6: 'failed wake send',
+CASES = {1: 'grid replay, exact sums', 2: 'grid replay, pattern sums', 3: 'grid replay, jobs complete at once',
+         4: 'as 3 with one firmware event per job', 5: 'refused jobs', 6: 'coalesced wake and reserved request capacity',
          7: 'missing tag', 8: 'hang', 9: 'context reset', 10: 'OPEN only',
          11: 'unexpected timeline before a submit', 12: 'completion clean and invalidate fails',
          13: 'completion at deadline', 14: 'output acquisition reaches deadline',
@@ -35,13 +29,27 @@ CASES = {1: 'bench, exact sums', 2: 'bench, pattern sums', 3: 'bench, jobs compl
          17: 'backward final clock sample', 18: 'pending, active and drained CLOSE',
          19: 'reserved-slot CLOSE and abort', 20: 'lost CLOSE',
          21: 'two healthy retained reopens', 22: 'reopen proof refusals', 23: 'reopen cache failure',
-         24: 'reopen result publication failure', 25: 'performance transition and reopen', 26: 'accepted job drains before forced idle',
+         24: 'creation result publication failure', 25: 'performance transition and reopen', 26: 'accepted job drains before forced idle',
          27: 'forced idle acknowledgement absent', 28: 'cancel acknowledgement absent', 29: 'clean drain refusal', 30: 'firmware reset while performance HOLD drains a job', 31: 'final PARK',
-         32: 'thermal close and reopen before final PARK', 33: 'final PARK callback failure'}
+         32: 'thermal close and reopen before final PARK', 33: 'final PARK callback failure',
+         34: 'unleased neighbour in GPU output rounded tail',
+         35: 'unleased neighbour in model rounded tail',
+         36: 'unleased neighbour in CPU-written input rounded tail',
+         37: 'unleased neighbour at exact rounded boundary',
+         38: 'worker immutable program source bounds and final-word creation',
+         39: 'ten public close/open cycles', 40: 'two caller slots and independent sequences',
+         41: 'timeout reset resumes queued peer', 42: 'decoded reset resumes queued peer',
+         43: 'queued peer kick deadline survives reset', 44: 'idle refusal retains both callers',
+         45: 'reset readback mismatch retains both callers', 46: 'failed isolation retains both callers',
+         47: 'failed restart retains queued peer', 48: 'failed restart health retains queued peer',
+         49: 'session limit clips recovery deadlines',
+         50: 'maximum job duration recovers an unconsumed kernel kick',
+         51: 'firmware timeline serial exhaustion refuses without a kick',
+         52: 'qualification timeout refuses recovery without a queued peer'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
-           'advance', 'external', 'now', 'pvr_mimus_service_submit', 'pvr_mimus_service_receive', 'kick',
-           'fixture_gpu_irq', 'pvr_mimus_complete', 'pvr_mimus_submit', 'fixture_mark', 'irq_read',
+           'advance', 'external', 'now', 'gpu_queue_submit', 'gpu_queue_wait', 'kick',
+           'fixture_gpu_irq', 'post', 'maintain', 'fixture_mark', 'irq_read',
            'a733_gpu_memory_read', 'a733_gpu_memory_write', 'a733_gpu_memory_barrier', 'pvr_cccb_poll',
            'pvr_ccb_submit', 'pvr_ccb_receive', 'pvr_ccb_poll', 'step', 'irq_write', 'read_reg', 'write_reg',
            'ring_write', 'drive_to_kick')
@@ -51,35 +59,43 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def fixture(models, out):
-    spec = importlib.util.spec_from_file_location('placement', ROOT / 'apps/os/placement.py')
-    placement = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(placement)
-    clocks = placement.Clocks('a76')
-    tensors = placement.merged_tensors(*models)
-    table = placement.table(tensors, clocks, 222)
-    admitted = placement.gpu_tensors(tensors, table)
-    jobs = []
-    for ordinal, rows, k, _n, _res, _blk in placement.call_list(tensors, 222):
-        n = table[ordinal][0]
-        if not n:
-            continue
-        for r in placement.split(rows, k, n):
-            jobs.append((ordinal, r, k, n, round(placement.gpu_seconds(r, k, n, clocks) * 1e6)))
-    lines = ['/* Generated by checks/pvr-mimus-service.py from apps/os/placement.py, A76 pair. */',
+def fixture(source, out):
+    if source:
+        data = json.loads(source.read_text())
+    else:
+        data = {'tensors': [dict(offset=0, ordinal=0, stride=64, k=64, n_gpu=32, job_rows=32, region=0),
+                            dict(offset=4096, ordinal=1, stride=1024, k=1024, n_gpu=16, job_rows=32, region=1)],
+                'jobs': [dict(ordinal=i % 2, rows=(i % 3 + 1), k=64 if i % 2 == 0 else 1024,
+                              n_gpu=32 if i % 2 == 0 else 16, duration_us=80) for i in range(8)]}
+    tensors, jobs = data['tensors'], data['jobs']
+    assert tensors and len(jobs) >= 3, 'fixture needs tensors and at least three jobs'
+    tensor_fields = ('offset', 'ordinal', 'stride', 'k', 'n_gpu', 'job_rows', 'region')
+    job_fields = ('ordinal', 'rows', 'k', 'n_gpu', 'duration_us')
+    assert len({t['ordinal'] for t in tensors}) == len(tensors)
+    for t in tensors:
+        assert all(isinstance(t[k], int) and t[k] >= 0 for k in tensor_fields)
+        assert t['region'] < 2 and t['k'] and t['n_gpu'] and t['stride'] >= t['k']
+        assert t['offset'] + (t['n_gpu'] - 1) * t['stride'] + t['k'] <= 8 << 20
+    by_ordinal = {t['ordinal']: t for t in tensors}
+    for j in jobs:
+        assert isinstance(j['duration_us'],(int,float)) and j['duration_us']>=0
+        j['duration_us']=round(j['duration_us'])
+        assert all(isinstance(j[k], int) and j[k] >= 0 for k in job_fields)
+        t = by_ordinal[j['ordinal']]
+        assert 0 < j['rows'] <= t['job_rows'] and j['k'] == t['k'] and j['n_gpu'] == t['n_gpu']
+    lines = ['/* Synthetic grid workload or an externally supplied workload replay. */',
              'struct fixture_tensor { uint32_t offset; uint16_t ordinal, stride, k, n_gpu, job_rows; uint8_t region; };',
              'struct fixture_job { uint16_t ordinal, rows, k, n_gpu; uint32_t duration_us; };',
-             '#define FIXTURE_TENSORS %du' % len(tensors), '#define FIXTURE_GPU_TENSORS %du' % len(admitted),
-             '#define FIXTURE_JOBS %du' % len(jobs),
+             '#define FIXTURE_TENSORS %du' % (max(by_ordinal) + 1),
+             '#define FIXTURE_GPU_TENSORS %du' % len(tensors), '#define FIXTURE_JOBS %du' % len(jobs),
              'static const struct fixture_tensor fixture_tensors[FIXTURE_GPU_TENSORS]={']
-    # gpu_tensors() rows begin (offset, ordinal, stride, k) and end with the region.
-    lines += ['    {%d,%d,%d,%d,%d,%d,%d},' % (a[0], a[1], a[2], a[3], table[a[1]][0], table[a[1]][1], a[-1])
-              for a in admitted]
+    lines += ['    {' + ','.join(str(t[k]) for k in tensor_fields) + '},' for t in tensors]
     lines += ['};', 'static const struct fixture_job fixture_jobs[FIXTURE_JOBS]={']
-    lines += ['    {%d,%d,%d,%d,%d},' % j for j in jobs]
+    lines += ['    {' + ','.join(str(j[k]) for k in job_fields) + '},' for j in jobs]
     lines.append('};')
-    (out / 'mimus-fixture.h').write_text('\n'.join(lines) + '\n')
-    return [j[4] for j in jobs]
+    (out / 'queue-fixture.h').write_text('\n'.join(lines) + '\n')
+    (out / 'workload.json').write_text(json.dumps(data, indent=2) + '\n')
+    return [j['duration_us'] for j in jobs]
 
 
 def symbols(elf):
@@ -94,15 +110,22 @@ def symbols(elf):
 
 def trace_filter(elf, funcs):
     dsb = []
+    stores=collections.defaultdict(list)
+    ring=[(a,a+n) for a,n,name in funcs if name=='ring_write']
     for line in subprocess.check_output(['llvm-objdump-21', '-d', '--no-show-raw-insn', str(elf)],
                                         text=True).splitlines():
-        m = re.match(r'\s*([0-9a-f]+):\s+dsb\s+sy', line)
-        if m:
-            dsb.append(int(m.group(1), 16))
+        m = re.match(r'\s*([0-9a-f]+):\s+(.*)', line)
+        if not m:continue
+        address,op=int(m.group(1),16),m.group(2)
+        if re.match(r'dsb\s+sy',op):dsb.append(address)
+        if any(first<=address<end for first,end in ring):
+            if re.match(r'str\s+x\d+, \[x(?!29|31)\d+',op):stores['uncached-store64'].append(address)
+            if re.match(r'strb\s+w\d+, \[x(?!29|31)\d+',op):stores['uncached-store8'].append(address)
     entries = {}
     for address, _size, name in funcs:
         if name in COUNTED:
             entries.setdefault(name, []).append(address)
+    entries.update(stores)
     return dsb, entries
 
 
@@ -149,7 +172,7 @@ def windows(events):
 SOURCE = {'aarch64_device_cache': 'maintenance', 'gicv3_spi_mask': 'interrupt mask/rearm',
           'gicv3_spi_rearm': 'interrupt mask/rearm', 'a733_gpu_memory_read': 'gpu_memory.c',
           'a733_gpu_memory_write': 'gpu_memory.c', 'a733_gpu_memory_barrier': 'gpu_memory.c',
-          'ring_read': 'client ring', 'ring_barrier': 'client ring', 'pvr_mimus_service_prepare': 'session',
+          'ring_read': 'client ring', 'ring_barrier': 'client ring', 'pvr_compute_queue_prepare': 'session',
           'publish': 'model', 'model': 'model'}
 # FreeRTOS kernel and SMP port: critical sections, the kernel lock (with its
 # spin), interrupt masking, and the assembly exception entries ('?').
@@ -174,13 +197,13 @@ def summarize(job_windows, segment):
 
 
 def segments(events):
-    """Per job: from pvr_mimus_service_submit to the kick, and from the GPU
-    interrupt to pvr_mimus_complete, counting DSBs, translations,
+    """Per job: from gpu_queue_submit to the kick, and from the GPU
+    interrupt to the native completion post, counting DSBs, translations,
     distributor accesses (mask/rearm), critical sections and advance() calls."""
     out = collections.defaultdict(list)
     state, counter = None, None
     for kind, name in events:
-        if kind == 'call' and name == 'pvr_mimus_service_submit':
+        if kind == 'call' and name == 'gpu_queue_submit':
             state, counter = 'kick', collections.Counter()
             continue
         if kind == 'call' and name == 'fixture_gpu_irq':
@@ -188,7 +211,7 @@ def segments(events):
         if state is None:
             continue
         if (state == 'kick' and kind == 'call' and name == 'kick') or \
-           (state == 'post' and kind == 'call' and name == 'pvr_mimus_complete'):
+           (state == 'post' and kind == 'call' and name == 'post'):
             out[state].append(counter)
             state = None
             continue
@@ -204,16 +227,18 @@ def segments(events):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--models', type=Path, default=Path.home() / '.cache/sunstoneos/inputs/mimus-bench')
-    parser.add_argument('--cases', nargs='+', type=int, choices=sorted(CASES), default=list(range(1, 25)))
+    parser.add_argument('--fixture', type=Path, help='External generic tensor/job JSON; default is an eight-job synthetic grid')
+    parser.add_argument('--cases', nargs='*', type=int, choices=sorted(CASES), default=list(range(1, 25)))
     parser.add_argument('--trace', nargs='*', type=int, default=[], help='cases to run instrumented')
     for name in ('freertos', 'tinyusb', 'firmware', 'qemu', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
     performance = any(25 <= c <= 30 for c in args.cases)
-    returning = any(c >= 31 for c in args.cases)
-    assert not returning or all(c >= 31 for c in args.cases) and not args.trace
-    assert not performance or all(c >= 25 for c in args.cases) and not args.trace
+    returning = any(31 <= c <= 33 for c in args.cases)
+    recovery = any(41 <= c <= 49 or c==52 for c in args.cases)
+    assert not recovery or all(41 <= c <= 49 or c==52 for c in args.cases) and not args.trace
+    assert not returning or all(31 <= c <= 33 for c in args.cases) and not args.trace
+    assert not performance or all(25 <= c <= 30 for c in args.cases) and not args.trace
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     project, build, fixtures = out / 'project', out / 'build', out / 'fixtures'
@@ -221,7 +246,7 @@ def main():
         d.mkdir(exist_ok=True)
     shutil.copy2(args.firmware, fixtures / 'gpu.fw')
     assert sha(fixtures / 'gpu.fw') == '1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2'
-    durations = fixture([args.models / 'base.mimus', args.models / 'overlay.mimus'], fixtures)
+    durations = fixture(args.fixture, fixtures)
     native = (ROOT / 'platform/a733/link.ld').read_text()
     reservations = native[native.index('    /* An absent pool'):native.index('    /DISCARD/')]
     linker = project / 'link.ld'
@@ -240,13 +265,12 @@ def main():
     platform = project / 'platform.c'
     platform.write_text(text)
     extra = ' '.join('"%s"' % (ROOT / p) for p in (
-        'checks/pvr-mimus-service.c', 'platform/a733/gpu_memory.c', 'platform/a733/gpu_reserved.c',
-        'platform/a733/gpu_mimus.c', 'drivers/gpu/pvr_mimus_service.c', 'drivers/gpu/pvr_compute_mimus.c',
-        'drivers/gpu/pvr_compute_mimus_usc.c', 'drivers/gpu/gicv3_spi.c'))
+        'checks/gpu-queue.c', 'platform/a733/gpu_memory.c', 'platform/a733/gpu_reserved.c',
+        'platform/a733/gpu_queue.c', 'drivers/gpu/pvr_compute_queue.c', 'drivers/gpu/gpu_queue.c', 'drivers/gpu/gicv3_spi.c'))
     if performance:
         extra += ' \"%s\"' % (ROOT / 'drivers/gpu/pvr_gpu_clock.c')
     (project / 'CMakeLists.txt').write_text(f'''cmake_minimum_required(VERSION 3.24)
-project(mimus_service_check LANGUAGES C ASM)
+project(gpu_queue_check LANGUAGES C ASM)
 add_subdirectory("{ROOT}" sunstone)
 get_target_property(sources gpu-service-model SOURCES)
 list(FILTER sources EXCLUDE REGEX "checks/pvr-gpu-service.c$|platform/qemu-smp/platform.c$")
@@ -254,26 +278,38 @@ list(APPEND sources "{platform}" {extra})
 list(REMOVE_DUPLICATES sources)
 set_property(TARGET gpu-service-model PROPERTY SOURCES "${{sources}}")
 target_include_directories(gpu-service-model PRIVATE "{fixtures}" "{ROOT}/checks")
-target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1 {"SUNSTONE_A733_OS_PERF=1" if performance else "SUNSTONE_A733_OS_CPU_RETURN=1" if returning else ""})
+target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1 {"SUNSTONE_A733_OS_PERF=1" if performance else "SUNSTONE_A733_OS_CPU_RETURN=1" if returning else "SUNSTONE_A733_OS_GPU_RECOVERY_TEST=1" if recovery else ""})
 get_target_property(options gpu-service-model LINK_OPTIONS)
 list(FILTER options EXCLUDE REGEX "-Wl,-T,")
 list(APPEND options "-Wl,-T,{linker}" -Wl,--defsym=__device_pool_size=2097152
   -Wl,--defsym=__uncached_pool_size=2097152 -Wl,--wrap=aarch64_device_cache -Wl,--wrap=aarch64_device_translate
-  -Wl,--wrap=pvr_mimus_submit -Wl,--wrap=pvr_mimus_complete -Wl,--wrap=pvr_cccb_poll
-  -Wl,--wrap=pvr_gpu_service_now -Wl,--wrap=pvr_mimus_service_poll -Wl,--wrap=a733_gpu_backend_stopped
+  -Wl,--wrap=pvr_cccb_poll
+  -Wl,--wrap=pvr_gpu_service_now -Wl,--wrap=pvr_compute_queue_poll -Wl,--wrap=a733_gpu_backend_stopped
   -Wl,--wrap=xQueueGenericSend)
 set_property(TARGET gpu-service-model PROPERTY LINK_OPTIONS "${{options}}")
 set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
 ''')
-    env = os.environ.copy()
+    env = environment()
     env['PATH'] = str(args.lld.resolve().parent) + os.pathsep + env.get('PATH', '')
-    commands, results = [], {'cases': {}, 'traces': {}}
+    commands_path=out/'commands.json'
+    commands=json.loads(commands_path.read_text()) if commands_path.exists() else []
+    results={'cases': {}, 'traces': {}}
+    if (out/'results.json').exists():
+        attempts=list(out.glob('results-attempt*.json'))
+        shutil.copy2(out/'results.json',out/('results-attempt%d.json' % (len(attempts)+1)))
+    logs={}
 
     def run(name, command, timeout=None):
         commands.append(command)
         r = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                            timeout=timeout, env=env)
-        (out / (name + '.log')).write_text(r.stdout)
+        log=out/(name+'.log')
+        if log.exists():
+            attempt=1
+            while (out/('%s-attempt%d.log' % (name,attempt))).exists(): attempt+=1
+            log=out/('%s-attempt%d.log' % (name,attempt))
+        log.write_text(r.stdout)
+        logs[name]=str(log.resolve())
         if r.returncode:
             raise RuntimeError('%s failed (%d): %s' % (name, r.returncode, r.stdout[-4000:]))
         return r.stdout
@@ -284,13 +320,13 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
             '-DSUNSTONE_GPU_FIRMWARE=' + str(fixtures / 'gpu.fw'), '-DSUNSTONE_LLD=' + str(args.lld.absolute()),
             '-DCMAKE_EXE_LINKER_FLAGS=--ld-path=' + str(args.lld.absolute())])
         run('build', ['nice', '-n', '10', 'cmake', '--build', str(build), '--target', 'gpu-service-model', '-j6'])
-        binary = out / 'mimus-service.elf'
+        binary = out / 'gpu-queue.elf'
         shutil.copy2(build / 'sunstone/gpu-service-model.elf', binary)
         funcs = symbols(binary)
         data = binary.read_bytes()
         nm = subprocess.check_output(['llvm-nm-21', '-S', str(binary)], text=True)
-        address = [int(l.split()[0], 16) for l in nm.splitlines() if l.split()[-1] == 'mimus_service_case']
-        slow = [int(l.split()[0], 16) for l in nm.splitlines() if l.split()[-1] == 'mimus_service_slow']
+        address = [int(l.split()[0], 16) for l in nm.splitlines() if l.split()[-1] == 'gpu_queue_case']
+        slow = [int(l.split()[0], 16) for l in nm.splitlines() if l.split()[-1] == 'gpu_queue_slow']
         assert len(address) == 1 and len(slow) == 1
         phdrs = subprocess.check_output(['llvm-readelf-21', '-lW', str(binary)], text=True)
         offset = None
@@ -318,11 +354,11 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
             path.write_bytes(image)
             if case in args.cases:
                 log = run('case-%d' % case, qemu + ['-kernel', str(path)], timeout=1800)
-                marker = 'PASS mimus service case 0x%016x;' % case
+                marker = 'PASS GPU queue case 0x%016x;' % case
                 assert marker in log, log[-3000:]
                 results['cases'][case] = {'name': CASES[case], 'metrics': dict(
                     (m.group(1), int(m.group(2), 16)) for m in re.finditer(r'metric (\S+) (0x[0-9a-f]+)', log)),
-                    'pass': log.strip().splitlines()[-1]}
+                    'pass': log.strip().splitlines()[-1], 'log': logs['case-%d' % case]}
             if case in args.trace:
                 image[slow_offset:slow_offset + 4] = (1).to_bytes(4, 'little')
                 path = out / ('case-%d-traced.elf' % case)
@@ -333,7 +369,7 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
                           ['-accel', 'tcg,thread=single,one-insn-per-tb=on', '-icount', 'shift=0,sleep=off',
                            '-d', 'exec,nochain',
                            '-dfilter', ranges, '-D', str(trace), '-kernel', str(path)], timeout=3600)
-                assert 'PASS mimus service case 0x%016x;' % case in log, log[-3000:]
+                assert 'PASS GPU queue case 0x%016x;' % case in log, log[-3000:]
                 events = parse(trace, dsb, entries, funcs)
                 all_windows = windows(events)
                 metrics = dict((m.group(1), int(m.group(2), 16)) for m in re.finditer(r'metric (\S+) (0x[0-9a-f]+)', log))
@@ -343,6 +379,9 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
                 else:
                     # Window 0 runs from the first marker to the first job's marker.
                     jobs = all_windows[1:]
+                    assert len(jobs)==len(durations)
+                    assert all(w[('call','uncached-store8')]==0 and
+                               w[('call','uncached-store64')] in (23,28) for w in jobs), 'client ring store width/count'
                     results['traces'][case] = {**summarize(jobs, segments(events)), 'metrics': metrics}
                 (out / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
     finally:

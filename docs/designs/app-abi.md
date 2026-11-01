@@ -10,12 +10,15 @@ the manifest declares. Applications reach the OS through a small set of
 [layering refactoring](../layering-audit.md); mimus, the speech recognizer,
 becomes the first application of an OS core that no longer contains it.
 
-An image holds zero or one application. A second application per image would add an
-application index to the INPUTS extent and the result record, and the
-manifest generator would place and check the regions and host operations of
-all the image's manifests together.
+An image holds zero or one primary application. A primary GPU application may
+also admit one trusted GPU application through an immutable `ss_gpu_share`
+descriptor. The peer has its own manifest, task and GPU-only grant. Both
+applications explicitly share one program and exactly the same region records.
+The primary manifest remains the session, input and result authority. General
+composition with separate input, result or host-operation records is unsupported.
 
-**Status.** Implemented for one statically linked application or no application.
+**Status.** Implemented for one primary application, with an optional fixed GPU
+peer, or no application.
 The source and historical migration plan below define the reviewed interface.
 The kit includes:
 
@@ -44,7 +47,31 @@ The kit includes:
 
 The native OS image implements the calls and links applications through the
 kit. Mimus lives in its own repository; hello-compute remains in SunstoneOS.
-The generic GPU compute queue remains separate, unimplemented work.
+The [generic GPU compute queue](gpu-compute-queue.md) admits application programs
+and region leases and serializes work from the primary and its optional peer.
+
+## Two trusted GPU applications share one admitted memory map
+
+`ss_gpu_share` names the primary manifest, peer manifest, peer entry, shared
+program descriptor and the mask of shared GPU regions. Admission runs before
+scheduling. It checks every region record against the primary, requires an
+existing GPU grant and consumes one granted worker core for the peer. The peer
+cannot add devices, regions, inputs, heap, workers or host operations. Its stack
+is bounded by the OS's fixed 16 KiB storage.
+
+The peer calls `gpu_queue_context_join` after the primary creates the context.
+Each task receives its own client handle, submission slot and completion queue.
+Only the primary creates the context or controls device-wide close, open and
+recovery waits. A task cannot use the other task's handle. Each application must
+keep its job's buffers stable until its own terminal record arrives. Concurrent
+mutable ranges must be disjoint or synchronized by the applications.
+
+Returning from the peer entry drains its owed record before marking it finished.
+The primary's `ss_finish` waits for peer completion within the admitted absolute
+deadline, quiesces GPU work and then publishes the result. Resident completion
+also quiesces the GPU before suspending. Failed isolation retains memory and
+prevents successful completion. This composition supplies no isolation between
+trusted applications sharing the GPU address space.
 
 ## The manifest declares what an application needs
 

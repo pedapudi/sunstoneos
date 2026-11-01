@@ -84,8 +84,10 @@ def inspect(image, kind, descriptor=None, host_tree=None):
         base.image_parts(Path(image))
         if generic:
             host.result_geometry(image)
-            cpu = load('inspect_cpu_geometry', ROOT/'apps/cpu-runtime-qualification/host.py')
-            geometry = cpu.geometry(Path(image))
+            returning = load('inspect_return_geometry', ROOT/'apps/os/cpu-return-host.py')
+            geometry = returning.geometry(Path(image))
+            if kind == 'gpu-return':
+                require('gpu_receipt' in geometry, 'GPU kind requires the linked GPU return receipt.')
         else:
             dev = load('inspect_dev', ROOT/'tools/dev-run.py')
             legacy = load('inspect_legacy', (host_tree or GPU_TREE)/'apps/os/cpu-return-host.py')
@@ -313,13 +315,55 @@ def capture(owner, plan, args):
                 allow_untouched=geo['gpu'].get('untouched_report_version') == 2)
         return {'valid': True, 'payload': payload, 'report': decoded}
     records = load('runner_result_host', ROOT/'apps/os/cpu-return-host.py')
-    result = records.capture_result(owner.tx, args.image, plan['epoch'], plan['generation'], out/'output-record.bin')
-    # Copy the secure return report too; the opaque payload alone is not proof
-    # of all-core retirement. Its ABI is shared by generic and legacy images.
-    addr, size = plan['geometry']['report_address'],plan['geometry']['report_bytes']
-    report = owner.read(addr, size, out/'return-report.bin')
-    decoded = records.decode_return_report(report, plan['epoch'])
-    return {'valid': True, 'payload': result['payload'], 'report': decoded}
+    geo = plan['geometry']
+    reads = [('return-report', geo['report_address'], geo['report_bytes']),
+             ('output-record', geo['output_address'], geo['output_bytes'])]
+    if 'gpu_receipt' in geo:
+        gpu = geo['gpu_receipt']
+        reads.append(('gpu-report', gpu['address'], gpu['bytes']))
+    if 'thermal' in geo:
+        reads.extend(records.thermal_capture.captures(geo['thermal']))
+    # Preserve every returned object before decoding any of them. A malformed
+    # application result must not hide the native retirement or GPU receipt.
+    copied = {name: owner.read(address, size, out/(name + '.bin'))
+              for name, address, size in reads}
+    decoded = records.decode_return_report(copied['return-report'], plan['epoch'])
+    valid, payload = True, b''
+    decoded['output_capture_sha256'] = hashlib.sha256(copied['output-record']).hexdigest()
+    try:
+        info = records.host.image_manifest(args.image)
+        payload = records.host.decode_result(copied['output-record'], plan['epoch'], plan['generation'],
+                                              info['manifest']['output_limit'])
+        decoded['output_capture_status'] = 'decoded'
+    except (ValueError, KeyError, struct.error) as error:
+        valid = False
+        decoded.update(output_capture_status='malformed', output_error=str(error))
+    if 'gpu_receipt' in geo:
+        decoded['gpu_capture_sha256'] = hashlib.sha256(copied['gpu-report']).hexdigest()
+        try:
+            decoded['gpu'] = records.gpu_capture.decode_captured(copied['gpu-report'], geo['gpu_receipt'],
+                                                                 plan['epoch'], plan['generation'])
+            require(args.kind != 'gpu-return' or decoded['gpu'].get('gpu_bisect') or
+                    decoded['gpu'].get('completed_gpu_work'),
+                    'GPU kind requires completed GPU work or an image-bound diagnostic receipt.')
+            decoded['gpu_capture_status'] = 'decoded'
+        except (ValueError, KeyError, struct.error) as error:
+            valid = False
+            decoded.update(gpu_capture_status='malformed', gpu_error=str(error))
+    if 'thermal' in geo:
+        decoded['thermal_capture_sha256'] = {name: hashlib.sha256(copied[name]).hexdigest()
+                                             for name, _, _ in records.thermal_capture.captures(geo['thermal'])}
+        try:
+            decoded['thermal'] = records.thermal_capture.decode(geo['thermal'], copied,
+                                                                plan['epoch'], plan['generation'])
+            decoded['thermal']['qualification_passed'] = False
+            decoded['thermal_capture_status'] = 'decoded'
+        except (ValueError, KeyError, struct.error) as error:
+            decoded.update(thermal_capture_status='malformed', thermal_error=str(error))
+    else:
+        decoded['thermal_capture_status'] = 'absent'
+    decoded['qualification_passed'] = False
+    return {'valid': valid, 'payload': payload, 'report': decoded}
 
 
 

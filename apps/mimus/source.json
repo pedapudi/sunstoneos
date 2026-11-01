@@ -1,9 +1,9 @@
 {
   "repository": "https://github.com/pedapudi/mimus.git",
-  "revision": "c0872ac122e156d8c5c0c64e3a09beeee8c5c21f",
+  "revision": "9fd498ec3bcdcb5d59655f3f38d93da273567e05",
   "base_revision": "18c7c81968f56c8c985af0ec26448184cf6a17ec",
-  "local_worktree": "/home/sunil/git/mimus-worktrees/small-fixes-1031",
-  "branch": "port/sunstoneos-split",
+  "local_worktree": "/home/sunil/git/mimus-worktrees/gpu-integrate-1031",
+  "branch": "port/sunstoneos-gpu-integrate",
   "application_directory": "sunstoneos",
   "dashboard": {
     "title": "Local speech recognition",
