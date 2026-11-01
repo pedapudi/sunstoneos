@@ -5,6 +5,7 @@
 #include "a733_audio_leases.h"
 #include "a733_platform_locks.h"
 #include "platform.h"
+#include "register_latency.h"
 #include <string.h>
 #ifndef I2S_CHECK_DUPLEX
 #define I2S_CHECK_DUPLEX 0
@@ -20,12 +21,14 @@ static struct a733_audio_leases audio;
 static struct a733_audio_parent parent;
 static struct a733_i2s_platform bindings[2];
 static struct a733_pins pins;
+static struct register_latency flush_effect[2];
 static struct dma_service_i2s_stream_profile profiles[2];
 static _Alignas(4096) unsigned char pool[8*4096];
 static unsigned char device[6][256];
 static uint32_t ccu[0x2000/4],pio[0x200/4],ir[0x80/4],dma[0x300/4];
 static uint32_t requested,drain_enabled=1,invalidations,submissions,io_count,peer_stage;
 static uint32_t late_drain,fail_clock,pause_open,pause_close,paused,gen_writes;
+static uint32_t stuck_flush;
 static uint64_t us=1,frequency;
 static unsigned creating_bootstrap,tx_mode,live;
 static TaskHandle_t bootstrap_task;
@@ -78,6 +81,8 @@ static uint32_t *word(uintptr_t a)
 static int read_reg(void *context,uintptr_t a,uint32_t *out)
 {
     (void)context;locked();inc(&io_count);
+    if(a==A733_I2S0_BASE+20)for(unsigned i=0;i<2;++i)
+        *word(a)=reg_latency_apply(&flush_effect[i],us,*word(a));
     if(a==A733_I2S0_BASE+24)*out=tx_mode==2?((64u<<16)|8):tx_mode?(64u<<16):8;
     else *out=*word(a);
     return 1;
@@ -87,8 +92,17 @@ static int write_reg(void *context,uintptr_t a,uint32_t v)
     (void)context;locked();inc(&io_count);
     if(a==A733_I2S0_BASE+12){ir[3]&=~v;return 1;}
     if(a==A733_I2S0_BASE && (v&1))inc(&gen_writes);
-    if(a==A733_I2S0_BASE+20)v&=~(3u<<24);
+    /* Manual17.1.8.6: FIFO flush self-clears. Forty fixture microseconds
+     * expose asynchronous completion without asserting a measured latency. */
+    if(a==A733_I2S0_BASE+20)for(unsigned i=0;i<2;++i){
+        unsigned mask=1u<<(24+i);
+        if((v&mask)&&!(*word(a)&mask)){
+            reg_latency_schedule(&flush_effect[i],us,40,mask,0);flush_effect[i].stuck=get(&stuck_flush);
+        }
+    }
     if(a==A733_I2S0_BASE+28 && v){
+        configASSERT(!(v&8)||!flush_effect[0].pending);
+        configASSERT(!(v&128)||!flush_effect[1].pending);
         configASSERT(ir[0]&1);
         if(tx_mode==2){
             if(v&8)configASSERT(dma[0x100/4]);
@@ -292,6 +306,17 @@ static void client(void *unused)
 {
     (void)unused;
     while(!get(&peer_stage))vTaskDelay(1);
+    if(*(volatile uint32_t *)UINT32_C(0x47fff000)==1){
+        open_stream(0);set(&stuck_flush,1);
+        configASSERT(request(DMA_SERVICE_SUBMIT,0,frequency,0).result==DMA_SERVICE_OK);
+        struct dma_service_reply r=wait_phase(0,DMA_SERVICE_RECOVERY);
+        configASSERT(flush_effect[0].pending&&!dma[0x100/4]&&!ir[28/4]&&!(ir[0]&6));
+        configASSERT(r.holds_buffers&&r.owns_session&&bindings[0].local.id&&bindings[0].pin_lease.id);
+        unsigned io=get(&io_count);vTaskDelay(3);
+        configASSERT(request(DMA_SERVICE_REAP,0,0,0).result==DMA_SERVICE_FAULT&&get(&io_count)==io);
+        platform_puts("PASS I2S stuck flush: deadline retains buffers and leases without DMA or direction enable\n");
+        platform_exit(0);
+    }
     if(I2S_CHECK_DUPLEX)duplex_case();
     set(&pause_open,1);open_stream(0);
     configASSERT(request(DMA_SERVICE_SUBMIT,0,frequency,0).result==DMA_SERVICE_OK);
@@ -408,6 +433,7 @@ void kernel_main(void)
         profiles[j].stream=(struct a733_i2s_stream_profile){
             {24576000,16000,0,32,32,1,0},a733_i2s_platform_stream_operations(),&bindings[I2S_CHECK_DUPLEX?0:j],
             j?A733_I2S_TRANSMIT:A733_I2S_RECEIVE,10000,0,0};
+        if(*(volatile uint32_t *)UINT32_C(0x47fff000)==1)profiles[j].stream.operation_us=100;
     }
     struct dma_memory_window window={(uintptr_t)pool,(uintptr_t)pool,sizeof(pool),7};
     struct dma_fifo_port ports[]={{A733_I2S0_RXFIFO,3,1u<<4,1u<<8,A733_DMA_READ},

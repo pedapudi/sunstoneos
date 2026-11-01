@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include "register_latency.h"
 static int pcie_gpu_init(struct a733_gpu_resource_manager *,const struct a733_gpu_resource_ops *,void *);
 static int pcie_pins_init(struct a733_pins *,const struct a733_pins_operations *,void *,const struct a733_pin_handoff *);
 #define PMIC_MODEL_NO_MAIN
@@ -18,6 +19,43 @@ static uint64_t phy_done,reset_rise;
 /* Configured target speed and the speed a modeled directed change reaches. */
 static unsigned link_speed=1,negotiated=1,speed_pending,speed_stuck;
 static uint64_t speed_since;
+static struct register_latency atu_effects[2],phy_effect,link_effect;
+#define atu_effect atu_effects[0]
+static uint64_t atu_on_us,atu_off_us;
+static unsigned atu_reads,atu_stall_off,atu1_stall_off,atu1_off_acks;
+static uint64_t gpio_cost_ns,gpio_returned_ns;
+static void deferred(struct pmic_model *m)
+{
+    uint32_t *w;
+    for(unsigned i=0;i<2;++i) {
+        w=pmic_model_word(m,0x06300004+i*0x200);
+        unsigned off=i&&atu_effects[i].pending&&!atu_effects[i].value;
+        *w=reg_latency_apply(&atu_effects[i],m->now,*w);
+        if(off&&!atu_effects[i].pending)++atu1_off_acks;
+    }
+    w=pmic_model_word(m,0x06c02900);*w=reg_latency_apply(&phy_effect,m->now,*w);
+    w=pmic_model_word(m,0x06400e0c);*w=reg_latency_apply(&link_effect,m->now,*w);
+}
+/* Shared with the function/EPF wrappers, whose region-one access policy is
+ * deliberately separate from the root-only native aperture. */
+static int atu_model_write(struct pmic_model *m,uintptr_t a,uint32_t value)
+{
+    if(a<0x06300000||a>0x06300218)return 0;
+    unsigned region=(unsigned)(a-0x06300000)/0x200,off=(unsigned)(a&0x1ff);
+    if(off>24)return 0;
+    deferred(m);
+    uint32_t *word=pmic_model_word(m,0x06300004+region*0x200);
+    struct register_latency *effect=&atu_effects[region];
+    if(off==4) {
+        assert(!effect->pending);
+        if((*word&(1u<<31))==value)return 1;
+        reg_latency_schedule(effect,m->now,value?atu_on_us:atu_off_us,1u<<31,value);
+        effect->stuck=value?stall_atu:region?atu1_stall_off:atu_stall_off;
+        return 1;
+    }
+    assert(!effect->pending&&!(*word&(1u<<31)));
+    *pmic_model_word(m,a)=value;return 1;
+}
 static int pcie_gpu_read(void *v,uintptr_t a,uint32_t *out)
 {struct pmic_model *m=v;*out=*pmic_model_word(m,a);return 1;}
 static int pcie_gpu_update(void *v,uintptr_t a,uint32_t required,uint32_t set,uint64_t deadline)
@@ -42,7 +80,11 @@ static int pcie_pin_write(void *v,uintptr_t a,uint32_t value)
             assert(phy_done&&reset_rise-phy_done>=100000);
         }
     }
-    return pmic_model_pin_write(v,a,value);
+    int r=pmic_model_pin_write(v,a,value);
+    if(gpio_cost_ns&&a==0x02000214&&(value&(1u<<22))) {
+        pmic_model_cost(m,gpio_cost_ns);gpio_returned_ns=m->now*1000+m->frac_ns;
+    }
+    return r;
 }
 static int pcie_pin_enter(void *v,uint64_t deadline)
 {
@@ -70,6 +112,10 @@ static int pcie_read(void *v,uintptr_t a,unsigned width,uint32_t *out)
 {
     struct pmic_model *m=v;assert(m->register_held&&!reg_retained);
     assert(a733_pcie_native_address(a,width,0));
+    deferred(m);
+    if(a==0x06300004)++atu_reads;
+    if(a>=0x20000000&&a<0x20001000)
+        assert(!atu_effect.pending&&(*pmic_model_word(m,0x06300004)&(1u<<31)));
     /* The controller clears the directed-change bit when the new speed is up. */
     if(a==0x0600080c&&speed_pending&&!speed_stuck&&m->now-speed_since>=200) {
         uint32_t *root=pmic_model_word(m,0x06000080),cap=*pmic_model_word(m,0x20000034)&255;
@@ -96,6 +142,8 @@ static int pcie_write(void *v,uintptr_t a,unsigned width,uint32_t value)
     struct pmic_model *m=v;assert(m->register_held&&!reg_retained);
     assert(a733_pcie_native_address(a,width,1)&&trace_count<2048);
     trace[trace_count++]=(typeof(trace[0])){a,width,value};
+    if(atu_model_write(m,a,value))return 1;
+    deferred(m);
     uint32_t *word=pmic_model_word(m,a&~(uintptr_t)3);
     if(a==0x0600080c&&(value&(1u<<17))) {
         /* A directed change needs a 0-to-1 bit transition on a trained link. */
@@ -105,20 +153,25 @@ static int pcie_write(void *v,uintptr_t a,unsigned width,uint32_t value)
     uint32_t mask=width==4?UINT32_MAX:(width==2?65535u:255u)<<((a&3)*8);
     *word=(*word&~mask)|(value<<((a&3)*8));
     if(a==0x03400194)*pmic_model_word(m,0x03400114)&=~value;
-    if(a==0x06c02100&&(value&1)&&!stall_phy)*pmic_model_word(m,0x06c02900)=1;
+    if(a==0x06c02100&&(value&1)) {
+        reg_latency_schedule(&phy_effect,m->now,200,1,1);phy_effect.stuck=stall_phy;
+    }
     if(a==0x06c02004&&(value&(1u<<28)))phy_done=m->now;
     if(a==0x06400c00&&(value&1)) {
         assert(reset_rise&&m->now>=reset_rise);
-        *pmic_model_word(m,0x06400e0c)=3;
+        reg_latency_schedule(&link_effect,m->now,200,3,3);
         *pmic_model_word(m,0x06000080)=0x00110000;
     }
-    if(a==0x06300004&&stall_atu)*word=0;
     return 1;
 }
 static void setup(void)
 {
     memset(&port,0,sizeof(port));trace_count=reg_retained=stall_phy=stall_atu=bad_caps=late_fault=raise_before_adopt=not_ready=phy_polls=speed_pending=speed_stuck=0;
     phy_done=reset_rise=0;pmic_model_setup(&model);
+    model.now_step=1;
+    atu_effects[0]=atu_effects[1]=phy_effect=link_effect=(struct register_latency){0};
+    atu_on_us=atu_off_us=250;atu_reads=atu_stall_off=atu1_stall_off=atu1_off_acks=0;
+    gpio_cost_ns=gpio_returned_ns=0;
     model.pmic[0x20]=0x40;model.pmic[0x2a]=13;
     *pmic_model_word(&model,0x02002000)=0xf8636300;
     *pmic_model_word(&model,0x020020a0)=0xfe106300;
@@ -270,6 +323,71 @@ static void speeds(void)
         &model.rails,&model.provider,&model.gpu)&&!other.self);}
     link_speed=negotiated=1;setup();assert(complete()==A733_PCIE_READY&&!port.speed_change&&!written(0,0x0600080c,4,1u<<17,1u<<17));
 }
+static void atu_latency(void)
+{
+    uint32_t value;uint64_t start,elapsed;unsigned before,reads;
+    /* Reprogramming an enabled window waits separately for both edges. */
+    setup();assert(complete()==A733_PCIE_READY);atu_off_us=4000;atu_on_us=15000;
+    start=model.now;reads=atu_reads;
+    assert(a733_pcie_config_read(&port,0,0,start+500000,&value)==A733_PCIE_READY);
+    elapsed=model.now-start;
+    assert(elapsed>=19000&&elapsed<20000&&value==0x56781234&&!atu_effect.pending);
+    printf("ATU delayed success: %llu us, %u acknowledgment reads\n",(unsigned long long)elapsed,atu_reads-reads);
+    /* Disable plus enable has one 20 ms budget, not two separate budgets. */
+    setup();assert(complete()==A733_PCIE_READY);atu_off_us=atu_on_us=12000;
+    start=model.now;reads=atu_reads;
+    assert(a733_pcie_config_read(&port,0,0,start+500000,&value)==A733_PCIE_RETAINED);
+    assert(model.now-start>=20000&&model.now-start<20100&&port.failed&&reg_retained&&atu_effect.pending);
+    assert(port.atu_failure==2&&port.atu_address==0x06300004&&port.atu_expected==(1u<<31)&&
+        port.atu_started>=start&&port.atu_started-start<100&&!(port.last_value&(1u<<31)));
+    printf("ATU combined timeout: %llu us, %u acknowledgment reads\n",(unsigned long long)(model.now-start),atu_reads-reads);
+    /* An acknowledgment beyond the local bound never permits CFG access. */
+    setup();assert(complete()==A733_PCIE_READY);atu_on_us=20001;
+    start=model.now;
+    assert(a733_pcie_config_read(&port,0,0,start+500000,&value)==A733_PCIE_RETAINED);
+    assert(atu_effect.pending&&model.now-start<20100);
+    /* Session deadline is shorter than the hardware-program budget. */
+    setup();assert(complete()==A733_PCIE_READY);atu_off_us=4000;
+    start=model.now;before=trace_count;
+    assert(a733_pcie_config_read(&port,0,0,start+1000,&value)==A733_PCIE_RETAINED);
+    assert(model.now-start>=1000&&model.now-start<1100&&trace_count==before+1);
+    assert(port.atu_failure==2&&port.atu_address==0x06300004&&!port.atu_expected&&(port.last_value&(1u<<31)));
+    /* A stuck disable cannot be followed by address programming. */
+    setup();assert(complete()==A733_PCIE_READY);atu_stall_off=1;
+    start=model.now;before=trace_count;
+    assert(a733_pcie_config_read(&port,0,0,start+500000,&value)==A733_PCIE_RETAINED);
+    assert(trace_count==before+1&&atu_effect.pending&&model.now-start<20100);
+    /* Frozen fixture time leaves readback stale; the finite read cap ends it. */
+    setup();assert(complete()==A733_PCIE_READY);model.now_step=0;
+    start=model.now;reads=atu_reads;before=trace_count;
+    assert(a733_pcie_config_read(&port,0,0,start+500000,&value)==A733_PCIE_RETAINED);
+    assert(model.now==start&&atu_reads-reads==(1u<<20)&&trace_count==before+1&&reg_retained);
+    assert(port.atu_failure==3&&port.atu_address==0x06300004&&!port.atu_expected&&port.atu_started==start);
+    printf("ATU frozen clock: %u acknowledgment reads, retained without address writes\n",atu_reads-reads);
+}
+static void hold_boundaries(void)
+{
+    setup();while(port.phase!=11)assert(step()!=A733_PCIE_RETAINED); /* RESET_WAIT */
+    model.now_step=0;model.frac_ns=23;model.now=port.perst_since+100000;
+    assert(a733_pcie_poll(&port)==A733_PCIE_PENDING&&port.phase==11&&!reset_rise);
+    ++model.now;assert(a733_pcie_poll(&port)==A733_PCIE_PENDING&&port.phase==12);
+    gpio_cost_ns=250023;
+    assert(a733_pcie_poll(&port)==A733_PCIE_PENDING&&port.phase==13);
+    assert(gpio_returned_ns&&port.perst_since==gpio_returned_ns/1000);
+    const uint64_t origin=port.perst_since;
+    model.now_step=1;
+    while(port.phase!=15)assert(step()!=A733_PCIE_RETAINED); /* IDENTIFY */
+    model.now_step=0;model.now=origin+100000;
+    assert(a733_pcie_poll(&port)==A733_PCIE_PENDING&&port.phase==15);
+    assert(model.now*1000-gpio_returned_ns<UINT64_C(100000000));
+    ++model.now;assert(a733_pcie_poll(&port)==A733_PCIE_READY&&port.phase==16);
+    assert(model.now*1000-gpio_returned_ns>=UINT64_C(100000000));
+    setup();while(port.phase!=11)assert(step()!=A733_PCIE_RETAINED);
+    port.config.deadline=port.perst_since+100000;model.now=port.config.deadline;model.now_step=0;
+    unsigned before=trace_count;
+    assert(a733_pcie_poll(&port)==A733_PCIE_RETAINED&&trace_count==before&&!reset_rise);
+    puts("PCIe minimum holds: fractional origin, costly GPIO completion, exact100ms pending and original deadline retained");
+}
 static void references(void)
 {
     static typeof(trace) reference;
@@ -332,6 +450,8 @@ int main(int argc,char **argv)
     setup();stall_atu=1;retained();
     setup();late_fault=1;retained();assert(!late_fault);
     speeds();
-    puts("PASS: PCIe provider composition, 24/26 MHz references, PHY/link/readiness/config, Gen2/Gen3 change/fallback and retained failures");
+    atu_latency();
+    hold_boundaries();
+    puts("PASS: PCIe references, Gen2/Gen3 change/fallback, delayed ATU and minimum holds, retained failures");
     return 0;
 }

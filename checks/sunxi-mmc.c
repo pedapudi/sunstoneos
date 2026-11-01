@@ -2,7 +2,9 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include "register_latency.h"
 #include "mmc-reference.h"
+#define MMC_REGISTER_LATENCY 1
 
 /* Card model follows the command/state protocol. The MMIO model supplies FIFO
  * words independently of completion interrupts, so receiving bytes cannot
@@ -20,7 +22,18 @@ struct model {
     int backwards, expiry_on_done, reentry, removal;
     int oor_command, oor_stop, oor_status; /* R1 OUT_OF_RANGE (bit 31) placement. */
     unsigned no_level, trickle, advertised, data_polls, polls;
+#ifdef MMC_REGISTER_LATENCY
+    struct register_latency reset_effect,update_effect;
+    unsigned reset_stuck,update_stuck,reset_pending_reads,update_pending_reads;
+#endif
 };
+#ifdef MMC_REGISTER_LATENCY
+static void completion(struct model *m)
+{
+    m->reg[0]=reg_latency_apply(&m->reset_effect,m->now,m->reg[0]);
+    m->reg[0x18/4]=reg_latency_apply(&m->update_effect,m->now,m->reg[0x18/4]);
+}
+#endif
 static void field(uint32_t *r, unsigned first, unsigned count, uint32_t v)
 {
     for (unsigned b = 0; b < count; ++b) {
@@ -64,6 +77,11 @@ static int read32(void *ctx, uint32_t off, uint32_t *out)
 {
     struct model *m = ctx; ++m->calls;
     assert(off <= 0x300 && !(off & 3));
+#ifdef MMC_REGISTER_LATENCY
+    completion(m);
+    if(off==0&&m->reset_effect.pending)++m->reset_pending_reads;
+    if(off==0x18&&m->update_effect.pending)++m->update_pending_reads;
+#endif
     if (off == 0x38) {
         if (m->data_command && m->fifo_pos == m->fifo_total) {
             if (!m->no_dtc) m->reg[off/4] |= 8;
@@ -98,7 +116,15 @@ static void command(struct model *m, uint32_t cmd)
 {
     assert((cmd & (1u << 10)) == 0); /* No media write command/data direction. */
     unsigned n = cmd & 63, arg = m->reg[0x1c/4];
-    if (cmd & (1u << 21)) { m->reg[0x18/4] = 0; return; }
+    if (cmd & (1u << 21)) {
+#ifdef MMC_REGISTER_LATENCY
+        assert(!m->update_effect.pending);
+        reg_latency_schedule(&m->update_effect,m->now,125,1u<<31,0);
+        m->update_effect.stuck=m->update_stuck;return;
+#else
+        m->reg[0x18/4]=0;return;
+#endif
+    }
     assert(m->command_count < 64);
     m->commands[m->command_count] = n; m->args[m->command_count++] = arg;
     m->reg[0x18/4] = cmd & ~(1u << 31);
@@ -171,8 +197,24 @@ static void command(struct model *m, uint32_t cmd)
 static int write32(void *ctx, uint32_t off, uint32_t value)
 {
     struct model *m = ctx; ++m->calls; assert(off <= 0x300 && !(off & 3));
+#ifdef MMC_REGISTER_LATENCY
+    completion(m);
+    /* Any dependent write exposes removal of the driver's completion wait. */
+    assert(!m->reset_effect.pending&&!m->update_effect.pending);
+#endif
     if (off == 0x38) { assert(!(value & 0xffff0000u)); m->reg[off/4] &= ~value; }
-    else if (off == 0) { m->reg[off/4] = value & ~7u; if (value & 7) m->fifo_total = m->fifo_pos = 0; }
+    else if (off == 0) {
+        m->reg[off/4] = value;
+        if (value & 7) {
+            m->fifo_total = m->fifo_pos = 0;
+#ifdef MMC_REGISTER_LATENCY
+            reg_latency_schedule(&m->reset_effect,m->now,125,7,0);
+            m->reset_effect.stuck=m->reset_stuck;
+#else
+            m->reg[off/4]&=~7u;
+#endif
+        }
+    }
     else m->reg[off/4] = value;
     if (off == 0x18) {
         command(m, value);
@@ -249,6 +291,7 @@ static void identified(struct model *m, struct sunxi_mmc *h, unsigned kind, unsi
     assert(m->reg[0x54/4] == 0x12345673 && m->reg[0x104/4] == 6);
     assert(m->reg[0x140/4] == 0xa5a70000 && m->reg[0x144/4] == 0x80);
     assert(m->reg[0x80/4] == 0 && m->reg[0x8c/4] == 0 && m->reg[0xc/4] == 0);
+    assert(m->reset_pending_reads&&m->update_pending_reads);
 }
 static void terminal(struct model *m, enum sunxi_mmc_error error, uint8_t *buffer)
 {
@@ -432,7 +475,13 @@ int main(int argc, char **argv)
         if (scenario == 0 || scenario == 1) assert(m.command_count == 2);
         if (scenario == 2 || scenario == 3 || scenario == 4 || scenario == 7) assert(!m.command_count);
     }
-    puts("PASS: pinned CSD parity, SD/eMMC identification and bounded reads, full-range admission, independent completion/status, FIFO-level bursts, end-of-card OUT_OF_RANGE, retained faults and callback guards");
+    for(unsigned stalled=0;stalled<2;++stalled) {
+        init(&m,&h,SUNXI_MMC_SD,1);h.deadline_us=1000;
+        if(stalled)m.update_stuck=1;else m.reset_stuck=1;
+        run(&m);terminal(&m,SUNXI_MMC_TIMEOUT,0);
+        assert(!m.command_count&&(stalled?m.update_effect.pending:m.reset_effect.pending));
+    }
+    puts("PASS: pinned CSD parity, delayed/stuck reset and clock update, SD/eMMC identification and bounded reads, full-range admission, independent completion/status, FIFO-level bursts, end-of-card OUT_OF_RANGE, retained faults and callback guards");
     return 0;
     return 0;
 }

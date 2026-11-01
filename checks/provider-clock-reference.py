@@ -40,6 +40,8 @@ static void initial(unsigned osc,unsigned n,unsigned m){memset(registers,0,sizeo
             assert prior['inputs']==input_identity(a.output/(name+'.c')),'Refuse changed successful check inputs'
             continue
         text=(ROOT/path).read_text();actual=block(text,fn)
+        if name=='twi':
+            actual=block((ROOT/'drivers/i2c/a733_twi.c').read_text(),'a733_twi_divider')+'\n'+block(text,'settled')+'\n'+actual
         if name in ('i2s','pwm'):
             typ,header=('a733_audio_parent','a733_i2s_platform.h') if name=='i2s' else ('a733_pwm','a733_pwm.h')
             extra='uint64_t deadline,' if name=='i2s' else ''
@@ -47,6 +49,7 @@ static void initial(unsigned osc,unsigned n,unsigned m){memset(registers,0,sizeo
             setup=f'#include "{header}"\n#define OSC UINT32_C(0x07090160)\nstatic struct {typ} p;\nstatic int rd(struct {typ} *p,{extra}uintptr_t address,uint32_t *value){{(void)p;{ignored}*value=*word(address);return 1;}}\nstatic void prepare(void){{memset(&p,0,sizeof p);}}\nstatic int test(void);\n'
         elif name=='twi':
             setup='''#include "a733_twi.h"
+#include "a733_range.h"
 #define A733_PLATFORM_REGISTER_LOCK 0
 static int current(struct a733_twi_native *p){(void)p;return 1;}
 static int healthy(struct a733_twi_native *p){(void)p;return 1;}
@@ -61,8 +64,8 @@ static void retain(struct a733_twi_native *p){p->fault=1;}
 enum a733_pins_result a733_pins_held_banked(struct a733_pins *p,const struct a733_pin_lease_banked *t,int *v,uint64_t d){(void)p;(void)t;(void)d;*v=1;return A733_PINS_OK;}
 int a733_pin_fields_banked(unsigned b,unsigned p,struct a733_pin_fields *f){(void)b;memset(f,0,sizeof(*f));f->mux_address=0x200+p;return 1;}
 static struct a733_twi_native p;
-static void prepare(void){memset(&p,0,sizeof p);p.self=&p;*word(A733_TWI11_BASE+0x10)=0xf8;*word(A733_TWI11_BASE+0x20)=0x30;*word(0x207)=8;*word(0x208)=8;}
-static int test(void){return a733_twi_native_prepare(&p,100)==1;}
+static void prepare(void){memset(&p,0,sizeof p);p.self=&p;p.base=A733_TWI11_BASE;p.bgr=A733_TWI11_BGR;p.first_pin=7;*word(p.base+0x10)=0xf8;*word(p.base+0x20)=0x30;*word(0x207)=8;*word(0x208)=8;}
+static int test(void){p.config.apb1_hz=(p.config.apb1>>24==3?600000000u:24000000u)/((p.config.apb1&31)+1);assert(a733_twi_divider(p.config.apb1_hz,&p.divider,&p.rate_hz));return a733_twi_native_prepare(&p,100)==1;}
 '''
         else:
             typ={'usb2':'a733_usb2_platform','radio':'a733_radio_platform','ce':'a733_ce'}[name]

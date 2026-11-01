@@ -62,7 +62,7 @@ def main():
         'drivers/usb/a733_xhci.c','drivers/usb/a733_xhci_tinyusb.c','drivers/usb/a733_usb3_phy.c']]
     cadence = a.sources/'pcie/kernel/bsp/drivers/phy/sunxi-cadence-combophy.c'
     paths = set(units+native+[cadence,root/'drivers/usb/a733_usb3_phy.h',root/'drivers/usb/host/cadence-source.py',root/'drivers/usb/host/superspeed.py',Path(__file__).resolve(),root/'checks/a733-pmic.c',core_source,core_header,
-        a.typec/'include/a733_typec.h',a.twi/'include/a733_twi.h',root/'drivers/usb/host/tusb_config.h',root/'drivers/usb/host/hub.patch'])
+        a.typec/'include/a733_typec.h',a.twi/'include/a733_twi.h',root/'drivers/usb/host/tusb_config.h',root/'drivers/usb/host/hub.patch',root/'checks/register_latency.h'])
     for directory in [root/'include',root/'runtime/include',root/'platform/a733',freertos,a.port]:
         paths.update(directory.glob('*.h'))
     paths.update(tiny.rglob('*.h'))
@@ -144,7 +144,7 @@ void usb2_source_reference(u32 *out){out[0]=out[1]=0;struct dwc3 d={.ref_clk=out
         saved(a.twi/'include'),saved(root/'checks'),saved(tiny),saved(tiny/'host')]
     includes.insert(1,out/'tinyusb-ss');includes.append(out)
     flags = [compiler,'-std=gnu11','-O1','-g','-Wall','-Wextra','-Werror','-Wno-unused-function',
-        '-fsanitize=address,undefined','-fno-omit-frame-pointer']+['-I'+str(i) for i in includes]
+        '-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer']+['-I'+str(i) for i in includes]
     run('host-build',flags+[hub_native if u==tiny/'host/hub.c' else out/'tinyusb-ss'/u.relative_to(tiny) if u.is_relative_to(tiny) else saved(u) for u in units]+[out/'mapping.c',out/'reference.c','-o',out/'composed'])
     loaded = subprocess.check_output(['ldd', str(out/'composed')], text=True)
     libraries = {}
@@ -154,6 +154,8 @@ void usb2_source_reference(u32 *out){out[0]=out[1]=0;struct dwc3 d={.ref_clk=out
                 libraries[word] = hashlib.sha256(Path(word).read_bytes()).hexdigest()
     (out/'loaded-libraries.json').write_text(json.dumps({'ldd': loaded, 'sha256': libraries}, indent=2)+'\n')
     cases=['admission','read','busy-read','busy-stuck','busy-stuck-platform','busy-stuck-lock','mutex-loss','bad-config','short-descriptor','bad-status','short-data','cancel','detach','unplug','hid-hs-unplug','hub-unplug','unplug-stuck','hub-detach','hub-detach-enabled','ss-hub-detach']
+    cases+=['latency-reset','latency-cnr','latency-run','latency-port']
+    cases+=['hub-hold','hub-hold-zero','hub-hold-expiry']
     cases=[] if a.compile_only else a.cases or cases
     for case in cases:
         run(case,[out/'composed',case,*([out/(case+'-reports.bin')] if case.startswith('companion-') or case.startswith('ss-') or case.startswith('irq-ss-') or case.startswith('msc-stall') or case.startswith('irq-msc-stall') or case.startswith('dual-') or case.startswith('irq-dual-') or case in ('hid-fs','hid-ls','hid-hs','hub-hid-fs','hub-hid-ls','hub-hid-hs','hub-mtt-ls','hub-port7','irq-hub-hid-fs') else [])])

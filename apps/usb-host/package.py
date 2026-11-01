@@ -64,64 +64,10 @@ def main():
         folder.mkdir()
         shutil.copy2(info['source'], folder / 'image.elf')
         shutil.copy2(info['check'], folder / 'link-check.json')
-        jpeg = ' --service "5=$records/jpeg-session.bin"' if profile == 'camera-jpeg' else ''
-        text = f'''# {info['application']} native image
-
-SHA-256: `{info['sha256']}`
-
-Source revision: `{revision}`. The linked image identity is `{info['build_id']}`.
-The image passed the native link checks. It has not run on a board.
-
-Attach to TYPEC24, the Type-C/DisplayPort host connector. Keep TYPEC16 connected
-to the development host for board power and USB0/FEL. The FUSB302 and active-high
-PL8 control the SY6280 VBUS switch from the board's 5 V supply.
-
-{info['accessory']}
-
-Expected result: {info['expected']}
-
-## Prepare the coordinator's immutable session
-
-The coordinator supplies independently reviewed records. The board prefix must
-select host workload zero. The USB memory record grants exclusive use of
-`0x47000000..0x48000000`; it is not the older image-RAM-only DDR record.
-It also binds the fixed payload alias. Type-C/VBUS, PHY, clocks, source capacity,
-storage preservation and supervised recovery need their existing board records.
-The JPEG variant additionally needs the codec's isolation and power records.
-No record is created by setting an evidence field to a nonzero value.
-
-From the SunstoneOS checkout, set `records` to those reviewed inputs, `images`
-to this package and `evidence` to a new cache directory. This command is offline:
-
-```sh
-py="$HOME/.cache/sunstoneos/venv/bin/python3"
-"$py" -B apps/os/prepare.py --image "$images/{profile}/image.elf" \\
-  --prefix "$records/board-prefix.bin" --service "1=$records/thermal.bin" \\
-  --service "6=$records/usb-memory.bin"{jpeg} \\
-  --devices {info['devices']:#x} --bind-sid --output "$evidence/{profile}-session"
-```
-
-Success reports `physical_access: false`, `admission_required: true` and the
-sealed image/session file hashes. This package contains no electrical admission
-and does not authorize a board launch.
-
-## Board execution remains blocked
-
-These are supervised images. They retain USB resources and provide no normal
-ROM-return guarantee. The shared `tools/dev-run.py cpu-return` route requires
-a returning image and must refuse them. A coordinator-owned supervised USB-class
-launch/capture route is still required in that shared runner. Do not bypass it
-with direct FEL commands. No executable board-launch command is claimed here.
-
-Before qualification, attach the named accessory to TYPEC24, establish its
-5 V/500 mA source authority and the new RAM reservation, and establish supervised
-manual recovery for the selected board. A complete TYPEC24 disconnect revokes
-the source session. Device hot-plug is implemented while the admitted Type-C
-adapter or powered hub remains connected; a fresh Type-C attachment needs a new
-admitted session. After a retained run, remove all board and externally supplied
-accessory power before the coordinator restores ROM access. Preserve microSD.
-'''
-        (folder / 'README.md').write_text(text)
+        import sys
+        sys.path.insert(0, str(ROOT/'tools'))
+        from board_readme import write
+        write(folder/'link-check.json', image=folder/'image.elf', expected=info['expected'])
         info['source'] = str(info['source'])
         info['check'] = str(info['check'])
     (args.output / 'images.json').write_text(json.dumps({

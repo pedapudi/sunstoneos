@@ -5,6 +5,7 @@ Native resource admission, sink replies, PHY readiness and elapsed time are
 explicit models. No electrical link, display pixels or DMA drain is qualified.
 """
 import argparse,copy,hashlib,importlib.util,json,pickle,struct
+from register_latency import RegisterLatency
 from pathlib import Path
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
@@ -13,11 +14,12 @@ def load(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 base=load('dp_controller_image',ROOT/'checks/storage-read-native.py')
 class Model:
- def __init__(self,image):
+ def __init__(self,image,phy_delays=(6000,35,40)):
   self.image=image;self.u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);self.u.mem_map(0x41000000,0x03000000)
   for a,b in image.parts:
    if b:self.u.mem_write(a,b)
   self.time=100;self.registers={};self.events=[];self.transactions=[];self.mode='normal';self.pending=None;self.counter=0;self.fifo=[];self.code_reply=0
+  self.phy_delays=phy_delays;self.phy_status=0x400;self.phy_effects={};self.phy_samples=[]
   self.pattern=0;self.cr=0;self.eq=0;self.edid_offset=0;self.callback_base=0x43f00000;self.obj=0x43e00000;self.cfg=0x43e01000
   self.dpcd=bytearray(16);self.dpcd[0]=0x14;self.dpcd[1]=0x14;self.dpcd[2]=0x84
   self.edid=bytearray(128);self.edid[:8]=bytes.fromhex('00ffffffffffff00');self.edid[18:21]=bytes([1,4,0x80]);p=bytearray(18)
@@ -51,8 +53,11 @@ class Model:
   elif kind==1:self.fifo=list(self.edid[self.edid_offset:self.edid_offset+count]);self.edid_offset+=count
   else:raise AssertionError(('Unsupported model AUX',hex(cmd),hex(address)))
  def read(self,a,w):
-  self.time+=1;self.complete();self.events.append(['read',a,w])
-  if a==0x06c01900:return 0x111
+  self.complete();self.events.append(['read',a,w])
+  if a==0x06c01900:
+   for effect in self.phy_effects.values():self.phy_status=effect.apply(self.time,self.phy_status)
+   self.phy_samples.append((self.time,self.phy_status))
+   return self.phy_status
   off=a-0x05740000
   if off==0x14c:return 4 if self.pending else 1 if self.counter else 0
   if off==0x130:return 0
@@ -62,7 +67,20 @@ class Model:
   if off==0x134:return self.fifo.pop(0)
   return self.registers.get(a,0)
  def write(self,a,w,v):
-  self.time+=1;self.events.append(['write',a,w,v]);self.registers[a]=v
+  self.events.append(['write',a,w,v]);previous=self.registers.get(a,0);self.registers[a]=v
+  if a==0x06c01000:
+   if not(v&1):
+    self.phy_status&=~0x11;self.phy_effects={}
+   elif not(previous&1):
+    self.phy_effects['ready']=RegisterLatency(self.time,self.phy_delays[0],1,1,stuck=self.mode=='phy-no-ready')
+  elif a==0x06c0100c:
+   if (v&1) and not(previous&1):
+    assert self.phy_status&1, 'PLL clock requested before common READY'
+    self.phy_effects['clock']=RegisterLatency(self.time,self.phy_delays[1],0x10,0x10,stuck=self.mode=='phy-no-clock')
+   if ((v>>4)&63)==1 and ((previous>>4)&63)!=1:
+    assert self.phy_status&0x10, 'A0 requested before clock acknowledgment'
+    self.phy_effects['power']=RegisterLatency(self.time,self.phy_delays[2],0x3f00,0x100,stuck=self.mode in ('phy-stale-a2','phy-no-power'))
+    if self.mode=='phy-no-power':self.phy_status&=~0x3f00
   off=a-0x05740000
   if off==0x104:self.transactions.append(v&255)
   elif off==0x100:
@@ -86,7 +104,7 @@ class Model:
   assert self.u.reg_read(UC_ARM64_REG_PC)==0x43fff000,(name,hex(self.u.reg_read(UC_ARM64_REG_PC)))
   return self.u.reg_read(UC_ARM64_REG_X0)
  def checkpoint(self):
-  state={k:copy.deepcopy(getattr(self,k)) for k in ('time','registers','events','transactions','pending','counter','fifo','code_reply','pattern','cr','eq','edid_offset')}
+  state={k:copy.deepcopy(getattr(self,k)) for k in ('time','registers','events','transactions','pending','counter','fifo','code_reply','pattern','cr','eq','edid_offset','phy_delays','phy_status','phy_effects','phy_samples')}
   return bytes(self.u.mem_read(self.obj,0x2000)),state
  def restore(self,point):
   memory,state=point;self.u.mem_write(self.obj,memory)
@@ -103,6 +121,28 @@ def main():
  assert m.call('a733_dp_service',m.obj)==1;assert m.call('a733_dp_stop',m.obj)==1
  core=m.result();assert struct.unpack_from('<4I',core)==(4,0,6,1);(a.output/'core.bin').write_bytes(core)
  results=['complete-discovery-training-active-service-retained-stop']
+ # Read count cannot complete a transition; only explicit monotonic time can.
+ probe=Model(image);probe.phy_effects['ready']=RegisterLatency(probe.time,10,1,1)
+ for unused in range(20):assert probe.read(0x06c01900,4)==0x400
+ assert probe.time==100
+ probe.time=110;assert probe.read(0x06c01900,4)==0x401
+ for mode in ('phy-no-ready','phy-no-clock','phy-stale-a2','phy-no-power'):
+  fault=Model(image);fault.mode=mode
+  if mode in ('phy-stale-a2','phy-no-power'):fault.put(fault.cfg+image.layouts['a733_dp_config']['deadline'],20000)
+  assert fault.call('a733_dp_init',fault.obj,fault.cfg)==1
+  assert fault.call('a733_dp_prepare',fault.obj)==0, mode
+  assert struct.unpack_from('<2I',fault.result())==(5,3 if mode in ('phy-stale-a2','phy-no-power') else 5), mode
+  assert not fault.counter
+  events=len(fault.events)
+  assert fault.call('a733_dp_prepare',fault.obj)==0
+  assert len(fault.events)==events, 'terminal failure performed MMIO'
+  results.append(mode+'-refused-retained')
+ late=Model(image);late.mode='phy-stale-a2'
+ late.put(late.cfg+image.layouts['a733_dp_config']['deadline'],10000)
+ assert late.call('a733_dp_init',late.obj,late.cfg)==1
+ assert late.call('a733_dp_prepare',late.obj)==0
+ assert struct.unpack_from('<2I',late.result())==(5,3) # deadline, not loop budget
+ results.append('phy-deadline-refused-retained')
  for mode in ('timeout','defer','short'):
   m.restore(new);m.mode=mode;assert m.call('a733_dp_prepare',m.obj)==0
   result=m.result();assert struct.unpack_from('<I',result)[0]==5;results.append(mode+'-refused-retained')
@@ -111,6 +151,6 @@ def main():
  m.restore(ready);m.mode='normal';m.put(m.obj+image.layouts['a733_dp']['config']+image.layouts['a733_dp_config']['owner'],99)
  assert m.call('a733_dp_start',m.obj)==0;results.append('configuration-mutation-refused')
  (a.output/'trace.json').write_text(json.dumps(ready[1]['events'])+'\n')
- (a.output/'summary.json').write_text(json.dumps(dict(passed=True,physical=False,scope=__doc__,image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),outcomes=results,core_sha256=hashlib.sha256(core).hexdigest()),indent=2)+'\n')
- print('PASS actual controller/PHY nominal and five focused retained faults')
+ (a.output/'summary.json').write_text(json.dumps(dict(passed=True,physical=False,scope=__doc__,image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),inputs={str(path.relative_to(ROOT)):hashlib.sha256(path.read_bytes()).hexdigest() for path in (Path(__file__),ROOT/'checks/register_latency.py',ROOT/'drivers/display/a733_dp.c',ROOT/'drivers/display/a733_dp_cadence.c')},phy_delays_us=list(m.phy_delays),outcomes=results,core_sha256=hashlib.sha256(core).hexdigest()),indent=2)+'\n')
+ print('PASS actual controller/PHY delayed transitions and retained faults')
 if __name__=='__main__':main()

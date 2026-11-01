@@ -145,6 +145,9 @@ static const struct step off_steps[] = {
     {UPDATE, A733_GPU_CCU, 0x0b24, BIT(0), 0},
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), BIT(16)},
     {UPDATE, A733_GPU_CCU, 0x0b20, BIT(31), BIT(27)},
+    /* Manual 4.1.6.121: UPD clears only after configuration is valid.
+     * Observe that handshake before removing its PLL source. */
+    {UPDATED, A733_GPU_CCU, 0x0b20, BIT(27), 100},
     {CHECK, A733_GPU_CCU, 0x0b20, BIT(31), 0},
     {UPDATE, A733_GPU_CCU, 0x00e0, BIT(27), 0},
     {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL, BIT(31) | BIT(30) | BIT(29)},

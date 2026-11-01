@@ -97,64 +97,10 @@ def caller_interval(result):
 
 
 def run(args):
-    args.build=args.build.resolve();metadata=(args.build/'manifest.json').read_bytes();manifest=json.loads(metadata)
-    require(manifest['schema']=='a733-launch-survey-v1' and manifest['physical_access'] is False,'Wrong survey build.')
-    frozen={name:(args.build/name).read_bytes() for name in manifest['files']}
-    require(all(Path(name).name==name and hashlib.sha256(data).hexdigest()==manifest['files'][name] for name,data in frozen.items()),'Survey build bytes changed.')
-    require(args.fel.is_file(),'FEL executable is missing.')
-    args.evidence=returning.output_directory(args.evidence)
-    record={'physical_access':True,'complete':False,'transactions':[],
-        'manifest_sha256':hashlib.sha256(metadata).hexdigest(),'one_attempt':True,'launch_attempted':False,'device_access_attempted':False}
-    def journal():save(args.evidence/'session.json',record)
-    access=module('launch_survey_access',ROOT/'tools/usb-access.py')
-    import usb_guard
-    usb_guard.check_health()
-    with access.board_lock() as node:
-        access.require_rom(node);identity=access.identity(node);port=access.target(node).name
-        record.update(node=str(node),identity=identity,port=port)
-        failed=False
-        def transaction(*commands,pass_fds=()):
-            nonlocal failed
-            require(not failed and access.identity(node)==identity,'Transport failed or instance changed; no further requests.')
-            access.require_rom(node);entry={'arguments':list(map(str,commands))};record['transactions'].append(entry);journal()
-            try:
-                record['device_access_attempted']=True
-                result=subprocess.run([str(args.fel),'-d',f'{int(node.parent.name)}:{int(node.name)}',*map(str,commands)],capture_output=True,text=True,timeout=15,pass_fds=pass_fds)
-                entry.update(exit_code=result.returncode,stdout=result.stdout,stderr=result.stderr)
-                require(result.returncode==0,'Survey FEL transaction failed.')
-            except BaseException as error:failed=True;entry['failure']=str(error);journal();raise
-            journal();return result.stdout
-        def transfer(address,data,readback):
-            with base.sealed_source(data) as (path,fd):transaction('write',hex(address),path,'read',hex(address),str(len(data)),readback,pass_fds=(fd,))
-            require(readback.read_bytes()==data,'Survey transfer comparison failed.')
-        dirty=False
-        try:
-            require('soc=00001903(A733)' in transaction('version'),'Not an A733 ROM instance.')
-            backups={}
-            for name,address,size in REGIONS:
-                path=args.evidence/(name+'-before.bin');transaction('read',hex(address),str(size),path);backups[name]=path.read_bytes();require(len(backups[name])==size,'Short SRAM backup.')
-            nonce=secrets.token_bytes(8);initial=bytes(120)+nonce;record['nonce']=nonce.hex();journal();dirty=True
-            transfer(0x85000,frozen['launch-survey.bin'],args.evidence/'code-upload.bin')
-            transfer(0x86000,initial,args.evidence/'report-upload.bin')
-            record['launch_attempted']=True;record['execution_intent']=True;journal();transaction('exe','0x85000')
-            transaction('read','0x86000','128',args.evidence/'report.bin')
-            # A successful report read establishes a responsive ROM service.
-            # Restore SRAM even when architectural report validation refuses.
-            raw=(args.evidence/'report.bin').read_bytes();validation_error=None
-            try:record['result']=decode(raw,nonce)
-            except (ValueError,struct.error) as error:validation_error=error
-            for name,address,size in REGIONS:transfer(address,backups[name],args.evidence/(name+'-restored.bin'))
-            dirty=False;record.update(sram_restored=True,rom_usable=True,complete=validation_error is None);journal()
-            if validation_error:raise validation_error
-        except BaseException as error:
-            record.update(failure=str(error),transport_failed=failed)
-            if dirty or failed or (record['device_access_attempted'] and not record.get('sram_restored')):
-                try:base.stop_after_failure(record,journal,lambda:access.quarantine_instance(node,'Survey stopped; no retries; manual recovery review required.',identity),error)
-                finally:
-                    if not record['launch_attempted']:base.hold_ownership()
-            else:journal()
-            raise
-    return 0
+    """Route legacy launch commands through the native probe contract."""
+    sys.path.insert(0, str(ROOT/'tools'))
+    import board
+    return board.legacy_run(args, image=args.build/'launch-survey.elf')
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__);sub=parser.add_subparsers(dest='operation',required=True)

@@ -209,14 +209,48 @@ static int window_valid(const struct a733_pcie *p,unsigned region,uint32_t type,
     return region==1&&(p->test||p->function)&&!type&&cpu==pci&&!(cpu&4095)&&bytes&&!(bytes&4095)&&
         cpu>=A733_PCIE_MEM&&bytes<=A733_PCIE_MEM_BYTES&&cpu-A733_PCIE_MEM<=A733_PCIE_MEM_BYTES-bytes;
 }
+/* The reference polls ATU enable for 20 ms. Disable and enable share that
+ * budget here; neither a stale readback nor a stopped time source can leave
+ * the register owner spinning forever. The read cap is a secondary bound. */
+static int atu_ack(struct a733_pcie *p,uintptr_t at,uint32_t expected,uint64_t start)
+{
+    p->atu_address=at+4;p->atu_expected=expected;p->atu_started=start;p->atu_failure=0;
+    for(unsigned n=0;n<(1u<<20);++n) {
+        uint32_t value;
+        if(!timely(p)) {
+            p->atu_failure=p->last_now>=p->deadline||p->last_now>=p->config.lifetime_deadline?2:1;return 0;
+        }
+        if(p->ops.read(p->cookie,at+4,4,&value)!=1){p->atu_failure=1;return 0;}
+        /* Keep a successful bus observation even when its trailing deadline
+         * check refuses it. It is diagnostic, never an accepted completion. */
+        p->last_value=value;
+        if(!timely(p)) {
+            p->atu_failure=p->last_now>=p->deadline||p->last_now>=p->config.lifetime_deadline?2:1;return 0;
+        }
+        if(p->last_now-start>=20000){p->atu_failure=2;return 0;}
+        if((value&BIT(31))==expected)return 1;
+    }
+    p->atu_failure=3;return 0;
+}
+int a733_pcie_atu_disable(struct a733_pcie *p,unsigned region)
+{
+    if(!p||p->self!=p||region>=2||!p->windows[region].bytes||!timely(p))return 0;
+    const uint64_t start=p->last_now;
+    const uintptr_t at=A733_PCIE_ATU_OUTBOUND(region);
+    return wr(p,at+4,0)&&atu_ack(p,at,0,start);
+}
 int a733_pcie_atu_program(struct a733_pcie *p,unsigned region,uint32_t type,
     uint32_t cpu,uint32_t pci,uint32_t bytes)
 {
-    if(!window_valid(p,region,type,cpu,pci,bytes))return 0;
+    if(!window_valid(p,region,type,cpu,pci,bytes)||!timely(p))return 0;
+    const uint64_t start=p->last_now;
     uintptr_t at=A733_PCIE_ATU_OUTBOUND(region);
     p->windows[region]=(struct a733_pcie_window){type,cpu,pci,bytes};
-    return wr(p,at+4,0)&&check(p,at+4,BIT(31),0)&&wr(p,at+8,cpu)&&wr(p,at+12,0)&&
-        wr(p,at+16,cpu+bytes-1)&&wr(p,at+20,pci)&&wr(p,at+24,0)&&wr(p,at,type)&&wr(p,at+4,BIT(31));
+    if(!wr(p,at+4,0)||!atu_ack(p,at,0,start)||!wr(p,at+8,cpu)||!wr(p,at+12,0)||
+        !wr(p,at+16,cpu+bytes-1)||!wr(p,at+20,pci)||!wr(p,at+24,0)||!wr(p,at,type))return 0;
+    p->atu_expected=BIT(31);
+    if(p->last_now-start>=20000){p->atu_failure=2;return 0;}
+    return wr(p,at+4,BIT(31))&&atu_ack(p,at,BIT(31),start);
 }
 int a733_pcie_atu_write_allowed(const struct a733_pcie *p,uintptr_t a,uint32_t v)
 {
@@ -386,7 +420,8 @@ enum a733_pcie_result a733_pcie_poll(struct a733_pcie *p)
             if(r==1){p->perst_since=p->last_now;++p->phase;}break;
         }
         case RC:ok=root_setup(p);if(ok)++p->phase;break;
-        case RESET_WAIT:if(p->last_now-p->perst_since>=100000)++p->phase;break;
+        /* The counter is floored to microseconds; equality can be early. */
+        case RESET_WAIT:if(p->last_now-p->perst_since>100000)++p->phase;break;
         case TRAIN:ok=update(p,APP+0xc00,0x41,0x41);if(ok)++p->phase;break;
         case LINK:
             if(!rd(p,APP+0xe0c,&p->last_value))ok=0;
@@ -397,7 +432,7 @@ enum a733_pcie_result a733_pcie_poll(struct a733_pcie *p)
             break;
         case IDENTIFY:
             /* No configuration request until 100 ms after PERST release. */
-            if(p->last_now-p->perst_since<100000)break;
+            if(p->last_now-p->perst_since<=100000)break;
             if(!rd(p,ATU+4,&p->last_value))ok=0;
             else if(p->last_value&BIT(31)) {
                 int r=link(p)?ready(p):-1;ok=r>=0;
@@ -530,7 +565,7 @@ enum a733_pcie_result a733_pcie_stop(struct a733_pcie *p,uint64_t deadline)
     if(p->phase==READY) {
         ok=link(p)&&atu_start(p,0)&&check(p,ATU+4,BIT(31),BIT(31))&&check(p,CFG+4,7,0)&&
             (!p->windows[1].bytes||check(p,A733_PCIE_ATU_OUTBOUND(1)+4,BIT(31),0))&&
-            wr(p,ATU+4,0)&&check(p,ATU+4,BIT(31),0)&&update(p,APP+0xc00,1,0);
+            a733_pcie_atu_disable(p,0)&&update(p,APP+0xc00,1,0);
         if(ok)p->phase=STOP_RESET;
     } else {
         ok=p->phase==STOP_DOWN&&rd(p,APP+0xe0c,&p->last_value);

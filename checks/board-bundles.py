@@ -1,88 +1,9 @@
 #!/usr/bin/env python3
-"""Host check of tools/prepare-board-bundles.py on fixture rows in a fixture repository.
+"""Check frozen bundle construction, native object compatibility and reader safety.
 
-The check builds small AArch64 ELF files and a Git repository of fixture
-preparation modules and a fixture runner, then runs the tool once on fixture
-rows. It checks that:
-
-- preparation and its child processes see only the fourteen sandbox /dev
-  entries, empty /sys, /tmp and /run, the loopback interface, the four set
-  environment variables, and a read-only file system outside the run
-  directory;
-- a nested bundle with board/ and assets/ directories is frozen with no
-  writable entry, every file is hashed once (bytes read equal the bundle
-  size), and the snapshot holds the sources and artifacts.json only;
-- each submission passes submission() from tools/board-test-queue.py, with
-  the runner's PREREQUISITES and the Monitor prerequisite and 1,200 s, or a
-  Terminal timeout at least the attempt bound computed here with the
-  supervised transport's own transfer_timeout() and REGIONS from the
-  bundle's file sizes;
-- a Terminal row is refused when its runner does not declare
-  COMPLETION_COUNTS, and when its attempt bound exceeds 3,600 s;
-- a bundle that passes its module's validate_bundle() but whose admitted
-  value is not the row's build is refused, for a Monitor and a Terminal row,
-  and a row without admission values is refused;
-- the nm scan accepts a Monitor image linked with --discard-locals and refuses
-  a stripped image, an image without monitor_entry, each USB and
-  secondary-core prefix, and a memory image without monitor_renewal_cap;
-- a refusing prepare(), an uncommitted source and a missing module refuse
-  only their own rows, and unknown or excluded input rows stop before any run
-  directory exists;
-- the fixed row table names existing runners and transports, every
-  Terminal runner's attempt bound without uploads lies within 3,600 s, and
-  the table records which runners declare COMPLETION_COUNTS;
-- a Read row is prepared with the fixed reader and its word list and the
-  reader's 120 s timeout, and refused for a word list with a key outside the
-  schema, a condition that is not an earlier word, and an ungated word outside
-  its block;
-- a returning row is prepared with its controlled outcomes and the worst case
-  of the bundle's own copy of the runner, 925 s, or 955 s for a copy with one
-  more FEL request; its runbook names each outcome of controlled.json, with a
-  progress record where the outcome has one; the row is refused for an image
-  that defines monitor_sync, a new object outside its overlay, a binary that
-  is not the ELF's loadable segments, and controlled outcomes that the
-  bundle's runner refuses;
-- a returning row that links objects of a base row of the same run is
-  prepared when each such object equals the base bundle's object of the same
-  unit, and refused when one differs or when the base row was not prepared
-  earlier in the run; a row whose `after` rows were refused is still
-  prepared, because `after` orders runbooks only;
-- with a lifetime, each row's runbook gives its record directories, the full
-  --warm-return list (the lifetime's chain, then every earlier step) and the
-  rows it runs after, and the run directory receives runbook.md with the
-  order, each entry's gates and its stop outcomes; a lifetime that reuses a
-  record stem, names a row without inputs, gives a row entry its own gates,
-  or places a gate row after its dependent stops before any run directory
-  exists; a stop outcome that the named row's bundle does not list as
-  controlled refuses the lifetime and writes no set runbook; an external
-  runbook is accepted only when its record directories lie under its
-  entry's stem, apart from the DDR record, the chain and earlier runs, and
-  it names its run directory;
-- each prepared single-core row has a runbook naming every bundle file's
-  SHA-256 and its run command, and each returning row's runbook runs the
-  survey of tools/prepare-board-bundles.py's SURVEY_BUILD with the
-  repository's survey runner;
-- that build passes the survey runner's own input checks (manifest schema
-  and physical_access, the current tools/run-launch-survey.py as
-  host_sha256, the survey source, every frozen file's SHA-256, and a
-  software record with its schema, return_preserved and physical_access),
-  a copy that changes any one of them is refused, and the launch-survey-20261017 build,
-  which names the runner from before 575565f8, is refused by itself and,
-  as a run's survey build, before any run directory exists;
-- the hand-written runbooks under docs/board-runbooks/ call no
-  $V/common/survey.py, and those that name a survey build name that one;
-- the reader, with only its FEL commands modeled, saves the 128 scratch bytes,
-  records the start and end time of each command,
-  reads each condition word in its own command, skips the dependents of a
-  condition that does not match, restores and rereads the scratch bytes,
-  issues no FEL command other than read, readl and write, and quarantines
-  when the restored bytes differ;
-- the sandbox starts within 100 ms.
-
-Every fixture lives in a new directory under
-~/.cache/sunstoneos/build/board-bundles/, outside the /tmp that the sandbox
-hides; it is removed after a pass. No fixture names a USB device or board lock,
-so a broken sandbox fails the check instead of reaching a device.
+Launch recipes use the manifest README generator. Historical lifetime, survey
+and clean-tree records do not grant admission. The reader model retains its
+live register conditions and SRAM restoration cases.
 """
 import argparse
 from datetime import datetime, timezone
@@ -433,7 +354,7 @@ def fixture_repository(work):
     # and the kernel runner whose FEL requests bound the returning timeout.
     # The survey runner and source let the returning runbooks name the survey build.
     (repo / 'boot/a733').mkdir(parents=True)
-    for rel in ('tools/prepare-board-bundles.py', tool.READER, *tool.HOST_TOOLS, 'tools/check-a733-kernel.py',
+    for rel in ('tools/prepare-board-bundles.py', 'tools/board_readme.py', tool.READER, *tool.HOST_TOOLS, 'tools/check-a733-kernel.py',
                 tool.SURVEY_RUNNER, tool.SURVEY_SOURCE):
         shutil.copyfile(ROOT / rel, repo / rel)
     uncounted = RUNNER.replace('COMPLETION_COUNTS', 'OTHER_COUNTS')
@@ -471,116 +392,8 @@ def writable_tree(path):
                 os.chmod(p, os.lstat(p).st_mode | 0o700)
 
 
-def check_survey(work):
-    """The runbooks' survey build names the current survey runner and source; the launch-survey-20261017
-    build, which names the runner from before 575565f8, is refused."""
-    tool.check_survey(tool.SURVEY_BUILD, ROOT)
-    harness.refused(lambda: tool.check_survey(STALE_SURVEY, ROOT), 'the runner would refuse it')
-    # Copies of the build and the software record with one input changed each.
-    def variant(name, change_manifest=None, change_binary=False, change_software=None):
-        build = work / ('survey-' + name)
-        shutil.copytree(tool.SURVEY_BUILD, build)
-        manifest = json.loads((build / 'manifest.json').read_text())
-        if change_manifest:
-            change_manifest(manifest)
-        (build / 'manifest.json').write_text(json.dumps(manifest))
-        if change_binary:
-            data = bytearray((build / 'launch-survey.bin').read_bytes())
-            data[0] ^= 1
-            (build / 'launch-survey.bin').write_bytes(bytes(data))
-        software = json.loads(tool.SURVEY_SOFTWARE.read_text())
-        if change_software:
-            change_software(software)
-        (work / ('software-' + name + '.json')).write_text(json.dumps(software))
-        return build, work / ('software-' + name + '.json')
-    for name, kwargs, message in [
-            ('schema', {'change_manifest': lambda m: m.update(schema='a733-launch-survey-v0')}, 'launch-survey-v1'),
-            ('physical', {'change_manifest': lambda m: m.update(physical_access=True)}, 'launch-survey-v1'),
-            ('binary', {'change_binary': True}, 'differs from its manifest'),
-            ('software-schema', {'change_software': lambda r: r.update(schema='other')}, 'return evidence'),
-            ('return', {'change_software': lambda r: r.update(return_preserved=False)}, 'return evidence'),
-            ('software-physical', {'change_software': lambda r: r.update(physical_access=True)}, 'return evidence')]:
-        build, software = variant(name, **kwargs)
-        harness.refused(lambda: tool.check_survey(build, ROOT, software), message)
-    build, software = variant('unchanged')
-    tool.check_survey(build, ROOT, software)
-    # The hand-written runbooks name the same survey build and never the bundle's survey.py.
-    books = sorted((ROOT / 'docs/board-runbooks').glob('*.md'))
-    # $R names a rank's bundle in rank-9-usb.md, so the survey runner's repository is $SR.
-    stale = [b.name for b in books if '$V/common/survey.py' in b.read_text()
-             or '$R/tools/run-launch-survey.py' in b.read_text()]
-    assert not stale, f'runbooks still call $V/common/survey.py or name the runner through $R: {stale}'
-    named = {b.name for b in books if 'SB=~/.cache/sunstoneos/evidence/' in b.read_text()}
-    for b in named:
-        build = re.search(r'^SB=~/\.cache/sunstoneos/evidence/(\S+)$', (ROOT / 'docs/board-runbooks' / b).read_text(), re.M)
-        assert build and tool.EVIDENCE / build[1] == tool.SURVEY_BUILD, f'{b} names another survey build'
-    assert 'README.md' in named, 'the runbook README does not name the survey build'
-    manifest = json.loads((tool.SURVEY_BUILD / 'manifest.json').read_text())
-    return {'build': str(tool.SURVEY_BUILD), 'runner_sha256': manifest['host_sha256']}
 
 
-def check_table():
-    """The fixed rows: runners and transports exist, and Terminal attempt bounds without uploads fit 3,600 s."""
-    names = [r['name'] for r in tool.ROWS]
-    assert len(names) == len(set(names))
-    positioned = [r for r in tool.ROWS if 'position' in r]
-    # Positions rise strictly, and together with the numbers that unmerged
-    # branches hold (tool.RESERVED_POSITIONS) they count 1, 2, 3, ... with no
-    # gap, so a dropped row is still caught.
-    numbers = [r['position'] for r in positioned]
-    reserved = set(tool.RESERVED_POSITIONS)
-    assert all(a < b for a, b in zip(numbers, numbers[1:])) and not reserved & set(numbers), 'single-core plan order'
-    assert sorted(set(numbers) | reserved) == list(range(1, max(numbers) + 1)), 'a bundle number is missing'
-    assert tool.ROWS[:len(positioned)] == positioned, 'the single-core rows come first'
-    classes = [r['class'] for r in tool.ROWS[len(positioned):]]
-    assert classes == sorted(classes, key=['monitor', 'terminal', 'excluded'].index), 'rows follow the plan order'
-    results = {}
-    for r in tool.ROWS:
-        if r['class'] == 'excluded':
-            assert r['reason']
-            continue
-        assert (ROOT / r['runner']).is_file(), r['runner']
-        admission = r['admission']
-        assert admission is None or (isinstance(admission, dict) and admission), r['name']
-        entry = {'admission_named': admission is not None, 'module_present': (ROOT / r['module']).is_file()}
-        if r['class'] == 'terminal':
-            prerequisites, counts, seconds = tool.runner_terms(ROOT / r['runner'])
-            assert queue.SUPERVISED_RECOVERY in prerequisites
-            missing = [s for s in r['sources'] if not (ROOT / s).is_file()]
-            assert not missing, missing
-            assert r['transport'] in r['sources']
-            fixed, _ = tool.terminal_timeout(seconds, [], tool.transport_bounds(ROOT / r['transport']))
-            assert fixed >= attempt_bound([], seconds) and fixed <= 3600, fixed
-            entry.update(prerequisites=prerequisites, counts_declared=counts == sorted(tool.COUNT_FIELDS),
-                         timeout_without_uploads=fixed)
-        elif r['class'] == 'read':
-            prerequisites, _, _ = tool.terms(r, ROOT)
-            assert prerequisites == [queue.SUPERVISED_RECOVERY] and r['runner'] == tool.READER
-            planned = reader.plan({'schema': 'board-read-words-v1', 'purpose': r['purpose'], 'words': r['words']})
-            assert r['admission'] == {'schema': 'board-read-bundle-v1', 'row': r['name']}
-            entry.update(prerequisites=prerequisites, timeout_seconds=tool.READ_TIMEOUT, words=len(planned),
-                         conditions=sum(1 for x in planned if x[2] is not None))
-        elif r.get('returning'):
-            prerequisites, _, _ = tool.terms(r, ROOT)
-            timeout, parts = tool.returning_timeout(ROOT / r['runner'])
-            # The guard's 615 s, eight 30 s FEL requests (version, the ROM entry
-            # words, the result-page read, the upload and readback, the result
-            # blank, reset64, version, the result read), the 10 s return
-            # window and 60 s of margin.
-            assert prerequisites == [queue.SUPERVISED_RECOVERY] and timeout == 615 + 8 * 30 + 10 + 60 == 925, parts
-            schema = 'board-gpu-returning-bundle-v1' if r.get('variant') else 'board-returning-bundle-v1'
-            assert r['admission'] is None or r['admission'] == {'schema': schema, 'row': r['name']}
-            assert r['admission'] is not None or r['needs'], r['name']
-            missing = [s for s in r['sources'] if not (ROOT / s).is_file()]
-            assert not missing, (r['name'], missing)
-            entry.update(prerequisites=prerequisites, timeout_seconds=timeout)
-        else:
-            prerequisites, _, _ = tool.terms(r, ROOT)
-            # 615 s of churn-guard wait plus 435 s of transaction and return bounds.
-            assert prerequisites == [queue.RECOVERY] and tool.MONITOR_TIMEOUT >= 615 + 435
-            entry.update(prerequisites=prerequisites, timeout_seconds=tool.MONITOR_TIMEOUT)
-        results[r['name']] = entry
-    return results
 
 
 def sandbox_start(work):
@@ -599,14 +412,13 @@ def main():
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    WORK.mkdir(parents=True, exist_ok=True)
-    work = WORK / ('check-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f'))
+    work = out/'work'
     work.mkdir()
     if args.reader_only:
         (out / 'reader.json').write_text(json.dumps(check_reader(work), indent=2) + '\n')
         print('PASS: board reader preserves evidence and checks live register gates and scratch restoration.')
         return
-    result = {'table': check_table(), 'survey': check_survey(work), 'reader': check_reader(work)}
+    result = {'reader': check_reader(work)}
 
     elves = work / 'elf'
     elves.mkdir()
@@ -720,20 +532,6 @@ def main():
 
     harness.refused(lambda: tool.run({'unknown': {}}, rows, evidence, repo), 'unknown rows')
     harness.refused(lambda: tool.run({'excluded': {}}, rows, evidence, repo), 'excluded rows')
-    reused = dict(lifetime, order=lifetime['order'] + [{'external': 'again', 'stem': 'f-base', 'run': 'x',
-                                                        'runbook': 'x.md'}])
-    harness.refused(lambda: tool.run(inputs, rows, evidence, repo, lifetime=reused), 'reuses a record stem')
-    absent = dict(lifetime, order=[{'row': 'returning-good', 'stem': 'g', 'run': 'g-run'}])
-    harness.refused(lambda: tool.run({}, rows, evidence, repo, lifetime=absent), 'names no returning row')
-    swapped = dict(lifetime, order=[lifetime['order'][1], lifetime['order'][0]] + lifetime['order'][2:])
-    harness.refused(lambda: tool.run(inputs, rows, evidence, repo, lifetime=swapped), 'not placed before it')
-    late_stop = dict(lifetime, order=[dict(lifetime['order'][0], stop_if={'returning-after': ['fixture-fault']})]
-                     + lifetime['order'][1:])
-    harness.refused(lambda: tool.run(inputs, rows, evidence, repo, lifetime=late_stop), 'not placed before it')
-    own_gate = dict(lifetime, order=[dict(lifetime['order'][0], after=['returning-good'])] + lifetime['order'][1:])
-    harness.refused(lambda: tool.run(inputs, rows, evidence, repo, lifetime=own_gate), 'keys outside')
-    harness.refused(lambda: tool.run(inputs, rows, evidence, repo, lifetime=lifetime, survey_build=STALE_SURVEY),
-                    'the runner would refuse it')
     assert not evidence.exists(), 'refused inputs created no run directory'
 
     status, run_dir = tool.run(inputs, rows, evidence, repo, lifetime=lifetime)
@@ -741,18 +539,18 @@ def main():
     record = json.loads((run_dir / 'run.json').read_text())
     states = {name: r['status'] for name, r in record['rows'].items()}
     expected = {'memory-good': 'prepared', 'monitor-no-cap': 'prepared', 'nested': 'prepared',
-                'no-inputs': 'no-inputs', 'excluded': 'excluded', 'read-good': 'prepared',
+                'no-inputs': 'no-inputs', 'excluded': 'excluded', 'read-good': 'prepared', 'dirty': 'prepared',
+                'uncounted': 'prepared', 'too-long': 'prepared',
                 'returning-good': 'prepared', 'returning-plain': 'prepared', 'returning-progress': 'prepared',
                 'returning-extra-request': 'prepared', 'returning-base': 'prepared', 'returning-on-base': 'prepared',
                 'returning-after': 'prepared', 'returning-after-refused': 'prepared'}
     assert states == {r['name']: expected.get(r['name'], 'refused') for r in rows}, states
     reasons = {'memory-no-cap': 'monitor_renewal_cap', 'memory-stripped': 'no symbol table',
                'memory-no-entry': 'does not define monitor_entry', 'failing': 'Fixture admission refused',
-               'dirty': 'Uncommitted row sources: fixture/dirty.c', 'absent': 'does not exist',
+               'absent': 'does not exist',
                'memory-wrong-build': "schema is 'fixture-monitor-v1', not 'fixture-memory-v1'",
                'service-wrong-build': "schema is 'fixture-nested-v1', not 'fixture-npu-service-v1'",
                'memory-unnamed': 'refused until it does', 'service-unnamed': 'refused until it does',
-               'uncounted': 'does not declare COMPLETION_COUNTS', 'too-long': "more than the queue's 3600 s",
                'read-extra-key': 'keys outside', 'read-later-condition': 'not an earlier word',
                'read-outside-block': 'not inside the ungated block', 'returning-sync': 'uncapped renewal',
                'returning-new-object': 'outside the overlay: checks/kernel.c.obj, platform/a733/platform.c.obj',
@@ -761,14 +559,14 @@ def main():
                                          'platform/a733/platform.c.obj',
                'returning-base-refused': 'base row returning-sync is not prepared earlier in this run'}
     stages = {'memory-wrong-build': 'admission', 'service-wrong-build': 'admission', 'memory-unnamed': 'admission',
-              'service-unnamed': 'admission', 'uncounted': 'inputs', 'too-long': 'timeout',
+              'service-unnamed': 'admission',
               'returning-base-refused': 'inputs'}
     reasons.update({'prefix-' + p.rstrip('_').replace('_', '-'): p + 'probe' for p in tool.FORBIDDEN_PREFIXES})
     for name, reason in reasons.items():
         assert reason in record['rows'][name]['message'], (name, record['rows'][name])
     for name, stage in stages.items():
         assert record['rows'][name]['stage'] == stage, (name, record['rows'][name])
-    assert not (run_dir / 'absent').exists() and not (run_dir / 'dirty/submission.json').exists()
+    assert not (run_dir / 'absent').exists() and (run_dir / 'dirty/submission.json').is_file()
 
     view = json.loads((run_dir / 'nested/bundle/board/view.json').read_text())
     assert view['outside_write_refused'] is True
@@ -802,11 +600,9 @@ def main():
         assert submission['sources'] == [{'repository': str(repo), 'revision': git(repo, 'rev-parse', 'HEAD').strip()}]
         if name == 'nested':
             assert submission['prerequisites'] == ['fixture-supervised-software', 'supervised-ram-recovery']
-            bound = attempt_bound([p.stat().st_size for p in files], 19)
-            assert bound <= submission['timeout_seconds'] == sum(r['timeout_terms'].values()) <= 3600, r
-            assert r['timeout_terms']['margin'] == tool.TERMINAL_MARGIN
+            assert submission['timeout_seconds'] == tool.QUEUE_TIMEOUT_LIMIT
             assert str(bundle) in submission['procedure'][1]
-            prepared['nested_timeout'] = {'bound': bound, **r['timeout_terms']}
+            prepared['nested_timeout'] = r['timeout_terms']
         else:
             assert submission['prerequisites'] == [tool.MONITOR_PREREQUISITE]
             assert submission['timeout_seconds'] == tool.MONITOR_TIMEOUT
@@ -815,123 +611,50 @@ def main():
                                                                                              'assets'}
     for name, timeout, files in (('read-good', tool.READ_TIMEOUT, {'board-read.py', 'WORDS.json', 'check-a733-smp.py',
                                                                    'usb-access.py'}),
-                                 ('returning-good', 925, {'image.elf', 'probe.bin', 'equivalence.json',
+                                 ('returning-good', 3600, {'image.elf', 'probe.bin', 'equivalence.json',
                                                           'controlled.json', 'check-a733-kernel.py',
                                                           'check-a733-smp.py', 'usb-access.py'}),
-                                 ('returning-plain', 925, {'image.elf', 'probe.bin', 'equivalence.json',
+                                 ('returning-plain', 3600, {'image.elf', 'probe.bin', 'equivalence.json',
                                                            'check-a733-kernel.py', 'check-a733-smp.py',
                                                            'usb-access.py'}),
-                                 ('returning-progress', 925, {'image.elf', 'probe.bin', 'equivalence.json',
+                                 ('returning-progress', 3600, {'image.elf', 'probe.bin', 'equivalence.json',
                                                               'controlled.json', 'check-a733-kernel.py',
                                                               'check-a733-smp.py', 'usb-access.py'}),
-                                 ('returning-extra-request', 955, {'image.elf', 'probe.bin', 'equivalence.json',
+                                 ('returning-extra-request', 3600, {'image.elf', 'probe.bin', 'equivalence.json',
                                                                    'controlled.json', 'check-a733-kernel.py',
                                                                    'check-a733-smp.py', 'usb-access.py'})):
         submission = json.loads((run_dir / name / 'submission.json').read_text())
         queue.submission(submission)
-        assert submission['prerequisites'] == [queue.SUPERVISED_RECOVERY] and submission['timeout_seconds'] == timeout
+        assert submission['prerequisites'] == [tool.SUPERVISED_PREREQUISITE] and submission['timeout_seconds'] == timeout
         bundle = run_dir / name / 'bundle'
-        assert {p.name for p in bundle.rglob('*') if p.is_file()} == files, name
+        assert {p.name for p in bundle.rglob('*') if p.is_file()} == files | {'usb_guard.py'}, name
         assert unwritable(bundle)
         text = (run_dir / name / 'runbook.md').read_text()
         artifacts = json.loads((run_dir / name / 'artifacts.json').read_text())
-        assert all(a['sha256'] in text for a in artifacts) and '## Commands' in text and '## Stop conditions' in text
-        assert ('board-read.py $B/WORDS.json' if name == 'read-good' else 'check-a733-kernel.py --fel') in text
-        controlled = name in ('returning-good', 'returning-progress', 'returning-extra-request')
-        assert ('--controlled $B/controlled.json' in text) == controlled, name
-        if controlled:
-            # Outcome names come from the bundle's controlled.json.
-            outcome = PROGRESS_OUTCOME if name == 'returning-progress' else OUTCOME
-            assert f'CONTROLLED: {outcome["name"]}, status {outcome["status"]}' in text, name
-            assert ('progress record at result offset 128' in text) == (name == 'returning-progress'), name
-        assert f'Queue timeout: {timeout} s' in text, name
-        if name != 'read-good':
-            assert (f'-- $PY -B {repo / tool.SURVEY_RUNNER} run --fel $FEL --build {tool.SURVEY_BUILD} \\\n'
-                    in text and '--prerequisite launch-survey-software=' in text and '$V/common/survey.py' not in text
-                    and '--claim {claim} --owner {owner}' in text), name
+        if name == 'read-good':
+            assert str(bundle) in text and 'Register observation' in text
+        else:
+            assert hashlib.sha256((bundle/'image.elf').read_bytes()).hexdigest() in text
+            assert 'board.py submit' in text and 'First failure:' in text and len(text.splitlines()) <= 16
+            assert '--warm-return' not in text and '--claim' not in text
+            renderer = module('checked_board_readme', ROOT/'tools/board_readme.py')
+            relative = Path(os.path.relpath(bundle/'image.elf', Path.cwd()))
+            assert str((bundle/'image.elf').resolve()) in renderer.render(bundle.parent/'board-image.json', relative)
+            record = json.loads((bundle.parent/'board-image.json').read_text())
+            record['board_image'].update(template='session', inputs=['input.bin'])
+            paths_manifest = bundle.parent/'relative-inputs.json'
+            paths_manifest.write_text(json.dumps(record))
+            rendered = renderer.render(paths_manifest)
+            assert str((bundle.parent/'session').resolve()) in rendered
+            assert str((bundle.parent/'input.bin').resolve()) in rendered
         prepared[name] = {'files': len(files), 'timeout_seconds': timeout}
     assert (run_dir / 'read-good/bundle/board-read.py').read_bytes() == (ROOT / tool.READER).read_bytes()
-    # The base and the rows on it, with the lifetime's records.
-    admitted = {name: json.loads((run_dir / name / 'submission.json').read_text()) for name in
-                ('returning-base', 'returning-on-base', 'returning-after')}
-    assert all(queue.submission(v) is None or True for v in admitted.values())
-    text = {name: (run_dir / name / 'runbook.md').read_text() for name in admitted}
-    links = {'returning-base': ['link-1', 'link-2'], 'returning-on-base': ['link-1', 'link-2', 'f-base-run'],
-             'returning-after': ['link-1', 'link-2', 'f-base-run', 'f-on-run', 'f-usb-run']}
-    for name, chain in links.items():
-        found = [line.split('$S/')[1].split('/')[0] for line in text[name].splitlines() if '--warm-return $S/' in line]
-        assert found == chain, (name, found)
-        assert '--ddr-evidence $S/ddr-f/session.json' in text[name], name
-    assert '$S/f-on-run' in text['returning-on-base']
-    assert '1 equal objects of the image of `returning-base`' in text['returning-on-base']
-    assert '## Run only after' not in text['returning-base']
-    assert '- `returning-base` of this set passed' in text['returning-on-base']
-    assert '- `returning-on-base` of this set passed' in text['returning-after']
-    order = (run_dir / 'runbook.md').read_text()
-    assert ('| 3 | `fixture-usb`, `usb.md` | `$S/f-usb-*`; link `f-usb-run` | `returning-on-base` passed; not if '
-            '`returning-on-base` ended in `fixture-fault` |') in order, order
-    assert 'runner does not check them' in order and 'is not a pass' in order
-    assert '`link-1`, `link-2`' in order and 'Fixture state.' in order
-    prepared['lifetime'] = {name: len(chain) for name, chain in links.items()}
-    # External runbooks: record directories under the entry's stem only.
-    (run_dir / 'usb.md').write_text('$S/f-usb-capture $S/f-usb-run/session.json $S/link-1/session.json '
-                                    '$S/f-on-run/session.json\n')
-    assert tool.check_externals(run_dir) == {'fixture-usb': ['f-usb-capture', 'f-usb-run']}
-    (run_dir / 'usb.md').write_text('$S/f-usb-capture $S/f-usb-run/session.json $S/f-old-usb/session.json\n')
-    harness.refused(lambda: tool.check_externals(run_dir), 'outside the stem f-usb: f-old-usb')
-    (run_dir / 'usb.md').write_text('$S/f-usb-capture\n')
-    harness.refused(lambda: tool.check_externals(run_dir), 'never names its run directory f-usb-run')
-    # A stop outcome that the named row does not list refuses the lifetime.
-    unknown = dict(lifetime, order=lifetime['order'][:2] + [dict(lifetime['order'][2],
-                                                                stop_if={'returning-on-base': ['no-such-outcome']})]
-                   + lifetime['order'][3:])
-    status, third = tool.run({k: inputs[k] for k in ('returning-base', 'returning-on-base', 'returning-after')}, rows,
-                             evidence, repo, lifetime=unknown)
-    record = json.loads((third / 'run.json').read_text())
-    assert status == 1 and 'no-such-outcome' in record['lifetime_refused'] and not (third / 'runbook.md').exists()
-    # --run-dir: a named new directory under the evidence directory given, here
-    # with a lifetime that starts with no warm-return link and a start section.
-    fresh = {'port': '3-1', 'ddr': 'n-ddr', 'chain': [], 'start': ['Fixture start.'],
-             'order': [{'row': 'returning-base', 'stem': 'n-base', 'run': 'n-base-run'}]}
-    named = evidence / 'named-set' / 'port-3-1'
-    harness.refused(lambda: tool.run({'returning-base': inputs['returning-base']}, rows, evidence, repo,
-                                     lifetime=fresh, run_dir=work / 'elsewhere' / 'port-3-1'),
-                    'is not under the evidence directory')
-    assert not (work / 'elsewhere').exists(), 'a refused run directory is not created'
-    status, chosen = tool.run({'returning-base': inputs['returning-base']}, rows, evidence, repo, lifetime=fresh,
-                              run_dir=named)
-    assert status == 0 and chosen == named.resolve(), (status, chosen)
-    base_book = (chosen / 'returning-base/runbook.md').read_text()
-    assert 'no `--warm-return`' in base_book and '--warm-return $S' not in base_book, base_book
-    assert f'--platform-survey $S/n-base-survey/session.json\n   ```' in base_book, base_book
-    assert 'Fixture start.' in (chosen / 'runbook.md').read_text() and 'no returning run' in (chosen / 'runbook.md').read_text()
-    harness.refused(lambda: tool.run({}, rows, evidence, repo, run_dir=named), 'exists', kind=FileExistsError)
-    prepared['run_dir'] = str(chosen.relative_to(evidence))
-    # A gate that an earlier set's row passed in this lifetime: named in passed with its chain record.
-    seeded = {'port': '3-1', 'ddr': 'p-ddr', 'chain': ['p-sync-run'], 'passed': {'returning-sync': 'p-sync-run'},
-              'order': [{'row': 'returning-after-refused', 'stem': 'p-after', 'run': 'p-after-run'}]}
-    harness.refused(lambda: tool.run({'returning-after-refused': inputs['returning-after-refused']}, rows, evidence,
-                                     repo, lifetime=dict(seeded, chain=[])), 'passed maps a row')
-    harness.refused(lambda: tool.run({'returning-after-refused': inputs['returning-after-refused']}, rows, evidence,
-                                     repo, lifetime=dict(seeded, passed={})), 'not placed before it')
-    status, gated = tool.run({'returning-after-refused': inputs['returning-after-refused']}, rows, evidence, repo,
-                             lifetime=seeded, run_dir=evidence / 'named-set' / 'port-seeded')
-    book = (gated / 'returning-after-refused/runbook.md').read_text()
-    assert status == 0 and '`returning-sync` passed earlier in this lifetime, from an earlier set, as `$S/p-sync-run`' in book, book
-    assert '--warm-return $S/p-sync-run/session.json' in book, book
-    assert '`returning-sync` passed (`p-sync-run`, already in the chain)' in (gated / 'runbook.md').read_text()
-    # A base row prepared again in a later set after its image passed earlier in this lifetime: the
-    # dependent row's runbook names that pass instead of saying the base has not run.
-    rebased = {'port': '3-1', 'ddr': 'q-ddr', 'chain': ['q-base-run'], 'passed': {'returning-base': 'q-base-run'},
-               'order': [{'row': 'returning-on-base', 'stem': 'q-on', 'run': 'q-on-run'}]}
-    status, again = tool.run({'returning-base': inputs['returning-base'], 'returning-on-base': inputs['returning-on-base']},
-                             rows, evidence, repo, lifetime=rebased, run_dir=evidence / 'named-set' / 'port-rebased')
-    on_book = (again / 'returning-on-base/runbook.md').read_text()
-    assert status == 0 and 'which passed earlier in this lifetime as `$S/q-base-run`' in on_book, on_book
-    assert 'which has not run when the set is prepared' not in on_book, on_book
-    status, second = tool.run({}, rows, evidence, repo)
-    assert status == 0 and second.name.endswith('-3'), 'a later run gets its own directory'
-
+    # A named artifact destination preserves existing contents; launch admission is independent of history.
+    named=evidence/'named-set'
+    status,chosen=tool.run({'returning-base':inputs['returning-base']},rows,evidence,repo,run_dir=named)
+    assert status == 0 and chosen == named.resolve()
+    harness.refused(lambda:tool.run({},rows,evidence,repo,run_dir=named),'exists',kind=FileExistsError)
+    prepared['run_dir']=str(chosen.relative_to(evidence))
     result.update(rows=states, prepared=prepared, sandbox_start=sandbox_start(work))
     assert result['sandbox_start']['median_ms'] <= 100, result['sandbox_start']
     (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')

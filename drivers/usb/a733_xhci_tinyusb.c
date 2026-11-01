@@ -485,6 +485,7 @@ static int control_response(const struct a733_xhci_notice *e)
                 hub->powered_mask|=1u<<port;
                 if(hub->powered_mask==((2u<<hub->ports)-2)){
                     uint64_t delay=(uint64_t)hub->power_good_2ms*2000;
+                    if(delay)++delay; /* Guard floor-us sampling of a positive hold. */
                     if(!a733_deadline_after(now,delay,&hub->power_good_deadline))return 0;
                 }
             }

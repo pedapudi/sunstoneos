@@ -72,7 +72,7 @@ def main(argv=None):
 
     parser.add_argument('--input',type=Path,action='append',default=[])
     parser.add_argument('--oracle',type=Path,action='append',default=[])
-    parser.add_argument('--supervised-manual-reconnect',action='store_true',required=True,
+    parser.add_argument('--supervised-manual-reconnect',action='store_true',
         help='Use the whole-board power-removal plan; cable reconnect alone does not release NPU resources.')
     args=parser.parse_args(argv);bundle=args.bundle.resolve();prepared=preparation.validate_bundle(bundle)
     frozen=prepared['_frozen'];admission=b'{}';raw=frozen['session.bin']

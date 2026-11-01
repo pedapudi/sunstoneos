@@ -30,7 +30,7 @@ NVME_UNITS = UNITS + ["drivers/pci/a733_pcie_function.c", "drivers/pci/a733_pcie
 NVME_MODES = ["poll", "msix", "intx", "gen2", "forged", "inherited", "fatal", "identify-error",
               "timeout", "extra-vector", "extra-intx", "shutdown-stuck", "suspend", "suspend-keep",
               "multifunction", "bridge", "warm-sibling", "large-bar", "assigned-bar", "table-outside",
-              "class", "stop-config", "stop-test", "stop-link-stuck",
+              "class", "stop-config", "stop-test", "stop-link-stuck", "atu1-stuck-stop",
               "gen3", "gen3-poll", "gen3-intx", "gen3-fallback"]
 # These place the NVMe pool at 4 GiB, inside AddressSanitizer's shadow gap on
 # x86-64, so they run in a build with only the undefined-behavior sanitizer.

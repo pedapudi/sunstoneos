@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Check declared application capture limits before any device or queue access."""
-import hashlib
+"""Check supervised launch delegation without entering runner admission or USB."""
 import importlib.util
+import os
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 import tempfile
 from unittest.mock import patch
@@ -13,51 +14,33 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('capture_policy', ROOT / 'tools/check-a733-smp-supervised.py')
 policy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(policy)
+sys.path.insert(0, str(ROOT / 'tools'))
+import board
 
-class Ready(Exception):
-    pass
-
-def ready():
-    raise Ready
 
 def forbidden(*args, **kwargs):
-    raise AssertionError('capture policy reached a device or queue callback')
+    raise AssertionError('supervised adapter reached a legacy session callback')
 
-cases = 0
+
 root = Path(tempfile.mkdtemp(prefix='sunstone-capture-policy-'))
-executable = root / 'model-fel'
-executable.write_bytes(b'host-only executable identity fixture')
-args = SimpleNamespace(fel=executable, evidence=root / 'must-not-exist')
-with patch.object(policy.base, 'FEL_HASH', hashlib.sha256(executable.read_bytes()).hexdigest()):
-    for key, seconds, limit, accepted in [
-            ('application_result', 3, 3, True),
-            ('application_result', 3.1, 3, False),
-            ('application_result', 179, 179, True),
-            ('application_result', 180, 180, False),
-            ('application_result', 1, 180, False),
-            ('application_board_result', 179, 179, True),
-            ('application_board_result', 180, 180, False),
-            ('application_board_result', 1, 180, False),
-            ('application_board_result', 8, 8, True),
-            ('application_board_result', 9, 8, False),
-            ('application_result', 1, None, False),
-            ('application_result', 1, True, False),
-            ('application_result', 1, float('inf'), False),
-            ('application_result', 1, float('nan'), False),
-            ('application_result', 1, 0, False),
-            ('board_result', 59, None, True),
-            ('board_result', 60, None, False),
-            ('board_result', 60, 200, False)]:
-        try:
-            policy.run_session(args, root, {}, ready, forbidden, forbidden,
-                product='host fixture', serial='host fixture', bcd_device=0x100,
-                capture_seconds=seconds, result_key=key, capture_limit_seconds=limit)
-        except Ready:
-            assert accepted, (key, seconds, limit)
-        except ValueError as error:
-            assert not accepted and str(error) == 'Unsupported supervised capture bounds.'
-        else:
-            raise AssertionError('capture policy passed the readiness boundary')
-        assert not args.evidence.exists()
-        cases += 1
-print(f'PASS declared capture policy: {cases} cases; no device or queue access')
+bundle = root / 'bundle'
+args = SimpleNamespace(fel=root / 'model-fel', evidence=root / 'must-not-exist',
+                       bundle=bundle, expect='fixture-result')
+# The runner owns image admission, watchdog bounds and recovery. Exercise the
+# real legacy adapter and stop at its CLI boundary, before any device access.
+with patch.dict(os.environ, {'SUNSTONE_USB_PORT': '3-3'}), \
+        patch.object(board, 'main', return_value=23) as runner:
+    try:
+        policy.run_session(args, bundle, {}, forbidden, forbidden, forbidden,
+            product='host fixture', serial='host fixture', bcd_device=0x100,
+            capture_seconds=8, result_key='application_result', capture_limit_seconds=8)
+    except SystemExit as error:
+        assert error.code == 23, error.code
+    else:
+        raise AssertionError('supervised adapter did not propagate the runner exit code')
+    runner.assert_called_once_with([
+        'run', str(bundle / 'image.elf'), '--kind', 'probe', '--port', '3-3',
+        '--fel', str(args.fel), '--evidence', str(args.evidence),
+        '--template', str(bundle), '--expect', args.expect])
+assert not args.evidence.exists()
+print('PASS supervised launch delegates image, port, inputs and exit status; no device access')

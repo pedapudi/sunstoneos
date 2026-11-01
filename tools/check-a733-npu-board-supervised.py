@@ -138,7 +138,7 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','fel','evidence'):parser.add_argument('--'+name,type=Path,required=True)
 
-    parser.add_argument('--supervised-manual-reconnect',action='store_true',required=True,
+    parser.add_argument('--supervised-manual-reconnect',action='store_true',
         help='Use the whole-board power-removal plan; cable reconnect does not release NPU resources.')
     args=parser.parse_args(argv);bundle=args.bundle.resolve();prepared=freeze_bundle(bundle);frozen=prepared['_frozen']
     admission={};session=frozen['session.bin'];template=session
