@@ -2,46 +2,39 @@
 
 **Status: implemented.**
 
-**Board-qualified scope:** All 32 original corpus references match on the A733, including feature and
-log-probability checksums, text, punctuation, capitals and formatting. Total
-compute is 7.571656 seconds for 260.504 seconds of audio: aggregate real-time
-factor 0.029065, with a maximum individual factor of 0.036796. Every recording
-meets the 0.05 limit. The longest, 29.84 seconds, takes 1097.984 ms, below both
-the 1492 ms limit and the conditional 1141.869 ms projection. Each final
-recording has one physical observation; timing spread is unmeasured.
+**Board-qualified scope:** Engine `418ad38c8` preserves all 32 original corpus references at vendor maximum CPU and DSU operating points. Its aggregate factor is 0.029065 and maximum is 0.036796, with one observation per recording. On the merged OS, entry `1793563566905223485-7d25a24b` returns the 29.84-second clip in 1097.939 ms with exact output. Paced entry `1793563703824318733-0c21b2b6` preserves segmented output and retires seven secondary CPUs. Both retained thermal reports are complete version 2 captures, with maximum slot lateness 957 and 951 microseconds. Retained thermal history covers only the first recording in each batch; policy remains active afterward. Long-duration worker stress remains pending.
 
-The qualified image SHA-256 is
-`9c667caeaca9d0f4c73c8ba48113108234f1ef94ca83d53ad2fc6f1fa3f3aa49`.
-Runs return normally at CPU-L 1794 MHz and 1000 mV, CPU-B 2002 MHz and
-1050 mV, and DSU 1274 MHz. Retained thermal coverage is complete for the
-first recording in each batch. The thermal policy remains active for later
-recordings, whose individual thermal histories are not retained.
+## Source and validation
 
-## Implementation and validation
+The OS merges shared `802ffef9` in `3470254e`. Thermal capture preserves
+absolute 25 ms sensor and 125 ms record phases, independent snapshots and a
+complete fresh first row before startup load is released. Version 2 reports
+retain their scheduled first slot and unchanged 2001-microsecond lateness budget.
+Critical startup and later stale samples remain observable.
 
 The [application source record](../../apps/mimus/source.json) selects mimus
-`ae253ad1c` and its declared engine `418ad38c8`. The engine combines parallel
-attention, row-first fused linear scaling and private immutable producers.
-Channel tiling is removed after its subsampling regression. Independent review
-finds no remaining blocking defect. All 32 references also match in QEMU;
-205 host engine tests, 196 int16 matrix cases, 35 raw SDOT cases, 450 scaled
-output cases and eight callback cases pass.
+`10db8e721`, whose declared engine is `418ad38c8`. The application embeds the
+shared USB diagnostic service with its generic entry-point suppression flag.
+Writable constructor and GOT metadata remain in image RAM; the storage linker
+patch is reviewed against that combined layout. The OS core has no engine dependency.
 
-The OS merge `94886b09` includes shared revision `6ebe687a` and preserves
-writable C++ metadata and applied DSU telemetry. Thermal fixes `9c598bb7`
-and `f253e59d` preserve the 125 ms coverage limit and critical failure evidence.
-All 16 focused thermal cases and the CPU-clock baseline pass. Three baseline
-builds and selected integration checks pass; all 45 runnable affected checks
-are covered. Another 290 checks require external inputs and remain pending.
-The check index contains 791 checks, including 89 pure-host checks.
-Long-duration worker race stress remains outside this corpus qualification.
+Seventeen actual-owner thermal cases and nine versioned decoder cases pass.
+Three baseline builds pass. The full integration gate builds every core target,
+OS variant and application target. Its failed USB target and unexecuted checks
+pass after the embedding correction: 99 continuation steps, including 89 indexed
+host checks. The index contains 808 checks and 94 pure-host checks. Another
+695 checks require external inputs; full physical subsystem coverage is pending.
+
+The recorded image SHA-256 is
+`3480a88fa7fa2edd67f9b559bc29a455a56736d1369f69e2a6d1489580bfd653`.
+The paced image SHA-256 is
+`522874a27101285fb8b3ae966a4b916298489aa3ee1341a163737450a75e97a4`.
+Both return normally at CPU-L 1794 MHz and 1000 mV, CPU-B 2002 MHz and
+1050 mV, with DSU 1274 MHz.
 
 Evidence is under `~/.cache/sunstoneos/build/cpu-perf-1031/`:
-`queue-qualified-1101/final-complete.json` and
-`queue-qualified-1101/summary.json` record the final
-corpus; `merge-validation-6ebe/validation-record.json` records integration
-coverage; `thermal-startup-1101/validation-record.json` records the thermal fix.
-The application's `docs/sunstoneos_cpu_performance.md` contains all 19 queue
-outcomes, per-recording results, stage-scaling tables and paths to every raw
-PROFILE record, including rejected
-performance hypotheses and the limits of the projection.
+`thermal-merge-1101/landing-validation.json`, `thermal-merge-1101/validation-record.json`
+and `full-integration-1101/continued/commands-results.json` bind the merged
+validation and physical results. The earlier complete corpus and its profiles
+remain in `queue-qualified-1101/final-complete.json` and the application
+report `docs/sunstoneos_cpu_performance.md`.
