@@ -24,38 +24,44 @@ constructors, busy drain, held-copy overrun, serializer-owned file EOF, stale
 readbacks, delayed FIFO completion and failed restoration. The independent
 review is in `return-review/final-review.md` under the same build root.
 
-## Native entry needs secondary CPU ownership
+## Returning probe owns secondary CPU policies
 
-The audio-disabled control refuses entry before cache maintenance or audio
-setup. Queue entry `1793516471802901284-83b8c6a0` records a watchdog reset and
-software fault site `0x15`: CPU1 power policy at `0x07053000` reads `0x100`
-(dynamic OFF). ESR contains that observed word and FAR contains its address;
-these values describe a software check, not an architectural exception.
-The image SHA-256 is
-`ea2949db2010351abcc46268ce9768243d167db57d86a8f6d3d4796ea09eb2bf`.
+The native probe acquires acknowledged static OFF before whole-hierarchy cache
+maintenance and restores exact original policies after final cache cleanup and
+receipt preparation. It admits matched static or dynamic OFF profiles, preserves
+inherited GIC wake-disable and clear software requests, and writes only changed
+secondary policy words. CPU0, cluster policy, wake controls, entry addresses,
+clocks, resets and rails are unchanged.
 
-The shared probe contract requires acknowledged static OFF, clear start
-requests and disabled GIC wake on all secondary CPUs. The intentional watchdog
-qualification probe only parks and does not establish those prerequisites.
-The existing owner in `boot/a733/stage2/cpu.c` is for cold boot; it has no
-returning-probe policy restoration. The shared startup owner must establish and
-retain the required state through cache maintenance and restore it safely for
-ROM return. The audio image does not change CPU power policy.
+The per-core CPU1 check writes zero then `0x100` only at `0x07053000` and verifies
+byte-identical neighboring pages. A separate aggregate check acquires and restores
+all seven secondaries. The returning path executes 18,944 data-cache operations
+and one I-cache invalidation before dynamic policy release. Failed acquisition
+or restoration retains the first failed input, keeps the watchdog armed and
+prevents successful completion or normal return.
 
-The shared diagnostic patch is
-`~/.cache/sunstoneos/build/audio-1031/shared-patches/0005-probe-entry-fault-inputs.patch`.
-It preserves the entry predicates and records each refusal's input. The CMake
-hook accepts it through `SUNSTONE_I2S_PROBE_ENTRY_PATCH` without editing shared
-source. Actual linked-entry checks and independent review pass under
-`~/.cache/sunstoneos/build/audio-1031/entry/` and `entry-review/`.
-The OS-only, hello-compute and external mimus baseline builds pass, including
-their image link checks. The selected integration gate, scheduler check and
-check index pass. `entry/validation.json` records the image hashes, source
-revision, external application checkout and build logs.
+Fourteen CPU ownership cases pass under
+`~/.cache/sunstoneos/build/audio-1031/policy/cpu-final/`; fourteen native entry,
+restoration and constructor cases pass under `policy/native-final/`. The default
+weak hooks remain inside memtest's protected recovery closure, with its link,
+relocation, stack and layout checks passing. Three independent reviewers approve
+the design, source and linked image; records are under `policy-review/`.
+The OS-only, hello-compute and external mimus baseline builds, selected integration
+gate, scheduler check and check index pass.
 
-The board queue is unavailable after the host reboot. No internal-loopback or
-overrun run is submitted. Queue recovery and the shared CPU ownership path
-both block physical audio execution.
+Shared patches `0006` through `0009` are under
+`~/.cache/sunstoneos/build/audio-1031/shared-patches/` and pass `git apply --check`.
+Patch 0006 replaces diagnostic patch 0005. The audio CMake hook builds patched
+copies without editing shared tracked files. The source comparison and measurable
+budgets are in `apps/i2s/CPU-OWNERSHIP.md`.
+
+The reviewed image SHA-256 is
+`1c822cdde6884b49e5249c58011629dfdb1419c5d71c3ee4ca8567a5355c1e43`.
+Its ELF, three mode inputs, expectations, short README and exact submit commands
+are under `~/.cache/sunstoneos/build/audio-1031/policy/`. The queue daemon is
+stopped; no new run is submitted. Control must return normally before internal
+loopback, and loopback must return normally before overrun. These transitions
+and physical audio remain unqualified.
 
 After successful control, the same image's loopback mode tests guarded-copy
 continuity and cache visibility across three close/reopen cycles. This mode
