@@ -3,7 +3,8 @@
  * requiring Arm execution; actual list, tasks and scheduler code stays linked. */
 #include "FreeRTOS.h"
 #undef portYIELD
-#define portYIELD() ((void)0)
+void ssFixtureYield(void);
+#define portYIELD() ssFixtureYield()
 #undef portDISABLE_INTERRUPTS
 #define portDISABLE_INTERRUPTS() ((void)0)
 #undef portENABLE_INTERRUPTS

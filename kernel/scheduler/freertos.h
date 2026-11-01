@@ -11,4 +11,18 @@ void ssKernelObjectSuspend(void);
 BaseType_t ssKernelObjectResume(void);
 BaseType_t ssKernelOwnerIRQExit(void);
 void ssKernelOwnerYield(void);
+#ifdef SS_FREERTOS_OBJECT_TRANSLATION
+/* Series B retains object metadata exclusion without stopping other owners.
+ * Application critical/suspend APIs keep their separate global contract. */
+#undef taskENTER_CRITICAL
+#undef taskEXIT_CRITICAL
+#undef taskENTER_CRITICAL_FROM_ISR
+#undef taskEXIT_CRITICAL_FROM_ISR
+#define taskENTER_CRITICAL() ssKernelObjectEnter()
+#define taskEXIT_CRITICAL() ssKernelObjectExit()
+#define taskENTER_CRITICAL_FROM_ISR() ssKernelObjectEnterFromISR()
+#define taskEXIT_CRITICAL_FROM_ISR(mask) ssKernelObjectExitFromISR(mask)
+#define vTaskSuspendAll() ssKernelObjectSuspend()
+#define xTaskResumeAll() ssKernelObjectResume()
+#endif
 #endif

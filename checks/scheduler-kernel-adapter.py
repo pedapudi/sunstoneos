@@ -42,10 +42,23 @@ def main():
         '#define INCLUDE_xTaskAbortDelay 1\n#define INCLUDE_xTaskResumeFromISR 1\n'
         '#undef configUSE_TIMERS\n#define configUSE_TIMERS 1\n'
         '#define configTIMER_TASK_PRIORITY 1\n#define configTIMER_QUEUE_LENGTH 8\n'
-        '#define configTIMER_TASK_STACK_DEPTH configMINIMAL_STACK_SIZE\n')
+        '#define configTIMER_TASK_STACK_DEPTH configMINIMAL_STACK_SIZE\n'
+        '#define configUSE_TRACE_FACILITY 1\n'
+        '#define configUSE_APPLICATION_TASK_TAG 1\n'
+        '#define configNUM_THREAD_LOCAL_STORAGE_POINTERS 2\n'
+        '#define INCLUDE_uxTaskGetStackHighWaterMark 1\n'
+        '#define INCLUDE_uxTaskGetStackHighWaterMark2 1\n')
     patched = build / 'tasks-api.c'
     run(['patch', '--fuzz=0', '--reject-file=-', '--output', patched,
          build / 'tasks.c', ROOT / 'patches/freertos-partitioned-api.patch'])
+    audit_spec = importlib.util.spec_from_file_location('api_audit', ROOT / 'checks/scheduler-kernel-api-audit.py')
+    api_audit = importlib.util.module_from_spec(audit_spec)
+    audit_spec.loader.exec_module(api_audit)
+    api_audit.audit(patched.read_text(), inventory)
+    for name in ('queue.c', 'event_groups.c', 'stream_buffer.c', 'timers.c'):
+        (build / name).write_text((args.freertos / name).read_text())
+    run(['patch', '--fuzz=0', '--reject-file=-', '-d', build, '-p0',
+         '-i', ROOT / 'patches/freertos-partitioned-objects.patch'])
     common = [args.cc, '-std=c11', '-O1', '-g', '-ffunction-sections', '-fdata-sections',
               '-DconfigSS_PARTITIONED_SCHEDULER=1', '-DSUNSTONE_SMP_CORES=8',
               '-I' + str(build / 'include'), '-I' + str(build),
@@ -53,12 +66,22 @@ def main():
               '-I' + str(ROOT / 'kernel/scheduler'), '-I' + str(args.freertos / 'include')]
     run([*common, '--target=aarch64-none-elf', '-march=armv8.1-a+lse', '-ffreestanding',
          '-Werror', '-isystem', args.sysroot / 'include', '-c', patched, '-o', build / 'tasks-api.o'])
+    disabled = [flag.replace('configSS_PARTITIONED_SCHEDULER=1',
+                             'configSS_PARTITIONED_SCHEDULER=0') for flag in common]
+    run([*disabled, '--target=aarch64-none-elf', '-march=armv8.1-a+lse', '-ffreestanding',
+         '-Werror', '-isystem', args.sysroot / 'include', '-c', patched, '-o', build / 'tasks-api-off.o'])
+    for name in ('queue', 'event_groups', 'stream_buffer', 'timers'):
+        run([*common, '--target=aarch64-none-elf', '-march=armv8.1-a+lse', '-ffreestanding',
+             '-Werror', '-isystem', args.sysroot / 'include', '-c', build / (name + '.c'),
+             '-o', build / (name + '.o')])
     translation = build / 'linked.c'
     translation.write_text('#include "' + str(ROOT / 'checks/scheduler-kernel-host-port.h') + '"\n'
                            '#include "tasks-api.c"\n'
                            '#include "' + str(ROOT / 'checks/scheduler-kernel-linked.c') + '"\n')
     binary = build / 'linked'
-    sources = [args.freertos / 'list.c', *[ROOT / 'kernel/scheduler' / name for name in
+    sources = [args.freertos / 'list.c', *[build / name for name in
+               ('queue.c', 'event_groups.c', 'stream_buffer.c', 'timers.c')],
+               *[ROOT / 'kernel/scheduler' / name for name in
                ('owner.c', 'notification.c', 'deadline.c', 'freertos_registry.c', 'freertos_control.c')]]
     run([*common, '-fsanitize=address,undefined', '-Wl,--gc-sections', translation, *sources, '-o', binary])
     print(run([binary]), end='')

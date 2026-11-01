@@ -26,6 +26,9 @@ struct ssKernelTask {
     struct ss_notification_wait notify_wait;
     struct ss_kernel_pin event_reference;
     _Atomic unsigned owner, execution, outcome, effective, base;
+    /* Compatibility object exclusion serializes donation writers. Owners read
+     * committed donation without acquiring an object lock before their FIFO. */
+    _Atomic unsigned donation, mutexes;
     uint64_t generation;
     unsigned wait_kind, notify_index;
     bool indefinite, unordered, off_cpu;
@@ -39,6 +42,7 @@ struct ssKernelCPU {
     UBaseType_t object_mask;
     bool yield_tail, reschedule, irq_drained;
     uint64_t publication[2];
+    uint64_t repair[2];
     struct ss_kernel_pin reference[SS_OWNER_SLOTS];
 };
 static struct ssKernelTask ssKernelTasks[SS_OWNER_SLOTS];
@@ -140,6 +144,8 @@ static void ssKernelSlotInitialize(void *opaque, unsigned slot, uint64_t incarna
     atomic_init(&s->outcome, SS_K_WAITING);
     atomic_init(&s->effective, (unsigned)t->uxPriority);
     atomic_init(&s->base, (unsigned)t->uxPriority);
+    atomic_init(&s->donation, 0);
+    atomic_init(&s->mutexes, 0);
     s->off_cpu = true;
     t->uxOwnerSlot = slot;
     ss_control_register(&ssKernelControl, slot, &ssKernelRegistry.descriptor[slot],
@@ -232,6 +238,11 @@ static void ssKernelFlush(void)
             bits &= bits - 1;
             struct ss_kernel_pin pin = cpu->reference[slot];
             cpu->reference[slot] = (struct ss_kernel_pin){0};
+            uint64_t bit = UINT64_C(1) << b;
+            if (cpu->repair[w] & bit) {
+                cpu->repair[w] &= ~bit;
+                ss_control_repair(&ssKernelControl, slot);
+            }
             ssKernelPublishReference(pin);
         }
     }
@@ -654,7 +665,9 @@ static bool ssKernelApply(void *context, unsigned slot, void *task,
         if (!s->off_cpu) { cpu->reschedule = true; return false; }
         s->offcpu_ack = state->offcpu_sequence;
     }
-    unsigned priority = state->effective_priority;
+    unsigned priority = state->priority;
+    unsigned donation = atomic_load_explicit(&s->donation, memory_order_acquire);
+    if (donation > priority) priority = donation;
     if (s->ready.priority != priority) {
         bool queued = s->ready.queued;
         if (queued) configASSERT(ss_owner_remove(&cpu->run, &s->ready));
@@ -860,6 +873,11 @@ static unsigned ssKernelPriority(TaskHandle_t handle, bool base)
     ss_kernel_handle_put(&pin);
     return priority;
 }
+static bool ssKernelPin(TaskHandle_t handle, struct ss_kernel_pin *pin)
+{
+    if (!handle) handle = pxCurrentTCBs[ssKernelCPUId()];
+    return ss_kernel_handle_pin(&ssKernelRegistry, handle, pin);
+}
 static eTaskState ssKernelState(TaskHandle_t handle)
 {
     struct ss_kernel_pin pin;
@@ -916,4 +934,68 @@ static uint32_t ssKernelNotifyClear(TaskHandle_t handle, UBaseType_t index,
     ss_kernel_handle_put(&pin);
     portCLEAR_INTERRUPT_MASK(irq);
     return clear_state ? result.previous_state == SS_NOTIFY_RECEIVED : result.previous;
+}
+
+/* Called with compatibility object exclusion. The donor commits metadata and
+ * retains lifetime before publishing a control hint after the outer unlock. */
+static void ssKernelDonationDefer(struct ss_kernel_pin pin)
+{
+    struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
+    cpu->repair[pin.slot / 64] |= UINT64_C(1) << (pin.slot % 64);
+    ssKernelDefer(pin);
+}
+static BaseType_t ssKernelInherit(TaskHandle_t holder)
+{
+    if (!holder) return pdFALSE;
+    UBaseType_t irq = ssKernelObjectEnterFromISR();
+    struct ss_kernel_pin pin;
+    if (!ssKernelPin(holder, &pin)) {
+        ssKernelObjectExitFromISR(irq);
+        return pdFALSE;
+    }
+    struct ssKernelTask *s = &ssKernelTasks[pin.slot];
+    unsigned priority = atomic_load_explicit(&ssKernelCurrent()->effective, memory_order_acquire);
+    unsigned base = atomic_load_explicit(&s->base, memory_order_acquire);
+    unsigned donation = atomic_load_explicit(&s->donation, memory_order_relaxed);
+    if (priority > donation && priority > base) {
+        atomic_store_explicit(&s->donation, priority, memory_order_release);
+        ssKernelDonationDefer(pin);
+    } else ss_kernel_handle_put(&pin);
+    ssKernelObjectExitFromISR(irq);
+    return base < priority ? pdTRUE : pdFALSE;
+}
+static BaseType_t ssKernelDisinherit(TaskHandle_t holder, bool timeout, unsigned waiting)
+{
+    if (!holder) return pdFALSE;
+    UBaseType_t irq = ssKernelObjectEnterFromISR();
+    struct ss_kernel_pin pin;
+    if (!ssKernelPin(holder, &pin)) {
+        ssKernelObjectExitFromISR(irq);
+        return pdFALSE;
+    }
+    struct ssKernelTask *s = &ssKernelTasks[pin.slot];
+    unsigned count = atomic_load_explicit(&s->mutexes, memory_order_relaxed);
+    configASSERT(count);
+    if (!timeout) {
+        configASSERT(holder == pxCurrentTCBs[ssKernelCPUId()]);
+        atomic_store_explicit(&s->mutexes, --count, memory_order_release);
+    }
+    bool change = (!timeout && !count) || (timeout && count == 1);
+    unsigned donation = atomic_load_explicit(&s->donation, memory_order_relaxed);
+    unsigned target = timeout ? waiting : 0;
+    bool lowered = change && donation > target &&
+        donation > atomic_load_explicit(&s->base, memory_order_acquire);
+    if (change && donation != target) {
+        atomic_store_explicit(&s->donation, target, memory_order_release);
+        ssKernelDonationDefer(pin);
+    } else ss_kernel_handle_put(&pin);
+    ssKernelObjectExitFromISR(irq);
+    return lowered ? pdTRUE : pdFALSE;
+}
+static TaskHandle_t ssKernelMutexTaken(void)
+{
+    struct ssKernelTask *s = ssKernelCurrent();
+    unsigned count = atomic_fetch_add_explicit(&s->mutexes, 1, memory_order_relaxed);
+    configASSERT(count != UINT32_MAX);
+    return s->ready.context;
 }

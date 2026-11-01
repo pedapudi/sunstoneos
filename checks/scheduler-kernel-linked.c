@@ -20,11 +20,17 @@ void vPortClearInterruptMaskFromISR(UBaseType_t mask) { (void)mask; }
 void vPortRecursiveLock(uint8_t cpu, ePortRTOSLock lock, BaseType_t acquire)
 { (void)cpu; (void)lock; if (acquire) ++fixture_locks; }
 void vInterruptCore(uint32_t interrupt, uint8_t cpu)
-{ (void)interrupt; ++fixture_sgi[cpu]; }
+{
+    (void)interrupt; ++fixture_sgi[cpu];
+    /* Explicit delivery of gate checkpoints; no concurrent task stacks. */
+    if (atomic_load(&ssKernelControl.gate_phase) == SS_GATE_ACQUIRING)
+        (void)ss_control_checkpoint(&ssKernelControl, cpu);
+}
 StackType_t *pxPortInitialiseStack(StackType_t *stack, TaskFunction_t entry, void *arg)
 { (void)entry; (void)arg; return stack; }
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 { (void)task; (void)name; abort(); }
+static BaseType_t fixture_hook(void *arg) { return *(BaseType_t *)arg; }
 static void fixture_entry(void *arg) { (void)arg; }
 static StaticTask_t storage[configNUMBER_OF_CORES + 4];
 static StackType_t stacks[configNUMBER_OF_CORES + 4][configMINIMAL_STACK_SIZE];
@@ -55,6 +61,7 @@ static void invariant(void)
             }
     }
 }
+#include "scheduler-kernel-objects.c"
 int main(void)
 {
     /* Real static creation enters the registry and least-loaded placement. */
@@ -74,6 +81,42 @@ int main(void)
     assert(atomic_load(&record(task)->owner) == 0);
     assert(atomic_load(&record(second)->owner) == 1);
     for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) enter(c);
+    fixture_cpu = 0;
+    assert(!strcmp(pcTaskGetName(task), "linked"));
+    assert(vTaskCoreAffinityGet(task) == tskNO_AFFINITY);
+    StackType_t *stack = NULL;
+    StaticTask_t *tcb = NULL;
+    assert(xTaskGetStaticBuffers(task, &stack, &tcb));
+    assert(stack == stacks[configNUMBER_OF_CORES] && tcb == &storage[configNUMBER_OF_CORES]);
+    vTaskSetTaskNumber(task, 42);
+    assert(uxTaskGetTaskNumber(task) == 42);
+    vTaskSetThreadLocalStoragePointer(task, 1, stack);
+    assert(pvTaskGetThreadLocalStoragePointer(task, 1) == stack);
+    assert(!pvTaskGetThreadLocalStoragePointer(task, -1));
+    assert(!pvTaskGetThreadLocalStoragePointer(task, 2));
+    vTaskSetApplicationTaskTag(task, fixture_hook);
+    assert(xTaskGetApplicationTaskTag(task) == fixture_hook);
+    assert(xTaskGetApplicationTaskTagFromISR(task) == fixture_hook);
+    BaseType_t hook_value = 73;
+    assert(xTaskCallApplicationTaskHook(task, &hook_value) == 73);
+    assert(uxTaskGetStackHighWaterMark(task) == uxTaskGetStackHighWaterMark2(task));
+    assert(xTaskGetSchedulerState() == taskSCHEDULER_RUNNING);
+    vTaskSuspendAll();
+    vTaskSuspendAll();
+    assert(xTaskGetSchedulerState() == taskSCHEDULER_SUSPENDED);
+    assert(ssKernelCPUs[0].preempt == 2);
+    (void)xTaskResumeAll();
+    assert(ssKernelCPUs[0].preempt == 1);
+    (void)xTaskResumeAll();
+    assert(!ssKernelCPUs[0].preempt);
+    assert(atomic_load(&ssKernelControl.gate_phase) == SS_GATE_OPEN);
+    TickType_t previous = xTaskGetTickCount();
+    assert(xTaskPeriodicDelay(&previous, 2) == 0);
+    enter(0);
+    (void)xTaskIncrementTick();
+    (void)xTaskIncrementTick();
+    enter(0);
+    assert(pxCurrentTCBs[0] == task);
     unsigned baseline_locks = fixture_locks;
     for (unsigned iteration = 0; iteration < 10000; ++iteration) {
         struct ssKernelTask *s = record(task);
@@ -147,6 +190,8 @@ int main(void)
     (void)xTaskIncrementTick();
     enter(0);
     assert(listLIST_IS_EMPTY(&event) && pxCurrentTCBs[0] == task);
+    fixture_objects();
+    fixture_inheritance(task, second);
     invariant();
     printf("linked FreeRTOS owner transitions: 10000 remote wakes, block-commit races, zero local scheduler locks, delay/event timeout\n");
     return 0;

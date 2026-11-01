@@ -8,12 +8,11 @@
   "private_check_chain": [
     "freertos-smp-tasks.patch",
     "freertos-partitioned-tasks.patch",
-    "freertos-partitioned-api.patch"
+    "freertos-partitioned-api.patch",
+    "freertos-partitioned-objects.patch"
   ],
   "enablement_blockers": [
     "Complete every API marked pending, including all public task-handle reads before dereferencing TCB memory.",
-    "Convert queue/event-group/stream-buffer/timer object retry suspension to object-only compatibility protection.",
-    "Defer priority inheritance donation under object protection and repair through owner control; no object-to-control lock nesting.",
     "Complete port IRQ-exit and voluntary-yield hooks; preserve trace, runtime accounting, errno, TLS and task-switch hooks.",
     "Exclude all legacy global ready/delayed/suspended lists and all legacy task dispatch from enabled code.",
     "Fix control migration publisher-drain acknowledgment found by ordering review; permanent FIFO and retirement-incarnation reuse fixes have a targeted threaded check.",
@@ -29,32 +28,38 @@
     {
       "name": "eTaskGetState",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "return ssKernelState(xTask);"
     },
     {
       "name": "pcTaskGetName",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "struct ss_kernel_pin ss_pin;"
     },
     {
       "name": "pvTaskGetThreadLocalStoragePointer",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "if (xIndex < 0 || xIndex >= configNUM_THREAD_LOCAL_STORAGE_POINTERS) return NULL;"
     },
     {
       "name": "pvTaskIncrementMutexHeldCount",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "return ssKernelMutexTaken();"
     },
     {
       "name": "ulTaskGenericNotifyTake",
       "state": "routed-private",
-      "validation": "linked-transition"
+      "validation": "linked-transition",
+      "definition_route": "return ssKernelNotifyWait(uxIndexToWaitOn, 0, 0, true, xClearCountOnExit == pdFALSE, xTicksToWait, NULL);"
     },
     {
       "name": "ulTaskGenericNotifyValueClear",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "return ssKernelNotifyClear(xTask, uxIndexToClear, ulBitsToClear, false);"
     },
     {
       "name": "ulTaskGetIdleRunTimeCounter",
@@ -79,12 +84,14 @@
     {
       "name": "uxTaskBasePriorityGet",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "return ssKernelPriority(xTask, true);"
     },
     {
       "name": "uxTaskBasePriorityGetFromISR",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "return ssKernelPriority(xTask, true);"
     },
     {
       "name": "uxTaskCallForEachTask",
@@ -93,18 +100,21 @@
     },
     {
       "name": "uxTaskGetNumberOfTasks",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "UBaseType_t result = 0;"
     },
     {
       "name": "uxTaskGetStackHighWaterMark",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "struct ss_kernel_pin ss_pin;"
     },
     {
       "name": "uxTaskGetStackHighWaterMark2",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "struct ss_kernel_pin ss_pin;"
     },
     {
       "name": "uxTaskGetSystemState",
@@ -113,23 +123,27 @@
     },
     {
       "name": "uxTaskGetTaskNumber",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "struct ss_kernel_pin pin;"
     },
     {
       "name": "uxTaskPriorityGet",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "return ssKernelPriority(xTask, false);"
     },
     {
       "name": "uxTaskPriorityGetFromISR",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "return ssKernelPriority(xTask, false);"
     },
     {
       "name": "uxTaskResetEventItemValue",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "UBaseType_t irq = ssKernelObjectEnterFromISR();"
     },
     {
       "name": "vTaskAllocateMPURegions",
@@ -138,23 +152,27 @@
     },
     {
       "name": "vTaskCoreAffinityGet",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "struct ss_kernel_pin pin;"
     },
     {
       "name": "vTaskCoreAffinitySet",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "uint64_t mask = uxCoreAffinityMask & ((UINT64_C(1) << configNUMBER_OF_CORES) - 1);"
     },
     {
       "name": "vTaskDelay",
       "state": "routed-private",
-      "validation": "linked-transition"
+      "validation": "linked-transition",
+      "definition_route": "UBaseType_t irq = portSET_INTERRUPT_MASK();"
     },
     {
       "name": "vTaskDelete",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "(void)ssKernelCommand(xTaskToDelete, SS_K_DELETE, 0, false);"
     },
     {
       "name": "vTaskEndScheduler",
@@ -184,7 +202,8 @@
     {
       "name": "vTaskGenericNotifyGiveFromISR",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "(void)ssKernelNotify(xTaskToNotify, uxIndexToNotify, 0, eIncrement, NULL, pxHigherPriorityTaskWoken);"
     },
     {
       "name": "vTaskGetInfo",
@@ -198,8 +217,9 @@
     },
     {
       "name": "vTaskInternalSetTimeOutState",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "configASSERT(pxTimeOut);"
     },
     {
       "name": "vTaskListTasks",
@@ -209,22 +229,26 @@
     {
       "name": "vTaskMissedYield",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "ssKernelCPUs[ssKernelCPUId()].reschedule = true;"
     },
     {
       "name": "vTaskPlaceOnEventList",
       "state": "routed-private",
-      "validation": "linked-transition"
+      "validation": "linked-transition",
+      "definition_route": "ssKernelEventBlock(pxEventList, 0, xTicksToWait, false, true);"
     },
     {
       "name": "vTaskPlaceOnEventListRestricted",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "ssKernelEventBlock(pxEventList, 0, xTicksToWait, false, xWaitIndefinitely != pdFALSE);"
     },
     {
       "name": "vTaskPlaceOnUnorderedEventList",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "ssKernelEventBlock(pxEventList, xItemValue, xTicksToWait, true, true);"
     },
     {
       "name": "vTaskPreemptionDisable",
@@ -238,18 +262,21 @@
     },
     {
       "name": "vTaskPriorityDisinheritAfterTimeout",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "(void)ssKernelDisinherit(pxMutexHolder, true, uxHighestPriorityWaitingTask);"
     },
     {
       "name": "vTaskPrioritySet",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "linked-transition",
+      "definition_route": "configASSERT(uxNewPriority < configMAX_PRIORITIES);"
     },
     {
       "name": "vTaskRemoveFromUnorderedEventList",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "(void)ssKernelEventWake(pxEventListItem, xItemValue, true);"
     },
     {
       "name": "vTaskResetState",
@@ -259,27 +286,32 @@
     {
       "name": "vTaskResume",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "configASSERT(xTaskToResume);"
     },
     {
       "name": "vTaskSetApplicationTaskTag",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "struct ss_kernel_pin pin;"
     },
     {
       "name": "vTaskSetTaskNumber",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "struct ss_kernel_pin pin;"
     },
     {
       "name": "vTaskSetThreadLocalStoragePointer",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "if (xIndex < 0 || xIndex >= configNUM_THREAD_LOCAL_STORAGE_POINTERS) return;"
     },
     {
       "name": "vTaskSetTimeOutState",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "configASSERT(pxTimeOut);"
     },
     {
       "name": "vTaskStartScheduler",
@@ -294,32 +326,38 @@
     {
       "name": "vTaskSuspend",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "(void)ssKernelCommand(xTaskToSuspend, SS_K_SUSPEND, 0, false);"
     },
     {
       "name": "vTaskSuspendAll",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "linked-transition",
+      "definition_route": "ssKernelSuspendAll();"
     },
     {
       "name": "vTaskSwitchContext",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "ssKernelSwitch((unsigned)xCoreID);"
     },
     {
       "name": "vTaskYieldWithinAPI",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "ssKernelOwnerYield();"
     },
     {
       "name": "xTaskAbortDelay",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "return ssKernelCommand(xTask, SS_K_ABORT, 0, false) ? pdTRUE : pdFALSE;"
     },
     {
       "name": "xTaskCallApplicationTaskHook",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "TaskHookFunction_t hook = xTaskGetApplicationTaskTag(xTask);"
     },
     {
       "name": "xTaskCatchUpTicks",
@@ -328,8 +366,9 @@
     },
     {
       "name": "xTaskCheckForTimeOut",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "configASSERT(pxTimeOut && pxTicksToWait);"
     },
     {
       "name": "xTaskCreate",
@@ -374,37 +413,44 @@
     {
       "name": "xTaskDelayUntil",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "configASSERT(pxPreviousWakeTime && xTimeIncrement);"
     },
     {
       "name": "xTaskGenericNotify",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "BaseType_t result = ssKernelNotify(xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue, NULL);"
     },
     {
       "name": "xTaskGenericNotifyFromISR",
       "state": "routed-private",
-      "validation": "linked-transition"
+      "validation": "linked-transition",
+      "definition_route": "return ssKernelNotify(xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue, pxHigherPriorityTaskWoken);"
     },
     {
       "name": "xTaskGenericNotifyStateClear",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "return ssKernelNotifyClear(xTask, uxIndexToClear, 0, true) ? pdTRUE : pdFALSE;"
     },
     {
       "name": "xTaskGenericNotifyWait",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "bool matched;"
     },
     {
       "name": "xTaskGetApplicationTaskTag",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "struct ss_kernel_pin pin;"
     },
     {
       "name": "xTaskGetApplicationTaskTagFromISR",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "struct ss_kernel_pin pin;"
     },
     {
       "name": "xTaskGetCurrentTaskHandle",
@@ -438,58 +484,69 @@
     },
     {
       "name": "xTaskGetSchedulerState",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "if (!xSchedulerRunning) return taskSCHEDULER_NOT_STARTED;"
     },
     {
       "name": "xTaskGetStaticBuffers",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "struct ss_kernel_pin ss_pin;"
     },
     {
       "name": "xTaskGetTickCount",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "return (TickType_t)ssKernelNow();"
     },
     {
       "name": "xTaskGetTickCountFromISR",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "return (TickType_t)ssKernelNow();"
     },
     {
       "name": "xTaskIncrementTick",
       "state": "routed-private",
-      "validation": "linked-transition"
+      "validation": "linked-transition",
+      "definition_route": "return ssKernelTick();"
     },
     {
       "name": "xTaskPeriodicDelay",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "linked-transition",
+      "definition_route": "configASSERT(pxPreviousWakeTime && xTimeIncrement);"
     },
     {
       "name": "xTaskPriorityDisinherit",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "return ssKernelDisinherit(pxMutexHolder, false, 0);"
     },
     {
       "name": "xTaskPriorityInherit",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "return ssKernelInherit(pxMutexHolder);"
     },
     {
       "name": "xTaskRemoveFromEventList",
       "state": "routed-private",
-      "validation": "linked-transition"
+      "validation": "linked-transition",
+      "definition_route": "configASSERT(!listLIST_IS_EMPTY(pxEventList));"
     },
     {
       "name": "xTaskResumeAll",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "linked-transition",
+      "definition_route": "return ssKernelResumeAll();"
     },
     {
       "name": "xTaskResumeFromISR",
       "state": "routed-private",
-      "validation": "aarch64-compile"
+      "validation": "aarch64-compile",
+      "definition_route": "configASSERT(xTaskToResume);"
     }
   ],
   "private_helpers": [
@@ -504,11 +561,17 @@
     "INCLUDE_uxTaskPriorityGet": 1,
     "INCLUDE_vTaskPrioritySet": 1,
     "INCLUDE_xTaskAbortDelay": 1,
-    "INCLUDE_xTaskResumeFromISR": 1
+    "INCLUDE_xTaskResumeFromISR": 1,
+    "configUSE_TRACE_FACILITY": 1,
+    "configUSE_APPLICATION_TASK_TAG": 1,
+    "configNUM_THREAD_LOCAL_STORAGE_POINTERS": 2,
+    "INCLUDE_uxTaskGetStackHighWaterMark": 1,
+    "INCLUDE_uxTaskGetStackHighWaterMark2": 1
   },
   "validation_commands": [
     "checks/scheduler-kernel-adapter.py --freertos FREERTOS --build-dir BUILD --sysroot SYSROOT",
     "checks/scheduler-kernel-registry.py --build-dir BUILD",
     "checks/scheduler-control.py --build-dir BUILD"
-  ]
+  ],
+  "object_validation": "Real queue empty-receive retry, event wait/set/clear, stream wait/send and timer command enqueue with explicit host owner checkpoints; no concurrent stacks or timer callback execution."
 }
