@@ -29,6 +29,7 @@ spec.loader.exec_module(slots)
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--image', type=Path, help='Also check a native ELF with monitor and session reservations.')
     args = parser.parse_args()
     out = args.output
     out.mkdir(parents=True, exist_ok=False)
@@ -155,8 +156,43 @@ def main():
     offset = elf['e_phoff'] + load_index * elf['e_phentsize']
     struct.pack_into('<Q', altered, offset + 16, 0x41eff000)
     struct.pack_into('<2Q', altered, offset + 32, 0, 0x2000)
-    refused(lambda: card.flat_runtime(altered), 'reserved memory')
+    refused(lambda: card.flat_runtime(altered), 'no load segment')
     cases.append('BSS-only-reserved-memory-collision')
+    native_identity = None
+    if args.image:
+        native = args.image.read_bytes()
+        native_elf = host.image_manifest(native)['elf']
+        flat = card.flat_runtime(native)
+        initialized = [p for p in native_elf.iter_segments() if p['p_type'] == 'PT_LOAD' and p['p_filesz']]
+        assert len(flat) == max(p['p_vaddr'] + p['p_filesz'] for p in initialized) - 0x41000000
+        for segment in initialized:
+            start = segment['p_vaddr'] - 0x41000000
+            assert flat[start:start + segment['p_filesz']] == segment.data()
+        cases.append('actual-native-reservations-and-initialized-payload')
+        sections = {s.name: (index, s) for index, s in enumerate(native_elf.iter_sections())}
+        assert '.storage_session' in sections and '.monitor_bss' in sections
+        for name, section_name, member, fmt, value, reason in [
+                ('arbitrary-BSS-at-session', '.storage_session', 0, '<I', sections['.bss'][1]['sh_name'], 'Allocated section'),
+                ('initialized-session-section', '.storage_session', 4, '<I', 1, 'fixed runtime reservation'),
+                ('misplaced-session-reservation', '.storage_session', 16, '<Q', 0x41eff000, 'fixed runtime reservation'),
+                ('arbitrary-monitor-section', '.monitor_bss', 0, '<I', sections['.bss'][1]['sh_name'], 'Allocated section'),
+                ('initialized-monitor-section', '.result', 4, '<I', 1, 'fixed runtime reservation')]:
+            changed = bytearray(native)
+            offset = native_elf['e_shoff'] + sections[section_name][0] * native_elf['e_shentsize'] + member
+            struct.pack_into(fmt, changed, offset, value)
+            refused(lambda: card.flat_runtime(changed), reason)
+            cases.append(name)
+        for name, base, reason in [('initialized-monitor-load', 0x42000000, 'Runtime load overlaps reserved memory'),
+                                   ('initialized-session-load', 0x41201000, 'Initialized runtime bytes')]:
+            changed = bytearray(native)
+            index, segment = next((i, p) for i, p in enumerate(native_elf.iter_segments())
+                                  if p['p_type'] == 'PT_LOAD' and p['p_vaddr'] == base)
+            offset = native_elf['e_phoff'] + index * native_elf['e_phentsize']
+            struct.pack_into('<Q', changed, offset + 32, segment['p_memsz'])
+            refused(lambda: card.flat_runtime(changed), reason)
+            cases.append(name)
+        native_identity = {'path': str(args.image.resolve()), 'sha256': hashlib.sha256(native).hexdigest(),
+                           'runtime_bytes': len(flat)}
     def bad(name, raw, reason):
         refused(lambda: host.session_decode(raw, manifest, info['sha256']), reason)
         cases.append(name)
@@ -205,6 +241,7 @@ def main():
     summary = {'passed': True, 'physical_access': False, 'cases': cases,
                'image_sha256': hashlib.sha256(image.read_bytes()).hexdigest(),
                'manifest_sha256': info['sha256'],
+               'native_image': native_identity,
                'scope': 'Real compiled application and C result producer; board and services are modeled opaque records.'}
     (out / 'result.json').write_text(json.dumps(summary, indent=2) + '\n')
     print('PASS', len(cases), 'generic host record cases')
