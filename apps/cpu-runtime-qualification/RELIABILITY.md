@@ -38,7 +38,8 @@ Thermal throttling ends the diagnostic through its first-failure path.
 The clock owner retains its existing DSU policy and thermal protection.
 No voltage table, grant or transition implementation changes.
 
-At 1,000 ticks per second, 4,096 blocking rounds require at least 4.096 seconds.
+At 1,000 ticks per second, the workload spans at least 4,096 tick increments,
+nominally 4.096 seconds. The first increment can consume a partial tick.
 The application bounds its work to 12 seconds from initialization, using
 wrap-safe tick subtraction. The OS retains its independent counter-based
 session deadline, five-second return reserve and host-armed watchdog.
