@@ -37,7 +37,8 @@ target_include_directories(latency-model PRIVATE
   "${latency_root}/runtime/include" "${latency_root}/apps/latency"
   "${FREERTOS_DIR}/include" "${smp_build}")
 target_compile_definitions(latency-model PRIVATE SUNSTONE_LATENCY=1 SUNSTONE_LATENCY_MODEL=1
-  SUNSTONE_SMP_CORES=8 INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1)
+  SUNSTONE_SMP_CORES=8 configIDLE_AFFINITY=1
+  INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1)
 target_compile_options(latency-model PRIVATE ${SUNSTONE_KERNEL_FLAGS} -Werror
   "$<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>")
 target_link_options(latency-model PRIVATE -nostdlib -static -Wl,--gc-sections

@@ -7,7 +7,9 @@
 #include <string.h>
 
 #define DMA_BASE UINT32_C(0x04601000)
-#define COPY_BYTES (64U * 1024U)
+/* Match the native RAM-copy session limit. CPU fill/copy/compare emulate
+ * the device here; their task shares priority with the synthetic CPU load. */
+#define COPY_BYTES 4096U
 #define CHANNEL(r) (A733_DMA_REG_CHANNELS + (r))
 static _Alignas(64) struct dma_service service;
 static _Alignas(64) struct a733_dma_descriptor descriptors;
@@ -145,7 +147,7 @@ void latency_dma_model_init(void)
         ss_latency_frequency / 100, &job, 1, &protected, 1, 4, 1));
     struct dma_service_irq irq = {rearm, &service, 4, ss_latency_frequency / 250};
     configASSERT(dma_service_bind_irq(&service, &irq));
-    client_task = xTaskCreateStaticAffinitySet(client, "modeled-DMA", 2048, NULL, 2,
+    client_task = xTaskCreateStaticAffinitySet(client, "modeled-DMA", 2048, NULL, 1,
         client_stack, &client_state, 1);
     configASSERT(client_task && dma_service_bind(&service, 0, client_task, 1));
 }

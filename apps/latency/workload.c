@@ -34,9 +34,32 @@ static void latency_dma_model_start(void) {}
 static unsigned latency_dma_model_stop(void) { return 0; }
 #endif
 
+/* The kernel calls this after ready-list insertion while its locks exclude
+ * changes to the running task. Admit a sample only when its target core runs
+ * the idle task or this diagnostic's memory task, as the phase requires. */
+void ss_latency_task_ready(void *task)
+{
+    const uint64_t ready = ss_latency_now();
+    unsigned p = atomic_load_explicit(&phase, memory_order_acquire);
+    if (p != IDLE && p != BUSY) return;
+    for (unsigned c = 0; c < LATENCY_CORES; ++c) {
+        if (task != wake_task[c] || !atomic_load_explicit(&wake[c].pending, memory_order_acquire)) continue;
+        TaskHandle_t running = xTaskGetCurrentTaskHandleForCore(c);
+        if (p == IDLE) {
+            /* Some model configurations let idle tasks migrate. Identity as
+             * any kernel idle task establishes that this core is idle. */
+            unsigned idle;
+            for (idle = 0; idle < LATENCY_CORES; ++idle)
+                if (running == xTaskGetIdleTaskHandleForCore(idle)) break;
+            if (idle == LATENCY_CORES) return;
+        } else if (running != load_task[c]) return;
+        wake[c].released = ready;
+        wake[c].metric = p == IDLE ? SS_LAT_SCHED_IDLE : SS_LAT_SCHED_BUSY;
+        return;
+    }
+}
 /* CPU0's periodic interrupt releases each pinned task. Remote-core samples
- * include SGI delivery. The timestamp precedes notification and its kernel
- * locks. One outstanding sample per core prevents overwritten timestamps. */
+ * include SGI delivery. One outstanding sample prevents overwritten stamps. */
 void ss_latency_tick_hook(void)
 {
     unsigned p = atomic_load_explicit(&phase, memory_order_acquire);
@@ -47,8 +70,7 @@ void ss_latency_tick_hook(void)
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
         if (atomic_load_explicit(&wake[c].completed, memory_order_acquire) >= limit ||
             atomic_load_explicit(&wake[c].pending, memory_order_acquire)) continue;
-        wake[c].metric = p == IDLE ? SS_LAT_SCHED_IDLE : SS_LAT_SCHED_BUSY;
-        wake[c].released = ss_latency_now();
+        wake[c].metric = SS_LAT_METRICS;
         atomic_store_explicit(&wake[c].pending, 1, memory_order_release);
         vTaskNotifyGiveFromISR(wake_task[c], &woken);
     }
@@ -71,8 +93,10 @@ static void wake_worker(void *argument)
             configASSERT(0);
         }
         configASSERT(atomic_load_explicit(&wake[c].pending, memory_order_acquire));
-        ss_latency_record(c, wake[c].metric, wake[c].released, (uintptr_t)wake_worker);
-        atomic_fetch_add_explicit(&wake[c].completed, 1, memory_order_release);
+        if (wake[c].metric < SS_LAT_METRICS) {
+            ss_latency_record(c, wake[c].metric, wake[c].released, (uintptr_t)wake_worker);
+            atomic_fetch_add_explicit(&wake[c].completed, 1, memory_order_release);
+        }
         atomic_store_explicit(&wake[c].pending, 0, memory_order_release);
     }
 }
@@ -152,12 +176,13 @@ void latency_workload_run(struct latency_result *out)
     latency_dma_model_start();
     atomic_store_explicit(&phase, BUSY, memory_order_release);
     wait_samples(LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES);
-    /* Completion IRQs remain enabled while the DMA client drains and closes. */
-    out->modeled_dma_jobs = latency_dma_model_stop();
-    atomic_store_explicit(&phase, QUIET, memory_order_release);
+    /* Measurement is complete. Stop background traffic before draining the
+     * modeled DMA client; completion IRQs remain enabled throughout cleanup. */
     atomic_store_explicit(&stop_load, 1, memory_order_release);
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         while (!atomic_load_explicit(&load[c].stopped, memory_order_acquire)) wait_tick();
+    out->modeled_dma_jobs = latency_dma_model_stop();
+    atomic_store_explicit(&phase, QUIET, memory_order_release);
     atomic_store_explicit(&phase, STOP, memory_order_release);
     for (unsigned c = 0; c < LATENCY_CORES; ++c) xTaskNotifyGive(wake_task[c]);
     for (unsigned c = 0; c < LATENCY_CORES; ++c)

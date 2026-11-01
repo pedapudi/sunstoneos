@@ -48,6 +48,7 @@ void ss_latency_gpu_arm(void);
 void ss_latency_gpu_post(unsigned client);
 void ss_latency_gpu_received(unsigned client);
 void ss_latency_tick_hook(void);
+void ss_latency_task_ready(void *task);
 #define SS_LATENCY_RECORD(core, region, start, site) \
     ss_latency_record((core), (region), (start), (uintptr_t)(site))
 #define SS_LATENCY_EVENT_BEGIN(region) ss_latency_event_begin(region)

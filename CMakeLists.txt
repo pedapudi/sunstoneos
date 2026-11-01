@@ -315,4 +315,5 @@ if(SUNSTONE_A733_STAGE2)
 endif()
 
 include(cmake/latency-recorder.cmake)
+include(cmake/latency.cmake)
 include(cmake/a733-os.cmake)

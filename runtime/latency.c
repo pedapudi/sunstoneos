@@ -149,4 +149,5 @@ void ss_latency_gpu_received(unsigned client)
     taskEXIT_CRITICAL();
 }
 __attribute__((weak)) void ss_latency_tick_hook(void) {}
+__attribute__((weak)) void ss_latency_task_ready(void *task) { (void)task; }
 #endif

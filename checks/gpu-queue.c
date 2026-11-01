@@ -21,6 +21,7 @@
 #include "a733_gpu_backend.h"
 #include "gicv3_spi.h"
 #include "queue-fixture.h"
+#include "sunstone_latency.h"
 
 /* 1 grid with exact sums; 2 grid with pattern sums (instrumented runs);
  * 3 as 2 with jobs that complete at once; 4 as 3 with one firmware event per
@@ -917,6 +918,15 @@ static void client(void *unused)
     if (c <= 4) {
         fixture_mark(1);
         for (unsigned j = 0; j < FIXTURE_JOBS; ++j) { fixture_mark(2); configASSERT(grid_job(j)); }
+#ifdef SUNSTONE_LATENCY
+        configASSERT(ss_latency_results[0].metric[SS_LAT_GPU].count > 1);
+        configASSERT(ss_latency_results[0].metric[SS_LAT_GPU].maximum > 0);
+        uint64_t latency_frequency;
+        __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(latency_frequency));
+        metric("latency-gpu-maximum-ticks", ss_latency_results[0].metric[SS_LAT_GPU].maximum);
+        metric("latency-counter-hz", latency_frequency);
+        platform_puts("PASS GPU IRQ timestamp reaches client receipt\n");
+#endif
         fixture_mark(3);
         metric("jobs", FIXTURE_JOBS);
         metric("sums-checked", sums_checked);
@@ -1015,6 +1025,11 @@ void fixture_unused(void)
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
+#ifdef SUNSTONE_LATENCY
+    uint64_t frequency;
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
+    ss_latency_init(frequency);
+#endif
     configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 52);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
