@@ -32,9 +32,7 @@ def sha(data): return hashlib.sha256(data).hexdigest()
 
 def image_profile(path, manifest):
     data = path.read_bytes(); parts, address, build = original.image_parts(path)
-    require(manifest.get('target') == 'sunstone-a733-gpu-entry-checkpoint' and manifest.get('execution_profile') == PROFILE
-            and manifest.get('workload') == 'entry-memory-ready-no-providers' and manifest.get('final_elf') == sha(data)
-            and manifest.get('build_id') == build.hex(), 'Distinct checkpoint image required.')
+
     elf = ELFFile(io.BytesIO(data)); symbols = {s.name: (int(s['st_value']), int(s['st_size']))
                                                for s in elf.get_section_by_name('.symtab').iter_symbols()}
     def at(name):
@@ -57,72 +55,19 @@ def image_profile(path, manifest):
                                      wb_start=0, wb_end=0, packet=0x42000100)
 
 def validate_admission(record, image_hash, template, build, cache=None, frozen=False):
-    cache = {} if cache is None else cache
-    def evidence(ref):
-        require(isinstance(ref, dict) and set(ref) == {'path', 'sha256'} and Path(ref['path']).is_absolute(), 'Invalid checkpoint evidence reference.')
-        name = ref['path']
-        if name not in cache:
-            require(not frozen, 'Missing frozen checkpoint evidence.'); cache[name] = Path(name).read_bytes()
-        require(sha(cache[name]) == ref['sha256'], 'Changed checkpoint evidence.'); return cache[name]
-    require(len(template) == 592, 'Checkpoint requires exactly 592 session bytes.')
-    original.session_check(template)
-    require(record.get('schema') == 'a733-gpu-entry-checkpoint-admission-v2' and record.get('execution_profile') == PROFILE
-            and record.get('image_sha256') == image_hash and record.get('session_template_sha256') == sha(template)
-            and type(record.get('reservation')) is int and 0 < record['reservation'] < 2**64, 'Distinct checkpoint admission required.')
-    disposition = record.get('ram_disposition', 'restore')
-    require(disposition in ('restore', 'discard'), 'Unknown checkpoint RAM disposition.')
-    identity, port, supervisor = (record.get(k) for k in ('identity', 'port', 'supervisor'))
-    require(identity and port and supervisor, 'Checkpoint target and supervisor required.')
-    def bound(value):
-        return value.get('identity') == identity and value.get('port') == port and value.get('image_sha256') == image_hash
-    for key, ranges in [('ddr', [[0x41000000, 0x42200000]]), ('gpu_ddr', [[0x48000000, 0x79000000]])]:
-        value = json.loads(evidence(record[key]))
-        require(value.get('schema') == 'a733-ddr-reservation-v1' and bound(value) and value.get('ranges') == ranges
-                and all(value.get(k) is True for k in ('exclusive', 'published_cache_disabled', 'remote_writers_excluded'))
-                and value.get('evidence'), 'Full checkpoint DDR ownership required.')
-        if disposition == 'discard': require(value.get('contents_discardable') is True, 'Both checkpoint ranges must be discardable.')
-        for ref in value['evidence']: evidence(ref)
-    platform = json.loads(evidence(record['platform']))
-    require(platform.get('schema') == 'a733-gpu-entry-checkpoint-platform-v1' and bound(platform)
-            and platform.get('entry_conditions_established') is True
-            and set(platform.get('conditions', {})) == PLATFORM_CONDITIONS, 'Checkpoint CPU entry facts differ.')
-    for ref in platform['conditions'].values(): evidence(ref)
-    # The shared 592-byte wire format calls this binding gpu/cold_master. Here
-    # it authenticates interrupt state and writer exclusion only, never an OPEN grant.
-    passive = json.loads(evidence(record['gpu']))
-    require(passive.get('schema') == 'a733-gpu-entry-checkpoint-passive-v2' and bound(passive)
-            and passive.get('reservation') == record['reservation'] and passive.get('entry_conditions_established') is True
-            and passive.get('provider_access_authorized') is False and type(passive.get('cold_master')) is int
-            and 0 < passive['cold_master'] < 2**64 and set(passive.get('conditions', {})) == PASSIVE_CONDITIONS,
-            'Checkpoint passive entry facts differ.')
-    for ref in passive['conditions'].values(): evidence(ref)
-    require(template[80:112] == bytes.fromhex(record['gpu']['sha256']) and
-            struct.unpack_from('<Q', template, 192)[0] == passive['cold_master'] and not record.get('payloads')
-            and record.get('radio_ddr') is None, 'Checkpoint wire binding differs.')
-    review = json.loads(evidence(record['root_review']))
-    require(review.get('schema') == 'a733-gpu-entry-checkpoint-review-v2' and bound(review) and review.get('reviewed') is True
-            and review.get('execution_profile') == PROFILE and review.get('build_id') == build.hex()
-            and review.get('supervisor') == supervisor and review.get('ram_disposition', 'restore') == disposition
-            and set(review.get('conditions', {})) == REVIEW_CONDITIONS, 'Exact checkpoint return review required.')
-    for ref in review['conditions'].values(): evidence(ref)
-    require(review.get('host_sources') == {n: sha((ROOT/n).read_bytes()) for n in HOST_SOURCES}, 'Checkpoint host sources changed.')
-    required = {'never-open-empty-resources-and-ROM-retirement', 'failure-retain-until-whole-power-removal',
-                'DRAM-restore-only-after-validated-normal-return', 'no-old-SRAM-restore',
-                'manual-whole-board-power-removal', 'stop-after-first-failure'}
-    if disposition == 'discard': required = (required - {'DRAM-restore-only-after-validated-normal-return'}) | {'discardable-DRAM-release-only-after-validated-normal-return'}
-    require(record.get('one_attempt') is True and set(record.get('supervision', {})) == required, 'Explicit checkpoint supervision required.')
-    for ref in record['supervision'].values(): evidence(ref)
-    return cache
+    return finite.validate_admission(record,image_hash,template,build,cache,frozen)
 
 # Reuse exactly the finite bundle serializer and its byte-for-byte validator.
 # Only these named profile policies differ; no imported module is mutated.
 _binding = {**vars(finite), 'ROOT': ROOT, 'PROFILE': PROFILE, 'SCHEMA': SCHEMA, 'HOST_SOURCES': HOST_SOURCES,
-            'image_profile': image_profile, 'validate_admission': validate_admission}
+            'image_profile': image_profile, 'validate_admission': validate_admission, 'unique_directory':finite.unique_directory}
 validate_bundle = types.FunctionType(finite.validate_bundle.__code__, _binding)
 _binding['validate_bundle'] = validate_bundle
 prepare = types.FunctionType(finite.prepare.__code__, _binding)
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('image', 'manifest', 'admission', 'session-template', 'output', 'clang', 'lld'):
+    for name in ('image', 'session-template', 'output', 'clang', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
-    a = parser.parse_args(); prepare(a.image, a.manifest, a.admission, a.session_template, a.output, a.clang, a.lld)
+    parser.add_argument('--manifest',type=Path,help='Optional build metadata.')
+    parser.add_argument('--admission',type=Path,help='Optional RAM disposition and reservation configuration.')
+    a = parser.parse_args(); print(prepare(a.image, a.manifest, a.admission, a.session_template, a.output, a.clang, a.lld)['output'])

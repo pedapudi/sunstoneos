@@ -90,12 +90,12 @@ though this image does not write their payloads.
 | CPU image, private state and monitor | `0x41000000–0x42200000` | Restore after validated return, or explicitly authorize discard |
 | Original WB and NC pools | `0x48000000–0x79000000` | Same choice; both complete ranges require authority |
 
-The passive entry record requires INTID 95 disabled, inactive and not pending,
-and exclusion of all device and remote writers through return. The inherited
+INTID 95 must be disabled, inactive and not pending, and all device and remote
+writers must remain excluded through return. The inherited
 monitor already checks that interrupt at entry. The checkpoint keeps the four
 GIC-only reads of distributor RWP and INTID 95 enable, pending and active state,
 including a final check after GIC restoration followed by a deadline check.
-Current CPU/GIC entry and continuity facts protect those accesses.
+The native monitor checks the CPU/GIC entry state before those accesses.
 
 This variant performs no GPU-engine, GPU-CCU, PPU or PCK register access. The
 complete zero application and empty allocation ledgers prove that it never
@@ -116,40 +116,37 @@ It therefore would not refuse solely because status was already ON. This source
 finding and the port 3-1 capture do not establish port 3-3's earlier state or
 diagnose its failed attempt.
 
-The shared 592-byte session retains legacy owner/supply fields for syntactic
-admission; no provider consumes them here. Its `gpu` evidence reference and
-`cold_master` token bind interrupt state and writer exclusion only.
+The shared 592-byte session retains its owner, supply, entry digest and
+`cold_master` fields because the native ABI consumes them. The checkpoint's
+native symbols and immutable memory layout select this profile. Preparation
+checks those bytes directly, then generates the session and launch packets.
 
-A root review binds the exact image, launcher, source closure, board instance,
-port, RAM disposition and supervisor. Use the existing direct retained runner;
-do not wrap it in a timeout that kills the process or releases its lock. A
-failed launch or return retains ownership until the coordinator's recovery.
-Only the coordinator can authorize a physical attempt. The software-only fixture
-under `host-*/` is not admission evidence.
+The shared runner holds the selected port lock and USB transition guard,
+validates the live A733 ROM instance and tests DRAM before snapshots or uploads.
+A failed launch or return retains ownership until recovery. Run it in a
+persistent process; a process-killing timeout can release the lock while device
+ownership remains uncertain. Only the coordinator operates the board.
 
 ## Commands and scope
 
-Build outside the checkout:
+Build outside the checkout and prepare the native session bundle:
 
 ```sh
-python3 apps/gpu-entry-checkpoint/build.py --output /absolute/new-build
+~/.cache/sunstoneos/venv/bin/python -B apps/gpu-entry-checkpoint/build.py \
+  --output BUILD
+~/.cache/sunstoneos/venv/bin/python -B apps/gpu-entry-checkpoint/prepare.py \
+  --image BUILD/build/checkpoint.elf --session-template SESSION_TEMPLATE \
+  --output BUNDLE --clang CLANG --lld LLD
+SUNSTONE_USB_PORT=3-3 ~/.cache/sunstoneos/venv/bin/python -B \
+  apps/gpu-entry-checkpoint/host.py --bundle BUNDLE --fel FEL --evidence RESULT
 ```
 
-With reviewed current facts, create the distinct bundle and invoke its adapter:
-
-```sh
-python3 apps/gpu-entry-checkpoint/prepare.py \
-  --image /absolute/new-build/build/checkpoint.elf \
-  --manifest /absolute/new-build/manifest.json \
-  --admission /absolute/reviewed-admission.json \
-  --session-template /absolute/session-template.bin \
-  --output /absolute/new-bundle --clang /absolute/clang --lld /absolute/ld.lld
-python3 apps/gpu-entry-checkpoint/host.py \
-  --bundle /absolute/new-bundle --fel /absolute/reviewed-fel \
-  --evidence /absolute/new-run --ddr-evidence /absolute/ddr.json \
-  --platform-survey /absolute/survey.json --warm-return /absolute/continuity.json \
-  --root-owned-claim CLAIM
-```
+Preparation prints the actual bundle directory. Existing output directories
+receive unique timestamped children. Optional `--manifest` accepts build
+metadata; optional `--admission CONFIG` reads only `ram_disposition` and
+`reservation`. RAM restoration is the default. Discard requires that both full
+ranges contain no data that must survive. Native owner and geometry checks,
+protected upload readback and returned report validation apply to both policies.
 
 `check.py` exercises the actual checkpoint proof, publication and return
 instructions with the existing architectural model. It checks binding, ownership,
