@@ -1,0 +1,498 @@
+{
+  "scope": "Private series-B API fork; not admitted into live CMake chain.",
+  "source_revision": "97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+  "production_chain": [
+    "freertos-smp-tasks.patch",
+    "freertos-partitioned-tasks.patch"
+  ],
+  "private_check_chain": [
+    "freertos-smp-tasks.patch",
+    "freertos-partitioned-tasks.patch",
+    "freertos-partitioned-api.patch"
+  ],
+  "enablement_blockers": [
+    "Complete every API marked pending, including all public task-handle reads before dereferencing TCB memory.",
+    "Convert queue/event-group/stream-buffer/timer object retry suspension to object-only compatibility protection.",
+    "Defer priority inheritance donation under object protection and repair through owner control; no object-to-control lock nesting.",
+    "Complete port IRQ-exit and voluntary-yield hooks; preserve trace, runtime accounting, errno, TLS and task-switch hooks.",
+    "Exclude all legacy global ready/delayed/suspended lists and all legacy task dispatch from enabled code.",
+    "Fix control migration publisher-drain acknowledgment and permanent control-slot lock races found by ordering review.",
+    "Run concurrent eight-core QEMU task/object/timer/deletion/migration stress after complete API conversion; no board admission before review."
+  ],
+  "validation_limits": "Host fixture links actual FreeRTOS tasks/list code. It advances owner checkpoints explicitly and does not execute task stacks concurrently.",
+  "apis": [
+    {
+      "name": "eTaskConfirmSleepModeStatus",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "eTaskGetState",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "pcTaskGetName",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "pvTaskGetThreadLocalStoragePointer",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "pvTaskIncrementMutexHeldCount",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "ulTaskGenericNotifyTake",
+      "state": "routed-private",
+      "validation": "linked-transition"
+    },
+    {
+      "name": "ulTaskGenericNotifyValueClear",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "ulTaskGetIdleRunTimeCounter",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "ulTaskGetIdleRunTimePercent",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "ulTaskGetRunTimeCounter",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "ulTaskGetRunTimePercent",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "uxTaskBasePriorityGet",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "uxTaskBasePriorityGetFromISR",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "uxTaskCallForEachTask",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "uxTaskGetNumberOfTasks",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "uxTaskGetStackHighWaterMark",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "uxTaskGetStackHighWaterMark2",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "uxTaskGetSystemState",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "uxTaskGetTaskNumber",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "uxTaskPriorityGet",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "uxTaskPriorityGetFromISR",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "uxTaskResetEventItemValue",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskAllocateMPURegions",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskCoreAffinityGet",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskCoreAffinitySet",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "vTaskDelay",
+      "state": "routed-private",
+      "validation": "linked-transition"
+    },
+    {
+      "name": "vTaskDelete",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "vTaskEndScheduler",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskEnterCritical",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskEnterCriticalFromISR",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskExitCritical",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskExitCriticalFromISR",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskGenericNotifyGiveFromISR",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "vTaskGetInfo",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskGetRunTimeStatistics",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskInternalSetTimeOutState",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskListTasks",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskMissedYield",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "vTaskPlaceOnEventList",
+      "state": "routed-private",
+      "validation": "linked-transition"
+    },
+    {
+      "name": "vTaskPlaceOnEventListRestricted",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "vTaskPlaceOnUnorderedEventList",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "vTaskPreemptionDisable",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskPreemptionEnable",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskPriorityDisinheritAfterTimeout",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskPrioritySet",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "vTaskRemoveFromUnorderedEventList",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "vTaskResetState",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskResume",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "vTaskSetApplicationTaskTag",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskSetTaskNumber",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskSetThreadLocalStoragePointer",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskSetTimeOutState",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskStartScheduler",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskStepTick",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "vTaskSuspend",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "vTaskSuspendAll",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "vTaskSwitchContext",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "vTaskYieldWithinAPI",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskAbortDelay",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "xTaskCallApplicationTaskHook",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskCatchUpTicks",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskCheckForTimeOut",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskCreate",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskCreateAffinitySet",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskCreateRestricted",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskCreateRestrictedAffinitySet",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskCreateRestrictedStatic",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskCreateRestrictedStaticAffinitySet",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskCreateStatic",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskCreateStaticAffinitySet",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskDelayUntil",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "xTaskGenericNotify",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "xTaskGenericNotifyFromISR",
+      "state": "routed-private",
+      "validation": "linked-transition"
+    },
+    {
+      "name": "xTaskGenericNotifyStateClear",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "xTaskGenericNotifyWait",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "xTaskGetApplicationTaskTag",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskGetApplicationTaskTagFromISR",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskGetCurrentTaskHandle",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskGetCurrentTaskHandleForCore",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskGetHandle",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskGetIdleTaskHandle",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskGetIdleTaskHandleForCore",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskGetMPUSettings",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskGetSchedulerState",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskGetStaticBuffers",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskGetTickCount",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "xTaskGetTickCountFromISR",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "xTaskIncrementTick",
+      "state": "routed-private",
+      "validation": "linked-transition"
+    },
+    {
+      "name": "xTaskPeriodicDelay",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "xTaskPriorityDisinherit",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskPriorityInherit",
+      "state": "pending",
+      "validation": "none"
+    },
+    {
+      "name": "xTaskRemoveFromEventList",
+      "state": "routed-private",
+      "validation": "linked-transition"
+    },
+    {
+      "name": "xTaskResumeAll",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    },
+    {
+      "name": "xTaskResumeFromISR",
+      "state": "routed-private",
+      "validation": "aarch64-compile"
+    }
+  ],
+  "private_helpers": [
+    "prvAddNewTaskToReadyList"
+  ]
+}
