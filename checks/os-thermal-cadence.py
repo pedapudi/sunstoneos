@@ -26,6 +26,7 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--build',type=Path,required=True,help='configured OS build with compile_commands.json')
 p.add_argument('--output',type=Path,required=True)
 p.add_argument('--baseline',type=Path,help='retained thermal.c before the cadence correction')
+p.add_argument('--startup-baseline',type=Path,help='retained thermal.c before startup snapshot filtering')
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
 spec=importlib.util.spec_from_file_location('thermal_report',ROOT/'apps/os/thermal-report.py')
 report=importlib.util.module_from_spec(spec);spec.loader.exec_module(report)
@@ -53,7 +54,7 @@ class Model:
         self.uc.emu_start(self.image.address('cadence_control'),0x6000fff0,count=200000)
         assert self.uc.reg_read(UC_ARM64_REG_PC)==0x6000fff0
         return self.uc.reg_read(UC_ARM64_REG_X0)&0xffffffff
-    def state(self):return struct.unpack('<8Q',self.uc.mem_read(self.image.address('cadence_state'),64))
+    def state(self):return struct.unpack('<9Q',self.uc.mem_read(self.image.address('cadence_state'),72))
     def decode(self):
         n=self.state()[6];return report.decode(bytes(self.uc.mem_read(self.image.address('cadence_report'),n)),11,12)
     def read_times(self):return list(struct.unpack('<'+'Q'*self.state()[2],self.uc.mem_read(self.image.address('cadence_read_times'),8*self.state()[2])))
@@ -94,6 +95,48 @@ if a.baseline:
     assert max(y['time_us']-x['time_us'] for x,y in zip(before['readings'],before['readings'][1:]))>125000
     assert times==old_times,'snapshot correction added a sensor read'
     cases += ['old-source-reproduces-coverage-failure','unchanged-sensor-read-schedule']
+
+def startup(m,filtered):
+    start=1000000;m.call(0,start)
+    for offset,mask in [(0,0),(25000,1),(50000,8),(75000,22)]:
+        m.call(9,start+offset,mask);assert m.call(1,start+offset)==1
+        if offset<75000:
+            assert m.state()[8]==1,'startup load released before complete sensors'
+            if filtered:assert m.state()[0]==0 and m.state()[1]==0
+    assert m.state()[8]==0 and m.state()[0]==1
+    m.call(2,start+75001);m.call(3,start+80000,1)
+    return m.decode(),m.read_times()
+
+first,first_times=startup(m,True)
+assert report.classify(first)=='complete' and first['readings'][0]['seen']==31
+assert first['readings'][0]['time_us']==1075000
+cases.append('partial-startup-recorded-before-load-release-and-first-window')
+if a.startup_baseline:
+    old_start=build('startup-baseline',a.startup_baseline);bad,bad_times=startup(old_start,False)
+    assert report.classify(bad)=='incomplete' and bad['readings'][0]['seen']==0
+    assert first_times==bad_times
+    cases.append('previous-startup-row-failure-with-identical-sensor-reads')
+# Full coverage with an old channel stays throttled and must not become row 0.
+m.call(0,1000000);m.call(9,1000000,1);m.call(1,1000000)
+m.call(9,2100001,30);m.call(1,2100001)
+assert m.state()[0]==0 and m.state()[1]==0 and m.state()[8]==1
+m.call(9,2125001,1);m.call(1,2125001)
+assert m.state()[0]==1 and m.state()[8]==0
+m.call(2,2125002);m.call(3,2125003,1)
+assert report.classify(m.decode())=='complete'
+cases.append('stale-startup-snapshot-waits-for-fresh-full-coverage')
+# A later stale record remains visible, preserving the failure evidence.
+m.call(0,1000000);m.call(1,1000000);m.call(2,1000001)
+m.call(9,2100001,0);m.call(1,2100001);m.call(3,2100002,1)
+assert m.state()[0]==2 and m.decode()['readings'][-1]['stale']==31
+assert report.classify(m.decode())=='incomplete'
+cases.append('later-stale-snapshot-is-not-filtered')
+# A critical startup failure with no valid channel must still publish row 0.
+m.call(0,1000000);m.call(9,1000000,0);m.call(10,1000000,1);m.call(2,1000000)
+assert m.call(1,1000000)==0xffffffff and m.state()[0]==1 and m.state()[3]==0
+m.call(3,1000001,0)
+assert m.decode()['readings'][0]['seen']==0 and m.decode()['readings'][0]['level']==2
+cases.append('critical-startup-with-no-seen-channels-is-retained')
 # Preserve a genuine long owner stall as incomplete, without invented rows.
 m.call(0,1000000);m.call(1,1000000);m.call(2,1000001);m.call(1,1350000)
 assert m.state()[0]==2 and m.state()[1]==1400000
@@ -118,6 +161,7 @@ for label,op in [('inactive',8),('retaining',6),('rearm-fault',7)]:
     sensor_read_times=times,report=r,
     source_sha256=hashlib.sha256((ROOT/'apps/os/thermal.c').read_bytes()).hexdigest(),
     baseline_sha256=hashlib.sha256(a.baseline.read_bytes()).hexdigest() if a.baseline else None,
+    startup_baseline_sha256=hashlib.sha256(a.startup_baseline.read_bytes()).hexdigest() if a.startup_baseline else None,
     script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     limits='Modeled device/task boundaries; actual owner, policy and report code.'),indent=2)+'\n')
 print('PASS thermal cadence:',len(cases),'cases, maximum gap',max(gaps),'us')

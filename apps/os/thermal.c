@@ -64,6 +64,9 @@ static void record_reading(uint64_t now,enum a733_thermal_level level)
 {
     if(now<readings.next&&level!=A733_THERMAL_CRITICAL)return;
     unsigned n=atomic_load_explicit(&readings.count,memory_order_relaxed);
+    /* Startup throttling precedes complete sensor coverage. Its first usable
+     * sample must be recorded before publish_load releases that throttling. */
+    if(!n&&level!=A733_THERMAL_CRITICAL&&(thermal.policy.seen!=31||thermal.policy.stale))return;
     if(n==THERMAL_RECORDS){atomic_store_explicit(&readings.overflow,1,memory_order_release);return;}
     struct os_thermal_reading *r=&readings.rows[n];
     r->time_us=now;r->sequence=thermal.policy.sequence;r->seen=thermal.policy.seen;

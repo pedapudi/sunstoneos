@@ -10,10 +10,10 @@
 
 struct board_application board;
 struct board_provider providers;
-uint64_t cadence_state[8],cadence_read_times[256];
+uint64_t cadence_state[9],cadence_read_times[256];
 uint8_t cadence_report[sizeof(struct os_thermal_report)+THERMAL_RECORDS*sizeof(struct os_thermal_reading)];
 static uint64_t model_time,read_delay;
-static unsigned reads,clocks,failures,poll_ready;
+static unsigned reads,clocks,failures,poll_ready,valid_mask;
 static int rearm_ok;
 static int32_t temperature;
 
@@ -39,7 +39,8 @@ enum a733_thermal_result cadence_read(struct a733_thermal *d,uint64_t deadline,s
     (void)d;(void)deadline;
     if(reads<256)cadence_read_times[reads]=model_time;
     ++reads;model_time+=read_delay;
-    memset(s,0,sizeof(*s));s->valid=31;s->sequence=thermal.policy.sequence+1;s->observed_us=model_time;
+    if(!valid_mask)return A733_THERMAL_AGAIN;
+    memset(s,0,sizeof(*s));s->valid=(uint8_t)valid_mask;s->sequence=thermal.policy.sequence+1;s->observed_us=model_time;
     for(unsigned i=0;i<5;++i)s->millicelsius[i]=temperature;
     return A733_THERMAL_SAMPLE;
 }
@@ -54,7 +55,7 @@ int cadence_control(unsigned op,uint64_t at,uint64_t value)
         memset(&window,0,sizeof(window));memset(&providers,0,sizeof(providers));
         memset(&board,0,sizeof(board));memset(cadence_state,0,sizeof(cadence_state));
         memset(cadence_report,0,sizeof(cadence_report));
-        reads=clocks=failures=0;read_delay=0;poll_ready=0;rearm_ok=1;temperature=40000;
+        reads=clocks=failures=0;read_delay=0;poll_ready=0;rearm_ok=1;temperature=40000;valid_mask=31;
         thermal.handle=(TaskHandle_t)(uintptr_t)1;thermal.active=1;thermal.masked=1;
         thermal.driver.initialized=1;board.session.deadline_us=at+60000000;
         board.session.epoch=11;board.session.generation=12;
@@ -78,9 +79,12 @@ int cadence_control(unsigned op,uint64_t at,uint64_t value)
     else if(op==6)thermal.retaining=(unsigned)value;
     else if(op==7){rearm_ok=-1;thermal.masked=1;}
     else if(op==8){thermal.active=0;poll_ready=0;}
+    else if(op==9)valid_mask=(unsigned)value;
+    else if(op==10)thermal.driver.fault=(unsigned)value;
     cadence_state[0]=atomic_load_explicit(&readings.count,memory_order_acquire);
     cadence_state[1]=readings.next;cadence_state[2]=reads;cadence_state[3]=clocks;
     cadence_state[4]=failures;cadence_state[5]=thermal.active;
     cadence_state[7]=thermal.policy.sequence;
+    cadence_state[8]=(uint64_t)os_thermal_throttled();
     return result;
 }
