@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/pedapudi/mimus.git",
-  "revision": "43443cef29951cf390c3461c9c3b5e017d0e75b7",
+  "revision": "9eca2315ea46db110abb829e7bf93793708998a6",
   "base_revision": "18c7c81968f56c8c985af0ec26448184cf6a17ec",
   "local_worktree": "/home/sunil/git/mimus-worktrees/cpu-perf-1031",
   "branch": "port/sunstoneos-split",
