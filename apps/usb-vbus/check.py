@@ -13,7 +13,7 @@ import harness as h
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR,UC_ARM64_REG_PSTATE
 CHECK_INPUTS=['apps/usb-vbus','drivers/i2c/a733_twi.c','runtime/deadline.c','runtime/deadline-a733.c','platform/a733/probe.c']
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--guard-only',action='store_true');p.add_argument('--init-only',action='store_true');p.add_argument('--old-image',type=Path);p.add_argument('--image',type=Path,required=True);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=True)
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--guard-only',action='store_true');p.add_argument('--init-only',action='store_true');p.add_argument('--old-image',type=Path);p.add_argument('--init-case');p.add_argument('--image',type=Path,required=True);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=True)
 if not a.guard_only and not a.init_only:
     subprocess.run([str(h.CLANG),'-std=c11','-O2','-Wall','-Wextra','-Werror',str(ROOT/'apps/usb-vbus/diagnostic.c'),str(ROOT/'apps/usb-vbus/model.c'),'-o',str(a.evidence/'model')],check=True)
     subprocess.run([str(a.evidence/'model')],check=True)
@@ -148,15 +148,16 @@ if a.old_image:
     assert old.call('prepare',count=30000)==0
     print('PASS original native admission refuses the observed board values')
 rows=[]
-for case in ('control','pulse','hold','warm','busy-clears','busy-stuck','reset-stuck','lines-stuck'):
+for case in ('control','pulse','hold','warm','busy-clears','busy-stuck','reset-stuck','lines-stuck','late-idle'):
+    if a.init_case and case!=a.init_case:continue
     mode={'control':0,'hold':10}.get(case,1)
     path=a.image.with_name(f'sunstone-a733-usb-vbus-{mode}.elf')
     model=mm.Machine(path,step=1);model.map(0x02002000,4096);model.sys['currentel']=4
     for address,value in hardware.items():model.write(address,value,4)
     initial=dict(hardware)
-    if case in ('warm','busy-clears','busy-stuck'):
+    if case in ('warm','busy-clears','busy-stuck','late-idle'):
         model.write(0x0701019c,0x30003,4);model.write(0x0708400c,0x40,4)
-    if case in ('busy-clears','busy-stuck'):model.write(0x07084010,0x28,4)
+    if case in ('busy-clears','busy-stuck','late-idle'):model.write(0x07084010,0x28,4)
     state={'reset_at':None,'gate_off':None,'reset_reads':0,'gated':False,'waits':0}
     began=model.now
     def access(cpu,kind,address,size,value,cookie):
@@ -175,7 +176,7 @@ for case in ('control','pulse','hold','warm','busy-clears','busy-stuck','reset-s
                 model.write(address,0,4);model.write(0x0708400c,0,4)
                 model.write(0x07084010,0xf8,4)
                 model.write(0x07084020,0x10 if case=='lines-stuck' else 0x30,4)
-        if address==0x07084010 and kind==16 and case=='busy-clears' and model.now-began>=2400:
+        if address==0x07084010 and kind==16 and case in ('busy-clears','late-idle') and model.now-began>=(19500*24 if case=='late-idle' else 2400):
             model.write(address,0xf8,4)
     def wait(cpu,address,size,cookie):
         if address==model.address('sunstone_deadline_wait_until'):
@@ -187,7 +188,7 @@ for case in ('control','pulse','hold','warm','busy-clears','busy-stuck','reset-s
     success=model.call('prepare',count=300000)
     assert model.read(0x07010010,4)==initial[0x07010010],'shared parent retuned'
     assert model.read(0x0701019c,4)&0x10001==0x10001
-    assert (success==1)==(case not in ('busy-stuck','reset-stuck','lines-stuck')),(case,success,state)
+    assert (success==1)==(case not in ('busy-stuck','reset-stuck','lines-stuck','late-idle')),(case,success,state)
     assert state['waits'] and model.now-began<=21000*24
     if success:
         assert state['reset_reads']>=2 and model.read(0x07084014,4)==40
