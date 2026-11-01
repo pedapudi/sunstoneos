@@ -8,17 +8,17 @@ service priority map are in [scheduler status](../status/scheduler.md).
 
 ## The global tick already has one owner
 
-[The configuration](../../include/FreeRTOSConfig.h:35) selects preemption,
+[The configuration](../../include/FreeRTOSConfig.h#L35) selects preemption,
 time slicing, eight priorities and a 1 kHz tick.
-[CPU0 programs the physical generic timer](../../platform/a733-smp-cached/platform.c:122).
-Only [CPU0 private peripheral interrupt 30 (PPI30) advances global time](../../platform/a733-smp-cached/platform.c:146).
+[CPU0 programs the physical generic timer](../../platform/a733-smp-cached/platform.c#L122).
+Only [CPU0 private peripheral interrupt 30 (PPI30) advances global time](../../platform/a733-smp-cached/platform.c#L146).
 Secondaries receive scheduler software-generated interrupts, called SGIs,
-and already [execute wait-for-interrupt (WFI) when idle](../../include/a733_cpu_power.h:23).
+and already [execute wait-for-interrupt (WFI) when idle](../../include/a733_cpu_power.h#L23).
 The idle-priority time-slice rule avoids SGIs when only the eight kernel
 idle tasks are ready. The system therefore has one periodic scheduler timer,
 rather than eight periodic timers.
 
-The [late-tick path](../../platform/a733-smp-cached/platform.c:133) processes
+The [late-tick path](../../platform/a733-smp-cached/platform.c#L133) processes
 at most three periods per IRQ. Further overdue periods retain the timer's
 level assertion. Each acknowledgment advances the original compare phase.
 Raising the tick rate would increase this work and lock traffic. Keep 1 kHz
@@ -31,7 +31,7 @@ one admitted-core mask for each distinct running priority. Its original list
 traversal examines every ready task at those priorities while the port holds
 the global ISR lock. Static allocation places no bound on the number of tasks.
 
-[The length check](../../patches/freertos-smp-tasks.patch:90) limits traversal
+[The length check](../../patches/freertos-smp-tasks.patch#L90) limits traversal
 to lists containing at most twice the core count. With eight cores, a list
 of sixteen entries can contain one running task and one waiter per core.
 Longer lists immediately request rescheduling on every core running that
@@ -90,7 +90,7 @@ long-list fallback. The higher loaded wake and task-lock-wait maxima prevent
 a claim of physical performance improvement. A single pair of executions
 does not establish repeatability or explain that variation.
 
-The [ready-list timestamp](../../apps/latency/workload.c:50) starts after
+The [ready-list timestamp](../../apps/latency/workload.c#L50) starts after
 notification locking and insertion. It does not measure the full interval
 from IRQ assertion to task execution. The recorder retains count, maximum
 and first-over-budget context; it contains no percentile samples. Its lock
@@ -130,7 +130,7 @@ The application worktree is under
 That correction removes unused GPU grants from the CPU profile. Without it,
 entry `1793561131232973768-80ec5a72` stops at the application pin check before
 scheduler startup, then returns through the watchdog. Exit detail 10 comes
-from [the application pin predicate](../../apps/board/main.c:326). A GPU-write
+from [the application pin predicate](../../apps/board/main.c#L326). A GPU-write
 region requires privileged writes to be excluded, while the CPU-only image
 maps that reservation writable. CPU and GPU manifest-generation host checks
 cover the correction. Model hashes and region addresses remain fixed.
@@ -189,7 +189,7 @@ run isolates an idle counting window or measures idle power.
 
 ## High-resolution deadlines require a separate compare consumer
 
-The [generic counter clock](../../platform/a733/counter_clock.c:16) supplies
+The [generic counter clock](../../platform/a733/counter_clock.c#L16) supplies
 sub-tick timestamps. A733's 24 MHz counter has a nominal 41.667 ns period.
 Reading that counter does not create an asynchronous timeout. There is no
 general application API for interrupt-driven sub-tick waits in this port.

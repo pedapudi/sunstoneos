@@ -146,14 +146,14 @@ reserves the available levels. It does not enforce an application policy.
 
 | Priority | Current use or reservation | Source |
 | ---: | --- | --- |
-| 0 | Kernel idle tasks, one pinned to each core | [cached configuration](../../platform/a733-smp-cached/FreeRTOSConfig.h:13) |
-| 1 | Diagnostic memory/background load; available for background application work | [latency workload](../../apps/latency/workload.c:171) |
-| 2 | CPU latency application's main task | [latency manifest](../../apps/latency/manifest.json:4) |
-| 3 | PMIC owner, NPU application client and recorded mimus board application | [board tasks](../../apps/board/main.c:339), [NPU tasks](../../apps/os/npu.c:294), external application's manifest |
-| 4 | USB, radio, watchdog supervision, thermal, audio, Bluetooth, GPU and DMA service work | [board tasks](../../apps/board/main.c:339), [thermal](../../apps/os/thermal.c:319), [GPU](../../apps/os/gpu-runtime.h:4), [DMA](../../apps/os/dma.c:58) |
-| 5 | Type-C and power owners | [board tasks](../../apps/board/main.c:339) |
-| 6 | Available for a bounded urgent service with a demonstrated need | [priority count](../../include/FreeRTOSConfig.h:38) |
-| 7 | Returning CPU terminal tasks and highest-priority latency probes | [CPU return](../../apps/os/cpu-return.c:60), [latency workload](../../apps/latency/workload.c:169) |
+| 0 | Kernel idle tasks, one pinned to each core | [cached configuration](../../platform/a733-smp-cached/FreeRTOSConfig.h#L13) |
+| 1 | Diagnostic memory/background load; available for background application work | [latency workload](../../apps/latency/workload.c#L171) |
+| 2 | CPU latency application's main task | [latency manifest](../../apps/latency/manifest.json#L4) |
+| 3 | PMIC owner, NPU application client and recorded mimus board application | [board tasks](../../apps/board/main.c#L339), [NPU tasks](../../apps/os/npu.c#L294), external application's manifest |
+| 4 | USB, radio, watchdog supervision, thermal, audio, Bluetooth, GPU and DMA service work | [board tasks](../../apps/board/main.c#L339), [thermal](../../apps/os/thermal.c#L319), [GPU](../../apps/os/gpu-runtime.h#L4), [DMA](../../apps/os/dma.c#L58) |
+| 5 | Type-C and power owners | [board tasks](../../apps/board/main.c#L339) |
+| 6 | Available for a bounded urgent service with a demonstrated need | [priority count](../../include/FreeRTOSConfig.h#L38) |
+| 7 | Returning CPU terminal tasks and highest-priority latency probes | [CPU return](../../apps/os/cpu-return.c#L60), [latency workload](../../apps/latency/workload.c#L169) |
 
 Eight levels cover these classes, but several services share priority four.
 Their execution budgets and affinities still require combined-load evidence.
@@ -172,7 +172,75 @@ Cross-core priority inversion with a high-priority waiter and medium-priority
 interferers still needs an isolated physical test.
 
 
-## Resume implementation and validation in this order
+## Stage 1 requires a shared dispatch protocol before board execution
+
+The requested hybrid keeps multi-core-affinity tasks on the global scheduler
+and moves single-core-affinity tasks to owner queues. There is no adapter that
+safely implements that contract. The per-core helpers remain disconnected;
+no stage-1 build option, new SGI condition or model negative control is present.
+The topology option remains OFF. Fixed priority, the tick and operating points
+retain their existing behavior.
+
+The legacy selector reads and writes remote current-task pointers and run states
+under the global locks. An owner context switch outside those locks races those
+accesses even if its own ready list is private. Atomic pointer loads alone do
+not preserve the coupled priority, affinity and run-state arbitration.
+
+The generated kernel used by the measured control gives these source anchors,
+relative to the task evidence root:
+`partitioned/control-quantiles/latency/tasks.c`.
+
+| Source line | Shared operation requiring conversion |
+| ---: | --- |
+| 352 | `prvYieldCore` reads the remote current task and marks its run state for yielding |
+| 919 | `prvYieldForTask` reads remote current priority and run state |
+| 1101 | The selector retires the outgoing run state and publishes the incoming current task |
+| 1215 | The selector uses other cores' current priorities and affinities to retarget the previous task |
+| 5403 | `vTaskSwitchContext` acquires both global locks before selection |
+
+Conditions: the existing eight-core control uses pinned notification probes,
+pinned memory load and ordinary OS tasks. Measurement: no modified scheduler
+image is submitted. Result: there is no after value or new board entry.
+Conclusion: the owner helpers alone do not remove global contention safely;
+the workload-period timing targets remain unmet.
+
+| Loaded measurement, microseconds | Baseline entry `1793566204991504422-8a47d893` | Stage 1 |
+| --- | ---: | --- |
+| Ready-to-running p50 | 69.292 | Not measured |
+| Ready-to-running p99, histogram upper bound | 159.958 | Not measured |
+| Ready-to-running maximum | 159.167 | Not measured |
+| Maximum task-lock wait | 139.333 | Not measured |
+
+The next implementation must define one sequence-validated dispatch handoff
+between owner and legacy selection, including remote yield state and global
+scheduler suspension. Then convert the pinned notification path, prove the
+empty-to-nonempty SGI condition with its negative control, and obtain the single
+requested memory-order review. Linked-kernel tests must mix pinned and
+multi-core-affinity tasks with competing priorities before a board submission.
+Parking a fake legacy current task or reserving its core would change the
+requested affinity and priority contract.
+
+The scheduler branch includes `bringup` through `8e83dfae` in merge `f7b92cbe`.
+The merge retains both CPU-capacity selection and the GPU queue application
+selection. Conflict markers and unmerged paths are absent. The implementation
+worker's bounded audit changes no code; its worktree remains clean.
+
+Host validation of merge `f7b92cbe`: the linked-kernel QEMU check passes
+256 cross-core queue exchanges, affinity, floating-point context, mutex
+exclusion and preemption. The explicit full integration gate passes its central
+build, every OS variant, kernel check, eight-core soak and core checks, then
+stops at `indexed-docs-links`. Its log identifies 22 relative source links that
+mistake `:line` for part of a filename. Those links now use `#Lline`; the focused
+document-link check passes. Remaining indexed checks are unexecuted, so the
+full gate is incomplete. Evidence is in `integration/gate-scheduler-stage1/`
+and `stage1/linked-kernel/`. This evidence covers the legacy kernel only.
+
+No board image is built or submitted for stage 1. The requested memory-order
+review remains due because there is no implemented hybrid publish/drain path
+to review. The status-parser check runs after this status edit.
+
+
+## Remaining full-architecture work follows the stage-1 dispatch handoff
 
 1. Complete the disabled topology integration in `30dc2d80`. Resolve its clock
    table dependency, test public queries with missing and valid observations,
