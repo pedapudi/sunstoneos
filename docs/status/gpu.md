@@ -1,6 +1,6 @@
 # GPU
 
-**Status: implemented; six finite compute-queue workloads pass on port 3-3.**
+**Status: implemented.**
 
 Native firmware loading, power/interrupt ownership,
 compute, rendering and application bindings have software evidence. Finite
