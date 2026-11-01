@@ -94,11 +94,12 @@ void board_host_irq_wait(void)
     if(!schedule.initialized||!schedule.deadline){taskENTER_CRITICAL();irq.fault=1;taskEXIT_CRITICAL();return;}
     uint64_t now=sunstone_deadline_now_us();
     if(schedule.deadline<=now)return; /* Poll must classify expired hardware. */
-    if((irq.draining||schedule.ready)&&++irq.burst<32)return;
+    if(!irq.deferred&&(irq.draining||schedule.ready)&&++irq.burst<32)return;
     uint64_t until=schedule.deadline;
-    if(irq.draining||schedule.ready){
-        /* Yield a saturated software batch without tick rounding. Never move
-         * a hardware deadline later to provide the fairness interval. */
+    if(irq.deferred||irq.draining||schedule.ready){
+        /* GIC mask/active status has no separate completion IRQ. Retry it,
+         * or yield a saturated software batch, without tick rounding. Never
+         * move a hardware deadline later for this bounded retry. */
         uint64_t retry=now>UINT64_MAX-50?UINT64_MAX:now+50;
         if(retry<until)until=retry;
     }

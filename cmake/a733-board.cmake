@@ -113,7 +113,8 @@ if(SUNSTONE_A733_OS_USB_CLASSES)
     COMMAND_ERROR_IS_FATAL ANY)
   list(APPEND board_host_sources "${board_cdc_source}"
     "${board_root}/drivers/usb/host/hid.c" "${board_root}/drivers/usb/host/serial.c"
-    "${board_root}/drivers/usb/host/uvc.c" "${board_root}/drivers/usb/host/serial-native.c")
+    "${board_root}/drivers/usb/host/uvc.c" "${board_root}/drivers/usb/host/uvc-camera.c"
+    "${board_root}/drivers/usb/host/serial-native.c")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${board_root}/drivers/usb/host/serial-source.py")
 endif()

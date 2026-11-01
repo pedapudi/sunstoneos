@@ -126,6 +126,14 @@ static void service_alarm(void)
 }
 static void service_immediate(void)
 {assert(0);}
+static void service_lost_alarm(void)
+{
+    kick();assert(programmed==13000);
+    clock_us=13100;assert(os_services_healthy(clock_us)==1);
+    clock_us=13101;assert(os_services_healthy(clock_us)==0);
+    /* Delivery after the observation window cannot start a fresh window. */
+    fire();assert(os_services_healthy(clock_us)==0);
+}
 static void services_cases(void)
 {
     memset(slots,0,sizeof slots);memset(notifies,0,sizeof notifies);
@@ -160,7 +168,12 @@ static void services_cases(void)
     assert(sunstone_deadline_wait_until(UINT64_MAX)==SUNSTONE_DEADLINE_ERROR);
     assert(os_services_healthy(clock_us)==0); /* Failed waiter is sticky. */
     board_service_progress(1);assert(os_services_healthy(clock_us)==1);
+    assert(board_service_blocked_until(1,20000));
+    while_waiting=service_lost_alarm;
+    assert(sunstone_deadline_wait_until(13000)==SUNSTONE_DEADLINE_EXPIRED);
+    assert(os_services_healthy(clock_us)==0);
+    board_service_progress(1);assert(os_services_healthy(clock_us)==1);
     assert(!depth);
-    puts("PASS service owner binding, actual-wait sequence, mature holds, fired/observing bounds, operation expiry and failed-wait progress");
+    puts("PASS service owner binding, actual-wait sequence, mature holds, lost/late alarm bounds, operation expiry and failed-wait progress");
 }
 int main(void){runtime_cases();services_cases();}

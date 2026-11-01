@@ -83,6 +83,9 @@ int main(void)
     board_host_irq_wait();assert(counter_us==start+17&&waits==before+1);
     progress();start=counter_us;board_host_irq_schedule(start+100000,1);
     for(unsigned i=0;i<32;++i)board_host_irq_wait();assert(counter_us==start+50);
+    progress();start=counter_us;irq.deferred=1;
+    board_host_irq_schedule(start+100000,0);board_host_irq_wait();
+    assert(counter_us==start+50); /* Delayed GIC acknowledgment needs no tick. */
     progress();board_host_irq_schedule(counter_us+7777,0);board_host_irq();
     start=counter_us;board_host_irq_wait();assert(counter_us==start); /* Arrival before arm is retained. */
     progress();board_host_irq_schedule(counter_us,0);before=waits;board_host_irq_wait();assert(waits==before);

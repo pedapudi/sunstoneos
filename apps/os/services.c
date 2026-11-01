@@ -93,8 +93,12 @@ static int services_state(uint64_t now,unsigned *first)
                 /* Alarm expiry can be a successful hold. Its certificate
                  * survives wake until real progress, bounded by both the
                  * operation budget and this service's observation window. */
+                uint64_t observation=r.woken_us&&r.woken_us<r.deadline_us?
+                    r.woken_us:r.deadline_us;
+                /* A lost or late alarm cannot extend the device deadline.
+                 * Early device notification starts the same window sooner. */
+                if(now>=observation&&now-observation>os_services[i].window_us){*first=i;return 0;}
                 if(r.woken_us){
-                    if(now>=r.woken_us&&now-r.woken_us>os_services[i].window_us){*first=i;return 0;}
                     continue;
                 }
                 if(r.armed)continue;
