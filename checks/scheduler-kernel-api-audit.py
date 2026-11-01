@@ -5,7 +5,7 @@ import re
 SIGNATURE = re.compile(
     r'^\s*(?:(?:STATIC|static)\s+)?'
     r'(?:void|char\s*\*|BaseType_t|UBaseType_t|TickType_t|eTaskState|'
-    r'uint32_t|TaskHandle_t|TaskHookFunction_t|configSTACK_DEPTH_TYPE|'
+    r'uint32_t|TaskHandle_t|TaskHookFunction_t|configSTACK_DEPTH_TYPE|configRUN_TIME_COUNTER_TYPE|'
     r'StackType_t\s*\*|void\s*\*)\s*'
     r'([A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{', re.M)
 

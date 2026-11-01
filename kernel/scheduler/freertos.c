@@ -1048,6 +1048,9 @@ static TaskHandle_t ssKernelMutexTaken(void)
 }
 
 #if ( configUSE_TRACE_FACILITY == 1 )
+#if ( configGENERATE_RUN_TIME_STATS == 1 )
+static configRUN_TIME_COUNTER_TYPE ssKernelRuntime(TaskHandle_t);
+#endif
 static void ssKernelInfo(TaskHandle_t handle, TaskStatus_t *status, bool stack)
 {
     configASSERT(status);
@@ -1076,7 +1079,7 @@ static void ssKernelInfo(TaskHandle_t handle, TaskStatus_t *status, bool stack)
     status->uxBasePriority = atomic_load_explicit(&s->base, memory_order_acquire);
 #endif
 #if ( configGENERATE_RUN_TIME_STATS == 1 )
-    status->ulRunTimeCounter = t->ulRunTimeCounter;
+    status->ulRunTimeCounter = ssKernelRuntime(t);
 #endif
     static const eTaskState states[] = { eReady, eRunning, eBlocked, eSuspended, eDeleted };
     status->eCurrentState = states[ssKernelLogicalExecution(s)];
@@ -1115,3 +1118,34 @@ static bool ssKernelIdleShouldYield(void)
 {
     return ssKernelCPUs[ssKernelCPUId()].run.ready[tskIDLE_PRIORITY].head != NULL;
 }
+
+#if ( configGENERATE_RUN_TIME_STATS == 1 )
+static configRUN_TIME_COUNTER_TYPE ssKernelRuntimeNow(void)
+{
+    configRUN_TIME_COUNTER_TYPE now;
+#ifdef portALT_GET_RUN_TIME_COUNTER_VALUE
+    portALT_GET_RUN_TIME_COUNTER_VALUE(now);
+#else
+    now = portGET_RUN_TIME_COUNTER_VALUE();
+#endif
+    return now;
+}
+static configRUN_TIME_COUNTER_TYPE ssKernelRuntime(TaskHandle_t handle)
+{
+    ssKernelSuspendAll();
+    struct ss_kernel_pin pin;
+    configRUN_TIME_COUNTER_TYPE result = 0;
+    if (ssKernelPin(handle, &pin)) {
+        struct ssKernelTask *s = &ssKernelTasks[pin.slot];
+        TCB_t *t = pin.descriptor->task;
+        result = t->ulRunTimeCounter;
+        if (ssKernelLogicalExecution(s) == SS_K_RUNNING) {
+            unsigned owner = atomic_load_explicit(&s->owner, memory_order_acquire);
+            result += ssKernelRuntimeNow() - ulTaskSwitchedInTime[owner];
+        }
+        ss_kernel_handle_put(&pin);
+    }
+    (void)ssKernelResumeAll();
+    return result;
+}
+#endif

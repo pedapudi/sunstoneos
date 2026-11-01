@@ -47,7 +47,13 @@ def main():
         '#define configUSE_APPLICATION_TASK_TAG 1\n'
         '#define configNUM_THREAD_LOCAL_STORAGE_POINTERS 2\n'
         '#define INCLUDE_uxTaskGetStackHighWaterMark 1\n'
-        '#define INCLUDE_uxTaskGetStackHighWaterMark2 1\n')
+        '#define INCLUDE_uxTaskGetStackHighWaterMark2 1\n'
+        '#define INCLUDE_xTaskGetHandle 1\n'
+        '#define INCLUDE_xTaskGetIdleTaskHandle 1\n'
+        '#define configGENERATE_RUN_TIME_STATS 1\n'
+        'unsigned int ssFixtureRuntime(void);\n'
+        '#define portGET_RUN_TIME_COUNTER_VALUE() ssFixtureRuntime()\n'
+        '#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS() ((void)0)\n')
     patched = build / 'tasks-api.c'
     run(['patch', '--fuzz=0', '--reject-file=-', '--output', patched,
          build / 'tasks.c', ROOT / 'patches/freertos-partitioned-api.patch'])

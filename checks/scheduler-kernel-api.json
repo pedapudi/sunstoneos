@@ -12,7 +12,7 @@
     "freertos-partitioned-objects.patch"
   ],
   "enablement_blockers": [
-    "Convert or explicitly exclude every pending optional API configuration; the current private configuration selects 73 routed public functions and none pending.",
+    "Convert or explicitly exclude remaining pending optional configurations; the private checker selects 79 routed public functions and none pending.",
     "Complete port IRQ-exit and voluntary-yield wiring, then validate context save, runtime accounting, errno, TLS and task-switch hooks with selected feature flags.",
     "Run concurrent eight-core QEMU task/object/timer/deletion/migration stress after complete API conversion; no board admission before review."
   ],
@@ -61,23 +61,27 @@
     },
     {
       "name": "ulTaskGetIdleRunTimeCounter",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "ssKernelSuspendAll();"
     },
     {
       "name": "ulTaskGetIdleRunTimePercent",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "configRUN_TIME_COUNTER_TYPE divisor = (ssKernelRuntimeNow() * configNUMBER_OF_CORES) / 100;"
     },
     {
       "name": "ulTaskGetRunTimeCounter",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "return ssKernelRuntime(xTask);"
     },
     {
       "name": "ulTaskGetRunTimePercent",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "configRUN_TIME_COUNTER_TYPE runtime = ssKernelRuntime(xTask);"
     },
     {
       "name": "uxTaskBasePriorityGet",
@@ -477,18 +481,21 @@
     },
     {
       "name": "xTaskGetHandle",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "configASSERT(pcNameToQuery);"
     },
     {
       "name": "xTaskGetIdleTaskHandle",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "configASSERT(xIdleTaskHandles[0]); return xIdleTaskHandles[0];"
     },
     {
       "name": "xTaskGetIdleTaskHandleForCore",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "configASSERT(xCoreID >= 0 && xCoreID < configNUMBER_OF_CORES);"
     },
     {
       "name": "xTaskGetMPUSettings",
@@ -580,7 +587,10 @@
     "configUSE_APPLICATION_TASK_TAG": 1,
     "configNUM_THREAD_LOCAL_STORAGE_POINTERS": 2,
     "INCLUDE_uxTaskGetStackHighWaterMark": 1,
-    "INCLUDE_uxTaskGetStackHighWaterMark2": 1
+    "INCLUDE_uxTaskGetStackHighWaterMark2": 1,
+    "INCLUDE_xTaskGetHandle": 1,
+    "INCLUDE_xTaskGetIdleTaskHandle": 1,
+    "configGENERATE_RUN_TIME_STATS": 1
   },
   "validation_commands": [
     "checks/scheduler-kernel-adapter.py --freertos FREERTOS --build-dir BUILD --sysroot SYSROOT",

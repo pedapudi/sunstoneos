@@ -301,3 +301,26 @@ static void fixture_delete_reuse(TaskHandle_t task, TaskHandle_t survivor)
     invariant();
     printf("linked FreeRTOS deletion: public delete retires all owner hints before static TCB storage reuse\n");
 }
+
+static unsigned fixture_runtime;
+unsigned ssFixtureRuntime(void) { return fixture_runtime; }
+static void fixture_runtime_accounting(TaskHandle_t task)
+{
+    fixture_cpu = 0;
+    assert(xTaskGetHandle("linked"));
+    assert(!xTaskGetHandle("missing"));
+    for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu)
+        assert(xTaskGetIdleTaskHandleForCore(cpu) == xIdleTaskHandles[cpu]);
+    fixture_runtime = 1000;
+    enter(0);
+    assert(ulTaskGetRunTimeCounter(task) == 1000);
+    fixture_runtime = 1100;
+    assert(ulTaskGetRunTimeCounter(task) == 1100);
+    assert(ulTaskGetRunTimePercent(task) == 100);
+    assert(ulTaskGetIdleRunTimeCounter() == 6600);
+    assert(ulTaskGetIdleRunTimePercent() == 75);
+    TaskStatus_t status;
+    vTaskGetInfo(task, &status, pdFALSE, eInvalid);
+    assert(status.ulRunTimeCounter == 1100);
+    printf("linked FreeRTOS optional runtime: switched/current intervals, task/idle percentage and pinned info snapshot\n");
+}
