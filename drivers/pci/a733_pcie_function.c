@@ -294,7 +294,8 @@ enum a733_pcie_result a733_pcie_function_poll(struct a733_pcie_function *f)
     case READY:ok=intact(f)&&(!f->window_bytes||equal(f,ATU1+4,4,B(31),B(31)));break;
     case SUSPEND:
         ok=!f->master&&pm&&wr(f,CFG+pm+4,2,3);
-        if(ok){f->wait_until=p->last_now+A733_PCIE_D3_WAIT_US;f->stage=SUSPEND_WAIT;}
+        if(ok)ok=a733_deadline_after(p->last_now,A733_PCIE_D3_WAIT_US+1,&f->wait_until);
+        if(ok)f->stage=SUSPEND_WAIT;
         break;
     case SUSPEND_WAIT:
         ok=rd(f,CFG+pm+4,2,&v)&&(v&3)==3;
@@ -302,7 +303,8 @@ enum a733_pcie_result a733_pcie_function_poll(struct a733_pcie_function *f)
         break;
     case RESUME:
         ok=wr(f,CFG+pm+4,2,0);
-        if(ok){f->wait_until=p->last_now+A733_PCIE_D3_WAIT_US;f->stage=RESUME_WAIT;}
+        if(ok)ok=a733_deadline_after(p->last_now,A733_PCIE_D3_WAIT_US+1,&f->wait_until);
+        if(ok)f->stage=RESUME_WAIT;
         break;
     case RESUME_WAIT:
         /* Without No_Soft_Reset the function lost BARs, decode and MSI-X. */

@@ -44,7 +44,11 @@ static uint8_t request[8],cbw[31];
 static unsigned root_unplug,root_unplugged,removals,remove_result,after_remove,teardown_stuck,disables;
 static unsigned busy_stuck,platform_reads;
 static struct register_latency reset_effect,cnr_effect,run_effect,port_effect;
+static struct register_latency ss_ready_effect;
+static unsigned ss_ready_pending_reads;
 static unsigned latency_stuck,reset_busy_reads,cnr_busy_reads,run_busy_reads,port_busy_reads;
+static unsigned hub_hold_case,hub_hold_ready;
+static uint64_t hub_power_complete_ns;
 static void core_completion(void)
 {
     registers[0x40/4]=reg_latency_apply(&reset_effect,m.now,registers[0x40/4]);
@@ -64,9 +68,22 @@ static int lock(void *v,uint64_t d)
 static void unlock(void *v){struct pmic_model *p=v;assert(p->register_held&&!reg_fault);p->register_held=0;}
 static void retain(void *v){assert(((struct pmic_model *)v)->register_held);reg_fault=1;}
 static int read_reg(void *v,uintptr_t a,uint32_t *out)
-{assert(m.register_held&&!reg_fault&&(a733_usb2_platform_address(a,0)||(ss_mode&&(a733_usb3_mask32(a)||a==0x06c01900))));++platform_reads;if(busy_stuck==5)busy_stuck=2;*out=*pmic_model_word(v,a);return 1;}
+{
+    assert(m.register_held&&!reg_fault&&(a733_usb2_platform_address(a,0)||(ss_mode&&(a733_usb3_mask32(a)||a==0x06c01900))));
+    ++platform_reads;if(busy_stuck==5)busy_stuck=2;
+    uint32_t *p=pmic_model_word(v,a);
+    if(a==0x06c01900){*p=reg_latency_apply(&ss_ready_effect,m.now,*p);if(ss_ready_effect.pending)++ss_ready_pending_reads;}
+    *out=*p;return 1;
+}
 static int write_reg(void *v,uintptr_t a,uint32_t value)
-{assert(m.register_held&&!reg_fault&&(a733_usb2_platform_address(a,1)||(ss_mode&&a733_usb3_mask32(a))));uint32_t *p=pmic_model_word(v,a);assert(!((*p^value)&~(ss_mode&&a733_usb3_mask32(a)?a733_usb3_mask32(a):a733_usb2_platform_mask(a))));*p=value;++platform_writes;return 1;}
+{
+    assert(m.register_held&&!reg_fault&&(a733_usb2_platform_address(a,1)||(ss_mode&&a733_usb3_mask32(a))));
+    uint32_t *p=pmic_model_word(v,a);assert(!((*p^value)&~(ss_mode&&a733_usb3_mask32(a)?a733_usb3_mask32(a):a733_usb2_platform_mask(a))));
+    if(a==0x06c01000&&(value&(1u<<8))&&!(*p&(1u<<8))){
+        reg_latency_schedule(&ss_ready_effect,m.now,200,1,1);ss_ready_effect.stuck=ss_bad==5;
+    }
+    *p=value;++platform_writes;return 1;
+}
 static int read_half(void *v,uintptr_t a,uint16_t *out)
 {(void)v;assert(m.register_held&&ss_mode&&a733_usb3_address16(a));*out=ss_analog[(a-0x06c80000)/2];return 1;}
 static int write_half(void *v,uintptr_t a,uint16_t value)
@@ -121,7 +138,7 @@ static void setup(void)
     *pmic_model_word(&m,0x06a0c120)=0x3331190a;*pmic_model_word(&m,0x06a0c1a0)=0x3139302a;
     *pmic_model_word(&m,0x06a0c140)=2;*pmic_model_word(&m,0x06a0c144)=1u<<24;
     *pmic_model_word(&m,0x06a0c14c)=ss_mode?5:4;
-    if(ss_mode)*pmic_model_word(&m,0x06c01900)=ss_bad==5?0:1;
+    if(ss_mode)*pmic_model_word(&m,0x06c01900)=0;
     const struct a733_typec_config tc={.ops={pmic_model_outside,pmic_model_now,current,unused_prepare,current,unused_vbus,unused_irq},
         .context=&m,.bus=&bus,.owner=70,.generation=71,.qualification=72,.recovery=73,
         .source_min_mv=5000,.source_max_mv=5100,.source_ma=ss_mode&&ss_bad!=6?ss_source:500,.zero_threshold_max_mv=800,.device_id=0x80};
@@ -203,6 +220,7 @@ static void control_data(uint8_t *p,unsigned count)
         }else if(request[1]==6){
             assert(request[0]==0xa0&&request[2]==0&&request[3]==(ss_hub?0x2a:0x29)&&count==(ss_hub?12:9));
             uint8_t desc[]={9,0x29,(uint8_t)(hub_bad==4?8:hub_ports),0x49,0,10,0,0,255,0,0,0};
+            if(hub_hold_case==2)desc[5]=0;
             if(ss_hub){desc[0]=12;desc[1]=0x2a;desc[3]=9;desc[7]=2;desc[8]=topology_fault==3?0x91:0x90;desc[9]=1;}
             memcpy(p,desc,count);
         }else if(request[0]==0x80){assert(request[1]==0&&count==2);p[0]=hub_bad==2?0:1;}
@@ -543,7 +561,18 @@ static int out(void *v,const void *p,size_t z){(void)v;return pmic_model_outside
 static void notice(void *v,const struct a733_xhci_notice *e)
 {
     if(e->kind==A733_XHCI_REMOVE){++removals;remove_result=e->result;}else if(removals)++after_remove;
+    unsigned powered=n.hubs[0].powered_mask;
+    if(hub_hold_case&&e->kind==A733_XHCI_TRANSFER&&e->endpoint==128&&!e->bytes&&!e->result&&
+       n.control_setup[0]==0x23&&n.control_setup[1]==3&&n.control_setup[2]==8&&!n.control_setup[3]){
+        m.frac_ns=23;pmic_model_cost(&m,25023);hub_power_complete_ns=m.now*1000+m.frac_ns;
+    }
     a733_usb2_host_notice(v,e);
+    struct a733_usb2_hub *h=&n.hubs[0];
+    if(hub_hold_case&&h->powered_mask!=powered&&h->powered_mask==((2u<<h->ports)-2)){
+        uint64_t delay=(uint64_t)h->power_good_2ms*2000;
+        assert(hub_power_complete_ns&&h->power_good_deadline==hub_power_complete_ns/1000+delay+(delay!=0));
+        hub_hold_ready=1;
+    }
 }
 static void start_core(void)
 {
@@ -650,6 +679,7 @@ static void mounted(void)
 int main(int argc,char **argv)
 {
     const char *mode=argc>1?argv[1]:"read";
+    if(!strncmp(mode,"hub-hold",8))hub_hold_case=strstr(mode,"zero")?2:strstr(mode,"expiry")?3:1;
     root_unplug=strstr(mode,"unplug")!=NULL;teardown_stuck=strstr(mode,"unplug-stuck")!=NULL;
     if(!strncmp(mode,"irq-",4)){irq_model=1;mode+=4;}
     if(!strncmp(mode,"companion-",10)){companion_mode=ss_mode=1;topology_fault=strstr(mode,"required-hub")?7:0;mode+=10;}
@@ -753,7 +783,8 @@ int main(int argc,char **argv)
     }
     if(ss_mode&&ss_bad==6){assert(!n.platform.self&&!platform_writes);puts("PASS modeled500mA source refuses SS platform construction");return 0;}
     if(ss_mode&&ss_bad==5){for(unsigned i=0;i<20000&&!n.platform.failed;++i){observe_role();a733_usb2_platform_poll(&n.platform);pmic_model_step(&m);m.now+=20;}assert(n.platform.failed&&!n.core_started&&n.platform.clock.exclusive&A733_CLOCK_COMB0);puts("PASS Cadence PMA timeout retains before controller DMA publication");return 0;}
-    prepare();if(ss_mode){assert(ss_halfwords>100&&!!(*pmic_model_word(&m,0x06c01000)&(1u<<12))==ss_reverse&&*pmic_model_word(&m,0x06a0d024)==(1u<<30));}
+    prepare();if(ss_mode){assert(ss_halfwords>100&&ss_ready_pending_reads&&!ss_ready_effect.pending&&
+        !!(*pmic_model_word(&m,0x06c01000)&(1u<<12))==ss_reverse&&*pmic_model_word(&m,0x06a0d024)==(1u<<30));}
     assert(platform_writes&&*pmic_model_word(&m,0x02003364)==(ss_mode?0:0x81000003));
     uint32_t reference[2];usb2_source_reference(reference);
     assert(*pmic_model_word(&m,0x06a0c12c)==reference[0]&&*pmic_model_word(&m,0x06a0c630)==reference[1]);
@@ -773,6 +804,26 @@ int main(int argc,char **argv)
         device_packet=device_speed==3?64:device_speed==1?32:8;hid_packet=device_speed==2?8:64;hid_interval=device_speed==3?4:10;
     }
     start_core();
+    if(hub_hold_case){
+        struct a733_usb2_hub *h=&n.hubs[0];
+        for(unsigned i=0;i<24000&&!n.failed&&!(hub_hold_ready&&(hub_hold_case==2||
+            (h->status_deferred&&n.core.devices[h->record-1].hub_configured)));++i)poll();
+        assert(hub_hold_ready&&!n.failed);
+        if(hub_hold_case==2){assert(!h->power_good_2ms&&h->power_good_deadline==hub_power_complete_ns/1000);
+            puts("PASS zero hub power-good delay stays immediate");return 0;}
+        struct a733_xhci_endpoint *e=&n.core.devices[h->record-1].endpoints[1];
+        assert(!e->pending);
+        m.now=h->power_good_deadline-1;m.frac_ns=0;observe_role();
+        assert(m.now*1000-hub_power_complete_ns<(uint64_t)h->power_good_2ms*2000000);
+        if(hub_hold_case==3){n.mount_deadline=m.now;
+            assert(a733_usb2_host_poll(&n)<0&&n.failed&&!e->pending);
+            puts("PASS hub power-good expiry retains without a status TD");return 0;}
+        assert(a733_usb2_host_poll(&n)>=0&&h->status_deferred&&!e->pending);
+        ++m.now;observe_role();
+        assert(a733_usb2_host_poll(&n)>=0&&!h->status_deferred&&e->pending);
+        assert(m.now*1000-hub_power_complete_ns>=(uint64_t)h->power_good_2ms*2000000);
+        puts("PASS hub power-good hold: costly fractional completion, exact descriptor delay pending then status TD");return 0;
+    }
     if(!strncmp(mode,"latency-",8)){
         latency_stuck=strstr(mode,"reset")?1:strstr(mode,"cnr")?2:strstr(mode,"run")?3:4;
         for(unsigned i=0;i<25000&&!n.failed;++i)poll();
