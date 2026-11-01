@@ -1,0 +1,36 @@
+{
+  "name": "audio-replay",
+  "devices": {
+    "required": [],
+    "optional": []
+  },
+  "cpu": {
+    "cluster": "a55",
+    "workers": 0,
+    "priority": 2,
+    "stack_bytes": 4096
+  },
+  "regions": [
+    {
+      "name": "pcm",
+      "kind": "input",
+      "access": [
+        "read"
+      ],
+      "bytes": 684
+    }
+  ],
+  "audio": {
+    "rate_hz": 16000,
+    "channels": 1,
+    "bits": 16,
+    "min_frames": 1,
+    "max_frames": 320
+  },
+  "deadlines": {
+    "run_us": 2000000,
+    "return_reserve_us": 5000000,
+    "progress_window_us": 1000000
+  },
+  "output_limit": 8
+}
