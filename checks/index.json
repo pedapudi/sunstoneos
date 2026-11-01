@@ -5975,6 +5975,21 @@
   "summary": "Decode observed cold-start clocks with fields from pinned A733 CCU sources.",
   "usb": false
  },
+ "i2s-rates-reference.py": {
+  "cache_areas": [
+   "sources"
+  ],
+  "docs": [
+   "docs/i2s-platform.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "sys.argv"
+  ],
+  "summary": "Compare the rates that the I2S0 binding admits with the pinned vendor tables.",
+  "usb": false
+ },
  "i2s-reference.py": {
   "cache_areas": [],
   "docs": [
@@ -7967,7 +7982,8 @@
  },
  "os-image-audio.py": {
   "cache_areas": [
-   "host"
+   "host",
+   "sources"
   ],
   "docs": [
    "docs/designs/cpu-a76-dvfs-measurements.md",
@@ -7980,7 +7996,7 @@
    "--build",
    "--output"
   ],
-  "summary": "Run the integrated OS image's capture client against a modeled DMA service.",
+  "summary": "Run the integrated OS image's capture stream and the recognizer's WAV",
   "usb": false
  },
  "os-image-dispatch.py": {
