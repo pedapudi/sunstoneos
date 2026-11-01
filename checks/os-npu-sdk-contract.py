@@ -79,13 +79,22 @@ for case in range(20):
 for builtin in (False, True):
     exe = a.output / ('builtin-report' if builtin else 'sdk-report')
     build(ROOT / 'checks/os-npu-sdk-report.c', exe, ['-DREPORT_BUILTIN'] if builtin else [])
-    cases = [(0, 'matched')] if builtin else [(0, 'completed'), (1, 'retained'), (2, 'retained'), (3, 'refused')]
+    cases = [(0, 'matched')] if builtin else [(0, 'completed'), (1, 'retained'), (2, 'retained'), (3, 'refused'), (4, 'retained'), (5, 'retained')]
     for case, wanted in cases:
         raw = a.output / (exe.name + '-' + str(case) + '.bin')
-        run([str(exe), str(case), str(raw)])
+        actual = run([str(exe), str(case), str(raw)])
+        site, observed = map(int, actual.stdout.split())
+        failure = None
+        if not builtin and case in (1, 2, 4, 5):
+            lines = (ROOT / 'apps/os/npu-client.c').read_text().splitlines()
+            guard = '    if(offset!=' + ('input' if case == 4 else 'output') + '_bytes) {'
+            note_line = lines.index(guard) + 2
+            assert site & 0xfff == note_line and observed == (4 if case == 5 else 0)
+            failure = crumbs.board_failure(dict(fault=0xb00, esr=site, elr=0, far=observed), defines, None)
+            assert failure['group'] == 'npu' and failure['aux'] == 0
         decoded = report.decode(raw.read_bytes(), 10, 20)
         assert report.classify(decoded) == wanted
-        results.append(dict(case=exe.name + '-' + str(case), classification=wanted, decoded=decoded))
+        results.append(dict(case=exe.name + '-' + str(case), classification=wanted, decoded=decoded, first_failure=failure))
 
 for label, offset in [('mismatches', 44), ('pattern-bytes', 64), ('digest', 72), ('reserved-pattern', 68)]:
     raw = bytearray((a.output / 'sdk-report-0.bin').read_bytes())
@@ -98,9 +107,12 @@ for label, offset in [('mismatches', 44), ('pattern-bytes', 64), ('digest', 72),
         raise AssertionError('Malformed SDK report accepted: ' + label)
 
 client = (ROOT / 'apps/os/npu-client.c').read_text()
-for guard in ('    if(offset!=input_bytes)return -1;\n', '    if(offset!=output_bytes)return -1;\n'):
+for kind in ('input', 'output'):
+    guard = '    if(offset!=' + kind + '_bytes) {\n'
     assert client.count(guard) == 1, 'Update the complete-copy red fixture for the current implementation'
-    client = client.replace(guard, '')
+    start = client.index(guard)
+    end = client.index('    }\n', start) + len('    }\n')
+    client = client[:start] + client[end:]
 red_client = a.output / 'incomplete-client.c'
 red_client.write_text(client)
 red_fixture = a.output / 'incomplete-report.c'
@@ -108,14 +120,31 @@ red_fixture.write_text((ROOT / 'checks/os-npu-sdk-report.c').read_text().replace
 exe = a.output / 'incomplete-report'
 build(red_fixture, exe)
 run([str(exe), '0', str(a.output / 'red-control.bin')])
-for case in (1, 2):
+for case in (1, 2, 4, 5):
     result = run([str(exe), str(case), str(a.output / 'unused.bin')], red=True)
-    assert result.returncode == -6 and '!memcmp(output,tensor_output,sizeof(output))' in result.stdout
+    condition = '!memcmp(tensor_input,input,sizeof(input))' if case == 4 else '!memcmp(output,tensor_output,sizeof(output))'
+    assert result.returncode == -6 and condition in result.stdout
     results.append(dict(case='missing-copy-check-' + str(case), rejected=True))
+
+noteless = (ROOT / 'apps/os/npu-client.c').read_text()
+note = '        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU)|((model&0x7ffu)<<16),\n            (uint32_t)offset,SUNSTONE_CRUMB_HERE());\n'
+assert noteless.count(note) == 2
+noteless = noteless.replace(note, '')
+red_client = a.output / 'noteless-client.c'
+red_client.write_text(noteless)
+red_fixture = a.output / 'noteless-report.c'
+red_fixture.write_text((ROOT / 'checks/os-npu-sdk-report.c').read_text().replace('../apps/os/npu-client.c', str(red_client.resolve())))
+exe = a.output / 'noteless-report'
+build(red_fixture, exe)
+run([str(exe), '0', str(a.output / 'noteless-control.bin')])
+for case in (4, 5):
+    result = run([str(exe), str(case), str(a.output / 'unused.bin')], red=True)
+    assert result.returncode == -6 and '(first_site>>12&15)==SUNSTONE_CRUMB_FAIL_NPU' in result.stdout
+    results.append(dict(case='missing-guard-note-' + str(case), rejected=True))
 
 inputs = {str(ROOT / path): hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
           for path in (*CHECK_INPUTS, 'checks/os-npu-sdk-contract.py')}
 inputs[str(a.native_flags)] = hashlib.sha256(a.native_flags.read_bytes()).hexdigest()
 (a.output / 'result.json').write_text(json.dumps(dict(result='pass', source_inputs=inputs,
     cases=results, commands=commands, physical_access=False), indent=1) + '\n')
-print('PASS OS NPU contract: 20 failure predicates, five actual producer/parser reports, four malformed reports, two missing-copy red cases')
+print('PASS OS NPU contract: 20 failure predicates, seven actual producer/parser reports, four malformed reports, four missing-copy red cases, two missing-note red cases')

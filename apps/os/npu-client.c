@@ -5,6 +5,7 @@
 #include "npu.h"
 #include "application.h"
 #include "sunstone_npu_service.h"
+#include "sunstone_crumb.h"
 #include "../board/application.h"
 #include <string.h>
 struct os_npu_report os_npu_published_report;
@@ -57,13 +58,22 @@ static int sdk_run(unsigned model,const void *input,size_t input_bytes,
     for(unsigned i=0;os_npu_tensor(NBG_INPUT,i,&t);++i) {
         memcpy(t.data,(const uint8_t *)input+offset,t.bytes);offset+=t.bytes;
     }
-    if(offset!=input_bytes)return -1;
+    /* Guard notes retain the local model in aux and copied extent in value. */
+    if(offset!=input_bytes) {
+        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU)|((model&0x7ffu)<<16),
+            (uint32_t)offset,SUNSTONE_CRUMB_HERE());
+        return -1;
+    }
     r=os_npu_submit(timeout);if(r!=1)return r;
     offset=0;
     for(unsigned i=0;os_npu_tensor(NBG_OUTPUT,i,&t);++i) {
         memcpy((uint8_t *)output+offset,t.data,t.bytes);offset+=t.bytes;
     }
-    if(offset!=output_bytes)return -1;
+    if(offset!=output_bytes) {
+        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU)|((model&0x7ffu)<<16),
+            (uint32_t)offset,SUNSTONE_CRUMB_HERE());
+        return -1;
+    }
     ++sdk_jobs;sdk_output_bytes=(uint32_t)output_bytes;
     return 1;
 }

@@ -84,3 +84,9 @@ supplies numerical evidence. The built-in reference checker uses its poison
 pattern and classifies reference matches as `matched`. Reserved pattern values
 and SDK reports carrying built-in numerical fields are refused. Scratch copies
 without the complete-copy checks must fail the same output assertions.
+
+A copy guard records its source line, local model index and copied byte count
+before the board closes admission. The host cases include a disappearing second
+output tensor, so the retained count is four bytes rather than zero. Removing
+the guard notes must fail the same first-failure assertions after the generic
+retained failure path runs.

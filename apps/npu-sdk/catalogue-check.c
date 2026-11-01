@@ -10,6 +10,8 @@ _Noreturn void __assert_func(const char *file,int line,const char *function,cons
 {(void)file;(void)line;(void)function;(void)condition;abort();}
 extern int os_npu_sdk_bind(const struct npu_runtime *);
 /* A refused geometry must never reach a device operation. */
+void board_fail_note(uint32_t site,uint32_t value,const void *caller)
+{(void)site;(void)value;(void)caller;abort();}
 int os_npu_load(unsigned entry){(void)entry;abort();}
 int os_npu_tensor(enum nbg_section_id section,unsigned index,struct npu_runtime_tensor *out)
 {(void)section;(void)index;(void)out;abort();}
