@@ -29,7 +29,7 @@ TYPES = {'npu_runtime_queue', 'npu_runtime', 'npu_runtime_slot', 'npu_queue', 'n
          'npu_service_direct', 'npu_service_runtime_state', 'npu_service_runtime',
          'npu_service_irq_ops', 'a733_npu_ops', 'a733_npu_controller', 'a733_npu_startup',
          'a733_npu_native', 'a733_npu_command', 'npu_runtime_counters', 'npu_idle',
-         'npu_idle_failure', 'npu_idle_counters', 'npu_runtime_queue_power_stats',
+         'npu_idle_failure', 'npu_idle_counters', 'npu_idle_part', 'npu_runtime_queue_power_stats',
          'npu_runtime_queue_power_config'}
 
 
@@ -89,7 +89,7 @@ class Machine:
         # Owner-model state. A nonzero clock_step advances the counter at every
         # read so that bounded hardware waits observe elapsed time.
         self.clock_step, self.detail, self.fail_after_writes = 0, [], None
-        self.quiet_result, self.public_idle, self.ready_calls = 1, 1, 0
+        self.quiet_results, self.quiet_default = [], 1
         self.deadline_log, self.deadline_result, self.deadline_pending = [], None, False
         self.isr_notices, self.created = [], []
         self.power_handle = self.BASE + 0xb3000
@@ -100,7 +100,7 @@ class Machine:
         self.ctrl = self.field(self.s, 'npu_service', 'controller')
         self.slot = self.field(self.rt, 'npu_runtime', 'slot')
         self.callbacks = {self.BASE + 0xc0000 + 16 * n: name for n, name in enumerate(
-            ('mask', 'rearm', 'read', 'clock', 'step', 'finished', 'bridge', 'quiet', 'can_idle', 'ready'))}
+            ('mask', 'rearm', 'read', 'clock', 'step', 'finished', 'bridge', 'quiet'))}
         cb = {name: address for address, name in self.callbacks.items()}
         self.set(self.rt, 'npu_runtime', 'bound', 1)
         self.set(self.rt, 'npu_runtime', 'slots', 1)
@@ -139,7 +139,7 @@ class Machine:
         for name in ('xTaskGetSchedulerState', 'xTaskGetCurrentTaskHandle', 'xTaskGenericNotify',
                      'ulTaskGenericNotifyTake', 'uxQueueMessagesWaiting', 'xQueueReceive',
                      'npu_runtime_tables_intact', 'vTaskNotifyGiveFromISR', 'vTaskGenericNotifyGiveFromISR',
-                     'sunstone_deadline_register', 'sunstone_deadline_wait_until', 'uxTaskPriorityGet',
+                     'sunstone_deadline_register', 'sunstone_deadline_wait_until',
                      'xTaskCreateStatic', 'xTaskCreateStaticAffinitySet'):
             values = image.symbols.get(name, set()) - {0}
             if values:
@@ -322,18 +322,11 @@ class Machine:
             else:
                 result, self.deadline_result, self.deadline_pending = self.deadline_result, None, False
                 self.ret(result)
-        elif name == 'uxTaskPriorityGet':
-            self.ret(2)
         elif name in ('xTaskCreateStatic', 'xTaskCreateStaticAffinitySet'):
             self.created.append((name, args[0], args[3], args[4]))
             self.ret(self.power_handle)
         elif name == 'quiet':
-            self.ret(self.quiet_result)
-        elif name == 'can_idle':
-            self.ret(self.public_idle)
-        elif name == 'ready':
-            self.ready_calls += 1
-            self.ret()
+            self.ret((self.quiet_results.pop(0) if self.quiet_results else self.quiet_default) & 0xffffffff)
         else:
             raise AssertionError(name)
 
@@ -391,11 +384,16 @@ class Owner:
     the result a case supplies, so a stale or cancelled alarm is an explicit
     event. The scheduler, the shared deadline backend and the GIC remain
     modeled; the owner, queue, idle policy and register ordering are production
-    instructions.
+    instructions. The part descriptor is written into modeled memory the way a
+    client would pass it.
     """
     CLOCK, SHADER, IDLE = 0x00070100, 0x015a0880, 0x7fffffff
+    PART = dict(clock=0, status=4, shader=0x10c, clock_pulse=1 << 9, clock_gate=1,
+                clock_field_mask=0x1fc, clock_field_value=0x100, shader_pulse=1,
+                shader_field_mask=0xfe, shader_field_value=0x80, full_idle=0x7fffffff)
+    DELAY_US, RESUME_US, HARD_US = 10000, 100, 1000
 
-    def __init__(self, image, disassembly, enabled=1):
+    def __init__(self, image, disassembly, enabled=1, strict=1):
         self.image = image
         m = self.m = Machine(image, disassembly)
         m.clock_step = 6
@@ -404,10 +402,14 @@ class Owner:
         for offset, value in ((0, self.CLOCK), (4, self.IDLE), (0x10c, self.SHADER), (0x10, 1)):
             m.put(m.MMIO + offset, value)
         callback = {name: address for address, name in m.callbacks.items()}
+        self.part = m.BASE + 0xd9000
+        for name, value in self.PART.items():
+            m.set(self.part, 'npu_idle_part', name, value, 4)
+        for name, value in (('delay_us', self.DELAY_US), ('resume_us', self.RESUME_US), ('hard_us', self.HARD_US)):
+            m.set(self.part, 'npu_idle_part', name, value, 8)
         self.config = m.BASE + 0xd8000
-        for name, value, width in (('enabled', enabled, 4), ('priority', 3, 8), ('quiet', callback['quiet'], 8),
-                                   ('can_idle', callback['can_idle'], 8), ('ready', callback['ready'], 8),
-                                   ('context', m.q, 8)):
+        for name, value, width in (('part', self.part, 8), ('enabled', enabled, 4), ('strict', strict, 4),
+                                   ('priority', 3, 8), ('quiet', callback['quiet'], 8)):
             m.set(self.config, 'npu_runtime_queue_power_config', name, value, width)
         self.entry = image.address('power_owner', unit='/drivers/npu/npu_runtime_queue.c')
         self.irq = image.address('irq', unit='/drivers/npu/npu_runtime_queue.c')
@@ -431,6 +433,10 @@ class Owner:
         idle = self.m.field(self.m.q, 'npu_runtime_queue', 'power')
         return self.m.getfield(self.m.field(idle, 'npu_idle', 'failure'), 'npu_idle_failure', name, 4)
 
+    def stat(self, name):
+        stats = self.m.field(self.m.q, 'npu_runtime_queue', 'power_stats')
+        return self.m.getfield(stats, 'npu_runtime_queue_power_stats', name, 8)
+
     def field(self, name, width=4):
         return self.m.getfield(self.m.q, 'npu_runtime_queue', name, width)
 
@@ -451,6 +457,16 @@ class Owner:
         """Advance to the armed deadline and deliver its expiry."""
         self.m.clock = max(self.m.clock, self.m.deadline_log[-1] * 24)
         return self.wake(1)
+
+    def command(self):
+        m = self.m
+        command = m.BASE + 0xd2000
+        m.set(command, 'npu_queue_command', 'owner', m.queue, 8)
+        hardware = m.field(command, 'npu_queue_command', 'hardware')
+        m.set(hardware, 'a733_npu_command', 'device', 0x80000000)
+        m.set(hardware, 'a733_npu_command', 'readable_bytes', 4096, 8)
+        m.set(hardware, 'a733_npu_command', 'token', m.BASE + 0xd4000, 8)
+        return command
 
     def publish(self, value=1):
         m = self.m
@@ -483,13 +499,21 @@ class Owner:
         assert self.expire()[0] == 'waiting', 'owner did not sleep after gating'
         assert self.phase() == self.enum('NPU_IDLE_SUSPENDED'), 'idle expiry did not suspend the clocks'
 
+    def resume(self):
+        """Admit, wake the owner and let it resume; the owner then rearms."""
+        m = self.m
+        assert m.run('caller', 'npu_runtime_queue_admit', m.q) == ('returned', 0)
+        m.run('caller', 'npu_runtime_queue_power_kick', m.q)
+        assert m.run('power')[0] == 'deadline-wait', 'owner did not rearm after resuming'
+
 
 def owner_cases(image, disassembly, only, record):
     ON, SUSPENDED = image.enums['NPU_IDLE_ON'], image.enums['NPU_IDLE_SUSPENDED']
-    RETAINED, SUSPENDING = image.enums['NPU_IDLE_RETAINED'], image.enums['NPU_IDLE_SUSPENDING']
-    RESUMING = image.enums['NPU_IDLE_RESUMING']
+    RETAINED = image.enums['NPU_IDLE_RETAINED']
+    SUSPEND, RESUME = image.enums['NPU_IDLE_STEP_SUSPEND'], image.enums['NPU_IDLE_STEP_RESUME']
     OWNER, HEALTH, IRQ = image.enums['NPU_IDLE_OWNER'], image.enums['NPU_IDLE_HEALTH'], image.enums['NPU_IDLE_UNEXPECTED_IRQ']
-    GATE, RESUME_GATE = Owner.CLOCK, Owner.CLOCK
+    RESUME_IRQ = image.enums['NPU_IDLE_RESUME_IRQ']
+    GATE = Owner.CLOCK
 
     def wanted(label):
         return only in (None, label)
@@ -499,19 +523,22 @@ def owner_cases(image, disassembly, only, record):
         assert o.m.getfield(o.m.rt, 'npu_runtime', 'failed') == 1, 'retained power fault left the runtime usable'
         assert o.m.getfield(o.m.s, 'npu_service', 'irq_pending') & 2, 'retained power fault did not request service recovery'
 
+    def rearmed(o, base_ticks, after_us=Owner.DELAY_US):
+        """The last alarm lies one delay after base_ticks (counter ticks), within the owner's own read time."""
+        return 0 <= o.m.deadline_log[-1] - (o.microseconds(base_ticks) + after_us) <= 5
+
     label = 'power-start-refusals'
     if wanted(label):
-        o = Owner(image, disassembly)
-        m = o.m
-        m.set(o.config, 'npu_runtime_queue_power_config', 'priority', 2, 8)
-        assert m.run('caller', 'npu_runtime_queue_power_start', m.q, o.config) == ('returned', 0), \
-            'power owner started at or below the producer priority'
-        m.set(o.config, 'npu_runtime_queue_power_config', 'priority', 3, 8)
-        m.set(o.config, 'npu_runtime_queue_power_config', 'quiet', 0, 8)
-        assert m.run('caller', 'npu_runtime_queue_power_start', m.q, o.config) == ('returned', 0), \
-            'power owner started without a quiet predicate'
-        assert not m.created and not o.writes() and not o.power('initialized', 4)
-        assert m.run('caller', 'npu_runtime_queue_admit', m.q) == ('returned', 1), 'a queue without an owner refused admission'
+        for name, value, width, reason in (('priority', 0, 8, 'power owner started without a priority'),
+                                           ('priority', 1 << 20, 8, 'power owner started above the kernel priorities'),
+                                           ('quiet', 0, 8, 'power owner started without a quiet predicate'),
+                                           ('part', 0, 8, 'power owner started without a part descriptor')):
+            o = Owner(image, disassembly)
+            m = o.m
+            m.set(o.config, 'npu_runtime_queue_power_config', name, value, width)
+            assert m.run('caller', 'npu_runtime_queue_power_start', m.q, o.config) == ('returned', 0), reason
+            assert not m.created and not o.writes() and not o.power('initialized', 4)
+            assert m.run('caller', 'npu_runtime_queue_admit', m.q) == ('returned', 1), 'a queue without an owner refused admission'
         record(label, m)
 
     label = 'owner-gates-after-delay-and-resumes-on-admission'
@@ -531,31 +558,26 @@ def owner_cases(image, disassembly, only, record):
         assert [row[2] for row in reads] == [0, 0x10c, 4], 'pre-suspend readback differs'
         assert m.run('caller', 'npu_runtime_queue_admit', m.q) == ('returned', 0)
         assert m.run('caller', 'npu_runtime_queue_admit', m.q) == ('returned', 0)
-        stats = m.field(m.q, 'npu_runtime_queue', 'power_stats')
-        assert m.getfield(stats, 'npu_runtime_queue_power_stats', 'resume_requests', 8) == 1, 'repeat admission queued twice'
-        assert o.field('power_resume') == 1
-        assert len(o.writes()) == 2, 'admission wrote a register'
+        assert o.stat('resume_requests') == 1, 'repeat admission queued twice'
+        assert o.field('power_resume') == 1 and len(o.writes()) == 2, 'admission wrote a register'
         m.run('caller', 'npu_runtime_queue_power_kick', m.q)
         assert m.notifications.get(m.power_handle) == 1
         assert m.run('power')[0] == 'deadline-wait', 'owner did not rearm after resuming'
         assert o.phase() == ON and o.counter('resumes') == 1 and o.field('power_resume') == 0
-        assert m.ready_calls == 1 and m.notifications.get(m.task) == 1, 'resume readiness was not delivered once'
-        assert m.getfield(stats, 'npu_runtime_queue_power_stats', 'max_request_to_ready_us', 8) <= 100
-        assert o.counter('resume_max_ticks') * 1000000 // 24000000 <= 100
+        assert m.notifications.get(m.task) == 1, 'resume readiness was not delivered once'
+        assert o.stat('max_request_to_ready_us') <= 100 and o.counter('resume_max_ticks') * 1000000 // 24000000 <= 100
         assert m.get(m.MMIO) == GATE and m.get(m.MMIO + 0x10c) == Owner.SHADER, 'resume left registers changed'
         assert m.run('caller', 'npu_runtime_queue_admit', m.q) == ('returned', 1)
-        assert m.deadline_log[-1] > m.deadline_log[0] and \
-            m.deadline_log[-1] == o.microseconds(o.power('idle_since') + 240000), 'resume did not restart the idle delay'
+        assert m.deadline_log[-1] == o.microseconds(o.power('idle_since') + 240000), 'resume did not restart the idle delay'
         record(label, m)
 
     label = 'owner-control-never-writes'
     if wanted(label):
         o = Owner(image, disassembly, enabled=0).start()
         m = o.m
-        assert o.expire()[0] == 'waiting'
+        assert o.expire()[0] == 'deadline-wait'
         assert o.phase() == ON and o.counter('controls') == 1 and not o.writes() and o.counter('gates') == 0, \
             'the control policy changed the device'
-        assert o.field('power_completion_hint') == 1
         assert m.run('caller', 'npu_runtime_queue_admit', m.q) == ('returned', 1)
         record(label, m)
 
@@ -563,18 +585,16 @@ def owner_cases(image, disassembly, only, record):
     if wanted(label):
         o = Owner(image, disassembly).start()
         m = o.m
-        first = m.deadline_log[-1]
         o.publish()  # Submission wakes no task; the alarm stays armed.
-        assert o.expire()[0] == 'waiting'
+        assert o.expire()[0] == 'deadline-wait', 'stale alarm gated an active queue'
         assert o.phase() == ON and not o.writes() and o.counter('gates') == 0, 'stale alarm gated an active queue'
-        assert o.field('power_completion_hint') == 1 and len(m.deadline_log) == 1, 'owner polled an active queue'
+        assert rearmed(o, m.clock), 'a busy queue did not rearm the idle delay'
+        m.clock += 2400
         o.complete()
-        assert m.isr_notices.count(m.power_handle) == 1 and o.field('power_completion_hint') == 0, \
-            'completion delivered the owner hint other than once'
-        assert o.power('generation') == 1
-        assert m.run('power')[0] == 'deadline-wait'
-        assert m.deadline_log[-1] > first and m.deadline_log[-1] == o.microseconds(o.power('idle_since') + 240000)
-        assert not o.writes() and o.phase() == ON
+        assert m.isr_notices.count(m.power_handle) == 0, 'completion woke the power owner'
+        assert o.power('generation') == 1 and o.power('idle_since') == o.field('observed', 8), 'completion did not refresh idle time'
+        assert o.expire()[0] == 'deadline-wait'
+        assert o.phase() == ON and not o.writes(), 'refreshed idle time still gated'
         record(label, m)
 
     label = 'stale-timer-after-job-completed'
@@ -591,19 +611,31 @@ def owner_cases(image, disassembly, only, record):
         assert m.deadline_log[-1] > first and m.deadline_log[-1] == o.microseconds(o.power('idle_since') + 240000)
         record(label, m)
 
-    for quiet in (0, -1):
-        label = 'pending-gic-state-blocks-gate' if quiet == 0 else 'unreadable-gic-state-blocks-gate'
-        if wanted(label):
-            o = Owner(image, disassembly).start()
-            m = o.m
-            m.quiet_result = quiet & 0xffffffff
-            assert o.expire()[0] == 'waiting'
-            assert o.phase() == RETAINED and o.failure('site') == OWNER, 'a pending interrupt state was not retained'
-            assert not o.writes() and o.counter('gates') == 0, 'gate write followed a non-quiet interrupt state'
-            retained_everywhere(o)
-            assert m.ready_calls == 1 and m.notifications.get(m.task) == 1
-            assert m.run('caller', 'npu_runtime_queue_admit', m.q) == ('returned', -1)
-            record(label, m)
+    label = 'quiet-controller-not-now-retries'
+    if wanted(label):
+        o = Owner(image, disassembly).start()
+        m = o.m
+        m.quiet_results = [0]  # A distributor write is in progress on another core.
+        assert o.expire()[0] == 'deadline-wait', 'a busy interrupt controller was fatal'
+        assert o.phase() == ON and not o.writes() and o.stat('quiet_retries') == 1, 'a busy interrupt controller was fatal'
+        assert not o.failure('site') and not o.field('power_resume')
+        assert m.getfield(m.queue, 'npu_queue', 'failed') == 0, 'a busy interrupt controller failed the queue'
+        assert rearmed(o, m.clock, 1000), 'a busy interrupt controller was not retried soon'
+        assert o.expire()[0] == 'waiting' and o.phase() == SUSPENDED, 'the retry did not gate'
+        record(label, m)
+
+    label = 'unreadable-gic-state-blocks-gate'
+    if wanted(label):
+        o = Owner(image, disassembly).start()
+        m = o.m
+        m.quiet_results = [0xffffffff]
+        assert o.expire()[0] == 'waiting'
+        assert o.phase() == RETAINED and o.failure('site') == OWNER, 'an invalid interrupt binding was not retained'
+        assert not o.writes() and o.counter('gates') == 0, 'gate write followed an invalid interrupt binding'
+        retained_everywhere(o)
+        assert m.notifications.get(m.task) == 1
+        assert m.run('caller', 'npu_runtime_queue_admit', m.q) == ('returned', -1)
+        record(label, m)
 
     label = 'partial-failure-between-suspend-writes'
     if wanted(label):
@@ -611,8 +643,8 @@ def owner_cases(image, disassembly, only, record):
         m = o.m
         m.fail_after_writes = 1
         assert o.expire()[0] == 'waiting'
-        assert o.phase() == RETAINED and o.failure('site') == HEALTH and o.failure('phase') == SUSPENDING, \
-            'partial suspend failure origin differs'
+        assert o.phase() == RETAINED and o.failure('site') == HEALTH and o.failure('step') == SUSPEND and \
+            o.failure('phase') == ON, 'partial suspend failure origin differs'
         assert len(o.writes()) == 1 and o.counter('gates') == 0, 'owner wrote after losing authority'
         retained_everywhere(o)
         assert m.run('caller', 'npu_runtime_queue_admit', m.q) == ('returned', -1)
@@ -646,8 +678,8 @@ def owner_cases(image, disassembly, only, record):
         m.fail_after_writes = len(o.writes()) + 1
         assert m.run('caller', 'npu_runtime_queue_return', m.q)[0] == 'waiting'
         assert m.run('power')[0] == 'waiting'
-        assert o.phase() == RETAINED and o.failure('site') == HEALTH and o.failure('phase') == RESUMING, \
-            'partial resume failure origin differs'
+        assert o.phase() == RETAINED and o.failure('site') == HEALTH and o.failure('step') == RESUME and \
+            o.failure('phase') == SUSPENDED, 'partial resume failure origin differs'
         assert o.field('power_stopped') == 1
         retained_everywhere(o)
         assert m.run('caller') == ('returned', -1), 'close succeeded with clocks suspended'
@@ -677,30 +709,79 @@ def owner_cases(image, disassembly, only, record):
         before = len(m.detail)
         assert m.run('isr', o.irq, m.q, m.BASE + 0xd0000)[0] == 'returned'
         assert len(m.detail) == before, 'interrupt read a suspended register'
-        assert o.phase() == RETAINED and o.failure('site') == IRQ, 'interrupt while suspended was not retained'
+        assert o.phase() == RETAINED and o.failure('site') == IRQ and o.failure('phase') == SUSPENDED, \
+            'interrupt while suspended was not retained'
         retained_everywhere(o)
         assert m.isr_notices.count(m.task) >= 1 and m.isr_notices.count(m.power_handle) == 1
         record(label, m)
 
-    label = 'published-successor-defers-gate'
+    label = 'interrupt-after-resume-is-attributed'
     if wanted(label):
         o = Owner(image, disassembly).start()
         m = o.m
-        o.publish()
-        m.public_idle = 0  # The EL0 ring holds a published successor.
-        m.clock += 2400
-        o.complete()
-        assert o.power('generation') == 0 and m.isr_notices.count(m.power_handle) == 0, \
-            'completion with a published successor refreshed idle time'
-        assert o.expire()[0] == 'waiting'
-        assert o.phase() == ON and not o.writes() and o.counter('gates') == 0, 'owner gated with a published successor'
-        assert o.field('power_completion_hint') == 1
-        m.public_idle = 1  # The successor completes and the ring drains.
-        o.publish(2)
-        o.complete()
-        assert m.isr_notices.count(m.power_handle) == 1 and o.power('generation') == 1
-        assert m.run('power')[0] == 'deadline-wait' and not o.writes()
+        o.gate()
+        m.quiet_results = [0]  # The ungate left an interrupt pending.
+        o.resume()
+        assert o.phase() == ON and o.field('power_resume_irq') == 1, 'resume did not observe the pending interrupt'
+        before = len(m.detail)
+        assert m.run('isr', o.irq, m.q, m.BASE + 0xd0000)[0] == 'returned'
+        assert len(m.detail) == before, 'resume interrupt read the device'
+        assert o.phase() == RETAINED and o.failure('site') == RESUME_IRQ, 'resume interrupt was not attributed to the resume'
+        retained_everywhere(o)
+        # A later interrupt with no job and a quiet resume keeps the generic origin.
+        o = Owner(image, disassembly).start()
+        m = o.m
+        o.gate()
+        o.resume()
+        assert o.field('power_resume_irq') == 0
+        assert m.run('isr', o.irq, m.q, m.BASE + 0xd0000)[0] == 'returned'
+        assert o.failure('site') == IRQ, 'a later interrupt was attributed to the resume'
         record(label, m)
+
+    label = 'admit-and-submit-hold-one-lock-span'
+    if wanted(label):
+        o = Owner(image, disassembly).start()
+        m = o.m
+        command = o.command()
+        job, out = m.BASE + 0xd1000, m.BASE + 0xd3000
+        o.gate()
+        locks = sum(1 for row in m.trace if row == ('caller', 'lock'))
+        writes = len(o.writes())
+        assert m.run('caller', 'npu_runtime_queue_submit', m.q, job, command, 0, 0, 100, out) == ('returned', 0), \
+            'submission to a suspended device did not report pending'
+        assert sum(1 for row in m.trace if row == ('caller', 'lock')) == locks + 1, 'admission and submission used separate lock spans'
+        assert m.getfield(m.queue, 'npu_queue', 'failed') == 0 and m.getfield(m.queue, 'npu_queue', 'submitted', 8) == 0, \
+            'pending submission changed the queue'
+        assert len(o.writes()) == writes and o.field('power_resume') == 1
+        m.run('caller', 'npu_runtime_queue_power_kick', m.q)
+        assert m.run('power')[0] == 'deadline-wait'
+        locks = sum(1 for row in m.trace if row == ('caller', 'lock'))
+        assert m.run('caller', 'npu_runtime_queue_submit', m.q, job, command, 0, 0, 100, out) == ('returned', 1)
+        assert sum(1 for row in m.trace if row == ('caller', 'lock')) == locks + 1
+        assert m.getfield(m.queue, 'npu_queue', 'submitted', 8) == 1 and \
+            [row[2] for row in m.detail if row[0] == 'caller' and row[1] == 'w'] == [0x654, 0x3a4], 'resumed submission did not ring the doorbell'
+        record(label, m)
+
+    for strict in (0, 1):
+        label = 'resume-over-budget-' + ('strict' if strict else 'counted')
+        if wanted(label):
+            o = Owner(image, disassembly, strict=strict).start()
+            m = o.m
+            o.gate()
+            m.clock_step = 1200  # Each timer read costs 50 us: the resume exceeds 100 us.
+            o.resume() if not strict else None
+            if strict:
+                assert m.run('caller', 'npu_runtime_queue_admit', m.q) == ('returned', 0)
+                m.run('caller', 'npu_runtime_queue_power_kick', m.q)
+                assert m.run('power')[0] == 'waiting'
+                assert o.phase() == RETAINED and o.failure('site') in (image.enums['NPU_IDLE_SETTLE'], image.enums['NPU_IDLE_RESUME_BUDGET']), \
+                    'a strict resume over budget was not retained'
+                retained_everywhere(o)
+            else:
+                assert o.phase() == ON and o.counter('resume_over_budget') == 1 and o.counter('resume_max_ticks') > 2400, \
+                    'an over-budget resume was not recorded'
+                assert m.getfield(m.queue, 'npu_queue', 'failed') == 0, 'an over-budget resume failed a production queue'
+            record(label, m)
 
 
 def cases(image, disassembly, only=None):
@@ -964,19 +1045,22 @@ def build_images(build, output, variants):
                     end = text.index('    if (result == 1)', start)
                     text = text[:start] + text[end:]
                 if variant == 'without-owner-activity-guard':
-                    for old, new in (('            if (power_idle(q)) {\n                q->power_completion_hint = 0;',
-                                      '            if (1) {\n                q->power_completion_hint = 0;'),
-                                     ('!q->power_stop && power_idle(q) && power_health(q)', '!q->power_stop && power_health(q)')):
-                        assert text.count(old) == 1
-                        text = text.replace(old, new)
+                    old = '            if (!power_idle(q)) {\n                deadline = ticks_to_us(q, now) + delay_us;'
+                    assert text.count(old) == 1
+                    text = text.replace(old, '            if (0) {\n                deadline = ticks_to_us(q, now) + delay_us;')
                 if variant == 'without-quiet-check':
-                    old = 'if (quiet == 1 && generation == q->power.generation &&'
+                    old = 'if (quiet == 1) {'
                     assert text.count(old) == 1
-                    text = text.replace(old, 'if (generation == q->power.generation &&')
+                    text = text.replace(old, 'if (quiet >= 0) {')
                 if variant == 'without-gated-irq-guard':
-                    old = 'if (q->power.initialized && q->power.phase != NPU_IDLE_ON) {'
+                    for old in ('if (q->power.initialized && q->power.phase != NPU_IDLE_ON) {',
+                                'if (q->power.initialized && !q->queue.head) {'):
+                        assert text.count(old) == 1
+                        text = text.replace(old, 'if (0) {')
+                if variant == 'without-resume-irq-attribution':
+                    old = 'q->power_resume_irq = after != 1;'
                     assert text.count(old) == 1
-                    text = text.replace(old, 'if (0) {')
+                    text = text.replace(old, 'q->power_resume_irq = 0;')
                 if variant == 'without-stop-resume':
                     old = 'if (q->power.phase != NPU_IDLE_RETAINED && (q->power_stop || q->power_resume)) {'
                     assert text.count(old) == 1
@@ -1017,7 +1101,7 @@ def build_images(build, output, variants):
         link += ['-Wl,--undefined=' + name for name in ('npu_runtime_queue_claim', 'npu_runtime_queue_return',
                                                        'npu_queue_submit', 'npu_queue_fence_status',
                                                        'npu_runtime_queue_power_start', 'npu_runtime_queue_admit',
-                                                       'npu_runtime_queue_power_kick')]
+                                                       'npu_runtime_queue_power_kick', 'npu_runtime_queue_submit')]
         # Use the linker's configured invocation path without resolving its symlink.
         run(link, directory / 'link.log')
         elf = directory / 'fixture.elf'
@@ -1034,7 +1118,8 @@ def main():
     parser.add_argument('--skip-mutations', action='store_true', help='Reuse separately recorded mutation evidence')
     parser.add_argument('--mutation', action='append', choices=('without-handshake', 'without-return-recheck',
                         'without-owner-capture', 'without-window-guards', 'without-owner-activity-guard',
-                        'without-quiet-check', 'without-gated-irq-guard', 'without-stop-resume'),
+                        'without-quiet-check', 'without-gated-irq-guard', 'without-stop-resume',
+                        'without-resume-irq-attribution'),
                         help='Run only these regression mutations')
     args = parser.parse_args()
     output = args.output.resolve()
@@ -1044,7 +1129,8 @@ def main():
     mutation_names = [] if args.skip_mutations else args.mutation or ['without-handshake', 'without-return-recheck',
                                                                      'without-owner-capture', 'without-window-guards',
                                                                      'without-owner-activity-guard', 'without-quiet-check',
-                                                                     'without-gated-irq-guard', 'without-stop-resume']
+                                                                     'without-gated-irq-guard', 'without-stop-resume',
+                                                                     'without-resume-irq-attribution']
     variants = ['actual', *mutation_names]
     images, inputs = build_images(args.build_dir.resolve(), output, variants)
     image = layouts(images['actual'][0])
@@ -1059,9 +1145,10 @@ def main():
                 'without-owner-capture': 'worker notified an invalid handoff owner',
                 'without-window-guards': 'direct adapter accepted lost lifecycle authority',
                 'without-owner-activity-guard': 'stale alarm gated an active queue',
-                'without-quiet-check': 'a pending interrupt state was not retained',
+                'without-quiet-check': 'a busy interrupt controller was fatal',
                 'without-gated-irq-guard': 'interrupt while suspended was not retained',
-                'without-stop-resume': 'close left clocks suspended'}
+                'without-stop-resume': 'close left clocks suspended',
+                'without-resume-irq-attribution': 'resume did not observe the pending interrupt'}
     for variant in mutation_names:
         reason = expected[variant]
         elf, disassembly = images[variant]
@@ -1070,9 +1157,10 @@ def main():
                   'without-owner-capture': 'ack-publication-before-notify-owner-remains-stable',
                   'without-window-guards': 'start-guard-runtime',
                   'without-owner-activity-guard': 'stale-timer-with-active-job',
-                  'without-quiet-check': 'pending-gic-state-blocks-gate',
+                  'without-quiet-check': 'quiet-controller-not-now-retries',
                   'without-gated-irq-guard': 'irq-while-suspended-is-retained',
-                  'without-stop-resume': 'suspended-close-resumes-before-return'}[variant]
+                  'without-stop-resume': 'suspended-close-resumes-before-return',
+                  'without-resume-irq-attribution': 'interrupt-after-resume-is-attributed'}[variant]
         message = refused(lambda: cases(layouts(elf), disassembly, target), reason, AssertionError)
         mutations.append({'variant': variant, 'caught': message})
     inputs[str(Path(__file__).resolve())] = sha(__file__)

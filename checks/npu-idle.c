@@ -1,5 +1,5 @@
 /* Production idle state machine; modeled MMIO and counter, no physical NPU. */
-#include "npu_idle.h"
+#include "a733_npu_idle.h"
 #include "register_latency.h"
 #include <assert.h>
 #include <stdio.h>
@@ -59,7 +59,7 @@ static int read32(void *cookie,uint32_t offset,uint32_t *value)
     default:assert(!"unexpected/destructive NPU register read");return 0;
     }
     trace(d,0,offset,*value);
-    d->ticks+=d->slow?d->frequency/5000:1;
+    d->ticks+=d->slow==1?d->frequency/5000:d->slow==2?d->frequency/10000:1;
     return 1;
 }
 static int write32(void *cookie,uint32_t offset,uint32_t value)
@@ -86,7 +86,7 @@ static int write32(void *cookie,uint32_t offset,uint32_t value)
         else{assert(d->pulse);d->pulse=0;}
         d->shader=value;
     }else assert(!"unexpected NPU register write");
-    d->ticks+=d->slow?d->frequency/5000:1;
+    d->ticks+=d->slow==1?d->frequency/5000:d->slow==2?d->frequency/10000:1;
     return 1;
 }
 static uint64_t now(void *cookie)
@@ -100,12 +100,13 @@ static int health(void *cookie)
     return access_ok(d,NPU_IDLE_HEALTH,0,0)&&d->health;
 }
 static const struct npu_idle_ops ops={read32,write32,now,health};
+static unsigned strict_mode=1;
 static void fresh(struct device *d,uint64_t frequency,unsigned enabled)
 {
     memset(d,0,sizeof(*d));
     d->frequency=frequency;d->quantum=1;d->settle=(frequency+999999)/1000000;
     d->clock=CLOCK;d->shader=SHADER;d->status=FULL_IDLE;d->health=1;d->ticks=100;
-    assert(npu_idle_init(&d->idle,&ops,d,frequency,enabled)==1);
+    assert(npu_idle_init(&d->idle,&a733_npu_idle_part,&ops,d,frequency,enabled,strict_mode)==1);
     assert(d->idle.phase==NPU_IDLE_ON);
     npu_idle_completed(&d->idle,d->ticks);
 }
@@ -250,6 +251,18 @@ static void readback(void)
     assert(stuck.gated&&stuck.idle.failure.site==NPU_IDLE_GATE_VALUE);retained(&stuck);
     struct device d;fresh(&d,24000000,1);suspend(&d);d.slow=1;
     assert(npu_idle_resume(&d.idle)!=1);retained(&d);
+    assert(d.idle.failure.site==NPU_IDLE_SETTLE||d.idle.failure.site==NPU_IDLE_RESUME_BUDGET);
+}
+/* An over-budget resume that completes is retained only in strict mode. The
+ * elapsed time is recorded in both modes. */
+static void budget(void)
+{
+    struct device d;
+    strict_mode=0;fresh(&d,24000000,1);suspend(&d);d.slow=2;
+    assert(npu_idle_resume(&d.idle)==1&&d.idle.phase==NPU_IDLE_ON);
+    assert(d.idle.counters.resume_over_budget==1&&d.idle.counters.resume_max_ticks>2400);
+    assert(d.idle.counters.resumes==1&&!d.gated);
+    strict_mode=1;
 }
 static void retention(void)
 {
@@ -271,6 +284,7 @@ int main(int argc,char **argv)
     else if(!strcmp(argv[1],"partial-failure"))failures();
     else if(!strcmp(argv[1],"readback"))readback();
     else if(!strcmp(argv[1],"retention"))retention();
+    else if(!strcmp(argv[1],"budget"))budget();
     else assert(!"unknown case");
     printf("PASS %s\n",argv[1]);return 0;
 }

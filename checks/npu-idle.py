@@ -12,11 +12,11 @@ import subprocess
 from harness import CLANG, SANITIZE, environment, save
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECK_INPUTS = ['include/npu_idle.h', 'drivers/npu/npu_idle.c',
+CHECK_INPUTS = ['include/npu_idle.h', 'include/a733_npu_idle.h', 'drivers/npu/npu_idle.c',
                 'checks/npu-idle.c', 'checks/register_latency.h',
                 'checks/npu-idle.py', 'checks/harness.py']
 CASES = ('nominal', 'threshold', 'cancellation', 'admission',
-         'delayed-effects', 'partial-failure', 'readback', 'retention')
+         'delayed-effects', 'partial-failure', 'readback', 'retention', 'budget')
 
 
 def main():
