@@ -16,7 +16,10 @@ root = pathlib.Path(__file__).resolve().parents[1]
 commands = json.loads(args.compile_commands.read_text())
 command = next(c for c in commands if c["file"].endswith("/apps/os/gpu.c"))
 flags = [f for f in shlex.split(command["command"]) if f.startswith(("-I", "-D"))]
-flags = [f for f in flags if "newlib" not in f.lower()]
+# The host calls the diagnostic crumb callback directly. The board's SVC
+# transport is AArch64-only and is covered by the native build and queued run.
+flags = [f for f in flags if "newlib" not in f.lower()
+         and not f.startswith("-DSUNSTONE_CRUMBS")]
 flags.insert(0, "-I" + str(root / "include"))
 args.output.mkdir(parents=True, exist_ok=True)
 os.environ["TMPDIR"] = str(args.output)
