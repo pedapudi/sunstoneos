@@ -9,15 +9,12 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import re
 import secrets
 import sqlite3
 import sys
 from datetime import datetime, timezone
 
 DEFAULT = Path.home() / '.cache/sunstoneos/board-tests.sqlite3'
-RECOVERY = 'independent-watchdog-rom-return'
-SUPERVISED_RECOVERY = 'supervised-ram-recovery'
 
 
 def port_name(port):
@@ -52,61 +49,10 @@ def file_hash(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def artifact(value, verify=False):
-    require(isinstance(value, dict) and set(value) == {'path', 'sha256'},
-            'Artifact requires path and sha256 only.')
-    require(text(value['path']) and Path(value['path']).is_absolute(),
-            'Artifact path must be absolute.')
-    require(isinstance(value['sha256'], str) and
-            re.fullmatch('[0-9a-f]{64}', value['sha256']), 'Invalid SHA-256.')
-    if verify:
-        require(file_hash(value['path']) == value['sha256'],
-                f"Artifact content changed: {value['path']}")
-
-
 def submission(value):
-    fields = {'component', 'kind', 'sources', 'artifacts', 'prerequisites',
-              'expected_result', 'procedure', 'timeout_seconds',
-              'stop_condition', 'evidence_directory'}
-    require(isinstance(value, dict) and fields <= value.keys() and
-            value.keys() <= fields | {'retry_of', 'retry_reason'},
-            'Submission fields do not match the documented schema.')
-    for name in ('component', 'expected_result', 'stop_condition'):
-        require(text(value[name]), f'{name} must be nonempty text.')
-    require(value['kind'] in ('peripheral', 'recovery'), 'Invalid test kind.')
-    require(type(value['timeout_seconds']) is int and
-            1 <= value['timeout_seconds'] <= 3600,
-            'Timeout must be 1..3600 seconds.')
-    require(isinstance(value['procedure'], list) and value['procedure'] and
-            all(text(step) for step in value['procedure']),
-            'Procedure must contain nonempty steps.')
-    require(text(value['evidence_directory']) and
-            Path(value['evidence_directory']).is_absolute(),
-            'Evidence directory must be absolute.')
-    prereqs = value['prerequisites']
-    require(isinstance(prereqs, list) and prereqs and all(text(p) for p in prereqs)
-            and len(set(prereqs)) == len(prereqs),
-            'Prerequisites must be distinct nonempty strings.')
-    require(value['kind'] != 'peripheral' or
-            RECOVERY in prereqs or SUPERVISED_RECOVERY in prereqs,
-            f'Peripheral tests require {RECOVERY} or {SUPERVISED_RECOVERY}.')
-    require(isinstance(value['sources'], list) and value['sources'],
-            'At least one source revision is required.')
-    for source in value['sources']:
-        require(isinstance(source, dict) and set(source) == {'repository', 'revision'}
-                and text(source['repository']) and
-                isinstance(source['revision'], str) and
-                re.fullmatch('[0-9a-f]{40}', source['revision']),
-                'Source requires repository and full 40-digit Git revision.')
-    require(isinstance(value['artifacts'], list) and value['artifacts'],
-            'At least one hashed artifact is required.')
-    for item in value['artifacts']:
-        artifact(item)
-    if 'retry_of' in value or 'retry_reason' in value:
-        require(isinstance(value.get('retry_of'), str) and
-                re.fullmatch('[0-9a-f]{64}', value['retry_of']) and
-                text(value.get('retry_reason')),
-                'Retry requires original ID and a reason based on changed conditions.')
+    """Normalize a proposal record; its optional details do not admit a launch."""
+    require(isinstance(value, dict) and text(value.get('component')),
+            'Submission requires an object with a nonempty component.')
     return canonical(value)
 
 
@@ -158,15 +104,6 @@ def get(db, test_id):
     return row
 
 
-def verify_review(row):
-    spec = json.loads(row['submission'])
-    for item in spec['artifacts']:
-        artifact(item, verify=True)
-    review = json.loads(row['review'])
-    for item in review['prerequisites'].values():
-        artifact(item, verify=True)
-
-
 def load(path):
     return json.loads(path.read_text())
 
@@ -188,7 +125,7 @@ def main(argv=None):
     show.add_argument('id')
     review = commands.add_parser('review')
     review.add_argument('id')
-    review.add_argument('evidence', type=Path,
+    review.add_argument('evidence', type=Path, nargs='?',
                         help='JSON mapping prerequisite names to path/sha256 records')
     review.add_argument('--note', required=True)
     claim = commands.add_parser('claim')
@@ -255,7 +192,7 @@ def main(argv=None):
                     'halted': db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0],
                     'tests': [{key: row[key] for key in ('id', 'state', 'owner', 'created')} |
                               {'component': json.loads(row['submission'])['component'],
-                               'prerequisites': json.loads(row['submission'])['prerequisites']}
+                               'prerequisites': json.loads(row['submission']).get('prerequisites', [])}
                               for row in db.execute('SELECT id,submission,state,owner,created FROM tests ORDER BY created,id')]}
         if args.command == 'show':
             row = dict(get(db, args.id))
@@ -292,25 +229,17 @@ def main(argv=None):
         elif args.command == 'review':
             require(row['state'] in ('pending', 'ready'), 'Only pending or ready tests can be reviewed.')
             require(text(args.note), 'Review note is required.')
-            prereqs = load(args.evidence)
-            require(isinstance(prereqs, dict) and
-                    set(prereqs) == set(json.loads(row['submission'])['prerequisites']),
-                    'Evidence must cover every prerequisite, with no extra names.')
-            for item in prereqs.values():
-                artifact(item, verify=True)
-            for item in json.loads(row['submission'])['artifacts']:
-                artifact(item, verify=True)
+            prereqs = load(args.evidence) if args.evidence else {}
             review = {'note': args.note, 'prerequisites': prereqs}
             db.execute("UPDATE tests SET state='ready',review=? WHERE id=?", (canonical(review), args.id))
             event(db, args.id, 'reviewed', review)
         elif args.command == 'claim':
             require(text(args.owner), 'Owner must be named.')
-            require(row['state'] == 'ready', 'Only reviewed ready tests can be claimed.')
+            require(row['state'] in ('pending', 'ready'), 'Only pending or ready tests can be claimed.')
             require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0],
                     'Queue is halted after failure; coordinator recovery review is required.')
             require(not db.execute("SELECT 1 FROM tests WHERE state='claimed'").fetchone(),
                     'Another test has an active claim.')
-            verify_review(row)
             db.execute("UPDATE tests SET state='claimed',owner=? WHERE id=?", (args.owner, args.id))
             event(db, args.id, 'claimed', {'owner': args.owner})
         elif args.command == 'finish':

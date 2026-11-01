@@ -428,10 +428,10 @@ def queue_summary(path, port=None):
             if after != before or any(item and item[1] for item in after[1:]):
                 return empty | {'note': 'Queue changed while reading; the next refresh will retry.'}
             note = 'Read-only queue state. A claim does not authorize device access; item times are submission times.'
-            # Supervised runners refuse claims from a queue bound to no port or another port.
+            # Queue port metadata identifies the schedule; device tools hold their own locks.
             if port is not None and not (recorded and recorded[0] == port):
                 note += (f' The queue is bound to USB port {str(recorded[0])[:32]}, not {port}.' if recorded and recorded[0]
-                         else ' The queue records no USB port; supervised runners refuse its claims.')
+                         else ' The queue records no USB port.')
             return {'available': True, 'halted': bool(halt and halt[0]),
                     'reason': str(halt[0]) if halt and halt[0] else '', 'counts': counts,
                     'items': items, 'note': note}
