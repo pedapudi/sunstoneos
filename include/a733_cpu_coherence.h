@@ -120,11 +120,14 @@ int a733_cpu_coherence_publish(uint64_t base, uint64_t bytes, uint64_t deadline_
 int a733_cpu_coherence_flush(uint64_t base, uint64_t bytes, uint64_t deadline_ticks);
 /* Additive 64-bit sum of the 1,024 words of the EL1 root and of the level-2
  * page named by root entry 1. Core 0 stores it at EL3 as the last step of
- * table preparation; word 0 of a line of its own in the table section. */
+ * table preparation; word 0 of a line of its own in the table section.
+ * The generic USB profile also includes its three fixed EL1 payload-alias L3
+ * pages. The matching EL1 check flushes and sums those pages on every core. */
 extern uint64_t a733_cached_el1_table_sum[8];
 /* EL1, M/C/I zero, DAIF masked. Flushes the root page at ttbr and the level-2
  * page named by root entry 1 in the Nonsecure space, reads both back with
  * Device loads and compares their sum with a733_cached_el1_table_sum.
+ * The generic USB profile includes its three payload-alias L3 pages.
  * Returns 1 on a match, -1 on refusal, deadline or mismatch. Images that
  * enable translation without a733_cpu_coherence_enable_el1() call it first.
  */

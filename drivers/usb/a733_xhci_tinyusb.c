@@ -18,7 +18,7 @@ static struct {
     struct sunstone_uvc_catalog catalog;
     struct sunstone_uvc stream;
     struct sunstone_uvc_negotiation negotiation;
-    unsigned address,interface,ready,starting,active,failed,bulk_bytes,bulk_requested,dropped,control_pending;
+    unsigned address,interface,ready,starting,active,failed,bulk_bytes,bulk_requested,dropped,control_pending,preferred_format;
     uint64_t generation,bulk_token;
     uint8_t *bulk_buffer;
 } camera;
@@ -1147,8 +1147,15 @@ static void transport_done(tuh_xfer_t *xfer)
     for(unsigned i=0;i<32;++i)if(transport_requests[i].used&&transport_requests[i].ticket==xfer->user_data)r=&transport_requests[i];
     if(!r)return; /* A drained/disconnected submission cannot complete a newer one. */
     if(r->address!=xfer->daddr||r->endpoint!=xfer->ep_addr){lost();return;}
+    size_t actual=xfer->actual_len;
+    /* The pinned TinyUSB SETUP fallthrough records the eight setup bytes
+     * when wLength is zero. This interface reports data-stage bytes. */
+    if(!r->endpoint&&!r->setup.wLength){
+        if(xfer->result==XFER_RESULT_SUCCESS&&actual&&actual!=8){lost();return;}
+        actual=0;
+    }
     sunstone_usb_complete complete=r->complete;void *context=r->context;r->used=0;
-    if(complete)complete(context,xfer->result==XFER_RESULT_SUCCESS?0:xfer->result==XFER_RESULT_STALLED?1:2,xfer->actual_len);
+    if(complete)complete(context,xfer->result==XFER_RESULT_SUCCESS?0:xfer->result==XFER_RESULT_STALLED?1:2,actual);
 }
 static struct transport_request *transport_request(struct sunstone_usb_transport *t,sunstone_usb_complete complete,void *context)
 {
@@ -1263,6 +1270,13 @@ static void camera_control_done(void *context,unsigned result,size_t actual)
     sunstone_uvc_expect_mode(&camera.stream,&camera.negotiation.mode);
     camera.starting=0;camera.active=1;camera.bulk_bytes=0;camera.dropped=host->core.isoch.dropped;
 }
+int a733_usb2_camera_select_format(struct a733_usb2_native *n,unsigned format)
+{
+    if(n!=host||!owner()||!n->generic_host||
+       (format&&format!=SUNSTONE_UVC_MJPEG&&format!=SUNSTONE_UVC_YUYV))return 0;
+    if(camera.active||camera.starting)return camera.preferred_format==format;
+    camera.preferred_format=format;return 1;
+}
 int a733_usb2_camera_start(struct a733_usb2_native *n)
 {
     if(n!=host||!owner()||!n->generic_host||camera.failed)return -1;
@@ -1271,9 +1285,11 @@ int a733_usb2_camera_start(struct a733_usb2_native *n)
     for(unsigned i=0;i<SUNSTONE_UVC_FRAMES;++i)if(camera.stream.frame[i].state==2)return 0;
     if(camera.generation==UINT64_MAX)return -1;
     ++camera.generation;
-    unsigned selected=0;
-    for(unsigned i=0;i<camera.catalog.modes;++i)if(camera.catalog.mode[i].format==SUNSTONE_UVC_YUYV&&
+    unsigned preferred=camera.preferred_format?camera.preferred_format:SUNSTONE_UVC_YUYV,selected=UINT32_MAX;
+    for(unsigned i=0;i<camera.catalog.modes;++i)if(camera.catalog.mode[i].format==preferred){selected=i;break;}
+    for(unsigned i=0;i<camera.catalog.modes;++i)if(camera.catalog.mode[i].format==preferred&&
        camera.catalog.mode[i].width==640&&camera.catalog.mode[i].height==480){selected=i;break;}
+    if(selected==UINT32_MAX){if(camera.preferred_format)return -1;selected=0;}
     if(sunstone_uvc_negotiate_begin(&camera.negotiation,&camera.catalog,&camera.catalog.mode[selected])!=1)return -1;
     camera.starting=1;camera.control_pending=1;
     if(!transport_control(&n->transport,(uint8_t)camera.address,camera.negotiation.setup,camera.negotiation.data,camera_control_done,NULL)){
@@ -1353,6 +1369,7 @@ usbh_class_driver_t const *usbh_app_driver_get_cb(uint8_t *count)
 #else
 void a733_usb2_set_input(struct a733_usb2_native *n,a733_usb2_input_emit emit,void *context){(void)n;(void)emit;(void)context;}
 int a733_usb2_camera_start(struct a733_usb2_native *n){(void)n;return -1;}
+int a733_usb2_camera_select_format(struct a733_usb2_native *n,unsigned format){(void)n;(void)format;return 0;}
 const struct sunstone_uvc_mode *a733_usb2_camera_mode(struct a733_usb2_native *n){(void)n;return NULL;}
 const struct sunstone_uvc_frame *a733_usb2_camera_acquire(struct a733_usb2_native *n){(void)n;return NULL;}
 int a733_usb2_camera_release(struct a733_usb2_native *n,const struct sunstone_uvc_frame *f,uint64_t g,uint64_t s){(void)n;(void)f;(void)g;(void)s;return 0;}

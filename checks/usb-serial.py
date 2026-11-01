@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from harness import CLANG, SANITIZE, environment
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
@@ -17,10 +18,10 @@ def main():
     includes=[root/'checks/usb-serial',root/'include',out,a.tinyusb,a.tinyusb/'class/cdc']
     if a.services: includes.append(a.services/'include')
     if a.transport: includes.append(a.transport/'include')
-    flags=['clang-21','-std=gnu11','-Wall','-Wextra','-Werror','-Wno-unused-function','-g','-O1','-fsanitize=address,undefined','-fno-sanitize-recover=all']+['-I'+str(x) for x in includes]
+    flags=[CLANG,'-std=gnu11','-Wall','-Wextra','-Werror','-Wno-unused-function','-g','-O1',*SANITIZE]+['-I'+str(x) for x in includes]
     steps=[]
     def run(command):
-        r=subprocess.run([str(x) for x in command],capture_output=True,text=True)
+        r=subprocess.run([str(x) for x in command],capture_output=True,text=True,env=environment())
         steps.append({'command':[str(x) for x in command],'exit':r.returncode,'output':r.stdout+r.stderr})
         (out/'steps.json').write_text(json.dumps(steps,indent=2)+'\n')
         if r.returncode: raise SystemExit(r.stdout+r.stderr)

@@ -8,14 +8,17 @@ import subprocess
 from harness import CLANG, SANITIZE, environment
 
 ROOT = Path(__file__).resolve().parents[1]
-CASES = ['echo', 'detach', 'generation', 'iso', 'iso-detach']
+CASES = ['echo', 'detach', 'generation', 'iso', 'iso-detach', 'full-speed', 'control-stall', 'interrupt-out', 'six-records', 'irq-dma', 'address-reuse']
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--cases', nargs='+', choices=CASES, default=CASES)
+    parser.add_argument('--cases', nargs='+', choices=CASES+['legacy-iso'])
+    parser.add_argument('--profile', choices=['generic', 'legacy'], default='generic')
     args = parser.parse_args()
+    args.cases = args.cases or (CASES if args.profile == 'generic' else ['legacy-iso'])
+    assert all((case == 'legacy-iso') == (args.profile == 'legacy') for case in args.cases)
     out = args.output.resolve()
     out.mkdir(parents=True)
     units = [ROOT/'checks/a733-xhci-dma.c', ROOT/'drivers/usb/a733_xhci.c', ROOT/'runtime/device_memory_pool.c']
@@ -32,12 +35,14 @@ def main():
             raise SystemExit(f'{name} failed; see {out/(name+".log")}')
 
     run('build', [str(CLANG), '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-                  *SANITIZE, '-I'+str(ROOT/'include'), *map(str, units), '-o', str(binary)])
+                  *SANITIZE, '-DSUNSTONE_USB_HOST_GENERIC='+str(int(args.profile == 'generic')), '-I'+str(ROOT/'include'), *map(str, units), '-o', str(binary)])
     for case in args.cases:
         run(case, [str(binary), case])
-    record = {'result': 'PASS', 'hardware_access': False, 'cases': args.cases, 'steps': steps,
+    record = {'result': 'PASS', 'hardware_access': False, 'profile': args.profile, 'cases': args.cases, 'steps': steps,
               'inputs': {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs},
               'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+              'compiler': {'path': str(CLANG), 'sha256': hashlib.sha256(CLANG.resolve().read_bytes()).hexdigest(),
+                           'version': subprocess.check_output([str(CLANG), '--version'], text=True)},
               'boundary': 'Actual core DMA submission, completion and teardown. Register/context effects '
                           'and DMA writes are modeled; physical coherence and USB timing are unqualified.'}
     (out/'result.json').write_text(json.dumps(record, indent=2)+'\n')

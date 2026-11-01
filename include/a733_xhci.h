@@ -4,18 +4,34 @@
 #include "device_memory_pool.h"
 #include <stdint.h>
 
-#define A733_XHCI_MEMORY_BYTES 5242880u
+#ifndef SUNSTONE_USB_HOST_GENERIC
+#define SUNSTONE_USB_HOST_GENERIC 0
+#endif
 #define A733_XHCI_TRANSFER_BYTES 4096u
 #define A733_XHCI_RING_TRBS 16u
 #define A733_XHCI_EVENT_TRBS 32u
-#define A733_XHCI_ENDPOINTS 4u
-#define A733_XHCI_DEVICES 3u
-#define A733_XHCI_DMA_ENDPOINTS 12u
-#define A733_XHCI_HUB_TIERS 2u /* Hub tiers below the root port; leaves sit one tier lower. */
-#define A733_XHCI_ISOCH_TDS 8u /* Isochronous TDs kept on one ring. */
-#define A733_XHCI_ISOCH_PACKET 4096u /* Page stride; USB2 service payload <=3072. */
-#define A733_XHCI_ISOCH_BUFFERS 1024u
+#define A733_XHCI_HUB_TIERS 2u /* Hub tiers below the root port. */
+#define A733_XHCI_ISOCH_TDS 8u
 #define A733_XHCI_DMA_BUFFERS 1u /* Legacy bounce page per endpoint. */
+#if SUNSTONE_USB_HOST_GENERIC
+#define A733_XHCI_MEMORY_BYTES 5242880u
+#define A733_XHCI_ENDPOINTS 4u
+#define A733_XHCI_DEVICES 6u
+#define A733_XHCI_DMA_ENDPOINTS (A733_XHCI_DEVICES*A733_XHCI_ENDPOINTS)
+#define A733_XHCI_ISOCH_PACKET 4096u /* Page stride; service payload <=3072. */
+#define A733_XHCI_ISOCH_BUFFERS 1024u
+#define A733_XHCI_DATA_OFFSET 262144u
+#define A733_XHCI_DATA_BYTES (A733_XHCI_ISOCH_BUFFERS*A733_XHCI_ISOCH_PACKET)
+#else
+#define A733_XHCI_MEMORY_BYTES 131072u
+#define A733_XHCI_ENDPOINTS 3u
+#define A733_XHCI_DEVICES 3u
+#define A733_XHCI_DMA_ENDPOINTS 7u
+#define A733_XHCI_ISOCH_PACKET 512u
+#define A733_XHCI_ISOCH_BUFFERS 8u /* Metadata for the legacy single bounce page. */
+#define A733_XHCI_DATA_OFFSET 0u
+#define A733_XHCI_DATA_BYTES 0u /* No public DMA leases in the legacy profile. */
+#endif
 
 enum a733_xhci_result { A733_XHCI_PENDING,A733_XHCI_READY,A733_XHCI_BUSY,
     A733_XHCI_INVALID,A733_XHCI_RETAINED };
@@ -47,7 +63,7 @@ struct a733_xhci_endpoint {
     unsigned dma_active,dma_offset,dma_shared;
     unsigned kind,direction,length,aborted,transfer_type,interval,burst; /* pending:0 idle,1 queued,2 on ring,3 reset recovery,4 dequeue recovery,5 halted by transaction error,6 isochronous TDs on ring,7 awaiting bulk clear,8 stop idle bulk,9 configure idle bulk. */
 };
-/* One root device and up to two hub children retain own EP0, contexts and
+/* One root device and up to five hub descendants retain own EP0, contexts and
  * data rings; command/event rings remain controller-owned. A child of a
  * USB2 hub at tier 1 sits at tier 2; parent is the parent hub's slot and
  * route the xHCI route string (one port nibble per tier). */

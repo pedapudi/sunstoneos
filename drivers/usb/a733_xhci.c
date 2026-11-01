@@ -9,9 +9,15 @@
 #define BIT(n) (UINT32_C(1)<<(n))
 #define TYPE(n) ((uint32_t)(n)<<10)
 #define IOC BIT(5)
-#define RING_BASE 40960u
+#define RING_BASE (16384u+A733_XHCI_DEVICES*8192u)
 #define BOUNCE_BASE (RING_BASE+A733_XHCI_DMA_ENDPOINTS*4096u)
 #define ISOCH_BASE (BOUNCE_BASE+A733_XHCI_DMA_ENDPOINTS*A733_XHCI_DMA_BUFFERS*4096u)
+#if SUNSTONE_USB_HOST_GENERIC
+#define SCRATCH_BASE (ISOCH_BASE+A733_XHCI_ISOCH_BUFFERS*A733_XHCI_ISOCH_PACKET)
+_Static_assert(ISOCH_BASE==A733_XHCI_DATA_OFFSET,"public DMA mapping offset");
+#else
+#define SCRATCH_BASE 98304u
+#endif
 /* Shared NC pages: bulk reserved/completed/queued, ISO queued/borrowed. */
 enum { DMA_FREE,DMA_RESERVED,DMA_COMPLETE,DMA_QUEUED,DMA_ISO_QUEUED,DMA_ISO_BORROWED };
 static uint64_t dma_token_sequence;
@@ -22,7 +28,6 @@ static uint64_t lease_token(void)
     while(!__atomic_compare_exchange_n(&dma_token_sequence,&old,old+1,0,__ATOMIC_RELAXED,__ATOMIC_RELAXED));
     return old+1;
 }
-#define SCRATCH_BASE (ISOCH_BASE+A733_XHCI_ISOCH_BUFFERS*A733_XHCI_ISOCH_PACKET)
 #define MAX_OFFSET UINT32_C(0x8000)
 #define BUSY_US 2000u /* Longest provider BUSY repeated inside one access. */
 enum { P_CAP,P_EXT,P_HALTED,P_RESET,P_RESET_WAIT,P_MEMORY,P_DCBAA,P_COMMAND,
@@ -108,12 +113,6 @@ static struct a733_xhci_device *device_address(struct a733_xhci *x,unsigned addr
     for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].address==address&&!x->devices[i].detach)return &x->devices[i];
     return NULL;
 }
-static struct a733_xhci_device *lease_device(struct a733_xhci *x,unsigned address)
-{
-    if(!x||x->self!=x||!address||address>127)return NULL;
-    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].address==address)return &x->devices[i];
-    return NULL;
-}
 static int borrowed(struct a733_xhci *x,unsigned j)
 {
     for(unsigned i=0;i<A733_XHCI_ISOCH_BUFFERS;++i){
@@ -148,8 +147,8 @@ static void pages(struct a733_xhci *x,unsigned j)
     uint8_t *p=(void *)x->extent.cpu;uint64_t base=x->extent.physical;struct a733_xhci_device *d=&x->devices[j];
     d->input=p+16384+8192*j;d->input_pa=base+16384+8192*j;
     d->device=p+20480+8192*j;d->device_pa=base+20480+8192*j;
-    for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
-        unsigned n=j*A733_XHCI_ENDPOINTS+i;struct a733_xhci_endpoint *e=&d->endpoints[i];
+    for(unsigned i=0;i<(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_ENDPOINTS:2u);++i){
+        unsigned n=j*(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_ENDPOINTS:2u)+i;struct a733_xhci_endpoint *e=&d->endpoints[i];
         e->ring=(void *)(p+RING_BASE+4096*n);e->ring_pa=base+RING_BASE+4096*n;
         e->bounce=p+BOUNCE_BASE+4096*A733_XHCI_DMA_BUFFERS*n;e->bounce_pa=base+BOUNCE_BASE+4096*A733_XHCI_DMA_BUFFERS*n;e->cycle=1;
     }
@@ -183,7 +182,7 @@ static int reclaim(struct a733_xhci *x,unsigned j)
     for(unsigned k=0;k<A733_XHCI_ISOCH_BUFFERS;++k){
         unsigned owner=x->isoch.owner[k];
         if(owner&&(owner-1)/A733_XHCI_ENDPOINTS==j){
-            memset((uint8_t *)x->extent.cpu+ISOCH_BASE+k*A733_XHCI_ISOCH_PACKET,0,A733_XHCI_ISOCH_PACKET);
+            if(SUNSTONE_USB_HOST_GENERIC)memset((uint8_t *)x->extent.cpu+ISOCH_BASE+k*A733_XHCI_ISOCH_PACKET,0,A733_XHCI_ISOCH_PACKET);
             x->isoch.held[k]=0;x->isoch.owner[k]=0;x->isoch.token[k]=0;
         }
     }
@@ -194,10 +193,13 @@ static int reclaim(struct a733_xhci *x,unsigned j)
     }
     if(d->slot)put64(x->dcbaa+8*d->slot,0);
     memset(p+16384+8192*j,0,8192);
-    for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
-        unsigned n=j*A733_XHCI_ENDPOINTS+i;
+    for(unsigned i=0;i<(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_ENDPOINTS:2u);++i){
+        unsigned n=j*(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_ENDPOINTS:2u)+i;
         memset(p+RING_BASE+4096*n,0,4096);
         memset(p+BOUNCE_BASE+4096*A733_XHCI_DMA_BUFFERS*n,0,4096*A733_XHCI_DMA_BUFFERS);
+    }
+    if(!SUNSTONE_USB_HOST_GENERIC&&x->extra_endpoint_owner==j+1){
+        memset(p+RING_BASE+6*4096,0,4096);memset(p+BOUNCE_BASE+6*4096,0,4096);x->extra_endpoint_owner=0;
     }
     memset(d,0,sizeof(*d));pages(x,j);
     if(x->default_device==j)x->default_device=0;
@@ -437,12 +439,12 @@ static int isoch_refill(struct a733_xhci *x,struct a733_xhci_device *d,struct a7
     if(e->pending!=6)e->deadline=x->lifetime_deadline-x->last_now>ISOCH_US?x->last_now+ISOCH_US:x->lifetime_deadline;
     while(s->count<A733_XHCI_ISOCH_TDS){
         unsigned i=(s->head+s->count)%A733_XHCI_ISOCH_TDS;
-        unsigned buffer=0;
+        unsigned buffer=SUNSTONE_USB_HOST_GENERIC?0:i;
         while(buffer<A733_XHCI_ISOCH_BUFFERS&&s->held[buffer])++buffer;
         if(buffer==A733_XHCI_ISOCH_BUFFERS)break;
         s->buffer[i]=buffer;s->held[buffer]=DMA_ISO_QUEUED;
         s->owner[buffer]=(unsigned)(d-x->devices)*A733_XHCI_ENDPOINTS+(unsigned)(e-d->endpoints)+1;
-        if(!ring(x,e->ring,e->ring_pa,&e->index,&e->cycle,x->extent.physical+ISOCH_BASE+buffer*A733_XHCI_ISOCH_PACKET,e->packet*(e->burst+1),
+        if(!ring(x,e->ring,e->ring_pa,&e->index,&e->cycle,(SUNSTONE_USB_HOST_GENERIC?x->extent.physical+ISOCH_BASE:e->bounce_pa)+buffer*A733_XHCI_ISOCH_PACKET,e->packet*(e->burst+1),
            TYPE(5)|IOC|BIT(2)|BIT(31)|(e->burst<<16),&s->trb[i]))return 0;
         s->state[i]=1;s->bytes[i]=0;++s->count;
     }
@@ -485,6 +487,10 @@ static int transfer_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
          * can clear the device before Dequeue. No stalled payload is copied. */
         if(!d->address||d->recovering)return 0;
         if(number==1){
+            if(!SUNSTONE_USB_HOST_GENERIC){
+                static const uint8_t max_lun[8]={0xa1,0xfe,0,0,0,0,1,0};
+                if(d->speed<3||d->speed>4||memcmp(d->setup,max_lun,8))return 0;
+            }
             if(d->control_stage==CONTROL_IDLE||
                (e->kind!=T_SETUP&&e->kind!=T_DATA&&e->kind!=T_STATUS))return 0;
         }else {
@@ -985,6 +991,13 @@ int a733_xhci_open(struct a733_xhci *x,unsigned address,unsigned ep,unsigned typ
     if(e)return e->packet==packet&&e->transfer_type==type&&!e->aborted;
     for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(!d->endpoints[i].opened) {
         e=&d->endpoints[i];
+        if(!SUNSTONE_USB_HOST_GENERIC&&i==2){
+            if(x->extra_endpoint_owner)return 0;
+            x->extra_endpoint_owner=(unsigned)(d-x->devices)+1;
+            uint8_t *p=(void *)x->extent.cpu;uint64_t base=x->extent.physical;
+            e->ring=(void *)(p+RING_BASE+6*4096);e->ring_pa=base+RING_BASE+6*4096;
+            e->bounce=p+BOUNCE_BASE+6*4096;e->bounce_pa=base+BOUNCE_BASE+6*4096;e->cycle=1;
+        }
         e->opened=1;e->transfer_type=type;e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=!!(ep&128);e->deadline=deadline;return 1;
     }
     return 0;
@@ -1007,7 +1020,7 @@ int a733_xhci_open_interrupt(struct a733_xhci *x,unsigned address,unsigned ep,
     else{encoded=3;for(unsigned v=interval;v>1;v>>=1)++encoded;}
     struct a733_xhci_endpoint *e=endpoint(d,ep);
     if(e)return e->packet==packet&&e->transfer_type==3&&e->interval==encoded&&!e->aborted;
-    for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(!d->endpoints[i].opened){
+    for(unsigned i=1;i<(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_ENDPOINTS:2u);++i)if(!d->endpoints[i].opened){
         e=&d->endpoints[i];e->opened=1;e->transfer_type=3;e->interval=encoded;
         e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=!!(ep&128);e->deadline=deadline;return 1;
     }
@@ -1024,6 +1037,7 @@ int a733_xhci_open_isoch(struct a733_xhci *x,unsigned address,unsigned ep,
        !interval||interval>(d->speed==3?4u:1u)||deadline>x->lifetime_deadline||settled(x,deadline)!=1)return 0;
     unsigned encoded=d->speed==3?interval-1:3,burst=packet>>11;
     packet&=2047;
+    if(packet*(burst+1)>A733_XHCI_ISOCH_PACKET)return 0;
     struct a733_xhci_endpoint *e=endpoint(d,ep);
     if(e)return e->packet==packet&&e->burst==burst&&e->transfer_type==1&&e->interval==encoded&&!e->aborted;
     if(x->isoch.device||d->endpoints[1].opened)return 0;
@@ -1046,6 +1060,7 @@ int a733_xhci_isoch_start(struct a733_xhci *x,unsigned address,unsigned ep)
 int a733_xhci_isoch_acquire(struct a733_xhci *x,unsigned address,unsigned ep,
     const uint8_t **data,unsigned *bytes,uint64_t *token)
 {
+    if(!SUNSTONE_USB_HOST_GENERIC)return -1;
     struct a733_xhci_endpoint *e=isoch_endpoint(x,address,ep);
     if(!e||!outside(x,data,sizeof(*data))||!outside(x,bytes,sizeof(*bytes))||
        !outside(x,token,sizeof(*token))||!checked(x))return -1;
@@ -1065,12 +1080,14 @@ int a733_xhci_isoch_acquire(struct a733_xhci *x,unsigned address,unsigned ep,
 }
 int a733_xhci_isoch_release(struct a733_xhci *x,unsigned address,unsigned ep,uint64_t token)
 {
-    struct a733_xhci_device *d=lease_device(x,address);
-    struct a733_xhci_endpoint *e=d?endpoint(d,ep):NULL;
-    if(!owner(x)||x->failed||!e||e->transfer_type!=1||!token||!checked(x))return 0;
-    unsigned id=(unsigned)(d-x->devices)*A733_XHCI_ENDPOINTS+(unsigned)(e-d->endpoints)+1;
+    if(!SUNSTONE_USB_HOST_GENERIC)return 0;
+    if(!owner(x)||x->failed||!token||!checked(x))return 0;
     struct a733_xhci_isoch *s=&x->isoch;
-    for(unsigned i=0;i<A733_XHCI_ISOCH_BUFFERS;++i)if(s->owner[i]==id&&s->held[i]==DMA_ISO_BORROWED&&s->token[i]==token){
+    for(unsigned i=0;i<A733_XHCI_ISOCH_BUFFERS;++i)if(s->held[i]==DMA_ISO_BORROWED&&s->token[i]==token){
+        unsigned id=s->owner[i];if(!id||id>A733_XHCI_DEVICES*A733_XHCI_ENDPOINTS)return fault(x);
+        struct a733_xhci_device *d=&x->devices[(id-1)/A733_XHCI_ENDPOINTS];
+        struct a733_xhci_endpoint *e=&d->endpoints[(id-1)%A733_XHCI_ENDPOINTS];
+        if(d->address!=address||e->address!=ep||e->transfer_type!=1)return 0;
         if(!barrier(x))return fault(x);
         s->held[i]=0;s->owner[i]=0;s->token[i]=0;return 1;
     }
@@ -1081,6 +1098,18 @@ int a733_xhci_isoch_take(struct a733_xhci *x,unsigned address,unsigned ep,uint8_
     struct a733_xhci_endpoint *e=isoch_endpoint(x,address,ep);
     if(!e||!outside(x,bytes,sizeof(*bytes))||capacity<e->packet*(e->burst+1)||
        !outside(x,out,e->packet*(e->burst+1)))return -1;
+    if(!SUNSTONE_USB_HOST_GENERIC){
+        struct a733_xhci_isoch *s=&x->isoch;
+        while(s->done){
+            unsigned i=s->head,state=s->state[i],n=s->bytes[i],buffer=s->buffer[i];
+            s->state[i]=0;s->head=(i+1)%A733_XHCI_ISOCH_TDS;--s->count;--s->done;
+            s->held[buffer]=0;s->owner[buffer]=0;
+            if(state==3)continue;
+            if(state!=2||n>e->packet*(e->burst+1)||!barrier(x)){fault(x);return -1;}
+            memcpy(out,e->bounce+buffer*A733_XHCI_ISOCH_PACKET,n);*bytes=n;return 1;
+        }
+        return 0;
+    }
     const uint8_t *data;unsigned n;uint64_t token;
     int result=a733_xhci_isoch_acquire(x,address,ep,&data,&n,&token);
     if(result!=1)return result;
@@ -1090,6 +1119,7 @@ int a733_xhci_isoch_take(struct a733_xhci *x,unsigned address,unsigned ep,uint8_
 int a733_xhci_dma_acquire(struct a733_xhci *x,unsigned address,unsigned ep,
     uint8_t **data,unsigned *capacity,uint64_t *token)
 {
+    if(!SUNSTONE_USB_HOST_GENERIC)return -1;
     struct a733_xhci_device *d=device_address(x,address);
     struct a733_xhci_endpoint *e=d?endpoint(d,ep):NULL;
     if(!owner(x)||x->failed||!d||d->detach||!e||!(ep&15)||!e->opened||e->aborted||
@@ -1107,13 +1137,15 @@ int a733_xhci_dma_acquire(struct a733_xhci *x,unsigned address,unsigned ep,
 }
 int a733_xhci_dma_release(struct a733_xhci *x,unsigned address,unsigned ep,uint64_t token)
 {
-    struct a733_xhci_device *d=lease_device(x,address);
-    struct a733_xhci_endpoint *e=d?endpoint(d,ep):NULL;
-    if(!owner(x)||x->failed||!e||!(ep&15)||!token||!checked(x))return 0;
+    if(!SUNSTONE_USB_HOST_GENERIC)return 0;
+    if(!owner(x)||x->failed||!(ep&15)||!token||!checked(x))return 0;
     struct a733_xhci_isoch *s=&x->isoch;
-    unsigned id=(unsigned)(d-x->devices)*A733_XHCI_ENDPOINTS+(unsigned)(e-d->endpoints)+1;
-    for(unsigned i=0;i<A733_XHCI_ISOCH_BUFFERS;++i)if(s->owner[i]==id&&s->token[i]==token&&
+    for(unsigned i=0;i<A733_XHCI_ISOCH_BUFFERS;++i)if(s->token[i]==token&&
        (s->held[i]==DMA_RESERVED||s->held[i]==DMA_COMPLETE)&&!s->references[i]){
+        unsigned id=s->owner[i];if(!id||id>A733_XHCI_DEVICES*A733_XHCI_ENDPOINTS)return fault(x);
+        struct a733_xhci_device *d=&x->devices[(id-1)/A733_XHCI_ENDPOINTS];
+        struct a733_xhci_endpoint *e=&d->endpoints[(id-1)%A733_XHCI_ENDPOINTS];
+        if(d->address!=address||e->address!=ep)return 0;
         if(!barrier(x))return fault(x);
         s->held[i]=0;s->owner[i]=0;s->token[i]=0;return 1;
     }

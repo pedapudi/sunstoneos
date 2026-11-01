@@ -168,6 +168,9 @@ int a733_usb2_audio_start(struct a733_usb2_native *,uint32_t rate,unsigned chann
 int a733_usb2_audio_read(struct a733_usb2_native *,struct a733_usb2_audio_block *);
 const struct sunstone_uvc_mode *a733_usb2_camera_mode(struct a733_usb2_native *);
 int a733_usb2_camera_start(struct a733_usb2_native *);
+/* Select a UVC format before starting. A requested format has no fallback
+ * to another encoding; zero restores the default YUYV preference. */
+int a733_usb2_camera_select_format(struct a733_usb2_native *,unsigned format);
 const struct sunstone_uvc_frame *a733_usb2_camera_acquire(struct a733_usb2_native *);
 int a733_usb2_camera_release(struct a733_usb2_native *,const struct sunstone_uvc_frame *,uint64_t generation,uint64_t sequence);
 void a733_usb2_set_input(struct a733_usb2_native *,a733_usb2_input_emit,void *);

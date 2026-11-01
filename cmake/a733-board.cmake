@@ -42,7 +42,7 @@ if(SUNSTONE_BOARD_SUPERVISED)
   apply_build_patch("${board_build}/boot-supervised.c" "${board_build}/boot.c"
     "${board_root}/platform/a733-smp-supervised/boot.patch")
   list(APPEND board_sources "${board_build}/boot-supervised.c")
-  if(SUNSTONE_BOARD_USB2_IRQ)
+  if(SUNSTONE_BOARD_USB2_IRQ AND NOT SUNSTONE_A733_OS_USB_CLASSES)
     apply_build_patch("${board_build}/boot-host-irq.c" "${board_build}/boot-supervised.c"
       "${board_root}/apps/board/host_irq_boot.patch")
     list(REMOVE_ITEM board_sources "${board_build}/boot-supervised.c" "${storage_build}/platform.c")
@@ -106,7 +106,23 @@ set(board_host_sources "${board_root}/drivers/usb/a733_xhci_tinyusb.c"
 if(SUNSTONE_BOARD_USB_AUDIO)
   list(APPEND board_host_sources "${board_host_tiny}/class/audio/audio_host.c")
 endif()
+if(SUNSTONE_A733_OS_USB_CLASSES)
+  set(board_cdc_source "${board_build}/cdc-native.c")
+  execute_process(COMMAND "${Python3_EXECUTABLE}" "${board_root}/drivers/usb/host/serial-source.py"
+    --source "${TINYUSB_DIR}/src/class/cdc/cdc_host.c" --output "${board_cdc_source}"
+    COMMAND_ERROR_IS_FATAL ANY)
+  list(APPEND board_host_sources "${board_cdc_source}"
+    "${board_root}/drivers/usb/host/hid.c" "${board_root}/drivers/usb/host/serial.c"
+    "${board_root}/drivers/usb/host/uvc.c" "${board_root}/drivers/usb/host/serial-native.c")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${board_root}/drivers/usb/host/serial-source.py")
+endif()
 add_library(a733-board-usb2-host OBJECT ${board_host_sources})
+if(SUNSTONE_A733_OS_USB_CLASSES)
+  target_compile_definitions(a733-board-usb2-host PRIVATE SUNSTONE_USB_HOST_GENERIC=1 SUNSTONE_USB_APP_ALIAS=1)
+  set_source_files_properties("${board_cdc_source}" TARGET_DIRECTORY a733-board-usb2-host
+    PROPERTIES COMPILE_OPTIONS "-Wno-unused-function;-iquote${TINYUSB_DIR}/src/class/cdc")
+endif()
 if(SUNSTONE_BOARD_USB_AUDIO)
  target_compile_definitions(a733-board-usb2-host PRIVATE SUNSTONE_USB_HOST_AUDIO=1)
 endif()

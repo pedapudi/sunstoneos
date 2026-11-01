@@ -8,8 +8,11 @@ from pathlib import Path
 import shutil
 import struct
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT/'checks'))
+import harness  # Refuse disabled assertions before any check can report success.
 CAPTURES = {
     'microsoft-keyboard': 'd7afd68431bdfa003350d7f3559ecdde77e39647a93a4bd6d416d4ded9a9151f',
     'logitech-unifying': '689923eaf8dbb4af6b97cf2ce717c8cb798a8757689eb51be372ff459faa6c74',
