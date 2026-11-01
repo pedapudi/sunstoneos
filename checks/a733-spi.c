@@ -21,6 +21,8 @@ struct model {
      * next buffer status read while the TX request is enabled. */
     unsigned late_push;
     struct register_latency reset, fifo_reset;
+    unsigned manual_time,fraction,write_cost;
+    uint64_t cs_ticks,done_ticks;
 };
 static void tick(struct model *m)
 {
@@ -43,9 +45,9 @@ static void tick(struct model *m)
         m->rx[(m->ri+m->rn)%192]=(uint8_t)(b^0xa5u^(m->received++));m->rn++;
     }
     m->burst++;
-    if(m->burst==m->total) {m->r[2]&=~0x80000000u;m->r[5]|=0x1000;m->done_at=m->now;}
+    if(m->burst==m->total) {m->r[2]&=~0x80000000u;m->r[5]|=0x1000;m->done_at=m->now;m->done_ticks=m->now*24+m->fraction;}
 }
-static int now(void *p,uint64_t *v) {struct model *m=p;tick(m);*v=++m->now;return 1;}
+static int now(void *p,uint64_t *v) {struct model *m=p;tick(m);if(!m->manual_time)++m->now;*v=m->now;return 1;}
 static int admit(void *p,const struct a733_spi_format *f,const struct a733_spi_plan *plan)
 { assert(f&&plan);return ((struct model*)p)->admit; }
 static int rd(void *p,uintptr_t a,uint32_t *v)
@@ -77,11 +79,13 @@ static int wr(void *p,uintptr_t a,uint32_t v)
         if(m->cs_asserted&&!cs) {
             assert(m->burst==m->total&&!(m->r[2]&0x80000000u)&&!m->tn&&!m->rn&&!m->buffer_held);
             assert(m->now-m->done_at>=m->hold_us);m->cs_completed++;
+            assert(m->now*24+m->fraction-m->done_ticks>=(uint64_t)m->hold_us*24);
         }
-        if(!m->cs_asserted&&cs)m->cs_at=m->now;
+        if(!m->cs_asserted&&cs){m->now+=m->write_cost;m->cs_at=m->now;m->cs_ticks=m->now*24+m->fraction;}
         m->cs_asserted=cs;
         if(v&0x80000000u) {
             assert(m->now-m->cs_at>=m->setup_us);
+            assert(m->now*24+m->fraction-m->cs_ticks>=(uint64_t)m->setup_us*24);
             assert(!(m->r[2]&0x80000000u));m->total=m->r[0x30/4];m->bcc_at_start=m->r[0x38/4];
             m->tx_target=m->r[0x34/4];m->burst=0;m->received=0;
             if(m->uncertain_start){m->r[o/4]=v;return 0;}
@@ -322,4 +326,20 @@ static void reset_latency(void)
         else {m.now=900;assert(a733_spi_poll(&s,1)==(fifo?A733_SPI_READY:A733_SPI_FIFO_RESET));assert(!e->pending);}
     }
 }
-int main(void){reset_latency();clocks();transfers();receive_capacity();faults();lanes();dma();puts("SPI clock, wire transfers, dual/quad lanes, DMA requests, retained faults and delayed/stuck reset completion checks passed");}
+static void minimum_cs(void)
+{
+    for(unsigned costly=0;costly<2;++costly){
+        struct a733_spi s;struct model m;start(&s,&m,3,0,0,0);
+        m.manual_time=1;m.fraction=23;m.write_cost=costly?17:0;
+        uint8_t byte=0x5a;struct a733_spi_transfer t={.kind=A733_SPI_WRITE,.tx=&byte,.tx_bytes=1};
+        assert(a733_spi_submit(&s,&t,100000)==A733_SPI_SETUP);
+        uint64_t anchor=s.wait_since;m.now=anchor+3;m.fraction=0;
+        assert(a733_spi_poll(&s,1)==A733_SPI_SETUP&&!m.burst);
+        ++m.now;m.fraction=23;assert(a733_spi_poll(&s,1)==A733_SPI_ACTIVE);
+        assert(a733_spi_poll(&s,1)==A733_SPI_HOLD);
+        anchor=s.wait_since;m.now=anchor+5;m.fraction=0;
+        assert(a733_spi_poll(&s,1)==A733_SPI_HOLD&&m.cs_asserted);
+        ++m.now;assert(a733_spi_poll(&s,1)==A733_SPI_COMPLETE&&!m.cs_asserted);
+    }
+}
+int main(void){minimum_cs();reset_latency();clocks();transfers();receive_capacity();faults();lanes();dma();puts("SPI clock, wire transfers, dual/quad lanes, DMA requests, retained faults and delayed/stuck reset completion checks passed");}
