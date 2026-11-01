@@ -16,7 +16,7 @@ ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--case',action='append');p.add_argument('--session',type=Path)
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
 types={'board_application','a733_board_session','a733_gpu_platform','a733_gpu_power','a733_pmic_consumer',
- 'os_thermal_service','a733_thermal_policy','a733_gpu_backend','a733_gpu_reserved','a733_gpu_queue','pvr_compute_queue','pvr_gpu_service','pvr_gpu_service_client',
+ 'os_thermal_service','a733_thermal_policy','a733_gpu_backend','a733_gpu_reserved','a733_gpu_queue','pvr_compute_queue','pvr_compute_queue_client','pvr_gpu_service','pvr_gpu_service_client',
  'a733_fault_report','a733_fault_record','a733_power_domain_row','a733_pmic_request','a733_rail_token','ss_result'}
 im=Image(a.image,types);enums={};sizes={}
 with a.image.open('rb') as f:
@@ -55,6 +55,13 @@ cases += [('cold-'+name,0,name) for name in ('not-started','opened','ticket','ep
  'service-epoch','published-epoch','service-owner','component-owner','backend-clock','reply-pending',
  'queued-request','queued-reply','queued-record','context-generation','create-ticket','create-pending',
  'unconsumed-record','refused-create-live-ticket','lost','service-error','backend-error','client-task','close-ticket','crumb-pending')]
+cases += [('cold-'+member,0,member) for member in ('application_sequence','timeline_serial',
+ 'timeline_previous','completed_jobs','reset_pending','recovering','close_pending','final_close')]
+cases += [('cold-peer-'+member,0,'peer-'+member) for member in ('client_owed','sequence','not_after','reserved','submitted','record')]
+cases += [('cold-backend-'+member,0,'backend-'+member) for member in ('recovering','recovery_write','recovery_reset')]
+cases += [('cold-service-'+member,0,'service-'+member) for member in ('recovery_detected','recovery_stop_deadline',
+ 'recovery_ready_deadline','recovery_stage','recovery_count')]
+cases += [('cold-manual-closed',0,'manual-closed')]
 if a.case:
  assert set(a.case)<={x[0] for x in cases}
  cases=[x for x in cases if x[0] in a.case]
@@ -95,7 +102,7 @@ for name,fail_step,mutation in cases:
   elif n=='eTaskGetState':state['getter']+=1;ret(enums['eSuspended'] if state['suspended'] else enums[state['worker_state']] if state['worker_state'] else enums['eBlocked'] if fail_step==0 and not state['worker_ready'] else enums['eReady'])
   elif n=='uxQueueMessagesWaiting':
    state['queue_reads']+=1;queue=u.reg_read(UC_ARM64_REG_X0)
-   bad={'queued-request':0x8200,'queued-reply':0x8300,'queued-record':0x8100}.get(mutation)
+   bad={'queued-request':0x8200,'queued-reply':0x8300,'queued-record':0x8100,'peer-record':0x8400}.get(mutation)
    ret(queue==bad)
   else:
    stage=next(k for k,v in steps.items() if v==n);state['setup'].append(stage)
@@ -161,6 +168,22 @@ for name,fail_step,mutation in cases:
   elif mutation=='backend-deadline':sf(backend,'a733_gpu_backend','deadline',1,8)
   elif mutation=='service-epoch':sf(service,'pvr_gpu_service','epoch',1,8)
   elif mutation=='reply-pending':sf(field(service,'pvr_gpu_service','clients'),'pvr_gpu_service_client','pending',1,8)
+  elif mutation=='manual-closed':sf(gpu,'gpu_private','manual_closed',1)
+  elif mutation in ('backend-recovering','backend-recovery_write','backend-recovery_reset'):
+   sf(backend,'a733_gpu_backend',mutation[len('backend-'):],1)
+  elif mutation.startswith('service-recovery_'):
+   member=mutation[len('service-'):]
+   sf(service,'pvr_gpu_service',member,1,8 if member in ('recovery_detected','recovery_stop_deadline','recovery_ready_deadline') else 4)
+  elif mutation in ('application_sequence','timeline_serial','timeline_previous','completed_jobs',
+                    'reset_pending','recovering','close_pending','final_close'):
+   sf(component,'pvr_compute_queue',mutation,1)
+  elif mutation.startswith('peer-'):
+   peer=field(component,'pvr_compute_queue','peer')
+   sf(peer,'pvr_compute_queue_client','completions',0x8400,8)
+   member=mutation[5:]
+   if member in ('reserved','submitted'):
+    sf(peer,'pvr_compute_queue_client','slot_state',enums['PVR_COMPUTE_QUEUE_'+member.upper()])
+   elif member!='record':sf(peer,'pvr_compute_queue_client',member,1,8 if member=='not_after' else 4)
   elif mutation in ('owed','context-generation','create-ticket','create-pending','unconsumed-record','crumb-pending'):
    member={'owed':'owed','context-generation':'generation','create-ticket':'create_ticket','create-pending':'create_pending','unconsumed-record':'client_owed','crumb-pending':'crumb_pending'}[mutation]
    sf(component,'pvr_compute_queue',member,1,8 if member=='create_ticket' else 4)

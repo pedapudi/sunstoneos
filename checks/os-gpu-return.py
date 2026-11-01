@@ -21,7 +21,7 @@ p.add_argument('--output',type=Path,required=True)
 p.add_argument('--session',type=Path)
 p.add_argument('--case',action='append')
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
-types={'board_application','a733_board_session','pvr_gpu_service','pvr_compute_queue','a733_gpu_queue',
+types={'board_application','a733_board_session','pvr_gpu_service','pvr_compute_queue','pvr_compute_queue_client','a733_gpu_queue',
        'a733_gpu_platform','a733_pmic_consumer','a733_pmic_request','pvr_gpu_service_reply',
        'pvr_gpu_service_request','ss_result'}
 image=Image(a.image,types)
@@ -50,7 +50,8 @@ epoch,generation=struct.unpack_from('<2Q',a.session.read_bytes(),24) if a.sessio
 rows=[]
 cases=('opened','thermal-parked','borrowed-job','no-completed-job','thermal-parked-no-jobs','sequence-mismatch','unconsumed-record',
              'stop-proof-missing','close-refused','park-failed','park-timeout','reply-epoch','queue-not-empty',
-             'late-finalizer','recognition-cutoff','finalizing-window','finalizing-expired','begin-expired')
+             'late-finalizer','recognition-cutoff','finalizing-window','finalizing-expired','begin-expired',
+             'peer-owed','peer-reserved','peer-submitted','peer-completion','recovering','irq-deferred')
 if a.case:
     assert set(a.case)<=set(cases)
     cases=a.case
@@ -75,13 +76,25 @@ for case in cases:
     sf(gpu,'gpu_private','component',component,8)
     sf(component,'pvr_compute_queue','owed',case=='borrowed-job')
     sf(component,'pvr_compute_queue','client_owed',case=='unconsumed-record')
+    sf(component,'pvr_compute_queue','completions',0x8800,8)
     sf(service,'pvr_gpu_service','worker',0x4567,8)
     sf(component,'pvr_compute_queue','sequence',0 if zero_jobs else 7)
+    sf(component,'pvr_compute_queue','completed_jobs',0 if zero_jobs else 7)
     sf(component,'pvr_compute_queue','slot_state',enums['PVR_COMPUTE_QUEUE_CLOSED'])
     put(image.address('os_gpu_client_task','/apps/os/gpu.c'),0x1234,8)
     sf(board,'board_application','live_until',60000000,8)
     sf(session,'a733_board_session','deadline_us',60000000,8)
     sf(session,'a733_board_session','epoch',epoch,8);sf(session,'a733_board_session','generation',generation,8)
+    peer=field(component,'pvr_compute_queue','peer')
+    if case.startswith('peer-'):
+        sf(peer,'pvr_compute_queue_client','completions',0x8900,8)
+        sf(peer,'pvr_compute_queue_client','slot_state',enums['PVR_COMPUTE_QUEUE_CLOSED'])
+        if case=='peer-owed':sf(peer,'pvr_compute_queue_client','client_owed',1)
+        if case in ('peer-reserved','peer-submitted'):
+            sf(peer,'pvr_compute_queue_client','slot_state',enums[
+                'PVR_COMPUTE_QUEUE_RESERVED' if case=='peer-reserved' else 'PVR_COMPUTE_QUEUE_SUBMITTED'])
+    if case=='recovering':sf(component,'pvr_compute_queue','recovering',1)
+    if case=='irq-deferred':sf(service,'pvr_gpu_service','irq_deferred',1)
     state={'time':100,'operation':None,'ticket':0,'suspended':0,'requests':[],'exit':None}
     names=('board_live','a733_smp_counter','xTaskGetTickCount','xTaskGetCurrentTaskHandle',
            'a733_gpu_backend_stopped','pvr_gpu_service_send_epoch','pvr_gpu_service_collect',
@@ -113,7 +126,7 @@ for case in cases:
             sf(args[2],'pvr_gpu_service_reply','epoch',4 if case=='reply-epoch' else 3,8)
             phase=enums['PVR_GPU_SERVICE_PARKED'] if op==enums['PVR_GPU_SERVICE_PARK'] else enums['PVR_GPU_SERVICE_STOPPED']
             sf(args[2],'pvr_gpu_service_reply','phase',phase);ret(1)
-        elif name=='uxQueueMessagesWaiting':ret(case=='queue-not-empty')
+        elif name=='uxQueueMessagesWaiting':ret(case=='queue-not-empty' or (case=='peer-completion' and args[0]==0x8900))
         elif name=='vTaskDelay':state['time']+=1000;ret()
         elif name=='vTaskSuspend':
             assert args[0]==0x4567 and state['requests'][-1]==enums['PVR_GPU_SERVICE_PARK']

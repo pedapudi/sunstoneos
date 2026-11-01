@@ -61,13 +61,14 @@ def run_image(path,output):
         assert task,'Image must register an application task'
         grant=image.address('grant','/apps/os/application.c')
         prepared=image.address('prepared','/apps/os/application.c')
+        put(image.address('main_task','/apps/os/application.c'),task,8)
         board=image.address('board');session=field(board,'board_application','session')
         put(field(session,'a733_board_session','deadline_us'),60000000,8)
         put(field(session,'a733_board_session','epoch'),123,8);put(field(session,'a733_board_session','generation'),456,8)
         put(field(board,'board_application','live_until'),60000000,8)
         put(prepared,1);put(field(grant,'ss_grant','devices'),16 if case=='granted-never-constructed' else 0)
         assert bytes(u.mem_read(gpu,gpu_bytes))==bytes(gpu_bytes),'GPU state must start wholly zero'
-        state={'clock_us':1000000,'task':task,'terminal':None,'cpu_return_entries':0,'retire_entries':0,'worker_callbacks':[]}
+        state={'clock_us':1000000,'task':task,'terminal':None,'cpu_return_entries':0,'retire_entries':0,'quiesce_entries':0,'worker_callbacks':[]}
         if case=='wrong-task':state['task']=task+16
         elif case=='missing-admission':put(prepared,0)
         elif case=='null-application-task':put(app_task_address,0,8)
@@ -77,7 +78,7 @@ def run_image(path,output):
         elif case.startswith('nonzero-'):put(gpu+gpu_fields[case.removeprefix('nonzero-')],1,1)
         callbacks=('eTaskGetState','uxQueueMessagesWaiting','pvr_gpu_service_send_epoch',
                    'pvr_gpu_service_collect','a733_gpu_backend_stopped')
-        names=['a733_smp_counter','xTaskGetCurrentTaskHandle','board_fail','platform_exit',
+        names=['a733_smp_counter','xTaskGetCurrentTaskHandle','board_live','os_gpu_queue_quiesce','board_fail','platform_exit',
                'vTaskSuspend','os_gpu_retire','os_cpu_return_begin',*callbacks]
         hooks={image.address(name):name for name in names}
         def ret(value=0):u.reg_write(UC_ARM64_REG_X0,value);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
@@ -87,6 +88,8 @@ def run_image(path,output):
             elif name=='xTaskGetCurrentTaskHandle':ret(state['task'])
             elif name=='os_cpu_return_begin':state['cpu_return_entries']+=1
             elif name=='os_gpu_retire':state['retire_entries']+=1
+            elif name=='os_gpu_queue_quiesce':state['quiesce_entries']+=1
+            elif name=='board_live':ret(1)
             elif name=='board_fail':state['terminal']='board-fail';machine.emu_stop()
             elif name=='platform_exit':state['terminal']='exit-'+hex(arg);machine.emu_stop()
             elif name=='vTaskSuspend':
@@ -97,7 +100,10 @@ def run_image(path,output):
         def call(name,*args,terminal=False):
             u.reg_write(UC_ARM64_REG_SP,0x8001f000);u.reg_write(UC_ARM64_REG_LR,0x80000000)
             for i,arg in enumerate(args):u.reg_write(UC_ARM64_REG_X0+i,arg)
-            u.emu_start(image.address(name),0x80000000,count=1000000)
+            # Finish now checks wholly zero GPU state in both generic
+            # quiescence and untouched retirement. Bound those byte walks
+            # by the exact linked state size as well as fixed call overhead.
+            u.emu_start(image.address(name),0x80000000,count=1000000+24*gpu_bytes)
             assert (state['terminal'] is not None) if terminal else u.reg_read(UC_ARM64_REG_PC)==0x80000000,(case,name,'execution budget or unexpected terminal')
             return u.reg_read(UC_ARM64_REG_X0)&0xffffffff
         if case=='no-gpu-grant':assert call('os_gpu_queue_start_entry')==1
@@ -110,9 +116,9 @@ def run_image(path,output):
         result_address=image.address('ss_result_record');receipt=bytes(u.mem_read(image.address('os_gpu_return_report'),64))
         finished=get(image.address('finished','/apps/os/application.c'))
         closing=get(image.address('closing','/apps/os/cpu-return.c'))
-        passed=not state['worker_callbacks'] and state['retire_entries']==1
+        passed=not state['worker_callbacks'] and state['retire_entries']<=1 and state['quiesce_entries']<=1
         if success:
-            passed=passed and state['terminal']=='application-suspended' and state['cpu_return_entries']==1 and finished==1 and closing==1
+            passed=passed and state['retire_entries']==1 and state['quiesce_entries']==1 and state['terminal']=='application-suspended' and state['cpu_return_entries']==1 and finished==1 and closing==1
             if passed:
                 result=bytes(u.mem_read(result_address,56+len(payload)))
                 assert struct.unpack_from('<7Q',result)==(0x31544c5553455241,1,

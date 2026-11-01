@@ -11,6 +11,7 @@
 #include "gpu-share.h"
 #include "pvr_compute_queue.h"
 extern const struct ss_gpu_share ss_gpu_share __attribute__((weak));
+int os_gpu_queue_quiesce(void);
 static struct ss_grant peer_grant;
 static TaskHandle_t peer_task;
 static StaticTask_t peer_task_state;
@@ -327,6 +328,7 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
         if(!peer_within_session())ss_fail(0x75d);
         ss_progress();vTaskDelay(1);
     }
+    if(!os_gpu_queue_quiesce())ss_fail(0x75e);
 #endif
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
 #ifdef SUNSTONE_A733_OS_GPU

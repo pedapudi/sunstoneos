@@ -15,7 +15,14 @@
 #include "a733_gpu_platform_native.h"
 #include "pvr_gpu_service.h"
 #include "boot.h"
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+#include "cpu-return.h"
+#endif
 #include <string.h>
+#ifdef SUNSTONE_A733_OS_GPU_RECOVERY_TEST
+__attribute__((used,retain)) const uint32_t os_gpu_recovery_test_configuration[5]={
+    UINT32_C(0x31545247),1,20,1,200000};
+#endif
 #ifdef SUNSTONE_A733_OS_PERF
 #include "perf.h"
 __attribute__((used,retain)) const uint32_t os_gpu_performance_configuration[5]={
@@ -45,7 +52,7 @@ static struct {
     unsigned constructor_refusal, constructor_worker_suspended;
 #endif
     /* Application task lifecycle; job admission belongs to the queue. */
-    unsigned opened, parked, failed, retired;
+    atomic_uint opened, parked, failed, retired, manual_closed;
     atomic_uint waiting;
     uint64_t epoch;
     /* Caller ownership survives timeout, including a late reply already
@@ -121,6 +128,18 @@ static int start_refused(unsigned reason)
     return 1;
 }
 static TaskHandle_t os_gpu_client_task;
+static uint64_t recovery_limit(void *unused)
+{
+    (void)unused;
+    if (!board_live(NULL)) return 0;
+    uint64_t end=atomic_load_explicit(&board.live_until,memory_order_acquire);
+    if (board.session.deadline_us<end) end=board.session.deadline_us;
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+    const uint64_t cutoff=os_cpu_return_cutoff()/24;
+    if (cutoff<end) end=cutoff;
+#endif
+    return end>10000 ? end-10000 : 0;
+}
 static int gpu_start_body(unsigned core);
 int os_gpu_queue_start(unsigned core)
 {
@@ -139,7 +158,8 @@ static int gpu_start_body(unsigned core)
     /* Each refusal below leaves OPEN refused and the boot on the CPU; pages
      * acquired before it stay retained. */
     struct a733_pmic_lifetime lifetime;
-    static const struct a733_gpu_backend_external external = {.revoked = &board.fatal, .live = board_live};
+    static const struct a733_gpu_backend_external external = {
+        .revoked=&board.fatal,.live=board_live,.recovery_limit=recovery_limit};
     if(previous_gpu_loss())return start_refused(1);
     if(!session_owners_distinct())return start_refused(2);
     if(!a733_gpu_platform_native_init(&gpu.native,&providers.shared.locks.callbacks))return start_refused(4);
@@ -163,6 +183,7 @@ static int gpu_start_body(unsigned core)
     if(!pvr_gpu_service_bind(&gpu.service,1,os_thermal_task_handle()))return start_refused(14);
 #endif
     if(!pvr_compute_queue_client_bind(gpu.component))return start_refused(3);
+    if(!os_application_gpu_share_bind(gpu.component))return start_refused(3);
     gpu.started = 1;
     return 1;
 }
@@ -207,9 +228,7 @@ static int runtime_observe(struct gpu_wait *wait)
 static int runtime_request(enum pvr_gpu_service_operation operation, struct gpu_wait *wait,
                            struct pvr_gpu_service_reply *reply)
 {
-#ifdef SUNSTONE_A733_OS_PERF
 retry:
-#endif
     ;
     int status = runtime_observe(wait);
     if (status != 1) return status;
@@ -228,20 +247,18 @@ retry:
         status = runtime_live(wait);
         if (status != 1) return status;
         if (received) {
-#ifdef SUNSTONE_A733_OS_PERF
             if(operation==PVR_GPU_SERVICE_CLOSE && reply->result==PVR_GPU_SERVICE_BUSY) {
                 vTaskDelay(1);goto retry;
             }
-#endif
             return reply->result == PVR_GPU_SERVICE_OK ? 1 : runtime_fault(OS_GPU_CALL_LOST);
         }
     }
 }
 /* Context creation owns the first OPEN; the runtime owns healthy reopens. */
 void pvr_compute_queue_runtime_opened(uint64_t epoch)
-{ gpu.epoch=epoch;gpu.opened=1;gpu.parked=0; }
+{ gpu.epoch=epoch;gpu.opened=1;gpu.parked=0;gpu.manual_closed=0; }
 void pvr_compute_queue_runtime_closed(void)
-{ gpu.opened=0;gpu.parked=1;gpu.retired=1; }
+{ gpu.opened=0;gpu.parked=1;gpu.manual_closed=1; }
 static int runtime_reopen(void)
 {
     struct gpu_wait wait;struct pvr_gpu_service_reply reply;
@@ -259,8 +276,12 @@ static int runtime_close(void)
 {
     struct gpu_wait wait;
     struct pvr_gpu_service_reply reply;
-    if (!gpu.opened || gpu.component->owed || runtime_window(&wait, OS_GPU_OPEN_US) != 1 ||
-        runtime_request(PVR_GPU_SERVICE_CLOSE, &wait, &reply) != 1) return 0;
+    if (!gpu.opened || runtime_window(&wait,OS_GPU_OPEN_US)!=1) return 0;
+    while (!pvr_compute_queue_clients_idle(gpu.component)) {
+        if (atomic_load(&gpu.component->lost) || runtime_observe(&wait)!=1) return 0;
+        vTaskDelay(1);
+    }
+    if (runtime_request(PVR_GPU_SERVICE_CLOSE,&wait,&reply)!=1) return 0;
     while (reply.phase != PVR_GPU_SERVICE_STOPPED) {
         /* The worker owns firmware, drain and platform waits. Observation
          * renews neither service progress nor this absolute bound. */
@@ -305,6 +326,65 @@ int os_gpu_queue_retire(void)
     int r = gpu_retire_body();
     sunstone_crumb(SUNSTONE_CRUMB_GPU_RETIRED, (uint32_t)(r));
     return r;
+}
+int os_gpu_queue_quiesce(void)
+{
+    if (!board_live(NULL)) return 0;
+    if (!os_gpu_client_task) {
+        const unsigned char *bytes=(const unsigned char *)&gpu;
+        if (xTaskGetCurrentTaskHandle()!=(TaskHandle_t)ss_application.task) return 0;
+        for (size_t i=0;i<sizeof(gpu);++i) if (bytes[i]) return 0;
+        return 1;
+    }
+    if (xTaskGetCurrentTaskHandle()!=os_gpu_client_task) return 0;
+    if (!gpu.started || !gpu.component) return !gpu.failed;
+    struct pvr_compute_queue *q=gpu.component;
+    struct gpu_wait wait;
+    if (runtime_window(&wait,OS_GPU_OPEN_US+PVR_GPU_SERVICE_RECOVERY_READY_US)!=1) return 0;
+    while (atomic_load(&q->create_pending) && !atomic_load(&q->create_done)) {
+        if (runtime_observe(&wait)!=1) return 0;
+        struct gpu_queue_context context;
+        struct gpu_queue_lease_info leases[GPU_QUEUE_LEASES];
+        int result=gpu_queue_context_create(&q->create_config,OS_GPU_WAIT_TICKS,&context,leases);
+        if (result==GPU_QUEUE_FAULT) return 0;
+        if (result!=GPU_QUEUE_TIMEOUT && result!=GPU_QUEUE_BUSY) break;
+    }
+    if (!gpu.epoch && gpu.service.phase==PVR_GPU_SERVICE_COLD &&
+        gpu.backend.phase==A733_GPU_BACKEND_BOUND && gpu.power.phase==A733_GPU_PLATFORM_NEW &&
+        !gpu.power.token && !gpu.power.delegated && !gpu.service.epoch && !atomic_load(&q->lost) &&
+        !q->create_ticket && !uxQueueMessagesWaiting(gpu.service.requests)) {
+        for (unsigned i=0;i<PVR_GPU_SERVICE_CLIENTS;++i)
+            if (gpu.service.clients[i].pending || uxQueueMessagesWaiting(gpu.service.clients[i].replies)) return 0;
+        return 1;
+    }
+    if (gpu.failed || atomic_load(&q->lost) || atomic_load(&q->create_done)!=1) return 0;
+    atomic_store(&gpu.waiting,1);
+    while (atomic_load(&q->recovering) || atomic_load(&q->client_owed) ||
+           atomic_load(&q->peer.client_owed)) {
+        if (atomic_load(&q->lost) || runtime_observe(&wait)!=1) return 0;
+        if (atomic_load(&q->client_owed)) {
+            struct gpu_queue_record record;
+            (void)gpu_queue_wait((struct gpu_queue_context){q->generation,0},&record,OS_GPU_WAIT_TICKS);
+        } else vTaskDelay(1);
+    }
+    atomic_store(&q->final_close,1);
+    if (!pvr_compute_queue_clients_idle(q)) return 0;
+    uint64_t epoch=atomic_load_explicit(&gpu.service.published_epoch,memory_order_acquire);
+    if (epoch!=gpu.epoch && gpu.service.phase==PVR_GPU_SERVICE_READY) pvr_compute_queue_runtime_opened(epoch);
+    if (gpu.opened && !runtime_close()) return 0;
+    if (!gpu.parked || !a733_gpu_backend_stopped(&gpu.backend,&gpu.service)) return 0;
+    if (q->create_ticket || q->close_ticket || atomic_load(&q->close_pending) ||
+        gpu.service.irq_wake_pending || gpu.service.irq_deferred ||
+        uxQueueMessagesWaiting(gpu.service.requests)) return 0;
+    for (unsigned i=0;i<PVR_GPU_SERVICE_CLIENTS;++i)
+        if (gpu.service.clients[i].pending || uxQueueMessagesWaiting(gpu.service.clients[i].replies)) return 0;
+#ifdef SUNSTONE_A733_OS_PERF
+    if (gpu.service.performance.ticket) return 0;
+#endif
+    gpu.accepted_ticket=0;
+    gpu.retired=1;
+    atomic_store(&gpu.waiting,0);
+    return 1;
 }
 static int gpu_retire_body(void)
 {
@@ -357,7 +437,7 @@ static int gpu_return_untouched_body(void)
        (unconstructed&&(os_gpu_client_task||!ss_grant())) || gpu.constructor_refusal>14 ||
        (cold ? (!gpu.started || gpu.component!=m || !p->initialized || !b->initialized ||
                 !s->initialized || !s->worker) : (gpu.started || gpu.component)) ||
-       gpu.opened || gpu.parked || gpu.failed || gpu.retired || gpu.epoch || gpu.accepted_ticket ||
+       gpu.opened || gpu.parked || gpu.failed || gpu.retired || gpu.manual_closed || gpu.epoch || gpu.accepted_ticket ||
        os_gpu_return_started() || a733_smp_counter()>=os_cpu_return_cutoff())return 0;
     if((!p->initialized&&!zero_bytes(p,sizeof(*p))) ||
        p->phase!=A733_GPU_PLATFORM_NEW || p->token || p->delegated || p->deadline || p->last_now ||
@@ -375,15 +455,26 @@ static int gpu_return_untouched_body(void)
        (b->initialized&&(b->phase!=A733_GPU_BACKEND_BOUND || b->service!=s || b->power!=p ||
                          b->memory!=&gpu.firmware.memory)) ||
        atomic_load(&b->error) || b->deadline || (!cold&&b->last_now) || b->identity || b->identity_step ||
+       b->recovering || b->recovery_write || b->recovery_reset ||
        !zero_bytes(&b->mode,sizeof(b->mode)))return 0;
     const unsigned creating=atomic_load(&m->create_pending), created=atomic_load(&m->create_done);
     const int refused_create=cold && created==2 && (creating==1 || creating==2);
     if(s->phase!=PVR_GPU_SERVICE_COLD || s->error || s->epoch || s->deadline ||
+       s->recovery_detected || s->recovery_stop_deadline || s->recovery_ready_deadline ||
+       s->recovery_stage || s->recovery_count ||
        (cold ? (b->last_now!=s->last_now || s->owner!=PVR_GPU_SERVICE_CLIENTS || !s->irq_masked ||
                 s->clients[0].task!=os_gpu_client_task || !m->completions || m->epoch || m->error) : s->last_now) ||
        atomic_load(&s->published_epoch) || s->irq_fault || s->irq_wake_pending || s->irq_deferred ||
        m->sequence || m->owed || m->crumb_pending || m->generation || m->create_ticket ||
        (!refused_create&&(creating||created)) || m->close_ticket || atomic_load(&m->client_owed) || atomic_load(&m->lost))return 0;
+    if (atomic_load(&m->application_sequence) || m->timeline_serial || m->timeline_previous || m->completed_jobs ||
+        m->reset_pending || atomic_load(&m->recovering) || atomic_load(&m->close_pending) ||
+        atomic_load(&m->final_close) || m->active_client || m->next_client || atomic_load(&m->not_after) ||
+        atomic_load(&m->peer.slot_state)!=PVR_COMPUTE_QUEUE_CLOSED || atomic_load(&m->peer.client_owed) ||
+        atomic_load(&m->peer.sequence) || atomic_load(&m->peer.not_after) ||
+        !zero_bytes(&m->slot,sizeof(m->slot)) || !zero_bytes(&m->peer.slot,sizeof(m->peer.slot)) ||
+        (m->peer.completions && (!m->peer.task || m->peer.task!=s->clients[2].task ||
+                                uxQueueMessagesWaiting(m->peer.completions))))return 0;
     if(m->owner) {
         if(m->owner!=&gpu.session || m->service!=s ||
            (m->phase!=PVR_COMPUTE_QUEUE_BOUND &&
@@ -433,7 +524,8 @@ int os_gpu_queue_return(uint64_t completed)
 static int gpu_return_body(uint64_t completed)
 {
     if(xTaskGetCurrentTaskHandle()!=os_gpu_client_task || !gpu.started || !gpu.component ||
-       gpu.failed || gpu.component->owed || atomic_load(&gpu.component->client_owed) || !gpu.epoch || os_gpu_return_started() ||
+       gpu.failed || !pvr_compute_queue_clients_idle(gpu.component) || gpu.component->owed ||
+       atomic_load(&gpu.component->recovering) || !gpu.epoch || os_gpu_return_started() ||
        a733_smp_counter()>=os_cpu_return_cutoff())return 0;
     atomic_store_explicit(&return_state,1,memory_order_release);
     if(gpu.opened) { if(!os_gpu_queue_retire())return 0; }
@@ -446,12 +538,19 @@ static int gpu_return_body(uint64_t completed)
         vTaskDelay(1);
         if(runtime_request(PVR_GPU_SERVICE_STATUS,&wait,&reply)!=1)return 0;
     }
-    if(reply.epoch!=gpu.epoch || gpu.component->sequence!=completed || gpu.component->owed ||
+    if(reply.epoch!=gpu.epoch || gpu.component->completed_jobs!=completed || gpu.component->owed ||
        atomic_load(&gpu.component->slot_state)!=PVR_COMPUTE_QUEUE_CLOSED ||
+       (gpu.component->peer.completions && atomic_load(&gpu.component->peer.slot_state)!=PVR_COMPUTE_QUEUE_CLOSED) ||
+       !pvr_compute_queue_clients_idle(gpu.component) || atomic_load(&gpu.component->recovering) ||
        gpu.service.clients[0].pending || uxQueueMessagesWaiting(gpu.service.requests) ||
-       uxQueueMessagesWaiting(gpu.component->completions) || gpu.service.irq_wake_pending ||
+       uxQueueMessagesWaiting(gpu.component->completions) || gpu.service.irq_wake_pending || gpu.service.irq_deferred ||
        gpu.power.pmic_observed || gpu.power.pmic.request.id ||
        !a733_gpu_backend_stopped(&gpu.backend,&gpu.service) || runtime_live(&wait)!=1)return 0;
+    for (unsigned i=0;i<PVR_GPU_SERVICE_CLIENTS;++i)
+        if (gpu.service.clients[i].pending || uxQueueMessagesWaiting(gpu.service.clients[i].replies)) return 0;
+#ifdef SUNSTONE_A733_OS_PERF
+    if (gpu.service.performance.ticket) return 0;
+#endif
     /* The priority-4 worker has blocked on this same core before priority 3
      * can collect the final reply. No other owner can resume it. */
     vTaskSuspend(gpu.service.worker);
@@ -541,6 +640,12 @@ int os_gpu_queue_start_entry(void)
 int pvr_compute_queue_runtime_sync(void)
 {
     if(!gpu.started)return 0;
+    if (atomic_load(&gpu.manual_closed)) return 0;
+    if (gpu.component && gpu.component->peer.task==xTaskGetCurrentTaskHandle()) {
+        if (!board_live(NULL) || atomic_load(&gpu.failed) || atomic_load(&gpu.component->lost)) return -1;
+        return !atomic_load(&gpu.retired) && atomic_load(&gpu.opened) &&
+            !atomic_load(&gpu.component->recovering) && !os_thermal_throttled();
+    }
     if(!gpu.opened&&!gpu.parked)return gpu.failed?-1:1;
     return os_gpu_queue_thermal();
 }
@@ -550,7 +655,7 @@ int os_gpu_retire(void)
     if(os_gpu_return_ready())return 1;
     if(gpu.constructor_refusal || (!gpu.epoch && gpu.service.phase==PVR_GPU_SERVICE_COLD))
         return os_gpu_queue_return_untouched();
-    return gpu.component&&os_gpu_queue_return(gpu.component->sequence);
+    return gpu.component&&os_gpu_queue_return(gpu.component->completed_jobs);
 }
 #endif
 
@@ -559,6 +664,7 @@ unsigned os_gpu_queue_state(void)
     if(gpu.failed||(gpu.component&&atomic_load(&gpu.component->lost)))return 2;
     return atomic_load(&gpu.waiting)||(gpu.component&&
         (atomic_load(&gpu.component->client_owed)||
+         atomic_load(&gpu.component->peer.client_owed)||atomic_load(&gpu.component->recovering)||
          (atomic_load(&gpu.component->create_pending)&&!atomic_load(&gpu.component->create_done))))?1:0;
 }
 

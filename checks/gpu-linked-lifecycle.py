@@ -51,7 +51,7 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
     def call(name, *args, unit=None):
         uc.reg_write(UC_ARM64_REG_SP, 0x8000f000); uc.reg_write(UC_ARM64_REG_LR, 0x80000000)
         for i, value in enumerate(args): uc.reg_write(UC_ARM64_REG_X0 + i, value)
-        uc.emu_start(image.address(name, unit), 0x80000000, count=100000)
+        uc.emu_start(image.address(name, unit), 0x80000000, count=2000000)
         assert uc.reg_read(UC_ARM64_REG_PC) == 0x80000000, 'instruction budget exhausted'
         return uc.reg_read(UC_ARM64_REG_X0)
     state = dict(time=100, live=1, waiting=0, sent=[], pending=0, collects=0)
@@ -62,10 +62,11 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
         put(image.address('os_gpu_client_task', '/apps/os/gpu.c'), 0x1234, 8)
         component=field(field(gpu, 'os_gpu_state', 'session'), 'a733_gpu_queue', 'component')
         setf(gpu, 'os_gpu_state', 'component', component, 8)
+        setf(component, 'pvr_compute_queue', 'completions', 0x8900, 8)
         setf(board, 'board_application', 'live_until', 3000000, 8)
         setf(field(board, 'board_application', 'session'), 'a733_board_session', 'deadline_us', 60000000, 8)
         hooks = {image.address(n): n for n in ('board_live', 'a733_smp_counter', 'xTaskGetCurrentTaskHandle',
-            'xTaskGetTickCount', 'os_thermal_throttled', 'vTaskDelay', 'pvr_gpu_service_send_epoch', 'pvr_gpu_service_collect')}
+            'xTaskGetTickCount', 'os_thermal_throttled', 'vTaskDelay', 'uxQueueMessagesWaiting', 'pvr_gpu_service_send_epoch', 'pvr_gpu_service_collect')}
         def hook(machine, address, size, unused):
             name = hooks.get(address)
             if not name: return
@@ -75,12 +76,13 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
             elif name == 'xTaskGetTickCount': ret(state['time'] // 1000)
             elif name == 'xTaskGetCurrentTaskHandle': ret(0x1234)
             elif name == 'os_thermal_throttled': ret(0)
+            elif name == 'uxQueueMessagesWaiting': ret(0)
             elif name == 'vTaskDelay': assert args[0] == 1; state['time'] += 1000; ret()
             elif name == 'pvr_gpu_service_send_epoch':
                 assert args[0] == field(gpu, 'os_gpu_state', 'service') and args[1] == 1 and args[3] == 10
                 assert not state['pending'] and get(field(gpu, 'os_gpu_state', 'retired')) == 1 and get(field(gpu, 'os_gpu_state', 'waiting'))
                 operation = get(field(args[2], 'pvr_gpu_service_request', 'operation'))
-                assert operation == (2 if not state['sent'] else 0)
+                assert operation == (2 if not state['sent'] or case == 'close-busy' else 0)
                 state['sent'].append(operation); state['pending'] = len(state['sent']); put(args[4], state['pending'], 8); ret(1)
             else:
                 assert args[1] == state['pending'] and args[3] == 10
