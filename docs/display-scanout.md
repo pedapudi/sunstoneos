@@ -151,8 +151,9 @@ memory pool: an immutable XRGB8888 frame and its 32 KiB IOMMU tables. The
 request describes the complete frame allocation. The binding authenticates
 allocation generations and exact extents, the display master's active READ-only
 IOMMU span, every table word, and each CPU page's uncached translation. This
-full walk of the tables and frame pages runs before publication, once per
-scanout phase, and after each prepare, request or replay. Each register access
+full walk of the tables and frame pages runs before publication and once after
+each prepare, request or replay. The validated private mappings remain immutable
+across that operation's scanout phases. Each register access
 checks only the allocation generations, exact extents and IOMMU generation, so
 a table word changed in place is found by the next full walk.
 The image owner must exclude CPU aliases and writers throughout the session.

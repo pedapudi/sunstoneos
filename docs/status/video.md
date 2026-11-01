@@ -20,6 +20,13 @@ Sparse-coefficient CPU oracles do not establish general JPEG conformance.
 Some malformed-input evidence lacks preserved runner/inputs.
 Evidence: `jpeg-runtime-input-20261018/` under `~/.cache/sunstoneos/evidence/`.
 
+The OS UVC JPEG adapter and standalone JPEG caller share a bounded advancing
+executor. It completes ready programming in one call and returns on the first
+pending hardware or copy step. Delayed/stuck completion and regression mutation
+checks pass. OS decode still accepts one frame per image lifetime; repeated-frame
+throughput, IRQ completion, CPU cost and idle power remain open in the
+[real-time audit](driver-realtime-audit.md).
+
 H.264 decode supports progressive 8-bit 4:2:0 Baseline/Main/High,
 CAVLC/CABAC, I/P/B including reference B pictures, scaling matrices, weighted
 prediction and long-term P references. The current High-profile layout has four full-HD

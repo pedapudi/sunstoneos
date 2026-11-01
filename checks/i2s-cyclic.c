@@ -9,6 +9,9 @@
 #undef dma_read
 #undef dma_write
 #define cyclic_case (*(volatile unsigned *)UINT64_C(0x47fff000))
+#ifdef I2S_RETIRE_CHECK
+#include "../apps/i2s/retire.h"
+#endif
 /* Pages: RX and TX descriptors, eight RX slots, four TX slots. */
 static _Alignas(4096) unsigned char cyclic_pool[14*4096];
 static unsigned char cyclic_device[2][8][4096],copied[4096];
@@ -59,7 +62,12 @@ static void dma_advance(void)
         set(&requested,get(&requested)&~(1u<<ch));
         configASSERT(ir[28/4]&(ch?128:8));cycle(ch,amounts[ch]);
     }
-    for(unsigned ch=0;ch<2;++ch)if(!dma[di(ch,0)] && get(&drain_enabled))dma[0x30/4]&=~(1u<<ch);
+    for(unsigned ch=0;ch<2;++ch)if(!dma[di(ch,0)] && get(&drain_enabled)){
+        dma[0x30/4]&=~(1u<<ch);
+        /* Board retirement clears PKG_NUM by idle; do not extend this as a
+         * wrap or rely on a completed transmission preserving its counter. */
+        dma[di(ch,0x30)]=0;
+    }
 }
 static uint32_t dma_read(void *context,uintptr_t address)
 {
@@ -123,11 +131,16 @@ static void inject(unsigned mask,unsigned rx,unsigned tx)
 }
 static void start_pair(void)
 {
+    unsigned expected=get(&submissions)+(cyclic_case==10?1:2);
     open_stream(0);open_stream(1);
     for(unsigned i=0;i<4;++i){struct a733_i2s_period p=cyclic_period(1);configASSERT(p.kind==A733_I2S_TX_FILL && p.slot==i);
         memset(cyclic_pool+(10+i)*4096,0x60+i,4096);configASSERT(request(DMA_SERVICE_PERIOD_PUT,1,0,p.ticket).result==DMA_SERVICE_OK);}
     for(unsigned j=0;j<(cyclic_case==10?1u:2u);++j)configASSERT(request(DMA_SERVICE_SUBMIT,j,frequency,0).result==DMA_SERVICE_OK);
-    vTaskDelay(3);
+    /* SUBMIT accepts asynchronous preparation. Wait for modeled ENABLE writes
+     * instead of assuming that three scheduler ticks finish FIFO flush. */
+    unsigned wait=0;
+    while(get(&submissions)!=expected&&wait++<100)vTaskDelay(1);
+    configASSERT(get(&submissions)==expected);
 }
 static void finish_pair(unsigned failed_mask)
 {
@@ -189,6 +202,38 @@ static void cyclic_client(void *unused)
         configASSERT(request(DMA_SERVICE_REAP,0,0,0).result==DMA_SERVICE_OK);close_stream(0);
     }else{
         start_pair();
+#ifdef I2S_RETIRE_CHECK
+        if(cyclic_case==19||cyclic_case==20){
+            inject(1,2,0);struct a733_i2s_period p=cyclic_period(0);
+            configASSERT(dma_service_copy_period(&service,0,p.ticket,copied,4096));
+            if(cyclic_case==20){inject(1,4,0);wait_phase(0,DMA_SERVICE_RESULT);}
+            else set(&drain_enabled,0);
+            struct i2s_retirement retirement={.service=&service,.held={p.ticket,0},.jobs=2};
+            int result=0;struct dma_service_reply blocked={0};
+            /* Observe the real blocked transition instead of spending a fixed
+             * tick count while the worker advances the modeled microseconds. */
+            for(unsigned i=0;i<100&&!result;++i){
+                result=i2s_retirement_step(&retirement);
+                if(cyclic_case==19&&!result&&!retirement.pending){blocked=request(DMA_SERVICE_STATUS,0,0,0);
+                    if(blocked.phase==DMA_SERVICE_DRAINING)break;}
+                vTaskDelay(1);
+            }
+            if(cyclic_case==19){
+                if(result||!bindings[0].pin_lease.id||!service.channels[0].holds_buffers){
+                    platform_puts("retire busy result/stage/phase/outcome/stream/clock=");
+                    platform_hex(result);platform_hex(retirement.stage);platform_hex(service.channels[0].phase);
+                    platform_hex(service.channels[0].outcome);platform_hex(service.streams[0].status);platform_hex(us);platform_puts("\n");}
+                configASSERT(!result&&blocked.phase==DMA_SERVICE_DRAINING&&blocked.holds_buffers&&
+                    blocked.owns_session&&bindings[0].pin_lease.id);
+                set(&drain_enabled,1);}
+            for(unsigned i=0;i<100&&!result;++i){result=i2s_retirement_step(&retirement);vTaskDelay(1);}
+            configASSERT(result==1&&!retirement.held[0]&&!bindings[0].pin_lease.id);
+            for(unsigned j=0;j<2;++j)configASSERT(service.channels[j].phase==DMA_SERVICE_CLOSED&&
+                !service.channels[j].holds_buffers&&!service.controller.channels[j].claimed);
+            configASSERT(!dma_service_copy_period(&service,0,p.ticket,copied,4096));
+            platform_puts("PASS I2S retirement exact held lease, busy drain/overrun, reap and both closes\n");platform_exit(0);
+        }
+#endif
         if(cyclic_case==10){
             struct dma_service_reply r=request(DMA_SERVICE_STATUS,0,0,0);
             configASSERT(r.phase==DMA_SERVICE_RECOVERY && r.holds_buffers && !r.stream_frames);
@@ -253,7 +298,9 @@ static void cyclic_client(void *unused)
                 configASSERT(range_invalidations==periods+4);
             }
             final_packet=1;__atomic_fetch_add(&us,64000,__ATOMIC_SEQ_CST);finish_pair(0);
-            configASSERT(service.controller.channels[1].packages==periods+1);
+            /* Cancel reports the last ACTIVE prefix. A final packet can
+             * complete while disabling, before the raw counter is cleared. */
+            configASSERT(service.controller.channels[1].packages==periods);
         }
     }
     platform_puts("PASS cyclic I2S actual providers, fixed rings, checked readonly RX staging, immutable TX progress, wrap/backpressure and retained drain\n");platform_exit(0);

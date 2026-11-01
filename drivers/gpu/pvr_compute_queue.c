@@ -1,5 +1,6 @@
 /* Single-context compute submission inside the privileged GPU worker. */
 #include "pvr_compute_queue.h"
+#include "pvr_gpu_crumb.h"
 #include "pvr_gpu_service.h"
 #include "a733_gpu_queue.h"
 #include "a733_gpu_backend.h"
@@ -404,15 +405,36 @@ void pvr_compute_queue_abort(struct pvr_compute_queue *q)
 }
 int pvr_compute_queue_recovered(struct pvr_compute_queue *q)
 {
-    if (!q || !atomic_load(&q->recovering) || atomic_load(&q->lost) ||
-        q->service->phase!=PVR_GPU_SERVICE_RECOVERING ||
-        !a733_gpu_backend_stopped(q->service->config.context,q->service)) return 0;
+    if (!q) return 0;
+    if (!atomic_load(&q->recovering) || atomic_load(&q->lost) ||
+        q->service->phase!=PVR_GPU_SERVICE_RECOVERING) {
+        pvr_gpu_crumb_fail(PVR_GPU_CRUMB_RECOVERY,1,__LINE__,
+            (uint32_t)q->service->phase << 16 | !!atomic_load(&q->lost) << 1 |
+            !!atomic_load(&q->recovering),PVR_GPU_CRUMB_HERE());
+        return 0;
+    }
+    if (!a733_gpu_backend_stopped(q->service->config.context,q->service)) {
+        pvr_gpu_crumb_fail(PVR_GPU_CRUMB_RECOVERY,2,__LINE__,
+            (uint32_t)q->service->stop.phase << 16 | q->service->stop.isolation_observed,
+            PVR_GPU_CRUMB_HERE());
+        return 0;
+    }
     if (q->owed) {
         struct pvr_compute_queue_client_view v;
-        if (!pvr_compute_queue_client_view(q,q->active_client,&v) ||
-            atomic_load(v.slot_state)!=PVR_COMPUTE_QUEUE_TAKEN) return 0;
+        if (!pvr_compute_queue_client_view(q,q->active_client,&v)) {
+            pvr_gpu_crumb_fail(PVR_GPU_CRUMB_RECOVERY,3,__LINE__,q->active_client,PVR_GPU_CRUMB_HERE());
+            return 0;
+        }
+        if (atomic_load(v.slot_state)!=PVR_COMPUTE_QUEUE_TAKEN) {
+            pvr_gpu_crumb_fail(PVR_GPU_CRUMB_RECOVERY,4,__LINE__,
+                atomic_load(v.slot_state),PVR_GPU_CRUMB_HERE());
+            return 0;
+        }
         atomic_store(v.slot_state,PVR_COMPUTE_QUEUE_CLOSED);
-        if (post(q,q->job.sequence,GPU_QUEUE_FAULT,q->error,0)!=1) return 0;
+        if (post(q,q->job.sequence,GPU_QUEUE_FAULT,q->error,0)!=1) {
+            pvr_gpu_crumb_fail(PVR_GPU_CRUMB_RECOVERY,5,__LINE__,q->job.sequence,PVR_GPU_CRUMB_HERE());
+            return 0;
+        }
     }
     q->reset_pending=0; q->held=0; q->phase=PVR_COMPUTE_QUEUE_READY;
     return 1;

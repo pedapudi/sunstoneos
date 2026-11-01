@@ -26,6 +26,9 @@ static unsigned regress_after_enable, regression_phase;
 static uint32_t saved_div2, pll_trace[8];
 static unsigned pll_count;
 static unsigned gate_status_reads, gate_status_hold, gate_status_fail, gate_status_late;
+static uint64_t lock_after;
+static unsigned lock_delay;
+static unsigned stale_lock_reads;
 static struct register_latency pll_lock, output_gate;
 static unsigned fraction,write_cost;
 static uint64_t lock_sample_ticks[3];
@@ -60,7 +63,7 @@ static int read_word(void *cookie, uintptr_t a, uint32_t *out)
 {
     assert(cookie == &parent && mutex);
     ++reads;
-    if(a==C+0x280)ccu[0x280/4]=reg_latency_apply(&pll_lock,now,ccu[0x280/4]);
+    if(a==C+0x280){if(pll_lock.pending)++stale_lock_reads;ccu[0x280/4]=reg_latency_apply(&pll_lock,now,ccu[0x280/4]);}
     if(a==C+0x199c)ccu[0x199c/4]=reg_latency_apply(&output_gate,now,ccu[0x199c/4]);
     if (a == C+0x199c) {
         ++gate_status_reads;
@@ -90,7 +93,7 @@ static int write_word(void *cookie, uintptr_t a, uint32_t value)
             /* Manual4.1.4.1/.2 requires three lock samples and20us settle.
              * Constructed11us/7us hardware delays use explicit fixture time. */
             if((value&B(29))&&!(ccu[0x280/4]&B(29))){
-                reg_latency_schedule(&pll_lock,now,11,B(28),B(28));pll_lock.stuck=lock_never;
+                lock_after=now+lock_delay;reg_latency_schedule(&pll_lock,now,lock_delay,B(28),B(28));pll_lock.stuck=lock_never;
             }
             if ((value & B(27)) && !(ccu[0x280/4]&B(27))) {
                 assert(!pll_lock.pending && parent.locked_samples==3 && now-parent.wait_since>=20);
@@ -154,6 +157,7 @@ static void setup(unsigned cold)
     osc=0x10000002; saved_div2=2u<<20; pll_count=0;
     regress_after_enable=regression_phase=0;
     gate_status_reads=gate_status_hold=gate_status_fail=gate_status_late=0;
+    lock_after=0;lock_delay=11;stale_lock_reads=0;
     ccu[0]=(0xf8000000u | (99u<<8) | (99u<<16));
     ccu[0x280/4]=saved_div2 | B(7); /* Unowned field survives. */
     ccu[0x1200/4]=B(12); ccu[0x120c/4]=B(8);
@@ -239,7 +243,7 @@ static void monotonic_core_case(void)
     }
     const struct a733_dma_transfer catalogue={{memory[2],0x41000000,128,A733_DMA_DESCRIPTORS},segments,2,maps,2};
     const struct a733_i2s_stream_profile profile={plan.format,{iops,ready_health},&binding,
-        A733_I2S_RECEIVE,100,0};
+        A733_I2S_RECEIVE,100,0,A733_I2S_ROUTE_I2S0};
     static struct a733_i2s_stream stream;
     assert(a733_i2s_stream_open(&stream,&profile,&catalogue,&dma,0,900) == A733_I2S_OPENING);
     assert(a733_i2s_stream_poll(&stream) == A733_I2S_OPENING);
@@ -368,6 +372,22 @@ static void minimum_intervals(void)
 int main(int argc, char **argv)
 {
     if (argc == 2) {
+        if(strcmp(argv[1],"--observed-audio1") == 0){
+            setup(1);saved_div2=1u<<20;ccu[0x280/4]=UINT32_C(0x41147f00);
+            ccu[0x28c/4]=UINT32_C(0x30000000);lock_delay=50;ready_parent();
+            assert(publish_count==1&&(ccu[0x280/4]&B(24))&&stale_lock_reads);
+            for(unsigned i=0;i<pll_count;++i)assert(pll_trace[i]&B(24));
+            assert(ccu[0x28c/4]==UINT32_C(0x30000000));
+            setup(0);ccu[0x280/4]|=B(24);ready_parent();assert(!pll_count);
+            puts("PASS observed AUDIO1 reserved bit survives cold preparation and warm adoption");
+            return 0;
+        }
+        if(strcmp(argv[1],"--reset-ldo") == 0){
+            setup(1);saved_div2=1u<<20;ccu[0x280/4]=UINT32_C(0x40147f00);lock_delay=50;ready_parent();
+            assert(publish_count==1&&(ccu[0x280/4]&B(30))&&gate_status_reads&&stale_lock_reads&&now>=lock_after+20);
+            puts("PASS AUDIO1 disabled PLL with enabled reset-default LDO waits for lock, settle and effective output gates");
+            return 0;
+        }
         if (strcmp(argv[1],"--audio-gates") == 0) audio_gate_cases();
         else if (strcmp(argv[1],"--rates") == 0) rate_cases();
         else if (strcmp(argv[1],"--monotonic-core") == 0) monotonic_core_case();

@@ -18,6 +18,8 @@ a.build.mkdir(parents=True, exist_ok=True)
 generated = a.build / 'generated'
 subprocess.run([sys.executable, str(ROOT/'tools/sunstone-manifest.py'), 'emit', '--manifest',
                 str(ROOT/'apps/gpu-lifecycle/manifest.json'), '--output', str(generated)], check=True)
+(generated/'FreeRTOS.h').write_text('#include <stdint.h>\ntypedef uint64_t TickType_t;\n')
+(generated/'task.h').write_text('TickType_t xTaskGetTickCount(void);\nvoid vTaskDelay(TickType_t);\n')
 fixture = r'''
 #include "gpu_lifecycle-app.h"
 #include "gpu_queue.h"
@@ -28,6 +30,8 @@ fixture = r'''
 static jmp_buf done;
 static unsigned mode, fail_at, creates, submits, waits, closes, opens, recovers, releases, peers, terminal;
 static uint32_t input[130], output[67];
+static uint64_t ticks;
+static unsigned attempts, delays;
 const struct ss_manifest gpu_lifecycle_manifest={0}, gpu_queue_peer_manifest={0};
 void gpu_queue_peer_main(const struct ss_grant *g) {(void)g;}
 void gpu_queue_peer_release(void) {assert(submits==1 && !releases);++releases;}
@@ -48,9 +52,13 @@ int gpu_queue_context_create(const struct gpu_queue_context_config *c,uint32_t t
 }
 int gpu_queue_submit(struct gpu_queue_context ctx,const struct gpu_queue_job *j)
 {
- ++submits;assert(ctx.generation==19 && j->sequence==submits && j->bindings==2 && j->argument_bytes==4);
+ ++attempts;if(submits==waits)++submits;assert(ctx.generation==19 && j->sequence==submits && j->bindings==2 && j->argument_bytes==4);
  assert(j->groups[0]==3 && j->groups[1]==1 && j->groups[2]==1 && !j->not_after_us);
  assert(j->binding[0].sync_bytes==260 && j->binding[1].sync_bytes==520);
+ if(submits==fail_at){
+  if(mode==4 || mode==16 || mode==17 || ((mode==15 || mode==18) && delays<3))return GPU_QUEUE_PARKED;
+  if(mode==18)return GPU_QUEUE_REFUSED;
+ }
  for(unsigned i=0;i<65;++i){unsigned at=(i+j->sequence-1)%65;
   assert(input[i]==UINT32_MAX-3u*at && input[65+i]==7u*at+9u);
   if(!(mode==12 && submits==fail_at))output[i]=input[i]+input[65+i];}
@@ -73,6 +81,9 @@ int gpu_queue_open(struct gpu_queue_context ctx,uint32_t ticks)
 {assert(ctx.generation==19 && ticks==4000 && closes==opens+1);++opens;return mode==8 && opens==fail_at?GPU_QUEUE_FAULT:GPU_QUEUE_OK;}
 int gpu_queue_recover(struct gpu_queue_context ctx,uint32_t ticks)
 {assert(ctx.generation==19 && ticks==4000 && waits==1 && !recovers);++recovers;return mode==10?GPU_QUEUE_FAULT:GPU_QUEUE_OK;}
+uint64_t xTaskGetTickCount(void){return ticks;}
+void vTaskDelay(uint64_t n){assert(n==1);ticks+=n;++delays;}
+int ss_live(void){return mode==16 && delays==2?-1:1;}
 void ss_progress(void) {}
 _Noreturn void ss_fail(uint32_t detail){terminal=detail;longjmp(done,1);}
 _Noreturn void ss_finish(const void *data,size_t bytes)
@@ -89,19 +100,22 @@ int main(int argc,char **argv)
  g.regions[GPU_LIFECYCLE_REGION_INPUT]=(struct ss_span){input,sizeof(input)};
  g.regions[GPU_LIFECYCLE_REGION_OUTPUT]=(struct ss_span){output,260};
  output[65]=0x12345678;output[66]=0x87654321;if(mode==1)g.devices=0;
+ if(mode==17)ticks=UINT64_MAX-100;
  if(!setjmp(done))gpu_lifecycle_main(&g);
- unsigned expected=mode;
+ unsigned expected=mode==15?0:mode>=16?4:mode;
  if(mode==5)expected=GPU_LIFECYCLE_RECOVERY && fail_at==1?9:5;
  if(mode==12)expected=6;if(mode==13)expected=GPU_LIFECYCLE_RECOVERY && fail_at==1?9:5;
  if(mode==14)expected=12;
  assert(terminal==expected && creates==(mode!=1));
- if(!mode){assert(submits==(GPU_LIFECYCLE_RECOVERY?2:10) && waits==submits);assert(closes==(GPU_LIFECYCLE_RECOVERY?1:10));assert(opens==(GPU_LIFECYCLE_RECOVERY?0:9));assert(recovers==GPU_LIFECYCLE_RECOVERY && releases==1 && peers==1);}
- if(mode==4)assert(submits==fail_at && waits==submits-1);
+ if(!mode || mode==15){assert(submits==(GPU_LIFECYCLE_RECOVERY?2:10) && waits==submits);assert(closes==(GPU_LIFECYCLE_RECOVERY?1:10));assert(opens==(GPU_LIFECYCLE_RECOVERY?0:9));assert(recovers==GPU_LIFECYCLE_RECOVERY && releases==1 && peers==1);}
+ if(mode==4 || mode>=16)assert(submits==fail_at && waits==submits-1);
  if(mode==5 || mode==6 || mode==12 || mode==13)assert(submits==fail_at && waits==fail_at);
  if(mode==7)assert(closes==fail_at);
  if(mode==8)assert(opens==fail_at && submits==fail_at);
  if(mode==9 || mode==10)assert(submits==1 && !closes);
  if(mode==11)assert(peers==1 && !closes);
+ assert(attempts==submits+delays);
+ assert(delays==(mode==4 || mode==17?500:mode==16?2:mode==15 || mode==18?3:0));
  assert(output[65]==0x12345678 && output[66]==0x87654321);return 0;
 }
 '''
@@ -114,8 +128,8 @@ for recovery in (0, 1):
     binary=a.build/('lifecycle-'+str(recovery))
     subprocess.run([a.cc,*flags,*definitions,'-fsanitize=address,undefined','-fno-sanitize-recover=all',
                     str(a.build/'fixture.c'),str(ROOT/'apps/gpu-lifecycle/main.c'),'-o',str(binary)],check=True)
-    selected=[(mode,1) for mode in ((0,1,2,3,4,5,6,7,8,11,13) if not recovery else (0,1,2,3,4,5,7,9,10,11,13,14))]
-    selected += ([(mode,10) for mode in (4,5,6,7,12,13)] + [(8,9)] if not recovery else [(mode,2) for mode in (4,5,6,13)])
+    selected=[(mode,1) for mode in ((0,1,2,3,4,5,6,7,8,11,13,15,16,17,18) if not recovery else (0,1,2,3,4,5,7,9,10,11,13,14,15,16,17,18))]
+    selected += ([(mode,10) for mode in (4,5,6,7,12,13,15,16,17,18)] + [(8,9)] if not recovery else [(mode,2) for mode in (4,5,6,13,15,16,17,18)])
     for mode,at in selected:
         subprocess.run([str(binary),str(mode),str(at)],check=True,env={**os.environ,'ASAN_OPTIONS':'detect_leaks=0'})
         cases.append({'recovery':bool(recovery),'injected_failure':mode,'at':at})

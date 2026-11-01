@@ -46,6 +46,7 @@ struct pvr_gpu_stop {
     struct pvr_gpu_control *control;
     void *context;
     uint64_t deadline, last_now;
+    uint64_t last_read; /* Last successful register sample, retained on failure. */
     uint32_t phase, error, index, count;
     uint32_t acknowledgement[2], command_status[2], isolation_observed, isolation_started, irq_status;
     uint32_t unacknowledged;
@@ -88,7 +89,7 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *);
  * register step and isolation. It starts at the register sequence: the same
  * interrupt acknowledgement, idle polls and DM association clears, then, as
  * upstream's pvr_fw_stop ends, the soft reset of every unit (a 64-bit write
- * of SOFT_RESET), followed by an exact readback, which halts the still running firmware processor, then
+ * of SOFT_RESET), followed by one completed read to fence the write through SOCIF, then
  * the isolation callback. The idle polls are the evidence that no GPU memory access is
  * in flight; when one does not match before the deadline the stop fails,
  * and the GPU must stay powered until a power removal. */

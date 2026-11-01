@@ -19,14 +19,10 @@ Recognition, models, manifests, capture wrappers and recognition checks belong
 to mimus; SunstoneOS owns the [application ABI](../designs/app-abi.md) and
 shared device services. The [layering audit](../layering-audit.md) lists defects.
 
-The three baseline builds and recorded QEMU parity have evidence under
-`~/.cache/sunstoneos/build/tool-gates-land-1031/` and
-`~/.cache/sunstoneos/build/integrate-streams-1031/`. Current OS-only,
-hello-compute and external-mimus baseline builds pass under
-`~/.cache/sunstoneos/build/check-selection-1031/followup-e124/`. The selected kernel,
-eight-core scheduling model, shared-helper, dashboard, PMIC and power-domain
-integration gate passes under
-`~/.cache/sunstoneos/build/check-selection-1031/final/gate-final-core/`.
+OS-only, hello-compute and external-mimus baseline builds pass. Their current
+logs are under `~/.cache/sunstoneos/build/check-selection-1031/followup-3/`.
+The OS builds clear external application selectors; the mimus build uses the
+checkout in the application source record.
 
 The SPI fixture exercises DMA interrupt completion, including latched DONE,
 request shutdown and reap cleanup. The provider-clock fixture supplies valid
@@ -35,27 +31,24 @@ under `followup-e124/host-fixes/` in the check-selection build directory.
 The I2S runtime initializer includes its route; `baseline-os-build.log` records
 a successful `i2s-file-model` build.
 
-Three host checks have assigned blockers:
+The full integration selection has passing evidence for the central build,
+all twelve OS variants, seven core checks and 84 indexed checks. Evidence
+combines unchanged successes at `c2c18e06` with the repaired runner-delegation
+fixture at `dbac57af` and nine remaining checks. The runner owns capture bounds;
+the delegation fixture verifies its arguments and exit status before USB access.
+No driver or application failure appears in this selection.
 
-- The board-runner/admission maintainer owns
-  `checks/audit-build-harness-supervised-claims.py`. It calls removed admission
-  APIs and checks the superseded queue policy. Reconcile its refusal cases with
-  the shared runner contract before using it as admission evidence.
-- The GPU lifecycle maintainer owns the obsolete texture fairness fixture;
-  [GPU status](gpu.md) states the required timing model.
-- The shared host-environment coordinator owns the missing NumPy dependency;
-  [NPU status](npu.md) states the affected check.
+The evidence root is
+`~/.cache/sunstoneos/build/check-selection-1031/followup-3/`:
 
-H.264 capture and SAE checks require external inputs and remain pending.
+- `gate-links-full/` records the builds, core checks and 74 indexed successes.
+- `capture/focused.log` records the repaired delegation fixture.
+- `gate-resumed/` records the nine previously unexecuted checks.
+- `check-index-after-capture.log` verifies 790 entries, including 89 pure-host
+  checks. Hook fixtures are skipped because their inputs are unchanged.
 
-The full integration gate on `58317dce` completes the central build, all twelve
-OS variants, seven core checks and thirteen indexed checks before stopping at
-the supervised-claims audit's missing `PREREQUISITES` API. Its elapsed time is
-113.49 seconds. The check index verifies 783 entries, including 87 pure-host
-checks. Hook fixtures are skipped because their inputs are unchanged.
-Logs, hook selection and cleanup-preservation configuration are under
-`~/.cache/sunstoneos/build/check-selection-1031/followup-e124/`; the full gate
-record is `gate-e124-full/`. This result leaves full integration blocked.
+H.264 capture, SAE and other checks requiring external inputs remain pending.
+These results establish no new physical qualification.
 
 Supervised/resident builds
 compose thermal, radio, I2S or headset services. Optional CPU/GPU/NPU builds
