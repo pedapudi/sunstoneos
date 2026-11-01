@@ -1,8 +1,8 @@
 """Prepare finite NPU development sessions; observations remain source-labelled.
 
 This adapter uses the NPU wire layout and finite return parser. A template
-supplies PMIC/pin configuration, not proof of physical qualification. Runtime
-readbacks and native guards establish the conditions they can observe.
+supplies PMIC/pin authority, not proof of physical qualification. Live pin
+readbacks supply the inherited electrical fields that native guards verify.
 """
 import hashlib
 import json
@@ -54,7 +54,7 @@ def initial_state(require, words):
 
 
 def session(finite, image_data, layout, template, live):
-    """Rebind native identities; retain the template's typed PMIC/pin settings."""
+    """Rebind identities and live PMIC pin settings; retain template authority."""
     require = finite.require
     size, boot, boot_bytes, npu, pmic, pins = layout
     require(tuple(layout) == (456, 224, 232, 72, 96, 128), 'NPU development layout differs.')
@@ -67,9 +67,20 @@ def session(finite, image_data, layout, template, live):
     sid = words[hex(0x0300624c)]
     code = (sid >> 16) & 255 or (sid >> 8) & 255
     require(code == 4, 'NPU development requires bin 4: vendor top 852 MHz at 800 mV.')
-    require(words[hex(0x07025000)] & 0xff == 0x22, 'NPU PMIC pins are not inherited R-TWI.')
-    # The pin handoff encodes ownership as well as mux/pull/drive. Preserve
-    # those typed fields rather than treating register observations as grants.
+    pin_words = []
+    for address in (0x07025000, 0x07025014, 0x07025024):
+        value = words.get(hex(address))
+        require(type(value) is int and 0 <= value <= 0xffffffff,
+                'Missing NPU PMIC pin readback: ' + hex(address))
+        pin_words.append(value)
+    pin_configs = []
+    for pin in range(2):
+        function, drive, pull = ((pin_words[0] >> (4 * pin)) & 15,
+                                 (pin_words[1] >> (4 * pin)) & 15,
+                                 (pin_words[2] >> (2 * pin)) & 3)
+        require(function == 2, 'NPU PMIC pins are not inherited R-TWI.')
+        require(drive <= 3 and pull <= 2, 'Unsupported inherited NPU PMIC pin electrical fields.')
+        pin_configs.append({'pin': pin, 'function': function, 'pull': pull, 'drive': drive})
     values, rates = [], []
     for index, address in enumerate((0x02002500, 0x02002580, 0x02002588)):
         require(not index or not words[hex(address)] & 0x18000000, 'NPU fabric clock has unsupported control bits.')
@@ -86,14 +97,22 @@ def session(finite, image_data, layout, template, live):
     build = finite.original.image_data(image_data)[2]
     raw[48:80] = build
     struct.pack_into('<6I', raw, boot + npu, *values, *rates)
+    # Expected and desired are identical in the native PMIC pin acquisition.
+    # Only its two electrical configurations change; the pin authorization,
+    # owner identities, IRQ authority and output-latch handoff stay intact.
+    for config in pin_configs:
+        struct.pack_into('<3B', raw, boot + pmic + 24 + 3 * config['pin'],
+                         config['function'], config['pull'], config['drive'])
     derived = {'fabric': values, 'rate_hz': rates, 'mhz': 852, 'supply_uv': 800000,
+               'pmic_pins': pin_configs,
                'configuration_template_sha256': sha(template),
                'physical_qualification': False,
-               'basis': 'template PMIC/pin configuration, live fabric/SID readbacks and native entry guards'}
+               'basis': 'template PMIC/pin authority, live pin/fabric/SID readbacks and native entry guards'}
     # Bind actual source-labelled records, without fabricating review or
     # measured electrical facts from a software template.
     records = [dict(live=live, derived=derived), {'clock_readbacks': live['words'], 'derived': derived},
-               {'template_pmic_pin_sha256': sha(template[boot + pmic:]), 'supply_check': 'native PMIC guard'},
+               {'template_pmic_pin_sha256': sha(template[boot + pmic:]), 'pmic_pins': pin_configs,
+                'supply_check': 'native PMIC guard'},
                {'watchdog_mode': 0xb1, 'session_seconds': 20, 'attempts': 1,
                 'normal_return': 'native quiescence, SRAM handback and watchdog disarm required'}]
     for at, record in zip((80, 112, 144, 176), records):

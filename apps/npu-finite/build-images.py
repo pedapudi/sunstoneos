@@ -63,7 +63,7 @@ def main():
         parser.error('The native NPU configuration template must contain 456 bytes.')
     (images / 'session-template.bin').write_bytes(template)
     provenance = {'template_source': str(args.template.resolve()), 'template_sha256': digest(args.template),
-        'template_bytes': len(template), 'purpose': 'PMIC/pin configuration only; fresh identities and live clocks are rebound',
+        'template_bytes': len(template), 'purpose': 'PMIC/pin authority only; live pin settings, clocks and fresh identities are rebound',
         'physical_qualification': False, 'images': []}
     for index, (name, (flag, jobs, stages)) in enumerate(PROFILES.items(), 1):
         directory = images / name
@@ -75,7 +75,8 @@ def main():
         terminal = ('NPU_STARTUP=READY_CLOSED_STOPPED; inference_jobs=0' if not jobs else
                     f'NPU_INFERENCE=MATCH; inference_jobs={jobs}')
         sequence = ' → '.join(f'`0x{s:04x}`' for s in [0x0101, 0x0102, *stages, 0x0503])
-        run = build / 'runs' / f'{index:02d}-{name}-{elf_hash[:12]}'
+        preparation_hash = digest(ROOT / 'apps/npu-finite/development.py')[:8]
+        run = build / 'runs' / f'{index:02d}-{name}-{elf_hash[:12]}-{preparation_hash}'
         commands = (f'SUNSTONE_USB_PORT=3-3 {sys.executable} {ROOT}/tools/run-ddr.py '
                     f'--fel {CACHE}/build/sunxi-a733/sunxi-fel --evidence {run}-ddr\n'
                     f'{sys.executable} {ROOT}/tools/dev-run.py npu --image {directory}/image.elf '
@@ -108,8 +109,11 @@ Use the coordinator's recovered, assigned port if it differs from 3-3. Stop at
 the first transport failure. These commands have not been executed here.
 Expected runner summary is `npu: returned; matched`. A watchdog return requires
 fresh DDR initialization before another attempt and never restores old SRAM.
-The template carries historical configuration; development preparation binds
-new session identities and reads live SID, fabric, routing and local reset state.
+The template supplies historical authority; development preparation binds
+new session identities and live PL0/PL1 mux, pull and drive settings. It also
+reads live SID, fabric, routing and local reset state. Expected and desired
+PMIC pin settings are equal; the native pin provider uses its existing
+disable/configure/restore sequence during acquisition.
 Active-NPU watchdog recovery remains physically unqualified.
 The startup failure diagnostic is described in apps/npu-finite/STARTUP-FAILURE.md.
 Run startup-only first; a repeated retained value 9 must now carry the earlier

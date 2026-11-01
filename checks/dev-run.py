@@ -717,6 +717,9 @@ def npu_native_cases(out, native):
                          hex(0x020025e0): 1 << 18, hex(0x070101ac): 1,
                          hex(0x020022ac): 0x30000000, hex(0x020022b0): 0xb0000, hex(0x07025000): 0x22,
                          **{hex(a): v for a, v in zip((0x02002500, 0x02002580, 0x02002588), fabric)}})
+    # The real port-3-3 capture has PL0/PL1 pull-up and drive code 1; the
+    # historical construction template has both fields zero.
+    live['words'].update({hex(0x07025014): 0x11111111, hex(0x07025024): 0x5})
     raw, profile, derived, records = helper.session(finite, image.read_bytes(), layout, template, live)
     assert 0x0300624c in helper.WORDS and 0x03006244 not in helper.WORDS
     shadow = json.loads(json.dumps(live))
@@ -728,7 +731,8 @@ def npu_native_cases(out, native):
         pass
     else:
         raise AssertionError('NPU used a neighboring SID word instead of its native DVFS word')
-    assert raw[224 + 96:] == template[224 + 96:]   # typed PMIC/pin authority retained
+    assert raw[344:350] == bytes((2, 1, 1, 2, 1, 1)), 'PMIC pins must adopt live pull/drive fields'
+    assert raw[320:344] == template[320:344] and raw[350:] == template[350:]  # authority is unchanged
     assert raw[48:80].hex() == facts['build_id'] and raw[24:48] != template[24:48]
     assert derived['mhz'] == 852 and derived['supply_uv'] == 800000 and not derived['physical_qualification']
     from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
@@ -751,6 +755,11 @@ def npu_native_cases(out, native):
         cpu.emu_start(symbols['npu_session_valid'], 0x43fff000, count=100000)
         return cpu.reg_read(UC_ARM64_REG_X0)
     assert native_valid(raw) == 1
+    asymmetric = json.loads(json.dumps(live))
+    asymmetric['words'].update({hex(0x07025014): 0x32, hex(0x07025024): 0x9})
+    pin_raw = helper.session(finite, image.read_bytes(), layout, template, asymmetric)[0]
+    assert pin_raw[344:350] == bytes((2, 1, 2, 2, 2, 3))
+    assert native_valid(pin_raw) == 1
     closed = json.loads(json.dumps(live))
     for address in (0x020025c0, 0x020025e0, 0x070101ac):
         closed['words'][hex(address)] = 0
@@ -760,7 +769,8 @@ def npu_native_cases(out, native):
     struct.pack_into('<I', bad, 224 + 72 + 12, derived['rate_hz'][0] + 1)
     assert native_valid(bytes(bad)) == 0
     for label, address, value in [('bin', 0x0300624c, 1 << 8), ('fabric', 0x02002500, 1 << 24),
-                                  ('pmic-pins', 0x07025000, 0), ('route', 0x03000008, 0),
+                                  ('pmic-pins', 0x07025000, 0), ('pmic-drive', 0x07025014, 0x40),
+                                  ('pmic-pull', 0x07025024, 0xc), ('route', 0x03000008, 0),
                                   ('local-reset', 0x02002b04, 0), ('pll', 0x020022a0, 0x80000000)]:
         changed = json.loads(json.dumps(live))
         changed['words'][hex(address)] = value
@@ -801,7 +811,8 @@ def npu_native_cases(out, native):
     (out / 'npu-session.bin').write_bytes(raw)
     passed('npu-real-image-native-session-validator', image_sha256=dev.digest(image),
            template_sha256=dev.digest(template_source), cases=['native-admit', 'closed-master-gates-native-admit', 'native-wrong-rate', 'wrong-bin', 'neighboring-SID-word', 'wrong-fabric',
-                  'wrong-pmic-pins', 'wrong-route', 'wrong-local-reset', 'wrong-pll', 'bundle-change', 'offline-cli'])
+                  'live-pmic-pull-drive', 'asymmetric-pmic-pins', 'wrong-pmic-pins', 'wrong-pmic-drive',
+                  'wrong-pmic-pull', 'wrong-route', 'wrong-local-reset', 'wrong-pll', 'bundle-change', 'offline-cli'])
 
 
 def npu_transport_case(out, finite, helper, os_host, bundle, live):

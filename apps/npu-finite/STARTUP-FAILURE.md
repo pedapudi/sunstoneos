@@ -46,10 +46,42 @@ Implemented diagnostics preserve the existing hardware sequence and bounds:
 - The shared returning transport selects the bundle's exact, hash-validated
   ELF for symbolization. It accepts both `board/image.elf` and `image.elf`.
 
-Unknown: the original failing startup predicate. The next startup-only run
-must either return `NPU_STARTUP=READY_CLOSED_STOPPED; inference_jobs=0`,
-or identify the earlier predicate through the symbolized first-failure
-record. A register offset is the low 16 bits of the physical address;
-use the symbolized source expression to identify its register bank.
-Retained value 9 can still follow that record and cannot overwrite it.
+## The PMIC pin handoff must describe the current inherited fields
+
+Observed in the subsequent run of ELF `89921f9c2958…`: startup stage 1
+records authority word `0x102` at `a733_npu_startup.c:497`. This is supply
+verification done plus PMIC provider fault, with provider READY absent.
+READY is sticky and only published after both provider baseline checks
+(`drivers/power/a733_pmic.c:440–447`). The verifier submits no rail request
+before READY (`drivers/power/a733_power_domains.c:295–297`).
+
+Observed in that run's session: bytes 344–349 describe PMIC pins PL0/PL1
+as function 2, pull 0, drive 0. Its captured R_PIO words instead have mux
+`0xffffff22`, drive `0x11111111` and pull `0x5`. Each pin therefore has
+function 2, pull 1, drive 1. Drive fields occupy four-bit slots; pull
+fields occupy two-bit slots (`drivers/pinctrl/a733_pin_tables.c:222–229`).
+The native pin provider compares all three fields exactly
+(`drivers/pinctrl/a733_pins.c:95–103`). A conflict faults PMIC startup
+before READY (`drivers/power/a733_pmic.c:430–438`).
+
+Observed in the host regression: the captured session reproduces that pin
+conflict. Corrected session preparation derives the six configuration bytes
+from live readbacks and retains the template's owner identities and pin
+authorization. Expected and desired settings remain equal. Pin acquisition
+uses the existing native disable/configure/restore sequence; this fix changes
+no pin-provider policy or voltage.
+
+Inferred: the stale pin fields explain the recorded provider failure.
+Unknown: whether an earlier baseline guard also fails on the board; its
+controller and clock readbacks were not captured. The next startup-only run
+must pass the pin conflict before it can qualify later supply and NPU work.
+
+Stage 1 depends on DCDC2 at 800 mV; the shared verifier also samples DCDC4.
+It does not sample CPU rails DCDC3/DCDC5. Their unnormalized selectors cannot
+directly cause this pre-READY pin conflict. The board device tree connects
+the NPU to DCDC2 (`sun60i-a733-orangepi-zero3w.dts:2931–2933`, vendor revision
+`2ac08e8c`). The bin-4 NPU point remains 852 MHz at 800 mV.
+
+Healthy output remains `NPU_STARTUP=READY_CLOSED_STOPPED; inference_jobs=0`.
+Retained value 9 can still follow a first failure and cannot overwrite it.
 Do not run inference images until startup-only returns normally.
