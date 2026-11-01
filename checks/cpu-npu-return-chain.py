@@ -114,6 +114,18 @@ class Native(owners.Model):
         admitted_epoch=self.u64(self.board+layout.layouts['board_application']['session']+
                                   layout.layouts['a733_board_session']['epoch'])
         self.put32(0x07090100,0x5c0d0000|(admitted_epoch&0xffff)) # modeled launcher tag
+        # Cached SMP startup metadata is an architectural admission input.
+        # The terminal completion/arrival flags remain zero until native code
+        # publishes them; no terminal barrier result is supplied here.
+        cached=layout.address('a733_cached_runtime')
+        cached_size=type_size(image.path,'a733_cached_runtime')
+        cached_fields=layout.layouts['a733_cached_runtime']
+        session_address=self.board+layout.layouts['board_application']['session']
+        admitted_deadline=self.u64(session_address+layout.layouts['a733_board_session']['deadline_us'])*24
+        for core in range(8):
+            self.put64(cached+core*cached_size+cached_fields['epoch'],admitted_epoch)
+            self.put64(cached+core*cached_size+cached_fields['diagnostic_deadline'],admitted_deadline)
+            self.put64(cached+core*cached_size+cached_fields['redistributor'],0x03460000+core*0x20000)
         self.put32(self.n+self.nf['started'], 1)
         self.put64(self.n+self.nf['end'], 55000000)
         self.put64(self.n+self.nf['initial_deadline'], 55000000)
@@ -315,7 +327,7 @@ class Terminal(terminal.Model):
                 ttbr0_el3=self.s['a733_cached_el3_l1'], icc_sre_el3=15, icc_igrpen1_el3=0)
             self.set('tpidr_el1', core);self.set('sctlr_el1', 0x30d01805)
             self.set('tcr_el1', 0x80803519);self.set('icc_sre_el1', 1);self.set('icc_sre_el2', 9)
-            self.put64(self.local['arrived']+core*8, epoch)
+            assert self.u64(self.local['arrived']+core*8)==0
             self.uc.mem_write(self.s['a733_cached_records']+core*128, struct.pack('<3Q', epoch, core, 3))
             rdist = 0x03460000+core*0x20000
             self.put32(rdist+0x14, 0);self.put32(rdist+0x10100, 0x40000001)
@@ -323,7 +335,7 @@ class Terminal(terminal.Model):
             if core:self.put32(0x07052008+core*0x1000, 8)
             self.uc.reg_write(prior.fault.REGS[0], core)
             self.uc.reg_write(UC_ARM64_REG_SP, self.s['a733_cpu_el1_stacks']+(core+1)*32768)
-            self.uc.reg_write(UC_ARM64_REG_PC, self.s['a733_qualification_terminal_el0'])
+            self.uc.reg_write(UC_ARM64_REG_PC, self.s['a733_qualification_worker_done'])
             contexts.append(self.uc.context_save())
         return epoch, contexts
 
@@ -548,7 +560,7 @@ def main():
         'os_npu_application', 'npu_runtime', 'npu_runtime_slot', 'npu_service',
         'a733_npu_controller', 'a733_npu_startup', 'ss_grant', 'npu_service_reply',
         'os_session', 'os_npu_session', 'nbg_assembly_layout', 'npu_runtime_tensor',
-        'a733_thermal_policy', 'os_thermal_readings', 'npu_service_activation'}
+        'a733_thermal_policy', 'os_thermal_readings', 'npu_service_activation', 'a733_cached_runtime'}
     layout = Image(args.elf, names)
     image = prior.fault.Image(args.elf)
     native = ownership(image, layout, payload)
@@ -560,6 +572,7 @@ def main():
     epoch, contexts = returns.from_owner(native)
     assert returns.execute(contexts, budget=4000000) == 'rom'
     assert not returns.postclean
+    assert all(returns.u64(returns.local['arrived']+core*8)==epoch for core in range(8))
     for ranges in returns.ranges:
         assert sum((hi-lo)//64 for lo, hi in ranges if POOL <= lo < POOL+POOL_BYTES) == 131072
     record = layout.address('ss_result_record')
@@ -589,7 +602,7 @@ def main():
         stages=['actual-host-GEMM-receipt','actual-public-SDK-mailbox-and-copy',
                 'actual-CLOSE','actual-worker-park','actual-bootstrap-local-stop',
                 'actual-immutable-report','actual-ss_finish','actual-owner-retirement',
-                'unmodified-state-to-eight-core-terminal','actual-native-reports',
+                'unmodified-state-to-eight-core-worker-done-arrival-barrier','actual-native-reports',
                 'production-runner-RAM-restoration','approved-post-ROM-helper-admission-and-RAM-restoration'],
         upstream_fault=dict(first_failure=failed.failures[0], terminal_entered=False),
         artifacts={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in
