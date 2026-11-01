@@ -36,6 +36,14 @@ static int validate(void *cookie, const struct a733_npu_command *c)
     }
     return 0;
 }
+static int window(struct npu_runtime_queue *q)
+{
+    unsigned failed = atomic_load_explicit(&q->runtime->failed, memory_order_acquire);
+    unsigned open = a733_npu_startup_window_open(q->runtime->startup);
+    if (!failed && open) return 1;
+    sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU), failed | open << 1, SUNSTONE_CRUMB_HERE());
+    return 0;
+}
 static int start(void *cookie, const struct a733_npu_command *c, uint64_t timeout)
 {
     struct npu_runtime_queue *q = cookie;
@@ -49,7 +57,9 @@ static int start(void *cookie, const struct a733_npu_command *c, uint64_t timeou
     const uintptr_t base = q->runtime->native.registers;
     /* VIPLite vip_drv_hardware.c:882-893: address, full barrier, fetch word.
      * Mapping, power and command validation belong to claim/registration. */
+    if (!window(q)) return 0;
     a733_mmio_write32_dsb_sy_after(base + 0x654, c->device);
+    if (!window(q)) return 0;
     a733_mmio_write32_dsb_sy_after(base + 0x3a4, 0x1ffff);
     return 1;
 }
@@ -60,7 +70,9 @@ static int complete(void *cookie)
     /* +0x010 is read-to-acknowledge. Read it once, as the vendor ISR does.
      * Completion requires event zero AND full idle before CPU acquisition.
      * A premature event is retained; no tick poll treats it as completion. */
+    if (!window(q)) return 0;
     const uint32_t events = *(volatile uint32_t *)(base + 0x10);
+    if (!window(q)) return 0;
     const uint32_t idle = *(volatile uint32_t *)(base + 4);
     __asm__ volatile("dsb sy" ::: "memory");
     q->last_events = events; q->last_idle = idle; q->observed = ticks();
