@@ -22,17 +22,154 @@ retirement reports.
 | Local stop and restart | Two matching jobs, four interrupt completions, normal return and restored DRAM | `1793514579021691740-d818fe48/` |
 | Switch conv12 to conv8 and back to conv12 | Three matching jobs, four interrupt completions, normal return and restored DRAM | `1793514712212240796-1a65224c/` |
 | Public application API | Two matching models, three interrupt completions, normal return and restored DRAM | `1793514867262701593-6a1aa965/` |
-| Domain OFF and restart | No accessible return within 46 seconds; instance quarantined and port paused | `1793514996007883230-40e64d60/` |
+| Physical domain OFF and restart | Unsupported; the frozen diagnostic has no accessible return within 46 seconds, and the instance is quarantined | `1793514996007883230-40e64d60/` |
 
 The [board queue](board-runner.md) validates finite NPU sessions and retirement
 receipts. The power-cycle run has no returned breadcrumb or first-failure record;
-its failing sub-step is unknown. Further physical attempts require coordinator
-recovery of port 3-3. The finite SDK diagnostic uses an EL1 application task;
+its failing sub-step is unknown. Port 3-3 is physically reconnected in FEL mode;
+further physical attempts require coordinator approval. The finite SDK diagnostic uses an EL1 application task;
 full OS EL0 mappings remain unqualified. These bounded successes do not qualify
 repeated transition reliability. Active-job reset recovery, thermal transitions,
 sustained operation and representative concurrent workloads remain unqualified.
 The [native application record](npu-application.md) preserves narrower historical
 attempts and their recovery evidence.
+
+## The supported NPU power boundary preserves shared SRAM
+
+**Observed:** the failed image is `image.elf`, SHA-256
+`5523f7c97f2896611ac7f3230d5a3df9c6e647085abd97cf43d251d0f1347e98`,
+from native source `593ce329`. Its queue entry is the domain-OFF row above.
+For this failed run, the coordinator confirms that port 3-3 disappeared from
+USB entirely. No native report or retained fault was recovered. The completed
+host transfers establish watchdog arming and acceptance of the launch command
+for `0x52000`. They do not establish which native power sub-step executed.
+
+### Supply sharing and the effective vendor path
+
+**Observed:** the cached Orange Pi V1.2 schematic, SHA-256 `4e0e92afbb1cca97…`,
+sheets 2, 6 and 8, connects NPU VDD to DCDC2 with VDD-SYS, VDD-DRAM, VDD-VE,
+VDD08-UFS, VDD-COMB0/1 and VDD08-HDMI. DCDC2 is an always-on shared supply.
+VDD-DRAM here names the SoC-side supply; it does not identify every LPDDR5
+supply. The board device tree binds `npu-supply` to DCDC2 and marks it
+boot-on and always-on (`board-kernel/sun60i-a733-orangepi-zero3w.dts:2123–2131,2931–2933`).
+
+| Consumer | Schematic supply | Relationship to DCDC2 |
+| --- | --- | --- |
+| NPU, SoC system fabric and SoC-side DRAM logic | DCDC2 | Shared; must remain powered |
+| A76 and A55 CPU cores | DCDC3 and DCDC5 | Separate CPU supplies |
+| USB core and management processor | DCDC9/ELDO7 | Separate core supply; shared combo-PHY digital supplies still include DCDC2 |
+| Analog PLLs, oscillator and VDD18-DRAM | CLDO3 | Separate analog supply |
+| USB analog and I/O circuitry | Several 1.8 V and 3.3 V rails | Separate from the NPU's internal PCK switch |
+
+**Observed:** the vendor PCK switch for NPU is domain 4, USB2 is domain 8,
+and GPU_TOP is domain 5 (`gpu-power/include/dt-bindings/power/sun60iw2-power.h:5–15`).
+Internal PCK domain gating does not turn the external DCDC2 regulator off.
+The native PMIC provider admits selector changes only for DCDC3/4/5 and has
+no regulator-enable write API (`drivers/power/a733_pmic.c:235–255`). Its
+DCDC2/4 verification consists of register reads. Rail unpin/release changes
+only software accounting (`drivers/power/a733_rail_leases.c:162–200`).
+The failed path therefore has no intentional DCDC2-disable or DCDC2-retune write.
+
+**Observed:** the pinned VIP2 platform initializes `enable_pm` false and sets
+it only under `CONFIG_AW_PM_DOMAINS` (`vip_drv_device_platform.c:102,1212–1214`,
+SHA-256 `a47f85f2266ec5a9…`). The selected board configuration leaves that
+option unset (`board-kernel-config/linux-sun60iw2-current-a733.config.a95129bf:892`).
+Its runtime OFF/ON hook consequently makes no PCK transition. The optional,
+enabled branch calls runtime put before local clock shutdown, and initializes
+local clocks before synchronous runtime get (`:419–439`). It does not disable
+the PMIC rail. The PCK callback writes a policy nibble, completes it with DSB,
+and polls status for at most 10 ms (`gpu-power/drivers/pm_domain/pck600_domains.c:105–123`,
+SHA-256 `2d9c2b60b3b264d1…`). That optional branch is not proof that the
+selected vendor board configuration cycles NPU power.
+
+### The failed program's write order
+
+**Observed source reconstruction:** the CPU memory-mapped register write inventory is saved
+under `~/.cache/sunstoneos/build/npu-wdt-1031/power-fault/` as
+`write-inventory.csv` and `write-inventory.json`. They enumerate conditional
+writes and repeated bus transactions in producer order. The accompanying
+`system-register-writes.json` records every linked `MSR` instruction by address
+and function; `failed-image.disasm` preserves the binary evidence. Interrupt,
+watchdog and service-task interleaving prevents a single source-derived total
+order. **Unknown:** the prefix that actually executed on the failed board.
+Graph-internal register programming belongs to the model command data;
+it does not address the SoC power controller or PMIC.
+
+| Phase, in dependency order | Register writes and controls |
+| --- | --- |
+| EL3 entry and interrupt routing | GIC distributor `0x03400000` and banked disable/group/configuration/priority/route words; CPU0 redistributor `0x03460000` and private interrupt page `0x03470000`. The inventory expands each offset and saved-state restoration. |
+| MBUS and security | Conditional update/reset sequence at `0x02002588` and `0x02002594`, then SPC/TZMA/security words from `include/a733_el3_security.h:47–55`; no PMIC mutation. |
+| Shared resource acquisition | Set NPU AHB bit 6 at `0x020025c0`, MBUS bit 18 at `0x020025e0`, and PCK clock bit 0 at `0x070101ac`, only when needed. |
+| PMIC pins and reads | Temporarily select disabled mux on PL0 then PL1 at `0x07025000`, restore function 2 in the same order. S_TWI0 DATA/CNTR at `0x07083008` and `0x0708300c` send address/index/read/STOP sequences for PMIC registers `ff,0e,0f,10,13,ff`, then `ff,0e,0f,10,15,ff`. No PMIC register data byte is written. |
+| Initial domain acquisition | Inherited ON causes no PCK write. Inherited coherent OFF would cause the five timing writes listed below, followed by ON policy and a status poll, before local opening. |
+| PLL and local open | Optional PLL_NPU gate/control writes at `0x02003920` and `0x020022a0`; LOCK and settle precede output enable. Clear SRAM-route bit 1 at `0x03000008`; release AHB, AXI, core resets at `0x02002b04`; select PLL/divider at `0x02002b00`; enable bus then module gates. |
+| Controller and inference | NPU `0x03600000` offsets `000,104,10c,3a8` implement two reset passes; then `55c,090,000,3a8,03c,100,3b4,388,104,10c,090,414,014` configure the engine. Command address `654` precedes barrier/fetch trigger `3a4`. The inventory lists every repeated value. |
+| CLOSE and local stop | Engine interrupt `+014=0`, MMU `+388=0`; IRQ97 mask/retirement. Clear module gate, bus gate, AHB/AXI/core reset-release bits; set CPU SRAM-route bit 1. PLL and shared rails remain owned. |
+| Added physical OFF | `0x07064170=1f1f1f`, `174=1f1f`, `c00=08080808`, `c04=808`, `c10=8`, then `0x07064000` policy low nibble 0; DSB and status `+8` polling. No PMIC write. |
+| Added physical ON | The same five timing writes, then policy low nibble 8 and status poll; local reopening, a fresh bootstrap/job, CLOSE and stop follow. Native master-gate checks precede ON, while the optional vendor path opens local clocks first. |
+| Recurring progress and watchdog | RTC offsets `100,104,10c,110,114,118,11c` from `0x07090000`; WDT restart `0x0205000c=14af`. Fault exit may select short WDT mode. |
+| Normal ROM return | Restore saved GIC state, ensure CPU SRAM routing, disarm WDT at `0x02050014`, clean caches, write CPU0 RVBAR low `0x08001004=20` and high `0x08001008=0`, then `RMR_EL3=2`. No USB-controller or PMIC-rail write occurs. |
+
+The controller order is defined by `a733_npu_controller.c:105–178,277–288`.
+The failed power API starts at ELF `0x4100f3a0`, restart at `0x4100fdbc`,
+and power service at `0x4101dd24`. All addresses name the SHA-256 above.
+
+### Recovery evidence does not establish whether WDT0 expired
+
+**Observed:** A733 manual V1.00 §2, Arm A76/A55 memory map, describes shared
+SRAM `0x74000–0xf3fff` and explicitly says “NPU cannot power off.” The cached
+text is `camera-research/A733_User_Manual_V1.00.txt:1291–1308`, SHA-256
+`219d3c21e5377d18…`. ROM uses this window for its `0xf3400` stack and `0xee800`
+FEL scratch (`docs/vendor-firmware/boot-rom-and-boot0.md`).
+
+**Inferred:** physical NPU OFF can remove SRAM needed by ROM. If OFF closes
+a master gate, the failed path can refuse its own ON precheck and retain
+PCK4 OFF. A subsequent reset could then fail before USB enumeration if that
+OFF state persists. **Unknown:** whether PCK4 survives WDT reset and whether
+this chain occurred. Absent USB does not establish that WDT failed to fire.
+Full-reset boot dispatch can also select storage rather than FEL.
+
+**Observed alternate gap:** the frozen image disarms WDT at call address
+`0x41026d34`, before whole-cache cleaning in the return tail at `0x4102b048`.
+A stall there has no armed watchdog. **Unknown:** whether execution reached
+that tail. No rail-loss or watchdog-expiry cause is established by this run.
+
+### Correction and next control
+
+**Implemented, host-verified:** the power-domain request API and owner release
+path refuse domain-4 OFF before changing generation, pins, count or hardware.
+The NPU physical-OFF/restart APIs record shared-supply/shared-SRAM refusal
+and retained authority/ownership inputs before returning terminal retention.
+A pending counted-row observation is recorded as unknown. DCDC2 is treated as
+physically shared even when no other software token exists. No new PMIC or
+domain read is needed to enforce the board policy.
+
+Local clock stop/restart remains supported. New group-6 stages precede each
+local stop/open table step, SRAM route, PLL output opening, PCK delay word,
+policy and status operation. `NPU_POWER_PRECHECK`/`NPU_POWER_REFUSED` distinguish
+policy refusal from a later generic failure. The first-failure value has bit 0
+for shared DCDC2, bit 1 for SRAM power dependence, and bit 2 for a previously
+verified supply. Full ownership observations remain in the startup object.
+The [power contract](../apps/npu-finite/POWER-CYCLE.md) specifies these limits.
+The current development runner refuses physical-OFF profiles before capture.
+The board-image inspector independently refuses them even when a selected
+frozen host parser still accepts the old image. Host cases exercise the failed
+ELF and establish refusal before board-backend construction.
+
+Independent correctness, hardware-safety and recovery panels approve the design
+before coding and the final code. Host cases prove no forbidden OFF hardware
+write or ownership mutation, DCDC2 refusal with sole shared/exclusive software
+holders, delayed supported PCK transitions and unchanged local restart.
+Physical domain OFF is unsupported; this change does not qualify it or identify
+the failed board's exact stopping point.
+
+No new board image is built while the queue is unavailable. After coordinator approval,
+propose one local clock stop/restart control with PCK4 held ON and DCDC2 at
+800 mV, expecting two matching jobs, four interrupt completions, verified DRAM
+restoration and normal return. The known frozen control is
+`~/.cache/sunstoneos/build/npu-wdt-1031/images/local-restart/image.elf`, SHA-256
+`a09bae93da5d0fe776dd94fb36504ff633fd0f1c681da0cb541174ccea8f7f59`.
+The separate physical-OFF image must not be resubmitted.
 
 The host model inspector passes a reference comparison.
 [Page-table construction](npu-mmu.md) and the
