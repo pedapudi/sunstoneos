@@ -83,14 +83,13 @@ static struct os_thermal_window {
     unsigned first,collecting;
     atomic_uint ready;
 } window;
-extern unsigned mimus_board_generation(void);
 void os_thermal_record_begin(void)
 {
     if(atomic_load_explicit(&window.ready,memory_order_relaxed)||window.collecting)return;
     unsigned n=atomic_load_explicit(&readings.count,memory_order_acquire);
     window.first=n?n-1:0;window.collecting=1;
     window.header.begin_us=a733_smp_counter()/24;
-    window.header.recognition_generation=mimus_board_generation();
+    window.header.recognition_generation=os_application_activity_generation();
 }
 void os_thermal_record_end(int success)
 {

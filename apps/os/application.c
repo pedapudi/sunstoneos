@@ -7,6 +7,9 @@
 #include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
 #include "boot.h"
+#ifdef SUNSTONE_NEWLIB
+#include "runtime.h"
+#endif
 #include <string.h>
 #ifdef SUNSTONE_A733_OS_HEADSET
 #include "../bluetooth/bluetooth.h"
@@ -15,7 +18,7 @@
 #include "cpu-return.h"
 #endif
 static struct ss_grant grant;
-static atomic_uint prepared,finished,usb_ready;
+static atomic_uint prepared,finished,usb_ready,activity_generation;
 static atomic_uint_fast64_t observed_until;
 static struct a733_typec_token attachment;
 static TaskHandle_t main_task;
@@ -46,7 +49,9 @@ int ss_clock_ready(void)
 void ss_activity_begin(void)
 {
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
-    void os_thermal_record_begin(void);os_thermal_record_begin();
+    void os_thermal_record_begin(void);
+    atomic_fetch_add_explicit(&activity_generation,1,memory_order_relaxed);
+    os_thermal_record_begin();
 #endif
 }
 void ss_activity_end(int success)
@@ -65,6 +70,16 @@ int ss_clock_info(char *line,size_t bytes)
     (void)line;(void)bytes;return 0;
 #endif
 }
+size_t ss_heap_peak(void)
+{
+#ifdef SUNSTONE_NEWLIB
+    return runtime_heap_peak();
+#else
+    return 0;
+#endif
+}
+unsigned os_application_activity_generation(void)
+{return atomic_load_explicit(&activity_generation,memory_order_relaxed);}
 /* Only the USB2 owner accesses mutable attachment state. */
 void os_application_host_observed(int ready)
 {
@@ -150,7 +165,15 @@ int os_application_prepare(void)
 {
     const struct os_session *s=os_session_admitted();const struct ss_manifest *m=ss_application.manifest;
     if(!s||atomic_load_explicit(&prepared,memory_order_acquire))return 0;
-    if(!m)return 1;
+    if(!m){
+#ifdef SUNSTONE_SMP_NEWLIB
+        void runtime_smp_init(void);runtime_smp_init();
+#endif
+#ifdef SUNSTONE_NEWLIB
+        runtime_init();
+#endif
+        return 1;
+    }
     grant.devices=os_session_devices();grant.region_count=m->region_count;
 #ifdef A733_A76_ADMITTED
     grant.main_core=m->cluster==SS_CLUSTER_A76?6:2;
@@ -186,6 +209,12 @@ int os_application_prepare(void)
     if(!main_task)return 0;
 #ifdef SUNSTONE_A733_OS_GPU_LINEAR
     os_recognizer=main_task;
+#endif
+#ifdef SUNSTONE_SMP_NEWLIB
+    void runtime_smp_init(void);runtime_smp_init();
+#endif
+#ifdef SUNSTONE_NEWLIB
+    runtime_init();
 #endif
     if(ss_application.init)ss_application.init();
     return 1;

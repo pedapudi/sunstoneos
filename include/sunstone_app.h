@@ -143,6 +143,8 @@ void ss_activity_begin(void);
 void ss_activity_end(int success);
 /* Copy the admitted CPU operating-point description; 0 without a grant. */
 int ss_clock_info(char *line,size_t bytes);
+/* High-water byte count of the image C/C++ heap. */
+size_t ss_heap_peak(void);
 /* Capture grant->capture_frames frames (up to that bound for a headset
  * segment, which may end early) for sequence number `sequence` in the
  * manifest's format from the granted capture device; a later sequence
