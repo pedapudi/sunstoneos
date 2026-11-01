@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 if not __debug__:
     raise RuntimeError('Checks require assertions.')
+from harness import CLANG, LLD
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'tools'))
 import board
@@ -77,9 +78,9 @@ def fixture(out, flags=1, host=True, weak=False, generic=False, pool=None, class
                       '.rodata : { *(.rodata) } :text sunstone_manifest : { *(sunstone_manifest) } :text ' +
                       ('.bss 0x41200000 (NOLOAD) : { *(.bss) } :data .monitor 0x42005000 (NOLOAD) : { *(.monitor) } :monitor ' if generic else '') +
                       (f'.uncached_pool {pool[0]} (NOLOAD) : {{ *(.uncached_pool) }} :pool ' if pool else '') + '}\n')
-    subprocess.run(['/usr/bin/clang-21', '--target=aarch64-none-elf', '-c', source,
+    subprocess.run([str(CLANG), '--target=aarch64-none-elf', '-c', source,
                     '-o', out/'fixture.o'], check=True)
-    subprocess.run([images.LLD, '-T', script, out/'fixture.o', '-o', out/'fixture.elf'], check=True)
+    subprocess.run([str(LLD), '-T', script, out/'fixture.o', '-o', out/'fixture.elf'], check=True)
     return out/'fixture.elf'
 
 
@@ -93,6 +94,9 @@ def args_for(image, evidence, approved=False):
 
 
 def admission(out):
+    reasons = {'power-removal': 'Probe requires power removal or lacks normal-return capability.',
+               'weak-quiesce': 'Probe requires a strong implementation of quiesce.',
+               'no-host': 'USB class kind requires the linked native USB host controller.'}
     variants = [('returnable', 1, True, False, True), ('power-removal', 2, True, False, False),
                 ('weak-quiesce', 1, True, True, False), ('no-host', 1, False, False, False)]
     for name, flags, host, weak, accepted in variants:
@@ -101,8 +105,8 @@ def admission(out):
         image = fixture(folder, flags, host, weak)
         try:
             info = images.inspect(image, 'usb-class')
-        except ValueError:
-            assert not accepted, name
+        except ValueError as error:
+            assert not accepted and reasons[name] in str(error), (name, str(error))
         else:
             assert accepted and info['native_probe'] and info['usb_class']
             args = args_for(image, out/'offline', True)
@@ -128,8 +132,10 @@ def admission(out):
                 struct.pack_into('<Q', altered, index*8, value)
                 try:
                     probe.receipt(altered, plan)
-                except ValueError:
-                    pass
+                except ValueError as error:
+                    reason = ('Probe receipt is incomplete or belongs to another session.' if index == 3 else
+                              'Probe receipt lacks complete cleanup/retirement.')
+                    assert reason in str(error), str(error)
                 else:
                     raise AssertionError('Invalid USB cleanup receipt accepted')
         passed('native-contract-'+name)
@@ -146,6 +152,10 @@ def admission(out):
             result = board.run_image(args, no_access)
         assert result['outcome'] == 'refused-before-launch' and not result['launch_attempted']
         assert result['first_failure']['site'] == 'preflight'
+        reason = ('requires --approved-by coordinator' if name == 'approval' else
+                  'require the native probe contract' if name == 'retained' else
+                  reasons['power-removal'])
+        assert reason in result['first_failure']['detail'], result['first_failure']
         passed('before-device-'+name)
     args = args_for(image, out/'unused', True)
     args.worker, args.hypothesis = 'host-model', 'Native probe route freezes no CPU template'
@@ -203,8 +213,8 @@ def typed_inputs(out):
         target = fixture(place, generic=True, pool=pool)
         try:
             spans = records.backup_regions(target)
-        except ValueError:
-            assert not accepted
+        except ValueError as error:
+            assert not accepted and 'USB backup pool lacks its exact linked allocation.' in str(error), str(error)
         else:
             assert accepted and {'address': 0x42200000, 'bytes': 0x800000} in spans
         passed('linked-backup-pool-'+name)

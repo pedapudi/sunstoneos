@@ -258,22 +258,39 @@ static int serve(void)
     return 1;
 }
 void os_storage_service(void){if(!serve())board_fail(NULL);}
+#ifdef SUNSTONE_BOARD_USB2_IRQ
+static void host_wait(void)
+{
+#ifdef SUNSTONE_BOARD_HOST_DEADLINE
+    /* The designated owner snapshots mutable host state before blocking.
+     * Applications still use the mailbox; no EL0 caller enters the driver. */
+    board_host_irq_schedule(a733_usb2_host_deadline(&board.host),
+        a733_usb2_host_work_pending(&board.host));
+#endif
+    board_host_irq_wait();
+}
+#endif
 void board_host_task(void *unused)
 {
     (void)unused;board.host.dual_leaf=!!(os_session_devices()&SS_DEVICE_USB_KEYBOARD);
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
-    const struct os_usb_service_ops service_ops={usb_request_wake,usb_release,usb_write,usb_configure,usb_configured,usb_changed};
+    const struct os_usb_service_ops service_ops={.wake=usb_request_wake,
+        .release=usb_release,.write=usb_write,.configure=usb_configure,
+        .configured=usb_configured,.changed=usb_changed};
     os_usb_service_init(&service_ops,NULL);
     a733_usb2_generic_enable(&board.host);
     a733_usb2_set_input(&board.host,usb_input,NULL);
     struct sunstone_usb_transport *transport=a733_usb2_transport(&board.host);
     if(os_usb_serial_native_start(transport)!=1)board_fail(NULL);
 #endif
+#ifdef SUNSTONE_BOARD_HOST_DEADLINE
+    if(!board_host_irq_deadline_init())board_fail(NULL);
+#endif
     for(;;){
         if(!board_live(NULL))break;
 #ifdef SUNSTONE_BOARD_USB2_IRQ
         int ready=board_host_irq_before();if(ready<0)break;
-        if(!ready){board_host_irq_wait();continue;}
+        if(!ready){host_wait();continue;}
 #endif
         enum a733_usb2_result r=a733_usb2_native_poll(&board.host);
         if(r==A733_USB2_RETAINED||r==A733_USB2_INVALID)break;
@@ -290,7 +307,7 @@ void board_host_task(void *unused)
         os_application_host_observed(r==A733_USB2_READY);
         if(r==A733_USB2_READY&&!serve())break;
 #ifdef SUNSTONE_BOARD_USB2_IRQ
-        board_host_irq_wait();
+        host_wait();
 #else
         vTaskDelay(1);
 #endif
