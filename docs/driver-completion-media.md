@@ -1,7 +1,8 @@
 # Media register completion audit
 
 This audit covers every file in `drivers/camera`, `drivers/display`,
-`drivers/video`, `drivers/deinterlace` and `drivers/g2d`. It separates a stored
+`drivers/video`, `drivers/deinterlace` and `drivers/g2d`: 45 files, comprising
+14 camera, 17 display, ten video, two deinterlace and two G2D files. It separates a stored
 configuration readback from an observed hardware transition. The reader is
 assumed to understand MMIO, DMA and deadline-based driver state machines.
 All conclusions are source inspections or host models; physical completion and
@@ -62,6 +63,44 @@ manifests supply their revision, URL, hash and license.
 | G2D | `g2d-assessment-20261020/g2d_rcq/` | [G2D manifest](../apps/g2d/sources.json) |
 | DI | `deinterlace-native/bsp/drivers/di/drv_div3x/lowlevel_v3x/di301/` | [DI manifest](../apps/deinterlace/sources.json) |
 
+## Native providers complete writes before dependent operations
+
+A Data Synchronization Barrier (`DSB SY`) completes preceding explicit memory
+accesses before execution continues. A volatile access or Data Memory Barrier
+(`DMB`) alone does not establish write completion. Completion of a CPU write
+also does not establish a device's internal transition, DMA drain or output
+visibility; those still require the status and ownership conditions below.
+
+The following paths reach actual native providers, including application-owned
+adapters. `both` means `DSB SY; access; DSB SY`; `after` means
+`access; DSB SY`, as implemented in `include/a733_mmio.h`. Every listed native
+write completes before its callback returns. A timer sample taken after that
+return can anchor an inter-write minimum. Host replacements of these providers
+need separate ordering tests.
+
+| Completion-sensitive sites | Effective native provider and barrier | Pinned source order and delay |
+| --- | --- | --- |
+| DISPLL enable/UPDATE, N, dividers and second UPDATE | `apps/dsi-scanout/native.c:pll_write` → `platform/a733/display_native_io.c:a733_display_native_write`, `both`. The driver also calls the native `barrier` after every write before readback. | Display `phy/sunxi_dsi_combophy_reg.c:displl_clk_enable/displl_clk_set`: enable fields → UPDATE → lock samples; N → 20 µs → dividers → UPDATE. Native reported targets are 6 µs between lock samples, 21 µs after N and 25 µs after lock. The N delay begins after write completion and readback. |
+| DSI PHY analog enable, host enable, instruction packet/graph, low→high instruction start and video exit graph | `display_scanout.c` → `a733_display_native.c` → `platform/a733/display_native_io.c`, `both`; panel command callbacks in `apps/dsi-scanout/native.c` reach the same provider. Explicit driver barriers also precede host enable and instruction start. | Display `sunxi_dsi_io_open`, `dsi_v1.c:dsi_start/dsi_close`: preserve field and graph order, source 1 µs analog minimum, 5 µs lock spacing and 20 µs settle. Reported targets are 2/6/21 µs. PHY analog shutdown, LVDS and SSC source delays belong to unimplemented paths; they are not implied by this start sequence. |
+| DE enable, double-buffer READY, RCQ address/length and submit | Native scanout uses `display_native_io.c`, `both`; framebuffer and DP setup use `a733_display_framebuffer.c:raw_write`, `both`. Framebuffer replay delegates through `apps/gpu-display/display.c` to `a733_display_native_rcq_submit`. That helper uses plain busy/control reads and one update write within a task critical section, then `DSB SY` before leaving. | DE `de_top.c:de_top_set_double_buffer_ready/de_top_set_rcq_update`: publish configuration/header before update; no selected inter-write delay. RCQ busy eligibility and fresh finish/frame-end observations remain necessary. |
+| LCD/TV TCON timing and channel enable; HDMI TOP/TX reset and PLL; PHY I2C and DDC requests | LCD uses the display provider above. TV/HDMI use `platform/a733/hdmi_native.c:write8/write32`, `both`; `a733_hdmi_phy.c:a733_hdmi_write` additionally invokes the native `barrier` after every write. | HDMI `phy_top.c:top_phy_config` requires 20 µs after lock; `dw_phy.c` requires 5 µs SVSRET pulse, 10 µs I2C poll spacing and 5 µs TX lock spacing. Native guards are 21/6/11/6 µs. The separate 50 ms TCON warmup has no established source minimum. |
+| DP reset release, clock/power requests, voltage/pre-emphasis and AUX/training requests | `a733_dp_cadence.c` → `a733_dp.c` → `apps/displayport/native.c:raw_write`, 16- or 32-bit `both`; explicit `barrier` issues `DSB SY`. | DP `phy/sunxi-cadence-combophy.c`: reset stages and selected requests retain 1 ms holds, status polling 5 µs, level changes 10 µs and AUX analog setup 10 ms. `wait_io` starts after the completed operation and requires elapsed reported time greater than its argument. Controller AUX/training spacing remains explicit. |
+| Camera analog reset/reference/LDO/calibration; CSI parser capture; VIPP parameter address→READY; DMA address/enable/acknowledgment | `a733_camera_native.c:analog_write/csi_write/route_write/dma_write` → `write_word` → `store`, 32-bit `both`. Model-only load/store hooks bypass this assembly and cannot prove it. | Camera `combo_csi_reg.c`, parser setters, `vipp200_reg.c` and `dma140_reg.c` preserve their selected setter order. Calibration FLAG/result, VIPP load and DMA events supply separate completion; these low-level selected setters establish no additional fixed inter-write delay. |
+| Sensor power/reset/PWDN lines and sensor register/table writes | `a733_camera_native.c:sensor_line` → `a733_pins_write_outputs` → `a733_pins_native.c`, `both`. `sensor_bus` drives `a733_twi_poll` through `a733_twi_native.c:store`, `both`, and returns only after transaction completion. | Upstream `ov5640.c` power/mode helpers retain 5 ms power, 1 ms PWDN, 20 ms reset, table delays and 500 µs mode settle. `ov5640.c:delay` anchors its guarded target after each completed callback. DSB completes controller writes; TWI completion establishes the sensor transaction boundary. |
+| ISP0 prepare and retained rearm: load addresses→ISP/VIPP READY→TOP GEN→START | `apps/isp0/native.c:engine_write/dma_write` → `store`, `after`; reads use `both`. Consecutive GEN and START callbacks each complete their write. Rearm clears observed status, refreshes the load address and READY before a separate trigger. | Camera `top_reg.c:csic_ptn_generation_en`, ISP600 `sunxi_isp.c` PARA_LOAD handling and `isp600_reg_cfg.c` address/update setters, pinned by `isp0-replay-sources.json`. The selected setters contain no fixed inter-write delay. ISP/VIPP load and TOP START clear remain independent completion conditions. |
+| ISP0 device interrupt enables→GIC rearm and interrupt mask→owner notification | `apps/isp0/irq.h` uses the preceding native `store`, `after`, before `gicv3_spi_rearm`; `drivers/gpu/gicv3_spi.c` fences distributor writes with `DSB SY`. | ISP600 SAVE/LOAD, VIPP load and DMA capture bits are pinned by the replay manifest. The adapter waits for GIC RWP/inactive state, clears owned pending state and programs device enables before rearm. These barriers do not replace deferred GIC status checks. |
+| VE PLL factors/enable/lock-enable→LOCK→output gate; module clocks and external/local reset | `a733_video_platform.c` and `a733_video_encode_platform.c` native operations → `a733_video_unit.c:a733_video_unit_native_write`, explicit `DSB SY` before access and after write; reads use `both`. | Pinned `ccu_gate.c/ccu_nm.c`, manual §§4.1.4.1–2 and `ccu_common.c:ccu_helper_wait_for_lock`: three LOCK samples at 3 µs spacing, then 20 µs. Shared `a733_pll_lock.h` guards these with 4/21 reported µs. `ccu_reset.c:ccu_reset_reset` holds external reset 10 µs; native target is 11 µs. |
+| H.264/HEVC VLD flush→busy check, decode trigger→status; JPEG decode/encode and H.264 encode reset/trigger/header command→status | Decoder platform adapters and encoder platform adapters reach the preceding video-unit native writer for byte or word accesses. Each reset pulse, flush and trigger write reaches `DSB SY` before a dependent write or poll. | Cedrus flush/trigger helpers and the pinned encoder register inventories define command order. Busy/success/error observations below remain required. No additional inter-write minimum is established by the selected codec references; binary-derived register order alone cannot establish an omitted delay's absence. |
+| DE_SYS power request, framebuffer reset, shared media clocks and IOMMU publication | Framebuffer `raw_write`, `both`; shared `a733_media_clock_native_write` uses `DSB SY` before its ownership read and after its write. G2D domain-row callbacks use its native `store`, `after`. | Pinned PCK600 delay-register programming precedes ON request and status polling. Delay-register values are hardware configuration, not elapsed CPU holds. Framebuffer's external reset target is 11 reported µs under its existing native 10 µs policy; no vendor minimum is established. |
+| G2D RCQ address/length→enable; task-end acknowledgment→mixer reset low→high→output copy | `apps/g2d/native.c:store`, `after`; readback uses `both`. The application fences each bounded copy as well. `drivers/g2d` builds immutable RAM commands and performs no MMIO. | Pinned `g2d_rcq/g2d_top.c` submit/reset helpers and selected successful IRQ path preserve acknowledgment and reset order before completion delivery. No selected reset hold is specified. CPU barriers and the success-path reset supply no independent fabric-drain proof. |
+| DI stale finish acknowledgment→masked configuration→START; following-job acknowledgment before new configuration | `apps/deinterlace/native.c:store`, `after`; readback uses `both`. `drivers/deinterlace/di-port.h` volatile accessors address RAM images through `di_dev_set_reg_base`, not physical registers. | DI301 configuration and `di_driver.c:894–920` successful completion preserve job ordering. Native code retains the finish latch through copy and acknowledges it before the next job. The selected RAM setters require no delay; the unused source lifecycle delay is refused by `di_port_violation`. |
+| Page tables/parameter RAM/input publication before media triggers | Camera uses `aarch64_device_cache`; display/framebuffer, codec, ISP0, DI and G2D publication adapters use `DSB SY` after preparing their admitted RAM. Subsequent trigger writes use the providers above. | Existing DMA/cache and IOMMU contracts remain required. A barrier completes CPU publication; it cannot establish ownership, mapping validity or an accelerator's completed writes. |
+
+No missing native completion barrier or lost source inter-write delay was
+confirmed in these selected implemented paths. This is source inspection,
+without a physical ordering claim. Unsupported shutdown, LVDS and SSC paths,
+codec binary timing and the existing drain gaps remain outside that conclusion.
+
 ## Display completion sites
 
 Offsets below are relative to the named block. Repeated ordinary configuration
@@ -98,7 +137,7 @@ completion indication.
 | `a733_camera_route.c:program`, `a733_camera_route_poll` | VIPP READY/capture `0x40`; load interrupt `0x30[8]` | Camera `vin-vipp/vipp200/vipp200_reg.c:__vipp_set_para_ready`, capture setters | READY is excluded from stable verification. Capture disable polls until clear without repeating its write. Final status requires the parameter-load indication; no physical frame or drain is inferred from it. |
 | `a733_camera_dma.c:a733_camera_dma_poll`, `stream_poll` | BK `0x254` capture/frame flags, `0x24c[0]` capture busy; next addresses | Manual §§16.1.14.27, 29, 35, 37, §16.1.6.7 | Single capture waits for capture done; final status rejects active capture. Streaming acknowledges observed events, updates next-slot addresses after frame start and checks racing frame starts. Source-defined frame boundaries govern slot ownership. |
 | `a733_camera_capture.c:a733_camera_capture_poll` | Parser fence `0x0c`, VIPP load status, quiet interval | Same parser/VIPP sources; OV5640 stop sequence | Coordinates leaf completion and requires capture bits clear before readout. Timing comes from selected sensor mode. Native drain callbacks are admission-backed placeholders, so this supplies no physical independent drain evidence. |
-| `a733_isp0.c:a733_isp0_poll/trigger/complete` | ISP `0x20` READY, VIPP READY, TOP pattern `+4[4]` START; ISP/VIPP status | Camera `vin-isp/isp600/isp600_reg_cfg.c`, `top_reg.c` pattern setters; manual §16.1.9.2 | Excludes auto-clearing READY from stable readback. START is written once. Completion requires ISP flags `0xc`, VIPP flag `0x100`, START clear and no unexpected flags under the outer deadline. |
+| `a733_isp0.c:a733_isp0_poll/trigger/complete/rearm` | ISP `0x20` READY, VIPP READY, TOP pattern `+4[4]` START; ISP/VIPP status | Camera `vin-isp/isp600/isp600_reg_cfg.c`, `top_reg.c` pattern setters; manual §16.1.9.2 | Excludes auto-clearing READY from stable readback. START is written once. Completion requires ISP flags `0xc`, VIPP flag `0x100`, START clear and no unexpected flags under the outer deadline. Retained rearm acknowledges those observed flags, refreshes the load address and ISP/VIPP READY, then permits a separate trigger. It retains the same input, mappings and output backing. |
 | `ov5640.c:ov5640_poll`, `configure` | Sensor reset/power lines, `0x3008` reset/standby, `0x4202` stream control | Camera `modules/sensor/ov5640.c`; upstream `drivers/media/i2c/ov5640.c` power/reset and mode tables | Preserves 5 ms power, 1 ms PWDN, 20 ms reset, table delays and 500 µs final timing control with one additional reported microsecond per minimum. Stream writes have explicit readbacks. Stored stream control alone does not prove that an in-flight frame has left the receiver. |
 | `a733_video_unit.c:a733_video_unit_pll_start/wait/open` | CCU PLL_VE0 `0x220`, LOCK bit28 | Manual §§4.1.4.1–2, 4.1.6.36; pinned `ccu_gate.c`, `ccu_nm.c` | Masks read-only LOCK from writes and readback. Shared lock helper qualifies lock before output gate opens; inherited rate admission remains separate. No new operating point is proposed. |
 | `a733_video_platform.c:cold`, `prep_step` | PCK request/status; local/CCU reset pulse | Manual power controller; pinned `cedar_ve.c`, package reset policy | ON acknowledgment is polled under the deadline. External reset uses a guarded 11 µs reported target for the source-defined 10 µs hold; local reset follows source writes. Existing reset authority requires prior drain. |
@@ -112,13 +151,31 @@ completion indication.
 
 | Directory | Files and boundary |
 | --- | --- |
-| `drivers/camera` | `a733_camera_native.c` validates admission, locks, mappings and allowed accesses; it delegates completion to the leaf drivers. `isp0-sources.json` records provenance. `isp600_default.h` and `ov5640_tables.h` contain parameter data. |
+| `drivers/camera` | `a733_camera_native.c` validates admission, locks, mappings and allowed accesses; it delegates completion to the leaf drivers. `isp0-sources.json` and `isp0-replay-sources.json` record native source provenance. `isp0-reference-sources.json` identifies the optional host FFmpeg comparison and establishes no ISP completion or pixel-equivalence contract. `isp0-replay.h` declares retained rearm and its exclusion/lifetime conditions. `isp600_default.h` and `ov5640_tables.h` contain parameter data. |
 | `drivers/display` | `a733_display_native.c` delegates DE RCQ busy/submission to its native helper. `a733_display_handoff.c` transfers ownership and polls leaf services. `display_scanout.c` orders leaf operations and refuses unsupported drain proof. `a733_dp_internal.h`, `a733_dp_regs.h` define interfaces and offsets. |
 | `drivers/video` | `a733_video_jpeg.c` parses JPEG and creates table data. `a733_video_jpeg_encode_tables.c` contains format tables. `a733_video_encode_platform.c` checks retained ownership and access policies; engine completion belongs to encoder state machines. |
 | `drivers/g2d` | `a733_g2d.c` builds immutable RCQ command memory; `g2d_mixer_type.h` defines its layout. They perform no device MMIO. Actual task completion and reset are in the application owner, outside this directory: see [G2D completion](g2d.md). |
 | `drivers/deinterlace` | `a733_deinterlace.c` runs the adapted DI301 setters against RAM, builds masked register images and consumes copied statistics. `di-port.h` marks any source delay as a violation. Actual start/busy/finish/reset MMIO belongs to the application owner: see [DI completion](deinterlace-native.md). |
 
 ## Host models must expose delayed and stale status
+
+Native barriers also need a model that delays write visibility. Current media
+host callbacks commonly update register dictionaries immediately; for example,
+`checks/a733-display-pll.c:barrier` only counts calls and the DE fixture's barrier
+only accounts an operation. The minimum-hold checks charge callback cost and
+fractional time but still publish writes immediately. Their passing results
+establish neither posted-write completion nor the presence of native `DSB SY`.
+
+Useful consumers for a model that queues writes until a barrier include the
+DISPLL N→20 µs→divider/UPDATE sequence, ISP0 load-address/READY→GEN→START and
+retained rearm, DE RCQ header/length→submit, codec flush/trigger→status, and G2D
+acknowledgment→reset→copy. The model should keep stale visible registers while
+writes are pending and start hardware latency only when a write becomes visible.
+For minimum holds, the next operation must remain refused until the full
+source interval after that visibility point. An omitted barrier must fail even
+when a later status read would otherwise return success. Linked instruction
+checks must observe the actual barrier; generic driver callbacks alone cannot
+prove native adapter behavior.
 
 The earlier `checks/displayport-controller.py:Model.read` returned `0x111` for
 every PHY status read. READY, clock acknowledgment and A0 acknowledgment were
@@ -157,6 +214,12 @@ cases require fresh RCQ finish and a later frame end, including stale flags,
 failed clears and frame boundaries racing status acknowledgment.
 
 ## Validation remains host-only
+
+The write-ordering inspection records all 45 driver files, their native provider
+inputs and inspected cached source hashes in
+`~/.cache/sunstoneos/build/model-fidelity-1031/ordering-followup/media/source-inspection.json`.
+Every inventoried filename appears in this audit. This documentation extension
+adds source evidence; the earlier host checks below retain their stated scope.
 
 Focused sanitizer, pinned-source comparison and native compilation records are
 under `~/.cache/sunstoneos/build/model-fidelity-1031/media/`: `pll/results.json`
