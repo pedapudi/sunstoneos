@@ -110,7 +110,11 @@ static void transfer_step(void)
         struct a733_xhci_device *d=&x.devices[j];struct a733_xhci_endpoint *e=&d->endpoints[i];
         if(e->pending!=2||!e->pending_trb||e->pending_trb==last_transfer[j][i]||(hold&BIT(j*4+i)))continue;
         last_transfer[j][i]=e->pending_trb;
-        if(e->direction&&e->kind!=2&&e->kind!=4)for(unsigned k=0;k<e->length;++k)e->bounce[k]=(uint8_t)(pattern+k);
+        if(e->direction&&e->kind!=2&&e->kind!=4){
+            const struct a733_xhci_trb *trb=&e->ring[(e->pending_trb-e->ring_pa)/16];
+            uint8_t *destination=cpu((uint64_t)trb->parameter_lo|((uint64_t)trb->parameter_hi<<32));
+            for(unsigned k=0;k<e->length;++k)destination[k]=(uint8_t)(pattern+k);
+        }
         put64(context(d->slot)+64*e->number+8,(e->ring_pa+16*e->index)|e->cycle);
         event(32,e->pending_trb,1,0,e->number,d->slot);return;
     }
@@ -178,7 +182,10 @@ static void cleared(unsigned j,unsigned slot)
 {
     const uint8_t *p=(void *)x.extent.cpu;
     assert(!get64(x.dcbaa+8*slot)&&zero(p+16384+8192*j,8192)&&!x.devices[j].slot&&!x.devices[j].port_ready);
-    for(unsigned i=0;i<2;++i)assert(zero(p+40960+4096*(j*2+i),4096)&&zero(p+69632+4096*(j*2+i),4096));
+    for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
+        const struct a733_xhci_endpoint *e=&x.devices[j].endpoints[i];
+        assert(zero(e->ring,4096)&&zero(e->bounce,4096));
+    }
 }
 int main(int argc,char **argv)
 {
@@ -248,7 +255,7 @@ int main(int argc,char **argv)
         }
         for(unsigned round=0;round<2;++round){
             assert(a733_xhci_bind_child(&x,3,2,3,now+1000000));UNTIL(x.devices[1].port_ready==3);
-            enumerate(1);open_bulk(1);assert(x.extra_endpoint_owner==2);bulk_read(1,0x10+round);
+            enumerate(1);open_bulk(1);assert(x.devices[1].endpoints[1].ring!=x.devices[1].endpoints[2].ring);bulk_read(1,0x10+round);
             if(round)break;
             uint8_t held[512];memset(held,0x5a,sizeof(held));hold|=BIT(5);
             assert(a733_xhci_transfer(&x,1,0x81,held,512,now+1000000));for(unsigned i=0;i<4;++i)assert(step()!=A733_XHCI_RETAINED);
@@ -275,7 +282,7 @@ int main(int argc,char **argv)
     attach(1);enumerate(1);open_bulk(1);bulk_read(1,0x10);
     struct a733_xhci_device *d=&x.devices[0];
     uint64_t rings[3]={d->endpoints[0].ring_pa,d->endpoints[1].ring_pa,d->endpoints[2].ring_pa};
-    unsigned slot=d->slot;assert(x.extra_endpoint_owner==1);
+    unsigned slot=d->slot;assert(d->endpoints[1].ring!=d->endpoints[2].ring);
     uint8_t held[512];memset(held,0x5a,sizeof(held));hold=BIT(1);
     assert(a733_xhci_transfer(&x,1,0x81,held,512,now+3000000));
     for(unsigned i=0;i<4;++i)assert(step()!=A733_XHCI_RETAINED);assert(d->endpoints[1].pending==2);
