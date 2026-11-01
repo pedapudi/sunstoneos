@@ -139,7 +139,7 @@ static void retained(void)
     assert(a733_clock_token_status(&m.power.clocks,&m.platform.clock)==A733_CLOCK_FAULT);
     if(m.platform.rail.id)assert(a733_rail_status(&m.power.rails,&m.platform.rail)==A733_RAIL_RETAINED);
 }
-static void reset_boundary(void)
+static __attribute__((unused)) void reset_boundary(void)
 {
     storage_setup(SUNXI_MMC_SD);
     while(m.platform.stage!=9)assert(step()!=A733_MMC_RETAINED); /* ENABLE */
