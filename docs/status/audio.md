@@ -1,74 +1,73 @@
 # Audio capture and playback
 
-Status: implemented and host-checked. Physical audio remains unqualified.
+Status: internal I2S0 capture/playback, cyclic cancellation and drain pass a
+returning board diagnostic. External microphone and headset operation remain
+unqualified.
 
-The native diagnostic in `apps/i2s/probe.c` uses the existing FreeRTOS DMA
-service, cyclic stream driver and cache adapter. I2S0 CTL bit 3 connects DOUT
-to DIN internally, as specified in A733 manual section 17.1.8.1. The diagnostic
-supports an audio-disabled control, guarded cyclic loopback and held-copy
-overrun. It uses 16 kHz mono samples in 32-bit containers, eight 1,024-byte
-periods and the existing 24.576 MHz module clock. CPU clocks and supply
-voltages are unchanged.
+The diagnostic in `apps/i2s/probe.c` uses the FreeRTOS DMA service, cyclic stream
+driver and native cache adapter. I2S0 CTL bit 3 connects DOUT to DIN internally,
+as specified in A733 manual section 17.1.8.1. The format is 16 kHz mono in
+32-bit containers, with eight 1,024-byte periods and a 24.576 MHz module clock.
+The audio driver preserves reserved AUDIO1 control bit 24, accepts the observed
+LDO-on/PLL-off baseline and waits for lock, settling and effective output gates.
+
+The board result for entry `1793561377196205560-f9163edf` verifies 18,419 patterned
+samples in 72 capture copies across three cancel/drain/close/reopen rounds.
+It records 150 DMA interrupts, three completed retirements and no retained fault.
+Entry `1793561406349236252-f1275fd8` verifies the held capture copy after raw-ring
+overrun, then retires both streams and returns normally. The same image's
+audio-disabled control, `1793561347028719264-5a2bab37`, also returns normally.
 
 Retirement returns exact client tickets, cancels and drains both directions,
-reaps and closes each stream, and observes the global DMA MBUS FIFO empty
-before reuse. Final cleanup masks the DMA interrupt, suspends its worker and
-releases parent leases. The probe monitor restores the DMA routing, security,
-clock and interrupt fields it changes before using the shared return contract.
-The audio clock driver accepts the documented reset state with its LDO enabled
-and PLL disabled, then waits for lock, settling and effective output gates.
+reaps and closes each stream, and waits for the global DMA MBUS FIFO to empty
+before reuse. The hardware clears its package counter during cancellation.
+Canceled progress preserves the last ACTIVE observation as a lower bound;
+channel completion and cache ownership establish drain. The diagnostic retains
+original fault callers and operands before later service refusals can hide them.
 
-Sanitizer, real FreeRTOS and linked-instruction checks pass under
-`~/.cache/sunstoneos/build/audio-1031/return/check-1/`. They cover actual
-constructors, busy drain, held-copy overrun, serializer-owned file EOF, stale
-readbacks, delayed FIFO completion and failed restoration. The independent
-review is in `return-review/final-review.md` under the same build root.
+Final cleanup masks the DMA interrupt, suspends its worker and releases parent
+leases. The monitor restores its saved DMA routing, security, clock and interrupt
+fields before returning through the shared probe contract. CPU operating points
+and supply voltages retain their inherited settings.
 
-## Returning probe owns secondary CPU policies
+## Secondary CPU ownership and host evidence
 
-The native probe acquires acknowledged static OFF before whole-hierarchy cache
-maintenance and restores exact original policies after final cache cleanup and
-receipt preparation. It admits matched static or dynamic OFF profiles, preserves
-inherited GIC wake-disable and clear software requests, and writes only changed
-secondary policy words. CPU0, cluster policy, wake controls, entry addresses,
-clocks, resets and rails are unchanged.
+The probe acquires acknowledged static OFF before whole-hierarchy cache
+maintenance. It restores the exact original policies after final cache cleanup
+and receipt preparation. It accepts matched static or dynamic OFF policies and
+preserves either inherited GIC wake setting. Only changed secondary policy words
+are written; CPU0 and cluster policies retain their original values.
 
-The per-core CPU1 check writes zero then `0x100` only at `0x07053000` and verifies
-byte-identical neighboring pages. A separate aggregate check acquires and restores
-all seven secondaries. The returning path executes 18,944 data-cache operations
-and one I-cache invalidation before dynamic policy release. Failed acquisition
-or restoration retains the first failed input, keeps the watchdog armed and
-prevents successful completion or normal return.
+The CPU1-specific check writes only `0x07053000` and verifies neighboring pages.
+The aggregate check acquires and restores all seven secondaries. Return executes
+18,944 data-cache operations and one I-cache invalidation before policy release.
+Acquisition and restoration failures retain their original inputs, keep the
+watchdog armed and prevent normal return. Three independent reviewers approve
+the design, source and linked image; their records are under
+`~/.cache/sunstoneos/build/audio-1031/policy-review/`.
 
-Fourteen CPU ownership cases pass under
-`~/.cache/sunstoneos/build/audio-1031/policy/cpu-final/`; fourteen native entry,
-restoration and constructor cases pass under `policy/native-final/`. The default
-weak hooks remain inside memtest's protected recovery closure, with its link,
-relocation, stack and layout checks passing. Three independent reviewers approve
-the design, source and linked image; records are under `policy-review/`.
-The OS-only, hello-compute and external mimus baseline builds, selected integration
-gate, scheduler check and check index pass.
+Sanitizer checks, twenty focused cases, seventeen CPU ownership cases
+and seventeen cyclic FreeRTOS cases pass under
+`~/.cache/sunstoneos/build/audio-1031/counter-drain/`. The models cover delayed
+readbacks and busy drain, counter reset at idle, overrun, held copies, stale
+tickets, wraps and reopening. The OS-only, hello-compute and external mimus
+baseline builds, selected integration gate and check index pass there too.
 
-Shared patches `0006` through `0009` are under
-`~/.cache/sunstoneos/build/audio-1031/shared-patches/` and pass `git apply --check`.
-Patch 0006 replaces diagnostic patch 0005. The audio CMake hook builds patched
-copies without editing shared tracked files. The source comparison and measurable
-budgets are in `apps/i2s/CPU-OWNERSHIP.md`.
+The returning image SHA-256 is
+`63840ec870d4045a3537c6a8fdcce95b97247cdfc4bb71d224f5147b9fa5019b`.
+Its ELF, inputs, expectations, README, commands and every submission result are
+under `~/.cache/sunstoneos/build/audio-1031/counter-drain/`.
+Shared patches `0006` through `0011` are under `shared-patches/` beside that
+directory and pass `git apply --check`. Patch 0006 replaces patch 0005; the
+CMake hook compiles patched shared sources without editing their tracked copies.
+Patch 0011 documents cancellation's conservative progress count in shared
+headers and the stream contract.
 
-The reviewed image SHA-256 is
-`1c822cdde6884b49e5249c58011629dfdb1419c5d71c3ee4ca8567a5355c1e43`.
-Its ELF, three mode inputs, expectations, short README and exact submit commands
-are under `~/.cache/sunstoneos/build/audio-1031/policy/`. The queue daemon is
-stopped; no new run is submitted. Control must return normally before internal
-loopback, and loopback must return normally before overrun. These transitions
-and physical audio remain unqualified.
-
-After successful control, the same image's loopback mode tests guarded-copy
-continuity and cache visibility across three close/reopen cycles. This mode
-does not measure the unguarded DMA ordering margin. That measurement, physical
-retirement, interrupt delivery and broader clock transitions remain open.
-No microphone or headset is attached. External capture, audible output and
-Bluetooth I2S1 routing remain separate requirements.
+The guarded-copy diagnostic checks continuity and cache visibility. Measuring
+the unguarded DMA ordering margin remains open. No microphone or headset is
+attached; external capture, audible playback and Bluetooth I2S1 routing require
+physical qualification. The generic capture and paced/recorded input services
+remain independent of the external recognition application.
 
 ## Other audio paths
 
