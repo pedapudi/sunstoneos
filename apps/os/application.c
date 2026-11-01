@@ -7,6 +7,28 @@
 #include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
 #include "sunstone_crumb.h"
+#ifdef SUNSTONE_A733_OS_GPU
+#include "gpu-share.h"
+#include "pvr_compute_queue.h"
+extern const struct ss_gpu_share ss_gpu_share __attribute__((weak));
+int os_gpu_queue_quiesce(void);
+static struct ss_grant peer_grant;
+static TaskHandle_t peer_task;
+static StaticTask_t peer_task_state;
+static StackType_t peer_stack[OS_GPU_PEER_STACK_BYTES/sizeof(StackType_t)];
+static atomic_uint peer_ready,peer_done;
+static struct pvr_compute_queue *peer_queue;
+int pvr_compute_queue_runtime_program(const struct gpu_queue_program *program)
+{return !peer_task || program==ss_gpu_share.program;}
+int os_application_gpu_share_bind(struct pvr_compute_queue *q)
+{
+    if (!peer_task) return 1;
+    if (!pvr_compute_queue_client_register(q,peer_task)) return 0;
+    peer_queue=q; return 1;
+}
+#else
+int os_application_gpu_share_bind(struct pvr_compute_queue *q){(void)q;return 1;}
+#endif
 #include "boot.h"
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
 #include "sunstone_usb_service.h"
@@ -28,7 +50,13 @@ static struct a733_typec_token attachment;
 static TaskHandle_t main_task;
 static atomic_uint_fast64_t finish_by;
 const struct ss_grant *ss_grant(void)
-{return atomic_load_explicit(&prepared,memory_order_acquire)?&grant:NULL;}
+{
+    if (!atomic_load_explicit(&prepared,memory_order_acquire)) return NULL;
+#ifdef SUNSTONE_A733_OS_GPU
+    if (peer_task && xTaskGetCurrentTaskHandle()==peer_task) return &peer_grant;
+#endif
+    return &grant;
+}
 int os_application_finished(void)
 {return atomic_load_explicit(&finished,memory_order_acquire);}
 void os_application_usb_ready(void)
@@ -142,6 +170,36 @@ int os_application_pins(struct a733_pin_handoff *pins)
     }
     return 1;
 }
+#ifdef SUNSTONE_A733_OS_GPU
+static int peer_within_session(void)
+{
+    uint64_t limit=atomic_load_explicit(&finish_by,memory_order_acquire);
+    if (!limit || board.session.deadline_us<limit) limit=board.session.deadline_us;
+    return ss_live()>=0 && limit && a733_smp_counter()/24<limit;
+}
+static void peer_entry(void *unused)
+{
+    (void)unused;
+    while (!atomic_load_explicit(&peer_ready,memory_order_acquire)) {
+        if (!peer_within_session()) ss_fail(0x759);
+        ss_progress();vTaskDelay(1);
+    }
+    ss_gpu_share.main(&peer_grant);
+    /* Returning from the entry does not release a GPU-owned buffer. */
+    if (!peer_queue) ss_fail(0x75a);
+    while (atomic_load(&peer_queue->peer.client_owed)) {
+        if (!peer_within_session()) ss_fail(0x75b);
+        struct gpu_queue_context c={peer_queue->generation,1};
+        struct gpu_queue_record record;
+        int r=gpu_queue_wait(c,&record,1);
+        if (r!=GPU_QUEUE_OK && r!=GPU_QUEUE_TIMEOUT && r!=GPU_QUEUE_FAULT && r!=GPU_QUEUE_REFUSED)
+            ss_fail(0x75c);
+        ss_progress();
+    }
+    atomic_store_explicit(&peer_done,1,memory_order_release);
+    for (;;) vTaskSuspend(NULL);
+}
+#endif
 static void main_entry(void *unused)
 {
     (void)unused;
@@ -170,6 +228,12 @@ static void main_entry(void *unused)
         if(!grant.finish_by_us||limit<grant.finish_by_us)grant.finish_by_us=limit;
     }
     atomic_store_explicit(&finish_by,grant.finish_by_us,memory_order_release);
+#ifdef SUNSTONE_A733_OS_GPU
+    if (peer_task) {
+        peer_grant.finish_by_us=grant.finish_by_us;
+        atomic_store_explicit(&peer_ready,1,memory_order_release);
+    }
+#endif
     ss_application.main(&grant);ss_fail(0x755);
 }
 int os_application_start(void)
@@ -225,13 +289,20 @@ int os_application_prepare(void)
     if(board.session.deadline_us<=m->return_reserve_us)return 0;
     grant.finish_by_us=board.session.deadline_us-m->return_reserve_us;
 #endif
+#ifdef SUNSTONE_A733_OS_GPU
+    if (&ss_gpu_share) {
+        if (!os_gpu_share_admit(&ss_gpu_share,m,&grant,&peer_grant)) return 0;
+        grant.worker_cores&=~(1u<<peer_grant.main_core);
+        peer_task=xTaskCreateStaticAffinitySet(peer_entry,ss_gpu_share.manifest->name,
+            ss_gpu_share.manifest->stack_bytes/sizeof(StackType_t),NULL,ss_gpu_share.manifest->priority,
+            peer_stack,&peer_task_state,(UBaseType_t)1<<peer_grant.main_core);
+        if (!peer_task) return 0;
+    }
+#endif
     atomic_store_explicit(&prepared,1,memory_order_release);
     main_task=xTaskCreateStaticAffinitySet(main_entry,m->name,m->stack_bytes/sizeof(StackType_t),NULL,m->priority,
         ss_application.stack,ss_application.task,(UBaseType_t)1<<grant.main_core);
     if(!main_task)return 0;
-#ifdef SUNSTONE_A733_OS_GPU_LINEAR
-    os_recognizer=main_task;
-#endif
 #ifdef SUNSTONE_SMP_NEWLIB
     void runtime_smp_init(void);runtime_smp_init();
 #endif
@@ -250,10 +321,17 @@ __attribute__((noinline)) _Noreturn void ss_fail(uint32_t detail)
 }
 _Noreturn void ss_finish(const void *data,size_t bytes)
 {
-    if((!data&&bytes)||bytes>ss_result_capacity||os_application_finished()||
+    if(xTaskGetCurrentTaskHandle()!=main_task || (!data&&bytes)||bytes>ss_result_capacity||os_application_finished()||
        (grant.finish_by_us&&a733_smp_counter()/24>=grant.finish_by_us))ss_fail(0x756);
+#ifdef SUNSTONE_A733_OS_GPU
+    while(peer_task&&!atomic_load_explicit(&peer_done,memory_order_acquire)){
+        if(!peer_within_session())ss_fail(0x75d);
+        ss_progress();vTaskDelay(1);
+    }
+    if(!os_gpu_queue_quiesce())ss_fail(0x75e);
+#endif
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
-#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+#ifdef SUNSTONE_A733_OS_GPU
     if(!os_gpu_retire())ss_fail(0x757);
 #endif
 #endif

@@ -113,7 +113,7 @@ def load(path):
             name + ': host operations overlap the OS reports 0x05..0x08')
     require(count or not first, name + ': an empty host range starts at 0')
     audio = raw.get('audio')
-    if (required | optional) & CAPTURE:
+    if audio is not None or (required | optional) & CAPTURE:
         require(audio is not None, name + ': a capture device needs an audio format')
         m['audio'] = {'rate_hz': integer(audio['rate_hz'], name + ' rate_hz', 8000, 192000),
                       'channels': integer(audio['channels'], name + ' channels', 1, 2),
@@ -123,7 +123,6 @@ def load(path):
         require(m['audio']['bits'] in (16, 24, 32), name + ': bits is 16, 24 or 32')
         require(m['audio']['min_frames'] <= m['audio']['max_frames'], name + ': min_frames exceeds max_frames')
     else:
-        require(audio is None, name + ': an audio format needs a capture device')
         m['audio'] = {'rate_hz': 0, 'channels': 0, 'bits': 0, 'min_frames': 0, 'max_frames': 0}
     regions, names = [], []
     require(len(raw.get('regions', [])) <= REGIONS, name + ': at most %d regions' % REGIONS)
@@ -155,6 +154,8 @@ def load(path):
         if address is not None:
             address = integer(address, where + ' address')
             require(address % PAGE == 0, where + ': a pinned address is 4 KiB aligned')
+            if access & (ACCESS['gpu-read'] | ACCESS['gpu-write']):
+                require(address % BLOCK == 0, where + ': a pinned GPU address is 2 MiB aligned')
         regions.append({'address': address, 'bytes': size, 'kind': kind, 'access': access,
                         'sha256': digest or '0' * 64})
     m['regions'] = regions
@@ -163,7 +164,9 @@ def load(path):
 
 
 def span(r):
-    return r['address'], r['address'] + -(-r['bytes'] // PAGE) * PAGE
+    # GPU leases and CPU output permissions reserve complete 2 MiB blocks.
+    alignment = BLOCK if r['access'] & (ACCESS['gpu-read'] | ACCESS['gpu-write']) else PAGE
+    return r['address'], r['address'] + -(-r['bytes'] // alignment) * alignment
 
 
 def assign(m):
@@ -312,7 +315,7 @@ def c_tables(m):
              'const struct ss_application ss_application = {&%s_manifest,%s_init,%s_main,app_stack,&app_task};' % (c,c,c),
              '__attribute__((used,retain,aligned(8))) uint8_t ss_result_record[%d];' % (56+m['output_limit']),
              'const size_t ss_result_capacity = %du;' % m['output_limit'],
-             '__attribute__((aligned(4))) uint8_t ss_capture_buffer[%d];' % (64 + max(8192, -(-(m['audio']['max_frames']*m['audio']['channels']*(m['audio']['bits']//8))//4096)*4096) if (m['devices_required']|m['devices_optional'])&4 else 64),
+             '__attribute__((aligned(4))) uint8_t ss_capture_buffer[%d];' % (64 + max(8192, -(-(m['audio']['max_frames']*m['audio']['channels']*(m['audio']['bits']//8))//4096)*4096) if m['audio']['max_frames'] else 64),
              'const size_t ss_capture_capacity = sizeof(ss_capture_buffer)-SS_CAPTURE_HEADROOM;',
              '__attribute__((used,retain)) const struct os_application os_applications[] = {',
              '    {"thermal",os_thermal_task_privileged,os_thermal_pins,os_thermal_start},',
@@ -324,8 +327,8 @@ def c_tables(m):
              '    {"radio",os_radio_task_privileged,os_radio_pins,os_radio_start},', '#endif',
              '#ifdef SUNSTONE_A733_OS_HEADSET',
              '    {"headset",os_headset_task_privileged,os_headset_pins,os_headset_start},', '#endif',
-             '#ifdef SUNSTONE_A733_OS_GPU_LINEAR',
-             '    {"gpu-linear",os_gpu_linear_task_privileged,os_gpu_linear_pins,os_gpu_linear_start},', '#endif',
+             '#ifdef SUNSTONE_A733_OS_GPU',
+             '    {"gpu-queue",os_gpu_queue_task_privileged,os_gpu_queue_pins,os_gpu_queue_start_entry},', '#endif',
              '    {"%s",os_application_task_privileged,os_application_pins,os_application_start},' % m['name'],
              '};', 'const unsigned os_application_count=sizeof(os_applications)/sizeof(os_applications[0]);',
              '__attribute__((used,retain)) const struct os_service os_services[OS_SERVICES] = {',
@@ -340,8 +343,15 @@ def c_tables(m):
              '#ifdef SUNSTONE_BOARD_USB2_IRQ', '    {187,0,0xb0,board_host_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_NPU', '    {97,OS_NPU_CORE,0xd8,os_npu_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_AUDIO', '    {143,0,0xd8,os_audio_irq},', '#endif',
-             '#ifdef SUNSTONE_A733_OS_GPU_LINEAR', '    {95,A733_SMP_APPLICATION_CORE,0xd8,a733_gpu_mimus_irq},', '#endif', '};',
-             'const unsigned a733_irq_route_count=sizeof(a733_irq_routes)/sizeof(a733_irq_routes[0]);', '']
+             '#ifdef SUNSTONE_A733_OS_GPU', ('    {95,A733_SMP_APPLICATION_CORE,0xd8,os_gpu_queue_irq},' if m.get('cluster', 0) else '    {95,2,0xd8,os_gpu_queue_irq},'), '#endif', '};',
+             'const unsigned a733_irq_route_count=sizeof(a733_irq_routes)/sizeof(a733_irq_routes[0]);',
+             '#ifdef SUNSTONE_A733_OS_GPU', '#include "gpu-runtime.h"',
+             '__attribute__((used,retain)) const uint32_t os_gpu_configuration[8]={',
+             '    1,OS_GPU_REPLY_US,OS_GPU_OPEN_US,OS_GPU_WAIT_TICKS,OS_GPU_PRIORITY,',
+             ('    A733_SMP_APPLICATION_CORE,' if m.get('cluster', 0) else '    2,'),
+             '#if defined(SUNSTONE_A733_OS_PERF) && OS_PERF_BOOT_MODE == 2',
+             '    A733_GPU_LOW_HZ,A733_GPU_LOW_UV};', '#else',
+             '    A733_GPU_CORE_HZ,A733_GPU_SUPPLY_UV};', '#endif', '#endif', '']
     # Placement is an OS setting; the GPU route uses the same admitted pair.
     if noapp:
         lines=[line for line in lines if not any(key in line for key in ('os_core-app.h','os_core_init','app_stack','app_task','{\"os-core\",os_application'))]

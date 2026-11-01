@@ -66,8 +66,15 @@ int a733_smp_launch_prepare(void)
     volatile const uint8_t *actual=(const volatile uint8_t *)(uintptr_t)id;
     volatile const uint8_t *request_id=(const volatile uint8_t *)&REQUEST[8];
     for(unsigned i=0;i<32;++i)ADMIT(actual[i]==request_id[i] && CONTRACT->build_id[i]==request_id[i],4);
+#ifdef SUNSTONE_NPU_FINITE_WATCHDOG
+    /* Whole-system WDT0 reset uses normal ROM entry. No SRAM redirect may
+     * remain armed while the NPU owns the shared SRAM. */
+    ADMIT((rd(0x02050014)&0xffff)==0xb1 && (rd(0x02050010)&0xffff)==1 &&
+        (rd(0x02050018)&0xffff)==2 && !rd(0x070501c0) && !rd(0x070501d4),6);
+#else
     ADMIT(!(rd(0x02050014)&1) && !(rd(0x02050010)&0x100) &&
         !rd(0x070501c0) && !rd(0x070501d4),6);
+#endif
     /* No watchdog, FEL flag or reset-redirect writes in supervised mode. */
     uint64_t start=ticks();require(start<=UINT64_MAX-20*A733_SMP_COUNTER_HZ,8);
     REPORT[1]=start;REPORT[2]=ticks();

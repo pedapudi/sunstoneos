@@ -15,7 +15,8 @@ static int size_code(uint32_t shift)
 {
     switch (shift) {
     case 12: return 0; case 14: return 1; case 16: return 2;
-    case 18: return 3; case 20: return 4; case 21: return 5;
+    /* BRN 71317 on the pinned A733 BVNC excludes larger data pages. */
+    case 18: return 3;
     default: return -1;
     }
 }

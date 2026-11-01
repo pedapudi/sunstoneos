@@ -220,12 +220,12 @@ static int admit(struct a733_power_domains *d,struct a733_power_domain_row *r,un
     else if(m->state==A733_POWER_DOMAIN_OFF)command(d,m,policy,1);
     return m->state==A733_POWER_DOMAIN_ON_WAIT;
 }
-/* Domain 5 release: power-off at count zero, after the domain-level reads;
+/* Domain 4 or 5 release: power-off at count zero, after the domain-level reads;
  * the pin is dropped once the domain is OFF. */
 static int release(struct a733_power_domains *d,struct a733_power_domain_row *r,unsigned g)
 {
     struct a733_power_domain *m=&d->domain[slot(r->domain)];const struct profile *f=&profiles[slot(r->domain)];
-    if(r->domain!=5){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
+    if(r->domain!=4 && r->domain!=5){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
     if(!r->counted){publish(r,g,A733_POWER_ROW_OFF);return 0;}
     if(m->state==A733_POWER_DOMAIN_FAILED){publish(r,g,A733_POWER_ROW_FAILED);return 0;}
     if(m->state==A733_POWER_DOMAIN_ON_WAIT || m->state==A733_POWER_DOMAIN_OFF_WAIT)return 1;

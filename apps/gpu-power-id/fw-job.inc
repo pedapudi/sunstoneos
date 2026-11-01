@@ -26,11 +26,7 @@
 
 #define JOB_PAYLOAD_PAGES 88u
 #define JOB_TABLE_PAGES 32u
-#ifdef FWS_MIMUS
-#define JOB_MAP_PAGES (JOB_PAYLOAD_PAGES + 71u)
-#else
 #define JOB_MAP_PAGES JOB_PAYLOAD_PAGES
-#endif
 #define JOB_OBJECTS 6u
 #define JOB_RING_BYTES 1024u
 #define JOB_SEED UINT32_C(0x12345678)
@@ -63,16 +59,14 @@ static struct pvr_ccb_token job_cleanup_token;
 /* The MMU cache command's return word, and its slot. */
 static uint32_t job_mmu_status = UINT32_MAX;
 static struct pvr_ccb_token job_mmu_token;
-#ifndef FWS_MIMUS
 static uint32_t job_output_words[4];
-#endif
 /* The job session (docs/designs/gpu-job-session.md): FWS_JOBS jobs on one
  * context, each timed in counter ticks from the MTS_SCHEDULE write of its
  * KICK (fws_mts_tick) to the first read of its timeline value. */
 #ifndef FWS_JOBS
 #define FWS_JOBS 1u
 #endif
-_Static_assert(FWS_JOBS == 1 || FWS_JOBS == 8 || FWS_JOBS == 2, "the first-job image or the eight-job session");
+_Static_assert(FWS_JOBS == 1 || FWS_JOBS == 8, "the first-job image or the eight-job session");
 /* A repeat starts only while this much of the timeline wait remains. */
 #define JOB_REPEAT_RESERVE_US 10000u
 #define JOB_TICKS_PER_US (COUNTER_HZ / 1000000u)
@@ -85,9 +79,6 @@ static struct job_run job_runs[FWS_JOBS];
 static unsigned job_jobs;
 static uint64_t job_prepare_ticks, job_publish_ticks, job_mmu_ticks, job_jobs_ticks, job_cleanup_ticks;
 
-#ifdef FWS_MIMUS
-#include "fw-mimus.inc"
-#endif
 
 static uint64_t job_address(unsigned program, unsigned i)
 {
@@ -165,9 +156,6 @@ static int fws_job_build(uintptr_t nc, struct pvr_mips_object *objects)
     if (offset != sizeof(job_payload) || count != JOB_PAYLOAD_PAGES) return 0;
     job_config.buffers[PVR_JOB_UFO] = (struct pvr_compute_program_span){job_objects[5].storage.cpu, 64,
                                                                        job_object_address[5]};
-#ifdef FWS_MIMUS
-    if (!mimus_maps(&count)) return 0;
-#endif
     for (unsigned i = 1; i < count; ++i) {
         struct pvr_gpu_mapping m = job_maps[i];
         unsigned j = i;
@@ -230,7 +218,6 @@ static int job_read_fence(void *context, uint32_t *out)
 /* As the service does: the previous timeline value, then the output's
  * guards and the complement of each expected word, cleaned to the point of
  * coherency before the KICK. */
-#ifndef FWS_MIMUS
 static int job_publish(void *context, const struct pvr_compute_job_config *c, uint64_t deadline)
 {
     (void)context; (void)deadline;
@@ -256,7 +243,6 @@ static int job_read_output(void *context, void *out, size_t bytes)
     __asm__ volatile("dsb sy" ::: "memory");
     return 1;
 }
-#endif
 /* Firmware events. Upstream processes the firmware CCB without failing on
  * any type it does not handle (pvr_ccb.c:139-160). The job records every
  * event of types 101-108 and fails none of them, so the control and the
@@ -286,7 +272,6 @@ static int job_event(void *context, const unsigned char command[PVR_CCB_COMMAND_
 
 /* The output as the GPU left it, against the image's expected words and
  * the guards around them. */
-#ifndef FWS_MIMUS
 static int job_output_matches(void)
 {
     const struct pvr_mips_buffer *b = &job_backing[PVR_JOB_OUTPUT];
@@ -297,7 +282,6 @@ static int job_output_matches(void)
     return 1;
 }
 
-#endif
 /* Bounded steps with the control serviced between them: publication of the
  * workload pages and VM tables, the client CCB format, the job (publish,
  * timeline check, CDM and UPDATE commands, KICK, timeline wait, output
@@ -329,9 +313,6 @@ static int job_spin(uint32_t n, uint64_t end, TickType_t os_begun)
                                        (uint32_t)(xTaskGetTickCount() - os_begun), job_client.write};
     return value == n;
 }
-#ifdef FWS_MIMUS
-#include "fw-mimus-run.inc"
-#endif
 static int fws_job_run(uint64_t deadline)
 {
     struct bb_line line;
@@ -385,21 +366,13 @@ static int fws_job_run(uint64_t deadline)
     }
     job_mmu_ticks = fws_counter() - phase_begun;
     static const struct pvr_cccb_ops client_ops = {fws_now, job_read, job_write, job_barrier};
-#ifndef FWS_MIMUS
     static const struct pvr_compute_job_ops job_ops = {fws_now, job_publish, job_read_fence, job_read_output};
-#endif
     if (stage == 2 && pvr_cccb_init(&job_client, &client_ops, NULL, &queue, JOB_RING_BYTES,
                                     job_object_address[0], deadline)) {
         enum pvr_cccb_result r;
         while ((r = pvr_cccb_poll(&job_client)) == PVR_CCCB_AGAIN) {}
         stage = r == PVR_CCCB_OK ? 3 : 0;
     } else stage = 0;
-#ifdef FWS_MIMUS
-    if (stage == 3) {
-        stage = 4;
-        result = mimus_run(wait_end, &first_kick, &last_done);
-    }
-#else
     if (stage == 3 && pvr_compute_job_init(&job, &job_config, &job_image, &job_ops, NULL, &job_client,
                                            bb_power.deadline)) {
         /* The timed wait's end in counter ticks: the timeline wait's end. */
@@ -442,7 +415,6 @@ static int fws_job_run(uint64_t deadline)
             } else if (result) { job_outcome = 4; break; }
         }
     }
-#endif
     job_jobs_ticks = last_done > first_kick ? last_done - first_kick : 0;
     /* A KICK the firmware has consumed is settled now, so the job line
      * reports its status and its slot is free before the cleanup. */
@@ -452,7 +424,6 @@ static int fws_job_run(uint64_t deadline)
     }
     uint32_t timeline = 0;
     (void)job_read_fence(NULL, &timeline);
-#ifndef FWS_MIMUS
     /* The words the GPU left, read again for the record. */
     const struct pvr_mips_buffer *b = &job_backing[PVR_JOB_OUTPUT];
     if (stage >= 4 && aarch64_device_cache(AARCH64_CACHE_INVALIDATE, (uintptr_t)b->storage.cpu, 4096)) {
@@ -460,7 +431,6 @@ static int fws_job_run(uint64_t deadline)
         job_output_words[0] = w[16]; job_output_words[1] = w[17]; job_output_words[2] = w[47];
         job_output_words[3] = w[15];
     }
-#endif
     bb_line_start(&line, "GPU FWJ job");
     bb_line_dec(&line, "complete", result == 1); bb_line_dec(&line, "outcome", job_outcome);
     bb_line_dec(&line, "stage", stage);
@@ -519,13 +489,11 @@ static int fws_job_run(uint64_t deadline)
     bb_line_hex(&line, "kick_rtn", job_client.token.serial && job_client.token.slot < PVR_CCB_HOST_SLOTS ?
                 *shared_word(PVR_FW_RETURNS, job_client.token.slot * 4u) : UINT32_MAX);
     bb_line_end(&line); bb_power_print(&line);
-#ifndef FWS_MIMUS
     bb_line_start(&line, "GPU FWJ output");
     bb_line_hex(&line, "w0", job_output_words[0]); bb_line_hex(&line, "w1", job_output_words[1]);
     bb_line_hex(&line, "w31", job_output_words[2]); bb_line_hex(&line, "guard", job_output_words[3]);
     bb_line_hex(&line, "expected0", job_image.expected[0]); bb_line_hex(&line, "expected31", job_image.expected[31]);
     bb_line_end(&line); bb_power_print(&line);
-#endif
     /* pvr_fw_structure_cleanup: KCCB 106, flags 0, cleanup type 0
      * (FWCOMMONCONTEXT), the context's firmware address; upstream waits for
      * its return word (pvr_fw.c:1127-1158). The wait ends at deadline; the

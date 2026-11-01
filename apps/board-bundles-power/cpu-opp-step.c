@@ -226,8 +226,7 @@ static int cpu_write(void *unused, uintptr_t a, uint32_t value)
     if (!a733_cpu_clock_address(a, 1))
         return 0;
     a733_mmio_write32(a, value);
-    if ((a & 0xfff) == 0x01c)
-        a733_mmio_dsb_sy();
+    a733_mmio_dsb_sy();
     return 1;
 }
 

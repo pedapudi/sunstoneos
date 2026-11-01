@@ -28,7 +28,7 @@ int pcie_publish(void)
  const struct a733_pcie_epf_test *t=&pcie.test;
  uint8_t *p=pcie.payload;memset(p,0,PCIE_OUTPUT_BYTES);
  put64(p,a733_smp_counter()/24);put32(p+8,32);put32(p+12,1);
- put16(p+16,pcie.session.vendor);put16(p+18,pcie.session.device);put16(p+20,(uint16_t)((t->command&~0x407u)|0x406));put16(p+22,0x11);
+ put16(p+16,pcie.session.vendor);put16(p+18,pcie.session.device);put16(p+20,(uint16_t)((t->command&~0x407u)|0x406));put16(p+22,pcie.port.endpoint.link_status);
  put32(p+24,pcie.session.bar);put32(p+28,t->event_count);put64(p+32,t->bar_bytes);
  put64(p+40,t->memory[0].physical+4096);put64(p+48,t->memory[1].physical+4096);put64(p+56,t->memory[2].physical);
  put32(p+64,t->status);put32(p+68,4096);put64(p+72,A733_PCIE_TEST_WINDOW);

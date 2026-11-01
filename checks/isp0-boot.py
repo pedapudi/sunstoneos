@@ -44,11 +44,14 @@ for bank,mask in ((4,0x02200000),(5,0x7000009e)):
   cases.append((f'bank{bank}-{kind}',offset+bank*4,mask))
 for case,case_offset,case_mask in cases:
  u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.reg_write(UC_ARM64_REG_PSTATE,13);u.reg_write(UC_ARM64_REG_TPIDR_EL1,0)
- for a,z in [(0x41000000,0x1200000),(0x90000000,0x200000),(0x03400000,0x10000),(0x02050000,0x1000),(0x07050000,0x1000)]:u.mem_map(a,z)
+ for a,z in [(0x41000000,0x1200000),(0x90000000,0x200000),(0x03400000,0x10000),(0x02050000,0x1000),(0x07050000,0x1000),(0x02002000,0x1000)]:u.mem_map(a,z)
  for a,b in e.parts:
   if b:u.mem_write(a,b)
  u.mem_write(0x42004000,contract);u.mem_write(0x41f00000,session)
  regs={0x03400000:0x30,0x03400004:7,0x03400088:0x55aa55aa,0x03400d08:0xffffffff,0x03400c14:0xaaaaaaaa,0x0340045c:0x12345678,0x034062f8:0x10000}
+ # The inherited boot now checks MBUS before CPU construction. Model its
+ # already-restored clock; this check covers IRQ admission, not MBUS changes.
+ regs[0x02002588]=0x81000000
  if case_offset is not None:regs[0x03400000+case_offset]=case_mask
  if case=='quiet-with-neighboring-interrupts':
   for base in (0x100,0x200,0x300):

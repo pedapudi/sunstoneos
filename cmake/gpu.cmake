@@ -55,7 +55,7 @@ if(SUNSTONE_GPU_FIRMWARE)
   add_executable(gpu-service-model EXCLUDE_FROM_ALL ${gpu_compute_sources}
     "${CMAKE_CURRENT_BINARY_DIR}/npu-service-start.S" platform/qemu-smp/platform.c
     runtime/memory.c runtime/memmove.c checks/pvr-gpu-service.c "${gpu_image}"
-    drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_firmware.c drivers/gpu/pvr_mips.c
+    drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_gpu_flush.c drivers/gpu/pvr_firmware.c drivers/gpu/pvr_mips.c
     drivers/gpu/pvr_fw_state.c drivers/gpu/pvr_ccb.c drivers/gpu/pvr_gpu_start.c
     drivers/gpu/pvr_gpu_control.c drivers/gpu/pvr_gpu_stop.c
     drivers/gpu/pvr_free_list.c drivers/gpu/pvr_gpu_events.c

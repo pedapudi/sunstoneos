@@ -62,8 +62,10 @@ static int plan(struct pvr_gpu_stop *s, struct pvr_gpu_control *c, const void *i
      * upstream's pvr_fw_stop ends (pvr_fw_startstop.c:315-320), assert the
      * soft reset of every unit, with the mask its pbe2_in_xe feature
      * selects, so that the GPU and the firmware are halted before the OFF. */
-    if (!acknowledged)
+    if (!acknowledged) {
         add(&result,WRITE,0x100,8,0,f[4]&1 ? UINT64_C(0xffeffffffffffc3d) : UINT64_C(0x00e7fffffffffc3d));
+        add(&result,POLL,0x100,8,UINT64_MAX,result.steps[result.count-1].value);
+    }
     *s=result; return 1;
 }
 int pvr_gpu_stop_init(struct pvr_gpu_stop *s, struct pvr_gpu_control *c,

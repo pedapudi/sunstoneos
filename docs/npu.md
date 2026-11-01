@@ -1,10 +1,25 @@
 # NPU implementation and model format
 
-Physical NPU execution remains **unproven**. The first supervised native launch
-produced no USB frames, and its sole refusal-report read timed out. That result
-does not establish whether NPU initialization began. The
-[native application record](npu-application.md) preserves the attempt, recovery
-and exact image identities.
+NPU startup, one inference and a two-model runtime are **board-qualified** on
+port 3-3 at 852 MHz and 800 mV. Each returns normally through the host-armed
+watchdog contract after CLOSE, local stop and matching output checks.
+The evidence is under `~/.cache/sunstoneos/build/npu-wdt-1031/runs/`:
+
+| Operation | Evidence directory | Result |
+| --- | --- | --- |
+| Startup without inference | `01-startup-only-28c8e15a2b62-834973ec/` | `NPU_STARTUP=READY_CLOSED_STOPPED; inference_jobs=0` |
+| One inference | `02-single-inference-0dd327616ce6-834973ec/` | `NPU_INFERENCE=MATCH; inference_jobs=1` |
+| Two-model runtime | `03-runtime-8f51a95699b7-834973ec/` | `NPU_INFERENCE=MATCH; inference_jobs=2` |
+
+Local restart, switching back to the first model, public application API access
+and domain OFF/restart are implemented and host-verified. Their board runs are
+pending, in that order. The [board queue](board-runner.md) has a host-checked
+finite NPU adapter. Submission requires the shared daemon to include it.
+The finite SDK diagnostic uses an EL1 application task;
+full OS EL0 mappings remain unqualified. Active-job reset recovery, thermal
+transitions, sustained operation and representative concurrent workloads also
+remain unqualified. The [native application record](npu-application.md)
+preserves narrower historical attempts and their recovery evidence.
 
 The host model inspector passes a reference comparison.
 [Page-table construction](npu-mmu.md) and the
@@ -48,7 +63,7 @@ transpose steps that the compiler emits around fully connected layers; its
 output matches the pinned SDK loader for every catalogue graph. Sessions take
 their memory from the platform pool by model size, which in the extended
 cached profile is the DDR reservation. Emulator checks with modeled device
-output pass; no board image links the runtime yet. The
+output pass. The bounded two-model runtime above also has physical evidence. The
 [mimus layer study](npu-mimus-linear.md) shows that the simulator computes a
 mimus int8 linear layer's sums exactly but rounds the output to INT16.
 
@@ -78,8 +93,8 @@ Its core hardware, memory, and scheduling files offer a dual MIT/GPL license.
 An adaptation can select the MIT terms while preserving the required notices.
 Downloaded reference files retain their original notices outside the repository.
 
-The SoC device tree supplies the following resources. These are reference
-values; no native NPU identity or execution result has been captured.
+The SoC device tree supplies the following resources. Native startup checks
+its admitted core identity before executing the qualified inference profiles.
 
 | Resource | Reference value |
 | --- | --- |
@@ -105,8 +120,9 @@ polling and FreeRTOS task/lock interfaces through repository source. It does not
 link the Linux driver or its file and ioctl interfaces into FreeRTOS. The first
 trusted convolution defaults to polling with interrupt ID 97 masked. The optional
 [finite interrupt profile](../apps/npu-interrupt/README.md) implements deferred
-completion on that interrupt. Physical interrupt delivery and broader concurrent
-use still require qualification.
+completion on that interrupt. The bounded returning profiles require interrupt
+completion and have the physical evidence above. Broader concurrent use remains
+unqualified.
 
 No external firmware request was found in the inspected VIPLite 2 subtree.
 That observation does not establish that every compiler or execution mode is
