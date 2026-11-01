@@ -13,13 +13,11 @@ foreach(pair "runtime.c|runtime|${os_qualification}/runtime.c"
              "continue.c|continue|${os_root}/platform/a733-smp-cached/continue.c"
              "continue.S|vectors|${storage_build}/continue.S"
              "main.c|main|${os_root}/apps/board/main.c"
-             "usb0.c|usb0|${os_root}/apps/mimus-board/usb0.c"
              "cpu.c|cpu|${os_root}/apps/os/cpu.c"
              "thermal.c|thermal|${os_root}/apps/os/thermal.c"
              "start.c|start|${os_root}/apps/os/start.c"
              "admission.c|admission|${os_root}/apps/os/admission.c"
-             "boot.c|boot|${os_build}/boot.c"
-             "recognition.cc|recognition|${os_recognition}")
+             "boot.c|boot|${os_build}/boot.c")
   string(REPLACE "|" ";" parts "${pair}")
   list(GET parts 0 unit)
   list(GET parts 1 patch_name)
