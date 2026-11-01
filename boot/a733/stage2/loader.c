@@ -15,6 +15,7 @@
 #include "a733_board_application.h"
 #include "../../../platform/a733-smp-cached/boot.h"
 #include "sunstone_session.h"
+#include "session.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -467,10 +468,9 @@ static const struct slot_extent *session_extent(const struct slot_header *h)
 }
 /* Resident contract for the integrated OS image (docs/os-image.md). The slot
  * supplies the session page as an asset; the slot header's extent digest
- * already authenticated it. Recorded workload 2 has 808 bytes, plus 272 for
- * NPU and 96 for the trailing CPU grant when selected; persisted epochs are
- * zero. The separate microphone profile retains 992 bytes. Every size must
- * match the session's size field. The loader stamps a fresh epoch, binds its new
+ * already authenticated it. Typed service extents fit within the session page;
+ * framing and persisted epochs are checked before watchdog arming. The loader
+ * stamps a fresh board epoch, binds its new
  * digest, its size and the image build ID that the session names, and
  * publishes the contract magic last. Deadlines count from arming. */
 static _Noreturn void enter(const struct slot_header *h)
@@ -483,10 +483,7 @@ static _Noreturn void enter(const struct slot_header *h)
     const struct ss_session_header *session = (const void *)((const uint8_t *)s + SS_SESSION_PREFIX_BYTES);
     if (!e || e->bytes < SS_SESSION_PREFIX_BYTES + sizeof(*session) ||
         e->bytes > SS_SESSION_MAX_BYTES || session->bytes != e->bytes) finish(ENTRY_REFUSED, 1);
-    if (s->magic != A733_BOARD_SUPERVISED_SESSION_MAGIC || s->version != 2 ||
-        s->bytes != sizeof(*s) || s->generation != h->generation || !s->lease ||
-        session->magic != SS_SESSION_MAGIC || session->version != SS_SESSION_VERSION ||
-        (session->flags & ~SS_SESSION_BIND_SID)) finish(ENTRY_REFUSED, 2);
+    if (!a733_stage2_session_valid(s, (size_t)e->bytes, h->generation)) finish(ENTRY_REFUSED, 2);
     if (session->flags & SS_SESSION_BIND_SID) {
         uint32_t sid[4]; uint8_t digest[32];
         for (unsigned i = 0; i < 4; ++i) sid[i] = rd(0x03006200 + 4*i);
