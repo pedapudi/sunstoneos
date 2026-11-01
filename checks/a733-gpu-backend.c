@@ -225,6 +225,11 @@ unsigned backend_check(void)
     CHECK(config.start.publish(&backend) && memory.phase == A733_GPU_MEMORY_PUBLISHED);
     /* The model's secure pages are plain memory, so both writes read back. */
     CHECK(backend.secure_smc0 == 2 && !backend.secure_drm);
+    /* The first timer correlation: record 1 at the core rate, then sequence 1. */
+    const volatile uint64_t *record = (const volatile uint64_t *)((uintptr_t)region(PVR_FW_UTILIZATION) + 40);
+    CHECK(*(const volatile uint32_t *)((uintptr_t)region(PVR_FW_UTILIZATION) + 10240) == 1 &&
+          record[0] && record[1] == record[0] && record[4] == A733_GPU_CORE_HZ &&
+          record[3] == (UINT64_C(256000000) << 20) / (A733_GPU_CORE_HZ / 1000));
     *(unsigned char *)((uintptr_t)region(PVR_FW_SYSTEM_INIT) + 352) = 1;
     uint32_t value = 0;
     CHECK(config.start.started(&backend, &value) && value == 1);

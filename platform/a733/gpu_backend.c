@@ -325,12 +325,36 @@ static int secure_configuration(struct a733_gpu_backend *b)
     sunstone_crumb(PVR_GPU_CRUMB_SECURE, (b->secure_smc0 & 0xffu) << 8 | (b->secure_drm & 0xffu));
     return 1;
 }
-/* The start's first step, before any start register write: the shared
- * memory becomes device-visible, then the secure configuration. */
+/* The first timer correlation, before the firmware starts, as the vendor
+ * host makes one on power-on (_RGXMakeTimeCorrData, rgxtimecorr.c:271-343)
+ * and as the qualified probe does before its start (apps/gpu-power-id/
+ * fw-start.c, timer_record): RGX_CR_TIMER, read again when its copy of bit
+ * 31 in bit 63 differs, bits 47:0; the OS time in ns; then the record and
+ * its sequence word through a733_gpu_memory_clock at the published rate. */
+static int timer_correlation(struct a733_gpu_backend *b)
+{
+    uint64_t cr, us;
+    unsigned reads = 1;
+    if (!raw_read(b, 0x160, 8, &cr)) return 0;
+    if ((cr ^ (cr << 32)) & (UINT64_C(1) << 63)) {
+        reads = 2;
+        if (!raw_read(b, 0x160, 8, &cr) || ((cr ^ (cr << 32)) & (UINT64_C(1) << 63)))
+            return fail(b, A733_GPU_BACKEND_CLOCK);
+    }
+    if (!now(b, &us) || us > UINT64_MAX / 1000 ||
+        !memory_result(b, a733_gpu_memory_clock(b->memory, b->service->config.state.gpu_clock_hz, us * 1000,
+                                                cr & UINT64_C(0xffffffffffff)))) return 0;
+    sunstone_crumb(PVR_GPU_CRUMB_TIMER, reads);
+    return 1;
+}
+/* The start's first step, before any start register write, in the probe's
+ * order: the shared memory becomes device-visible, then the timer
+ * correlation and the secure configuration. */
 static int publish(void *context)
 {
     struct a733_gpu_backend *b = context;
-    return active(b) && memory_result(b, a733_gpu_memory_publish(b->memory)) && secure_configuration(b);
+    return active(b) && memory_result(b, a733_gpu_memory_publish(b->memory)) && timer_correlation(b) &&
+        secure_configuration(b);
 }
 static int started(void *context, uint32_t *out)
 {
