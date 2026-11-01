@@ -38,6 +38,7 @@ int main(int argc,char **argv)
     assert(ss_cpu_topology_info(NULL)==SS_TOPOLOGY_INVALID);
     assert(ss_cpu_topology(out,SS_CPU_MAX,NULL)==SS_TOPOLOGY_INVALID);
     assert(ss_work_split(1,1,1,ranges,SS_CPU_MAX,NULL)==SS_TOPOLOGY_INVALID);
+    assert(ss_work_split_max(1,1,1,ranges,SS_CPU_MAX,NULL)==SS_TOPOLOGY_INVALID);
 #ifndef SUNSTONE_A733_CPU_TOPOLOGY
     (void)argv;
     memset(&info,0xa5,sizeof(info));
@@ -45,6 +46,7 @@ int main(int argc,char **argv)
     struct ss_cpu_topology_info zero={0};assert(!memcmp(&info,&zero,sizeof(info)));
     assert(ss_cpu_topology(out,SS_CPU_MAX,&count)==SS_TOPOLOGY_UNCALIBRATED&&count==0);
     assert(ss_work_split(1,1,1,ranges,SS_CPU_MAX,&count)==SS_TOPOLOGY_UNCALIBRATED&&count==0);
+    assert(ss_work_split_max(1,1,1,ranges,SS_CPU_MAX,&count)==SS_TOPOLOGY_UNCALIBRATED&&count==0);
     assert(!ss_cpu_observations(0,NULL));
 #else
     prepare();
@@ -59,6 +61,7 @@ int main(int argc,char **argv)
         if(!strcmp(argv[1],"identity"))observed[7].flags=0;
         assert(ss_cpu_topology_info(&info)==SS_TOPOLOGY_INVALID);
         assert(ss_work_split(1,255,1,ranges,SS_CPU_MAX,&count)==SS_TOPOLOGY_INVALID&&count==0);
+        assert(ss_work_split_max(1,255,1,ranges,SS_CPU_MAX,&count)==SS_TOPOLOGY_INVALID&&count==0);
         prepare(); /* A captured identity mismatch remains a boot fault. */
         assert(ss_cpu_topology(out,SS_CPU_MAX,&count)==SS_TOPOLOGY_INVALID&&count==0);
         goto unchanged;
@@ -66,15 +69,24 @@ int main(int argc,char **argv)
         fixture.version=0;
         assert(ss_cpu_topology_info(&info)==SS_TOPOLOGY_INVALID);
         goto unchanged;
+    }else if(!strcmp(argv[1],"uncalibrated")){
+        for(unsigned c=0;c<fixture.cpu_count;++c){
+            cpus[c].capacity_max=0;cpus[c].flags=0;
+        }
+        fixture.calibration_epoch=0;
+        assert(ss_work_split_max(256,255,1,ranges,SS_CPU_MAX,&count)==SS_TOPOLOGY_UNCALIBRATED);
+        goto unchanged;
     }else if(!strcmp(argv[1],"calibrated")){
         fixture.calibration_epoch=1;fixture.operating_epoch=1;
         fixture.calibration_source="synthetic wrapper fixture";
         fixture.capacity_workload="synthetic integer weights";
         for(unsigned c=0;c<fixture.cpu_count;++c){
-            cpus[c].capacity_max=cpus[c].capacity_effective=c<6?512:1024;
+            cpus[c].capacity_max=c<6?512:1024;cpus[c].capacity_effective=128;
             cpus[c].flags=SS_CPU_CAPACITY_MAX_VALID|SS_CPU_CAPACITY_EFFECTIVE_VALID;
         }
         assert(ss_work_split(100,255,1,ranges,SS_CPU_MAX,&count)==SS_TOPOLOGY_OK&&count==8);
+        for(unsigned c=0;c<8;++c)assert(ranges[c].end-ranges[c].begin==(c<4?13:12));
+        assert(ss_work_split_max(100,255,1,ranges,SS_CPU_MAX,&count)==SS_TOPOLOGY_OK&&count==8);
         for(unsigned c=0;c<8;++c)assert(ranges[c].end-ranges[c].begin==(c<6?10:20));
         assert(ss_work_split(100,255,1,ranges,7,&count)==SS_TOPOLOGY_SPACE&&count==8);
         puts("calibrated wrapper split conserves work and uses capacity weights");return 0;
@@ -83,13 +95,22 @@ int main(int argc,char **argv)
     }
     assert(ss_cpu_topology_info(&info)==SS_TOPOLOGY_OK);
     assert(info.cpu_count==8&&info.cache_count==25&&info.domain_count==2);
-    assert(info.admitted==255&&info.observed==255&&info.calibration_epoch==0);
+    assert(info.admitted==255&&info.observed==255&&info.calibration_epoch==fixture.calibration_epoch);
     assert(ss_cpu_topology(out,7,&count)==SS_TOPOLOGY_SPACE&&count==8);
     assert(!memcmp(out,saved,sizeof(out)));
     assert(ss_cpu_topology(out,SS_CPU_MAX,&count)==SS_TOPOLOGY_OK&&count==8);
     assert(out[7].affinity==0x700&&out[7].midr==0x414fd0b1);
     assert(ss_cpu_topology(NULL,0,&count)==SS_TOPOLOGY_SPACE&&count==8);
     assert(ss_work_split(100,255,1,ranges,SS_CPU_MAX,&count)==SS_TOPOLOGY_UNCALIBRATED);
+    assert(!memcmp(ranges,saved_ranges,sizeof(ranges)));
+    assert(ss_work_split_max(256,255,1,ranges,7,&count)==SS_TOPOLOGY_SPACE&&count==8);
+    assert(!memcmp(ranges,saved_ranges,sizeof(ranges)));
+    assert(ss_work_split_max(256,UINT64_C(1)<<8,1,ranges,SS_CPU_MAX,&count)==SS_TOPOLOGY_INVALID);
+    assert(!memcmp(ranges,saved_ranges,sizeof(ranges)));
+    assert(ss_work_split_max(256,255,1,ranges,SS_CPU_MAX,&count)==SS_TOPOLOGY_OK&&count==8);
+    const unsigned lengths[]={20,20,19,19,19,19,70,70};
+    for(unsigned c=0;c<8;++c)assert(ranges[c].end-ranges[c].begin==lengths[c]);
+    assert(ss_cpu_topology_info(&info)==SS_TOPOLOGY_OK&&!info.operating_epoch);
     struct ss_cpu_observation observation;
     assert(ss_cpu_observations(7,&observation)&&observation.mpidr==0x80000700);
     assert(!ss_cpu_observations(SS_CPU_MAX,&observation)&&!ss_cpu_observations(7,NULL));

@@ -86,3 +86,30 @@ int ss_cpu_observations(unsigned core,struct ss_cpu_observation *out)
     (void)core;(void)out;return 0;
 #endif
 }
+int ss_work_split_max(uint64_t units,uint64_t mask,uint32_t quantum,
+                      struct ss_work_range *out,size_t capacity,size_t *count)
+{
+    if(!count)return SS_TOPOLOGY_INVALID;
+    *count=0;
+#ifdef SUNSTONE_A733_CPU_TOPOLOGY
+    const struct ss_cpu_topology *t=snapshot();
+    if(!t)return SS_TOPOLOGY_INVALID;
+    struct ss_cpu_info cpus[SS_CPU_MAX];
+    struct ss_cpu_topology maximum=*t;
+    for(size_t c=0;c<t->cpu_count;++c){
+        cpus[c]=t->cpus[c];
+        cpus[c].capacity_effective=cpus[c].capacity_max;
+        cpus[c].flags&=~SS_CPU_CAPACITY_EFFECTIVE_VALID;
+        if(cpus[c].flags&SS_CPU_CAPACITY_MAX_VALID)
+            cpus[c].flags|=SS_CPU_CAPACITY_EFFECTIVE_VALID;
+    }
+    /* This private view represents the measured calibration point. It is
+     * never published as the live operating state. All immutable fields and
+     * capacity bounds were checked by snapshot() before this projection. */
+    maximum.cpus=cpus;maximum.operating_epoch=t->calibration_epoch;
+    return ss_cpu_work_split(&maximum,units,mask,quantum,out,capacity,count);
+#else
+    (void)units;(void)mask;(void)quantum;(void)out;(void)capacity;
+    return SS_TOPOLOGY_UNCALIBRATED;
+#endif
+}

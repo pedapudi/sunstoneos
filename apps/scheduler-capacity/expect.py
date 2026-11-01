@@ -42,7 +42,8 @@ def discovery_expectation():
     words[4:8] = [host.WORDS, host.ROUNDS, host.WARM, host.REPS]
     for core in range(8):
         base = 32 + core * host.CORE_BYTES
-        u64(base, 0x80000000 | core << 8)
+        # MPIDR.MT is set on both observed A733 core types. Affinity is in Aff1.
+        u64(base, 0x81000000 | core << 8)
         u64(base + 8, 0x412fd050 if core < 6 else 0x414fd0b1)
         words[(base + 16) // 4:(base + 40) // 4] = [raw] * 6
         words[(base + 40) // 4:(base + 64) // 4] = [core, 15, 2, {'min': 0, 'max': 1}, 4, 0]

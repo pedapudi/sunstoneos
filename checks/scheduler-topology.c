@@ -87,8 +87,11 @@ int main(void)
     unsigned cpu=99,n=0;
     for(unsigned i=0;i<8;i++) {
         assert(ss_cpu_from_mpidr(a,(UINT64_C(1)<<31)|((uint64_t)i<<8),&cpu)==0 && cpu==i);
-        assert(a->cpus[i].capacity_max==0 && !(a->cpus[i].flags & SS_CPU_ENERGY_VALID));
+        assert(a->cpus[i].capacity_max==(i<6?285u:1024u));
+        assert(a->cpus[i].flags==SS_CPU_CAPACITY_MAX_VALID && !a->cpus[i].capacity_effective);
     }
+    assert(a->calibration_epoch && a->calibration_source && a->capacity_workload);
+    assert(!a->operating_epoch && a->caches[24].bytes==1048576);
     assert(!a->domains[0].energy && !a->domains[0].energy_count);
     assert(a->opp_frequency_hz(A733_CPU_LITTLE,0)==416000000);
     assert(a->opp_frequency_hz(A733_CPU_LITTLE,999)==0);

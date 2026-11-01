@@ -32,7 +32,7 @@ for enabled in (False, True):
         extra = ['-DSUNSTONE_A733_CPU_TOPOLOGY=1', str(out / 'data.o')]
     subprocess.run([*flags, *extra, *[str(root / s) for s in sources], '-Wl,--gc-sections',
                     '-o', str(exe)], check=True, env=env)
-    for case in ('normal', 'missing', 'affinity', 'midr', 'identity', 'invalid', 'calibrated', 'revision') if enabled else ('disabled',):
+    for case in ('normal', 'missing', 'affinity', 'midr', 'identity', 'invalid', 'uncalibrated', 'calibrated', 'revision') if enabled else ('disabled',):
         r = subprocess.run([str(exe), case], check=True, env=env, capture_output=True, text=True)
         (out / (exe.name + '-' + case + '.log')).write_text(r.stdout)
         print(exe.name, case, r.stdout.strip())
