@@ -689,8 +689,15 @@ def renewal(elf):
     """The monitor's 0x734 handler returns zero and moves CNTPS_CVAL_EL1 2 s on."""
     m = machine.Machine(elf, step=0)
     start = m.address('monitor_sync')
-    eret = start + 0x38
-    assert int.from_bytes(m.uc.mem_read(eret, 4), 'little') == 0xd69f03e0
+    # Find the linked return instruction rather than assuming the legacy
+    # handler's byte count; probe renewal adds deadline and WDT checks.
+    returns=[start+i for i in range(0,512,4) if m.read(start+i,4)==0xd69f03e0]
+    assert returns
+    eret=returns[0]
+    if 'sunstone_probe_deadline' in m.e.symbols:
+        m.map(0x02050000,4096)
+        m.write(0x02050014,0xb1,4)
+        m.write(m.address('sunstone_probe_deadline'),30*TICK)
     m.sys[(3, 6, 5, 2, 0)] = 0x17 << 26
     m.now = 5 * TICK
     m.uc.reg_write(UC_ARM64_REG_SP, 0x43ff0000)
@@ -700,8 +707,8 @@ def renewal(elf):
     regs = [m.uc.reg_read(UC_ARM64_REG_X0 + i) for i in range(4)]
     assert regs == [0, 11, 22, 33] and m.uc.reg_read(UC_ARM64_REG_SP) == 0x43ff0000
     assert m.sys[(3, 7, 14, 2, 2)] == m.now + 2 * TICK
-    # Any other SMC ends in the monitor's exception path.
-    m.uc.reg_write(UC_ARM64_REG_X0, 0x735)
+    # An unsupported SMC ends in the monitor's exception path.
+    m.uc.reg_write(UC_ARM64_REG_X0, 0x736) # 0x735 is the probe's fatal SMC.
     m.uc.emu_start(start, m.address('monitor_exception'))
     assert m.pc() == m.address('monitor_exception')
     return {'cntps_cval_advance_ticks': 2 * TICK}

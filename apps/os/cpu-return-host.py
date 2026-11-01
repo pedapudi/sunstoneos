@@ -266,3 +266,17 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# Compatibility names for the single-owner board runner.
+decode_return_report = decode_report
+
+def capture_result(tx, image, epoch, generation, output):
+    geometry = host.result_geometry(image)
+    output = Path(output)
+    require(not output.exists(), "Result capture destination already exists.")
+    tx("read", hex(geometry["address"]), geometry["bytes"], output)
+    raw = output.read_bytes()
+    info = host.image_manifest(image)
+    payload = host.decode_result(raw, epoch, generation, info["manifest"]["output_limit"])
+    return {"payload": payload, "record_sha256": hashlib.sha256(raw).hexdigest()}
