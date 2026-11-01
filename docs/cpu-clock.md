@@ -291,6 +291,23 @@ lock and mux settles also exceed the manual's minimum 1 us between updates.
 The correction adds no register write or voltage transition and relaxes no
 request, update, lock, burst or release deadline.
 
+LOCK qualification uses both sides of each register read. The poll-entry
+sample determines eligibility against the previous counted read's post-read
+sample plus four whole microseconds. The driver then reads the PLL and samples
+time again. An eligible set LOCK counts using that post-read time; any observed
+clear LOCK resets the count. An early set LOCK never counts, even if preemption
+delays its later timestamp. A failed post-read time sample retains ownership.
+This preserves the vendor's minimum observation gap under preemption before
+or after MMIO. It adds one existing counter-provider call per PLL poll, with
+no new state, hardware write, sleep or configured timeout.
+
+`checks/cpu-clock-model.c --lock-timing-only` covers preemption before and after
+LOCK observation, failed post-read time, an early unlocked observation and
+expiry while waiting inside the observation gap. The original timestamps fail
+the first preemption case. A post-read-only mutation fails the second case,
+which requires the pre-read eligibility check as well. All five cases preserve
+high DCDC3 until successful lock qualification, mux reselection and settling.
+
 `checks/cpu-clock-model.c --close-update-only` covers staged N during raise
 and close, wrong N after completion, stuck UPDATE and read failure. The model
 keeps visible and staged N separate, instead of making an N write immediately

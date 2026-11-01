@@ -17,6 +17,7 @@ struct cpu_model {
     unsigned bin, stuck_update, stuck_lock, ignore_pmic, reads, writes, count, read_ns, frac_ns;
     uint32_t staged_n[3]; /* N reads stay at the old value until UPDATE completes. */
     unsigned old_n_reads, wrong_update, fail_update_read;
+    unsigned lock_delay_before_us, lock_delay_after_us, fail_post_read, fail_next_time;
     uint64_t update_at[3], lock_at[3], lock_us; /* lock_us 0: lock 20 us after the update. */
     uint64_t park_ns[3]; /* Time of each domain's latest park write, in nanoseconds. */
     /* Lock reads while parked: consecutive set reads counted at least 3 us
@@ -87,7 +88,8 @@ static void pmic_written(void *v,uint8_t reg,uint8_t value)
 static uint64_t model_ns(void){return pm.now*1000u+cm.frac_ns;}
 static int cpu_now(void *v,uint64_t *out)
 {
-    (void)v;int r=pmic_model_now(&pm,out);
+    (void)v;if(cm.fail_next_time){cm.fail_next_time=0;return 0;}
+    int r=pmic_model_now(&pm,out);
     cm.frac_ns+=cm.read_ns;pm.now+=cm.frac_ns/1000u;cm.frac_ns%=1000u;
     return r;
 }
@@ -107,6 +109,9 @@ static int cpu_read(void *v,uintptr_t a,uint32_t *out)
     for(unsigned d=0;d<3;++d) {
         if(a!=PLL(d))continue;
         if(cm.fail_update_read && (*word(a)&(1u<<26)))return 0;
+        if(cpu.state==10 && d==cpu.cluster){
+            pm.now+=cm.lock_delay_before_us;cm.lock_delay_before_us=0;
+        }
         advance(d);*out=*word(a);
         if((*out&(1u<<26)) && (*out&(255u<<8))!=cm.staged_n[d])++cm.old_n_reads;
         if(((*word(SEL(d))>>24)&7) || (*out&(1u<<26)))continue;
@@ -116,6 +121,11 @@ static int cpu_read(void *v,uintptr_t a,uint32_t *out)
             cm.lock_seen_ns[d]=model_ns();
             if(++cm.lock_run[d]==3)cm.lock_third_ns[d]=model_ns();
             if(cm.lock_run[d]>cm.max_lock_run)cm.max_lock_run=cm.lock_run[d];
+        }
+        if(cpu.state==10 && d==cpu.cluster){
+            /* The MMIO observation precedes this modeled preemption. */
+            pm.now+=cm.lock_delay_after_us;cm.lock_delay_after_us=0;
+            if(cm.fail_post_read){cm.fail_post_read=0;cm.fail_next_time=1;}
         }
     }
     return 1;
@@ -432,6 +442,52 @@ static void update_cases(void)
     }
     puts("PASS update readback: 5 cases; staged N on raise/close, wrong completed N, stuck UPDATE, read fault");
 }
+/* Driver LOCK is state 10. Inject preemption on either side of MMIO so
+ * a sample timestamp alone cannot establish the actual observation gap. */
+static void lock_timing_setup(void)
+{
+    close_update_setup();
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.state==9);
+    pm.now+=50;
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.state==10);
+    cm.read_ns=0;
+}
+static void lock_timing_cases(void)
+{
+    for(unsigned mode=0;mode<2;++mode){
+        lock_timing_setup();
+        if(mode==0)cm.lock_delay_before_us=20;
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.lock.locked==1);
+        /* Next observation is immediate, or only 1 us later. Preemption
+         * after an early read must not make that read eligible to count. */
+        if(mode==1){++pm.now;cm.lock_delay_after_us=20;}
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING);
+        if(cpu.lock.locked!=1)fprintf(stderr,"LOCK timing mode=%u counted=%u\n",mode,cpu.lock.locked);
+        assert(cpu.lock.locked==1);
+        cm.read_ns=80;pm.now+=5;
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.lock.locked==2);
+        pm.now+=5;
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.state==11);
+        assert(cm.lock_run[1]>=3 && model_ns()>=cm.lock_third_ns[1]+20000u);
+        assert(pm.pmic[REG_DCDC3]==55 && !pmic_writes());
+        assert(run(400)==A733_CPU_CLOCK_COMPLETE && released() && pm.pmic[REG_DCDC3]==30);
+    }
+    lock_timing_setup();cm.fail_post_read=1;
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_RETAINED && cpu.failed);
+    assert(pm.pmic[REG_DCDC3]==55 && !pmic_writes());retained();
+    /* An early observation still resets qualification when LOCK is clear. */
+    lock_timing_setup();
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.lock.locked==1);
+    cm.stuck_lock=1;*word(PLL(1))&=~(1u<<28);
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && !cpu.lock.locked);
+    /* Keep the counter fixed inside the gap, but expire the lock timer. */
+    cm.stuck_lock=0;*word(PLL(1))|=1u<<28;
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.lock.locked==1);
+    cpu.timer=pm.now;
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_RETAINED && cpu.failed);
+    assert(pm.pmic[REG_DCDC3]==55 && !pmic_writes());retained();
+    puts("PASS LOCK observation timing: 5 cases; preemption before/after MMIO, time fault, early unlock, timeout");
+}
 /* The steps of docs/designs/cpu-top-opp.md on a modeled port 3-3. */
 static void top_cases(void)
 {
@@ -569,8 +625,10 @@ int main(int argc,char **argv)
 {
     if(argc==2 && !strcmp(argv[1],"--late-policy-reproduce")){late_policy_cases(1);return 0;}
     if(argc==2 && !strcmp(argv[1],"--late-policy-only")){late_policy_cases(0);return 0;}
+    if(argc==2 && !strcmp(argv[1],"--lock-timing-only")){lock_timing_cases();return 0;}
     update_cases();
     if(argc==2 && !strcmp(argv[1],"--close-update-only"))return 0;
+    lock_timing_cases();
     late_policy_cases(0);
     inherited_cases();
     if(argc==2 && !strcmp(argv[1],"--inherited-only"))return 0;

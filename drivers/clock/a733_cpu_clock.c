@@ -641,20 +641,25 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
     }
     case S_UPDATE:
     case S_LOCK: {
+        /* Eligibility uses time before the read, relative to the previous
+         * counted read's post-read sample. Preemption on either side of
+         * MMIO can delay a sample but cannot qualify an early observation. */
+        const unsigned countable=c->state!=S_LOCK || !c->lock.locked ||
+            c->last_now>=c->lock.counted_at+A733_PLL_LOCK_GAP_US+1u;
         uint32_t pll;
         if(!rd(c,pll_word(c->cluster),&pll))return fault(c);
+        if(!time_now(c))return fault(c);
         /* N is manually updated: readback may remain at the old value until
          * UPDATE clears (manual 5.1.4.2; vendor ccu_nkmp_set_rate). */
         if(c->state==S_UPDATE && (pll&UPDATE))
             return c->last_now<c->timer ? A733_CPU_CLOCK_PENDING : fault(c);
         if(((pll>>8)&255)!=c->n)return fault(c);
-        if(c->state==S_UPDATE ? (pll&UPDATE)!=0 : (pll&LOCK)==0) {
-            if(c->state==S_LOCK)(void)a733_pll_lock_count(&c->lock,c->last_now,0);
+        if(c->state==S_LOCK && !(pll&LOCK)) {
+            (void)a733_pll_lock_count(&c->lock,c->last_now,0);
             return c->last_now<c->timer ? A733_CPU_CLOCK_PENDING : fault(c);
         }
         if(c->state==S_UPDATE){c->timer=c->last_now+LOCK_US;c->state=S_LOCK;return A733_CPU_CLOCK_PENDING;}
-        /* A lock read sooner than the gap after the last counted one does
-         * not count; polls come faster than the gap in a burst. */
+        if(!countable)return c->last_now<c->timer ? A733_CPU_CLOCK_PENDING : fault(c);
         if(!a733_pll_lock_count(&c->lock,c->last_now,1))return c->last_now<c->timer ? A733_CPU_CLOCK_PENDING : fault(c);
         if(!settle(c,A733_PLL_LOCK_SETTLE_US))return fault(c);
         c->state=S_UNPARK;return A733_CPU_CLOCK_PENDING;
