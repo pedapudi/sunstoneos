@@ -4,8 +4,9 @@ Mimus runs through the SunstoneOS application kit from its own repository.
 The acceptance branch `port/sunstoneos-acceptance-on-split` is based on CPU
 engine revision `0cbc96950`. Commits `1a485bad4` and `8f0e0f127` supply paced
 replay and CPU-only manifest permissions. The separate build patch selects
-paced replay. Images use SunstoneOS `e124d65f`; its cached C++ layout includes
-the CPU worker's fix. No duplicate linker patch is required.
+paced replay. The recorded result uses SunstoneOS `e124d65f`; the fresh paced
+image uses `cbf591ff`, including `bringup` `6ebe687a`. The cached C++ layout
+includes the CPU worker's fix. No duplicate linker patch is required.
 
 ## Recorded input passes physical acceptance
 
@@ -24,13 +25,20 @@ snapshot from `apps/os/cpu.c:mhz`; it does not measure the active DSU clock.
 
 ## Paced physical acceptance needs a completed capture
 
-Queue entry `1793516482062422295-b7b2893e` has no final result or captured
-transcript. Its board outcome and timing are unknown. The stopped queue daemon
-and unavailable boards block physical work. The coordinator must reconcile
-that interrupted entry and recover board access before another submission.
-A paced control and five subsequent fresh-session trials remain required.
-The runner supplies one native launch per submission; these trials do not
-exercise retained application state across five replays in one native session.
+Queue entry `1793556850281227875-c450351e` fails before launch on port 3-1.
+The first FEL `version` transaction times out during USB bulk send after
+10.022193 seconds. The runner records `host-error` at `identity`, with
+`launch_attempted=false` and `quarantined=true`. The originating check is
+`tools/board.py:Live.sanity`, through `tx('version')`; its transaction log
+records exit code 2 and no output. No reset, DRAM setup, image upload or native
+execution occurs. There is no application transcript, CRC or pacing timing.
+
+Port 3-1 is paused. Coordinator recovery and resumption are required before a
+new control; all five repeat trials remain unsubmitted. The image's numerical
+and pacing behavior is untested on this OS revision. An image change cannot
+resolve the observed prelaunch transport failure. The runner supplies one
+native launch per submission; the planned trials check fresh sessions rather
+than five replays within one native session.
 
 ## Host validation passes
 
@@ -39,12 +47,14 @@ paced image also passes linked-image and public-interface checks. Actual kit
 adapters with eight FreeRTOS workers pass recorded and paced QEMU parity.
 The QEMU kit grant models five regions; physical recorded admission checks the
 production manifest's six regions, including packed weights.
-Both adapter sanitizer checks pass. The selected integration gate and check
-index pass. Independent review finds no blocking rebase or build-patch defect.
+Both adapter sanitizer checks and QEMU parity retain their evidence for the
+unchanged application sources. Fresh baseline builds, the CPU clock model,
+three returning-watchdog cases, the selected integration gate and check index
+pass on the updated OS. Independent review finds no blocking rebase or build-patch defect.
 Firmware and host sources equal the requested engine revision.
 
-Builds, source identities, image READMEs, transcripts and parity records are in
-`~/.cache/sunstoneos/build/app-acceptance-1031/on-split/`. Shared integration
-patches and the exact remaining submission commands are in that directory's
-`shared-patches/` and `remaining-submissions.sh`. Sustained replay, live input,
+Fresh images, submission metadata and the transport-failure decode are in
+`~/.cache/sunstoneos/build/app-acceptance-1031/queue-1101/`; its
+`shared-patches/` directory holds integration patches. Recorded and existing
+host parity evidence remain in the sibling `on-split/` directory. Sustained replay, live input,
 session expiry and accelerator-assisted execution remain unqualified.
