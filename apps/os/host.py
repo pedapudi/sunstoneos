@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""Offline SunstoneOS manifest, typed-session and result records.
+
+Application payloads remain opaque. Device evidence and transport ownership
+are validated by the caller before it uses these records for a board launch.
+"""
+import hashlib
+import importlib.util
+import io
+from pathlib import Path
+import struct
+from elftools.elf.elffile import ELFFile
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    value = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(value)
+    return value
+
+
+manifest_tool = module('ss_host_manifest', ROOT / 'tools/sunstone-manifest.py')
+PREFIX_BYTES, MAX_BYTES = 592, 4096
+SESSION_MAGIC, SESSION_VERSION = 0x324e4f4953534553, 1
+BIND_SID = 1
+HEADER = struct.Struct('<QQIIII32s')
+EXTENT = struct.Struct('<II')
+INPUT = struct.Struct('<Q32s')
+THERMAL, AUDIO, NPU, CPU_GRANT, INPUTS = 1, 2, 3, 4, 16
+SERVICE_BYTES = {THERMAL: 216, AUDIO: 184, NPU: 272, CPU_GRANT: 96}
+RESULT_MAGIC, RESULT_VERSION, RESULT_FINISHED = 0x31544c5553455241, 1, 1
+RESULT = struct.Struct('<7Q')
+
+
+def require(ok, message):
+    if not ok:
+        raise ValueError(message)
+
+
+def image_manifest(image):
+    """Read the linked section; JSON supplied beside an image is not authority."""
+    raw = Path(image).read_bytes() if isinstance(image, (str, Path)) else bytes(image)
+    elf = ELFFile(io.BytesIO(raw))
+    sections = [s for s in elf.iter_sections() if s.name == 'sunstone_manifest']
+    require(len(sections) <= 1, 'Ambiguous application manifest section.')
+    section = sections[0] if sections else None
+    packed = section.data() if section else b''
+    require(not section or section['sh_type'] == 'SHT_PROGBITS' and section['sh_flags'] & 2 and not section['sh_flags'] & 1,
+            'Application manifest must be immutable allocated data.')
+    manifests = manifest_tool.unpack(packed) if packed else []
+    require(len(manifests) <= 1, 'One application per image required.')
+    return {'sha256': hashlib.sha256(packed).hexdigest(), 'manifest': manifests[0] if manifests else None,
+            'section': packed, 'elf': elf}
+
+
+def regions(manifest, kinds):
+    return [dict(r) for r in (manifest or {}).get('regions', []) if r['kind'] in kinds]
+
+
+def input_facts(manifest, inputs):
+    declared = regions(manifest, (manifest_tool.KIND['input'],))
+    require(len(inputs) == len(declared), 'Input count differs from manifest.')
+    facts, uploads = bytearray(), []
+    for index, (region, data) in enumerate(zip(declared, inputs)):
+        data = bytes(data)
+        digest = hashlib.sha256(data).digest()
+        pinned = bytes.fromhex(region['sha256'])
+        require(0 < len(data) <= region['bytes'], 'Input length exceeds manifest region.')
+        require(not any(pinned) or len(data) == region['bytes'] and digest == pinned,
+                'Input differs from pinned manifest digest or length.')
+        facts.extend(INPUT.pack(len(data), digest))
+        uploads.append({'index': index, 'address': region['address'], 'bytes': len(data),
+                        'sha256': digest.hex()})
+    return bytes(facts), uploads
+
+
+def session_decode(raw, manifest=None, manifest_sha256=None):
+    raw = bytes(raw)
+    require(PREFIX_BYTES + HEADER.size <= len(raw) <= MAX_BYTES, 'Invalid typed session size.')
+    magic, version, size, count, devices, flags, digest = HEADER.unpack_from(raw, PREFIX_BYTES)
+    require((magic, version, size) == (SESSION_MAGIC, SESSION_VERSION, len(raw)), 'Invalid typed session header.')
+    require(not flags & ~BIND_SID and not devices & ~31, 'Unknown session devices or flags.')
+    extents, offsets, offset = {}, {}, PREFIX_BYTES + HEADER.size
+    for _ in range(count):
+        require(offset + EXTENT.size <= len(raw), 'Truncated session extent header.')
+        kind, size = EXTENT.unpack_from(raw, offset)
+        offset += EXTENT.size
+        require(kind < 32 and kind not in extents, 'Duplicate or invalid session extent type.')
+        padded = (size + 7) & ~7
+        require(offset + padded <= len(raw), 'Truncated session extent payload.')
+        require(not any(raw[offset + size:offset + padded]), 'Nonzero session extent padding.')
+        offsets[kind], extents[kind] = offset, raw[offset:offset + size]
+        offset += padded
+    require(offset == len(raw), 'Unconsumed typed session bytes.')
+    for kind, size in SERVICE_BYTES.items():
+        require(kind not in extents or len(extents[kind]) == size, 'Invalid service extent size.')
+    require(THERMAL in extents, 'Missing thermal service extent.')
+    if manifest_sha256 is not None:
+        require(digest.hex() == manifest_sha256, 'Session manifest digest differs from image.')
+    if manifest is not None or manifest_sha256 is not None:
+        m = manifest or {}
+        required, optional = m.get('devices_required', 0), m.get('devices_optional', 0)
+        require(devices & required == required and not devices & ~(required | optional),
+                'Session device grant differs from manifest.')
+        capture = devices & 12
+        require(capture in (0, 4, 8), 'Multiple capture devices granted.')
+        require(not devices & 2 or devices & 1, 'Keyboard grant requires storage.')
+        require(devices & 1 or not capture and flags & BIND_SID,
+                'Session without storage requires SID binding and no capture.')
+        workload = struct.unpack_from('<I', raw, 400)[0]
+        expected = 4 if devices & 2 else 0 if devices & 1 else 2
+        require(workload == expected or workload == 1 and expected == 0,
+                'Board workload differs from device grant.')
+        facts = extents.get(INPUTS, b'')
+        declared = regions(manifest, (manifest_tool.KIND['input'],))
+        require(len(facts) == INPUT.size * len(declared), 'INPUTS extent count differs from manifest.')
+        for index, region in enumerate(declared):
+            size, actual = INPUT.unpack_from(facts, index * INPUT.size)
+            pinned = bytes.fromhex(region['sha256'])
+            require(0 < size <= region['bytes'], 'Input length exceeds manifest region.')
+            require(not any(pinned) or size == region['bytes'] and actual == pinned,
+                    'INPUTS extent differs from pinned manifest digest or length.')
+        if capture:
+            require(AUDIO in extents, 'Capture grant requires audio service extent.')
+            samples = struct.unpack_from('<I', extents[AUDIO], 164)[0]
+            require(m['audio']['min_frames'] <= samples <= m['audio']['max_frames'],
+                    'Capture length differs from manifest.')
+    return {'devices': devices, 'flags': flags, 'manifest_sha256': digest.hex(),
+            'extents': extents, 'offsets': offsets}
+
+
+def session_bytes(prefix, services, manifest, manifest_sha256, devices, flags=0, inputs=()):
+    """Build a typed session from existing board and service record producers."""
+    require(len(prefix) == PREFIX_BYTES, 'Board prefix size differs.')
+    facts, _ = input_facts(manifest, inputs)
+    records = dict(services)
+    require(INPUTS not in records, 'INPUTS must come from the input producer.')
+    if facts:
+        records[INPUTS] = facts
+    body = bytearray()
+    for kind, data in records.items():
+        data = bytes(data)
+        body.extend(EXTENT.pack(kind, len(data)))
+        body.extend(data)
+        body.extend(bytes((-len(data)) % 8))
+    raw = bytes(prefix) + HEADER.pack(SESSION_MAGIC, SESSION_VERSION, PREFIX_BYTES + HEADER.size + len(body),
+                                    len(records), devices, flags, bytes.fromhex(manifest_sha256)) + body
+    session_decode(raw, manifest, manifest_sha256)
+    return raw
+
+
+def result_geometry(image):
+    info = image_manifest(image)
+    require(info['manifest'] is not None, 'Result requires an application manifest.')
+    table = info['elf'].get_section_by_name('.symtab')
+    found = [s for s in table.iter_symbols() if s.name == 'ss_result_record' and s['st_shndx'] != 'SHN_UNDEF'] if table else []
+    size = RESULT.size + info['manifest']['output_limit']
+    require(len(found) == 1 and found[0]['st_info']['bind'] == 'STB_GLOBAL' and found[0]['st_size'] == size,
+            'Result symbol differs from manifest capacity.')
+    return {'address': int(found[0]['st_value']), 'bytes': size}
+
+
+def decode_result(raw, epoch, generation, output_limit=None):
+    raw = bytes(raw)
+    require(len(raw) >= RESULT.size, 'Truncated application result.')
+    magic, version, capacity, actual, actual_generation, status, used = RESULT.unpack_from(raw)
+    require((magic, version, capacity, actual, actual_generation, status) ==
+            (RESULT_MAGIC, RESULT_VERSION, len(raw), epoch, generation, RESULT_FINISHED),
+            'Application result is incomplete or belongs to another session.')
+    require(output_limit is None or len(raw) == RESULT.size + output_limit,
+            'Application result capacity differs from manifest.')
+    require(used <= len(raw) - RESULT.size, 'Application result payload exceeds capacity.')
+    return raw[RESULT.size:RESULT.size + used]
+
+
+def backup_regions(image, uploads=()):
+    """Union uploaded spans with the manifest WORK and OUTPUT regions."""
+    info = image_manifest(image)
+    spans = [(r['address'], r['address'] + r['bytes']) for r in
+             regions(info['manifest'], (manifest_tool.KIND['work'], manifest_tool.KIND['output']))]
+    spans.extend((r['address'], r['address'] + r['bytes']) for r in uploads)
+    merged = []
+    for low, high in sorted(spans):
+        require(0 <= low < high <= 1 << 64, 'Invalid backup region.')
+        if merged and low <= merged[-1][1]:
+            merged[-1][1] = max(high, merged[-1][1])
+        else:
+            merged.append([low, high])
+    return [{'address': low, 'bytes': high - low} for low, high in merged]
