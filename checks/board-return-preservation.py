@@ -20,14 +20,18 @@ def main():
     parser.add_argument('--host-tree', type=Path, default=ROOT)
     parser.add_argument('--rail-elf', type=Path)
     parser.add_argument('--post-rail-elf', type=Path)
+    parser.add_argument('--npu-parser-tree', type=Path, help='Actual report parser checkout before source integration.')
+    parser.add_argument('--sdk-report', type=Path, help='Nominal report captured from the real SDK owner host fixture.')
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=False)
     sys.path.insert(0, str(args.tool_tree/'tools'))
     import board
     import board_images as images
     records = images.load('preservation_real_return_host', args.host_tree/'apps/os/cpu-return-host.py')
+    if args.npu_parser_tree:
+        records.npu_capture=images.load('preservation_real_npu_parser',args.npu_parser_tree/'apps/os/npu-report.py')
     cpu = records.cpu
-    epoch, generation = 1, 2
+    epoch, generation = struct.unpack_from('<2Q',args.sdk_report.read_bytes(),16) if args.sdk_report else (1,2)
     report = bytearray(cpu.REPORT_BYTES)
     struct.pack_into('<8Q', report, 0, cpu.MAGIC, 3, len(report), epoch, 1000, 4, 0, 0)
     for core in range(8):
@@ -39,7 +43,7 @@ def main():
     # an image's 18 MiB reservation in the host fixture.
     geo = {'report_address':0x42006000, 'report_bytes':len(report),
            'output_address':0x41200000, 'output_bytes':64,
-           'monitor':[0x42005000,0x42010000], 'cached_writable':[0x41200000,0x41201000],
+           'monitor':[0x42000000,0x42010000], 'cached_writable':[0x41200000,0x41201000],
            'application_regions':[{'address':0x45000000,'bytes':4096}],
            'npu_pool':{'address':0x47400000,'bytes':0x800000},
            'npu_stop':{'address':0x41200100,'bytes':104}, 'thermal':{}}
@@ -48,10 +52,17 @@ def main():
         geo.pop('npu_pool'); geo.pop('npu_stop')
     stop = struct.pack('<4I2Q10I', 0x5255504e, 1, 104, 1, epoch, generation,
                        0, 0, 0, 0, 0, 0, 1, 0, 0, 0xc35a3ca5) + bytes(32)
+    sdk_stop=args.sdk_report.read_bytes() if args.sdk_report else struct.pack(
+        '<4I2Q10I',0x5255504e,1,104,1,epoch,generation,3,2,2,0,0,0,1,8,0,0)+bytes(32)
     # Use the actual producer's public constants/layout once NPU support is present.
     if has_npu:
         try:
             records.decode_npu_stop(stop, epoch, generation)
+            sdk=records.npu_capture.decode(sdk_stop,epoch,generation)
+            assert sdk['mode']=='sdk' and sdk['jobs']==sdk['jobs_selected']==2 and sdk['output_bytes']==8
+            assert sdk['mismatches']==sdk['pattern_bytes']==sdk['pattern']==0 and sdk['last_digest']=='00'*32
+            assert records.npu_capture.classify(sdk)=='completed'
+            if args.sdk_report:print('SDK producer report',str(args.sdk_report),images.sha(args.sdk_report))
         except ValueError:
             raise AssertionError('Update stop fixture to the native report contract')
 
@@ -60,6 +71,7 @@ def main():
             super().__init__(options, evidence, record)
             self.variant, self.events, self.saved = variant, [], {}
             self.restore_count=0
+            self.helper_running=False
             self.memory = [(a,bytearray(bytes([i+17])*n)) for i,(a,n) in
                            enumerate(images.preservation_regions(make_plan()))]
             self.saved={a:bytes(data) for a,data in self.memory}
@@ -84,6 +96,10 @@ def main():
             if phase=='restore-rails':
                 assert self.record['dram_restored'] and self.record['native_retirement_validated']
                 assert all(bytes(data)==self.saved[a] for a,data in self.memory)
+                if self.variant=='npu-sdk':
+                    board.Live.rails(self,phase)
+                    assert self.record['rail_runs'][phase]['dram_restored']
+                    assert all(bytes(data)==self.saved[a] for a,data in self.memory)
         def read(self,address,size,path):
             self.events.append(('read', address, size))
             for a,data in self.memory:
@@ -103,19 +119,30 @@ def main():
                     values[address-a:address-a+len(data)]=data; return
             raise AssertionError(('upload outside fixture',hex(address)))
         def prepare(self,info):return make_plan()
-        def arm(self,mode):self.armed=True
+        def arm(self,mode,**kwargs):self.armed=True
         def tx(self,*values):
+            if values==('readl','0x07090160'):return '0x10008002'
+            if values==('reset64','0x41000000'):
+                self.helper_running=True
+                followup=images.load('sdk_real_post_helper_parser',args.tool_tree/'apps/os/cpu-return-followup.py')
+                lines=[f'{name} {phase} pll={pll:#x} mux={mux:#x} mhz={mhz} pat0=0 pat1=0 lfm=0'
+                       for name,pll,mux,mhz in board.state.BOOT_ROWS for phase in ('before','after')]
+                lines += ['SUPPLY dcdc5_uv=1000000 dcdc3_uv=800000 bin=4 dcxo_hz=26000000',
+                          'VOLT dcdc5_selector=30 dcdc5_uv=800000',followup.COMPLETE]
+                payload=('\n'.join(lines)+'\n').encode();raw=bytearray(16384)
+                struct.pack_into('<4Q',raw,0,0x534b4552,5,0,len(payload));raw[256:256+len(payload)]=payload
+                self.put(0x42000000,raw);return ''
             assert values==('exe','0x52000')
             for a,data in self.memory:data[:]=bytes([99])*len(data)
             self.put(geo['report_address'],report)
             self.put(geo['output_address'], b'bad' if self.variant=='output-malformed' else
                      struct.pack('<7Q',0x31544c5553455241,1,64,epoch,generation,1,8)+b'complete')
             if has_npu:
-                native_stop=bytearray(stop)
+                native_stop=bytearray(sdk_stop if self.variant=='npu-sdk' else stop)
                 if self.variant=='npu-mismatch':
                     struct.pack_into('<3I',native_stop,36,1,1,1)
                     struct.pack_into('<I',native_stop,60,2)
-                if self.variant=='npu-telemetry-malformed':struct.pack_into('<I',native_stop,68,0)
+                if self.variant=='npu-telemetry-malformed':struct.pack_into('<I',native_stop,68,1)
                 if self.variant=='npu-refused':struct.pack_into('<I',native_stop,48,1)
                 self.put(geo['npu_stop']['address'],native_stop if self.variant!='npu-late-fault' else bytes(104))
             if self.variant=='retirement-invalid':self.put(geo['report_address'],bytes(len(report)))
@@ -128,12 +155,14 @@ def main():
         def wait(self,seconds):pass
         def returned(self):
             self.armed=False
-            words={'tag':0x5c0d0001,'last':board.crumbs.RETURN_ROM<<16,'time':0,'fault':0,'esr':0,'elr':0,'far':0}
+            words={'tag':0x5c0d0000|(epoch&0xffff),'last':board.crumbs.RETURN_ROM<<16,'time':0,'fault':0,'esr':0,'elr':0,'far':0}
+            if self.helper_running:
+                self.helper_running=False;return 0xb1,0,words
             if self.variant=='late-fault':words['fault']=0xfa030000
             return (1 if self.variant=='watchdog' else 0),0,words
 
     def make_plan():
-        plan={'format':'generic','geometry':geo,'return_host':records,'image_ram':(0x41000000,4096),
+        plan={'format':'generic','geometry':geo,'return_host':records,'image_ram':(0x41000000,0x50000),
               'input_regions':[{'address':0x46000000,'bytes':4096}], 'uploads':[(0x41000000,source)],
               'launch':['exe','0x52000'],'watchdog':{'mode':0xb1,'session_seconds':1},
               'epoch':epoch,'generation':generation}
@@ -143,7 +172,7 @@ def main():
     source=args.out/'model.bin';source.write_bytes(b'MODEL ONLY')
     variants=['normal','output-malformed','thermal-malformed','retirement-invalid','backup-corrupt',
               'range-omitted','restore-readback','watchdog','late-fault']
-    if has_npu:variants.extend(('npu-late-fault','npu-mismatch','npu-refused','npu-telemetry-malformed'))
+    if has_npu:variants.extend(('npu-sdk','npu-late-fault','npu-mismatch','npu-refused','npu-telemetry-malformed'))
     for variant in variants:
         evidence=args.out/variant
         parser=argparse.ArgumentParser();board.run_options(parser)
@@ -160,10 +189,10 @@ def main():
              patch.object(records.host,'image_manifest',return_value={'manifest':{'output_limit':8}}),\
              contextlib.redirect_stdout(io.StringIO()):
             result=board.run_image(options,backend)
-        good=variant in ('normal','output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed')
+        good=variant in ('normal','output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed','npu-sdk')
         assert result.get('dram_restored',False)==good,(variant,result)
         assert bool(result.get('rails_restored'))==good,(variant,result)
-        assert result['outcome']==('returned' if variant=='normal' else
+        assert result['outcome']==('returned' if variant in ('normal','npu-sdk') else
                                   'watchdog-reset' if variant=='watchdog' else
                                   'host-error' if variant=='late-fault' else 'result-mismatch'),(variant,result)
         assert result['quarantined']==(not good),(variant,result)
@@ -181,6 +210,11 @@ def main():
             assert all(bytes(data)==owner.saved[a] for a,data in owner.memory)
             assert (evidence/'output-record.bin').exists() and (evidence/'return-report.bin').exists()
             if has_npu:assert (evidence/'npu-stop.bin').stat().st_size==104
+            if variant=='npu-sdk':
+                assert (evidence/'npu-stop.bin').read_bytes()==sdk_stop
+                assert result['return_report']['npu_capture_status']=='decoded'
+                assert result['return_report']['npu_report']['mode']=='sdk'
+                assert result['rail_runs']['restore-rails']['image_sha256']==board.POST_RAIL_HELPER_SHA256
         print('PASS',variant)
     # Exercise the production pinned helper method, including its own uploads.
     if args.rail_elf:
