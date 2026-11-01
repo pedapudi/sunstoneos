@@ -31,7 +31,14 @@ The kit includes:
 - `checks/sunstone-app-abi.py`: compiles both manifests for the host and for
   `aarch64-none-elf`, compares the compiled section bytes with the tool's
   packing, runs hello-compute on a host model of the calls, checks the mimus
-  draft against today's constants, and checks eleven refusals.
+  draft against today's constants, and checks eleven refusals;
+- the CPU-return launch path for any application: `apps/os/prepare.py` builds
+  the SRAM launcher, launch request and contract, `apps/os/cpu-return-host.py`
+  reads the return layout and performs one returning run, and
+  `tools/dev-run.py` prepares the typed session from the image's manifest and
+  runs the image. Its default image is hello-compute built with the CPU-return
+  lifetime; mimus runs through the same path with its own inputs and its
+  result decoder.
 
 The native OS image implements the calls and links applications through the
 kit. Mimus lives in its own repository; hello-compute remains in SunstoneOS.

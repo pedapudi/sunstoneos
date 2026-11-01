@@ -8,19 +8,31 @@ host-armed WDT0, the breadcrumb decoder and the instance quarantine on an
 unresolved failure.
 
 Kinds:
-  cpu-return  one recognition image through apps/os/cpu-return-host.py
-  gpu-return  one GPU bisection ladder image through the same host, loaded
-              from the ladder's source tree (its GPU report decoder)
-  npu         an NPU returning image; refused unless the image admits the
-              host-armed watchdog (see npu_check)
+  cpu-return  one CPU-return application image, by default the hello-compute
+              control image, through apps/os/cpu-return-host.py
+  gpu-return  refused: the GPU ladder images are pre-split recognition images
+              (see GPU_REFUSAL)
+  npu         refused: see npu_check
 
-Preparation builds the board bundle from the image ELF, a session template
-and the three recognition inputs with the existing prepare.py functions. It
-replaces the session identities with fresh ones and derives the thermal clock
-fields from a read-only FEL capture of the target. Before launch, that capture
+A CPU-return image is recognised by its watchdog marker and its result record
+(apps/os/host.py). Preparation builds the typed session from the image's
+manifest: the board prefix, thermal record and CPU clock grant come from a
+reviewed session (--records), with fresh identities and with the thermal clock
+fields derived from a read-only FEL capture of the target; the INPUTS extent
+describes the inputs given with --input, in manifest order. The SRAM launcher
+admits the image's WDT0 mode (apps/os/prepare.py). Before launch, the capture
 is compared with the initial-state predicates the image itself enforces
 (apps/os/thermal.c, drivers/thermal/a733_thermal.c, apps/os/cpu-return-entry.c),
 so a board whose state the image would refuse is reported without a launch.
+
+The application's decoder (--decoder, or apps/<name>/host.py for an
+application in this tree) is a Python module with:
+  decode(payload)   the result payload as a JSON value; required
+  expected(inputs)  the value decode() must return for these inputs; optional
+  inputs()          the inputs used when no --input is given; optional
+A run passes when the image returns normally (RETURN_ROM breadcrumb, WDT0
+mode 0) and, when the decoder has expected(), the decoded result equals it.
+Without a decoder the runner prints the raw payload.
 """
 import argparse
 import hashlib
@@ -28,8 +40,8 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import secrets
-import shutil
 import struct
 import subprocess
 import sys
@@ -40,13 +52,20 @@ CACHE = Path.home() / '.cache/sunstoneos'
 EVIDENCE = CACHE / 'evidence'
 FEL = CACHE / 'build/sunxi-a733/sunxi-fel'
 CLANG, LLD = Path('/usr/bin/clang-21'), CACHE / 'host/usr/bin/ld.lld-21'
-CONTROL_IMAGE = EVIDENCE / 'wdt-breadcrumbs-1031/control/package/native/image.elf'
-CONTROL = EVIDENCE / 'wdt-breadcrumbs-1031/control/offline-proof/prepared'
-GPU_TREE = Path.home() / 'git/sunstoneos-worktrees/gpu-bisect-1031-crumbs'
-GPU_LADDER = CACHE / 'build/gpu-bisect-1031/crumbs/ladder-wdt2'
-GPU_TEMPLATE = EVIDENCE / 'sol-gpu-completion-1031/prepared'
+# The hello-compute CPU-return image of this tree:
+#   cmake ... -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=hello-compute -DSUNSTONE_A733_OS_CPU_RETURN=ON
+#             -DA733_A76_ADMITTED=ON -DSUNSTONE_A733_OS_CPU_CLOCK=ON
+#   cmake --build ... --target sunstone-a733-os-hello
+CONTROL_IMAGE = CACHE / 'build/mimus-split-1031/control-hello/sunstone-a733-os-hello.elf'
+# The reviewed session of the CPU-return control bundle: board prefix,
+# thermal record and CPU clock grant (904-byte layout before typed sessions).
+RECORDS = EVIDENCE / 'wdt-breadcrumbs-1031/control/offline-proof/prepared/board/session-template.bin'
 RAIL_HELPER = EVIDENCE / 'wdt-breadcrumbs-1031/control/offline-proof/rails-800/probe.bin'
 RAIL_HELPER_SHA256 = 'f48a6be72b336c8990a124fd608bba5fddb5c8617ec62eac5642b2d50fb27c75'
+GPU_REFUSAL = ('gpu-return is refused: the GPU ladder images are pre-split mimus recognition images that need '
+               'the fixed-layout session template and the three recognition inputs, which this runner no longer '
+               'prepares, and the generic return path does not copy the GPU retirement report. Run them with '
+               'the pre-split runner, tools/dev-run.py at revision 6a714bcf.')
 # The read-only words of the existing CPU/thermal state capture
 # (sol-resume-20261031/port-3-3/cpu-thermal-state): CCU, R_CCU, SID, CPU PLLs, RTC.
 WORDS = (0x2002000, 0x20020a0, 0x20020a8, 0x20020ac, 0x2002518, 0x2002fc0, 0x2002fe4, 0x2003908,
@@ -54,6 +73,12 @@ WORDS = (0x2002000, 0x20020a0, 0x20020a8, 0x20020ac, 0x2002518, 0x2002fc0, 0x200
          *(0x8871000 + 0x1000 * d + o for d in range(3) for o in (0, 4, 8, 0x18, 0x1c)), 0x7090160)
 # apps/os/cpu-return-entry.c: boot CPU-L, CPU-B and DSU PLL and mux words.
 BOOT_PLL, BOOT_MUX = (0xf8802600, 0xf8802700, 0xf8802600), (0x03010000, 0x03000000, 0x03010105)
+# Thermal record fields set from the live board (apps/os/os.h): APB1 word and
+# rate, and whether the thermal owner configures GPADC24M.
+THERMAL_APB1, THERMAL_CONFIGURE = 168, 176
+# CPU clock grant fields (include/a733_cpu_clock.h): epoch and generation, clusters.
+GRANT_SESSION, GRANT_CLUSTERS = 32, 48
+STORAGE = 1   # the USB storage device bit (include/sunstone_app.h)
 
 
 def load(name, path):
@@ -76,13 +101,6 @@ def save(path, value):
     Path(path).write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
 
 
-def symbol(elf, name):
-    """A defined symbol by exact name, including C++ internal-linkage names."""
-    found = [s for s in elf.symbols if s['shndx'] != 0 and (s['name'] == name or s['name'].endswith(
-        str(len(name)) + name))]
-    return found[0] if len(found) == 1 else None
-
-
 # ---- live state ---------------------------------------------------------------
 
 def capture(fel):
@@ -101,10 +119,18 @@ def capture(fel):
                 'time': time.strftime('%Y-%m-%dT%H:%M:%S'), 'words': {hex(a): v for a, v in zip(WORDS, values)}}
 
 
-def state_check(words, os_image):
+def speed_bin(sid_word):
+    """The CPU clock driver's column for a SID DVFS word: 1-8, 9 for code 0, None if refused."""
+    text = (ROOT / 'drivers/clock/a733_cpu_clock.c').read_text()
+    codes = [int(v, 16) for v in re.search(r'codes\[\]=\{([^}]*)\}', text)[1].split(',')]
+    code = (sid_word >> 16) & 255 or (sid_word >> 8) & 255
+    return 9 if not code else codes.index(code) + 1 if code in codes else None
+
+
+def state_check(words):
     """The image's own initial-state predicates on FEL-readable words.
 
-    Returns (findings, derived session thermal fields). An empty findings list
+    Returns (findings, derived thermal record fields). An empty findings list
     means the readable part of the native guards admits this board state.
     The PMIC rails (DCDC3 and DCDC5 must read 800 mV) are behind the PMIC
     controller and cannot be read here; see rails_note()."""
@@ -141,7 +167,7 @@ def state_check(words, os_image):
                             f'{BOOT_PLL[d]:#x}/{BOOT_MUX[d]:#x} (CPU entry guard)')
         if w[base + 4] & (3 << 29) or w[base + 8] >> 31 or w[base + 0x18] >> 31:
             findings.append(f'{name} pattern or LFM enabled (CPU entry guard)')
-    if os_image.bin_column(w[0x300624c]) != 4:
+    if speed_bin(w[0x300624c]) != 4:
         findings.append(f'SID DVFS word {w[0x300624c]:#x} does not select speed bin 4 (CPU entry guard)')
     derived = {'apb1': apb1, 'apb1_hz': rate // div if rate and not rate % div else None,
                'configure_adc_clock': configure}
@@ -159,58 +185,98 @@ def rails_note(record):
 
 # ---- preparation --------------------------------------------------------------
 
-def prepare(host, image, template, output, live):
-    """Board bundle from the ELF, a template bundle's session template and assets."""
-    o = host.os_image
+def session_records(path, host):
+    """The board prefix, thermal record and CPU clock grant of a reviewed session."""
+    raw = Path(path).read_bytes()
+    size = host.PREFIX_BYTES
+    if len(raw) > size + 8 and struct.unpack_from('<Q', raw, size)[0] == host.SESSION_MAGIC:
+        extents = host.session_decode(raw)['extents']
+        thermal, grant = extents[host.THERMAL], extents.get(host.CPU_GRANT)
+    else:
+        # The fixed layout: prefix, thermal record, CPU clock grant.
+        thermal = raw[size:size + host.SERVICE_BYTES[host.THERMAL]]
+        grant = raw[size + len(thermal):]
+        require(struct.unpack_from('<Q', thermal)[0] == host.SERVICE_MAGIC[host.THERMAL],
+                'Reviewed session has no thermal record.')
+    require(grant is not None and len(grant) == host.SERVICE_BYTES[host.CPU_GRANT] and
+            struct.unpack_from('<Q', grant)[0] == host.SERVICE_MAGIC[host.CPU_GRANT],
+            'Reviewed session has no CPU clock grant; the CPU-return profile requires one.')
+    return raw[:size], thermal, grant
+
+
+def kit():
+    """The OS CPU-return host (apps/os/cpu-return-host.py) and launcher (apps/os/prepare.py)."""
+    os.environ.setdefault('SUNSTONEOS_DIR', str(ROOT))
+    return (load('dev_cpu_return_host', ROOT / 'apps/os/cpu-return-host.py'),
+            load('dev_os_launcher', ROOT / 'apps/os/prepare.py'))
+
+
+def prepare(host, launcher, image, records, inputs, output, live):
+    """Board bundle from a CPU-return image, a reviewed session's records and the inputs."""
+    os_host = host.host
     data = Path(image).read_bytes()
-    elf = o.os_link.Elf(data)
-    require(symbol(elf, 'os_cpu_return_output') is not None, 'Image is not a CPU-return image.')
-    watchdog = o.watchdog_marker(elf)
+    watchdog = os_host.watchdog_marker(data)
     require(watchdog is not None, 'Image carries no host-armed watchdog marker; a hang would strand the board.')
-    raw = bytearray((Path(template) / 'board/session-template.bin').read_bytes())
+    symbols = host.linked_symbols(image)
+    require('ss_result_record' in symbols, 'Image has no result record; it is not a CPU-return application image.')
+    require('os_gpu_configuration' not in symbols, 'Image links the GPU return; the generic return path does not '
+            'copy its GPU retirement report.')
+    info = os_host.image_manifest(data)
+    require(info['manifest'] is not None, 'Image has no application manifest.')
+    manifest = info['manifest']
+    devices = manifest['devices_required']
+    require(not devices & STORAGE, 'The CPU return admits only sessions without USB storage (workload 2).')
+    findings, derived = state_check(live['words'])
+    prefix, thermal, grant = session_records(records, os_host)
+    prefix, thermal, grant = bytearray(prefix), bytearray(thermal), bytearray(grant)
+    require(struct.unpack_from('<I', prefix, 400)[0] == 2, 'Reviewed board prefix is not workload 2.')
+    launcher.board().session_check(bytes(prefix), usb_reference_modes=(1,))
     # Fresh identities: no record of an earlier run (DRAM result, report)
-    # can match this session. The grant record names the same session.
+    # can match this session. The grant names the same session.
     epoch, generation, lease = (secrets.randbits(62) | 1 for _ in range(3))
-    struct.pack_into('<3Q', raw, 24, epoch, generation, lease)
-    grant = o.grant_fields(raw)
-    if grant and grant['clusters']:
-        struct.pack_into('<2Q', raw, len(raw) - o.GRANT_BYTES + 32, epoch, generation)
-    findings, derived = state_check(live['words'], o)
-    if derived['apb1_hz']:
-        struct.pack_into('<2I', raw, 760, derived['apb1'], derived['apb1_hz'])
-    if derived['configure_adc_clock'] is not None:
-        raw[768] = derived['configure_adc_clock']
-    o.session_check(raw, False)
+    struct.pack_into('<3Q', prefix, 24, epoch, generation, lease)
     output.mkdir(parents=True)
     board = output / 'board'
     board.mkdir()
     (board / 'image.elf').write_bytes(data)
-    segments, address, identity = o.base.image_parts(board / 'image.elf')
-    raw[48:80] = identity
-    o.build_launcher(board, len(raw), str(CLANG), str(LLD), watchdog['mode'])
+    segments, address, identity = host.base.image_parts(board / 'image.elf')
+    prefix[48:80] = identity
+    # The record's size field names the complete fixed-layout session.
+    struct.pack_into('<Q', thermal, 16, os_host.PREFIX_BYTES + len(thermal) + len(grant))
+    if derived['apb1_hz']:
+        struct.pack_into('<2I', thermal, THERMAL_APB1, derived['apb1'], derived['apb1_hz'])
+    if derived['configure_adc_clock'] is not None:
+        thermal[THERMAL_CONFIGURE] = derived['configure_adc_clock']
+    if struct.unpack_from('<I', grant, GRANT_CLUSTERS)[0]:
+        struct.pack_into('<2Q', grant, GRANT_SESSION, epoch, generation)
+    values = [bytes(v) for v in inputs]
+    raw = os_host.session_bytes(bytes(prefix), {os_host.THERMAL: bytes(thermal), os_host.CPU_GRANT: bytes(grant)},
+                                manifest, info['sha256'], devices, os_host.BIND_SID, values)
+    launcher.build_launcher(board, len(raw), str(CLANG), str(LLD), watchdog['mode'])
     uploads = []
     for index, segment in enumerate(segments):
         if segment['data']:
             (board / f'segment-{index}.bin').write_bytes(segment['data'])
             uploads.append({'name': f'segment-{index}.bin', 'address': segment['address']})
     (board / 'session.bin').write_bytes(raw)
-    uploads.append({'name': 'session.bin', 'address': o.SESSION_ADDRESS})
-    for name, value in zip(('request.bin', 'contract.bin'), o.request_bytes(address, identity, raw)):
+    uploads.append({'name': 'session.bin', 'address': launcher.SESSION_ADDRESS})
+    for name, value in zip(('request.bin', 'contract.bin'), launcher.request_bytes(address, identity, raw)):
         (board / name).write_bytes(value)
     (board / 'result-zero.bin').write_bytes(bytes(16384))
     (board / 'report-zero.bin').write_bytes(bytes(128))
-    shutil.copytree(Path(template) / 'assets', output / 'assets')
-    assets = o.host.validate_assets(output / 'assets')['assets']
-    linked = symbol(elf, 'mimus_asset_sha256')
-    if linked is not None:
-        require(elf.read(linked['value'], 96) == b''.join(bytes.fromhex(a['sha256']) for a in assets),
-                'Recognition inputs differ from the hashes linked into the image.')
+    _, planned = os_host.input_facts(manifest, values)
+    (output / 'inputs').mkdir()
+    for item, value in zip(planned, values):
+        item['name'] = 'input-%d.bin' % item.pop('index')
+        (output / 'inputs' / item['name']).write_bytes(value)
     names = ['launch.bin', 'session.bin', 'request.bin', 'contract.bin', 'result-zero.bin', 'report-zero.bin',
              'image.elf'] + [u['name'] for u in uploads if u['name'].startswith('segment-')]
-    meta = {'schema': 'sunstoneos-dev-bundle-v1', 'image_sha256': hashlib.sha256(data).hexdigest(),
-            'build_id': identity.hex(), 'epoch': epoch, 'generation': generation, 'lease': lease,
-            'workload': struct.unpack_from('<I', raw, 400)[0], 'segments': uploads,
-            'files': {n: digest(board / n) for n in names}, 'template': str(Path(template).resolve()),
+    meta = {'schema': 'sunstoneos-dev-bundle-v2', 'image_sha256': hashlib.sha256(data).hexdigest(),
+            'application': manifest['name'], 'build_id': identity.hex(), 'epoch': epoch,
+            'generation': generation, 'lease': lease, 'devices': devices,
+            'workload': struct.unpack_from('<I', raw, 400)[0], 'segments': uploads, 'inputs': planned,
+            'files': {n: digest(board / n) for n in names},
+            'records': {'path': str(Path(records).resolve()), 'sha256': digest(records)},
             'derived_session': derived, 'state_findings': findings, 'watchdog': watchdog}
     save(output / 'dev-bundle.json', meta)
     return meta
@@ -221,15 +287,23 @@ def validator(host):
     def validate(bundle):
         bundle = Path(bundle)
         meta = json.loads((bundle / 'dev-bundle.json').read_text())
+        require(meta.get('schema') == 'sunstoneos-dev-bundle-v2', 'Unsupported development bundle.')
         board = bundle / 'board'
         files = {n: digest(board / n) for n in meta['files']}
         require(files == meta['files'], 'Development bundle changed after preparation.')
+        inputs = [dict(item, path=str(bundle / 'inputs' / item['name'])) for item in meta['inputs']]
+        require(all(digest(item['path']) == item['sha256'] for item in inputs), 'Development input changed.')
         if meta['image_sha256'] not in cached:
             cached[meta['image_sha256']] = host.geometry(board / 'image.elf')
+        info = host.host.image_manifest(board / 'image.elf')
+        decoded = host.host.session_decode((board / 'session.bin').read_bytes(), info['manifest'], info['sha256'])
+        facts, planned = host.host.input_facts(info['manifest'], [Path(i['path']).read_bytes() for i in inputs])
+        require(decoded['extents'].get(host.host.INPUTS, b'') == facts and
+                [(p['address'], p['bytes']) for p in planned] == [(i['address'], i['bytes']) for i in inputs],
+                'Session inputs differ from the development inputs.')
         p = {k: meta[k] for k in ('image_sha256', 'build_id', 'epoch', 'generation', 'lease', 'workload', 'segments')}
         p.update(files=files, _sizes={n: (board / n).stat().st_size for n in files},
-                 qualification=cached[meta['image_sha256']],
-                 _assets=host.os_image.host.validate_assets(bundle / 'assets')['assets'])
+                 qualification=cached[meta['image_sha256']], _inputs=inputs)
         return p
     return validate
 
@@ -270,10 +344,32 @@ def run_return(args, host, bundle, live, out, access=None, guard=None):
                                   return_timeout=90, watchdog=watchdog, access=access, guard=guard)
 
 
+def judge(decoder, payload, inputs, session):
+    """(outcome, detail, decoded) of a run that returned with this payload."""
+    w = session.get('watchdog', {})
+    last = w.get('breadcrumbs', {}).get('last', {}).get('name')
+    if w.get('mode_after_return') != 0 or last != 'RETURN_ROM':
+        return 'failed', f'return not normal: WDT0 mode {w.get("mode_after_return")}, last breadcrumb {last}', None
+    if decoder is None:
+        shown = payload[:64].hex() + ('...' if len(payload) > 64 else '')
+        return 'returned', f'raw result {len(payload)} bytes {shown}', None
+    try:
+        decoded = decoder.decode(payload)
+    except (ValueError, struct.error) as error:
+        return 'result-invalid', f'decoder refused the result: {error}', None
+    if not hasattr(decoder, 'expected'):
+        return 'returned', 'result ' + json.dumps(decoded, sort_keys=True), decoded
+    expected = decoder.expected(inputs)
+    if decoded != expected:
+        return 'result-mismatch', 'result %s, expected %s' % (json.dumps(decoded, sort_keys=True),
+                                                             json.dumps(expected, sort_keys=True)), decoded
+    return 'passed', 'result ' + json.dumps(decoded, sort_keys=True) + ' as expected', decoded
+
+
 def restore_rails(args, host, evidence):
     """The existing rail helper (board bundle 33) through the existing kernel runner."""
     require(digest(args.rail_helper) == RAIL_HELPER_SHA256, 'Rail helper binary differs from the approved one.')
-    followup = load('dev_followup', host.ROOT / 'apps/os/cpu-return-followup.py')
+    followup = load('dev_followup', ROOT / 'apps/os/cpu-return-followup.py')
     out = evidence / 'rail-helper'
     code = host.cpu.kernel.main(['--fel', str(args.fel), '--image', str(args.rail_helper), '--evidence', str(out),
                                  '--mode', 'kernel', '--expect', followup.COMPLETE, '--return-timeout', '10'])
@@ -281,16 +377,16 @@ def restore_rails(args, host, evidence):
     return followup.helper_result(json.loads((out / 'session.json').read_text()), (out / 'kernel.log').read_text())
 
 
-def npu_check(image):
+def npu_check(image, host):
     """Bringup's NPU launcher and monitor refuse an enabled WDT0 (launch.c ADMIT,
     monitor.c finish(1)); armed, the launcher parks and the watchdog resets the
     board 16 s later with no breadcrumbs. Only an image with the watchdog
-    marker admits the armed mode."""
-    os_link = load('dev_os_link', ROOT / 'checks/os-image-link.py')
-    marker = symbol(os_link.Elf(Path(image).read_bytes()), 'os_cpu_return_watchdog')
-    require(marker is not None, 'NPU image does not admit the host-armed watchdog (no os_cpu_return_watchdog '
-            'marker); rebuild it on work/wdt-breadcrumbs-1031 before a development run.')
-    require(False, 'NPU development preparation is not implemented for watchdog-admitting images yet.')
+    marker admits the armed mode, and the NPU session's reviewed authority
+    records have no development producer."""
+    require(host.watchdog_marker(image) is not None, 'npu is refused: the image does not admit the host-armed '
+            'watchdog (no os_cpu_return_watchdog marker); rebuild it on work/wdt-breadcrumbs-1031.')
+    require(False, 'npu is refused: development preparation of an NPU session, whose NPU extent cites reviewed '
+            'admission, clock, power, supervision and DDR records, is not implemented.')
 
 
 def summary_of(kind, outcome, detail):
@@ -300,11 +396,14 @@ def summary_of(kind, outcome, detail):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('kind', choices=('cpu-return', 'gpu-return', 'npu'))
-    parser.add_argument('--image', type=Path, help='Image ELF (default: the control image or ladder stage)')
-    parser.add_argument('--stage', type=int, help='gpu-return: ladder stage number (1-9)')
-    parser.add_argument('--ladder', type=Path, default=GPU_LADDER, help='gpu-return: ladder directory')
-    parser.add_argument('--template', type=Path, help='Bundle supplying session-template.bin and assets/')
-    parser.add_argument('--host-tree', type=Path, help='Source tree whose host modules run the image')
+    parser.add_argument('--image', type=Path, help='CPU-return image ELF, from this tree or an application '
+                        'such as mimus (default: the hello-compute control image)')
+    parser.add_argument('--input', type=Path, action='append', default=[],
+                        help="An INPUT region's content, once per region in manifest order")
+    parser.add_argument('--decoder', type=Path, help='Python module that decodes the result payload '
+                        '(default: apps/<name>/host.py in this tree when present; otherwise the raw payload)')
+    parser.add_argument('--records', type=Path, default=RECORDS,
+                        help='Reviewed session supplying the board prefix, thermal record and CPU clock grant')
     parser.add_argument('--port', help='Physical USB port, for example 3-1 (else SUNSTONE_USB_PORT)')
     parser.add_argument('--evidence', type=Path, help='New evidence directory')
     parser.add_argument('--state', type=Path, help='Use this captured state.json instead of reading the board')
@@ -314,58 +413,70 @@ def main(argv=None):
     parser.add_argument('--rail-helper', type=Path, default=RAIL_HELPER)
     parser.add_argument('--fel', type=Path, default=FEL)
     args = parser.parse_args(argv)
+    os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
+    sys.dont_write_bytecode = True
+    if args.kind == 'gpu-return':
+        parser.exit(2, GPU_REFUSAL + '\n')
+    host, launcher = kit()
+    if args.kind == 'npu':
+        try:
+            require(args.image, 'npu is refused: npu requires --image.')
+            npu_check(args.image, host.host)
+        except ValueError as error:
+            parser.exit(2, f'{error}\n')
     if args.port:
         os.environ['SUNSTONE_USB_PORT'] = args.port
     port = os.environ.get('SUNSTONE_USB_PORT')
     require(port or args.state, 'Select the board with --port or SUNSTONE_USB_PORT.')
-    if args.kind == 'npu':
-        require(args.image, 'npu requires --image.')
-        npu_check(args.image)
-    if args.kind == 'gpu-return':
-        tree = args.host_tree or GPU_TREE
-        if args.image is None:
-            require(args.stage, 'gpu-return requires --image or --stage.')
-            stages = sorted(args.ladder.glob(f'{args.stage}-*/sunstone-a733-os.elf'))
-            require(len(stages) == 1, f'No single ladder stage {args.stage} image in {args.ladder}.')
-            args.image = stages[0]
-        template = args.template or GPU_TEMPLATE
+    image = args.image or CONTROL_IMAGE
+    info = host.host.image_manifest(image)
+    require(info['manifest'] is not None, 'Image has no application manifest.')
+    name = info['manifest']['name']
+    decoder_path = args.decoder or (ROOT / 'apps' / name / 'host.py')
+    decoder = load('dev_decoder', decoder_path) if args.decoder or decoder_path.is_file() else None
+    if args.input:
+        inputs = [p.read_bytes() for p in args.input]
     else:
-        tree = args.host_tree or ROOT
-        args.image = args.image or CONTROL_IMAGE
-        template = args.template or CONTROL
+        require(decoder is not None and hasattr(decoder, 'inputs') or
+                not host.host.regions(info['manifest'], (1,)), f'{name} declares inputs; give them with --input.')
+        inputs = decoder.inputs() if decoder is not None and hasattr(decoder, 'inputs') else []
     evidence = args.evidence or EVIDENCE / 'dev-runs-1031' / f"{port or 'offline'}-{args.kind}-{time.strftime('%H%M%S')}"
     evidence.mkdir(parents=True, exist_ok=False)
-    os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
-    sys.dont_write_bytecode = True
-    host = load('dev_cpu_return_host', tree / 'apps/os/cpu-return-host.py')
     live = json.loads(args.state.read_text()) if args.state else capture(args.fel)
     save(evidence / 'state.json', live)
-    meta = prepare(host, args.image, template, evidence / 'bundle', live)
-    record = {'kind': args.kind, 'port': live['port'], 'identity': live['identity'], 'host_tree': str(tree),
-              'image': str(args.image.resolve()), 'image_sha256': meta['image_sha256'],
-              'bundle': str(evidence / 'bundle'), 'derived_session': meta['derived_session'],
-              'state_findings': meta['state_findings'], 'launched': False}
-    if meta['state_findings'] and not args.force:
+    record = {'kind': args.kind, 'port': live['port'], 'identity': live['identity'], 'image': str(Path(image).resolve()),
+              'application': name, 'decoder': str(decoder_path.resolve()) if decoder else None,
+              'bundle': str(evidence / 'bundle'), 'launched': False}
+    try:
+        meta = prepare(host, launcher, image, args.records, inputs, evidence / 'bundle', live)
+    except ValueError as error:
+        meta = None
+        record.update(outcome='refused-before-launch', summary=summary_of(args.kind, 'not launched', str(error)))
+    if meta:
+        record.update(image_sha256=meta['image_sha256'], derived_session=meta['derived_session'],
+                      state_findings=meta['state_findings'])
+    if meta is None:
+        pass   # the preparation refusal is recorded above
+    elif meta['state_findings'] and not args.force:
         record.update(outcome='refused-before-launch', summary=summary_of(
             args.kind, 'not launched', '; '.join(meta['state_findings'])))
     elif args.check_only:
         validator(host)(evidence / 'bundle')
         record.update(outcome='checked', summary=summary_of(args.kind, 'prepared and checked',
-            f"image {meta['image_sha256'][:12]}, WDT0 mode {meta['watchdog']['mode']:#x}, session {meta['watchdog']['session_seconds']} s, "
+            f"{name} image {meta['image_sha256'][:12]}, WDT0 mode {meta['watchdog']['mode']:#x}, "
+            f"session {meta['watchdog']['session_seconds']} s, {len(inputs)} input(s), "
             f"GPADC {'adopt' if meta['derived_session']['configure_adc_clock'] == 0 else 'configure'}"))
     else:
         out = evidence / 'run'
         record['launched'] = True
         try:
             result = run_return(args, host, evidence / 'bundle', live, out)
-            record.update(outcome='returned', result=result)
-            gpu = result.get('gpu')
-            transcript = out / 'transcript.txt'
-            require(transcript.is_file(), 'Normal return wrote no transcript.')
-            lines = [x for x in transcript.read_text().splitlines() if x.startswith(('TEXT ', 'PASS ', 'FAIL '))]
-            record.update(transcript=str(transcript), transcript_result=lines)
-            record['summary'] = summary_of(args.kind, 'returned', 'secondaries off %d%s; %s; transcript %s' % (
-                result['secondaries_off'], f', GPU report {gpu}' if gpu else '', ' | '.join(lines), transcript))
+            session = json.loads((out / 'session.json').read_text())
+            payload = (out / 'result.bin').read_bytes()
+            outcome, detail, decoded = judge(decoder, payload, inputs, session)
+            record.update(outcome=outcome, result=result, payload=str(out / 'result.bin'), decoded=decoded)
+            record['summary'] = summary_of(args.kind, outcome, 'secondaries off %d; %s' % (
+                result['secondaries_off'], detail))
         except Exception as error:
             report = out / 'watchdog-report.json'
             if report.exists():
@@ -378,7 +489,7 @@ def main(argv=None):
         session = out / 'session.json'
         run_record = json.loads(session.read_text()) if session.exists() else {}
         record['rails'] = rails_note(run_record)
-        if args.restore_rails and record['outcome'] == 'returned':
+        if args.restore_rails and run_record.get('complete'):
             try:
                 record['rail_helper'] = restore_rails(args, host, evidence)
                 record['rails'] = 'DCDC3 and DCDC5 restored to 800 mV by the rail helper.'
@@ -387,7 +498,7 @@ def main(argv=None):
     save(evidence / 'dev-run.json', record)
     print(record['summary'])
     print('evidence:', evidence / 'dev-run.json')
-    return 0 if record['outcome'] in ('returned', 'checked') else 1
+    return 0 if record['outcome'] in ('passed', 'returned', 'checked') else 1
 
 
 if __name__ == '__main__':
