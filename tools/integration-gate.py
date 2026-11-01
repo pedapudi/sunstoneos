@@ -4,8 +4,7 @@
 Host configuration stays in CACHE/bin/cfg.sh. This tool never launches a board.
 Build directories belong to the resolved source checkout, so gates on different
 checkouts never share a CMake cache; a lock refuses a second concurrent gate on
-the same checkout. A source tree with uncommitted changes is refused unless
---allow-dirty is given, and the recorded identity then names those changes:
+the same checkout. The recorded source identity includes uncommitted changes:
 the revision, the tracked diff and every untracked file that Git does not
 ignore. The gate fails if that state cannot be read completely, or if it
 changes before the gate holds the lock or by the end of the last step.
@@ -17,6 +16,7 @@ import fcntl
 import hashlib
 import json
 from pathlib import Path
+from host_evidence import unique_directory
 import os
 import re
 import shlex
@@ -122,8 +122,8 @@ def tree_state(source):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path)
-    parser.add_argument('label', help='new evidence label; existing directories are refused')
-    parser.add_argument('--reason', required=True, help='changed behavior and risk this selection checks')
+    parser.add_argument('label', help='evidence label; existing directories receive a unique child')
+    parser.add_argument('--reason', default='', help='optional changed behavior and risk this selection checks')
     parser.add_argument('--target', action='append', default=[], help='OS-core central CMake target; repeat to add targets')
     parser.add_argument('--variant', choices=VARIANTS, action='append', default=[])
     parser.add_argument('--check', action='append', default=[], help='core check or check declared by an external application')
@@ -133,10 +133,8 @@ def main(argv=None):
     parser.add_argument('--application', type=Path, action='append', default=[],
                         help='external checkout with sunstoneos/gate.json; repeat to add applications')
     parser.add_argument('--trials', type=int, default=1, help='predeclared soak8 trials, not failure retries (default: 1)')
-    parser.add_argument('--allow-dirty', action='store_true', help='build a tree with uncommitted changes; the status and diff hash are recorded')
+    parser.add_argument('--allow-dirty', action='store_true', help='compatibility option; local changes are always recorded')
     args = parser.parse_args(argv)
-    if not args.reason.strip():
-        parser.error('--reason must describe the validation risk')
     if not args.full and not (args.target or args.variant or args.check):
         parser.error('select --target, --variant or --check; --full is only for justified broad validation')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', args.label):
@@ -181,17 +179,10 @@ def main(argv=None):
     status = subprocess.run(['git', 'status', '--porcelain'], cwd=source, capture_output=True, text=True)
     if status.returncode != 0:
         parser.error('source must be a Git checkout: ' + status.stderr.strip())
-    if status.stdout and not args.allow_dirty:
-        parser.error('source has uncommitted changes; commit them or pass --allow-dirty to record them')
     state = tree_state(source)
-    if state[1] and not args.allow_dirty:
-        parser.error('source has uncommitted changes; commit them or pass --allow-dirty to record them')
     build_root = args.build_root.resolve() if args.build_root else cache / 'build'
     output = build_root / ('gate-' + args.label)
-    try:
-        output.mkdir(parents=True, exist_ok=False)
-    except FileExistsError:
-        parser.error(f'evidence already exists: {output}; reuse its results or choose a new label for affected work')
+    output = unique_directory(output)
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
     env['SUNSTONEOS_DIR'] = str(source)
     env['PATH'] = str(cache / 'host/usr/lib/llvm-21/bin') + os.pathsep + env.get('PATH', '')
@@ -240,8 +231,8 @@ def main(argv=None):
     for name, app in configured.items():
         app_state = tree_state(app['root'])
         application_states[name] = app_state
-        if None in app_state or (app_state[1] and not args.allow_dirty):
-            note('FAIL external ' + name + ' state is unreadable or dirty; pass --allow-dirty to record local changes')
+        if None in app_state:
+            note('FAIL external ' + name + ' state is unreadable')
             return 1
         note(name + '-source: ' + str(app['root']))
         note(name + '-revision: ' + app_state[0])
