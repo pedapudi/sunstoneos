@@ -54,7 +54,9 @@ int ss_usb_jpeg_native_poll(struct ss_usb_jpeg_view *view)
     if(!native_started||native_failed||!view||!board_live(NULL))return -1;
     if(!jpeg_input_ready(&jpeg.supplied))return -1;
     if(!jpeg.stage){int r=jpeg_setup();if(r==1)jpeg.stage=1;if(r<0)native_failed=1;return r<0?-1:0;}
-    int r=a733_video_jpeg_poll(&jpeg.run);
+    /* Complete ready register programming in this wake. A pending hardware
+     * completion or copy callback returns immediately to the USB owner. */
+    int r=a733_video_jpeg_advance(&jpeg.run,1024);
     if(r==1&&jpeg.run.state==A733_VIDEO_JPEG_COPIED)
         *view=(struct ss_usb_jpeg_view){jpeg.payload,jpeg.supplied.output_bytes,
             jpeg.supplied.width,jpeg.supplied.height,native_frame};

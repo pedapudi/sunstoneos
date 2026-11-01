@@ -16,7 +16,7 @@ typedef int BaseType_t;
 #define taskSCHEDULER_NOT_STARTED 0
 #define configMAX_API_CALL_INTERRUPT_PRIORITY 11
 #define portPRIORITY_SHIFT 4
-static unsigned critical,alive=1,started,notifies,waits,begins,finishes,rearm_fail,inject_exit;
+static unsigned critical,alive=1,started,notifies,waits,begins,finishes,rearm_fail,inject_exit,work_pending;
 static volatile uint32_t *regs;
 static int board_live(void *v){(void)v;return alive;}
 static int xTaskGetSchedulerState(void){return started;}
@@ -31,6 +31,8 @@ static void vTaskNotifyGiveFromISR(void *task,BaseType_t *woken)
 {assert(critical&&task==board.handles[4]);++notifies;*woken=1;}
 static unsigned ulTaskNotifyTake(unsigned clear,unsigned ticks)
 {assert(!critical&&clear==1&&ticks==1);++waits;return 0;}
+int a733_xhci_work_pending(const struct a733_xhci *x)
+{assert(!critical&&x==&board.host.core);return work_pending;}
 int gicv3_spi_mask(const struct gicv3_spi *s)
 {assert(critical&&s->intid==187);regs[0x114/4]&=~(1u<<27);return 1;}
 int gicv3_spi_rearm(const struct gicv3_spi *s)
@@ -48,7 +50,7 @@ static void setup(void)
 {
  memset((void *)regs,0,4096);memset(&irq,0,sizeof(irq));memset(&board,0,sizeof(board));
  board.handles[4]=(void *)1;board.host.core_started=1;regs[0x4b8/4]=0xb0000000;
- critical=started=notifies=waits=begins=finishes=rearm_fail=inject_exit=0;alive=1;
+ critical=started=notifies=waits=begins=finishes=rearm_fail=inject_exit=work_pending=0;alive=1;
  assert(board_host_irq_bind());started=1;irq.armed=1;
 }
 int main(void)
@@ -72,5 +74,8 @@ int main(void)
  assert(board_host_irq_before()<0);board_host_irq_stop();assert(irq.masked);
  setup();board_host_irq_wait();assert(waits==1);
  irq.draining=1;board_host_irq_wait();assert(waits==1);
+ setup();work_pending=1;
+ for(unsigned i=0;i<31;++i)board_host_irq_wait();
+ assert(!waits);board_host_irq_wait();assert(waits==1);
  puts("PASS actual owner IRQ mask propagation, inactive wait, claim race, pending rearm exclusion, notification, bounded failure retention");
 }
