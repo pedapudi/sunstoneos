@@ -4,9 +4,21 @@ void crypto_run_clear_clients(struct crypto_run *r)
 {
  crypto_secret_clear(r->hash.key,sizeof(r->hash.key));
  crypto_secret_clear(r->hash.buffer,sizeof(r->hash.buffer));
+ crypto_secret_clear(r->hash.digest,sizeof(r->hash.digest));
  crypto_secret_clear(r->cipher.key,sizeof(r->cipher.key));
+ crypto_secret_clear(r->cipher.iv,sizeof(r->cipher.iv));
  crypto_secret_clear(r->cipher.hash_subkey,sizeof(r->cipher.hash_subkey));
  crypto_secret_clear(r->cipher.subkey_block,sizeof(r->cipher.subkey_block));
+ crypto_secret_clear(r->cipher.j0,sizeof(r->cipher.j0));
+ crypto_secret_clear(r->cipher.tag,sizeof(r->cipher.tag));
+ crypto_secret_clear(r->cipher.nonce,sizeof(r->cipher.nonce));
+ crypto_secret_clear(r->cipher.aad,sizeof(r->cipher.aad));
+ crypto_secret_clear(r->cipher.input,sizeof(r->cipher.input));
+ crypto_secret_clear(r->cipher.output,sizeof(r->cipher.output));
+ crypto_secret_clear(r->request.input,sizeof(r->request.input));
+ crypto_secret_clear(r->request.iv,sizeof(r->request.iv));
+ crypto_secret_clear(r->request.aad,sizeof(r->request.aad));
+ crypto_secret_clear(r->payload,sizeof(r->payload));
 }
 void crypto_run_clear_secrets(struct crypto_run *r)
 {crypto_request_clear(&r->request);crypto_run_clear_clients(r);}
