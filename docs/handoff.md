@@ -817,7 +817,10 @@ over historical completion or qualification claims below.
   - `tools/integration-gate.py` with an explicit `--reason`.
 
   Then merge into `bringup` without piping `git merge`, checking for unmerged
-  paths, and push after a secret scan. No co-author lines.
+  paths, and push. The pre-push hook scans the outgoing commits for secrets
+  and assistant attribution; see
+  [Scan outgoing commits before a push](validation.md#scan-outgoing-commits-before-a-push).
+  No co-author lines.
 
 # Current work
 
