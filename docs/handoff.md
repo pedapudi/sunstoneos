@@ -6,25 +6,25 @@ history.
 
 ## Paused after the 2026-10-31 tranche
 
-Both boards are unavailable after one GPU recognition attempt and one longer
-CPU recognition attempt failed to return. No native result was recovered from
-either attempt. Preserve their runners and claims; do not contact either board
-or retry the images. The preceding NPU constructor diagnostic passed on port
-3-3 with normal return and full saved-RAM restoration. Work continues offline
-on safe GPU refusal reporting, NPU startup and source-backed failure diagnosis.
-Full board support is unfinished. No new end-to-end device capability was
-qualified in this tranche. Implementation is paused after closeout; resume only
-when the user asks. Workers have completed their handoffs. The two retained
-runners remain alive solely to preserve failed-session ownership.
+Implementation is paused; resume only when the user asks. Both boards remain
+unavailable after CPU/GPU attempts failed to return. At the user's explicit
+instruction, both retained runners were terminated and their queue claims closed
+as failed. Their port locks are released; no board process remains running.
+Quarantine and halted queues remain because hardware recovery is unproven.
+
+Workers have completed their handoffs. No new end-to-end device capability was
+qualified in this tranche. The preceding NPU constructor diagnostic passed with
+normal return and full saved-RAM restoration. Reviewed offline fixes and staged
+work are recorded below.
 
 ## Board access
 
 Both boards use USB-only power and speed bin 4. Port 3-1 is unavailable after
 the GPU image did not return within 90 seconds. Its old FEL descriptor does not
-establish a responsive ROM. Preserve runner PID `1921828`, execution session
-`43472` and queue claim
-`222b773655fe191da4c858869a92220a5a5afdea05c076f86a1391bb7e54b5e9`.
-Do not probe or retry it. Reuse requires explicit USB power removal and
+establish a responsive ROM. Former runner PID `1921828` and execution session
+`43472` are stopped. Queue claim
+`222b773655fe191da4c858869a92220a5a5afdea05c076f86a1391bb7e54b5e9`
+is closed as failed. Do not probe or retry it. Reuse requires explicit USB power removal and
 reconnection, followed by the recorded recovery procedure; no repeated user
 request has been made.
 
@@ -36,19 +36,21 @@ Those pre-attempt records are under
 `cpu-long-target.json`, `cpu-thermal-state/session.json`,
 `cpu-long-cacheoff/session.json` and `cpu-long-survey/session.json`. These
 observations are not native warm-return links. Its preparation claims are closed.
-The failed longer CPU attempt retains port 3-3 under claim
-`aaf8d09c6e05031fa819ca0db14bc7d672c930b41803bf05d8030422bc2d4fdb`,
-runner PID `1975112` and execution session `11523`. Its frozen inputs and failure
-journal are under `~/.cache/sunstoneos/evidence/sol-cpu-robustness-1031/`.
-No CPU receipt, thermal window or restoration proof was recovered. Reuse requires
-explicit USB power removal and reconnection; preserve the retained process until
-that recovery is verified. Do not use the earlier successful entry records as
-current launch authority.
+The failed longer CPU claim
+`aaf8d09c6e05031fa819ca0db14bc7d672c930b41803bf05d8030422bc2d4fdb`
+is closed as failed. Former runner PID `1975112` and execution session `11523`
+are stopped. Its frozen inputs and failure journal remain under
+`~/.cache/sunstoneos/evidence/sol-cpu-robustness-1031/`. No CPU receipt, thermal
+window or restoration proof was recovered. Reuse requires explicit USB power
+removal and reconnection. Earlier entry records are not current launch authority.
+Host release evidence is under
+`~/.cache/sunstoneos/evidence/board-hold-release-20261031/`; it establishes process
+termination and released locks, not hardware recovery.
 
 | Port | Last node | Host identity | Current access |
 | --- | --- | --- | --- |
-| 3-1 | `003/014` | `[7,2486,1096973,0,0]` | Quarantined after native nonreturn; retained claim and process |
-| 3-3 | `003/016` | `[7,2569,1096975,0,0]` | Quarantined after CPU nonreturn; retained claim and process |
+| 3-1 | `003/014` | `[7,2486,1096973,0,0]` | Quarantined after native nonreturn; process stopped, claim failed |
+| 3-3 | `003/016` | `[7,2569,1096975,0,0]` | Quarantined after CPU nonreturn; process stopped, claim failed |
 
 The evidence root is `~/.cache/sunstoneos/evidence/sol-resume-20261028/`.
 Keep every native warm-return link in order; same-instance observations are not
@@ -88,8 +90,8 @@ microSD cards. The former pre-recovery port 3-3 chain is historical.
 ## Resume with a narrower target
 
 Recover one board only after the user confirms power removal and reconnection.
-Preserve the failed-session records and close their exact retained processes
-under the existing recovery procedure. Use existing returning probes to locate
+Preserve the failed-session records, verify the new identity and review the
+halted queue under the existing recovery procedure. Use existing returning probes to locate
 the failed phase while holding the image, model and recording fixed. Do not
 launch another complete CPU/GPU image merely because a new package passes its
 software checks. Select one device outcome and a concrete failure hypothesis;

@@ -34,8 +34,9 @@ and physical results through 2026-10-31:
 | DRAM training | Captures across ten lifetimes establish the inputs for the training-restore design | Executing the restore and qualifying memory after it |
 
 Both ports are unavailable after GPU and longer CPU recognition attempts failed
-to return. Their claims and runners remain retained; neither produced a native
-result. The preceding port 3-3 constructor diagnostic returned normally with its
+to return. Their runners were terminated and their claims closed as failed at
+the user's direction; neither produced a native result. Host locks are released,
+while board quarantine and halted queues remain. The preceding port 3-3 constructor diagnostic returned normally with its
 saved 18 MiB restored. Further physical recovery is unavailable until confirmed
 by the user. Software evidence remains separate from physical
 qualification; each board test requires its own return and failure admission.
