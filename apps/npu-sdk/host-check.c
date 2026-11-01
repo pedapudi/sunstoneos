@@ -16,7 +16,8 @@ int main(int argc,char **argv)
 {
     char in[4]="abc",out[4]={0};
     assert(ss_npu_run(1,in,4,out,4,100)==-1);
-    const struct ss_npu_backend backend={run,close_backend};
+    const struct ss_npu_model models[]={{"unused",1,1,1,1},{"copy",1,1,4,4}};
+    const struct ss_npu_backend backend={run,close_backend,models,2};
     assert(ss_npu_service_bind(&backend));assert(!ss_npu_service_bind(&backend));
     assert(ss_npu_run(1,in,4,out,4,100)==0);
     assert(ss_npu_close()==-1);assert(ss_npu_run(2,in,4,out,4,100)==-1);

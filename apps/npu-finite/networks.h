@@ -1,6 +1,7 @@
 #ifndef SUNSTONE_NPU_FINITE_NETWORKS_H
 #define SUNSTONE_NPU_FINITE_NETWORKS_H
 #include <stddef.h>
+#include "sunstone_app.h"
 /* The networks of the NPU runtime finite image, in job order: each model with
  * its input tensors and reference outputs concatenated in model order. The
  * build (apps/npu-finite/build.py --runtime) generates the table from the
@@ -17,4 +18,5 @@ struct npu_finite_network {
 #endif
 #define NPU_FINITE_OUTPUT_BYTES 4096u
 extern const struct npu_finite_network npu_finite_networks[NPU_FINITE_NETWORKS];
+extern const struct ss_npu_model npu_finite_models[NPU_FINITE_NETWORKS];
 #endif

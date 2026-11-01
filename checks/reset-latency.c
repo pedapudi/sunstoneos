@@ -54,6 +54,7 @@ const struct os_session *os_session_admitted(void)
     static const struct os_session session={.board={.workload=4}};
     return &session;
 }
+uint64_t board_runtime_deadline_us(void){return UINT64_MAX/24;}
 const struct os_service os_services[OS_SERVICES]={
     {"board-pmic",1000000},{"board-usb0",1000000},{"board-typec",1000000},
     {"board-power",1000000},{"board-usb2",1000000},

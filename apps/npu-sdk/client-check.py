@@ -8,7 +8,7 @@ from elftools.elf.elffile import ELFFile
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();a.out.mkdir(parents=True,exist_ok=False)
-im=Image(a.image,layout_names=('npu_runtime','npu_runtime_slot','npu_runtime_counters','npu_service','a733_npu_controller','a733_observe_identity','npu_finite_network'))
+im=Image(a.image,layout_names=('npu_runtime','npu_runtime_slot','npu_runtime_counters','npu_service','a733_npu_controller','a733_observe_identity','npu_finite_network','ss_npu_backend'))
 L=im.layouts;enums={}
 with a.image.open('rb') as f:
  for cu in ELFFile(f).get_dwarf_info().iter_CUs():
@@ -79,7 +79,10 @@ for variant in ('matched','last-output-mismatch','last-IRQ-missing','last-job-fa
  u.hook_add(UC_HOOK_CODE,code)
  # Bind the actual mailbox to linked helper/close callbacks before starting
  # the application. Initialization of the service-ready publication is modeled.
- backend=0x43ffc000;put(backend,im.address('npu_job_run'));put(backend+8,im.address('sdk_close'))
+ backend=0x43ffc000;fields=L['ss_npu_backend']
+ put(backend+fields['run'],im.address('npu_job_run'));put(backend+fields['close'],im.address('sdk_close'))
+ if 'models' in fields:
+  put(backend+fields['models'],im.address('npu_finite_models'));put(backend+fields['count'],jobs,4)
  stop_hook=u.hook_add(UC_HOOK_CODE,lambda cpu,at,size,cookie:cpu.emu_stop() if at==0x43fff200 else None)
  u.reg_write(UC_ARM64_REG_X0,backend);u.reg_write(UC_ARM64_REG_SP,0x43ffb000);u.reg_write(UC_ARM64_REG_LR,0x43fff200)
  u.emu_start(im.address('ss_npu_service_bind'),0,count=10000)

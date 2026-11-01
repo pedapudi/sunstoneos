@@ -97,6 +97,22 @@ records no fault. For software failures, bit 31 of the site word identifies a
 return address; the decoder symbolizes the preceding call instruction.
 CPU-clock records also retain the owner phase, cluster and status/refusal word.
 
+OS NPU request failures use group 10 and retain the failing source line and
+statement address. Their request flag is distinct from register, startup and
+sustained-measurement records. The auxiliary word holds the service operation
+and the expected ticket's low eight bits. The value holds the failed
+predicate's observed low 32 bits. A deadline refusal records observed time;
+a counter failure has its own source line and a zero result. No additional
+clock or device read follows a refusal.
+
+The retained `os_npu_first_failure` snapshot keeps full request and reply
+tickets, model, expected and observed operands, and atomically published
+runtime/IRQ state. Watch refusals also keep sampled time, session end and the
+gate used for the decision. Its ready value is two after copying completes.
+An earlier provider or register record remains authoritative in RTC. Watchdog
+reset may destroy this RAM snapshot; RTC alone cannot reconstruct a full
+64-bit ticket, deadline or observed operand.
+
 [checks/harness.py](../checks/harness.py) steps over progress SVC `0x5c0d` and
 failure SVC `0x5c0e` in function-level models without exception vectors.
 That model support establishes no physical reset result.

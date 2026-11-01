@@ -136,6 +136,53 @@ static int parent(void)
     return a->owner==app.allocation.owner && a->generation==app.allocation.generation &&
         a->first==app.allocation.first && a->pages==app.allocation.pages && a->state==DEVICE_MEMORY_DEVICE;
 }
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+/* Worker-written evidence, retained with the parent through terminal cleanup. */
+uint32_t npu_active_cancel_platform[2][6];
+unsigned npu_active_cancel_authority[2],npu_active_cancel_checkpoints;
+uint64_t npu_active_cancel_platform_ticks[2];
+#define CANCEL_CHECKPOINT_REFUSE(observed) do { \
+    struct npu_service_cancel_diagnostic *d=&app.reserved.convolution.diagnostic; \
+    uint64_t operand=(observed); \
+    uint32_t site=SUNSTONE_CRUMB_FAIL_SITE(NPU)|SUNSTONE_CRUMB_NPU_CANCEL|(3u<<23)|((uint32_t)(d->job_ticket&127)<<16); \
+    uint32_t value=(uint32_t)operand; \
+    if(operand>UINT32_MAX){site|=SUNSTONE_CRUMB_NPU_CANCEL_HIGH_WORD;value=(uint32_t)(operand>>32);} \
+    if(!d->fault_recorded){ \
+        d->fault_operand=operand;d->fault_ticket=d->job_ticket;d->fault_sample=3; \
+        d->fault_site=site;d->fault_caller=(uintptr_t)SUNSTONE_CRUMB_HERE();d->fault_recorded=1; \
+        sunstone_crumb_fail(site,value,(const void *)d->fault_caller); \
+    }return 0; \
+}while(0)
+static int cancel_checkpoint(void *cookie,unsigned stage)
+{
+    static const uintptr_t addresses[6]={A733_POWER_PCK_DOMAIN(4),A733_POWER_PCK_DOMAIN(4)+8,
+        0x020022a0,0x02002b00,0x02002b04,0x02003920};
+    struct a733_npu_startup *s=&app.startup;
+    unsigned domain;
+    if(cookie!=&app || stage>1 || npu_active_cancel_checkpoints!=stage || !live() || !parent() ||
+       xTaskGetCurrentTaskHandle()!=app.reserved.convolution.service.worker ||
+       !a733_npu_startup_window_open(s) || s->stage!=A733_NPU_STARTUP_READY ||
+       s->pll_factors!=UINT32_C(0x00104600) ||
+       a733_clock_token_status(&app.registry,&s->clock)!=A733_CLOCK_OK ||
+       a733_rail_status(&app.rails,&s->rail)!=A733_RAIL_READY || !s->pck.token ||
+       !a733_power_domain_check(&app.domains,4,&domain) || domain!=8)return 0;
+    unsigned authority=a733_power_authority_load(&app.rails.authority);
+    if(!(authority&A733_POWER_DCDC2_VERIFIED) || (authority&(A733_POWER_PMIC_TRANSFER|A733_POWER_DOMAIN4_FAULT)))CANCEL_CHECKPOINT_REFUSE(authority);
+    for(unsigned i=0;i<6;++i)
+        if(!s->ops.registers.read(s->cookie,addresses[i],&npu_active_cancel_platform[stage][i]))CANCEL_CHECKPOINT_REFUSE(addresses[i]);
+    const uint32_t *v=npu_active_cancel_platform[stage];
+    if((v[0]&15)!=8)CANCEL_CHECKPOINT_REFUSE(v[0]);
+    if((v[1]&15)!=8)CANCEL_CHECKPOINT_REFUSE(v[1]);
+    if(v[2]!=(UINT32_C(0xf8104600)|s->pll_inherited))CANCEL_CHECKPOINT_REFUSE(v[2]);
+    if((v[3]&UINT32_C(0x8700001f))!=UINT32_C(0x80000000))CANCEL_CHECKPOINT_REFUSE(v[3]);
+    if((v[4]&UINT32_C(0xf0001))!=UINT32_C(0xf0001))CANCEL_CHECKPOINT_REFUSE(v[4]);
+    if(stage)for(unsigned i=0;i<6;++i)if(v[i]!=npu_active_cancel_platform[0][i])CANCEL_CHECKPOINT_REFUSE(v[i]);
+    npu_active_cancel_authority[stage]=authority;
+    npu_active_cancel_platform_ticks[stage]=a733_smp_counter();
+    ++npu_active_cancel_checkpoints;return 1;
+}
+#undef CANCEL_CHECKPOINT_REFUSE
+#endif
 static int worker(void *cookie)
 {
     uint64_t el,now;__asm__ volatile("mrs %0,CurrentEL":"=r"(el));
@@ -620,6 +667,10 @@ int a733_npu_application_init(TaskHandle_t client)
 #endif
 #ifdef SUNSTONE_NPU_RESTART
        !npu_convolution_restart_enable(&app.reserved.convolution,npu_application_irq_restart) ||
+#endif
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+       !npu_convolution_cancel_diagnostic_enable(&app.reserved.convolution,npu_application_irq_restart,
+           cancel_checkpoint,&app) ||
 #endif
        !preparation_admitted())goto failed;
 #ifdef SUNSTONE_NPU_FINITE_THERMAL

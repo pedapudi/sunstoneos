@@ -10,7 +10,9 @@ for an image whose link check records the NPU profile.
 classify() keeps the outcomes apart:
 
 - 'pending': the client has not published its report yet;
-- 'matched': every completed job's outputs equal the linked reference;
+- 'matched': the built-in client compared every output with its linked reference;
+- 'completed': the SDK copied the selected number of outputs and stopped;
+  the application supplies numerical evidence separately;
 - 'mismatch': at least one completed job's outputs differ from the reference,
   with the bytes that kept the SUBMIT fill pattern in the last job reported;
 - 'refused': a thermal stop, including one for stale thermal data, ended the
@@ -37,6 +39,7 @@ def decode(raw, epoch, generation):
         raise ValueError('NPU report size differs.')
     r = dict(zip(FIELDS, struct.unpack_from(LAYOUT, raw)))
     r['last_digest'] = raw[72:104].hex()
+    r['mode'] = 'pending'
     if (r['magic'], r['version'], r['bytes']) != (MAGIC, 1, REPORT_BYTES):
         raise ValueError('Not an NPU report.')
     if (r['epoch'], r['generation']) != (epoch, generation):
@@ -48,10 +51,13 @@ def decode(raw, epoch, generation):
         if any(r[k] for k in FIELDS[6:]) or any(raw[72:]):
             raise ValueError('A pending NPU report carries results.')
         return r
-    if (r['pattern'] != PATTERN or r['jobs'] > r['jobs_selected'] or r['mismatches'] > r['jobs'] or
+    if (r['pattern'] not in (0, PATTERN) or r['jobs'] > r['jobs_selected'] or r['mismatches'] > r['jobs'] or
             r['pattern_bytes'] > r['output_bytes'] or (r['jobs'] == 0) != (r['output_bytes'] == 0) or
             (r['jobs'] == 0 and (r['pattern_bytes'] or any(raw[72:])))):
         raise ValueError('Inconsistent NPU report.')
+    r['mode'] = 'sdk' if r['pattern'] == 0 else 'builtin'
+    if r['mode'] == 'sdk' and (r['mismatches'] or r['pattern_bytes'] or any(raw[72:])):
+        raise ValueError('An SDK NPU report carries built-in numerical results.')
     if not r['retained'] and not r['stopped']:
         raise ValueError('An NPU report without retention must follow a proven stop.')
     return r
@@ -67,4 +73,4 @@ def classify(report):
         return 'mismatch'
     if report['refused'] or report['jobs'] < report['jobs_selected']:
         return 'refused'
-    return 'matched'
+    return 'completed' if report['pattern'] == 0 else 'matched'

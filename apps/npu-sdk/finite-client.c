@@ -61,6 +61,17 @@ static void sdk_service(void *unused)
     while(!a733_npu_application_ready()) {if(!live())retained(31);vTaskDelay(1);}
     runtime=a733_npu_application_runtime();
     if(!runtime)retained(10);
+    for(unsigned i=0;i<NPU_FINITE_NETWORKS;++i) {
+        const struct nbg_assembly_layout *p=&runtime->plans[i];
+        const struct ss_npu_model *m=&npu_finite_models[i];
+        size_t inputs=0,outputs=0;
+        if(m->inputs!=p->inputs||m->outputs!=p->outputs)retained(10);
+        for(unsigned j=0;j<p->inputs;++j)inputs+=p->buffers[NBG_ALLOC_INPUT+j].payload_bytes;
+        for(unsigned j=0;j<p->outputs;++j)outputs+=p->buffers[NBG_ALLOC_INPUT+p->inputs+j].payload_bytes;
+        if(inputs!=m->input_bytes||outputs!=m->output_bytes)retained(10);
+    }
+    const struct ss_npu_backend backend={npu_job_run,sdk_close,npu_finite_models,NPU_FINITE_NETWORKS};
+    if(!ss_npu_service_bind(&backend))retained(10);
     atomic_store_explicit(&sdk_ready,1,memory_order_release);
     for(;;) {
         if(ss_npu_service_step()<0 || !live())retained(30);
@@ -155,8 +166,6 @@ void a733_smp_diagnostic_start(void)
     struct npu_runtime_model models[NPU_FINITE_NETWORKS];
     for(unsigned n=0;n<NPU_FINITE_NETWORKS;++n)
         models[n]=(struct npu_runtime_model){npu_finite_networks[n].model,npu_finite_networks[n].model_bytes};
-    const struct ss_npu_backend backend={npu_job_run,sdk_close};
-    configASSERT(ss_npu_service_bind(&backend));
     TaskHandle_t worker=xTaskCreateStaticAffinitySet(sdk_service,"npu-sdk-owner",4096,NULL,2,
         service_stack,&service_state,1);
     TaskHandle_t task=xTaskCreateStaticAffinitySet(npu_runtime_client,"npu-runtime",4096,NULL,2,

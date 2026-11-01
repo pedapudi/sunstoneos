@@ -6,6 +6,7 @@
 #include "a733_mapping_check.h"
 #include "aarch64_device_memory.h"
 #include "device_memory_pool.h"
+#include "sunstone_crumb.h"
 #include "boot.h"
 #include "sunstone_npu_service.h"
 #include <string.h>
@@ -30,16 +31,52 @@ static unsigned creating; /* Only while os_npu_start creates its two tasks. */
 extern unsigned char __os_npu_pool_start[],__os_npu_pool_end[];
 static int clock_now(uint64_t *now)
 {return a733_counter_clock_now(&providers.shared.counter,now);}
-static int fail(void)
+struct os_npu_failure os_npu_first_failure;
+struct watch_failure {
+    uint32_t line;
+    uint64_t expected,observed,now,end,gate;
+    const void *where;
+};
+static int fail_at(uint32_t line,enum npu_service_operation op,unsigned model,uint64_t ticket,
+                   const struct npu_service_reply *reply,uint64_t expected,uint64_t observed,const void *where,
+                   const struct watch_failure *watch)
 {
-    atomic_store_explicit(&npu.failed,1,memory_order_release);board_fail(NULL);
-    if(npu.client)xTaskNotifyGive(npu.client);return -1;
+    const uint32_t site=SUNSTONE_CRUMB_FAIL_NPU<<12|(line&0xfffu)|SUNSTONE_CRUMB_NPU_REQUEST|
+        ((uint32_t)op&7u)<<24|((uint32_t)ticket&255u)<<16;
+    /* First-note ownership belongs to the existing board latch. In particular,
+     * a native register or startup failure must survive this caller's refusal. */
+    board_fail_note(site,(uint32_t)observed,where);
+    atomic_store_explicit(&npu.failed,1,memory_order_release);
+    unsigned empty=0;
+    if(atomic_compare_exchange_strong_explicit(&os_npu_first_failure.ready,&empty,1,
+            memory_order_acq_rel,memory_order_acquire)) {
+        struct os_npu_failure *f=&os_npu_first_failure;
+        f->site=site;f->operation=op;f->model=model;f->ticket=ticket;
+        f->expected=expected;f->observed=observed;f->caller=(uintptr_t)where;
+        f->reply_valid=reply!=NULL;if(reply)f->reply=*reply;
+        if(watch){f->watch_valid=1;f->now=watch->now;f->end=watch->end;f->gate=watch->gate;}
+        /* These fields have atomic publication. A timeout does not authorize
+         * reading mutable controller fields owned by the NPU worker. */
+        f->slot_state=atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire);
+        f->runtime_failed=atomic_load_explicit(&npu.runtime.failed,memory_order_acquire);
+        f->irq_pending=atomic_load_explicit(&npu.runtime.service.irq_pending,memory_order_acquire);
+        f->irq_stopped=atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire);
+        atomic_store_explicit(&f->ready,2,memory_order_release);
+    }
+    board_fail_at(site,(uint32_t)observed,where);return -1;
 }
+#define FAIL_REQUEST(op,model,ticket,reply,expected,observed) \
+    fail_at(__LINE__,(op),(model),(ticket),(reply),(uint64_t)(expected),(uint64_t)(observed),SUNSTONE_CRUMB_HERE(),NULL)
+static int fail_watch(enum npu_service_operation op,unsigned model,uint64_t ticket,
+                      const struct npu_service_reply *reply,const struct watch_failure *watch)
+{return fail_at(watch->line,op,model,ticket,reply,watch->expected,watch->observed,watch->where,watch);}
 static void sdk_notify(void *unused)
 {(void)unused;if(npu.client)xTaskNotifyGive(npu.client);}
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
 void os_npu_queue_notify(void){sdk_notify(NULL);}
 #endif
+static int fail(void)
+{sdk_notify(NULL);return FAIL_REQUEST(NPU_SERVICE_STATUS,UINT32_MAX,0,NULL,0,npu.runtime.native.failed);}
 static void fatal(void *v){(void)v;(void)fail();}
 static int live(void)
 {return npu.started&&board_live(NULL)&&!atomic_load_explicit(&npu.failed,memory_order_acquire);}
@@ -77,19 +114,35 @@ static int claim(void)
     }
     return 0;
 }
-static int watch(uint64_t *now)
+#define WATCH_REFUSE(want,got) do { \
+    *why=(struct watch_failure){.line=__LINE__,.expected=(uint64_t)(want),.observed=(uint64_t)(got), \
+        .now=sampled,.end=npu.end,.gate=gate_sampled?word:atomic_load_explicit(&npu.gate,memory_order_acquire), \
+        .where=SUNSTONE_CRUMB_HERE()};return 0; \
+} while(0)
+static int watch(uint64_t *now,struct watch_failure *why)
 {
-    if(!live()||!clock_now(now)||*now>=npu.end)return 0;
-    uint64_t word=atomic_load_explicit(&npu.gate,memory_order_acquire),until=word>>3;
+    uint64_t sampled=0,word=0;unsigned gate_sampled=0;
+    if(!npu.started)WATCH_REFUSE(1,0);
+    const unsigned failed=atomic_load_explicit(&npu.failed,memory_order_acquire);
+    if(failed)WATCH_REFUSE(0,failed);
+    if(!board_live(NULL))WATCH_REFUSE(1,0);
+    if(!clock_now(now))WATCH_REFUSE(1,0);
+    sampled=*now;
+    if(*now>=npu.end)WATCH_REFUSE(npu.end,*now);
+    word=atomic_load_explicit(&npu.gate,memory_order_acquire);gate_sampled=1;
+    const uint64_t until=word>>3;
     if(!(word&STOP)&&*now>=until&&*now-until>=4000000) {
         os_npu_thermal(0,1,0,*now);
         word=atomic_load_explicit(&npu.gate,memory_order_acquire);
     }
-    return !(word&STOP)||*now<word>>3;
+    if((word&STOP)&&*now>=word>>3)WATCH_REFUSE(word>>3,*now);
+    return 1;
 }
+#undef WATCH_REFUSE
 static int progress(uint64_t *now)
 {
-    if(!watch(now))return fail();
+    struct watch_failure why;
+    if(!watch(now,&why))return fail_watch(NPU_SERVICE_STATUS,UINT32_MAX,0,NULL,&why);
     BOARD_PROGRESS(OS_SERVICE_NPU);return 1;
 }
 int os_npu_progress(void)
@@ -105,8 +158,24 @@ unsigned os_npu_stopped(void)
         !atomic_load_explicit(&npu.runtime.failed,memory_order_acquire)&&
         !atomic_load_explicit(&npu.runtime.service.irq_pending,memory_order_acquire)&&
         (!atomic_load_explicit(&npu.active,memory_order_acquire)||
-         atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire));
+         (atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire)&&
+          npu_service_runtime_parked(&npu.runtime.service)));
 }
+static int retirement_fault(void)
+{
+    if(atomic_load_explicit(&npu.closed,memory_order_acquire)||
+       atomic_load_explicit(&npu.stopped,memory_order_acquire)){
+        unsigned late=atomic_load_explicit(&npu.runtime.service.irq_pending,memory_order_acquire);
+        if(atomic_load_explicit(&npu.runtime.failed,memory_order_acquire))late|=1u<<8;
+        if(atomic_load_explicit(&npu.active,memory_order_acquire)&&
+           !atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire))late|=1u<<9;
+        if(atomic_load_explicit(&npu.failed,memory_order_acquire))late|=1u<<10;
+        if(late){(void)FAIL_REQUEST(NPU_SERVICE_CLOSE,UINT32_MAX,0,NULL,0,late);return 1;}
+    }
+    return 0;
+}
+int os_npu_retirement_check(void)
+{return !retirement_fault()&&os_npu_complete();}
 #ifdef SUNSTONE_A733_OS_PERF
 /* Performance modes: the request number and rate in one word, the answer
  * number and result in another; the bootstrap serves requests only after the
@@ -144,7 +213,7 @@ static void perf_serve(void)
             a733_npu_startup_retune_until(&npu.startup,request&0xffff,perf_deadline);
         atomic_store_explicit(&perf_answer,(request>>16)<<2|(r==1 ? 1u : r==0 ? 2u : 3u),memory_order_release);
         atomic_store_explicit(&perf_request,0,memory_order_release);
-        if(r<0){(void)fail();vTaskSuspend(NULL);}
+        if(r<0){(void)FAIL_REQUEST(NPU_SERVICE_STATUS,UINT32_MAX,0,NULL,1,r);vTaskSuspend(NULL);}
     }
 }
 #define STOPPED_WAIT() perf_serve()
@@ -157,19 +226,29 @@ static int caller(void)
  * wrappers never retry a submission or free its windows. */
 static int call(enum npu_service_operation op,unsigned model,uint64_t timeout)
 {
-    uint64_t now,ticket;
-    struct npu_service_reply reply;
-    if(progress(&now)!=1)return -1;
+    uint64_t now=0,ticket=0;
+    struct npu_service_reply reply={0};
+    struct watch_failure why;
+    if(!watch(&now,&why))return fail_watch(op,model,0,NULL,&why);
+    BOARD_PROGRESS(OS_SERVICE_NPU);
     uint64_t end=npu.end,word=atomic_load_explicit(&npu.gate,memory_order_acquire);
     if((word&STOP)&&(word>>3)<end)end=word>>3;
-    if(end<=now)return fail();
+    if(end<=now)return FAIL_REQUEST(op,model,0,NULL,end,now);
     TickType_t wait=pdMS_TO_TICKS(2000);
     const uint64_t ticks=(end-now)*configTICK_RATE_HZ/1000000;
     if(ticks<wait)wait=(TickType_t)ticks;
-    if(!wait||!npu_runtime_send(&npu.runtime,0,op,model,timeout,wait,&ticket)||
-       !npu_runtime_collect(&npu.runtime,0,ticket,&reply,wait)||!watch(&now)||
-       reply.ticket!=ticket||reply.result!=NPU_SERVICE_OK||reply.fault!=A733_NPU_NO_FAULT||
-       reply.state!=(op==NPU_SERVICE_CLOSE?A733_NPU_CLOSED:op==NPU_SERVICE_SUBMIT?A733_NPU_DONE:A733_NPU_READY))return fail();
+    if(!wait)return FAIL_REQUEST(op,model,0,NULL,1,ticks);
+    if(!npu_runtime_send(&npu.runtime,0,op,model,timeout,wait,&ticket))
+        return FAIL_REQUEST(op,model,0,NULL,1,atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire));
+    if(!npu_runtime_collect(&npu.runtime,0,ticket,&reply,wait))
+        return FAIL_REQUEST(op,model,ticket,NULL,1,atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire));
+    if(reply.ticket!=ticket)return FAIL_REQUEST(op,model,ticket,&reply,ticket,reply.ticket);
+    if(reply.result!=NPU_SERVICE_OK)return FAIL_REQUEST(op,model,ticket,&reply,NPU_SERVICE_OK,reply.result);
+    if(reply.fault!=A733_NPU_NO_FAULT)return FAIL_REQUEST(op,model,ticket,&reply,A733_NPU_NO_FAULT,reply.fault);
+    const enum a733_npu_state expected=op==NPU_SERVICE_CLOSE?A733_NPU_CLOSED:
+        op==NPU_SERVICE_SUBMIT?A733_NPU_DONE:A733_NPU_READY;
+    if(reply.state!=expected)return FAIL_REQUEST(op,model,ticket,&reply,expected,reply.state);
+    if(!watch(&now,&why))return fail_watch(op,model,ticket,&reply,&why);
     return 1;
 }
 int os_npu_open(void)
@@ -181,7 +260,7 @@ int os_npu_open(void)
 }
 int os_npu_load(unsigned entry)
 {
-    if(!caller()||!npu.opened||entry>=OS_NPU_MODELS||os_npu_stopping())return 0;
+    if(!caller()||!npu.opened||entry>=os_npu_model_count||os_npu_stopping())return 0;
     return call(NPU_SERVICE_LOAD,entry,0);
 }
 int os_npu_tensor(enum nbg_section_id section,unsigned index,struct npu_runtime_tensor *tensor)
@@ -206,7 +285,7 @@ int os_npu_submit(uint64_t timeout)
 int os_npu_close(void)
 {
     if(!caller()||!npu.opened||atomic_load_explicit(&npu.closed,memory_order_acquire))return 0;
-    uint64_t now;if(!clock_now(&now))return fail();
+    uint64_t now;if(!clock_now(&now))return FAIL_REQUEST(NPU_SERVICE_CLOSE,0,0,NULL,1,0);
     os_npu_thermal(0,1,0,now);
     if(call(NPU_SERVICE_CLOSE,0,0)!=1)return -1;
     npu.opened=0;atomic_store_explicit(&npu.closed,1,memory_order_release);
@@ -216,7 +295,8 @@ static void bootstrap(void *unused)
 {
     (void)unused;unsigned begun=0;
     for(;;) {
-        uint64_t now;if(!watch(&now))break;
+        uint64_t now;struct watch_failure why;
+        if(!watch(&now,&why)){(void)fail_watch(NPU_SERVICE_STATUS,UINT32_MAX,0,NULL,&why);goto failed;}
         if(!begun) {
             if(now>=npu.initial_deadline)os_npu_thermal(0,1,0,now);
             if(os_npu_stopping()) {
@@ -228,7 +308,7 @@ static void bootstrap(void *unused)
             complete();begun=1;
         }
         enum a733_npu_platform_result r=npu_runtime_startup_poll(&npu.runtime);
-        if(r==A733_NPU_PLATFORM_RETAINED)break;
+        if(r==A733_NPU_PLATFORM_RETAINED){(void)FAIL_REQUEST(NPU_SERVICE_OPEN,0,0,NULL,A733_NPU_PLATFORM_READY,r);goto failed;}
         if(r==A733_NPU_PLATFORM_READY) {
             enum npu_service_result activated=npu_service_activate(&npu.runtime.service);
             if(activated==NPU_SERVICE_OK) {
@@ -237,10 +317,17 @@ static void bootstrap(void *unused)
 #endif
                 atomic_store_explicit(&npu.active,1,memory_order_release);xTaskNotifyGive(npu.client);
                 for(;;) {
-                    if(!watch(&now))goto failed;
+                    if(!watch(&now,&why)){(void)fail_watch(NPU_SERVICE_STATUS,UINT32_MAX,0,NULL,&why);goto failed;}
                     if(atomic_load_explicit(&npu.closed,memory_order_acquire)) {
+                        /* The final reply precedes the worker's last callback.
+                         * Its release acknowledgment and notification precede
+                         * retiring startup/IRQ provider ownership. */
+                        if(!npu_service_runtime_parked(&npu.runtime.service)){
+                            (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));continue;
+                        }
+                        if(retirement_fault())goto failed;
                         r=npu_runtime_stop_poll(&npu.runtime);
-                        if(r==A733_NPU_PLATFORM_RETAINED)goto failed;
+                        if(r==A733_NPU_PLATFORM_RETAINED){(void)FAIL_REQUEST(NPU_SERVICE_CLOSE,0,0,NULL,A733_NPU_PLATFORM_READY,r);goto failed;}
                         if(r==A733_NPU_PLATFORM_READY) {
                             atomic_store_explicit(&npu.stopped,1,memory_order_release);
                             xTaskNotifyGive(npu.client);STOPPED_WAIT();return;
@@ -249,7 +336,7 @@ static void bootstrap(void *unused)
                     } else (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));
                 }
             }
-            if(activated!=NPU_SERVICE_BUSY)break;
+            if(activated!=NPU_SERVICE_BUSY){(void)FAIL_REQUEST(NPU_SERVICE_OPEN,0,0,NULL,NPU_SERVICE_OK,activated);goto failed;}
         }
         /* A PENDING startup blocks until its power-service notification, its
          * deadline or the last tick of its settle; a thermal notification
@@ -257,7 +344,7 @@ static void bootstrap(void *unused)
         (void)ulTaskNotifyTake(pdTRUE,r==A733_NPU_PLATFORM_PENDING ? a733_npu_startup_wait_ticks(&npu.startup) : 1);
     }
 failed:
-    (void)fail();vTaskSuspend(NULL);
+    vTaskSuspend(NULL);
 }
 /* The bootstrap and the registered client call a733_counter_clock_now, which
  * masks DAIF, so both start at EL1t. Only their two creations in
@@ -268,8 +355,9 @@ int os_npu_task_privileged(void (*entry)(void *),void *context)
 int os_npu_pins(struct a733_pin_handoff *pins){return pins&&os_session_admitted();}
 int os_npu_start(void)
 {
-    extern int os_npu_sdk_bind(void);
-    if(!ss_npu_service_bind_event(sdk_notify,NULL)||!os_npu_sdk_bind())return 0;
+    extern int os_npu_sdk_bind(const struct npu_runtime *);
+    extern int os_npu_diagnostic_bind(struct npu_runtime *) __attribute__((weak));
+    if(!ss_npu_service_bind_event(sdk_notify,NULL))return 0;
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
     if(!os_npu_queue_sdk_bind())return 0;
 #endif
@@ -281,29 +369,24 @@ int os_npu_start(void)
     uintptr_t start=(uintptr_t)__os_npu_pool_start,end=(uintptr_t)__os_npu_pool_end;
     /* The reservation fits any one catalogue entry; the runtime takes the
      * linked entry's exact requirement from its start. */
-    const size_t need=npu_runtime_requirements(os_npu_models,OS_NPU_MODELS,
+    if(!os_npu_model_count||os_npu_model_count>NPU_RUNTIME_MODELS)return 0;
+    const unsigned slots=
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
-        OS_NPU_MODELS
+        os_npu_model_count;
 #else
-        1
+        1;
 #endif
-    );
+    const size_t need=npu_runtime_requirements(os_npu_models,os_npu_model_count,slots);
     if(start!=OS_NPU_POOL_START||end-start!=OS_NPU_POOL_BYTES||!need||need>OS_NPU_POOL_BYTES||
        !a733_mapping_check_stride(aarch64_device_translate,start,start,end-start,0x200000,&wb)||
        !device_memory_pool_init_typed(&npu.pool,start,start,end-start,DEVICE_MEMORY_CLASS_DMA32,DEVICE_MEMORY_WRITE_BACK)||
        !device_memory_acquire(&npu.pool,g->owner,need,&npu.lease,&npu.extent)||
        npu.extent.cpu!=start||npu.extent.physical!=start||npu.extent.bytes!=need)return 0;
-    struct npu_runtime_config config={.count=OS_NPU_MODELS,.slots=
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-        OS_NPU_MODELS,
-#else
-        1,
-#endif
-        .cpu=npu.extent.cpu,
+    struct npu_runtime_config config={.count=os_npu_model_count,.slots=slots,.cpu=npu.extent.cpu,
         .physical=npu.extent.physical,.bytes=npu.extent.bytes,.register_cpu=0x03600000,
         .register_physical=0x03600000,.fatal=fatal};
-    memcpy(config.models,os_npu_models,sizeof(os_npu_models));
-    if(!npu_runtime_prepare(&npu.runtime,&config)){device_memory_retain(&npu.pool,npu.lease);return 0;}
+    memcpy(config.models,os_npu_models,os_npu_model_count*sizeof(os_npu_models[0]));
+    if(!npu_runtime_prepare(&npu.runtime,&config)||!os_npu_sdk_bind(&npu.runtime)){device_memory_retain(&npu.pool,npu.lease);return 0;}
     device_memory_lookup(&npu.pool,npu.lease)->state=DEVICE_MEMORY_DEVICE;
     const struct a733_board_session *b=&s->board;
     npu.end=board.session.deadline_us-10000;
@@ -326,7 +409,7 @@ int os_npu_start(void)
     npu.client=xTaskCreateStaticAffinitySet(os_npu_client_task,"os-npu-app",STACK,NULL,3,npu.stacks[1],&npu.tasks[1],2);
     creating=0;
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
-    for(unsigned i=0;i<OS_NPU_MODELS;++i)
+    for(unsigned i=0;i<os_npu_model_count;++i)
         if(!npu_runtime_preload(&npu.runtime,i,i))return 0;
     if(!os_npu_queue_prepare_edges(&npu.runtime))return 0;
 #endif
@@ -341,6 +424,7 @@ int os_npu_start(void)
        !npu_runtime_bind(&npu.runtime,&npu.startup,clients,4,2)||
 #endif
        !os_npu_irq_bind(&npu.runtime)||
+       (os_npu_diagnostic_bind&&!os_npu_diagnostic_bind(&npu.runtime))||
        npu.end>(UINT64_MAX>>3)-5000000||!clock_now(&now)||now>=npu.end)return 0;
     npu.initial_deadline=now+1000000;
     atomic_init(&npu.gate,npu.initial_deadline<<3);npu.started=1;return 1;

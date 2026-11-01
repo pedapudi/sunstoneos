@@ -12,6 +12,9 @@
 #include "a733_fault.h"
 #endif
 uint64_t a733_smp_counter(void);
+/* The absolute runtime deadline (apps/board/main.c). The sealed session's
+ * board prefix has zero time fields and cannot bound a wait. */
+uint64_t board_runtime_deadline_us(void);
 /* Windows bound active work and the interval from a wake to its checked
  * result. They are configuration, not board measurements of worst latency. */
 static atomic_uint_fast64_t seen[OS_SERVICES];
@@ -31,7 +34,7 @@ int board_service_blocked_until(unsigned service,uint64_t deadline)
     TaskHandle_t owner=atomic_load_explicit(&blocked_owner[service],memory_order_acquire);
     const struct os_session *session=os_session_admitted();
     if(!owner||owner!=xTaskGetCurrentTaskHandle()||!session||
-       deadline>session->board.deadline_us||deadline<=a733_smp_counter()/24)return 0;
+       deadline>board_runtime_deadline_us()||deadline<=a733_smp_counter()/24)return 0;
     taskENTER_CRITICAL();
     struct sunstone_deadline_record r;
     int ok=sunstone_deadline_owner_record(owner,&r)&&!r.failed&&!r.armed&&r.sequence<UINT64_MAX;
