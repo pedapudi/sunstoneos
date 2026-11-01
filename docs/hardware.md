@@ -50,6 +50,14 @@ The [handoff branch list](handoff.md#open-branches) distinguishes unmerged fixes
 
 ## Current software integration
 
+The shared PMIC decoder preserves raw DCDC8/DCDC9 selectors 88–127 without
+publishing a programmed voltage. The pinned references disagree in that range.
+The [source comparison](designs/pmic-reference-reconciliation.md) and finite
+supply observer pass host checks; physical execution awaits a qualified
+watchdog/breadcrumb wrapper. BLDO5's fresh selector, fitted radio supply routing
+and physical voltage remain unobserved. Thermal transitions, processor
+concurrency and E902 management retain their existing qualification gaps.
+
 - Optional eight-worker mimus passes exact recognition parity in QEMU and
   native compilation. One exact CPU-only eight-worker recording now passes physically; other profiles and broader recognition qualification remain open.
   Supervised recorded OS recognition now supports eight workers with A76
@@ -848,9 +856,9 @@ to the stated scope:
   These register settings do not measure analog supply stability.
   Three calibration-shadow reads also pass physically in nonsecure EL1 under
   `thermal-sid-shadow-20261018/runtime/`, followed by successful ROM return.
-  This proves access to the calibration words, not temperature acquisition.
-  Existing calibration and controller evidence was reused. Physical acquisition,
-  accuracy, interrupt delivery and recovery remain unqualified.
+  This proves access to the calibration words. The finite thermal image also
+  demonstrates acquisition and normal return, as recorded below. Accuracy,
+  interrupt delivery, thermal transitions and fault recovery remain unqualified.
   A fixed board [thermal policy](thermal.md#a-fixed-board-policy-throttles-and-stops-work)
   is **implemented**. Its trips come from the pinned device tree. The CPU and
   GPU channels throttle at 90 °C, and every channel is critical at 110 °C. A

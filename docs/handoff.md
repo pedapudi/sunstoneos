@@ -127,6 +127,15 @@ access authority; DMA1 remains source-blocked. Existing DRAM restore evidence
 remains valid. Full-map testing after training and restore, temperature coverage
 and per-master DMA/IOMMU behavior remain unqualified.
 
+The PMIC decoder preserves DCDC8/DCDC9 codes 88–127 as raw, undecoded
+values because pinned U-Boot and Linux references disagree. The six-rail
+observer and source/provider checks pass on the host. Its physical launch
+requires watchdog and breadcrumb integration. The
+[PMIC comparison](designs/pmic-reference-reconciliation.md) identifies artifacts
+and missing fitted-PMIC, wiring and voltage evidence. The
+[thermal and management proposal](designs/thermal-management-qualification.md)
+records processor lifecycle dependencies and E902 resource conflicts.
+
 ## Merged application and failure-record interfaces
 
 Mimus lives in its own repository under `sunstoneos/`.

@@ -378,13 +378,13 @@ int main(int argc,char **argv)
     }
     pmic_model_setup(&m);ready(&m);
     const enum a733_rail ids[]={A733_RAIL_DCDC1,A733_RAIL_DCDC2,A733_RAIL_DCDC4,A733_RAIL_DCDC8,A733_RAIL_BLDO5,A733_RAIL_CLDO1};
-    const unsigned uv[]={3300000,800000,800000,1800000,1800000,1800000};
+    const unsigned uv[]={3300000,800000,800000,0,1800000,1800000};
     for(unsigned i=0;i<6;++i) {
         struct a733_rail_token t=rail(&m,10+i,A733_RAIL_BIT(ids[i]));struct a733_pmic_request q;
         assert(a733_pmic_submit(&m.provider,t.owner,&t,ids[i],1000000,&q)==A733_PMIC_PENDING);
         assert(a733_rail_release(&m.rails,&t,1000000)!=A733_RAIL_READY);
         struct a733_pmic_snapshot s;finish(&m,&q,&s);
-        assert(s.rail==ids[i] && s.enabled && s.decoded && s.programmed_uv==uv[i]);
+        assert(s.rail==ids[i] && s.enabled && s.decoded==!!uv[i] && s.programmed_uv==uv[i]);
         assert(!m.i2c_held && s.chip==3 && !s.page_before && !s.page_after && !s.revision);
         assert(a733_pmic_reap(&m.provider,&q)==A733_PMIC_COMPLETE);
         assert(a733_pmic_result(&m.provider,&q,&s)==A733_PMIC_INVALID);
