@@ -1,9 +1,12 @@
 # PMIC register access and service spin timing
 
-Status: **implemented and measured on the board.** Bundle 6 ran the changed
+Status: **implemented and host-checked; the current barrier placement needs
+physical qualification.** Bundle 6 ran the earlier
 provider four times on port 3-3 on 2026-10-24, read-only. Three runs used a
-`DSB SY` pair around every access. The fourth used the barrier placement of
-item 6 of section "Change" and qualified it for snapshots. Section "Board result"
+`DSB SY` pair around every access. The fourth used
+plain DATA stores with a trailing CNTR barrier and qualified it for snapshots.
+The current adapter completes DATA with DSB before the dependent CNTR trigger.
+The measurements below describe the earlier placement. Section "Board result"
 gives the steps, the access costs, the provisional empirical bound and what
 the measured costs predict. The modeled step times come from the host model
 of the power service, `checks/power-domains-service.c`, which sets each bus
@@ -75,14 +78,18 @@ accounts for the remaining 45 µs (section "Board result").
    `PMIC_POLLS_PER_STEP`, rises from 64 to 256, because with a slow bus a
    selector write needs about 56 polls plus re-spins.
 
-6. **Barrier placement.** The native adapter reads S_TWI0 plainly, writes
-   `DATA` plainly and completes each `CNTR` write with one `DSB SY`
-   (`a733_mmio_write32_dsb_sy_after`), which makes `phase_at` follow the
-   write's completion. Its reads of R_CCU, CCU, GIC and R_PIO at admission
-   and startup keep `DSB SY` on both sides. Section 1.2 of the performance
-   architecture prescribes this placement. A bundle 6 run on port 3-3
-   qualified it for snapshots (section "Board result"), and
-   `checks/pmic-tree.py` keeps the placement.
+6. **Barrier placement.** The native adapter reads S_TWI0 plainly and completes
+   each `DATA` and `CNTR` store with `DSB SY`
+   (`a733_mmio_write32_dsb_sy_after`). DATA therefore completes before the
+   dependent CNTR trigger; CNTR completes before `phase_at` and bus-status
+   polling. INT_FLAG, expected status and STOP/idle still establish the bus
+   transaction's completion. Reads of R_CCU, CCU, GIC and R_PIO at admission
+   and startup keep `DSB SY` on both sides. This adds one DSB per DATA phase
+   to the earlier measured placement, preserving register values and order.
+   `checks/pmic-tree.py` keeps the placement; `checks/power-write-order.py`
+   executes the native adapter with independently posted stores and bus latency.
+   Removing DATA's DSB fails before CNTR. The new placement has host evidence;
+   the earlier board measurements do not qualify it.
 
 `phase_at` is a microsecond time truncated from the counter and read after
 the write completes, so a spin ends within about ±1 µs of the flag. Polls
@@ -168,7 +175,7 @@ and flag read.
 | Serial accesses between a flag and the next phase-start write | 27 per transaction | 25 per transaction, about 150 per snapshot | Counted from the phase sequence |
 | Snapshot step, 400 kHz, 200 ns per access | 712 µs (113%) | 685 µs (109%) | `checks/power-domains-service.c` |
 | Snapshot step, 400 kHz, measured costs | Not rerun | 739 µs (117%) | Same, board-cost table |
-| Snapshot step on the board, median; first step | 917 µs (146%); 941 µs | 779 µs (123.7%) and 784 µs (124.4%); 809 µs and 807 µs; 796 µs (126.4%) and 824 µs with the completing-poll window; 795 µs (126.1%) and 819 µs with that window and the item 6 placement | Bundle 6 `STEP` lines of the four runs, port 3-3 |
+| Snapshot step on the board, median; first step | 917 µs (146%); 941 µs | 779 µs (123.7%) and 784 µs (124.4%); 809 µs and 807 µs; 796 µs (126.4%) and 824 µs with the completing-poll window; 795 µs (126.1%) and 819 µs with that window and the earlier plain-DATA placement | Bundle 6 `STEP` lines of the four runs, port 3-3 |
 | Selector write, 400 kHz, measured costs | Not rerun | One step of 950 µs; not measured on the board | Same |
 | Snapshot, 400 kHz, flags 10% later than the divisor implies, 200 ns | Two steps, one tick wait | One step of 751 µs for 708 µs of model wire | Same, slow-bus case |
 | Tick waits per snapshot and selector write, 100 kHz | 2 and 3 | 2 and 3 | Same |
@@ -185,8 +192,7 @@ finish slightly later than 1 ms.
 target is 693 µs for a snapshot. With every software cost set to zero, the
 model charges only the register accesses and a 35 ns counter read per time
 read. It then gives 712 µs (113%) with a `DSB SY` pair around each access
-and 694 µs (110.2%) with the adapter's placement (item 6 of section
-"Change"). Each phase
+and 694 µs (110.2%) with the earlier plain-DATA placement. Each phase
 of a snapshot spins its rounded wire time, 23 µs for a byte and 5 µs for a
 condition, which already makes 642 µs of the 693 µs. The 51 µs that remain
 cover 42 phases, about 1.2 µs each. The serial register accesses of a
@@ -411,9 +417,9 @@ affects only images that run the power service: GPU, accelerator, GPU
 display, HDMI, the DisplayPort and G2D board image, and the integrated OS
 image built from it. None of them is board-qualified.
 
-**Qualification of the barrier placement.** Bundle 6 built from this tree
-links the adapter with the placement of item 6 under "Change", and its
-windows time that placement directly. Its run on port 3-3 met bundle 6's
+**Qualification of the earlier barrier placement.** The frozen bundle 6
+linked the adapter with plain DATA stores and a trailing CNTR DSB; its
+windows timed that placement directly. Its run on port 3-3 met bundle 6's
 pass conditions with the same 1,268-permille median limit and first-step
 allowance, and its snapshots, `XADDR` window and bus-idle reads match the
 run with `DSB SY` pairs (section "Board result"). That qualifies the
@@ -602,16 +608,15 @@ with 2 to 3 µs for the window. The 87 ns moves most phases across a whole
 microsecond, so the window costs about 12 µs per step although its stamps
 spend about 3.6 µs.
 
-**Barrier placement of item 6, measured.** The first three runs used a
-`DSB SY` pair around every access. The placement of item 6 of section
-"Change" reads S_TWI0 plainly, writes `DATA` plainly and completes the
-`CNTR` write with one `DSB SY`. A fourth run, in the third run's lifetime
+**Earlier barrier placement, measured.** The first three runs used a
+`DSB SY` pair around every access. The fourth placement read S_TWI0 plainly,
+wrote `DATA` plainly and completed `CNTR` with one `DSB SY`. A fourth run, in the third run's lifetime
 and with the same completing-poll window, used it. Its raw log is
 `~/.cache/sunstoneos/evidence/board-session-20261024-8/port-3-3/s10-bb6-light-run/kernel.log`,
 from the frozen bundle
 `~/.cache/sunstoneos/evidence/board-bundles-20261024-10/port-3-3/step-2-light/pmic-power-domain-reads/`.
 
-| Metric | Third run, `DSB SY` pairs | Fourth run, item 6 placement |
+| Metric | Third run, `DSB SY` pairs | Fourth run, plain DATA |
 | --- | --- | --- |
 | Median step | 796.4 µs (19,114.5 ticks), 1,265 permille | 794.6 µs (19,070 ticks), 1,262 permille |
 | Steps after the first | 794.5 to 804.6 µs | 793.5 to 801.4 µs |
@@ -643,7 +648,7 @@ predicted and the 7.4 µs that the completing polls saved. Each phase costs
 its spin plus the whole microseconds that its serial work spans. With
 `DSB SY` pairs, a byte phase's serial work is about 3.3 µs: its 3.10 µs
 completing poll and about 0.2 µs before the poll and after its write. With
-the item 6 placement it is about 3.0 µs, still at or just above 3 µs in most
+the earlier plain-DATA placement it is about 3.0 µs, still at or just above 3 µs in most
 byte phases, so few phases lost a whole microsecond. The model, with its
 poll cost matched to each run's span total, gives 758 µs and 748 µs, a
 10 µs difference, because its phases sit at other fractions of a
