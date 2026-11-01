@@ -1,4 +1,4 @@
-"""Exact final-retirement review and copied report for returning GPU recognition."""
+"""Exact final-retirement review and copied report for returning GPU images."""
 import struct
 
 CONDITIONS = {'output-lending-retired', 'firmware-off-isolation-and-resources',
@@ -6,10 +6,10 @@ CONDITIONS = {'output-lending-retired', 'firmware-off-isolation-and-resources',
               'local-pools-and-read-only-cache-retirement'}
 MAGIC, BYTES = 0x3152475033333741, 64
 CONSTRUCTOR_STAGES = (
-    None, 'previous GPU-loss record', 'owner identities', 'tensor table',
+    None, 'previous GPU-loss record', 'owner identities', 'queue client binding',
     'native platform constructor', 'platform constructor', 'PMIC lifetime',
-    'PMIC binding', 'performance selection', 'firmware memory', 'mimus memory',
-    'native backend binding', 'service construction', 'recognizer client binding',
+    'PMIC binding', 'performance selection', 'firmware memory', 'queue memory',
+    'native backend binding', 'service construction', 'application client binding',
     'thermal client binding')
 
 

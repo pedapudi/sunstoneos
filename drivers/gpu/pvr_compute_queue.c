@@ -46,8 +46,12 @@ static int fault(struct pvr_compute_queue *q,unsigned detail)
 static int post(struct pvr_compute_queue *q,uint32_t sequence,unsigned result,unsigned detail,uint32_t duration)
 {
     const struct gpu_queue_record r={sequence,(uint16_t)result,(uint16_t)detail,duration,0};
-    if (xQueueSend(q->completions,&r,0)!=pdTRUE) return fault(q,GPU_QUEUE_SERVICE);
-    q->owed=0; return 1;
+    /* A higher-priority client may run as soon as the queue wakes it. */
+    q->owed=0;
+    if (xQueueSend(q->completions,&r,0)!=pdTRUE) {
+        q->owed=1; return fault(q,GPU_QUEUE_SERVICE);
+    }
+    return 1;
 }
 static int cache_range(const struct gpu_queue_lease_info *l,uint64_t off,uint64_t bytes,int output)
 {
@@ -82,7 +86,7 @@ static unsigned admit(const struct pvr_compute_queue *q,const struct gpu_queue_j
 
 int pvr_compute_queue_bind(struct pvr_compute_queue *q,struct pvr_gpu_service *g,struct pvr_gpu_service_config *c)
 {
-    if (!q || !g || !c || !q->owner || q->phase || g->initialized || c->compute_queue || c->mimus || c->compute ||
+    if (!q || !g || !c || !q->owner || q->phase || g->initialized || c->compute_queue || c->compute ||
         c->graphics || c->free_lists.count || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED) return 0;
     q->service=g;
     for (unsigned i=0;i<PVR_COMPUTE_QUEUE_OBJECTS;++i)
@@ -136,7 +140,9 @@ int pvr_compute_queue_prepare(struct pvr_compute_queue *q,uint64_t deadline)
     *(volatile uint32_t *)q->firmware[TIMELINE].storage.cpu=q->sequence;
     a733_mmio_dsb_sy();
     /* Three payload pages contain the job page and the immutable USC code. */
-    if (!aarch64_device_cache(AARCH64_CACHE_CLEAN,q->owner->payload_extent.cpu,3*PAGE)) return 0;
+    if (!aarch64_device_cache(AARCH64_CACHE_CLEAN,q->owner->payload_extent.cpu,3*PAGE)) {
+        q->error=GPU_QUEUE_MAINTENANCE; return 0;
+    }
     q->publish_index=q->publish_page=0; q->phase=PVR_COMPUTE_QUEUE_PUBLISHING;
     return 1;
 }
@@ -234,7 +240,9 @@ static int take(struct pvr_compute_queue *q)
         atomic_store(&q->slot_state,PVR_COMPUTE_QUEUE_IDLE);
         return post(q,q->job.sequence,GPU_QUEUE_REFUSED,GPU_QUEUE_DEADLINE,0);
     }
-    if (!a733_deadline_after(now,q->job_us,&q->deadline)) return fault(q,GPU_QUEUE_SERVICE);
+    /* Ring staging has its own finite transport bound. A short kernel hang
+     * bound starts only once the kernel-queue KICK has been accepted. */
+    if (!a733_deadline_after(now,GPU_QUEUE_MAX_JOB_US,&q->deadline)) return fault(q,GPU_QUEUE_SERVICE);
     put32(q->update+4,q->job.sequence);
     const struct pvr_cccb_command commands[2]={
         {PVR_CCB_MAGIC|PVR_CCCB_TASK|205u,96,1,1,q->command}, {PVR_CCB_MAGIC|213u,8,0,0,q->update}};
@@ -331,7 +339,8 @@ int pvr_compute_queue_submitting(const struct pvr_compute_queue *q)
 uint64_t pvr_compute_queue_progress(const struct pvr_compute_queue *q)
 { return q ? (uint64_t)q->phase|(uint64_t)q->client.phase<<8|(uint64_t)q->client.cursor<<16|(uint64_t)q->sequence<<32 : 0; }
 int pvr_compute_queue_hold(struct pvr_compute_queue *q)
-{ if (!q || atomic_load(&q->lost)) return 0; q->held=1; return q->phase==PVR_COMPUTE_QUEUE_READY; }
+{ if (!q || atomic_load(&q->lost)) return 0; q->held=1; return q->phase==PVR_COMPUTE_QUEUE_READY &&
+    atomic_load(&q->slot_state)!=PVR_COMPUTE_QUEUE_RESERVED; }
 int pvr_compute_queue_release(struct pvr_compute_queue *q)
 { if (!q || !q->held || atomic_load(&q->lost)) return 0; q->held=0; return 1; }
 int pvr_compute_queue_reopen(struct pvr_compute_queue *q)

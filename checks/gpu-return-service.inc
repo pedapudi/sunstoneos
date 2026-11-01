@@ -13,11 +13,11 @@ static int final_park(void *ctx,uint64_t deadline)
 }
 static void return_client(void)
 {
-    configASSERT(bench_job(0));closed();
+    configASSERT(grid_job(0));closed();
     if(gpu_queue_case==32){
         configASSERT(reopen_reply(service.epoch).result==PVR_GPU_SERVICE_OK);
         configASSERT(compute->phase==PVR_COMPUTE_QUEUE_READY);
-        configASSERT(bench_job(1));closed();
+        configASSERT(grid_job(1));closed();
     }
     struct pvr_gpu_service_request request={PVR_GPU_SERVICE_PARK,1000000};
     struct pvr_gpu_service_reply reply;uint64_t ticket;

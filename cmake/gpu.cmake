@@ -40,7 +40,6 @@ if(SUNSTONE_GPU_FIRMWARE)
   configure_file("${gpu_service_linker}.tmp" "${gpu_service_linker}" COPYONLY)
   file(REMOVE "${gpu_service_linker}.tmp")
   set(gpu_compute_sources
-    drivers/gpu/gpu_queue.c drivers/gpu/pvr_compute_queue.c platform/a733/gpu_queue.c
     drivers/gpu/pvr_compute_mode.c
     drivers/gpu/pvr_compute_service.c drivers/gpu/pvr_compute_package.c drivers/gpu/pvr_compute_job.c
     drivers/gpu/pvr_compute_programs.c drivers/gpu/pvr_compute_context.c

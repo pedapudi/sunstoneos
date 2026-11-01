@@ -412,7 +412,7 @@ static int gpu_return_body(uint64_t completed)
        gpu.failed || gpu.component->owed || atomic_load(&gpu.component->client_owed) || !gpu.epoch || os_gpu_return_started() ||
        a733_smp_counter()>=os_cpu_return_cutoff())return 0;
     atomic_store_explicit(&return_state,1,memory_order_release);
-    if(gpu.opened) { if(!runtime_close())return 0; }
+    if(gpu.opened) { if(!os_gpu_queue_retire())return 0; }
     if(!gpu.parked || gpu.opened || !a733_gpu_backend_stopped(&gpu.backend,&gpu.service))return 0;
     struct gpu_wait wait;
     struct pvr_gpu_service_reply reply;

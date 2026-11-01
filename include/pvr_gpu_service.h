@@ -15,23 +15,19 @@
 #define PVR_GPU_PERF_FAILED 4u
 #endif
 struct pvr_compute_service;
-struct pvr_mimus_service;
 struct pvr_compute_queue;
 struct a733_gpu_queue;
 struct pvr_gpu_service;
 struct pvr_render_service;
 struct a733_gpu_graphics_memory;
 struct a733_gpu_disposal;
-struct a733_gpu_mimus;
 struct pvr_render_texture_request;
 struct pvr_render_texture_frame;
 
 #define PVR_GPU_SERVICE_CLIENTS 8u
 /* Wake messages carry client PVR_GPU_SERVICE_CLIENTS. Ticket 0 is the
- * interrupt handler's, the only one that clears irq_wake_pending; ticket
- * PVR_GPU_SERVICE_MIMUS_WAKE is the mimus session's job wake. */
-#define PVR_GPU_SERVICE_MIMUS_WAKE 1u
-#define PVR_GPU_SERVICE_QUEUE_WAKE 2u
+ * interrupt handler's; the compute queue coalesces its own wake ticket. */
+#define PVR_GPU_SERVICE_QUEUE_WAKE 1u
 #define PVR_GPU_SERVICE_REQUESTS (PVR_GPU_SERVICE_CLIENTS + 2u)
 #define PVR_GPU_SERVICE_STACK_WORDS 4096u
 #define PVR_GPU_SERVICE_IRQ_REARM_ATTEMPTS 32u
@@ -161,10 +157,7 @@ struct pvr_gpu_service_config {
     /* Standalone lifecycle images only: the exclusive owner of child disposal
      * and reconstruction. NULL, as in every other image, refuses DISPOSE. */
     struct a733_gpu_disposal *disposal;
-    /* Optional mimus session (pvr_mimus_service.h); excludes compute. */
-    struct pvr_mimus_service *mimus;
-    /* Concrete retained native owner; permits healthy STOPPED reopen only. */
-    struct a733_gpu_mimus *mimus_owner;
+    /* Optional generic compute queue; excludes fixed compute and graphics. */
     struct pvr_compute_queue *compute_queue;
     struct a733_gpu_queue *queue_owner;
 #ifdef SUNSTONE_A733_OS_PERF

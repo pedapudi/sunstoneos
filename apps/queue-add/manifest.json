@@ -7,5 +7,5 @@
     {"name": "output", "kind": "work", "access": ["read", "gpu-write"], "bytes": 4096}
   ],
   "deadlines": {"run_us": 2000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
-  "output_limit": 16
+  "output_limit": 48
 }

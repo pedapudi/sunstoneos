@@ -22,9 +22,9 @@
 #include "gicv3_spi.h"
 #include "queue-fixture.h"
 
-/* 1 bench with exact sums; 2 bench with pattern sums (instrumented runs);
+/* 1 grid with exact sums; 2 grid with pattern sums (instrumented runs);
  * 3 as 2 with jobs that complete at once; 4 as 3 with one firmware event per
- * job; 5 refused jobs; 6 failed wake send; 7 missing tag; 8 hang; 9 context
+ * job; 5 refused jobs; 6 coalesced wake; 7 missing tag; 8 hang; 9 context
  * reset; 10 OPEN only; 11 an unexpected timeline value before a submit; 12 the
  * completion's clean and invalidate fails; 13 completion at its deadline;
  * 14 output acquisition reaches the deadline; 15 completion just before it;
@@ -327,8 +327,8 @@ static int sums_equal(unsigned job, uint32_t sequence)
     return 1;
 }
 static uint32_t completed;
-/* One job of the bench: 1 when it completed with every tag and sum. */
-static int bench_job(unsigned job)
+/* One grid job: 1 when it completed with every tag and sum. */
+static int grid_job(unsigned job)
 {
     const unsigned c = gpu_queue_case;
     uint32_t k = fixture_jobs[job].k, rows = fixture_jobs[job].rows;
@@ -367,7 +367,7 @@ static void pool_pages(unsigned *wb, unsigned *nc)
         if (n->allocations[i].state != DEVICE_MEMORY_FREE) *nc += n->allocations[i].pages;
     }
 }
-/* --wrap counters of the two architecture helpers and the session code.
+/* --wrap counters of the two architecture helpers and the queue.
  * Every maintenance call on the output region must clean and invalidate:
  * DC IVAC is checked as a write and faults on the image's read-only view.
  * Case 12 makes the first such call of a job fail once. */
@@ -489,7 +489,7 @@ static void client(void *unused)
     if(c>=31)return_client();
 #endif
     if (c >= 21 && c <= 24) {
-        configASSERT(bench_job(0));
+        configASSERT(grid_job(0));
         closed();
         const uint64_t old_epoch = service.epoch;
         const struct device_memory_lease payload = session.payload_lease, tables = session.table_lease;
@@ -524,12 +524,12 @@ static void client(void *unused)
                          atomic_load(&compute->slot_state) == PVR_COMPUTE_QUEUE_IDLE);
             metric("first-reopen-cache-lines", cache_lines - cache_before);
             configASSERT(reopen_reply(old_epoch).result == PVR_GPU_SERVICE_INVALID);
-            configASSERT(bench_job(1) && compute->sequence == 2);
+            configASSERT(grid_job(1) && compute->sequence == 2);
             if (c == 21) {
                 closed();
                 configASSERT(reopen_reply(service.epoch).result == PVR_GPU_SERVICE_OK);
                 configASSERT(compute->phase == PVR_COMPUTE_QUEUE_READY);
-                configASSERT(bench_job(2) && compute->sequence == 3);
+                configASSERT(grid_job(2) && compute->sequence == 3);
             }
         }
         unsigned wb_after, nc_after; pool_pages(&wb_after, &nc_after);
@@ -612,7 +612,7 @@ static void client(void *unused)
     uint64_t output_cache0=output_cache_calls;
     if (c >= 13 && c <= 17) {
         if (c == 15) {
-            configASSERT(bench_job(0));
+            configASSERT(grid_job(0));
             configASSERT(completion_clock_samples == 2 && complete_calls == 1 &&
                          compute->phase == PVR_COMPUTE_QUEUE_READY && !atomic_load(&compute->lost));
         } else {
@@ -641,7 +641,7 @@ static void client(void *unused)
     }
     if (c <= 4) {
         fixture_mark(1);
-        for (unsigned j = 0; j < FIXTURE_JOBS; ++j) { fixture_mark(2); configASSERT(bench_job(j)); }
+        for (unsigned j = 0; j < FIXTURE_JOBS; ++j) { fixture_mark(2); configASSERT(grid_job(j)); }
         fixture_mark(3);
         metric("jobs", FIXTURE_JOBS);
         metric("sums-checked", sums_checked);
@@ -674,7 +674,7 @@ static void client(void *unused)
         r = receive();
         configASSERT(r.result == GPU_QUEUE_REFUSED && r.detail == GPU_QUEUE_DEADLINE && r.sequence == 1);
         configASSERT(atomic_load(&compute->slot_state) == PVR_COMPUTE_QUEUE_IDLE && !kick_step_count);
-        configASSERT(bench_job(0) && bench_job(1));
+        configASSERT(grid_job(0) && grid_job(1));
         platform_puts("PASS GPU queue case "); platform_hex(c);
         platform_puts("; malformed bindings/grid/sequence and expired kick deadline refuse without a kick\n"); platform_exit(0);
     }
@@ -692,23 +692,23 @@ static void client(void *unused)
         r = receive();
         configASSERT(r.result == GPU_QUEUE_OK && r.sequence == 1 && kick_step_count == 1);
         completed = 1;
-        configASSERT(bench_job(1));
+        configASSERT(grid_job(1));
         platform_puts("PASS GPU queue case "); platform_hex(c);
         platform_puts("; one coalesced wake accepts and completes one job\n"); platform_exit(0);
     }
     if (c == 7) {
-        configASSERT(!bench_job(0));
+        configASSERT(!grid_job(0));
         configASSERT(compute->phase == PVR_COMPUTE_QUEUE_READY && service.phase == PVR_GPU_SERVICE_READY);
         platform_puts("PASS GPU queue case "); platform_hex(c);
         platform_puts("; a missing tag reaches the client with the session idle\n"); platform_exit(0);
     }
-    /* 8, 9, 11, 12: the job is LOST; afterwards submit reports the loss. */
+    /* 8, 9, 11, 12: the job is FAULT; afterwards submit reports the loss. */
     unsigned lost_job = 0;
     if (c == 11) {
         /* A timeline the session did not expect, written while it is idle:
-         * the next job is refused at its timeline check as LOST, before any
+         * the next job is refused at its timeline check as FAULT, before any
          * ring write. */
-        configASSERT(bench_job(0));
+        configASSERT(grid_job(0));
         __atomic_store_n((uint32_t *)compute->firmware[5].storage.cpu, completed + 5, __ATOMIC_RELEASE);
         lost_job = 1;
     }
@@ -726,10 +726,10 @@ static void client(void *unused)
     if (c == 8) configASSERT(at - kick_us >= 1000000 && at - kick_us <= 1000000 + 1000 + 2000);
     configASSERT(submit(&job) == -1);
     platform_puts("PASS GPU queue case "); platform_hex(c);
-    platform_puts(c == 8 ? "; a hang ends in LOST after max_job_us and submit then reports the loss\n" :
-                  c == 9 ? "; a context reset ends in LOST and submit then reports the loss\n" :
-                  c == 11 ? "; an unexpected timeline ends the next job in LOST and submit then reports the loss\n" :
-                  "; a failed completion clean-and-invalidate ends in LOST and submit then reports the loss\n");
+    platform_puts(c == 8 ? "; a hang ends in FAULT after max_job_us and submit then reports the loss\n" :
+                  c == 9 ? "; a context reset ends in FAULT and submit then reports the loss\n" :
+                  c == 11 ? "; an unexpected timeline ends the next job in FAULT and submit then reports the loss\n" :
+                  "; a failed completion clean-and-invalidate ends in FAULT and submit then reports the loss\n");
     platform_exit(0);
 }
 /* Unused parts of the included model. */

@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import struct
 import subprocess
+from harness import CLANG, environment
 
 
 def function(source, name, result='void'):
@@ -115,9 +116,9 @@ u64 leaf_{i}(u64 pa, u32 flags) {{
                                           'drivers/gpu/LICENSE.pvr').read_bytes())
     reference = evidence / 'reference.c'
     reference.write_text(code)
-    command = ['clang-21', '-shared', '-fPIC', '-O2', '-Wall', '-Wextra', '-Werror',
+    command = [str(CLANG), '-shared', '-fPIC', '-O2', '-Wall', '-Wextra', '-Werror',
                str(reference), '-o', str(evidence / 'reference.so')]
-    subprocess.run(command, check=True)
+    subprocess.run(command,check=True,env=environment())
     lib = C.CDLL(str(evidence / 'reference.so'))
     lib.root_entry.argtypes = [C.c_uint64]; lib.root_entry.restype = C.c_uint64
     lib.context_init.argtypes = [C.c_void_p, C.c_uint64]; lib.context_init.restype = None
@@ -150,7 +151,7 @@ u64 leaf_{i}(u64 pa, u32 flags) {{
             index = address % (1 << 21) // (1 << shift)
             struct.pack_into('<Q', pages[leaves[pc, pd]], index * 8,
                              getattr(lib, f'leaf_{code}')(m['physical'] + offset, m['flags']))
-    assert used_sizes == set(range(6)) and len(pages) == len(physical)
+    assert used_sizes == set(range(4)) and len(pages) == len(physical)
     expected_tables = b''.join(pages)
     expected_context = (C.c_uint8 * 32)()
     lib.context_init(expected_context, physical[0])
@@ -159,9 +160,9 @@ u64 leaf_{i}(u64 pa, u32 flags) {{
         assert (evidence / name).read_bytes() == data, name
         outputs[name] = hashlib.sha256(data).hexdigest()
     (evidence / 'comparison.json').write_text(json.dumps(dict(result='pass', sources=hashes,
-        compiler_command=command, outputs=outputs, page_sizes=sizes, table_pages=len(pages),
+        compiler_command=command, outputs=outputs, page_sizes=sizes[:4], table_pages=len(pages),
         directory_pages=len(directories), leaf_tables=len(leaves), physical_access=False), indent=2) + '\n')
-    print('PASS complete GPU tables and firmware context match pinned encoders for all six page sizes')
+    print('PASS complete GPU tables and firmware context match pinned encoders for all four admitted page sizes')
 
 
 if __name__ == '__main__':

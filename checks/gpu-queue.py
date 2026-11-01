@@ -35,7 +35,7 @@ CASES = {1: 'grid replay, exact sums', 2: 'grid replay, pattern sums', 3: 'grid 
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'gpu_queue_submit', 'gpu_queue_wait', 'kick',
-           'fixture_gpu_irq', 'queue_complete', 'queue_submit', 'fixture_mark', 'irq_read',
+           'fixture_gpu_irq', 'post', 'maintain', 'fixture_mark', 'irq_read',
            'a733_gpu_memory_read', 'a733_gpu_memory_write', 'a733_gpu_memory_barrier', 'pvr_cccb_poll',
            'pvr_ccb_submit', 'pvr_ccb_receive', 'pvr_ccb_poll', 'step', 'irq_write', 'read_reg', 'write_reg',
            'ring_write', 'drive_to_kick')
@@ -96,15 +96,22 @@ def symbols(elf):
 
 def trace_filter(elf, funcs):
     dsb = []
+    stores=collections.defaultdict(list)
+    ring=[(a,a+n) for a,n,name in funcs if name=='ring_write']
     for line in subprocess.check_output(['llvm-objdump-21', '-d', '--no-show-raw-insn', str(elf)],
                                         text=True).splitlines():
-        m = re.match(r'\s*([0-9a-f]+):\s+dsb\s+sy', line)
-        if m:
-            dsb.append(int(m.group(1), 16))
+        m = re.match(r'\s*([0-9a-f]+):\s+(.*)', line)
+        if not m:continue
+        address,op=int(m.group(1),16),m.group(2)
+        if re.match(r'dsb\s+sy',op):dsb.append(address)
+        if any(first<=address<end for first,end in ring):
+            if re.match(r'str\s+x\d+, \[x(?!29|31)\d+',op):stores['uncached-store64'].append(address)
+            if re.match(r'strb\s+w\d+, \[x(?!29|31)\d+',op):stores['uncached-store8'].append(address)
     entries = {}
     for address, _size, name in funcs:
         if name in COUNTED:
             entries.setdefault(name, []).append(address)
+    entries.update(stores)
     return dsb, entries
 
 
@@ -177,7 +184,7 @@ def summarize(job_windows, segment):
 
 def segments(events):
     """Per job: from gpu_queue_submit to the kick, and from the GPU
-    interrupt to queue_complete, counting DSBs, translations,
+    interrupt to the native completion post, counting DSBs, translations,
     distributor accesses (mask/rearm), critical sections and advance() calls."""
     out = collections.defaultdict(list)
     state, counter = None, None
@@ -190,7 +197,7 @@ def segments(events):
         if state is None:
             continue
         if (state == 'kick' and kind == 'call' and name == 'kick') or \
-           (state == 'post' and kind == 'call' and name == 'queue_complete'):
+           (state == 'post' and kind == 'call' and name == 'post'):
             out[state].append(counter)
             state = None
             continue
@@ -207,7 +214,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--fixture', type=Path, help='External generic tensor/job JSON; default is an eight-job synthetic grid')
-    parser.add_argument('--cases', nargs='+', type=int, choices=sorted(CASES), default=list(range(1, 25)))
+    parser.add_argument('--cases', nargs='*', type=int, choices=sorted(CASES), default=list(range(1, 25)))
     parser.add_argument('--trace', nargs='*', type=int, default=[], help='cases to run instrumented')
     for name in ('freertos', 'tinyusb', 'firmware', 'qemu', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
@@ -354,6 +361,9 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
                 else:
                     # Window 0 runs from the first marker to the first job's marker.
                     jobs = all_windows[1:]
+                    assert len(jobs)==len(durations)
+                    assert all(w[('call','uncached-store8')]==0 and
+                               w[('call','uncached-store64')] in (23,28) for w in jobs), 'client ring store width/count'
                     results['traces'][case] = {**summarize(jobs, segments(events)), 'metrics': metrics}
                 (out / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
     finally:

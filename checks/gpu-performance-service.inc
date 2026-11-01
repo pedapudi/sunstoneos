@@ -138,7 +138,7 @@ static void performance_client(void)
         if(held_job_sent){struct gpu_queue_record record=receive();
             configASSERT(record.result==GPU_QUEUE_OK && record.sequence==(gpu_queue_case==26?2u:1u));
             completed=record.sequence;
-        }else configASSERT(bench_job(gpu_queue_case==26?1:0));
+        }else configASSERT(grid_job(gpu_queue_case==26?1:0));
         closed();
         configASSERT(pvr_gpu_service_performance_state(&service)==PVR_GPU_PERF_OWNER);
         configASSERT(reopen_reply(service.epoch).result==PVR_GPU_SERVICE_OK);

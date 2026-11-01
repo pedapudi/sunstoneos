@@ -1,134 +1,148 @@
 #!/usr/bin/env python3
-"""GPU opt-in and returned-proof branches with a real frozen linked bundle.
+"""Validate generic GPU retirement reports captured by the linked native fixtures.
 
-No USB module, queue database or transport is opened. The bundle validator and
-native-produced CPU/GPU records are real. The enclosing retained receipt is a
-labeled model assembled from the accepted CPU host fixture. This exercises the
-new pretransport branches; CPU compound transport/helper cases are reused.
+The OS decoder and retirement-review predicates execute against reports emitted
+by os-gpu-return.py and os-gpu-untouched.py. Mutations cover report identity,
+shutdown conditions, untouched-return opt-in and review evidence. Transport,
+bundle authority, retained backups and compound host followup belong to the
+application launcher and are outside this parser check. No hardware is accessed.
 """
 import argparse
 import copy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import struct
-import tempfile
 from harness import refused, save
-ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('gpu_compound', ROOT/'apps/os/cpu-return-followup.py')
-f = importlib.util.module_from_spec(spec); spec.loader.exec_module(f)
-E = Path.home()/'.cache/sunstoneos/evidence/sol-gpu-return-1028'
-C = Path.home()/'.cache/sunstoneos/evidence/sol-cpu-normal-return-1028'
+
+ROOT=Path(__file__).resolve().parents[1]
+spec=importlib.util.spec_from_file_location('gpu_return_rules',ROOT/'apps/os/gpu-return.py')
+rules=importlib.util.module_from_spec(spec);spec.loader.exec_module(rules)
+
+
+def require(ok,reason):
+    if not ok:raise ValueError(reason)
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def mutated(raw,index,value):
+    result=bytearray(raw);struct.pack_into('<Q',result,index*8,value);return bytes(result)
+
+
+def captures(directory,pattern):
+    summary=json.loads((directory/'results.json').read_text())
+    assert summary['physical_access'] is False and summary['cases']
+    assert all(case['passed'] for case in summary['cases'])
+    paths=sorted(directory.glob(pattern));assert paths,'Native fixture reports are absent: '+str(directory)
+    return summary,paths
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--out', type=Path, required=True)
-    parser.add_argument('--case', action='append', help='Run only selected receipt cases.')
-    args = parser.parse_args(); args.out.mkdir(parents=True, exist_ok=False)
-    bundle = E/'preparation-delivery/MODEL-NOT-DEPLOYABLE-clock-top'
-    p = f.cpu.validate_bundle(bundle)
-    assert p['image_sha256'] == '6d28a8340c08ba4a3d07eb46a6cd578cb8b8a72f9102c43052e31690f8c89c66'
-    config = json.loads((bundle/'board/image-input-manifest.json').read_text())['gpu_profile']
-    report = (E/'terminal-delivery/return-report.bin').read_bytes()
-    output = (E/'capture-producer-delivery/opened-output.bin').read_bytes()
-    gpu_raw = (E/'capture-producer-delivery/opened-gpu-report.bin').read_bytes()
-    gpu = f.cpu.os_image.gpu_return_rules.decode(gpu_raw, p['epoch'], p['generation'], f.require)
-    text = f.cpu.decode_output(output, p['epoch'], p['generation'])
-    cases = []
-    def ref(path): return {'path':str(path.resolve()), 'sha256':f.digest(path)}
-    with tempfile.TemporaryDirectory(prefix='MODEL-GPU-followup-') as temporary:
-        root = Path(temporary)
-        def fresh():
-            (root/'return-report.bin').write_bytes(report)
-            (root/'recorded-output.bin').write_bytes(output)
-            (root/'transcript.txt').write_text(text)
-            (root/'gpu-retirement.bin').write_bytes(gpu_raw)
-            r = copy.deepcopy(json.loads((C/'compatibility-host/MODEL-return-receipt.json').read_text())['model_record'])
-            r.update(port=p['_review']['port'], initial_node='/dev/bus/usb/099/001',
-                initial_identity=p['_review']['identity'], returned_node='/dev/bus/usb/099/002',
-                returned_identity=[0,0,2,0,0], image_sha256=p['image_sha256'],
-                return_review_sha256=f.digest(bundle/'return-review.json'),
-                host_source_sha256=f.digest(Path(f.cpu.__file__)), automatic_access=True,
-                tool_sha256=f.base.FEL_HASH, report_sha256=f.digest(root/'return-report.bin'),
-                output_sha256=f.digest(root/'recorded-output.bin'),
-                gpu_report_sha256=f.digest(root/'gpu-retirement.bin'),
-                result={**f.cpu.decode_report(report,p['epoch']), 'gpu':copy.deepcopy(gpu)})
-            a = {'cpu_bundle':str(bundle), 'cpu_return_review':ref(bundle/'return-review.json'),
-                 'return_session':str(root/'session.json'), 'claim':r['root_owned_claim'],
-                 'port':r['port'], 'initial_node':r['initial_node'], 'initial_identity':r['initial_identity'],
-                 'helper':{'image':ref(C/'rails-800/build/probe.elf'),
-                           'binary':ref(C/'rails-800/probe.bin'), 'manifest':ref(C/'rails-800/input-identities.json')},
-                 'gpu_return':{'configuration':copy.deepcopy(config),
-                               'retirement_review_sha256':f.digest(bundle/'return-review.json'),
-                               'report':str(root/'gpu-retirement.bin')}}
-            return a,r
-        variants = ('success','thermal-success','adjacent-chunks','missing-opt-in','changed-geometry','changed-review',
-                    'wrong-capture-path','missing-record','changed-record','wrong-epoch','wrong-generation',
-                    'missing-fw-off','no-completed-jobs','wrong-supply','summary-mismatch','missing-backups',
-                    'uncached-hole','writeback-hole','oversize-backup','malformed-backup')
-        if args.case:
-            assert set(args.case) <= set(variants)
-            variants=args.case
-        for variant in variants:
-            a,r = fresh()
-            if variant=='thermal-success':
-                p['qualification']['thermal']=f.cpu.thermal_capture.geometry(bundle/'board/image.elf')
-                native=Path.home()/'.cache/sunstoneos/evidence/sol-cpu-robustness-1031/native-thermal-gpu'
-                copied={name:(native/(name+'.bin')).read_bytes() for name,_,_ in f.cpu.thermal_capture.captures(p['qualification']['thermal'])}
-                window=bytearray(copied['thermal-window']);struct.pack_into('<2Q',window,16,p['epoch'],p['generation'])
-                copied['thermal-window']=bytes(window)
-                for name,data in copied.items():(root/(name+'.bin')).write_bytes(data)
-                r['thermal_capture_status']='decoded'
-                r['thermal_capture_sha256']={name:f.digest(root/(name+'.bin')) for name in copied}
-                r['result']['thermal']=f.cpu.thermal_capture.decode(p['qualification']['thermal'],copied,p['epoch'],p['generation'])
-            if variant == 'adjacent-chunks':
-                lo,hi = p['qualification']['gpu']['write_back_pool']; mid=(lo+hi)//2
-                r['dram_backups']=[{'address':lo,'bytes':mid-lo},{'address':mid,'bytes':hi-mid},
-                    {'address':p['qualification']['gpu']['uncached_pool'][0],
-                     'bytes':p['qualification']['gpu']['uncached_pool'][1]-p['qualification']['gpu']['uncached_pool'][0]}]
-            if variant == 'missing-opt-in':a.pop('gpu_return')
-            if variant == 'changed-geometry':a['gpu_return']['configuration']['return']['uncached_pool'][1] += 4096
-            if variant == 'changed-review':a['gpu_return']['retirement_review_sha256']='0'*64
-            if variant == 'wrong-capture-path':a['gpu_return']['report']=str(root/'other.bin')
-            if variant == 'missing-record':(root/'gpu-retirement.bin').unlink()
-            if variant == 'changed-record':(root/'gpu-retirement.bin').write_bytes(bytes(64))
-            changes={'wrong-epoch':(3,p['epoch']+1),'wrong-generation':(4,p['generation']+1),
-                     'missing-fw-off':(6,62),'no-completed-jobs':(5,0),'wrong-supply':(7,900000)}
-            if variant in changes:
-                raw=bytearray(gpu_raw);index,value=changes[variant];struct.pack_into('<Q',raw,index*8,value)
-                (root/'gpu-retirement.bin').write_bytes(raw);r['gpu_report_sha256']=f.digest(root/'gpu-retirement.bin')
-            if variant == 'summary-mismatch':r['result']['gpu']['worker_parked']=False
-            if variant == 'missing-backups':r.pop('dram_backups')
-            if variant in ('uncached-hole','writeback-hole'):
-                lo,hi=p['qualification']['gpu']['uncached_pool' if variant=='uncached-hole' else 'write_back_pool']
-                r['dram_backups']=[row for row in r['dram_backups'] if not row['address']<=lo<row['address']+row['bytes']]
-            if variant == 'oversize-backup':r['dram_backups']=[{'address':0x41000000,'bytes':0x1200000}]
-            if variant == 'malformed-backup':r['dram_backups']=[{'address':'invalid','bytes':4096}]
-            (root/'session.json').write_text(json.dumps(r))
-            if variant in ('success','thermal-success','adjacent-chunks'):
-                actual,transcript=f.returned(a,p);assert actual['result']['gpu']==gpu and transcript==text
-                if variant=='thermal-success':assert f.thermal_evidence(a,p,r)=={'status':'decoded','complete':True,'classification':'complete'}
-            else:
-                reason = ('CPU-only profile' if variant=='missing-opt-in' else
-                    'Exact GPU continuation' if variant in ('changed-geometry','changed-review','wrong-capture-path') else
-                    'Copied GPU retirement' if variant in ('missing-record','changed-record') else
-                    'GPU retirement' if variant in changes else
-                    'receipt summary' if variant=='summary-mismatch' else
-                    'coverage is absent' if variant=='missing-backups' else
-                    'coverage is incomplete' if variant in ('uncached-hole','writeback-hole') else
-                    'exceeds the original' if variant=='oversize-backup' else 'Invalid GPU backup')
-                refused(lambda:f.returned(a,p),reason)
-            cases.append({'name':variant,'passed':True,'transport_calls':0})
-        if not args.case:
-            a,_=fresh(); cpu=copy.deepcopy(p);cpu['qualification'].pop('gpu')
-            refused(lambda:f.gpu_authority(a,cpu),'GPU authority supplied for a CPU-only')
-            a.pop('gpu_return');assert f.gpu_authority(a,cpu) is None
-            cases.append({'name':'CPU-only-default-and-extra-proof-refusal','passed':True,'transport_calls':0})
-    save(args.out/'results.json', {'physical_access':False,'scope':__doc__, 'image_sha256':p['image_sha256'],
-        'bundle_clock_authority':'nominal model; compound under-test admission is unchanged and not bypassed',
-        'cases':cases,'native_producer_records':{str(E/n):f.digest(E/n) for n in
-            ('terminal-delivery/return-report.bin','capture-producer-delivery/opened-gpu-report.bin','capture-producer-delivery/opened-output.bin')}})
-    print('PASS',len(cases),'GPU compound pretransport branches')
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output','--out',dest='output',type=Path,required=True)
+    parser.add_argument('--return-captures',type=Path,required=True,
+                        help='Successful os-gpu-return.py capture directory')
+    parser.add_argument('--untouched-captures',type=Path,required=True,
+                        help='Successful os-gpu-untouched.py capture directory')
+    parser.add_argument('--case',action='append',help='Run selected cases by exact name')
+    args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=False)
+    return_summary,returned=captures(args.return_captures,'*-gpu-report.bin')
+    untouched_summary,untouched=captures(args.untouched_captures,'constructor-*-report.bin')
+    rows=[];available=set()
 
-if __name__ == '__main__': main()
+    def run(name,action):
+        available.add(name)
+        if args.case and name not in args.case:return
+        action();rows.append(dict(name=name,passed=True,transport_calls=0))
+
+    def decode(raw,epoch,generation,allow=False):
+        return rules.decode(raw,epoch,generation,require,allow_untouched=allow)
+
+    epoch,generation=struct.unpack_from('<2Q',returned[0].read_bytes(),24)
+    for path in returned:
+        raw=path.read_bytes()
+        def nominal(raw=raw):
+            result=decode(raw,epoch,generation)
+            assert result=={'jobs':7,'gpu_off':True,'worker_parked':True,
+                            'pmic_sample_retired':True,'dcdc4_uv':960000}
+            assert decode(raw,epoch,generation,True)==result
+        run('returned-'+path.stem,nominal)
+    raw=returned[0].read_bytes()
+    for name,index,value in (
+        ('wrong-magic',0,0),('wrong-version',1,3),('wrong-size',2,63),
+        ('wrong-epoch',3,epoch+1),('wrong-generation',4,generation+1),
+        ('no-completed-jobs',5,0),('maximum-sequence',5,0xffffffff),
+        ('oversize-sequence',5,0x100000000),('wrong-supply',7,900000)):
+        run(name,lambda index=index,value=value:refused(
+            lambda:decode(mutated(raw,index,value),epoch,generation),'GPU retirement'))
+    for bit in range(6):
+        run('missing-shutdown-condition-'+str(bit),lambda bit=bit:refused(
+            lambda:decode(mutated(raw,6,63^(1<<bit)),epoch,generation),'GPU retirement'))
+    run('unknown-shutdown-condition',lambda:refused(
+        lambda:decode(mutated(raw,6,127),epoch,generation),'GPU retirement'))
+    for name,data in (('short-record',raw[:-1]),('extra-record-byte',raw+b'\0')):
+        run(name,lambda data=data:refused(lambda:decode(data,epoch,generation),'Incomplete GPU retirement'))
+
+    untouched_epoch,untouched_generation=struct.unpack_from('<2Q',untouched[0].read_bytes(),24)
+    for path in untouched:
+        data=path.read_bytes();stage=int(path.stem.split('-')[1])
+        def nominal(data=data,stage=stage):
+            refused(lambda:decode(data,untouched_epoch,untouched_generation),'not admitted')
+            result=decode(data,untouched_epoch,untouched_generation,True)
+            assert result=={'jobs':0,'gpu_untouched':True,'constructor_refusal':stage,
+                            'constructor_stage':rules.CONSTRUCTOR_STAGES[stage],'qualification_passed':False}
+            assert not any(result.get(key,False) for key in ('gpu_off','worker_parked','pmic_sample_retired'))
+        run('untouched-constructor-'+str(stage),nominal)
+    data=untouched[0].read_bytes()
+    for name,index,value in (
+        ('untouched-wrong-magic',0,0),('untouched-wrong-size',2,63),
+        ('untouched-wrong-epoch',3,untouched_epoch+1),
+        ('untouched-wrong-generation',4,untouched_generation+1),
+        ('untouched-has-job',5,1),('untouched-has-shutdown-proof',6,63),
+        ('untouched-stage-zero',7,0),('untouched-stage-outside',7,15)):
+        run(name,lambda index=index,value=value:refused(
+            lambda:decode(mutated(data,index,value),untouched_epoch,untouched_generation,True),
+            'GPU untouched refusal'))
+    # An untouched receipt cannot become a normal shutdown receipt by changing
+    # its version: it has no jobs, shutdown conditions or supply observation.
+    run('untouched-cannot-claim-shutdown',lambda:refused(
+        lambda:decode(mutated(data,1,1),untouched_epoch,untouched_generation,True),'GPU retirement'))
+
+    config={'profile':'modeled review input','return':{'write_back_pool':[0x41200000,0x41400000],
+                                                     'uncached_pool':[0x41c00000,0x41e00000]}}
+    conditions={name:{'evidence':name} for name in sorted(rules.CONDITIONS)}
+    baseline={'gpu_retirement':{'configuration':copy.deepcopy(config),'conditions':conditions}}
+    observed=[]
+    def evidence(value):
+        require(isinstance(value,dict) and value.get('evidence') in rules.CONDITIONS,
+                'Review evidence is absent.')
+        observed.append(value['evidence'])
+    def nominal_review():
+        observed.clear();rules.validate(baseline,config,evidence,require)
+        assert observed==sorted(rules.CONDITIONS)
+    run('exact-retirement-review',nominal_review)
+    for name in ('missing-review','wrong-configuration','missing-condition','extra-condition','missing-evidence'):
+        def invalid_review(name=name):
+            review=copy.deepcopy(baseline)
+            if name=='missing-review':review.clear()
+            elif name=='wrong-configuration':review['gpu_retirement']['configuration']['return']['uncached_pool'][1]+=4096
+            elif name=='missing-condition':review['gpu_retirement']['conditions'].pop(next(iter(conditions)))
+            elif name=='extra-condition':review['gpu_retirement']['conditions']['unsupported']={}
+            else:review['gpu_retirement']['conditions'][next(iter(conditions))]={}
+            refused(lambda:rules.validate(review,config,evidence,require),
+                    'Review evidence' if name=='missing-evidence' else 'Exact GPU final-retirement review')
+        run(name,invalid_review)
+    if args.case:assert set(args.case)<=available,'Unknown case: '+str(set(args.case)-available)
+    inputs={str(path.resolve()):digest(path) for path in [*returned,*untouched]}
+    save(args.output/'results.json',dict(physical_access=False,scope=__doc__,cases=rows,
+        decoder_sha256=digest(ROOT/'apps/os/gpu-return.py'),native_producer_records=inputs,
+        producer_images={'return':return_summary['image_sha256'],'untouched':untouched_summary['image_sha256']},
+        remaining_external_coverage='Application launcher compound followup: bundle and opt-in authority, copied-record paths/hashes, retained backup coverage and transport.'))
+    print('PASS',len(rows),'GPU retirement decoder and review cases; no transport')
+
+
+if __name__=='__main__':main()

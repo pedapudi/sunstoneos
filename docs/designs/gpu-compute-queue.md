@@ -44,6 +44,9 @@ interrupt delivery, performance or recovery.
 - **Physical migration step:** the coordinator receives the requests below.
   Board operations were prohibited, so legacy removal follows host evidence.
   Physical qualification and the independent feature review remain open.
+- **Build selection:** the generic option lands with runtime ownership in
+  migration commit 3, so independent applications can select the service.
+  Migration commit 7 removes the legacy sources and worker configuration.
 - **Host followup scope:** the OS check validates native retirement captures
   and the generic decoder. Compound transport, backup and restoration checks
   belong to the external application launcher.
@@ -68,8 +71,14 @@ one job. Configure it with the cached `cfg.sh`, `MIMUS_DIR=`,
 os=/home/sunil/git/sunstoneos-worktrees/gpu-queue-1031
 b=$HOME/.cache/sunstoneos/build/gpu-queue-1031
 p=$HOME/.cache/sunstoneos/venv/bin/python
-"$p" "$os/tools/dev-run.py" gpu-return --port 3-1   --image "$b/queue-eight-return/sunstone-a733-os-queue-add.elf"   --host-tree "$os" --template "$b/board-templates/queue-eight"   --evidence "$b/board-runs/queue-eight"
-"$p" "$os/tools/dev-run.py" gpu-return --port 3-1   --image "$b/gpu-return2/sunstone-a733-os.elf"   --host-tree "$os" --template "$b/board-templates/exact-sum"   --evidence "$b/board-runs/exact-sum"
+"$p" "$os/tools/dev-run.py" gpu-return --port 3-1 \
+  --image "$b/queue-eight-return/sunstone-a733-os-queue-add.elf" \
+  --host-tree "$os" --template "$b/board-templates/queue-eight" \
+  --evidence "$b/board-runs/queue-eight"
+"$p" "$os/tools/dev-run.py" gpu-return --port 3-1 \
+  --image "$b/gpu-return2/sunstone-a733-os.elf" \
+  --host-tree "$os" --template "$b/board-templates/exact-sum" \
+  --evidence "$b/board-runs/exact-sum"
 ```
 
 The vector result must contain eight jobs, 65 elements, checksum 8,840,

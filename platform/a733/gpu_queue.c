@@ -66,7 +66,7 @@ struct pvr_compute_queue *a733_gpu_queue_prepare(struct a733_gpu_queue *s, struc
         !private_image((uintptr_t)s, sizeof(*s)) || !private_image((uintptr_t)service, sizeof(*service)) ||
         !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)g, sizeof(*g)) ||
         !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)service, sizeof(*service)) ||
-        !g->prepared || g->memory.phase != A733_GPU_MEMORY_OFFLINE || g->config.compute || g->config.mimus ||
+        !g->prepared || g->memory.phase != A733_GPU_MEMORY_OFFLINE || g->config.compute ||
         g->config.compute_queue || g->config.graphics || g->config.free_lists.count || service->initialized) return NULL;
     if (!acquire(g->wb_pool, owner, A733_GPU_QUEUE_PAYLOAD_PAGES * PAGE, &s->payload_lease, &s->payload_extent))
         return failed(s, g);

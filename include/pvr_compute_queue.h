@@ -3,11 +3,8 @@
 /* The GPU compute queue inside the GPU service worker
  * (drivers/gpu/pvr_gpu_service.c, docs/designs/gpu-compute-queue.md).
  *
- * The worker calls the functions below directly, at each place where it
- * calls the mimus session today. They run in the worker task at EL1, one at
- * a time, each bounded and without a tick wait. Their signatures are those a
- * component function table would hold, so a second component later turns
- * these direct calls into a loop over a table without changing the queue. */
+ * The worker calls these bounded operations at EL1, one at a time and
+ * without a tick wait. */
 #include <stdatomic.h>
 #include <stdint.h>
 #include "gpu_queue.h"
@@ -21,7 +18,7 @@ struct a733_gpu_queue;
 struct pvr_gpu_service;
 struct pvr_gpu_service_config;
 
-/* Firmware-only objects, one uncached page each, as the mimus session has:
+/* Firmware-only objects, one uncached page each:
  * compute context, register state, client-ring control, client ring,
  * memory context, timeline. */
 #define PVR_COMPUTE_QUEUE_OBJECTS 6u
@@ -36,7 +33,7 @@ struct pvr_gpu_service_config;
  * - 320-407: argument block, per job (at most 24 bytes of binding addresses,
  *   then at most 64 argument bytes).
  * One clean from byte 256 to the end of the argument block covers each job:
- * 2 lines for mimus's 32-byte block, at most 3. A changed PDS line adds one. */
+ * 2 lines for a 32-byte block, at most 3. Changed PDS lines add maintenance. */
 #define PVR_COMPUTE_QUEUE_PDS_DATA 0u
 #define PVR_COMPUTE_QUEUE_FENCE 192u
 #define PVR_COMPUTE_QUEUE_CDM 256u
@@ -86,20 +83,20 @@ struct pvr_compute_queue {
     struct gpu_queue_job slot;
 };
 
-/* Before the scheduler, at EL1, in images that include the GPU: reserve the
- * context's payload and firmware pages from the GPU pools, as
- * a733_gpu_mimus_prepare does, and set config->queue. No device access. */
+/* Before the scheduler, at EL1, after the platform reserves payload and
+ * firmware pages: bind the component and set config->compute_queue.
+ * No device access. */
 int pvr_compute_queue_bind(struct pvr_compute_queue *, struct pvr_gpu_service *,
                            struct pvr_gpu_service_config *);
 /* CREATE request, device COLD: copy the program; plan the leases and the
  * internal pages with pvr_gpu_vm_require; acquire the planned table pages,
- * at most 32, from the GPU write-back pool, as a733_gpu_mimus_prepare does;
+ * at most 32, from the GPU write-back pool;
  * build the GPU address space once with pvr_gpu_vm_build, which needs that
  * exact size; build the firmware context. The worker then runs OPEN.
  * 1 accepted, 0 refused without device access. */
 int pvr_compute_queue_create(struct pvr_compute_queue *, const struct gpu_queue_context_config *);
 
-/* Worker calls, at the sites that call the mimus session today. */
+/* Serialized worker operations. */
 unsigned pvr_compute_queue_objects(struct pvr_compute_queue *, struct pvr_mips_object *, unsigned);
 int pvr_compute_queue_prepare(struct pvr_compute_queue *, uint64_t deadline);
 int pvr_compute_queue_publish(struct pvr_compute_queue *);   /* 1 done, 0 pending, -1 fault */
@@ -117,7 +114,7 @@ uint64_t pvr_compute_queue_progress(const struct pvr_compute_queue *);
 int pvr_compute_queue_hold(struct pvr_compute_queue *);
 int pvr_compute_queue_release(struct pvr_compute_queue *);
 /* After healthy STOPPED: restore the memory-context record and the firmware
- * context as a733_gpu_mimus_reopen does, and the timeline to the last
+ * context, and restore the timeline to the last
  * sequence. The GPU tables stay published and unchanged. */
 int pvr_compute_queue_reopen(struct pvr_compute_queue *);
 
