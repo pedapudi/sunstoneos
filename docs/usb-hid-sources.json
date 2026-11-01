@@ -1,0 +1,88 @@
+{
+  "runtime": {
+    "component": "TinyUSB HID host",
+    "source_record": "../sources.lock.json#/tinyusb",
+    "revision": "d668b0abb7219b9ce324fa88d46604bb9e869973",
+    "license": "MIT",
+    "execution": "A733 CPU under FreeRTOS; host fixture links the same HID class",
+    "use": "Enumeration, report-protocol setup, interrupt endpoint buffers and class callbacks"
+  },
+  "captures": [
+    {
+      "name": "microsoft-keyboard",
+      "url": "https://wiki.wireshark.org/uploads/4e4c7e04ffc237af7b09e1e890e884ee/XHC20-MicrosoftKeyboard.pcapng.gz",
+      "revision": "Content addressed by compressed SHA-256; retrieved 2026-10-31",
+      "sha256": "d7afd68431bdfa003350d7f3559ecdde77e39647a93a4bd6d416d4ded9a9151f",
+      "uncompressed_sha256": "439bc8a580e4fb8a4c5880fc75d7ad156c0c229f0dedf786b4b8495b846e7b28",
+      "license": "No explicit capture license identified; retain downloaded bytes outside tracked source and do not redistribute",
+      "source_available": true,
+      "execution": "Host-only offline fixture; never sent to a USB device or desktop input service",
+      "descriptors": [
+        {
+          "packet": 20,
+          "interface": 0,
+          "bytes": 60,
+          "sha256": "3ff35a2908d55c14bf4aafb20aad79d621c7a2e3628805b7e30d6873fd9ed35c",
+          "facts": "Keyboard modifier bitmap, reserved byte and six-element key array; 211 captured input reports"
+        }
+      ]
+    },
+    {
+      "name": "logitech-unifying",
+      "url": "https://wiki.wireshark.org/uploads/1ca2e5ae2519eda3a0d2328a2b5d8222/XHC20-LogitechUnifying.pcapng.gz",
+      "revision": "Content addressed by compressed SHA-256; retrieved 2026-10-31",
+      "sha256": "689923eaf8dbb4af6b97cf2ce717c8cb798a8757689eb51be372ff459faa6c74",
+      "uncompressed_sha256": "5508d9d85b10a5bf947b3986c1b5dd3555bfce6dccbb4902e5c307ffec36709d",
+      "license": "No explicit capture license identified; retain downloaded bytes outside tracked source and do not redistribute",
+      "source_available": true,
+      "execution": "Host-only offline fixture; never sent to a USB device or desktop input service",
+      "descriptors": [
+        {
+          "packet": 22,
+          "interface": 0,
+          "bytes": 59,
+          "sha256": "55d7ebedfc30af5a3f3cf24664ff492aafffbaf393735ea87cc78826978f41bf",
+          "facts": "Keyboard modifier bitmap and six-element array; 106 captured reports all idle"
+        },
+        {
+          "packet": 29,
+          "interface": 1,
+          "bytes": 148,
+          "sha256": "56452c145f7db1f9ead0cb06fe368c218ec767bc8385b753bd2a1b2c1216c41c",
+          "facts": "Mouse report ID 2; sixteen buttons, signed twelve-bit X/Y, signed eight-bit wheel and horizontal pan; 128 captured reports"
+        }
+      ]
+    }
+  ],
+  "capture_header_reference": {
+    "url": "https://gitlab.com/wireshark/wireshark/-/raw/v4.4.9/epan/dissectors/packet-usb.c",
+    "revision": "v4.4.9",
+    "sha256": "f326d57cb9f2648ec8817a16f5ab032608a93bc050c98ea1746521704d4ab2ba",
+    "license": "GPL-2.0-or-later",
+    "use": "Host-only reference for Darwin USB pseudoheader fields; no source copied",
+    "section": "dissect_darwin_buffer_packet_header"
+  },
+  "research_references": [
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/v6.12/Documentation/hid/hidintro.rst",
+      "revision": "v6.12",
+      "sha256": "888bfdf75f12719980ba17531a98bd86834352d2d88d9c3d60643d8f946bb88e",
+      "license": "GPL-2.0",
+      "use": "Host-only descriptor-format comparison; no code or descriptors copied into the implementation"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bentiss/hid-tools/0579ecdb4e041ce93c18ca45b3e8a2584f9ce952/tests_kernel/test_keyboard.py",
+      "revision": "0579ecdb4e041ce93c18ca45b3e8a2584f9ce952",
+      "sha256": "29b4cf1e232fda81c575ae730785ff0c1b91f4500ff2a7d476e74040b1fa7ffa",
+      "license": "GPL-2.0",
+      "use": "Host-only descriptor-format comparison; no code or descriptors copied into the implementation"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/bentiss/hid-tools/0579ecdb4e041ce93c18ca45b3e8a2584f9ce952/tests_kernel/test_mouse.py",
+      "revision": "0579ecdb4e041ce93c18ca45b3e8a2584f9ce952",
+      "sha256": "677315962aa35cde87b2b03da336b50e0c115a0b8216e3cc026624bc67c0e9c6",
+      "license": "GPL-2.0",
+      "use": "Host-only descriptor-format comparison; no code or descriptors copied into the implementation"
+    }
+  ]
+}
