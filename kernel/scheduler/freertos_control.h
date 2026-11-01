@@ -21,7 +21,8 @@ struct ss_control_state {
     bool suspended, dead;
 };
 struct ss_control_transfer {
-    uint64_t epoch, deadline, wait_generation, wait_outcome, accounting;
+    uint64_t epoch, deadline, wait_generation, wait_outcome, accounting, execution;
+    uint64_t route_epoch; /* closed publisher epoch, independent of incarnation */
     unsigned old_owner, new_owner;
 };
 struct ss_control_ops {
@@ -47,9 +48,17 @@ struct ss_control_slot {
     struct ss_owner_descriptor *descriptor;
     struct ss_control_transfer transfer;
     _Atomic unsigned owner;
+    /* Low eight route-word bits are the owner; upper bits are the epoch.
+     * Reader banks combine CLOSED in bit 63 with their participant count. */
+    _Atomic uint64_t route_word, route_readers[2];
     unsigned phase; /* 0 stable, 1 detach, 2 adopt, 3 forwarding */
     bool retained, old_drained;
     uint64_t drain_mask;
+};
+struct ss_control_route {
+    struct ss_control *control;
+    uint64_t epoch;
+    unsigned slot, owner;
 };
 enum ss_control_gate_phase { SS_GATE_OPEN, SS_GATE_ACQUIRING, SS_GATE_HELD, SS_GATE_RELEASING };
 struct ss_control {
@@ -80,6 +89,12 @@ bool ss_control_applied(const struct ss_control *, unsigned, uint64_t);
 void ss_control_wait(struct ss_control *, unsigned, uint64_t); /* task only, IRQs enabled */
 unsigned ss_control_drain(struct ss_control *, unsigned); /* max sixteen records */
 void ss_control_forward(struct ss_control *, unsigned); /* stale old-owner hint */
+/* Caller already owns a lifetime pin and masks local API interrupts. One
+ * registration/validation attempt; false requires an epoch-neutral bounded
+ * broadcast activation hint. Keep the lifetime pin until route_put and every
+ * slot publication/SGI finish. Never retry a failed routing admission. */
+bool ss_control_route_pin(struct ss_control *, unsigned, struct ss_control_route *);
+void ss_control_route_put(struct ss_control_route *);
 /* Bounded hint only; caller commits donation under object protocol first. */
 void ss_control_repair(struct ss_control *, unsigned);
 void ss_control_retirement(struct ss_control *, unsigned); /* last closed put hook */

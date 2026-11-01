@@ -2,6 +2,10 @@
 #include "freertos_control.h"
 #include <stddef.h>
 
+#define ROUTE_CLOSED (UINT64_C(1) << 63)
+#define ROUTE_COUNT (ROUTE_CLOSED - 1)
+#define ROUTE_SHIFT 8u
+
 static void lock(struct ss_control *c, struct ss_control_slot *s)
 {
     uint32_t t = atomic_fetch_add_explicit(&s->tickets, 1, memory_order_relaxed);
@@ -24,6 +28,59 @@ static void all(struct ss_control *c, unsigned slot)
     for (unsigned cpu = 0; cpu < SS_CONTROL_CPUS; ++cpu)
         if (c->active_mask & (UINT64_C(1) << cpu)) hint(c, cpu, slot);
 }
+bool ss_control_route_pin(struct ss_control *c, unsigned slot,
+                           struct ss_control_route *out)
+{
+    *out = (struct ss_control_route){0};
+    struct ss_control_slot *s = &c->slot[slot];
+    uint64_t word = atomic_load_explicit(&s->route_word, memory_order_acquire);
+    uint64_t epoch = word >> ROUTE_SHIFT;
+    uint64_t previous = atomic_fetch_add_explicit(&s->route_readers[epoch & 1],
+                                                 1, memory_order_acq_rel);
+    ss_owner_barrier(c->backend);
+    struct ss_control_route route = { c, epoch, slot, (unsigned)(word & 0xff) };
+    if (!(previous & ROUTE_CLOSED) &&
+        atomic_load_explicit(&s->route_word, memory_order_acquire) == word) {
+        *out = route;
+        return true;
+    }
+    ss_control_route_put(&route);
+    return false;
+}
+void ss_control_route_put(struct ss_control_route *route)
+{
+    if (!route->control) return;
+    struct ss_control *c = route->control;
+    struct ss_control_slot *s = &c->slot[route->slot];
+    uint64_t previous = atomic_fetch_sub_explicit(&s->route_readers[route->epoch & 1],
+                                                 1, memory_order_release);
+    /* Close and participant release use the same atomic word. Either close
+     * observes zero or the final closed participant publishes this event. */
+    if ((previous & ROUTE_CLOSED) && (previous & ROUTE_COUNT) == 1)
+        all(c, route->slot);
+    *route = (struct ss_control_route){0};
+}
+static uint64_t route_close(struct ss_control_slot *s)
+{
+    uint64_t epoch = atomic_load_explicit(&s->route_word, memory_order_acquire) >> ROUTE_SHIFT;
+    atomic_fetch_or_explicit(&s->route_readers[epoch & 1], ROUTE_CLOSED, memory_order_acq_rel);
+    return epoch;
+}
+static bool route_drained(struct ss_control_slot *s, uint64_t epoch)
+{
+    return atomic_load_explicit(&s->route_readers[epoch & 1], memory_order_acquire) == ROUTE_CLOSED;
+}
+static void route_adopt(struct ss_control_slot *s)
+{
+    uint64_t next = s->transfer.route_epoch + 1;
+    /* Epochs must not wrap. Preserve transient rejected admissions to a closed
+     * bank: resetting its count would lose their subsequent decrements. The
+     * release reopening orders the intervening route before a stale reader's
+     * acquiring registration, so two-bank reuse cannot validate an old word. */
+    atomic_fetch_and_explicit(&s->route_readers[next & 1], ROUTE_COUNT, memory_order_release);
+    atomic_store_explicit(&s->route_word,
+        (next << ROUTE_SHIFT) | s->transfer.new_owner, memory_order_release);
+}
 void ss_control_init(struct ss_control *c, uint64_t active,
                      const struct ss_owner_backend *b, const struct ss_control_ops *ops)
 {
@@ -42,6 +99,11 @@ void ss_control_register(struct ss_control *c, unsigned slot,
         .priority = priority, .effective_priority = priority, .affinity = affinity };
     s->transfer = (struct ss_control_transfer){0};
     atomic_store_explicit(&s->owner, owner, memory_order_release);
+    /* Registry registration requires lifetime references and all old owner
+     * hints retired. No valid routing participant survives reincarnation. */
+    atomic_store_explicit(&s->route_readers[0], 0, memory_order_relaxed);
+    atomic_store_explicit(&s->route_readers[1], ROUTE_CLOSED, memory_order_relaxed);
+    atomic_store_explicit(&s->route_word, owner, memory_order_release);
     atomic_store_explicit(&s->applied, 0, memory_order_release);
     s->phase = 0;
     s->retained = false;
@@ -103,8 +165,16 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
         s->retained = true;
     }
     if (s->phase == 3 && cpu == s->transfer.old_owner &&
-        (!c->ops.drained || c->ops.drained(c->ops.context, cpu, slot)))
-        s->old_drained = true;
+        route_drained(s, s->transfer.route_epoch)) {
+        if (!c->ops.drained || c->ops.drained(c->ops.context, cpu, slot)) {
+            s->old_drained = true;
+            hint(c, s->owner, slot);
+        } else {
+            /* This entry will drain the local activation batch after controls.
+             * Arrange a fresh checkpoint after that work, not an early ack. */
+            hint(c, cpu, slot);
+        }
+    }
     if (s->desired.dead && !s->retained) {
         if (ss_owner_references_retired(s->descriptor) &&
             (!c->ops.drained || c->ops.drained(c->ops.context, cpu, slot))) {
@@ -113,7 +183,15 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
         } else hint(c, cpu, slot);
     } else if (cpu == s->owner && s->retained) {
         void *task = s->descriptor->task; /* retained reference predates close */
+        if (s->phase == 2) {
+            /* Detach has acknowledged the saved frame. Adopt before applying
+             * even a deletion that arrived during transfer. */
+            c->ops.adopt(c->ops.context, slot, task, &s->transfer);
+            route_adopt(s);
+            s->phase = 3; hint(c, s->transfer.old_owner, slot);
+        }
         if (s->desired.dead) {
+            (void)route_close(s);
             if (!c->ops.apply(c->ops.context, slot, task, &s->desired)) {
                 hint(c, cpu, slot); unlock(c, s); return;
             }
@@ -125,6 +203,7 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
                 unsigned next = destination(s->desired.affinity & c->active_mask);
                 if (next != SS_CONTROL_NONE) {
                     s->transfer.old_owner = cpu; s->transfer.new_owner = next;
+                    s->transfer.route_epoch = route_close(s);
                     ++s->transfer.epoch; s->old_drained = false; s->phase = 1;
                 }
             }
@@ -134,10 +213,6 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
                     hint(c, s->owner, slot);
                 } else hint(c, cpu, slot);
             } else {
-                if (s->phase == 2) {
-                    c->ops.adopt(c->ops.context, slot, task, &s->transfer);
-                    s->phase = 3; hint(c, s->transfer.old_owner, slot);
-                }
                 bool completed = c->ops.apply(c->ops.context, slot, task, &s->desired);
                 bool eligible = (s->desired.affinity & (UINT64_C(1) << cpu)) != 0;
                 if (completed && eligible) {
@@ -146,17 +221,16 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
                 }
                 else hint(c, cpu, slot);
                 if (s->phase == 3) {
-                    /* Conservatively wait for every other publisher, including
-                     * new-owner references, before ending old forwarding. */
-                    if (atomic_load_explicit(&s->descriptor->references, memory_order_acquire) == 1 &&
-                        s->old_drained) s->phase = 0;
-                    else hint(c, cpu, slot);
+                    /* The acknowledgment follows old-epoch closure, reader
+                     * retirement and a fresh owner drain. New-route publishers
+                     * and unrelated lifetime pins do not postpone retirement. */
+                    if (s->old_drained) s->phase = 0;
                 }
                 if (!s->phase && completed && eligible) { s->retained = false; put = true; }
                 else if (!eligible) hint(c, cpu, slot);
             }
         }
-    } else if (s->retained) hint(c, s->owner, slot);
+    } else hint(c, s->owner, slot);
     unlock(c, s);
     /* A last-put callback may publish retirement; never invoke under lock. */
     if (put) ss_owner_put(s->descriptor);

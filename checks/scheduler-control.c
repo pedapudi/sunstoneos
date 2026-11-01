@@ -106,12 +106,21 @@ int main(void)
     atomic_store(&offcpu, true); drain(); assert(ss_control_applied(&control, 1, seq));
     atomic_store(&offcpu, false);
     assert(ss_owner_pin(&descriptor[0], 1, NULL)); /* late old publisher */
+    struct ss_control_route old_route, new_route;
+    assert(ss_control_route_pin(&control, 0, &old_route));
+    assert(old_route.owner == 0);
     seq = ss_control_publish(&control, 0, migrate, NULL);
     drain(); assert(!ss_control_applied(&control, 0, seq) && !atomic_load(&adopted));
     atomic_store(&offcpu, true); drain();
     assert(atomic_load(&adopted) == 1 && control.slot[0].phase == 3);
+    assert(ss_control_route_pin(&control, 0, &new_route));
+    assert(new_route.owner == 1 && new_route.epoch != old_route.epoch);
     ss_control_forward(&control, 0); drain();
-    ss_owner_put(&descriptor[0]); drain(); assert(control.slot[0].phase == 0);
+    ss_control_route_put(&old_route);
+    drain(); assert(control.slot[0].phase == 0);
+    /* A current-epoch publisher and lifetime pin do not hold old forwarding. */
+    ss_control_route_put(&new_route);
+    ss_owner_put(&descriptor[0]);
     assert(ss_owner_pin(&descriptor[0], 1, NULL));
     ss_control_publish(&control, 0, delete_task, &descriptor[0]); drain();
     assert(!atomic_load(&retired));
