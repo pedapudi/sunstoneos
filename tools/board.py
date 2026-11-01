@@ -422,14 +422,14 @@ class Live:
         self.record['rails'] = images.rail_result(values, log)
         self.journal()
 
-    def live_state(self):
-        words = images.load('npu_live_words', (self.args.host_tree or ROOT)/'apps/npu-finite/development.py').WORDS if self.args.kind == 'npu' else dev.WORDS
+    def live_state(self, finite_npu=False):
+        words = images.load('npu_live_words', (self.args.host_tree or ROOT)/'apps/npu-finite/development.py').WORDS if finite_npu else dev.WORDS
         values = [int(v,16) for v in self.tx(*[x for a in words for x in ('readl', hex(a))]).split()]
         require(len(values) == len(words), 'Live state word count differs.')
         return {'identity': self.identity, 'port': self.args.port, 'words': {hex(a):v for a,v in zip(words,values)}}
 
     def prepare(self, info):
-        return images.prepare(self.args, info, {} if self.args.kind=='probe' else self.live_state(), self.evidence/'bundle')
+        return images.prepare(self.args, info, {} if self.args.kind=='probe' else self.live_state(info.get('finite_npu',False)), self.evidence/'bundle')
 
     def launch(self, plan):
         if plan.get('format') == 'npu':
@@ -453,7 +453,7 @@ class Live:
         self.tx(*plan['launch'])
         self.wait(plan['watchdog']['session_seconds'] + crumbs.interval(plan['watchdog']['mode']) + 10)
         before, after, words = self.returned()
-        decoded = crumbs.decode(words, plan['epoch'])
+        decoded = crumbs.decode(words, plan['epoch'], self.args.image) if plan.get('format') == 'npu' else crumbs.decode(words, plan['epoch'])
         self.record['breadcrumbs'] = decoded
         save(self.evidence/'breadcrumbs.json', decoded)
         require(not after & 1, 'WDT0 did not disarm after return.')
@@ -522,7 +522,7 @@ def references(args):
             paths.update(p for p in (tree/directory).glob('*') if p.is_file())
         paths.add(tree/'drivers/clock/a733_cpu_clock.c')
         paths.add(tree/'apps/board/launch.c')
-        if args.kind == 'npu':
+        if args.kind == 'npu' and 'ss_result_record' not in images.symbols(args.image):
             finite = images.load('reference_npu_irq', tree/'apps/npu-interrupt/host.py').finite
             paths.update(tree/name for name in finite.HOST_SOURCES)
             paths.update(tree/name for name in ('apps/npu-finite/development.py','tools/vendor-mbus.py'))
@@ -572,7 +572,7 @@ def run_image(args, backend=Live):
         descriptor = json.loads(descriptor_path.read_text()) if descriptor_path.exists() else None
         if descriptor:
             save(evidence/'image.board.json', descriptor)
-        if args.kind == 'npu':
+        if args.kind == 'npu' and 'ss_result_record' not in images.symbols(args.image):
             manifest = (args.template/'manifest.json') if args.template else args.image.parent/'manifest.json'
             if not manifest.exists():
                 manifest = args.image.parent/'manifest.json'
@@ -613,8 +613,12 @@ def run_image(args, backend=Live):
                     decoded = result.get('breadcrumbs',{})
                     fault = decoded.get('fault',{})
                     last = decoded.get('last',{})
-                    result['first_failure'] = {'site': fault.get('elr') or last.get('name','before-entry'),
-                                                'detail': decoded.get('summary','Watchdog reset')}
+                    origin = decoded.get('board_failure')
+                    result['first_failure'] = dict(origin, native_site=origin['site'],
+                        site=f"{origin['group']}:{origin['site']}:{origin['caller']}",
+                        detail=decoded.get('summary','Watchdog reset')) if origin else {
+                            'site': fault.get('elr') or last.get('name','before-entry'),
+                            'detail': decoded.get('summary','Watchdog reset')}
                 if owner.journal_error is not None:
                     raise owner.journal_error
             except BaseException as error:
@@ -710,7 +714,7 @@ class Queue:
             options['descriptor'] = str(target)
         template = args.template or (images.GPU_TEMPLATE if args.kind=='gpu-return' else images.CONTROL)
         if args.kind!='probe':
-            if args.kind == 'npu':
+            if args.kind == 'npu' and 'ss_result_record' not in images.symbols(source):
                 require(args.template is not None, 'NPU requires a template directory with session.bin.')
                 destination = directory/'template'
                 destination.mkdir()

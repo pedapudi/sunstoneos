@@ -533,6 +533,51 @@ def rail_cases(out):
         passed('pinned-rail-helper-'+variant)
 
 
+def generic_npu_case(out, hello):
+    root=out/'generic-npu';root.mkdir()
+    args=arguments(root,'--kind','npu');args.image=hello
+    original_symbols=images.symbols
+    def generic_symbols(image):
+        # The real hello ELF exercises the generic session producer; only
+        # the linked-service identity is modeled for NPU kind selection.
+        return dict(original_symbols(image),os_npu_client_model=(1,1))
+    with patch.object(images,'symbols',generic_symbols):
+        info=images.inspect(hello,'npu')
+        assert info['generic'] and not info.get('finite_npu')
+        source=json.loads((board.dev.EVIDENCE/'sol-resume-20261031/port-3-3/cpu-thermal-state/session.json').read_text())
+        words={}
+        for transaction in source['transactions']:
+            command=transaction['command']
+            addresses=[int(command[i+1],16) for i,value in enumerate(command) if value=='readl']
+            words.update({hex(address):int(value,16) for address,value in zip(addresses,transaction['stdout'].split())})
+        plan=images.prepare(args,info,{'words':words},root/'bundle')
+        assert plan['format']=='generic'
+        queued=arguments(root,'--kind','npu','--template',str(root/'bundle'),submit=True);queued.image=hello
+        job=board.Queue(root/'queue').submit(queued)
+        assert (Path(job['directory'])/'template/session.bin').read_bytes()==(root/'bundle/session.bin').read_bytes()
+        reached=[]
+        def backend(*args):
+            reached.append(True)
+            raise RuntimeError('modeled stop after preflight')
+        result=board.run_image(args,backend)
+        assert reached and 'modeled stop after preflight' in result['first_failure']['detail']
+    model=Model('normal');owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
+    read_words=[]
+    def tx(*commands):
+        read_words.extend(int(commands[i+1],16) for i,value in enumerate(commands) if value=='readl')
+        return ' '.join('0' for _ in read_words)
+    owner.tx=tx
+    owner.live_state(False)
+    assert tuple(read_words)==board.dev.WORDS
+    origin={'group':'npu','site':123,'caller':'0x41200100','value':'0x8'}
+    decoded={'board_failure':origin,'last':{'name':'NPU_RETAINED'},'summary':'native failure'}
+    with patch.object(board.crumbs,'decode',return_value=decoded):
+        result,_,_=lifecycle(out/'native-first-failure','watchdog')
+    assert result['first_failure']['site']=='npu:123:0x41200100'
+    assert result['first_failure']['native_site']==123 and result['first_failure']['value']=='0x8'
+    passed('generic-npu-keeps-typed-session-preflight-and-live-register-set')
+
+
 def finite_npu_cases(out, image_root, state, fixture):
     live = json.loads(state.read_bytes())
     template = out/'npu-template'
@@ -611,6 +656,13 @@ def finite_npu_cases(out, image_root, state, fixture):
             assert calls[0]=='entry' and calls[1]==('backup',0x41000000,0x1200000)
             assert calls[-2:]==['rom','entry'] and owner.record['npu_dirty']
             assert plan['dram_backup'].stat().st_size==0x1200000
+            owner.tx=lambda *args:None
+            owner.wait=lambda *args:None
+            owner.returned=lambda:(0,0,{})
+            normal={'session':True,'last':{'stage':board.crumbs.RETURN_ROM,'value':0}}
+            with patch.object(finite,'require_entry_state'),patch.object(board.crumbs,'decode',return_value=normal) as decode:
+                assert owner.launch(plan)=='returned'
+                assert decode.call_args.args[2]==image
             try:
                 with owner.locked():raise ValueError('modeled dirty preload refusal')
             except ValueError:pass
@@ -649,6 +701,7 @@ def main():
     if 'ddr' in groups:owned_ddr_cases(args.out)
     if 'rails' in groups:rail_cases(args.out)
     if args.hello and 'offline' in groups:offline(args.out,args.hello)
+    if 'generic-npu' in groups:generic_npu_case(args.out,args.hello)
     if 'npu' in groups:finite_npu_cases(args.out,args.npu_images,args.npu_state,args.npu_fixture)
     board.save(args.out/'results.json',rows)
     print(f'{len(rows)} checks passed; no device access')

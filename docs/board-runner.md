@@ -159,12 +159,11 @@ storage grants or execute storage-write sessions, even with that flag. Those
 operations remain in the existing backup-first update path and must meet
 [goal section 4](goal.md). Read-only execution grants no card or NVMe writes.
 
-`--kind npu` admits only an image with the returning watchdog contract and the
-linked OS NPU service, using its typed service session. The current checkout's
-standalone NPU images reject an armed watchdog, and its CPU-return build excludes
-NPU. Such images are refused before device access. NPU execution remains
-unsupported until a compatible native watchdog and return path is supplied and
-checked; session serialization alone does not establish that support.
+`--kind npu` supports two returning image formats. Generic OS images require
+both the returning watchdog contract and the linked OS NPU service, and use
+typed service sessions. Finite native NPU diagnostics use the preparation and
+retirement rules described below. Neither format's serialization establishes
+physical qualification.
 
 ## Qualify on port 3-1
 
