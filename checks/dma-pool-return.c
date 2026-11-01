@@ -114,11 +114,17 @@ static _Noreturn void fatal(void *unused)
     preserved();
     if(DMA_RETURN_CASE==1){
         configASSERT(session.startup.retire_fault==4&&platform_reads>platform_before);
+        configASSERT(session.startup.platform.retire_fault==A733_DMA_RETIRE_CONTROLLER);
+        configASSERT(session.startup.retire_read_address==DMA+A733_DMA_REG_CPU_ROUTE);
+        configASSERT(session.startup.retire_read_result==1&&session.startup.retire_read_value==0);
+        configASSERT(session.startup.retire_token_result==A733_CLOCK_OK);
         platform_puts("PASS DMA pool return: changed route refuses final acknowledgment\n");
     }else{
         configASSERT(observed_deadline&&session.startup.retire_deadline==observed_deadline);
         configASSERT(session.startup.retire_fault==2&&session.startup.retire_now>=observed_deadline);
         configASSERT(platform_reads==platform_before);
+        configASSERT(session.startup.retire_token_result==A733_CLOCK_BUSY);
+        configASSERT(!session.startup.platform.retire_fault&&!session.startup.retire_read_address);
         platform_puts("PASS DMA pool return: registry BUSY expires within fixed 50000 us\n");
     }
     platform_exit(0);
@@ -183,6 +189,8 @@ static void client(void *unused)
     for(unsigned i=0;i<1000&&!atomic_load_explicit(&session.retired,memory_order_acquire);++i)vTaskDelay(1);
     configASSERT(DMA_RETURN_CASE==0||DMA_RETURN_CASE==3);
     configASSERT(a733_dma_pool_session_retire(&session)==1&&session.startup.retired);
+    configASSERT(!session.startup.retire_fault&&!session.startup.platform.retire_fault);
+    configASSERT(session.startup.retire_token_result==A733_CLOCK_OK);
     configASSERT(session.startup.retire_deadline==observed_deadline&&platform_reads>platform_before);
     configASSERT(!session.startup.register_held&&xSemaphoreGetMutexHolder(locks.mutex[0])==NULL);
     preserved();unsigned last=platform_reads;
