@@ -62,12 +62,37 @@ Entry requires CPU0 at EL3 with EL3 translation and caches disabled, a valid
 session, matching input checksum and the exact host-armed WDT0 mode/configuration.
 It retains the full nonce and absolute deadline outside EL1's BSS.
 
-**Physical prerequisite:** all seven secondary CPUs must already have matching
-static OFF policy, OFF acknowledgment/status, clear start requests and disabled
-GIC wake. The library checks the PCK-600 identity and these fields again before
-return. It makes no PPU policy or power-domain writes. Fresh FEL alone does not
-establish this prerequisite; no current physical result qualifies that baseline.
-A dynamic-OFF sample or a WFE loop does not establish equivalent ownership.
+The default EL3 owner normalizes all seven secondary CPUs to acknowledged
+static OFF before whole-hierarchy cache maintenance. Preflight checks identify
+the PCK-600 PPUs and accept only matching static or dynamic OFF policy/status,
+zero operating-mode policy and clear software-start requests. It rejects active
+cores before any policy write. Each dynamic policy becomes zero with DSB SY;
+the owner waits for PWSR dynamic-disable acknowledgment and actual OFF before
+verifying PWPR. It then sets only that core's GIC wake-disable bit. One 100 ms
+deadline, capped by the session deadline, and a 65,536-sample limit bound the
+entire acquisition. The inherited policy and core appear in the `PROBE_POLICY`
+RTC breadcrumb before mutation.
+
+The existing strict held-state checks retain their predicates and read order.
+Entry refusal sites `0x10..0x12` retain the sampled CPU word. PPU sites
+`0x20..0x27` retain the first rejected raw register in ESR and its address in
+FAR; ELR identifies the checking statement. Site `0x28` reports an acquisition
+counter/deadline/sample bound. These are software diagnostics.
+
+The weak `sunstone_probe_acquire_secondaries()` hook implements this owner.
+The default `sunstone_probe_release_secondaries()` retains static OFF and
+wake-disable through ROM return. A strong owner must satisfy the same held-state
+checks; its release runs after final data and instruction-cache maintenance and
+receipt preparation. No cache operation follows release. A release failure
+parks with the watchdog armed. Consumers using the common owner remove private
+policy-owner overrides and build-time runtime patches.
+
+The [entry ownership design](designs/probe-entry-normalization.md) supplies the
+source comparison, write scope and validation limits. A subsequent multicore
+consumer needs a reviewed held-policy release after publishing the target entry;
+the resident startup path supplies that operation. Peripheral owners establish
+their own reset and gate state before dependent access. Shared entry cannot
+reset camera, audio or other blocks without their ownership and drain proof.
 
 Call `sunstone_probe_progress()` at bounded points of completed work. EL1 uses
 SMC `0x734`; EL3 uses the library's direct helper. The common monitor preserves

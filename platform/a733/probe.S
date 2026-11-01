@@ -19,9 +19,6 @@ sunstone_probe_smc:
 .global sunstone_probe_rom
 .type sunstone_probe_rom,%function
 sunstone_probe_rom:
-    ic iallu
-    dsb sy
-    isb
     ldr x0,=0x08001004
     mov w1,#0x20
     str w1,[x0]
