@@ -198,9 +198,16 @@ enum {
     SUNSTONE_CRUMB_NPU_RETAINED = 0x06ff,
 };
 
+#ifdef SUNSTONE_GPU_TIMING
+#include "gpu_queue_timing.h"
+#define SUNSTONE_GPU_TIMING_CRUMB(stage,value) do { if ((stage)==SUNSTONE_CRUMB_GPU_SUBMIT || (stage)==SUNSTONE_CRUMB_GPU_COMPLETE || (stage)==SUNSTONE_CRUMB_GPU_PEER_SUBMIT || (stage)==SUNSTONE_CRUMB_GPU_PEER_COMPLETE) gpu_queue_timing_crumb(stage,value); } while (0)
+#else
+#define SUNSTONE_GPU_TIMING_CRUMB(stage,value) ((void)0)
+#endif
 #ifdef SUNSTONE_CRUMBS
 static inline void sunstone_crumb(uint32_t stage, uint32_t value)
 {
+    SUNSTONE_GPU_TIMING_CRUMB(stage,value);
     __asm__ volatile("mov x0, %0\n mov x1, %1\n svc #0x5c0d"
         :: "r"((uint64_t)stage), "r"((uint64_t)value) : "x0", "x1", "memory");
 }
@@ -237,7 +244,7 @@ static inline void sunstone_crumb_el3_start(uint64_t epoch)
     __asm__ volatile("dsb sy" ::: "memory");
 }
 #else
-static inline void sunstone_crumb(uint32_t stage, uint32_t value) { (void)stage; (void)value; }
+static inline void sunstone_crumb(uint32_t stage, uint32_t value) { SUNSTONE_GPU_TIMING_CRUMB(stage,value); (void)stage; (void)value; }
 static inline void sunstone_crumb_el3(uint32_t stage, uint32_t value) { (void)stage; (void)value; }
 static inline void sunstone_crumb_el3_start(uint64_t epoch) { (void)epoch; }
 static inline void sunstone_watchdog_restart(void) {}

@@ -9,6 +9,10 @@ option(SUNSTONE_A733_OS_HEADSET "OS Bluetooth headset capture service" OFF)
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
 option(SUNSTONE_A733_OS_NPU "Integrated OS with a task-bound NPU catalogue service" OFF)
 option(SUNSTONE_A733_OS_GPU "OS GPU compute queue" OFF)
+option(SUNSTONE_GPU_TIMING "Capture optional GPU job timing records" OFF)
+if(SUNSTONE_GPU_TIMING AND NOT SUNSTONE_A733_OS_GPU)
+  message(FATAL_ERROR "SUNSTONE_GPU_TIMING requires SUNSTONE_A733_OS_GPU")
+endif()
 option(SUNSTONE_A733_OS_GPU_RECOVERY_TEST
   "Withhold one completion until the ordinary job deadline in a qualification image" OFF)
 set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
@@ -286,6 +290,10 @@ if(SUNSTONE_A733_OS_GPU)
   else()
     set(os_recognition_core 2)
   endif()
+  if(SUNSTONE_GPU_TIMING)
+    list(APPEND os_added apps/os/gpu-timing.c)
+    list(APPEND os_external_inputs "${os_root}/include/gpu_queue_timing.h")
+  endif()
   # The GPU runtime: the service, compute queue and the A733 platform,
   # backend and firmware memory, as the accelerator image composes them. The
   # service's compute, render and free-list objects come with it.
@@ -473,3 +481,10 @@ else()
   set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_LINK_SCRIPT "${storage_build}/link.ld")
 endif()
 set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_DEVICE_OBJECTS "${os_service_targets}")
+
+if(SUNSTONE_GPU_TIMING)
+  target_compile_definitions(sunstone-a733-os-core PUBLIC SUNSTONE_GPU_TIMING=1)
+  foreach(symbol gpu_queue_submit gpu_queue_wait pvr_cccb_begin pvr_cccb_poll pvr_ccb_submit aarch64_device_cache xQueueReceive)
+    target_link_options(sunstone-a733-os-core INTERFACE "-Wl,--wrap=${symbol}")
+  endforeach()
+endif()

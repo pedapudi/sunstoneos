@@ -1,3 +1,6 @@
+#ifdef SUNSTONE_GPU_TIMING
+#include "gpu_queue_timing.h"
+#endif
 /* SPDX-License-Identifier: MIT
  * Identity decoding and register facts follow pvr_device.c, pvr_fw_startstop.c,
  * pvr_fw_mips.c and pvr_rogue_cr_defs.h.
@@ -302,13 +305,48 @@ static int control_write(void *context, uint32_t off, uint32_t value)
     if (off != 0x8b0 || value != 1) return fail(b, A733_GPU_BACKEND_ACCESS);
     return raw_write(b, off, 4, value);
 }
+#ifdef SUNSTONE_GPU_TIMING
+static struct a733_gpu_backend *timing_backend;
+void a733_gpu_backend_timing_sample(unsigned position)
+{
+    struct a733_gpu_backend *b=timing_backend;
+    /* COMPLETE also covers refused jobs and recovery faults. Diagnostics
+     * must never wake a stopped device or turn a missing sample into a fault. */
+    if(!b || !b->initialized || !b->service || !b->power || !b->memory ||
+       !gpu_queue_timing_active() || (position<2 && !gpu_queue_timing_kicking()) ||
+       b->phase!=A733_GPU_BACKEND_ACTIVE || b->power->phase!=A733_GPU_PLATFORM_ON ||
+       !b->power->token || !b->power->delegated || b->memory->phase!=A733_GPU_MEMORY_PUBLISHED ||
+       b->service->phase!=PVR_GPU_SERVICE_READY || b->service->queue.phase!=PVR_CCB_ACTIVE ||
+       b->recovering || atomic_load_explicit(&b->error,memory_order_acquire) ||
+       (b->external.revoked && atomic_load_explicit(b->external.revoked,memory_order_acquire)) ||
+       (b->external.live && b->external.live(b->external.context)!=1))return;
+    uint64_t begin,end,cr;
+    __asm__ volatile("isb; mrs %0, cntpct_el0":"=r"(begin)::"memory");
+    if(!raw_read(b,0x160,8,&cr))return;
+    if((cr^(cr<<32))&(UINT64_C(1)<<63)) {
+        if(!raw_read(b,0x160,8,&cr) || ((cr^(cr<<32))&(UINT64_C(1)<<63)))return;
+    }
+    __asm__ volatile("isb; mrs %0, cntpct_el0":"=r"(end)::"memory");
+    gpu_queue_timing_cr(position,cr&UINT64_C(0xffffffffffff),begin,end);
+}
+#endif
 static int kick(void *context, uint32_t off, uint32_t value)
 {
     struct a733_gpu_backend *b = context;
     if (!control_live(b)) return 0;
     if (off != 0xb00 || value != 0 || b->memory->phase != A733_GPU_MEMORY_PUBLISHED)
         return fail(b, A733_GPU_BACKEND_ACCESS);
-    return raw_write(b, off, 4, value);
+#ifdef SUNSTONE_GPU_TIMING
+    timing_backend=b;
+    a733_gpu_backend_timing_sample(0);
+    gpu_queue_timing_stamp(GPU_TIMING_KICK_BEGIN);
+#endif
+    int result=raw_write(b, off, 4, value);
+#ifdef SUNSTONE_GPU_TIMING
+    gpu_queue_timing_stamp(GPU_TIMING_KICK_END);
+    a733_gpu_backend_timing_sample(1);
+#endif
+    return result;
 }
 static int memory_result(struct a733_gpu_backend *b, int result)
 { return result || fail(b, A733_GPU_BACKEND_MEMORY); }
