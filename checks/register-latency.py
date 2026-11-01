@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Check deferred register effects and reproduce premature CPU PLL verification.
+"""Exercise fixed CPU transitions and regress stale readback and N-stage timing.
 
-The CPU driver belongs to another stream. Two copies in the output directory
-isolate its known faulty verification order and the corresponding waited order.
-Both execute the real transition fixture. The source driver is never modified.
-This regression passes only when the old order fails while UPDATE is pending
-and the waited order completes repeated raises and lowers at three latencies.
+Temporary driver mutations retain the full merged sampling/deadline logic.
+The source driver is unchanged. Each mutant must fail at its originating
+observation, while the fixed driver repeatedly raises and lowers the clock.
 """
 import argparse
 import hashlib
@@ -45,32 +43,31 @@ def main():
 
     path = ROOT / 'drivers/clock/a733_cpu_clock.c'
     source = path.read_text()
-    prefix = '    case S_UPDATE:\n    case S_LOCK: {\n        uint32_t pll;\n'
-    begin = source.index(prefix) + len(prefix)
-    end = source.index('        if(c->state==S_UPDATE ?', begin)
-    old_check = ('        if(!rd(c,pll_word(c->cluster),&pll) || '
-                 '((pll>>8)&255)!=c->n)return fault(c);\n')
-    waited_check = ('        if(!rd(c,pll_word(c->cluster),&pll))return fault(c);\n'
-                    '        /* UPDATE clear makes the multiplier readback valid. */\n'
-                    '        if(c->state==S_UPDATE && (pll&UPDATE))\n'
-                    '            return c->last_now<c->timer ? A733_CPU_CLOCK_PENDING : fault(c);\n'
-                    '        if(((pll>>8)&255)!=c->n)return fault(c);\n')
-    observed = source[begin:end]
-    assert observed in (old_check, waited_check), 'review changed CPU verification sequence'
+    mismatch = ('        if(((pll>>8)&255)!=c->n){\n'
+                '            a733_cpu_clock_pll_mismatch_note(c,__LINE__,SUNSTONE_CRUMB_HERE(),pll);\n'
+                '            return fault(c);\n'
+                '        }\n')
+    assert source.count(mismatch) == 1, 'review changed CPU mismatch sequence'
+    wait = source.index('        /* N is manually updated:')
+    assert wait < source.index(mismatch)
+    premature = source[:wait] + mismatch + source[wait:].replace(mismatch, '', 1)
+    stage = '!put(c,pll_word(c->cluster),pll) || !settle(c,SETTLE_US) ||'
+    assert source.count(stage) == 1, 'review changed CPU N-stage sequence'
+    no_stage_delay = source.replace(stage, '!put(c,pll_word(c->cluster),pll) ||', 1)
     results = {}
     inputs = [path, ROOT / 'checks/register_latency.h', ROOT / 'checks/register_latency.py',
               ROOT / 'checks/cpu-clock-model.c', ROOT / 'checks/cpu-update-latency.c',
               ROOT / 'checks/a733-pmic.c', ROOT / 'checks/register-latency.py',
               *(ROOT / p for p in UNITS)]
-    for name, check in [('premature', old_check), ('waited', waited_check)]:
+    for name, variant in [('fixed', source), ('premature', premature), ('no-stage-delay', no_stage_delay)]:
         driver = out / (name + '.c')
-        driver.write_text(source[:begin] + check + source[end:])
+        driver.write_text(variant)
         exe = out / name
         command = [str(CLANG), '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                    '-Iinclude', *SANITIZE, '-Wl,--wrap=a733_rail_floor',
                    'checks/cpu-update-latency.c', str(driver), *UNITS, '-o', str(exe)]
-        if name == 'premature':
-            command.insert(1, '-DEXPECT_PREMATURE_VERIFY=1')
+        if name != 'fixed':
+            command.insert(1, '-D' + ('EXPECT_PREMATURE_VERIFY' if name == 'premature' else 'EXPECT_STAGE_FAILURE') + '=1')
         for phase, argv in [('build', command), ('run', [str(exe)])]:
             result = subprocess.run(argv, cwd=ROOT, env=environment(), text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -78,15 +75,17 @@ def main():
             assert result.returncode == 0, (name, phase, result.stdout)
         if name == 'premature':
             assert result.stdout.count('origin=multiplier-before-update') == 3
+        if name == 'no-stage-delay':
+            assert result.stdout.count('origin=update-captured-unstaged-n') == 3
         results[name] = result.stdout
     (out / 'results.json').write_text(json.dumps({
         'status': 'PASS', 'seconds': round(time.monotonic() - start, 3),
-        'source_has_known_bug': observed == old_check,
+        'source_driver': 'fixed verification and vendor N-stage interval',
         'inputs': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
                    for p in inputs}, 'cases': results,
-        'limits': 'Host models only; temporary driver copies isolate verification order.'
+        'limits': 'Host models only; temporary mutations isolate verification order and the vendor N-stage interval. Native posted-write completion is checked by os-cpu-clock-native.py.'
     }, indent=2) + '\n')
-    print('PASS: stale readback catches premature CPU verification; waited raises/lowers complete')
+    print('PASS: fixed repeated CPU transitions; stale-readback and N-stage-delay mutations caught')
 
 
 if __name__ == '__main__':

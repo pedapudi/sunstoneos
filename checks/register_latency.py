@@ -23,3 +23,30 @@ class RegisterLatency:
             self.pending = False
             return (visible & ~self.mask) | (self.value & self.mask)
         return visible
+
+
+class PostedWrites:
+    """CPU-side posted stores, completed explicitly by the fixture's DSB hook.
+
+    This is an allowed delayed-transaction scenario, not a peripheral timing
+    specification. DMB orders stores without completing them. complete() ends
+    the architectural transactions; endpoint effects still need RegisterLatency
+    or device-specific status. Device-nGnRE may acknowledge before application.
+    """
+
+    def __init__(self, words):
+        self.words = dict(words)
+        self.pending = []
+
+    def write(self, address, value):
+        self.pending.append((address, value))
+
+    def read(self, address):
+        return self.words.get(address, 0)
+
+    def complete(self):
+        completed = self.pending
+        self.pending = []
+        for address, value in completed:
+            self.words[address] = value
+        return completed

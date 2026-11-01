@@ -10,7 +10,7 @@ int main(void)
     static const unsigned delays[]={103,257,1003};
     for(unsigned i=0;i<sizeof(delays)/sizeof(*delays);++i) {
         setup(0x00000100,1,30,30,30,&both);
-        cm.update_us=delays[i];cm.lock_us=delays[i]+30;
+        cm.update_us=delays[i];cm.lock_us=delays[i]+30;cm.stage_us=20;
         assert(heat(50000)==A733_THERMAL_NORMAL);
         for(unsigned pass=0;pass<2;++pass) {
             static const unsigned rates[]={1196,416};
@@ -30,18 +30,31 @@ int main(void)
                     (unsigned long long)pm.now,(unsigned long long)cm.update[cpu.cluster].start,
                     (unsigned long long)cm.update[cpu.cluster].delay);
                 break;
+#elif defined(EXPECT_STAGE_FAILURE)
+                /* UPDATE acknowledges the request but captured the old N:
+                 * the missing vendor interval precedes the completion wait. */
+                uint32_t observed=*word(PLL(cpu.cluster));
+                assert(status==A733_CPU_CLOCK_RETAINED && cpu.failed);
+                assert(!cm.update[cpu.cluster].pending && !(observed&(1u<<26)));
+                assert(((observed>>8)&255)!=cpu.n && cm.captured_n[cpu.cluster]!=cm.staged_n[cpu.cluster]);
+                printf("origin=update-captured-unstaged-n domain=%u observed=%08x expected_n=%u "
+                    "stage_ns=%llu now_us=%llu required_us=%u\n",cpu.cluster,observed,cpu.n,
+                    (unsigned long long)cm.stage_at[cpu.cluster],(unsigned long long)pm.now,cm.stage_us);
+                break;
 #else
                 assert(status==A733_CPU_CLOCK_COMPLETE && !cpu.failed);
                 assert(cpu.applied_mhz[A733_CPU_LITTLE]==rates[j] && released());
 #endif
             }
-#ifdef EXPECT_PREMATURE_VERIFY
+#if defined(EXPECT_PREMATURE_VERIFY) || defined(EXPECT_STAGE_FAILURE)
             break;
 #endif
         }
     }
 #ifdef EXPECT_PREMATURE_VERIFY
     puts("CPU UPDATE: premature verification reproduced at three latencies");
+#elif defined(EXPECT_STAGE_FAILURE)
+    puts("CPU UPDATE: missing N-stage interval reproduced at three latencies");
 #else
     puts("CPU UPDATE: three latencies, repeated raise/lower transitions");
 #endif
