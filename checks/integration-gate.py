@@ -3,6 +3,7 @@
 
 The cases cover selection, failure handling, evidence preservation,
 per-checkout build directories and the dirty-tree identity."""
+import argparse
 import hashlib
 import json
 import os
@@ -16,13 +17,12 @@ if not __debug__:
     raise SystemExit('checks require assertions')
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / 'tools/integration-gate.py'
+OUTPUT = None
 
 
 class GateTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.sandbox = Path(self.temp.name)
+        self.sandbox = Path(tempfile.mkdtemp(prefix='gate-', dir=OUTPUT))
         self.calls = self.sandbox / 'calls.jsonl'
         self.env = dict(os.environ, GATE_TEST_CALLS=str(self.calls), PYTHONDONTWRITEBYTECODE='1')
         self.env.pop('EXAMPLE_DIR', None)
@@ -57,6 +57,22 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         record = source / 'apps/example/source.json'
         record.parent.mkdir(parents=True)
         record.write_text('{"application_directory": "sunstoneos"}\n')
+        selector = source / 'checks/affected.py'
+        selector.parent.mkdir()
+        selector.write_text('''from types import SimpleNamespace
+indexer = SimpleNamespace(generate=lambda: {
+    'focused.py': {'pure_host': True, 'required_arguments': ['--output']},
+    'progress.py': {'pure_host': True, 'required_arguments': []},
+    'image.py': {'pure_host': False, 'library': False, 'required_arguments': ['--image']}})
+def needs(entry):
+    return ['--image']
+def plan(value=None, changed=None):
+    checks = [{'check': 'focused.py', 'status': 'runnable', 'needs': [], 'output': True},
+              {'check': 'progress.py', 'status': 'runnable', 'needs': [], 'output': False}]
+    if changed == ['pending']:
+        checks.append({'check': 'image.py', 'status': 'pending', 'needs': ['--image'], 'output': False})
+    return {'baseline': 'sup', 'changed': changed, 'checks': checks}
+''')
         git = ['git', '-c', 'user.name=gate', '-c', 'user.email=gate@example.invalid']
         for command in (['init', '-q'], ['add', '.'], ['commit', '-q', '-m', 'Gate test']):
             subprocess.run(git + command, cwd=source, check=True, capture_output=True)
@@ -207,6 +223,56 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertIn('-DEXAMPLE_DIR=', calls[0])
         self.assertIn('-DSUNSTONE_APPLICATION=', calls[0])
         self.assertEqual(calls[0][2], str(self.sandbox / 'build' / ('gate-os-resaud-' + self.tree(self.source))))
+
+    def test_affected_runs_one_baseline_and_deduplicates_core_checks(self):
+        result = self.run_gate('--affected', 'HEAD~1..HEAD', '--check', 'progress')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.records()
+        self.assertEqual(sum(call[0] == 'cfg.sh' for call in calls), 1)
+        self.assertIn('-DSUNSTONE_A733_OS=ON', calls[0])
+        runs = [call for call in calls if call[0] == 'python']
+        self.assertEqual([call[1] for call in runs], ['checks/progress.py', 'checks/focused.py'])
+        self.assertIn('--output', runs[1])
+        self.assertTrue((self.sandbox / 'build/gate-case/affected.json').is_file())
+
+    def test_pending_affected_checks_are_reported_and_incomplete(self):
+        result = self.run_gate('--changed', 'pending')
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('PENDING checks/image.py: --image', result.stdout)
+        self.assertIn('INCOMPLETE affected coverage', result.stdout)
+        self.assertFalse(any('checks/image.py' in call for call in self.records()))
+
+    def test_full_and_affected_are_mutually_exclusive(self):
+        result = self.run_gate('--full', '--affected', 'HEAD~1..HEAD')
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.records(), [])
+
+    def test_external_name_collision_keeps_the_indexed_os_check(self):
+        checker = self.enable_example()
+        record = self.example / 'sunstoneos/gate.json'
+        app = json.loads(record.read_text())
+        app['checks']['focused'] = app['checks'].pop('example-smp')
+        app['checks']['focused'][1][-1] = '{evidence}/focused'
+        record.write_text(json.dumps(app))
+        catalogue = self.sandbox / 'build/npu-board/session-artifacts.json'
+        catalogue.parent.mkdir(parents=True, exist_ok=True)
+        catalogue.write_text('{}\n')
+        for label, selection in (('affected', ['--affected', 'HEAD~1..HEAD', '--check', 'focused']),
+                                 ('full', ['--full'])):
+            with self.subTest(selection=label):
+                before = len(self.records())
+                result = self.run_gate(*selection, label=label)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                runs = [call for call in self.records()[before:] if call[0] == 'python']
+                self.assertEqual(sum('checks/focused.py' in call for call in runs), 1)
+                self.assertEqual(sum(str(checker) in call for call in runs), 1)
+                output = self.sandbox / 'build' / ('gate-' + label)
+                self.assertTrue((output / 'check-focused.log').is_file())
+                self.assertTrue((output / 'indexed-focused.log').is_file())
+                indexed = next(call for call in runs if 'checks/focused.py' in call)
+                external = next(call for call in runs if str(checker) in call)
+                self.assertEqual(indexed[-1], str(output / 'evidence/indexed/focused'))
+                self.assertEqual(external[-1], str(output / 'evidence/focused'))
 
     def test_npu_variant_names_the_cached_catalogue(self):
         refused = self.run_gate('--reason', 'OS NPU profile', '--variant', 'npu')
@@ -389,7 +455,9 @@ exec "$REAL" "$@"
         self.assertEqual(application[application.index('--target') + 1:],
                          ['sunstone-a733-os', 'smp-example-model', '-j', '12'])
         runs = [c for c in calls if c[0] == 'python']
-        self.assertEqual(len(runs), 8)
+        self.assertEqual(len(runs), 9)
+        self.assertEqual(sum('checks/focused.py' in call for call in runs), 1)
+        self.assertEqual(sum('checks/progress.py' in call for call in runs), 1)
         soak = next(c for c in runs if 'tools/check-smp.py' in c)
         self.assertEqual(soak[soak.index('--trials') + 1], '2')
 
@@ -421,4 +489,9 @@ exec "$REAL" "$@"
 
 
 if __name__ == '__main__':
-    unittest.main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, required=True)
+    options, remaining = parser.parse_known_args()
+    OUTPUT = options.output.resolve()
+    OUTPUT.mkdir(parents=True, exist_ok=False)
+    unittest.main(argv=['integration-gate.py', *remaining])

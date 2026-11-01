@@ -26,12 +26,14 @@ selection is not proof that no check covers a change.
 import argparse
 import ast
 import functools
+import io
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -57,7 +59,7 @@ NOT_PURE = {'radio-network.py': 'every case needs the optional --tcp, --kernel, 
 
 
 def checks():
-    return sorted(p for p in (ROOT / 'checks').glob('*.py') if p.name not in ('harness.py', 'check-index.py'))
+    return sorted(p for p in (ROOT / 'checks').glob('*.py') if p.name not in ('harness.py', 'check-index.py', 'affected.py'))
 
 
 def mentions():
@@ -153,15 +155,36 @@ def generate():
     for path in checks():
         try:
             index[path.name] = entry(path, documents)
+            inputs = covered(path)
+            index[path.name]['inputs'] = sorted(inputs)
+            index[path.name]['input_directories'] = sorted(p for p in inputs if (ROOT / p).is_dir())
         except (SyntaxError, UnicodeDecodeError, ValueError) as error:
             raise SystemExit(f'checks/{path.name}: cannot be classified: {error}')
     return index
 
 
+class Revision:
+    """Read a committed dependency graph without changing the checkout."""
+    def __init__(self, revision):
+        archive = subprocess.check_output(['git', 'archive', '--format=tar', revision], cwd=ROOT)
+        self.files = {}
+        self.directories = set()
+        with tarfile.open(fileobj=io.BytesIO(archive)) as stream:
+            for member in stream:
+                path = ROOT / member.name.rstrip('/')
+                if member.isdir():
+                    self.directories.add(path)
+                elif member.isfile():
+                    self.files[path] = stream.extractfile(member).read()
+
+    def text(self, path):
+        return self.files[path].decode(errors='replace')
+
+
 @functools.lru_cache(maxsize=None)
-def named(path, includes_only):
+def named(path, includes_only, revision=None):
     """Repository files and subdirectories one file names; only #include targets for non-check sources."""
-    text = path.read_text(errors='replace')
+    text = revision.text(path) if revision else path.read_text(errors='replace')
     tokens = set(INCLUDE.findall(text)) if includes_only else set(PATH_TOKEN.findall(text)) | set(INCLUDE.findall(text))
     found = set()
     for token in tokens:
@@ -169,17 +192,32 @@ def named(path, includes_only):
             continue
         for base in (ROOT, path.parent, ROOT / 'include'):
             candidate = Path(os.path.normpath(base / token))
-            if candidate.is_relative_to(ROOT) and candidate.parent != ROOT.parent and candidate.exists():
+            exists = candidate in revision.files or candidate in revision.directories if revision else candidate.exists()
+            directory = candidate in revision.directories if revision else candidate.is_dir()
+            if candidate.is_relative_to(ROOT) and candidate.parent != ROOT.parent and exists:
                 # A top-level directory such as drivers/ or checks/ would select everything under it.
-                if not (candidate.is_dir() and candidate.parent == ROOT) and candidate != ROOT:
+                if not (directory and candidate.parent == ROOT) and candidate != ROOT:
                     found.add(candidate)
                 break
     if not includes_only and re.search(r'^import harness$', text, re.M):
         found.add(ROOT / 'checks/harness.py')
+    if not includes_only and path.suffix == '.py':
+        # Literal declarations cover inputs assembled dynamically by a check.
+        tree = ast.parse(text)
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'CHECK_INPUTS' for t in node.targets):
+                values = ast.literal_eval(node.value)
+                if not isinstance(values, (list, tuple)) or not all(isinstance(v, str) for v in values):
+                    raise ValueError('CHECK_INPUTS must be a literal list or tuple of repository paths')
+                for value in values:
+                    candidate = Path(os.path.normpath(ROOT / value))
+                    if not candidate.is_relative_to(ROOT):
+                        raise ValueError('CHECK_INPUTS must stay inside the repository')
+                    found.add(candidate)
     return frozenset(found)
 
 
-def covered(path):
+def covered(path, revision=None):
     """Paths named by a check, followed through the checks/ files it names and their #include closure."""
     seen, stack = set(), [path]
     while stack:
@@ -187,8 +225,9 @@ def covered(path):
         if current in seen:
             continue
         seen.add(current)
-        if current.is_file() and current.suffix in ('.py', '.c', '.cc', '.h', '.S', '.inc'):
-            stack.extend(named(current, current.parent != ROOT / 'checks'))
+        exists = current in revision.files if revision else current.is_file()
+        if exists and current.suffix in ('.py', '.c', '.cc', '.h', '.S', '.inc'):
+            stack.extend(named(current, current.parent != ROOT / 'checks', revision))
     return {p.relative_to(ROOT).as_posix() for p in seen}
 
 
@@ -196,8 +235,8 @@ def select(index, changed):
     changed = [Path(os.path.normpath(ROOT / p)).relative_to(ROOT).as_posix() for p in changed]
     chosen = []
     for name in sorted(index):
-        names = covered(ROOT / 'checks' / name)
-        dirs = {n for n in names if (ROOT / n).is_dir()}
+        names = set(index[name]['inputs'])
+        dirs = set(index[name]['input_directories'])
         if any(c in names or any(c.startswith(d + '/') for d in dirs) or any(n.startswith(c + '/') for n in names)
                for c in changed):
             chosen.append(name)
