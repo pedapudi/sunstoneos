@@ -57,7 +57,10 @@ def main():
     struct.pack_into('<I', prefix, 400, 2)
     # Board/service validation is outside this framing model. The extent bytes
     # are opaque and retain their native record lengths.
-    services = {host.THERMAL: bytes(host.SERVICE_BYTES[host.THERMAL])}
+    thermal = bytearray(host.SERVICE_BYTES[host.THERMAL])
+    struct.pack_into('<3Q', thermal, 0, host.SERVICE_MAGIC[host.THERMAL], 1,
+                     host.PREFIX_BYTES + len(thermal))
+    services = {host.THERMAL: bytes(thermal)}
     wire = host.session_bytes(prefix, services, manifest, info['sha256'], 0, host.BIND_SID, [data])
     decoded = host.session_decode(wire, manifest, info['sha256'])
     assert decoded['extents'][host.THERMAL] == services[host.THERMAL]
@@ -91,6 +94,9 @@ def main():
     altered = bytearray(wire)
     struct.pack_into('<I', altered, 656 + 8 + 216, host.THERMAL)
     bad('duplicate-extent', altered, 'Duplicate')
+    altered = bytearray(wire)
+    struct.pack_into('<Q', altered, decoded['offsets'][host.THERMAL] + 16, 999)
+    bad('service-record-size', altered, 'service record header')
     altered = bytearray(wire)
     struct.pack_into('<Q', altered, decoded['offsets'][host.INPUTS], manifest['regions'][0]['bytes'] + 1)
     bad('oversized-input-fact', altered, 'Input length')

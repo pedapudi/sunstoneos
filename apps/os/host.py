@@ -30,6 +30,8 @@ EXTENT = struct.Struct('<II')
 INPUT = struct.Struct('<Q32s')
 THERMAL, AUDIO, NPU, CPU_GRANT, INPUTS = 1, 2, 3, 4, 16
 SERVICE_BYTES = {THERMAL: 216, AUDIO: 184, NPU: 272, CPU_GRANT: 96}
+SERVICE_MAGIC = {THERMAL: 0x415337334f534131, AUDIO: 0x415337334f415531,
+                 NPU: 0x415337334f4e5031, CPU_GRANT: 0x4153373343505531}
 RESULT_MAGIC, RESULT_VERSION, RESULT_FINISHED = 0x31544c5553455241, 1, 1
 RESULT = struct.Struct('<7Q')
 
@@ -97,6 +99,12 @@ def session_decode(raw, manifest=None, manifest_sha256=None):
     for kind, size in SERVICE_BYTES.items():
         require(kind not in extents or len(extents[kind]) == size, 'Invalid service extent size.')
     require(THERMAL in extents, 'Missing thermal service extent.')
+    legacy_bytes = PREFIX_BYTES + sum(SERVICE_BYTES[kind] for kind in extents if kind in SERVICE_BYTES)
+    for kind in SERVICE_BYTES:
+        if kind in extents:
+            size = legacy_bytes if kind == THERMAL else SERVICE_BYTES[kind]
+            require(struct.unpack_from('<3Q', extents[kind]) == (SERVICE_MAGIC[kind], 1, size),
+                    'Invalid service record header.')
     if manifest_sha256 is not None:
         require(digest.hex() == manifest_sha256, 'Session manifest digest differs from image.')
     if manifest is not None or manifest_sha256 is not None:
