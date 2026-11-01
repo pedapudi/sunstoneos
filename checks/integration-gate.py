@@ -112,7 +112,8 @@ def plan(value=None, changed=None):
     def test_reason_is_optional_metadata(self):
         result = self.run_gate('--check', 'progress')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(len(self.records()), 1)
+        self.assertEqual(self.records(), [['python', 'checks/progress.py', '--output',
+                                         str(self.sandbox / 'build/gate-case/evidence/progress')]])
 
     def test_source_check_needs_no_build_and_deduplicates(self):
         result = self.run_gate('--reason', 'PMIC source ownership', '--check', 'pmic-tree', '--check', 'pmic-tree')

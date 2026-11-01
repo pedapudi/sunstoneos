@@ -350,7 +350,7 @@ def main(argv=None):
         'kernel': ['tools/check-kernel.py', build / 'kernel-check.elf', '--qemu', qemu, '--evidence', evidence / 'kernel'],
         'soak8': ['tools/check-smp.py', build / 'smp8-soak-model.elf', '--case', 'soak8', '--trials', str(args.trials), '--qemu', qemu, '--evidence', evidence / 'soak8'],
         'shared-helpers': ['checks/shared-helpers.py', '--output', evidence / 'shared-helpers'],
-        'progress': ['checks/progress.py'],
+        'progress': ['checks/progress.py', '--output', evidence / 'progress'],
         'check-index': ['checks/check-index.py', '--verify'],
         'pmic-tree': ['checks/pmic-tree.py'],
         'power-domains-tree': ['checks/power-domains-tree.py'],
