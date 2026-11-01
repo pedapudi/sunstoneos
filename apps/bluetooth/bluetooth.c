@@ -58,13 +58,15 @@ int bluetooth_profile_valid(const struct bluetooth_profile *p,const uint8_t dige
 #endif
     }
     if(p->version==3){
-#ifndef SUNSTONE_BLUETOOTH_RECOGNITION
-        return 0;
-#else
+#ifdef SUNSTONE_BLUETOOTH_RECOGNITION
         for(unsigned i=0;i<2;++i)if(!p->recognition.bytes[i]||p->recognition.bytes[i]>BLUETOOTH_MODEL_SLOT||
             p->recognition.bytes[i]!=bluetooth_model_bytes[i]||
             memcmp(p->recognition.sha256[i],bluetooth_model_sha256[i],32))return 0;
+#elif !defined(SUNSTONE_BLUETOOTH_CAPTURE_PROFILE)
+        return 0;
 #endif
+        /* Capture authenticates the complete profile below. The application
+         * manifest owns the model identities in its compatibility tail. */
     }
     uint8_t actual[32];storage_digest_bytes(p,p->bytes,actual);if(memcmp(actual,digest,32))return 0;
     for(unsigned i=0;i<4;++i){
