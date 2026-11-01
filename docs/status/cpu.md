@@ -62,3 +62,30 @@ The [startup](../cpu-start.md), [coherence](../cpu-coherence.md),
 records define source and test scope. PMU empty/fixed regions, table-walk counts
 and WFI counters have a single-core physical result in
 `board-session-20261023/port-3-3/set5-bb4-run/`; broader event qualification remains.
+
+## Returning probe entry
+
+The shared returning-probe runtime normalizes acknowledged secondary OFF policies
+to static OFF and disables each secondary's GIC wake. PWSR completion precedes
+PWPR verification, under one 100 ms deadline and a finite sample cap. The inherited
+policy appears in an RTC breadcrumb. CPU0, cluster, shared domains, rails and
+clocks receive no normalization writes. Static OFF remains held through ROM
+return; later multicore consumers require the reviewed held-policy release path.
+The [entry design](../designs/probe-entry-normalization.md) defines that contract.
+
+Three independent reviewers approve the source and linked memory-test and audio
+images. Forty-four distinct shared-runtime cases, sixteen focused audio cases,
+the memory-test recovery checks and the ISP prefetch sanitizer case pass.
+The full integration gate passes all central targets, twelve OS variants,
+the core checks and 88 indexed host checks. The hello and mimus baseline images
+also build. The check index verifies 805 checks, including 93 pure-host checks;
+693 checks requiring external inputs remain pending in the full gate.
+
+Raw evidence is under `~/.cache/sunstoneos/build/probe-shared-1101/`: reviews in
+`reviews/`, shared cases in `probe-check-5/` and `probe-check-wake/`, audio cases
+in `audio-focused/`, and the gate in `gates/gate-shared-probe-full/`.
+The audio control passes offline admission. No board entry is submitted for this
+integration because the brief assigns no port. The required physical sequence
+is audio control, camera ISP control and audio control on one assigned port
+without a replug. Stop at a later camera reset refusal; that reset owner and
+peripheral gate normalization remain with the camera stream.
