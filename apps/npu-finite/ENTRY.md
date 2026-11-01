@@ -497,3 +497,42 @@ host cases reject profile relabeling, extra or absent completions, inference
 claims and incorrect receipts or stages. These checks establish software
 composition; physical startup, IRQ delivery and retirement remain unqualified
 for this image.
+
+### Return after one inference job
+
+`build.py --single-inference --evidence DIRECTORY` produces
+`npu-single-inference-return-v1`. It runs the startup sequence above, then
+submits one job of the network linked into the image, waits for its completion
+interrupt, copies the output and reaps the job before the ordinary CLOSE. The
+default build links the `conv12` catalogue entry: one 3×3 convolution from a
+1×3×12×12 UINT8 input to a 1×4×10×10 UINT8 output. The client compares the
+copied output with the linked reference. Status 0 means the 400 bytes match;
+status 1 is a normal return with a different output. Both statuses publish the
+receipt and return to ROM, and the host reports the copied bytes.
+
+The startup-only and single-inference profiles share one client source. Each has
+its own receipt magic, monitor detail and immutable marker, so neither result
+can be relabelled as the other. The final gate requires two interrupt
+completions (bootstrap and job), one recorded job ticket and the same CLOSE,
+local stop and provider parking as startup-only. The ordered log is:
+
+```text
+NPU_STAGE=WAIT_STARTUP, OPEN, BOOTSTRAP_READY, SUBMIT job=0x…01, REAPED,
+CLOSE, WAIT_LOCAL_STOP; NPU_IRQ_COMPLETIONS=0x…02; NPU_IRQ_STOPPED=0x…01;
+NPU_STAGE=QUIESCENT; NPU_OUTPUT= (one byte per line);
+NPU_INFERENCE=MATCH or MISMATCH; inference_jobs=1
+```
+
+`apps/npu-first-inference/reference.py` computes the expected output on the
+host CPU in integer arithmetic from the network's generating formulas and the
+compiler's recorded quantization. Its `reference` operation checks that the
+image's linked input equals the regenerated quantized input and that the
+linked SDK simulator output equals the CPU result. Its `compare` operation takes
+the host session record or the returned log and reports byte agreement, the
+first differing element and the dequantized error against the float network.
+
+Each client stage calls `sunstone_crumb` from `crumb.h`. The call compiles to
+nothing until a progress-record implementation defines it; a retained client
+failure also records its reason. Use the same preparation and capture as
+startup-only, with this profile in the manifest. Status: software-checked and
+staged; no board run.

@@ -38,8 +38,9 @@ assert h.timing('NPU_STAGE=OPEN\n') is None
 def ref(path):return {'path':str(path.resolve()),'sha256':sha(path.read_bytes())}
 results=[]
 with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
- t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));thermal=bool(g.get('thermal'));restart=bool(g.get('restart'));startup=bool(g.get('startup_only'));execution=h.geometry_profile(g)
- completions=4 if restart else 1 if startup else 3
+ t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));thermal=bool(g.get('thermal'));restart=bool(g.get('restart'));startup=bool(g.get('startup_only'));infer=bool(g.get('single_inference'));execution=h.geometry_profile(g)
+ completions=4 if restart else 2 if infer else 1 if startup else 3
+ client_profile=h.STARTUP_CLIENT.get(execution)
  IRQ_RECEIPTS=f'NPU_IRQ_COMPLETIONS=0x{completions:016x}\nNPU_IRQ_STOPPED=0x0000000000000001\n'
  if restart:
   assert a.interrupt
@@ -187,7 +188,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  platform.write_bytes(saved_platform)
  if startup:
   assert a.interrupt and a.client_logs
-  for execution_label in (h.PROFILE,h.RESTART,h.CHECKPOINT,h.PROVIDER_CHECKPOINT):
+  for execution_label in (h.PROFILE,h.RESTART,h.CHECKPOINT,h.PROVIDER_CHECKPOINT,h.STARTUP if infer else h.INFERENCE):
    rejected('startup-cannot-use-'+execution_label,lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':execution_label}))
  if checkpoint:
   if g.get('checkpoint_irq'):
@@ -239,20 +240,28 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    if variant=='bad-MBUS-result':text=text.replace('NPU_MBUS=\n0x0000000084000000\n0x0000000000000000','NPU_MBUS=\n0x0000000084000000\n0x0000000000000001')
    if variant=='duplicate-MBUS':text+=text[text.index('NPU_MBUS='):]
   if startup:
-   text=(a.client_logs/'matched.log').read_text()
+   text=(a.client_logs/({'mismatch':'mismatch.log','unwritten-second':'unwritten.log','false-success':'mismatch.log'}.get(variant,'matched.log') if infer else 'matched.log')).read_text()
+   if variant=='infer-zero-jobs-log':text=text.replace('inference_jobs=1','inference_jobs=0')
+   if variant=='infer-one-IRQ':text=text.replace('NPU_IRQ_COMPLETIONS=0x0000000000000002','NPU_IRQ_COMPLETIONS=0x0000000000000001')
+   if variant=='infer-missing-submit':text=text.replace('NPU_STAGE=SUBMIT job=0x0000000000000001\n','')
+   if variant=='infer-missing-reap':text=text.replace('NPU_STAGE=REAPED\n','')
+   if variant=='infer-short-output':text=text.replace('NPU_OUTPUT=\n0x'+text.split('NPU_OUTPUT=\n0x',1)[1].split('\n',1)[0]+'\n','NPU_OUTPUT=\n',1)
+   if variant=='infer-match-claim':text=text.replace('NPU_INFERENCE=MATCH','NPU_INFERENCE=MISMATCH')
+   if variant=='infer-startup-log':text=(a.client_logs/'matched.log').read_text().split('NPU_STAGE=SUBMIT')[0]+'NPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\nNPU_IRQ_COMPLETIONS=0x0000000000000001\nNPU_IRQ_STOPPED=0x0000000000000001\nNPU_STAGE=QUIESCENT\nNPU_STARTUP=READY_CLOSED_STOPPED; inference_jobs=0\n'
    if variant=='startup-inference-log':text=text.replace('inference_jobs=0','inference_jobs=1')
    if variant=='startup-two-IRQs':text=text.replace('NPU_IRQ_COMPLETIONS=0x0000000000000001','NPU_IRQ_COMPLETIONS=0x0000000000000002')
    if variant=='startup-zero-IRQs':text=text.replace('NPU_IRQ_COMPLETIONS=0x0000000000000001','NPU_IRQ_COMPLETIONS=0x0000000000000000')
    if variant=='startup-missing-close':text=text.replace('NPU_STAGE=CLOSE\n','')
    if variant=='startup-restart-log':text=text.replace('NPU_STAGE=CLOSE\n','NPU_STAGE=RESTART_OPEN\n')
   if variant=='duplicate-log':text+=text
-  monitor=list(native_report);monitor[3:9]=[5,status,0x4e50554e if checkpoint else 0x4e505553 if startup else 0,11000000,1,12000000]
+  monitor=list(native_report);monitor[3:9]=[5,status,0x4e50554e if checkpoint else client_profile[1] if startup else 0,11000000,1,12000000]
   if variant=='old-generic-monitor-magic':monitor[0]=0x4153373343525331
   header=[0x534b4552,5,status,len(text),0,0,0,0,11500000,12000000]+[0]*6
-  receipt=[0x4e505543484b3031 if checkpoint else 0x4e50555448533031 if thermal else 0x4e50555354415231 if startup else 0x4e50555245543031,profile['epoch'],profile['generation'],profile['lease'],status,0x4e50554e if checkpoint else status+1,g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64,490000000,len(text)]
+  receipt=[0x4e505543484b3031 if checkpoint else 0x4e50555448533031 if thermal else client_profile[0] if startup else 0x4e50555245543031,profile['epoch'],profile['generation'],profile['lease'],status,0x4e50554e if checkpoint else status+1,g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64,490000000,len(text)]
   if thermal:receipt += [reason,jobs,12000000 if variant=='thermal-late-drain' else 130000000]
   if variant=='thermal-fault-reason':receipt[11]=4
   if variant=='ordinary-receipt':receipt[0]=0x4e50555245543031;receipt[5]=1;monitor[5]=0
+  if variant=='startup-receipt':receipt[0]=h.STARTUP_CLIENT[h.STARTUP][0];monitor[5]=h.STARTUP_CLIENT[h.STARTUP][1]
   if variant=='stale-generation':monitor[2]+=1
   if variant=='stale-lease':receipt[3]+=1
   if variant=='unclean-receipt':receipt[8]-=1
@@ -266,7 +275,8 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  variants=['nominal','old-generic-monitor-magic','mismatch','unwritten-second','unwritten-tail','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','wrong-ROM-entry']
  if g.get('stopped_capture'):variants+=['capture-metadata-invalid','capture-parent-short','capture-extent-transport-failure','capture-durability-failure','capture-output-differs']
  if checkpoint or thermal or startup:variants.append('ordinary-receipt')
- if startup:variants+=['startup-inference-log','startup-two-IRQs','startup-zero-IRQs','startup-missing-close','startup-restart-log']
+ if startup and not infer:variants+=['startup-inference-log','startup-two-IRQs','startup-zero-IRQs','startup-missing-close','startup-restart-log']
+ if infer:variants+=['startup-receipt','infer-zero-jobs-log','infer-one-IRQ','infer-missing-submit','infer-missing-reap','infer-short-output','infer-match-claim','infer-startup-log']
  if g.get('checkpoint_mbus'):variants+=['missing-MBUS','truncated-MBUS','bad-MBUS-result','duplicate-MBUS']
  if thermal:variants+=['thermal-zero','thermal-one','thermal-one-mismatch','thermal-late-drain','thermal-fault-reason']
  assert not set(a.case)-set(variants),'Unknown selected case'
@@ -346,10 +356,10 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   normal=variant in ('nominal','capture-output-differs') or variant in ('mismatch','unwritten-second','unwritten-tail') and not checkpoint or thermal and variant in ('thermal-zero','thermal-one','thermal-one-mismatch');assert (failure is None)==normal,(variant,failure)
   if normal:
    assert record['complete'] and record['dram_restored'] and record['ownership_release_permitted'] and not record['sram_restored']
-   assert result['functional_success']==(variant=='nominal' and not checkpoint and not startup) and result['controlled_negative']==(variant in ('mismatch','unwritten-second','unwritten-tail','thermal-one-mismatch','capture-output-differs'))
-   if not checkpoint and not startup:
+   assert result['functional_success']==(variant=='nominal' and not checkpoint and (infer or not startup)) and result['controlled_negative']==(variant in ('mismatch','unwritten-second','unwritten-tail','thermal-one-mismatch','capture-output-differs'))
+   if not checkpoint and (infer or not startup):
     size=len(bytes.fromhex(g['reference']));pattern=result['output_pattern']
-    assert not pattern['first_unwritten']
+    assert not pattern.get('first_unwritten')
     if variant=='unwritten-second':assert pattern['second_unwritten'] and pattern['second_pattern_ranges']==[[0,size]],pattern
     elif variant=='unwritten-tail':
      assert not pattern['second_unwritten'] and pattern['second_pattern_ranges'][-1]==[TAIL,size],pattern
@@ -404,22 +414,22 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    restart_record.write_bytes(saved_restart)
    rejected('restart-image-relabel-refused',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.PROFILE}))
   # Receipts in logs that the actual client produced (checks/npu-interrupt-client.py).
-  for variant in (('matched','missing-completion','missing-stop','wrong-completion','duplicate-completion') if startup else ('matched','mismatch','missing-completion','missing-stop','wrong-completion','duplicate-completion',*(('missing-restart-stage','reordered-restart-stage') if restart else ()))) if a.client_logs else ():
+  for variant in (('matched','missing-completion','missing-stop','wrong-completion','duplicate-completion') if startup and not infer else ('matched','mismatch','missing-completion','missing-stop','wrong-completion','duplicate-completion',*(('missing-restart-stage','reordered-restart-stage') if restart else ()))) if a.client_logs else ():
    text=(a.client_logs/('mismatch.log' if variant=='mismatch' else 'matched.log')).read_text();status=int(variant=='mismatch')
    if variant=='missing-completion':text=text.replace(f'NPU_IRQ_COMPLETIONS=0x{completions:016x}\n','')
    if variant=='missing-stop':text=text.replace('NPU_IRQ_STOPPED=0x0000000000000001\n','')
-   if variant=='wrong-completion':text=text.replace(f'NPU_IRQ_COMPLETIONS=0x{completions:016x}','NPU_IRQ_COMPLETIONS=0x0000000000000002')
+   if variant=='wrong-completion':text=text.replace(f'NPU_IRQ_COMPLETIONS=0x{completions:016x}',f'NPU_IRQ_COMPLETIONS=0x{completions+1:016x}')
    if variant=='missing-restart-stage':text=text.replace('NPU_STAGE=FIRST_CLOSE\n','')
    if variant=='reordered-restart-stage':text=text.replace('NPU_STAGE=FIRST_CLOSE\nNPU_STAGE=RESTART_OPEN\n','NPU_STAGE=RESTART_OPEN\nNPU_STAGE=FIRST_CLOSE\n')
    if variant=='duplicate-completion':text='NPU_IRQ_COMPLETIONS=0x0000000000000002\n'+text
-   monitor=list(native_report);monitor[3:9]=[5,status,0x4e505553 if startup else 0,11000000,1,12000000]
+   monitor=list(native_report);monitor[3:9]=[5,status,client_profile[1] if startup else 0,11000000,1,12000000]
    header=[0x534b4552,5,status,len(text),0,0,0,0,11500000,12000000]+[0]*6
-   receipt=[0x4e50555354415231 if startup else 0x4e50555245543031,profile['epoch'],profile['generation'],profile['lease'],status,status+1,g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64,490000000,len(text)]
+   receipt=[client_profile[0] if startup else 0x4e50555245543031,profile['epoch'],profile['generation'],profile['lease'],status,status+1,g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64,490000000,len(text)]
    plat=bytearray(16384);struct.pack_into('<16Q',plat,0,*header);plat[256:256+len(text)]=text.encode()
    frames=struct.pack('<16Q',*monitor),bytes(plat),struct.pack('<11Q',*receipt)
    if variant in ('matched','mismatch'):
     value=h.validate_reports(*frames,prepared)
-    assert value['functional_success']==(variant=='matched' and not startup) and value['interrupt_completions']==completions and value['interrupt_stopped']
+    assert value['functional_success']==(variant=='matched' and (infer or not startup)) and value['interrupt_completions']==completions and value['interrupt_stopped']
     if not startup:assert value['timing']['counters'] is not None,value['timing']
     if restart:assert value['normal_restart'] and 'startup_us' not in value['timing'] and 'initial_entry_to_restart_ready_us' in value['timing']
     results.append({'name':variant+'-producer-log-report','passed':True})

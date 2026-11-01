@@ -137,7 +137,7 @@ _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint6
 #endif
 #endif
 #ifdef SUNSTONE_NPU_STARTUP_ONLY
-    if(status)a733_smp_stop(6,operation);
+    if(status>NPU_STARTUP_MAX_STATUS)a733_smp_stop(6,operation);
 #endif
     if(kind!=1 || (esr>>26)!=0x17 || operation!=0x733 || status>
 #ifdef SUNSTONE_NPU_FINITE_THERMAL

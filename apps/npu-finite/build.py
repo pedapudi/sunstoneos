@@ -17,6 +17,7 @@ p.add_argument('--entry-irq-checkpoint',action='store_true',help='provider-free 
 p.add_argument('--thermal',action='store_true',help='poll THS before and during finite execution')
 p.add_argument('--interrupt',action='store_true',help='build the interrupt-driven variant')
 p.add_argument('--startup-only',action='store_true',help='interrupt bootstrap OPEN/READY/CLOSE with no inference')
+p.add_argument('--single-inference',action='store_true',help='interrupt bootstrap OPEN/READY, one job with copied output and REAP, then CLOSE')
 p.add_argument('--restart',action='store_true',help='IRQ returning diagnostic: local stop/restart between two baseline jobs')
 p.add_argument('--rate-852',action='store_true',help='PLL_NPU at 852 MHz, admitted only for a speed bin that lists 800 mV for it')
 p.add_argument('--rate-492',action='store_true',help='the optional 492 MHz mode; the default is the vendor operating point for the speed bin')
@@ -24,8 +25,9 @@ p.add_argument('--shufflenet',action='store_true',help='the published ShuffleNet
 p.add_argument('--sdk-reference',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-complete-graph-proposal-20261019/sdk-reference',
  help='directory with network_binary.nb, published-input.dat and output0_2_1.dat')
 a=p.parse_args()
+if a.single_inference:a.startup_only=True
 if a.startup_only:
- if a.restart or a.shufflenet or a.thermal or a.entry_checkpoint or a.entry_irq_checkpoint or a.entry_provider_checkpoint:p.error("Startup-only requires the baseline interrupt profile")
+ if a.restart or a.shufflenet or a.thermal or a.entry_checkpoint or a.entry_irq_checkpoint or a.entry_provider_checkpoint:p.error("Startup-only and single inference require the baseline interrupt profile")
  a.interrupt=True
 if a.entry_provider_checkpoint:a.entry_irq_checkpoint=True
 if a.entry_irq_checkpoint:a.entry_checkpoint=True
@@ -66,6 +68,7 @@ def compile_like(suffix,source,name):
  c += ['-MD','-MF',str(dest)+'.d']
  if a.entry_checkpoint:c += ['-DSUNSTONE_NPU_ENTRY_CHECKPOINT=1']
  if a.startup_only:c += ['-DSUNSTONE_NPU_STARTUP_ONLY=1']
+ if a.single_inference:c += ['-DSUNSTONE_NPU_SINGLE_INFERENCE=1']
  if a.entry_provider_checkpoint:c += ['-DSUNSTONE_NPU_ENTRY_PROVIDER_CHECKPOINT=1','-DSUNSTONE_NPU_INTERRUPT=1']
  if a.entry_irq_checkpoint:
   c += ['-DSUNSTONE_NPU_ENTRY_IRQ_CHECKPOINT=1']
@@ -97,7 +100,8 @@ if a.interrupt:
 if a.restart:identity['profile']='npu-interrupt-restart-return-v1'
 if a.startup_only:
  identity['profile']='npu-startup-return-v1'
- identity['startup_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/startup.c',root/'apps/npu-finite/startup.h')}
+ identity['startup_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/startup.c',root/'apps/npu-finite/startup.h',root/'apps/npu-finite/crumb.h')}
+if a.single_inference:identity['profile']='npu-single-inference-return-v1'
 if a.thermal:
  identity['profile']='npu-finite-thermal-return-v1'
  identity['thermal_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/thermal.c',root/'apps/npu-finite/thermal.h')}

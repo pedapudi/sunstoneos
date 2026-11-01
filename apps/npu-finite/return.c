@@ -21,7 +21,7 @@ _Noreturn void platform_exit(unsigned status)
 #else
     if(
 #ifdef SUNSTONE_NPU_STARTUP_ONLY
-       status || !npu_startup_return_ready() ||
+       status>NPU_STARTUP_MAX_STATUS || !npu_startup_return_ready() ||
 #endif
        status>
 #ifdef SUNSTONE_NPU_FINITE_THERMAL

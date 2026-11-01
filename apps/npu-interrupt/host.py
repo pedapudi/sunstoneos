@@ -7,7 +7,7 @@ spec=importlib.util.spec_from_file_location('npu_irq_finite_host',ROOT/'apps/npu
 finite=importlib.util.module_from_spec(spec);spec.loader.exec_module(finite)
 finite.PROFILE='npu-interrupt-finite-return-v1'
 finite.SCHEMA='a733-npu-interrupt-finite-entry-v1'
-finite.PROFILES=(*finite.PROFILES,finite.PROFILE,finite.RESTART,finite.STARTUP)
+finite.PROFILES=(*finite.PROFILES,finite.PROFILE,finite.RESTART,finite.STARTUP,finite.INFERENCE)
 finite.HOST_SOURCES=(*finite.HOST_SOURCES,'apps/npu-interrupt/host.py')
 PROFILE,SCHEMA,HOST_SOURCES=finite.PROFILE,finite.SCHEMA,finite.HOST_SOURCES
 RESTART_CONDITIONS=(
@@ -63,7 +63,8 @@ def validate_admission(admission,raw,build,layout,image_hash,cache=None,*,execut
 def validate_reports(monitor,platform,receipt,prepared):
     value=_original_reports(monitor,platform,receipt,prepared)
     restart=prepared.get('execution_profile')==finite.RESTART
-    count=4 if restart else 1 if prepared.get('execution_profile')==finite.STARTUP else 3
+    client=finite.STARTUP_CLIENT.get(prepared.get('execution_profile'))
+    count=4 if restart else client[3] if client else 3
     marker=f'NPU_IRQ_COMPLETIONS=0x{count:016x}\nNPU_IRQ_STOPPED=0x0000000000000001\n'
     finite.require(value['log'].count('NPU_IRQ_COMPLETIONS=')==1 and
         value['log'].count('NPU_IRQ_STOPPED=')==1 and marker+'NPU_STAGE=QUIESCENT\n' in value['log'],
