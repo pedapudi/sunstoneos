@@ -1,0 +1,177 @@
+{
+  "schema": "board-read-words-v1",
+  "purpose": "Observe radio pin and clock configuration while preserving PM2 and all rails; the values cannot establish fitted wiring or analog levels.",
+  "words": [
+    {
+      "address": "0x03006200",
+      "block": "sid",
+      "note": "SoC identity word 0"
+    },
+    {
+      "address": "0x03006204",
+      "block": "sid",
+      "note": "SoC identity word 1"
+    },
+    {
+      "address": "0x03006208",
+      "block": "sid",
+      "note": "SoC identity word 2"
+    },
+    {
+      "address": "0x0300620c",
+      "block": "sid",
+      "note": "SoC identity word 3; distinguishes the boards"
+    },
+    {
+      "address": "0x0300624c",
+      "block": "sid",
+      "note": "Raw speed-bin word; not a PCB revision"
+    },
+    {
+      "address": "0x0701000c",
+      "block": "r_ccu",
+      "note": "APBS0 route; PM observations require the recorded DCXO selector and divide-by-one"
+    },
+    {
+      "address": "0x07010010",
+      "block": "r_ccu",
+      "note": "APBS1 route observation"
+    },
+    {
+      "address": "0x02002518",
+      "block": "ccu",
+      "note": "Main APB1 route; PG observations require the recorded 100 MHz selector/divider"
+    },
+    {
+      "address": "0x0701020c",
+      "block": "r_ccu",
+      "note": "RTC bus gate and reset; require bits 0 and 16 set before RTC access"
+    },
+    {
+      "address": "0x07090160",
+      "condition": {
+        "address": "0x0701020c",
+        "mask": "0x00010001",
+        "value": "0x00010001"
+      },
+      "note": "DCXO configuration; a selected frequency is not an independent measurement"
+    },
+    {
+      "address": "0x07090000",
+      "condition": {
+        "address": "0x0701020c",
+        "mask": "0x00010001",
+        "value": "0x00010001"
+      },
+      "note": "RTC oscillator control"
+    },
+    {
+      "address": "0x07090004",
+      "condition": {
+        "address": "0x0701020c",
+        "mask": "0x00010001",
+        "value": "0x00010001"
+      },
+      "note": "RTC oscillator status"
+    },
+    {
+      "address": "0x07090060",
+      "condition": {
+        "address": "0x0701020c",
+        "mask": "0x00010001",
+        "value": "0x00010001"
+      },
+      "note": "RTC clock fanout; does not establish a waveform at the module"
+    },
+    {
+      "address": "0x07025030",
+      "condition": {
+        "address": "0x0701000c",
+        "mask": "0x0700001f",
+        "value": "0x00000000"
+      },
+      "note": "PM mux0; preserve reset/LPO behavior on PM2"
+    },
+    {
+      "address": "0x07025040",
+      "condition": {
+        "address": "0x0701000c",
+        "mask": "0x0700001f",
+        "value": "0x00000000"
+      },
+      "note": "PM DATA; inputs do not reveal hidden output latches"
+    },
+    {
+      "address": "0x07025044",
+      "condition": {
+        "address": "0x0701000c",
+        "mask": "0x0700001f",
+        "value": "0x00000000"
+      },
+      "note": "PM drive0"
+    },
+    {
+      "address": "0x07025054",
+      "condition": {
+        "address": "0x0701000c",
+        "mask": "0x0700001f",
+        "value": "0x00000000"
+      },
+      "note": "PM pull0"
+    },
+    {
+      "address": "0x02000380",
+      "condition": {
+        "address": "0x02002518",
+        "mask": "0x0300001f",
+        "value": "0x03000005"
+      },
+      "note": "PG mux0"
+    },
+    {
+      "address": "0x02000384",
+      "condition": {
+        "address": "0x02002518",
+        "mask": "0x0300001f",
+        "value": "0x03000005"
+      },
+      "note": "PG mux1"
+    },
+    {
+      "address": "0x02000390",
+      "condition": {
+        "address": "0x02002518",
+        "mask": "0x0300001f",
+        "value": "0x03000005"
+      },
+      "note": "PG DATA; inputs do not reveal hidden output latches"
+    },
+    {
+      "address": "0x020003a0",
+      "condition": {
+        "address": "0x02002518",
+        "mask": "0x0300001f",
+        "value": "0x03000005"
+      },
+      "note": "PG drive0"
+    },
+    {
+      "address": "0x020003a4",
+      "condition": {
+        "address": "0x02002518",
+        "mask": "0x0300001f",
+        "value": "0x03000005"
+      },
+      "note": "PG drive1"
+    },
+    {
+      "address": "0x020003b0",
+      "condition": {
+        "address": "0x02002518",
+        "mask": "0x0300001f",
+        "value": "0x03000005"
+      },
+      "note": "PG pull0"
+    }
+  ]
+}

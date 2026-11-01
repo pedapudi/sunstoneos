@@ -1,0 +1,96 @@
+{
+  "schema": "sunstone-radio-sdio-reference-v1",
+  "use": "Compare native radio startup and operating points with the selected A733 Linux reference.",
+  "execution_location": "Host-side inspection only; these Linux sources are not linked into SunstoneOS.",
+  "source_available": true,
+  "sources": [
+    {
+      "source_lock_key": "board-gpu-power-sun60i-a733-orangepi-zero3w-dts",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60i-a733-orangepi-zero3w.dts",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "cache_path": "board-kernel/sun60i-a733-orangepi-zero3w.dts",
+      "sha256": "31145367f604fd756f2c6a67447e5134e4be0ad5fae87672cfaa9b7c6d055a39",
+      "license": "GPL-2.0-or-later OR MIT",
+      "sections": "sdc1 node, lines 1653-1674; radio control nodes, lines 2952-2981"
+    },
+    {
+      "source_lock_key": "board-gpu-power-sun60iw2p1-dtsi",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "cache_path": "board-kernel/sun60iw2p1.dtsi",
+      "sha256": "1c7313f655bdc4d018201664adcb1fa1d100280388b8975e193ebbfc6ad4ddfa",
+      "license": "GPL-2.0-or-later OR MIT",
+      "sections": "sdc1 node, lines 4545-4558"
+    },
+    {
+      "source_lock_key": "board-gpu-power-ccu-sun60iw2-c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu-sun60iw2.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "cache_path": "board-kernel/ccu-sun60iw2.c",
+      "sha256": "1d32bb8555f8ff205d35210f638f9d42cc28aa9295c46963aa1c810d47b06d77",
+      "license": "GPL-2.0-only",
+      "sections": "smhc_parents and smhc1_clk, lines 1083-1103"
+    },
+    {
+      "source_lock_key": "board-sdio-bsp-drivers-mmc-sunxi-mmc-c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/mmc/sunxi-mmc.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "cache_path": "radio-sdio/bsp/drivers/mmc/sunxi-mmc.c",
+      "sha256": "52c7f92db77290437b7818f3c3a92a2956c1ab637214794e56220d0dde99ce16",
+      "license": "GPL-2.0-or-later",
+      "sections": "sunxi_mmc_signal_voltage_switch; v5p3x probe selection, lines 3981-3997"
+    },
+    {
+      "source_lock_key": "board-sdio-bsp-drivers-mmc-sunxi-mmc-v5p3x-c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/mmc/sunxi-mmc-v5p3x.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "cache_path": "radio-sdio/bsp/drivers/mmc/sunxi-mmc-v5p3x.c",
+      "sha256": "348a6893ae256b2df712813e998ab2b6a13341dd8c57f6fcfb31656fe735d94c",
+      "license": "GPL-2.0-or-later",
+      "sections": "sunxi_mmc_clk_set_rate_for_sdmmc_v5p3x; sunxi_mmc_set_clk_dly; sunxi_mmc_init_priv_v5p3x"
+    },
+    {
+      "source_lock_key": "board-sdio-drivers-mmc-core-sdio-c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/mmc/core/sdio.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "cache_path": "radio-sdio/drivers/mmc/core/sdio.c",
+      "sha256": "d1e27eda01bd0117f312d027f3a133543e0945b6ea968ccc49c040adbd3e894b",
+      "license": "GPL-2.0-or-later",
+      "sections": "sdio_read_cccr; sdio_set_bus_speed_mode; mmc_sdio_init_uhs_card; mmc_sdio_init_card"
+    },
+    {
+      "source_lock_key": "radio-platform-power-delay",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_bsp/aicsdio.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "cache_path": "radio/kernel/drivers/net/wireless/aic8800/aic8800_bsp/aicsdio.c",
+      "sha256": "f08bcfa63f9b7226f4b26832ee9b6088c057fd5ee06389f3ad872f13f9246f0c",
+      "license": "Module declares GPL; this file has no separate license statement.",
+      "sections": "sdio_set_clock target selection, lines 253-255 and 1687-1690"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/config/kernel/linux-sun60iw2-current-a733.config",
+      "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+      "cache_path": "radio/build/external/config/kernel/linux-sun60iw2-current-a733.config",
+      "sha256": "ae50f80a9f46cf06adfd79aa5c754809fc9c5f59d3ded9863ebe0dc783b1e3dc",
+      "license": "No file-level license statement; published kernel configuration used only as a reference.",
+      "sections": "CONFIG_ARCH_SUN60IW2/P1, lines 21-22; CONFIG_AW_MMC_V5P3X, line 204"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_bsp/aic_bsp_driver.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "cache_path": "radio/kernel/drivers/net/wireless/aic8800/aic8800_bsp/aic_bsp_driver.h",
+      "sha256": "9f72ebdd743ac0af134df50ebc36ea25876b9a361a89b82e17a4a8c2e4d918b3",
+      "license": "Module declares GPL; this header has no separate license statement.",
+      "sections": "AIC_SDIO_V3_CLOCK, line 422"
+    },
+    {
+      "source_lock_key": "board-gpu-power-ccu-sun60iw2-r-c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu-sun60iw2-r.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "cache_path": "board-kernel/ccu-sun60iw2-r.c",
+      "sha256": "9285e1b35bfae975e2c1257d477d843ad277916b9c555c12c5f88e1c7ea02554",
+      "license": "GPL-2.0-only",
+      "sections": "APBS0 mux width and divider, lines 29-32; RTC gate/reset, lines 169-171 and 232"
+    }
+  ]
+}
