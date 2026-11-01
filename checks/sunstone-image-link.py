@@ -176,6 +176,20 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm):
     # Object inventories include references in discarded sections. A public
     # call remains valid when no live caller keeps its implementation linked.
     allowed |= public_calls
+    # An explicit shared-GPU descriptor names its own generated manifest.
+    # Admit that immutable object only, using the selected image manifest's
+    # exact bytes and section bounds rather than a symbol-name suffix.
+    manifests = [(n, section) for n, section in zip(elf.names, elf.sections)
+                 if n == 'sunstone_manifest' and section[5]]
+    if manifests:
+        assert len(manifests) == 1, 'ambiguous generated application manifest'
+        section = manifests[0][1]
+        selected = application_manifest(elf)['name'].replace('-', '_') + '_manifest'
+        manifest_objects = [symbol for symbol in elf.symbols if symbol['name'] == selected and symbol['shndx']]
+        assert len(manifest_objects) == 1 and manifest_objects[0]['bind'] == 1 and manifest_objects[0]['type'] == 1 and \
+            (manifest_objects[0]['value'], manifest_objects[0]['size']) == (section[3], section[5]) and \
+            section[2] & 7 == 2, 'generated manifest object differs from the immutable application section'
+        allowed.add(selected)
     allowed |= {name for name in linked if re.match(r'^(?:[xv]|ux|ul|uc|pv|pc)[A-Z]', name)}
     # FreeRTOS configASSERT is a board-supplied kernel callback.
     allowed.update(('vApplicationAssert', 'platform_panic'))
