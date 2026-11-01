@@ -7,9 +7,14 @@
 
 /* Model a level event and posted output. The device may signal before full
  * idle; only both conditions permit a fence. The ISR callback has no worker. */
-struct hardware { unsigned starts, notices, event, idle, error, fail_start; uint32_t address; };
+struct hardware { unsigned starts, notices, event, idle, error, fail_start, registration_irq;
+    uint32_t address; struct npu_queue *queue; };
 static int validate(void *v, const struct a733_npu_command *c)
-{ (void)v; return c->device == 0x10080000 && c->readable_bytes == 524288 && c->token; }
+{
+    struct hardware *h = v;
+    if (h->registration_irq) npu_queue_irq(h->queue);
+    return c->device == 0x10080000 && c->readable_bytes == 524288 && c->token;
+}
 static int start(void *v, const struct a733_npu_command *c, uint64_t timeout)
 {
     struct hardware *h = v;
@@ -37,6 +42,12 @@ static void scenario(unsigned failure)
     static struct npu_queue_job jobs[N];
     assert(npu_queue_init(&q, &ops, &h));
     assert(!npu_queue_init(&q, &ops, &h));
+    if (failure == 4) {
+        h.queue = &q; h.registration_irq = 1;
+        assert(!npu_queue_register(&q, &c, &command));
+        assert(!c.owner && atomic_load(&q.failed) && h.notices == 1 && !h.starts);
+        return;
+    }
     assert(npu_queue_register(&q, &c, &command));
     assert(!npu_queue_register(&q, &c, &command));
     struct npu_queue_fence previous = {0}, out = {&foreign, 123};

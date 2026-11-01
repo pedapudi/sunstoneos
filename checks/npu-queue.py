@@ -26,7 +26,7 @@ def main():
                '-o', str(a.output / 'queue')]
     subprocess.run(command, env=env, check=True)
     rows = []
-    for case, label in enumerate(('ordered-ten-thousand', 'device-error', 'event-before-idle', 'successor-trigger-failure')):
+    for case, label in enumerate(('ordered-ten-thousand', 'device-error', 'event-before-idle', 'successor-trigger-failure', 'IRQ-during-registration')):
         run = subprocess.run([str(a.output / 'queue'), str(case)], env=env, capture_output=True, text=True)
         (a.output / (label + '.log')).write_text(run.stdout + run.stderr)
         rows.append({'case': label, 'passed': run.returncode == 0})

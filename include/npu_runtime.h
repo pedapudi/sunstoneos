@@ -43,7 +43,8 @@ struct npu_runtime_config {
     void (*fatal)(void *);
     void *fatal_cookie;
 };
-/* Slot states, written only by the worker and read by clients with acquire
+/* Slot states, written by preparation before bind, then by the worker. Clients
+ * read with acquire
  * ordering. A client may write its inputs and read its outputs only while its
  * slot is READY and it has no request pending. */
 enum npu_runtime_state {
@@ -58,7 +59,7 @@ struct npu_runtime_tensor {
     size_t bytes;
     struct nbg_tensor tensor;
 };
-/* Worker-written counts for host models and board diagnostics. */
+/* Preparation/worker counts for host models and board diagnostics. */
 enum npu_runtime_step {
     NPU_RUNTIME_STEP_LOAD, NPU_RUNTIME_STEP_PREPARE, NPU_RUNTIME_STEP_POOL,
     NPU_RUNTIME_STEP_START, NPU_RUNTIME_STEP_CHECK, NPU_RUNTIME_STEP_KINDS
