@@ -93,9 +93,11 @@ A fault remains pending while registry retention is busy, and later polls
 retry that metadata operation without invoking device or mutex callbacks.
 
 Lock observations must be consecutive and separated by at least five
-microseconds. Three successful observations are followed by at least twenty-five
-microseconds, preserving the source's final five-microsecond polling delay and
-twenty-microsecond settle. The native path adds a second lock filter and final
+microseconds. After three successful observations, the driver waits for a
+twenty-five-microsecond advance of its whole-microsecond clock. That target
+guarantees the source's twenty-microsecond settle despite clock rounding. The
+source also includes a final five-microsecond polling delay before the settle.
+The native path adds a second lock filter and final
 register verification after retuning. It refuses timeout instead of continuing.
 
 The current readback contract requires the update bit to remain asserted after

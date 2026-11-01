@@ -9,8 +9,19 @@ struct radio_model {
     uint8_t card[3][0x20000];
     unsigned commands,ready_queries,accesses,register_retained,admitted,fail_write;
     uint64_t pins_at,enabled_at,module_at,first_host_at;
+    uint64_t pins_ticks,enabled_ticks;
+    unsigned fraction,gpio_cost;
 };
 static struct radio_model r;
+static int radio_pin_write(void *v,uintptr_t a,uint32_t value)
+{
+    unsigned rising=a==0x07025040&&(value&2)&&!(*pmic_model_word(v,a)&2);
+    if(rising)r.power.now+=r.gpio_cost;
+    int result=pmic_model_pin_write(v,a,value);
+    if(rising){r.enabled_ticks=r.power.now*24+r.fraction;
+        assert(r.enabled_ticks-r.pins_ticks>=10000*24);r.enabled_at=r.power.now;}
+    return result;
+}
 static int radio_now(void *v,uint64_t *out)
 {*out=((struct radio_model *)v)->power.now;return 1;}
 static int radio_current(void *v){return !((struct radio_model *)v)->power.worker;}
@@ -80,6 +91,7 @@ static int radio_write(void *v,uintptr_t a,uint32_t value)
         assert(a==0x02002d10 || a==0x02002d1c);
         if(a==0x02002d10 && (value&(1u<<31))) {
             assert(m->enabled_at && m->power.now-m->enabled_at>=50000);m->module_at=m->power.now;
+            assert(m->power.now*24+m->fraction-m->enabled_ticks>=50000*24);
         }
         if(a==0x02002d1c && (value&(1u<<16)))assert(m->module_at && m->power.now-m->module_at>=10);
         *pmic_model_word(&m->power,a)=value;
@@ -99,10 +111,11 @@ static void radio_cis(struct radio_model *m,unsigned function)
     else {*p++=4;*p++=0;*p++=0;*p++=2;*p++=0x32;}
     *p=0xff;
 }
-static void radio_setup(void)
+static void radio_setup_supply(enum a733_radio_rail supply)
 {
     /* Each setup represents a separate simulated board lifetime. */
     memset(&r,0,sizeof(r));pmic_model_setup(&r.power);
+    r.power.pins.operations.write=radio_pin_write;
     *pmic_model_word(&r.power,0x02002000)=0xf8000000u|(99u<<16)|(99u<<8);
     *pmic_model_word(&r.power,0x02002580)=1u<<31;
     *pmic_model_word(&r.power,0x02002588)=1u<<31;
@@ -112,9 +125,11 @@ static void radio_setup(void)
     r.sdc[0x300/4]=0x03050530;r.sdc[0x5c/4]=0x81710000;
     for(unsigned i=0;i<3;++i)radio_cis(&r,i);
     r.card[0][0]=0x43;r.card[0][1]=3;r.card[0][8]=2;
+    /* This positive host fixture supplies 1.8V through modeled BLDO5. It does
+     * not establish the fitted board routing or decode DCDC8 selector 100. */
     struct a733_radio_platform_config config={.owner=42,.handoff=200,
         .deadline_us=500000,.lifetime_deadline_us=10000000,
-        .topology={201,A733_RADIO_DCDC1,A733_RADIO_DCDC8,A733_RADIO_DCDC8,A733_RADIO_DCDC8},
+        .topology={201,A733_RADIO_DCDC1,supply,supply,supply},
         .fabric={0,1u<<31,1u<<31},.fabric_hz={24000000,24000000,24000000},
         .card={.supported_ocr=0x00300000,.command_timeout=20000,.ready_poll_interval=100}};
     for(unsigned i=0;i<8;++i)config.desired[i].function=i<6?2:i==6?0:1;
@@ -123,6 +138,7 @@ static void radio_setup(void)
     assert(a733_radio_platform_init(&r.radio,&config,&ops,&r,&r.power.clocks,
         &r.power.pins,&r.power.rails,&r.power.provider));
 }
+static void radio_setup(void){radio_setup_supply(A733_RADIO_BLDO5);}
 static enum a733_radio_platform_result radio_step(void)
 {
     r.power.now+=100;
@@ -130,7 +146,7 @@ static enum a733_radio_platform_result radio_step(void)
     unsigned was_enabled=*pmic_model_word(&r.power,0x07025040)&2;
     unsigned had_pins=r.radio.pin_lease.id!=0;
     enum a733_radio_platform_result result=a733_radio_platform_poll(&r.radio);
-    if(!had_pins && r.radio.pin_lease.id)r.pins_at=r.power.now;
+    if(!had_pins && r.radio.pin_lease.id){r.pins_at=r.power.now;r.pins_ticks=r.power.now*24+r.fraction;}
     unsigned enabled=*pmic_model_word(&r.power,0x07025040)&2;
     if(!was_enabled && enabled){assert(r.pins_at && r.power.now-r.pins_at>=10000);r.enabled_at=r.power.now;}
     assert(!(*pmic_model_word(&r.power,0x07025040)&4)); /* PM2 level preserved. */
@@ -152,8 +168,27 @@ static void retained_without_io(void)
     assert(a733_clock_token_status(&r.power.clocks,&r.radio.clock)==A733_CLOCK_FAULT);
     assert(a733_rail_status(&r.power.rails,&r.radio.rail)==A733_RAIL_RETAINED);
 }
+static void minimum_power_intervals(void)
+{
+    for(unsigned costly=0;costly<2;++costly){
+        radio_setup();r.fraction=23;r.gpio_cost=costly?17:0;
+        for(unsigned i=0;i<2000&&r.radio.stage!=8;++i)assert(radio_step()!=A733_RADIO_RETAINED);
+        assert(r.radio.stage==8&&r.radio.pin_lease.id);
+        r.power.now=r.radio.wait_since+10000;r.fraction=0;
+        assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==8&&!r.enabled_at);
+        ++r.power.now;assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==9);
+        r.fraction=23;assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==10);
+        assert(r.enabled_at&&r.radio.wait_since==r.enabled_at);
+        r.power.now=r.radio.wait_since+50000;r.fraction=0;
+        assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==10&&!r.module_at);
+        ++r.power.now;assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_PENDING&&r.radio.stage==11);
+        r.power.now=r.radio.config.deadline_us;
+        assert(a733_radio_platform_poll(&r.radio)==A733_RADIO_RETAINED&&!r.module_at);
+    }
+}
 int main(void)
 {
+    minimum_power_intervals();
     radio_setup();
     enum a733_radio_platform_result status=A733_RADIO_PENDING;
     for(unsigned i=0;i<4000 && status!=A733_RADIO_READY;++i){status=radio_step();assert(status!=A733_RADIO_RETAINED);}
@@ -165,7 +200,7 @@ int main(void)
     assert(a733_clock_acquire(&r.power.clocks,99,0,A733_CLOCK_SDC1,1000000,&collision)==A733_CLOCK_BUSY);
     assert(a733_clock_acquire(&r.power.clocks,99,0,A733_CLOCK_RADIO_MODULE,1000000,&collision)==A733_CLOCK_BUSY);
     struct a733_rail_token rail_collision={0};
-    assert(a733_rail_acquire(&r.power.rails,99,0,A733_RAIL_BIT(A733_RAIL_DCDC8),1000000,&rail_collision)==A733_RAIL_BUSY);
+    assert(a733_rail_acquire(&r.power.rails,99,0,A733_RAIL_BIT(A733_RAIL_BLDO5),1000000,&rail_collision)==A733_RAIL_BUSY);
     struct a733_radio_borrow token;struct sdio_card *card=0;
     assert(!a733_radio_platform_borrow(&r.radio,80,(void *)&r.power.pins,&card));
     assert(a733_radio_platform_borrow(&r.radio,80,&token,&card) && card==&r.radio.card);
@@ -188,8 +223,14 @@ int main(void)
     assert(sunxi_sdio_submit(&r.radio.host,&request,deadline));r.power.now=deadline;
     assert(a733_radio_platform_live(&r.radio,&token,deadline+1000)==A733_RADIO_RETAINED);
     retained_without_io();
+    /* Undecoded DCDC8 selector 100 never authorizes the fitted topology. */
+    radio_setup_supply(A733_RADIO_DCDC8);status=A733_RADIO_PENDING;
+    for(unsigned i=0;i<500&&status!=A733_RADIO_RETAINED;++i)status=radio_step();
+    assert(status==A733_RADIO_RETAINED&&r.radio.stage==4&&!r.accesses&&!r.radio.pin_lease.id);
+    assert(r.radio.snapshots[1].rail==A733_RAIL_DCDC8&&r.radio.snapshots[1].selector==100&&!r.radio.snapshots[1].decoded);
+    retained_without_io();
     /* Wrong observed rail voltage stops before module or controller writes. */
-    radio_setup();r.power.pmic[0x19]=99;
+    radio_setup();r.power.pmic[0x2e]=12;
     status=A733_RADIO_PENDING;
     for(unsigned i=0;i<500 && status!=A733_RADIO_RETAINED;++i)status=radio_step();
     assert(status==A733_RADIO_RETAINED && !r.accesses && !r.radio.pin_lease.id);

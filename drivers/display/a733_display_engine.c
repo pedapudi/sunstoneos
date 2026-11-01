@@ -271,7 +271,11 @@ enum a733_de_state a733_de_poll(struct a733_de *d)
         if (d->action == A733_DE_OBSERVE) { d->step = 5; goto out; }
     } else if (step == 3) {
         if (!d->substep) d->expected = (value & ~w.mask) | w.value;
-        if (d->substep == 2 && value != d->expected) { fail(d, A733_DE_VERIFY); goto out; }
+        /* de_top_check_display_double_buffer_update_finish documents
+         * READY as unreadable. ARMED permits downstream timing startup;
+         * fresh RCQ/frame completion is observed separately by replay. */
+        uint32_t verify = w.offset == 0x814c ? ~UINT32_C(1) : UINT32_MAX;
+        if (d->substep == 2 && ((value ^ d->expected) & verify)) { fail(d, A733_DE_VERIFY); goto out; }
         if (++d->substep < 3) goto out;
         d->substep = 0;
         if (++d->index < write_count) goto out;

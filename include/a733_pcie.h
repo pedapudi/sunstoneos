@@ -81,6 +81,10 @@ struct a733_pcie {
     unsigned phase,phy_index,supply_index,held,failed,clock_retained,rail_retained;
     unsigned speed_change; /* Directed speed change requested above Gen1. */
     unsigned client_stopped; /* The claimed function client finished its orderly stop. */
+    uintptr_t atu_address;
+    uint64_t atu_started;
+    uint32_t atu_expected;
+    unsigned atu_failure; /* 0 none, 1 access/clock failure, 2 time bound, 3 read cap. */
     uint8_t root_cap;
     /* Region 0: core CFG0 window. Region 1: the claimed client's MEM window. */
     struct a733_pcie_window windows[2];
@@ -143,10 +147,13 @@ int a733_pcie_read(struct a733_pcie *,uintptr_t,unsigned,uint32_t *);
 int a733_pcie_write(struct a733_pcie *,uintptr_t,unsigned,uint32_t);
 /* Disable, observe clear, program and enable one outbound region. Region 0
  * admits only the CFG0 window for bus 1 device 0; region 1 admits one identity
- * MEM window inside the aperture after a client claim. The caller observes the
- * enable bit. The recorded window is the region's native write permission. */
+ * MEM window inside the aperture after a client claim. Returns after enable
+ * acknowledgment. The recorded window is the region's native write permission. */
 int a733_pcie_atu_program(struct a733_pcie *,unsigned region,uint32_t type,
     uint32_t cpu,uint32_t pci,uint32_t bytes);
+/* Internal callers hold the register mutex. Program returns after ENABLE is
+ * observed; disable returns after clear, before releasing window ownership. */
+int a733_pcie_atu_disable(struct a733_pcie *,unsigned region);
 int a733_pcie_atu_write_allowed(const struct a733_pcie *,uintptr_t,uint32_t);
 int a733_pcie_phy_step(struct a733_pcie *); /* 1 complete,0 pending,-1 fault. */
 int a733_pcie_phy_address(uintptr_t,unsigned,unsigned writing);

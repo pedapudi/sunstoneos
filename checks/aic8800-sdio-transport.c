@@ -11,6 +11,8 @@ static int add_unrelated, malformed, response_status, ready_delay, zero_credit, 
 static int large_aggregate, byte_words = 128;
 static uint64_t large_read_timeout;
 static uint64_t pad_time, byte_mode_time;
+static uint64_t pad_ticks;
+static unsigned pad_fraction,pad_cost,native_time;
 static int drop_setup_confirmation, fail_pad_restore, setup_write_applied, fail_tx;
 static uint32_t get32(const uint8_t *p)
 {
@@ -81,11 +83,11 @@ static int transport_write(void *context, uint32_t offset, uint32_t value)
         unsigned fn = (arg >> 28) & 7, addr = (arg >> 9) & 0x1ffff;
         if (cmd == 52 && (arg >> 31)) {
             if (fn == 0 && addr == 2 && !ready_delay) m.card[0][3] |= (uint8_t)arg;
-            if (fn == 0 && (addr == 0xf1 || addr == 0xf2)) { ++pad_writes; pad_time = m.now; }
+            if (fn == 0 && (addr == 0xf1 || addr == 0xf2)) {m.now+=pad_cost; ++pad_writes; pad_time = m.now;pad_ticks=m.now*24+pad_fraction;}
             if (fail_pad_restore && fn == 0 && addr == 0xf1 && (uint8_t)arg == 0) {
                 assert(write_cb(context, offset, value)); return 0;
             }
-            if (fn == 1 && addr == 7) byte_mode_time = m.now;
+            if (fn == 1 && addr == 7) {byte_mode_time = m.now;if(native_time)assert(m.now*24+pad_fraction-pad_ticks>=1000*24);}
             if (fail_setup && fn == 0 && addr == 0x111) {
                 assert(write_cb(context, offset, value)); return 0; /* Write took effect. */
             }
@@ -107,7 +109,7 @@ static int transport_write(void *context, uint32_t offset, uint32_t value)
     if (offset == 0x200 && m.write && m.position == m.bytes) tx_done();
     return result;
 }
-static void begin(enum aic8800_transport_pad pad)
+static void begin_ticks(enum aic8800_transport_pad pad,uint64_t ticks_per_ms)
 {
     /* Each case discards a complete simulated device; no live hardware exists. */
     reset_model();
@@ -119,16 +121,18 @@ static void begin(enum aic8800_transport_pad pad)
     add_unrelated = malformed = response_status = ready_delay = zero_credit = fail_setup = 0;
     large_aggregate = 0; byte_words = 128; large_read_timeout = 0;
     pad_time = byte_mode_time = 0;
+    pad_ticks=pad_fraction=pad_cost=0;native_time=ticks_per_ms==1000;
     drop_setup_confirmation = fail_pad_restore = setup_write_applied = fail_tx = 0;
     prepare(); enumerate(); /* Real controller and card APIs, existing model. */
     struct aic8800_transport_config tc = { .variant = AIC8800_TRANSPORT_D80_BOOTSTRAP,
-        .pad = pad, .ticks_per_ms = 10, .command_timeout = 100, .poll_interval = 5 };
+        .pad = pad, .ticks_per_ms = ticks_per_ms, .command_timeout = 100, .poll_interval = 5 };
     m.card[0][2] = 4; m.card[0][3] = 4; m.card[0][4] = 0x80; m.card[1][0] = 0x40;
     m.card[0][0x110] = 64;
     assert(aic8800_transport_init(&transport, &card, &tc));
     assert(!aic8800_transport_init(&transport, &card, &tc));
     assert(aic8800_transport_setup(&transport, m.now + 2000));
 }
+static void begin(enum aic8800_transport_pad pad){begin_ticks(pad,10);}
 static void step(void)
 {
     ++m.now; unsigned words = m.words;
@@ -340,8 +344,40 @@ static void consume_deadline(void)
 #ifndef AIC8800_TRANSPORT_FIXTURE_MAIN
 #define AIC8800_TRANSPORT_FIXTURE_MAIN main
 #endif
+static void minimum_pad_intervals(void)
+{
+    for(unsigned variant=1;variant<=2;++variant)for(unsigned costly=0;costly<2;++costly){
+        begin_ticks((enum aic8800_transport_pad)variant,1000);pad_fraction=23;pad_cost=costly?17:0;
+        for(unsigned i=0;i<300&&pad_writes<(variant==2?2u:1u);++i)step();
+        /* Finish the immediate modeled command at the same physical instant.
+         * Timestamping before its costly write would shorten this hold. */
+        for(unsigned i=0;i<20&&(transport.phase!=11||transport.pending);++i)aic8800_transport_poll(&transport);
+        assert(transport.phase==11&&!transport.pending&&transport.wait_until==m.now+1001);
+        uint64_t anchor=m.now;unsigned commands=m.command_count;
+        m.now=anchor+1000;pad_fraction=0;aic8800_transport_poll(&transport);
+        assert(transport.phase==11&&m.command_count==commands&&!byte_mode_time);
+        ++m.now;for(unsigned i=0;i<20&&!byte_mode_time;++i)aic8800_transport_poll(&transport);
+        assert(byte_mode_time&&m.now*24+pad_fraction-pad_ticks>=1000*24);
+        setup();
+        if(variant==2){
+            pad_fraction=23;identity(4000);
+            for(unsigned i=0;i<300&&(transport.phase!=24||transport.pending);++i)step();
+            assert(transport.phase==24&&!transport.pending);
+            anchor=transport.wait_until-1001;commands=m.command_count;
+            m.now=anchor+1000;pad_fraction=0;aic8800_transport_poll(&transport);
+            assert(transport.phase==24&&m.command_count==commands);
+            ++m.now;aic8800_transport_poll(&transport);assert(transport.phase!=24);
+        }
+    }
+    begin_ticks(AIC8800_PAD_KEEP,1000);
+    for(unsigned i=0;i<300&&(transport.phase!=11||transport.pending);++i)step();
+    assert(transport.phase==11);unsigned commands=m.command_count;m.now=transport.deadline;
+    aic8800_transport_poll(&transport);
+    assert(transport.state==AIC8800_TRANSPORT_FAULT&&transport.error==AIC8800_TRANSPORT_TIMEOUT&&m.command_count==commands&&!byte_mode_time);
+}
 int AIC8800_TRANSPORT_FIXTURE_MAIN(int argc, char **argv)
 {
+    minimum_pad_intervals();
     if (argc == 2 && !strcmp(argv[1], "bootstrap")) {
         good(); bootstrap_failures();
         puts("AIC SDIO bootstrap: fixed write, non-echo confirmation, pad restore, identity and retained uncertainty passed");

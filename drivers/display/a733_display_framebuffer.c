@@ -295,7 +295,7 @@ static int cold_step(fb_t *f)
         break;
     case 1:case 2:{
         int r=update(f,CCU+(f->index==1?0xa74:0xa04),0x10000,0);if(r!=1)return r;
-        if(f->index==2)f->until=f->last_now+10;break;}
+        if(f->index==2&&!a733_deadline_after(f->last_now,11,&f->until))return -1;break;}
     case 3:if(!timely(f))return -1;if(f->last_now<f->until)return 0;break;
     case 4:{
         if(!f->domain_requested){

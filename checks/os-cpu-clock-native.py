@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import shlex
 
+from register_latency import PostedWrites
 from harness import Image, LLD, Steps
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MEM_READ, UC_HOOK_INTR
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_LR, UC_ARM64_REG_PC
@@ -51,6 +52,7 @@ registers = {0x07090160: 0x10008002, 0x0300624c: 0x00000496,
              0x08873000: 0xf8001e00, 0x0887301c: 0x03000000}
 for page in sorted({x & ~4095 for x in registers}): m.mem_map(page, 4096)
 for addr, value in registers.items(): m.mem_write(addr, value.to_bytes(4, 'little'))
+bank = PostedWrites(registers)
 events = []
 stop = 0x4200fff0
 
@@ -59,11 +61,17 @@ def hook(cpu, address, size, unused):
     if address == stop: cpu.emu_stop()
     elif int.from_bytes(cpu.mem_read(address, size), 'little') == 0xd5033f9f:
         events.append(('dsb-sy',))
+        bank.complete()
 
 
 def access(cpu, operation, address, size, value, unused):
     if address < 0x10000000:
         events.append(('read' if operation == UC_MEM_READ else 'write', address, size, value))
+        assert size == 4
+        if operation == UC_MEM_READ:
+            cpu.mem_write(address, bank.read(address).to_bytes(4, 'little'))
+        else:
+            bank.write(address, value)
 
 
 m.hook_add(UC_HOOK_CODE, hook)
@@ -86,16 +94,18 @@ assert call(4) == 1 and len(events) == 8 and all(e[0] == 'read' and e[2] == 4 fo
 cases.append('actual-os-admission-report')
 # CPU-B left at 2002 MHz by an earlier image of the lifetime: the FEL ROM
 # return does not reset it, and the admission refuses it.
-m.mem_write(0x08872000, (0xf8004d00).to_bytes(4, 'little'))
+bank.words[0x08872000] = 0xf8004d00
 assert call(4) == 0
-m.mem_write(0x08872000, registers[0x08872000].to_bytes(4, 'little'))
+bank.words[0x08872000] = registers[0x08872000]
 cases.append('admission-refuses-cpu-b-above-boot0-rate')
 reads = [*registers, *[base + offset for base in (0x08871000, 0x08872000, 0x08873000) for offset in (4, 8, 0x18)]]
 for addr in reads:
     assert call(0, addr) == 1 and len(events) == 1 and events[0][:3] == ('read', addr, 4)
 cases.append('all-seventeen-allowed-reads')
 for addr in (0x08871000, 0x08872000, 0x08873000, 0x0887101c, 0x0887201c, 0x0887301c):
+    bank.words[addr] = 0
     assert call(1, addr, registers[addr]) == 1
+    assert not bank.pending and bank.read(addr) == registers[addr]
     expected = [('write', addr, 4, registers[addr])]
     expected.append(('dsb-sy',))
     assert events == expected, (hex(addr), events)
@@ -114,7 +124,9 @@ steps.command('compile-bundle-'+stamp,[*flags,'-c',bundle_source,'-o',bundle_obj
 bundle_elf=a.output/'bundle.elf'
 steps.command('link-bundle-'+hashlib.sha256(bundle_obj.read_bytes()).hexdigest()[:12],
               [LLD,'-Ttext=0x41000000','--entry=os_cpu_bundle_adapter_check','--gc-sections',bundle_obj,*objects[1:],'-o',bundle_elf])
+os_image = image
 image=Image(bundle_elf)
+bank=PostedWrites(registers)
 m=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
 m.mem_map(0x200000,0x10000)
 m.mem_map(0x41000000,0x400000);m.mem_map(0x42000000,0x10000)
@@ -130,11 +142,68 @@ def call(mode,addr=0,value=0):
     assert m.reg_read(UC_ARM64_REG_PC)==stop
     return m.reg_read(UC_ARM64_REG_X0)
 for addr in (0x08871000,0x08872000,0x08873000,0x0887101c,0x0887201c,0x0887301c):
+    bank.words[addr]=0
     assert call(1,addr,registers[addr])==1
+    assert not bank.pending and bank.read(addr)==registers[addr]
     assert events==[('write',addr,4,registers[addr]),('dsb-sy',)],(hex(addr),events)
 for addr in (0x08870000,0x08871004,0x08872002,0x0300624c):
     assert call(1,addr,0)==0 and not events
 cases.append('bundle-six-writes-complete-and-out-of-policy-refusal')
+# Revert the actual compiled barrier in fresh emulators. A missing DSB leaves
+# the adapter's accepted write outstanding at return. Endpoint UPDATE/LOCK
+# latency is exercised separately by the real driver transition fixture.
+def fresh_write(program, entry, revert):
+    cpu = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+    cpu.mem_map(0x200000, 0x10000)
+    cpu.mem_map(0x41000000, 0x400000)
+    cpu.mem_map(0x42000000, 0x10000)
+    for page in sorted({x & ~4095 for x in registers}): cpu.mem_map(page, 4096)
+    patched = 0
+    for address, data in program.parts:
+        data = bytearray(data)
+        for offset in range(0, len(data) - 3, 4):
+            if revert and data[offset:offset+4] == bytes.fromhex('9f3f03d5'):
+                data[offset:offset+4] = bytes.fromhex('1f2003d5')
+                patched += 1
+        cpu.mem_write(address, bytes(data))
+    assert not revert or patched, 'native adapter no longer contains DSB SY; review mutation'
+    posted = PostedWrites(registers)
+    address, value = 0x08871000, 0xf8802e00
+    old = posted.read(address)
+    assert old != value
+    def store(machine, operation, target, size, word, unused):
+        if target < 0x10000000:
+            assert operation != UC_MEM_READ, 'write adapter unexpectedly reads MMIO'
+            posted.write(target, word)
+    cpu.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, store)
+    barriers = []
+    def instructions(machine, pc, size, unused):
+        if pc == stop:
+            machine.emu_stop()
+        elif int.from_bytes(machine.mem_read(pc, size), 'little') == 0xd5033f9f:
+            barriers.append(pc)
+            posted.complete()
+    cpu.hook_add(UC_HOOK_CODE, instructions)
+    cpu.reg_write(UC_ARM64_REG_SP, 0x4200f000)
+    cpu.reg_write(UC_ARM64_REG_LR, stop)
+    for reg, word in ((UC_ARM64_REG_X0, 1), (UC_ARM64_REG_X1, address), (UC_ARM64_REG_X2, value)):
+        cpu.reg_write(reg, word)
+    cpu.emu_start(program.address(entry), stop, count=100000)
+    assert cpu.reg_read(UC_ARM64_REG_PC) == stop and cpu.reg_read(UC_ARM64_REG_X0) == 1
+    if revert:
+        assert not barriers and posted.pending == [(address, value)] and posted.read(address) == old
+    else:
+        assert len(barriers) == 1 and not posted.pending and posted.read(address) == value
+    return dict(origin='accepted-write-not-completed' if revert else 'write-completed',
+                address=address, observed=posted.read(address), requested=value,
+                pending=posted.pending, executed_dsb=len(barriers))
+
+negative = {name: {variant: fresh_write(program, entry, revert)
+                   for variant, revert in (('control', False), ('reverted-dsb', True))}
+            for name, program, entry in (
+    ('os', os_image, 'os_cpu_adapter_check'),
+    ('bundle', image, 'os_cpu_bundle_adapter_check'))}
+cases.append('reverted-native-dsb-leaves-accepted-write-pending-in-both-adapters')
 # Drive the actual owner through both inspections and both-cluster requests.
 # The driver boundary models completion; its grant decoder/DSU table are real.
 owner_obj = a.output / 'owner.o'
@@ -161,10 +230,10 @@ for mode, name in enumerate(('both-clusters-big-little-dsu', 'no-grant-read-only
     status = int.from_bytes(cpu.mem_read(owner_image.address('os_check_result'), 4), 'little')
     assert status == 1, (name, status)
     cases.append(name)
-result = dict(status='PASS', cases=cases, elf_sha256=hashlib.sha256(elf.read_bytes()).hexdigest(),
+result = dict(status='PASS', cases=cases, barrier_mutations=negative, elf_sha256=hashlib.sha256(elf.read_bytes()).hexdigest(),
     inputs={f: hashlib.sha256((ROOT / f).read_bytes()).hexdigest() for f in
-            (*units, 'checks/os-cpu-clock-bundle.c', 'apps/board-bundles-power/cpu-opp-step.c', 'checks/os-cpu-clock-owner.c', 'checks/os-cpu-clock-native.py', 'apps/os/cpu.c', 'include/a733_cpu_clock.h', 'include/a733_mmio.h')},
+            (*units, 'checks/os-cpu-clock-bundle.c', 'apps/board-bundles-power/cpu-opp-step.c', 'checks/os-cpu-clock-owner.c', 'checks/os-cpu-clock-native.py', 'checks/register_latency.py', 'apps/os/cpu.c', 'include/a733_cpu_clock.h', 'include/a733_mmio.h')},
     owner_elf_sha256=hashlib.sha256(owner_elf.read_bytes()).hexdigest(),
-    limits='Actual AArch64 adapters with modeled MMIO storage; actual request owner with modeled driver completion. No physical clock, rail or thermal qualification.')
+    limits='Actual AArch64 adapters with modeled CPU-side posted writes; device readiness is separate; actual request owner with modeled driver completion. No physical clock, rail or thermal qualification.')
 (a.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
 print('PASS actual OS CPU adapter: report, CPU-B above boot0 refused, seventeen reads, both adapters complete six writes, refusals')

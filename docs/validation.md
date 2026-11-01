@@ -1,5 +1,9 @@
 # Select checks by changed behavior
 
+Driver and fixture authors follow [completion and timing validation](driver-validation.md):
+wait for documented completion before verification, preserve vendor barriers and
+inter-write delays, and model delayed completion with stale readback.
+
 Before a test batch, state the changed behavior, credible failure risk, and
 smallest check that resolves that risk. Run focused checks during iteration.
 Broaden testing when a shared dependency changes, a failure reveals wider impact,
