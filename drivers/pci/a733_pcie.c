@@ -210,14 +210,35 @@ static int window_valid(const struct a733_pcie *p,unsigned region,uint32_t type,
     return region==1&&(p->test||p->function)&&!type&&cpu==pci&&!(cpu&4095)&&bytes&&!(bytes&4095)&&
         cpu>=A733_PCIE_MEM&&bytes<=A733_PCIE_MEM_BYTES&&cpu-A733_PCIE_MEM<=A733_PCIE_MEM_BYTES-bytes;
 }
+/* The reference polls ATU enable for 20 ms. Disable and enable share that
+ * budget here; neither a stale readback nor a stopped time source can leave
+ * the register owner spinning forever. The read cap is a secondary bound. */
+static int atu_ack(struct a733_pcie *p,uintptr_t at,uint32_t expected,uint64_t start)
+{
+    for(unsigned n=0;n<(1u<<20);++n) {
+        uint32_t value;
+        if(!rd(p,at+4,&value)||p->last_now-start>=20000)return 0;
+        if((value&BIT(31))==expected)return 1;
+    }
+    return 0;
+}
+int a733_pcie_atu_disable(struct a733_pcie *p,unsigned region)
+{
+    if(!p||p->self!=p||region>=2||!p->windows[region].bytes||!timely(p))return 0;
+    const uint64_t start=p->last_now;
+    const uintptr_t at=A733_PCIE_ATU_OUTBOUND(region);
+    return wr(p,at+4,0)&&atu_ack(p,at,0,start);
+}
 int a733_pcie_atu_program(struct a733_pcie *p,unsigned region,uint32_t type,
     uint32_t cpu,uint32_t pci,uint32_t bytes)
 {
-    if(!window_valid(p,region,type,cpu,pci,bytes))return 0;
+    if(!window_valid(p,region,type,cpu,pci,bytes)||!timely(p))return 0;
+    const uint64_t start=p->last_now;
     uintptr_t at=A733_PCIE_ATU_OUTBOUND(region);
     p->windows[region]=(struct a733_pcie_window){type,cpu,pci,bytes};
-    return wr(p,at+4,0)&&check(p,at+4,BIT(31),0)&&wr(p,at+8,cpu)&&wr(p,at+12,0)&&
-        wr(p,at+16,cpu+bytes-1)&&wr(p,at+20,pci)&&wr(p,at+24,0)&&wr(p,at,type)&&wr(p,at+4,BIT(31));
+    return wr(p,at+4,0)&&atu_ack(p,at,0,start)&&wr(p,at+8,cpu)&&wr(p,at+12,0)&&
+        wr(p,at+16,cpu+bytes-1)&&wr(p,at+20,pci)&&wr(p,at+24,0)&&wr(p,at,type)&&
+        p->last_now-start<20000&&wr(p,at+4,BIT(31))&&atu_ack(p,at,BIT(31),start);
 }
 int a733_pcie_atu_write_allowed(const struct a733_pcie *p,uintptr_t a,uint32_t v)
 {
@@ -531,7 +552,7 @@ enum a733_pcie_result a733_pcie_stop(struct a733_pcie *p,uint64_t deadline)
     if(p->phase==READY) {
         ok=link(p)&&atu_start(p,0)&&check(p,ATU+4,BIT(31),BIT(31))&&check(p,CFG+4,7,0)&&
             (!p->windows[1].bytes||check(p,A733_PCIE_ATU_OUTBOUND(1)+4,BIT(31),0))&&
-            wr(p,ATU+4,0)&&check(p,ATU+4,BIT(31),0)&&update(p,APP+0xc00,1,0);
+            a733_pcie_atu_disable(p,0)&&update(p,APP+0xc00,1,0);
         if(ok)p->phase=STOP_RESET;
     } else {
         ok=p->phase==STOP_DOWN&&rd(p,APP+0xe0c,&p->last_value);

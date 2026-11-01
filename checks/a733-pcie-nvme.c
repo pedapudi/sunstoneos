@@ -179,6 +179,7 @@ static int ep_read(void *v,uintptr_t a,unsigned width,uint32_t *out)
         *out=word>>((a&3)*8);if(width==1)*out&=255;if(width==2)*out&=65535;return 1;
     }
     if(a>=0x22000000&&a<0x28000000){
+        assert(!atu_effects[1].pending&&(*w(0x06300204)&(1u<<31)));
         assert(width==4&&(command16()&2)&&!d3);
         if(a-bar0()<BAR0_BYTES){*out=nvme_read((uint32_t)(a-bar0()));return 1;}
         uint32_t base=*w(0x20000018)&~15u;assert(a-base<4096);*out=bar2[(a-base)/4];return 1;
@@ -190,6 +191,11 @@ static int ep_read(void *v,uintptr_t a,unsigned width,uint32_t *out)
 static int ep_write(void *v,uintptr_t a,unsigned width,uint32_t value)
 {
     ++ep_accesses;assert(native_write(a,width,value));
+    if(a==0x06000004&&value==0x102&&port.windows[1].bytes)
+        assert(!atu_effects[1].pending&&!(*w(0x06300204)&(1u<<31))&&atu1_off_acks);
+    if(a==0x06400c00&&!(value&1))
+        assert(!atu_effect.pending&&!(*w(0x06300004)&(1u<<31)));
+    if(a>=0x06300200&&a<=0x06300218)return atu_model_write(v,a,value);
     if(a>=0x20000000&&a<0x20001000){
         unsigned f=target_function();assert(!f&&!in_d3_wait());
         if(a>=0x20000010&&a<=0x20000024&&value==UINT32_MAX){
@@ -509,6 +515,13 @@ int main(int argc,char **argv)
         assert(a733_pcie_nvme_shutdown(&nvme));
         assert(until(nvme_poll,&nvme,A733_PCIE_STOPPED)==A733_PCIE_RETAINED&&!port.client_stopped);
         retained_memory();assert((command16()&4)&&(*w(0x02000210)&(1u<<22)));
+    }
+    else if(!strcmp(mode,"atu1-stuck-stop")){
+        start(A733_PCIE_IRQ_POLL);assert(until(nvme_poll,&nvme,A733_PCIE_READY)==A733_PCIE_READY);
+        atu1_stall_off=1;assert(a733_pcie_nvme_shutdown(&nvme));
+        assert(until(nvme_poll,&nvme,A733_PCIE_STOPPED)==A733_PCIE_RETAINED&&!port.client_stopped);
+        assert(atu_effects[1].pending&&!atu1_off_acks&&(*w(0x06300204)&(1u<<31)));
+        assert((*w(0x06000004)&0xffff)==0x106&&(*w(0x06400c00)&1));retained_memory();
     }
     else if(!strncmp(mode,"stop-",5))port_case(mode);
     else function_case(mode);

@@ -244,7 +244,7 @@ static int quiesce(struct a733_pcie_function *f)
        !equal(f,APP+0xe00,4,UINT32_MAX,f->sii)||!wr(f,APP+0xe08,4,intx(f))))return 0;
     if(!wr(f,CFG+4,2,stopped_command(f))||!equal(f,CFG+4,2,0xffff,stopped_command(f)))return 0;
     if(f->window_bytes&&(!wr(f,DBI+0x20,4,CLOSED)||!equal(f,DBI+0x20,4,UINT32_MAX,CLOSED)||
-       !wr(f,ATU1+4,4,0)||!equal(f,ATU1+4,4,B(31),0)))return 0;
+       !a733_pcie_atu_disable(f->port,1)))return 0;
     return wr(f,DBI+4,2,0x102)&&equal(f,DBI+4,2,0xffff,0x102);
 }
 static int intact(struct a733_pcie_function *f)
