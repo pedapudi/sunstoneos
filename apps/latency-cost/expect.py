@@ -13,7 +13,7 @@ def expectation(enabled):
     u64(0, 0x4f535431, 0x53534c43)
     u64(8, 24000000)
     words[4:8] = [int(enabled), 48, 32, 255]
-    u64(32, positive)
+    u64(32, full)
     for c in range(8):
         base = 40 + c * 776
         for i in range(48):
