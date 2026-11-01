@@ -25,15 +25,31 @@ The mutex-ownership correction has separate modeled evidence in
 `mutex-enter-20261020/root-integration.json`; the later camera snapshots include
 the corrected adapter.
 
-Recorded ISP0 accepts one 640x480 BGGR12 input through TOP DDR, ISP600,
-VIPP0 and DMA0 into copied NV16. Native defaults reuse GPL source without an
-opaque tuning blob. `isp0-native-20261020/` records bounded EL1h calls with
-modeled pixels; it does not qualify full task scheduling or numerical output.
+Recorded ISP0 replays one immutable 640x480 BGGR12 input through TOP DDR,
+ISP600, VIPP0 and DMA0. Each copied NV16 frame stays immutable through USB
+completion and sequence-bound acknowledgment. Fresh status and fault checks
+precede retained reuse; both IOMMU masters, allocations and provider leases
+remain owned. Native defaults reuse GPL source without an opaque tuning blob.
 See [source provenance](../../drivers/camera/isp0-sources.json).
+
+IRQ completion uses DMA0, VIPP0 load and ISP0 SAVE within the original session
+deadline. Completion still requires ISP LOAD. Sanitizer, linked-image and
+FreeRTOS QEMU checks cover a second capture after USB acknowledgment and
+staggered IRQ events. Evidence and frozen host-only images are under
+`~/.cache/sunstoneos/build/camera-isp-1031/`. Device effects, pixels, USB and IRQ
+entry are modeled.
+
+An identified host FFmpeg build supplies independent CPU comparison files.
+Its interpolation and color-conversion algorithm is not established as
+equivalent to ISP600. Physical pixels, IRQ delivery and repeated operation
+remain unqualified. The retained ISP ELF fails the probe runner's watchdog
+admission. A source-backed global drain condition and shared-probe conversion
+must cover TOP reads, ISP/VIPP parameters, output writes and IOMMU page walks
+before a board run. No run is queued.
 
 Remaining work includes OV5640 module qualification on both connectors,
 continuous native frame delivery, raw receiver/parser routing into ISP0,
-independent pixel comparison, IRQ completion, scaling, auto-exposure/white-balance
+physical pixel comparison, IRQ qualification, scaling, auto-exposure/white-balance
 control, sensor tuning and fault recovery. Hawkeye 64 MP is a separate feasibility
 question: published ISP dimensions are below a full 64 MP frame; lower modes or
 bypass need independent evidence.

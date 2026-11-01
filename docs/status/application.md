@@ -13,7 +13,8 @@ secondaries off. These inputs do not establish general recognition or startup
 repeatability. [CPU status](cpu.md) identifies the result and failed controls.
 
 The [application source record](../../apps/mimus/source.json) pins the external
-mimus port. OS-only and hello-compute builds explicitly clear `MIMUS_DIR`.
+mimus integration checkout on `port/sunstoneos-gpu-integrate`. OS-only and
+hello-compute builds explicitly clear `MIMUS_DIR`.
 Recognition, models, manifests, capture wrappers and recognition checks belong
 to mimus; SunstoneOS owns the [application ABI](../designs/app-abi.md) and
 shared device services. The [layering audit](../layering-audit.md) lists defects.
@@ -26,12 +27,13 @@ hello-compute and external-mimus baseline builds pass under
 eight-core scheduling model, shared-helper, dashboard, PMIC and power-domain
 integration gate passes there.
 
-Full integration remains blocked by the missing I2S stream-profile `route`
-initializer at `checks/i2s-runtime-provider.c:107`. Combined host evidence covers
-83 runnable checks: 78 pass and five remain failing. The failures concern the
-SPI platform expectation, obsolete supervised-claim interface, GPU texture macro,
+The frozen full integration attempt covers 83 runnable checks: 78 pass and five
+fail. The failures concern the SPI platform expectation, obsolete
+supervised-claim interface, GPU texture macro,
 missing NumPy and provider-clock fixture. The full attempt and failed-case logs
 are in `gate-final-full/` and `full-host/` under that build directory.
+The missing I2S stream-profile `route` initializer in that attempt is fixed.
+These frozen results do not establish the combined tree's full integration result.
 The corrected toolchain-lookup case retains its resumed result in
 `safety-resumed.log`; the dashboard result is in `gate-final-core/`.
 H.264 capture and SAE checks require external inputs and remain pending.
@@ -41,6 +43,20 @@ compose thermal, radio, I2S or headset services. Optional CPU/GPU/NPU builds
 have host evidence under `concurrent-gpu-npu-1026/`,
 `resident-gpu-cold-1026/` and `resume-gpu-eight-workers-20261026/` relative to
 `~/.cache/sunstoneos/evidence/`; simultaneous physical operation is unqualified.
+
+`SUNSTONE_A733_OS_GPU=ON` selects the generic GPU compute queue. Applications
+own their programs and tensor placement; `apps/queue-add` supplies an independent
+vector-add consumer. An optional trusted second GPU application has its own
+manifest, task, client slot and completion queue. Both callers consent to one
+program and memory map; the primary controls device lifecycle. Host checks cover
+reopen, reset recovery preserving a queued peer and final quiescence. Physical
+queue execution, recovery and application GPU recognition remain unqualified.
+
+Recorded and paced PCM use the generic capture interface without a device grant.
+The current audio fixture builds against the application kit with an empty
+`MIMUS_DIR`; sanitizer, AArch64 and linked-instruction evidence is indexed by
+`~/.cache/sunstoneos/build/audio-1031/frozen/README.md`. These checks model grant
+publication, clock, waits and finish; they do not execute native scheduling.
 
 The [board runner](../board-runner.md) owns fresh-FEL preparation, frozen queue
 submissions, returning CPU/GPU/probe capture and bounded recovery. Its host
@@ -52,6 +68,12 @@ breadcrumb and result contracts; static secondary-OFF and peripheral retirement
 still need physical evidence. Finite NPU images admit the armed watchdog and have qualified startup,
 inference and two-model results; [NPU status](npu.md) identifies the exact images
 and pending lifecycle operations.
+
+Generic GPU capture accepts image-bound GPU and thermal receipts with strict
+binary result decoding. The frozen proposals under
+`~/.cache/sunstoneos/build/gpu-integrate-1031/images-lifecycle/` contain the known
+CPU clock close defect. They need a rebuild and refreeze with the merged
+correction before physical qualification.
 
 First-failure records retain site, caller and inputs through watchdog reset;
 `apps/board/main.c:board_fail_at` and `apps/os/application.c:ss_fail` record the

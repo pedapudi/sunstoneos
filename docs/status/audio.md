@@ -5,10 +5,13 @@
 I2S0 finite/repeated capture, playback, duplex,
 hardware TX rings, guarded cyclic RX and DMA0 interrupt notification have
 software evidence. USB periods have copied ownership; PCM files supply playback.
+The OS capture adapter consumes cyclic staging through exact tickets without
+exposing raw DMA pages. Recorded and paced PCM also use the application kit's
+capture buffer and headroom without a device grant or recognizer dependency.
 
 **Board-qualified scope:** None.
 
-No microphone is attached. Capture, playback,
+No microphone or headset is attached. Capture, playback,
 continuity, IRQs, DMA visibility, serializer drain and sound remain unqualified.
 
 Cyclic RX needs a physical ordering bound: the package counter has no
@@ -19,6 +22,18 @@ Both uncertainties must measure below one period. Four-period rings give a
 `i2s-hardware-cyclic-20261019/identity-reuse-clarification.json` under `~/.cache/sunstoneos/evidence/`
 define that modeled scope. Retained-allocation exclusion has focused evidence
 in [DMA status](memory-dma.md#dma).
+
+Evidence at `~/.cache/sunstoneos/build/audio-1031/frozen/README.md` binds the
+current host/model images, hashes and reviews. Actual FreeRTOS/provider cases
+keep a busy canceled writer in DRAINING, preserve a held copy through overrun,
+and refuse stale tickets after both duplex directions close and reopen.
+Sanitizer, AArch64 and linked-image checks cover device-free PCM replay with an
+empty `MIMUS_DIR`. Registers, DMA effects and cache visibility are modeled.
+
+I2S and OS audio images retain their legacy supervised lifetime. Returning-probe
+conversion must retire workers, client leases, DMA, both audio directions and
+USB, then join monitor secondary shutdown and interrupt restoration. No audio
+board run is queued.
 
 PCM EOF establishes declared DMA consumption and FIFO empty. It does not
 establish serializer drain, so TX/GEN, clocks, pins and buffers stay owned;
