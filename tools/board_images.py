@@ -2,6 +2,7 @@
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import secrets
 import shutil
@@ -81,7 +82,8 @@ def finite_npu_info(image, host, finite, manifest):
 
 
 def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
-    host = load('board_records', ROOT / 'apps/os/host.py')
+    tree = host_tree or ROOT
+    host = load('board_records', tree / 'apps/os/host.py')
     names = symbols(image) if Path(image).read_bytes()[:4] == b'\x7fELF' else {}
     descriptor = descriptor or {}
     if descriptor:
@@ -114,7 +116,7 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
         base.image_parts(Path(image))
         if generic:
             host.result_geometry(image)
-            returning = load('inspect_return_geometry', ROOT/'apps/os/cpu-return-host.py')
+            returning = load('inspect_return_geometry', tree/'apps/os/cpu-return-host.py')
             geometry = returning.geometry(Path(image))
             if kind == 'gpu-return':
                 require('gpu_receipt' in geometry, 'GPU kind requires the linked GPU return receipt.')
@@ -123,6 +125,9 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
             geometry = legacy.geometry(Path(image))
         if kind=='npu':
             require('os_npu_client_model' in names, 'NPU kind requires the linked OS NPU service.')
+        if generic and 'os_npu_client_model' in names:
+            require('npu_pool' in geometry and 'npu_stop' in geometry,
+                    'NPU image requires its linked pool and mandatory stop receipt.')
     else:
         require(descriptor.get('purpose')=='watchdog-reset-diagnostic','Raw probes admit only the intentional watchdog-reset diagnostic; use the native ELF contract.')
         require(descriptor.get('schema') == 'sunstone-board-probe-v1', 'Probe requires a hash-bound .board.json descriptor.')
@@ -150,7 +155,7 @@ def policy(info, args, session=None):
         require(approved or reviewed.get(point['block']) == (point['mhz'], point['mv']),
                 'Operating point requires --approved-by coordinator.')
     if session is not None and len(session) >= 96:
-        host = load('board_policy_records', ROOT / 'apps/os/host.py')
+        host = load('board_policy_records', (args.host_tree or ROOT) / 'apps/os/host.py')
         if info['generic']:
             grant = host.session_decode(session)['extents'].get(host.CPU_GRANT)
         else:
@@ -163,10 +168,10 @@ def policy(info, args, session=None):
                     'CPU grant outside reviewed operating points requires --approved-by coordinator.')
 
 
-def launcher(out, size, mode, seconds=60):
+def launcher(out, size, mode, seconds=60, tree=ROOT):
     """Reuse the board launcher with the OS contract, full session and armed WDT."""
-    board = load('runner_board_prepare', ROOT / 'apps/board/prepare.py')
-    source = (ROOT / 'platform/a733-smp-supervised/launch.c').read_text()
+    board = load('runner_board_prepare', tree / 'apps/board/prepare.py')
+    source = (tree / 'platform/a733-smp-supervised/launch.c').read_text()
     source = board.adapt_launcher(source, {
         '0x4153373353554c33': '0x415337334f534c31', 'REQUEST[1]==3': 'REQUEST[1]==2',
         'CONTRACT->version==3': 'CONTRACT->version==2',
@@ -179,7 +184,7 @@ def launcher(out, size, mode, seconds=60):
     for name, path in [('launch.c', 'apps/board/launch.c'), ('launch.S', 'platform/a733-smp-observe/launch.S'),
                        ('launch.ld', 'platform/a733-smp-observe/launch.ld'), ('boot.h', 'platform/a733-smp-cached/boot.h'),
                        ('a733_board_application.h', 'include/a733_board_application.h')]:
-        shutil.copy2(ROOT / path, out / name)
+        shutil.copy2(tree / path, out / name)
     flags = ['--target=arm-none-eabi', '-march=armv8-a', '-marm', '-mfloat-abi=soft', '-ffreestanding',
              '-fno-builtin', '-fno-stack-protector', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables',
              '-Os', '-g', '-Wall', '-Wextra', '-Werror', '-DSUNSTONE_BOARD_SUPERVISED=1',
@@ -215,7 +220,8 @@ def prepare(args, info, live, out):
         return load('prepare_native_probe', ROOT/'tools/board_probe.py').prepare(args.image,info['native_probe'],args.input,out)
     dev = load('runner_dev', ROOT / 'tools/board_state.py')
     base = load('runner_base', ROOT / 'tools/check-a733-smp.py')
-    records = load('runner_records', ROOT / 'apps/os/host.py')
+    tree = args.host_tree or ROOT
+    records = load('runner_records', tree / 'apps/os/host.py')
     if args.kind == 'probe':
         out.mkdir()
         raw = Path(args.image).read_bytes()
@@ -275,11 +281,11 @@ def prepare(args, info, live, out):
         inputs = [b'SunstoneOS board control\n']
     elif not inputs:
         inputs = [(template/f'input-{i}.bin').read_bytes() for i, _ in enumerate(records.regions(image_info['manifest'], (1,)))]
-    producer = load('runner_session_prepare', ROOT/'apps/os/prepare.py')
+    producer = load('runner_session_prepare', tree/'apps/os/prepare.py')
     meta = producer.prepare(args.image, prefix, services, inputs, out, devices=devices, flags=flags)
     session = (out/'session.bin').read_bytes()
     policy(info, args, session)
-    launcher(out, len(session), info['watchdog']['mode'], info['watchdog']['session_seconds'])
+    launcher(out, len(session), info['watchdog']['mode'], info['watchdog']['session_seconds'], tree)
     board = load('runner_request', ROOT/'apps/board/prepare.py')
     request, contract = board.request_bytes(address, identity, epoch, generation, lease, session)
     request = struct.pack('<Q', 0x415337334f534c31) + request[8:]
@@ -296,8 +302,79 @@ def prepare(args, info, live, out):
     uploads += [(0x41f00000, out/'session.bin'), (0x42000000, write(out/'result-zero.bin', blank)),
                 (0x42004000, write(out/'contract.bin', contract)), (0x52c00, write(out/'request.bin', request)),
                 (0x52d00, write(out/'report-zero.bin', bytes(128))), (0x52000, out/'launch.bin')]
-    return dict(meta, epoch=epoch, generation=generation, uploads=uploads, launch=['exe', '0x52000'],
-                watchdog=info['watchdog'], format='generic', geometry=info['report_geometry'])
+    returning = load('prepare_return_geometry', tree/'apps/os/cpu-return-host.py')
+    plan = dict(meta, epoch=epoch, generation=generation, uploads=uploads, launch=['exe', '0x52000'],
+                watchdog=info['watchdog'], format='generic', geometry=info['report_geometry'],
+                return_host=returning, input_regions=meta['uploads'], image_ram=returning.IMAGE_RAM)
+    plan['preserve_regions'] = preservation_regions(plan)
+    validate_uploads(plan)
+    return plan
+
+
+def preservation_regions(plan):
+    """Union the linked image/monitor, manifest, input and device DRAM extents."""
+    geo = plan['geometry']
+    extents = [plan['image_ram'], (geo['report_address'], geo['report_bytes']),
+               (geo['output_address'], geo['output_bytes'])]
+    extents += [(geo[name][0], geo[name][1] - geo[name][0])
+                for name in ('monitor', 'cached_writable')]
+    extents += [(r['address'], r['bytes']) for r in geo['application_regions']]
+    extents += [(r['address'], r['bytes']) for r in plan['input_regions']]
+    if 'npu_pool' in geo:
+        extents.append((geo['npu_pool']['address'], geo['npu_pool']['bytes']))
+    merged = []
+    for address, size in sorted(extents):
+        require(type(address) is int and type(size) is int and
+                0x40000000 <= address < address + size <= 0x80000000,
+                'Preservation extent is outside admitted DRAM.')
+        high = address + size
+        if merged and address <= merged[-1][0] + merged[-1][1]:
+            low, count = merged[-1]
+            merged[-1] = (low, max(low + count, high) - low)
+        else:
+            merged.append((address, size))
+    return merged
+
+
+def validate_uploads(plan):
+    regions = preservation_regions(plan)
+    require(plan['preserve_regions'] == regions, 'Preservation plan omits a linked DRAM range.')
+    for address, source in plan['uploads']:
+        size = Path(source).stat().st_size
+        require(size > 0 and (any(low <= address and address + size <= low + count
+                                 for low, count in regions) or
+                             0x52000 <= address < address + size <= 0x52d80),
+                'Upload is outside protected DRAM or launcher SRAM.')
+
+
+def backup_dram(owner, regions, label='dram'):
+    """Read bounded chunks before uploads and retain their hashes durably."""
+    backups = []
+    for address, size in regions:
+        for offset in range(0, size, 4 * 1024 * 1024):
+            count = min(4 * 1024 * 1024, size - offset)
+            path = owner.evidence/f'{label}-before-{len(backups)}.bin'
+            data = owner.read(address + offset, count, path)
+            require(len(data) == count and path.stat().st_size == count, 'Incomplete DRAM backup.')
+            with path.open('rb') as stream:
+                os.fsync(stream.fileno())
+            backups.append({'address': address + offset, 'bytes': count, 'file': str(path),
+                            'sha256': hashlib.sha256(data).hexdigest()})
+    return backups
+
+
+def restore_dram(owner, backups, regions):
+    """Validate every saved byte and extent before the first restoration write."""
+    expected = [(a + o, min(4 * 1024 * 1024, n - o)) for a, n in regions
+                for o in range(0, n, 4 * 1024 * 1024)]
+    require([(b['address'], b['bytes']) for b in backups] == expected,
+            'DRAM backup inventory omits or overlaps a protected range.')
+    for item in backups:
+        path = Path(item['file'])
+        require(path.stat().st_size == item['bytes'] and sha(path) == item['sha256'], 'Saved DRAM changed.')
+    for item in backups:
+        require(sha(item['file']) == item['sha256'], 'Saved DRAM changed before restoration.')
+        owner.upload(item['address'], Path(item['file']))
 
 
 def write(path, data):
@@ -347,7 +424,7 @@ def capture(owner, plan, args):
             decoded['gpu'] = host.os_image.gpu_return_rules.decode(raw, plan['epoch'], plan['generation'], require,
                 allow_untouched=geo['gpu'].get('untouched_report_version') == 2)
         return {'valid': True, 'payload': payload, 'report': decoded}
-    records = load('runner_result_host', ROOT/'apps/os/cpu-return-host.py')
+    records = plan['return_host']
     geo = plan['geometry']
     reads = [('return-report', geo['report_address'], geo['report_bytes']),
              ('output-record', geo['output_address'], geo['output_bytes'])]
@@ -356,51 +433,87 @@ def capture(owner, plan, args):
         reads.append(('gpu-report', gpu['address'], gpu['bytes']))
     if 'thermal' in geo:
         reads.extend(records.thermal_capture.captures(geo['thermal']))
+    if 'npu_stop' in geo:
+        reads.append(('npu-stop', geo['npu_stop']['address'], geo['npu_stop']['bytes']))
+    if 'cpu_rails' in geo:
+        reads.append(('cpu-rails', geo['cpu_rails']['address'], geo['cpu_rails']['bytes']))
     # Preserve every returned object before decoding any of them. A malformed
     # application result must not hide the native retirement or GPU receipt.
     copied = {name: owner.read(address, size, out/(name + '.bin'))
               for name, address, size in reads}
-    decoded = records.decode_return_report(copied['return-report'], plan['epoch'])
-    valid, payload = True, b''
-    decoded['output_capture_sha256'] = hashlib.sha256(copied['output-record']).hexdigest()
-    try:
-        info = records.host.image_manifest(args.image)
-        payload = records.host.decode_result(copied['output-record'], plan['epoch'], plan['generation'],
-                                              info['manifest']['output_limit'])
-        decoded['output_capture_status'] = 'decoded'
-    except (ValueError, KeyError, struct.error) as error:
-        valid = False
-        decoded.update(output_capture_status='malformed', output_error=str(error))
-    if 'gpu_receipt' in geo:
-        decoded['gpu_capture_sha256'] = hashlib.sha256(copied['gpu-report']).hexdigest()
-        try:
-            decoded['gpu'] = records.gpu_capture.decode_captured(copied['gpu-report'], geo['gpu_receipt'],
-                                                                 plan['epoch'], plan['generation'])
-            require(args.kind != 'gpu-return' or decoded['gpu'].get('gpu_bisect') or
-                    decoded['gpu'].get('completed_gpu_work'),
-                    'GPU kind requires completed GPU work or an image-bound diagnostic receipt.')
-            decoded['gpu_capture_status'] = 'decoded'
-        except (ValueError, KeyError, struct.error) as error:
-            valid = False
-            decoded.update(gpu_capture_status='malformed', gpu_error=str(error))
-    if 'thermal' in geo:
-        decoded['thermal_capture_sha256'] = {name: hashlib.sha256(copied[name]).hexdigest()
-                                             for name, _, _ in records.thermal_capture.captures(geo['thermal'])}
-        try:
-            decoded['thermal'] = records.thermal_capture.decode(geo['thermal'], copied,
-                                                                plan['epoch'], plan['generation'])
-            decoded['thermal']['qualification_passed'] = False
-            decoded['thermal_capture_status'] = 'decoded'
-            if decoded['thermal'].get('classification') != 'complete':
-                valid = False
-                decoded['thermal_error'] = 'Thermal window is '+str(decoded['thermal'].get('classification'))
-        except (ValueError, KeyError, struct.error) as error:
-            valid = False
-            decoded.update(thermal_capture_status='malformed', thermal_error=str(error))
+    require(owner.record.get('normal_return') and not owner.record.get('dram_lost'),
+            'DRAM restoration requires a verified normal return.')
+    if hasattr(records, 'mandatory_return'):
+        decoded = records.mandatory_return(copied, geo, plan['epoch'], plan['generation'])
     else:
-        decoded['thermal_capture_status'] = 'absent'
-    decoded['qualification_passed'] = False
-    return {'valid': valid, 'payload': payload, 'report': decoded}
+        require('npu_pool' not in geo and 'npu_stop' not in geo, 'NPU retirement parser is missing.')
+        decoded = records.decode_return_report(copied['return-report'], plan['epoch'])
+    owner.record['native_retirement_validated'] = True
+    owner.journal()
+    try:
+        valid, payload = True, b''
+        if 'npu_stop' in decoded:
+            decoded['npu_capture_sha256'] = hashlib.sha256(copied['npu-stop']).hexdigest()
+            try:
+                decoded['npu_report'] = records.npu_capture.decode(copied['npu-stop'], plan['epoch'], plan['generation'])
+                valid = not (decoded['npu_report']['mismatches'] or decoded['npu_report']['refused'])
+                decoded['npu_capture_status'] = 'decoded'
+            except (ValueError, KeyError, struct.error) as error:
+                valid = False
+                decoded.update(npu_capture_status='malformed', npu_error=str(error))
+        if 'cpu_rails' in geo:
+            decoded['cpu_rail_capture_sha256'] = hashlib.sha256(copied['cpu-rails']).hexdigest()
+            try:
+                decoded['cpu_rails'] = records.decode_rails(copied['cpu-rails'])
+            except (ValueError, KeyError, struct.error) as error:
+                valid = False
+                decoded['cpu_rail_error'] = str(error)
+        decoded['output_capture_sha256'] = hashlib.sha256(copied['output-record']).hexdigest()
+        try:
+            info = records.host.image_manifest(args.image)
+            payload = records.host.decode_result(copied['output-record'], plan['epoch'], plan['generation'],
+                                                  info['manifest']['output_limit'])
+            decoded['output_capture_status'] = 'decoded'
+        except (ValueError, KeyError, struct.error) as error:
+            valid = False
+            decoded.update(output_capture_status='malformed', output_error=str(error))
+        if 'gpu_receipt' in geo:
+            decoded['gpu_capture_sha256'] = hashlib.sha256(copied['gpu-report']).hexdigest()
+            try:
+                decoded['gpu'] = records.gpu_capture.decode_captured(copied['gpu-report'], geo['gpu_receipt'],
+                                                                     plan['epoch'], plan['generation'])
+                require(args.kind != 'gpu-return' or decoded['gpu'].get('gpu_bisect') or
+                        decoded['gpu'].get('completed_gpu_work'),
+                        'GPU kind requires completed GPU work or an image-bound diagnostic receipt.')
+                decoded['gpu_capture_status'] = 'decoded'
+            except (ValueError, KeyError, struct.error) as error:
+                valid = False
+                decoded.update(gpu_capture_status='malformed', gpu_error=str(error))
+        if 'thermal' in geo:
+            decoded['thermal_capture_sha256'] = {name: hashlib.sha256(copied[name]).hexdigest()
+                                                 for name, _, _ in records.thermal_capture.captures(geo['thermal'])}
+            try:
+                decoded['thermal'] = records.thermal_capture.decode(geo['thermal'], copied,
+                                                                    plan['epoch'], plan['generation'])
+                decoded['thermal']['qualification_passed'] = False
+                decoded['thermal_capture_status'] = 'decoded'
+                if decoded['thermal'].get('classification') != 'complete':
+                    valid = False
+                    decoded['thermal_error'] = 'Thermal window is '+str(decoded['thermal'].get('classification'))
+            except (ValueError, KeyError, struct.error) as error:
+                valid = False
+                decoded.update(thermal_capture_status='malformed', thermal_error=str(error))
+        else:
+            decoded['thermal_capture_status'] = 'absent'
+        decoded['qualification_passed'] = False
+        return {'valid': valid, 'payload': payload, 'report': decoded}
+    finally:
+        require(plan['preserve_regions'] == preservation_regions(plan),
+                'Preservation plan changed after launch.')
+        restore_dram(owner, plan['dram_backups'], plan['preserve_regions'])
+        owner.record.update(dram_restored=True, dram_dirty=False)
+        owner.journal()
+
 
 
 
@@ -475,3 +588,11 @@ def rail_result(values, log):
         "result": dict(zip(("magic","stage","status"), values[:3]))}, log)
     require(result["complete"], "Rail helper refused or did not complete normally: "+result.get("reason", ""))
     return dict(result, boot_clock_domains=3, already_normalized=not result["written"])
+
+
+def post_rail_result(values, log):
+    """The approved DCDC5-only helper requires DCDC3 already at 800 mV."""
+    followup = load('board_post_rail_result', ROOT/'apps/os/cpu-return-followup.py')
+    return followup.helper_result({'complete': True, 'transport_failed': False,
+        'automatic_access': True, 'mode': 'kernel',
+        'result': dict(zip(('magic', 'stage', 'status'), values[:3]))}, log)

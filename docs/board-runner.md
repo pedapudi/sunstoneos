@@ -176,7 +176,28 @@ operations remain in the existing backup-first update path and must meet
 
 `--kind npu` supports two returning image formats. Generic OS images require
 both the returning watchdog contract and the linked OS NPU service, and use
-typed service sessions. Finite native NPU diagnostics use the preparation and
+typed service sessions. `--host-tree` selects their geometry, session producer
+and return validators; submission hashes that source tree as well as the runner.
+Before image uploads, the runner saves the image and monitor DRAM, manifest WORK
+and OUTPUT regions, uploaded INPUT spans and the linked NPU pool. It merges
+overlapping preservation spans and refuses uploads outside protected DRAM or
+the launcher SRAM reservation. Backups use chunks of at most four MiB with
+SHA-256 hashes.
+
+After a matching normal return without a retained fault, the runner copies the
+CPU return report, application output, native NPU stop report and optional
+telemetry. Mandatory CPU and NPU retirement proofs authorize DRAM restoration.
+It validates every backup and its complete range inventory before writing any
+saved bytes, then verifies each restoration by readback. The returning ROM owns
+SRAM. Missing retirement, uncertain return or incomplete restoration quarantines
+the instance and prevents the post-ROM rail helper. Malformed application output
+or optional telemetry fails the result after established cleanup. With
+`--restore-rails`, guarded CPU images run the pinned helper after restored DRAM
+and verified boot clocks, including when functional result validation fails.
+The post-ROM helper is separately pinned: it requires DCDC3 already at 800 mV
+and DCDC5 at 1000 mV, then lowers DCDC5 to 800 mV. Each helper preserves its
+full linked DRAM image, including BSS, stacks and heap, and its result buffer.
+It restores those bytes after its validated normal return. Finite native NPU diagnostics use the preparation and
 retirement rules described below. Neither format's serialization establishes
 physical qualification.
 
@@ -220,12 +241,13 @@ Finite NPU diagnostics use `--kind npu`. Supply a `--template` directory with
 `session.bin`, the reviewed 456-byte native NPU session template. The matching
 `manifest.json` may be in that directory or beside the ELF. Submission copies
 both files into the queue entry and hashes the finite NPU host dependencies.
-`--host-tree` selects the finite NPU source tree when it differs from the runner.
+`--host-tree` selects the NPU source tree when it differs from the runner.
 The runner checks the image, manifest and template before opening the board.
 
 The finite adapter initializes DDR through the shared queue path, captures the
 NPU system-register set and rebinds the native session through the existing NPU
-preparation helper. It does not run the CPU rail helper. Before uploads it saves
+preparation helper. Before each NPU run, the pinned rail helper confirms DCDC3 and DCDC5 at
+800 mV. The helper preserves its own DRAM uploads. Before image uploads it saves
 the complete 18 MiB NPU DRAM reservation. Immediately before watchdog arming it
 checks the reviewed ROM instructions and native NPU entry state again.
 

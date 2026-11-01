@@ -2,8 +2,6 @@
 """Check generic return preservation and helper ordering without USB or an ELF build."""
 import argparse
 import contextlib
-import hashlib
-import importlib.util
 import io
 from pathlib import Path
 import struct
@@ -19,6 +17,8 @@ def main():
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--tool-tree', type=Path, default=ROOT)
     parser.add_argument('--host-tree', type=Path, default=ROOT)
+    parser.add_argument('--rail-elf', type=Path)
+    parser.add_argument('--post-rail-elf', type=Path)
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=False)
     sys.path.insert(0, str(args.tool_tree/'tools'))
@@ -45,7 +45,8 @@ def main():
     has_npu = hasattr(records, 'mandatory_return')
     if not has_npu:
         geo.pop('npu_pool'); geo.pop('npu_stop')
-    stop = struct.pack('<13Q', 0x315255504e, 1, 104, epoch, generation, 1, 0, 0, 0, 0, 0, 1, 0)
+    stop = struct.pack('<4I2Q10I', 0x5255504e, 1, 104, 1, epoch, generation,
+                       0, 0, 0, 0, 0, 0, 1, 0, 0, 0xc35a3ca5) + bytes(32)
     # Use the actual producer's public constants/layout once NPU support is present.
     if has_npu:
         try:
@@ -59,6 +60,7 @@ def main():
             self.variant, self.events, self.saved = variant, [], {}
             self.memory = [(a,bytearray(bytes([i+17])*n)) for i,(a,n) in
                            enumerate(images.preservation_regions(make_plan()))]
+            self.saved={a:bytes(data) for a,data in self.memory}
             self.quarantined = False
         @contextlib.contextmanager
         def locked(self):
@@ -87,7 +89,7 @@ def main():
                     value=bytes(data[address-a:address-a+size]); path.write_bytes(value); return value
             raise AssertionError(('read outside fixture',hex(address),size))
         def upload(self,address,source):
-            self.events.append(('write',address))
+            self.events.append(('write-restore' if self.record.get('native_retirement_validated') else 'write-upload',address))
             data=Path(source).read_bytes()
             if self.variant=='restore-readback' and self.record.get('native_retirement_validated'):
                 raise board.Mismatch('restoration readback differs')
@@ -99,12 +101,18 @@ def main():
         def arm(self,mode):self.armed=True
         def tx(self,*values):
             assert values==('exe','0x52000')
-            self.saved={a:bytes(data) for a,data in self.memory}
             for a,data in self.memory:data[:]=bytes([99])*len(data)
             self.put(geo['report_address'],report)
             self.put(geo['output_address'], b'bad' if self.variant=='output-malformed' else
                      struct.pack('<7Q',0x31544c5553455241,1,64,epoch,generation,1,8)+b'complete')
-            if has_npu:self.put(geo['npu_stop']['address'],stop if self.variant!='npu-late-fault' else bytes(104))
+            if has_npu:
+                native_stop=bytearray(stop)
+                if self.variant=='npu-mismatch':
+                    struct.pack_into('<3I',native_stop,36,1,1,1)
+                    struct.pack_into('<I',native_stop,60,2)
+                if self.variant=='npu-telemetry-malformed':struct.pack_into('<I',native_stop,68,0)
+                if self.variant=='npu-refused':struct.pack_into('<I',native_stop,48,1)
+                self.put(geo['npu_stop']['address'],native_stop if self.variant!='npu-late-fault' else bytes(104))
             if self.variant=='retirement-invalid':self.put(geo['report_address'],bytes(len(report)))
             if self.variant=='backup-corrupt':Path(self.record['dram_backups'][-1]['file']).write_bytes(b'corrupt')
             if self.variant=='range-omitted':self.record['dram_backups'].pop()
@@ -121,7 +129,7 @@ def main():
 
     def make_plan():
         plan={'format':'generic','geometry':geo,'return_host':records,'image_ram':(0x41000000,4096),
-              'input_regions':[{'address':0x46000000,'bytes':4096}], 'uploads':[],
+              'input_regions':[{'address':0x46000000,'bytes':4096}], 'uploads':[(0x41000000,source)],
               'launch':['exe','0x52000'],'watchdog':{'mode':0xb1,'session_seconds':1},
               'epoch':epoch,'generation':generation}
         plan['preserve_regions']=images.preservation_regions(plan)
@@ -130,7 +138,7 @@ def main():
     source=args.out/'model.bin';source.write_bytes(b'MODEL ONLY')
     variants=['normal','output-malformed','thermal-malformed','retirement-invalid','backup-corrupt',
               'range-omitted','restore-readback','watchdog','late-fault']
-    if has_npu:variants.append('npu-late-fault')
+    if has_npu:variants.extend(('npu-late-fault','npu-mismatch','npu-refused','npu-telemetry-malformed'))
     for variant in variants:
         evidence=args.out/variant
         parser=argparse.ArgumentParser();board.run_options(parser)
@@ -147,7 +155,7 @@ def main():
              patch.object(records.host,'image_manifest',return_value={'manifest':{'output_limit':8}}),\
              contextlib.redirect_stdout(io.StringIO()):
             result=board.run_image(options,backend)
-        good=variant in ('normal','output-malformed','thermal-malformed')
+        good=variant in ('normal','output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed')
         assert result.get('dram_restored',False)==good,(variant,result)
         assert bool(result.get('rails_restored'))==good,(variant,result)
         assert result['outcome']==('returned' if variant=='normal' else
@@ -157,12 +165,99 @@ def main():
         owner=owners[0]
         if not good:
             assert 'restore-rails' not in owner.events
-            assert not any(e[0]=='write' for e in owner.events if isinstance(e,tuple)),variant
+            assert not any(e[0]=='write-restore' for e in owner.events if isinstance(e,tuple)) or variant=='restore-readback',variant
         else:
+            first_write=next(i for i,e in enumerate(owner.events) if isinstance(e,tuple) and e[0]=='write-upload')
+            assert all(e[0]=='read' and e[2]<=4*1024*1024 for e in owner.events[1:first_write])
             assert all(bytes(data)==owner.saved[a] for a,data in owner.memory)
             assert (evidence/'output-record.bin').exists() and (evidence/'return-report.bin').exists()
-            if has_npu:assert (evidence/'npu-stop.bin').read_bytes()==stop
+            if has_npu:assert (evidence/'npu-stop.bin').stat().st_size==104
         print('PASS',variant)
+    # Exercise the production pinned helper method, including its own uploads.
+    if args.rail_elf:
+        assert images.sha(args.rail_elf)=='ef63663020cf827f89811ef9cb60733a4965f70e518fe96ccd8821c59babfb5f'
+        linked=images.symbols(args.rail_elf)
+        assert linked['__heap_end'][0]==sum(board.RAIL_HELPER_DRAM)
+        assert linked['__bss_end'][0]<=linked['__exception_stack_top'][0]<=linked['__monitor_stack_top'][0]<=sum(board.RAIL_HELPER_DRAM)
+        assert images.sha(board.state.RAIL_HELPER)==board.state.RAIL_HELPER_SHA256
+        print('PASS pinned helper ELF bounds include BSS, stacks and heap')
+    if args.post_rail_elf:
+        assert images.sha(args.post_rail_elf)=='ae00ce1d4a1f82b77ab1e016dc1a08f795e56c9c6f4c92d166f6434d75590098'
+        linked=images.symbols(args.post_rail_elf)
+        assert linked['__heap_end'][0]==sum(board.POST_RAIL_HELPER_DRAM)
+        assert linked['__bss_end'][0]<=linked['__exception_stack_top'][0]<=linked['__monitor_stack_top'][0]<=sum(board.POST_RAIL_HELPER_DRAM)
+        assert images.sha(board.POST_RAIL_HELPER)==board.POST_RAIL_HELPER_SHA256
+        print('PASS pinned post helper ELF bounds include BSS, stacks and heap')
+    for variant in ('normal','uncertain','corrupt','report-failed'):
+        evidence=args.out/('helper-'+variant);evidence.mkdir()
+        helper=evidence/'model-helper.bin';helper.write_bytes(b'MODEL HELPER')
+        class RailOwner:
+            def __init__(self):
+                self.evidence=evidence;self.args=types.SimpleNamespace(rail_helper=helper)
+                self.record={};self.events=[];self.clock=0
+                self.memory={0x41000000:bytes([71])*board.RAIL_HELPER_DRAM[1],0x42000000:bytes([72])*16384}
+                self.before=self.memory.copy()
+            def journal(self):pass
+            def elapsed_now(self):return self.clock
+            def read(self,address,size,path):
+                data=self.memory[address];assert len(data)==size;path.write_bytes(data);return data
+            def upload(self,address,path):
+                self.events.append(address)
+                data=Path(path).read_bytes();self.memory[address]=data+self.memory[address][len(data):]
+            def arm(self,*values,**kwargs):pass
+            def wait(self,*values):self.clock=1
+            def returned(self):return (0 if variant=='uncertain' else 0xb1),0,{}
+            def tx(self,*values):
+                if values==('readl','0x07090160'):return '0x10008002'
+                assert values==('reset64','0x41000000')
+                raw=bytearray(16384);struct.pack_into('<4Q',raw,0,0x534b4552,5,0,0)
+                self.memory[0x42000000]=bytes(raw)
+                if variant=='corrupt':
+                    Path(self.record['rail_dram_backups']['rails'][-1]['file']).write_bytes(b'changed')
+        owner=RailOwner()
+        with patch.object(board.state,'RAIL_HELPER_SHA256',images.sha(helper)),\
+             patch.object(images,'rail_result',side_effect=ValueError('invalid helper receipt') if variant=='report-failed' else None,
+                          return_value={'dcdc3_uv':800000,'dcdc5_uv':800000}):
+            try:board.Live.rails(owner)
+            except ValueError:
+                assert variant!='normal'
+            else:assert variant=='normal'
+        assert bool(owner.record.get('dram_restored'))==(variant=='normal')
+        assert len(owner.events)==(4 if variant=='normal' else 2)
+        if variant=='normal':assert owner.memory==owner.before
+        print('PASS helper DRAM '+variant)
+    # The post-ROM profile uses the distinct reviewed DCDC5-only binary and
+    # the real parser; its continuation gate is independent of CLI input paths.
+    followup=images.load('preservation_helper_followup', args.tool_tree/'apps/os/cpu-return-followup.py')
+    for variant in ('normal','dcdc3-raised','unretired','unrestored'):
+        evidence=args.out/('post-helper-'+variant);evidence.mkdir()
+        helper=evidence/'post-model.bin';helper.write_bytes(b'MODEL POST HELPER')
+        lines=[f'{name} {phase} pll={pll:#x} mux={mux:#x} mhz={mhz} pat0=0 pat1=0 lfm=0'
+               for name,pll,mux,mhz in board.state.BOOT_ROWS for phase in ('before','after')]
+        lines += [f'SUPPLY dcdc5_uv=1000000 dcdc3_uv={1050000 if variant=="dcdc3-raised" else 800000} bin=4 dcxo_hz=26000000',
+                  'VOLT dcdc5_selector=30 dcdc5_uv=800000', followup.COMPLETE]
+        payload=('\n'.join(lines)+'\n').encode()
+        class PostOwner(RailOwner):
+            def __init__(self):
+                super().__init__()
+                self.record={'normal_return':True,'native_retirement_validated':variant!='unretired',
+                             'dram_restored':variant!='unrestored'}
+                self.memory[0x41000000]=bytes([71])*board.POST_RAIL_HELPER_DRAM[1]
+                self.before=self.memory.copy()
+            def tx(self,*values):
+                if values==('readl','0x07090160'):return '0x10008002'
+                assert values==('reset64','0x41000000')
+                raw=bytearray(16384);struct.pack_into('<4Q',raw,0,0x534b4552,5,0,len(payload))
+                raw[256:256+len(payload)]=payload;self.memory[0x42000000]=bytes(raw)
+            def returned(self):return 0xb1,0,{}
+        owner=PostOwner()
+        with patch.object(board,'POST_RAIL_HELPER',helper),patch.object(board,'POST_RAIL_HELPER_SHA256',images.sha(helper)):
+            try:board.Live.rails(owner,'restore-rails')
+            except ValueError:assert variant!='normal'
+            else:assert variant=='normal'
+        assert len(owner.events)==(4 if variant=='normal' else 2 if variant=='dcdc3-raised' else 0)
+        if variant=='normal':assert owner.memory==owner.before
+        print('PASS post helper '+variant)
     plan=make_plan();plan['preserve_regions'].pop()
     try:images.validate_uploads(plan)
     except ValueError:pass

@@ -26,6 +26,14 @@ from host_evidence import evidence_directory
 ROOT, CACHE = images.ROOT, images.CACHE
 PYTHON = CACHE / 'venv/bin/python3'
 PORTS = ('3-1', '3-3')
+# Pinned rail helper's linked __heap_end; probe.bin excludes its BSS/stacks.
+# Derived from probe.elf SHA-256 ef63663020cf827f89811ef9cb60733a4965f70e518fe96ccd8821c59babfb5f.
+# state.RAIL_HELPER_SHA256 binds this geometry to the reviewed binary.
+RAIL_HELPER_DRAM = (0x41000000, 0x48300)
+POST_RAIL_HELPER = CACHE/'evidence/sol-cpu-normal-return-1028/rails-800/probe.bin'
+POST_RAIL_HELPER_SHA256 = 'f48a6be72b336c8990a124fd608bba5fddb5c8617ec62eac5642b2d50fb27c75'
+# Linked __heap_end from ELF SHA-256 ae00ce1d4a1f82b77ab1e016dc1a08f795e56c9c6f4c92d166f6434d75590098.
+POST_RAIL_HELPER_DRAM = (0x41000000, 0x47300)
 OUTCOMES = ('returned', 'result-mismatch', 'watchdog-reset', 'no-return', 'refused-before-launch', 'host-error')
 crumbs = images.load('board_crumbs', ROOT/'tools/a733-crumbs.py')
 import board_state as state
@@ -129,8 +137,8 @@ class Live:
                 self.quarantine(str(error))
                 raise
             finally:
-                if self.record.get('npu_dirty') and not self.record.get('dram_restored'):
-                    self.quarantine('NPU RAM ownership remains unresolved.')
+                if (self.record.get('npu_dirty') or self.record.get('dram_dirty')) and not self.record.get('dram_restored'):
+                    self.quarantine('DRAM ownership remains unresolved.')
 
     def adopt(self, node):
         self.access.require_session(node)
@@ -182,6 +190,8 @@ class Live:
         self.tx('read', hex(address), size, path, timeout=max(30, size/100000+10))
         data = Path(path).read_bytes()
         require(len(data) == size, 'Incomplete FEL readback.')
+        with Path(path).open('rb') as stream:
+            os.fsync(stream.fileno())
         return data
 
     def upload(self, address, source):
@@ -195,6 +205,8 @@ class Live:
                     timeout=max(30, len(data)*2/100000+10), pass_fds=(fd,))
         if path.read_bytes() != data:
             raise Mismatch(f'Upload readback differs at {address:#x}; execution refused.')
+        with path.open('rb') as stream:
+            os.fsync(stream.fileno())
 
     def sanity(self):
         require('soc=00001903(A733)' in self.tx('version'), 'Target is not A733.')
@@ -399,13 +411,27 @@ class Live:
         return result
 
     def rails(self, phase='rails'):
+        post = phase == 'restore-rails'
+        if post:
+            require(self.record.get('normal_return') and self.record.get('native_retirement_validated') and
+                    self.record.get('dram_restored') and not self.record.get('dram_lost'),
+                    'Post-ROM rail helper requires validated native retirement and restored DRAM.')
+        helper = POST_RAIL_HELPER if post else self.args.rail_helper
+        expected = POST_RAIL_HELPER_SHA256 if post else state.RAIL_HELPER_SHA256
+        reservation = POST_RAIL_HELPER_DRAM if post else RAIL_HELPER_DRAM
         evidence = self.evidence/phase
         evidence.mkdir(parents=True, exist_ok=True)
-        data = self.args.rail_helper.read_bytes()
-        require(hashlib.sha256(data).hexdigest() == state.RAIL_HELPER_SHA256, 'Rail helper binary differs from the pinned one.')
+        data = helper.read_bytes()
+        require(hashlib.sha256(data).hexdigest() == expected, 'Rail helper binary differs from the pinned one.')
         oscillator = int(self.tx('readl','0x07090160'),16)
         require((oscillator>>14)&3==2 and oscillator&0x10000002==0x10000002,
                 'Rail helper requires the enabled raw 26 MHz oscillator.')
+        require(len(data) <= reservation[1], 'Rail helper exceeds its linked reservation.')
+        regions = [reservation, (0x42000000, 16384)]
+        backups = images.backup_dram(self, regions, phase)
+        self.record.update(dram_dirty=True, dram_restored=False)
+        self.record.setdefault('rail_dram_backups', {})[phase] = backups
+        self.journal()
         self.upload(0x41000000, images.write(evidence/'rail-helper.bin',data))
         self.upload(0x42000000, images.write(evidence/'rail-blank.bin', bytes(16384)))
         # This exact legacy helper returns via RMR but does not disarm WDT0.
@@ -432,8 +458,12 @@ class Live:
         log = data[256:256+values[3]].decode(errors='replace')
         (evidence/'rail.log').write_text(log)
         # The helper performs all boot-clock, speed-bin and PMIC readbacks.
-        self.record['rails'] = images.rail_result(values, log)
+        self.record['rails'] = images.post_rail_result(values, log) if post else images.rail_result(values, log)
+        run['image_sha256'] = expected
         run['rails'] = self.record['rails']
+        images.restore_dram(self, backups, regions)
+        self.record.update(dram_restored=True, dram_dirty=False)
+        run['dram_restored'] = True
         self.journal()
 
     def live_state(self, finite_npu=False):
@@ -446,6 +476,12 @@ class Live:
         return images.prepare(self.args, info, {} if self.args.kind=='probe' else self.live_state(info.get('finite_npu',False)), self.evidence/'bundle')
 
     def launch(self, plan):
+        if plan.get('format') == 'generic':
+            images.validate_uploads(plan)
+            plan['dram_backups'] = images.backup_dram(self, plan['preserve_regions'])
+            self.record['dram_backups'] = plan['dram_backups']
+            self.record.update(dram_restored=False, dram_dirty=True)
+            self.journal()
         if plan.get('format') == 'npu':
             plan['finite'].require_entry_state(self.tx)
             backup = self.evidence/'npu-DRAM-before.bin'
@@ -476,7 +512,7 @@ class Live:
             self.record['dram_lost'] = True
             return 'watchdog-reset'
         if not (decoded['session'] and decoded.get('last',{}).get('stage') == crumbs.RETURN_ROM and
-                decoded['last']['value'] == 0):
+                decoded['last']['value'] == 0 and not decoded.get('fault') and not decoded.get('board_failure')):
             raise UnresolvedReturn('Return lacks the matching RETURN_ROM breadcrumb.')
         self.record['normal_return'] = True
         return 'returned'
@@ -485,8 +521,8 @@ class Live:
         try:
             return images.capture(self, plan, self.args)
         except BaseException as error:
-            if plan.get('format') == 'npu' and not self.record.get('dram_restored'):
-                self.quarantine('NPU retirement or DRAM restoration unverified: '+str(error))
+            if plan.get('format') in ('npu', 'generic') and not self.record.get('dram_restored'):
+                self.quarantine('Native retirement or DRAM restoration unverified: '+str(error))
             if isinstance(error, ValueError):
                 raise Mismatch(str(error)) from error
             raise
@@ -592,6 +628,9 @@ def references(args):
             paths.update(tree/name for name in finite.HOST_SOURCES)
             paths.update(tree/name for name in ('apps/npu-finite/development.py','tools/vendor-mbus.py'))
     paths.update((args.fel,args.rail_helper))
+    if args.restore_rails:
+        paths.update((POST_RAIL_HELPER, POST_RAIL_HELPER.parent/'input-identities.json',
+                      POST_RAIL_HELPER.parent/'build/probe.elf'))
     if args.kind == 'npu':
         paths.add(args.objcopy)
     for directory in (args.ddr_build,args.ddr_restore):
@@ -671,7 +710,7 @@ def run_image(args, backend=Live):
                 timed('identity', owner.sanity)
                 timed('reset', owner.reset)
                 timed('dram', owner.dram)
-                if helper_only or info['entry_guard']:
+                if helper_only or info['entry_guard'] or args.kind == 'npu':
                     timed('rails', owner.rails)
                 if helper_only:
                     result['outcome'] = 'returned'
@@ -686,6 +725,17 @@ def run_image(args, backend=Live):
                     (evidence/'output.bin').write_bytes(payload)
                     result['return_report'] = captured['report']
                     result['output_sha256'] = hashlib.sha256(payload).hexdigest()
+                    if info['entry_guard'] and getattr(args, 'restore_rails', False):
+                        if plan.get('format') == 'generic':
+                            require(result.get('native_retirement_validated') and result.get('dram_restored'),
+                                    'Rail restoration requires native retirement and restored DRAM.')
+                        after = timed('restore-state', owner.live_state)
+                        save(evidence/'state-after.json', after)
+                        require(not state.boot_clocks(after['words']),
+                                'CPU clocks differ from boot words before rail restoration.')
+                        # Mandatory retirement and RAM restoration precede optional result validation.
+                        timed('restore-rails', lambda: owner.rails('restore-rails'))
+                        result['rails_restored'] = True
                     matched = captured['valid']
                     if expected:
                         matched &= matches_expectation(expected, payload)
@@ -709,14 +759,6 @@ def run_image(args, backend=Live):
                             wanted = args.expect_result if getattr(args, 'expect_result', None) is not None else decoder.expected(values)
                             if decoded != wanted:
                                 raise Mismatch('Decoded result differs from expectation.')
-                    if info['entry_guard'] and getattr(args, 'restore_rails', False):
-                        after = timed('restore-state', owner.live_state)
-                        save(evidence/'state-after.json', after)
-                        require(not state.boot_clocks(after['words']),
-                                'CPU clocks differ from boot words before rail restoration.')
-                        # Capture and decoder succeeded on a confirmed normal return.
-                        timed('restore-rails', lambda: owner.rails('restore-rails'))
-                        result['rails_restored'] = True
                 else:
                     decoded = result.get('breadcrumbs',{})
                     fault = decoded.get('fault',{})
@@ -1195,7 +1237,7 @@ def run_options(parser, submit=False):
     parser.add_argument('--decode-application', action='store_true', help='Use the application decoder and its default inputs when available.')
     parser.add_argument('--records', type=Path, help='Board, thermal and CPU session records for a generic image.')
     parser.add_argument('--template', type=Path, help='Typed-session bundle, or legacy bundle with board/ and assets/.')
-    parser.add_argument('--host-tree', type=Path, help='Legacy GPU or finite NPU host source tree; generic images use this OS tree.')
+    parser.add_argument('--host-tree', type=Path, help='Host source tree for image geometry, session preparation and return validation.')
     parser.add_argument('--input', action='append', type=Path, default=[])
     parser.add_argument('--fel', type=Path, default=state.FEL)
     parser.add_argument('--rail-helper', type=Path, default=state.RAIL_HELPER)

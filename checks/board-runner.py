@@ -255,8 +255,8 @@ def transport_cases(out):
         result,model,owner=lifecycle(out/('restore-'+variant),variant,restore=True)
         assert result['outcome']==expected,(variant,result)
         assert bool(model.quarantined)==(variant in ('fel-after-return','missing-return','wrong-return-session')),(variant,model.quarantined)
-        assert bool(result.get('rails_restored'))==(variant=='normal')
-        assert owner.rail_phases==(['rails','restore-rails'] if variant in ('normal','restore-failure') else ['rails'])
+        assert bool(result.get('rails_restored'))==(variant in ('normal','mismatch','decoder-failure','decoder-invalid'))
+        assert owner.rail_phases==(['rails','restore-rails'] if variant in ('normal','mismatch','decoder-failure','decoder-invalid','restore-failure') else ['rails'])
         if variant=='watchdog-before-entry':
             assert result['dram_lost'] and not result['breadcrumbs']['session']
         if variant in ('missing-return','wrong-return-session','watchdog-before-entry'):
@@ -289,8 +289,8 @@ def decoded_expectation_cases(out):
         result, model, owner=lifecycle(out/variant, variant, restore=True)
         good=variant=='decoder-expected'
         assert result['outcome']==('returned' if good else 'result-mismatch'),result
-        assert bool(result.get('rails_restored'))==good
-        assert owner.rail_phases==(['rails','restore-rails'] if good else ['rails'])
+        assert result['rails_restored']
+        assert owner.rail_phases==['rails','restore-rails']
         assert result['normal_return'] and not model.quarantined
         passed(variant)
 
@@ -511,6 +511,7 @@ def copied_return_report(epoch):
 def gpu_capture_cases(out, gpu_images):
     """Run the real generic capture after fake FEL return with exact ELF layouts."""
     require_images = bool(gpu_images)
+    return_host=images.load('generic_capture_return_host',ROOT/'apps/os/cpu-return-host.py')
     assert require_images, 'gpu-capture requires --gpu-image for each real ELF under test'
     for index,image in enumerate(gpu_images):
         info=images.inspect(image,'gpu-return')
@@ -562,8 +563,11 @@ def gpu_capture_cases(out, gpu_images):
                 def dram(self):pass
                 def rails(self):pass
                 def prepare(self,info):
-                    return {'epoch':epoch,'generation':generation,'watchdog':{'mode':0xb1,'session_seconds':1},
-                            'uploads':[],'launch':['exe','0x52000'],'format':'generic','geometry':geo}
+                    plan={'epoch':epoch,'generation':generation,'watchdog':{'mode':0xb1,'session_seconds':1},
+                            'uploads':[],'launch':['exe','0x52000'],'format':'generic','geometry':geo,'return_host':return_host,
+                            'image_ram':return_host.IMAGE_RAM,'input_regions':[]}
+                    plan['preserve_regions']=images.preservation_regions(plan)
+                    return plan
                 def read(self,address,size,path):
                     data=super().read(address,size,path)
                     if variant=='short-gpu' and address==gpu['address']:
@@ -627,6 +631,7 @@ def report_cases(out,hello):
         else:raise AssertionError(variant+' accepted')
     passed('generic-retirement-report-success-session-drain-and-length')
     if hello:
+        return_host=host
         # Move the report symbol to MMIO. Structural preflight must refuse it
         # without constructing a transport owner or resetting a board.
         import io as _io
@@ -666,8 +671,11 @@ def report_cases(out,hello):
                 def dram(self):pass
                 def rails(self):pass
                 def prepare(self,info):
-                    return {'epoch':1,'generation':2,'watchdog':{'mode':0xb1,'session_seconds':1},
-                            'uploads':[],'launch':['exe','0x52000'],'format':'generic','geometry':geo}
+                    plan={'epoch':1,'generation':2,'watchdog':{'mode':0xb1,'session_seconds':1},
+                            'uploads':[],'launch':['exe','0x52000'],'format':'generic','geometry':geo,'return_host':return_host,
+                            'image_ram':return_host.IMAGE_RAM,'input_regions':[]}
+                    plan['preserve_regions']=images.preservation_regions(plan)
+                    return plan
             with patch.object(board.os,'access',return_value=True),contextlib.redirect_stdout(io.StringIO()):
                 result=board.run_image(args,Backend)
             assert result['outcome']==('result-mismatch' if foreign else 'returned'),result
@@ -768,7 +776,7 @@ def rail_cases(out):
             try:owner.rails()
             except ValueError as error:assert expired and 'watchdog' in str(error)
             else:assert not expired
-        assert not owner.armed and not model.quarantined
+        assert not owner.armed and bool(model.quarantined)==expired
         if expired:assert not (root/'rails/rail-result.bin').exists(),'Never read DRAM after possible WDT expiry.'
         else:assert owner.record['rails']['dcdc5_uv']==800000
         passed('pinned-rail-helper-'+variant)
