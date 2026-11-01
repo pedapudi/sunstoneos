@@ -150,8 +150,24 @@ unsigned os_npu_stopped(void)
         !atomic_load_explicit(&npu.runtime.failed,memory_order_acquire)&&
         !atomic_load_explicit(&npu.runtime.service.irq_pending,memory_order_acquire)&&
         (!atomic_load_explicit(&npu.active,memory_order_acquire)||
-         atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire));
+         (atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire)&&
+          npu_service_runtime_parked(&npu.runtime.service)));
 }
+static int retirement_fault(void)
+{
+    if(atomic_load_explicit(&npu.closed,memory_order_acquire)||
+       atomic_load_explicit(&npu.stopped,memory_order_acquire)){
+        unsigned late=atomic_load_explicit(&npu.runtime.service.irq_pending,memory_order_acquire);
+        if(atomic_load_explicit(&npu.runtime.failed,memory_order_acquire))late|=1u<<8;
+        if(atomic_load_explicit(&npu.active,memory_order_acquire)&&
+           !atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire))late|=1u<<9;
+        if(atomic_load_explicit(&npu.failed,memory_order_acquire))late|=1u<<10;
+        if(late){(void)FAIL_REQUEST(NPU_SERVICE_CLOSE,UINT32_MAX,0,NULL,0,late);return 1;}
+    }
+    return 0;
+}
+int os_npu_retirement_check(void)
+{return !retirement_fault()&&os_npu_complete();}
 #ifdef SUNSTONE_A733_OS_PERF
 /* Performance modes: the request number and rate in one word, the answer
  * number and result in another; the bootstrap serves requests only after the
@@ -288,6 +304,13 @@ static void bootstrap(void *unused)
                 for(;;) {
                     if(!watch(&now,&why)){(void)fail_watch(NPU_SERVICE_STATUS,UINT32_MAX,0,NULL,&why);goto failed;}
                     if(atomic_load_explicit(&npu.closed,memory_order_acquire)) {
+                        /* The final reply precedes the worker's last callback.
+                         * Its release acknowledgment and notification precede
+                         * retiring startup/IRQ provider ownership. */
+                        if(!npu_service_runtime_parked(&npu.runtime.service)){
+                            (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));continue;
+                        }
+                        if(retirement_fault())goto failed;
                         r=npu_runtime_stop_poll(&npu.runtime);
                         if(r==A733_NPU_PLATFORM_RETAINED){(void)FAIL_REQUEST(NPU_SERVICE_CLOSE,0,0,NULL,A733_NPU_PLATFORM_READY,r);goto failed;}
                         if(r==A733_NPU_PLATFORM_READY) {

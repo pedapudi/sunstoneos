@@ -169,6 +169,9 @@ const struct ss_grant *ss_grant(void);
 int ss_live(void);
 /* One atomic store: this application's supervision record. */
 void ss_progress(void);
+/* Read-only 24 MHz system counter; cached startup grants EL0 access. The
+ * serialized read orders diagnostic timestamps around ordinary data loads. */
+uint64_t ss_counter_ticks(void);
 /* Load hint: 1 while the thermal policy is throttling or has failed. */
 int ss_throttled(void);
 /* 1 once the CPU clock owner has finished the session grant's requests,
@@ -273,6 +276,21 @@ int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
 /* After the final run, repeat until 1 (slot closed), or a negative failure.
  * Successful CLOSE is terminal for this session. */
 int ss_npu_close(void);
+/* Optional diagnostic observer, registered once before scheduling. Callbacks
+ * run on the serialized EL1 worker, never block and access ordinary memory
+ * only. START follows a matching RUNNING job's hardware-busy sample; the
+ * callback records counters A. CANDIDATE returns 1 after counters B advance;
+ * CONFIRMED follows the same job's second hardware-busy sample. DONE precedes
+ * reap and records actual ISR receipts. An observer cannot delay completion.
+ * Kick only notifies that worker; it performs no device operation. */
+enum { SS_NPU_OBSERVE_CANDIDATE=0,SS_NPU_OBSERVE_START=1,
+       SS_NPU_OBSERVE_DONE=2,SS_NPU_OBSERVE_CONFIRMED=3 };
+struct ss_npu_observation {
+    uint64_t ticket,token,client,model,trigger_ticks,sample_ticks,idle,state,irq_ticks,irq_count;
+};
+int ss_npu_observe(int (*)(void *,unsigned,const struct ss_npu_observation *),void *);
+void ss_npu_observer_kick(void);
+
 
 /* USB class calls return 1 for a result, 0 while pending, -1 on refusal or
  * disconnect. Input events are copied. Serial and camera payloads stay in

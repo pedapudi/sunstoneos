@@ -105,6 +105,11 @@ struct npu_service_runtime_state {
     void (*loop)(struct npu_service *);
     unsigned failed, idle_hints;
 };
+/* Optional diagnostic observer. The worker calls it once after attribution
+ * of a trigger (event 1), on subsequent passes before IRQ progress (0), and
+ * before reaping a completed command (2). It must never block or modify the
+ * service. Register before scheduling. All register reads use ops.read and
+ * its native startup gate; event +0x10 is destructive and forbidden here. */
 struct npu_service {
     struct a733_npu_controller controller;
     struct a733_npu_ops ops;
@@ -112,6 +117,7 @@ struct npu_service {
     struct npu_service_irq_ops irq_ops;
     void *irq_cookie;
     atomic_uint irq_pending, irq_stopped, irq_completions;
+    atomic_uint runtime_parked;
     unsigned irq_bound, irq_masked, irq_rearming, irq_retained;
     unsigned irq_waiting;
     TickType_t irq_wait_start[3];
@@ -138,7 +144,16 @@ struct npu_service {
     unsigned shared, members, running, next;
     struct npu_service_member member[NPU_SERVICE_CLIENTS];
     struct npu_service_runtime_state *runtime; /* Null outside runtime mode. */
+#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
+    void (*observe)(void *,const struct npu_service *,unsigned);
+    void *observe_cookie;
+    uint64_t trigger_ticks; /* Native adapter's counter at the trigger write. */
+#endif
 };
+
+int npu_service_runtime_parked(const struct npu_service *);
+int npu_service_observe(struct npu_service *,
+    void (*)(void *,const struct npu_service *,unsigned),void *);
 
 /* Optional normal restart for the deferred, single-client IRQ service. Bind
  * before scheduling, after client 0 and its IRQ. ready runs in the worker

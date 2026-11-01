@@ -37,6 +37,8 @@ unsigned os_npu_stopped(void);
 int os_npu_progress(void);
 /* Published finite result with local stop complete and no retained failure. */
 int os_npu_complete(void);
+/* Task context only: preserve a late atomic failure before generic cleanup. */
+int os_npu_retirement_check(void);
 void os_npu_client_task(void *);
 int os_npu_task_privileged(void (*)(void *),void *);
 struct a733_pin_handoff;

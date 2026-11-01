@@ -411,6 +411,19 @@ static enum npu_service_result execute_runtime(struct npu_service *s,
 }
 /* Hand a completed job back to the runtime; on a controller fault release
  * every held reply. */
+int npu_service_runtime_parked(const struct npu_service *s)
+{return s&&s->runtime&&atomic_load_explicit(&s->runtime_parked,memory_order_acquire);}
+int npu_service_observe(struct npu_service *s,
+    void (*observe)(void *,const struct npu_service *,unsigned),void *cookie)
+{
+#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
+    if(!s||!s->initialized||!s->runtime||!observe||s->observe||
+       xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
+    s->observe=observe;s->observe_cookie=cookie;return 1;
+#else
+    (void)s;(void)observe;(void)cookie;return 0;
+#endif
+}
 static void runtime_settle(struct npu_service *s)
 {
     struct a733_npu_controller *c = &s->controller;
@@ -418,6 +431,9 @@ static void runtime_settle(struct npu_service *s)
     if (c->state == A733_NPU_DONE && s->running < NPU_SERVICE_CLIENTS) {
         void *token; int stopped;
         unsigned client = s->running;
+#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
+        if(s->observe)s->observe(s->observe_cookie,s,2);
+#endif
         if (a733_npu_reap(c, &token, &stopped) && !stopped) {
             s->running = NPU_SERVICE_CLIENTS; s->member[client].state = MEMBER_QUEUED;
             rt->hooks.finished(rt->context, client, 0);
@@ -466,8 +482,20 @@ static void runtime_worker(struct npu_service *s)
             (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             continue;
         }
+        if(s->controller.state==A733_NPU_CLOSED&&!s->members&&
+           atomic_load_explicit(&s->irq_stopped,memory_order_acquire)){
+            /* Runtime slot CLOSE is terminal. Publish after the final reply,
+             * then invoke no backend or runtime callback again. Unexpected
+             * notifications cannot resume device ownership. */
+            atomic_store_explicit(&s->runtime_parked,1,memory_order_release);
+            if(s->activation.bootstrap)xTaskNotifyGive(s->activation.bootstrap);
+            for(;;)(void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+        }
         if (!controller_active(s) && s->controller.state != A733_NPU_FAULT)
             (void)s->ops.microseconds(s->cookie);
+#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
+        if(s->observe&&s->controller.state==A733_NPU_RUNNING)s->observe(s->observe_cookie,s,0);
+#endif
         int progressed = runtime_progress(s, timed_out);
         runtime_settle(s);
         if (timed_out && idle_hint(s)) { timed_out = 0; continue; }
@@ -633,6 +661,7 @@ static int initialize(struct npu_service *s, const struct a733_npu_ops *ops, voi
     s->activation=activation ? *activation : (struct npu_service_activation){0};
     atomic_init(&s->activation_state,activation ? SERVICE_WAITING : SERVICE_ACTIVE);
     atomic_init(&s->irq_pending,0);atomic_init(&s->irq_stopped,0);atomic_init(&s->irq_completions,0);
+    atomic_init(&s->runtime_parked,0);
     s->initialized = 1; s->affinity = affinity; instance = s; creating_worker = 1;
 #if configNUMBER_OF_CORES > 1
     s->worker = xTaskCreateStaticAffinitySet(worker, "npu-service", NPU_SERVICE_STACK_WORDS,
@@ -760,6 +789,9 @@ int npu_service_start(struct npu_service *s, unsigned client, unsigned command, 
     if (!a733_npu_submit(c, &s->commands[command], timeout) && c->state != A733_NPU_FAULT) return -1;
     /* A faulted start stays attributed to its member and is retained. */
     s->member[client].state = MEMBER_RUNNING; s->running = client;
+#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
+    if(s->observe&&c->state==A733_NPU_RUNNING)s->observe(s->observe_cookie,s,1);
+#endif
     return c->state == A733_NPU_FAULT ? -1 : 1;
 }
 void npu_service_release(struct npu_service *s, unsigned client, enum npu_service_result result,
