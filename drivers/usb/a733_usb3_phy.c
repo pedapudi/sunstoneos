@@ -47,8 +47,9 @@ static int update(struct a733_usb2_platform *p,uintptr_t a,uint32_t clear,uint32
 static int wait_after(struct a733_usb2_platform *p,uint64_t delay)
 {
     uint64_t now;
-    if(p->ops.now(p->cookie,&now)!=1||now<p->last_now||now>=p->config.deadline||delay>=p->config.deadline-now)return 0;
-    p->last_now=now;p->ss_wait=now+delay;return 1;
+    if(p->ops.now(p->cookie,&now)!=1||now<p->last_now||now>=p->config.deadline||delay>=p->config.deadline-now-1)return 0;
+    /* Preserve the hold after the floor-us sample, including its fraction. */
+    p->last_now=now;p->ss_wait=now+delay+1;return 1;
 }
 int a733_usb3_phy_poll(struct a733_usb2_platform *p)
 {
