@@ -15,7 +15,9 @@
 #define SS_SESSION_MAX_BYTES 4096u
 #define SS_SESSION_MAGIC UINT64_C(0x324e4f4953534553) /* "SESSION2" */
 #define SS_SESSION_VERSION 1u
-/* The loader compares the four SID words' digest with the prefix sid_evidence. */
+/* The loader compares the four SID words' digest with the prefix
+ * sid_evidence. OS admission requires this flag when the grant has no USB
+ * storage, the recorded mode that today's loader binds to the board. */
 #define SS_SESSION_BIND_SID 1u
 struct ss_session_header {
     uint64_t magic, version;
@@ -26,17 +28,16 @@ struct ss_session_header {
     uint8_t manifests_sha256[32];   /* SHA-256 of the image's sunstone_manifest section */
 };
 struct ss_extent {
-    uint16_t type;
-    uint16_t index;                 /* application index for per-application types */
+    uint32_t type;
     uint32_t bytes;                 /* payload bytes that follow */
 };
 /* OS service extents carry today's records unchanged: thermal facts, the I2S
- * receive facts, the NPU client facts and the CPU clock grant (whose zero
- * epoch means the prefix epoch). */
+ * receive facts (whose capture_samples is the capture length), the NPU
+ * client facts and the CPU clock grant. Admission loads a copy of the grant
+ * with the prefix epoch stamped in when the grant names clusters. */
 enum {
     SS_EXTENT_THERMAL = 1, SS_EXTENT_AUDIO = 2, SS_EXTENT_NPU = 3, SS_EXTENT_CPU_GRANT = 4,
-    SS_EXTENT_INPUTS = 16,          /* struct ss_input_fact per INPUT region, manifest order */
-    SS_EXTENT_PARAMS = 17           /* uint8_t sha256[32], then the opaque block */
+    SS_EXTENT_INPUTS = 16           /* struct ss_input_fact per INPUT region, manifest order */
 };
 struct ss_input_fact {
     uint64_t bytes;
@@ -48,7 +49,11 @@ _Static_assert(sizeof(struct ss_extent) == 8 && sizeof(struct ss_input_fact) == 
 
 /* Host channel frame header: today's 64-byte USB0 response header. */
 #define SS_FRAME_MAGIC UINT32_C(0x424d494d)
-#define SS_HOST_OS_FIRST 0x80u        /* OS operations; applications use 0x00..0x7f */
+/* OS operations: 0x05..0x08 (fault, NPU, thermal and performance reports,
+ * with today's numbers) and 0x80..0xff for new ones. */
+#define SS_HOST_OS_REPORT_FIRST 0x05u
+#define SS_HOST_OS_REPORT_LAST 0x08u
+#define SS_HOST_OS_FIRST 0x80u
 struct ss_host_frame {
     uint32_t magic, version, state, bytes, total, offset, storage, op;
     uint64_t epoch, generation;
@@ -63,10 +68,8 @@ _Static_assert(sizeof(struct ss_host_frame) == 64 && offsetof(struct ss_host_fra
 enum { SS_RESULT_FINISHED = 1 };
 struct ss_result {
     uint64_t magic, version, bytes;  /* bytes: header plus payload capacity */
-    uint64_t epoch, generation;
-    uint32_t application, status;
-    uint64_t payload_bytes;
+    uint64_t epoch, generation, status, payload_bytes;
 };
-_Static_assert(sizeof(struct ss_result) == 56 && offsetof(struct ss_result, application) == 40 &&
+_Static_assert(sizeof(struct ss_result) == 56 && offsetof(struct ss_result, status) == 40 &&
     offsetof(struct ss_result, payload_bytes) == 48, "ss_result layout");
 #endif

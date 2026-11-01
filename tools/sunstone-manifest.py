@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Generate and decode SunstoneOS application manifests (docs/designs/app-abi.md).
 
-`emit` validates the manifest.json files of one image together, assigns the
-addresses of unpinned regions, and writes per application a C source that
-places the binary manifest in the section "sunstone_manifest", a header of
-region indices, and the packed bytes that the C compiler must reproduce.
-`decode` reads the bytes of that section, as host tools do from a linked
-image, and prints the manifests as JSON.
+`emit` validates an image's application manifest.json, assigns the addresses
+of unpinned regions, and writes a C source that places the binary manifest
+in the section "sunstone_manifest", a header with the region indices and the
+prototypes of the application's functions, and the packed bytes that the C
+compiler must reproduce. `decode` reads the bytes of that section, as host
+tools do from a linked image, and prints the manifests as JSON.
 
-Status: prototype. The OS build does not call this tool yet.
+An image holds one application. Status: prototype. The OS build does not
+call this tool yet.
 """
 import argparse
 import json
@@ -19,18 +20,17 @@ import sys
 
 MAGIC = 0x5453464e4d505041
 VERSION = 1
-MANIFEST_BYTES = 560
+MANIFEST_BYTES = 552
 REGIONS = 8
-HEAD = struct.Struct('<QII16sIIBBBBIQQQQIIBBB5s')
+HEAD = struct.Struct('<QII16sIIBBBBIQQQQIBBBB')
 AUDIO = struct.Struct('<IHHII')
 REGION = struct.Struct('<QQII32s')
-assert HEAD.size == 96 and AUDIO.size == 16 and REGION.size == 56
+assert HEAD.size == 88 and AUDIO.size == 16 and REGION.size == 56
 assert HEAD.size + AUDIO.size + REGIONS * REGION.size == MANIFEST_BYTES
 
 DEVICES = {'usb-storage': 1 << 0, 'usb-keyboard': 1 << 1, 'audio-i2s': 1 << 2,
-           'audio-headset': 1 << 3, 'radio': 1 << 4, 'gpu': 1 << 5, 'npu': 1 << 6}
+           'audio-headset': 1 << 3, 'gpu': 1 << 4}
 CAPTURE = DEVICES['audio-i2s'] | DEVICES['audio-headset']
-PRIVILEGE = {'el0': 0, 'el1': 1}
 CLUSTER = {'a55': 0, 'a76': 1}
 KIND = {'input': 1, 'work': 2, 'output': 3}
 ACCESS = {'read': 1, 'write': 2, 'gpu-read': 4, 'gpu-write': 8}
@@ -39,8 +39,11 @@ ACCESS = {'read': 1, 'write': 2, 'gpu-read': 4, 'gpu-write': 8}
 WINDOW = (0x44000000, 0x47000000)
 PAGE = 0x1000
 BLOCK = 0x200000
+# OS host operations: the fault, NPU, thermal and performance reports keep
+# 0x05..0x08, and new OS operations start at 0x80.
+OS_REPORTS = (0x05, 0x09)
 OS_HOST_FIRST = 0x80
-LIMITS = {'output_limit': 65536, 'params_limit': 2048}
+OUTPUT_LIMIT = 65536
 
 
 def fail(message):
@@ -71,7 +74,7 @@ def integer(value, where, low=0, high=(1 << 64) - 1):
 def load(path):
     """manifest.json -> normalized dict with integer fields."""
     raw = json.loads(Path(path).read_text())
-    known = {'name', 'devices', 'cpu', 'regions', 'audio', 'deadlines', 'output_limit', 'params_limit', 'host_ops'}
+    known = {'name', 'devices', 'cpu', 'regions', 'audio', 'deadlines', 'output_limit', 'host_ops'}
     require(set(raw) <= known, '%s: unknown keys %s' % (path, sorted(set(raw) - known)))
     name = raw['name']
     require(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9-]{0,14}', name) is not None,
@@ -86,10 +89,11 @@ def load(path):
     require(not wanted or (listed == wanted and bin(wanted).count('1') == 1),
             name + ': a required capture device excludes the other')
     cpu = raw['cpu']
-    require(cpu.get('privilege', 'el0') in PRIVILEGE and cpu.get('cluster', 'a55') in CLUSTER,
-            name + ': privilege is el0 or el1, cluster is a55 or a76')
+    require(set(cpu) <= {'cluster', 'workers', 'priority', 'stack_bytes', 'heap_bytes'},
+            name + ': unknown cpu keys %s' % sorted(set(cpu) - {'cluster', 'workers', 'priority', 'stack_bytes', 'heap_bytes'}))
+    require(cpu.get('cluster', 'a55') in CLUSTER, name + ': cluster is a55 or a76')
     m = {'name': name, 'devices_required': required, 'devices_optional': optional,
-         'privilege': PRIVILEGE[cpu.get('privilege', 'el0')], 'cluster': CLUSTER[cpu.get('cluster', 'a55')],
+         'cluster': CLUSTER[cpu.get('cluster', 'a55')],
          'workers': integer(cpu.get('workers', 0), name + ' workers', 0, 7),
          'priority': integer(cpu['priority'], name + ' priority', 1, 30),
          'stack_bytes': integer(cpu['stack_bytes'], name + ' stack_bytes', 1024, 1 << 20),
@@ -99,24 +103,27 @@ def load(path):
     m['run_deadline_us'] = integer(d.get('run_us', 0), name + ' run_us')
     m['return_reserve_us'] = integer(d['return_reserve_us'], name + ' return_reserve_us')
     m['progress_window_us'] = integer(d['progress_window_us'], name + ' progress_window_us', 1, 60000000)
-    for key, high in LIMITS.items():
-        m[key] = integer(raw.get(key, 0), name + ' ' + key, 0, high)
+    m['output_limit'] = integer(raw.get('output_limit', 0), name + ' output_limit', 0, OUTPUT_LIMIT)
     ops = raw.get('host_ops', {'first': 0, 'count': 0})
-    m['host_op_first'] = integer(ops['first'], name + ' host_ops.first', 0, OS_HOST_FIRST - 1)
-    m['host_op_count'] = integer(ops['count'], name + ' host_ops.count', 0, OS_HOST_FIRST)
-    require(m['host_op_first'] + m['host_op_count'] <= OS_HOST_FIRST, name + ': host operations reach the OS range')
-    require(m['host_op_count'] or not m['host_op_first'], name + ': an empty host range starts at 0')
+    first = m['host_op_first'] = integer(ops['first'], name + ' host_ops.first', 0, OS_HOST_FIRST - 1)
+    count = m['host_op_count'] = integer(ops['count'], name + ' host_ops.count', 0, OS_HOST_FIRST)
+    require(first + count <= OS_HOST_FIRST, name + ': host operations reach the OS range 0x80..0xff')
+    require(not count or first + count <= OS_REPORTS[0] or OS_REPORTS[1] <= first,
+            name + ': host operations overlap the OS reports 0x05..0x08')
+    require(count or not first, name + ': an empty host range starts at 0')
     audio = raw.get('audio')
     if (required | optional) & CAPTURE:
         require(audio is not None, name + ': a capture device needs an audio format')
         m['audio'] = {'rate_hz': integer(audio['rate_hz'], name + ' rate_hz', 8000, 192000),
                       'channels': integer(audio['channels'], name + ' channels', 1, 2),
                       'bits': integer(audio['bits'], name + ' bits', 16, 32),
+                      'min_frames': integer(audio['min_frames'], name + ' min_frames', 1, 1 << 24),
                       'max_frames': integer(audio['max_frames'], name + ' max_frames', 1, 1 << 24)}
         require(m['audio']['bits'] in (16, 24, 32), name + ': bits is 16, 24 or 32')
+        require(m['audio']['min_frames'] <= m['audio']['max_frames'], name + ': min_frames exceeds max_frames')
     else:
         require(audio is None, name + ': an audio format needs a capture device')
-        m['audio'] = {'rate_hz': 0, 'channels': 0, 'bits': 0, 'max_frames': 0}
+        m['audio'] = {'rate_hz': 0, 'channels': 0, 'bits': 0, 'min_frames': 0, 'max_frames': 0}
     regions, names = [], []
     require(len(raw.get('regions', [])) <= REGIONS, name + ': at most %d regions' % REGIONS)
     for i, r in enumerate(raw.get('regions', [])):
@@ -158,53 +165,46 @@ def span(r):
     return r['address'], r['address'] + -(-r['bytes'] // PAGE) * PAGE
 
 
-def assign(manifests):
-    """Place unpinned regions at the lowest free 2 MiB boundary; check the image."""
+def assign(m):
+    """Place unpinned regions at the lowest free 2 MiB boundary in the window.
+
+    A second application per image would pass every manifest of the image
+    through this placement, so that regions of different applications are
+    checked against each other."""
     taken = []
 
-    def place(where, r):
+    def place(i, r):
+        where = '%s region %s' % (m['name'], m['region_names'][i])
         low, high = span(r)
         require(WINDOW[0] <= low < high <= WINDOW[1], '%s: [%#x, %#x) outside the application window' % (where, low, high))
         for other, (a, b) in taken:
-            require(high <= a or b <= low, '%s overlaps %s' % (where, other))
-        taken.append((where, (low, high)))
+            require(high <= a or b <= low, '%s overlaps region %s' % (where, other))
+        taken.append((m['region_names'][i], (low, high)))
 
-    for m in manifests:
-        for i, r in enumerate(m['regions']):
-            if r['address'] is not None:
-                place('%s region %s' % (m['name'], m['region_names'][i]), r)
-    for m in manifests:
-        for i, r in enumerate(m['regions']):
-            if r['address'] is None:
-                where = '%s region %s' % (m['name'], m['region_names'][i])
-                r['address'] = WINDOW[0]
-                while True:
-                    low, high = span(r)
-                    clash = [b for _, (a, b) in taken if not (high <= a or b <= low)]
-                    if not clash:
-                        break
-                    r['address'] = -(-max(clash) // BLOCK) * BLOCK
-                place(where, r)
-    seen, ops = set(), []
-    for m in manifests:
-        require(m['name'] not in seen, 'application %s listed twice' % m['name'])
-        seen.add(m['name'])
-        first, count = m['host_op_first'], m['host_op_count']
-        for other, (a, b) in ops:
-            require(first + count <= a or b <= first, '%s host operations overlap %s' % (m['name'], other))
-        if count:
-            ops.append((m['name'], (first, first + count)))
-    return manifests
+    for i, r in enumerate(m['regions']):
+        if r['address'] is not None:
+            place(i, r)
+    for i, r in enumerate(m['regions']):
+        if r['address'] is None:
+            r['address'] = WINDOW[0]
+            while True:
+                low, high = span(r)
+                clash = [b for _, (a, b) in taken if not (high <= a or b <= low)]
+                if not clash:
+                    break
+                r['address'] = -(-max(clash) // BLOCK) * BLOCK
+            place(i, r)
+    return m
 
 
 def pack(m):
     out = HEAD.pack(MAGIC, VERSION, MANIFEST_BYTES, m['name'].encode(), m['devices_required'],
-                    m['devices_optional'], m['privilege'], m['cluster'], m['workers'], m['priority'],
+                    m['devices_optional'], m['cluster'], m['workers'], m['priority'], 0,
                     m['stack_bytes'], m['heap_bytes'], m['run_deadline_us'], m['return_reserve_us'],
-                    m['progress_window_us'], m['output_limit'], m['params_limit'], m['host_op_first'],
-                    m['host_op_count'], len(m['regions']), bytes(5))
+                    m['progress_window_us'], m['output_limit'], m['host_op_first'],
+                    m['host_op_count'], len(m['regions']), 0)
     a = m['audio']
-    out += AUDIO.pack(a['rate_hz'], a['channels'], a['bits'], a['max_frames'], 0)
+    out += AUDIO.pack(a['rate_hz'], a['channels'], a['bits'], a['min_frames'], a['max_frames'])
     for r in m['regions']:
         out += REGION.pack(r['address'], r['bytes'], r['kind'], r['access'], bytes.fromhex(r['sha256']))
     out += bytes(REGION.size * (REGIONS - len(m['regions'])))
@@ -218,18 +218,18 @@ def unpack(raw):
     result = []
     for base in range(0, len(raw), MANIFEST_BYTES):
         b = raw[base:base + MANIFEST_BYTES]
-        (magic, version, size, name, required, optional, privilege, cluster, workers, priority, stack, heap,
-         run, reserve, window, output, params, first, count, regions, reserved) = HEAD.unpack_from(b)
-        require((magic, version, size) == (MAGIC, VERSION, MANIFEST_BYTES) and not any(reserved) and
+        (magic, version, size, name, required, optional, cluster, workers, priority, reserved0, stack, heap,
+         run, reserve, window, output, first, count, regions, reserved1) = HEAD.unpack_from(b)
+        require((magic, version, size) == (MAGIC, VERSION, MANIFEST_BYTES) and not reserved0 and not reserved1 and
                 regions <= REGIONS, 'manifest at %d: header differs' % base)
-        rate, channels, bits_, frames, zero = AUDIO.unpack_from(b, HEAD.size)
-        require(not zero, 'manifest at %d: audio reserved word set' % base)
+        rate, channels, bits_, low, high = AUDIO.unpack_from(b, HEAD.size)
         m = {'name': name.rstrip(b'\0').decode(), 'devices_required': required, 'devices_optional': optional,
-             'privilege': privilege, 'cluster': cluster, 'workers': workers, 'priority': priority,
+             'cluster': cluster, 'workers': workers, 'priority': priority,
              'stack_bytes': stack, 'heap_bytes': heap, 'run_deadline_us': run, 'return_reserve_us': reserve,
-             'progress_window_us': window, 'output_limit': output, 'params_limit': params,
+             'progress_window_us': window, 'output_limit': output,
              'host_op_first': first, 'host_op_count': count,
-             'audio': {'rate_hz': rate, 'channels': channels, 'bits': bits_, 'max_frames': frames}, 'regions': []}
+             'audio': {'rate_hz': rate, 'channels': channels, 'bits': bits_, 'min_frames': low, 'max_frames': high},
+             'regions': []}
         for i in range(REGIONS):
             address, length, kind, access, digest = REGION.unpack_from(b, HEAD.size + AUDIO.size + i * REGION.size)
             if i < regions:
@@ -252,22 +252,23 @@ def cname(name):
 def c_source(m):
     c = cname(m['name'])
     a = m['audio']
-    lines = ['/* Generated by tools/sunstone-manifest.py from %s/manifest.json. */' % m['name'],
-             '#include "sunstone_app.h"',
+    lines = ['/* Generated by tools/sunstone-manifest.py from the %s manifest.json. */' % m['name'],
+             '#include "%s-app.h"' % c,
              '__attribute__((used, retain, section("sunstone_manifest"), aligned(8)))',
              'const struct ss_manifest %s_manifest = {' % c,
              '    .magic = SS_MANIFEST_MAGIC, .version = SS_MANIFEST_VERSION, .bytes = sizeof(struct ss_manifest),',
              '    .name = "%s",' % m['name'],
              '    .devices_required = %#xu, .devices_optional = %#xu,' % (m['devices_required'], m['devices_optional']),
-             '    .privilege = %d, .cluster = %d, .workers = %d, .priority = %d, .stack_bytes = %du,' % (
-                 m['privilege'], m['cluster'], m['workers'], m['priority'], m['stack_bytes']),
+             '    .cluster = %d, .workers = %d, .priority = %d, .stack_bytes = %du,' % (
+                 m['cluster'], m['workers'], m['priority'], m['stack_bytes']),
              '    .heap_bytes = UINT64_C(%d), .run_deadline_us = UINT64_C(%d),' % (m['heap_bytes'], m['run_deadline_us']),
              '    .return_reserve_us = UINT64_C(%d), .progress_window_us = UINT64_C(%d),' % (
                  m['return_reserve_us'], m['progress_window_us']),
-             '    .output_limit = %du, .params_limit = %du,' % (m['output_limit'], m['params_limit']),
+             '    .output_limit = %du,' % m['output_limit'],
              '    .host_op_first = %d, .host_op_count = %d, .region_count = %d,' % (
                  m['host_op_first'], m['host_op_count'], len(m['regions'])),
-             '    .audio = {%du, %du, %du, %du, 0},' % (a['rate_hz'], a['channels'], a['bits'], a['max_frames']),
+             '    .audio = {%du, %du, %du, %du, %du},' % (
+                 a['rate_hz'], a['channels'], a['bits'], a['min_frames'], a['max_frames']),
              '    .regions = {']
     for r in m['regions']:
         digest = ','.join('0x' + r['sha256'][i:i + 2] for i in range(0, 64, 2))
@@ -279,12 +280,19 @@ def c_source(m):
 
 def c_header(m):
     c = cname(m['name'])
-    guard = c.upper() + '_REGIONS_H'
-    lines = ['/* Generated by tools/sunstone-manifest.py: indices into ss_grant()->regions. */',
-             '#ifndef ' + guard, '#define ' + guard]
+    guard = c.upper() + '_APP_H'
+    lines = ['/* Generated by tools/sunstone-manifest.py: the %s application\'s functions' % m['name'],
+             ' * and its indices into ss_grant()->regions. */',
+             '#ifndef ' + guard, '#define ' + guard, '#include "sunstone_app.h"',
+             '#ifdef __cplusplus', 'extern "C" {', '#endif',
+             'extern const struct ss_manifest %s_manifest;' % c,
+             '/* Optional: once, before the scheduler starts. */',
+             'void %s_init(void);' % c,
+             '/* The main task, at EL0, after input authentication. */',
+             'void %s_main(const struct ss_grant *grant);' % c]
     for i, n in enumerate(m['region_names']):
         lines.append('#define %s_REGION_%s %du' % (c.upper(), n.upper(), i))
-    lines += ['#endif', '']
+    lines += ['#ifdef __cplusplus', '}', '#endif', '#endif', '']
     return '\n'.join(lines)
 
 
@@ -292,7 +300,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='command', required=True)
     e = sub.add_parser('emit')
-    e.add_argument('--manifest', type=Path, action='append', required=True)
+    e.add_argument('--manifest', type=Path, required=True)
     e.add_argument('--output', type=Path, required=True)
     d = sub.add_parser('decode')
     d.add_argument('section', type=Path)
@@ -301,16 +309,13 @@ def main():
         json.dump(unpack(a.section.read_bytes()), sys.stdout, indent=2)
         print()
         return
-    manifests = assign([load(path) for path in a.manifest])
+    m = assign(load(a.manifest))
     a.output.mkdir(parents=True, exist_ok=True)
-    packed = b''
-    for m in manifests:
-        c = cname(m['name'])
-        (a.output / (c + '-manifest.c')).write_text(c_source(m))
-        (a.output / (c + '-regions.h')).write_text(c_header(m))
-        packed += pack(m)
-    (a.output / 'manifests.bin').write_bytes(packed)
-    (a.output / 'manifests.json').write_text(json.dumps([public(m) for m in manifests], indent=2) + '\n')
+    c = cname(m['name'])
+    (a.output / (c + '-manifest.c')).write_text(c_source(m))
+    (a.output / (c + '-app.h')).write_text(c_header(m))
+    (a.output / 'manifest.bin').write_bytes(pack(m))
+    (a.output / 'manifest.json').write_text(json.dumps([public(m)], indent=2) + '\n')
 
 
 if __name__ == '__main__':
