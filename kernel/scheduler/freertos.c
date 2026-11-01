@@ -100,6 +100,7 @@ static void ssKernelRetired(void *, unsigned, uint64_t);
 static bool ssKernelDispatch(void *, unsigned);
 static void ssKernelInspect(void *, unsigned, unsigned);
 static void ssKernelExpired(void *, const struct ss_deadline_result *);
+static void ssKernelPublishReference(struct ss_kernel_pin);
 static void ssKernelRetirement(void *context, unsigned slot, unsigned coordinator)
 {
     (void)context; (void)coordinator;
@@ -191,7 +192,9 @@ static bool ssKernelAddTask(TCB_t *t)
         if (!xSchedulerRunning || owner == ssKernelCPUId()) {
             configASSERT(ss_owner_enqueue(&ssKernelCPUs[owner].run, &ssKernelTasks[slot].ready, false));
         } else {
-            ss_owner_publish(&ssKernelCPUs[owner].run, slot, (unsigned)t->uxPriority);
+            struct ss_kernel_pin pin;
+            configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, t, &pin));
+            ssKernelPublishReference(pin);
         }
     }
     portCLEAR_INTERRUPT_MASK(irq);
@@ -222,10 +225,18 @@ static void ssKernelBootstrap(void)
 static void ssKernelPublishReference(struct ss_kernel_pin pin)
 {
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
-    unsigned owner = atomic_load_explicit(&s->owner, memory_order_acquire);
     unsigned priority = atomic_load_explicit(&s->effective, memory_order_acquire);
-    if (owner == ssKernelCPUId()) ssKernelInspect(NULL, pin.slot, priority);
-    else ss_owner_publish(&ssKernelCPUs[owner].run, pin.slot, priority);
+    struct ss_control_route route;
+    if (ss_control_route_pin(&ssKernelControl, pin.slot, &route)) {
+        if (route.owner == ssKernelCPUId()) ssKernelInspect(NULL, pin.slot, priority);
+        else ss_owner_publish(&ssKernelCPUs[route.owner].run, pin.slot, priority);
+        ss_control_route_put(&route);
+    } else {
+        /* One failed admission never waits for a moving route. Ordinary hints
+         * let each owner inspect authoritative completion after adoption. */
+        for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu)
+            ss_owner_publish(&ssKernelCPUs[cpu].run, pin.slot, priority);
+    }
     ss_kernel_handle_put(&pin);
 }
 static void ssKernelFlush(void)
@@ -620,14 +631,9 @@ static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
                                              actions[action], value, &ssKernelBackend);
     if (previous) *previous = result.previous;
     if (result.completed_wait) {
-        unsigned c = atomic_load_explicit(&s->owner, memory_order_acquire);
-        unsigned p = atomic_load_explicit(&s->effective, memory_order_acquire);
-        if (c == ssKernelCPUId()) {
-            ssKernelInspect(NULL, pin.slot, p);
-            if (woken && ssKernelCPUs[c].reschedule) *woken = pdTRUE;
-        } else ss_owner_publish(&ssKernelCPUs[c].run, pin.slot, p);
-    }
-    ss_kernel_handle_put(&pin);
+        ssKernelPublishReference(pin);
+        if (woken && ssKernelCPUs[ssKernelCPUId()].reschedule) *woken = pdTRUE;
+    } else ss_kernel_handle_put(&pin);
     portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
     return result.accepted ? pdPASS : pdFAIL;
 }

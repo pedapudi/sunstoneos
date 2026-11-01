@@ -48,3 +48,33 @@ legacy();
 } }
 '''
     assert not re.match(r'\s*#if', definitions(negative)['vTaskSuspendAll'][0])
+
+
+def audit_reachability(ast, selected):
+    functions = {node['name']: node for node in ast['inner']
+                 if node['kind'] == 'FunctionDecl'
+                 and any(child['kind'] == 'CompoundStmt' for child in node.get('inner', []))}
+    forbidden = {'pxReadyTasksLists', 'pxDelayedTaskList', 'pxOverflowDelayedTaskList',
+                 'xSuspendedTaskList', 'xTasksWaitingTermination', 'xPendingReadyList'}
+
+    def references(node):
+        result = set()
+        if node.get('kind') == 'DeclRefExpr':
+            declaration = node['referencedDecl']
+            result.add((declaration['kind'], declaration['name']))
+        for child in node.get('inner', []):
+            result.update(references(child))
+        return result
+
+    seen, todo = set(), list(selected)
+    while todo:
+        name = todo.pop()
+        if name in seen or name not in functions:
+            continue
+        seen.add(name)
+        for kind, reference in references(functions[name]):
+            if kind == 'FunctionDecl':
+                todo.append(reference)
+            assert not (kind == 'VarDecl' and reference in forbidden), (
+                f'{name}: selected API reaches legacy scheduler list {reference}')
+    return len(seen)

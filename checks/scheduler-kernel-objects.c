@@ -195,3 +195,109 @@ static void fixture_critical(void)
     assert(fixture_locks == locks + 3);
     printf("linked FreeRTOS critical APIs: nested task/ISR exclusion preserves port nesting and permits remote owner dispatch\n");
 }
+
+static TaskHandle_t fixture_progress_task;
+static void fixture_control_progress(void *opaque)
+{
+    (void)opaque;
+    for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) enter(cpu);
+    fixture_cpu = atomic_load(&record(fixture_progress_task)->owner);
+}
+static void fixture_migration(TaskHandle_t task)
+{
+    struct ss_owner_backend progress = ssKernelBackend;
+    progress.wait = fixture_control_progress;
+    ssKernelControl.backend = &progress;
+    fixture_progress_task = task;
+    fixture_cpu = 0;
+    vTaskCoreAffinitySet(task, (UBaseType_t)1 << 2);
+    assert(fixture_cpu == 2 && pxCurrentTCBs[2] == task);
+    assert(atomic_load(&record(task)->owner) == 2);
+    assert(vTaskCoreAffinityGet(task) == (UBaseType_t)1 << 2);
+    assert(atomic_load(&record(task)->execution) == SS_K_RUNNING);
+    vTaskCoreAffinitySet(task, (UBaseType_t)1 << 0);
+    assert(fixture_cpu == 0 && pxCurrentTCBs[0] == task);
+    /* Drain the final source forwarding acknowledgment after route closure. */
+    for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) enter(cpu);
+    ssKernelControl.backend = &ssKernelBackend;
+    fixture_cpu = 0;
+    invariant();
+    printf("linked FreeRTOS migration: public self-affinity transfer and return preserve single owner after adoption\n");
+}
+
+static void fixture_migration_wake(TaskHandle_t task)
+{
+    fixture_cpu = 0;
+    struct ssKernelTask *s = record(task);
+    struct ss_notification_guard guard;
+    ss_notification_gate_begin(&s->notification[0], &ssKernelBackend, &guard);
+    uint64_t generation = s->generation + 1;
+    assert(ss_notification_wait_enter(&guard, &s->notify_wait, generation,
+                                      SS_NOTIFY_WAIT_COUNT, 0, true));
+    s->notify_index = 0;
+    ssKernelBlock(3, true, SS_K_NOTIFICATION);
+    ss_notification_gate_end(&guard);
+    enter(0); /* Saved frame leaves CPU0 before migration begins. */
+    fixture_cpu = 1;
+    assert(ssKernelCommand(task, SS_K_AFFINITY, (UBaseType_t)1 << 2, true));
+    enter(0); /* Close the old route and detach, without destination adoption. */
+    assert(atomic_load(&s->execution) == SS_K_TRANSFERRING);
+    assert(atomic_load(&s->owner) == 0 && !s->ready.queued && !s->deadline.owner);
+    fixture_cpu = 1;
+    BaseType_t woken = pdFALSE;
+    assert(xTaskGenericNotifyFromISR(task, 0, 0, eIncrement, NULL, &woken) == pdPASS);
+    /* A closed route broadcasts ordinary owner hints; neither owner can make
+     * the task ready before adoption has installed queue/deadline ownership. */
+    for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu)
+        assert(atomic_load(&ssKernelCPUs[cpu].run.incoming[s->ready.priority][s->ready.slot / 64]) &
+               (UINT64_C(1) << (s->ready.slot % 64)));
+    enter(0);
+    assert(atomic_load(&s->execution) == SS_K_TRANSFERRING && !s->ready.queued);
+    enter(2);
+    assert(pxCurrentTCBs[2] == task && !s->deadline.owner);
+    assert(atomic_load(&s->owner) == 2 && atomic_load(&s->execution) == SS_K_RUNNING);
+    ss_notification_gate_begin(&s->notification[0], &ssKernelBackend, &guard);
+    struct ss_notification_finish finish = ss_notification_wait_finish(
+        &guard, &s->notify_wait, generation, 0, false, false);
+    ss_notification_gate_end(&guard);
+    assert(finish.matched && finish.condition && finish.value == 1);
+    for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) enter(cpu);
+    struct ss_owner_backend progress = ssKernelBackend;
+    progress.wait = fixture_control_progress;
+    ssKernelControl.backend = &progress;
+    fixture_progress_task = task;
+    fixture_cpu = 2;
+    vTaskCoreAffinitySet(task, 1);
+    ssKernelControl.backend = &ssKernelBackend;
+    fixture_cpu = 0;
+    invariant();
+    printf("linked FreeRTOS migration wake: closed-route broadcast cannot activate before adoption; notification survives transfer\n");
+}
+
+static void fixture_delete_reuse(TaskHandle_t task, TaskHandle_t survivor)
+{
+    unsigned slot = record(task)->ready.slot;
+    uint64_t incarnation = atomic_load(&ssKernelRegistry.descriptor[slot].incarnation);
+    struct ss_owner_backend progress = ssKernelBackend;
+    progress.wait = fixture_control_progress;
+    ssKernelControl.backend = &progress;
+    fixture_progress_task = survivor;
+    fixture_cpu = 1;
+    vTaskDelete(task);
+    for (unsigned round = 0; round < 3; ++round)
+        for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) enter(cpu);
+    struct ss_kernel_pin pin;
+    assert(!ssKernelPin(task, &pin));
+    fixture_cpu = 1;
+    TaskHandle_t replacement = create(configNUMBER_OF_CORES, 5);
+    assert(replacement == task);
+    assert(ssKernelPin(replacement, &pin));
+    assert(pin.incarnation > incarnation);
+    ss_kernel_handle_put(&pin);
+    for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) enter(cpu);
+    assert(pxCurrentTCBs[0] == replacement && atomic_load(&record(replacement)->owner) == 0);
+    ssKernelControl.backend = &ssKernelBackend;
+    fixture_cpu = 0;
+    invariant();
+    printf("linked FreeRTOS deletion: public delete retires all owner hints before static TCB storage reuse\n");
+}

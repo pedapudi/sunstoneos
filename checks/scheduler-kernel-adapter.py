@@ -74,8 +74,12 @@ def main():
                and any(child['kind'] == 'CompoundStmt' for child in node.get('inner', []))}
     selection = [{**entry, 'selected': entry['name'] in enabled} for entry in inventory['apis']]
     (build / 'api-selection.json').write_text(json.dumps(selection, indent=2) + '\n')
-    print('selected pending task APIs: ' + ', '.join(entry['name'] for entry in selection
-          if entry['selected'] and entry['state'] == 'pending'))
+    pending = [entry['name'] for entry in selection if entry['selected'] and entry['state'] == 'pending']
+    assert not pending, f'selected task APIs remain pending: {pending}'
+    reachable = api_audit.audit_reachability(ast, enabled & public)
+    print(f'private task API AST: {sum(entry["selected"] for entry in selection)} selected routes; '
+          f'{reachable} reachable functions contain no legacy scheduler lists')
+
     disabled = [flag.replace('configSS_PARTITIONED_SCHEDULER=1',
                              'configSS_PARTITIONED_SCHEDULER=0') for flag in common]
     run([*disabled, '--target=aarch64-none-elf', '-march=armv8.1-a+lse', '-ffreestanding',

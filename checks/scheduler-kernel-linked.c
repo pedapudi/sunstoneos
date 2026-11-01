@@ -196,6 +196,9 @@ int main(int argc, char **argv)
     fixture_inheritance(task, second);
     fixture_diagnostics();
     fixture_critical();
+    fixture_migration(task);
+    fixture_migration_wake(task);
+    fixture_delete_reuse(task, second);
     invariant();
     printf("linked FreeRTOS owner transitions: 10000 remote wakes, block-commit races, zero local scheduler locks, delay/event timeout\n");
     return 0;
