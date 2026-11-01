@@ -15,6 +15,7 @@ static int irq_only_bind(struct npu_runtime *rt, const struct npu_service_irq_op
 }
 #define npu_runtime_bind_irq irq_only_bind
 #define NPU_IRQ_EXTERNAL_BIND npu_finite_runtime_irq_bind
+#define NPU_IRQ_QUIET_QUERY npu_finite_runtime_irq_quiet
 #include "../../platform/a733/npu_irq.c"
 #undef npu_runtime_bind_irq
 _Static_assert((configMAX_API_CALL_INTERRUPT_PRIORITY<<portPRIORITY_SHIFT)<=NPU_IRQ_PRIORITY,

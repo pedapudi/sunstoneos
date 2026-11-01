@@ -22,7 +22,7 @@ static unsigned checkpoint_mbus_restore(void)
 #include "sunstone_crumb.h"
 #include "watchdog.h"
 #define sd_single_core_exception npu_finite_retained_exception
-#ifdef SUNSTONE_NPU_FINITE_THERMAL
+#if defined(SUNSTONE_NPU_FINITE_THERMAL) || defined(SUNSTONE_NPU_IDLE_BENCH)
 #define sd_single_core_monitor_init npu_finite_base_monitor_init
 #endif
 #include SUNSTONE_NPU_BASE_MONITOR
@@ -42,6 +42,34 @@ void sd_single_core_monitor_init(void)
      * enable state; never clear inherited THS pending/active state. */
     if(!saved.ready || saved.banks<=2 || (saved.spi_enabled[2]&128u) || !thermal_irq_quiet())finish(1);
     npu_finite_thermal_irq_admitted=1;
+    __asm__ volatile("dsb sy":::"memory");
+}
+#endif
+#ifdef SUNSTONE_NPU_IDLE_BENCH
+#undef sd_single_core_monitor_init
+static uint32_t deadline_priorities __attribute__((section(".monitor_state")));
+static unsigned deadline_installed __attribute__((section(".monitor_state")));
+void sd_single_core_monitor_init(void)
+{
+    const uint32_t ppi=UINT32_C(1)<<27;
+    /* Borrow only a disabled, inactive, nonpending virtual timer. Capture
+     * before the base monitor clears PPIs, so inherited work remains visible. */
+    deadline_installed=0;
+    if((mmio_read(GICR_SGI+0x100)|mmio_read(GICR_SGI+0x200)|
+        mmio_read(GICR_SGI+0x300))&ppi)finish(4);
+    const uint32_t priorities=mmio_read(GICR_SGI+0x418);
+    npu_finite_base_monitor_init();
+    deadline_priorities=priorities;
+    __asm__ volatile("msr cntv_ctl_el0,xzr\n isb":::"memory");
+    /* CNTVOFF_EL2 is zeroed by the base monitor: CNTV compare and the
+     * shared deadline facility's physical-counter epoch therefore agree. */
+    if(!(mmio_read(GICR_SGI+0x80)&ppi)||(mmio_read(GICR_SGI+0xd00)&ppi))finish(4);
+    mmio_write(GICR_SGI+0xc04,mmio_read(GICR_SGI+0xc04)&~(UINT32_C(1)<<23));
+    mmio_write(GICR_SGI+0x418,(priorities&UINT32_C(0x00ffffff))|UINT32_C(0xd8000000));
+    wait_clear(GICR_BASE,8); /* GICR_CTLR.RWP completes the configuration writes. */
+    if((mmio_read(GICR_SGI+0xc04)&(UINT32_C(1)<<23))||
+       mmio_read(GICR_SGI+0x418)!=((priorities&UINT32_C(0x00ffffff))|UINT32_C(0xd8000000)))finish(4);
+    deadline_installed=1;
     __asm__ volatile("dsb sy":::"memory");
 }
 #endif
@@ -75,14 +103,28 @@ static int return_gic(uint64_t deadline)
     if(!return_wait(GICR_BASE,8,deadline))return 0;
     /* Device IRQ97 was disabled/clear/inactive before receipt publication.
      * Only the owned timer PPIs are cleared by the monitor. */
-    mmio_write(GICR_SGI+0x280,(1u<<TICK_IRQ)|(1u<<RECOVERY_IRQ));
-    mmio_write(GICR_SGI+0x380,(1u<<TICK_IRQ)|(1u<<RECOVERY_IRQ));
+    const uint32_t timer_mask=(1u<<TICK_IRQ)|(1u<<RECOVERY_IRQ)
+#ifdef SUNSTONE_NPU_IDLE_BENCH
+        |(1u<<27)
+#endif
+        ;
+    mmio_write(GICR_SGI+0x280,timer_mask);
+    mmio_write(GICR_SGI+0x380,timer_mask);
     mmio_write(GICR_SGI+0x80,saved.group);
     mmio_write(GICR_SGI+0xd00,saved.modifier);
     mmio_write(GICR_SGI+0xc04,saved.configuration);
     mmio_write(GICR_SGI+0x41c,saved.priorities);
+#ifdef SUNSTONE_NPU_IDLE_BENCH
+    if(!deadline_installed)return 0;
+    mmio_write(GICR_SGI+0x418,deadline_priorities);
+#endif
     mmio_write(GICR_SGI+0x100,saved.enabled);
     if(!return_wait(GICR_BASE,8,deadline))return 0;
+#ifdef SUNSTONE_NPU_IDLE_BENCH
+    if((mmio_read(GICR_SGI+0x200)|mmio_read(GICR_SGI+0x300))&(1u<<27))return 0;
+    if(mmio_read(GICR_SGI+0x418)!=deadline_priorities ||
+       mmio_read(GICR_SGI+0xc04)!=saved.configuration)return 0;
+#endif
 #ifdef SUNSTONE_NPU_INTERRUPT
     if(!npu_irq_route_restore(&saved.npu_irq,deadline))return 0;
 #endif
