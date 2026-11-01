@@ -25,8 +25,8 @@ _Static_assert(PARAMETER_BYTES+4u*PLANE_BYTES <= ((TABLE_BYTES-16384u)/4096u)*41
     "stream exceeds selected IOMMU capacity");
 _Static_assert(Y_IOVA+4u*PLANE_BYTES<=A733_IOMMU_IOVA_LIMIT,"camera IOVA overflow");
 #define MCLK1 UINT32_C(0x02003804)
-static uintptr_t mclk(const struct a733_camera_native *n){return MCLK1+4u*n->port;}
-static unsigned pwdn_pin(const struct a733_camera_native *n){return n->port?10u:6u;}
+static uintptr_t mclk(const struct a733_camera_native *n){return MCLK1+4u*(n->sensor_bus.mclk-1u);}
+static unsigned pwdn_pin(const struct a733_camera_native *n){return n->sensor_bus.pwdn.pin;}
 static struct a733_camera_native *instance;
 static size_t plane_span(const struct a733_camera_native *n)
 {return PLANE_BYTES*(n->stream?2u:1u);}
@@ -155,7 +155,7 @@ static int native_handoff(void *v,uint64_t t,enum a733_capture_handoff h,
     if(t!=n->boot.lease || c!=&n->capture || !authority(n) || !timely(n,d) ||
        c->analog.state!=A733_CAMERA_PLATFORM_ACTIVE || c->iommu.state!=A733_IOMMU_ACTIVE ||
        c->analog.admission.token!=t || c->iommu.admission.token!=t ||
-       c->route.state!=A733_ROUTE_ARMED || c->sensor.state!=OV5640_READY)return -1;
+       c->route.state!=A733_ROUTE_ARMED || c->sensor.state!=CAMERA_SENSOR_READY)return -1;
     if(h==A733_CAPTURE_LOCAL)return c->dma.state==A733_CAM_DMA_ARMED && c->receiver.state==A733_CSI_NEW?1:-1;
     return h==A733_CAPTURE_PACKETS && c->local_granted && c->receiver.state==A733_CSI_ARMED &&
         c->receiver.image_mode==!n->stream &&
@@ -217,13 +217,13 @@ static int sensor_acquire(void *v,uint64_t d,uint64_t *t)
     if(!authority(n) || !timely(n,d) || !n->twi_native.prepared || n->twi.state!=A733_TWI_READY)return -1;
     *t=n->boot.lease;return 1;
 }
-static int sensor_line(void *v,uint64_t t,enum ov5640_line line,int asserted,uint64_t d)
+static int sensor_line(void *v,uint64_t t,enum camera_sensor_line line,int asserted,uint64_t d)
 {
     struct a733_camera_native *n=v;
     if(t!=n->boot.lease || !authority(n) || !timely(n,d) || (asserted!=0 && asserted!=1))return -1;
     unsigned b,p,value;
-    if(line==OV5640_PWDN_LINE){b=A733_PIN_E;p=pwdn_pin(n);value=(unsigned)asserted;}
-    else if(line==OV5640_RESET_LINE && !n->boot.pwdn_only){b=n->boot.reset_bank;p=n->boot.reset_pin;value=!asserted;}
+    if(line==CAMERA_SENSOR_PWDN_LINE){b=n->sensor_bus.pwdn.bank;p=pwdn_pin(n);value=(unsigned)(asserted==n->sensor_bus.pwdn.active_high);}
+    else if(line==CAMERA_SENSOR_RESET_LINE && !n->boot.pwdn_only){b=n->boot.reset_bank;p=n->boot.reset_pin;value=(unsigned)(asserted==n->sensor_bus.reset.active_high);}
     else return -1;
     return a733_pins_write_outputs(n->config.pins,&n->pin,b,1u<<p,value<<p,d)==A733_PINS_OK &&
         timely(n,d) && authority(n)?1:-1;
@@ -231,7 +231,7 @@ static int sensor_line(void *v,uint64_t t,enum ov5640_line line,int asserted,uin
 static int sensor_bus(struct a733_camera_native *n,uint64_t t,uint8_t address,uint16_t reg,
     unsigned reading,uint8_t *data,unsigned count,uint64_t d)
 {
-    if(t!=n->boot.lease || address!=0x3c || !data || !authority(n) || !timely(n,d))return -1;
+    if(t!=n->boot.lease || address!=n->sensor_bus.i2c_address || !data || !authority(n) || !timely(n,d))return -1;
     /* Bounded synchronous bridge preserves the sensor controller's current
      * callback contract. One transaction gets at most 10 ms within capture time;
      * a 40-byte block write takes about 4 ms at 100 kHz. */
@@ -248,11 +248,11 @@ static int sensor_write(void *v,uint64_t t,uint8_t a,uint16_t r,uint8_t x,uint64
 {return sensor_bus(v,t,a,r,0,&x,1,d);}
 static int sensor_write_block(void *v,uint64_t t,uint8_t a,uint16_t r,const uint8_t *x,unsigned count,uint64_t d)
 {
-    uint8_t block[OV5640_BLOCK_BYTES];
-    if(!x || count<2 || count>OV5640_BLOCK_BYTES)return -1;
+    uint8_t block[CAMERA_SENSOR_BLOCK_BYTES];
+    if(!x || count<2 || count>CAMERA_SENSOR_BLOCK_BYTES)return -1;
     memcpy(block,x,count);return sensor_bus(v,t,a,r,0,block,count,d);
 }
-static int sensor_receiver(void *v,uint64_t t,uint64_t rt,const struct ov5640_mode *m,uint64_t d)
+static int sensor_receiver(void *v,uint64_t t,uint64_t rt,const struct camera_mode *m,uint64_t d)
 {
     struct a733_camera_native *n=v;
     return t==n->boot.lease && rt==t && authority(n) && timely(n,d) &&
@@ -260,9 +260,8 @@ static int sensor_receiver(void *v,uint64_t t,uint64_t rt,const struct ov5640_mo
         m->xclk_hz==n->capture.config.mode.xclk_hz && m->link_hz==n->capture.config.mode.link_hz &&
         m->pixel_hz==n->capture.config.mode.pixel_hz && m->width==A733_CAMERA_WIDTH &&
         m->height==A733_CAMERA_HEIGHT && m->htotal==n->capture.config.mode.htotal &&
-        m->vtotal==n->capture.config.mode.vtotal && m->lanes==2 && m->virtual_channel==0 &&
-        m->csi_data_type==0x1e && m->bytes_per_pixel==2 && m->format==OV5640_UYVY &&
-        m->size==SUNSTONE_CAMERA_SIZE?1:-1;
+        m->vtotal==n->capture.config.mode.vtotal && m->lanes==n->sensor_bus.lanes && m->virtual_channel==n->sensor_bus.virtual_channel &&
+        m->csi_data_type==0x1e && m->bytes_per_pixel==2 && m->format==CAMERA_UYVY?1:-1;
 }
 static int route_admit(void *v,const struct a733_route_config *c,uint64_t d,uint64_t *t)
 {
@@ -316,7 +315,7 @@ static int csi_write(void *v,uint64_t t,enum a733_csi_region r,uint16_t o,uint32
         unsigned status=(s==A733_CAPTURE_SAMPLE || s==A733_CAPTURE_REARM_SAMPLE) &&
             n->capture.receiver.state==A733_CSI_SAMPLE;
         unsigned rearm=s==A733_CAPTURE_REARM_RECEIVER && n->capture.receiver.state==A733_CSI_REARM;
-        if(n->capture.sensor.state!=OV5640_READY ||
+        if(n->capture.sensor.state!=CAMERA_SENSOR_READY ||
            !((status && r==A733_CSI_PORT && o==0x118 && !(x&~0x1fffu)) ||
              (status && r==A733_CSI_PARSER && o==0x44 && !(x&~7u)) ||
              (rearm && r==A733_CSI_PARSER && o==0x0c && (x&0x03030303)==1)))return -1;
@@ -335,7 +334,7 @@ static int dma_admit(void *v,const struct a733_camera_dma_config *c,uint64_t d,u
      * of the previous image. The channel is acknowledged and inactive, the
      * parser fence is clear and the sensor is stopped. */
     if(n->capture.dma.state==A733_CAM_DMA_REARM){
-        if(n->capture.state!=A733_CAPTURE_REARM_DMA || n->capture.sensor.state!=OV5640_READY ||
+        if(n->capture.state!=A733_CAPTURE_REARM_DMA || n->capture.sensor.state!=CAMERA_SENSOR_READY ||
            n->state!=A733_CAMERA_NATIVE_CAPTURE)return -1;
         memset((void *)planes,A733_CAMERA_NATIVE_FILL,2u*PLANE_BYTES);
     }
@@ -362,7 +361,7 @@ static int dma_sync_slot(void *v,uint64_t t,unsigned slot,uint64_t d)
         if(cache(n,AARCH64_CACHE_INVALIDATE,p+plane*plane_span(n),A733_CAMERA_NATIVE_PLANE_BYTES,d)!=1)return -1;
     return 1;
 }
-static int boot_valid(const struct a733_camera_boot_record *b,unsigned supervised,unsigned port)
+static int boot_valid(const struct a733_camera_boot_record *b,unsigned supervised,const struct camera_sensor_bus *bus)
 {
     if(b->version!=(supervised?2u:1u) || b->bytes!=sizeof(*b) || !b->owner || !b->epoch || !b->generation ||
        !b->lease || !b->deadline_us || !(b->build[0]|b->build[1]|b->build[2]|b->build[3]) ||
@@ -379,11 +378,13 @@ static int boot_valid(const struct a733_camera_boot_record *b,unsigned supervise
         if(b->reset_bank || b->reset_pin || r->function || r->pull || r->drive)return 0;
     } else if(b->reset_bank<A733_PIN_B || b->reset_bank>A733_PIN_K || b->reset_pin>=32 ||
        !(a733_pin_bank_mask(b->reset_bank)&(1u<<b->reset_pin)) ||
-       (b->reset_bank==A733_PIN_E && (port?
-          (b->reset_pin==9 || b->reset_pin==10 || b->reset_pin==14 || b->reset_pin==15):
-          (b->reset_pin>=5 && b->reset_pin<=8))) ||
-       (b->reset_bank==A733_PIN_K && b->reset_pin>=10u*port && b->reset_pin<10u*(port+1)) ||
        b->inherited[14].function!=1)return 0;
+    if(!b->pwdn_only){
+        for(unsigned i=0;i<10;i++)if(b->reset_bank==bus->csi[i].bank && b->reset_pin==bus->csi[i].pin)return 0;
+        const struct camera_pin *pins[]={&bus->mclk_pin,&bus->i2c_scl,&bus->i2c_sda};
+        for(unsigned i=0;i<3;i++)if(b->reset_bank==pins[i]->bank && b->reset_pin==pins[i]->pin)return 0;
+        if(b->reset_bank==bus->pwdn.bank && b->reset_pin==bus->pwdn.pin)return 0;
+    }
     for(unsigned i=0;i<3;i++){
         if(!b->programmed_uv[i])return 0;
         switch(b->rails[i]) {
@@ -399,7 +400,10 @@ static int boot_valid(const struct a733_camera_boot_record *b,unsigned supervise
 extern int a733_smp_device_preparation_admitted(void);
 static int initialize(struct a733_camera_native *n,const struct a733_camera_native_config *c,unsigned supervised,unsigned stream)
 {
-    if(!n || n->self || instance || !c || !c->boot || !c->media || !c->clocks || !c->pins ||
+    const struct sunstone_board_description *board=sunstone_board_orangepi_zero3w();
+    unsigned port=c && c->media && c->media->config.camera_mclk_mask==4;
+    const struct camera_sensor_bus *wiring=board && port<board->camera_count?&board->camera[port]:NULL;
+    if(!wiring || !n || n->self || instance || !c || !c->boot || !c->media || !c->clocks || !c->pins ||
        !c->rails || !c->rail_parent || !c->pmic || !c->locks || !c->task ||
        c->pmic->self!=c->pmic ||
        !c->locks->initialized || c->locks->now!=a733_counter_clock_now || !c->locks->context ||
@@ -409,7 +413,7 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
        (c->media->config.camera_mclk_mask!=2 && c->media->config.camera_mclk_mask!=4) || c->media->config.deadline_us!=c->boot->deadline_us ||
        c->pmic->clocks!=c->clocks || c->pmic->rails!=c->rails || c->pmic->pins!=c->pins ||
        c->rail_parent->owner!=c->boot->owner ||
-       !boot_valid(c->boot,supervised,c->media->config.camera_mclk_mask==4) || !a733_ranges_disjoint(n,sizeof(*n),c,sizeof(*c)) ||
+       !boot_valid(c->boot,supervised,wiring) || !a733_ranges_disjoint(n,sizeof(*n),c,sizeof(*c)) ||
        !a733_ranges_disjoint(n,sizeof(*n),c->boot,sizeof(*c->boot)) ||
        !a733_ranges_disjoint(n,sizeof(*n),c->media,sizeof(*c->media)) ||
        !a733_ranges_disjoint(n,sizeof(*n),c->clocks,sizeof(*c->clocks)) ||
@@ -423,14 +427,33 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
        a733_pmic_outside(c->pmic,n,sizeof(*n))!=1 ||
        a733_pmic_outside(c->pmic,c,sizeof(*c))!=1 ||
        a733_pmic_outside(c->pmic,c->boot,sizeof(*c->boot))!=1)return 0;
-    struct ov5640_mode selected_mode;
-    if(!a733_camera_selected_mode(&selected_mode))return 0;
+    if(!board || port>=board->camera_count || !board->camera_sensor_count || board->camera_sensor_count>16)return 0;
+    struct camera_sensor_bus bus=*wiring;
+    if(bus.port!=port || bus.parser!=port || bus.mclk!=port+1 || bus.xclk_hz!=24000000 ||
+       !bus.pwdn.present || bus.pwdn.bank<A733_PIN_B || bus.pwdn.bank>A733_PIN_K ||
+       bus.pwdn.pin>=32 || !(a733_pin_bank_mask(bus.pwdn.bank)&(1u<<bus.pwdn.pin)) ||
+       bus.pwdn.active_high>1 ||
+       (bus.i2c_controller!=A733_TWI_MAIN9 && bus.i2c_controller!=A733_TWI_MAIN11))return 0;
+    if(!c->boot->pwdn_only)bus.reset=(struct camera_gpio){c->boot->reset_bank,c->boot->reset_pin,0,1};
+    else bus.reset.present=0;
+    for(unsigned i=0;i<3;i++){
+        if(bus.regulator[i]!=UINT16_MAX && bus.regulator[i]!=(uint16_t)c->boot->rails[i])return 0;
+        bus.regulator[i]=(uint16_t)c->boot->rails[i];
+    }
+    struct camera_mode selected_mode;
+    if(!a733_camera_selected_mode_for_port(&selected_mode,port))return 0;
     struct device_memory_pool *pool=a733_memory_reservations_init();
     if(!pool || !a733_ranges_disjoint(n,sizeof(*n),(void *)pool->backing.cpu,pool->backing.bytes) ||
        !a733_ranges_disjoint(c,sizeof(*c),(void *)pool->backing.cpu,pool->backing.bytes) ||
        !a733_ranges_disjoint(c->boot,sizeof(*c->boot),(void *)pool->backing.cpu,pool->backing.bytes))return 0;
     *n=(struct a733_camera_native){.self=n,.config=*c,.boot=*c->boot,.pool=pool,.state=A733_CAMERA_NATIVE_CLOCK,.stream=stream,
         .port=c->media->config.camera_mclk_mask==4};
+    n->sensor_bus=bus;
+    for(size_t i=0;i<board->camera_sensor_count;i++){
+        n->sensor_drivers[i]=camera_sensor_find(board->camera_sensors[i]);
+        if(!n->sensor_drivers[i])return fail(n);
+    }
+    n->sensor_driver_count=board->camera_sensor_count;
     instance=n;
     size_t bytes=stream?A733_CAMERA_NATIVE_STREAM_BYTES:A733_CAMERA_NATIVE_BYTES;
     if(!device_memory_acquire_aligned(n->pool,n->boot.owner,bytes,16384,&n->memory,&n->extent))return fail(n);
@@ -455,15 +478,15 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
           {(void *)(p+TABLE_BYTES+PARAMETER_BYTES+plane_span(n)),uv_iova(n),pa+TABLE_BYTES+PARAMETER_BYTES+plane_span(n),plane_span(n)}},
         .table_words=(void *)p,.table_bytes=TABLE_BYTES,.table_physical=pa,.frame_id=n->boot.lease,
         .receiver={(uint8_t)n->port,(uint8_t)n->port,n->boot.settle,n->boot.deskew,324000000},.mode=selected_mode,
+        .sensor_bus=&n->sensor_bus,.sensor_drivers=n->sensor_drivers,.sensor_driver_count=n->sensor_driver_count,
         .color_bars=n->boot.test_pattern,.slots=stream?2:0,.slot_bytes=stream?PLANE_BYTES:0,
-        .sensor={time_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,no_drain,sensor_write_block},
+        .sensor={time_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,no_drain,sensor_write_block,NULL},
         .analog={time_read,analog_admit,analog_read,analog_write},
         .iommu={time_read,mmu_admit,mmu_read,mmu_write,mmu_publish},
         .route={time_read,route_admit,route_publish,route_read,route_write,no_drain,no_drain,no_drain},
         .csi={time_read,csi_admit,csi_read,csi_write,no_drain,no_drain,no_drain},
         .dma={time_read,dma_admit,dma_read,dma_write,no_drain,no_drain,no_drain,dma_sync,no_drain,NULL,stream?dma_sync_slot:NULL}};
-    if((supervised?a733_camera_capture_supervised_init(&n->capture,&capture):a733_camera_capture_init(&n->capture,&capture))!=1 ||
-       (n->boot.pwdn_only && ov5640_pwdn_only(&n->capture.sensor)!=1))return fail(n);
+    if((supervised?a733_camera_capture_supervised_init(&n->capture,&capture):a733_camera_capture_init(&n->capture,&capture))!=1)return fail(n);
     return 1;
 }
 int a733_camera_native_init(struct a733_camera_native *n,const struct a733_camera_native_config *c)
@@ -477,14 +500,14 @@ static int pin_acquire(struct a733_camera_native *n)
 {
     struct a733_pin_request_banked r[A733_CAMERA_NATIVE_PIN_COUNT]={0};
     unsigned count=n->boot.pwdn_only?A733_CAMERA_NATIVE_PIN_COUNT-1:A733_CAMERA_NATIVE_PIN_COUNT;
-    for(unsigned i=0;i<10;i++){r[i].bank=A733_PIN_K;r[i].pin=i+10u*n->port;r[i].desired=(struct a733_pin_config){2,0,0};}
-    r[10].bank=A733_PIN_E;r[10].pin=n->port?9:5;r[10].desired=(struct a733_pin_config){2,0,0};
-    r[11].bank=A733_PIN_E;r[11].pin=pwdn_pin(n);r[11].desired=(struct a733_pin_config){1,0,0};r[11].output_value=1;
-    for(unsigned i=12;i<14;i++){r[i].bank=A733_PIN_E;r[i].pin=i-5+(n->port?7:0);r[i].desired=(struct a733_pin_config){8,0,0};}
+    for(unsigned i=0;i<10;i++){r[i].bank=n->sensor_bus.csi[i].bank;r[i].pin=n->sensor_bus.csi[i].pin;r[i].desired=(struct a733_pin_config){n->sensor_bus.csi[i].function,0,0};}
+    r[10].bank=n->sensor_bus.mclk_pin.bank;r[10].pin=n->sensor_bus.mclk_pin.pin;r[10].desired=(struct a733_pin_config){n->sensor_bus.mclk_pin.function,0,0};
+    r[11].bank=n->sensor_bus.pwdn.bank;r[11].pin=pwdn_pin(n);r[11].desired=(struct a733_pin_config){1,0,0};r[11].output_value=n->sensor_bus.pwdn.active_high;
+    for(unsigned i=12;i<14;i++){const struct camera_pin *pin=i==12?&n->sensor_bus.i2c_scl:&n->sensor_bus.i2c_sda;r[i].bank=pin->bank;r[i].pin=pin->pin;r[i].desired=(struct a733_pin_config){pin->function,0,0};}
     if(!n->boot.pwdn_only){r[14].bank=n->boot.reset_bank;r[14].pin=n->boot.reset_pin;r[14].desired=(struct a733_pin_config){1,0,0};}
     for(unsigned i=0;i<count;i++)r[i].expected=n->boot.inherited[i];
     struct a733_pin_output_condition condition={0};
-    condition.masks[A733_PIN_E]=1u<<pwdn_pin(n);condition.levels[A733_PIN_E]=1u<<pwdn_pin(n);
+    condition.masks[n->sensor_bus.pwdn.bank]=1u<<pwdn_pin(n);condition.levels[n->sensor_bus.pwdn.bank]=(uint32_t)n->sensor_bus.pwdn.active_high<<pwdn_pin(n);
     if(!n->boot.pwdn_only)condition.masks[n->boot.reset_bank]|=1u<<n->boot.reset_pin;
     enum a733_pins_result result=a733_pins_acquire_banked_checked(n->config.pins,n->boot.owner,
         r,count,&condition,&n->pin,n->boot.deadline_us);
@@ -520,7 +543,7 @@ int a733_camera_native_poll(struct a733_camera_native *n)
         a733_clock_mask_t shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC;
         if(n->boot.apb1>>24==3)shared|=A733_CLOCK_PERI0;
         enum a733_clock_result c=a733_clock_acquire(n->config.clocks,n->boot.owner,shared,
-            (n->port?A733_CLOCK_TWI9:A733_CLOCK_TWI11),n->boot.deadline_us,&n->twi_clock);
+            (n->sensor_bus.i2c_controller==A733_TWI_MAIN9?A733_CLOCK_TWI9:A733_CLOCK_TWI11),n->boot.deadline_us,&n->twi_clock);
         if(c==A733_CLOCK_BUSY)break;
         if(c!=A733_CLOCK_OK){r=-1;break;}n->state=A733_CAMERA_NATIVE_RAIL;break;
     }
@@ -557,7 +580,7 @@ int a733_camera_native_poll(struct a733_camera_native *n)
     case A733_CAMERA_NATIVE_TWI: {
         struct a733_twi_native_config c={n->config.clocks,n->twi_clock,n->config.pins,n->pin,
             n->config.rails,&n->rail,n->config.locks,n->config.task,n->boot.apb1,n->boot.apb1_hz,
-            n->port?A733_TWI_MAIN9:A733_TWI_MAIN11};
+            (enum a733_twi_controller)n->sensor_bus.i2c_controller};
         if(!n->twi_native.self && !a733_twi_native_init(&n->twi_native,&c)){r=-1;break;}
         int ready=a733_twi_native_prepare(&n->twi_native,n->boot.deadline_us);
         if(!ready)break;

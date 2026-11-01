@@ -35,7 +35,7 @@ endif()
 apply_build_patch("${storage_build}/continue.S" "${storage_root}/platform/a733-smp-cached/continue.S"
   "${storage_root}/platform/a733-storage-maintenance/continue.patch")
 file(SHA256 "${storage_root}/platform/a733-smp-cached/link.ld" storage_source_hash)
-if(NOT storage_source_hash STREQUAL "4eed87c4507579138c045ae49a5ffe1981ca618335dee1b8b98053de5917c69f")
+if(NOT storage_source_hash STREQUAL "3799b48326efa23f3a49ac1aaf07ab47e9f0cd6e83600f17614f927ea273fa5d")
   message(FATAL_ERROR "Review the storage link patch against changed cached source")
 endif()
 apply_build_patch("${storage_build}/link.ld" "${storage_root}/platform/a733-smp-cached/link.ld"

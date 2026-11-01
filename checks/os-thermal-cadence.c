@@ -10,7 +10,7 @@
 
 struct board_application board;
 struct board_provider providers;
-uint64_t cadence_state[9],cadence_read_times[256];
+uint64_t cadence_state[12],cadence_read_times[256];
 uint8_t cadence_report[sizeof(struct os_thermal_report)+THERMAL_RECORDS*sizeof(struct os_thermal_reading)];
 static uint64_t model_time,read_delay;
 static unsigned reads,clocks,failures,poll_ready,valid_mask;
@@ -55,6 +55,7 @@ int cadence_control(unsigned op,uint64_t at,uint64_t value)
         memset(&window,0,sizeof(window));memset(&providers,0,sizeof(providers));
         memset(&board,0,sizeof(board));memset(cadence_state,0,sizeof(cadence_state));
         memset(cadence_report,0,sizeof(cadence_report));
+        thermal_record_origin_us=0;
         reads=clocks=failures=0;read_delay=0;poll_ready=0;rearm_ok=1;temperature=40000;valid_mask=31;
         thermal.handle=(TaskHandle_t)(uintptr_t)1;thermal.active=1;thermal.masked=1;
         thermal.driver.initialized=1;board.session.deadline_us=at+60000000;
@@ -81,10 +82,13 @@ int cadence_control(unsigned op,uint64_t at,uint64_t value)
     else if(op==8){thermal.active=0;poll_ready=0;}
     else if(op==9)valid_mask=(unsigned)value;
     else if(op==10)thermal.driver.fault=(unsigned)value;
+    else if(op==11)atomic_store_explicit(&thermal.pending,1,memory_order_release);
     cadence_state[0]=atomic_load_explicit(&readings.count,memory_order_acquire);
     cadence_state[1]=readings.next;cadence_state[2]=reads;cadence_state[3]=clocks;
     cadence_state[4]=failures;cadence_state[5]=thermal.active;
     cadence_state[7]=thermal.policy.sequence;
     cadence_state[8]=(uint64_t)os_thermal_throttled();
+    cadence_state[9]=thermal.next_read;cadence_state[10]=thermal_record_origin_us;
+    cadence_state[11]=model_time;
     return result;
 }

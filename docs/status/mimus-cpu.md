@@ -1,6 +1,8 @@
 # CPU recognizer qualification
 
-All 32 original corpus references match on the A733, including feature and
+**Status: implemented.**
+
+**Board-qualified scope:** All 32 original corpus references match on the A733, including feature and
 log-probability checksums, text, punctuation, capitals and formatting. Total
 compute is 7.571656 seconds for 260.504 seconds of audio: aggregate real-time
 factor 0.029065, with a maximum individual factor of 0.036796. Every recording
@@ -14,6 +16,8 @@ Runs return normally at CPU-L 1794 MHz and 1000 mV, CPU-B 2002 MHz and
 1050 mV, and DSU 1274 MHz. Retained thermal coverage is complete for the
 first recording in each batch. The thermal policy remains active for later
 recordings, whose individual thermal histories are not retained.
+
+## Implementation and validation
 
 The [application source record](../../apps/mimus/source.json) selects mimus
 `ae253ad1c` and its declared engine `418ad38c8`. The engine combines parallel

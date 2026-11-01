@@ -7,41 +7,21 @@
  * Copyright (C) 2010, Guennadi Liakhovetski <g.liakhovetski@gmx.de>
  * EDID field interpretation follows Linux drm_edid.c and drm_edid.h. */
 #include "a733_hdmi.h"
+#include "a733_display_modes.h"
+#include <string.h>
 #include "a733_range.h"
 int a733_hdmi_edid_accept(const uint8_t *e,size_t n,enum a733_hdmi_mode mode,
                          enum a733_hdmi_range range){
-    static const uint8_t signature[]={0,255,255,255,255,255,255,0};
-    struct a733_hdmi_timing t;unsigned hdmi=0,vic=0,quant=0;
-    if(!e || n<128 || n>A733_HDMI_EDID_BYTES || (n&127) ||
-       (range!=A733_HDMI_LIMITED && range!=A733_HDMI_FULL) ||
-       a733_hdmi_timing(mode,&t)!=1)return -1;
-    for(unsigned i=0;i<8;++i)if(e[i]!=signature[i])return -1;
-    if(e[18]!=1 || (e[19]!=3 && e[19]!=4) || !(e[20]&0x80) ||
-       (size_t)(e[126]+1)*128!=n)return -1;
-    for(size_t b=0;b<n;b+=128){
-        unsigned sum=0;for(unsigned j=0;j<128;++j)sum+=e[b+j];
-        if(sum&255)return -1;
-        if(!b || e[b]!=2)continue;
-        if(e[b+1]<3)return -1;
-        unsigned end=e[b+2];
-        if(!end)continue;
-        if(end<4 || end>127)return -1;
-        for(unsigned p=4;p<end;){
-            unsigned tag=e[b+p]>>5,len=e[b+p]&31,q=p+1;
-            if(q+len>end)return -1;
-            if(tag==2){for(unsigned j=0;j<len;++j)
-                if((e[b+q+j]&0x7f)==(unsigned)mode)vic=1;}
-            if(tag==3 && len>=5 && e[b+q]==3 && e[b+q+1]==12 && e[b+q+2]==0){
-                hdmi=1;
-                if(len>=7 && e[b+q+6] && (uint32_t)e[b+q+6]*5000000<t.pixel_hz)return -1;
-            }
-            /* CTA Video Capability Data Block: QS permits RGB range selection.
-             * Hardware colorbar is full-range, so do not mislabel it limited. */
-            if(tag==7 && len>=2 && e[b+q]==0 && (e[b+q+1]&0x40))quant=1;
-            p=q+len;
-        }
+    struct sunstone_display_modes modes;struct a733_hdmi_timing timing;
+    if((range!=A733_HDMI_LIMITED&&range!=A733_HDMI_FULL)||
+       a733_hdmi_timing(mode,&timing)!=1||n>A733_HDMI_EDID_BYTES||
+       sunstone_display_edid_parse(e,n,&modes)!=SUNSTONE_EDID_OK||!modes.hdmi||
+       (modes.max_tmds_hz&&modes.max_tmds_hz<timing.pixel_hz)||
+       (range==A733_HDMI_FULL&&!modes.rgb_range_selectable))return -1;
+    for(size_t i=0;i<modes.count;++i){enum a733_hdmi_mode found;
+        if(a733_hdmi_mode_from_pixel(&modes.modes[i],&found)==SUNSTONE_MODE_OK&&found==mode)return 1;
     }
-    return hdmi && vic && (range==A733_HDMI_LIMITED || quant)?1:-1;
+    return -1;
 }
 static int fail(struct a733_hdmi *s,enum a733_hdmi_error e){
     if(!s || s->self!=s)return -1;
@@ -50,22 +30,33 @@ static int fail(struct a733_hdmi *s,enum a733_hdmi_error e){
 }
 int a733_hdmi_init(struct a733_hdmi *s,const struct a733_hdmi_config *c){
     struct a733_hdmi_timing t;
+    if(!c)return -1;
+    struct a733_hdmi_request request=c->request;
+    struct sunstone_display_mode pixels=c->pixel_mode;
+    if(pixels.pixel_hz){enum a733_hdmi_mode profile;
+        if(a733_hdmi_mode_from_pixel(&pixels,&profile)!=SUNSTONE_MODE_OK||
+           (request.mode&&request.mode!=profile))return -1;
+        request.mode=profile;
+    }
     if(!s || !c || s->self || a733_ranges_overlap_or_wrap(s,sizeof(*s),c,sizeof(*c)) ||
        (c->context && a733_ranges_overlap_or_wrap(s,sizeof(*s),c->context,1)) ||
        !c->ops.now_us || !c->ops.acquire || !c->ops.validate || !c->ops.read8 ||
        !c->ops.write8 || !c->ops.read32 || !c->ops.write32 || !c->ops.barrier ||
-       !c->ops.retain || !c->request.initial.id || !c->request.initial.generation ||
-       (c->request.phy_reference_hz!=24000000&&c->request.phy_reference_hz!=26000000)||
-       (c->request.range!=A733_HDMI_LIMITED && c->request.range!=A733_HDMI_FULL) ||
-       (c->request.source!=A733_HDMI_PATTERN&&c->request.source!=A733_HDMI_FRAMEBUFFER)||
-       a733_hdmi_timing(c->request.mode,&t)!=1)return -1;
+       !c->ops.retain || !request.initial.id || !request.initial.generation ||
+       (request.phy_reference_hz!=24000000&&request.phy_reference_hz!=26000000)||
+       (request.range!=A733_HDMI_LIMITED && request.range!=A733_HDMI_FULL) ||
+       (request.source!=A733_HDMI_PATTERN&&request.source!=A733_HDMI_FRAMEBUFFER)||
+       a733_hdmi_timing(request.mode,&t)!=1)return -1;
     /* No external PHY control/BIST; no live output or pad mux. Complete
      * provenance for the remaining fields is still mandatory at acquisition. */
-    const uint32_t *w=c->request.initial.words;
+    const uint32_t *w=request.initial.words;
     if((w[0]&0x80000300) || (w[1]&1) || (w[2]&0xe8000000) || (w[3]&0x100))return -1;
     s->self=s;s->io.self=&s->io;s->io.ops=c->ops;s->io.context=c->context;
-    s->io.request=c->request;s->timing=t;
-    if(a733_hdmi_phy_init(&s->phy,&s->io)!=1 || a733_tcon_tv_init(&s->tv,&s->io)!=1)
+    s->io.request=request;s->timing=t;
+    if(!pixels.pixel_hz)pixels=(struct sunstone_display_mode){t.pixel_hz,t.width,t.height,t.hfront,
+        t.hsync,t.hback,t.vfront,t.vsync,t.vback,SUNSTONE_MODE_HSYNC_POSITIVE|SUNSTONE_MODE_VSYNC_POSITIVE};
+    s->pixel_mode=pixels;
+    if(a733_hdmi_phy_init(&s->phy,&s->io)!=1 || a733_tcon_tv_init_mode(&s->tv,&s->io,&s->pixel_mode)!=1)
         return fail(s,A733_HDMI_IO);
     return 1;
 }
@@ -329,4 +320,39 @@ int a733_hdmi_poll(struct a733_hdmi *s){
 int a733_hdmi_service(struct a733_hdmi *s,uint64_t d){
     if(!s || s->state!=A733_HDMI_ACTIVE || deadline(s,d)!=1)return -1;
     return a733_hdmi_poll(s);
+}
+
+static int connector_detect(void *v,uint64_t d,unsigned *connected,uint64_t *generation)
+{
+    struct a733_hdmi *s=v;
+    if(!s||(s->state!=A733_HDMI_PREPARED&&s->state!=A733_HDMI_ACTIVE)||deadline(s,d)!=1)return 0;
+    s->entered=1;int r=hpd(s);s->entered=0;
+    if(r<0)return 0;
+    if(!r)s->connector_invalidated=1;
+    *connected=(unsigned)r;*generation=0;return 1;
+}
+static int connector_edid(void *v,uint64_t d,uint8_t *out,size_t capacity,size_t *bytes)
+{
+    struct a733_hdmi *s=v;
+    if(!s||s->connector_invalidated||!out||!bytes||capacity<s->edid_size||
+       (s->state!=A733_HDMI_PREPARED&&s->state!=A733_HDMI_ACTIVE)||deadline(s,d)!=1)return 0;
+    memcpy(out,s->edid,s->edid_size);*bytes=s->edid_size;return 1;
+}
+static enum sunstone_display_mode_status connector_mode(void *v,const struct sunstone_display_mode *mode)
+{
+    struct a733_hdmi *s=v;enum a733_hdmi_mode profile;
+    if(!s||s->connector_invalidated)return SUNSTONE_MODE_LINK;
+    enum sunstone_display_mode_status r=a733_hdmi_mode_from_pixel(mode,&profile);
+    if(r!=SUNSTONE_MODE_OK)return r;
+    /* The existing owner authenticated one exact PHY/clock request. A mode
+     * that needs another profile must use a new, separately admitted owner. */
+    return s&&profile==s->io.request.mode?SUNSTONE_MODE_OK:SUNSTONE_MODE_UNSUPPORTED_PROFILE;
+}
+int a733_hdmi_connector_init(struct sunstone_display_connector_state *out,
+    const struct sunstone_display_port *port,struct a733_hdmi *s)
+{
+    if(!out||!port||port->connector!=SUNSTONE_DISPLAY_HDMI||port->controller!=0||
+       !s||s->self!=s||s->connector_invalidated||(s->state!=A733_HDMI_PREPARED&&s->state!=A733_HDMI_ACTIVE))return 0;
+    *out=(struct sunstone_display_connector_state){.port=port,
+        .ops={connector_detect,connector_edid,connector_mode},.context=s};return 1;
 }

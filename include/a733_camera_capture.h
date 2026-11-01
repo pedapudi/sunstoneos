@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef SUNSTONE_A733_CAMERA_CAPTURE_H
 #define SUNSTONE_A733_CAMERA_CAPTURE_H
-#include "ov5640.h"
+#include "camera_sensor.h"
 #include "a733_camera_platform.h"
 #include "a733_csi_receiver.h"
 #include "a733_camera_route.h"
@@ -53,9 +53,12 @@ struct a733_camera_capture_config {
     size_t table_bytes; /* Zero keeps the legacy 32KiB arena; otherwise typed capacity. */
     uint64_t table_physical,frame_id;
     struct a733_csi_config receiver; /* Matching port/parser 0 or 1. */
-    /* From ov5640_mode_get in UYVY or YUYV; sets every controller's frame
+    /* Negotiated sensor mode in UYVY or YUYV; sets every controller's frame
      * size, and each image span must cover one width x height plane. */
-    struct ov5640_mode mode;
+    struct camera_mode mode;
+    const struct camera_sensor_bus *sensor_bus;
+    const struct camera_sensor_driver *const *sensor_drivers;
+    size_t sensor_driver_count;
     /* Continuous capture only: 2..A733_CAMERA_DMA_SLOTS ring slots, each
      * taking slot_bytes (a multiple of 4096 covering one plane) of both
      * image spans. Zero keeps the single-image paths. */
@@ -73,7 +76,7 @@ struct a733_camera_capture_config {
      * No platform callback may synthesize native controller success, enable a
      * producer, retry, reset, change tables or perform an unrequested rollback.
      */
-    struct ov5640_ops sensor;
+    struct camera_sensor_bus_ops sensor;
     struct a733_camera_platform_ops analog;
     struct a733_iommu_ops iommu;
     struct a733_route_ops route;
@@ -103,7 +106,7 @@ enum a733_capture_state {
 struct a733_camera_capture {
     struct a733_camera_capture_config config;
     struct a733_iommu_tables tables;
-    struct ov5640 sensor;
+    struct camera_sensor sensor;
     struct a733_camera_platform analog;
     struct a733_iommu iommu;
     struct a733_camera_route route;

@@ -3,6 +3,7 @@
 #define SUNSTONE_OV5640_H
 
 #include <stdint.h>
+#include "camera_sensor.h"
 
 /* One serialized privileged owner. Initialize fresh zeroed storage once.
  * All callback contexts and this object remain reserved until CLOSED, or
@@ -31,12 +32,8 @@ enum ov5640_size {
 enum ov5640_format { OV5640_UYVY, OV5640_YUYV, OV5640_SBGGR8, OV5640_FORMATS };
 /* pixel_hz is the sensor timing clock; one frame takes htotal * vtotal of
  * its periods. link_hz is the CSI-2 clock lane frequency. */
-struct ov5640_mode {
-    uint32_t xclk_hz, link_hz, pixel_hz;
-    uint16_t width, height, htotal, vtotal;
-    uint8_t lanes, virtual_channel, csi_data_type, bytes_per_pixel;
-    uint8_t size, format; /* enum ov5640_size, enum ov5640_format */
-};
+/* Compatibility name for the existing sensor API. */
+#define ov5640_mode camera_mode
 /* The default: 640x480 UYVY at nominal 30 frames/s. */
 extern const struct ov5640_mode ov5640_vga_mode;
 /* Derive a two-lane mode with a 24 MHz XCLK, using the reference driver's

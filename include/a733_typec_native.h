@@ -4,6 +4,7 @@
 #include "a733_typec.h"
 #include "a733_pmic.h"
 struct a733_platform_locks;
+struct sunstone_usb_port;
 struct a733_typec_native_config {
     struct a733_clock_leases *clocks;
     struct a733_pins *pins;
@@ -17,6 +18,7 @@ struct a733_typec_native_config {
 struct a733_typec_native {
     struct a733_typec_native *self;
     struct a733_typec_native_config config,sealed;
+    const struct sunstone_usb_port *wiring;
     struct a733_typec provider;
     struct a733_twi bus;
     struct a733_twi_ops bus_ops;

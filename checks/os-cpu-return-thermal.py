@@ -25,6 +25,7 @@ p.add_argument('--output', type=Path, required=True)
 a = p.parse_args()
 a.output.mkdir(parents=True, exist_ok=False)
 layout = thermal.geometry(a.image)
+period_us = thermal.report.PERIOD_US if layout['window']['members']['first'] == thermal.report.HEADER_BYTES else 100000
 image = Image(a.image, {'os_thermal_service', 'a733_thermal_policy', 'board_application', 'a733_board_session'})
 m = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
 m.mem_map(0x41000000, 0x1200000)
@@ -75,7 +76,7 @@ for i in range(5):
 call('record_reading', time_us, 0)
 call('os_thermal_record_begin')
 for n in range(1, 4):
-    time_us += 100000
+    time_us += period_us
     put(policy + fields['sequence'], '<I', n)
     for i in range(5):
         put(policy + fields['seen_us'] + i * 8, '<Q', time_us)
@@ -84,11 +85,11 @@ call('os_thermal_record_end', 1)
 copied = {name: bytes(m.mem_read(address, size)) for name, address, size in thermal.captures(layout)}
 result = thermal.decode(layout, copied, 11, 12)
 assert result['classification'] == 'complete' and result['rows'] == 4
-assert result['recognition_generation'] == 7 and result['end_us'] - result['begin_us'] == 300000
+assert result['recognition_generation'] == 7 and result['end_us'] - result['begin_us'] == 3 * period_us
 assert result['readings'][0]['millicelsius'] == [40000, 41000, 42000, 43000, 44000]
 cases = ['actual-native-emitter-and-published-window']
 # The producer continues recording, while the first recognition stays immutable.
-time_us += 100000
+time_us += period_us
 call('record_reading', time_us, 0)
 call('os_thermal_record_begin')
 call('os_thermal_record_end', 0)

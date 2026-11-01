@@ -1,3 +1,5 @@
+#include "ov5640.h"
+#include "a733_camera_application.h"
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* The native binding and real controllers execute against modeled MMIO/cache
  * and task identity. This fixture supplies no physical qualification evidence. */
@@ -324,7 +326,7 @@ static void setup(void)
     WORD(0x0708300c)=0x40;WORD(0x07083010)=0xf8;WORD(0x07083014)=0x28;WORD(0x07083020)=0x30;
     WORD(0x07083200)=0xf81000;WORD(0x07083210)=0x80c0;WORD(0x07083218)=0x100010;
     pm.pmic[0x0e]=3;pm.pmic[0x10]=0xff;pm.pmic[0x21]=0xff;
-    pm.pmic[0x12]=23;pm.pmic[0x19]=100;pm.pmic[0x2e]=13;
+    pm.pmic[0x12]=23;pm.pmic[0x20]=0xff;pm.pmic[0x2b]=13;pm.pmic[0x2e]=13;
     WORD(TWI_BASE+0x10)=0xf8;WORD(TWI_BASE+0x20)=0x30;
     WORD(TWI_BASE+0x200)=0xf81000;WORD(TWI_BASE+0x210)=0x80c0;WORD(TWI_BASE+0x218)=0x100010;
     sensor[0x300a]=0x56;sensor[0x300b]=0x40;common[0]=0x360500;common[1]=0xa5;
@@ -352,7 +354,7 @@ static void setup(void)
         .origin=A733_CAMERA_COLD_RESET,.excluded_masters=A733_IOMMU_REAL_MASTERS,.powered_masters=A733_IOMMU_REAL_MASTERS,
         .raw_trim=0xb00,.parameter_guard_bytes=4096,.plane_guard_bytes=4096,.apb1=0,.apb1_hz=24000000,
         .settle=20,.deskew=camera_port?7:2,.reset_bank=A733_PIN_G,.reset_pin=10,.test_pattern=mode==10,.discard_frames=(uint8_t)DISCARDS,
-        .rails={A733_RAIL_DCDC1,A733_RAIL_DCDC8,A733_RAIL_BLDO5},.programmed_uv={3300000,1800000,1800000}};
+        .rails={A733_RAIL_DCDC1,A733_RAIL_BLDO2,A733_RAIL_BLDO5},.programmed_uv={3300000,1800000,1800000}};
     for(unsigned i=0;i<15;i++)boot.inherited[i]=(struct a733_pin_config){15,0,0};
     boot.inherited[11].function=boot.inherited[14].function=1;
     for(unsigned i=0;i<10;i++)pin_config(A733_PIN_K,i+10u*camera_port,boot.inherited[i]);
@@ -491,12 +493,20 @@ static void routing_checks(void)
 }
 static void stream_case(void)
 {
+    struct a733_camera_application adapter={0};struct sunstone_camera endpoint;
+    struct sunstone_camera_mode selected;
+    assert(a733_camera_application_init(&adapter,&camera,&endpoint)==1);
+    assert(endpoint.ops->enumerate(endpoint.context,0,&selected)==1 && selected.format==SUNSTONE_CAMERA_NV16);
+    assert(endpoint.ops->enumerate(endpoint.context,1,&selected)==0);
+
     struct device_memory_lease output;struct device_memory_extent out;
     assert(camera.extent.bytes==A733_CAMERA_NATIVE_STREAM_BYTES);
     assert(device_memory_acquire(&pool,boot.owner,A733_CAMERA_FRAME_BYTES,&output,&out));
+    struct sunstone_camera_mode incompatible=selected;incompatible.format=SUNSTONE_CAMERA_YUYV;
+    assert(endpoint.ops->start(endpoint.context,&incompatible,boot.deadline_us)==-1);
     int result=0,ready=0;
     for(unsigned poll=0;poll<20000 && !ready && result>=0;++poll){
-        result=a733_camera_native_poll(&camera);
+        result=adapter.started?a733_camera_native_poll(&camera):endpoint.ops->start(endpoint.context,&selected,boot.deadline_us);
         if(result==1){
             if(mode==22 && camera.copy_active && camera.copy_bytes>=4096)dma[0x254/4]|=4;
             if(mode==24 && camera.copy_active && camera.copy_bytes>=4096){
@@ -528,9 +538,19 @@ static void stream_case(void)
         for(unsigned plane=0;plane<2;++plane)for(unsigned i=0;i<A733_CAMERA_NATIVE_PLANE_BYTES;++i)
             assert(((uint8_t *)out.cpu)[plane*A733_CAMERA_NATIVE_PLANE_BYTES+i]==payload(frame,plane,i));
         assert(max_status_gap<camera.capture.status_us);
-        assert(a733_camera_native_stream_stop(&camera)==1);
+        struct sunstone_camera_frame view;int got=0;
+        for(unsigned i=0;i<20000 && !got;i++){
+            got=endpoint.ops->next(endpoint.context,&view,boot.deadline_us);assert(got>=0);pm.now+=1000;
+        }
+        assert(got==1 && view.plane[0] && view.plane[1] && !view.spans && !view.span_count);
+        assert(view.bytes[0]==A733_CAMERA_NATIVE_PLANE_BYTES && view.stride[0]==A733_CAMERA_WIDTH);
+        assert(camera.capture.dma.ring.state[adapter.slot]==A733_SLOT_HELD);
+        assert(endpoint.ops->release(endpoint.context,view.token+1,boot.deadline_us)==-1);
+        assert(endpoint.ops->release(endpoint.context,view.token,boot.deadline_us)==1);
+        assert(endpoint.ops->release(endpoint.context,view.token,boot.deadline_us)==-1);
+        assert(endpoint.ops->stop(endpoint.context,boot.deadline_us)==0);
         for(unsigned i=0;i<100 && camera.state!=A733_CAMERA_NATIVE_FAULT;++i){
-            (void)a733_camera_native_poll(&camera);pm.now+=1000;
+            (void)endpoint.ops->stop(endpoint.context,boot.deadline_us);pm.now+=1000;
         }
         assert(camera.state==A733_CAMERA_NATIVE_FAULT && sensor[0x4202]==15 && sensor[0x300e]==0x40);
         assert(!camera.capture.quiet && !camera.capture.drained && (parser[3]&3)==2);
@@ -538,6 +558,9 @@ static void stream_case(void)
             assert(((uint8_t *)out.cpu)[plane*A733_CAMERA_NATIVE_PLANE_BYTES+i]==payload(frame,plane,i));
     }
     unsigned before=io_count;assert(a733_camera_native_poll(&camera)==-1 && io_count==before);
+    struct sunstone_camera_frame dead;
+    assert(endpoint.ops->next(endpoint.context,&dead,boot.deadline_us)==-1 && io_count==before);
+    assert(endpoint.ops->stop(endpoint.context,boot.deadline_us)==-1 && io_count==before);
     assert(camera.memory.generation && !device_memory_release(&pool,camera.memory));
     printf("PORT %u register_accesses=%u register_writes=%u cache_acquisitions=%u\n",camera_port,io_count,writes,cache_syncs);
     printf("PASS native stream frames=%u copy_calls=%u bytes=%u max_status_gap_us=%llu retained=1 drain=0\n",
@@ -645,7 +668,7 @@ int main(int argc,char **argv)
         assert(a733_camera_native_copy(&camera,0,(A733_CAMERA_NATIVE_PLANE_BYTES-1),output,0,2)==-1);
         assert(a733_camera_native_copy(&camera,0,0,camera.memory,0,1)==-1);
         assert(camera.capture.route.state==A733_ROUTE_ARMED && camera.capture.receiver.state==A733_CSI_ARMED);
-        assert(camera.capture.iommu.state==A733_IOMMU_ACTIVE && camera.capture.sensor.state==OV5640_READY);
+        assert(camera.capture.iommu.state==A733_IOMMU_ACTIVE && camera.capture.sensor.state==CAMERA_SENSOR_READY);
     }
     if(mode==26){
         unsigned before=io_count;media.config.camera_mclk_mask=2u<<(1u-camera_port);

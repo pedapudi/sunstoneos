@@ -2,6 +2,7 @@
 #include "pvr_compute_queue.h"
 #include "pvr_gpu_service.h"
 #include "a733_range.h"
+#include "sunstone_latency.h"
 #include <string.h>
 
 static struct pvr_compute_queue *instance;
@@ -155,6 +156,7 @@ int gpu_queue_wait(struct gpu_queue_context c,struct gpu_queue_record *out,uint3
     if (!atomic_load(v.client_owed)) return atomic_load(&q->lost)?GPU_QUEUE_FAULT:GPU_QUEUE_REFUSED;
     struct gpu_queue_record record;
     if (xQueueReceive(v.completions,&record,(TickType_t)ticks)!=pdTRUE) return GPU_QUEUE_TIMEOUT;
+    SS_LATENCY_GPU_RECEIVED(c.client);
     atomic_store(v.client_owed,0); *out=record;
     return record.result;
 }

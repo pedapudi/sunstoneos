@@ -15,8 +15,11 @@ static uintptr_t base(const struct a733_i2s_stream *s) {return hdmi(s)?UINT32_C(
 static unsigned errors(const struct a733_i2s_stream *s) {return tx(s)?0x60:6;}
 static unsigned flush(const struct a733_i2s_stream *s) {return 1u<<(tx(s)?25:24);}
 static unsigned drq(const struct a733_i2s_stream *s) {return tx(s)?128:8;}
-static enum a733_i2s_status fault(struct a733_i2s_stream *s)
+__attribute__((weak)) void a733_i2s_fault_observed(const struct a733_i2s_stream *s,uintptr_t caller)
+{(void)s;(void)caller;}
+__attribute__((noinline,not_tail_called)) static enum a733_i2s_status fault(struct a733_i2s_stream *s)
 {
+    a733_i2s_fault_observed(s,(uintptr_t)__builtin_return_address(0));
     s->status=A733_I2S_RECOVERY;
     if(s->peer)s->peer->status=A733_I2S_RECOVERY;
     return s->status;

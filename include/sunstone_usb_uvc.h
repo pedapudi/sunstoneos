@@ -3,10 +3,12 @@
 #define SUNSTONE_USB_UVC_H
 #include <stddef.h>
 #include <stdint.h>
+#include "sunstone_camera.h"
 #define SUNSTONE_UVC_SLICES 1024
 #define SUNSTONE_UVC_FRAMES 3
 #define SUNSTONE_UVC_MODES 64
 #define SUNSTONE_UVC_ALTS 16
+#define SUNSTONE_UVC_INTERVALS 57 /* Maximum entries in a 255-byte frame descriptor. */
 enum sunstone_uvc_format { SUNSTONE_UVC_YUYV = 1, SUNSTONE_UVC_MJPEG = 2 };
 struct sunstone_uvc_mode {
   uint8_t format, index, frame, interface;
@@ -22,14 +24,14 @@ struct sunstone_uvc_catalog {
   unsigned modes, alts;
   struct sunstone_uvc_mode mode[SUNSTONE_UVC_MODES];
   struct sunstone_uvc_alt alt[SUNSTONE_UVC_ALTS];
-};
-struct sunstone_uvc_slice {
-  const uint8_t *data;
-  size_t bytes;
-  void *lease;
+  struct {
+    uint32_t discrete[SUNSTONE_UVC_INTERVALS];
+    uint32_t minimum,maximum,step;
+    unsigned count;
+  } intervals[SUNSTONE_UVC_MODES];
 };
 struct sunstone_uvc_frame {
-  struct sunstone_uvc_slice slice[SUNSTONE_UVC_SLICES];
+  struct sunstone_camera_span slice[SUNSTONE_UVC_SLICES];
   size_t bytes;
   unsigned slices;
   uint64_t sequence, generation;

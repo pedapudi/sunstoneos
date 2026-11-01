@@ -5,7 +5,7 @@
 extern unsigned char __device_pool_start[],__device_pool_end[];
 extern unsigned char __uncached_pool_start[],__uncached_pool_end[];
 #define PROFILE {A733_CAMERA_PROFILE_MAGIC,1,SUNSTONE_CAMERA_SIZE,A733_CAMERA_WIDTH,\
- A733_CAMERA_HEIGHT,OV5640_UYVY,A733_CAMERA_NV16,A733_CAMERA_IS_STREAM,\
+ A733_CAMERA_HEIGHT,CAMERA_UYVY,A733_CAMERA_NV16,A733_CAMERA_IS_STREAM,\
  A733_CAMERA_NATIVE_PLANE_BYTES,A733_CAMERA_SLOT_BYTES,A733_CAMERA_TABLE_BYTES,\
  A733_CAMERA_SOURCE_BYTES,A733_CAMERA_FRAME_BYTES,sizeof(struct a733_camera_image_profile),\
  (uintptr_t)__device_pool_start,(uintptr_t)__device_pool_end}
@@ -15,10 +15,10 @@ int camera_memory_profile_valid(void)
     /* Volatile reads keep the admission check independent of the compiler's
      * constant folding and merging of identical readonly initializers. */
     const volatile struct a733_camera_image_profile *p=&a733_camera_image_profile;
-    struct ov5640_mode mode;
+    struct camera_mode mode;
     if(!a733_camera_selected_mode(&mode) || p->magic!=A733_CAMERA_PROFILE_MAGIC || p->version!=1 ||
        p->size!=SUNSTONE_CAMERA_SIZE || p->width!=mode.width || p->height!=mode.height ||
-       p->input_format!=OV5640_UYVY || p->output_format!=A733_CAMERA_NV16 ||
+       p->input_format!=CAMERA_UYVY || p->output_format!=A733_CAMERA_NV16 ||
        p->stream!=A733_CAMERA_IS_STREAM || p->plane!=A733_CAMERA_NATIVE_PLANE_BYTES ||
        p->slot!=A733_CAMERA_SLOT_BYTES || p->table!=A733_CAMERA_TABLE_BYTES ||
        p->source!=A733_CAMERA_SOURCE_BYTES || p->output!=A733_CAMERA_FRAME_BYTES ||

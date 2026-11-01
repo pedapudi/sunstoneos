@@ -51,10 +51,13 @@ static uint64_t fresh_until(void)
     return until+1000000;
 }
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
-/* The supervised lifetime is 60 s. One owner appends at most 10 rows/s plus
+/* The supervised lifetime is 60 s. One owner appends at most 8 rows/s plus
  * an initial and terminal row. Readers acquire the count; published rows
  * never change. No allocation, I/O, wait or additional THS read occurs here. */
 #define THERMAL_RECORDS (A733_BOARD_SUPERVISED_SECONDS*10u+2u)
+/* The first count publication releases this immutable cadence origin to the
+ * recognizer, which publishes its selected first slot in the version 2 header. */
+static uint64_t thermal_record_origin_us;
 static struct os_thermal_readings {
     struct os_thermal_reading rows[THERMAL_RECORDS];
     atomic_uint count,overflow;
@@ -67,6 +70,9 @@ static void record_reading(uint64_t now,enum a733_thermal_level level)
     /* Startup throttling precedes complete sensor coverage. Its first usable
      * sample must be recorded before publish_load releases that throttling. */
     if(!n&&level!=A733_THERMAL_CRITICAL&&(thermal.policy.seen!=31||thermal.policy.stale))return;
+    /* The first usable row starts the immutable record phase. Partial startup
+     * sensor sets cannot establish a slot that no usable row can cover. */
+    if(!readings.next){thermal_record_origin_us=now;readings.next=now;}
     if(n==THERMAL_RECORDS){atomic_store_explicit(&readings.overflow,1,memory_order_release);return;}
     struct os_thermal_reading *r=&readings.rows[n];
     r->time_us=now;r->sequence=thermal.policy.sequence;r->seen=thermal.policy.seen;
@@ -76,10 +82,10 @@ static void record_reading(uint64_t now,enum a733_thermal_level level)
         uint64_t age=now-((r->seen&(1u<<i))?thermal.policy.seen_us[i]:thermal.policy.start_us);
         r->age_us[i]=age>UINT32_MAX?UINT32_MAX:(uint32_t)age;
     }
-    /* Keep the first row's phase despite late owner passes. Missed periods
-     * produce no invented rows; an early critical row preserves the phase. */
-    if(!readings.next)readings.next=now;
-    if(now>=readings.next)readings.next+=((now-readings.next)/100000+1)*100000;
+    /* Advance the absolute 125 ms phase, skipping missed slots. Never invent
+     * a historical sample to fill a scheduling delay. */
+    if(now>=readings.next)
+        readings.next+=(1+(now-readings.next)/125000)*125000;
     atomic_store_explicit(&readings.count,n+1,memory_order_release);
 }
 /* Only the recognizer writes the first window. Publish once; the USB owner
@@ -103,8 +109,15 @@ void os_thermal_record_end(int success)
     if(!window.collecting||atomic_load_explicit(&window.ready,memory_order_relaxed))return;
     unsigned n=atomic_load_explicit(&readings.count,memory_order_acquire);
     struct os_thermal_report *h=&window.header;
-    h->end_us=a733_smp_counter()/24;h->magic=OS_THERMAL_REPORT_MAGIC;h->version=1;
+    h->end_us=a733_smp_counter()/24;h->magic=OS_THERMAL_REPORT_MAGIC;h->version=2;
     h->rows=n-window.first;h->row_bytes=sizeof(struct os_thermal_reading);
+    h->scheduled_first_us=0;
+    if(h->rows){
+        /* A nonzero acquired count publishes the producer's immutable origin. */
+        h->scheduled_first_us=thermal_record_origin_us;
+        uint64_t first=readings.rows[window.first].time_us;
+        h->scheduled_first_us+=(first-thermal_record_origin_us)/125000*125000;
+    }
     h->bytes=sizeof(*h)+h->rows*h->row_bytes;
     h->epoch=board.session.epoch;h->generation=board.session.generation;
     h->overflow=atomic_load_explicit(&readings.overflow,memory_order_acquire);
@@ -250,6 +263,7 @@ static int step(void)
     unsigned notified=atomic_exchange_explicit(&thermal.pending,0,memory_order_acq_rel);
     uint64_t n=a733_smp_counter()/24;
     if(notified||n>=thermal.next_read){
+        if(!thermal.next_read)thermal.next_read=n;
         struct a733_thermal_sample sample;
         enum a733_thermal_result r=a733_thermal_read(&thermal.driver,deadline(),&sample);
         uint64_t t;
@@ -267,7 +281,10 @@ static int step(void)
         os_npu_thermal(level==A733_THERMAL_NORMAL&&a733_thermal_policy_seen(&thermal.policy)==31,
             level!=A733_THERMAL_NORMAL,fresh_until()+1,t);
 #endif
-        thermal.next_read=n+25000;
+        /* Keep the 25 ms phase. Completion time skips slots crossed during
+         * a read; an early IRQ read leaves the next periodic deadline intact. */
+        if(t>=thermal.next_read)
+            thermal.next_read+=(1+(t-thermal.next_read)/25000)*25000;
     }else{
         /* Expire clock admission between reads without extra THS accesses.
          * Checkpoints independently enforce this same inclusive deadline. */

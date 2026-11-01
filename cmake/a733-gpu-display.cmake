@@ -27,7 +27,7 @@ foreach(pair "boot.c|boot.patch" "platform.c|platform.patch" "link-devices.ld|li
 endforeach()
 list(APPEND gd_sources "${gd_build}/boot.c" "${gd_build}/platform.c")
 foreach(source IN ITEMS apps/gpu-display/admission.c apps/gpu-display/snapshot.c apps/gpu-display/privilege.c
- drivers/display/a733_hdmi.c drivers/display/a733_hdmi_phy.c drivers/display/a733_tcon_tv.c
+ drivers/display/a733_hdmi.c drivers/display/a733_hdmi_phy.c drivers/display/a733_tcon_tv.c drivers/display/sunstone_edid.c
  platform/a733/hdmi_native.c platform/a733/display_native_io.c drivers/iommu/a733_iommu.c
  drivers/clock/a733_media_clock.c drivers/clock/a733_media_clock_native.c
  drivers/display/a733_display_engine.c drivers/display/a733_tcon_lcd.c

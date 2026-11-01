@@ -140,6 +140,11 @@ int a733_xhci_init(struct a733_xhci *,const struct a733_xhci_ops *,void *,
  * not recover a stalled peripheral/interconnect; qualified recovery is required.
  */
 enum a733_xhci_result a733_xhci_poll(struct a733_xhci *);
+/* Owner-task scheduling hint: a software-only startup or queued request step
+ * can run now. Metadata only; false does not establish hardware quiescence.
+ * Hardware waits, teardown, recovery and isochronous refill keep their existing
+ * scheduling. The caller must bound its batch and still run poll's guards. */
+int a733_xhci_work_pending(const struct a733_xhci *);
 /* Optional owner-task interrupt profile. The platform keeps its level SPI
  * masked and deactivated throughout begin/drain/finish. Start returns0 until
  * ACTIVE, then1; all three return-1 and retain on failure. Begin acknowledges

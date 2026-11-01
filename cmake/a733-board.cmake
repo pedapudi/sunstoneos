@@ -54,6 +54,7 @@ else()
   list(APPEND board_sources "${board_build}/boot.c")
 endif()
 foreach(source IN ITEMS
+  drivers/board/orangepi_zero3w.c
   apps/board/main.c apps/board/session.c apps/board/radio_profile.c apps/board/admission.c apps/board/client.c apps/board/audio.c apps/board/usb0.c apps/board/identity.c
   drivers/usb/a733_typec.c drivers/usb/a733_typec_pd.c platform/a733/typec_native.c drivers/i2c/a733_twi.c drivers/i2c/a733_twi_native.c
   drivers/usb/a733_usb2_platform.c drivers/usb/a733_usb2_native.c drivers/usb/a733_xhci.c drivers/usb/a733_usb3_phy.c
@@ -113,7 +114,8 @@ if(SUNSTONE_A733_OS_USB_CLASSES)
     COMMAND_ERROR_IS_FATAL ANY)
   list(APPEND board_host_sources "${board_cdc_source}"
     "${board_root}/drivers/usb/host/hid.c" "${board_root}/drivers/usb/host/serial.c"
-    "${board_root}/drivers/usb/host/uvc.c" "${board_root}/drivers/usb/host/serial-native.c")
+    "${board_root}/drivers/usb/host/uvc.c" "${board_root}/drivers/usb/host/uvc-camera.c"
+    "${board_root}/drivers/usb/host/serial-native.c")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${board_root}/drivers/usb/host/serial-source.py")
 endif()

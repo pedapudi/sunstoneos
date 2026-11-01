@@ -1,4 +1,5 @@
 #include "profile.h"
+#include "a733_display_modes.h"
 #include <string.h>
 static int zero(const void *v,size_t z){const uint8_t *p=v;unsigned n=0;for(size_t i=0;i<z;++i)n|=p[i];return !n;}
 uint64_t dsi_frame_bytes(const struct dsi_session *s)
@@ -16,6 +17,9 @@ int dsi_request(const struct dsi_session *s,struct display_request *r,uint64_t p
  .timing={.dsi={.pixel_hz=v[0],.hs_hz=v[1],.ls_hz=v[2],.width=v[3],.height=v[4],.hsync=v[5],.hback=v[6],.hfront=v[7],.vsync=v[8],.vback=v[9],.vfront=v[10],.lanes=v[11],.format=v[12],.mode=v[13]},.actual_dclk_hz=v[14]},
  .frame={cpu,pa,dsi_bank_bytes(s),s->board.generation,v[15]}};
  for(unsigned i=3;i<=10;++i)if(v[i]>65535)return 0;
+ struct sunstone_display_mode pixels={v[0],(uint16_t)v[3],(uint16_t)v[4],(uint16_t)v[7],
+  (uint16_t)v[5],(uint16_t)v[6],(uint16_t)v[10],(uint16_t)v[8],(uint16_t)v[9],0};
+ if(!a733_dsi_timing_from_mode(&pixels,v[1],v[2],v[11],v[12],v[13],&q.timing.dsi))return 0;
  struct a733_de_plan p;struct a733_de_surface f={pa,q.frame.mapped_bytes,s->owner,v[15]};
  if(!a733_de_plan(&q.timing,&f,&p))return 0;*r=q;return 1;
 }
