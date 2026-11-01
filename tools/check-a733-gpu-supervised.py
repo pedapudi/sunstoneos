@@ -145,7 +145,7 @@ def main(argv=None):
     for name in ('bundle', 'fel', 'evidence'):
         parser.add_argument('--' + name, type=Path, required=True)
 
-    parser.add_argument('--supervised-manual-reconnect', action='store_true', required=True)
+    parser.add_argument('--supervised-manual-reconnect', action='store_true')
     args = parser.parse_args(argv)
     bundle = args.bundle.resolve()
     prepared_bytes=(bundle/'prepared.json').read_bytes()

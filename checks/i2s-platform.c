@@ -1,5 +1,6 @@
 /* Clock/pin transaction model. No physical clocks, pin timing or microphone. */
 #include "a733_i2s_platform.h"
+#include "register_latency.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -25,6 +26,9 @@ static unsigned regress_after_enable, regression_phase;
 static uint32_t saved_div2, pll_trace[8];
 static unsigned pll_count;
 static unsigned gate_status_reads, gate_status_hold, gate_status_fail, gate_status_late;
+static struct register_latency pll_lock, output_gate;
+static unsigned fraction,write_cost;
+static uint64_t lock_sample_ticks[3];
 static int enter(void *cookie, uint64_t deadline)
 {
     assert(cookie == &parent && !mutex && now < deadline);
@@ -56,6 +60,8 @@ static int read_word(void *cookie, uintptr_t a, uint32_t *out)
 {
     assert(cookie == &parent && mutex);
     ++reads;
+    if(a==C+0x280)ccu[0x280/4]=reg_latency_apply(&pll_lock,now,ccu[0x280/4]);
+    if(a==C+0x199c)ccu[0x199c/4]=reg_latency_apply(&output_gate,now,ccu[0x199c/4]);
     if (a == C+0x199c) {
         ++gate_status_reads;
         /* Cold status must not be sampled before PLL output enable. */
@@ -64,6 +70,10 @@ static int read_word(void *cookie, uintptr_t a, uint32_t *out)
         if (gate_status_fail) return 0;
     }
     *out=*word(a);
+    if(a==C+0x280&&parent.stage==3&&(*out&B(28))&&parent.locked_samples<3){
+        unsigned i=parent.locked_samples;lock_sample_ticks[i]=now*24+fraction;
+        if(i)assert(lock_sample_ticks[i]-lock_sample_ticks[i-1]>=3*24);
+    }
     return 1;
 }
 static int write_word(void *cookie, uintptr_t a, uint32_t value)
@@ -77,11 +87,20 @@ static int write_word(void *cookie, uintptr_t a, uint32_t value)
             assert(pll_count < 8); pll_trace[pll_count++]=value;
             assert((value & 0x700000) == saved_div2);
             assert(!(value & B(27)) || (ccu[0x280/4] & B(28)));
-            if ((value & B(31)) && !lock_never) value |= B(28);
-            if ((value & B(27)) && !gate_status_hold) ccu[0x199c/4] |= B(17)|B(18);
+            /* Manual4.1.4.1/.2 requires three lock samples and20us settle.
+             * Constructed11us/7us hardware delays use explicit fixture time. */
+            if((value&B(29))&&!(ccu[0x280/4]&B(29))){
+                reg_latency_schedule(&pll_lock,now,11,B(28),B(28));pll_lock.stuck=lock_never;
+            }
+            if ((value & B(27)) && !(ccu[0x280/4]&B(27))) {
+                assert(!pll_lock.pending && parent.locked_samples==3 && now-parent.wait_since>=20);
+                assert(now*24+fraction-lock_sample_ticks[2]>=20*24);
+                if(!gate_status_hold)reg_latency_schedule(&output_gate,now,7,B(17)|B(18),B(17)|B(18));
+            }
         } else assert(held[A733_AUDIO_LOCAL]);
     }
     *word(a)=value;
+    if(a==C+0x280)now+=write_cost;
     if (late_write && a == failure_address) now=900;
     if (write_failure && a == failure_address) return 0; /* Write may have happened. */
     return 1;
@@ -128,6 +147,8 @@ static void setup(unsigned cold)
     memset(&pins,0,sizeof(pins)); memset(ccu,0,sizeof(ccu)); memset(pio,0,sizeof(pio));
     memset(held,0,sizeof(held));
     now=1; mutex=reads=writes=publish_count=releases=0;
+    pll_lock=(struct register_latency){0};output_gate=(struct register_latency){0};
+    fraction=write_cost=0;memset(lock_sample_ticks,0,sizeof(lock_sample_ticks));
     conflict_scope=late_acquire=late_publish=late_release=busy_lock=0;
     lease_pending=write_failure=lock_never=late_pin_release=late_write=0; failure_address=0;
     osc=0x10000002; saved_div2=2u<<20; pll_count=0;
@@ -313,6 +334,37 @@ static void rate_cases(void)
     assert(iops.acquire(&binding,&p,900) == BUSY && reads+writes == before && !binding.local.id);
     puts("],\"refused_module_hz\":[22579200]}");
 }
+static void unstable_lock(void)
+{
+    setup(1);
+    for(unsigned i=0;i<40&&!parent.locked_samples;++i){assert(a733_audio_parent_poll(&parent)==PENDING);now+=3;}
+    assert(parent.locked_samples==1&&!publish_count);
+    ccu[0x280/4]&=~B(28);
+    ++now;
+    assert(a733_audio_parent_poll(&parent)==PENDING&&!parent.locked_samples&&!publish_count);
+    reg_latency_schedule(&pll_lock,now,11,B(28),B(28));
+    ready_parent();assert(publish_count==1&&!output_gate.pending);
+}
+static void minimum_intervals(void)
+{
+    for(unsigned costly=0;costly<2;++costly){
+        setup(1);fraction=23;write_cost=costly?17:0;
+        while(parent.stage!=3)assert(a733_audio_parent_poll(&parent)==PENDING);
+        uint64_t anchor=parent.wait_since;
+        now=anchor+3;fraction=0;
+        assert(a733_audio_parent_poll(&parent)==PENDING&&!parent.locked_samples);
+        now=anchor+20;fraction=23;
+        assert(a733_audio_parent_poll(&parent)==PENDING&&parent.locked_samples==1);
+        now+=3;fraction=0;
+        assert(a733_audio_parent_poll(&parent)==PENDING&&parent.locked_samples==1);
+        ++now;assert(a733_audio_parent_poll(&parent)==PENDING&&parent.locked_samples==2);
+        now+=4;fraction=23;assert(a733_audio_parent_poll(&parent)==PENDING&&parent.locked_samples==3);
+        anchor=parent.wait_since;now=anchor+20;fraction=0;
+        assert(a733_audio_parent_poll(&parent)==PENDING&&!(ccu[0x280/4]&B(27))&&!publish_count);
+        ++now;assert(a733_audio_parent_poll(&parent)==PENDING&&(ccu[0x280/4]&B(27)));
+        ready_parent();assert(publish_count==1);
+    }
+}
 int main(int argc, char **argv)
 {
     if (argc == 2) {
@@ -323,6 +375,8 @@ int main(int argc, char **argv)
         return 0;
     }
     assert(argc == 1);
+    minimum_intervals();
+    unstable_lock();
     setup(1); lease_pending=1; ready_parent();
     assert(publish_count == 1 && held[A733_AUDIO_REFERENCE] && held[A733_AUDIO_STABLE]);
     assert(!held[A733_AUDIO_CHANGE] && (ccu[0x280/4] & B(7)));

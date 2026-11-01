@@ -242,8 +242,8 @@ boundaries; ETC2 and EAC formats.
 
 Baselines are counted from the integration base for a 1920 × 1080 profile-4
 frame and the 1280 × 720 display frame. Three harnesses hold the counters: the
-frame-path emulation `checks/gpu-texture-frame.py`, which runs the worker's
-sources under Unicorn and applies its burst rule; the display replay model
+frame-path emulation `checks/gpu-texture-frame.py`, which runs the render service
+under Unicorn without modeling scheduler pacing; the display replay model
 `checks/gpu-display-replay.py`; and the VM check `checks/pvr-gpu-vm.c`.
 
 | Metric | Baseline | Target | Measured by |

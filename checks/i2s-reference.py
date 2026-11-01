@@ -5,6 +5,7 @@ import hashlib
 import pathlib
 import re
 import subprocess
+from harness import CLANG, SANITIZE, environment
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--source-dir', type=pathlib.Path, required=True)
@@ -133,10 +134,10 @@ int main(void)
 file = args.build_dir / 'reference.c'
 file.write_text(notice + '\n' + stubs + '\n' + macros + '\n' + functions + '\n' + main)
 binary = args.build_dir / 'reference'
-subprocess.run(['cc', '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-                '-Wno-unused-parameter', '-fsanitize=undefined,address',
+subprocess.run([str(CLANG), '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                '-Wno-unused-parameter', *SANITIZE,
                 '-I' + str(root / 'include'), str(file),
                 str(root / 'drivers/audio/a733_i2s.c'),
                 str(root / 'drivers/dma/a733_dma.c'),
-                str(root / 'drivers/dma/a733_dma_controller.c'), '-o', str(binary)], check=True)
-subprocess.run([str(binary)], check=True)
+                str(root / 'drivers/dma/a733_dma_controller.c'), '-o', str(binary)], check=True, env=environment())
+subprocess.run([str(binary)], check=True, env=environment())

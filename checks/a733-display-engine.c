@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "a733_display_engine.h"
+#include "register_latency.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,6 +11,9 @@ static struct model {
     uint64_t now;
     unsigned calls, fail_at, late_at, regress_at, reenter_at, corrupt_at;
     unsigned admitted, inactive, dsi_stopped;
+    unsigned ready_read_zero,ready_corrupt;
+    uint64_t ready_delay;
+    struct register_latency ready_effect;
     /* Replay model: free-running FRAME_END every frame_period status reads,
      * optionally ignored W1C clears, and RCQ completion on submission. */
     unsigned replay, status_reads, frame_period, stuck_clear, polls, races4, races17;
@@ -49,7 +53,13 @@ static int read32(void *ctx,uintptr_t addr,uint32_t *v)
     assert(ctx==&m);
     if(m.replay && addr==A733_DE_BASE+0x8144 && m.frame_period && ++m.status_reads%m.frame_period==0)
         *reg(addr)|=1;
+    if(addr==A733_DE_BASE+0x814c)
+        *reg(addr)=reg_latency_apply(&m.ready_effect,m.now,*reg(addr));
     *v=*reg(addr);
+    if(addr==A733_DE_BASE+0x814c){
+        if(m.ready_read_zero)*v&=~1u;
+        if(m.ready_corrupt && m.driver->step==3 && m.driver->substep==2)*v^=0x80;
+    }
     if(m.replay && addr==A733_DE_BASE+0x8144 && (*v&1)){m.races4+=m.driver->step==4;m.races17+=m.driver->step==17;}
     int ok=op();if(m.calls==m.corrupt_at)*v^=0x80000000;return ok;
 }
@@ -65,7 +75,10 @@ static int write32(void *ctx,uintptr_t addr,uint32_t v)
     if(m.driver->action==A733_DE_PREPARE)assert(m.inactive && !m.regs[0x8140/4]);
     if(off==0x8140 && (v&1))assert(m.inactive);
     if(m.driver->action==A733_DE_STOP)assert(m.dsi_stopped && off==0x8140 && !(v&1));
-    *reg(addr)=v;return op(); /* Failed callback may already have changed hardware. */
+    *reg(addr)=v;
+    if(off==0x814c && (v&1) && m.ready_delay)
+        reg_latency_schedule(&m.ready_effect,m.now,m.ready_delay,1,0);
+    return op(); /* Failed callback may already have changed hardware. */
 }
 static int barrier(void *ctx){assert(ctx==&m);return op();}
 static int rcq_submit(void *ctx)
@@ -176,6 +189,31 @@ static void faults(void)
     setup(&d,0);drive(&d);assert(a733_de_request(&d,A733_DE_START,m.now+10000));drive(&d);
     assert(a733_de_request(&d,A733_DE_STOP,m.now+10000));drive(&d);
     assert(d.error==A733_DE_AUTHORITY && m.regs[0x8140/4]==1);
+}
+static void ready_readback(void)
+{
+    struct a733_de d;
+    for(unsigned mode=0;mode<3;++mode){
+        setup(&d,0);drive(&d);assert(d.state==A733_DE_READY);
+        m.ready_read_zero=mode==0;m.ready_delay=mode==1?1:mode==2?30:0;
+        assert(a733_de_request(&d,A733_DE_START,m.now+10000));drive(&d);
+        assert(d.state==A733_DE_ARMED && !d.replay_frame_end && !d.replay_rcq_done);
+        assert(m.regs[0x814c/4]&0x80); /* Unrelated fields remain checked. */
+        if(mode==1)assert(!m.ready_effect.pending && !(m.regs[0x814c/4]&1));
+        if(mode==2){
+            assert(m.ready_effect.pending);uint64_t time=m.now;
+            uint32_t before=m.regs[0x814c/4];
+            for(unsigned i=0;i<20;++i)
+                assert(reg_latency_apply(&m.ready_effect,time,before)==before);
+            assert(m.now==time && m.ready_effect.pending);
+            assert(!(reg_latency_apply(&m.ready_effect,m.ready_effect.start+30,before)&1));
+        }
+    }
+    setup(&d,0);drive(&d);m.ready_read_zero=m.ready_corrupt=1;
+    assert(a733_de_request(&d,A733_DE_START,m.now+10000));drive(&d);
+    assert(d.state==A733_DE_FAULT_RETAINED && d.error==A733_DE_VERIFY);
+    assert(m.regs[0x8140/4]==0 && d.config.surface.owner==97);
+    puts("PASS DE unreadable/timed READY, checked stable fields and configuration-only ARMED");
 }
 static _Alignas(4096) uint8_t ring_pages[A733_DE_RING_SLOTS*4096];
 /* TV0 initialization over a mapping with a declared ring frame size, or the
@@ -341,6 +379,7 @@ static void rings(void)
 }
 int main(void)
 {
+    ready_readback();
     images();puts("four full source image/lifecycle comparisons and address/timing rejection cases passed");
     faults();puts("ownership, active RCQ, bypass, uncertain write, readback, deadline and reentry cases passed");
     replays();puts("replay with free-running frame-end, persistent frame-end, ignored clear and stale RCQ_FINISH cases passed");

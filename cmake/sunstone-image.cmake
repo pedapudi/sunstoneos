@@ -206,5 +206,8 @@ function(add_sunstone_image target)
       --application "${name}" --build-id "${output}/build-id.txt"
       --lifetime "${IMAGE_LIFETIME}" --output "${output}/link-check.json"
       --nm "${CMAKE_NM}" ${symbol_arguments}
+    COMMAND "${Python3_EXECUTABLE}" "${SUNSTONE_SOURCE_ROOT}/tools/board_readme.py"
+      --manifest "${output}/link-check.json" --image "$<TARGET_FILE:${target}>"
+      --output "${output}/README.md"
     COMMAND_EXPAND_LISTS VERBATIM)
 endfunction()

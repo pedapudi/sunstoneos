@@ -30,7 +30,8 @@ from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ['two-generations-pcm-headroom-and-stream-reuse', 'discontinuous-period-refused',
          'self-stopped-stream-refused', 'request-rules', 'progress-reports',
-         'formats-periods-and-buffers', 'rates-and-period-sizes', 'full-ring-and-handshakes']
+         'formats-periods-and-buffers', 'rates-and-period-sizes', 'full-ring-and-handshakes',
+         'cyclic-staging-and-reopen', 'cyclic-copy-refusal-retains-lease', 'reversed-timestamps-retain-lease']
 LENGTHS = [16000, 20480, 80000]
 if not __debug__:
     raise RuntimeError('checks require assertions')

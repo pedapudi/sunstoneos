@@ -174,6 +174,9 @@ static int supply_raise(struct a733_gpu_platform *p)
     case RAISE_WRITE:
         r = raise_result(p, 1);
         if (r <= 0) return r;
+        /* Completion may arrive while the task is preempted after its entry
+         * sample. Start settling only after result collection and reap. */
+        if (!clock_ok(p)) return -1;
         if (!a733_deadline_after(p->last_now, A733_GPU_SUPPLY_SETTLE_US, &p->supply_settled)) return -1;
         p->supply_written = 1;
         p->supply_stage = RAISE_RELEASE;

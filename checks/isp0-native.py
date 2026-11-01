@@ -24,7 +24,12 @@ class Machine:
   self.put(self.base+self.f['handle'],1,8)
   self.shared=image.address('providers')+image.layouts['board_provider']['shared'];nf=image.layouts['a733_native_usb'];self.clock=self.shared+nf['clocks'];self.gpu=self.shared+nf['gpu'];self.rails=self.shared+nf['rails'];self.nf=nf
   names=['a733_cpu_coherence_publish','aarch64_device_cache_stride','board_live','board_fail','a733_smp_counter','a733_counter_clock_now','xTaskGetCurrentTaskHandle','xTaskGetSchedulerState','aarch64_device_translate','a733_platform_lock_enter','a733_platform_lock_leave','a733_platform_lock_retain','a733_pmic_submit','a733_pmic_result','vTaskDelay','a733_native_usb_step','a733_native_usb_health','tusb_rhport_init','tud_task_ext','tud_vendor_n_available','tud_vendor_n_read','tud_vendor_n_write','tud_vendor_n_write_flush','tud_speed_get']
-  self.hooks={image.address(n):n for n in names};self.u.hook_add(UC_HOOK_CODE,self.code)
+  names+=['vTaskEnterCritical','vTaskExitCritical']
+  self.hooks={image.address(n):n for n in names}
+  # Only callback boundaries need instruction hooks. Hooking every copy/hash
+  # instruction adds host overhead without changing any modeled behavior.
+  for address in set(self.hooks)|{STOP,0x50f00000,0x50f00004,0x50f00008}:
+   self.u.hook_add(UC_HOOK_CODE,self.code,begin=address,end=address)
   self.u.hook_add(UC_HOOK_MEM_READ,self.read_mmio,begin=0x02000000,end=0x070fffff);self.u.hook_add(UC_HOOK_MEM_WRITE,self.write_mmio,begin=0x02000000,end=0x070fffff)
  def get(self,a,n=8):return int.from_bytes(self.u.mem_read(a,n),'little')
  def put(self,a,v,n=4):self.u.mem_write(a,int(v).to_bytes(n,'little'))
@@ -45,6 +50,7 @@ class Machine:
   x=self.args()
   if name=='vTaskDelay':self.done=True;u.emu_stop()
   elif name=='board_live':self.ret(not self.failed)
+  elif name in ('vTaskEnterCritical','vTaskExitCritical'):self.ret() # Single-threaded ledger model.
   elif name=='a733_cpu_coherence_publish':self.ret(1)
   elif name=='aarch64_device_cache_stride':self.ret(64)
   elif name=='board_fail':self.failed=True;self.ret()
@@ -124,6 +130,10 @@ class Machine:
   # Consume root's one post-launch artifact, retaining original producer bytes.
   self.u.mem_write(SCRATCH,self.contract);assert self.call('a733_smp_contract_valid',SCRATCH,self.now*24)==1
   assert self.call('isp0_session_prepare',SCRATCH)==1
+  # The current boot publishes pools before starting tasks. Exercise the real
+  # preparation and translation checks rather than fabricating pool pointers.
+  assert self.call('a733_memory_reservations_prepare')==1
+  assert self.call('a733_memory_uncached_prepare')==1
   assert self.call('isp0_upload_allocate')==1
   supplied=self.base+self.f['supplied'];packet=struct.pack('<4I2Q',0x55495053,1,614400,0,*struct.unpack_from('<2Q',self.session,24))+self.raw;at=0
   while at<len(packet):

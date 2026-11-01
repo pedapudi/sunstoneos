@@ -35,13 +35,15 @@ def routing(host,bundle,out,session,frame):
         def read(self,ep,n,timeout):assert ep==0x81 and n==192;return frame
     def find(**kw):
         assert kw==dict(idVendor=0x1f3a,idProduct=0xefe8,bus=1,address=3);calls.append(kw);return Device()
-    def launch(transaction,observe,bundle,prepared,evidence,record,save,ready,*,result_key):
+    def launch(transaction,observe,bundle,prepared,evidence,record,save,ready,*,result_key,power_removal_reason=None):
         assert result_key=='pcie_result';observe(time.monotonic());record['complete']=record[result_key]=='observed-success'
     with ExitStack() as stack:
         stack.enter_context(patch.object(host,'claimed',lambda *a:None));stack.enter_context(patch.object(shared,'module',lambda *a:access))
         stack.enter_context(patch.dict(sys.modules,{'usb_guard':guard}));stack.enter_context(patch.object(shared,'digest',lambda *a:shared.base.FEL_HASH))
         stack.enter_context(patch.object(shared.shutil,'copy2',lambda *a:None));stack.enter_context(patch.object(shared.os,'access',lambda *a:True))
         stack.enter_context(patch.object(shared.subprocess,'run',lambda *a,**k:fel.append(a) or types.SimpleNamespace(returncode=0,stdout='soc=00001903(A733)',stderr='')))
+        # This routing fixture models DRAM authority; the shared DRAM check has its own coverage.
+        stack.enter_context(patch.object(shared.base,'verify_dram',lambda *a:None))
         stack.enter_context(patch.object(shared,'launch_once',launch));stack.enter_context(patch.object(shared,'finish_after_observation',lambda *a:None))
         stack.enter_context(patch.object(shared.base,'stop_after_failure',lambda *a:None));stack.enter_context(patch.object(usb.core,'find',find))
         args=['--bundle',str(bundle),'--fel',str(out/'MODEL-fel'),'--evidence',str(out/'routing-capture'),'--supervised-manual-reconnect']

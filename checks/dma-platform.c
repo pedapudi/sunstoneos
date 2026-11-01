@@ -17,9 +17,12 @@ struct model {
     unsigned busy_once, pending_once, bad_handoff, late_acquire, regress_acquire;
     uintptr_t fail_write, late_write, late_read, fail_read;
     unsigned late_leave;
+    unsigned fractional;
+    uint64_t counter,reset_observed;
     uintptr_t addresses[16];uint32_t values[16];
 };
-static int now(void *cookie,uint64_t *v) {*v=((struct model *)cookie)->now;return 1;}
+static int now(void *cookie,uint64_t *v)
+{struct model *m=cookie;if(m->fractional)m->now=m->counter/24;*v=m->now;return 1;}
 static enum a733_dma_platform_result acquire(void *cookie,
     const struct a733_dma_platform_config *c,a733_clock_mask_t shared,struct a733_clock_token *token)
 {
@@ -48,6 +51,10 @@ static uint32_t *reg(struct model *m,uintptr_t a)
 static int read_reg(void *cookie,uintptr_t a,uint32_t *v)
 {
     struct model *m=cookie;assert(m->locked);++m->reads;
+    if(m->fractional && a==CCU+0x5e4 && !m->reset_observed) {
+        m->counter+=73; /* Costly final baseline read, ending at phase 23. */
+        m->reset_observed=m->counter;
+    }
     if (a>=CCU && a<=CCU+0xac) ++m->parent_reads;
     if (a>=DMA && a<DMA+0x500) assert((m->ccu[0x704/4]&0x10001)==0x10001 && (m->ccu[0x5e4/4]&1));
     *v=*reg(m,a);if(a==m->late_read)m->now=m->deadline;return a!=m->fail_read;
@@ -55,6 +62,8 @@ static int read_reg(void *cookie,uintptr_t a,uint32_t *v)
 static int write_reg(void *cookie,uintptr_t a,uint32_t v)
 {
     struct model *m=cookie;assert(m->locked && m->writes<16);
+    if(m->fractional && a==CCU+0x704 && (v&0x10000))
+        assert(m->counter-m->reset_observed>=480);
     if (a==CCU+0x704) assert(!(m->ccu[0x704/4]&~v&0x10001));
     else if (a==CCU+0x5e4) assert((v&0x40302)==0x40302);
     else assert(a==DMA+0x28 || a==DMA+0x34 || a==DMA+0x38);
@@ -109,6 +118,24 @@ static void retained(struct model *m,struct a733_dma_platform *p)
 int main(int argc, char **argv)
 {
     struct model m;struct a733_dma_platform p;struct a733_dma_platform_config c=config(1);
+    if(argc==2 && !strcmp(argv[1],"--reset-minimum-only")) {
+        setup(&m,&p,c);m.fractional=1;m.counter=100*24+22;
+        assert(a733_dma_platform_poll(&p)==PENDING);
+        assert(a733_dma_platform_poll(&p)==PENDING && m.reset_observed%24==23 && !m.writes);
+        m.counter=m.reset_observed+479;
+        assert(a733_dma_platform_poll(&p)==PENDING && !m.writes);
+        ++m.counter;
+        assert(a733_dma_platform_poll(&p)==PENDING && !m.writes);
+        m.counter+=24;
+        assert(a733_dma_platform_poll(&p)==PENDING && m.writes==3);
+        assert(a733_dma_platform_poll(&p)==READY);
+        setup(&m,&p,c);m.fractional=1;m.counter=100*24+22;
+        assert(a733_dma_platform_poll(&p)==PENDING && a733_dma_platform_poll(&p)==PENDING);
+        m.counter=c.deadline_us*24;
+        assert(a733_dma_platform_poll(&p)==RETAINED && !m.writes);retained(&m,&p);
+        puts("PASS DMA reset: costly baseline and fractional clock preserve 20 us; original deadline retains before writes");
+        return 0;
+    }
     if(argc==2 && !strcmp(argv[1],"--parent-gates-only")) {
         const unsigned mhz[]={600,400,800,480};
         const uint32_t masks[]={0xa00,0x806,0x400,0x180};

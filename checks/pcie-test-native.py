@@ -6,6 +6,7 @@ acquired manager metadata, MMIO responses, endpoint DMA/MSI, translations, RTOS
 and USB FIFOs are modeled. Boot, route, dispatch and IRQ code are not executed.
 """
 import argparse,importlib.util,json,struct,inspect,textwrap
+import harness
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn import UC_HOOK_MEM_READ,UC_HOOK_MEM_WRITE
@@ -37,6 +38,8 @@ class Machine(old.Machine):
  def __init__(self,image,session,registers):
   self.pending_w1c=False;self.scheduler=0;self.events=0;self.arm_calls=0;self.stop_calls=0;self.vendor=bytearray();self.command_seen=0
   super().__init__(image,session,'test-client')
+  for name in ('vTaskEnterCritical','vTaskExitCritical','vTaskEnterCriticalFromISR','vTaskExitCriticalFromISR'):
+   self.hooks[image.address(name)]=name
   self.cpu.mem_map(0x02000000,0x06000000);self.cpu.mem_map(0x22000000,0x100000)
   for address,value in registers.items():self.cpu.mem_write(int(address,16),struct.pack('<I',value))
   self.test=self.base+self.layout['test'];self.tf=image.layouts['a733_pcie_epf_test']
@@ -55,6 +58,8 @@ class Machine(old.Machine):
   if self.pending_w1c:
    cpu.mem_write(0x06000830,bytes(4));self.pending_w1c=False
   arg=lambda n:cpu.reg_read(UC_ARM64_REG_X0+n)
+  if self.hooks.get(address) in ('vTaskEnterCritical','vTaskExitCritical','vTaskEnterCriticalFromISR','vTaskExitCriticalFromISR'):
+   self.returned(0);return
   if address==self.image.address('xTaskGetSchedulerState'):self.returned(self.scheduler);return
   if address==self.image.address('aarch64_device_translate'):
    nc=0x41c00000<=arg(0)<0x41e00000;cpu.mem_write(arg(2),struct.pack('<Q2I',arg(0),0x44 if nc else 0,3 if nc else 2));self.returned(1);return
@@ -84,12 +89,16 @@ class Machine(old.Machine):
   self.usb_pc=self.cpu.reg_read(UC_ARM64_REG_LR);self.usb_context=self.cpu.context_save()
  def native_write(self,address,width,value):return self.call('write',self.native,address,width,value,unit='/drivers/pci/a733_pcie_native.c')
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--session',type=Path,required=True);p.add_argument('--registers',type=Path,required=True);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--session',type=Path,required=True);p.add_argument('--registers',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
+ p.add_argument('--link-speed',type=int,choices=(1,2,3),default=3,help='Modeled negotiated x1 speed after port startup');a=p.parse_args()
+ a.output.mkdir(parents=True,exist_ok=True)
  registers={}
  for line in a.registers.read_text().splitlines():
   parts=line.split()
   if len(parts)==2:registers[parts[0]]=int(parts[1],16)
+ registers['6000080']=(0x10|a.link_speed)<<16;registers['20000050']=(0x10|a.link_speed)<<16
  image=Image(a.image);session=a.session.read_bytes();m=Machine(image,session,registers)
+ assert m.call('a733_memory_uncached_prepare')==1
  assert m.call('pcie_session_valid',0x41f00000)==1
  assert m.call('pcie_construct')==1;m.scheduler=2
  assert m.call('admitted',m.base,m.port+image.layouts['a733_pcie']['config'],unit='/apps/pcie-test/native.c')==1
@@ -125,6 +134,7 @@ def main():
  assert len(m.vendor)==4352 and bytes(m.vendor[128:])==payload
  frame=bytes(m.vendor);(a.output/'native-frame.bin').write_bytes(frame)
  decode=module('pcie_test_native_decode',ROOT/'apps/pcie-test/observe.py');decoded=decode.decode(frame,session)
+ assert struct.unpack_from('<H',payload,22)[0]&0x3ff==0x10|a.link_speed
  m.time+=11000;assert m.call('pcie_output_ready')==0
  result=dict(actual_client=True,actual_native_value_mutex_policy=True,actual_checked_copy=True,actual_fragmented_serializer=True,continued_observation=True,stale_export_refused=True,decoded=decoded,boundaries=__doc__)
  (a.output/'native-result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps({k:v for k,v in result.items() if k not in ('boundaries','decoded')}))

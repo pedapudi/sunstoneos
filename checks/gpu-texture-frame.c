@@ -1,8 +1,8 @@
 /* Frame-path counter driver for checks/gpu-texture-frame.py.
  *
- * Links the actual render-service worker and texture code with stub owners,
+ * Links the actual render-service and texture code with stub owners,
  * clock, translation, cache maintenance and client rings. The harness runs it
- * under Unicorn and counts what the worker does to the CPU and memory while
+ * under Unicorn and counts what the render service does to CPU and memory while
  * frame_mark(1) is in force. The GPU result is written by the harness from
  * gpu_model_render() and is not counted. Nothing here touches a device. */
 #include "a733_gpu_graphics_memory.h"
@@ -30,9 +30,8 @@ struct frame_layout {
 volatile struct frame_layout frame_layout;
 volatile uint32_t frame_failure;
 
-/* Markers observed by the harness. 1 starts counting a request, 2 a worker
- * poll, and 0 stops counting; 3 records a worker tick wait between CPU-only
- * steps and 4 a wait for the GPU; 16 + n starts frame n; 32 + n starts the
+/* Markers observed by the harness. 1 starts counting a request, 2 a render
+ * poll, and 0 stops counting; 16 + n starts frame n; 32 + n starts the
  * read-back or present of frame n. */
 __attribute__((noinline)) void frame_mark(unsigned what) { __asm__ volatile("" :: "r"(what) : "memory"); }
 __attribute__((noinline)) void gpu_model_render(uint32_t sequence) { __asm__ volatile("" :: "r"(sequence) : "memory"); }
@@ -109,8 +108,8 @@ int pvr_cccb_pair_fragment_tail_begin(struct pvr_cccb_pair *p, const struct pvr_
     (void)clean; (void)cleans; (void)deadline;
     p->fragment_tail = 1; return ring_write(p->fragment, c, n);
 }
-/* Set by each pair poll. On the device, the poll after a kick waits for the
- * GPU, so the worker sleeps until the next tick or interrupt before it. */
+/* Set by each modeled device poll: it may await GPU work without changing
+ * the render-service progress fields. */
 static unsigned device_polled;
 int pvr_cccb_pair_poll(struct pvr_cccb_pair *p)
 {
@@ -172,11 +171,9 @@ void frame_main(void)
         q = (struct pvr_render_texture_request){.operation = PVR_TEXTURE_SUBMIT, .previous = frame - 1,
             .generation = generation};
         if (request(&q) != 1) fail(12);
-        /* The worker loop in pvr_gpu_service.c: after a request it steps
-         * while each step progresses, up to PVR_GPU_SERVICE_BURST_STEPS, and
-         * then waits one tick on its queue before the next burst. The fields
-         * below are the render part of its progress identity. */
-        unsigned burst = 0;
+        /* Measure render-service work independently of scheduler pacing.
+         * checks/pvr-gpu-service.c and checks/pvr-compute-service.c execute
+         * the actual worker with FreeRTOS and check its wait behavior. */
         for (unsigned i = 0;; ++i) {
             const uint32_t before[4] = {s->phase, s->checked, s->texture_cursor, s->pair.phase | s->pair.fragment_tail << 4};
             device_polled = 0;
@@ -185,10 +182,7 @@ void frame_main(void)
             frame_mark(0);
             if (r < 0 || i > 1000000) fail(13);
             const uint32_t after[4] = {s->phase, s->checked, s->texture_cursor, s->pair.phase | s->pair.fragment_tail << 4};
-            /* A poll that waited for the GPU starts a new burst. */
-            if (device_polled) { frame_mark(4); burst = 1; }
-            else if (!memcmp(before, after, sizeof(before))) fail(18);
-            else if (++burst == PVR_GPU_SERVICE_BURST_STEPS) { frame_mark(3); burst = 0; }
+            if (!device_polled && !memcmp(before, after, sizeof(before))) fail(18);
             if (r == 1) break;
         }
         frame_mark(32 + frame);

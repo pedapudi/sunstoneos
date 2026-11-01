@@ -46,7 +46,7 @@ struct a733_npu_controller {
     void *cookie;
     struct a733_npu_command job;
     struct a733_npu_mmu_image mmu;
-    uint64_t start, timeout, cancel_start, cancel_timeout;
+    uint64_t start, timeout, cancel_start, cancel_timeout, cancel_asserted_us;
     enum a733_npu_state state;
     enum a733_npu_fault fault;
     uint32_t irq_seen, last_idle, chip_model, chip_revision, chip_product, chip_date;

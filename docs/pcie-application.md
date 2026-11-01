@@ -2,7 +2,7 @@
 
 The application connects the existing native PCIe controller, COMB1 PHY and
 read-only configuration API to the board providers and copied USB output. Its
-initial mode starts an x1 Gen1 link to one authenticated cold direct endpoint,
+initial mode requests an x1 Gen3 link to one authenticated cold direct endpoint,
 reads four conventional configuration-header dwords and checks endpoint/link
 identity before publishing a private report. No endpoint is presumed connected.
 Physical operation remains unqualified.
@@ -47,7 +47,8 @@ MSI and MSI-X refusal checks. The application then reads function 0 offsets 0,
 4, 8 and 12 through the public configuration API. A final walk follows at most 48
 aligned capability headers with a visited bitmap, rejects malformed or cyclic
 lists, checks retained PCIe/MSI pointers and verifies both MSI and MSI-X remain
-disabled. Final endpoint link status must report x1 Gen1, followed by the core's
+disabled. Final endpoint link status must match the first observed x1 speed
+(Gen1, Gen2 or Gen3), followed by the core's
 READY resource/link/BME check before immutable publication. These sequential
 reads are an observation interval, not an atomic hardware snapshot.
 
@@ -100,10 +101,11 @@ independent reset or a DMA-drain guarantee. Disabled inbound windows do not
 establish hardware isolation from an untrusted endpoint.
 
 The separate [endpoint test application](pcie-test-application.md) implements a
-selected BAR and one MSI-completed endpoint-DMA COPY offline. General BAR
-allocation, bridges/enumeration, endpoint drivers, wider DMA/interrupt modes,
-Gen2/Gen3, power transitions and shutdown remain required PCIe work. This initial
-configuration application retains its original scope.
+selected BAR and one MSI-completed endpoint-DMA COPY offline. The general
+function client also implements memory BAR allocation, INTx/MSI-X and D0/D3hot.
+Bridges, embedded root DMA and physical link, interrupt, DMA, power and recovery
+qualification remain required. This configuration application observes one
+cold endpoint without enabling bus mastering.
 
 ## Software evidence
 

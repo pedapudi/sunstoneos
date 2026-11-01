@@ -270,7 +270,9 @@ static int program(struct a733_iommu *s)
     struct operation p=operation(s->index,s->tables.physical,s->translated_masters);
     if(p.kind==1) {
         if(!s->phase) {
-            if(!a733_deadline_after(s->now,10,&s->wait_until))return fail(s);
+            /* The clock rounds down; an extra microsecond guarantees the
+             * source's udelay(10) after the last flush request. */
+            if(!a733_deadline_after(s->now,11,&s->wait_until))return fail(s);
             s->phase=1;
         }
         if(s->now<s->wait_until)return 0;

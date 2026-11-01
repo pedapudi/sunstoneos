@@ -25,7 +25,7 @@ def decode(frame,session):
     if not observed or (size,flags)!=(4096,3):raise ValueError('NVMe read or orderly stop incomplete')
     session_vendor,session_device=struct.unpack_from('<2H',session,788)
     session_lba=struct.unpack_from('<Q',session,800)[0];session_function,session_namespace=struct.unpack_from('<2I',session,808)
-    if (vendor,device,function,namespace,lba)!=(session_vendor,session_device,session_function,session_namespace,session_lba) or class_revision>>8!=0x010802 or (link&0x3ff)!=0x11:
+    if (vendor,device,function,namespace,lba)!=(session_vendor,session_device,session_function,session_namespace,session_lba) or class_revision>>8!=0x010802 or ((link&0x3f0)!=0x10 or not 1<=link&15<=3):
         raise ValueError('NVMe endpoint identity or read target differs')
     if not 9<=shift<=12 or not 1<=namespace<=namespaces or blocks<(4096>>shift) or lba>blocks-(4096>>shift) or nvme_version<0x00010000:
         raise ValueError('NVMe namespace geometry differs')

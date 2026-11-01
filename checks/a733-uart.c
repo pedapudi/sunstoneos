@@ -1,4 +1,5 @@
 #include "a733_uart.h"
+#include "register_latency.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -11,6 +12,7 @@ struct model {
     int backwards, late, shift_busy;
     unsigned ninth, last_tx, stuck_offset, reserved_zero;
     uintptr_t base; /* Zero selects UART1. */
+    struct register_latency update;
 };
 static int now(void *p, uint64_t *t)
 { struct model *m=p; ++m->clocks; *t=m->backwards ? m->now-1 : m->now; return 1; }
@@ -24,7 +26,7 @@ static int read32(void *p, uintptr_t addr, uint32_t *v)
     else if (o==8) *v=m->cause;
     else if (o==0x14) { *v=(m->shift_busy ? 0x20u : 0x60u) | (m->rx ? 1u : 0u) | m->lsr_error; m->lsr_error=0; }
     else if (o==0x7c) *v=(m->tx_space ? 2u : 0u)|4u|(m->rx ? 9u : 0u);
-    else if (o==0xa4) *v=m->update_pending ? 7 : 3;
+    else if (o==0xa4) {m->regs[o/4]=reg_latency_apply(&m->update,m->now,m->regs[o/4]);*v=m->update_pending?7:m->regs[o/4];}
     else *v=m->regs[o/4];
     if (m->late) m->now=1000;
     return 1;
@@ -35,6 +37,10 @@ static int write32(void *p, uintptr_t addr, uint32_t v)
     assert(!(o&3) && (o<=0x10 || o==0xa4 || o==0xc0));
     if (++m->accesses == m->fail_access) return -1;
     if (m->stuck_offset && o==m->stuck_offset) return 1;
+    /* Manual18.10.6.4/18.10.9.18 requires CHANGE_UPDATE self-clear before
+     * configuration continues. Ten microseconds is a constructed latency. */
+    assert(!m->update.pending);
+    if(o==0xa4&&(v&4))reg_latency_schedule(&m->update,m->now,10,4,0);
     ++m->writes;
     if (m->trace_count<64) {
         m->trace_offset[m->trace_count]=o; m->trace_value[m->trace_count++]=v;
@@ -58,6 +64,7 @@ static void ready(struct a733_uart *u, struct model *m)
     unsigned writes=m->writes;
     assert(a733_uart_poll(u)==A733_UART_CONFIGURING && m->writes==writes);
     m->update_pending=0;
+    m->now+=10;
     assert(a733_uart_poll(u)==A733_UART_READY);
     assert(m->dll==1 && m->dlh==0 && m->regs[3]==3 && m->regs[4]==0x22);
 }
@@ -89,6 +96,7 @@ static void configured(struct a733_uart *u, struct model *m, const struct a733_u
     memset(u,0,sizeof(*u)); memset(m,0,sizeof(*m));m->now=1;m->tx_space=256;m->cause=1;
     m->base=0x02500000u+f->port*0x1000u;
     assert(a733_uart_begin(u,&ops,m,f,1000)==A733_UART_CONFIGURING);
+    m->now+=10;
     assert(a733_uart_poll(u)==A733_UART_READY);
 }
 static void modes(void)
@@ -240,6 +248,7 @@ int main(int argc, char **argv)
     memset(&u,0,sizeof(u));memset(&m,0,sizeof(m));m.now=1;
     struct a733_uart_format f=format();
     assert(a733_uart_begin(&u,&ops,&m,&f,10)==A733_UART_CONFIGURING);
+    m.update.stuck=1;
     m.now=10;assert(a733_uart_poll(&u)==A733_UART_FAULT);
     puts("UART configuration, FIFO, interrupt, drain and retained-fault model passed.");
     return 0;

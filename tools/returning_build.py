@@ -404,10 +404,14 @@ class ReturningPlatform:
         record.update(extra or {})
         record['physical_access'] = False
         save(e, 'input-identities.json', record)
+        from board_readme import write
+        write(e/'input-identities.json')
 
     def copy_helpers(self, app, names=('check.py', 'README.md')):
         """Copy the app's checks and the ELF layout reader, checks/harness.py, beside the image."""
         for name in names:
+            if name == 'README.md':
+                continue
             source = ROOT / 'apps' / app / name
             if source.exists():
                 shutil.copy2(source, self.evidence / name)

@@ -22,16 +22,21 @@ Changed paths are relative to the repository root; a directory selects every
 check that covers a path below it.
 Paths assembled from separate string segments are not found, so an empty
 selection is not proof that no check covers a change.
+CHECK_INPUTS supplies supplementary literal repository paths. The hook fixture
+uses its complete declared inventory plus the hook, harness and fixture itself,
+matching the pre-push hook's conditional fixture policy.
 """
 import argparse
 import ast
 import functools
+import io
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -53,11 +58,18 @@ INCLUDE = re.compile(r"""^\s*#\s*include\s+"([^"]+)\"""", re.M)
 # Cache areas that hold no evidence or build output: toolchains, pinned sources, the host venv.
 NEUTRAL_AREAS = {'host', 'sources', 'venv'}
 # Checks the text scan would call pure-host but that cannot run without arguments.
-NOT_PURE = {'radio-network.py': 'every case needs the optional --tcp, --kernel, --headers and --evidence paths'}
+NOT_PURE = {
+    'radio-network.py': 'every case needs the optional --tcp, --kernel, --headers and --evidence paths',
+    'h264-input-host.py': 'the default run needs --image, --inputs, --native and --launcher',
+    'sae-openssl.py': 'the default run needs --openssl, --upstream and --evidence; --verify-source needs a pinned source tree',
+}
+# The hook fixtures run only for their actual process inputs. References inside
+# harness helpers do not add fixture inputs; this matches pre-push.fixture_selection.
+COMPLETE_INPUTS = {'pre-push-hook.py': ('tools/git-hooks/pre-push', 'checks/harness.py')}
 
 
 def checks():
-    return sorted(p for p in (ROOT / 'checks').glob('*.py') if p.name not in ('harness.py', 'check-index.py'))
+    return sorted(p for p in (ROOT / 'checks').glob('*.py') if p.name not in ('harness.py', 'check-index.py', 'affected.py'))
 
 
 def mentions():
@@ -143,7 +155,7 @@ def entry(path, documents):
             and set(required) <= OUTPUT_OPTIONS and path.name not in NOT_PURE)
     return {'summary': doc.splitlines()[0] if doc else '', 'docs': documents(path.name),
             'required_arguments': required + (['sys.argv'] if uses_argv else []), 'cache_areas': areas,
-            'usb': usb, 'library': is_library, 'pure_host': pure}
+            'usb': usb, 'library': is_library, 'pure_host': pure, 'input_reason': NOT_PURE.get(path.name)}
 
 
 def generate():
@@ -153,15 +165,58 @@ def generate():
     for path in checks():
         try:
             index[path.name] = entry(path, documents)
+            inputs = covered(path)
+            index[path.name]['inputs'] = sorted(inputs)
+            index[path.name]['input_directories'] = sorted(p for p in inputs if (ROOT / p).is_dir())
         except (SyntaxError, UnicodeDecodeError, ValueError) as error:
             raise SystemExit(f'checks/{path.name}: cannot be classified: {error}')
     return index
 
 
+class Revision:
+    """Read a committed dependency graph without changing the checkout."""
+    def __init__(self, revision):
+        archive = subprocess.check_output(['git', 'archive', '--format=tar', revision], cwd=ROOT)
+        self.files = {}
+        self.directories = set()
+        with tarfile.open(fileobj=io.BytesIO(archive)) as stream:
+            for member in stream:
+                path = ROOT / member.name.rstrip('/')
+                if member.isdir():
+                    self.directories.add(path)
+                elif member.isfile():
+                    self.files[path] = stream.extractfile(member).read()
+
+    def text(self, path):
+        return self.files[path].decode(errors='replace')
+
+
 @functools.lru_cache(maxsize=None)
-def named(path, includes_only):
+def declarations(path, revision=None):
+    """Literal supplementary input paths, relative to the repository root."""
+    text = revision.text(path) if revision else path.read_text(errors='replace')
+    values = ()
+    for node in ast.parse(text).body:
+        if not isinstance(node, ast.Assign):
+            continue
+        names = {target.id for target in node.targets if isinstance(target, ast.Name)}
+        if 'CHECK_INPUTS' in names:
+            values = ast.literal_eval(node.value)
+            if not isinstance(values, (list, tuple)) or not all(isinstance(v, str) for v in values):
+                raise ValueError('CHECK_INPUTS must be a literal list or tuple of repository paths')
+    inputs = set()
+    for value in values or ():
+        candidate = Path(os.path.normpath(ROOT / value))
+        if not candidate.is_relative_to(ROOT):
+            raise ValueError('CHECK_INPUTS must stay inside the repository')
+        inputs.add(candidate)
+    return frozenset(inputs)
+
+
+@functools.lru_cache(maxsize=None)
+def named(path, includes_only, revision=None):
     """Repository files and subdirectories one file names; only #include targets for non-check sources."""
-    text = path.read_text(errors='replace')
+    text = revision.text(path) if revision else path.read_text(errors='replace')
     tokens = set(INCLUDE.findall(text)) if includes_only else set(PATH_TOKEN.findall(text)) | set(INCLUDE.findall(text))
     found = set()
     for token in tokens:
@@ -169,17 +224,21 @@ def named(path, includes_only):
             continue
         for base in (ROOT, path.parent, ROOT / 'include'):
             candidate = Path(os.path.normpath(base / token))
-            if candidate.is_relative_to(ROOT) and candidate.parent != ROOT.parent and candidate.exists():
+            exists = candidate in revision.files or candidate in revision.directories if revision else candidate.exists()
+            directory = candidate in revision.directories if revision else candidate.is_dir()
+            if candidate.is_relative_to(ROOT) and candidate.parent != ROOT.parent and exists:
                 # A top-level directory such as drivers/ or checks/ would select everything under it.
-                if not (candidate.is_dir() and candidate.parent == ROOT) and candidate != ROOT:
+                if not (directory and candidate.parent == ROOT) and candidate != ROOT:
                     found.add(candidate)
                 break
     if not includes_only and re.search(r'^import harness$', text, re.M):
         found.add(ROOT / 'checks/harness.py')
+    if not includes_only and path.suffix == '.py':
+        found.update(declarations(path, revision))
     return frozenset(found)
 
 
-def covered(path):
+def covered(path, revision=None):
     """Paths named by a check, followed through the checks/ files it names and their #include closure."""
     seen, stack = set(), [path]
     while stack:
@@ -187,8 +246,14 @@ def covered(path):
         if current in seen:
             continue
         seen.add(current)
-        if current.is_file() and current.suffix in ('.py', '.c', '.cc', '.h', '.S', '.inc'):
-            stack.extend(named(current, current.parent != ROOT / 'checks'))
+        exists = current in revision.files if revision else current.is_file()
+        if exists and current.parent == ROOT / 'checks' and current.suffix == '.py':
+            if current.name in COMPLETE_INPUTS:
+                seen.update(declarations(current, revision))
+                seen.update(ROOT / name for name in COMPLETE_INPUTS[current.name])
+                continue
+        if exists and current.suffix in ('.py', '.c', '.cc', '.h', '.S', '.inc'):
+            stack.extend(named(current, current.parent != ROOT / 'checks', revision))
     return {p.relative_to(ROOT).as_posix() for p in seen}
 
 
@@ -196,8 +261,8 @@ def select(index, changed):
     changed = [Path(os.path.normpath(ROOT / p)).relative_to(ROOT).as_posix() for p in changed]
     chosen = []
     for name in sorted(index):
-        names = covered(ROOT / 'checks' / name)
-        dirs = {n for n in names if (ROOT / n).is_dir()}
+        names = set(index[name]['inputs'])
+        dirs = set(index[name]['input_directories'])
         if any(c in names or any(c.startswith(d + '/') for d in dirs) or any(n.startswith(c + '/') for n in names)
                for c in changed):
             chosen.append(name)
@@ -235,7 +300,8 @@ def main():
         e = index[name]
         needs = 'pure-host' if e['pure_host'] else 'needs ' + ', '.join(
             ['library'] * e['library'] + ['USB'] * e['usb'] + e['required_arguments'] +
-            ['cache/' + a for a in e['cache_areas'] if a not in NEUTRAL_AREAS]) or 'needs inputs'
+            ['cache/' + a for a in e['cache_areas'] if a not in NEUTRAL_AREAS] +
+            ([e['input_reason']] if e['input_reason'] else [])) or 'needs inputs'
         print(f'checks/{name}: {needs}')
     if not args.run:
         return

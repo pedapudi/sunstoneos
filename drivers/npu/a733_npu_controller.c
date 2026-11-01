@@ -186,6 +186,11 @@ int a733_npu_cancel(struct a733_npu_controller *c, uint64_t timeout)
     c->state = A733_NPU_CANCEL_ASSERTED;
     uint32_t value;
     if (!read_reg(c, 0x3a8, &value) || !write_reg(c, 0x3a8, value | 8u)) return 0;
+    /* The source holds cancel for 100 us after asserting it. Preserve the
+     * original hard timeout while measuring that minimum after the write. */
+    c->cancel_asserted_us=c->ops.microseconds(c->cookie);
+    if(c->cancel_asserted_us-c->cancel_start>=c->cancel_timeout)
+        return fail(c,A733_NPU_TIMEOUT);
     return 1;
 }
 
@@ -214,7 +219,8 @@ enum a733_npu_state a733_npu_advance(struct a733_npu_controller *c, int sample_e
         return c->state;
     }
     int canceled = c->state == A733_NPU_CANCEL_ASSERTED || c->state == A733_NPU_CANCEL_WAIT;
-    uint64_t elapsed = c->ops.microseconds(c->cookie) - (canceled ? c->cancel_start : c->start);
+    uint64_t sampled = c->ops.microseconds(c->cookie);
+    uint64_t elapsed = sampled - (canceled ? c->cancel_start : c->start);
     if (elapsed >= (canceled ? c->cancel_timeout : c->timeout)) {
         fail(c, A733_NPU_TIMEOUT); return c->state;
     }
@@ -227,7 +233,8 @@ enum a733_npu_state a733_npu_advance(struct a733_npu_controller *c, int sample_e
     }
     if (c->irq_seen & ~EVENT_DONE) { fail(c, A733_NPU_IRQ); return c->state; }
     if (c->state == A733_NPU_CANCEL_ASSERTED) {
-        if (elapsed < 100) return c->state;
+        /* A rounded timestamp needs one extra us to guarantee the pulse. */
+        if (sampled-c->cancel_asserted_us <= 100) return c->state;
         if (!read_reg(c, 0x3a8, &value) || !write_reg(c, 0x3a8, value & ~8u)) return c->state;
         c->state = A733_NPU_CANCEL_WAIT;
         return c->state;

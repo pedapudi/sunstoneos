@@ -6,6 +6,10 @@ branch (commit `736ba24`). They check the current sources against the
 budgets in [gpu-graphics.md](gpu-graphics.md). All values come from host
 models; no board was used.
 
+The wait counts are historical synthetic scheduler counts for these frozen
+sources. The current texture fixture measures render-service work without
+simulating scheduler waits; dedicated FreeRTOS worker checks cover timed pacing.
+
 ## Method
 
 - **Frame-path emulation.** `checks/gpu-texture-frame.py` from the current
