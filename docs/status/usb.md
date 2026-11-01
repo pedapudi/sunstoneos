@@ -113,9 +113,12 @@ pin the corresponding vendor driver.
 
 ## Proposed source qualification and bounded bench test
 
-**Status: proposal awaiting three-reviewer design approval.** No power-control
-code or source authority is changed. The coordinator must approve the target
-board and source session before any physical PL8 enable.
+**Status: physical enable is blocked at the design gate.** The simplicity,
+hardware-performance and correctness reviewers verify the source corrections.
+They withhold approval for enabled tests until independent cutoff, shared-input
+headroom and exit handling have measurable limits. No power-control code or
+source authority is changed. The coordinator must approve the target board
+and source session before any physical PL8 enable.
 
 The first source profile supplies USB2 default current with at least 500 mA
 available to TYPEC24. Admission requires measured shared-input headroom,
@@ -128,6 +131,13 @@ measurement bounds.
 The nominal 1.447 A switch limit cannot replace these measurements. Leave
 Gen1, higher-current advertisement and larger PD contracts unadmitted.
 
+That 500 mA budget does not admit a hub and four arbitrary peripherals. Count
+the hub's own draw, each device's descriptor budget and startup transients.
+A webcam can need the complete 500 mA budget. For the requested simultaneous
+keyboard, mouse, webcam and serial topology, use a separately powered USB2 hub
+whose upstream port has demonstrated no backfeed. Do not raise source current
+from the SY6280's nominal limit. TYPEC16 continues to power the board.
+
 Reuse the existing provider's CC debounce, VBUS checks, permanent revocation
 and independent GPIO shutdown. Preserve its current budgets: a 120 ms stable
 sink termination (Rd) observation before enable, VBUS rise within 275 ms,
@@ -139,6 +149,26 @@ limit and an external measurement.
 Measure before and after any implementation change with identical inputs.
 Record p50, p99 and maximum service gap and shutdown latency, CPU time and
 idle input current; an unexplained regression blocks integration.
+
+Timestamp the fault observation, revocation, first GPIO stop, PL8-low
+acknowledgment and externally confirmed VBUS below 800 mV. The 5 ms GPIO
+timer starts when the GPIO task recognizes shutdown. Progress expiry can
+take 10 ms after the last observation, followed by the GPIO task's measured
+service gap and its disable interval. A measured gap of at most 2 ms would
+give a conditional 17 ms bound while the CPU and GPIO path remain live.
+The provider's 2 ms entry guard does not enforce the GPIO task's cadence.
+Bound discharge within 650 ms of the shutdown request. A five-second test
+must request shutdown by 4.330 seconds, reserving the detection and cleanup
+intervals. Compare the same
+image with source disabled before enabling it, at identical clocks, board
+load, supply, cable and meter settings. Record meter uncertainty; an idle
+current increase outside that uncertainty needs an explanation before acceptance.
+
+The vendor selects 400 kHz for S_TWI1. The current native provider caps it at
+100 kHz; that cap remains an implementation gap. The default needs a derived
+400 kHz divider for each admitted oscillator rate, supported by the FUSB302
+timing and the board's measured rise time. Preserve vendor write ordering,
+STOP completion and deadlines. Do not retune the shared APBS1/OSC parent.
 
 The first empty-port run lasts at most five seconds and confirms PL8 low,
 no attachment token and no VBUS rise. A physically empty TYPEC24 has no Rd
@@ -172,3 +202,11 @@ detection, a latching cutoff and a verified watchdog/enable path. Those
 capabilities are not established by the fitted schematic. Their absence
 remains a blocker to that stronger fault guarantee and must not be hidden
 in qualification flags or source-session identifiers.
+
+Success, a diagnostic mismatch, assertion, timeout, cancellation and host loss
+must all request shutdown before retiring either provider task. Transport
+failure stops further board communication. A CPU/interconnect stall or reset
+needs an independent cutoff; software cleanup cannot establish source-off
+in those cases. Before implementation, the coordinator must select that
+protection and approve numerical overload current, cutoff latency and maximum
+delivered energy. No such equipment or reset-to-PL8 proof is established here.
