@@ -3,19 +3,9 @@
 
   returning-watchdog.py --out DIR [--image ELF] [--baseline ELF] [--clang C --lld L]
 
-Cases without --image use a modeled FEL: the shared transport arms WDT0 just
-before exe, classifies the returned instance before any DRAM request, writes
-the reset report and keeps the fresh ROM instance unquarantined. Host cases
-check which failures quarantine the instance: a host exception after a
-confirmed normal return does not; a failed or refused FEL request, an exception
-before the confirmation and a return without RETURN_ROM do. The modeled
-quarantine writes its records under the case's temporary directory. With --image,
-the linked return image runs in the instruction model: an EL1 breadcrumb SVC,
-the EL3 first-fault record and the disarm on the normal ROM return. No USB
-node, queue or FEL executable is opened.
-
-With --clang and --lld, the OS-request launcher of apps/os/prepare.py is built
-with and without a WDT0 mode.
+Without --image, check the breadcrumb layout and decoder. Transport, quarantine
+and watchdog classification use the fake-board cases in checks/board-runner.py.
+The optional image checks execute the actual native watchdog and fatal paths.
 """
 import argparse
 import contextlib
@@ -121,199 +111,10 @@ def header_cases():
     passed('decode-board-failure-and-stop-status')
 
 
-def transport_case(variant, root):
-    old, new = Path('/dev/bus/usb/003/056'), Path('/dev/bus/usb/003/057')
-    port = Path('/sys/bus/usb/devices/3-3')
-    records = root / 'recovery'
-    state = {'locked': False, 'guard': False, 'node': old, 'launched': False, 'held': 0, 'quarantined': 0,
-             'calls': [], 'after_return': [], 'mode': 0, 'rtc': {}}
-    class Access:
-        @contextlib.contextmanager
-        def board_lock(self):
-            state['locked'] = True
-            try: yield old
-            finally: state['locked'] = False
-        def require_session(self, node): assert state['locked']
-        def require_rom(self, node): assert state['locked']
-        def identity(self, node): return [1, 57 if node == new else 56, 3, 4, 5]
-        def target(self, node): return port
-        def session_node(self, config): return state['node']
-        def quarantine_instance(self, node, reason, observed=None):
-            # Same record as tools/usb-access.py, kept in this case's directory.
-            state['quarantined'] += 1
-            records.mkdir(exist_ok=True)
-            key = port.name + '-' + '-'.join(str(int(x)) for x in observed or self.identity(node))
-            (records / f'recovery-required-{key}.json').write_text(json.dumps({'identity': observed, 'reason': reason}))
-    class Guard:
-        def check_health(self): pass
-        @contextlib.contextmanager
-        def reenumeration(self, *values):
-            state['guard'] = True
-            try: yield
-            finally: state['guard'] = False
-    def process(command, **kwargs):
-        arguments, out = command[3:], []
-        state['calls'].append(arguments)
-        if state['launched']:
-            state['after_return'].append(arguments)
-        i = 0
-        while i < len(arguments):
-            op = arguments[i]
-            if op == 'version':
-                out.append('soc=00001903(A733)'); i += 1
-            elif op == 'writel':
-                address, value = int(arguments[i + 1], 0), int(arguments[i + 2], 0); i += 3
-                if address == crumbs.WDT_MODE:
-                    state['mode'] = value & 0xffff if variant != 'disarm-ignored' or not state['launched'] else state['mode']
-                elif crumbs.RTC <= address < crumbs.RTC + 0x200:
-                    state['rtc'][address - crumbs.RTC] = value
-            elif op == 'readl':
-                address = int(arguments[i + 1], 0); i += 2
-                value = {crumbs.WDT_MODE: state['mode'], crumbs.WDT_CONFIG: 1,
-                         crumbs.WDT_OUTPUT: 2 if variant != 'arm-readback' else 0}.get(address)
-                if value is None:
-                    value = state['rtc'].get(address - crumbs.RTC, 0) if address >= crumbs.RTC else 0
-                out.append(hex(value))
-            elif op == 'exe':
-                assert state['guard'] and state['mode'] == (0 if variant == 'no-watchdog' else 0xb1), 'exe inside the guard, armed as asked'
-                i += 2
-                state['launched'] = True; state['node'] = new
-                rtc = state['rtc']
-                rtc[0x100] = 0x5c0d0000 | EPOCH & 0xffff if variant != 'fired-before-entry' else 0
-                if variant in ('fired', 'disarm-ignored'):
-                    rtc[0x104] = 0x0410 << 16 | 37; rtc[0x10c] = 6 << 29 | 77
-                    if variant == 'fired':
-                        state['mode'] = 0x01  # the image's EL3 stop shortened WDT0
-                elif variant == 'disarmed-without-rom':
-                    state['mode'] = 0; rtc[0x104] = 0x0421 << 16
-                elif variant == 'rom-from-other-session':
-                    state['mode'] = 0; rtc[0x104] = 0x0503 << 16; rtc[0x100] ^= 1
-                elif variant != 'fired-before-entry':
-                    # The image's disarm write clears the mode before RETURN_ROM.
-                    state['mode'] = 0; rtc[0x104] = 0x0503 << 16
-            elif op == 'read':
-                Path(arguments[i + 3]).write_bytes(bytes(int(arguments[i + 2]))); i += 4
-            else:
-                raise AssertionError(op)
-        failing = variant == 'fel-error-after-return' and arguments[:1] == ['read'] and state['launched']
-        return types.SimpleNamespace(returncode=1 if failing else 0, stdout='\n'.join(out), stderr='')
-    def admit(*values): assert state['locked']
-    def validate(path): return {'image_sha256': 'f' * 64, 'epoch': EPOCH}
-    def execute(transaction, launch, ready, p, record, save):
-        ready(); record['dirty'] = True; save()
-        assert int(transaction('readl', '0x02050014'), 16) & 1 == 0
-        if variant == 'host-error-before-launch':
-            raise KeyError('modeled host error before launch')
-        launch()
-        transaction('version'); transaction('read', '0x42000000', 128, str(root / 'report.bin'))
-        if variant == 'host-error-after-return':
-            # The 3-3 run of 2026-10-31: outputs read, then a missing host file.
-            (root / 'return-review.json').read_text()
-        if variant == 'fel-refused-after-return':
-            transaction('exe', '0x52000')
-        record.update(complete=True); save()
-        return 'normal'
-    def hold(): state['held'] += 1
-    fel = root / 'fel'; fel.write_bytes(b'modeled, never executed')
-    args = types.SimpleNamespace(bundle=root, fel=fel, evidence=root / 'evidence', root_owned_claim='MODEL ONLY')
-    options = {'return_timeout': 90}
-    if variant != 'no-watchdog':
-        options['watchdog'] = {'mode': 0xb1, 'session_seconds': 0 if variant == 'invalid-session' else 60}
-    clock = itertools.count(0, 0.5)
-    decode = crumbs.decode
-    if variant == 'host-error-during-classification':
-        def decode(*values): raise KeyError('modeled host error before the return is confirmed')
-    stderr = io.StringIO()
-    with contextlib.redirect_stderr(stderr), patch.object(transport.crumbs, 'decode', decode), \
-            patch.object(base, 'digest', return_value=base.FEL_HASH), patch.object(base, 'hold_ownership', hold), \
-            patch.object(transport.subprocess, 'run', process), patch.object(transport.os, 'access', return_value=True), \
-            patch.object(transport.time, 'monotonic', lambda: next(clock)), patch.object(transport.time, 'sleep', lambda s: None):
-        try:
-            result = transport.run(args, base=base, profile='model', validate_bundle=validate, admit=admit,
-                                   execute=execute, description='model', access=Access(), guard=Guard(), **options)
-            error = None
-        except (ValueError, OSError, KeyError, transport.WatchdogReset) as failure:
-            result, error = None, failure
-    record = json.loads((args.evidence / 'session.json').read_text()) if (args.evidence / 'session.json').exists() else {}
-    state['records'] = sorted(records.glob('recovery-required-*.json')) if records.exists() else []
-    state['stderr'] = stderr.getvalue()
-    return state, record, result, error, args.evidence
 
 
-def quarantined(state, record):
-    """One quarantine record for the returned or original instance, also stated in the run record."""
-    assert state['quarantined'] == 1 and len(state['records']) == 1, state
-    written = json.loads(state['records'][0].read_text())
-    assert record['instance_quarantined'] == written['reason'] and not record.get('host_failed_after_normal_return')
-    assert 'HOST FAILED AFTER NORMAL RETURN' not in state['stderr']
-    return written
 
 
-def transport_cases():
-    with tempfile.TemporaryDirectory(prefix='returning-watchdog-') as temporary:
-        for variant in ('normal', 'fired', 'fired-before-entry', 'no-watchdog', 'invalid-session', 'arm-readback',
-                        'disarm-ignored', 'disarmed-without-rom', 'rom-from-other-session',
-                        'host-error-after-return', 'fel-error-after-return', 'fel-refused-after-return',
-                        'host-error-before-launch', 'host-error-during-classification'):
-            root = Path(temporary) / variant; root.mkdir()
-            state, record, result, error, evidence = transport_case(variant, root)
-            if variant == 'normal':
-                assert record['return_timeout_seconds'] == 86, 'armed: session, interval and 10 s'
-                assert result == 'normal' and error is None and not state['held'] and not state['quarantined']
-                assert not state['records'] and 'instance_quarantined' not in record
-                n = record['normal_return']
-                assert n['wdt0_disarmed'] and n['first_request_succeeded'] and n['return_rom'] == {
-                    'session': True, 'stage': crumbs.RETURN_ROM, 'value': 0}
-                assert n['returned_identity'] == record['returned_identity'] != record['initial_identity']
-                w = record['watchdog']
-                assert w['armed'] and w['disarmed'] and not w['fired'] and w['mode_after_return'] == 0
-                assert w['breadcrumbs']['last']['name'] == 'RETURN_ROM'
-                # The first request on the returned instance is the classification.
-                assert state['after_return'][0] == crumbs.return_arguments()
-            elif variant in ('fired', 'fired-before-entry'):
-                assert isinstance(error, transport.WatchdogReset) and not state['held'] and not state['quarantined']
-                assert record['watchdog_reset'] and record['dram_lost'] and record['rom_usable'] and not record['complete']
-                assert record['failure'].startswith('WDT0 reset the board')
-                report = json.loads((evidence / 'watchdog-report.json').read_text())
-                assert report['watchdog_fired'] and state['mode'] == 0
-                # Classification and the launcher-report read only: no DRAM request.
-                assert len(state['after_return']) == 2 and state['after_return'][1][:2] == ['read', '0x52d00']
-                assert report['stop_shortened'] == (variant == 'fired')
-                assert report['reset_interval_seconds'] == (0.5 if variant == 'fired' else 16)
-                if variant == 'fired':
-                    assert report['breadcrumbs']['last'] == {'stage': 0x410, 'name': 'GPU_SUBMIT', 'value': 37,
-                        'core': 6, 'seconds_since_power_on': round(77 * 1024 / 24e6, 4)}
-                else:
-                    assert not report['breadcrumbs']['session']
-            elif variant == 'no-watchdog':
-                assert record['return_timeout_seconds'] == 90
-                assert result == 'normal' and not any('writel' in c for c in state['calls'])
-            elif variant == 'host-error-after-return':
-                # Failed with evidence and the usual hold, but no quarantine.
-                assert isinstance(error, FileNotFoundError) and result is None, error
-                assert not state['quarantined'] and not state['records'] and state['held'] == 1
-                assert record['host_failed_after_normal_return'] and record['instance_quarantined'] is False
-                assert not record['complete'] and 'return-review.json' in record['failure']
-                assert record['normal_return']['first_request_succeeded'] and not record.get('fel_request_raised')
-                assert 'HOST FAILED AFTER NORMAL RETURN: FileNotFoundError' in state['stderr']
-                assert 'the board instance remains usable' in state['stderr']
-            elif variant in ('fel-error-after-return', 'fel-refused-after-return'):
-                text = {'fel-error-after-return': 'FEL request failed',
-                        'fel-refused-after-return': 'guarded launch callback'}[variant]
-                assert text in str(error) and record['normal_return'] and record['fel_request_raised']
-                assert quarantined(state, record)['identity'] == record['returned_identity'] and state['held'] == 1
-            elif variant in ('host-error-before-launch', 'host-error-during-classification'):
-                assert isinstance(error, KeyError) and 'normal_return' not in record and state['held'] == 1
-                identity = record['initial_identity'] if variant == 'host-error-before-launch' else record['returned_identity']
-                assert quarantined(state, record)['identity'] == identity
-            elif variant == 'invalid-session':
-                assert 'Watchdog mode or session length differs' in str(error) and not state['calls']
-            else:
-                text = {'arm-readback': 'readback after arming', 'disarm-ignored': 'did not disarm',
-                        'disarmed-without-rom': 'without this session', 'rom-from-other-session': 'without this session'}[variant]
-                assert text in str(error) and state['held'] == 1 and state['quarantined'] == 1, (variant, error, state)
-                assert 'normal_return' not in record and quarantined(state, record)
-            passed('transport-' + variant, fel_requests=len(state['calls']))
 
 
 def launcher_case(out, clang, lld):
@@ -501,7 +302,6 @@ def main():
         parser.error('the launcher case needs --clang and --lld together')
     args.out.mkdir(parents=True, exist_ok=False)
     header_cases()
-    transport_cases()
     if args.clang and args.lld:
         launcher_case(args.out, args.clang, args.lld)
     if args.image:

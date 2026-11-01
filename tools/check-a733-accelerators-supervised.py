@@ -102,7 +102,7 @@ def main(argv=None):
     for name in ('bundle','fel','evidence','gpu-input'):parser.add_argument('--'+name,type=Path,required=True)
     for name in ('npu-input','gpu-oracle','npu-oracle'):parser.add_argument('--'+name,type=Path,action='append',default=[])
 
-    parser.add_argument('--supervised-manual-reconnect',action='store_true',required=True)
+    parser.add_argument('--supervised-manual-reconnect',action='store_true')
     args=parser.parse_args(argv);bundle=args.bundle.resolve();prepared=preparation.validate_bundle(bundle)
     gpu_input=args.gpu_input.read_bytes();inputs=[p.read_bytes() for p in args.npu_input]
     gpu_oracles=[p.read_bytes() for p in args.gpu_oracle];npu_oracles=[p.read_bytes() for p in args.npu_oracle]

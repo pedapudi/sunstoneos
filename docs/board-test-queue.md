@@ -1,9 +1,10 @@
 # Serialize tests per board while development proceeds in parallel
 
 Development workers build and check components in separate worktrees, then submit
-physical test proposals through `tools/board-test-queue.py`. One coordinator
-reviews proposals and performs board operations. The tool stores metadata in
-SQLite and never executes submitted procedures.
+physical test proposals through the [board runner](board-runner.md). One
+coordinator reviews proposals and performs board operations. The legacy
+`tools/board-test-queue.py` described below stores proposal metadata in SQLite
+and never executes submitted procedures. Its claims grant no launch authority.
 
 Each board has a separate database, shared by worktrees targeting that board.
 The original board on port `3-1` uses the default
@@ -42,47 +43,24 @@ Queue and token files are under `~/.cache/sunstoneos/`. Use the matching
 `--database` and `--token-file` arguments. Each database records the physical
 USB port of its board.
 
-These runners check that binding:
+The shared runner owns launch admission, physical-port selection, exclusive
+claims and frozen input checks. Development commands and returning peripheral
+hosts delegate to it. The legacy proposal database, owner token, prerequisite
+names and software-evidence flags do not authorize an image. Native diagnostics
+submitted as probes must satisfy the [probe contract](board-probe-contract.md).
+CPU, GPU and NPU images use their supported return contracts. Images without a
+compatible watchdog, finite cleanup and return receipt remain refused.
 
-- The protected multicore launcher, `tools/check-a733-smp.py`.
-- Every runner built on the shared supervised session, `run_session` in
-  `tools/check-a733-smp-supervised.py`. These include each
-  `tools/check-a733-*-supervised.py` runner and the application capture hosts
-  that call it, such as `apps/adc/capture.py`.
+[Runner checks](../checks/board-runner.py) exercise paused-board refusal,
+exclusive claims, assignment of a flexible-port job only once, changed or
+missing queued artifacts, and changed or missing host helpers. These checks
+operate on the runner's durable queue without device access. Native hardware
+checks for session binding, ownership, electrical limits and retirement remain
+required after host admission.
 
-Each of these runners takes the board lock and reads the locked port. It then
-refuses the launch when the `--database` it was given does not exist, records
-no port, or records a different port. The refusal happens before the first FEL
-request, so the board keeps its ROM identity and SRAM contents and is not
-quarantined. Supervised runners repeat the check with the final claim check
-immediately before native entry. A claim in one board's queue therefore cannot
-authorize a launch through these runners on the other board.
-
-Eighteen device runners, for example `tools/check-a733-hevc-supervised.py`,
-check their claim through `device_claim` in `tools/check-a733-smp-supervised.py`.
-It refuses a halted queue, a test that the given owner has not claimed, a
-prerequisite set other than the runner's, a reviewed entry other than the
-bundle's `admission.json`, software evidence that does not cover the admitted
-image, launcher and host sources, and submitted artifacts that do not cover
-`prepared.json`, `image.elf` and `launch.bin`. Each runner supplies its device
-label, prerequisites and software-evidence schema and result flags. A change to
-these rules therefore applies to all eighteen runners. The board, accelerator,
-GPU display, NPU, combined mimus board, integrated OS and multicore observer
-runners keep their own claim checks. `checks/audit-build-harness-supervised-claims.py`
-records every runner's decision for a valid claim and for each tampered field.
-
-The other runners that read queue claims do not check the binding:
-`tools/check-a733-device-launch.py`, `tools/check-a733-storage-launch.py`,
-`tools/check-a733-smp-observe.py`, `tools/run-a64-entry-probe.py`,
-`tools/run-launch-survey.py`, `tools/run-native-startup-probe.py`,
-`apps/dma-copy/observe.py` and `apps/npu-convolution/observe.py`. Before using
-one of them, the coordinator must confirm that the claim belongs to the queue
-of the board on the selected port.
-
-A failure halts that board's queue; recovery evidence and admission never
-transfer between boards. Do not copy a live device identity, RAM reservation or
-electrical qualification to the second board. USB enumeration numbers change;
-the physical port identifies ownership.
+Recovery evidence never transfers between boards. Do not copy a live device
+identity, RAM reservation or electrical qualification to the second board.
+USB enumeration numbers change; the physical port identifies ownership.
 
 ## Initialize once and submit immutable proposals
 
