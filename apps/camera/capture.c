@@ -63,7 +63,7 @@ static int fault(void)
   * Cancellation stops producer advancement without attempting unsafe bus STOP. */
 #ifdef SUNSTONE_CAMERA_STREAM
  if(app.output_ready){
-  app.retained_status=4u|(app.camera.capture.sensor.state==OV5640_READY?1u:0u);
+  app.retained_status=4u|(app.camera.capture.sensor.state==CAMERA_SENSOR_READY?1u:0u);
   atomic_store_explicit(&app.result,4,memory_order_release);return -1;
  }
 #endif

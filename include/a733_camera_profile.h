@@ -1,48 +1,24 @@
 #ifndef SUNSTONE_A733_CAMERA_PROFILE_H
 #define SUNSTONE_A733_CAMERA_PROFILE_H
 #include <stdint.h>
-#include "ov5640.h"
+#include "camera_sensor.h"
+#include "sunstone_board.h"
 #ifndef SUNSTONE_CAMERA_SIZE
 #define SUNSTONE_CAMERA_SIZE 3
 #endif
-#if SUNSTONE_CAMERA_SIZE == 0
-#define A733_CAMERA_WIDTH 160u
-#define A733_CAMERA_HEIGHT 120u
-#elif SUNSTONE_CAMERA_SIZE == 1
-#define A733_CAMERA_WIDTH 176u
-#define A733_CAMERA_HEIGHT 144u
-#elif SUNSTONE_CAMERA_SIZE == 2
-#define A733_CAMERA_WIDTH 320u
-#define A733_CAMERA_HEIGHT 240u
-#elif SUNSTONE_CAMERA_SIZE == 3
-#define A733_CAMERA_WIDTH 640u
-#define A733_CAMERA_HEIGHT 480u
-#elif SUNSTONE_CAMERA_SIZE == 4
-#define A733_CAMERA_WIDTH 720u
-#define A733_CAMERA_HEIGHT 480u
-#elif SUNSTONE_CAMERA_SIZE == 5
-#define A733_CAMERA_WIDTH 720u
-#define A733_CAMERA_HEIGHT 576u
-#elif SUNSTONE_CAMERA_SIZE == 6
-#define A733_CAMERA_WIDTH 1024u
-#define A733_CAMERA_HEIGHT 768u
-#elif SUNSTONE_CAMERA_SIZE == 7
-#define A733_CAMERA_WIDTH 1280u
-#define A733_CAMERA_HEIGHT 720u
-#elif SUNSTONE_CAMERA_SIZE == 8
-#define A733_CAMERA_WIDTH 1920u
-#define A733_CAMERA_HEIGHT 1080u
-#elif SUNSTONE_CAMERA_SIZE == 9
-#define A733_CAMERA_WIDTH 2592u
-#define A733_CAMERA_HEIGHT 1944u
-#else
-#error Unsupported OV5640 image size
+#ifndef SUNSTONE_CAMERA_WIDTH
+#define SUNSTONE_CAMERA_WIDTH 640u
 #endif
+#ifndef SUNSTONE_CAMERA_HEIGHT
+#define SUNSTONE_CAMERA_HEIGHT 480u
+#endif
+#define A733_CAMERA_WIDTH SUNSTONE_CAMERA_WIDTH
+#define A733_CAMERA_HEIGHT SUNSTONE_CAMERA_HEIGHT
 #define A733_CAMERA_NATIVE_PLANE_BYTES (A733_CAMERA_WIDTH*A733_CAMERA_HEIGHT)
 #define A733_CAMERA_NATIVE_GUARD_BYTES 4096u
 #define A733_CAMERA_PAGE_ROUND(n) (((n)+4095u)&~4095u)
 #define A733_CAMERA_SLOT_BYTES (A733_CAMERA_PAGE_ROUND(A733_CAMERA_NATIVE_PLANE_BYTES)+4096u)
-#define A733_CAMERA_TABLE_BYTES (SUNSTONE_CAMERA_SIZE==9?36864u:32768u)
+#define A733_CAMERA_TABLE_BYTES (8192u+4u*A733_CAMERA_SLOT_BYTES>16777216u?36864u:32768u)
 #define A733_CAMERA_NATIVE_BYTES (A733_CAMERA_TABLE_BYTES+8192u+2u*A733_CAMERA_SLOT_BYTES)
 #define A733_CAMERA_NATIVE_STREAM_BYTES (A733_CAMERA_TABLE_BYTES+8192u+4u*A733_CAMERA_SLOT_BYTES)
 #define A733_CAMERA_FRAME_BYTES (2u*A733_CAMERA_NATIVE_PLANE_BYTES)
@@ -66,9 +42,21 @@ struct a733_camera_image_profile {
 extern const struct a733_camera_image_profile a733_camera_image_profile;
 /* Derive timing from the existing sensor implementation; dimensions must agree
  * before the native allocation or the image's CPU mappings are constructed. */
-static inline int a733_camera_selected_mode(struct ov5640_mode *m)
+static inline int a733_camera_selected_mode_for_port(struct camera_mode *m,unsigned port)
 {
-    return ov5640_mode_get(m,SUNSTONE_CAMERA_SIZE,OV5640_UYVY,0)==1 &&
-        m->width==A733_CAMERA_WIDTH && m->height==A733_CAMERA_HEIGHT;
+    const struct sunstone_board_description *board=sunstone_board_orangepi_zero3w();
+    if(!board || port>=board->camera_count)return 0;
+    for(size_t i=0;i<board->camera_sensor_count;i++){
+        const struct camera_sensor_driver *d=camera_sensor_find(board->camera_sensors[i]);
+        if(!d)continue;
+        for(unsigned index=0;index<d->mode_count;index++){
+            if(camera_sensor_mode(d,index,CAMERA_UYVY,0,m)==1 &&
+               m->width==A733_CAMERA_WIDTH && m->height==A733_CAMERA_HEIGHT &&
+               m->xclk_hz==board->camera[port].xclk_hz && m->lanes==board->camera[port].lanes)return 1;
+        }
+    }
+    return 0;
 }
+static inline int a733_camera_selected_mode(struct camera_mode *m)
+{return a733_camera_selected_mode_for_port(m,0);}
 #endif
