@@ -17,6 +17,9 @@ struct cpu_model {
     unsigned bin, stuck_update, stuck_lock, ignore_pmic, reads, writes, count, read_ns, frac_ns;
     uint32_t staged_n[3]; /* N reads stay at the old value until UPDATE completes. */
     unsigned old_n_reads, wrong_update, fail_update_read;
+    unsigned stage_us, fail_stage_time, stop_stage_time;
+    uint64_t stage_at[3];
+    uint32_t captured_n[3];
     unsigned lock_delay_before_us, lock_delay_after_us, fail_post_read, fail_next_time;
     uint64_t update_at[3], lock_at[3], lock_us; /* lock_us 0: lock 20 us after the update. */
     uint64_t park_ns[3]; /* Time of each domain's latest park write, in nanoseconds. */
@@ -97,7 +100,7 @@ static void advance(unsigned d)
 {
     uint32_t *pll=word(PLL(d));
     if((*pll&(1u<<26)) && !cm.stuck_update && pm.now>=cm.update_at[d]){
-        uint32_t n=cm.staged_n[d]^(cm.wrong_update ? 1u<<8 : 0);
+        uint32_t n=cm.captured_n[d]^(cm.wrong_update ? 1u<<8 : 0);
         *pll=(*pll&~((1u<<26)|(255u<<8)))|n;
     }
     if(!(*pll&(1u<<28)) && !(*pll&(1u<<26)) && !cm.stuck_lock && pm.now>=cm.lock_at[d])*pll|=1u<<28;
@@ -141,9 +144,15 @@ static int cpu_write(void *v,uintptr_t a,uint32_t value)
             assert(model_ns()>=cm.park_ns[d]+20000u);
             /* N is staged, not immediately visible (manual 5.1.4.2). */
             uint32_t visible=*word(a)&((255u<<8)|(1u<<28));
-            cm.staged_n[d]=value&(255u<<8);
+            if(!(value&(1u<<26))){
+                cm.staged_n[d]=value&(255u<<8);cm.stage_at[d]=model_ns();
+                if(cm.fail_stage_time)cm.fail_next_time=1;
+                if(cm.stop_stage_time)cm.read_ns=0;
+            }
             *word(a)=(value&~((255u<<8)|(1u<<28)))|visible;
             if(value&(1u<<26)){
+                cm.captured_n[d]=model_ns()>=cm.stage_at[d]+(uint64_t)cm.stage_us*1000u ?
+                    cm.staged_n[d] : visible&(255u<<8);
                 *word(a)&=~(1u<<28);cm.lock_run[d]=0;
                 cm.update_at[d]=pm.now+10;cm.lock_at[d]=pm.now+(cm.lock_us ? cm.lock_us : 20);
             }
@@ -442,6 +451,26 @@ static void update_cases(void)
     }
     puts("PASS update readback: 5 cases; staged N on raise/close, wrong completed N, stuck UPDATE, read fault");
 }
+/* Hypothesis fixture: the old-N board result is reproduced if UPDATE can
+ * capture N before a 20 us stage interval. The physical run tests the timing
+ * correction; the fixture does not claim measured silicon staging latency. */
+static void stage_cases(void)
+{
+    close_update_setup();cm.stage_us=20;
+    assert(a733_cpu_clock_burst(&cpu,200)==A733_CPU_CLOCK_PENDING && !cpu.failed);
+    assert(rate(A733_CPU_BIG)==1014000000 && pm.pmic[REG_DCDC3]==55);
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && released() && pm.pmic[REG_DCDC3]==30);
+    assert(cm.writes==5 && pmic_writes()==1);covered();
+    for(unsigned mode=0;mode<2;++mode){
+        close_update_setup();cm.stage_us=20;
+        if(mode==0)cm.fail_stage_time=1;else cm.stop_stage_time=1;
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_RETAINED && cpu.failed);
+        assert(cm.writes==2 && !pmic_writes() && pm.pmic[REG_DCDC3]==55);
+        assert(!(*word(PLL(1))&(1u<<26)) && ((*word(SEL(1))>>24)&7)==0);
+        retained();
+    }
+    puts("PASS N staging: 3 cases; delayed capture, failed and stopped post-N counter");
+}
 /* Driver LOCK is state 10. Inject preemption on either side of MMIO so
  * a sample timestamp alone cannot establish the actual observation gap. */
 static void lock_timing_setup(void)
@@ -626,6 +655,8 @@ int main(int argc,char **argv)
     if(argc==2 && !strcmp(argv[1],"--late-policy-reproduce")){late_policy_cases(1);return 0;}
     if(argc==2 && !strcmp(argv[1],"--late-policy-only")){late_policy_cases(0);return 0;}
     if(argc==2 && !strcmp(argv[1],"--lock-timing-only")){lock_timing_cases();return 0;}
+    if(argc==2 && !strcmp(argv[1],"--n-stage-only")){stage_cases();return 0;}
+    stage_cases();
     update_cases();
     if(argc==2 && !strcmp(argv[1],"--close-update-only"))return 0;
     lock_timing_cases();

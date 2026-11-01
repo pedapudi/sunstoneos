@@ -649,7 +649,10 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
         c->park_at=c->last_now;c->lock=(struct a733_pll_lock){0,0};
         if(!settle(c,SETTLE_US))return fault(c);
         pll=(pll&~FIELD_N)|(c->n<<8);
-        if(!put(c,pll_word(c->cluster),pll) || !put(c,pll_word(c->cluster),pll|UPDATE))return fault(c);
+        /* boot0 waits after staging N, before requesting its manual update.
+         * The adapter completes the write before this interval begins. */
+        if(!put(c,pll_word(c->cluster),pll) || !settle(c,SETTLE_US) ||
+           !put(c,pll_word(c->cluster),pll|UPDATE))return fault(c);
         c->timer=c->last_now+UPDATE_US;c->state=S_UPDATE;return A733_CPU_CLOCK_PENDING;
     }
     case S_UPDATE:

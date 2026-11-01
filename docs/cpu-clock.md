@@ -252,23 +252,31 @@ UPDATE, a wrong N after completion and subsequent LOCK failures retain both
 leases. The manual is pinned by `a733-user-manual-1.00` in `sources.lock.json`
 (SHA-256 `cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d`).
 
-The 2026-10-31 close failure `0x4613f6ff` decodes as target 1014 MHz, a local
-check, close requested, CPU-B parked and both clock and rail tokens held.
-There is no PMIC request, prior shared-provider fault, elapsed deadline or
-elapsed state timer. Its auxiliary record identifies USER, FOLLOW, cursor 3
-and prior stored result COMPLETE. The fault statement compared N during UPDATE.
-The native read callback admits this CPU-B register and returns success;
-the failing condition is the premature N comparison. The record does not
-preserve the actual old N or UPDATE bit, so the staged-readback model supplies
-that source-backed reproduction rather than a measured register trace.
+The corrected UPDATE-first and LOCK timing image completed one GPU job and
+returned normally on both boards. The eight-core reliability image still
+failed during the 2002-to-1014 MHz close. Disassembly of its frozen ELF
+confirmed both corrections. The first retained-setter diagnostic identified
+the N comparison after UPDATE cleared, with no deadline or manager fault.
+A second diagnostic read `0xf8804d00` at that statement: N remained 77 while
+the driver expected 39, UPDATE was clear, and PLL enable, output and LOCK
+remained set. These observations exclude an absent fix or disabled PLL.
+Evidence is under `~/.cache/sunstoneos/board-queue/entries/`, entries
+`1793512930164628324-8c5d13f4` and `1793513153733329412-dfa025f8`.
 
-Sustained applications wait for the top clock points and therefore request
-CPU-B's 2002-to-1014 MHz lowering during close. The short hello application
-can finish before those raises. Its successful control record reports DCDC5
-at 800 mV, rather than CPU-L's 1000 mV top rail. It therefore does not establish
-the close path after the complete top-point sequence. Earlier successful runs
-can also observe UPDATE only after completion. Heat is not required to explain
-a configuration comparison taken before its completion condition.
+The pinned boot0 routine at blob offsets `0x2114`–`0x21b4` waits 20 us after
+writing N and before requesting UPDATE. The native driver previously waited
+before N only. Both native write adapters now complete PLL writes with DSB SY,
+then the driver waits at least 20 us between N and UPDATE. The native sequence
+still retains a wrong N after UPDATE; the delay does not replace verification.
+The extra settle adds 21 us in the model, with two additional completion
+barriers and unchanged register and PMIC write counts. Three reviewers
+approved the design and implementation before its physical experiment.
+
+The short hello application can finish before the top-point raises. Its
+successful control reports DCDC5 at 800 mV, rather than CPU-L's 1000 mV top
+rail, so it does not establish the close path after the complete top-point
+sequence. Sustained applications wait for those points and force CPU-B's
+lowering. The different outcomes do not establish a thermal cause.
 
 The native close sequence and its vendor comparison are:
 
@@ -277,7 +285,7 @@ The native close sequence and its vendor comparison are:
 | CPU-B registers | `ccu-sun60iw2-cpupll.c`: control at `0x08872000`, external P and mux at `0x0887201c`; both paths use these fields. |
 | Inherited controls | Linux enables modulation during probe. Native admission requires it disabled and preserves PLL, LDO, output and lock enable bits. |
 | Consumer clock | Linux adjusts N live under its modulation profile. Native parks on DCXO and settles for at least 20 us, following boot0. |
-| N update | Write N, request UPDATE, wait up to 10 ms for clear, then validate N. Comparing N before completion was the defect. |
+| N update | Complete the N write, settle at least 20 us as boot0 does, request UPDATE, wait up to 10 ms for clear, then validate N. |
 | Divider | Linux grows P before changing N and shrinks it after UPDATE. Native changes P while still parked, then selects the qualified PLL; no consumer sees the intermediate rate. For 2002 to 1014 MHz, P remains zero. |
 | Lock | The standard vendor helper qualifies three LOCK samples at least 3 us apart, then waits 20 us. Native uses that qualification with its existing 70 ms fault bound. |
 | Reselect | Native reads back P/mux, selects the PLL, settles at least 20 us and verifies the final decoded rate before any lower rail write. |
@@ -563,3 +571,9 @@ evidence remains applicable because this change does not alter that code.
 
 These are software results only. Physical lock time, settling, rail
 accuracy, frequency, PMU access and thermal behavior remain unmeasured.
+
+`checks/cpu-clock-model.c --n-stage-only` adds a delayed-capture hypothesis
+for the observed old-N word and covers failed and stopped time sources after
+N. The pre-fix model fails the successful-close case. The corrected case
+keeps DCDC3 high until final lock and mux qualification; failed settles issue
+no UPDATE. This model does not measure silicon staging latency.

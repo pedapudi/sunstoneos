@@ -94,7 +94,7 @@ int a733_cpu_clock_grant_load(const struct a733_cpu_clock_grant_record *,uint64_
 struct a733_cpu_clock_ops {
     int (*now)(void *,uint64_t *); /* Monotonic microseconds shared with the leases. */
     int (*read)(void *,uintptr_t,uint32_t *);
-    int (*write)(void *,uintptr_t,uint32_t);
+    int (*write)(void *,uintptr_t,uint32_t); /* 1 only after the device write completes. */
 };
 enum a733_cpu_clock_status {
     A733_CPU_CLOCK_READY, A733_CPU_CLOCK_PENDING, A733_CPU_CLOCK_COMPLETE, A733_CPU_CLOCK_BUSY,
