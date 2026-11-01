@@ -18,6 +18,9 @@ spec.loader.exec_module(host)
 spec = importlib.util.spec_from_file_location('session_prepare', ROOT / 'apps/os/prepare.py')
 prepare = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(prepare)
+spec = importlib.util.spec_from_file_location('session_card', ROOT / 'apps/os/card.py')
+card = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(card)
 
 
 def main():
@@ -39,7 +42,7 @@ def main():
     layout = out / 'result-layout.c'
     layout.write_text('#include "sunstone_session.h"\n'
                       'unsigned char ss_result_record[sizeof(struct ss_result) + 16];\n')
-    run(CLANG, '-std=c11', '-O2', '-I', ROOT / 'include', '-I', gen,
+    run(CLANG, '-std=c11', '-O2', '-no-pie', '-Wl,-Ttext-segment=0x41000000', '-I', ROOT / 'include', '-I', gen,
         ROOT / 'checks/sunstone-app-abi.c', ROOT / 'apps/hello-compute/main.c',
         gen / 'hello_compute-manifest.c', layout, '-o', image)
     info = host.image_manifest(image)
@@ -90,13 +93,44 @@ def main():
     frozen = prepare.prepare(image, prefix, services, [data], bundle, devices=0, flags=host.BIND_SID)
     assert frozen['uploads'][0]['address'] == manifest['regions'][0]['address']
     assert (bundle / 'session.bin').read_bytes() == wire
+    empty_bundle = out / 'empty-bundle'
+    prepare.prepare(image, prefix, services, [b''], empty_bundle, devices=0, flags=host.BIND_SID)
+    assert (empty_bundle / 'input-0.bin').read_bytes() == b''
+    source.write_bytes(b'')
+    run(image, source, result)
+    assert struct.unpack('<IIQ', host.decode_result(result.read_bytes(), 0, 0, 16)) == (1, 0, 0)
+    source.write_bytes(data)
+    run(image, source, result)
     (bundle / 'input-0.bin').write_bytes(b'changed')
     refused(lambda: prepare.validate_bundle(bundle), 'input changed')
     (bundle / 'input-0.bin').write_bytes(data)
     prepare.validate_bundle(bundle)
     cases = ['compiled-manifest', 'C-result-producer', 'result-symbol-capacity',
              'framed-result', 'framed-result-not-ready', 'truncated-result-frame', 'typed-session-producer',
-             'manifest-upload', 'headset-without-I2S-extent', 'actual-bundle-producer', 'changed-frozen-input']
+             'manifest-upload', 'headset-without-I2S-extent', 'actual-bundle-producer',
+             'actual-empty-input-bundle-and-result', 'changed-frozen-input']
+    image_raw = image.read_bytes()
+    elf = host.image_manifest(image)['elf']
+    table = elf.get_section_by_name('.symtab')
+    result_index = next(index for index, symbol in enumerate(table.iter_symbols()) if symbol.name == 'ss_result_record')
+    result_offset = table['sh_offset'] + result_index * table['sh_entsize']
+    for name, offset, form, value, reason in [
+            ('absolute-result-symbol', 6, '<H', 0xfff1, 'data object'),
+            ('function-result-symbol', 4, '<B', 0x12, 'data object'),
+            ('result-outside-section', 8, '<Q', 0x03006000, 'allocated writable data')]:
+        altered = bytearray(image_raw)
+        struct.pack_into(form, altered, result_offset + offset, value)
+        refused(lambda: host.result_geometry(altered), reason)
+        cases.append(name)
+    card.flat_runtime(image_raw)
+    # Mutate an actual load segment into a BSS-only reserved-memory collision.
+    load_index = next(index for index, segment in enumerate(elf.iter_segments()) if segment['p_type'] == 'PT_LOAD')
+    altered = bytearray(image_raw)
+    offset = elf['e_phoff'] + load_index * elf['e_phentsize']
+    struct.pack_into('<Q', altered, offset + 16, 0x41eff000)
+    struct.pack_into('<2Q', altered, offset + 32, 0, 0x2000)
+    refused(lambda: card.flat_runtime(altered), 'reserved memory')
+    cases.append('BSS-only-reserved-memory-collision')
     def bad(name, raw, reason):
         refused(lambda: host.session_decode(raw, manifest, info['sha256']), reason)
         cases.append(name)

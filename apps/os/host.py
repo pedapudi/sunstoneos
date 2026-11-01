@@ -72,7 +72,7 @@ def input_facts(manifest, inputs):
         data = bytes(data)
         digest = hashlib.sha256(data).digest()
         pinned = bytes.fromhex(region['sha256'])
-        require(0 < len(data) <= region['bytes'], 'Input length exceeds manifest region.')
+        require(len(data) <= region['bytes'], 'Input length exceeds manifest region.')
         require(not any(pinned) or len(data) == region['bytes'] and digest == pinned,
                 'Input differs from pinned manifest digest or length.')
         facts.extend(INPUT.pack(len(data), digest))
@@ -130,7 +130,7 @@ def session_decode(raw, manifest=None, manifest_sha256=None):
         for index, region in enumerate(declared):
             size, actual = INPUT.unpack_from(facts, index * INPUT.size)
             pinned = bytes.fromhex(region['sha256'])
-            require(0 < size <= region['bytes'], 'Input length exceeds manifest region.')
+            require(size <= region['bytes'], 'Input length exceeds manifest region.')
             require(not any(pinned) or size == region['bytes'] and actual == pinned,
                     'INPUTS extent differs from pinned manifest digest or length.')
         if capture == manifest_tool.DEVICES['audio-i2s']:
@@ -170,7 +170,20 @@ def result_geometry(image):
     size = RESULT.size + info['manifest']['output_limit']
     require(len(found) == 1 and found[0]['st_info']['bind'] == 'STB_GLOBAL' and found[0]['st_size'] == size,
             'Result symbol differs from manifest capacity.')
-    return {'address': int(found[0]['st_value']), 'bytes': size}
+    symbol = found[0]
+    index, address = symbol['st_shndx'], int(symbol['st_value'])
+    require(symbol['st_info']['type'] == 'STT_OBJECT' and type(index) is int and
+            0 < index < info['elf'].num_sections(), 'Result symbol must name a data object.')
+    section = info['elf'].get_section(index)
+    require(section['sh_type'] in ('SHT_PROGBITS', 'SHT_NOBITS') and section['sh_flags'] & 3 == 3 and
+            section['sh_addr'] <= address and address + size <= section['sh_addr'] + section['sh_size'],
+            'Result object is outside allocated writable data.')
+    require(0x41000000 <= address < address + size <= 0x41f00000,
+            'Result object is outside native image RAM.')
+    require(any(p['p_type'] == 'PT_LOAD' and p['p_flags'] & 2 and p['p_vaddr'] <= address and
+                address + size <= p['p_vaddr'] + p['p_memsz'] for p in info['elf'].iter_segments()),
+            'Result object has no writable load segment.')
+    return {'address': address, 'bytes': size}
 
 
 def decode_result(raw, epoch, generation, output_limit=None):
@@ -218,7 +231,7 @@ def backup_regions(image, uploads=()):
     info = image_manifest(image)
     spans = [(r['address'], r['address'] + r['bytes']) for r in
              regions(info['manifest'], (manifest_tool.KIND['work'], manifest_tool.KIND['output']))]
-    spans.extend((r['address'], r['address'] + r['bytes']) for r in uploads)
+    spans.extend((r['address'], r['address'] + r['bytes']) for r in uploads if r['bytes'])
     merged = []
     for low, high in sorted(spans):
         require(0 <= low < high <= 1 << 64, 'Invalid backup region.')

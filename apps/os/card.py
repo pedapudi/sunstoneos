@@ -44,16 +44,22 @@ def flat_runtime(image):
     from elftools.elf.elffile import ELFFile
     raw = Path(image).read_bytes() if isinstance(image, (str, Path)) else bytes(image)
     elf = ELFFile(io.BytesIO(raw))
-    segments = [p for p in elf.iter_segments() if p['p_type'] == 'PT_LOAD' and p['p_filesz']]
-    require(segments and all(0x41000000 <= p['p_vaddr'] and p['p_vaddr'] + p['p_memsz'] <= 0x41f00000
-                            for p in segments), 'Runtime overlaps reserved memory.')
+    loads = [p for p in elf.iter_segments() if p['p_type'] == 'PT_LOAD']
+    require(loads and all(0x41000000 <= p['p_vaddr'] and p['p_vaddr'] + p['p_memsz'] <= 0x41f00000 and
+                         p['p_filesz'] <= p['p_memsz']
+                            for p in loads), 'Runtime overlaps reserved memory.')
+    occupied = []
+    for p in loads:
+        low, high = int(p['p_vaddr']), int(p['p_vaddr'] + p['p_memsz'])
+        require(all(high <= start or end <= low for start, end in occupied), 'Overlapping load memory.')
+        if high > low:
+            occupied.append((low, high))
+    segments = [p for p in loads if p['p_filesz']]
+    require(segments, 'Runtime has no initialized load segment.')
     end = max(int(p['p_vaddr'] + p['p_filesz']) for p in segments)
     result = bytearray(end - 0x41000000)
-    occupied = []
     for p in segments:
         address, data = int(p['p_vaddr']), p.data()
-        require(all(address + len(data) <= low or high <= address for low, high in occupied), 'Overlapping load segments.')
-        occupied.append((address, address + len(data)))
         offset = address - 0x41000000
         result[offset:offset + len(data)] = data
     return bytes(result)
