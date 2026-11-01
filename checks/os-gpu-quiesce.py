@@ -50,7 +50,7 @@ for case in a.case or CASES:
     board=image.address('board');session=field(board,'board_application','session')
     task=get(field(image.address('ss_application'),'ss_application','task'),8);assert task
     sf(board,'board_application','live_until',60000000,8);sf(session,'a733_board_session','deadline_us',60000000,8)
-    state={'time':100,'operation':None,'ticket':0,'requests':[],'waits':0,'creates':0,'delays':0}
+    state={'time':100,'operation':None,'ticket':0,'requests':[],'deadlines':[],'waits':0,'creates':0,'delays':0}
     if case!='unconstructed':
         put(image.address('os_gpu_client_task','/apps/os/gpu.c'),task,8)
         sf(gpu,'gpu_private','started',1);sf(gpu,'gpu_private','component',q,8)
@@ -130,6 +130,7 @@ for case in a.case or CASES:
             sf(q,'pvr_compute_queue','recovering',0);sf(service,'pvr_gpu_service','published_epoch',4,8);ret()
         elif name=='pvr_gpu_service_send_epoch':
             op=get(field(args[2],'pvr_gpu_service_request','operation'));state['operation']=op
+            state['deadlines'].append(state['time']+get(field(args[2],'pvr_gpu_service_request','timeout_us'),8))
             state['requests'].append(op);state['ticket']+=1;put(args[4],state['ticket'],8);ret(1)
         elif name=='pvr_gpu_service_collect':
             state['time']+=1000
@@ -150,6 +151,7 @@ for case in a.case or CASES:
         assert get(field(peer,'pvr_compute_queue_client','client_owed'))==1
     elif case=='thermal-late-peer':
         assert result==0 and state['delays']==1 and state['requests']==[enums['PVR_GPU_SERVICE_CLOSE']]*2
+        assert state['deadlines'][0]==state['deadlines'][1]
         assert not get(field(gpu,'gpu_private','failed')) and get(field(gpu,'gpu_private','parked'))==1
     else:assert bool(result)==success,(case,result,state)
     if case in ('unconstructed','cold','refused-create','manual-closed'):assert not state['requests'],(case,state)
