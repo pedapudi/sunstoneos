@@ -52,7 +52,7 @@ def main():
     cases = []
     for name, seconds, key, accepted in (
             ('actual', policy['capture_seconds'], policy['result_key'], True),
-            ('overlong', 180 if policy['result_key'] == 'mimus_result' else 60,
+            ('overlong', 180 if policy['result_key'] == 'application_result' else 60,
              policy['result_key'], False),
             ('unknown', policy['capture_seconds'], 'unknown_result', False)):
         if args.case and name not in args.case:
