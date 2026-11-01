@@ -308,7 +308,7 @@ static int inherited_on(void)
     b=boot(200,1,0);
     assert(b.result==A733_NPU_PLATFORM_RETAINED && r.writes && r.held && r.retained &&
         tokens_held() && !d.ppu_writes);
-    puts("\"unsafe_local_refusals\":6,\"incoherent_refusals\":2,\"postwrite_retention\":true,\"domain_off_supported\":true}");
+    puts("\"unsafe_local_refusals\":6,\"incoherent_refusals\":2,\"postwrite_retention\":true,\"domain_off_supported\":false}");
     puts("PASS inherited NPU domain ownership, local-state refusal, retention and release policy");
     return 0;
 }
