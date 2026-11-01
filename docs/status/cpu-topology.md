@@ -3,10 +3,11 @@
 **Status: blocked.**
 
 **Board-qualified scope:** No topology or capacity image has board evidence.
-Port 3-3 is paused after queue entry `1793572859635159128-187e5901` from
-another worker fails its return window. Coordinator recovery and queue resume
-are required before capacity measurement. All per-core throughput, capacity
-ratios, repetition spread and parallel split comparisons remain unmeasured.
+Capacity entry `1793573680220457265-8ce967d9` awaits execution on port 3-3.
+The port is paused because another worker repeats an image and hypothesis.
+Coordinator queue resume is required before capacity measurement. All per-core
+throughput, capacity ratios, repetition spread and parallel split comparisons
+remain unmeasured.
 
 ## Application queries link with topology enabled and disabled
 
@@ -47,18 +48,33 @@ Evidence paths are relative to
 - `review-evidence/review.md`: independent review approves the wiring and
   capacity configuration correction. Its separate sanitizer checks and native
   links pass. `refuse-capacity-no-clock.log` records the configuration refusal.
+- `review-evidence/optional-console/`: independent review and four host cases
+  approve optional console output on C++ allocation failure. The fatal exit
+  remains mandatory. This permits the capacity image's formatted clock report
+  to link without a console. `runtime-model/cxx.log` and `runtime-smp.json`
+  record successful C++ and SMP runtime execution in QEMU.
+- `gate-sched-topology-full-1101/summary.txt`: the full integration gate passes
+  on `8f940cb8`, including every OS variant, the pinned mimus baseline, kernel
+  and eight-core soak checks, the check index and indexed host checks.
+  The optional-console correction has separate focused runtime evidence.
 
 The fixed-work probe contains three warm-ups and seven measured repetitions
 per kernel and core. These host checks establish arithmetic and record layout;
 they supply no measured board capacity or energy cost.
 
-## Physical calibration waits for coordinator recovery
+## Physical calibration waits for the paused queue
 
-The runner pause and blocking result are copied into `blocked-board/`.
-No capacity image is frozen or submitted while the port is paused. The next
-run uses the existing CPU-return path on port 3-3. The runner first normalizes
-DCDC3 and DCDC5 to 800 mV. The approved workload points are CPU-L 1794 MHz at
-1000 mV, CPU-B 2002 MHz at 1050 mV and DSU 1274 MHz.
+The current runner pause is copied into `blocked-board/paused-3-3.json`.
+The capacity image is queued through the CPU-return path on port 3-3, with
+source bytes committed as `1806a2db`. Its SHA-256 is
+`35503e1201ed57c00a9e0bfda258d31e525e16136b31ee8138c32f3507e09622`.
+The whole-output expectation covers the 10,976-byte result. Unknown discovery
+registers and durations have ranges; the host decoder validates identity,
+geometry, arithmetic and clock epochs. The image record is `capacity-image.md`.
+
+The runner first normalizes DCDC3 and DCDC5 to 800 mV. The approved workload
+points are CPU-L 1794 MHz at 1000 mV, CPU-B 2002 MHz at 1050 mV and
+DSU 1274 MHz. No submitted image runs at another operating point.
 
 The image must return with per-core identity, cache geometry, LSE instruction
 support and integer/NEON timing samples. A stable clock epoch and complete
