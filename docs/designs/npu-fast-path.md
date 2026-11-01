@@ -91,56 +91,133 @@ still make one CPU interrupt per command.
 
 ## Power and measurement require separate physical evidence
 
-Approved measurements retain 852 MHz at 800 mV while jobs are queued.
-Physical domain OFF remains unsupported: ROM recovery shares NPU SRAM, and
-DCDC2 also supplies system and DRAM logic. See [the power boundary](../npu.md#the-supported-npu-power-boundary-preserves-shared-sram).
+**Proposal only:** internal clock suspension is unimplemented and physically
+unqualified. The control keeps the NPU at 852 MHz and 800 mV while its
+lifetime is open. A power change requires review for simplicity, hardware
+performance and correctness before coding; the same three reviewers inspect
+the implementation. This proposal authorizes no transition run.
 
-The proposed idle policy suspends only the vendor's internal NPU clocks.
-A one-shot idle timer becomes eligible at the later of full-idle plus 10 ms
-and resume plus 1 ms. Completed records awaiting release do not delay gating.
-Submission cancels an unexecuted idle request. A suspended engine resumes on
-the lifecycle path before accepting work; the 1 ms minimum never delays a job.
+### The domain and rail remain owned during internal clock suspension
 
-The gate-only transition preserves the top-point scaler fields. This differs
-from the vendor's enclosing `power_clock_state_in/out` routines, which also
-change scaling at `vip_drv_pm.c:445–448,461–464`. Resume must complete the
-vendor's 1 µs settle and top-point verification within a 100 µs deadline.
-The first resumed job may add at most 100 µs to p99 and maximum latency.
-The design requires simplicity, performance and correctness approval before
-implementation. The direct queue owner performs transitions while it holds the
-acknowledged worker handoff. A one-shot timer only notifies that owner, carrying
-an idle generation so stale timer delivery cannot gate new work. The timer
-requires an interrupt deadline facility; tick polling cannot provide it.
+“PCK4” means domain 4 of the PCK-600 controller, whose register row begins at
+`0x07064000`. It is an internal SoC power switch. The pinned vendor binding
+`include/dt-bindings/power/sun60iw2-power.h:5–15` identifies domain 4 as NPU,
+domain 5 as GPU_TOP and domain 8 as USB2. These identities do not establish
+that all storage inside the NPU domain belongs exclusively to an NPU job.
+The A733 User Manual V1.00 §2 places shared SRAM at `0x74000–0xf3fff` and
+requires the NPU to remain powered when that SRAM is used. ROM uses this
+SRAM for its stack and FEL scratch. Domain-4 OFF therefore remains unsupported.
+[The power boundary](../npu.md#the-supported-npu-power-boundary-preserves-shared-sram)
+records the failed domain-OFF run and the unresolved reset behavior.
+
+The external DCDC2 regulator is a separate resource. The Orange Pi V1.2
+schematic, sheets 2, 6 and 8, connects it to NPU VDD, VDD-SYS, SoC-side
+VDD-DRAM, VDD-VE, VDD08-UFS, VDD-COMB0/1 and VDD08-HDMI. The schematic is
+pinned as `board-schematic` in `sources.lock.json`, SHA-256
+`4e0e92afbb1cca97a9c8593b8f2679178d9738f242ea431ed3650e893fe28ed0`.
+The vendor board tree marks DCDC2 boot-on and always-on and binds
+`npu-supply` to it (`sun60i-a733-orangepi-zero3w.dts:2123–2131,2931–2933`).
+A sole software rail token cannot make this physically shared supply exclusive.
+
+The proposed transition retains the existing shared DCDC2 token, domain-4 ON
+ownership, exclusive PLL_NPU and NPU clock tokens, shared parent/fabric leases,
+PCK clock lease, mappings and buffers. It preserves the SRAM route and all
+CCU gates, resets, PLL settings, voltage and PCK policies. The only proposed
+writes are inside the NPU register window at `0x03600000`. Vendor source
+supports internal clock suspension but does not prove ROM access to shared
+SRAM during that suspension. Recovery from a fault while suspended remains
+an evidence gap even after a successful normal resume.
+
+### A one-shot timer requests gating after sustained idle
+
+The candidate policy makes suspension eligible at the later of full-idle plus
+10 ms and successful resume plus 1 ms. These are initial hysteresis settings,
+not measured energy break-even points. Completed records awaiting release do
+not delay gating. Submission cancels an unexecuted idle request and resumes a
+suspended engine before accepting work. The minimum on-time never delays a job.
+
+The direct queue owner performs transitions while holding the acknowledged
+worker handoff. A one-shot timer only notifies that owner and carries an idle
+generation; stale delivery cannot gate later work. The timer needs an interrupt
+deadline facility. The owner serializes timer handling, submission and interrupt
+completion through the existing device lock. It verifies queue emptiness,
+full idle (`+0x004 = 0x7fffffff`) and completion-event retirement before the
+first suspend write. The event word at `+0x010` is destructive on read, so
+an independent timer callback must never consume it outside the completion path.
 
 The transition states are RUNNING, IDLE_ON, SUSPENDING, SUSPENDED, RESUMING and
-RETAINED. Admission accepts jobs only in RUNNING or IDLE_ON. Before its first
-suspend write, the owner rechecks queue emptiness, full-idle proof and absent
-pending events under the device lock. Arrival before that write cancels the
-idle request. Arrival afterward receives backpressure until resume completes.
+RETAINED. Admission accepts jobs only in RUNNING or IDLE_ON. Arrival before
+the first suspend write cancels the idle request. Arrival afterward receives
+backpressure until resume completes. A partial write, unexpected readback or
+expired transition deadline enters RETAINED, preserving resources without an
+automatic retry. A suspended queue must resume successfully before CLOSE.
 
-Suspend preserves unrelated fields at register `+0x000`, sets bit 0 and pulses
-bit 9 high then low. Resume clears bit 0, pulses bit 9 high then low, waits the
-vendor's minimum 1 µs, and pulses bit 0 at `+0x10c` high then low.
-Every dependent write completes with DSB. Both transitions wait the vendor's
-settle interval before readback; register fields, full scale, full idle and
-absent events must agree before readiness is published. A partial failure or
-expired 100 µs bound enters RETAINED without releasing resources or retrying.
-A suspended queue must resume successfully before the existing CLOSE path.
-Successful transitions alone do not qualify watchdog recovery during NPU SRAM
-ownership.
+### The internal gate preserves the top operating point
 
-A proposed 3-3 transition run alternates 100 busy/idle cycles using the vendor
-suspend/resume sequence at `vip_drv_pm.c:157–209`. It retains domain power and
-the approved operating point. Record every completion, resume delay, p50/p99/max
-job latency, throughput, CPU time and idle power before and after. Require no
-numerical mismatch, no retained fault, normal retirement and restored DRAM.
-Compare 9, 11 and 100 ms idle gaps. Continuously queued throughput must remain
-at least 98% of control; p99, maximum and CPU/job must stay within 105%, 110%
-and 105% of control respectively. Reject unexplained regressions within those
-limits too. Idle savings must exceed the meter's uncertainty at 95% confidence, and total cycle
-energy must not increase beyond measurement uncertainty. Record the break-even
-idle duration, including transition energy. This power-state run needs
-coordinator approval before submission.
+The sequence comes from `vip_drv_pm.c:142–220` in the pinned VIPLite 2 source
+identified above, SHA-256
+`f92cc17a7bf5b9fa40a2991dbf9e511eb4b0cddcf09829f2b047bfe4cf141d35`.
+Its silicon branch uses a 1 µs delay; `inc/vip_lite_config.h:161–163,470–475`
+selects silicon and enables internal clock suspension by default. The enclosing
+`power_clock_state_in/out` routines also change frequency scaling
+(`vip_drv_pm.c:438–465`). The proposal uses only their gate helpers and preserves
+the full-scale fields established at OPEN.
+
+| Phase | Proposed ordered operations |
+| --- | --- |
+| Suspend | Read `+0x000`; preserve unrelated fields and scaler bits 8:2. Set bit 0, write with bit 9 high, then write with bit 9 low. Wait at least 1 µs. |
+| Resume | Read `+0x000`; preserve unrelated fields and scaler bits 8:2. Clear bit 0, write with bit 9 high, then write with bit 9 low. Wait at least 1 µs. Read `+0x10c`, preserve scaler bits 7:1, then pulse bit 0 high and low. |
+| Publish readiness | Verify gate/load bits, both full-scale fields, unchanged top-point clock configuration, full idle and no unretired completion. Publish IDLE_ON only after these checks pass. |
+
+Dependent writes complete with DSB in the native adapter. The vendor helpers
+do not verify gated readback or bound failures. The implementation must establish
+which control registers remain readable while suspended before requiring their
+readback. It must preserve the full-idle proof from before suspension and
+recheck full idle after resume. A readback failure retains ownership; it cannot
+justify another power operation.
+
+The expected gate-only resume cost is the mandated 1 µs settle plus MMIO,
+barriers, verification and owner scheduling. That expression is a source-based
+lower bound, not a measured latency or upper bound. The candidate budget is
+100 µs from resume request to readiness, with at most 100 µs added to the
+first resumed job's p99 and maximum latency. Neither budget has physical evidence.
+The 100 µs target includes owner scheduling; an implementation that wakes only
+on a 1 ms tick cannot satisfy it.
+
+Full startup has different costs: the vendor platform waits 2 ms after its
+power/clock hook (`vip_drv_device_platform.c:1385–1387`), and the board tree
+specifies a 1,000 µs regulator-enable ramp. These values cannot support a
+100 µs rail/domain power-up claim. The proposed gate retains the settled rail,
+ON domain and locked PLL, so it must avoid the full startup path. The host model
+reports 4,615 µs for native startup with domain 4 already ON
+([startup measurements](npu-board-measurements.md#startup-latency-change-by-change)).
+That model establishes neither physical startup time nor gate-only resume latency.
+
+### A proposed run measures latency and energy against the always-on control
+
+Before a transition run, complete the three-person design and code review,
+exercise cancellation and partial failures in host checks, and establish the
+readback policy. The coordinator must approve a frozen run separately. Its
+prediction is that internal gating preserves job output and recovery resources
+while reducing energy in idle gaps longer than the measured break-even duration.
+
+The candidate port 3-3 run changes only internal gate policy from the always-on
+852 MHz, 800 mV control. Alternate 100 busy/idle cycles and compare 9, 11 and
+100 ms idle gaps; the 9 ms case must never gate. Record each transition and
+completion, request-to-ready resume delay, first-job delay, p50/p99/maximum job
+latency, throughput, CPU time, idle power and cycle energy. Bind logs to the
+image hash, Git revision and queue entry. Require no numerical mismatch,
+retained fault or cleanup failure, with normal retirement and restored DRAM.
+
+Continuously queued throughput must remain at least 98% of control. P99,
+maximum latency and CPU time per job must remain within 105%, 110% and 105%
+of control respectively, as well as meeting the absolute resume budgets.
+Unexplained regressions block acceptance even within those limits. Idle savings
+must exceed meter uncertainty at 95% confidence, and total cycle energy must
+not increase beyond measurement uncertainty. Measure transition energy and the
+break-even idle duration before retaining or changing the 10 ms threshold.
+No available measurement establishes savings, resume latency, safe shared-SRAM
+access while gated, or watchdog recovery from a suspended-state fault.
 
 The performance comparison needs a control and a queue variant with identical
 model bytes and inputs, at least 1,000 jobs each, and a prepared dependent
