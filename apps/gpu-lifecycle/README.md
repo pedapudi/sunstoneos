@@ -25,6 +25,10 @@ This test requires the qualification-only
 recovery from a GPU that never becomes idle; uncertain idle state retains the
 resources and fails the run.
 
+A parked owner submission waits up to 500 scheduler ticks, yielding one tick
+between attempts while the session remains live. The same bound applies after
+reopen and recovery. Other submission results stop the diagnostic.
+
 The primary application uses input bytes 0–519 and output bytes 0–259. The
 peer uses ranges beginning at byte 1,024. The manifest grants one worker for
 the peer task, a 20-second application budget and five seconds for return.

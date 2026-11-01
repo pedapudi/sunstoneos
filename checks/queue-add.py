@@ -16,6 +16,8 @@ a.build.mkdir(parents=True, exist_ok=True)
 generated = a.build / 'generated'
 subprocess.run([sys.executable, str(ROOT/'tools/sunstone-manifest.py'), 'emit',
                 '--manifest', str(ROOT/'apps/queue-add/manifest.json'), '--output', str(generated)], check=True)
+(generated/'FreeRTOS.h').write_text('#include <stdint.h>\ntypedef uint64_t TickType_t;\n')
+(generated/'task.h').write_text('TickType_t xTaskGetTickCount(void);\nvoid vTaskDelay(TickType_t);\n')
 fixture = r'''
 #include "queue_add-app.h"
 #include "gpu_queue.h"
@@ -27,7 +29,8 @@ static jmp_buf done;
 #ifndef QUEUE_ADD_JOBS
 #define QUEUE_ADD_JOBS 1u
 #endif
-static unsigned mode, fail_at, creates, submits, waits, closes, terminal, progress;
+static unsigned mode, fail_at, creates, submits, waits, closes, terminal, progress, attempts, delays;
+static uint64_t ticks;
 static uint32_t input[130], output[67];
 int gpu_queue_context_create(const struct gpu_queue_context_config *c, uint32_t ticks,
                             struct gpu_queue_context *ctx, struct gpu_queue_lease_info *info)
@@ -47,7 +50,8 @@ int gpu_queue_context_create(const struct gpu_queue_context_config *c, uint32_t 
 }
 int gpu_queue_submit(struct gpu_queue_context ctx, const struct gpu_queue_job *j)
 {
-    ++submits;
+    ++attempts;
+    if(submits == waits) ++submits;
     assert(ctx.generation == 19 && j->sequence == submits && j->bindings == 2 && j->argument_bytes == 4);
     assert(creates == 1 && !closes && waits + 1 == submits && submits <= QUEUE_ADD_JOBS);
     assert(j->groups[0] == 3 && j->groups[1] == 1 && j->groups[2] == 1);
@@ -56,6 +60,11 @@ int gpu_queue_submit(struct gpu_queue_context ctx, const struct gpu_queue_job *j
     assert(j->binding[0].sync_bytes == 260 && j->binding[1].sync_bytes == 520);
     for(unsigned i=0;i<2;++i) assert(!j->binding[i].address && !j->binding[i].sync_offset && !j->binding[i].reserved);
     assert(j->arguments[0] == 65 && !j->arguments[1] && !j->arguments[2] && !j->arguments[3]);
+    if(submits == fail_at) {
+        if(mode == 4 || mode == 16 || mode == 17 || ((mode == 15 || mode == 18) && delays < 3))
+            return GPU_QUEUE_PARKED;
+        if(mode == 18) return GPU_QUEUE_REFUSED;
+    }
     for(unsigned i=0;i<65;++i) {
         unsigned at=(i+j->sequence-1)%65;
         assert(input[i] == UINT32_MAX-3u*at && input[65+i] == 7u*at+9u);
@@ -86,6 +95,9 @@ int gpu_queue_close(struct gpu_queue_context ctx, uint32_t ticks)
     assert(submits == QUEUE_ADD_JOBS && waits == QUEUE_ADD_JOBS);
     return mode == 7 ? GPU_QUEUE_FAULT : GPU_QUEUE_OK;
 }
+uint64_t xTaskGetTickCount(void) { return ticks; }
+void vTaskDelay(uint64_t n) { assert(n == 1);ticks += n;++delays; }
+int ss_live(void) { return mode == 16 && delays == 2 ? -1 : 1; }
 void ss_progress(void) { ++progress; }
 _Noreturn void ss_fail(uint32_t detail) { terminal=detail;longjmp(done,1); }
 _Noreturn void ss_finish(const void *data, size_t bytes)
@@ -105,20 +117,24 @@ int main(int argc, char **argv)
     g.regions[QUEUE_ADD_REGION_OUTPUT]=(struct ss_span){output,260};
     output[65]=0x12345678;output[66]=0x87654321;
     if(mode == 1) g.devices=0;
+    if(mode == 17) ticks=UINT64_MAX-100;
     if(!setjmp(done)) queue_add_main(&g);
     unsigned expected=mode <= 7 ? mode : mode == 10 ? 6 : 5;
-    if(mode == 4) expected=0x400u | (fail_at << 4) | GPU_QUEUE_PARKED;
-    if(mode >= 11) {
+    if(mode == 4 || mode == 16 || mode == 17) expected=0x400u | (fail_at << 4) | GPU_QUEUE_PARKED;
+    if(mode >= 11 && mode <= 14) {
         unsigned result=mode == 11 ? GPU_QUEUE_BUSY : mode == 12 ? GPU_QUEUE_REFUSED :
                         mode == 13 ? GPU_QUEUE_FAULT : GPU_QUEUE_TIMEOUT;
         expected=0x400u | (fail_at << 4) | result;
     }
-    unsigned expected_submits=mode == 0 || mode == 7 ? QUEUE_ADD_JOBS : mode >= 4 ? fail_at : 0;
-    unsigned expected_waits=mode == 4 || mode >= 11 ? fail_at-1 : expected_submits;
+    if(mode == 15) expected=0;
+    if(mode == 18) expected=0x400u | (fail_at << 4) | GPU_QUEUE_REFUSED;
+    unsigned expected_submits=mode == 0 || mode == 7 || mode == 15 ? QUEUE_ADD_JOBS : mode >= 4 ? fail_at : 0;
+    unsigned expected_waits=mode == 4 || (mode >= 11 && mode != 15) ? fail_at-1 : expected_submits;
     assert(terminal == expected && creates == (mode != 1));
     assert(submits == expected_submits && waits == expected_waits);
-    assert(closes == (mode == 0 || mode == 7));
-    assert(progress == submits);
+    assert(closes == (mode == 0 || mode == 7 || mode == 15));
+    assert(progress == submits + delays && attempts == submits + delays);
+    assert(delays == (mode == 4 || mode == 17 ? 500 : mode == 16 ? 2 : mode == 15 || mode == 18 ? 3 : 0));
     assert(output[65] == 0x12345678 && output[66] == 0x87654321);
     return 0;
 }
@@ -129,13 +145,14 @@ cases=[]
 case_names=['success-with-partial-workgroup-and-unsigned-wrap','missing-device','create-refused',
             'lease-address-mismatch','submit-parked','wait-timeout','wrong-output','close-fault',
             'wrong-completion-sequence','fault-completion','stale-output',
-            'submit-busy','submit-refused','submit-fault','submit-timeout']
+            'submit-busy','submit-refused','submit-fault','submit-timeout',
+            'parked-then-ready','parked-session-ended','parked-tick-wrap-deadline','parked-then-refused']
 for jobs,definitions in [(1,[]),(8,['-DQUEUE_ADD_JOBS=8'])]:
     binary=a.build/('queue-add-'+str(jobs))
     subprocess.run([a.cc,*flags,*definitions,'-fsanitize=address,undefined','-fno-sanitize-recover=all',
                     str(a.build/'fixture.c'),str(ROOT/'apps/queue-add/main.c'),'-o',str(binary)],check=True)
-    injected=[(mode,1) for mode in range(15)]
-    if jobs == 8:injected += [(mode,8) for mode in (4,5,6,8,9,10,11,12,13,14)]
+    injected=[(mode,1) for mode in range(19)]
+    if jobs == 8:injected += [(mode,8) for mode in (4,5,6,8,9,10,11,12,13,14,15,16,17,18)]
     for mode,fail_at in injected:
         subprocess.run([str(binary),str(mode),str(fail_at)],check=True,
                        env={**os.environ,'ASAN_OPTIONS':'detect_leaks=0'})
