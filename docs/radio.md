@@ -221,44 +221,26 @@ command and clock/framing settings. Wideband voice also requires codec
 negotiation and an appropriate mSBC path. LE Audio is a separate feature set;
 the board's advertised Bluetooth version does not establish its support.
 
-## First implementation should stop at confirmed radio identity
+## Physical qualification starts with admitted radio identity
 
-Implement a bounded SDIO transport and D80 identity worker before importing a
-network stack. Use one radio owner for the shared enable/reset lines, SDIO
-bootstrap, and Wi-Fi/Bluetooth power references. Expose status and a retained
-terminal error; do not automatically reset or re-upload after transport loss.
+The native SDIO controller, card worker, identity transport, firmware loader,
+Wi-Fi station/network path and Bluetooth profiles are implemented and
+software-tested. Their component documents hold the current API and test
+contracts. Physical radio identity and operation remain unqualified.
 
-1. Bind SDC1 clocks, reset, 1.8 V pins and power controls. Implement SDIO
-   enumeration with CMD5, CMD3 and CMD7, plus bounded reads of common/function
-   registers and card information tuples. Reject unexpected function counts or
-   identities before chip-specific operations.
-2. Add CMD52 register operations and CMD53 fixed-address FIFO transfers, with
-   explicit byte/block lengths, bounded buffers, interrupt handling, and
-   monotonic timeouts. Select the D80 register map only after its SDIO ID matches.
-3. Implement the command header/CRC, memory-read request, and confirmation
-   decoder. Include the reference's required setup writes in a separate,
-   reviewable identity sequence. Retain the observed revision and H flag;
-   stop without loading images.
-4. Check one scripted identity exchange, one malformed/incorrect confirmation,
-   and one transport timeout with retained state on the host. Run a single
-   coordinator-owned board identity check after watchdog recovery and SDC1
-   bindings are qualified. Reuse those checks until relevant behavior changes.
+The [native identity application](../apps/radio-sdio-id/README.md) connects
+shared providers, the controller/card and transport. Its fixed bootstrap write
+and address-correlated CMD53 replies precede firmware loading. The
+[return design](../apps/radio-sdio-id/RETURNING.md) requires fitted-supply and
+PM2 evidence and a reviewed lifetime; reusable shutdown remains unqualified.
+The [SDIO reference audit](radio-sdio-reference.md) identifies the vendor's
+208 MHz target, nominal 200 MHz rounding and missing native UHS sequence.
 
-The following implementation can then consume matched, hashed firmware from
-immutable byte ranges; no runtime filesystem is required. It must validate all
-patch-table writes and image bounds before publication, retain transfer state,
-and confirm each command. Firmware startup should precede passive capability
-queries, scan/connect/authentication, TCP/IP, Bluetooth discovery/pairing, and
-headset audio. Power management, coexistence, and all supported radio modes
-remain hardware-support work even when mimus uses another input source.
-
-The [native SDIO identity application](../apps/radio-sdio-id/README.md) already
-connects the controller, card, radio platform and shared providers. It retains
-resources on success and failure; reusable shutdown is unqualified. Its
-[return design](../apps/radio-sdio-id/RETURNING.md) records the fitted-supply and
-PM2 reset/LPO uncertainties and missing disposal proof. Independent watchdog
-qualification is not a prerequisite for unrelated work. Radio performance
-measurements remain deferred until functional hardware integration.
+After electrical and returning-image admission, compare one-bit and four-bit
+identity before firmware/HCI identity, scan, association, traffic, reconnect
+and coexistence. Power management and all supported radio modes remain board
+support requirements. Headset interoperability requires the absent headset.
+Radio performance measurements follow functional hardware qualification.
 
 ## Source and artifact identities
 

@@ -1981,7 +1981,13 @@ to the stated scope:
   physical qualification remain outstanding.
 
 - Radio: **implemented** a [returning SDIO diagnostic](../apps/radio-sdio-id/README.md)
-  that composes the actual shared providers, card and transport constructors.
+  and host-tested deadline checks for public record consumption. The full
+  sanitizer transport model, native dispatcher traffic/deadline cases and
+  OS/radio/headset build pass under `~/.cache/sunstoneos/build/radio-1031/`.
+  The [vendor-rate audit](radio-sdio-reference.md) establishes the selected
+  208 MHz request and nominal 200 MHz parent rounding; native UHS timing/tuning
+  remains missing. Its guarded read list is prepared, with no board execution.
+  The diagnostic composes the actual shared providers, card and transport constructors.
   The native build, twelve modeled application cases, constructor composition
   and nine producer refusals pass under `radio-native-20261025/`. Fitted supply
   topology and complete PM output-latch/PM2 authority remain unresolved; missing
