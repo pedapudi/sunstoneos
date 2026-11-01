@@ -3,8 +3,10 @@
 import argparse
 import copy
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 sys.dont_write_bytecode = True
@@ -22,12 +24,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--artifacts', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--configure', action='store_true', help='configure the NPU board image using a copy of the supplied map')
+    parser.add_argument('--configure-script', type=Path,
+                        default=Path.home() / '.cache/sunstoneos/bin/cfg.sh')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     catalogue = module('catalogue', 'tools/npu-session-catalogue.py')
     embed = module('embed', 'apps/os/npu-catalogue.py')
     sessions = module('sessions', 'checks/npu-session.py')
-    old = json.loads(args.artifacts.read_text())
+    board = module('board', 'apps/npu-board/catalogue.py')
+    original = args.artifacts.read_bytes()
+    copied_map = args.output / 'historical-map.json'
+    copied_map.write_bytes(original)
+    old = json.loads(original)
     # Application example: this historical key identifies the pinned linear layer.
     legacy = 'mimus-linear-q'
     name = 'linear-i16-per-row'
@@ -42,7 +51,10 @@ def main():
     embed.generate(args.artifacts, args.output / 'old.c', 4)
     embed.generate(new_path, args.output / 'new.c', 4)
     assert (args.output / 'old.c').read_bytes() == (args.output / 'new.c').read_bytes()
-    for label, path in [('old', args.artifacts), ('new', new_path)]:
+    board.generate(copied_map, args.output / 'old-board.c')
+    board.generate(new_path, args.output / 'new-board.c')
+    assert (args.output / 'old-board.c').read_bytes() == (args.output / 'new-board.c').read_bytes()
+    for label, path in [('old', copied_map), ('new', new_path)]:
         directory = args.output / label
         directory.mkdir()
         sessions.fixtures(path, sessions.SESSION_NAMES['reserved'], directory)
@@ -68,11 +80,14 @@ def main():
             path.write_text(json.dumps(paths))
             directory = args.output / stem
             directory.mkdir()
-            for consumer, call in [('embed', lambda: embed.generate(path, directory / 'bad.c', 4)),
-                                   ('session', lambda: sessions.fixtures(path, [name], directory))]:
+            consumers = [('embed', lambda: embed.generate(path, directory / 'bad.c', 4)),
+                         ('session', lambda: sessions.fixtures(path, [name], directory))]
+            if section == 'model':
+                consumers.append(('board', lambda: board.generate(path, directory / 'bad-board.c')))
+            for consumer, call in consumers:
                 try:
                     call()
-                except (ValueError, AssertionError) as error:
+                except (ValueError, AssertionError, SystemExit) as error:
                     assert 'artifact differs' in str(error) or 'does not match the catalogue' in str(error)
                     refused.append(stem + '-' + consumer)
                 else:
@@ -83,8 +98,23 @@ def main():
         pass
     else:
         raise AssertionError('unknown model accepted')
-    (args.output / 'result.json').write_text(json.dumps(dict(result='pass', refused=refused), indent=1) + '\n')
-    print('PASS NPU artifact map compatibility: identical old/new output; changed model, input and reference refused by both consumers')
+    command = None
+    if args.configure:
+        build = args.output / 'npu-board-build'
+        command = [str(args.configure_script), str(ROOT), str(build), '-DMIMUS_DIR=',
+                   '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=',
+                   '-DSUNSTONE_A733_NPU_BOARD=ON',
+                   '-DSUNSTONE_NPU_BOARD_CATALOGUE=' + str(copied_map.resolve())]
+        with (args.output / 'configure.log').open('w') as log:
+            subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
+        assert (build / 'npu-board-application/models.c').read_bytes() == (args.output / 'old-board.c').read_bytes()
+    assert args.artifacts.read_bytes() == original, 'source artifact map changed'
+    result = dict(result='pass', refused=refused, configure_command=command,
+                  artifacts_sha256=hashlib.sha256(original).hexdigest())
+    (args.output / 'result.json').write_text(json.dumps(result, indent=1) + '\n')
+    print('PASS NPU artifact map compatibility: identical old/new output; changed artifacts refused')
+    if args.configure:
+        print('PASS NPU board configure: copied cached map; source map unchanged')
 
 
 if __name__ == '__main__':
