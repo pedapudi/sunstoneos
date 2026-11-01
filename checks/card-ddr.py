@@ -24,9 +24,12 @@ regs=[UC_ARM_REG_R4,UC_ARM_REG_R5,UC_ARM_REG_R6,UC_ARM_REG_R7,UC_ARM_REG_R8,UC_A
 def w(cpu,address,value):cpu.mem_write(address,struct.pack('<I',value))
 def r(cpu,address):return struct.unpack('<I',cpu.mem_read(address,4))[0]
 def ret(cpu,value=0):cpu.reg_write(UC_ARM_REG_R0,value);cpu.reg_write(UC_ARM_REG_PC,cpu.reg_read(UC_ARM_REG_LR))
+# DRAM pages of the shared quick check in boot/a733/ddr-restore.c: 31
+# address-line words and sixteen 4 KiB windows 192 MiB apart.
+DRAM_PAGES=sorted({(0x40000000+(1<<(n+1) if n else 0))&~0xfff for n in range(31)}|{0x40000000+w*0x0c000000 for w in range(16)})
 def fixture():
     cpu=Uc(UC_ARCH_ARM,UC_MODE_ARM)
-    for address,size in [(0x40000,0xc0000),(0x03006000,0x1000),(0x04020000,0x1000),(0x0a900000,0x200000),(0x41000000,0x1000),(0x42000000,0x1000)]:cpu.mem_map(address,size)
+    for address,size in [(0x40000,0xc0000),(0x03006000,0x1000),(0x04020000,0x1000),(0x0a900000,0x200000)]+[(page,0x1000) for page in DRAM_PAGES]:cpu.mem_map(address,size)
     cpu.mem_write(0x47000,blob);cpu.mem_write(0x831f8,original[0x574:0x5f4])
     cpu.mem_write(0x03006200,struct.pack('<4I',*parsed['chip_id']))
     for address,value in [(0x83c14,1),(0x83648,0x838f8),(0x838f8+0x20,0x83858),(0x838f8+0xa8,0x5b32d),(0x838f8+0x90,512),(0x838f8+0xe8,0xffff),(0x838f8+0xec,131072),(0x83858,0x04020000),(0x83858+0x14,0x04020200)]:w(cpu,address,value)

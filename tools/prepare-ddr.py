@@ -130,7 +130,11 @@ if args.variant == "restore":
     restore_manifest = {"set_sha256": training.RESTORE_SET_SHA256, "helper": 0x92000,
                         "helper_limit": 0x8000, "record": 0x87000, "record_limit": training.RECORD_LIMIT,
                         "stack": [0x9b000, 0x9f000], "hook": hook, "phy_registers": len(profile),
-                        "sample_bytes": 8192, "sample_read_bytes": 278528,
+                        # Quick check in boot/a733/ddr-restore.c: 31 address-line words
+                        # and sixteen 4 KiB windows 192 MiB apart below 4 GiB.
+                        "sample_bytes": 65616, "sample_read_bytes": 262392,
+                        "sample_windows": [0x40000000 + n*0x0c000000 for n in range(16)],
+                        "check_ticks_words": [25, 26], "counter_hz": 24000000,
                         "allocated_sections": allocated,
                         "profile_sha256": hashlib.sha256(generated.encode()).hexdigest(),
                         "errors": {"geometry": 1, "header_crc": 2, "payload_crc": 3, "chip": 4,

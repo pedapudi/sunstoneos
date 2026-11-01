@@ -32,6 +32,13 @@ phy = [(run['base']+2*i, value) for run in parsed['runs'][1:] for i,value in enu
 masks = {m['address']:m['mask'] for m in parsed['masks']}
 assert len(phy) == 1016 and len(parsed['runs'][0]['values']) == 40
 results = []
+# Quick check layout (boot/a733/ddr-restore.c): 31 address-line words and
+# sixteen 4 KiB windows. Only these DRAM pages exist in the fixture.
+LINES = [0x40000000 + (1 << (n+1) if n else 0) for n in range(31)]
+WINDOWS = [0x40000000 + w*0x0c000000 for w in range(16)]
+DRAM_PAGES = sorted({address & ~0xfff for address in LINES} | set(WINDOWS))
+SAMPLE = manifest['restore']['sample_read_bytes']
+assert SAMPLE == 31*4*2 + 16*4096*4
 
 def repair(data, payload=False):
     if payload: struct.pack_into('<I', data, 20, t.crc(data[128:]))
@@ -40,7 +47,8 @@ def repair(data, payload=False):
 cases = {'nominal':0, 'wrong-board':4, 'header-crc':2, 'payload-crc':3, 'strap':6,
          'boot0':5, 'geometry':1, 'run-overflow':1, 'unauthorized-address':1,
          'unauthorized-mask':1, 'mode-register-section':1, 'parameter-high-half':0,
-         'readback':7, 'final-readback':7, 'memory':9, 'size':8, 'missing-hook':10}
+         'readback':7, 'final-readback':7, 'memory':9, 'address-alias':9,
+         'window-bit':9, 'size':8, 'missing-hook':10}
 for case, error in cases.items():
     record = bytearray(original)
     if case=='wrong-board': record = bytearray(other)
@@ -56,7 +64,7 @@ for case, error in cases.items():
     if case=='parameter-high-half': record[138] ^= 0x80; repair(record,True)
     cpu = Uc(UC_ARCH_ARM,UC_MODE_ARM)
     cpu.mem_map(0x40000,0xc0000); cpu.mem_map(0x03006000,0x1000);cpu.mem_map(0x0a900000,0x200000)
-    cpu.mem_map(0x41000000,0x1000);cpu.mem_map(0x42000000,0x1000)
+    for page in DRAM_PAGES:cpu.mem_map(page,0x1000)
     fel = bytes(range(256))*48
     cpu.mem_write(0x47000,fel)
     for address,name in ((0x8e000,'boot0-head.bin'),(0x4a000,'boot0-body.bin'),(0x85000,'ddr-entry.bin'),(0x92000,'ddr-restore.bin')):
@@ -108,11 +116,21 @@ for case, error in cases.items():
     def memory(uc,access,address,size,value,data):
         if address>=0x40000000:
             assert not state['faulted'],('DRAM after fault',hex(address))
-            if access==17: state['dram_writes']+=size
+            if access==17:
+                state['dram_writes']+=size
+                # Address line 20 stuck low: DRAM + 2^20 also lands on DRAM.
+                if case=='address-alias' and address==LINES[19]:
+                    uc.mem_write(LINES[0],struct.pack('<I',value&0xffffffff));state['injections']+=1
             else:
                 state['dram_reads']+=size
                 if case=='memory' and not state['injections']:
                     uc.mem_write(address,b'\xff'*size);state['injections']+=1;state['faulted']=True
+                if case=='address-alias' and address==LINES[0] and state['injections']:state['faulted']=True
+                # Data bit 8 stuck low in the last window, read in the last pass.
+                if case=='window-bit' and address==WINDOWS[15]+4*0x20 and state['dram_reads']>SAMPLE-4096:
+                    current=struct.unpack('<I',uc.mem_read(address,4))[0]
+                    if current&0x100:
+                        uc.mem_write(address,struct.pack('<I',current&~0x100));state['injections']+=1;state['faulted']=True
         if access==17 and address in masks:
             assert size==2
             assert struct.unpack('<H',uc.mem_read(0x0aaa0000,2))[0]==0
@@ -140,8 +158,9 @@ for case, error in cases.items():
         for address,value in phy:
             actual=struct.unpack('<H',cpu.mem_read(address,2))[0]
             assert actual==((0x5a5a&~masks[address])|(value&masks[address]))
-        assert mailbox[8:11]==(1016,1,278528)
-        assert state['dram_reads']==state['dram_writes']==278528
+        assert mailbox[8:11]==(1016,1,SAMPLE)
+        assert state['dram_reads']==state['dram_writes']==SAMPLE
+        assert mailbox[25] or mailbox[26]
     elif error in (1,2,3,4,5,6):
         assert state['init']==0 and not state['phy_writes'] and not state['dram_reads'] and not state['dram_writes']
         assert bytes(cpu.mem_read(0x831f8,128))==selected
@@ -149,7 +168,17 @@ for case, error in cases.items():
         assert state['injections']==1 and len(state['phy_writes'])==1 and state['timing']==state['continuation']==0
         assert not state['dram_reads'] and not state['dram_writes']
     elif case in ('size','final-readback','missing-hook'):assert not state['dram_reads'] and not state['dram_writes']
-    elif case=='memory':assert state['injections']==1 and state['dram_reads']==4 and state['dram_writes']==4096
+    elif case=='memory':
+        assert state['injections']==1 and state['dram_reads']==4 and state['dram_writes']==31*4
+        assert mailbox[10:12]==(4,LINES[0])
+    elif case=='address-alias':
+        # The aliased base word is the first one read back.
+        assert state['injections']==1 and mailbox[10:13]==(4,LINES[0],0x01010101)
+        assert mailbox[13]==0x14141414 and state['dram_writes']==31*4
+    elif case=='window-bit':
+        assert state['injections']==1 and mailbox[11]==WINDOWS[15]+4*0x20
+        assert mailbox[12]^mailbox[13]==0x100 and mailbox[10]==SAMPLE-4096+4*0x21
+        assert state['dram_writes']==SAMPLE
     results.append({'case':case,'error':error,'instructions':state['instructions'],
                     'phy_writes':len(state['phy_writes']),'dram_read_bytes':state['dram_reads'],
                     'dram_write_bytes':state['dram_writes'],'injections':state['injections'],'pass':True})
