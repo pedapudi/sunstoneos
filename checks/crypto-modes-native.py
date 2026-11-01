@@ -4,11 +4,17 @@ import argparse,hashlib,json,pathlib,subprocess,sys
 from harness import environment
 p=argparse.ArgumentParser()
 for name in ('image','session','vectors','output'):p.add_argument('--'+name,type=pathlib.Path,required=True)
-p.add_argument('--only',action='append');a=p.parse_args();root=pathlib.Path(__file__).resolve().parents[1];a.output.mkdir(parents=True,exist_ok=False)
+p.add_argument('--only',action='append')
+p.add_argument('--host-request',type=pathlib.Path,help='Reviewed isolated producer for added hash selectors')
+a=p.parse_args();root=pathlib.Path(__file__).resolve().parents[1];a.output.mkdir(parents=True,exist_ok=False)
 # Keep the accepted emulator's exact ELF layout, ownership, USB and private
 # publication mechanism. Select one success per family and authenticated failure.
 source=(root/'checks/crypto-runtime-native.py').read_text()
 source=source.replace("ROOT=Path(__file__).resolve().parents[1]",'ROOT=Path('+repr(str(root))+')')
+if a.host_request:
+ source=source.replace("prep=module('prep',ROOT/'apps/crypto/prepare.py');observe=module('observe',ROOT/'apps/crypto/observe.py')",
+  "prep=module('prep',ROOT/'apps/crypto/prepare.py');observe=module('observe',ROOT/'apps/crypto/observe.py')\n"+
+  "prep.operation=observe.operation=module('digest_request',Path("+repr(str(a.host_request))+"))")
 source=source.replace("'operation_input')","'operation_input','a733_smp_counter')")
 source=source.replace("  if name=='board_live':", "  if name=='a733_smp_counter':returned(24);return\n  if name=='board_live':")
 source=source.replace("for variant in ('partial-upload','upload-success','wrong-request','postpublication-write','expired-upload','expired-after-key-copy','producer-owned-cleanup','output-success','late-publication'):","for variant in ('output-success',):")
@@ -21,6 +27,8 @@ source=source.replace("==0xfedcba9876543210","==prep.operation.decode(request)['
 # Each request was executed through actual run/services in the vector fixture;
 # this linked check models CE completion at the same existing boundary.
 selected=['hash-sha512','hmac-sha1','ecb-192-encrypt','cbc-256-decrypt','ctr-192-encrypt','gcm-256-encrypt','gcm-empty-decrypt','gcm-auth-failure','cleanup']
+if a.host_request:selected+=['md5-hash-0-1','sm3-hash-0-1','sm3-hmac-128-2']
+if a.only and not set(a.only)<=set(selected):p.error('Unknown native crypto case')
 results={}
 for case in selected:
  if a.only and case not in a.only:continue
@@ -34,6 +42,24 @@ for case in selected:
   generated=generated.replace("cpu.mem_read(request_at+32,16))==(bytes(16)", "cpu.mem_read(request_at+2120,128))==(bytes(128)")
   generated=generated.replace("else b'\\x33'*16)", "else b'\\x33'*128)")
   generated=generated.replace("  execute('crypto_task')\n  assert bytes(cpu.mem_read(cipher_key", "  hk=base+app['run']+run['hash']+layouts['a733_ce_hash']['key'];hb=base+app['run']+run['hash']+layouts['a733_ce_hash']['buffer']\n  cpu.mem_write(hk,b'k'*128);cpu.mem_write(hb,b'p'*2176)\n  execute('crypto_task')\n  assert bytes(cpu.mem_read(hk,128))==bytes(128) and bytes(cpu.mem_read(hb,2176))==bytes(2176)\n  assert bytes(cpu.mem_read(cipher_key")
+  private="""  private=[]
+  for object_name,structure,fields in (
+   ('hash','a733_ce_hash',(('key',128),('buffer',2176),('digest',64))),
+   ('cipher','a733_ce_cipher',(('key',32),('iv',16),('subkey_block',16),('hash_subkey',16),('j0',16),('tag',16),('nonce',64),('aad',512),('input',2064),('output',2064)))):
+   for field,size in fields:
+    address=base+app['run']+run[object_name]+layouts[structure][field]
+    cpu.mem_write(address,b'p'*size);private.append((address,size))
+  payload=base+app['run']+run['payload'];cpu.mem_write(payload,b'p'*2048);private.append((payload,2048))
+  request_ranges=[]
+  for field,size in (('input',2048),('iv',64),('aad',512)):
+   address=request_at+layouts['crypto_request'][field]
+   cpu.mem_write(address,b'q'*size);request_ranges.append((address,size))
+"""
+  verified="""  for address,size in private:assert bytes(cpu.mem_read(address,size))==bytes(size)
+  for address,size in request_ranges:
+   assert bytes(cpu.mem_read(address,size))==(bytes(size) if variant=='expired-after-key-copy' else b'q'*size)
+"""
+  generated=generated.replace("  execute('crypto_task')\n  assert bytes(cpu.mem_read(hk",private+"  execute('crypto_task')\n"+verified+"  assert bytes(cpu.mem_read(hk")
  if case=='gcm-auth-failure':
   generated=generated.replace("write(base+app['run']+run['stage'],8);returned(1);return", "write(base+app['run']+run['stage'],5);returned(-1);return")
   generated=generated.replace("if variant=='late-publication' else []", "if True else []")
