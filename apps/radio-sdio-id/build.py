@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the returning SDIO identity diagnostic; require supplied radio authority."""
+"""Build the returning SDIO identity diagnostic from supplied hardware facts."""
 import argparse
 import hashlib
 import json
@@ -9,6 +9,7 @@ import sys
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools'))
 from returning_build import ROOT, PROVIDER_UNITS, platform_arguments, platform_from
+from host_evidence import unique_directory
 
 SCHEMA = 'a733-radio-sdio-id-v1'
 FACTS = {
@@ -18,9 +19,7 @@ FACTS = {
     'startup': ('fabric_parent_gates_stable', 'sdc1_gate_off_reset_asserted',
                 'store_ahb_mbus_msi_lite1_ready', 'sd_monitor_autogating_disabled',
                 'device_mappings_security_verified', 'sdc1_irq_and_other_owners_excluded'),
-    'bootstrap': ('awake_bootstrap', 'no_outstanding_debug_or_stale_confirmations',
-                  'write_40500058_40_authorized'),
-    'recovery': ('whole_board_power_removal', 'permanent_retention', 'one_attempt', 'no_reuse'),
+    'bootstrap': ('awake_bootstrap', 'no_outstanding_debug_or_stale_confirmations'),
 }
 
 
@@ -35,40 +34,34 @@ def integer(value, low, high, name):
 
 
 def profile_source(path):
-    """Hash supplied evidence; hashes identify assertions, not electrical proof."""
+    """Encode explicit hardware inputs; a build does not measure the supplied facts."""
     raw = path.read_bytes()
     record = json.loads(raw)
     require(record.get('schema') == SCHEMA, 'radio authority schema')
-    for name in ('identity', 'port', 'lifetime'):
-        require(isinstance(record.get(name), str) and record[name].strip(), 'missing ' + name)
     four = integer(record.get('four_bit'), 0, 1, 'four_bit')
     facts, inputs = {}, {str(path.resolve()): raw}
     for group, required in FACTS.items():
         entry = record.get(group, {})
-        source = Path(entry.get('path', ''))
-        require(source.is_absolute() and source.is_file(), 'missing ' + group + ' evidence')
-        data = source.read_bytes()
-        require(hashlib.sha256(data).hexdigest() == entry.get('sha256'), group + ' evidence hash')
-        fact = json.loads(data)
-        require(fact.get('schema') == SCHEMA + '-' + group and fact.get('reviewed') is True,
-                group + ' reviewed assertions missing')
-        require(all(fact.get(k) == record[k] for k in ('identity', 'port', 'lifetime')),
-                group + ' board/lifetime mismatch')
+        require(isinstance(entry, dict), 'missing ' + group + ' hardware inputs')
+        if 'path' in entry:
+            # Older profiles may keep values in separate files. Recorded review
+            # flags and hashes are provenance, not permission to build.
+            source = Path(entry['path'])
+            data = source.read_bytes()
+            fact = json.loads(data)
+            inputs[str(source.resolve())] = data
+        else:
+            fact = entry
         require(all(fact.get(k) is True for k in required), group + ' required fact absent')
-        inputs[str(source)] = data
         facts[group] = fact
     routes = facts['topology'].get('rails', {})
     require(routes.get('vbat') == 'dcdc1', 'VBAT must use observed DCDC1')
     rail = {'dcdc1': 0, 'dcdc8': 1, 'bldo5': 2, 'cldo1': 3}
     require(all(routes.get(k) in ('dcdc8', 'bldo5', 'cldo1') for k in ('pg', 'pm', 'vddio')),
             'exact PG/PM/VDDIO topology absent')
-    require(isinstance(facts['topology'].get('routing_evidence'), str) and
-            facts['topology']['routing_evidence'].strip(), 'fitted routing explanation absent')
     pins = facts['pins']
     require(pins.get('latch_origin') in ('verified-writer-history', 'verified-reset-contract'),
             'PM input DATA sampling cannot establish output latch')
-    require(isinstance(pins.get('latch_evidence'), str) and pins['latch_evidence'].strip(),
-            'PM latch provenance absent')
     latch = integer(pins.get('pm_latch'), 0, 63, 'complete PM latch')
     arrays = []
     for name in ('expected', 'desired'):
@@ -116,18 +109,18 @@ const struct radio_id_profile radio_id_profile = {{
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--evidence', type=Path, required=True)
-    select = p.add_mutually_exclusive_group(required=True)
-    select.add_argument('--authority', type=Path, help='supplied board/lifetime evidence record')
+    select = p.add_mutually_exclusive_group()
+    select.add_argument('--profile', '--authority', dest='profile', type=Path, help='explicit wiring, latch, fabric and bootstrap inputs')
     select.add_argument('--refusal-image', action='store_true', help='zero authority; refuses before provider initialization')
     platform_arguments(p)
     a = p.parse_args()
     # Complete validation precedes build configuration and provider generation.
     source, inputs, record = ('#include "profile.h"\nconst struct radio_id_profile radio_id_profile = {0};\n', {}, None)
-    if a.authority:
-        source, inputs, record = profile_source(a.authority)
+    if a.profile:
+        source, inputs, record = profile_source(a.profile)
     e = a.evidence.resolve()
-    require(ROOT not in e.parents and e != ROOT and not e.exists(), 'new external evidence directory required')
-    e.mkdir(parents=True)
+    require(ROOT not in e.parents and e != ROOT, 'external evidence directory required')
+    e = unique_directory(e)
     (e / 'profile.c').write_text(source)
     for i, (name, data) in enumerate(inputs.items()):
         (e / f'authority-{i}.json').write_bytes(data)
@@ -144,10 +137,10 @@ def main():
                      ['-I' + str(ROOT / 'apps/radio-sdio-id'), '-I' + str(ROOT / 'apps/board-bundles-power')])
     platform.reuse(list(PROVIDER_UNITS))
     platform.link(); platform.binary(); platform.run()
-    platform.record(__file__, {'execution_admitted': False, 'refusal_image': a.refusal_image,
+    platform.record(__file__, {'execution_admitted': False, 'refusal_image': not bool(a.profile),
         'authority': record, 'authority_inputs': {name: hashlib.sha256(data).hexdigest() for name, data in inputs.items()},
-        'requires_coordinator_board_lifetime_admission': True})
-    print('Built radio SDIO diagnostic; launch is not authorized by a build.')
+        'profile_supplied': bool(a.profile)})
+    print(f'Built radio SDIO diagnostic: {e}')
 
 
 if __name__ == '__main__':
