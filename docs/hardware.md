@@ -3051,6 +3051,9 @@ to the stated scope:
   no plaintext; empty authenticated decryption is supported. Thirty-nine
   application/service vectors, linked native upload/cleanup and actual-frame
   host checks pass under `crypto-modes-20261028/`, with independent review.
+  MD5 and SM3 compression, streaming HMAC and CPU-staging erasure now have
+  [focused host and linked-image evidence](security-engines.md). All physical
+  CE, IRQ, raw-source, key and drain qualification remains open.
   The change adds 2,072 text bytes and 4,096 BSS bytes without another DMA
   allocation. Physical predecessor exclusion, secure-bank access and engine
   operation remain unqualified.
