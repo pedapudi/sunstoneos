@@ -166,6 +166,17 @@ class Check(unittest.TestCase):
         sample = progress.parse_handoff('## Continuation and evidence reuse\n\nProse.\n\n'
                                         '1. First\n   continued.\n2. Second.\n\nTrailing paragraph.\n')
         self.assertEqual([item['text'] for item in sample['next_actions']], ['First\n   continued.', 'Second.'])
+        current = progress.parse_handoff(
+            '## Open problems and files\n\n'
+            '- **CPU return:** physical confirmation remains outstanding.\n'
+            '  Keep the session evidence.\n'
+            '- **NPU startup:** qualify scheduled restart.\n\n'
+            'Other context.\n\n## Open branches\n\n- Unmerged implementation.\n')
+        self.assertEqual(current['next_actions'], [
+            {'order': 1, 'text': '**CPU return:** physical confirmation remains outstanding.\n'
+                                 '  Keep the session evidence.'},
+            {'order': 2, 'text': '**NPU startup:** qualify scheduled restart.'},
+        ])
         self.assertEqual(data['summary']['qualified'], 0)
         path = self.root / 'docs/hardware.md'
         path.write_text('# Replaced inventory format\n')
