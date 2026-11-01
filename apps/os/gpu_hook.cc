@@ -5,6 +5,7 @@
 // does not exist and os_gpu_open keeps the GPU closed and unpowered.
 extern "C" {
 #include "dispatch.h"
+#include "gpu-progress.h"
 #include "pvr_compute_mimus.h"
 }
 #include <cstddef>
@@ -32,7 +33,39 @@ Call call;
 // carry the next one, so no earlier job's tags can pass.
 uint32_t completed;
 
+#ifdef SUNSTONE_A733_OS_GPU_BISECT
+// Jobs handed to the GPU; each one either completes OK or ends the boot.
+uint32_t bisect_jobs;
+bool bisect_reached;
+// Called once the limit refuses a job or a call; the CPU computes the rest.
+void BisectReached() {
+  if (bisect_reached) return;
+  bisect_reached = true;
+  sunstone_crumb(OS_GPU_CRUMB_BISECT_LIMIT, completed);
+}
+// Whether the call of this ordinal may reach the GPU at all.
+bool BisectCall(uint32_t ordinal) {
+#if OS_GPU_BISECT_STAGE == 3
+  (void)ordinal;
+  return bisect_jobs < OS_GPU_BISECT_LIMIT;
+#elif OS_GPU_BISECT_STAGE == 4
+  return os_placement_layer[ordinal] <= OS_GPU_BISECT_LIMIT;
+#else
+  (void)ordinal;
+  return false;
+#endif
+}
+#endif
+
 bool Submit() {
+#ifdef SUNSTONE_A733_OS_GPU_BISECT
+  // The engine computes the rows after the last accepted job itself.
+  if (OS_GPU_BISECT_STAGE == 3 && bisect_jobs >= OS_GPU_BISECT_LIMIT) {
+    BisectReached();
+    call.stopped = true;
+    return false;
+  }
+#endif
   size_t rows = call.rows - call.next;
   if (rows > call.job_rows) rows = call.job_rows;
   call.job = {call.x_offset + call.next * call.stride, call.ordinal, static_cast<uint32_t>(rows),
@@ -45,6 +78,10 @@ bool Submit() {
     return false;
   }
   call.in_flight = true;
+#ifdef SUNSTONE_A733_OS_GPU_BISECT
+  ++bisect_jobs;
+#endif
+  sunstone_crumb(OS_GPU_CRUMB_JOB_SUBMIT, call.ordinal);
   return true;
 }
 
@@ -74,6 +111,12 @@ size_t Begin(void*, uint32_t ordinal, const int8_t* weights, size_t weight_strid
              const int16_t* codes, size_t stride) {
   call = {};
   if (!os_dispatch_active) return 0;
+#ifdef SUNSTONE_A733_OS_GPU_BISECT
+  if (!BisectCall(ordinal)) {
+    BisectReached();
+    return 0;
+  }
+#endif
   const int ready = a733_gpu_mimus_thermal();
   if (ready < 0) os_dispatch_failed(ready == OS_GPU_CALL_TIMEOUT ? OS_DISPATCH_TIMEOUT : OS_DISPATCH_LOST);
   if (!ready) return 0;
@@ -109,6 +152,7 @@ bool Finish(void*, mimus::asr::ExactSumJob* out) {
   if (done.result == PVR_MIMUS_LOST) os_dispatch_failed(OS_DISPATCH_LOST);
   os_dispatch_waiting(0);
   call.in_flight = false;
+  sunstone_crumb(OS_GPU_CRUMB_JOB_DONE, static_cast<uint32_t>(done.result) << 12 | (done.sequence & 0xfff));
   if (done.result != PVR_MIMUS_OK) {
     os_dispatch_refused();
     call.stopped = true;
@@ -137,7 +181,21 @@ bool Finish(void*, mimus::asr::ExactSumJob* out) {
 const mimus::asr::ExactSumHook hook{Begin, Finish, nullptr};
 }  // namespace
 
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
+#ifdef SUNSTONE_A733_OS_GPU_BISECT
+extern "C" int os_gpu_retire(void) {
+  // As below, but a limit may have refused the rest of the final call, and
+  // stage 1 never opened the session. Every submitted job completed OK.
+  if (call.in_flight || bisect_jobs != completed || os_dispatch_record.incomplete || os_dispatch_record.failure)
+    return 0;
+  // A refused constructor keeps its own untouched report.
+  if (!completed && !os_dispatch_record.opened && os_dispatch_record.open_failed)
+    return a733_gpu_mimus_return_untouched();
+  if (os_dispatch_record.opened != (OS_GPU_BISECT_STAGE != 1)) return 0;
+  mimus::asr::SetExactSumHook(nullptr);
+  os_dispatch_active = 0;
+  return a733_gpu_mimus_return_bisect(completed);
+}
+#elif defined(SUNSTONE_A733_OS_CPU_RETURN)
 extern "C" int os_gpu_retire(void) {
   // Called after synchronous transcription and every parallel stop ACK.
   // No engine task can still read a previously lent output descriptor.
@@ -151,7 +209,14 @@ extern "C" int os_gpu_retire(void) {
 }
 #endif
 extern "C" void os_gpu_open(void) {
+#ifdef SUNSTONE_A733_OS_GPU_BISECT
+  // Stage 1 never sends OPEN, so dispatch stays inactive; stage 2 opens. In
+  // both, the installed hook places no call.
+  if (OS_GPU_BISECT_STAGE != 1 && !os_dispatch_open()) return;
+  if (OS_GPU_BISECT_STAGE <= 2) BisectReached();
+#else
   if (!os_dispatch_open()) return;
+#endif
   // The engine offers the hook only the placed tensors' calls; every other
   // call keeps the CPU paths it has without a hook.
   mimus::asr::SetExactSumOrdinals(std::span<const uint8_t>(os_placement_gpu_ordinals, (os_placement_rows + 7) / 8));

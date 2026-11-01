@@ -114,6 +114,34 @@ int os_gpu_retire(void);
 int os_gpu_return_ready(void);
 int os_gpu_return_started(void);
 #endif
+#ifdef SUNSTONE_A733_OS_GPU_BISECT
+/* Diagnostic limit on how far GPU recognition goes (SUNSTONE_A733_OS_GPU_BISECT):
+ * OS_GPU_BISECT_STAGE 1 stops after the constructor, 2 after OPEN (firmware
+ * start and session publication), 3 after OS_GPU_BISECT_LIMIT jobs and 4
+ * after encoder layer OS_GPU_BISECT_LIMIT. The CPU computes every later
+ * call, so the transcript stays complete. */
+#if !defined(SUNSTONE_A733_OS_CPU_RETURN) || OS_GPU_BISECT_STAGE < 1 || OS_GPU_BISECT_STAGE > 4 || \
+    (OS_GPU_BISECT_STAGE == 3 && OS_GPU_BISECT_LIMIT < 1)
+#error "GPU bisection needs the returning profile and a valid stage"
+#endif
+/* Recognizer only, after transcription: close and park a session opened by
+ * stage 2 to 4, or suspend the idle worker of stage 1, then write the
+ * version 3 retirement report. 1 permits the CPU return. */
+int a733_gpu_mimus_return_bisect(uint64_t completed);
+/* Encoder layer of every ordinal: 0 for the subsampling front end, i + 1 for
+ * encoder.layers.i, 255 for every later tensor (apps/os/placement.py --layers). */
+extern const uint8_t os_placement_layer[];
+/* Retirement report: version 3 carries stage << 32 | limit in its last word,
+ * and stage 2 returns with no jobs. */
+#define OS_GPU_RETURN_VERSION 3
+#define OS_GPU_RETURN_VALUE ((uint64_t)OS_GPU_BISECT_STAGE << 32 | OS_GPU_BISECT_LIMIT)
+#define OS_GPU_RETURN_WITHOUT_JOBS 1
+#else
+/* Retirement report: version 1 carries the GPU supply voltage in its last word. */
+#define OS_GPU_RETURN_VERSION 1
+#define OS_GPU_RETURN_VALUE A733_GPU_SUPPLY_UV
+#define OS_GPU_RETURN_WITHOUT_JOBS 0
+#endif
 /* One job of a placed call. begin writes the slot and wakes the worker
  * without waiting: 1 submitted (finish returns its record), 0 refused before
  * any device access (the caller computes the rows), negative caller outcome

@@ -26,6 +26,14 @@ option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" O
 option(SUNSTONE_A733_OS_NPU "Integrated OS with a task-bound NPU catalogue service" OFF)
 option(SUNSTONE_A733_OS_GPU_LINEAR "Integrated OS with mimus linear layers on the GPU" OFF)
 option(SUNSTONE_A733_OS_CPU_RETURN "One staged CPU recognition with success-only ROM return" OFF)
+# A diagnostic limit on returning GPU recognition, for locating a failing step
+# in a few board runs: constructor (never OPEN), firmware (OPEN, no job),
+# jobs:N (the first N jobs) or layer:K (calls up to encoder layer K, 0 being
+# the subsampling front end). The CPU computes the rest, so the transcript
+# stays complete. Every variant ends in the normal ROM return with a
+# version 3 GPU report that claims no GPU qualification.
+set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
+  "GPU recognition limit: constructor, firmware, jobs:N or layer:K")
 if(NOT SUNSTONE_A733_OS)
   return()
 endif()
@@ -300,9 +308,34 @@ if(SUNSTONE_A733_OS_GPU_LINEAR)
     set(os_cores a55)
     set(os_recognition_core 2)
   endif()
+  set(os_placement_layers)
+  set(os_gpu_bisect_definitions)
+  if(SUNSTONE_A733_OS_GPU_BISECT)
+    if(NOT SUNSTONE_A733_OS_CPU_RETURN)
+      message(FATAL_ERROR "SUNSTONE_A733_OS_GPU_BISECT needs the returning profile (SUNSTONE_A733_OS_CPU_RETURN)")
+    endif()
+    if(NOT SUNSTONE_A733_OS_GPU_BISECT MATCHES "^(constructor|firmware|jobs:([1-9][0-9]*)|layer:([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-4]))$")
+      message(FATAL_ERROR "SUNSTONE_A733_OS_GPU_BISECT must be constructor, firmware, jobs:N or layer:K (K < 255)")
+    endif()
+    set(os_bisect_limit 0)
+    if(CMAKE_MATCH_1 STREQUAL "constructor")
+      set(os_bisect_stage 1)
+    elseif(CMAKE_MATCH_1 STREQUAL "firmware")
+      set(os_bisect_stage 2)
+    elseif(CMAKE_MATCH_2)
+      set(os_bisect_stage 3)
+      set(os_bisect_limit ${CMAKE_MATCH_2})
+    else()
+      set(os_bisect_stage 4)
+      set(os_bisect_limit ${CMAKE_MATCH_3})
+    endif()
+    set(os_placement_layers --layers)
+    set(os_gpu_bisect_definitions SUNSTONE_A733_OS_GPU_BISECT=1 OS_GPU_BISECT_STAGE=${os_bisect_stage}
+      OS_GPU_BISECT_LIMIT=${os_bisect_limit}u)
+  endif()
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/apps/os/placement.py"
     --models "${SUNSTONE_A733_OS_MODEL_DIR}/base.mimus" "${SUNSTONE_A733_OS_MODEL_DIR}/overlay.mimus"
-    --cores ${os_cores} --output "${os_build}/placement.h" RESULT_VARIABLE os_placement_status)
+    --cores ${os_cores} --output "${os_build}/placement.h" ${os_placement_layers} RESULT_VARIABLE os_placement_status)
   if(NOT os_placement_status EQUAL 0)
     message(FATAL_ERROR "GPU placement table generation failed")
   endif()
@@ -380,7 +413,7 @@ if(SUNSTONE_A733_OS_GPU_LINEAR)
   # A733_GPU_OUTPUT_EL0_READ_ONLY makes platform/a733-smp-cached/memory.c map
   # 0x46C00000-0x47000000 read-only at EL0 and EL1.
   target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS_GPU_LINEAR=1
-    OS_RECOGNITION_CORE=${os_recognition_core} A733_GPU_OUTPUT_EL0_READ_ONLY=1)
+    OS_RECOGNITION_CORE=${os_recognition_core} A733_GPU_OUTPUT_EL0_READ_ONLY=1 ${os_gpu_bisect_definitions})
   set_source_files_properties("${os_root}/drivers/gpu/a733_gpu_platform_native.c" TARGET_DIRECTORY sunstone-a733-os
     PROPERTIES COMPILE_OPTIONS "-iquote${os_root}/platform/a733")
 endif()
@@ -436,6 +469,12 @@ if(A733_A76_ADMITTED)
 endif()
 if(SUNSTONE_A733_OS_CPU_RETURN)
   string(APPEND os_identity ";cpu_return=1")
+endif()
+if(SUNSTONE_A733_OS_GPU_BISECT)
+  if(NOT SUNSTONE_A733_OS_GPU_LINEAR)
+    message(FATAL_ERROR "SUNSTONE_A733_OS_GPU_BISECT needs the GPU image (SUNSTONE_A733_OS_GPU_LINEAR)")
+  endif()
+  string(APPEND os_identity ";gpu_bisect=${SUNSTONE_A733_OS_GPU_BISECT}")
 endif()
 if(SUNSTONE_A733_OS_PERF)
   string(APPEND os_identity ";perf=1;perf_boot=${SUNSTONE_A733_OS_PERF_BOOT}")

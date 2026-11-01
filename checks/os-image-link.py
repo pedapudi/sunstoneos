@@ -235,6 +235,13 @@ def gpu_configuration(elf, required=False):
             marker=one('os_gpu_untouched_return_version')
             assert marker['size']==4 and struct.unpack('<I',elf.read(marker['value'],4))==(2,), 'GPU untouched-return capability differs'
             result['return']['untouched_report_version']=2
+        bisect=[s for s in elf.symbols if s['name']=='os_gpu_bisect_configuration' and s['shndx']!=0]
+        if bisect:
+            marker=one('os_gpu_bisect_configuration')
+            version,stage,limit=struct.unpack('<3I',elf.read(marker['value'],12))
+            assert marker['size']==12 and version==1 and 1<=stage<=4 and \
+                (stage!=3 or limit>=1) and (stage!=4 or limit<255) and untouched, 'GPU bisect configuration differs'
+            result['return']['bisect']={'stage':('constructor','firmware','jobs','layer')[stage-1],'limit':limit}
     return result
 
 
@@ -382,7 +389,10 @@ def main():
             assert {'os_cpu_return_output', 'a733_qualification_report', 'a733_qualification_success_dispatch', 'os_cpu_return_entry_profile', 'os_cpu_return_entry_guard', 'os_cpu_return_thermal_ready'} <= names, 'CPU return adapter missing'
             assert not ({'a733_native_usb_step', 'tusb_init', 'dcd_init'} & names), 'CPU return starts native USB'
             if gpu_linear:
-                assert {'os_gpu_retire', 'a733_gpu_mimus_return', 'os_gpu_return_ready', 'os_gpu_return_report',
+                # A bisect image retires through its own version-3 report instead.
+                final = ('a733_gpu_mimus_return_bisect' if 'os_gpu_bisect_configuration' in names
+                         else 'a733_gpu_mimus_return')
+                assert {'os_gpu_retire', final, 'os_gpu_return_ready', 'os_gpu_return_report',
                         'a733_gpu_platform_park', 'a733_pmic_consumer_gpu_end'} <= names, 'GPU return retirement missing'
                 report = [s for s in Elf(args.image.read_bytes()).symbols if s['name']=='os_gpu_return_report' and s['shndx']!=0]
                 assert len(report)==1 and report[0]['size']==64, 'GPU return report differs'

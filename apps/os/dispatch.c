@@ -3,6 +3,7 @@
  * runs in the recognizer task at EL0, which also runs the GPU hook, so the
  * active count and the record need no atomics or locks. */
 #include "dispatch.h"
+#include "gpu-progress.h"
 #include "a733_mapping_check.h"
 #include "placement.h"
 #include <stdatomic.h>
@@ -56,6 +57,7 @@ void os_dispatch_failed(unsigned state)
         state==OS_DISPATCH_TIMEOUT?OS_DISPATCH_TIMEOUT:OS_DISPATCH_LOST;
     os_dispatch_active=0;
     atomic_store_explicit(&gpu_state,OS_DISPATCH_GPU_FAULT,memory_order_release);
+    sunstone_crumb(OS_GPU_CRUMB_FAILED,0x100u|os_dispatch_record.failure);
     os_dispatch_stop();
 }
 
