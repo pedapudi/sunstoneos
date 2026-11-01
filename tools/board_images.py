@@ -69,6 +69,10 @@ def inspect(image, kind, descriptor=None, host_tree=None):
         finite = load('inspect_npu_irq', tree/'apps/npu-interrupt/host.py').finite
         manifest = json.loads((Path(image).parent/'manifest.json').read_bytes())
         facts = dev.npu_check(image, host, finite, manifest)
+        # Frozen host trees retain their geometry parser, but current runner
+        # admission independently excludes the unsupported physical OFF path.
+        require(facts.get('execution_profile') != finite.POWER,
+                'Unsupported physical NPU OFF profile; use local stop/restart.')
         return dict(facts, symbols=names, generic=False, entry_guard=False,
                     descriptor=descriptor, finite_npu=True)
     marker = host.watchdog_marker(image) if names else descriptor.get('watchdog')

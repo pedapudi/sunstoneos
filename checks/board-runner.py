@@ -578,7 +578,7 @@ def generic_npu_case(out, hello):
     passed('generic-npu-keeps-typed-session-preflight-and-live-register-set')
 
 
-def finite_npu_cases(out, image_root, state, fixture):
+def finite_npu_cases(out, image_root, state, fixture, host_tree=None):
     live = json.loads(state.read_bytes())
     template = out/'npu-template'
     template.mkdir()
@@ -591,6 +591,27 @@ def finite_npu_cases(out, image_root, state, fixture):
         (root/'manifest.json').write_bytes((image_root/name/'manifest.json').read_bytes())
         args = arguments(root,'--kind','npu','--template',str(template))
         args.image = image
+        if name=='power-cycle':
+            # The current runner must also refuse a frozen parser that still
+            # recognizes and accepts the old POWER geometry. No backend may
+            # be constructed, including when --host-tree selects that parser.
+            def no_backend(*values,**keywords):raise AssertionError('board backend created')
+            assert host_tree is not None, 'Supply --npu-host-tree with the prior POWER-capable parser'
+            frozen_dev=images.load('power_capable_dev',host_tree/'tools/dev-run.py')
+            frozen_finite=images.load('power_capable_irq',host_tree/'apps/npu-interrupt/host.py').finite
+            records=images.load('power_capable_records',ROOT/'apps/os/host.py')
+            old_facts=frozen_dev.npu_check(image,records,frozen_finite,
+                json.loads((root/'manifest.json').read_bytes()))
+            assert old_facts['execution_profile']==frozen_finite.POWER
+            for number,tree in enumerate((None,host_tree)):
+                args.host_tree=tree
+                args.evidence=root/('refused-'+str(number))
+                result=board.run_image(args,backend=no_backend)
+                assert result['outcome']=='refused-before-launch' and not result['launch_attempted']
+                assert 'physical NPU OFF' in result['first_failure']['detail'] or \
+                    'supported finite NPU profile' in result['first_failure']['detail']
+            passed('finite-npu-physical-off-refused-before-backend-including-frozen-host')
+            continue
         info = images.inspect(image,'npu')
         assert info['finite_npu'] and not info['entry_guard']
         plan = images.prepare(args,info,live,root/'bundle')
@@ -686,6 +707,7 @@ def main():
     parser.add_argument('--npu-images',type=Path)
     parser.add_argument('--npu-state',type=Path)
     parser.add_argument('--npu-fixture',type=Path)
+    parser.add_argument('--npu-host-tree',type=Path,help='Frozen host tree whose NPU parser still admits POWER')
     parser.add_argument('--only',default='transport,queue,policy,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
     args=parser.parse_args()
     args.out.mkdir(parents=True,exist_ok=False)
@@ -702,7 +724,7 @@ def main():
     if 'rails' in groups:rail_cases(args.out)
     if args.hello and 'offline' in groups:offline(args.out,args.hello)
     if 'generic-npu' in groups:generic_npu_case(args.out,args.hello)
-    if 'npu' in groups:finite_npu_cases(args.out,args.npu_images,args.npu_state,args.npu_fixture)
+    if 'npu' in groups:finite_npu_cases(args.out,args.npu_images,args.npu_state,args.npu_fixture,args.npu_host_tree)
     board.save(args.out/'results.json',rows)
     print(f'{len(rows)} checks passed; no device access')
 

@@ -701,9 +701,23 @@ def npu_cases(out):
             else:
                 raise AssertionError('NPU accepted another watchdog contract')
     passed('npu-image-geometry-and-exact-watchdog')
-    with patch.object(finite, 'geometry_profile', lambda geometry: finite.RESTART):
-        assert dev.npu_check(image, reader, finite, manifest)['execution_profile'] == finite.RESTART
-    passed('npu-development-admits-local-restart')
+    for profile in (finite.RESTART, finite.SWITCH, finite.SDK):
+        with patch.object(finite, 'geometry_profile', lambda geometry: profile):
+            assert dev.npu_check(image, reader, finite, manifest)['execution_profile'] == profile
+    passed('npu-development-admits-local-restart-switch-sdk')
+    manifest_path=out/'npu-manifest.json'
+    manifest_path.write_text(json.dumps(manifest))
+    with patch.object(finite, 'geometry_profile', lambda geometry: finite.POWER), \
+            patch.object(dev, 'load', side_effect=lambda name,path: types.SimpleNamespace(finite=finite) if name=='dev_npu_interrupt' else finite), \
+            patch.object(dev, 'npu_capture', side_effect=AssertionError('board capture created')), \
+            patch.object(dev, 'npu_run', side_effect=AssertionError('board backend created')):
+        for action in (lambda: dev.npu_check(image,reader,finite,manifest),
+                       lambda: dev.npu_main(types.SimpleNamespace(image=image,manifest=manifest_path),
+                                            types.SimpleNamespace(host=reader))):
+            try:action()
+            except ValueError as error:assert 'supported finite NPU profile' in str(error)
+            else:raise AssertionError('Unsupported physical NPU OFF accepted')
+    passed('npu-physical-off-refused-before-board-capture-or-backend')
     # Capture never opens hardware here. An attempted failed transfer must
     # quarantine its saved instance; clean admission refusals must not.
     for variant in ('nominal', 'nonzero', 'timeout', 'bad-hex', 'short', 'admission'):
