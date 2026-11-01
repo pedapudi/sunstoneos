@@ -16,16 +16,19 @@ restoration retains board ownership. Artifact output paths must be unused;
 evidence directories can receive unique children. [The tool audit](tool-gates.md) lists each condition and the remaining
 changes in files assigned to other agents.
 
-All three baseline images build. Recorded mimus recognition matches its reference
-in cached QEMU. The check index, pre-push hook and 33 final host invocations pass.
-Raw evidence is under `~/.cache/sunstoneos/build/tool-gates-1031/`. The audit names
-the native fixture, SDK and HTTP checks that remain unverified. No board was
-accessed; physical bring-up remains paused.
+All three baseline images build with Clang 21 and cached lld. Recorded mimus
+recognition in cached QEMU matches its reference. The integration gate passes
+with and without the external mimus checkout. Returning-watchdog, development
+runner, DDR retention, capture conversion, CPU clock and capture-bound host
+checks pass, along with the check index and pre-push fixture. Integration
+evidence is under `~/.cache/sunstoneos/build/tool-gates-land-1031/`.
+No board was accessed for this integration. The audit names protected-owner
+changes and earlier unverified component checks.
 
 ## Board state and recovery
 
-This page describes the code merged through `dc3d1ccd` and recorded board
-results from 2026-10-31. Evidence paths are relative to
+This page describes the merged startup, host-tool and application interfaces
+and recorded board results from 2026-10-31. Evidence paths are relative to
 `~/.cache/sunstoneos/evidence/`. Saved USB identities do not establish live
 access. Only the coordinator checks identity, permissions, locks and failure
 records under [AGENTS.md](../AGENTS.md#hardware-access). Preserve both microSD
@@ -50,7 +53,8 @@ cards. Neither board has populated eMMC or UFS; keep the failed UFS probe disabl
   finished while the CPU clock owner was in REQUEST. The return path requires
   FOLLOW and refused the return. Evidence:
   `dev-runs-1031/3-1-cpu-return-204119/run/watchdog-report.json`; code:
-  `apps/os/cpu.c` and `apps/os/cpu-return/cpu.patch`. The fix remains unmerged.
+  `apps/os/cpu.c` and `apps/os/cpu-return/cpu.patch`. The merged return path
+  handles this owner phase; the correction has no subsequent board result.
 - **GPU firmware diagnostic — failed.** Image `2-firmware` from `ladder-wdt3`
   stopped in the compatibility callback at
   `platform/a733/gpu_backend.c:375` in its frozen build. Evidence:
@@ -62,7 +66,8 @@ cards. Neither board has populated eMMC or UFS; keep the failed UFS probe disabl
   `RETURN_ROM` and mode 0. Evidence:
   `dev-runs-1031/3-3-cpu-return-201331/run/session.json`.
   A normal return does not establish completed host RAM restoration.
-  The quarantine-scope fix remains unmerged.
+  The merged transport keeps a confirmed normally returned instance usable
+  after a host-side failure. That behavior is covered without a board.
 
 Both recent 3-1 failures returned through WDT0. Treat DRAM as uninitialized
 after that reset and run the DDR tool before the next image uses it.
@@ -112,7 +117,7 @@ Host-only autonomous boot evidence is under `resume-card-os-1026/`.
 
 Mimus lives in its own repository under `sunstoneos/`.
 [apps/mimus/source.json](../apps/mimus/source.json) pins
-`port/sunstoneos-split` at `c2dcb5a9`. The application owns recognition,
+`port/sunstoneos-split` at `c0872ac1`. The application owns recognition,
 models, manifests, capture wrappers and recognition checks. The merged
 reference cleanup supplies explicit OS admission inputs and the shared USB
 emulator; OS-only and hello-compute builds require no mimus sources.
@@ -145,7 +150,7 @@ cmake --build "$build/os" --target sunstone-a733-os -j12
 "$cfg" "$os" "$build/hello" -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=hello-compute
 cmake --build "$build/hello" --target sunstone-a733-os-hello -j12
 
-mimus="$HOME/git/mimus-worktrees/os-refs-1031"
+mimus="$HOME/git/mimus-worktrees/small-fixes-1031"
 "$cfg" "$os" "$build/mimus" -DMIMUS_DIR="$mimus" -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=mimus
 cmake --build "$build/mimus" --target sunstone-a733-os -j12
 ```
@@ -201,9 +206,9 @@ normal return with boot clocks. After watchdog reset it waits until DRAM is
 initialized and the next launch normalizes rails. `--no-normalize-rails` and
 `--no-restore-rails` explicitly disable the respective default.
 
-This command does not yet demonstrate a passing hello-compute control: the
-REQUEST/FOLLOW refusal above remains in the merged code. Current `gpu-return`
-is refused because the existing ladder uses the pre-split application layout;
+This command does not yet demonstrate a passing hello-compute control.
+The merged REQUEST/FOLLOW correction is host-verified; a new board result
+remains outstanding. Current `gpu-return` is refused because the existing ladder uses the pre-split application layout;
 its runner is `tools/dev-run.py` at `6a714bcf`. NPU development preparation
 also remains unimplemented. `--check-only` reads the board unless `--state FILE`
 supplies a capture; neither mode writes rails.
@@ -217,9 +222,9 @@ reuse. No board run is requested for this documentation change.
 
 ## Open problems and files
 
-- **Early CPU return:** `apps/os/cpu-return/cpu.patch` refuses completion
-  before the clock owner reaches FOLLOW. The hello-compute failure above
-  exercises this condition; `apps/os/cpu.c` defines the owner phases.
+- **Early CPU return:** the host-verified return path handles application
+  completion before the clock owner reaches FOLLOW. Physical confirmation
+  after the recorded hello-compute failure remains outstanding.
 - **GPU service:** the latest compatibility stop belongs to the frozen
   unmerged diagnostic. The merged service still has the health-binding,
   vendor-setup, MMUCACHE, page-size and SLC gaps in
@@ -235,9 +240,7 @@ reuse. No board run is requested for this documentation change.
 
 ## Open branches
 
-- `work/tool-gates-1031`: simplify host tools and gate device access; under review, unmerged.
-- `work/quarantine-scope-1031`: preserve a normally returned instance after a host-side error; fix prepared, unmerged.
-- `work/early-return-1031`: permit application completion before CPU clock setup finishes; fix prepared, unmerged.
+- `work/tool-gates-1031`: host-tool admission and merged startup fixes; prepared for integration after the listed host checks.
 - `work/gpu-ref-fixes-1031`: align the GPU service with the reference sequence; diagnosis and fixes in progress, unmerged.
 - `work/gpu-queue-1031`, with mimus `port/sunstoneos-gpu-queue`: supply a generic GPU compute queue and application port; unmerged.
 

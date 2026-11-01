@@ -213,6 +213,8 @@ RETURN_TIMEOUT_SECONDS = 20 + 30
 CHUNK_BYTES = 4 * 1024 * 1024
 RAM_START, RAM_BYTES = 0x41000000, 0x1200000
 base = supervised.base
+# The development runner uses this export to execute the CPU rail helper.
+kernel = base.module('qualification_kernel', ROOT / 'tools/check-a733-kernel.py')
 returning = base.module('qualification_returning', ROOT / 'tools/a733-returning-host.py')
 
 

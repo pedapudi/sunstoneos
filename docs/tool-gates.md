@@ -469,7 +469,7 @@ The analyser’s current required `ddr_evidence` lookup at `tools/analyse-ddr-ca
 
 ## Software evidence and physical limits
 
-The final 33 host-integration invocations passed. They exercise supported paths without removed records and preserve refusals for wrong target/session, malformed geometry, unsafe ownership, out-of-range inputs and changed transfer/result bytes. Source-generation checks preserve old output and follow the selected child through their wrappers.
+The final 33 host-integration invocations passed. They exercise supported paths without removed records and preserve refusals for wrong target/session, malformed geometry, unsafe ownership, out-of-range inputs and changed transfer/result bytes. Source-generation checks refuse an existing artifact output and preserve its contents.
 
 Host results are recorded in `~/.cache/sunstoneos/build/tool-gates-1031/final-host/results.json`. Check-index validation, three baseline builds and the pre-push fixture passed. The returning USB host check now creates an unused report directory for both absent and reused outputs ([host-check.py:22](../apps/usb-returning/host-check.py)); its 26 cases passed. This fixture correction adds no launch authority and is excluded from the gate count.
 
@@ -479,19 +479,20 @@ The GPU provider image builds; its linked host check remains blocked by an incom
 
 Standalone historical kernel/EL1 tools do not supply a complete host watchdog wrapper. Returning SD also requires the coordinator’s host-armed watchdog wrapper. The protected development runner’s NoHold failure-lock behavior needs its owner correction. No physical test was requested or performed to establish these paths.
 
-No board command is needed for this host-only cleanup. Both boards remain unavailable pending recovery. The coordinator chooses any later physical test after recovery from the documented device state. This audit establishes no new physical qualification.
+No board command is needed for this host-only cleanup. The coordinator establishes live board state and chooses any later physical test from the documented device state. This audit establishes no new physical qualification.
 
 
 ## Current integration and protected owners
 
-The following conditions remain in files assigned to other agents. These rows
+These rows describe integration behavior and remaining protected-owner work.
+They overlap the original inventory and do not change its counts. Locations
 use current line numbers. The recommendations preserve live target checks,
 watchdog recovery, storage preservation and comparisons of transferred bytes.
 
 | Location | Action | Condition and recommended change |
 | --- | --- | --- |
-| [tools/dev-run.py:352](../tools/dev-run.py) | `kept-another-listed-agent` | The development bundle must carry the literal `sunstoneos-dev-bundle-v2` schema. Replace schema admission with checks of the fields and native session geometry the launcher consumes. |
-| [tools/dev-run.py:355](../tools/dev-run.py) | `kept-another-listed-agent` | Prepared files and inputs must match saved bundle hashes. Remove independently prepared bundle authority; retain immutable same-run transfer sources, image/session consistency and uploaded-byte comparisons. |
+| [tools/dev-run.py:352](../tools/dev-run.py) | `kept-safety` | The development bundle carries the serialized format the validator consumes. The command prepares that bundle in the same run with fresh session identities. Keep format, field and native session-geometry checks. |
+| [tools/dev-run.py:355](../tools/dev-run.py) | `kept-safety` | Files and inputs must match the bundle prepared in the same command. There is no external bundle input. Keep these mutation guards, immutable transfer sources, image/session consistency and uploaded-byte comparisons. |
 | [tools/dev-run.py:523](../tools/dev-run.py) | `kept-another-listed-agent` | The rail helper must match a fixed reviewed binary hash. Replace that admission with explicit helper compatibility checks. Keep boot-clock checks, voltage limits and verified readbacks for each changed rail. |
 | [tools/run-ddr.py:156](../tools/run-ddr.py) | `kept-safety` | The selected build must support CPU clock restoration, and restore builds must perform final clocked PHY readback. These are hardware compatibility requirements. Preserve the corresponding behavior checks, SID match, SRAM bounds, watchdog fallback and same-run upload comparisons. |
 | [tools/training-record.py:77](../tools/training-record.py) | `replaced` | A current capture binds its embedded DDR result to its own live mailbox. An older capture binds its mailbox, device and instance identity to the DDR run it references. Both CLI modes accept relocated captures and current trained values; neither requires equality with historical register values. |
@@ -505,3 +506,11 @@ voltage-limit and successful readback checks. The host checks that cover the
 integrated returning transport must accept a host-side error after a confirmed
 normal return without quarantining the instance; FEL request failures still
 quarantine it.
+
+
+The development runner uses the kernel-runner export at
+[apps/cpu-runtime-qualification/host.py:217](../apps/cpu-runtime-qualification/host.py)
+for controlled CPU rail-helper outcomes. Keep that export for this consumer.
+It supplies executable behavior and does not restore a review, claim or
+continuity precondition. The development-runner host case exercises the
+helper's normal, controlled and failed outcomes through that export.
