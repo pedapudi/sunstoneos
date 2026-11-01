@@ -1,0 +1,64 @@
+--- portASM.S
++++ portASM.S
+@@ -844,6 +844,61 @@
+ ERET
+ 13:
+ #endif
++/* GPU calls change task mode only at immutable, fixed instruction sites.
++ * No C runs on the exception stack. Weak absent sites cannot authorize entry. */
++.weak pvr_gpu_call_enter_site
++.weak pvr_gpu_call_kernel
++.weak pvr_gpu_call_exit_site
++.weak pvr_gpu_call_user_resume
++CMP X2, #120
++B.EQ .Lgpu_call_enter
++CMP X2, #121
++B.NE .Lgpu_call_next
++AND X3, X5, #15
++CMP X3, #4
++B.NE .Lgpu_call_refuse
++ADRP X3, pvr_gpu_call_exit_site
++ADD X3, X3, :lo12:pvr_gpu_call_exit_site
++CBZ X3, .Lgpu_call_refuse
++CMP X4, X3
++B.NE .Lgpu_call_refuse
++ADRP X4, pvr_gpu_call_user_resume
++ADD X4, X4, :lo12:pvr_gpu_call_user_resume
++CBZ X4, .Lgpu_call_refuse
++MRS X3, TPIDRRO_EL0
++BIC X3, X3, #(1 << 56)
++MSR TPIDRRO_EL0, X3
++BIC X5, X5, #15
++B .Lgpu_call_return
++.Lgpu_call_enter:
++AND X3, X5, #15
++CBNZ X3, .Lgpu_call_refuse
++ADRP X3, pvr_gpu_call_enter_site
++ADD X3, X3, :lo12:pvr_gpu_call_enter_site
++CBZ X3, .Lgpu_call_refuse
++CMP X4, X3
++B.NE .Lgpu_call_refuse
++ADRP X4, pvr_gpu_call_kernel
++ADD X4, X4, :lo12:pvr_gpu_call_kernel
++CBZ X4, .Lgpu_call_refuse
++MRS X3, TPIDRRO_EL0
++ORR X3, X3, #(1 << 56)
++MSR TPIDRRO_EL0, X3
++ORR X5, X5, #4
++.Lgpu_call_return:
++MSR ELR_EL1, X4
++MSR SPSR_EL1, X5
++LDP X4, X5, [SP], #0x10
++LDP X2, X3, [SP], #0x10
++LDP X0, X1, [SP], #0x10
++ERET
++.Lgpu_call_refuse:
++/* Restore the original caller PC even when a missing target was detected. */
++MRS X4, ELR_EL1
++MOV X0, #-1
++STR X0, [SP, #0x20]
++B .Lgpu_call_return
++.Lgpu_call_next:
+ #if ( configENABLE_MPU == 1 )
+    /* ---------- SystemCallEnter? ---------------------------------*/
+    LDR     X3, =NUM_SYSTEM_CALLS
