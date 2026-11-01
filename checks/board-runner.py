@@ -361,9 +361,23 @@ def daemon_cases(out):
     board.save(run/'result.json',{'outcome':'returned','first_failure':None})
     lease=Path(job['directory'])/'runner-process.json'
     identity=board.process_identity(os.getpid());board.save(lease,identity)
+    with q.locked() as state:
+        q.pause(state,'3-3','Fixture pause on the other board.')
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert board.main(['--queue',str(q.root),'resume','3-3']) == 0
+    boards=q.status()['boards']
+    assert boards['3-1']['pause'] is None and len(boards['3-1']['running']) == 1
+    assert boards['3-3']['pause'] is None
+    passed('cli-resume-other-port-does-not-collect-or-pause-live-run')
     q.recover()
-    assert q.status()['boards']['3-1']['running'], 'A live child keeps its claim even after writing a result.'
-    with patch.object(board,'process_alive',return_value=False):q.recover()
+    boards=q.status()['boards']
+    assert boards['3-1']['running'], 'A live child keeps its claim even after writing a result.'
+    assert boards['3-1']['pause'] is None, 'Daemon recovery skips live children without pausing them.'
+    with patch.object(board,'process_alive',return_value=False):
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert board.main(['--queue',str(q.root),'resume','3-3']) == 0
+        assert q.status()['boards']['3-1']['running'], 'Only the daemon collects stopped orphans.'
+        q.recover()
     assert not q.status()['boards']['3-1']['running']
     assert json.loads(Path(job['result_path']).read_text())['outcome']=='returned'
     passed('daemon-recovery-waits-for-child-and-collects-run-result')

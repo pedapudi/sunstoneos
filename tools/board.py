@@ -964,7 +964,6 @@ class Queue:
                     self.pause(state,port,f"Third failure at {failure['site']} with no new hypothesis.")
 
     def resume(self, port):
-        self.recover()
         with self.locked() as state:
             state['pauses'].pop(port,None)
             path = self.root/f'paused-{port}.json'
@@ -975,7 +974,7 @@ class Queue:
             self.event('resumed',port=port)
 
     def recover(self, exclude=()):
-        """Collect an orphaned child's result; never replay its image."""
+        """The daemon collects stopped orphans; live runners retain their claims."""
         exclude = set(exclude)
         with self.locked() as state:
             interrupted = [dict(j) for j in state['jobs'] if j['state']=='running' and j['id'] not in exclude]
@@ -985,12 +984,14 @@ class Queue:
             lease = Path(job['directory'])/'runner-process.json'
             identity = json.loads(lease.read_text()) if lease.exists() else job.get('process')
             alive = identity is not None and process_alive(identity)
-            if path.exists() and port_idle(port) and not alive:
+            if alive:
+                continue
+            if path.exists() and port_idle(port):
                 self.complete(job['id'],json.loads(path.read_text()))
             else:
                 with self.locked() as state:
                     self.pause(state,port,'Daemon interrupted during a run; inspect the runner and port lock.')
-                if port_idle(port) and identity is not None and not alive:
+                if port_idle(port) and identity is not None:
                     self.complete(job['id'],{'outcome':'host-error','image_sha256':job['image_sha256'],
                         'port':port,'durations':{},'evidence_path':job['directory'],
                         'first_failure':{'site':'daemon-interrupted','detail':'No child result; image is not replayed.'}})
