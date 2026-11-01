@@ -45,6 +45,14 @@ void ss_latency_phase_set(unsigned phase)
     if (phase >= SS_LAT_PHASES && phase != SS_LAT_PHASE_NONE) return;
     /* Never rewrite a published phase window. */
     if (phase == SS_LAT_INIT || (phase < SS_LAT_PHASES && phase_start[phase])) return;
+    if (active_phase < SS_LAT_PHASES) {
+        /* Close admission before selecting the cutoff. DSB completes the
+         * closing publication to the inner-shareable observers before the
+         * ISB/counter read. A reader that still observed OPEN therefore ended
+         * before this cutoff; readers seeing CLOSING exclude boundary samples. */
+        __atomic_store_n(&phase_end[active_phase], UINT64_MAX, __ATOMIC_RELEASE);
+        __asm__ volatile("dsb ish" ::: "memory");
+    }
     uint64_t now = ss_latency_now();
     if (active_phase < SS_LAT_PHASES)
         __atomic_store_n(&phase_end[active_phase], now, __ATOMIC_RELEASE);
@@ -98,9 +106,12 @@ void ss_latency_phase_snapshot(struct ss_latency_phase_core out[SS_LAT_PHASES][8
 }
 static unsigned interval_phase(uint64_t start, uint64_t elapsed)
 {
+    /* Finish the caller's end-counter read before observing phase bounds. */
+    __asm__ volatile("isb" ::: "memory");
     for (unsigned p = 0; p < SS_LAT_PHASES; ++p) {
         uint64_t begin = __atomic_load_n(&phase_start[p], __ATOMIC_ACQUIRE);
         uint64_t end = __atomic_load_n(&phase_end[p], __ATOMIC_ACQUIRE);
+        if (end == UINT64_MAX) return SS_LAT_PHASE_NONE;
         if ((p != SS_LAT_INIT && !begin) || start < begin ||
             (end && (start >= end || elapsed > end - start))) continue;
         return p;
