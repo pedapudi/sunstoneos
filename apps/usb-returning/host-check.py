@@ -11,11 +11,15 @@ import struct
 import sys
 import tempfile
 from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[2]
+sys.path.insert(0,str(ROOT/'tools'))
+from host_evidence import unique_directory
+if not __debug__:raise SystemExit('Host checks require assertions; do not use optimized Python.')
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args();e=a.evidence
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args();e=unique_directory(a.evidence)
 host=module('usb_return_host',ROOT/'tools/check-a733-usb-returning.py');kernel=module('kernel_return_host',ROOT/'tools/check-a733-kernel.py')
 real_find,real_dispose=host.usb.core.find,host.usb.util.dispose_resources
 cases=[]
@@ -103,7 +107,8 @@ try:
             (port/'bcdDevice').write_text('0100' if state['polls']==1 else '02b3')
             return native if state['polls']==1 else returned
         access=SimpleNamespace(board_lock=lock,require_session=lambda n:None,require_rom=lambda n:None,identity=identity,target=lambda n:port,session_node=session,quarantine_instance=lambda *v:None)
-        helper=SimpleNamespace(FEL_HASH='fixture',stop_after_failure=lambda *v:state.update(retained=True))
+        helper=module('usb_kernel_failure_helpers',ROOT/'tools/check-a733-smp.py')
+        helper.stop_after_failure=lambda *v:state.update(retained=True)
         kernel.load_module=lambda name,path:access if name=='access' else helper
         @contextmanager
         def reenumeration(*v):yield
@@ -117,7 +122,8 @@ try:
             elif args[0]=='readl':out='eb00008f e3a00911 e3a0193d e3a0605c ea00004d'
             elif args[0]=='read':
                 size=int(args[2]);data=bytearray(size)
-                if size==128:struct.pack_into('<I',data,0,0x534b4552)
+                if size==8:pass
+                elif size==128:struct.pack_into('<I',data,0,0x534b4552)
                 else:
                     text=b'COMPLETE fixture';struct.pack_into('<4Q',data,0,0x534b4552,5,0,len(text));data[256:256+len(text)]=text
                 Path(args[3]).write_bytes(data)
@@ -140,5 +146,26 @@ try:
         passed(variant)
 finally:
  host.usb.core.find=real_find;host.usb.util.dispose_resources=real_dispose
+# Builder compatibility uses actual object bytes and header closures, with no
+# historical board run or base-bundle admission.
+builder=module('usb_return_builder',ROOT/'apps/usb-returning/build.py')
+with tempfile.TemporaryDirectory() as temporary:
+ root=Path(temporary);current=root/'monitor-current.obj';current.write_bytes(b'current monitor object')
+ replacement=root/'monitor-copy.obj';replacement.write_bytes(current.read_bytes())
+ positions=[current]*len(builder.CENTRAL_PLATFORM);selected=[]
+ platform=SimpleNamespace(build=root,platform_objects=positions,compiler='/usr/bin/clang',
+     replace_platform_object=lambda unit,obj:selected.append((unit,obj)))
+ result=builder.monitor_input(platform,replacement)
+ assert selected and result['sha256']==builder.digest(current) and result['headers']=={}
+ passed('builder-compatible-monitor-without-base-records')
+ replacement.write_bytes(b'different monitor object')
+ header=root/'platform.h';header.write_text('current layout')
+ closure={'object':str(replacement),'roots':[],'headers':{str(header):hashlib.sha256(b'old layout').hexdigest()}}
+ with patch.object(builder,'object_closure',return_value=closure):
+  try:builder.monitor_input(platform,replacement)
+  except SystemExit as error:assert 'headers differ' in str(error)
+  else:raise AssertionError('builder accepted incompatible monitor headers')
+ passed('builder-refuses-mixed-monitor-headers')
+ assert len(builder.TINYUSB_UNITS)==5 and all(name.endswith('.c') for name in builder.TINYUSB_UNITS)
 result={'passed':True,'physical_access':False,'checker_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'host_sha256':hashlib.sha256((ROOT/'tools/check-a733-usb-returning.py').read_bytes()).hexdigest(),'kernel_runner_sha256':hashlib.sha256((ROOT/'tools/check-a733-kernel.py').read_bytes()).hexdigest(),'cases':cases}
 (e/'host-check-result.json').write_text(json.dumps(result,indent=2)+'\n');print(f'{len(cases)} focused host cases passed')
