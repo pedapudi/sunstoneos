@@ -111,12 +111,17 @@ Its frozen host parser verifies 200 jobs, every ordered output digest, timing
 windows, the measured maximum and the actual interrupt receipts. Host evidence
 covers 37 producer/parser, corruption, count, marker and timeout cases in
 `qualification-1101/sustained-host-7/` under the same build root.
+Failure reporting retains the job index and observed operand at the original
+predicate before generic retention. Fifteen native fault cases and decoder
+checks cover the measurement formats, explicit high-word records and legacy
+stages in `qualification-1101/sustained-fault-validation.json`. These host cases
+do not qualify physical fault recovery.
 
 The next concurrency diagnostic requires additional approval for the existing
 eight-core CPU startup, vendor top CPU/DSU points and verified post-ROM rail
 normalization. The NPU-only authorization keeps PCK4 ON and DCDC2 untouched;
 it does not authorize those CPU power transitions. The written proposal and
-three-role design reviews are under `qualification-1101/` in the build root.
+correctness, safety and recovery reviews are under `qualification-1101/` in the build root.
 The active-job cancellation design is prepared there; its physical run follows
 the concurrency stage.
 
