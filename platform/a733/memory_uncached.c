@@ -3,6 +3,9 @@
 #include "a733_mapping_check.h"
 #include "a733_memory_critical.h"
 #include "a733_device_memory_layout.h"
+#if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+#include "a733_usb_memory.h"
+#endif
 
 extern unsigned char __uncached_pool_start[], __uncached_pool_end[];
 extern unsigned char __device_pool_end[];
@@ -36,9 +39,14 @@ static struct device_memory_pool *published;
 static int check_local(void)
 {
     uintptr_t start = (uintptr_t)__uncached_pool_start, end = (uintptr_t)__uncached_pool_end;
+#if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+    if(start!=A733_USB_MEMORY_BASE||end!=A733_USB_MEMORY_END||
+       (uintptr_t)__device_pool_end>0x41f00000)return 0;
+#else
     if (start == end) return 1; /* The image links no uncached pool. */
     if (start != UINT32_C(0x41c00000) || end != UINT32_C(0x41e00000) ||
         (uintptr_t)__device_pool_end > start) return 0;
+#endif
     /* Normal-NC identity mapping, outer or inner shareable; one write
      * translation per 2 MiB block or per page (a733_memory_local_check()),
      * which also proves the read translation of the same descriptor at EL1. */

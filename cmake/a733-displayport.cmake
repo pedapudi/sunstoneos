@@ -11,7 +11,7 @@ apply_build_patch("${displayport_build}/link.ld" "${SUNSTONE_SOURCE_ROOT}/platfo
  "${SUNSTONE_SOURCE_ROOT}/apps/displayport/extended-link.patch")
 sunstone_board_application(displayport BOOT "${displayport_build}/boot.c"
  LINK_SCRIPT "${displayport_build}/link.ld"
- TAG "runtime-native-displayport1;supervised20;RGB565-1280x720-TV1-DP4lane-RBR;PD2-C-E;private-copy;extended-NC"
+ TAG "runtime-native-displayport1;supervised20;RGB565-1280x720-TV1-DP4lane-HBR2;PD2-C-E;private-copy;extended-NC"
  CONTRACT_MAGIC 0x4153373344504331ULL RESULT_MAGIC 0x4153373344505231ULL
  DEFINITIONS SUNSTONE_A733_EXTENDED_DEVICE_MEMORY=1 A733_BOARD_SUPERVISED_SECONDS=20
  PROFILE displayport-supervised-v1

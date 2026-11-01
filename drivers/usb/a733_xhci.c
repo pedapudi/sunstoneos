@@ -5,9 +5,29 @@
 #include "a733_range.h"
 #include "dma_address_width.h"
 #include <string.h>
+#include <limits.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define TYPE(n) ((uint32_t)(n)<<10)
 #define IOC BIT(5)
+#define RING_BASE (16384u+A733_XHCI_DEVICES*8192u)
+#define BOUNCE_BASE (RING_BASE+A733_XHCI_DMA_ENDPOINTS*4096u)
+#define ISOCH_BASE (BOUNCE_BASE+A733_XHCI_DMA_ENDPOINTS*A733_XHCI_DMA_BUFFERS*4096u)
+#if SUNSTONE_USB_HOST_GENERIC
+#define SCRATCH_BASE (ISOCH_BASE+A733_XHCI_ISOCH_BUFFERS*A733_XHCI_ISOCH_PACKET)
+_Static_assert(ISOCH_BASE==A733_XHCI_DATA_OFFSET,"public DMA mapping offset");
+#else
+#define SCRATCH_BASE 98304u
+#endif
+/* Shared NC pages: bulk reserved/completed/queued, ISO queued/borrowed. */
+enum { DMA_FREE,DMA_RESERVED,DMA_COMPLETE,DMA_QUEUED,DMA_ISO_QUEUED,DMA_ISO_BORROWED };
+static uint64_t dma_token_sequence;
+static uint64_t lease_token(void)
+{
+    uint64_t old=__atomic_load_n(&dma_token_sequence,__ATOMIC_RELAXED);
+    do{if(old==UINT64_MAX)return 0;}
+    while(!__atomic_compare_exchange_n(&dma_token_sequence,&old,old+1,0,__ATOMIC_RELAXED,__ATOMIC_RELAXED));
+    return old+1;
+}
 #define MAX_OFFSET UINT32_C(0x8000)
 #define BUSY_US 2000u /* Longest provider BUSY repeated inside one access. */
 enum { P_CAP,P_EXT,P_HALTED,P_RESET,P_RESET_WAIT,P_MEMORY,P_DCBAA,P_COMMAND,
@@ -93,6 +113,15 @@ static struct a733_xhci_device *device_address(struct a733_xhci *x,unsigned addr
     for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].address==address&&!x->devices[i].detach)return &x->devices[i];
     return NULL;
 }
+static int borrowed(struct a733_xhci *x,unsigned j)
+{
+    for(unsigned i=0;i<A733_XHCI_ISOCH_BUFFERS;++i){
+        unsigned owner=x->isoch.owner[i],state=x->isoch.held[i];
+        if(owner&&(owner-1)/A733_XHCI_ENDPOINTS==j&&
+           (state==DMA_RESERVED||state==DMA_COMPLETE||state==DMA_ISO_BORROWED))return 1;
+    }
+    return 0;
+}
 /* A record under teardown keeps its logical address only for repeated detach
  * or abort requests; new requests never reach it. */
 static int detaching(const struct a733_xhci *x,unsigned address)
@@ -118,10 +147,10 @@ static void pages(struct a733_xhci *x,unsigned j)
     uint8_t *p=(void *)x->extent.cpu;uint64_t base=x->extent.physical;struct a733_xhci_device *d=&x->devices[j];
     d->input=p+16384+8192*j;d->input_pa=base+16384+8192*j;
     d->device=p+20480+8192*j;d->device_pa=base+20480+8192*j;
-    for(unsigned i=0;i<2;++i){
-        unsigned n=j*2+i;struct a733_xhci_endpoint *e=&d->endpoints[i];
-        e->ring=(void *)(p+40960+4096*n);e->ring_pa=base+40960+4096*n;
-        e->bounce=p+69632+4096*n;e->bounce_pa=base+69632+4096*n;e->cycle=1;
+    for(unsigned i=0;i<(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_ENDPOINTS:2u);++i){
+        unsigned n=j*(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_ENDPOINTS:2u)+i;struct a733_xhci_endpoint *e=&d->endpoints[i];
+        e->ring=(void *)(p+RING_BASE+4096*n);e->ring_pa=base+RING_BASE+4096*n;
+        e->bounce=p+BOUNCE_BASE+4096*A733_XHCI_DMA_BUFFERS*n;e->bounce_pa=base+BOUNCE_BASE+4096*A733_XHCI_DMA_BUFFERS*n;e->cycle=1;
     }
 }
 static int layout(struct a733_xhci *x)
@@ -134,15 +163,10 @@ static int layout(struct a733_xhci *x)
     x->erst=p+12288;x->erst_pa=base+12288;
     x->scratch=p+12352;
     put64(x->erst,x->event_pa);put32(x->erst+8,A733_XHCI_EVENT_TRBS);
-    if(x->scratchpads){put64(x->dcbaa,base+12352);for(unsigned i=0;i<x->scratchpads;++i)put64(x->scratch+8*i,base+98304+4096*i);}
+    if(x->scratchpads){put64(x->dcbaa,base+12352);for(unsigned i=0;i<x->scratchpads;++i)put64(x->scratch+8*i,base+SCRATCH_BASE+4096*i);}
     x->command_cycle=x->event_cycle=1;
-    /* Three context pairs, seven ring/bounce pairs and eight scratch pages
-     * occupy exactly128KiB. EP0+one data credit belong to each device. The
-     * seventh credit is reserved for the sole admitted MSC second bulk pipe. */
-    _Static_assert(16384+3*8192==40960,"context pages");
-    _Static_assert(40960+7*4096==69632,"ring pages");
-    _Static_assert(69632+7*4096==98304,"bounce pages");
-    _Static_assert(98304+8*4096==A733_XHCI_MEMORY_BYTES,"retained parent extent");
+    /* Fixed pages avoid cached aliases and keep every DMA pointer stable. */
+    _Static_assert(SCRATCH_BASE+8*4096<=A733_XHCI_MEMORY_BYTES,"retained parent extent");
     _Static_assert(A733_XHCI_RING_TRBS*sizeof(struct a733_xhci_trb)<=4096,"ring extent");
     _Static_assert(A733_XHCI_TRANSFER_BYTES<=4096,"bounce extent");
     for(unsigned j=0;j<A733_XHCI_DEVICES;++j)pages(x,j);
@@ -154,11 +178,29 @@ static int layout(struct a733_xhci *x)
 static int reclaim(struct a733_xhci *x,unsigned j)
 {
     uint8_t *p=(void *)x->extent.cpu;struct a733_xhci_device *d=&x->devices[j];
+    /* A borrowed page must never be cleared or reassigned under its reader. */
+    for(unsigned k=0;k<A733_XHCI_ISOCH_BUFFERS;++k){
+        unsigned owner=x->isoch.owner[k];
+        if(owner&&(owner-1)/A733_XHCI_ENDPOINTS==j){
+            if(SUNSTONE_USB_HOST_GENERIC)memset((uint8_t *)x->extent.cpu+ISOCH_BASE+k*A733_XHCI_ISOCH_PACKET,0,A733_XHCI_ISOCH_PACKET);
+            x->isoch.held[k]=0;x->isoch.owner[k]=0;x->isoch.token[k]=0;
+        }
+    }
+    if(x->isoch.device==j+1){
+        /* Other devices may retain bulk pages in this shared pool. */
+        x->isoch.device=x->isoch.requested=x->isoch.head=x->isoch.count=x->isoch.done=x->isoch.skip=0;
+        memset(x->isoch.state,0,sizeof(x->isoch.state));
+    }
     if(d->slot)put64(x->dcbaa+8*d->slot,0);
     memset(p+16384+8192*j,0,8192);
-    for(unsigned i=0;i<2;++i){memset(p+40960+4096*(j*2+i),0,4096);memset(p+69632+4096*(j*2+i),0,4096);}
-    if(x->extra_endpoint_owner==j+1){memset(p+65536,0,4096);memset(p+94208,0,4096);x->extra_endpoint_owner=0;}
-    if(x->isoch.device==j+1)memset(&x->isoch,0,sizeof(x->isoch));
+    for(unsigned i=0;i<(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_ENDPOINTS:2u);++i){
+        unsigned n=j*(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_ENDPOINTS:2u)+i;
+        memset(p+RING_BASE+4096*n,0,4096);
+        memset(p+BOUNCE_BASE+4096*A733_XHCI_DMA_BUFFERS*n,0,4096*A733_XHCI_DMA_BUFFERS);
+    }
+    if(!SUNSTONE_USB_HOST_GENERIC&&x->extra_endpoint_owner==j+1){
+        memset(p+RING_BASE+6*4096,0,4096);memset(p+BOUNCE_BASE+6*4096,0,4096);x->extra_endpoint_owner=0;
+    }
     memset(d,0,sizeof(*d));pages(x,j);
     if(x->default_device==j)x->default_device=0;
     return barrier(x);
@@ -226,13 +268,13 @@ static int command(struct a733_xhci *x,struct a733_xhci_device *d,unsigned kind,
 static void ep_context(struct a733_xhci *x,struct a733_xhci_device *d,struct a733_xhci_endpoint *e)
 {
     uint8_t *p=d->input+(e->number+1)*x->context_bytes;
-    /* Isoch IN has type 5 and CErr 0; its Max ESIT Payload is one packet. */
+    /* USB2 high-bandwidth services use Max Burst for transactions per interval. */
     unsigned periodic=e->transfer_type==3||e->transfer_type==1;
-    unsigned type=e->number==1?4:e->transfer_type==3?7:e->transfer_type==1?5:e->direction?6:2;
+    unsigned type=e->number==1?4:e->transfer_type==3?(e->direction?7:3):e->transfer_type==1?5:e->direction?6:2;
     if(periodic)put32(p,e->interval<<16);
     put32(p+4,(e->packet<<16)|(e->burst<<8)|(type<<3)|(e->transfer_type==1?0:3u<<1));
     put64(p+8,(e->ring_pa+16*e->index)|e->cycle);
-    put32(p+16,e->number==1?8:periodic?(e->packet<<16)|e->packet:4096);
+    put32(p+16,e->number==1?8:periodic?((e->packet*(e->burst+1))<<16)|e->packet:4096);
 }
 static void address_context(struct a733_xhci *x,struct a733_xhci_device *d)
 {
@@ -279,7 +321,7 @@ static int submit_endpoint(struct a733_xhci *x,struct a733_xhci_device *d,struct
         d->address=d->pending_address;d->pending_address=0;d->address_status=0;
         notify(x,A733_XHCI_TRANSFER,0,ep,0,0);return 1;
     }
-    uint64_t parameter=e->bounce_pa;uint32_t control=TYPE(e->kind)|IOC,status=e->length;
+    uint64_t parameter=e->dma_active?x->extent.physical+ISOCH_BASE+(e->dma_active-1)*A733_XHCI_ISOCH_PACKET+e->dma_offset:e->bounce_pa;uint32_t control=TYPE(e->kind)|IOC,status=e->length;
     if(e->kind==T_SETUP) {
         parameter=(uint64_t)get32(d->setup)|((uint64_t)get32(d->setup+4)<<32);
         control|=BIT(6)|(d->control_length?(d->control_in?3u:2u)<<16:0);status=8;
@@ -364,8 +406,8 @@ static int isoch_event(struct a733_xhci *x,struct a733_xhci_device *d,struct a73
         if(k==A733_XHCI_ISOCH_TDS||(k>s->done&&!s->skip))return 0;
         isoch_skip(s,k);s->skip=0;
         unsigned i=(s->head+s->done)%A733_XHCI_ISOCH_TDS;
-        if(!d->detach&&code==1&&!residual){s->bytes[i]=e->packet;s->state[i]=2;}
-        else if(!d->detach&&code==13&&residual<=e->packet){s->bytes[i]=e->packet-residual;s->state[i]=2;}
+        if(!d->detach&&code==1&&!residual){s->bytes[i]=e->packet*(e->burst+1);s->state[i]=2;}
+        else if(!d->detach&&code==13&&residual<=e->packet*(e->burst+1)){s->bytes[i]=e->packet*(e->burst+1)-residual;s->state[i]=2;}
         else if(code==1||code==13||code==3||code==4||code==36){s->state[i]=3;++s->dropped;}
         else return 0;
         ++s->done;
@@ -397,12 +439,17 @@ static int isoch_refill(struct a733_xhci *x,struct a733_xhci_device *d,struct a7
     if(e->pending!=6)e->deadline=x->lifetime_deadline-x->last_now>ISOCH_US?x->last_now+ISOCH_US:x->lifetime_deadline;
     while(s->count<A733_XHCI_ISOCH_TDS){
         unsigned i=(s->head+s->count)%A733_XHCI_ISOCH_TDS;
-        if(!ring(x,e->ring,e->ring_pa,&e->index,&e->cycle,e->bounce_pa+i*A733_XHCI_ISOCH_PACKET,e->packet,
-           TYPE(5)|IOC|BIT(2)|BIT(31),&s->trb[i]))return 0;
+        unsigned buffer=SUNSTONE_USB_HOST_GENERIC?0:i;
+        while(buffer<A733_XHCI_ISOCH_BUFFERS&&s->held[buffer])++buffer;
+        if(buffer==A733_XHCI_ISOCH_BUFFERS)break;
+        s->buffer[i]=buffer;s->held[buffer]=DMA_ISO_QUEUED;
+        s->owner[buffer]=(unsigned)(d-x->devices)*A733_XHCI_ENDPOINTS+(unsigned)(e-d->endpoints)+1;
+        if(!ring(x,e->ring,e->ring_pa,&e->index,&e->cycle,(SUNSTONE_USB_HOST_GENERIC?x->extent.physical+ISOCH_BASE:e->bounce_pa)+buffer*A733_XHCI_ISOCH_PACKET,e->packet*(e->burst+1),
+           TYPE(5)|IOC|BIT(2)|BIT(31)|(e->burst<<16),&s->trb[i]))return 0;
         s->state[i]=1;s->bytes[i]=0;++s->count;
     }
-    e->pending=6;
-    return wr(x,x->doorbell+d->slot*4,e->number);
+    e->pending=s->count>s->done?6:0;
+    return !e->pending||wr(x,x->doorbell+d->slot*4,e->number);
 }
 /* Under teardown, a TD may still finish by itself, by a halting error or by
  * the requested stop. No completion reaches the class. A forced stop event may
@@ -434,14 +481,17 @@ static int transfer_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
     for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)if(d->endpoints[i].number==number&&d->endpoints[i].pending==2)e=&d->endpoints[i];
     if(!e||e->pending_trb!=pointer||e->aborted)return 0;
     if(code==6){
-        /* Admit GET_MAX_LUN or one bulk STALL armed by the READ10 owner.
+        /* Recover an addressed EP0 request or one bulk STALL armed by READ10.
          * Revoke the destination and preserve the TD pointer/deadline. EP0
          * notifies after Reset/Dequeue; bulk notifies after Reset so the class
          * can clear the device before Dequeue. No stalled payload is copied. */
-        static const uint8_t max_lun[8]={0xa1,0xfe,0,0,0,0,1,0};
-        if(!d->address||d->speed<3||d->speed>4||d->recovering)return 0;
+        if(!d->address||d->recovering)return 0;
         if(number==1){
-            if(memcmp(d->setup,max_lun,8)||
+            if(!SUNSTONE_USB_HOST_GENERIC){
+                static const uint8_t max_lun[8]={0xa1,0xfe,0,0,0,0,1,0};
+                if(d->speed<3||d->speed>4||memcmp(d->setup,max_lun,8))return 0;
+            }
+            if(d->control_stage==CONTROL_IDLE||
                (e->kind!=T_SETUP&&e->kind!=T_DATA&&e->kind!=T_STATUS))return 0;
         }else {
             if(e->transfer_type!=2||e->kind!=T_NORMAL||!d->read_recovery)return 0;
@@ -464,6 +514,12 @@ static int transfer_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
     if(residual>requested||(code==1&&residual)||(code==13&&(!e->direction||e->kind==T_SETUP||e->kind==T_STATUS)))return 0;
     unsigned bytes=requested-residual;
     if(!barrier(x))return 0;
+    if(e->dma_active){
+        unsigned i=e->dma_active-1;
+        if(e->dma_shared){if(!x->isoch.references[i])return 0;--x->isoch.references[i];}
+        else x->isoch.held[i]=DMA_COMPLETE;
+        e->dma_active=e->dma_shared=e->dma_offset=0;
+    }
     if(e->caller&&e->direction) {
         if(!outside(x,e->caller,e->length)||!checked(x))return 0;
         memcpy(e->caller,e->bounce,bytes);
@@ -500,7 +556,30 @@ static int command_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
         if(e->pending==6)return isoch_finished(x,d,e);
         return e->pending!=2||finished(x,d,e);
     }
-    if(kind==C_DISABLE)return d->detach==2&&reclaim(x,(unsigned)(d-x->devices));
+    if(kind==C_DISABLE){
+        if(d->detach!=2)return 0;
+        /* Disable Slot proves controller ownership ended. App leases survive
+         * until release, while on-ring pages can be discarded now. */
+        unsigned j=(unsigned)(d-x->devices);
+        for(unsigned k=0;k<A733_XHCI_ENDPOINTS;++k){
+            struct a733_xhci_endpoint *e=&d->endpoints[k];
+            if(e->dma_active&&e->dma_shared){
+                unsigned i=e->dma_active-1;
+                if(!x->isoch.references[i])return 0;
+                --x->isoch.references[i];
+            }
+            e->dma_active=e->dma_shared=e->dma_offset=0;
+        }
+        for(unsigned i=0;i<A733_XHCI_ISOCH_BUFFERS;++i){
+            unsigned id=x->isoch.owner[i];
+            if(id&&(id-1)/A733_XHCI_ENDPOINTS==j&&
+               (x->isoch.held[i]==DMA_QUEUED||x->isoch.held[i]==DMA_ISO_QUEUED)){
+                x->isoch.held[i]=0;x->isoch.owner[i]=0;x->isoch.token[i]=0;
+            }
+        }
+        d->detach=3;
+        return borrowed(x,j)?1:reclaim(x,j);
+    }
     if(d->detach)return 1; /* Teardown owns the slot; a completed request has no further effect. */
     unsigned slot_state=get32(d->device+12)>>27;
     if(d->recovering&&(kind==C_STOP||kind==C_CONFIGURE)){
@@ -632,7 +711,8 @@ static int port(struct a733_xhci *x)
 static int teardown(struct a733_xhci *x,unsigned j)
 {
     struct a733_xhci_device *d=&x->devices[j];
-    if(!d->slot)return reclaim(x,j);
+    if(d->detach==3)return borrowed(x,j)?1:reclaim(x,j);
+    if(!d->slot)return borrowed(x,j)?1:reclaim(x,j);
     if(!barrier(x))return 0;
     if(d->detach==1){
         for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
@@ -722,7 +802,7 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
         if(x->command_kind&&x->command_deadline<x->deadline)x->deadline=x->command_deadline;
         for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
             struct a733_xhci_device *d=&x->devices[j];
-            if((d->detach||(d->port_ready&&d->port_ready!=3))&&d->deadline&&d->deadline<x->deadline)x->deadline=d->deadline;
+            if(((d->detach&&d->detach!=3)||(d->port_ready&&d->port_ready!=3))&&d->deadline&&d->deadline<x->deadline)x->deadline=d->deadline;
             if(d->detach)continue;
             /* The isochronous bound is checked against the event ring below. */
             for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)if(((d->endpoints[i].pending&&d->endpoints[i].pending!=6)||
@@ -771,18 +851,19 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
         {
             /* Children before their hub; a detaching hub with a bound child
              * that is not detaching is inconsistent. */
-            unsigned waiting=0;
+            unsigned waiting=0,borrowers=0;
             for(unsigned j=A733_XHCI_DEVICES;j-->0;)if(x->devices[j].detach){
+                if(x->devices[j].detach==3&&borrowed(x,j)){borrowers=1;continue;}
                 if(!childless(x,j)){waiting=1;continue;}
                 if(!teardown(x,j))goto failed;goto done;
             }
-            if(waiting)goto failed;
+            if(waiting&&!borrowers)goto failed;
         }
         if(x->isoch.requested&&x->isoch.count<A733_XHCI_ISOCH_TDS){
             struct a733_xhci_device *d=&x->devices[x->isoch.device-1];struct a733_xhci_endpoint *e=&d->endpoints[1];
-            if(!d->detach&&d->port_ready==3&&e->configured&&!e->aborted){if(!isoch_refill(x,d,e))goto failed;goto done;}
+            if(!d->detach&&d->port_ready==3&&e->configured&&!e->aborted){unsigned before=x->isoch.count;if(!isoch_refill(x,d,e))goto failed;if(x->isoch.count>before)goto done;}
         }
-        if(x->detaching){x->detaching=x->announced=x->removed=x->port_reset=x->speed=0;goto done;}
+        if(x->detaching){unsigned held=0;for(unsigned j=0;j<A733_XHCI_DEVICES;++j)held|=x->devices[j].detach;if(held)goto done;x->detaching=x->announced=x->removed=x->port_reset=x->speed=0;goto done;}
         for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
             struct a733_xhci_device *d=&x->devices[j];
             if(d->port_ready==1){if(!command(x,d,C_ENABLE,x->slot_type<<16))goto failed;d->port_ready=4;goto done;}
@@ -903,18 +984,19 @@ int a733_xhci_open(struct a733_xhci *x,unsigned address,unsigned ep,unsigned typ
         if(address&&actual!=d->endpoints[0].packet)d->evaluate_pending=1;
         d->endpoints[0].opened=1;d->endpoints[0].packet=actual;d->endpoints[0].number=1;return 1;
     }
-    if(!address||type!=2||packet!=(d->speed==4?1024u:512u)||(d->speed!=3&&d->speed!=4))return 0;
+    if(!address||type!=2||(d->speed!=1&&d->speed!=3&&d->speed!=4)||
+       (d->speed==4?packet!=1024:d->speed==3?packet!=512:
+        packet!=8&&packet!=16&&packet!=32&&packet!=64))return 0;
     struct a733_xhci_endpoint *e=endpoint(d,ep);
     if(e)return e->packet==packet&&e->transfer_type==type&&!e->aborted;
     for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(!d->endpoints[i].opened) {
         e=&d->endpoints[i];
-        if(i==2){
-            unsigned owner=(unsigned)(d-x->devices)+1;
+        if(!SUNSTONE_USB_HOST_GENERIC&&i==2){
             if(x->extra_endpoint_owner)return 0;
-            x->extra_endpoint_owner=owner;
+            x->extra_endpoint_owner=(unsigned)(d-x->devices)+1;
             uint8_t *p=(void *)x->extent.cpu;uint64_t base=x->extent.physical;
-            e->ring=(void *)(p+65536);e->ring_pa=base+65536;
-            e->bounce=p+94208;e->bounce_pa=base+94208;e->cycle=1;
+            e->ring=(void *)(p+RING_BASE+6*4096);e->ring_pa=base+RING_BASE+6*4096;
+            e->bounce=p+BOUNCE_BASE+6*4096;e->bounce_pa=base+BOUNCE_BASE+6*4096;e->cycle=1;
         }
         e->opened=1;e->transfer_type=type;e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=!!(ep&128);e->deadline=deadline;return 1;
     }
@@ -931,16 +1013,16 @@ int a733_xhci_open_interrupt(struct a733_xhci *x,unsigned address,unsigned ep,
 {
     struct a733_xhci_device *d=device_address(x,address);
     if(!owner(x)||!d||x->failed||!x->connected||!address||address!=d->address||
-       ep&~0x8fu||!(ep&128)||!(ep&15)||!packet||packet>(d->speed==2?8u:64u)||
+       ep&~0x8fu||!(ep&15)||!packet||packet>(d->speed==2?8u:64u)||
        (d->speed<1||d->speed>4)||!interval||interval>(d->speed>=3?16u:255u)||deadline>x->lifetime_deadline||settled(x,deadline)!=1)return 0;
     unsigned encoded;
     if(d->speed>=3)encoded=interval-1;
     else{encoded=3;for(unsigned v=interval;v>1;v>>=1)++encoded;}
     struct a733_xhci_endpoint *e=endpoint(d,ep);
     if(e)return e->packet==packet&&e->transfer_type==3&&e->interval==encoded&&!e->aborted;
-    for(unsigned i=1;i<2;++i)if(!d->endpoints[i].opened){
+    for(unsigned i=1;i<(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_ENDPOINTS:2u);++i)if(!d->endpoints[i].opened){
         e=&d->endpoints[i];e->opened=1;e->transfer_type=3;e->interval=encoded;
-        e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=1;e->deadline=deadline;return 1;
+        e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=!!(ep&128);e->deadline=deadline;return 1;
     }
     return 0;
 }
@@ -949,15 +1031,19 @@ int a733_xhci_open_isoch(struct a733_xhci *x,unsigned address,unsigned ep,
 {
     struct a733_xhci_device *d=device_address(x,address);
     if(!owner(x)||!d||x->failed||!x->connected||!address||address!=d->address||
-       ep&~0x8fu||!(ep&128)||!(ep&15)||!packet||packet>A733_XHCI_ISOCH_PACKET||(d->speed!=1&&d->speed!=3)||
+       ep&~0x8fu||!(ep&128)||!(ep&15)||!packet||(packet&~0x1fffu)||!(packet&2047)||
+       (packet&2047)>(d->speed==3?1024u:1023u)||((packet>>11)&3)>2||
+       (d->speed==1&&(packet>>11))||(d->speed!=1&&d->speed!=3)||
        !interval||interval>(d->speed==3?4u:1u)||deadline>x->lifetime_deadline||settled(x,deadline)!=1)return 0;
-    unsigned encoded=d->speed==3?interval-1:3;
+    unsigned encoded=d->speed==3?interval-1:3,burst=packet>>11;
+    packet&=2047;
+    if(packet*(burst+1)>A733_XHCI_ISOCH_PACKET)return 0;
     struct a733_xhci_endpoint *e=endpoint(d,ep);
-    if(e)return e->packet==packet&&e->transfer_type==1&&e->interval==encoded&&!e->aborted;
+    if(e)return e->packet==packet&&e->burst==burst&&e->transfer_type==1&&e->interval==encoded&&!e->aborted;
     if(x->isoch.device||d->endpoints[1].opened)return 0;
-    e=&d->endpoints[1];e->opened=1;e->transfer_type=1;e->interval=encoded;
+    e=&d->endpoints[1];e->opened=1;e->transfer_type=1;e->interval=encoded;e->burst=burst;
     e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=1;e->deadline=deadline;
-    x->isoch=(struct a733_xhci_isoch){.device=(unsigned)(d-x->devices)+1};return 1;
+    x->isoch.device=(unsigned)(d-x->devices)+1;return 1;
 }
 static struct a733_xhci_endpoint *isoch_endpoint(struct a733_xhci *x,unsigned address,unsigned ep)
 {
@@ -971,17 +1057,97 @@ int a733_xhci_isoch_start(struct a733_xhci *x,unsigned address,unsigned ep)
     if(!isoch_endpoint(x,address,ep))return 0;
     x->isoch.requested=1;return 1;
 }
+int a733_xhci_isoch_acquire(struct a733_xhci *x,unsigned address,unsigned ep,
+    const uint8_t **data,unsigned *bytes,uint64_t *token)
+{
+    if(!SUNSTONE_USB_HOST_GENERIC)return -1;
+    struct a733_xhci_endpoint *e=isoch_endpoint(x,address,ep);
+    if(!e||!outside(x,data,sizeof(*data))||!outside(x,bytes,sizeof(*bytes))||
+       !outside(x,token,sizeof(*token))||!checked(x))return -1;
+    struct a733_xhci_isoch *s=&x->isoch;
+    while(s->done){
+        unsigned i=s->head,state=s->state[i],n=s->bytes[i],buffer=s->buffer[i];
+        if(buffer>=A733_XHCI_ISOCH_BUFFERS||s->held[buffer]!=DMA_ISO_QUEUED){fault(x);return -1;}
+        s->state[i]=0;s->head=(i+1)%A733_XHCI_ISOCH_TDS;--s->count;--s->done;
+        if(state==3){s->held[buffer]=0;s->owner[buffer]=0;continue;}
+        if(state!=2||n>e->packet*(e->burst+1)||!barrier(x)){fault(x);return -1;}
+        uint64_t id=lease_token();if(!id){fault(x);return -1;}
+        s->held[buffer]=DMA_ISO_BORROWED;s->token[buffer]=id;
+        *data=(const uint8_t *)x->extent.cpu+ISOCH_BASE+buffer*A733_XHCI_ISOCH_PACKET;
+        *bytes=n;*token=s->token[buffer];return 1;
+    }
+    return 0;
+}
+int a733_xhci_isoch_release(struct a733_xhci *x,unsigned address,unsigned ep,uint64_t token)
+{
+    if(!SUNSTONE_USB_HOST_GENERIC)return 0;
+    if(!owner(x)||x->failed||!token||!checked(x))return 0;
+    struct a733_xhci_isoch *s=&x->isoch;
+    for(unsigned i=0;i<A733_XHCI_ISOCH_BUFFERS;++i)if(s->held[i]==DMA_ISO_BORROWED&&s->token[i]==token){
+        unsigned id=s->owner[i];if(!id||id>A733_XHCI_DEVICES*A733_XHCI_ENDPOINTS)return fault(x);
+        struct a733_xhci_device *d=&x->devices[(id-1)/A733_XHCI_ENDPOINTS];
+        struct a733_xhci_endpoint *e=&d->endpoints[(id-1)%A733_XHCI_ENDPOINTS];
+        if(d->address!=address||e->address!=ep||e->transfer_type!=1)return 0;
+        if(!barrier(x))return fault(x);
+        s->held[i]=0;s->owner[i]=0;s->token[i]=0;return 1;
+    }
+    return 0;
+}
 int a733_xhci_isoch_take(struct a733_xhci *x,unsigned address,unsigned ep,uint8_t *out,unsigned capacity,unsigned *bytes)
 {
-    struct a733_xhci_endpoint *e=isoch_endpoint(x,address,ep);struct a733_xhci_isoch *s=&x->isoch;
-    if(!e||!bytes||capacity<e->packet||!outside(x,out,e->packet))return -1;
-    while(s->done){
-        unsigned i=s->head,state=s->state[i],n=s->bytes[i];
-        s->state[i]=0;s->head=(i+1)%A733_XHCI_ISOCH_TDS;--s->count;--s->done;
-        if(state==3)continue;
-        /* The completion event returned this packet's bounce bytes to software. */
-        if(state!=2||n>e->packet||!barrier(x)){fault(x);return -1;}
-        memcpy(out,e->bounce+i*A733_XHCI_ISOCH_PACKET,n);*bytes=n;return 1;
+    struct a733_xhci_endpoint *e=isoch_endpoint(x,address,ep);
+    if(!e||!outside(x,bytes,sizeof(*bytes))||capacity<e->packet*(e->burst+1)||
+       !outside(x,out,e->packet*(e->burst+1)))return -1;
+    if(!SUNSTONE_USB_HOST_GENERIC){
+        struct a733_xhci_isoch *s=&x->isoch;
+        while(s->done){
+            unsigned i=s->head,state=s->state[i],n=s->bytes[i],buffer=s->buffer[i];
+            s->state[i]=0;s->head=(i+1)%A733_XHCI_ISOCH_TDS;--s->count;--s->done;
+            s->held[buffer]=0;s->owner[buffer]=0;
+            if(state==3)continue;
+            if(state!=2||n>e->packet*(e->burst+1)||!barrier(x)){fault(x);return -1;}
+            memcpy(out,e->bounce+buffer*A733_XHCI_ISOCH_PACKET,n);*bytes=n;return 1;
+        }
+        return 0;
+    }
+    const uint8_t *data;unsigned n;uint64_t token;
+    int result=a733_xhci_isoch_acquire(x,address,ep,&data,&n,&token);
+    if(result!=1)return result;
+    memcpy(out,data,n);*bytes=n;
+    return a733_xhci_isoch_release(x,address,ep,token)?1:-1;
+}
+int a733_xhci_dma_acquire(struct a733_xhci *x,unsigned address,unsigned ep,
+    uint8_t **data,unsigned *capacity,uint64_t *token)
+{
+    if(!SUNSTONE_USB_HOST_GENERIC)return -1;
+    struct a733_xhci_device *d=device_address(x,address);
+    struct a733_xhci_endpoint *e=d?endpoint(d,ep):NULL;
+    if(!owner(x)||x->failed||!d||d->detach||!e||!(ep&15)||!e->opened||e->aborted||
+       e->transfer_type==1||!outside(x,data,sizeof(*data))||!outside(x,capacity,sizeof(*capacity))||
+       !outside(x,token,sizeof(*token))||!checked(x))return -1;
+    struct a733_xhci_isoch *s=&x->isoch;
+    for(unsigned i=0;i<A733_XHCI_ISOCH_BUFFERS;++i)if(!s->held[i]){
+        uint64_t id=lease_token();if(!id){fault(x);return -1;}
+        s->held[i]=DMA_RESERVED;s->token[i]=id;
+        s->owner[i]=(unsigned)(d-x->devices)*A733_XHCI_ENDPOINTS+(unsigned)(e-d->endpoints)+1;
+        *data=(uint8_t *)x->extent.cpu+ISOCH_BASE+i*A733_XHCI_ISOCH_PACKET;
+        *capacity=A733_XHCI_TRANSFER_BYTES;*token=id;return 1;
+    }
+    return 0;
+}
+int a733_xhci_dma_release(struct a733_xhci *x,unsigned address,unsigned ep,uint64_t token)
+{
+    if(!SUNSTONE_USB_HOST_GENERIC)return 0;
+    if(!owner(x)||x->failed||!(ep&15)||!token||!checked(x))return 0;
+    struct a733_xhci_isoch *s=&x->isoch;
+    for(unsigned i=0;i<A733_XHCI_ISOCH_BUFFERS;++i)if(s->token[i]==token&&
+       (s->held[i]==DMA_RESERVED||s->held[i]==DMA_COMPLETE)&&!s->references[i]){
+        unsigned id=s->owner[i];if(!id||id>A733_XHCI_DEVICES*A733_XHCI_ENDPOINTS)return fault(x);
+        struct a733_xhci_device *d=&x->devices[(id-1)/A733_XHCI_ENDPOINTS];
+        struct a733_xhci_endpoint *e=&d->endpoints[(id-1)%A733_XHCI_ENDPOINTS];
+        if(d->address!=address||e->address!=ep)return 0;
+        if(!barrier(x))return fault(x);
+        s->held[i]=0;s->owner[i]=0;s->token[i]=0;return 1;
     }
     return 0;
 }
@@ -1004,9 +1170,27 @@ int a733_xhci_setup(struct a733_xhci *x,unsigned address,const uint8_t setup[8],
 int a733_xhci_transfer(struct a733_xhci *x,unsigned address,unsigned ep,uint8_t *buffer,unsigned bytes,uint64_t deadline)
 {
     struct a733_xhci_device *d=device_address(x,address);
-    if(!owner(x)||!d||x->failed||address!=d->address||ep&~0x8fu||bytes>A733_XHCI_TRANSFER_BYTES||
-       (bytes&&!outside(x,buffer,bytes))||deadline>x->lifetime_deadline)return 0;
+    if(!owner(x)||!d||x->failed||address!=d->address||ep&~0x8fu||bytes>A733_XHCI_TRANSFER_BYTES||deadline>x->lifetime_deadline)return 0;
     struct a733_xhci_endpoint *e=endpoint(d,ep);
+    unsigned direct=0,offset=0,shared=0;
+    if(e&&(ep&15)){
+        struct a733_xhci_isoch *s=&x->isoch;
+        unsigned id=(unsigned)(d-x->devices)*A733_XHCI_ENDPOINTS+(unsigned)(e-d->endpoints)+1;
+        for(unsigned k=0;k<A733_XHCI_ISOCH_BUFFERS;++k){
+            uintptr_t start=x->extent.cpu+ISOCH_BASE+k*A733_XHCI_ISOCH_PACKET;
+            uintptr_t pointer=(uintptr_t)buffer;
+            if(s->held[k]==DMA_RESERVED&&s->owner[k]==id&&pointer==start){direct=k+1;break;}
+            /* OUT may reference a completed IN lease on the same device, for
+             * example after skipping a USB serial status header. */
+            if(!(ep&128)&&s->held[k]==DMA_COMPLETE&&s->owner[k]&&
+               (s->owner[k]-1)/A733_XHCI_ENDPOINTS==(unsigned)(d-x->devices)&&
+               pointer>=start&&pointer-start<A733_XHCI_TRANSFER_BYTES&&
+               bytes<=A733_XHCI_TRANSFER_BYTES-(pointer-start)){
+                direct=k+1;offset=(unsigned)(pointer-start);shared=1;break;
+            }
+        }
+    }
+    if(bytes&&!direct&&!outside(x,buffer,bytes))return 0;
     if(!e||!e->opened||e->pending||e->aborted||e->transfer_type==1||
        ((ep&15)&&d->recovering)||settled(x,deadline)!=1)return 0;
     if(ep&15)for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(d->endpoints[i].pending==7)return 0;
@@ -1019,8 +1203,13 @@ int a733_xhci_transfer(struct a733_xhci *x,unsigned address,unsigned ep,uint8_t 
             if(bytes||direction!=status_in)return 0;kind=d->address_status?T_ADDRESS_STATUS:T_STATUS;
         } else return 0;
     }
-    if(bytes&&!direction)memcpy(e->bounce,buffer,bytes);
-    e->caller=bytes&&direction?buffer:NULL;e->length=bytes;e->direction=direction;e->kind=kind;
+    if(bytes&&!direction&&!direct)memcpy(e->bounce,buffer,bytes);
+    if(direct){
+        e->dma_active=direct;e->dma_offset=offset;e->dma_shared=shared;
+        if(shared){if(x->isoch.references[direct-1]==UINT_MAX)return fault(x);++x->isoch.references[direct-1];}
+        else x->isoch.held[direct-1]=DMA_QUEUED;
+    }
+    e->caller=bytes&&direction&&!direct?buffer:NULL;e->length=bytes;e->direction=direction;e->kind=kind;
     e->address=ep;e->deadline=deadline;e->pending=1;return 1;
 }
 int a733_xhci_read_recovery(struct a733_xhci *x,unsigned address)

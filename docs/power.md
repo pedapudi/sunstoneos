@@ -29,14 +29,16 @@ was `0x00`, matching the pinned AXP8191 reference driver.
 | Setting | Register value | Interpretation from the reference register map |
 | --- | --- | --- |
 | DCDC enables | `0x10 = 0xff` | DCDC8 enable bit is set |
-| DCDC8 voltage | `0x19 = 0xe4` | Seven-bit selector 100 programs 1.8 V |
+| DCDC8 voltage | `0x19 = 0xe4` | Seven-bit selector 100; voltage interpretation disputed |
 | LDO enables | `0x22 = 0xe1` | DLDO6 enable bit is set |
 | DLDO6 voltage | `0x39 = 0x14` | Selector 20 programs 2.5 V |
 | DCDC1 voltage | `0x12 = 0x17` | Selector 23 programs 3.3 V |
 | Switched DCDC1 outputs | `0x11 = 0x17` | DC1SW2 is enabled; DC1SW1 is disabled |
 
 The board device tree assigns DCDC8 to UFS VCCQ/VCCQ2 and DLDO6 to UFS VCC.
-These are programmed settings, not measured voltages or proof of physical
+The [PMIC source comparison](designs/pmic-reference-reconciliation.md) gives
+DCDC8 code 100 as 1.8 V in U-Boot and 3.1 V in Linux. The shared decoder now
+retains this code as undecoded. These bytes prove neither voltage nor physical
 storage population. Their enable bits remove disabled regulator configuration
 as the immediate explanation for UFS failure. No voltage setting was changed.
 

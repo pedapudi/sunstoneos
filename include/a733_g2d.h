@@ -12,7 +12,9 @@
  * assigned-clock-rates of the g2d node; g2d_parents[0] in ccu-sun60iw2.c). */
 #define A733_G2D_MODULE UINT32_C(0x00000000)
 #define A733_G2D_MODULE_HZ UINT32_C(300000000)
-/* One immutable job, no reclamation or reset on any outcome. RCQ memory is a
- * separate zeroed, uncached 4096-byte READ-only IOMMU mapping. */
+/* One immutable job; resources remain retained on every outcome. Native
+ * success acknowledges task-end and pulses mixer AHB reset before copying.
+ * That reset does not prove drain. RCQ uses a separate zeroed, uncached
+ * 4096-byte READ-only IOMMU mapping. */
 int a733_g2d_commands(void *,size_t,const struct a733_g2d_session *);
 #endif

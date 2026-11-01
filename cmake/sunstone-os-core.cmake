@@ -1,6 +1,8 @@
 # OS implementation and device owners, independent of application sources.
 option(SUNSTONE_A733_OS "Build the integrated OS image" OFF)
 option(SUNSTONE_A733_OS_RESIDENT "Integrated OS with the resident lifetime" OFF)
+option(SUNSTONE_A733_OS_USB_CLASSES "OS input, serial and camera host services" OFF)
+option(SUNSTONE_A733_OS_USB_JPEG "OS camera MJPEG hardware decoder" OFF)
 option(SUNSTONE_A733_OS_AUDIO "OS I2S capture service" OFF)
 option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF)
 option(SUNSTONE_A733_OS_HEADSET "OS Bluetooth headset capture service" OFF)
@@ -16,6 +18,20 @@ if(NOT SUNSTONE_A733_OS AND NOT SUNSTONE_A733_OS_CORE AND NOT SUNSTONE_A733_OS_H
   return()
 endif()
 include_guard(GLOBAL)
+if(SUNSTONE_A733_OS_USB_CLASSES AND (SUNSTONE_A733_OS_NPU OR SUNSTONE_A733_OS_CPU_RETURN))
+  message(FATAL_ERROR "USB class memory conflicts with the NPU pool; returning USB class drain is not qualified")
+endif()
+if(SUNSTONE_A733_OS_USB_CLASSES AND NOT SUNSTONE_BOARD_USB2_IRQ)
+  message(FATAL_ERROR "USB class services require SUNSTONE_BOARD_USB2_IRQ=ON")
+endif()
+if(SUNSTONE_A733_OS_USB_JPEG AND
+   (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR
+    SUNSTONE_A733_OS_NPU OR SUNSTONE_A733_OS_GPU_LINEAR))
+  message(FATAL_ERROR "USB JPEG owns runtime NC allocation; other device owners need allocator serialization")
+endif()
+if(SUNSTONE_A733_OS_USB_JPEG AND NOT SUNSTONE_A733_OS_USB_CLASSES)
+  message(FATAL_ERROR "USB JPEG requires USB class services")
+endif()
 if(NOT SUNSTONE_BOARD_SUPERVISED OR NOT TARGET sunstone-a733-board)
   message(FATAL_ERROR "The OS kit requires the supervised native board composition")
 endif()
@@ -109,7 +125,7 @@ set(os_build "${CMAKE_CURRENT_BINARY_DIR}/os-image")
 file(MAKE_DIRECTORY "${os_build}")
 get_target_property(os_sources sunstone-a733-board SOURCES)
 list(REMOVE_ITEM os_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
-  "${board_build}/boot-supervised.c" "${board_build}/boot.c" "${board_build}/build-id.c"
+  "${board_build}/boot-host-irq.c" "${board_build}/boot-supervised.c" "${board_build}/boot.c" "${board_build}/build-id.c"
   "${os_root}/apps/board/admission.c" "${os_root}/apps/board/identity.c"
   "${os_root}/apps/board/client.c" "${os_root}/apps/board/usb0.c")
 if(SUNSTONE_A733_OS_RESIDENT)
@@ -131,11 +147,16 @@ apply_build_patch("${os_build}/boot.c" "${os_boot_base}" "${os_root}/apps/os/boo
 # Retained per-core fault records and their previous-boot report
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
-  apps/os/application.c apps/os/session.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
+  apps/os/usb-service.c apps/os/application.c apps/os/session.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
   apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
   drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c platform/a733/fault.S platform/a733/fault.c)
 set(os_patches "${os_root}/apps/os/boot.patch")
+if(SUNSTONE_A733_OS_USB_CLASSES)
+  apply_build_patch("${os_build}/link-usb.ld" "${storage_build}/link.ld"
+    "${os_root}/apps/os/usb-memory-link.patch")
+  list(APPEND os_patches "${os_root}/apps/os/usb-memory-link.patch")
+endif()
 if(SUNSTONE_A733_OS_RESIDENT)
   list(APPEND os_patches "${os_root}/apps/os/boot-resident.patch")
 endif()
@@ -290,6 +311,11 @@ set(os_boot_final "${os_build}/boot.c")
 if(SUNSTONE_A733_OS_CPU_RETURN)
   include("${os_root}/cmake/a733-os-cpu-return.cmake")
 endif()
+if(SUNSTONE_A733_OS_USB_JPEG)
+  list(APPEND os_added apps/os/usb-jpeg-native.c apps/jpeg/input.c
+    drivers/video/a733_video_jpeg.c drivers/video/a733_video_jpeg_run.c
+    drivers/video/a733_video_platform.c drivers/video/a733_video_unit.c drivers/iommu/a733_iommu.c)
+endif()
 list(TRANSFORM os_added PREPEND "${os_root}/")
 list(APPEND os_sources "${os_boot_final}" ${os_added})
 list(REMOVE_DUPLICATES os_sources)
@@ -331,6 +357,12 @@ foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE
     set_property(TARGET sunstone-a733-os-core PROPERTY ${property} "${value}")
   endif()
 endforeach()
+if(SUNSTONE_A733_OS_USB_CLASSES)
+  get_target_property(os_links sunstone-a733-os-core LINK_OPTIONS)
+  list(FILTER os_links EXCLUDE REGEX "^-Wl,-T,|__uncached_pool_size")
+  list(APPEND os_links "-Wl,-T,${os_build}/link-usb.ld")
+  set_property(TARGET sunstone-a733-os-core PROPERTY LINK_OPTIONS "${os_links}")
+endif()
 get_target_property(os_includes sunstone-a733-os-core INCLUDE_DIRECTORIES)
 list(REMOVE_ITEM os_includes "${os_root}/runtime/include" "${SUNSTONE_NETWORK_C_HEADERS}")
 set_property(TARGET sunstone-a733-os-core PROPERTY INCLUDE_DIRECTORIES "${os_includes}")
@@ -338,6 +370,12 @@ sunstone_smp_compile(sunstone-a733-os-core)
 get_target_property(os_definitions sunstone-a733-os-core COMPILE_DEFINITIONS)
 list(FILTER os_definitions EXCLUDE REGEX "^A733_SMP_(CONTRACT|RESULT)_MAGIC=")
 set_property(TARGET sunstone-a733-os-core PROPERTY COMPILE_DEFINITIONS "${os_definitions}")
+if(SUNSTONE_A733_OS_USB_JPEG)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_JPEG=1)
+endif()
+if(SUNSTONE_A733_OS_USB_CLASSES)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_CLASSES=1 SUNSTONE_USB_HOST_GENERIC=1 SUNSTONE_USB_APP_ALIAS=1)
+endif()
 target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
   "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_A733_OS_CPU_RETURN=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_CRUMBS=1>"
@@ -401,6 +439,14 @@ endforeach()
 # Keep libraries with their existing device owner. The main core is built even
 # when no application is selected; descriptors and result storage belong to images.
 file(GLOB os_headers "${os_root}/apps/os/*.h")
+if(SUNSTONE_A733_OS_USB_CLASSES)
+  list(APPEND os_headers "${os_root}/include/a733_usb_memory.h" "${os_root}/include/sunstone_usb_service.h"
+    "${os_root}/include/sunstone_usb_hid.h" "${os_root}/include/sunstone_usb_serial.h"
+    "${os_root}/include/sunstone_usb_uvc.h" "${os_root}/include/sunstone_usb_transport.h")
+endif()
+if(SUNSTONE_A733_OS_USB_JPEG)
+  list(APPEND os_headers "${os_root}/apps/jpeg/native-shared.h" "${os_root}/include/sunstone_usb_jpeg.h")
+endif()
 set(os_inputs ${board_inputs} ${os_sources} ${os_headers} ${os_generated} ${os_patches} ${os_external_inputs}
   "${os_root}/platform/a733-smp-cached/irq_table.h" "${os_root}/include/a733_fault.h"
   "${os_root}/include/a733_thermal.h" "${os_root}/include/a733_thermal_native.h"
@@ -411,6 +457,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${os_inputs})
 set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_INPUTS "${os_inputs}")
 if(SUNSTONE_A733_OS_NPU)
   set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_LINK_SCRIPT "${os_build}/link-npu.ld")
+elseif(SUNSTONE_A733_OS_USB_CLASSES)
+  set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_LINK_SCRIPT "${os_build}/link-usb.ld")
 else()
   set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_LINK_SCRIPT "${storage_build}/link.ld")
 endif()

@@ -235,7 +235,7 @@ void kernel_main(void)
     struct a733_pin_request req[]={{5,{0,0,0},{3,0,0}},{6,{0,0,0},{3,0,0}},{8,{0,0,0},{3,0,0}},{7,{0,0,0},{3,0,0}}};
     configASSERT(a733_i2s_platform_duplex_init(&bindings[0],&parent,&pins,&audio,7,req,4));
     for(unsigned j=0;j<2;++j){profiles[j].duplex=1;profiles[j].stream=(struct a733_i2s_stream_profile){
-        {24576000,16000,0,32,32,1,0},a733_i2s_platform_stream_operations(),&bindings[0],j?A733_I2S_TRANSMIT:A733_I2S_RECEIVE,cyclic_case==9?1000000:500000,1};}
+        {24576000,16000,0,32,32,1,0},a733_i2s_platform_stream_operations(),&bindings[0],j?A733_I2S_TRANSMIT:A733_I2S_RECEIVE,cyclic_case==9?1000000:500000,1,0};}
     struct dma_memory_window window={(uintptr_t)cyclic_pool,(uintptr_t)cyclic_pool,sizeof(cyclic_pool),7};
     struct dma_fifo_port ports[]={{A733_I2S0_RXFIFO,3,1u<<4,1u<<8,A733_DMA_READ},{A733_I2S0_TXFIFO,3,1u<<4,1u<<8,A733_DMA_WRITE}};
     configASSERT(a733_dma_native_init(&native,0x09000000,0x09000000,&window,1,ports,2,fatal,NULL));

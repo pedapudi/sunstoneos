@@ -29,7 +29,8 @@ assert HEAD.size == 88 and AUDIO.size == 16 and REGION.size == 56
 assert HEAD.size + AUDIO.size + REGIONS * REGION.size == MANIFEST_BYTES
 
 DEVICES = {'usb-storage': 1 << 0, 'usb-keyboard': 1 << 1, 'audio-i2s': 1 << 2,
-           'audio-headset': 1 << 3, 'gpu': 1 << 4}
+           'audio-headset': 1 << 3, 'gpu': 1 << 4,
+           'usb-mouse': 1 << 5, 'usb-serial': 1 << 6, 'usb-camera': 1 << 7}
 CAPTURE = DEVICES['audio-i2s'] | DEVICES['audio-headset']
 CLUSTER = {'a55': 0, 'a76': 1}
 KIND = {'input': 1, 'work': 2, 'output': 3}
@@ -338,7 +339,9 @@ def c_tables(m):
              '#ifdef SUNSTONE_A733_OS_AUDIO', '    {"audio",1000000},', '#endif',
              '#ifdef SUNSTONE_A733_OS_RADIO', '    {"radio",1000000},{"network",1000000},', '#endif',
              '#ifdef SUNSTONE_A733_OS_HEADSET', '    {"bluetooth",1000000},{"headset",1000000},', '#endif', '};',
+             '#ifdef SUNSTONE_BOARD_USB2_IRQ', 'extern void board_host_irq(void);', '#endif',
              'const struct a733_irq_route a733_irq_routes[] = {', '    {71,0,0xd8,os_thermal_irq},',
+             '#ifdef SUNSTONE_BOARD_USB2_IRQ', '    {187,0,0xb0,board_host_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_NPU', '    {97,OS_NPU_CORE,0xd8,os_npu_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_AUDIO', '    {143,0,0xd8,os_audio_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_GPU', ('    {95,A733_SMP_APPLICATION_CORE,0xd8,os_gpu_queue_irq},' if m.get('cluster', 0) else '    {95,2,0xd8,os_gpu_queue_irq},'), '#endif', '};',

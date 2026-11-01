@@ -238,18 +238,18 @@ Radio must select its supply mapping from separately admitted board topology.
 
 The provider reads DCDC1/2/3/4/5/8/9, BLDO1/2/5, CLDO1/2/3/5, ELDO6 and DC1SW2.
 DCDC1/DC1SW2 decoding covers valid selectors through 28; DCDC2/3/4/5 through 87;
-BLDO1/2/5 and CLDO1/2/3/5 through 29. DCDC8 and DCDC9 decoding stop at
-selector 101. The pinned bootloader getter
-uses a power-of-two `ALIGN` macro with a 100 mV step at selector 102 and above;
-this does not establish the higher-range voltage formula. Such selectors
-retain their raw bytes with `decoded=0`. Required DCDC8 selector 100 is in
-the source-defined linear region and represents 1.8 V.
+BLDO1/2/5 and CLDO1/2/3/5 through 29. DCDC8 and DCDC9 decode only selectors
+0–87, the range on which the pinned Linux and U-Boot references agree.
+Codes 88–127 retain their complete raw selector and enable bytes with
+`decoded=0` and `programmed_uv=0`. Enable status remains independent.
+[The reference comparison](designs/pmic-reference-reconciliation.md) preserves
+both interpretations, including DCDC8 code 100 as 1.8 V versus 3.1 V.
 
 DCDC9 reads enable register `0x11` bit0 and selector `0x1a` bits6:0.
-Selectors 0–70 decode as 500 mV plus 10 mV per step. Selectors 71–101 decode
-as 1,200 mV plus 20 mV per step above selector 70, reaching 1,820 mV.
-The higher branch remains undecoded; the table's declared 3.4 V maximum does
-not resolve the getter ambiguity. Selector 70 represents 1.2 V.
+Selectors 0–70 decode as 500 mV plus 10 mV per step. Selectors 71–87 decode
+as 1,200 mV plus 20 mV per step above selector 70, reaching 1,540 mV.
+A consumer requiring a higher decoded voltage must refuse admission until
+PMIC transfer-function applicability is established for the fitted component.
 
 ELDO6 reads enable register `0x23` bit3 and selector `0x3f` bits5:0.
 Selectors 0–40 cover 0.5–1.5 V in 25 mV steps; selector 12 represents 0.8 V.

@@ -3,6 +3,10 @@
  * Copyright (c) 2017-2026, Arm Limited and Contributors. All rights reserved.
  */
 #include "a733_cpu_coherence.h"
+#if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+#include "a733_usb_memory.h"
+#endif
+
 .if (A733_CPU_COHERENCE_TCR_CACHED_WALK >> 48) | (A733_CPU_COHERENCE_TCR_UNCACHED_WALK >> 48)
 .error "A733_CPU_COHERENCE_TCR needs a fourth move"
 .endif
@@ -266,7 +270,7 @@ a733_cpu_coherence_flush:
  * names, then sum both pages with Device loads and compare the sum with the
  * value core 0 recorded at EL3. Root entry 1 must be exactly a table
  * descriptor to another monitor page. Needs x0, x2, x14 from el1_admit;
- * leaves x0, x2, x4 intact and clobbers x5-x13, x15-x17. */
+ * leaves x0, x2, x4 intact and clobbers x3, x5-x13, x15-x17. */
 .macro el1_tables_check
     mrs x5, ctr_el0
     ubfx x5, x5, #16, #4
@@ -288,11 +292,29 @@ a733_cpu_coherence_flush:
     cmp x8, x0
     b.eq .Lrefuse_el1
     flush_page x8
+#if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+    /* These fixed EL1-only L3 pages are part of the same immutable profile.
+     * Flush in Nonsecure space before the walker can consume their words. */
+    adrp x3, a733_cached_usb_el1_l3
+    add x3, x3, :lo12:a733_cached_usb_el1_l3
+    .rept A733_USB_MEMORY_ALIAS_TABLES
+    flush_page x3
+    add x3, x3, #4096
+    .endr
+#endif
     dsb sy
     deadline_check .Lrefuse_el1
     mov x5, xzr
     sum_page x0
     sum_page x8
+#if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+    adrp x8, a733_cached_usb_el1_l3
+    add x8, x8, :lo12:a733_cached_usb_el1_l3
+    .rept A733_USB_MEMORY_ALIAS_TABLES
+    sum_page x8
+    add x8, x8, #4096
+    .endr
+#endif
     adrp x6, a733_cached_el1_table_sum
     ldr x6, [x6, :lo12:a733_cached_el1_table_sum]
     cmp x5, x6

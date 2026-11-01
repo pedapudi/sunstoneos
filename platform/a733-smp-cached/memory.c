@@ -5,11 +5,16 @@
 #ifdef SUNSTONE_A733_OS_GPU
 #include "../../apps/os/application.h"
 #endif
-/* This builder maps image RAM, and so every local pool byte, with 2 MiB
- * level-2 block descriptors; the QEMU golden comparison in
- * checks/device-memory-capacity.c fixes them. The local pool check of
- * a733_memory_critical.h therefore makes one translation per 2 MiB block in
- * every image that links this file. */
+#if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+#include "a733_usb_memory.h"
+#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY) || defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+#error "USB class memory requires its own fixed pool profile"
+#endif
+#endif
+/* Physical pools use 2 MiB level-2 blocks, so one translation per block
+ * checks their attributes at admission. The generic USB application alias
+ * uses separate level-3 pages and is outside those allocator checks.
+ * checks/usb-memory.py verifies its page permissions and physical targets. */
 const uintptr_t a733_local_pool_stride = (uintptr_t)2 << 20;
 #if defined(A733_GPU_OUTPUT_EL0_READ_ONLY) && defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
 #error "The read-only GPU output view rewrites local-layout entries; the extended layout has none"
@@ -19,8 +24,11 @@ const uintptr_t a733_local_pool_stride = (uintptr_t)2 << 20;
 uint64_t a733_cached_el3_l1[512] TABLE, a733_cached_el3_l2[512] TABLE;
 uint64_t a733_cached_el3_l3[512] TABLE;
 uint64_t a733_cached_el1_l1[512] TABLE, a733_cached_el1_l2[512] TABLE;
+#if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+uint64_t a733_cached_usb_el1_l3[A733_USB_MEMORY_ALIAS_TABLES][512] TABLE;
+#endif
 /* Word 0 holds the EL1 table sum; the rest keeps the line to itself. Code
- * names it last so that it follows the five pages (checks/cpu-table-walks.py). */
+ * names it last so that it follows the table pages (checks/cpu-table-walks.py). */
 uint64_t a733_cached_el1_table_sum[8] __attribute__((section(".bss.a733_cached_tables"),aligned(64)));
 extern unsigned char __tables_start[], __tables_end[], __bss_end[], __heap_end[];
 extern unsigned char __device_pool_start[], __device_pool_end[];
@@ -68,6 +76,10 @@ int a733_cached_memory_prepare(void)
     if(!a733_camera_memory_admitted() || wb!=A733_CAMERA_POOL_START || we!=A733_CAMERA_POOL_END ||
        nc!=ne || (uintptr_t)__bss_end>(uintptr_t)__heap_end ||
        (uintptr_t)__heap_end>0x41f00000)return 0;
+#elif defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+    if(!os_usb_memory_admitted() || nc!=A733_USB_MEMORY_BASE || ne!=A733_USB_MEMORY_END ||
+       (uintptr_t)__bss_end>(uintptr_t)__heap_end || (uintptr_t)__heap_end>wb ||
+       we<wb || (we!=wb && ((wb|we)&4095 || we-wb>A733_LOCAL_DEVICE_POOL_BYTES || we>0x41f00000)))return 0;
 #else
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
     if (!a733_device_memory_local_pool_valid(wb, we)) return 0;
@@ -104,11 +116,13 @@ int a733_cached_memory_prepare(void)
         a733_cached_el1_l2[i]=common|BIT(53);
     }
 #else
+#if !defined(SUNSTONE_USB_HOST_GENERIC) || !SUNSTONE_USB_HOST_GENERIC
     if (ne != nc) {
         /* Change both aliases before any cache adoption; preserve NS/AP/XN. */
         a733_cached_el3_l2[14] = (a733_cached_el3_l2[14] & ~UINT64_C(28)) | 8;
         a733_cached_el1_l2[14] = (a733_cached_el1_l2[14] & ~UINT64_C(28)) | 8;
     }
+#endif
 #if defined(A733_GPU_OUTPUT_EL0_READ_ONLY)
     /* GPU output region 0x46c00000-0x47000000: AP = 0b11, read-only at EL0
      * and EL1 as the text block is, UXN and PXN, still write-back inner
@@ -140,7 +154,12 @@ int a733_cached_memory_prepare(void)
          * Device mapping of the remaining monitor pages. */
         if (a >= (uintptr_t)__tables_start && a + 4096 <= (uintptr_t)__tables_end) {
             v |= 8 | (UINT64_C(3) << 8);
-            if (a == (uintptr_t)a733_cached_el1_l1 || a == (uintptr_t)a733_cached_el1_l2) v |= BIT(5);
+            if (a == (uintptr_t)a733_cached_el1_l1 || a == (uintptr_t)a733_cached_el1_l2
+#if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+                || (a >= (uintptr_t)a733_cached_usb_el1_l3 &&
+                    a < (uintptr_t)a733_cached_usb_el1_l3 + sizeof(a733_cached_usb_el1_l3))
+#endif
+            ) v |= BIT(5);
         }
         a733_cached_el3_l3[i] = v;
     }
@@ -161,9 +180,39 @@ int a733_cached_memory_prepare(void)
                 *entry++ = v;
         }
 #endif
+#if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+    /* One immutable NC physical view in both regimes. Controller metadata,
+     * scratch and the remaining pool are inaccessible at EL0. */
+    for(uintptr_t a=A733_USB_MEMORY_BASE;a<A733_USB_MEMORY_END;a+=0x200000){
+        unsigned i=(unsigned)((a-0x40000000)>>21);
+        uint64_t common=a|BIT(54)|BIT(10)|(UINT64_C(3)<<8)|8|1;
+        a733_cached_el3_l2[i]=common|BIT(5)|BIT(6);
+        a733_cached_el1_l2[i]=common|BIT(53);
+    }
+    /* The application alias contains payload pages only. AP=11 is read-only
+     * at EL0 and EL1; drivers write through the private identity view. */
+    for(unsigned table=0;table<A733_USB_MEMORY_ALIAS_TABLES;++table){
+        uintptr_t va=A733_USB_MEMORY_ALIAS_BASE+(uintptr_t)table*0x200000;
+        for(unsigned page=0;page<512;++page){
+            uintptr_t address=va+(uintptr_t)page*4096;
+            uint64_t v=0;
+            if(address>=A733_USB_MEMORY_APP_START&&address<A733_USB_MEMORY_APP_END)
+                v=(address-A733_USB_MEMORY_ALIAS_BASE+A733_USB_MEMORY_BASE)|BIT(54)|BIT(53)|
+                    BIT(10)|(UINT64_C(3)<<8)|(UINT64_C(3)<<6)|8|3;
+            a733_cached_usb_el1_l3[table][page]=v;
+        }
+        unsigned i=(unsigned)((va-0x40000000)>>21);
+        a733_cached_el1_l2[i]=(uintptr_t)a733_cached_usb_el1_l3[table]|3;
+        a733_cached_el3_l2[i]=0;
+    }
+#endif
     /* Last table step: each core compares this with its own readback. */
     uint64_t sum = 0;
     for (unsigned i = 0; i < 512; ++i) sum += a733_cached_el1_l1[i] + a733_cached_el1_l2[i];
+    #if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
+    for(unsigned table=0;table<A733_USB_MEMORY_ALIAS_TABLES;++table)
+        for(unsigned page=0;page<512;++page)sum+=a733_cached_usb_el1_l3[table][page];
+#endif
     a733_cached_el1_table_sum[0] = sum;
 #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
     return a733_device_memory_tables_complete();

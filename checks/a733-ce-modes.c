@@ -4,6 +4,7 @@
  * supplies the SHA round constants and initial values and checks every result
  * line against hashlib, hmac, OpenSSL and published vectors. */
 #include "a733_ce_hash.h"
+#include "a733_ce_digest_methods.h"
 #include "a733_ce_cipher.h"
 #include <assert.h>
 #include <stdio.h>
@@ -46,11 +47,53 @@ static int read_reg(void *v,uintptr_t a,uint32_t *out)
 {struct model *m=v;assert(m->held && a!=NS+0xd0 && !(a>=SEC+0x90 && a<=SEC+0x9c));*out=*reg(m,a);return 1;}
 
 /* SHA tables come from the request file; the script derives them from primes. */
-static uint64_t k512[80],initial[6][8];
+static uint64_t k512[80],initial[7][8];
 static uint32_t rotate(uint32_t x,unsigned n) {return (x>>n)|(x<<(32-n));}
 static uint64_t rotate64(uint64_t x,unsigned n) {return (x>>n)|(x<<(64-n));}
 static uint64_t big(const uint8_t *p,unsigned n) {uint64_t v=0;for (unsigned i=0;i<n;++i) v=v<<8|p[i];return v;}
 static void put(uint8_t *p,uint64_t v,unsigned n) {for (unsigned i=0;i<n;++i) p[i]=(uint8_t)(v>>(8*(n-1-i)));}
+static void md5(uint64_t state[8],const uint8_t *block)
+{
+    static const uint32_t k[64]={
+        0xd76aa478,0xe8c7b756,0x242070db,0xc1bdceee,0xf57c0faf,0x4787c62a,0xa8304613,0xfd469501,
+        0x698098d8,0x8b44f7af,0xffff5bb1,0x895cd7be,0x6b901122,0xfd987193,0xa679438e,0x49b40821,
+        0xf61e2562,0xc040b340,0x265e5a51,0xe9b6c7aa,0xd62f105d,0x02441453,0xd8a1e681,0xe7d3fbc8,
+        0x21e1cde6,0xc33707d6,0xf4d50d87,0x455a14ed,0xa9e3e905,0xfcefa3f8,0x676f02d9,0x8d2a4c8a,
+        0xfffa3942,0x8771f681,0x6d9d6122,0xfde5380c,0xa4beea44,0x4bdecfa9,0xf6bb4b60,0xbebfbc70,
+        0x289b7ec6,0xeaa127fa,0xd4ef3085,0x04881d05,0xd9d4d039,0xe6db99e5,0x1fa27cf8,0xc4ac5665,
+        0xf4292244,0x432aff97,0xab9423a7,0xfc93a039,0x655b59c3,0x8f0ccc92,0xffeff47d,0x85845dd1,
+        0x6fa87e4f,0xfe2ce6e0,0xa3014314,0x4e0811a1,0xf7537e82,0xbd3af235,0x2ad7d2bb,0xeb86d391};
+    static const unsigned shift[16]={7,12,17,22,5,9,14,20,4,11,16,23,6,10,15,21};
+    uint32_t a=(uint32_t)state[0],b=(uint32_t)state[1],c=(uint32_t)state[2],d=(uint32_t)state[3];
+    for (unsigned i=0;i<64;++i) {
+        unsigned round=i/16,g=round==0?i:(round==1?(5*i+1)%16:(round==2?(3*i+5)%16:(7*i)%16));
+        uint32_t f=round==0?((b&c)|(~b&d)):(round==1?((d&b)|(~d&c)):(round==2?(b^c^d):(c^(b|~d))));
+        uint32_t next=b+rotate(a+f+k[i]+(uint32_t)le(block+4*g,4),32-shift[4*round+i%4]);
+        a=d;d=c;c=b;b=next;
+    }
+    state[0]=(uint32_t)(state[0]+a);state[1]=(uint32_t)(state[1]+b);
+    state[2]=(uint32_t)(state[2]+c);state[3]=(uint32_t)(state[3]+d);
+}
+static uint32_t left(uint32_t x,unsigned n)
+{n&=31;return n?(x<<n)|(x>>(32-n)):x;}
+static void sm3(uint64_t state[8],const uint8_t *block)
+{
+    uint32_t w[68],v[8];for (unsigned i=0;i<8;++i) v[i]=(uint32_t)state[i];
+    for (unsigned i=0;i<16;++i) w[i]=(uint32_t)big(block+4*i,4);
+    for (unsigned i=16;i<68;++i) {
+        uint32_t x=w[i-16]^w[i-9]^left(w[i-3],15);
+        w[i]=x^left(x,15)^left(x,23)^left(w[i-13],7)^w[i-6];
+    }
+    for (unsigned i=0;i<64;++i) {
+        uint32_t a=v[0],b=v[1],c=v[2],d=v[3],e=v[4],f=v[5],g=v[6],h=v[7];
+        uint32_t ss1=left(left(a,12)+e+left(i<16?0x79cc4519:0x7a879d8a,i),7),ss2=ss1^left(a,12);
+        uint32_t ff=i<16?a^b^c:(a&b)|(a&c)|(b&c),gg=i<16?e^f^g:(e&f)|(~e&g);
+        uint32_t t1=ff+d+ss2+(w[i]^w[i+4]),t2=gg+h+ss1+w[i];
+        v[0]=t1;v[1]=a;v[2]=left(b,9);v[3]=c;
+        v[4]=t2^left(t2,9)^left(t2,17);v[5]=e;v[6]=left(f,19);v[7]=g;
+    }
+    for (unsigned i=0;i<8;++i) state[i]=(uint32_t)state[i]^v[i];
+}
 static void sha1(uint64_t s[8],const uint8_t *block)
 {
     uint32_t w[80],a=(uint32_t)s[0],b=(uint32_t)s[1],c=(uint32_t)s[2],d=(uint32_t)s[3],e=(uint32_t)s[4];
@@ -172,13 +215,17 @@ static void complete(struct model *m)
         ++symmetric_tasks;
         return;
     }
-    unsigned method=(unsigned)le(d+4,4),state_bytes=a733_ce_hash_state(method),word=method>=4?8:4;
+    unsigned method=(unsigned)le(d+4,4),state_bytes=a733_ce_digest_state(method),word=method==4||method==5?8:4;
     uint64_t state[8];memcpy(state,initial[method],sizeof(state));
-    if (le(d,4)&256) for (unsigned i=0;i<state_bytes/word;++i) state[i]=big(d+320+word*i,word);
+    if (le(d,4)&256) for (unsigned i=0;i<state_bytes/word;++i)
+        state[i]=method==0?le(d+320+word*i,word):big(d+320+word*i,word);
     size_t n=(size_t)le(d+36,4);
-    for (size_t at=0;at<n;at+=a733_ce_hash_block(method))
-        (method==1?sha1:(method<4?sha256:sha512))(state,d+384+at);
-    for (unsigned i=0;i<state_bytes/word;++i) put(m->pages+256+word*i,state[i],word);
+    for (size_t at=0;at<n;at+=a733_ce_digest_block(method))
+        (method==0?md5:(method==6?sm3:(method==1?sha1:(method<4?sha256:sha512))))(state,d+384+at);
+    for (unsigned i=0;i<state_bytes/word;++i) {
+        if (method==0) for (unsigned j=0;j<word;++j) m->pages[256+word*i+j]=(uint8_t)(state[i]>>(8*j));
+        else put(m->pages+256+word*i,state[i],word);
+    }
     memcpy(m->last_state,m->pages+256,state_bytes);
 }
 static int write_reg(void *v,uintptr_t a,uint32_t value)
@@ -205,9 +252,9 @@ static int write_reg(void *v,uintptr_t a,uint32_t value)
         assert(m->cipher_starts==m->key_cleans);++m->cipher_starts;++width_seen[width];
     } else {
         assert(value==0x400);
-        unsigned method=(unsigned)le(d+4,4),state_bytes=a733_ce_hash_state(method),control=(unsigned)le(d,4);
+        unsigned method=(unsigned)le(d+4,4),state_bytes=a733_ce_digest_state(method),control=(unsigned)le(d,4);
         assert(state_bytes && (control==0x10002 || control==0x10102) && le(d+40,4)==state_bytes);
-        size_t n=(size_t)le(d+36,4);assert(n && n<=2048 && n%a733_ce_hash_block(method)==0);
+        size_t n=(size_t)le(d+36,4);assert(n && n<=2048 && n%a733_ce_digest_block(method)==0);
         assert(le(d+8,5)==n*8 && le(d+24,5)==PHYS+384 && le(d+29,5)==PHYS+256);
         if (control&256) {assert(le(d+18,5)==PHYS+320 && !memcmp(d+320,m->last_state,state_bytes));}
         else {assert(!le(d+18,5));m->hash_processed=0;}
@@ -265,8 +312,8 @@ static void hash_case(struct model *m,unsigned method,const uint8_t *key,size_t 
 {
     uint8_t input[2048],out[64];memset(out,0xa5,sizeof(out));uint64_t g=0;
     enum a733_ce_hash_result r=a733_ce_hash_start(&m->hash,method,key,key_bytes,10000,&g);
-    unsigned digest=a733_ce_hash_digest(method);
-    assert(g && (r==A733_CE_HASH_READY || (r==A733_CE_HASH_PENDING && key_bytes>a733_ce_hash_block(method))));
+    unsigned digest=a733_ce_digest_size(method);
+    assert(g && (r==A733_CE_HASH_READY || (r==A733_CE_HASH_PENDING && key_bytes>a733_ce_digest_block(method))));
     for (unsigned i=0;i<40 && r==A733_CE_HASH_PENDING;++i) {
         if (m->pending) complete(m);
         r=a733_ce_hash_poll_digest(&m->hash,g,out,digest);unchanged(out,digest);
@@ -291,7 +338,7 @@ static void hash_case(struct model *m,unsigned method,const uint8_t *key,size_t 
         if (r!=A733_CE_HASH_DIGEST) unchanged(out,digest);
     }
     assert(r==A733_CE_HASH_DIGEST);unchanged(out+digest,sizeof(out)-digest);
-    printf("hash %u ",method);if (key) hex(key,key_bytes);else putchar('*');printf(" %zu ",length);hex(out,digest);puts("");
+    printf("hash %u ",method);if (key && key_bytes) hex(key,key_bytes);else putchar(key?'-':'*');printf(" %zu ",length);hex(out,digest);puts("");
     assert(!m->session.client && a733_ce_idle(&m->session.controller));
     zeroed(m->hash.buffer,sizeof(m->hash.buffer));zeroed(m->hash.digest,64);zeroed(m->hash.key,128);
     zeroed(m->pages+256,2432-256);zeroed(m->visible+256,2432-256);
@@ -346,8 +393,8 @@ static void refusals(struct model *m)
 {
     setup(m);struct a733_ce *p=&m->session.controller;uint8_t data[256]={0},state[64]={0},key[32]={0},iv[16]={0},out[64];uint64_t g=77;
     /* Controller: unknown method, wrong block multiple, state/total mismatches. */
-    assert(a733_ce_digest_request(p,0,data,64,0,0,512,10000)==A733_CE_INVALID);
-    assert(a733_ce_digest_request(p,6,data,64,0,0,512,10000)==A733_CE_INVALID);
+    assert(a733_ce_digest_request(p,7,data,64,0,0,512,10000)==A733_CE_INVALID);
+    assert(a733_ce_digest_request(p,-1,data,64,0,0,512,10000)==A733_CE_INVALID);
     assert(a733_ce_digest_request(p,A733_CE_SHA512,data,64,0,0,512,10000)==A733_CE_INVALID);
     assert(a733_ce_digest_request(p,A733_CE_SHA384,data,128,state,1,1024,10000)==A733_CE_INVALID);
     assert(a733_ce_digest_request(p,A733_CE_SHA1,data,64,0,1,1024,10000)==A733_CE_INVALID);
@@ -363,8 +410,8 @@ static void refusals(struct model *m)
     assert(a733_ce_symmetric_request(p,&good,data,17,10000)==A733_CE_INVALID);
     /* Services: method, key length and digest size. */
     uint8_t long_key[A733_CE_HMAC_KEY_MAX+1]={0};
-    assert(a733_ce_hash_start(&m->hash,0,0,0,10000,&g)==A733_CE_HASH_INVALID);
-    assert(a733_ce_hash_start(&m->hash,6,0,0,10000,&g)==A733_CE_HASH_INVALID);
+    assert(a733_ce_hash_start(&m->hash,7,0,0,10000,&g)==A733_CE_HASH_INVALID);
+    assert(a733_ce_hash_start(&m->hash,-1,0,0,10000,&g)==A733_CE_HASH_INVALID);
     assert(a733_ce_hash_start(&m->hash,A733_CE_SHA1,0,5,10000,&g)==A733_CE_HASH_INVALID);
     assert(a733_ce_hash_start(&m->hash,A733_CE_SHA1,long_key,sizeof(long_key),10000,&g)==A733_CE_HASH_INVALID);
     assert(a733_ce_hash_start(&m->hash,A733_CE_SHA1,(const uint8_t *)&g,4,10000,&g)==A733_CE_HASH_INVALID);

@@ -30,7 +30,9 @@ struct a733_ce_hash {
 int a733_ce_hash_bind(struct a733_ce_hash *,struct a733_ce_session *);
 /* A SHA-256 stream; equivalent to a733_ce_hash_start(h,A733_CE_SHA256,0,0,...). */
 enum a733_ce_hash_result a733_ce_hash_begin(struct a733_ce_hash *,uint64_t deadline_us,uint64_t *generation);
-/* Begin a SHA-1, SHA-224, SHA-256, SHA-384 or SHA-512 stream. A nonnull key
+/* Begin a hash stream. Include a733_ce_digest_methods.h for MD5/SM3 and
+ * complete block/state/digest size helpers; SHA-1/224/256/384/512 remain
+ * available through a733_ce.h. A nonnull key
  * selects HMAC (RFC 2104) with 0..A733_CE_HMAC_KEY_MAX key bytes, copied
  * before return. The engine runs every compression; software forms the
  * padded key blocks and the outer hash input. READY accepts input at once.
@@ -44,13 +46,14 @@ enum a733_ce_hash_result a733_ce_hash_start(struct a733_ce_hash *,enum a733_ce_h
  * Input is copied before return and need not survive polling. No new input while
  * a task is pending. Length overflow and alias checks precede consumption. */
 enum a733_ce_hash_result a733_ce_hash_update(struct a733_ce_hash *,uint64_t,const uint8_t *,size_t,size_t *accepted);
-/* Final adds standard SHA software padding, including the original message
+/* Final adds method-specific software padding, including the original message
  * bit length (64-bit field for 64-byte blocks, 128-bit for 128-byte blocks).
+ * MD5 stores that length little endian; SHA and SM3 store it big endian.
  * Empty messages and exact block multiples are supported. HMAC then runs the
  * outer hash before DIGEST. */
 enum a733_ce_hash_result a733_ce_hash_final(struct a733_ce_hash *,uint64_t);
 /* Output changes only on DIGEST, once per stream; bytes must equal
- * a733_ce_hash_digest(method). READY requests more input or
+ * a733_ce_digest_size(method). READY requests more input or
  * finalization. Each successful task zeros and cleans the DMA output, IV and
  * input after copying. Failure clears private CPU staging and retains the actual page,
  * token and active client slot; DMA memory is not cleared after uncertainty.

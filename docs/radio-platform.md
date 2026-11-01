@@ -264,8 +264,10 @@ sources corroborate those register contracts.
 Enumeration starts with one SDIO data line at 400 kHz. Normal firmware owners
 then require the implemented four-bit 25 MHz mode, whose operation remains
 software-tested only.
-High-speed timing, DMA, interrupt service and suspend/resume require separate
-implementation and qualification. Board startup must connect the borrowed
+The [selected vendor sequence](radio-sdio-reference.md) targets SDR104 at
+208 MHz, nominally rounded to 200 MHz with the reference parents. Native UHS
+timing, tuning, DMA, interrupt service and suspend/resume still need implementation
+and qualification. The 25 MHz profile does not complete the vendor-rate requirement. Board startup must connect the borrowed
 card and live guard to the transport worker before firmware loading.
 
 The normal PM startup checks are recorded in

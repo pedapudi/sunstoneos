@@ -5,7 +5,30 @@
 #include "host/hcd.h"
 #include <string.h>
 static struct a733_usb2_native *host;
+#if SUNSTONE_USB_HOST_GENERIC
+#include "sunstone_usb_hid.h"
+#include "sunstone_usb_uvc.h"
+#include "sunstone_usb_serial.h"
+#include "host/usbh_pvt.h"
+static struct sunstone_usb_hid generic_hid[CFG_TUH_DEVICE_MAX][CFG_TUH_HID];
+static sunstone_hid_emit input_emit;
+static void *input_context;
+static uint64_t hid_generation;
+static struct {
+    struct sunstone_uvc_catalog catalog;
+    struct sunstone_uvc stream;
+    struct sunstone_uvc_negotiation negotiation;
+    unsigned address,interface,ready,starting,active,failed,bulk_bytes,bulk_requested,dropped,control_pending,preferred_format;
+    uint64_t generation,bulk_token;
+    uint8_t *bulk_buffer;
+} camera;
+static void camera_poll(void);
+static void transport_retire(void);
+static void camera_disconnect(uint8_t address);
+
+#endif
 static unsigned descriptor_index(unsigned address);
+static unsigned le16(const uint8_t *);
 static void bot_recovery_poll(void);
 static struct a733_usb2_ss *ss_state(unsigned address)
 {
@@ -14,10 +37,48 @@ static struct a733_usb2_ss *ss_state(unsigned address)
     return i<A733_XHCI_DEVICES?&host->descriptors[i].ss:NULL;
 }
 
+/* Store endpoint descriptors before class drivers can open them. Resource and
+ * DMA limits remain enforced by the controller; a descriptor grants no memory. */
+static int generic_configuration(struct a733_usb2_generic *out,const uint8_t *p,unsigned bytes)
+{
+    struct a733_usb2_generic g={0};uint32_t alternates[32]={0};
+    unsigned current=32,alt=0,expected=0,seen=0,interfaces=0,supported=0;
+    if(bytes<9||p[0]!=9||p[1]!=2||le16(p+2)!=bytes||!p[4]||p[4]>32||p[5]!=1)return 0;
+    for(unsigned at=9;at<bytes;){
+        unsigned n=p[at];if(n<2||n>bytes-at)return 0;
+        const uint8_t *q=p+at;
+        if(q[1]==4){
+            if(n!=9||(current<32&&seen!=expected)||q[2]>=32||q[3]>=32||q[4]>15)return 0;
+            current=q[2];alt=q[3];expected=q[4];seen=0;
+            if(alternates[current]&(1u<<alt))return 0;alternates[current]|=1u<<alt;
+            if(!alt){++interfaces;g.interfaces|=1u<<current;g.classes[current]=q[5];}
+            supported|=q[5]==3||q[5]==2||q[5]==10||q[5]==14||q[5]==255;
+        }else if(q[1]==5){
+            if(n<7||current>=32||++seen>expected||g.endpoints==A733_USB2_GENERIC_ENDPOINTS||
+               q[2]&0x70||!(q[2]&15)||!(q[3]&3)||!le16(q+4))return 0;
+            for(unsigned i=0;i<g.endpoints;++i)if(g.endpoint[i].address==q[2]&&(g.endpoint[i].interface!=current||g.endpoint[i].alternate==alt))return 0;
+            g.endpoint[g.endpoints++]=(struct a733_usb2_generic_endpoint){q[2],q[3]&3,q[6],current,alt,le16(q+4)};
+        }else if(q[1]==0x21&&current<32&&g.classes[current]==3){
+            if(n<9||q[5]!=1||q[6]!=0x22||!le16(q+7)||le16(q+7)>1024)return 0;
+            g.reports[current]=le16(q+7);
+        }
+        at+=n;
+    }
+    if(current>=32||seen!=expected||interfaces!=p[4]||!supported)return 0;
+    for(unsigned i=0;i<32;++i)if(alternates[i]&&!(alternates[i]&1))return 0;
+    memcpy(g.alternates,alternates,sizeof(alternates));g.ready=1;*out=g;return 1;
+}
+static struct a733_usb2_generic *generic_at(unsigned address)
+{
+    unsigned i=host?descriptor_index(address):A733_XHCI_DEVICES;
+    return host&&host->generic_host&&i<A733_XHCI_DEVICES&&host->descriptors[i].generic.ready?&host->descriptors[i].generic:NULL;
+}
 static void mounted_update(void)
 {
     host->mounted=host->dual_leaf?(host->msc_mounted&&host->hid_mounted):
         (host->msc_mounted||host->hid_mounted||host->audio_mounted);
+    if(host->generic_host)for(unsigned i=0;i<A733_XHCI_DEVICES;++i)
+        host->mounted|=host->descriptors[i].generic.mounted;
 }
 /* Hub state bound to a device record, to a logical address, or to the record
  * that owns a parent slot. */
@@ -142,6 +203,7 @@ int a733_usb2_host_bind(struct a733_usb2_native *n)
     if(host||!n||n->self!=n||!n->core_started||!n->core.self||n->core.ops.current(n->core.context)!=1)return 0;
     host=n;uint64_t now;if(!clock_now(&now)||now>=n->platform.config.deadline){lost();return 0;}
     n->mount_deadline=n->platform.config.deadline;n->mount_budget=n->platform.config.deadline-now;
+    if(n->generic_host)n->transport.generation=n->core.generation;
     const tusb_rhport_init_t init={.role=TUSB_ROLE_HOST,.speed=n->core.require_ss?TUSB_SPEED_SUPER:TUSB_SPEED_HIGH};
     if(!tusb_init(0,&init)){lost();return 0;}return 1;
 }
@@ -178,6 +240,9 @@ int a733_usb2_host_poll(struct a733_usb2_native *n)
         }
     }
     if(!host->failed&&r!=A733_XHCI_BUSY){tuh_task_ext(0,false);if(!host->failed)bot_recovery_poll();}
+#if SUNSTONE_USB_HOST_GENERIC
+    if(!host->failed&&host->generic_host){transport_retire();camera_poll();}
+#endif
 #if CFG_TUH_AUDIO
     /* Hand completed isochronous packets to the pending class request. Each
      * completion lets the class queue its next request in the same poll. */
@@ -384,6 +449,10 @@ static int control_response(const struct a733_xhci_notice *e)
     struct a733_usb2_hub *hub=hub_record(n->control_device);
     struct a733_usb2_ss *ssdata=&desc->ss;
     const uint8_t *p=n->control_buffer,*s=n->control_setup;unsigned bytes=n->control_bytes;
+    if(e->result==1&&desc->generic.ready){
+        if((e->endpoint&15)||device->control_stage||device->endpoints[0].pending)return 0;
+        n->control_buffer=NULL;n->control_bytes=0;return 1;
+    }
     if(e->result==1){
         /* TinyUSB invokes the class fallback immediately on STALLED, without
          * hcd_edpt_clear_stall. The core has already completed Reset Endpoint
@@ -421,6 +490,13 @@ static int control_response(const struct a733_xhci_notice *e)
             }
         }
         return 1;
+    }
+    if(desc->generic.ready&&((s[0]&0x60)||s[0]==0x81)){
+        if(e->endpoint!=128||e->bytes>bytes||bytes!=le16(s+6))return 0;
+        /* The pinned HID host mounts with wLength rather than actual_len.
+         * A short report descriptor would include stale enumeration bytes. */
+        if(s[0]==0x81&&s[1]==6&&s[3]==0x22&&e->bytes!=bytes)return 0;
+        n->control_buffer=NULL;n->control_bytes=0;return 1;
     }
     if(e->endpoint!=128||e->result||e->bytes!=bytes||bytes!=le16(s+6))return 0;
     n->control_buffer=NULL;n->control_bytes=0;
@@ -468,7 +544,7 @@ static int control_response(const struct a733_xhci_notice *e)
             if(status&1){
                 if(!(hub->connected_mask&(1u<<port))){
                     unsigned mask=hub->connected_mask;
-                    if(mask&&(!n->dual_leaf||(mask&(mask-1))))return 0;
+                    if(mask&&!n->generic_host&&(!n->dual_leaf||(mask&(mask-1))))return 0;
                     hub->connected_mask|=1u<<port;hub->selected_port=port;attaching();
                 }
             }else if(hub->connected_mask&(1u<<port)){
@@ -497,7 +573,7 @@ static int control_response(const struct a733_xhci_notice *e)
         if(!n->control_device&&n->platform.config.topology_mode&&
            is_hub!=(n->platform.config.topology_mode==2))return 0;
         if(speed==4&&(p[2]||p[3]!=3||p[7]!=9))return 0;
-        if(p[0]!=18||p[5]||(!is_hub&&(p[4]||p[6]))||
+        if(p[0]!=18||(!n->generic_host&&(p[5]||(!is_hub&&(p[4]||p[6]))))||
            (is_hub&&!nested&&(n->control_device||(speed==4?p[6]!=3:(speed!=3||(p[6]!=1&&p[6]!=2)))))||
            (speed==2&&p[7]!=8)||(speed==3&&p[7]!=64)||
            (speed==1&&p[7]!=8&&p[7]!=16&&p[7]!=32&&p[7]!=64))return 0;
@@ -525,6 +601,29 @@ static int control_response(const struct a733_xhci_notice *e)
         if(ss&&(!ssdata->ss_ready||(p[8]*8u>900u||p[8]*8u>n->platform.typec->config.source_ma)))return 0;
         if(!ss&&p[8]*2u>upstream_ma(n->control_device))return 0;
         if(is_hub&&!hub)return 0;
+        if(n->generic_host&&!is_hub){
+            if(bytes<9||p[0]!=9||!p[4]||p[4]>32||p[5]!=1||!(p[7]&128)||
+               total<9||total>CFG_TUH_ENUMERATION_BUFSIZE||(p[7]&31))return 0;
+            if(bytes==9){if(desc->configuration_probe)return 0;memcpy(desc->configuration_prefix,p,9);desc->configuration_probe=1;return 1;}
+            if(bytes!=total||!desc->configuration_probe||memcmp(desc->configuration_prefix,p,9))return 0;
+            if(generic_configuration(&desc->generic,p,bytes)){
+#if SUNSTONE_USB_HOST_GENERIC
+                unsigned video=0;
+                for(unsigned i=0;i<32;++i)video|=desc->generic.classes[i]==14;
+                if(video){
+                    if(camera.address&&camera.address!=e->address){
+                        if(camera.active||camera.starting||camera.bulk_token||camera.control_pending)return 0;
+                        for(unsigned i=0;i<SUNSTONE_UVC_FRAMES;++i)if(camera.stream.frame[i].state==2)return 0;
+                    }
+                    camera.failed=camera.bulk_bytes=0;
+                    if(sunstone_uvc_descriptors(&camera.catalog,p,bytes)!=0)return 0;
+                    camera.address=e->address;
+                }
+#endif
+                return 1;
+            }
+            /* Existing storage/audio profiles retain their class-specific checks. */
+        }
         if(bytes<9||p[0]!=9||(!audio&&p[4]!=1)||p[5]!=1||!(p[7]&128)||p[8]>250||
            (is_hub?(total!=(ss?31u:hub->protocol==2?41u:25u)||!powered||(p[7]&31)):
             audio?0:(ss?(total!=40&&total!=44):(total!=32&&total!=34))))return 0;
@@ -601,6 +700,9 @@ void a733_usb2_host_notice(void *cookie,const struct a733_xhci_notice *event)
         uint64_t now,d=deadline();
         if(!d||!clock_now(&now)||host->core.ops.live(host->core.context,host->core.generation,d)!=1){lost();return;}
         if(event->endpoint&15){
+            struct a733_usb2_generic *g=generic_at(event->address);
+            if(g&&event->result)for(unsigned i=0;i<g->endpoints;++i)
+                if(g->endpoint[i].address==event->endpoint&&g->classes[g->endpoint[i].interface]==3){lost();return;}
             struct a733_usb2_hub *h=hub_at(event->address);
             if(h){
                 if(event->endpoint!=h->endpoint||!h->status_requested||h->status_deferred||
@@ -611,7 +713,7 @@ void a733_usb2_host_notice(void *cookie,const struct a733_xhci_notice *event)
                 if(!n->hid.pending||n->hid.event_seen||event->endpoint!=n->hid.endpoint||
                    event->address!=n->hid_address||event->result||event->bytes>n->hid.requested){lost();return;}
                 n->hid.event_seen=1;n->hid.event_bytes=event->bytes;
-            }else if(!n->msc_seen||event->address!=n->address||!bot_complete(event)){lost();return;}
+            }else if(!generic_at(event->address)&&(!n->msc_seen||event->address!=n->address||!bot_complete(event))){lost();return;}
         }else if(!control_response(event)){lost();return;}
         hcd_event_xfer_complete((uint8_t)event->address,(uint8_t)event->endpoint,event->bytes,
             event->result==0?XFER_RESULT_SUCCESS:event->result==1?XFER_RESULT_STALLED:XFER_RESULT_FAILED,false);
@@ -660,6 +762,16 @@ bool hcd_edpt_open(uint8_t port,uint8_t address,const tusb_desc_endpoint_t *e)
     }
     struct a733_usb2_ss *ssdata=ss_state(address);if(!ssdata)return false;
     unsigned speed=a733_xhci_device_speed(&host->core,address);
+    struct a733_usb2_generic *generic=generic_at(address);
+    if(generic&&(e->bEndpointAddress&15)){
+        unsigned found=0;
+        for(unsigned i=0;i<generic->endpoints;++i){const struct a733_usb2_generic_endpoint *q=&generic->endpoint[i];
+            found|=q->address==e->bEndpointAddress&&q->type==e->bmAttributes.xfer&&q->packet==tu_unaligned_read16(&e->wMaxPacketSize)&&q->interval==e->bInterval;}
+        if(!found)return false;
+        if(e->bmAttributes.xfer==TUSB_XFER_INTERRUPT)return a733_xhci_open_interrupt(&host->core,address,e->bEndpointAddress,tu_edpt_packet_size(e),e->bInterval,d);
+        if(e->bmAttributes.xfer==TUSB_XFER_ISOCHRONOUS)return a733_xhci_open_isoch(&host->core,address,e->bEndpointAddress,tu_unaligned_read16(&e->wMaxPacketSize),e->bInterval,d);
+        return a733_xhci_open(&host->core,address,e->bEndpointAddress,e->bmAttributes.xfer,tu_edpt_packet_size(e),d);
+    }
     if(e->bmAttributes.xfer==TUSB_XFER_ISOCHRONOUS){
         /* Only an admitted audio capture alternate setting, as TinyUSB's audio
          * class opens it for the selected configuration. */
@@ -691,7 +803,8 @@ bool hcd_edpt_close(uint8_t port,uint8_t address,uint8_t ep)
 static unsigned descriptor_index(unsigned address)
 {
     if(!address)return host->core.default_device;
-    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(host->core.devices[i].address==address)return i;
+    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)
+        if(host->core.devices[i].address==address&&!host->core.devices[i].detach)return i;
     return A733_XHCI_DEVICES;
 }
 bool hcd_setup_send(uint8_t port,uint8_t address,const uint8_t setup[8])
@@ -743,6 +856,15 @@ bool hcd_setup_send(uint8_t port,uint8_t address,const uint8_t setup[8])
                 ((host->bot_recovery==4&&index==host->msc_in)||(host->bot_recovery==6&&index==host->msc_out));
         }
     }
+    if(!valid&&desc->generic.ready&&len<=A733_XHCI_TRANSFER_BYTES){
+        unsigned recipient=setup[0]&31,type=setup[0]&0x60,endpoint_known=0;
+        for(unsigned i=0;i<desc->generic.endpoints;++i)endpoint_known|=desc->generic.endpoint[i].address==index;
+        valid=((type==0x20||type==0x40)&&
+            (recipient==0||(recipient==1&&(index&255)<32&&(desc->generic.interfaces&(1u<<(index&255))))||
+             (recipient==2&&endpoint_known)))||
+            (setup[0]==1&&setup[1]==11&&!len&&index<32&&value<32&&(desc->generic.alternates[index]&(1u<<value)))||
+            (setup[0]==0x81&&setup[1]==6&&value==0x2200&&index<32&&desc->generic.classes[index]==3&&len==desc->generic.reports[index]);
+    }
     if(!valid){lost();return false;}
     if(!a733_xhci_setup(&host->core,address,setup,d))return false;
     host->control_address=address;host->control_device=di;memcpy(host->control_setup,setup,8);return true;
@@ -770,11 +892,11 @@ bool hcd_edpt_xfer(uint8_t port,uint8_t address,uint8_t ep,uint8_t *buffer,uint1
                !buffer||host->core.ops.outside(host->core.context,buffer,bytes)!=1||
                !a733_xhci_isoch_start(&host->core,address,ep)){lost();return false;}
             a->pending_buffer=buffer;a->pending_bytes=bytes;return true;
-        }else if(!host->msc_seen||address!=host->address||!bot_submit(ep,buffer,bytes)){lost();return false;}
+        }else if(!generic_at(address)&&(!host->msc_seen||address!=host->address||!bot_submit(ep,buffer,bytes))){lost();return false;}
     }
     if(host->audio_seen&&address==host->audio.address&&ep==0&&bytes&&
        (host->control_setup[0]!=0x22||bytes!=3||!buffer||le24(buffer)!=host->audio.rate)){lost();return false;}
-    if(a733_xhci_device_speed(&host->core,address)==4&&ep==0&&bytes&&
+    if(!generic_at(address)&&a733_xhci_device_speed(&host->core,address)==4&&ep==0&&bytes&&
        (host->control_setup[1]!=48||bytes!=6||!buffer||memcmp(buffer,host->descriptors[host->control_device].ss.ss_sel,6))){lost();return false;}
     int ok=a733_xhci_transfer(&host->core,address,ep,buffer,bytes,d);
     if(!ok&&(ep&15))lost();
@@ -833,6 +955,15 @@ int a733_usb2_read_result(struct a733_usb2_native *n,uint8_t out[512])
 }
 void tuh_hid_mount_cb(uint8_t address,uint8_t instance,const uint8_t *descriptor,uint16_t bytes)
 {
+#if SUNSTONE_USB_HOST_GENERIC
+    if(owner()&&generic_at(address)){
+        if(!address||address>CFG_TUH_DEVICE_MAX||instance>=CFG_TUH_HID||hid_generation==UINT64_MAX){lost();return;}
+        struct sunstone_usb_hid *state=&generic_hid[address-1][instance];
+        if(sunstone_usb_hid_mount(state,address,instance,++hid_generation,descriptor,bytes,input_emit,input_context))
+            (void)tuh_hid_receive_report(address,instance);
+        return;
+    }
+#endif
     uint64_t now;
     if(!owner()||!host->hid_seen||address!=host->hid_address||host->hid_mounted||instance||
        !a733_xhci_device_speed(&host->core,address)||!descriptor||bytes!=host->hid.descriptor_bytes||
@@ -842,12 +973,25 @@ void tuh_hid_mount_cb(uint8_t address,uint8_t instance,const uint8_t *descriptor
 }
 void tuh_hid_umount_cb(uint8_t address,uint8_t instance)
 {
+#if SUNSTONE_USB_HOST_GENERIC
+    if(owner()&&host->generic_host&&address&&address<=CFG_TUH_DEVICE_MAX&&instance<CFG_TUH_HID){
+        struct sunstone_usb_hid *state=&generic_hid[address-1][instance];
+        (void)sunstone_usb_hid_unmount(state,state->generation);return;
+    }
+#endif
     if(!owner()||!host->hid_seen||address!=host->hid_address||instance){lost();return;}
     withdraw_hid();mounted_update();
 }
 void tuh_hid_report_received_cb(uint8_t address,uint8_t instance,const uint8_t *report,uint16_t bytes)
 {
     if(!owner()){lost();return;}
+#if SUNSTONE_USB_HOST_GENERIC
+    if(generic_at(address)&&address&&address<=CFG_TUH_DEVICE_MAX&&instance<CFG_TUH_HID){
+        struct sunstone_usb_hid *state=&generic_hid[address-1][instance];
+        (void)sunstone_usb_hid_report(state,state->generation,report,bytes);
+        (void)tuh_hid_receive_report(address,instance);return;
+    }
+#endif
     uint64_t now;struct a733_usb2_hid *h=&host->hid;
     /* Pinned TinyUSB ignores result in hidh_xfer_cb. Only the HCD's validated
      * successful event may reach this callback, including actual short/ZLP. */
@@ -969,4 +1113,268 @@ int a733_usb2_audio_read(struct a733_usb2_native *n,struct a733_usb2_audio_block
 int a733_usb2_audio_start(struct a733_usb2_native *n,uint32_t rate,unsigned channels,uint64_t d)
 {(void)n;(void)rate;(void)channels;(void)d;return 0;}
 int a733_usb2_audio_read(struct a733_usb2_native *n,struct a733_usb2_audio_block *out){(void)n;(void)out;return -1;}
+#endif
+
+#if SUNSTONE_USB_HOST_GENERIC
+struct transport_request {
+    unsigned used,address,endpoint;
+    uintptr_t ticket;
+    sunstone_usb_complete complete;
+    void *context;
+    tusb_control_request_t setup;
+};
+static struct transport_request transport_requests[32];
+static uintptr_t transport_ticket;
+static void transport_retire(void)
+{
+    /* CDC RX is submitted by its upstream class, outside transport_requests.
+     * Disable Slot (detach 3) proves drain even while application leases keep
+     * the record reserved; no missing callback is treated as DMA completion. */
+    for(unsigned address=1;address<=CFG_TUH_DEVICE_MAX;++address){
+        unsigned active=0;
+        for(unsigned j=0;j<A733_XHCI_DEVICES;++j){const struct a733_xhci_device *d=&host->core.devices[j];
+            if(d->address==address&&d->slot&&d->detach!=3)active=1;}
+        if(!active)os_usb_serial_native_quiesce((uint8_t)address);
+    }
+    for(unsigned i=0;i<32;++i){
+        struct transport_request *r=&transport_requests[i];if(!r->used)continue;
+        unsigned live=0;
+        for(unsigned j=0;j<A733_XHCI_DEVICES;++j){const struct a733_xhci_device *d=&host->core.devices[j];
+            if(d->address==r->address&&d->slot&&d->detach!=3)live=1;}
+        if(!live){sunstone_usb_complete complete=r->complete;void *context=r->context;r->used=0;if(complete)complete(context,2,0);}
+    }
+}
+
+static void transport_done(tuh_xfer_t *xfer)
+{
+    struct transport_request *r=NULL;
+    for(unsigned i=0;i<32;++i)if(transport_requests[i].used&&transport_requests[i].ticket==xfer->user_data)r=&transport_requests[i];
+    if(!r)return; /* A drained/disconnected submission cannot complete a newer one. */
+    if(r->address!=xfer->daddr||r->endpoint!=xfer->ep_addr){lost();return;}
+    size_t actual=xfer->actual_len;
+    /* The pinned TinyUSB SETUP fallthrough records the eight setup bytes
+     * when wLength is zero. This interface reports data-stage bytes. */
+    if(!r->endpoint&&!r->setup.wLength){
+        if(xfer->result==XFER_RESULT_SUCCESS&&actual&&actual!=8){lost();return;}
+        actual=0;
+    }
+    sunstone_usb_complete complete=r->complete;void *context=r->context;r->used=0;
+    if(complete)complete(context,xfer->result==XFER_RESULT_SUCCESS?0:xfer->result==XFER_RESULT_STALLED?1:2,actual);
+}
+static struct transport_request *transport_request(struct sunstone_usb_transport *t,sunstone_usb_complete complete,void *context)
+{
+    if(!owner()||t!=&host->transport||!host->generic_host||transport_ticket==UINTPTR_MAX)return NULL;
+    for(unsigned i=0;i<32;++i)if(!transport_requests[i].used){
+        transport_requests[i]=(struct transport_request){.used=1,.ticket=++transport_ticket,.complete=complete,.context=context};return &transport_requests[i];}
+    return NULL;
+}
+static int transport_control(struct sunstone_usb_transport *t,uint8_t address,const uint8_t setup[8],uint8_t *buffer,sunstone_usb_complete complete,void *context)
+{
+    if(!setup)return 0;
+    struct transport_request *r=transport_request(t,complete,context);if(!r)return 0;
+    r->address=address;memcpy(&r->setup,setup,8);
+    tuh_xfer_t xfer={.daddr=address,.ep_addr=0,.setup=&r->setup,.buffer=buffer,.complete_cb=transport_done,.user_data=r->ticket};
+    if(!tuh_control_xfer(&xfer)){r->used=0;return 0;}return 1;
+}
+static int transport_open(struct sunstone_usb_transport *t,uint8_t address,const struct sunstone_usb_endpoint *e)
+{
+    if(!owner()||t!=&host->transport||!e)return 0;
+    tusb_desc_endpoint_t ep={.bLength=7,.bDescriptorType=5,.bEndpointAddress=e->address,.wMaxPacketSize=e->packet,.bInterval=e->interval};
+    ep.bmAttributes.xfer=e->attributes&3;return tuh_edpt_open(address,&ep);
+}
+static int transport_submit(struct sunstone_usb_transport *t,uint8_t address,uint8_t ep,uint8_t *buffer,size_t bytes,sunstone_usb_complete complete,void *context)
+{
+    if(bytes>UINT16_MAX)return 0;
+    struct transport_request *r=transport_request(t,complete,context);if(!r)return 0;
+    r->address=address;r->endpoint=ep;
+    tuh_xfer_t xfer={.daddr=address,.ep_addr=ep,.buffer=buffer,.buflen=(uint16_t)bytes,.complete_cb=transport_done,.user_data=r->ticket};
+    if(!tuh_edpt_xfer(&xfer)){r->used=0;return 0;}return 1;
+}
+static int transport_acquire(struct sunstone_usb_transport *t,uint8_t address,uint8_t ep,uint8_t **buffer,size_t *capacity,uint64_t *token)
+{
+    unsigned bytes=0;
+    if(!owner()||t!=&host->transport||!capacity)return 0;
+    if(a733_xhci_dma_acquire(&host->core,address,ep,buffer,&bytes,token)!=1)return 0;
+    *capacity=bytes;return 1;
+}
+static int transport_release(struct sunstone_usb_transport *t,uint8_t address,uint8_t ep,uint64_t token)
+{return owner()&&t==&host->transport&&a733_xhci_dma_release(&host->core,address,ep,token)==1;}
+static const struct sunstone_usb_transport_ops transport_ops={transport_control,transport_open,transport_submit,transport_acquire,transport_release};
+void a733_usb2_set_input(struct a733_usb2_native *n,sunstone_hid_emit emit,void *context)
+{if(n&&n->self==n){input_emit=emit;input_context=context;}}
+int a733_usb2_generic_enable(struct a733_usb2_native *n)
+{
+    if(!n||n->self!=n||n->stack_started)return 0;
+    n->generic_host=1;n->transport=(struct sunstone_usb_transport){&transport_ops,n,n->platform.config.identity};return 1;
+}
+struct sunstone_usb_transport *a733_usb2_transport(struct a733_usb2_native *n)
+{return n&&n->self==n&&n->generic_host?&n->transport:NULL;}
+#else
+int a733_usb2_generic_enable(struct a733_usb2_native *n){(void)n;return 0;}
+struct sunstone_usb_transport *a733_usb2_transport(struct a733_usb2_native *n){(void)n;return NULL;}
+#endif
+
+void tuh_mount_cb(uint8_t address)
+{
+    if(owner()&&generic_at(address)){generic_at(address)->mounted=1;mounted_update();host->mount_deadline=0;}
+}
+void tuh_umount_cb(uint8_t address)
+{
+#if SUNSTONE_USB_HOST_GENERIC
+    camera_disconnect(address);
+#endif
+    (void)address;
+    if(owner()&&host->generic_host){
+        struct a733_usb2_generic *g=generic_at(address);if(g)g->mounted=0;
+        mounted_update();host->mount_deadline=0;
+    }
+}
+
+#if SUNSTONE_USB_HOST_GENERIC
+static void camera_release_packet(void *context,void *lease)
+{
+    (void)context;
+    const struct sunstone_uvc_alt *a=&camera.negotiation.alt;
+    uint64_t token=(uint64_t)(uintptr_t)lease;
+    if(!token)return;
+    if(a->type==1)(void)a733_xhci_isoch_release(&host->core,camera.address,a->endpoint,token);
+    else (void)a733_xhci_dma_release(&host->core,camera.address,a->endpoint,token);
+}
+static void camera_disconnect(uint8_t address)
+{
+    if(camera.address!=address)return;
+    camera.ready=camera.starting=camera.active=0;
+    sunstone_uvc_disconnect(&camera.stream);
+}
+static void camera_control_done(void *context,unsigned result,size_t actual)
+{
+    (void)context;
+    camera.control_pending=0;
+    if(!camera.starting)return;
+    int next=sunstone_uvc_negotiate_complete(&camera.negotiation,(int)result,actual);
+    if(next<0){camera.failed=1;camera.starting=0;return;}
+    if(next){
+        camera.control_pending=1;
+        if(!transport_control(&host->transport,(uint8_t)camera.address,camera.negotiation.setup,
+            camera.negotiation.data,camera_control_done,NULL)){camera.failed=1;camera.starting=0;}
+        return;
+    }
+    const struct sunstone_uvc_alt *a=&camera.negotiation.alt;
+    struct a733_usb2_generic *g=generic_at(camera.address);
+    const struct a733_usb2_generic_endpoint *selected=NULL;
+    for(unsigned i=0;g&&i<g->endpoints;++i)if(g->endpoint[i].interface==a->interface&&
+       g->endpoint[i].alternate==a->alt&&g->endpoint[i].address==a->endpoint)selected=&g->endpoint[i];
+    if(!selected){camera.failed=1;camera.starting=0;return;}
+    struct sunstone_usb_endpoint ep={selected->address,selected->type,selected->interval,selected->packet};
+    if(!transport_open(&host->transport,(uint8_t)camera.address,&ep)){
+        camera.failed=1;camera.starting=0;return;
+    }
+    struct sunstone_uvc_ops ops={.release=camera_release_packet};
+    sunstone_uvc_init(&camera.stream,&ops,camera.generation,camera.negotiation.maximum);
+    sunstone_uvc_expect_mode(&camera.stream,&camera.negotiation.mode);
+    camera.starting=0;camera.active=1;camera.bulk_bytes=0;camera.dropped=host->core.isoch.dropped;
+}
+int a733_usb2_camera_select_format(struct a733_usb2_native *n,unsigned format)
+{
+    if(n!=host||!owner()||!n->generic_host||
+       (format&&format!=SUNSTONE_UVC_MJPEG&&format!=SUNSTONE_UVC_YUYV))return 0;
+    if(camera.active||camera.starting)return camera.preferred_format==format;
+    camera.preferred_format=format;return 1;
+}
+int a733_usb2_camera_start(struct a733_usb2_native *n)
+{
+    if(n!=host||!owner()||!n->generic_host||camera.failed)return -1;
+    if(camera.active||camera.starting)return 1;
+    if(!camera.ready||!camera.catalog.modes||camera.bulk_token||camera.control_pending)return 0;
+    for(unsigned i=0;i<SUNSTONE_UVC_FRAMES;++i)if(camera.stream.frame[i].state==2)return 0;
+    if(camera.generation==UINT64_MAX)return -1;
+    ++camera.generation;
+    unsigned preferred=camera.preferred_format?camera.preferred_format:SUNSTONE_UVC_YUYV,selected=UINT32_MAX;
+    for(unsigned i=0;i<camera.catalog.modes;++i)if(camera.catalog.mode[i].format==preferred){selected=i;break;}
+    for(unsigned i=0;i<camera.catalog.modes;++i)if(camera.catalog.mode[i].format==preferred&&
+       camera.catalog.mode[i].width==640&&camera.catalog.mode[i].height==480){selected=i;break;}
+    if(selected==UINT32_MAX){if(camera.preferred_format)return -1;selected=0;}
+    if(sunstone_uvc_negotiate_begin(&camera.negotiation,&camera.catalog,&camera.catalog.mode[selected])!=1)return -1;
+    camera.starting=1;camera.control_pending=1;
+    if(!transport_control(&n->transport,(uint8_t)camera.address,camera.negotiation.setup,camera.negotiation.data,camera_control_done,NULL)){
+        camera.starting=0;camera.control_pending=0;camera.failed=1;return -1;
+    }
+    return 1;
+}
+const struct sunstone_uvc_mode *a733_usb2_camera_mode(struct a733_usb2_native *n)
+{return n==host&&owner()&&camera.active?&camera.negotiation.mode:NULL;}
+const struct sunstone_uvc_frame *a733_usb2_camera_acquire(struct a733_usb2_native *n)
+{return n==host&&owner()&&camera.active?sunstone_uvc_acquire(&camera.stream):NULL;}
+int a733_usb2_camera_release(struct a733_usb2_native *n,const struct sunstone_uvc_frame *frame,uint64_t generation,uint64_t sequence)
+{return n==host&&owner()&&sunstone_uvc_release_ticket(&camera.stream,frame,generation,sequence)==0;}
+static void camera_bulk_done(void *context,unsigned result,size_t actual)
+{
+    (void)context;
+    uint64_t token=camera.bulk_token;uint8_t *buffer=camera.bulk_buffer;
+    camera.bulk_token=0;camera.bulk_buffer=NULL;
+    unsigned start=camera.bulk_bytes==0;
+    camera.bulk_bytes+=(unsigned)actual;
+    unsigned end=actual<camera.bulk_requested||camera.bulk_bytes>=camera.negotiation.payload;
+    (void)sunstone_uvc_payload_fragment(&camera.stream,camera.generation,buffer,actual,(void *)(uintptr_t)token,(int)result,start,end);
+    if(end)camera.bulk_bytes=0;
+}
+static void camera_poll(void)
+{
+    if(!camera.active)return;
+    const struct sunstone_uvc_alt *a=&camera.negotiation.alt;
+    if(a->type==1){
+        const uint8_t *buffer;unsigned bytes;uint64_t token;
+        if(!a733_xhci_isoch_start(&host->core,camera.address,a->endpoint)){camera.failed=1;camera.active=0;return;}
+        int got=a733_xhci_isoch_acquire(&host->core,camera.address,a->endpoint,&buffer,&bytes,&token);
+        if(got>0){
+            unsigned gap=camera.dropped!=host->core.isoch.dropped;
+            camera.dropped=host->core.isoch.dropped;
+            (void)sunstone_uvc_payload(&camera.stream,camera.generation,buffer,bytes,(void *)(uintptr_t)token,(int)gap);
+        }
+        else if(got<0){camera.failed=1;camera.active=0;}
+    }else if(!camera.bulk_token){
+        unsigned bytes;uint8_t *buffer;uint64_t token;
+        if(a733_xhci_dma_acquire(&host->core,camera.address,a->endpoint,&buffer,&bytes,&token)!=1)return;
+        unsigned remaining=camera.negotiation.payload-camera.bulk_bytes;
+        if(bytes>remaining)bytes=remaining;
+        camera.bulk_token=token;camera.bulk_buffer=buffer;camera.bulk_requested=bytes;
+        if(!transport_submit(&host->transport,(uint8_t)camera.address,a->endpoint,buffer,bytes,camera_bulk_done,NULL)){
+            (void)a733_xhci_dma_release(&host->core,camera.address,a->endpoint,token);camera.bulk_token=0;camera.bulk_buffer=NULL;
+        }
+    }
+}
+static bool camera_class_init(void){return true;}
+static bool camera_class_deinit(void){return true;}
+static uint16_t camera_class_open(uint8_t rhport,uint8_t address,const tusb_desc_interface_t *itf,uint16_t bytes)
+{
+    if(rhport||!host->generic_host||itf->bInterfaceClass!=14||camera.address!=address)return 0;
+    unsigned at=0;
+    while(at<bytes){const uint8_t *q=(const void *)((const uint8_t *)itf+at);unsigned length=q[0];
+        if(length<2||length>bytes-at)break;
+        if((q[1]==4&&(length<9||q[5]!=14))||(q[1]==11&&at))break;
+        at+=length;
+    }
+    return (uint16_t)at;
+}
+static bool camera_class_config(uint8_t address,uint8_t interface)
+{
+    if(camera.address!=address)return false;
+    camera.interface=interface;camera.ready=1;
+    usbh_driver_set_config_complete(address,interface);return true;
+}
+static bool camera_class_transfer(uint8_t address,uint8_t ep,xfer_result_t result,uint32_t bytes)
+{(void)address;(void)ep;(void)result;(void)bytes;return false;}
+usbh_class_driver_t const *usbh_app_driver_get_cb(uint8_t *count)
+{
+    static const usbh_class_driver_t driver={.name="UVC",.init=camera_class_init,.deinit=camera_class_deinit,
+        .open=camera_class_open,.set_config=camera_class_config,.xfer_cb=camera_class_transfer,.close=camera_disconnect};
+    *count=host&&host->generic_host?1:0;return &driver;
+}
+#else
+void a733_usb2_set_input(struct a733_usb2_native *n,a733_usb2_input_emit emit,void *context){(void)n;(void)emit;(void)context;}
+int a733_usb2_camera_start(struct a733_usb2_native *n){(void)n;return -1;}
+int a733_usb2_camera_select_format(struct a733_usb2_native *n,unsigned format){(void)n;(void)format;return 0;}
+const struct sunstone_uvc_mode *a733_usb2_camera_mode(struct a733_usb2_native *n){(void)n;return NULL;}
+const struct sunstone_uvc_frame *a733_usb2_camera_acquire(struct a733_usb2_native *n){(void)n;return NULL;}
+int a733_usb2_camera_release(struct a733_usb2_native *n,const struct sunstone_uvc_frame *f,uint64_t g,uint64_t s){(void)n;(void)f;(void)g;(void)s;return 0;}
 #endif

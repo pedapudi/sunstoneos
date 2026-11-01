@@ -233,6 +233,24 @@ python3 checks/aic8800-sdio-transport.py \
   --case bootstrap
 ```
 
+The public record consumer observes the monotonic counter before and after
+retirement under the reentry guard, as the dispatcher-owned consumer does.
+An expired deadline, backwards clock or counter failure at admission preserves
+the held reply. Expiry on the final observation retains the retired state and
+faults the transport. Every later fault poll makes no backend calls.
+The public path adds two counter observations per retirement; it adds no
+peripheral command, receive-buffer copy or tick wait. The dispatcher-owned
+path keeps its existing observation count and A-MSDU ownership behavior.
+
+Five composed register-model cases cover valid retirement, admission expiry,
+clock regression, counter failure and late completion. Each case checks
+callback reentry refusal. The regression fails against the original consumer;
+the full transport suite passes with Clang 21 and address/undefined-behavior
+sanitizers under `~/.cache/sunstoneos/build/radio-1031/consume-after/`.
+The runner's `--case consume` selects the focused cases. Independent review
+passed; native QEMU dispatcher traffic and deadline cases also pass with RSN
+enabled. These results do not establish physical radio operation.
+
 The runner verifies its pinned reference files, including the message header
 and sender. The [firmware engine](radio-firmware.md) extends the same transport with
 1,536-byte uploads after completed identity. Physical execution still needs

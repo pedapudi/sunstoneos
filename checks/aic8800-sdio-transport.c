@@ -275,6 +275,68 @@ static void bootstrap_failures(void)
     assert(transport.last_result.transferred == 4 && host.request.data == transport.tx);
     assert(transmissions == 0 && transport.pending); stopped();
 }
+static unsigned consume_observations;
+static unsigned consume_clock_mode;
+static int consume_now(void *context, uint64_t *out)
+{
+    ++consume_observations;
+    assert(transport.entered); /* Counter callbacks cannot reenter retirement. */
+    assert(!aic8800_transport_consume(&transport));
+    if (consume_clock_mode == 3) {
+        ++m.accesses; return 0;
+    }
+    if (consume_clock_mode == 4 && consume_observations == 2)
+        m.now = transport.deadline;
+    return now_cb(context, out);
+}
+static void consume_deadline(void)
+{
+    /* Hold an actual unrelated bootstrap reply, rather than fabricating the
+     * cursor or record ownership. Each case owns a fresh modeled card. */
+    for (unsigned mode = 0; mode < 5; ++mode) {
+        begin(AIC8800_PAD_KEEP); setup(); add_unrelated = 1; identity(2000);
+        for (unsigned i = 0; i < 300 && !transport.held; ++i) step();
+        assert(transport.held && transmissions == 1 && receive_commands == 1);
+        size_t cursor = transport.cursor, consumed = transport.unrelated.consumed;
+        uint64_t progress = transport.progress;
+        unsigned commands = m.command_count, words = m.words, accesses = m.accesses;
+        uint8_t saved[sizeof(transport.rx)]; memcpy(saved, transport.rx, sizeof(saved));
+        consume_observations = 0; consume_clock_mode = mode;
+        host.config.ops.now = consume_now;
+        if (mode == 1) m.now = transport.deadline;
+        if (mode == 2) m.now = host.last_now - 1;
+        int result = aic8800_transport_consume(&transport);
+        assert(!transport.entered && m.command_count == commands && m.words == words);
+        assert(!memcmp(saved, transport.rx, sizeof(saved)));
+        assert(consume_observations == (mode == 0 || mode == 4 ? 2u : 1u));
+        assert(m.accesses - accesses == consume_observations);
+        if (mode == 0) {
+            assert(result && transport.state == AIC8800_TRANSPORT_IDENTITY);
+            assert(!transport.held && transport.cursor == cursor + consumed);
+            assert(transport.progress == progress + 1);
+            assert(!aic8800_transport_consume(&transport)); /* Exactly once. */
+        } else {
+            assert(!result);
+            assert(transport.error == (mode == 1 || mode == 4 ?
+                AIC8800_TRANSPORT_TIMEOUT : AIC8800_TRANSPORT_HOST_ERROR));
+            assert(host.result.error == (mode == 1 || mode == 4 ? SUNXI_SDIO_TIMEOUT :
+                mode == 2 ? SUNXI_SDIO_CLOCK_ERROR : SUNXI_SDIO_IO_ERROR));
+            if (mode == 4) {
+                /* A late final observation retains the already retired state. */
+                assert(!transport.held && transport.cursor == cursor + consumed);
+                assert(transport.progress == progress + 1);
+            } else {
+                assert(transport.held && transport.cursor == cursor);
+                assert(transport.progress == progress);
+                struct aic8800_sdio_response event;
+                assert(aic8800_transport_peek(&transport, &event));
+                assert(event.address == 0x12345678 && event.value == 0xabcdef12);
+            }
+            stopped();
+            assert(m.accesses - accesses == consume_observations);
+        }
+    }
+}
 #ifndef AIC8800_TRANSPORT_FIXTURE_MAIN
 #define AIC8800_TRANSPORT_FIXTURE_MAIN main
 #endif
@@ -283,8 +345,11 @@ int AIC8800_TRANSPORT_FIXTURE_MAIN(int argc, char **argv)
     if (argc == 2 && !strcmp(argv[1], "bootstrap")) {
         good(); bootstrap_failures();
         puts("AIC SDIO bootstrap: fixed write, non-echo confirmation, pad restore, identity and retained uncertainty passed");
+    } else if (argc == 2 && !strcmp(argv[1], "consume")) {
+        consume_deadline();
+        puts("AIC SDIO consume: valid retirement, deadline, clock regression, counter failure, late completion and reentry passed");
     } else {
-        assert(argc == 1); good(); errors(); aggregate(); bootstrap_failures();
+        assert(argc == 1); good(); errors(); aggregate(); bootstrap_failures(); consume_deadline();
         puts("AIC SDIO transport: setup, identity, retained unrelated messages, 10-block aggregate, bounds, deadlines and uncertain writes passed");
     }
     return 0;

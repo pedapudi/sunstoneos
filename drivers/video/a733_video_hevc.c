@@ -18,7 +18,9 @@ static const uint32_t required[HEVC_BUFFERS]={A733_HEVC_INPUT_SLOT,A733_HEVC_INP
 int a733_hevc_begin(struct a733_hevc_run *r,const struct a733_hevc_ops *ops,void *ctx,
  const struct a733_hevc_job *job,uint64_t deadline)
 {
- if(!r||!ops||!ops->now_us||!ops->acquire||!ops->prepare||!ops->read||!ops->write||!ops->copied||
+ /* Fresh zeroed storage is required. A nonzero deadline marks every accepted
+  * begin, even before acquire returns a token. Retained runs cannot restart. */
+ if(!r||r->deadline||!ops||!ops->now_us||!ops->acquire||!ops->prepare||!ops->read||!ops->write||!ops->copied||
  !job||!job->input||!job->input_bytes||job->input_bytes>524288||!deadline)return 0;
  for(unsigned i=0;i<HEVC_BUFFERS;++i){uint64_t a=job->buffers[i].iova,n=job->buffers[i].bytes;
   if(!a||a%4096||n!=required[i]||a>UINT64_C(0x100000000)-n)return 0;

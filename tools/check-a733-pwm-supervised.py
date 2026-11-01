@@ -149,7 +149,7 @@ def main(argv=None):
     for text in args.command:
         name,sep,value=text.partition(':');require(name in ('start','duty','stop','led'),'Unknown PWM operation.')
         kind={'start':1,'duty':2,'stop':3,'led':4}[name];argument=int(value) if sep else 0
-        require((kind in (1,2) and 1<=argument<600) or (kind==3 and not sep) or (kind==4 and argument in (0,1) and sep),'Invalid PWM operation.')
+        require((kind in (1,2) and 1<=argument<=600) or (kind==3 and not sep) or (kind==4 and argument in (0,1) and sep),'Invalid PWM operation.')
         program.append((kind,argument))
     bundle=args.bundle.resolve();prepared=freeze_bundle(bundle);frozen=prepared['_frozen']
     admission=json.loads(frozen['admission.json']);session=frozen['session.bin'];template=frozen['session-template.bin']

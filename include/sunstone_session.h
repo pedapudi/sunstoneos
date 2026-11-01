@@ -17,7 +17,8 @@
  * this header, then `extents` typed extents, each padded to 8 bytes. The
  * stage-2 loader checks `bytes` and the prefix identity, stamps the prefix
  * epoch and binds the SHA-256 of the first `bytes` bytes into the contract;
- * it reads no extent. */
+ * it bounds every extent and requires zero persisted board and CPU-grant
+ * epochs before watchdog arming. OS admission validates service policy. */
 #define SS_SESSION_PREFIX_BYTES 592u
 #define SS_SESSION_MAX_BYTES 4096u
 #define SS_SESSION_MAGIC UINT64_C(0x324e4f4953534553) /* "SESSION2" */
@@ -43,9 +44,18 @@ struct ss_extent {
  * client facts and the CPU clock grant. Admission loads a copy of the grant
  * with the prefix epoch stamped in when the grant names clusters. */
 enum {
-    SS_EXTENT_THERMAL = 1, SS_EXTENT_AUDIO = 2, SS_EXTENT_NPU = 3, SS_EXTENT_CPU_GRANT = 4,
+    SS_EXTENT_THERMAL = 1, SS_EXTENT_AUDIO = 2, SS_EXTENT_NPU = 3, SS_EXTENT_CPU_GRANT = 4, SS_EXTENT_JPEG = 5, SS_EXTENT_USB_MEMORY = 6,
     SS_EXTENT_INPUTS = 16           /* struct ss_input_fact per INPUT region, manifest order */
 };
+/* USB class profile's reserved NC pool and read-only application alias.
+ * evidence identifies the reviewed reservation for this exact range under
+ * the board prefix memory authority. Geometry alone is not physical ownership
+ * evidence; the original boot-image reservation hash does not cover this pool. */
+struct ss_usb_memory_extent {
+    uint64_t version, base, bytes, alias;
+    uint8_t evidence[32];
+};
+SS_STATIC_ASSERT(sizeof(struct ss_usb_memory_extent)==64,"USB memory extent layout");
 struct ss_input_fact {
     uint64_t bytes;
     uint8_t sha256[32];

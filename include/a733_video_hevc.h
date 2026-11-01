@@ -67,8 +67,10 @@ struct a733_hevc_run {
  unsigned picture,index,flushed,flush_bits;
  enum a733_hevc_state state;
 };
-/* Fresh storage, single privileged serialized caller. Validates spans and the
- * plan; no callback runs. Returns 1 ready, 0 refused. */
+/* Fresh zeroed storage, single privileged serialized caller. Validates spans
+ * and the plan; no callback runs. Returns 1 ready, 0 refused unchanged. An
+ * accepted begin is one-shot: its nonzero deadline forbids every later begin,
+ * including before acquire returns a token and after copied or failed states. */
 int a733_hevc_begin(struct a733_hevc_run *,const struct a733_hevc_ops *,void *,
  const struct a733_hevc_job *,uint64_t);
 /* At most one external operation per poll after a monotonic time check.

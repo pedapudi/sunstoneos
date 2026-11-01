@@ -19,6 +19,15 @@ in its evidence. The current physical results are summarized below; the detailed
 inventory that follows also records earlier implementations and their remaining
 gaps. A passing diagnostic does not qualify every application using that device.
 
+The [bounded CPU reliability application](../apps/cpu-runtime-qualification/RELIABILITY.md)
+has host evidence for repeated scheduling, saved `d8` context and payload
+publication across all eight cores. Its `02-reliability` image ran on 3-3
+and failed with the CPU clock driver in RETAINED at `return-cpu.c:159`;
+evidence is under `~/.cache/sunstoneos/evidence/cpu-reliability-1031/start-1/`.
+Another worker owns the defect. Startup repeatability, full restoration and
+the longer-recording application remain unqualified, as do recurring per-core
+IRQs, idle/wake and thermal transitions.
+
 ## Current physical results
 
 The [handoff](handoff.md) identifies the frozen images, launch requirements
@@ -56,6 +65,13 @@ The [handoff branch list](handoff.md#open-branches) distinguishes unmerged fixes
   retained failures and returning-image proofs. The independent vector-add
   application also builds and passes host checks. Physical execution of this
   queue, interrupt qualification and complete recovery remain outstanding.
+The shared PMIC decoder preserves raw DCDC8/DCDC9 selectors 88–127 without
+publishing a programmed voltage. The pinned references disagree in that range.
+The [source comparison](designs/pmic-reference-reconciliation.md) and finite
+supply observer pass host checks; physical execution awaits a qualified
+watchdog/breadcrumb wrapper. BLDO5's fresh selector, fitted radio supply routing
+and physical voltage remain unobserved. Thermal transitions, processor
+concurrency and E902 management retain their existing qualification gaps.
 
 - Optional eight-worker mimus passes exact recognition parity in QEMU and
   native compilation. One exact CPU-only eight-worker recording now passes physically; other profiles and broader recognition qualification remain open.
@@ -316,11 +332,15 @@ to the stated scope:
   recovery remain unqualified. Concurrent live GPU/HDMI, broader formats/modes,
   streaming and frame retirement remain required.
 - DisplayPort: **implemented** a bounded [native TYPEC24 path](displayport-native.md)
-  for four lanes at 1.62 Gb/s, 720p60 RGB8 and Type-C assignments C/E through the
+  for four lanes at 5.4 Gb/s, 720p60 RGB8 and Type-C assignments C/E through the
   documented V1.2 [lane/AUX route](board-wiring.md#typec24-has-a-documented-displayport-route).
   TYPEC16 remains USB0/power input; PD messages supply HPD because the dedicated
   pad is unconnected. COMB0/SERDES/VO1 ownership excludes USB3 and PCIe sharing
   in this profile; retained master-8 memory supplies the display frames.
+  The [vendor-maximum rate path](designs/displayport-top-rate.md) has host
+  PHY/controller and admission-loop evidence. It requires matching 5.4 Gb/s
+  analog/SERDES facts, preparer validation and coordinator approval
+  before a physical run. Earlier image results below retain their original scope.
   Final image `91646247…` passes actual linked construction, Type-C negotiation,
   controller/PHY/AUX/DE lifecycle and retained shutdown with modeled device effects.
   Twelve host capture cases and one linked high-speed TinyUSB 512/512/zero-length
@@ -359,10 +379,15 @@ to the stated scope:
   newest valid slot. The resident recorded bundle includes the actual monitor,
   OS, session, both models and recording through the existing backup-first
   storage plans. Eight inference workers and CPU operating-point grants are
-  supported; entry binds the board identity and derives fresh session/grant
-  epochs. Twenty-four producer cases and twenty linked entry/admission cases
-  pass under `resume-card-os-1026/`. With cold CPU ownership and the crypto-engine
-  predecessor contract, the monitor occupies 32,456 of 32,768 bytes.
+  supported; entry binds the board identity and stamps the board epoch. OS
+  admission stamps its private CPU-grant copy. The stage-2 cold-session check
+  rejects stale persisted epochs and malformed typed records before watchdog
+  arming; 36 sanitizer/linked cases pass under
+  `~/.cache/sunstoneos/build/sd-boot-1031/session-check-4/`. These checks start
+  after SD loading and do not qualify physical boot. The monitor occupies
+  32,368 bytes, leaving 400 bytes before its fixed report.
+  Twenty-four earlier producer cases and twenty linked entry/admission cases
+  pass under `resume-card-os-1026/` for their recorded image identities.
   [Cold SD admission](boot-slots.md#cold-sd-admission-starts-from-boot0s-controller-state)
   checks inherited controller and pin state. Loading then uses the existing
   3.3 V, 50 MHz, four-bit DMA path, with bounded transfers and guarded tails.
@@ -640,7 +665,11 @@ to the stated scope:
   12,224 MiB outside its protected window in an estimated three to five runs is
   **implemented** and host-modeled. In emulation its admission accepts the
   12,288 MiB map its platform writes and its monitor's remote-writer sample;
-  its DMA0 cases are not built, and no run has taken place on a board. The second board also passes its
+  complete block-map admission now rejects aliases, wrong permissions and
+  attributes in host and native corruption checks. Its DMA0 cases are not built.
+  The image needs the WDT0 return contract, breadcrumbs and a development-runner
+  handler before a board launch. No memory qualification run has taken place.
+  The second board also passes its
   returning platform survey with SRAM restoration under
   `second-board-20261018-3-3/platform-attempt1/`.
   The thermal policy throttles at 85 °C on the DDR temperature channel; this is
@@ -797,6 +826,14 @@ to the stated scope:
   [SNTP client](radio-network.md#an-sntp-client-supplies-utc-to-the-rtc-service)
   produces RTC SET requests from network time; no image runs it with the RTC
   service. Independent watchdog evidence is recorded above.
+- RTC alarm ownership: **host-verified only.** The driver refuses stale or
+  duplicate notifications after acknowledgment, completion or failure before
+  invoking callbacks. A separate review, sanitizer checks across 171 callback
+  failures, preserved alarm/calendar checks and linked alarm cases pass.
+  [The driver contract](../apps/rtc/qualification.md) records the scope; evidence
+  is under `build/buses-rtc-1031/` in the local cache. The rebuilt returning RTC
+  images need host-armed WDT0, retained breadcrumbs and current runner support
+  before physical use. Alarm IRQ, crystal, wakeup and retention remain open.
 - Combined monitoring: **implemented** [repeated thermal/ADC sampling](monitor-application.md)
   through separate native owners with a shared stable clock parent and copied
   coherent snapshots. Stop requires both owners to verify converter-disable
@@ -851,9 +888,9 @@ to the stated scope:
   These register settings do not measure analog supply stability.
   Three calibration-shadow reads also pass physically in nonsecure EL1 under
   `thermal-sid-shadow-20261018/runtime/`, followed by successful ROM return.
-  This proves access to the calibration words, not temperature acquisition.
-  Existing calibration and controller evidence was reused. Physical acquisition,
-  accuracy, interrupt delivery and recovery remain unqualified.
+  This proves access to the calibration words. The finite thermal image also
+  demonstrates acquisition and normal return, as recorded below. Accuracy,
+  interrupt delivery, thermal transitions and fault recovery remain unqualified.
   A fixed board [thermal policy](thermal.md#a-fixed-board-policy-throttles-and-stops-work)
   is **implemented**. Its trips come from the pinned device tree. The CPU and
   GPU channels throttle at 90 °C, and every channel is critical at 110 °C. A
@@ -1073,6 +1110,10 @@ to the stated scope:
   parent cases are recorded in [its platform record](spi-platform.md).
   These checks model dependency observations and qualify no native application,
   measured frequency or physical operation. Earlier frozen image scopes remain intact.
+- Exposed I2C: **not implemented** for header TWI0–3 or S_TWI2. Internal
+  PMIC/Type-C and camera paths do not cover those controllers.
+  [The binding inventory](../drivers/i2c/README.md) records header routes,
+  selected vendor rates, pin conflicts and missing clock/mutex ownership.
 - UART: **implemented** bounded [FIFO control](uart.md) for UART0–6 and both
   always-on UARTs, with format planning, flow control where supported, interrupts,
   error reporting and transmit drain. Host checks, source comparisons and native compilation
@@ -1132,7 +1173,10 @@ to the stated scope:
   SPI4 has no DMA request in the manual. Dual and quad modes still lack an
   application consumer; the SPI3 DMA application is described below.
   Board admission, physical peers, three-wire and bit-aligned modes and SPIF
-  remain outstanding.
+  remain outstanding. [SPI media applicability](../apps/spi/qualification.md)
+  distinguishes the manual's attached W25Q64 example from fitted media.
+  No SPI storage device is established on either current board; an identified
+  connection and electrical authority precede a media-specific command.
   The [supervised SPI3 application](spi-application.md#deferred-interrupt-software-evidence)
   supports polling version 1 and deferred-IRQ version 2 for one authenticated
   FIFO-sized WRITE_READ exchange on the 1.8 V PE0–3 route. CPU0 INTID59 masks
@@ -1175,9 +1219,9 @@ to the stated scope:
   continuous output active until full power removal. Physical waveform, fan-off
   current and visible LED behavior remain unqualified. Cycle mode now plans the
   smallest exact prescaler for any period up to 10 ms, in either polarity, with
-  constant levels at zero and full-period duty. The fan application accepts
-  a duty of 600 ticks, which is full speed, but the supervised host tool still
-  refuses that value.
+  constant levels at zero and full-period duty. The fan application and supervised host tool accept
+  600 ticks for full duty. Parser checks preserve the 0/601 refusal before
+  bundle or device access.
   Host and instruction-model checks pass. S_PWM needs a clock-registry scope
   before an owner can reserve it. Other channels, capture, input counting and
   other operating modes remain required.
@@ -1312,6 +1356,11 @@ to the stated scope:
   changed no native/runtime image or wire layout; HDMI USB observation has separate
   typed authority and image evidence above. Production refuses modeled records; independently established
   physical access and each device's remaining admission prerequisites stay required.
+  Cyclic receive output now excludes metadata and every retained channel's
+  allocations before callbacks. Twenty-six sanitizer cases and twelve selected
+  FreeRTOS cyclic cases pass; [the copy-cost record](designs/dma-rx-copy-ownership.md)
+  retains unchanged valid-copy callback counts. These results do not qualify
+  physical DMA ordering.
   [DMA1 applicability](dma.md#dma1-request-routing-remains-unresolved) remains
   source-blocked. Its register layout, dedicated gates/reset and interrupts are
   identified, but the CPUX request table does not establish the CPUS controller's
@@ -1404,6 +1453,10 @@ to the stated scope:
   excludes other masters while master 10 alone translates; shared DE_SYS/PCK,
   clocks, rails, PMIC and USB providers retain the original native lifetime.
   Fresh task-end, fault/guard checks and bounded copied output precede publication.
+  CPU command construction rejects overlapping sessions and wrapping command
+  spans before access. Sanitizer checks preserve all 132 admitted operation/format
+  pages; the pinned-source register comparisons pass. Physical qualification
+  remains outstanding. See the [command-span design](designs/display-command-admission.md).
   The [GPL source adaptation](../apps/g2d/sources.json) preserves register/header
   notices; no opaque G2D firmware or Linux runtime is required.
   Actual allocator, task, admission, boot and SRAM checks pass with their recorded
@@ -1939,8 +1992,10 @@ to the stated scope:
   domain. Physical domain power-up remains untested.
   [Replay over a ring](display-engine.md#de352-replay-over-a-ring-of-two-to-four-frames)
   of two to four frames is **implemented** in the display engine. The
-  configuration fixes the frame size, and a slot becomes writable again only
-  after a frame end shows that scanout has moved past it. Host checks pass,
+  configuration fixes the frame size. Every published frame remains immutable;
+  the native retirement query refuses rewriting every slot. RCQ finish, address
+  readback and a later frame end do not establish completion of old pixel reads.
+  Host checks pass,
   including refusal of ring readings that the configuration does not declare.
   No application produces frames into the ring yet. The ring stays retained
   after STOP, because no drain proof exists, and physical slot retirement
@@ -1966,7 +2021,13 @@ to the stated scope:
   physical qualification remain outstanding.
 
 - Radio: **implemented** a [returning SDIO diagnostic](../apps/radio-sdio-id/README.md)
-  that composes the actual shared providers, card and transport constructors.
+  and host-tested deadline checks for public record consumption. The full
+  sanitizer transport model, native dispatcher traffic/deadline cases and
+  OS/radio/headset build pass under `~/.cache/sunstoneos/build/radio-1031/`.
+  The [vendor-rate audit](radio-sdio-reference.md) establishes the selected
+  208 MHz request and nominal 200 MHz parent rounding; native UHS timing/tuning
+  remains missing. Its guarded read list is prepared, with no board execution.
+  The diagnostic composes the actual shared providers, card and transport constructors.
   The native build, twelve modeled application cases, constructor composition
   and nine producer refusals pass under `radio-native-20261025/`. Fitted supply
   topology and complete PM output-latch/PM2 authority remain unresolved; missing
@@ -2901,6 +2962,11 @@ to the stated scope:
   no vendor trace covers the P picture's control bits. No numerical or
   physical decode result exists. Main10, larger pictures, several slices,
   tiles, wavefront parallel processing and B pictures remain required.
+  Repeated initialization now preserves live and terminal controller state;
+  the host model covers refusal before token acquisition and throughout both
+  pictures. An [offline comparator](../apps/hevc/PIXELS.md) checks captured NV12
+  output against CPU decoding; its own host cases use CPU-generated copies
+  and do not qualify the VE.
   The attached board ROM profile, actual memory/cache/drain authority, physical
   decoding and remaining codec modes remain outstanding.
 
@@ -3010,6 +3076,9 @@ to the stated scope:
   no plaintext; empty authenticated decryption is supported. Thirty-nine
   application/service vectors, linked native upload/cleanup and actual-frame
   host checks pass under `crypto-modes-20261028/`, with independent review.
+  MD5 and SM3 compression, streaming HMAC and CPU-staging erasure now have
+  [focused host and linked-image evidence](security-engines.md). All physical
+  CE, IRQ, raw-source, key and drain qualification remains open.
   The change adds 2,072 text bytes and 4,096 BSS bytes without another DMA
   allocation. Physical predecessor exclusion, secure-bank access and engine
   operation remain unqualified.
@@ -3103,7 +3172,18 @@ to the stated scope:
 
 - USB host and Type-C: **implemented** native [source power and attachment
   control](typec.md), plus [high-speed USB2 host transfers](usb2-host.md) through
-  xHCI and TinyUSB. Focused checks cover attachment, independent power cutoff,
+  xHCI and TinyUSB. Generic host images expose OS-owned keyboard/mouse,
+  CDC and bridge serial, and UVC services through separate application grants.
+  Serial and camera buffers have retained zero-copy application views; an
+  optional MJPEG consumer reuses the hardware JPEG decoder. The
+  [image guide](usb-host-images.md) records four native builds and composed host
+  checks. Physical source power, peripherals, DMA visibility and sustained
+  traffic remain unqualified; supervised runner and RAM admission remain open.
+  The host connector is TYPEC24, the USB-C/DisplayPort port; accessories need
+  a USB-C adapter or hub. VBUS enable requires coordinator approval and an
+  explicit admitted source session. Review corrections and merged-tree checks
+  are recorded in the image guide. Full Type-C detach needs a new admitted
+  session. Focused checks cover attachment, independent power cutoff,
   mass-storage enumeration, copied sector reads, malformed responses,
   cancellation and disconnects. The [native board application](board-application.md)
   connects startup, separate Type-C tasks, host reads and simultaneous USB0

@@ -1,4 +1,5 @@
 #include "request.h"
+#include "a733_ce_digest_methods.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 void crypto_secret_clear(void *memory,size_t bytes)
@@ -12,7 +13,7 @@ unsigned crypto_request_output(const struct crypto_request *r)
 {
  if(r->operation==CRYPTO_SHA256)return 32;
  if(r->operation==CRYPTO_HASH||r->operation==CRYPTO_HMAC){
-  static const unsigned sizes[6]={0,20,28,32,48,64};return r->method<=5?sizes[r->method]:0;
+  return a733_ce_digest_size(r->method);
  }
  if(r->version==2&&r->mode==3)return r->operation==CRYPTO_CIPHER_DECRYPT?r->bytes-r->tag_bytes:r->bytes+r->tag_bytes;
  return r->bytes;
@@ -36,7 +37,7 @@ int crypto_request_copy(struct crypto_request *out,const struct crypto_session *
     !zero(out->iv+out->iv_bytes,sizeof(out->iv)-out->iv_bytes)||
     !zero(out->aad+out->aad_bytes,sizeof(out->aad)-out->aad_bytes))goto fail;
  if(out->operation==CRYPTO_HASH||out->operation==CRYPTO_HMAC){
-  if(out->method<1||out->method>5||out->mode||out->iv_bytes||out->aad_bytes||out->tag_bytes||
+  if(!a733_ce_digest_size(out->method)||out->mode||out->iv_bytes||out->aad_bytes||out->tag_bytes||
      (out->operation==CRYPTO_HASH&&out->key_bytes))goto fail;
  }else{
   if((out->operation!=CRYPTO_CIPHER_ENCRYPT&&out->operation!=CRYPTO_CIPHER_DECRYPT)||out->method||out->mode>3||

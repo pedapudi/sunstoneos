@@ -117,6 +117,11 @@ def physical_authority(record):
 
 
 
+def link_rate_authority(fact):
+    require(type(fact.get('qualified_link_rate_mbps')) is int and fact['qualified_link_rate_mbps']==5400,
+        'DisplayPort analog and SERDES authority must cover 5.4 Gb/s.')
+
+
 def validate_admission(record, image_hash, template_hash, raw, cache=None, frozen=False):
     common = record
     cache = board.validate_admission(common, image_hash, template_hash, cache, frozen)
@@ -132,6 +137,7 @@ def validate_admission(record, image_hash, template_hash, raw, cache=None, froze
         fact = json.loads(data)
         require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'] and all((fact.get(key) is True for key in fields[name])), 'DisplayPort physical facts do not cover the admitted image/target.')
         if name in ('analog', 'serdes'):
+            link_rate_authority(fact)
             require(fact.get('qualified_apb_hz') == struct.unpack_from('<I', raw, 860)[0], 'DisplayPort AUX APB frequency requires independent physical evidence.')
     ddr = json.loads(evidence(record['displayport_ddr']))
     require(ddr.get('identity') == record['identity'] and ddr.get('port') == record['port'] and (ddr.get('exclusive') is True) and (ddr.get('published_cache_disabled') is True) and (ddr.get('remote_writers_excluded') is True) and (ddr.get('ranges') == [[1207959552, 2030043136]]), 'Extended DisplayPort DRAM exclusion evidence differs.')
@@ -259,6 +265,8 @@ def _image_parts(data):
         match=[p for p in parts if not p['flags']&2 and p['address']<=address and address+size<=p['address']+len(p['data'])]
         require(len(match)==1,'Extended DisplayPort marker is not immutable/file-backed.')
         p=match[0];return address,p['data'][address-p['address']:address-p['address']+size]
+    _,rate=immutable('displayport_link_rate_mbps',8)
+    require(struct.unpack('<Q',rate)==(5400,),'DisplayPort compiled link rate must be 5.4 Gb/s.')
     _,geometry=immutable('displayport_geometry',104)
     require(struct.unpack('<13Q',geometry)==(0x4153373344504131,1,952,288,0x41f00000,20,1024,1280,720,2560,2097152,36864,0x10001000),'DisplayPort compiled geometry differs.')
     address,identity=immutable('a733_smp_build_id',32)

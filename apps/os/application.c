@@ -8,6 +8,9 @@
 #include "a733_storage_digest.h"
 #include "sunstone_crumb.h"
 #include "boot.h"
+#ifdef SUNSTONE_A733_OS_USB_CLASSES
+#include "sunstone_usb_service.h"
+#endif
 #ifdef SUNSTONE_NEWLIB
 #include "runtime.h"
 #endif
@@ -38,6 +41,13 @@ int ss_live(void)
     return a733_smp_counter()/24<atomic_load_explicit(&observed_until,memory_order_acquire);
 }
 void ss_progress(void){board_service_progress(OS_SERVICE_APPLICATION);}
+void os_application_usb_changed(void)
+{if(main_task)xTaskNotifyGive(main_task);}
+void ss_usb_wait(uint32_t wait_us)
+{
+    TickType_t ticks=pdMS_TO_TICKS(((uint64_t)wait_us+999)/1000);
+    (void)ulTaskNotifyTake(pdTRUE,ticks?ticks:1);
+}
 int ss_throttled(void){return os_thermal_throttled();}
 int ss_clock_ready(void)
 {
@@ -86,6 +96,11 @@ void os_application_host_observed(int ready)
 {
     BOARD_PROGRESS(BOARD_SERVICE_USB2);
     if(!ready)return;
+#ifdef SUNSTONE_A733_OS_USB_CLASSES
+    if(!(grant.devices&SS_DEVICE_USB_STORAGE)){
+        atomic_store_explicit(&board.result,3,memory_order_release);return;
+    }
+#endif
     enum a733_usb2_device_kind expected=(grant.devices&SS_DEVICE_USB_KEYBOARD)?A733_USB2_DEVICE_DUAL:A733_USB2_DEVICE_MSC;
     if(a733_usb2_device_kind(&board.host)!=expected){board_fail(NULL);return;}
     int live=board.host.core.ops.live?board.host.core.ops.live(board.host.core.context,
@@ -238,6 +253,13 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
 #ifdef SUNSTONE_A733_OS_GPU
     if(!os_gpu_retire())ss_fail(0x757);
 #endif
+#endif
+#ifdef SUNSTONE_A733_OS_USB_CLASSES
+    os_usb_service_retire();
+    while(!os_usb_service_idle()){
+        if(ss_live()<0)ss_fail(0x758);
+        ss_progress();vTaskDelay(1);
+    }
 #endif
     struct ss_result *r=(void *)ss_result_record;
     r->magic=SS_RESULT_MAGIC;r->version=SS_RESULT_VERSION;r->bytes=sizeof(*r)+ss_result_capacity;

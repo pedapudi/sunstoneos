@@ -1,4 +1,5 @@
 #include "a733_ce_hash.h"
+#include "a733_ce_digest_methods.h"
 enum { OPEN,REQUEST,WAIT,DONE };
 /* Stream passes: HMAC hashes an over-long key first and ends with OUTER. */
 enum { INNER,KEY,OUTER };
@@ -21,21 +22,22 @@ static int time_ok(struct a733_ce_hash *h)
     return h->bound_engine->binding.ops.now_us(h->bound_engine->binding.cookie,&now)==1 &&
         a733_deadline_admit(now,&h->last_now,h->deadline);
 }
-/* Append standard SHA padding to a queued tail shorter than 2048 bytes. */
+/* Append method-specific padding to a queued tail shorter than 2048 bytes. */
 static void pad(struct a733_ce_hash *h)
 {
-    unsigned block=a733_ce_hash_block(h->method);
+    unsigned block=a733_ce_digest_block(h->method);
     size_t padded=(h->queued+1+block/8+block-1)&~(size_t)(block-1);
     h->buffer[h->queued]=0x80;
     for (size_t i=h->queued+1;i<padded;++i) h->buffer[i]=0;
     uint64_t bits=h->message_bytes*8;
-    for (unsigned i=0;i<8;++i) h->buffer[padded-1-i]=(uint8_t)(bits>>(8*i));
+    for (unsigned i=0;i<8;++i)
+        h->buffer[h->method==A733_CE_MD5 ? padded-8+i:padded-1-i]=(uint8_t)(bits>>(8*i));
     h->queued=padded;h->finalizing=1;h->phase=REQUEST;
 }
 /* Queue the block-sized HMAC key combined with the inner or outer pad byte. */
 static void keyed(struct a733_ce_hash *h,uint8_t pad_byte)
 {
-    unsigned block=a733_ce_hash_block(h->method);
+    unsigned block=a733_ce_digest_block(h->method);
     for (unsigned i=0;i<block;++i) h->buffer[h->queued+i]=h->key[i]^pad_byte;
     h->queued+=block;h->message_bytes+=block;
 }
@@ -57,7 +59,7 @@ enum a733_ce_hash_result a733_ce_hash_start(struct a733_ce_hash *h,enum a733_ce_
     if (atomic_exchange_explicit(&h->busy,1,memory_order_acquire)) return A733_CE_HASH_BUSY;
     if (h->terminal) return finish(h,A733_CE_HASH_RETAINED);
     if (h->fault || !bound(h)) return retain(h);
-    unsigned block=a733_ce_hash_block(method);
+    unsigned block=a733_ce_digest_block(method);
     if (!deadline || !generation || !outside(h,generation,sizeof(*generation)) || !h->next_generation ||
         !block || (!key && key_bytes) || key_bytes>A733_CE_HMAC_KEY_MAX ||
         (key_bytes && (!outside(h,key,key_bytes) || !a733_ranges_disjoint(key,key_bytes,generation,sizeof(*generation)))))
@@ -129,7 +131,7 @@ enum a733_ce_hash_result a733_ce_hash_poll_digest(struct a733_ce_hash *h,uint64_
     if (atomic_exchange_explicit(&h->busy,1,memory_order_acquire)) return A733_CE_HASH_BUSY;
     if (h->terminal) return finish(h,A733_CE_HASH_RETAINED);
     if (h->fault || !bound(h)) return retain(h);
-    if (!generation || generation!=h->generation || bytes!=a733_ce_hash_digest(h->method) ||
+    if (!generation || generation!=h->generation || bytes!=a733_ce_digest_size(h->method) ||
         !outside(h,digest,bytes)) return finish(h,A733_CE_HASH_INVALID);
     if (h->phase==DONE) return finish(h,A733_CE_HASH_CONSUMED);
     if (!active(h) || !time_ok(h)) return retain(h);
@@ -144,7 +146,7 @@ enum a733_ce_hash_result a733_ce_hash_poll_digest(struct a733_ce_hash *h,uint64_
         if (r!=A733_CE_PENDING) return retain(h);
         h->inflight=take;h->phase=WAIT;return finish(h,A733_CE_HASH_PENDING);
     }
-    unsigned state=a733_ce_hash_state(h->method),out=a733_ce_hash_digest(h->method);
+    unsigned state=a733_ce_digest_state(h->method),out=a733_ce_digest_size(h->method);
     uint8_t result[64]={0};enum a733_ce_result r=a733_ce_digest_poll(controller,result,state);
     if (controller->fault || !time_ok(h) || (r!=A733_CE_PENDING && r!=A733_CE_BUSY && r!=A733_CE_DIGEST)) {
         zero(result,sizeof(result));return retain(h);

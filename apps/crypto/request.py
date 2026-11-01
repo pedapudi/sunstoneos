@@ -9,7 +9,7 @@ MAGIC=0x4153373343525131
 HEADER=48
 MAXIMUM=2048
 OPERATIONS={'sha256':1,'aes-encrypt':2,'aes-decrypt':3,'hash':4,'hmac':5,'cipher-encrypt':6,'cipher-decrypt':7}
-HASHES={'sha1':1,'sha224':2,'sha256':3,'sha384':4,'sha512':5}
+HASHES={'md5':0,'sm3':6,'sha1':1,'sha224':2,'sha256':3,'sha384':4,'sha512':5}
 MODES={'ecb':0,'cbc':1,'ctr':2,'gcm':3}
 EXTENT=2824
 def runtime(session):
@@ -32,7 +32,7 @@ def decode(raw,session=None):
         if operation in (4,5):
             if method not in HASHES.values() or mode or iv_bytes or aad_bytes or tag_bytes or (operation==4 and key_bytes):
                 raise ValueError('Invalid hash parameters')
-            output={1:20,2:28,3:32,4:48,5:64}[method]
+            output={0:16,1:20,2:28,3:32,4:48,5:64,6:32}[method]
         elif operation in (6,7):
             if method or mode not in MODES.values() or key_bytes not in (16,24,32):raise ValueError('Invalid cipher parameters')
             if mode==3:
