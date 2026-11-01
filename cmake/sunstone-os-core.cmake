@@ -369,7 +369,10 @@ if(SUNSTONE_A733_OS_USB_JPEG)
 endif()
 if(SUNSTONE_A733_CPU_TOPOLOGY)
   list(APPEND os_added kernel/scheduler/topology.c platform/a733/cpu_topology.c
-    platform/a733/cpu_observation.c drivers/board/orangepi_zero3w.c)
+    platform/a733/cpu_observation.c drivers/board/orangepi_zero3w.c
+    drivers/clock/a733_cpu_clock.c)
+  # Topology references the clock owner's read-only OPP tables even when the
+  # clock service is disabled. Section GC drops its unused transition code.
 endif()
 list(TRANSFORM os_added PREPEND "${os_root}/")
 if(SUNSTONE_LATENCY)
