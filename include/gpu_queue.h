@@ -66,14 +66,17 @@ enum gpu_queue_detail {
 
 struct gpu_queue_context { uint32_t generation, client; };
 
-/* A program from apps/gpu-program/compile.py, compile --profile 3, as the
+/* A program from apps/gpu-program/compile.py, compile --profile 3 or 4, as the
  * descriptor that the compiler step generates. The queue copies the code into
  * the context's program pages at creation. Programs are trusted: the queue
  * checks the descriptor's shape, never the code's memory behaviour. Source
  * admission stays an offline review step (include/pvr_compute_package.h). */
 #define GPU_QUEUE_ABI_GRID 1u
+#define GPU_QUEUE_ABI_LOCAL 2u
+#define GPU_QUEUE_LOCAL_WORDS 240u /* bounded on-chip allocation, 960 bytes */
+#define GPU_QUEUE_BARRIER_TASK 1u /* uniform barriers within one 32-lane task */
 struct gpu_queue_program {
-    uint32_t abi;              /* GPU_QUEUE_ABI_GRID */
+    uint32_t abi;              /* GPU_QUEUE_ABI_GRID or GPU_QUEUE_ABI_LOCAL */
     uint32_t code_bytes;       /* USC code without the compiler's 8-byte header */
     uint32_t temps;            /* compiler metadata word 0 */
     uint32_t coefficients;     /* 3, or 7 when the program reads the group counts */
@@ -81,6 +84,12 @@ struct gpu_queue_program {
     uint32_t reserved;
     const uint32_t *code;
     uint8_t program_sha256[32], source_sha256[32], compiler_sha256[32];
+    /* LOCAL: mutable per-workgroup coefficient words, beginning immediately
+     * after coefficients system-value words. All lanes share this on-chip
+     * allocation. Compiler global backing and zero initialization are refused.
+     * GRID requires both fields zero. Source review requires every shared read
+     * to follow a write in its group and every barrier to be uniform. */
+    uint32_t local_words, barriers;
 };
 
 /* One lease adopts the first bytes of one region of the application's
@@ -188,6 +197,14 @@ int gpu_queue_open(struct gpu_queue_context, uint32_t wait_ticks);
 /* Owner only: wait for bounded worker recovery after a fault. An owed fault
  * record remains collectible; permanent recovery failure returns FAULT. */
 int gpu_queue_recover(struct gpu_queue_context, uint32_t wait_ticks);
+#ifdef SUNSTONE_GPU_TIMING
+/* Optional diagnostic builds expose copied timing records after work ends.
+ * The record layout is in gpu_queue_timing.h; no diagnostic API is linked
+ * into ordinary images. */
+struct gpu_queue_timing_record;
+unsigned gpu_queue_timing_count(void);
+int gpu_queue_timing_read(unsigned index, struct gpu_queue_timing_record *out);
+#endif
 #ifdef __cplusplus
 }
 #endif

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Check metadata disappearance without opening or resetting a USB device."""
+import argparse
 import errno
+import harness
 import importlib.util
 import json
 from pathlib import Path
-import tempfile
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
@@ -12,8 +13,11 @@ spec = importlib.util.spec_from_file_location(
 access = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(access)
 
-with tempfile.TemporaryDirectory(prefix="sunstoneos-disconnect-") as directory:
-    root = Path(directory)
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--output", type=Path, required=True)
+root = parser.parse_args().output.resolve()
+root.mkdir(parents=True, exist_ok=False)
+if True:
     device = root / "3-1"
     device.mkdir()
     config = {"port": "3-1", "sysfs": str(device.resolve())}
@@ -42,6 +46,13 @@ with tempfile.TemporaryDirectory(prefix="sunstoneos-disconnect-") as directory:
          patch.object(access, "identity", return_value=[1, 2, 3, 0, 0]), \
          patch.object(access, "target", return_value=device) as target:
         access.quarantine_instance(root / "node", "fixture")
+        records = sorted(root.glob("blocked-*.json"))
+        assert len(records) == 1
+        original = records[0].read_bytes()
+        assert json.loads(original)["identity"] == [1, 2, 3, 0, 0]
+        # Quarantine resolves the port once. Refusal must not inspect a stale
+        # instance's descriptors after that record exists.
+        target.reset_mock()
         try:
             access.require_rom(root / "node")
         except ValueError as error:
@@ -52,5 +63,6 @@ with tempfile.TemporaryDirectory(prefix="sunstoneos-disconnect-") as directory:
         (device / "bcdDevice").write_text("02b3")
         with patch.object(access, "identity", return_value=[1, 4, 5, 0, 0]):
             access.require_rom(root / "node")
-        assert json.loads(access.RECOVERY_REQUIRED.read_text())["reason"] == "fixture"
+        assert records[0].read_bytes() == original
+        assert json.loads(original)["reason"] == "fixture"
 print("PASS: disconnect absence, new ROM instance, unrelated device, and fatal metadata errors.")

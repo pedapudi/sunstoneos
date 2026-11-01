@@ -63,7 +63,8 @@ def put(address, fmt, *values):
     m.mem_write(address, struct.pack(fmt, *values))
 
 
-board = image.address('board') + image.layouts['board_application']['session']
+# The embedded USB diagnostic has its own board; use the OS session owner.
+board = image.address('board', 'return-main-pinned.c') + image.layouts['board_application']['session']
 for key, value in (('epoch', 11), ('generation', 12)):
     put(board + image.layouts['a733_board_session'][key], '<Q', value)
 policy = image.address('thermal', 'return-thermal.c') + image.layouts['os_thermal_service']['policy']

@@ -25,12 +25,13 @@ SECTIONS {
         KEEP(*(sunstone_manifest))
         __stop_sunstone_manifest = .;
     } > CODE
-    /* C++ constructors; empty in a C image. */
+    /* C++ metadata carries writable ELF flags. Keep it with writable RAM
+     * rather than the read-only executable block, including the GOT. */
     .init_array : {
         __init_array_start = .;
         KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*))) KEEP(*(.init_array))
         __init_array_end = .;
-    } > CODE
+    } > RAM
     .data : { *(.data*) *(.got*) } > RAM
     .result 0x42000000 (NOLOAD) : {
         __a733_smp_result = .; . += 0x4000; __a733_smp_result_end = .;

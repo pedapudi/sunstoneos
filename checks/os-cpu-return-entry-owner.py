@@ -11,7 +11,7 @@ DSU are compared with their boot words after a modeled ROM reset of both.
 import argparse,importlib.util,struct
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
-from unicorn.arm64_const import UC_ARM64_REG_PC,UC_ARM64_REG_LR
+from unicorn.arm64_const import UC_ARM64_REG_PC,UC_ARM64_REG_LR,UC_ARM64_REG_SP
 from harness import Image,save
 spec_crumb=importlib.util.spec_from_file_location('owner_cpu_crumbs',Path(__file__).resolve().parents[1]/'tools/a733-crumbs.py')
 cpu_crumbs=importlib.util.module_from_spec(spec_crumb);spec_crumb.loader.exec_module(cpu_crumbs)
@@ -266,6 +266,28 @@ def main():
  assert m.step()==1 and not m.requests;m.put32(m.p+pf['published_seen'],31)
  assert m.step()==1 and m.requests==[(1,2002)]
  rows.append({'name':'wait-all-five-before-first-request','passed':True})
+ # The formatter must publish the applied DSU point, not its boot snapshot.
+ m=Model(image,layout,members);cf=layout.layouts['a733_cpu_clock'];reported=[]
+ assert m.call(0,'os_cpu_admit')==1
+ def clock_line():
+  reported.append(m.u32(m.uc.reg_read(UC_ARM64_REG_SP)))
+  return 1
+ m.hooks[layout.address('snprintf')]=clock_line
+ def formatted_dsu():
+  assert m.call(0,'os_cpu_clock_line',(0x41ef0000,512))==1
+  return reported[-1]
+ m.hooks[layout.address('a733_cpu_clock_burst')]=lambda:2
+ # A completion with no applied DSU point keeps the decoded boot value.
+ assert m.step()==1 and formatted_dsu()==494
+ m.put32(m.owner+members['phase'],2);m.put32(m.owner+members['cluster'],3)
+ m.put32(m.owner+members['ready'],0);m.put32(m.owner+members['count'],2)
+ m.hooks[layout.address('a733_cpu_clock_burst')]=lambda:1
+ assert m.step()==1 and m.call(0,'os_cpu_clock_ready')==0 and formatted_dsu()==494
+ m.put32(m.c+cf['applied_mhz']+8,1274)
+ m.hooks[layout.address('a733_cpu_clock_burst')]=lambda:2
+ assert m.step()==1 and m.call(0,'os_cpu_clock_ready')==1 and formatted_dsu()==1274
+ assert m.u32(m.owner+members['count'])==3
+ rows.append({'name':'formatter-publishes-completed-DSU-point','passed':True})
  tf=layout.layouts['os_thermal_service'];df=layout.layouts['a733_thermal']
  for name,change,expected in [('ready',lambda m,t:None,1),('uninitialized',lambda m,t:m.put32(t+tf['driver']+df['initialized'],0),0),('faulted',lambda m,t:m.put32(t+tf['driver']+df['fault'],1),0),('retaining',lambda m,t:m.put32(t+tf['retaining'],1),0),('inactive',lambda m,t:m.put32(t+tf['active'],0),0),('failed',lambda m,t:m.put32(t+tf['failed'],1),0)]:
   m=Model(image,layout,members);m.check_ready_fixture=False;t=layout.address('thermal','return-thermal.c')

@@ -42,7 +42,7 @@ int gpu_queue_context_create(const struct gpu_queue_context_config *c, uint32_t 
     assert(c->lease[0].region == QUEUE_ADD_REGION_OUTPUT && c->lease[1].region == QUEUE_ADD_REGION_INPUT);
     assert(!c->lease[0].bytes && !c->lease[1].bytes);
     if(mode == 2) return GPU_QUEUE_REFUSED;
-    *ctx = (struct gpu_queue_context){.generation=19};
+    *ctx = (struct gpu_queue_context){.generation=19, .client=0};
     info[0] = (struct gpu_queue_lease_info){.address=(uintptr_t)output, .bytes=2097152};
     info[1] = (struct gpu_queue_lease_info){.address=(uintptr_t)input, .bytes=2097152};
     if(mode == 3) ++info[0].address;

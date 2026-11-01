@@ -28,7 +28,8 @@ def fnv(data):
     return value
 
 
-def inspect(image):
+def inspect(image, usb_pool=None):
+    """Admit image RAM, with the shared linked-arena validator for native USB only."""
     data=Path(image).read_bytes();elf=ELFFile(io.BytesIO(data))
     require(elf['e_machine']=='EM_AARCH64' and elf['e_entry']==0x41000000,'Probe entry must be AArch64 0x41000000.')
     table=elf.get_section_by_name('.symtab');symbols={}
@@ -47,12 +48,19 @@ def inspect(image):
     require(m['watchdog_mode']==0xb1 and 1<=m['seconds']<=600 and
             (m['session_address'],m['session_bytes'],m['result_address'],m['result_bytes'])==
             (SESSION,128,RECEIPT,128),'Probe watchdog or session/receipt geometry differs.')
+    arena = usb_pool(elf) if usb_pool else None
     uploads=[]
     for p in elf.iter_segments():
         if p['p_type']!='PT_LOAD' or not p['p_memsz']:continue
         low,high=p['p_paddr'],p['p_paddr']+p['p_memsz']
-        require(low==p['p_vaddr'] and 0x41000000<=low<high<=0x41f00000 and
-                p['p_filesz']<=p['p_memsz'] and p['p_flags']&3!=3,'Probe load segment exceeds image RAM.')
+        if not (0x41000000<=low<high<=0x41f00000):
+            require(arena is not None, 'Probe load segment exceeds image RAM.')
+            require((low, high, p['p_vaddr'], p['p_filesz'], p['p_flags']) ==
+                    (arena['address'], arena['address']+arena['bytes'], arena['address'], 0, 6),
+                    'Probe external load is not the linked USB arena.')
+        else:
+            require(low==p['p_vaddr'] and p['p_filesz']<=p['p_memsz'] and
+                    p['p_flags']&3!=3,'Probe load segment exceeds image RAM.')
         require(not any(low<b and a<high for a,b in [(u['address'],u['end']) for u in uploads]),'Probe segments overlap.')
         uploads.append({'address':low,'end':high,'data':p.data()})
     require(uploads and any(p['address']<=0x41000000< p['address']+len(p['data']) for p in uploads),'Probe entry has no image bytes.')

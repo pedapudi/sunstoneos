@@ -1,0 +1,48 @@
+{
+  "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+  "execution": "Reference only; the native diagnostic adapts the GPU master counter sequence to the existing OS MMIO interface.",
+  "sources": [
+    {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/bus/sunxi-nsi.c",
+      "sha256": "322ef7a142521760c081d092c8f5193f688144cd6ec842f93bbf457e27814c71",
+      "license": "GPL-2.0-or-later",
+      "sections": "__rate_for_master; nsi_pmu_disable/enable/clear; __nsi_pmu_timer_store_v2; device-tree unit loading"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/bus/sunxi-nsi.h",
+      "sha256": "42db94da3e3ac2d072363550f637d41027988ac58154c753c1090c8fadcfc64c",
+      "license": "GPL-2.0-or-later",
+      "sections": "CONFIG_ARCH_SUN60IW2 master IDs; MBUS_PMU register macros"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/bus/sunxi-nsi-bw.c",
+      "sha256": "8d256ef58e5dc2668c6b3026ce670e6dcf99cdf2b289e137b28e19a761ab183b",
+      "license": "GPL-2.0-or-later",
+      "sections": "nsi_pmu_bandwidth_rd_show; nsi_pmu_bandwidth_wr_show"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi",
+      "sha256": "1c7313f655bdc4d018201664adcb1fa1d100280388b8975e193ebbfc6ad4ddfa",
+      "license": "GPL-2.0+ OR MIT",
+      "sections": "nsi-controller@2020000 GPU master 6, clock mapping and 16-byte IA data unit"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_rogue_fwif.h",
+      "sha256": "39b6eb48874fdb4bd6e4b8fa6eadae99209d22c5d9945ec4cd6989549460fb13",
+      "license": "MIT OR GPL-2.0",
+      "sections": "HWPerf KCCB command IDs and shared-memory fields"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/modules/gpu/img-bxm/linux/rogue_km/include/rogue/rgx_hwperf.h",
+      "sha256": "dd435013b67ab81bef45fa6cb34311913a5d9009134aafbaa0c31dd6509dc7f2",
+      "license": "MIT OR GPL-2.0",
+      "sections": "RGX_HWPERF_CONFIG_MUX_CNTBLK group and bit fields"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/modules/gpu/img-bxm/linux/rogue_km/services/shared/devices/rogue/rgx_hwperf_table.c",
+      "sha256": "1fb8b8e17a6ee4fb6646052cdd393fb43f7af51c7832e157f7e10bc2cbc2f0eb",
+      "license": "MIT OR GPL-2.0",
+      "sections": "asRGXCntBlkTypeModel block and feature mappings"
+    }
+  ]
+}

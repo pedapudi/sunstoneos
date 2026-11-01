@@ -154,7 +154,8 @@ int pvr_compute_queue_create(struct pvr_compute_queue *q,const struct gpu_queue_
     const uintptr_t end=(uintptr_t)__stop_sunstone_gpu_program;
     const uintptr_t code=(uintptr_t)p.code;
     uint64_t local=(uint64_t)p.local_size[0]*p.local_size[1];
-    if (p.abi!=GPU_QUEUE_ABI_GRID || p.reserved || !p.code || !p.code_bytes || (p.code_bytes&3) ||
+    unsigned common_words=pvr_compute_job_common_words(&p);
+    if (!common_words || p.reserved || !p.code || !p.code_bytes || (p.code_bytes&3) ||
         p.code_bytes>GPU_QUEUE_PROGRAM_BYTES || p.temps>252 ||
         (p.coefficients!=3 && p.coefficients!=7) || !p.local_size[0] || !p.local_size[1] ||
         !p.local_size[2] || local>32 || local*p.local_size[2]!=32 ||
@@ -166,7 +167,7 @@ int pvr_compute_queue_create(struct pvr_compute_queue *q,const struct gpu_queue_
     memset(page,0,3*PAGE);
     memcpy(page+PAGE,p.code,p.code_bytes);
     q->task_word=(A733_GPU_QUEUE_PROGRAM_GPU-UINT64_C(0xe000000000))|((uint64_t)((p.temps+3)/4)<<35);
-    q->coefficients=p.coefficients; q->job_us=c->job_us;
+    q->coefficients=p.coefficients; q->common_words=common_words; q->job_us=c->job_us;
     const uint32_t zero[3]={0,0,0};
     q->binding0=q->lease[0].address;
     pvr_compute_job_grid_pds(page,q->task_word,zero,A733_GPU_QUEUE_JOB_GPU+PVR_COMPUTE_QUEUE_ARGUMENTS,q->binding0);
@@ -298,7 +299,8 @@ static int take(struct pvr_compute_queue *q)
     unsigned bytes=8*(q->job.bindings-1)+q->job.argument_bytes;
     memcpy(args+8*(q->job.bindings-1),q->job.arguments,q->job.argument_bytes);
     uint32_t pds=(uint32_t)(A733_GPU_QUEUE_JOB_GPU-UINT64_C(0xda00000000));
-    pvr_compute_job_grid_cdm(page+PVR_COMPUTE_QUEUE_CDM,pds,pds+PVR_COMPUTE_QUEUE_FENCE,q->job.groups);
+    (void)pvr_compute_job_grid_cdm_resources(page+PVR_COMPUTE_QUEUE_CDM,pds,
+        pds+PVR_COMPUTE_QUEUE_FENCE,q->job.groups,q->common_words);
     if (!maintain(q,0) ||
         ((pointer_changed || groups_changed) && !aarch64_device_cache(AARCH64_CACHE_CLEAN,
             (uintptr_t)page+(groups_changed?0:64),groups_changed && pointer_changed?128:64)) ||
