@@ -34,10 +34,12 @@
 #include "../runtime/device_memory_pool.c"
 #include "../drivers/gpu/pvr_gpu_vm.c"
 #include "pvr_compute_mimus.h"
-/* Page counts the runner reads from the headers that include FreeRTOS:
+/* Page counts and the large-mapping page shift the runner reads from the
+ * headers that include FreeRTOS:
  * a733_gpu_reserved.h, a733_gpu_mimus.h, pvr_mimus_service.h, a733_xhci.h. */
 #if !defined(REPLAY_FIRMWARE_WB_PAGES) || !defined(REPLAY_FIRMWARE_NC_PAGES) || \
-    !defined(REPLAY_SESSION_WB_PAGES) || !defined(REPLAY_SESSION_NC_PAGES) || !defined(REPLAY_XHCI_BYTES)
+    !defined(REPLAY_SESSION_WB_PAGES) || !defined(REPLAY_SESSION_NC_PAGES) || !defined(REPLAY_XHCI_BYTES) || \
+    !defined(REPLAY_SESSION_LARGE_PAGE_SHIFT)
 #error "the runner supplies the replayed allocation sizes"
 #endif
 
@@ -169,11 +171,11 @@ static unsigned session_table_pages(void)
 {
     struct pvr_gpu_mapping maps[64];unsigned count=0;
     const uint64_t payload=0x41a00000,pds=UINT64_C(0xda00000000),usc=UINT64_C(0xe000000000),general=UINT64_C(0x8000000000);
-    maps[count++]=(struct pvr_gpu_mapping){PVR_MIMUS_MODEL_GPU,OS_DISPATCH_MODELS,PVR_MIMUS_MODEL_BYTES,21,PVR_GPU_VM_READ_ONLY};
+    maps[count++]=(struct pvr_gpu_mapping){PVR_MIMUS_MODEL_GPU,OS_DISPATCH_MODELS,PVR_MIMUS_MODEL_BYTES,REPLAY_SESSION_LARGE_PAGE_SHIFT,PVR_GPU_VM_READ_ONLY};
     maps[count++]=(struct pvr_gpu_mapping){PVR_MIMUS_MODEL_GPU+PVR_MIMUS_MODEL_BYTES,OS_DISPATCH_MODELS+OS_DISPATCH_MODEL_BYTES,
-        PVR_MIMUS_MODEL_BYTES,21,PVR_GPU_VM_READ_ONLY};
-    maps[count++]=(struct pvr_gpu_mapping){PVR_MIMUS_ARENA_GPU,OS_DISPATCH_ARENA,PVR_MIMUS_ARENA_BYTES,21,PVR_GPU_VM_READ_ONLY};
-    maps[count++]=(struct pvr_gpu_mapping){PVR_MIMUS_OUTPUT_GPU,OS_DISPATCH_OUTPUT,PVR_MIMUS_OUTPUT_BYTES,21,0};
+        PVR_MIMUS_MODEL_BYTES,REPLAY_SESSION_LARGE_PAGE_SHIFT,PVR_GPU_VM_READ_ONLY};
+    maps[count++]=(struct pvr_gpu_mapping){PVR_MIMUS_ARENA_GPU,OS_DISPATCH_ARENA,PVR_MIMUS_ARENA_BYTES,REPLAY_SESSION_LARGE_PAGE_SHIFT,PVR_GPU_VM_READ_ONLY};
+    maps[count++]=(struct pvr_gpu_mapping){PVR_MIMUS_OUTPUT_GPU,OS_DISPATCH_OUTPUT,PVR_MIMUS_OUTPUT_BYTES,REPLAY_SESSION_LARGE_PAGE_SHIFT,0};
     static const uint32_t program_pages[10]={1,1,1,1,1,1,1,5,5,1};
     uint64_t physical=payload+3*4096;
     for(unsigned i=0;i<10;++i){

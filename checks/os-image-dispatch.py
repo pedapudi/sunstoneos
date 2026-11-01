@@ -85,6 +85,7 @@ def replay_sizes():
     return ['-DREPLAY_FIRMWARE_WB_PAGES=%d' % find('include/a733_gpu_reserved.h', r'A733_GPU_RESERVED_WB_BYTES \((\d+)u \*'),
             '-DREPLAY_FIRMWARE_NC_PAGES=%d' % find('include/a733_gpu_reserved.h', r'A733_GPU_RESERVED_NC_BYTES \((\d+)u \*'),
             '-DREPLAY_SESSION_WB_PAGES=%d' % find('include/a733_gpu_mimus.h', r'A733_GPU_MIMUS_PAYLOAD_PAGES (\d+)u'),
+            '-DREPLAY_SESSION_LARGE_PAGE_SHIFT=%d' % find('include/a733_gpu_mimus.h', r'A733_GPU_MIMUS_LARGE_PAGE_SHIFT (\d+)u'),
             '-DREPLAY_SESSION_NC_PAGES=%d' % find('include/pvr_mimus_service.h', r'PVR_MIMUS_SERVICE_OBJECTS (\d+)u'),
             '-DREPLAY_XHCI_BYTES=%d' % find('include/a733_xhci.h', r'A733_XHCI_MEMORY_BYTES (\d+)u')]
 

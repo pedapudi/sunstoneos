@@ -103,12 +103,13 @@ struct pvr_mimus_service *a733_gpu_mimus_prepare(struct a733_gpu_mimus *s, struc
     p->excluded[6] = (struct pvr_compute_program_span){payload + PAGE, PVR_MIMUS_PROGRAM_BYTES, PROGRAM_GPU};
     unsigned count = 0;
     const uint64_t models_gpu[PVR_MIMUS_MODELS] = {PVR_MIMUS_MODEL_GPU, PVR_MIMUS_MODEL_GPU + PVR_MIMUS_MODEL_BYTES};
+    const uint32_t large = A733_GPU_MIMUS_LARGE_PAGE_SHIFT;
     for (unsigned i = 0; i < PVR_MIMUS_MODELS; ++i)
-        s->maps[count++] = (struct pvr_gpu_mapping){models_gpu[i], l->models[i], PVR_MIMUS_MODEL_BYTES, 21,
+        s->maps[count++] = (struct pvr_gpu_mapping){models_gpu[i], l->models[i], PVR_MIMUS_MODEL_BYTES, large,
                                                     PVR_GPU_VM_READ_ONLY};
-    s->maps[count++] = (struct pvr_gpu_mapping){PVR_MIMUS_ARENA_GPU, l->arena, PVR_MIMUS_ARENA_BYTES, 21,
+    s->maps[count++] = (struct pvr_gpu_mapping){PVR_MIMUS_ARENA_GPU, l->arena, PVR_MIMUS_ARENA_BYTES, large,
                                                 PVR_GPU_VM_READ_ONLY};
-    s->maps[count++] = (struct pvr_gpu_mapping){PVR_MIMUS_OUTPUT_GPU, l->output, PVR_MIMUS_OUTPUT_BYTES, 21, 0};
+    s->maps[count++] = (struct pvr_gpu_mapping){PVR_MIMUS_OUTPUT_GPU, l->output, PVR_MIMUS_OUTPUT_BYTES, large, 0};
     for (unsigned i = 0; i < 3; ++i)
         s->maps[count++] = (struct pvr_gpu_mapping){(i ? PROGRAM_GPU + (i - 1) * PAGE : JOB_GPU),
             s->payload_extent.physical + i * PAGE, PAGE, 12, PVR_GPU_VM_READ_ONLY};

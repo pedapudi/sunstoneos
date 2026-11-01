@@ -12,8 +12,14 @@
  * programs (1 + 1 + 4 x 1 + 1 + 5 + 5 + 1 pages). */
 #define A733_GPU_MIMUS_PAYLOAD_PAGES 21u
 /* GPU mappings: base model, overlay model, arena span and output region as
- * 2 MiB pages, then one 4 KiB mapping per payload page. */
+ * 256 KiB pages, then one 4 KiB mapping per payload page. */
 #define A733_GPU_MIMUS_MAPS (4u + A733_GPU_MIMUS_PAYLOAD_PAGES)
+/* Page shift of the four large mappings. This core (BVNC 36.56.104.183) has
+ * hardware erratum BRN 71317: 2 MiB and 1 MiB GPU pages cause page faults,
+ * so the vendor driver caps GPU pages at 256 KiB (rgxinit.c). The table
+ * page count is the same, because each 2 MiB region still has one leaf
+ * table. */
+#define A733_GPU_MIMUS_LARGE_PAGE_SHIFT 18u
 /* The planner's table pages for those mappings: 24, measured by
  * checks/pvr-mimus-service.py; with the payload and the firmware's 34 pages
  * the GPU holds 79 of the write-back pool's pages. */
