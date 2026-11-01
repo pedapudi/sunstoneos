@@ -5,6 +5,10 @@
 /* The Normal non-cacheable boot pool. The local layout uses one optional
  * 2 MiB block, 0x41c00000..0x41e00000, with the caller's alignment; the
  * extended layout reserves class `uncached`, 0x78000000..0x79000000.
+ * The OS USB-class layout instead reserves 8 MiB at
+ * 0x42200000..0x42a00000. This same allocator owns that complete linker
+ * reservation: USB takes the first 5 MiB lease, and JPEG retains separate
+ * leases in the remainder. The NPU pool and application regions are outside it.
  *
  * Preparation and the getter behave as for the write-back pool. In the
  * extended layout a733_device_memory_prepare() runs preparation once, and in
