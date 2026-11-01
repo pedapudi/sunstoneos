@@ -24,7 +24,7 @@ static RECOVERY uint64_t hash(const volatile uint8_t *p,uint64_t bytes)
     return h;
 }
 /* First failed secondary observation, kept outside EL1-cleared BSS. */
-static struct { uintptr_t address; uint32_t observed,check; } secondary_fault
+static volatile struct { uintptr_t address; uint32_t observed,check; } secondary_fault
     __attribute__((section(".monitor_state")));
 static RECOVERY int off_word(uintptr_t address,uint32_t mask,uint32_t expected,unsigned check)
 {

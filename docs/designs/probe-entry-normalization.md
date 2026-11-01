@@ -1,15 +1,92 @@
-# Returning probe entry ownership
+# Returning probes acquire secondary CPU ownership
 
-The shared probe acquires secondary CPU ownership after session, watchdog and architectural checks and before whole-cache operations. It retains the existing diagnostic predicates and short-circuit read order. The common weak acquire/release hooks implement the owner; consumers must remove older private replacements to use it.
+Status: implemented and host-checked. Physical transitions and repeatability
+remain unqualified. This contract covers returning, single-core diagnostics.
 
-The vendor BL31 clears the low policy nibble of nine CPUIDLE words at monitor offset 0x4e88, but that does not disable inherited dynamic transitions. Its CPU_ON waits for OFF, programs per-core mode/request and waits for ON; CPU_OFF disables GIC wake. The A733 BSP TF-A path corroborates this sequence. Arm DEN0051E 3.4.3 and 4.1.1 supplies the missing dynamic-disable completion: PWSR acknowledges completion after any in-flight transition. The [CPU source manifest](../../boot/a733/stage2/cpu-sources.json), [CPU comparison](../reference-backsolve-cpu.md) and [vendor monitor inventory](../vendor-firmware/tf-a-monitor.md) pin the references. Unlike stage2's older helper, verification must not require PWPR readback before PWSR completion.
+The shared probe acquires all seven secondary CPUs after session, watchdog and
+architectural checks, before cache maintenance. It accepts acknowledged static
+or dynamic OFF as input and establishes static OFF with GIC wake disabled.
+It retains that state through ROM return. An active core refuses before any
+policy write, because entry cannot shut down an unknown owner.
 
-Preflight all seven core pages before writes: identity, architecture, capabilities, zero operating mode, acknowledged OFF policy/status 0 or 0x100, clear software requests; accept either GIC wake setting. Retain the sampled per-core policy/control/mode during acquisition. Reject an active core instead of shutting down an unknown owner. The changed writes target only PWPR 0x07053000..0x07059000 and per-secondary hotplug control 0x07050204..0x0705021c bit 1. CPU0 (0x07052000), cluster (0x07051000), power domains, rails and clocks are excluded.
+## The vendor sequence needs an explicit dynamic-disable handshake
 
-Acquire under one 100 ms absolute deadline, capped by session deadline, and 65,536 poll samples even if the counter stops. Record each inherited policy/core in the existing RTC breadcrumb before mutation. Write PWPR zero with DSB SY, wait PWSR zero, then verify PWPR. Permit documented OFF/ON transient bits while waiting. Set per-core wake-disable by read/modify/write only after static OFF; preserve every other bit. Recheck the original strict static-OFF predicates before cache maintenance. A timeout, denial or changing request retains first raw fault inputs and parks with WDT0 armed.
+The vendor BL31 clears the low policy nibble of nine CPUIDLE words at binary
+offset `0x4e88`. That operation preserves dynamic-enable bit 8. Its CPU_ON path
+waits for OFF, programs per-core mode/request, waits for ON and clears both
+requests. CPU_OFF disables that core's GIC wake. The A733 BSP TF-A path
+corroborates those addresses and operations.
 
-The default release keeps the normalized static OFF policies and wake-disable settings. ROM has no running secondary consumer to restore; restoring inherited dynamic transitions would reintroduce autonomous wake. Keep the audio release hook API and uncached ROM tail for consumers with an independently reviewed owner. Acquisition is entry-only code outside memtest recovery pages; only the existing checks and no-op release remain in its protected closure. This preserves the fixed four-page recovery reservation. Acquisition adds no recurring hot-path work; it runs once per diagnostic. The bounds are availability limits, not measured hardware latency. Acquisition timing remains unmeasured on hardware. A subsequent multicore consumer must release the held policy only after publishing its target entry; the resident startup path implements that handoff. Historical nonresident launch images are not established compatible.
+Arm DEN0051E sections 3.4.3 and 4.1.1 define the missing completion condition.
+Disabling dynamic transitions takes effect after any in-flight transition;
+PWSR acknowledges the change. Entry waits for dynamic status disabled and actual
+OFF before checking PWPR readback. A rejected transition or timeout parks with
+WDT0 armed and the first raw failure retained.
 
-Shared code owns no peripheral clock/reset. Do not reset a shared block globally. Camera VIDEO_IN reset and gate normalization remains with the camera worker's apps/isp0 owner, which this task must not edit. A camera control that passes common entry and fails its later reset check is recorded and stops the sequence per the brief. Other owned peripheral normalization belongs before each owner's first dependent access, with vendor ordering and preserved shared bits.
+The [CPU source manifest](../../boot/a733/stage2/cpu-sources.json),
+[CPU comparison](../reference-backsolve-cpu.md) and
+[vendor monitor inventory](../vendor-firmware/tf-a-monitor.md) pin the source
+identities, binary offsets and licenses. The older stage2 helper's policy-first
+verification order is unsuitable for a delayed acknowledgment.
 
-Focused validation executes final linked acquire/begin/return paths with delayed PWSR and stale PWPR; validates write isolation, first rejected inputs/read order, static/dynamic inputs, all-seven ownership, denial, in-flight wake, stopped counter, deadlines, request races, retention through return and no cache operation after release. Inspect linked images and memtest recovery closure. Run full integration gate and check index once. Obtain independent simplicity, hardware-performance and correctness design/code reviews; at least two reviewers inspect final linked controls. Physical prediction: audio, camera control, audio pass common entry on one port with no replug. Stop at the first transport failure or later camera failure.
+## Only secondary-core registers change
+
+Preflight reads all seven identities, architectures, capabilities, policies,
+operating modes, status words and software requests before the first write.
+It admits only matched policy/status `0/0` or `0x100/0x100`, operating mode zero
+and clear software requests. Either inherited GIC wake setting is accepted.
+
+Acquisition writes zero only to dynamic policy words at
+`0x07053000..0x07059000`, one page apart. Each write completes with DSB SY.
+PWSR may temporarily report OFF or ON with dynamic enable still active; only
+zero establishes completion. PWPR verification follows that completion.
+Entry then sets bit 1 of per-core hotplug control at
+`0x07050204..0x0705021c`, preserving every other bit and completing with DSB SY.
+The original strict held-state predicates and short-circuit read order remain.
+
+No write targets CPU0 at `0x07052000`, the cluster page at `0x07051000`, a power
+domain, a rail, a clock or a reset. The `PROBE_POLICY` RTC breadcrumb records
+`core << 12 | inherited_policy` before each core's normalization. A fault
+retains its raw rejected register and address independently.
+
+One 100 ms absolute counter deadline, capped by the session deadline, bounds
+acquisition. A 65,536-sample limit also bounds a stopped counter. These limits
+bound availability; they do not claim measured hardware latency. Acquisition
+runs once at entry and adds no recurring I/O or scheduler work.
+
+## Ownership stays held through ROM return
+
+The weak acquire hook implements normalization. Its code runs before memory
+testing and stays outside memtest's protected recovery pages. The weak release
+hook returns READY without writes. The protected return closure contains the
+held-state checks, fault path and release hook within its four-page reservation.
+All data and instruction-cache maintenance precedes the optional release call;
+the ROM tail contains no cache instruction.
+
+A subsequent multicore consumer must publish its target entry before releasing
+the held policy. The resident startup path implements that handoff. Historical
+nonresident launch images are not established compatible with retained static
+OFF. Consumers selecting the common owner remove private strong owner hooks
+and build-time replacements for the shared runtime.
+
+Peripheral reset and gate normalization belongs to the block's owner before
+its first dependent access. Common entry has no peripheral ownership authority.
+In particular, the camera owner controls VIDEO_IN and ISP reset sequencing.
+It must preserve shared resources and establish drain before reset; a global
+reset from common entry cannot supply that proof.
+
+## Validation separates modeled behavior from physical proof
+
+Linked instruction checks model delayed PWSR acknowledgment, stale PWPR,
+in-flight wake, changing requests, invalid last-core identity, deadlines and a
+stopped counter. They check all seven cores, exact register write scope,
+preservation of hotplug upper fields and every original held-state predicate.
+CPU-origin cases retain their first sampled inputs. Existing memtest checks
+verify protected placement, relocation closure, stack bounds and beacons.
+
+Three independent reviewers inspect design and code; linked memory-test and
+audio images receive separate inspections. The full integration gate and the
+check index cover software integration. Acquisition latency remains unmeasured
+on hardware. The physical proof requires audio, camera control and audio on one
+port without a replug, with common entry passing each time. A later camera
+reset refusal stops that sequence and remains with the camera owner.
