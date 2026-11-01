@@ -193,78 +193,13 @@ def main(argv=None):
     prep.add_argument('--clang',default='clang-21'); prep.add_argument('--lld',type=Path,default=Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
     live = sub.add_parser('launch')
     for name in ('bundle','fel','evidence'): live.add_argument('--'+name,type=Path,required=True)
-    live.add_argument('--confirm-bridge-stable',action='store_true',required=True)
+    live.add_argument('--confirm-bridge-stable',action='store_true')
     args = parser.parse_args(argv)
     if args.operation == 'prepare':
         result=prepare(args.image,args.image_manifest,args.output.resolve(),args.clang,args.lld,args.reservation); print(json.dumps(result,indent=2)); return 0
-    bundle=args.bundle.resolve(); prepared=validate_bundle(bundle)
-    args.evidence = base.output_directory(args.evidence)
-    for label, path in [('host-tool.py', Path(__file__)), ('base-host-tool.py',Path(base.__file__)), ('prepared.json', bundle/'prepared.json')]:
-        shutil.copy2(path,args.evidence/label)
-    access=module('smp_usb_access',ROOT/'tools/usb-access.py')
-    sys.path.insert(0,str(ROOT/'tools')); import usb_guard
-    usb_guard.check_health()
-    record={'complete':False,'transactions':[],'bundle_sha256':digest(bundle/'prepared.json'),'launch_attempted':False}
-    def save(): save_json(args.evidence/'session.json',record)
-    with access.board_lock() as node:
-        access.require_session(node); access.require_rom(node); identity=access.identity(node)
-        port=access.target(node); port_config={'port':port.name,'sysfs':str(port.resolve())}; failed=False
-        def ready(): pass
-        record.update(initial_node=str(node),initial_identity=identity,port=port.name, host_tool_sha256=digest(Path(__file__)), usb_access_sha256=digest(ROOT/'tools/usb-access.py'), usb_guard_sha256=digest(Path(usb_guard.__file__))); save()
-        def transaction(*arguments, pass_fds=()):
-            nonlocal failed
-            require(not failed,'Transport failure forbids all further requests.')
-            entry={'arguments':[str(a) for a in arguments]}
-            if pass_fds:
-                entry['sealed_sources'] = [{'fd':fd,'bytes':os.fstat(fd).st_size,'sha256':hashlib.sha256(os.pread(fd,os.fstat(fd).st_size,0)).hexdigest(),'seals':fcntl.fcntl(fd,fcntl.F_GET_SEALS)} for fd in pass_fds]
-            record['transactions'].append(entry); save()
-            try:
-                require(access.identity(node)==identity,'USB identity changed before a request.')
-                access.require_rom(node)
-                result=subprocess.run([str(args.fel),'-d',f'{int(node.parent.name)}:{int(node.name)}',*map(str,arguments)],capture_output=True,text=True,timeout=15,pass_fds=pass_fds)
-                entry.update(exit_code=result.returncode,stdout=result.stdout,stderr=result.stderr)
-                require(result.returncode==0,'FEL request failed.')
-            except (OSError,ValueError,subprocess.TimeoutExpired) as error:
-                failed=True; entry['failure']=str(error); save(); raise
-            save(); return result.stdout
-        def wait_return():
-            nonlocal node,identity
-            old=identity; deadline=time.monotonic()+20; departure=False
-            while time.monotonic()<deadline:
-                candidate=access.session_node(port_config)
-                if candidate is None:
-                    departure=True
-                else:
-                    try:
-                        new=access.identity(candidate)
-                        if new!=old: departure=True
-                        if new!=old and os.access(candidate,os.R_OK|os.W_OK):
-                            access.require_session(candidate); access.require_rom(candidate); node,identity=candidate,new
-                            record.update(returned_node=str(node),returned_identity=identity); save()
-                            require('soc=00001903(A733)' in transaction('version'),'Returned ROM is not A733.'); return
-                    except FileNotFoundError: departure=True
-                time.sleep(.05)
-            candidate=access.session_node(port_config)
-            if not departure and candidate is not None and access.identity(candidate)==old and os.access(candidate,os.R_OK|os.W_OK):
-                access.require_session(candidate); access.require_rom(candidate)
-                return observe_refusal(transaction,args.evidence,prepared,record,save)
-            raise ValueError('No distinct accessible ROM instance in 20 seconds; ownership remains held.')
-        try:
-            require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
-            with usb_guard.reenumeration('sunstoneos-a733','version-2 device-memory launch and watchdog ROM return',2):
-                base.verify_dram(transaction,args.evidence,record,save)
-                launch_once(transaction,wait_return,bundle,prepared,args.evidence,record,save,
-                    ready)
-        except BaseException as error:
-            record['transport_failed'] = failed
-            stop_after_failure(record,save,
-                lambda: access.quarantine_instance(node,'Device-memory launch stopped; no further device communication or automatic retry.',identity),error)
-            raise
-    if record.get('clean_refusal'):
-        print('Original ROM reported a clean launch refusal; SRAM was restored. Scheduler result remains unobserved.')
-    else:
-        print('A new accessible ROM instance was observed. Scheduler result remains unobserved; DDR must be reinitialized.')
-    return 2
+    sys.path.insert(0, str(ROOT/'tools'))
+    import board
+    raise SystemExit(board.legacy_run(args, image=None))
 
 
 if __name__=='__main__':

@@ -1,8 +1,8 @@
 /* Frame-path counter driver for checks/gpu-texture-frame.py.
  *
- * Links the actual render-service worker and texture code with stub owners,
+ * Links the actual render-service and texture code with stub owners,
  * clock, translation, cache maintenance and client rings. The harness runs it
- * under Unicorn and counts what the worker does to the CPU and memory while
+ * under Unicorn and counts what the render service does to CPU and memory while
  * frame_mark(1) is in force. The GPU result is written by the harness from
  * gpu_model_render() and is not counted. Nothing here touches a device. */
 #include "a733_gpu_graphics_memory.h"

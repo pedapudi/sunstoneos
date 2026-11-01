@@ -1,373 +1,77 @@
-# The mimus session in the GPU service
+# Mimus on the generic GPU compute queue
 
-The integrated OS image's GPU option ([recognition-dispatch.md](recognition-dispatch.md))
-runs the exact integer sums of mimus linear layers on the GPU. This
-component gives the session code of [gpu-mimus.md](gpu-mimus.md) (job words,
-cache maintenance, completion tags) a life inside the GPU service
-([gpu-service.md](gpu-service.md)): firmware objects, a client ring, a
-timeline, one job slot shared with the recognizer and a completion queue.
-The [design](designs/gpu-recognition.md) states the budgets and
-[the measurements](designs/gpu-recognition-measurements.md) compare the
-result with them.
+**Status: implemented and host-modeled.** Complete recognition through the
+current GPU queue remains physically unqualified. [GPU status](status/gpu.md)
+identifies the scoped standalone results and remaining lifecycle work.
 
-Status: **implemented** and host-modeled. The GPU option's image links and
-passes its link check and host checks. The local mimus engine pinned in
-[source.json](../apps/mimus/source.json)
-provides the exact-sum hook consumed by `apps/os/gpu_hook.cc`. No board has
-executed integrated OS GPU recognition; the engine hook's availability establishes source
-integration only.
+SunstoneOS provides a generic compute queue through the
+[application kit](designs/app-abi.md). Mimus owns its exact-sum shader, tensor
+admission, job sizing, output tags and numerical readout in its own repository.
+The [application source record](../apps/mimus/source.json) identifies the
+checkout. Source paths beginning with `sunstoneos/` below belong to that checkout.
 
-## Parts
+## Components and ownership
 
-| Part | Source | Role |
+| Component | Source | Responsibility |
 | --- | --- | --- |
-| Session component | [pvr_mimus_service.c](../drivers/gpu/pvr_mimus_service.c), [pvr_mimus_service.h](../include/pvr_mimus_service.h) | Slot, client ring, timeline, completion queue, failure |
-| Service points | [pvr_gpu_service.c](../drivers/gpu/pvr_gpu_service.c) | `config.mimus`: configuration checks at init, objects, publication, mode admission, READY poll, events, wait bound, submit window, progress, end of a burst once the session has nothing to submit, failure, job wake |
-| Native construction | [gpu_mimus.c](../platform/a733/gpu_mimus.c), [a733_gpu_mimus.h](../include/a733_gpu_mimus.h) | Pool pages, GPU address space, context-switch programs, compute context |
-| Runtime | [gpu.c](../apps/os/gpu.c) | Start, OPEN, per-job begin and finish, INTID 95, tensor admission |
-| Engine hook | [gpu_hook.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/os/gpu_hook.cc) | Splits a call into jobs, checks tags, hands sums to the engine |
+| Public queue | [gpu_queue.h](../include/gpu_queue.h), [gpu_queue.c](../drivers/gpu/gpu_queue.c) | Context handles, leases, submission and completion records |
+| Worker component | [pvr_compute_queue.c](../drivers/gpu/pvr_compute_queue.c), [pvr_compute_queue.h](../include/pvr_compute_queue.h) | Client slots, ring, timeline and bounded job progress |
+| GPU service | [pvr_gpu_service.c](../drivers/gpu/pvr_gpu_service.c) | Firmware lifecycle, interrupts, scheduling and recovery |
+| Native construction | [gpu_queue.c](../platform/a733/gpu_queue.c), [a733_gpu_queue.h](../include/a733_gpu_queue.h) | Pool pages, mappings, programs and compute context |
+| OS runtime | [gpu.c](../apps/os/gpu.c) | Queue construction, IRQ95 binding, thermal transitions and final retirement |
+| Mimus context and program | `sunstoneos/apps/mimus/gpu_linear.c`, `gpu_linear_program.c` | Model/arena/output leases, tensor admission and compiled shader |
+| Mimus job adapter | `sunstoneos/apps/mimus/gpu_linear_job.h` | Job bounds, argument words, bindings, cache extents and tag validation |
+| Mimus engine hook | `sunstoneos/apps/os/gpu_hook.cc` | Split a linear call into jobs, compare sums and supply the engine readout |
 
-## Address space and memory
-
-| GPU range | Physical | Page, access | Owner of its bytes |
-| --- | --- | --- | --- |
-| `0x43000000`, `0x43800000`, 8 MiB each | Base and overlay models at `0x44000000`, `0x44800000` | 256 KiB, read-only | Loader; published at boot |
-| `0x46000000`, 12 MiB | Same: mimus's arena with the codes | 256 KiB, read-only | Recognizer |
-| `0x46C00000`, 2 MiB | Same: 64 KiB of tags, then sums | 256 KiB, read-write | GPU; read-only at EL0 and EL1 |
-| PDS heap `+0x1e0000`; USC heap `+0x100000`, `+0x101000` | Job page; two program pages | 4 KiB, read-only | Worker |
-| Context-switch programs at the compute heap addresses | 18 pages | 4 KiB; shared and resume pages read-write | Worker |
-
-The job and program pages share the first 2 MiB of their heaps with the
-context-switch programs, because every 2 MiB region the session maps costs one
-4 KiB table page: the address space needs 24 table pages. The session takes
-21 write-back pages and the tables from the write-back pool, and six uncached
-pages (compute context, register state, client-ring control, client ring,
-memory context, timeline) from the uncached pool, after USB2 and audio.
-With the firmware's 34 and 45 pages the GPU holds 79 write-back and 51
-uncached pages. Nothing is released; a failure retains every page.
+The queue retains one program and memory map, up to four buffer leases and two
+trusted caller slots. One job executes at a time. The native mapping planner
+uses workload pages no larger than 256 KiB and bypasses the GPU system cache
+for shared mutable data. The [queue design](designs/gpu-compute-queue.md)
+defines admission, memory ownership and the public lifecycle.
 
 ## One job
 
-1. The hook ([gpu_hook.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/os/gpu_hook.cc)) runs in the recognizer
-   task at EL0. It accepts a call only when the engine's tensor ordinal,
-   weight address, weight stride, K and N all match the tensor admitted at
-   start under that ordinal, and the codes lie in the arena span. It writes
-   the job (ordinal, code offset, rows, row stride) into the slot, stores
-   SUBMITTED with release order and sends the worker a wake message with a
-   wait of zero ticks: client `PVR_GPU_SERVICE_CLIENTS` and ticket
-   `PVR_GPU_SERVICE_MIMUS_WAKE` (1). Ticket 0 stays the interrupt handler's
-   wake, and only that message clears `irq_wake_pending`. If the send fails,
-   the hook moves the slot from SUBMITTED to IDLE by compare-and-swap. When
-   the swap succeeds the job is refused and the engine computes its rows;
-   when the worker has already taken the slot, the hook waits for the record
-   as usual. The engine then computes its own channels.
-2. The worker, one priority above the recognizer on the same core, takes the
-   slot by compare-and-swap from SUBMITTED to TAKEN with acquire order and
-   copies it once into its own memory. Every later check and use reads that
-   copy, because `pvr_mimus_submit` reads the code offset twice. In one step,
-   under one interrupt mask and re-enable, it looks up the admitted tensor
-   (one bounds compare), assigns the next sequence, checks that the timeline
-   holds the previous sequence, as `pvr_compute_service` does, and calls
-   `pvr_mimus_submit`. It then writes the 96-byte compute command, which
-   `pvr_mimus_session_command` wrote once at OPEN into a zeroed buffer, and
-   an 8-byte timeline UPDATE carrying the sequence to the client ring,
-   publishes the ring and submits the kick through the kernel ring. A refusal
-   before the ring write posts REFUSED and leaves the slot IDLE. OPEN writes
-   timeline 0, and sequences start at 1. After a step that leaves the session
-   with nothing to submit and the interrupt re-enabled, the worker runs no
-   further step until the next wake.
-3. On INTID 95, or at the 4 ms bound of each wait while the job runs, the
-   worker drains firmware events. When the kick's return is collected and the
-   timeline reaches the sequence, it requires a clock sample before the job
-   deadline, then calls `pvr_mimus_complete` (`DC CIVAC` over the job's tags
-   and sums). A second monotonic clock sample must still precede the deadline
-   before it sets the slot IDLE and posts an 8-byte record (sequence, OK)
-   to the one-entry completion queue.
-4. The hook receives the record, requires the sequence after the previous
-   OK record's, checks every tag with `pvr_mimus_tags_complete` and compares
-   every sum with an int64 sum that a scalar CPU loop computes from the same
-   codes and weights. It hands the engine the job's rows and the address, row
-   stride and width (4 or 8 bytes) of its sums. The engine reads them out
-   with its own code over the admitted independent row ranges, and
-   then asks for the call's next job, which reuses the output region. The
-   design's "Synchronization across cores" gives why the other workers read
-   the sums coherently.
+1. Mimus opens its queue context after model hashes match. Its adapter admits
+   tensor extents against the returned leases and bounds each job by output
+   capacity, workgroup count and the arithmetic budget.
+2. The engine hook builds a generic job with a sequence, buffer bindings and
+   kernel arguments. The worker copies the submitted slot before validating
+   and using it. The OS performs the declared cache maintenance and encodes
+   COMPUTE 205 followed by timeline UPDATE 213 and KICK 101.
+3. The worker observes firmware events on IRQ95 with a 4 ms backup poll. Queue
+   completion requires both client-ring completion and the matching timeline;
+   deadlines bound progress. Output acquisition precedes publication of the
+   completion record.
+4. Mimus requires the matching sequence and every output tag. Qualification
+   builds compare every sum with CPU int64 arithmetic before engine readout.
+   The next job reuses the output only after all readers finish.
 
-The hang bound `max_job_us` is 1 s from the kick, the most that bind accepts.
-A separate two-second caller deadline starts before slot publication, covering
-the service's ring-admission and kick stages without an unbounded reply wait.
-It is shortened by the current board and session deadlines. The caller checks
-time and admission before and after each ten-tick receive; a late OK record
-cannot lend output. FreeRTOS elapsed ticks also bound a stopped architectural
-counter, and a finite observation count prevents a broken queue from spinning
-forever with both clocks stopped. No observation renews the deadline or reports
-recognition progress.
-
-Caller timeout is `OS_DISPATCH_TIMEOUT`, distinct from a worker LOST record.
-It fails the board and suspends the recognizer with its in-flight job and
-borrowed context retained. It never resets the device, closes an uncertain
-job, releases resources or falls back to CPU work. A late reply cannot resume
-the caller. See the [bounded reply design](designs/gpu-recognition-wait.md)
-for the scheduling assumptions and supervised entry requirements.
-
-A missed deadline, context reset, failed completion maintenance or service
-failure posts LOST for an owed record and makes later submits return -1.
-A timeline mismatch has the same result: before submission it must equal the
-previous sequence, and during a job it must equal the previous or current one.
-Completion at the deadline is late, including when output cache maintenance
-consumes the remaining time. A failed or backward final clock sample also
-faults. These checks retain the slot until output acquisition succeeds within
-the deadline; they cannot interrupt a CPU instruction or hardware access that
-does not return.
-
-CLOSE requires an idle mimus session with no owed record and an idle slot.
-It atomically changes that slot to CLOSED before changing interrupt, deadline
-or shutdown state. Pending and running jobs return BUSY without changing the
-slot. A submit atomically reserves an idle slot before copying its request,
-so CLOSE also refuses while the producer writes. Once CLOSE seals the slot,
-later submits return 0. A lost session returns a CLOSE fault and keeps its
-retained slot.
-
-Healthy CLOSE permits an explicit OPEN by the same client and closed epoch.
-The native owner requires the backend's complete stopped proof, an empty
-completion queue and unchanged allocation generations and extents before
-rewriting backing. It retains all allocations and the published GPU page
-tables. It rebuilds mutable firmware contexts and context-switch storage,
-then restages firmware through the existing OPEN path.
-The service publishes a new epoch and preserves increasing job sequences;
-the new timeline starts at the last completed sequence. Older request epochs
-are refused. The slot remains CLOSED until the new OPEN result is published
-with the slot ready. Failed reconstruction, startup or result publication
-latches loss and retains backing.
-
-A completed job whose sequence, tags or numerical sums fail validation retires
-the session permanently. Previously this rejection removed the hook while the
-GPU stayed open; removing the hook also removed the only caller of thermal
-parking. The recognizer now clears dispatch admission and latches terminal
-retirement before requesting CLOSE. It consumes the rejected record first and
-hands none of that job's output to the engine. The engine has finished reading
-previous output before its next `Finish` call, so no accepted output borrow
-crosses this close.
-
-The caller waits through the existing CLOSE/STATUS protocol for same-epoch
-STOPPED, with live board authority, before removing the hook and continuing on
-the CPU. CLOSE acceptance alone is insufficient: STOPPED follows the firmware
-acknowledgements, hardware idle checks and platform power-off of the existing
-[healthy stop contract](gpu-stop.md). A stale record does not prove the worker
-is idle; a pending job or request can refuse CLOSE and must take the LOST path.
-Timeout, failed reply or revoked authority also ends the boot through LOST,
-with no silent CPU fallback. Successful retirement retains all allocations and
-permanently refuses OPEN and job submission, even after temperature returns to
-normal. It introduces no hard-fault reset or new drain claim.
-
-Reconstruction uses the existing [compute-context builder](gpu-compute-context.md)
-and [acknowledged stop sequence](gpu-stop.md). Their pinned board source is
-`linux-orangepi` revision `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`:
-`pvr_queue.c:init_fw_context` initializes queue pointers and saved state,
-`pvr_context.c` zeroes context storage, and `pvr_vm.c:fw_mem_context_init`
-sets the page-table root and unallocated catalogue marker.
-The evidence snapshot preserves those source files and `pvr_fw_startstop.c`.
+The [exact-sum description](gpu-mimus.md) explains the integer arithmetic.
+SunstoneOS accepts application-owned programs through the generic interface;
+[queue-add](../apps/queue-add/README.md) supplies an independent vector consumer.
 
 ## Failure classes
 
-Classes follow section 1.8 of
-[performance-architecture.md](performance-architecture.md).
-
-| Failure | Class | Result | Retained |
-| --- | --- | --- | --- |
-| Start refused: previous-boot GPU loss, owner or client collision, tensor admission, pools, firmware | 1 | OPEN refused; CPU for the boot | Acquired pool pages |
-| An accepted OPEN has a failed, mismatched, missing or late reply or ready record | 3 | Terminal board failure; no CPU fallback | Accepted request identity and everything the service holds |
-| Job refused before the first client-ring write, including a failed wake send | 1 | REFUSED; slot IDLE; the engine computes the rows | Nothing |
-| Completed record has an unexpected sequence, missing tag or incorrect sum | 2 only after acknowledged shutdown | `os_dispatch_incomplete` closes placement; the recognizer retires the session before removing the hook and allowing CPU fallback | All backing remains allocated; no reopen for this boot |
-| Terminal retirement refuses CLOSE, misses its deadline, loses authority or lacks same-epoch STOPPED | 3 | LOST and the existing board-failure path before CPU fallback | Everything uncertain, including pending replies and backing |
-| After the client ring is published: deadline missed, context reset, timeline mismatch, failed maintenance, service failure | 3 | LOST; `os_dispatch_failed`, `board_fail`, recognizer suspension | Everything |
-| No record or observation after the caller deadline | 3 | Distinct caller TIMEOUT; board failure and recognizer suspension without treating it as completion | In-flight job, borrowed context, mappings and all uncertain ownership |
-
-Supervised execution requires manual whole-board power removal before reuse,
-after either success or failure. Resident execution also keeps its watchdog
-and GPU-loss stop-detail behavior; caller bounds no longer depend on it.
-
-## Checks
-
-- `checks/pvr-mimus-service.py` runs the worker, this component, the native
-  construction and the firmware memory transport under QEMU against a
-  software firmware model, over the bench recording's jobs and the failure
-  cases, and counts barriers, translations, queue operations and wake-ups.
-- `checks/gpu-recognition-engine.py` runs the hook against a model of the
-  mimus engine, with block sinks, on the host.
-- `checks/os-image-dispatch.py` and `checks/os-image-link.py` cover the
-  dispatcher, the mapping checks, the pool replay, the supervisor's GPU-loss
-  detail and the linked image.
-
-The focused completion checks run one job each through the actual service
-clock sampler and caller abort path. They cover completion at the deadline,
-output acquisition reaching the deadline, completion one microsecond before
-the deadline, a failed final clock read and a backward final sample.
-The four fault cases require one LOST record, a retained TAKEN slot, refusal
-of later submits and unchanged pool ownership. The successful case checks
-the tags and sums. Successful completion adds one clock read and no extra
-output cache maintenance.
-
-The five cases passed under QEMU with the software firmware model on
-2026-10-24. The evidence directory is
-`~/.cache/sunstoneos/evidence/gpu-deadline-20261024/`; its `snapshot/manifest.json`
-preserves selected sources, executables and records. The unmodified service
-fails the deadline-equality assertion in `before-fixture-fixed/`.
-The earlier `before/` attempt failed fixture initialization and provides no
-deadline result. Existing 204-job arithmetic and startup evidence was reused;
-these five cases provide no physical GPU execution or timing qualification.
-
-Three focused CLOSE cases passed under the same QEMU firmware model on
-2026-10-24. One submits a job, checks BUSY while pending and running, completes
-the job, then reaches STOPPED through CLOSE and refuses later submits.
-Another injects the RESERVED slot state, checks BUSY and invokes the actual
-abort path; it verifies retention without resuming an interrupted producer.
-The third checks CLOSE fault refusal after an actual late completion produces
-LOST. Each preserves the pool allocations. Records and selected source and
-image identities are in
-`~/.cache/sunstoneos/evidence/gpu-close-20261024/snapshot/manifest.json`.
-The checks establish service admission and model shutdown behavior; physical
-shutdown and thermal qualification remain outstanding.
-
-The retained-reopen checks cover two healthy power cycles, increasing job
-sequences, stale epochs, missing stop proof, unread completions, changed
-allocation generations, failed cache publication and failed OPEN-result
-publication. They use the actual native reconstruction and service, with the
-backend stop proof supplied by the firmware model. All four focused cases
-pass; physical stop proof remains required by the native backend.
-
-The native thermal-caller check executes `apps/os/gpu.c` as AArch64 code
-with modeled service replies, clock and RTOS waits. Seven cases cover repeated
-park/reopen, throttle and critical arrival during reopen, observation timeout,
-wrong client, expired lifetime and a stale OPEN record. Three focused
-follow-up cases also verify that renewed lifetime or a direct OPEN cannot
-revive a latched failure. The hook's focused sanitizer check covers its actual
-call boundary and preserves disabled placement after incomplete output or loss.
-A native backend check verifies permanent access refusal after lifetime expiry.
-Evidence is preserved under
-`~/.cache/sunstoneos/evidence/gpu-power-runtime-20261024/`;
-`snapshot/manifest.json` binds selected final sources, executables and records.
-
-The first reopen performs 3,520 cache-line operations, compared with 5,056 at
-cold OPEN. Keeping 24 immutable table pages published avoids 1,536 cleans.
-Reconstruction clears 35,136 bytes of context-switch storage before the
-existing program builder writes its instructions, and initializes 268 bytes
-of firmware context. It allocates no pages: 79 write-back and 51 uncached
-pages remain owned. These are software operation counts, not board timings.
-
-The terminal-retirement checks exercise the actual AArch64 caller with modeled
-service replies: successful STOPPED, BUSY, timeout, critical revocation, wrong
-client, an outstanding ticket and a stale STOPPED epoch. The engine-hook check
-rejects tags, sums and a stale sequence after consuming one prior output job;
-it permits CPU fallback only after retirement and takes LOST when retirement
-fails. The unchanged hook fails this new assertion. These focused checks passed
-on 2026-10-24; sources, objects, results and engine ownership references are in
-`~/.cache/sunstoneos/evidence/gpu-terminal-retire-20261024/snapshot/manifest.json`.
-They model shutdown replies and do not qualify physical power-off or drain.
-
-Retirement runs once on rejected output, using the existing one-second close
-target and bounded queue observation. Healthy jobs add one caller retirement
-flag check; the compiled AArch64 submission wrapper uses three instructions
-for its address, load and branch. OPEN and thermal reconciliation also check
-the flag. No normal-path queue transaction, cache operation or device access
-is added. The source of the engine borrow boundary is mimus `9c57286b7`,
-`kernels.cc:HookedSums` and `parallel.h:ForRowRanges`. The installed
-`apps/mimus/parallel_runtime.cc:dispatch` waits for every submitted worker's matching
-completion before returning. These sources are preserved with the evidence.
+The public queue distinguishes a refused job, thermal parking, timeout and a
+latched device fault. A refusal before submission permits the application to
+choose CPU execution. Completion requires the submitted sequence; a stale
+record cannot authorize output reuse. A timeout does not prove the device
+stopped. Fault recovery and buffer release require the queue's documented
+quiescence and isolation conditions.
 
 ## Lifecycle and power limits
 
-The shared power controller uses the vendor top point, 1008 MHz at 960 mV.
-Native backend binding makes both firmware clock fields describe that rate
-before startup. The initial 400 MHz staging field is not the running clock.
-Supervised recorded recognition can combine the GPU with the existing CPU
-clock owner and two or eight inference workers, with admitted A76 ownership. The recognizer waits at most one
-second for initial CPU requests to resolve before GPU OPEN. CPU and GPU owners
-hold distinct rail leases and use the shared PMIC provider; their retained
-failure rules remain independent. See [the composition design](designs/gpu-cpu-clock.md)
-for scheduling, exact grant admission and software evidence. The
-[eight-worker extension](designs/gpu-eight-workers.md) preserves owner-only GPU
-calls and joins every sum readout before the producer reuses its output.
-Startup and acknowledged shutdown
-exist, including explicit healthy thermal park and reopen. Automatic idle
-parking and full fault recovery remain
-[unimplemented designs](gpu-recovery.md). Deadline failure retains resources;
-it does not establish that the GPU stopped or cooled.
+The shared controller selects the vendor's 1008 MHz/960 mV GPU operating point.
+Healthy close powers off while retaining memory for reopen. Timeout recovery
+requires idle, reset completion, OFF and firmware-memory reclamation before the
+queue resumes; failed isolation retains buffers and owed records. Final return
+requires both callers to quiesce. Physical thermal response, repeated queue
+startup and fault recovery remain unqualified.
 
-At the next recognizer `Begin` after prior output consumption, THROTTLE closes
-the healthy session and waits for STOPPED. NORMAL reopens a parked session.
-Throttle arriving during OPEN causes one CLOSE before new work is admitted;
-each boundary performs at most two transitions. Failed or incomplete dispatch
-admission remains closed. No idle timer or frequency change is involved.
-
-Each transition targets a one-second absolute bound, clamped below the board
-session and current lifetime limits. The client checks expiry after each
-queue wait of at most ten ticks; STATUS observation also waits one tick.
-These waits add observation latency and never renew service progress.
-The backend checks permanent revocation and current `board_live` admission
-before normal operations. Lifetime expiry latches failure even if renewed
-later. Each admitted `board_live` call adds two architectural counter reads;
-the recognizer also calls it at each thermal boundary. Fault-safe interrupt
-masking remains possible after revocation. Revocation does not establish
-power-off or cooling. Physical shutdown, thermal response, automatic idle
-parking and hard-fault recovery remain outstanding.
-
-## Board evidence that would confirm it
-
-See the design's "Board evidence that would confirm the design". The hook's
-comparison of every GPU sum with a CPU sum stays until the board shows GPU
-cache invalidation at job start, GPU read-only enforcement, cross-core code
-writes and retention of the fault slots across a WDT0 reset. The compute
-command names no border-colour table (address zero); if the firmware or the
-GPU reads it, the read faults on an unmapped address and every job ends
-LOST, which a board run of the bench jobs shows at once.
-
-The complete resident OS GPU-linear image is built and preserved in
-`~/.cache/sunstoneos/evidence/gpu-full-integration-20261024/merged/`. Its normal
-dependency build includes the current CORE6 controller and terminal retirement
-caller; all 263 linked objects and compiler dependencies are bound. Three
-selected cases execute that image's actual caller for healthy retirement,
-CLOSE refusal and lifetime loss during CLOSE. They model service replies and
-scheduling, and do not establish physical firmware execution or drain. The
-existing OS link check also passes for the GPU start list and INT95 route.
-
-## Retire performance requests when the service fails
-
-An accepted performance request belongs to the GPU worker until its reply is
-queued. Service failure publishes one failed reply for that ticket, preserving
-the original GPU error. This includes a firmware reset while HOLD waits for an
-accepted Mimus job to drain. The failed worker stops advancing controllers, so
-its failure handler must complete the request before waiting for new messages.
-
-A shared reply helper clears the ticket and stage before queue publication.
-Performance-specific failure enters the same failure handler and publishes one
-reply. The worker remains the sole writer of performance request state. Device
-failure retains firmware memory, job buffers, power and ownership under the
-existing failure policy. The reply supplies no evidence that the GPU stopped.
-
-Normal performance replies perform one queue send and one reply copy. Compute
-submission and completion add zero checks, locks, barriers, translations,
-digests, copies or wake-ups. Failure adds one conditional ticket check and,
-only with an accepted request, one queue send. No mutable storage is added.
-The performance-enabled native service grows from 22,832 to 22,880 bytes of
-code and read-only data; its nine mutable bytes are unchanged. The build without
-performance control keeps the same code and storage sizes; only assertion line
-numbers change in its instructions.
-
-Evidence is preserved under
-`~/.cache/sunstoneos/evidence/sol-gpu-robustness-1028/`. With the original service,
-the two-core FreeRTOS fixture's firmware reset leaves the performance waiter
-without a reply until its bounded wait fails. With the repaired service, the
-same case receives the failed performance reply and a LOST Mimus job. It checks
-the original control error, cleared ticket and stage, no duplicate reply and
-held allocations and session ownership. The successful transition and reopen,
-missing forced-idle acknowledgement and missing cancel acknowledgement cases
-also pass. These four cases use modeled firmware and synthetic job results.
-The supervised eight-worker GPU/NPU OS image builds at the high default;
-its link check passes. Physical fault response and recovery remain unqualified.
-
-The optional staged returning OS profile retires validated GPU output, obtains
-acknowledged OFF and final provider parking, then reuses the CPU return terminals
-and host RAM restoration. Its [design and software evidence](designs/gpu-normal-return.md)
-require GPU retirement review and preserve read-only output mappings. Integrated
-recognition and successful physical return remain unqualified.
+[checks/gpu-queue.py](../checks/gpu-queue.py) exercises the queue and service
+model; [checks/gpu-peer-native.py](../checks/gpu-peer-native.py) covers native
+second-caller construction. The mimus repository owns shader, readout and
+recognition checks. Host evidence includes 204 exact-sum jobs and ten modeled
+open/close cycles, with queued-peer recovery and final quiescence. These results
+establish no physical queue execution. [GPU status](status/gpu.md) records the
+evidence paths and current qualification blockers.

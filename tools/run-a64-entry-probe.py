@@ -55,74 +55,10 @@ def decode(raw,nonce,pre):
     return result
 
 def run(a):
-    a.build=a.build.resolve();manifest_raw=(a.build/'manifest.json').read_bytes();m=json.loads(manifest_raw)
-    require(m['schema']=='a733-a64-entry-probe-v1' and m['layout']==dict(zip(SYMBOLS,LAYOUT)),'Probe build identity differs.')
-    frozen={name:(a.build/name).read_bytes() for name in m['files']}
-    require(all(Path(name).name==name and hashlib.sha256(data).hexdigest()==m['files'][name] for name,data in frozen.items()),'Probe build changed.')
-    pre=0  # Compare only counters captured by this execution.
-    require(a.fel.is_file(),'FEL executable is missing.')
-    a.evidence=returning.output_directory(a.evidence)
-    record={'complete':False,'launch_attempted':False,'transactions':[],'physical_access':True,
-        'binary_sha256':m['files']['probe.bin']}
-    def journal():save(a.evidence/'session.json',record)
-    access=module('a64_probe_access',ROOT/'tools/usb-access.py');import usb_guard
-    usb_guard.check_health()
-    with access.board_lock() as node:
-        access.require_session(node);access.require_rom(node);identity=access.identity(node);port=access.target(node);config={'port':port.name,'sysfs':str(port.resolve())};failed=False;dirty=False
-        record.update(initial_identity=identity,initial_node=str(node),port=port.name);journal()
-        def transaction(*arguments,pass_fds=()):
-            nonlocal failed
-            require(not failed and access.identity(node)==identity,'Transport failed or instance changed; stop.')
-            access.require_rom(node);entry={'arguments':list(map(str,arguments))};record['transactions'].append(entry);journal()
-            try:
-                result=subprocess.run([str(a.fel),'-d',f'{int(node.parent.name)}:{int(node.name)}',*map(str,arguments)],capture_output=True,text=True,timeout=15,pass_fds=pass_fds)
-                entry.update(exit_code=result.returncode,stdout=result.stdout,stderr=result.stderr);require(result.returncode==0,'FEL transaction failed.')
-            except BaseException as error:failed=True;entry['failure']=str(error);journal();raise
-            journal();return result.stdout
-        def transfer(address,data,destination):
-            with base.sealed_source(data) as (path,fd):transaction('write',hex(address),path,'read',hex(address),str(len(data)),destination,pass_fds=(fd,))
-            require(destination.read_bytes()==data,'Upload/restoration comparison differs.')
-        try:
-            require('soc=00001903(A733)' in transaction('version'),'Not an A733 ROM instance.')
-            words=transaction('readl','0x20','readl','0x24','readl','0x28','readl','0x3c','readl','0x40')
-            require([int(v,16) for v in words.split()]==[0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d],'Forced-FEL ROM destination changed.')
-            dirty=True;journal()
-            try:
-                base.verify_dram(transaction,a.evidence,record,journal)
-            except base.DramNotReady:
-                dirty=False
-                raise
-            dirty=False
-            backups={}
-            for name,address,size in [('code',0x41000000,len(frozen['probe.bin'])),('report',0x42000000,256)]:
-                path=a.evidence/(name+'-before.bin');transaction('read',hex(address),str(size),path);backups[name]=path.read_bytes();require(len(backups[name])==size,'Short backup.');base.sync_file(path)
-            nonce=secrets.token_bytes(16);initial=bytearray(256);struct.pack_into('<Q',initial,104,pre);initial[240:]=nonce;record['nonce']=nonce.hex();dirty=True;journal()
-            transfer(0x41000000,frozen['probe.bin'],a.evidence/'code-upload.bin');transfer(0x42000000,bytes(initial),a.evidence/'report-upload.bin')
-            with usb_guard.reenumeration('sunstoneos-a733','A64 entry capture and existing forced-FEL return',2):
-                record['launch_attempted']=True;journal();transaction('reset64','0x41000000')
-                deadline=time.monotonic()+10;old=identity
-                while True:
-                    candidate=access.session_node(config)
-                    if candidate is not None and access.identity(candidate)!=old and os.access(candidate,os.R_OK|os.W_OK):break
-                    require(time.monotonic()<deadline,'No new FEL instance before deadline; no protocol retry.');time.sleep(.05)
-                node=candidate;identity=access.identity(node);access.require_session(node);access.require_rom(node)
-                record.update(returned_identity=identity,returned_node=str(node));journal()
-            require('soc=00001903(A733)' in transaction('version'),'Return is not an A733 ROM service.')
-            transaction('read','0x42000000','256',a.evidence/'report.bin');base.sync_file(a.evidence/'report.bin');raw=(a.evidence/'report.bin').read_bytes();error=None
-            try:record['result']=decode(raw,nonce,pre)
-            except (ValueError,struct.error) as e:error=e
-            transfer(0x41000000,backups['code'],a.evidence/'code-restored.bin');transfer(0x42000000,backups['report'],a.evidence/'report-restored.bin');dirty=False
-            record.update(rom_usable=True,dram_restored=True,complete=error is None);journal()
-            if error:raise error
-        except BaseException as error:
-            record.update(failure=str(error),transport_failed=failed)
-            if dirty or failed:
-                try:base.stop_after_failure(record,journal,lambda:access.quarantine_instance(node,'A64 probe stopped; no automatic retry; coordinator recovery required.',identity),error)
-                finally:
-                    if dirty and not record['launch_attempted']:base.hold_ownership()
-            else:journal()
-            raise
-    return 0
+    """Route legacy launch commands through the native probe contract."""
+    sys.path.insert(0, str(ROOT/'tools'))
+    import board
+    return board.legacy_run(a, image=a.build/'probe.elf')
 
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='operation',required=True)

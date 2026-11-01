@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Count the render worker's per-frame CPU work on the texture path.
+"""Count the render service's per-frame CPU work on the texture path.
 
-Builds checks/gpu-texture-frame.c with the worker and texture sources of
+Builds checks/gpu-texture-frame.c with the render-service and texture sources of
 --source (default: this checkout) and runs it under Unicorn. Counts, per
-frame and while the worker runs: bytes stored by memory region, cache
+frame and while the render service runs: bytes stored by memory region, cache
 maintenance by operation, stage-1 translations, loads from the output
 allocation during completion checks, instructions, barriers and store-release
 instructions, worker polls, and scheduling waits. Executes the current service's

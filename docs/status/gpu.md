@@ -1,68 +1,78 @@
-# GPU compute support
+# GPU
 
-The generic compute queue is implemented and host-tested. Firmware startup and
-shutdown return normally on port 3-3. Compute and lifecycle qualification remain
-incomplete because the one-job application stops at its first submission.
+**Status: implemented; current compute queue qualification is incomplete.**
 
-The service retains one program and memory map, with up to four buffer leases.
-Two admitted applications can share that trusted context through independent
-submission slots and completion queues. One job executes at a time. Completion
-uses the GPU interrupt with a 4 ms backup poll. Shared mutable mappings bypass
-the GPU system cache, and GPU data pages are at most 256 KiB.
+Native firmware loading, power/interrupt ownership,
+compute, rendering and application bindings have software evidence.
+Complete recognition and general recovery remain unqualified.
 
-Healthy close powers the device off and retains its memory for reopen. A job
-timeout or reset can resume the queue only after idle checks, reset readback,
-power-off and firmware-memory reclaim. Failed isolation retains buffers and owed
-records. Final application completion quiesces both callers before CPU return
-or resident suspension. The default GPU operating point is 1008 MHz at 960 mV.
+**Board-qualified scope:** Standalone firmware start, health, stop and restart,
+eight compute jobs and two production exact-sum shapes pass at 1008 MHz/960 mV.
+The shapes use K=512 and K=516, each with 33 rows and 17 channels. All 1,122
+sums, tags and guards match; context cleanup, firmware OFF, isolation, provider
+parking and normal ROM return pass for those frozen inputs.
 
-## Qualification
+Evidence paths are relative to `~/.cache/sunstoneos/evidence/`:
 
-| Operation | Current result |
-| --- | --- |
-| Firmware start and stop | Pass on port 3-3: zero jobs, GPU off, seven secondaries retired and normal return. |
-| One queue job | First submission returns a non-OK result; the application stops and the watchdog resets the board. |
-| Eight queue jobs | Not submitted; depends on the one-job result. |
-| Ten open/close cycles with sharing | Host checks pass; physical run pending. |
-| Timeout recovery preserving a queued peer | Host checks pass; physical run pending. |
-| Mimus recognition with exhaustive GPU sum checks | Shader, readout and program host checks pass; physical run pending. |
+- `board-session-20261025-20/port-3-1/` and
+  `board-session-20261025-22/port-3-1/` record firmware stop/restart.
+- `board-session-20261025-29/port-3-1/` records eight jobs.
+- `sol-resume-20261028/port-3-1/gpu-exact-sum/` binds the exact-sum inputs
+  and healthy retirement.
+- `sol-resume-20261028/port-3-1/gpu-cache-permission/` tests the CPU-only
+  read-only-output cache helper; it does not establish general GPU visibility.
 
-The firmware evidence is queue entry `1793516275891220461-b5cf700f`; its image
-SHA-256 is `07caeef0d3fffdf1f5c5bd4520e48e447d8bbbbaaa733f14afb8bb0654262ed1`.
-The failed one-job evidence is entry `1793516370919560948-dd320841`; its image
-SHA-256 is `f18415f1c8c9160628717f9a59d4c751c3bd3e3eece30ba050a4192b14906938`.
-Both images use OS revision `e124d65f`. Evidence is under
-`~/.cache/sunstoneos/board-queue/entries/`, with the native fault and watchdog
-classification in each entry's `run/result.json`.
+The reference firmware image at `fed5813f` starts and stops firmware with zero
+jobs and returns the reference transcript on 3-1. Its evidence is in
+`dev-runs-1031/3-1-gpu-return-210941/`, with RETURN_ROM and watchdog mode 0.
+This result does not qualify the later combined queue image.
 
-The one-job fault is application detail 4 at `queue_add_main`, before any job is
-accepted. The diagnostic application records the submission result and job
-number in the retained fault. Host checks verify all five non-OK results.
-Initial thermal throttling is a possible cause; the board evidence does not
-identify the returned result. The shared queue requires coordinator recovery
-after the host reboot before the diagnostic can run. No later image is frozen.
+The generic compute queue is implemented with one retained program and memory
+map, up to four buffer leases and two trusted application slots. One job executes
+at a time. Completion uses interrupts with a 4 ms backup poll. Shared mutable
+mappings bypass the GPU system cache; data pages are at most 256 KiB.
+Startup uses executed-command health, vendor secure writes, initial timer
+correlation and MMU-cache completion before READY.
 
-Bringup includes the CPU clock close correction, generic GPU and thermal capture,
-and complete binary-result matching. The three baseline builds, both integration
-gates and the check index pass. Host evidence is under
-`~/.cache/sunstoneos/build/gpu-integrate-1031/qualified/`.
+Healthy close powers off while retaining memory for reopen. Timeout/reset
+recovery requires idle checks, reset readback, power-off and firmware-memory
+reclaim before queue resumption. Failed isolation retains buffers and owed
+records. Final completion quiesces both callers before CPU return or resident
+suspension. The primary application owns lifecycle; the second has independent
+manifest admission, submission sequence and completion queue.
 
-The texture-frame fixture executes the service's current scheduling code with
-modeled time and task readiness. Three scheduler probes, three texture scenes
-and mutations of the burst limit, CPU scheduling interval and submission
-exemption pass. Six service cases and the hello baseline build pass. Evidence is
-under `~/.cache/sunstoneos/build/gpu-integrate-1031/texture-scheduling-1101/`.
+Host checks cover 204 exact-sum jobs, ten shared open/close cycles, queued-peer
+preservation during reset recovery, native reset access policy and final
+quiescence. The mimus shader/readout checks preserve exhaustive sum comparison.
+These modeled results add no physical queue qualification. The OS uses the
+[application kit](../designs/app-abi.md) and does not depend on mimus.
 
-Extended-layout QEMU fixtures prepare their pools once after profile admission;
-local-layout images retain boot preparation. Seven texture scenarios, three
-batch scenarios and three local queue controls pass. Native translation checks
-reject incorrect attributes in the final write-back or uncached block before
-READY and GPU construction. GPU power, delayed OFF completion and ten performance
-platform cases pass with the write-ordering changes. The three baseline builds
-pass. Evidence is under
+The texture frame fixture measures native render-service work for three scenes,
+with two frames each. Its timed probes compile the actual service scheduling
+code with modeled time and task readiness. Burst, CPU-run and submission
+exemption mutations fail. Work counters exclude the scheduler itself. Extended
+texture and batch fixtures prepare their pools once; native translation checks
+reject incorrect final write-back and uncached blocks before GPU construction.
+Host evidence is under
 `~/.cache/sunstoneos/build/gpu-integrate-1031/texture-prepare-1101/`.
 
-The coordinator's CPU performance measurement does not qualify GPU support or
-establish that offloading improves recognition speed. GPU performance selection
-is a separate task. The queue serves applications through the
-[application kit](../designs/app-abi.md); the OS does not depend on mimus.
+GPU capture supports image-bound GPU/thermal receipts and bounded binary
+expectations in the active shared runner. The current port 3-3 sequence begins
+with a rebuilt firmware control, then one and eight jobs, shared reopen cycles,
+timeout recovery and recognition with exhaustive sum checks.
+
+The firmware control on OS revision `e124d65f` returns normally with zero GPU
+jobs and the reference transcript in queue entry `1793516275891220461-b5cf700f`.
+The one-job image in entry `1793516370919560948-dd320841` stops at its first
+submission with application detail 4. Its diagnostic retains the public result
+and job number. Initial thermal parking remains a hypothesis. These entries
+are under `~/.cache/sunstoneos/board-queue/entries/`; they do not qualify the
+rebuilt images.
+
+Remaining work includes current queue firmware start/stop, one/eight jobs,
+ten physical open/close cycles, queued-peer timeout recovery, complete GPU
+recognition, graphics, thermal transitions and representative concurrency.
+CPU performance evidence does not establish GPU speedup. Frozen earlier failed
+inputs and fault origins remain in [the hardware worklog](../hardware-worklog-20261031.md).
+See [backend](../gpu-backend.md), [power](../gpu-power.md),
+[rendering](../gpu-render.md) and [compiled programs](../gpu-compiled-programs.md).
