@@ -54,7 +54,8 @@ CASES = {1: 'grid replay, exact sums', 2: 'grid replay, pattern sums', 3: 'grid 
          58: 'permanent timeline fault wakes the caller and retains buffers',
          59: 'two clients pipeline independent sequences and direct notification waiters',
          60: 'forged fence under lock contention refuses after an IRQ-free unlock',
-         61: 'uncertain batch doorbell returns every retained fence in its accepted prefix'}
+         61: 'uncertain batch doorbell returns every retained fence in its accepted prefix',
+         62: 'uncached retained payloads preserve the timeline and application maintenance'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'gpu_queue_submit', 'gpu_queue_wait', 'kick',
@@ -239,6 +240,7 @@ def main():
     parser.add_argument('--fixture', type=Path, help='External generic tensor/job JSON; default is an eight-job synthetic grid')
     parser.add_argument('--cases', nargs='*', type=int, choices=sorted(CASES), default=list(range(1, 25)))
     parser.add_argument('--trace', nargs='*', type=int, default=[], help='cases to run instrumented')
+    parser.add_argument('--timing', action='store_true', help='compile optional GPU IRQ counter capture')
     for name in ('freertos', 'tinyusb', 'firmware', 'qemu', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
@@ -290,6 +292,7 @@ set_property(TARGET gpu-service-model PROPERTY SOURCES "${{sources}}")
 target_include_directories(gpu-service-model PRIVATE "{fixtures}" "{ROOT}/checks")
 target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1 {"SUNSTONE_A733_OS_PERF=1" if performance else "SUNSTONE_A733_OS_CPU_RETURN=1" if returning else "SUNSTONE_A733_OS_GPU_RECOVERY_TEST=1" if recovery else ""})
 target_compile_definitions(gpu-service-model PRIVATE INCLUDE_vTaskPrioritySet=1)
+target_compile_definitions(gpu-service-model PRIVATE {"SUNSTONE_GPU_TIMING=1" if args.timing else ""})
 get_target_property(options gpu-service-model LINK_OPTIONS)
 list(FILTER options EXCLUDE REGEX "-Wl,-T,")
 list(APPEND options "-Wl,-T,{linker}" -Wl,--defsym=__device_pool_size=2097152

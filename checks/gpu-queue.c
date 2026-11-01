@@ -555,12 +555,15 @@ static void pool_pages(unsigned *wb, unsigned *nc)
  * Every maintenance call on the output region must clean and invalidate:
  * DC IVAC is checked as a write and faults on the image's read-only view.
  * Case 12 makes the first such call of a job fail once. */
-uint64_t cache_calls, cache_lines, translations, output_cache_calls;
+uint64_t cache_calls, cache_lines, translations, output_cache_calls, payload_cache_calls, dirty_input_cache_calls;
 uint32_t ring_polls, fail_output_cache;
 int __real_aarch64_device_cache(enum aarch64_cache_op, uintptr_t, size_t);
 int __wrap_aarch64_device_cache(enum aarch64_cache_op op, uintptr_t address, size_t bytes)
 {
     ++cache_calls; cache_lines += (bytes + 63) / 64;
+    if (compute && compute->job_cpu && address<(uintptr_t)compute->job_cpu+PVR_COMPUTE_FAST_DEPTH*PVR_COMPUTE_FAST_STRIDE &&
+        address+bytes>(uintptr_t)compute->job_cpu) ++payload_cache_calls;
+    if (address>=FIXTURE_INPUT && address<FIXTURE_INPUT+(12u<<20)) ++dirty_input_cache_calls;
     if (fail_reopen_cache && service.epoch == 2) { fail_reopen_cache = 0; return 0; }
     if (address < FIXTURE_OUTPUT + FIXTURE_OUTPUT_BYTES && address + bytes > FIXTURE_OUTPUT) {
         configASSERT(op == AARCH64_CACHE_CLEAN_INVALIDATE && address >= FIXTURE_OUTPUT &&
@@ -724,6 +727,7 @@ static void client(void *unused)
     struct gpu_queue_context_config creation={.job_us=(c>=41&&c<=49)||c==52?200000:1000000,.program=&program,.lease_count=4};
     if (c==55) creation.priority=GPU_QUEUE_PRIORITY_HIGH;
     if (c==56) creation.job_us=2000;
+    if (c==62) creation.payload_cache=GPU_QUEUE_PAYLOAD_UNCACHED;
     for(unsigned i=0;i<4;++i)creation.lease[i].region=i;
     struct gpu_queue_lease_info leases[GPU_QUEUE_LEASES];
     struct gpu_queue_program boundary;
@@ -1069,7 +1073,7 @@ void fixture_unused(void)
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
-    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 61);
+    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 62);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (gpu_queue_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();

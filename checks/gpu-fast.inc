@@ -41,8 +41,8 @@ static int fast_kick(void *ctx,unsigned offset,unsigned value,unsigned char *com
         word(ring+136,4)==(PVR_CCB_MAGIC|213u) && word(ring+176,4)==compute->firmware_address[5]);
     uint32_t serial=(uint32_t)word(ring+180,4);
     uint64_t cdm=word(ring+80,8);
-    configASSERT(cdm>=A733_GPU_QUEUE_JOB_GPU+PVR_COMPUTE_QUEUE_CDM);
-    uint64_t slot=cdm-A733_GPU_QUEUE_JOB_GPU-PVR_COMPUTE_QUEUE_CDM;
+    configASSERT(cdm>=compute->job_gpu+PVR_COMPUTE_QUEUE_CDM);
+    uint64_t slot=cdm-compute->job_gpu-PVR_COMPUTE_QUEUE_CDM;
     configASSERT(!(slot%PVR_COMPUTE_FAST_STRIDE) && slot<PVR_COMPUTE_FAST_DEPTH*PVR_COMPUTE_FAST_STRIDE);
     unsigned produced=atomic_load(&fast_produced);
     configASSERT(produced-atomic_load(&fast_consumed)<PVR_COMPUTE_FAST_DEPTH && serial==produced+1);
@@ -77,7 +77,7 @@ static void fast_model(void *unused)
         while (now_us()<j->doorbell+20 || atomic_load(&hold_completion)) {}
         configASSERT(!memcmp(j->page,j->snapshot,sizeof(j->snapshot)));
         uint64_t output=word(j->page+96,8);
-        uint32_t argument=(uint32_t)word(j->page+PVR_COMPUTE_QUEUE_ARGUMENTS,4);
+        uint32_t argument=(uint32_t)word(j->page+PVR_COMPUTE_QUEUE_ARGUMENTS+8,4);
         configASSERT(output>=FIXTURE_OUTPUT && output+4<=FIXTURE_OUTPUT+FIXTURE_OUTPUT_BYTES);
         put((void *)(uintptr_t)output,4,argument);
         __asm__ volatile("dsb sy" ::: "memory");
@@ -94,14 +94,15 @@ static void fast_model(void *unused)
 }
 static struct gpu_queue_job fast_job(unsigned sequence,unsigned slot)
 {
-    struct gpu_queue_job job={.sequence=sequence,.bindings=1,.argument_bytes=4,.groups={1,1,1}};
+    struct gpu_queue_job job={.sequence=sequence,.bindings=2,.argument_bytes=4,.groups={1,1,1}};
     job.binding[0]=(struct gpu_queue_binding){.lease=0,.address=slot*128,.sync_offset=slot*128,.sync_bytes=64};
+    job.binding[1]=(struct gpu_queue_binding){.lease=3,.address=slot*64,.sync_offset=slot*64,.sync_bytes=64};
     memcpy(job.arguments,&sequence,4);
     return job;
 }
 static void fast_cases(unsigned c)
 {
-    configASSERT(c>=54 && c<=61 && level()==0);
+    configASSERT(c>=54 && c<=62 && level()==0);
     while (service.irq_masked) vTaskDelay(1);
     if (c==56 || c==58) vTaskPrioritySet(NULL,5);
     else vTaskSuspend(service.worker);
@@ -196,8 +197,21 @@ static void fast_cases(unsigned c)
         platform_puts("PASS GPU queue case ");platform_hex(c);
         platform_puts("; two EL0 clients pipeline independent sequences and direct completion waiters\n");platform_exit(0);
     }
-    if (c==55) {
-        configASSERT(word((unsigned char *)compute->firmware[0].storage.cpu+32,4)==2);
+    if (c==55 || c==62) {
+        uint64_t payload_before=payload_cache_calls,inputs_before=dirty_input_cache_calls,outputs_before=output_cache_calls;
+        configASSERT(word((unsigned char *)compute->firmware[0].storage.cpu+32,4)==(c==55?2:1));
+        if (c==62) {
+            configASSERT(compute->job_gpu==A733_GPU_QUEUE_JOB_GPU+64 &&
+                compute->job_cpu==(unsigned char *)compute->firmware[5].storage.cpu+64 &&
+                64+PVR_COMPUTE_FAST_DEPTH*PVR_COMPUTE_FAST_STRIDE<=4096);
+            const unsigned char *root=(const unsigned char *)session.table_extent.cpu;
+            uint64_t directory=(word(root+(A733_GPU_QUEUE_JOB_GPU>>30)*4,4)&~UINT64_C(15))<<8;
+            const unsigned char *dir=root+(directory-session.table_extent.physical);
+            uint64_t leaf=word(dir+((A733_GPU_QUEUE_JOB_GPU>>21)&511)*8,8)&~UINT64_C(4095);
+            uint64_t pte=word(root+(leaf-session.table_extent.physical)+((A733_GPU_QUEUE_JOB_GPU&0x1fffff)>>12)*8,8);
+            configASSERT((pte&~UINT64_C(4095))==compute->firmware[5].pages[0] && (pte&15)==11);
+            memset((unsigned char *)compute->firmware[5].storage.cpu+4,0xa5,60);
+        }
         for (unsigned batch=0;batch<8;++batch) {
             struct gpu_queue_job jobs[4];
             struct gpu_queue_fence fences[4];
@@ -220,9 +234,14 @@ static void fast_cases(unsigned c)
                     record.sequence==batch*4+i+1 && word((void *)(uintptr_t)(FIXTURE_OUTPUT+i*128),4)==record.sequence);
             }
             configASSERT(!compute->fast.used && uxQueueMessagesWaiting(service.requests)==requests);
+            if (c==62) for (unsigned i=4;i<64;++i)
+                configASSERT(((unsigned char *)compute->firmware[5].storage.cpu)[i]==0xa5);
         }
+        configASSERT(dirty_input_cache_calls-inputs_before==32 && output_cache_calls-outputs_before==32);
+        configASSERT(c==62?payload_cache_calls==payload_before:payload_cache_calls>payload_before);
         platform_puts("PASS GPU queue case ");platform_hex(c);
-        platform_puts("; eight four-job batches retain outputs and collect context-bound fences out of order\n");
+        platform_puts(c==62?"; NC payload PTE, timeline guard and four slots pass with zero payload DC calls\n":
+            "; eight four-job batches retain outputs and collect context-bound fences out of order\n");
         platform_exit(0);
     }
     for (unsigned i=1;i<=32;++i) {
@@ -232,6 +251,13 @@ static void fast_cases(unsigned c)
         struct gpu_queue_record record;
         configASSERT(gpu_queue_wait(context,&record,GPU_QUEUE_WAIT_FOREVER)==GPU_QUEUE_OK && record.sequence==i &&
             !record.detail && level()==0 && word((void *)(uintptr_t)(FIXTURE_OUTPUT+(i%4)*128),4)==i);
+#ifdef SUNSTONE_GPU_TIMING
+        uint64_t counter;
+        __asm__ volatile("isb\n mrs %0,cntvct_el0" : "=r"(counter) :: "memory");
+        configASSERT(gpu_queue_last_irq_counter(context)>0 && gpu_queue_last_irq_counter(context)<=counter);
+#else
+        configASSERT(!gpu_queue_last_irq_counter(context));
+#endif
         configASSERT(uxQueueMessagesWaiting(service.requests)==requests && !compute->fast.used);
     }
     configASSERT(atomic_load(&fast_consumed)==32 && compute->completed_jobs==32 && irq_count);

@@ -80,7 +80,7 @@ int gpu_queue_context_create(const struct gpu_queue_context_config *c,uint32_t t
     if (atomic_load(&q->lost)) return GPU_QUEUE_FAULT;
     if (q->final_close || q->create_done) return GPU_QUEUE_REFUSED;
     if (!q->create_pending) {
-        if (!c->program || !pvr_compute_queue_runtime_program(c->program) || !c->lease_count || c->lease_count>GPU_QUEUE_LEASES || c->reserved || c->priority>GPU_QUEUE_PRIORITY_HIGH) return GPU_QUEUE_REFUSED;
+        if (!c->program || !pvr_compute_queue_runtime_program(c->program) || !c->lease_count || c->lease_count>GPU_QUEUE_LEASES || c->reserved || c->priority>GPU_QUEUE_PRIORITY_HIGH || c->payload_cache>GPU_QUEUE_PAYLOAD_UNCACHED) return GPU_QUEUE_REFUSED;
         q->create_program=*c->program;
         q->create_config=*c;
         q->create_config.program=&q->create_program;
@@ -282,7 +282,7 @@ int gpu_queue_submit_batch(struct gpu_queue_context c,const struct gpu_queue_job
     struct pvr_compute_queue *q=instance;
     int r=context(q,c);
     if (r!=GPU_QUEUE_OK) return r;
-    if (!q->service->config.job_irq_ack || !jobs || !out || !count || count>GPU_QUEUE_DEPTH) return GPU_QUEUE_REFUSED;
+    if (!q->service->config.job_irq_ack || !pvr_gpu_call || !jobs || !out || !count || count>GPU_QUEUE_DEPTH) return GPU_QUEUE_REFUSED;
     struct fast_batch_call call={.context=c,.count=count};
     memcpy(call.job,jobs,count*sizeof(*jobs));
     r=pvr_gpu_call(FAST_BATCH,&call);
@@ -295,6 +295,16 @@ int gpu_queue_wait_fence(struct gpu_queue_fence fence,struct gpu_queue_record *o
     if (!out || !fence.serial || !fence.sequence || !caller(q,fence.context.client) ||
         fence.context.generation!=q->generation || !q->service->config.job_irq_ack) return GPU_QUEUE_REFUSED;
     return direct_wait(q,fence.context,out,ticks,fence.serial,fence.sequence);
+}
+uint64_t gpu_queue_last_irq_counter(struct gpu_queue_context c)
+{
+#ifdef SUNSTONE_GPU_TIMING
+    struct pvr_compute_queue *q=instance;
+    if (!caller(q,c.client) || c.generation!=q->generation) return 0;
+    return atomic_load_explicit(&q->fast.last_irq[c.client],memory_order_acquire);
+#else
+    (void)c;return 0;
+#endif
 }
 int gpu_queue_wait(struct gpu_queue_context c,struct gpu_queue_record *out,uint32_t ticks)
 {

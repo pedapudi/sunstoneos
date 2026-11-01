@@ -43,7 +43,11 @@ void pvr_compute_fast_unlock(struct pvr_compute_queue *q)
     }
 }
 
-void pvr_compute_fast_snapshot(struct pvr_compute_queue *q,BaseType_t *woken)
+void pvr_compute_fast_snapshot(struct pvr_compute_queue *q,BaseType_t *woken
+#ifdef SUNSTONE_GPU_TIMING
+    ,uint64_t irq_counter
+#endif
+    )
 {
     if (!atomic_load_explicit(&q->fast.enabled,memory_order_acquire)) return;
     /* Completion condition: firmware UPDATE reaches the uncached timeline.
@@ -63,8 +67,12 @@ void pvr_compute_fast_snapshot(struct pvr_compute_queue *q,BaseType_t *woken)
             latch(q,GPU_QUEUE_SERVICE,value,__LINE__);
             return;
         }
-        for (unsigned serial=completed;serial<value;++serial)
+        for (unsigned serial=completed;serial<value;++serial) {
             atomic_store_explicit(&q->fast.done_us[serial%PVR_COMPUTE_FAST_DEPTH],now,memory_order_relaxed);
+#ifdef SUNSTONE_GPU_TIMING
+            atomic_store_explicit(&q->fast.irq_counter[serial%PVR_COMPUTE_FAST_DEPTH],irq_counter,memory_order_relaxed);
+#endif
+        }
         atomic_store_explicit(&q->fast.completed,value,memory_order_release);
     }
     for (unsigned i=0;i<GPU_QUEUE_CLIENTS;++i) {
@@ -169,12 +177,18 @@ int pvr_compute_fast_submit(struct pvr_compute_queue *q,unsigned client,const st
     if (!clock_now(q,&now)) {result=FAILED(q,GPU_QUEUE_SERVICE,job->sequence);goto out;}
     if (job->not_after_us && now>=job->not_after_us) {result=GPU_QUEUE_REFUSED;goto out;}
     unsigned char *page=q->job_cpu+index*PVR_COMPUTE_FAST_STRIDE;
-    uint64_t gpu=A733_GPU_QUEUE_JOB_GPU+index*PVR_COMPUTE_FAST_STRIDE;
+    uint64_t gpu=q->job_gpu+index*PVR_COMPUTE_FAST_STRIDE;
     uint64_t binding0=q->lease[job->binding[0].lease].address+job->binding[0].address;
-    const uint32_t zero[3]={0,0,0};
-    pvr_compute_job_grid_pds(page,q->task_word,q->coefficients==7?job->groups:zero,
-        gpu+PVR_COMPUTE_QUEUE_ARGUMENTS,binding0);
-    pvr_compute_job_fence_pds(page+PVR_COMPUTE_QUEUE_FENCE);
+    int pointer_changed=q->fast.payload[index].binding0!=binding0;
+    int groups_changed=q->coefficients==7 && memcmp(q->fast.payload[index].groups,job->groups,sizeof(job->groups));
+    if (pointer_changed) {
+        *(uint64_t *)(page+96)=binding0;
+        q->fast.payload[index].binding0=binding0;
+    }
+    if (groups_changed) {
+        for (unsigned i=0;i<3;++i) *(uint32_t *)(page+48+4*i)=job->groups[i];
+        memcpy(q->fast.payload[index].groups,job->groups,sizeof(job->groups));
+    }
     unsigned char *args=page+PVR_COMPUTE_QUEUE_ARGUMENTS;
     for (unsigned i=1;i<job->bindings;++i) {
         uint64_t address=q->lease[job->binding[i].lease].address+job->binding[i].address;
@@ -183,7 +197,12 @@ int pvr_compute_fast_submit(struct pvr_compute_queue *q,unsigned client,const st
     memcpy(args+8*(job->bindings-1),job->arguments,job->argument_bytes);
     uint32_t pds=(uint32_t)(gpu-UINT64_C(0xda00000000));
     pvr_compute_job_grid_cdm(page+PVR_COMPUTE_QUEUE_CDM,pds,pds+PVR_COMPUTE_QUEUE_FENCE,job->groups);
-    if (!maintenance(q,job,0) || !aarch64_device_cache(AARCH64_CACHE_CLEAN,(uintptr_t)page,PVR_COMPUTE_FAST_STRIDE)) {
+    unsigned bytes=8*(job->bindings-1)+job->argument_bytes;
+    if (!maintenance(q,job,0) || (!q->payload_cache &&
+            (((pointer_changed || groups_changed) && !aarch64_device_cache(AARCH64_CACHE_CLEAN,
+                (uintptr_t)page+(groups_changed?0:64),groups_changed && pointer_changed?128:64)) ||
+             !aarch64_device_cache(AARCH64_CACHE_CLEAN,(uintptr_t)page+PVR_COMPUTE_QUEUE_CDM,
+                (PVR_COMPUTE_QUEUE_ARGUMENTS-PVR_COMPUTE_QUEUE_CDM+bytes+63)&~63u)))) {
         result=FAILED(q,GPU_QUEUE_MAINTENANCE,job->sequence);goto out;
     }
     if (!clock_now(q,&now) || UINT64_MAX-now<q->job_us) {result=FAILED(q,GPU_QUEUE_SERVICE,job->sequence);goto out;}
@@ -241,6 +260,10 @@ int pvr_compute_fast_collect(struct pvr_compute_queue *q,unsigned client,uint32_
     result=e->fault?GPU_QUEUE_FAULT:GPU_QUEUE_OK;
     *out=(struct gpu_queue_record){e->job.sequence,(uint16_t)result,(uint16_t)e->fault,
         e->fault?0:(uint32_t)(completed-e->kicked),0};
+#ifdef SUNSTONE_GPU_TIMING
+    atomic_store_explicit(&q->fast.last_irq[client],e->fault?0:
+        atomic_load_explicit(&q->fast.irq_counter[(e->serial-1)%PVR_COMPUTE_FAST_DEPTH],memory_order_relaxed),memory_order_release);
+#endif
     if (!e->fault) ++q->completed_jobs;
     e->serial=0;--q->fast.used;
     if (!q->fast.used && !atomic_load(&q->recovering) &&

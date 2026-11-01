@@ -23,17 +23,30 @@ struct pvr_compute_fast {
     atomic_uint pending[GPU_QUEUE_CLIENTS];
     atomic_uint fault_through[GPU_QUEUE_CLIENTS];
     atomic_uint_fast64_t done_us[PVR_COMPUTE_FAST_DEPTH];
+#ifdef SUNSTONE_GPU_TIMING
+    atomic_uint_fast64_t irq_counter[PVR_COMPUTE_FAST_DEPTH],last_irq[GPU_QUEUE_CLIENTS];
+#endif
     uint32_t fault_observed, fault_submitted, fault_line;
     TaskHandle_t task[GPU_QUEUE_CLIENTS]; /* Immutable after CREATE. */
     struct pvr_compute_fast_entry entry[PVR_COMPUTE_FAST_DEPTH];
+    struct {uint64_t binding0;uint32_t groups[3];} payload[PVR_COMPUTE_FAST_DEPTH];
     unsigned head, used;
     uint64_t last_now;
 };
+#ifdef SUNSTONE_GPU_TIMING
+#define PVR_COMPUTE_SNAPSHOT(q,w,t) pvr_compute_fast_snapshot((q),(w),(t))
+#else
+#define PVR_COMPUTE_SNAPSHOT(q,w,t) pvr_compute_fast_snapshot((q),(w))
+#endif
 int pvr_compute_fast_lock(struct pvr_compute_queue *);
 void pvr_compute_fast_unlock(struct pvr_compute_queue *);
 /* Called only after device IRQ acknowledgement completed. The ISR variant
  * uses FromISR notification APIs; neither operation takes the transport lock. */
-void pvr_compute_fast_snapshot(struct pvr_compute_queue *, BaseType_t *woken);
+void pvr_compute_fast_snapshot(struct pvr_compute_queue *, BaseType_t *woken
+#ifdef SUNSTONE_GPU_TIMING
+    ,uint64_t irq_counter
+#endif
+    );
 void pvr_compute_fast_ready(struct pvr_compute_queue *);
 void pvr_compute_fast_seal(struct pvr_compute_queue *);
 int pvr_compute_fast_submit(struct pvr_compute_queue *, unsigned, const struct gpu_queue_job *, uint32_t *);

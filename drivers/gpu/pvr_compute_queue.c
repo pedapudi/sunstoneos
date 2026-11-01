@@ -169,6 +169,14 @@ int pvr_compute_queue_create(struct pvr_compute_queue *q,const struct gpu_queue_
     q->binding0=q->lease[0].address;
     pvr_compute_job_grid_pds(page,q->task_word,zero,A733_GPU_QUEUE_JOB_GPU+PVR_COMPUTE_QUEUE_ARGUMENTS,q->binding0);
     pvr_compute_job_fence_pds(page+PVR_COMPUTE_QUEUE_FENCE);
+    if (q->service->config.job_irq_ack) for (unsigned i=0;i<PVR_COMPUTE_FAST_DEPTH;++i) {
+        unsigned char *slot=q->job_cpu+i*PVR_COMPUTE_FAST_STRIDE;
+        memset(slot,0,PVR_COMPUTE_FAST_STRIDE);
+        pvr_compute_job_grid_pds(slot,q->task_word,zero,
+            q->job_gpu+i*PVR_COMPUTE_FAST_STRIDE+PVR_COMPUTE_QUEUE_ARGUMENTS,q->binding0);
+        pvr_compute_job_fence_pds(slot+PVR_COMPUTE_QUEUE_FENCE);
+        q->fast.payload[i].binding0=q->binding0;
+    }
     memset(q->command,0,sizeof(q->command));
     pvr_compute_job_command(q->command,0,A733_GPU_QUEUE_JOB_GPU+PVR_COMPUTE_QUEUE_CDM,q->resume);
     put32(q->update,q->firmware_address[TIMELINE]);

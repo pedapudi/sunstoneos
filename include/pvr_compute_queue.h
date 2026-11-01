@@ -79,7 +79,7 @@ struct pvr_compute_queue {
     atomic_uint final_close;
     atomic_uint client_owed;
     unsigned char *job_cpu;
-    uint64_t epoch, resume, task_word;
+    uint64_t epoch, resume, task_word, job_gpu;
     struct gpu_queue_context_config create_config;
     struct gpu_queue_program create_program;
     uint64_t create_ticket, close_ticket;
@@ -92,7 +92,7 @@ struct pvr_compute_queue {
     struct pvr_mips_object objects[PVR_COMPUTE_QUEUE_OBJECTS];
     struct pvr_cccb client;
     struct gpu_queue_lease_info lease[GPU_QUEUE_LEASES];
-    uint32_t lease_count, coefficients, phase, error, sequence, owed, held, priority;
+    uint32_t lease_count, coefficients, phase, error, sequence, owed, held, priority, payload_cache;
     /* Worker-owned: one terminal breadcrumb before publishing a job record. */
     unsigned crumb_pending;
     uint64_t job_us, deadline, kicked;

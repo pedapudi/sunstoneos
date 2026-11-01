@@ -66,6 +66,7 @@ enum gpu_queue_detail {
     GPU_QUEUE_SERVICE
 };
 enum gpu_queue_priority {GPU_QUEUE_PRIORITY_NORMAL, GPU_QUEUE_PRIORITY_LOW, GPU_QUEUE_PRIORITY_HIGH};
+enum gpu_queue_payload_cache {GPU_QUEUE_PAYLOAD_WRITEBACK, GPU_QUEUE_PAYLOAD_UNCACHED};
 
 struct gpu_queue_context { uint32_t generation, client; };
 struct gpu_queue_fence {
@@ -123,6 +124,7 @@ struct gpu_queue_context_config {
     uint32_t lease_count, reserved;
     struct gpu_queue_lease_request lease[GPU_QUEUE_LEASES];
     uint32_t priority;         /* enum gpu_queue_priority; fixed until destruction */
+    uint32_t payload_cache;    /* enum gpu_queue_payload_cache; fixed mapping */
 };
 
 /* One buffer range of a job. The program receives the GPU address
@@ -193,6 +195,9 @@ int gpu_queue_submit_batch(struct gpu_queue_context,const struct gpu_queue_job *
     struct gpu_queue_fence *,uint32_t *accepted);
 /* Collect a specific fence, including out of submission order. */
 int gpu_queue_wait_fence(struct gpu_queue_fence,struct gpu_queue_record *,uint32_t wait_ticks);
+/* Optional IRQ-entry CNTVCT timestamp of the last collected job. Zero when
+ * timing is disabled, or when slow event handling acquired its fence. */
+uint64_t gpu_queue_last_irq_counter(struct gpu_queue_context);
 /* Collect the oldest owed record. Zero wait_ticks polls once; WAIT_FOREVER
  * waits without a timer. Explicit finite waits bound the caller's wait.
  * Native completion uses direct task notifications, then acquires output
