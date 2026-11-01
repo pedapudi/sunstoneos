@@ -81,6 +81,9 @@ static void performance_owner(void *arg)
         configASSERT(held==A733_PERF_EXPIRED && !perf_commands && perf_request(A733_PERF_RELEASE,0)==A733_PERF_DONE);
     } else {
         configASSERT(held==A733_PERF_DONE);atomic_store(&perf_held,1);
+        /* No pending mailbox request remains. The service must still enforce
+         * the forced-idle limit while the direct queue has no jobs. */
+        if(gpu_queue_case==68)vTaskSuspend(NULL);
         while(!atomic_load(&perf_observed))vTaskDelay(1);
         configASSERT(perf_request(A733_PERF_RATE,600)==A733_PERF_DONE);
         configASSERT(perf_request(A733_PERF_VOLTAGE,800)==A733_PERF_DONE);

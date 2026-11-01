@@ -5,6 +5,8 @@
  */
 #include "pvr_ccb.h"
 #include "a733_range.h"
+#include "a733_mmio.h"
+#include "pvr_gpu_crumb.h"
 #include <string.h>
 
 enum { WRITE_OFFSET = 0, READ_OFFSET = 128, WRAP_MASK = 132, COMMAND_SIZE = 136 };
@@ -52,6 +54,7 @@ static int barrier(struct pvr_ccb *q, enum pvr_ccb_barrier b)
 }
 static enum pvr_ccb_result fail(struct pvr_ccb *q)
 {
+    q->direct=(struct pvr_ccb_direct){0};
     q->phase = PVR_CCB_FAILED;
     return PVR_CCB_FAULT;
 }
@@ -152,8 +155,60 @@ enum pvr_ccb_result pvr_ccb_submit(struct pvr_ccb *q, const void *command,
     return PVR_CCB_OK;
 }
 
+static inline void direct_barrier(void)
+{
+#if defined(__aarch64__)
+    a733_mmio_dsb_sy();
+#else
+    /* Pure-host transport fixtures have ordinary shared RAM. Native A733
+     * publication above requires device-write completion through DSB SY. */
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+#endif
+}
+static enum pvr_ccb_result direct_fault(struct pvr_ccb *q,unsigned reason,uint32_t read,unsigned line)
+{
+    q->failed_line=line;q->failed_read=read;q->failed_write=q->host_write;
+    /* Error bit 11 selects raw KCCB failure; bits 10:4 retain the host
+     * cursor and bits 3:0 the predicate. FAR retains the observed FW cursor. */
+    pvr_gpu_crumb_fail(PVR_GPU_CRUMB_QUEUE,0x800u|(q->host_write<<4)|reason,line,read,PVR_GPU_CRUMB_HERE());
+    return fail(q);
+}
+static enum pvr_ccb_result submit_direct(struct pvr_ccb *q,const void *command,uint64_t now,uint64_t deadline)
+{
+    enum pvr_ccb_result status=active(q);
+    if (status!=PVR_CCB_OK) return status;
+    if (!outside(q,command,PVR_CCB_COMMAND_BYTES) || !command_valid(command) || now<q->last_now) return PVR_CCB_INVALID;
+    if (deadline<=now) return PVR_CCB_EXPIRED;
+    q->last_now=now;
+    const uint32_t mask=PVR_CCB_HOST_SLOTS-1;
+    direct_barrier();
+    uint32_t read=*(volatile uint32_t *)(q->direct.control+READ_OFFSET);
+    /* Firmware may still expose the previous read offset. Never poll it;
+     * retain one empty slot and return AGAIN when the sampled ring is full. */
+    if (read>mask || ((read-q->host_read)&mask)>((q->host_write-q->host_read)&mask))
+        return direct_fault(q,1,read,__LINE__);
+    q->host_read=read;
+    uint32_t old=q->host_write,next=(old+1)&mask;
+    if (next==read || q->slots[old].state!=FREE) return PVR_CCB_AGAIN;
+    if (q->serial==UINT64_MAX) return direct_fault(q,2,read,__LINE__);
+    const unsigned char *source=__builtin_assume_aligned(command,8);
+    volatile unsigned char *destination=q->direct.commands+old*PVR_CCB_COMMAND_BYTES;
+    for (unsigned i=0;i<PVR_CCB_COMMAND_BYTES;i+=8) {
+        uint64_t word;__builtin_memcpy(&word,source+i,8);*(volatile uint64_t *)(destination+i)=word;
+    }
+    *(volatile uint32_t *)(q->direct.returns+old*4)=0;
+    /* Vendor pvr_ccb.c publication: command bytes complete before the
+     * write-offset store, which completes before the MTS kick. */
+    direct_barrier();
+    q->host_write=next;++q->serial;
+    *(volatile uint32_t *)(q->direct.control+WRITE_OFFSET)=next;
+    direct_barrier();
+    if (q->direct.doorbell(q->direct.context)!=1) return direct_fault(q,3,read,__LINE__);
+    return PVR_CCB_OK;
+}
 enum pvr_ccb_result pvr_ccb_submit_noreply(struct pvr_ccb *q,const void *command,uint64_t now,uint64_t deadline)
 {
+    if (q && q->direct.doorbell && !((uintptr_t)command&7)) return submit_direct(q,command,now,deadline);
     struct pvr_ccb_token token;
     enum pvr_ccb_result result=pvr_ccb_submit(q,command,now,deadline,&token);
     if (result==PVR_CCB_OK) q->slots[token.slot].state=FREE;
@@ -240,6 +295,7 @@ enum pvr_ccb_result pvr_ccb_abort(struct pvr_ccb *q)
     if (!a733_span_excl_nonempty(q, sizeof(*q)) || (q->phase != PVR_CCB_PREPARED &&
         q->phase != PVR_CCB_ACTIVE && q->phase != PVR_CCB_FAILED &&
         q->phase != PVR_CCB_RETIRED)) return PVR_CCB_INVALID;
+    q->direct=(struct pvr_ccb_direct){0};
     return fail(q);
 }
 
@@ -247,6 +303,7 @@ enum pvr_ccb_result pvr_ccb_retire(struct pvr_ccb *q)
 {
     if (!a733_span_excl_nonempty(q, sizeof(*q)) || (q->phase != PVR_CCB_PREPARED &&
         q->phase != PVR_CCB_ACTIVE)) return PVR_CCB_INVALID;
+    q->direct=(struct pvr_ccb_direct){0};
     q->phase = PVR_CCB_RETIRED;
     return PVR_CCB_OK;
 }

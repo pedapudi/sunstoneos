@@ -44,7 +44,7 @@ void pvr_compute_fast_unlock(struct pvr_compute_queue *q)
 }
 
 void pvr_compute_fast_snapshot(struct pvr_compute_queue *q,BaseType_t *woken
-#ifdef SUNSTONE_GPU_TIMING
+#ifdef SUNSTONE_GPU_FAST_TIMING
     ,uint64_t irq_counter
 #endif
     )
@@ -69,7 +69,7 @@ void pvr_compute_fast_snapshot(struct pvr_compute_queue *q,BaseType_t *woken
         }
         for (unsigned serial=completed;serial<value;++serial) {
             atomic_store_explicit(&q->fast.done_us[serial%PVR_COMPUTE_FAST_DEPTH],now,memory_order_relaxed);
-#ifdef SUNSTONE_GPU_TIMING
+#ifdef SUNSTONE_GPU_FAST_TIMING
             atomic_store_explicit(&q->fast.irq_counter[serial%PVR_COMPUTE_FAST_DEPTH],irq_counter,memory_order_relaxed);
 #endif
         }
@@ -86,6 +86,10 @@ void pvr_compute_fast_snapshot(struct pvr_compute_queue *q,BaseType_t *woken
 }
 void pvr_compute_fast_ready(struct pvr_compute_queue *q)
 {
+    const struct pvr_gpu_service_config *c=&q->service->config;
+    if (c->job_kick) q->service->queue.direct=(struct pvr_ccb_direct){
+        c->resources[PVR_FW_HOST_CONTROL].storage.cpu,c->resources[PVR_FW_HOST_COMMANDS].storage.cpu,
+        c->resources[PVR_FW_RETURNS].storage.cpu,c->job_kick,c->context};
     q->fast.task[0]=q->service->clients[0].task;
     q->fast.task[1]=q->peer.task;
     atomic_store_explicit(&q->fast.submitted,q->timeline_serial,memory_order_release);
@@ -96,6 +100,7 @@ void pvr_compute_fast_ready(struct pvr_compute_queue *q)
 }
 void pvr_compute_fast_seal(struct pvr_compute_queue *q)
 {
+    q->service->queue.direct=(struct pvr_ccb_direct){0};
     /* Same SMP kernel critical section as the interrupt dispatcher: no
      * device ACK/timeline read can cross power retirement after this seal. */
     taskENTER_CRITICAL();
@@ -260,7 +265,7 @@ int pvr_compute_fast_collect(struct pvr_compute_queue *q,unsigned client,uint32_
     result=e->fault?GPU_QUEUE_FAULT:GPU_QUEUE_OK;
     *out=(struct gpu_queue_record){e->job.sequence,(uint16_t)result,(uint16_t)e->fault,
         e->fault?0:(uint32_t)(completed-e->kicked),0};
-#ifdef SUNSTONE_GPU_TIMING
+#ifdef SUNSTONE_GPU_FAST_TIMING
     atomic_store_explicit(&q->fast.last_irq[client],e->fault?0:
         atomic_load_explicit(&q->fast.irq_counter[(e->serial-1)%PVR_COMPUTE_FAST_DEPTH],memory_order_relaxed),memory_order_release);
 #endif

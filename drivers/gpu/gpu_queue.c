@@ -171,6 +171,9 @@ static int direct_wait(struct pvr_compute_queue *q,struct gpu_queue_context c,
 {
     TickType_t begin=xTaskGetTickCount(),budget=ticks==GPU_QUEUE_WAIT_FOREVER?portMAX_DELAY:(TickType_t)ticks;
     int queried=0;
+#ifdef SUNSTONE_GPU_FAST_TIMING
+    atomic_store_explicit(&q->fast.last_wake[c.client],0,memory_order_relaxed);
+#endif
     for (;;) {
         if (atomic_load(&q->lost)) return GPU_QUEUE_FAULT;
         uint32_t target=requested?requested:atomic_load_explicit(&q->fast.pending[c.client],memory_order_acquire);
@@ -214,6 +217,12 @@ static int direct_wait(struct pvr_compute_queue *q,struct gpu_queue_context c,
         if (!wait || !ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,wait)) {
             atomic_store(&q->fast.waiter[c.client],0);return GPU_QUEUE_TIMEOUT;
         }
+#ifdef SUNSTONE_GPU_FAST_TIMING
+        uint64_t resumed;
+        __asm__ volatile("isb\n mrs %0,cntvct_el0" : "=r"(resumed) :: "memory");
+        if (target<=atomic_load_explicit(&q->fast.completed,memory_order_acquire))
+            atomic_store_explicit(&q->fast.last_wake[c.client],resumed,memory_order_release);
+#endif
         atomic_store(&q->fast.waiter[c.client],0);
     }
 }
@@ -298,10 +307,20 @@ int gpu_queue_wait_fence(struct gpu_queue_fence fence,struct gpu_queue_record *o
 }
 uint64_t gpu_queue_last_irq_counter(struct gpu_queue_context c)
 {
-#ifdef SUNSTONE_GPU_TIMING
+#ifdef SUNSTONE_GPU_FAST_TIMING
     struct pvr_compute_queue *q=instance;
     if (!caller(q,c.client) || c.generation!=q->generation) return 0;
     return atomic_load_explicit(&q->fast.last_irq[c.client],memory_order_acquire);
+#else
+    (void)c;return 0;
+#endif
+}
+uint64_t gpu_queue_last_wake_counter(struct gpu_queue_context c)
+{
+#ifdef SUNSTONE_GPU_FAST_TIMING
+    struct pvr_compute_queue *q=instance;
+    if (!caller(q,c.client) || c.generation!=q->generation) return 0;
+    return atomic_load_explicit(&q->fast.last_wake[c.client],memory_order_acquire);
 #else
     (void)c;return 0;
 #endif

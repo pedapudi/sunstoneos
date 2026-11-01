@@ -151,7 +151,7 @@ static int interrupt_rearm(struct pvr_gpu_service *s)
 }
 int pvr_gpu_service_interrupt(struct pvr_gpu_service *s, BaseType_t *woken)
 {
-#ifdef SUNSTONE_GPU_TIMING
+#ifdef SUNSTONE_GPU_FAST_TIMING
     uint64_t irq_counter;
     __asm__ volatile("isb\n mrs %0, cntvct_el0" : "=r"(irq_counter) :: "memory");
 #endif
@@ -651,7 +651,7 @@ static void advance_locked(struct pvr_gpu_service *s)
     if (s->phase==PVR_GPU_SERVICE_READY && s->config.compute_queue && s->config.job_irq_ack &&
         !s->irq_masked && !s->recovery_stage &&
 #ifdef SUNSTONE_A733_OS_PERF
-        !s->performance.ticket &&
+        !s->performance.ticket && !performance_controlling(s) &&
 #endif
         atomic_load_explicit(&s->config.compute_queue->fast.enabled,memory_order_acquire)) {
         /* The periodic safety deadline reads CPU fence state only. Successful
@@ -1393,6 +1393,7 @@ int pvr_gpu_service_init(struct pvr_gpu_service *s, const struct pvr_gpu_service
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
         (!!c->job_irq_ack != !!c->job_now) || (c->job_irq_ack &&
             (!c->compute_queue || !c->irq.mask || !pvr_compute_fast_snapshot || !pvr_compute_fast_poll)) ||
+        (c->job_kick && !c->job_irq_ack) ||
         ((c->compute || c->compute_queue) && !c->compute_mode) ||
         (!!c->power.begin != !!c->power.poll) || (!!c->enable == !!c->power.begin) ||
         !c->queue.read || !c->queue.write || !c->queue.barrier || !c->queue.kick ||

@@ -210,6 +210,11 @@ static int job_irq_ack(void *ctx)
 { configASSERT(ctx==&config); set(&gpu_status,0); __asm__ volatile("dsb sy" ::: "memory"); return 1; }
 static int job_now(void *ctx,uint64_t *out)
 { configASSERT(ctx==&config);*out=now_us();return 1; }
+static int job_kick(void *ctx)
+{
+    unsigned slot=((uint32_t)word(resource(0),4)-1)&127;
+    return fast_kick(ctx,0xb00,0,resource(1)+slot*88);
+}
 static int event(void *ctx, const unsigned char command[88]) { (void)ctx; (void)command; return 0; }
 void fixture_gpu_irq(void)
 {
@@ -1073,7 +1078,7 @@ void fixture_unused(void)
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
-    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 62);
+    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 68);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (gpu_queue_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();
@@ -1109,6 +1114,7 @@ void kernel_main(void)
     config.enable = enable; config.context = &config; config.compute_mode = mode;
     config.irq = (struct pvr_gpu_service_irq_ops){mask, rearm};
     if (gpu_queue_case>=54) {config.job_irq_ack=job_irq_ack;config.job_now=job_now;}
+    if (gpu_queue_case>=63) config.job_kick=job_kick;
     if(gpu_queue_case>=41) {
         config.recovery_begin=recovery_admit;
         config.stop.read=recovery_read;config.stop.isolate=recovery_isolate;
@@ -1128,7 +1134,7 @@ void kernel_main(void)
     TaskHandle_t a = xTaskCreateStaticAffinitySet(client, "client", 4096, NULL, 3, queue_stacks[0], &queue_tasks[0], 1);
     TaskHandle_t m = xTaskCreateStaticAffinitySet(model, "model", 4096, NULL, 6, queue_stacks[1], &queue_tasks[1], 2);
     configASSERT(a && m && pvr_gpu_service_bind(&service, 0, a));
-    if(gpu_queue_case>=40) {
+    if(gpu_queue_case>=40 && gpu_queue_case!=68) {
         TaskHandle_t peer=xTaskCreateStaticAffinitySet(shared_peer,"peer",4096,NULL,3,queue_stacks[2],&queue_tasks[2],1);
         configASSERT(peer && pvr_compute_queue_client_register(compute,peer));
     }

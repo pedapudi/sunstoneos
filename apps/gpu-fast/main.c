@@ -12,7 +12,7 @@ struct bench_input {uint32_t magic,jobs,payload_cache,reserved;};
 struct bench_result {
     uint32_t magic,version,payload_cache,jobs,frequency,serial_jobs,pipeline_jobs,irq_samples;
     uint32_t rtt[3],submit[3],irq_wait[3];
-    uint32_t pipeline_ticks,pipeline_submit_ticks,depth,warmup,reserved[3];
+    uint32_t pipeline_ticks,pipeline_submit_ticks,depth,warmup,wake[3];
 };
 _Static_assert(sizeof(struct bench_result)==96,"benchmark result");
 static uint64_t counter(void)
@@ -52,7 +52,7 @@ void gpu_fast_main(const struct ss_grant *grant)
         input.payload_cache>GPU_QUEUE_PAYLOAD_UNCACHED || input.reserved) ss_fail(2);
     uint64_t frequency;
     __asm__ volatile("mrs %0,cntfrq_el0":"=r"(frequency));
-    struct bench_result result={.magic=input.magic,.version=1,.payload_cache=input.payload_cache,
+    struct bench_result result={.magic=input.magic,.version=2,.payload_cache=input.payload_cache,
         .jobs=input.jobs,.frequency=(uint32_t)frequency};
     const struct gpu_queue_context_config config={.job_us=200000,.program=&gpu_queue_program,
         .lease_count=2,.lease={{.region=GPU_FAST_REGION_OUTPUT},{.region=GPU_FAST_REGION_INPUT}},
@@ -76,7 +76,8 @@ void gpu_fast_main(const struct ss_grant *grant)
                 record.sequence!=sequence) ss_fail(4);
         }
         result.warmup=WARMUP;
-        uint32_t *rtt=grant->regions[GPU_FAST_REGION_SAMPLES].base,*submit=rtt+SAMPLES,*irq=submit+SAMPLES;
+        uint32_t *rtt=grant->regions[GPU_FAST_REGION_SAMPLES].base,*submit=rtt+SAMPLES,*irq=submit+SAMPLES,*wake=irq+SAMPLES;
+        uint32_t wake_samples=0;
         for (unsigned i=0;i<input.jobs;++i) {
             job.sequence=++sequence;
             uint64_t began=counter();
@@ -85,14 +86,18 @@ void gpu_fast_main(const struct ss_grant *grant)
             if (r!=GPU_QUEUE_OK) ss_fail(0x100u|(unsigned)r);
             if (gpu_queue_wait(context,&record,GPU_QUEUE_WAIT_FOREVER)!=GPU_QUEUE_OK || record.sequence!=sequence) ss_fail(5);
             uint64_t end=counter(),interrupt=gpu_queue_last_irq_counter(context);
+            uint64_t resumed=gpu_queue_last_wake_counter(context);
             if (end-began>UINT32_MAX || kicked-began>UINT32_MAX || (interrupt && (end<interrupt || end-interrupt>UINT32_MAX))) ss_fail(6);
             rtt[i]=(uint32_t)(end-began);submit[i]=(uint32_t)(kicked-began);
             if (interrupt) irq[result.irq_samples++]=(uint32_t)(end-interrupt);
+            if (interrupt && resumed>=interrupt && resumed<=end) wake[wake_samples++]=(uint32_t)(resumed-interrupt);
             ++result.serial_jobs;
             if (!(i&127)) ss_progress();
         }
         distribution(rtt,SAMPLES,result.rtt);distribution(submit,SAMPLES,result.submit);
         if (result.irq_samples) distribution(irq,result.irq_samples,result.irq_wait);
+        if (wake_samples) distribution(wake,wake_samples,result.wake);
+        result.irq_samples|=wake_samples<<16;
         struct gpu_queue_job jobs[GPU_QUEUE_DEPTH];
         struct gpu_queue_fence fences[GPU_QUEUE_DEPTH];
         for (unsigned i=0;i<GPU_QUEUE_DEPTH;++i) {jobs[i]=job;jobs[i].sequence=++sequence;}

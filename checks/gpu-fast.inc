@@ -51,7 +51,7 @@ static int fast_kick(void *ctx,unsigned offset,unsigned value,unsigned char *com
         .page=compute->job_cpu+slot,.doorbell=now_us()};
     memcpy(j->snapshot,j->page,sizeof(j->snapshot));
     atomic_store_explicit(&fast_produced,produced+1,memory_order_release);
-    return gpu_queue_case!=61;
+    return gpu_queue_case!=61 && gpu_queue_case!=67;
 }
 static void fast_model(void *unused)
 {
@@ -102,11 +102,70 @@ static struct gpu_queue_job fast_job(unsigned sequence,unsigned slot)
 }
 static void fast_cases(unsigned c)
 {
-    configASSERT(c>=54 && c<=62 && level()==0);
+    configASSERT(c>=54 && c<=68 && level()==0);
     while (service.irq_masked) vTaskDelay(1);
     if (c==56 || c==58) vTaskPrioritySet(NULL,5);
-    else vTaskSuspend(service.worker);
+    else if (c!=66 && c!=68) vTaskSuspend(service.worker);
     unsigned requests=uxQueueMessagesWaiting(service.requests);
+    if (c>=63) configASSERT(service.queue.direct.doorbell==job_kick);
+#ifdef SUNSTONE_A733_OS_PERF
+    if (c==68) {
+        atomic_store(&perf_go,1);
+        TickType_t began=xTaskGetTickCount();
+        while (!atomic_load(&perf_held)) {configASSERT(xTaskGetTickCount()-began<200);vTaskDelay(1);}
+        configASSERT(!service.performance.ticket && !compute->fast.used && compute->held &&
+            service.performance.clock.phase==PVR_GPU_CLOCK_HELD);
+        while (service.phase!=PVR_GPU_SERVICE_FAILED) {
+            configASSERT(now_us()<perf_limit+20000);vTaskDelay(1);
+        }
+        configASSERT(service.error==PVR_GPU_SERVICE_CONTROL &&
+            service.performance.clock.error==PVR_GPU_CLOCK_TIME &&
+            atomic_load(&compute->lost) && !service.queue.direct.doorbell && !atomic_load(&fast_produced));
+        platform_puts("PASS GPU queue case ");platform_hex(c);
+        platform_puts("; idle direct queue faults at the forced-idle limit after the HOLD reply\n");platform_exit(0);
+    }
+#endif
+    if (c==64) {
+        uint32_t previous=service.queue.host_write,read=(previous+1)&127;
+        set((uint32_t *)(resource(0)+128),read);
+        struct gpu_queue_job job=fast_job(1,0);
+        configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_FAULT && service.queue.failed_line &&
+            service.queue.failed_read==read && service.queue.failed_write==previous &&
+            !service.queue.direct.doorbell && !atomic_load(&fast_produced) && compute->fast.used==1);
+        platform_puts("PASS GPU queue case ");platform_hex(c);
+        platform_puts("; invalid firmware cursor records its predicate and inputs before retaining the job\n");platform_exit(0);
+    }
+    if (c==65) {
+        uint32_t write=service.queue.host_write,read=service.queue.host_read;
+        unsigned reservation=service.queue.slots[write].state;
+        service.queue.slots[write].state=1; /* An uncollected guarded KCCB reservation. */
+        struct gpu_queue_job job=fast_job(1,0);
+        configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_BUSY && !compute->fast.used && !atomic_load(&fast_produced));
+        service.queue.slots[write].state=reservation;
+        service.queue.host_write=(read-1)&127;
+        set((uint32_t *)resource(0),service.queue.host_write);
+        configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_BUSY && !compute->fast.used && !atomic_load(&fast_produced));
+        service.queue.host_write=write;set((uint32_t *)resource(0),write);
+        struct gpu_queue_record record;
+        configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_OK &&
+            gpu_queue_wait(context,&record,GPU_QUEUE_WAIT_FOREVER)==GPU_QUEUE_OK && record.sequence==1);
+        platform_puts("PASS GPU queue case ");platform_hex(c);
+        platform_puts("; full ring and retained reservation return BUSY without consuming a sequence or slot\n");platform_exit(0);
+    }
+    if (c==66) {
+        struct gpu_queue_job job=fast_job(1,0);
+        struct gpu_queue_record record;
+        configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_OK && gpu_queue_wait(context,&record,1000)==GPU_QUEUE_OK);
+        configASSERT(gpu_queue_close(context,1000)==GPU_QUEUE_OK && !service.queue.direct.doorbell &&
+            !atomic_load(&compute->fast.enabled));
+        job=fast_job(2,0);
+        configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_PARKED);
+        configASSERT(gpu_queue_open(context,1000)==GPU_QUEUE_OK && service.queue.direct.doorbell==job_kick && service.epoch==2);
+        configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_OK &&
+            gpu_queue_wait(context,&record,1000)==GPU_QUEUE_OK && record.sequence==2);
+        platform_puts("PASS GPU queue case ");platform_hex(c);
+        platform_puts("; close revokes the admitted view and fresh READY restores it for the next job\n");platform_exit(0);
+    }
     if (c==60) {
         atomic_store(&compute->fast.locked,1);
         atomic_store(&fast_unlock_request,1);
@@ -118,7 +177,7 @@ static void fast_cases(unsigned c)
         platform_puts("PASS GPU queue case ");platform_hex(c);
         platform_puts("; unvalidated future fence waits only for the lock and refuses without a GPU interrupt\n");platform_exit(0);
     }
-    if (c==61) {
+    if (c==61 || c==67) {
         struct gpu_queue_job jobs[2]={fast_job(1,0),fast_job(2,1)};
         struct gpu_queue_fence fences[2]={0};
         uint32_t accepted=0;
@@ -244,14 +303,16 @@ static void fast_cases(unsigned c)
             "; eight four-job batches retain outputs and collect context-bound fences out of order\n");
         platform_exit(0);
     }
-    for (unsigned i=1;i<=32;++i) {
+    unsigned count=c==63?256:32;
+    unsigned callbacks_before=calls;
+    for (unsigned i=1;i<=count;++i) {
         struct gpu_queue_job job=fast_job(i,i%4);
         if (i%3==0) xTaskNotifyGiveIndexed(xTaskGetCurrentTaskHandle(),PVR_COMPUTE_FAST_NOTIFY);
         configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_OK && level()==0);
         struct gpu_queue_record record;
         configASSERT(gpu_queue_wait(context,&record,GPU_QUEUE_WAIT_FOREVER)==GPU_QUEUE_OK && record.sequence==i &&
             !record.detail && level()==0 && word((void *)(uintptr_t)(FIXTURE_OUTPUT+(i%4)*128),4)==i);
-#ifdef SUNSTONE_GPU_TIMING
+#ifdef SUNSTONE_GPU_FAST_TIMING
         uint64_t counter;
         __asm__ volatile("isb\n mrs %0,cntvct_el0" : "=r"(counter) :: "memory");
         configASSERT(gpu_queue_last_irq_counter(context)>0 && gpu_queue_last_irq_counter(context)<=counter);
@@ -260,9 +321,11 @@ static void fast_cases(unsigned c)
 #endif
         configASSERT(uxQueueMessagesWaiting(service.requests)==requests && !compute->fast.used);
     }
-    configASSERT(atomic_load(&fast_consumed)==32 && compute->completed_jobs==32 && irq_count);
+    configASSERT(atomic_load(&fast_consumed)==count && compute->completed_jobs==count && irq_count);
+    if (c==63) configASSERT(calls==callbacks_before && service.queue.serial>=256);
     platform_puts("PASS GPU queue case ");platform_hex(c);
-    platform_puts("; EL0 caller kicks and collects 32 delayed jobs with worker suspended and ring wrap\n");
+    platform_puts(c==63?"; 256 admitted KCCB jobs wrap with no provider callbacks or service work\n":
+        "; EL0 caller kicks and collects 32 delayed jobs with worker suspended and ring wrap\n");
     platform_exit(0);
 }
 static void fast_peer(void)

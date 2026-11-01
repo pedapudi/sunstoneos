@@ -55,7 +55,13 @@ CASES = {1: 'grid replay, exact sums', 2: 'grid replay, pattern sums', 3: 'grid 
          59: 'two clients pipeline independent sequences and direct notification waiters',
          60: 'forged fence under lock contention refuses after an IRQ-free unlock',
          61: 'uncertain batch doorbell returns every retained fence in its accepted prefix',
-         62: 'uncached retained payloads preserve the timeline and application maintenance'}
+         62: 'uncached retained payloads preserve the timeline and application maintenance',
+         63: 'admitted KCCB publication wraps without provider validation',
+         64: 'admitted KCCB rejects a jumping firmware cursor and retains its origin',
+         65: 'admitted KCCB preserves full-ring and reserved-slot backpressure',
+         66: 'admitted KCCB view is revoked on close and restored after fresh READY',
+         67: 'uncertain admitted doorbell preserves the accepted batch prefix',
+         68: 'idle direct queue preserves the forced-idle hold deadline'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'gpu_queue_submit', 'gpu_queue_wait', 'kick',
@@ -244,12 +250,12 @@ def main():
     for name in ('freertos', 'tinyusb', 'firmware', 'qemu', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
-    performance = any(25 <= c <= 30 for c in args.cases)
+    performance = any(25 <= c <= 30 or c==68 for c in args.cases)
     returning = any(31 <= c <= 33 for c in args.cases)
     recovery = any(41 <= c <= 49 or c==52 for c in args.cases)
     assert not recovery or all(41 <= c <= 49 or c==52 for c in args.cases) and not args.trace
     assert not returning or all(31 <= c <= 33 for c in args.cases) and not args.trace
-    assert not performance or all(25 <= c <= 30 for c in args.cases) and not args.trace
+    assert not performance or all(25 <= c <= 30 or c==68 for c in args.cases) and not args.trace
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     project, build, fixtures = out / 'project', out / 'build', out / 'fixtures'
@@ -292,7 +298,7 @@ set_property(TARGET gpu-service-model PROPERTY SOURCES "${{sources}}")
 target_include_directories(gpu-service-model PRIVATE "{fixtures}" "{ROOT}/checks")
 target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1 {"SUNSTONE_A733_OS_PERF=1" if performance else "SUNSTONE_A733_OS_CPU_RETURN=1" if returning else "SUNSTONE_A733_OS_GPU_RECOVERY_TEST=1" if recovery else ""})
 target_compile_definitions(gpu-service-model PRIVATE INCLUDE_vTaskPrioritySet=1)
-target_compile_definitions(gpu-service-model PRIVATE {"SUNSTONE_GPU_TIMING=1" if args.timing else ""})
+target_compile_definitions(gpu-service-model PRIVATE {"SUNSTONE_GPU_FAST_TIMING=1" if args.timing else ""})
 get_target_property(options gpu-service-model LINK_OPTIONS)
 list(FILTER options EXCLUDE REGEX "-Wl,-T,")
 list(APPEND options "-Wl,-T,{linker}" -Wl,--defsym=__device_pool_size=2097152

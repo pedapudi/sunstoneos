@@ -35,7 +35,7 @@ elseif(SUNSTONE_APPLICATION STREQUAL "queue-add")
   add_sunstone_image(sunstone-a733-os-queue-add LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION queue-add)
 elseif(SUNSTONE_APPLICATION STREQUAL "gpu-fast")
-  if(NOT SUNSTONE_A733_OS_GPU OR NOT SUNSTONE_GPU_TIMING)
+  if(NOT SUNSTONE_A733_OS_GPU OR NOT SUNSTONE_GPU_FAST_TIMING)
     message(FATAL_ERROR "GPU benchmark requires the GPU and optional GPU timing")
   endif()
   add_sunstone_application(gpu-fast

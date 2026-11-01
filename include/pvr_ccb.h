@@ -36,16 +36,27 @@ struct pvr_ccb_ops {
 };
 struct pvr_ccb_token { uint64_t epoch, serial; uint32_t slot; };
 struct pvr_ccb_slot { uint64_t serial, deadline; uint32_t state, status; };
+/* Optional job-only view admitted once by the native backend and installed
+ * at READY. Exact retained NC regions, aligned to at least eight bytes.
+ * kick completes the one MTS write. The same lock owns this view and all
+ * guarded KCCB producers. Revoke it before abort, stop or mapping retirement. */
+struct pvr_ccb_direct {
+    volatile unsigned char *control,*commands,*returns;
+    int (*doorbell)(void *);
+    void *context;
+};
 
 /* Caller-owned state. Zero once before initialization. Fields are private to
  * this component except phase and last_event, which may be read for diagnosis.
  * Serialize every API call through one privileged FreeRTOS worker or lock.
  */
 struct pvr_ccb {
+    struct pvr_ccb_direct direct;
     struct pvr_ccb_ops ops;
     void *context;
     uint64_t epoch, serial, last_now;
     uint32_t phase, host_write, host_read, firmware_read;
+    uint32_t failed_line,failed_read,failed_write;
     struct pvr_ccb_slot slots[PVR_CCB_HOST_SLOTS];
     unsigned char last_event[PVR_CCB_COMMAND_BYTES];
 };

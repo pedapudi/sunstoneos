@@ -65,8 +65,15 @@ static int ring_write(void *ctx,enum pvr_cccb_region r,uint32_t off,const void *
         (r==PVR_CCCB_CONTROL && q->phase!=PVR_COMPUTE_QUEUE_FORMAT)) return 0;
     volatile unsigned char *d=(volatile unsigned char *)q->firmware[r==PVR_CCCB_CONTROL?CONTROL:RING].storage.cpu+off;
     const unsigned char *s=in;
-    if (!((off|n)&7)) for (size_t i=0;i<n;i+=8) {
-        uint64_t v; memcpy(&v,s+i,8); *(volatile uint64_t *)(d+i)=v;
+    if (!((off|n)&7)) {
+        if (!((uintptr_t)s&7)) {
+            const unsigned char *aligned=__builtin_assume_aligned(s,8);
+            for (size_t i=0;i<n;i+=8) {
+                uint64_t v;__builtin_memcpy(&v,aligned+i,8);*(volatile uint64_t *)(d+i)=v;
+            }
+        } else for (size_t i=0;i<n;i+=8) {
+            uint64_t v;__builtin_memcpy(&v,s+i,8);*(volatile uint64_t *)(d+i)=v;
+        }
     } else for (size_t i=0;i<n;++i) d[i]=s[i];
     return 1;
 }

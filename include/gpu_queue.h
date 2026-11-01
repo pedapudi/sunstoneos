@@ -198,6 +198,9 @@ int gpu_queue_wait_fence(struct gpu_queue_fence,struct gpu_queue_record *,uint32
 /* Optional IRQ-entry CNTVCT timestamp of the last collected job. Zero when
  * timing is disabled, or when slow event handling acquired its fence. */
 uint64_t gpu_queue_last_irq_counter(struct gpu_queue_context);
+/* Counter sampled when a GPU notification resumes the last collecting wait;
+ * zero if that wait found its fence ready before blocking, or timing is off. */
+uint64_t gpu_queue_last_wake_counter(struct gpu_queue_context);
 /* Collect the oldest owed record. Zero wait_ticks polls once; WAIT_FOREVER
  * waits without a timer. Explicit finite waits bound the caller's wait.
  * Native completion uses direct task notifications, then acquires output
