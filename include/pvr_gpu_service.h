@@ -54,7 +54,10 @@ enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED, PVR_GPU_SERVICE_ENABLING,
     PVR_GPU_SERVICE_BUILDING, PVR_GPU_SERVICE_DRAINING, PVR_GPU_SERVICE_PUBLISHING, PVR_GPU_SERVICE_PUBLISHING_GRAPHICS,
     PVR_GPU_SERVICE_COMPUTE_CLEANUP, PVR_GPU_SERVICE_GRAPHICS_CLEANUP, PVR_GPU_SERVICE_DISPOSING, PVR_GPU_SERVICE_DISPOSED,
-    PVR_GPU_SERVICE_RECONSTRUCTING, PVR_GPU_SERVICE_PARKING, PVR_GPU_SERVICE_PARKED };
+    PVR_GPU_SERVICE_RECONSTRUCTING, PVR_GPU_SERVICE_PARKING, PVR_GPU_SERVICE_PARKED,
+    PVR_GPU_SERVICE_RECOVERING };
+#define PVR_GPU_SERVICE_RECOVERY_STOP_US UINT64_C(300000)
+#define PVR_GPU_SERVICE_RECOVERY_READY_US UINT64_C(1000000)
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
     PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE, PVR_GPU_SERVICE_RENDER, PVR_GPU_SERVICE_RENDER_OUTPUT,
     PVR_GPU_SERVICE_COMPUTE_OUTPUT, PVR_GPU_SERVICE_COMPUTE_CANCEL, PVR_GPU_SERVICE_COMPUTE_INPUT,
@@ -174,6 +177,10 @@ struct pvr_gpu_service_config {
     /* Optional generic compute queue; excludes fixed compute and graphics. */
     struct pvr_compute_queue *compute_queue;
     struct a733_gpu_queue *queue_owner;
+    /* Worker-only admission for recoverable queue timeout/reset. Return 1
+     * with the current absolute session limit; retain all resources on refusal.
+     * Recovery keeps the original stop and restart deadlines across polls. */
+    int (*recovery_begin)(void *,uint64_t *session_limit);
 #ifdef SUNSTONE_A733_OS_PERF
     /* Concrete OS GPU performance owner, using a second pre-bound client. */
     struct pvr_gpu_clock_ops performance_clock;
@@ -273,6 +280,8 @@ struct pvr_gpu_service {
     struct pvr_mips_boot boot;
     struct pvr_mips_object mappings[PVR_MIPS_MAX_OBJECTS];
     uint64_t epoch, deadline, last_now;
+    uint64_t recovery_detected, recovery_stop_deadline, recovery_ready_deadline;
+    unsigned recovery_stage, recovery_count;
     enum pvr_gpu_service_phase phase;
     enum pvr_gpu_service_error error;
     unsigned owner, initialized, closed_owner;

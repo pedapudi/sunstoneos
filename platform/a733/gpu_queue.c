@@ -203,10 +203,12 @@ int a733_gpu_queue_reopen(struct a733_gpu_queue *s)
 {
     struct pvr_compute_queue *q=s ? &s->component : NULL;
     struct pvr_gpu_service *g=q ? q->service : NULL;
-    if (!g || s->stage!=BUILT || g->phase!=PVR_GPU_SERVICE_STOPPED ||
+    int recovering=q && atomic_load(&q->recovering);
+    if (!g || s->stage!=BUILT ||
+        (recovering ? g->phase!=PVR_GPU_SERVICE_RECOVERING : g->phase!=PVR_GPU_SERVICE_STOPPED) ||
         q->phase!=PVR_COMPUTE_QUEUE_READY || q->final_close || q->owed || atomic_load(&q->lost) ||
-        atomic_load(&q->slot_state)!=PVR_COMPUTE_QUEUE_CLOSED ||
-        q->client_owed || uxQueueMessagesWaiting(q->completions) ||
+        (!recovering && (atomic_load(&q->slot_state)!=PVR_COMPUTE_QUEUE_CLOSED ||
+                       !pvr_compute_queue_clients_idle(q))) ||
         s->vm.phase!=A733_GPU_VM_MEMORY_PUBLISHED ||
         !a733_gpu_backend_stopped(g->config.context,g) ||
         s->firmware->memory.phase!=A733_GPU_MEMORY_OFFLINE ||

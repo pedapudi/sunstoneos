@@ -36,7 +36,16 @@ CASES = {1: 'grid replay, exact sums', 2: 'grid replay, pattern sums', 3: 'grid 
          35: 'unleased neighbour in model rounded tail',
          36: 'unleased neighbour in CPU-written input rounded tail',
          37: 'unleased neighbour at exact rounded boundary',
-         38: 'worker immutable program source bounds and final-word creation'}
+         38: 'worker immutable program source bounds and final-word creation',
+         39: 'ten public close/open cycles', 40: 'two caller slots and independent sequences',
+         41: 'timeout reset resumes queued peer', 42: 'decoded reset resumes queued peer',
+         43: 'queued peer kick deadline survives reset', 44: 'idle refusal retains both callers',
+         45: 'reset readback mismatch retains both callers', 46: 'failed isolation retains both callers',
+         47: 'failed restart retains queued peer', 48: 'failed restart health retains queued peer',
+         49: 'session limit clips recovery deadlines',
+         50: 'maximum job duration recovers an unconsumed kernel kick',
+         51: 'firmware timeline serial exhaustion refuses without a kick',
+         52: 'qualification timeout refuses recovery without a queued peer'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'gpu_queue_submit', 'gpu_queue_wait', 'kick',
@@ -226,6 +235,8 @@ def main():
     args = parser.parse_args()
     performance = any(25 <= c <= 30 for c in args.cases)
     returning = any(31 <= c <= 33 for c in args.cases)
+    recovery = any(41 <= c <= 49 or c==52 for c in args.cases)
+    assert not recovery or all(41 <= c <= 49 or c==52 for c in args.cases) and not args.trace
     assert not returning or all(31 <= c <= 33 for c in args.cases) and not args.trace
     assert not performance or all(25 <= c <= 30 for c in args.cases) and not args.trace
     out = args.output.resolve()
@@ -267,7 +278,7 @@ list(APPEND sources "{platform}" {extra})
 list(REMOVE_DUPLICATES sources)
 set_property(TARGET gpu-service-model PROPERTY SOURCES "${{sources}}")
 target_include_directories(gpu-service-model PRIVATE "{fixtures}" "{ROOT}/checks")
-target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1 {"SUNSTONE_A733_OS_PERF=1" if performance else "SUNSTONE_A733_OS_CPU_RETURN=1" if returning else ""})
+target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1 {"SUNSTONE_A733_OS_PERF=1" if performance else "SUNSTONE_A733_OS_CPU_RETURN=1" if returning else "SUNSTONE_A733_OS_GPU_RECOVERY_TEST=1" if recovery else ""})
 get_target_property(options gpu-service-model LINK_OPTIONS)
 list(FILTER options EXCLUDE REGEX "-Wl,-T,")
 list(APPEND options "-Wl,-T,{linker}" -Wl,--defsym=__device_pool_size=2097152
@@ -286,6 +297,7 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
     if (out/'results.json').exists():
         attempts=list(out.glob('results-attempt*.json'))
         shutil.copy2(out/'results.json',out/('results-attempt%d.json' % (len(attempts)+1)))
+    logs={}
 
     def run(name, command, timeout=None):
         commands.append(command)
@@ -297,6 +309,7 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
             while (out/('%s-attempt%d.log' % (name,attempt))).exists(): attempt+=1
             log=out/('%s-attempt%d.log' % (name,attempt))
         log.write_text(r.stdout)
+        logs[name]=str(log.resolve())
         if r.returncode:
             raise RuntimeError('%s failed (%d): %s' % (name, r.returncode, r.stdout[-4000:]))
         return r.stdout
@@ -345,7 +358,7 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
                 assert marker in log, log[-3000:]
                 results['cases'][case] = {'name': CASES[case], 'metrics': dict(
                     (m.group(1), int(m.group(2), 16)) for m in re.finditer(r'metric (\S+) (0x[0-9a-f]+)', log)),
-                    'pass': log.strip().splitlines()[-1]}
+                    'pass': log.strip().splitlines()[-1], 'log': logs['case-%d' % case]}
             if case in args.trace:
                 image[slow_offset:slow_offset + 4] = (1).to_bytes(4, 'little')
                 path = out / ('case-%d-traced.elf' % case)

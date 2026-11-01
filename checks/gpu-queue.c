@@ -62,8 +62,10 @@ static struct ss_region regions[5] = {
     {.address=FIXTURE_INPUT,.bytes=12u<<20,.kind=SS_REGION_WORK,
      .access=SS_ACCESS_READ|SS_ACCESS_WRITE|SS_ACCESS_GPU_READ}
 };
-static StaticTask_t queue_tasks[2];
-static StackType_t queue_stacks[2][4096];
+static StaticTask_t queue_tasks[3];
+static StackType_t queue_stacks[3][4096];
+static atomic_uint peer_release,peer_submitted,peer_finished;
+static unsigned reset_readbacks, fault_records;
 static const struct gicv3_spi spi = {0x08000000, 95};
 #define GICD 0x08000000u
 
@@ -77,6 +79,13 @@ static unsigned refuse_stopped, fail_reopen_cache, fail_reopen_post, stopped_pro
 BaseType_t __real_xQueueGenericSend(QueueHandle_t, const void *, TickType_t, BaseType_t);
 BaseType_t __wrap_xQueueGenericSend(QueueHandle_t queue, const void *item, TickType_t wait, BaseType_t position)
 {
+    if (gpu_queue_case>=41 && gpu_queue_case<=50 && compute && queue==compute->completions &&
+        ((const struct gpu_queue_record *)item)->result==GPU_QUEUE_FAULT) {
+        configASSERT(service.phase==PVR_GPU_SERVICE_RECOVERING && reset_readbacks && isolated &&
+            service.stop.phase==PVR_GPU_STOP_STOPPED && memory.phase==A733_GPU_MEMORY_OFFLINE &&
+            service.irq_masked && !service.irq_fault && compute->owed==0);
+        ++fault_records;
+    }
     if (fail_reopen_post && service.epoch == 1 && queue == compute->completions) {
         const struct gpu_queue_record *record = item;
         configASSERT(!record->sequence && record->result == GPU_QUEUE_OK);
@@ -91,14 +100,16 @@ int __wrap_a733_gpu_backend_stopped(struct a733_gpu_backend *backend, struct pvr
 {
     (void)backend;
     ++stopped_proofs;
-    return !refuse_stopped && s == &service && (s->phase == PVR_GPU_SERVICE_STOPPED
+    return !refuse_stopped && s == &service && (s->phase == PVR_GPU_SERVICE_STOPPED || s->phase==PVR_GPU_SERVICE_RECOVERING
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
         || s->phase==PVR_GPU_SERVICE_PARKING || s->phase==PVR_GPU_SERVICE_PARKED
 #endif
         ) &&
         s->stop.phase == PVR_GPU_STOP_STOPPED && s->stop.isolation_observed &&
-        s->stop.acknowledgement[0] == 1 && s->stop.acknowledgement[1] == 1 &&
-        s->queue.phase == PVR_CCB_RETIRED && s->control.phase == PVR_GPU_CONTROL_RETIRED &&
+        (s->stop.unacknowledged ?
+            (reset_readbacks && s->queue.phase==PVR_CCB_FAILED && s->control.phase==PVR_GPU_CONTROL_FAILED) :
+            (s->stop.acknowledgement[0]==1 && s->stop.acknowledgement[1]==1 &&
+             s->queue.phase==PVR_CCB_RETIRED && s->control.phase==PVR_GPU_CONTROL_RETIRED)) &&
         memory.phase == A733_GPU_MEMORY_OFFLINE && s->irq_masked && !s->irq_fault;
 }
 int __real_pvr_compute_queue_poll(struct pvr_compute_queue *);
@@ -145,6 +156,40 @@ static uint64_t now_us(void)
 static int mask(void *ctx) { (void)ctx; return gicv3_spi_mask(&spi); }
 static int rearm(void *ctx) { (void)ctx; return gicv3_spi_rearm(&spi); }
 static int mode(void *ctx) { callback(ctx); return 1; }
+static int recovery_admit(void *ctx,uint64_t *limit)
+{
+    callback(ctx); configASSERT(service.phase==PVR_GPU_SERVICE_READY && service.irq_masked);
+    stopping=1;
+    *limit=now_us()+(gpu_queue_case==49 ? 1 : UINT64_C(3000000));
+    return 1;
+}
+static int recovery_read(void *ctx,uint32_t off,uint32_t width,uint64_t *out)
+{
+    if (!read_reg(ctx,off,width,out)) return 0;
+    if (service.phase==PVR_GPU_SERVICE_RECOVERING) {
+        if (gpu_queue_case==44 && off==0x3c8) *out=0;
+        if (off==0x100) {
+            if (gpu_queue_case==45) *out=0;
+            else { configASSERT(*out==UINT64_C(0xffeffffffffffc3d)); ++reset_readbacks; }
+        }
+    }
+    return 1;
+}
+static int recovery_isolate(void *ctx)
+{
+    if (!service.stop.unacknowledged) return isolate(ctx);
+    callback(ctx);
+    configASSERT(service.phase==PVR_GPU_SERVICE_RECOVERING && reset_readbacks && stopping &&
+        word(registers+0x100,8)==UINT64_C(0xffeffffffffffc3d) &&
+        service.queue.phase==PVR_CCB_FAILED && service.control.phase==PVR_GPU_CONTROL_FAILED &&
+        service.irq_masked && !fault_records && atomic_load(&compute->client_owed) &&
+        !uxQueueMessagesWaiting(compute->completions));
+    if (gpu_queue_case==46) return 0;
+    running=0; __atomic_fetch_add(&isolated,1,__ATOMIC_RELEASE);
+    return a733_gpu_memory_reclaim(&memory);
+}
+static int recovery_enable(void *ctx)
+{ return gpu_queue_case==47 && service.epoch==2 ? 0 : enable(ctx); }
 /* GPU interrupt status register: the completion interrupt or a pending
  * firmware event; the control poll clears it. */
 static int irq_read(void *ctx, uint32_t off, uint32_t *out)
@@ -176,7 +221,10 @@ static int kick(void *ctx, uint32_t off, uint32_t value)
 #ifdef SUNSTONE_A733_OS_PERF
     if(perf_kick(ctx,next,slot,command))return 1;
 #endif
-    if (word(command, 4) != (PVR_CCB_MAGIC | 101u)) return firmware_fixture_kick(ctx, off, value);
+    if (word(command, 4) != (PVR_CCB_MAGIC | 101u)) {
+        if (gpu_queue_case==48 && service.epoch==2) return 1;
+        return firmware_fixture_kick(ctx, off, value);
+    }
     callback(ctx); configASSERT(off == 0xb00 && !value && running);
     const struct pvr_compute_queue *c = compute;
     configASSERT(word(command + 8, 4) == c->firmware_address[0]);
@@ -193,7 +241,9 @@ static int kick(void *ctx, uint32_t off, uint32_t value)
     last_sequence = sequence;
     unsigned char *control = c->firmware[2].storage.cpu;
     put(control, 4, cursor); put(control + 4, 4, cursor % FIXTURE_RING_BYTES);
-    put(resource(0) + 128, 4, next); put(resource(2) + slot * 4, 4, 1); fixture_executed();
+    if (!(gpu_queue_case==50 && sequence==1)) {
+        put(resource(0)+128,4,next);put(resource(2)+slot*4,4,1);fixture_executed();
+    }
     kick_us = now_us();
     ++kick_step_count;
     __atomic_store_n(&kicked, sequence, __ATOMIC_RELEASE);
@@ -219,7 +269,7 @@ static void model(void *unused)
         uint32_t xs = (uint32_t)word(words + 26, 2);
         configASSERT((uint32_t)word(words + 28, 4) == sequence);
         configASSERT(x_gpu >= FIXTURE_INPUT && w_gpu >= FIXTURE_WEIGHTS);
-        unsigned job = sequence - 1, c = gpu_queue_case;
+        unsigned job = (sequence - 1)%FIXTURE_JOBS, c = gpu_queue_case;
         configASSERT(job < FIXTURE_JOBS && fixture_jobs[job].rows == rows && fixture_jobs[job].k == k &&
                      fixture_jobs[job].n_gpu == n);
         const int8_t *wt = weights_cpu(w_gpu);
@@ -239,11 +289,11 @@ static void model(void *unused)
         uint32_t tags = lane_tags(rows, n);
         uint32_t *tag = (uint32_t *)(uintptr_t)(FIXTURE_OUTPUT + FIXTURE_TAG_BYTES) - tags;
         for (uint32_t i = 0; i < tags; ++i) tag[i] = (c == 7 && i == 0) ? sequence - 1 : sequence;
-        uint64_t duration = c == 3 || c == 4 ? 0 : fixture_jobs[job].duration_us;
+        uint64_t duration = c>=41 && sequence==1 ? 5000 : c==3 || c==4 ? 0 : fixture_jobs[job].duration_us;
         while (now_us() < started + duration) {}
         while (atomic_load(&hold_completion)) {}
         __asm__ volatile("dsb sy" ::: "memory");
-        if (c == 4 || c == 9 || c == 30) {
+        if (c == 4 || c == 9 || c == 30 || (c==42 && sequence==1)) {
             unsigned write = get((uint32_t *)resource(PVR_FW_EVENT_CONTROL));
             unsigned char *e = resource(PVR_FW_EVENTS) + (write & 31) * 88;
             memset(e, 0, 88);
@@ -251,7 +301,7 @@ static void model(void *unused)
             else { put(e, 4, PVR_CCB_MAGIC | 105); put(e + 8, 4, compute->firmware_address[0]); }
             __atomic_store_n((uint32_t *)resource(PVR_FW_EVENT_CONTROL), (write + 1) & 31, __ATOMIC_RELEASE);
         }
-        if (c != 8 && c != 9 && c != 30) put(compute->firmware[5].storage.cpu, 4, sequence);
+        if (c != 8 && c != 9 && c != 30 && !(c==42 && sequence==1)) put(compute->firmware[5].storage.cpu, 4, sequence);
         __asm__ volatile("dsb sy" ::: "memory");
         set(&gpu_status, 1);
         /* Level interrupt: pending until the handler masks it. */
@@ -305,7 +355,16 @@ static struct gpu_queue_record receive(void)
         configASSERT(xTaskGetTickCount() - start < (gpu_queue_slow ? 60000u : 3000u));
     return r;
 }
-static void wait_record_time(uint64_t *us, struct gpu_queue_record *r) { *r = receive(); *us = now_us(); }
+static uint64_t retained_failure(void)
+{
+    TickType_t start=xTaskGetTickCount();
+    while (!atomic_load(&compute->lost)) { configASSERT(xTaskGetTickCount()-start<3000);vTaskDelay(1); }
+    struct gpu_queue_record record={0xfeed,0xabcd,0xdcba,0x1234,0x5678},before=record;
+    configASSERT(gpu_queue_wait(context,&record,0)==GPU_QUEUE_TIMEOUT &&
+        !memcmp(&record,&before,sizeof(record)) && atomic_load(&compute->client_owed) &&
+        !uxQueueMessagesWaiting(compute->completions) && !isolated);
+    return now_us();
+}
 static uint32_t sums_checked;
 static int sums_equal(unsigned job, uint32_t sequence)
 {
@@ -327,6 +386,116 @@ static int sums_equal(unsigned job, uint32_t sequence)
             ++sums_checked;
         }
     return 1;
+}
+static void shared_peer(void *unused)
+{
+    (void)unused;
+    while (!atomic_load(&peer_release)) vTaskDelay(1);
+    struct gpu_queue_context handle;
+    struct gpu_queue_lease_info leases[GPU_QUEUE_LEASES];
+    configASSERT(gpu_queue_context_join(&handle,leases)==GPU_QUEUE_OK && handle.client==1);
+    struct gpu_queue_job job=make_job(1);
+    job.sequence=1;
+    if (gpu_queue_case==43) job.not_after_us=now_us()+10000;
+    configASSERT(gpu_queue_submit(handle,&job)==GPU_QUEUE_OK);
+    atomic_store(&peer_submitted,1);
+    struct gpu_queue_record record;
+    for (;;) {
+        int r=gpu_queue_wait(handle,&record,10);
+        if (r!=GPU_QUEUE_TIMEOUT) {
+            configASSERT(record.sequence==1);
+            if (gpu_queue_case==43) configASSERT(r==GPU_QUEUE_REFUSED && record.detail==GPU_QUEUE_DEADLINE);
+            else configASSERT(r==GPU_QUEUE_OK && sums_equal(1,2) && tags_complete(fixture_jobs[1].rows,fixture_jobs[1].n_gpu,2));
+            break;
+        }
+        if (atomic_load(&compute->lost)) break;
+    }
+    atomic_store(&peer_finished,1);
+    vTaskSuspend(NULL);
+}
+static void lifecycle_cases(unsigned c)
+{
+    if (c==52) {
+        const struct gpu_queue_job job=make_job(0);
+        configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_OK);
+        (void)retained_failure();
+        configASSERT(!service.recovery_detected && !fault_records && !reset_readbacks && !isolated &&
+            service.epoch==1 && kick_step_count==1 && !atomic_load(&compute->peer.client_owed));
+    } else if (c==51) {
+        compute->timeline_serial=UINT32_MAX;
+        const struct gpu_queue_job job=make_job(0);
+        configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_OK);
+        struct gpu_queue_record record=receive();
+        configASSERT(record.result==GPU_QUEUE_REFUSED && record.detail==GPU_QUEUE_SEQUENCE && record.sequence==1 &&
+            !kick_step_count && !atomic_load(&compute->lost) && !atomic_load(&compute->application_sequence) &&
+            compute->timeline_serial==UINT32_MAX);
+    } else if (c==39) {
+        for (unsigned i=0;i<10;++i) {
+            struct gpu_queue_job job=make_job(i%FIXTURE_JOBS); job.sequence=i+1;
+            put(job.arguments+12,4,i+1);
+            configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_OK);
+            struct gpu_queue_record r=receive();
+            configASSERT(r.result==GPU_QUEUE_OK && r.sequence==i+1);
+            configASSERT(gpu_queue_close(context,3000)==GPU_QUEUE_OK && pvr_compute_queue_clients_idle(compute));
+            if (i!=9) configASSERT(gpu_queue_open(context,3000)==GPU_QUEUE_OK);
+        }
+        configASSERT(service.epoch==10 && compute->completed_jobs==10 && kick_step_count==10);
+    } else {
+        if (c==40) atomic_store(&hold_slot,1);
+        struct gpu_queue_job job=make_job(0);
+        configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_OK);
+        atomic_store(&peer_release,1);
+        TickType_t start=xTaskGetTickCount();
+        while (!atomic_load(&peer_submitted)) { configASSERT(xTaskGetTickCount()-start<1000); vTaskDelay(1); }
+        if (c==40) {
+            configASSERT(atomic_load(&compute->peer.slot_state)==PVR_COMPUTE_QUEUE_SUBMITTED);
+            atomic_store(&hold_slot,0);
+            const struct pvr_gpu_service_message wake={.client=PVR_GPU_SERVICE_CLIENTS,.ticket=PVR_GPU_SERVICE_QUEUE_WAKE};
+            configASSERT(xQueueSend(service.requests,&wake,0)==pdTRUE);
+        }
+        if ((c>=44 && c<=46) || c==49) {
+            while (!atomic_load(&compute->lost)) { configASSERT(xTaskGetTickCount()-start<2000); vTaskDelay(1); }
+            struct gpu_queue_record record;
+            configASSERT(gpu_queue_wait(context,&record,0)==GPU_QUEUE_TIMEOUT && atomic_load(&compute->client_owed) &&
+                atomic_load(&compute->peer.client_owed) && !fault_records && !isolated &&
+                atomic_load(&compute->slot_state)==PVR_COMPUTE_QUEUE_TAKEN &&
+                atomic_load(&compute->peer.slot_state)==PVR_COMPUTE_QUEUE_SUBMITTED && kick_step_count==1 &&
+                memory.phase==A733_GPU_MEMORY_PUBLISHED && service.phase==PVR_GPU_SERVICE_FAILED);
+            configASSERT(service.recovery_stop_deadline<=service.recovery_detected+PVR_GPU_SERVICE_RECOVERY_STOP_US &&
+                service.recovery_ready_deadline<=service.recovery_detected+PVR_GPU_SERVICE_RECOVERY_READY_US);
+            if (c==49) configASSERT(service.recovery_stop_deadline==service.recovery_ready_deadline);
+        } else {
+            struct gpu_queue_record record=receive();
+            configASSERT(record.sequence==1 && record.result==(c==40 ? GPU_QUEUE_OK : GPU_QUEUE_FAULT));
+            if (c!=40) {
+                configASSERT(record.detail==(c==42 ? GPU_QUEUE_RESET : GPU_QUEUE_HANG));
+                int recovered=gpu_queue_recover(context,3000);
+                if (c==47 || c==48) {
+                    configASSERT(recovered==GPU_QUEUE_FAULT && fault_records==1 && isolated &&
+                        atomic_load(&compute->peer.client_owed) && kick_step_count==1 &&
+                        atomic_load(&compute->peer.slot_state)==PVR_COMPUTE_QUEUE_SUBMITTED);
+                    goto done;
+                }
+                configASSERT(recovered==GPU_QUEUE_OK && service.recovery_count==1 && service.epoch==2 &&
+                    service.flush.phase==PVR_GPU_FLUSH_COMPLETE && get(&mmu_flushes)==2 && fault_records==1);
+            }
+            while (!atomic_load(&peer_finished)) { configASSERT(xTaskGetTickCount()-start<3000); vTaskDelay(1); }
+            unsigned serial=c==43 ? 2 : 3;
+            job=make_job(serial-1); job.sequence=2;
+            configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_OK);
+            record=receive();
+            configASSERT(record.result==GPU_QUEUE_OK && record.sequence==2 && compute->timeline_serial==serial &&
+                sums_equal(serial-1,serial) && tags_complete(fixture_jobs[serial-1].rows,fixture_jobs[serial-1].n_gpu,serial));
+            configASSERT(gpu_queue_close(context,3000)==GPU_QUEUE_OK && pvr_compute_queue_clients_idle(compute));
+            configASSERT(compute->completed_jobs==(c==40 ? 3 : c==43 ? 1 : 2));
+        }
+    }
+done:
+    metric("successful-jobs",compute->completed_jobs); metric("fault-records",fault_records);
+    metric("reset-readbacks",reset_readbacks); metric("service-epoch",service.epoch);
+    metric("timeline-serial",compute->timeline_serial); metric("kicks",kick_step_count);
+    platform_puts("PASS GPU queue case ");platform_hex(c);platform_puts("; lifecycle ownership and bounded recovery\n");
+    platform_exit(0);
 }
 static uint32_t completed;
 /* One grid job: 1 when it completed with every tag and sum. */
@@ -539,7 +708,7 @@ static void client(void *unused)
     (void)unused;
     const unsigned c = gpu_queue_case;
     uint64_t lines0 = cache_lines, translations0 = translations;
-    struct gpu_queue_context_config creation={.job_us=1000000,.program=&program,.lease_count=4};
+    struct gpu_queue_context_config creation={.job_us=(c>=41&&c<=49)||c==52?200000:1000000,.program=&program,.lease_count=4};
     for(unsigned i=0;i<4;++i)creation.lease[i].region=i;
     struct gpu_queue_lease_info leases[GPU_QUEUE_LEASES];
     struct gpu_queue_program boundary;
@@ -578,6 +747,7 @@ static void client(void *unused)
     unsigned wb, nc; pool_pages(&wb, &nc);
     metric("pool-wb-pages", wb); metric("pool-nc-pages", nc);
     metric("table-pages", session.requirements.table_pages);
+    if(c>=39) lifecycle_cases(c);
     configASSERT(wb <= 87 && nc <= 52 && session.requirements.table_pages == 24);
 #ifdef SUNSTONE_A733_OS_PERF
     if(c>=25)performance_client();
@@ -700,9 +870,8 @@ static void client(void *unused)
                          !receive_now(&r, 0));
         } else {
             configASSERT(submit(&job) == 1);
-            r = receive();
-            configASSERT(r.result == GPU_QUEUE_FAULT && r.sequence == 1 &&
-                         service.phase == PVR_GPU_SERVICE_FAILED);
+            (void)retained_failure();
+            configASSERT(service.phase==PVR_GPU_SERVICE_FAILED);
             configASSERT(close_reply().result == PVR_GPU_SERVICE_FAULT);
             configASSERT(atomic_load(&compute->slot_state) == PVR_COMPUTE_QUEUE_TAKEN &&
                          submit(&job) == -1 && !stopping &&
@@ -725,9 +894,8 @@ static void client(void *unused)
         } else {
             const struct gpu_queue_job job = make_job(0);
             configASSERT(submit(&job) == 1);
-            r = receive();
-            configASSERT(r.result == GPU_QUEUE_FAULT && r.sequence == 1 &&
-                         service.phase == PVR_GPU_SERVICE_FAILED &&
+            (void)retained_failure();
+            configASSERT(service.phase == PVR_GPU_SERVICE_FAILED &&
                          compute->phase == PVR_COMPUTE_QUEUE_FAILED && atomic_load(&compute->lost));
             metric("boundary-queue-error",compute->error);metric("boundary-service-error",service.error);
             metric("boundary-clock-samples",completion_clock_samples);metric("boundary-completes",complete_calls);
@@ -823,19 +991,19 @@ static void client(void *unused)
     const struct gpu_queue_job job = make_job(lost_job);
     uint32_t kicks_before = kick_step_count;
     configASSERT(submit(&job) == 1);
-    uint64_t at; wait_record_time(&at, &r);
-    configASSERT(r.result == GPU_QUEUE_FAULT && service.phase == PVR_GPU_SERVICE_FAILED);
+    uint64_t at=retained_failure();
+    configASSERT(service.phase==PVR_GPU_SERVICE_FAILED);
     configASSERT(compute->error == (c == 8 ? GPU_QUEUE_HANG : c == 9 ? GPU_QUEUE_RESET :
                                   c == 11 ? GPU_QUEUE_TIMELINE : GPU_QUEUE_MAINTENANCE));
     if (c == 11) configASSERT(kick_step_count == kicks_before && submit_calls == 1);
     if (c == 12) configASSERT(complete_calls == 1 && !__atomic_load_n(&fail_output_cache, __ATOMIC_ACQUIRE));
     metric("lost-after-kick-us", at - kick_us);
-    if (c == 8) configASSERT(at - kick_us >= 1000000 && at - kick_us <= 1000000 + 1000 + 2000);
+    if (c==8) configASSERT(at>=compute->client.deadline && at<=compute->deadline+3000);
     configASSERT(submit(&job) == -1);
     platform_puts("PASS GPU queue case "); platform_hex(c);
-    platform_puts(c == 8 ? "; a hang ends in FAULT after max_job_us and submit then reports the loss\n" :
-                  c == 9 ? "; a context reset ends in FAULT and submit then reports the loss\n" :
-                  c == 11 ? "; an unexpected timeline ends the next job in FAULT and submit then reports the loss\n" :
+    platform_puts(c == 8 ? "; a hang retains DMA ownership after max_job_us and submit reports the loss\n" :
+                  c == 9 ? "; a context reset retains DMA ownership and submit reports the loss\n" :
+                  c == 11 ? "; an unexpected timeline retains DMA ownership and submit reports the loss\n" :
                   "; a failed completion clean-and-invalidate ends in FAULT and submit then reports the loss\n");
     platform_exit(0);
 }
@@ -847,7 +1015,7 @@ void fixture_unused(void)
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
-    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 38);
+    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 52);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (gpu_queue_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();
@@ -882,6 +1050,11 @@ void kernel_main(void)
     config.stop = (struct pvr_gpu_stop_ops){boundary_now, read_reg, write_reg, sync_write, sync_read, isolate, NULL};
     config.enable = enable; config.context = &config; config.compute_mode = mode;
     config.irq = (struct pvr_gpu_service_irq_ops){mask, rearm};
+    if(gpu_queue_case>=41) {
+        config.recovery_begin=recovery_admit;
+        config.stop.read=recovery_read;config.stop.isolate=recovery_isolate;
+        config.enable=recovery_enable;
+    }
     configASSERT(a733_gpu_memory_init(&memory, config.firmware_buffers, config.resources));
     /* The component was bound to the reserved configuration; the service
      * copies this one, which carries the same pointer. */
@@ -896,6 +1069,10 @@ void kernel_main(void)
     TaskHandle_t a = xTaskCreateStaticAffinitySet(client, "client", 4096, NULL, 3, queue_stacks[0], &queue_tasks[0], 1);
     TaskHandle_t m = xTaskCreateStaticAffinitySet(model, "model", 4096, NULL, 6, queue_stacks[1], &queue_tasks[1], 2);
     configASSERT(a && m && pvr_gpu_service_bind(&service, 0, a));
+    if(gpu_queue_case>=40) {
+        TaskHandle_t peer=xTaskCreateStaticAffinitySet(shared_peer,"peer",4096,NULL,3,queue_stacks[2],&queue_tasks[2],1);
+        configASSERT(peer && pvr_compute_queue_client_register(compute,peer));
+    }
 #ifdef SUNSTONE_A733_OS_PERF
     TaskHandle_t thermal=xTaskCreateStaticAffinitySet(performance_owner,"thermal",4096,NULL,5,perf_stack,&perf_task,1);
     configASSERT(thermal && pvr_gpu_service_bind(&service,1,thermal));

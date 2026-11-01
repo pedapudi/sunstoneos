@@ -49,6 +49,25 @@ enum pvr_compute_queue_phase { PVR_COMPUTE_QUEUE_NEW, PVR_COMPUTE_QUEUE_BOUND,
     PVR_COMPUTE_QUEUE_PUBLISHED, PVR_COMPUTE_QUEUE_FORMAT, PVR_COMPUTE_QUEUE_READY,
     PVR_COMPUTE_QUEUE_IN_FLIGHT, PVR_COMPUTE_QUEUE_FAILED };
 
+/* The second admitted task shares the owner's trusted program and mappings.
+ * Each caller owns one submission and completion slot. */
+struct pvr_compute_queue_client {
+    QueueHandle_t completions;
+    StaticQueue_t completion_state;
+    uint8_t completion_storage[sizeof(struct gpu_queue_record)];
+    TaskHandle_t task;
+    atomic_uint slot_state, client_owed;
+    atomic_uint_fast64_t not_after;
+    struct gpu_queue_job slot;
+    atomic_uint sequence;
+};
+struct pvr_compute_queue_client_view {
+    QueueHandle_t completions;
+    atomic_uint *slot_state, *client_owed, *sequence;
+    atomic_uint_fast64_t *not_after;
+    struct gpu_queue_job *slot;
+};
+
 struct pvr_compute_queue {
     struct a733_gpu_queue *owner;
     struct pvr_mips_buffer firmware[PVR_COMPUTE_QUEUE_OBJECTS], publish[10];
@@ -63,7 +82,7 @@ struct pvr_compute_queue {
     struct gpu_queue_program create_program;
     uint64_t create_ticket, close_ticket;
     atomic_uint create_pending, create_done;
-    uint32_t close_pending;
+    atomic_uint close_pending;
     QueueHandle_t completions;
     StaticQueue_t completion_state;
     uint8_t completion_storage[sizeof(struct gpu_queue_record)];
@@ -83,7 +102,21 @@ struct pvr_compute_queue {
     /* Shared with the client. */
     atomic_uint slot_state, lost, wake;
     struct gpu_queue_job slot;
+    struct pvr_compute_queue_client peer;
+    atomic_uint application_sequence, recovering;
+    unsigned active_client, next_client;
+    uint32_t timeline_serial, timeline_previous, completed_jobs;
+    unsigned reset_pending;
 };
+
+int pvr_compute_queue_client_view(struct pvr_compute_queue *, unsigned,
+    struct pvr_compute_queue_client_view *);
+int pvr_compute_queue_clients_idle(struct pvr_compute_queue *);
+int pvr_compute_queue_client_register(struct pvr_compute_queue *, TaskHandle_t);
+int pvr_compute_queue_runtime_program(const struct gpu_queue_program *);
+/* After native reset/readback, complete OFF and memory reclaim only. Publish
+ * the failed active record, preserving the other caller's submitted slot. */
+int pvr_compute_queue_recovered(struct pvr_compute_queue *);
 
 /* Before the scheduler, at EL1, after the platform reserves payload and
  * firmware pages: bind the component and set config->compute_queue.

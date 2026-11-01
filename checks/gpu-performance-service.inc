@@ -66,7 +66,7 @@ static enum a733_perf_status perf_request(enum a733_perf_action action,unsigned 
     perf_elapsed[action]=now_us()-started;
     if(gpu_queue_case==30) {
         configASSERT(reply.result==PVR_GPU_SERVICE_FAULT && reply.phase==PVR_GPU_SERVICE_FAILED &&
-            reply.error==PVR_GPU_SERVICE_CONTROL && service.error==PVR_GPU_SERVICE_CONTROL);
+            reply.error==PVR_GPU_SERVICE_COMPUTATION && service.error==PVR_GPU_SERVICE_COMPUTATION);
         configASSERT(!service.performance.ticket && !service.performance.stage && !perf_commands);
         configASSERT(!service.clients[1].pending && !uxQueueMessagesWaiting(service.clients[1].replies));
     }
@@ -102,9 +102,9 @@ static void performance_client(void)
     }
     atomic_store(&perf_go,1);
     if(gpu_queue_case==26 || gpu_queue_case==30) {
-        struct gpu_queue_record record=receive();
-        if(gpu_queue_case==30)configASSERT(record.result==GPU_QUEUE_FAULT && record.sequence==1);
-        else configASSERT(record.result==GPU_QUEUE_OK && record.sequence==1 && sums_equal(0,1));
+        if(gpu_queue_case==30)(void)retained_failure();
+        else {struct gpu_queue_record record=receive();
+            configASSERT(record.result==GPU_QUEUE_OK && record.sequence==1 && sums_equal(0,1));}
         completed=1;
     }
     unsigned held_job_sent=0;
@@ -129,7 +129,9 @@ static void performance_client(void)
         configASSERT(device_memory_describe((void *)session.table_lease.pool,session.table_lease,&extent,&state));
         configASSERT(state!=DEVICE_MEMORY_FREE && service.firmware_fixture_owner==0 && !isolated);
         configASSERT(service.phase==PVR_GPU_SERVICE_FAILED && atomic_load(&compute->lost));
-        configASSERT(atomic_load(&compute->slot_state)==(gpu_queue_case==27?PVR_COMPUTE_QUEUE_IDLE:PVR_COMPUTE_QUEUE_TAKEN));
+        configASSERT(atomic_load(&compute->slot_state)==(gpu_queue_case==27?PVR_COMPUTE_QUEUE_IDLE:
+            gpu_queue_case==28?PVR_COMPUTE_QUEUE_SUBMITTED:PVR_COMPUTE_QUEUE_TAKEN));
+        if(gpu_queue_case!=27)configASSERT(atomic_load(&compute->client_owed) && !uxQueueMessagesWaiting(compute->completions));
         configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_FAULT);
         configASSERT(pvr_gpu_service_performance_state(&service)==(PVR_GPU_PERF_OWNER|PVR_GPU_PERF_FAILED));
         configASSERT(close_reply().result==PVR_GPU_SERVICE_FAULT);

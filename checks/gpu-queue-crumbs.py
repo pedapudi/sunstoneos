@@ -45,7 +45,7 @@ def run(command, log):
     log.write_bytes(result.stdout + result.stderr)
     assert result.returncode == 0, (command, log)
 
-types = {'pvr_compute_queue', 'pvr_gpu_service', 'pvr_cccb', 'gpu_queue_job', 'gpu_queue_binding',
+types = {'pvr_compute_queue', 'pvr_compute_queue_client', 'pvr_gpu_service', 'pvr_cccb', 'gpu_queue_job', 'gpu_queue_binding',
          'gpu_queue_lease_info', 'pvr_mips_buffer', 'pvr_fw_buffer', 'a733_gpu_queue', 'device_memory_extent'}
 for enabled in (False, True):
     directory = a.output / ('enabled' if enabled else 'disabled')
@@ -72,8 +72,12 @@ for enabled in (False, True):
                     enums[name] = die.attributes['DW_AT_const_value'].value
                 if die.tag == 'DW_TAG_structure_type' and name in types and 'DW_AT_byte_size' in die.attributes:
                     sizes[name] = die.attributes['DW_AT_byte_size'].value
-    for case in ('success', 'deadline-refused', 'fault-before-kick', 'fault-after-kick',
-                 'abort-submitted', 'abort-reserved', 'publication-failed', 'create-ready'):
+    cases = ('success', 'deadline-refused', 'fault-before-kick', 'fault-after-kick',
+             'abort-submitted', 'abort-reserved', 'publication-failed', 'create-ready')
+    for scenario in cases + tuple('peer-' + case for case in cases if case != 'create-ready'):
+        peer = scenario.startswith('peer-')
+        case = scenario[5:] if peer else scenario
+        submit_stage, complete_stage = (0x0412, 0x0413) if peer else (0x0410, 0x0411)
         u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
         u.mem_map(0x80000000, 0x200000)
         mapped = set()
@@ -103,11 +107,21 @@ for enabled in (False, True):
         setfield(q, 'pvr_compute_queue', 'phase', enums['PVR_COMPUTE_QUEUE_READY'])
         setfield(q, 'pvr_compute_queue', 'slot_state', enums['PVR_COMPUTE_QUEUE_SUBMITTED'])
         setfield(q, 'pvr_compute_queue', 'sequence', sequence - 1)
+        setfield(q, 'pvr_compute_queue', 'timeline_serial', sequence - 1)
+        setfield(q, 'pvr_compute_queue', 'application_sequence', sequence - 1)
+        setfield(q, 'pvr_compute_queue', 'completions', 0x800c0000, 8)
         setfield(q, 'pvr_compute_queue', 'lease_count', 1)
         setfield(q, 'pvr_compute_queue', 'job_us', 10000, 8)
         lease = field(q, 'pvr_compute_queue', 'lease')
         setfield(lease, 'gpu_queue_lease_info', 'bytes', 4096, 8)
-        slot = field(q, 'pvr_compute_queue', 'slot')
+        client_base = field(q, 'pvr_compute_queue', 'peer') if peer else q
+        client_type = 'pvr_compute_queue_client' if peer else 'pvr_compute_queue'
+        slot = field(client_base, client_type, 'slot')
+        setfield(client_base, client_type, 'slot_state', enums['PVR_COMPUTE_QUEUE_SUBMITTED'])
+        if peer:
+            setfield(q, 'pvr_compute_queue', 'slot_state', enums['PVR_COMPUTE_QUEUE_CLOSED'])
+            setfield(client_base, client_type, 'completions', 0x800d0000, 8)
+            setfield(client_base, client_type, 'sequence', sequence - 1)
         setfield(slot, 'gpu_queue_job', 'sequence', sequence)
         setfield(slot, 'gpu_queue_job', 'bindings', 1, 2)
         groups = field(slot, 'gpu_queue_job', 'groups')
@@ -122,7 +136,7 @@ for enabled in (False, True):
         if case == 'deadline-refused' or case == 'publication-failed':
             setfield(slot, 'gpu_queue_job', 'not_after_us', 1, 8)
         if case == 'abort-reserved':
-            setfield(q, 'pvr_compute_queue', 'slot_state', enums['PVR_COMPUTE_QUEUE_RESERVED'])
+            setfield(client_base, client_type, 'slot_state', enums['PVR_COMPUTE_QUEUE_RESERVED'])
         if case == 'create-ready':
             setfield(q, 'pvr_compute_queue', 'phase', enums['PVR_COMPUTE_QUEUE_FORMAT'])
             setfield(q, 'pvr_compute_queue', 'create_pending', 1)
@@ -142,12 +156,12 @@ for enabled in (False, True):
                 u.mem_write(args[0], bytes([args[1] & 255]) * args[2])
                 ret(args[0])
             elif name == 'pvr_gpu_service_now':
-                assert crumbs == ([(0x0410, sequence)] if enabled else [])
+                assert crumbs == ([(submit_stage, sequence)] if enabled else [])
                 put(args[1], 100, 8)
                 ret(case != 'fault-before-kick')
             elif name == 'pvr_cccb_begin':
                 state['ring_begin'] += 1
-                assert crumbs == ([(0x0410, sequence)] if enabled else [])
+                assert crumbs == ([(submit_stage, sequence)] if enabled else [])
                 setfield(client, 'pvr_cccb', 'phase', enums['PVR_CCCB_WAIT'])
                 ret(1)
             elif name == 'pvr_cccb_poll':
@@ -155,8 +169,9 @@ for enabled in (False, True):
                 put(timeline, sequence)
                 ret(enums['PVR_CCCB_OK'])
             elif name == 'xQueueGenericSend':
+                assert args[0] == (0x800d0000 if peer else 0x800c0000), (scenario, 'wrong completion queue')
                 record = struct.unpack('<IHHII', bytes(u.mem_read(args[1], 16)))
-                assert crumbs == ([(0x0410, sequence), (0x0411, sequence)] if enabled and case != 'create-ready' else [])
+                assert crumbs == ([(submit_stage, sequence), (complete_stage, sequence)] if enabled and case != 'create-ready' else [])
                 assert get(field(q, 'pvr_compute_queue', 'crumb_pending')) == 0
                 state['posts'].append(record)
                 if case == 'publication-failed' and not state['publication_failed']:
@@ -193,14 +208,22 @@ for enabled in (False, True):
                 assert not state['posts']
                 invoke('pvr_compute_queue_abort')
         invoke('pvr_compute_queue_abort')  # Repeat abort never repeats a boundary.
-        expected = [] if case in ('abort-reserved', 'create-ready') else [(0x0410, sequence), (0x0411, sequence)]
+        if case in ('abort-reserved', 'abort-submitted', 'create-ready'):
+            expected = []
+        elif case in ('fault-before-kick', 'fault-after-kick'):
+            expected = [(submit_stage, sequence)]
+        else:
+            expected = [(submit_stage, sequence), (complete_stage, sequence)]
         assert crumbs == (expected if enabled else []), (case, enabled, crumbs)
-        assert get(field(q, 'pvr_compute_queue', 'crumb_pending')) == 0
-        if case not in ('abort-reserved', 'create-ready'):
-            expected_result = enums['GPU_QUEUE_OK'] if case == 'success' else enums['GPU_QUEUE_REFUSED'] if case == 'deadline-refused' else enums['GPU_QUEUE_FAULT']
+        assert get(field(q, 'pvr_compute_queue', 'crumb_pending')) == int(
+            case in ('fault-before-kick', 'fault-after-kick'))
+        if case in ('success', 'deadline-refused', 'publication-failed'):
+            expected_result = enums['GPU_QUEUE_OK'] if case == 'success' else enums['GPU_QUEUE_REFUSED']
             assert state['posts'][-1][:2] == (sequence, expected_result), (case, state)
-        rows.append({'crumbs_enabled': enabled, 'case': case, 'crumbs': crumbs, **state, 'passed': True})
+        elif case != 'create-ready':
+            assert not state['posts'], (case, 'unisolated abort published a record', state)
+        rows.append({'crumbs_enabled': enabled, 'case': scenario, 'crumbs': crumbs, **state, 'passed': True})
 save(a.output / 'results.json', {'cases': rows, 'source_sha256': {
     name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     for name in ('drivers/gpu/pvr_compute_queue.c', 'include/pvr_compute_queue.h', 'include/sunstone_crumb.h')}})
-print('PASS native GPU job breadcrumbs: %d cases; enabled two SVCs per claimed job, disabled zero' % len(rows))
+print('PASS native GPU job breadcrumbs: %d cases; terminal markers withheld on unisolated faults' % len(rows))
