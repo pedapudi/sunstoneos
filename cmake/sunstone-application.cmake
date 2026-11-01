@@ -13,14 +13,14 @@ function(add_sunstone_application name)
   get_filename_component(manifest "${APP_MANIFEST}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
   set(output "${CMAKE_CURRENT_BINARY_DIR}/sunstone-applications/${name}")
   file(MAKE_DIRECTORY "${output}")
-  configure_file("${manifest}" "${output}/manifest.json" @ONLY)
+  configure_file("${manifest}" "${output}/manifest-input.json" @ONLY)
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${SUNSTONE_SOURCE_ROOT}/tools/sunstone-manifest.py"
-    emit --manifest "${output}/manifest.json" --output "${output}" COMMAND_ERROR_IS_FATAL ANY)
+    emit --manifest "${output}/manifest-input.json" --output "${output}" COMMAND_ERROR_IS_FATAL ANY)
   string(REPLACE "-" "_" cname "${name}")
   add_library(${name} OBJECT EXCLUDE_FROM_ALL ${APP_SOURCES})
   target_link_libraries(${name} PRIVATE sunstone-os-settings ${APP_LIBRARIES})
   target_include_directories(${name} PRIVATE "${output}" ${APP_INCLUDE_DIRECTORIES})
-  set_target_properties(${name} PROPERTIES SUNSTONE_MANIFEST "${output}/manifest.json"
+  set_target_properties(${name} PROPERTIES SUNSTONE_MANIFEST "${output}/manifest-input.json"
     SUNSTONE_MANIFEST_DIRECTORY "${output}" SUNSTONE_APPLICATION_NAME "${name}"
     SUNSTONE_APPLICATION_LIBRARIES "${APP_LIBRARIES}"
     SUNSTONE_APPLICATION_INPUTS "${manifest};${APP_INPUTS}")
