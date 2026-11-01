@@ -293,7 +293,11 @@ def run(args):
         journal()
         record['dirty'] = True
         journal()
-        base.verify_dram(tx, args.evidence)
+        try:
+            base.verify_dram(tx, args.evidence, record, journal)
+        except base.DramNotReady:
+            record['dirty'] = False
+            raise
         record['dirty'] = False
         journal()
         return run_once(tx, launch, ready, args.bundle.resolve(), prepared, args.evidence, record, journal)

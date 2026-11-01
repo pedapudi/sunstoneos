@@ -16,6 +16,9 @@ class WatchdogReset(RuntimeError):
 
 def retain_failure(base,record,save,quarantine,error,hold=None):
  hold=base.hold_ownership if hold is None else hold
+ if getattr(base,'clean_dram_refusal',lambda r,e:False)(record,error):
+  base.stop_after_failure(record,save,quarantine,error,hold=hold)
+  return
  retained=False
  def hold_once():
   nonlocal retained

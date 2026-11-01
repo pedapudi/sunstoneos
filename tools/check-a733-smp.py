@@ -91,6 +91,15 @@ output_directory = unique_directory
 artifact_directory = new_directory
 
 
+class DramNotReady(ValueError):
+    """The complete test word differed and its original bytes were restored."""
+
+
+def clean_dram_refusal(record, error):
+    return isinstance(error, DramNotReady) and not any(record.get(key) for key in
+        ('dirty', 'dram_probe_dirty', 'transport_failed', 'launch_attempted'))
+
+
 def verify_dram(transaction, evidence, record=None, save=lambda: None):
     """Test eight bytes in the reserved result page and restore them before preload.
 
@@ -100,25 +109,37 @@ def verify_dram(transaction, evidence, record=None, save=lambda: None):
     if record is None: record = {}
     address = '0x42000000'
     before = evidence / 'dram-before.bin'
+    record['dram_probe_dirty'] = True
+    try:
+        save()
+    except BaseException:
+        # No request has started, so the failed initial journal cannot hide a write.
+        record['dram_probe_dirty'] = False
+        raise
     transaction('read', address, 8, before)
     original = before.read_bytes()
     require(len(original) == 8, 'Incomplete DRAM test backup.')
     sync_file(before)
     # Complement every saved bit so unchanged or stale reads cannot pass.
     pattern = bytes(value ^ 255 for value in original)
-    record['dram_probe_dirty'] = True
-    save()
     with sealed_source(pattern) as (source, descriptor):
         tested = evidence / 'dram-tested.bin'
         transaction('write', address, source, 'read', address, 8, tested, pass_fds=(descriptor,))
-    matches = tested.read_bytes() == pattern
+    observed = tested.read_bytes()
+    require(len(observed) == 8, 'Incomplete DRAM test readback; state is uncertain.')
+    matches = observed == pattern
     with sealed_source(original) as (source, descriptor):
         restored = evidence / 'dram-restored.bin'
         transaction('write', address, source, 'read', address, 8, restored, pass_fds=(descriptor,))
     require(restored.read_bytes() == original, 'DRAM test restoration differs; launch refused.')
     record['dram_probe_dirty'] = False
-    save()
-    require(matches, 'DRAM write/read comparison differs; launch refused.')
+    try:
+        save()
+    except BaseException:
+        record['dram_probe_dirty'] = True
+        raise
+    if not matches:
+        raise DramNotReady('DRAM write/read comparison differs; launch refused.')
 
 
 def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -388,6 +409,11 @@ def hold_ownership():
 
 
 def stop_after_failure(record, save, quarantine, error, hold=hold_ownership):
+    if clean_dram_refusal(record, error):
+        record.update(failure=str(error), prelaunch_refusal='dram-not-ready',
+                      ownership_release_permitted=True)
+        save()
+        return
     # Evidence or quarantine failure must not release ownership of a live image.
     try:
         record['failure'] = str(error)

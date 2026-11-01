@@ -29,6 +29,8 @@ Physical operations require the selected port’s `board_lock`, USB guard, curre
 
 Native session/build bindings, memory and DMA ownership, cache publication, shared clock/power coordination, supported clock/voltage limits, native thermal bounds and copied-result integrity remain required. Returning development runs require the host-armed watchdog and RTC breadcrumbs. Existing failure-stop and restoration handlers remain; process cleanup cannot establish physical recovery.
 
+A complete DRAM comparison mismatch with verified restoration and a durable journal refuses launch without quarantining the ROM instance. DDR initialization may follow that refusal. Incomplete reads, transport loss, failed restoration and failed restoration journaling retain quarantine and ownership.
+
 Storage writes retain the backup-first boot update with slot fallback, backed-up microSD data-partition confinement and the user-designated scratch-NVMe restriction. Removing review or queue records does not expand any write grant or target extent.
 
 ## Original grouped inventory

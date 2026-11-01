@@ -87,7 +87,11 @@ def run(a):
             words=transaction('readl','0x20','readl','0x24','readl','0x28','readl','0x3c','readl','0x40')
             require([int(v,16) for v in words.split()]==[0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d],'Forced-FEL ROM destination changed.')
             dirty=True;journal()
-            base.verify_dram(transaction,a.evidence)
+            try:
+                base.verify_dram(transaction,a.evidence,record,journal)
+            except base.DramNotReady:
+                dirty=False
+                raise
             dirty=False
             backups={}
             for name,address,size in [('code',0x41000000,len(frozen['probe.bin'])),('report',0x42000000,256)]:
