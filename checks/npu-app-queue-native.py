@@ -38,9 +38,19 @@ def sha(path):
 def build_image(build, output):
     cache = (build / 'CMakeCache.txt').read_text()
     old = Path(re.search(r'^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$', cache, re.M)[1])
-    cc = re.search(r'^CMAKE_C_COMPILER:(?:STRING|FILEPATH)=(.*)$', cache, re.M)[1]
+    compiler = re.search(r'^CMAKE_C_COMPILER:(?:STRING|FILEPATH|UNINITIALIZED|INTERNAL)=(.*)$', cache, re.M)
+    compiler_file = None
+    if compiler:
+        cc = compiler[1]
+    else:
+        # A toolchain may set a normal variable rather than a cache entry.
+        compiler_file = next((build / 'CMakeFiles').glob('*/CMakeCCompiler.cmake'))
+        cc = re.search(r'set\(CMAKE_C_COMPILER "([^"]+)"\)', compiler_file.read_text())[1]
     link = shlex.split((build / 'CMakeFiles/sunstone-a733-os.dir/link.txt').read_text())
     inputs, commands = {}, []
+    inputs[str(Path(cc).resolve())] = sha(Path(cc).resolve())
+    if compiler_file is not None:
+        inputs[str(compiler_file)] = sha(compiler_file)
     for token in link:
         token = token.removeprefix('-Wl,-T,').removeprefix('--ld-path=')
         path = Path(token) if Path(token).is_absolute() else build / token
