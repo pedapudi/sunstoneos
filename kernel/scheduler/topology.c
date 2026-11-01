@@ -16,6 +16,20 @@ int ss_cpu_topology_validate(const struct ss_cpu_topology *t)
     for (size_t i=0;i<t->domain_count;i++) {
         uint64_t m=t->domains[i].cpus;
         if (!m || (m & ~all) || (m & covered)) return SS_TOPOLOGY_INVALID;
+        const struct ss_cpu_domain *d=&t->domains[i];
+        if(d->energy_count>SS_ENERGY_POINT_MAX ||
+            (!!d->energy != !!d->energy_count)) return SS_TOPOLOGY_INVALID;
+        if(d->energy_count && (!t->energy_source || !t->energy_source[0] ||
+            !t->opp_frequency_hz || d->opp_table_id==SS_ID_NONE)) return SS_TOPOLOGY_INVALID;
+        for(size_t k=0;k<d->energy_count;k++) {
+            const struct ss_cpu_energy_point *e=&d->energy[k];
+            if(!e->frequency_hz || !e->power_uw ||
+                t->opp_frequency_hz(d->opp_table_id,e->opp_id)!=e->frequency_hz)
+                return SS_TOPOLOGY_INVALID;
+            for(size_t j=0;j<k;j++)
+                if(e->opp_id==d->energy[j].opp_id || e->frequency_hz==d->energy[j].frequency_hz)
+                    return SS_TOPOLOGY_INVALID;
+        }
         covered |= m;
     }
     if (covered != all) return SS_TOPOLOGY_INVALID;
@@ -40,7 +54,7 @@ int ss_cpu_topology_validate(const struct ss_cpu_topology *t)
             (c->capacity_effective && (!c->capacity_max || c->capacity_effective>c->capacity_max)) ||
             ((c->flags & 3u) && (!t->calibration_epoch || !t->calibration_source || !t->capacity_workload)) ||
             ((c->flags & SS_CPU_CAPACITY_EFFECTIVE_VALID) && !t->operating_epoch) ||
-            ((c->flags & SS_CPU_ENERGY_VALID) && !t->energy_source)) return SS_TOPOLOGY_INVALID;
+            (!!(c->flags & SS_CPU_ENERGY_VALID) != !!t->domains[c->performance_domain].energy_count)) return SS_TOPOLOGY_INVALID;
         const uint16_t ids[]={c->l1i,c->l1d,c->l2,c->l3};
         for (unsigned k=0;k<4;k++) if(ids[k]!=SS_ID_NONE) {
             if(ids[k]>=t->cache_count) return SS_TOPOLOGY_INVALID;

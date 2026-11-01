@@ -42,6 +42,43 @@ static void conservation(struct ss_cpu_topology *t,uint64_t units,uint32_t quant
     }
     assert(end==units);
 }
+static uint64_t fixture_opp(unsigned table,unsigned row)
+{
+    return table==0 && row<2 ? UINT64_C(1000000000)*(row+1) : 0;
+}
+static void energy_fixtures(void)
+{
+    struct ss_cpu_energy_point costs[]={{1000000000,100000,0},{2000000000,300000,1}};
+    struct ss_cpu_topology t=fixture(4,1,0);
+    t.opp_frequency_hz=fixture_opp; t.energy_source="synthetic measured power fixture";
+    domains[0].energy=costs; domains[0].energy_count=2;
+    for(unsigned i=0;i<4;i++) cpus[i].flags|=SS_CPU_ENERGY_VALID;
+    assert(ss_cpu_topology_validate(&t)==0);
+    cpus[1].flags&=~SS_CPU_ENERGY_VALID;
+    assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+    cpus[1].flags|=SS_CPU_ENERGY_VALID;
+    domains[0].energy=0;assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+    domains[0].energy=costs;domains[0].energy_count=0;
+    assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+    domains[0].energy_count=SS_ENERGY_POINT_MAX+1;
+    assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+    domains[0].energy_count=2;t.energy_source=0;
+    assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+    t.energy_source="synthetic measured power fixture";t.opp_frequency_hz=0;
+    assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+    t.opp_frequency_hz=fixture_opp;costs[1]=costs[0];
+    assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+    costs[1]=(struct ss_cpu_energy_point){2000000000,300000,2};
+    assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+    costs[1].opp_id=1;costs[1].frequency_hz=0;
+    assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+    costs[1].frequency_hz=2000000001;
+    assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+    costs[1].frequency_hz=2000000000;costs[1].power_uw=0;
+    assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+    costs[1].power_uw=300000;domains[0].opp_table_id=1;
+    assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+}
 int main(void)
 {
     const struct ss_cpu_topology *a=a733_cpu_topology();
@@ -50,8 +87,11 @@ int main(void)
     unsigned cpu=99,n=0;
     for(unsigned i=0;i<8;i++) {
         assert(ss_cpu_from_mpidr(a,(UINT64_C(1)<<31)|((uint64_t)i<<8),&cpu)==0 && cpu==i);
-        assert(a->cpus[i].capacity_max==0);
+        assert(a->cpus[i].capacity_max==0 && !(a->cpus[i].flags & SS_CPU_ENERGY_VALID));
     }
+    assert(!a->domains[0].energy && !a->domains[0].energy_count);
+    assert(a->opp_frequency_hz(A733_CPU_LITTLE,0)==416000000);
+    assert(a->opp_frequency_hz(A733_CPU_LITTLE,999)==0);
     assert(ss_cpu_from_mpidr(a,1,&cpu)==SS_TOPOLOGY_INVALID);
     assert(a733_cpu_topology_opps(0,&n)==a733_cpu_clock_opps(A733_CPU_LITTLE,&cpu) && n==cpu);
     assert(a733_cpu_topology_opps(2,&n)==a733_cpu_clock_opps(A733_CPU_DSU,&cpu));
@@ -113,5 +153,6 @@ int main(void)
     assert(ss_cpu_work_split(&t,100,1,1,out,64,&count)==SS_TOPOLOGY_INVALID);
     assert(ss_cpu_work_split(&t,100,0,1,out,64,&count)==SS_TOPOLOGY_INVALID);
     assert(ss_cpu_work_split(&t,100,2,0,out,64,&count)==SS_TOPOLOGY_INVALID);
+    energy_fixtures();
     puts("scheduler topology: identity, domains, caches, unknown capacity, SMT and integer ranges passed");
 }

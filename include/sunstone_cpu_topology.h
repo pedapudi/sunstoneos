@@ -7,6 +7,7 @@
 #define SS_CPU_MAX 64u
 #define SS_CACHE_MAX (SS_CPU_MAX * 3u + 1u)
 #define SS_DOMAIN_MAX SS_CPU_MAX
+#define SS_ENERGY_POINT_MAX 256u
 #define SS_ID_NONE UINT16_MAX
 #define SS_MPIDR_AFFINITY_MASK UINT64_C(0xff00ffffff)
 enum ss_topology_status { SS_TOPOLOGY_OK, SS_TOPOLOGY_INVALID,
@@ -28,9 +29,15 @@ struct ss_cpu_cache {
 };
 /* OPP IDs refer to the platform clock owner's tables. Energy remains unknown
  * until a record supplies measured power and its provenance. */
+struct ss_cpu_energy_point {
+    uint64_t frequency_hz;
+    uint32_t power_uw, opp_id;
+};
 struct ss_cpu_domain {
     uint64_t cpus;
     uint16_t clock_id, rail_id, opp_table_id;
+    const struct ss_cpu_energy_point *energy;
+    size_t energy_count;
 };
 struct ss_cpu_policy {
     uint64_t admitted, reserved, service, application, irq;
@@ -39,6 +46,9 @@ struct ss_cpu_topology {
     uint32_t version;
     uint64_t calibration_epoch, operating_epoch;
     const char *calibration_source, *capacity_workload, *energy_source;
+    /* Pure lookup in the referenced clock owner table. Returns zero for an
+     * unsupported table/row; energy points must match its frequency exactly. */
+    uint64_t (*opp_frequency_hz)(unsigned table_id, unsigned opp_id);
     const struct ss_cpu_info *cpus;
     const struct ss_cpu_cache *caches;
     const struct ss_cpu_domain *domains;

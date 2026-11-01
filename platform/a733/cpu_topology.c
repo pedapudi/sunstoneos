@@ -26,11 +26,17 @@ static const struct ss_cpu_info cpus[]={
 /* CPU-L and DSU share DCDC5; DSU has an OPP-table link on the shared L3,
  * rather than a CPU performance domain with duplicate members. */
 static const struct ss_cpu_domain domains[]={
-    {0x3f,A733_CPU_LITTLE,A733_RAIL_DCDC5,A733_CPU_LITTLE},
-    {0xc0,A733_CPU_BIG,A733_RAIL_DCDC3,A733_CPU_BIG}
+    {.cpus=0x3f,.clock_id=A733_CPU_LITTLE,.rail_id=A733_RAIL_DCDC5,.opp_table_id=A733_CPU_LITTLE},
+    {.cpus=0xc0,.clock_id=A733_CPU_BIG,.rail_id=A733_RAIL_DCDC3,.opp_table_id=A733_CPU_BIG}
 };
+static uint64_t opp_frequency_hz(unsigned table,unsigned row)
+{
+    unsigned count=0;
+    const struct a733_cpu_opp *opps=a733_cpu_topology_opps(table,&count);
+    return opps && row<count ? (uint64_t)opps[row].mhz*1000000 : 0;
+}
 static const struct ss_cpu_topology snapshot={
-    .version=SS_TOPOLOGY_VERSION,.cpus=cpus,.caches=caches,.domains=domains,
+    .version=SS_TOPOLOGY_VERSION,.opp_frequency_hz=opp_frequency_hz,.cpus=cpus,.caches=caches,.domains=domains,
     .cpu_count=8,.cache_count=25,.domain_count=2,
     .policy=&sunstone_orangepi_zero3w_cpu_policy
 };
