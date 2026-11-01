@@ -47,3 +47,7 @@ else()
   add_sunstone_image(sunstone-a733-os LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION ${SUNSTONE_APPLICATION})
 endif()
+
+if(SUNSTONE_A733_OS_NPU)
+  target_sources(sunstone-a733-os-core PRIVATE "${SUNSTONE_SOURCE_ROOT}/runtime/npu_app.c")
+endif()

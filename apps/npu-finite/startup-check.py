@@ -111,7 +111,14 @@ for variant in selected:
    if variant=='state-lost-before-publication':put(app_result+ar['jobs'],0 if infer else 1,4)
    if variant=='late-publication':state['ticks']=deadline
   word=get(at,4);kind=word&0xffffffe0;reg=word&31
-  values={0xd5384240:state['el'],0xd53800a0:0,0xd5381000:state['sctlr'],0xd53e5200:0x17<<26,0xd53be020:state['ticks']}
+  if word==0xd69f03e0 and state.get('crumb_return'):
+   u.reg_write(UC_ARM64_REG_PC,state.pop('crumb_return'));return
+  if word&0xffe0001f==0xd4000001:
+   immediate=(word>>5)&0xffff
+   assert immediate in (0x5c0d,0x5c0e),hex(immediate)
+   state['crumb_return']=at+4;state['crumb_svc']=immediate
+   u.reg_write(UC_ARM64_REG_PC,im.address('npu_finite_svc'));return
+  values={0xd5385200:0x15<<26|state.get('crumb_svc',0),0xd53e4020:0,0xd53e6000:0,0xd5384240:state['el'],0xd53800a0:0,0xd5381000:state['sctlr'],0xd53e5200:0x17<<26,0xd53be020:state['ticks']}
   if kind in values:
    if reg<31:u.reg_write(UC_ARM64_REG_X0+reg,values[kind])
    u.reg_write(UC_ARM64_REG_PC,at+4);return

@@ -45,11 +45,13 @@ have host evidence under `concurrent-gpu-npu-1026/`,
 The [board runner](../board-runner.md) owns fresh-FEL preparation, frozen queue
 submissions, returning CPU/GPU/probe capture and bounded recovery. Its host
 checks and real offline preparation are under
-`~/.cache/sunstoneos/build/board-runner-1031/`; physical runner qualification
-remains pending. [Native probes](../board-probe-contract.md) share watchdog,
+`~/.cache/sunstoneos/build/board-runner-1031/`; broader physical runner qualification remains pending. The finite NPU adapter
+prepares native sessions and validates returning interrupt receipts; the shared
+daemon must include it before NPU submissions. [Native probes](../board-probe-contract.md) share watchdog,
 breadcrumb and result contracts; static secondary-OFF and peripheral retirement
-still need physical evidence. Current standalone NPU images reject an armed
-watchdog and have no supported returning runner path.
+still need physical evidence. Finite NPU images admit the armed watchdog and have qualified startup,
+inference and two-model results; [NPU status](npu.md) identifies the exact images
+and pending lifecycle operations.
 
 First-failure records retain site, caller and inputs through watchdog reset;
 `apps/board/main.c:board_fail_at` and `apps/os/application.c:ss_fail` record the

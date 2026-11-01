@@ -1,8 +1,22 @@
-The NPU finite image combines the existing supervised single-core convolution with an application-local returning monitor. It retains the original model, PMIC/PLL/startup services, session validator and private memory constructor. The two jobs still copy, compare and reap their outputs before terminal CLOSE, local gate/reset shutdown and device-task quiescence. The host compiler and compiled model artifacts remain pinned external dependencies.
+The NPU finite images combine supervised single-core execution with a local returning monitor and host-armed WDT0. The startup-only profile executes the controller bootstrap, then closes and stops. The single-inference profile also copies, compares and reaps one numerical output. The runtime profile loads and runs the two networks named by `runtime-models.json`. Each profile retains the existing PMIC, PLL, startup, session and private-memory services. The host compiler and model artifacts remain pinned external dependencies.
+
+Build the three guarded profiles and their hash/report/stage documentation with:
+
+```sh
+~/.cache/sunstoneos/venv/bin/python3 apps/npu-finite/build-images.py --build ~/.cache/sunstoneos/build/npu-wdt-1031
+```
+
+Each `images/<name>/README.md` gives the coordinator's DRAM initialization and
+`tools/dev-run.py npu` command. The generated native session template supplies
+PMIC and pin configuration; development preparation binds fresh identities and
+live fabric clocks. [WATCHDOG.md](WATCHDOG.md) specifies the reset contract and
+distinguishes source inference from active-NPU physical recovery evidence.
+The linked policy/vector/return checks, `crumb-check.py`, and `images-check.py`
+run without board access. Run the latter with `--images BUILD/images`.
 
 The selected FreeRTOS SRE port initializes tasks at EL1t, with SP_EL0 as the stack selector. This image does not link the cached SMP SVC119 exit handler. The task-profile check executes the actual stack constructor and observes saved PSTATE 4. The privileged return path follows the selected SRE architecture.
 
-Before providers start, the EL3 contract check copies the uploaded session into private retained memory and authenticates that copy; the unchanged monitor then seals it. The application-local monitor includes that implementation and replaces only its terminal exception entry. The retained session, its admission flags and the runtime contract survive EL1 BSS clearing. The additional return receipt occupies the same separately retained section.
+Before providers start, the EL3 contract check copies the uploaded session into private retained memory and authenticates that copy. The finite build adapts shared monitor admission for armed WDT0 and records first faults through its own EL1 and EL3 vectors. The retained session, its admission flags and the runtime contract survive EL1 BSS clearing. The additional return receipt occupies the same separately retained section.
 
 After successful task quiescence, normal exit checks the numerical result and publishes a receipt bound to epoch, generation, lease, status, deadline and exact linked memory interval. It stops the EL1 timers and cleans every 64-byte line from `__npu_clean_start` through `__device_pool_end`. The interval includes retained metadata, provider state, stacks, command buffers and NPU tables. Page-boundary deadline checks bound this sweep.
 

@@ -7,6 +7,7 @@ applications. No subsystem has complete physical qualification.
 of application use. Update current state in the subsystem files below.
 
 <a id="board-state-and-recovery"></a>
+<a id="coordinator-launch-and-capture"></a>
 
 The coordinator establishes live identity, permissions, per-port lock and failed
 instance state before queue operations. Saved USB descriptors do not prove ROM
@@ -23,7 +24,7 @@ in their subsystem file; host evidence establishes no physical qualification.
 - [Memory/DMA](status/memory-dma.md): implemented; DRAM restoration passes on both boards, while full-map memory and device DMA qualification remain open.
 - [Power/thermal](status/power-thermal.md): implemented; finite observations and rail normalization pass, while transitions and protection remain unqualified.
 - [GPU](status/gpu.md): implemented; standalone exact sums pass, while current service integration, recognition and recovery remain open.
-- [NPU](status/npu.md): implemented; finite inference and current constructor checkpoints pass, while current scheduled startup and restart remain unqualified.
+- [NPU](status/npu.md): implemented; finite startup, inference and two-model runtime qualify, while repeated lifecycle, SDK access and domain restart remain open.
 - [USB](status/usb.md): implemented; returning USB0 exchange passes, while host source authority and peripheral qualification remain blocked.
 - [Storage](status/storage.md): implemented; scoped PIO/DMA reads pass, while SDR104, writes and autonomous card boot remain unqualified.
 - [Radio](status/radio.md): implemented; fitted wiring, top-rate SDIO, returning shutdown and physical interoperability remain blocked.

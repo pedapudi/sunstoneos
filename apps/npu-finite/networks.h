@@ -10,7 +10,11 @@ struct npu_finite_network {
     const unsigned char *model,*input,*reference;
     size_t model_bytes,input_bytes,reference_bytes;
 };
+#ifdef SUNSTONE_NPU_MODEL_SWITCH
+#define NPU_FINITE_NETWORKS 3u
+#else
 #define NPU_FINITE_NETWORKS 2u
+#endif
 #define NPU_FINITE_OUTPUT_BYTES 4096u
 extern const struct npu_finite_network npu_finite_networks[NPU_FINITE_NETWORKS];
 #endif

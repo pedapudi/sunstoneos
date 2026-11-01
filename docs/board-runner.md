@@ -159,12 +159,11 @@ storage grants or execute storage-write sessions, even with that flag. Those
 operations remain in the existing backup-first update path and must meet
 [goal section 4](goal.md). Read-only execution grants no card or NVMe writes.
 
-`--kind npu` admits only an image with the returning watchdog contract and the
-linked OS NPU service, using its typed service session. The current checkout's
-standalone NPU images reject an armed watchdog, and its CPU-return build excludes
-NPU. Such images are refused before device access. NPU execution remains
-unsupported until a compatible native watchdog and return path is supplied and
-checked; session serialization alone does not establish that support.
+`--kind npu` supports two returning image formats. Generic OS images require
+both the returning watchdog contract and the linked OS NPU service, and use
+typed service sessions. Finite native NPU diagnostics use the preparation and
+retirement rules described below. Neither format's serialization establishes
+physical qualification.
 
 ## Qualify on port 3-1
 
@@ -201,3 +200,24 @@ processor operating points. Its expected outcome is `watchdog-reset`, with
 `quarantined=false`. Its CLI exit code is 1 because a watchdog reset is a failed
 image run. It tests recovery without repeating a failed workload. Stop after
 any unexpected transport failure or no-return and preserve the result path.
+
+Finite NPU diagnostics use `--kind npu`. Supply a `--template` directory with
+`session.bin`, the reviewed 456-byte native NPU session template. The matching
+`manifest.json` may be in that directory or beside the ELF. Submission copies
+both files into the queue entry and hashes the finite NPU host dependencies.
+`--host-tree` selects the finite NPU source tree when it differs from the runner.
+The runner checks the image, manifest and template before opening the board.
+
+The finite adapter initializes DDR through the shared queue path, captures the
+NPU system-register set and rebinds the native session through the existing NPU
+preparation helper. It does not run the CPU rail helper. Before uploads it saves
+the complete 18 MiB NPU DRAM reservation. Immediately before watchdog arming it
+checks the reviewed ROM instructions and native NPU entry state again.
+
+After normal return, the interrupt-profile parser validates the monitor,
+platform log and cleanup receipt before restoring the saved DRAM. Numerical
+mismatch still permits restoration after validated retirement and remains a
+failed result. An invalid receipt or incomplete restoration quarantines the
+instance. The new ROM retains ownership of SRAM; the adapter never restores
+old SRAM over it. Watchdog recovery follows the shared runner path and does
+not restore potentially invalid DRAM. These host paths do not qualify hardware.

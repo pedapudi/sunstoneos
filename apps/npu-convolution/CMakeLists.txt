@@ -118,7 +118,7 @@ list(APPEND npu_sources ${npu_units}
   "${TINYUSB_DIR}/src/device/usbd.c" "${TINYUSB_DIR}/src/class/vendor/vendor_device.c"
   "${npu_build}/tinyusb/dcd_sunxi_musb.c")
 set(npu_inputs ${a733_identity_inputs} ${npu_sources}
-  "${a733_root}/apps/npu-convolution/artifacts.py" "${a733_root}/tools/npu-models.json" "${a733_root}/drivers/npu/npu_models.inc" "${A733_NPU_MODEL}" "${A733_NPU_INPUT}" "${A733_NPU_REFERENCE}"
+  "${a733_root}/apps/npu-convolution/artifacts.py" "${a733_root}/tools/npu-models.json" "${a733_root}/drivers/npu/npu_models.inc" "${a733_root}/drivers/npu/catalogue.py" "${npu_build}/npu_models.inc" "${A733_NPU_MODEL}" "${A733_NPU_INPUT}" "${A733_NPU_REFERENCE}"
   "${CMAKE_CURRENT_LIST_FILE}" "${a733_root}/apps/npu-convolution/continue.patch"
   "${a733_root}/patches/freertos-smp-privileged.patch")
 file(GLOB_RECURSE npu_usb_headers "${TINYUSB_DIR}/src/*.h")
@@ -164,7 +164,8 @@ foreach(property INCLUDE_DIRECTORIES COMPILE_OPTIONS LINK_OPTIONS LINK_DEPENDS)
 endforeach()
 target_include_directories(${npu_target} PRIVATE "${a733_root}/platform/a733-smp-observe"
   "${a733_root}/drivers/usb" "${TINYUSB_DIR}/src")
-target_compile_definitions(${npu_target} PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
+target_compile_definitions(${npu_target} PRIVATE
+  SUNSTONE_NPU_MODEL_TABLE="${npu_build}/npu_models.inc" SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
   SUNSTONE_A733_USB=1 A733_SMP_RESULT_MAGIC=0x415337334e505231ULL
   INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1
   INCLUDE_xSemaphoreGetMutexHolder=1)
