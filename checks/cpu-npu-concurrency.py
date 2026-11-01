@@ -52,6 +52,9 @@ if not a.disabled_only:
       run([str(executable),'actual',str(payload)])
       result=host.decode(payload.read_bytes(),mode=mode,model_index=0 if mode else None,reference=b'\0\xff' if mode else None)
       results.append(dict(case=label,passed=True,receipt=result))
+      failed=run([str(executable),'throttle-after-ready',str(a.out/(label+'-throttle.bin'))],2)
+      assert 'FIRST_FAULT detail=0000099' in failed.stderr,failed.stderr
+      results.append(dict(case=label+'-throttle-after-ready-refused',passed=True,retained=failed.stderr.strip()))
       if mode:
           for fault in ['early-complete','changed-ticket','changed-token','frozen-cpu1','wrong-core']:
               failed=run([str(executable),fault,str(a.out/(fault+'.bin'))],2)
