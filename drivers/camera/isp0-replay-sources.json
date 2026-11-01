@@ -1,0 +1,48 @@
+{
+  "repository": "https://github.com/orangepi-xunlong/linux-orangepi",
+  "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+  "license": "GPL-2.0-only; existing adapted driver notices are retained",
+  "execution": "FreeRTOS CPU and ISP/TOP/VIPP/DMA hardware; vendor Linux is a development reference",
+  "files": [
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/camera/bsp/drivers/vin/top_reg.c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/top_reg.c",
+      "sha256": "810e2b59b85096e1a25ec29bea636a9c7b93b727033707f8b3e43d57e963511b",
+      "symbol": "csic_ptn_generation_en",
+      "behavior": "Zero cycles, enable and START reissue one DDR input without reset."
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/camera/bsp/drivers/vin/vin-isp/sunxi_isp.c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-isp/sunxi_isp.c",
+      "sha256": "83bcba85e5e842e9be61ee071007cc8e6456b21a2a75060c905f1438ee194b18",
+      "symbol": "ISP600 PARA_SAVE/PARA_LOAD interrupt handling",
+      "behavior": "Clear completed flags, refresh load address and table flags, set parameter READY, then restart recorded input."
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/camera/bsp/drivers/vin/vin-isp/isp600/isp600_reg_cfg.h",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-isp/isp600/isp600_reg_cfg.h",
+      "sha256": "d4701f18876b50d3fd4f87fe05119ffb751568eeac06a31eb83876141fb7fe4a",
+      "symbol": "PARA_SAVE_INT_EN/PARA_LOAD_INT_EN",
+      "behavior": "SAVE is bit 2; LOAD is bit 3. Only SAVE and errors wake the native ISP owner."
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/camera/bsp/drivers/vin/vin-vipp/vipp200/vipp200_reg_i.h",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-vipp/vipp200/vipp200_reg_i.h",
+      "sha256": "7bb1d68b1c8e6ad1b947e2225e710cbd17b86cc990f871d9a8805aaf4f7e67e8",
+      "symbol": "VIPP_INT_BYPASS_REG_OFF/VIPP_CHN0_REG_LOAD_EN",
+      "behavior": "VIPP0 load enable is bit 8 at offset 0x20; raw completion remains latched at offset 0x30."
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/camera/bsp/drivers/vin/vin-video/dma140/dma140_reg_i.h",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-video/dma140/dma140_reg_i.h",
+      "sha256": "0cc2e0ff1e1c3f1754f5f1461918beca539176ffd028bf098cdc4ff1e3121b1b",
+      "symbol": "CSIC_DMA_INT_EN_REG_OFF/CD_INT_EN",
+      "behavior": "Channel capture completion is bit 0 at offset 0x250; native completion/errors wake without W1C in the ISR."
+    }
+  ],
+  "limits": [
+    "No software Bayer processing oracle is supplied by these setters.",
+    "No global parameter, output or page-walk drain condition is established.",
+    "Repeated captures retain all memory, mappings, clocks and power ownership."
+  ]
+}

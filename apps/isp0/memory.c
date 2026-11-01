@@ -8,6 +8,7 @@ int isp0_upload_allocate(void)
 {
  if(isp0.wb_pool||!a733_isp0_geometry_valid(&isp0.session))return 0;
  isp0.bytes=A733_ISP0_OUTPUT_CAPACITY;
+ isp0.sequence=1;
  isp0.wb_pool=a733_memory_reservations_init();if(!isp0.wb_pool)return 0;
  for(unsigned i=0;i<2;i++){struct device_memory_extent e;
   if(!device_memory_acquire_aligned(isp0.wb_pool,isp0.session.owner,isp0.bytes,4096,
