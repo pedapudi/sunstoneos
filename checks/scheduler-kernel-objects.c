@@ -324,3 +324,125 @@ static void fixture_runtime_accounting(TaskHandle_t task)
     assert(status.ulRunTimeCounter == 1100);
     printf("linked FreeRTOS optional runtime: switched/current intervals, task/idle percentage and pinned info snapshot\n");
 }
+
+static void fixture_preemption(TaskHandle_t task)
+{
+    fixture_cpu = 0;
+    vTaskPreemptionDisable(task);
+    assert(((TCB_t *)task)->xPreemptionDisable);
+    TaskHandle_t urgent = xTaskCreateStaticAffinitySet(fixture_entry, "urgent", configMINIMAL_STACK_SIZE,
+        NULL, 6, stacks[configNUMBER_OF_CORES + 2], &storage[configNUMBER_OF_CORES + 2], 1);
+    assert(urgent);
+    enter(0);
+    assert(pxCurrentTCBs[0] == task); /* Higher ready priority cannot preempt. */
+    vTaskDelay(1); /* Disable never prevents the task from blocking. */
+    enter(0);
+    assert(pxCurrentTCBs[0] == urgent);
+    vTaskSuspend(urgent);
+    enter(0);
+    assert(pxCurrentTCBs[0] == xIdleTaskHandles[0]);
+    (void)xTaskIncrementTick();
+    enter(0);
+    assert(pxCurrentTCBs[0] == task);
+    /* Explicit yield, unlike involuntary preemption, may select urgent work. */
+    vTaskResume(urgent);
+    ssKernelOwnerYield();
+    enter(0);
+    assert(pxCurrentTCBs[0] == urgent);
+    vTaskSuspend(urgent);
+    enter(0);
+    assert(pxCurrentTCBs[0] == task);
+    vTaskPreemptionEnable(task);
+    assert(!((TCB_t *)task)->xPreemptionDisable);
+    vTaskResume(urgent);
+    enter(0);
+    assert(pxCurrentTCBs[0] == urgent);
+    /* Synchronous remote change must be acknowledged by its owner. */
+    struct ss_owner_backend progress = ssKernelBackend;
+    progress.wait = fixture_control_progress;
+    ssKernelControl.backend = &progress;
+    fixture_progress_task = task;
+    fixture_cpu = 1;
+    vTaskPreemptionDisable(task);
+    assert(((TCB_t *)task)->xPreemptionDisable);
+    ssKernelControl.backend = &ssKernelBackend;
+    fixture_cpu = 0;
+    vTaskSuspend(urgent);
+    enter(0);
+    assert(pxCurrentTCBs[0] == task);
+    vTaskPreemptionEnable(task);
+    printf("linked FreeRTOS optional preemption: owner acknowledgment, higher-priority deferral, explicit yield and blocking\n");
+}
+
+void vPortEndScheduler(void)
+{
+    /* Mirror the pinned ARM_CR82 unsupported-stop assertion, and prove the
+     * task wrapper did not delete idle/timer tasks before reaching the port. */
+    assert(xSchedulerRunning && uxTaskGetNumberOfTasks() == configNUMBER_OF_CORES + 1);
+    fprintf(stderr, "scheduler stop unsupported\n");
+    configASSERT(NULL);
+}
+
+static uintptr_t fixture_tls[configNUMBER_OF_CORES];
+static unsigned fixture_tls_deleted, fixture_switches[configNUMBER_OF_CORES], fixture_traces[2];
+void ssFixtureTLS(uintptr_t block) { fixture_tls[fixture_cpu] = block; }
+void ssFixtureTLSDelete(uintptr_t block) { assert(block); ++fixture_tls_deleted; }
+void ssFixtureSwitch(void *task)
+{
+    assert(task == pxCurrentTCBs[fixture_cpu]);
+    ++fixture_switches[fixture_cpu];
+}
+void ssFixtureTrace(unsigned phase) { assert(phase < 2); ++fixture_traces[phase]; }
+static void fixture_switch_hooks(TaskHandle_t task)
+{
+    fixture_cpu = 0;
+    assert(pxCurrentTCBs[0] == task && fixture_tls_deleted);
+    unsigned switches = fixture_switches[0], outgoing = fixture_traces[0], incoming = fixture_traces[1];
+    FreeRTOS_errno = 17;
+    TaskHandle_t urgent = xTaskCreateStaticAffinitySet(fixture_entry, "hook", configMINIMAL_STACK_SIZE,
+        NULL, 6, stacks[configNUMBER_OF_CORES + 3], &storage[configNUMBER_OF_CORES + 3], 1);
+    assert(urgent);
+    enter(0);
+    assert(pxCurrentTCBs[0] == urgent && FreeRTOS_errno == 0);
+    assert(((TCB_t *)task)->iTaskErrno == 17);
+    assert(fixture_tls[0] == ((TCB_t *)urgent)->xTLSBlock);
+    FreeRTOS_errno = 23;
+    vTaskSuspend(urgent);
+    enter(0);
+    assert(pxCurrentTCBs[0] == task && FreeRTOS_errno == 17);
+    assert(((TCB_t *)urgent)->iTaskErrno == 23);
+    assert(fixture_tls[0] == ((TCB_t *)task)->xTLSBlock);
+    assert(fixture_switches[0] == switches + 2);
+    assert(fixture_traces[0] == outgoing + 2 && fixture_traces[1] == incoming + 2);
+    printf("linked FreeRTOS switch hooks: trace, task hook, TLS selection/deletion and errno save/restore\n");
+}
+
+static void fixture_no_idle_pull(TaskHandle_t task)
+{
+    StaticTask_t background_tcb;
+    StackType_t background_stack[configMINIMAL_STACK_SIZE];
+    fixture_cpu = 0;
+    TaskHandle_t background = xTaskCreateStaticAffinitySet(fixture_entry, "background", configMINIMAL_STACK_SIZE,
+        NULL, 1, background_stack, &background_tcb, 1);
+    assert(background);
+    enter(0);
+    enter(2);
+    unsigned imbalance_observations = 0;
+    if (record(background)->ready.queued && atomic_load(&record(background)->owner) == 0 &&
+        pxCurrentTCBs[0] == task && pxCurrentTCBs[2] == xIdleTaskHandles[2])
+        ++imbalance_observations;
+    assert(imbalance_observations == 1); /* Idle pull begins only in series D. */
+    struct ss_owner_backend progress = ssKernelBackend;
+    progress.wait = fixture_control_progress;
+    ssKernelControl.backend = &progress;
+    fixture_progress_task = task;
+    fixture_cpu = 1;
+    vTaskDelete(background);
+    for (unsigned round = 0; round < 3; ++round)
+        for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) enter(cpu);
+    struct ss_kernel_pin pin;
+    assert(!ssKernelPin(background, &pin));
+    ssKernelControl.backend = &ssKernelBackend;
+    fixture_cpu = 0;
+    printf("linked FreeRTOS placement: %u checkpoint observations of ready work on a busy owner beside an idle core; no idle pull\n", imbalance_observations);
+}

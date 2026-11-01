@@ -11,6 +11,15 @@
 #include "notification.h"
 #include "deadline.h"
 
+/* The private fork rejects optional configurations whose API branches have
+ * not been converted. No enabled public API may fall through to legacy lists.
+ * Tickless scheduling belongs to series D. The current OS uses static tasks
+ * and the non-MPU AArch64 port. */
+#if ( configSUPPORT_DYNAMIC_ALLOCATION == 1 ) || ( portUSING_MPU_WRAPPERS != 0 ) || \
+    ( configUSE_TICKLESS_IDLE != 0 ) || ( configUSE_STATS_FORMATTING_FUNCTIONS > 0 )
+#error "partitioned scheduler: optional API configuration is not converted"
+#endif
+
 _Static_assert(configNUMBER_OF_CORES > 1 && configNUMBER_OF_CORES <= 8,
                "the admitted owner fork supports two through eight CPUs");
 _Static_assert(configMAX_PRIORITIES == SS_OWNER_PRIORITIES,
@@ -523,9 +532,24 @@ static void ssKernelSwitch(unsigned c)
             configASSERT(ss_owner_enqueue(&cpu->run, previous, !cpu->yield_tail));
         }
     }
+    bool voluntary = cpu->yield_tail;
     cpu->yield_tail = false;
     ssKernelService();
-    struct ss_owner_task *selected = ss_owner_select(&cpu->run);
+    struct ss_owner_task *selected = NULL;
+#if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
+    if (previous && !voluntary) {
+        struct ssKernelTask *s = &ssKernelTasks[previous->slot];
+        if (((TCB_t *)previous->context)->xPreemptionDisable && previous->queued &&
+            atomic_load_explicit(&s->execution, memory_order_acquire) == SS_K_READY &&
+            atomic_load_explicit(&s->owner, memory_order_acquire) == c) {
+            configASSERT(ss_owner_remove(&cpu->run, previous));
+            cpu->run.current = selected = previous;
+        }
+    }
+#else
+    (void)voluntary;
+#endif
+    if (!selected) selected = ss_owner_select(&cpu->run);
     configASSERT(selected); /* A pinned idle task always exists on each CPU. */
     struct ssKernelTask *s = &ssKernelTasks[selected->slot];
     configASSERT(!s->dead && !s->suspended && s->off_cpu);
@@ -722,6 +746,9 @@ static bool ssKernelApply(void *context, unsigned slot, void *task,
         cpu->reschedule = true;
     }
     t->uxBasePriority = state->priority;
+#if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
+    t->xPreemptionDisable = state->preemption_disabled ? pdTRUE : pdFALSE;
+#endif
     t->uxCoreAffinityMask = (UBaseType_t)state->affinity;
     atomic_store_explicit(&s->base, state->priority, memory_order_release);
     if (state->dead || state->suspended) return true;
@@ -817,7 +844,7 @@ static void ssKernelRetired(void *context, unsigned slot, uint64_t incarnation)
 }
 
 enum ssKernelCommand { SS_K_PRIORITY, SS_K_AFFINITY, SS_K_SUSPEND, SS_K_RESUME,
-                       SS_K_ABORT, SS_K_DELETE };
+                       SS_K_ABORT, SS_K_DELETE, SS_K_PREEMPT };
 struct ssKernelMutation { enum ssKernelCommand command; uint64_t argument; unsigned slot; bool changed; };
 static bool ssKernelMutateState(void *opaque, struct ss_control_state *state)
 {
@@ -852,6 +879,10 @@ static bool ssKernelMutateState(void *opaque, struct ss_control_state *state)
     case SS_K_DELETE:
         state->dead = true;
         configASSERT(ss_kernel_handle_close(&ssKernelRegistry, m->slot));
+        return true;
+    case SS_K_PREEMPT:
+        if (state->preemption_disabled == (m->argument != 0)) return false;
+        state->preemption_disabled = m->argument != 0;
         return true;
     }
     return false;

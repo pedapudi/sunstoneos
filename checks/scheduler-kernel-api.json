@@ -12,8 +12,8 @@
     "freertos-partitioned-objects.patch"
   ],
   "enablement_blockers": [
-    "Convert or explicitly exclude remaining pending optional configurations; the private checker selects 79 routed public functions and none pending.",
-    "Complete port IRQ-exit and voluntary-yield wiring, then validate context save, runtime accounting, errno, TLS and task-switch hooks with selected feature flags.",
+    "The private checker selects 81 routed public functions and none pending. Remaining optional APIs are rejected by compile-time guards; enabling those configurations requires their conversion.",
+    "Complete port IRQ-exit and voluntary-yield wiring. Linked transitions cover trace, runtime, errno, synthetic TLS and task-switch hooks; concurrent saved-frame execution remains untested.",
     "Run concurrent eight-core QEMU task/object/timer/deletion/migration stress after complete API conversion; no board admission before review."
   ],
   "validation_limits": "Host fixture links actual FreeRTOS tasks/list/object code. It advances owner checkpoints explicitly and does not execute task stacks concurrently. Clang AST audit checks selected function definitions and their reachable task translation-unit functions for legacy scheduler-list references.",
@@ -21,7 +21,8 @@
     {
       "name": "eTaskConfirmSleepModeStatus",
       "state": "pending",
-      "validation": "none"
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
     },
     {
       "name": "eTaskGetState",
@@ -152,7 +153,8 @@
     {
       "name": "vTaskAllocateMPURegions",
       "state": "pending",
-      "validation": "none"
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
     },
     {
       "name": "vTaskCoreAffinityGet",
@@ -223,7 +225,8 @@
     {
       "name": "vTaskGetRunTimeStatistics",
       "state": "pending",
-      "validation": "none"
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
     },
     {
       "name": "vTaskInternalSetTimeOutState",
@@ -234,7 +237,8 @@
     {
       "name": "vTaskListTasks",
       "state": "pending",
-      "validation": "none"
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
     },
     {
       "name": "vTaskMissedYield",
@@ -262,13 +266,15 @@
     },
     {
       "name": "vTaskPreemptionDisable",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "(void)ssKernelCommand(xTask, SS_K_PREEMPT, 1, false);"
     },
     {
       "name": "vTaskPreemptionEnable",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "(void)ssKernelCommand(xTask, SS_K_PREEMPT, 0, false);"
     },
     {
       "name": "vTaskPriorityDisinheritAfterTimeout",
@@ -333,7 +339,8 @@
     {
       "name": "vTaskStepTick",
       "state": "pending",
-      "validation": "none"
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
     },
     {
       "name": "vTaskSuspend",
@@ -386,32 +393,38 @@
     {
       "name": "xTaskCreate",
       "state": "pending",
-      "validation": "none"
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
     },
     {
       "name": "xTaskCreateAffinitySet",
       "state": "pending",
-      "validation": "none"
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
     },
     {
       "name": "xTaskCreateRestricted",
       "state": "pending",
-      "validation": "none"
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
     },
     {
       "name": "xTaskCreateRestrictedAffinitySet",
       "state": "pending",
-      "validation": "none"
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
     },
     {
       "name": "xTaskCreateRestrictedStatic",
       "state": "pending",
-      "validation": "none"
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
     },
     {
       "name": "xTaskCreateRestrictedStaticAffinitySet",
       "state": "pending",
-      "validation": "none"
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
     },
     {
       "name": "xTaskCreateStatic",
@@ -422,7 +435,7 @@
     {
       "name": "xTaskCreateStaticAffinitySet",
       "state": "routed-private",
-      "validation": "aarch64-compile",
+      "validation": "linked-transition",
       "definition_route": "TaskHandle_t handle = NULL;"
     },
     {
@@ -500,7 +513,8 @@
     {
       "name": "xTaskGetMPUSettings",
       "state": "pending",
-      "validation": "none"
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
     },
     {
       "name": "xTaskGetSchedulerState",
@@ -590,7 +604,10 @@
     "INCLUDE_uxTaskGetStackHighWaterMark2": 1,
     "INCLUDE_xTaskGetHandle": 1,
     "INCLUDE_xTaskGetIdleTaskHandle": 1,
-    "configGENERATE_RUN_TIME_STATS": 1
+    "configGENERATE_RUN_TIME_STATS": 1,
+    "configUSE_TASK_PREEMPTION_DISABLE": 1,
+    "configUSE_C_RUNTIME_TLS_SUPPORT": 1,
+    "configUSE_POSIX_ERRNO": 1
   },
   "validation_commands": [
     "checks/scheduler-kernel-adapter.py --freertos FREERTOS --build-dir BUILD --sysroot SYSROOT",
@@ -600,6 +617,13 @@
   "object_validation": "Real queue empty-receive retry, event wait/set/clear, stream wait/send and timer command enqueue with explicit host owner checkpoints; no concurrent stacks or timer callback execution.",
   "critical_scope": "Public task critical sections retain compatibility task/ISR locks, local IRQ masking and local preemption exclusion. Public ISR critical sections retain the ISR lock and local exclusion. Other owner schedulers continue dispatching; global scheduler suspension remains a separate gate.",
   "unsupported_api_contracts": {
-    "vTaskEndScheduler": "Routes directly to vPortEndScheduler. The pinned upstream ARM_CR82 port explicitly asserts because scheduler stop is unsupported; it does not run legacy idle-task deletion."
-  }
+    "vTaskEndScheduler": "Routes directly to vPortEndScheduler. The pinned upstream ARM_CR82 port explicitly asserts because scheduler stop is unsupported; it does not run legacy idle-task deletion. A linked subprocess verifies the unsupported port entry is reached with idle/timer tasks intact."
+  },
+  "excluded_optional_configurations": {
+    "configSUPPORT_DYNAMIC_ALLOCATION": 1,
+    "portUSING_MPU_WRAPPERS": "nonzero",
+    "configUSE_TICKLESS_IDLE": "nonzero; series D",
+    "configUSE_STATS_FORMATTING_FUNCTIONS": "positive"
+  },
+  "placement_validation": "A host checkpoint fixture records one observation of ready work waiting on its busy owner beside an idle core. This confirms no idle pull in series B; it is not a concurrent imbalance measurement."
 }

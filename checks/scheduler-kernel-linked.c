@@ -65,7 +65,11 @@ static void invariant(void)
 int main(int argc, char **argv)
 {
     (void)argv;
-    if (argc > 1) return fixture_startup();
+    if (argc > 1) {
+        int result = fixture_startup();
+        if (!strcmp(argv[1], "end")) vTaskEndScheduler();
+        return result;
+    }
     /* Real static creation enters the registry and least-loaded placement. */
     for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
         TaskHandle_t idle = create(c, 0);
@@ -199,7 +203,10 @@ int main(int argc, char **argv)
     fixture_migration(task);
     fixture_migration_wake(task);
     fixture_delete_reuse(task, second);
+    fixture_no_idle_pull(task);
     fixture_runtime_accounting(task);
+    fixture_preemption(task);
+    fixture_switch_hooks(task);
     invariant();
     printf("linked FreeRTOS owner transitions: 10000 remote wakes, block-commit races, zero local scheduler locks, delay/event timeout\n");
     return 0;
