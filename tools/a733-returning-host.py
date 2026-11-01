@@ -107,7 +107,9 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
     require(decoded['session'] and last.get('stage')==crumbs.RETURN_ROM and last.get('value')==0,
             'Returned with WDT0 disarmed but without this session\'s RETURN_ROM breadcrumb.')
     return None
+   # Mode 0x01: the image's EL3 stop shortened WDT0 to 0.5 s before parking.
    report={'watchdog_fired':True,'interval_seconds':state['interval_seconds'],
+           'reset_interval_seconds':crumbs.interval(before),'stop_shortened':before&0xffff==1,
            'returned_after_seconds':state['returned_after_seconds'],'breadcrumbs':decoded,
            'dram':'lost: DDR is uninitialized after the reset; run cold DDR before any DRAM access',
            'cpu_rails':'PMIC rails keep the values the image set; restore before shared reuse',

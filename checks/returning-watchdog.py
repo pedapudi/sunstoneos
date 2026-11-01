@@ -134,6 +134,8 @@ def transport_case(variant, root):
                 rtc[0x100] = 0x5c0d0000 | EPOCH & 0xffff if variant != 'fired-before-entry' else 0
                 if variant in ('fired', 'disarm-ignored'):
                     rtc[0x104] = 0x0410 << 16 | 37; rtc[0x10c] = 6 << 29 | 77
+                    if variant == 'fired':
+                        state['mode'] = 0x01  # the image's EL3 stop shortened WDT0
                 elif variant == 'disarmed-without-rom':
                     state['mode'] = 0; rtc[0x104] = 0x0421 << 16
                 elif variant == 'rom-from-other-session':
@@ -197,6 +199,8 @@ def transport_cases():
                 assert report['watchdog_fired'] and state['mode'] == 0
                 # Classification and the launcher-report read only: no DRAM request.
                 assert len(state['after_return']) == 2 and state['after_return'][1][:2] == ['read', '0x52d00']
+                assert report['stop_shortened'] == (variant == 'fired')
+                assert report['reset_interval_seconds'] == (0.5 if variant == 'fired' else 16)
                 if variant == 'fired':
                     assert report['breadcrumbs']['last'] == {'stage': 0x410, 'name': 'GPU_SUBMIT', 'value': 37,
                         'core': 6, 'seconds_since_power_on': round(77 * 1024 / 24e6, 4)}
@@ -294,6 +298,19 @@ def native_cases(image_path, baseline):
     assert m.stop == 'park' and rtc(m, 0x104) == 0x0503 << 16 | 0xb1
     assert not any(a == 0x08001004 for _, a, _, v in m.writes), 'no RVBAR write before parking'
     passed('rom-return-parks-while-enabled')
+    # The EL3 stop: record EL3_STOP, then shorten only the host-armed WDT0.
+    class Stop(prior.Model):
+        def code(self, uc, a, size, unused):
+            if a != self.s['a733_smp_stop']:
+                super().code(uc, a, size, unused)
+    for mode, shortened in ((0xb1, True), (0, False), (0x41, False)):
+        m = Stop(prior.fault.Image(Path(image_path)))
+        m.put32(0x02050014, mode)
+        m.call(0, 'a733_smp_stop', (3, 0x736))
+        writes = [(a, v) for _, a, size, v in m.writes if 0x02050000 <= a < 0x02051000]
+        assert m.stop == 'park' and rtc(m, 0x104) == 0x0111 << 16 | 3 << 12 | 0x736, hex(rtc(m, 0x104))
+        assert writes == ([(0x02050014, 0x16aa0001), (0x0205000c, 0x14af)] if shortened else []), (mode, writes)
+    passed('el3-stop-shortens-armed-watchdog')
 
 
 def main():

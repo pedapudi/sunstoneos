@@ -19,7 +19,9 @@
  * (sunstone_watchdog_restart). A failure stops the restarts, so WDT0 resets
  * the board one interval after the failure or after the session deadline.
  * The only normal return disarms WDT0, records RETURN_ROM with the mode read
- * back, and parks instead of returning if the enable bit is still set.
+ * back, and parks instead of returning if the enable bit is still set. The
+ * EL3 stop (a733_smp_stop) shortens an armed WDT0 to 0.5 s and restarts it, so
+ * a deliberate stop returns to FEL about half a second later.
  *
  * Words (RTC base 0x07090000):
  *   0x100 TAG   0x5c0d << 16 | low 16 bits of the session epoch
