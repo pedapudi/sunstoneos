@@ -346,7 +346,7 @@ static enum a733_radio_platform_result metadata(struct a733_radio_platform *p)
         p->wait_since=p->last_now;p->stage=SUPPLY_WAIT;return A733_RADIO_PENDING;
     }
     if(p->stage==SUPPLY_WAIT) {
-        if(p->last_now-p->wait_since>=10000)p->stage=ENABLE_MODULE;
+        if(p->last_now-p->wait_since>10000)p->stage=ENABLE_MODULE;
         return A733_RADIO_PENDING;
     }
     if(p->stage==ENABLE_MODULE) {
@@ -358,7 +358,7 @@ static enum a733_radio_platform_result metadata(struct a733_radio_platform *p)
     }
     if(p->stage==MODULE_SETTLE) {
         /* The pinned AIC BSP waits 50ms after WLAN power-on before card rescan. */
-        if(p->last_now-p->wait_since>=50000)p->stage=BUS_GATE;
+        if(p->last_now-p->wait_since>50000)p->stage=BUS_GATE;
         return A733_RADIO_PENDING;
     }
     return A733_RADIO_INVALID;

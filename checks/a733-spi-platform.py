@@ -8,6 +8,8 @@ import re
 import shutil
 import subprocess
 
+from harness import CLANG, SANITIZE, environment
+
 
 def sha(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
@@ -35,11 +37,11 @@ def main():
         records.append(dict(path=str(p),sha256=sha(p),archive=dest.name))
         (out/'inputs.json').write_text(json.dumps(records,indent=2)+'\n')
     for p in [root/n for n in source]+[cache/'sources'/n for n in refs]:archive(p)
-    clang=shutil.which('clang');assert clang
+    clang=str(CLANG);assert CLANG.is_file()
     commands=[]
     def run(name,cmd):
         commands.append(dict(name=name,command=cmd));(out/'commands.json').write_text(json.dumps(commands,indent=2)+'\n')
-        p=subprocess.run(cmd,cwd=root,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+        p=subprocess.run(cmd,cwd=root,env=environment(),text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
         (out/(name+'.log')).write_text(p.stdout)
         if p.returncode:raise RuntimeError(f'{name}: see {out/name}.log')
     if 'reference' in args.steps:
@@ -63,7 +65,7 @@ def main():
     run('toolchain',[clang,'--version'])
     if 'host' in args.steps:
         sources=[source[i] for i in [0,4,6,8,9,11]]
-        cmd=[clang,'-std=c11','-Wall','-Wextra','-Werror','-O1','-g','-fsanitize=address,undefined','-I'+str(root/'include')]
+        cmd=[clang,'-std=c11','-Wall','-Wextra','-Werror','-O1','-g',*SANITIZE,'-I'+str(root/'include')]
         run('host-build',cmd+[str(root/p) for p in sources]+['-o',str(out/'host')])
         run('host',[str(out/'host')])
     if 'native' in args.steps:

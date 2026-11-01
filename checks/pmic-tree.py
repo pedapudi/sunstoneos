@@ -20,8 +20,8 @@ supply consumer accept. This check fails when:
 - a source outside drivers/power names the S_TWI0 interrupt (GIC-600 INTID
   235), which only the provider may use;
 - the native adapter's register accessors leave the barrier placement of
-  docs/designs/pmic-access.md: plain S_TWI0 reads and DATA write, DSB SY
-  after the CNTR write that starts a bus phase, and DSB SY on both sides of
+  the completion contract: plain S_TWI0 reads, DSB SY after DATA and CNTR
+  writes, and DSB SY on both sides of
   every other register read;
 - the native adapter's file defines a macro that names an a733_mmio_
   accessor, which could hide its barrier placement from the rule above;
@@ -179,8 +179,8 @@ def main():
         return found[1]
     if re.search(r'counter_clock_now|locks->now', body('now')):
         problems.append('drivers/power/a733_pmic_native.c: now() takes the counter clock lock')
-    # The barrier placement of docs/designs/pmic-access.md: plain S_TWI0
-    # reads and DATA write, DSB SY after the CNTR write, and DSB SY on both
+    # Complete DATA before the dependent CNTR write; keep plain S_TWI0
+    # reads, DSB SY after both writes, and DSB SY on both
     # sides of every other register read.
     twi = re.search(r'static int twi\(uintptr_t a\)\{return \(a&~\(uintptr_t\)0xfffu\)==0x07083000u;\}', adapter)
     read, write = strip_comments(body('read32')), strip_comments(body('write32'))
@@ -191,11 +191,10 @@ def main():
             or re.findall(r'\ba733_mmio_\w+\(', read) != ['a733_mmio_read32(', 'a733_mmio_read32_dsb_sy_both(']):
         problems.append('drivers/power/a733_pmic_native.c: read32() must read S_TWI0 plainly and every other '
                         'register with DSB SY on both sides')
-    if (not re.search(r'if\s*\(\s*a\s*==\s*0x0708300cu\s*\)\s*a733_mmio_write32_dsb_sy_after\(a,\s*value\);\s*'
-                      r'else\s+a733_mmio_write32\(a,\s*value\);', write)
-            or re.findall(r'\ba733_mmio_\w+\(', write) != ['a733_mmio_write32_dsb_sy_after(', 'a733_mmio_write32(']):
-        problems.append('drivers/power/a733_pmic_native.c: write32() must complete the CNTR write with DSB SY '
-                        'after it and write DATA plainly')
+    if (not re.search(r'a733_mmio_write32_dsb_sy_after\(a,\s*value\);', write)
+            or re.findall(r'\ba733_mmio_\w+\(', write) != ['a733_mmio_write32_dsb_sy_after(']):
+        problems.append('drivers/power/a733_pmic_native.c: write32() must complete DATA and CNTR writes '
+                        'with DSB SY after each store')
     for name in ['owned', 'read32', 'write32']:
         if 'xSemaphoreGetMutexHolder' in body(name):
             problems.append(f'drivers/power/a733_pmic_native.c: {name}() queries the mutex holder per access')

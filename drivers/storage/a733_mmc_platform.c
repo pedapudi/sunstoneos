@@ -466,7 +466,7 @@ static enum a733_mmc_platform_result registers(struct a733_mmc_platform *p)
         if(ok){p->reset_since=p->last_now;p->stage=RESET_WAIT;}
     } else if(p->stage==RESET_WAIT) {
         uint32_t v;ok=rd(p,p->bus,&v)&&(v&0x10001u)==1;
-        if(ok&&p->last_now-p->reset_since>=10)p->stage=RESET_RELEASE;
+        if(ok&&p->last_now-p->reset_since>10)p->stage=RESET_RELEASE;
     } else if(p->stage==RESET_RELEASE) {
         ok=masked(p)==1&&update(p,p->bus,0x10001,1,0x10001);
         if(ok)p->stage=OPEN;

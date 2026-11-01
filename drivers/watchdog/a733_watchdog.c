@@ -1,5 +1,5 @@
 #include "a733_watchdog.h"
-#include "boot.h"
+#include "a733_mmio.h"
 
 #define WDT 0x02050000UL
 #define FEL_FLAG 0x07090108UL
@@ -19,32 +19,32 @@ int a733_watchdog_arm(struct a733_watchdog *watchdog, unsigned seconds)
     default: return 0;
     }
     if (watchdog->armed) return 0;
-    watchdog->mode = mmio_read(WDT + 0x14) & 0xffff;
+    watchdog->mode = a733_mmio_read32_dsb_sy_both(WDT + 0x14) & 0xffff;
     if (watchdog->mode & 1) return 0; // Do not take another owner's watchdog.
-    watchdog->configuration = mmio_read(WDT + 0x10) & 0xffff;
-    watchdog->output = mmio_read(WDT + 0x18) & 0xffff;
-    watchdog->fel_flag = mmio_read(FEL_FLAG);
+    watchdog->configuration = a733_mmio_read32_dsb_sy_both(WDT + 0x10) & 0xffff;
+    watchdog->output = a733_mmio_read32_dsb_sy_both(WDT + 0x18) & 0xffff;
+    watchdog->fel_flag = a733_mmio_read32_dsb_sy_both(FEL_FLAG);
     // boot0 consumes this flag. ROM-only recovery needs a separate path.
-    mmio_write(FEL_FLAG, 0x5aa5a55a);
-    if (mmio_read(FEL_FLAG) != 0x5aa5a55a) {
-        mmio_write(FEL_FLAG, watchdog->fel_flag);
+    a733_mmio_write32_dsb_sy_both(FEL_FLAG, 0x5aa5a55a);
+    if (a733_mmio_read32_dsb_sy_both(FEL_FLAG) != 0x5aa5a55a) {
+        a733_mmio_write32_dsb_sy_both(FEL_FLAG, watchdog->fel_flag);
         return 0;
     }
     // Match the A733 bootloader's reset pulse duration. This setting does not
     // establish power-controller or redirect retention; reinitialize DDR.
-    mmio_write(WDT + 0x18, KEY | 2);
-    mmio_write(WDT + 0x10, KEY | (watchdog->configuration & ~3U) | 1);
+    a733_mmio_write32_dsb_sy_both(WDT + 0x18, KEY | 2);
+    a733_mmio_write32_dsb_sy_both(WDT + 0x10, KEY | (watchdog->configuration & ~3U) | 1);
     watchdog->armed = 1; // The saved state must now be restored on failure.
     // Verify the reset policy before enabling a timer that could expire.
-    if ((mmio_read(WDT + 0x10) & 3) != 1 ||
-        (mmio_read(WDT + 0x18) & 0xffff) != 2) {
+    if ((a733_mmio_read32_dsb_sy_both(WDT + 0x10) & 3) != 1 ||
+        (a733_mmio_read32_dsb_sy_both(WDT + 0x18) & 0xffff) != 2) {
         (void)a733_watchdog_disarm(watchdog);
         return 0;
     }
     uint32_t mode = (watchdog->mode & ~0xf1U) | (interval << 4) | 1;
-    mmio_write(WDT + 0x14, KEY | mode);
-    mmio_write(WDT + 0x0c, 0x14af);
-    if ((mmio_read(WDT + 0x14) & 0xf1) != (mode & 0xf1)) {
+    a733_mmio_write32_dsb_sy_both(WDT + 0x14, KEY | mode);
+    a733_mmio_write32_dsb_sy_both(WDT + 0x0c, 0x14af);
+    if ((a733_mmio_read32_dsb_sy_both(WDT + 0x14) & 0xf1) != (mode & 0xf1)) {
         (void)a733_watchdog_disarm(watchdog);
         return 0;
     }
@@ -54,20 +54,20 @@ int a733_watchdog_arm(struct a733_watchdog *watchdog, unsigned seconds)
 int a733_watchdog_disarm(struct a733_watchdog *watchdog)
 {
     if (!watchdog->armed) return 0;
-    mmio_write(WDT + 0x14, KEY | watchdog->mode);
-    if (mmio_read(WDT + 0x14) & 1) return 0;
-    mmio_write(WDT + 0x10, KEY | watchdog->configuration);
-    mmio_write(WDT + 0x18, KEY | watchdog->output);
-    mmio_write(FEL_FLAG, watchdog->fel_flag);
-    if ((mmio_read(WDT + 0x14) & 0xffff) != watchdog->mode ||
-        (mmio_read(WDT + 0x10) & 0xffff) != watchdog->configuration ||
-        (mmio_read(WDT + 0x18) & 0xffff) != watchdog->output ||
-        mmio_read(FEL_FLAG) != watchdog->fel_flag) return 0;
+    a733_mmio_write32_dsb_sy_both(WDT + 0x14, KEY | watchdog->mode);
+    if (a733_mmio_read32_dsb_sy_both(WDT + 0x14) & 1) return 0;
+    a733_mmio_write32_dsb_sy_both(WDT + 0x10, KEY | watchdog->configuration);
+    a733_mmio_write32_dsb_sy_both(WDT + 0x18, KEY | watchdog->output);
+    a733_mmio_write32_dsb_sy_both(FEL_FLAG, watchdog->fel_flag);
+    if ((a733_mmio_read32_dsb_sy_both(WDT + 0x14) & 0xffff) != watchdog->mode ||
+        (a733_mmio_read32_dsb_sy_both(WDT + 0x10) & 0xffff) != watchdog->configuration ||
+        (a733_mmio_read32_dsb_sy_both(WDT + 0x18) & 0xffff) != watchdog->output ||
+        a733_mmio_read32_dsb_sy_both(FEL_FLAG) != watchdog->fel_flag) return 0;
     watchdog->armed = 0;
     return 1;
 }
 
 void a733_watchdog_feed(const struct a733_watchdog *watchdog)
 {
-    if (watchdog->armed) mmio_write(WDT + 0x0c, 0x14af);
+    if (watchdog->armed) a733_mmio_write32_dsb_sy_both(WDT + 0x0c, 0x14af);
 }

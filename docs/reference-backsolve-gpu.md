@@ -1,4 +1,4 @@
-# GPU reference sequence and current integration gaps
+# GPU reference sequence and historical integration comparison
 
 The A733 GPU power path selects the vendor's 1008 MHz/960 mV operating point.
 [The power controller](../drivers/gpu/a733_gpu_power.c) enables PLL_GPU0,
@@ -6,20 +6,20 @@ releases bus reset, opens the bus/core clocks and waits for CORE6 ON.
 [The supply provider](../drivers/gpu/a733_gpu_platform.c) raises DCDC4 before
 that sequence. The disabled-PLL, 400 MHz, 800 mV path belongs to earlier images.
 
-Standalone firmware and compute success does not establish the integrated
-application service. The service still omits health-counter binding, vendor
-secure writes, first-job MMU-cache invalidation and device-cache transfers.
-A nonreturning image can fail before a workload runs; no failing-stage evidence
-identifies the cause of the complete recognition nonreturn.
+The current [compute queue](../platform/a733/gpu_queue.c) uses workload pages
+no larger than 256 KiB; [the VM planner](../drivers/gpu/pvr_gpu_vm.c) rejects
+larger pages. Executed-command health, secure writes and first-job MMU-cache
+completion are implemented. [GPU status](status/gpu.md) states the current
+qualification limits; standalone success does not qualify integrated recognition.
 
 The vendor driver development kit (DDK) supplies the A733 platform reference.
-This comparison uses the code merged through `dc3d1ccd` and the source analysis in
-`~/.cache/sunstoneos/evidence/ref-gpu-hang-1031/report.md` and `analysis.md`.
-That analysis inspected native commit `9b0c7039` and a separate nine-image
-bisection ladder. Its 256 KiB workload-page correction is absent here:
-[the current application mappings](../platform/a733/gpu_mimus.c) still select
-2 MiB pages. The analysis directory's `inputs.json` and
-`firmware-metadata.json` preserve source/image hashes and firmware metadata.
+The historical source comparison below describes code through `dc3d1ccd`,
+including the removed application-specific OS session. It preserves the source
+analysis in `~/.cache/sunstoneos/evidence/ref-gpu-hang-1031/report.md` and
+`analysis.md`, which inspect native commit `9b0c7039` and a nine-image bisection
+ladder. Their `inputs.json` and `firmware-metadata.json` retain source/image
+hashes and firmware metadata. The comparison's gaps describe those frozen
+inputs, rather than the current queue implementation.
 
 **Observed** identifies source behavior or a recorded measurement.
 **Inferred** identifies a predicted consequence. **Unknown** identifies a
@@ -357,19 +357,19 @@ record retains caller `0x41088a50` and value `0x04040201`. Evidence is under
 That diagnostic comes from the unmerged GPU-reference branch. Its line numbers
 and behavior do not describe the merged backend. The stop localizes the
 callback; it does not prove a firmware ABI mismatch or a workload page fault.
-Diagnosis remains in progress. The omissions below describe the merged code.
+The omissions below describe the frozen source comparison.
 
-## The service omits steps present in the standalone probe
+## Historical service omissions relative to the standalone probe
 
 The October 31 analysis compares native source with the selected DDK and
 upstream Imagination driver at
 `cbbddb6b08cc9900a87cccaa9b22bbe06aa4f50a`.
 Its cached upstream root is
 `~/.cache/sunstoneos/evidence/ref-gpu-hang-1031/linux/drivers/gpu/drm/imagination/`.
-The following omissions are also present in this checkout. Paths and symbols
-identify current code; upstream line citations use that pinned source.
+Paths and symbols below identify the compared revision, including files since
+removed from the OS. Upstream line citations use the pinned source.
 
-| Boundary | Observed current behavior | Reference and inferred consequence |
+| Boundary | Observed behavior in the compared revision | Reference and inferred consequence |
 | --- | --- | --- |
 | Health completion | `drivers/gpu/pvr_gpu_service.c` calls `pvr_gpu_control_init()` but never binds `pvr_gpu_control_count_executed()`. Without the callback, the control requires a health return word of 1. | The standalone `apps/gpu-power-id/fw-start.c` binds executed-count completion. Upstream `pvr_power.c:165–196` checks executed progress and submits HEALTH_CHECK without a return-slot waiter. **Inferred:** firmware can start and execute health while service startup times out before any job. |
 | Vendor secure writes | `platform/a733/gpu_backend.c:power_poll` proceeds from identity/capability checks to active state without `0x0a0000b0=2`, then `0x01880014=0`. | DDK `sunxi_platform.c:964–979` and standalone `fw-start.c:secure_config` perform these ordered 32-bit writes. **Inferred:** missing secure preparation can block firmware memory access. Its necessity in inherited board state is **unknown**. |
@@ -413,13 +413,13 @@ reach the resource limits associated with those additional flags.
 
 ## Compatibility must succeed before health or workload diagnosis
 
-The frozen firmware-only diagnostic currently stops in the compatibility
+The frozen firmware-only diagnostic stops in the compatibility
 callback. Resolve that boundary before interpreting its later health or
 workload stages. The earlier executed-count/return-slot evidence still supports
-the health-binding gap in the merged service; it does not identify this stop.
+the health-binding gap in the compared service; it does not identify this stop.
 
 Only after startup succeeds can a 256 KiB versus 2 MiB comparison test
 BRN 71317. A shared startup failure is uninformative about page size.
 First-job failures also leave the MMUCACHE and SLC ownership gaps unresolved.
-Fixes remain outside the merged code. The [handoff](handoff.md#open-branches)
-lists the active branches without granting their artifacts board authority.
+The current fixes and remaining qualification work are recorded in
+[GPU status](status/gpu.md); historical images have no new launch authority.

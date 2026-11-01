@@ -1,4 +1,5 @@
 #include "a733_display_pll.h"
+#include "register_latency.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +15,9 @@ struct fixture {
     unsigned held,retained,leaves,reads,writes,auths,locks,barriers;
     unsigned fail_auth,uncertain_write,corrupt_write,late_write,lose_lock,enter_busy;
     unsigned final_time_fault,post_leave_observations;
+    struct register_latency lock_effect;
+    unsigned updates,stuck_update;
+    uint64_t lock_delay;
 };
 static int now(void *ctx,uint64_t *n)
 {
@@ -48,7 +52,9 @@ static uint32_t *word(struct fixture *f,uintptr_t a)
 }
 static int read32(void *ctx,uintptr_t a,uint32_t *v)
 {
-    struct fixture *f=ctx;assert(f->held && !f->retained);++f->reads;*v=*word(f,a);
+    struct fixture *f=ctx;assert(f->held && !f->retained);++f->reads;
+    if(a==0x055090e0)f->phy[0xe0/4]=reg_latency_apply(&f->lock_effect,f->now,f->phy[0xe0/4]);
+    *v=*word(f,a);
     if(a==0x055090e0) {
         if(f->last_lock)assert(f->now-f->last_lock>=5);
         f->last_lock=f->now;++f->locks;
@@ -65,6 +71,11 @@ static int write32(void *ctx,uintptr_t a,uint32_t v)
     if(f->writes==8){assert(f->locks>=3);assert(f->now-f->last_lock>=25);
         memcpy(f->multiplied,f->phy,sizeof(f->phy));f->multiplier_time=f->now;}
     if(f->writes==9)assert(f->now-f->multiplier_time>=20);
+    if(f->writes==7 || f->writes==14){
+        ++f->updates;f->phy[0xe0/4]&=~UINT32_C(0x04000000);
+        reg_latency_schedule(&f->lock_effect,f->now,f->lock_delay,0x04000000,0x04000000);
+        f->lock_effect.stuck=f->stuck_update==f->updates;
+    }
     if(f->corrupt_write)*word(f,a)^=0x80;
     if(f->late_write)f->now=f->config.deadline;
     return f->uncertain_write?0:1;
@@ -73,7 +84,7 @@ static int barrier(void *ctx)
 {struct fixture *f=ctx;assert(f->held && !f->retained);++f->barriers;return 1;}
 static void setup(struct fixture *f,unsigned enabled,uint32_t hs,uint32_t ls,uint32_t target_hs,uint32_t target_ls)
 {
-    memset(f,0,sizeof(*f));f->now=1;
+    memset(f,0,sizeof(*f));f->now=1;f->lock_delay=40;
     assert(a733_clock_leases_init(&f->registry,now,f));
     struct a733_clock_token token;
     assert(a733_clock_acquire(&f->registry,77,A733_CLOCK_PERI0|A733_CLOCK_FABRIC,
@@ -167,7 +178,7 @@ int main(int argc,char **argv)
         }
         f.lose_lock=!i;finish(&f,A733_DISPLAY_PLL_READY_RETAINED);
         assert(f.writes==14 && f.leaves==1 && !f.held && !f.retained);
-        assert(f.locks==(i?6u:8u));
+        assert(f.locks>=(i?6u:8u) && f.updates==2 && !f.lock_effect.pending);
         assert(a733_clock_token_status(&f.registry,&f.config.reservation.token)==A733_CLOCK_OK);
         uint32_t enabled[128],multiplied[128],final[128];
         pll_reference(f.initial,f.pll.plan.target.factors,enabled,multiplied,final);
@@ -177,6 +188,17 @@ int main(int argc,char **argv)
         struct a733_clock_token other={0};
         assert(a733_clock_acquire(&f.registry,88,A733_CLOCK_DISPLL1,0,10000,&other)==A733_CLOCK_BUSY);
     }
+    /* Each UPDATE invalidates the prior LOCK until its independent delay.
+     * Permanent failure at either update must preserve resources and stop I/O. */
+    for(unsigned update=1;update<=2;++update){
+        setup(&f,0,480000000,120000000,600000000,100000000);
+        f.stuck_update=update;finish(&f,A733_DISPLAY_PLL_FAULT_RETAINED);
+        assert(f.pll.error==A733_DISPLAY_PLL_TIME && f.writes==(update==1?7u:14u));
+        assert(f.retained==1 && !f.leaves);
+    }
+    setup(&f,0,480000000,120000000,600000000,100000000);
+    f.lock_delay=300;finish(&f,A733_DISPLAY_PLL_READY_RETAINED);
+    assert(f.locks>50 && !f.lock_effect.pending);
     fault_cases(&saved);
     setup(&f,0,480000000,120000000,600000000,100000000);
     f.phy[0x104/4]^=0x800000;finish(&f,A733_DISPLAY_PLL_FAULT_RETAINED);assert(!f.writes);

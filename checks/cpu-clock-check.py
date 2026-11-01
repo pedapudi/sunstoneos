@@ -348,7 +348,8 @@ def main():
     assert 'static const unsigned sensor[3]={3,0,3}; /* Physical channels CPUL, CPUB and CPUL. */' in driver
 
     # Transition model with sanitizers, then AArch64 compilation of changed units.
-    for path in UNITS + ['checks/cpu-clock-model.c', 'checks/a733-pmic.c']:
+    for path in UNITS + ['checks/cpu-clock-model.c', 'checks/a733-pmic.c',
+                         'checks/register_latency.h']:
         read(ROOT / path)
     for path in sorted((ROOT / 'include').glob('*.h')):
         read(path)

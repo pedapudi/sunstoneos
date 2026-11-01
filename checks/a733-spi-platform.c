@@ -228,13 +228,25 @@ static void modes(void)
     assert(f.transactions==1&&*cell(&f,fcr)==0x00200001u&&!f.platform.spi.dma_requests);
     assert(*cell(&f,f.platform.spi.plan.base+0x38)==0x10000000u);
     assert(a733_spi_platform_reap(&f.platform,100000)==A733_SPI_PLATFORM_READY);
-    /* A DMA transfer cannot use the FIFO-sized interrupt completion path. */
+    /* DMA completion uses the latched DONE interrupt without CPU FIFO I/O. */
     f.rn=0;assert(a733_spi_platform_submit(&f.platform,&t,100000)==A733_SPI_PLATFORM_PENDING);
-    while(f.platform.spi.state==A733_SPI_SETUP)a733_spi_platform_poll(&f.platform,8);
-    assert(a733_spi_platform_interrupt_start(&f.platform)==A733_SPI_PLATFORM_INVALID);
-    assert(advance(&f,A733_SPI_PLATFORM_COMPLETE)==A733_SPI_PLATFORM_COMPLETE);
+    for(unsigned i=0;i<100&&f.platform.spi.state==A733_SPI_SETUP;i++)
+        assert(a733_spi_platform_poll(&f.platform,8)==A733_SPI_PLATFORM_PENDING);
+    assert(f.platform.spi.state==A733_SPI_ACTIVE);
+    uintptr_t ier=f.platform.spi.plan.base+0x10,isr=f.platform.spi.plan.base+0x14;
+    assert(*cell(&f,isr)&0x1000u);
+    assert(a733_spi_platform_interrupt_start(&f.platform)==A733_SPI_PLATFORM_PENDING);
+    assert(f.platform.interrupt_armed&&*cell(&f,ier)==0x1700u&&(*cell(&f,isr)&0x1000u));
+    assert(a733_spi_platform_poll(&f.platform,8)==A733_SPI_PLATFORM_INVALID);
+    enum a733_spi_platform_result result=A733_SPI_PLATFORM_PENDING;
+    for(unsigned i=0;i<100&&result==A733_SPI_PLATFORM_PENDING;i++)
+        result=a733_spi_platform_interrupt_poll(&f.platform,8);
+    assert(result==A733_SPI_PLATFORM_COMPLETE&&f.transactions==2&&!f.received);
+    assert(!f.platform.interrupt_armed&&f.platform.interrupt_service&&!*cell(&f,ier));
+    assert(!f.platform.spi.dma_requests&&*cell(&f,fcr)==0x00200001u);
     assert(a733_spi_platform_dma_stop(&f.platform,100000)==A733_SPI_PLATFORM_INVALID);
     assert(a733_spi_platform_reap(&f.platform,100000)==A733_SPI_PLATFORM_READY);
+    assert(!f.platform.interrupt_service);
     assert(a733_spi_platform_close(&f.platform,100000)==A733_SPI_PLATFORM_PENDING);
     assert(advance(&f,A733_SPI_PLATFORM_CLOSED)==A733_SPI_PLATFORM_CLOSED&&!f.poisoned);
     /* Abandonment gates the requests and retains every lease. */

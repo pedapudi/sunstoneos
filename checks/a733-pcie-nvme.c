@@ -167,6 +167,7 @@ static int native_write(uintptr_t a,unsigned width,uint32_t v)
     if(a>=0x06300000&&a<0x06302000&&!a733_pcie_atu_write_allowed(&port,a,v))return 0;
     return 1;
 }
+static uint64_t pm_cost_ns,pm_returned_ns;
 static int in_d3_wait(void){return pm_since&&model.now-pm_since<A733_PCIE_D3_WAIT_US;}
 static int ep_read(void *v,uintptr_t a,unsigned width,uint32_t *out)
 {
@@ -179,6 +180,7 @@ static int ep_read(void *v,uintptr_t a,unsigned width,uint32_t *out)
         *out=word>>((a&3)*8);if(width==1)*out&=255;if(width==2)*out&=65535;return 1;
     }
     if(a>=0x22000000&&a<0x28000000){
+        assert(!atu_effects[1].pending&&(*w(0x06300204)&(1u<<31)));
         assert(width==4&&(command16()&2)&&!d3);
         if(a-bar0()<BAR0_BYTES){*out=nvme_read((uint32_t)(a-bar0()));return 1;}
         uint32_t base=*w(0x20000018)&~15u;assert(a-base<4096);*out=bar2[(a-base)/4];return 1;
@@ -190,6 +192,11 @@ static int ep_read(void *v,uintptr_t a,unsigned width,uint32_t *out)
 static int ep_write(void *v,uintptr_t a,unsigned width,uint32_t value)
 {
     ++ep_accesses;assert(native_write(a,width,value));
+    if(a==0x06000004&&value==0x102&&port.windows[1].bytes)
+        assert(!atu_effects[1].pending&&!(*w(0x06300204)&(1u<<31))&&atu1_off_acks);
+    if(a==0x06400c00&&!(value&1))
+        assert(!atu_effect.pending&&!(*w(0x06300004)&(1u<<31)));
+    if(a>=0x06300200&&a<=0x06300218)return atu_model_write(v,a,value);
     if(a>=0x20000000&&a<0x20001000){
         unsigned f=target_function();assert(!f&&!in_d3_wait());
         if(a>=0x20000010&&a<=0x20000024&&value==UINT32_MAX){
@@ -204,6 +211,7 @@ static int ep_write(void *v,uintptr_t a,unsigned width,uint32_t value)
             assert(value==0||value==3);++d3_writes;pm_since=model.now;
             *pm=(*pm&~3u)|value;d3=value==3;
             if(old==3&&!value&&!no_soft_reset)reset_function();
+            if(pm_cost_ns){pmic_model_cost(&model,pm_cost_ns);pm_returned_ns=model.now*1000+model.frac_ns;}
             return 1;
         }
     }
@@ -371,6 +379,19 @@ static void forged(void)
     read_back(16);
 }
 static int refuse(const void *d,unsigned b,uint32_t o,uint32_t v){(void)d;(void)b;(void)o;(void)v;return 0;}
+static void pm_boundary(struct a733_pcie_function *f)
+{
+    const uint64_t end=f->wait_until;
+    unsigned phase=f->stage,accesses=ep_accesses;
+    assert(pm_returned_ns&&end==pm_returned_ns/1000+A733_PCIE_D3_WAIT_US+1);
+    model.now=end-1;model.frac_ns=0;
+    assert(a733_pcie_function_poll(f)==A733_PCIE_PENDING&&f->stage==phase&&ep_accesses==accesses);
+    assert(model.now*1000-pm_returned_ns<A733_PCIE_D3_WAIT_US*1000u);
+    ++model.now;
+    enum a733_pcie_result r=a733_pcie_function_poll(f);
+    assert((r==A733_PCIE_PENDING||r==A733_PCIE_READY)&&f->stage!=phase);
+    assert(model.now*1000-pm_returned_ns>=A733_PCIE_D3_WAIT_US*1000u);
+}
 static void function_case(const char *mode)
 {
     /* The general layer alone with a refusing driver write rule. */
@@ -388,11 +409,17 @@ static void function_case(const char *mode)
         assert(!a733_pcie_function_suspend(&plain));
         assert(a733_pcie_function_begin(&plain,port.config.lifetime_deadline,&events)==A733_PCIE_READY);
         assert(a733_pcie_function_master(&plain,0)&&a733_pcie_function_end(&plain,1)==A733_PCIE_READY);
+        model.now_step=0;model.frac_ns=23;pm_cost_ns=25023;
         assert(a733_pcie_function_suspend(&plain));
+        assert(a733_pcie_function_poll(&plain)==A733_PCIE_PENDING&&plain.stage==8);
+        pm_boundary(&plain);
         for(unsigned i=0;i<200&&!(plain.stage==9);++i)assert(advance(function_poll,&plain)==A733_PCIE_PENDING);
         assert(d3&&plain.stage==9&&plain.soft_reset==!no_soft_reset);
         assert(a733_pcie_function_begin(&plain,port.config.lifetime_deadline,&events)==A733_PCIE_INVALID);
         assert(a733_pcie_function_resume(&plain));
+        model.frac_ns=23;
+        assert(a733_pcie_function_poll(&plain)==A733_PCIE_PENDING&&plain.stage==11);
+        pm_boundary(&plain);model.now_step=1;pm_cost_ns=0;
         assert(until(function_poll,&plain,A733_PCIE_READY)==A733_PCIE_READY&&!d3&&d3_writes==2);
         /* Restored or retained: identical BARs, decode and both MSI-X entries. */
         assert(*w(0x20000010)==0x22000004&&*w(0x20000018)==0x22004000&&command16()==0x402);
@@ -402,7 +429,17 @@ static void function_case(const char *mode)
         assert(until(function_poll,&plain,A733_PCIE_STOPPED)==A733_PCIE_STOPPED);
         enum a733_pcie_result r=A733_PCIE_PENDING;
         for(unsigned i=0;i<100&&r==A733_PCIE_PENDING;++i){r=a733_pcie_stop(&port,port.config.lifetime_deadline);model.now+=100;}
-        assert(r==A733_PCIE_STOPPED);stopped();return;
+        assert(r==A733_PCIE_STOPPED);stopped();
+        /* An expired original lifetime permits no access during a PM hold. */
+        irq_armed=irq_stopped=0;pm_since=0;
+        device();memset(&plain,0,sizeof(plain));
+        assert(a733_pcie_function_init(&plain,&port,&c,&memory,&irq));
+        assert(until(function_poll,&plain,A733_PCIE_READY)==A733_PCIE_READY);
+        assert(a733_pcie_function_suspend(&plain));
+        assert(a733_pcie_function_poll(&plain)==A733_PCIE_PENDING&&plain.stage==8);
+        model.now=port.config.lifetime_deadline;unsigned accesses=ep_accesses;
+        assert(a733_pcie_function_poll(&plain)==A733_PCIE_RETAINED&&ep_accesses==accesses);
+        puts("PCIe PM holds: costly fractional D0/D3hot writes, exact10ms pending and expired lifetime retained");return;
     }
     if(!strcmp(mode,"multifunction")){
         siblings=1u<<3;sibling[3][0]=0x0001144d;sibling[3][2]=0x08800000;device();
@@ -515,6 +552,14 @@ int main(int argc,char **argv)
         assert(a733_pcie_nvme_shutdown(&nvme));
         assert(until(nvme_poll,&nvme,A733_PCIE_STOPPED)==A733_PCIE_RETAINED&&!port.client_stopped);
         retained_memory();assert((command16()&4)&&(*w(0x02000210)&(1u<<22)));
+    }
+    else if(!strcmp(mode,"atu1-stuck-stop")){
+        start(A733_PCIE_IRQ_POLL);assert(until(nvme_poll,&nvme,A733_PCIE_READY)==A733_PCIE_READY);
+        atu1_stall_off=1;assert(a733_pcie_nvme_shutdown(&nvme));
+        assert(until(nvme_poll,&nvme,A733_PCIE_STOPPED)==A733_PCIE_RETAINED&&!port.client_stopped);
+        assert(atu_effects[1].pending&&!atu1_off_acks&&(*w(0x06300204)&(1u<<31)));
+        assert(port.atu_failure&&port.atu_address==0x06300204&&!port.atu_expected);
+        assert((*w(0x06000004)&0xffff)==0x106&&(*w(0x06400c00)&1));retained_memory();
     }
     else if(!strncmp(mode,"stop-",5))port_case(mode);
     else function_case(mode);

@@ -164,7 +164,8 @@ enum a733_dma_platform_result a733_dma_platform_poll(struct a733_dma_platform *p
         return PENDING;
     }
     if (p->stage==RESET_WAIT) {
-        if (p->last_now-p->reset_since<20) return PENDING;
+        /* Rounded microseconds need one extra unit for the full hold. */
+        if (p->last_now-p->reset_since<=20) return PENDING;
         p->stage=ENABLE;
     }
     int entered=p->ops.enter(p->cookie,p->config.deadline_us);

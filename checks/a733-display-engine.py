@@ -158,6 +158,6 @@ run([a.cc,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-Wno-unused-paramet
 result=run([str(binary)])
 obj=a.evidence/'a733_display_engine.o'
 run([a.cc,'--target=aarch64-none-elf','-std=c11','-O2','-Wall','-Wextra','-Werror','-ffreestanding','-fno-builtin','-mgeneral-regs-only','-mstrict-align','-mno-outline-atomics','-fstack-usage','-I'+str(root/'include'),'-I'+str(root/'runtime/include'),'-c',str(root/compiled[0]),'-o',str(obj)])
-inputs=compiled+['include/a733_display_engine.h','include/a733_tcon_lcd.h','include/a733_dsi_video.h','include/a733_dsi_phy.h','runtime/include/string.h','checks/a733-display-engine.c','checks/a733-display-engine.py']
+inputs=compiled+['include/a733_display_engine.h','include/a733_tcon_lcd.h','include/a733_dsi_video.h','include/a733_dsi_phy.h','runtime/include/string.h','checks/a733-display-engine.c','checks/a733-display-engine.py','checks/register_latency.h']
 record=dict(result=result,sources=pins,inputs={n:hashlib.sha256((root/n).read_bytes()).hexdigest() for n in inputs},reference_sha256=hashlib.sha256(reference.read_bytes()).hexdigest(),binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),object_sha256=hashlib.sha256(obj.read_bytes()).hexdigest(),size=run(['/usr/lib/llvm-21/bin/llvm-size',str(obj)]),undefined=run(['/usr/lib/llvm-21/bin/llvm-nm','-u',str(obj)]),stack=obj.with_suffix('.su').read_text(),scope='Host source/model and native compilation; no physical execution')
 (a.evidence/'results.json').write_text(json.dumps(record,indent=2)+'\n');print(result,end='')

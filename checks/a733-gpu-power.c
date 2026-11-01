@@ -5,6 +5,7 @@
  * owner and writes the combined trace that a733-gpu-power-reference.py
  * compares with the pinned PCK functions. */
 #include "a733_gpu_power.h"
+#include "register_latency.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -26,6 +27,8 @@ struct model {
      * lock bit reads 1 (UINT32_MAX never); lock_flicker drops the lock at the
      * second locked read; update_stuck keeps the 0xb20 update bit set. */
     unsigned pll_writes, pll_ignore, lock_after, lock_reads, lock_flicker, update_stuck;
+    unsigned off_update_delay;
+    struct register_latency clock_update;
     uint64_t locked_counter, output_counts;
     /* A status read after the PWCR write and before the policy write
      * returns this value when it is nonzero. */
@@ -162,6 +165,8 @@ static int read_reg(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, uint
             if (locked) m.locked_counter = m.counter;
         } else *pll &= ~(1u << 28);
     }
+    if (bank == A733_GPU_CCU && off == 0xb20)
+        m.regs[bank][off/4] = reg_latency_apply(&m.clock_update,m.counter,m.regs[bank][off/4]);
     *out = m.regs[bank][off/4];
     if (m.corrupt == off) *out ^= 1;
     return 1;
@@ -189,6 +194,8 @@ static int update(void *ctx, enum a733_gpu_power_bank bank, uint32_t off,
     }
     if (bank == A733_GPU_CCU && off == 0xe0) {
         assert(m.held);
+        if(s.phase==A733_GPU_POWER_STOPPING)
+            assert(!m.clock_update.pending && !(m.regs[0][0xb20/4]&(1u<<27)));
         /* A 1008 MHz rate change needs the output gate closed, and the output
          * gate opens at least 20 us after the lock. */
         if (clear == 0x0070ff00) assert(!(m.regs[0][0xe0/4] & (1u << 27)));
@@ -204,7 +211,9 @@ static int update(void *ctx, enum a733_gpu_power_bank bank, uint32_t off,
     uint32_t value = (m.regs[bank][off/4] & ~clear) | set;
     if (bank == A733_GPU_CCU && off == 0xb20) {
         assert(set & (1u << 27)); /* The update bit clears once the change is valid. */
-        if (!m.update_stuck) value &= ~(1u << 27);
+        reg_latency_schedule(&m.clock_update,m.counter,
+            s.phase==A733_GPU_POWER_STOPPING ? m.off_update_delay : 0,1u<<27,0);
+        m.clock_update.stuck=m.update_stuck;
     }
     /* The vendor order: reset released before the bus gate, the bus gate
      * before the core gate, and the reset asserted after both gates close. */
@@ -258,6 +267,19 @@ static void on(void)
 { assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN); assert(drain() == A733_GPU_POWER_OK); }
 static void off(void)
 { assert(a733_gpu_power_off(&s, 10000) == A733_GPU_POWER_AGAIN); assert(drain() == A733_GPU_POWER_OK); }
+static void completion_cases(void)
+{
+    fresh();on();m.off_update_delay=12;off();
+    assert(s.clock_update_reads[0]>1 && !m.clock_update.pending && m.releases==1);
+    fresh();on();m.update_stuck=1;
+    unsigned pll=m.pll_writes;
+    assert(a733_gpu_power_off(&s,10000)==A733_GPU_POWER_AGAIN);
+    assert(drain()==A733_GPU_POWER_FAULT && s.error==A733_GPU_POWER_UPDATE);
+    assert(s.clock_update_reads[0]==100 && m.clock_update.pending &&
+        m.pll_writes==pll && m.held && !m.releases && (m.regs[0][0xb24/4]&0x10000));
+    terminal();
+    puts("PASS GPU OFF: delayed update completes before PLL shutdown; stuck update retains PLL/reset/resources");
+}
 static void core_cases(void)
 {
     for (unsigned top = 0; top < 2; ++top) for (unsigned core = 0; core < 2; ++core) {
@@ -389,6 +411,7 @@ static void core_cases(void)
 int main(int argc, char **argv)
 {
     assert(argc == 2);
+    if (!strcmp(argv[1], "--completion-only")) { completion_cases(); return 0; }
     if (!strcmp(argv[1], "--core")) { core_cases(); return 0; }
     fresh(); assert(!a733_gpu_power_init(&s, &ops, &m));
     assert(a733_gpu_power_off(&s, 10000) == A733_GPU_POWER_INVALID);

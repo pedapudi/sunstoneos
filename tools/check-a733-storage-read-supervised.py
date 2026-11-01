@@ -182,7 +182,7 @@ def main(argv=None):
     for name in ('bundle','fel','evidence'):parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--database',type=Path,help=argparse.SUPPRESS)
     parser.add_argument('--claim',help=argparse.SUPPRESS);parser.add_argument('--owner',help=argparse.SUPPRESS)
-    parser.add_argument('--supervised-manual-reconnect',action='store_true',required=True,
+    parser.add_argument('--supervised-manual-reconnect',action='store_true',
         help='Retain resources until whole-board power removal; cable reconnect does not release SD0 read resources.')
     parser.add_argument('--read',action='append',metavar='FIRST:BLOCKS',help='One to four validated ranges; default 0:1 and 1:1.')
     parser.add_argument('--throughput',metavar='FIRST:SPAN',help='Read-only throughput plan over [FIRST, FIRST+SPAN); needs record version 4.')

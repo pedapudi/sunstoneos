@@ -1,4 +1,5 @@
 #include "a733_spi.h"
+#include "register_latency.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -19,11 +20,14 @@ struct model {
     /* A TX channel longer than the transfer: one extra byte arrives at the
      * next buffer status read while the TX request is enabled. */
     unsigned late_push;
+    struct register_latency reset, fifo_reset;
+    unsigned manual_time,fraction,write_cost;
+    uint64_t cs_ticks,done_ticks;
 };
 static void tick(struct model *m)
 {
-    if(m->r[1]&0x80000000u) { m->r[1]=0x80;m->r[6]&=~0x80008000u; }
-    m->r[6]&=~0x80008000u;
+    m->r[1]=reg_latency_apply(&m->reset,m->now,m->r[1]);
+    m->r[6]=reg_latency_apply(&m->fifo_reset,m->now,m->r[6]);
     if(m->r[6]&0x01000000u)
         while(m->tn<64&&m->dma_tx_i<m->dma_tx_n){m->tx[(m->ti+m->tn)%64]=m->dma_src[m->dma_tx_i++];m->tn++;}
     if((m->r[6]&0x100u)&&m->rn&&!(m->dma_rx_lag&&m->dma_rx_lag--))
@@ -41,9 +45,9 @@ static void tick(struct model *m)
         m->rx[(m->ri+m->rn)%192]=(uint8_t)(b^0xa5u^(m->received++));m->rn++;
     }
     m->burst++;
-    if(m->burst==m->total) {m->r[2]&=~0x80000000u;m->r[5]|=0x1000;m->done_at=m->now;}
+    if(m->burst==m->total) {m->r[2]&=~0x80000000u;m->r[5]|=0x1000;m->done_at=m->now;m->done_ticks=m->now*24+m->fraction;}
 }
-static int now(void *p,uint64_t *v) {struct model *m=p;tick(m);*v=++m->now;return 1;}
+static int now(void *p,uint64_t *v) {struct model *m=p;tick(m);if(!m->manual_time)++m->now;*v=m->now;return 1;}
 static int admit(void *p,const struct a733_spi_format *f,const struct a733_spi_plan *plan)
 { assert(f&&plan);return ((struct model*)p)->admit; }
 static int rd(void *p,uintptr_t a,uint32_t *v)
@@ -61,6 +65,13 @@ static int rd(void *p,uintptr_t a,uint32_t *v)
 static int wr(void *p,uintptr_t a,uint32_t v)
 {
     struct model *m=p;unsigned o=(unsigned)(a-m->base);assert(o<0x44);
+    /* Manual18.9.8.1/.5: reset commands self-clear. Ten fixture microseconds
+     * expose a pending interval; the manual does not specify this latency. */
+    m->r[1]=reg_latency_apply(&m->reset,m->now,m->r[1]);
+    m->r[6]=reg_latency_apply(&m->fifo_reset,m->now,m->r[6]);
+    assert(!m->reset.pending && !m->fifo_reset.pending);
+    if(o==4 && (v&0x80000000u))reg_latency_schedule(&m->reset,m->now,10,UINT32_MAX,0x80);
+    if(o==0x18 && (v&0x80008000u))reg_latency_schedule(&m->fifo_reset,m->now,10,0x80008000u,0);
     if(o==0x14){m->r[5]&=~v;return 1;}
     if(o==0x18&&m->fcr_stuck)return 1;
     if(o==0x08) {
@@ -68,11 +79,13 @@ static int wr(void *p,uintptr_t a,uint32_t v)
         if(m->cs_asserted&&!cs) {
             assert(m->burst==m->total&&!(m->r[2]&0x80000000u)&&!m->tn&&!m->rn&&!m->buffer_held);
             assert(m->now-m->done_at>=m->hold_us);m->cs_completed++;
+            assert(m->now*24+m->fraction-m->done_ticks>=(uint64_t)m->hold_us*24);
         }
-        if(!m->cs_asserted&&cs)m->cs_at=m->now;
+        if(!m->cs_asserted&&cs){m->now+=m->write_cost;m->cs_at=m->now;m->cs_ticks=m->now*24+m->fraction;}
         m->cs_asserted=cs;
         if(v&0x80000000u) {
             assert(m->now-m->cs_at>=m->setup_us);
+            assert(m->now*24+m->fraction-m->cs_ticks>=(uint64_t)m->setup_us*24);
             assert(!(m->r[2]&0x80000000u));m->total=m->r[0x30/4];m->bcc_at_start=m->r[0x38/4];
             m->tx_target=m->r[0x34/4];m->burst=0;m->received=0;
             if(m->uncertain_start){m->r[o/4]=v;return 0;}
@@ -99,7 +112,7 @@ static void start_format(struct a733_spi *s,struct model *m,const struct a733_sp
     struct a733_spi_format f=*format;unsigned port=f.port,mode=f.mode,lsb=f.lsb_first;
     struct a733_spi_plan plan;assert(!a733_spi_plan(port,f.max_hz,&plan));m->base=plan.base;
     assert(a733_spi_begin(s,&ops,m,&f,100000)==A733_SPI_RESETTING);
-    for(unsigned i=0;i<8&&s->state!=A733_SPI_READY;i++)a733_spi_poll(s,7);
+    for(unsigned i=0;i<8&&s->state!=A733_SPI_READY;i++){m->now+=10;a733_spi_poll(s,7);}
     assert(s->state==A733_SPI_READY);
     assert((m->r[2]&3)==mode&&!!(m->r[2]&0x1000)==lsb);
     m->r[0x88/4]=0xe5;
@@ -296,4 +309,37 @@ static void dma(void)
     finish(&s);assert(a733_spi_reap(&s)==A733_SPI_READY);
     m.r[6]|=0x100u;assert(a733_spi_close(&s,100000)==A733_SPI_FAULT);
 }
-int main(void){clocks();transfers();receive_capacity();faults();lanes();dma();puts("SPI clock, wire transfers, dual/quad lanes, DMA requests, retained faults and FIFO completion checks passed");}
+static void reset_latency(void)
+{
+    for(unsigned fifo=0;fifo<2;++fifo)for(unsigned stuck=0;stuck<2;++stuck) {
+        struct a733_spi s={0};struct model m={.admit=1};
+        struct a733_spi_format f={.port=3,.max_hz=500000};
+        struct a733_spi_plan plan;assert(!a733_spi_plan(3,f.max_hz,&plan));m.base=plan.base;
+        assert(a733_spi_begin(&s,&ops,&m,&f,1000)==A733_SPI_RESETTING);
+        if(fifo){m.now=20;assert(a733_spi_poll(&s,1)==A733_SPI_FIFO_RESET);}
+        struct register_latency *e=fifo?&m.fifo_reset:&m.reset;
+        e->stuck=stuck;
+        unsigned state=s.state;
+        assert(a733_spi_poll(&s,1)==(int)state);
+        assert(e->pending && !(m.r[1]&1));
+        if(stuck){m.now=1000;assert(a733_spi_poll(&s,1)==A733_SPI_FAULT);assert(e->pending);}
+        else {m.now=900;assert(a733_spi_poll(&s,1)==(fifo?A733_SPI_READY:A733_SPI_FIFO_RESET));assert(!e->pending);}
+    }
+}
+static void minimum_cs(void)
+{
+    for(unsigned costly=0;costly<2;++costly){
+        struct a733_spi s;struct model m;start(&s,&m,3,0,0,0);
+        m.manual_time=1;m.fraction=23;m.write_cost=costly?17:0;
+        uint8_t byte=0x5a;struct a733_spi_transfer t={.kind=A733_SPI_WRITE,.tx=&byte,.tx_bytes=1};
+        assert(a733_spi_submit(&s,&t,100000)==A733_SPI_SETUP);
+        uint64_t anchor=s.wait_since;m.now=anchor+3;m.fraction=0;
+        assert(a733_spi_poll(&s,1)==A733_SPI_SETUP&&!m.burst);
+        ++m.now;m.fraction=23;assert(a733_spi_poll(&s,1)==A733_SPI_ACTIVE);
+        assert(a733_spi_poll(&s,1)==A733_SPI_HOLD);
+        anchor=s.wait_since;m.now=anchor+5;m.fraction=0;
+        assert(a733_spi_poll(&s,1)==A733_SPI_HOLD&&m.cs_asserted);
+        ++m.now;assert(a733_spi_poll(&s,1)==A733_SPI_COMPLETE&&!m.cs_asserted);
+    }
+}
+int main(void){minimum_cs();reset_latency();clocks();transfers();receive_capacity();faults();lanes();dma();puts("SPI clock, wire transfers, dual/quad lanes, DMA requests, retained faults and delayed/stuck reset completion checks passed");}

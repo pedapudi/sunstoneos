@@ -271,100 +271,15 @@ def main(argv=None):
     for name in ('bundle','storage','fel','evidence'):live.add_argument('--'+name,type=Path,required=True)
     for name in ('qualification','input-evidence','admission','database'):live.add_argument('--'+name,type=Path,help=argparse.SUPPRESS)
     live.add_argument('--claim',help=argparse.SUPPRESS);live.add_argument('--owner',help=argparse.SUPPRESS)
-    live.add_argument('--confirm-bridge-stable',action='store_true',required=True)
+    live.add_argument('--confirm-bridge-stable',action='store_true')
     args=parser.parse_args(argv)
     if args.operation=='prepare-capture':
         print(prepare_capture(args.grant,args.identification,args.allocation,args.qualification,args.output));return 0
     if args.operation=='prepare':
         print(json.dumps(prepare(args.image,args.image_manifest,args.configuration,args.storage,args.output.resolve(),args.clang,args.lld),indent=2));return 0
-    bundle=args.bundle.resolve()
-    with store_api.ProtectedDirectory(args.storage) as store:
-        p,grant=validate_bundle(bundle,store)
-        config=json.loads((bundle/'configuration.json').read_text())
-        args.evidence=base.module('storage_launch_live_output',ROOT/'tools/host_evidence.py').evidence_directory(args.evidence)
-        for name,path in [('host.py',Path(__file__)),('base-host.py',Path(base.__file__)),
-                          ('storage-host.py',Path(store_api.__file__)),('prepared.json',bundle/'prepared.json')]:
-            shutil.copy2(path,args.evidence/name);base.sync_file(args.evidence/name)
-        access=base.module('storage_usb_access',ROOT/'tools/usb-access.py')
-        sys.path.insert(0,str(ROOT/'tools'));import usb_guard
-        usb_guard.check_health()
-        record=dict(complete=False,transactions=[],launch_attempted=False,storage_complete=False)
-        def save():save_json(args.evidence/'session.json',record)
-        with access.board_lock() as node:
-            access.require_session(node);access.require_rom(node);identity=access.identity(node)
-            port=access.target(node);port_config={'port':port.name,'sysfs':str(port.resolve())}
-            original=identity;failed=False
-            def ready():
-                validate_session({},p,grant,config,original,port.name,str(port.resolve()))
-                validate_bundle(bundle,store)
-            ready();record.update(initial_identity=identity,port=port.name);save()
-            def transaction(*arguments,pass_fds=()):
-                nonlocal failed
-                require(not failed,'Failed transport forbids further requests.')
-                entry={'arguments':list(map(str,arguments))};record['transactions'].append(entry);save()
-                try:
-                    require(access.identity(node)==identity,'USB instance changed before request.');access.require_rom(node)
-                    r=subprocess.run([str(args.fel),'-d',f'{int(node.parent.name)}:{int(node.name)}',*map(str,arguments)],
-                                     capture_output=True,text=True,timeout=15,pass_fds=pass_fds)
-                    entry.update(exit_code=r.returncode,stdout=r.stdout,stderr=r.stderr)
-                    require(r.returncode==0,'FEL request failed.')
-                except BaseException as error:
-                    failed=True;entry['failure']=str(error);save();raise
-                save();return r.stdout
-            def wait_runtime():
-                nonlocal node,identity
-                until=time.monotonic()+5;departed=False
-                while time.monotonic()<until:
-                    candidate=access.session_node(port_config)
-                    if candidate is None:departed=True
-                    else:
-                        try:
-                            observed=access.identity(candidate)
-                            if observed!=original:
-                                departed=True
-                                if os.access(candidate,os.R_OK|os.W_OK):
-                                    access.require_session(candidate)
-                                    require((port/'bcdDevice').read_text().strip()=='0102' and
-                                            (port/'product').read_text().strip()=='sunstoneos storage maintenance' and
-                                            (port/'serial').read_text().strip()=='sunstoneos-a733-storage',
-                                            'Distinct USB instance is not the maintenance runtime.')
-                                    node,identity=candidate,observed;record['runtime_identity']=observed;save()
-                                    return store_api.USBExchange(access,node,identity,grant)
-                        except FileNotFoundError:departed=True
-                    time.sleep(.02)
-                candidate=access.session_node(port_config)
-                if not departed and candidate is not None and access.identity(candidate)==original:
-                    refusal(transaction,p,args.evidence,record,save);return None
-                raise ValueError('No maintenance runtime within the acquisition bound; ownership retained.')
-            def wait_rom():
-                nonlocal node,identity
-                previous=identity;until=time.monotonic()+config['maximum_recovery_us']/1000000+5
-                while time.monotonic()<until:
-                    candidate=access.session_node(port_config)
-                    if candidate is not None:
-                        try:
-                            observed=access.identity(candidate)
-                            if observed!=previous and os.access(candidate,os.R_OK|os.W_OK):
-                                access.require_session(candidate);access.require_rom(candidate);node,identity=candidate,observed
-                                require('soc=00001903(A733)' in transaction('version'),'Returned ROM is not A733.')
-                                record['returned_identity']=observed;save();return
-                        except FileNotFoundError:pass
-                    time.sleep(.05)
-                raise ValueError('No distinct accessible ROM after completed maintenance; ownership retained.')
-            try:
-                require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
-                base.verify_dram(transaction,args.evidence,record,save)
-                with usb_guard.reenumeration('sunstoneos-a733','storage maintenance and independent ROM return',2):
-                    connected_launch(transaction,wait_runtime,wait_rom,ready,bundle,p,store,grant,args.evidence,record,save)
-            except BaseException as error:
-                record['transport_failed']=failed
-                base.stop_after_failure(record,save,lambda:access.quarantine_instance(node,
-                    'Storage maintenance stopped; no further requests or automatic retry.',identity),error)
-                raise
-    if record.get('clean_refusal'):
-        print('Launch refused before mutation; SRAM restored. Coordinator retains board ownership.');return 2
-    print('Storage completion receipt is durable and a distinct ROM executed. Power-loss durability and bootability remain unqualified.')
-    return 0
+    sys.path.insert(0, str(ROOT/'tools'))
+    import board
+    raise SystemExit(board.legacy_run(args, image=None, storage_write=True))
 
 
 if __name__=='__main__':

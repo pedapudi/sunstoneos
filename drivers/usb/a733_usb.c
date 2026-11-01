@@ -20,21 +20,42 @@ void tusb_time_delay_ms_api(uint32_t milliseconds)
     vTaskDelay(pdMS_TO_TICKS(milliseconds));
 }
 
+static void hold_us(uint32_t microseconds)
+{
+    /* This legacy target's monitor establishes the 24 MHz counter contract.
+     * One extra raw tick covers the fraction before the first sample. */
+    const uint64_t ticks=(COUNTER_HZ/1000000u)*(uint64_t)microseconds+1;
+    const uint64_t start=counter();
+    if(start>UINT64_MAX-ticks)platform_panic("USB hold overflow",__LINE__);
+    const uint64_t target=start+ticks;
+    if(microseconds>=1000)vTaskDelay(pdMS_TO_TICKS(microseconds/1000));
+    uint64_t previous=start;
+    for(unsigned reads=0;reads<1000000;++reads){
+        uint64_t now=counter();
+        if(now<previous)platform_panic("USB counter reversed",__LINE__);
+        if(now>=target)return;
+        previous=now;
+    }
+    platform_panic("USB counter stopped",__LINE__);
+}
+
 void a733_usb_prepare(void)
 {
-    // The caller has removed soft-connect. Let the host observe the detach.
-    vTaskDelay(pdMS_TO_TICKS(150));
+    // Complete the caller's SoftConn clear before the 150 ms detach hold.
+    a733_mmio_dsb_sy();
+    hold_us(150000);
     // Boot ROM supplies the parent reference and interconnect clocks. Reset
     // only this device controller, preserving the other USB controllers.
-    mmio_write(CCU + 0x1300, mmio_read(CCU + 0x1300) | (1U << 30));
+    a733_mmio_write32_dsb_sy_after(CCU + 0x1300, mmio_read(CCU + 0x1300) | (1U << 30));
     uint32_t gate = mmio_read(CCU + 0x1304) | (1U << 8);
-    mmio_write(CCU + 0x1304, gate & ~(1U << 24));
-    a733_mmio_dsb_sy();
-    vTaskDelay(pdMS_TO_TICKS(1));
-    mmio_write(CCU + 0x1304, gate | (1U << 24));
-    mmio_write(USB + 0x420, mmio_read(USB + 0x420) | 1);
-    mmio_write(USB + 0x410, (mmio_read(USB + 0x410) & ~(1U << 3)) | (1U << 5));
-    a733_mmio_dsb_sy();
+    a733_mmio_write32_dsb_sy_after(CCU + 0x1304, gate & ~(1U << 24));
+    /* Device reset is asserted: hold at least 1 ms after write completion. */
+    hold_us(1000);
+    a733_mmio_write32_dsb_sy_after(CCU + 0x1304, gate | (1U << 24));
+    /* Reset is released: allow 40 us for device gate/reset propagation. */
+    hold_us(40);
+    a733_mmio_write32_dsb_sy_after(USB + 0x420, mmio_read(USB + 0x420) | 1);
+    a733_mmio_write32_dsb_sy_after(USB + 0x410, (mmio_read(USB + 0x410) & ~(1U << 3)) | (1U << 5));
     platform_puts("USB controller prepared\n");
 }
 
