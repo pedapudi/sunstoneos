@@ -608,9 +608,11 @@ def host_round_trip(elf, binary, out):
     log.write_text(json.dumps({'session': 1, 'runs': [], 'acceptance': accepted}))
     prepared_args = ap.Namespace(elf=elf, image=binary, run_log=log, output=bundle, mask=[], budget=30.0)
     printed = io.StringIO()
+    harness.artifact_refused(lambda: host.prepare(prepared_args), bundle)
+    prepared_args.output = out / 'fresh-host-bundle'
     with contextlib.redirect_stdout(printed):
         host.prepare(prepared_args)
-    assert prior.read_bytes() == before and prepared_args.output.parent == bundle
+    assert prior.read_bytes() == before and prepared_args.output.parent == out
     bundle = prepared_args.output
     p = json.loads((bundle / 'prepared.json').read_text())
     assert json.loads(printed.getvalue())['output_directory'] == str(bundle.resolve()) == p['output_directory']
