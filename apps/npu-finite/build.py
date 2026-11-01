@@ -22,6 +22,9 @@ p.add_argument('--thermal',action='store_true',help='poll THS before and during 
 p.add_argument('--interrupt',action='store_true',help='build the interrupt-driven variant')
 p.add_argument('--startup-only',action='store_true',help='interrupt bootstrap OPEN/READY/CLOSE with no inference')
 p.add_argument('--single-inference',action='store_true',help='interrupt bootstrap OPEN/READY, one job with copied output and REAP, then CLOSE')
+p.add_argument('--active-cancel',action='store_true',help='finite diagnostic WAIT cancellation, controller-only recovery and one verified inference at 852 MHz')
+p.add_argument('--build-jobs',type=int,default=1,help='maximum compiler processes (default: 1)')
+p.add_argument('--host-elf-only',action='store_true',help='produce a linked host fixture ELF without a board binary')
 p.add_argument('--restart',action='store_true',help='IRQ returning diagnostic: local stop/restart between two baseline jobs')
 p.add_argument('--power-cycle',action='store_true',help='clean domain OFF/ON between two interrupt-driven baseline jobs')
 p.add_argument('--rate-852',action='store_true',help='PLL_NPU at 852 MHz, admitted only for a speed bin that lists 800 mV for it')
@@ -40,6 +43,11 @@ p.add_argument('--artifacts',type=Path,default=Path.home()/'.cache/sunstoneos/bu
 p.add_argument('--sdk-reference',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-complete-graph-proposal-20261019/sdk-reference',
  help='directory with network_binary.nb, published-input.dat and output0_2_1.dat')
 a=p.parse_args()
+if a.build_jobs<1:p.error('Build jobs must be positive')
+if a.active_cancel:
+ if a.latency or a.runtime or a.model_switch or a.sdk or a.sustained or a.restart or a.power_cycle or a.shufflenet or a.thermal or a.rate_492 or a.entry_checkpoint or a.entry_irq_checkpoint or a.entry_provider_checkpoint:
+  p.error('Active cancellation requires the baseline single-core interrupt profile')
+ a.startup_only=True;a.interrupt=True;a.rate_852=True
 if a.dependent_chain and (a.latency!='queue' or a.sequence):p.error('Dependent chain requires --latency queue and excludes --sequence')
 if not 1<=a.chain_repeats<=1000 or a.chain_repeats!=1 and not a.dependent_chain:p.error('Chain repetitions require --dependent-chain and 1..1000 repetitions')
 if a.sequence and (a.latency!='queue' or not 2<=a.sequence<=64):p.error('Sequence requires --latency queue and 2..64 repetitions')
@@ -88,6 +96,8 @@ config+=['-DCMAKE_C_COMPILER=/usr/bin/clang-21','-DCMAKE_ASM_COMPILER=/usr/bin/c
 # Every finite producer opts into RTC progress and armed-WDT behavior. The
 # original retained producer and other single-core consumers remain unchanged.
 config=[v+' -DSUNSTONE_CRUMBS=1 -DSUNSTONE_NPU_FINITE_WATCHDOG=1 -DINCLUDE_xTaskDelayUntil=1' if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
+if a.active_cancel:
+ config=[v+' -DSUNSTONE_NPU_ACTIVE_CANCEL=1' if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
 if a.latency:
  assert sum(v.startswith('-DCMAKE_C_FLAGS=') for v in config)==1
  config=[v+' -include '+str(root/'apps/npu-finite/latency-stats.h') if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
@@ -103,7 +113,7 @@ if a.shufflenet:
  config+=['-DA733_NPU_LARGE_GRAPH=ON','-DA733_NPU_NN_POOL_GRAPH=ON']
 if a.thermal:config+=['-DA733_NPU_FINITE_THERMAL=ON']
 save('configure-command.json',config);run('configure',config)
-run('base-build',['cmake','--build',str(e/'native'),'--target','a733-npu-convolution-single-core','-j6'])
+run('base-build',['cmake','--build',str(e/'native'),'--target','a733-npu-convolution-single-core','-j'+str(a.build_jobs)])
 entries=[x for x in json.loads((e/'native/compile_commands.json').read_text()) if 'a733-npu-convolution-single-core.dir/' in x['command']]
 link=shlex.split((e/'native/CMakeFiles/a733-npu-convolution-single-core.dir/link.txt').read_text());commands=[]
 obj=e/'objects';obj.mkdir(exist_ok=True)
@@ -187,7 +197,7 @@ if a.runtime:
   assert len(paths['inputs'])==len(m['inputs']) and len(paths['references'])==len(m['outputs']),m['name']
   for path,t in zip(paths['inputs']+paths['references'],m['inputs']+m['outputs']):
    assert path.stat().st_size==t['logical_bytes']==t['reference']['bytes'] and sha(path)==t['reference']['sha256'],(m['name'],path)
-  networks.append({'name':m['name'],'fixture':paths['model']==fixture['MODEL'],'model':model,'input':b''.join(x.read_bytes() for x in paths['inputs']),
+  networks.append({'name':m['name'],'inputs':len(m['inputs']),'outputs':len(m['outputs']),'fixture':paths['model']==fixture['MODEL'],'model':model,'input':b''.join(x.read_bytes() for x in paths['inputs']),
    'reference':b''.join(x.read_bytes() for x in paths['references']),'paths':{k:[str(x) for x in v] if isinstance(v,list) else str(v) for k,v in paths.items()}})
  assert len(networks)==2 and sha(fixture['MODEL'])==listed[0]['model']['sha256'],'network 0 is the baseline fixture; the client runs two networks'
  if a.model_switch:
@@ -208,6 +218,8 @@ if a.runtime:
   text+=f'const unsigned char npu_finite_reference_{i}[{len(n["reference"])}] __attribute__((used,retain))={{'+','.join(map(str,n['reference']))+'};\n'
  text+='const struct npu_finite_network npu_finite_networks[NPU_FINITE_NETWORKS]={\n'+''.join(
   f' {{model_{i},input_{i},npu_finite_reference_{i},{len(n["model"])}u,{len(n["input"])}u,{len(n["reference"])}u}},\n' for i,n in enumerate(networks))+'};\n'
+ text+='const struct ss_npu_model npu_finite_models[NPU_FINITE_NETWORKS]={\n'+''.join(
+  '{'+json.dumps(n['name'])+f',{n["inputs"]}u,{n["outputs"]}u,{len(n["input"])}u,{len(n["reference"])}u'+ '},\n' for n in networks)+'};\n'
  (generated/'networks.c').write_text(text)
  (generated/'npu_admitted_models.c').write_text(catalogue_tool.table(listed))
  runtime_objects=[compile_like('/apps/npu-convolution/native.c',root/'apps/npu-convolution/native-runtime.c','native-runtime'),
@@ -253,6 +265,7 @@ if a.startup_only:
  identity['profile']='npu-startup-return-v1'
  identity['startup_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/startup.c',root/'apps/npu-finite/startup.h',root/'apps/npu-finite/crumb.h')}
 if a.single_inference:identity['profile']='npu-single-inference-return-v1'
+if a.active_cancel:identity['profile']='npu-active-cancel-return-v1'
 if a.runtime:identity.update(profile='npu-runtime-return-v1',**runtime_identity)
 if a.model_switch:identity.update(profile='npu-model-switch-return-v1')
 if a.sdk:identity.update(profile='npu-sdk-return-v1')
@@ -310,7 +323,8 @@ if a.runtime:newlink[-2:-2]=[str(x) for x in runtime_objects]+['-Wl,--undefined=
 if checkpoint_irq and not a.entry_provider_checkpoint:newlink[-2:-2]=[str(checkpoint_irq)]
 if a.entry_checkpoint:newlink[-2:-2]=['-Wl,--undefined='+n for n in ('a733_npu_application_model','a733_npu_application_input','a733_npu_application_reference')]
 commands.append(newlink);run('link',newlink,cwd=e/'native')
-copy=['/usr/lib/llvm-21/bin/llvm-objcopy','-O','binary',str(e/'image.elf'),str(e/'image.bin')];commands.append(copy);run('binary',copy)
+if not a.host_elf_only:
+ copy=['/usr/lib/llvm-21/bin/llvm-objcopy','-O','binary',str(e/'image.elf'),str(e/'image.bin')];commands.append(copy);run('binary',copy)
 save('commands.json',commands)
 # Preserve the effective compiler closure, including generated SRE/platform units.
 inputs={root/'apps/npu-finite/link.ld',Path(__file__).resolve(),script,platform,source,e/'monitor-base.c'}
@@ -321,6 +335,6 @@ for dep in list((e/'native').rglob('*.obj.d'))+list(obj.glob('*.obj.d')):
 closure={}
 for i,path in enumerate(sorted(inputs)):
  dest=e/'compiled-inputs'/str(i)/path.name;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(path,dest);closure[str(path)]={'sha256':sha(path),'snapshot':str(dest.relative_to(e))}
-save('input-identities.json',{'compiled_inputs':closure,'identity_inputs':identity,'build_id':build_id,'elf_sha256':sha(e/'image.elf'),'binary_sha256':sha(e/'image.bin'),'physical_access':False,'physical_admission':False,'note':'Native NPU return image; host build evidence does not establish physical operation.'})
-save('manifest.json',{'execution_profile':identity['profile'],'build_id':build_id,'final_elf':sha(e/'image.elf'),'binary_sha256':sha(e/'image.bin'),'physical_admission':False})
+save('input-identities.json',{'compiled_inputs':closure,'identity_inputs':identity,'build_id':build_id,'elf_sha256':sha(e/'image.elf'),'binary_sha256':None if a.host_elf_only else sha(e/'image.bin'),'physical_access':False,'physical_admission':False,'host_fixture_only':a.host_elf_only,'note':'Native NPU return image; host build evidence does not establish physical operation.'})
+save('manifest.json',{'execution_profile':identity['profile'],'build_id':build_id,'final_elf':sha(e/'image.elf'),'binary_sha256':None if a.host_elf_only else sha(e/'image.bin'),'host_fixture_only':a.host_elf_only,'physical_admission':False})
 print('Built NPU runtime finite returning image:' if a.runtime else 'Built NPU interrupt finite returning image:' if a.interrupt else 'Built NPU finite returning image:',sha(e/'image.elf'))

@@ -1,5 +1,6 @@
 #ifndef SUNSTONE_NPU_APP_SERVICE_H
 #define SUNSTONE_NPU_APP_SERVICE_H
+#include "sunstone_app.h"
 #include <stddef.h>
 #include <stdint.h>
 /* OS task only. Bind once before applications start; callbacks execute only
@@ -8,6 +9,10 @@
 struct ss_npu_backend {
     int (*run)(unsigned,const void *,size_t,void *,size_t,uint64_t);
     int (*close)(void);
+    /* Immutable for the session. The backend checks these against its decoded
+     * linked models before bind; bind validates names and public capacities. */
+    const struct ss_npu_model *models;
+    unsigned count;
 };
 int ss_npu_service_bind(const struct ss_npu_backend *);
 /* Optional owner wakeup, registered once before bind and application startup.

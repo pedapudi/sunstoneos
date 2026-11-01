@@ -2,6 +2,7 @@
 #include "aarch64_device_memory.h"
 #include "a733_range.h"
 #include "a733_mapping_check.h"
+#include "sunstone_crumb.h"
 #include <string.h>
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
 #include "nbg_sh_nt.h"
@@ -113,9 +114,16 @@ static int private_overlap(const struct npu_convolution *c,uintptr_t p,size_t n)
  * the mapped fetch span. The prefix digest plus an END check of every later
  * eight-byte unit binds the same bytes as a digest of the whole allocation. */
 typedef uint64_t __attribute__((may_alias)) stream_word;
+static unsigned stream_slot(unsigned k)
+{
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+    if(k==2)return NPU_CONVOLUTION_WAIT;
+#endif
+    return k ? NPU_CONVOLUTION_BOOTSTRAP : NPU_CONVOLUTION_COMMAND;
+}
 static int stream_intact(const struct npu_convolution *c,unsigned k)
 {
-    const struct a733_npu_buffer *b=&c->buffers[k ? NPU_CONVOLUTION_BOOTSTRAP : NPU_CONVOLUTION_COMMAND];
+    const struct a733_npu_buffer *b=&c->buffers[stream_slot(k)];
     size_t bytes=c->stream_bytes[k];
     unsigned char actual[32];
     if(!bytes || (bytes&7) || bytes>b->bytes)return 0;
@@ -151,11 +159,26 @@ static int unchanged(struct npu_convolution *c,int job)
         digest((void *)b->cpu,b->bytes,actual);
         if(memcmp(actual,c->immutable_digest[j],sizeof(actual)))return fault(c);
     }
-    for(unsigned k=0;k<2u;++k)if(!stream_intact(c,k))return fault(c);
+    for(unsigned k=0;k<NPU_CONVOLUTION_STREAMS;++k)if(!stream_intact(c,k))return fault(c);
     return 1;
 }
 static void little(unsigned char *p,uint32_t v)
 {for(unsigned i=0;i<4;++i)p[i]=(unsigned char)(v>>(8*i));}
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+static int diagnostic_image(struct a733_npu_buffer *b)
+{
+    if(!b || !b->cpu || (b->cpu&7) || b->bytes!=NPU_CONVOLUTION_COMMAND_BYTES ||
+       b->role!=A733_NPU_BUFFER_COMMAND || b->device!=npu_convolution_layout[NPU_CONVOLUTION_WAIT].device ||
+       NPU_CONVOLUTION_WAIT_BYTES>b->bytes)return 0;
+    unsigned char *p=(void *)b->cpu;
+    for(size_t i=0;i<b->bytes;i+=8){little(p+i,0x10000000);little(p+i+4,0);}
+    /* VIPLite cmd_wait: opcode 7, argument 1600, second word zero. */
+    for(size_t i=0;i<NPU_CONVOLUTION_WAIT_PAIRS;++i)little(p+8*i,0x38000640);
+    little(p+8*NPU_CONVOLUTION_WAIT_PAIRS,0x08010e01);
+    little(p+8*NPU_CONVOLUTION_WAIT_PAIRS+4,0x40);
+    return 1;
+}
+#endif
 static int bootstrap_image(struct a733_npu_buffer *b)
 {
     unsigned char *p=(void *)b->cpu;
@@ -302,14 +325,22 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
        !bootstrap_image(&c->buffers[NPU_CONVOLUTION_BOOTSTRAP]) ||
        !a733_npu_memory_command(&c->native.memory,c->buffers[NPU_CONVOLUTION_BOOTSTRAP].device,&c->commands[0]) ||
        !a733_npu_memory_command(&c->native.memory,c->buffers[NPU_CONVOLUTION_COMMAND].device,&c->commands[1]))return fault(c);
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+    if(!diagnostic_image(&c->buffers[NPU_CONVOLUTION_WAIT]) ||
+       !a733_npu_memory_command(&c->native.memory,c->buffers[NPU_CONVOLUTION_WAIT].device,&c->commands[2]) ||
+       c->commands[2].token==c->commands[0].token || c->commands[2].token==c->commands[1].token)return fault(c);
+#endif
     for(unsigned j=0;j<4;++j) {
         const struct a733_npu_buffer *b=&c->buffers[immutable_slot(c,j)];
         digest((void *)b->cpu,b->bytes,c->immutable_digest[j]);
     }
     c->stream_bytes[0]=plan.buffers[NBG_ALLOC_COMMAND].payload_bytes;
     c->stream_bytes[1]=A733_NPU_BOOTSTRAP_BYTES;
-    for(unsigned k=0;k<2;++k) {
-        const struct a733_npu_buffer *b=&c->buffers[k ? NPU_CONVOLUTION_BOOTSTRAP : NPU_CONVOLUTION_COMMAND];
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+    c->stream_bytes[2]=NPU_CONVOLUTION_WAIT_BYTES;
+#endif
+    for(unsigned k=0;k<NPU_CONVOLUTION_STREAMS;++k) {
+        const struct a733_npu_buffer *b=&c->buffers[stream_slot(k)];
         if(!c->stream_bytes[k] || (c->stream_bytes[k]&7) || c->stream_bytes[k]>b->bytes)return fault(c);
         digest((void *)b->cpu,c->stream_bytes[k],c->stream_digest[k]);
         if(!stream_intact(c,k))return fault(c);
@@ -335,7 +366,19 @@ static int write_reg(void *cookie,unsigned offset,uint32_t v)
 {
     struct npu_convolution *c=cookie;
     if(!good(c) || !a733_npu_startup_window_open(c->startup) || !a733_npu_native_operations.write(&c->native,offset,v))return 0;
-    if(offset==0x3a4)c->job_doorbell_ticks=ticks(); /* The trigger; the bootstrap's is overwritten by the job's. */
+    if(offset==0x3a4) {
+        c->job_doorbell_ticks=ticks(); /* The bootstrap's is overwritten by the job's. */
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+        c->job_doorbell_us=a733_npu_native_operations.microseconds(&c->native);
+        if(c->service.controller.job.device==c->commands[2].device)
+            sunstone_crumb(SUNSTONE_CRUMB_NPU_CANCEL_TRIGGER,2);
+#endif
+    }
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+    if(offset==0x3a8 && c->diagnostic.proven && c->service.controller.state==A733_NPU_CANCEL_ASSERTED)
+        sunstone_crumb((v&8) ? SUNSTONE_CRUMB_NPU_CANCEL_ASSERT : SUNSTONE_CRUMB_NPU_CANCEL_RELEASE,
+            (uint32_t)c->diagnostic.job_ticket);
+#endif
     return 1;
 }
 static uint64_t now(void *cookie)
@@ -351,7 +394,11 @@ static int publish(void *cookie,const struct a733_npu_mmu_image *image,
 {
     struct npu_convolution *c=cookie;
     if(!bootstrap)c->job_publish_ticks=ticks();
-    if((bootstrap!=0 && bootstrap!=1) || !same_command(command,&c->commands[bootstrap ? 0 : 1]) ||
+    int selected=same_command(command,&c->commands[bootstrap ? 0 : 1]);
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+    if(!bootstrap && same_command(command,&c->commands[2]))selected=1;
+#endif
+    if((bootstrap!=0 && bootstrap!=1) || !selected ||
        !unchanged(c,!bootstrap))return fault(c);
     if(!a733_npu_native_operations.publish(&c->native,image,command,bootstrap))return 0;
     if(!bootstrap) {
@@ -383,12 +430,14 @@ static int metadata(const struct npu_convolution *c,const struct a733_npu_ops *o
     const struct a733_npu_mmu_image *image,const struct a733_npu_command *commands,unsigned count)
 {
     const struct a733_npu_mmu_image *own=&c->native.memory.image;
-    return ops && image && commands && count==2 && cookie==c &&
+    int command_match=commands && count==NPU_CONVOLUTION_COMMANDS;
+    for(unsigned i=0;command_match && i<NPU_CONVOLUTION_COMMANDS;++i)
+        command_match=same_command(&commands[i],&c->commands[i]);
+    return ops && image && command_match && cookie==c &&
         ops->read==read_reg && ops->write==write_reg && ops->microseconds==now &&
         ops->delay==delay && ops->barrier==barrier && ops->publish==publish && ops->finish==finish &&
         image->physical==own->physical && image->bytes==own->bytes &&
-        image->pd_entry==own->pd_entry && image->tables==own->tables &&
-        same_command(&commands[0],&c->commands[0]) && same_command(&commands[1],&c->commands[1]);
+        image->pd_entry==own->pd_entry && image->tables==own->tables;
 }
 /* Service activation, on the startup's task: the service's copy of the
  * operations, image and catalogue is the only one, checked here once. */
@@ -411,8 +460,9 @@ int npu_convolution_bind(struct npu_convolution *c,struct a733_npu_startup *star
        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     c->startup=startup;c->client=client;
     const struct npu_service_activation activation={startup->task,prepared,c};
-    if(!npu_service_init_deferred(&c->service,&operations,c,&c->native.memory.image,c->commands,2,
-        priority,affinity,&activation) || !npu_service_bind(&c->service,0,client,2))return fault(c);
+    if(!npu_service_init_deferred(&c->service,&operations,c,&c->native.memory.image,c->commands,NPU_CONVOLUTION_COMMANDS,
+        priority,affinity,&activation) || !npu_service_bind(&c->service,0,client,
+        (1u<<NPU_CONVOLUTION_COMMANDS)-2u))return fault(c);
     c->bound=1;return 1;
 }
 static enum a733_npu_platform_result platform_step(struct npu_convolution *c,int stop)
@@ -430,8 +480,8 @@ enum a733_npu_platform_result npu_convolution_startup_poll(struct npu_convolutio
 static int client(const struct npu_convolution *c)
 {return c && c->prepared && c->bound && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
     xTaskGetCurrentTaskHandle()==c->client;}
-int npu_convolution_send(struct npu_convolution *c,enum npu_service_operation op,
-    const void *input,size_t bytes,uint64_t timeout,TickType_t wait,uint64_t *ticket)
+static int send(struct npu_convolution *c,enum npu_service_operation op,
+    const void *input,size_t bytes,uint64_t timeout,TickType_t wait,uint64_t *ticket,unsigned command)
 {
     if(!client(c) || !good(c) || atomic_load_explicit(&c->closed,memory_order_acquire) || c->pending || !ticket || private_overlap(c,(uintptr_t)ticket,sizeof(*ticket)) ||
        wait==portMAX_DELAY || (op!=NPU_SERVICE_SUBMIT && (input || bytes)))return 0;
@@ -456,7 +506,7 @@ int npu_convolution_send(struct npu_convolution *c,enum npu_service_operation op
         if(c->native.memory.state!=A733_NPU_MEMORY_IDLE)return fault(c);
         memset((void *)c->buffers[NPU_CONVOLUTION_POOL].cpu,0,c->buffers[NPU_CONVOLUTION_POOL].bytes);
 #endif
-        memcpy((void *)c->buffers[NPU_CONVOLUTION_INPUT].cpu,input,bytes);r.command=1;
+        memcpy((void *)c->buffers[NPU_CONVOLUTION_INPUT].cpu,input,bytes);r.command=command;
         /* The WRITE-role output is cleaned and invalidated by the job
          * publication, so the device starts from this pattern. The buffer is
          * page aligned: whole 64-bit words, then the tail bytes. */
@@ -466,6 +516,17 @@ int npu_convolution_send(struct npu_convolution *c,enum npu_service_operation op
         for(;i+8<=size;i+=8)*(uint64_t *)(output+i)=NPU_CONVOLUTION_OUTPUT_POISON*UINT64_C(0x100000001);
         for(;i<size;++i)*(unsigned char *)(output+i)=(unsigned char)(NPU_CONVOLUTION_OUTPUT_POISON>>8*(i&3));
         break;
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+    case NPU_SERVICE_CANCEL:
+        if(!c->diagnostic_job || !c->job || c->output_ready || c->ready ||
+           c->observed.state!=A733_NPU_RUNNING || timeout<=100 || timeout>20000)return 0;
+        break;
+    case NPU_SERVICE_RECOVER:
+        if(!c->diagnostic_reaped || c->diagnostic_recovering || c->diagnostic_recovered ||
+           c->job || c->output_ready || c->ready || c->observed.state!=A733_NPU_DRAINED ||
+           !timeout || timeout>100000)return 0;
+        break;
+#endif
     case NPU_SERVICE_REAP:
         if(!c->output_ready || !c->job || timeout)return 0;
         break;
@@ -479,9 +540,28 @@ int npu_convolution_send(struct npu_convolution *c,enum npu_service_operation op
     if(!npu_service_send(&c->service,&r,wait,&t))return 0;
     c->pending=t;c->pending_operation=op;
     if(op==NPU_SERVICE_OPEN)c->opened=1;
-    if(op==NPU_SERVICE_SUBMIT){c->job=t;c->ready=0;c->output_ready=0;}
+    if(op==NPU_SERVICE_SUBMIT){
+        c->job=t;c->ready=0;c->output_ready=0;
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+        c->diagnostic_job=command==2;c->diagnostic_canceled=0;
+#endif
+    }
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+    if(op==NPU_SERVICE_RECOVER)c->diagnostic_recovering=1;
+#endif
     *ticket=t;return 1;
 }
+int npu_convolution_send(struct npu_convolution *c,enum npu_service_operation op,
+    const void *input,size_t bytes,uint64_t timeout,TickType_t wait,uint64_t *ticket)
+{return send(c,op,input,bytes,timeout,wait,ticket,1);}
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+int npu_convolution_diagnostic_send(struct npu_convolution *c,const void *input,size_t bytes,
+    uint64_t timeout,TickType_t wait,uint64_t *ticket)
+{
+    if(!c || c->diagnostic_reaped || timeout>100000)return 0;
+    return send(c,NPU_SERVICE_SUBMIT,input,bytes,timeout,wait,ticket,2);
+}
+#endif
 int npu_convolution_collect(struct npu_convolution *c,uint64_t ticket,
     struct npu_service_reply *out,TickType_t wait)
 {
@@ -498,11 +578,39 @@ int npu_convolution_collect(struct npu_convolution *c,uint64_t ticket,
             atomic_store_explicit(&c->closed,1,memory_order_release);
         }
     } else if(reply.result!=NPU_SERVICE_OK || reply.fault!=A733_NPU_NO_FAULT || !reply.owns_session ||
-       reply.canceled || (c->job && reply.job_ticket!=c->job))fault(c);
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+       (reply.canceled && !(c->diagnostic_job && op==NPU_SERVICE_REAP)) ||
+#else
+       reply.canceled ||
+#endif
+       (c->job && reply.job_ticket!=c->job))fault(c);
     else if(op==NPU_SERVICE_REAP) {
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+        if(c->diagnostic_job) {
+            if(!c->diagnostic_canceled || !reply.canceled || reply.state!=A733_NPU_DRAINED)fault(c);
+            else {c->job=0;c->output_ready=0;c->diagnostic_job=0;c->diagnostic_reaped=1;}
+        } else
+#endif
         if(reply.state!=A733_NPU_READY)fault(c);
         else {c->job=0;c->output_ready=0;c->ready=1;}
-    } else if(reply.state==A733_NPU_READY && !c->job)c->ready=1;
+    } else if(reply.state==A733_NPU_READY && !c->job) {
+        c->ready=1;
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+        if(c->diagnostic_recovering) {
+            c->diagnostic_recovering=0;c->diagnostic_recovered=1;
+        }
+#endif
+    }
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+    else if(c->diagnostic_job && c->job && reply.state==A733_NPU_CANCELED) {
+        c->diagnostic_canceled=1;c->output_ready=1;
+    }
+    else if(c->diagnostic_job && op==NPU_SERVICE_CANCEL &&
+        (reply.state==A733_NPU_CANCEL_ASSERTED || reply.state==A733_NPU_CANCEL_WAIT)){}
+    /* A finite diagnostic that reaches DONE before cancellation has not proved
+     * cancellation of active work. Retain before output or REAP admission. */
+    else if(c->diagnostic_job && reply.state==A733_NPU_DONE)fault(c);
+#endif
     else if(reply.state==A733_NPU_DONE && c->job)c->output_ready=1;
     else if(reply.state!=A733_NPU_BOOTING && reply.state!=A733_NPU_RUNNING)fault(c);
     *out=reply;return 1;
@@ -534,6 +642,28 @@ static int restart_ready(void *cookie)
     struct npu_convolution *c=cookie;
     return restart_live(c) && a733_npu_startup_window_open(c->startup);
 }
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+static uint64_t diagnostic_trigger(void *cookie)
+{return ((struct npu_convolution *)cookie)->job_doorbell_us;}
+static int diagnostic_check(void *cookie,unsigned stage)
+{
+    struct npu_convolution *c=cookie;
+    if(!restart_ready(c))return 0;
+    if(stage==2)return 1;
+    return stage<=1 && c->native.memory.state==A733_NPU_MEMORY_IDLE &&
+        !c->native.memory.active.device && unchanged(c,0) &&
+        c->diagnostic_checkpoint(c->diagnostic_checkpoint_cookie,stage)==1;
+}
+int npu_convolution_cancel_diagnostic_enable(struct npu_convolution *c,int (*irq)(void *),
+    int (*checkpoint)(void *,unsigned),void *cookie)
+{
+    if(!good(c) || !c->bound || !checkpoint || !cookie || c->diagnostic_checkpoint)return 0;
+    c->diagnostic_checkpoint=checkpoint;c->diagnostic_checkpoint_cookie=cookie;
+    if(!npu_service_cancel_diagnostic_enable(&c->service,&c->diagnostic,2,diagnostic_trigger,
+        diagnostic_check,c,irq))return fault(c);
+    return 1;
+}
+#endif
 int npu_convolution_restart_enable(struct npu_convolution *c,int (*irq)(void *))
 {
     return good(c) && c->bound && npu_service_restart_enable(&c->service,irq,restart_ready);

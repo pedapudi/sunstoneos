@@ -204,7 +204,11 @@ def typed_inputs(out):
                                                                           'configure_adc_clock': 1}))
         return real_load(name, path)
     info = {'generic': True, 'descriptor': {}, 'watchdog': {'mode': 0xb1, 'session_seconds': 20},
-            'report_geometry': {}}
+            # Inert ELF fixture's linked report, result, monitor and heap spans.
+            'report_geometry': {'report_address':0x42005000,'report_bytes':8880,
+                'output_address':0x41200000,'output_bytes':72,
+                'monitor':(0x42005000,0x42005000+8880+32768),
+                'cached_writable':(0x41200000,0x41300000),'application_regions':[]}}
     with patch.object(images, 'load', side_effect=modeled_state):
         plan = images.prepare(args, info, {'words': {}}, folder/'prepared')
     raw = (folder/'prepared/session.bin').read_bytes()

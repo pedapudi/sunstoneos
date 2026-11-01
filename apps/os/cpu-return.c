@@ -9,6 +9,9 @@
 #include "platform.h"
 #include "sunstone_crumb.h"
 #include <string.h>
+#ifdef SUNSTONE_A733_OS_NPU
+#include "npu.h"
+#endif
 /* The host arms WDT0 in this mode before launch, waits for the session
  * length plus one interval, and reads the breadcrumbs at this address after a
  * watchdog reset (apps/os/cpu-return-host.py). */
@@ -43,11 +46,29 @@ __attribute__((noinline)) static void bounded(void)
 uint64_t os_cpu_return_cutoff(void)
 {return (board.session.deadline_us-OS_CPU_RETURN_RESERVE_US)*24;}
 int os_cpu_return_requested(void){return atomic_load_explicit(&closing,memory_order_acquire);}
-int os_cpu_return_ready(void){return atomic_load_explicit(&ready,memory_order_acquire);}
+/* Task-context gates retain the original NPU fault. The EL3 terminal calls
+ * ready() after selecting its Secure Device stack; its health read stays
+ * side-effect free because breadcrumb SVC is not available at EL3. */
+int os_cpu_return_devices_ready(void)
+{
+#ifdef SUNSTONE_A733_OS_NPU
+    return os_npu_retirement_check();
+#else
+    return 1;
+#endif
+}
+int os_cpu_return_ready(void)
+{
+    if(!atomic_load_explicit(&ready,memory_order_acquire))return 0;
+#ifdef SUNSTONE_A733_OS_NPU
+    if(!os_npu_complete())return 0;
+#endif
+    return 1;
+}
 static void terminal(void *argument)
 {
     unsigned core=(unsigned)(uintptr_t)argument;
-    if(ulTaskNotifyTake(pdTRUE,portMAX_DELAY)!=1||portGET_CORE_ID()!=core||!os_cpu_return_ready())fail(0x737);
+    if(ulTaskNotifyTake(pdTRUE,portMAX_DELAY)!=1||portGET_CORE_ID()!=core||!os_cpu_return_devices_ready()||!os_cpu_return_ready())fail(0x737);
     sunstone_crumb(SUNSTONE_CRUMB_TERMINAL,core);
     a733_qualification_worker_done(core);
 }
@@ -72,6 +93,7 @@ void os_cpu_return_begin(const uint8_t *text,size_t bytes)
 #ifdef SUNSTONE_A733_OS_GPU_LINEAR
     if(!os_gpu_return_ready())fail(0x740);
 #endif
+    if(!os_cpu_return_devices_ready())fail(0x741);
     const struct ss_result *result=(const void *)ss_result_record;
     if(result->magic!=SS_RESULT_MAGIC||result->status!=SS_RESULT_FINISHED||result->payload_bytes!=bytes)fail(0x738);
     sunstone_crumb(SUNSTONE_CRUMB_OUTPUT,(uint32_t)bytes);
@@ -84,6 +106,7 @@ void os_cpu_return_pmic(void)
 {
     if(!atomic_load_explicit(&pmic_stop,memory_order_acquire))return;
     bounded();
+    if(!os_cpu_return_devices_ready())fail(0x741);
     struct a733_native_usb *p=&providers.shared;
     if(p->pmic.held||p->pmic.retained||p->pmic.failed||p->pmic.active!=A733_PMIC_REQUESTS||
        atomic_load_explicit(&p->locks.retained,memory_order_acquire))fail(0x739);
@@ -110,6 +133,7 @@ void os_cpu_return_supervise(void)
         if(a733_smp_counter()>=cutoff)fail(0x73c);
         return;
     }
+    if(!os_cpu_return_devices_ready())fail(0x741);
     if(!atomic_load_explicit(&thermal_done,memory_order_acquire))return;
 #ifdef SUNSTONE_A733_OS_DMA
     if(!os_dma_return_ready())return;

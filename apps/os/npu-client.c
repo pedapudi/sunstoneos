@@ -1,13 +1,15 @@
-/* One concrete application of the task-bound API. The full catalogue remains
- * selectable through LOAD; this default caller compares one linked vector.
+/* One concrete application of the task-bound API. Every linked catalogue
+ * entry is selectable through LOAD; this caller compares one selected vector.
  * The client exercises generic model sessions and accelerator dispatch. */
 #include "os.h"
 #include "npu.h"
 #include "application.h"
 #include "sunstone_npu_service.h"
+#include "sunstone_crumb.h"
 #include "../board/application.h"
 #include <string.h>
-static struct os_npu_report published;
+struct os_npu_report os_npu_published_report;
+#define published os_npu_published_report
 static uint8_t pattern_byte(size_t i){return (uint8_t)(OS_NPU_OUTPUT_PATTERN>>8*(i&3));}
 /* Whole 64-bit words where aligned, then the tail bytes. */
 static void fill(uint8_t *p,size_t bytes)
@@ -34,12 +36,13 @@ int os_npu_complete(void)
     return atomic_load_explicit(&published.finished,memory_order_acquire)&&
         published.stopped&&!published.retained&&os_npu_stopped();
 }
+static uint32_t sdk_jobs,sdk_output_bytes;
 /* The existing privileged slot owner services the application's mailbox. */
 static unsigned sdk_loaded,sdk_model;
 static int sdk_run(unsigned model,const void *input,size_t input_bytes,
                    void *output,size_t output_bytes,uint64_t timeout)
 {
-    if(model>=OS_NPU_MODELS)return 0;
+    if(model>=os_npu_model_count)return 0;
     struct npu_runtime_tensor t;
     int r;
     if(!sdk_loaded||sdk_model!=model||!os_npu_tensor(NBG_INPUT,0,&t)) {
@@ -60,19 +63,41 @@ static int sdk_run(unsigned model,const void *input,size_t input_bytes,
     for(unsigned i=0;os_npu_tensor(NBG_INPUT,i,&t);++i) {
         memcpy(t.data,(const uint8_t *)input+offset,t.bytes);offset+=t.bytes;
     }
+    /* Guard notes retain the local model in aux and copied extent in value. */
+    if(offset!=input_bytes) {
+        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU)|((model&0x7ffu)<<16),
+            (uint32_t)offset,SUNSTONE_CRUMB_HERE());
+        return -1;
+    }
     r=os_npu_submit(timeout);if(r!=1)return r;
     offset=0;
     for(unsigned i=0;os_npu_tensor(NBG_OUTPUT,i,&t);++i) {
         memcpy((uint8_t *)output+offset,t.data,t.bytes);offset+=t.bytes;
     }
+    if(offset!=output_bytes) {
+        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU)|((model&0x7ffu)<<16),
+            (uint32_t)offset,SUNSTONE_CRUMB_HERE());
+        return -1;
+    }
+    ++sdk_jobs;sdk_output_bytes=(uint32_t)output_bytes;
     return 1;
 }
 static unsigned sdk_closed;
 static int sdk_close(void)
 {int r=os_npu_close();if(r==1)sdk_closed=1;return r;}
-int os_npu_sdk_bind(void)
+int os_npu_sdk_bind(const struct npu_runtime *runtime)
 {
-    const struct ss_npu_backend backend={sdk_run,sdk_close};
+    if(!runtime||runtime->count!=os_npu_model_count)return 0;
+    for(unsigned i=0;i<os_npu_model_count;++i) {
+        const struct nbg_assembly_layout *p=&runtime->plans[i];
+        const struct ss_npu_model *m=&os_npu_model_info[i];
+        if(m->inputs!=p->inputs||m->outputs!=p->outputs)return 0;
+        size_t inputs=0,outputs=0;
+        for(unsigned j=0;j<p->inputs;++j)inputs+=p->buffers[NBG_ALLOC_INPUT+j].payload_bytes;
+        for(unsigned j=0;j<p->outputs;++j)outputs+=p->buffers[NBG_ALLOC_INPUT+p->inputs+j].payload_bytes;
+        if(inputs!=m->input_bytes||outputs!=m->output_bytes)return 0;
+    }
+    const struct ss_npu_backend backend={sdk_run,sdk_close,os_npu_model_info,os_npu_model_count};
     return ss_npu_service_bind(&backend);
 }
 void os_npu_client_task(void *unused)
@@ -110,7 +135,7 @@ void os_npu_client_task(void *unused)
     }
     if(os_npu_stopping()){r->refused=1;goto close;}
     /* A thermal stop after the check above makes LOAD refuse. */
-    const int loaded=os_npu_load(0);
+    const int loaded=os_npu_load(os_npu_client_entry);
     if(!loaded){r->refused=1;goto close;}
     if(loaded<0)goto retained;
     for(unsigned job=0;job<s->npu.jobs;++job) {
@@ -148,7 +173,10 @@ wait_stop:
         (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));
     }
 done:
-    if(ss_application.manifest&&!sdk_closed)ss_npu_service_fail();
+    if(ss_application.manifest) {
+        r->jobs=sdk_jobs;r->output_bytes=sdk_output_bytes;r->pattern=0;
+        if(!sdk_closed)ss_npu_service_fail();
+    }
     /* One publication: the copy completes before finished becomes visible. */
     r->stopped=os_npu_stopped();
     memcpy((uint8_t *)&published+16,(const uint8_t *)r+16,OS_NPU_REPORT_BYTES-16);

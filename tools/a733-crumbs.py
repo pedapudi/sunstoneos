@@ -161,6 +161,25 @@ def board_failure(words, defines, elf):
         record['register_offset'] = hex((record['aux'] & 0x3fff) << 2)
     elif record['group'] == 'npu' and site & defines['NPU_STARTUP']:
         record['startup_stage'] = record['aux'] & 0xff
+    elif record['group'] == 'npu' and site & defines['NPU_MEASUREMENT']:
+        job=site >> 16 & 255
+        record.update(measurement_stage=23+(site >> 24 & 7),
+                      job_index=None if job==255 else job,
+                      observed_word=hex(value),
+                      observed_word_index=int(bool(site & defines['NPU_MEASUREMENT_HIGH_WORD'])))
+    elif record['group'] == 'npu' and site & defines.get('NPU_REQUEST', 0):
+        operations=('STATUS','OPEN','SUBMIT','CANCEL','REAP','CLOSE','WAIT','LOAD')
+        record.update(request_operation=operations[site >> 24 & 7],
+                      expected_ticket_low8=site >> 16 & 255,
+                      observed_word=hex(value),ticket_bits=8)
+    elif record['group']=='npu' and not site&defines.get('NPU_REQUEST',0) and site&defines['NPU_CANCEL']:
+        sample=site>>23&3
+        record.update(cancel_sample=None if sample==3 else sample,ticket_low_bits=site>>16&127,ticket_bits=7,
+                      observed_word=hex(value),observed_word_index=int(bool(site&defines['NPU_CANCEL_HIGH_WORD'])))
+    elif record['group']=='npu' and not site&defines.get('NPU_REQUEST',0) and site&defines['NPU_OUTPUT']:
+        record.update(ticket_low_bits=site>>16&511,ticket_bits=9)
+        if value&defines['NPU_OUTPUT_LENGTH']:record['output_bytes']=value&0x7fffffff
+        else:record.update(output_byte_index=value>>8,output_byte=value&255)
     if record['group'] == 'cpu_return' and record['site'] == BOUNDED:
         record['deadline_seconds'] = record['aux']
         record['refusal'] = [text for bit, text in LIVE_REFUSAL if value >> bit & 1]
@@ -288,6 +307,16 @@ def decode(words, epoch, elf=None):
             text += f"; register offset {f['register_offset']}"
         if 'startup_stage' in f:
             text += f"; startup stage {f['startup_stage']}"
+        if 'measurement_stage' in f:
+            text += (f"; NPU measurement stage {f['measurement_stage']}, "
+                     f"job {f['job_index'] if f['job_index'] is not None else 'global'}, "
+                     f"observed {'high' if f['observed_word_index'] else 'low'} word {f['observed_word']}")
+        if 'cancel_sample' in f:
+            text += (f"; cancel sample {f['cancel_sample'] if f['cancel_sample'] is not None else 'unavailable'}, "
+                     f"ticket low {f['ticket_bits']} bits {f['ticket_low_bits']}, "
+                     f"observed {'high' if f['observed_word_index'] else 'low'} word {f['observed_word']}")
+        if 'output_byte_index' in f:text += f"; output byte {f['output_byte_index']} was {f['output_byte']:#x}; ticket low {f['ticket_bits']} bits {f['ticket_low_bits']}"
+        if 'output_bytes' in f:text += f"; output bytes {f['output_bytes']}; ticket low {f['ticket_bits']} bits {f['ticket_low_bits']}"
         if f['group'] == 'cpu_retained':
             text += (f"; setter {f['setter']}, state {f['driver_state_name']}, domain {f['domain_name']}, "
                      f"origin {f['origin_name']}, target {f['target_mhz']} MHz, phase {f['phase_name']}, "

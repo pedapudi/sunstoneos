@@ -77,7 +77,7 @@ def main():
         machine.put(machine.n + machine.nL['end'], machine.now + 50000)
         machine.put(machine.n + machine.nL['gate'], ((machine.now + 1000000) << 3) | 1)
         machine.call('os_npu_client_task', 0, budget=1000000)
-        published = image.address('published', unit='apps/os/npu-client.c')
+        published = (image.address('os_npu_published_report') if 'os_npu_published_report' in image.symbols else image.address('published', unit='apps/os/npu-client.c'))
         layout = machine.L['os_npu_report']
         fields = {key: machine.get(published + layout[key], 4) for key in ('finished', 'stopped', 'retained')}
         failed = variant != 'normal-refusal'
@@ -145,7 +145,7 @@ def late_stop(image, raw, results):
     machine.now = 6001000
     service = machine.rt + machine.L['npu_runtime']['service']
     layout = machine.L['npu_service']
-    published = image.address('published', unit='apps/os/npu-client.c')
+    published = (image.address('os_npu_published_report') if 'os_npu_published_report' in image.symbols else image.address('published', unit='apps/os/npu-client.c'))
     report = machine.L['os_npu_report']
     for key in ('started', 'stopped', 'active'):
         machine.put(machine.n + machine.nL[key], 1, 4)

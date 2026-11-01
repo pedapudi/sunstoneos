@@ -6,8 +6,9 @@
 #include <stdio.h>
 struct board_application board;
 const struct ss_application ss_application={.manifest=(const void *)1};
-const unsigned os_npu_client_model=0,os_npu_input_count=0,os_npu_output_count=0;
+const unsigned os_npu_model_count=1,os_npu_client_entry=0,os_npu_client_model=0,os_npu_input_count=0,os_npu_output_count=0;
 const struct os_npu_vector os_npu_inputs[1]={{0}},os_npu_references[1]={{0}};
+const struct ss_npu_model os_npu_model_info[]={{"copy",1,1,4,4}};
 static struct os_session session;
 static char input[4]="abc",output[4],tensor_input[4],tensor_output[4];
 static unsigned loads,submits,ready,closed,waits,progresses,notifications;
@@ -29,6 +30,7 @@ int os_npu_submit(uint64_t timeout)
 {assert(timeout==100);++submits;memcpy(tensor_output,tensor_input,4);return 1;}
 int os_npu_close(void){closed=1;return 1;}
 int board_live(void *v){assert(!v);return 1;}
+void board_fail_note(uint32_t s,uint32_t v,const void *p){(void)s;(void)v;(void)p;assert(0);}
 void board_fail(void *v){(void)v;assert(0);}
 void vTaskSuspend(TaskHandle_t task){assert(!task);longjmp(ended,1);}
 static void notify(void *unused){(void)unused;++notifications;}
@@ -56,9 +58,14 @@ int main(void)
     assert(sdk_run(0,input,4,output,4,100)==1&&loads==1&&submits==2);
     /* A lost READY window requires a new LOAD even for the same model. */
     ready=0;assert(sdk_run(0,input,4,output,4,100)==1&&loads==2&&submits==3);
-    assert(sdk_run(OS_NPU_MODELS,input,4,output,4,100)==0&&loads==2&&submits==3);
+    assert(sdk_run(os_npu_model_count,input,4,output,4,100)==0&&loads==2&&submits==3);
     assert(sdk_run(0,input,3,output,4,100)==0&&loads==2&&submits==3);
-    assert(ss_npu_service_bind_event(notify,NULL)&&os_npu_sdk_bind());
+    struct npu_runtime runtime={.count=1};
+    struct nbg_assembly_layout *plan=&runtime.plans[0];
+    plan->inputs=1;plan->outputs=1;
+    plan->buffers[NBG_ALLOC_INPUT].payload_bytes=4;
+    plan->buffers[NBG_ALLOC_INPUT+1].payload_bytes=4;
+    assert(ss_npu_service_bind_event(notify,NULL)&&os_npu_sdk_bind(&runtime));
     if(!setjmp(ended))os_npu_client_task(NULL);
     assert(waits==3&&progresses==5&&notifications==2&&loads==2&&submits==4);
     assert(ss_npu_close()==1&&os_npu_complete());

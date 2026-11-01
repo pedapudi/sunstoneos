@@ -13,7 +13,8 @@
 enum npu_service_operation {
     NPU_SERVICE_STATUS, NPU_SERVICE_OPEN, NPU_SERVICE_SUBMIT,
     NPU_SERVICE_CANCEL, NPU_SERVICE_REAP, NPU_SERVICE_CLOSE,
-    NPU_SERVICE_WAIT, NPU_SERVICE_LOAD /* Runtime mode only. */
+    NPU_SERVICE_WAIT, NPU_SERVICE_LOAD, /* Runtime mode only. */
+    NPU_SERVICE_RECOVER /* Explicit active-cancellation diagnostic only. */
 };
 enum npu_service_result {
     NPU_SERVICE_OK, NPU_SERVICE_INVALID, NPU_SERVICE_DENIED,
@@ -109,6 +110,37 @@ struct npu_service_direct {
     void (*irq)(void *, BaseType_t *);
     void *context;
 };
+struct npu_service_activity_sample {
+    uint64_t time_us, job_ticket;
+    uint32_t idle, frontend[2], fetch[2];
+    enum a733_npu_state state;
+};
+/* Private diagnostic state, reserved for the complete service lifetime. The
+ * worker owns every non-atomic field. check validates retained resources and
+ * the original session deadline, at recovery entry (0), recovery completion
+ * (1), and during activity/cancel/recovery progress (2). trigger returns the
+ * timestamp captured after the native doorbell's completed MMIO write.
+ * irq restarts the existing stopped-to-masked binding without local shutdown. */
+struct npu_service_cancel_diagnostic {
+    unsigned command, started, proven, canceled, reaped, recovery, recovered;
+    struct npu_service_activity_sample samples[3];
+    uint64_t job_ticket, trigger_us, cancel_asserted_us, cancel_released_us, cancel_done_us;
+    uint32_t cancel_status,cancel_idle;
+    uint64_t fault_operand,fault_ticket;
+    uintptr_t fault_caller;
+    unsigned fault_sample,fault_site,fault_recorded;
+    uint64_t recovery_ticket;
+    atomic_uint irq_receipts, irq_window;
+    unsigned receipt_base, accounted_receipts, recovery_receipts;
+    uint64_t (*trigger)(void *);
+    int (*check)(void *,unsigned), (*irq)(void *);
+    void *cookie;
+};
+/* Optional diagnostic observer. The worker calls it once after attribution
+ * of a trigger (event 1), on subsequent passes before IRQ progress (0), and
+ * before reaping a completed command (2). It must never block or modify the
+ * service. Register before scheduling. All register reads use ops.read and
+ * its native startup gate; event +0x10 is destructive and forbidden here. */
 struct npu_service {
     /* Same routed core, installed/removed with local IRQs masked. A direct
      * client owns job MMIO; the worker parks until it returns the idle NPU. */
@@ -121,6 +153,7 @@ struct npu_service {
     struct npu_service_irq_ops irq_ops;
     void *irq_cookie;
     atomic_uint irq_pending, irq_stopped, irq_completions;
+    atomic_uint runtime_parked;
     unsigned irq_bound, irq_masked, irq_rearming, irq_retained;
     unsigned irq_waiting;
     TickType_t irq_wait_start[3];
@@ -147,7 +180,27 @@ struct npu_service {
     unsigned shared, members, running, next;
     struct npu_service_member member[NPU_SERVICE_CLIENTS];
     struct npu_service_runtime_state *runtime; /* Null outside runtime mode. */
+#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
+    void (*observe)(void *,const struct npu_service *,unsigned);
+    void *observe_cookie;
+    uint64_t trigger_ticks; /* Native adapter's counter at the trigger write. */
+#endif
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+    struct npu_service_cancel_diagnostic *cancel_diagnostic;
+#endif
 };
+
+int npu_service_runtime_parked(const struct npu_service *);
+int npu_service_observe(struct npu_service *,
+    void (*)(void *,const struct npu_service *,unsigned),void *);
+/* Bind once after the sole client and IRQ, before scheduling. Normal restart,
+ * shared/runtime use and additional clients are excluded. Recovery remains a
+ * request from that client and preserves activation and exclusive ownership. */
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+int npu_service_cancel_diagnostic_enable(struct npu_service *,
+    struct npu_service_cancel_diagnostic *,unsigned command,
+    uint64_t (*trigger)(void *),int (*check)(void *,unsigned),void *cookie,int (*irq)(void *));
+#endif
 
 /* Optional normal restart for the deferred, single-client IRQ service. Bind
  * before scheduling, after client 0 and its IRQ. ready runs in the worker

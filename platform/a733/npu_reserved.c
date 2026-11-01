@@ -3,6 +3,9 @@
 
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
 _Static_assert(NPU_CONVOLUTION_BUFFERS == 8, "large graph layout");
+#elif defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+_Static_assert(NPU_CONVOLUTION_BUFFERS == 7, "active cancellation layout");
+_Static_assert(NPU_CONVOLUTION_RESERVED_BYTES == 0x189000u, "active cancellation parent");
 #else
 _Static_assert(NPU_CONVOLUTION_BUFFERS == 6, "reserved convolution layout");
 #endif
