@@ -21,8 +21,9 @@ instance without holding the process, a watchdog reset is decoded, a state
 change since capture stops the run before any write, and an external decoder
 module decodes the result and may report it failed.
 
-The rail helper runs after every normal return, and not after a watchdog
-reset, a quarantine, any other failure or --no-restore-rails. Its report
+The rail helper runs after a normal return whose read-only capture shows
+the boot clock words, and not after a watchdog reset, a quarantine, any other
+failure, other clock words or --no-restore-rails. Its report
 accepts only a normal return with one 800 mV VOLT readback per rail above
 800 mV at entry, DCDC3 first; its REFUSED and STOPPED returns are
 controlled outcomes of the actual kernel runner. Before a launch the helper
@@ -376,7 +377,12 @@ def transport_case(host, launcher, root, live, variant, argv=(), payload=None):
         return {'modeled': True, 'complete': True, 'supply': ['SUPPLY modeled'], 'volt': [], 'rail_state': [],
                 'outcome': [dev.RAIL_COMPLETE]}
     def after(fel):
-        raise AssertionError('board read after the run')
+        """The read-only capture after a normal return: result-invalid leaves CPU-B off its boot word."""
+        assert variant in ('passed', 'result-invalid', 'external-decoder'), 'board read after a failed run'
+        words = dict(live['words'])
+        if variant == 'result-invalid':
+            words[hex(0x8872000)] = 0xf8805300
+        return dict(live, words=words)
     with patch.object(host.base, 'digest', side_effect=lambda p: host.base.FEL_HASH if Path(p) == fel else dev.digest(p)), \
             patch.object(returning.subprocess, 'run', process), patch.object(returning.os, 'access', return_value=True), \
             patch.object(returning.time, 'monotonic', lambda: next(clock)), patch.object(returning.time, 'sleep', lambda s: None), \
@@ -435,17 +441,20 @@ def transport_cases(host, launcher, out, live):
         # The rail helper runs after a normal return only: a watchdog reset leaves DRAM
         # uninitialized, and --no-restore-rails skips it. Normalization before the launch
         # never runs with --state.
-        restored = variant in ('passed', 'result-invalid', 'external-decoder')
+        restored = variant in ('passed', 'external-decoder')
+        assert (root / 'evidence/state-after.json').exists() == (variant in ('passed', 'result-invalid',
+                                                                           'external-decoder')), variant
         assert state['rails'] == restored, (variant, state['rails'], record.get('rail_helper_reason'))
         assert record['normalize_rails'].startswith('not run: --state'), record['normalize_rails']
         assert 'rails: ' in record['summary']
         if restored:
             assert record['rail_helper']['modeled'] and 'at 800 mV after the rail helper' in record['rails']
-            assert record['rail_helper_reason'] == 'normal return', record
+            assert record['rail_helper_reason'] == 'normal return, CPU clocks at their boot words', record
         else:
             assert record['rail_helper'] is None if variant != 'result-mismatch' else 'rail_helper' not in record
-            reason = 'not run: --no-restore-rails' if variant == 'result-mismatch' else \
-                'not run: run cold DDR first; the next launch lowers the rails'
+            reason = {'result-mismatch': 'not run: --no-restore-rails',
+                      'result-invalid': 'not run: CPU-B not at the boot PLL and mux words after the return'}.get(
+                          variant, 'not run: run cold DDR first; the next launch lowers the rails')
             assert record['rail_helper_reason'] == reason, (variant, record['rail_helper_reason'])
         if variant == 'passed':
             # The development bundle has no return-review.json, and the normal return passes
@@ -561,7 +570,9 @@ def controlled_cases(host, out):
                            'FAIL CPU rail write result', 'did not return normally')):
             r = dev.run_rail_helper(args, host, out / f'controlled-{name}')
             assert not r['complete'] and reason in r['reason'] and r['supply'], (name, r)
-            assert name != 'failed' or (r['rail_state'] and 'runner_error' in r), r
+            assert name != 'failed' or (r['rail_state'] == [
+                'RAIL rail=DCDC3 stage=WRITE byte_index=7 selector=0xb7 written=0x9e readback=0x9f'] and
+                'runner_error' in r), r
     assert len(calls) == 3
     r = dev.run_rail_helper(types.SimpleNamespace(fel=out / 'fel', rail_helper=helper), host, out / 'controlled-hash')
     assert not r['complete'] and 'differs from the reviewed one' in r['reason'] and len(calls) == 3, r
@@ -634,8 +645,11 @@ def normalize_cases(host, out):
             'mode_after_return': 0, 'breadcrumbs': {'last': {'name': 'RETURN_ROM'}}}}))
         (run / 'result.bin').write_bytes(b'')
         return {'secondaries_off': 7}
+    def capture(fel):
+        calls.append('capture')
+        return captured_state()
     evidence = out / 'normalize-interrupted'
-    with patch.object(dev, 'run_rail_helper', helper), patch.object(dev, 'capture', lambda fel: captured_state()), \
+    with patch.object(dev, 'run_rail_helper', helper), patch.object(dev, 'capture', capture), \
             patch.object(dev, 'run_return', returned):
         try:
             dev.main(['cpu-return', '--port', '3-3', '--evidence', str(evidence)])
@@ -643,7 +657,7 @@ def normalize_cases(host, out):
         except KeyboardInterrupt:
             pass
     record = json.loads((evidence / 'dev-run.json').read_text())
-    assert calls == ['helper', 'launch', 'helper'] and record['launched'], (calls, record)
+    assert calls == ['helper', 'capture', 'launch', 'capture', 'helper'] and record['launched'], (calls, record)
     assert record['outcome'] == 'result-invalid' and record['rail_helper_reason'] == 'started after the run', record
     calls = []
     with patch.object(dev, 'run_rail_helper', lambda *a: calls.append('helper')):

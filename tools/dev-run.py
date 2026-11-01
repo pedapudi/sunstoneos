@@ -25,9 +25,11 @@ it). A helper run before the launch that does not complete stops the run
 before the state capture. After the run the helper runs only on a normal
 return. Any other outcome can leave DRAM uninitialized, as a WDT0 reset does,
 and the helper launch reads and writes DRAM over FEL; cold DDR comes first,
-and the next launch's helper run lowers the rails. dev-run.json records the
-helper's SUPPLY (entry rails), VOLT (each written rail's readback), RAIL (a
-failed rail change) and outcome lines.
+and the next launch's helper run lowers the rails. After a normal return a
+read-only capture, saved as state-after.json, first shows that the CPU clocks
+are at their boot words. dev-run.json records the helper's SUPPLY (entry
+rails), VOLT (each written rail's readback), RAIL (a failed rail change, with
+the rail and stage named) and outcome lines.
 
 A CPU-return image is recognised by its watchdog marker and its result record
 (apps/os/host.py). Preparation builds the typed session from the image's
@@ -423,6 +425,22 @@ def judge(decoder, payload, inputs, session):
     return 'passed', 'result ' + json.dumps(decoded, sort_keys=True) + ' as expected', decoded
 
 
+# The RAIL line's rail (enum a733_rail, include/a733_rail_leases.h) and stage
+# (apps/board-bundles-power/cpu-rail-change.h) numbers. The pinned helper
+# prints numbers; the report names them.
+RAIL_NAMES = {2: 'DCDC3', 4: 'DCDC5'}
+RAIL_STAGES = ('IDLE', 'READ', 'WRITE', 'SETTLE', 'FINAL', 'RELEASE')
+
+
+def rail_line(line):
+    """A RAIL line with its rail and stage named, for example rail=DCDC3 stage=WRITE."""
+    def name(token):
+        key, _, value = token.partition('=')
+        table = {'rail': RAIL_NAMES, 'stage': dict(enumerate(RAIL_STAGES))}.get(key)
+        return f'{key}={table[int(value)]}' if table and value.isdigit() and int(value) in table else token
+    return ' '.join(name(t) for t in line.split())
+
+
 # The helper's clock inspections before and after the rail writes.
 BOOT_ROWS = tuple((name, BOOT_PLL[d], BOOT_MUX[d], (494, 1014, 494)[d]) for d, name in enumerate(DOMAINS))
 
@@ -437,7 +455,7 @@ def helper_report(record, log):
     outcome = [x for x in lines if x.startswith(('COMPLETE ', 'REFUSED ', 'STOPPED ', 'FAIL '))]
     # A failure inside a rail change prints the rail, the helper's stage and
     # the provider's last selector bytes.
-    rail = [x for x in lines if x.startswith('RAIL ')]
+    rail = [rail_line(x) for x in lines if x.startswith('RAIL ')]
     report = {'supply': supply, 'volt': volt, 'outcome': outcome, 'rail_state': rail, 'complete': False}
     def fields(line):
         return {k: int(v, 0) for k, v in (x.split('=', 1) for x in line.split()[1:])}
@@ -538,10 +556,21 @@ def restore_rails(args, host, evidence, run_record):
     It runs only after a normal return, which restored every DRAM range the
     run used. After any other outcome DRAM can be uninitialized (a WDT0 reset
     leaves it so, tools/a733-returning-host.py), and the helper launch reads
-    and writes DRAM over FEL, which can stall."""
+    and writes DRAM over FEL, which can stall. Before the helper, a read-only
+    capture saved as state-after.json shows the CPU clocks the image left;
+    the helper would refuse clocks off their boot words, so the runner does
+    not start it."""
     if not run_record.get('complete'):
         return None, 'not run: run cold DDR first; the next launch lowers the rails'
-    return run_rail_helper(args, host, evidence / 'rail-helper'), 'normal return'
+    try:
+        after = capture(args.fel)
+        save(evidence / 'state-after.json', after)
+        off = boot_clocks(after['words'])
+    except Exception as error:
+        return None, f'not run: the clock read after the return failed: {type(error).__name__}: {error}'
+    if off:
+        return None, 'not run: ' + ', '.join(off) + ' not at the boot PLL and mux words after the return'
+    return run_rail_helper(args, host, evidence / 'rail-helper'), 'normal return, CPU clocks at their boot words'
 def npu_check(image, host):
     """Bringup's NPU launcher and monitor refuse an enabled WDT0 (launch.c ADMIT,
     monitor.c finish(1)); armed, the launcher parks and the watchdog resets the
