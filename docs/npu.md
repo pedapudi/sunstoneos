@@ -163,13 +163,24 @@ holders, delayed supported PCK transitions and unchanged local restart.
 Physical domain OFF is unsupported; this change does not qualify it or identify
 the failed board's exact stopping point.
 
-No new board image is built while the queue is unavailable. After coordinator approval,
-propose one local clock stop/restart control with PCK4 held ON and DCDC2 at
-800 mV, expecting two matching jobs, four interrupt completions, verified DRAM
-restoration and normal return. The known frozen control is
-`~/.cache/sunstoneos/build/npu-wdt-1031/images/local-restart/image.elf`, SHA-256
-`a09bae93da5d0fe776dd94fb36504ff633fd0f1c681da0cb541174ccea8f7f59`.
-The separate physical-OFF image must not be resubmitted.
+**Observed control result:** the fresh local clock stop/restart image returns
+normally on port 3-3 with two matching jobs, four interrupt completions and
+verified DRAM restoration. It records no first failure or quarantine. Queue
+entry `1793558381244643310-6a29a71d/run/result.json` is under
+`~/.cache/sunstoneos/board-queue/entries/`. Native source is `32f18fe5`; the
+runner is `6ebe687a`. The ELF is
+`~/.cache/sunstoneos/build/npu-wdt-1031/control-1101/images/local-restart/image.elf`,
+SHA-256 `dd826f5ff75795b6beb2b96b352e28439574156fc39c222cd00e338d70e8eac3`.
+The control retains PCK4 and shared DCDC2 ownership. It does not establish
+physical-OFF safety or active-job watchdog recovery. The separate physical-OFF
+image must not be resubmitted.
+
+The next single proposed run switches conv12 to conv8 and back to conv12 at
+852 MHz/800 mV with domain power retained. It requires coordinator approval
+before a fresh image is built. Expected results are three matching jobs,
+four interrupt completions, normal return and restored DRAM. The risk is stale
+model or mapping state producing a wrong output or a stalled command;
+watchdog recovery during active SRAM routing remains unqualified.
 
 The host model inspector passes a reference comparison.
 [Page-table construction](npu-mmu.md) and the

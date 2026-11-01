@@ -59,40 +59,51 @@ handling. SDK execution is modeled; this check adds no physical inference
 qualification. Its log is
 `~/.cache/sunstoneos/build/check-selection-1031/followup-3/gate-links-full/indexed-npu-source-output.log`.
 
-Normal stop/restart preserves registered providers and service objects in
-software checks. Repeated start/stop, same-instance restart, domain power-off,
-reset during an active job, confinement and thermal protection remain
-unqualified. The first physical restart nonreturn remains a failed observation.
-The queued runner prepares native finite sessions, validates interrupt receipts
-and restores saved RAM after retirement. Its adapter has host evidence; the
-shared daemon must include that adapter before these submissions.
+Bounded local stop/restart, model switching and finite-task SDK access return
+normally with matching outputs and restored DRAM on port 3-3. The queue evidence
+is under `~/.cache/sunstoneos/board-queue/entries/`:
+
+| Operation | Matching jobs / interrupt completions | Entry |
+| --- | --- | --- |
+| Current local stop/restart control | 2 / 4 | `1793558381244643310-6a29a71d` |
+| conv12, conv8, then conv12 | 3 / 4 | `1793514712212240796-1a65224c` |
+| Finite application SDK | 2 / 3 | `1793514867262701593-6a1aa965` |
+
+These bounded workloads do not establish repeated-transition reliability.
+Active-job reset recovery, confinement, thermal protection and full OS EL0 SDK
+mappings remain unqualified. The queued runner validates native interrupt
+receipts and restores saved DRAM after verified retirement.
+
+The current local-restart control uses merged source `32f18fe5` and the runner
+at `6ebe687a`. Its ELF is
+`~/.cache/sunstoneos/build/npu-wdt-1031/control-1101/images/local-restart/image.elf`,
+SHA-256 `dd826f5ff75795b6beb2b96b352e28439574156fc39c222cd00e338d70e8eac3`.
+The returned report has status zero, matching outputs, stopped interrupt service,
+normal local restart, normal ROM return and verified DRAM restoration. It has
+no first failure or quarantine.
 
 The runtime models up to eight catalogue clients and model switching. The board
 image has one slot and five catalogue models; direct FIFO USB and shader-graph
 loading remain incomplete. Configured eight NN cores and zero TP/TP-lite cores
 are target records, not a physical identity measurement.
 
-The next host-verified lifecycle images and frozen compatible decoder are under
-`~/.cache/sunstoneos/build/npu-wdt-1031/images/` and `next-host-593ce329/`.
-`images/next-images.json` binds their artifacts and host archive. The proposed
-queue order requires matching normal return before each subsequent run:
+**Physical NPU domain OFF is unsupported.** The selected vendor configuration
+keeps runtime domain power ON. DCDC2 is shared with SoC system and DRAM logic;
+ROM recovery uses shared SRAM that requires NPU power. The request API and
+power owner refuse physical OFF before changing hardware or ownership. The
+runner refuses the physical-OFF image even with its old frozen parser.
+The [power audit](../npu.md#the-supported-npu-power-boundary-preserves-shared-sram)
+records the failed run, register writes, schematic sources and recovery limits.
 
-1. Local restart: two matching jobs across local start/stop lifetimes and four
-   interrupt completions.
-2. Model switching: conv12, conv8 and conv12, with three jobs and four interrupts.
-3. Public SDK access: two models, three interrupts and owner-authorized quiescence.
-4. Domain OFF/restart: OFF policy/status 0/0 then ON 8/8 between matching jobs,
-   with four interrupts. Run this last.
-
-The SDK diagnostic uses finite-task privilege; it does not qualify OS EL0
-mappings. SDK owner/interleaving, transient-provider, report-capacity, failure
-retention and power-transition fault checks have evidence in `next-checks/`,
-`next-sdk-api/`, `next-abi/`, `next-frozen-preparation/`, `power/root/` and
-`next-baselines/` under that build root. Correctness, hardware-safety and recovery
-panels approve the frozen branch through `593ce329` against `a0b092b5`.
+Correctness, hardware-safety and recovery panels approve the conservative
+shared-power refusal; evidence is under
+`~/.cache/sunstoneos/build/npu-wdt-1031/power-fault/`. Host SDK ownership,
+interleaving, report-capacity and failure-retention evidence remains in
+`next-checks/`, `next-sdk-api/`, `next-abi/` and `next-frozen-preparation/`
+under the same build root.
 
 Remaining work includes repeated startup, broader graph/operator and numerical
-coverage, model switching under load, SDK access, mimus integration, concurrent
+coverage, model switching under load, OS EL0 SDK access, mimus integration, concurrent
 CPU/GPU operation and safe fault recovery. See [startup](../npu-startup.md),
 [service](../npu-service.md), [SRAM routing](../designs/npu-sram-route.md),
 [runtime breadth](../designs/npu-breadth.md), [board image](../designs/npu-board.md)
