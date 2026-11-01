@@ -25,7 +25,7 @@ a = p.parse_args()
 a.output.mkdir(parents=True, exist_ok=False)
 types = {'board_application', 'a733_board_session', 'pvr_gpu_service', 'pvr_gpu_service_client', 'pvr_mimus_service',
          'a733_gpu_mimus', 'a733_gpu_platform', 'pvr_gpu_service_reply', 'pvr_gpu_service_request',
-         'os_dispatch_record', 'Call'}
+         'os_dispatch_record', 'Call', 'pvr_mimus_record'}
 image = Image(a.image, types)
 enums = {}
 with a.image.open('rb') as f:
@@ -96,11 +96,12 @@ def machine(case):
     sf(session, 'a733_board_session', 'epoch', epoch, 8)
     sf(session, 'a733_board_session', 'generation', generation, 8)
     state = dict(time=100, operation=None, ticket=0, suspended=0, hook_removed=0, requests=[], exit=None,
-                 begun=0, thermal=0)
+                 begun=0, thermal=0, finish=None)
     names = ('board_live', 'a733_smp_counter', 'xTaskGetTickCount', 'xTaskGetCurrentTaskHandle',
              'a733_gpu_backend_stopped', 'pvr_gpu_service_send_epoch', 'pvr_gpu_service_collect',
              'uxQueueMessagesWaiting', 'vTaskDelay', 'vTaskSuspend', 'board_fail', 'platform_exit',
-             'a733_gpu_mimus_begin', 'a733_gpu_mimus_thermal',
+             'a733_gpu_mimus_begin', 'a733_gpu_mimus_thermal', 'a733_gpu_mimus_finish',
+             'os_dispatch_waiting', 'os_dispatch_refused',
              '_ZN5mimus3asr15SetExactSumHookEPKNS0_12ExactSumHookE')
     hooks = {image.address(n): n for n in names if n in image.symbols}
 
@@ -123,6 +124,11 @@ def machine(case):
         elif name == 'uxQueueMessagesWaiting': ret(0)
         elif name == 'a733_gpu_mimus_begin': state['begun'] += 1; ret(1)
         elif name == 'a733_gpu_mimus_thermal': state['thermal'] += 1; ret(0)
+        elif name in ('os_dispatch_waiting', 'os_dispatch_refused'): ret()
+        elif name == 'a733_gpu_mimus_finish':
+            sequence, result = state['finish']
+            sf(args[0], 'pvr_mimus_record', 'sequence', sequence)
+            sf(args[0], 'pvr_mimus_record', 'result', result); ret(1)
         elif name == 'pvr_gpu_service_send_epoch':
             op = get(field(args[2], 'pvr_gpu_service_request', 'operation'))
             state['operation'] = op; state['ticket'] += 1; state['requests'].append(op)
@@ -224,6 +230,24 @@ for name, mutate in refusals.items():
             not m['state']['suspended'], name + ' left a report, request or suspension')
     rows.append({'name': name, 'passed': True})
 
+# A job the service refuses before any device access does not count as run,
+# so retirement still returns with the jobs that completed.
+if stage >= 3:
+    done = limit - 1 if stage == 3 else 7
+    m = machine('refused-job')
+    opened_session(m, done)
+    m['put'](m['jobs'], done + 1)
+    m['sf'](m['call'], 'Call', 'rows', 64, 8); m['sf'](m['call'], 'Call', 'job_rows', 32)
+    m['sf'](m['call'], 'Call', 'in_flight', 1, 1)
+    m['state']['finish'] = (done + 1, enums['PVR_MIMUS_REFUSED'])
+    require(m['invoke']('_ZN12_GLOBAL__N_16FinishEPvPN5mimus3asr11ExactSumJobE', 0, 0x80002000) & 0xff == 0 and
+            m['get'](m['jobs']) == done and m['get'](m['field'](m['call'], 'Call', 'stopped'), 1) == 1,
+            'refused job counted as run')
+    require(m['invoke']('os_gpu_retire') == 1, 'retirement refused after a refused job')
+    raw = bytes(m['u'].mem_read(image.address('os_gpu_return_report'), 64))
+    require(struct.unpack('<8Q', raw)[5] == done, 'report counts a refused job')
+    rows.append({'name': 'refused-job', 'passed': True, 'jobs': done})
+
 # The limit itself.
 if stage == 3:
     for submitted in (limit - 1, limit):
@@ -249,6 +273,12 @@ if stage == 4:
                 'layer limit differs at ordinal %d' % ordinal)
         rows.append({'name': 'layer-%d-ordinal-%d' % (layers[ordinal], ordinal), 'passed': True,
                      'admitted': admitted})
+    # An ordinal past the table reads no layer entry and does not reach the limit.
+    m = machine('ordinal-out-of-range')
+    m['put'](image.address('os_dispatch_active'), len(layers))
+    m['invoke']('_ZN12_GLOBAL__N_15BeginEPvjPKammmmPKsm', 0, len(layers))
+    require(not m['get'](m['reached'], 1) and not m['state']['begun'], 'out-of-range ordinal reached the limit')
+    rows.append({'name': 'ordinal-out-of-range', 'passed': True})
 save(a.output / 'results.json', {'physical_access': False, 'image_sha256': hashlib.sha256(a.image.read_bytes()).hexdigest(),
                                  'bisect': {'stage': stage, 'limit': limit}, 'cases': rows})
 print('PASS linked GPU bisect stage %d limit %d:' % (stage, limit), len(rows), 'cases')

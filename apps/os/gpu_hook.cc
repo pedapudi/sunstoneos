@@ -34,7 +34,8 @@ Call call;
 uint32_t completed;
 
 #ifdef SUNSTONE_A733_OS_GPU_BISECT
-// Jobs handed to the GPU; each one either completes OK or ends the boot.
+// Jobs the GPU ran: each submitted job either completes OK, is refused by the
+// service before any device access (Finish takes it back), or ends the boot.
 uint32_t bisect_jobs;
 bool bisect_reached;
 // Called once the limit refuses a job or a call; the CPU computes the rest.
@@ -49,7 +50,8 @@ bool BisectCall(uint32_t ordinal) {
   (void)ordinal;
   return bisect_jobs < OS_GPU_BISECT_LIMIT;
 #elif OS_GPU_BISECT_STAGE == 4
-  return os_placement_layer[ordinal] <= OS_GPU_BISECT_LIMIT;
+  // An ordinal outside the table is left to os_dispatch_place, which refuses it.
+  return ordinal >= os_placement_rows || os_placement_layer[ordinal] <= OS_GPU_BISECT_LIMIT;
 #else
   (void)ordinal;
   return false;
@@ -154,6 +156,9 @@ bool Finish(void*, mimus::asr::ExactSumJob* out) {
   call.in_flight = false;
   sunstone_crumb(OS_GPU_CRUMB_JOB_DONE, static_cast<uint32_t>(done.result) << 12 | (done.sequence & 0xfff));
   if (done.result != PVR_MIMUS_OK) {
+#ifdef SUNSTONE_A733_OS_GPU_BISECT
+    --bisect_jobs;
+#endif
     os_dispatch_refused();
     call.stopped = true;
     return false;
