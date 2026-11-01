@@ -11,8 +11,9 @@
  * buffer contents. It never computes a job on the CPU; REFUSED and FAULT
  * records leave that choice to the application.
  *
- * The context belongs to one client task, bound to a GPU service client slot
- * before the scheduler starts. Only that task calls the functions below.
+ * Immutable image admission binds at most two client tasks before scheduling.
+ * Each context handle belongs to its registered task. The owner creates the
+ * context and controls its device lifetime; the peer joins the shared map.
  * Every call runs in task context. Plain C with no FreeRTOS types, so host
  * checks and application code share these definitions. */
 #include <stddef.h>
@@ -25,6 +26,7 @@ extern "C" {
 #endif
 
 #define GPU_QUEUE_CONTEXTS 1u
+#define GPU_QUEUE_CLIENTS 2u
 #define GPU_QUEUE_DEPTH 1u
 #define GPU_QUEUE_PROGRAMS 1u
 #define GPU_QUEUE_LEASES 4u
@@ -43,8 +45,10 @@ extern "C" {
  *   the device.
  * - REFUSED: malformed or not admissible; no device access took place for
  *   it. The context stays usable.
- * - FAULT: the GPU or the service failed. Every later call returns FAULT, and
- *   an owed record arrives with FAULT.
+ * - FAULT: this job or the service failed. After proven device isolation, an
+ *   owed fault record stays collectible and recover waits for restart. Failed
+ *   isolation retains the owed record and buffers without publishing a record.
+ *   Buffer reuse requires successful completion or successful recovery.
  * - TIMEOUT: the caller's wait ended first. A record stays owed; a pending
  *   create reply is collected by the next call. */
 enum gpu_queue_result {
@@ -60,7 +64,7 @@ enum gpu_queue_detail {
     GPU_QUEUE_SERVICE
 };
 
-struct gpu_queue_context { uint32_t generation; };
+struct gpu_queue_context { uint32_t generation, client; };
 
 /* A program from apps/gpu-program/compile.py, compile --profile 3, as the
  * descriptor that the compiler step generates. The queue copies the code into
@@ -127,10 +131,10 @@ struct gpu_queue_binding {
 };
 GPU_QUEUE_STATIC_ASSERT(sizeof(struct gpu_queue_binding) == 16, "binding record");
 
-/* One job. sequence rises strictly through the boot, across device close and
- * reopen; the worker writes it to the context's timeline after the work and
- * the record carries it back. groups is the grid in workgroups of the
- * program's local size. not_after_us, when nonzero, is the latest monotonic
+/* One job. sequence rises strictly for each client through the boot, across
+ * close, reopen and recovery. The record carries the caller's sequence; the
+ * firmware timeline uses a separate serial shared by the clients. groups is
+ * the grid in workgroups of the program's local size. not_after_us, when nonzero, is the latest monotonic
  * time at which the worker may kick the job; a later job is refused with
  * GPU_QUEUE_DEADLINE.
  *
@@ -158,10 +162,14 @@ struct gpu_queue_record {
 };
 GPU_QUEUE_STATIC_ASSERT(sizeof(struct gpu_queue_record) == 16, "completion record");
 
-/* Once per boot. Waits at most wait_ticks for the device to open and the
+/* Once per boot, by the owner task. Waits at most wait_ticks for the device to open and the
  * context to become ready; info receives one entry per lease. */
 int gpu_queue_context_create(const struct gpu_queue_context_config *, uint32_t wait_ticks,
                              struct gpu_queue_context *, struct gpu_queue_lease_info *info);
+/* The second task, registered by immutable image admission, joins the owner
+ * context and receives its shared leases. It uses the same trusted program
+ * and map, with an independent job slot, sequence and completion queue. */
+int gpu_queue_context_join(struct gpu_queue_context *, struct gpu_queue_lease_info *info);
 /* Nonblocking. Copies the job into the context's slot and wakes the worker.
  * OK means a record follows. Checks that need no worker state run here; the
  * worker repeats them on its own copy and reports a later refusal as a
@@ -171,10 +179,15 @@ int gpu_queue_submit(struct gpu_queue_context, const struct gpu_queue_job *);
  * the context's record queue, which the worker fills after the completion
  * interrupt. */
 int gpu_queue_wait(struct gpu_queue_context, struct gpu_queue_record *, uint32_t wait_ticks);
-/* Refuses new jobs and waits for an owed record, then closes the device.
- * Every page and lease stays retained, as with today's GPU service; the
- * context cannot be created again in this boot. */
+/* Owner only: refuse new jobs, drain accepted work and close the device.
+ * Pages, leases and per-client sequence numbers stay retained. An uncollected
+ * peer record returns BUSY so its task can collect it before close. */
 int gpu_queue_close(struct gpu_queue_context, uint32_t wait_ticks);
+/* Owner only: reopen a healthy closed device, preserving the context. */
+int gpu_queue_open(struct gpu_queue_context, uint32_t wait_ticks);
+/* Owner only: wait for bounded worker recovery after a fault. An owed fault
+ * record remains collectible; permanent recovery failure returns FAULT. */
+int gpu_queue_recover(struct gpu_queue_context, uint32_t wait_ticks);
 #ifdef __cplusplus
 }
 #endif
