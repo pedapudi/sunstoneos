@@ -1,8 +1,8 @@
 --- portASM.S
 +++ portASM.S
-@@ -844,6 +844,61 @@
+@@ -860,6 +860,61 @@
  ERET
- 13:
+ 14:
  #endif
 +/* GPU calls change task mode only at immutable, fixed instruction sites.
 + * No C runs on the exception stack. Weak absent sites cannot authorize entry. */
