@@ -14,7 +14,9 @@ struct npu_runtime_queue {
     struct npu_service_direct direct;
     TaskHandle_t task;
     uint64_t started, timeout_ticks, frequency, observed;
-    uint64_t irq_cpu_ticks; /* Updated only with SUNSTONE_NPU_QUEUE_TIMING. */
+#ifdef SUNSTONE_NPU_QUEUE_TIMING
+    uint64_t irq_cpu_ticks;
+#endif
     uint32_t last_events, last_idle; /* First failed completion inputs survive retention. */
     BaseType_t *woken; /* Non-null only during its ISR. */
     /* Optional shared-ring bridge. It consumes bounded work after each IRQ

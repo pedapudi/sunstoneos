@@ -120,7 +120,9 @@ struct npu_runtime {
     uint64_t finishes;
     /* Diagnostic timestamp after the fetch doorbell and its DSB complete.
      * Updated only when SUNSTONE_NPU_QUEUE_TIMING is enabled. */
+#ifdef SUNSTONE_NPU_QUEUE_TIMING
     uint64_t doorbell_ticks;
+#endif
     struct npu_runtime_counters counters;
     atomic_uint failed;
     unsigned prepared, bound, resident, tensor_links;

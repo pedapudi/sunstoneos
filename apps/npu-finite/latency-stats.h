@@ -1,5 +1,8 @@
 #ifndef SUNSTONE_NPU_LATENCY_STATS_H
 #define SUNSTONE_NPU_LATENCY_STATS_H
+#ifndef SUNSTONE_NPU_QUEUE_TIMING
+#define SUNSTONE_NPU_QUEUE_TIMING 1
+#endif
 /* Diagnostic configuration, forced into every unit before FreeRTOS headers
  * so kernel task records and their callers share one counter layout. */
 #define configGENERATE_RUN_TIME_STATS 1
