@@ -14,10 +14,19 @@ kit; the OS integration gate supplies no application unless explicitly
 requested. [The image guide](os-image.md) gives the build commands and
 [the optional source record](../apps/mimus/source.json) pins the application.
 
-Software builds and host checks establish the split's composition and
-protocol behavior. They establish no new physical qualification. The
-legacy GPU session remains behind `SUNSTONE_A733_OS_LEGACY_MIMUS_GPU` until
-the generic compute queue is implemented. Board state below remains current.
+The generic GPU compute queue replaces the application-specific session.
+`SUNSTONE_A733_OS_GPU` selects one context, one program, one job slot and four
+manifest-region leases. Data pages stop at 256 KiB for BRN 71317. The GPU map
+is built once; completion uses interrupts with the retained 4 ms backup poll.
+The mimus application owns its kernel and tensor jobs in its external checkout.
+`apps/queue-add` is an independent consumer with one- and eight-job variants.
+
+Host service, arithmetic, mapping, thermal and returning-image fixtures pass.
+Evidence and requested physical runs are recorded in the
+[queue design](designs/gpu-compute-queue.md). Physical queue qualification and
+independent feature review remain open. No board state changed. The separate
+return owner must rename its private GPU guards, and the launcher owner must
+complete generic result/template handling before these images are launched.
 
 ## Paused after the 2026-10-31 tranche
 
