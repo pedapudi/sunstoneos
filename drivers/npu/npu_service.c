@@ -1,4 +1,5 @@
 #include "npu_service.h"
+#include "sunstone_crumb.h"
 #include <string.h>
 
 static struct npu_service *instance;
@@ -30,7 +31,13 @@ static inline int valid_request(const struct npu_service_request *r, enum npu_se
 }
 static void irq_fault(struct npu_service *s)
 {
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+    if(s->controller.state!=A733_NPU_FAULT) {
+        s->controller.state=A733_NPU_FAULT;s->controller.fault=A733_NPU_IRQ;
+    }
+#else
     s->controller.state=A733_NPU_FAULT;s->controller.fault=A733_NPU_IRQ;
+#endif
     atomic_fetch_or_explicit(&s->irq_pending,IRQ_FAILED,memory_order_release);
 }
 enum { IRQ_MASK_WAIT, IRQ_REARM_WAIT, IRQ_STOP_WAIT };
@@ -65,6 +72,144 @@ static int irq_mask(struct npu_service *s)
     else if(r<0){s->irq_retained=1;irq_fault(s);}
     return r;
 }
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+static int diagnostic_fault_at(struct npu_service *s,enum a733_npu_fault why,
+    uint64_t operand,unsigned sample,uint32_t site,const void *where)
+{
+    if(s->controller.state!=A733_NPU_FAULT) {
+        struct npu_service_cancel_diagnostic *d=s->cancel_diagnostic;
+        uint64_t ticket=d->job_ticket ? d->job_ticket : s->job_ticket;
+        site|=SUNSTONE_CRUMB_NPU_CANCEL|((sample&3)<<23)|((uint32_t)(ticket&127)<<16);
+        uint32_t value=(uint32_t)operand;
+        if(operand>UINT32_MAX){site|=SUNSTONE_CRUMB_NPU_CANCEL_HIGH_WORD;value=(uint32_t)(operand>>32);}
+        if(!d->fault_recorded) {
+            d->fault_operand=operand;d->fault_ticket=ticket;d->fault_sample=sample;
+            d->fault_site=site;d->fault_caller=(uintptr_t)where;d->fault_recorded=1;
+            sunstone_crumb_fail(site,value,where);
+        }
+        s->controller.state=A733_NPU_FAULT;s->controller.fault=why;
+    }
+    (void)site;(void)where;
+    return 0;
+}
+#define diagnostic_fault_value(s,why,value,sample) diagnostic_fault_at((s),(why),(value),(sample),SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
+#define diagnostic_fault(s,why) diagnostic_fault_value((s),(why),(uint64_t)(why),3)
+static int diagnostic_live(struct npu_service *s)
+{
+    struct npu_service_cancel_diagnostic *d=s->cancel_diagnostic;
+    if(!d)return 1;
+    int result=d->check(d->cookie,2);
+    return result==1 || diagnostic_fault_value(s,A733_NPU_MEMORY,(uint32_t)result,3);
+}
+static int diagnostic_begin_irq(struct npu_service *s)
+{
+    struct npu_service_cancel_diagnostic *d=s->cancel_diagnostic;
+    if(!d)return 1;
+    unsigned receipts=atomic_load_explicit(&d->irq_receipts,memory_order_acquire);
+    if(receipts!=d->accounted_receipts)return diagnostic_fault_value(s,A733_NPU_IRQ,receipts,3);
+    unsigned pending=atomic_load_explicit(&s->irq_pending,memory_order_acquire);
+    if(pending)return diagnostic_fault_value(s,A733_NPU_IRQ,pending,3);
+    d->receipt_base=receipts;
+    atomic_store_explicit(&d->irq_window,1,memory_order_release);
+    return 1;
+}
+static int diagnostic_active(struct npu_service *s)
+{
+    struct npu_service_cancel_diagnostic *d=s->cancel_diagnostic;
+    struct a733_npu_controller *c=&s->controller;
+    const struct a733_npu_command *command=&s->commands[d->command];
+    if(!d->started)return diagnostic_fault_value(s,A733_NPU_REGISTER,d->started,3);
+    if(d->proven)return diagnostic_fault_value(s,A733_NPU_REGISTER,d->proven,3);
+    if(c->state!=A733_NPU_RUNNING)return diagnostic_fault_value(s,A733_NPU_IRQ,c->state,3);
+    if(s->job_ticket!=d->job_ticket)return diagnostic_fault_value(s,A733_NPU_IRQ,s->job_ticket,3);
+    if(c->job.token!=command->token)return diagnostic_fault_value(s,A733_NPU_MEMORY,(uintptr_t)c->job.token,3);
+    if(c->job.device!=command->device)return diagnostic_fault_value(s,A733_NPU_REGISTER,c->job.device,3);
+    unsigned pending=atomic_load_explicit(&s->irq_pending,memory_order_acquire);
+    if(pending)return diagnostic_fault_value(s,A733_NPU_IRQ,pending,3);
+    unsigned receipts=atomic_load_explicit(&d->irq_receipts,memory_order_acquire);
+    if(receipts!=d->accounted_receipts)return diagnostic_fault_value(s,A733_NPU_IRQ,receipts,3);
+    for(unsigned i=0;i<3;++i) {
+        struct npu_service_activity_sample *sample=&d->samples[i];
+        if(!diagnostic_live(s))return 0;
+        sample->time_us=s->ops.microseconds(s->cookie);
+        sample->job_ticket=s->job_ticket;sample->state=c->state;
+        if(sample->time_us-d->trigger_us>2000)return diagnostic_fault_value(s,A733_NPU_TIMEOUT,sample->time_us-d->trigger_us,i);
+        if(!s->ops.read(s->cookie,4,&sample->idle))return diagnostic_fault_value(s,A733_NPU_IO,4,i);
+        if(!s->ops.read(s->cookie,0x660,&sample->frontend[0]))return diagnostic_fault_value(s,A733_NPU_IO,0x660,i);
+        if(!s->ops.read(s->cookie,0x660,&sample->frontend[1]))return diagnostic_fault_value(s,A733_NPU_IO,0x660,i);
+        if(!s->ops.read(s->cookie,0x664,&sample->fetch[0]))return diagnostic_fault_value(s,A733_NPU_IO,0x664,i);
+        if(!s->ops.read(s->cookie,0x664,&sample->fetch[1]))return diagnostic_fault_value(s,A733_NPU_IO,0x664,i);
+        if(sample->state!=A733_NPU_RUNNING)return diagnostic_fault_value(s,A733_NPU_REGISTER,sample->state,i);
+        if(sample->job_ticket!=d->job_ticket)return diagnostic_fault_value(s,A733_NPU_IRQ,sample->job_ticket,i);
+        if(sample->idle&1)return diagnostic_fault_value(s,A733_NPU_NOT_IDLE,sample->idle,i);
+        for(unsigned j=0;j<2;++j)if((sample->fetch[j]&7) || sample->fetch[j]<command->device ||
+            (uint64_t)sample->fetch[j]>=command->device+command->readable_bytes)
+                return diagnostic_fault_value(s,A733_NPU_REGISTER,sample->fetch[j],i);
+        if(i!=2)s->ops.delay(s->cookie,101);
+    }
+    uint64_t now=s->ops.microseconds(s->cookie);
+    if(now-d->trigger_us>2000)return diagnostic_fault_value(s,A733_NPU_TIMEOUT,now-d->trigger_us,2);
+    /* A pre-existing cancel acknowledgment cannot authorize this request. */
+    uint32_t cancel;
+    if(!s->ops.read(s->cookie,0x3a8,&cancel))return diagnostic_fault_value(s,A733_NPU_IO,0x3a8,2);
+    if(cancel&16)return diagnostic_fault_value(s,A733_NPU_REGISTER,cancel,2);
+    pending=atomic_load_explicit(&s->irq_pending,memory_order_acquire);
+    if(pending)return diagnostic_fault_value(s,A733_NPU_IRQ,pending,2);
+    receipts=atomic_load_explicit(&d->irq_receipts,memory_order_acquire);
+    if(receipts!=d->accounted_receipts)return diagnostic_fault_value(s,A733_NPU_IRQ,receipts,2);
+    now=s->ops.microseconds(s->cookie);
+    if(now-d->trigger_us>5000)return diagnostic_fault_value(s,A733_NPU_TIMEOUT,now-d->trigger_us,2);
+    d->proven=1;sunstone_crumb(SUNSTONE_CRUMB_NPU_CANCEL_PROVEN,(uint32_t)d->job_ticket);return 1;
+}
+static enum npu_service_result diagnostic_recover(struct npu_service *s,
+    const struct npu_service_message *m)
+{
+    struct npu_service_cancel_diagnostic *d=s->cancel_diagnostic;
+    struct a733_npu_controller *c=&s->controller;
+    if(!d || s->owner!=m->client)return NPU_SERVICE_DENIED;
+    if(c->state==A733_NPU_FAULT)return NPU_SERVICE_FAULT;
+    if(!d->proven || !d->canceled || !d->reaped || d->recovered || s->job_ticket ||
+       s->has_held || (d->recovery_ticket && d->recovery_ticket!=m->ticket))return NPU_SERVICE_DENIED;
+    if(!diagnostic_live(s))return NPU_SERVICE_FAULT;
+    d->recovery_ticket=m->ticket;
+    if(!d->recovery) {
+        if(c->state!=A733_NPU_DRAINED || d->check(d->cookie,0)!=1) {
+            diagnostic_fault(s,A733_NPU_MEMORY);return NPU_SERVICE_FAULT;
+        }
+        if(irq_mask(s)!=1)return c->state==A733_NPU_FAULT ? NPU_SERVICE_FAULT : SERVICE_DEFERRED;
+        if(atomic_load_explicit(&s->irq_pending,memory_order_acquire) || !a733_npu_close(c)) {
+            diagnostic_fault(s,A733_NPU_IRQ);return NPU_SERVICE_FAULT;
+        }
+        d->recovery=1;
+        sunstone_crumb(SUNSTONE_CRUMB_NPU_CANCEL_CLOSED,(uint32_t)d->job_ticket);
+    }
+    if(d->recovery==1) {
+        if(c->state!=A733_NPU_CLOSED || c->fault || !s->irq_masked) {
+            diagnostic_fault(s,A733_NPU_IRQ);return NPU_SERVICE_FAULT;
+        }
+        int stopped=irq_call(s,IRQ_STOP_WAIT,s->irq_ops.stop);
+        if(stopped<0){diagnostic_fault(s,A733_NPU_IRQ);return NPU_SERVICE_FAULT;}
+        if(!stopped)return SERVICE_DEFERRED;
+        atomic_store_explicit(&s->irq_stopped,1,memory_order_release);
+        sunstone_crumb(SUNSTONE_CRUMB_NPU_CANCEL_IRQ_RETIRED,(uint32_t)d->job_ticket);
+        taskENTER_CRITICAL();
+        int ready=!atomic_load_explicit(&s->irq_pending,memory_order_acquire) &&
+            !s->irq_retained && diagnostic_live(s) && d->irq(s->irq_cookie)==1 && diagnostic_live(s);
+        if(ready)atomic_store_explicit(&s->irq_stopped,0,memory_order_release);
+        taskEXIT_CRITICAL();
+        if(!ready){diagnostic_fault(s,A733_NPU_IRQ);return NPU_SERVICE_FAULT;}
+        sunstone_crumb(SUNSTONE_CRUMB_NPU_CANCEL_IRQ_REARM,(uint32_t)d->job_ticket);
+        d->recovery=2;
+    }
+    if(d->recovery!=2 || !diagnostic_begin_irq(s))return NPU_SERVICE_FAULT;
+    s->job_ticket=m->ticket;
+    c->diagnostic_ticket=m->ticket;
+    if(!a733_npu_open(c,&s->ops,s->cookie,&s->image,&s->commands[0],m->request.timeout_us)) {
+        diagnostic_fault(s,A733_NPU_MEMORY);return NPU_SERVICE_FAULT;
+    }
+    d->recovery=3;return NPU_SERVICE_OK;
+}
+#endif
 /* The worker and the runtime loop each call irq_progress and execute_shared
  * once. Forced inlining keeps them inline in the worker, as when the worker
  * was their only caller; the runtime loop, linked only into images that call
@@ -72,6 +217,15 @@ static int irq_mask(struct npu_service *s)
 #define SERVICE_INLINE static inline __attribute__((always_inline))
 SERVICE_INLINE int irq_progress(struct npu_service *s)
 {
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+    struct npu_service_cancel_diagnostic *diagnostic=s->cancel_diagnostic;
+    if(diagnostic && s->controller.state!=A733_NPU_FAULT) {
+        unsigned received=atomic_load_explicit(&diagnostic->irq_receipts,memory_order_acquire);
+        unsigned window=atomic_load_explicit(&diagnostic->irq_window,memory_order_acquire);
+        if(!diagnostic_live(s) || (window ? received-diagnostic->receipt_base>1 :
+            received!=diagnostic->accounted_receipts))diagnostic_fault(s,A733_NPU_IRQ);
+    }
+#endif
     a733_npu_check_timeout(&s->controller);
     unsigned pending=atomic_load_explicit(&s->irq_pending,memory_order_acquire);
     if(pending&IRQ_FAILED)irq_fault(s);
@@ -84,8 +238,50 @@ SERVICE_INLINE int irq_progress(struct npu_service *s)
     }
     enum a733_npu_state before=s->controller.state;
     a733_npu_advance(&s->controller,!!(pending&IRQ_EVENT));
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+    if(diagnostic && before==A733_NPU_CANCEL_ASSERTED && s->controller.state==A733_NPU_CANCEL_WAIT)
+        diagnostic->cancel_released_us=s->ops.microseconds(s->cookie);
+    if(diagnostic && s->controller.state==A733_NPU_CANCELED) {
+        if(!diagnostic->proven || s->job_ticket!=diagnostic->job_ticket ||
+           !diagnostic->cancel_released_us)diagnostic_fault(s,A733_NPU_IRQ);
+        else if(!diagnostic->canceled) {
+            if(!s->ops.read(s->cookie,0x3a8,&diagnostic->cancel_status))diagnostic_fault(s,A733_NPU_IO);
+            diagnostic->cancel_idle=s->controller.last_idle;
+            diagnostic->cancel_done_us=s->ops.microseconds(s->cookie);
+            if((diagnostic->cancel_status&24)!=16)
+                diagnostic_fault_value(s,A733_NPU_REGISTER,diagnostic->cancel_status,3);
+            else if(diagnostic->cancel_idle!=UINT32_C(0x7fffffff))
+                diagnostic_fault_value(s,A733_NPU_NOT_IDLE,diagnostic->cancel_idle,3);
+            else if(diagnostic->cancel_done_us-s->controller.cancel_start>=s->controller.cancel_timeout)
+                diagnostic_fault_value(s,A733_NPU_TIMEOUT,diagnostic->cancel_done_us-s->controller.cancel_start,3);
+            else {
+                diagnostic->canceled=1;
+                sunstone_crumb(SUNSTONE_CRUMB_NPU_CANCEL_IDLE,(uint32_t)diagnostic->job_ticket);
+            }
+        }
+    }
+#endif
     if((before==A733_NPU_BOOTING && s->controller.state==A733_NPU_READY) ||
        (before==A733_NPU_RUNNING && s->controller.state==A733_NPU_DONE)) {
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+        if(diagnostic) {
+            unsigned received=atomic_load_explicit(&diagnostic->irq_receipts,memory_order_acquire);
+            if(!atomic_load_explicit(&diagnostic->irq_window,memory_order_acquire) ||
+               received-diagnostic->receipt_base!=1)diagnostic_fault(s,A733_NPU_IRQ);
+            else {
+                diagnostic->accounted_receipts=received;
+                atomic_store_explicit(&diagnostic->irq_window,0,memory_order_release);
+            }
+            if(diagnostic->recovery==3 && before==A733_NPU_BOOTING && s->controller.state==A733_NPU_READY) {
+                if(diagnostic->check(diagnostic->cookie,1)!=1)diagnostic_fault(s,A733_NPU_MEMORY);
+                else {
+                    diagnostic->recovery_receipts=received;diagnostic->recovered=1;diagnostic->recovery=4;
+                    sunstone_crumb(SUNSTONE_CRUMB_NPU_CANCEL_BOOTSTRAP,received);
+                }
+            }
+        }
+        if(s->controller.state==A733_NPU_FAULT)return 1;
+#endif
         unsigned count=atomic_load_explicit(&s->irq_completions,memory_order_relaxed);
         if(count==UINT32_MAX)irq_fault(s);
         else atomic_store_explicit(&s->irq_completions,count+1,memory_order_release);
@@ -113,6 +309,12 @@ static enum npu_service_result execute(struct npu_service *s,
 {
     const struct npu_service_request *r = &m->request;
     struct a733_npu_controller *c = &s->controller;
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+    if(r->operation==NPU_SERVICE_RECOVER) {
+        if(r->command || !duration(r->timeout_us) || r->timeout_us>100000)return NPU_SERVICE_INVALID;
+        return diagnostic_recover(s,m);
+    }
+#endif
     if (!valid_request(r, NPU_SERVICE_WAIT)) return NPU_SERVICE_INVALID;
     if (r->operation == NPU_SERVICE_STATUS)
         return c->state == A733_NPU_FAULT ? NPU_SERVICE_FAULT : NPU_SERVICE_OK;
@@ -134,6 +336,10 @@ static enum npu_service_result execute(struct npu_service *s,
             if(!ready){irq_fault(s);return NPU_SERVICE_FAULT;}
         }
         s->owner = m->client; s->job_ticket = m->ticket;
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+        c->diagnostic_ticket=m->ticket;
+        if(!diagnostic_begin_irq(s))return NPU_SERVICE_FAULT;
+#endif
         if (a733_npu_open(c, &s->ops, s->cookie, &s->image, &s->commands[0], r->timeout_us))
             return NPU_SERVICE_OK;
         if (c->state == A733_NPU_FAULT) return NPU_SERVICE_FAULT;
@@ -153,8 +359,32 @@ static enum npu_service_result execute(struct npu_service *s,
         if (c->state != A733_NPU_READY) return NPU_SERVICE_BUSY;
         if(s->irq_bound && irq_mask(s)!=1)
             return c->state==A733_NPU_FAULT ? NPU_SERVICE_FAULT : SERVICE_DEFERRED;
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+        if(s->cancel_diagnostic) {
+            struct npu_service_cancel_diagnostic *d=s->cancel_diagnostic;
+            if(r->command==d->command) {
+                if(d->started || r->timeout_us>100000)return NPU_SERVICE_DENIED;
+            } else if(!d->recovered)return NPU_SERVICE_DENIED;
+            if(!diagnostic_live(s))return NPU_SERVICE_FAULT;
+            if(r->command!=d->command && !diagnostic_begin_irq(s))return NPU_SERVICE_FAULT;
+        }
+#endif
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+        c->diagnostic_ticket=m->ticket;
+#endif
         if (a733_npu_submit(c, &s->commands[r->command], r->timeout_us)) {
-            s->job_ticket = m->ticket; return NPU_SERVICE_OK;
+            s->job_ticket = m->ticket;
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+            if(s->cancel_diagnostic && r->command==s->cancel_diagnostic->command) {
+                struct npu_service_cancel_diagnostic *d=s->cancel_diagnostic;
+                d->job_ticket=m->ticket;d->started=1;d->trigger_us=d->trigger(d->cookie);
+                uint64_t elapsed=s->ops.microseconds(s->cookie)-d->trigger_us;
+                if(!d->trigger_us || elapsed>2000) {
+                    diagnostic_fault_value(s,A733_NPU_TIMEOUT,elapsed,3);return NPU_SERVICE_FAULT;
+                }
+            }
+#endif
+            return NPU_SERVICE_OK;
         }
         if (c->state == A733_NPU_FAULT) { s->job_ticket = m->ticket; return NPU_SERVICE_FAULT; }
         return NPU_SERVICE_INVALID;
@@ -162,16 +392,45 @@ static enum npu_service_result execute(struct npu_service *s,
         if (c->state != A733_NPU_BOOTING && c->state != A733_NPU_RUNNING) return NPU_SERVICE_BUSY;
         if(s->irq_bound && irq_mask(s)!=1)
             return c->state==A733_NPU_FAULT ? NPU_SERVICE_FAULT : SERVICE_DEFERRED;
-        if (a733_npu_cancel(c, r->timeout_us)) return NPU_SERVICE_OK;
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+        if(s->cancel_diagnostic && r->timeout_us>20000)return NPU_SERVICE_INVALID;
+        if(s->cancel_diagnostic && !diagnostic_active(s))return NPU_SERVICE_FAULT;
+#endif
+        if (a733_npu_cancel(c, r->timeout_us)) {
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+            if(s->cancel_diagnostic) {
+                struct npu_service_cancel_diagnostic *d=s->cancel_diagnostic;
+                d->cancel_asserted_us=c->cancel_asserted_us;
+                if(c->cancel_asserted_us-d->trigger_us>5000) {
+                    diagnostic_fault_value(s,A733_NPU_TIMEOUT,c->cancel_asserted_us-d->trigger_us,3);return NPU_SERVICE_FAULT;
+                }
+            }
+#endif
+            return NPU_SERVICE_OK;
+        }
         break;
     case NPU_SERVICE_REAP: {
         void *token; int stopped;
         if (!a733_npu_reap(c, &token, &stopped)) return NPU_SERVICE_BUSY;
         (void)token; *canceled = (unsigned)stopped;
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+        if(s->cancel_diagnostic && stopped) {
+            struct npu_service_cancel_diagnostic *d=s->cancel_diagnostic;
+            if(!d->proven || !d->canceled || s->job_ticket!=d->job_ticket) {
+                diagnostic_fault(s,A733_NPU_IRQ);return NPU_SERVICE_FAULT;
+            }
+            d->reaped=1;
+            sunstone_crumb(SUNSTONE_CRUMB_NPU_CANCEL_REAPED,(uint32_t)d->job_ticket);
+        }
+#endif
         if(s->restart_irq)s->restart_reaped=!stopped;
         return NPU_SERVICE_OK;
     }
     case NPU_SERVICE_CLOSE:
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+        if(s->cancel_diagnostic && (!s->cancel_diagnostic->recovered ||
+           atomic_load_explicit(&s->irq_completions,memory_order_acquire)!=3))return NPU_SERVICE_DENIED;
+#endif
         if (c->state != A733_NPU_READY && c->state != A733_NPU_DRAINED &&
             !(s->irq_bound && c->state==A733_NPU_CLOSED)) return NPU_SERVICE_BUSY;
         if(s->irq_bound && irq_mask(s)!=1)
@@ -707,11 +966,31 @@ enum npu_service_result npu_service_activate(struct npu_service *s)
 int npu_service_restart_enable(struct npu_service *s,int (*irq)(void *),int (*ready)(void *))
 {
     if(!s || s!=instance || !s->initialized || !irq || !ready || s->restart_irq ||
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+       s->cancel_diagnostic ||
+#endif
        !s->irq_bound || s->shared || s->runtime || !s->activation.bootstrap || !s->clients[0].task ||
        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     for(unsigned i=1;i<NPU_SERVICE_CLIENTS;++i)if(s->clients[i].task)return 0;
     s->restart_irq=irq;s->restart_ready=ready;return 1;
 }
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+int npu_service_cancel_diagnostic_enable(struct npu_service *s,
+    struct npu_service_cancel_diagnostic *d,unsigned command,
+    uint64_t (*trigger)(void *),int (*check)(void *,unsigned),void *cookie,int (*irq)(void *))
+{
+    if(!s || s!=instance || !s->initialized || !d || !trigger || !check || !irq || !cookie ||
+       s->cancel_diagnostic || s->restart_irq || !s->irq_bound || s->shared || s->runtime ||
+       !s->activation.bootstrap || !s->clients[0].task || command!=2 || s->command_count!=3 ||
+       s->commands[command].device!=UINT32_C(0xe010a000) || s->commands[command].readable_bytes!=524288 ||
+       !(s->clients[0].commands&(1u<<command)) || d->command || d->started || d->reaped || d->recovered ||
+       xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
+    for(unsigned i=1;i<NPU_SERVICE_CLIENTS;++i)if(s->clients[i].task)return 0;
+    d->command=command;d->trigger=trigger;d->check=check;d->cookie=cookie;d->irq=irq;
+    atomic_init(&d->irq_receipts,0);atomic_init(&d->irq_window,0);
+    s->cancel_diagnostic=d;return 1;
+}
+#endif
 static int restart_caller(struct npu_service *s)
 {
     uint64_t level;__asm__ volatile("mrs %0,CurrentEL":"=r"(level));
@@ -756,6 +1035,9 @@ enum npu_service_result npu_service_restart_resume(struct npu_service *s)
 int npu_service_share(struct npu_service *s)
 {
     if (!s || s != instance || !s->initialized || s->shared || s->restart_irq ||
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+        s->cancel_diagnostic ||
+#endif
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
     /* The controller refuses a command touching internal SRAM before any
      * device access; rejecting it here keeps dispatch refusals impossible. */
@@ -809,7 +1091,11 @@ void npu_service_retain(struct npu_service *s)
 }
 int npu_service_bind(struct npu_service *s, unsigned slot, TaskHandle_t task, uint32_t commands)
 {
-    if (!s || s != instance || !s->initialized || s->restart_irq || slot >= NPU_SERVICE_CLIENTS || !task ||
+    if (!s || s != instance || !s->initialized || s->restart_irq ||
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+        s->cancel_diagnostic ||
+#endif
+        slot >= NPU_SERVICE_CLIENTS || !task ||
         task == s->worker || s->clients[slot].task || (commands & 1u) ||
         (s->command_count < 32 && (commands >> s->command_count)) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
@@ -830,6 +1116,13 @@ int npu_service_bind_irq(struct npu_service *s,const struct npu_service_irq_ops 
 void npu_service_irq_notify_from_isr(struct npu_service *s,int mask_ok,BaseType_t *woken)
 {
     configASSERT(s && s==instance && s->initialized && s->irq_bound && woken);
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+    if(s->cancel_diagnostic) {
+        struct npu_service_cancel_diagnostic *d=s->cancel_diagnostic;
+        unsigned previous=atomic_fetch_add_explicit(&d->irq_receipts,1,memory_order_acq_rel);
+        if(previous==UINT32_MAX || !atomic_load_explicit(&d->irq_window,memory_order_acquire))mask_ok=0;
+    }
+#endif
     unsigned stopped=atomic_exchange_explicit(&s->irq_stopped,0,memory_order_acq_rel);
     if(s->restart_irq && (stopped ||
        atomic_load_explicit(&s->activation_state,memory_order_acquire)!=SERVICE_ACTIVE)) {

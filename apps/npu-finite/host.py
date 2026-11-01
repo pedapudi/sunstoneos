@@ -15,6 +15,7 @@ require,sha=base.require,original.sha
 RESTART='npu-interrupt-restart-return-v1'
 STARTUP='npu-startup-return-v1'
 INFERENCE='npu-single-inference-return-v1'
+ACTIVE_CANCEL='npu-active-cancel-return-v1'
 # The NPU runtime client (build.py --runtime): one job of each linked network through npu_job_run.
 RUNTIME='npu-runtime-return-v1'
 SWITCH='npu-model-switch-return-v1'
@@ -22,13 +23,14 @@ SDK='npu-sdk-return-v1'
 POWER='npu-power-cycle-return-v1'
 # The startup client's receipt magic, monitor detail, inference jobs and interrupt completions.
 STARTUP_CLIENT={STARTUP:(0x4e50555354415231,0x4e505553,0,1),INFERENCE:(0x4e5055494e463031,0x4e505549,1,2),
+ ACTIVE_CANCEL:(0x4e505543414e3031,0x4e505543,1,3),
  RUNTIME:(0x4e50555254523031,0x4e505552,2,3),
  SWITCH:(0x4e50555357433031,0x4e505557,3,4),
  SDK:(0x4e505553444b3031,0x4e505544,2,3)}
 MBUS_CHECKPOINT='npu-entry-mbus-checkpoint-v1'
 IRQ_CHECKPOINT='npu-entry-irq-checkpoint-v1'
 PROVIDER_CHECKPOINT='npu-entry-provider-checkpoint-v1'
-PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT,RESTART,STARTUP,INFERENCE,RUNTIME,SWITCH,SDK,POWER);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
+PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT,RESTART,STARTUP,INFERENCE,ACTIVE_CANCEL,RUNTIME,SWITCH,SDK,POWER);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
 HOST_SOURCES=('apps/npu-finite/host.py','apps/npu-finite/stopped-capture.py','tools/a733-returning-host.py','tools/a733-crumbs.py','include/sunstone_crumb.h','apps/npu-convolution/prepare-supervised.py','apps/npu-convolution/observe.py','tools/check-a733-smp.py','tools/check-a733-smp-supervised.py','tools/check-a733-smp-observe.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/usb_guard.py','tools/npu-models.json','platform/a733-smp-supervised/launch.c','platform/a733-smp-observe/launch.S','platform/a733-smp-observe/launch.ld','platform/a733-smp-cached/boot.h')
 def save(path,value):base.save_json(path,value)
 
@@ -158,6 +160,12 @@ def image_profile(data,manifest):
  if manifest['execution_profile']==SWITCH:geometry['model_switch']=True
  if manifest['execution_profile']==SDK:geometry['sdk']=True
  if manifest['execution_profile']==INFERENCE:geometry['single_inference']=True
+ if manifest['execution_profile']==ACTIVE_CANCEL:
+  require(read('npu_active_cancel_profile')==struct.pack('<6Q',0x4e505543414e3031,32768,262160,524288,0x189000,0xe010a000) and
+   all(n in symbols for n in ('npu_service_cancel_diagnostic_enable','npu_convolution_diagnostic_send','cancel_checkpoint','npu_application_irq_restart')) and
+   all(n not in symbols for n in ('a733_npu_startup_power_off','a733_npu_startup_power_restart','npu_convolution_restart_poll')),
+   'Active cancellation implementation or fixed command layout differs.')
+  geometry['active_cancel']=True
  if restart:geometry['restart']=True
  if manifest['execution_profile']==POWER:
   require(all(n in symbols for n in ('a733_npu_startup_power_off','a733_npu_startup_power_restart')),'Missing domain OFF/ON sequencer.')
@@ -184,7 +192,7 @@ def image_profile(data,manifest):
  if capture is not None:geometry['stopped_capture']=capture
  return parts,address,build,layout,geometry
 
-def geometry_profile(g):return POWER if g.get('power_cycle') else SDK if g.get('sdk') else SWITCH if g.get('model_switch') else RUNTIME if g.get('runtime') else INFERENCE if g.get('single_inference') else STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
+def geometry_profile(g):return POWER if g.get('power_cycle') else SDK if g.get('sdk') else SWITCH if g.get('model_switch') else RUNTIME if g.get('runtime') else ACTIVE_CANCEL if g.get('active_cancel') else INFERENCE if g.get('single_inference') else STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
 
 def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,execution_profile=PROFILE):
  """Check the actual native wire record without external process evidence."""
@@ -348,6 +356,7 @@ def validate_reports(monitor,platform,receipt,p):
   require(m[6]<=ticks['start_ticks']<ticks['end_ticks']<=h[9],'Sustained timing escapes native report.')
   return result
  if g.get('runtime'):return runtime_report(text,status,deadline,g)
+ if g.get('active_cancel'):return active_cancel_report(text,status,deadline,g)
  if startup and startup[2]:return inference_report(text,status,deadline,g)
  if startup:
   expected=('NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=OPEN\nNPU_STAGE=BOOTSTRAP_READY\nNPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n'
@@ -390,6 +399,43 @@ def validate_reports(monitor,platform,receipt,p):
    'timing':timing(text),'log':text}
  require(matched==(status==0) and matches[0][3].startswith('PASS')==(status==0),'Numerical status disagrees with copied outputs.')
  return {'normal_return':True,'functional_success':matched,'controlled_negative':not matched,'status':status,'diagnostic_deadline':deadline,'first_digest':bytes(first).hex(),'second_output':bytes(second).hex(),'output_pattern':output_pattern(first,second),'timing':timing(text),'log':text,**({'power_cycle':samples} if power else {})}
+
+def active_cancel_report(text,status,deadline,g):
+ """Validate the active observations, pulse, owned recovery and exact output."""
+ head=('NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=OPEN\nNPU_STAGE=BOOTSTRAP_READY\nNPU_STAGE=CANCELED_RECOVERED\n'
+  'NPU_STAGE=SUBMIT job=0x0000000000000001\nNPU_STAGE=REAPED\nNPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n'
+  'NPU_IRQ_COMPLETIONS=0x0000000000000003\nNPU_IRQ_STOPPED=0x0000000000000001\nNPU_CANCEL_RECEIPT=\n')
+ match=re.fullmatch(re.escape(head)+r'((?:0x[0-9a-f]{16}\n){51})NPU_STAGE=QUIESCENT\nNPU_OUTPUT=\n'
+  r'((?:0x[0-9a-f]{16}\n)+)NPU_INFERENCE=MATCH; inference_jobs=1\n',text)
+ require(status==0 and match is not None,'Active cancellation terminal stages or receipt differ.')
+ words=[int(v,16) for v in match[1].splitlines()]
+ ticket,trigger,asserted,released,done,recovery_ticket,receipts,recovery_receipts,cancel_status,idle=words[:10]
+ require(0<ticket<recovery_ticket and trigger<=asserted<=trigger+5000 and released-asserted>100 and
+  released<=done<asserted+20000 and receipts==3 and recovery_receipts==2 and
+  cancel_status&24==16 and idle==0x7fffffff,'Active cancellation pulse, idle or IRQ receipts differ.')
+ samples=[words[10+8*i:18+8*i] for i in range(3)]
+ for index,sample in enumerate(samples):
+  time,job,idle,frontend0,frontend1,address0,address1,state=sample
+  require(trigger<=time<=trigger+2000 and job==ticket and not idle&1 and state==3 and
+   all(0xe010a000<=address<0xe018a000 and not address&7 for address in (address0,address1)),
+   'Active cancellation sample does not prove the matching command was active.')
+  if index:require(time-samples[index-1][0]>=100,'Active cancellation samples are too close.')
+ require(samples[-1][0]<=asserted,'Active observations follow cancellation assertion.')
+ platform=[words[34+8*i:42+8*i] for i in range(2)]
+ for sample in platform:
+  policy,status,pll,module,bus,gate,authority,ticks=sample
+  require(policy&15==8 and status&15==8 and pll&~(1<<24)==0xf8104600 and
+   module&0x8700001f==0x80000000 and bus&0xf0001==0xf0001 and authority&4 and
+   not authority&0x1700 and ticks>0,'Active cancellation power or clock state differs.')
+ require(platform[0][:6]==platform[1][:6] and platform[0][7]<platform[1][7] and words[50]==2,
+  'Active cancellation recovery changed a power or clock checkpoint.')
+ output=[int(v,16) for v in match[2].splitlines()]
+ require(all(v<256 for v in output) and bytes(output)==bytes.fromhex(g['reference']),
+  'Active cancellation follow-up output differs from the complete reference.')
+ return dict(normal_return=True,active_cancel=True,functional_success=True,controlled_negative=False,jobs=1,status=0,
+  diagnostic_deadline=deadline,output=bytes(output).hex(),samples=samples,platform=platform,
+  cancel=dict(ticket=ticket,trigger_us=trigger,asserted_us=asserted,released_us=released,done_us=done,
+   recovery_ticket=recovery_ticket,status=cancel_status,idle=words[9],IRQ_receipts=receipts,recovery_IRQ_receipts=recovery_receipts),log=text)
 
 def inference_report(text,status,deadline,g):
  """The single-inference log: startup, one job, CLOSE, then the copied output.

@@ -2,6 +2,7 @@
 #include "aarch64_device_memory.h"
 #include "a733_range.h"
 #include "a733_mapping_check.h"
+#include "sunstone_crumb.h"
 #include <string.h>
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
 #include "nbg_sh_nt.h"
@@ -365,7 +366,19 @@ static int write_reg(void *cookie,unsigned offset,uint32_t v)
 {
     struct npu_convolution *c=cookie;
     if(!good(c) || !a733_npu_startup_window_open(c->startup) || !a733_npu_native_operations.write(&c->native,offset,v))return 0;
-    if(offset==0x3a4)c->job_doorbell_ticks=ticks(); /* The trigger; the bootstrap's is overwritten by the job's. */
+    if(offset==0x3a4) {
+        c->job_doorbell_ticks=ticks(); /* The bootstrap's is overwritten by the job's. */
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+        c->job_doorbell_us=a733_npu_native_operations.microseconds(&c->native);
+        if(c->service.controller.job.device==c->commands[2].device)
+            sunstone_crumb(SUNSTONE_CRUMB_NPU_CANCEL_TRIGGER,2);
+#endif
+    }
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+    if(offset==0x3a8 && c->diagnostic.proven && c->service.controller.state==A733_NPU_CANCEL_ASSERTED)
+        sunstone_crumb((v&8) ? SUNSTONE_CRUMB_NPU_CANCEL_ASSERT : SUNSTONE_CRUMB_NPU_CANCEL_RELEASE,
+            (uint32_t)c->diagnostic.job_ticket);
+#endif
     return 1;
 }
 static uint64_t now(void *cookie)
@@ -508,6 +521,11 @@ static int send(struct npu_convolution *c,enum npu_service_operation op,
         if(!c->diagnostic_job || !c->job || c->output_ready || c->ready ||
            c->observed.state!=A733_NPU_RUNNING || timeout<=100 || timeout>20000)return 0;
         break;
+    case NPU_SERVICE_RECOVER:
+        if(!c->diagnostic_reaped || c->diagnostic_recovering || c->diagnostic_recovered ||
+           c->job || c->output_ready || c->ready || c->observed.state!=A733_NPU_DRAINED ||
+           !timeout || timeout>100000)return 0;
+        break;
 #endif
     case NPU_SERVICE_REAP:
         if(!c->output_ready || !c->job || timeout)return 0;
@@ -528,6 +546,9 @@ static int send(struct npu_convolution *c,enum npu_service_operation op,
         c->diagnostic_job=command==2;c->diagnostic_canceled=0;
 #endif
     }
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+    if(op==NPU_SERVICE_RECOVER)c->diagnostic_recovering=1;
+#endif
     *ticket=t;return 1;
 }
 int npu_convolution_send(struct npu_convolution *c,enum npu_service_operation op,
@@ -572,7 +593,14 @@ int npu_convolution_collect(struct npu_convolution *c,uint64_t ticket,
 #endif
         if(reply.state!=A733_NPU_READY)fault(c);
         else {c->job=0;c->output_ready=0;c->ready=1;}
-    } else if(reply.state==A733_NPU_READY && !c->job)c->ready=1;
+    } else if(reply.state==A733_NPU_READY && !c->job) {
+        c->ready=1;
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+        if(c->diagnostic_recovering) {
+            c->diagnostic_recovering=0;c->diagnostic_recovered=1;
+        }
+#endif
+    }
 #if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
     else if(c->diagnostic_job && c->job && reply.state==A733_NPU_CANCELED) {
         c->diagnostic_canceled=1;c->output_ready=1;
@@ -614,6 +642,28 @@ static int restart_ready(void *cookie)
     struct npu_convolution *c=cookie;
     return restart_live(c) && a733_npu_startup_window_open(c->startup);
 }
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+static uint64_t diagnostic_trigger(void *cookie)
+{return ((struct npu_convolution *)cookie)->job_doorbell_us;}
+static int diagnostic_check(void *cookie,unsigned stage)
+{
+    struct npu_convolution *c=cookie;
+    if(!restart_ready(c))return 0;
+    if(stage==2)return 1;
+    return stage<=1 && c->native.memory.state==A733_NPU_MEMORY_IDLE &&
+        !c->native.memory.active.device && unchanged(c,0) &&
+        c->diagnostic_checkpoint(c->diagnostic_checkpoint_cookie,stage)==1;
+}
+int npu_convolution_cancel_diagnostic_enable(struct npu_convolution *c,int (*irq)(void *),
+    int (*checkpoint)(void *,unsigned),void *cookie)
+{
+    if(!good(c) || !c->bound || !checkpoint || !cookie || c->diagnostic_checkpoint)return 0;
+    c->diagnostic_checkpoint=checkpoint;c->diagnostic_checkpoint_cookie=cookie;
+    if(!npu_service_cancel_diagnostic_enable(&c->service,&c->diagnostic,2,diagnostic_trigger,
+        diagnostic_check,c,irq))return fault(c);
+    return 1;
+}
+#endif
 int npu_convolution_restart_enable(struct npu_convolution *c,int (*irq)(void *))
 {
     return good(c) && c->bound && npu_service_restart_enable(&c->service,irq,restart_ready);

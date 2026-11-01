@@ -98,6 +98,15 @@
  * observed low 32 bits. The retained OS snapshot keeps full identities and
  * operands; the RTC record alone cannot reconstruct a full 64-bit ticket. */
 #define SUNSTONE_CRUMB_NPU_REQUEST 0x08000000u
+/* Cancellation predicate: sample bits 24:23 (3 unavailable), low seven ticket
+ * bits 22:16. FAR keeps the operand's low word, or its high word when needed.
+ * The complete operand and ticket also remain in the pinned diagnostic. */
+#define SUNSTONE_CRUMB_NPU_CANCEL 0x04000000u
+#define SUNSTONE_CRUMB_NPU_CANCEL_HIGH_WORD 0x02000000u
+/* Without CANCEL, OUTPUT uses bit 25 and ticket low9 in bits24:16. FAR is
+ * byte index <<8 | actual byte; bit31 instead denotes an actual byte length. */
+#define SUNSTONE_CRUMB_NPU_OUTPUT 0x02000000u
+#define SUNSTONE_CRUMB_NPU_OUTPUT_LENGTH 0x80000000u
 #define SUNSTONE_CRUMB_FAIL_RETURN 0x80000000u /* site flag: caller is a return address */
 #define SUNSTONE_CRUMB_FAIL_SITE(group) (SUNSTONE_CRUMB_FAIL_##group << 12 | ((uint32_t)__LINE__ & 0xfffu))
 /* The address of this statement, for the caller word of a board failure.
@@ -220,6 +229,18 @@ enum {
     SUNSTONE_CRUMB_NPU_PPU_DELAY_WRITE = 0x0653,
     SUNSTONE_CRUMB_NPU_PPU_POLICY = 0x0654,
     SUNSTONE_CRUMB_NPU_PPU_STATUS = 0x0655,
+    SUNSTONE_CRUMB_NPU_CANCEL_TRIGGER = 0x0660,
+    SUNSTONE_CRUMB_NPU_CANCEL_PROVEN = 0x0661,
+    SUNSTONE_CRUMB_NPU_CANCEL_ASSERT = 0x0662,
+    SUNSTONE_CRUMB_NPU_CANCEL_RELEASE = 0x0663,
+    SUNSTONE_CRUMB_NPU_CANCEL_IDLE = 0x0664,
+    SUNSTONE_CRUMB_NPU_CANCEL_REAPED = 0x0665,
+    SUNSTONE_CRUMB_NPU_CANCEL_CLOSED = 0x0666,
+    SUNSTONE_CRUMB_NPU_CANCEL_IRQ_RETIRED = 0x0667,
+    SUNSTONE_CRUMB_NPU_CANCEL_IRQ_REARM = 0x0668,
+    SUNSTONE_CRUMB_NPU_CANCEL_BOOTSTRAP = 0x0669,
+    SUNSTONE_CRUMB_NPU_CANCEL_OUTPUT = 0x066a,
+    SUNSTONE_CRUMB_NPU_CANCEL_QUIESCENT = 0x066b,
     SUNSTONE_CRUMB_NPU_RETAINED = 0x06ff,
 };
 

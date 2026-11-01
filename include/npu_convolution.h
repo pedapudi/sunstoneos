@@ -90,6 +90,11 @@ struct npu_convolution {
     unsigned restarting;
 #if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
     unsigned diagnostic_job, diagnostic_canceled, diagnostic_reaped;
+    unsigned diagnostic_recovering, diagnostic_recovered;
+    struct npu_service_cancel_diagnostic diagnostic;
+    uint64_t job_doorbell_us;
+    int (*diagnostic_checkpoint)(void *,unsigned);
+    void *diagnostic_checkpoint_cookie;
 #endif
     /* The latest job's timing, written by the service worker before the DONE
      * reply that a client then reads. At publication, just before the
@@ -185,6 +190,12 @@ int npu_convolution_output(struct npu_convolution *,void *,size_t bytes);
  * only after the worker's cancel acknowledgment and full-idle finish. */
 int npu_convolution_diagnostic_send(struct npu_convolution *,const void *,size_t,
     uint64_t timeout_us,TickType_t wait,uint64_t *ticket);
+/* Before scheduling, after binding IRQ97. checkpoint runs in the worker at
+ * controller recovery entry (0) and completed bootstrap (1), and must compare
+ * PCK4 ON and unchanged local CCU words. The same client later sends RECOVER
+ * after canceled REAP; no local startup stop or restart participates. */
+int npu_convolution_cancel_diagnostic_enable(struct npu_convolution *,int (*irq)(void *),
+    int (*checkpoint)(void *,unsigned),void *cookie);
 #endif
 /* Original EL1 bootstrap task only, after the client collected successful CLOSE.
  * Poll local module/bus gate and reset shutdown under the original authority.
