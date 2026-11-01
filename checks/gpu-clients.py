@@ -20,6 +20,7 @@ typedef uint64_t StackType_t; typedef void *TaskHandle_t; typedef void (*TaskFun
 typedef struct { unsigned unused; } StaticTask_t;
 #define pdTRUE 1
 #define pdFALSE 0
+#define portMAX_DELAY ((TickType_t)0xffffffffu)
 #define taskSCHEDULER_NOT_STARTED 0
 #define taskSCHEDULER_RUNNING 1
 #define configASSERT assert
@@ -28,6 +29,7 @@ typedef struct { unsigned unused; } StaticTask_t;
 (a.output/'task.h').write_text('''#include "FreeRTOS.h"
 int xTaskGetSchedulerState(void); TaskHandle_t xTaskGetCurrentTaskHandle(void);
 TickType_t xTaskGetTickCount(void); void vTaskDelay(TickType_t);
+uint32_t ulTaskNotifyTakeIndexed(UBaseType_t,BaseType_t,TickType_t);
 ''')
 (a.output/'queue.h').write_text('''#ifndef HOST_QUEUE_H
 #define HOST_QUEUE_H

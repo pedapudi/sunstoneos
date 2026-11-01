@@ -29,6 +29,7 @@ option(SUNSTONE_A733_OS_GPU_RECOVERY_TEST
 set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
   "GPU diagnostic limit: constructor, firmware, jobs:N or layer:K")
 option(SUNSTONE_A733_OS_CPU_RETURN "Application result with success-only ROM return" OFF)
+option(SUNSTONE_GPU_FAST_TIMING "Capture optional GPU IRQ-entry counter timestamps" OFF)
 option(SUNSTONE_A733_OS_CORE "Build the OS core without an application" OFF)
 option(SUNSTONE_A733_CPU_TOPOLOGY "Expose read-only topology and per-core architectural observations" OFF)
 option(SUNSTONE_A733_OS_HELLO "Build the hello-compute OS image" OFF)
@@ -340,7 +341,7 @@ if(SUNSTONE_A733_OS_GPU)
     drivers/gpu/a733_gpu_platform_native.c drivers/gpu/pvr_compute_mode.c drivers/gpu/pvr_compute_service.c
     drivers/gpu/pvr_compute_package.c drivers/gpu/pvr_compute_job.c drivers/gpu/pvr_compute_programs.c
     drivers/gpu/pvr_compute_context.c drivers/gpu/gpu_queue.c
-    drivers/gpu/pvr_compute_queue.c drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c
+    drivers/gpu/pvr_compute_queue.c drivers/gpu/pvr_compute_fast.c runtime/gpu_call.S drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c
     drivers/gpu/pvr_render_target.c drivers/gpu/pvr_render_programs.c drivers/gpu/pvr_render_draw.c
     drivers/gpu/pvr_render_texture.c drivers/gpu/pvr_render_context.c drivers/gpu/pvr_render_job.c
     drivers/gpu/pvr_render_service.c drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_gpu_flush.c drivers/gpu/pvr_firmware.c
@@ -444,6 +445,7 @@ endif()
 target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_TASK_DEADLINES=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
   "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_A733_OS_CPU_RETURN=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_CRUMBS=1>"
+  "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
   A733_SMP_CONTRACT_MAGIC=${os_contract_magic} A733_SMP_RESULT_MAGIC=${os_result_magic}
   "$<$<BOOL:${SUNSTONE_A733_OS_RESIDENT}>:SUNSTONE_BOARD_RESIDENT=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_AUDIO}>:SUNSTONE_A733_OS_AUDIO=1>"

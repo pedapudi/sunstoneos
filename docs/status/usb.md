@@ -13,9 +13,11 @@ exchange, quiesces USB and returns responsively in the frozen records
 `board-session-20261023/port-3-3/r9-v4-usb/` under
 `~/.cache/sunstoneos/evidence/`.
 The [device](../usb.md) and [platform](../usb-platform.md) records bind inputs.
-On port `3-1`, entry `1793567391558674480-ec1dbf2c` records PL8 disabled and
-low after runner reset/FEL and DDR preparation. It refuses before diagnostic
-launch; powered TYPEC24 operation remains unqualified.
+On port `3-1`, with TYPEC24 physically empty, the source-disabled control, a
+one-second VBUS pulse and a ten-second VBUS hold return normally (entries
+`1793570915607590841-5a219698`, `1793571535501560347-d0b1985c` and
+`1793571557988499335-8426c3ed`). VBUS rises within 6.8 ms and falls within
+2.0 ms. Loaded-port operation and attached peripherals remain unqualified.
 
 Cold USB0 clock/reset/PHY preparation is host-checked but keeps the device
 disconnected. Physical cold start, fabric/security ownership and wider
@@ -23,85 +25,94 @@ USB1/USB2/DWC3 operation remain unqualified. The inherited SESSION refusal and
 32-bit PCTL SoftConn failure are resolved in the byte-store takeover path;
 [the worklog](../hardware-worklog-20261031.md) retains their exact input scope.
 
-## Current host refusal and next steps
+## Current host admission and qualification
 
-Board entry `1793567391558674480-ec1dbf2c` is `refused-before-launch`, site
-`prepare`, at revision `e4047776`. Its result is under
+The inherited-state correction is implemented. The runner captures APBS1,
+S_TWI_BGR and XO_CTRL0 without requiring cold reset defaults. The native owner
+accepts the observed normalized PLL_REF source, preserves shared APBS1 and
+S_TWI0, and programs S_TWI1's local divider from the actual input rate. It gives
+an enabled inherited controller a bounded chance to become bus-free before
+reset. Initialization has one 20 ms deadline, the vendor reset/gate sequence,
+a full 1 ms gate-off interval, and a wait for software reset to self-clear.
+Idle requires physical SDA/SCL high, no START/STOP, idle status and inactive
+autonomous/DMA paths. No VBUS enable precedes those checks.
+
+The 208-byte report appends inherited clock and controller snapshots. The
+matching decoder is required. Three rebuilt images and their commands are under
+`~/.cache/sunstoneos/build/usb-host-board-1101/inherited4/images/`:
+
+| README relative to that directory | ELF SHA-256 | Physical outcome |
+| --- | --- | --- |
+| `control/README.md` | `28ee313dea47b1af39ecc05f76a6439611780427950eb9243299a1383a6c1274` | Returned, entry `1793570915607590841-5a219698` |
+| `pulse-1s/README.md` | `9a241f3c7a3ef007315bf4b7a8c684a56ba2b27940a4537ad71c54c6d4a2697e` | Returned, entry `1793571535501560347-d0b1985c` |
+| `hold-10s/README.md` | `68a7b3702bfbfc78d8972203a7a747b6a722513e149186b06abefeb00d28b9d6` | Returned, entry `1793571557988499335-8426c3ed` |
+
+All three ran on port `3-1` from `bringup` `08d154cc`, which contains runner
+correction `1d9eb576` and native correction `302dedc5`. TYPEC16 supplied board
+power and TYPEC24 was physically empty. Each run matched `SSBVRPT1`, reported no
+decoder, guard or cleanup failure, retired S_TWI1 at 400 kHz with idle status
+`0xf8`, and left PL8 configured as an output driven low.
+
+| Run | VBUS on time | Rise to VBUS-OK | Fall to VBUS-OK clear | CC samples | Largest guard service gap |
+| --- | --- | --- | --- | --- | --- |
+| Control | none | none | 1.541 ms | 2 | 527 µs |
+| One-second pulse | 996.957 ms | 6.795 ms | 1.964 ms | 133 | 531 µs |
+| Ten-second hold | 9.996957 s | 6.795 ms | 1.585 ms | 1319 | 532 µs |
+
+Rise and fall stay within the 275 ms and 650 ms limits, and the guard service
+gap stays within its 2 ms revocation limit. The results qualify empty-port
+source enable and shutdown only. They do not qualify a loaded port, overload
+behavior or any attached device.
+
+Next steps:
+
+1. Rebuild the input, serial, camera and camera-JPEG images on `bringup`.
+2. Attach a separately powered USB2 hub with upstream backfeed protection,
+   keyboard, mouse, UVC webcam and supported serial adapter to TYPEC24. Serial
+   needs a voltage-compatible 1 Mbaud 8N1 test source/receiver and common
+   ground.
+3. Run each class image on `3-1` through the queue.
+
+Host evidence is under `inherited4/` in this task's build directory.
+`runner-check/` accepts the observed and warm-controller snapshots;
+`native-check.log` covers the state machine, guard, fatal cleanup and decoder.
+`init-delay-check/` executes actual linked initialization with observed clocks,
+warm/busy controllers, delayed/stuck reset, stuck bus and sequential retirement.
+It also executes the old image and confirms that its admission fails on the
+same values. `late-idle-check/` verifies that a late bus-idle observation cannot
+truncate the vendor gate-off interval. All three offline admissions and one
+USB-enabled OS baseline pass. One independent admission check identifies the
+truncated-delay defect; it is corrected and covered by the linked model.
+
+The latest physical entry remains `1793567391558674480-ec1dbf2c`, a control
+refusal before launch at `prepare`, revision `e4047776`. The result is under
 `~/.cache/sunstoneos/board-queue/entries/1793567391558674480-ec1dbf2c/run/result.json`.
-The source-disabled image never starts. Runner PL8 observations pass at
-admission, fresh FEL, both DDR-helper returns and DDR completion: mux 15,
-data zero, raw pull word `0x5`. PL8's decoded pull field is zero; the raw word
-also contains other pins. This is observed reset/FEL fail-safe evidence for
-that run, without a universal reset guarantee.
+PL8 is mux 15, data zero and raw pull word `0x5` at admission, fresh FEL, both
+DDR-helper returns and DDR completion. PL8's decoded pull is zero. These
+observations establish source-off for that reset/FEL preparation, without a
+universal reset guarantee. No diagnostic VBUS enable occurs in this entry.
 
-The admission snapshot is APBS1 `0x04000000`, S_TWI_BGR `0x00010001` and
-XO_CTRL0 `0x983fffb7`. The manual and pinned vendor clock driver establish:
-
-- APBS1 source 4 is normalized SYS_CLK24M/PLL_REF, divided by one.
-- S_TWI_BGR bits 0 and 16 belong to S_TWI0, the PMIC bus. S_TWI1 uses
-  bits 1 and 17, which are clear. Gate bits alone do not establish bus idle.
-- DCXO detection bits 15:14 are 3, meaning 24 MHz. Enable and stable bits
-  are set. The diagnostic incorrectly requires APBS1 source zero.
-
-The DDR wrapper invokes boot0 PMIC/clock setup, and the PMIC provider uses
-S_TWI0 with mask `0x10001`. That explains the observed state without assigning
-it to S_TWI1. The exact historical writer is not established. A host invocation
-of the actual current admission function reproduces this refusal in
-`~/.cache/sunstoneos/build/usb-host-board-1101/inherited3/before.json`.
-No implementation fix or new board submission follows that reproduction.
-
-Open work, in priority order:
-
-1. Replace the cold-state predicates in `tools/board_usb_power.py` and
-   `apps/usb-vbus/main.c` with initialization from inherited state. Record
-   inherited registers, preserve S_TWI0 and shared APBS1 consumers, derive
-   timing from the selected source, reset only S_TWI1, and bound reset and
-   bus-idle completion. The pinned vendor U-Boot sequence preserves unrelated
-   BGR bits and includes a 1 ms gate-off interval. Software reset at TWI
-   `+0x18` self-clears on completion. Model delayed reset, observed entry
-   values, busy transfer and stuck bus before another physical attempt.
-2. Rebuild the control, pulse and hold images after that correction. Update
-   their decoder and READMEs for inherited-state reporting, then run focused
-   checks and offline runner admission. Existing packages need replacement.
-3. Through the updated `bringup` queue, run control, pulse, then hold on `3-1`
-   with `--expect SSBVRPT1`, the matching decoder and
-   `--approved-by coordinator`. Proceed only after each preceding run passes;
-   stop at the first failure. Keep TYPEC24 empty and TYPEC16 connected.
-4. After those physical results, integrate finite host cleanup and decoder
-   completion, rebuild the four class images, and qualify the powered hub
-   topology. The reviewed follow-up commits and remaining real-time gaps
-   appear below.
-
-The built packages are under
-`~/.cache/sunstoneos/build/usb-host-board-1101/qualification/vbus-images/`:
-
-| README relative to that directory | Physical status |
-| --- | --- |
-| `control/README.md` | Refused before launch in the entry above |
-| `pulse-1s/README.md` | Not run |
-| `hold-10s/README.md` | Not run |
-
-The coordinator's approval for the empty-port control/pulse/hold sequence on
-`3-1` remains valid. No additional approval is pending for those tests.
-Broader PHY power changes retain their design/code review gate; new operating
-points beyond the approved vendor configuration require coordinator approval.
+That entry records APBS1 `0x04000000`, S_TWI_BGR `0x00010001` and XO_CTRL0
+`0x983fffb7`. APBS1 selects normalized SYS_CLK24M/PLL_REF divided by one.
+BGR bits 0/16 enable and release S_TWI0, the PMIC bus; S_TWI1 uses bits 1/17.
+DCXO detection 3 means 24 MHz, with enable and stability set. Runner DDR
+preparation invokes boot0 PMIC/clock setup, consistent with S_TWI0 remaining
+live. Gate bits alone do not establish a transfer's state.
 
 Source anchors are manual sections 4.2.5.3, 4.2.5.16, 9.1.7.16 and
 18.11.10.7; `docs/provider-clock-reference.md`; and the pinned vendor
-`ccu-sun60iw2-r.c` recorded in `docs/typec-pd-sources.json`. The cached vendor
-U-Boot `drivers/i2c/sunxi_i2c.c`, revision
-`b791be842935b27268ae3d00e943a9075495f30a`, has SHA-256
-`cc6277a946c927042afa56e81375b8698c514827efe18f12ad1e8a5d016743d8`.
-Its reset/gate sequence is at lines 721–743; software-reset completion and
-clock setup are at lines 486–504. The cached manual and clock-driver hashes
-remain in the existing source records.
+`ccu-sun60iw2-r.c` in `docs/typec-pd-sources.json`. Vendor U-Boot
+`drivers/i2c/sunxi_i2c.c`, revision `b791be842935b27268ae3d00e943a9075495f30a`,
+has SHA-256 `cc6277a946c927042afa56e81375b8698c514827efe18f12ad1e8a5d016743d8`.
+Lines 721–743 supply the reset/gate order and 1 ms delay; lines 486–504 wait
+for software reset before clock setup. The shared parent is retained because
+retuning it would also alter the live PMIC bus.
 
-Shared editing requires coordination for `tools/board.py`,
-`tools/board_images.py`, `tools/board_usb_power.py`, `apps/os/services.c` and
-the shared deadline runtime. The device-class overlap files are
-`apps/os/client.c`, `drivers/usb/host/uvc-camera.c`,
-`include/sunstone_uvc_camera.h`, `checks/device-classes-usb.c` and
-`checks/device-classes-usb.py`. This round changes only this status document.
+Coordinate edits to `tools/board.py`, `tools/board_images.py`,
+`tools/board_usb_power.py`, `apps/os/services.c` and the shared deadline runtime.
+The device-class overlap remains `apps/os/client.c`,
+`drivers/usb/host/uvc-camera.c`, `include/sunstone_uvc_camera.h`,
+`checks/device-classes-usb.c` and `checks/device-classes-usb.py`.
 
 ## Host and Type-C
 

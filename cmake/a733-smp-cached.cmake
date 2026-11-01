@@ -10,8 +10,10 @@ apply_build_patch("${a733_build}/port-base.c" "${a733_port}/port.c"
   "${a733_root}/patches/freertos-smp-c.patch")
 apply_build_patch("${a733_build}/port.c" "${a733_build}/port-base.c"
   "${a733_root}/patches/freertos-a733-smp.patch")
-apply_build_patch("${a733_build}/portASM.S" "${a733_port}/portASM.S"
+apply_build_patch("${a733_build}/portASM-base.S" "${a733_port}/portASM.S"
   "${a733_root}/patches/freertos-smp-asm.patch")
+apply_build_patch("${a733_build}/portASM.S" "${a733_build}/portASM-base.S"
+  "${a733_root}/patches/freertos-gpu-call.patch")
 apply_build_patch("${a733_build}/portmacro.h" "${a733_port}/portmacro.h"
   "${a733_root}/patches/freertos-smp-macro.patch")
 apply_build_patch("${a733_build}/tasks.c" "${FREERTOS_DIR}/tasks.c"
@@ -68,6 +70,7 @@ file(WRITE "${a733_build}/build-id.txt" "${a733_build_id}\n")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${a733_identity_inputs}
   "${a733_port}/port.c" "${a733_port}/portASM.S" "${a733_port}/portmacro.h"
   "${a733_root}/patches/freertos-smp-c.patch" "${a733_root}/patches/freertos-smp-asm.patch"
+  "${a733_root}/patches/freertos-gpu-call.patch"
   "${a733_root}/patches/freertos-smp-macro.patch" "${a733_root}/patches/freertos-a733-smp.patch"
   "${FREERTOS_DIR}/tasks.c" "${a733_root}/patches/freertos-smp-tasks.patch")
 add_executable(a733-smp-cached-diagnostic EXCLUDE_FROM_ALL ${a733_sources}

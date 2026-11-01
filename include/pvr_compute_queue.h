@@ -13,6 +13,7 @@
 #include "a733_gpu_vm_memory.h"
 #include "FreeRTOS.h"
 #include "queue.h"
+#include "pvr_compute_fast.h"
 
 struct a733_gpu_queue;
 struct pvr_gpu_service;
@@ -69,6 +70,7 @@ struct pvr_compute_queue_client_view {
 };
 
 struct pvr_compute_queue {
+    struct pvr_compute_fast fast;
     struct a733_gpu_queue *owner;
     struct pvr_mips_buffer firmware[PVR_COMPUTE_QUEUE_OBJECTS], publish[10];
     uint32_t firmware_address[PVR_COMPUTE_QUEUE_OBJECTS];
@@ -77,7 +79,7 @@ struct pvr_compute_queue {
     atomic_uint final_close;
     atomic_uint client_owed;
     unsigned char *job_cpu;
-    uint64_t epoch, resume, task_word;
+    uint64_t epoch, resume, task_word, job_gpu;
     struct gpu_queue_context_config create_config;
     struct gpu_queue_program create_program;
     uint64_t create_ticket, close_ticket;
@@ -90,7 +92,7 @@ struct pvr_compute_queue {
     struct pvr_mips_object objects[PVR_COMPUTE_QUEUE_OBJECTS];
     struct pvr_cccb client;
     struct gpu_queue_lease_info lease[GPU_QUEUE_LEASES];
-    uint32_t lease_count, coefficients, phase, error, sequence, owed, held;
+    uint32_t lease_count, coefficients, phase, error, sequence, owed, held, priority, payload_cache;
     uint32_t common_words; /* immutable admitted system values plus local words */
     /* Worker-owned: one terminal breadcrumb before publishing a job record. */
     unsigned crumb_pending;
@@ -106,7 +108,8 @@ struct pvr_compute_queue {
     struct pvr_compute_queue_client peer;
     atomic_uint application_sequence, recovering;
     unsigned active_client, next_client;
-    uint32_t timeline_serial, timeline_previous, completed_jobs;
+    uint32_t timeline_serial, timeline_previous;
+    atomic_uint completed_jobs;
     unsigned reset_pending;
 };
 
@@ -171,6 +174,8 @@ int pvr_compute_queue_wake(struct pvr_compute_queue *);
 int pvr_compute_queue_client_bind(struct pvr_compute_queue *);
 /* Runtime hook: 1 live, 0 thermally parked, -1 failed. */
 int pvr_compute_queue_runtime_sync(void);
+/* Hot-path admission reads published lifecycle/thermal state only. */
+int pvr_compute_queue_runtime_admit(void);
 void pvr_compute_queue_runtime_opened(uint64_t epoch);
 void pvr_compute_queue_runtime_closed(void);
 #endif

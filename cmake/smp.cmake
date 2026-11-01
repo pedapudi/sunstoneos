@@ -6,8 +6,10 @@ set(smp_build "${CMAKE_CURRENT_BINARY_DIR}/freertos-smp")
 file(MAKE_DIRECTORY "${smp_build}")
 apply_build_patch("${smp_build}/port.c" "${smp_port}/port.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/freertos-smp-c.patch")
-apply_build_patch("${smp_build}/portASM.S" "${smp_port}/portASM.S"
+apply_build_patch("${smp_build}/portASM-base.S" "${smp_port}/portASM.S"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/freertos-smp-asm.patch")
+apply_build_patch("${smp_build}/portASM.S" "${smp_build}/portASM-base.S"
+  "${CMAKE_CURRENT_SOURCE_DIR}/patches/freertos-gpu-call.patch")
 apply_build_patch("${smp_build}/portmacro.h" "${smp_port}/portmacro.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/freertos-smp-macro.patch")
 # Exercise the scheduler used by the cached native SMP image, including
@@ -17,7 +19,8 @@ apply_build_patch("${smp_build}/tasks.c" "${FREERTOS_DIR}/tasks.c"
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${smp_port}/port.c" "${smp_port}/portASM.S" "${smp_port}/portmacro.h"
   "${FREERTOS_DIR}/tasks.c" patches/freertos-smp-tasks.patch
-  patches/freertos-smp-c.patch patches/freertos-smp-asm.patch patches/freertos-smp-macro.patch)
+  patches/freertos-smp-c.patch patches/freertos-smp-asm.patch patches/freertos-smp-macro.patch
+  patches/freertos-gpu-call.patch)
 foreach(target IN ITEMS smp-kernel-model smp-context-model)
   if(target STREQUAL "smp-context-model")
     set(smp_check checks/smp-context.c checks/smp-context.S)

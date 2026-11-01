@@ -55,7 +55,9 @@ static void callback(void *ctx)
 {
     uint64_t el, sp;
     __asm__ volatile("mrs %0, CurrentEL\n mrs %1, spsel" : "=r"(el), "=r"(sp));
-    configASSERT(ctx == &config && el == 4 && sp == 0 && xTaskGetCurrentTaskHandle() == service.worker);
+    TaskHandle_t current=xTaskGetCurrentTaskHandle();
+    configASSERT(ctx == &config && el == 4 && sp == 0 && (current == service.worker ||
+        (config.job_irq_ack && (current==service.clients[0].task || current==service.clients[2].task))));
     __atomic_fetch_add(&calls, 1, __ATOMIC_RELEASE);
     __atomic_fetch_or(&cores, 1u << portGET_CORE_ID(), __ATOMIC_RELEASE);
     TickType_t tick = xTaskGetTickCount();
