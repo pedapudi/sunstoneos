@@ -86,8 +86,11 @@ static int gate_status(struct a733_audio_parent *p, unsigned *enabled)
 static int baseline(struct a733_audio_parent *p)
 {
     uint32_t x, y;
+    /* Manual 4.1.6.51: AUDIO1 bits 26:23 are reserved. Unlike AUDIO0,
+     * bit 24 is not a modulation enable; preserve it without interpreting it.
+     * The vendor AUDIO1 definition uses PAT0 bit 31 and PAT1 bit 27. */
     if (!reference(p) || !rd(p, p->deadline, AUDIO, &p->audio_value) ||
-        (p->audio_value & BIT(24)) || !rd(p, p->deadline, CCU+0x288, &x) || (x & BIT(31)) ||
+        !rd(p, p->deadline, CCU+0x288, &x) || (x & BIT(31)) ||
         !rd(p, p->deadline, CCU+0x28c, &y) || (y & BIT(27)) ||
         !gate_control(p)) return 0;
     if (!p->cold) {
@@ -95,7 +98,9 @@ static int baseline(struct a733_audio_parent *p)
         return (p->audio_value & (CONTROLS|BIT(28)|RATE_MASK)) ==
             (CONTROLS|BIT(28)|RATE_VALUE) && gate_status(p,&enabled) && enabled;
     }
-    if (p->audio_value & CONTROLS) return 0;
+    /* AUDIO1 reset leaves its LDO enabled (manual 4.1.6.51, 0x40147f00).
+     * An idle LDO does not make the disabled PLL an active shared parent. */
+    if (p->audio_value & (CONTROLS&~BIT(30))) return 0;
     static const unsigned consumers[] = {0x1200,0x1210,0x1220,0x1224,0x1230,0x1240,0x1280,0x12c0};
     for (unsigned i=0; i<sizeof(consumers)/sizeof(*consumers); ++i)
         if (!rd(p, p->deadline, CCU+consumers[i], &x) || (x & BIT(31))) return 0;

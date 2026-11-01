@@ -87,7 +87,10 @@ readbacks, outputs, return report, decoded breadcrumbs and `result.json`.
 
 The runner verifies the A733 ROM instructions, protects the `readl` helper's
 SRAM scratch, and uses the measured four-second WDT0 sequence to obtain a fresh
-FEL instance. It waits for the new instance's udev permissions. DRAM setup reuses
+FEL instance. It waits for the new instance's udev permissions. While the board
+re-enumerates, a sysfs attribute read can fail with ENODEV or ENOENT; discovery
+treats both as an absent device and the wait continues until its deadline
+([`checks/usb-access-discover.py`](../checks/usb-access-discover.py)). DRAM setup reuses
 `tools/run-ddr.py` under the same lock. A matching SID selects a cached training
 record; missing or rejected restoration falls back to full training. The default
 record directory is `~/.cache/sunstoneos/ddr-records`;

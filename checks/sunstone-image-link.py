@@ -171,7 +171,8 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm):
     allowed = symbols(runtime_libraries, True)
     linked = {symbol['name'] for symbol in elf.symbols if symbol['shndx'] != 0}
     kit = Path(__file__).resolve().parents[1] / 'include'
-    header = (kit / 'sunstone_app.h').read_text() + (kit / 'gpu_queue.h').read_text()
+    header = ''.join((kit / name).read_text() for name in
+                     ('sunstone_app.h', 'gpu_queue.h', 'sunstone_latency.h', 'sunstone_dma.h'))
     public_calls = set(re.findall(r'\b((?:ss_|gpu_queue_)[a-z0-9_]+)\s*\([^;{}]*\)\s*;', header))
     # Object inventories include references in discarded sections. A public
     # call remains valid when no live caller keeps its implementation linked.
@@ -192,7 +193,7 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm):
         allowed.add(selected)
     allowed |= {name for name in linked if re.match(r'^(?:[xv]|ux|ul|uc|pv|pc)[A-Z]', name)}
     # FreeRTOS configASSERT is a board-supplied kernel callback.
-    allowed.update(('vApplicationAssert', 'platform_panic'))
+    allowed.update(('vApplicationAssert', 'platform_panic', 'ullPortYieldRequired'))
     forbidden = sorted(external - allowed)
     assert not forbidden, 'application references private OS symbols: ' + ', '.join(forbidden)
     # Application registration and program bytes enter immutable image

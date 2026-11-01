@@ -113,7 +113,10 @@ int main(int argc,char **argv)
  if(fail_mode==4){assert(atomic_load(&dsi.result)==2&&!dsi.pool&&pm.register_held&&dsi.stage==4);
  assert(pll_yields>100&&last_yield-first_yield<5000&&pll_ticks>1000);}
  else if(fail_mode){assert(atomic_load(&dsi.result)==2);assert(device_memory_lookup(&memory_pool,dsi.frame)->state==DEVICE_MEMORY_RETAINED&&device_memory_lookup(&memory_pool,dsi.tables)->state==DEVICE_MEMORY_RETAINED);}
- else {assert(atomic_load(&dsi.result)==1&&dsi.native.binding.transferred&&dsi.iommu.state==A733_IOMMU_ACTIVE&&dsi.iommu.fault.scanned_masters==0x100);
+ else {assert(dsi.native.config.port&&dsi.native.config.port->connector==SUNSTONE_DISPLAY_DSI&&dsi.native.config.port->controller==1);
+ assert(dsi.native.config.port->panel&&dsi.native.config.port->panel->id==input.panel_id&&
+ dsi.native.config.port->panel->prepare_count+dsi.native.config.port->panel->enable_count==input.values[DSI_STEP_COUNT]);
+ assert(atomic_load(&dsi.result)==1&&dsi.native.binding.transferred&&dsi.iommu.state==A733_IOMMU_ACTIVE&&dsi.iommu.fault.scanned_masters==0x100);
  /* No tick passes while the PLL holds the common register mutex. */
  assert(pll_yields>100&&!pll_ticks);
  assert(dsi.media.config.groups==(A733_MEDIA_DE|A733_MEDIA_VO0|A733_MEDIA_IOMMU));assert(device_memory_lookup(&memory_pool,dsi.frame)->state==DEVICE_MEMORY_DEVICE);

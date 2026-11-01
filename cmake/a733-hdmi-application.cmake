@@ -37,7 +37,7 @@ list(REMOVE_ITEM hdmi_sources "${storage_build}/build-id.c" "${storage_build}/bo
 apply_build_patch("${hdmi_build}/boot.c" "${storage_build}/boot.c" "${hdmi_root}/apps/hdmi/boot.patch")
 list(APPEND hdmi_sources "${hdmi_build}/boot.c")
 foreach(source IN ITEMS apps/hdmi/main.c apps/hdmi/admission.c apps/hdmi/snapshot.c apps/hdmi/output.c
- drivers/display/a733_hdmi.c drivers/display/a733_hdmi_phy.c drivers/display/a733_tcon_tv.c
+ drivers/display/a733_hdmi.c drivers/display/a733_hdmi_phy.c drivers/display/a733_tcon_tv.c drivers/display/sunstone_edid.c
  platform/a733/hdmi_native.c)
  list(APPEND hdmi_sources "${hdmi_root}/${source}")
 endforeach()

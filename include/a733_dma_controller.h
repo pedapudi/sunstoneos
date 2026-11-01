@@ -130,6 +130,9 @@ enum a733_dma_control_status a733_dma_submit_cyclic_tx(struct a733_dma_controlle
     unsigned,const struct a733_dma_transfer *,uint64_t);
 enum a733_dma_control_status a733_dma_submit_cyclic_rx(struct a733_dma_controller *,
     unsigned,const struct a733_dma_transfer *,uint64_t);
+/* Cached completed-package lower bound. After cancel, the counter is no longer
+ * sampled: disable can clear PKG_NUM before channel drain. Final partial or
+ * unobserved packages are intentionally absent; this is not a wire timestamp. */
 int a733_dma_cyclic_progress(const struct a733_dma_controller *,unsigned,uint64_t *);
 /* Copy only one completed, not-yet-reused RX range into private staging. No
  * raw lease escapes. Output must be disjoint from every retained channel's

@@ -4,6 +4,7 @@
  * Copyright (C) 2016 Allwinner.
  */
 #include "a733_dsi_video.h"
+#include "a733_display_modes.h"
 #include "a733_range.h"
 #include "a733_dsi_phy.h"
 #include <stddef.h>
@@ -40,8 +41,10 @@ int a733_dsi_video_plan(const struct a733_dsi_video_timing *t, struct a733_dsi_v
         !t->pixel_hz || !t->width || t->width > 1920 || !t->height || t->height > 1200 ||
         !t->vsync || !t->vback || !t->vfront || t->vsync > 4095 || t->vback > 4095 ||
         t->hsync < 4 || t->hback < 5 || t->hfront < 20) return 0;
-    uint32_t ht = (uint32_t)t->width + t->hsync + t->hback + t->hfront;
-    uint32_t vt = (uint32_t)t->height + t->vsync + t->vback + t->vfront;
+    struct sunstone_display_mode pixels=a733_dsi_pixel_mode(t);
+    if(!sunstone_display_mode_valid(&pixels))return 0;
+    uint32_t ht = (uint32_t)pixels.width + pixels.hsync + pixels.hback + pixels.hfront;
+    uint32_t vt = (uint32_t)pixels.height + pixels.vsync + pixels.vback + pixels.vfront;
     if (ht > 8192 || vt > 8191) return 0;
     unsigned burst = t->mode == A733_DSI_BURST;
     uint64_t transport = t->pixel_hz;

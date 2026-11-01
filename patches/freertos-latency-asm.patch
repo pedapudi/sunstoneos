@@ -1,0 +1,22 @@
+--- portASM.S
++++ portASM.S
+@@ -526,6 +526,19 @@
+    MOV X1, # portMAX_API_PRIORITY_MASK
+ 
+ 4:
++#ifdef SUNSTONE_LATENCY
++   /* A context restore can unmask without a C portENABLE_INTERRUPTS call.
++    * Close the old core interval while IRQ entry still excludes writers.
++    * X0-X3 remain live; the task's remaining GP/FPU state is still saved. */
++   CBNZ X3, 9f
++   STP X0, X1, [ SP, #-16 ]!
++   STP X2, X3, [ SP, #-16 ]!
++   MRS X0, TPIDR_EL1
++   BL ss_latency_mask_close
++   LDP X2, X3, [ SP ], #16
++   LDP X0, X1, [ SP ], #16
++9:
++#endif
+    MSR ICC_PMR_EL1, X1      /* Set interrupt mask */
+    DSB SY
+    ISB SY

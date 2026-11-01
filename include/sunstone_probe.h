@@ -40,6 +40,11 @@ extern const struct sunstone_probe_marker sunstone_probe_marker;
  * resources before returning READY. A failure must return another value. */
 uint64_t sunstone_probe_quiesce(void);
 uint64_t sunstone_probe_restore_interrupts(void); /* EL3; strong monitor-owned hook */
+/* EL3 hooks: default acquisition normalizes acknowledged secondary OFF to
+ * static OFF with GIC wake disabled, retained through ROM. A strong owner
+ * must meet the same held-state checks; release follows all cache work. */
+uint64_t sunstone_probe_acquire_secondaries(void);
+uint64_t sunstone_probe_release_secondaries(void);
 void sunstone_probe_begin(void); /* EL3, before any whole-cache maintenance. */
 _Noreturn void sunstone_probe_complete(unsigned status,size_t bytes); /* EL1 or EL3 */
 _Noreturn void sunstone_probe_fault(uint64_t site,uint64_t esr,uint64_t elr,uint64_t far); /* EL3 */

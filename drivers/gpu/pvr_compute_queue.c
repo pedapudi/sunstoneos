@@ -10,6 +10,7 @@
 #include "a733_range.h"
 #include "aarch64_device_memory.h"
 #include "sunstone_crumb.h"
+#include "sunstone_latency.h"
 #include <string.h>
 
 #define PAGE 4096u
@@ -87,6 +88,7 @@ static int post(struct pvr_compute_queue *q,uint32_t sequence,unsigned result,un
     }
     /* A higher-priority client may run as soon as the queue wakes it. */
     q->owed=0;
+    SS_LATENCY_GPU_POST(q->active_client);
     if (xQueueSend(v.completions,&r,0)!=pdTRUE) {
         q->owed=1; return fault(q,GPU_QUEUE_SERVICE);
     }
@@ -316,6 +318,7 @@ static int take(struct pvr_compute_queue *q)
         {PVR_CCB_MAGIC|PVR_CCCB_TASK|205u,96,1,1,q->command}, {PVR_CCB_MAGIC|213u,8,0,0,q->update}};
     q->previous_sequence=atomic_load(v.sequence); atomic_store(v.sequence,q->job.sequence);
     q->sequence=q->job.sequence; q->kicked=0; q->phase=PVR_COMPUTE_QUEUE_IN_FLIGHT;
+    SS_LATENCY_GPU_ARM();
     if (!pvr_cccb_begin(&q->client,commands,2,NULL,0,q->deadline)) return fault(q,GPU_QUEUE_SERVICE);
     return drive_to_kick(q);
 }

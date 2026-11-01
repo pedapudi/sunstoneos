@@ -7,6 +7,7 @@ import secrets
 import shutil
 import struct
 import subprocess
+from typing import NamedTuple
 from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +16,19 @@ CONTROL = CACHE/'evidence/wdt-breadcrumbs-1031/control/offline-proof/prepared'
 GPU_TREE = Path.home()/'git/sunstoneos-worktrees/gpu-bisect-1031-crumbs'
 GPU_TEMPLATE = CACHE/'evidence/sol-gpu-completion-1031/prepared'
 CLANG, LLD = Path('/usr/bin/clang-21'), CACHE/'host/usr/bin/ld.lld-21'
+DMA_EXTENT, DMA_MAGIC = 7, 0x41533733444d4131
+DMA_FACTS = ('dma_bus_enabled', 'dma_reset_deasserted', 'dma_mbus_enabled',
+             'dma_exclusive_writers', 'cpu_quiet', 'mcu_quiet', 'producers_quiet',
+             'prior_bus_drained', 'irq_masked', 'watchdog_recovery')
+
+
+class DmaAdmission(NamedTuple):
+    session: bytes
+    authority: bytes
+    identity: tuple
+    port: str
+    image_sha256: str
+    identity_verified: bool
 
 
 def load(name, path):
@@ -74,7 +88,8 @@ def finite_npu_info(image, host, finite, manifest):
     parts, address, build, layout, geometry = finite.image_profile(Path(image).read_bytes(), manifest)
     profile = finite.geometry_profile(geometry)
     require(profile in (finite.STARTUP, finite.INFERENCE, finite.RUNTIME, finite.RESTART,
-                        finite.SWITCH, finite.SDK, finite.POWER), 'Unsupported finite NPU profile.')
+                        finite.SWITCH, finite.SDK, finite.POWER,
+                        getattr(finite, 'LATENCY', 'npu-latency-return-v1')), 'Unsupported finite NPU profile.')
     require(layout[:3] == (456, 224, 232), 'NPU development session layout differs.')
     return {'watchdog': watchdog, 'geometry': geometry, 'session_layout': list(layout),
             'execution_profile': profile, 'image_sha256': sha(image), 'build_id': build.hex()}
@@ -111,6 +126,10 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
             marker['mode'] & 0xff0f == 1 and 1 <= marker['mode'] >> 4 <= 11 and
             1 <= marker['session_seconds'] <= 600, 'Invalid watchdog marker.')
     generic = 'ss_result_record' in names
+    dma = 'os_dma_profile' in names
+    if dma:
+        require(generic and symbol_bytes(image, 'os_dma_profile') == struct.pack('<3Q', DMA_MAGIC, 1, 4096),
+                'Unsupported native DMA return profile.')
     geometry = None
     if kind != 'probe':
         require(generic or 'os_cpu_return_output' in names, 'No returning application result in image.')
@@ -134,7 +153,72 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
                 'Probe entry/report reservations differ.')
     return {'symbols': names, 'watchdog': marker, 'generic': generic,
             'entry_guard': 'os_cpu_return_entry_profile' in names, 'descriptor': descriptor,
-            'report_geometry': geometry, 'usb_class': 'os_usb_service_dispatch' in names}
+            'report_geometry': geometry, 'dma': dma,
+            'usb_class': 'os_usb_service_dispatch' in names}
+
+
+def session_template(args):
+    template = Path(args.template or (GPU_TEMPLATE if args.kind == 'gpu-return' else CONTROL))
+    path = template/'session.bin' if (template/'session.bin').is_file() else template/'board/session-template.bin'
+    return template, Path(getattr(args, 'records', None) or path)
+
+
+def dma_admission(args, info, live=None):
+    """Authenticate the original DMA record before reseeding any session identity.
+
+    Offline admission binds supplied facts. The runner verifies their original
+    USB instance under its lock before resetting, then preserves these bytes.
+    """
+    if not info.get('generic'):
+        return None
+    template, path = session_template(args)
+    raw = path.read_bytes()
+    records = load('runner_dma_records', ROOT/'apps/os/host.py')
+    typed = len(raw) >= 600 and struct.unpack_from('<Q', raw, 592)[0] == records.SESSION_MAGIC
+    service = records.session_decode(raw)['extents'].get(DMA_EXTENT) if typed else None
+    require(bool(service) == bool(info.get('dma')), 'Native DMA profile and service extent differ.')
+    if service is None:
+        return None
+    require(len(service) == 160 and struct.unpack_from('<3Q', service) == (DMA_MAGIC, 1, 160),
+            'Invalid DMA service extent.')
+    fabric = struct.unpack_from('<6I', service, 56)
+    expected_cpu, expected_mcu, desired_cpu, desired_mcu, route_mask = struct.unpack_from('<5I', service, 80)
+    owner, handoff, deadline, cold = struct.unpack_from('<3QI', service, 104)
+    controller, evidence, established, owned, channels = struct.unpack_from('<2QI2H', service, 136)
+    epoch, generation, lease = struct.unpack_from('<3Q', raw, 24)
+    require(fabric == struct.unpack_from('<6I', raw, 488) and owner and
+            handoff == evidence == lease and not deadline and not cold and not route_mask and
+            expected_cpu == desired_cpu and expected_mcu == desired_mcu and desired_cpu & 1 and
+            controller == 0x04601000 and established == 0x3f and owned == 0xffff and channels == 1,
+            'DMA requires the fixed inherited DMA0 configuration and drained ownership.')
+    authority_path = template/'dma-authority.json'
+    require(authority_path.is_file(), 'DMA requires template/dma-authority.json with physical authority.')
+    data = authority_path.read_bytes()
+    require(hashlib.sha256(data).digest() == service[24:56], 'DMA authority digest differs from service record.')
+    authority = json.loads(data)
+    require(isinstance(authority, dict), 'DMA authority must be an object.')
+    identity = live.get('identity') if live is not None else authority.get('identity')
+    require(isinstance(identity, list) and len(identity) == 5 and all(type(x) is int for x in identity),
+            'DMA requires the USB instance identity captured under the board lock.')
+    expected = dict(identity=identity, port=args.port, image_sha256=sha(args.image),
+                    epoch=epoch, generation=generation, lease=lease, controller=controller,
+                    service_channels=channels, dma_evidence=evidence, dma_handoff=handoff,
+                    configuration_sha256=hashlib.sha256(service[56:160]).hexdigest())
+    security = load('runner_dma_security', ROOT/'tools/dma-nonsecure-access.py')
+    security.validate(data, expected, None, require)
+    require(all(authority.get(name) is True for name in DMA_FACTS) and
+            type(authority.get('dma_autogate')) is int and authority['dma_autogate'] == 4,
+            'DMA inherited gates, drain, exclusion or recovery facts are incomplete.')
+    return DmaAdmission(raw, data, tuple(identity), args.port, expected['image_sha256'], live is not None)
+
+
+def bind_dma_identity(admission, args, identity):
+    """Bind frozen facts to the original instance under the runner's port lock."""
+    require(isinstance(admission, DmaAdmission) and admission.port == args.port and
+            admission.image_sha256 == sha(args.image) and tuple(identity) == admission.identity,
+            'DMA authority does not cover the original locked USB instance.')
+    return admission._replace(identity_verified=True)
+
 
 
 def policy(info, args, session=None):
@@ -202,7 +286,7 @@ def launcher(out, size, mode, seconds=60):
     require(0 < (out / 'launch.bin').stat().st_size <= 0xc00, 'Launcher exceeds SRAM reservation.')
 
 
-def prepare(args, info, live, out):
+def prepare(args, info, live, out, *, dma_binding=None):
     if info.get('finite_npu'):
         tree = args.host_tree or ROOT
         finite = load('prepare_npu_irq', tree/'apps/npu-interrupt/host.py').finite
@@ -247,10 +331,14 @@ def prepare(args, info, live, out):
     # A typed-session bundle can carry NPU service facts and arbitrary manifest inputs.
     # The reviewed legacy control template also supplies board/thermal/CPU facts
     # for the OS-only hello-compute control; no application asset is copied.
-    template = Path(template)
-    session_path = template / 'session.bin' if (template/'session.bin').exists() else template/'board/session-template.bin'
-    session_path = getattr(args, 'records', None) or session_path
-    raw = session_path.read_bytes()
+    template, session_path = session_template(args)
+    admission = dma_binding if dma_binding is not None else dma_admission(args, info, live)
+    if admission is not None:
+        require(isinstance(admission, DmaAdmission) and admission.identity_verified and info.get('dma') and
+                admission.port == args.port and admission.image_sha256 == sha(args.image),
+                'DMA preparation requires frozen authority bound to the original USB instance.')
+    dma_authority = admission.authority if admission is not None else None
+    raw = admission.session if admission is not None else session_path.read_bytes()
     image_info = records.image_manifest(args.image)
     if struct.unpack_from('<Q', raw, 592)[0] == records.SESSION_MAGIC:
         old = records.session_decode(raw)
@@ -276,6 +364,11 @@ def prepare(args, info, live, out):
         if struct.unpack_from('<I', grant, 48)[0]:
             struct.pack_into('<2Q', grant, 32, epoch, generation)
         services[records.CPU_GRANT] = grant
+    if DMA_EXTENT in services:
+        dma = bytearray(services[DMA_EXTENT])
+        struct.pack_into('<Q', dma, 112, lease)
+        struct.pack_into('<Q', dma, 144, lease)
+        services[DMA_EXTENT] = dma
     findings, derived = dev.state_check(live['words'])
     require(not findings, '; '.join(findings))
     thermal = bytearray(services[records.THERMAL])
@@ -289,6 +382,8 @@ def prepare(args, info, live, out):
         inputs = [(template/f'input-{i}.bin').read_bytes() for i, _ in enumerate(records.regions(image_info['manifest'], (1,)))]
     producer = load('runner_session_prepare', ROOT/'apps/os/prepare.py')
     meta = producer.prepare(args.image, prefix, services, inputs, out, devices=devices, flags=flags)
+    if dma_authority is not None:
+        write(out/'dma-authority.json', dma_authority)
     session = (out/'session.bin').read_bytes()
     policy(info, args, session)
     launcher(out, len(session), info['watchdog']['mode'], info['watchdog']['session_seconds'])

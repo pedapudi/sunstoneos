@@ -51,8 +51,10 @@ int a733_dma_platform_init(struct a733_dma_platform *p,
 }
 static int timely(struct a733_dma_platform *p)
 {
-    uint64_t now;
-    return p->ops.now_us(p->cookie,&now)==1 && a733_deadline_admit(now,&p->last_now,p->config.deadline_us);
+    uint64_t now=0;
+    int result=p->ops.now_us(p->cookie,&now);
+    if(p->retire_checking)p->retire_now=now;
+    return result==1 && a733_deadline_admit(now,&p->last_now,p->config.deadline_us);
 }
 static enum a733_dma_platform_result fault(struct a733_dma_platform *p)
 {p->failed=1;return RETAINED;}
@@ -195,3 +197,30 @@ enum a733_dma_platform_result a733_dma_platform_poll(struct a733_dma_platform *p
 }
 int a733_dma_platform_ready(const struct a733_dma_platform *p)
 {return p && p->initialized && !p->failed && p->stage==COMPLETE;}
+
+enum a733_dma_platform_result a733_dma_platform_verify_adopted(
+    struct a733_dma_platform *p,uint64_t deadline)
+{
+    if(!a733_dma_platform_ready(p)||p->config.cold||!deadline)return RETAINED;
+    /* Verification uses a fresh finite deadline without changing the copied
+     * startup contract. cold=0 makes baseline/controller strictly read-only. */
+    struct a733_dma_platform check=*p;
+    check.config.deadline_us=deadline;
+    check.retire_checking=1;
+    if(!timely(&check)){
+        p->retire_fault=A733_DMA_RETIRE_TIME;p->retire_now=check.retire_now;return fault(p);
+    }
+    int entered=check.ops.enter(check.cookie,deadline);
+    if(entered==0&&timely(&check))return BUSY;
+    if(entered!=1){
+        p->retire_fault=A733_DMA_RETIRE_ENTER;p->retire_now=check.retire_now;return fault(p);
+    }
+    unsigned failed=0;
+    if(!baseline(&check))failed=A733_DMA_RETIRE_BASELINE;
+    else if(!controller(&check))failed=A733_DMA_RETIRE_CONTROLLER;
+    else if(!timely(&check))failed=A733_DMA_RETIRE_BEFORE_LEAVE;
+    check.ops.leave(check.cookie);
+    if(!failed&&!timely(&check))failed=A733_DMA_RETIRE_AFTER_LEAVE;
+    if(failed){p->retire_fault=failed;p->retire_now=check.retire_now;return fault(p);}
+    return READY;
+}

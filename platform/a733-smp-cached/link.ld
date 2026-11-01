@@ -31,7 +31,7 @@ SECTIONS {
         KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*))) KEEP(*(.init_array))
         __init_array_end = .;
     } > CODE
-    .data : { *(.data*) } > RAM
+    .data : { *(.data*) *(.got*) } > RAM
     .result 0x42000000 (NOLOAD) : {
         __a733_smp_result = .; . += 0x4000; __a733_smp_result_end = .;
     } > MONITOR

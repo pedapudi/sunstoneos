@@ -19,7 +19,8 @@ enum dma_service_kind { DMA_SERVICE_RAM, DMA_SERVICE_I2S_STREAM, DMA_SERVICE_FIF
 enum dma_service_operation { DMA_SERVICE_STATUS, DMA_SERVICE_OPEN, DMA_SERVICE_SUBMIT,
     DMA_SERVICE_CANCEL, DMA_SERVICE_REAP, DMA_SERVICE_CLOSE,
     DMA_SERVICE_PERIOD_GET, DMA_SERVICE_PERIOD_PUT,
-    DMA_SERVICE_PERIOD_END }; /*8: finite TX only; timeout is valid tail frames. */
+    DMA_SERVICE_PERIOD_END, /*8: finite TX only; timeout is valid tail frames. */
+    DMA_SERVICE_RETIRE }; /* Optional normal return, job zero and no timeout. */
 enum dma_service_result { DMA_SERVICE_OK, DMA_SERVICE_INVALID, DMA_SERVICE_DENIED,
     DMA_SERVICE_BUSY, DMA_SERVICE_FAULT };
 enum dma_service_phase { DMA_SERVICE_CLOSED, DMA_SERVICE_OPENING, DMA_SERVICE_READY,
@@ -40,7 +41,7 @@ struct dma_service_reply {
     enum dma_service_outcome outcome;
     unsigned owns_session, holds_buffers;
     struct a733_i2s_period period; /* Kind distinguishes raw, copied and metadata-only progress. */
-    uint64_t stream_frames; /* Cumulative completed cyclic frames, including final drain. */
+    uint64_t stream_frames; /* Completed cyclic prefix; cancel preserves the last ACTIVE observation. */
 };
 /* Metadata is copied at initialization; pointed-to RAM allocations remain
  * reserved/pinned for service lifetime. RAM jobs prohibit FIFO requests.
@@ -130,6 +131,11 @@ struct dma_service {
     atomic_uint irq_pending;
     unsigned irq_bound,irq_armed,irq_spurious,irq_retained;
     uint32_t irq_events; /* Controller event count when the SPI was rearmed. */
+    int (*retirement_mask)(void *);
+    void *retirement_cookie;
+    unsigned retirement_senders,retirement_client;
+    uint64_t retirement_ticket;
+    atomic_uint retirement_collected;
     TaskHandle_t worker;
     StaticTask_t worker_state;
     StackType_t worker_stack[DMA_SERVICE_STACK_WORDS];
@@ -177,6 +183,17 @@ int dma_service_bind(struct dma_service *, unsigned slot, TaskHandle_t, uint32_t
  * until a poll acknowledges one. A failed mask or rearm permanently returns
  * the service to tick polling; channel state and buffers are unaffected. */
 int dma_service_bind_irq(struct dma_service *, const struct dma_service_irq *);
+/* Optional trusted boot setup, after IRQ binding and before scheduling. mask
+ * runs once on accepted RETIRE, on the worker after admission closes and the
+ * IRQ notifier is synchronized. No kernel critical section is held while it
+ * masks and verifies the SPI within a bounded deadline; exactly 1 succeeds.
+ * RETIRE requires every channel CLOSED, all results collected, and no queued
+ * work or other pending client. Refusal leaves the running service unchanged.
+ * A failed mask retains the stopped service and never acknowledges retirement.
+ * The caller must collect its successful RETIRE reply and then observe retired
+ * before restoring platform state. Allocations and clock leases stay owned. */
+int dma_service_bind_retirement(struct dma_service *,int (*mask)(void *),void *);
+int dma_service_retired(const struct dma_service *);
 /* ISR only, after the platform has masked the SPI; mask_ok is its result. */
 void dma_service_irq_notify_from_isr(struct dma_service *, int mask_ok, BaseType_t *woken);
 /* Task-only. Identity comes from FreeRTOS. send copies the request, never

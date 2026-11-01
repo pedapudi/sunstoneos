@@ -57,6 +57,10 @@
 #define SUNSTONE_CRUMB_FAR 0x11cu
 #define SUNSTONE_CRUMB_TAG_MAGIC 0x5c0du
 #define SUNSTONE_CRUMB_FAULT_MAGIC 0xfau
+/* With FAULT clear, ELR carries this marker, ESR the inherited dynamic-OFF
+ * core mask and FAR the completed static-OFF core mask. A real first fault
+ * replaces all three diagnostic words before publishing FAULT. */
+#define SUNSTONE_CRUMB_PROBE_POLICY_MAGIC 0x50505531u
 #define SUNSTONE_CRUMB_SVC 0x5c0d
 #define SUNSTONE_CRUMB_FAIL_SVC 0x5c0e
 #define SUNSTONE_CRUMB_FAIL_LEVEL 0xbu
@@ -145,6 +149,7 @@ enum {
     SUNSTONE_CRUMB_PROBE_BEGIN = 0x0801,
     SUNSTONE_CRUMB_PROBE_PROGRESS = 0x0802,
     SUNSTONE_CRUMB_PROBE_CLEAN = 0x0803,
+    SUNSTONE_CRUMB_PROBE_POLICY = 0x0804, /* inherited policy; core << 12 | PWPR */
     SUNSTONE_CRUMB_RETURN_ROM = 0x0503,     /* value: WDT0 mode after disarm */
     SUNSTONE_CRUMB_NPU_WAIT_STARTUP = 0x0601,
     SUNSTONE_CRUMB_NPU_OPEN = 0x0602,
