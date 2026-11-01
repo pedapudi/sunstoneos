@@ -91,3 +91,9 @@ reuse. The native service check verifies pointer identity for borrowed echo,
 deferred receive release, transport result conventions and quiescence before
 reattachment. These checks do not model electrical signaling, UART timing or
 physical DMA visibility.
+
+`checks/usb-serial-capture.py` also replays 1,401 public FT2232H transfers
+through the retained packet-view API. Its 472,568 payload bytes match an
+independent decoder. The [traffic source record](usb-serial-traffic-sources.json)
+identifies the captured FPGA/FIFO mode. This establishes packet handling and
+status stripping; it does not establish UART operation or one-megabaud timing.

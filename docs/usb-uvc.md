@@ -39,9 +39,11 @@ boundaries: a short USB packet or negotiated maximum payload terminates a payloa
 The transport adapter supplies start and end markers through the fragment entry
 point.
 
-MJPEG bytes can feed the existing hardware JPEG service. That service requires
-contiguous compressed input, so a consumer may need one gather copy from the
-packet references. YUYV remains a packed pixel frame without JPEG decoding.
+The optional [hardware JPEG consumer](usb-jpeg.md) gathers MJPEG payloads once
+into the existing decoder's contiguous input. Raw frame delivery retains the
+original USB buffers. The native camera owner can select MJPEG explicitly
+before starting; the JPEG demo uses that selection and refuses YUYV fallback.
+The default camera demo prefers VGA YUYV when available.
 
 The host test checks probe sizes, bandwidth selection, actual retained image
 bytes, detach ownership, overflow, malformed payloads and queue backpressure.
@@ -80,7 +82,8 @@ commit, payload header flags and alternate-setting capacity. The source is GPL
 2.0 only and remains source-available. Its Linux USB, V4L2, allocation and URB
 interfaces cannot execute on FreeRTOS; this class supplies owner-task callbacks
 and retained packet views for those interfaces. The adaptation preserves the
-source's copyright notice. Linux is a development reference, not a runtime.
+source's copyright notice. Linux supplies the development reference; the
+adapted class runs on the CPU under FreeRTOS.
 
 The downloaded source has SHA-256
 `d5c1f227b0423736a4acfeb9da8ff57ff5f44c9fd8df33af56280cb76a20b2a9`.

@@ -92,6 +92,23 @@ The 64 KiB SD result is
 `sol-sd-warm-packet-1029/sentinel-physical-result.json`.
 Host-only autonomous boot evidence is under `resume-card-os-1026/`.
 
+## USB host classes await physical qualification
+
+The OS exposes separately granted keyboard/mouse events, retained USB serial
+buffers and UVC camera frames. Native input, serial, camera and hardware JPEG
+camera images link with interrupt completion and application payload aliases.
+The [image guide](usb-host-images.md) records their hashes, host checks and exact
+offline preparation commands. Public descriptor and traffic fixtures supplement
+the composed host checks; physical throughput and device operation remain open.
+
+Board launch still needs reviewed TYPEC24/VBUS authority, the new exclusive RAM
+reservation and a supervised USB-class route in the protected development
+runner. The images retain resources and refuse the CPU-return lifetime.
+Hot-plug works within an admitted Type-C adapter/hub connection; removing that
+connection requires a new source session. No board access occurred in this task.
+Four proposals are pending in the existing 3-3 queue; the image guide lists
+their IDs and unmet prerequisites.
+
 ## Merged application and failure-record interfaces
 
 Mimus lives in its own repository under `sunstoneos/`.

@@ -1,4 +1,16 @@
-# USB host storage reads and copied HID interrupt input
+# USB host storage, input, serial and cameras
+
+The generic host profile adds [keyboard and mouse events](usb-hid.md),
+[USB serial streams](usb-serial.md) and [UVC camera frames](usb-uvc.md).
+It reuses TinyUSB HID and CDC classes; a separate video host class supplies
+UVC probe/commit and bulk or isochronous reception. The OS application kit
+grants these classes separately. Completed serial data and camera payload
+spans remain in retained DMA memory until application release.
+The [class design](designs/usb-host-classes.md) describes ownership and traffic
+budgets. Physical device operation and sustained traffic remain unqualified.
+
+The narrower profiles below remain separate admission choices. Their copied
+storage, raw HID and audio APIs preserve their existing contracts.
 
 The USB2 host implementation connects the A733 DWC3/xHCI controller to TinyUSB
 and copied read-only storage and HID input APIs. It supports one directly attached
