@@ -22,6 +22,7 @@ as the image manifest.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -160,6 +161,41 @@ def layout(elf, assets, recognizer, loader, profile=False, gpu_linear=False):
     return {'load_window': [hex(w) for w in window],
             'regions': [{'name': r['name'], 'start': hex(r['start']), 'end': hex(r['end'])} for r in regions],
             'image_end': hex(max(end for _, _, end in sections))}
+
+
+def application_manifest(elf, assets=None, recognizer=None, gpu_linear=False):
+    """Decode the linked authority and compare the migrated fixed memory layout."""
+    spec = importlib.util.spec_from_file_location('sunstone_manifest',
+                                                Path(__file__).resolve().parents[1] / 'tools/sunstone-manifest.py')
+    decoder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(decoder)
+    sections = [s for name, s in zip(elf.names, elf.sections) if name == 'sunstone_manifest']
+    assert len(sections) == 1, 'image must contain one application manifest section'
+    section = sections[0]
+    raw = elf.data[section[4]:section[4] + section[5]]
+    manifests = decoder.unpack(raw)
+    assert len(manifests) == 1, 'image must contain one application'
+    manifest = manifests[0]
+    for name, expected in (('__start_sunstone_manifest', section[3]),
+                           ('__stop_sunstone_manifest', section[3] + section[5])):
+        symbols = [s for s in elf.symbols if s['name'] == name and s['shndx'] != 0]
+        assert len(symbols) == 1 and symbols[0]['value'] == expected, name
+    if assets is not None:
+        text = assets.read_text()
+        addresses = [int(v, 0) for v in re.search(r'mimus_asset_address\[3\]=\{([^}]*)\}', text).group(1).split(',')]
+        sizes = [int(v, 0) for v in re.search(r'mimus_asset_bytes\[3\]=\{([^}]*)\}', text).group(1).split(',')]
+        digests = re.findall(r'0x([0-9a-fA-F]{2})', text[text.index('mimus_asset_sha256'):])
+        inputs = [r for r in manifest['regions'] if r['kind'] == 1]
+        assert [(r['address'], r['bytes']) for r in inputs] == list(zip(addresses, sizes)), 'manifest input geometry differs'
+        assert ''.join(r['sha256'] for r in inputs) == ''.join(digests).lower(), 'manifest input digests differ'
+        text = recognizer.read_text()
+        arena = next(r for r in manifest['regions'] if r['kind'] == 2)
+        assert (arena['address'], arena['bytes']) == (number(re.search(r'kMimusArenaBase = ([^;]*);', text).group(1)),
+                                                       arena_bytes(text, gpu_linear)), 'manifest arena differs'
+        if gpu_linear:
+            output = manifest['regions'][-1]
+            assert (output['address'], output['bytes'], output['access']) == (GPU_VIEW[0], GPU_VIEW[1] - GPU_VIEW[0], 9), 'manifest GPU output differs'
+    return {'sha256': hashlib.sha256(raw).hexdigest(), **manifest}
 
 
 def gpu_configuration(elf, required=False):
@@ -337,7 +373,7 @@ def check(path, assets, recognizer, loader, audio=False, radio=False, headset=Fa
         assert perf_operation == 8, 'Performance opcode collides with thermal diagnostic'
     gpu_profile = gpu_configuration(elf, required=gpu_linear)
     assert bool(gpu_profile) == gpu_linear, 'GPU configuration differs from build selection'
-    return {'inference': inference_configuration(elf), 'gpu_profile': gpu_profile, 'thermal_report': all(thermal), 'cpu_critical_trip': 'a733_thermal_policy_cpu_limit' in names,
+    return {'manifest': application_manifest(elf, assets, recognizer, gpu_linear), 'inference': inference_configuration(elf), 'gpu_profile': gpu_profile, 'thermal_report': all(thermal), 'cpu_critical_trip': 'a733_thermal_policy_cpu_limit' in names,
             'npu_profile': npu_profile, 'perf_boot_mode': perf_boot, 'perf_operation': perf_operation, 'interrupts': interrupts, 'applications': applications,
             'layout': layout(elf, assets, recognizer, loader, radio or headset, gpu_linear)}
 

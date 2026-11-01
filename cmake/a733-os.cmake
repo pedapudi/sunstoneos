@@ -345,6 +345,27 @@ if(NOT os_recognition STREQUAL "${os_root}/apps/mimus-board/recognition.cc")
   list(REMOVE_ITEM os_sources "${os_root}/apps/mimus-board/recognition.cc")
   list(APPEND os_sources "${os_recognition}")
 endif()
+# Link the manifest that describes this exact recognition configuration.
+file(READ "${os_root}/apps/mimus-board/manifest.json" os_app_manifest)
+math(EXPR os_app_workers "${SUNSTONE_MIMUS_WORKERS}-1")
+string(JSON os_app_manifest SET "${os_app_manifest}" cpu workers ${os_app_workers})
+if(NOT A733_A76_ADMITTED)
+  string(JSON os_app_manifest SET "${os_app_manifest}" cpu cluster "\"a55\"")
+endif()
+if(NOT SUNSTONE_A733_OS_GPU_LINEAR)
+  string(JSON os_app_manifest REMOVE "${os_app_manifest}" regions 4)
+  string(JSON os_app_manifest SET "${os_app_manifest}" regions 3 bytes 16777216)
+endif()
+file(WRITE "${os_build}/manifest.json" "${os_app_manifest}\n")
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/tools/sunstone-manifest.py" emit
+  --manifest "${os_build}/manifest.json" --output "${os_build}"
+  COMMAND_ERROR_IS_FATAL ANY)
+list(APPEND os_sources "${os_build}/mimus-manifest.c")
+list(APPEND os_include_dirs "${os_build}")
+list(APPEND os_generated "${os_build}/manifest.json" "${os_build}/mimus-manifest.c"
+  "${os_build}/mimus-app.h" "${os_build}/manifest.bin")
+list(APPEND os_external_inputs "${os_root}/apps/mimus-board/manifest.json"
+  "${os_root}/tools/sunstone-manifest.py" "${os_root}/include/sunstone_app.h")
 set(os_boot_final "${os_build}/boot.c")
 if(SUNSTONE_A733_OS_CPU_RETURN)
   include("${os_root}/cmake/a733-os-cpu-return.cmake")
