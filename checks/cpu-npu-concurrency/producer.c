@@ -20,13 +20,12 @@ uint64_t ss_counter_ticks(void){return UINT64_C(24000000)+(ns()-began)*24/1000*4
 unsigned host_core(void){return !strcmp(scenario,"wrong-core")&&core==3?2:core;}
 const struct ss_grant *ss_grant(void){return &grant;}
 int ss_live(void){return 1;}
+/* Model the OS: throttled until the clock grant completes 30 ms after start,
+ * as the initial THROTTLE state holds until every sensor has been read. */
+static int ready_now(void){return (ns()-began)>30000000;}
 static atomic_uint started;
-int ss_throttled(void)
-{
-    if(!strcmp(scenario,"throttle"))return atomic_load(&started)?1:0;
-    if(!strcmp(scenario,"startup-throttle"))return ns()-began<30000000;
-    return 0;
-}
+int ss_throttled(void){return !ready_now()||(!strcmp(scenario,"throttle-after-ready")&&(ns()-began)>120000000)||(!strcmp(scenario,"throttle")&&atomic_load(&started));}
+
 void ss_thermal_status(struct ss_thermal_status *s)
 {
     memset(s,0,sizeof(*s));s->seen=31;s->sequence=7;s->start_us=1000;s->now_us=5000000;
@@ -34,7 +33,7 @@ void ss_thermal_status(struct ss_thermal_status *s)
     if(!strcmp(scenario,"throttle")){s->cause=2;s->deadline_us=4999000;}else s->deadline_us=5001000;
 }
 void ss_progress(void){}
-int ss_clock_ready(void){return 1;}
+int ss_clock_ready(void){return ready_now();}
 int ss_clock_info(char *line,size_t n){return snprintf(line,n,"CLOCK cpu_l_mhz=1794 cpu_b_mhz=2002 cpu_l_mv=1000 cpu_b_mv=1050 transitions=3 dsu_mhz=1274 sid=00000000 bin=4 core=6 pattern=0 parked_max_us=1\n");}
 void ss_activity_begin(void){atomic_store(&started,1);}
 void ss_activity_end(int success){if(!success)abort();}

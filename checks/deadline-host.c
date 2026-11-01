@@ -109,7 +109,10 @@ const struct os_service os_services[OS_SERVICES]={
     {"pmic",1000000},{"usb0",100},{"typec",1000000},{"power",1000000},
     {"usb2",1000000},{"application",1000000},{"thermal",1000000}};
 struct os_session { struct { unsigned workload; uint64_t deadline_us; } board; };
-static const struct os_session test_session={{0,100000}};
+/* The sealed session's board prefix has zero time fields on the board (the
+ * launcher's session.bin); the absolute deadline exists only in board.session. */
+static const struct os_session test_session={{0,0}};
+__attribute__((unused)) static uint64_t board_runtime_deadline_us(void){return 100000;}
 static const struct os_session *os_session_admitted(void){return &test_session;}
 static int a733_board_host_workload(unsigned workload){(void)workload;return 1;}
 static int os_application_finished(void){return 0;}

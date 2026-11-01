@@ -52,18 +52,15 @@ if not a.disabled_only:
       run([str(executable),'actual',str(payload)])
       result=host.decode(payload.read_bytes(),mode=mode,model_index=0 if mode else None,reference=b'\0\xff' if mode else None)
       results.append(dict(case=label,passed=True,receipt=result))
-      if not mode:
-          run([str(executable),'startup-throttle',str(a.out/'startup-throttle.bin')])
-          host.decode((a.out/'startup-throttle.bin').read_bytes(),mode=0)
-          results.append(dict(case='throttle-before-start-is-not-a-fault',passed=True))
-          run([str(executable),'throttle',str(a.out/'control-throttle.bin')])
-          assert host.decode_failure((a.out/'control-throttle.bin').read_bytes())['stage']==0x99
-          results.append(dict(case='control-throttle-failure-returns',passed=True))
+      run([str(executable),'throttle-after-ready',str(a.out/(label+'-throttle.bin'))])
+      record=host.decode_failure((a.out/(label+'-throttle.bin')).read_bytes())
+      assert record['stage']==0x99 and record['ack_mask']==255,record
+      results.append(dict(case=label+'-throttle-after-ready-returns-record',passed=True,failure=record))
       if mode:
           for fault in ['early-complete','changed-ticket','changed-token','frozen-cpu1','wrong-core','throttle']:
               run([str(executable),fault,str(a.out/(fault+'.bin'))])
               record=host.decode_failure((a.out/(fault+'.bin')).read_bytes())
-              assert record['ack_mask']==255 and record['sdk_closed']==1,(fault,record)
+              assert record['ack_mask']==255 and record['sdk_closed']==(0 if fault=='wrong-core' else 1),(fault,record)
               if fault=='wrong-core':assert (record['stage'],record['core'],record['observed'])==(0x9a,3,2),record
               if fault=='throttle':assert record['stage']==0x99 and record['thermal']['causes']==['publication is stale'] and record['thermal']['millicelsius'][2]==-3000 and record['thermal']['freshness_margin_us']==-1000,record
               try:host.decode((a.out/(fault+'.bin')).read_bytes(),mode=1,model_index=0,reference=b'\0\xff')

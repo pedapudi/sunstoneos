@@ -32,6 +32,7 @@ int board_live(void *unused)
 {(void)unused;return !atomic_load_explicit(&board.fatal,memory_order_acquire)&&
     a733_smp_counter()/24<atomic_load_explicit(&board.live_until,memory_order_acquire)&&
     a733_smp_counter()/24<board.session.deadline_us;}
+uint64_t board_runtime_deadline_us(void){return board.session.deadline_us;}
 static void fail_close(void)
 {atomic_fetch_or_explicit(&board.watchdog_state,4,memory_order_release);
  atomic_store_explicit(&board.fatal,1,memory_order_release);}

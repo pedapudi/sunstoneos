@@ -15,6 +15,9 @@ static struct cpu_npu_receipt receipt;
 static StaticTask_t tasks[8];
 static StackType_t stacks[8][2048];
 static atomic_uint start_epoch,stop_epoch,ack[8];
+/* Set once the clock owner has finished its grant, after the boot switch saw
+ * NORMAL with every sensor read. The OS holds ss_throttled() at 1 until then. */
+static atomic_uint throttle_armed;
 struct cpu_npu_counter { _Alignas(64) atomic_uint_fast64_t value; };
 static struct cpu_npu_counter chunks[8];
 static uint64_t work_cutoff;
@@ -80,11 +83,10 @@ static void require(int condition,unsigned stage,unsigned core)
 static void live(unsigned core)
 {
     int state=ss_live();if(state<0)fault(0x81,core,0,(uint32_t)state,1);
-    /* Startup throttling holds until the thermal owner has seen all five
-     * channels, so the load hint binds only after the workload starts. */
-    if(atomic_load_explicit(&start_epoch,memory_order_acquire)){
-        int throttled=ss_throttled();if(throttled)fault(0x99,core,0,(uint32_t)throttled,0);
-    }
+    /* Startup throttling precedes the first complete sensor set; it is not a
+     * thermal event. Judge load only after the grant is complete. */
+    if(atomic_load_explicit(&throttle_armed,memory_order_acquire)){
+        int throttled=ss_throttled();if(throttled)fault(0x99,core,0,(uint32_t)throttled,0);}
     unsigned actual=portGET_CORE_ID();if(actual!=core)fault(0x9a,core,0,actual,core);
     if(actual==6&&atomic_load_explicit(&failed,memory_order_acquire))failure_finish();
     ss_progress();
@@ -113,7 +115,12 @@ static void stopped(unsigned core,unsigned epoch)
 static void worker(void *argument)
 {
     unsigned core=(unsigned)(uintptr_t)argument;
-    while(!atomic_load_explicit(&start_epoch,memory_order_acquire)){live(core);vTaskDelay(1);}
+    while(!atomic_load_explicit(&start_epoch,memory_order_acquire)){
+        /* A failure before the start still quiesces every worker. */
+        unsigned early=atomic_load_explicit(&stop_epoch,memory_order_acquire);
+        if(early){stopped(core,early);for(;;)vTaskSuspend(NULL);}
+        live(core);vTaskDelay(1);
+    }
     for(;;){
         unsigned stop=atomic_load_explicit(&stop_epoch,memory_order_acquire);
         if(stop){stopped(core,stop);for(;;)vTaskSuspend(NULL);}
@@ -230,6 +237,7 @@ void cpu_npu_load_main(const struct ss_grant *grant)
         vTaskDelay(1);
     }
     require(at_top(),0x87,6);receipt.initial_top=1;
+    atomic_store_explicit(&throttle_armed,1,memory_order_release);
 #ifdef SUNSTONE_A733_OS_NPU
     vectors();receipt.mode=1;receipt.target=CPU_NPU_JOBS;
 #endif
