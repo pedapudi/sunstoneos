@@ -145,6 +145,9 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *);
  * Hardware waits, teardown, recovery and isochronous refill keep their existing
  * scheduling. The caller must bound its batch and still run poll's guards. */
 int a733_xhci_work_pending(const struct a733_xhci *);
+/* Metadata only; owner must serialize access. Includes ISO inactivity, which
+ * is checked only after queued events have been drained by poll. */
+uint64_t a733_xhci_next_deadline(const struct a733_xhci *);
 /* Optional owner-task interrupt profile. The platform keeps its level SPI
  * masked and deactivated throughout begin/drain/finish. Start returns0 until
  * ACTIVE, then1; all three return-1 and retain on failure. Begin acknowledges
@@ -212,6 +215,11 @@ int a733_xhci_isoch_acquire(struct a733_xhci *,unsigned address,unsigned endpoin
 int a733_xhci_isoch_release(struct a733_xhci *,unsigned address,unsigned endpoint,uint64_t token);
 int a733_xhci_setup(struct a733_xhci *,unsigned address,const uint8_t[8],uint64_t deadline);
 int a733_xhci_transfer(struct a733_xhci *,unsigned address,unsigned endpoint,
+    uint8_t *,unsigned bytes,uint64_t deadline);
+/* Already configured bulk/interrupt endpoint: publish and ring directly in
+ * caller context under the native execution gate. No enumeration or command
+ * work is advanced. One outstanding transfer per endpoint remains the bound. */
+int a733_xhci_transfer_now(struct a733_xhci *,unsigned address,unsigned endpoint,
     uint8_t *,unsigned bytes,uint64_t deadline);
 /* Arm one matched bulk STALL for the mounted read-only storage consumer.
  * Requires an idle configured bulk pair; a second stall is not armed by retry. */

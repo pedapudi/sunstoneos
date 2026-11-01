@@ -63,7 +63,7 @@ def main():
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--image', type=Path)
     parser.add_argument('--output', type=Path)
-    parser.add_argument('--kind', choices=('cpu-return', 'gpu-return', 'npu', 'probe'))
+    parser.add_argument('--kind', choices=('cpu-return', 'gpu-return', 'npu', 'probe', 'usb-class'))
     parser.add_argument('--expected')
     parser.add_argument('--first-failure')
     args = parser.parse_args()

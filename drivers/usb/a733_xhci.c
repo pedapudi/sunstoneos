@@ -113,7 +113,7 @@ static struct a733_xhci_device *device_address(struct a733_xhci *x,unsigned addr
     for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].address==address&&!x->devices[i].detach)return &x->devices[i];
     return NULL;
 }
-static int borrowed(struct a733_xhci *x,unsigned j)
+static int borrowed(const struct a733_xhci *x,unsigned j)
 {
     for(unsigned i=0;i<A733_XHCI_ISOCH_BUFFERS;++i){
         unsigned owner=x->isoch.owner[i],state=x->isoch.held[i];
@@ -801,12 +801,25 @@ int a733_xhci_work_pending(const struct a733_xhci *x)
     case P_COMMAND:case P_ERST_SIZE:case P_ERST_BASE:case P_ERDP:
     case P_IMAN:case P_CONFIG:case P_RUN:case P_POWER:return 1;
     case P_ACTIVE:
-        if(x->command_kind||x->detaching)return 0;
+        if(x->command_kind)return 0;
+        for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
+            const struct a733_xhci_device *d=&x->devices[j];
+            if(d->detach&&childless(x,j)&&
+               (d->detach!=3||!borrowed(x,j)))return 1;
+        }
+        if(x->isoch.requested&&x->isoch.count<A733_XHCI_ISOCH_TDS){
+            const struct a733_xhci_device *d=&x->devices[x->isoch.device-1];
+            if(!d->detach&&d->port_ready==3&&d->endpoints[1].configured&&!d->endpoints[1].aborted)
+                for(unsigned i=0;i<A733_XHCI_ISOCH_BUFFERS;++i)if(!x->isoch.held[i])return 1;
+        }
+        if(x->detaching)return 0;
         for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
             const struct a733_xhci_device *d=&x->devices[j];
             if(d->detach)continue;
             if(d->port_ready==1||d->port_ready==2)return 1;
-            if(d->port_ready!=3||d->recovering)continue;
+            if(d->port_ready!=3)continue;
+            if(d->recovering){unsigned p=d->endpoints[d->recovering-1].pending;
+                if(p==3||p==4||p==8||p==9)return 1;}
             if(d->evaluate_pending)return 1;
             for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
                 const struct a733_xhci_endpoint *e=&d->endpoints[i];
@@ -817,6 +830,24 @@ int a733_xhci_work_pending(const struct a733_xhci *x)
         return 0;
     default:return 0;
     }
+}
+uint64_t a733_xhci_next_deadline(const struct a733_xhci *x)
+{
+    if(!owner(x)||x->failed)return 0;
+    if(x->phase!=P_ACTIVE)return x->deadline;
+    uint64_t next=x->lifetime_deadline;
+    if(!x->require_ss&&x->port_reset&&x->devices[0].port_ready<3&&x->reset_deadline<next)next=x->reset_deadline;
+    if(x->command_kind&&x->command_deadline<next)next=x->command_deadline;
+    for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
+        const struct a733_xhci_device *d=&x->devices[j];
+        if(((d->detach&&d->detach!=3)||(d->port_ready&&d->port_ready!=3))&&d->deadline&&d->deadline<next)next=d->deadline;
+        if(d->detach)continue;
+        for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
+            const struct a733_xhci_endpoint *e=&d->endpoints[i];
+            if((e->pending||(i&&e->opened&&!e->configured))&&e->deadline<next)next=e->deadline;
+        }
+    }
+    return next;
 }
 enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
 {
@@ -1236,6 +1267,20 @@ int a733_xhci_transfer(struct a733_xhci *x,unsigned address,unsigned ep,uint8_t 
     }
     e->caller=bytes&&direction&&!direct?buffer:NULL;e->length=bytes;e->direction=direction;e->kind=kind;
     e->address=ep;e->deadline=deadline;e->pending=1;return 1;
+}
+int a733_xhci_transfer_now(struct a733_xhci *x,unsigned address,unsigned ep,uint8_t *buffer,unsigned bytes,uint64_t deadline)
+{
+    if(!owner(x)||x->failed||!(ep&15))return 0;
+    struct a733_xhci_device *d=device_address(x,address);
+    struct a733_xhci_endpoint *e=d?endpoint(d,ep):NULL;
+    if(!e||!e->configured||d->port_ready!=3||d->recovering)return 0;
+    if(!a733_xhci_transfer(x,address,ep,buffer,bytes,deadline))return 0;
+    /* The direct sequence has its own admitted deadline. Other endpoints keep
+     * their deadlines; poll recomputes their minimum before owner progress. */
+    uint64_t previous=x->deadline;x->deadline=deadline;
+    int submitted=submit_endpoint(x,d,e);x->deadline=previous;
+    if(!submitted)return fault(x);
+    return 1;
 }
 int a733_xhci_read_recovery(struct a733_xhci *x,unsigned address)
 {

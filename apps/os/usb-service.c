@@ -30,7 +30,7 @@ static int allowed(unsigned device)
 static void wake(void){if(ops.wake)ops.wake(context);}
 static void changed(void){if(ops.changed)ops.changed(context);}
 void os_usb_service_init(const struct os_usb_service_ops *o,void *c)
-{if(o)ops=*o;else memset(&ops,0,sizeof(ops));context=c;}
+{if(o)ops=*o;else memset(&ops,0,sizeof(ops));if(!ops.leave)ops.enter=NULL;context=c;}
 void os_usb_service_connected(unsigned devices)
 {atomic_fetch_and_explicit(&disconnected,~devices,memory_order_release);atomic_fetch_or_explicit(&connected,devices,memory_order_release);changed();}
 void os_usb_service_disconnected(unsigned devices)
@@ -142,6 +142,19 @@ int ss_usb_serial_write(uint64_t sequence,const void *data,size_t bytes)
     if(!allowed(SS_DEVICE_USB_SERIAL)||(!sequence||sequence<=last_tx)||(!data&&bytes)||!bytes||
        !(atomic_load_explicit(&connected,memory_order_acquire)&SS_DEVICE_USB_SERIAL))return -1;
     if(atomic_load_explicit(&tx.state,memory_order_acquire))return 0;
+    if(ops.enter){
+        int entered=ops.enter(context);if(entered!=1)return entered<0?-1:0;
+        if(!allowed(SS_DEVICE_USB_SERIAL)||atomic_load_explicit(&tx.state,memory_order_acquire)||
+           !(atomic_load_explicit(&connected,memory_order_acquire)&SS_DEVICE_USB_SERIAL)){
+            ops.leave(context);return 0;
+        }
+        tx.sequence=sequence;tx.data=data;tx.bytes=bytes;
+        atomic_store_explicit(&tx.state,2,memory_order_release);
+        int result=ops.write?ops.write(context,sequence,data,bytes):-1;
+        if(result==1)last_tx=sequence;
+        else atomic_store_explicit(&tx.state,0,memory_order_release);
+        ops.leave(context);return result;
+    }
     last_tx=sequence;tx.sequence=sequence;tx.data=data;tx.bytes=bytes;
     atomic_store_explicit(&tx.state,1,memory_order_release);wake();return 1;
 }

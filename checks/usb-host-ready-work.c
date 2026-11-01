@@ -89,6 +89,7 @@ int main(int argc,char **argv)
     unsigned stuck=argc>1&&!strcmp(argv[1],"stuck");
     if(argc>1&&!strcmp(argv[1],"long-delay")){reset_delay=7000;run_delay=5000;}
     initialize();uint64_t start=now;
+    assert(a733_xhci_next_deadline(&x)==x.deadline);
     for(unsigned i=0;!portsc&&!x.failed&&i<200;++i){
         enum a733_xhci_result r=a733_xhci_poll(&x);assert(r!=A733_XHCI_INVALID);
         if(stuck&&reset_effect.pending)reset_effect.stuck=1;
@@ -102,6 +103,7 @@ int main(int argc,char **argv)
     assert(!a733_xhci_work_pending(&x));owner_wait();
     uint8_t data[512];unsigned base=notice_count;
     assert(a733_xhci_transfer(&x,1,0x81,data,sizeof(data),now+1000000));
+    assert(a733_xhci_next_deadline(&x)==now+1000000);
     assert(a733_xhci_work_pending(&x));owner_wait();
     assert(a733_xhci_poll(&x)==A733_XHCI_READY);
     assert(x.devices[0].endpoints[1].pending==2&&!a733_xhci_work_pending(&x));
@@ -119,6 +121,7 @@ int main(int argc,char **argv)
     while(now<complete_at){assert(a733_xhci_poll(&x)==A733_XHCI_READY);owner_wait();}
     assert(x.command_kind);command_step();
     assert(a733_xhci_poll(&x)==A733_XHCI_READY&&!x.command_kind);
+    assert(a733_xhci_next_deadline(&x)==x.lifetime_deadline);
     printf("startup_us=%llu startup_waits=%u ready_steps=%u ready_waits=%u\n",
         (unsigned long long)startup_us,startup_waits,ready_steps,ready_waits);
     /* A truthful ready hint with a contended guard cannot spin forever. */

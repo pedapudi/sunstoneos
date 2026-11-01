@@ -136,6 +136,8 @@ __attribute__((weak)) uint64_t sunstone_probe_acquire_secondaries(void)
     }
     return SUNSTONE_PROBE_READY;
 }
+/* Device-specific emergency cutoff is bounded and independent of EL1 state. */
+RECOVERY __attribute__((weak)) void sunstone_probe_abort_devices(void) {}
 RECOVERY _Noreturn void sunstone_probe_fault(uint64_t site,uint64_t esr,uint64_t elr,uint64_t far)
 {
     __asm__ volatile("msr daifset,#15":::"memory");
@@ -148,6 +150,9 @@ RECOVERY _Noreturn void sunstone_probe_fault(uint64_t site,uint64_t esr,uint64_t
         __asm__ volatile("dsb sy":::"memory");
         rtc[SUNSTONE_CRUMB_FAULT/4]=(site==0x104 ? 0xfa010000u : 0xfa030000u)|((uint32_t)site&255);
         __asm__ volatile("dsb sy":::"memory");
+        /* Publish the origin before cutoff. A recursive abort faults with this
+         * magic already set, so it neither overwrites evidence nor retries. */
+        sunstone_probe_abort_devices();
     }
     for(;;)__asm__ volatile("wfe");
 }

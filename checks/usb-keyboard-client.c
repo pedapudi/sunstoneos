@@ -1,13 +1,29 @@
 /* The fixture includes the OS client's actual mailbox and HID callbacks. */
 #include "sunstone_usb_service.h"
 #include "sunstone_usb_hid.h"
+#include "a733_usb2_native.h"
 #include <assert.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
-static const struct ss_grant grant={.devices=SS_DEVICE_USB_KEYBOARD};
+static const struct ss_grant grant={.devices=SS_DEVICE_USB_KEYBOARD|SS_DEVICE_USB_STORAGE};
+static struct {void *handles[8];struct a733_usb2_native host;uint8_t sector[512];atomic_uint result;} board;
+static atomic_uint owner_notifications,application_notifications;
+static unsigned storage_submissions,storage_complete;
+void xTaskNotifyGive(void *owner)
+{assert(owner==(void *)1);atomic_fetch_add_explicit(&owner_notifications,1,memory_order_relaxed);}
+void os_application_usb_changed(void)
+{atomic_fetch_add_explicit(&application_notifications,1,memory_order_relaxed);}
+int a733_usb2_read_sector(struct a733_usb2_native *n,uint32_t lba,uint64_t deadline)
+{assert(n==&board.host&&lba==7&&deadline==20000);++storage_submissions;return 1;}
+int a733_usb2_read_result(struct a733_usb2_native *n,uint8_t data[512])
+{assert(n==&board.host);if(!storage_complete)return 0;memset(data,0x5a,512);return 1;}
+int a733_usb2_hid_result(struct a733_usb2_native *n,struct a733_usb2_hid_report *report)
+{(void)n;(void)report;assert(0);return -1;}
+int a733_usb2_hid_receive(struct a733_usb2_native *n,uint64_t deadline)
+{(void)n;(void)deadline;assert(0);return 0;}
 const struct ss_grant *ss_grant(void){return &grant;}
 int ss_live(void){return 1;}
 unsigned os_session_devices(void){return grant.devices;}
@@ -45,10 +61,22 @@ static void *reader(void *unused)
 }
 int main(void)
 {
+    board.handles[4]=(void *)1;board.host.platform.config.lifetime_deadline=20000;
+    uint8_t sector[512];
+    assert(ss_storage_read(7,sector)==0);
+    assert(atomic_exchange(&owner_notifications,0)==1);
+    assert(serve()==1&&storage_submissions==1&&atomic_load(&storage.state)==2);
+    storage_complete=1;assert(serve()==1&&atomic_load(&storage.state)==3);
+    assert(atomic_exchange(&application_notifications,0)==1);
+    assert(ss_storage_read(7,sector)==1);
+    for(unsigned i=0;i<512;++i)assert(sector[i]==0x5a);
     struct ss_key_report report;
     attach();key(1);key(0);
+    assert(atomic_load(&application_notifications)==1);
     assert(ss_key_report(&report)==1&&report.data[2]==4);
+    assert(atomic_exchange(&owner_notifications,0)==1);
     keyboard_publish();assert(ss_key_report(&report)==1&&!report.data[2]);
+    assert(atomic_exchange(&application_notifications,0)==2);
     assert(ss_key_report(&report)==0);
     key(1);key(0);detach();
     assert(ss_key_report(&report)==0);

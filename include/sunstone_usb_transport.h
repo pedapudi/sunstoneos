@@ -12,7 +12,8 @@
  * refuses an on-ring buffer. Stale tokens cannot release a reused address.
  * One transfer per endpoint may be outstanding; held completed buffers do
  * not prevent a new acquire while pool capacity remains.
- * All operations and completions run in the USB owner task. A successful
+ * Operations run under the native execution gate; completions run in the USB
+ * owner task. Control/open and class changes stay in that task. A successful
  * submission borrows its buffer until completion. A timeout or disconnect
  * does not authorize reuse of memory still owned by the controller. */
 struct sunstone_usb_transport;
@@ -30,6 +31,10 @@ struct sunstone_usb_transport_ops {
     int (*acquire)(struct sunstone_usb_transport *,uint8_t address,uint8_t endpoint,
         uint8_t **buffer,size_t *capacity,uint64_t *token);
     int (*release)(struct sunstone_usb_transport *,uint8_t address,uint8_t endpoint,uint64_t token);
+    /* Optional dedicated data endpoint submission from a serialized caller.
+     * Completion is deferred to the owner after the matched hardware event. */
+    int (*submit_direct)(struct sunstone_usb_transport *,uint8_t address,uint8_t endpoint,
+        uint8_t *buffer,size_t bytes,sunstone_usb_complete,void *);
 };
 struct sunstone_usb_transport {
     const struct sunstone_usb_transport_ops *ops;

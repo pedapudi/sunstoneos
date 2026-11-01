@@ -14,6 +14,7 @@ CHECK_INPUTS = ['include/sunstone_camera.h', 'include/sunstone_usb_uvc.h',
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--cases',nargs='+',choices=['protocol','interface'],default=['protocol','interface'])
     args=parser.parse_args()
     root=Path(__file__).resolve().parents[1]
     out=args.output.resolve()
@@ -23,6 +24,7 @@ def main():
     steps=[]
     for name,units in [('protocol',['checks/usb-uvc.c','drivers/usb/host/uvc.c']),
                        ('interface',['checks/device-classes-usb.c',*CHECK_INPUTS[-2:]])]:
+        if name not in args.cases:continue
         commands=[flags+[str(root/unit) for unit in units]+['-o',str(out/name)],
                   [str(out/name)]]
         for command in commands:
@@ -35,6 +37,7 @@ def main():
            'checks/usb-uvc-c270.h','checks/usb-uvc-capture.h','docs/usb-uvc-sources.json',
            'checks/device-classes-usb.py']
     record={'result':'PASS','hardware_access':False,
+            'cases':args.cases,
             'inputs':{path:hashlib.sha256((root/path).read_bytes()).hexdigest() for path in paths},
             'scope':'Shared camera lifecycle and retained UVC spans; existing UVC protocol and public descriptor facts'}
     (out/'result.json').write_text(json.dumps(record,indent=2)+'\n')

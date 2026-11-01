@@ -283,6 +283,14 @@ enum { OS_SERVICE_APPLICATION=5, OS_SERVICE_THERMAL,
 struct os_service { const char *name; uint32_t window_us; };
 extern const struct os_service os_services[OS_SERVICES];
 void board_service_progress(unsigned);
+/* Bind this service once to its owning task and fixed deadline slot. A fresh
+ * wait certificate supports a separately bounded operation health deadline. */
+int board_service_deadline_register(unsigned);
+/* Declare the next wait's operation budget, within the admitted session.
+ * An alarm may mature normally; the owner must then check the device and
+ * report real progress within its service window and this absolute budget. */
+int board_service_blocked_until(unsigned,uint64_t);
+void os_usb0_notify(void);
 int os_application_finished(void);
 int os_session_decode(const void *,size_t,struct os_session *);
 const void *os_session_extent(const void *,uint32_t,size_t *);
@@ -290,9 +298,9 @@ uint32_t os_session_devices(void);
 const struct ss_input_fact *os_session_inputs(unsigned *);
 /* Interval between watchdog renewals while every service is in its window. */
 #define OS_RENEW_US 1000000u
-/* 1 when every service reported progress no more than its window before
- * now_us (counter microseconds); 0 when any record is older than its window;
- * -1 when no record is stale but some service has not yet reported. */
+/* 1 when every service has fresh progress or a valid bounded wait certificate;
+ * 0 on expired/failed/stale state; -1 before every required owner has reported.
+ * now_us uses the architectural counter's microsecond epoch. */
 int os_services_healthy(uint64_t now_us);
 /* Resident WDT0 renewal from the supervising task (watchdog.c); 1 renewed. */
 int os_watchdog_reload(void *supervisor);

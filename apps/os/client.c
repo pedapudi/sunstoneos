@@ -7,6 +7,7 @@
 #include "../board/host_irq.h"
 #endif
 #include <string.h>
+void os_application_usb_changed(void);
 #ifdef SUNSTONE_A733_OS_USB_JPEG
 #include "sunstone_usb_service.h"
 #include "sunstone_usb_jpeg.h"
@@ -88,17 +89,21 @@ static void camera_poll(void)
     }
     const struct sunstone_uvc_mode *mode=a733_usb2_camera_mode(&board.host);
     if(!mode){if(camera_connected)os_usb_service_disconnected(SS_DEVICE_USB_CAMERA);camera_connected=0;camera_started=0;return;}
-    struct sunstone_camera_mode generic_mode;
-    if(sunstone_uvc_camera_mode(mode,&generic_mode)!=1){board_fail(NULL);return;}
+    struct sunstone_camera_mode camera_mode;
+    if(sunstone_uvc_camera_mode(mode,&camera_mode)!=1){board_fail(NULL);return;}
     if(!camera_connected){os_usb_service_connected(SS_DEVICE_USB_CAMERA);camera_connected=1;}
     for(unsigned slot=0;slot<SUNSTONE_UVC_FRAMES;++slot)if(!camera_lease[slot].frame){
         const struct sunstone_uvc_frame *frame=a733_usb2_camera_acquire(&board.host);if(!frame)return;
         struct camera_lease *lease=&camera_lease[slot];
         lease->frame=frame;lease->generation=frame->generation;lease->sequence=frame->sequence;lease->token=++camera_token;
-        for(unsigned i=0;i<frame->slices;++i)lease->slice[i]=(struct ss_usb_frame_slice){frame->slice[i].data,frame->slice[i].bytes};
-        struct ss_usb_camera_frame view={.token=lease->token,.sequence=frame->sequence,.slices=lease->slice,
-            .slice_count=frame->slices,.bytes=frame->bytes,.width=generic_mode.width,.height=generic_mode.height,
-            .format=generic_mode.format==SUNSTONE_CAMERA_YUYV?SS_USB_FRAME_YUYV:SS_USB_FRAME_MJPEG};
+        struct sunstone_camera_frame shared;
+        if(sunstone_uvc_camera_view(frame,mode,lease->token,&shared)!=1){
+            os_usb_camera_native_release(lease->token);board_fail(NULL);return;
+        }
+        for(size_t i=0;i<shared.span_count;++i)lease->slice[i]=(struct ss_usb_frame_slice){shared.spans[i].data,shared.spans[i].bytes};
+        struct ss_usb_camera_frame view={.token=lease->token,.sequence=shared.sequence,.slices=lease->slice,
+            .slice_count=shared.span_count,.bytes=shared.bytes[0],.width=camera_mode.width,.height=camera_mode.height,
+            .format=camera_mode.format==SUNSTONE_CAMERA_YUYV?SS_USB_FRAME_YUYV:SS_USB_FRAME_MJPEG};
         if(os_usb_service_frame(&view)!=1){os_usb_camera_native_release(lease->token);return;}
     }
 }
@@ -145,12 +150,14 @@ static void keyboard_publish(void)
        !atomic_compare_exchange_strong_explicit(&keyboard.ready,&state,3,
         memory_order_acq_rel,memory_order_acquire))return;
     if(keyboard_pending.invalidate){state=0;keyboard_pending.invalidate=0;}
+    int published=0;
     if(!state&&keyboard_pending.dirty){
         keyboard.report=keyboard_pending.report;
         keyboard_pending.attachment=keyboard.report.attachment;
-        keyboard_pending.dirty=0;state=1;
+        keyboard_pending.dirty=0;state=1;published=1;
     }
     atomic_store_explicit(&keyboard.ready,state,memory_order_release);
+    if(published)os_application_usb_changed();
 }
 #endif
 int ss_storage_read(uint64_t sector,uint8_t data[512])
@@ -158,7 +165,8 @@ int ss_storage_read(uint64_t sector,uint8_t data[512])
     const struct ss_grant *g=ss_grant();
     if(!data||sector>UINT32_MAX||!g||!(g->devices&SS_DEVICE_USB_STORAGE)||ss_live()<0)return -1;
     unsigned state=atomic_load_explicit(&storage.state,memory_order_acquire);
-    if(!state){storage.sector=sector;atomic_store_explicit(&storage.state,1,memory_order_release);return 0;}
+    if(!state){storage.sector=sector;atomic_store_explicit(&storage.state,1,memory_order_release);
+        if(board.handles[4])xTaskNotifyGive(board.handles[4]);return 0;}
     if(storage.sector!=sector)return -1;
     if(state==4)return -1;if(state!=3)return 0;
     memcpy(data,storage.data,512);atomic_store_explicit(&storage.state,0,memory_order_release);return 1;
@@ -170,7 +178,8 @@ int ss_key_report(struct ss_key_report *report)
     unsigned ready=1;
     if(!atomic_compare_exchange_strong_explicit(&keyboard.ready,&ready,2,
         memory_order_acq_rel,memory_order_acquire))return 0;
-    *report=keyboard.report;atomic_store_explicit(&keyboard.ready,0,memory_order_release);return 1;
+    *report=keyboard.report;atomic_store_explicit(&keyboard.ready,0,memory_order_release);
+    if(board.handles[4])xTaskNotifyGive(board.handles[4]);return 1;
 }
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
 static void usb_input(void *unused,const struct sunstone_hid_event *e)
@@ -237,7 +246,7 @@ static int serve(void)
     if(state==2){
         int r=a733_usb2_read_result(n,storage.data);if(r<0)return 0;
         if(r==1){memcpy(board.sector,storage.data,512);atomic_store_explicit(&board.result,1,memory_order_release);
-            atomic_store_explicit(&storage.state,3,memory_order_release);}
+            atomic_store_explicit(&storage.state,3,memory_order_release);os_application_usb_changed();}
     }
     if(os_session_devices()&SS_DEVICE_USB_KEYBOARD){
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
@@ -261,22 +270,39 @@ static int serve(void)
     return 1;
 }
 void os_storage_service(void){if(!serve())board_fail(NULL);}
+#ifdef SUNSTONE_BOARD_USB2_IRQ
+static void host_wait(void)
+{
+#ifdef SUNSTONE_BOARD_HOST_DEADLINE
+    /* The designated owner snapshots mutable host state before blocking.
+     * Applications still use the mailbox; no EL0 caller enters the driver. */
+    board_host_irq_schedule(a733_usb2_host_deadline(&board.host),
+        a733_usb2_host_work_pending(&board.host));
+#endif
+    board_host_irq_wait();
+}
+#endif
 void board_host_task(void *unused)
 {
     (void)unused;board.host.dual_leaf=!!(os_session_devices()&SS_DEVICE_USB_KEYBOARD);
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
-    const struct os_usb_service_ops service_ops={usb_request_wake,usb_release,usb_write,usb_configure,usb_configured,usb_changed};
+    const struct os_usb_service_ops service_ops={.wake=usb_request_wake,
+        .release=usb_release,.write=usb_write,.configure=usb_configure,
+        .configured=usb_configured,.changed=usb_changed};
     os_usb_service_init(&service_ops,NULL);
     a733_usb2_generic_enable(&board.host);
     a733_usb2_set_input(&board.host,usb_input,NULL);
     struct sunstone_usb_transport *transport=a733_usb2_transport(&board.host);
     if(os_usb_serial_native_start(transport)!=1)board_fail(NULL);
 #endif
+#ifdef SUNSTONE_BOARD_HOST_DEADLINE
+    if(!board_host_irq_deadline_init())board_fail(NULL);
+#endif
     for(;;){
         if(!board_live(NULL))break;
 #ifdef SUNSTONE_BOARD_USB2_IRQ
         int ready=board_host_irq_before();if(ready<0)break;
-        if(!ready){board_host_irq_wait();continue;}
+        if(!ready){host_wait();continue;}
 #endif
         enum a733_usb2_result r=a733_usb2_native_poll(&board.host);
         if(r==A733_USB2_RETAINED||r==A733_USB2_INVALID)break;
@@ -293,7 +319,7 @@ void board_host_task(void *unused)
         os_application_host_observed(r==A733_USB2_READY);
         if(r==A733_USB2_READY&&!serve())break;
 #ifdef SUNSTONE_BOARD_USB2_IRQ
-        board_host_irq_wait();
+        host_wait();
 #else
         vTaskDelay(1);
 #endif
