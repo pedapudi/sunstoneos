@@ -3,7 +3,7 @@
   "revision": "c2dcb5a92b527e850a1cb7a380b07bd125d3d70b",
   "base_revision": "18c7c81968f56c8c985af0ec26448184cf6a17ec",
   "local_worktree": "/home/sunil/git/mimus-worktrees/os-refs-1031",
-  "branch": "port/sunstoneos-os-refs",
+  "branch": "port/sunstoneos-split",
   "application_directory": "sunstoneos",
   "dashboard": {
     "title": "Local speech recognition",
