@@ -32,8 +32,10 @@ import subprocess
 import sys
 import time
 
-STATE = "/tmp/board-usb-churn.json"
-STATE_LOCK = "/tmp/board-usb-churn.lock"
+# Historical names keep the budget and lock shared with existing worktrees.
+# Mimus is the external application that originally supplied this guard.
+STATE = "/tmp/mimus-usb-churn.json"
+STATE_LOCK = "/tmp/mimus-usb-churn.lock"
 SYSFS = "/sys"
 BOOT_ID = "/proc/sys/kernel/random/boot_id"
 
@@ -64,11 +66,17 @@ def _log(message: str) -> None:
   print(message, file=sys.stderr, flush=True)
 
 
+def _setting(name: str, default=None):
+  """Prefer SUNSTONE_USB settings; accept the external application's old names."""
+  return os.environ.get("SUNSTONE_USB_" + name,
+                        os.environ.get("MIMUS_USB_" + name, default))
+
+
 def settings() -> tuple[float, int, float]:
   """(spacing s, per-board cap, window s) from the environment."""
-  return (float(os.environ.get("SUNSTONE_USB_SPACING_S", SPACING_S)),
-          int(os.environ.get("SUNSTONE_USB_BOARD_CAP", BOARD_CAP)),
-          float(os.environ.get("SUNSTONE_USB_BOARD_WINDOW_S", BOARD_WINDOW_S)))
+  return (float(_setting("SPACING_S", SPACING_S)),
+          int(_setting("BOARD_CAP", BOARD_CAP)),
+          float(_setting("BOARD_WINDOW_S", BOARD_WINDOW_S)))
 
 
 # --- Churn budget -----------------------------------------------------------
@@ -258,7 +266,7 @@ def check_health(log=_log, read_log=None) -> None:
   if failed:
     message = "\n".join(recovery_steps(pci, line)
                         for pci, line in failed.items())
-    if os.environ.get("SUNSTONE_USB_HEALTH") == "warn":
+    if _setting("HEALTH") == "warn":
       log(message + "\nusb_guard: SUNSTONE_USB_HEALTH=warn: continuing")
     else:
       raise SystemExit(message)
