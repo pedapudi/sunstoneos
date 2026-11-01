@@ -75,6 +75,8 @@ def machine(case):
     # Images with breadcrumbs issue SVC #0x736 at each progress point.
     if hasattr(harness, 'skip_crumbs'):
         harness.skip_crumbs(u, image)
+    # WDT0: images with the host-armed watchdog restart it from the live supervisor.
+    u.mem_map(0x02050000, 0x1000)
 
     def put(address, value, n=4): u.mem_write(address, int(value).to_bytes(n, 'little'))
     def get(address, n=4): return int.from_bytes(u.mem_read(address, n), 'little')
@@ -201,6 +203,8 @@ text = b'MODEL ONLY bisect transcript\n'
 m['u'].mem_write(0x80001000, text)
 m['state']['time'] = 56000000
 m['invoke']('os_cpu_return_supervise')
+require('os_cpu_return_watchdog' not in image.symbols or m['get'](0x0205000c) == 0x14af,
+        'live supervisor did not restart WDT0')
 m['invoke']('os_cpu_return_begin', 0x80001000, len(text))
 require(m['state']['exit'] is None, 'CPU completion refused after bisect retirement')
 (a.output / 'nominal-gpu-report.bin').write_bytes(raw)
