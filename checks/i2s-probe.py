@@ -140,29 +140,74 @@ def native_cases(elf,steps):
     rows.append(name)
     return rows
 
+def entry_cases(elf,out,steps):
+    """Execute the entry assembly and real library before cache maintenance.
+
+    MMIO values establish an explicit modeled baseline, not board authority.
+    Bad cases change one inherited input and require its retained origin.
+    """
+    cases=[('baseline',None,0,0,0),('wrong-EL','currentel',8,0x11,0),
+           ('wrong-core','mpidr_el1',0x81000100,0x12,0),
+           ('cached-EL3','sctlr_el3',0xc51838,0x13,0),
+           ('dynamic-OFF',0x07053000,0x100,0x15,0x07053000),
+           ('pending-ack',0x07053008,0x100,0x15,0x07053008),
+           ('wake-enabled',0x07050204,0,0x15,0x07050204)]
+    rows=['actual-entry-'+case[0] for case in cases]
+    if all(steps.case(name) for name in rows):return rows
+    spec=importlib.util.spec_from_file_location('i2s_shared_probe',ROOT/'checks/board-probe.py')
+    shared=importlib.util.module_from_spec(spec);spec.loader.exec_module(shared)
+    input_path=out/'entry-input.bin';input_path.write_bytes(struct.pack('<4I',0,24,1,0))
+    attempt=1
+    while (out/f'entry-session-{attempt}').exists():attempt+=1
+    plan=shared.probe.prepare(elf,shared.probe.inspect(elf),[input_path],out/f'entry-session-{attempt}')
+    for label,field,value,site,address in cases:
+        name='actual-entry-'+label
+        if steps.case(name):continue
+        m=shared.Model(elf,plan)
+        m.sys.update(mpidr_el1=0x81000000,sctlr_el3=0xc50838)
+        if isinstance(field,str):m.sys[field]=value
+        elif field is not None:m.write(field,value,4)
+        reached=[]
+        hook_addresses(m.uc,[m.address('invalidate_data_cache')],lambda uc,*_: (reached.append(True),uc.emu_stop()))
+        m.call('monitor_entry',count=300000)
+        rtc=m.rtc()
+        if site:
+            assert not reached and rtc['fault']==0xfa030000|site,(name,reached,rtc)
+            assert rtc['esr']==value and rtc['far']==address,(name,rtc)
+        else:
+            assert reached and not rtc['fault'],(name,reached,rtc)
+            assert m.read(m.address('sunstone_probe_deadline'))>m.now
+        steps.case(name,{'passed':True,'retained':rtc})
+        del m;gc.collect()
+    return rows
+
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--build',type=Path,required=True);p.add_argument('--out',type=Path,required=True)
-    p.add_argument('--resume',action='store_true');a=p.parse_args();a.out.mkdir(parents=True,exist_ok=a.resume);rows={};steps=Steps(a.out,'commands.json')
+    p.add_argument('--resume',action='store_true');p.add_argument('--native-only',action='store_true')
+    a=p.parse_args();a.out.mkdir(parents=True,exist_ok=a.resume);rows={};steps=Steps(a.out,'commands.json')
     def run(label,cmd):
         steps.command(label,cmd,timeout=30)
         return Path(steps.steps[label]['log']).read_text()
     sources=['checks/i2s-platform.c','drivers/audio/a733_i2s.c','drivers/audio/a733_i2s_platform.c',
              'drivers/pinctrl/a733_pins.c','drivers/pinctrl/a733_pin_tables.c','drivers/audio/a733_audio_leases.c','drivers/clock/a733_clock_leases.c','drivers/audio/a733_i2s_stream.c',
              'drivers/dma/a733_dma.c','drivers/dma/a733_dma_controller.c']
-    run('platform-build',[CLANG,'-std=c11','-g','-O1','-Wall','-Wextra','-Werror',*SANITIZE,'-I'+str(ROOT/'include'),
+    if not a.native_only:
+      run('platform-build',[CLANG,'-std=c11','-g','-O1','-Wall','-Wextra','-Werror',*SANITIZE,'-I'+str(ROOT/'include'),
                           *[ROOT/v for v in sources],'-o',a.out/'platform'])
-    run('reset-ldo',[a.out/'platform','--reset-ldo']);run('platform-baseline',[a.out/'platform'])
-    rows['reset-default-LDO-and-parent-baseline']=True
-    for label,target,case in [('held-busy-drain','i2s-retire-model',19),('held-overrun','i2s-retire-model',20),('file-EOF','i2s-file-retire-model',None)]:
+      run('reset-ldo',[a.out/'platform','--reset-ldo']);run('platform-baseline',[a.out/'platform'])
+      rows['reset-default-LDO-and-parent-baseline']=True
+    for label,target,case in ([] if a.native_only else [('held-busy-drain','i2s-retire-model',19),('held-overrun','i2s-retire-model',20),('file-EOF','i2s-file-retire-model',None)]):
         cmd=[CACHE/'host/usr/bin/qemu-system-aarch64','-machine','virt,gic-version=3,secure=off,virtualization=off',
              '-cpu','cortex-a55','-smp','2','-m','128M','-nographic','-monitor','none','-semihosting-config','enable=on,target=native',
              '-kernel',a.build/(target+'.elf')]
         if case is not None:cmd+=['-device',f'loader,addr=0x47fff000,data={case},data-len=4']
         text=run(label,cmd);assert 'PASS I2S' in text,text;rows[label]=True
     rows.update({name:True for name in native_cases(a.build/'sunstone-a733-i2s-probe.elf',steps)})
+    rows.update({name:True for name in entry_cases(a.build/'sunstone-a733-i2s-probe.elf',a.out,steps)})
     (a.out/'result.json').write_text(json.dumps({'passed':True,'physical_access':False,'cases':rows,
         'image_sha256':hashlib.sha256((a.build/'sunstone-a733-i2s-probe.elf').read_bytes()).hexdigest(),
         'modeled_boundaries':['common monitor setup and interrupt restore','MMIO propagation and counters','DMA/FIFO sample effects'],
         'commands_are_host_only':True},indent=2)+'\n')
-    print('PASS I2S return: sanitizer parent, actual FreeRTOS retirement, delayed MMIO completion and native restoration')
+    print('PASS I2S native entry and restoration' if a.native_only else
+          'PASS I2S return: sanitizer parent, actual FreeRTOS retirement, native entry and restoration')
 if __name__=='__main__':main()

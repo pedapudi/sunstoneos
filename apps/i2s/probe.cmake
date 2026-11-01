@@ -32,6 +32,23 @@ function(sunstone_i2s_probe)
   set_target_properties(sunstone-a733-i2s-probe PROPERTIES SUFFIX ".elf")
   include("${SUNSTONE_SOURCE_ROOT}/cmake/sunstone-probe.cmake")
   sunstone_enable_probe(sunstone-a733-i2s-probe)
+  # Shared-library fixes remain reviewable patches until their owner integrates
+  # them. Compile the patched copy without changing the shared source file.
+  if(SUNSTONE_I2S_PROBE_ENTRY_PATCH)
+    execute_process(COMMAND patch --fuzz=0 --reject-file=- --output "${out}/probe.c"
+      "${SUNSTONE_SOURCE_ROOT}/platform/a733/probe.c" "${SUNSTONE_I2S_PROBE_ENTRY_PATCH}"
+      RESULT_VARIABLE patch_status OUTPUT_VARIABLE patch_report ERROR_VARIABLE patch_error)
+    if(NOT patch_status EQUAL 0)
+      message(FATAL_ERROR "I2S entry patch failed: ${patch_report}${patch_error}")
+    endif()
+    get_target_property(probe_sources sunstone-a733-i2s-probe SOURCES)
+    list(REMOVE_ITEM probe_sources "${SUNSTONE_SOURCE_ROOT}/platform/a733/probe.c")
+    set_property(TARGET sunstone-a733-i2s-probe PROPERTY SOURCES "${probe_sources}")
+    target_sources(sunstone-a733-i2s-probe PRIVATE "${out}/probe.c")
+    set_source_files_properties("${out}/probe.c" PROPERTIES COMPILE_OPTIONS "-Os;-mgeneral-regs-only")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+      "${SUNSTONE_SOURCE_ROOT}/platform/a733/probe.c" "${SUNSTONE_I2S_PROBE_ENTRY_PATCH}")
+  endif()
   foreach(pair "i2s-cyclic-model|i2s-retire-model|I2S_RETIRE_CHECK" "i2s-file-model|i2s-file-retire-model|I2S_FILE_RETIRE_CHECK")
     string(REPLACE "|" ";" parts "${pair}")
     list(GET parts 0 original)
