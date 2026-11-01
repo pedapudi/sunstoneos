@@ -34,6 +34,7 @@ p.add_argument('--runtime',action='store_true',help='the NPU runtime client: one
 p.add_argument('--model-switch',action='store_true',help='three runtime jobs: first model, second model, then first model again')
 p.add_argument('--sustained',action='store_true',help='200 back-to-back runtime jobs alternating the two models; one final CLOSE')
 p.add_argument('--latency',choices=('legacy','queue'),help='one checked warmup, then 1000 checked model-0 jobs through the helper or resident queue')
+p.add_argument('--idle',choices=('off','gate'),help='queue latency only: matched power-owner control or 10 ms clock gating, plus 100 jobs after each 9/11/100 ms idle gap')
 p.add_argument('--dependent-chain',action='store_true',help='queue latency only: append two queued models and their fused stream with an aliased output/input tensor')
 p.add_argument('--chain-repeats',type=int,default=1,help='dependent chain: repeat each resident path 1..1000 times, checking both outputs after each final fence')
 p.add_argument('--sequence',type=int,default=0,help='queue latency only: append one resident sequence repeating the same command 2..64 times')
@@ -48,6 +49,7 @@ if a.active_cancel:
  if a.latency or a.runtime or a.model_switch or a.sdk or a.sustained or a.restart or a.power_cycle or a.shufflenet or a.thermal or a.rate_492 or a.entry_checkpoint or a.entry_irq_checkpoint or a.entry_provider_checkpoint:
   p.error('Active cancellation requires the baseline single-core interrupt profile')
  a.startup_only=True;a.interrupt=True;a.rate_852=True
+if a.idle and (a.latency!='queue' or a.sequence or a.dependent_chain):p.error('Idle benchmark requires --latency queue and excludes sequences and dependent chains')
 if a.dependent_chain and (a.latency!='queue' or a.sequence):p.error('Dependent chain requires --latency queue and excludes --sequence')
 if not 1<=a.chain_repeats<=1000 or a.chain_repeats!=1 and not a.dependent_chain:p.error('Chain repetitions require --dependent-chain and 1..1000 repetitions')
 if a.sequence and (a.latency!='queue' or not 2<=a.sequence<=64):p.error('Sequence requires --latency queue and 2..64 repetitions')
@@ -101,6 +103,8 @@ if a.active_cancel:
 if a.latency:
  assert sum(v.startswith('-DCMAKE_C_FLAGS=') for v in config)==1
  config=[v+' -include '+str(root/'apps/npu-finite/latency-stats.h') if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
+if a.idle:
+ config=[v+' -DSUNSTONE_NPU_IDLE_BENCH=1 -DSUNSTONE_DEADLINE_SINGLE_CORE=1' if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
 if a.restart:
  assert sum(v.startswith('-DCMAKE_C_FLAGS=') for v in config)==1
  config=[v+' -DSUNSTONE_NPU_RESTART=1'+(' -DSUNSTONE_NPU_POWER_CYCLE=1' if a.power_cycle else '') if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
@@ -130,6 +134,7 @@ def compile_like(suffix,source,name):
  if a.sdk:c += ['-DSUNSTONE_NPU_SDK_RETURN=1']
  if a.sustained:c += ['-DSUNSTONE_NPU_SUSTAINED=1']
  if a.latency:c += ['-DSUNSTONE_NPU_LATENCY=1','-DSUNSTONE_NPU_QUEUE_TIMING=1',f'-DSUNSTONE_NPU_LATENCY_QUEUE={int(a.latency=="queue")}',f'-DSUNSTONE_NPU_LATENCY_SEQUENCE={a.sequence}',f'-DSUNSTONE_NPU_DEPENDENT_CHAIN={int(a.dependent_chain)}',f'-DSUNSTONE_NPU_CHAIN_REPEATS={a.chain_repeats}']
+ if a.idle:c += [f'-DSUNSTONE_NPU_IDLE_GATE={int(a.idle=="gate")}']
  if a.entry_provider_checkpoint:c += ['-DSUNSTONE_NPU_ENTRY_PROVIDER_CHECKPOINT=1','-DSUNSTONE_NPU_INTERRUPT=1']
  if a.entry_irq_checkpoint:
   c += ['-DSUNSTONE_NPU_ENTRY_IRQ_CHECKPOINT=1']
@@ -153,6 +158,13 @@ monitor_base=monitor_base.replace('#include "../npu-interrupt/irq-route.h"','#in
 (e/'monitor-base.c').write_text(monitor_base)
 monitor=compile_like('/apps/storage-read-single-core/monitor.c',root/'apps/npu-finite/monitor.c','monitor')
 platform=e/'platform.c';text=(e/'native/npu-single-core/platform.c').read_text();assert text.count('_Noreturn void platform_exit(')==1
+if a.idle:
+ anchor='    mmio_write(GICR_SGI + 0x100, 1U << TIMER_IRQ);'
+ assert text.count(anchor)==1
+ text='#include "'+str(root/'apps/npu-finite/deadline.h')+'"\n'+text.replace(anchor,anchor+'\n    npu_finite_deadline_setup();')
+ anchor='void vApplicationFPUSafeIRQHandler(uint64_t interrupt)\n{'
+ assert text.count(anchor)==1
+ text=text.replace(anchor,anchor+'\n    if(interrupt==27){sunstone_deadline_irq();return;}')
 platform.write_text(text.replace('_Noreturn void platform_exit(','_Noreturn void npu_finite_legacy_exit('))
 platform_obj=compile_like('/npu-single-core/platform.c',platform,'platform')
 ret=compile_like('/apps/npu-convolution/native.c',root/'apps/npu-finite/return.c','return')
@@ -229,9 +241,12 @@ if a.runtime:
  for n in ('a733_npu_runtime','a733_npu_runtime_interim','npu_job'):
   runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/'drivers/npu'/(n+'.c'),n))
  if a.latency:
-  for n in ('npu_queue','npu_runtime_queue'):
+  for n in ('npu_queue','npu_runtime_queue','npu_idle'):
    runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/'drivers/npu'/(n+'.c'),n))
   if a.sequence or a.dependent_chain:runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/'drivers/npu/a733_npu_sequence.c','npu-sequence'))
+ if a.idle:
+  for source in ('runtime/deadline.c','runtime/deadline-a733.c','apps/npu-finite/deadline.c'):
+   runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/source,Path(source).stem+'-idle'))
  if a.sdk:runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/'runtime/npu_app.c','npu-app'))
  runtime_objects.append(compile_like('/drivers/npu/npu_service.c',generated/'npu_admitted_models.c','npu_admitted_models'))
  runtime_identity={'runtime_sources':{str(x.relative_to(root)):sha(x) for x in sorted([root/'apps/npu-convolution/native-runtime.c',root/'apps/npu-convolution/native-runtime.h',
@@ -247,6 +262,11 @@ if a.runtime:
   runtime_identity['runtime_sources'].update({str(path.relative_to(root)):sha(path) for path in
    [root/'apps/npu-finite/queue-client.c',root/'apps/npu-finite/latency-stats.h',root/'include/npu_queue.h',root/'include/npu_runtime_queue.h',
     root/'drivers/npu/npu_queue.c',root/'drivers/npu/npu_runtime_queue.c']})
+  if a.idle:runtime_identity['runtime_sources'].update({str(path.relative_to(root)):sha(path) for path in
+   [root/'apps/npu-finite/idle-client.h',root/'apps/npu-finite/deadline.c',root/'apps/npu-finite/deadline.h',
+    root/'runtime/deadline.c',root/'runtime/deadline-a733.c',root/'include/sunstone_deadline.h']})
+  runtime_identity['runtime_sources'].update({str(path.relative_to(root)):sha(path) for path in
+   [root/'include/npu_idle.h',root/'drivers/npu/npu_idle.c']})
   if a.dependent_chain:runtime_identity['runtime_sources'].update({str(path.relative_to(root)):sha(path) for path in
    [root/'apps/npu-finite/dependent-client.h',root/'apps/npu-finite/chain-models.json']})
   if a.sequence or a.dependent_chain:runtime_identity['runtime_sources'].update({str(path.relative_to(root)):sha(path) for path in
@@ -270,7 +290,7 @@ if a.runtime:identity.update(profile='npu-runtime-return-v1',**runtime_identity)
 if a.model_switch:identity.update(profile='npu-model-switch-return-v1')
 if a.sdk:identity.update(profile='npu-sdk-return-v1')
 if a.sustained:identity.update(sustained={'jobs':200,'models':2,'order':'job-index-modulo-model-count'})
-if a.latency:identity.update(profile='npu-latency-return-v1',latency={'mode':a.latency,'measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':a.sequence,'doorbell_timing':True,**({'dependent_chain':True,**({'chain_repeats':a.chain_repeats} if a.chain_repeats!=1 else {})} if a.dependent_chain else {})})
+if a.latency:identity.update(profile='npu-latency-return-v1',latency={'mode':a.latency,'measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':a.sequence,'doorbell_timing':True,**({'idle':{'enabled':a.idle=='gate','cycles':100,'gaps_us':[9000,11000,100000],'threshold_us':10000,'resume_budget_us':100}} if a.idle else {}),**({'dependent_chain':True,**({'chain_repeats':a.chain_repeats} if a.chain_repeats!=1 else {})} if a.dependent_chain else {})})
 if a.power_cycle:identity.update(profile='npu-power-cycle-return-v1')
 if a.thermal:
  identity['profile']='npu-finite-thermal-return-v1'
