@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import shlex
-from harness import Image, LLD, Steps
+from harness import Image, LLD, Steps, skip_crumbs
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0
@@ -20,8 +20,9 @@ args = parser.parse_args()
 out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
 steps = Steps(out, 'commands.json')
 unit = next(v for v in json.loads((args.build / 'compile_commands.json').read_text())
-            if v['file'].endswith('/apps/os/thermal.c'))
-original = shlex.split(unit['command']); old_root = str(Path(unit['file']).parents[2])
+            if v['file'].endswith(('/apps/os/thermal.c', '/os-image/return-thermal.c')))
+original = shlex.split(unit['command'])
+old_root = str(Path(next(v[2:] for v in original if v.startswith('-I') and v.endswith('/apps/os'))).parents[1])
 flags = [v.replace(old_root, str(ROOT)) for v in original[:original.index('-o')]]
 flags += ['-DSUNSTONE_A733_OS_GPU=1', '-DSUNSTONE_A733_FAULT_PAGE=1']
 flags=[('-I'+str(ROOT/'apps/board')) if v.startswith('-I') and not Path(v[2:]).is_dir()
@@ -54,6 +55,7 @@ for mode, name in enumerate(cases):
             for page in range(address & ~4095, (address + size + 4095) & ~4095, 4096):
                 if page not in pages: uc.mem_map(page, 4096); pages.add(page)
             uc.mem_write(address, segment.data())
+    skip_crumbs(uc, image)
     uc.mem_map(0x80000000, 0x10000); uc.reg_write(UC_ARM64_REG_SP, 0x8000f000)
     uc.reg_write(UC_ARM64_REG_X0, mode)
     uc.hook_add(UC_HOOK_INTR, lambda machine, interrupt, unused: machine.emu_stop())
