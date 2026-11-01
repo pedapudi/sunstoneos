@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 import sys
+import types
 from unittest.mock import patch
 
 if not __debug__:
@@ -120,6 +121,65 @@ def offline(out):
     passed('real-typed-session-preparation-and-unsafe-clock-refusal-stay-offline')
 
 
+def npu_cases(out):
+    """Exercise the current inspector with geometry from a frozen parser."""
+    images = board.images
+    image = out/'npu-image.elf'
+    image.write_bytes(b'modeled immutable NPU image')
+    marker = {'mode': 0xb1, 'session_seconds': 20}
+    reader = types.SimpleNamespace(watchdog_marker=lambda image: marker)
+    layout = (456, 224, 232, 72, 96, 128)
+    finite = types.SimpleNamespace(
+        image_profile=lambda data, manifest: ([], 0x41000000, bytes(32), layout, {'startup_only': True}),
+        geometry_profile=lambda geometry: finite.STARTUP,
+        STARTUP='npu-startup-return-v1', INFERENCE='npu-single-inference-return-v1',
+        RUNTIME='npu-runtime-return-v1', RESTART='npu-finite-restart-return-v1',
+        SWITCH='npu-model-switch-return-v1', SDK='npu-sdk-return-v1', POWER='npu-power-cycle-return-v1')
+    manifest = {'execution_profile': finite.STARTUP}
+    facts = images.finite_npu_info(image, reader, finite, manifest)
+    assert facts['watchdog'] == marker and facts['geometry']['startup_only']
+    assert facts['session_layout'] == list(layout)
+    for altered in (None, {'mode': 0xa1, 'session_seconds': 20},
+                    {'mode': 0xb1, 'session_seconds': 19}):
+        with patch.object(reader, 'watchdog_marker', return_value=altered):
+            try:
+                images.finite_npu_info(image, reader, finite, manifest)
+            except ValueError as error:
+                assert 'exact host-armed watchdog' in str(error)
+            else:
+                raise AssertionError('NPU accepted another watchdog contract')
+    with patch.object(finite, 'image_profile', return_value=([], 0x41000000, bytes(32), (904, 224, 232), {})):
+        try:
+            images.finite_npu_info(image, reader, finite, manifest)
+        except ValueError as error:
+            assert 'session layout differs' in str(error)
+        else:
+            raise AssertionError('NPU accepted another session layout')
+    passed('npu-image-geometry-and-exact-watchdog')
+    frozen = out/'frozen-host-tree'
+    def load(name, path):
+        if name == 'board_records':
+            return reader
+        assert name == 'inspect_npu_irq' and path == frozen/'apps/npu-interrupt/host.py'
+        return types.SimpleNamespace(finite=finite)
+    with patch.object(images, 'load', side_effect=load):
+        for profile in (finite.STARTUP, finite.INFERENCE, finite.RUNTIME, finite.RESTART, finite.SWITCH, finite.SDK):
+            with patch.object(finite, 'geometry_profile', return_value=profile):
+                info = images.inspect(image, 'npu', host_tree=frozen, manifest=manifest)
+                assert info['execution_profile'] == profile and info['finite_npu']
+        passed('npu-current-inspector-admits-local-restart-switch-sdk-with-frozen-parser')
+        with patch.object(finite, 'geometry_profile', return_value=finite.POWER):
+            # The frozen parser still recognizes POWER; current admission owns the refusal.
+            assert images.finite_npu_info(image, reader, finite, manifest)['execution_profile'] == finite.POWER
+            try:
+                images.inspect(image, 'npu', host_tree=frozen, manifest=manifest)
+            except ValueError as error:
+                assert 'physical NPU OFF' in str(error)
+            else:
+                raise AssertionError('Unsupported physical NPU OFF accepted')
+    passed('npu-current-inspector-refuses-physical-off-with-frozen-parser')
+
+
 def queued_decoder(out):
     source = out/'application'
     source.mkdir()
@@ -155,6 +215,7 @@ def main():
     args=parser.parse_args();args.out.mkdir(parents=True)
     routing(args.out)
     helper_cases()
+    npu_cases(args.out)
     offline(args.out)
     queued_decoder(args.out)
     (args.out/'result.json').write_text(json.dumps({'passed':True,'physical_access':False,'cases':rows},indent=2)+'\n')

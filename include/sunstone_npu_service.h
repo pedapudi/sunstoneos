@@ -10,6 +10,12 @@ struct ss_npu_backend {
     int (*close)(void);
 };
 int ss_npu_service_bind(const struct ss_npu_backend *);
+/* Optional owner wakeup, registered once before bind and application startup.
+ * Called in the publishing task after a request or failure becomes visible.
+ * It must be safe at both application and service task privilege levels.
+ * The notification must remain pending until consumed, including when the
+ * owner has not entered its wait yet. It must not call the mailbox API. */
+int ss_npu_service_bind_event(void (*notify)(void *),void *context);
 /* 0 idle, 1 request completed/refused, -1 retained failure. */
 int ss_npu_service_step(void);
 void ss_npu_service_fail(void);

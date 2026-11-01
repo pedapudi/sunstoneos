@@ -43,7 +43,8 @@ struct npu_runtime_config {
     void (*fatal)(void *);
     void *fatal_cookie;
 };
-/* Slot states, written only by the worker and read by clients with acquire
+/* Slot states, written by preparation before bind, then by the worker. Clients
+ * read with acquire
  * ordering. A client may write its inputs and read its outputs only while its
  * slot is READY and it has no request pending. */
 enum npu_runtime_state {
@@ -58,7 +59,7 @@ struct npu_runtime_tensor {
     size_t bytes;
     struct nbg_tensor tensor;
 };
-/* Worker-written counts for host models and board diagnostics. */
+/* Preparation/worker counts for host models and board diagnostics. */
 enum npu_runtime_step {
     NPU_RUNTIME_STEP_LOAD, NPU_RUNTIME_STEP_PREPARE, NPU_RUNTIME_STEP_POOL,
     NPU_RUNTIME_STEP_START, NPU_RUNTIME_STEP_CHECK, NPU_RUNTIME_STEP_KINDS
@@ -117,9 +118,14 @@ struct npu_runtime {
     struct nbg_assembly_cursor cursor;
     unsigned loading, checking, last_started;
     uint64_t finishes;
+    /* Diagnostic timestamp after the fetch doorbell and its DSB complete.
+     * Updated only when SUNSTONE_NPU_QUEUE_TIMING is enabled. */
+#ifdef SUNSTONE_NPU_QUEUE_TIMING
+    uint64_t doorbell_ticks;
+#endif
     struct npu_runtime_counters counters;
     atomic_uint failed;
-    unsigned prepared, bound;
+    unsigned prepared, bound, resident, tensor_links;
 };
 
 /* Size of the parent allocation for slots slots and these catalogue models,
@@ -145,6 +151,23 @@ int npu_runtime_prepare(struct npu_runtime *, const struct npu_runtime_config *)
  * runtime mode with one command per slot. */
 int npu_runtime_bind(struct npu_runtime *, struct a733_npu_startup *, const TaskHandle_t clients[],
                      UBaseType_t priority, UBaseType_t affinity);
+/* Optional resident loader: pre-scheduler, after prepare and before bind.
+ * Assemble each selected model into a separate slot once. Empty slots only;
+ * no device operation. The resident bind gives one trusted caller all slots'
+ * tensor windows and queue commands; ordinary requests use slot zero only.
+ * One OPEN/CLOSE owns this resident set. This keeps network interpretation
+ * in the loader while the queue accepts generic prepared command handles. */
+int npu_runtime_preload(struct npu_runtime *, unsigned slot, unsigned model);
+/* Slow, pre-bind device-only edge between two preloaded slots. Tensor shape,
+ * representation and allocation size must agree. Reassembles the consumer's
+ * resident addresses once; no copy or cache operation is needed between jobs.
+ * Linked runtimes require bind_resident and refuse subsequent LOAD operations.
+ * Submit the consumer after the producer's fence, or prepare one stream that
+ * preserves their flush/stall boundary. CPU access waits for the final user. */
+int npu_runtime_link_tensor(struct npu_runtime *, unsigned producer, unsigned output,
+                            unsigned consumer, unsigned input);
+int npu_runtime_bind_resident(struct npu_runtime *, struct a733_npu_startup *, TaskHandle_t,
+                              UBaseType_t priority, UBaseType_t affinity);
 /* Required, after bind and before scheduling: interrupt completion through
  * npu_service_bind_irq on the embedded service. Activation is refused
  * without it. idle_hint 1 keeps the idle-register hint until board evidence

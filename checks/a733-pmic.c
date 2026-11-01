@@ -389,6 +389,25 @@ int main(int argc,char **argv)
         assert(a733_pmic_reap(&m.provider,&q)==A733_PMIC_COMPLETE);
         assert(a733_pmic_result(&m.provider,&q,&s)==A733_PMIC_INVALID);
     }
+    /* DCDC2 supplies SoC/DRAM outside this ledger. Even a sole exclusive
+     * software holder cannot retune it. The selector API offers no enable
+     * operation; all target bytes, including apparent gate values, refuse
+     * before any transport access or queued request. */
+    for(unsigned exclusive=0;exclusive<2;++exclusive) {
+        pmic_model_setup(&m);ready(&m);
+        struct a733_rail_token supply={0};const a733_rail_mask_t mask=A733_RAIL_BIT(A733_RAIL_DCDC2);
+        assert(a733_rail_acquire(&m.rails,10,exclusive ? 0 : mask,exclusive ? mask : 0,
+            m.now+1000000,&supply)==A733_RAIL_PENDING);
+        assert(a733_rail_status(&m.rails,&supply)==A733_RAIL_READY);
+        const unsigned reads=m.reads,writes=m.writes;
+        for(unsigned target=0;target<256;++target) {
+            struct a733_pmic_request refused={0};
+            assert(a733_pmic_submit_write(&m.provider,10,&supply,A733_RAIL_DCDC2,30,(uint8_t)target,
+                m.now+1000000,&refused)==A733_PMIC_INVALID);
+            assert(!refused.id && m.reads==reads && m.writes==writes);
+        }
+        assert(a733_rail_release(&m.rails,&supply,m.now+1000000)==A733_RAIL_READY);
+    }
     /* Independent DMA/autonomous engines refuse before pin transition. */
     const uintptr_t dirty[]={0x07083200,0x07083314,0x07083218,0x0340011c};
     const uint32_t bits[]={1,1,0x100,1u<<11};

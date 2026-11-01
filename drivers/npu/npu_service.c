@@ -462,6 +462,25 @@ static int runtime_progress(struct npu_service *s, int timed_out)
 static void runtime_worker(struct npu_service *s)
 {
     for (int timed_out = 0;;) {
+        if (s->direct_request) {
+            /* This is the only direct handoff point. After acknowledgment
+             * this iteration can only park; a claimant may preempt us after
+             * its notification without resuming any worker MMIO operation. */
+            int ready = s->controller.state == A733_NPU_READY &&
+                s->running == NPU_SERVICE_CLIENTS && !s->has_deferred &&
+                !s->has_held && !s->runtime->failed && !s->irq_retained &&
+                !atomic_load_explicit(&s->irq_pending, memory_order_acquire) &&
+                !uxQueueMessagesWaiting(s->requests);
+            if (ready) s->direct = s->direct_request;
+            s->direct_request = NULL;
+            TaskHandle_t owner = s->direct_owner;
+            atomic_store_explicit(&s->direct_ready, ready ? 1u : 2u, memory_order_release);
+            xTaskNotifyGive(owner);
+        }
+        if (s->direct) {
+            (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            continue;
+        }
         if (atomic_load_explicit(&s->activation_state, memory_order_acquire) != SERVICE_ACTIVE) {
             (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             continue;

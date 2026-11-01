@@ -111,6 +111,9 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
         if manifest is None:
             manifest = json.loads((Path(image).parent/'manifest.json').read_bytes())
         facts = finite_npu_info(image, host, finite, manifest)
+        # Current admission excludes physical OFF even with a frozen geometry parser.
+        require(facts.get('execution_profile') != finite.POWER,
+                'Unsupported physical NPU OFF profile; use local stop/restart.')
         return dict(facts, symbols=names, generic=False, entry_guard=False,
                     descriptor=descriptor, finite_npu=True)
     marker = host.watchdog_marker(image) if names else descriptor.get('watchdog')

@@ -265,7 +265,7 @@
  MSR ICC_SGI1R_EL1, X0                     /* X0 contains the value to write to ICC_SGI1R_EL1 */
  MSR ELR_EL1, X4
  MSR SPSR_EL1, X5
-@@ -807,6 +828,22 @@
+@@ -807,6 +828,38 @@
  ERET
  
  12:
@@ -284,6 +284,22 @@
 +LDP XZR, X1, [SP], #0x10
 +ERET
 +13:
++#endif
++#ifdef SUNSTONE_A733_OS_NPU_QUEUE
++/* SVC120 is the fixed shared NPU ring doorbell. Kernel calls104..117
++ * retain their existing meanings; 118 is newlib and 119 is OS exit. */
++CMP X2, #120
++B.NE 14f
++savefuncontextgpregs
++BL ss_npu_queue_svc
++restorefuncontextgpregexceptx0
++MSR ELR_EL1, X4
++MSR SPSR_EL1, X5
++LDP X4, X5, [SP], #0x10
++LDP X2, X3, [SP], #0x10
++LDP XZR, X1, [SP], #0x10
++ERET
++14:
 +#endif
  #if ( configENABLE_MPU == 1 )
     /* ---------- SystemCallEnter? ---------------------------------*/

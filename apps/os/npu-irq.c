@@ -4,4 +4,7 @@
 #define NPU_IRQ_PRIORITY 0xd8u
 #define NPU_IRQ_HANDLER os_npu_irq
 #define NPU_IRQ_EXTERNAL_BIND os_npu_irq_bind
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+#define NPU_IRQ_IDLE_HINT 0
+#endif
 #include "../../platform/a733/npu_irq.c"

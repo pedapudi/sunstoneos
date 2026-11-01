@@ -29,13 +29,27 @@ p.add_argument('--rate-492',action='store_true',help='the optional 492 MHz mode;
 p.add_argument('--shufflenet',action='store_true',help='the published ShuffleNetV2 graph in the large NN-pool profile (needs --interrupt)')
 p.add_argument('--runtime',action='store_true',help='the NPU runtime client: one job of each runtime-models.json network through npu_job_run')
 p.add_argument('--model-switch',action='store_true',help='three runtime jobs: first model, second model, then first model again')
+p.add_argument('--sustained',action='store_true',help='200 back-to-back runtime jobs alternating the two models; one final CLOSE')
+p.add_argument('--latency',choices=('legacy','queue'),help='one checked warmup, then 1000 checked model-0 jobs through the helper or resident queue')
+p.add_argument('--dependent-chain',action='store_true',help='queue latency only: append two queued models and their fused stream with an aliased output/input tensor')
+p.add_argument('--chain-repeats',type=int,default=1,help='dependent chain: repeat each resident path 1..1000 times, checking both outputs after each final fence')
+p.add_argument('--sequence',type=int,default=0,help='queue latency only: append one resident sequence repeating the same command 2..64 times')
 p.add_argument('--sdk',action='store_true',help='two models through the public application NPU mailbox API')
 p.add_argument('--artifacts',type=Path,default=Path.home()/'.cache/sunstoneos/build/npu-board/session-artifacts.json',
  help='--runtime: catalogue artifact paths by model name; the baseline fixture supplies its own model')
 p.add_argument('--sdk-reference',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-complete-graph-proposal-20261019/sdk-reference',
  help='directory with network_binary.nb, published-input.dat and output0_2_1.dat')
 a=p.parse_args()
+if a.dependent_chain and (a.latency!='queue' or a.sequence):p.error('Dependent chain requires --latency queue and excludes --sequence')
+if not 1<=a.chain_repeats<=1000 or a.chain_repeats!=1 and not a.dependent_chain:p.error('Chain repetitions require --dependent-chain and 1..1000 repetitions')
+if a.sequence and (a.latency!='queue' or not 2<=a.sequence<=64):p.error('Sequence requires --latency queue and 2..64 repetitions')
+if a.latency:
+ if a.model_switch or a.sdk or a.sustained:p.error('Latency, sustained, SDK and model-switch are separate profiles')
+ a.runtime=True
 if a.power_cycle:a.restart=True;a.interrupt=True
+if a.sustained:
+ if a.model_switch or a.sdk:p.error("Sustained, SDK and model-switch are separate profiles")
+ a.runtime=True
 if a.model_switch:a.runtime=True
 if a.sdk:
  if a.model_switch:p.error('SDK and model-switch are separate profiles')
@@ -68,9 +82,15 @@ def run(name,c,cwd=None):
 # model, provider and service inputs. No fixture admission is generated here.
 old=json.loads((base/'configure-command.json').read_text());old_root=next(v[:-len('/apps/npu-convolution-single-core')] for v in old if v.endswith('/apps/npu-convolution-single-core'))
 config=[v.replace(old_root,str(root)).replace(str(base/'native'),str(e/'native')) for v in old]
+config=[('-DSUNSTONE_LLD='+str(Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld'))
+ if v.startswith('-DSUNSTONE_LLD=') else v for v in config]
+config+=['-DCMAKE_C_COMPILER=/usr/bin/clang-21','-DCMAKE_ASM_COMPILER=/usr/bin/clang-21']
 # Every finite producer opts into RTC progress and armed-WDT behavior. The
 # original retained producer and other single-core consumers remain unchanged.
 config=[v+' -DSUNSTONE_CRUMBS=1 -DSUNSTONE_NPU_FINITE_WATCHDOG=1 -DINCLUDE_xTaskDelayUntil=1' if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
+if a.latency:
+ assert sum(v.startswith('-DCMAKE_C_FLAGS=') for v in config)==1
+ config=[v+' -include '+str(root/'apps/npu-finite/latency-stats.h') if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
 if a.restart:
  assert sum(v.startswith('-DCMAKE_C_FLAGS=') for v in config)==1
  config=[v+' -DSUNSTONE_NPU_RESTART=1'+(' -DSUNSTONE_NPU_POWER_CYCLE=1' if a.power_cycle else '') if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
@@ -98,6 +118,8 @@ def compile_like(suffix,source,name):
  if a.runtime:c += ['-DSUNSTONE_NPU_RUNTIME_RETURN=1']
  if a.model_switch:c += ['-DSUNSTONE_NPU_MODEL_SWITCH=1']
  if a.sdk:c += ['-DSUNSTONE_NPU_SDK_RETURN=1']
+ if a.sustained:c += ['-DSUNSTONE_NPU_SUSTAINED=1']
+ if a.latency:c += ['-DSUNSTONE_NPU_LATENCY=1','-DSUNSTONE_NPU_QUEUE_TIMING=1',f'-DSUNSTONE_NPU_LATENCY_QUEUE={int(a.latency=="queue")}',f'-DSUNSTONE_NPU_LATENCY_SEQUENCE={a.sequence}',f'-DSUNSTONE_NPU_DEPENDENT_CHAIN={int(a.dependent_chain)}',f'-DSUNSTONE_NPU_CHAIN_REPEATS={a.chain_repeats}']
  if a.entry_provider_checkpoint:c += ['-DSUNSTONE_NPU_ENTRY_PROVIDER_CHECKPOINT=1','-DSUNSTONE_NPU_INTERRUPT=1']
  if a.entry_irq_checkpoint:
   c += ['-DSUNSTONE_NPU_ENTRY_IRQ_CHECKPOINT=1']
@@ -150,7 +172,7 @@ if a.runtime:
  # The networks in job order, each checked against its reviewed catalogue
  # entry; the baseline fixture (A733_NPU_MODEL) supplies the model it names.
  catalogue_tool=module_from(root/'tools/npu-session-catalogue.py')
- runtime_list=root/'apps/npu-finite/runtime-models.json'
+ runtime_list=root/('apps/npu-finite/chain-models.json' if a.dependent_chain else 'apps/npu-finite/runtime-models.json')
  job_plan=root/'apps/npu-finite/switch-jobs.json'
  listed=catalogue_tool.application_models([runtime_list])
  artifacts=json.loads(a.artifacts.read_text())
@@ -189,11 +211,15 @@ if a.runtime:
  (generated/'networks.c').write_text(text)
  (generated/'npu_admitted_models.c').write_text(catalogue_tool.table(listed))
  runtime_objects=[compile_like('/apps/npu-convolution/native.c',root/'apps/npu-convolution/native-runtime.c','native-runtime'),
-  compile_like('/apps/npu-convolution/main.c',root/('apps/npu-sdk/finite-client.c' if a.sdk else 'apps/npu-finite/runtime-client.c'),'runtime-client'),
+  compile_like('/apps/npu-convolution/main.c',root/('apps/npu-finite/queue-client.c' if a.latency else 'apps/npu-sdk/finite-client.c' if a.sdk else 'apps/npu-finite/runtime-client.c'),'runtime-client'),
   compile_like('/platform/a733/npu_irq.c',root/'apps/npu-finite/runtime-irq.c','runtime-irq'),
   compile_like('/apps/npu-convolution/native.c',generated/'networks.c','networks')]
  for n in ('a733_npu_runtime','a733_npu_runtime_interim','npu_job'):
   runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/'drivers/npu'/(n+'.c'),n))
+ if a.latency:
+  for n in ('npu_queue','npu_runtime_queue'):
+   runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/'drivers/npu'/(n+'.c'),n))
+  if a.sequence or a.dependent_chain:runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/'drivers/npu/a733_npu_sequence.c','npu-sequence'))
  if a.sdk:runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/'runtime/npu_app.c','npu-app'))
  runtime_objects.append(compile_like('/drivers/npu/npu_service.c',generated/'npu_admitted_models.c','npu_admitted_models'))
  runtime_identity={'runtime_sources':{str(x.relative_to(root)):sha(x) for x in sorted([root/'apps/npu-convolution/native-runtime.c',root/'apps/npu-convolution/native-runtime.h',
@@ -205,6 +231,14 @@ if a.runtime:
    'reference_sha256':hashlib.sha256(n['reference']).hexdigest()} for n in networks],
   'generated':{'networks.c':sha(generated/'networks.c'),'npu_admitted_models.c':sha(generated/'npu_admitted_models.c')}}
  save('networks.json',[{k:v for k,v in n.items() if k in ('name','paths')} for n in networks])
+ if a.latency:
+  runtime_identity['runtime_sources'].update({str(path.relative_to(root)):sha(path) for path in
+   [root/'apps/npu-finite/queue-client.c',root/'apps/npu-finite/latency-stats.h',root/'include/npu_queue.h',root/'include/npu_runtime_queue.h',
+    root/'drivers/npu/npu_queue.c',root/'drivers/npu/npu_runtime_queue.c']})
+  if a.dependent_chain:runtime_identity['runtime_sources'].update({str(path.relative_to(root)):sha(path) for path in
+   [root/'apps/npu-finite/dependent-client.h',root/'apps/npu-finite/chain-models.json']})
+  if a.sequence or a.dependent_chain:runtime_identity['runtime_sources'].update({str(path.relative_to(root)):sha(path) for path in
+   [root/'include/a733_npu_sequence.h',root/'drivers/npu/a733_npu_sequence.c']})
 checkpoint=compile_like('/apps/npu-convolution/native.c',root/'apps/npu-finite/checkpoint.c','checkpoint') if a.entry_checkpoint else None
 checkpoint_irq=compile_like('/apps/npu-convolution/native.c',root/'apps/npu-interrupt/irq-route.c','checkpoint-irq-route') if a.entry_irq_checkpoint else None
 # Bind the new monitor/cleanup/return sources into the existing authenticated
@@ -222,6 +256,8 @@ if a.single_inference:identity['profile']='npu-single-inference-return-v1'
 if a.runtime:identity.update(profile='npu-runtime-return-v1',**runtime_identity)
 if a.model_switch:identity.update(profile='npu-model-switch-return-v1')
 if a.sdk:identity.update(profile='npu-sdk-return-v1')
+if a.sustained:identity.update(sustained={'jobs':200,'models':2,'order':'job-index-modulo-model-count'})
+if a.latency:identity.update(profile='npu-latency-return-v1',latency={'mode':a.latency,'measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':a.sequence,'doorbell_timing':True,**({'dependent_chain':True,**({'chain_repeats':a.chain_repeats} if a.chain_repeats!=1 else {})} if a.dependent_chain else {})})
 if a.power_cycle:identity.update(profile='npu-power-cycle-return-v1')
 if a.thermal:
  identity['profile']='npu-finite-thermal-return-v1'
