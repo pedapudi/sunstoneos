@@ -1,13 +1,13 @@
 # OS implementation and device owners, independent of application sources.
 option(SUNSTONE_A733_OS "Build the integrated OS image" OFF)
 option(SUNSTONE_A733_OS_RESIDENT "Integrated OS with the resident lifetime" OFF)
-option(SUNSTONE_A733_OS_AUDIO "Integrated OS with I2S microphone recognition" OFF)
+option(SUNSTONE_A733_OS_AUDIO "OS I2S capture service" OFF)
 option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF)
-option(SUNSTONE_A733_OS_HEADSET "Integrated OS with Bluetooth headset recognition" OFF)
+option(SUNSTONE_A733_OS_HEADSET "OS Bluetooth headset capture service" OFF)
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
 option(SUNSTONE_A733_OS_NPU "Integrated OS with a task-bound NPU catalogue service" OFF)
 option(SUNSTONE_A733_OS_GPU_LINEAR "Integrated OS with mimus linear layers on the GPU" OFF)
-option(SUNSTONE_A733_OS_CPU_RETURN "One staged CPU recognition with success-only ROM return" OFF)
+option(SUNSTONE_A733_OS_CPU_RETURN "Application result with success-only ROM return" OFF)
 option(SUNSTONE_A733_OS_CORE "Build the OS core without an application" OFF)
 option(SUNSTONE_A733_OS_HELLO "Build the hello-compute OS image" OFF)
 if(NOT SUNSTONE_A733_OS AND NOT SUNSTONE_A733_OS_CORE AND NOT SUNSTONE_A733_OS_HELLO)
@@ -25,20 +25,14 @@ if(SUNSTONE_A733_OS_GPU_LINEAR AND NOT SUNSTONE_A733_OS_LEGACY_MIMUS_GPU)
   message(FATAL_ERROR "GPU recognition currently requires SUNSTONE_A733_OS_LEGACY_MIMUS_GPU=ON")
 endif()
 if(SUNSTONE_A733_OS_HEADSET AND SUNSTONE_A733_OS_AUDIO)
-  message(FATAL_ERROR "The recognizer takes one capture source: the I2S microphone or the headset")
+  message(FATAL_ERROR "An image selects one capture source: I2S or the headset")
 endif()
 if(SUNSTONE_A733_OS_MSBC AND NOT SUNSTONE_A733_OS_HEADSET)
   message(FATAL_ERROR "Wideband mSBC speech is a headset option")
 endif()
-# A76 admission (docs/designs/cpu-a76-dvfs.md): the recognizer and its
-# inference worker run on cores 6 and 7, and every other task keeps the A55
-# default affinity. The option is also the compile definition.
-option(A733_A76_ADMITTED "Integrated OS with recognition on the admitted Cortex-A76 cores" OFF)
-if(SUNSTONE_MIMUS_WORKERS STREQUAL "8" AND
-   (NOT A733_A76_ADMITTED OR SUNSTONE_A733_OS_AUDIO OR
-    SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET))
-  message(FATAL_ERROR "Eight OS inference workers require admitted recorded recognition")
-endif()
+# A76 admission permits application placement on cores 6 and 7. Device owners
+# retain their existing A55 affinity.
+option(A733_A76_ADMITTED "Admit Cortex-A76 cores for application placement" OFF)
 # CPU operating points granted by the sealed supervised or resident session
 # policy (docs/cpu-clock.md).
 option(SUNSTONE_A733_OS_CPU_CLOCK "Integrated OS with granted CPU operating-point changes" OFF)
