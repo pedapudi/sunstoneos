@@ -355,7 +355,7 @@ if(os_include_dirs)
   target_include_directories(sunstone-a733-os-core PRIVATE ${os_include_dirs})
 endif()
 if(SUNSTONE_A733_OS_HEADSET)
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BLUETOOTH_HEADSET=1)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BLUETOOTH_HEADSET=1 SUNSTONE_BLUETOOTH_CAPTURE_PROFILE=1)
 endif()
 if(A733_A76_ADMITTED)
   target_compile_definitions(sunstone-a733-os-core PRIVATE A733_A76_ADMITTED=1
