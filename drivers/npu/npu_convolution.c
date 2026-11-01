@@ -71,8 +71,13 @@ struct supported_model {
 #else
 #define NPU_MODEL_FAMILY(v)
 #endif
+/* Standalone consumers use the checked compatibility view. Application builds
+ * select the freshly rendered table beside their authenticated artifacts. */
+#ifndef SUNSTONE_NPU_MODEL_TABLE
+#define SUNSTONE_NPU_MODEL_TABLE "npu_models.inc"
+#endif
 static const struct supported_model models[]={
-#include "npu_models.inc"
+#include SUNSTONE_NPU_MODEL_TABLE
 };
 #undef NPU_MODEL_FAMILY
 static const unsigned immutable[4]={NPU_CONVOLUTION_NN,NPU_CONVOLUTION_COEFF,
