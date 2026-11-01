@@ -46,8 +46,17 @@
  *    submits, reads the output and returns the window, then closes. A SUBMIT
  *    posted while the read window is lent is refused. The requests, replies
  *    and client tick waits per inference and the copies per tensor byte in
- *    each direction are printed. */
+ *    each direction are printed.
+ *  7 every slot runs jobs through the generic job helper (drivers/npu/npu_job.c)
+ *    in place of its own requests. Slot 0 runs conv8 and then the
+ *    two-input graph, so the helper opens the slot and loads twice; slot 1
+ *    first passes a wrong input size, which is refused after the LOAD and
+ *    before a SUBMIT; slot 2 closes and names a model outside the catalogue
+ *    before its first job, both refused; the bootstrap task, which owns no
+ *    slot, is refused. Each output copy equals the write window and the
+ *    register model's expected bytes. */
 #include "npu_runtime.h"
+#include "npu_job.h"
 #include "aarch64_device_memory.h"
 #include "platform.h"
 #include "npu_session_fixtures.h"
@@ -550,6 +559,67 @@ void __wrap_vTaskDelay(TickType_t ticks)
     __real_vTaskDelay(ticks);
 }
 #endif
+/* Case 7: one job of model m through the helper, its copies compared with
+ * the windows the helper copied to and from. */
+static uint8_t job_in[SLOTS][2 * FIXTURE_MAX_TENSOR], job_out[SLOTS][2 * FIXTURE_MAX_TENSOR];
+static int helper_job(unsigned slot, unsigned m, size_t in_bytes)
+{
+    const struct fixture *f = &fixtures[m];
+    size_t at = 0, out_bytes = 0;
+    for (unsigned i = 0; i < f->inputs; ++i) {
+        configASSERT(at + f->tensor_bytes[i] <= sizeof(job_in[slot]));
+        memcpy(job_in[slot] + at, f->tensor[i], f->tensor_bytes[i]);
+        at += f->tensor_bytes[i];
+    }
+    for (unsigned j = 0; j < f->outputs; ++j) out_bytes += f->tensor_bytes[f->inputs + j];
+    configASSERT(out_bytes <= sizeof(job_out[slot]));
+    memset(job_out[slot], 0xa5, out_bytes);
+    const uint64_t jobs = rt.counters.jobs;
+    int result = npu_job_run(m, job_in[slot], in_bytes ? in_bytes : at, job_out[slot], out_bytes, 1000000);
+    set(&opened[slot], 1);
+    if (result != 1) return result;
+    configASSERT(rt.slot[slot].model == m && rt.counters.jobs > jobs);
+    verify(slot);
+    at = 0;
+    for (unsigned i = 0; i < f->inputs; ++i) {
+        struct npu_runtime_tensor t;
+        configASSERT(npu_runtime_tensor(&rt, slot, NBG_INPUT, i, &t) && !memcmp(t.data, job_in[slot] + at, t.bytes));
+        at += t.bytes;
+    }
+    at = 0;
+    for (unsigned j = 0; j < f->outputs; ++j) {
+        struct npu_runtime_tensor t;
+        configASSERT(npu_runtime_tensor(&rt, slot, NBG_OUTPUT, j, &t) && !memcmp(t.data, job_out[slot] + at, t.bytes));
+        at += t.bytes;
+    }
+    configASSERT(at == out_bytes);
+    return 1;
+}
+static void helper_case(unsigned slot)
+{
+    switch (slot) {
+    case 0:
+        configASSERT(helper_job(slot, CONV8, 0) == 1 && helper_job(slot, DUAL_U8, 0) == 1 &&
+                     helper_job(slot, CONV8, 0) == 1 && rt.counters.loads >= 3);
+        break;
+    case 1:
+        configASSERT(helper_job(slot, CONV8, 1) == 0 && rt.slot[slot].opened &&
+                     atomic_load(&rt.slot[slot].state) == NPU_RUNTIME_READY);
+        configASSERT(helper_job(slot, CONV8, 0) == 1);
+        break;
+    case 2:
+        configASSERT(npu_job_close() == 0 &&
+                     npu_job_run(FIXTURES, job_in[slot], 1, job_out[slot], 1, 1000000) == 0 &&
+                     !rt.slot[slot].opened);
+        configASSERT(helper_job(slot, MIMUS, 0) == 1);
+        break;
+    default:
+        configASSERT(helper_job(slot, DUAL_I8, 0) == 1);
+    }
+    configASSERT(npu_job_close() == 1 && rt.slot[slot].closed && npu_job_close() == 0);
+    set(&closed[slot], 1);
+    vTaskSuspend(NULL);
+}
 static void client(void *argument)
 {
     unsigned slot = (unsigned)(uintptr_t)argument;
@@ -558,6 +628,7 @@ static void client(void *argument)
     if ((npu_case == 5||npu_case == 6) && slot == 3) { npu_board_client_run(&board_client); configASSERT(0); }
 #endif
     wait_flag(&started, 1);
+    if (npu_case == 7) helper_case(slot);
     struct npu_service_reply r = call(slot, NPU_SERVICE_OPEN, 0, 1000000);
     configASSERT(r.result == NPU_SERVICE_OK && r.owns_session &&
                  (r.state == A733_NPU_BOOTING || r.state == A733_NPU_READY));
@@ -976,7 +1047,13 @@ static void bootstrap_run(void *unused)
             "PASS NPU runtime: the board client loop hands the windows over, one request and reply per inference, no tick wait\n");
     }
 #endif
+    if (npu_case == 7) {
+        uint8_t byte = 0;
+        configASSERT(npu_job_run(CONV8, &byte, 1, &byte, 1, 1000000) == 0 && npu_job_close() == 0);
+    }
     for (unsigned s = 0; s < SLOTS; ++s) wait_flag(&opened[s], 1);
+    if (npu_case == 7)
+        finish_case("PASS NPU runtime: the job helper opens, loads, copies and closes for every slot; wrong sizes, indexes and callers are refused\n");
     if (npu_case == 0) {
         /* One credit at a time, each once every slot with work left has its
          * next job submitted; starts then follow round-robin order. */
@@ -1124,7 +1201,8 @@ void kernel_main(void)
     model.regs[0x20/4] = 0x9000; model.regs[0x24/4] = 0x9202;
     model.regs[0x30/4] = 0x1000003b; model.regs[0x28/4] = 0x20240101; model.regs[1] = IDLE;
     model.masked = 1;
-    model.immediate = npu_case == 1 || npu_case == 3 || npu_case == 4 || npu_case == 5 || npu_case == 6;
+    model.immediate = npu_case == 1 || npu_case == 3 || npu_case == 4 || npu_case == 5 || npu_case == 6 ||
+        npu_case == 7;
     model.late = npu_case == 2;
     model.defer_mask = npu_case == 2 ? 6 : 0;
     bootstrap = xTaskCreateStaticAffinitySet(bootstrap_run, "bootstrap", 4096, NULL, 3,
@@ -1151,6 +1229,7 @@ void kernel_main(void)
                  !rt.service.ops.write(rt.service.cookie, 0, 0x70900) &&
                  !__atomic_load_n(&model.accesses, __ATOMIC_ACQUIRE));
     configASSERT(npu_runtime_bind_irq(&rt, &irq_ops, &rt, 1, 1));
+    configASSERT(!npu_job_attach(&rt, portMAX_DELAY) && npu_job_attach(&rt, 20000) && !npu_job_attach(&rt, 20000));
 #ifdef NPU_BOARD_CLIENT_CHECK
     board_client = (struct npu_board_client){.rt = &rt, .slot = 3, .job_timeout_us = 1000000,
         .wait = 20000, .task = clients[3], .bootstrap = bootstrap,.now=board_time,.session_end=60000000};
