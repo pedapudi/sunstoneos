@@ -265,7 +265,8 @@ int os_application_prepare(void)
     grant.main_core=2;
 #endif
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
-    /* The ring producer and its IRQ consumer serialize on the same core. */
+    /* The current queue route is core 1, a Cortex-A55. */
+    if(m->cluster==SS_CLUSTER_A76)return 0;
     grant.main_core=1;
 #endif
     unsigned workers=m->workers;

@@ -328,6 +328,7 @@ int os_npu_start(void)
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
     for(unsigned i=0;i<OS_NPU_MODELS;++i)
         if(!npu_runtime_preload(&npu.runtime,i,i))return 0;
+    if(!os_npu_queue_prepare_edges(&npu.runtime))return 0;
 #endif
 #ifndef SUNSTONE_A733_OS_NPU_QUEUE
     TaskHandle_t clients[]={npu.client};

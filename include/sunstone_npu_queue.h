@@ -8,6 +8,12 @@ extern "C" {
 #define SS_NPU_QUEUE_MAX_DEPTH 64u
 #define SS_NPU_QUEUE_MAX_HANDLES 8u
 #define SS_NPU_QUEUE_MAX_TENSORS 32u
+/* Optional immutable image composition. Prepared-entry and tensor indices
+ * are zero based. Every declared output/input pair has identical shape and
+ * representation. Connected handles share one buffer lease. The OS copies and admits this table before scheduling. */
+struct ss_npu_queue_edge { uint32_t producer, output, consumer, input; };
+struct ss_npu_queue_edges { const struct ss_npu_queue_edge *edges; size_t count; };
+extern const struct ss_npu_queue_edges ss_npu_queue_edges;
 struct ss_npu_queue;
 typedef uint32_t ss_npu_handle;
 struct ss_npu_fence { struct ss_npu_queue *queue; uint64_t value; };
@@ -33,7 +39,7 @@ int ss_npu_queue_dirty(struct ss_npu_queue *, ss_npu_handle,
  * 1 accepted, 0 backpressure/invalid, -1 retained. No allocation or syscall
  * occurs while the consumer is active; idle-to-active publication rings one
  * SVC doorbell. A failed doorbell retains the published entry and buffers.
- * First submission transfers the handle's complete tensor allocation set to
+ * First submission transfers the connected handles' tensor allocation sets to
  * the device after cache handoff. Repeats use unchanged inputs. No CPU may
  * touch that allocation set until acquire succeeds for its last queued use. */
 int ss_npu_queue_submit(struct ss_npu_queue *, ss_npu_handle, struct ss_npu_fence after,
@@ -42,11 +48,15 @@ int ss_npu_queue_submit(struct ss_npu_queue *, ss_npu_handle, struct ss_npu_fenc
  * buffer ownership. A fence remains queryable after its receipt is released. */
 int ss_npu_queue_status(struct ss_npu_queue *, struct ss_npu_fence);
 /* Acquire the handle's outputs after all its published uses complete. The
- * fence identifies a use of that handle; a later pending repeat refuses CPU
+ * live receipt fence identifies a use of that handle; a later pending repeat refuses CPU
  * access. Completion is acquired before cache maintenance. 1 acquired,
  * 0 pending, -1 invalid/retained. Read outputs before submitting that handle
  * again. Input and output pointers are unavailable while device-owned. */
 int ss_npu_queue_acquire(struct ss_npu_queue *, struct ss_npu_fence);
+/* Acquire by resident handle after releasing or wrapping its receipt. This
+ * waits for the current last use of every handle connected by image edges.
+ * It never reads a recycled receipt. 1 acquired, 0 pending, -1 invalid/fault. */
+int ss_npu_queue_acquire_handle(struct ss_npu_queue *, ss_npu_handle);
 /* Release completed receipts in FIFO order. This returns ring capacity only;
  * it never gives the CPU access to buffers. A handle lease remains pinned
  * even when every receipt has been released. 1 released, 0 pending/invalid. */
@@ -54,7 +64,7 @@ int ss_npu_queue_release(struct ss_npu_queue *, struct ss_npu_fence);
 /* Optional final-fence wait: a persistent direct IRQ notification, no service
  * hop or tick polling. Independent session watchdog bounds lost interrupts. */
 int ss_npu_queue_wait(struct ss_npu_queue *, struct ss_npu_fence);
-/* Release every receipt and acquire every used handle first. Repeat until
+/* Release every receipt and acquire every used handle or connected group. Repeat until
  * 1 closed, 0 pending, -1 retained. A fault never authorizes resource release. */
 int ss_npu_queue_close(struct ss_npu_queue *);
 #ifdef __cplusplus

@@ -32,10 +32,12 @@ def main():
         r.check_returncode()
     run('build', [a.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                   '-fsanitize=address,undefined', '-Iinclude', 'checks/npu-app-queue.c', '-o', exe])
-    for label, args in [('normal', []), ('start-failure', ['1']), ('completion-failure', ['2'])]:
+    for label, args in [('normal', []), ('start-failure', ['1']), ('completion-failure', ['2']), ('linked', ['3']),
+                        ('undeclared-alias', ['4']), ('bad-edge-index', ['5']),
+                        ('duplicate-edge', ['6']), ('partial-alias', ['7'])]:
         run(label, [exe, *args])
     digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
-    record = dict(passed=True, physical_access=False, cases=3,
+    record = dict(passed=True, physical_access=False, cases=8,
                   hardware='modeled; no physical qualification',
                   inputs={p: digest(ROOT / p) for p in CHECK_INPUTS},
                   executable_sha256=digest(exe), compiler_sha256=digest(a.cc.resolve()))

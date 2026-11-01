@@ -6,6 +6,31 @@
 #include "aarch64_device_memory.h"
 #include "a733_mapping_check.h"
 #include <string.h>
+/* Applications may provide one constant edge table in their image. */
+__attribute__((weak)) const struct ss_npu_queue_edges ss_npu_queue_edges={0};
+#define MAX_EDGES (SS_NPU_QUEUE_MAX_HANDLES*SS_NPU_QUEUE_MAX_TENSORS)
+static struct ss_npu_queue_edge edges[MAX_EDGES];
+static size_t edge_count;
+static unsigned edges_prepared;
+int os_npu_queue_prepare_edges(struct npu_runtime *rt)
+{
+    if(!rt||edges_prepared||ss_npu_queue_edges.count>MAX_EDGES||
+       (ss_npu_queue_edges.count&&!ss_npu_queue_edges.edges))return 0;
+    edge_count=ss_npu_queue_edges.count;
+    if(edge_count)memcpy(edges,ss_npu_queue_edges.edges,edge_count*sizeof(*edges));
+    for(size_t i=0;i<edge_count;++i){
+        const struct ss_npu_queue_edge *e=&edges[i];
+        if(e->producer>=rt->slots||e->consumer>=rt->slots||e->producer==e->consumer||
+           e->output>=rt->slot[e->producer].layout.outputs||e->input>=rt->slot[e->consumer].layout.inputs)return 0;
+        for(size_t j=0;j<i;++j)
+            if(edges[j].consumer==e->consumer&&edges[j].input==e->input)return 0;
+    }
+    for(size_t i=0;i<edge_count;++i){
+        const struct ss_npu_queue_edge *e=&edges[i];
+        if(!npu_runtime_link_tensor(rt,e->producer,e->output,e->consumer,e->input))return 0;
+    }
+    edges_prepared=1;return 1;
+}
 static struct ss_npu_queue ring;
 static struct npu_runtime_queue direct;
 static struct npu_queue_command commands[SS_NPU_QUEUE_MAX_HANDLES];
@@ -14,6 +39,7 @@ static struct npu_queue_fence hardware_fence;
 static unsigned opened,closed,cache_stride;
 static uint64_t original_sctlr;
 static BaseType_t *irq_woken;
+static unsigned in_svc;
 static uintptr_t identity(void *unused)
 {(void)unused;return (uintptr_t)xTaskGetCurrentTaskHandle();}
 static int on_core(void *unused)
@@ -31,7 +57,9 @@ static void request(void *unused)
 }
 static void notify(void *unused,uintptr_t producer,int isr)
 {
-    (void)unused;if(!producer)return;
+    (void)unused;if(!producer||in_svc)return;
+    /* The SVC's producer is already running and observes failure on return.
+     * No task-level notification/critical section may unmask this exception. */
     if(isr)vTaskNotifyGiveFromISR((TaskHandle_t)producer,irq_woken);
     else xTaskNotifyGive((TaskHandle_t)producer);
 }
@@ -49,7 +77,8 @@ static int open_queue(void *unused,unsigned depth)
     (void)unused;(void)depth;
     if(opened||os_npu_stopping()||!os_npu_queue_begin())return -1;
     struct npu_runtime *rt=os_npu_queue_runtime();
-    if(!rt||rt->slots>SS_NPU_QUEUE_MAX_HANDLES||!(cache_stride=aarch64_device_cache_stride()))return -1;
+    if(!rt||!edges_prepared||rt->slots>SS_NPU_QUEUE_MAX_HANDLES||
+       (cache_stride=aarch64_device_cache_stride())!=64)return -1;
     for(unsigned i=0;i<rt->slots;++i){
         struct npu_runtime_slot *s=&rt->slot[i];
         struct ss_npu_tensor in[SS_NPU_QUEUE_MAX_TENSORS],out[SS_NPU_QUEUE_MAX_TENSORS];
@@ -61,6 +90,7 @@ static int open_queue(void *unused,unsigned depth)
             (struct ss_npu_cache_span){s->read.cpu,s->read.bytes},
             (struct ss_npu_cache_span){s->write.cpu,s->write.bytes}))return -1;
     }
+    if(!ss_npu_queue_service_edges(&ring,edges,edge_count))return -1;
     if(npu_runtime_queue_claim(&direct,rt)!=1)return -1;
     for(unsigned i=0;i<rt->slots;++i)
         if(!npu_queue_register(&direct.queue,&commands[i],&rt->commands[i+1]))return -1;
@@ -85,7 +115,7 @@ static int start(void *unused,unsigned handle,uint64_t sequence,uint64_t after,u
 {
     (void)unused;
     const struct os_session *s=os_session();
-    if(!opened||closed||!s||sequence>s->npu.jobs||handle>ring.handles||!handle)return -1;
+    if(!opened||closed||os_npu_stopping()||!s||sequence>s->npu.jobs||handle>ring.handles||!handle)return -1;
     struct npu_queue_fence dependency={0};
     if(after)dependency=(struct npu_queue_fence){&direct.queue,after};
     /* The handle lease keeps every DMA buffer pinned across record release. */
@@ -111,7 +141,9 @@ int ss_npu_queue_svc(void)
 {
     /* Entered with local IRQs masked by the real FreeRTOS SVC handler. */
     if(!opened||closed||!on_core(NULL)||identity(NULL)!=ring.producer)return -1;
-    return ss_npu_queue_service_progress(&ring,0,0);
+    in_svc=1;
+    int result=ss_npu_queue_service_progress(&ring,0,0);
+    in_svc=0;return result;
 }
 static int doorbell(void *unused)
 {

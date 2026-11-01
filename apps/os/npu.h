@@ -47,6 +47,7 @@ struct npu_runtime *os_npu_queue_runtime(void);
 int os_npu_queue_begin(void);
 void os_npu_queue_end(void);
 int os_npu_queue_sdk_bind(void);
+int os_npu_queue_prepare_edges(struct npu_runtime *);
 int os_npu_queue_sdk_step(void);
 int os_npu_queue_sdk_closed(void);
 void os_npu_queue_sdk_fail(void);

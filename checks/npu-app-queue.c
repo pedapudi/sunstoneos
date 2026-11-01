@@ -11,7 +11,7 @@ static void idle_race(struct ss_npu_queue *);
 static struct ss_npu_queue q;
 static _Alignas(64) unsigned char input[2][64],output[2][64];
 static unsigned starts,finishes,bells,cache_calls,requests,notifications,waits;
-static unsigned running,race,fault,inside,closed;
+static unsigned running,race,fault,inside,closed,linked,admission_failure;
 static struct npu_queue native_queue;
 static struct npu_queue_command native_command[2];
 static struct npu_queue_job native_job;
@@ -25,10 +25,22 @@ static int open_backend(void *c,unsigned depth)
 {
     (void)c;assert(depth==3);
     for(unsigned i=0;i<2;++i){
-        struct ss_npu_tensor a={input[i],64},b={output[i],64};
+        struct ss_npu_tensor a={linked&&i==1?output[0]:input[i],admission_failure==7&&i==1?32:64},b={output[i],64};
         assert(ss_npu_queue_service_handle(&q,&a,1,&b,1,
             (struct ss_npu_cache_span){(uintptr_t)input[i],64},
             (struct ss_npu_cache_span){(uintptr_t)output[i],64}));
+    }
+    if(linked){
+        const struct ss_npu_queue_edge edges[2]={{0,0,1,0},{0,0,1,0}};
+        if(admission_failure){
+            if(admission_failure==4)assert(!ss_npu_queue_service_edges(&q,NULL,0));
+            else if(admission_failure==5){
+                const struct ss_npu_queue_edge bad={0,0,1,1};
+                assert(!ss_npu_queue_service_edges(&q,&bad,1));
+            } else assert(!ss_npu_queue_service_edges(&q,edges,admission_failure==6?2:1));
+            return -1;
+        }
+        assert(ss_npu_queue_service_edges(&q,edges,1));
     }
     return 1;
 }
@@ -67,7 +79,7 @@ static void notify(void *c,uintptr_t t,int isr)
 static void complete(void)
 {
     assert(running);unsigned h=running-1;
-    memcpy(output[h],input[h],64);running=0;inside=1;
+    memcpy(output[h],linked&&h==1?output[0]:input[h],64);running=0;inside=1;
     npu_queue_irq(&native_queue);
     (void)ss_npu_queue_service_progress(&q,1,1);inside=0;
 }
@@ -77,8 +89,44 @@ static void idle_race(struct ss_npu_queue *unused)
     (void)unused;
     if(race){race=0;assert(ss_npu_queue_submit(&q,1,(struct ss_npu_fence){0},100,&injected)==1);}
 }
+static void linked_case(void)
+{
+    ss_npu_handle a,b;struct ss_npu_tensor t;
+    assert(ss_npu_queue_register(&q,0,&a)&&ss_npu_queue_register(&q,1,&b));
+    assert(ss_npu_queue_tensor(&q,b,SS_NPU_INPUT,0,&t)&&t.data==output[0]);
+    memset(input[0],71,64);
+    struct ss_npu_fence f1,f2,f3,f4;
+    assert(ss_npu_queue_submit(&q,a,(struct ss_npu_fence){0},100,&f1)==1);
+    assert(cache_calls==3); /* Two outputs and the external input, each once. */
+    assert(ss_npu_queue_submit(&q,b,f1,100,&f2)==1&&starts==1&&bells==1&&cache_calls==3);
+    assert(!ss_npu_queue_tensor(&q,b,SS_NPU_OUTPUT,0,&t));
+    assert(!ss_npu_queue_dirty(&q,a,SS_NPU_INPUT,0,0,1));
+    assert(!ss_npu_queue_dirty(&q,b,SS_NPU_INPUT,0,0,1));
+    complete();
+    assert(starts==2&&cache_calls==3&&ss_npu_queue_status(&q,f1)==1);
+    assert(ss_npu_queue_acquire(&q,f1)==0&&ss_npu_queue_acquire_handle(&q,a)==0);
+    complete();
+    assert(ss_npu_queue_acquire(&q,f1)==1&&cache_calls==5&&output[1][0]==71);
+    assert(ss_npu_queue_acquire_handle(&q,b)==1&&cache_calls==5);
+    assert(ss_npu_queue_release(&q,f1)&&ss_npu_queue_release(&q,f2));
+    /* Writing the aliased input marks the owning producer output. */
+    assert(ss_npu_queue_tensor(&q,b,SS_NPU_INPUT,0,&t));((unsigned char *)t.data)[0]=33;
+    assert(ss_npu_queue_dirty(&q,b,SS_NPU_INPUT,0,0,1));
+    assert(ss_npu_queue_submit(&q,b,f2,100,&f3)==1&&cache_calls==6);
+    complete();assert(output[1][0]==33&&ss_npu_queue_release(&q,f3));
+    /* Reuse a wrapped receipt for another handle without returning the lease. */
+    assert(ss_npu_queue_submit(&q,a,f3,100,&f4)==1&&cache_calls==6);
+    complete();assert(ss_npu_queue_release(&q,f4));
+    assert(ss_npu_queue_acquire(&q,f1)==-1);
+    assert(ss_npu_queue_acquire_handle(&q,b)==1&&cache_calls==8);
+    assert(ss_npu_queue_tensor(&q,a,SS_NPU_OUTPUT,0,&t));
+    assert(ss_npu_queue_close(&q)==0&&ss_npu_queue_service_step(&q)==1&&closed);
+    puts("PASS declared alias, connected lease, dependency refill, dirty ownership and released receipt recovery");
+}
 int main(int argc,char **argv)
 {
+    if(argc>1&&atoi(argv[1])>=3)linked=1;
+    if(argc>1&&atoi(argv[1])>=4)admission_failure=(unsigned)atoi(argv[1]);
     const struct ss_npu_queue_backend b={identity,on_core,request,open_backend,close_backend,
         start,finish,cache,doorbell,notify,wait};
     const struct npu_queue_ops ops={validate_native,start_native,complete_native,notify_native};
@@ -90,8 +138,14 @@ int main(int argc,char **argv)
     assert(ss_npu_queue_service_bind(&q,&b,NULL));
     struct ss_npu_queue *pub=NULL;
     assert(ss_npu_queue_open(3,&pub)==0&&requests==1);
+    if(admission_failure){
+        assert(ss_npu_queue_service_step(&q)==-1&&!starts&&!cache_calls);
+        assert(ss_npu_queue_open(3,&pub)==-1&&ss_npu_queue_close(&q)==-1);
+        puts("PASS undeclared or malformed tensor alias refused before device/cache work");return 0;
+    }
     assert(ss_npu_queue_service_step(&q)==1&&notifications==1);
     assert(ss_npu_queue_open(3,&pub)==1&&pub==&q);
+    if(linked){linked_case();return 0;}
     ss_npu_handle a=0,bh=0;assert(ss_npu_queue_register(&q,0,&a)&&a==1);
     assert(ss_npu_queue_register(&q,1,&bh)&&bh==2);
     assert(!ss_npu_queue_register(&q,2,&bh));
@@ -101,7 +155,7 @@ int main(int argc,char **argv)
     if(argc>1)fault=(unsigned)atoi(argv[1]);
     struct ss_npu_fence f1,f2,f3,unchanged={NULL,19};
     int first=ss_npu_queue_submit(&q,a,(struct ss_npu_fence){0},100,&f1);
-    if(fault==1){assert(first==-1&&f1.value==1&&q.handle[0].device_owned);goto retained;}
+    if(fault==1){assert(first==-1&&f1.value==1&&q.group[q.handle[0].group].device_owned);goto retained;}
     assert(first==1&&bells==1&&starts==1&&cache_calls==2);
     assert(!ss_npu_queue_submit(&q,a,(struct ss_npu_fence){&q,2},100,&unchanged)&&unchanged.value==19);
     assert(ss_npu_queue_submit(&q,bh,f1,100,&f2)==1);
@@ -112,7 +166,7 @@ int main(int argc,char **argv)
     assert(ss_npu_queue_close(&q)==0);
     assert(!ss_npu_queue_release(&q,f2));
     complete();
-    if(fault==2){assert(q.handle[0].device_owned);goto retained;}
+    if(fault==2){assert(q.group[q.handle[0].group].device_owned);goto retained;}
     assert(ss_npu_queue_status(&q,f1)==1&&ss_npu_queue_acquire(&q,f1)==0);
     assert(ss_npu_queue_release(&q,f1)==1);
     struct ss_npu_fence f4;
@@ -135,6 +189,14 @@ int main(int argc,char **argv)
     complete();assert(ss_npu_queue_acquire(&q,injected)==1&&output[0][0]==53);
     assert(ss_npu_queue_release(&q,f5)&&ss_npu_queue_release(&q,injected));
     task=2;assert(ss_npu_queue_status(&q,f5)==-1);task=1;
+    struct ss_npu_fence f7,f8;
+    assert(ss_npu_queue_submit(&q,a,injected,100,&f7)==1);
+    complete();assert(ss_npu_queue_release(&q,f7));
+    assert(ss_npu_queue_submit(&q,bh,f7,100,&f8)==1);
+    complete();assert(ss_npu_queue_release(&q,f8));
+    /* Recycled receipts cannot strand independent handle leases either. */
+    assert(ss_npu_queue_acquire(&q,f1)==-1);
+    assert(ss_npu_queue_acquire_handle(&q,a)==1&&ss_npu_queue_acquire_handle(&q,bh)==1);
     q.job_limit=atomic_load(&q.published);
     assert(!ss_npu_queue_submit(&q,a,injected,100,&unchanged)&&unchanged.value==19);
     assert(ss_npu_queue_close(&q)==0&&requests==2);
