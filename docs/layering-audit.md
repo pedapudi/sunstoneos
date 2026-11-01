@@ -166,8 +166,8 @@ application owns its linear kernel, tensor admission, placement and CPU
 fallback. `apps/queue-add` uses the queue without an application-specific
 change to the driver.
 
-Host queue, arithmetic and native instruction checks pass. Physical queue
-execution and the independent feature review remain open. The small generic
+Host queue, arithmetic and native instruction checks and independent source
+review pass. Physical queue execution remains unqualified. The small generic
 qualification service remains separate, as the
 [queue design](designs/gpu-compute-queue.md) specifies. Startup initialization comes from immutable application registration records
 that name manifest regions and prefix lengths. Other output regions receive

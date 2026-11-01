@@ -26,6 +26,14 @@ types={'board_application','a733_board_session','pvr_gpu_service','pvr_compute_q
        'pvr_gpu_service_request','ss_result'}
 image=Image(a.image,types)
 identity=hashlib.sha256(a.image.read_bytes()).hexdigest()
+report_version,report_value=1,960000
+if 'os_gpu_bisect_configuration' in image.symbols:
+    marker=image.address('os_gpu_bisect_configuration')
+    raw=next(data[marker-start:marker-start+12] for start,data in image.parts
+             if start<=marker and marker+12<=start+len(data))
+    version,stage,limit=struct.unpack('<3I',raw)
+    assert version==1 and 2<=stage<=4, 'Opened diagnostic fixtures require stage 2, 3 or 4'
+    report_version,report_value=3,(stage<<32)|limit
 enums={}
 with a.image.open('rb') as f:
     dwarf=ELFFile(f).get_dwarf_info()
@@ -135,7 +143,7 @@ for case in cases:
     assert bool(invoke('os_gpu_return_ready'))==success
     if success:
         raw=bytes(u.mem_read(image.address('os_gpu_return_report'),64))
-        assert struct.unpack('<8Q',raw)==(0x3152475033333741,1,64,epoch,generation,0 if zero_jobs else 7,63,960000)
+        assert struct.unpack('<8Q',raw)==(0x3152475033333741,report_version,64,epoch,generation,0 if zero_jobs else 7,63,report_value)
         (a.output/(case+'-gpu-report.bin')).write_bytes(raw)
         text=b'MODEL ONLY GPU application output\n';u.mem_write(0x80001000,text)
         state['time']=57000000 if case=='begin-expired' else 56000000

@@ -61,7 +61,7 @@ interrupt delivery, performance or recovery.
   GPU session are removed.
 - **Physical migration step:** the coordinator receives the requests below.
   Board operations were prohibited, so legacy removal follows host evidence.
-  Physical qualification and the independent feature review remain open.
+  Physical qualification remains open; independent integration review passes.
 - **Build selection:** the generic option lands with runtime ownership in
   migration commit 3, so independent applications can select the service.
   Migration commit 7 removes the legacy sources and worker configuration.
@@ -71,46 +71,38 @@ interrupt delivery, performance or recovery.
 
 ## Coordinator board requests
 
-Both ports remain quarantined. These commands require the coordinator's
-recovery procedure, the generic launcher integration and matching prepared
-session templates. A captured descriptor alone does not authorize a launch.
-The GPU power, clock, voltage and firmware-boot sequence is unchanged from the
-base. Only context construction and job publication change.
+The combined implementation includes the reference startup fixes at
+`fed5813f`: executed-command health checks, vendor secure writes, initial timer
+correlation, 32-bit register transactions and MMU-cache completion before READY.
+Retained reopen repeats the same startup sequence and flush. The queue changes
+neither the vendor operating point nor the order of power and clock operations.
 
-The eight-job vector image uses `QUEUE_ADD_JOBS=8`; the default example uses
-one job. Configure it with the cached `cfg.sh`, `MIMUS_DIR=`,
-`SUNSTONE_APPLICATION=queue-add`, `SUNSTONE_A733_OS=ON`,
-`SUNSTONE_A733_OS_GPU=ON`, `SUNSTONE_A733_OS_CPU_RETURN=ON`,
-`SUNSTONE_A733_OS_CPU_CLOCK=ON`, `A733_A76_ADMITTED=ON` and
-`CMAKE_C_FLAGS=-DQUEUE_ADD_JOBS=8`. Build target
-`sunstone-a733-os-queue-add` in the directory below.
+Four frozen image packages live under
+`~/.cache/sunstoneos/build/gpu-integrate-1031/images/`. Each package has a README
+with its image hash, runner command, session template, inputs, expected result,
+breadcrumbs and failure signatures. Run them in this order:
 
-```sh
-os=/home/sunil/git/sunstoneos-worktrees/gpu-queue-1031
-b=$HOME/.cache/sunstoneos/build/gpu-queue-1031
-p=$HOME/.cache/sunstoneos/venv/bin/python
-"$p" "$os/tools/dev-run.py" gpu-return --port 3-1 \
-  --image "$b/queue-eight-return/sunstone-a733-os-queue-add.elf" \
-  --host-tree "$os" --template "$b/board-templates/queue-eight" \
-  --evidence "$b/board-runs/queue-eight"
-"$p" "$os/tools/dev-run.py" gpu-return --port 3-1 \
-  --image "$b/gpu-return2/sunstone-a733-os.elf" \
-  --host-tree "$os" --template "$b/board-templates/exact-sum" \
-  --evidence "$b/board-runs/exact-sum"
-```
+1. Firmware start and stop without a queued job; CPU recognition retains the
+   reference transcript. Its diagnostic receipt claims no GPU qualification.
+2. One vector-add job with 65 checked outputs and checksum 8,840.
+3. Eight vector-add jobs with rotated inputs, eight completion times and the
+   same checksum. Every job checks every output before another submission.
+4. Recorded recognition with the application's GPU linear layers. Every GPU
+   sum and tag must agree with the CPU before the engine consumes the output.
 
-The vector result must contain eight jobs, 65 elements, checksum 8,840,
-sequence 8 and eight completion times. Every job rotates its inputs and checks
-all 65 outputs. Require acknowledged GPU shutdown, suspended worker, normal ROM
-return and restoration of every saved RAM span. Compare kick-to-timeline
-measurements with the recorded 80–83 microsecond steady-state range and
-113 microsecond first-job observation. A changed result needs investigation;
-host timing does not predict physical interrupt latency.
+The coordinator must establish current port identity, recovery, session authority
+and runner readiness. Native return requires `RETURN_ROM`, watchdog mode 0,
+acknowledged GPU shutdown and a suspended GPU worker. Host completion also
+requires restoration of every saved RAM span and the admitted rail procedure.
+The reference firmware diagnostic's native return does not establish those host
+steps: its followup failed on a missing review file. The CPU clock owner's early
+REQUEST/FOLLOW return defect remains a separate integration dependency.
 
-The exact-sum run must produce the reference transcript and checksums, validate
-every GPU sum and tag, park the GPU and return normally. Submit-to-kick and
-timeline-to-record counter instrumentation remains a coordinator measurement
-request; the application record exposes kick-to-completion time only.
+Physical queue interrupts, timing and recovery remain unqualified. Measure
+submit-to-kick and timeline-to-record latency on the board; host timing cannot
+establish interrupt latency. The application record exposes kick-to-completion
+time only. Independent source review and passing host checks cover the combined
+software path.
 
 The GPU compute queue is the OS service through which an application runs a
 compute program on the A733 GPU. The application creates one context with

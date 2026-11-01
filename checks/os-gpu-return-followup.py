@@ -73,7 +73,7 @@ def main():
         run('returned-'+path.stem,nominal)
     raw=returned[0].read_bytes()
     for name,index,value in (
-        ('wrong-magic',0,0),('wrong-version',1,3),('wrong-size',2,63),
+        ('wrong-magic',0,0),('wrong-version',1,4),('wrong-size',2,63),
         ('wrong-epoch',3,epoch+1),('wrong-generation',4,generation+1),
         ('maximum-sequence',5,0xffffffff),
         ('oversize-sequence',5,0x100000000),('wrong-supply',7,900000)):

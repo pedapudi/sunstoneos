@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/pedapudi/mimus.git",
-  "revision": "6ea26a30f97c80dbccc7f728189eb81c80338553",
+  "revision": "e21adf7cc2b7b3a0c173769fcddd104bb892b007",
   "base_revision": "18c7c81968f56c8c985af0ec26448184cf6a17ec",
   "local_worktree": "/home/sunil/git/mimus-worktrees/gpu-integrate-1031",
   "branch": "port/sunstoneos-gpu-integrate",

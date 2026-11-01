@@ -28,7 +28,18 @@ with a.image.open('rb') as f:
     im.layouts['gpu_private']={d.attributes['DW_AT_name'].value.decode():d.attributes['DW_AT_data_member_location'].value for d in die.get_DIE_from_attribute('DW_AT_type').iter_children() if d.tag=='DW_TAG_member'}
 spec=importlib.util.spec_from_file_location('gpu_return',ROOT/'apps/os/gpu-return.py');decoder=importlib.util.module_from_spec(spec);spec.loader.exec_module(decoder)
 spec=importlib.util.spec_from_file_location('thermal_capture',ROOT/'apps/os/cpu-return-thermal.py');thermal_capture=importlib.util.module_from_spec(spec);spec.loader.exec_module(thermal_capture)
-thermal_layout=thermal_capture.geometry(a.image)
+thermal_producers=[name in im.symbols and any(im.symbols[name])
+                   for name in ('os_thermal_record_begin','os_thermal_record_end')]
+assert thermal_producers in ([False,False],[True,True]), 'Incomplete thermal window producer pair'
+thermal_layout=thermal_capture.geometry(a.image) if all(thermal_producers) else None
+diagnostic=None
+if 'os_gpu_bisect_configuration' in im.symbols:
+ address=im.address('os_gpu_bisect_configuration')
+ raw=next(data[address-start:address-start+12] for start,data in im.parts
+          if start<=address and address+12<=start+len(data))
+ diagnostic=struct.unpack('<3I',raw)
+ assert diagnostic[0]==1 and 1<=diagnostic[1]<=4
+
 def require(ok,why):
  if not ok:raise ValueError(why)
 def field(base,typ,n):return base+im.layouts[typ][n]
@@ -69,7 +80,7 @@ for name,fail_step,mutation in cases:
   slot=field(previous,'a733_fault_report','slot');sf(slot,'a733_fault_record','info',int(re.search(r'#define A733_FAULT_KIND_EXIT (\d+)',(ROOT/'include/a733_fault.h').read_text())[1]),8)
   sf(slot,'a733_fault_record','status',5,8);sf(slot,'a733_fault_record','detail',0x4750554c,8)
  state={'time_us':1000000,'scheduler':1,'suspended':False,'worker_ready':False,'worker_state':None,'setup':[],'getter':0,'queue_reads':0}
- hooks={im.address(n):n for n in [*steps.values(),'xTaskGetSchedulerState','os_session_admitted','xTaskGetCurrentTaskHandle','a733_smp_counter','vTaskSuspend','eTaskGetState','uxQueueMessagesWaiting','os_application_activity_generation']}
+ hooks={im.address(n):n for n in [*steps.values(),'xTaskGetSchedulerState','os_session_admitted','xTaskGetCurrentTaskHandle','a733_smp_counter','vTaskSuspend','eTaskGetState','uxQueueMessagesWaiting']+(['os_application_activity_generation'] if thermal_layout is not None else [])}
  def ret(value=0):u.reg_write(UC_ARM64_REG_X0,value);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
  def hook(cpu,address,size,unused):
   n=hooks.get(address)
@@ -157,11 +168,19 @@ for name,fail_step,mutation in cases:
  assert bool(result) is (mutation is None),(name,result,state)
  if result:
   raw=bytes(u.mem_read(im.address('os_gpu_return_report'),64));decoded=decoder.decode(raw,epoch,generation,require,allow_untouched=True)
-  expected={'jobs':0,'gpu_untouched':True,'qualification_passed':False}
-  expected.update({'device_never_opened':True} if fail_step==0 else {'constructor_refusal':fail_step,'constructor_stage':decoder.CONSTRUCTOR_STAGES[fail_step]})
+  diagnostic_cold=fail_step==0 and diagnostic is not None and diagnostic[1]==1
+  if diagnostic_cold:
+   stage,limit=diagnostic[1:]
+   assert struct.unpack('<8Q',raw)==(decoder.MAGIC,3,64,epoch,generation,0,0,(stage<<32)|limit)
+   expected={'jobs':0,'gpu_bisect':{'stage':decoder.BISECT_STAGES[stage],'limit':limit},
+             'gpu_off':False,'gpu_never_powered':True,'worker_parked':False,'qualification_passed':False}
+  else:
+   expected={'jobs':0,'gpu_untouched':True,'qualification_passed':False}
+   expected.update({'device_never_opened':True} if fail_step==0 else {'constructor_refusal':fail_step,'constructor_stage':decoder.CONSTRUCTOR_STAGES[fail_step]})
   assert decoded==expected
   assert get(field(gpu,'gpu_private','constructor_refusal'))==fail_step
-  refused(lambda:decoder.decode(raw,epoch,generation,require),'not admitted')
+  refused(lambda:decoder.decode(raw,epoch,generation,require),
+          'GPU bisect retirement' if diagnostic_cold else 'not admitted')
   assert call('os_gpu_return_ready')==1 and call('os_gpu_queue_return_untouched')==0
   (a.output/(name+'-report.bin')).write_bytes(raw)
   text=b'MODEL ONLY CPU return with GPU never opened\n';u.mem_write(0x80001000,text)
@@ -172,21 +191,22 @@ for name,fail_step,mutation in cases:
   call('os_cpu_return_begin',0x80001000,len(text))
   assert call('os_cpu_return_requested')==1
   (a.output/(name+'-result.bin')).write_bytes(u.mem_read(result_address,56))
-  policy=field(im.address('thermal','return-thermal.c'),'os_thermal_service','policy')
-  sf(policy,'a733_thermal_policy','seen',31,1);sf(policy,'a733_thermal_policy','cpu_critical_millicelsius',70000)
-  for i in range(5):
-   put(field(policy,'a733_thermal_policy','millicelsius')+4*i,40000+1000*i)
-   put(field(policy,'a733_thermal_policy','seen_us')+8*i,state['time_us'],8)
-  call('record_reading',state['time_us'],0);call('os_thermal_record_begin')
-  for n in range(1,4):
-   state['time_us']+=100000;sf(policy,'a733_thermal_policy','sequence',n)
-   for i in range(5):put(field(policy,'a733_thermal_policy','seen_us')+8*i,state['time_us'],8)
-   call('record_reading',state['time_us'],0)
-  call('os_thermal_record_end',1)
-  copied={label:bytes(u.mem_read(address,size)) for label,address,size in thermal_capture.captures(thermal_layout)}
-  assert thermal_capture.decode(thermal_layout,copied,epoch,generation)['classification']=='complete'
-  for label,data in copied.items():(a.output/(name+'-'+label+'.bin')).write_bytes(data)
+  if thermal_layout is not None:
+   policy=field(im.address('thermal','return-thermal.c'),'os_thermal_service','policy')
+   sf(policy,'a733_thermal_policy','seen',31,1);sf(policy,'a733_thermal_policy','cpu_critical_millicelsius',70000)
+   for i in range(5):
+    put(field(policy,'a733_thermal_policy','millicelsius')+4*i,40000+1000*i)
+    put(field(policy,'a733_thermal_policy','seen_us')+8*i,state['time_us'],8)
+   call('record_reading',state['time_us'],0);call('os_thermal_record_begin')
+   for n in range(1,4):
+    state['time_us']+=100000;sf(policy,'a733_thermal_policy','sequence',n)
+    for i in range(5):put(field(policy,'a733_thermal_policy','seen_us')+8*i,state['time_us'],8)
+    call('record_reading',state['time_us'],0)
+   call('os_thermal_record_end',1)
+   copied={label:bytes(u.mem_read(address,size)) for label,address,size in thermal_capture.captures(thermal_layout)}
+   assert thermal_capture.decode(thermal_layout,copied,epoch,generation)['classification']=='complete'
+   for label,data in copied.items():(a.output/(name+'-'+label+'.bin')).write_bytes(data)
  rows.append({'name':name,'passed':True,'constructor_apis':state['setup'],'getter_calls':state['getter']})
- save(a.output/'results.json',{'passed':True,'physical_access':False,'image_sha256':hashlib.sha256(a.image.read_bytes()).hexdigest(),'scope':__doc__,'cases':rows})
-save(a.output/'results.json',{'passed':True,'physical_access':False,'image_sha256':hashlib.sha256(a.image.read_bytes()).hexdigest(),'scope':__doc__,'cases':rows})
+ save(a.output/'results.json',{'passed':True,'physical_access':False,'image_sha256':hashlib.sha256(a.image.read_bytes()).hexdigest(),'scope':__doc__,'thermal_window_exercised':thermal_layout is not None,'cases':rows})
+save(a.output/'results.json',{'passed':True,'physical_access':False,'image_sha256':hashlib.sha256(a.image.read_bytes()).hexdigest(),'scope':__doc__,'thermal_window_exercised':thermal_layout is not None,'cases':rows})
 print('PASS untouched GPU constructor/return:',len(rows),'cases')

@@ -8,8 +8,8 @@ qualification. The [hardware matrix](hardware.md) holds the full inventory;
 
 ## Board state and recovery
 
-This page describes the code merged through `dc3d1ccd` and recorded board
-results from 2026-10-31. Evidence paths are relative to
+This page describes the combined application kit and recorded board results
+from 2026-10-31. Evidence paths are relative to
 `~/.cache/sunstoneos/evidence/`. Saved USB identities do not establish live
 access. Only the coordinator checks identity, permissions, locks and failure
 records under [AGENTS.md](../AGENTS.md#hardware-access). Preserve both microSD
@@ -227,8 +227,8 @@ reuse. No board run is requested for this documentation change.
 - `work/quarantine-scope-1031`: preserve a normally returned instance after a host-side error; fix prepared, unmerged.
 - `work/early-return-1031`: permit application completion before CPU clock setup finishes; fix prepared, unmerged.
 - `work/gpu-integrate-1031`: combines the reference startup fixes and generic
-  compute queue on the current application kit; prepared for host validation
-  and coordinator-run physical qualification.
+  compute queue on the current application kit. Host checks and independent
+  review pass; four frozen image packages await coordinator-run qualification.
 - `work/gpu-queue-1031`, with mimus `port/sunstoneos-gpu-queue`: supply a generic GPU compute queue and application port; unmerged.
 
 ## Review and validation

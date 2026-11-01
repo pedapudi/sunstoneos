@@ -173,7 +173,9 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm):
     kit = Path(__file__).resolve().parents[1] / 'include'
     header = (kit / 'sunstone_app.h').read_text() + (kit / 'gpu_queue.h').read_text()
     public_calls = set(re.findall(r'\b((?:ss_|gpu_queue_)[a-z0-9_]+)\s*\([^;{}]*\)\s*;', header))
-    allowed |= linked & public_calls
+    # Object inventories include references in discarded sections. A public
+    # call remains valid when no live caller keeps its implementation linked.
+    allowed |= public_calls
     allowed |= {name for name in linked if re.match(r'^(?:[xv]|ux|ul|uc|pv|pc)[A-Z]', name)}
     # FreeRTOS configASSERT is a board-supplied kernel callback.
     allowed.update(('vApplicationAssert', 'platform_panic'))
