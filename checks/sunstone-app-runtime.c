@@ -22,6 +22,7 @@ const struct ss_input_fact *os_session_inputs(unsigned *n){*n=0;return NULL;}
 uint64_t a733_smp_counter(void){return 24000000;}
 void board_service_progress(unsigned n){(void)n;}
 void board_fail(void *p){(void)p;__builtin_trap();}
+void board_fail_at(uint32_t site,uint32_t value,const void *caller){(void)site;(void)value;(void)caller;board_fail(NULL);}
 void vTaskSuspend(TaskHandle_t t){(void)t;__builtin_trap();}
 void vTaskDelay(TickType_t ticks){(void)ticks;__builtin_trap();}
 void runtime_smp_init(void){}

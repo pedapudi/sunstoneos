@@ -23,8 +23,10 @@ from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True)
 p.add_argument('--restore-build',type=Path);p.add_argument('--restore-record',type=Path)
+p.add_argument('--survey-build',type=Path,help='diagnostic restore build (prepare-ddr.py --survey) for the survey cases')
 a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=False)
 if bool(a.restore_build)!=bool(a.restore_record):p.error('restore build and record must be supplied together')
+if a.survey_build and not a.restore_build:p.error('--survey-build needs --restore-build and --restore-record')
 spec=importlib.util.spec_from_file_location('ddr_fixture_base',ROOT/'tools/check-a733-smp.py');base=importlib.util.module_from_spec(spec);spec.loader.exec_module(base)
 real_spec=importlib.util.spec_from_file_location;real_stop=base.stop_after_failure
 spec=real_spec('training_fixture',ROOT/'tools/training-record.py');training=importlib.util.module_from_spec(spec);spec.loader.exec_module(training)
@@ -51,6 +53,7 @@ ROM_CLOCKS={0x08871000:0xf8802600,0x0887101c:0x03010000,0x08872000:0xf8802700,0x
 # Restore cases: the mailbox error, the expected exit, and whether the run
 # ends in a WDT0 reset (deliberate after a returned failure, or after a hang).
 RESTORE={'restore-nominal':(0,0,False),'restore-clock-not-rom':(0,3,True),'restore-header-crc':(2,3,True),'restore-readback':(7,3,True),
+         'restore-final-readback':(15,3,True),'restore-before-final-readback':(None,1,False),
          'restore-memory':(9,3,True),'restore-ram-pages':(0,3,True),'restore-hang':(None,3,True),
          'restore-chip-mismatch':(None,3,False),'restore-no-return':(None,1,False),
          'restore-unexplained-reset':(None,1,False),'restore-fallback-fails':(7,1,True),
@@ -59,6 +62,12 @@ RESTORE={'restore-nominal':(0,0,False),'restore-clock-not-rom':(0,3,True),'resto
          'restore-helper-upload':(None,1,False),'restore-record-missing':(None,1,False),
          'restore-fallback-missing':(None,1,False),'restore-no-session':(None,1,False),
          'restore-fallback-before-clock-return':(None,1,False)}
+# Survey cases: a decoded survey that agrees with the mailbox, one whose hook
+# passes held while the readback after init_DRAM failed, a helper that left
+# the cleared survey untouched, and a clear that does not read back.
+SURVEY_CASES={'restore-survey':(7,3,True),'restore-survey-final-readback':(15,3,True),
+              'restore-survey-missing':(7,3,True),'restore-survey-clear-mismatch':(None,1,False)}
+if a.survey_build:RESTORE.update(SURVEY_CASES)
 if a.restore_build:
     cases+=list(RESTORE)
     restore_manifest=json.loads((a.restore_build/'manifest.json').read_text())
@@ -68,11 +77,43 @@ if a.restore_build:
     old_fallback=a.evidence/'build-fallback-old';old_fallback.mkdir()
     for name in files:(old_fallback/name).write_bytes((build/name).read_bytes())
     (old_fallback/'manifest.json').write_text(json.dumps({'files':files,'boot0_sha256':restore_manifest['boot0_sha256']}))
+    # A restore build from before the clocked final readback: no final_readback error.
+    old_restore=a.evidence/'build-restore-old';old_restore.mkdir()
+    for name in restore_manifest['files']:(old_restore/name).write_bytes((a.restore_build/name).read_bytes())
+    old_manifest=json.loads(json.dumps(restore_manifest));del old_manifest['restore']['errors']['final_readback']
+    (old_restore/'manifest.json').write_text(json.dumps(old_manifest))
     chip=list(struct.unpack_from('<4I',a.restore_record.read_bytes(),32))
     sample=restore_manifest['restore']['sample_read_bytes']
     phy_count=restore_manifest['restore']['phy_registers']
     parsed=training.parse(a.restore_record.read_bytes())
     profile=[run['base']+2*n for run in parsed['runs'][1:] for n in range(len(run['values']))]
+    if a.survey_build:
+        spec=real_spec('ddr_survey_fixture',ROOT/'tools/ddr-survey.py');survey_tool=importlib.util.module_from_spec(spec);spec.loader.exec_module(survey_tool)
+        survey_manifest=json.loads((a.survey_build/'manifest.json').read_text())['restore']['survey']
+        values=[v for run in parsed['runs'][1:] for v in run['values']];mask_of={m['address']:m['mask'] for m in parsed['masks']}
+        # The first entry with a nonzero expected value reads 0 and index 5
+        # reads 0x42 (two mismatches, as the mailbox reports), index 3 is
+        # stored later (as a wide-memory halfword), index 4 already held its
+        # value; every other entry holds.
+        zero=next(n for n,(address,value) in enumerate(zip(profile,values)) if n>5 and value&mask_of[address])
+        # The final-readback survey: every hook entry holds, and header words
+        # 8-10 show the readback after init_DRAM found the mux 1 and the clock 0.
+        def survey_bytes(final):
+            header=struct.pack('<4I',survey_tool.MAGIC,len(profile),1,3)+bytes(16)+(struct.pack('<3I',1,1,0) if final else bytes(12))+bytes(20)
+            data=bytearray(header)
+            for n,(address,value) in enumerate(zip(profile,values)):
+                m=mask_of[address];want=value&m;before=(value^m)&0xffff
+                if before==0x42:before^=0x100
+                after=end=(before&~m)|want
+                if not final:
+                    if n==zero:after=end=0
+                    if n==5:after=end=0x42
+                    if n==3:after=before
+                    if n==4:before=after
+                data+=struct.pack('<4H',before,after,end,m)
+            assert len(data)==survey_manifest['bytes']
+            return bytes(data)
+        fake_survey,final_survey=survey_bytes(False),survey_bytes(True)
 OLD,NEW=Path('/fixture-usb/003/072'),Path('/fixture-usb/003/073')
 IDENTITY={OLD:[1,2,3,4,5],NEW:[1,2,3,4,6]}
 class Port:
@@ -121,13 +162,14 @@ for case in cases:
             return struct.pack('<7I',0x53524444,5,0 if case=='init-only' or failed else 4096,7 if failed else 0,0,0,0)+bytes(100)
         error=RESTORE[case][0]
         assert error is not None,(case,'this case must not collect a restore result')
-        data=struct.pack('<7I',0x53524444,5,12288 if error in (0,9) else 0,0,0,0,0)
-        writes=phy_count if error in (0,7,9) else 0
+        # init_DRAM returned before the quick check and the final readback.
+        data=struct.pack('<7I',0x53524444,5,12288 if error in (0,9,15) else 0,0,0,0,0)
+        writes=phy_count if error in (0,7,9,15) else 0
         # A readback failure names its first mismatch in words 11-13 and
         # counts two in word 27; word 28 holds the second, profile index 5.
-        first=(profile[0],0x1234,0) if error==7 else (0,0,0)
-        data+=struct.pack('<7I',error,writes,int(error in (0,7,9)),sample if not error else 4 if error==9 else 0,*first)
-        survey=struct.pack('<5I',2,5<<16|0x0042,0,0,0) if error==7 else bytes(20)
+        first=(profile[0],0x1234,0) if error in (7,15) else (0,0,0)
+        data+=struct.pack('<7I',error,writes,int(error in (0,7,9,15)),sample if not error else 4 if error==9 else 0,*first)
+        survey=struct.pack('<5I',2,5<<16|0x0042,0,0,0) if error in (7,15) else bytes(20)
         return data+bytes(44)+struct.pack("<2I",0xfffffff0,(0xfffffff0+24000*31)&0xffffffff)+survey
     def fake_fel(command,**kwargs):
         held();assert command[:2]==[str(fel),'-d'];node={'3:72':OLD,'3:73':NEW}[command[2]];arguments=command[3:]
@@ -148,6 +190,10 @@ for case in cases:
                 if address==0x86000:data=mailbox(node)
                 if (case=='upload-mismatch' and address==0x8e000 and address in memory) or (case=='RAM-mismatch' and address==0x41000000):data=bytes([data[0]^1])+data[1:]
                 if case=='restore-ram-pages' and node==OLD and address==0x41000000:data=bytes([data[0]^1])+data[1:]
+                if address==0x96000 and node==OLD and case in SURVEY_CASES:
+                    if case=='restore-survey' and board.get('launched'):data=fake_survey
+                    if case=='restore-survey-final-readback' and board.get('launched'):data=final_survey
+                    if case=='restore-survey-clear-mismatch':data=bytes([data[0]^1])+data[1:]
                 if address in memory and ((case=='restore-record-upload' and address==0x87000) or (case=='restore-helper-upload' and address==0x92000)):
                     data=bytes([data[0]^1])+data[1:]
                 Path(arguments[i+3]).write_bytes(data);i+=4
@@ -177,6 +223,7 @@ for case in cases:
                 assert op=='exe';i+=2
                 if address==0x85000 and node in board['helper']:
                     assert 'armed' in events and wdt['mode']==0x41,(case,events)
+                    board['launched']=True
                     if case in ('restore-hang','restore-no-return','restore-unexplained-reset'):
                         reset();return types.SimpleNamespace(returncode=1,stdout='',stderr='usb_bulk_send() ERROR -1: Input/Output Error')
         # The deliberate second arming, or a disarm that did not take, lets
@@ -197,7 +244,8 @@ for case in cases:
     guard.reenumeration=reenumeration
     def sleep(seconds):clock[0]+=seconds
     restore_case=case.startswith('restore-')
-    selected_build=a.restore_build if restore_case else init_build if case.startswith('init-only') else old_build if case=='build-before-clock-return' else build
+    selected_build=(a.survey_build if case in SURVEY_CASES else old_restore if case=='restore-before-final-readback'
+                    else a.restore_build) if restore_case else init_build if case.startswith('init-only') else old_build if case=='build-before-clock-return' else build
     argv=[str(ROOT/'tools/run-ddr.py'),'--fel',str(fel),'--build',str(selected_build),'--evidence',str(out/'runtime')]+(['--allow-untrained'] if case=='init-only' else [])
     if restore_case and case!='restore-record-missing':argv+=['--record',str(a.restore_record)]
     if restore_case and case!='restore-fallback-missing':
@@ -211,7 +259,7 @@ for case in cases:
     if expected=='failure' or expected==1:assert status not in (0,3,None),(case,status)
     else:assert status==expected,(case,status)
     device_free=('pre-device-refusal','init-only-flag-missing','restore-record-missing','restore-fallback-missing','restore-no-session',
-                 'build-before-clock-return','restore-fallback-before-clock-return')
+                 'build-before-clock-return','restore-fallback-before-clock-return','restore-before-final-readback')
     retained=status not in (0,3) and case not in device_free
     assert events.count('hold')==int(retained),(case,events)
     quarantines=[e for e in events if isinstance(e,tuple) and e[0]=='quarantine']
@@ -245,12 +293,13 @@ for case in cases:
             assert record['watchdog']['mode_after_reset']==0x41 and record['watchdog']['mode_after_reset_disarm']==0
             assert record['fallback']['result']['dram_mib']==4096 and (out/'runtime/fallback/ram-41000000-read.bin').exists()
             assert not [e for e in fel_requests if e[0]==str(NEW) and ('0x87000' in e or '0x92000' in e)]
-        if case in ('restore-header-crc','restore-readback','restore-memory'):
+        if case in ('restore-header-crc','restore-readback','restore-final-readback','restore-memory'):
             assert record['restore_result']['error']==RESTORE[case][0]
-        if case=='restore-readback':
+        if case in ('restore-readback','restore-final-readback','restore-survey','restore-survey-final-readback'):
             assert record['restore_result']['mismatches']==2 and record['restore_result']['failure_address']==profile[0]
             assert record['restore_result']['later_mismatches']==[{'address':f'{profile[5]:#010x}','actual':'0x0042'}]
-        if case in ('restore-header-crc','restore-readback','restore-memory','restore-fallback-fails','restore-ram-pages'):
+            assert record['restore_result']['failed_pass']==('hook' if RESTORE[case][0]==7 else 'after init_DRAM')
+        if case in ('restore-header-crc','restore-readback','restore-final-readback','restore-memory','restore-fallback-fails','restore-ram-pages'):
             assert 'deliberate_reset' in record['watchdog'] and events.count('armed')==2
             # No host RAM page is written after a reported restore error.
             if case!='restore-ram-pages':
@@ -280,6 +329,24 @@ for case in cases:
         assert not any('0x41000000' in e for e in fel_requests),'RAM pages after a clock refusal'
     if case in ('build-before-clock-return','restore-fallback-before-clock-return'):
         assert 'clock return' in str(status) and not (out/'runtime').exists(),(case,status)
+    if case=='restore-survey':
+        result=record['restore_result']['survey']
+        assert result['classes']=={'reads-zero':1,'other-value':1,'stored-later':1,'already-at-value':1,'held':len(profile)-4},result
+        assert result['mismatches']==2 and result['agrees_with_mailbox'] and result['control']['micro_cont_mux_sel_at_hook']=='0x0001'
+        decoded=json.loads((out/'runtime/survey.json').read_text())['entries']
+        assert len(decoded)==len(profile) and decoded[5]['after']=='0x0042' and decoded[zero]['class']=='reads-zero'
+    if case=='restore-survey-final-readback':
+        # The hook's passes held: the survey agrees with a final-readback mailbox.
+        result=record['restore_result']['survey']
+        assert result['classes']=={'held':len(profile)} and result['mismatches']==0 and result['agrees_with_mailbox'],result
+        assert result['after_init']=={'micro_cont_mux_sel':'0x0001','ucclk_hclk_enables':'0x0000'},result
+    if case=='restore-survey':assert record['restore_result']['survey']['after_init'] is None
+    if case=='restore-before-final-readback':
+        assert 'clocked final readback' in str(status) and not (out/'runtime').exists(),(case,status)
+    if case=='restore-survey-missing':
+        assert 'did not start' in record['restore_result']['survey']['error'] and not (out/'runtime/survey.json').exists()
+    if case=='restore-survey-clear-mismatch':
+        assert 'survey-clear-upload.bin' in record['failure'],(case,record.get('failure'))
     if case=='restore-clock-not-rom':
         assert 'not at the entry point' in record['watchdog']['deliberate_reset'] and record['fallback']['cpu_clocks']['cpu_l_pll']=='0xf8802600'
     with lock.open('a') as released:fcntl.flock(released,fcntl.LOCK_EX|fcntl.LOCK_NB)

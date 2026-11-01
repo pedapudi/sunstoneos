@@ -114,8 +114,8 @@ for write in update['writes']:
         sector_cases+=1
 assert select()['copies']['B']['generation']==2
 two_copy_read_bytes=sum(g['blocks']*512 for c in select()['copies'].values() for g in c['guards'])
-# Each copy is read once, header sector plus payload sectors (12,320 bytes: 25 sectors).
-assert two_copy_read_bytes==2*512*-(-len(two)//512)==25600
+# Each copy is read once: its header sector plus the payload sectors (11,640 bytes: 1 + 23 sectors).
+assert two_copy_read_bytes==2*512*(1-(-(len(two)-128)//512))==24576,(two_copy_read_bytes,len(two))
 refused(lambda:plan('repeat',two),'already holds')
 assert not converted('update','update-complete')['sessions']
 cases+=['standby-B-generation-two','sector-interruptions-preserve-active','completed-plan-skips','repeat-refused']

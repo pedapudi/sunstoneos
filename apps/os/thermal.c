@@ -13,6 +13,7 @@
 #include "a733_thermal_native.h"
 #include "gicv3_spi.h"
 #include "a733_mapping_check.h"
+#include "sunstone_crumb.h"
 #include "boot.h"
 #include <string.h>
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
@@ -167,13 +168,16 @@ static int authorize(void *v,const struct a733_thermal_config *c,const struct a7
         token->exclusive==thermal.token.exclusive&&
         a733_clock_token_status(&providers.shared.clocks,&thermal.token)==A733_CLOCK_OK;
 }
-static void cancel(void)
+static void cancel_from(uint32_t site,const void *here)
 {
 #ifdef SUNSTONE_A733_OS_NPU
  os_npu_thermal(0,1,0,a733_smp_counter()/24);
 #endif
  atomic_store_explicit(&load_state,A733_THERMAL_CRITICAL,memory_order_release);
- atomic_store_explicit(&thermal.failed,1,memory_order_release);board_fail(NULL);}
+ atomic_store_explicit(&thermal.failed,1,memory_order_release);
+ board_fail_at(site,thermal.driver.fault_site,here);}
+/* Each cancel() and fault() call site records its own line and address. */
+#define cancel() cancel_from(SUNSTONE_CRUMB_FAIL_SITE(THERMAL),SUNSTONE_CRUMB_HERE())
 static void publish_load(enum a733_thermal_level level)
 {
     if(level==A733_THERMAL_NORMAL&&a733_thermal_policy_seen(&thermal.policy)!=31)
@@ -215,7 +219,9 @@ static int rearm(void)
     }
     taskEXIT_CRITICAL();return ok;
 }
-static int fault(void){cancel();thermal.retaining=1;(void)mask();return -1;}
+static int fault_from(uint32_t site,const void *here)
+{cancel_from(site,here);thermal.retaining=1;(void)mask();return -1;}
+#define fault() fault_from(SUNSTONE_CRUMB_FAIL_SITE(THERMAL),SUNSTONE_CRUMB_HERE())
 /* Owner task only. 1 after a completed bounded step, -1 once failed. */
 static int step(void)
 {

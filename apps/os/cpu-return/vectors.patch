@@ -55,7 +55,7 @@
      // Use this core's reserved Secure Device stack regardless of the fault's SP.
      adrp x3, a733_cpu_entry_stacks
      add x3, x3, :lo12:a733_cpu_entry_stacks
-@@ -497,10 +538,37 @@
+@@ -497,10 +538,67 @@
      stp x0, x1, [sp, #-16]!
      mrs x0, esr_el1
      and x0, x0, #0xffff
@@ -65,6 +65,9 @@
 +    mov x1, #0x5c0d
 +    cmp x0, x1
 +    b.eq .Lcrumb
++    mov x1, #0x5c0e
++    cmp x0, x1
++    b.eq .Lfail_record
      cmp x0, #119
      b.eq .Lexit
      ldp x0, x1, [sp], #16
@@ -84,6 +87,33 @@
 +    orr w3, w3, w0, lsl #29
 +    str w3, [x2, #0x10c]
 +    dsb sy
++    ldp x2, x3, [sp], #16
++    ldp x0, x1, [sp], #16
++    eret
++.Lfail_record:
++    // sunstone_crumb_fail(site, value, caller) (include/sunstone_crumb.h):
++    // the first board failure in the FAULT/ESR/ELR/FAR words, unless a fault
++    // or exit already holds them. x2 is the caller, x1 the value.
++    stp x2, x3, [sp, #-16]!
++    stp x4, x5, [sp, #-16]!
++    ldp x0, x1, [sp, #32]
++    mov x3, #0x07090000
++    ldr w4, [x3, #0x110]
++    cbnz w4, 1f
++    str w0, [x3, #0x114]
++    str w2, [x3, #0x118]
++    str w1, [x3, #0x11c]
++    mrs x4, mpidr_el1
++    ubfx x4, x4, #8, #3
++    mrs x5, spsr_el1
++    and w5, w5, #0xf
++    mov w0, #0xfa0b0000       // magic, level 0xb
++    orr w0, w0, w4, lsl #20
++    orr w0, w0, w5, lsl #8
++    dsb sy
++    str w0, [x3, #0x110]
++    dsb sy
++1:  ldp x4, x5, [sp], #16
 +    ldp x2, x3, [sp], #16
 +    ldp x0, x1, [sp], #16
 +    eret
