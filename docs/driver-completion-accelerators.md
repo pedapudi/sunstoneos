@@ -61,7 +61,7 @@ Offsets in this table are relative to the named register bank.
 | Same | CORE6 PWCR `+0x20`, policy `+0`, status `+8`; TOP5 power row. | Selected `sunxi_platform.c` and Arm DEN0051E §5.2.8, as pinned in [GPU power](gpu-power.md). PWCR requires settled policy except the documented cold state. ON/OFF wait for CORE6 status; TOP5 completion comes from the power owner. Status polls retain resources on timeout. |
 | Same | CCU `+0xb24` reset and bus gate; PLL disable control fields. | Manual §4.1.6.16,122 and CCU disable source. Each control write has its own readback; no separate local reset-done field is documented. CORE/TOP retirement precedes clock removal. |
 | `a733_gpu_performance.c`, `a733_gpu_platform_performance_poll`, `a733_gpu_platform_performance_off` | CCU `+0xb20` source/divider update. | Manual §4.1.6.121. Both paths poll UPD clear, then verify the resulting selector/divider/rate under a deadline. Correct completion condition. |
-| `a733_gpu_platform.c`, `supply_raise`; `a733_gpu_performance.c`, voltage stages | PMIC DCDC4 request, completed snapshot, supply settle. | [GPU operating-point design](designs/gpu-performance.md), [GPU power](gpu-power.md), PMIC provider pins. Both wait strictly beyond the rounded timestamp plus `A733_GPU_SUPPLY_SETTLE_US`. No direct PMIC MMIO occurs in these files. Rail sequencing is protected review scope. |
+| `a733_gpu_platform.c`, `supply_raise`; `a733_gpu_performance.c`, voltage stages | PMIC DCDC4 request, completed snapshot, supply settle. | [GPU operating-point design](designs/gpu-performance.md), [GPU power](gpu-power.md), PMIC provider pins. Both refresh their validated clock after completed PMIC result collection and reap, then wait strictly beyond that timestamp plus `A733_GPU_SUPPLY_SETTLE_US`. No direct PMIC MMIO occurs in these files. Rail sequencing is protected review scope. |
 | `a733_gpu_resources.c`, `gate`; native adapter | Shared PCK/fabric gates at RCCU `+0x1ac`, CCU `+0x5c0/+0x5e0`; parent verification. | Manual §4.1.6.82–83 and [shared resource source comparison](../checks/a733-gpu-resources-reference.py). Control readbacks verify retained gate fields; selected PLL branches also check effective gate status. No new PLL transition is started here. |
 | `pvr_gpu_start.c`, `pvr_gpu_start_poll` | SYS_BUS_SECURE `+0xa100`, SOFT_RESET `+0x100`: write then read fence. | GPU host start source. Read fences drain writes; their return values are intentionally not equality checks. Reset is followed by documented 3 µs delays, implemented with rounding allowance, then a fresh firmware-started word. |
 | Same | SLC_CTRL_MISC `+0x3800`, MIPS remaps `+0x810…+0x8c8`, SLC coherency `+0x38c0`; GARTEN release. | GPU host start source; `pvr_mips.c` constructs the remaps. No documented per-write busy flag. Publication and ordered register writes precede release; firmware readiness is the completion condition. |
@@ -88,7 +88,7 @@ Offsets in this table are relative to the named register bank.
 
 | File and function | Write and required observation | Reference and assessment |
 | --- | --- | --- |
-| `a733_dma_platform.c`, `a733_dma_platform_poll` | CCU `+0x704` reset/bus gate, `+0x5e4` MBUS gate; 20 µs reset-held baseline. | Manual §4.1.6.84–85; DMA platform source. Ordinary writes have exact readback. The pre-release wait starts after a baseline observation rather than asserting reset. Its rounded 20 µs interval can be short by less than 1 µs; no exact minimum was established from a primary reference, so this remains a conservative-budget issue. |
+| `a733_dma_platform.c`, `a733_dma_platform_poll` | CCU `+0x704` reset/bus gate, `+0x5e4` MBUS gate; 20 µs reset-held baseline. | Manual §4.1.6.84–85; DMA platform source. Ordinary writes have exact readback. The pre-release wait starts after a baseline observation rather than asserting reset. The [native contract](dma-platform.md#cold-startup-releases-an-inherited-reset-without-taking-over-active-work) requires at least 20 µs after that observation. The wait now requires a rounded delta greater than 20 µs; the original operation deadline remains unchanged. This minimum is a native policy, without a vendor timing claim. |
 | Same, `controller` | DMA global auto gate and CPU/MCU routes. | DMA source `:2272–2282`; each write has readback and global quiet checks before and after. No update/busy handshake is documented for these route fields. |
 | `a733_dma_controller.c`, `submit` | Channel descriptor `+8`, IRQ enable `+0x34`, EN `+0`. | Manual §13.1.7.6,8 and per-channel IRQ definitions; DMA submit source. Descriptor and IRQ readbacks precede EN. Completion requires finite-chain event, then teardown; an ignored start times out. |
 | Same, `begin_stop`, `a733_dma_poll` | IRQ disable, pause, EN=0, unpause; pending W1C `+0x38`; descriptor restoration. | DMA terminate source `:1268–1300`; manual §13.1.7.3,6,7. Teardown polls EN=0 **and** channel BUSY=0, checks pending clear and restored descriptor before cache acquire/release. This is stronger than the reference's write-only terminate. |
@@ -98,7 +98,7 @@ Offsets in this table are relative to the named register bank.
 | `a733_ce.c`, `poll` SUBMIT/WAIT | Descriptor `+0/+4`, IRQ enable `+8`, load `+0x10`; status `+0xc`, error `+0x18`. | Manual §19.1.7.1–7; CE `ss_ctrl_start/ss_ctrl_hash_start`. Status value 1 means completed successfully, 2 means failure. Pending starts clear; output acquire follows success. TLR readback is not a substitute for task completion. |
 | Same, completion cleanup | ISR W1C `+0xc`, IRQ disable `+8`. | Manual §19.1.7.4. IRQ readback follows W1C; the next PREPARE requires ISR clear. No same-call ISR-clear wait exists. Delayed W1C can cause conservative refusal on reuse, but cannot create a fresh completion because submission first checks zero. |
 | Same, `prepare`, `provision` | CE LPC `+0xd0` bit 1; secure health `+0x90…+0x9c`. | Manual §19.1.7.8 and §19.1.8.34–37. Each field is read back; low-power config bit 0 must already be clear. The source does not prescribe a separate apply/ready wait for health programming. |
-| `a733_ce_clock.c`, `a733_ce_clock_provision` | CCU `+0xac0/+0xac4/+0x5e4` local clocks/reset. | CE clock manifest: `sunxi_ce.c:1148–1215`; manual §4.1.6.84,117–118. Each RMW gets exact readback, with parent/effective branch checks before and after. No PLL is retuned, and no completion bit is documented for these local fields. |
+| `a733_ce_clock.c`, `a733_ce_clock_provision` | CCU `+0xac0/+0xac4/+0x5e4` local clocks/reset. | CE clock manifest: `sunxi_ce.c:1148–1215`; manual §4.1.6.84,117–118. Each RMW gets exact readback, with parent/effective branch checks before and after. No PLL is retuned, and no completion bit is documented for these local fields. The reference calls `reset_control_deassert`; its `ccu_reset_deassert` has no delay. The separate 10 µs `ccu_reset_reset` pulse is not invoked. |
 
 The MMIO adapters `a733_gpu_resources_native.c`,
 `a733_gpu_platform_native.c`, `a733_npu_platform_native.c`,
@@ -132,6 +132,17 @@ completion.
   24 fractional phases of a 24 MHz counter. Stopped-clock and excessive-delay
   cases retain the original fatal bounds. Address and undefined-behavior
   sanitizers cover this extracted-function check.
+- **GPU supply settle:** `checks/gpu-performance-platform.c --settle-only`
+  lets the actual PMIC provider finish after the GPU entry timestamp.
+  Separately charged result and reap callbacks expose stale anchors in
+  startup and performance changes. Expiry preserves the prior endpoint,
+  current voltage, clock selector and owned resources. Build this case with
+  `SUNSTONE_GPU_SETTLE_LATENCY=1`, `SUNSTONE_A733_OS_PERF=1`, and linker
+  wraps for `a733_pmic_result` and `a733_pmic_reap`.
+- **DMA reset hold:** `checks/dma-platform.c --reset-minimum-only` charges
+  the final baseline read and uses fractional 24 MHz time. Release at
+  fewer than 480 ticks fails independently; original-deadline expiry
+  retains the token before any write.
 - **DMA:** `checks/dma-controller.c` already separates queue completion
   from explicit bus drain and checks that output invalidation follows
   EN=0 and BUSY=0. That independent model remains in place.
@@ -158,7 +169,9 @@ its corrected invocation is preserved beside that failed setup.
 Removing the GPU OFF wait fails before PLL shutdown. Restoring the original
 IOMMU interval fails the 240-tick flush check. Removing cancellation rounding
 allowance fails the 2,400-tick pulse check. The original native-delay loop
-fails the fractional-time minimum check. These negative controls establish
+fails the fractional-time minimum check. Restoring the DMA reset comparison
+releases reset before 480 ticks. Removing either GPU post-collection time
+sample anchors settling before the required interval. These negative controls establish
 that the focused checks detect the corrected behavior.
 
 For identical inherited GPU ON/OFF inputs, ON uses 190 callbacks before and
@@ -171,6 +184,11 @@ measure board performance. The current closure passes its complete fault sweep.
 Commands, logs and mutation results are under
 `~/.cache/sunstoneos/build/model-fidelity-1031/accelerators/`, especially
 `results.json`, `mutations/results.json` and `native-delay-sanitized/`.
+The additional DMA/GPU minimum-delay evidence is in
+`minimum-extension/results.json`. The ordinary GPU provider closure passes
+its ten cases before and after the anchor corrections. Each completed supply
+write adds one validated time sample, with no added register writes.
+
 No board was accessed. GPU OFF update latency, NPU pulse and settle timing,
 IOMMU flush duration, DMA cyclic ordering and physical fault recovery remain
 qualification requirements.
