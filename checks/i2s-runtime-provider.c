@@ -104,7 +104,7 @@ void kernel_main(void)
  struct a733_pins_operations pops={enter,leave,clock_now,read_reg,write_reg};configASSERT(a733_pins_init(&pins,&pops,NULL,A733_PINS_PB_MASK));
  struct a733_pin_request pins_req[]={{5,{0,0,0},{3,0,0}},{6,{0,0,0},{3,0,0}},{7,{0,0,0},{3,0,0}}};
  configASSERT(a733_i2s_platform_stream_init(&bindings[0],&parent,&pins,&audio,7,pins_req,3,A733_I2S_TRANSMIT));
- profiles[0].stream=(struct a733_i2s_stream_profile){{24576000,16000,0,16,32,1,0},a733_i2s_platform_stream_operations(),&bindings[0],A733_I2S_TRANSMIT,10000,0};
+ profiles[0].stream=(struct a733_i2s_stream_profile){{24576000,16000,0,16,32,1,0},a733_i2s_platform_stream_operations(),&bindings[0],A733_I2S_TRANSMIT,10000,0,A733_I2S_ROUTE_I2S0};
  struct a733_i2s_plan plan;configASSERT(a733_i2s_plan(&profiles[0].stream.format,&plan)&&plan.frame_bytes==2);
  struct dma_memory_window window={(uintptr_t)pcm_pool,(uintptr_t)pcm_pool,sizeof(pcm_pool),7};
  struct dma_fifo_port port={A733_I2S0_TXFIFO,3,1u<<2,1u<<8,A733_DMA_WRITE};
