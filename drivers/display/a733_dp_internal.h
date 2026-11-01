@@ -2,6 +2,9 @@
 #ifndef SUNSTONE_A733_DP_INTERNAL_H
 #define SUNSTONE_A733_DP_INTERNAL_H
 #include "a733_dp.h"
+/* trilinear_get_max_rate() and the effective DP-only Cadence rate/level tables. */
+#define A733_DP_LINK_RATE_MBPS 5400u
+#define A733_DP_LINK_BW_CODE (A733_DP_LINK_RATE_MBPS / 270u)
 int a733_dp_read(struct a733_dp *,uintptr_t,unsigned,uint32_t *);
 int a733_dp_write(struct a733_dp *,uintptr_t,unsigned,uint32_t);
 int a733_dp_wait(struct a733_dp *,unsigned);
