@@ -2,6 +2,7 @@
 """Exercise the actual eMMC image and copied clients with modeled device effects."""
 import argparse,hashlib,importlib.util,json,struct,time
 from pathlib import Path
+if not __debug__:raise SystemExit('Host checks require assertions; do not use optimized Python.')
 from elftools.elf.elffile import ELFFile
 from unicorn.arm64_const import UC_ARM64_REG_X0
 ROOT=Path(__file__).resolve().parents[3]
@@ -95,7 +96,7 @@ class Machine(service.Machine):
         assert [n for n,_ in self.commands]==[0,1,1,1,2,3,9,7,13,8,13],self.commands
 
 def run(image_path,session_path,out):
-    out.mkdir(parents=True,exist_ok=False);raw=session_path.read_bytes();prep.embedded_reference(image_path.read_bytes(),raw)
+    out=module('emmc_native_evidence',ROOT/'tools/host_evidence.py').unique_directory(out);raw=session_path.read_bytes();prep.embedded_reference(image_path.read_bytes(),raw)
     global image
     image=service.base.Image(image_path);image.sizes={}
     with image_path.open('rb') as f:
@@ -131,6 +132,7 @@ def run(image_path,session_path,out):
     assert decoder.decode(m.frame(),raw)['status']==2 and m.field('cancel')==1
     assert m.read(m.platform+m.p['fault'])==1
     (out/'trace.json').write_text(json.dumps(m.trace)+'\n')
+    print('Output:',out)
     (out/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,image_sha256=hashlib.sha256(image_path.read_bytes()).hexdigest(),session_sha256=hashlib.sha256(raw).hexdigest(),host=m.host,commands=m.commands,native_client_reads=2,mmio_accesses=len(m.trace),scope='Actual session/contract snapshot, provider construction, selected native aperture, MMC identification including EXT_CSD, copied two-client reads and cancellation. Providers, translations, scheduling, clock/time and MMIO/card effects modeled.'),indent=2)+'\n')
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)

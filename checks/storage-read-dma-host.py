@@ -3,6 +3,7 @@
 import argparse,copy,hashlib,importlib.util,io,json,struct,time
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
+if not __debug__:raise SystemExit('checks require assertions')
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
@@ -13,9 +14,14 @@ def rejected(fn):
 def run(image,fixture,native,out,emmc,emmc_evidence):
  out.mkdir(parents=True,exist_ok=False);host=module('dma_host',ROOT/'tools/check-a733-storage-read-supervised.py');prep=host.preparation
  manifest=image.parent/'image-input-manifest.json';bundle=out/'MODEL-NOT-PHYSICAL-bundle'
- prep.prepare(image,manifest,fixture/'admission.json',fixture/'session-template.bin',bundle,
+ target=json.loads((fixture/'admission.json').read_text())
+ direct={k:target[k] for k in ('identity','port','reservation')}
+ admission_path=out/'direct-target.json';admission_path.write_text(json.dumps(direct))
+ prep.prepare(image,None,admission_path,fixture/'session-template.bin',bundle,
               Path('/usr/lib/llvm-21/bin/clang'),Path('/home/sunil/.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld'))
- frozen=host.freeze_bundle(bundle);raw=frozen['_frozen']['session.bin'];source=(fixture/'session-template.bin').read_bytes()
+ frozen=host.freeze_bundle(bundle);assert not (bundle/'image-input-manifest.json').exists()
+ assert not frozen['entry_evidence']
+ raw=frozen['_frozen']['session.bin'];source=(fixture/'session-template.bin').read_bytes()
  frames=[]
  for name in ('host-idle-frame.bin','host-frame.bin'):
   body=bytearray((native/name).read_bytes());assert body[16:32]==source[24:40]
@@ -67,15 +73,49 @@ def run(image,fixture,native,out,emmc,emmc_evidence):
   off=int(segment['p_offset'])+address-int(segment['p_vaddr']);bad=bytearray(body);bad[off]^=1
   rejected(lambda:prep.embedded_reference(bad,source))
  cases['elf_capability_binding']=dict(passed=True)
- admission=json.loads((fixture/'admission.json').read_text());ih=hashlib.sha256(body).hexdigest()
- original=prep.validate_admission(admission,ih,hashlib.sha256(source).hexdigest(),source)
- for fact in prep.DMA_MEMORY_FACTS:
-  cache=dict(original);entry=copy.deepcopy(admission);changed=bytearray(source);path=entry['memory']['path']
-  memory=json.loads(cache[path]);del memory[fact];data=json.dumps(memory,sort_keys=True).encode();cache[path]=data
-  digest=hashlib.sha256(data).digest();changed[664:696]=digest;entry['memory']['sha256']=digest.hex()
-  th=hashlib.sha256(changed).hexdigest();entry['session_template_sha256']=th
-  rejected(lambda:prep.validate_admission(entry,ih,th,changed,cache))
- cases['dma_memory_authority']=dict(passed=True,required=list(prep.DMA_MEMORY_FACTS))
+ ih=hashlib.sha256(body).hexdigest()
+ assert prep.validate_admission(direct,ih,hashlib.sha256(source).hexdigest(),source)=={}
+ for key in ('identity','port','reservation'):
+  rejected(lambda:prep.validate_admission({**direct,key:None},ih,'unused',source))
+ for offset,fmt,value in ((856,'<I',0x80000000),(840,'<Q',10000001),
+                           (848,'<Q',5000001),(864,'<Q',0xffffffff),(813,'<B',0)):
+  changed=bytearray(source);struct.pack_into(fmt,changed,offset,value)
+  rejected(lambda:prep.validate_admission(direct,ih,'unused',changed))
+ cases['direct_target_and_native_limits']=dict(passed=True,process_records=False)
+ # The supported capture CLI reaches the common live runner without queue files.
+ saved_runner=host.supervisor.run_session
+ def direct_runner(args,bundle,prepared,ready,validate_entry,capture,**kwargs):
+  assert args.database is None and args.claim is None and args.owner is None
+  ready();validate_entry(direct['identity'],direct['port']);return 0
+ host.supervisor.run_session=direct_runner
+ try:
+  assert host.main(['--bundle',str(bundle),'--fel','/unused-for-host-check',
+                    '--evidence',str(out/'cli-capture'),'--supervised-manual-reconnect'])==0
+ finally:host.supervisor.run_session=saved_runner
+
+ metadata_path=bundle/'prepared.json';saved_metadata=metadata_path.read_bytes()
+ metadata=json.loads(saved_metadata);metadata['files']['image-input-manifest.json']='00'*32
+ metadata['entry_evidence']={'/missing/review.json':{'name':'missing-review.bin','sha256':'00'*32}}
+ metadata_path.write_text(json.dumps(metadata))
+ assert prep.validate_bundle(bundle)['_frozen']['image.elf']==body
+ metadata_path.write_bytes(saved_metadata)
+ archived=bundle/'launch.c';saved_source=archived.read_bytes()
+ archived.write_bytes(b'optional archived source changed')
+ assert prep.validate_bundle(bundle)['_frozen']['image.elf']==body
+ archived.write_bytes(saved_source)
+ session_path=bundle/'session.bin';saved_session=session_path.read_bytes()
+ session_path.write_bytes(bytes([saved_session[0]^1])+saved_session[1:])
+ rejected(lambda:prep.validate_bundle(bundle));session_path.write_bytes(saved_session)
+ cases['process_files_ignored_transport_integrity_retained']=dict(passed=True)
+
+ # Existing output directories retain their earlier evidence in place.
+ original_metadata=(bundle/'prepared.json').read_bytes()
+ again=prep.prepare(image,None,admission_path,fixture/'session-template.bin',bundle,
+                    Path('/usr/lib/llvm-21/bin/clang'),Path('/home/sunil/.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld'))
+ assert (bundle/'prepared.json').read_bytes()==original_metadata
+ assert len(list(bundle.glob('*/prepared.json')))==1
+ assert Path(again['_bundle_directory']).parent==bundle
+ cases['existing_output_preserved']=dict(passed=True)
  # Shared helpers must not raise the eMMC API or actual linked geometry limit.
  emmc_observe=module('emmc_dma_compat',ROOT/'apps/emmc-read/observe.py')
  assert emmc_observe.MAXIMUM==4096

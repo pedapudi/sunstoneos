@@ -2,11 +2,12 @@
 """Produce modeled eMMC authority using actual board and PMIC producers."""
 import hashlib,importlib.util,json,re,struct
 from pathlib import Path
+if not __debug__:raise SystemExit('Host fixtures require assertions; do not use optimized Python.')
 ROOT=Path(__file__).resolve().parents[3]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 def produce(image,out,host):
-    out.mkdir(parents=True,exist_ok=False)
+    out=module('emmc_fixture_evidence',ROOT/'tools/host_evidence.py').unique_directory(out)
     prep=module('emmc_fixture_prepare',ROOT/'apps/emmc-read/prepare.py')
     ih=hashlib.sha256(image.read_bytes()).hexdigest();_,_,identity=prep.base.image_parts(image)
     baseline=Path.home()/'.cache/sunstoneos/evidence/board-supervised-20261017/batch1/session-fixture.bin'
@@ -39,6 +40,7 @@ def produce(image,out,host):
     admission=dict(**target,schema=prep.shared.ENTRY_SCHEMA,reservation=100,session_template_sha256=hashlib.sha256(raw).hexdigest(),ddr=ddr,platform=platform,**refs,whole_board_power_removal=True,no_resource_reuse_before_power_removal=True,recovery=dict(mode='manual-usb-reconnect',demonstrated_fel=True,explicit_reconnect_before_resumption=True,preserve_microsd=True,one_attempt=True,evidence=[evidence]))
     path=out/'admission.json';path.write_text(json.dumps(admission,indent=2)+'\n');prep.validate_admission(admission,ih,hashlib.sha256(raw).hexdigest(),raw)
     (out/'fixture-inputs.json').write_text(json.dumps(dict(baseline=str(baseline),baseline_sha256=hashlib.sha256(baseline.read_bytes()).hexdigest(),pmic_fixture=str(pmic_source),pmic_fixture_sha256=hashlib.sha256(pmic_source.read_bytes()).hexdigest(),image_sha256=ih,physical_access=False),indent=2)+'\n')
+    print('Output:',out)
     return template,path
 if __name__=='__main__':
     import argparse

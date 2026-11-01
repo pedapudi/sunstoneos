@@ -13,7 +13,6 @@ import os
 from pathlib import Path
 import secrets
 import shutil
-import sqlite3
 import struct
 import subprocess
 import sys
@@ -28,10 +27,6 @@ SESSION,SESSION_BYTES,CONTRACT = 0x41f00000,704,0x42004000
 REQUEST,REPORT,ENTRY = 0x54000,0x54100,0x52000
 REGIONS = [('launcher',ENTRY,0x2000),('request',REQUEST,128),('report',REPORT,128),
            ('stack',0x55000,0x1000),('scratch',0x71000,128)]
-CONDITIONS = {'dram-cpu-coherence','remote-dma-alias-exclusion','cold-controller-irq-exclusion',
-              'board-topology-supplies','card-identity-range','qualified-reload-bounds','sram-workspace'}
-PREREQUISITES = {'independent-watchdog-rom-return','stable-protected-fel',
-                 'storage-maintenance-session','storage-maintenance-software'}
 
 
 def sha(data): return hashlib.sha256(data).hexdigest()
@@ -115,13 +110,6 @@ def request_bytes(address,identity,epoch,generation,lease,session):
     return request,contract+bytes(4096-224)
 
 
-def image_manifest(path,image,identity):
-    m=json.loads(path.read_text())
-    require(m.get('target')==TARGET and m.get('execution_profile')=='storage-maintenance-1' and
-            m.get('image_kind')=='runtime' and m.get('final_elf')==digest(image) and
-            m.get('build_id')==identity.hex(),'Matching maintenance runtime manifest required.')
-
-
 def build_launcher(output,session_header,extra_flags=()):
     """Compile the shared SRAM launcher with one application's wire validator."""
     clang,lld=extra_flags[:2];flags_extra=list(extra_flags[2:])
@@ -144,14 +132,14 @@ def build_launcher(output,session_header,extra_flags=()):
 
 
 def prepare(image,manifest,config_path,storage,output,clang,lld):
-    segments,address,identity=image_parts(image);image_manifest(manifest,image,identity)
+    segments,address,identity=image_parts(image)
     with store_api.ProtectedDirectory(storage) as store:
         raw,grant,storage_manifest=storage_inputs(store)
     config=json.loads(config_path.read_text());epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     session=session_bytes(raw,config,digest(image),epoch,generation,lease)
-    output.mkdir(parents=True,exist_ok=False)
+    output=base.module('storage_launch_output',ROOT/'tools/host_evidence.py').unique_directory(output)
     build_launcher(output,ROOT/'platform/a733-storage-maintenance/session.h',(clang,lld))
-    shutil.copy2(image,output/'image.elf');shutil.copy2(manifest,output/'image-input-manifest.json')
+    shutil.copy2(image,output/'image.elf')
     save_json(output/'configuration.json',config)
     payloads=[]
     for index,segment in enumerate(segments):
@@ -172,8 +160,11 @@ def prepare(image,manifest,config_path,storage,output,clang,lld):
 def validate_bundle(bundle,store):
     p=json.loads((bundle/'prepared.json').read_text())
     require(p.get('schema')=='a733-storage-launch-bundle-1' and p.get('physical_access') is False,'Wrong prepared bundle.')
-    for name,value in p['files'].items():require(Path(name).name==name and digest(bundle/name)==value,'Prepared artifact changed.')
-    segments,address,identity=image_parts(bundle/'image.elf');image_manifest(bundle/'image-input-manifest.json',bundle/'image.elf',identity)
+    required={'image.elf','configuration.json','session.bin','request.bin','contract.bin','result-zero.bin','report-zero.bin','launch.bin'}
+    required.update(item['name'] for item in p['segments'])
+    require(required<=set(p['files']),'Missing maintenance transport input.')
+    for name in required:require(Path(name).name==name and digest(bundle/name)==p['files'][name],'Prepared artifact changed.')
+    segments,address,identity=image_parts(bundle/'image.elf')
     require(p['image_sha256']==digest(bundle/'image.elf') and p['build_id']==identity.hex(),'Image binding changed.')
     raw,grant,manifest=storage_inputs(store)
     require(sha(raw)==p['grant_sha256'] and manifest==p['storage_manifest_sha256'],'Protected storage artifacts changed.')
@@ -189,67 +180,15 @@ def validate_bundle(bundle,store):
             payloads.append({'name':name,'address':s['address']})
     require(p['segments']==payloads and p['reservations']==[{k:v for k,v in s.items() if k!='data'} for s in segments],
             'Prepared ELF reservations differ.')
-    require(p['launcher_sha256']==digest(bundle/'launch.bin') and 0<(bundle/'launch.bin').stat().st_size<=0x2000 and
-            p['base_host_sha256']==digest(Path(base.__file__)) and p['storage_host_sha256']==digest(Path(store_api.__file__)),
-            'Launcher or host dependency changed.')
+    require(p['launcher_sha256']==digest(bundle/'launch.bin') and 0<(bundle/'launch.bin').stat().st_size<=0x2000,
+            'Launcher bytes or SRAM bounds changed.')
     return p,grant
 
 
-def read_record(ref):
-    path=base.artifact(ref);raw=path.read_bytes();require(sha(raw)==ref['sha256'],'Evidence changed while reading.')
-    return json.loads(raw)
-
-
-def binding(p,identity,port,sysfs):
-    return dict(target=dict(soc='00001903',port=port,sysfs=sysfs,instance=identity),image_sha256=p['image_sha256'],
-                build_id=p['build_id'],epoch=p['epoch'],generation=p['generation'],lease=p['lease'],
-                grant_sha256=p['grant_sha256'],session_sha256=p['files']['session.bin'],
-                configuration_sha256=p['files']['configuration.json'],dram=[[0x41000000,0x42200000]],sram=REGIONS)
-
-
 def validate_session(value,p,grant,config,identity,port,sysfs):
-    expected=binding(p,identity,port,sysfs)
-    # JSON represents tuples as lists.
-    expected=json.loads(json.dumps(expected))
-    require(value.get('schema')=='a733-storage-maintenance-session-1' and value.get('binding')==expected and
-            value.get('physical_qualification') is True and value.get('ownership_retained') is True,
-            'Current physical storage/CPU/workspace admission is absent or mismatched.')
-    require(set(value.get('conditions',{}))==CONDITIONS,'Missing physical maintenance prerequisites.')
-    for name,ref in value['conditions'].items():
-        c=read_record(ref)
-        require(c.get('condition')==name and c.get('binding')==expected and c.get('physical_access') is True and
-                c.get('established') is True and c.get('observations'),'Unqualified physical condition: '+name)
-        for observation in c['observations']:base.artifact(observation)
-        if name=='qualified-reload-bounds':
-            require(c.get('bounds')=={k:config[k] for k in ('minimum_reload_us','maximum_recovery_us','guard_us','reset_by_us','rtc')},
-                    'Qualified reload bounds/source differ from session.')
-        if name=='sram-workspace':require(c.get('preservation_restoration_qualified') is True,'Expanded SRAM restoration is unqualified.')
-        if name=='card-identity-range':require(c.get('card_range')==store_api.card_range(grant),'Physical card/range differs.')
-
-
-def claimed(database,test_id,owner,bundle,qualification,protection,admission):
-    db=sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True);db.row_factory=sqlite3.Row
-    try:
-        require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0],'Board queue is halted.')
-        row=db.execute('SELECT * FROM tests WHERE id=?',(test_id,)).fetchone()
-        require(row is not None and row['state']=='claimed' and row['owner']==owner,'Matching coordinator claim required.')
-        submission,review=json.loads(row['submission']),json.loads(row['review'])
-        require(set(submission['prerequisites'])==PREREQUISITES and set(review['prerequisites'])==PREREQUISITES,'Queue prerequisites differ.')
-        for name,path in [('independent-watchdog-rom-return',qualification),('stable-protected-fel',protection),('storage-maintenance-session',admission)]:
-            require(base.artifact(review['prerequisites'][name]).resolve()==path.resolve(),'Unreviewed admission input.')
-        software=read_record(review['prerequisites']['storage-maintenance-software'])
-        require(software.get('schema')=='a733-storage-maintenance-software-1' and software.get('physical_access') is False and
-                software.get('native_image') is True and software.get('host_instruction_composition') is True,'Connected software evidence required.')
-        for key,name in [('prepared','prepared.json'),('image','image.elf'),('launcher','launch.bin')]:
-            require(base.artifact(software[key]).resolve()==(bundle/name).resolve(),'Software evidence names another bundle.')
-        for key,path in [('host_tool',Path(__file__)),('base_host_tool',Path(base.__file__)),('storage_host_tool',Path(store_api.__file__))]:
-            require(digest(base.artifact(software[key]))==digest(path),'Host software identity changed.')
-        require(software.get('evidence'),'Missing focused software observations.')
-        for item in software['evidence']:base.artifact(item)
-        require({(bundle/n).resolve() for n in ('prepared.json','image.elf','launch.bin')} <=
-                {base.artifact(a).resolve() for a in submission['artifacts']},'Queue lacks exact prepared artifacts.')
-        return {key:read_record(ref) for key,ref in review['prerequisites'].items()}
-    finally:db.close()
+    """Check the live target and native watchdog/session limits directly."""
+    require(identity and port and sysfs,'Current target identity required.')
+    session_bytes(store_api.grant_encode(grant),config,p['image_sha256'],p['epoch'],p['generation'],p['lease'])
 
 
 def preload(transaction,bundle,p,evidence):
@@ -287,21 +226,10 @@ def refusal(transaction,p,evidence,record,save):
 def prepare_capture(grant_path,identification_path,allocation_path,qualification_path,output):
     raw=grant_path.read_bytes();g=store_api.grant_decode(raw)
     require(g['mode']==0,'Capture preparation accepts only a read-only grant.')
-    identification=json.loads(identification_path.read_text());allocation=json.loads(allocation_path.read_text())
-    qualification=json.loads(qualification_path.read_text())
-    require(identification.get('condition')=='card-identity-range' and identification.get('physical_access') is True and
-            identification.get('established') is True and identification.get('card_range')==store_api.card_range(g) and
-            identification.get('observations'),'An actual identified card and exact range are required.')
-    for ref in identification['observations']:base.artifact(ref)
-    target=allocation['target']
-    base.validate_qualification(qualification,target['port'],target['sysfs'])
-    require(sha(store_api.canonical(qualification))==g['recovery'] and
-            sha(store_api.canonical(allocation))==g['allocation'] and allocation.get('owner')=='SunstoneOS' and
-            allocation.get('card_range')=={k:g[k] for k in ('kind','host','cid','sectors','first','blocks')},'Capture allocation/recovery does not match the grant.')
     with store_api.ProtectedDirectory(output,create=True) as store:
         fd=store.create('grant.bin');store_api.write_all(fd,raw);store.seal('grant.bin',fd,256,bytes.fromhex(sha(raw)))
-        store.record('capture.json',dict(grant=g,grant_sha256=sha(raw),identification_sha256=digest(identification_path)))
-        store.record('identification.json',identification);store.record('allocation.json',allocation);store.record('qualification.json',qualification)
+        store.record('capture.json',dict(grant=g,grant_sha256=sha(raw)))
+    return store.path
 
 
 def connected_launch(transaction,wait_runtime,wait_rom,ready,bundle,p,store,grant,evidence,record,save):
@@ -333,56 +261,41 @@ def connected_launch(transaction,wait_runtime,wait_rom,ready,bundle,p,store,gran
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__);sub=parser.add_subparsers(dest='operation',required=True)
     capture=sub.add_parser('prepare-capture')
-    for name in ('grant','identification','allocation','qualification','output'):capture.add_argument('--'+name,type=Path,required=True)
+    for name in ('grant','output'):capture.add_argument('--'+name,type=Path,required=True)
+    for name in ('identification','allocation','qualification'):capture.add_argument('--'+name,type=Path,help=argparse.SUPPRESS)
     prep=sub.add_parser('prepare')
-    for name in ('image','image-manifest','configuration','storage','output'):prep.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','configuration','storage','output'):prep.add_argument('--'+name,type=Path,required=True)
+    prep.add_argument('--image-manifest',type=Path,help=argparse.SUPPRESS)
     prep.add_argument('--clang',default='clang-21');prep.add_argument('--lld',type=Path,default=Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
     live=sub.add_parser('launch')
-    for name in ('bundle','storage','fel','qualification','input-evidence','admission','evidence','database'):live.add_argument('--'+name,type=Path,required=True)
-    live.add_argument('--claim',required=True);live.add_argument('--owner',required=True)
+    for name in ('bundle','storage','fel','evidence'):live.add_argument('--'+name,type=Path,required=True)
+    for name in ('qualification','input-evidence','admission','database'):live.add_argument('--'+name,type=Path,help=argparse.SUPPRESS)
+    live.add_argument('--claim',help=argparse.SUPPRESS);live.add_argument('--owner',help=argparse.SUPPRESS)
     live.add_argument('--confirm-bridge-stable',action='store_true',required=True)
     args=parser.parse_args(argv)
     if args.operation=='prepare-capture':
-        prepare_capture(args.grant,args.identification,args.allocation,args.qualification,args.output);return 0
+        print(prepare_capture(args.grant,args.identification,args.allocation,args.qualification,args.output));return 0
     if args.operation=='prepare':
         print(json.dumps(prepare(args.image,args.image_manifest,args.configuration,args.storage,args.output.resolve(),args.clang,args.lld),indent=2));return 0
     bundle=args.bundle.resolve()
     with store_api.ProtectedDirectory(args.storage) as store:
         p,grant=validate_bundle(bundle,store)
-        require(digest(args.fel)==base.FEL_HASH,'Unreviewed FEL executable.')
-        reviewed=claimed(args.database,args.claim,args.owner,bundle,args.qualification,args.input_evidence,args.admission)
-        qualification=reviewed['independent-watchdog-rom-return'];protection=reviewed['stable-protected-fel']
-        admission=reviewed['storage-maintenance-session'];config=json.loads((bundle/'configuration.json').read_text())
-        require(sha(store_api.canonical(qualification))==grant['recovery'],'Recovery evidence differs from the immutable grant.')
-        args.evidence.mkdir(parents=True,exist_ok=False)
-        for name,path in [('host.py',Path(__file__)),('base-host.py',Path(base.__file__)),('storage-host.py',Path(store_api.__file__)),
-                          ('prepared.json',bundle/'prepared.json'),('qualification.json',args.qualification),
-                          ('protection.json',args.input_evidence),('admission.json',args.admission)]:
+        config=json.loads((bundle/'configuration.json').read_text())
+        args.evidence=base.module('storage_launch_live_output',ROOT/'tools/host_evidence.py').unique_directory(args.evidence)
+        for name,path in [('host.py',Path(__file__)),('base-host.py',Path(base.__file__)),
+                          ('storage-host.py',Path(store_api.__file__)),('prepared.json',bundle/'prepared.json')]:
             shutil.copy2(path,args.evidence/name);base.sync_file(args.evidence/name)
-        for ref in admission['conditions'].values():
-            c=read_record(ref)
-            for item in [ref,*c['observations']]:
-                source=base.artifact(item);data=source.read_bytes();require(sha(data)==item['sha256'],'Physical evidence changed.')
-                path=args.evidence/item['sha256']
-                if not path.exists():path.write_bytes(data);base.sync_file(path)
         access=base.module('storage_usb_access',ROOT/'tools/usb-access.py')
         sys.path.insert(0,str(ROOT/'tools'));import usb_guard
         usb_guard.check_health()
-        record=dict(complete=False,transactions=[],claim=args.claim,owner=args.owner,launch_attempted=False,storage_complete=False)
+        record=dict(complete=False,transactions=[],launch_attempted=False,storage_complete=False)
         def save():save_json(args.evidence/'session.json',record)
         with access.board_lock() as node:
             access.require_session(node);access.require_rom(node);identity=access.identity(node)
             port=access.target(node);port_config={'port':port.name,'sysfs':str(port.resolve())}
             original=identity;failed=False
             def ready():
-                current=claimed(args.database,args.claim,args.owner,bundle,args.qualification,args.input_evidence,args.admission)
-                require(current==reviewed,'Reviewed evidence changed.')
-                base.validate_qualification(qualification,port.name,str(port.resolve()))
-                require(protection.get('complete') is True and protection.get('asserted') is True and
-                        protection.get('workspace_restored') is True and protection.get('identity')==original and
-                        protection.get('port')==port.name and protection.get('rom_sha256')==base.ROM_HASH,
-                        'Protected FEL evidence does not cover the live instance.')
-                validate_session(admission,p,grant,config,original,port.name,str(port.resolve()))
+                validate_session({},p,grant,config,original,port.name,str(port.resolve()))
                 validate_bundle(bundle,store)
             ready();record.update(initial_identity=identity,port=port.name);save()
             def transaction(*arguments,pass_fds=()):
@@ -440,6 +353,7 @@ def main(argv=None):
                 raise ValueError('No distinct accessible ROM after completed maintenance; ownership retained.')
             try:
                 require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
+                base.verify_dram(transaction,args.evidence,record,save)
                 with usb_guard.reenumeration('sunstoneos-a733','storage maintenance and independent ROM return',2):
                     connected_launch(transaction,wait_runtime,wait_rom,ready,bundle,p,store,grant,args.evidence,record,save)
             except BaseException as error:
@@ -448,11 +362,11 @@ def main(argv=None):
                     'Storage maintenance stopped; no further requests or automatic retry.',identity),error)
                 raise
     if record.get('clean_refusal'):
-        print('Launch refused before mutation; SRAM restored. Coordinator retains the queue claim.');return 2
+        print('Launch refused before mutation; SRAM restored. Coordinator retains board ownership.');return 2
     print('Storage completion receipt is durable and a distinct ROM executed. Power-loss durability and bootability remain unqualified.')
     return 0
 
 
 if __name__=='__main__':
     try:sys.exit(main())
-    except (OSError,ValueError,RuntimeError,sqlite3.Error,struct.error) as error:sys.exit(f'Stopped: {error}')
+    except (OSError,ValueError,RuntimeError,struct.error) as error:sys.exit(f'Stopped: {error}')

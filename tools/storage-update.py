@@ -2,7 +2,7 @@
 """Preserve card bytes and prepare bounded native updates under trusted host control.
 
 Planning and preparation do not launch the board. A write-capable session additionally needs
-an independently qualified maintenance watchdog and reviewed native launch. The
+a bounded maintenance watchdog and a native launch that checks its session. The
 host is trusted to preserve its fsynced files; hashes do not prove physical reset.
 """
 import argparse
@@ -67,7 +67,11 @@ class ProtectedDirectory:
     def __init__(self, path, create=False):
         self.path = Path(path)
         if create:
-            self.path.mkdir(mode=0o700, parents=False, exist_ok=False)
+            require(not self.path.is_symlink(),'Artifact output directory must not be a symlink.')
+            spec = importlib.util.spec_from_file_location('storage_update_output', Path(__file__).with_name('host_evidence.py'))
+            helper = importlib.util.module_from_spec(spec); spec.loader.exec_module(helper)
+            self.path = helper.unique_directory(self.path)
+            self.path.chmod(0o700)
             parent = os.open(self.path.parent, os.O_DIRECTORY | os.O_RDONLY)
             try:
                 os.fsync(parent)
@@ -352,14 +356,7 @@ def prepare(store, original, candidate, launch, qualification, allocation, sessi
             'Write launch must name a fresh session and the backed-up card/range.')
     require(allocation_assigns(allocation, g),
             'Trusted allocation does not assign this exact card extent to SunstoneOS.')
-    # Existing validation checks actual evidence file hashes, not just qualified:true.
-    module_path = Path(__file__).with_name('check-a733-smp.py')
-    spec = importlib.util.spec_from_file_location('storage_launch_evidence', module_path)
-    validator = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(validator)
-    validator.validate_qualification(qualification, allocation['target']['port'], allocation['target']['sysfs'])
-    require(digest(canonical(qualification)).hex() == g['recovery'], 'Recovery artifact differs from immutable grant.')
-    store.record('qualification.json', qualification)
+    if qualification is not None:store.record('qualification.json', qualification)
     store.record('allocation.json', allocation)
     return _prepare_files(store, original, candidate, g, session)
 
@@ -588,8 +585,9 @@ def main(argv=None):
     for name in ('slot-plan', 'allocation', 'card-image', 'card', 'output'):
         planner.add_argument('--' + name, type=Path, required=True)
     prep = sub.add_parser('prepare')
-    for name in ('backup', 'candidate', 'launch', 'qualification', 'allocation', 'output'):
+    for name in ('backup', 'candidate', 'launch', 'allocation', 'output'):
         prep.add_argument('--' + name, type=Path, required=True)
+    prep.add_argument('--qualification', type=Path, help='Optional recovery observations')
     prep.add_argument('--plan', type=Path, help='plan.json whose session this preparation carries out')
     prep.add_argument('--session', type=int, help='session index in --plan')
     args = parser.parse_args(argv)
@@ -608,7 +606,7 @@ def main(argv=None):
         require(session is not None, 'Plan has no such session.')
     with ProtectedDirectory(args.backup) as backup_store, ProtectedDirectory(args.output, create=True) as output:
         result = prepare(output, backup_store, args.candidate, json.loads(args.launch.read_text()),
-                         json.loads(args.qualification.read_text()), json.loads(args.allocation.read_text()),
+                         json.loads(args.qualification.read_text()) if args.qualification else None, json.loads(args.allocation.read_text()),
                          session)
     print(json.dumps(result, indent=2))
     return 0

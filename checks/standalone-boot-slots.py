@@ -68,6 +68,13 @@ def main():
         return path
 
     cases = []
+    existing=out/'existing-output';existing.mkdir();(existing/'keep').write_bytes(b'previous-evidence')
+    child=slots.new_directory(existing)
+    assert child.parent==existing and (existing/'keep').read_bytes()==b'previous-evidence'
+    assert child.stat().st_mode & 0o777 == 0o700
+    cases.append('existing-output-preserves-evidence-in-unique-child')
+    output_link=out/'output-directory-link';output_link.symlink_to(existing,target_is_directory=True)
+    refused(lambda:slots.new_directory(output_link))
     backup = card('backup.img', [(0x83, 65536, 65536)])
     allocation = out / 'allocation.json'
     tool('allocate', '--backup', backup, '--slot-a', SLOT_A, '--slot-b', SLOT_B, '--output', allocation)
