@@ -1,0 +1,22 @@
+{
+  "name": "usb-camera",
+  "devices": {
+    "required": [
+      "usb-camera"
+    ],
+    "optional": []
+  },
+  "cpu": {
+    "cluster": "a55",
+    "workers": 0,
+    "priority": 2,
+    "stack_bytes": 4096
+  },
+  "regions": [],
+  "deadlines": {
+    "run_us": 10000000,
+    "return_reserve_us": 5000000,
+    "progress_window_us": 1000000
+  },
+  "output_limit": 64
+}

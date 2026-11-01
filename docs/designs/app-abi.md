@@ -507,3 +507,84 @@ the GPU compute queue design uses them.
   microseconds per request adds well under 1 ms. Measure the host's
   transcript collection time in `os-staged-recorded` and on the board before
   and after commit 10.
+
+## USB input, serial and camera services
+
+Applications request `usb-keyboard`, `usb-mouse`, `usb-serial` and `usb-camera`
+independently in their manifest. Images select these services with
+`SUNSTONE_A733_OS_USB_CLASSES=ON`. A class grant does not grant USB controller
+register access. The USB owner task receives interrupt completions and
+application request notifications, and dispatches class work in task context.
+
+`ss_input_event` copies keyboard changes and pointer motion or button changes
+into an application event. `ss_key_report` remains available for applications
+that consume the eight-byte keyboard compatibility report. An application can
+consume events only for its granted classes.
+
+`ss_usb_serial_acquire` returns a read-only receive buffer.
+`ss_usb_camera_acquire` returns a read-only list of frame slices. Payload bytes
+stay in the OS-owned USB transfer buffers. The application must release each
+lease token with the matching release call after its last read. The owner task
+processes release requests before rearming the buffers. Tokens increase across
+attachments; repeated or stale releases fail.
+
+`ss_usb_serial_write` borrows the application's immutable buffer. A successful
+submission retains the buffer until `ss_usb_serial_write_result` reports actual
+completion or failure after controller drain. Disconnect alone does not release
+a pending write. Applications keep borrowed receive buffers held while using
+them for transmission.
+
+Class calls return one for a result, zero while pending and minus one on
+refusal or disconnect. Disconnect retires queued unread leases and input events;
+held leases remain readable until explicit release. This software ownership
+contract does not establish physical DMA drain or hotplug qualification.
+
+The `usb-input` demo returns its first input event. The `usb-serial` demo echoes
+one receive buffer and returns the receive and transmit byte counts. The
+`usb-camera` demo checksums a frame in place, releases it and returns its
+sequence, byte count, checksum and dimensions. Each demo has its own manifest
+and builds without external application sources.
+
+The serial demo configures 1,000,000 baud, eight data bits, no parity and one
+stop bit through `ss_usb_serial_configure` before receiving data. Line settings
+and flow control use the upstream class driver's bridge-specific requests.
+Applications use `ss_usb_wait` to sleep between pending results; interrupt
+completions and owner-task publications wake the application.
+
+`SUNSTONE_A733_OS_USB_JPEG=ON` adds one hardware MJPEG decode to the camera
+demo. The session must supply JPEG extent type 5, containing a complete
+856-byte `a733_jpeg_session` with version 4 and the matching board prefix.
+The extent binds reviewed electrical, initial-isolation, memory and supervised
+recovery evidence. Fixture and reference hashes are zero because the camera
+supplies runtime content. The OS validates the vendor's 624 MHz operating point
+at 800 mV and distinct resource owners before accepting this extent.
+
+`ss_usb_camera_decode` retains the frame lease while the OS gathers its slices
+once into the decoder's contiguous input. The OS reuses the native JPEG
+platform, IOMMU setup, command executor and retained output checks. It returns
+packed active planar Y, Cb and Cr bytes in a private retained buffer. It permits
+one decode per image; completion retains the decoder resources and does not
+establish DMA drain or authorize a return to ROM. The raw camera frame path
+keeps its original transfer buffers until explicit release.
+
+USB class images reserve a 16 MiB non-cacheable pool at
+`0x47000000..0x48000000`. Session extent type 6 carries four little-endian
+64-bit words: version 1, physical base `0x47000000`, size `0x01000000` and
+application alias base `0x7a000000`, followed by a 32-byte reservation-evidence
+hash. This 64-byte extent identifies reviewed physical ownership and remote
+writer exclusion for the additional RAM range under the board's memory
+authority. The boot-image DDR record alone does not establish that authority.
+The sealed session validates the extent before the MMU maps the pool.
+
+The USB host's first 5 MiB allocation starts at the pool base. Only its shared
+payload pages, at offsets `0x40000..0x440000`, have a read-only application
+alias. Controller rings, contexts, scratch space and later JPEG allocations
+remain inaccessible through that alias. The OS identity mapping permits writes;
+both aliases use identical non-cacheable attributes. Applications receive the
+alias address through the kit. The native serial owner translates a retained
+receive view back to its OS address for a zero-copy echo transfer.
+
+The alias maps the shared USB payload pages for the image. A trusted application
+may process only its own completed leases. Grants control service admission;
+they do not provide per-class confidentiality against an application that guesses
+another payload address.

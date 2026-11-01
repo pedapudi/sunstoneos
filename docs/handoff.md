@@ -191,6 +191,27 @@ reliability launch failed as recorded above. The earlier longer-recognition
 nonreturn has no recovered fault location; the corrected hello control has
 only its own recorded scope. Further trials remain held after the failure.
 
+## USB host classes await physical qualification
+
+The OS exposes separately granted keyboard/mouse events, retained USB serial
+buffers and UVC camera frames. Native input, serial, camera and hardware JPEG
+camera images link with interrupt completion and application payload aliases.
+The [image guide](usb-host-images.md) records their hashes, host checks and exact
+offline preparation commands. Public descriptor and traffic fixtures supplement
+the composed host checks; physical throughput and device operation remain open.
+
+The USB host connector is TYPEC24, the USB-C/DisplayPort port. Accessories
+need a USB-C adapter or hub. Enabling VBUS requires coordinator approval and
+an explicit admitted source session; the images grant no electrical authority.
+
+Board launch still needs reviewed TYPEC24/VBUS authority, the new exclusive RAM
+reservation and a supervised USB-class route in the protected development
+runner. The images retain resources and refuse the CPU-return lifetime.
+Hot-plug works within an admitted Type-C adapter/hub connection; removing that
+connection requires a new source session. No board access occurred in this task.
+Four proposals are pending in the existing 3-3 queue; the image guide lists
+their IDs and unmet prerequisites.
+
 ## Merged application and failure-record interfaces
 
 Mimus lives in its own repository under `sunstoneos/`.

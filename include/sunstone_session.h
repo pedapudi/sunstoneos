@@ -44,9 +44,18 @@ struct ss_extent {
  * client facts and the CPU clock grant. Admission loads a copy of the grant
  * with the prefix epoch stamped in when the grant names clusters. */
 enum {
-    SS_EXTENT_THERMAL = 1, SS_EXTENT_AUDIO = 2, SS_EXTENT_NPU = 3, SS_EXTENT_CPU_GRANT = 4,
+    SS_EXTENT_THERMAL = 1, SS_EXTENT_AUDIO = 2, SS_EXTENT_NPU = 3, SS_EXTENT_CPU_GRANT = 4, SS_EXTENT_JPEG = 5, SS_EXTENT_USB_MEMORY = 6,
     SS_EXTENT_INPUTS = 16           /* struct ss_input_fact per INPUT region, manifest order */
 };
+/* USB class profile's reserved NC pool and read-only application alias.
+ * evidence identifies the reviewed reservation for this exact range under
+ * the board prefix memory authority. Geometry alone is not physical ownership
+ * evidence; the original boot-image reservation hash does not cover this pool. */
+struct ss_usb_memory_extent {
+    uint64_t version, base, bytes, alias;
+    uint8_t evidence[32];
+};
+SS_STATIC_ASSERT(sizeof(struct ss_usb_memory_extent)==64,"USB memory extent layout");
 struct ss_input_fact {
     uint64_t bytes;
     uint8_t sha256[32];
