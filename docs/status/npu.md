@@ -189,9 +189,9 @@ NPU stays at 852 MHz/800 mV, PCK4 stays ON and DCDC2 is untouched.
 The approved proposal is under `qualification-1101/` in the build root.
 `concurrency-1101/review/`, `final-checks/`, `final-native/`, `templates-final/`
 and `queue-inputs/` contain the review, checks, native artifacts, session
-provenance and image-bound submission inputs. The current checked source is
-`9dff0667`; its combined ELF SHA-256 is
-`2d8551bc4baa599f031e46a3f1a76e97c84cda03e3716c0474df4b2dcc86e680`.
+provenance and image-bound submission inputs. The merged executable source is
+`03137448`; its combined ELF SHA-256 is
+`686f9c355e0997c2d78e89bf051128f7c974631fd282079de5d4cc7634ae00e9`.
 
 Active-job cancellation is implemented and independently reviewed. A finite
 WAIT stream supplies an active command; cancellation requires its acknowledgment
@@ -235,69 +235,75 @@ CPU/GPU operation and safe fault recovery. See [startup](../npu-startup.md),
 and [conformance](../npu-conformance.md).
 
 
-## Continuation requires runner integration before board testing
+## Land the merged runner before the CPU and NPU controls
 
-The branch is `work/npu-wdt-1031`. Reviewed executable source is `9dff0667`;
-subsequent commits update this status only. No concurrency or cancellation
-board entry is submitted. The four passing queue entries above remain the
-physical evidence; host checks do not extend their scope.
+The branch is `work/npu-wdt-1031`. Merge `03137448` includes `bringup`
+`35ee1836`. It preserves resident NPU queues, the EL0 submission ring, GPU fast
+paths, USB admission and the latency profile alongside concurrency and active
+cancellation. No concurrency or cancellation board entry is submitted.
+The passing queue entries above remain the physical evidence.
 
 Open work, in priority order:
 
-1. **Integrate the runner support.** The coordinator must reconcile this branch
-   with current `bringup`, preserving the separately landed NPU fast path and
-   other workers' runner changes. Deploy RAM preservation, image-bound decoding,
-   fresh ON-only admission and the reviewed rail-helper ordering before any run.
-   The scoped review material is
-   `concurrency-1101/runner-support.patch`; it is not guaranteed to apply cleanly
-   to current `bringup`. The alternative is to merge current `bringup` into this
-   branch, then repeat affected validation and reviews for changed native paths.
-2. **Run the CPU control, then concurrency.** The coordinator-approved port is
-   3-3. Exact ordered commands, templates, expectations and decoders are in
-   `concurrency-1101/queue-inputs/commands.json`. First verify both CPU rails at
-   800 mV. Stop on the first failure. After each verified return, record the entry
-   and result before continuing. The combined run checks four NPU outputs and
-   proves overlap with checked matrix multiplication on all eight CPU cores.
+1. **Land and deploy.** The coordinator lands this branch and restarts the
+   queue daemon with its runner support. Keep current USB source-off and probe
+   admission, plus NPU ON-only admission, RAM preservation, image-bound decoding
+   and the approved rail-helper ordering. The old standalone
+   `concurrency-1101/runner-support.patch` is superseded by the merged branch.
+2. **Run the CPU-only control, then concurrency on 3-3.** Use the exact commands
+   in the image READMEs below. Before each run, confirm DCDC3 and DCDC5 at
+   800 mV through the runner. Stop at the first failure. The combined run checks
+   four NPU outputs and proves overlap with matrix multiplication on all eight
+   CPU cores. Record each queue entry and result before continuing.
 3. **Qualify active-job cancellation.** After both controls pass, build the
    cancellation board package from the integrated source and rerun its focused
-   cases. Submit the bounded WAIT-stream cancellation and matching-inference
-   recovery test. The existing `cancel-1101/producer-host-4/image.elf` is a host
-   fixture, not a queued board package.
+   cases. Test bounded WAIT-stream cancellation followed by matching inference.
+   `cancel-1101/producer-host-4/image.elf` remains a host fixture, not a board
+   package. Cancellation and domain OFF have no physical qualification.
 
-Both unrun native images are under
-`~/.cache/sunstoneos/build/npu-wdt-1031/concurrency-1101/`:
+Both rebuilt, unrun images are under
+`~/.cache/sunstoneos/build/npu-wdt-1031/land-35ee1836/`:
 
 | Image | ELF SHA-256 | README relative to that directory |
 | --- | --- | --- |
-| CPU-only control | `d80812cf85fc703394818dfef84f4330e35fa57003fa289dd1d213ed9221959d` | `final-native/control/README.md` |
-| CPU and NPU concurrency | `2d8551bc4baa599f031e46a3f1a76e97c84cda03e3716c0474df4b2dcc86e680` | `final-native/combined/README.md` |
+| CPU-only control | `7f18c978f34cd3105bfdeb85aa08ac83fd907d996a1827ae60233b16216060a8` | `images/control/README.md` |
+| CPU and NPU concurrency | `686f9c355e0997c2d78e89bf051128f7c974631fd282079de5d4cc7634ae00e9` | `images/combined/README.md` |
 
-The coordinator approves the existing CPU lifecycle and top points, the CPU
-control followed by concurrency, and then active-job cancellation. Three
-independent reviewers approve the frozen concurrency source. Deployment of the
-runner support remains pending with the coordinator; no further review is
-requested. Any NPU domain OFF, clock gating or new voltage/clock point requires
-a separate proposal and coordinator approval. PCK4 stays ON and DCDC2 stays
-untouched. The post-ROM helper is permitted only after verified normal return
-and RAM restoration.
+Each package has its ELF, complete receipt expectation, image-bound decoder,
+session template and exact submission command. `images/commands.json` lists
+both commands in order. The frozen host source is `host-03137448/`; use it
+with these images. The older `concurrency-1101/queue-inputs/commands.json`
+and its image hashes are superseded.
 
-Host evidence is in `concurrency-1101/final-checks/`, `review/` and
-`final-gate.log`. The three baseline builds, selected integration gate and
-complete linked return-chain check pass. The return-chain check includes
-client completion, worker and interrupt retirement, all-core arrival, the
-8 MiB pool clean, RAM restoration and the permitted post-ROM helper.
+Approved points are CPU-L 1794 MHz/1000 mV on DCDC5, CPU-B 2002 MHz/1050 mV
+on DCDC3 and DSU 1274 MHz. CPU-B lowers to 1014 MHz before ROM. NPU stays
+at 852 MHz/800 mV, PCK4 stays ON and DCDC2 stays untouched. The post-ROM
+DCDC5-only helper runs only after verified normal return and RAM restoration;
+faults or uncertain return prohibit it.
+
+The coordinator approves the control, concurrency and subsequent cancellation
+runs within those bounds. The three earlier independent reviews cover source
+`9dff0667`; no new reviews are requested for this bounded merge. Landing and
+runner deployment remain with the coordinator. Any NPU domain OFF, clock
+gating or new voltage/clock point needs a separate proposal and approval.
+
+Merged-tree checks are under `land-35ee1836/` in the build root.
+`final-board-runner.log`, `final-usb-disconnect.log` and
+`final-usb-discover.log` pass. `final-concurrency.log`, `final-owners.log`,
+`final-geometry.log`, `final-terminal.log` and `final-chain.log` pass.
+The linked chain includes client completion, worker and interrupt retirement,
+all-core arrival, the 8 MiB pool clean, RAM restoration and the permitted
+post-ROM helper. SDK event, failure-record and copy-guard checks also pass.
+Full gate evidence is `gate-ready.log`, label `npu-land-35ee1836-ready`.
 
 Shared files require coordination with CPU, NPU fast-path and runner workers:
 `tools/board.py`, `tools/board_images.py`, `tools/a733-crumbs.py`,
 `include/sunstone_crumb.h`, `include/sunstone_app.h`, `runtime/npu_app.c`,
-`CMakeLists.txt`, `apps/os/npu*`, `apps/os/cpu-return*`,
-`apps/os/return-fail-harness.h`, `apps/os/main.c`, `apps/os/task.c`,
-`platform/a733-smp-supervised/launch.c` and `drivers/npu/*`.
-Check the actual branch diff before resolving these files; preserve unrelated
-workers' interfaces and changes.
+`CMakeLists.txt`, `cmake/sunstone-os-core.cmake`, `apps/os/npu*`,
+`apps/os/cpu-return*`, `apps/os/return-fail-harness.h`, `apps/os/main.c`,
+`apps/os/task.c`, `platform/a733-smp-supervised/launch.c` and `drivers/npu/*`.
+Preserve other workers' interfaces when resolving these files.
 
-
-Auxiliary scratch branches are preserved and clean. `npu-cancel-1101` at
-`38841b70` and `work/npu-control-merge-1101` at `4a06665a` contain WIP commits
-from old development fixtures. Their reviewed equivalents already exist on
-`work/npu-wdt-1031`; neither scratch commit is a landing candidate.
+Auxiliary scratch branches remain separate: `npu-cancel-1101` at `38841b70`
+and `work/npu-control-merge-1101` at `4a06665a`. Those WIP commits are
+excluded from this branch and must not be landed.
