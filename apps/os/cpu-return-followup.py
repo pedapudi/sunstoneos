@@ -383,7 +383,7 @@ def run(args):
     def end(): state['phases'][-1]['complete'] = True; save()
     def observe(name, binary, capture):
         access = module('compound_access_' + name, 'tools/usb-access.py')
-        sys.path.insert(0, str(Path.home() / 'git/mimus/tools')); import usb_guard
+        sys.path.insert(0, str(ROOT / 'tools')); import usb_guard
         usb_guard.check_health()
         with access.board_lock() as node:
             access.require_session(node); access.require_rom(node)

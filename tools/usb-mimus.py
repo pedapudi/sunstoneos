@@ -111,7 +111,7 @@ spec.loader.exec_module(platform)
 spec = importlib.util.spec_from_file_location("mimus_failure", ROOT / "tools/check-a733-smp.py")
 failure_helper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(failure_helper)
-sys.path.insert(0, str(Path.home() / "git/mimus/tools"))
+sys.path.insert(0, str(ROOT / "tools"))
 import usb_guard
 
 

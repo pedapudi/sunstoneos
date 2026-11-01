@@ -109,7 +109,7 @@ READER = 'tools/board-bundles-next-read.py'
 # A Read bundle makes no re-enumeration, so its attempt needs no guard wait:
 # its 30 s FEL bound per command and the scratch save and restore fit 120 s.
 READ_TIMEOUT = 120
-HOST_TOOLS = ('tools/check-a733-smp.py', 'tools/usb-access.py')
+HOST_TOOLS = ('tools/check-a733-smp.py', 'tools/usb-access.py', 'tools/usb_guard.py')
 # The returning SRAM survey that precedes each returning run. Its runner is the
 # repository's tools/run-launch-survey.py, which refuses a build whose manifest
 # names another runner or survey source. The build of launch-survey-20261017

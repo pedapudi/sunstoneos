@@ -124,7 +124,7 @@ def main():
             input_evidence.get('rom_sha256') == ROM_HASH,
             'Successful physical low-input inspection evidence is required.')
     access = load_module('watchdog_access', ROOT / 'tools/usb-access.py')
-    sys.path.insert(0, str(Path.home() / 'git/mimus/tools'))
+    sys.path.insert(0, str(ROOT / 'tools'))
     import usb_guard
     usb_guard.check_health()
     args.evidence.mkdir(parents=True, exist_ok=False)

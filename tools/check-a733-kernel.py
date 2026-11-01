@@ -285,7 +285,7 @@ def main(argv=None, observe=None, validate_result=None):
     if controlled is not None:
         record["controlled_sha256"] = hashlib.sha256(controlled_raw).hexdigest()
     access = load_module("access", ROOT / "tools/usb-access.py")
-    sys.path.insert(0, str(Path.home() / "git/mimus/tools"))
+    sys.path.insert(0, str(ROOT / "tools"))
     import usb_guard
     failure_helper = load_module("kernel_failure", ROOT / "tools/check-a733-smp.py")
     if admission:

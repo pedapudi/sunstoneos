@@ -366,7 +366,7 @@ def main(argv=None):
                 path=args.evidence/item['sha256']
                 if not path.exists():path.write_bytes(data);base.sync_file(path)
         access=base.module('storage_usb_access',ROOT/'tools/usb-access.py')
-        sys.path.insert(0,str(Path.home()/'git/mimus/tools'));import usb_guard
+        sys.path.insert(0,str(ROOT/'tools'));import usb_guard
         usb_guard.check_health()
         record=dict(complete=False,transactions=[],claim=args.claim,owner=args.owner,launch_attempted=False,storage_complete=False)
         def save():save_json(args.evidence/'session.json',record)

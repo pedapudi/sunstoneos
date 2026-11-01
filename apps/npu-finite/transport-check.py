@@ -133,7 +133,7 @@ with tempfile.TemporaryDirectory(prefix='returning-transport-') as temporary:
    assert seen[-1]==((b'ddr',b'survey'),old,identity,'3-3.11',base.FEL_HASH,base.FEL_HASH,(b'warm',))
    results.append({'name':'NPU-adapter-'+('success' if successful else 'mismatch'),'passed':True})
  # Exercise the real shared churn decision without opening its registry.
- real_guard=load('pinned_usb_guard',Path.home()/'git/mimus/tools/usb_guard.py')
+ real_guard=load('pinned_usb_guard',root/'tools/usb_guard.py')
  event={'board':'MODEL-3-1','what':'MODEL launch','count':2,'start':10,'end':None,'pid':900001}
  with patch.object(real_guard,'_alive',return_value=True):
   assert real_guard.wait_needed([], 'MODEL-3-3',2,11,pid=900002)==(0.0,'')

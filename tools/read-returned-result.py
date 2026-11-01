@@ -17,7 +17,7 @@ prior = json.loads((args.evidence / "session.json").read_text())
 spec = importlib.util.spec_from_file_location("access", Path(__file__).with_name("usb-access.py"))
 access = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(access)
-sys.path.insert(0, str(Path.home() / "git/mimus/tools"))
+sys.path.insert(0, str(Path(__file__).parent))
 import usb_guard
 usb_guard.check_health()
 with access.board_lock() as node:

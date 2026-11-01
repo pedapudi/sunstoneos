@@ -71,14 +71,11 @@ for root,name in [(transport,'transport')]+([] if central else [(a.baseline.reso
 platform.copy_helpers('usb-returning',('host-check.py','check.py','prepare.py','README.md'))
 print(f'Built bounded USB returning image; {len(platform.reused)} reused objects and four new units.')
 # Freeze the runnable host closure, including the updated kernel observer hook.
-host_files=['tools/check-a733-usb-returning.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/check-a733-smp.py']
+host_files=['tools/check-a733-usb-returning.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/check-a733-smp.py','tools/usb_guard.py']
 host_inputs={}
 for name in host_files:
  source=r/name;dest=e/'host'/name;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,dest)
  host_inputs[name]=digest(source)
-# The existing runner deliberately uses the configured external guard path.
-# Record that runtime dependency; do not substitute another implementation.
-external=Path.home()/'git/mimus/tools/usb_guard.py';host_inputs[str(external)]=digest(external)
 save(e,'host-inputs.json',host_inputs)
 # Preserve the reviewed ROM bytes/disassembly and the actual compiled PIO source.
 return_sources={}

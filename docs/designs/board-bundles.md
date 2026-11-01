@@ -319,7 +319,7 @@ sandbox fails the check instead of reaching a device.
 | Time from entry to forced return | 2 s, uncapped by renewal in USB builds | 22 s | Primary agent's monitor model; board record ticks |
 | Fixed cost per run: upload, launch, re-enumeration, record read | 2.0 s *estimated*: the 2026-10-15 forced-stall run took 4.0 s from its first read to its result file, of which 2 s was the deadline | 3 s | Evidence file times; board journals replace the estimate |
 | USB re-enumerations per chain | Not applicable | 8 to 12 (two per run) | Count of `guard.reenumeration` reservations |
-| Chain wall time | Not applicable | 10 min: 2.3 to 3.5 min for 4 to 6 runs alone; 8.3 to 9.5 min after ranks 1 to 7 (*estimated*) | Replay through `wait_needed` in `~/git/mimus/tools/usb_guard.py` from the guard state ranks 1 to 7 leave |
+| Chain wall time | Not applicable | 10 min: 2.3 to 3.5 min for 4 to 6 runs alone; 8.3 to 9.5 min after ranks 1 to 7 (*estimated*) | Replay through `wait_needed` in `tools/usb_guard.py` from the guard state ranks 1 to 7 leave |
 | Queue timeout | Not applicable | Monitor 1,200 s; Terminal the attempt bound below, at most 3,600 s | Computed by the tool from the runner, the transport and the bundle's file sizes; the check recomputes the bound with the transport's own `transfer_timeout()` and `REGIONS` and confirms the timeout is at least that bound |
 
 The wall-time replay assumes 22 s per run plus 3 s of fixed cost, and at

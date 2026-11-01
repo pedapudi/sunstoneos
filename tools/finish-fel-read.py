@@ -28,7 +28,7 @@ if result_path.exists():
     sys.exit('This recovery was already attempted; inspect its result before further work.')
 spec = importlib.util.spec_from_file_location('access', Path(__file__).with_name('usb-access.py'))
 access = importlib.util.module_from_spec(spec); spec.loader.exec_module(access)
-sys.path.insert(0, str(Path.home() / 'git/mimus/tools'))
+sys.path.insert(0, str(Path(__file__).parent))
 import usb_guard
 record = dict(transactions=[], complete=False)
 def save(): result_path.write_text(json.dumps(record, indent=2) + '\n')

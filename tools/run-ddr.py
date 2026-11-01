@@ -69,7 +69,7 @@ spec.loader.exec_module(access)
 spec = importlib.util.spec_from_file_location("ddr_base", ROOT / "tools/check-a733-smp.py")
 base = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(base)
-sys.path.insert(0, str(Path.home() / "git/mimus/tools"))
+sys.path.insert(0, str(ROOT / "tools"))
 import usb_guard
 
 

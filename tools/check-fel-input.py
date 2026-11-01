@@ -75,7 +75,7 @@ def main():
     spec = importlib.util.spec_from_file_location("access", ROOT / "tools/usb-access.py")
     access = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(access)
-    sys.path.insert(0, str(Path.home() / "git/mimus/tools"))
+    sys.path.insert(0, str(ROOT / "tools"))
     import usb_guard
     usb_guard.check_health()
     args.evidence.mkdir(parents=True, exist_ok=False)

@@ -29,7 +29,7 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
  require(base.digest(args.fel)==base.FEL_HASH,'FEL executable differs from reviewed bytes.')
  access=module('returning_access',ROOT/'tools/usb-access.py') if access is None else access
  if guard is None:
-  sys.path.insert(0,str(Path.home()/'git/mimus/tools'));import usb_guard
+  sys.path.insert(0,str(ROOT/'tools'));import usb_guard
   guard=usb_guard
  guard.check_health();args.evidence.mkdir(parents=True,exist_ok=False)
  record={'mode':'kernel','execution_profile':profile,'complete':False,'launch_attempted':False,'dirty':False,'transport_failed':False,'root_owned_claim':args.root_owned_claim,'transactions':[],'return_timeout_seconds':return_timeout,'tool_sha256':base.FEL_HASH,'image_sha256':p['image_sha256']}

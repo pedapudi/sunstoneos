@@ -14,6 +14,13 @@ FEL recovery device (`1f3a:efe8`). It discovers the current USB address each tim
 and refuses to select among multiple matching devices. Python 3 and the host
 `getfacl` and `setfacl` commands are required.
 
+`usb_guard.py` limits how often board tools re-enumerate USB devices and refuses
+board work after the host's xHCI controller has died. Board tools import it from
+this directory, and bundles that run a frozen host runner carry a copy. The file
+is a byte-identical copy of `tools/usb_guard.py` from mimus revision `d0723ea9`.
+Both copies share one churn state file under `/tmp`. Note for mimus: import the
+guard from SunstoneOS `tools/usb_guard.py` and remove the mimus copy.
+
 ## Access across board resets
 
 For autonomous bring-up, install a session rule from this worktree:

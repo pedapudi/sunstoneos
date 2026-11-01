@@ -267,7 +267,7 @@ def main(argv=None):
                        ('ddr-contract.json',args.ddr_contract),('platform-contract.json',args.platform_contract),
                        ('prepared.json',bundle/'prepared.json')]: shutil.copy2(path,args.evidence/label)
     access=module('observe_usb_access',ROOT/'tools/usb-access.py')
-    sys.path.insert(0,str(Path.home()/'git/mimus/tools')); import usb_guard
+    sys.path.insert(0,str(ROOT/'tools')); import usb_guard
     usb_guard.check_health()
     record={'complete':False,'transactions':[],'claim':args.claim,'owner':args.owner,
             'bundle_sha256':digest(bundle/'prepared.json'),'launch_attempted':False,'scheduler_result':'unobserved'}

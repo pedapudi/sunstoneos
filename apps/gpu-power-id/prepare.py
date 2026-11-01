@@ -59,7 +59,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 OBJCOPY = '/usr/lib/llvm-21/bin/llvm-objcopy'
 HOST_TOOLS = {'check-a733-kernel.py': 'tools/check-a733-kernel.py', 'check-a733-smp.py': 'tools/check-a733-smp.py',
-              'usb-access.py': 'tools/usb-access.py'}
+              'usb-access.py': 'tools/usb-access.py', 'usb_guard.py': 'tools/usb_guard.py'}
 SCHEMA = 'board-gpu-returning-bundle-v1'
 # The image each build reuses objects of, by its build record's identity.
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
