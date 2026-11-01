@@ -27,10 +27,15 @@ output checks and digest. This excludes IRQ time charged to idle. Mean
 API-entry-to-completed-doorbell delay is 403.44 versus 0.943 µs.
 [The design](../designs/npu-fast-path.md) records hashes, timing scope and vendor references.
 
-Port 3-3 entry `1793564565759310818-479eba75` returns with matching outputs
-from two binaries sharing one 400-byte output/input allocation. Two FIFO records
-are pending together; a prepared joined stream instead emits one final event.
-Both forms require no interstage CPU copy. Repeated chaining remains unqualified.
+Port 3-3 entry `1793565141195481474-2e135a8c` returns normally after 1,000
+two-record FIFO chains and 1,000 joined streams. Two distinct binaries share a
+400-byte output/input allocation and every intermediate and final output matches.
+FIFO and joined throughput is 45,987.32 and 48,166.66 logical stages/s, including
+output checks and digest. Scheduled task CPU cost is 19.87 and 18.70 µs/stage.
+Each chain has two stages; its mean interval excluding those checks is 13.94
+and 12.02 µs. Both forms perform zero interstage CPU copies. The joined stream
+emits one final event and no intermediate event. The complete image retires
+4,001 hardware jobs and 4,002 IRQs, with restored DRAM.
 
 The EL0 application-kit ring has resident handles, image-declared tensor edges,
 connected buffer leases and an SVC doorbell only on idle-to-active publication.

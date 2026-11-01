@@ -1,7 +1,8 @@
 # Dependent NPU command diagnostic
 
-**Implemented; physically unqualified.** This finite diagnostic appends two
-passes to the 1,000-job resident-queue latency measurement. The reader is
+**Implemented; repeated physical operation passes on port 3-3.** This finite
+diagnostic appends FIFO and joined-stream passes to the 1,000-job resident-queue
+latency measurement. The reader is
 assumed to know DMA buffers, interrupt completion and quantized tensors.
 
 The producer is the admitted `conv12` convolution. A second convolution reads
@@ -21,8 +22,11 @@ final completion; no intermediate CPU observation is claimed.
 
 The immutable `npu_dependent_return_profile` identifies the edge from slot 0,
 output 0 to slot 1, input 0. The latency startup marker requires 1,004 jobs and
-1,005 interrupt completions: one warmup, 1,000 measured jobs, two FIFO records
-and one joined-stream record, plus bootstrap completion. The log records each
+1,005 interrupt completions for the default single iteration: one warmup,
+1,000 measured jobs, two FIFO records and one joined-stream record, plus
+bootstrap completion. `--chain-repeats 1000` requires 4,001 hardware jobs and
+4,002 IRQs. Each path checks both stage outputs on every iteration and reuses
+its records only after final completion and release. The log records each
 pass's interval, records submitted before waiting, completed records, output
 checks, digest and first mismatch. It also records both CPU and device addresses
 of the shared boundary tensor. It remains within the finite 16 KiB log.
@@ -39,8 +43,12 @@ representation field of the producer output: dimensions `[10,10,4,1]`, unsigned
 
 The host SDK simulator received all 400 producer output bytes unchanged and
 produced all 128 consumer reference bytes equal to the quantized CPU reference.
-The native decoder and assembler accept the consumer. These checks establish
-compatible model bytes and references; physical DMA behavior remains open.
+The native decoder and assembler accept the consumer. Port 3-3 entry
+`1793565141195481474-2e135a8c` repeats each path 1,000 times with matching
+intermediate and final outputs, identical boundary addresses and normal return.
+The FIFO and joined paths execute 45,987.32 and 48,166.66 logical stages/s,
+including output checks and digest. These results cover the named models and
+buffers; recovery and other graph layouts remain unqualified.
 
 | Artifact | SHA-256 |
 | --- | --- |
@@ -63,7 +71,7 @@ library is linked into FreeRTOS. Compilation used an 8 GiB RAM limit with no
 additional swap, four CPUs, a network-disabled container and no board devices.
 The measured maximum child RSS was 4,283,664 KiB.
 
-The coordinator builds with `--latency queue --dependent-chain` and an artifact
+The coordinator builds with `--latency queue --dependent-chain --chain-repeats 1000` and an artifact
 map that includes `conv12-consumer`. [The chain model list](chain-models.json)
 is separate from the matched legacy/queue model list. This diagnostic requires
 the existing finite watchdog, RAM-only session and normal-return checks.

@@ -168,11 +168,25 @@ fence. It preserves each native stream's flush/stall footer and emits only the
 final event and END. Preparing
 links and validating dependencies happens once, while the sequence is idle.
 A live command must never be patched while the fetch engine can read it.
-Port 3-3 entry `1793564565759310818-479eba75` checks two distinct binaries
-with an aliased 400-byte intermediate. Two queued records and a joined stream
-both produce exact stage outputs and return normally. The joined 240-byte stream
-uses one final IRQ and performs no intermediate CPU copy. Its single-pass
-timing establishes operation; repeated chained-throughput qualification is separate.
+Port 3-3 entry `1793565141195481474-2e135a8c` repeats each form 1,000 times
+with two distinct compatible binaries. Their 400-byte intermediate has the same
+CPU and device address in both models. Every intermediate and final output
+matches its reference. The image completes 4,001 hardware jobs, including
+warmup and the separate 1,000-job loop, receives 4,002 IRQs and returns normally.
+
+| Dependent path | Stages/s | Task CPU/stage (µs) | Mean chain interval (µs) | Intermediate events across 1,000 chains |
+| --- | ---: | ---: | ---: | ---: |
+| Two FIFO records pending together | 45,987.32 | 19.87 | 13.94 | 1,000 |
+| One resident joined stream | 48,166.66 | 18.70 | 12.02 | 0 |
+
+Each chain executes two stages. Throughput and task CPU include both output
+checks, digest and progress checks; the mean chain interval excludes these
+checks. Both paths perform zero interstage CPU copies. The joined 240-byte
+stream produces only the final device completion, so no CPU completion or
+submission occurs between stages. Each iteration waits before record reuse.
+This qualifies these buffers, two binaries and normal retirement; other graphs,
+fault recovery and EL0 execution need separate evidence. The repeated image
+SHA-256 is `ae8dc27e6c16b8b362bc3a2d7ecdc640d7616d677e52e760020d9930993464fd`.
 
 ## Power and measurement require separate physical evidence
 
