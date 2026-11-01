@@ -66,7 +66,7 @@ is under `~/.cache/sunstoneos/board-queue/entries/`:
 | Operation | Matching jobs / interrupt completions | Entry |
 | --- | --- | --- |
 | Current local stop/restart control | 2 / 4 | `1793558381244643310-6a29a71d` |
-| conv12, conv8, then conv12 | 3 / 4 | `1793514712212240796-1a65224c` |
+| conv12, conv8, then conv12 | 3 / 4 | `1793558909256910454-ab3a76b4` |
 | Finite application SDK | 2 / 3 | `1793514867262701593-6a1aa965` |
 
 These bounded workloads do not establish repeated-transition reliability.
@@ -81,6 +81,12 @@ SHA-256 `dd826f5ff75795b6beb2b96b352e28439574156fc39c222cd00e338d70e8eac3`.
 The returned report has status zero, matching outputs, stopped interrupt service,
 normal local restart, normal ROM return and verified DRAM restoration. It has
 no first failure or quarantine.
+
+The current model-switch image checks conv12, conv8 and conv12 outputs in one
+runtime lifetime. Entry `1793558909256910454-ab3a76b4` has status zero, four
+interrupt completions, normal return and verified DRAM restoration. Its ELF is
+`~/.cache/sunstoneos/build/npu-wdt-1031/qualification-1101/images/model-switch/image.elf`,
+SHA-256 `8ede7a8341fa28abe93f717d3d410b499333eca3e32aeafd83fa7bafe0c846d7`.
 
 The runtime models up to eight catalogue clients and model switching. The board
 image has one slot and five catalogue models; direct FIFO USB and shader-graph
