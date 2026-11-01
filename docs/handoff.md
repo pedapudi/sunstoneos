@@ -71,10 +71,20 @@ cards. Neither board has populated eMMC or UFS; keep the failed UFS probe disabl
   handles this owner phase. The corrected hello control returned normally on
   3-1 with seven secondaries off; evidence:
   `dev-runs-1031/3-1-cpu-return-211702/run/session.json`.
-- **CPU reliability — failed.** Image `02-reliability` ran on 3-3 and failed
-  with the CPU clock driver in RETAINED at `return-cpu.c:159`. Evidence:
-  `cpu-reliability-1031/start-1/`. Another worker owns this defect. Three-start
-  repeatability and full restoration remain unqualified.
+- **CPU reliability — one corrected run passed on 3-3.** All eight pinned
+  CPUs completed 4096 rounds in 4096 ticks with independently matching
+  payload digests. The 224-byte result returned normally with seven
+  secondaries off and WDT0 disarmed. Queue entry
+  `1793513595977482947-679bf1ea` records image SHA-256
+  `ad25bc86d87130038dfafddae2a63250c694e2db7f375d4d01371967d978c4cf`
+  and matching native fix `f2131e76`.
+  The previous ELF contained the UPDATE-first and LOCK timing corrections;
+  its remaining failure read CPU-B N=77 after UPDATE cleared when N=39 was
+  requested. The corrected native adapters complete PLL writes and the
+  driver restores boot0's 20 us interval between N and UPDATE. Evidence is
+  under `~/.cache/sunstoneos/board-queue/entries/`; the two preceding
+  diagnostic entries identify the setter and raw PLL word. Three-start
+  repeatability, thermal coverage and full CPU qualification remain open.
 - **GPU firmware diagnostic — failed.** Image `2-firmware` from `ladder-wdt3`
   stopped in the compatibility callback at
   `platform/a733/gpu_backend.c:375` in its frozen build. Evidence:

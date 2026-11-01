@@ -233,7 +233,8 @@ step and waits at most 20 µs:
    must cover both PLL waits and a 10 ms margin for the owner polls that
    follow lock, 90 ms in total; otherwise the transition ends EXPIRED here,
    before any PLL or mux write. Then park the mux on the DCXO and wait 20 µs,
-   write N, set the update bit, wait up to 10 ms for it to clear and up to
+   complete the N write, wait 20 µs, set the update bit, wait up to 10 ms
+   for it to clear and up to
    70 ms (the pinned driver's limits) for three lock reads at least 3 µs
    apart, wait 20 µs, write P, select the PLL again and wait 20 µs. The lock
    rule is the vendor CCU helper's with `CONFIG_AW_STANDARD_CCU=y`, which the
@@ -243,6 +244,85 @@ step and waits at most 20 µs:
 8. When lowering the rate, write the lower voltage after the frequency
    change and wait for the same ramp.
 9. Release both leases.
+
+The control register's N is a manually updated parameter. The A733 manual
+V1.00, section 5.1.4.2 (pages 244-246), permits the old N to remain visible
+until UPDATE completes. The driver waits for UPDATE to clear before comparing
+N with the requested value, as `ccu_nkmp_set_rate` does. Read failures, a stuck
+UPDATE, a wrong N after completion and subsequent LOCK failures retain both
+leases. The manual is pinned by `a733-user-manual-1.00` in `sources.lock.json`
+(SHA-256 `cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d`).
+
+The corrected UPDATE-first and LOCK timing image completed one GPU job and
+returned normally on both boards. The eight-core reliability image still
+failed during the 2002-to-1014 MHz close. Disassembly of its frozen ELF
+confirmed both corrections. The first retained-setter diagnostic identified
+the N comparison after UPDATE cleared, with no deadline or manager fault.
+A second diagnostic read `0xf8804d00` at that statement: N remained 77 while
+the driver expected 39, UPDATE was clear, and PLL enable, output and LOCK
+remained set. These observations exclude an absent fix or disabled PLL.
+Evidence is under `~/.cache/sunstoneos/board-queue/entries/`, entries
+`1793512930164628324-8c5d13f4` and `1793513153733329412-dfa025f8`.
+
+The pinned boot0 routine at blob offsets `0x2114`–`0x21b4` waits 20 us after
+writing N and before requesting UPDATE. The native driver previously waited
+before N only. Both native write adapters now complete PLL writes with DSB SY,
+then the driver waits at least 20 us between N and UPDATE. The native sequence
+still retains a wrong N after UPDATE; the delay does not replace verification.
+The extra settle adds 21 us in the model, with two additional completion
+barriers and unchanged register and PMIC write counts. Three reviewers
+approved the design and implementation before its physical experiment.
+
+The short hello application can finish before the top-point raises. Its
+successful control reports DCDC5 at 800 mV, rather than CPU-L's 1000 mV top
+rail, so it does not establish the close path after the complete top-point
+sequence. Sustained applications wait for those points and force CPU-B's
+lowering. The different outcomes do not establish a thermal cause.
+
+The native close sequence and its vendor comparison are:
+
+| Operation | Vendor reference and native behavior |
+| --- | --- |
+| CPU-B registers | `ccu-sun60iw2-cpupll.c`: control at `0x08872000`, external P and mux at `0x0887201c`; both paths use these fields. |
+| Inherited controls | Linux enables modulation during probe. Native admission requires it disabled and preserves PLL, LDO, output and lock enable bits. |
+| Consumer clock | Linux adjusts N live under its modulation profile. Native parks on DCXO and settles for at least 20 us, following boot0. |
+| N update | Complete the N write, settle at least 20 us as boot0 does, request UPDATE, wait up to 10 ms for clear, then validate N. |
+| Divider | Linux grows P before changing N and shrinks it after UPDATE. Native changes P while still parked, then selects the qualified PLL; no consumer sees the intermediate rate. For 2002 to 1014 MHz, P remains zero. |
+| Lock | The standard vendor helper qualifies three LOCK samples at least 3 us apart, then waits 20 us. Native uses that qualification with its existing 70 ms fault bound. |
+| Reselect | Native reads back P/mux, selects the PLL, settles at least 20 us and verifies the final decoded rate before any lower rail write. |
+| Rail | Frequency lowering precedes DCDC3 lowering and regulator settling. Voltage and its ramp precede a frequency raise. Lowering the rail first would expose the old fast CPU clock to insufficient voltage. |
+| Shared DSU | CPU-L remains at 1794 MHz and its DCDC5 rail at 1000 mV during CPU-B close. The existing 1274 MHz DSU point remains within the vendor cap and shared voltage; CPU-B close writes neither. |
+
+The manual's non-LFM recipe has duplicated UPDATE and inconsistent lock-status
+wording. The effective Linux path uses one UPDATE request and polls its clear;
+the native DCXO path preserves its existing enabled PLL and LDO. Its intervening
+lock and mux settles also exceed the manual's minimum 1 us between updates.
+The correction adds no register write or voltage transition and relaxes no
+request, update, lock, burst or release deadline.
+
+LOCK qualification uses both sides of each register read. The poll-entry
+sample determines eligibility against the previous counted read's post-read
+sample plus four whole microseconds. The driver then reads the PLL and samples
+time again. An eligible set LOCK counts using that post-read time; any observed
+clear LOCK resets the count. An early set LOCK never counts, even if preemption
+delays its later timestamp. A failed post-read time sample retains ownership.
+This preserves the vendor's minimum observation gap under preemption before
+or after MMIO. It adds one existing counter-provider call per PLL poll, with
+no new state, hardware write, sleep or configured timeout.
+
+`checks/cpu-clock-model.c --lock-timing-only` covers preemption before and after
+LOCK observation, failed post-read time, an early unlocked observation and
+expiry while waiting inside the observation gap. The original timestamps fail
+the first preemption case. A post-read-only mutation fails the second case,
+which requires the pre-read eligibility check as well. All five cases preserve
+high DCDC3 until successful lock qualification, mux reselection and settling.
+
+`checks/cpu-clock-model.c --close-update-only` covers staged N during raise
+and close, wrong N after completion, stuck UPDATE and read failure. The model
+keeps visible and staged N separate, instead of making an N write immediately
+visible. The close case first inspects the 800 mV boot floor and performs the
+actual top raise. It then checks that all five lowering clock writes precede
+the single DCDC3 write back to 800 mV. The old driver fails this case.
 
 The pinned Linux driver changes N in place with linear frequency modulation
 (LFM) enabled. At probe it sets these bits in each CPU PLL's control words:
@@ -492,3 +572,17 @@ evidence remains applicable because this change does not alter that code.
 
 These are software results only. Physical lock time, settling, rail
 accuracy, frequency, PMU access and thermal behavior remain unmeasured.
+
+`checks/cpu-clock-model.c --n-stage-only` adds a delayed-capture hypothesis
+for the observed old-N word and covers failed and stopped time sources after
+N. The pre-fix model fails the successful-close case. The corrected case
+keeps DCDC3 high until final lock and mux qualification; failed settles issue
+no UPDATE. This model does not measure silicon staging latency.
+
+The completed-write plus N-stage interval image returned on board 3-3 in
+queue entry `1793513595977482947-679bf1ea`. All eight reliability workers
+completed 4096 rounds, the independent host decoder matched all digests,
+seven secondaries retired and WDT0 was disarmed. Its SHA-256 is
+`ad25bc86d87130038dfafddae2a63250c694e2db7f375d4d01371967d978c4cf`.
+This run establishes the combined correction for that workload; it does not
+separate barrier completion from N-stage timing or qualify thermal coverage.

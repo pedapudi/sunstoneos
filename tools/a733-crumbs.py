@@ -116,17 +116,46 @@ def symbolize(elf, address):
         return best
 
 
+def finite_npu_failure_image(elf):
+    """Frozen finite NPU images used group 8 before CPU retention used it.
+
+    Require the finite return producers, rather than a general NPU service:
+    a mixed CPU/NPU OS image can legitimately emit CPU retention failures.
+    The caller supplies the validated launched ELF, not the current source tree.
+    """
+    if elf is None:
+        return False
+    try:
+        from elftools.elf.elffile import ELFFile
+        from elftools.common.exceptions import ELFError
+    except ImportError:
+        return False
+    try:
+        with open(elf, 'rb') as stream:
+            table = ELFFile(stream).get_section_by_name('.symtab')
+            names = {s.name for s in table.iter_symbols()
+                     if s['st_shndx'] != 'SHN_UNDEF'} if table else set()
+        return {'npu_finite_receipt', 'npu_finite_rom_return'} <= names
+    except (OSError, ELFError):
+        return False
+
+
 def board_failure(words, defines, elf):
     """Decode a level 0xb record: the first board_fail and its site."""
     fault, site, caller, value = words['fault'], words['esr'], words['elr'], words['far']
     groups = {v: k[len('FAIL_'):].lower() for k, v in defines.items()
               if k.startswith('FAIL_') and k not in ('FAIL_SVC', 'FAIL_LEVEL', 'FAIL_RETURN')}
     group = (site >> 12) & 15
+    legacy_npu = group == 8 and finite_npu_failure_image(elf)
+    if legacy_npu:
+        groups[group] = 'npu'
     slot = (fault >> 8) & 255
     record = {'core': (fault >> 20) & 15, 'level': FAIL_LEVEL, 'group': groups.get(group, f'unknown {group}'),
               'site': site & 0xfff, 'aux': site >> 16 & 0x7fff, 'caller': hex(caller), 'value': hex(value),
               'caller_kind': 'return address' if site >> 31 else 'statement',
               'exception_level': 'EL0' if slot == 0 else 'EL1' if slot in (4, 5) else f'SPSR.M {slot:#x}'}
+    if legacy_npu:
+        record['group_source'] = 'finite NPU ELF (legacy group 8)'
     record['site_kind'] = 'detail' if record['group'] in ('cpu_return', 'application') else 'source line'
     if record['group'] == 'npu' and site & defines['NPU_REGISTER']:
         record['register_offset'] = hex((record['aux'] & 0x3fff) << 2)
@@ -150,6 +179,33 @@ def board_failure(words, defines, elf):
                 # another revision can number its lines differently.
                 record['dcdc5_mv'], record['dcdc3_mv'] = 10 * (value >> 22 & 0x3ff), 10 * (value >> 12 & 0x3ff)
                 record['rail_line_source'] = 'apps/os/cpu-return-entry.c of the decoding tree'
+    if record['group'] == 'cpu_pll':
+        aux=record['aux']
+        record.update(expected_n=aux&255, domain=aux>>8&3, driver_state=aux>>10&15,
+                      closing=bool(aux>>14&1), pll=hex(value), observed_n=value>>8&255,
+                      update=bool(value>>26&1), locked=bool(value>>28&1))
+    if record['group'] == 'cpu_retained':
+        aux = record['aux']
+        state, domain, origin = aux & 15, aux >> 4 & 3, aux >> 6 & 3
+        phase, cursor, prior = aux >> 8 & 3, aux >> 10 & 3, aux >> 12 & 7
+        states = ('IDLE', 'CLOCK', 'RAIL', 'INSPECT', 'READ', 'VOLTAGE', 'WRITTEN',
+                  'SETTLE', 'PARK', 'UPDATE', 'LOCK', 'UNPARK', 'RELEASE')
+        record.update(setter='fault_at', driver_state=state,
+                      driver_state_name=states[state] if state < len(states) else 'UNKNOWN',
+                      domain=domain, domain_name=('CPU-L', 'CPU-B', 'DSU', 'INVALID')[domain],
+                      origin=origin, origin_name=('USER', 'LOWER', 'RESTORE', 'INVALID')[origin],
+                      phase=phase, phase_name=('START', 'INSPECT', 'REQUEST', 'FOLLOW')[phase],
+                      request_cursor=cursor, prior_status=prior,
+                      prior_status_source='driver.result', prior_status_name=('READY', 'PENDING', 'COMPLETE', 'BUSY', 'REFUSED',
+                                         'INVALID', 'EXPIRED', 'RETAINED')[prior],
+                      provider_status=None if value & 0xff == 0xff else value & 0xff,
+                      target_mhz=value >> 8 & 0x7ff, inspection=bool(value >> 19 & 1),
+                      closing=bool(value >> 20 & 1), counter_failed=bool(value >> 21 & 1),
+                      clocks_failed=bool(value >> 22 & 1), ledger_failed=bool(value >> 23 & 1),
+                      pmic_failed=bool(value >> 24 & 1), clock_held=bool(value >> 25 & 1),
+                      rail_held=bool(value >> 26 & 1), request_held=bool(value >> 27 & 1),
+                      deadline_expired=bool(value >> 28 & 1), timer_expired=bool(value >> 29 & 1),
+                      parked=bool(value >> 30 & 1), critical=bool(value >> 31 & 1))
     if caller:
         # A statement address is exact; a return address points after the call.
         record['caller_source'] = symbolize(elf, caller - 4 if site >> 31 else caller)
@@ -202,6 +258,15 @@ def decode(words, epoch, elf=None):
             text += f"; register offset {f['register_offset']}"
         if 'startup_stage' in f:
             text += f"; startup stage {f['startup_stage']}"
+        if f['group'] == 'cpu_retained':
+            text += (f"; setter {f['setter']}, state {f['driver_state_name']}, domain {f['domain_name']}, "
+                     f"origin {f['origin_name']}, target {f['target_mhz']} MHz, phase {f['phase_name']}, "
+                     f"request cursor {f['request_cursor']}, prior {f['prior_status_name']}, "
+                     f"provider status {f['provider_status']}, closing {f['closing']}, "
+                     f"pre-retention faults counter={f['counter_failed']} clock={f['clocks_failed']} "
+                     f"ledger={f['ledger_failed']} PMIC={f['pmic_failed']}; "
+                     f"leases clock={f['clock_held']} rail={f['rail_held']} request={f['request_held']}; "
+                     f"expired deadline={f['deadline_expired']} timer={f['timer_expired']}")
         if 'refusal' in f:
             text += '; ' + (', '.join(f['refusal']) or 'no refusal bit')
         parts.append(text)

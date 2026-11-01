@@ -70,11 +70,15 @@
  * without it put phase << 24 | cluster << 16 | status & 0xffff in the value.
  * GUARD (aux bit 14): the value is the entry guard's full refusal word,
  * detail << 12 | line of apps/os/cpu-return-entry.c. */
+#define SUNSTONE_CRUMB_FAIL_CPU_PLL 0x9u /* Mismatched PLL word; expected N/state/domain in aux. */
+#define SUNSTONE_CRUMB_FAIL_CPU_RETAINED 0x8u /* First CPU driver fault; layout in cpu-return/cpu.patch. */
 #define SUNSTONE_CRUMB_CPU_AUX 0x20000000u
 #define SUNSTONE_CRUMB_CPU_GUARD 0x40000000u
 #define SUNSTONE_CRUMB_FAIL_PMIC 0x6u       /* PMIC power service; value: authority word */
 #define SUNSTONE_CRUMB_FAIL_GPU 0x7u        /* GPU failure; value: reason or register status */
-#define SUNSTONE_CRUMB_FAIL_NPU 0x8u        /* NPU failure; value: reason or register status */
+#define SUNSTONE_CRUMB_FAIL_NPU 0xau        /* NPU failure; value: reason or register status */
+/* Frozen finite NPU images use group 8. The host distinguishes their defined
+ * finite return producers from CPU retention using the launched image ELF. */
 /* NPU first-failure layouts, independent of progress stages. Register offsets
  * are the physical address's low 16 bits, divided by four in aux bits 13:0;
  * the symbolized source identifies the bank. Value keeps all 32 status bits.

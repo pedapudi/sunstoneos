@@ -94,7 +94,7 @@ int a733_cpu_clock_grant_load(const struct a733_cpu_clock_grant_record *,uint64_
 struct a733_cpu_clock_ops {
     int (*now)(void *,uint64_t *); /* Monotonic microseconds shared with the leases. */
     int (*read)(void *,uintptr_t,uint32_t *);
-    int (*write)(void *,uintptr_t,uint32_t);
+    int (*write)(void *,uintptr_t,uint32_t); /* 1 only after the device write completes. */
 };
 enum a733_cpu_clock_status {
     A733_CPU_CLOCK_READY, A733_CPU_CLOCK_PENDING, A733_CPU_CLOCK_COMPLETE, A733_CPU_CLOCK_BUSY,
@@ -129,6 +129,16 @@ struct a733_cpu_clock {
     uint32_t words[A733_CPU_DOMAINS][3]; /* Last pattern 0, pattern 1 and LFM words read per domain. */
     uint64_t park_at, parked_max_us; /* Park write time; longest park write to select readback, us. */
 };
+/* Optional first-fault observer. The default weak definition does nothing.
+ * Called once before failed is set and before either manager is retained.
+ * line/here identify the driver's fault statement; status is the failed
+ * provider result, or UINT32_MAX for a local check. Breadcrumb emission is
+ * permitted; clock, rail and provider operations or driver mutation are not. */
+/* Optional raw PLL mismatch observer, with the same restrictions. */
+void a733_cpu_clock_pll_mismatch_note(const struct a733_cpu_clock *,unsigned line,
+    const void *here,uint32_t pll);
+void a733_cpu_clock_retained_note(const struct a733_cpu_clock *,unsigned line,
+    const void *here,uint32_t status);
 /* Zeroed private storage once. Managers, the PMIC provider and the thermal
  * policy have platform lifetime; the policy must already be initialized. The
  * grant is copied. No hardware access. */
