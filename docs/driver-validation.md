@@ -11,6 +11,8 @@ can latch a fault during a valid transition.
    condition beside the wait: UPDATE clears, LOCK asserts, BUSY clears, READY
    asserts, or a specified minimum settle interval expires. A posted-write
    barrier establishes ordering; a device completion signal establishes progress.
+   Start a minimum hold after its triggering write. A clock rounded down to
+   whole microseconds needs an extra unit before it can prove that hold elapsed.
 2. **Model the permitted delay.** Keep old readback fields visible until the
    documented update completes. Separate the write request, its acknowledgment
    and subsequent readiness. Use explicit fixture time and the shared
@@ -34,3 +36,5 @@ Select checks under [the validation policy](validation.md). Keep hardware
 safety checks when consolidating fixtures. Submit eligible physical tests
 through [the board runner](board-runner.md) and use
 [the probe contract](board-probe-contract.md) for native diagnostics.
+The [driver completion audit](driver-completion-audit.md) lists the register
+sites, references and fixture evidence across the driver tree.
