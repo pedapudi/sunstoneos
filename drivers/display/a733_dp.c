@@ -98,9 +98,10 @@ static int trained(const uint8_t *s,unsigned eq)
 {for(unsigned i=0;i<4;i++)if(((s[i/2]>>((i&1)*4))&(eq?7:1))!=(eq?7:1))return 0;return !eq||(s[2]&1);}
 static int training(struct a733_dp *d,unsigned eq)
 {
- uint8_t pattern=(uint8_t)((eq?2:1)|0x20);unsigned same=0;
+ unsigned selected=eq?((d->result.dpcd[2]&0x40)?3u:2u):1u;
+ uint8_t pattern=(uint8_t)(selected|0x20);unsigned same=0;
  /* Manual15.4.5.1 requires the receiver in training mode before source. */
- if(!dpcd_write(d,0x102,&pattern,1)||!f(d,TR_SCRAMBLING_DISABLE,1,1)||!f(d,TR_TRAINING_PATTERN_SET,7,eq?2:1))return 0;
+ if(!dpcd_write(d,0x102,&pattern,1)||!f(d,TR_SCRAMBLING_DISABLE,1,1)||!f(d,TR_TRAINING_PATTERN_SET,7,selected))return 0;
  for(unsigned attempt=0;attempt<(eq?5u:10u);attempt++){
   if(eq)++d->result.eq_attempts;else ++d->result.cr_attempts;
   if(!a733_dp_cadence_levels(d,d->result.training)||!dpcd_write(d,0x103,d->result.training,4))return 0;
@@ -140,12 +141,12 @@ int a733_dp_prepare(struct a733_dp *d)
     !wr(d,TR_AUX_REPLY_TIMEOUT_INTV,440)||!wr(d,TR_INPUT_SOURCE_ENABLE,1)||!a733_dp_wait(d,500))goto bad;
  d->result.stage=3;
  if(!dpcd_read(d,0,d->result.dpcd,16))goto bad;
- if(d->result.dpcd[0]<0x11||d->result.dpcd[0]>0x14||d->result.dpcd[1]<6||(d->result.dpcd[2]&31)!=4)goto badsink;
+ if(d->result.dpcd[0]<0x11||d->result.dpcd[0]>0x14||d->result.dpcd[1]<A733_DP_LINK_BW_CODE||(d->result.dpcd[2]&31)!=4)goto badsink;
  if(!edid(d))goto bad;
- uint8_t power=1,bw[2]={6,4},coding[2]={0,1};
+ uint8_t power=1,bw[2]={A733_DP_LINK_BW_CODE,4},coding[2]={0,1};
  if(d->result.dpcd[2]&0x80)bw[1]|=0x80;
  if(!dpcd_write(d,0x600,&power,1)||!a733_dp_wait(d,1000)||!dpcd_write(d,0x100,bw,2)||!dpcd_write(d,0x107,coding,2)||
-    !wr(d,TR_LINK_BW_SET,6)||!wr(d,TR_LANE_COUNT_SET,4)||!wr(d,TR_ENHANCED_FRAME_EN,(bw[1]>>7)&1)||!wr(d,TR_TRANSMITTER_OUTPUT_EN,1))goto bad;
+    !wr(d,TR_LINK_BW_SET,A733_DP_LINK_BW_CODE)||!wr(d,TR_LANE_COUNT_SET,4)||!wr(d,TR_ENHANCED_FRAME_EN,(bw[1]>>7)&1)||!wr(d,TR_TRANSMITTER_OUTPUT_EN,1))goto bad;
  d->result.stage=4;if(!training(d,0)||!training(d,1))goto bad;
  uint8_t clear=0;
  if(!dpcd_write(d,0x102,&clear,1)||!wr(d,TR_TRAINING_PATTERN_SET,0)||!wr(d,TR_SCRAMBLING_DISABLE,0))goto bad;
@@ -154,8 +155,10 @@ int a733_dp_prepare(struct a733_dp *d)
   {TR_SRC0_MAIN_STREAM_HTOTAL,1650},{TR_SRC0_MAIN_STREAM_VTOTAL,750},{TR_SRC0_MAIN_STREAM_POLAR,3},
   {TR_SRC0_MAIN_STREAM_HSW,40},{TR_SRC0_MAIN_STREAM_VSW,5},{TR_SRC0_MAIN_STREAM_HRES,1280},{TR_SRC0_MAIN_STREAM_VRES,720},
   {TR_SRC0_MAIN_STREAM_HSTART,260},{TR_SRC0_MAIN_STREAM_VSTART,25},{TR_SRC0_MAIN_STREAM_MISC0,0x20},{TR_SRC0_MAIN_STREAM_MISC1,0},
-  {TR_SRC0_MVID,74250},{TR_SRC0_NVID,162000},{TR_SRC0_USER_PIXEL_CNT,1},{TR_SRC0_USER_DATA_CNT,960},
-  {TR_SRC0_MAIN_STREAM_INTERLACE,0},{TR_SRC0_SECOND_DATA_WINDOW,283},{TR_SRC0_TU_CONFIG,0x00160040},
+  /* Pinned timestamp, secondary-window and transfer-unit calculations for
+   * 74.25 MHz RGB888 at four lanes and 5.4 Gb/s; fractional TU is truncated. */
+  {TR_SRC0_MVID,74250},{TR_SRC0_NVID,A733_DP_LINK_RATE_MBPS*100},{TR_SRC0_USER_PIXEL_CNT,1},{TR_SRC0_USER_DATA_CNT,960},
+  {TR_SRC0_MAIN_STREAM_INTERLACE,0},{TR_SRC0_SECOND_DATA_WINDOW,945},{TR_SRC0_TU_CONFIG,0x09060040},
   {TR_SEC0_AUDIO_ENABLE,0},{TR_SECOND_STREAM_ENABLE,0}};
  for(unsigned i=0;i<sizeof(video)/sizeof(*video);i++)if(!wr(d,video[i].r,video[i].v))goto bad;
  d->result.state=A733_DP_READY;d->entered=0;return 1;
