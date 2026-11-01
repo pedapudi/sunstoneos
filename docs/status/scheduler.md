@@ -33,7 +33,7 @@ comes first. Per-core EDF with constant-bandwidth servers follows measured
 fixed-priority, object-lock and timer stages. Dedicated spinning agents are not
 the default because they consume a core and idle power.
 
-## Host-tested components are integrated but not connected to scheduling
+## Host-tested components support a private fork; production uses the control
 
 - Topology tables, validation and capacity-proportional work splitting:
   `b307b961`, `78166181`, `2bb69689`. Host cases cover A733, symmetric,
@@ -172,127 +172,136 @@ Cross-core priority inversion with a high-priority waiter and medium-priority
 interferers still needs an isolated physical test.
 
 
-## Stage 1 requires a shared dispatch protocol before board execution
+## Series B converts the complete scheduler behind a disabled option
 
-The requested hybrid keeps multi-core-affinity tasks on the global scheduler
-and moves single-core-affinity tasks to owner queues. There is no adapter that
-safely implements that contract. The per-core helpers remain disconnected;
-no stage-1 build option, new SGI condition or model negative control is present.
-The topology option remains OFF. Fixed priority, the tick and operating points
-retain their existing behavior.
+The series-B contract replaces legacy scheduling for every task. A live fork
+must exclude the legacy selector and global ready list. The production build
+keeps `configSS_PARTITIONED_SCHEDULER` at its default zero. The incomplete API
+patch is exercised only by a private linked host fixture, not by native images.
+The control kernel remains buildable.
 
-The legacy selector reads and writes remote current-task pointers and run states
-under the global locks. An owner context switch outside those locks races those
-accesses even if its own ready list is private. Atomic pointer loads alone do
-not preserve the coupled priority, affinity and run-state arbitration.
+The private adapter implements owner priority FIFOs and CLZ selection,
+notification/block-frame transitions, event waits and local delayed heaps.
+Creation assigns single-core affinity directly and otherwise chooses the
+allowed core with the fewest assigned tasks, breaking ties by lowest index.
+CPU0's periodic tick remains; remote due deadlines request their owner.
+Control and registry modules provide fixed storage and lifetime references.
+These are partial implementation results, not complete public API coverage.
 
-The generated kernel used by the measured control gives these source anchors,
-relative to the task evidence root:
-`partitioned/control-quantiles/latency/tasks.c`.
+The [API inventory](../../checks/scheduler-kernel-api.json) lists all 94 public
+task entry points: 34 route to the private adapter and 60 remain pending.
+It distinguishes compile-only paths from behavior-tested paths. The private
+patch changes 35 bodies including a creation helper. The live CMake source
+chain does not apply that API patch. Port IRQ-exit/yield hooks, object retry
+protection, priority inheritance and remaining API conversions block enablement.
+Commits `79ed0c90` and `35d35753` preserve this work coherently.
 
-| Source line | Shared operation requiring conversion |
-| ---: | --- |
-| 352 | `prvYieldCore` reads the remote current task and marks its run state for yielding |
-| 919 | `prvYieldForTask` reads remote current priority and run state |
-| 1101 | The selector retires the outgoing run state and publishes the incoming current task |
-| 1215 | The selector uses other cores' current priorities and affinities to retarget the previous task |
-| 5403 | `vTaskSwitchContext` acquires both global locks before selection |
+Series B intentionally keeps a ready task on its busy home core even if another
+core is idle. Idle pull belongs to series D. Concurrent linked-kernel stress
+must count observations of that condition; that measurement is still absent.
+No topology-placement or idle-pull implementation is part of this series.
+The topology worker owns the unfinished application wiring in `30dc2d80`.
 
-Conditions: the existing eight-core control uses pinned notification probes,
-pinned memory load and ordinary OS tasks. Measurement: no modified scheduler
-image is submitted. Result: there is no after value or new board entry.
-Conclusion: the owner helpers alone do not remove global contention safely;
-the workload-period timing targets remain unmet.
+### Publication and retirement changes have focused host evidence
 
-| Loaded measurement, microseconds | Baseline entry `1793566204991504422-8a47d893` | Stage 1 |
-| --- | ---: | --- |
-| Ready-to-running p50 | 69.292 | Not measured |
-| Ready-to-running p99, histogram upper bound | 159.958 | Not measured |
-| Ready-to-running maximum | 159.167 | Not measured |
-| Maximum task-lock wait | 139.333 | Not measured |
+Commit `8eacaa3e` adds an atomic bucket summary as the logical wake-list head.
+A publisher performs slot and head release ORs, then the dispatch/SGI handshake.
+The old head identifies empty-to-nonempty publication, including nonurgent work.
+The owner detaches the head before scanning slot hints and rechecks all pending
+work before dispatch. Hint bits never authorize task activation by themselves.
+The native `ss_owner_publish` body contains 60 static instructions and no LL/SC
+retry. Registry lookup, pin/release and backend callback bodies are excluded.
+This count is not a cycle or latency measurement.
 
-The next implementation must define one sequence-validated dispatch handoff
-between owner and legacy selection, including remote yield state and global
-scheduler suspension. Then convert the pinned notification path, prove the
-empty-to-nonempty SGI condition with its negative control, and obtain the single
-requested memory-order review. Linked-kernel tests must mix pinned and
-multi-core-affinity tasks with competing priorities before a board submission.
-Parking a fake legacy current task or reserving its core would change the
-requested affinity and priority contract.
+The final reference release now executes a DMB before checking closed admission,
+paired with the closer's DMB before checking reference retirement. A finite
+negative control reproduces a missed retirement notification without that
+barrier. A separate negative omits the empty-head SGI and strands nonurgent
+hints without an owner interrupt. The migration negative reproduces an early
+old-owner acknowledgment followed by a delayed old-route publication.
 
-The scheduler branch includes `bringup` through `8e83dfae` in merge `f7b92cbe`.
-The merge retains both CPU-capacity selection and the GPU queue application
-selection. Conflict markers and unmerged paths are absent. The implementation
-worker's bounded audit changes no code; its worktree remains clean.
+The exhaustive suite passes 50 cases, including sixteen expected negative
+controls; peak resident memory is 199,636 KiB. Owner, notification, registry
+and deadline sanitizer/native checks pass. The private adapter compiles for
+AArch64 with the converted optional branches selected. Its linked sanitizer
+fixture passes 10,000 remote wakes around block-frame eviction, local/event
+waits, remote timeout delivery and zero compatibility-lock acquisitions in the
+measured local scheduling loops. It links real FreeRTOS task/list code but
+advances owner checkpoints explicitly. It does not run concurrent task stacks,
+so it cannot establish the required eight-core QEMU or board behavior.
+Evidence resides in `series-b/` beneath the task cache.
 
-Host validation of merge `f7b92cbe`: the linked-kernel QEMU check passes
-256 cross-core queue exchanges, affinity, floating-point context, mutex
-exclusion and preemption. The explicit full integration gate passes its central
-build, every OS variant, kernel check, eight-core soak and core checks, then
-stops at `indexed-docs-links`. Its log identifies 22 relative source links that
-mistake `:line` for part of a filename. Those links now use `#Lline`; the focused
-document-link check passes. Remaining indexed checks are unexecuted, so the
-full gate is incomplete. Evidence is in `integration/gate-scheduler-stage1/`
-and `stage1/linked-kernel/`. This evidence covers the legacy kernel only.
+### Migration routing remains the first correctness blocker
 
-No board image is built or submitted for stage 1. The requested memory-order
-review remains due because there is no implemented hybrid publish/drain path
-to review. The status-parser check runs after this status edit.
+The independent ordering review approves the wake helpers within their scope
+and verifies the specific control-slot reuse correction in `35d35753`.
+Control FIFO counters persist across incarnation changes; registration uses
+that FIFO, and retirement callbacks carry an incarnation checked under
+administration. The threaded duplicate-consumer/reuse fixture passes.
 
+The review withholds whole-adapter approval. Control code can remember an old
+owner's empty inbox while an old-route publisher still holds a reference.
+A later reference-count snapshot does not close routing admission or require
+a fresh drain acknowledgment. Migration must serialize old-epoch publisher
+admission against transfer, close that epoch, wait for its publishers, then
+obtain a fresh old-owner drain acknowledgment. Unconditional forwarding alone
+does not establish the retirement or reuse contract. The model demonstrates
+the early-ack race; the actual routing-epoch fix remains open.
 
-## Remaining full-architecture work follows the stage-1 dispatch handoff
+The review is `series-b/ordering-review/review.md`, SHA-256
+`3122dc34a51870affd3a1bdde168c2773dddd70e9781aa4461e74bed9a9dc00d`.
+The same review must examine the completed migration and port integration
+before a board run.
 
-1. Complete the disabled topology integration in `30dc2d80`. Resolve its clock
-   table dependency, test public queries with missing and valid observations,
-   and build the native capacity application. Obtain an independent feature
-   review before enabling it. Capture full MPIDR/cache identity and the fixed
-   scalar/NEON throughput on both CPU types through the queue.
-2. Review the unmerged commits in the table below. The retirement notification
-   needs particular attention to the last-reference release versus close race.
-   IRQ-origin recording needs validation against the actual timer compare.
-   Merge only approved components into the scheduler branch.
-3. Finish the FreeRTOS adapter in recovery commit `00293293` on
-   `work/scheduler-freertos-fork-1101`. Convert every enabled task API, connect
-   control/deadline/retirement paths, and add IRQ-exit and explicit-yield port
-   hooks. Keep the fork disabled until linked-kernel cases and eight-core QEMU
-   stress pass and an independent code reviewer approves it.
-4. Update the design's instruction-cost accounting to match the implementation:
-   owner wake draining can inspect 256 words per bounded batch; the permanent
-   handle registry can require 256 probes. Measure common and worst paths.
-   The design's earlier scan estimate does not describe these bounds.
-5. Compare each enabled stage with the latency control on the board, including
-   exact IRQ-to-task origins, per-core distributions, context switches, masking
-   and idle wake-ups. Run the eight-core soak and exact mimus recognition after
-   each stage. Merge current `bringup` into the scheduler branch before each
-   future submission; preserve the probe worker's entry code.
-6. Implement and measure per-object locking, one-shot timers and capacity-aware
-   placement in separate stages. Compare equal versus capacity-proportional
-   mimus splitting with the CPU worker. Measure big-pinned versus unpinned
-   critical tasks and energy per job only if calibrated supply data exists.
-   EDF reservations follow those measurements.
+The supervised production OS baseline builds with the fork disabled; its log
+is `series-b-baseline.log`. The current two-core legacy QEMU check passes 256
+queue exchanges, affinity, floating-point context, mutex exclusion and
+preemption; evidence is `series-b/control-qemu/`. The check index verifies
+843 checks. The full integration gate, mixed-affinity
+concurrent QEMU stress, all-core fork soak and physical comparisons remain due.
+No new board entry or after measurement exists for series B. The loaded wake
+p50/p99/maximum baseline is 69.292/159.958/159.167 microseconds on core six;
+maximum task-lock wait is 139.333 microseconds. Per-core baseline values remain
+in `partitioned/control-quantiles-summary.json`.
 
-### Pending code reviews and recovery branches
+## Finish series B before enabling the fork
 
-All branches below are local worker branches. Their host checks are author
-checks; their new code has no independent approval yet. A reviewer independent
-of each author supplies the feature approval. The coordinator decides what to
-land in `bringup`. No new review or board run is requested during wrap-up.
+1. Fix routing-epoch admission and the fresh old-owner migration acknowledgment.
+   Extend the actual control fixture with delayed old publishers and a second
+   transfer; keep incarnation and pending-hint retirement separate.
+2. Complete the 60 pending task APIs and priority-inheritance paths. Pin before
+   every TCB read, route state changes to the owner, and exclude legacy
+   ready/delayed/suspended list manipulation under the enabled option.
+3. Convert queue, semaphore, mutex, event, stream and timer retry paths to
+   compatibility object protection. That lock never permits a remote owner-list
+   edit. Preserve the FIFO port lock worker's acquire/release implementation.
+4. Connect the complete generated fork and owner IRQ-exit/voluntary-yield port
+   hooks. Preserve frame/TLS/trace/runtime accounting and CPU0-only global time.
+   Run mixed pinned/multi-core-affinity tasks at competing priorities, timeout
+   races, deletion with pending hints and migration under real eight-core QEMU.
+   Record local scheduling lock counts and idle-core/home-core imbalance.
+5. Complete the independent ordering review and full integration gate. Merge
+   coordinator-landed lock/topology/probe changes through `bringup`. Submit the
+   unchanged latency workload at the existing CPU operating points and compare
+   every core against its baseline; then run exact mimus recognition. Never
+   retry an image that fails to return without a concrete correction.
 
-| Branch suffix after `work/scheduler-` | Commit | Remaining review or integration |
-| --- | --- | --- |
-| `percentiles-1101` | `8065115f` | IRQ-origin packing, producer and decoder accuracy |
-| `owner-core-1101` | `e83b200b` | Last-reference retirement notification and memory ordering |
-| `freertos-fork-1101` | `5db91643`, `e0136632` | TCB layout, permanent registry and reclamation |
-| `control-1101` | `d06e0d63` | Remote controls, global suspension rendezvous and migration |
-| `deadline-1101` | `390b8880` | Deadline heap, cancellation and timeout races |
-| `freertos-fork-1101` | `00293293` | Incomplete adapter; finish before review or integration |
+### Recovery commits and remaining review scope
 
-The fork branch contains deadline commit `a45da836`, a copy of `390b8880`.
-Avoid integrating duplicate changes as separate implementations. Recovery
-commit `7598e945` on `work/scheduler-measure-1101` preserves a superseded
-measurement prototype; do not merge it. The reviewed histogram implementation
-is already integrated. Worker worktrees and generated evidence remain under
-the task cache, with no active workers.
+The registry/layout commits `5db91643`, `e0136632`, deadline commit `a45da836`
+and control commit `2bf3e230` are integrated as private-fork foundations.
+`a45da836` copies `390b8880`; they are one implementation. Retirement hook
+`e83b200b` is integrated as `f109a9af`, with the last-release ordering repair
+in `8eacaa3e`. The API conversion and exact pending list live in `79ed0c90`.
+The reviewed reuse correction is `35d35753`. Host compilation and isolated
+checks do not approve the incomplete live adapter.
+
+The earlier adapter recovery `00293293` and superseded measurement prototype
+`7598e945` remain recovery points. Do not reapply their source over the current
+fork. The old IRQ-origin recorder commit `8065115f` is not integrated here;
+coordinate recorder changes with the lock/latency worker and take them through
+`bringup`. No board, voltage or storage approval is pending for this private
+host work. The coordinator lands branches; no push is performed here.
 
 ### Images and outstanding validation
 
@@ -300,15 +309,18 @@ No prepared native board image is waiting for a first run. The three native
 latency images already have queue entries: `control-before/`, `control-after/`
 and `partitioned/control-quantiles/`. The latest image's generated README is
 `partitioned/control-quantiles/os-image/sunstone-a733-os-latency/README.md`.
-The capacity probe has host artifacts only; its application wiring is incomplete.
+The topology worker owns the capacity probe and its application wiring; no
+capacity image is prepared by this series. The supervised baseline is a host
+build check; its generated README is
+`integration/gate-os-sup-scheduler-rt-1101-517b6e1e82/os-image/README.md`.
 Do not submit an old image again for an unchanged hypothesis.
 
 The earlier supervised, resident and resident-audio builds, linked-kernel
 checks, register-context checks and eight-core QEMU soak pass under
 `integration/`. Those checks precede the new host components and unfinished
 integration. The final three baseline builds, integration gate and check-index
-verification remain due after implementation. The wrap-up status-parser check
-writes to `wrap-up/progress/`; it does not validate scheduler timing.
+verification remain due after implementation. The current status-parser check writes to `series-b/progress/`; it does not
+validate scheduler timing.
 
 ### Shared files and coordination
 
@@ -316,9 +328,13 @@ writes to `wrap-up/progress/`; it does not validate scheduler timing.
   `platform/a733-smp-cached/`, `include/FreeRTOSConfig.h`,
   `kernel/scheduler/`, and scheduler CMake wiring. Coordinate edits to the public
   application kit in `include/sunstone_app.h` with application maintainers.
-- The latency worker owns `runtime/latency*.c`, `include/sunstone_latency.h`,
-  `apps/latency/`, timing budgets and combined-load images. Preserve its
-  instrumentation and merge later latency commits before comparisons.
+- `work/sched-lock-1101` owns task/ISR lock acquire and release in
+  `patches/freertos-smp-c.patch` and latency attribution instrumentation. Scheduler
+  owner-entry/exit and conditional-SGI additions use separate hunks. Merge its
+  coordinator-landed changes from `bringup`; do not edit its implementation.
+- `work/sched-topology-1101` owns topology tables, application query wrappers
+  and the native capacity probe/measurement. Merge its coordinator-landed
+  changes from `bringup`; this series does not edit those files.
 - The probe integration worker, `work/probe-shared-1101`, owns
   `platform/a733/probe.*`. Do not replace its entry code.
 - The CPU worker owns CPU clock policy and mimus CPU optimization on
