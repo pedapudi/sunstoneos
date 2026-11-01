@@ -16,8 +16,9 @@ command line. Its memory reads back what was written, and every other address
 reads a pattern of its own address. A normal return whose Adler-32 matches
 passes from a development bundle that has no return-review.json; a wrong or
 malformed result fails; every returned run leaves all DRAM as it was before
-the run. A result of another session or a bad return report quarantines the
-instance without holding the process, a watchdog reset is decoded, a state
+the run. A result of another session or a bad return report fails after the confirmed
+normal return without quarantining the instance or holding the process.
+A watchdog reset is decoded, a state
 change since capture stops the run before any write, and an external decoder
 module decodes the result and may report it failed.
 
@@ -428,7 +429,9 @@ def transport_cases(host, launcher, out, live):
             assert report['breadcrumbs']['fault']['detail'] == '0x736', report
         elif variant in ('foreign-result', 'bad-report'):
             text = {'foreign-result': 'belongs to another session', 'bad-report': 'No successful CPU return report'}
-            assert text[variant] in record['error'] and state['quarantined'] == 1, (variant, record)
+            assert text[variant] in record['error'] and not state['quarantined'], (variant, record)
+            assert session['host_failed_after_normal_return'] and session['instance_quarantined'] is False
+            assert session['normal_return']['first_request_succeeded'] and not session.get('fel_request_raised')
             assert not session['complete'] and not session['dram_restored'] and state['writes_after_launch'] == 0
         elif variant != 'state-changed':
             # A returned run restores every backed-up DRAM range, whatever the result.

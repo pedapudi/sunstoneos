@@ -5,7 +5,11 @@
 
 Cases without --image use a modeled FEL: the shared transport arms WDT0 just
 before exe, classifies the returned instance before any DRAM request, writes
-the reset report and keeps the fresh ROM instance unquarantined. With --image,
+the reset report and keeps the fresh ROM instance unquarantined. Host cases
+check which failures quarantine the instance: a host exception after a
+confirmed normal return does not; a failed or refused FEL request, an exception
+before the confirmation and a return without RETURN_ROM do. The modeled
+quarantine writes its records under the case's temporary directory. With --image,
 the linked return image runs in the instruction model: an EL1 breadcrumb SVC,
 the EL3 first-fault record and the disarm on the normal ROM return. No USB
 node, queue or FEL executable is opened.
@@ -16,6 +20,7 @@ with and without a WDT0 mode.
 import argparse
 import contextlib
 import importlib.util
+import io
 import itertools
 import json
 from pathlib import Path
@@ -119,6 +124,7 @@ def header_cases():
 def transport_case(variant, root):
     old, new = Path('/dev/bus/usb/003/056'), Path('/dev/bus/usb/003/057')
     port = Path('/sys/bus/usb/devices/3-3')
+    records = root / 'recovery'
     state = {'locked': False, 'guard': False, 'node': old, 'launched': False, 'held': 0, 'quarantined': 0,
              'calls': [], 'after_return': [], 'mode': 0, 'rtc': {}}
     class Access:
@@ -132,7 +138,12 @@ def transport_case(variant, root):
         def identity(self, node): return [1, 57 if node == new else 56, 3, 4, 5]
         def target(self, node): return port
         def session_node(self, config): return state['node']
-        def quarantine_instance(self, *values): state['quarantined'] += 1
+        def quarantine_instance(self, node, reason, observed=None):
+            # Same record as tools/usb-access.py, kept in this case's directory.
+            state['quarantined'] += 1
+            records.mkdir(exist_ok=True)
+            key = port.name + '-' + '-'.join(str(int(x)) for x in observed or self.identity(node))
+            (records / f'recovery-required-{key}.json').write_text(json.dumps({'identity': observed, 'reason': reason}))
     class Guard:
         def check_health(self): pass
         @contextlib.contextmanager
@@ -184,14 +195,22 @@ def transport_case(variant, root):
                 Path(arguments[i + 3]).write_bytes(bytes(int(arguments[i + 2]))); i += 4
             else:
                 raise AssertionError(op)
-        return types.SimpleNamespace(returncode=0, stdout='\n'.join(out), stderr='')
+        failing = variant == 'fel-error-after-return' and arguments[:1] == ['read'] and state['launched']
+        return types.SimpleNamespace(returncode=1 if failing else 0, stdout='\n'.join(out), stderr='')
     def admit(*values): assert state['locked']
     def validate(path): return {'image_sha256': 'f' * 64, 'epoch': EPOCH}
     def execute(transaction, launch, ready, p, record, save):
         ready(); record['dirty'] = True; save()
         assert int(transaction('readl', '0x02050014'), 16) & 1 == 0
+        if variant == 'host-error-before-launch':
+            raise KeyError('modeled host error before launch')
         launch()
         transaction('version'); transaction('read', '0x42000000', 128, str(root / 'report.bin'))
+        if variant == 'host-error-after-return':
+            # The 3-3 run of 2026-10-31: outputs read, then a missing host file.
+            (root / 'return-review.json').read_text()
+        if variant == 'fel-refused-after-return':
+            transaction('exe', '0x52000')
         record.update(complete=True); save()
         return 'normal'
     def hold(): state['held'] += 1
@@ -201,28 +220,51 @@ def transport_case(variant, root):
     if variant != 'no-watchdog':
         options['watchdog'] = {'mode': 0xb1, 'session_seconds': 0 if variant == 'invalid-session' else 60}
     clock = itertools.count(0, 0.5)
-    with patch.object(base, 'digest', return_value=base.FEL_HASH), patch.object(base, 'hold_ownership', hold), \
+    decode = crumbs.decode
+    if variant == 'host-error-during-classification':
+        def decode(*values): raise KeyError('modeled host error before the return is confirmed')
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr), patch.object(transport.crumbs, 'decode', decode), \
+            patch.object(base, 'digest', return_value=base.FEL_HASH), patch.object(base, 'hold_ownership', hold), \
             patch.object(transport.subprocess, 'run', process), patch.object(transport.os, 'access', return_value=True), \
             patch.object(transport.time, 'monotonic', lambda: next(clock)), patch.object(transport.time, 'sleep', lambda s: None):
         try:
             result = transport.run(args, base=base, profile='model', validate_bundle=validate, admit=admit,
                                    execute=execute, description='model', access=Access(), guard=Guard(), **options)
             error = None
-        except (ValueError, transport.WatchdogReset) as failure:
+        except (ValueError, OSError, KeyError, transport.WatchdogReset) as failure:
             result, error = None, failure
     record = json.loads((args.evidence / 'session.json').read_text()) if (args.evidence / 'session.json').exists() else {}
+    state['records'] = sorted(records.glob('recovery-required-*.json')) if records.exists() else []
+    state['stderr'] = stderr.getvalue()
     return state, record, result, error, args.evidence
+
+
+def quarantined(state, record):
+    """One quarantine record for the returned or original instance, also stated in the run record."""
+    assert state['quarantined'] == 1 and len(state['records']) == 1, state
+    written = json.loads(state['records'][0].read_text())
+    assert record['instance_quarantined'] == written['reason'] and not record.get('host_failed_after_normal_return')
+    assert 'HOST FAILED AFTER NORMAL RETURN' not in state['stderr']
+    return written
 
 
 def transport_cases():
     with tempfile.TemporaryDirectory(prefix='returning-watchdog-') as temporary:
         for variant in ('normal', 'fired', 'fired-before-entry', 'no-watchdog', 'invalid-session', 'arm-readback',
-                        'disarm-ignored', 'disarmed-without-rom', 'rom-from-other-session'):
+                        'disarm-ignored', 'disarmed-without-rom', 'rom-from-other-session',
+                        'host-error-after-return', 'fel-error-after-return', 'fel-refused-after-return',
+                        'host-error-before-launch', 'host-error-during-classification'):
             root = Path(temporary) / variant; root.mkdir()
             state, record, result, error, evidence = transport_case(variant, root)
             if variant == 'normal':
                 assert record['return_timeout_seconds'] == 86, 'armed: session, interval and 10 s'
                 assert result == 'normal' and error is None and not state['held'] and not state['quarantined']
+                assert not state['records'] and 'instance_quarantined' not in record
+                n = record['normal_return']
+                assert n['wdt0_disarmed'] and n['first_request_succeeded'] and n['return_rom'] == {
+                    'session': True, 'stage': crumbs.RETURN_ROM, 'value': 0}
+                assert n['returned_identity'] == record['returned_identity'] != record['initial_identity']
                 w = record['watchdog']
                 assert w['armed'] and w['disarmed'] and not w['fired'] and w['mode_after_return'] == 0
                 assert w['breadcrumbs']['last']['name'] == 'RETURN_ROM'
@@ -246,12 +288,31 @@ def transport_cases():
             elif variant == 'no-watchdog':
                 assert record['return_timeout_seconds'] == 90
                 assert result == 'normal' and not any('writel' in c for c in state['calls'])
+            elif variant == 'host-error-after-return':
+                # Failed with evidence and the usual hold, but no quarantine.
+                assert isinstance(error, FileNotFoundError) and result is None, error
+                assert not state['quarantined'] and not state['records'] and state['held'] == 1
+                assert record['host_failed_after_normal_return'] and record['instance_quarantined'] is False
+                assert not record['complete'] and 'return-review.json' in record['failure']
+                assert record['normal_return']['first_request_succeeded'] and not record.get('fel_request_raised')
+                assert 'HOST FAILED AFTER NORMAL RETURN: FileNotFoundError' in state['stderr']
+                assert 'the board instance remains usable' in state['stderr']
+            elif variant in ('fel-error-after-return', 'fel-refused-after-return'):
+                text = {'fel-error-after-return': 'FEL request failed',
+                        'fel-refused-after-return': 'guarded launch callback'}[variant]
+                assert text in str(error) and record['normal_return'] and record['fel_request_raised']
+                assert quarantined(state, record)['identity'] == record['returned_identity'] and state['held'] == 1
+            elif variant in ('host-error-before-launch', 'host-error-during-classification'):
+                assert isinstance(error, KeyError) and 'normal_return' not in record and state['held'] == 1
+                identity = record['initial_identity'] if variant == 'host-error-before-launch' else record['returned_identity']
+                assert quarantined(state, record)['identity'] == identity
             elif variant == 'invalid-session':
                 assert 'Watchdog mode or session length differs' in str(error) and not state['calls']
             else:
                 text = {'arm-readback': 'readback after arming', 'disarm-ignored': 'did not disarm',
                         'disarmed-without-rom': 'without this session', 'rom-from-other-session': 'without this session'}[variant]
                 assert text in str(error) and state['held'] == 1 and state['quarantined'] == 1, (variant, error, state)
+                assert 'normal_return' not in record and quarantined(state, record)
             passed('transport-' + variant, fel_requests=len(state['calls']))
 
 
