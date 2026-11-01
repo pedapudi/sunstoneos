@@ -28,6 +28,9 @@ _Static_assert(configGENERATE_RUN_TIME_STATS==1&&sizeof(configRUN_TIME_COUNTER_T
 #if SUNSTONE_NPU_LATENCY_SEQUENCE && (!SUNSTONE_NPU_LATENCY_QUEUE || SUNSTONE_NPU_LATENCY_SEQUENCE<2 || SUNSTONE_NPU_LATENCY_SEQUENCE>64)
 #error "A repeated-command sequence requires queue mode and 2..64 repetitions"
 #endif
+#ifndef SUNSTONE_NPU_DEPENDENT_CHAIN
+#define SUNSTONE_NPU_DEPENDENT_CHAIN 0
+#endif
 #define JOBS 1000u
 __attribute__((used,retain)) const uint64_t npu_startup_return_profile[4]={
     NPU_STARTUP_RECEIPT_MAGIC,1,NPU_STARTUP_JOBS,1+NPU_STARTUP_JOBS};
@@ -196,6 +199,9 @@ static void run_sequence(void)
     return_queue(&sequence);
 }
 #endif
+#if SUNSTONE_NPU_DEPENDENT_CHAIN
+#include "dependent-client.h"
+#endif
 int npu_startup_return_ready(void)
 {
     const struct npu_runtime *rt=runtime;
@@ -203,6 +209,9 @@ int npu_startup_return_ready(void)
         !atomic_load_explicit(&rt->failed,memory_order_acquire)&&!direct.claimed&&
 #if SUNSTONE_NPU_LATENCY_SEQUENCE
         !sequence.claimed&&sequence_checked==1&&
+#endif
+#if SUNSTONE_NPU_DEPENDENT_CHAIN
+        dependent_ready()&&
 #endif
         atomic_load_explicit(&rt->slot[0].state,memory_order_acquire)==NPU_RUNTIME_CLOSED&&
         rt->slot[0].opened&&rt->slot[0].closed&&!rt->slot[0].pending&&
@@ -232,6 +241,9 @@ static void report(const unsigned char output_digest[32])
     unsigned char hash[32];storage_digest_bytes(durations,sizeof durations,hash);
     platform_puts("NPU_DURATION_SHA256=\n");hex_bytes(hash,sizeof hash);
     platform_puts("NPU_OUTPUT_SHA256=\n");hex_bytes(output_digest,32);
+#if SUNSTONE_NPU_DEPENDENT_CHAIN
+    dependent_report();
+#endif
 #if SUNSTONE_NPU_LATENCY_SEQUENCE
     const uint64_t extra[]={SUNSTONE_NPU_LATENCY_SEQUENCE,sequence_start,sequence_end,sequence_bytes,
         sequence_checked,sequence_bad,sequence_offset,sequence_byte,sequence.queue.submitted,
@@ -295,6 +307,9 @@ static void npu_latency_client(void *unused)
     }
 #if SUNSTONE_NPU_LATENCY_SEQUENCE
     run_sequence();mismatch|=sequence_bad;
+#endif
+#if SUNSTONE_NPU_DEPENDENT_CHAIN
+    mismatch|=run_dependent();
 #endif
     if(runtime->counters.jobs!=NPU_STARTUP_JOBS||checked!=JOBS||npu_service_irq_completions(&runtime->service)!=1+NPU_STARTUP_JOBS)retained(47);
     const unsigned status=mismatch?1:0;

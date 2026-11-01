@@ -20,7 +20,7 @@ CHECK_INPUTS = ['apps/npu-finite/queue-client.c', 'apps/npu-finite/startup.h',
                 'include/a733_npu_sequence.h', 'drivers/npu/a733_npu_sequence.c']
 CHECK_INPUTS += ['arch/aarch64/device_memory.c', 'include/aarch64_device_memory.h']
 CHECK_INPUTS += ['apps/npu-finite/latency-stats.h']
-CHECK_INPUTS += ['checks/npu-latency-counters.c']
+CHECK_INPUTS += ['checks/npu-latency-counters.c','apps/npu-finite/dependent-client.h']
 
 
 def sha(path):
@@ -32,7 +32,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--baseline', type=Path, default=Path.home() / '.cache/sunstoneos/evidence/npu-finite-quiescence-20261018/native')
     parser.add_argument('--cc', type=Path, default=Path('/usr/bin/clang-21'))
-    parser.add_argument('--mode', action='append', choices=('legacy', 'queue', 'sequence'), help='Run only named diagnostic modes')
+    parser.add_argument('--mode', action='append', choices=('legacy', 'queue', 'sequence', 'chain'), help='Run only named diagnostic modes')
     parser.add_argument('--lld', type=Path, default=Path.home() / '.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
     args = parser.parse_args()
     output = args.output.resolve()
@@ -88,10 +88,10 @@ def main():
     (output / 'build-actual-cache.log').write_text(built.stdout + built.stderr)
     commands.append(cache_command)
     built.check_returncode()
-    for mode in (i for i, name in enumerate(('legacy', 'queue', 'sequence')) if not args.mode or name in args.mode):
+    for mode in (i for i, name in enumerate(('legacy', 'queue', 'sequence', 'chain')) if not args.mode or name in args.mode):
         repeats = 32 if mode == 2 else 0
         image_path = output / f'producer-{mode}.elf'
-        command = flags + [f'-DSUNSTONE_NPU_LATENCY_QUEUE={int(bool(mode))}', f'-DSUNSTONE_NPU_LATENCY_SEQUENCE={repeats}', str(ROOT / 'checks/npu-latency-client.c'),
+        command = flags + [f'-DSUNSTONE_NPU_LATENCY_QUEUE={int(bool(mode))}', f'-DSUNSTONE_NPU_LATENCY_SEQUENCE={repeats}', f'-DSUNSTONE_NPU_DEPENDENT_CHAIN={int(mode==3)}', str(ROOT / 'checks/npu-latency-client.c'),
                           str(ROOT / 'drivers/storage/storage_digest.c'), str(ROOT / 'runtime/memory.c'),
                           str(ROOT / 'drivers/npu/a733_npu_sequence.c'), str(cache_object),
                           '-nostdlib', f'--ld-path={args.lld}', '-Wl,-Ttext=0x41000000',
@@ -104,7 +104,7 @@ def main():
         (output / 'commands.json').write_text(json.dumps(commands, indent=2) + '\n')
         built.check_returncode()
         image = Image(image_path, layout_names=())
-        for case in ((0, 1, 2, 3) if not mode else (0, 1, 2, 3, 4, 5, 8, 9, 10, 11) if mode == 1 else (0, 6, 7)):
+        for case in ((0, 1, 2, 3) if not mode else (0, 1, 2, 3, 4, 5, 8, 9, 10, 11) if mode == 1 else (0, 6, 7) if mode==2 else (0, 6, 7, 12)):
             machine = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
             machine.mem_map(0x40000000, 0x04000000)
             machine.mem_map(0x200000, 0x10000)  # ELF header segment from the fixture link.
@@ -148,8 +148,8 @@ def main():
                 status = int(case in (1, 7))
                 assert state == {'stop': 'platform_exit', 'status': status}, state
                 assert len(text) <= 16127 and value('checked') == 1000
-                geometry = {'runtime': True, 'references': ['01020304', '01020304'],
-                            'latency': {'mode': 'queue' if mode else 'legacy', 'measured_jobs': 1000, 'warmup_jobs': 1, 'model': 0, 'sequence_repeats': repeats, 'doorbell_timing': True}}
+                geometry = {'runtime': True, 'references': ['01020304', '09080706' if mode==3 else '01020304'],
+                            'latency': {'mode': 'queue' if mode else 'legacy', 'measured_jobs': 1000, 'warmup_jobs': 1, 'model': 0, 'sequence_repeats': repeats, 'doorbell_timing': True, **({'dependent_chain':True} if mode==3 else {})}}
                 parsed = host.latency_report(text, status, 480000000, geometry)
                 publish = parsed['timing']['submit_to_doorbell']
                 assert publish['samples'] == 1000
@@ -169,6 +169,13 @@ def main():
                 if repeats:
                     assert parsed['repeated_sequence']['repetitions'] == 32
                     assert parsed['repeated_sequence']['functional_success'] == (case != 7)
+                if mode==3:
+                    chain=parsed['dependent_chain']
+                    assert len(chain)==2 and [p['queue_records'] for p in chain]==[2,1]
+                    assert [p['submitted_before_wait'] for p in chain]==[2,1]
+                    assert chain[1]['interstage_cpu_wakes']==0
+                    assert all(p['interstage_cpu_copy_bytes']==0 for p in chain)
+                    assert all(p['functional_success']==(case!=7) for p in chain)
                 # Run the linked native receipt writer before checking the
                 # complete monitor/platform/receipt envelope and IRQ wrapper.
                 machine.mem_write(0x42000000 + 24, struct.pack('<Q', len(text)))
@@ -188,10 +195,10 @@ def main():
                 prepared = {'epoch': 7, 'generation': 8, 'lease': 9, 'execution_profile': host.LATENCY,
                             'geometry': dict(geometry, startup_only=True, clean_start=0x41200000, clean_end=0x41f00000)}
                 complete = interrupt.validate_reports(monitor, bytes(platform), receipt, prepared)
-                assert complete['interrupt_completions'] == 1002 + bool(repeats) and complete['interrupt_stopped']
+                assert complete['interrupt_completions'] == 1002 + bool(repeats) + 3*(mode==3) and complete['interrupt_stopped']
                 marker = bytes(machine.mem_read(image.address('npu_latency_return_profile'), 64))
                 startup_marker = struct.unpack('<4Q', machine.mem_read(image.address('npu_startup_return_profile'), 32))
-                assert host.latency_extension(startup_marker, {'npu_latency_return_profile'}, lambda name: marker) == geometry['latency']
+                assert host.latency_extension(startup_marker, ({'npu_latency_return_profile','npu_dependent_return_profile'} if mode==3 else {'npu_latency_return_profile'}), lambda name: marker if name=='npu_latency_return_profile' else struct.pack('<8Q',0x4e50554445503031,1,0,0,1,0,2,1)) == geometry['latency']
                 lines = text.splitlines(keepends=True)
                 fields_at = lines.index('NPU_LATENCY=\n') + 1
                 for index, replacement, reason in ((3, 0, 'warmup'), (9, 1, 'quantiles'),
@@ -204,16 +211,21 @@ def main():
                     changed = list(lines)
                     changed[publish_at + index] = f'0x{replacement:016x}\n'
                     refused(lambda: host.latency_report(''.join(changed), status, 480000000, geometry), 'doorbell')
+                if mode==3:
+                    chain_at = lines.index('NPU_DEPENDENT_CHAIN=\n') + 1
+                    for index, replacement in ((2,1),(3,1),(4,0),(5,1),(10,8)):
+                        changed=list(lines);changed[chain_at+index]=f'0x{replacement:016x}\n'
+                        refused(lambda:host.latency_report(''.join(changed),status,480000000,geometry),'Dependent chain')
                 checksum_at = lines.index('NPU_DURATION_SHA256=\n') + 1
                 changed = list(lines)
                 changed[checksum_at] = ('0' if changed[checksum_at][0] != '0' else '1') + changed[checksum_at][1:]
                 refused(lambda: host.latency_report(''.join(changed), status, 480000000, geometry), 'checksum')
                 malformed = bytearray(marker)
                 struct.pack_into('<Q', malformed, 32, 0)
-                refused(lambda: host.latency_extension(startup_marker, {'npu_latency_return_profile'}, lambda name: malformed), 'extension differs')
+                refused(lambda: host.latency_extension(startup_marker, ({'npu_latency_return_profile','npu_dependent_return_profile'} if mode==3 else {'npu_latency_return_profile'}), lambda name: malformed if name=='npu_latency_return_profile' else struct.pack('<8Q',0x4e50554445503031,1,0,0,1,0,2,1)), 'extension differs')
                 for changed, reason in (
                         (text.replace('NPU_STAGE=WARMUP', 'NPU_STAGE=SKIPPED', 1), 'stage'),
-                        (text.replace(f'NPU_IRQ_COMPLETIONS=0x{1002+bool(repeats):016x}', 'NPU_IRQ_COMPLETIONS=0x00000000000003e9'), 'stage'),
+                        (text.replace(f'NPU_IRQ_COMPLETIONS=0x{1002+bool(repeats)+3*(mode==3):016x}', 'NPU_IRQ_COMPLETIONS=0x00000000000003e9'), 'stage'),
                         (text.replace('NPU_DURATION_SHA256=\n', 'NPU_DURATION_SHA256=\n0', 1), 'stage'),
                         (text.replace('NPU_INFERENCE=MATCH;', 'NPU_INFERENCE=MISMATCH;', 1) if not status else text.replace('NPU_INFERENCE=MISMATCH;', 'NPU_INFERENCE=MATCH;', 1), 'status')):
                     refused(lambda: host.latency_report(changed, status, 480000000, geometry), reason)
@@ -221,11 +233,11 @@ def main():
             else:
                 assert state['stop'] == 'vTaskSuspend', state
                 fault = struct.unpack('<6Q', machine.mem_read(image.address('npu_latency_failure'), 48))
-                expected = 40 if case == 2 else 12 if not mode else {3: 43, 4: 44, 5: 37, 6: 55, 8: 31, 9: 31, 11: 61}[case]
-                assert fault[0] == expected and fault[1] == ((1 << 64) - 1 if case in (2, 8, 9) else 1000 if case == 6 else 0 if case == 11 else 3), fault
-                assert not value('fixture_closed') and value('checked') == (0 if case in (2, 8, 9) else 1000 if case == 6 else 0 if case == 11 else 3)
+                expected = 40 if case == 2 else 12 if not mode else {3: 43, 4: 44, 5: 37, 6: 73 if mode==3 else 55, 12: 62, 8: 31, 9: 31, 11: 61}[case]
+                assert fault[0] == expected and fault[1] == ((1 << 64) - 1 if case in (2, 8, 9) else 1000 if case in (6,12) else 0 if case == 11 else 3), fault
+                assert not value('fixture_closed') and value('checked') == (0 if case in (2, 8, 9) else 1000 if case in (6,12) else 0 if case == 11 else 3)
                 if case == 6:
-                    assert value('fixture_releases') == 1000 and fault[2:4] == (1, 0)
+                    assert value('fixture_releases') == 1000 and fault[2:4] == ((2,0) if mode==3 else (1,0))
                 elif mode and 3 <= case <= 5:
                     assert value('fixture_releases') == 3
                     assert fault[2:4] == ((3, 3) if case == 3 else (4, 3) if case == 4 else (4, 4)), fault
