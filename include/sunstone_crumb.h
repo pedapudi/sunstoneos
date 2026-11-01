@@ -99,6 +99,11 @@ enum {
     SUNSTONE_CRUMB_CLOCK_GUARD = 0x0201,    /* CPU clock entry guard passed */
     SUNSTONE_CRUMB_CLOCK_CHANGE = 0x0202,   /* request; value: domain << 12 | MHz */
     SUNSTONE_CRUMB_CLOCK_READY = 0x0203,    /* every granted request issued */
+    /* Return step: 1 drain, 2 request CPU-B lowering, 3 wait for lowering,
+     * 4 verify clocks/leases, 5 done. Value: step << 12 | owner phase << 10 |
+     * cluster << 8 | driver state. Owner phases: START, INSPECT, REQUEST,
+     * FOLLOW, numbered 0 through 3. */
+    SUNSTONE_CRUMB_CLOCK_RETURN = 0x0204,
     SUNSTONE_CRUMB_PMIC_STOP = 0x0210,      /* PMIC owner stopped */
     SUNSTONE_CRUMB_THERMAL_DONE = 0x0221,   /* thermal service stopped */
     SUNSTONE_CRUMB_ASSET_START = 0x0301,    /* value: asset index */
