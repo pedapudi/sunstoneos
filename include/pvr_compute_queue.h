@@ -1,0 +1,112 @@
+#ifndef SUNSTONE_PVR_COMPUTE_QUEUE_H
+#define SUNSTONE_PVR_COMPUTE_QUEUE_H
+/* The GPU compute queue inside the GPU service worker
+ * (drivers/gpu/pvr_gpu_service.c, docs/designs/gpu-compute-queue.md).
+ *
+ * Status: prototype. Nothing implements these declarations yet.
+ *
+ * The worker calls the functions below directly, at each place where it
+ * calls the mimus session today. They run in the worker task at EL1, one at
+ * a time, each bounded and without a tick wait. Their signatures are those a
+ * component function table would hold, so a second component later turns
+ * these direct calls into a loop over a table without changing the queue. */
+#include <stdatomic.h>
+#include <stdint.h>
+#include "gpu_queue.h"
+#include "pvr_cccb.h"
+#include "pvr_mips.h"
+
+struct pvr_gpu_service;
+struct pvr_gpu_service_config;
+
+/* Firmware-only objects, one uncached page each, as the mimus session has:
+ * compute context, register state, client-ring control, client ring,
+ * memory context, timeline. */
+#define PVR_COMPUTE_QUEUE_OBJECTS 6u
+
+/* The job page (GPU-read-only, in the PDS heap):
+ * - 0-127: PDS data, written at creation; the binding-0 address and the
+ *   group counts are rewritten only when they differ from the previous job,
+ *   and the counts only for a program that reads them;
+ * - 128-191: PDS dispatch program, written at creation;
+ * - 192-255: fence PDS program, written at creation;
+ * - 256-315: CDM stream, per job;
+ * - 320-407: argument block, per job (at most 24 bytes of binding addresses,
+ *   then at most 64 argument bytes).
+ * One clean from byte 256 to the end of the argument block covers each job:
+ * 2 lines for mimus's 32-byte block, at most 3. A changed PDS line adds one. */
+#define PVR_COMPUTE_QUEUE_PDS_DATA 0u
+#define PVR_COMPUTE_QUEUE_FENCE 192u
+#define PVR_COMPUTE_QUEUE_CDM 256u
+#define PVR_COMPUTE_QUEUE_ARGUMENTS 320u
+
+/* Slot shared with the client task. Every access to slot_state, lost and
+ * wake is sequentially consistent on both sides. */
+enum pvr_compute_queue_slot { PVR_COMPUTE_QUEUE_CLOSED, PVR_COMPUTE_QUEUE_IDLE,
+    PVR_COMPUTE_QUEUE_RESERVED, PVR_COMPUTE_QUEUE_SUBMITTED, PVR_COMPUTE_QUEUE_TAKEN };
+
+struct pvr_compute_queue {
+    struct pvr_gpu_service *service;
+    struct pvr_mips_object objects[PVR_COMPUTE_QUEUE_OBJECTS];
+    struct pvr_cccb client;
+    struct gpu_queue_lease_info lease[GPU_QUEUE_LEASES];
+    uint32_t lease_count, coefficients, phase, error, sequence, owed, held;
+    uint64_t job_us, deadline, kicked, not_after;
+    unsigned char command[96], update[8];
+    uint64_t binding0;            /* last PDS binding-0 address */
+    uint32_t groups[3];           /* last PDS group counts */
+    struct gpu_queue_job job;     /* the worker's copy */
+    /* Shared with the client. */
+    atomic_uint slot_state, lost, wake;
+    struct gpu_queue_job slot;
+};
+
+/* Before the scheduler, at EL1, in images that include the GPU: reserve the
+ * context's payload and firmware pages from the GPU pools, as
+ * a733_gpu_mimus_prepare does, and set config->queue. No device access. */
+int pvr_compute_queue_bind(struct pvr_compute_queue *, struct pvr_gpu_service *,
+                           struct pvr_gpu_service_config *);
+/* CREATE request, device COLD: copy the program; plan the leases and the
+ * internal pages with pvr_gpu_vm_require; acquire the planned table pages,
+ * at most 32, from the GPU write-back pool, as a733_gpu_mimus_prepare does;
+ * build the GPU address space once with pvr_gpu_vm_build, which needs that
+ * exact size; build the firmware context. The worker then runs OPEN.
+ * 1 accepted, 0 refused without device access. */
+int pvr_compute_queue_create(struct pvr_compute_queue *, const struct gpu_queue_context_config *);
+
+/* Worker calls, at the sites that call the mimus session today. */
+unsigned pvr_compute_queue_objects(struct pvr_compute_queue *, struct pvr_mips_object *, unsigned);
+int pvr_compute_queue_prepare(struct pvr_compute_queue *, uint64_t deadline);
+int pvr_compute_queue_publish(struct pvr_compute_queue *);   /* 1 done, 0 pending, -1 fault */
+int pvr_compute_queue_poll(struct pvr_compute_queue *);      /* -1 fault */
+int pvr_compute_queue_event(struct pvr_compute_queue *, const unsigned char command[88]);
+void pvr_compute_queue_abort(struct pvr_compute_queue *);
+int pvr_compute_queue_close(struct pvr_compute_queue *);     /* 1 sealed, 0 busy */
+/* 1 while a job is in flight (deadline: its hang bound) or waits in the slot
+ * with a kick deadline (deadline: not_after). */
+int pvr_compute_queue_deadline(const struct pvr_compute_queue *, uint64_t *deadline);
+int pvr_compute_queue_submitting(const struct pvr_compute_queue *);
+uint64_t pvr_compute_queue_progress(const struct pvr_compute_queue *);
+/* Performance hold: stop kicking; 1 once nothing is in flight. A job
+ * submitted during the hold waits in the slot. release kicks it. */
+int pvr_compute_queue_hold(struct pvr_compute_queue *);
+int pvr_compute_queue_release(struct pvr_compute_queue *);
+/* After healthy STOPPED: restore the memory-context record and the firmware
+ * context as a733_gpu_mimus_reopen does, and the timeline to the last
+ * sequence. The GPU tables stay published and unchanged. */
+int pvr_compute_queue_reopen(struct pvr_compute_queue *);
+
+/* Client side of gpu_queue_submit after the slot holds the job:
+ *   atomic_store(&slot_state, SUBMITTED);
+ *   if (atomic_exchange(&wake, 1) == 0) send one wake message;
+ * Worker, on that wake message, before taking the slot:
+ *   atomic_store(&wake, 0);
+ *   if (atomic_load(&slot_state) == SUBMITTED) take the job;
+ * In the single order of these sequentially consistent operations, either
+ * the worker's clear precedes the client's exchange, which then sends, or the
+ * client's store precedes the worker's load, which then sees the job. The
+ * worker can therefore wait with portMAX_DELAY when idle without losing a
+ * job. The request queue holds one message per client, one interrupt wake
+ * and this one wake, so the send cannot find it full. */
+int pvr_compute_queue_wake(struct pvr_compute_queue *);
+#endif
