@@ -13,7 +13,9 @@ CPU/GPU/probe capture and a frozen run queue. Fake FEL checks, real offline
 hello/GPU preparation and independent review pass; physical qualification is
 pending. Evidence is under `~/.cache/sunstoneos/build/board-runner-1031/`.
 Finite NPU images admit the armed watchdog and have board-qualified startup
-and inference. Their receipt format still needs an adapter in the queued runner.
+and inference. The queued runner now prepares their native sessions, validates
+interrupt receipts and restores DRAM after retirement. Its adapter passes host
+checks; physical runs require the shared daemon to include that adapter.
 The guide gives the coordinator's port 3-1 qualification commands.
 The [native probe contract](board-probe-contract.md) now has a library, offline
 admission command and converted memtest example. Host/instruction checks cover
@@ -352,8 +354,8 @@ domain OFF/restart through its native session template and exact image marker.
 `--check-only` reads the board unless `--state FILE`
 supplies a capture; neither mode writes rails.
 
-The next NPU diagnostics are host-verified and await coordinator runs. Their
-source and tools are frozen at `593ce329` beneath
+The next NPU diagnostics are host-verified and await queued runs on port 3-3.
+Their native source and compatible finite host decoder are frozen at `593ce329` beneath
 `~/.cache/sunstoneos/build/npu-wdt-1031/next-host-593ce329/`. Image directories
 are under `images/` in that build directory:
 
@@ -364,9 +366,10 @@ are under `images/` in that build directory:
 | 3 | `sdk-access` | Match both models through the public application API; three IRQ completions and owner-authorized quiescence. |
 | 4 | `power-cycle` | Prove domain policy/status OFF 0/0 then ON 8/8 between matching jobs; four IRQ completions. |
 
-Each directory's README gives full hashes, exact commands, breadcrumb order
-and stage failures. `images/next-images.json` binds the artifacts and frozen
-host archive. Continue only after the preceding run returns normally with
+Each directory's short README gives its image hash, queue command, expected
+result and first-failure decode. `images/next-images.json` binds the artifacts
+and frozen host archive. The shared daemon must include the finite NPU adapter
+before submission; `docs/board-runner.md` defines its session template. Continue only after the preceding run returns normally with
 matching output; power-cycle runs last. The SDK diagnostic uses the finite
 task privilege. Its host evidence covers the memory-only public API and
 owner checks, and does not qualify full OS EL0 mappings.
