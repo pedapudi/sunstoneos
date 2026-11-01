@@ -379,7 +379,7 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
     capture_limit={'accelerator_result':19,'gpu_display_result':19,'hdmi_audio_result':19,'g2d_result':19,'displayport_result':19,'deinterlace_result':19,'isp0_result':19}.get(result_key,59)
     if result_key in ('application_result', 'application_board_result'):
         require(type(capture_limit_seconds) in (int, float) and
-                0 < capture_limit_seconds < float('inf'), 'Unsupported supervised capture bounds.')
+                0 < capture_limit_seconds <= 179, 'Unsupported supervised capture bounds.')
         capture_limit = capture_limit_seconds
     else:
         require(capture_limit_seconds is None, 'Unsupported supervised capture bounds.')

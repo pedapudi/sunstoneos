@@ -234,7 +234,7 @@ def failed_controllers(log_text: str) -> dict[str, str]:
   return failed
 
 
-def recovery_steps(pci: str, line: str) -> str:
+def recovery_steps(pci: str, line: str, health_setting: str = "SUNSTONE_USB_HEALTH") -> str:
   return f"""usb_guard: USB host controller {pci} failed during this boot:
   {line}
 Every device on it (boards, and any keyboard, mouse or Bluetooth adapter it
@@ -245,7 +245,7 @@ refused. Recovery, by the owner:
        sleep 2; echo {pci} | sudo tee /sys/bus/pci/drivers/xhci_hcd/bind
      (tools/host/README.md describes an optional watchdog that does this).
   2. Check that the boards are back: ls -l /dev/serial/by-id/
-SUNSTONE_USB_HEALTH=warn proceeds anyway."""
+{health_setting}=warn proceeds anyway."""
 
 
 _health_checked = 0.0
@@ -264,10 +264,12 @@ def check_health(log=_log, read_log=None) -> None:
     return
   failed = failed_controllers(text)
   if failed:
-    message = "\n".join(recovery_steps(pci, line)
+    health_setting = "SUNSTONE_USB_HEALTH" if "SUNSTONE_USB_HEALTH" in os.environ else (
+        "MIMUS_USB_HEALTH" if "MIMUS_USB_HEALTH" in os.environ else "SUNSTONE_USB_HEALTH")
+    message = "\n".join(recovery_steps(pci, line, health_setting)
                         for pci, line in failed.items())
     if _setting("HEALTH") == "warn":
-      log(message + "\nusb_guard: SUNSTONE_USB_HEALTH=warn: continuing")
+      log(message + f"\nusb_guard: {health_setting}=warn: continuing")
     else:
       raise SystemExit(message)
   _health_checked = time.monotonic()

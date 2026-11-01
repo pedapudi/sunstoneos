@@ -43,7 +43,11 @@ class CompatibilityTest(unittest.TestCase):
         messages = []
         if warns:
           usb_guard.check_health(log=messages.append, read_log=lambda: failed)
-          self.assertTrue(any("continuing" in m for m in messages))
+          setting = "SUNSTONE_USB_HEALTH" if "SUNSTONE_USB_HEALTH" in environment else "MIMUS_USB_HEALTH"
+          self.assertIn(f"usb_guard: {setting}=warn: continuing", messages[-1])
+          self.assertIn(f"{setting}=warn proceeds anyway.", messages[-1])
+          other = "MIMUS_USB_HEALTH" if setting == "SUNSTONE_USB_HEALTH" else "SUNSTONE_USB_HEALTH"
+          self.assertNotIn(other, messages[-1])
         else:
           with self.assertRaises(SystemExit):
             usb_guard.check_health(log=messages.append, read_log=lambda: failed)

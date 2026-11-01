@@ -386,7 +386,9 @@ validator supplies no application field name by default.
 
 The optional `supervised_capture_seconds` object in a port's
 `sunstoneos/gate.json` maps application result keys to positive finite capture
-limits in seconds. The application runner passes its declared limit through
+limits in seconds, up to the OS maximum of 179 seconds. The supervisor refuses
+a declaration above this maximum even when the requested capture is shorter.
+The application runner passes its declared limit through
 `capture_limit_seconds` to the shared supervisor. Both `application_result`
 and `application_board_result` require an explicit limit. Standard device
 result keys retain their OS bounds and reject an application limit override.
