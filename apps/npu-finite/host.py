@@ -57,17 +57,36 @@ def build_launcher(output,clang,lld,objcopy,*,watchdog_mode=0xb1):
  require(0<(output/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM reservation.')
 
 
+def startup_client(prepared):
+ client=STARTUP_CLIENT.get(prepared.get('execution_profile'))
+ if prepared.get('geometry',{}).get('sustained'):
+  require(prepared.get('execution_profile')==RUNTIME,'Sustained geometry requires runtime profile.')
+  return (STARTUP_CLIENT[RUNTIME][0],STARTUP_CLIENT[RUNTIME][1],200,201)
+ return client
+
+def sustained_extension(startup_marker,names,read):
+ sustained=startup_marker==(STARTUP_CLIENT[RUNTIME][0],1,200,201)
+ require(('npu_sustained_return_profile' in names)==sustained,'Sustained extension/startup marker differs.')
+ if sustained:
+  require(read('npu_sustained_return_profile')==struct.pack('<4Q',0x4e50555355533031,1,200,2),
+   'Sustained immutable extension differs.')
+  require('npu_finite_reference_2' not in names,'Sustained plan requires exactly two networks.')
+ return sustained
+
+
 def image_profile(data,manifest):
  watchdog_marker(data)
  parts,address,build,layout=original.image_data(data)
  elf=ELFFile(io.BytesIO(data));symbols={s.name:s for s in elf.get_section_by_name('.symtab').iter_symbols()}
  # Select the parser from native immutable markers rather than a manifest.
- names=set(symbols)
+ names=set(symbols);sustained=False
  if 'npu_startup_return_profile' in names:
   marker=symbols['npu_startup_return_profile'];start=int(marker['st_value'])
   part=next(p for p in parts if p['address']<=start and start+32<=p['address']+len(p['data']))
   value=struct.unpack_from('<4Q',part['data'],start-part['address'])
   execution=next((name for name,description in STARTUP_CLIENT.items() if value==(description[0],1,description[2],description[3])),None)
+  sustained=value==(STARTUP_CLIENT[RUNTIME][0],1,200,201)
+  if sustained:execution=RUNTIME
   require(execution is not None,'Unsupported native startup marker.')
  elif 'npu_restart_return_profile' in names:
   marker=symbols['npu_restart_return_profile'];start=int(marker['st_value'])
@@ -86,7 +105,7 @@ def image_profile(data,manifest):
   if s['st_info']['type']=='STT_FUNC' and s['st_shndx']!='SHN_UNDEF']
  require(not any('usb' in n.lower() or n.startswith(('tud_','tuh_','dcd_','hcd_')) or
   n=='a733_observe_service_start' for n in functions),'Finite image contains native USB functions.')
- startup=STARTUP_CLIENT.get(manifest['execution_profile'])
+ startup=startup_client({'execution_profile':execution,'geometry':{'sustained':sustained}})
  checkpoint=manifest['execution_profile'] in (CHECKPOINT,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT);thermal=manifest['execution_profile']==THERMAL
  for name in ('npu_finite_receipt','npu_finite_smc','npu_finite_rom_return', 'npu_entry_checkpoint_ready' if checkpoint else 'a733_npu_application_quiescent'):
   require(name in symbols and symbols[name]['st_value'],'Missing returning producer: '+name)
@@ -110,6 +129,8 @@ def image_profile(data,manifest):
   else:
    require('npu_entry_checkpoint_provider_profile' not in symbols and all(n not in symbols for n in ('a733_npu_application_init','npu_convolution_startup_poll','npu_service_activate','vTaskStartScheduler')),'Checkpoint contains a provider or scheduler constructor.')
  else:require('npu_entry_checkpoint_profile' not in symbols,'Checkpoint image cannot use numerical profile.')
+ if startup:require(sustained_extension(value,names,read)==sustained,'Sustained startup selection differs.')
+ else:require('npu_sustained_return_profile' not in names,'Unexpected sustained extension.')
  runtime=manifest['execution_profile'] in (RUNTIME,SWITCH,SDK)
  if manifest['execution_profile']==SDK:
   require(all(n in symbols for n in ('ss_npu_run','ss_npu_close','ss_npu_service_step','sdk_service')),'Missing linked SDK owner or public API.')
@@ -127,12 +148,13 @@ def image_profile(data,manifest):
  else:require('npu_restart_return_profile' not in symbols,'Restart image requires its distinct profile.')
  # The runtime image compares each network's copied output with its linked
  # reference; network 0 is the image's selected immutable model.
- references=[read(f'npu_finite_reference_{n}').hex() for n in range(startup[2])] if runtime else []
+ references=[read(f'npu_finite_reference_{n}').hex() for n in range(2 if sustained else startup[2])] if runtime else []
  if not runtime:require('npu_finite_reference_0' not in symbols,'Only the runtime image links network references.')
  geometry={'clean_start':lo,'clean_end':hi,'receipt':receipt,'log':log,'reference':read('a733_npu_application_reference').hex()}
  require(not runtime or references[0]==geometry['reference'],'Runtime network 0 is not the selected model.')
  if startup:geometry['startup_only']=True
  if runtime:geometry.update(runtime=True,references=references)
+ if sustained:geometry['sustained']=True
  if manifest['execution_profile']==SWITCH:geometry['model_switch']=True
  if manifest['execution_profile']==SDK:geometry['sdk']=True
  if manifest['execution_profile']==INFERENCE:geometry['single_inference']=True
@@ -295,7 +317,7 @@ def job_counters(text):
 
 
 def validate_reports(monitor,platform,receipt,p):
- thermal=p.get('execution_profile')==THERMAL;startup=STARTUP_CLIENT.get(p.get('execution_profile'))
+ thermal=p.get('execution_profile')==THERMAL;startup=startup_client(p)
  require(len(monitor)==128 and len(platform)==16384 and len(receipt)==(112 if thermal else 88),'Incomplete returned reports.')
  m=struct.unpack('<16Q',monitor);h=struct.unpack_from('<16Q',platform);r=struct.unpack('<14Q' if thermal else '<11Q',receipt);g=p['geometry']
  magic=0x415337334e505231
@@ -320,6 +342,11 @@ def validate_reports(monitor,platform,receipt,p):
   else:require(text==prefix,'Checkpoint log or status differs.')
   require(status==0,'Checkpoint log or status differs.')
   return {'normal_return':True,'checkpoint':('PROVIDERS_CONSTRUCTED' if p.get('execution_profile')==PROVIDER_CHECKPOINT else 'ENTRY_MEMORY_READY'),'functional_success':False,'controlled_negative':False,'jobs':0,'status':0,'diagnostic_deadline':deadline,'log':text,**mbus}
+ if g.get('sustained'):
+  result=sustained_report(text,status,deadline,g)
+  ticks=result['timing']
+  require(m[6]<=ticks['start_ticks']<ticks['end_ticks']<=h[9],'Sustained timing escapes native report.')
+  return result
  if g.get('runtime'):return runtime_report(text,status,deadline,g)
  if startup and startup[2]:return inference_report(text,status,deadline,g)
  if startup:
@@ -380,6 +407,45 @@ def inference_report(text,status,deadline,g):
  return {'normal_return':True,'single_inference':True,'functional_success':matched,'controlled_negative':not matched,
   'jobs':1,'status':status,'diagnostic_deadline':deadline,'output':bytes(output).hex(),
   'output_pattern':{k:v for k,v in output_pattern(b'',bytes(output)).items() if k!='first_unwritten'},'log':text}
+
+def sustained_report(text,status,deadline,g):
+ """Validate all 200 copied-output hashes and API latency windows in ticks."""
+ require(g.get('runtime') and len(g['references'])==2,'Sustained network geometry differs.')
+ head=('NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=SUSTAINED\nNPU_STAGE=CLOSE\n'
+  'NPU_STAGE=WAIT_LOCAL_STOP\nNPU_IRQ_COMPLETIONS=0x00000000000000c9\n'
+  'NPU_IRQ_STOPPED=0x0000000000000001\nNPU_STAGE=QUIESCENT\nNPU_SUSTAINED=\n')
+ word=r'0x[0-9a-f]{16}'
+ pattern=re.escape(head)+r'((?:'+word+r'\n){12})NPU_JOB_TICKS=\n((?:'+word+' '+word+r'\n){200})NPU_OUTPUT_DIGEST=\n((?:'+word+r'\n){32})NPU_INFERENCE=(MATCH|MISMATCH); inference_jobs=200\n'
+ match=re.fullmatch(pattern,text)
+ require(match is not None,'Sustained stage, job, IRQ or output log differs.')
+ frequency,start,end,maximum,jobs,checked,bad,first_count,second_count,first_bad,offset,value=(int(v,16) for v in match[1].split())
+ require(frequency==24000000 and jobs==checked==200 and first_count==second_count==100 and 0<=bad<=200,
+  'Sustained job/check/model counters differ.')
+ windows=[tuple(int(v,16) for v in line.split()) for line in match[2].splitlines()]
+ require(start==windows[0][0] and deadline-480000000<=start<end<deadline and
+  all(start<=a<b<=end and b-a<=frequency for a,b in windows) and
+  all(windows[n-1][1]<=windows[n][0] for n in range(1,200)) and
+  maximum==max(b-a for a,b in windows),'Sustained timing windows or maximum differ.')
+ raw=[int(v,16) for v in match[3].split()]
+ require(all(v<256 for v in raw),'Sustained digest byte differs.')
+ digest=bytes(raw).hex();references=[bytes.fromhex(v) for v in g['references']]
+ expected=hashlib.sha256(b''.join(hashlib.sha256(references[n%2]).digest() for n in range(200))).hexdigest()
+ matched=digest==expected
+ require(matched==(bad==0)==(status==0) and (match[4]=='MATCH')==matched,
+  'Sustained status disagrees with copied output checks/hash.')
+ sentinel=(1<<64)-1
+ if not bad:require((first_bad,offset,value)==(sentinel,sentinel,sentinel),'Unexpected sustained mismatch detail.')
+ else:require(first_bad<200 and offset<len(references[first_bad%2]) and value<256 and
+  value!=references[first_bad%2][offset],'Sustained first mismatch detail differs.')
+ return {'normal_return':True,'runtime':True,'sustained':True,'functional_success':matched,
+  'controlled_negative':not matched,'jobs':jobs,'outputs_checked':checked,'mismatches':bad,
+  'model_jobs':[first_count,second_count],'first_mismatch':None if not bad else {'job':first_bad,'offset':offset,'byte':value},
+  'status':status,'diagnostic_deadline':deadline,'output_digest':digest,
+  'timing':{'frequency_hz':frequency,'start_ticks':start,'end_ticks':end,'duration_ticks':end-start,
+   'duration_seconds':(end-start)/frequency,'jobs_per_second':jobs*frequency/(end-start),
+   'maximum_api_ticks':maximum,'maximum_api_us':maximum*1000000/frequency,
+   'job_windows_ticks':windows,'window':'npu_job_run call; total includes every copied-output comparison and digest'},'log':text}
+
 
 def runtime_report(text,status,deadline,g):
  """The runtime client's log: startup, one job of each network through

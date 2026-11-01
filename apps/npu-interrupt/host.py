@@ -38,7 +38,7 @@ def validate_admission(admission,raw,build,layout,image_hash,cache=None,*,execut
 def validate_reports(monitor,platform,receipt,prepared):
     value=_original_reports(monitor,platform,receipt,prepared)
     restart=prepared.get('execution_profile') in (finite.RESTART,finite.POWER)
-    client=finite.STARTUP_CLIENT.get(prepared.get('execution_profile'))
+    client=finite.startup_client(prepared)
     count=4 if restart else client[3] if client else 3
     marker=f'NPU_IRQ_COMPLETIONS=0x{count:016x}\nNPU_IRQ_STOPPED=0x0000000000000001\n'
     finite.require(value['log'].count('NPU_IRQ_COMPLETIONS=')==1 and
