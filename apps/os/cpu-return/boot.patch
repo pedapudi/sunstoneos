@@ -14,7 +14,7 @@
  _Noreturn void a733_smp_stop(unsigned status,uint64_t detail)
  {
      __asm__ volatile("msr daifset, #15":::"memory");
-+    sunstone_crumb_el3(SUNSTONE_CRUMB_EL3_STOP,(uint32_t)(status<<12|(detail&0xfff)));
++    sunstone_crumb_el3(SUNSTONE_CRUMB_EL3_STOP,(uint32_t)((status>15?15:status)<<12|(detail&0xfff)));
      RESULT->completed_mask=status?0:255;
      RESULT->status=status;RESULT->detail=detail;RESULT->end_counter=a733_smp_counter();
      barrier();RESULT->stage=5;barrier();

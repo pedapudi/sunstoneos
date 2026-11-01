@@ -11,6 +11,7 @@
  * the thermal level. A grant that names
  * no cluster leaves every clock and voltage unchanged. */
 #include "os.h"
+#include "sunstone_crumb.h"
 #include "../board/application.h"
 #include "../mimus-board/application.h"
 #include "a733_cpu_clock.h"
@@ -114,6 +115,11 @@ static void publish(void)
 int os_cpu_clock_ready(void){return (int)atomic_load_explicit(&owner.ready,memory_order_acquire);}
 static uint64_t later(uint64_t us)
 {uint64_t now;return a733_counter_clock_now(&providers.shared.counter,&now)?now+us:0;}
+/* Each refusal records its line, phase and status before the thermal
+ * owner's fault() ends the session (include/sunstone_crumb.h). */
+static int refused(uint32_t site,const void *here,uint32_t status)
+{board_fail_note(site,(uint32_t)owner.phase<<24|(owner.cluster&0xffu)<<16|(status&0xffffu),here);return -1;}
+#define REFUSED(status) refused(SUNSTONE_CRUMB_FAIL_SITE(CPU_CLOCK),SUNSTONE_CRUMB_HERE(),(uint32_t)(status))
 int os_cpu_clock_step(const struct a733_thermal_policy *policy)
 {
     struct a733_cpu_clock *c=&owner.driver;
@@ -122,9 +128,9 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
         struct a733_cpu_clock_config config;
         if(!s||!a733_cpu_clock_grant_load(&s->cpu_clock,s->board.epoch,s->board.generation,&config)||
            !a733_cpu_clock_init(c,&config,&clock_ops,&owner,&providers.shared.clocks,&providers.shared.rails,
-               &providers.shared.pmic,policy))return -1;
+               &providers.shared.pmic,policy))return REFUSED(0);
         owner.phase=INSPECT;owner.cluster=A733_CPU_LITTLE;
-        if(a733_cpu_clock_inspect(c,A733_CPU_LITTLE,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return -1;
+        if(a733_cpu_clock_inspect(c,A733_CPU_LITTLE,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return REFUSED(0);
         return 1;
     }
     enum a733_cpu_clock_status r=a733_cpu_clock_burst(c,BURST_US);
@@ -135,20 +141,20 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
      * result, including a retained driver, before the session ends. */
     if(owner.phase==FOLLOW) {
         int ready=os_perf_step(c,policy,(int)r);
-        if(ready<0)return -1;
+        if(ready<0)return REFUSED(0);
         if(ready && !atomic_load_explicit(&owner.ready,memory_order_relaxed))
             atomic_store_explicit(&owner.ready,1,memory_order_release);
     }
 #endif
-    if(r==A733_CPU_CLOCK_RETAINED||r==A733_CPU_CLOCK_INVALID)return -1;
+    if(r==A733_CPU_CLOCK_RETAINED||r==A733_CPU_CLOCK_INVALID)return REFUSED(r);
     if(r==A733_CPU_CLOCK_PENDING)return 1;
     if(r==A733_CPU_CLOCK_COMPLETE&&owner.phase!=INSPECT)++owner.count;
     if(r!=A733_CPU_CLOCK_READY)publish();
     if(owner.phase==INSPECT){
-        if(r!=A733_CPU_CLOCK_COMPLETE)return -1;
+        if(r!=A733_CPU_CLOCK_COMPLETE)return REFUSED(r);
         if(owner.cluster==A733_CPU_LITTLE){
             owner.cluster=A733_CPU_BIG;
-            return a733_cpu_clock_inspect(c,A733_CPU_BIG,later(REQUEST_US))==A733_CPU_CLOCK_PENDING?1:-1;
+            return a733_cpu_clock_inspect(c,A733_CPU_BIG,later(REQUEST_US))==A733_CPU_CLOCK_PENDING?1:REFUSED(0);
         }
 #ifdef SUNSTONE_A733_OS_PERF
         owner.phase=FOLLOW;return 1;
@@ -180,7 +186,7 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
             enum a733_cpu_clock_status q=a733_cpu_clock_request(c,(enum a733_cpu_domain)d,target,later(REQUEST_US));
             ++owner.cluster;
             if(q==A733_CPU_CLOCK_PENDING)return 1;
-            if(q==A733_CPU_CLOCK_RETAINED||q==A733_CPU_CLOCK_INVALID)return -1;
+            if(q==A733_CPU_CLOCK_RETAINED||q==A733_CPU_CLOCK_INVALID)return REFUSED(q);
         }
         owner.phase=FOLLOW;atomic_store_explicit(&owner.ready,1,memory_order_release);
     }

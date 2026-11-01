@@ -30,6 +30,7 @@ void board_fail(void *v){(void)v;
     }
 #endif
     up=0;++fails;}
+void board_fail_at(uint32_t site,uint32_t value,const void *here){(void)site;(void)value;(void)here;board_fail(NULL);}
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
 int os_cpu_clock_step(const struct a733_thermal_policy *p){(void)p;return 1;}
 #endif

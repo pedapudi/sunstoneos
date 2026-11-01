@@ -21,4 +21,7 @@ struct a733_thermal_policy;
 int os_cpu_return_thermal_ready(void);
 int os_cpu_return_entry_guard(const struct a733_cpu_clock *,const struct a733_thermal_policy *,
     uint64_t,int (*)(void *,uintptr_t,uint32_t *),void *);
+/* The last guard refusal: detail << 12 | source line in cpu-return-entry.c;
+ * 0 after a guard that did not refuse. */
+extern uint32_t os_cpu_return_entry_refusal;
 #endif

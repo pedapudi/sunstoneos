@@ -38,7 +38,7 @@
      dsb sy
      add x2, x23, #688
      add x2, x2, x20, lsl #10
-@@ -369,9 +382,34 @@
+@@ -369,9 +382,40 @@
      dsb sy
      str x1, [x2, #40]
      dsb sy
@@ -64,6 +64,12 @@
 +    ldr w1, [x0, #0x14]
 +    and w1, w1, #0xffff
 +    mov x0, #0x07090000
++    mrs x3, cntpct_el0
++    ubfx x3, x3, #10, #29
++    mrs x4, mpidr_el1
++    ubfx x4, x4, #8, #3
++    orr w3, w3, w4, lsl #29
++    str w3, [x0, #0x10c]
 +    mov w2, #0x05030000
 +    orr w2, w2, w1
 +    str w2, [x0, #0x104]
