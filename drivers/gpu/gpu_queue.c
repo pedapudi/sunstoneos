@@ -2,10 +2,13 @@
 #include "pvr_compute_queue.h"
 #include "pvr_gpu_service.h"
 #include "a733_range.h"
+#include "aarch64_device_memory.h"
+#include "pvr_gpu_call.h"
 #include <string.h>
 
 static struct pvr_compute_queue *instance;
 __attribute__((weak)) int pvr_compute_queue_runtime_sync(void) { return 1; }
+__attribute__((weak)) int pvr_compute_queue_runtime_admit(void) { return 1; }
 __attribute__((weak)) int pvr_compute_queue_runtime_program(const struct gpu_queue_program *p) { (void)p;return 1; }
 __attribute__((weak)) void pvr_compute_queue_runtime_opened(uint64_t epoch) { (void)epoch; }
 __attribute__((weak)) void pvr_compute_queue_runtime_closed(void) { }
@@ -102,10 +105,85 @@ static int context(struct pvr_compute_queue *q,struct gpu_queue_context c)
     }
     return q->create_done==1 && c.generation==q->generation ? GPU_QUEUE_OK : GPU_QUEUE_REFUSED;
 }
+/* Fixed same-task kernel entry. The argument stays on the caller's stack;
+ * no function pointer or private GPU-memory pointer crosses the interface. */
+extern int pvr_gpu_call(unsigned,void *) __attribute__((weak));
+enum { FAST_SUBMIT=1, FAST_COLLECT=2 };
+struct fast_call {
+    struct gpu_queue_context context;
+    struct gpu_queue_job job;
+    struct gpu_queue_record record;
+    uint32_t fence;
+};
+int pvr_gpu_call_dispatch(unsigned operation,void *argument)
+{
+    struct pvr_compute_queue *q=instance;
+    if (operation!=FAST_SUBMIT && operation!=FAST_COLLECT) return GPU_QUEUE_REFUSED;
+    if (!argument || ((uintptr_t)argument&7) || !a733_span_excl_nonempty(argument,sizeof(struct fast_call))) return GPU_QUEUE_REFUSED;
+    struct aarch64_translation translation;
+    uintptr_t first=(uintptr_t)argument,last=first+sizeof(struct fast_call)-1;
+    /* EL0 write permission also admits reads. Validate both pages of this
+     * fixed-size kernel argument; the transport's retained maps need no walk. */
+    if (!aarch64_device_translate_el0(first,1,&translation) ||
+        ((first>>12)!=(last>>12) && !aarch64_device_translate_el0(last,1,&translation))) return GPU_QUEUE_REFUSED;
+    struct fast_call *a=argument;
+    int r=context(q,a->context);
+    if (r!=GPU_QUEUE_OK || !q->service->config.job_irq_ack) return r==GPU_QUEUE_OK?GPU_QUEUE_REFUSED:r;
+    if (operation==FAST_COLLECT) return pvr_compute_fast_collect(q,a->context.client,&a->record);
+    int live=pvr_compute_queue_runtime_admit();
+    if (live!=1) return live<0?GPU_QUEUE_FAULT:GPU_QUEUE_PARKED;
+    return pvr_compute_fast_submit(q,a->context.client,&a->job,&a->fence);
+}
+static int direct_submit(struct gpu_queue_context c,const struct gpu_queue_job *job,uint32_t *fence)
+{
+    if (!job) return GPU_QUEUE_REFUSED;
+    if (!pvr_gpu_call) return GPU_QUEUE_REFUSED;
+    struct fast_call call={.context=c,.job=*job};
+    int r=pvr_gpu_call(FAST_SUBMIT,&call);
+    if (r==GPU_QUEUE_OK && fence) *fence=call.fence;
+    return r;
+}
+static int direct_wait(struct pvr_compute_queue *q,struct gpu_queue_context c,
+    struct gpu_queue_record *out,uint32_t ticks)
+{
+    TickType_t begin=xTaskGetTickCount(),budget=ticks==GPU_QUEUE_WAIT_FOREVER?portMAX_DELAY:(TickType_t)ticks;
+    for (;;) {
+        if (atomic_load(&q->lost)) return GPU_QUEUE_FAULT;
+        uint32_t target=atomic_load_explicit(&q->fast.pending[c.client],memory_order_acquire);
+        if (!target) return atomic_load(&q->lost)?GPU_QUEUE_FAULT:GPU_QUEUE_REFUSED;
+        if (target<=atomic_load_explicit(&q->fast.completed,memory_order_acquire) ||
+            !atomic_load_explicit(&q->fast.enabled,memory_order_acquire)) {
+            struct fast_call call={.context=c};
+            int r=pvr_gpu_call(FAST_COLLECT,&call);
+            if (r!=GPU_QUEUE_BUSY) {
+                if (r==GPU_QUEUE_OK || (r==GPU_QUEUE_FAULT && call.record.sequence)) *out=call.record;
+                return r;
+            }
+        }
+        if (!budget || (budget!=portMAX_DELAY && !remaining(begin,budget))) return GPU_QUEUE_TIMEOUT;
+        /* Clear stale notifications BEFORE publishing the waiter, then
+         * recheck. An IRQ in either gap cannot lose the wakeup. */
+        (void)ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,0);
+        atomic_store_explicit(&q->fast.waiter[c.client],target,memory_order_release);
+        if (atomic_load(&q->lost)) {atomic_store(&q->fast.waiter[c.client],0);return GPU_QUEUE_FAULT;}
+        if (((!atomic_load_explicit(&q->fast.irq_error,memory_order_acquire) &&
+              target<=atomic_load_explicit(&q->fast.completed,memory_order_acquire)) ||
+             target<=atomic_load_explicit(&q->fast.fault_through[c.client],memory_order_acquire)) &&
+            !atomic_load_explicit(&q->fast.locked,memory_order_acquire)) {
+            atomic_store(&q->fast.waiter[c.client],0);continue;
+        }
+        TickType_t wait=budget==portMAX_DELAY?portMAX_DELAY:remaining(begin,budget);
+        if (!wait || !ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,wait)) {
+            atomic_store(&q->fast.waiter[c.client],0);return GPU_QUEUE_TIMEOUT;
+        }
+        atomic_store(&q->fast.waiter[c.client],0);
+    }
+}
 int gpu_queue_submit(struct gpu_queue_context c,const struct gpu_queue_job *job)
 {
     struct pvr_compute_queue *q=instance;
     int r=context(q,c); if (r!=GPU_QUEUE_OK) return r;
+    if (q->service->config.job_irq_ack) return direct_submit(c,job,NULL);
     struct pvr_compute_queue_client_view v;
     if (!pvr_compute_queue_client_view(q,c.client,&v)) return GPU_QUEUE_REFUSED;
     if (atomic_load(v.client_owed)) return GPU_QUEUE_BUSY;
@@ -153,6 +231,7 @@ int gpu_queue_wait(struct gpu_queue_context c,struct gpu_queue_record *out,uint3
     if (!caller(q,c.client) || !out || c.generation!=q->generation ||
         !pvr_compute_queue_client_view(q,c.client,&v)) return GPU_QUEUE_REFUSED;
     if (!atomic_load(v.client_owed)) return atomic_load(&q->lost)?GPU_QUEUE_FAULT:GPU_QUEUE_REFUSED;
+    if (q->service->config.job_irq_ack) return direct_wait(q,c,out,ticks);
     struct gpu_queue_record record;
     if (xQueueReceive(v.completions,&record,(TickType_t)ticks)!=pdTRUE) return GPU_QUEUE_TIMEOUT;
     atomic_store(v.client_owed,0); *out=record;

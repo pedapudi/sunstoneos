@@ -73,6 +73,10 @@ enum pvr_ccb_result pvr_ccb_start(struct pvr_ccb *, uint64_t now);
  */
 enum pvr_ccb_result pvr_ccb_submit(struct pvr_ccb *, const void *command,
                                   uint64_t now, uint64_t deadline, struct pvr_ccb_token *);
+/* KICK without a return-slot reservation, as the reference job path uses.
+ * Firmware read-offset ownership still prevents reuse before consumption.
+ * The producer retains its own GPU fence and hang deadline. */
+enum pvr_ccb_result pvr_ccb_submit_noreply(struct pvr_ccb *,const void *,uint64_t,uint64_t);
 /* One bounded scan, at most 128 return-word reads. Service this on interrupts
  * and before pending deadlines. Timeout, corrupt metadata, or callback failure
  * latches FAILED; subsequent APIs perform no device access. No internal retries.

@@ -30,6 +30,7 @@
 #pragma weak pvr_compute_fast_lock
 #pragma weak pvr_compute_fast_unlock
 #pragma weak pvr_compute_fast_seal
+#pragma weak pvr_compute_fast_poll
 static struct pvr_gpu_service *instance;
 static unsigned creating_worker;
 static void worker(void *);
@@ -492,6 +493,7 @@ static int begin_recovery(struct pvr_gpu_service *s)
          !atomic_load(&q->peer.client_owed))) return 0;
 #endif
     atomic_store(&q->recovering,1);
+    if (s->config.job_irq_ack) pvr_compute_fast_seal(q);
     if (!interrupt_mask(s) || s->config.recovery_begin(s->config.context,&limit)!=1 ||
         limit<=now) return 0;
     s->recovery_detected=now;
@@ -638,9 +640,21 @@ static void performance_step(struct pvr_gpu_service *s)
     if(r==1 || r<0)performance_finish(s,r==1 ? A733_PERF_DONE : A733_PERF_FAILED,point);
 }
 #endif
-static void advance(struct pvr_gpu_service *s)
+static void advance_locked(struct pvr_gpu_service *s)
 {
     if (s->phase == PVR_GPU_SERVICE_FAILED) return;
+    if (s->phase==PVR_GPU_SERVICE_READY && s->config.compute_queue && s->config.job_irq_ack &&
+        !s->irq_masked && !s->recovery_stage &&
+#ifdef SUNSTONE_A733_OS_PERF
+        !s->performance.ticket &&
+#endif
+        atomic_load_explicit(&s->config.compute_queue->fast.enabled,memory_order_acquire)) {
+        /* The periodic safety deadline reads CPU fence state only. Successful
+         * completion is acquired on an actual IRQ, never by this watchdog. */
+        if (pvr_compute_fast_poll(s->config.compute_queue)<0 && !begin_recovery(s))
+            fail(s,PVR_GPU_SERVICE_COMPUTATION);
+        return;
+    }
     if (!interrupt_mask(s)) { fail(s, PVR_GPU_SERVICE_INTERRUPT); return; }
     int rearm = 0;
     switch (s->phase) {
@@ -904,7 +918,14 @@ static void advance(struct pvr_gpu_service *s)
     if (s->phase == PVR_GPU_SERVICE_STOPPED) s->owner = PVR_GPU_SERVICE_CLIENTS;
     if (rearm && !interrupt_rearm(s)) fail(s, PVR_GPU_SERVICE_INTERRUPT);
 }
-static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
+static void advance(struct pvr_gpu_service *s)
+{
+    struct pvr_compute_queue *q=s->config.compute_queue;
+    if (q && s->config.job_irq_ack && !pvr_compute_fast_lock(q)) return;
+    advance_locked(s);
+    if (q && s->config.job_irq_ack) pvr_compute_fast_unlock(q);
+}
+static enum pvr_gpu_service_result execute_locked(struct pvr_gpu_service *s,
                                            const struct pvr_gpu_service_message *m)
 {
     const struct pvr_gpu_service_request *r = &m->request;
@@ -1126,6 +1147,14 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
 /* Coarse progress identity of the controllers the worker advances. It only
  * decides whether another step may follow without waiting. A missed change
  * falls back to the worker's wait and never affects a protocol decision. */
+static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,const struct pvr_gpu_service_message *m)
+{
+    struct pvr_compute_queue *q=s->config.compute_queue;
+    if (q && s->config.job_irq_ack && !pvr_compute_fast_lock(q)) return PVR_GPU_SERVICE_BUSY;
+    enum pvr_gpu_service_result result=execute_locked(s,m);
+    if (q && s->config.job_irq_ack) pvr_compute_fast_unlock(q);
+    return result;
+}
 static uint64_t progress(const struct pvr_gpu_service *s)
 {
     const struct pvr_compute_service *c = s->config.compute;
@@ -1190,6 +1219,10 @@ static TickType_t wait_ticks(struct pvr_gpu_service *s)
     case PVR_GPU_SERVICE_READY: break;
     default: return 1;
     }
+    /* Direct jobs never complete from this watchdog. It reads only acquired
+     * CPU fence state and schedules recovery after a missing interrupt or
+     * hung job. Completion itself wakes the caller in the ISR. */
+    if (s->config.compute_queue && s->config.job_irq_ack) return 1;
     if (s->config.irq.mask && s->irq_masked) return 1;
     /* The job and the render keep their own deadlines. s->deadline belongs
      * to the latest client request, which the worker may have refused while
@@ -1344,6 +1377,8 @@ int pvr_gpu_service_init(struct pvr_gpu_service *s, const struct pvr_gpu_service
     if (!s || instance || s->initialized || !c || !priority || priority >= configMAX_PRIORITIES ||
         !affinity || (affinity >> configNUMBER_OF_CORES) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
+        (!!c->job_irq_ack != !!c->job_now) || (c->job_irq_ack &&
+            (!c->compute_queue || !c->irq.mask || !pvr_compute_fast_snapshot || !pvr_compute_fast_poll)) ||
         ((c->compute || c->compute_queue) && !c->compute_mode) ||
         (!!c->power.begin != !!c->power.poll) || (!!c->enable == !!c->power.begin) ||
         !c->queue.read || !c->queue.write || !c->queue.barrier || !c->queue.kick ||

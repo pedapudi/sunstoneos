@@ -83,6 +83,11 @@ int pvr_cccb_init(struct pvr_cccb *, const struct pvr_cccb_ops *, void *context,
 int pvr_cccb_begin(struct pvr_cccb *, const struct pvr_cccb_command *, unsigned count,
                    const uint32_t *cleanup_addresses, unsigned cleanup_count,
                    uint64_t deadline);
+/* Task/lock-owned immediate KICK. Samples space once, writes fixed commands
+ * and publishes once. AGAIN leaves the published cursor unchanged. GPU
+ * completion is tracked by the producer's timeline, without a return slot. */
+enum pvr_cccb_result pvr_cccb_try_submit(struct pvr_cccb *,const struct pvr_cccb_command *,unsigned,
+    uint64_t now,uint64_t deadline);
 
 /* One bounded step: format 32 bytes, sample ring space, write at most 256 bytes,
  * publish, submit one KICK, or collect its return. The owner must separately

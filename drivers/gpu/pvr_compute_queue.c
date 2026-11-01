@@ -367,6 +367,7 @@ int pvr_compute_queue_poll(struct pvr_compute_queue *q)
         if (r==PVR_CCCB_FAULT || r==PVR_CCCB_INVALID) return fault(q,GPU_QUEUE_SERVICE);
         if (q->client.phase!=PVR_CCCB_IDLE) return 0;
         q->phase=PVR_COMPUTE_QUEUE_READY;
+        if (q->service->config.job_irq_ack) pvr_compute_fast_ready(q);
         unsigned closed=PVR_COMPUTE_QUEUE_CLOSED;
         (void)atomic_compare_exchange_strong(&q->slot_state,&closed,PVR_COMPUTE_QUEUE_IDLE);
         closed=PVR_COMPUTE_QUEUE_CLOSED;
@@ -374,6 +375,8 @@ int pvr_compute_queue_poll(struct pvr_compute_queue *q)
         if (q->create_pending && !q->create_done) {q->owed=1; return post(q,0,GPU_QUEUE_OK,0,0);}
         return 1;
     }
+    if (q->service->config.job_irq_ack &&
+        (q->phase==PVR_COMPUTE_QUEUE_READY || q->phase==PVR_COMPUTE_QUEUE_IN_FLIGHT)) return pvr_compute_fast_poll(q);
     if (q->phase==PVR_COMPUTE_QUEUE_READY) return take(q);
     if (q->phase==PVR_COMPUTE_QUEUE_IN_FLIGHT) return complete(q);
     return fault(q,GPU_QUEUE_SERVICE);
@@ -393,10 +396,13 @@ int pvr_compute_queue_event(struct pvr_compute_queue *q,const unsigned char comm
 void pvr_compute_queue_abort(struct pvr_compute_queue *q)
 {
     if (!q || q->phase==PVR_COMPUTE_QUEUE_FAILED) return;
+    if (q->service->config.job_irq_ack) pvr_compute_fast_seal(q);
     q->phase=PVR_COMPUTE_QUEUE_FAILED;
     if (q->client.phase!=PVR_CCCB_NEW) (void)pvr_cccb_abort(&q->client);
     atomic_store(&q->lost,1);
     atomic_store(&q->recovering,0);
+    if (q->service->config.job_irq_ack) for (unsigned i=0;i<GPU_QUEUE_CLIENTS;++i)
+        if (q->fast.task[i]) xTaskNotifyGiveIndexed(q->fast.task[i],PVR_COMPUTE_FAST_NOTIFY);
     /* Failure alone does not return DMA ownership. Preserve every owed
      * record and slot until independently established isolation. */
 }
@@ -416,6 +422,7 @@ int pvr_compute_queue_recovered(struct pvr_compute_queue *q)
             PVR_GPU_CRUMB_HERE());
         return 0;
     }
+    if (q->service->config.job_irq_ack) return pvr_compute_fast_recovered(q);
     if (q->owed) {
         struct pvr_compute_queue_client_view v;
         if (!pvr_compute_queue_client_view(q,q->active_client,&v)) {
@@ -448,6 +455,7 @@ int pvr_compute_queue_close(struct pvr_compute_queue *q)
             atomic_store(&q->slot_state,PVR_COMPUTE_QUEUE_IDLE); return 0;
         }
     }
+    if (q->service->config.job_irq_ack) pvr_compute_fast_seal(q);
     return 1;
 }
 int pvr_compute_queue_deadline(const struct pvr_compute_queue *q,uint64_t *out)

@@ -150,6 +150,27 @@ static int write_step(struct pvr_cccb *s)
     return 1;
 }
 
+enum pvr_cccb_result pvr_cccb_try_submit(struct pvr_cccb *s,const struct pvr_cccb_command *commands,
+    unsigned count,uint64_t now,uint64_t deadline)
+{
+    if (!s || now<s->last_now || deadline<=now ||
+        !pvr_cccb_begin(s,commands,count,NULL,0,deadline)) return PVR_CCCB_INVALID;
+    s->last_now=now;
+    if (!space(s)) return PVR_CCCB_FAULT;
+    if (s->phase==PVR_CCCB_SPACE) {s->phase=PVR_CCCB_IDLE; return PVR_CCCB_AGAIN;}
+    /* Each step writes a header, a <=256-byte payload chunk or padding.
+     * The admitted fixed command list bounds this loop; it never polls HW. */
+    while (s->phase==PVR_CCCB_WRITE)
+        if (!write_step(s)) return fail(s,PVR_CCCB_IO);
+    if (s->ops.barrier(s->context,PVR_CCB_RELEASE)!=1) return fail(s,PVR_CCCB_IO);
+    put32(s->kick+12,s->cursor);
+    enum pvr_ccb_result result=pvr_ccb_submit_noreply(s->queue,s->kick,now,deadline);
+    if (result==PVR_CCB_AGAIN) {s->cursor=s->write;s->phase=PVR_CCCB_IDLE;return PVR_CCCB_AGAIN;}
+    if (result!=PVR_CCB_OK) return fail(s,PVR_CCCB_QUEUE);
+    s->write=s->cursor;s->phase=PVR_CCCB_IDLE;
+    return PVR_CCCB_OK;
+}
+
 enum pvr_cccb_result pvr_cccb_poll(struct pvr_cccb *s)
 {
     if (!s) return PVR_CCCB_INVALID;

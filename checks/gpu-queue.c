@@ -68,6 +68,9 @@ static atomic_uint peer_release,peer_submitted,peer_finished;
 static unsigned reset_readbacks, fault_records;
 static const struct gicv3_spi spi = {0x08000000, 95};
 #define GICD 0x08000000u
+static int fast_kick(void *,unsigned,unsigned,unsigned char *);
+static void fast_model(void *);
+static void fast_cases(unsigned);
 
 /* GPU and firmware model state. */
 static uint32_t kicked, run, gpu_status, irq_count, hook_wakes, kick_step_count;
@@ -202,6 +205,8 @@ static int irq_write(void *ctx, uint32_t off, uint32_t value)
 { callback(ctx); configASSERT(off == 0x8b0 && value == 1); set(&gpu_status, 0); return 1; }
 static int job_irq_ack(void *ctx)
 { configASSERT(ctx==&config); set(&gpu_status,0); __asm__ volatile("dsb sy" ::: "memory"); return 1; }
+static int job_now(void *ctx,uint64_t *out)
+{ configASSERT(ctx==&config);*out=now_us();return 1; }
 static int event(void *ctx, const unsigned char command[88]) { (void)ctx; (void)command; return 0; }
 void fixture_gpu_irq(void)
 {
@@ -220,6 +225,7 @@ static int kick(void *ctx, uint32_t off, uint32_t value)
 {
     unsigned next = (unsigned)word(resource(0), 4), slot = (next - 1) & 127;
     unsigned char *command = resource(1) + slot * 88;
+    if (gpu_queue_case>=54 && word(command,4)==(PVR_CCB_MAGIC|101u)) return fast_kick(ctx,off,value,command);
 #ifdef SUNSTONE_A733_OS_PERF
     if(perf_kick(ctx,next,slot,command))return 1;
 #endif
@@ -259,6 +265,7 @@ static const int8_t *weights_cpu(uint64_t gpu)
 { return (const int8_t *)(uintptr_t)gpu; }
 static void model(void *unused)
 {
+    if (gpu_queue_case>=54) fast_model(unused);
     (void)unused;
     for (;;) {
         while (__atomic_load_n(&kicked, __ATOMIC_ACQUIRE) == run) {}
@@ -741,10 +748,12 @@ static void client(void *unused)
     struct pvr_gpu_service_reply reply;
     configASSERT(compute->phase==PVR_COMPUTE_QUEUE_READY && service.phase==PVR_GPU_SERVICE_READY &&
         session.vm.phase==A733_GPU_VM_MEMORY_PUBLISHED);
+    if (c>=54) fast_cases(c);
     if (c==53) {
         while (service.irq_masked) vTaskDelay(1);
         vTaskSuspend(service.worker);
         service.config.job_irq_ack=job_irq_ack;
+        service.config.job_now=job_now;
         pvr_compute_fast_ready(compute);
         /* A coalesced completion published before the waiter blocks must
          * leave a direct notification pending without running the worker. */
@@ -1049,10 +1058,12 @@ void fixture_unused(void)
 { (void)firmware_fixture_owner; (void)firmware_fixture_event; (void)firmware_fixture_irq_read;
   (void)firmware_fixture_irq_write; (void)peer; (void)supervisor; }
 
+#include "gpu-fast.inc"
+
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
-    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 53);
+    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 54);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (gpu_queue_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();
@@ -1087,6 +1098,7 @@ void kernel_main(void)
     config.stop = (struct pvr_gpu_stop_ops){boundary_now, read_reg, write_reg, sync_write, sync_read, isolate, NULL};
     config.enable = enable; config.context = &config; config.compute_mode = mode;
     config.irq = (struct pvr_gpu_service_irq_ops){mask, rearm};
+    if (gpu_queue_case>=54) {config.job_irq_ack=job_irq_ack;config.job_now=job_now;}
     if(gpu_queue_case>=41) {
         config.recovery_begin=recovery_admit;
         config.stop.read=recovery_read;config.stop.isolate=recovery_isolate;

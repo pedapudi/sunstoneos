@@ -152,6 +152,14 @@ enum pvr_ccb_result pvr_ccb_submit(struct pvr_ccb *q, const void *command,
     return PVR_CCB_OK;
 }
 
+enum pvr_ccb_result pvr_ccb_submit_noreply(struct pvr_ccb *q,const void *command,uint64_t now,uint64_t deadline)
+{
+    struct pvr_ccb_token token;
+    enum pvr_ccb_result result=pvr_ccb_submit(q,command,now,deadline,&token);
+    if (result==PVR_CCB_OK) q->slots[token.slot].state=FREE;
+    return result;
+}
+
 enum pvr_ccb_result pvr_ccb_poll(struct pvr_ccb *q, uint64_t now)
 {
     enum pvr_ccb_result status = active(q);

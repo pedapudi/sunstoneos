@@ -172,6 +172,8 @@ int pvr_compute_queue_wake(struct pvr_compute_queue *);
 int pvr_compute_queue_client_bind(struct pvr_compute_queue *);
 /* Runtime hook: 1 live, 0 thermally parked, -1 failed. */
 int pvr_compute_queue_runtime_sync(void);
+/* Hot-path admission reads published lifecycle/thermal state only. */
+int pvr_compute_queue_runtime_admit(void);
 void pvr_compute_queue_runtime_opened(uint64_t epoch);
 void pvr_compute_queue_runtime_closed(void);
 #endif

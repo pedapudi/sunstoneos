@@ -34,6 +34,7 @@ extern "C" {
 #define GPU_QUEUE_ARGUMENT_BYTES 64u
 #define GPU_QUEUE_PROGRAM_BYTES 8128u  /* USC code: two 4 KiB pages less one cache line */
 #define GPU_QUEUE_MAX_JOB_US UINT64_C(1000000)
+#define GPU_QUEUE_WAIT_FOREVER UINT32_MAX
 #define GPU_QUEUE_LEASE_ALIGN (UINT64_C(2) << 20)
 
 /* Results. A call returns one of these; a completion record carries OK,

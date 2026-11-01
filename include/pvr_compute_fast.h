@@ -16,12 +16,16 @@ struct pvr_compute_fast_entry {
 };
 struct pvr_compute_fast {
     /* Task-only transport lock. ISR never acquires it. */
-    atomic_uint locked, enabled, submitted, completed, irq_error;
+    atomic_uint locked, enabled, submitted, completed, irq_error, fault_claimed;
     atomic_uint waiter[GPU_QUEUE_CLIENTS];
-    uint32_t fault_observed, fault_submitted;
+    atomic_uint pending[GPU_QUEUE_CLIENTS];
+    atomic_uint fault_through[GPU_QUEUE_CLIENTS];
+    atomic_uint_fast64_t done_us[PVR_COMPUTE_FAST_DEPTH];
+    uint32_t fault_observed, fault_submitted, fault_line;
     TaskHandle_t task[GPU_QUEUE_CLIENTS]; /* Immutable after CREATE. */
     struct pvr_compute_fast_entry entry[PVR_COMPUTE_FAST_DEPTH];
     unsigned head, used;
+    uint64_t last_now;
 };
 int pvr_compute_fast_lock(struct pvr_compute_queue *);
 void pvr_compute_fast_unlock(struct pvr_compute_queue *);

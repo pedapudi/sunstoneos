@@ -46,7 +46,8 @@ CASES = {1: 'grid replay, exact sums', 2: 'grid replay, pattern sums', 3: 'grid 
          50: 'maximum job duration recovers an unconsumed kernel kick',
          51: 'firmware timeline serial exhaustion refuses without a kick',
          52: 'qualification timeout refuses recovery without a queued peer',
-         53: 'direct interrupt fences, coalescing and notification races'}
+         53: 'direct interrupt fences, coalescing and notification races',
+         54: 'EL0 caller submission and ISR collection without the service worker'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'gpu_queue_submit', 'gpu_queue_wait', 'kick',
@@ -268,7 +269,7 @@ def main():
     extra = ' '.join('"%s"' % (ROOT / p) for p in (
         'checks/gpu-queue.c', 'platform/a733/gpu_memory.c', 'platform/a733/gpu_reserved.c',
         'platform/a733/gpu_queue.c', 'drivers/gpu/pvr_compute_queue.c', 'drivers/gpu/pvr_compute_fast.c',
-        'drivers/gpu/gpu_queue.c', 'drivers/gpu/gicv3_spi.c'))
+        'drivers/gpu/gpu_queue.c', 'runtime/gpu_call.S', 'drivers/gpu/gicv3_spi.c'))
     if performance:
         extra += ' \"%s\"' % (ROOT / 'drivers/gpu/pvr_gpu_clock.c')
     (project / 'CMakeLists.txt').write_text(f'''cmake_minimum_required(VERSION 3.24)

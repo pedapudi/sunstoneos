@@ -302,6 +302,16 @@ static int control_write(void *context, uint32_t off, uint32_t value)
     if (off != 0x8b0 || value != 1) return fail(b, A733_GPU_BACKEND_ACCESS);
     return raw_write(b, off, 4, value);
 }
+static int job_irq_ack(void *context)
+{
+    (void)context;
+    /* Device mapping was checked once by device_pages() at construction.
+     * Service sealing prevents this callback crossing power retirement. */
+    a733_mmio_write32_dsb_sy_after(A733_GPU_REGISTERS+0x8b0,1);
+    return 1;
+}
+static int job_now(void *context,uint64_t *out)
+{ (void)context; return a733_gpu_platform_native_now(NULL,out); }
 static int kick(void *context, uint32_t off, uint32_t value)
 {
     struct a733_gpu_backend *b = context;
@@ -668,6 +678,7 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
     c->executed = executed; c->flush_mmu = 1;
     c->stop = (struct pvr_gpu_stop_ops){now, stop_read, stop_write, sync_write, sync_read, isolate, external->isolate ? NULL : isolate_poll};
     c->irq = (struct pvr_gpu_service_irq_ops){irq_mask, irq_rearm};
+    if (c->compute_queue) {c->job_irq_ack=job_irq_ack;c->job_now=job_now;}
     c->power = (struct pvr_gpu_service_enable_ops){power_begin, power_poll};
     if (c->free_lists.count) c->free_lists.ops = (struct pvr_free_list_ops){free_allocate, free_page,
         free_read, free_write, free_publish, free_recover};
