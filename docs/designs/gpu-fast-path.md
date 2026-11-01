@@ -7,14 +7,16 @@ commands; the shared kernel command buffer (KCCB) carries their KICK command.
 
 ## Costs and acceptance budgets
 
-The supplied board baseline spends 338 ms submitting and collecting 154 jobs,
-or 2.195 ms per job. It contains no latency distribution or queue entry identity.
-The current implementation sends each submission through the GPU service task,
-which advances the transport and posts a completion queue record. Its bounded
-bursts and tick waits add scheduling to both halves of a job.
+The reference recognition workload spends 339.188 ms inside 154 GPU jobs in
+entry `1793560651607761780-3cb221f5`. Separate firmware timestamps in entry
+`1793561022387122671-06be5388` place 94.6% of aggregate job time inside device
+scheduling and shader execution. Each completion interrupts the blocked service
+task before its backup poll expires. The measured recognition penalty therefore
+cannot be attributed to tick polling. The reference path still adds service
+messages, command construction and output collection around every job.
 
 The initial budgets are 5 microseconds of submission CPU time, 20 microseconds
-from completion interrupt to a runnable waiting task, 50 microseconds for the
+from completion interrupt to the waiting task running, 50 microseconds for the
 99th percentile empty-job round trip and 10,000 jobs per second. These are targets;
 board measurements determine qualification. Explicit caller wait timeouts retain
 their public meaning; completion never depends on those timeouts expiring.
@@ -39,7 +41,7 @@ the existing firmware runs on the GPU's MIPS processor, with its retained licens
 UPDATE has no explicit interrupt-request field. The reference interrupt handler
 scans active timelines after ordinary completion interrupts. Hardware must confirm
 that this firmware reliably interrupts for the submitted jobs. A missing interrupt
-is a recovery failure, not permission to restore completion polling. The sources
+requires recovery. The sources
 provide no bounded compute-preemption guarantee.
 
 ## Ownership and bounded work
@@ -49,7 +51,12 @@ lifetime. Four fixed job slots each retain independent PDS, CDM and argument
 storage until the caller collects their fence. Submissions serialize the CCCB
 and shared KCCB with the same context lock used by service control. Lock admission
 is nonblocking; contention returns BUSY. No allocation or service request precedes
-a successful job's kick. A batch publishes a bounded number of jobs in order.
+a successful job's kick. READY admits exact retained uncached KCCB regions and
+the doorbell register once. Job publication uses aligned stores into those
+regions, preserving the command, write-offset and kick barriers. A stale firmware
+read cursor returns BUSY; an impossible advance latches its predicate and cursor
+inputs before retaining the failed job. A batch publishes at most four jobs in
+one caller entry, with one KICK per job.
 
 Application tasks run at EL0. A fixed supervisor-call gateway enters EL1t on
 the same task stack, calls the GPU dispatcher and restores EL0 before returning.
@@ -103,3 +110,29 @@ least 10,000 empty jobs, a pipeline, queue-add and application recognition. Reco
 image hash, revision and queue entry beside each distribution and throughput.
 Timing instrumentation compiles out when disabled. Host timings do not establish
 board latency or accelerator speedup.
+
+## Measured limits
+
+The zero-element vector shader still loads its argument block. It measures a
+minimal real compute dispatch with a fence, rather than a timeline-only command.
+On port 3-3, shortening KCCB publication reduces median submission wall time
+from 13.458 to 3.833 microseconds. The same 10,000-job workload retains a roughly
+104-microsecond median round trip and 9,540 jobs per second at depth four.
+These observations do not isolate a firmware lower bound. The
+[GPU status](../status/gpu.md) binds distributions to images and queue entries.
+
+The measured IRQ C-entry to notification return has a 2.292-microsecond median,
+8.167-microsecond 99th percentile and 118-microsecond maximum. It excludes the
+vector/dispatcher prefix. Submission wall time includes preemption and counter
+overhead; its 51.875-microsecond maximum does not establish a five-microsecond
+CPU bound. The fixed GPU loops have bounded operation counts, but FreeRTOS's
+shared notification and scheduler locks still need a bounded contention proof.
+The CPU timing record on `work/latency-1101`, `docs/status/latency.md`, records
+long waits on those locks. It does not identify the origin of this GPU run's
+tail samples.
+
+The initial 50-microsecond round-trip, 10,000-job throughput and 20-microsecond
+maximum wake targets remain unmet. Default payloads remain write-back: uncached
+payloads save only 0.208 microseconds at the median in the paired measurement
+and provide no measured tail improvement. Idle timeout and hysteresis remain
+an integration requirement for the lifecycle owner.
