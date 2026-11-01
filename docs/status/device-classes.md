@@ -104,6 +104,11 @@ own controller work and validation.
 ## Evidence and qualification
 
 Raw host evidence is under `~/.cache/sunstoneos/build/peripheral-classes-1101/`.
+Task-owned downloaded references reside in its `reference-cache/` directory.
+Repeat the sensor check with `--source reference-cache/camera-sensors-linux-v6.12/ov5647.c`
+and the display check with `--source-cache reference-cache/display-class`, using
+absolute paths from that build directory. The relocation record binds earlier
+evidence paths to the same SHA-256 identities.
 The sensor source, revision, hash, license and execution role are recorded in
 [the sensor manifest](../../drivers/camera/sensor-sources.json). Panel, EDID and
 DisplayID references are in [the display manifest](../display-class-sources.json).
@@ -121,8 +126,14 @@ for 720p/1080p with retained failures. Independent sanitizer testing covers
 USB checks cover the shared camera lifecycle, all advertised frame intervals,
 original spans, stale release tickets and detach. Existing UVC protocol, HID
 recording replay, serial protocol/lifetime and composed xHCI/TinyUSB class checks
-pass. The Type-C model's stale PMIC-fault injection is corrected to publish the
-power-authority fault; prior completed cases remain valid.
+pass. Type-C tests inject PMIC failure through the published power-authority
+state and cover attachment, fault shutdown, retained resources and monitoring.
+
+The OS-only, hello-compute and external mimus baseline builds pass. The selected
+integration gate passes OS linkage, kernel boot and check-index verification;
+its selection and logs are in `gate/gate-peripheral-classes-final/`. The USB-class
+native objects also compile with class services and interrupt completion enabled.
+No host check establishes board timing or power measurements.
 
 The standalone DSI application configure encounters an existing rejected hunk in
 `apps/storage-read-single-core/platform.patch`. The composed host fixture and

@@ -1,6 +1,6 @@
 {
   "schema": "sunstone-source-adaptation-v1",
-  "cache": "~/.cache/sunstoneos/sources/display-class",
+  "cache_argument": "checks/display-classes.py --source-cache DIRECTORY",
   "sources": [
     {
       "file": "panel-simple.c",
