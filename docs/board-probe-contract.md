@@ -54,7 +54,15 @@ Input, payload, code, session and receipt allocations must not overlap.
 The immutable marker and all required helpers must have real file-backed load
 coverage. Host admission rejects writable executable loads, malformed lengths,
 MMIO input or payload addresses, missing cleanup hooks and unknown versions.
-The complete image allocation must stay within `0x41000000..0x41efffff`.
+The ordinary image allocation must stay within `0x41000000..0x41efffff`.
+Native USB probes through `usb-class` or its `probe` alias may additionally
+reserve the exact `0x42200000..0x42a00000` USB arena. The shared OS host validator
+requires an allocated, writable, non-executable `.uncached_pool` NOBITS section,
+strong exact linker bounds and one matching standalone load with zero file bytes.
+Every other external load is refused. The arena is excluded from uploads and
+host initialization; marker input, payload and helper bounds retain their
+ordinary limits. This linked geometry establishes neither physical RAM authority
+nor a live backup or restoration procedure.
 
 ## Begin before cache maintenance and report actual progress
 

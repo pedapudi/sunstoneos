@@ -263,16 +263,12 @@ def watchdog_marker(image):
     return {'mode': mode, 'session_seconds': seconds}
 
 
-def backup_regions(image, uploads=()):
-    """Union uploaded spans with the manifest WORK and OUTPUT regions."""
-    info = image_manifest(image)
-    spans = [(r['address'], r['address'] + r['bytes']) for r in
-             regions(info['manifest'], (manifest_tool.KIND['work'], manifest_tool.KIND['output']))]
-    spans.extend((r['address'], r['address'] + r['bytes']) for r in uploads if r['bytes'])
-    pool = info['elf'].get_section_by_name('.uncached_pool')
+def usb_pool_geometry(elf):
+    """Validate the exact linked USB arena; this establishes no physical authority."""
+    pool = elf.get_section_by_name('.uncached_pool')
     if pool is not None and pool['sh_size'] and pool['sh_addr'] >= 0x42200000:
         low, size = pool['sh_addr'], pool['sh_size']
-        table = info['elf'].get_section_by_name('.symtab')
+        table = elf.get_section_by_name('.symtab')
         bounds = {name: [s for s in table.iter_symbols() if s.name == name and
                         s['st_shndx'] != 'SHN_UNDEF'] if table else []
                   for name in ('__uncached_pool_start', '__uncached_pool_end')}
@@ -280,10 +276,22 @@ def backup_regions(image, uploads=()):
                 pool['sh_flags'] & 7 == 3 and all(len(found) == 1 and
                 found[0]['st_info']['bind'] == 'STB_GLOBAL' and found[0]['st_value'] == expected
                 for found, expected in zip(bounds.values(), (low, low + size))) and
-                any(p['p_type'] == 'PT_LOAD' and p['p_flags'] & 7 == 6 and
-                    p['p_vaddr'] <= low < low + size <= p['p_vaddr'] + p['p_memsz']
-                    for p in info['elf'].iter_segments()), 'USB backup pool lacks its exact linked allocation.')
-        spans.append((low, low + size))
+                sum(p['p_type'] == 'PT_LOAD' and p['p_flags'] == 6 and not p['p_filesz'] and
+                    p['p_vaddr'] == p['p_paddr'] == low and p['p_memsz'] == size
+                    for p in elf.iter_segments()) == 1, 'USB backup pool lacks its exact linked allocation.')
+        return {'address': low, 'bytes': size}
+    return None
+
+
+def backup_regions(image, uploads=()):
+    """Union uploaded spans with the manifest WORK and OUTPUT regions."""
+    info = image_manifest(image)
+    spans = [(r['address'], r['address'] + r['bytes']) for r in
+             regions(info['manifest'], (manifest_tool.KIND['work'], manifest_tool.KIND['output']))]
+    spans.extend((r['address'], r['address'] + r['bytes']) for r in uploads if r['bytes'])
+    pool = usb_pool_geometry(info['elf'])
+    if pool:
+        spans.append((pool['address'], pool['address'] + pool['bytes']))
     merged = []
     for low, high in sorted(spans):
         require(0 <= low < high <= 1 << 64, 'Invalid backup region.')

@@ -92,9 +92,11 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
         require('a733_usb2_native_poll' in names,
                 'USB class kind requires the linked native USB host controller.')
     if kind in ('probe', 'usb-class') and 'sunstone_probe_marker' in names:
-        native = load('native_probe_contract', ROOT/'tools/board_probe.py').inspect(image)
+        usb_class = 'a733_usb2_native_poll' in names
+        native = load('native_probe_contract', ROOT/'tools/board_probe.py').inspect(
+            image, usb_pool=host.usb_pool_geometry if usb_class else None)
         return {'symbols':names,'watchdog':native['watchdog'],'generic':False,'entry_guard':False,
-                'descriptor':descriptor,'native_probe':native,'usb_class':'a733_usb2_native_poll' in names}
+                'descriptor':descriptor,'native_probe':native,'usb_class':usb_class}
     if kind == 'npu' and 'ss_result_record' not in names:
         tree = host_tree or ROOT
         finite = load('inspect_npu_irq', tree/'apps/npu-interrupt/host.py').finite

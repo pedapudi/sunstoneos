@@ -34,7 +34,8 @@ def passed(name):
     print('PASS', name)
 
 
-def fixture(out, flags=1, host=True, weak=False, generic=False, pool=None, class_service=False):
+def fixture(out, flags=1, host=True, weak=False, generic=False, pool=None, class_service=False,
+            extra=None, pool_input=False):
     source = out/'fixture.S'
     functions = ['_start', *('sunstone_probe_'+n for n in
                  ('begin', 'complete', 'return', 'fault', 'quiesce', 'restore_interrupts', 'rom'))]
@@ -49,7 +50,8 @@ def fixture(out, flags=1, host=True, weak=False, generic=False, pool=None, class
     text += '.section .rodata,"a"\n.global sunstone_probe_marker\n.type sunstone_probe_marker,%object\n'
     text += 'sunstone_probe_marker:\n.quad ' + ','.join(str(v) for v in
         (probe.MAGIC, 1, 112, 0xb1, 20, probe.SESSION, 128, probe.RECEIPT, 128,
-         0x42000100, 256, 0, 0, flags)) + '\n.size sunstone_probe_marker,112\n'
+         0x42000100, 256, pool[0] if pool_input else 0, 16 if pool_input else 0,
+         flags)) + '\n.size sunstone_probe_marker,112\n'
     if generic:
         records = images.load('usb_fixture_records', ROOT/'apps/os/host.py')
         manifest = records.manifest_tool.assign(records.manifest_tool.load(ROOT/'apps/hello-compute/manifest.json'))
@@ -70,14 +72,21 @@ def fixture(out, flags=1, host=True, weak=False, generic=False, pool=None, class
         text += '__monitor_bss_end:\n__a733_smp_boot_stack_top:\n'
     if pool is not None:
         text += '.section .uncached_pool,"aw",%nobits\n.global __uncached_pool_start,__uncached_pool_end\n'
-        text += '__uncached_pool_start: .zero ' + str(pool[1]) + '\n__uncached_pool_end:\n'
+        text += '__uncached_pool_start:\n'
+        if pool_input:
+            text += '.global sunstone_probe_input\n.type sunstone_probe_input,%object\n'
+            text += 'sunstone_probe_input: .zero 16\n.size sunstone_probe_input,16\n'
+        text += '.zero ' + str(pool[1] - (16 if pool_input else 0)) + '\n__uncached_pool_end:\n'
+    if extra is not None:
+        text += '.section .extra,"aw",%nobits\n.zero 4096\n'
     source.write_text(text)
     script = out/'fixture.ld'
-    script.write_text('ENTRY(_start)\nPHDRS { text PT_LOAD FLAGS(5); data PT_LOAD FLAGS(6); monitor PT_LOAD FLAGS(6); pool PT_LOAD FLAGS(6); }\nSECTIONS { '
+    script.write_text('ENTRY(_start)\nPHDRS { text PT_LOAD FLAGS(5); data PT_LOAD FLAGS(6); monitor PT_LOAD FLAGS(6); pool PT_LOAD FLAGS(6); extra PT_LOAD FLAGS(6); }\nSECTIONS { '
                       '. = 0x41000000; .text : { *(.text) } :text '
                       '.rodata : { *(.rodata) } :text sunstone_manifest : { *(sunstone_manifest) } :text ' +
                       ('.bss 0x41200000 (NOLOAD) : { *(.bss) } :data .monitor 0x42005000 (NOLOAD) : { *(.monitor) } :monitor ' if generic else '') +
-                      (f'.uncached_pool {pool[0]} (NOLOAD) : {{ *(.uncached_pool) }} :pool ' if pool else '') + '}\n')
+                      (f'.uncached_pool {pool[0]} (NOLOAD) : {{ *(.uncached_pool) }} :pool ' if pool else '') +
+                      (f'.extra {extra} (NOLOAD) : {{ *(.extra) }} :extra ' if extra else '') + '}\n')
     subprocess.run([str(CLANG), '--target=aarch64-none-elf', '-c', source,
                     '-o', out/'fixture.o'], check=True)
     subprocess.run([str(LLD), '-T', script, out/'fixture.o', '-o', out/'fixture.elf'], check=True)
@@ -254,10 +263,80 @@ def wrappers(out):
         passed('generic-kind-'+name)
 
 
+def arena_admission(out):
+    from elftools.elf.elffile import ELFFile
+    allocation = (0x42200000, 0x800000)
+    reason = 'USB backup pool lacks its exact linked allocation.'
+    cases = [('exact', allocation, None, None),
+             ('old-NPU-overlap', (0x47000000, 0x1000000), None, reason),
+             ('oversized', (0x42200000, 0xa00000), None, reason),
+             ('extra-load', allocation, 0x46000000, 'Probe external load is not the linked USB arena.'),
+             ('file-bytes', allocation, None, reason), ('file-section', allocation, None, reason),
+             ('executable', allocation, None, reason), ('weak-bounds', allocation, None, reason),
+             ('external-payload', allocation, None, 'Probe payload is outside admitted RAM.'),
+             ('external-input', allocation, None, 'Probe object lacks writable image-RAM load coverage.')]
+    for name, pool, extra, refusal in cases:
+        folder = out/('arena-'+name)
+        folder.mkdir()
+        image = fixture(folder, pool=pool, extra=extra, pool_input=name == 'external-input')
+        raw = bytearray(image.read_bytes())
+        elf = ELFFile(io.BytesIO(raw))
+        table = elf.get_section_by_name('.symtab')
+        symbols = {s.name: (i, s) for i, s in enumerate(table.iter_symbols())}
+        for index, p in enumerate(elf.iter_segments()):
+            if p['p_type'] == 'PT_LOAD' and p['p_vaddr'] == pool[0]:
+                ph = elf['e_phoff'] + index*elf['e_phentsize']
+                if name == 'file-bytes':
+                    struct.pack_into('<Q', raw, ph+32, 1)
+                elif name == 'executable':
+                    struct.pack_into('<I', raw, ph+4, 7)
+        if name == 'file-section':
+            section_index = next(i for i, s in enumerate(elf.iter_sections()) if s.name == '.uncached_pool')
+            struct.pack_into('<I', raw, elf['e_shoff']+section_index*elf['e_shentsize']+4, 1)
+        elif name == 'weak-bounds':
+            index, symbol = symbols['__uncached_pool_end']
+            raw[table['sh_offset'] + index*table['sh_entsize']+4] = 0x20
+        elif name == 'external-payload':
+            _, marker = symbols['sunstone_probe_marker']
+            section = elf.get_section(marker['st_shndx'])
+            struct.pack_into('<Q', raw, section['sh_offset']+marker['st_value']-section['sh_addr']+9*8, pool[0])
+        image.write_bytes(raw)
+        for kind in ('usb-class', 'probe'):
+            try:
+                info = images.inspect(image, kind)
+            except ValueError as error:
+                assert refusal == str(error), (name, kind, str(error))
+            else:
+                assert refusal is None and info['usb_class']
+                segment = next(p for p in info['native_probe']['uploads'] if p['address'] == pool[0])
+                assert segment['end'] == sum(pool) and segment['data'] == b''
+                args = args_for(image, out/'unused', True)
+                plan = images.prepare(args, info, {}, folder/('prepared-'+kind))
+                assert all(not (pool[0] <= address < sum(pool)) for address, path in plan['uploads'])
+        if name == 'exact':
+            try:
+                probe.inspect(image)
+            except ValueError as error:
+                assert str(error) == 'Probe load segment exceeds image RAM.'
+            else:
+                raise AssertionError('Default probe accepted external memory')
+        passed('USB-probe-arena-'+name)
+    folder = out/'arena-non-USB'
+    folder.mkdir()
+    image = fixture(folder, host=False, pool=allocation)
+    try:
+        images.inspect(image, 'probe')
+    except ValueError as error:
+        assert str(error) == 'Probe load segment exceeds image RAM.'
+    else:
+        raise AssertionError('Ordinary probe accepted USB arena')
+    passed('ordinary-probe-keeps-image-RAM-bound')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', '--out', dest='out', type=Path, required=True)
-    parser.add_argument('--only', choices=('all', 'admission', 'typed', 'wrappers'), default='all')
+    parser.add_argument('--only', choices=('all', 'admission', 'typed', 'wrappers', 'arena'), default='all')
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=False)
     if args.only in ('all', 'admission'):
@@ -266,6 +345,8 @@ def main():
         typed_inputs(args.out)
     if args.only in ('all', 'wrappers'):
         wrappers(args.out)
+    if args.only in ('all', 'arena'):
+        arena_admission(args.out)
     (args.out/'result.json').write_text(json.dumps({'physical_access': False, 'passed': ROWS}, indent=2)+'\n')
 
 
