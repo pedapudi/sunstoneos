@@ -5,13 +5,16 @@
 #include "platform.h"
 #include "mimus/asr/parallel.h"
 #include <cstdio>
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
+#if defined(SUNSTONE_A733_OS) || defined(SUNSTONE_A733_OS_CPU_RETURN)
 #include <atomic>
+#ifdef SUNSTONE_A733_OS
+extern "C" {
+#include "sunstone_app.h"
+}
+#else
 extern "C" uint64_t a733_smp_counter(void);
 extern "C" uint64_t os_cpu_return_cutoff(void);
 #endif
-#ifdef SUNSTONE_A733_OS
-#include "a733_smp_placement.h"
 #endif
 #ifdef SUNSTONE_MIMUS_NATIVE
 #include "native.h"
@@ -37,14 +40,11 @@ constexpr unsigned worker_priority(unsigned core) {
     return kMimusOwnerPriority;
 }
 #ifdef SUNSTONE_A733_OS
-constexpr unsigned inference_mask = kWorkers == 8 ? 0xffu :
-    (1u << A733_SMP_RECOGNITION_CORE) | (1u << A733_SMP_INFERENCE_CORE);
-// Read from the linked ELF by the OS link check and host preparation.
-extern "C" __attribute__((used,retain)) const uint32_t mimus_parallel_configuration[7] = {
-    1, kWorkers, A733_SMP_RECOGNITION_CORE, inference_mask, kMimusOwnerPriority,
-    inference_mask & 0x3fu ? worker_priority(0) : 0,
-    inference_mask & 0xc0u ? worker_priority(6) : 0
-};
+// Filled before the scheduler from the immutable grant. The manifest remains
+// the linked image's authority for placement; this record describes execution.
+extern "C" {
+__attribute__((used,retain)) uint32_t mimus_parallel_configuration[7];
+}
 #endif
 #if defined(SUNSTONE_MIMUS_NATIVE) && SUNSTONE_MIMUS_WORKERS == 8 && !defined(A733_A76_ADMITTED)
 #error Eight native inference workers require admitted A76 placement
@@ -64,7 +64,7 @@ TaskHandle_t owner;
 unsigned owner_core, completed_core_mask;
 uint64_t submitted, completed, async_jobs;
 bool busy, async_pending;
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
+#if defined(SUNSTONE_A733_OS) || defined(SUNSTONE_A733_OS_CPU_RETURN)
 std::atomic<unsigned> parked{0};
 void park_worker(void *) {
     parked.fetch_add(1, std::memory_order_release);
@@ -184,7 +184,18 @@ void mimus_parallel_init(unsigned owner_index, unsigned worker_index) {
                  worker_index < configNUMBER_OF_CORES);
     owner_core = owner_index;
 #ifdef SUNSTONE_A733_OS
-    configASSERT(owner_index == A733_SMP_RECOGNITION_CORE && worker_index == A733_SMP_INFERENCE_CORE);
+    const struct ss_grant *grant = ss_grant();
+    configASSERT(grant && grant->main_core == owner_index &&
+                 __builtin_popcount(grant->worker_cores) == kWorkers - 1 &&
+                 !(grant->worker_cores & (1u << owner_index)) &&
+                 (grant->worker_cores & (1u << worker_index)));
+    const unsigned mask = grant->worker_cores | (1u << owner_index);
+    const uint32_t configuration[7] = {
+        1, kWorkers, owner_index, mask, kMimusOwnerPriority,
+        mask & 0x3fu ? worker_priority(0) : 0,
+        mask & 0xc0u ? worker_priority(6) : 0
+    };
+    for (unsigned i = 0; i < 7; ++i) mimus_parallel_configuration[i] = configuration[i];
 #elif defined(SUNSTONE_MIMUS_NATIVE) && SUNSTONE_MIMUS_WORKERS == 8
     configASSERT(owner_index == 6 && worker_index == 7);
 #endif
@@ -194,7 +205,12 @@ void mimus_parallel_init(unsigned owner_index, unsigned worker_index) {
         slot.index = i;
         slot.core = worker_index;
         if (i > 1) {
+#ifdef SUNSTONE_A733_OS
+            for (slot.core = 0; slot.core < configNUMBER_OF_CORES &&
+                 (!(grant->worker_cores & (1u << slot.core)) || (assigned & (1u << slot.core))); ++slot.core) {}
+#else
             for (slot.core = 0; assigned & (1u << slot.core); ++slot.core) {}
+#endif
             configASSERT(slot.core < configNUMBER_OF_CORES);
             assigned |= 1u << slot.core;
         }
@@ -225,7 +241,7 @@ void mimus_parallel_report() {
              static_cast<unsigned long long>(async_jobs));
     platform_puts(line);
 }
-#ifdef SUNSTONE_A733_OS_CPU_RETURN
+#if defined(SUNSTONE_A733_OS) || defined(SUNSTONE_A733_OS_CPU_RETURN)
 void mimus_parallel_stop() {
     configASSERT(owner == xTaskGetCurrentTaskHandle() && !busy && !async_pending &&
                  completed == submitted && !parked.load(std::memory_order_acquire));
@@ -235,7 +251,11 @@ void mimus_parallel_stop() {
         configASSERT(xQueueSend(slot.jobs, &stop, 0) == pdTRUE);
     }
     while (parked.load(std::memory_order_acquire) != kWorkers - 1) {
+#ifdef SUNSTONE_A733_OS
+        configASSERT(ss_live() == 1);
+#else
         configASSERT(a733_smp_counter() < os_cpu_return_cutoff());
+#endif
         vTaskDelay(1);
     }
 }

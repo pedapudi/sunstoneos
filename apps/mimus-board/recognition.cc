@@ -1,3 +1,6 @@
+#ifdef SUNSTONE_A733_OS
+#include "recognition-ss.cc"
+#else
 #include "application.h"
 #include "assets.h"
 #include "../mimus/recorded.h"
@@ -101,3 +104,4 @@ extern "C" int mimus_board_copy(uint32_t offset,size_t bytes,uint8_t *out,size_t
     *total=used;if(offset>used||bytes>used-offset||bytes>1024)return -1;
     std::memcpy(out,transcript+offset,bytes);*copied=bytes;return mimus_board_live()?1:-1;
 }
+#endif

@@ -7,7 +7,7 @@
 namespace mimus::asr { class Recognizer; }
 // Fixed inference arena shared by recorded and paced recognition.
 inline constexpr uintptr_t kMimusArenaBase = 0x46000000;
-#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+#ifdef SUNSTONE_A733_OS
 // The GPU option reads codes from the first 12 MiB and owns the output region
 // above it (docs/recognition-dispatch.md); the bench recording's peak is
 // below 2.8 MiB.
