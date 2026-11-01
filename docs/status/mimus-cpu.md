@@ -2,7 +2,7 @@
 
 **Status: implemented.**
 
-**Board-qualified scope:** Engine `418ad38c8` preserves all 32 original corpus references at vendor maximum CPU and DSU operating points. Its aggregate factor is 0.029065 and maximum is 0.036796, with one observation per recording. On the merged OS, entry `1793563566905223485-7d25a24b` returns the 29.84-second clip in 1097.939 ms with exact output. Paced entry `1793563703824318733-0c21b2b6` preserves segmented output and retires seven secondary CPUs. Both retained thermal reports are complete version 2 captures, with maximum slot lateness 957 and 951 microseconds. Retained thermal history covers only the first recording in each batch; policy remains active afterward. Long-duration worker stress remains pending.
+**Board-qualified scope:** Engine `bcaf39ff5`, selected explicitly in the qualified images, preserves all 32 original corpus references on the merged OS at vendor maximum CPU and DSU operating points. Aggregate real-time factor is 0.027888 and maximum is 0.032916. The 29.84-second clip takes 982.227 ms; the reference takes 109.551 ms. Paced entry `1793563703824318733-0c21b2b6` preserves segmented output. Thermal control entry `1793563566905223485-7d25a24b` and the paced entry have complete version 2 reports, with maximum slot lateness 957 and 951 microseconds. Per-core diagnostic entry `1793567533946545503-823190b1` returns normally with exact output and unchanged maximum clocks. Physical long-duration worker stress remains pending.
 
 ## Source and validation
 
@@ -35,6 +35,35 @@ Both return normally at CPU-L 1794 MHz and 1000 mV, CPU-B 2002 MHz and
 Evidence is under `~/.cache/sunstoneos/build/cpu-perf-1031/`:
 `thermal-merge-1101/landing-validation.json`, `thermal-merge-1101/validation-record.json`
 and `full-integration-1101/continued/commands-results.json` bind the merged
-validation and physical results. The earlier complete corpus and its profiles
-remain in `queue-qualified-1101/final-complete.json` and the application
-report `docs/sunstoneos_cpu_performance.md`.
+validation and physical results. The current corpus and profiles are in
+`final-cpu2-1101/board/final-complete.json` and its sibling batch files.
+The application performance report still describes the preceding engine.
+
+## Landing work in priority order
+
+1. Update the mimus internal engine source record to `bcaf39ff5`, commit it,
+   then pin that application commit in `apps/mimus/source.json` here.
+   The current OS pin remains `10db8e721`, with engine `418ad38c8`.
+   Build and check the default application without an engine override.
+2. Build a fresh native race image, run its short control, then the four
+   predeclared 50-second sessions in `race-test-1101/sessions.json` through
+   the queue on port 3-1. The integrated QEMU screen passes; physical stress
+   is unqualified. Keep the existing session limit and stop at failure or pause.
+3. Complete the application performance report using the final corpus,
+   per-core timing and physical stress receipts. The detailed continuation
+   record is mimus `docs/status/sunstoneos-cpu.md` in
+   `/home/sunil/git/mimus-worktrees/cpu-perf-1031`.
+
+No native race image is built and awaiting its first run. Already-run image
+READMEs are `native-producers-1101/README.md` and
+`native-kernel-timing-1101/README.md` below the evidence root.
+The complete corpus entry list is in
+`final-cpu2-1101/board/entries.jsonl`; every entry returns normally and retains
+exact outputs. The application status document lists each entry explicitly.
+
+The coordinator owns landing this branch and advancing the mimus shared branch.
+No approval is pending for the existing RAM-only queue plan; further board work
+awaits coordinator resumption. Storage writes and new operating points require
+coordinator approval. Coordinate shared thermal files `apps/os/thermal.c`,
+`checks/os-thermal-cadence.c` and `checks/os-thermal-cadence.py` with the
+acceptance worker. Coordinate `apps/mimus/source.json` with the integrator.
