@@ -332,16 +332,16 @@ class ExFat:
 
 rng = random.Random(0x5a733)
 files = {
-    'config.txt': b'model=models/base.bin\noverlay=models/mimus overlay model.bin\nrate=16000\n',
+    'config.txt': b'model=models/base.bin\noverlay=models/overlay model.bin\nrate=16000\n',
     'empty.txt': b'',
     'models': {
         'base.bin': rng.randbytes(300 * 1024 + 123),
-        'mimus overlay model.bin': rng.randbytes(70 * 1024 + 5),
+        'overlay model.bin': rng.randbytes(70 * 1024 + 5),
         'Contiguous Model.bin': rng.randbytes(96 * 1024),
     },
     'tail.bin': rng.randbytes(12 * 1024 + 7),
 }
-paths = ['config.txt', 'empty.txt', 'models/base.bin', 'models/mimus overlay model.bin',
+paths = ['config.txt', 'empty.txt', 'models/base.bin', 'models/overlay model.bin',
          'models/Contiguous Model.bin', 'tail.bin']
 
 
@@ -388,10 +388,10 @@ def card(name, kind, partitioned=True, size_mib=68):
     img[base * SECTOR:] = part.read_bytes()
     part.unlink()
     fs = Fat(img, base) if kind != 'exfat' else ExFat(img, base)
-    layout = interleave(fs, 'models/base.bin', 'models/mimus overlay model.bin', 5, 2)
+    layout = interleave(fs, 'models/base.bin', 'models/overlay model.bin', 5, 2)
     layout['tail.bin'] = tail_layout(fs)
     if kind == 'exfat':
-        fs.populate(files, layout, {'models/base.bin', 'models/mimus overlay model.bin'})
+        fs.populate(files, layout, {'models/base.bin', 'models/overlay model.bin'})
     else:
         fs.populate(files, layout)
     if partitioned:

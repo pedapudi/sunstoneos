@@ -32,7 +32,7 @@ belongs in the handoff and the hardware matrix.
 - Run every hardware block at the highest operating point the vendor uses for
   the chip's speed bin, with the vendor's voltage. Lower clocks are optional
   modes for power saving or thermal limits and never the default or a cap.
-- Complete onboard hardware support and local mimus execution are separate
+- Complete onboard hardware support and local application execution are separate
   completion requirements. A CPU fallback does not satisfy accelerator support.
 - Keep downloaded sources, models, firmware blobs, builds, raw logs and full
   disassembly outside tracked source. Record each one's URL, revision, SHA-256
@@ -46,6 +46,7 @@ belongs in the handoff and the hardware matrix.
 
 ## Layering
 
+<!-- Mimus is an external application example in this layering rule. -->
 SunstoneOS is a general operating system. Applications, such as the mimus
 speech recognizer, live in their own repositories and build against the
 SunstoneOS application kit: [include/sunstone_app.h](include/sunstone_app.h)
@@ -55,7 +56,7 @@ defines the layers and lists the remaining defects.
 
 ## Scope and simplicity
 
-- Full board hardware coverage is required independently of mimus. Distinguish
+- Full board hardware coverage is required independently of applications. Distinguish
   usable board functions from unconnected SoC interfaces and optional
   application features, with physical evidence for the distinction.
 - Prefer a complete native device path to more isolated components. Add an
@@ -128,7 +129,7 @@ changed branches. A commit, rebase or handoff does not invalidate test evidence.
 - Identify the target before any device command, and open no other board.
   Hold the per-port lock (`tools/usb-access.py:board_lock`,
   `/tmp/sunstoneos-a733-<USB-port>.lock`) during every device operation, and
-  no project-wide mimus lock. Share a controller or acoustic resource only
+  no project-wide application lock. Share a controller or acoustic resource only
   through the existing shared-board tooling.
 - Before a board run of a subsystem, derive its complete sequence from the
   vendor reference (vendor source and binaries, upstream Linux, TF-A, manuals)

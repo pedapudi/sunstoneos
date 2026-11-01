@@ -152,7 +152,7 @@ def el3_model(core, mpidr=None):
             'ttbr0_el3': 0, 'currentel': 12, 'daif': 0x3c0, 'tpidr_el1': core}
 
 
-def prepare(image, uc, core, state=3, name=b'mimus-board\0'):
+def prepare(image, uc, core, state=3, name=b'app-worker\0'):
     records = image.symbols['a733_cached_records']
     epoch = 0x5eed0000 + core
     uc.mem_write(records + core * 128, struct.pack('<3Q', epoch, core, state))
@@ -239,7 +239,7 @@ def check_case(image, r):
             assert slot['status'] == 4 and slot['detail'] == model['esr_el1'], slot
             assert (slot['esr'], slot['elr'], slot['far'], slot['spsr']) == \
                 (model['esr_el1'], model['elr_el1'], model['far_el1'], model['spsr_el1']), slot
-            assert slot['tcb'] == TCB and slot['task'] == 'mimus-board', slot
+            assert slot['tcb'] == TCB and slot['task'] == 'app-worker', slot
         else:
             # A deliberate exit whose x2 still held 0x1ff is not a vector fault.
             assert slot['kind'] == 'deliberate exit' and slot['status'] == 5 and slot['detail'] == 3, slot
@@ -309,7 +309,7 @@ def name_bounds(image):
             model, ['a733_smp_stop', 'a733_storage_maintenance_stop'])
         slot = decode.decode_slot(bytes(uc.mem_read(SLOTS + 2 * 128, 128)))
         assert slot['state'] == 'valid' and slot['tcb'] == tcb, slot
-        assert (slot['task'] == 'mimus-board') == (expect == 'kept'), (hex(tcb), slot['task'])
+        assert (slot['task'] == 'app-worker') == (expect == 'kept'), (hex(tcb), slot['task'])
         rows.append(dict(tcb=tcb, name=slot['task']))
     return rows
 
