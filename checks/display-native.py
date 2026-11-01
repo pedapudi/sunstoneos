@@ -14,7 +14,7 @@ p.add_argument('--cc', default='clang-21')
 a = p.parse_args()
 root = pathlib.Path(__file__).resolve().parents[1]
 a.evidence.mkdir(parents=True, exist_ok=False)
-compiled = ['drivers/display/a733_display_native.c', 'drivers/iommu/a733_iommu.c', 'runtime/device_memory_pool.c', 'drivers/display/a733_display_handoff.c', 'drivers/display/a733_display_pll.c',
+compiled = ['drivers/display/a733_display_modes.c', 'drivers/display/sunstone_connector.c', 'drivers/display/sunstone_edid.c', 'drivers/display/a733_display_native.c', 'drivers/iommu/a733_iommu.c', 'runtime/device_memory_pool.c', 'drivers/display/a733_display_handoff.c', 'drivers/display/a733_display_pll.c',
             'drivers/clock/a733_media_clock.c', 'drivers/clock/a733_clock_leases.c',
             'drivers/gpu/a733_gpu_resources.c', 'drivers/display/display_scanout.c',
             'drivers/display/a733_dsi.c', 'drivers/display/a733_dsi_phy.c',

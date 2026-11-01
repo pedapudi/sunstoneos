@@ -132,6 +132,10 @@ static void setup(enum a733_hdmi_mode mode,enum a733_hdmi_range range){
     uint8_t *e=m->edid+384;e[0]=2;e[1]=3;e[2]=range==A733_HDMI_FULL?15:12;
     e[4]=0x41;e[5]=(uint8_t)mode;e[6]=0x65;e[7]=3;e[8]=12;e[9]=0;e[10]=0x10;e[11]=0;
     if(range==A733_HDMI_FULL){e[12]=0xe2;e[13]=0;e[14]=0x40;}checksum(e);
+    /* Exercise the generic constructor, preserving the exact admitted profile. */
+    struct a733_hdmi_timing pixels;assert(a733_hdmi_timing(live.c.request.mode,&pixels)==1);
+    live.c.pixel_mode=(struct sunstone_display_mode){pixels.pixel_hz,pixels.width,pixels.height,
+        pixels.hfront,pixels.hsync,pixels.hback,pixels.vfront,pixels.vsync,pixels.vback,3};
     assert(a733_hdmi_init(&live.s,&live.c)==1);
 }
 static void capture(void){

@@ -3,6 +3,7 @@
 #include "a733_display_handoff.h"
 #include "a733_iommu.h"
 #include "device_memory_pool.h"
+#include "sunstone_display.h"
 struct a733_platform_locks;
 struct a733_display_native_config {
     struct a733_media_clock *media;
@@ -11,6 +12,9 @@ struct a733_display_native_config {
     struct device_memory_pool *pool;
     struct device_memory_lease frame, tables;
     struct display_request request;
+    /* Optional board binding for an explicitly selected, fitted panel. NULL
+     * retains the externally authenticated session contract. */
+    const struct sunstone_display_port *port;
     struct a733_platform_locks *locks;
     void *task, *context;
     uint64_t recovery_generation;

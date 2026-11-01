@@ -1,4 +1,5 @@
 #include "a733_display_native.h"
+#include "a733_display_modes.h"
 #include "a733_range.h"
 #include <string.h>
 
@@ -131,6 +132,13 @@ int a733_display_native_init(struct a733_display_native *n,const struct a733_dis
     if(!n||!c||n->initialized||!c->pool||!c->iommu||!c->locks||!c->task||!c->now_us||!c->authorize||!c->panel||
        c->frame.owner!=c->request.owner||c->tables.owner!=c->request.owner||
        c->frame.slot==c->tables.slot||!c->frame.generation||!c->tables.generation)return 0;
+    if(c->port){
+        struct sunstone_display_mode pixels=a733_dsi_pixel_mode(&c->request.timing.dsi);
+        struct a733_dsi_video_timing timing;
+        if(!c->port->panel||c->port->panel->id!=c->request.panel_id||
+           a733_dsi_panel_timing(c->port,&pixels,c->request.timing.dsi.hs_hz,c->request.timing.dsi.ls_hz,&timing)!=SUNSTONE_MODE_OK||
+           memcmp(&timing,&c->request.timing.dsi,sizeof(timing)))return 0;
+    }
     struct device_memory_extent f,t;enum device_memory_state fs,ts;
     if(!device_memory_describe(c->pool,c->frame,&f,&fs)||!device_memory_describe(c->pool,c->tables,&t,&ts)||
        fs!=DEVICE_MEMORY_DEVICE||ts!=DEVICE_MEMORY_DEVICE||t.bytes!=A733_IOMMU_TABLE_BYTES||

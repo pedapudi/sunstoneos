@@ -316,7 +316,7 @@ def main():
     cases={
         'pll':(PLL,['drivers/display/a733_display_pll.c','drivers/display/a733_dsi_phy.c','drivers/clock/a733_clock_leases.c']),
         'dsi':(DSI,['drivers/display/a733_dsi_phy.c','drivers/display/a733_dsi.c',str(a.dsi_reference)]),
-        'hdmi':(HDMI,['drivers/display/a733_hdmi.c','drivers/display/a733_hdmi_phy.c','drivers/display/a733_tcon_tv.c']),
+        'hdmi':(HDMI,['drivers/display/a733_hdmi.c','drivers/display/sunstone_edid.c','drivers/display/a733_hdmi_phy.c','drivers/display/a733_tcon_tv.c']),
         'sensor':(SENSOR,['drivers/camera/ov5640.c']),
         'capture':(CAPTURE,['drivers/camera/ov5640.c','drivers/camera/a733_camera_platform.c','drivers/camera/a733_csi_receiver.c','drivers/camera/a733_camera_route.c','drivers/camera/a733_camera_dma.c','drivers/iommu/a733_iommu.c','drivers/camera/a733_camera_capture.c']),
         'dp':(dp_wait(),[]),
