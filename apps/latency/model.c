@@ -31,6 +31,29 @@ static void controller(void *argument)
         number(" bytes_written=", result.traffic[c].bytes_written);
         number(" digest=", result.traffic[c].digest);
         platform_puts("\n");
+        number("isr_acquisitions=", result.acquisitions[c][0]);
+        number(" task_acquisitions=", result.acquisitions[c][1]);
+        platform_puts("\n");
+        for (unsigned i = 0; i < LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES; ++i) {
+            const struct latency_wake_sample *w = &result.wakes[c][i];
+            unsigned p = i < LATENCY_IDLE_SAMPLES ? SS_LAT_IDLE : SS_LAT_BUSY;
+            configASSERT(w->metric == (p == SS_LAT_IDLE ? SS_LAT_SCHED_IDLE : SS_LAT_SCHED_BUSY));
+            configASSERT(w->workload_flags == (p == SS_LAT_IDLE ? LATENCY_WAKE_IDLE : LATENCY_WAKE_BUSY));
+            configASSERT(result.phase_bounds[p][0] <= w->ready && w->ready <= w->running);
+            configASSERT(w->running <= result.phase_bounds[p][1]);
+        }
+        for (unsigned p = 0; p < SS_LAT_PHASES; ++p)
+            for (unsigned m = 0; m < SS_LAT_METRICS; ++m) {
+                const struct ss_latency_distribution *d = &result.phases[p][c].metric[m];
+                number("phase=", p); number(" metric=", m);
+                number(" count=", d->count);
+                number(" p50_upper_ticks=", d->p50_upper);
+                number(" p99_upper_ticks=", d->p99_upper);
+                number(" max_ticks=", d->maximum);
+                number(" max_start=", d->start); number(" max_site=", d->site);
+                number(" overflow_bin_count=", d->overflow_bin_count);
+                platform_puts("\n");
+            }
         for (unsigned m = 0; m < SS_LAT_METRICS; ++m) {
             const struct ss_latency_metric *sample = &result.core[c].metric[m];
             platform_puts(metric_names[m]);

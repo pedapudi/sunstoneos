@@ -6,5 +6,5 @@
     {"name": "traffic", "kind": "work", "access": ["read", "write"], "bytes": 8388608}
   ],
   "deadlines": {"run_us": 12000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
-  "output_limit": 8192
+  "output_limit": 65536
 }
