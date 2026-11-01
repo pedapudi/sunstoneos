@@ -149,7 +149,10 @@ int npu_runtime_queue_claim(struct npu_runtime_queue *q, struct npu_runtime *rt)
     if (rt->service.direct != &q->direct ||
         atomic_load_explicit(&rt->failed, memory_order_acquire) ||
         atomic_load_explicit(&q->queue.failed, memory_order_acquire) ||
+        !a733_npu_startup_window_open(rt->startup) ||
         atomic_load_explicit(&rt->service.irq_pending, memory_order_acquire)) {
+        atomic_store_explicit(&q->queue.failed, 1, memory_order_release);
+        atomic_store_explicit(&rt->failed, 1, memory_order_release);
         npu_runtime_queue_unlock(armed_saved); return -1;
     }
     const int armed = rt->service.irq_ops.rearm(rt->service.irq_cookie);
@@ -182,7 +185,8 @@ int npu_runtime_queue_return(struct npu_runtime_queue *q)
     const uint64_t count = atomic_load_explicit(&q->queue.completed, memory_order_acquire);
     if (!npu_queue_idle(&q->queue) || atomic_load_explicit(&q->runtime->failed, memory_order_acquire) ||
         atomic_load_explicit(&s->irq_pending, memory_order_acquire) ||
-        count > UINT32_MAX - npu_service_irq_completions(s)) result = -1;
+        count > UINT32_MAX - npu_service_irq_completions(s) ||
+        q->queue.submitted > UINT64_MAX - q->runtime->counters.jobs) result = -1;
     if (result == 1) {
         s->irq_masked = 1;
         atomic_fetch_add_explicit(&s->irq_completions, (unsigned)count, memory_order_release);

@@ -473,8 +473,9 @@ static void runtime_worker(struct npu_service *s)
                 !uxQueueMessagesWaiting(s->requests);
             if (ready) s->direct = s->direct_request;
             s->direct_request = NULL;
+            TaskHandle_t owner = s->direct_owner;
             atomic_store_explicit(&s->direct_ready, ready ? 1u : 2u, memory_order_release);
-            xTaskNotifyGive(s->direct_owner);
+            xTaskNotifyGive(owner);
         }
         if (s->direct) {
             (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
