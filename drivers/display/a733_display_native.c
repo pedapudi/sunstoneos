@@ -3,11 +3,11 @@
 #include <string.h>
 
 /* The full walk reads all 8192 uncached table words and translates every
- * frame and table page, so it runs once per scanout phase and again after
- * each prepare, request or replay. Allocation, extent and IOMMU generation
+ * frame and table page, so it runs once after each prepare, request or replay.
+ * The private mappings remain immutable across that operation's phases.
+ * Allocation, extent and IOMMU generation
  * checks still run on every access. One owner task serializes this record. */
 static const struct a733_display_native *walked;
-static enum display_phase walked_phase;
 static int memory(struct a733_display_native *n)
 {
     const struct a733_display_native_config *c=&n->config;
@@ -17,7 +17,7 @@ static int memory(struct a733_display_native *n)
        memcmp(&f,&n->frame_extent,sizeof(f))||memcmp(&t,&n->table_extent,sizeof(t))||
        c->iommu->state!=A733_IOMMU_ACTIVE||c->iommu->translated_masters!=0x100||
        c->iommu->accessible_masters!=0x100||memcmp(&c->iommu->tables,&n->tables,sizeof(n->tables)))return 0;
-    if(walked==n&&walked_phase==n->binding.scanout.phase)return 1;
+    if(walked==n)return 1;
     walked=0;
     if(a733_iommu_validate(&n->tables)!=1)return 0;
     /* The one immutable READ span and every table word were validated above.
@@ -26,7 +26,7 @@ static int memory(struct a733_display_native *n)
         if(!a733_display_native_mapping(f.cpu+off,f.physical+off,0x44))return 0;
     for(uint64_t off=0;off<t.bytes;off+=DEVICE_MEMORY_PAGE)
         if(!a733_display_native_mapping(t.cpu+off,t.physical+off,0x44))return 0;
-    walked=n;walked_phase=n->binding.scanout.phase;return 1;
+    walked=n;return 1;
 }
 static int live(struct a733_display_native *n)
 {return n&&n->self==n&&n->initialized&&!n->failed&&a733_display_native_owner(n->config.task);}
