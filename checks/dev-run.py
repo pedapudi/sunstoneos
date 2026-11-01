@@ -519,7 +519,10 @@ def helper_cases():
             ('wrong-readback', HELPER_RECORD, helper_log(1000, 800, volt=['VOLT dcdc5_selector=0x9f dcdc5_uv=810000']),
              'VOLT lines'),
             ('clock-after', HELPER_RECORD, helper_log(1000, 1050).replace('CPU-B after pll=0xf8802700',
-                                                                          'CPU-B after pll=0xf8805300'), 'CPU-B after')):
+                                                                          'CPU-B after pll=0xf8805300'), 'CPU-B after'),
+            # A log truncated after the VOLT word.
+            ('truncated-volt', HELPER_RECORD, helper_log(1000, 1050, volt=[
+                'VOLT ', 'VOLT dcdc5_selector=0x9e dcdc5_uv=800000']), 'VOLT lines')):
         r = dev.helper_report(record, log)
         assert not r['complete'] and reason in r['reason'], (name, r)
         assert r['supply'] and r['outcome'], (name, r)
@@ -562,6 +565,21 @@ def controlled_cases(host, out):
     assert len(calls) == 3
     r = dev.run_rail_helper(types.SimpleNamespace(fel=out / 'fel', rail_helper=helper), host, out / 'controlled-hash')
     assert not r['complete'] and 'differs from the reviewed one' in r['reason'] and len(calls) == 3, r
+    # Any other error while recording is a report, not an exception: a truncated log, an
+    # unexpected decode error and a missing helper binary.
+    def truncated(argv):
+        evidence = Path(argv[argv.index('--evidence') + 1]); evidence.mkdir()
+        (evidence / 'session.json').write_text(json.dumps(HELPER_RECORD))
+        (evidence / 'kernel.log').write_text(helper_log(1000, 1050, volt=['VOLT ']))
+    with patch.object(host.cpu.kernel, 'main', truncated), patch.object(dev, 'RAIL_HELPER_SHA256', dev.digest(helper)):
+        r = dev.run_rail_helper(args, host, out / 'controlled-truncated')
+        assert not r['complete'] and 'VOLT lines' in r['reason'] and r['volt'] == ['VOLT '], r
+        with patch.object(dev, 'helper_report', side_effect=StopIteration):
+            r = dev.run_rail_helper(args, host, out / 'controlled-decode-error')
+        assert not r['complete'] and 'StopIteration' in r['reason'], r
+    r = dev.run_rail_helper(types.SimpleNamespace(fel=out / 'fel', rail_helper=out / 'absent.bin'), host,
+                            out / 'controlled-absent')
+    assert not r['complete'] and 'FileNotFoundError' in r['reason'] and r['supply'] == [], r
     passed('rail-helper-controlled-outcomes')
 
 

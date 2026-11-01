@@ -460,7 +460,7 @@ def helper_report(record, log):
         report['reason'] = 'speed bin or DCXO differs'
         return report
     written = [fields(x) for x in volt]
-    if [next(iter(f))[:5] for f in written] != expected or not all(
+    if [next(iter(f), '')[:5] for f in written] != expected or not all(
             f[r + '_uv'] == 800000 and f[r + '_selector'] & 127 == 30 for r, f in zip(expected, written)):
         report['reason'] = 'VOLT lines differ from one 800 mV readback per raised rail, DCDC3 first'
         return report
@@ -479,8 +479,22 @@ def helper_report(record, log):
 
 def run_rail_helper(args, host, out):
     """The rail helper (board bundle 33) through the existing kernel runner, which holds the
-    port lock. Returns helper_report() with the runner's status and evidence directory; never raises."""
+    port lock. Returns helper_report() with the runner's status and evidence directory.
+
+    It raises only KeyboardInterrupt, and SystemExit from outside the runner;
+    the caller saves its own record before calling. The kernel runner reports
+    its own failures with SystemExit, which is recorded."""
     report = {'evidence': str(out)}
+    try:
+        return run_rail_helper_once(args, host, out, report)
+    except Exception as error:
+        report.update(complete=False, reason=f'rail helper record failed: {type(error).__name__}: {error}')
+        for key in ('supply', 'volt', 'outcome', 'rail_state'):
+            report.setdefault(key, [])
+        return report
+
+
+def run_rail_helper_once(args, host, out, report):
     if digest(args.rail_helper) != RAIL_HELPER_SHA256:
         report.update(complete=False, supply=[], volt=[], outcome=[], rail_state=[],
                       reason='rail helper binary differs from the reviewed one; not run')
@@ -506,9 +520,9 @@ def run_rail_helper(args, host, out):
         report['session_error'] = str(error)
     try:
         report.update(helper_report(record, log.read_text(errors='replace') if log.exists() else ''))
-    except (ValueError, KeyError) as error:
+    except Exception as error:
         report.update(complete=False, supply=[], volt=[], outcome=[], rail_state=[],
-                      reason=f'helper log unreadable: {error}')
+                      reason=f'helper log unreadable: {type(error).__name__}: {error}')
     if report['complete'] and report.get('runner_status') not in (None, 0):
         report.update(complete=False, reason='runner status %r' % report['runner_status'])
     return report
