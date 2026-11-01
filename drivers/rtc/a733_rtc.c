@@ -131,7 +131,13 @@ int a733_rtc_arm(struct a733_rtc *r,unsigned delay)
 int a733_rtc_irq(struct a733_rtc *r)
 {
     uint32_t pending;
-    if(!r||r->read_only||!atomic_load_explicit(&r->owned,memory_order_acquire))return 0;
+    /* Deferred notifications can outlive the alarm that generated them. A
+     * completed or retained instance must never acknowledge a later event.
+     * All entry points run in the same owner task with the GIC line masked. */
+    if(!r||r->read_only||r->state!=A733_RTC_ARMED||
+       !atomic_load_explicit(&r->owned,memory_order_acquire)||
+       atomic_load_explicit(&r->irq_seen,memory_order_acquire)||
+       atomic_load_explicit(&r->irq_fault,memory_order_acquire))return 0;
     if(!read_reg(r,STATUS,&pending)||!(pending&1)||
        !write_reg(r,IRQEN,r->saved_irq_enable&~UINT32_C(1))||!write_reg(r,STATUS,1)){
         atomic_store_explicit(&r->irq_fault,1,memory_order_release);return 0;
@@ -157,5 +163,6 @@ int a733_rtc_finish(struct a733_rtc *r,int cancel)
     if(!write_reg(r,ALDAY,r->snapshot.saved_day)||!write_reg(r,ALHMS,r->snapshot.saved_hms)||
        !read_reg(r,ALDAY,&d)||!read_reg(r,ALHMS,&h)||d!=r->snapshot.saved_day||h!=r->snapshot.saved_hms)return fail(r);
     r->snapshot.alarm_seen=seen;r->snapshot.cancelled=!seen;
+    atomic_store_explicit(&r->owned,0,memory_order_release);
     r->state=seen?A733_RTC_FIRED:A733_RTC_CANCELLED;return 1;
 }
