@@ -29,6 +29,11 @@ static uint32_t stage, peer_done, publish_waiting, publish_release, fault_mode;
 static uint32_t calls, published, enabled, isolated, handled, cores, mmu_flushes;
 static unsigned char registers[0xa108];
 static unsigned running, stopping, first_publish = 1;
+/* Cases 7/8 hold the counter at the OPEN boundary after the controller is
+ * ready, while the MMU flush is still pending. Case 9 crosses it in the
+ * flush completion callback. All preceding setup uses the normal clock. */
+static uint64_t forced_now;
+static unsigned deadline_crossed;
 
 static uint32_t get(const uint32_t *p) { return __atomic_load_n(p, __ATOMIC_ACQUIRE); }
 static void set(uint32_t *p, uint32_t v) { __atomic_store_n(p, v, __ATOMIC_RELEASE); }
@@ -80,6 +85,15 @@ static int now(void *ctx, uint64_t *out)
     callback(ctx); uint64_t counter, frequency;
     __asm__ volatile("mrs %0, cntpct_el0\n mrs %1, cntfrq_el0" : "=r"(counter), "=r"(frequency));
     *out = (counter / frequency) * 1000000 + (counter % frequency) * 1000000 / frequency;
+    if ((gpu_service_case == 7 || gpu_service_case == 8) &&
+        service.phase == PVR_GPU_SERVICE_CHECKING && service.control.phase == PVR_GPU_CONTROL_READY &&
+        service.flush.phase == PVR_GPU_FLUSH_SUBMIT && !forced_now) {
+        /* Let the preceding flush publication finish before the clock jumps;
+         * the next service step begins at this injected boundary. */
+        forced_now = service.deadline - (gpu_service_case == 8);
+        return 1;
+    }
+    if (forced_now) *out = forced_now;
     return 1;
 }
 static int read_reg(void *ctx, uint32_t off, uint32_t width, uint64_t *out)
@@ -238,6 +252,10 @@ static void fixture_executed(void)
 static int executed(void *ctx, uint32_t *out)
 {
     callback(ctx);
+    if (gpu_service_case == 9 && service.flush.phase == PVR_GPU_FLUSH_WAIT && service.flush.consumed) {
+        forced_now = service.deadline;
+        deadline_crossed = 1;
+    }
 #ifdef SUNSTONE_GPU_NATIVE_MEMORY
     return a733_gpu_memory_executed(&memory, out);
 #else
@@ -278,6 +296,15 @@ static int irq_read(void *ctx, uint32_t off, uint32_t *out)
 {
     callback(ctx); configASSERT(off == 0x8a8);
     if (get(&fault_mode) == 3) return 0;
+    if ((gpu_service_case == 7 || gpu_service_case == 8) &&
+        service.control.phase == PVR_GPU_CONTROL_READY && service.flush.phase == PVR_GPU_FLUSH_SUBMIT) {
+        /* A pending IRQ can keep control_poll returning AGAIN forever after
+         * its own opening deadline no longer applies (case 7). In case 8,
+         * time crosses the boundary inside a successful controller poll. */
+        if (gpu_service_case == 8) { forced_now = service.deadline; deadline_crossed = 1; }
+        *out = gpu_service_case == 7;
+        return 1;
+    }
 #ifdef SUNSTONE_GPU_NATIVE_MEMORY
     if (get(&fault_mode) == 4) {
         /* Publish one firmware event, then deliberately violate pinned writable
@@ -421,6 +448,26 @@ static void peer(void *arg)
 static void owner(void *arg)
 {
     (void)arg;
+    if (gpu_service_case >= 7 && gpu_service_case <= 9) {
+        configASSERT(request(PVR_GPU_SERVICE_OPEN, 1000000).result == PVR_GPU_SERVICE_OK);
+        vTaskDelay(80); /* The worker must enforce OPEN without a new request. */
+        struct pvr_gpu_service_reply response = request(PVR_GPU_SERVICE_STATUS, 0);
+        metric("deadline_phase", response.phase); metric("deadline_error", response.error);
+        configASSERT(response.phase == PVR_GPU_SERVICE_FAILED && response.result == PVR_GPU_SERVICE_FAULT);
+        configASSERT(response.owns_session && get(&enabled) && !get(&isolated));
+        configASSERT(response.error == (gpu_service_case == 9 ? PVR_GPU_SERVICE_CONTROL : PVR_GPU_SERVICE_CLOCK));
+        configASSERT(gpu_service_case == 7 || deadline_crossed);
+        configASSERT(get(&mmu_flushes) == (gpu_service_case == 9));
+        configASSERT(service.flush.phase != PVR_GPU_FLUSH_COMPLETE || gpu_service_case == 9);
+        unsigned count = get(&calls);
+        configASSERT(request(PVR_GPU_SERVICE_OPEN, 100000).result == PVR_GPU_SERVICE_FAULT);
+        configASSERT(request(PVR_GPU_SERVICE_CLOSE, 100000).result == PVR_GPU_SERVICE_FAULT);
+        vTaskDelay(5); configASSERT(get(&calls) == count);
+        for (unsigned i=0;i<22;++i) for (unsigned j=0;j<4096;++j) configASSERT(guards[i][j] == 0xa5);
+        platform_puts("PASS GPU service: case "); platform_hex(gpu_service_case);
+        platform_puts("; opening deadline bounds controller READY and MMU completion; retained ownership\n");
+        platform_exit(0);
+    }
 #ifdef SUNSTONE_GPU_ASYNC_POWER
     if (gpu_service_case == 5 || gpu_service_case == 6) {
         struct pvr_gpu_service_reply response = request(PVR_GPU_SERVICE_OPEN, 50000);

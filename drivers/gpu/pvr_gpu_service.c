@@ -619,19 +619,27 @@ static void advance(struct pvr_gpu_service *s)
     }
     case PVR_GPU_SERVICE_CHECKING:
     case PVR_GPU_SERVICE_READY: {
+        /* Control stops enforcing its opening deadline at controller READY.
+         * OPEN still owns this deadline until the service's MMU flush ends,
+         * including polls that keep returning AGAIN for pending events. */
+        if (s->phase == PVR_GPU_SERVICE_CHECKING && !opening_clock(s)) return;
         enum pvr_gpu_control_result r;
 #ifdef SUNSTONE_A733_OS_PERF
         if(performance_controlling(s))r=PVR_GPU_CONTROL_OK;
         else
 #endif
         r=pvr_gpu_control_poll(&s->control,4);
+        if (r != PVR_GPU_CONTROL_OK && r != PVR_GPU_CONTROL_AGAIN) {
+            fail(s, PVR_GPU_SERVICE_CONTROL); return;
+        }
+        if (s->phase == PVR_GPU_SERVICE_CHECKING && !opening_clock(s)) return;
         if (r == PVR_GPU_CONTROL_OK && s->phase == PVR_GPU_SERVICE_CHECKING && s->config.flush_mmu) {
             const int flushed = flush_step(s);
             if (flushed < 0) { fail(s, PVR_GPU_SERVICE_CONTROL); return; }
+            if (!opening_clock(s)) return;
             if (flushed) { s->phase = PVR_GPU_SERVICE_READY; rearm = 1; }
         }
         else if (r == PVR_GPU_CONTROL_OK) { s->phase = PVR_GPU_SERVICE_READY; rearm = 1; }
-        else if (r != PVR_GPU_CONTROL_AGAIN) { fail(s, PVR_GPU_SERVICE_CONTROL); return; }
         if (s->config.free_lists.count) {
             if (free_list_progress(s, 0) == PVR_FREE_LIST_FAULT) return;
         }
