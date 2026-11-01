@@ -18,7 +18,7 @@ parser.add_argument("--output", type=Path, default=CACHE / "build/a733-ddr")
 # --variant the wrapper is byte-identical to the reviewed one.
 VARIANTS = {"pstate0": (0, 0), "init-only": (0x1fff0000, 0x00010000), "restore": None}
 parser.add_argument("--variant", choices=sorted(VARIANTS))
-parser.add_argument("--restore-set", type=Path, help="reviewed restore-set-v3.json; required for restore")
+parser.add_argument("--restore-set", type=Path, help="reviewed restore-set-v4.json; required for restore")
 args = parser.parse_args()
 if (args.restore_set is not None) != (args.variant == "restore"):
     sys.exit("--restore-set goes with, and only with, --variant restore.")
@@ -63,6 +63,8 @@ for name, address in (("ddr-entry", 0x85000), ("cache-off", 0x71000)):
 symbols = subprocess.check_output([nm, str(args.output / "ddr-entry.elf")], text=True)
 log_address = next(int(line.split()[0], 16) for line in symbols.splitlines()
                    if line.split()[-1] == "log_character")
+symbol = {line.split()[-1]: int(line.split()[0], 16) for line in symbols.splitlines()}
+ticks_address, poll_limit_address = symbol["clock_ticks"], symbol["clock_poll_limit"]
 restore_manifest = None
 if args.variant == "restore":
     spec = importlib.util.spec_from_file_location("training_record", ROOT / "tools/training-record.py")
@@ -130,7 +132,11 @@ if args.variant == "restore":
     restore_manifest = {"set_sha256": training.RESTORE_SET_SHA256, "helper": 0x92000,
                         "helper_limit": 0x8000, "record": 0x87000, "record_limit": training.RECORD_LIMIT,
                         "stack": [0x9b000, 0x9f000], "hook": hook, "phy_registers": len(profile),
-                        "sample_bytes": 8192, "sample_read_bytes": 278528,
+                        # Quick check in boot/a733/ddr-restore.c: 31 address-line words
+                        # and sixteen 4 KiB windows 192 MiB apart below 4 GiB.
+                        "sample_bytes": 65616, "sample_read_bytes": 262392,
+                        "sample_windows": [0x40000000 + n*0x0c000000 for n in range(16)],
+                        "check_ticks_words": [25, 26], "counter_hz": 24000000,
                         "allocated_sections": allocated,
                         "profile_sha256": hashlib.sha256(generated.encode()).hexdigest(),
                         "errors": {"geometry": 1, "header_crc": 2, "payload_crc": 3, "chip": 4,
@@ -150,7 +156,10 @@ if ((args.output / "ddr-entry.bin").stat().st_size > 0x1000
     sys.exit("Wrapper exceeds its reserved SRAM interval.")
 manifest = {"boot0_sha256": expected, "load": 0x47000, "head_shadow": 0x8e000,
             "wrapper": 0x85000, "mailbox": 0x86000, "log": 0xe0000,
-            "log_character": log_address, "files": {}}
+            "log_character": log_address, "clock_ticks": ticks_address,
+            "clock_poll_limit": poll_limit_address,
+            # Mailbox word 15: CPU-L/DSU return to the ROM clock point.
+            "clock_point_word": 15, "files": {}}
 if args.variant:
     manifest["variant"] = args.variant
 if restore_manifest:

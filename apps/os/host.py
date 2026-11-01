@@ -226,6 +226,34 @@ def read_result(exchange, image, epoch, generation):
     return decode_result(raw, epoch, generation, limit)
 
 
+WATCHDOG_MARKER, WATCHDOG_VERSION, CRUMB_RTC = 0x31544457534f5243, 2, 0x07090000
+
+
+def watchdog_marker(image):
+    """{'mode', 'session_seconds'} of a returning image's watchdog, or None (apps/os/cpu-return.c).
+
+    The host arms that WDT0 mode before launch. The image restarts it while its
+    session is live, disarms it on its only normal return and records
+    breadcrumbs in RTC words (include/sunstone_crumb.h)."""
+    raw = Path(image).read_bytes() if isinstance(image, (str, Path)) else bytes(image)
+    elf = ELFFile(io.BytesIO(raw))
+    table = elf.get_section_by_name('.symtab')
+    found = [s for s in table.iter_symbols() if s.name == 'os_cpu_return_watchdog' and
+             s['st_shndx'] != 'SHN_UNDEF'] if table else []
+    if not found:
+        return None
+    require(len(found) == 1 and found[0]['st_size'] == 40 and type(found[0]['st_shndx']) is int,
+            'Watchdog marker geometry differs.')
+    section, address = elf.get_section(found[0]['st_shndx']), int(found[0]['st_value'])
+    offset = address - section['sh_addr']
+    data = section.data()[offset:offset + 40]
+    require(section['sh_type'] == 'SHT_PROGBITS' and len(data) == 40, 'Watchdog marker has no image bytes.')
+    magic, version, mode, rtc, seconds = struct.unpack('<5Q', data)
+    require((magic, version, rtc) == (WATCHDOG_MARKER, WATCHDOG_VERSION, CRUMB_RTC) and mode & 0xff0f == 1 and
+            1 <= mode >> 4 <= 11 and 1 <= seconds <= 600, 'Watchdog marker differs.')
+    return {'mode': mode, 'session_seconds': seconds}
+
+
 def backup_regions(image, uploads=()):
     """Union uploaded spans with the manifest WORK and OUTPUT regions."""
     info = image_manifest(image)

@@ -94,10 +94,15 @@ u32 restore_admit(void)
     return 0;
 }
 
+/* A mismatch does not stop the pass: every entry is written and read, so
+ * one board run names every register that does not hold its value. Words
+ * 11-13 keep the first mismatch, word 27 counts them and words 28-31 hold
+ * the next four as (profile index << 16) | value read. Any mismatch fails
+ * the restore, which then never resumes boot0. */
 static u32 restore_phy(u32 write)
 {
     const u8 *r = RECORD, *p = r+128;
-    u32 offset = 88, index = 0; /* Skip the admitted parameter run. */
+    u32 offset = 88, index = 0, mismatches = 0; /* Skip the admitted parameter run. */
     *MUX = 0;
     barrier();
     for (u32 run = 1; run < word(r+80); ++run) {
@@ -116,16 +121,16 @@ static u32 restore_phy(u32 write)
             }
             u16 actual = *reg;
             if ((actual ^ expected) & mask) {
-                MAIL[11] = address; MAIL[12] = expected; MAIL[13] = actual;
-                *MUX = 1; barrier();
-                return READBACK;
+                if (!mismatches) { MAIL[11] = address; MAIL[12] = expected; MAIL[13] = actual; }
+                else if (mismatches < 5) MAIL[27+mismatches] = index << 16 | actual;
+                MAIL[27] = ++mismatches;
             }
         }
         offset += (count*2+3)&~3u;
     }
     *MUX = 1;
     barrier();
-    return 0;
+    return mismatches ? READBACK : 0;
 }
 
 u32 restore_write(void)
@@ -134,8 +139,71 @@ u32 restore_write(void)
     return restore_phy(1);
 }
 
+/* Low word of the 24 MHz system counter, which boot0's own timer reads. */
+static u32 ticks(void)
+{
+    u32 low, high;
+    __asm__ volatile("isb\n\tmrrc p15, 0, %0, %1, c14" : "=r"(low), "=r"(high));
+    (void)high;
+    return low;
+}
+
+/* Quick memory check after init_DRAM. With the MMU off, AArch32 reaches
+ * DRAM only from 0x40000000 to 0xffffffff, the first 3 GiB of 12 GiB.
+ * Address lines: a unique word at DRAM and at DRAM + 2^k for k = 2..31, then
+ * the complements; a stuck or shorted line aliases two words. Data: sixteen
+ * 4 KiB windows 192 MiB apart, each pass written to all windows before any
+ * is read back: a rotating one, a rotating zero, address ^ 0xa55a5aa5 and its
+ * complement, so every data bit is driven both ways next to unequal
+ * neighbours. 65,616 distinct bytes; 262,392 bytes written and read. */
+#define DRAM 0x40000000u
+#define LINES 31u
+#define WINDOWS 16u
+#define STRIDE 0x0c000000u
+#define WORDS 1024u
+#define SEED 0xa55a5aa5u
+static volatile u32 *line(u32 n) { return (volatile u32 *)(DRAM + (n ? 1u << (n+1) : 0)); }
+static u32 fail(u32 read, volatile u32 *at, u32 expected, u32 actual)
+{
+    MAIL[10] = read; MAIL[11] = (u32)at; MAIL[12] = expected; MAIL[13] = actual;
+    return MEMORY;
+}
+static u32 memory_check(void)
+{
+    u32 read = 0;
+    for (u32 flip = 0; flip != 2; ++flip) {
+        for (u32 n = 0; n < LINES; ++n) *line(n) = 0x01010101u*(n+1) ^ (0u-flip);
+        barrier();
+        for (u32 n = 0; n < LINES; ++n) {
+            u32 expected = 0x01010101u*(n+1) ^ (0u-flip), actual = *line(n);
+            read += 4;
+            if (actual != expected) return fail(read, line(n), expected, actual);
+        }
+    }
+    for (u32 pass = 0; pass < 4; ++pass) {
+        u32 flip = 0u - (pass & 1), rotate = pass < 2;
+        for (u32 w = 0; w < WINDOWS; ++w) {
+            volatile u32 *at = (volatile u32 *)(DRAM + w*STRIDE), *end = at + WORDS;
+            for (u32 one = 1; at != end; ++at, one = one << 1 | one >> 31)
+                *at = (rotate ? one : (u32)at ^ SEED) ^ flip;
+        }
+        barrier();
+        for (u32 w = 0; w < WINDOWS; ++w) {
+            volatile u32 *at = (volatile u32 *)(DRAM + w*STRIDE), *end = at + WORDS;
+            for (u32 one = 1; at != end; ++at, one = one << 1 | one >> 31) {
+                u32 expected = (rotate ? one : (u32)at ^ SEED) ^ flip, actual = *at;
+                read += 4;
+                if (actual != expected) return fail(read, at, expected, actual);
+            }
+        }
+    }
+    MAIL[10] = read;
+    return 0;
+}
+
 u32 restore_check(u32 size)
 {
+    MAIL[25] = ticks();
     if (MAIL[9] != 1 || MAIL[8] != PROFILE_COUNT) return HOOK;
     if (size != 12288) return SIZE;
     /* Cache-off entry is mandatory. Check again after opaque boot0 calls. */
@@ -143,25 +211,7 @@ u32 restore_check(u32 size)
     __asm__ volatile("mrc p15, 0, %0, c1, c0, 0" : "=r"(control));
     if (control & 0x1005) return ENTRY;
     u32 failure = restore_phy(0);
-    if (failure) return failure;
-    /* Two 4 KiB pages, 32 walking-one passes and two address patterns.
-     * 8 KiB distinct memory, 278528 bytes written and read each. */
-    for (u32 pass = 0; pass < 34; ++pass) {
-        for (u32 page = 0; page < 2; ++page) {
-            volatile u32 *memory = (volatile u32 *)(0x41000000u+page*0x1000000u);
-            for (u32 i = 0; i < 1024; ++i)
-                memory[i] = pass < 32 ? 1u << pass : ((u32)&memory[i] ^ (pass == 32 ? 0xa55a5aa5u : 0x5aa5a55au));
-            barrier();
-            for (u32 i = 0; i < 1024; ++i) {
-                u32 expected = pass < 32 ? 1u << pass : ((u32)&memory[i] ^ (pass == 32 ? 0xa55a5aa5u : 0x5aa5a55au));
-                u32 actual = memory[i];
-                MAIL[10] += 4;
-                if (actual != expected) {
-                    MAIL[11] = (u32)&memory[i]; MAIL[12] = expected; MAIL[13] = actual;
-                    return MEMORY;
-                }
-            }
-        }
-    }
-    return 0;
+    if (!failure) failure = memory_check();
+    MAIL[26] = ticks();
+    return failure;
 }

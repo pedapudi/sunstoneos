@@ -13,7 +13,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
-from harness import Image, save
+from harness import Image, save, skip_crumbs
 
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--image',type=Path,required=True)
@@ -72,6 +72,8 @@ for case in cases:
     u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x41000000,0x1200000);u.mem_map(0x80000000,0x10000)
     for address,data in image.parts:
         if data:u.mem_write(address,data)
+    skip_crumbs(u,image)
+    u.mem_map(0x02050000,0x1000)  # WDT0: the live supervisor restarts the host-armed watchdog.
     def put(address,value,n=4):u.mem_write(address,int(value).to_bytes(n,'little'))
     def get(address,n=4):return int.from_bytes(u.mem_read(address,n),'little')
     def field(base,typ,name):return base+image.layouts[typ][name]
@@ -146,6 +148,7 @@ for case in cases:
         if case!='recognition-cutoff':put(image.address('return_state','/apps/os/gpu.c'),1)
         invoke('os_cpu_return_supervise')
         assert state['exit']==(None if case=='finalizing-window' else 0x73c)
+        if 'os_cpu_return_watchdog' in image.symbols:assert get(0x0205000c)==0x14af
         assert not invoke('os_gpu_return_ready') and not state['requests'] and not state['suspended']
         rows.append({'name':case,'passed':True,'terminal_detail':state['exit']})
         continue

@@ -29,7 +29,8 @@ class Model:
         self.image = image
         self.s = image.symbols
         self.uc = image.machine()
-        for a,n in ((0x03400000,0x200000),(0x07050000,0x10000),(0x08000000,0x10000)):
+        # Returning images disarm WDT0 (0x02050000) and keep breadcrumbs in RTC words (0x07090000).
+        for a,n in ((0x02050000,0x1000),(0x03400000,0x200000),(0x07050000,0x10000),(0x07090000,0x1000),(0x08000000,0x10000)):
             self.uc.mem_map(a,n)
         self.core = 0
         self.reg = [dict(scr_el3=0x530, mpidr_el1=0x81000000|(c<<8), currentel=12,
@@ -108,6 +109,9 @@ class Model:
             self.set('esr_el1',0x56000000|int(args[0][1:],0));self.set('elr_el1',a+4)
             self.set('spsr_el1',0)
             uc.reg_write(UC_ARM64_REG_PC,self.s['a733_cached_el1_vectors']+8*128)
+        elif ins.mnemonic=='eret':
+            # Only the EL1 vector's breadcrumb SVC returns by ERET in modeled paths.
+            uc.reg_write(UC_ARM64_REG_PC,self.get('elr_el1'))
         elif ins.mnemonic=='smc':
             self.set('esr_el3',0x5e000000);self.set('elr_el3',a+4)
             uc.reg_write(UC_ARM64_REG_PC,self.s['a733_cached_el3_vectors']+8*128)

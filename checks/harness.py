@@ -183,6 +183,26 @@ def system_register_access(word):
     return word & 0xffd00000 == 0xd5100000 or word & 0xffd80000 == 0xd5080000
 
 
+# SVC #0x5c0d: the EL1 breadcrumb call of returning images (include/sunstone_crumb.h).
+CRUMB_SVC = 0xd40b81a1
+
+
+def skip_crumbs(uc, image, crumbs=None):
+    """Step over each breadcrumb SVC in image as the EL1 vector would return from it.
+
+    Function-level models have no exception vectors, so an SVC would stop
+    emulation. When crumbs is a list, (stage, value) is appended for each call.
+    Return the hooked addresses.
+    """
+    from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_X0, UC_ARM64_REG_X1
+
+    def step(machine, address, size, unused):
+        if crumbs is not None:
+            crumbs.append((machine.reg_read(UC_ARM64_REG_X0), machine.reg_read(UC_ARM64_REG_X1)))
+        machine.reg_write(UC_ARM64_REG_PC, address + 4)
+    return hook_addresses(uc, instruction_sites(image.parts, lambda word: word == CRUMB_SVC), step)
+
+
 def hook_addresses(uc, addresses, callback):
     """Register callback as a Unicorn code hook on each address alone.
 

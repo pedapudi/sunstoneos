@@ -19,8 +19,13 @@ require = host.require
 
 def geometry(image):
     result = host.result_geometry(image)
-    return {'output_address': result['address'], 'output_bytes': result['bytes'],
-            'application_regions': host.backup_regions(image)}
+    record = {'output_address': result['address'], 'output_bytes': result['bytes'],
+              'application_regions': host.backup_regions(image)}
+    watchdog = host.watchdog_marker(image)
+    if watchdog is not None:
+        # Host-armed WDT0 and RTC breadcrumbs (include/sunstone_crumb.h).
+        record['watchdog'] = watchdog
+    return record
 
 
 def decode_output(raw, epoch, generation, output_limit=None):

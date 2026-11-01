@@ -254,7 +254,7 @@ The following reviewed implementations are integrated with software evidence:
     normal return passed. Sustained throughput, broader extents and fault
     recovery remain unqualified. No card write or manual reconnect occurred.
 - **DRAM training restore:** captures from ten lifetimes fix a per-board
-  restore set of 1,036 registers (`restore-set-v3.json`). Initialization without training takes
+  restore set of 941 registers (`restore-set-v4.json`). Initialization without training takes
   36 ms, against 5.1 s to train all four P-states. The restore itself is
   implemented and independently reviewed for RAM-only execution. Seventeen
   native instruction cases, nineteen host cases, both board record producers
@@ -262,6 +262,31 @@ The following reviewed implementations are integrated with software evidence:
   `~/.cache/sunstoneos/evidence/resume-dram-restore-1025/`. Physical memory
   validation remains outstanding; optional card-boot integration is implemented.
   The 36 ms figure excludes training and does not establish working restored memory.
+  Branch `work/dram-restore-1031` makes the FEL restore safe to try: the
+  runner arms WDT0 around the restore, and a failed or hung restore resets the
+  board to a new FEL instance and trains fully once (exit status 3). The quick
+  check now covers address lines 2–31 and sixteen windows below 4 GiB.
+  The first board run (port 3-1, 2026-10-31, warm start after a WDT0 reset)
+  failed the PHY readback at byte-lane register `0x73` (`0x0a9200e6`), which
+  reads 0 whatever is written, and fell back to a full training that
+  passed. The set now leaves that register and the byte-lane status offsets
+  out in every lane, and a readback failure reports every mismatching
+  register in one run. The wrapper now returns CPU-L and the DSU to the boot
+  ROM's 494 MHz words before it returns to FEL, because boot0's board setup
+  leaves them at 1014 and 780 MHz and a return to live FEL does not re-enter
+  the ROM. `tools/run-ddr.py` reads the CPU clock words after every run and
+  refuses builds without this return. Builds, both records and host results
+  are in `~/.cache/sunstoneos/evidence/dram-clock-point-1031/`; the commands
+  are in the
+  [first-test runbook](board-runbooks/dram-restore-test-1.md#commands-for-one-board).
+  The 941-entry restore then ran on port 3-1 (2026-10-31, after a WDT0
+  reset): 125 of 921 registers did not hold their write and the fallback
+  trained fully. The five the mailbox names are hardware copies of other
+  byte-lane registers and PHY-produced values; the other 120 are not named.
+  A diagnostic run that stores every entry's value before and after its
+  write decides whether this hook can restore training
+  ([runbook](board-runbooks/dram-restore-test-1.md#the-second-board-run-found-125-registers-that-do-not-hold-a-write)).
+  No board run has used the clock-return build.
 
 ## Current integration
 
@@ -832,7 +857,10 @@ over historical completion or qualification claims below.
   - `tools/integration-gate.py` with an explicit `--reason`.
 
   Then merge into `bringup` without piping `git merge`, checking for unmerged
-  paths, and push after a secret scan. No co-author lines.
+  paths, and push. The pre-push hook scans the outgoing commits for secrets
+  and assistant attribution; see
+  [Scan outgoing commits before a push](validation.md#scan-outgoing-commits-before-a-push).
+  No co-author lines.
 
 # Current work
 

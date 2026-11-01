@@ -8,17 +8,85 @@
      // All fatal paths converge here without using an EL1 stack or RAM.
      // Ordinary NS WB memory is safe only after every EL3 context adopted it.
      mrs x3, sctlr_el3
-@@ -497,10 +498,16 @@
+@@ -399,6 +400,46 @@
+     add x5, x5, #128
+     subs x6, x6, #1
+     b.ne .Lstorage_adopted
++    // Breadcrumb fault words (include/sunstone_crumb.h): the first fault or
++    // exit after entry, in RTC words that survive a watchdog reset. Only after
++    // the checks above proved this core's EL3 identity map; the success SMC
++    // left earlier. x20 is 4 for an exception, as in the report. Uses x2-x7.
++    mrs x3, esr_el3
++    lsr x4, x3, #26
++    cmp x4, #0x17
++    ccmp x20, #0, #0, eq
++    b.eq .Lcrumb_fault_done
++    mov x2, #0x07090000
++    ldr w5, [x2, #0x110]
++    cbnz w5, .Lcrumb_fault_done
++    mrs x5, mpidr_el1
++    ubfx x5, x5, #8, #3
++    mov w6, #0xfa000000
++    orr w6, w6, w5, lsl #20
++    orr w6, w6, w18, lsl #8
++    and w7, w20, #0xff
++    orr w6, w6, w7
++    cmp x4, #0x17
++    b.ne .Lcrumb_fault_el3
++    orr w6, w6, #0x10000
++    str w21, [x2, #0x114]
++    mrs x7, elr_el1
++    str w7, [x2, #0x118]
++    mrs x7, far_el1
++    str w7, [x2, #0x11c]
++    b .Lcrumb_fault_info
++.Lcrumb_fault_el3:
++    orr w6, w6, #0x30000
++    str w3, [x2, #0x114]
++    mrs x7, elr_el3
++    str w7, [x2, #0x118]
++    mrs x7, far_el3
++    str w7, [x2, #0x11c]
++.Lcrumb_fault_info:
++    dsb sy
++    str w6, [x2, #0x110]
++    dsb sy
++.Lcrumb_fault_done:
+     // Use this core's reserved Secure Device stack regardless of the fault's SP.
+     adrp x3, a733_cpu_entry_stacks
+     add x3, x3, :lo12:a733_cpu_entry_stacks
+@@ -497,10 +538,37 @@
      stp x0, x1, [sp, #-16]!
      mrs x0, esr_el1
      and x0, x0, #0xffff
 +    mov x1, #0x735
 +    cmp x0, x1
 +    b.eq .Lqualification
++    mov x1, #0x5c0d
++    cmp x0, x1
++    b.eq .Lcrumb
      cmp x0, #119
      b.eq .Lexit
      ldp x0, x1, [sp], #16
      b FreeRTOS_SWI_Handler
++.Lcrumb:
++    // sunstone_crumb(stage, value) (include/sunstone_crumb.h): LAST and TIME
++    // in RTC words, interrupts masked by the exception, all registers kept.
++    stp x2, x3, [sp, #-16]!
++    ldp x0, x1, [sp, #16]
++    bfi w1, w0, #16, #16
++    mov x2, #0x07090000
++    str w1, [x2, #0x104]
++    mrs x3, cntpct_el0
++    ubfx x3, x3, #10, #29
++    mrs x0, mpidr_el1
++    ubfx x0, x0, #8, #3
++    orr w3, w3, w0, lsl #29
++    str w3, [x2, #0x10c]
++    dsb sy
++    ldp x2, x3, [sp], #16
++    ldp x0, x1, [sp], #16
++    eret
 +.Lqualification:
 +    ldp x0, x1, [sp], #16
 +    b a733_qualification_terminal_privileged

@@ -6,6 +6,7 @@
 #include "../board/session.h"
 #include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
+#include "sunstone_crumb.h"
 #include "boot.h"
 #ifdef SUNSTONE_NEWLIB
 #include "runtime.h"
@@ -137,12 +138,14 @@ static void main_entry(void *unused)
     const struct ss_input_fact *facts=os_session_inputs(&count);
     for(unsigned i=0;i<m->region_count;++i)if(m->regions[i].kind==SS_REGION_INPUT){
         if(input>=count)ss_fail(0x751);
+        sunstone_crumb(SUNSTONE_CRUMB_ASSET_START,input);
         struct storage_digest h;storage_digest_init(&h);
         const uint8_t *p=grant.regions[i].base;size_t left=grant.regions[i].bytes;
         while(left){size_t n=left>4096?4096:left;
             if(ss_live()!=1||!storage_digest_add(&h,p,n))ss_fail(0x752);
             p+=n;left-=n;ss_progress();}
         uint8_t hash[32];storage_digest_end(&h,hash);
+        sunstone_crumb(SUNSTONE_CRUMB_ASSET_DONE,input);
         if(memcmp(hash,facts[input++].sha256,32))ss_fail(0x753);
     }
     uint64_t now=a733_smp_counter()/24;

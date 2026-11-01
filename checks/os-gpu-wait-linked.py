@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
-from harness import Image
+from harness import Image, skip_crumbs
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_PC
 
@@ -36,6 +36,7 @@ for case in ('missing-job-reply', 'late-job-reply', 'accepted-open-no-reply', 'i
     for address, data in image.parts:
         if data:
             uc.mem_write(address, data)
+    skip_crumbs(uc, image)
 
     def put(address, value, size=4):
         uc.mem_write(address, int(value).to_bytes(size, 'little'))

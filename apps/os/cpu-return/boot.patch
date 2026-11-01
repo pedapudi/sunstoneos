@@ -1,20 +1,89 @@
 --- input
 +++ output
-@@ -2,6 +2,8 @@
+@@ -2,6 +2,9 @@
  #include "a733_device_memory_layout.h"
  #endif
  #include "cached.h"
 +#include "cpu-return-runtime.h"
 +#include "cpu-return.h"
++#include "sunstone_crumb.h"
  #include "session.h"
  #include "irq_table.h"
  #include "a733_cpu_continue.h"
-@@ -91,6 +93,8 @@
+@@ -21,11 +24,19 @@
+ _Noreturn void a733_smp_stop(unsigned status,uint64_t detail)
+ {
+     __asm__ volatile("msr daifset, #15":::"memory");
++    sunstone_crumb_el3(SUNSTONE_CRUMB_EL3_STOP,(uint32_t)(status<<12|(detail&0xfff)));
+     RESULT->completed_mask=status?0:255;
+     RESULT->status=status;RESULT->detail=detail;RESULT->end_counter=a733_smp_counter();
+     barrier();RESULT->stage=5;barrier();
+-    /* Supervised terminal halt retains all CPUs, registers and reservations.
+-     * No reset occurs. USB may be unavailable; manual reconnection owns recovery. */
++    /* Under the host-armed WDT0 (include/sunstone_crumb.h), shorten it to its
++     * 0.5 s interval and restart it: the board returns to FEL through the
++     * watchdog reset with the breadcrumbs kept. Any other WDT0 state is left,
++     * and the halt below then retains all CPUs, registers and reservations. */
++    if((read32(0x02050014)&0xffff)==SUNSTONE_CRUMB_WATCHDOG_MODE){
++        write32(0x02050014,0x16aa0001u);write32(SUNSTONE_CRUMB_WDT_RESTART,0x14afu);
++    }
++    /* Supervised terminal halt. Without the host-armed watchdog no reset
++     * occurs; USB may be unavailable and manual reconnection owns recovery. */
+     for(;;)__asm__ volatile("wfe");
+ }
+ static int boot_state(void)
+@@ -69,14 +80,18 @@
+     uint64_t *out=(uint64_t *)&admission;
+     for(unsigned i=0;i<sizeof(admission)/8;++i)out[i]=in[i];
+     barrier();
++    sunstone_crumb_el3_start(admission.epoch);
++    sunstone_crumb_el3(SUNSTONE_CRUMB_EL3_ENTRY,0);
+     if(!boot_state() || !a733_smp_contract_valid(&admission,a733_smp_counter()) ||
+        source->magic!=admission.magic || source->generation!=admission.generation ||
+        (RESULT->magic==A733_SMP_RESULT_MAGIC && RESULT->generation==admission.generation))
+         a733_smp_stop(1,1);
+-    /* Supervised admission never arms a timer or installs a reset redirect.
+-     * Configuration readback does not claim independent fault recovery. */
+-    if((read32(0x02050014)&1) || (read32(0x02050010)&0x100) ||
+-       read32(0x070501c0) || read32(0x070501d4))a733_smp_stop(1,2);
++    /* The host armed WDT0 in this profile's mode, system reset and reset
++     * output (include/sunstone_crumb.h), with no reset redirect. The return
++     * path disarms it; any stop or hang ends in a watchdog reset to FEL. */
++    if((read32(0x02050014)&0xffff)!=SUNSTONE_CRUMB_WATCHDOG_MODE || (read32(0x02050010)&0xffff)!=1 ||
++       (read32(0x02050018)&0xffff)!=2 || read32(0x070501c0) || read32(0x070501d4))a733_smp_stop(1,2);
++    sunstone_crumb_el3(SUNSTONE_CRUMB_EL3_ADMITTED,0);
+     volatile uint64_t *r=(volatile uint64_t *)RESULT;
+     for(unsigned i=0;i<sizeof(*RESULT)/8;++i)r[i]=0;
+     RESULT->magic=A733_SMP_RESULT_MAGIC;RESULT->epoch=admission.epoch;
+@@ -91,7 +106,10 @@
      if(!board_identity_prepare(admission.startup_deadline))a733_smp_stop(3,0x30a);
      if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
          a733_smp_stop(3,0x308);
 +    if(!a733_qualification_boot(admission.epoch,admission.diagnostic_deadline))a733_smp_stop(4,0x735);
 +    os_cpu_return_spi_save();
      a733_cached_prepare(admission.epoch,admission.startup_deadline,admission.diagnostic_deadline,admission.lease);
++    sunstone_crumb_el3(SUNSTONE_CRUMB_EL3_MONITOR,0);
      /* GICv3 security/routing sequence follows the existing EL3 monitor. */
      uint32_t ctlr=read32(0x03400000),banks=(read32(0x03400004)&31)+1;
+     if(ctlr&(1u<<6))a733_smp_stop(2,2);
+@@ -108,6 +126,7 @@
+     int routed=a733_irq_table_route(admission.startup_deadline,a733_smp_counter);if(routed!=A733_IRQ_TABLE_ROUTED)a733_smp_stop(3,routed==A733_IRQ_TABLE_RWP_TIMEOUT?0x311:0x310);
+     write32(0x03400000,(ctlr&~7u)|0x33);wait_clear(0x03400000,1u<<31);
+     if((read32(0x03400000)&0x73)!=0x33)a733_smp_stop(2,3);
++    sunstone_crumb_el3(SUNSTONE_CRUMB_EL3_GIC,0);
+     uint64_t mpidr;__asm__ volatile("mrs %0, mpidr_el1":"=r"(mpidr));
+     for(unsigned c=1;c<8;++c) {
+         targets[c-1]=c;
+@@ -118,10 +137,12 @@
+            !a733_cpu_entry_native_init(&owners[c-1],&power[c-1],admission.epoch))a733_smp_stop(2,c+16);
+         while(a733_cpu_entry_poll(&owners[c-1])==A733_CPU_ENTRY_PENDING) {}
+         if(owners[c-1].state!=A733_CPU_ENTRY_DISPATCHED)a733_smp_stop(2,c+32);
++        sunstone_crumb_el3(SUNSTONE_CRUMB_EL3_SECONDARY,c);
+     }
+     /* The vendor's cold-boot security setup, before any core enters EL1:
+      * the secondaries wait for the primary's continuation below. */
+     a733_el3_security_setup();
++    sunstone_crumb_el3(SUNSTONE_CRUMB_EL3_SECURITY,0);
+     RESULT->stage=2;barrier();
+     a733_cpu_primary_continue(admission.epoch);
+     a733_smp_stop(2,4);

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Maintain checks/index.json and run the pure-host checks that cover changed paths.
+"""Classify every check and run the pure-host checks that cover changed paths.
 
-The index is derived from each check's own text: the first docstring line, the
+The index is generated from the checkout on every call and is never stored in
+the repository. It is derived from each check's own text: the first docstring line, the
 component documents that name the check, required command-line arguments, the
 local cache areas it reads, and whether it can reach USB. A check is pure-host
 when it is a runnable script that needs no USB access, no cached evidence or
 build output, and no required argument other than a new output directory.
 
-  check-index.py --write                 regenerate checks/index.json
-  check-index.py --verify                fail when the index misses, invents or misdescribes a check
+  check-index.py --json                  print the index as JSON
+  check-index.py --verify                fail when a check cannot be classified or the index is tracked
   check-index.py --changed PATH...       list checks whose text or fixtures name a changed path
   check-index.py --changed PATH... --run --output DIR
                                          also run the selected pure-host checks, one new
@@ -37,7 +38,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness
 
 ROOT = Path(__file__).resolve().parents[1]
-INDEX = ROOT / 'checks/index.json'
+# The index was once a tracked file at this path; --verify refuses its return.
+RETIRED_INDEX = 'checks/index.json'
 # Required options the runner may satisfy with a new, empty directory.
 OUTPUT_OPTIONS = {'--output'}
 # Top-level ~/.cache/sunstoneos area named by a path literal or by a CACHE/cache variable.
@@ -145,8 +147,15 @@ def entry(path, documents):
 
 
 def generate():
+    """Map each check name to its entry; a check that cannot be parsed stops with its name."""
     documents = mentions()
-    return {path.name: entry(path, documents) for path in checks()}
+    index = {}
+    for path in checks():
+        try:
+            index[path.name] = entry(path, documents)
+        except (SyntaxError, UnicodeDecodeError, ValueError) as error:
+            raise SystemExit(f'checks/{path.name}: cannot be classified: {error}')
+    return index
 
 
 @functools.lru_cache(maxsize=None)
@@ -198,27 +207,26 @@ def select(index, changed):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     action = parser.add_mutually_exclusive_group(required=True)
-    action.add_argument('--write', action='store_true')
+    action.add_argument('--json', action='store_true')
     action.add_argument('--verify', action='store_true')
     action.add_argument('--changed', nargs='+', metavar='PATH')
     parser.add_argument('--run', action='store_true', help='run the selected pure-host checks')
     parser.add_argument('--output', type=Path, help='new directory for --run results')
     parser.add_argument('--timeout', type=int, default=900, help='seconds per check')
     args = parser.parse_args()
-    if args.write:
-        INDEX.write_text(json.dumps(generate(), indent=1, sort_keys=True) + '\n')
+    index = generate()
+    if args.json:
+        print(json.dumps(index, indent=1, sort_keys=True))
         return
-    index = json.loads(INDEX.read_text())
     if args.verify:
-        current = generate()
-        missing = sorted(set(current) - set(index))
-        invented = sorted(set(index) - set(current))
-        stale = sorted(name for name in set(index) & set(current) if index[name] != current[name])
-        for label, names in (('unindexed', missing), ('absent', invented), ('stale', stale)):
-            for name in names:
-                print(f'{label}: checks/{name}')
-        if missing or invented or stale:
-            raise SystemExit('checks/index.json is out of date; regenerate it with checks/check-index.py --write')
+        problems = [f'{name}: listed in NOT_PURE but absent from checks/' for name in sorted(set(NOT_PURE) - set(index))]
+        if subprocess.run(['git', 'ls-files', '--error-unmatch', RETIRED_INDEX], cwd=ROOT,
+                          capture_output=True).returncode == 0:
+            problems.append(f'{RETIRED_INDEX}: tracked; the index is generated on demand, so remove it with git rm --cached')
+        for problem in problems:
+            print(problem)
+        if problems:
+            raise SystemExit('the check index failed verification')
         print(f'PASS: {len(index)} checks indexed, {sum(e["pure_host"] for e in index.values())} pure-host')
         return
     chosen = select(index, args.changed)
