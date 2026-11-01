@@ -598,14 +598,22 @@ def host_round_trip(elf, binary, out):
     import contextlib
     import io
     bundle = out / 'host-bundle'
-    shutil.rmtree(bundle, ignore_errors=True)
+    bundle.mkdir(parents=True, exist_ok=True)
+    prior = bundle / 'prior-evidence.txt'
+    if not prior.exists():
+        prior.write_text('preserved evidence')
+    before = prior.read_bytes()
     log = out / 'run-log.json'
     accepted = {'by': 'model user', 'date': '2026-10-22', 'residuals': list(host.RESIDUALS)}
     log.write_text(json.dumps({'session': 1, 'runs': [], 'acceptance': accepted}))
-    bundle.mkdir(parents=True)
-    with contextlib.redirect_stdout(io.StringIO()):
-        host.prepare(ap.Namespace(elf=elf, image=binary, run_log=log, output=bundle, mask=[], budget=30.0))
+    prepared_args = ap.Namespace(elf=elf, image=binary, run_log=log, output=bundle, mask=[], budget=30.0)
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        host.prepare(prepared_args)
+    assert prior.read_bytes() == before and prepared_args.output.parent == bundle
+    bundle = prepared_args.output
     p = json.loads((bundle / 'prepared.json').read_text())
+    assert json.loads(printed.getvalue())['output_directory'] == str(bundle.resolve()) == p['output_directory']
     assert p['entry'] == 0x41000000 and p['contract_address'] == 0x41005000 and p['budget_ticks'] == 20 * TICK
     assert p['mask'] == 0x1f and p['slice'] == [32, 6144] and p['groups'] == 23 and p['acceptance'] == accepted
     m = machine.Machine(elf)

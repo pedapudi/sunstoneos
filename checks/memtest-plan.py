@@ -191,62 +191,62 @@ def refused_contract(log, lib):
 
 
 def upload_gate(lib):
-    """Runs that need review block every later contract, in any session, until
-    the log holds a review entry; an abort exclusion alone lets a new session
-    continue."""
+    """Unsafe native outcomes cannot be cleared by a review note."""
     def log(session, *runs, **extra):
-        return {'session': session, 'acceptance': ACCEPTED, 'excluded': [], 'runs': list(runs), **extra}
+        return {'session': session, 'excluded': [], 'runs': list(runs), **extra}
     passed = {'session': 1, 'sequence': 1, 'status': 'pass', 'resume': host.DRAM_BASE + 160 * BLOCK}
     review = {'by': 'model user', 'date': '2026-10-22'}
     cases = {}
-    for name, run in (('scan', {'status': 'stopped', 'stop': 'scan'}),
-                      ('decode', {'status': 'stopped', 'stop': 'decode'}),
+    for name, run in (('decode', {'status': 'stopped', 'stop': 'decode'}),
                       ('digest', {'status': 'stopped', 'stop': 'digest'}),
                       ('dma_phase', {'status': 'pass', 'dma_phase': 1}),
-                      ('untrusted', {'status': 'untrusted'}),
-                      ('missing', {})):
+                      ('untrusted', {'status': 'untrusted'}), ('missing', {})):
         run = {'session': 1, 'sequence': 2, **run}
-        # The stop blocks the same session and the next one.
         assert refused_contract(log(1, passed, run), lib), name
-        assert refused_contract(log(2, passed, run), lib), name
-        # A review entry releases it; an incomplete one does not.
-        assert refused_contract(log(2, passed, {**run, 'reviewed': {'by': 'model user'}}), lib), name
-        assert refused_contract(log(2, passed, {**run, 'reviewed': review}), lib) is None, name
-        cases[name] = 'blocks every session until reviewed'
-    # An abort exclusion: blocked in its own session, released by a boot0 upload.
-    abort = {'session': 1, 'sequence': 2, 'status': 'untrusted', 'abort_excluded': True}
+        assert refused_contract(log(1, passed, {**run, 'reviewed': review}), lib), name
+        if name in ('decode', 'digest'):
+            assert refused_contract(log(2, passed, {**run, 'reviewed': review}), lib), name
+        else:
+            # This is future input only; native idle/reset and failed-instance
+            # checks still decide whether the new session may execute.
+            assert refused_contract(log(2, passed, run), lib) is None, name
+        cases[name] = 'review cannot clear unsafe current state'
+    scan = {'session': 1, 'sequence': 2, 'status': 'stopped', 'stop': 'scan',
+            'scan_page': host.DRAM_BASE + 1000 * BLOCK}
+    assert refused_contract(log(1, passed, scan, excluded=[(1000,1001)]), lib)
+    assert refused_contract(log(2, passed, scan), lib)
+    assert refused_contract(log(2, passed, scan, excluded=[(1000,1001)]), lib) is None
+    assert refused_contract(log(2, passed, {**scan, 'scan_page': 1}, excluded=[(1000,1001)]), lib)
+    cases['scan'] = 'new session and bounded physical block exclusion required'
+    abort = {'session': 1, 'sequence': 2, 'status': 'untrusted', 'progress': host.DRAM_BASE + 1000 * BLOCK, 'phase': 0}
     assert refused_contract(log(1, passed, abort), lib)
-    assert refused_contract(log(2, passed, abort, excluded=[(1000, 1002)]), lib) is None
-    cases['abort_excluded'] = 'blocks its session only'
-    # A mismatch, a refusal or a deadline stop blocks its own session until reviewed.
-    for name, run in (('fail', {'status': 'fail', 'resume': host.DRAM_BASE + 32 * BLOCK}),
-                      ('refused', {'status': 'refused'}), ('budget', {'status': 'stopped', 'stop': 'budget'})):
+    assert refused_contract(log(2, passed, abort), lib)
+    assert refused_contract(log(2, passed, abort, excluded=[(999,1001)]), lib) is None
+    cases['abort'] = 'progress block and predecessor remain excluded'
+    mismatch = {'session': 1, 'sequence': 2, 'status': 'fail',
+                'mismatches': [{'address': host.DRAM_BASE + 1000 * BLOCK}]}
+    assert refused_contract(log(1, passed, mismatch), lib)
+    assert refused_contract(log(1, passed, mismatch, excluded=[(1000,1001)]), lib) is None
+    cases['mismatch'] = 'known physical fault remains excluded'
+    assert refused_contract(log(2, passed, {'session': 1, 'sequence': 2, 'status': 'fail', 'reviewed': review}), lib)
+    for name, run in (('refused', {'status': 'refused'}), ('budget', {'status': 'stopped', 'stop': 'budget'})):
         run = {'session': 1, 'sequence': 2, **run}
-        assert refused_contract(log(1, passed, run), lib), name
-        assert refused_contract(log(2, passed, run), lib) is None, name
-        contract, _ = host.next_contract(log(1, passed, {**run, 'reviewed': review}), lib, [], 20)
-        assert contract.sequence == 3 and not contract.mask & host.MASK['signature'], name
-        cases[name] = 'blocks its session until reviewed'
-    # A reviewed failure resumes from the last resume address of the session.
-    contract, _ = host.next_contract(log(1, passed, {'session': 1, 'sequence': 2, 'status': 'refused',
-                                                     'reviewed': review}), lib, [], 20)
-    assert contract.slice_start == 160
+        contract, _ = host.next_contract(log(1, passed, run), lib, [], 20)
+        assert contract.sequence == 3 and contract.slice_start == 160
+        assert not contract.mask & host.MASK['signature']
+        cases[name] = 'safe bounded state resumes without review'
     return cases
 
 
 def acceptance_gate(lib):
-    """No contract without the user's acceptance of every residual."""
+    """Residual notes are optional and cannot waive actual native admission."""
     runs = {'session': 1, 'excluded': [], 'runs': []}
-    assert 'acceptance' in refused_contract(runs, lib)
-    assert 'acceptance' in refused_contract({**runs, 'acceptance': {'residuals': list(host.RESIDUALS)}}, lib)
-    refusals = {}
-    for residual in host.RESIDUALS:
-        partial = {**ACCEPTED, 'residuals': [r for r in host.RESIDUALS if r != residual]}
-        message = refused_contract({**runs, 'acceptance': partial}, lib)
-        assert message and residual in message, (residual, message)
-        refusals[residual] = message
-    assert refused_contract({**runs, 'acceptance': ACCEPTED}, lib) is None
-    return sorted(refusals)
+    assert refused_contract(runs, lib) is None
+    assert host.acceptance(runs) is None
+    for note in ({}, {'residuals': []}, {'by': 'optional note'}):
+        assert refused_contract({**runs, 'acceptance': note}, lib) is None
+        assert host.acceptance({**runs, 'acceptance': note}) == note
+    return 'optional notes; current native admission remains mandatory'
 
 
 def march_eviction(lib, geometry=None, reverse_down=False):
