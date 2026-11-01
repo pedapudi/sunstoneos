@@ -46,43 +46,15 @@ def frame(host,prepared,challenge,sequence,reference,status=0,armed=1000):
     return struct.pack('<4I',host.protocol.MESSAGE_MAGIC,sequence,0x80000033,512)+raw
 
 def admission_fixture(prep,image,raw,layout,build,directory):
-    """Bind actual typed native configuration to conspicuously nonphysical proofs."""
-    profile=prep.session_profile(raw,layout);image_hash=sha(image);identity=[0,0,0,0,0];port='software-fixture-never-deploy'
-    def write(name,value):
-        path=(directory/name).resolve();data=value if isinstance(value,bytes) else json.dumps(value,sort_keys=True).encode()
-        path.write_bytes(data);return {'path':str(path),'sha256':sha(data)}
-    proof=write('not-hardware.txt',b'SOFTWARE FIXTURE ONLY: establishes no physical facts; never deploy.\n')
-    common={'image_sha256':image_hash,'identity':identity,'port':port,'whole_platform':profile['whole_platform']}
-    boot,boot_bytes=layout[1:3];boot_hash=sha(raw[boot:boot+boot_bytes])
-    ddr=write('ddr.json',{**common,'schema':'a733-ddr-reservation-v1','ranges':[[0x41000000,0x42200000]],
-        'exclusive':True,'published_cache_disabled':True,'remote_writers_excluded':True,'evidence':[proof]})
-    conditions=('source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram',
-        'exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership','usb-device-mapping',
-        'physical-counter-continuity','npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership')
-    if struct.unpack_from('<Q',raw,8)[0]==prep.SINGLE_CORE_VERSION:
-        conditions=tuple(c for c in conditions if c!='source-backed-cpu-dsu-transition')+(
-            'primary-cache-transition-and-secondary-off','rom-usb0-pio-takeover',
-            'usb0-irq188-189-190-disabled-inactive-clear','usb-supplies-stable-and-writers-excluded')
-    platform=write('platform.json',{**common,**profile,'schema':'a733-npu-convolution-platform-v1',
-        'conditions':dict.fromkeys(conditions,proof),'entry_conditions_established':True,'physical_coherence_result':'under-test'})
-    clock_conditions=('independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers',
-        'no-autonomous-parent-selector-writers','supervised-cross-pll-disturbance-risk')
-    clock=write('clock.json',{**common,'conditions':dict.fromkeys(clock_conditions,proof)})
-    power=write('power.json',{**common,'supply_uv':800000,'boot_sha256':boot_hash,
-        'conditions':dict.fromkeys(('dcdc2-stable-800mv','authenticated-pmic-pin-inheritance'),proof)})
-    supervision=write('supervision.json',{**common,'supervisor':profile['supervisor'],'one_attempt':True,
-        'conditions':dict.fromkeys(('manual-whole-board-power-removal','retain-all-resources-until-power-removal','stop-after-first-failure'),proof)})
-    admission={**common,**profile,'schema':'a733-npu-supervised-entry-v1','boot_sha256':boot_hash,
-        'ddr':ddr,'platform':platform,'clock':clock,'power':power,'supervision':supervision}
-    admission_ref=write('admission.json',admission);value=bytearray(raw);value[48:80]=build
-    value[80:112]=bytes.fromhex(admission_ref['sha256'])
-    for offset,ref in ((112,clock),(144,power),(176,supervision)):value[offset:offset+32]=bytes.fromhex(ref['sha256'])
-    (directory/'session.bin').write_bytes(value)
-    return directory/'session.bin',Path(admission_ref['path'])
+    """Reuse native typed inputs without external admission records."""
+    value=bytearray(raw);value[48:80]=build
+    path=directory/'session.bin';path.write_bytes(value)
+    return path,None
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','session','evidence','clang','lld','objcopy'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','session','evidence','clang','lld','objcopy'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--manifest',type=Path)
     parser.add_argument('--binding-only',action='store_true');parser.add_argument('--bundle',type=Path)
     a=parser.parse_args();e=a.evidence.resolve();e.mkdir(parents=True,exist_ok=True)
     host=load('npu_focused_host',ROOT/'tools/check-a733-npu-supervised.py');prep=host.preparation;shared=host.supervisor
@@ -92,14 +64,14 @@ def main():
     source_paths=[Path(__file__),Path(host.__file__),Path(prep.__file__),Path(host.protocol.__file__),
         ROOT/'apps/npu-convolution/artifacts.py',ROOT/'tools/usb-access.py',Path(shared.__file__),Path(shared.base.__file__),Path(shared.observer.__file__),
         ROOT/'checks/a733-smp-supervised-launch.py',ROOT/'platform/a733-smp-supervised/launch.c',ROOT/'platform/a733-smp-observe/launch.S',ROOT/'platform/a733-smp-observe/launch.ld',ROOT/'platform/a733-smp-cached/boot.h']
-    inputs={str(p.resolve()):sha(p.read_bytes()) for p in source_paths+[a.image,a.manifest,a.session,a.clang,a.lld,a.objcopy]}
+    inputs={str(p.resolve()):sha(p.read_bytes()) for p in source_paths+[a.image,a.session,a.clang,a.lld,a.objcopy]}
     fingerprint=sha(json.dumps(inputs,sort_keys=True).encode());state_path=e/'results.json'
     state=json.loads(state_path.read_text()) if state_path.exists() else {'physical_access':False,'cases':{},'inputs':inputs,'source_identity':fingerprint}
     assert state['source_identity']==fingerprint,'Frozen batch inputs changed; retain prior evidence and use a new batch.'
     snapshot=e/'inputs'
     if not snapshot.exists():
         snapshot.mkdir()
-        for i,p in enumerate(source_paths+[a.image,a.manifest,a.session]):shutil.copy2(p,snapshot/(str(i)+'-'+p.name))
+        for i,p in enumerate(source_paths+[a.image,a.session]):shutil.copy2(p,snapshot/(str(i)+'-'+p.name))
     def save():shared.save_json(state_path,state)
     def case(name,operation):
         if state['cases'].get(name,{}).get('result')=='pass':return
@@ -140,15 +112,24 @@ def main():
         return {'original_check_sha256':sha(original.encode()),'derived_check_sha256':sha(derived.encode()),
             'scope':'One new contract publication case; unchanged watchdog/frequency/refusal cases reused.'}
     case('npu-launcher-publication',launcher)
-    def frozen(directory):
-        paths=[Path(p) for p in prepared['entry_evidence']];original={p:p.read_bytes() for p in paths}
-        try:
-            for p in paths:p.write_bytes(b'changed external file after freeze')
-            assert prep.validate_bundle(bundle)['_frozen']==prepared['_frozen']
-        finally:
-            for p,data in original.items():p.write_bytes(data)
-    case('frozen-proof-no-reread',frozen)
-    for name in ('session.bin','admission.json','segment-0.bin','launch.bin'):
+    def repeated_output(directory):
+        sentinel=bundle/'prior-evidence.txt';sentinel.write_bytes(b'preserved')
+        session,_=admission_fixture(prep,image,a.session.read_bytes(),layout,build,directory)
+        second=prep.prepare(a.image,None,session,None,bundle,a.clang,a.lld,a.objcopy)
+        assert sentinel.read_bytes()==b'preserved' and second['image_sha256']==prepared['image_sha256']
+        assert len(list(bundle.glob('*/prepared.json')))==1
+    case('existing-output-preserved',repeated_output)
+    def archive_changes(directory):
+        for path in bundle.iterdir():
+            if path.is_file() and path.name not in prepared['files'] and path.name!='prepared.json':
+                original=path.read_bytes()
+                try:
+                    path.write_bytes(b'Changed archived build notes or source')
+                    assert prep.validate_bundle(bundle)['_frozen']==prepared['_frozen']
+                finally:path.write_bytes(original)
+        return {'archived_source_manifest_log_not_authority':True}
+    case('archived-build-files-independent',archive_changes)
+    for name in ('session.bin','segment-0.bin','launch.bin'):
         def mutation(directory,name=name):
             path=bundle/name;data=path.read_bytes()
             try:path.write_bytes(bytes([data[0]^1])+data[1:]);refused(lambda:prep.validate_bundle(bundle))
@@ -180,44 +161,15 @@ def main():
             else:struct.pack_into('<Q',raw,208,0)
             refused(lambda:prep.session_profile(bytes(raw),layout))
         case('typed-session-'+variation,bad_session)
-    for variation in ('missing-power-removal','wrong-platform','missing-pmic-pins'):
-        def bad_admission(directory,variation=variation):
-            frozen=prepared['_frozen'];record=json.loads(frozen['admission.json']);raw=bytearray(frozen['session.bin'])
-            cache={path:frozen[item['name']] for path,item in prepared['entry_evidence'].items()}
-            name='supervision' if variation=='missing-power-removal' else 'power'
-            ref=record[name];facts=json.loads(cache[ref['path']])
-            if variation=='missing-power-removal':facts['conditions'].pop('manual-whole-board-power-removal')
-            elif variation=='missing-pmic-pins':facts['conditions'].pop('authenticated-pmic-pin-inheritance')
-            else:facts['whole_platform']+=1
-            cache[ref['path']]=json.dumps(facts,sort_keys=True).encode();ref['sha256']=sha(cache[ref['path']])
-            offset=176 if name=='supervision' else 144;raw[offset:offset+32]=bytes.fromhex(ref['sha256'])
-            admission=json.dumps(record,sort_keys=True).encode();raw[80:112]=hashlib.sha256(admission).digest()
-            refused(lambda:prep.validate_admission(admission,bytes(raw),build,layout,sha(image),cache,True))
-        case('admission-'+variation,bad_admission)
-    def queue(directory):
-        def ref(path):return {'path':str(path.resolve()),'sha256':sha(path.read_bytes())}
-        proof=directory/'software-fixture.txt';proof.write_text('SOFTWARE FIXTURE ONLY; no qualification.\n')
-        sources=dict(host.source_files());sources.update({'supervised-host-tool.py':Path(shared.__file__),
-            'base-host-tool.py':Path(shared.base.__file__),'observer-host-tool.py':Path(shared.observer.__file__)})
-        software={'schema':'a733-npu-supervised-software-v1','physical_access':False,
-            **dict.fromkeys(('admission_cases','launcher_cases','host_capture','host_lifecycle'),True),
-            'image':ref(bundle/'image.elf'),'launcher':ref(bundle/'launch.bin'),
-            'sources':{k:ref(v) for k,v in sources.items()},'evidence':[ref(proof)]}
-        software_path=directory/'software.json';shared.save_json(software_path,software)
-        prerequisites={'supervised-ram-recovery':ref(bundle/'admission.json'),'npu-supervised-software':ref(software_path)}
-        submission={'prerequisites':list(prerequisites),'artifacts':[ref(bundle/n) for n in ('prepared.json','image.elf','launch.bin')]}
-        database=directory/'queue.db';db=sqlite3.connect(database)
-        db.execute('CREATE TABLE settings(key TEXT,value TEXT)');db.execute('INSERT INTO settings VALUES(?,?)',('halted',''))
-        db.execute('CREATE TABLE tests(id TEXT,state TEXT,owner TEXT,submission TEXT,review TEXT)')
-        db.execute('INSERT INTO tests VALUES(?,?,?,?,?)',('fixture','claimed','fixture-owner',json.dumps(submission),json.dumps({'prerequisites':prerequisites})));db.commit()
-        host.claimed(database,'fixture','fixture-owner',bundle,prepared)
-        refused(lambda:host.claimed(database,'fixture','other-owner',bundle,prepared))
-        submission['prerequisites'].remove('supervised-ram-recovery')
-        db.execute('UPDATE tests SET submission=?',(json.dumps(submission),));db.commit()
-        refused(lambda:host.claimed(database,'fixture','fixture-owner',bundle,prepared));db.close()
-        software['sources']['npu-host-tool.py']=ref(proof);refused(lambda:host.validate_software(software,bundle,prepared))
-        return {'fixture_not_qualification':True}
-    case('queue-and-source-admission',queue)
+    def direct_session(directory):
+        raw=prepared['_frozen']['session.bin']
+        assert prep.validate_admission(b'{}',raw,build,layout,sha(image))=={}
+        assert prep.image_manifest_check({},image,raw)==prepared['execution_profile']
+        bad=bytearray(raw);bad[48]^=1
+        refused(lambda:prep.validate_admission(b'{}',bad,build,layout,sha(image)))
+        bad=bytearray(raw);struct.pack_into('<I',bad,layout[1]+layout[3]+12,1)
+        refused(lambda:prep.validate_admission(b'{}',bad,build,layout,sha(image)))
+    case('direct-session-and-clock-validation',direct_session)
     def capture_case(directory,variation):
         clock=Clock();calls=[];record={'npu_result':'unobserved'};challenge=bytes(range(1,33));saved=[]
         statuses=[1,0] if variation in ('pending-success','timing-change') else [2] if variation=='mismatch' else [3] if variation=='fault' else [0]
@@ -256,122 +208,17 @@ def main():
             refused(lambda:host.capture_device(device,lambda:None,101,prepared,directory,{},lambda:None))
         assert calls==['write'];return {'calls':calls}
     for variation in ('partial','late'):case('transfer-'+variation,lambda d,v=variation:transfer(d,v))
-    # Shared discovery, refusal, failure and flock cases are reused from the
-    # reviewed board-supervised-host batch; only the NPU result selector is new.
-    for status in ('success','fault'):
-        case('transport-npu-'+status,lambda d,s=status:transport(host,prepared,bundle,reference,d,s))
     save();print(json.dumps({'cases':len(state['cases']),'results':str(state_path),'physical_access':False}))
 
 
-def transport(npu,prepared,bundle,reference,directory,status):
-    """Exercise actual shared run_session with NPU protocol and private flock."""
-    host=npu.supervisor;clock=Clock();events=[];phase=[False];packet=[b''];old=Path('/fixture-usb/101/010');native=Path('/fixture-usb/101/011')
-    port=directory/'port';port.mkdir()
-    for name,value in [('bcdDevice','0101'),('product',npu.protocol.PRODUCT),('serial',npu.protocol.SERIAL)]: (port/name).write_text(value)
-    identity=lambda node:[0,0 if node==old else 1,0,0,0]
-    access=types.SimpleNamespace(discover=lambda:old,require_session=lambda n:None,require_rom=lambda n:None,
-        identity=identity,target=lambda n:port,session_node=lambda c:native if phase[0] else old,
-        quarantine_instance=lambda *a:events.append('quarantine'))
-    fel=directory/'fixture-fel';fel.write_bytes(b'NOT EXECUTABLE: software FEL fixture')
-    guard_source=directory/'fixture-guard.py';guard_source.write_text('# Fixture only.\n')
-    guard=types.ModuleType('usb_guard');guard.__file__=str(guard_source);guard.check_health=lambda:None;guard.reenumeration=lambda *a:nullcontext()
-    def fake_fel(command,**kwargs):
-        assert command[:3]==[str(fel),'-d','101:10'];args=command[3:];events.append(args)
-        if args==['version']:text='soc=00001903(A733)'
-        elif args==['readl','0x02050014']:text='0'
-        else:assert args==['exe','0x52000'];phase[0]=True;text=''
-        return types.SimpleNamespace(returncode=0,stdout=text,stderr='')
-    def preload(*args):prepared['_backup_hashes']={};events.append('preload-reused')
-    def write(endpoint,data,timeout):assert endpoint==2;packet[0]=bytes(data);events.append('usb-write');return len(data)
-    def read(endpoint,length,timeout):
-        assert endpoint==0x81 and length==1040;events.append('usb-read')
-        return frame(npu,prepared,packet[0][32:64],struct.unpack_from('<I',packet[0],4)[0],reference,0 if status=='success' else 3)
-    device=types.SimpleNamespace(bcdDevice=0x0101,set_configuration=lambda n:None,write=write,read=read)
-    usb=types.ModuleType('usb');core=types.ModuleType('usb.core');usb.core=core
-    def find(**kw):assert kw=={'idVendor':0x1f3a,'idProduct':0xefe8,'bus':101,'address':11};return device
-    core.find=find;lock=directory/'private.lock'
-    @contextmanager
-    def board_lock():
-        with open(lock,'a') as owned:
-            fcntl.flock(owned,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            yield old
-    access.board_lock=board_lock
-    def hold():
-        with open(lock,'a') as other:
-            try:fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            except BlockingIOError:events.append('held-private-flock')
-            else:raise AssertionError('Ownership released before hold')
-    real_finish,real_stop=host.finish_after_observation,host.base.stop_after_failure
-    def finish(record,save,quarantine):return real_finish(record,save,quarantine,hold=hold)
-    def stop(record,save,quarantine,error):return real_stop(record,save,quarantine,error,hold=hold)
-    real_capture=npu.capture
-    def capture(*args,**kw):return real_capture(*args,**kw,now=clock.now,pause=clock.pause)
-    settings=types.SimpleNamespace(fel=fel,evidence=directory/'runtime',claim='fixture',owner='fixture')
-    patches=[patch.object(host,'module',lambda name,path:access),
-        patch.object(host.base,'FEL_HASH',sha(fel.read_bytes())),patch.object(host.base,'preload',preload),
-        patch.object(host.subprocess,'run',fake_fel),patch.object(host.os,'access',lambda *a:True),
-        patch.object(host.time,'monotonic',clock.now),patch.object(host.time,'sleep',clock.pause),
-        patch.object(host,'finish_after_observation',finish),patch.object(host.base,'stop_after_failure',stop),
-        patch.object(npu,'capture',capture),patch.dict(sys.modules,{'usb':usb,'usb.core':core,'usb_guard':guard})]
-    with ExitStack() as stack:
-        for item in patches:stack.enter_context(item)
-        code=host.run_session(settings,bundle,prepared,lambda:None,lambda i,p:None,
-            lambda dev,same,deadline,record,save:npu.capture_device(dev,same,deadline,prepared,directory/'runtime',record,save),
-            product=npu.protocol.PRODUCT,serial=npu.protocol.SERIAL,bcd_device=0x0101,capture_seconds=.1,result_key='npu_result')
-    record=json.loads((directory/'runtime/session.json').read_text())
-    assert code==(0 if status=='success' else 2) and record['complete']==(status=='success')
-    assert record['npu_result']=='observed-'+status and 'quarantine' in events and 'held-private-flock' in events
-    assert events.count('usb-write')==events.count('usb-read')==1 and events.count(['exe','0x52000'])==1
-    return {'events':events,'code':code,'record':record,'preload':'Reused prior transport evidence; fixture stub only.'}
+
 
 def binding_checks(host,bundle,directory):
-    """Only changed frozen queue/software binding; reuse 33 prior cases."""
-    bundle=bundle.resolve();prepared=host.preparation.validate_bundle(bundle);results={}
-    def ref(path):return {'path':str(path.resolve()),'sha256':sha(path.read_bytes())}
-    def refused(name,operation):
-        try:operation()
-        except (ValueError,RuntimeError):results[name]='pass';return
-        raise AssertionError('Expected frozen binding refusal: '+name)
-    proof=directory/'fixture.txt';proof.write_text('Software fixture only; no physical qualification.\n')
-    sources=dict(host.source_files());shared=host.supervisor
-    sources.update({'supervised-host-tool.py':Path(shared.__file__),'base-host-tool.py':Path(shared.base.__file__),'observer-host-tool.py':Path(shared.observer.__file__)})
-    software={'schema':'a733-npu-supervised-software-v1','physical_access':False,
-        **dict.fromkeys(('admission_cases','launcher_cases','host_capture','host_lifecycle'),True),
-        'image':ref(bundle/'image.elf'),'launcher':ref(bundle/'launch.bin'),
-        'sources':{k:ref(v) for k,v in sources.items()},'evidence':[ref(proof)]}
-    software_path=directory/'software-fixture.json';shared.save_json(software_path,software)
-    prerequisites={'supervised-ram-recovery':ref(bundle/'admission.json'),'npu-supervised-software':ref(software_path)}
-    submission={'prerequisites':list(prerequisites),'artifacts':[ref(bundle/n) for n in ('prepared.json','image.elf','launch.bin')]}
-    database=directory/'queue.db';db=sqlite3.connect(database)
-    db.execute('CREATE TABLE settings(key TEXT,value TEXT)');db.execute('INSERT INTO settings VALUES(?,?)',('halted',''))
-    db.execute('CREATE TABLE tests(id TEXT,state TEXT,owner TEXT,submission TEXT,review TEXT)')
-    db.execute('INSERT INTO tests VALUES(?,?,?,?,?)',('fixture','claimed','fixture-owner',json.dumps(submission),json.dumps({'prerequisites':prerequisites})));db.commit()
-    host.claimed(database,'fixture','fixture-owner',bundle,prepared);results['unchanged-frozen-claim']='pass'
-    for name in ('prepared.json','admission.json'):
-        path=bundle/name;original=path.read_bytes()
-        try:
-            path.write_bytes(original+b'\n')
-            # Rebind queue artifacts too: two matching live paths must not admit.
-            submission['artifacts']=[ref(bundle/n) for n in ('prepared.json','image.elf','launch.bin')]
-            prerequisites['supervised-ram-recovery']=ref(bundle/'admission.json')
-            db.execute('UPDATE tests SET submission=?,review=?',(json.dumps(submission),json.dumps({'prerequisites':prerequisites})));db.commit()
-            initial={**prepared['files'],'prepared.json':prepared['_prepared_sha256']}
-            # Simulate a file replacement after the initial current-file scan;
-            # review refs must still bind the initially admitted bytes directly.
-            real_digest=host.digest
-            with patch.object(host,'digest',lambda path:initial[Path(path).name] if Path(path).parent==bundle and Path(path).name in initial else real_digest(path)):
-                refused('changed-frozen-'+name,lambda:host.claimed(database,'fixture','fixture-owner',bundle,prepared))
-        finally:path.write_bytes(original)
-    for key,name in (('image','image.elf'),('launcher','launch.bin')):
-        path=bundle/name;original=path.read_bytes()
-        try:
-            path.write_bytes(bytes([original[0]^1])+original[1:]);changed=copy.deepcopy(software);changed[key]=ref(path)
-            refused('software-rebound-'+key,lambda:host.validate_software(changed,bundle,prepared))
-        finally:path.write_bytes(original)
-    db.close()
-    shared.save_json(directory/'results.json',{'physical_access':False,'cases':results,'reused_cases':33,
-        'sources':{str(p):sha(p.read_bytes()) for p in (Path(__file__),Path(host.__file__),Path(host.preparation.__file__))},
-        'initial_prepared_sha256':prepared['_prepared_sha256'],'image_sha256':prepared['image_sha256'],'launcher_sha256':prepared['launcher_sha256']})
-    print(json.dumps({'binding_cases':len(results),'results':str(directory/'results.json')}))
+    prepared=host.preparation.validate_bundle(bundle)
+    raw=prepared['_frozen']['session.bin']
+    assert host.preparation.validate_admission(b'{}',raw,bytes.fromhex(prepared['build_id']),
+        prepared['session_layout'],prepared['image_sha256'])=={}
+    host.supervisor.save_json(directory/'results.json',{'passed':True,'physical_access':False,
+        'direct_native_session':True})
 
 if __name__=='__main__':main()

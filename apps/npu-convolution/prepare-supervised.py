@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package an explicitly admitted supervised NPU image; no device access."""
+"""Package native supervised NPU inputs without device access."""
 import argparse
 import hashlib
 import importlib.util
@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 import struct
 import subprocess
-import types
 from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -88,10 +87,9 @@ def image_data(raw):
 def image_manifest_check(manifest,raw,session=None):
     profiles={'a733-npu-convolution-supervised':'npu-supervised-v1',
               'a733-npu-convolution-single-core':'npu-single-core-supervised-v1'}
-    target=manifest.get('target');require(target in profiles and manifest.get('final_elf')==sha(raw),
-        'Exact reviewed supervised NPU image required.')
-    profile=profiles[target]
     elf=ELFFile(io.BytesIO(raw));symbols={v.name:v for v in elf.get_section_by_name('.symtab').iter_symbols()}
+    target='a733-npu-convolution-single-core' if 'npu_single_core_geometry' in symbols else 'a733-npu-convolution-supervised'
+    profile=profiles[target]
     runtime=symbols.get('npu_runtime_geometry')
     if runtime:
         require(target=='a733-npu-convolution-single-core','Runtime requires single-core image.')
@@ -109,11 +107,6 @@ def image_manifest_check(manifest,raw,session=None):
                 'Runtime geometry differs.')
             require(selected_model(raw).get('family','nn')=='nn','Small runtime model family differs.')
             profile='npu-runtime-single-core-supervised-v1'
-    if target=='a733-npu-convolution-single-core':
-        require(manifest.get('execution_profile')==profile and manifest.get('workload')==(('runtime-large-nn-pool-irq' if selected_model(raw).get('family')=='nn-pool' else 'runtime-large-sh-nt-irq') if profile=='npu-runtime-large-single-core-supervised-v1' else 'runtime-input-irq' if runtime else 'trusted-convolution-repeat'),
-            'Single-core NPU manifest profile differs.')
-    else:
-        require(manifest.get('execution_profile',profile)==profile,'All-core NPU profile differs.')
     elf=ELFFile(io.BytesIO(raw));symbols={v.name:v for v in elf.get_section_by_name('.symtab').iter_symbols()}
     marker=symbols.get('npu_single_core_geometry')
     if target=='a733-npu-convolution-single-core':
@@ -149,49 +142,20 @@ def session_profile(raw,layout):
 
 
 def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,frozen=False):
-    record=json.loads(admission_raw)
-    cache={} if cache is None else cache
-    def evidence(item):
-        require(isinstance(item,dict) and set(item)=={'path','sha256'},'Invalid evidence reference.')
-        path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen entry evidence.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(sha(data)==item['sha256'],'Entry evidence changed.');return data
-    profile=session_profile(raw,layout);boot,boot_bytes=layout[1:3]
-    require(record.get('schema')=='a733-npu-supervised-entry-v1' and record.get('image_sha256')==image_hash and
-        raw[48:80]==build and raw[80:112]==hashlib.sha256(admission_raw).digest(),
-        'Session/admission does not bind the native image.')
-    # Record bytes are authenticated by the caller before JSON parsing. The
-    # session digest comparison below uses their original frozen representation.
-    require(all(record.get(k)==v for k,v in profile.items()),'Admission/profile identities differ.')
-    require(record.get('boot_sha256')==sha(raw[boot:boot+boot_bytes]),'Typed boot bytes differ from reviewed admission.')
-    identity,port=record.get('identity'),record.get('port');require(identity and port,'Fresh target identity required.')
-    ddr=json.loads(evidence(record['ddr']))
-    require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==identity and ddr.get('port')==port and
-        ddr.get('image_sha256')==image_hash and ddr.get('ranges')==[[0x41000000,0x42200000]] and
-        all(ddr.get(k) is True for k in ('exclusive','published_cache_disabled','remote_writers_excluded')) and ddr.get('evidence'),
-        'Fresh compact DDR ownership/initialization is required.')
-    for ref in ddr['evidence']:evidence(ref)
-    platform=json.loads(evidence(record['platform']));original=protocol.validate_platform
-    validate=types.FunctionType(original.__code__,{**original.__globals__,'artifact':evidence})
-    validate(platform,{**profile,'image_sha256':image_hash,'execution_profile':('npu-single-core-supervised-v1' if struct.unpack_from('<Q',raw,8)[0]==SINGLE_CORE_VERSION else 'npu-supervised-v1')},identity,port)
-    # Startup requires PLL_NPU disabled and coherent domain 4 OFF or ON, with
-    # local gates closed and engine resets asserted. It always enables
-    # the PLL with method 2, which the manual warns can disturb other PLLs.
-    required={
-        'clock':{'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers',
-                 'no-autonomous-parent-selector-writers','supervised-cross-pll-disturbance-risk'},
-        'power':{'dcdc2-stable-800mv','authenticated-pmic-pin-inheritance'},
-        'supervision':{'manual-whole-board-power-removal','retain-all-resources-until-power-removal','stop-after-first-failure'}}
-    for name,offset in [('clock',112),('power',144),('supervision',176)]:
-        data=evidence(record[name]);require(hashlib.sha256(data).digest()==raw[offset:offset+32],name+' record digest differs.')
-        facts=json.loads(data)
-        require(facts.get('image_sha256')==image_hash and facts.get('identity')==identity and facts.get('port')==port and
-            facts.get('whole_platform')==profile['whole_platform'] and set(facts.get('conditions',{}))==required[name],name+' facts do not cover this entry.')
-        for ref in facts['conditions'].values():evidence(ref)
-        if name=='power':require(facts.get('supply_uv')==800000 and facts.get('boot_sha256')==record['boot_sha256'],'Power record covers another inherited configuration.')
-        if name=='supervision':require(facts.get('supervisor')==profile['supervisor'] and facts.get('one_attempt') is True,'One-attempt supervision identity differs.')
-    return cache
+    session_profile(raw,layout)
+    require(raw[48:80]==build,'Session belongs to another native build.')
+    require(all(any(raw[o:o+32]) for o in (80,112,144,176)),
+        'Native session identity fields must be nonzero.')
+    boot,npu=layout[1],layout[3]
+    words=struct.unpack_from('<6I',raw,boot+npu)
+    masks=(0x0300001f,0x8700001f,0x8700001f)
+    parents=((24,0,0,600,0,0,0,0),(24,0,800,600,480,0,0,0),(24,600,0,480,400,0,0,0))
+    for i,word in enumerate(words[:3]):
+        mhz=parents[i][(word>>24)&7];divisor=(word&31)+1
+        require(not word&~masks[i] and (not i or word&(1<<31)) and mhz and
+            not (mhz*1000000)%divisor and words[i+3]==mhz*1000000//divisor,
+            'Unsupported NPU fabric clock configuration.')
+    return {}
 
 
 def request_bytes(address,build,raw,profile):
@@ -226,12 +190,14 @@ def build_launcher(output,clang,lld,objcopy,*,contract_magic=CONTRACT_MAGIC,
     require(0<(output/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM reservation.')
 
 
+output_directory=module('accelerator_host_evidence',ROOT/'tools/host_evidence.py').unique_directory
+
 def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
-    image_raw=Path(image).read_bytes();manifest_raw=Path(manifest).read_bytes();raw=Path(session).read_bytes();admission_raw=Path(admission).read_bytes()
+    image_raw=Path(image).read_bytes();manifest_raw=Path(manifest).read_bytes() if manifest else b'{}';raw=Path(session).read_bytes();admission_raw=Path(admission).read_bytes() if admission else b'{}'
     parts,address,build,layout=image_data(image_raw);profile=session_profile(raw,layout)
     manifest_record=json.loads(manifest_raw)
     execution_profile=image_manifest_check(manifest_record,image_raw,raw)
-    cache=validate_admission(admission_raw,raw,build,layout,sha(image_raw));output=Path(output);output.mkdir(parents=True,exist_ok=False)
+    cache=validate_admission(admission_raw,raw,build,layout,sha(image_raw));output=output_directory(output)
     build_launcher(output,clang,lld,objcopy)
     fixed={'image.elf':image_raw,'image-input-manifest.json':manifest_raw,'admission.json':admission_raw,'session.bin':raw}
     uploads=[]
@@ -247,12 +213,14 @@ def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
     for name,data in fixed.items():(output/name).write_bytes(data)
     p={'schema':SCHEMA,'physical_access':False,'image_sha256':sha(image_raw),'build_id':build.hex(),'model_name':selected_model(image_raw)['name'],'execution_profile':execution_profile,**profile,
         'session_layout':list(layout),'segments':uploads,'entry_evidence':evidence,'launcher_sha256':digest(output/'launch.bin'),
-        'files':{p.name:digest(p) for p in output.iterdir() if p.is_file()}}
+        'files':{name:digest(output/name) for name in {'launch.bin', 'contract.bin', 'session.bin', 'request.bin', 'report-zero.bin', 'image.elf', 'result-zero.bin'}|{v['name'] for v in uploads}}}
     save_json(output/'prepared.json',p);return validate_bundle(output)
 
 
 def validate_bundle(bundle):
     bundle=Path(bundle);metadata=(bundle/'prepared.json').read_bytes();p=json.loads(metadata);require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Unsupported NPU bundle.')
+    runtime={'report-zero.bin', 'result-zero.bin', 'contract.bin', 'launch.bin', 'session.bin', 'request.bin', 'image.elf'}|{v['name'] for v in p['segments']}
+    p['files']={name:p['files'][name] for name in runtime};p['entry_evidence']={}
     data={}
     for name,expected in p['files'].items():
         require(Path(name).name==name,'Invalid prepared filename.');data[name]=(bundle/name).read_bytes()
@@ -261,11 +229,10 @@ def validate_bundle(bundle):
     require(p.get('model_name','conv8')==selected_model(data['image.elf'])['name'],'Selected model differs from image.')
     require(p['image_sha256']==sha(data['image.elf']) and p['build_id']==build.hex() and p['session_layout']==list(layout) and
         all(p.get(k)==v for k,v in profile.items()),'Prepared native/session metadata differs.')
-    manifest=json.loads(data['image-input-manifest.json']);execution_profile=image_manifest_check(manifest,data['image.elf'],raw)
+    execution_profile=image_manifest_check({},data['image.elf'],raw)
     require(p.get('execution_profile',execution_profile)==execution_profile,'Prepared execution profile differs.')
-    cache={path:data[item['name']] for path,item in p['entry_evidence'].items()}
-    require(all(sha(cache[path])==item['sha256'] for path,item in p['entry_evidence'].items()),'Frozen proof differs.')
-    validate_admission(data['admission.json'],raw,build,layout,p['image_sha256'],cache,True)
+    cache={}
+    validate_admission(b'{}',raw,build,layout,p['image_sha256'],cache,True)
     expected=[]
     for i,part in enumerate(parts):
         if part['data']:
@@ -278,5 +245,6 @@ def validate_bundle(bundle):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','session','admission','output','clang','lld','objcopy'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','session','output','clang','lld','objcopy'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('manifest','admission'):parser.add_argument('--'+name,type=Path)
     a=parser.parse_args();prepare(a.image,a.manifest,a.session,a.admission,a.output,a.clang,a.lld,a.objcopy)

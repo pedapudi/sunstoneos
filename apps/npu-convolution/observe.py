@@ -126,25 +126,7 @@ def capture_until_recovery(exchange, prepared, challenge, evidence, record, save
     return True
 
 
-def validate_platform(value, prepared, identity, port):
-    require(value.get('schema')=='a733-npu-convolution-platform-v1' and value.get('identity')==identity and
-            value.get('port')==port and value.get('image_sha256')==prepared['image_sha256'], 'Observer platform admission differs.')
-    required={'source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram',
-              'exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership',
-              'usb-device-mapping','physical-counter-continuity','npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership'}
-    if prepared.get('execution_profile')=='npu-single-core-supervised-v1':
-        required.remove('source-backed-cpu-dsu-transition')
-        required.update({'primary-cache-transition-and-secondary-off','rom-usb0-pio-takeover',
-            'usb0-irq188-189-190-disabled-inactive-clear','usb-supplies-stable-and-writers-excluded'})
-    require(set(value.get('conditions',{}))==required, 'Observer entry conditions are incomplete.')
-    for item in value['conditions'].values(): artifact(item)
-    require(value.get('usb_evidence')==prepared['usb_evidence'] and value.get('npu_evidence')==prepared['npu_evidence'] and
-            value.get('command_admission')==prepared['command_admission'] and
-            value.get('pmic_evidence')==prepared['pmic_evidence'] and value.get('pin_evidence')==prepared['pin_evidence'] and
-            value.get('epoch')==prepared['epoch'] and value.get('generation')==prepared['generation'] and
-            value.get('lease')==prepared['lease'],'Platform evidence does not bind immutable NPU/PMIC/pin/USB admission.')
-    require(value.get('entry_conditions_established') is True and value.get('physical_coherence_result')=='under-test',
-            'Platform record must establish entry conditions without claiming the experiment already passed.')
+
 
 
 def main(argv=None):

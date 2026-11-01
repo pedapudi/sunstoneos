@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
-"""Prepare the linked NPU board image with MODEL-NOT-PHYSICAL authority and check its admission.
+"""Check direct NPU board preparation and the native session validators.
 
-The board prefix is the reviewed G2D native fixture's board session with its
-qualification digests bound to a model note and an NPU-capable fabric record
-(every fabric clock at 24 MHz). The NPU record, its four evidence records and
-the admission are written here with physical_authority false; production
-preparation must refuse them, and only physical_authority is substituted to
-build the bundle. The image's actual record and contract validators,
-private session copy and getter run under Unicorn on the prepared session,
-and the prepared SRAM launcher runs in the AArch32 model of
-checks/sram_launcher.py. The Python and C validators must agree on the
-accepted record and on each refusal. No board, USB device or queue is used.
+Unicorn executes the linked session and contract validators, private session
+copy, constructors and SRAM launcher. The checks retain clock, thermal,
+ownership, upload-integrity and bounded-return refusals. No device is opened.
 """
 import argparse,hashlib,importlib.util,json,struct,sys
 from pathlib import Path
@@ -34,72 +27,58 @@ def main():
     p.add_argument('--clang',type=Path,default=Path('/usr/lib/llvm-21/bin/clang'))
     p.add_argument('--lld',type=Path,default=Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
     p.add_argument('--output',type=Path,required=True)
-    a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
+    p.add_argument('--bundle-only',action='store_true')
+    a=p.parse_args();a.output=module('board_host_evidence',ROOT/'tools/host_evidence.py').unique_directory(a.output)
     prep=module('npu_board_host_prepare',ROOT/'apps/npu-board/prepare.py')
     fixture=a.output/'MODEL-NOT-PHYSICAL-fixture';fixture.mkdir()
     image=a.image.read_bytes();ih=hashlib.sha256(image).hexdigest()
     catalogue=prep._image_parts(image)[3]
-    target=dict(identity='npu-board-software-only-model',port='no-physical-port',image_sha256=ih,physical_authority=False,modeled=True)
-    def record(name,value):
-        data=json.dumps(value,sort_keys=True,indent=2).encode()+b'\n';path=(fixture/name).resolve();path.write_bytes(data)
-        return dict(path=str(path),sha256=hashlib.sha256(data).hexdigest())
-    note=record('MODEL-NOT-PHYSICAL.json',dict(**target,purpose=__doc__))
+    identity=hashlib.sha256(b'Native input fixture; no physical qualification').digest()
     board=bytearray(BOARD_FIXTURE.read_bytes()[:592])
-    for offset in (80,216,248,280):board[offset:offset+32]=bytes.fromhex(note['sha256'])
+    for offset in (80,216,248,280):board[offset:offset+32]=identity
     struct.pack_into('<3I',board,488,0,0x80000000,0x80000000);struct.pack_into('<3I',board,500,24000000,24000000,24000000)
     owners=struct.unpack_from('<4Q',board,456);board_pck=struct.unpack_from('<I',board,540)[0]
     owner,command,supervisor=0x4e505542,0x434d4441,0x53555056;pck=(board_pck+4)%16
     assert owner not in owners
-    def ddr(name,ranges):
-        return record(name,dict(**target,schema='a733-ddr-reservation-v1',exclusive=True,published_cache_disabled=True,
-            remote_writers_excluded=True,ranges=ranges,evidence=[note]))
-    npu_ddr=ddr('npu-ddr.json',[[0x48000000,0x79000000]])
-    facts={}
-    for key,conditions in prep.CONDITIONS.items():
-        extra={'admission':{'ddr_sha256':npu_ddr['sha256']},'power':{'supply_uv':800000},
-               'supervision':{'supervisor':supervisor,'one_attempt':True}}.get(key,{})
-        facts[key]=record('npu-'+key+'.json',dict(**target,schema='a733-npu-board-'+key+'-v1',reviewed=True,
-            conditions={c:note for c in sorted(conditions)},**extra))
     raw=bytearray(board)+bytearray(prep.SESSION_BYTES-592)
     struct.pack_into('<6Q',raw,592,prep.SESSION_MAGIC,prep.SESSION_VERSION,prep.SESSION_BYTES,owner,command,supervisor)
     struct.pack_into('<2I',raw,640,pck,0);raw[648:680]=catalogue
-    for key,offset in prep.DIGESTS.items():raw[offset:offset+32]=bytes.fromhex(facts[key]['sha256'])
-    thermal_facts={
-        'initial':['exclusive_ths_and_irq71','remote_writers_excluded','no_inherited_thermal_service','security_access_authorized','gic_route_owned','boot_lineage_reviewed'],
-        'electrical':['avcc_adc_digital_supplies_stable','sid_shadows_readable','device_mappings_verified','no_physical_aliases'],
-        'clocks':['stable_apb1_ref_osc','no_clock_reset_writers','gpadc_consumers_excluded'],
-        'supervision':['whole_board_power_removal','permanent_retention','no_reuse','one_attempt']}
-    thermal={}
+    for key,offset in prep.DIGESTS.items():raw[offset:offset+32]=hashlib.sha256(key.encode()).digest()
     struct.pack_into('<2Q',raw,808,0x544853,91)
-    for i,(key,required) in enumerate(thermal_facts.items()):
-        thermal[key]=record('thermal-'+key+'.json',dict(**target,schema='a733-thermal-'+key+'-v1',
-            reviewed=True,**{k:True for k in required}))
-        raw[824+32*i:856+32*i]=bytes.fromhex(thermal[key]['sha256'])
+    for i,key in enumerate(('initial','electrical','clocks','supervision')):
+        raw[824+32*i:856+32*i]=hashlib.sha256(key.encode()).digest()
     struct.pack_into('<2I4B',raw,952,1,12000000,1,31,31,0)
     for i in range(5):struct.pack_into('<3H',raw,964+6*i,1400,1600,1000)
     raw=bytes(raw);th=hashlib.sha256(raw).hexdigest()
     prep.session_check(raw);prep.embedded_reference(image,raw)
-    conditions=('source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma',
-        'remote-writers-excluded','usb-clock-power-reset-ownership','usb-device-mapping','physical-counter-continuity')
-    platform=record('platform.json',dict(**target,schema='a733-smp-observer-platform-v1',entry_conditions_established=True,
-        physical_coherence_result='under-test',conditions={k:note for k in conditions}))
-    admission=dict(**target,schema='a733-npu-board-supervised-entry-v1',reservation=struct.unpack_from('<Q',raw,200)[0],
-        session_template_sha256=th,ddr=ddr('ddr.json',[[0x41000000,0x42200000]]),npu_ddr=npu_ddr,platform=platform,thermal=thermal,**facts,
-        whole_board_power_removal=True,no_resource_reuse_before_power_removal=True,
-        recovery=dict(mode='manual-usb-reconnect',demonstrated_fel=True,explicit_reconnect_before_resumption=True,
-            preserve_microsd=True,one_attempt=True,evidence=[note]))
-    record('admission.json',admission);(fixture/'session-template.bin').write_bytes(raw)
+    (fixture/'session-template.bin').write_bytes(raw)
     cases={}
-    try:prep.validate_admission(admission,ih,th,raw)
-    except ValueError as error:assert 'Modeled NPU board evidence' in str(error),error
-    else:raise AssertionError('Production accepted modeled physical authority')
-    cases['production-refuses-modeled-authority']=True
-    bundle=a.output/'MODEL-NOT-PHYSICAL-bundle'
-    with patch.object(prep,'physical_authority',lambda value:None):
-        prepared=prep.prepare(a.image,a.manifest,fixture/'admission.json',fixture/'session-template.bin',bundle,
-            a.clang,a.lld,0,[a.input],[a.reference])
-        prep.validate_bundle(bundle)
-    cases['modeled-bundle-prepared-and-revalidated']=True
+    assert prep.validate_admission({},ih,th,raw)=={}
+    cases['native-session-without-process-records']=True
+    bundle=a.output/'bundle'
+    prepared=prep.prepare(a.image,None,None,fixture/'session-template.bin',bundle,
+        a.clang,a.lld,0,[a.input],[a.reference])
+    prep.validate_bundle(bundle)
+    cases['bundle-prepared-and-revalidated']=True
+    for path in bundle.iterdir():
+        if path.is_file() and path.name not in prepared['files'] and path.name!='prepared.json':
+            original=path.read_bytes()
+            try:
+                path.write_bytes(b'Changed archived build notes or source')
+                assert prep.validate_bundle(bundle)['files']==prepared['files']
+            finally:path.write_bytes(original)
+    cases['archived-build-files-independent']=True
+    upload=bundle/'segment-0.bin';original=upload.read_bytes()
+    try:
+        upload.write_bytes(original+b'x')
+        harness.refused(lambda:prep.validate_bundle(bundle),'bundle input changed',ValueError)
+    finally:upload.write_bytes(original)
+    cases['changed-upload-refused']=True
+    if a.bundle_only:
+        (a.output/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,
+            cases=cases,bundle=str(bundle),native_cases_reused=True))+'\n')
+        print('PASS NPU board runtime files; archived inputs independent and changed upload refused')
+        return
     session=(bundle/'session.bin').read_bytes();contract_page=(bundle/'contract.bin').read_bytes()
     assert contract_page[224:256]==hashlib.sha256(session).digest() and contract_page[256:288]==session[80:112]
     assert struct.unpack_from('<Q',(bundle/'request.bin').read_bytes(),0)[0]==prep.REQUEST_MAGIC

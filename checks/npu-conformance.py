@@ -248,4 +248,18 @@ with tempfile.TemporaryDirectory() as temporary:
     harness.refused(lambda: stage('missing', lambda t: t['models']['conv8'].update(nbg='absent')),
                     'No such file', FileNotFoundError)
 
+# An existing output keeps its bytes; staging uses a unique child.
+from types import SimpleNamespace
+from unittest.mock import patch
+with tempfile.TemporaryDirectory() as temporary:
+    output=Path(temporary)/'existing';output.mkdir();marker=output/'old.txt';marker.write_bytes(b'prior evidence')
+    staged_paths=[]
+    def stop_before_container(work):
+        staged_paths.append(work)
+        raise RuntimeError('fixture stops before container')
+    with patch.object(tool,'stage',stop_before_container):
+        harness.refused(lambda:tool.run(SimpleNamespace(output=output)),'fixture stops before container',RuntimeError)
+    assert marker.read_bytes()==b'prior evidence' and staged_paths[0].parent.parent==output
+    assert staged_paths[0].parent!=output
+
 print('PASS NPU conformance harness: 84-job plan, 55 line vectors, coverage, comparisons, verdicts, timing and pins')

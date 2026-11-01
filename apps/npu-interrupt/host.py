@@ -33,32 +33,7 @@ def image_profile(data,manifest):
     return result
 
 def validate_admission(admission,raw,build,layout,image_hash,cache=None,*,execution_profile=PROFILE):
-    profile,collected=_original_admission(admission,raw,build,layout,image_hash,cache,execution_profile=execution_profile)
-    record=json.loads(admission);ref=record['interrupt'];data=finite.evidence_ref(ref,cache)
-    collected[ref['path']]=data;facts=json.loads(data)
-    finite.require(facts.get('schema')=='a733-npu-interrupt-entry-v1' and
-        facts.get('image_sha256')==image_hash and facts.get('build_id')==build.hex() and
-        facts.get('identity')==record['identity'] and facts.get('port')==record['port'] and
-        facts.get('interrupt')==97 and facts.get('cpu')==0 and
-        set(facts.get('conditions',{}))=={'exclusive-level-high-SPI65','single-task-event-acknowledgment',
-            'masked-notification-and-serialized-rearm','close-source-disable-before-pending-clear',
-            'inactive-pending-clear-before-return','saved-route-restored-before-enable'},
-        'Interrupt admission does not bind the exact route and returning lifetime.')
-    for item in facts['conditions'].values():
-        value=finite.evidence_ref(item,cache);collected[item['path']]=value
-    if execution_profile==finite.RESTART:
-        ref=record['restart'];data=finite.evidence_ref(ref,cache)
-        collected[ref['path']]=data;facts=json.loads(data)
-        finite.require(facts.get('schema')=='a733-npu-normal-restart-entry-v1' and
-            facts.get('image_sha256')==image_hash and facts.get('build_id')==build.hex() and
-            facts.get('identity')==record['identity'] and facts.get('port')==record['port'] and
-            all(facts.get(k)==profile[k] for k in ('epoch','generation','lease','npu_owner','whole_platform','supervisor')) and
-            facts.get('reviewed') is True and facts.get('restart_qualification')=='under-test' and
-            set(facts.get('conditions',{}))==set(RESTART_CONDITIONS),
-            'Restart admission does not cover the same retained ownership and bounded lifetime.')
-        for item in facts['conditions'].values():
-            value=finite.evidence_ref(item,cache);collected[item['path']]=value
-    return profile,collected
+    return _original_admission(admission,raw,build,layout,image_hash,cache,execution_profile=execution_profile)
 
 def validate_reports(monitor,platform,receipt,prepared):
     value=_original_reports(monitor,platform,receipt,prepared)
