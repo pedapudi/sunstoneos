@@ -39,7 +39,7 @@ int gpu_queue_context_create(const struct gpu_queue_context_config *c, uint32_t 
     assert(c->lease[0].region == QUEUE_ADD_REGION_OUTPUT && c->lease[1].region == QUEUE_ADD_REGION_INPUT);
     assert(!c->lease[0].bytes && !c->lease[1].bytes);
     if(mode == 2) return GPU_QUEUE_REFUSED;
-    *ctx = (struct gpu_queue_context){19};
+    *ctx = (struct gpu_queue_context){.generation=19};
     info[0] = (struct gpu_queue_lease_info){.address=(uintptr_t)output, .bytes=2097152};
     info[1] = (struct gpu_queue_lease_info){.address=(uintptr_t)input, .bytes=2097152};
     if(mode == 3) ++info[0].address;
@@ -62,7 +62,14 @@ int gpu_queue_submit(struct gpu_queue_context ctx, const struct gpu_queue_job *j
         if(mode != 10 || submits != fail_at) output[i] = input[i] + input[65+i];
     }
     if(mode == 6 && submits == fail_at) ++output[64];
-    return mode == 4 && submits == fail_at ? GPU_QUEUE_PARKED : GPU_QUEUE_OK;
+    if(submits == fail_at) {
+        if(mode == 4) return GPU_QUEUE_PARKED;
+        if(mode == 11) return GPU_QUEUE_BUSY;
+        if(mode == 12) return GPU_QUEUE_REFUSED;
+        if(mode == 13) return GPU_QUEUE_FAULT;
+        if(mode == 14) return GPU_QUEUE_TIMEOUT;
+    }
+    return GPU_QUEUE_OK;
 }
 int gpu_queue_wait(struct gpu_queue_context ctx, struct gpu_queue_record *r, uint32_t ticks)
 {
@@ -100,8 +107,14 @@ int main(int argc, char **argv)
     if(mode == 1) g.devices=0;
     if(!setjmp(done)) queue_add_main(&g);
     unsigned expected=mode <= 7 ? mode : mode == 10 ? 6 : 5;
+    if(mode == 4) expected=0x400u | (fail_at << 4) | GPU_QUEUE_PARKED;
+    if(mode >= 11) {
+        unsigned result=mode == 11 ? GPU_QUEUE_BUSY : mode == 12 ? GPU_QUEUE_REFUSED :
+                        mode == 13 ? GPU_QUEUE_FAULT : GPU_QUEUE_TIMEOUT;
+        expected=0x400u | (fail_at << 4) | result;
+    }
     unsigned expected_submits=mode == 0 || mode == 7 ? QUEUE_ADD_JOBS : mode >= 4 ? fail_at : 0;
-    unsigned expected_waits=mode == 4 ? fail_at-1 : expected_submits;
+    unsigned expected_waits=mode == 4 || mode >= 11 ? fail_at-1 : expected_submits;
     assert(terminal == expected && creates == (mode != 1));
     assert(submits == expected_submits && waits == expected_waits);
     assert(closes == (mode == 0 || mode == 7));
@@ -115,13 +128,14 @@ flags=['-std=c11','-Wall','-Wextra','-Werror','-I'+str(ROOT/'include'),'-I'+str(
 cases=[]
 case_names=['success-with-partial-workgroup-and-unsigned-wrap','missing-device','create-refused',
             'lease-address-mismatch','submit-parked','wait-timeout','wrong-output','close-fault',
-            'wrong-completion-sequence','fault-completion','stale-output']
+            'wrong-completion-sequence','fault-completion','stale-output',
+            'submit-busy','submit-refused','submit-fault','submit-timeout']
 for jobs,definitions in [(1,[]),(8,['-DQUEUE_ADD_JOBS=8'])]:
     binary=a.build/('queue-add-'+str(jobs))
     subprocess.run([a.cc,*flags,*definitions,'-fsanitize=address,undefined','-fno-sanitize-recover=all',
                     str(a.build/'fixture.c'),str(ROOT/'apps/queue-add/main.c'),'-o',str(binary)],check=True)
-    injected=[(mode,1) for mode in range(10)]
-    if jobs == 8:injected += [(mode,8) for mode in (4,5,6,8,9,10)]
+    injected=[(mode,1) for mode in range(15)]
+    if jobs == 8:injected += [(mode,8) for mode in (4,5,6,8,9,10,11,12,13,14)]
     for mode,fail_at in injected:
         subprocess.run([str(binary),str(mode),str(fail_at)],check=True,
                        env={**os.environ,'ASAN_OPTIONS':'detect_leaks=0'})

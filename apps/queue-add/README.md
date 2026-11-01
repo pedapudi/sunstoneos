@@ -35,6 +35,11 @@ Reproduce the descriptor with `apps/gpu-program/compile.py compile --profile 3
 Mesa source and build directories, the Ninja executable and an output directory.
 The output's `program.h` must match this application's descriptor.
 
+A submission failure records `0x400 | (sequence << 4) | result` in the retained
+application fault. The low four bits identify the public queue result; the next
+four bits identify the job. This distinguishes a parked device from a malformed
+job, a busy slot or a lost service.
+
 The result is 48 bytes of little-endian words:
 
 | Byte offset | Field | Successful eight-job result |
@@ -60,7 +65,7 @@ result-capture integration, then the coordinator's `tools/dev-run.py` path.
 This application adds no launcher or physical launch authority.
 
 `checks/queue-add.py --build DIR` compiles the default and eight-job variants
-for the host and AArch64, then runs 28 checks. Its sanitizer fixtures check the
+for the host and AArch64, then runs 42 checks. Its sanitizer fixtures check the
 lease, argument and dispatch records, model copied output and inject refusals,
 timeout, corruption, stale output and completion faults. Later-job injections
 check the exact number of submissions, waits and closes before failure.
