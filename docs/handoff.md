@@ -247,6 +247,14 @@ The following reviewed implementations are integrated with software evidence:
   `~/.cache/sunstoneos/evidence/resume-dram-restore-1025/`. Physical memory
   validation remains outstanding; optional card-boot integration is implemented.
   The 36 ms figure excludes training and does not establish working restored memory.
+  Branch `work/dram-restore-1031` makes the FEL restore safe to try: the
+  runner arms WDT0 around the restore, and a failed or hung restore resets the
+  board to a new FEL instance and trains fully once (exit status 3). The quick
+  check now covers address lines 2–31 and sixteen windows below 4 GiB. Frozen
+  builds, both records and host results are in
+  `~/.cache/sunstoneos/evidence/dram-restore-1031/`; the commands are in the
+  [first-test runbook](board-runbooks/dram-restore-test-1.md#commands-for-one-board).
+  No board run has used it.
 
 ## Current integration
 

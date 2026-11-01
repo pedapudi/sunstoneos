@@ -2,7 +2,9 @@
 
 Status: **RAM-only restore implemented and host-checked; no physical restore
 has run.** The capture tools, fixed restore set, record builder, SRAM
-admission and restore helper are implemented. The card allocation and record
+admission and restore helper are implemented. On the FEL path the restore
+runs under WDT0: a failed or hung restore resets the board to a new FEL
+instance and the host trains fully once. The card allocation and record
 planner support legacy single-unit records
 and paired records in separate units. Physical card integration remains
 unqualified. Independent code review and physical prerequisites are recorded in the [first-test runbook](../board-runbooks/dram-restore-test-1.md).
@@ -130,7 +132,7 @@ exist, a record is valid only for room-temperature cold starts.
 **Projected DRAM time with a restore:** 40 ms for boot0's
 initialization-only path, plus about 1 ms for 1,016 16-bit PHY writes and
 their read-back, the 20 parameter words being set before the call (*estimated* at 1 µs per APB write), plus the
-20 ms quick check: about 60 ms against 5,093 ms of training today, a saving
+quick check (*estimated* at 30 ms for 131,196 uncached word accesses): about 70 ms against 5,093 ms of training today, a saving
 of about 5.0 s per cold boot.
 
 The capture must also record the LPDDR5 mode registers. boot0's stored
@@ -205,7 +207,7 @@ loop. The flag is cleared only when part B passes. The check
 catches gross restore errors only. Marginal timing shows only in the
 qualification runs, and the safety of the restore rests on them.
 
-## Pre-admission rejection trains fully; post-edit failure stops
+## Pre-admission rejection trains fully; post-edit failure resets on the FEL path and stops on the card
 
 | Check, before any parameter edit | Mismatch |
 | --- | --- |
@@ -218,10 +220,16 @@ qualification runs, and the safety of the restore rests on them.
 
 The accepted SRAM implementation rejects an invalid record before changing any
 parameter. Once restore changes parameters or PHY registers, readback, size
-and sampled-memory failures stop the attempt. The FEL wrapper reports the
-error through its SRAM mailbox and returns through the normal FEL swap; the
-card hook stops in SRAM. Neither path retrains in place. A warm reset has no
-qualified recovery destination.
+and quick-check failures stop the attempt. Neither path retrains in place,
+because the PHY state after a partial restore is unknown and retraining
+within one lifetime has never run on these boards.
+
+- **FEL path.** The wrapper reports the error through its SRAM mailbox and
+  returns through the normal FEL swap. The host then resets the board with
+  WDT0 and runs the plain four-P-state wrapper once on the new FEL instance,
+  as described under [the FEL runner](#the-fel-runner-falls-back-through-one-watchdog-reset).
+- **Card path.** The hook stops in SRAM. A warm reset after a card boot has
+  no qualified recovery destination.
 
 Runtime temperature admission remains unimplemented. Current captures contain
 unknown temperature and no qualified range. A default card image therefore
@@ -430,15 +438,17 @@ Existing record headers and payloads are not part of the helper plan. These
 ordinary-file plans establish neither physical reservation nor card-write
 qualification.
 
-The accepted offline evidence is in
-`~/.cache/sunstoneos/evidence/dram-card-restore-20261026/`. The experimental
+The current offline evidence is in
+`~/.cache/sunstoneos/evidence/dram-restore-1031/` (`card-restore`,
+`card-default` and their check directories). The experimental
 boot0 SHA-256 is
-`e4a5ba15cb9f8ae494b5374463e210925496fa363b566ce7f4b86a3db45837ae`;
+`cdfbf5da75a5fd9b46e60de96bbe5b8e957d626d45a019a83b8697486c4f84ff`;
 the default image is
-`a31525f3843c2b2e0f051833113e03959cceda51221ddafe910ddb1d3a117117`.
-Both load the same 10,472-byte helper, SHA-256
-`3e3bc281037d580018429e86293a62757fedcd9e14db2635d7c45885da34c1ae`.
-Its single initialized section occupies `0x92000..0x948e8`. Bootstrap sections
+`cd0fe2832b8903e3f63f255716ddcaea749f32a51bc50583ace6165b8dd92d67`.
+Both load the same 10,812-byte helper, SHA-256
+`d667fb64b1d042a6a9af295644767aead7a564b0dea8c469cb51e59e99570e6e`, which
+includes the shared quick check.
+Its single initialized section occupies `0x92000..0x94a3c`. Bootstrap sections
 use 120, 76, 72, 64, 124, 80, 20 and 112 bytes in slots 8–15. Every section
 fits after its zero presence word; no raw-loader BSS is admitted.
 
@@ -456,17 +466,15 @@ resume refusal and preserved backup. The default instruction case performs
 no restore reads. These checks model MMIO and stop at the terminal `WFE`;
 they do not establish physical timing, ROM acceptance or DRAM margins.
 
-For the actual record, the first valid helper uses 21 sectors and the two
-records use 56 sectors: 39,424 bytes read. A bad first helper followed by a
-valid second uses 50,176 bytes. The format caps both-helper/both-record reads
+For the actual record, the first valid helper uses 22 sectors and the two
+records use 56 sectors: 39,936 bytes read. A bad first helper followed by a
+valid second uses 51,200 bytes. The format caps both-helper/both-record reads
 at 226 sectors, or 115,712 bytes. One non-refreshable ten-second counter
 budget covers the attempt. Restore performs 1,016 masked PHY writes with
-immediate readback, followed by a separate 1,016-read final pass. The memory
-sample writes and reads 278,528 bytes each. The instruction fixture caps each
-case at five million instructions; the largest observed case uses 4,860,609.
+immediate readback, followed by a separate 1,016-read final pass. The quick
+check writes and reads 262,392 bytes each way. The instruction fixture caps each
+case at five million instructions; the largest observed case uses 4,869,878.
 This count is not a hardware performance measure.
-The accepted RAM helper rebuilt byte-for-byte identically, so its earlier
-physical prerequisites and offline evidence remain applicable.
 
 ## Periodic retraining every N boots
 
@@ -497,9 +505,10 @@ fresh trainings.
    work.
 3. **Fallback cases** on the FEL path: a wrong CRC, another board's chip ID,
    a changed strap CRC, a temperature limit of zero, a forced read-back
-   mismatch and a forced part A failure. Pre-admission rejection must leave parameters
+   mismatch and a forced quick-check failure. Pre-admission rejection must leave parameters
    unchanged and run full training once. Post-edit readback and memory failures
-   must stop before caller continuation, with no in-place retraining.
+   must stop before caller continuation, with no in-place retraining; on the
+   FEL path the runner then resets through WDT0 and trains fully once.
 4. **Boot time**: ten restored and ten fully trained boots per board,
    comparing boot0's `DRAM BOOT DRIVE INFO` to `Actual DRAM SIZE` interval.
 5. **Card**: host backup, record write through the new region, then the
@@ -509,12 +518,13 @@ fresh trainings.
 
 | Quantity | Budget | Basis |
 | --- | --- | --- |
-| DRAM interval with restore | 500 ms; prediction about 60 ms | 40 ms measured for the initialization-only path on both boards, plus *estimated* writes and the quick check |
+| DRAM interval with restore | 500 ms; prediction about 70 ms | 40 ms measured for the initialization-only path on both boards, plus *estimated* writes and the quick check |
 | Helper and record reads | At most 115,712 bytes; one ten-second attempt deadline | Single-sector PIO; physical latency unmeasured |
 | CRC over the record | Bounded by the 24 KiB record limit | Instruction-checked; physical cost unmeasured |
 | Temperature admission | Default full-training fallback | Runtime measurement and allowed range unqualified |
-| Current quick check | 8 KiB sample; 278,528 bytes read and written each | Wider Part A/B checks remain future proposals |
-| Hook code | 668 bytes in 1,024 bytes of slots; separate 10,472-byte helper | Eight zero presence words; reserved helper extents |
+| Quick check | 31 address-line words and sixteen 4 KiB windows below 4 GiB; 262,392 bytes written and read each way; *estimated* 30 ms | Measured on the board by mailbox words 25 and 26; wider Part A/B checks remain future proposals |
+| FEL fallback | One WDT0 reset (about 6 s, measured) and one four-P-state training (about 5.1 s) | Only after a failed or hung restore |
+| Hook code | 668 bytes in 1,024 bytes of slots; separate 10,812-byte helper | Eight zero presence words; reserved helper extents |
 | Pre-admission fallback | One full training in the same boot, about 5.1 s plus any successful reads | Measured full-training time; read latency unmeasured |
 
 A restored boot counts only with a passing quick check, and the restore
@@ -564,22 +574,91 @@ checks every PHY write with `MicroContMuxSel` clear, restores that mux to
 
 A failed write check exits directly to the wrapper's saved SRAM context;
 it must not resume boot0 and reach its memory test. After a successful
-`init_DRAM`, the wrapper checks the size and performs a bounded uncached
-sample test below 4 GiB. This sample is a gross-error check; the separate
-March C- qualification remains required. Failures have distinct mailbox
+`init_DRAM`, the wrapper checks the size and runs the
+[quick check](#the-quick-check-covers-address-lines-and-sixteen-windows-below-4-gib).
+The quick check finds gross errors only; the separate March C-
+qualification remains required. Failures have distinct mailbox
 codes for record geometry, header CRC, payload CRC, chip ID, boot0 identity,
 strap, PHY readback, size and memory comparison. No failure retrains in
-place. The host refuses its RAM page checks on any restore failure.
+place. The host writes no RAM page after a reported restore failure.
 
 The budget is one admission pass and one ordered PHY write/readback pass,
 with bounded record parsing and no allocation. Ordered same-register
 readback follows each write; explicit barriers surround mux transitions.
 A second readback pass after
-`init_DRAM` detects changes made by boot0 before the sample test. Host instruction checks
+`init_DRAM` detects changes made by boot0 before the quick check. Host instruction checks
 exercise the real wrapper/helper with modeled boot0 calls and MMIO. They
 require exact fault codes and zero later memory accesses for wrong-board,
-CRC, readback and sampled-memory failures. These checks establish software
+CRC, readback and quick-check failures. These checks establish software
 ordering only; they do not qualify the PHY or authorize a launch.
+
+### The quick check covers address lines and sixteen windows below 4 GiB
+
+`restore_check` in `boot/a733/ddr-restore.c` runs after the second readback
+pass, with the MMU and caches off. In AArch32 it reaches DRAM only from
+`0x4000_0000` to `0xffff_ffff`, the first 3 GiB of the 12 GiB map. Both card
+and FEL restores use it.
+
+- **Address lines 2–31.** It writes a distinct word at `0x4000_0000` and at
+  `0x4000_0000 + 2^k` for k = 2..31, reads all 31 back, then repeats with the
+  complements. A stuck or shorted address line makes two of these words
+  share a location, so the earlier word reads back wrong. This also tests,
+  for single-bit offsets, the linear decode below 4 GiB that
+  [memory-protection.md](../memory-protection.md) has not yet established.
+- **Data.** Sixteen 4 KiB windows start at `0x4000_0000` and are 192 MiB apart;
+  the last ends at `0xf400_0fff`. Each of four passes writes all windows
+  before reading any: a rotating one (word i holds `1 << (i mod 32)`), its
+  complement, the word address XOR `0xa55a5aa5`, and that value's
+  complement. Every data bit is therefore driven to both levels while its
+  neighbours differ.
+
+The check touches 65,616 distinct bytes and writes and reads 262,392 bytes
+each way. A mismatch stores the bytes read so
+far, the address, the expected and the actual word in mailbox words 10–13.
+Mailbox words 25 and 26 hold the low word of the 24 MHz system counter at the
+start and end of `restore_check`, which boot0's own timer also reads. The
+host reports the difference as the check time. In the instruction fixture
+the nominal FEL case executes 2,326,445 instructions.
+
+### The FEL runner falls back through one watchdog reset
+
+`tools/run-ddr.py` with a restore build also takes `--fallback-build`, the
+plain four-P-state wrapper for the same boot0. The run has at most one
+WDT0 reset and one full training:
+
+1. Before any launch it requires the reconnect access rule for the port,
+   reads the SID over FEL and compares it with the record's chip ID. A
+   mismatch skips the restore and runs the plain wrapper on the same
+   instance, which is the ordinary cold path.
+2. It requires WDT0 disabled, then arms it in the order measured on both
+   boards on 2026-10-31: output 2, configuration 1 (system reset), mode
+   `0x41` (enabled, four seconds) and restart word `0x14af`, all under key
+   `0x16aa0000`, with readback. In that measurement the board left USB about
+   4.2 s after arming and a new FEL instance enumerated at about 5.9 s.
+   Evidence: `~/.cache/sunstoneos/evidence/wdt-fel-return-20261031/`.
+3. One FEL request executes the wrapper and then writes mode `0x16aa0000`,
+   so WDT0 is disabled as soon as the wrapper returns. The restore path runs
+   boot0's power and clock setup, the 40 ms initialization and the quick
+   check; it is *estimated* at under one second against the four-second
+   interval. The runner records the request's duration as `exe_seconds`.
+4. A clean restore result, the expected size and the host's two RAM pages
+   end the run with exit status 0.
+5. Any other returned result arms WDT0 again. A hang, or a request that
+   fails while WDT0 counts, needs no second arming; the runner sends nothing
+   more to the old instance.
+6. Within 20 s of arming, the runner adopts the new FEL instance on the same
+   port. The mode register keeps `0x41` through the reset, so an enabled
+   mode shows that WDT0 fired. The runner disarms WDT0 and runs the plain
+   wrapper once. Success gives exit status 3.
+
+A missing new instance, an instance whose WDT0 was not enabled, a failed
+full training or any FEL transport failure stops the run and quarantines the
+current instance, as other runners do. The plain wrapper's bytes equal those
+that trained both boards to 12,288 MiB on the instances created by the
+2026-10-31 watchdog reset (`~/.cache/sunstoneos/evidence/resume-20261031b/`).
+The WDT0 register values match the launchers in [watchdog.md](../watchdog.md);
+the runner writes no RTC FEL flag or ROM redirect word, as in the
+measurement.
 
 ## Two-copy host selection and standby update contract
 
@@ -664,6 +743,7 @@ Implementation and remaining physical work:
 | Record format, paired selection and standby plans | Implemented and host-checked; physical card stage not started |
 | Record builder from a capture | Implemented; both actual board references and identity refusals checked |
 | Restore wrapper variant | Implemented; instruction and host-runner cases checked |
+| FEL fallback through one WDT0 reset, address-line and window quick check | Implemented; 19 instruction and 28 runner cases checked; never run on a board |
 | March C- runs on the restored and P-state-0-only paths | Image implemented and host-modeled, never run on a board |
 | First restore test, [runbook](../board-runbooks/dram-restore-test-1.md) | SRAM artifacts built; physical prerequisites remain |
 
@@ -705,14 +785,16 @@ Implementation and remaining physical work:
    `0x0001`, `dram_tpr1` bit 31 set, words 32–51), a Thumb-to-Arm `BLX` at
    `0x56142` into a table-driven writer that clears `MicroContMuxSel`,
    writes and reads back the set, sets it to 1 and calls `0x4bca8`, then
-   after `init_DRAM` a sampled pattern check below 4 GiB. Any failure stops
+   after `init_DRAM` the quick check below 4 GiB. Any failure stops
    and reports in the mailbox; there is no in-place retraining.
-   `tools/run-ddr.py` gains a `--record` upload for that variant.
+   `tools/run-ddr.py` uploads the record and, on a failure or hang, resets
+   through WDT0 and runs `--fallback-build` once.
 3. **Host checks, implemented.** `checks/ddr-wrapper.py` covers the
    restore path, and `checks/ddr-host-retention.py` covers its runner cases:
    a wrong-board record, a corrupt record, a read-back mismatch and a
-   memory-check failure must each stop with their code before any further
-   DRAM use.
+   quick-check failure must each stop with their code before any further
+   DRAM use and fall back through one WDT0 reset. Hangs, a missing or
+   unexplained reset, a failed fallback and a SID mismatch are covered too.
 4. **March C-.** Prepare the [memory qualification image](../memory-qualification.md)
    for two board runs: after a P-state-0-only training (the reference
    path's baseline, which has never had a full memory test) and after the

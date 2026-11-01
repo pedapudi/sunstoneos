@@ -1,8 +1,10 @@
 # First DRAM training-restore test (FEL path)
 
 Status: **built and host-checked; not run on a board.** The record builder,
-SRAM restore helper and runner are implemented. The first physical test
-still requires a fresh power-cycled lifetime per board and acceptance of the memory qualification image's three residuals.
+SRAM restore helper and runner are implemented. The runner falls back
+through one WDT0 reset and one full training, so a failed restore costs
+about 11 s instead of the board's lifetime. The March C- step still requires
+acceptance of the memory qualification image's three residuals.
 Independent correctness review approved the offline implementation on
 2026-10-25. No launch approval or recovery qualification follows from the
 host checks or that review.
@@ -72,36 +74,35 @@ by the single command recorded beside it in `restore-set-v3.command`
    (`MicroContMuxSel` cleared, writes in record order, set to 1, then
    `0x4bca8`), and after `init_DRAM` reads every restored register back and
    runs quick-check part A below 4 GiB. It reports each step in the
-   mailbox. On any failure it stops and reports; this first test makes no
+   mailbox. On any failure it stops and reports; it makes no
    in-place retraining, because retraining within a lifetime has never run
-   on these boards.
+   on these boards. `tools/run-ddr.py` then resets the board through WDT0
+   and runs the plain four-P-state wrapper once on the new FEL instance
+   ([design](../designs/dram-training-restore.md#the-fel-runner-falls-back-through-one-watchdog-reset)).
 3. **Host checks:** the wrapper in Unicorn with the patched boot0 calls
    modeled (edit order, the record checks, the writer's accesses, every
    refusal), and `run-ddr.py` with a modeled FEL device for the restore mode.
 
 ## Host evidence and SRAM bounds
 
-The evidence directory is
-`~/.cache/sunstoneos/evidence/resume-dram-restore-1025/`.
-The restore build is `build-final`; `from-capture` contains the two
-board records and their producer checks. No check opens a physical device. Each final check directory preserves its
-checker sources and their hashes under `checker-sources/`.
+The frozen artifacts and check results are in
+`~/.cache/sunstoneos/evidence/dram-restore-1031/`. No check opens a physical
+device.
 
 | Check | Result and scope |
 | --- | --- |
-| `checks/training-record-capture.py` | Both recorded P-state-0 references produce 13,836-byte records; seven altered identity/data cases refuse. Parameter words 32–51 retain all 32 bits. |
-| `checks/ddr-wrapper.py` with restore build | Seventeen instruction cases pass, including the actual patched Thumb BLX, full-width parameters, wrong SID, header/payload CRC, malformed sections, arbitrary address/mask rejection, size, missing hook, two readback failures and sampled-memory failure. boot0 calls and MMIO effects are modeled. |
-| `checks/ddr-host-retention.py` | Nineteen cases pass. Restore errors keep ownership and prevent the host's RAM-page transactions; record/helper upload mismatches stop before DDR execution. |
-| `checks/training-record.py` | Existing record and card-image plan checks pass without device access. |
-| Existing P-state-0 wrapper | Its focused instruction check passes; the 432-byte wrapper remains byte-identical to the accepted capture build. |
+| `checks/training-record-capture.py` (`from-capture`) | Both recorded P-state-0 references produce 13,836-byte records; seven altered identity/data cases refuse. Both captures of each lifetime give the same record. |
+| `checks/ddr-wrapper.py` with the restore build (`native-3-3`, `native-3-1`) | Nineteen instruction cases pass for each board's record, including the actual patched Thumb BLX, full-width parameters, wrong SID, header/payload CRC, malformed sections, arbitrary address/mask rejection, size, missing hook, two readback failures and three quick-check failures: a stuck word, an aliased address line 20 and a stuck data bit in the last window. boot0 calls and MMIO effects are modeled. |
+| `checks/ddr-host-retention.py` (`host`) | Twenty-eight cases pass. Restore cases model WDT0, the SID and both USB instances: success, a SID mismatch, four returned failures, a hang, a disarm that does not take, a failed fallback, no new instance, an unexplained reset, an arming readback mismatch, an already enabled WDT0, upload mismatches and missing arguments. |
+| `checks/ddr-wrapper.py` with the plain build | Passes; the plain build's files equal those of the full trainings that passed on both boards after the 2026-10-31 watchdog reset. |
+| `checks/card-ddr.py`, `card-ddr-pio.py`, `card-ddr-host.py` | Twenty experimental and one default instruction case, thirteen timer/PIO cases and nineteen host cases pass with the shared quick check. |
 
-The nominal instruction case executes 2,345,249 instructions under a
+The nominal instruction case executes 2,326,445 instructions under a
 4,000,000-instruction fixture limit. It performs 1,016 masked PHY writes,
-immediate readback and a second readback pass after modeled `init_DRAM`.
-The sample touches two 4 KiB pages at `0x41000000` and `0x42000000`.
-Thirty-two walking-one passes and two address-pattern passes each write
-and read 278,528 bytes in total. This bounds software work and detects
-gross errors; it does not cover every channel, rank or the full memory map.
+immediate readback, a second readback pass after modeled `init_DRAM` and the
+quick check: 31 address-line words and sixteen 4 KiB windows 192 MiB apart
+below 4 GiB, 262,392 bytes written and read each way. The quick check
+detects gross errors; it reaches only the first 3 GiB of the 12 GiB map.
 
 | Artifact or reservation | Address and size |
 | --- | --- |
@@ -109,40 +110,53 @@ gross errors; it does not cover every channel, rank or the full memory map.
 | Mailbox | `0x86000`, 128 bytes |
 | Record | `0x87000`, 13,836 bytes; reservation 24 KiB |
 | FEL head shadow | `0x8e000`, 12 KiB |
-| Helper and address/mask table | `0x92000`, 9,864 bytes; reservation 32 KiB |
+| Helper and address/mask table | `0x92000`, 10,204 bytes; reservation 32 KiB |
 | Private stack | `0x9b000..0x9f000`, 16 KiB |
 
-The build manifest gives source and payload SHA-256 identities and the
-linked allocated sections. The helper has one allocated code/data section
-and no uninitialized BSS. The helper digest is
-`65b20a53e13fa3d484343869bfee78f4fe503d15b6cecf78f5eeef92c28ff080`.
-The port 3-3 record digest is
-`ae1da9e29fccfd68d8d99f1bd2ab880228978038992dcb69b3efd88c57dab7e4`;
-the port 3-1 record digest is
-`7a9f0213da86318d972e1f366d2cc446e53b4a7dd7f1974fae3c0f2e49372793`.
-These records use generation 1, boot0 checksum `0x2fce7bb3`, parameter-set
+| File | SHA-256 |
+| --- | --- |
+| `build-restore/ddr-restore.bin` | `9e5507ce3fb9194bf03468d14cacb7b93bfc9d0dd0c3048a61576bf8ab8e4798` |
+| `build-restore/ddr-entry.bin`, unchanged | `34298104ea5903fb86beda94b8895bfaeb12a8a47cce0b569253ecd727c10b16` |
+| `build-restore/manifest.json` | `642c2f4f5022202c3e356bb5140ce7610623615b0b239a466efc2dbf011d4280` |
+| `build-full/manifest.json` | `4f20beed55a2759469a9b5f0c8dfc0ede3dfdb7e0487553254632386d68bdaa9` |
+| `records/record-3-3.bin` | `ae1da9e29fccfd68d8d99f1bd2ab880228978038992dcb69b3efd88c57dab7e4` |
+| `records/record-3-1.bin` | `7a9f0213da86318d972e1f366d2cc446e53b4a7dd7f1974fae3c0f2e49372793` |
+
+The records use generation 1, boot0 checksum `0x2fce7bb3`, parameter-set
 index 5 and strap CRC `0xf874a6a5`. Unknown temperature is encoded as
 `INT32_MIN` with limit zero; this experiment has no temperature admission
-measurement and remains limited to supervised room-temperature cold starts.
+measurement and remains limited to room-temperature starts.
 
 Admission failures return error 1 (geometry), 2 (header CRC), 3 (payload
 CRC), 4 (SID), 5 (boot0) or 6 (strap) before parameter edits.
-Runtime failures return 7 (PHY readback), 8 (size), 9 (sampled memory),
+Runtime failures return 7 (PHY readback), 8 (size), 9 (quick check),
 10 (missing or repeated hook) or 11 (cache/MMU state after boot0).
 A readback failure inside boot0 restores the wrapper context from SRAM,
 swaps the FEL head back and returns without resuming boot0. The runner
-requires success, 1,016 writes, one hook call, 278,528 sampled read bytes
-and the 12,288 MiB size before issuing its RAM-page checks.
+requires success, 1,016 writes, one hook call, 262,392 checked bytes
+and the 12,288 MiB size before its RAM-page checks; anything else falls
+back through WDT0.
 
-## Commands for one board after approval
+## Commands for one board
 
-In a fresh lifetime after a power removal, at room temperature after at
-least one hour unpowered, matching the captures:
+The per-board record lives on the host, in the frozen `records` directory,
+and the runner uploads it to SRAM `0x87000` on every run. The reconnect
+access rule must cover the port, because the fallback re-enumerates USB.
+Both records come from room-temperature cold starts. The first run should
+match them: a fresh lifetime after at least one hour unpowered. A run after
+a watchdog recovery is a warm start with the PMIC rails still set, which no
+capture covers; the quick check and the fallback bound its cost, but a pass
+there does not qualify warm restores. With
+`F=~/.cache/sunstoneos/evidence/dram-restore-1031` and `S` the session's
+evidence directory:
 
-1. Restore DDR start (`rs-ddr`): `run-ddr.py` with the restore build and
-   the board's record through `--record`. The build must use
-   `--variant restore --restore-set` with the fixed analysis file.
-2. The v5 capture (`rs-capture-1`) with `--ddr-evidence $S/rs-ddr`.
+1. Restore DDR start (`rs-ddr`), for port 3-3:
+   `tools/run-ddr.py --fel ~/.cache/sunstoneos/build/sunxi-a733/sunxi-fel --build $F/build-restore --record $F/records/record-3-3.bin --fallback-build $F/build-full --evidence $S/rs-ddr`.
+   Port 3-1 uses `record-3-1.bin`. Exit status 0 means restored, 3 means
+   the restore failed and the fallback training passed; either leaves
+   trained DRAM for the next image.
+2. The v5 capture (`rs-capture-1`) with `--ddr-evidence $S/rs-ddr`, only
+   after exit status 0.
 3. The [memory qualification image](../memory-qualification.md), March C-
    over the 12,288 MiB map, three to five runs.
 
@@ -151,14 +165,16 @@ least one hour unpowered, matching the captures:
 | Item | Prediction |
 | --- | --- |
 | `rs-ddr/firmware.log` | `Training result is = 7` about 36 ms after `DRAM BOOT DRIVE INFO`; `Actual DRAM SIZE =12288 M` about 40 ms after it; `DRAM simple test OK.` |
-| Restore mailbox | Every record check passes, the read-back of all restored registers matches, part A passes |
+| Restore mailbox | Every record check passes, the read-back of all restored registers matches, the quick check passes in about 30 ms (words 25 and 26) |
+| WDT0 | Reads `0x41` after arming and `0` in the same request that returns from the wrapper |
 | Both 4 KiB pages of `run-ddr.py` | Read back |
 | `rs-capture-1` against the record | Every restored register equal to the record; the other registers equal the initialization-only capture or within the P-state-0-only lifetime spread |
 | March C- | Pass over the full map |
-| DRAM interval | About 60 ms with the quick check, against 4,437–4,451 ms for P-state-0-only training |
+| DRAM interval | About 70 ms with the quick check, against 4,437–4,451 ms for P-state-0-only training and 5,088–5,102 ms for the four-P-state training it replaces |
 
-A failure at any step stops the board's session, as every runner does
-today, and the board needs a power removal.
+A restore failure or hang ends in one WDT0 reset, about 6 s, and one full
+training, about 5.1 s. A failure of that fallback, or of any later step,
+stops the board's session as every runner does today.
 
 ## Qualifying the restore later
 
