@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "gpu_queue.h"
+#include "sunstone_npu_queue.h"
 #ifdef __cplusplus
 #define SS_STATIC_ASSERT static_assert
 #define SS_NORETURN [[noreturn]]
