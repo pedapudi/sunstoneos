@@ -100,7 +100,7 @@ static int complete(void *cookie)
 static void notify(void *cookie)
 {
     struct npu_runtime_queue *q = cookie;
-    vTaskNotifyGiveFromISR(q->task, q->woken);
+    if (!q->progress_from_isr) vTaskNotifyGiveFromISR(q->task, q->woken);
 }
 static void irq(void *cookie, BaseType_t *woken)
 {
@@ -120,6 +120,7 @@ static void irq(void *cookie, BaseType_t *woken)
         atomic_store_explicit(&q->runtime->failed, 1, memory_order_release);
         atomic_fetch_or_explicit(&q->runtime->service.irq_pending, 2u, memory_order_release);
     }
+    if (q->progress_from_isr) q->progress_from_isr(q->progress_cookie, woken);
 }
 int npu_runtime_queue_claim(struct npu_runtime_queue *q, struct npu_runtime *rt)
 {

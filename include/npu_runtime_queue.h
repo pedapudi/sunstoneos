@@ -17,6 +17,10 @@ struct npu_runtime_queue {
     uint64_t irq_cpu_ticks; /* Updated only with SUNSTONE_NPU_QUEUE_TIMING. */
     uint32_t last_events, last_idle; /* First failed completion inputs survive retention. */
     BaseType_t *woken; /* Non-null only during its ISR. */
+    /* Optional shared-ring bridge. It consumes bounded work after each IRQ
+     * and owns completion notification when installed. Configure before claim. */
+    void (*progress_from_isr)(void *, BaseType_t *);
+    void *progress_cookie;
     unsigned claimed;
 };
 int npu_runtime_queue_claim(struct npu_runtime_queue *, struct npu_runtime *);
