@@ -136,6 +136,11 @@ static void run_firmware(void)
         step();
         if (firmware.state == AIC8800_FW_DELAY) {
             uint64_t until = firmware.delay_until;
+            /* This fixture's clock tick is100us. For the source's500us
+             * power-on hold, completion must cover a late fractional tick. */
+            assert(transport.config.ticks_per_ms==10);
+            uint64_t end_ticks=until*2400,origin=(until-firmware.power_delay_ticks)*2400+2399;
+            assert(end_ticks-origin>=500*24);
             unsigned before = m.command_count;
             m.now = until - 1; aic8800_transport_poll(&transport);
             assert(firmware.state == AIC8800_FW_DELAY && m.command_count == before);

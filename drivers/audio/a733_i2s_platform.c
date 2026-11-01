@@ -164,7 +164,7 @@ enum a733_i2s_resource_result a733_audio_parent_poll(struct a733_audio_parent *p
     if (p->stage == P_CHECK) {
         ok = baseline(p);
         if (ok) { p->stage = p->cold ? P_LOCK : P_READY; p->wait_since = p->last_time; }
-    } else if (p->stage == P_LOCK && p->last_time - p->wait_since >= 3) {
+    } else if (p->stage == P_LOCK && p->last_time - p->wait_since > 3) {
         uint32_t v;
         ok = rd(p,p->deadline,AUDIO,&v);
         if (ok) {
@@ -172,7 +172,7 @@ enum a733_i2s_resource_result a733_audio_parent_poll(struct a733_audio_parent *p
             p->wait_since = p->last_time;
             if (p->locked_samples == 3) p->stage = P_SETTLE;
         }
-    } else if (p->stage == P_SETTLE && p->last_time - p->wait_since >= 20) {
+    } else if (p->stage == P_SETTLE && p->last_time - p->wait_since > 20) {
         uint32_t v;
         ok = rd(p,p->deadline,AUDIO,&v) && (v & BIT(28)) &&
              update(p,p->deadline,AUDIO,BIT(27),BIT(27));

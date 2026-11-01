@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "a733_iommu.h"
+#include "register_latency.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -16,10 +17,16 @@ struct model {
     uint64_t now,flush_start;
     unsigned writes,reads,publications,admissions,admit_pending,publish_pending;
     unsigned drop,late,late_read,deny,unresolved,undrained,regression,token_change;
+    unsigned fractional;
+    uint64_t counter;
+    uint32_t flush_busy;
+    struct register_latency flush;
 };
 static int now(void *p,uint64_t *v)
 {
-    struct model *m=p;*v=++m->now;
+    struct model *m=p;
+    if(m->fractional){*v=m->now=++m->counter/24;return 1;}
+    *v=++m->now;
     if(m->regression && m->now>2)*v=0;
     return 1;
 }
@@ -43,6 +50,7 @@ static void offset_ok(uint32_t off)
 static int read_reg(void *p,uint64_t token,uint32_t off,uint32_t *v,uint64_t d)
 {
     struct model *m=p;assert(token==37);offset_ok(off);++m->reads;
+    if(m->fractional)++m->counter;
     *v=m->regs[off/4];if(m->late_read)m->now=d;return 1;
 }
 static int write_reg(void *p,uint64_t token,uint32_t off,uint32_t v,uint64_t d)
@@ -51,6 +59,19 @@ static int write_reg(void *p,uint64_t token,uint32_t off,uint32_t v,uint64_t d)
     assert(off!=0x10 && off!=0x10010); /* No reset, including on errors. */
     assert(off!=0x84 && off!=0x10084); /* Preserve faults. */
     ++m->writes;if(m->drop==m->writes)return 1;
+    if(m->fractional) {
+        ++m->counter;
+        if(off==0x10e18 && v==1) {
+            /* Last micro-TLB request arrives late within a rounded us. */
+            m->counter=(m->counter/24+1)*24+17;
+            m->flush_busy=1;
+            reg_latency_schedule(&m->flush,m->counter,240,1,0);
+        }
+        if((off==0x30 || off==0x10030) && v==0) {
+            m->flush_busy=reg_latency_apply(&m->flush,m->counter,m->flush_busy);
+            assert(!m->flush_busy && !m->flush.pending);
+        }
+    }
     if(off==0x30 && v==3)m->flush_start=m->now;
     if(off==0x30 && v==0)assert(m->now-m->flush_start>=10);
     if((off==0x14 || off==0x10014) && v==1) {
@@ -240,6 +261,15 @@ static void capacity_checks(void)
 }
 int main(int argc,char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"--completion-only")) {
+        struct a733_iommu_tables t={0};struct a733_iommu s={0};
+        struct model *m=calloc(1,sizeof(*m));assert(m);m->fractional=1;
+        assert(a733_iommu_build(&t,arena,0x140000000,maps,3)==1);
+        assert(a733_iommu_init(&s,&ops,m,&t)==1 && a733_iommu_open(&s,10000)==1);
+        int r=0;for(unsigned i=0;i<1000 && !r;++i)r=a733_iommu_poll(&s);
+        assert(r==1 && !m->flush.pending);free(m);
+        puts("PASS IOMMU: fractional clock preserves the full 10 us hardware flush interval");return 0;
+    }
     if(argc==2 && !strcmp(argv[1],"--capacity-only")){capacity_checks();return 0;}
     if(argc==2 && !strcmp(argv[1],"--inherited-walk-only")) {
         inherited_walk_checks();return 0;

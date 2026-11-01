@@ -3,7 +3,7 @@
   const $ = (id) => document.getElementById(id);
   const state = { data: null, revision: null, etag: null, view: 'hardware', dependency: 'gpu', expanded: new Set(), request: 0, controller: null, docRequest: 0, docController: null, document: null, history: [], opener: null };
   const evidenceLabels = { board: 'Physical result', host: 'Host checked', emulator: 'Emulator checked', source: 'Source reviewed' };
-  const statusLabels = { planned: 'Planned', implemented: 'Partial implementation', host_tested: 'Host / emulator evidence', board_tested: 'Physical result (partial)', qualified: 'Qualified' };
+  const statusLabels = { planned: 'Planned', implemented: 'Partial implementation', blocked: 'Blocked', unknown: 'Status unavailable', host_tested: 'Host / emulator evidence', board_tested: 'Physical result (partial)', qualified: 'Qualified' };
   function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = String(text); return node; }
   function list(value) { return Array.isArray(value) ? value : []; }
   function plain(value) { return String(value || '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/\*\*|__|`/g, '').replace(/\s+/g, ' ').trim(); }
@@ -106,9 +106,9 @@
       seen.add(path); container.append(documentButton(path, link.label || link.title || path));
     }
   }
-  function detailBlock(container, title, content) {
+  function detailBlock(container, title, content, base = 'docs/hardware.md') {
     if (!content) return;
-    const section = el('section', 'detail-block prose'); section.append(el('h4', '', title)); markdown(section, content); container.append(section);
+    const section = el('section', 'detail-block prose'); section.append(el('h4', '', title)); markdown(section, content, base); container.append(section);
   }
   function hardwareCard(item) {
     const card = el('details', 'hardware-card'); card.dataset.hardwareId = item.id; card.open = state.expanded.has(item.id);
@@ -116,13 +116,13 @@
     const top = el('div', 'card-top'); top.append(el('span', 'card-area', item.area || 'Hardware'), el('span', 'card-toggle', '+')); top.lastChild.setAttribute('aria-hidden', 'true');
     summary.append(top, el('h3', 'card-name', item.name), el('p', 'card-summary', plain(item.functions || item.summary)));
     const badges = el('div', 'card-badges');
-    badges.append(el('span', 'pill ' + (item.implementation === 'implemented' ? 'implemented' : ''), item.implementation === 'implemented' ? 'Partial implementation' : item.implementation === 'planned' ? 'Planned' : 'Status unavailable'));
+    badges.append(el('span', 'pill ' + (item.implementation === 'implemented' ? 'implemented' : ''), statusLabels[item.implementation] || 'Status unavailable'));
     for (const kind of list(item.evidence)) if (evidenceLabels[kind]) badges.append(el('span', 'pill ' + kind, evidenceLabels[kind]));
     summary.append(badges, el('span', 'qualification-line', item.qualification === 'qualified' ? 'Qualified within documented criteria' : item.qualification === 'unqualified' ? 'Qualification pending' : 'Qualification not recorded'));
     const detail = el('div', 'card-detail');
     detailBlock(detail, 'Required functions', item.functions);
     detailBlock(detail, 'Dependencies', item.dependencies);
-    if (list(item.details).length) for (const entry of item.details) detailBlock(detail, entry.title || 'Evidence and limits', entry.markdown);
+    if (list(item.details).length) for (const entry of item.details) detailBlock(detail, entry.title || 'Evidence and limits', entry.markdown, entry.source || 'docs/hardware.md');
     else if (item.implementation === 'planned' && !list(item.evidence).some((kind) => ['board', 'host', 'emulator'].includes(kind))) detailBlock(detail, 'Evidence and limits', 'No implementation or test evidence is recorded for this item.');
     else detailBlock(detail, 'Evidence and limits', item.summary || 'Detailed evidence is unavailable. Read the support matrix for the recorded status.');
     const links = el('div', 'document-links'); linkButtons(links, item.links); detail.append(links); card.append(summary, detail);
@@ -288,7 +288,9 @@
     if (area) {
       detail.append(el('h4', '', 'Recorded evidence'), el('p', 'secondary', (statusLabels[area.status] || area.status_label) + '. Applies only to the scope in the support matrix.'), el('p', 'secondary', 'Qualification: ' + area.qualification.replace(/_/g, ' ') + '.'));
       const evidence = el('details', 'dependency-evidence'); evidence.append(el('summary', '', 'Read current scope'));
-      const copy = el('div', 'prose'); markdown(copy, area.details.map((part) => part.markdown).join('\n\n')); evidence.append(copy); detail.append(evidence);
+      const copy = el('div', 'prose');
+      for (const part of list(area.details)) markdown(copy, part.markdown, part.source || 'docs/hardware.md');
+      evidence.append(copy); detail.append(evidence);
     } else detail.append(el('p', 'secondary', 'This node describes required functionality. Its component record holds the evidence; no separate completion status is inferred.'));
     for (const [title, ids] of [['Direct prerequisites', selected.requires], ['Direct dependents', [...descendants]]]) {
       detail.append(el('h4', '', title));
@@ -315,12 +317,12 @@
         const data = await response.json();
         if (request !== state.request) return;
         if (data.schema_version !== 1 || !Array.isArray(data.hardware)) throw new Error('The progress record has an unsupported format.');
-        if (data.parser?.status && data.parser.status !== 'ok') throw new Error(`Project records could not be interpreted (${data.parser.status}). ${list(data.parser.warnings).join(' ')}`);
         const revision = data.revision || JSON.stringify(data);
         state.etag = response.headers.get('ETag');
         if (revision !== state.revision) { state.data = data; render(data); state.revision = revision; }
       } else if (!state.data) throw new Error('The server returned no initial progress record.');
-      notice(list(state.data?.parser?.warnings).join(' ')); setConnection('online', 'Live records');
+      notice(list(state.data?.parser?.warnings).join(' '));
+      setConnection('online', state.data?.parser?.status === 'ok' ? 'Live records' : 'Records need attention');
       $('checked-time').textContent = `Checked ${new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date())}`;
     } catch (error) {
       if (request !== state.request) return;

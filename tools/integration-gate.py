@@ -10,10 +10,14 @@ ignore. The gate fails if that state cannot be read completely, or if it
 changes before the gate holds the lock or by the end of the last step.
 Use checks/check-index.py --changed PATH... to help choose focused checks; its
 textual coverage is advisory. Component checks outside this gate run directly.
+The full gate conditions hook fixtures on --affected or --changed scope. Its
+default combines HEAD^..HEAD (all tracked files at a root commit) with staged,
+unstaged and nonignored untracked changes in the checkout.
 """
 import argparse
 import fcntl
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 from host_evidence import unique_directory
@@ -50,8 +54,8 @@ VARIANTS = {
 # OS-core checks and the central target each needs. The core central build is
 # configured without external applications.
 DEPENDENCIES = {'kernel': 'kernel-check', 'soak8': 'smp8-soak-model'}
-CORE_CHECKS = (*DEPENDENCIES, 'shared-helpers', 'progress', 'check-index', 'pmic-tree',
-               'power-domains-tree')
+CORE_SCRIPTS = ('shared-helpers', 'progress', 'check-index', 'pmic-tree', 'power-domains-tree')
+CORE_CHECKS = (*DEPENDENCIES, *CORE_SCRIPTS)
 def external_applications(source, paths):
     """Load each selected application's own build targets and check commands."""
     applications = {}
@@ -128,6 +132,9 @@ def main(argv=None):
     parser.add_argument('--target', action='append', default=[], help='OS-core central CMake target; repeat to add targets')
     parser.add_argument('--variant', choices=VARIANTS, action='append', default=[])
     parser.add_argument('--check', action='append', default=[], help='core check or check declared by an external application')
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument('--affected', metavar='RANGE', help='select indexed checks for BASE..HEAD and one supervised OS baseline')
+    selection.add_argument('--changed', nargs='+', metavar='PATH', help='select indexed checks for repository paths and one OS baseline')
     parser.add_argument('--full', action='store_true', help='explicit broad integration milestone: all core and application central targets, every OS variant and all listed checks')
     parser.add_argument('--cache', type=Path, default=Path(os.environ.get('SUNSTONE_CACHE', Path.home() / '.cache/sunstoneos')))
     parser.add_argument('--build-root', type=Path, help='build and gate evidence directory; defaults to CACHE/build')
@@ -136,7 +143,7 @@ def main(argv=None):
     parser.add_argument('--trials', type=int, default=1, help='predeclared soak8 trials, not failure retries (default: 1)')
     parser.add_argument('--allow-dirty', action='store_true', help='compatibility option; local changes are always recorded')
     args = parser.parse_args(argv)
-    if not args.full and not (args.target or args.variant or args.check):
+    if not args.full and not (args.target or args.variant or args.check or args.affected or args.changed):
         parser.error('select --target, --variant or --check; --full is only for justified broad validation')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', args.label):
         parser.error('label must be a single filename beginning with a letter or digit')
@@ -150,6 +157,46 @@ def main(argv=None):
         parser.error('source must be a SunstoneOS checkout')
     targets = list(dict.fromkeys(args.target))
     variants = list(VARIANTS) if args.full else list(dict.fromkeys(args.variant))
+    indexed, pending, affected_plan, hook_scope = [], [], None, None
+    if args.full or args.affected or args.changed:
+        try:
+            spec = importlib.util.spec_from_file_location('affected', source / 'checks/affected.py')
+            selector = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(selector)
+            if args.full:
+                index = selector.indexer.generate()
+                indexed = [{'check': name, 'output': '--output' in entry['required_arguments']}
+                           for name, entry in sorted(index.items()) if entry['pure_host']]
+                pending = [{'check': name, 'needs': selector.needs(entry)}
+                           for name, entry in sorted(index.items()) if not entry['pure_host'] and not entry['library']]
+                scope_range, scope_paths = args.affected, args.changed
+                basis = 'explicit range or paths'
+                dirty_paths = []
+                if not (scope_range or scope_paths):
+                    commit = subprocess.check_output(['git', 'cat-file', '-p', 'HEAD'], cwd=source)
+                    if any(line.startswith(b'parent ') for line in commit.split(b'\n\n', 1)[0].splitlines()):
+                        scope_range, basis = 'HEAD^..HEAD', 'latest first-parent change'
+                    else:
+                        tracked = subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', '-z', 'HEAD'], cwd=source)
+                        scope_paths = [os.fsdecode(path) for path in tracked.split(b'\0') if path]
+                        basis = 'all tracked files at the root commit'
+                    tracked_changes = subprocess.check_output(['git', 'diff', '--name-only', '--no-renames', '-z', 'HEAD'], cwd=source)
+                    untracked = subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '-z'], cwd=source)
+                    dirty_paths = sorted({os.fsdecode(path) for path in (tracked_changes + untracked).split(b'\0') if path})
+                scope = selector.plan(scope_range, scope_paths, index=index)
+                selected = any(check['check'] == 'pre-push-hook.py' for check in scope['checks'])
+                if dirty_paths:
+                    local = selector.plan(changed=dirty_paths, index=index)
+                    selected |= any(check['check'] == 'pre-push-hook.py' for check in local['checks'])
+                indexed = [check for check in indexed if check['check'] != 'pre-push-hook.py' or selected]
+                hook_scope = {'basis': basis, 'selected': selected, 'plan': scope, 'dirty_paths': dirty_paths}
+            else:
+                affected_plan = selector.plan(args.affected, args.changed)
+                indexed = [check for check in affected_plan['checks'] if check['status'] == 'runnable']
+                pending = [check for check in affected_plan['checks'] if check['status'] == 'pending']
+                variants = list(dict.fromkeys([*variants, affected_plan['baseline']]))
+        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            parser.error('cannot select indexed checks: ' + str(error))
     if any('npu' in v for v in variants) and not (cache / NPU_CATALOGUE).is_file():
         parser.error('the npu variant needs the NPU catalogue map ' + str(cache / NPU_CATALOGUE))
     selectors = compatibility_variables(source)
@@ -163,6 +210,8 @@ def main(argv=None):
     application_checks = {check: name for name, app in configured.items() for check in app['checks']}
     known_checks = (*CORE_CHECKS, *application_checks)
     checks = list(known_checks) if args.full else list(dict.fromkeys(args.check))
+    # Core commands already run these scripts with their established arguments.
+    indexed = [check for check in indexed if Path(check['check']).stem not in set(checks) & set(CORE_SCRIPTS)]
     if any(check not in known_checks for check in checks):
         parser.error('unknown check; external checks require --application or SUNSTONE_EXTERNAL_APPLICATIONS')
     for check in checks:
@@ -220,6 +269,14 @@ def main(argv=None):
     note('reason: ' + args.reason)
     note('source: ' + str(source))
     note('selection: ' + shlex.join(sys.argv[1:] if argv is None else argv))
+    if affected_plan is not None:
+        (output / 'affected.json').write_text(json.dumps(affected_plan, indent=2) + '\n')
+    if hook_scope is not None:
+        (output / 'hook-scope.json').write_text(json.dumps(hook_scope, indent=2) + '\n')
+        note('hook fixture: ' + ('selected' if hook_scope['selected'] else 'skipped') + '; ' + hook_scope['basis'])
+    note(f'indexed checks: {len(indexed)} runnable, {len(pending)} pending')
+    for check in pending:
+        note('PENDING checks/' + check['check'] + ': ' + ', '.join(check['needs']))
     revision, changes, diff, untracked = state
     note('revision: ' + (revision or 'unavailable'))
     note('diff-sha256: ' + (diff or 'unavailable'))
@@ -318,7 +375,7 @@ def main(argv=None):
         'kernel': ['tools/check-kernel.py', build / 'kernel-check.elf', '--qemu', qemu, '--evidence', evidence / 'kernel'],
         'soak8': ['tools/check-smp.py', build / 'smp8-soak-model.elf', '--case', 'soak8', '--trials', str(args.trials), '--qemu', qemu, '--evidence', evidence / 'soak8'],
         'shared-helpers': ['checks/shared-helpers.py', '--output', evidence / 'shared-helpers'],
-        'progress': ['checks/progress.py'],
+        'progress': ['checks/progress.py', '--output', evidence / 'progress'],
         'check-index': ['checks/check-index.py', '--verify'],
         'pmic-tree': ['checks/pmic-tree.py'],
         'power-domains-tree': ['checks/power-domains-tree.py'],
@@ -330,8 +387,17 @@ def main(argv=None):
     for check in checks:
         if not run('check-' + check, [python, *commands[check]]):
             return 1
+    for check in indexed:
+        command = [python, 'checks/' + check['check']]
+        if check['output']:
+            command += ['--output', evidence / 'indexed' / Path(check['check']).stem]
+        if not run('indexed-' + Path(check['check']).stem, command):
+            return 1
     if not unchanged('during the selected steps'):
         return 1
+    if affected_plan is not None and pending:
+        note('INCOMPLETE affected coverage: selected checks still need the inputs listed above')
+        return 2
     note('PASS selected integration checks; unselected behavior is not revalidated')
     return 0
 

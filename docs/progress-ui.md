@@ -26,12 +26,19 @@ must be present in `tools/progress-ui/` in the displayed repository.
 
 ## Canonical documents determine the displayed scope
 
-The server reads [the hardware matrix](hardware.md), [the handoff](handoff.md),
-[the mimus record](mimus.md), and [the validation policy](validation.md). It does
-not maintain a separate status file. Every hardware inventory row appears,
-including rows with no implementation. Stable name aliases associate the
-matrix's partial-evidence bullets with their inventory rows. Expanded details
-retain the canonical prose and documentation links.
+The server reads [the hardware matrix](hardware.md), its linked subsystem
+records in `docs/status/`, [the handoff](handoff.md), and
+[the validation policy](validation.md). An external application's source
+declaration can also select its evidence document. Every hardware inventory
+row appears. Expanded details retain the canonical prose and documentation links.
+
+Each inventory row links to its canonical record through `[State](status/NAME.md)`.
+A record starts with a title and a standalone `**Status: implemented.**` or
+`**Status: blocked.**` declaration. Its introductory `**Board-qualified scope:**`
+paragraph states the physical result, or `None.` when no physical result applies.
+A link fragment selects a section with its own scope paragraph and inherits the
+record's status. For example, `status/memory-dma.md#dma` can record no physical
+DMA result while the same document records DDR initialization.
 
 Implementation, evidence, and qualification are separate fields. An implemented
 row means that some of its scope has code. A physical result applies only to its
@@ -40,17 +47,18 @@ operation. The current matrix states that no row is fully qualified across all
 its required functions. The dashboard shows partial physical results, including
 GPU compute and NPU inference, while retaining zero fully qualified rows.
 
-Physical-result labels require known explicit statements in the matrix, such as
-boot-CPU instruction execution or USB high-speed exchanges. A host DMA test does
-not receive that label. Host, emulator, and source labels require affirmative
-evidence wording; pending tests do not count. These conservative text rules do
-not independently audit a test result. The original scope remains visible for
-review.
+Physical-result labels require an explicit, nonempty board-qualified scope other
+than `None.` in the selected record or section. Host, emulator, and source labels
+require affirmative evidence wording; pending tests do not count. These text
+rules do not independently audit a test result. The original scope remains
+visible for review. Older matrices without State links retain their existing
+prose parser and physical-result anchors.
 
 If the inventory table or qualification declaration changes format, the API
 reports an unsupported parser state and unknown qualification totals. It does
-not reinterpret missing rows as planned work. Unmatched evidence bullets appear
-in parser warnings with their original text so that aliases can be updated.
+not reinterpret missing rows as planned work. A missing or malformed status
+record, scope paragraph or selected section produces a visible warning and an
+unknown row status. Matrix prose cannot supply a replacement claim for that row.
 The ordered next actions and blocker paragraphs are copied from the handoff.
 
 ## Dependency graph covers the complete inventory
@@ -76,7 +84,10 @@ and cycles without suppressing the other dashboard views.
 ## Refreshes perform bounded local reads
 
 The browser refreshes while the page is visible. The server compares file
-modification time, size, inode and type before rebuilding a snapshot. An unchanged
+modification time, size, inode and type before rebuilding a snapshot. Inputs
+include every Markdown file directly in `docs/status/`, missing State-link
+targets, and the status directory itself. Adding, changing, removing or restoring
+a subsystem record invalidates the snapshot. An unchanged
 snapshot retains its HTTP ETag, allowing a conditional request to receive an
 empty `304` response. No language model, external API, build, benchmark or device
 command runs during refresh.
@@ -114,7 +125,8 @@ The server exposes these read-only endpoints:
 | `/api/document?path=docs/hardware.md` | Canonical Markdown as plain text |
 | `/api/source?path=docs/hardware.md` | The same document as JSON with path, title and content |
 
-Document paths must name a Markdown file directly within `docs/`. Each path
+Document paths must name a Markdown file directly within `docs/` or
+`docs/status/`. Relative links resolve from the document containing them. Each path
 component is opened without following symlinks. Arbitrary files, traversal,
 duplicate document parameters, Git files and symlinked assets are refused.
 Errors return fixed text without reflecting filesystem paths. Content security
@@ -129,15 +141,24 @@ panels do not modify project state.
 Run the backend check with:
 
 ```sh
-python3 -B checks/progress.py
+python3 -B checks/progress.py --output /absolute/new/progress-checks
 ```
 
 The focused fixture checks inventory coverage, planned rows, host-versus-physical
 classification, dependency coverage, cycle detection and unknown-format reporting.
-It also checks cache invalidation, Git worktree metadata, unchanged queue bytes,
+It also checks scoped subsystem records, missing and malformed records, nested
+document access, relative links, cache invalidation, Git worktree metadata, unchanged queue bytes,
 secret omission, concurrent queue changes, document boundaries, symlink refusal,
 Host/Origin validation and HTTP conditional requests. Temporary SQLite files and a loopback HTTP server are
-confined to the fixture. No board access occurs.
+confined to fresh fixture directories beneath the required `--output` directory.
+The output directory must not exist. Every fixture remains there for inspection
+after the check. No board access occurs.
+
+Subsystem-record parser and headless browser checks pass under
+`~/.cache/sunstoneos/build/check-selection-1031/dashboard/`. The browser checks
+cover relative links in hardware and dependency details, blocked badges and
+refresh after a record becomes malformed. That refresh clears the old physical
+result and displays an unknown status with its warning.
 
 Backend evidence is retained outside Git under
 `~/.cache/sunstoneos/evidence/progress-server-20261016/`. The integrated browser check passes search and filters, expanded-state retention,

@@ -88,6 +88,7 @@ The record of a board run is its log, the image hash and the Git revision.
 Apply [docs/validation.md](docs/validation.md) here and in application ports:
 run the checks that cover the change, in a build whose feature flags select the
 changed branches. A commit, rebase or handoff does not invalidate test evidence.
+Driver and fixture authors follow [completion and timing validation](docs/driver-validation.md).
 
 ## Parallel work and tool use
 

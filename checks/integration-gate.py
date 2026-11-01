@@ -3,6 +3,7 @@
 
 The cases cover selection, failure handling, evidence preservation,
 per-checkout build directories and the dirty-tree identity."""
+import argparse
 import hashlib
 import json
 import os
@@ -16,13 +17,12 @@ if not __debug__:
     raise SystemExit('checks require assertions')
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / 'tools/integration-gate.py'
+OUTPUT = None
 
 
 class GateTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.sandbox = Path(self.temp.name)
+        self.sandbox = Path(tempfile.mkdtemp(prefix='gate-', dir=OUTPUT))
         self.calls = self.sandbox / 'calls.jsonl'
         self.env = dict(os.environ, GATE_TEST_CALLS=str(self.calls), PYTHONDONTWRITEBYTECODE='1')
         self.env.pop('EXAMPLE_DIR', None)
@@ -57,6 +57,34 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         record = source / 'apps/example/source.json'
         record.parent.mkdir(parents=True)
         record.write_text('{"application_directory": "sunstoneos"}\n')
+        selector = source / 'checks/affected.py'
+        selector.parent.mkdir()
+        selector.write_text('''from types import SimpleNamespace
+import subprocess
+from pathlib import Path
+indexer = SimpleNamespace(generate=lambda: {
+    'focused.py': {'pure_host': True, 'required_arguments': ['--output']},
+    'progress.py': {'pure_host': True, 'required_arguments': []},
+    'pre-push-hook.py': {'pure_host': True, 'required_arguments': ['--output']},
+    'image.py': {'pure_host': False, 'library': False, 'required_arguments': ['--image']}})
+def needs(entry):
+    return ['--image']
+def plan(value=None, changed=None, index=None):
+    if value == 'HEAD^..HEAD':
+        changed = subprocess.check_output(['git', 'diff', '--name-only', 'HEAD^', 'HEAD'],
+                                          cwd=Path(__file__).resolve().parents[1], text=True).splitlines()
+    checks = [{'check': 'focused.py', 'status': 'runnable', 'needs': [], 'output': True},
+              {'check': 'progress.py', 'status': 'runnable', 'needs': [], 'output': False}]
+    if changed == ['pending']:
+        checks.append({'check': 'image.py', 'status': 'pending', 'needs': ['--image'], 'output': False})
+    if set(changed or []) & {'tools/git-hooks/pre-push', 'checks/harness.py', 'checks/pre-push-hook.py', 'untracked-hook-input.txt'}:
+        checks.append({'check': 'pre-push-hook.py', 'status': 'runnable', 'needs': [], 'output': True})
+    return {'baseline': 'sup', 'range': value, 'changed': changed, 'checks': checks}
+''')
+        (selector.parent / 'pre-push-hook.py').write_text('CHECK_INPUTS = ("untracked-hook-input.txt",)\nprint("fake hook fixture")\n')
+        hook = source / 'tools/git-hooks/pre-push'
+        hook.parent.mkdir(parents=True)
+        hook.write_text('# fake hook\n')
         git = ['git', '-c', 'user.name=gate', '-c', 'user.email=gate@example.invalid']
         for command in (['init', '-q'], ['add', '.'], ['commit', '-q', '-m', 'Gate test']):
             subprocess.run(git + command, cwd=source, check=True, capture_output=True)
@@ -96,7 +124,8 @@ if os.environ.get('GATE_TEST_FAIL') in args:
     def test_reason_is_optional_metadata(self):
         result = self.run_gate('--check', 'progress')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(len(self.records()), 1)
+        self.assertEqual(self.records(), [['python', 'checks/progress.py', '--output',
+                                         str(self.sandbox / 'build/gate-case/evidence/progress')]])
 
     def test_source_check_needs_no_build_and_deduplicates(self):
         result = self.run_gate('--reason', 'PMIC source ownership', '--check', 'pmic-tree', '--check', 'pmic-tree')
@@ -207,6 +236,145 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertIn('-DEXAMPLE_DIR=', calls[0])
         self.assertIn('-DSUNSTONE_APPLICATION=', calls[0])
         self.assertEqual(calls[0][2], str(self.sandbox / 'build' / ('gate-os-resaud-' + self.tree(self.source))))
+
+    def test_affected_runs_one_baseline_and_deduplicates_core_checks(self):
+        result = self.run_gate('--affected', 'HEAD~1..HEAD', '--check', 'progress')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.records()
+        self.assertEqual(sum(call[0] == 'cfg.sh' for call in calls), 1)
+        self.assertIn('-DSUNSTONE_A733_OS=ON', calls[0])
+        runs = [call for call in calls if call[0] == 'python']
+        self.assertEqual([call[1] for call in runs], ['checks/progress.py', 'checks/focused.py'])
+        self.assertIn('--output', runs[1])
+        self.assertTrue((self.sandbox / 'build/gate-case/affected.json').is_file())
+
+    def test_pending_affected_checks_are_reported_and_incomplete(self):
+        result = self.run_gate('--changed', 'pending')
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('PENDING checks/image.py: --image', result.stdout)
+        self.assertIn('INCOMPLETE affected coverage', result.stdout)
+        self.assertFalse(any('checks/image.py' in call for call in self.records()))
+
+    def commit_source(self, name):
+        path = self.source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('changed\n')
+        subprocess.run(['git', 'add', '.'], cwd=self.source, check=True, capture_output=True)
+        subprocess.run(['git', '-c', 'user.name=gate', '-c', 'user.email=gate@example.invalid',
+                        'commit', '-qm', 'Change ' + name], cwd=self.source, check=True, capture_output=True)
+
+    def test_full_hook_fixture_uses_explicit_changed_inputs(self):
+        catalogue = self.sandbox / 'build/npu-board/session-artifacts.json'
+        catalogue.parent.mkdir(parents=True, exist_ok=True)
+        catalogue.write_text('{}\n')
+        for number, (changed, expected) in enumerate((('drivers/ordinary.c', False),
+                                                     ('tools/git-hooks/pre-push', True),
+                                                     ('checks/harness.py', True),
+                                                     ('checks/pre-push-hook.py', True))):
+            with self.subTest(changed=changed):
+                before = len(self.records())
+                result = self.run_gate('--full', '--changed', changed, label='scope-' + str(number))
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                runs = [call for call in self.records()[before:] if call[0] == 'python']
+                self.assertEqual(sum('checks/pre-push-hook.py' in call for call in runs), int(expected))
+                self.assertEqual(sum('checks/focused.py' in call for call in runs), 1)
+                self.assertEqual(sum('checks/progress.py' in call for call in runs), 1)
+                self.assertEqual(len(runs), 8 + int(expected))
+
+    def test_full_hook_fixture_default_scope_and_explicit_range(self):
+        catalogue = self.sandbox / 'build/npu-board/session-artifacts.json'
+        catalogue.parent.mkdir(parents=True, exist_ok=True)
+        catalogue.write_text('{}\n')
+        # A root commit selects its tracked hook fixture; later defaults use the
+        # latest first-parent change instead of treating every full check as changed.
+        for label, changed, expected, explicit in (('root', None, True, False),
+                                                  ('driver', 'drivers/ordinary.c', False, False),
+                                                  ('harness', 'checks/harness.py', True, True)):
+            with self.subTest(case=label):
+                if changed:
+                    self.commit_source(changed)
+                before = len(self.records())
+                selection = ['--full', *(['--affected', 'HEAD^..HEAD'] if explicit else [])]
+                result = self.run_gate(*selection, label=label)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                runs = [call for call in self.records()[before:] if call[0] == 'python']
+                self.assertEqual(sum('checks/pre-push-hook.py' in call for call in runs), int(expected))
+                self.assertEqual(len(runs), 8 + int(expected))
+                scope = json.loads((self.sandbox / 'build' / ('gate-' + label) / 'hook-scope.json').read_text())
+                self.assertEqual(scope['selected'], expected)
+                if label == 'root':
+                    self.assertEqual(scope['basis'], 'all tracked files at the root commit')
+                else:
+                    self.assertEqual(scope['plan']['range'], 'HEAD^..HEAD')
+
+    def test_full_default_scope_includes_local_hook_inputs(self):
+        catalogue = self.sandbox / 'build/npu-board/session-artifacts.json'
+        catalogue.parent.mkdir(parents=True, exist_ok=True)
+        catalogue.write_text('{}\n')
+        self.commit_source('drivers/ordinary.c')
+        for number, (changed, expected) in enumerate((('unrelated-note.txt', False),
+                                                     ('tools/git-hooks/pre-push', True),
+                                                     ('checks/pre-push-hook.py', True),
+                                                     ('untracked-hook-input.txt', True))):
+            with self.subTest(changed=changed):
+                path = self.source / changed
+                original = path.read_text() if path.exists() else None
+                path.write_text('local fixture change\n')
+                before = len(self.records())
+                result = self.run_gate('--full', label='local-' + str(number))
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                runs = [call for call in self.records()[before:] if call[0] == 'python']
+                self.assertEqual(sum('checks/pre-push-hook.py' in call for call in runs), int(expected))
+                self.assertEqual(len(runs), 8 + int(expected))
+                output = self.sandbox / 'build' / ('gate-local-' + str(number))
+                scope = json.loads((output / 'hook-scope.json').read_text())
+                self.assertIn(changed, scope['dirty_paths'])
+                self.assertEqual(scope['selected'], expected)
+                if original is not None:
+                    path.write_text(original)
+
+    def test_full_default_scope_keeps_the_original_renamed_hook_path(self):
+        catalogue = self.sandbox / 'build/npu-board/session-artifacts.json'
+        catalogue.parent.mkdir(parents=True, exist_ok=True)
+        catalogue.write_text('{}\n')
+        self.commit_source('drivers/ordinary.c')
+        old, new = 'tools/git-hooks/pre-push', 'tools/git-hooks/renamed-hook'
+        subprocess.run(['git', 'mv', old, new], cwd=self.source, check=True, capture_output=True)
+        result = self.run_gate('--full')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        runs = [call for call in self.records() if call[0] == 'python']
+        self.assertEqual(sum('checks/pre-push-hook.py' in call for call in runs), 1)
+        self.assertEqual(len(runs), 9)
+        scope = json.loads((self.sandbox / 'build/gate-case/hook-scope.json').read_text())
+        self.assertTrue({old, new} <= set(scope['dirty_paths']))
+        self.assertTrue(scope['selected'])
+
+    def test_external_name_collision_keeps_the_indexed_os_check(self):
+        checker = self.enable_example()
+        record = self.example / 'sunstoneos/gate.json'
+        app = json.loads(record.read_text())
+        app['checks']['focused'] = app['checks'].pop('example-smp')
+        app['checks']['focused'][1][-1] = '{evidence}/focused'
+        record.write_text(json.dumps(app))
+        catalogue = self.sandbox / 'build/npu-board/session-artifacts.json'
+        catalogue.parent.mkdir(parents=True, exist_ok=True)
+        catalogue.write_text('{}\n')
+        for label, selection in (('affected', ['--affected', 'HEAD~1..HEAD', '--check', 'focused']),
+                                 ('full', ['--full'])):
+            with self.subTest(selection=label):
+                before = len(self.records())
+                result = self.run_gate(*selection, label=label)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                runs = [call for call in self.records()[before:] if call[0] == 'python']
+                self.assertEqual(sum('checks/focused.py' in call for call in runs), 1)
+                self.assertEqual(sum(str(checker) in call for call in runs), 1)
+                output = self.sandbox / 'build' / ('gate-' + label)
+                self.assertTrue((output / 'check-focused.log').is_file())
+                self.assertTrue((output / 'indexed-focused.log').is_file())
+                indexed = next(call for call in runs if 'checks/focused.py' in call)
+                external = next(call for call in runs if str(checker) in call)
+                self.assertEqual(indexed[-1], str(output / 'evidence/indexed/focused'))
+                self.assertEqual(external[-1], str(output / 'evidence/focused'))
 
     def test_npu_variant_names_the_cached_catalogue(self):
         refused = self.run_gate('--reason', 'OS NPU profile', '--variant', 'npu')
@@ -389,7 +557,9 @@ exec "$REAL" "$@"
         self.assertEqual(application[application.index('--target') + 1:],
                          ['sunstone-a733-os', 'smp-example-model', '-j', '12'])
         runs = [c for c in calls if c[0] == 'python']
-        self.assertEqual(len(runs), 8)
+        self.assertEqual(len(runs), 10)
+        self.assertEqual(sum('checks/focused.py' in call for call in runs), 1)
+        self.assertEqual(sum('checks/progress.py' in call for call in runs), 1)
         soak = next(c for c in runs if 'tools/check-smp.py' in c)
         self.assertEqual(soak[soak.index('--trials') + 1], '2')
 
@@ -421,4 +591,9 @@ exec "$REAL" "$@"
 
 
 if __name__ == '__main__':
-    unittest.main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, required=True)
+    options, remaining = parser.parse_known_args()
+    OUTPUT = options.output.resolve()
+    OUTPUT.mkdir(parents=True, exist_ok=False)
+    unittest.main(argv=['integration-gate.py', *remaining])

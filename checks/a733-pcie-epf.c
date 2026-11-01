@@ -12,7 +12,7 @@ static uint8_t output[4096];
 static int epf_read(void *v,uintptr_t a,unsigned width,uint32_t *out)
 {
  assert(a733_pcie_native_address(a,width,0)||a733_pcie_epf_native_address(&port,a,width,0));
- if(a>=0x22000000&&a<=0x2200002c){assert(width==4);*out=*pmic_model_word(v,a);return 1;}
+ if(a>=0x22000000&&a<=0x2200002c){assert(width==4&&!atu_effects[1].pending&&(*pmic_model_word(v,0x06300204)&(1u<<31)));*out=*pmic_model_word(v,a);return 1;}
  return pcie_read(v,a,width,out);
 }
 static int epf_write(void *v,uintptr_t a,unsigned width,uint32_t value)
@@ -23,6 +23,7 @@ static int epf_write(void *v,uintptr_t a,unsigned width,uint32_t value)
  if(wide_bar&&a==0x20000014&&value==UINT32_MAX){*pmic_model_word(v,a)=UINT32_MAX;return 1;}
  if(a==0x06000830){assert(value==1);*pmic_model_word(v,a)&=~value;return 1;}
  if(a==0x22000004){assert(irq_armed&&!submitted&&value==32);++submitted;}
+ if(a>=0x06300200&&a<=0x06300218)return atu_model_write(v,a,value);
  if(a733_pcie_native_address(a,width,1))return pcie_write(v,a,width,value);
  uint32_t *word=pmic_model_word(v,a&~(uintptr_t)3),mask=width==4?UINT32_MAX:65535u<<((a&3)*8);
  *word=(*word&~mask)|(value<<((a&3)*8));return 1;

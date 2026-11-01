@@ -17,6 +17,9 @@ from harness import Image, hook_addresses
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_PC, UC_ARM64_REG_LR
 
+CHECK_INPUTS = ('apps/os/capture.c', 'checks/os-audio-replay-application.c')
+
+
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)

@@ -192,7 +192,7 @@ static int time_ok(struct ov5640 *s)
 }
 static int delay(struct ov5640 *s, uint64_t us)
 {
-    if (!a733_deadline_after(s->now, us, &s->wait_until)) return fault(s);
+    if (us == UINT64_MAX || !a733_deadline_after(s->now, us + 1, &s->wait_until)) return fault(s);
     return 0;
 }
 int ov5640_init(struct ov5640 *s, const struct ov5640_ops *ops, void *context,

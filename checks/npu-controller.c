@@ -1,5 +1,6 @@
 /* Stateful MMIO and noncoherent-buffer model; no physical NPU emulation. */
 #include "a733_npu_controller.h"
+#include "register_latency.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -18,11 +19,20 @@ struct device {
     unsigned active, event_sent, cancel_pulse, cancel_done, refuse_cancel;
     unsigned io_fail_at, calls, failed, ignore_write, ignore_start, finish_fail, publish_fail;
     unsigned inject_late_fault;
+    unsigned fractional, assertion_cost;
+    uint64_t counter, asserted_counter;
+    struct register_latency cancel_effect;
     unsigned char cpu_input[64], device_input[64], cpu_output[64], device_output[64];
 };
 
 static void advance(struct device *d)
 {
+    if(d->fractional && d->cancel_effect.pending) {
+        d->reg[0x3a8/4]=reg_latency_apply(&d->cancel_effect,d->counter,d->reg[0x3a8/4]);
+        if(!d->cancel_effect.pending) {
+            d->cancel_done=1;d->reg[1]=IDLE;d->active=0;
+        }
+    }
     if (!d->active) return;
     uint64_t elapsed = d->now - d->launched;
     if (!d->event_sent && elapsed >= d->event_after) {
@@ -55,12 +65,21 @@ static int write32(void *cookie, unsigned at, uint32_t value)
     if (!access_ok(d)) return 0;
     assert(at < sizeof(d->reg) && !(at & 3)); ++d->writes;
     if (at == d->ignore_write) return 1;
+    if(d->fractional && at==0x3a8 && (value&8)) {
+        d->counter+=d->assertion_cost;d->now=d->counter/24;
+        d->asserted_counter=d->counter;
+    }
     d->reg[at/4] = value;
     if (at == 0x3a8) {
         if (value & 1) { ++d->resets; d->reg[0x388/4] = 0; d->reg[1] = IDLE; }
         if (value & 8) d->cancel_pulse = 1;
         else if (d->cancel_pulse && !d->refuse_cancel) {
-            d->cancel_done = 1; d->reg[at/4] |= 16; d->reg[1] = IDLE; d->active = 0;
+            if(d->fractional) {
+                assert(d->counter-d->asserted_counter>=2400);
+                reg_latency_schedule(&d->cancel_effect,d->counter,48,16,16);
+            } else {
+                d->cancel_done = 1; d->reg[at/4] |= 16; d->reg[1] = IDLE; d->active = 0;
+            }
         }
     }
     if (at == 0x3a4) {
@@ -75,7 +94,12 @@ static int write32(void *cookie, unsigned at, uint32_t value)
     }
     return 1;
 }
-static uint64_t clock_us(void *cookie) { return ((struct device *)cookie)->now; }
+static uint64_t clock_us(void *cookie)
+{
+    struct device *d=cookie;
+    if(d->fractional)d->now=d->counter/24;
+    return d->now;
+}
 static void delay_us(void *cookie, unsigned us) { ((struct device *)cookie)->now += us; }
 static void barrier(void *cookie) { ++((struct device *)cookie)->barriers; }
 static int publish(void *cookie, const struct a733_npu_mmu_image *selected,
@@ -208,10 +232,44 @@ static void check_mmu_control(void)
     puts("PASS NPU MMU control: all single-bit deviations retain submission, completion and close");
 }
 
+static void completion_cases(void)
+{
+    struct device d;struct a733_npu_controller c;
+    started(&d,&c);d.event_after=d.idle_after=10000;
+    assert(a733_npu_submit(&c,&task,1000));
+    d.fractional=1;d.counter=d.now*24+23;d.assertion_cost=120;
+    assert(a733_npu_cancel(&c,500) && c.cancel_asserted_us==c.cancel_start+5);
+    unsigned writes=d.writes;
+    d.counter+=2399;
+    assert(a733_npu_poll(&c)==A733_NPU_CANCEL_ASSERTED && d.writes==writes);
+    d.counter+=25;
+    assert(a733_npu_poll(&c)==A733_NPU_CANCEL_WAIT && d.cancel_effect.pending);
+    assert(a733_npu_poll(&c)==A733_NPU_CANCEL_WAIT && d.finished==1);
+    d.counter+=48;
+    assert(a733_npu_poll(&c)==A733_NPU_CANCELED && d.finished==2 && d.cancel_done);
+
+    started(&d,&c);d.event_after=d.idle_after=10000;
+    assert(a733_npu_submit(&c,&task,1000));
+    d.fractional=1;d.counter=d.now*24+23;d.assertion_cost=501*24;
+    assert(!a733_npu_cancel(&c,500) && c.fault==A733_NPU_TIMEOUT);
+    assert((d.reg[0x3a8/4]&8) && !d.cancel_effect.pending && d.finished==1);
+    retained(&d,&c);
+
+    started(&d,&c);d.event_after=d.idle_after=10000;
+    assert(a733_npu_submit(&c,&task,1000));
+    d.fractional=1;d.counter=d.now*24+23;d.assertion_cost=120;
+    assert(a733_npu_cancel(&c,101));writes=d.writes;d.counter+=96*24;
+    assert(a733_npu_poll(&c)==A733_NPU_FAULT && c.fault==A733_NPU_TIMEOUT);
+    assert(d.writes==writes && (d.reg[0x3a8/4]&8) && d.finished==1);
+    retained(&d,&c);
+    puts("PASS NPU cancel: fractional minimum after costly assertion, delayed acknowledgement, original hard timeout retains asserted cancellation");
+}
+
 int main(int argc, char **argv)
 {
     struct a733_npu_region region = {0x51000000, 1048576, 0x10000000, A733_NPU_PAGE_4K, 0};
     assert(a733_npu_mmu_build(tables, sizeof(tables), 0x49000000, &region, 1, &mmu));
+    if(argc==2 && !strcmp(argv[1],"--completion-only")){completion_cases();return 0;}
     if (argc == 2 && !strcmp(argv[1], "--mmu-control-only")) {
         check_mmu_control(); return 0;
     }
@@ -271,6 +329,7 @@ int main(int argc, char **argv)
     assert(a733_npu_submit(&c, &task, 1000)); assert(a733_npu_cancel(&c, 500));
     unsigned writes = d.writes; d.now += 99;
     assert(a733_npu_poll(&c) == A733_NPU_CANCEL_ASSERTED && d.writes == writes);
+    d.now++; assert(a733_npu_poll(&c) == A733_NPU_CANCEL_ASSERTED);
     d.now++; assert(a733_npu_poll(&c) == A733_NPU_CANCEL_WAIT);
     assert(a733_npu_poll(&c) == A733_NPU_CANCELED);
     assert(a733_npu_reap(&c, &token, &canceled) && canceled && token == &task_resource);
@@ -279,7 +338,7 @@ int main(int argc, char **argv)
 
     started(&d, &c); d.event_after = d.idle_after = 10000;
     assert(a733_npu_submit(&c, &task, 1000) && a733_npu_cancel(&c, 500));
-    d.now += 100; assert(a733_npu_poll(&c) == A733_NPU_CANCEL_WAIT);
+    d.now += 101; assert(a733_npu_poll(&c) == A733_NPU_CANCEL_WAIT);
     d.reg[1] = 0; /* Cancellation acknowledged, but memory is still busy. */
     assert(a733_npu_poll(&c) == A733_NPU_CANCEL_WAIT && d.finished == 1);
     d.now += 400; assert(a733_npu_poll(&c) == A733_NPU_FAULT); retained(&d, &c);

@@ -35,6 +35,7 @@ import struct
 import subprocess
 import sys
 import time
+from host_evidence import evidence_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / ".cache/sunstoneos"
@@ -168,7 +169,7 @@ if restore:
         sys.exit("--fallback-build must be the plain full-training wrapper for the same boot0.")
     if fallback.get("clock_point_word") != 15:
         sys.exit(f"--fallback-build {args.fallback_build} predates the CPU clock return; rebuild it with tools/prepare-ddr.py.")
-args.evidence.mkdir(parents=True, exist_ok=False)
+args.evidence = evidence_directory(args.evidence)
 record = {"manifest": manifest, "tool_sha256": hashlib.sha256(args.fel.read_bytes()).hexdigest(),
           "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
           "transactions": [], "complete": False, "launch_attempted": False,

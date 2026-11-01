@@ -210,8 +210,8 @@ enum a733_display_pll_state a733_display_pll_poll(struct a733_display_pll *p)
     default:fail(p,A733_DISPLAY_PLL_IO);break;
     }
     if (timely(p)) {
-        if (p->stage==FILTER || p->stage==SETTLE) delay(p,p->stage==SETTLE?25:5);
-        else if (p->stage==PROGRAM && p->substep==5) {p->substep=0;delay(p,20);}
+        if (p->stage==FILTER || p->stage==SETTLE) delay(p,p->stage==SETTLE?25:6);
+        else if (p->stage==PROGRAM && p->substep==5) {p->substep=0;delay(p,21);}
         if (finishing) p->state=A733_DISPLAY_PLL_READY_RETAINED;
     }
 out:

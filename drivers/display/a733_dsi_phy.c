@@ -141,7 +141,7 @@ static int clock_ok(struct a733_dsi_phy *p)
 }
 static void wait_for(struct a733_dsi_phy *p, unsigned us)
 {
-    if (!a733_deadline_after(p->last_now, us, &p->wait_until)) fail(p, A733_DSI_PHY_TIME);
+    if (!a733_deadline_after(p->last_now, (uint64_t)us + 1, &p->wait_until)) fail(p, A733_DSI_PHY_TIME);
 }
 static uint32_t field_value(const struct a733_dsi_phy *p, const struct field *f)
 {

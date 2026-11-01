@@ -97,6 +97,13 @@ static void defer_command(struct sunxi_mmc *h, uint64_t delay_us)
     if (!time_ok(h)) return;
     if (!a733_deadline_after(h->last_us, delay_us, &h->retry_us)) fault(h, SUNXI_MMC_TIME);
 }
+/* Only source-required minimum holds need the floor-us quantization guard.
+ * Poll intervals continue to use defer_command without this extra unit. */
+static void defer_hold(struct sunxi_mmc *h,uint64_t delay_us)
+{
+    if(delay_us==UINT64_MAX){fault(h,SUNXI_MMC_TIME);return;}
+    defer_command(h,delay_us+1);
+}
 static uint32_t bits(const uint32_t *r, unsigned start, unsigned count)
 {
     unsigned word = 3 - start / 32, shift = start % 32;
@@ -341,7 +348,7 @@ static void setup(struct sunxi_mmc *h)
         if ((v & ((1u << 31) | (1u << 5) | 7u)) != START) { fault(h, SUNXI_MMC_CONTROLLER); return; }
         h->setup = 6;
         queue(h, P_IDLE, 1u << 15, 0, 0, 0);
-        defer_command(h, 1000); return;
+        defer_hold(h, 1000); return;
     default: return;
     }
 }
@@ -767,7 +774,7 @@ static void sd_signal(struct sunxi_mmc *h)
             if(h->last_us-h->signal_us>=10000){fault(h,SUNXI_MMC_SIGNAL);return;}
             defer_command(h,100);return;
         }
-        h->card.signal_1v8=1;defer_command(h,10000);++h->sd_sig;return;
+        h->card.signal_1v8=1;defer_hold(h,10000);++h->sd_sig;return;
     case 3:
         if(!wr(h,4,(1u<<16)|MASK_DAT0)||!fence(h)||!wr(h,0x18,UPDATE|VSW))return;
         if(!time_ok(h))return;
@@ -786,7 +793,7 @@ static void sd_signal(struct sunxi_mmc *h)
          * voltage-switch and command-done bits arrive after the clock restart. */
         if(!interrupts(h)||!wr(h,0x38,h->result.interrupts&0xffffu)||!wr(h,4,1u<<16)||!rd(h,4,&v))return;
         if(v!=(1u<<16)){fault(h,SUNXI_MMC_CONTROLLER);return;}
-        defer_command(h,1000);++h->sd_sig;return;
+        defer_hold(h,1000);++h->sd_sig;return;
     case 4:
         /* card_busy's separate 10 ms begins after Linux's 1 ms delay. */
         h->signal_us=h->last_us;++h->sd_sig;
@@ -845,7 +852,7 @@ static void protocol(struct sunxi_mmc *h)
     case P_IDLE:
         queue(h, mmc ? P_MMC_QUERY : P_SD_IF, mmc ? (1u | RESP) : (8u | RESP | CRC),
               mmc ? 0 : 0x1aa, 0, 0);
-        defer_command(h, 2000); return;
+        defer_hold(h, 2000); return;
     case P_SD_IF:
         if (r != 0x1aa) { fault(h, SUNXI_MMC_UNSUPPORTED); return; }
         if (UHS_ON && h->config.sd_profile == UHS) {
@@ -890,7 +897,7 @@ static void protocol(struct sunxi_mmc *h)
         queue(h, P_CID, 2u | RESP | LONG | CRC, 0, 0, 0); return;
     case P_SD_VOLTAGE:
         if (!UHS_ON || !card_response(h)) { fault(h, SUNXI_MMC_CARD); return; }
-        h->protocol = P_SD_SIGNAL; h->sd_sig = 0; defer_command(h, 1000); return;
+        h->protocol = P_SD_SIGNAL; h->sd_sig = 0; defer_hold(h, 1000); return;
     case P_CID:
         for (unsigned i = 0; i < 4; ++i) h->card.cid[i] = h->response[i];
         queue(h, P_RCA, 3u | RESP | CRC, mmc ? (1u << 16) : 0, 0, 0); return;
