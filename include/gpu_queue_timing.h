@@ -2,6 +2,9 @@
 #define SUNSTONE_GPU_QUEUE_TIMING_H
 #include <stdint.h>
 #include "gpu_queue.h"
+#ifdef SUNSTONE_GPU_NSI_PMU
+#include "a733_gpu_nsi_pmu.h"
+#endif
 #define GPU_QUEUE_TIMING_CAPACITY 192u
 /* Architectural counter ticks (24 MHz), except explicitly named raw fields. */
 enum gpu_queue_timing_stamp {
@@ -28,6 +31,9 @@ struct gpu_queue_timing_state {
     uint32_t pmic_observed, pmic_retained, pmic_selector_raw, pmic_enable_raw, pmic_programmed_uv;
 };
 struct gpu_queue_timing_record {
+#ifdef SUNSTONE_GPU_NSI_PMU
+    struct a733_gpu_nsi_record nsi;
+#endif
     uint64_t ticks[GPU_TIMING_STAMPS];
     uint64_t sync_bytes, clean_ticks, clean_bytes, invalidate_ticks, invalidate_bytes;
     uint64_t firmware_pre_raw, firmware_post_raw;
@@ -52,6 +58,9 @@ void gpu_queue_timing_irq(void);
 void gpu_queue_timing_block_receive(void *);
 void gpu_queue_timing_cr(unsigned, uint64_t, uint64_t, uint64_t);
 void a733_gpu_backend_timing_sample(unsigned);
+#ifdef SUNSTONE_GPU_NSI_PMU
+void a733_gpu_backend_nsi_sample(unsigned, struct a733_gpu_nsi_record *);
+#endif
 int a733_gpu_backend_timing_state(struct gpu_queue_timing_state *);
 void gpu_queue_timing_state_sample(unsigned);
 #ifdef __cplusplus

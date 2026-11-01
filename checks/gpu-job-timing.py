@@ -11,6 +11,7 @@ from harness import CLANG
 parser = argparse.ArgumentParser()
 parser.add_argument("compile_commands", type=pathlib.Path)
 parser.add_argument("--output", type=pathlib.Path, required=True)
+parser.add_argument("--nsi", action="store_true", help="exercise optional NSI diagnostic callbacks")
 args = parser.parse_args()
 root = pathlib.Path(__file__).resolve().parents[1]
 commands = json.loads(args.compile_commands.read_text())
@@ -19,7 +20,9 @@ flags = [f for f in shlex.split(command["command"]) if f.startswith(("-I", "-D")
 # The host calls the diagnostic crumb callback directly. The board's SVC
 # transport is AArch64-only and is covered by the native build and queued run.
 flags = [f for f in flags if "newlib" not in f.lower()
-         and not f.startswith("-DSUNSTONE_CRUMBS")]
+         and not f.startswith(("-DSUNSTONE_CRUMBS", "-DSUNSTONE_GPU_NSI_PMU"))]
+if args.nsi:
+    flags.append("-DSUNSTONE_GPU_NSI_PMU=1")
 flags.insert(0, "-I" + str(root / "include"))
 args.output.mkdir(parents=True, exist_ok=True)
 os.environ["TMPDIR"] = str(args.output)

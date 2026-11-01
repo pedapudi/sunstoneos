@@ -14,6 +14,9 @@
 #include "a733_gpu_platform_native.h"
 #include "pvr_gpu_crumb.h"
 #include "pvr_compute_queue.h"
+#ifdef SUNSTONE_GPU_NSI_PMU
+#include "a733_gpu_nsi_pmu.h"
+#endif
 
 /* The first backend error records its statement in the breadcrumb record
  * (pvr_gpu_crumb.h, unit BACKEND) before the service sees the failure. */
@@ -325,6 +328,83 @@ static struct a733_gpu_backend *timing_live(void)
        (b->external.live && b->external.live(b->external.context)!=1))return NULL;
     return b;
 }
+#ifdef SUNSTONE_GPU_NSI_PMU
+static struct a733_gpu_nsi_pmu nsi_pmu;
+static struct a733_gpu_nsi_record *nsi_active;
+static uint64_t nsi_ticks(void *context)
+{
+    (void)context;uint64_t t;
+    __asm__ volatile("isb; mrs %0, cntpct_el0":"=r"(t)::"memory");return t;
+}
+static int nsi_register(enum a733_gpu_nsi_register reg)
+{ return reg==A733_NSI_ENABLE || reg==A733_NSI_CLEAR || reg==A733_NSI_CYCLE || reg==A733_NSI_READ || reg==A733_NSI_WRITE; }
+static int nsi_read(void *context,enum a733_gpu_nsi_register reg,uint32_t *v)
+{
+    (void)context;
+    if(!nsi_register(reg) || !device_page(UINT32_C(0x02020000)+reg))return 0;
+    *v=a733_mmio_read32_dsb_sy_both(UINT32_C(0x02020000)+reg);return 1;
+}
+static int nsi_write(void *context,enum a733_gpu_nsi_register reg,uint32_t v)
+{
+    (void)context;
+    if((reg!=A733_NSI_ENABLE && reg!=A733_NSI_CLEAR && reg!=A733_NSI_CYCLE) ||
+       !device_page(UINT32_C(0x02020000)+reg))return 0;
+    a733_mmio_write32_dsb_sy_both(UINT32_C(0x02020000)+reg,v);return 1;
+}
+static int nsi_clock_read(uintptr_t address,uint32_t *v)
+{
+    if(!device_page(address))return 0;
+    *v=a733_mmio_read32_dsb_sy_both(address);return 1;
+}
+void a733_gpu_backend_nsi_sample(unsigned position,struct a733_gpu_nsi_record *r)
+{
+    if(!r)return;
+    /* Cleanup remains permitted after a job failure while the GPU's existing
+     * owner and its NSI counter ownership remain retained. No device power,
+     * parent clock, reset or QoS operations are performed. */
+    if(position==2){
+        if(!nsi_pmu.owned)return;
+        a733_gpu_nsi_end(&nsi_pmu,r);
+        nsi_active=NULL;
+        if(r->samples) {
+            uint32_t oscillator,reference,peri0,peri_pattern0,peri_pattern1,de,pattern0,pattern1,gate;
+            if(!nsi_clock_read(0x02002580,&r->clock_end_raw) || r->clock_end_raw!=r->clock_raw ||
+               !nsi_clock_read(0x07090160,&oscillator) || oscillator!=r->oscillator_raw ||
+               !nsi_clock_read(0x02002000,&reference) || reference!=r->reference_raw ||
+               !nsi_clock_read(0x020020a0,&peri0) || peri0!=r->peri0_raw ||
+               !nsi_clock_read(0x020020a8,&peri_pattern0) || peri_pattern0!=r->peri_pattern0_raw ||
+               !nsi_clock_read(0x020020ac,&peri_pattern1) || peri_pattern1!=r->peri_pattern1_raw ||
+               !nsi_clock_read(0x020022e0,&de) || de!=r->de_raw ||
+               !nsi_clock_read(0x020022e8,&pattern0) || pattern0!=r->pattern0_raw ||
+               !nsi_clock_read(0x020022ec,&pattern1) || pattern1!=r->pattern1_raw ||
+               !nsi_clock_read(0x02002584,&gate) || gate!=r->gate_raw) {
+                if(r->status!=A733_NSI_IO)r->status=A733_NSI_CLOCK;
+            }
+        }
+        return;
+    }
+    if(!timing_live())return;
+    if(position==1){a733_gpu_nsi_after_kick(&nsi_pmu,r);return;}
+    if(position!=0)return;
+    uint32_t oscillator,reference,peri0,peri_pattern0,peri_pattern1,de,pattern0,pattern1,clock;
+    r->status=A733_NSI_CLOCK;
+    uint32_t gate;
+    if(!nsi_clock_read(0x07090160,&oscillator) || !nsi_clock_read(0x02002000,&reference) ||
+       !nsi_clock_read(0x020020a0,&peri0) || !nsi_clock_read(0x020022e0,&de) ||
+       !nsi_clock_read(0x020020a8,&peri_pattern0) || !nsi_clock_read(0x020020ac,&peri_pattern1) ||
+       !nsi_clock_read(0x020022e8,&pattern0) || !nsi_clock_read(0x020022ec,&pattern1) ||
+       !nsi_clock_read(0x02002580,&clock) || !nsi_clock_read(0x02002584,&gate) ||
+       (gate&0x10001)!=0x10001)return;
+    const uint32_t hz=a733_gpu_nsi_hz(oscillator,reference,peri0,peri_pattern0,peri_pattern1,de,pattern0,pattern1,clock);
+    const struct a733_gpu_nsi_ops ops={nsi_read,nsi_write,nsi_ticks};
+    a733_gpu_nsi_begin(&nsi_pmu,&ops,timing_backend,hz,clock,r);
+    r->oscillator_raw=oscillator;r->reference_raw=reference;r->peri0_raw=peri0;
+    r->peri_pattern0_raw=peri_pattern0;r->peri_pattern1_raw=peri_pattern1;
+    r->de_raw=de;r->pattern0_raw=pattern0;r->pattern1_raw=pattern1;
+    r->gate_raw=gate;
+    if(nsi_pmu.owned)nsi_active=r;
+}
+#endif
 void a733_gpu_backend_timing_sample(unsigned position)
 {
     struct a733_gpu_backend *b=timing_live();
@@ -622,6 +702,14 @@ static int isolate(void *context)
 {
     struct a733_gpu_backend *b = context;
     if (!active(b)) return 0;
+#ifdef SUNSTONE_GPU_NSI_PMU
+    /* IA6 belongs to GPU_TOP in the vendor device tree. Restore its counter
+     * before domain teardown; recovered completion is posted after power-off. */
+    if(nsi_active) {
+        nsi_active->status=A733_NSI_IO;
+        a733_gpu_backend_nsi_sample(2,nsi_active);
+    }
+#endif
     uint64_t deadline = b->service->stop.deadline;
     if (b->service->stop.phase != PVR_GPU_STOP_ISOLATE ||
         (b->service->stop.unacknowledged && (!b->recovering || !b->recovery_reset)) || !before(b, deadline) ||

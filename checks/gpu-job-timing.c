@@ -3,6 +3,11 @@
 static TaskHandle_t current;
 static unsigned cache_calls, expanded_count, cr_samples, state_samples, block_next, receive_timeout, complete_during_sample;
 static struct pvr_cccb_command expanded[4];
+#ifdef SUNSTONE_GPU_NSI_PMU
+static unsigned nsi_calls[3];
+void a733_gpu_backend_nsi_sample(unsigned position,struct a733_gpu_nsi_record *r)
+{ assert(position<3);++nsi_calls[position];r->samples|=1u<<position; }
+#endif
 TaskHandle_t xTaskGetCurrentTaskHandle(void) { return current; }
 void a733_gpu_backend_timing_sample(unsigned p) { ++cr_samples;gpu_queue_timing_cr(p,100+p,10+p,20+p); }
 int a733_gpu_backend_timing_state(struct gpu_queue_timing_state *s)
@@ -103,6 +108,9 @@ int main(void)
     assert(r.state[3].pmic_retained && r.state[3].pmic_selector_raw==0x2e);
     assert(r.mid_samples==2 && state_samples==5);
     assert(r.cr_raw[2]==102 && r.sync_bytes==64 && r.timestamp_injected);
+#ifdef SUNSTONE_GPU_NSI_PMU
+    assert(nsi_calls[0]==1 && nsi_calls[1]==1 && nsi_calls[2]==1 && r.nsi.samples==7);
+#endif
     cmd[0].bytes=88;current=service.worker;active=&rows[0];
     __wrap_pvr_cccb_begin(&q.client,cmd,2,NULL,0,100);assert(expanded_count==2);active=NULL;
     assert(cr_samples==1);
@@ -110,6 +118,9 @@ int main(void)
     gpu_queue_timing_crumb(SUNSTONE_CRUMB_GPU_SUBMIT,8);
     gpu_queue_timing_crumb(SUNSTONE_CRUMB_GPU_COMPLETE,8);
     assert(cr_samples==1 && state_samples==5); /* refusal without a kick must never touch CR MMIO */
+#ifdef SUNSTONE_GPU_NSI_PMU
+    assert(nsi_calls[0]==1 && nsi_calls[1]==1 && nsi_calls[2]==1);
+#endif
     for(unsigned i=2;i<GPU_QUEUE_TIMING_CAPACITY+3;++i){job.sequence=7+i;__wrap_gpu_queue_submit(ctx,&job);}
     assert(gpu_queue_timing_count()==GPU_QUEUE_TIMING_CAPACITY);
     assert(!gpu_queue_timing_read(GPU_QUEUE_TIMING_CAPACITY,&r));

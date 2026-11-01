@@ -71,6 +71,9 @@ void gpu_queue_timing_crumb(uint32_t stage,uint32_t sequence)
         r->public.ticks[GPU_TIMING_COMPLETE]=ticks();
         if(r->public.ticks[GPU_TIMING_KICK_BEGIN]) {
             a733_gpu_backend_timing_sample(2);gpu_queue_timing_state_sample(3);
+#ifdef SUNSTONE_GPU_NSI_PMU
+            a733_gpu_backend_nsi_sample(2,&r->public.nsi);
+#endif
         }
         if(r->public.timestamp_injected) {
             volatile uint64_t *p=(volatile uint64_t *)((unsigned char *)queue->firmware[5].storage.cpu+8);
@@ -137,9 +140,17 @@ enum pvr_ccb_result __real_pvr_ccb_submit(struct pvr_ccb *,const void *,uint64_t
 enum pvr_ccb_result __wrap_pvr_ccb_submit(struct pvr_ccb *q,const void *cmd,uint64_t now,uint64_t deadline,struct pvr_ccb_token *token)
 {
     int track=worker() && active && q==queue->client.queue && cmd==queue->client.kick;
-    if(track){in_ccb_submit=1;gpu_queue_timing_stamp(GPU_TIMING_CCB_BEGIN);}
+    if(track){in_ccb_submit=1;gpu_queue_timing_stamp(GPU_TIMING_CCB_BEGIN);
+#ifdef SUNSTONE_GPU_NSI_PMU
+        a733_gpu_backend_nsi_sample(0,&active->public.nsi);
+#endif
+    }
     enum pvr_ccb_result result=__real_pvr_ccb_submit(q,cmd,now,deadline,token);
-    if(track){gpu_queue_timing_stamp(GPU_TIMING_CCB_END);in_ccb_submit=0;}return result;
+    if(track){gpu_queue_timing_stamp(GPU_TIMING_CCB_END);
+#ifdef SUNSTONE_GPU_NSI_PMU
+        a733_gpu_backend_nsi_sample(result==PVR_CCB_OK?1:2,&active->public.nsi);
+#endif
+        in_ccb_submit=0;}return result;
 }
 int __real_aarch64_device_cache(enum aarch64_cache_op,uintptr_t,size_t);
 int __wrap_aarch64_device_cache(enum aarch64_cache_op op,uintptr_t address,size_t bytes)
