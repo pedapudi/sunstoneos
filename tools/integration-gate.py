@@ -275,6 +275,7 @@ def main(argv=None):
             return 1
     for name in (APPLICATIONS if args.full and mimus else applications):
         directory, selected = application_builds[name], applications.get(name, [])
+        selected = list(dict.fromkeys(['sunstone-a733-os', *selected]))
         if not run(name + '-configure', [cfg, source, directory, '-DMIMUS_DIR=' + str(mimus),
                    '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=mimus']):
             return 1

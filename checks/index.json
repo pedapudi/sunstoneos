@@ -553,23 +553,6 @@
   "summary": "Check the modeled media clock trace against pinned primary source.",
   "usb": false
  },
- "a733-mimus-native.py": {
-  "cache_areas": [
-   "host"
-  ],
-  "docs": [
-   "docs/designs/mbus-restore.md",
-   "docs/watchdog.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--image",
-   "--evidence"
-  ],
-  "summary": "Check native admission packaging, watchdog lifecycle and durable capture.",
-  "usb": false
- },
  "a733-mmc-adaptive-voltage.py": {
   "cache_areas": [
    "sources"
@@ -904,7 +887,7 @@
   "docs": [
    "docs/a733-smp-observe-host.md",
    "docs/board-test-queue.md",
-   "docs/os-image.md",
+   "docs/os-image-history.md",
    "docs/watchdog.md"
   ],
   "library": false,
@@ -1830,6 +1813,19 @@
   "summary": "Execute only the new Bluetooth application composition after native image review/link.",
   "usb": false
  },
+ "bluetooth-capture-profile.py": {
+  "cache_areas": [
+   "sources"
+  ],
+  "docs": [],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check compiled capture-profile admission, immutable binding and recognizer pin isolation.",
+  "usb": false
+ },
  "bluetooth-headset-host.py": {
   "cache_areas": [
    "evidence"
@@ -1882,35 +1878,6 @@
   "pure_host": false,
   "required_arguments": [],
   "summary": "Check only new Bluetooth profile/evidence admission and actual copied result bytes.",
-  "usb": false
- },
- "bluetooth-mimus-host.py": {
-  "cache_areas": [
-   "evidence",
-   "inputs"
-  ],
-  "docs": [],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--output",
-   "--composition"
-  ],
-  "summary": "New finite recognition admission and copied-output boundaries; no hardware access.",
-  "usb": false
- },
- "bluetooth-mimus.py": {
-  "cache_areas": [
-   "build",
-   "inputs"
-  ],
-  "docs": [],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--output"
-  ],
-  "summary": "Build focused finite headset/Mimus fixtures and run only selected new cases.",
   "usb": false
  },
  "bluetooth-msbc-native.py": {
@@ -2172,22 +2139,6 @@
   "summary": "Only retained board/session/profile identity; hardware boundaries are modeled.",
   "usb": false
  },
- "board-session-seal-recognition.py": {
-  "cache_areas": [
-   "build",
-   "evidence",
-   "inputs"
-  ],
-  "docs": [],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--output",
-   "--composition"
-  ],
-  "summary": "Cover only the retained version3 profile handoff in a Mimus-enabled image.",
-  "usb": false
- },
  "board-session-seal.py": {
   "cache_areas": [
    "evidence",
@@ -2253,7 +2204,6 @@
    "host"
   ],
   "docs": [
-   "apps/mimus-board/README.md",
    "docs/board-application.md",
    "docs/designs/npu-board.md",
    "docs/hardware.md",
@@ -4692,69 +4642,6 @@
   "summary": "Execute selected GPU boundaries in the full linked finite or OS image.",
   "usb": false
  },
- "gpu-mimus-layers.py": {
-  "cache_areas": [],
-  "docs": [
-   "docs/designs/gpu-exact-sum-caller.md",
-   "docs/designs/gpu-mimus-compute-measurements.md",
-   "docs/gpu-mimus.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--mimus",
-   "--output"
-  ],
-  "summary": "Build and run the host model of exact mimus linear layers on the GPU.",
-  "usb": false
- },
- "gpu-mimus-program.py": {
-  "cache_areas": [],
-  "docs": [
-   "docs/designs/gpu-mimus-compute-measurements.md",
-   "docs/gpu-compiled-programs.md",
-   "docs/gpu-mimus.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--mesa-source",
-   "--mesa-build",
-   "--ninja",
-   "--output"
-  ],
-  "summary": "Check the linked mimus linear-layer program against the pinned compiler.",
-  "usb": false
- },
- "gpu-mimus-readout.py": {
-  "cache_areas": [
-   "host"
-  ],
-  "docs": [
-   "docs/designs/gpu-mimus-compute-measurements.md",
-   "docs/gpu-mimus.md"
-  ],
-  "library": false,
-  "pure_host": true,
-  "required_arguments": [
-   "--output"
-  ],
-  "summary": "Run the compiled mimus read-out entry under Unicorn.",
-  "usb": false
- },
- "gpu-mimus-time-model.py": {
-  "cache_areas": [],
-  "docs": [
-   "docs/designs/gpu-mimus-compute-measurements.md",
-   "docs/designs/gpu-mimus-compute.md",
-   "docs/gpu-mimus.md"
-  ],
-  "library": false,
-  "pure_host": true,
-  "required_arguments": [],
-  "summary": "Per-core time model of mimus linear layers with exact sums on the GPU.",
-  "usb": false
- },
  "gpu-performance-linked.py": {
   "cache_areas": [],
   "docs": [],
@@ -4777,22 +4664,6 @@
    "--sources"
   ],
   "summary": "Check the selected firmware ABI, GPU transition providers and shared engine.",
-  "usb": false
- },
- "gpu-recognition-engine.py": {
-  "cache_areas": [],
-  "docs": [
-   "docs/designs/gpu-recognition-measurements.md",
-   "docs/gpu-mimus-service.md",
-   "docs/os-image.md",
-   "docs/recognition-dispatch.md"
-  ],
-  "library": false,
-  "pure_host": true,
-  "required_arguments": [
-   "--output"
-  ],
-  "summary": "Check the SunstoneOS exact-sum hook against a model of the mimus engine.",
   "usb": false
  },
  "gpu-render-cleanup.py": {
@@ -5947,21 +5818,6 @@
   "summary": "Build the finite I2S receive model with the DMA0 interrupt adapter and run its cases.",
   "usb": false
  },
- "i2s-mimus.py": {
-  "cache_areas": [],
-  "docs": [
-   "docs/i2s-application.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--output",
-   "--freertos",
-   "--models"
-  ],
-  "summary": "Only changed finite capture, WAV handoff and copied transcript boundaries.",
-  "usb": false
- },
  "i2s-platform-reference.py": {
   "cache_areas": [],
   "docs": [
@@ -6683,145 +6539,6 @@
   ],
   "summary": "Exercise the real ordinary-file preparer once with a nonbootable monitor.",
   "usb": true
- },
- "mimus-board-identity.py": {
-  "cache_areas": [],
-  "docs": [
-   ".agents/skills/sunstone-a733-device/SKILL.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--image",
-   "--output"
-  ],
-  "summary": "Check the linked Mimus workload gate without executing shared CPU startup.",
-  "usb": false
- },
- "mimus-paced-optional.py": {
-  "cache_areas": [
-   "inputs"
-  ],
-  "docs": [
-   "docs/mimus-replay.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--output"
-  ],
-  "summary": "Check paced optional punctuation with real engine types and formatter, modeled recognition.",
-  "usb": false
- },
- "mimus-parity.py": {
-  "cache_areas": [],
-  "docs": [
-   "docs/mimus-usb.md",
-   "docs/mimus.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--reference",
-   "--candidate",
-   "--output"
-  ],
-  "summary": "Compare one recorded-audio FreeRTOS result with its host transcription reference.",
-  "usb": false
- },
- "mimus-supervised-host.py": {
-  "cache_areas": [
-   "evidence",
-   "inputs"
-  ],
-  "docs": [],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--image",
-   "--manifest",
-   "--evidence",
-   "--clang",
-   "--lld",
-   "--objcopy"
-  ],
-  "summary": "New mimus packaging/host cases only; all physical facts and USB are fixtures.",
-  "usb": true
- },
- "mimus-supervised-native.py": {
-  "cache_areas": [],
-  "docs": [
-   "docs/designs/smp-heterogeneous.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--image",
-   "--bundle",
-   "--evidence"
-  ],
-  "summary": "New supervised mimus boundaries in the actual image; no recognition replay.",
-  "usb": true
- },
- "mimus-supervised.py": {
-  "cache_areas": [],
-  "docs": [
-   "docs/mimus-smp.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--output",
-   "--freertos",
-   "--tinyusb",
-   "--clang",
-   "--clangxx",
-   "--lld",
-   "--objcopy",
-   "--mimus",
-   "--newlib",
-   "--newlib-smp"
-  ],
-  "summary": "Build the root-configured mimus image; execute only new supervised cases.",
-  "usb": false
- },
- "mimus-usb-session.py": {
-  "cache_areas": [],
-  "docs": [
-   "docs/mimus-usb.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--inputs",
-   "--reference",
-   "--image",
-   "--fel",
-   "--ddr",
-   "--warm-return",
-   "--survey",
-   "--baseline",
-   "--output"
-  ],
-  "summary": "Exercise USB Mimus admission and failure ownership with modeled transports only.",
-  "usb": true
- },
- "mimus-warm.py": {
-  "cache_areas": [
-   "evidence",
-   "inputs"
-  ],
-  "docs": [
-   "docs/mimus-usb.md",
-   "docs/mimus.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--output"
-  ],
-  "summary": "Build and run the host warm-engine check, then compare both warm results with the host reference.",
-  "usb": false
  },
  "monitor-application-fixture.py": {
   "cache_areas": [
@@ -7613,7 +7330,7 @@
    "docs/npu-conformance.md",
    "docs/npu-service.md",
    "docs/npu-session.md",
-   "docs/os-image.md"
+   "docs/os-image-history.md"
   ],
   "library": false,
   "pure_host": false,
@@ -7722,56 +7439,13 @@
   "summary": "One supervised native link and the supply, startup sequencer and refusal composition.",
   "usb": true
  },
- "os-card-bundle.py": {
-  "cache_areas": [],
-  "docs": [],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--build",
-   "--base-model",
-   "--overlay-model",
-   "--wav",
-   "--boot0",
-   "--packer",
-   "--output"
-  ],
-  "summary": "Exercise the real cold-card producer using explicit ordinary-file model evidence.",
-  "usb": false
- },
- "os-card-entry.py": {
-  "cache_areas": [],
-  "docs": [],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--build",
-   "--fixture",
-   "--output"
-  ],
-  "summary": "Execute the actual linked stage-2 recorded entry and native OS admission.",
-  "usb": false
- },
- "os-contract-profile.py": {
-  "cache_areas": [],
-  "docs": [],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--image",
-   "--legacy",
-   "--output"
-  ],
-  "summary": "Read actual ELF contract metadata and refuse malformed/absent new profiles.",
-  "usb": false
- },
  "os-cpu-clock-native.py": {
   "cache_areas": [],
   "docs": [
    "docs/cpu-clock.md",
    "docs/designs/cpu-top-opp.md",
    "docs/designs/gpu-cpu-clock.md",
-   "docs/os-image.md"
+   "docs/os-image-history.md"
   ],
   "library": false,
   "pure_host": false,
@@ -7820,46 +7494,6 @@
   "summary": "Execute the linked initial-state guard; device reads and THS readiness are modeled.",
   "usb": false
  },
- "os-cpu-return-followup-integration.py": {
-  "cache_areas": [
-   "build",
-   "evidence"
-  ],
-  "docs": [],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--out"
-  ],
-  "summary": "One complete compound composition with explicit model authority/transport.",
-  "usb": true
- },
- "os-cpu-return-followup.py": {
-  "cache_areas": [],
-  "docs": [],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--out"
-  ],
-  "summary": "Focused compound admission and SRAM/helper proof checks; no physical access.",
-  "usb": false
- },
- "os-cpu-return-host.py": {
-  "cache_areas": [
-   "evidence"
-  ],
-  "docs": [],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--bundle",
-   "--native-report",
-   "--out"
-  ],
-  "summary": "Exercise actual CPU-return preparation bindings and capture with modeled FEL.",
-  "usb": false
- },
  "os-cpu-return-rails.py": {
   "cache_areas": [],
   "docs": [],
@@ -7906,18 +7540,6 @@
    "--out"
   ],
   "summary": "Execute the linked OS success terminal with modeled service completion and GIC.",
-  "usb": false
- },
- "os-gpu-cpu-start.py": {
-  "cache_areas": [],
-  "docs": [],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--image",
-   "--output"
-  ],
-  "summary": "Check actual combined OS GPU startup ordering and owner exclusion; no inference or MMIO.",
   "usb": false
  },
  "os-gpu-return-followup.py": {
@@ -7989,7 +7611,7 @@
   "docs": [
    "docs/designs/cpu-a76-dvfs-measurements.md",
    "docs/handoff.md",
-   "docs/os-image.md"
+   "docs/os-image-history.md"
   ],
   "library": false,
   "pure_host": false,
@@ -7997,28 +7619,7 @@
    "--build",
    "--output"
   ],
-  "summary": "Run the integrated OS image's capture stream and the recognizer's WAV",
-  "usb": false
- },
- "os-image-dispatch.py": {
-  "cache_areas": [
-   "inputs"
-  ],
-  "docs": [
-   "docs/designs/cpu-a76-dvfs-measurements.md",
-   "docs/designs/gpu-recognition-measurements.md",
-   "docs/designs/gpu-recognition.md",
-   "docs/designs/recognition-dispatch-measurements.md",
-   "docs/gpu-mimus-service.md",
-   "docs/os-image.md",
-   "docs/recognition-dispatch.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--output"
-  ],
-  "summary": "Check the OS image's placement of mimus linear layers on the CPU or GPU against its design budgets.",
+  "summary": "Run native OS PCM capture and stream checks against a modeled DMA service.",
   "usb": false
  },
  "os-image-headset.py": {
@@ -8030,7 +7631,7 @@
    "docs/designs/bluetooth-voice-recognition.md",
    "docs/designs/cpu-a76-dvfs-measurements.md",
    "docs/handoff.md",
-   "docs/os-image.md"
+   "docs/os-image-history.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8045,7 +7646,7 @@
   "cache_areas": [],
   "docs": [
    "docs/handoff.md",
-   "docs/os-image.md"
+   "docs/os-image-history.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8056,64 +7657,13 @@
   "summary": "Check the linked integrated OS image's EL3 publication hook for its workloads.",
   "usb": false
  },
- "os-image-launch.py": {
-  "cache_areas": [
-   "host"
-  ],
-  "docs": [
-   "docs/designs/cpu-a76-dvfs-measurements.md",
-   "docs/designs/cpu-a76-dvfs.md",
-   "docs/designs/cpu-leftovers-measurements.md",
-   "docs/designs/cpu-leftovers.md",
-   "docs/designs/cpu-top-opp.md",
-   "docs/handoff.md",
-   "docs/os-image.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--build",
-   "--base",
-   "--overlay",
-   "--wav",
-   "--output"
-  ],
-  "summary": "Host check of the supervised integrated OS preparation and launcher.",
-  "usb": false
- },
- "os-image-link.py": {
-  "cache_areas": [],
-  "docs": [
-   "docs/designs/app-abi.md",
-   "docs/designs/gpu-eight-workers.md",
-   "docs/designs/gpu-recognition.md",
-   "docs/designs/recognition-dispatch.md",
-   "docs/gpu-mimus-service.md",
-   "docs/handoff.md",
-   "docs/layering-audit.md",
-   "docs/os-image.md",
-   "docs/recognition-dispatch.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--image",
-   "--assets",
-   "--recognizer",
-   "--loader",
-   "--lifetime",
-   "--output"
-  ],
-  "summary": "Check the linked integrated OS image's fixed interrupt table, start list and layout.",
-  "usb": false
- },
  "os-image-radio.py": {
   "cache_areas": [
    "host"
   ],
   "docs": [
    "docs/handoff.md",
-   "docs/os-image.md"
+   "docs/os-image-history.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8129,7 +7679,7 @@
   "docs": [
    "docs/boot-slots.md",
    "docs/handoff.md",
-   "docs/os-image.md"
+   "docs/os-image-history.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8169,27 +7719,10 @@
   "summary": "Run linked resident NPU wait/deadline code and cold-authority checks.",
   "usb": false
  },
- "os-npu.py": {
-  "cache_areas": [],
-  "docs": [
-   "docs/designs/npu-sram-route.md",
-   "docs/handoff.md",
-   "docs/os-image.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--image",
-   "--session-base",
-   "--output"
-  ],
-  "summary": "Focused linked OS NPU constructor/API checks; RTOS and device effects modeled.",
-  "usb": false
- },
  "os-radio-staging.py": {
   "cache_areas": [],
   "docs": [
-   "docs/os-image.md"
+   "docs/os-image-history.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8206,24 +7739,21 @@
   "summary": "Focused offline OS radio staging. Every board fact is synthetic, never authority.",
   "usb": false
  },
- "os-staged-recorded.py": {
+ "os-session-host.py": {
   "cache_areas": [],
-  "docs": [
-   "docs/os-image.md"
-  ],
+  "docs": [],
   "library": false,
-  "pure_host": false,
+  "pure_host": true,
   "required_arguments": [
-   "--build",
    "--output"
   ],
-  "summary": "Execute actual AArch64 readiness, result-copy and USB0 protocol for OS workload2.",
+  "summary": "Check generic host records against compiled manifest and C result producers.",
   "usb": false
  },
  "os-thermal-report.py": {
   "cache_areas": [],
   "docs": [
-   "docs/os-image.md"
+   "docs/os-image-history.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8233,20 +7763,6 @@
    "--output"
   ],
   "summary": "Actual linked thermal producer, window hooks, admission and USB report pages.",
-  "usb": false
- },
- "os-thermal-throttle.py": {
-  "cache_areas": [],
-  "docs": [
-   "docs/os-image.md"
-  ],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--build",
-   "--output"
-  ],
-  "summary": "Run actual AArch64 OS thermal publication, dispatch and recognition checkpoints.",
   "usb": false
  },
  "ov5640-modes-reference.py": {
@@ -8469,18 +7985,6 @@
    "output"
   ],
   "summary": "Check the performance-mode table against pinned sources and run its host models.",
-  "usb": false
- },
- "perf-native.py": {
-  "cache_areas": [],
-  "docs": [],
-  "library": false,
-  "pure_host": false,
-  "required_arguments": [
-   "--build",
-   "--output"
-  ],
-  "summary": "Linked combined performance/NPU admission and USB diagnostics.",
   "usb": false
  },
  "pins-expanded.py": {
@@ -9022,7 +8526,7 @@
    "docs/designs/gpu-recognition-measurements.md",
    "docs/designs/gpu-recognition.md",
    "docs/gpu-mimus-service.md",
-   "docs/os-image.md",
+   "docs/os-image-history.md",
    "docs/recognition-dispatch.md"
   ],
   "library": false,
@@ -10571,7 +10075,36 @@
   "required_arguments": [
    "--build"
   ],
-  "summary": "Check the prototype application interface (docs/designs/app-abi.md) on the host.",
+  "summary": "Check the application ABI without an external application checkout.",
+  "usb": false
+ },
+ "sunstone-app-runtime.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--native-flags",
+   "--service-session"
+  ],
+  "summary": "Run the OS application mailbox with the selected native image's headers.",
+  "usb": false
+ },
+ "sunstone-image-link.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--manifest",
+   "--application",
+   "--build-id",
+   "--lifetime",
+   "--output"
+  ],
+  "summary": "Validate the application manifest and generated tables in a native OS image.",
   "usb": false
  },
  "sunxi-mmc-uhs.py": {

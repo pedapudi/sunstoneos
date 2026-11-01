@@ -117,7 +117,8 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertEqual(calls[1][calls[1].index('--target') + 1:], ['kernel-check', '-j', '12'])
         self.assertEqual(calls[2][1:], [str(self.source), str(mimus), '-DMIMUS_DIR=' + str(self.mimus),
                                       '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=mimus'])
-        self.assertEqual(calls[3][calls[3].index('--target') + 1:], ['smp-mimus-model', '-j', '12'])
+        self.assertEqual(calls[3][calls[3].index('--target') + 1:],
+                         ['sunstone-a733-os', 'smp-mimus-model', '-j', '12'])
         self.assertEqual(calls[4][1], 'tools/check-kernel.py')
         self.assertEqual(calls[5][calls[5].index('--image') + 1], str(mimus / 'smp-mimus-model.elf'))
         self.assertEqual(calls[5][1], str(checker))
@@ -318,7 +319,8 @@ exec "$REAL" "$@"
         self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 14)  # core, mimus and twelve OS variants
         application = next(c for c in calls if c[0] == 'cmake' and 'smp-mimus-model' in c)
         # The fake lists the same targets in both builds; mimus builds only its own.
-        self.assertEqual(application[application.index('--target') + 1:], ['smp-mimus-model', '-j', '12'])
+        self.assertEqual(application[application.index('--target') + 1:],
+                         ['sunstone-a733-os', 'smp-mimus-model', '-j', '12'])
         runs = [c for c in calls if c[0] == 'python']
         self.assertEqual(len(runs), 8)
         soak = next(c for c in runs if 'tools/check-smp.py' in c)
