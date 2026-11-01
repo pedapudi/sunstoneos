@@ -35,7 +35,8 @@ CASES = {1: 'grid replay, exact sums', 2: 'grid replay, pattern sums', 3: 'grid 
          34: 'unleased neighbour in GPU output rounded tail',
          35: 'unleased neighbour in model rounded tail',
          36: 'unleased neighbour in CPU-written input rounded tail',
-         37: 'unleased neighbour at exact rounded boundary'}
+         37: 'unleased neighbour at exact rounded boundary',
+         38: 'worker immutable program source bounds and final-word creation'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'gpu_queue_submit', 'gpu_queue_wait', 'kick',

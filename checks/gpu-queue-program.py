@@ -9,11 +9,13 @@ from pathlib import Path
 import re
 import struct
 import subprocess
+from elftools.elf.elffile import ELFFile
 
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--build',type=Path,required=True)
 p.add_argument('--cc',default='clang')
+p.add_argument('--ld',default='ld.lld',help='configured AArch64-capable linker; preserve the ld.lld basename')
 a=p.parse_args();a.build.mkdir(parents=True,exist_ok=True)
 spec=importlib.util.spec_from_file_location('program_compile',ROOT/'apps/gpu-program/compile.py')
 c=importlib.util.module_from_spec(spec);spec.loader.exec_module(c)
@@ -60,7 +62,39 @@ for flags,suffix in [([], 'host'),(['--target=aarch64-none-elf','-ffreestanding'
     subprocess.run([a.cc,*flags,'-std=c11','-Wall','-Wextra','-Werror','-Wpedantic',
                     '-I'+str(ROOT/'include'),'-c',str(a.build/'descriptor.c'),
                     '-o',str(a.build/(suffix+'.o'))],check=True)
-result={'schema':'sunstone-gpu-queue-program-host-v1','physical_access':False,'cases':cases,
-        'program_sha256':m['program_sha256']}
+# Link the actual descriptor without a live reference to its code. KEEP must
+# retain the immutable application section even with --gc-sections. Both
+# production scripts also define equal bounds when no program is linked.
+section_name='sunstone_gpu_program'
+start_name='__start_'+section_name
+stop_name='__stop_'+section_name
+(a.build/'entry.S').write_text('.text\n.global _start\n.global a733_smp_entry\n_start:\na733_smp_entry:\n    ret\n')
+subprocess.run([a.cc,'--target=aarch64-none-elf','-c',str(a.build/'entry.S'),'-o',str(a.build/'entry.o')],check=True)
+linked=[]
+for script in ('platform/a733-smp-cached/link.ld','platform/qemu-smp/link.ld'):
+    for nonempty in (False,True):
+        tag=Path(script).parent.name+('-program' if nonempty else '-empty')
+        elf=a.build/(tag+'.elf')
+        objects=[str(a.build/'entry.o')]+([str(a.build/'aarch64.o')] if nonempty else [])
+        subprocess.run([a.ld,'--gc-sections','-T',str(ROOT/script),*objects,'-o',str(elf)],check=True)
+        with elf.open('rb') as stream:
+            image=ELFFile(stream)
+            symbols=image.get_section_by_name('.symtab')
+            start=symbols.get_symbol_by_name(start_name)[0]['st_value']
+            stop=symbols.get_symbol_by_name(stop_name)[0]['st_value']
+            section=image.get_section_by_name(section_name)
+            assert start%4 == 0 and 0x41000000 <= start <= stop < 0x41200000
+            if nonempty:
+                assert section is not None and section.data() == code
+                assert section['sh_addr'] == start and stop-start == len(code)
+                assert section['sh_flags']&2 and not section['sh_flags']&1
+                symbol=symbols.get_symbol_by_name('gpu_queue_code')[0]
+                assert symbol['st_value'] == start and symbol['st_size'] == len(code)
+            else:
+                assert start == stop and (section is None or section['sh_size'] == 0)
+            linked.append({'case':tag,'start':hex(start),'stop':hex(stop),'bytes':stop-start})
+            cases.append(tag+'-immutable-code-bounds' if nonempty else tag+'-defined-bounds')
+result={'schema':'sunstone-gpu-queue-program-host-v2','physical_access':False,'cases':cases,
+        'program_sha256':m['program_sha256'],'linked_sections':linked}
 (a.build/'result.json').write_text(json.dumps(result,indent=2)+'\n')
-print(json.dumps({'cases':len(cases),'program_sha256':m['program_sha256']}))
+print(json.dumps({'cases':len(cases),'program_sha256':m['program_sha256'],'linked_sections':linked}))

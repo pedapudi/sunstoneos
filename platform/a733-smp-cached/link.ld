@@ -10,6 +10,11 @@ SECTIONS {
         KEEP(*(.text.a733_smp_boot)) *(.text*)
     } > CODE
     .rodata : { *(.rodata*) } > CODE
+    sunstone_gpu_program : ALIGN(4) {
+        __start_sunstone_gpu_program = .;
+        KEEP(*(sunstone_gpu_program))
+        __stop_sunstone_gpu_program = .;
+    } > CODE
     sunstone_manifest : ALIGN(8) {
         __start_sunstone_manifest = .;
         KEEP(*(sunstone_manifest))

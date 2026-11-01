@@ -45,7 +45,9 @@ static struct gpu_queue_context context;
 #define FIXTURE_OUTPUT_BYTES (2u << 20)
 #define FIXTURE_TAG_BYTES 65536u
 #define FIXTURE_RING_BYTES 1024u
+__attribute__((section("sunstone_gpu_program"),aligned(4),used))
 static const uint32_t program_code[] = {0};
+extern const unsigned char __start_sunstone_gpu_program[],__stop_sunstone_gpu_program[];
 static const struct gpu_queue_program program = {
     .abi=GPU_QUEUE_ABI_GRID,.code_bytes=sizeof(program_code),.temps=1,
     .coefficients=3,.local_size={32,1,1},.code=program_code
@@ -484,6 +486,43 @@ static void shared_mapping_flags(void)
     configASSERT(leases==compute->lease_count && job==1 && programs && state);
     metric("shared-mapping-leases",leases);metric("shared-mapping-state-pages",state);
 }
+/* No accepted CREATE has run here. These calls execute the worker's actual
+ * admission function with invalid source extents; no shader bytes are read. */
+static void worker_program_bounds(struct gpu_queue_context_config *creation,
+                                  struct gpu_queue_program *boundary)
+{
+    static struct a733_gpu_queue owner_before;
+    static unsigned char payload_before[A733_GPU_QUEUE_PAYLOAD_PAGES*4096u];
+    static struct device_memory_pool wb_before,nc_before;
+    const uintptr_t begin=(uintptr_t)__start_sunstone_gpu_program,end=(uintptr_t)__stop_sunstone_gpu_program;
+    configASSERT(end>=begin+4 && !(begin&3) && !(end&3));
+    const struct {uintptr_t code;uint32_t bytes;} invalid[]={
+        {UINT32_C(0x02000000),4},       /* Unreadable device register space. */
+        {(uintptr_t)&program,4},       /* Other immutable image data. */
+        {begin-4,4},{end,4},{end-4,8},{UINTPTR_MAX-3,8}
+    };
+    struct device_memory_pool *wb=a733_memory_reservations_init(),*nc=a733_memory_uncached_init();
+    configASSERT(session.payload_extent.bytes==sizeof(payload_before) && !session.table_lease.generation);
+    memcpy(&owner_before,&session,sizeof(session));
+    memcpy(payload_before,(const void *)session.payload_extent.cpu,sizeof(payload_before));
+    memcpy(&wb_before,wb,sizeof(wb_before));memcpy(&nc_before,nc,sizeof(nc_before));
+    uint64_t cache_before=cache_calls,translations_before=translations;
+    unsigned callbacks_before=calls;
+    struct gpu_queue_program candidate=program;
+    struct gpu_queue_context_config bad=*creation;bad.program=&candidate;
+    for(unsigned i=0;i<sizeof(invalid)/sizeof(invalid[0]);++i){
+        candidate.code=(const uint32_t *)invalid[i].code;candidate.code_bytes=invalid[i].bytes;
+        configASSERT(!pvr_compute_queue_create(compute,&bad));
+        configASSERT(!memcmp(&owner_before,&session,sizeof(session)) &&
+            !memcmp(payload_before,(const void *)session.payload_extent.cpu,sizeof(payload_before)) &&
+            !memcmp(&wb_before,wb,sizeof(wb_before)) && !memcmp(&nc_before,nc,sizeof(nc_before)));
+        configASSERT(cache_calls==cache_before && translations==translations_before && calls==callbacks_before &&
+            service.phase==PVR_GPU_SERVICE_COLD && !service.epoch && !enabled && !running && !kick_step_count);
+    }
+    *boundary=program;boundary->code=(const uint32_t *)(end-4);boundary->code_bytes=4;
+    creation->program=boundary;
+    metric("invalid-program-source-extents",sizeof(invalid)/sizeof(invalid[0]));
+}
 static void client(void *unused)
 {
     (void)unused;
@@ -492,6 +531,8 @@ static void client(void *unused)
     struct gpu_queue_context_config creation={.job_us=1000000,.program=&program,.lease_count=4};
     for(unsigned i=0;i<4;++i)creation.lease[i].region=i;
     struct gpu_queue_lease_info leases[GPU_QUEUE_LEASES];
+    struct gpu_queue_program boundary;
+    if(c==38)worker_program_bounds(&creation,&boundary);
     if(c==24)fail_reopen_post=1;
     int created=gpu_queue_context_create(&creation,gpu_queue_slow?60000:3000,&context,leases);
     if(c>=34 && c<=36){
@@ -531,6 +572,11 @@ static void client(void *unused)
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
     if(c>=31)return_client();
 #endif
+    if(c==38){
+        configASSERT(*(const uint32_t *)(session.payload_extent.cpu+4096)==*boundary.code && grid_job(0));
+        platform_puts("PASS GPU queue case ");platform_hex(c);
+        platform_puts("; invalid worker code extents preserve memory, final immutable word creates and runs\n");platform_exit(0);
+    }
     if(c==37){
         configASSERT(grid_job(0));
         platform_puts("PASS GPU queue case ");platform_hex(c);
@@ -788,7 +834,7 @@ void fixture_unused(void)
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
-    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 37);
+    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 38);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (gpu_queue_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();
@@ -805,7 +851,7 @@ void kernel_main(void)
         (size_t)(gpu_firmware_end - gpu_firmware), 400000000);
     configASSERT(rc);
     unsigned region_count=4;
-    if(gpu_queue_case>=34){
+    if(gpu_queue_case>=34 && gpu_queue_case<=37){
         unsigned target=gpu_queue_case==35?1:gpu_queue_case==36?3:0;
         regions[target].bytes=target==1?17:4096;
         regions[4]=(struct ss_region){.address=regions[target].address+(gpu_queue_case==37?FIXTURE_OUTPUT_BYTES:4096),

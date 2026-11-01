@@ -212,7 +212,7 @@ def emit_queue_program(blob,manifest):
     if digest(blob)!=m['program_sha256']:raise ValueError('Queue program identity differs')
     words=struct.unpack('<'+'I'*((len(blob)-8)//4),blob[8:])
     lines=['/* SPDX-License-Identifier: MIT */','#include "gpu_queue.h"',
-           'static const uint32_t gpu_queue_code[] = {']
+           'static const uint32_t gpu_queue_code[] __attribute__((section("sunstone_gpu_program"), aligned(4), used)) = {']
     for offset in range(0,len(words),8):
         lines.append('    '+', '.join('0x%08xu'%w for w in words[offset:offset+8])+',')
     lines+=['};','static const struct gpu_queue_program gpu_queue_program = {',

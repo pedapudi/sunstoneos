@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/pedapudi/mimus.git",
-  "revision": "def7fcbc38efc037397a9178b438b037802e4a2f",
+  "revision": "fd80ca9654a75f1bd70170ac0da612be3574453a",
   "base_revision": "18c7c81968f56c8c985af0ec26448184cf6a17ec",
   "local_worktree": "/home/sunil/git/mimus-worktrees/gpu-queue-1031",
   "branch": "port/sunstoneos-gpu-queue",

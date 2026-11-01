@@ -179,7 +179,29 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm):
     allowed.update(('vApplicationAssert', 'platform_panic'))
     forbidden = sorted(external - allowed)
     assert not forbidden, 'application references private OS symbols: ' + ', '.join(forbidden)
-    return {'objects': len(objects), 'libraries': len(libraries), 'external_symbols': len(external)}
+    # The worker may copy only code admitted from application object files.
+    # The linker retains that code in an immutable section with exact bounds.
+    name = 'sunstone_gpu_program'
+    chunks = []
+    for path in objects:
+        obj = Elf(Path(path).read_bytes())
+        chunks += [obj.data[s[4]:s[4] + s[5]] for n, s in zip(obj.names, obj.sections) if n == name]
+    sections = [s for n, s in zip(elf.names, elf.sections) if n == name]
+    assert len(sections) <= 1, 'multiple GPU program sections'
+    raw = b'' if not sections else elf.data[sections[0][4]:sections[0][4] + sections[0][5]]
+    assert raw == b''.join(chunks), 'GPU program section contains code outside application objects'
+    bounds = []
+    for marker in ('__start_' + name, '__stop_' + name):
+        values = [s['value'] for s in elf.symbols if s['name'] == marker and s['shndx']]
+        assert len(values) == 1, 'missing GPU program bound: ' + marker
+        bounds.append(values[0])
+    assert bounds[1] - bounds[0] == len(raw), 'GPU program section bounds differ'
+    if raw:
+        section = sections[0]
+        assert section[2] & 2 and not section[2] & 1, 'GPU program code must be immutable allocated data'
+        assert section[3] == bounds[0], 'GPU program start differs from section'
+    return {'objects': len(objects), 'libraries': len(libraries), 'external_symbols': len(external),
+            'gpu_program_bytes': len(raw)}
 
 
 def main():

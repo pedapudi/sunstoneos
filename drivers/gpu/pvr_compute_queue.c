@@ -12,6 +12,8 @@
 #define PAGE 4096u
 #define LINE 64u
 #define RING_BYTES 1024u
+/* The image linker admits application code into this immutable section. */
+extern const unsigned char __start_sunstone_gpu_program[], __stop_sunstone_gpu_program[];
 enum { CONTEXT, STATE, CONTROL, RING, MEMORY, TIMELINE };
 static void put32(void *out,uint32_t v) { memcpy(out,&v,4); }
 static void put64(void *out,uint64_t v) { memcpy(out,&v,8); }
@@ -102,12 +104,16 @@ int pvr_compute_queue_create(struct pvr_compute_queue *q,const struct gpu_queue_
     if (!q || !c || q->phase!=PVR_COMPUTE_QUEUE_BOUND || q->service->phase!=PVR_GPU_SERVICE_COLD ||
         !c->program || !c->job_us || c->job_us>GPU_QUEUE_MAX_JOB_US) return 0;
     struct gpu_queue_program p=*c->program;
+    const uintptr_t begin=(uintptr_t)__start_sunstone_gpu_program;
+    const uintptr_t end=(uintptr_t)__stop_sunstone_gpu_program;
+    const uintptr_t code=(uintptr_t)p.code;
     uint64_t local=(uint64_t)p.local_size[0]*p.local_size[1];
     if (p.abi!=GPU_QUEUE_ABI_GRID || p.reserved || !p.code || !p.code_bytes || (p.code_bytes&3) ||
         p.code_bytes>GPU_QUEUE_PROGRAM_BYTES || p.temps>252 ||
         (p.coefficients!=3 && p.coefficients!=7) || !p.local_size[0] || !p.local_size[1] ||
         !p.local_size[2] || local>32 || local*p.local_size[2]!=32 ||
-        !a733_span_excl_nonempty(p.code,p.code_bytes) ||
+        !a733_span_excl_nonempty(p.code,p.code_bytes) || begin>=end || code<begin || code>=end ||
+        p.code_bytes>end-code ||
         !a733_ranges_disjoint_nonempty(p.code,p.code_bytes,(void *)q->owner->payload_extent.cpu,3*PAGE)) return 0;
     if (!a733_gpu_queue_create(q->owner,c)) return 0;
     unsigned char *page=(unsigned char *)q->owner->payload_extent.cpu;

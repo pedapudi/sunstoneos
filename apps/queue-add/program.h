@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "gpu_queue.h"
-static const uint32_t gpu_queue_code[] = {
+static const uint32_t gpu_queue_code[] __attribute__((section("sunstone_gpu_program"), aligned(4), used)) = {
     0x87008235u, 0x00000480u, 0x82354000u, 0x04818700u, 0x41000000u, 0xf100a065u, 0x4040000cu, 0x8002ff00u,
     0x8235ff6au, 0x04c08700u, 0x43000000u, 0x0040d255u, 0x80a38002u, 0x82364385u, 0x41c3e200u, 0x00008400u,
     0xd299ff43u, 0xf03cd300u, 0x871e9ca1u, 0x80cfc387u, 0x44204211u, 0x20678244u, 0xff490000u, 0xd300c098u,
