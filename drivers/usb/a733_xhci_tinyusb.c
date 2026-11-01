@@ -800,7 +800,8 @@ bool hcd_edpt_close(uint8_t port,uint8_t address,uint8_t ep)
 static unsigned descriptor_index(unsigned address)
 {
     if(!address)return host->core.default_device;
-    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(host->core.devices[i].address==address)return i;
+    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)
+        if(host->core.devices[i].address==address&&!host->core.devices[i].detach)return i;
     return A733_XHCI_DEVICES;
 }
 bool hcd_setup_send(uint8_t port,uint8_t address,const uint8_t setup[8])
