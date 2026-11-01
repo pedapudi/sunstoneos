@@ -61,6 +61,8 @@ SS_STATIC_ASSERT(sizeof(struct ss_extent) == 8 && sizeof(struct ss_input_fact) =
 #define SS_HOST_OS_REPORT_FIRST 0x05u
 #define SS_HOST_OS_REPORT_LAST 0x08u
 #define SS_HOST_OS_FIRST 0x80u
+/* Paged read of the complete ss_result record, including its header. */
+#define SS_HOST_RESULT_OP 0x80u
 struct ss_host_frame {
     uint32_t magic, version, state, bytes, total, offset, storage, op;
     uint64_t epoch, generation;

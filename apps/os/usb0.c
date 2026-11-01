@@ -28,9 +28,9 @@ static _Noreturn void stop(void){board_fail(NULL);for(;;)vTaskSuspend(NULL);}
 #ifdef SUNSTONE_A733_OS_PERF
 #include "perf.h"
 #endif
-static uint8_t frame[1160];
+static _Alignas(8) uint8_t frame[1160];
 static struct ss_host_request request;
-static unsigned used,frame_bytes,sent,transferred,waiting,app_frame;
+static unsigned used,frame_bytes,sent,transferred,waiting,app_frame,app_success;
 void tud_mount_cb(void){}
 void tud_umount_cb(void){}
 void tud_suspend_cb(bool wake){(void)wake;}
@@ -46,6 +46,17 @@ void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
 static void queue(unsigned bytes){frame_bytes=bytes;sent=transferred=0;}
 static int os_request(void)
 {
+    if(request.op==SS_HOST_RESULT_OP){
+        if(request.flags||!request.count||request.count>SS_HOST_PAYLOAD_BYTES||request.argument)stop();
+        memset(frame,0,sizeof(frame));struct ss_host_frame *h=(void *)frame;
+        size_t total=sizeof(struct ss_result)+ss_result_capacity;
+        size_t n=0;unsigned ready=os_application_finished();
+        if(ready&&request.offset<total){n=total-request.offset;if(n>request.count)n=request.count;
+            memcpy(frame+64,ss_result_record+request.offset,n);}
+        *h=(struct ss_host_frame){.magic=SS_FRAME_MAGIC,.version=1,.state=ready,.bytes=n,
+            .total=total,.offset=request.offset,.op=request.op,.epoch=board.session.epoch,.generation=board.session.generation};
+        queue(64+n);return 1;
+    }
 #ifdef SUNSTONE_A733_FAULT_PAGE
     if(request.op==5){if(request.flags||request.offset||request.count||request.argument)stop();
         memcpy(frame,&a733_fault_previous,sizeof(a733_fault_previous));queue(sizeof(a733_fault_previous));return 1;}
@@ -75,22 +86,24 @@ static int os_request(void)
 static void exchange(void)
 {
     BOARD_PROGRESS(BOARD_SERVICE_USB0);
-    if(frame_bytes){if(!board_live(NULL))stop();sent+=tud_vendor_write(frame+sent,frame_bytes-sent);tud_vendor_flush();return;}
+    if(frame_bytes){if(!board_live(NULL))stop();
+        if(app_success){int live=os_application_export_live();if(live<0)stop();if(!live)return;}
+        sent+=tud_vendor_write(frame+sent,frame_bytes-sent);tud_vendor_flush();return;}
     if(waiting){
         struct ss_host_reply reply;
         if(!os_host_reply(&reply,frame+64))return;
-        if(os_application_export_live()<0)stop();
+        if(reply.state==1){int live=os_application_export_live();if(live<0)stop();if(!live)return;}
         struct ss_host_frame *h=(void *)frame;
         *h=(struct ss_host_frame){.magic=SS_FRAME_MAGIC,.version=reply.version,.state=reply.state,.bytes=reply.bytes,
             .total=reply.total,.offset=request.offset,.storage=atomic_load_explicit(&board.result,memory_order_acquire),
             .op=request.op,.epoch=board.session.epoch,.generation=board.session.generation};
-        memcpy(h->tag,reply.tag,16);app_frame=1;waiting=0;queue(64+reply.bytes);return;
+        memcpy(h->tag,reply.tag,16);app_frame=1;app_success=reply.state==1;waiting=0;queue(64+reply.bytes);return;
     }
     unsigned available=tud_vendor_available();if(!available)return;
     unsigned n=sizeof(request)-used;if(n>available)n=available;
     unsigned got=tud_vendor_read((uint8_t *)&request+used,n);if(!got||got>n)stop();used+=got;
     if(used!=sizeof(request))return;used=0;
-    if(os_request())return;
+    app_success=0;if(os_request())return;
     if(!os_host_offer(&request))stop();waiting=1;
 }
 void board_usb0_task(void *unused)
