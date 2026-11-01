@@ -317,11 +317,15 @@ to the stated scope:
   recovery remain unqualified. Concurrent live GPU/HDMI, broader formats/modes,
   streaming and frame retirement remain required.
 - DisplayPort: **implemented** a bounded [native TYPEC24 path](displayport-native.md)
-  for four lanes at 1.62 Gb/s, 720p60 RGB8 and Type-C assignments C/E through the
+  for four lanes at 5.4 Gb/s, 720p60 RGB8 and Type-C assignments C/E through the
   documented V1.2 [lane/AUX route](board-wiring.md#typec24-has-a-documented-displayport-route).
   TYPEC16 remains USB0/power input; PD messages supply HPD because the dedicated
   pad is unconnected. COMB0/SERDES/VO1 ownership excludes USB3 and PCIe sharing
   in this profile; retained master-8 memory supplies the display frames.
+  The [vendor-maximum rate path](designs/displayport-top-rate.md) has host
+  PHY/controller and admission-loop evidence. It requires matching 5.4 Gb/s
+  analog/SERDES facts, preparer validation and coordinator approval
+  before a physical run. Earlier image results below retain their original scope.
   Final image `91646247…` passes actual linked construction, Type-C negotiation,
   controller/PHY/AUX/DE lifecycle and retained shutdown with modeled device effects.
   Twelve host capture cases and one linked high-speed TinyUSB 512/512/zero-length
@@ -1434,6 +1438,10 @@ to the stated scope:
   excludes other masters while master 10 alone translates; shared DE_SYS/PCK,
   clocks, rails, PMIC and USB providers retain the original native lifetime.
   Fresh task-end, fault/guard checks and bounded copied output precede publication.
+  CPU command construction rejects overlapping sessions and wrapping command
+  spans before access. Sanitizer checks preserve all 132 admitted operation/format
+  pages; the pinned-source register comparisons pass. Physical qualification
+  remains outstanding. See the [command-span design](designs/display-command-admission.md).
   The [GPL source adaptation](../apps/g2d/sources.json) preserves register/header
   notices; no opaque G2D firmware or Linux runtime is required.
   Actual allocator, task, admission, boot and SRAM checks pass with their recorded
@@ -1969,8 +1977,10 @@ to the stated scope:
   domain. Physical domain power-up remains untested.
   [Replay over a ring](display-engine.md#de352-replay-over-a-ring-of-two-to-four-frames)
   of two to four frames is **implemented** in the display engine. The
-  configuration fixes the frame size, and a slot becomes writable again only
-  after a frame end shows that scanout has moved past it. Host checks pass,
+  configuration fixes the frame size. Every published frame remains immutable;
+  the native retirement query refuses rewriting every slot. RCQ finish, address
+  readback and a later frame end do not establish completion of old pixel reads.
+  Host checks pass,
   including refusal of ring readings that the configuration does not declare.
   No application produces frames into the ring yet. The ring stays retained
   after STOP, because no drain proof exists, and physical slot retirement
