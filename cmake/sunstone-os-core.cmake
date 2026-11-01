@@ -16,12 +16,22 @@ if(SUNSTONE_A733_OS_NPU_QUEUE AND NOT SUNSTONE_A733_OS_NPU)
   message(FATAL_ERROR "The NPU queue requires SUNSTONE_A733_OS_NPU=ON")
 endif()
 option(SUNSTONE_A733_OS_GPU "OS GPU compute queue" OFF)
+option(SUNSTONE_GPU_TIMING "Capture optional GPU job timing records" OFF)
+option(SUNSTONE_GPU_NSI_PMU "Capture experimental GPU master NSI traffic counters" OFF)
+if(SUNSTONE_GPU_NSI_PMU AND NOT SUNSTONE_GPU_TIMING)
+  message(FATAL_ERROR "SUNSTONE_GPU_NSI_PMU requires SUNSTONE_GPU_TIMING")
+endif()
+if(SUNSTONE_GPU_TIMING AND NOT SUNSTONE_A733_OS_GPU)
+  message(FATAL_ERROR "SUNSTONE_GPU_TIMING requires SUNSTONE_A733_OS_GPU")
+endif()
 option(SUNSTONE_A733_OS_GPU_RECOVERY_TEST
   "Withhold one completion until the ordinary job deadline in a qualification image" OFF)
 set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
   "GPU diagnostic limit: constructor, firmware, jobs:N or layer:K")
 option(SUNSTONE_A733_OS_CPU_RETURN "Application result with success-only ROM return" OFF)
+option(SUNSTONE_GPU_FAST_TIMING "Capture optional GPU IRQ-entry counter timestamps" OFF)
 option(SUNSTONE_A733_OS_CORE "Build the OS core without an application" OFF)
+option(SUNSTONE_A733_CPU_TOPOLOGY "Expose read-only topology and per-core architectural observations" OFF)
 option(SUNSTONE_A733_OS_HELLO "Build the hello-compute OS image" OFF)
 if(NOT SUNSTONE_A733_OS AND NOT SUNSTONE_A733_OS_CORE AND NOT SUNSTONE_A733_OS_HELLO)
   return()
@@ -35,8 +45,8 @@ if(SUNSTONE_A733_OS_GPU_RECOVERY_TEST AND
     NOT SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle"))
   message(FATAL_ERROR "GPU recovery qualification requires the returning GPU lifecycle image")
 endif()
-if(SUNSTONE_A733_OS_USB_CLASSES AND (SUNSTONE_A733_OS_NPU OR SUNSTONE_A733_OS_CPU_RETURN))
-  message(FATAL_ERROR "USB class memory conflicts with the NPU pool; returning USB class drain is not qualified")
+if(SUNSTONE_A733_OS_USB_CLASSES AND SUNSTONE_A733_OS_CPU_RETURN)
+  message(FATAL_ERROR "Returning USB class drain is not qualified")
 endif()
 if(SUNSTONE_A733_OS_USB_CLASSES AND NOT SUNSTONE_BOARD_USB2_IRQ)
   message(FATAL_ERROR "USB class services require SUNSTONE_BOARD_USB2_IRQ=ON")
@@ -164,7 +174,9 @@ apply_build_patch("${os_build}/boot.c" "${os_boot_base}" "${os_root}/apps/os/boo
 # Retained per-core fault records and their previous-boot report
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
+  runtime/cpu_topology_app.c
   apps/os/usb-service.c apps/os/application.c apps/os/session.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
+  runtime/deadline.c runtime/deadline-a733.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
   apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
   drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c platform/a733/fault.S platform/a733/fault.c)
@@ -311,6 +323,14 @@ if(SUNSTONE_A733_OS_GPU)
   else()
     set(os_recognition_core 2)
   endif()
+  if(SUNSTONE_GPU_TIMING)
+    list(APPEND os_added apps/os/gpu-timing.c)
+    if(SUNSTONE_GPU_NSI_PMU)
+      list(APPEND os_added drivers/gpu/a733_gpu_nsi_pmu.c)
+      list(APPEND os_external_inputs "${os_root}/include/a733_gpu_nsi_pmu.h")
+    endif()
+    list(APPEND os_external_inputs "${os_root}/include/gpu_queue_timing.h")
+  endif()
   # The GPU runtime: the service, compute queue and the A733 platform,
   # backend and firmware memory, as the accelerator image composes them. The
   # service's compute, render and free-list objects come with it.
@@ -321,7 +341,7 @@ if(SUNSTONE_A733_OS_GPU)
     drivers/gpu/a733_gpu_platform_native.c drivers/gpu/pvr_compute_mode.c drivers/gpu/pvr_compute_service.c
     drivers/gpu/pvr_compute_package.c drivers/gpu/pvr_compute_job.c drivers/gpu/pvr_compute_programs.c
     drivers/gpu/pvr_compute_context.c drivers/gpu/gpu_queue.c
-    drivers/gpu/pvr_compute_queue.c drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c
+    drivers/gpu/pvr_compute_queue.c drivers/gpu/pvr_compute_fast.c runtime/gpu_call.S drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c
     drivers/gpu/pvr_render_target.c drivers/gpu/pvr_render_programs.c drivers/gpu/pvr_render_draw.c
     drivers/gpu/pvr_render_texture.c drivers/gpu/pvr_render_context.c drivers/gpu/pvr_render_job.c
     drivers/gpu/pvr_render_service.c drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_gpu_flush.c drivers/gpu/pvr_firmware.c
@@ -347,6 +367,10 @@ if(SUNSTONE_A733_OS_USB_JPEG)
   list(APPEND os_added apps/os/usb-jpeg-native.c apps/jpeg/input.c
     drivers/video/a733_video_jpeg.c drivers/video/a733_video_jpeg_run.c
     drivers/video/a733_video_platform.c drivers/video/a733_video_unit.c drivers/iommu/a733_iommu.c)
+endif()
+if(SUNSTONE_A733_CPU_TOPOLOGY)
+  list(APPEND os_added kernel/scheduler/topology.c platform/a733/cpu_topology.c
+    platform/a733/cpu_observation.c drivers/board/orangepi_zero3w.c)
 endif()
 list(TRANSFORM os_added PREPEND "${os_root}/")
 if(SUNSTONE_LATENCY)
@@ -412,10 +436,16 @@ if(SUNSTONE_A733_OS_USB_JPEG)
 endif()
 if(SUNSTONE_A733_OS_USB_CLASSES)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_CLASSES=1 SUNSTONE_USB_HOST_GENERIC=1 SUNSTONE_USB_APP_ALIAS=1)
+  if(NOT SUNSTONE_A733_OS_USB_JPEG)
+    # The retained JPEG adapter still needs owner passes for setup and copied
+    # readout. Enable its precise wait only after IRQ81 and readiness are wired.
+    target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_HOST_DEADLINE=1)
+  endif()
 endif()
-target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
+target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_TASK_DEADLINES=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
   "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_A733_OS_CPU_RETURN=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_CRUMBS=1>"
+  "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
   A733_SMP_CONTRACT_MAGIC=${os_contract_magic} A733_SMP_RESULT_MAGIC=${os_result_magic}
   "$<$<BOOL:${SUNSTONE_A733_OS_RESIDENT}>:SUNSTONE_BOARD_RESIDENT=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_AUDIO}>:SUNSTONE_A733_OS_AUDIO=1>"
@@ -441,6 +471,9 @@ if(SUNSTONE_A733_OS_GPU)
     PROPERTIES COMPILE_OPTIONS "-iquote${os_root}/platform/a733")
 endif()
 target_include_directories(sunstone-a733-os-core BEFORE PRIVATE "${os_root}/apps/os" "${os_build}")
+if(SUNSTONE_A733_CPU_TOPOLOGY)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_CPU_TOPOLOGY=1)
+endif()
 if(os_include_dirs)
   target_include_directories(sunstone-a733-os-core PRIVATE ${os_include_dirs})
 endif()
@@ -464,7 +497,11 @@ get_target_property(os_link sunstone-a733-os-core LINK_OPTIONS)
 list(FILTER os_link EXCLUDE REGEX "Map,")
 if(SUNSTONE_A733_OS_NPU)
   # A fixed private reservation, not an expansion of the board's local pool.
-  file(READ "${storage_build}/link.ld" os_npu_link)
+  if(SUNSTONE_A733_OS_USB_CLASSES)
+    file(READ "${os_build}/link-usb.ld" os_npu_link)
+  else()
+    file(READ "${storage_build}/link.ld" os_npu_link)
+  endif()
   string(APPEND os_npu_link "\n__os_npu_pool_start = 0x47400000;\n__os_npu_pool_end = 0x47c00000;\n")
   file(WRITE "${os_build}/link-npu.ld" "${os_npu_link}")
   list(FILTER os_link EXCLUDE REGEX "-T,")
@@ -505,7 +542,7 @@ endif()
 set(os_inputs ${board_inputs} ${os_sources} ${os_headers} ${os_generated} ${os_patches} ${os_external_inputs}
   "${os_root}/platform/a733-smp-cached/irq_table.h" "${os_root}/include/a733_fault.h"
   "${os_root}/include/a733_thermal.h" "${os_root}/include/a733_thermal_native.h"
-  "${os_root}/include/gicv3_spi.h" "${CMAKE_CURRENT_LIST_FILE}")
+  "${os_root}/include/gicv3_spi.h" "${os_root}/include/sunstone_deadline.h" "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_ITEM os_inputs "${board_build}/build-id.c")
 list(REMOVE_DUPLICATES os_inputs)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${os_inputs})
@@ -518,3 +555,15 @@ else()
   set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_LINK_SCRIPT "${storage_build}/link.ld")
 endif()
 set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_DEVICE_OBJECTS "${os_service_targets}")
+
+if(SUNSTONE_GPU_TIMING)
+  target_compile_definitions(sunstone-a733-os-core PUBLIC SUNSTONE_GPU_TIMING=1)
+  target_compile_definitions(sunstone-a733-os-gpu PRIVATE SUNSTONE_GPU_TIMING=1)
+  if(SUNSTONE_GPU_NSI_PMU)
+    target_compile_definitions(sunstone-a733-os-core PUBLIC SUNSTONE_GPU_NSI_PMU=1)
+    target_compile_definitions(sunstone-a733-os-gpu PRIVATE SUNSTONE_GPU_NSI_PMU=1)
+  endif()
+  foreach(symbol gpu_queue_submit gpu_queue_wait pvr_cccb_begin pvr_cccb_poll pvr_ccb_submit aarch64_device_cache xQueueReceive)
+    target_link_options(sunstone-a733-os-core INTERFACE "-Wl,--wrap=${symbol}")
+  endforeach()
+endif()

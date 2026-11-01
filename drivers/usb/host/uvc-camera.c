@@ -65,19 +65,24 @@ static int select_interval(const struct sunstone_uvc_catalog *catalog,unsigned i
         !((selected->interval-catalog->intervals[index].minimum)%catalog->intervals[index].step);
     return selected->interval==catalog->mode[index].interval;
 }
+static int before_deadline(struct sunstone_uvc_camera *s,uint64_t deadline)
+{
+    uint64_t now;
+    return deadline && s->transport.now(s->transport.context,&now)==1 && now<deadline;
+}
 static int start(void *context,const struct sunstone_camera_mode *mode,uint64_t deadline)
 {
     struct sunstone_uvc_camera *s=context;
-    if(s->fault || s->stopping || !deadline || !mode)return -1;
+    if(s->fault || s->stopping || !mode || !before_deadline(s,deadline))return -1;
     if(s->started)return matches(&s->active,mode)?1:-1;
-    if(s->starting && !matches(&s->active,mode))return -1;
+    if(s->starting && (!matches(&s->active,mode) || deadline!=s->start_deadline))return -1;
     /* Mode search is setup-only. Frame acquire/release inspect at most the
      * three fixed lease slots and never search modes or USB descriptors. */
     for(unsigned i=0;i<SUNSTONE_UVC_FRAMES;i++)if(s->held[i].frame)return -1;
     for(unsigned i=0;i<s->catalog->modes;i++){
         struct sunstone_uvc_mode selected;
         if(!select_interval(s->catalog,i,mode,&selected))continue;
-        if(!s->starting){s->active=selected;s->starting=1;}
+        if(!s->starting){s->active=selected;s->starting=1;s->start_deadline=deadline;}
         int r=s->transport.start(s->transport.context,&s->active,deadline);
         if(r<0 || r>1){s->fault=1;return -1;}
         if(r==1){s->starting=0;s->started=1;}
@@ -88,7 +93,8 @@ static int start(void *context,const struct sunstone_camera_mode *mode,uint64_t 
 static int next(void *context,struct sunstone_camera_frame *view,uint64_t deadline)
 {
     struct sunstone_uvc_camera *s=context;
-    if(s->fault || s->stopping || !view || !deadline || !s->started || !s->stream->connected)return -1;
+    if(s->fault || s->stopping || !view || !s->started || !s->stream->connected ||
+       !before_deadline(s,deadline))return -1;
     if(s->token==UINT64_MAX){s->fault=1;return -1;}
     unsigned slot;
     for(slot=0;slot<SUNSTONE_UVC_FRAMES;slot++)if(!s->held[slot].frame)break;
@@ -104,7 +110,7 @@ static int next(void *context,struct sunstone_camera_frame *view,uint64_t deadli
 static int release(void *context,uint64_t token,uint64_t deadline)
 {
     struct sunstone_uvc_camera *s=context;
-    if(!token || !deadline)return -1;
+    if(!token || !before_deadline(s,deadline))return -1;
     /* Release remains available after detach/stop/fault. A stale ticket never
      * releases a later frame at the same address. */
     for(unsigned i=0;i<SUNSTONE_UVC_FRAMES;i++)if(s->held[i].frame && s->held[i].token==token){
@@ -117,9 +123,10 @@ static int release(void *context,uint64_t token,uint64_t deadline)
 static int stop(void *context,uint64_t deadline)
 {
     struct sunstone_uvc_camera *s=context;
-    if(s->fault || !deadline)return -1;
+    if(s->fault || !before_deadline(s,deadline))return -1;
     if(!s->started && !s->starting)return 1;
-    s->stopping=1;
+    if(s->stopping && deadline!=s->stop_deadline)return -1;
+    if(!s->stopping){s->stopping=1;s->stop_deadline=deadline;}
     int r=s->transport.stop(s->transport.context,deadline);
     if(r<0 || r>1){s->fault=1;return -1;}
     if(r==1){s->started=0;s->starting=0;s->stopping=0;}
@@ -129,7 +136,7 @@ static const struct sunstone_camera_ops operations={enumerate,start,next,release
 int sunstone_uvc_camera_init(struct sunstone_uvc_camera *s,struct sunstone_uvc *stream,
     const struct sunstone_uvc_catalog *catalog,const struct sunstone_uvc_camera_transport *transport)
 {
-    if(!s || s->camera.ops || !stream || !catalog || !transport || !transport->start || !transport->stop ||
+    if(!s || s->camera.ops || !stream || !catalog || !transport || !transport->start || !transport->stop || !transport->now ||
        !catalog->modes || catalog->modes>SUNSTONE_UVC_MODES)return -1;
     for(unsigned i=0;i<catalog->modes;i++){
         struct sunstone_camera_mode mode;

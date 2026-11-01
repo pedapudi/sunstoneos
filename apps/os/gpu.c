@@ -178,6 +178,9 @@ static int gpu_start_body(unsigned core)
     if(!a733_gpu_backend_bind(&gpu.backend,&gpu.service,&gpu.firmware.config,&gpu.firmware.memory,&gpu.power,
                              &external))return start_refused(11);
     if(!service_init(core))return start_refused(12);
+#ifdef SUNSTONE_GPU_TIMING
+    gpu_queue_timing_bind(gpu.component);
+#endif
     if(!pvr_gpu_service_bind(&gpu.service,0,os_gpu_client_task))return start_refused(13);
 #ifdef SUNSTONE_A733_OS_PERF
     if(!pvr_gpu_service_bind(&gpu.service,1,os_thermal_task_handle()))return start_refused(14);
@@ -617,6 +620,10 @@ enum a733_perf_status os_gpu_perf_action(enum a733_perf_action action,uint32_t v
 #endif
 void os_gpu_queue_irq(void)
 {
+#ifdef SUNSTONE_GPU_TIMING
+    extern void gpu_queue_timing_irq(void);
+    gpu_queue_timing_irq();
+#endif
     BaseType_t woken = pdFALSE;
     /* A mask that cannot hold leaves delivery enabled: end the boot. */
     if (!gpu.started || !pvr_gpu_service_interrupt(&gpu.service, &woken)) board_fail(NULL);
@@ -648,6 +655,12 @@ int pvr_compute_queue_runtime_sync(void)
     }
     if(!gpu.opened&&!gpu.parked)return gpu.failed?-1:1;
     return os_gpu_queue_thermal();
+}
+int pvr_compute_queue_runtime_admit(void)
+{
+    if (!gpu.started || atomic_load(&gpu.manual_closed) || atomic_load(&gpu.retired)) return 0;
+    if (atomic_load(&gpu.failed) || atomic_load(&board.fatal) || !board_live(NULL)) return -1;
+    return atomic_load(&gpu.opened) && !atomic_load(&gpu.component->recovering) && !os_thermal_throttled();
 }
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
 int os_gpu_retire(void)

@@ -142,6 +142,16 @@ struct pvr_gpu_service_config {
     int (*enable)(void *);
     void *context;
     struct pvr_gpu_service_irq_ops irq;
+    /* Optional admitted job interrupt acknowledgement. Completes the MIPS
+     * EVENT clear before the caller acquires timelines. Bounded, ISR-safe,
+     * no allocation, translation walk or FreeRTOS task query. Supplied only
+     * when native job rings and register mappings have passed admission. */
+    int (*job_irq_ack)(void *);
+    /* Same monotonic clock, without mutating the service's sampled clock. */
+    int (*job_now)(void *,uint64_t *);
+    /* Optional once-admitted MTS doorbell for job-only raw KCCB publication.
+     * Same bounded completion and lifetime contract as job_irq_ack. */
+    int (*job_kick)(void *);
     struct pvr_gpu_service_enable_ops power;
     /* Optional bounded worker callback: acquire the firmware's executed
      * kernel-command count. When set, the health check is judged by that

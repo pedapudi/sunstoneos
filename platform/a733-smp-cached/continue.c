@@ -109,6 +109,21 @@ static void local_boot(unsigned c,uint64_t epoch)
     if(!a733_cpu_continue_init(&s,&config))failed(c,3);
     while(a733_cpu_continue_poll(&s)==A733_CONTINUE_PENDING) {}
     if(s.state!=A733_CONTINUE_GIC_READY)failed(c,4);
+#ifdef SUNSTONE_TASK_DEADLINES
+    if(!c){
+        /* GIC-600/IHI0069: PPI27 is the level-sensitive virtual timer.
+         * Verify its implemented Group1NS assignment in the Secure view;
+         * Nonsecure IGROUPR reads cannot validate interrupt security. */
+        uintptr_t g=s.redistributor+0x10000;
+        const uint32_t ppi=UINT32_C(1)<<27,edge=UINT32_C(1)<<23;
+        sync_memory();
+        if(!(*(volatile uint32_t *)(g+0x80)&ppi) ||
+           (*(volatile uint32_t *)(g+0xd00)&ppi))failed(c,0x736);
+        *(volatile uint32_t *)(g+0xc04)&=~edge;
+        sync_memory();
+        if(*(volatile uint32_t *)(g+0xc04)&edge)failed(c,0x737);
+    }
+#endif
     a733_cached_records[c].redistributor=s.redistributor;
     sync_memory();a733_cached_records[c].state=2;sync_memory();
     uint64_t last=0;
@@ -146,6 +161,12 @@ _Noreturn void a733_cached_el1(unsigned c,uint64_t epoch,uint64_t startup,uint64
     a733_cached_runtime[c].epoch=epoch;a733_cached_runtime[c].startup_deadline=startup;
     a733_cached_runtime[c].diagnostic_deadline=diagnostic;a733_cached_runtime[c].redistributor=rdist;
     if(a733_smp_pre_scheduler(c,epoch,startup/24)!=1)a733_cached_smc(3,0x201);
+#ifdef SUNSTONE_A733_CPU_TOPOLOGY
+    /* Read architectural identity/cache geometry at EL1 before any task. The
+     * capture restores CSSELR after its documented ISB completion sequence. */
+    extern void ss_cpu_observe_boot(unsigned core);
+    ss_cpu_observe_boot(c);
+#endif
     if(!c) {
 #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
         if (a733_device_memory_prepare() != 1) a733_cached_smc(3, 0x203);

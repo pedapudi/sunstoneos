@@ -1,14 +1,15 @@
 # Driver completion, CPU cost and idle wakeups
 
-**Status: audit and three focused host-tested fixes; physical timing is unmeasured.**
+**Status: implemented.**
+
+**Board-qualified scope:** Physical driver timing and idle power are unmeasured.
+Host models cover the selected ready-step, notification and deadline changes.
 
 This audit is for developers familiar with C, FreeRTOS and DMA ownership.
 It covers the I/O paths under `drivers/`, `platform/`, `runtime/` and `apps/os/`.
-The source inventory contains 410 C, C++, assembly, header, include and patch
-files. Tick-wait expressions occur in 24 files, queue/notification expressions
-in 15, critical-region expressions in 30, allocation expressions in 3 and
-cache/mapping expressions in 61. These counts locate review candidates;
-they do not establish execution frequency or a worst-case bound.
+The linked findings identify loops, service hops, critical regions and copied
+buffers that need workload-specific review. Source occurrences establish
+neither execution frequency nor a worst-case bound.
 
 Costs below are counted operations or conditional estimates from the code.
 One tick means 1 ms at the configured 1 kHz scheduler. Scheduling, device time
@@ -22,8 +23,8 @@ remain in the linked subsystem status files.
 | Rank | Workload and location | Baseline cost, or current cost for open findings | Fix and current status |
 | ---: | --- | --- | --- |
 | 1 | UVC MJPEG setup: `apps/os/usb-jpeg-native.c:59`, `drivers/video/a733_video_jpeg_run.c:169` | One of 659 ready programming writes per owner pass; about 659 ms if each pass sleeps one tick, before decode/copy time. | **Fixed for ready programming.** Both JPEG callers use a bounded advancing poll. The model completes all 659 writes in one call, then samples the pending task-end status once. Hardware completion, copies and repeated OS frames remain open. |
-| 2 | USB serial/UVC host submissions: `apps/board/host_irq.c:74`, `drivers/usb/a733_xhci.c:796` | Ready startup/address/configuration/submission steps sleep one tick apiece. The delayed-register model counts 19 startup sleeps and 14 sleeps on ready steps. | **Fixed for ready work.** A metadata-only readiness hint admits at most 32 owner passes per batch. The same model counts 7 startup sleeps and no ready-step sleeps. Idle and hardware waits still use a tick timeout. |
-| 3 | USB serial TX and USB storage mailbox: `apps/os/usb-service.c:146`, `apps/os/client.c:159` | One serial TX can be pending; each TX passes through owner dispatch. Sector reads copy 512 bytes through a single mailbox. Sector submission does not notify the owner. | **Open.** Submit into resident endpoint rings under bounded endpoint ownership, permit several tickets in flight, and notify on storage publication/completion. Keep receive loans and sequence checks. |
+| 2 | USB serial/UVC host submissions: `apps/board/host_irq.c`, `drivers/usb/a733_xhci.c` | Ready startup/address/configuration/submission steps previously slept one tick apiece. The delayed-register control counts 19 startup sleeps and 14 sleeps on ready steps. | **Raw class waits fixed in host checks.** At most 32 ready passes precede a precise wait; IRQs notify the owner directly. Noninterruptible startup and deferred GIC acknowledgment use bounded 50 µs retries. Earlier device deadlines remain authoritative. The JPEG profile retains its existing cadence until decoder readiness/IRQ81 is connected. |
+| 3 | USB serial TX and storage/report mailboxes: `apps/os/usb-service.c`, `apps/os/client.c` | One serial TX per endpoint; EL0 applications still submit through the owner mailbox. Sector reads copy 512 bytes. | **Partly fixed.** An admitted EL1 caller can submit retained serial buffers directly under bounded native ownership. Storage submission/completion and keyboard consumption/publication notify their waiters. A bounded EL0 privileged submission path and multiple TX tickets remain open. |
 | 4 | USB0 device exchange: `apps/board/usb0_service.h:79`, `apps/board/usb0_service.h:109`; legacy `drivers/usb/diagnostic.c:284` | Up to 200 µs of active polling, then a tick sleep; idle service still polls every tick. A packet arriving after a burst can wait nearly a tick. | **Open.** Deliver device IRQs to the owner and notify application-reply publication. A precise deadline must cover protocol and health timers. Measure any short spin against the IRQ path before retaining it. |
 | 5 | SD streaming/update worker: `platform/a733-storage-update/worker.c:45`, `drivers/storage/sunxi_mmc.c:355`, `drivers/storage/fatfs_port.c:88` | One storage-service advance per tick. PIO advances at most one 512-byte block per poll: at one poll/tick its ideal ceiling is 512,000 bytes/s. FatFs can busy-poll without an idle callback. | **Open.** Route SMHC command/data/IDMA completion to its owner, wake requests directly, and batch ready state transitions. Use existing multi-sector DMA extents. Storage-write behavior requires separate coordinator review; no write path changes here. |
 | 6 | DMA clients: `drivers/dma/dma_service.c:528`, `drivers/dma/dma_service.c:328`, `drivers/dma/a733_dma_controller.c:90`, `drivers/dma/a733_dma_controller.c:260` | Each API request queues to a worker and receives a reply. Submission revalidates mappings/conflicts and maintains complete admitted buffer extents; completion scans channels and invalidates complete outputs. Cost grows with mappings, channels and bytes. | **Open; coordinate with latency owner.** Keep the published 25 µs masked-region and 250 µs DMA delivery targets. Admit immutable profiles once, submit from caller context and deliver completion fences. Measure cache work before changing ownership. `drivers/dma/` is unchanged. |
@@ -32,7 +33,37 @@ remain in the linked subsystem status files.
 | 9 | G2D readout: `apps/g2d/native.c:220`, `apps/g2d/native.c:233`, `apps/g2d/memory.c:22` | Output copies 32 KiB per tick. Two 24 KiB guard scans per chunk add at least 48 KiB of uncached reads; a 720p XRGB frame needs 113 copy wakes and at least 5.30 MiB of guard reads. | **Open.** Use task-end IRQ notification, retain the vendor mixer-reset order, and verify immutable guards once at each ownership boundary. Bound and batch copied ranges; preserve IOMMU-fault and tail checks. The driver already emits an eight-header RCQ batch. |
 | 10 | Small crypto operations: `drivers/crypto/a733_ce_native.c:97`, `drivers/crypto/a733_ce_native.c:120` | A 16-byte AES task maintains 7872 bytes of maximum-sized cache ranges, 492 times its payload; 32-byte random generation maintains 2560 bytes. Counts exclude stores and copies. | **Open.** Carry authenticated dirty/input/output lengths into native synchronization, preserving key/output scrubbing and cache-line isolation. Use CE completion IRQ notification and resident descriptors; qualify private memory and entropy independently. |
 
+## USB qualification follow-ups preserve the physical-test order
+
+The [USB status](usb.md) records coordinator approval and reviewed empty-port
+control, one-second and ten-second diagnostics. The updated runner checks PL8
+on every return. These images await coordinator execution through that runner;
+they do not start xHCI, PHY or DMA.
+
+Reviewed close/drain commit `13897638` consumes endpoint and command completions,
+finishes port resets, excludes enabled Debug Capability and observes HCHalted
+within 16 ms. The normative xHCI halt condition covers pending pipelined
+transactions; an unspecified additional fabric acknowledgment is unnecessary.
+Borrowed pages stay retained. Native memory reclamation and IRQ synchronization
+remain to integrate after the empty-port runs.
+
+Reviewed JPEG commit `3d33b607` supplies decoder INTID 81 wakeups and precise
+readiness/deadlines. It awaits owner-waiter integration. EL0 serial submission
+still needs a safe privileged continuation and nonblocking provider admission.
+PHY idle gating and physical timing/power measurements remain open.
+
 ## Remaining driver families and shared services
+
+The USB host qualification stream owns `drivers/usb/a733_xhci*`,
+`drivers/usb/a733_usb2*`, `drivers/usb/host/`, `apps/board/host_irq.*`,
+`apps/os/usb-service.c` and the corresponding host-class integration in
+`apps/os/client.c`. The driver real-time stream owns the remaining USB0
+findings, including `apps/board/usb0_service.h`, `drivers/usb/diagnostic.c`
+and the common precise-deadline service. Host integration uses its committed
+[`sunstone_deadline.h`](../../include/sunstone_deadline.h) interface. The host
+integration also bounds health after a lost or late timer IRQ in
+`apps/os/services.c`; coordinator integration must retain that correction.
+USB0 device changes remain with their owner and are not implemented here.
 
 | Area and location | Finding, cost and required action | Status |
 | --- | --- | --- |
@@ -48,7 +79,7 @@ remain in the linked subsystem status files.
 | ADC/pins: `drivers/adc/a733_adc.c:96`, `drivers/adc/a733_lradc.c`, `drivers/pinctrl/a733_pins.c` | ADC uses the source-defined sampling divider and interrupt status. Pin ownership is fixed-capacity. No heap or mandatory tick sleep occurs in these cores; owner cadence and electrical behavior remain separate. | Reviewed; LRADC electrical authority is blocked. |
 | PCIe/NVMe: `drivers/pci/a733_pcie_nvme.c:61`, `drivers/pci/a733_pcie_nvme.c:150` | The finite queue has one pending command despite its resident queue depth. Completion records exist and data is uncached; the caller must schedule polling/IRQ delivery. | Open. Add multiple admitted read tickets and direct completion fences after endpoint qualification. No endpoint is available; no writes are authorized. |
 | Network: `drivers/net/sunstone_net.c:373`, `drivers/net/sunstone_net.c:384`, `drivers/net/sunstone_net.c:438` | Normal worker dequeues one request per tick: at most 1000 requests/s before device work, with a service hop. Owned mode uses the shared radio owner. Supplicant/OpenSSL allocation is in authentication paths; data-path buffer ownership still needs size-specific measurement. | Open. Notify submissions/SDIO completion and batch bounded request rings; keep one shared module owner. |
-| Application kit: `apps/os/application.c:74`, `apps/os/application.c:376`, `apps/os/services.c:36` | USB and host waits round to milliseconds/ticks. Host request publication already notifies the waiter. Service health assumes periodic progress, so an indefinite interrupt wait would falsely expire the watchdog window. | Open. A precise task-deadline source and explicit healthy-blocked state are prerequisites for eliminating idle polling safely. |
+| Application kit: `apps/os/application.c`, `apps/os/services.c` | USB and host notification waits use the architectural timer. A registered owner's actual wait sequence and absolute operation bound can replace periodic progress. | **Host-checked.** Lost/late timer delivery cannot extend the alarm plus service observation window. Real progress clears the certificate. Physical wake latency and other application wait loops remain unqualified. |
 | Platform synchronization: `platform/a733/shared_locks.c:35`, `platform/a733/counter_clock.c:44` | Common register-lock contention retries with one-tick waits; the monotonic counter uses an unbounded CAS loop. Task-context checks mask interrupts briefly. None has a measured board maximum. | Open. Separate unrelated resource locks and measure holders against the latency budget. Preserve first-fault inputs and bounded hardware deadlines. |
 | Runtime: `runtime/newlib.c:68`, `runtime/newlib_smp.c:55`, `runtime/new_delete.cc:23`, `runtime/device_memory_pool.c` | `_write` calls the platform output function once per byte. C/C++ allocation remains available to applications; no blanket allocation-free claim applies. Device-pool acquisition belongs at open, and the pool requires caller serialization. | Open for hot logging. Use bounded buffered UART output and keep allocation outside I/O submission. |
 | Clock/power/DRAM/watchdog: `drivers/clock/`, `drivers/power/`, `drivers/dram/`, `drivers/watchdog/`, `platform/a733/dma_pool_session.c:152` | Setup and recovery poll pending transitions; clock/provider registries use bounded-size inventories. DMA startup's tick wait is outside normal transfer submission. Retained device lifetimes prevent safe idle gating without drain evidence. | Reviewed. No clock, voltage, domain, reset, storage-write or operating-point change. Idle current and transition latency remain unmeasured. |
@@ -110,7 +141,7 @@ are missing.
 
 | Required comparison | Baseline queue entry | Candidate queue entry | p50 / p99 / maximum latency | Throughput / CPU cost | Idle behavior |
 | --- | --- | --- | --- | --- | --- |
-| USB serial/UVC ready submissions | Not submitted: host authority/peripherals/runner route missing | Same prerequisites | Unmeasured | Unmeasured | Tick wakes remain; idle current unmeasured |
+| USB serial/UVC ready submissions | Not submitted: source/cutoff, peripherals and returning host lifetime missing | Same prerequisites | Unmeasured | Unmeasured | Raw host uses IRQ/precise deadlines; PHY gating and idle current remain unqualified |
 | UVC hardware JPEG decode | Not submitted: admitted camera/decoder lifetime missing | Same prerequisites | Unmeasured | Unmeasured | Retained leases; idle current unmeasured |
 | Display operation/replay validation | Not submitted: selected sink/authority/return path missing | Same prerequisites | Unmeasured | Unmeasured | Retained mappings; idle current unmeasured |
 

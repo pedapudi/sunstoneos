@@ -24,6 +24,8 @@ static struct {
 } camera;
 static void camera_poll(void);
 static void transport_retire(void);
+static int transport_notice(const struct a733_xhci_notice *);
+static void transport_completions(void);
 static void camera_disconnect(uint8_t address);
 
 #endif
@@ -143,6 +145,44 @@ static void attaching(void)
 }
 static uint64_t mount_bound(void)
 {return host->mount_deadline?host->mount_deadline:host->platform.config.lifetime_deadline;}
+extern uint32_t a733_tinyusb_next_timeout_ms(uint32_t now_ms);
+int a733_usb2_host_work_pending(struct a733_usb2_native *n)
+{
+    if(!n||n!=host||!owner()||!n->stack_started)return 0;
+    if(a733_xhci_work_pending(&n->core)||tuh_task_event_ready())return 1;
+#if SUNSTONE_USB_HOST_GENERIC
+    if(n->generic_host&&camera.active&&camera.negotiation.alt.type==1&&n->core.isoch.done)return 1;
+#endif
+    return 0;
+}
+uint64_t a733_usb2_host_deadline(struct a733_usb2_native *n)
+{
+    if(!n||n->self!=n||n->failed)return 0;
+    uint64_t now;
+    if(n->core_started){if(!owner()||n!=host||n->core.ops.now(n->core.context,&now)!=1)return 0;}
+    else if(!n->core_ops.now||n->core_ops.now(n,&now)!=1)return 0;
+    if(!n->core_started||!n->stack_started){
+        uint64_t retry=now>UINT64_MAX-50?UINT64_MAX:now+50;
+        return retry<n->platform.config.deadline?retry:n->platform.config.deadline;
+    }
+    if(n!=host||!owner())return 0;
+    uint64_t next=a733_xhci_next_deadline(&n->core);if(!next)return 0;
+#define EARLIER(d) do{uint64_t value=(d);if(value<next)next=value;}while(0)
+    if(!n->core.irq_mode){uint64_t retry=now>UINT64_MAX-50?UINT64_MAX:now+50;EARLIER(retry);}
+    if(!n->mounted&&n->mount_deadline)EARLIER(n->mount_deadline);
+    if(n->read_pending)EARLIER(n->read_deadline);
+    if(n->hid.pending)EARLIER(n->hid.deadline);
+    if(n->audio.starting)EARLIER(n->audio.start_deadline);
+    for(unsigned i=0;i<A733_USB2_HUBS;++i){const struct a733_usb2_hub *h=&n->hubs[i];
+        if(h->present&&h->status_deferred&&n->core.devices[h->record-1].hub_configured)EARLIER(h->power_good_deadline);}
+    uint32_t ms=a733_tinyusb_next_timeout_ms((uint32_t)(now/1000));
+    if(ms!=UINT32_MAX){uint64_t delay=(uint64_t)ms*1000;
+        /* TinyUSB timers compare floor milliseconds; wake at their boundary. */
+        delay=delay>now%1000?delay-now%1000:0;
+        if(delay<=UINT64_MAX-now)EARLIER(now+delay);}
+#undef EARLIER
+    return next;
+}
 /* A removed leaf ends its outstanding request without a result or copy. The
  * core has revoked, or is about to revoke, the request's DMA destination. */
 static void withdraw_msc(void)
@@ -241,7 +281,7 @@ int a733_usb2_host_poll(struct a733_usb2_native *n)
     }
     if(!host->failed&&r!=A733_XHCI_BUSY){tuh_task_ext(0,false);if(!host->failed)bot_recovery_poll();}
 #if SUNSTONE_USB_HOST_GENERIC
-    if(!host->failed&&host->generic_host){transport_retire();camera_poll();}
+    if(!host->failed&&host->generic_host){transport_completions();transport_retire();camera_poll();}
 #endif
 #if CFG_TUH_AUDIO
     /* Hand completed isochronous packets to the pending class request. Each
@@ -700,6 +740,9 @@ void a733_usb2_host_notice(void *cookie,const struct a733_xhci_notice *event)
     else if(event->kind==A733_XHCI_TRANSFER){
         uint64_t now,d=deadline();
         if(!d||!clock_now(&now)||host->core.ops.live(host->core.context,host->core.generation,d)!=1){lost();return;}
+#if SUNSTONE_USB_HOST_GENERIC
+        if(host->generic_host&&transport_notice(event))return;
+#endif
         if(event->endpoint&15){
             struct a733_usb2_generic *g=generic_at(event->address);
             if(g&&event->result)for(unsigned i=0;i<g->endpoints;++i)
@@ -1118,7 +1161,7 @@ int a733_usb2_audio_read(struct a733_usb2_native *n,struct a733_usb2_audio_block
 
 #if SUNSTONE_USB_HOST_GENERIC
 struct transport_request {
-    unsigned used,address,endpoint;
+    unsigned used,address,endpoint,direct,done,result,actual;
     uintptr_t ticket;
     sunstone_usb_complete complete;
     void *context;
@@ -1126,6 +1169,24 @@ struct transport_request {
 };
 static struct transport_request transport_requests[32];
 static uintptr_t transport_ticket;
+static int transport_notice(const struct a733_xhci_notice *event)
+{
+    for(unsigned i=0;i<32;++i){struct transport_request *r=&transport_requests[i];
+        if(!r->used||!r->direct||r->address!=event->address||r->endpoint!=event->endpoint)continue;
+        if(r->done){lost();return 1;}
+        r->result=event->result;r->actual=event->bytes;r->done=1;return 1;
+    }
+    return 0;
+}
+static void transport_completions(void)
+{
+    for(unsigned i=0;i<32;++i){struct transport_request *r=&transport_requests[i];
+        if(!r->used||!r->direct||!r->done)continue;
+        sunstone_usb_complete complete=r->complete;void *context=r->context;
+        unsigned result=r->result,actual=r->actual;r->used=0;
+        if(complete)complete(context,result,actual);
+    }
+}
 static void transport_retire(void)
 {
     /* CDC RX is submitted by its upstream class, outside transport_requests.
@@ -1200,7 +1261,16 @@ static int transport_acquire(struct sunstone_usb_transport *t,uint8_t address,ui
 }
 static int transport_release(struct sunstone_usb_transport *t,uint8_t address,uint8_t ep,uint64_t token)
 {return owner()&&t==&host->transport&&a733_xhci_dma_release(&host->core,address,ep,token)==1;}
-static const struct sunstone_usb_transport_ops transport_ops={transport_control,transport_open,transport_submit,transport_acquire,transport_release};
+static int transport_submit_direct(struct sunstone_usb_transport *t,uint8_t address,uint8_t ep,uint8_t *buffer,size_t bytes,sunstone_usb_complete complete,void *context)
+{
+    if(!ep||(ep&128)||bytes>A733_XHCI_TRANSFER_BYTES)return 0;
+    struct transport_request *r=transport_request(t,complete,context);if(!r)return 0;
+    r->address=address;r->endpoint=ep;r->direct=1;
+    uint64_t d=deadline();
+    if(!d||!a733_xhci_transfer_now(&host->core,address,ep,buffer,(unsigned)bytes,d)){r->used=0;return 0;}
+    return 1;
+}
+static const struct sunstone_usb_transport_ops transport_ops={transport_control,transport_open,transport_submit,transport_acquire,transport_release,transport_submit_direct};
 void a733_usb2_set_input(struct a733_usb2_native *n,sunstone_hid_emit emit,void *context)
 {if(n&&n->self==n){input_emit=emit;input_context=context;}}
 int a733_usb2_generic_enable(struct a733_usb2_native *n)

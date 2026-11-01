@@ -3,6 +3,9 @@
 #include "platform.h"
 #include "a733_cpu_continue.h"
 #include "cached.h"
+#ifdef SUNSTONE_TASK_DEADLINES
+#include "sunstone_deadline.h"
+#endif
 #ifdef SUNSTONE_A733_CACHED_DEVICES
 #include "a733_cached_devices.h"
 #endif
@@ -112,6 +115,12 @@ void a733_smp_primary_el1(void)
     uintptr_t r=a733_cached_runtime[0].redistributor,g=r+0x10000;
     *(volatile uint8_t *)(g+0x400+30)=portLOWEST_USABLE_INTERRUPT_PRIORITY<<portPRIORITY_SHIFT;
     *(volatile uint32_t *)(g+0x100)=1u<<30;
+#ifdef SUNSTONE_TASK_DEADLINES
+    /* CNTV is independent of scheduler CNTP. EL3 admitted its implemented
+     * Group1NS level-sensitive PPI; API calls require this priority or lower. */
+    *(volatile uint8_t *)(g+0x400+27)=0xd8;
+    *(volatile uint32_t *)(g+0x100)=1u<<27;
+#endif
     __asm__ volatile("dsb sy":::"memory");
     while(*(volatile uint32_t *)r&8)a733_smp_startup_check();
     diagnostic_deadline=a733_smp_diagnostic_deadline();
@@ -171,11 +180,18 @@ void vApplicationIRQHandler(uint64_t interrupt)
                 }
             }
         }
+    #ifdef SUNSTONE_TASK_DEADLINES
+    } else if(interrupt==27 && !c) {
+        sunstone_deadline_irq();
+#endif
     } else if(interrupt==0 && c<8) {
         /* Only this core writes its count, so a plain load and store suffice;
          * the relaxed store keeps other cores' relaxed loads untorn. */
         __atomic_store_n(&a733_smp_core_results[c].sgis,a733_smp_core_results[c].sgis+1,__ATOMIC_RELAXED);
         FreeRTOS_SGI_Handler();
+#ifdef SUNSTONE_TASK_DEADLINES
+        if(!c)sunstone_deadline_rearm();
+#endif
 #ifdef SUNSTONE_A733_IRQ_TABLE
     } else if(interrupt<1020 && a733_irq_table_dispatch((unsigned)interrupt,c)) {
 #endif

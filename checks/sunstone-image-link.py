@@ -82,6 +82,11 @@ def application_manifest(elf):
 def check(image, manifest=None, application=None):
     image = Path(image)
     elf = Elf(image.read_bytes())
+    # Returning launchers save mutable image RAM. C++ metadata and linker
+    # orphans must not introduce writable sections into the executable block.
+    writable = [s for s in elf.sections if s[2] & 3 == 3 and s[5] and s[3] < 0x42000000]
+    assert all(0x41200000 <= s[3] < s[3] + s[5] <= 0x42000000 for s in writable), \
+        'allocated writable section outside image RAM'
     defined = [s for s in elf.symbols if s['name'] and s['shndx'] not in (0, 0xfff1)]
 
     def one(name):

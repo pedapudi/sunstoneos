@@ -77,7 +77,9 @@ int a733_cached_memory_prepare(void)
        nc!=ne || (uintptr_t)__bss_end>(uintptr_t)__heap_end ||
        (uintptr_t)__heap_end>0x41f00000)return 0;
 #elif defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
-    if(!os_usb_memory_admitted() || nc!=A733_USB_MEMORY_BASE || ne!=A733_USB_MEMORY_END ||
+    /* These are immutable linker allocations, not physical RAM discovery.
+     * The runner establishes launch authority before this image executes. */
+    if(nc!=A733_USB_MEMORY_BASE || ne!=A733_USB_MEMORY_END ||
        (uintptr_t)__bss_end>(uintptr_t)__heap_end || (uintptr_t)__heap_end>wb ||
        we<wb || (we!=wb && ((wb|we)&4095 || we-wb>A733_LOCAL_DEVICE_POOL_BYTES || we>0x41f00000)))return 0;
 #else
