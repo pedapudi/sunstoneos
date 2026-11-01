@@ -235,8 +235,8 @@ def line_coverage(model, sequence):
                 uncovered_input_lines=sorted(inputs), uncovered_output_lines=sorted(outputs))
 
 
-def mimus_int32_bias(x, rows, k, weights, n, weight_scales, bias, input_scale, scale, zero, low, high):
-    """The int32-bias rule of tools/npu-mimus-linear.py compare(): an exact integer
+def int32_bias(x, rows, k, weights, n, weight_scales, bias, input_scale, scale, zero, low, high):
+    """Compute dense outputs with an exact integer
     accumulator, the bias added as an int32 code in units of input_scale * ws[n],
     and one rounding (half to even) of the result to the output type."""
     out = []
@@ -580,8 +580,8 @@ def compiler_reference(processes, work, name, entry, position, vector):
     return tuple(tensor_dump(out, 'attach_output', o, t) for o, t in enumerate(model['outputs']))
 
 
-def mimus_reference(work, name, entry, base):
-    """The int32-bias rule over the pinned weight codes, weight scales and bias of the mimus layer."""
+def dense_reference(work, name, entry, base):
+    """The int32-bias rule over the pinned weight codes, weight scales and bias of the quantized linear layer."""
     import yaml
     model = entry['catalogue']
     inputs = work / 'inputs' / name
@@ -591,22 +591,22 @@ def mimus_reference(work, name, entry, base):
     scales = (inputs / 'ws.f32').read_bytes()
     biases = (inputs / 'bias.f32').read_bytes()
     if meta['layer'] != entry['layer'] or len(weights) != n * k or len(scales) != 4 * n or len(biases) != 4 * n:
-        raise RuntimeError('pinned mimus layer files differ from the study metadata')
+        raise RuntimeError('pinned linear layer files differ from the study metadata')
     quantize = yaml.safe_load((inputs / 'model.quantize').read_text())['quantize_parameters']
     q = next(v for key, v in quantize.items() if key.startswith('@attach_output'))
     (tensor,), (output,) = model['inputs'], model['outputs']
     _, low, high, _, qtype = tensor_format(output)
     if (q['qtype'] != qtype or q['zero_point'] != output['zero_point'] or float32(q['scale']) != tensor_scale(output)
             or tensor['dimensions'] != [k, meta['rows']] or output['dimensions'] != [n, meta['rows']]):
-        raise RuntimeError('mimus quantization or shape differs from the catalogue')
+        raise RuntimeError('linear quantization or shape differs from the catalogue')
     # The rule sums raw input codes, which equals the dequantized sum only for
     # input zero point 0 and the catalogue's input scale.
     if tensor['zero_point'] != 0 or float32(meta['input_scale']) != tensor_scale(tensor):
-        raise RuntimeError('mimus input zero point or scale differs from the rule\'s assumptions')
+        raise RuntimeError('linear input zero point or scale differs from the rule\'s assumptions')
     weights = list(struct.unpack('<%db' % len(weights), weights))
     scales = struct.unpack('<%df' % n, scales)
     biases = struct.unpack('<%df' % n, biases)
-    return [(pack(output, mimus_int32_bias(codes(tensor, vector[0]), meta['rows'], k, weights, n, scales, biases,
+    return [(pack(output, int32_bias(codes(tensor, vector[0]), meta['rows'], k, weights, n, scales, biases,
                                            meta['input_scale'], q['scale'], q['zero_point'], low, high)),)
             for _, vector in base]
 
@@ -685,11 +685,11 @@ def worker(args):
         references = None
         if entry['reference'] == 'compiler':
             references = [outcome((name, position)) for position in range(len(base))]
-        elif entry['reference'] == 'mimus-int32-bias':
+        elif entry['reference'] == 'dense-int32-bias':
             try:
-                references = mimus_reference(work, name, entry, base)
+                references = dense_reference(work, name, entry, base)
             except Exception as error:
-                failures.append('mimus reference: %s' % error)
+                failures.append('dense reference: %s' % error)
                 references = [None] * len(base)
         inventory = outcome((name, 'inspector'))
         if inventory and inventory['version'] != plan['inspector_version']:

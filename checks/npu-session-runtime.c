@@ -1,6 +1,6 @@
 /* NPU runtime on two QEMU cores: the five catalogue models (three small
  * convolution graphs, the published ShuffleNetV2 graph with its external
- * working pool and a mimus linear layer) loaded at runtime into four slots,
+ * working pool and a per-row quantized linear layer) loaded at runtime into four slots,
  * each owned by one EL0 client task, with the actual runtime, service,
  * controller, memory policy, assembler and native cache operations. A
  * register model stands in for the NPU. On completion it reads each assembled
@@ -14,7 +14,7 @@
  *
  * The case word at 0x47fff000 selects:
  *  0 four slots, three jobs each, started one at a time on credits in
- *    round-robin order. Slot 3 runs the mimus layer, then a LOAD of a changed
+ *    round-robin order. Slot 3 runs the quantized linear layer, then a LOAD of a changed
  *    catalogue model and three ShuffleNetV2 LOADs whose staged copy changes
  *    during assembly (a load-state record outside the templates, a relocation
  *    outside its region, a coefficient byte that only the staging recheck
@@ -77,7 +77,7 @@ static int board_time(void *unused,uint64_t *out)
 #define PARENT_BASE 0x44000000u
 #define PARENT_LIMIT (48u << 20)
 _Static_assert(FIXTURES == 5, "five catalogue models");
-enum { CONV8, DUAL_U8, DUAL_I8, SHUFFLENET, MIMUS };
+enum { CONV8, DUAL_U8, DUAL_I8, SHUFFLENET, LINEAR };
 
 static struct npu_runtime rt;
 static uint8_t writable_conv8[4096] __attribute__((aligned(64)));
@@ -611,7 +611,7 @@ static void helper_case(unsigned slot)
         configASSERT(npu_job_close() == 0 &&
                      npu_job_run(FIXTURES, job_in[slot], 1, job_out[slot], 1, 1000000) == 0 &&
                      !rt.slot[slot].opened);
-        configASSERT(helper_job(slot, MIMUS, 0) == 1);
+        configASSERT(helper_job(slot, LINEAR, 0) == 1);
         break;
     default:
         configASSERT(helper_job(slot, DUAL_I8, 0) == 1);
@@ -643,21 +643,21 @@ static void client(void *argument)
             load(slot, slot);
             for (unsigned n = 0; n < JOBS; ++n) configASSERT(job(slot, n).result == NPU_SERVICE_OK);
         } else {
-            load(slot, MIMUS);
+            load(slot, LINEAR);
             configASSERT(job(slot, 0).result == NPU_SERVICE_OK);
-            uint32_t mimus_stream = rt.slot[slot].stream_bytes;
+            uint32_t linear_stream = rt.slot[slot].stream_bytes;
             writable_conv8[100] ^= 1;   /* A changed catalogue byte is refused at LOAD. */
             refused_load(slot, CONV8);
             writable_conv8[100] ^= 1;
             corrupt = 1; refused_load(slot, SHUFFLENET);
             uint32_t mark = rt.slot[slot].end_mark;
-            configASSERT(mark > mimus_stream && !corrupt);
+            configASSERT(mark > linear_stream && !corrupt);
             corrupt = 2; refused_load(slot, SHUFFLENET);
             configASSERT(!corrupt && rt.slot[slot].end_mark >= mark);
             corrupt = 3; refused_load(slot, SHUFFLENET);
             configASSERT(!corrupt && rt.slot[slot].end_mark >= mark);
             load(slot, CONV8);   /* Also compares the whole fetch span with a one-call assembly. */
-            configASSERT(rt.slot[slot].stream_bytes < mimus_stream);
+            configASSERT(rt.slot[slot].stream_bytes < linear_stream);
             tail_is_end(slot);
             configASSERT(job(slot, 1).result == NPU_SERVICE_OK && job(slot, 2).result == NPU_SERVICE_OK);
         }
@@ -998,10 +998,10 @@ static void board_usb(void)
     unsigned result;
     while (!(result = npu_board_client_answer(c, host_sequence))) { configASSERT(xTaskGetTickCount() - start < 20000); vTaskDelay(1); }
     configASSERT(result == NPU_BOARD_RESULT_REFUSED && c->refused == 1 && c->requests == requests + JOBS);
-    /* The catalogue's largest output: mimus-linear-q's 2,816 bytes, a
+    /* The catalogue's largest output: linear-i16-per-row's 2,816 bytes, a
      * 2,880-byte READ response, inside the image's transmit FIFO. */
-    const struct fixture *g = &fixtures[MIMUS];
-    configASSERT(host(LOAD, MIMUS, 0, NULL, 0) == NPU_BOARD_RESULT_OK && atomic_load(&c->window) == NPU_BOARD_READ_LENT &&
+    const struct fixture *g = &fixtures[LINEAR];
+    configASSERT(host(LOAD, LINEAR, 0, NULL, 0) == NPU_BOARD_RESULT_OK && atomic_load(&c->window) == NPU_BOARD_READ_LENT &&
                  c->inputs == 1 && c->outputs == 1 && c->input[0].bytes == g->tensor_bytes[0] &&
                  c->output[0].bytes == 2816 && 64 + c->output[0].bytes <= TX_FIFO);
     for (uint32_t at = 0; at < g->tensor_bytes[0]; at += HOST_CHUNK) {
@@ -1015,7 +1015,7 @@ static void board_usb(void)
         unsigned i = source_of_output(s, 0);
         for (unsigned x = 0; x < 2816; ++x)
             configASSERT(usb.in[64 + x] ==
-                         expected(MIMUS, 0, i == UINT32_MAX ? 0 : ((const uint8_t *)c->input[i].cpu)[x % c->input[i].bytes]));
+                         expected(LINEAR, 0, i == UINT32_MAX ? 0 : ((const uint8_t *)c->input[i].cpu)[x % c->input[i].bytes]));
     }
     configASSERT(host(RETURN, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK);
     configASSERT(host(CLOSE, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK && c->state == A733_NPU_CLOSED &&

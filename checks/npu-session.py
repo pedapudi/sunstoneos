@@ -42,7 +42,7 @@ MODES = {
                     port_define='npu_service_task_privileged=npu_session_task_privileged',
                     wraps=['a733_npu_native_operations', 'aarch64_device_translate',
                            'aarch64_device_cache', 'storage_digest_bytes']),
-    # The same check with the published ShuffleNet graph and a mimus linear
+    # The same check with the published ShuffleNet graph and a per-row quantized linear
     # layer added, its parent
     # taken from the reservation constructor: case 0 runs every model and
     # case 3 offers a pool smaller than the parent.
@@ -84,9 +84,9 @@ MODES = {
 # the five models that the session and runtime cases use or refuse.
 ADMITTED = ROOT / 'apps/npu-board/npu-models.json'
 SESSION_NAMES = {'session': ('conv8', 'dual-u8', 'dual-i8'),
-                 'reserved': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q'),
-                 'runtime': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q'),
-                 'board-client': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q')}
+                 'reserved': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'linear-i16-per-row'),
+                 'runtime': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'linear-i16-per-row'),
+                 'board-client': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'linear-i16-per-row')}
 MODES['board-thermal']={**MODES['board-client'],'cases':[6]}
 SESSION_NAMES['board-thermal']=SESSION_NAMES['board-client']
 
