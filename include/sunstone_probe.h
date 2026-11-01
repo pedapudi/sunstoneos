@@ -39,6 +39,11 @@ extern const struct sunstone_probe_marker sunstone_probe_marker;
 /* Strong image-owned implementation. Retire DMA/IRQs/workers and restore
  * resources before returning READY. A failure must return another value. */
 uint64_t sunstone_probe_quiesce(void);
+/* Optional bounded EL3 fatal cutoff, called once after the first RTC fault is
+ * published. Executes with MMU/caches off and IRQs masked. No RTOS, allocation,
+ * waits or dependence on dirty Nonsecure EL1 data. Does not establish quiescence
+ * or authorize a normal return. The default is empty. */
+void sunstone_probe_abort_devices(void);
 uint64_t sunstone_probe_restore_interrupts(void); /* EL3; strong monitor-owned hook */
 /* EL3 hooks: default acquisition normalizes acknowledged secondary OFF to
  * static OFF with GIC wake disabled, retained through ROM. A strong owner
