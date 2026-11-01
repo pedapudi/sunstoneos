@@ -56,7 +56,7 @@ class ReturnModel(Model):
   if phase==3:self.put32(self.owner+owner_fields['ready'],1)
   self.put32(self.c+self.cf['applied_mhz'],494);self.put32(self.c+self.cf['applied_mhz']+4,1014)
   for d in raised:self.apply(d,TOP[d])
-  self.flight=flight;self.script=[];self.inspections=[];self.guards=0;self.closing=1
+  self.flight=flight;self.script=[];self.inspections=[];self.guards=0;self.bursts=0;self.closing=1
   self.hooks[layout.address('os_cpu_return_requested')]=lambda:self.closing
   self.hooks[layout.address('a733_cpu_clock_burst')]=self.burst
   self.hooks[layout.address('a733_cpu_clock_inspect')]=self.inspect
@@ -65,6 +65,7 @@ class ReturnModel(Model):
   mhz,pll,mux=point;self.put32(self.c+self.cf['applied_mhz']+4*d,mhz)
   self.put32(0x08871000+4096*d,pll);self.put32(0x0887101c+4096*d,mux)
  def burst(self):
+  self.bursts+=1
   r=self.script.pop(0) if self.script else 0
   if r==COMPLETE and self.flight is not None:self.apply(*self.flight);self.flight=None
   return r
@@ -98,6 +99,15 @@ def returns(image,layout,members):
    assert m.words()==BOOT,name
   rows.append({'name':name,'passed':True,'requests':m.requests,'returned':ok})
  F=0xffffffff
+ # Before the first owner pass: no driver initialization, inspection or poll.
+ # Successful setup hooks let the old START path reach its unwanted inspection.
+ m=ReturnModel(image,layout,members,0,0)
+ m.uc.mem_write(m.c,bytes(members['phase']));setup=[]
+ m.hooks[layout.address('os_session_admitted')]=lambda:0x41ed0000
+ m.hooks[layout.address('a733_cpu_clock_grant_load')]=lambda:setup.append('grant') or 1
+ m.hooks[layout.address('a733_cpu_clock_init')]=lambda:setup.append('init') or 1
+ run('return-in-START',m,[((0,),1)],[],0)
+ assert not m.bursts and not setup,(m.bursts,setup)
  # CPU-L's inspection in flight: it finishes; CPU-B is never inspected.
  run('return-in-INSPECT',ReturnModel(image,layout,members,1,0),[((PENDING,),1),((COMPLETE,),1)],[],4)
  # Inspected, before the entry guard and any request: no guard, no request.

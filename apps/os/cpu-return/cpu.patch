@@ -19,14 +19,25 @@
  static int clock_now(void *v,uint64_t *out)
  {return v==&owner&&a733_counter_clock_now(&providers.shared.counter,out);}
  static int clock_read(void *v,uintptr_t a,uint32_t *out){return v==&owner&&read_word(NULL,a,out);}
-@@ -132,7 +137,32 @@
+@@ -123,7 +128,7 @@
+ {
+     struct a733_cpu_clock *c=&owner.driver;
+     const struct os_session *s=os_session_admitted();
+-    if(owner.phase==START){
++    if(owner.phase==START&&!os_cpu_return_requested()){
+         struct a733_cpu_clock_config config;
+         if(!s||!a733_cpu_clock_grant_load(&s->cpu_clock,s->board.epoch,s->board.generation,&config)||
+            !a733_cpu_clock_init(c,&config,&clock_ops,&owner,&providers.shared.clocks,&providers.shared.rails,
+@@ -132,7 +137,33 @@
          if(a733_cpu_clock_inspect(c,A733_CPU_LITTLE,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return REFUSED(0);
          return 1;
      }
+-    enum a733_cpu_clock_status r=a733_cpu_clock_burst(c,BURST_US);
 +    /* No automatic restoration may raise a clock during successful close.
 +     * Existing thermal lowering remains permitted and bounded. */
 +    if(os_cpu_return_requested())c->throttled=0;
-     enum a733_cpu_clock_status r=a733_cpu_clock_burst(c,BURST_US);
++    /* START has no active driver when close precedes the first owner pass. */
++    enum a733_cpu_clock_status r=owner.phase==START ? A733_CPU_CLOCK_READY : a733_cpu_clock_burst(c,BURST_US);
 +    /* A return may be requested in any phase, including before the raises
 +     * finish: an application need not wait for ss_clock_ready(). From then
 +     * on the owner starts no inspection or request of its own. A transition
@@ -52,7 +63,7 @@
  #ifdef SUNSTONE_A733_OS_PERF
      /* The performance-mode service replaces the one-request-per-cluster
       * start: its boot switch moves the CPU domains to the boot mode, and it
-@@ -162,6 +192,15 @@
+@@ -162,6 +193,15 @@
  #endif
      }
      if(owner.phase==REQUEST){
@@ -68,7 +79,7 @@
          /* One request per granted domain once its sensor has a reading (CPUL
           * is physical channel 3, CPUB channel 0), in the default path's order
           * (docs/designs/cpu-top-opp.md): CPU-B, CPU-L, then the DSU at the
-@@ -182,12 +221,14 @@
+@@ -182,12 +222,14 @@
                  target=c->report.binned ? a733_cpu_clock_dsu_top(c->report.bin,c->applied_mhz[A733_CPU_LITTLE],big) : 0;
                  if(!target)continue;
              }
