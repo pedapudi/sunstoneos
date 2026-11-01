@@ -1,8 +1,8 @@
 {
   "repository": "https://github.com/pedapudi/mimus.git",
-  "revision": "c5dfce93fc6f41065a4073423ac2e93589b75119",
+  "revision": "def7fcbc38efc037397a9178b438b037802e4a2f",
   "base_revision": "18c7c81968f56c8c985af0ec26448184cf6a17ec",
-  "local_worktree": "/home/sunil/git/mimus-worktrees/sunstoneos-split-1031",
-  "branch": "port/sunstoneos-split",
+  "local_worktree": "/home/sunil/git/mimus-worktrees/gpu-queue-1031",
+  "branch": "port/sunstoneos-gpu-queue",
   "application_directory": "sunstoneos"
 }
