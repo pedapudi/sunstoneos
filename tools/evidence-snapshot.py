@@ -9,6 +9,9 @@ import os
 import shlex
 from pathlib import Path
 import subprocess
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from host_evidence import unique_directory
 
 
 def git(root, *arguments):
@@ -181,14 +184,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", type=Path, default=Path.cwd())
     parser.add_argument("--output", type=Path, required=True,
-                        help="New directory outside the repository; never overwritten")
+                        help="Directory outside the repository; existing evidence receives a unique child")
     parser.add_argument("--source", action="append", default=[],
                         help="Repository-relative source/configuration/fixture file; repeat as needed")
     parser.add_argument("--artifact", type=Path, action="append", default=[],
                         help="Executable, image, log or result file to preserve; repeat as needed")
     parser.add_argument("--tool", type=Path, action="append", default=[],
                         help="Tool executable to preserve and hash; does not execute it")
-    parser.add_argument("--note", required=True,
+    parser.add_argument("--note", default="",
                         help="Describe the recorded check and any evidence limitations")
     parser.add_argument("--reuse", type=Path, action="append", default=[],
                         help="Earlier snapshot directory whose identical files are hard-linked instead of copied")
@@ -222,7 +225,7 @@ def main():
 
     revision = git(root, "rev-parse", "HEAD").strip()
     status = git(root, "status", "--porcelain=v1", "--untracked-files=all")
-    output.mkdir(parents=True, exist_ok=False)
+    output = unique_directory(output)
     records = {"sources": {}, "artifacts": [], "tools": []}
     for path in dict.fromkeys(sources):
         relative = path.relative_to(root)
