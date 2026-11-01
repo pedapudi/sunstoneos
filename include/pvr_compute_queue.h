@@ -13,6 +13,7 @@
 #include "a733_gpu_vm_memory.h"
 #include "FreeRTOS.h"
 #include "queue.h"
+#include "pvr_compute_fast.h"
 
 struct a733_gpu_queue;
 struct pvr_gpu_service;
@@ -69,6 +70,7 @@ struct pvr_compute_queue_client_view {
 };
 
 struct pvr_compute_queue {
+    struct pvr_compute_fast fast;
     struct a733_gpu_queue *owner;
     struct pvr_mips_buffer firmware[PVR_COMPUTE_QUEUE_OBJECTS], publish[10];
     uint32_t firmware_address[PVR_COMPUTE_QUEUE_OBJECTS];

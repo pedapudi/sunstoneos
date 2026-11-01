@@ -200,6 +200,8 @@ static int irq_read(void *ctx, uint32_t off, uint32_t *out)
 }
 static int irq_write(void *ctx, uint32_t off, uint32_t value)
 { callback(ctx); configASSERT(off == 0x8b0 && value == 1); set(&gpu_status, 0); return 1; }
+static int job_irq_ack(void *ctx)
+{ configASSERT(ctx==&config); set(&gpu_status,0); __asm__ volatile("dsb sy" ::: "memory"); return 1; }
 static int event(void *ctx, const unsigned char command[88]) { (void)ctx; (void)command; return 0; }
 void fixture_gpu_irq(void)
 {
@@ -739,6 +741,41 @@ static void client(void *unused)
     struct pvr_gpu_service_reply reply;
     configASSERT(compute->phase==PVR_COMPUTE_QUEUE_READY && service.phase==PVR_GPU_SERVICE_READY &&
         session.vm.phase==A733_GPU_VM_MEMORY_PUBLISHED);
+    if (c==53) {
+        while (service.irq_masked) vTaskDelay(1);
+        vTaskSuspend(service.worker);
+        service.config.job_irq_ack=job_irq_ack;
+        pvr_compute_fast_ready(compute);
+        /* A coalesced completion published before the waiter blocks must
+         * leave a direct notification pending without running the worker. */
+        atomic_store(&compute->fast.submitted,4);
+        atomic_store(&compute->fast.waiter[0],3);
+        put(compute->firmware[5].storage.cpu,4,4);
+        set(&gpu_status,1);
+        *(volatile uint32_t *)(uintptr_t)(GICD+0x200+4*(95/32))=1u<<(95%32);
+        __asm__ volatile("dsb sy" ::: "memory");
+        configASSERT(ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,portMAX_DELAY)==1);
+        configASSERT(atomic_load(&compute->fast.completed)==4 && !atomic_load(&compute->fast.waiter[0]) &&
+            !service.irq_masked && !uxQueueMessagesWaiting(service.requests));
+        /* Clear stale notifications before registration; a fence already
+         * acquired by the ISR is then observed without blocking. */
+        xTaskNotifyGiveIndexed(xTaskGetCurrentTaskHandle(),PVR_COMPUTE_FAST_NOTIFY);
+        configASSERT(ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,0)==1);
+        atomic_store(&compute->fast.waiter[0],4);
+        configASSERT(atomic_load_explicit(&compute->fast.completed,memory_order_acquire)>=4);
+        atomic_store(&compute->fast.waiter[0],0);
+        /* A timeline outside published work retains its actual inputs. */
+        put(compute->firmware[5].storage.cpu,4,5);
+        set(&gpu_status,1);
+        *(volatile uint32_t *)(uintptr_t)(GICD+0x200+4*(95/32))=1u<<(95%32);
+        __asm__ volatile("dsb sy" ::: "memory");
+        while (!atomic_load(&compute->fast.irq_error)) taskYIELD();
+        configASSERT(compute->fast.fault_observed==5 && compute->fast.fault_submitted==4 &&
+            atomic_load(&compute->fast.completed)==4);
+        platform_puts("PASS GPU queue case ");platform_hex(c);
+        platform_puts("; direct ISR fences, coalesced completion, stale notification and fault origin\n");
+        platform_exit(0);
+    }
     configASSERT(get(&mmu_flushes)==1 && service.flush.phase==PVR_GPU_FLUSH_COMPLETE &&
         service.flush.executed_after!=service.flush.executed_before);
     shared_mapping_flags();
@@ -1015,7 +1052,7 @@ void fixture_unused(void)
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
-    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 52);
+    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 53);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (gpu_queue_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();

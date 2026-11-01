@@ -1,0 +1,37 @@
+#ifndef SUNSTONE_PVR_COMPUTE_FAST_H
+#define SUNSTONE_PVR_COMPUTE_FAST_H
+#include <stdatomic.h>
+#include "gpu_queue.h"
+#include "FreeRTOS.h"
+#include "task.h"
+
+#define PVR_COMPUTE_FAST_DEPTH 4u
+#define PVR_COMPUTE_FAST_NOTIFY 1u
+#define PVR_COMPUTE_FAST_STRIDE 512u
+struct pvr_compute_queue;
+struct pvr_compute_fast_entry {
+    struct gpu_queue_job job;
+    uint64_t kicked, deadline;
+    uint32_t serial, client, fault;
+};
+struct pvr_compute_fast {
+    /* Task-only transport lock. ISR never acquires it. */
+    atomic_uint locked, enabled, submitted, completed, irq_error;
+    atomic_uint waiter[GPU_QUEUE_CLIENTS];
+    uint32_t fault_observed, fault_submitted;
+    TaskHandle_t task[GPU_QUEUE_CLIENTS]; /* Immutable after CREATE. */
+    struct pvr_compute_fast_entry entry[PVR_COMPUTE_FAST_DEPTH];
+    unsigned head, used;
+};
+int pvr_compute_fast_lock(struct pvr_compute_queue *);
+void pvr_compute_fast_unlock(struct pvr_compute_queue *);
+/* Called only after device IRQ acknowledgement completed. The ISR variant
+ * uses FromISR notification APIs; neither operation takes the transport lock. */
+void pvr_compute_fast_snapshot(struct pvr_compute_queue *, BaseType_t *woken);
+void pvr_compute_fast_ready(struct pvr_compute_queue *);
+void pvr_compute_fast_seal(struct pvr_compute_queue *);
+int pvr_compute_fast_submit(struct pvr_compute_queue *, unsigned, const struct gpu_queue_job *, uint32_t *);
+int pvr_compute_fast_collect(struct pvr_compute_queue *, unsigned, struct gpu_queue_record *);
+int pvr_compute_fast_poll(struct pvr_compute_queue *);
+int pvr_compute_fast_recovered(struct pvr_compute_queue *);
+#endif

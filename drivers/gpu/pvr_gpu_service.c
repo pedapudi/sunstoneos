@@ -26,6 +26,10 @@
 #pragma weak pvr_compute_queue_reopen
 #pragma weak pvr_compute_queue_wake
 #pragma weak pvr_compute_queue_recovered
+#pragma weak pvr_compute_fast_snapshot
+#pragma weak pvr_compute_fast_lock
+#pragma weak pvr_compute_fast_unlock
+#pragma weak pvr_compute_fast_seal
 static struct pvr_gpu_service *instance;
 static unsigned creating_worker;
 static void worker(void *);
@@ -148,6 +152,21 @@ int pvr_gpu_service_interrupt(struct pvr_gpu_service *s, BaseType_t *woken)
 {
     if (!s || s != instance || !s->initialized || !s->config.irq.mask || !woken) return 0;
     UBaseType_t saved = taskENTER_CRITICAL_FROM_ISR();
+    struct pvr_compute_queue *q=s->config.compute_queue;
+    if (q && s->config.job_irq_ack && !s->irq_masked && !s->irq_fault &&
+        atomic_load_explicit(&q->fast.enabled,memory_order_acquire)) {
+        if (!s->config.job_irq_ack(s->config.context)) s->irq_fault=1;
+        else {
+            pvr_compute_fast_snapshot(q,woken);
+            /* Event queue work belongs to the service. A job-only interrupt
+             * leaves delivery enabled and never traverses that task. */
+            const volatile uint32_t *events=s->config.resources[PVR_FW_EVENT_CONTROL].storage.cpu;
+            if (!atomic_load_explicit(&q->fast.irq_error,memory_order_acquire) && events[0]==events[32]) {
+                taskEXIT_CRITICAL_FROM_ISR(saved);
+                return 1;
+            }
+        }
+    }
     if (!s->irq_masked && !s->irq_fault) {
         s->irq_masked = 1;
         if (!s->config.irq.mask(s->config.context)) s->irq_fault = 1;
@@ -158,6 +177,19 @@ int pvr_gpu_service_interrupt(struct pvr_gpu_service *s, BaseType_t *woken)
     }
     int ok = !s->irq_fault;
     taskEXIT_CRITICAL_FROM_ISR(saved);
+    return ok;
+}
+static int service_ack(void *context,uint32_t offset,uint32_t value)
+{
+    struct pvr_gpu_service *s=instance;
+    if (!s || context!=s->config.context) return 0;
+    taskENTER_CRITICAL();
+    int ok=s->config.control.write32(context,offset,value);
+    /* An ACK by control must acquire timelines too; otherwise it could clear
+     * a completion arriving while job interrupts are masked for event work. */
+    if (ok && s->config.compute_queue && s->config.job_irq_ack)
+        pvr_compute_fast_snapshot(s->config.compute_queue,NULL);
+    taskEXIT_CRITICAL();
     return ok;
 }
 #ifdef SUNSTONE_A733_OS_PERF
@@ -649,6 +681,7 @@ static void advance(struct pvr_gpu_service *s)
         if (r == PVR_GPU_START_OK) {
             struct pvr_gpu_control_ops ops = s->config.control;
             ops.now = service_clock; ops.event = service_event;
+            if (s->config.job_irq_ack) ops.write32=service_ack;
             if (!pvr_gpu_control_init(&s->control, &s->start, &s->queue,
                     &ops, s->config.context, s->deadline) ||
                 (s->config.executed && !pvr_gpu_control_count_executed(&s->control, s->config.executed))) {
