@@ -1,3 +1,4 @@
+include("${CMAKE_CURRENT_LIST_DIR}/application-kit.cmake")
 # One native I2S0 stream, retained DMA periods and USB0 sink observation.
 if(NOT TARGET sunstone-a733-storage-maintenance)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-storage-maintenance.cmake")
@@ -54,17 +55,17 @@ target_include_directories(sunstone-a733-i2s BEFORE PRIVATE "${i2s_root}/apps/i2
 target_compile_definitions(sunstone-a733-i2s PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
  SUNSTONE_A733_USB=1 SUNSTONE_A733_IRQ_TABLE=1 A733_SMP_CONTRACT_MAGIC=0x4153373341554331ULL A733_SMP_RESULT_MAGIC=0x4153373341555231ULL)
 if(COMMAND sunstone_external_i2s)
- sunstone_external_i2s()
+ sunstone_external_i2s(sunstone-a733-i2s "${i2s_root}" "${i2s_build}"
+   i2s_application_sources i2s_application_inputs i2s_application_identity)
+ target_sources(sunstone-a733-i2s PRIVATE ${i2s_application_sources})
+ list(APPEND i2s_sources ${i2s_application_sources})
 endif()
 set(i2s_link "${storage_build}/link.ld")
 file(GLOB i2s_headers "${i2s_root}/apps/i2s/*.h")
-set(i2s_inputs ${i2s_sources} ${i2s_headers} ${storage_inputs}
+set(i2s_inputs ${i2s_application_inputs} ${i2s_sources} ${i2s_headers} ${storage_inputs}
  "${i2s_root}/apps/i2s/boot.patch" "${i2s_root}/platform/a733-smp-cached/irq_table.h"
  "${CMAKE_CURRENT_LIST_FILE}" "${i2s_root}/apps/i2s/CMakeLists.txt" "${i2s_root}/apps/i2s/recorded.py"
  "${i2s_root}/platform/a733-smp-supervised/boot.patch" "${SUNSTONE_I2S_RECORDED_WAV}")
-if(COMMAND sunstone_external_i2s_inputs)
- sunstone_external_i2s_inputs()
-endif()
 list(REMOVE_DUPLICATES i2s_inputs)
 set(i2s_identity "native-i2s-1;${i2s_application_identity};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;I2S0;16kHz;mono;S16;USB0-sink;supervised-retained")
 foreach(input IN LISTS i2s_inputs)
