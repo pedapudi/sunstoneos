@@ -148,12 +148,12 @@ def entry_cases(elf,out,steps):
     MMIO values establish an explicit modeled baseline, not board authority.
     Bad cases change one inherited input and require its retained origin.
     """
-    cases=[('baseline',None,0,0,0),('wrong-EL','currentel',8,0x11,0),
-           ('wrong-core','mpidr_el1',0x81000100,0x12,0),
-           ('cached-EL3','sctlr_el3',0xc51838,0x13,0),
-           ('dynamic-OFF',0x07053000,0x100,0x15,0x07053000),
-           ('pending-ack',0x07053008,0x100,0x15,0x07053008),
-           ('wake-enabled',0x07050204,0,0x15,0x07050204)]
+    cases=[('baseline',None,0,0,0),('wrong-EL','currentel',8,0x10,0),
+           ('wrong-core','mpidr_el1',0x81000100,0x11,0),
+           ('cached-EL3','sctlr_el3',0xc51838,0x12,0),
+           ('dynamic-OFF',0x07053000,0x100,0x25,0x07053008),
+           ('pending-ack',0x07053008,0x100,0x25,0x07053008),
+           ('wake-enabled',0x07050204,0,0,0)]
     rows=['actual-entry-'+case[0] for case in cases]
     if all(steps.case(name) for name in rows):return rows
     spec=importlib.util.spec_from_file_location('i2s_shared_probe',ROOT/'checks/board-probe.py')
@@ -166,12 +166,7 @@ def entry_cases(elf,out,steps):
         name='actual-entry-'+label
         if steps.case(name):continue
         m=shared.Model(elf,plan)
-        expected_value=value
-        # The optional owner preflights the same inherited inputs before its
-        # policy writes and records their more specific ownership sites.
-        if 'transition' in m.e.symbols:
-            site={'dynamic-OFF':0x83,'pending-ack':0x83,'wake-enabled':0}.get(label,site)
-            if label=='dynamic-OFF':address=0x07053008;expected_value=0
+        expected_value=0 if label=="dynamic-OFF" else value
         m.sys.update(mpidr_el1=0x81000000,sctlr_el3=0xc50838)
         if isinstance(field,str):m.sys[field]=value
         elif field is not None:m.write(field,value,4)

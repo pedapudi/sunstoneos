@@ -14,7 +14,10 @@ independently observed secondary OFF states and restoration of saved RAM and
 control registers. One eight-worker CPU-only mimus input matches its 90-frame
 reference at the bin-4 top operating points. A corrected reliability workload
 completes 4096 rounds in 4096 ticks on all eight pinned CPUs, with independently
-matching payload digests, seven secondaries off and WDT0 disarmed.
+matching payload digests, seven secondaries off and WDT0 disarmed. Three
+consecutive returning audio, memory and audio controls on port 3-1 normalize
+all seven secondary policies from dynamic OFF to static OFF, retain matching
+RTC summaries and return normally without a replug.
 
 Evidence paths are relative to `~/.cache/sunstoneos/evidence/`:
 
@@ -62,3 +65,50 @@ The [startup](../cpu-start.md), [coherence](../cpu-coherence.md),
 records define source and test scope. PMU empty/fixed regions, table-walk counts
 and WFI counters have a single-core physical result in
 `board-session-20261023/port-3-3/set5-bb4-run/`; broader event qualification remains.
+
+## Returning probe entry
+
+The shared returning-probe runtime normalizes acknowledged secondary OFF policies
+to static OFF and disables each secondary's GIC wake. PWSR completion precedes
+PWPR verification, under one 100 ms deadline and a finite sample cap. The inherited
+policy appears in an RTC breadcrumb. CPU0, cluster, shared domains, rails and
+clocks receive no normalization writes. Static OFF remains held until the ROM
+reset request; later multicore consumers require the reviewed held-policy release path.
+The [entry design](../designs/probe-entry-normalization.md) defines that contract.
+
+Three independent reviewers approve the source and linked memory-test and audio
+images. Forty-four distinct shared-runtime cases, sixteen focused audio cases,
+the memory-test recovery checks and the ISP prefetch sanitizer case pass.
+The full integration gate passes all central targets, twelve OS variants,
+the core checks and 88 indexed host checks. The hello and mimus baseline images
+also build. The check index verifies 805 checks, including 93 pure-host checks;
+693 checks requiring external inputs remain pending in the full gate.
+
+Raw evidence is under `~/.cache/sunstoneos/build/probe-shared-1101/`: reviews in
+`reviews/`, retained-summary cases in `probe-breadcrumb-check/`, audio cases
+in `audio-breadcrumb-focused/`, and the gate in `gates/gate-shared-probe-full/`.
+The diagnostic summary update also passes the selected gate in
+`gates/gate-policy-breadcrumb/`. The final audio and memory-test image hashes are
+`3baaace90784c0bcd0c75929cbac03d4de1ca3c06b1338e7d745c1184b031227`
+and `61d3d9582ec9846510ac2537d35df6938c7e0c01e60aae388c4583fc5ca2f4bf`.
+The unchanged audio and scan-only memory images pass three consecutive queued
+runs on port 3-1 with the ENODEV/ENOENT discovery fix from `6636cae8`:
+
+- Audio control: `1793563765178868625-47ea9df5`.
+- Scan-only memory probe: `1793563856677556459-2fc4fcf6`.
+- Audio control: `1793563904446986983-31e882d1`.
+
+All three results are `returned`, with no fault and WDT0 disarmed. Each RTC
+summary has ESR `0xfe`, ELR `0x50505531` and FAR `0xfe`: every secondary inherits
+policy `0x100` and completes static-OFF normalization. LAST is RETURN_ROM.
+Audio matches its full 128-byte expectation. The memory payload matches the
+`MRECORD1` substring; its complete record checksum, contract and pass status
+also validate. No seed image is needed because the first run inherits dynamic
+OFF. The queue ledger shows no intervening port-3-1 job; no replug is issued.
+The decoded records and ledger excerpt are in `proof-fixed/`.
+
+The second and third images inherit dynamic OFF again. Every queued image has
+an intervening system-watchdog reset and DDR restoration. The exact reset or
+software mechanism restoring dynamic OFF is unproved, so this evidence qualifies
+repeated entry normalization, not static-policy continuity across preparation.
+Camera reset and peripheral gate normalization remain with the camera stream.
