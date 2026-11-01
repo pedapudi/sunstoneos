@@ -206,130 +206,14 @@ def main(argv=None):
     live=sub.add_parser('launch')
     for name in ('bundle','fel','evidence'):
         live.add_argument('--'+name,type=Path,required=True)
-    live.add_argument('--confirm-bridge-stable',action='store_true',required=True)
+    live.add_argument('--confirm-bridge-stable',action='store_true')
     args=parser.parse_args(argv)
     if args.operation=='prepare':
         result=prepare(args.image,args.image_manifest,args.output.resolve(),args.clang,args.lld)
         print(json.dumps(result,indent=2)); return 0
-    bundle=args.bundle.resolve(); prepared=validate_bundle(bundle)
-    def ready(): pass
-    args.evidence = base.output_directory(args.evidence)
-    for label,path in [('host-tool.py',Path(__file__)),('base-host-tool.py',Path(base.__file__)),
-                       ('prepared.json',bundle/'prepared.json')]: shutil.copy2(path,args.evidence/label)
-    access=module('observe_usb_access',ROOT/'tools/usb-access.py')
-    sys.path.insert(0,str(ROOT/'tools')); import usb_guard
-    usb_guard.check_health()
-    record={'complete':False,'transactions':[],
-            'bundle_sha256':digest(bundle/'prepared.json'),'launch_attempted':False,'scheduler_result':'unobserved'}
-    def save(): save_json(args.evidence/'session.json',record)
-    with access.board_lock() as node:
-        access.require_session(node); access.require_rom(node); identity=access.identity(node)
-        port=access.target(node); port_config={'port':port.name,'sysfs':str(port.resolve())}; failed=False
-        record.update(initial_node=str(node),initial_identity=identity,port=port.name,
-                      host_tool_sha256=digest(Path(__file__)),base_host_tool_sha256=digest(Path(base.__file__)),
-                      usb_access_sha256=digest(ROOT/'tools/usb-access.py'),usb_guard_sha256=digest(Path(usb_guard.__file__)))
-        save()
-        def transaction(*arguments,pass_fds=()):
-            nonlocal failed
-            require(not failed,'A transport failure forbids all further requests.')
-            entry={'arguments':[str(x) for x in arguments]}
-            if pass_fds:
-                entry['sealed_sources']=[{'fd':fd,'bytes':os.fstat(fd).st_size,
-                    'sha256':hashlib.sha256(os.pread(fd,os.fstat(fd).st_size,0)).hexdigest(),
-                    'seals':fcntl.fcntl(fd,fcntl.F_GET_SEALS)} for fd in pass_fds]
-            record['transactions'].append(entry); save()
-            try:
-                require(access.identity(node)==identity,'USB instance changed before FEL request.')
-                access.require_rom(node)
-                result=subprocess.run([str(args.fel),'-d',f'{int(node.parent.name)}:{int(node.name)}',*map(str,arguments)],
-                                      capture_output=True,text=True,timeout=15,pass_fds=pass_fds)
-                entry.update(exit_code=result.returncode,stdout=result.stdout,stderr=result.stderr)
-                require(result.returncode==0,'FEL request failed.')
-            except (OSError,ValueError,subprocess.TimeoutExpired) as error:
-                failed=True;entry['failure']=str(error);save();raise
-            save();return result.stdout
-        def observe(started):
-            nonlocal node,identity,failed
-            old=identity; departure=False; observed=False; native_io=False; deadline=started+20
-            challenge=secrets.token_bytes(32)
-            record['challenge']=challenge.hex();save()
-            while time.monotonic()<deadline:
-                candidate=access.session_node(port_config)
-                if candidate is None: departure=True
-                else:
-                    try:
-                        current=access.identity(candidate)
-                        if current!=old: departure=True
-                        if current!=old and os.access(candidate,os.R_OK|os.W_OK):
-                            access.require_session(candidate)
-                            revision=(port/'bcdDevice').read_text().strip()
-                            if revision=='0101':
-                                if observed:
-                                    require(current==identity,'Unexpected second observer instance.')
-                                    time.sleep(.01);continue
-                                require((port/'product').read_text().strip()==PRODUCT and
-                                        (port/'serial').read_text().strip()==SERIAL, 'Observer descriptors differ.')
-                                node,identity=candidate,current
-                                if time.monotonic()>=started+3.6:
-                                    record['capture_limit']='Observer appeared after capture deadline.'
-                                    observed=True;save();continue
-                                native_io=True
-                                import usb.core
-                                device=usb.core.find(idVendor=0x1f3a,idProduct=0xefe8,
-                                    bus=int(node.parent.name),address=int(node.name))
-                                require(device is not None and device.bcdDevice==0x0101, 'Observer handle differs.')
-                                def same():
-                                    require(not failed and access.identity(node)==identity,'Observer USB instance changed; no more requests.')
-                                    require((port/'bcdDevice').read_text().strip()=='0101','Observer revision changed.')
-                                same();device.default_timeout=min(500,max(1,int((started+3.6-time.monotonic())*1000)))
-                                device.set_configuration(1)
-                                record['observer_identity']=identity;save()
-                                def exchange(packet,timeout):
-                                    nonlocal failed
-                                    try:
-                                        same()
-                                        require(device.write(0x02,packet,timeout=timeout)==len(packet),'Observer request was incomplete.')
-                                        same()
-                                        remaining=int((started+3.6-time.monotonic())*1000)
-                                        require(remaining>0,'Observer deadline expired after request write.')
-                                        return bytes(device.read(0x81,528,timeout=min(timeout,remaining)))
-                                    except Exception:
-                                        failed=True;raise
-                                capture_until_recovery(exchange,prepared,challenge,args.evidence,record,save,started+3.6)
-                                observed=True;native_io=False
-                            elif revision=='02b3':
-                                node,identity=candidate,current;access.require_rom(node)
-                                require('soc=00001903(A733)' in transaction('version'),'Returned ROM is not A733.')
-                                record.update(returned_node=str(node),returned_identity=identity,fresh_rom_response=True,
-                                              recovery_limit='A fresh ROM response does not independently establish watchdog causation.')
-                                save();return
-                            else: raise ValueError('Unexpected service at the protected target port.')
-                    except FileNotFoundError:
-                        if native_io:
-                            failed=True;raise
-                        departure=True
-                    except Exception:
-                        if native_io: failed=True
-                        raise
-                time.sleep(.01)
-            candidate=access.session_node(port_config)
-            if not departure and candidate is not None and access.identity(candidate)==old and os.access(candidate,os.R_OK|os.W_OK):
-                access.require_session(candidate);access.require_rom(candidate)
-                base.observe_refusal(transaction,args.evidence,prepared,record,save)
-                record['clean_refusal']=True;save();return
-            raise ValueError('No fresh accessible ROM response within recovery observation bound.')
-        try:
-            require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
-            with usb_guard.reenumeration('sunstoneos-a733','cached SMP observer and independent watchdog ROM return',2):
-                base.verify_dram(transaction,args.evidence,record,save)
-                launch_once(transaction,observe,bundle,prepared,args.evidence,record,save,ready)
-        except BaseException as error:
-            record['transport_failed']=failed
-            base.stop_after_failure(record,save,
-                lambda:access.quarantine_instance(node,'Observer attempt stopped; no requests or automatic retry.',identity),error)
-            raise
-    print('Diagnostic: '+record['scheduler_result']+'. Fresh ROM response: '+str(record.get('fresh_rom_response',False))+'.')
-    return 0 if record['complete'] else 2
+    sys.path.insert(0, str(ROOT/'tools'))
+    import board
+    raise SystemExit(board.legacy_run(args, image=None))
 
 
 if __name__=='__main__':

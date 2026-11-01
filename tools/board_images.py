@@ -79,7 +79,6 @@ def inspect(image, kind, descriptor=None, host_tree=None):
             cpu = load('inspect_cpu_geometry', ROOT/'apps/cpu-runtime-qualification/host.py')
             geometry = cpu.geometry(Path(image))
         else:
-            dev = load('inspect_dev', ROOT/'tools/dev-run.py')
             legacy = load('inspect_legacy', (host_tree or GPU_TREE)/'apps/os/cpu-return-host.py')
             geometry = legacy.geometry(Path(image))
         if kind=='npu':
@@ -160,7 +159,7 @@ def launcher(out, size, mode, seconds=60):
 def prepare(args, info, live, out):
     if info.get('native_probe'):
         return load('prepare_native_probe', ROOT/'tools/board_probe.py').prepare(args.image,info['native_probe'],args.input,out)
-    dev = load('runner_dev', ROOT / 'tools/dev-run.py')
+    dev = load('runner_dev', ROOT / 'tools/board_state.py')
     base = load('runner_base', ROOT / 'tools/check-a733-smp.py')
     records = load('runner_records', ROOT / 'apps/os/host.py')
     if args.kind == 'probe':
@@ -190,6 +189,7 @@ def prepare(args, info, live, out):
     # for the OS-only hello-compute control; no application asset is copied.
     template = Path(template)
     session_path = template / 'session.bin' if (template/'session.bin').exists() else template/'board/session-template.bin'
+    session_path = getattr(args, 'records', None) or session_path
     raw = session_path.read_bytes()
     image_info = records.image_manifest(args.image)
     if struct.unpack_from('<Q', raw, 592)[0] == records.SESSION_MAGIC:
@@ -313,7 +313,7 @@ def prepare_legacy(host, image, template, output, live):
     grant = o.grant_fields(raw)
     if grant and grant['clusters']:
         struct.pack_into('<2Q', raw, len(raw) - o.GRANT_BYTES + 32, epoch, generation)
-    findings, derived = load('legacy_state', ROOT/'tools/dev-run.py').state_check(live['words'])
+    findings, derived = load('legacy_state', ROOT/'tools/board_state.py').state_check(live['words'])
     if derived['apb1_hz']:
         struct.pack_into('<2I', raw, 760, derived['apb1'], derived['apb1_hz'])
     if derived['configure_adc_clock'] is not None:
@@ -355,7 +355,7 @@ def prepare_legacy(host, image, template, output, live):
 
 
 def rail_result(values, log):
-    dev = load("board_rail_result", ROOT/"tools/dev-run.py")
+    dev = load("board_rail_result", ROOT/"tools/board_state.py")
     result = dev.helper_report({"complete": True, "transport_failed": False, "mode": "kernel",
         "result": dict(zip(("magic","stage","status"), values[:3]))}, log)
     require(result["complete"], "Rail helper refused or did not complete normally: "+result.get("reason", ""))

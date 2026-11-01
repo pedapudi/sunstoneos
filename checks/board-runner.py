@@ -114,6 +114,8 @@ class Model:
         assert self.lock and command[1]=='-d'
         assert command[2]==f'3:{self.number}'
         args = command[3:]
+        if self.variant == 'fel-after-return' and self.launched and args == ['readl', '0x20']:
+            return types.SimpleNamespace(returncode=1, stdout='', stderr='injected post-return transport failure')
         self.calls.append(args)
         out = []
         i = 0
@@ -153,15 +155,23 @@ class Model:
                 self.registers[board.crumbs.RTC+0x100]=0x5c0d0001
                 self.registers[board.crumbs.RTC+0x104]=(0x0410 if self.variant=='watchdog' else board.crumbs.RETURN_ROM)<<16
                 if self.variant not in ('watchdog','stuck-disarm'):self.registers[board.crumbs.WDT_MODE]=0
+                if self.variant == 'watchdog-before-entry':
+                    self.registers[board.crumbs.RTC+0x100] = 0
+                    self.registers[board.crumbs.WDT_MODE] = 0xb1
+                elif self.variant == 'missing-return':
+                    self.registers[board.crumbs.RTC+0x104] = 0
+                elif self.variant == 'wrong-return-session':
+                    self.registers[board.crumbs.RTC+0x100] ^= 1
                 i+=2
             else:
                 raise AssertionError(op)
         return types.SimpleNamespace(returncode=0,stdout='\n'.join(out),stderr='')
 
 
-def lifecycle(root,variant):
+def lifecycle(root,variant,restore=False):
     root.mkdir()
     args=arguments(root)
+    args.restore_rails=restore
     if variant=='mismatch':args.expect='a different output'
     model=Model(variant)
     owners=[]
@@ -171,12 +181,23 @@ def lifecycle(root,variant):
             owners.append(self)
         def dram(self):
             if variant=='dram-failure':raise board.DramFailure('training rejected')
-        def rails(self):
+        rail_phases = None
+        def rails(self, phase='rails'):
+            if self.rail_phases is None:self.rail_phases=[]
+            self.rail_phases.append(phase)
+            if variant == 'restore-failure' and phase == 'restore-rails':
+                raise ValueError('Rail helper refused post-return supplies')
             if variant=='rail-refusal':raise ValueError('Rail helper refused CPU supplies')
+        def live_state(self):
+            words={hex(0x8871000+0x1000*d+o):v for d in range(3)
+                   for o,v in ((0,board.state.BOOT_PLL[d]),(0x1c,board.state.BOOT_MUX[d]))}
+            if variant=='restore-clock':words['0x8871000']=0
+            return {'words':words}
         def prepare(self,info):
             return {'epoch':1,'generation':2,'watchdog':{'mode':0xb1,'session_seconds':1},
                     'uploads':[(0x41000000,args.image)],'launch':['exe','0x52000']}
         def capture(self,plan):
+            if variant=='fel-after-return':self.tx('readl','0x20')
             if variant=='host-error':raise TypeError('injected decoder bug after normal return')
             if variant=='invalid-report':
                 with patch.object(images,'capture',side_effect=ValueError('Application result belongs to another session')):
@@ -184,6 +205,10 @@ def lifecycle(root,variant):
             if variant=='journal-error':
                 self.journal_error=OSError('journal full after return')
             return {'valid':True,'payload':b'complete','report':{'state':4}}
+    if variant in ('decoder-failure', 'decoder-invalid'):
+        args.decoder=root/'application-decoder.py'
+        args.decoder.write_text('def decode(payload):\n    return {"failed": True}\ndef failures(decoded):\n    return ["native job failed"]\n' if variant=='decoder-failure' else
+                                'def decode(payload):\n    raise ValueError("malformed payload")\n')
     info={'entry_guard':True,'descriptor':{},'watchdog':{'mode':0xb1,'session_seconds':1}}
     with patch.object(images,'inspect',return_value=info),patch.object(images,'policy'), \
          patch.object(board.os,'access',return_value=True),contextlib.redirect_stdout(io.StringIO()), \
@@ -216,6 +241,22 @@ def transport_cases(out):
             # One fresh-instance wait, never an automatic second reset.
             assert sum('0x16aa0041' in c for c in model.calls)==1
         passed(variant)
+    for variant,expected in (
+            ('watchdog-before-entry','watchdog-reset'),('missing-return','host-error'),
+            ('wrong-return-session','host-error'),('fel-after-return','host-error'),
+            ('decoder-failure','result-mismatch'),('decoder-invalid','result-mismatch'),
+            ('restore-failure','host-error'),('restore-clock','host-error'),
+            ('normal','returned'),('watchdog','watchdog-reset'),('mismatch','result-mismatch')):
+        result,model,owner=lifecycle(out/('restore-'+variant),variant,restore=True)
+        assert result['outcome']==expected,(variant,result)
+        assert bool(model.quarantined)==(variant in ('fel-after-return','missing-return','wrong-return-session')),(variant,model.quarantined)
+        assert bool(result.get('rails_restored'))==(variant=='normal')
+        assert owner.rail_phases==(['rails','restore-rails'] if variant in ('normal','restore-failure') else ['rails'])
+        if variant=='watchdog-before-entry':
+            assert result['dram_lost'] and not result['breadcrumbs']['session']
+        if variant in ('missing-return','wrong-return-session','watchdog-before-entry'):
+            assert not any(c[0]=='read' and int(c[1],0)>=0x41000000 for c in model.calls[model.calls.index(['exe','0x52000'])+1:])
+        passed('restore-and-classification-'+variant)
     root=out/'journal-armed';root.mkdir()
     args=arguments(root);model=Model('normal');record={}
     owner=board.Live(args,root,record,access=model,process=model.process,now=model.now,sleep=model.sleep)
@@ -374,7 +415,7 @@ def artifacts(out):
 
 
 def offline(out,hello):
-    source=json.loads((board.dev.EVIDENCE/'sol-resume-20261031/port-3-3/cpu-thermal-state/session.json').read_text())
+    source=json.loads((board.state.EVIDENCE/'sol-resume-20261031/port-3-3/cpu-thermal-state/session.json').read_text())
     words={}
     for t in source['transactions']:
         c=t['command'];addresses=[int(c[i+1],16) for i,x in enumerate(c) if x=='readl']
@@ -489,9 +530,9 @@ def rail_cases(out):
             clocks.append(f'{name} {phase} pll={pll:#x} mux={mux:#x} mhz={mhz} pat0=0 pat1=0 lfm=0')
     common='\n'.join(clocks)+'\n'
     supply='SUPPLY dcdc5_uv=1000000 dcdc3_uv=800000 bin=4 dcxo_hz=26000000\n'
-    log=common+supply+'VOLT dcdc5_selector=30 dcdc5_uv=800000\n'+board.dev.RAIL_COMPLETE+'\n'
+    log=common+supply+'VOLT dcdc5_selector=30 dcdc5_uv=800000\n'+board.state.RAIL_COMPLETE+'\n'
     assert images.rail_result((0x534b4552,5,0),log)['dcdc5_uv']==800000
-    already=common+supply.replace('dcdc5_uv=1000000','dcdc5_uv=800000')+board.dev.RAIL_COMPLETE+'\n'
+    already=common+supply.replace('dcdc5_uv=1000000','dcdc5_uv=800000')+board.state.RAIL_COMPLETE+'\n'
     assert images.rail_result((0x534b4552,5,0),already)['already_normalized']
     try:images.rail_result((0x534b4552,5,1),already.replace('dcdc3_uv=800000','dcdc3_uv=1000000'))
     except ValueError as error:assert 'refused' in str(error)
@@ -523,12 +564,12 @@ def rail_cases(out):
         model.registers[0x07090160]=0x10008002
         owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep,
                          elapsed_now=lambda:model.clock+model.suspended)
-        with patch.object(board.dev,'RAIL_HELPER_SHA256',images.sha(args.rail_helper)),patch.object(board.os,'access',return_value=True),owner.locked():
+        with patch.object(board.state,'RAIL_HELPER_SHA256',images.sha(args.rail_helper)),patch.object(board.os,'access',return_value=True),owner.locked():
             try:owner.rails()
             except ValueError as error:assert expired and 'watchdog' in str(error)
             else:assert not expired
         assert not owner.armed and not model.quarantined
-        if expired:assert not (root/'rail-result.bin').exists(),'Never read DRAM after possible WDT expiry.'
+        if expired:assert not (root/'rails/rail-result.bin').exists(),'Never read DRAM after possible WDT expiry.'
         else:assert owner.record['rails']['dcdc5_uv']==800000
         passed('pinned-rail-helper-'+variant)
 

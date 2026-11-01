@@ -76,7 +76,6 @@ def main(argv=None):
         help='Use the reviewed whole-board power-removal plan; cable reconnect does not release HDMI audio resources.')
     parser.add_argument('--database', type=Path)
     args=parser.parse_args(argv)
-    require(args.evidence.parent.is_dir(),'HDMI audio evidence parent must already exist.')
     bundle=args.bundle.resolve();prepared=freeze_bundle(bundle);frozen=prepared['_frozen']
     admission=json.loads(frozen['admission.json']);session=frozen['source-session.bin'];pcm=frozen['input.pcm']
     entry={path:frozen['entry-evidence-'+str(i)+'.bin'] for i,path in enumerate(json.loads(frozen.get('entry-index.bin',b'[]')))}

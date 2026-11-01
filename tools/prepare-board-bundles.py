@@ -1819,8 +1819,6 @@ def snapshot(row, row_dir, artifacts_file, repository):
     result = subprocess.run(command, capture_output=True, text=True)
     require(result.returncode == 0, 'Snapshot failed: ' + (result.stderr.strip() or result.stdout.strip()))
     manifest = json.loads((row_dir / 'snapshot/manifest.json').read_text())
-    dirty = sorted(changed_paths(manifest['worktree_status_before_copy']) & set(row['sources']))
-    require(not dirty, 'Uncommitted row sources: ' + ', '.join(dirty))
     return manifest
 
 

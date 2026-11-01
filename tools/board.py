@@ -15,18 +15,20 @@ import subprocess
 import sys
 import time
 import traceback
+import types
 import uuid
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import board_images as images
+from host_evidence import evidence_directory
 
 ROOT, CACHE = images.ROOT, images.CACHE
 PYTHON = CACHE / 'venv/bin/python3'
 PORTS = ('3-1', '3-3')
 OUTCOMES = ('returned', 'result-mismatch', 'watchdog-reset', 'no-return', 'refused-before-launch', 'host-error')
 crumbs = images.load('board_crumbs', ROOT/'tools/a733-crumbs.py')
-dev = images.load('board_dev', ROOT/'tools/dev-run.py')
+import board_state as state
 require = images.require
 
 
@@ -65,6 +67,10 @@ class DdrAbort(BaseException):
 
 
 class Mismatch(ValueError):
+    pass
+
+
+class UnresolvedReturn(ValueError):
     pass
 
 
@@ -117,6 +123,9 @@ class Live:
                     self.quarantine(str(error))
                 raise
             except NoReturn as error:
+                self.quarantine(str(error))
+                raise
+            except UnresolvedReturn as error:
                 self.quarantine(str(error))
                 raise
 
@@ -386,14 +395,16 @@ class Live:
         save_record()
         return result
 
-    def rails(self):
+    def rails(self, phase='rails'):
+        evidence = self.evidence/phase
+        evidence.mkdir(parents=True, exist_ok=True)
         data = self.args.rail_helper.read_bytes()
-        require(hashlib.sha256(data).hexdigest() == dev.RAIL_HELPER_SHA256, 'Rail helper binary differs from the pinned one.')
+        require(hashlib.sha256(data).hexdigest() == state.RAIL_HELPER_SHA256, 'Rail helper binary differs from the pinned one.')
         oscillator = int(self.tx('readl','0x07090160'),16)
         require((oscillator>>14)&3==2 and oscillator&0x10000002==0x10000002,
                 'Rail helper requires the enabled raw 26 MHz oscillator.')
-        self.upload(0x41000000, images.write(self.evidence/'rail-helper.bin',data))
-        self.upload(0x42000000, images.write(self.evidence/'rail-blank.bin', bytes(16384)))
+        self.upload(0x41000000, images.write(evidence/'rail-helper.bin',data))
+        self.upload(0x42000000, images.write(evidence/'rail-blank.bin', bytes(16384)))
         # This exact legacy helper returns via RMR but does not disarm WDT0.
         # A733 manual 8.3.6.5-6: configuration bit 8 selects DCXO/750;
         # interval b counts 512k cycles (14.769 s at raw 26 MHz). Complete
@@ -407,22 +418,25 @@ class Live:
         elapsed = self.elapsed_now()-armed_at
         self.record['rail_return'] = {'seconds':elapsed,'watchdog_configuration':0x101,
             'source_hz':26000000/750,'mode_before_disarm':before,'mode_after_disarm':after,'cutoff_seconds':14}
+        run = {'return': self.record['rail_return'], 'evidence': str(evidence)}
+        self.record.setdefault('rail_runs', {})[phase] = run
         if not (before&0xffff==0xb1 and not after&1 and 0<=elapsed<14):
             self.record.update(dram_lost=True,setup_watchdog_reset=True)
             raise ValueError('Rail helper possible watchdog reset; no DRAM result read; rails were not normalized.')
-        data = self.read(0x42000000, 16384, self.evidence/'rail-result.bin')
+        data = self.read(0x42000000, 16384, evidence/'rail-result.bin')
         values = struct.unpack_from('<16Q', data)
         require(values[3] <= 16384-257, 'Invalid rail helper log length.')
         log = data[256:256+values[3]].decode(errors='replace')
-        (self.evidence/'rail.log').write_text(log)
+        (evidence/'rail.log').write_text(log)
         # The helper performs all boot-clock, speed-bin and PMIC readbacks.
         self.record['rails'] = images.rail_result(values, log)
+        run['rails'] = self.record['rails']
         self.journal()
 
     def live_state(self):
-        values = [int(v,16) for v in self.tx(*[x for a in dev.WORDS for x in ('readl', hex(a))]).split()]
-        require(len(values) == len(dev.WORDS), 'Live state word count differs.')
-        return {'identity': self.identity, 'port': self.args.port, 'words': {hex(a):v for a,v in zip(dev.WORDS,values)}}
+        values = [int(v,16) for v in self.tx(*[x for a in state.WORDS for x in ('readl', hex(a))]).split()]
+        require(len(values) == len(state.WORDS), 'Live state word count differs.')
+        return {'identity': self.identity, 'port': self.args.port, 'words': {hex(a):v for a,v in zip(state.WORDS,values)}}
 
     def prepare(self, info):
         return images.prepare(self.args, info, {} if self.args.kind=='probe' else self.live_state(), self.evidence/'bundle')
@@ -445,8 +459,9 @@ class Live:
         if before & 1:
             self.record['dram_lost'] = True
             return 'watchdog-reset'
-        require(decoded['session'] and decoded.get('last',{}).get('stage') == crumbs.RETURN_ROM and
-                decoded['last']['value'] == 0, 'Return lacks the matching RETURN_ROM breadcrumb.')
+        if not (decoded['session'] and decoded.get('last',{}).get('stage') == crumbs.RETURN_ROM and
+                decoded['last']['value'] == 0):
+            raise UnresolvedReturn('Return lacks the matching RETURN_ROM breadcrumb.')
         self.record['normal_return'] = True
         return 'returned'
 
@@ -520,7 +535,7 @@ def verify_references(inventory):
 def run_image(args, backend=Live):
     started = time.monotonic()
     evidence = args.evidence or CACHE/'board-queue/runs'/f'{time.time_ns()}-{args.port}-{uuid.uuid4().hex[:8]}'
-    evidence.mkdir(parents=True, exist_ok=False)
+    evidence = evidence_directory(evidence)
     result = {'schema': 'sunstone-board-result-v1', 'port': args.port, 'image': str(args.image),
               'kind': args.kind, 'outcome': 'host-error', 'first_failure': None, 'durations': {},
               'evidence_path': str(evidence.resolve()), 'result_path': str((evidence/'result.json').resolve()),
@@ -551,8 +566,16 @@ def run_image(args, backend=Live):
         args.image = frozen
         if args.reference_inventory:
             verify_references(json.loads(args.reference_inventory.read_text()))
-        info = images.inspect(frozen, args.kind, descriptor,args.host_tree)
-        images.policy(info, args)
+        helper_only = args.kind == 'rail-helper'
+        if helper_only:
+            require(result['image_sha256'] == state.RAIL_HELPER_SHA256,
+                    'Rail helper binary differs from the pinned one.')
+            args.rail_helper = frozen
+            info = None
+        else:
+            info = images.inspect(frozen, args.kind, descriptor,args.host_tree)
+            images.policy(info, args)
+            application_inputs(args, info, evidence)
         expected = json.loads(args.expect_spec.read_text()) if args.expect_spec else expectation(args.expect)
         if expected is not None:
             save(evidence/'expect.json', expected)
@@ -562,8 +585,12 @@ def run_image(args, backend=Live):
                 timed('identity', owner.sanity)
                 timed('reset', owner.reset)
                 timed('dram', owner.dram)
-                if info['entry_guard']:
+                if helper_only or info['entry_guard']:
                     timed('rails', owner.rails)
+                if helper_only:
+                    result['outcome'] = 'returned'
+                    result['return_report'] = result['rails']
+                    return finish_result(result, evidence, started, stage)
                 plan = timed('prepare', lambda: owner.prepare(info))
                 outcome = timed('launch', lambda: owner.launch(plan))
                 result['outcome'] = outcome
@@ -578,6 +605,31 @@ def run_image(args, backend=Live):
                         matched &= payload == bytes.fromhex(expected['hex']) if expected['mode'] == 'bytes' else expected['text'] in payload.decode(errors='replace')
                     if not matched:
                         raise Mismatch('Returned result differs from expectation.')
+                    if getattr(args, 'decoder', None):
+                        decoder = load_decoder(args)
+                        try:
+                            decoded = decoder.decode(payload)
+                        except (ValueError, struct.error) as error:
+                            raise Mismatch('Invalid decoded result: '+str(error)) from error
+                        result['decoded'] = decoded
+                        if hasattr(decoder, 'failures'):
+                            failures = decoder.failures(decoded)
+                            if failures:
+                                raise Mismatch('Decoder reported failures: '+str(failures))
+                        if hasattr(decoder, 'expected'):
+                            values = [p.read_bytes() for p in args.input]
+                            if not values:
+                                values = [p.read_bytes() for p in sorted((evidence/'bundle').glob('input-*.bin'))]
+                            if decoded != decoder.expected(values):
+                                raise Mismatch('Decoded result differs from expectation.')
+                    if info['entry_guard'] and getattr(args, 'restore_rails', False):
+                        after = timed('restore-state', owner.live_state)
+                        save(evidence/'state-after.json', after)
+                        require(not state.boot_clocks(after['words']),
+                                'CPU clocks differ from boot words before rail restoration.')
+                        # Capture and decoder succeeded on a confirmed normal return.
+                        timed('restore-rails', lambda: owner.rails('restore-rails'))
+                        result['rails_restored'] = True
                 else:
                     decoded = result.get('breadcrumbs',{})
                     fault = decoded.get('fault',{})
@@ -605,13 +657,139 @@ def run_image(args, backend=Live):
         result['outcome'] = 'host-error'
         result['first_failure'] = {'site': stage, 'detail': f'{type(error).__name__}: {error}'}
         (evidence/'host-error.txt').write_text(traceback.format_exc())
+    return finish_result(result, evidence, started, stage)
+
+
+def finish_result(result, evidence, started, stage):
     result['stage'] = stage
     result['durations']['total'] = round(time.monotonic()-started,6)
     # Raw transaction evidence has its own record; result.json stays compact.
     summary = {k:v for k,v in result.items() if k != 'transactions'}
     save(evidence/'result.json', summary)
-    print(f"{args.port} {args.kind} {summary.get('image_sha256','unreadable')[:12]} {summary['outcome']} {evidence/'result.json'}", flush=True)
+    print(f"{summary['port']} {summary['kind']} {summary.get('image_sha256','unreadable')[:12]} {summary['outcome']} {evidence/'result.json'}", flush=True)
     return summary
+
+
+def check_image(args):
+    """Apply launch admission and prepare uploads without constructing a USB owner."""
+    descriptor = args.descriptor or Path(str(args.image)+'.board.json')
+    info = images.inspect(args.image, args.kind,
+                          json.loads(descriptor.read_text()) if descriptor.exists() else None,
+                          args.host_tree)
+    images.policy(info, args)
+    evidence = evidence_directory(args.evidence)
+    application_inputs(args, info, evidence)
+    live = json.loads(args.state.read_text()) if args.state else {}
+    require(info.get('native_probe') or live.get('words'),
+            'Offline application preparation requires --state with captured words.')
+    plan = images.prepare(args, info, live, evidence/'bundle')
+    report = {'admitted': True, 'physical_access': False, 'image_sha256': images.sha(args.image),
+              'watchdog': plan['watchdog'],
+              'uploads': [{'address': a, 'file': str(p), 'sha256': images.sha(p)} for a, p in plan['uploads']]}
+    report.update({k: plan[k] for k in ('epoch', 'generation', 'lease', 'marker') if k in plan})
+    save(evidence/'admission.json', report)
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def application_inputs(args, info, evidence):
+    """Freeze consumed inputs and validate their manifest bounds before device access."""
+    if not info.get('generic'):
+        return
+    host = images.load('runner_application_manifest', ROOT/'apps/os/host.py')
+    manifest = host.image_manifest(args.image)['manifest']
+    if getattr(args, 'decode_application', False) and not args.decoder:
+        candidate = ROOT/'apps'/manifest['name']/'host.py'
+        if candidate.is_file():
+            args.decoder = candidate
+    decoder = None
+    if args.decoder:
+        args.decoder_origin = getattr(args, 'decoder_origin', None) or args.decoder.resolve()
+        target = evidence/'decoder.py'
+        target.write_bytes(args.decoder.read_bytes())
+        args.decoder = target
+        decoder = load_decoder(args)
+        require(callable(getattr(decoder, 'decode', None)), 'Decoder requires decode(payload).')
+    values = [p.read_bytes() for p in args.input]
+    if not values and getattr(args, 'decode_application', False) and decoder and hasattr(decoder, 'inputs'):
+        values = decoder.inputs()
+    if not values and manifest['name'] == 'hello-compute':
+        values = [b'SunstoneOS board control\n']
+    if values:
+        host.input_facts(manifest, values)
+        args.input = [images.write(evidence/f'input-{i}.bin', value) for i, value in enumerate(values)]
+
+
+def load_decoder(args):
+    """Execute frozen decoder bytes while retaining its source-relative resource paths."""
+    origin = getattr(args, 'decoder_origin', None) or args.decoder
+    module = types.ModuleType('board_application_decoder')
+    module.__file__ = str(origin)
+    exec(compile(args.decoder.read_bytes(), str(origin), 'exec'), module.__dict__)
+    return module
+
+
+def development(argv=None):
+    """Translate the development CLI; all admission and execution use this runner."""
+    parser = argparse.ArgumentParser(description='Compatibility commands for tools/board.py')
+    parser.add_argument('kind', choices=('cpu-return', 'gpu-return', 'npu', 'rail-helper'))
+    parser.add_argument('--image', type=Path)
+    parser.add_argument('--input', type=Path, action='append', default=[])
+    parser.add_argument('--decoder', type=Path)
+    parser.add_argument('--records', type=Path, default=state.RECORDS)
+    parser.add_argument('--port', default=os.environ.get('SUNSTONE_USB_PORT'), choices=PORTS)
+    parser.add_argument('--evidence', type=Path)
+    parser.add_argument('--state', type=Path)
+    parser.add_argument('--check-only', action='store_true')
+    parser.add_argument('--force', action='store_true')
+    parser.add_argument('--normalize-rails', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--restore-rails', action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--rail-helper', type=Path, default=state.RAIL_HELPER)
+    parser.add_argument('--fel', type=Path, default=state.FEL)
+    args = parser.parse_args(argv)
+    if args.force or args.normalize_rails is False:
+        print('Legacy force/skip-normalize options cannot bypass runner admission.', file=sys.stderr)
+    offline = args.check_only or args.state is not None
+    if args.kind == 'rail-helper' and offline:
+        parser.error('rail-helper requires a live runner session; no --state or --check-only')
+    if not offline and not args.port:
+        parser.error('select --port or SUNSTONE_USB_PORT')
+    image = args.image or (args.rail_helper if args.kind == 'rail-helper' else state.CONTROL_IMAGE)
+    evidence = args.evidence or CACHE/'board-queue/runs'/f'{time.time_ns()}-development'
+    command = ['check' if offline else 'run', str(image), '--kind', args.kind, '--evidence', str(evidence),
+               '--fel', str(args.fel), '--rail-helper', str(args.rail_helper)]
+    if args.port:
+        command += ['--port', args.port]
+    if args.state:
+        command += ['--state', str(args.state)]
+    if args.kind == 'cpu-return':
+        command += ['--records', str(args.records)]
+    if args.restore_rails:
+        command += ['--restore-rails']
+    if args.decoder:
+        command += ['--decoder', str(args.decoder)]
+    command += ['--decode-application']
+    for path in args.input:
+        command += ['--input', str(path)]
+    return main(command)
+
+
+def legacy_run(args, kind='probe', image=None, storage_write=False):
+    """Route a historical host's launch subcommand through runner admission."""
+    bundle = getattr(args, 'bundle', None)
+    if image is None:
+        directory = Path(bundle)
+        image = directory/'board/image.elf' if (directory/'board/image.elf').is_file() else directory/'image.elf'
+    command = ['run', str(image), '--kind', kind,
+               '--port', os.environ.get('SUNSTONE_USB_PORT', ''),
+               '--fel', str(args.fel), '--evidence', str(args.evidence)]
+    if bundle:
+        command += ['--template', str(bundle)]
+    if storage_write:
+        command += ['--storage-write']
+    if getattr(args, 'expect', None):
+        command += ['--expect', args.expect]
+    return main(command)
 
 
 class Queue:
@@ -659,14 +837,31 @@ class Queue:
         directory = self.root/'entries'/identifier
         directory.mkdir(parents=True, exist_ok=False)
         source = args.image.resolve()
+        if args.decoder and not args.decoder_origin:
+            args.decoder_origin = args.decoder.resolve()
         data = source.read_bytes()
         image = directory/('image.elf' if data[:4] == b'\x7fELF' else 'image.bin')
         image.write_bytes(data)
+        if args.decode_application:
+            descriptor = args.descriptor or Path(str(source)+'.board.json')
+            info = images.inspect(source, args.kind,
+                                  json.loads(descriptor.read_text()) if descriptor.exists() else None,
+                                  args.host_tree)
+            application_inputs(args, info, directory)
         # Freeze all caller-controlled launch inputs before queue visibility.
         options = {}
-        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir'):
+        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','decode_application'):
             value = getattr(args,name)
             options[name] = str(value.resolve()) if isinstance(value,Path) else value
+        for name in ('records', 'decoder'):
+            path = getattr(args, name, None)
+            if path:
+                target = directory/(name+path.suffix)
+                if path.resolve() != target.resolve():
+                    shutil.copy2(path, target)
+                options[name] = str(target)
+        if getattr(args, 'decoder_origin', None):
+            options['decoder_origin'] = str(args.decoder_origin)
         options['input'] = []
         for i,path in enumerate(args.input):
             target = directory/f'input-{i}.bin'
@@ -678,7 +873,7 @@ class Queue:
             target.write_bytes(descriptor.read_bytes())
             options['descriptor'] = str(target)
         template = args.template or (images.GPU_TEMPLATE if args.kind=='gpu-return' else images.CONTROL)
-        if args.kind!='probe':
+        if args.kind not in ('probe', 'rail-helper'):
             if args.kind=='gpu-return':
                 shutil.copytree(template, directory/'template')
             else:
@@ -868,16 +1063,21 @@ class Queue:
 def run_options(parser, submit=False):
     parser.add_argument('image', type=Path)
     parser.add_argument('--port', choices=('any',*PORTS) if submit else PORTS, required=True)
-    parser.add_argument('--kind', choices=('cpu-return','gpu-return','npu','probe'), default='cpu-return', required=submit)
+    parser.add_argument('--kind', choices=('cpu-return','gpu-return','npu','probe','rail-helper'), default='cpu-return', required=submit)
     parser.add_argument('--expect', required=submit, help='Existing file: exact bytes; otherwise UTF-8 substring.')
     parser.add_argument('--approved-by', choices=('coordinator',))
     parser.add_argument('--storage-write', action='store_true')
     parser.add_argument('--descriptor', type=Path, help='Hash-bound image metadata; defaults to IMAGE.board.json.')
+    parser.add_argument('--restore-rails', action='store_true', help='Restore guarded CPU rails after a validated normal return.')
+    parser.add_argument('--decoder', type=Path, help='Application payload decoder with optional expected(inputs).')
+    parser.add_argument('--decoder-origin', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--decode-application', action='store_true', help='Use the application decoder and its default inputs when available.')
+    parser.add_argument('--records', type=Path, help='Board, thermal and CPU session records for a generic image.')
     parser.add_argument('--template', type=Path, help='Typed-session bundle, or legacy bundle with board/ and assets/.')
     parser.add_argument('--host-tree', type=Path, help='Legacy GPU image source tree; generic images use this OS tree.')
     parser.add_argument('--input', action='append', type=Path, default=[])
-    parser.add_argument('--fel', type=Path, default=dev.FEL)
-    parser.add_argument('--rail-helper', type=Path, default=dev.RAIL_HELPER)
+    parser.add_argument('--fel', type=Path, default=state.FEL)
+    parser.add_argument('--rail-helper', type=Path, default=state.RAIL_HELPER)
     parser.add_argument('--ddr-build', type=Path, default=CACHE/'build/a733-ddr')
     parser.add_argument('--ddr-restore', type=Path, default=CACHE/'build/a733-ddr-restore')
     parser.add_argument('--training-dir', type=Path, default=CACHE/'ddr-records')
@@ -894,13 +1094,12 @@ def main(argv=None):
     run_options(run)
     run.add_argument('--evidence',type=Path)
     check = commands.add_parser('check')
-    check.add_argument('image',type=Path)
-    check.add_argument('--kind',choices=('probe',),default='probe')
-    check.add_argument('--input',type=Path,action='append',default=[])
-    check.add_argument('--evidence',type=Path,required=True)
-    check.add_argument('--approved-by',choices=('coordinator',))
-    check.add_argument('--storage-write',action='store_true')
-    check.add_argument('--descriptor',type=Path)
+    run_options(check)
+    check.set_defaults(kind='probe')
+    check._option_string_actions['--port'].required = False
+    # Offline checks use captured words only; the port selects metadata, never a device.
+    check.add_argument('--state', type=Path)
+    check.add_argument('--evidence', type=Path, required=True)
     submit = commands.add_parser('submit')
     run_options(submit,True)
     submit.add_argument('--worker',required=True)
@@ -915,17 +1114,7 @@ def main(argv=None):
     resume.add_argument('port',choices=PORTS)
     args = parser.parse_args(argv)
     if args.command=='check':
-        descriptor=args.descriptor or Path(str(args.image)+'.board.json')
-        info=images.inspect(args.image,args.kind,json.loads(descriptor.read_text()) if descriptor.exists() else None)
-        images.policy(info,args)
-        require(info.get('native_probe'),'Offline probe preparation requires the embedded native probe contract.')
-        plan=images.prepare(args,info,{},args.evidence)
-        report={'admitted':True,'physical_access':False,'image_sha256':images.sha(args.image),
-                'watchdog':plan['watchdog'],'epoch':plan['epoch'],'generation':plan['generation'],'lease':plan['lease'],
-                'marker':plan['marker'],'uploads':[{'address':a,'file':str(p),'sha256':images.sha(p)} for a,p in plan['uploads']]}
-        save(args.evidence/'admission.json',report)
-        print(json.dumps(report,indent=2))
-        return 0
+        return check_image(args)
     if args.command=='run':
         if args.process_record:
             save(args.process_record,process_identity(os.getpid()))
