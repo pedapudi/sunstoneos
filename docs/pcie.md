@@ -3,7 +3,8 @@
 The initial native profile implements the A733 COMB1 internal 100 MHz PHY
 sequence, PCIe root-complex preparation, an x1 link and read-only
 configuration access to one directly attached endpoint. The configuration-read,
-endpoint-test and NVMe applications all select Gen1 (2.5 GT/s). FreeRTOS owns the
+endpoint-test and NVMe applications request Gen3 (8 GT/s), with negotiated
+x1 Gen1 or Gen2 fallback. FreeRTOS owns the
 controller. Linux and U-Boot supply register semantics and comparison helpers;
 neither is a runtime dependency. The [supervised native application](pcie-application.md)
 connects these providers to authenticated entry and copied USB results. Physical
@@ -109,11 +110,12 @@ and refuses endpoint configuration writes.
 
 Local PCIe AUX uses SYS24M and AXI uses PERI0 400 MHz. SYS24M is the normalized
 24 MHz PLL_REF output, and admission checks it with the shared
-`a733_clock_ref24_valid()` decoder. The COMB1 PHY also takes the raw DCXO
-oscillator through the DCXO_SERDES1 gate (0x0709016c bit 5), and its fixed
-91-entry register table is verified only for a 24 MHz oscillator. Admission
-therefore also requires a 24 MHz DCXO and refuses a 19.2 MHz or 26 MHz board,
-even when its PLL_REF factors produce a valid SYS24M. The inherited parent
+`a733_clock_ref24_valid()` decoder. A 26 MHz oscillator with PLL_REF
+N=96 and M=104 supplies the same normalized rate. The vendor PCIe path sets
+SERDES to 100 MHz, enables SERDES and DCXO_SERDES1 (0x0709016c bit 5),
+and selects its internal-100-MHz PHY table without an oscillator-rate branch.
+The native driver uses that same table and admits the normalized reference;
+it requires no raw-24-MHz predicate. The inherited parent
 checks require No-Auto mode, software enable and effective gate status for
 every selected branch. The native controller keeps GIC delivery masked and
 checks pending/active state, observes both link-up bits, bounds capability-list
@@ -379,7 +381,7 @@ that revision and requires identical write sequences. Controller and endpoint
 responses, including the speed change, are modeled.
 
 The same script builds `checks/a733-pcie-nvme.c` with the function client and
-NVMe driver and runs its 26 cases. The model supplies an NVMe controller with
+NVMe driver and runs its selected cases. The model supplies an NVMe controller with
 a 16 KiB 64-bit BAR0, a 4 KiB BAR2, an I/O BAR and an eight-entry MSI-X table.
 It also models the DesignWare MSI and SII latches, PCI power-management resets
 and link loss after PERST.
@@ -410,3 +412,53 @@ Every modeled DMA requires function bus mastering and device-owned memory,
 and every write passes the native filter's decisions. The endpoint, its
 controller and interrupt delivery are software models; no NVMe device or
 function power transition has run on hardware.
+
+
+## Reference comparison and host evidence for 26 MHz and Gen3
+
+The source pins, hashes, licenses and execution boundaries are in
+[the PCIe source record](../drivers/pci/source.json). The comparison uses
+kernel revision `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f` and the existing
+U-Boot reference. No source was downloaded for this change.
+
+| Initialization step | Effective vendor source | Native behavior and difference |
+| --- | --- | --- |
+| Clock input | `ccu-sun60iw2-rtc.c:69` decodes raw DCXO; `ccu-sun60iw2.c:39` defines PLL_REF factors. | Requires enabled/stable DCXO and a locked, enabled PLL_REF that produces 24 MHz. The 26 MHz case uses N=96/M=104. |
+| Clock parents | `ccu-sun60iw2.c:1557–1583` defines AUX, AXI and SERDES parents. | Retains normalized REF/PERI0 ownership; requires AUX24, AXI400, SERDES100 and effective gates. |
+| Supplies and domain | `sunxi_pcie_plat_hw_init()` enables supplies, clocks and PHY. | Adopts shared PCK7/SERDES ownership and reads stable DCDC2/BLDO1 supplies; fitted analog routing remains separate authority. No new voltage or power-domain operation is added. |
+| PHY selection | `sunxi_cadence_phy_combo1_pcie_init()` sets SERDES to 100 MHz, enables DCXO_SERDES1, switches COMB1 to PCIe and selects the internal table. | Performs the same local register sequence under exclusive COMB1 ownership. The table has no raw-oscillator branch. |
+| PHY lock | `sunxi_cadence_phy_pcie_internal_100m_init()` writes 91 entries, waits for PLL lock and writes four finishing entries. | Executed helper traces match in address, width, value and order. Native polling has absolute deadlines and retains uncertain ownership; the vendor loop is unbounded. |
+| Root setup | `sunxi_pcie_host_setup_rc()` and platform setup configure the DesignWare root. | Preserves bounded capability walking, masked interrupts and cold endpoint admission. PERST stays asserted through PHY setup, then the native path observes its 100 ms hold and post-release waits. |
+| Speed | DTS `max-link-speed = <3>`; `sunxi_pcie_host_speed_change()` sets the target, clears/sets directed-change bit 17 and waits. | Every application requests Gen3. A completed change may negotiate x1 Gen1, Gen2 or Gen3; later identity checks bind that status. Timeout retains resources. Shared NSI bandwidth programming remains outside PCIe ownership. |
+| Configuration | `sunxi_pcie_prog_outbound_atu()` programs CFG0. | Matches the helper after one additional disable/readback before retargeting the owned window. |
+| Interrupts and storage | Vendor MSI/SII handling, Linux NVMe CQ ordering and U-Boot queue/identify/read logic. | Existing MSI COPY and polling/MSI-X/INTx NVMe models retain DMA ownership, phase-tag validation and read-only commands. Physical delivery remains untested. |
+| Stop | Vendor removal disables LTSSM and tears down PHY/clocks/power. | Native NVMe shuts down; port stop disables LTSSM, asserts PERST and then observes link-down. Full PHY, shared USB and return restoration remain incomplete; retained resources cannot be reclaimed. |
+
+Evidence is under `~/.cache/sunstoneos/build/pcie-1031/`:
+
+- `vendor-reference-final/` preserves executed vendor/native PHY and iATU traces.
+- `host-trace-final/` preserves sanitizer cases for clock admission, training,
+  MSI, MSI-X, INTx, NVMe, D0/D3 and retained faults. Explicit Gen1 traces match
+  base `2e74bdc5`; valid 24/26 MHz runs have identical native PCIe writes.
+- `qemu-normal-memory/` preserves the passing core case.
+  `qemu-device-memory/` preserves passing endpoint-test and NVMe cases.
+  These execute AArch64 C models with newlib/semihosting; QEMU supplies CPU
+  and RAM. It supplies no A733 PCIe hardware or physical DMA visibility.
+- `linked-root/`, `linked-epf/` and `linked-nvme/` preserve application,
+  native filter, serializer and decoder checks at negotiated Gen1–Gen3.
+  Port startup is modeled. `linked-poll/` covers the optional polling build.
+- `decoder-check/` accepts x1 Gen1–Gen3 and refuses invalid speed or width
+  fields in all three production decoders. Host capture, durability and
+  transport-refusal results are named by the frozen image README.
+
+The admission change preserves its two reference-register reads and removes
+one integer comparison. PHY writes, copies, translations and wait budgets are
+unchanged. Gen3 adds the existing directed-change sequence once at open.
+No steady-state work is added. The source comparison and preserved Gen1
+traces establish software equivalence only.
+
+The frozen image index is `~/.cache/sunstoneos/build/pcie-1031/images/README.md`.
+Its images are **host-validation only**. The shared probe contract requires
+actual device/IRQ/DMA retirement, interrupt restoration and watchdog return.
+These retained PCIe/USB lifetimes cannot advertise that return. No PCIe board
+run is requested while the endpoint and reviewed retirement path are absent.

@@ -167,7 +167,7 @@ Unless stated below, implementation is **planned**. Partial results apply only
 to the stated scope:
 
 - PCIe: **implemented** [native root-port preparation](pcie.md) with shared
-  clock, rail, pin and PMIC ownership, COMB1 PHY initialization, x1 Gen1 link
+  clock, rail, pin and PMIC ownership, COMB1 PHY initialization, x1 Gen3 link
   observation and read-only configuration access to one direct endpoint.
   Source comparison, composed host checks and native compilation pass. The
   [supervised application](pcie-application.md) connects the existing providers
@@ -198,8 +198,11 @@ to the stated scope:
   validates and records each request; the native write filter admits an iATU
   write only when it repeats that record. A configuration field selects a 2.5, 5
   or 8 GT/s target, and above 2.5 GT/s the port follows the board kernel's
-  directed speed change after training. Host-model checks pass; both
-  applications still select 2.5 GT/s, and no board test ran. A general
+  directed speed change after training. All three native applications request
+  the vendor Gen3 default and accept negotiated x1 Gen1–Gen3. Normalized REF
+  admission supports the boards' 26 MHz DCXO using the unchanged vendor
+  internal-100-MHz PHY sequence. Sanitizer, linked-image and QEMU checks pass
+  under `~/.cache/sunstoneos/build/pcie-1031/`; no endpoint is attached. A general
   [endpoint function client](pcie.md) is **implemented**. It scans the direct
   endpoint's functions 0–7 and refuses bridges, assigns memory BARs below
   4 GiB inside the aperture, delivers polling, INTx or MSI-X interrupts, moves
@@ -208,7 +211,7 @@ to the stated scope:
   asserting PERST. Twenty-four host-model cases pass, and both units compile
   for AArch64. The supervised board image
   [`sunstone-a733-pcie-nvme`](pcie-nvme.md) links both. One task brings the
-  port up at 2.5 GT/s, reads one admitted 4096-byte block with polled
+  port up with a Gen3 target, reads one admitted 4096-byte block with polled
   completion, shuts the controller down, stops the port with PERST held and
   reports the copied block through USB0. Any failure retains the port's leases
   and the queue and data pages. Linked-image and host checks pass against a
@@ -217,8 +220,10 @@ to the stated scope:
   authority. Ten linked native cases, thirteen route/dispatch cases, twenty
   host checks and default polling validation pass under `sol-nvme-msix-1028/`.
   Faults retain pages and port leases. No endpoint, NVMe device, interrupt or power transition has
-  run on hardware; the endpoint test driver keeps its own BAR and MSI setup. Bridges and switches, ASPM, embedded root DMA, Gen2
-  selection by the applications and physical Gen2/Gen3 links remain required.
+  run on hardware; the endpoint test driver keeps its own BAR and MSI setup.
+  Bridges and switches, ASPM, embedded root DMA and physical Gen3/fallback
+  qualification remain required. The frozen images are host-only: the shared
+  probe contract still needs complete PCIe/USB retirement and return restoration.
 - HDMI: **implemented** [controller, PHY and TV0 diagnostic output](hdmi.md)
   for 720p60 and 1080p60. Composed host checks, primary-source comparisons and
   native compilation pass. The [native startup binding](hdmi-native.md) now

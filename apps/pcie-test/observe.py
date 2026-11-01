@@ -22,7 +22,7 @@ def decode(frame,session):
     bar_bytes,src,dst,msi=struct.unpack_from('<4Q',payload,32)
     ep_status,size,window=struct.unpack_from('<2IQ',payload,64)
     if not observed or (command,flags,events,ep_status,size,window)!=(32,1,1,0x50,4096,0x22000000):raise ValueError('DMA completion contract differs')
-    if (vendor,device)!=struct.unpack_from('<2H',session,788) or bar!=struct.unpack_from('<Q',session,800)[0] or pci_command&0x407!=0x406 or link!=0x11:raise ValueError('Endpoint identity/configuration differs')
+    if (vendor,device)!=struct.unpack_from('<2H',session,788) or bar!=struct.unpack_from('<Q',session,800)[0] or pci_command&0x407!=0x406 or (link&0x3f0)!=0x10 or not 1<=link&15<=3:raise ValueError('Endpoint identity/configuration differs')
     if not 48<=bar_bytes<=0x100000 or bar_bytes&(bar_bytes-1) or payload[80:112]!=session[808:840] or payload[112:128]!=bytes(16):raise ValueError('BAR/ordering proof differs')
     ranges=[(src-4096,src+8192),(dst-4096,dst+8192),(msi,msi+4096)]
     if any(not 0x41c00000<=a<b<=0x41e00000 or a&4095 for a,b in ranges) or any(a<d and c<b for i,(a,b) in enumerate(ranges) for c,d in ranges[i+1:]):raise ValueError('DMA extent geometry differs')
