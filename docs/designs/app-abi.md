@@ -216,8 +216,19 @@ service; the NPU client, which runs at EL1, stays one.
 | `ss_capture(sequence, &pcm, &bytes)` | PCM in the manifest format, with `capture_frames` exact for I2S and an upper bound for headset segments from the granted capture device. The 64 bytes before the samples belong to the caller, so mimus writes its WAV header in place without a copy. | `os_capture` returning a WAV |
 | `ss_host_recv(&request, wait_us)`, `ss_host_send(&reply)` | A mailbox for one 16-byte request in the application's range, and its reply of up to 1,024 bytes plus a 16-byte application tag. The USB0 owner wakes the waiting task with a task notification. It passes the next request only after the USB transfer of the previous reply completed, so a request also confirms delivery of the previous reply. The OS sends nothing for an application request until the application replies. | `mimus_board_copy` and the mimus USB0 exchange |
 | `ss_storage_read(sector, data)`, `ss_key_report(&report)` | One 512-byte read from the USB storage leaf, and the next boot-keyboard report, both served by the OS USB2 owner. | the generated `mimus-client.c`, a patched copy of `apps/board/client.c` |
+| `ss_npu_run(model, input, input_bytes, output, output_bytes, timeout_us)` | Submit and poll one image-linked NPU model through ordinary memory and atomics. Identical repeated calls return 0 while pending, 1 after copied output, -2 for refused work, or -1 when unavailable or failed. | NPU runtime slot owned by a privileged service task. |
+| `ss_npu_close()` | Submit and poll CLOSE after the final consumed result. The application must close before finishing. | NPU service CLOSE and bounded stop. |
 | `ss_finish(result, bytes)` | Copies the result into the OS result record and ends the application. A returning lifetime then returns to the host; the resident lifetime keeps the record readable over the host channel. | `os_cpu_return_begin(transcript, used)` |
 | `ss_fail(detail)` | Records the first application failure and ends the session. | `mimus_board_fail` |
+
+The NPU service is selected by the image. Application buffers remain borrowed
+until the request completes; a failed request retains them for that session.
+The model index names a linked catalogue entry. Input and output are
+concatenated tensors in model order, each direction at most one MiB.
+`timeout_us`, at most one second, bounds hardware SUBMIT. The session bounds
+the mailbox and LOAD; OS send and collect each use their existing two-second
+wait bound. [The SDK diagnostic](../../apps/npu-sdk/README.md) records the
+owner, failure-race and privilege checks and their physical limits.
 
 `ss_fail()` calls `board_fail_at()` with the application failure group,
 the detail and the caller's return address. SVC `0x5c0e` preserves that record

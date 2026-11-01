@@ -228,6 +228,24 @@ struct ss_key_report {
     uint8_t data[8];
 };
 int ss_key_report(struct ss_key_report *report);
+/* One admitted application's NPU catalogue. Model is an image catalogue index.
+ * Call repeatedly with identical arguments until completion: 0 pending,
+ * 1 output tensors copied, -2 refused, -1 unavailable or retained failure.
+ * Inputs/outputs concatenate logical tensors in model order. The caller must
+ * keep both buffers alive and untouched while pending. Only one request may
+ * be outstanding; a mismatched call does not cancel that request. The service
+ * task bounds hardware SUBMIT to timeout_us (1..1000000). Queue, OPEN,
+ * LOAD and CLOSE use the runtime request waits and session deadline; this
+ * argument is not an end-to-end API deadline.
+ * A failed service permanently retains the request and buffers until session
+ * teardown. These calls use only ordinary memory and atomics at EL0. */
+#define SS_NPU_MAX_TENSOR_BYTES (1024u * 1024u)
+int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
+               void *output,size_t output_bytes,uint64_t timeout_us);
+/* After the final run, repeat until 1 (slot closed), or a negative failure.
+ * Successful CLOSE is terminal for this session. */
+int ss_npu_close(void);
+
 /* USB class calls return 1 for a result, 0 while pending, -1 on refusal or
  * disconnect. Input events are copied. Serial and camera payloads stay in
  * OS-owned buffers until explicit release; applications must not modify them.

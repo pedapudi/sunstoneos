@@ -671,11 +671,160 @@ def rail_cases(out):
         passed('pinned-rail-helper-'+variant)
 
 
+def generic_npu_case(out, hello):
+    root=out/'generic-npu';root.mkdir()
+    args=arguments(root,'--kind','npu');args.image=hello
+    original_symbols=images.symbols
+    def generic_symbols(image):
+        # The real hello ELF exercises the generic session producer; only
+        # the linked-service identity is modeled for NPU kind selection.
+        return dict(original_symbols(image),os_npu_client_model=(1,1))
+    with patch.object(images,'symbols',generic_symbols):
+        info=images.inspect(hello,'npu')
+        assert info['generic'] and not info.get('finite_npu')
+        source=json.loads((board.dev.EVIDENCE/'sol-resume-20261031/port-3-3/cpu-thermal-state/session.json').read_text())
+        words={}
+        for transaction in source['transactions']:
+            command=transaction['command']
+            addresses=[int(command[i+1],16) for i,value in enumerate(command) if value=='readl']
+            words.update({hex(address):int(value,16) for address,value in zip(addresses,transaction['stdout'].split())})
+        plan=images.prepare(args,info,{'words':words},root/'bundle')
+        assert plan['format']=='generic'
+        queued=arguments(root,'--kind','npu','--template',str(root/'bundle'),submit=True);queued.image=hello
+        job=board.Queue(root/'queue').submit(queued)
+        assert (Path(job['directory'])/'template/session.bin').read_bytes()==(root/'bundle/session.bin').read_bytes()
+        reached=[]
+        def backend(*args):
+            reached.append(True)
+            raise RuntimeError('modeled stop after preflight')
+        result=board.run_image(args,backend)
+        assert reached and 'modeled stop after preflight' in result['first_failure']['detail']
+    model=Model('normal');owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
+    read_words=[]
+    def tx(*commands):
+        read_words.extend(int(commands[i+1],16) for i,value in enumerate(commands) if value=='readl')
+        return ' '.join('0' for _ in read_words)
+    owner.tx=tx
+    owner.live_state(False)
+    assert tuple(read_words)==board.dev.WORDS
+    origin={'group':'npu','site':123,'caller':'0x41200100','value':'0x8'}
+    decoded={'board_failure':origin,'last':{'name':'NPU_RETAINED'},'summary':'native failure'}
+    with patch.object(board.crumbs,'decode',return_value=decoded):
+        result,_,_=lifecycle(out/'native-first-failure','watchdog')
+    assert result['first_failure']['site']=='npu:123:0x41200100'
+    assert result['first_failure']['native_site']==123 and result['first_failure']['value']=='0x8'
+    passed('generic-npu-keeps-typed-session-preflight-and-live-register-set')
+
+
+def finite_npu_cases(out, image_root, state, fixture):
+    live = json.loads(state.read_bytes())
+    template = out/'npu-template'
+    template.mkdir()
+    (template/'session.bin').write_bytes((image_root/'session-template.bin').read_bytes())
+    for name in ('local-restart','model-switch','sdk-access','power-cycle'):
+        root = out/('npu-'+name)
+        root.mkdir()
+        image = root/'image.elf'
+        image.write_bytes((image_root/name/'image.elf').read_bytes())
+        (root/'manifest.json').write_bytes((image_root/name/'manifest.json').read_bytes())
+        args = arguments(root,'--kind','npu','--template',str(template))
+        args.image = image
+        info = images.inspect(image,'npu')
+        assert info['finite_npu'] and not info['entry_guard']
+        plan = images.prepare(args,info,live,root/'bundle')
+        assert plan['format']=='npu' and plan['watchdog']=={'mode':0xb1,'session_seconds':20}
+        assert all(source.is_file() for _,source in plan['uploads'])
+        if name == 'model-switch':
+            plan.update(json.loads((fixture/'identities.json').read_bytes()))
+            backup = root/'backup.bin'
+            backup.write_bytes(bytes(plan['finite'].DRAM[1]))
+            plan.update(dram_backup=backup,dram_backup_sha256=images.sha(backup))
+            class Owner:
+                evidence=root
+                record={}
+                restored=[]
+                def read(self,address,size,path):
+                    key={0x42000000:'monitor',plan['geometry']['log']:'platform',plan['geometry']['receipt']:'receipt'}[address]
+                    raw=(fixture/'nominal'/(key+'.bin')).read_bytes()
+                    assert len(raw)==size
+                    path.write_bytes(raw)
+                    return raw
+                def upload(self,address,path):
+                    assert address==0x41000000 and path.stat().st_size==0x1200000
+                    self.restored.append(address)
+                def journal(self):pass
+            owner=Owner()
+            captured=images.capture(owner,plan,args)
+            assert captured['valid'] and owner.restored==[0x41000000] and owner.record['dram_restored']
+            owner.restored.clear()
+            original=owner.read
+            def corrupt(address,size,path):
+                raw=original(address,size,path)
+                return bytes([raw[0]^1])+raw[1:] if address==plan['geometry']['receipt'] else raw
+            owner.read=corrupt
+            try:images.capture(owner,plan,args)
+            except ValueError:pass
+            else:raise AssertionError('Malformed finite retirement accepted')
+            assert not owner.restored
+            model=Model('normal')
+            live_owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
+            live_owner.read=corrupt
+            with live_owner.locked():
+                try:live_owner.capture(plan)
+                except board.Mismatch:pass
+                else:raise AssertionError('Malformed report accepted by live capture')
+            assert live_owner.quarantined and not live_owner.record.get('dram_restored')
+        if name == 'local-restart':
+            calls=[]
+            model=Model('normal')
+            owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
+            finite=plan['finite']
+            original_check=finite.require_entry_state
+            finite.require_entry_state=lambda tx:calls.append('entry')
+            owner.read=lambda address,size,path:(path.write_bytes(bytes(size)),calls.append(('backup',address,size)))[0]
+            owner.upload=lambda address,path:calls.append(('upload',address))
+            owner.sanity=lambda:calls.append('rom')
+            owner.arm=lambda mode:None
+            def stop(*args):raise RuntimeError('stop before launch')
+            owner.tx=stop
+            try:
+                try:owner.launch(plan)
+                except RuntimeError:pass
+            finally:finite.require_entry_state=original_check
+            assert calls[0]=='entry' and calls[1]==('backup',0x41000000,0x1200000)
+            assert calls[-2:]==['rom','entry'] and owner.record['npu_dirty']
+            assert plan['dram_backup'].stat().st_size==0x1200000
+            owner.tx=lambda *args:None
+            owner.wait=lambda *args:None
+            owner.returned=lambda:(0,0,{})
+            normal={'session':True,'last':{'stage':board.crumbs.RETURN_ROM,'value':0}}
+            with patch.object(finite,'require_entry_state'),patch.object(board.crumbs,'decode',return_value=normal) as decode:
+                assert owner.launch(plan)=='returned'
+                assert decode.call_args.args[2]==image
+            try:
+                with owner.locked():raise ValueError('modeled dirty preload refusal')
+            except ValueError:pass
+            assert owner.quarantined
+            queued=arguments(root,'--kind','npu','--template',str(template),submit=True)
+            queued.image=image
+            job=board.Queue(root/'queue').submit(queued)
+            frozen=Path(job['directory'])/'template'
+            assert (frozen/'manifest.json').read_bytes()==(image.parent/'manifest.json').read_bytes()
+            assert (frozen/'session.bin').read_bytes()==(template/'session.bin').read_bytes()
+            refs=json.loads((Path(job['directory'])/'references.json').read_bytes())
+            assert str(ROOT/'apps/npu-finite/development.py') in refs
+            assert str(ROOT/'apps/npu-interrupt/host.py') in refs
+        passed('finite-npu-frozen-preparation-'+name)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--hello',type=Path)
     parser.add_argument('--gpu-image',type=Path,action='append',help='Real generic GPU ELF for gpu-capture group; repeat for diagnostic and ordinary images.')
+    parser.add_argument('--npu-images',type=Path)
+    parser.add_argument('--npu-state',type=Path)
+    parser.add_argument('--npu-fixture',type=Path)
     parser.add_argument('--only',default='transport,queue,policy,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
     args=parser.parse_args()
     args.out.mkdir(parents=True,exist_ok=False)
@@ -692,6 +841,8 @@ def main():
     if 'ddr' in groups:owned_ddr_cases(args.out)
     if 'rails' in groups:rail_cases(args.out)
     if args.hello and 'offline' in groups:offline(args.out,args.hello)
+    if 'generic-npu' in groups:generic_npu_case(args.out,args.hello)
+    if 'npu' in groups:finite_npu_cases(args.out,args.npu_images,args.npu_state,args.npu_fixture)
     board.save(args.out/'results.json',rows)
     print(f'{len(rows)} checks passed; no device access')
 

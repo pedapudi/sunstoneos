@@ -283,16 +283,13 @@ static int inherited_on(void)
     printf("{\"inherited_on\":{\"ticks\":%u,\"elapsed_us\":%llu,\"settle_us\":%llu,\"local_writes\":%u,\"pck_writes\":%u},",
         b.ticks,(unsigned long long)b.elapsed_us,
         (unsigned long long)b.stage_us[A733_NPU_STARTUP_SETTLE],r.writes,d.ppu_writes);
-    /* Local CLOSE keeps the power-domain row and rail pin. The actual owner
-     * refuses a later OFF request for domain 4, without releasing its pin. */
-    bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);bootstrap_running=0;
-    assert(tokens_held() && s.row.counted==1 && d.owner.domain[1].count==1 && !d.ppu_writes);
-    const unsigned request=atomic_load(&s.row.request),state=atomic_load(&s.row.state);
-    assert(!a733_power_domain_request(&s.row,0));service_step();
-    assert(atomic_load(&s.row.request)==request && atomic_load(&s.row.state)==state &&
-        a733_power_domain_state(&s.row)==A733_POWER_ROW_ON);
-    assert(s.row.counted==1 && d.owner.domain[1].count==1 && !d.ppu_writes && tokens_held());
-    assert(m.rails.pins[s.rail.id&(A733_RAIL_CLIENTS-1)]==1);
+    /* Local stop keeps the claim; explicit power_off releases only its pin. */
+    bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);
+    assert(a733_npu_startup_power_off(&s)==A733_NPU_PLATFORM_PENDING);bootstrap_running=0;
+    service_step();bootstrap_running=1;
+    assert(a733_npu_startup_power_off(&s)==A733_NPU_PLATFORM_READY);bootstrap_running=0;
+    assert(!s.row.counted && !d.owner.domain[1].count && tokens_held());
+    assert(!m.rails.pins[s.rail.id&(A733_RAIL_CLIENTS-1)]);
     /* Each field below invalidates the inherited-state precheck separately. */
     static const struct { unsigned offset,bit; } unsafe[]={
         {0xb00,31},{0xb04,0},{0xb04,16},{0xb04,17},{0xb04,18},{0x2a0,31}};
@@ -314,7 +311,7 @@ static int inherited_on(void)
     b=boot(200,1,0);
     assert(b.result==A733_NPU_PLATFORM_RETAINED && r.writes && r.held && r.retained &&
         tokens_held() && !d.ppu_writes);
-    puts("\"unsafe_local_refusals\":6,\"incoherent_refusals\":2,\"postwrite_retention\":true,\"domain_off_refused\":true}");
+    puts("\"unsafe_local_refusals\":6,\"incoherent_refusals\":2,\"postwrite_retention\":true,\"domain_off_supported\":true}");
     puts("PASS inherited NPU domain ownership, local-state refusal, retention and release policy");
     return 0;
 }
@@ -594,6 +591,108 @@ static int restart(void)
     puts("PASS same-lifetime NPU restart: retained identities, no PCK/PLL writes, local-open and five retained failures");
     return 0;
 }
+static void cycle_policy_write(uintptr_t address,uint32_t value)
+{
+    if(address!=A733_POWER_PCK_DOMAIN(4))return;
+    assert(!atomic_load(&s.window_open) && r.sysctrl==2 && !(r.ccu[0xb00/4]&(1u<<31)) &&
+        (r.ccu[0xb04/4]&0xf0001)==(1u<<19));
+    assert((value&15)==0 || (value&15)==8);
+}
+static void power_busy(unsigned on)
+{
+    atomic_uint *busy[]={&m.clocks.busy,&m.rails.busy,&m.gpu.busy};
+    for(unsigned i=0;i<3;++i) {
+        const unsigned request=atomic_load(&s.row.request),writes=d.ppu_writes,local=r.writes;
+        atomic_store(busy[i],1);
+        assert((on ? a733_npu_startup_power_restart(&s) : a733_npu_startup_power_off(&s))==A733_NPU_PLATFORM_PENDING);
+        atomic_store(busy[i],0);
+        assert(!s.failed && atomic_load(&s.row.request)==request && d.ppu_writes==writes && r.writes==local);
+    }
+}
+/* Exercise the real provider and its generation/pin ledger across OFF/ON.
+ * Engine job/IRQ behavior belongs to the coordinator's native client model. */
+static int power_cycle(void)
+{
+    for(unsigned variant=0;variant<18;++variant) {
+        setup();
+        /* Register the competing row before registration closes. */
+        struct a733_power_domain_row other={0};
+        if(variant==1)assert(a733_power_domain_row_init(&other,&d.owner,4,s.config.owner,&s.rail));
+        assert(boot(200,1,0).result==A733_NPU_PLATFORM_READY);
+        if(variant==1){assert(a733_power_domain_request(&other,1));service_step();assert(other.counted);}
+        bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);
+        d.written=cycle_policy_write;
+        const uint64_t clock=s.clock.id,rail=s.rail.id,pck=s.pck.token;
+        const unsigned pll=r.pll_writes,pmic=m.writes;
+        unsigned request=atomic_load(&s.row.request);
+        if(variant==2)d.stall[4]=1;
+        if(variant==3)d.ack_us=A733_POWER_PCK_BOUND_US;
+        if(variant==4)d.status_override[4]=3;
+        if(variant==5)r.sysctrl=0;
+        if(variant==6)atomic_store(&s.window_open,1);
+        if(variant==7)atomic_store(&s.providers.clocks->failed,1);
+        if(variant==8)m.now=s.config.deadline_us;
+        if(variant==9)d.fail_read=1;
+        if(!variant)power_busy(0);
+        enum a733_npu_platform_result result=a733_npu_startup_power_off(&s);
+        if(!variant)power_busy(0);
+        if(variant==10)atomic_fetch_add(&s.row.request,2); /* unsolicited generation */
+        if(variant==11)a733_power_authority_set(&m.rails.authority,A733_POWER_LEDGER_FAULT); /* failed unpin retains pin */
+        for(unsigned polls=0;result==A733_NPU_PLATFORM_PENDING && polls<30;++polls) {
+            bootstrap_running=0;service_step();bootstrap_running=1;
+            if(variant==12 && a733_power_domain_state(&s.row)==A733_POWER_ROW_OFF)d.ccu_5c0&=~(1u<<6);
+            m.now+=1000;result=a733_npu_startup_power_off(&s);
+        }
+        assert(s.clock.id==clock && s.rail.id==rail && s.pck.token==pck && r.pll_writes==pll && m.writes==pmic);
+        if(variant && variant<13) {
+            assert(result==A733_NPU_PLATFORM_RETAINED && s.failed && !atomic_load(&s.window_open));
+            if(variant==1)assert(other.counted && d.owner.domain[1].count==1 && (d.ppu[4][2]&15)==8);
+            if(variant==2 || variant==3 || variant==4 || variant==11)assert(s.row.counted);
+            bootstrap_running=0;continue;
+        }
+        assert(result==A733_NPU_PLATFORM_READY && s.stage==A733_NPU_STARTUP_POWER_OFF && !s.row.counted &&
+            !d.owner.domain[1].count && !m.rails.pins[s.rail.id&(A733_RAIL_CLIENTS-1)] &&
+            !s.power_off_policy && !s.power_off_status && s.power_off_ack_us>=s.power_off_request_us &&
+            atomic_load(&s.row.request)==request+1);
+        assert(a733_npu_startup_power_off(&s)==A733_NPU_PLATFORM_READY);
+        if(variant==13)d.stall[4]=1;
+        if(variant==14)d.ccu_5e0&=~(1u<<18);
+        if(!variant)power_busy(1);
+        if(variant==15)d.ack_us=A733_POWER_PCK_BOUND_US;
+        result=a733_npu_startup_power_restart(&s);
+        if(!variant)power_busy(1);
+        if(variant==16)atomic_fetch_add(&s.row.request,2);
+        if(variant==17)m.now=s.config.deadline_us;
+        for(unsigned polls=0;result==A733_NPU_PLATFORM_PENDING && polls<30;++polls) {
+            bootstrap_running=0;service_step();bootstrap_running=1;
+            m.now+=1000;result=a733_npu_startup_power_restart(&s);
+        }
+        if(variant>=13)assert(result==A733_NPU_PLATFORM_RETAINED && s.failed && !atomic_load(&s.window_open));
+        else {
+            assert(result==A733_NPU_PLATFORM_READY && atomic_load(&s.window_open) && s.row.counted &&
+                s.power_on_policy==8 && s.power_on_status==8 && s.power_on_ack_us>=s.power_on_request_us &&
+                atomic_load(&s.row.request)==request+4 && tokens_held());
+            assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);
+            printf("{\"power_cycle_request_to_observation_us\":{\"off\":%llu,\"on\":%llu},\"retained_pll_writes\":%u}\n",
+                (unsigned long long)(s.power_off_ack_us-s.power_off_request_us),
+                (unsigned long long)(s.power_on_ack_us-s.power_on_request_us),r.pll_writes-pll);
+            /* Additional complete cycles use the same row and fresh generations. */
+            for(unsigned cycle=0;cycle<2;++cycle) {
+                result=a733_npu_startup_power_off(&s);
+                for(unsigned n=0;result==A733_NPU_PLATFORM_PENDING && n<30;++n){bootstrap_running=0;service_step();bootstrap_running=1;m.now+=1000;result=a733_npu_startup_power_off(&s);}
+                assert(result==A733_NPU_PLATFORM_READY);
+                result=a733_npu_startup_power_restart(&s);
+                for(unsigned n=0;result==A733_NPU_PLATFORM_PENDING && n<30;++n){bootstrap_running=0;service_step();bootstrap_running=1;m.now+=1000;result=a733_npu_startup_power_restart(&s);}
+                assert(result==A733_NPU_PLATFORM_READY && atomic_load(&s.row.request)==request+8+cycle*4);
+                assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);
+            }
+        }
+        assert(s.clock.id==clock && s.rail.id==rail && s.pck.token==pck && r.pll_writes==pll && m.writes==pmic);
+        bootstrap_running=0;
+    }
+    puts("PASS domain4 OFF/ON: repeated cycle, fresh generations, multirow, late/stuck/invalid ack, stopped/window/lease/deadline/I/O/unpin failures and closed master gates");
+    return 0;
+}
 static int cold_fabric(void)
 {
     const uint32_t ahb=1u<<6,mbus=1u<<18;
@@ -649,6 +748,7 @@ int main(int argc,char **argv)
     if(argc==2 && !strcmp(argv[1],"--cold-fabric"))return cold_fabric();
     if(argc==2 && !strcmp(argv[1],"--resident-retune"))return resident_retune(0);
     if(argc==2 && !strcmp(argv[1],"--resident-retune-wait"))return resident_retune(12);
+    if(argc==2 && !strcmp(argv[1],"--power-cycle"))return power_cycle();
     if(argc==2 && !strcmp(argv[1],"--restart"))return restart();
     if(argc==2 && !strcmp(argv[1],"--inherited-on"))return inherited_on();
     if(argc==2 && !strcmp(argv[1],"--inherited-pll"))return inherited_pll();
@@ -753,7 +853,9 @@ int main(int argc,char **argv)
     assert(b.result==A733_NPU_PLATFORM_RETAINED && r.held && r.retained && !atomic_load(&s.window_open));
     /* The reference clock: 24 MHz and normalized 26 MHz inputs are admitted;
      * a wrong ratio, a reference PLL that is not locked, enabled or stable,
-     * and an oscillator that is not stable are refused before any write. */
+     * and an oscillator that is not stable are refused before any write.
+     * The shared provider validates these during acquisition and preserves
+     * its reserved lease on FAULT, so the startup retains its clock/rail too. */
     static const struct { uint32_t osc,ref; unsigned admitted; } refs[]={
         {0x10004002,0xf84f6300,1},{0x983fb0f7,0xf8675f00,1},
         {0x983fb0f7,0xf8675e00,0},{0x983fb0f7,0xe8675f00,0},{0x983fb0f7,0x78675f00,0},
@@ -762,7 +864,11 @@ int main(int argc,char **argv)
         setup();r.osc=refs[i].osc;r.ccu[0]=refs[i].ref;
         b=boot(200,1,0);
         assert(refs[i].admitted ? b.result==A733_NPU_PLATFORM_READY :
-            b.result==A733_NPU_PLATFORM_RETAINED && !r.writes && tokens_released());
+            b.result==A733_NPU_PLATFORM_RETAINED && s.failed && !r.writes && !d.ppu_writes &&
+            a733_clock_token_status(&m.clocks,&s.clock)==A733_CLOCK_OK &&
+            a733_rail_status(&m.rails,&s.rail)==A733_RAIL_READY &&
+            m.gpu.leases[s.config.pck_client].token==s.pck.token && s.pck.token &&
+            m.gpu.leases[s.config.pck_client].mode==A733_GPU_RESOURCE_RETAINED);
     }
     puts("\"cases\":18}");
     puts("PASS NPU startup sequencer over the power-domain owner: boot, a late power service, stop, four refusals, five retentions and seven reference-clock cases");
