@@ -264,6 +264,13 @@ The following reviewed implementations are integrated with software evidence:
   are in `~/.cache/sunstoneos/evidence/dram-clock-point-1031/`; the commands
   are in the
   [first-test runbook](board-runbooks/dram-restore-test-1.md#commands-for-one-board).
+  The 941-entry restore then ran on port 3-1 (2026-10-31, after a WDT0
+  reset): 125 of 921 registers did not hold their write and the fallback
+  trained fully. The five the mailbox names are hardware copies of other
+  byte-lane registers and PHY-produced values; the other 120 are not named.
+  A diagnostic run that stores every entry's value before and after its
+  write decides whether this hook can restore training
+  ([runbook](board-runbooks/dram-restore-test-1.md#the-second-board-run-found-125-registers-that-do-not-hold-a-write)).
   No board run has used the clock-return build.
 
 ## Current integration

@@ -61,6 +61,53 @@ at 2040 MHz. It writes no storage: the record comes from the host.
   with byte-lane register `0x73` modelled as reading 0 and reproduces the
   board's restore words 7–13.
 
+## The second board run found 125 registers that do not hold a write
+
+- **Conditions.** Port 3-1, 2026-10-31, the 941-entry set (`record-3-1.bin`
+  in `dram-restore-1031b/`), directly after a WDT0 reset.
+- **Result.** The helper wrote all 921 PHY entries in one hook call and 125
+  read back wrong (error 7). The mailbox names five, by profile index:
+
+  | Index | Register | Byte-lane offset | Written | Read |
+  | --- | --- | --- | --- | --- |
+  | 19 | `0x0a92011e` | `0x11e` (lane 0, CSR `0x8f`) | `0x9a` | `0x0000` |
+  | 24 | `0x0a9201ac` | `0x1ac` (lane 0, CSR `0xd6`) | `0x52` | `0x0053` |
+  | 25 | `0x0a9201ae` | `0x1ae` (lane 0, CSR `0xd7`) | `0x381` | `0x031f` |
+  | 26 | `0x0a9201b6` | `0x1b6` (lane 0, CSR `0xdb`) | `0xf9f` | `0x05a1` |
+  | 27 | `0x0a9201b8` | `0x1b8` (lane 0, CSR `0xdc`) | `0xfa` | `0x0096` |
+
+  The other 23 entries of lane 0 in byte block 0 held. The runner reset the
+  board through WDT0 and the fallback trained fully (exit status 3).
+  Evidence: `~/.cache/sunstoneos/evidence/dev-runs-1031/3-1-ddr-restore-v4`.
+- **Hardware copies.** In all twenty captures, lane 0's offset `0x11e`
+  equals lane 0's offset `0x4c` (CSR `0x26`), and lane 1's `0x11e` equals
+  lane 0's `0x4e` (CSR `0x27`), in each of the four byte blocks. These eight
+  registers are copies that the PHY updates. At the hook the copy reads 0,
+  although the source had just been written and held.
+- **PHY-produced values.** Lane-0 offsets `0x1aa`–`0x1be` (CSRs
+  `0xd5`–`0xdf`) of each byte block form one group whose values differ
+  between lifetimes of the same kind, also after initialization only.
+  Offset `0x1ae` reads `0x31f` after initialization only in both boards'
+  captures, and read `0x31f` again after the write. Offsets `0x1b6` and
+  `0x1b8` read values that appear in no capture. None of the four held its
+  write, and the values come from the PHY. The set has 21 registers in this
+  group.
+- **Not explained.** Those two rules cover at most 29 entries, so at least
+  96 mismatches lie elsewhere, all at indices 28 and above: among the other
+  byte-lane entries, the master and `0x30000` blocks, the 445 ACSM entries
+  (`0x0a982238`–`0x0a98270e`), the message block or the initialization
+  engine. The mailbox does not name them. Variation between lifetimes does
+  not predict a failure: six registers of lane 0 in byte block 0 vary
+  between lifetimes on both boards and held.
+- **Next.** Whether this hook can restore training depends on which
+  registers the 96 are. Copies and PHY-produced values do not need
+  restoring; a trained delay or VREF register that does not hold would mean
+  this hook point is not viable. One diagnostic run answers it: the helper
+  stores, for every entry, the value read before the write and the value
+  read after it (3,684 bytes, inside the free part of the helper's
+  reservation at `0x96000`), and the runner reads that array. No such build
+  exists yet.
+
 Reference for the register names: TF-A v2.12.0
 `drivers/st/ddr/phy/phyinit/include/ddrphy_csr_all_cdefines.h`
 (BSD-3-Clause, SHA-256 `96402f78fab3ba132a78e91a5144e6c921991f9a04bfabab34bb7b70cfd453a3`),
