@@ -53,6 +53,8 @@ int main(int argc,char **argv)
 {
     assert(argc==4);unsigned which=(unsigned)strtoul(argv[3],NULL,10);size_t pn,cn;
     unsigned char *producer=read_model(argv[1],&pn),*consumer=read_model(argv[2],&cn);
+    const struct npu_runtime_model models[]={{producer,pn},{consumer,cn}};
+    assert(npu_runtime_requirements(models,2,2)==6291456);
     rt.prepared=1;rt.slots=2;rt.count=2;prepare(0,producer,pn);prepare(1,consumer,cn);
     struct npu_runtime_slot *p=&rt.slot[0],*s=&rt.slot[1];unsigned pi=p->layout.inputs;
     assert(!memcmp(&p->tensors[pi].tensor,&s->tensors[0].tensor,offsetof(struct nbg_tensor,name)));

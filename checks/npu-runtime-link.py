@@ -59,12 +59,16 @@ def main():
     table = output / 'admitted.c'
     table.write_text(catalogue_tool.table(entries))
     runtime = (ROOT / 'drivers/npu/a733_npu_runtime.c').read_text()
-    names = ('fault', 'good', 'state', 'admit', 'fill_end', 'maintain', 'same_plan', 'npu_runtime_link_tensor')
+    names = ('fault', 'good', 'state', 'admit', 'pages', 'whole_groups', 'need', 'place', 'sized',
+             'npu_runtime_requirements', 'fill_end', 'maintain', 'same_plan', 'npu_runtime_link_tensor')
     routines = output / 'link-routines.c'
     crc = (ROOT / 'drivers/npu/a733_npu_runtime_interim.c').read_text()
     crc = crc.replace('__attribute__((target("crc")))', '').replace('__builtin_arm_crc32cb', 'fixture_crc_byte').replace('__builtin_arm_crc32cd', 'fixture_crc_word')
     end_pair = re.search(r'^#define END_PAIR .*$', runtime, re.M)[0]
-    routines.write_text(end_pair + '\n' + ''.join(function(runtime, n) for n in names) + crc)
+    page = re.search(r'^#define PAGE .*$', runtime, re.M)[0]
+    structures = ''.join(re.search(r'struct ' + name + r' \{.*?\};', runtime, re.S)[0] + '\n'
+                         for name in ('sizes', 'placement'))
+    routines.write_text(end_pair + '\n' + page + '\n' + structures + ''.join(function(runtime, n) for n in names) + crc)
     units = ['checks/npu-runtime-link.c', 'drivers/npu/nbg_model.c', 'drivers/npu/nbg_assembly.c',
              'drivers/npu/nbg_relocation.c', 'drivers/npu/nbg_checksum.c', 'drivers/npu/nbg_sh_nt.c',
              'drivers/npu/a733_npu_mmu.c', 'drivers/storage/storage_digest.c']
