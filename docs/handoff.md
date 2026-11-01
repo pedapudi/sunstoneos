@@ -268,10 +268,14 @@ The following reviewed implementations are integrated with software evidence:
   reset): 125 of 921 registers did not hold their write and the fallback
   trained fully. The five the mailbox names are hardware copies of other
   byte-lane registers and PHY-produced values; the other 120 are not named.
-  A diagnostic run that stores every entry's value before and after its
-  write decides whether this hook can restore training
-  ([runbook](board-runbooks/dram-restore-test-1.md#the-second-board-run-found-125-registers-that-do-not-hold-a-write)).
-  No board run has used the clock-return build.
+  The clock-return build then passed on both boards (plain twice on 3-3;
+  restore with fallback on 3-1, which failed the readback again with 124
+  mismatches). A diagnostic restore build in
+  `~/.cache/sunstoneos/evidence/dram-survey-1031/` stores every entry's
+  value before its write, after it and at the end of the pass, and the
+  runner classifies each one; its run decides whether this hook can restore
+  training ([runbook](board-runbooks/dram-restore-test-1.md#the-survey-run-classifies-every-entry)).
+  No board run has used the diagnostic build.
 
 ## Current integration
 

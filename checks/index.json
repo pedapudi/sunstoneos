@@ -3137,7 +3137,7 @@
    "--output"
   ],
   "summary": "Execute real restore admission, patched BLX and abort in Unicorn.",
-  "usb": false
+  "usb": true
  },
  "ddr-wrapper.py": {
   "cache_areas": [],

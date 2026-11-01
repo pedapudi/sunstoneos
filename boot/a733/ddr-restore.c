@@ -94,6 +94,21 @@ u32 restore_admit(void)
     return 0;
 }
 
+#ifdef RESTORE_SURVEY
+/* Diagnostic build only (tools/prepare-ddr.py --survey). The write pass
+ * stores, for every profile entry, the value read before the write, the
+ * value read straight after it, the value read again once every entry is
+ * written, and the mask, as four halfwords from SURVEY+64. The header holds
+ * a magic word, the entries recorded, and the hook-time PHY control words:
+ * MicroContMuxSel before the helper clears it, then UcclkHclkEnables,
+ * MicroReset, DctWriteProt and UctShadowRegs. The host decodes it with
+ * tools/ddr-survey.py. */
+#define SURVEY ((volatile u32 *)0x96000)
+#define SURVEY_ENTRY ((volatile u16 *)0x96040)
+#define SURVEY_MAGIC 0x59565253u /* "SRVY" */
+#define PHY16(address) (*(volatile u16 *)(address))
+#endif
+
 /* A mismatch does not stop the pass: every entry is written and read, so
  * one board run names every register that does not hold its value. Words
  * 11-13 keep the first mismatch, word 27 counts them and words 28-31 hold
@@ -103,8 +118,23 @@ static u32 restore_phy(u32 write)
 {
     const u8 *r = RECORD, *p = r+128;
     u32 offset = 88, index = 0, mismatches = 0; /* Skip the admitted parameter run. */
+#ifdef RESTORE_SURVEY
+    if (write) {
+        for (u32 i = 0; i < 16; ++i) SURVEY[i] = 0;
+        SURVEY[2] = *MUX;
+    }
+#endif
     *MUX = 0;
     barrier();
+#ifdef RESTORE_SURVEY
+    if (write) {
+        SURVEY[3] = PHY16(0x0aa80100);
+        SURVEY[4] = PHY16(0x0aaa0132);
+        SURVEY[5] = PHY16(0x0aaa0062);
+        SURVEY[6] = PHY16(0x0aaa0008);
+        SURVEY[0] = SURVEY_MAGIC;
+    }
+#endif
     for (u32 run = 1; run < word(r+80); ++run) {
         u32 address = word(p+offset), count = word(p+offset+4);
         offset += 8;
@@ -116,10 +146,21 @@ static u32 restore_phy(u32 write)
                 /* MMU/cache-off FEL accesses are ordered Device accesses.
                  * The same-register read below observes the preceding write;
                  * only mux ownership transitions need an explicit DSB. */
-                *reg = (*reg & ~mask) | (expected & mask);
+                u16 before = *reg;
+                *reg = (before & ~mask) | (expected & mask);
                 MAIL[8] = index+1;
+#ifdef RESTORE_SURVEY
+                SURVEY_ENTRY[4*index] = before;
+                SURVEY_ENTRY[4*index+3] = mask;
+#endif
             }
             u16 actual = *reg;
+#ifdef RESTORE_SURVEY
+            if (write) {
+                SURVEY_ENTRY[4*index+1] = actual;
+                SURVEY[1] = index+1;
+            }
+#endif
             if ((actual ^ expected) & mask) {
                 if (!mismatches) { MAIL[11] = address; MAIL[12] = expected; MAIL[13] = actual; }
                 else if (mismatches < 5) MAIL[27+mismatches] = index << 16 | actual;
@@ -128,6 +169,13 @@ static u32 restore_phy(u32 write)
         }
         offset += (count*2+3)&~3u;
     }
+#ifdef RESTORE_SURVEY
+    /* Every entry again, after the last write: a value that held at first
+     * and changed later was rewritten by the PHY or by a later entry. */
+    if (write)
+        for (u32 i = 0; i < PROFILE_COUNT; ++i)
+            SURVEY_ENTRY[4*i+2] = PHY16(restore_profile[i].address);
+#endif
     *MUX = 1;
     barrier();
     return mismatches ? READBACK : 0;

@@ -23,8 +23,10 @@ from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True)
 p.add_argument('--restore-build',type=Path);p.add_argument('--restore-record',type=Path)
+p.add_argument('--survey-build',type=Path,help='diagnostic restore build (prepare-ddr.py --survey) for the survey cases')
 a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=False)
 if bool(a.restore_build)!=bool(a.restore_record):p.error('restore build and record must be supplied together')
+if a.survey_build and not a.restore_build:p.error('--survey-build needs --restore-build and --restore-record')
 spec=importlib.util.spec_from_file_location('ddr_fixture_base',ROOT/'tools/check-a733-smp.py');base=importlib.util.module_from_spec(spec);spec.loader.exec_module(base)
 real_spec=importlib.util.spec_from_file_location;real_stop=base.stop_after_failure
 spec=real_spec('training_fixture',ROOT/'tools/training-record.py');training=importlib.util.module_from_spec(spec);spec.loader.exec_module(training)
@@ -59,6 +61,10 @@ RESTORE={'restore-nominal':(0,0,False),'restore-clock-not-rom':(0,3,True),'resto
          'restore-helper-upload':(None,1,False),'restore-record-missing':(None,1,False),
          'restore-fallback-missing':(None,1,False),'restore-no-session':(None,1,False),
          'restore-fallback-before-clock-return':(None,1,False)}
+# Survey cases: a decoded survey that agrees with the mailbox, a helper that
+# left the cleared survey untouched, and a clear that does not read back.
+SURVEY_CASES={'restore-survey':(7,3,True),'restore-survey-missing':(7,3,True),'restore-survey-clear-mismatch':(None,1,False)}
+if a.survey_build:RESTORE.update(SURVEY_CASES)
 if a.restore_build:
     cases+=list(RESTORE)
     restore_manifest=json.loads((a.restore_build/'manifest.json').read_text())
@@ -73,6 +79,25 @@ if a.restore_build:
     phy_count=restore_manifest['restore']['phy_registers']
     parsed=training.parse(a.restore_record.read_bytes())
     profile=[run['base']+2*n for run in parsed['runs'][1:] for n in range(len(run['values']))]
+    if a.survey_build:
+        spec=real_spec('ddr_survey_fixture',ROOT/'tools/ddr-survey.py');survey_tool=importlib.util.module_from_spec(spec);spec.loader.exec_module(survey_tool)
+        survey_manifest=json.loads((a.survey_build/'manifest.json').read_text())['restore']['survey']
+        values=[v for run in parsed['runs'][1:] for v in run['values']];mask_of={m['address']:m['mask'] for m in parsed['masks']}
+        # The first entry with a nonzero expected value reads 0 and index 5
+        # reads 0x42 (two mismatches, as the mailbox reports), index 3 changes
+        # later, index 4 already held its value; every other entry holds.
+        zero=next(n for n,(address,value) in enumerate(zip(profile,values)) if n>5 and value&mask_of[address])
+        fake_survey=bytearray(struct.pack('<4I',survey_tool.MAGIC,len(profile),1,3)+bytes(48))
+        for n,(address,value) in enumerate(zip(profile,values)):
+            m=mask_of[address];want=value&m;before=(value^m)&0xffff
+            if before==0x42:before^=0x100
+            after=end=(before&~m)|want
+            if n==zero:after=end=0
+            if n==5:after=end=0x42
+            if n==3:end=after^m
+            if n==4:before=after
+            fake_survey+=struct.pack('<4H',before,after,end,m)
+        assert len(fake_survey)==survey_manifest['bytes']
 OLD,NEW=Path('/fixture-usb/003/072'),Path('/fixture-usb/003/073')
 IDENTITY={OLD:[1,2,3,4,5],NEW:[1,2,3,4,6]}
 class Port:
@@ -148,6 +173,9 @@ for case in cases:
                 if address==0x86000:data=mailbox(node)
                 if (case=='upload-mismatch' and address==0x8e000 and address in memory) or (case=='RAM-mismatch' and address==0x41000000):data=bytes([data[0]^1])+data[1:]
                 if case=='restore-ram-pages' and node==OLD and address==0x41000000:data=bytes([data[0]^1])+data[1:]
+                if address==0x96000 and node==OLD and case in SURVEY_CASES:
+                    if case=='restore-survey' and board.get('launched'):data=bytes(fake_survey)
+                    if case=='restore-survey-clear-mismatch':data=bytes([data[0]^1])+data[1:]
                 if address in memory and ((case=='restore-record-upload' and address==0x87000) or (case=='restore-helper-upload' and address==0x92000)):
                     data=bytes([data[0]^1])+data[1:]
                 Path(arguments[i+3]).write_bytes(data);i+=4
@@ -177,6 +205,7 @@ for case in cases:
                 assert op=='exe';i+=2
                 if address==0x85000 and node in board['helper']:
                     assert 'armed' in events and wdt['mode']==0x41,(case,events)
+                    board['launched']=True
                     if case in ('restore-hang','restore-no-return','restore-unexplained-reset'):
                         reset();return types.SimpleNamespace(returncode=1,stdout='',stderr='usb_bulk_send() ERROR -1: Input/Output Error')
         # The deliberate second arming, or a disarm that did not take, lets
@@ -197,7 +226,7 @@ for case in cases:
     guard.reenumeration=reenumeration
     def sleep(seconds):clock[0]+=seconds
     restore_case=case.startswith('restore-')
-    selected_build=a.restore_build if restore_case else init_build if case.startswith('init-only') else old_build if case=='build-before-clock-return' else build
+    selected_build=(a.survey_build if case in SURVEY_CASES else a.restore_build) if restore_case else init_build if case.startswith('init-only') else old_build if case=='build-before-clock-return' else build
     argv=[str(ROOT/'tools/run-ddr.py'),'--fel',str(fel),'--build',str(selected_build),'--evidence',str(out/'runtime')]+(['--allow-untrained'] if case=='init-only' else [])
     if restore_case and case!='restore-record-missing':argv+=['--record',str(a.restore_record)]
     if restore_case and case!='restore-fallback-missing':
@@ -280,6 +309,16 @@ for case in cases:
         assert not any('0x41000000' in e for e in fel_requests),'RAM pages after a clock refusal'
     if case in ('build-before-clock-return','restore-fallback-before-clock-return'):
         assert 'clock return' in str(status) and not (out/'runtime').exists(),(case,status)
+    if case=='restore-survey':
+        result=record['restore_result']['survey']
+        assert result['classes']=={'reads-zero':1,'other-value':1,'changed-later':1,'already-at-value':1,'held':len(profile)-4},result
+        assert result['immediate_mismatches']==2 and result['agrees_with_mailbox'] and result['control']['micro_cont_mux_sel_at_hook']=='0x0001'
+        decoded=json.loads((out/'runtime/survey.json').read_text())['entries']
+        assert len(decoded)==len(profile) and decoded[5]['after']=='0x0042' and decoded[zero]['class']=='reads-zero'
+    if case=='restore-survey-missing':
+        assert 'did not start' in record['restore_result']['survey']['error'] and not (out/'runtime/survey.json').exists()
+    if case=='restore-survey-clear-mismatch':
+        assert 'survey-clear-upload.bin' in record['failure'],(case,record.get('failure'))
     if case=='restore-clock-not-rom':
         assert 'not at the entry point' in record['watchdog']['deliberate_reset'] and record['fallback']['cpu_clocks']['cpu_l_pll']=='0xf8802600'
     with lock.open('a') as released:fcntl.flock(released,fcntl.LOCK_EX|fcntl.LOCK_NB)

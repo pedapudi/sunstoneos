@@ -6,6 +6,10 @@ This establishes instruction ordering, not PHY or physical RAM operation.
 Byte-lane register 0x73 (offset 0xe6 in each lane) reads 0 whatever is
 written, as port 3-1 showed on 2026-10-31. With --reproduce MAILBOX only the
 nominal case runs, and restore words 7-13 must equal that board mailbox's.
+For a survey build (tools/prepare-ddr.py --survey) every case also checks the
+survey at 0x96000, and the survey-classes case makes one entry each drop its
+write, read 0, read another value, change after a later write and already
+hold its value; tools/ddr-survey.py must decode each class.
 """
 import argparse
 import hashlib
@@ -20,6 +24,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from ddr_clock_model import ROM, ClockModel
 
 ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location('ddr_survey', ROOT/'tools/ddr-survey.py')
+survey_tool = importlib.util.module_from_spec(spec); spec.loader.exec_module(survey_tool)
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('build', type=Path)
 p.add_argument('--record', type=Path, required=True)
@@ -65,6 +71,15 @@ cases = {'nominal':0, 'wrong-board':4, 'header-crc':2, 'payload-crc':3, 'strap':
          'unauthorized-mask':1, 'mode-register-section':1, 'parameter-high-half':0,
          'readback':7, 'readback-survey':7, 'final-readback':7, 'memory':9, 'address-alias':9,
          'window-bit':9, 'size':8, 'missing-hook':10}
+SURVEYED = manifest['restore'].get('survey')
+if SURVEYED:
+    cases['survey-classes'] = 7
+    # Entries whose write is observable from the fixture's 0x5a5a and whose
+    # expected value is nonzero under the mask.
+    observable = [n for n,(address,value) in enumerate(phy) if (0x5a5a^value)&masks[address] and value&masks[address]]
+    SURVEY_CLASS = dict(zip([observable[k*len(observable)//5] for k in range(5)],
+                            ('unchanged', 'reads-zero', 'other-value', 'changed-later', 'already-at-value')))
+    assert len(SURVEY_CLASS) == 5 and all(n+1 < PHY_COUNT for n in SURVEY_CLASS)
 if a.reproduce:
     board = struct.unpack_from('<7I', a.reproduce.read_bytes(), 28)
     cases = {'nominal': board[0]}
@@ -90,7 +105,14 @@ for case, error in cases.items():
         cpu.mem_write(address,(a.build/name).read_bytes())
     cpu.mem_write(0x87000,bytes(record));cpu.mem_write(0x03006200,struct.pack('<4I',*parsed['chip_id']))
     for address,_ in phy:cpu.mem_write(address,struct.pack('<H',0x5a5a))
+    if case=='survey-classes':
+        already=next(n for n,c in SURVEY_CLASS.items() if c=='already-at-value')
+        cpu.mem_write(phy[already][0],struct.pack('<H',(0x5a5a&~masks[phy[already][0]])|(phy[already][1]&masks[phy[already][0]])))
+        injected={phy[n][0]:c for n,c in SURVEY_CLASS.items()}
+        later={phy[n+1][0]:phy[n][0] for n,c in SURVEY_CLASS.items() if c=='changed-later'}
     cpu.mem_write(0x0aaa0000,struct.pack('<H',1))
+    # boot0 sets UcclkHclkEnables to 3 before the firmware run; MicroReset 1 stalls it.
+    cpu.mem_write(0x0aa80100,struct.pack('<H',3));cpu.mem_write(0x0aaa0132,struct.pack('<H',1))
     cpu.reg_write(UC_ARM_REG_CPSR,0x60000053);cpu.reg_write(UC_ARM_REG_SP,0xf3000);cpu.reg_write(UC_ARM_REG_LR,0xf0000)
     regs=(UC_ARM_REG_R4,UC_ARM_REG_R5,UC_ARM_REG_R6,UC_ARM_REG_R7,UC_ARM_REG_R8,UC_ARM_REG_R9,UC_ARM_REG_R10,UC_ARM_REG_R11)
     for i,reg in enumerate(regs):cpu.reg_write(reg,0x12340000+i)
@@ -157,6 +179,15 @@ for case, error in cases.items():
             assert size==2
             assert struct.unpack('<H',uc.mem_read(0x0aaa0000,2))[0]==0
             state['phy_writes'].append(address)
+        if case=='survey-classes':
+            if access==17 and address in later:
+                # A later entry's write changes the earlier one, as a hardware copy would.
+                earlier=later[address];old=struct.unpack('<H',uc.mem_read(earlier,2))[0]
+                uc.mem_write(earlier,struct.pack('<H',old^masks[earlier]));state['injections']+=1
+            if access==16 and injected.get(address) in ('unchanged','reads-zero','other-value') and address in state['phy_writes']:
+                kind=injected[address];m=masks[address];written=(0x5a5a&~m)|(dict(phy)[address]&m)
+                value={'unchanged':0x5a5a,'reads-zero':0,'other-value':written^m^0x8000}[kind]
+                uc.mem_write(address,struct.pack('<H',value));state['survey'].add(address);state['faulted']=True
         if access==16 and case=='readback' and state['phy_writes'] and address==phy[0][0] and not state['injections']:
             uc.mem_write(address,struct.pack('<H',phy[0][1]^masks[address]));state['injections']+=1;state['faulted']=True
     clocks = ClockModel(cpu, manifest['clock_ticks']) if 'clock_ticks' in manifest else None
@@ -180,6 +211,30 @@ for case, error in cases.items():
         assert {k:clocks.words[k] for k in ROM}==ROM and mailbox[15]==0,(case,mailbox[15])
     assert mailbox[0:2]==(0x53524444,5)
     assert mailbox[7]==error,(case,mailbox[:14],state)
+    if SURVEYED:
+        data=bytes(cpu.mem_read(SURVEYED['address'],SURVEYED['bytes']))
+        if not mailbox[9]:
+            # No hook call: the survey stays as the host cleared it.
+            assert data==bytes(SURVEYED['bytes']),case
+        else:
+            entries,summary=survey_tool.decode(data,[address for address,_ in phy],[value for _,value in phy])
+            assert [int(e['mask'],16) for e in entries]==[masks[address] for address,_ in phy]
+            # Hook-time control words as the fixture holds them: the mux was 1.
+            assert summary['control']['micro_cont_mux_sel_at_hook']=='0x0001'
+            assert summary['control']['ucclk_hclk_enables']=='0x0003' and summary['control']['micro_reset']=='0x0001'
+            if case=='survey-classes':
+                wanted={n:c for n,c in SURVEY_CLASS.items()}
+                natural={n for n,(address,value) in enumerate(phy) if not (0x5a5a^value)&masks[address]}
+                assert {e['index']:e['class'] for e in entries
+                        if e['class']!='held' and e['index'] not in natural}==wanted,summary
+                assert summary['immediate_mismatches']==mailbox[27]==3,(summary,mailbox[27])
+            elif case in ('readback','readback-survey'):
+                assert summary['immediate_mismatches']==mailbox[27] and set(summary['classes'])<={'held','already-at-value','other-value','unchanged'},summary
+            else:
+                # Entries whose fixture value 0x5a5a already matches cannot show their write.
+                matched=sum(1 for address,value in phy if not (0x5a5a^value)&masks[address])
+                assert summary['classes']=={'held':PHY_COUNT-matched,'already-at-value':matched},(case,summary)
+                assert all(int(e['before'],16)==0x5a5a for e in entries)
     if a.reproduce:
         # The board restore stopped before boot0 resumed; so must this one.
         assert mailbox[7:14]==board,(mailbox[7:14],board)
@@ -207,6 +262,9 @@ for case, error in cases.items():
         assert mailbox[11:14]==(phy[0][0],phy[0][1],phy[0][1]^masks[phy[0][0]])
         assert mailbox[27:32]==(3,100<<16|phy[100][1]^masks[phy[100][0]],500<<16|phy[500][1]^masks[phy[500][0]],0,0)
     elif case in ('size','final-readback','missing-hook'):assert not state['dram_reads'] and not state['dram_writes']
+    elif case=='survey-classes':
+        assert state['phy_writes']==[a for a,v in phy] and state['injections']==1 and len(state['survey'])==3
+        assert state['timing']==state['continuation']==0 and not state['dram_reads'] and not state['dram_writes']
     elif case=='memory':
         assert state['injections']==1 and state['dram_reads']==4 and state['dram_writes']==31*4
         assert mailbox[10:12]==(4,LINES[0])

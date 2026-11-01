@@ -736,6 +736,50 @@ park, a domain already at the ROM point, and a stopped counter before the
 first wait, during the update wait and during the lock wait; for the last
 three the check lowers the poll limit to 2,000.
 
+### A diagnostic build records every entry around its write
+
+`tools/prepare-ddr.py --variant restore --survey` builds the restore helper
+with `RESTORE_SURVEY` defined; without the flag the helper's bytes do not
+change. The diagnostic helper fills a survey at SRAM `0x96000`, inside the
+helper reservation and above the helper's 9,780 bytes:
+
+- **Header, 64 bytes.** Word 0 is `0x59565253` once the write pass starts,
+  word 1 counts the entries recorded, word 2 holds `MicroContMuxSel` before
+  the helper clears it, and words 3–6 hold `UcclkHclkEnables`
+  (`0x0aa80100`), `MicroReset` (`0x0aaa0132`), `DctWriteProt`
+  (`0x0aaa0062`) and `UctShadowRegs` (`0x0aaa0008`) at the hook.
+- **Entries, 8 bytes each from `0x96040`.** For each of the 921 entries in
+  profile order: the value read before the write (the helper's
+  read-modify-write already reads it), the value read straight after it,
+  the value read again after the last entry is written, and the mask.
+
+The survey takes 7,432 bytes, ending at `0x97d08`. The write pass,
+its mismatch reporting and the outcome are those of the production helper,
+plus one read of each entry at the end of the pass.
+
+`tools/run-ddr.py` uploads zeros over the survey with the helper and reads
+them back, so a helper that stops before its write pass leaves no earlier
+values. After the restore returns, it reads the survey, and
+`tools/ddr-survey.py` puts each entry in one class, from the masked
+comparison with the record's value:
+
+| Class | After the write | Meaning |
+| --- | --- | --- |
+| held | matches, and still matches at the end | The register stores the value |
+| already-at-value | as held, and the value before already matched | The write could not be observed |
+| changed-later | matches, but not at the end of the pass | The PHY or a later entry's write changed it |
+| unchanged | equals the value before in all 16 bits | The write did not reach a storage register |
+| reads-zero | 0, although the value before was not | A copy or status register the PHY clears |
+| other-value | neither the value before nor the written value | The PHY produced the value |
+
+The runner writes every entry to `survey.json`, records the class counts,
+the mismatches by register family and the control words in
+`restore_result.survey`, and checks that the entries wrong straight after
+their write equal mailbox word 27. A survey without its magic word, or with
+fewer entries than the profile, is recorded as an error and the run falls
+back as usual. `tools/ddr-survey.py SURVEY.BIN --record RECORD.BIN` decodes a
+saved survey offline.
+
 ## Two-copy host selection and standby update contract
 
 The implemented host tools reuse `boot-slots.py` allocations and

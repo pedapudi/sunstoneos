@@ -104,9 +104,38 @@ at 2040 MHz. It writes no storage: the record comes from the host.
   restoring; a trained delay or VREF register that does not hold would mean
   this hook point is not viable. One diagnostic run answers it: the helper
   stores, for every entry, the value read before the write and the value
-  read after it (3,684 bytes, inside the free part of the helper's
-  reservation at `0x96000`), and the runner reads that array. No such build
-  exists yet.
+  read after it, and the runner reads that array
+  ([survey run](#the-survey-run-classifies-every-entry)).
+- **Repeat.** The clock-return build ran the same restore on port 3-1 after
+  a WDT0 reset (`dev-runs-1031/3-1-ddr-clock-restore`): error 7, 124
+  mismatches, the same first mismatch, and `0x0a9201ac` and `0x0a9201ae`
+  read `0x53` and `0x31f` again. `0x0a9201b6` and `0x0a9201b8` read `0xa6`
+  and `0xc2`, against `0x5a1` and `0x96` in the earlier run, as values the
+  PHY produces would. The fallback passed, and CPU-L and the DSU ended on the
+  ROM clock point.
+
+## The survey run classifies every entry
+
+The diagnostic restore build stores each entry's value before its write,
+straight after it and at the end of the pass, and the runner decodes every
+entry into a class
+([design](../designs/dram-training-restore.md#a-diagnostic-build-records-every-entry-around-its-write)).
+It changes nothing else about the restore, so the run is expected to fail
+the readback as before (exit status 3), now with `survey.json` naming every
+mismatch. With `D=~/.cache/sunstoneos/evidence/dram-survey-1031`, after a
+WDT0 reset when DRAM is already trained, on port 3-1:
+
+`tools/run-ddr.py --fel ~/.cache/sunstoneos/build/sunxi-a733/sunxi-fel --build $D/build-survey --record $D/records/record-3-1.bin --fallback-build $D/build-full --evidence $S/rs-survey`
+
+Port 3-3 uses `record-3-3.bin`. The result decides the hook point:
+
+- If every mismatch is a copy, a PHY-produced value or a register that
+  changes later, those registers leave the set and the restore can be tried
+  again at this hook.
+- If a trained delay or VREF register is unchanged after its write, this
+  hook cannot restore training, and the restore has to move to a point
+  before the firmware run.
+
 
 Reference for the register names: TF-A v2.12.0
 `drivers/st/ddr/phy/phyinit/include/ddrphy_csr_all_cdefines.h`
