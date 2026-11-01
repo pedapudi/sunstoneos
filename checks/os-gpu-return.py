@@ -64,7 +64,8 @@ epoch,generation=struct.unpack_from('<2Q',a.session.read_bytes(),24) if a.sessio
 rows=[]
 cases=('opened','thermal-parked','borrowed-job','hook-in-flight','incomplete-output','no-validated-job',
              'stop-proof-missing','close-refused','park-failed','park-timeout','reply-epoch','queue-not-empty',
-             'late-finalizer','recognition-cutoff','finalizing-window','finalizing-expired','begin-expired')
+             'late-finalizer','recognition-cutoff','finalizing-window','finalizing-expired','begin-expired',
+             'refused-last-call','unfinished-call')
 if a.case:
     assert set(a.case)<=set(cases)
     cases=a.case
@@ -97,6 +98,9 @@ for case in cases:
     sf(record,'os_dispatch_record','opened',1)
     sf(record,'os_dispatch_record','incomplete',case=='incomplete-output')
     sf(call,'Call','in_flight',case=='hook-in-flight',1)
+    if case in ('refused-last-call','unfinished-call'):
+        # The last call's second job was refused (stopped) or never ran.
+        sf(call,'Call','rows',4,8);sf(call,'Call','next',2,8);sf(call,'Call','stopped',case=='refused-last-call',1)
     put(image.address('completed','/apps/os/gpu_hook.cc'),0 if case=='no-validated-job' else 7)
     state={'time':100,'operation':None,'ticket':0,'suspended':0,'hook_removed':0,'requests':[],'exit':None}
     names=('board_live','a733_smp_counter','xTaskGetTickCount','xTaskGetCurrentTaskHandle',
@@ -154,7 +158,7 @@ for case in cases:
         continue
     if case=='late-finalizer':state['time']=55000000
     result=invoke('os_gpu_retire')
-    success=case in ('opened','thermal-parked','begin-expired')
+    success=case in ('opened','thermal-parked','begin-expired','refused-last-call')
     assert bool(result)==success and state['suspended']==int(success),(case,result,state)
     assert bool(invoke('os_gpu_return_ready'))==success
     if success:

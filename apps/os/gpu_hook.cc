@@ -201,7 +201,9 @@ extern "C" int os_gpu_retire(void) {
   // No engine task can still read a previously lent output descriptor.
   if (!completed && !call.in_flight && call.next == call.rows)
     return a733_gpu_mimus_return_untouched();
-  if (call.in_flight || call.next != call.rows || !completed ||
+  // A refused job stops its call early and the engine computes the rest of
+  // the rows itself, so a stopped call is finished too.
+  if (call.in_flight || (call.next != call.rows && !call.stopped) || !completed ||
       !os_dispatch_record.opened || os_dispatch_record.incomplete || os_dispatch_record.failure) return 0;
   mimus::asr::SetExactSumHook(nullptr);
   os_dispatch_active = 0;
