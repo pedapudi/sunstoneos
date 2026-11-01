@@ -199,9 +199,22 @@ static void cyclic_client(void *unused)
             if(cyclic_case==20){inject(1,4,0);wait_phase(0,DMA_SERVICE_RESULT);}
             else set(&drain_enabled,0);
             struct i2s_retirement retirement={.service=&service,.held={p.ticket,0},.jobs=2};
-            int result=0;
-            for(unsigned i=0;i<32&&!result;++i){result=i2s_retirement_step(&retirement);vTaskDelay(1);}
-            if(cyclic_case==19){configASSERT(!result&&bindings[0].pin_lease.id&&service.channels[0].holds_buffers);
+            int result=0;struct dma_service_reply blocked={0};
+            /* Observe the real blocked transition instead of spending a fixed
+             * tick count while the worker advances the modeled microseconds. */
+            for(unsigned i=0;i<100&&!result;++i){
+                result=i2s_retirement_step(&retirement);
+                if(cyclic_case==19&&!result&&!retirement.pending){blocked=request(DMA_SERVICE_STATUS,0,0,0);
+                    if(blocked.phase==DMA_SERVICE_DRAINING)break;}
+                vTaskDelay(1);
+            }
+            if(cyclic_case==19){
+                if(result||!bindings[0].pin_lease.id||!service.channels[0].holds_buffers){
+                    platform_puts("retire busy result/stage/phase/outcome/stream/clock=");
+                    platform_hex(result);platform_hex(retirement.stage);platform_hex(service.channels[0].phase);
+                    platform_hex(service.channels[0].outcome);platform_hex(service.streams[0].status);platform_hex(us);platform_puts("\n");}
+                configASSERT(!result&&blocked.phase==DMA_SERVICE_DRAINING&&blocked.holds_buffers&&
+                    blocked.owns_session&&bindings[0].pin_lease.id);
                 set(&drain_enabled,1);}
             for(unsigned i=0;i<100&&!result;++i){result=i2s_retirement_step(&retirement);vTaskDelay(1);}
             configASSERT(result==1&&!retirement.held[0]&&!bindings[0].pin_lease.id);
