@@ -100,3 +100,30 @@ The models split notification, block completion, dispatch, lifetime and transfer
 properties to keep exploration small. Their conjunction does not prove that a
 future implementation composes those protocols correctly. Source review,
 linked-kernel stress and physical qualification remain required.
+
+## The logical wake-list head gives nonurgent work its first interrupt
+
+The owner helper has sixteen slot buckets and one atomic summary word as its
+logical list head. A producer release-publishes a slot bit, then release-ORs its
+bucket bit into the head. The returned old head identifies empty-to-nonempty
+publication. The owner acquire-detaches the head before inspecting buckets.
+A slot can reach an older inspection before its delayed head publication;
+the resulting later empty-bucket inspection is harmless. The bucket hint alone
+never authorizes task activation.
+
+`incoming_head` exhausts sequentially consistent instruction interleavings of
+two publishers, head detachment, bucket detachment, inspection, coalescing-flag
+clearing and final all-work inspection. The owner keeps running priority six.
+Positive cases cover two nonurgent wakes and either ordering of an urgent wake.
+The negative removes the empty-head SGI condition. Two nonurgent publications
+then remain uninspected without a pending interrupt or another scheduling event.
+This checks the first-publication interrupt contract; it does not promise that
+a lower-priority ready task can execute while higher-priority work runs.
+Buffered weak-memory ordering remains the separate `Wake.tla` check.
+
+`last_put_close` buffers the final reference decrement and admission close
+independently. Both sides execute a store-to-load barrier before checking the
+other word. The positive case requires at least one retirement notification.
+The negative removes the last-put barrier and lets both callers miss the
+notification, even though the closer retains its own barrier. This extends the
+pin-versus-close lifetime check to the event that wakes the reclaimer.

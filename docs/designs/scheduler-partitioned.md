@@ -148,15 +148,19 @@ allocation-free and callable directly in the owner context.
 
 The logical multi-producer wake list uses one pending bit per task slot, per
 target CPU and priority. At 128 slots and eight priorities this takes 128 bytes
-per CPU. A publisher sets its task's bit with one release atomic OR. The owner
-detaches a word with an acquire exchange and visits set bits with CLZ.
+per CPU, plus an eight-byte atomic summary word forming the logical list head.
+A publisher release-ORs its task bit, then release-ORs its bucket bit into the
+head. The old head identifies empty-to-nonempty publication. The owner
+acquire-detaches the head before detaching slot words and visiting bits with CLZ.
 The bit is a level-triggered hint to inspect authoritative state; it carries
 no generation and cannot itself authorize activation.
 
 This bounded representation replaces an intrusive Treiber stack. A Treiber
 producer is lock-free but can retry indefinitely under continuous competition.
 The fixed-slot representation gives bounded producer instructions without
-allocation, node reclamation or head-pointer retry. Repeated notifications
+allocation, node reclamation or head-pointer retry. A slot may reach an older
+inspection before its delayed head publication. The later empty-bucket inspection
+is harmless; the summary and slot bits authorize no task transition by themselves. Repeated notifications
 coalesce activation; their values/counts remain in the notification object.
 
 The priority FIFO order is the owner's enqueue order. Publications from
@@ -205,13 +209,16 @@ but does not authorize modifying owner state.
 The publication protocol is:
 
 1. Waker updates the notification or wins the blocked-wait state transition.
-2. Waker release-publishes the incoming bit, executes `DMB ISH`, then
-   acquire-loads the target's dispatch word.
-3. If the task outranks the published current task, or the target is idle,
-   the waker requests a reschedule SGI. Equal/lower-priority work stays pending.
-4. Before committing a lower running priority or entering idle, the owner
-   release-publishes that dispatch word, executes `DMB ISH`, then acquire-checks
-   all relevant incoming words. New urgent work restarts local selection.
+2. Waker release-publishes the incoming slot bit and bucket-head bit, executes
+   `DMB ISH`, then acquire-loads the target's dispatch word.
+3. If the old logical head is empty, the task outranks the published current
+   task, or the target is idle, the waker requests a reschedule SGI. Further
+   equal/lower-priority publications into a nonempty head coalesce.
+4. The owner acquire-detaches the logical head at entry and inspects a bounded
+   batch. Before committing dispatch it release-publishes its status and clears
+   the SGI coalescing flag, executes `DMB ISH`, then acquire-checks all incoming
+   and detached work. Remaining work requests a bounded continuation even when
+   its priority is lower than the selected task.
 
 The two store-to-load barriers forbid both CPUs observing the old state and
 omitting the required wakeup. Acquire/release alone does not prohibit that
@@ -234,19 +241,21 @@ The final owner sequence orders the pending clear before the same store-to-load
 barrier that precedes inbox inspection:
 
 ```text
-waker: release publish hint
+waker: release OR slot hint
+       old_head = release_OR(incoming_head[target], bucket_bit)
        DMB ISH
        status = acquire_load(dispatch[target])
-       if urgent(status) or idle(status):
+       if old_head == 0 or urgent(status) or idle(status):
            if exchange_acq_rel(sgi_pending[target], 1) == 0:
                DSB ISHST; send target SGI
 
-owner: merge already detached work and process bounded control/activation
+owner: acquire exchange incoming_head[self] with zero
+       merge already detached work and process bounded control/activation
        release_store(dispatch[self], next_priority_or_idle_with_sequence)
        release_store(sgi_pending[self], 0)
        DMB ISH
        acquire_check live incoming words, local detached words and control hints
-       if urgent work exists: restart bounded selection/continuation
+       if any work remains: request bounded selection/continuation
        else: commit selected task or final masked WFI sequence
 ```
 
@@ -468,6 +477,10 @@ increment after closure sees closed admission and touches no TCB. After the
 count reaches zero, all owners drain their live bits, detached sets and control
 references and acknowledge that incarnation. Only then can the TCB/stack be
 reused and the descriptor reopen with a new incarnation.
+The final reference release executes its own `DMB ISH` before checking closed
+admission and notifying the permanent retirement coordinator. Without that
+barrier, the closer can see a remaining reference while the releaser sees open
+admission, leaving no event to wake reclamation.
 
 Hints are not outcomes: an owner acquire-checks the current authoritative
 wait state under its object's protocol, and only that owner changes a current
@@ -745,8 +758,8 @@ and `k ≤ 16` activations per entry are fixed configuration limits.
 | Ready enqueue/remove | Fixed list-link and bitmap operations | At most 64 retired instructions each, excluding instrumentation and context save |
 | Pick/yield | One CLZ, one FIFO remove; yield adds one append | At most 96 instructions for local pick/yield body |
 | Untimed local notification-give | Native atomic value/pending operations, ready append and priority test | At most 160 instructions before optional switch |
-| Remote wake | Native publication RMW, DMB, status load, conditional SGI | At most 160 producer instructions excluding privilege entry and hardware interrupt delivery |
-| Incoming scan | At most `P × W` acquire word inspections plus `k` activations | Count the linked path; tune the bounded batch to meet 25 µs without delaying urgent tasks |
+| Remote wake | Two native publication RMWs, DMB, status load, conditional SGI | Count the linked producer, including registry pin/release; no cycle claim before measurement |
+| Incoming scan | One head exchange, at most 256 slot-word loads, nonzero-word exchanges and sixteen hint validations | Count the linked path; tune the bounded batch to meet 25 µs without delaying urgent tasks |
 | Timed block/wake | Object protocol plus at most seven heap levels | Count comparisons, loads/stores and object waits separately; no invented cycle conversion |
 | Timeout | At most seven heap levels per expired entry plus object detach | Measure simultaneous expiry and expired-batch continuation |
 | Migration | Two owner commands, off-CPU and adoption acknowledgments, cache refill | Slow-path counter interval and PMU events; no constant context-switch claim |
@@ -780,6 +793,13 @@ for the first reservation guarantee. [EDF/CBS and reclaiming research](scheduler
 | C: object protection | Replace compatibility protection with per-object locks; tune already-correct timeout, priority/inheritance/control and migration paths | Cross-core queue, notification, simultaneous timeout, deletion/reuse and migration stress; lock/mask attribution; latency and exact mimus |
 | D: per-core compare and heterogeneous policy | Remove CPU0 periodic tick, enable local deadlines/slicing, capacity hints, idle pull and IRQ-owner binding | Time wrap, overdue compare, stale readback, WFI races and synthetic topology tests; idle wakeups, big/little throughput, weighted splitting, pinned latency and exact mimus |
 | E: reservations | EDF/CBS, band policy and admission | Budget exhaustion/replenishment, interference and inheritance accounting; periodic service isolation and full physical regression |
+
+Every series-B task has one owner, including a task whose affinity admits
+several cores. Creation chooses the allowed core with the fewest assigned tasks;
+ties select the lowest logical index. Owner changes require the acknowledged
+migration transfer. There is no legacy selector or global ready list under the
+option. Idle pull starts in D: a ready task can wait on its busy owner while
+another core is idle. The linked stress counts observations of that condition.
 
 Series B still needs correct owner-routed timeout handling even before C removes
 object compatibility locks. A shared compatibility object lock never authorizes

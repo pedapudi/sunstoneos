@@ -29,10 +29,13 @@ def build_and_check(build, compiler='clang-21', objdump='llvm-objdump-21'):
     assert 'ss_owner_test_scan' not in disassembly
     assert not re.search(r'\b(?:ldaxr|stlxr|ldxr|stxr)\b', disassembly), 'LL/SC is forbidden'
     producer = disassembly.split('<ss_owner_publish>:', 1)[1].split('\n\n', 1)[0]
-    assert len(re.findall(r'\bldsetl\b', producer)) == 1
+    assert len(re.findall(r'\bldsetl\b', producer)) == 2
     assert len(re.findall(r'\bswpal\b', producer)) == 1
     assert re.search(r'\bdmb\s+ish\b', producer)
     assert re.search(r'\bdsb\s+ishst\b', producer)
+    last_put = disassembly.split('<ss_owner_put>:', 1)[1].split('\n\n', 1)[0]
+    assert re.search(r'\bldaddl\b.*\bdmb\s+ish\b.*\bldar\b', last_put, re.S), \
+        'last release must order reference decrement before admission load'
     # Reject cycles in direct producer control flow, allowing backwards branches
     # to shared epilogues. Indirect calls are the immutable architecture backend.
     instructions = {}
@@ -65,6 +68,8 @@ def build_and_check(build, compiler='clang-21', objdump='llvm-objdump-21'):
         done.add(address)
 
     visit(addresses[0])
+    print(f'scheduler owner: producer has {len(instructions)} static instructions, '
+          'excluding out-of-line backend callbacks')
     print('scheduler owner: AArch64 LSE publication has no direct retry cycle')
 
 
