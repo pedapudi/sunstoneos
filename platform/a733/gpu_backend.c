@@ -9,11 +9,19 @@
 #include "aarch64_device_memory.h"
 #include "a733_mapping_check.h"
 #include "a733_gpu_platform_native.h"
+#include "pvr_gpu_crumb.h"
 
-static int fail(struct a733_gpu_backend *b, enum a733_gpu_backend_error error)
+/* The first backend error records its statement in the breadcrumb record
+ * (pvr_gpu_crumb.h, unit BACKEND) before the service sees the failure. */
+#define fail(b, error) fail_at((b), (error), __LINE__, PVR_GPU_CRUMB_HERE())
+static int fail_at(struct a733_gpu_backend *b, enum a733_gpu_backend_error error,
+                   unsigned line, const void *here)
 {
     unsigned expected = 0;
-    atomic_compare_exchange_strong_explicit(&b->error, &expected, error, memory_order_release, memory_order_relaxed);
+    if (atomic_compare_exchange_strong_explicit(&b->error, &expected, error, memory_order_release, memory_order_relaxed))
+        pvr_gpu_crumb_fail(PVR_GPU_CRUMB_BACKEND, error, line,
+            ((uint32_t)b->phase & 0xffu) << 24 | (b->identity_step & 0xffu) << 16 |
+            ((uint32_t)b->service->phase & 0xffu) << 8 | (b->service->control.phase & 0xffu), here);
     return 0;
 }
 static int healthy(struct a733_gpu_backend *b)

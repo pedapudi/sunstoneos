@@ -1,4 +1,5 @@
 #include "pvr_gpu_service.h"
+#include "pvr_gpu_crumb.h"
 #include "a733_range.h"
 #include "pvr_compute_service.h"
 #include "pvr_mimus_service.h"
@@ -169,8 +170,17 @@ static int performance_reply(struct pvr_gpu_service *s, enum a733_perf_status st
     return xQueueSend(s->clients[client].replies,&reply,0)==pdTRUE;
 }
 #endif
-static void fail(struct pvr_gpu_service *s, enum pvr_gpu_service_error error)
+/* Every failure site records itself: the first failure of the service, its
+ * controller or its backend fills the breadcrumb record (pvr_gpu_crumb.h,
+ * unit SERVICE), and the EL1 vector keeps the first. */
+#define fail(s, error) fail_at((s), (error), __LINE__, PVR_GPU_CRUMB_HERE())
+static void fail_at(struct pvr_gpu_service *s, enum pvr_gpu_service_error error,
+                    unsigned line, const void *here)
 {
+    if (s->phase != PVR_GPU_SERVICE_FAILED)
+        pvr_gpu_crumb_fail(PVR_GPU_CRUMB_SERVICE, error, line,
+            ((uint32_t)s->phase & 0xffu) << 24 | (pvr_gpu_control_steps(&s->control) & 0xffu) << 16 |
+            (s->start.index & 0xffffu), here);
 #ifdef SUNSTONE_A733_OS_PERF
     if(s->config.performance_begin)
         atomic_store_explicit(&s->performance.published,PVR_GPU_PERF_OWNER|PVR_GPU_PERF_FAILED,memory_order_release);
@@ -583,6 +593,7 @@ static void advance(struct pvr_gpu_service *s)
                 fail(s, PVR_GPU_SERVICE_CONTROL); return;
             }
             s->phase = PVR_GPU_SERVICE_CHECKING;
+            sunstone_crumb(PVR_GPU_CRUMB_STARTED, s->start.count);
         } else if (r != PVR_GPU_START_AGAIN) { fail(s, PVR_GPU_SERVICE_START); return; }
         break;
     }
