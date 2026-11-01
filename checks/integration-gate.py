@@ -25,6 +25,7 @@ class GateTests(unittest.TestCase):
         self.sandbox = Path(self.temp.name)
         self.calls = self.sandbox / 'calls.jsonl'
         self.env = dict(os.environ, GATE_TEST_CALLS=str(self.calls), PYTHONDONTWRITEBYTECODE='1')
+        self.env.pop('MIMUS_DIR', None)
         # These tools only record arguments. No build, emulator or device is used.
         stub = '''#!/usr/bin/env python3
 import json, os, pathlib, sys
@@ -64,6 +65,17 @@ if os.environ.get('GATE_TEST_FAIL') in args:
     def tree(self, source):
         return source.name + '-' + hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:10]
 
+    def enable_mimus(self):
+        self.mimus = self.checkout('mimus')
+        port = self.mimus / 'sunstoneos'
+        port.mkdir()
+        (port / 'CMakeLists.txt').write_text('add_sunstone_application(mimus)\n')
+        subprocess.run(['git', 'add', '.'], cwd=self.mimus, check=True, capture_output=True)
+        subprocess.run(['git', '-c', 'user.name=gate', '-c', 'user.email=gate@example.invalid',
+                        'commit', '-q', '-m', 'Add application'], cwd=self.mimus, check=True, capture_output=True)
+        self.env['MIMUS_DIR'] = str(self.mimus)
+        return self.mimus / 'sunstoneos/tools/check-mimus-smp.py'
+
     def records(self):
         return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
 
@@ -94,18 +106,27 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertEqual(calls[2][1], 'tools/check-kernel.py')
 
     def test_application_check_uses_its_own_build(self):
+        checker = self.enable_mimus()
         result = self.run_gate('--reason', 'Recognition scheduling', '--check', 'kernel', '--check', 'mimus-smp')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.records()
         self.assertEqual([c[0] for c in calls], ['cfg.sh', 'cmake', 'cfg.sh', 'cmake', 'python', 'python'])
         core = self.sandbox / 'build' / ('gate-central-' + self.tree(self.source))
         mimus = self.sandbox / 'build' / ('gate-mimus-' + self.tree(self.source))
-        self.assertEqual(calls[0][1:], [str(self.source), str(core), '-DMIMUS_DIR='])
+        self.assertEqual(calls[0][1:], [str(self.source), str(core), '-DSUNSTONE_APPLICATION=', '-DMIMUS_DIR='])
         self.assertEqual(calls[1][calls[1].index('--target') + 1:], ['kernel-check', '-j', '12'])
-        self.assertEqual(calls[2][1:], [str(self.source), str(mimus)])
+        self.assertEqual(calls[2][1:], [str(self.source), str(mimus), '-DMIMUS_DIR=' + str(self.mimus),
+                                      '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=mimus'])
         self.assertEqual(calls[3][calls[3].index('--target') + 1:], ['smp-mimus-model', '-j', '12'])
         self.assertEqual(calls[4][1], 'tools/check-kernel.py')
         self.assertEqual(calls[5][calls[5].index('--image') + 1], str(mimus / 'smp-mimus-model.elf'))
+        self.assertEqual(calls[5][1], str(checker))
+
+    def test_application_check_requires_external_checkout(self):
+        result = self.run_gate('--reason', 'Recognition scheduling', '--check', 'mimus-smp')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('mimus checks require', result.stderr)
+        self.assertEqual(self.records(), [])
 
     def test_selected_variant_only(self):
         result = self.run_gate('--reason', 'Resident audio wiring', '--variant', 'resaud')
@@ -114,6 +135,8 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertEqual(len(calls), 2)
         self.assertIn('-DSUNSTONE_A733_OS_AUDIO=ON', calls[0])
         self.assertNotIn('-DSUNSTONE_A733_OS_RADIO=ON', calls[0])
+        self.assertIn('-DMIMUS_DIR=', calls[0])
+        self.assertIn('-DSUNSTONE_APPLICATION=', calls[0])
         self.assertEqual(calls[0][2], str(self.sandbox / 'build' / ('gate-os-resaud-' + self.tree(self.source))))
 
     def test_npu_variant_names_the_cached_catalogue(self):
@@ -258,12 +281,13 @@ exec "$REAL" "$@"
         self.assertFalse((self.sandbox / 'build/gate-case/status.txt').exists())
 
     def test_failure_is_not_retried_and_later_checks_do_not_run(self):
-        self.env['GATE_TEST_FAIL'] = 'tools/check-mimus-smp.py'
+        checker = str(self.enable_mimus())
+        self.env['GATE_TEST_FAIL'] = checker
         result = self.run_gate('--reason', 'Recognition scheduling', '--check', 'mimus-smp', '--check', 'progress')
         self.assertEqual(result.returncode, 1)
         runs = [c for c in self.records() if c[0] == 'python']
         self.assertEqual(len(runs), 1)
-        self.assertEqual(runs[0][1], 'tools/check-mimus-smp.py')
+        self.assertEqual(runs[0][1], checker)
         self.assertIn('host deadline exceeded', (self.sandbox / 'build/gate-case/check-mimus-smp.log').read_text())
 
     def test_configure_failure_prevents_checks(self):
@@ -280,6 +304,7 @@ exec "$REAL" "$@"
         self.assertEqual((self.sandbox / 'build/gate-case/summary.txt').read_bytes(), before)
 
     def test_explicit_full_suite_and_declared_trials(self):
+        self.enable_mimus()
         catalogue = self.sandbox / 'build/npu-board/session-artifacts.json'
         catalogue.parent.mkdir(parents=True, exist_ok=True)
         catalogue.write_text('{}\n')
@@ -298,6 +323,32 @@ exec "$REAL" "$@"
         self.assertEqual(len(runs), 8)
         soak = next(c for c in runs if 'tools/check-smp.py' in c)
         self.assertEqual(soak[soak.index('--trials') + 1], '2')
+
+    def test_full_without_mimus_builds_only_os(self):
+        catalogue = self.sandbox / 'build/npu-board/session-artifacts.json'
+        catalogue.parent.mkdir(parents=True, exist_ok=True)
+        catalogue.write_text('{}\n')
+        result = self.run_gate('--reason', 'Independent OS milestone', '--full')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.records()
+        self.assertFalse(any('smp-mimus-model' in call for call in calls))
+        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 13)
+        self.assertTrue(all('-DMIMUS_DIR=' in c for c in calls if c[0] == 'cfg.sh'))
+
+    def test_external_change_during_steps_fails(self):
+        self.enable_mimus()
+        self.env['GATE_TEST_TOUCH'] = str(self.mimus / 'changed.cc')
+        result = self.run_gate('--reason', 'External application changed', '--check', 'mimus-smp')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('FAIL external mimus changed', result.stdout)
+
+    def test_build_root_keeps_new_directories_together(self):
+        directory = self.sandbox / 'task-builds'
+        result = self.run_gate('--reason', 'Isolated build', '--target', 'kernel-check',
+                               '--build-root', str(directory))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((directory / 'gate-case/summary.txt').is_file())
+        self.assertEqual(self.records()[0][2], str(directory / ('gate-central-' + self.tree(self.source))))
 
 
 if __name__ == '__main__':
