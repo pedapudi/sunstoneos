@@ -61,7 +61,8 @@ void latency_workload_progress(void)
 #ifdef SUNSTONE_LATENCY_DMA
     dma_progress();
 #endif
-    if (ss_live() < 0 || ss_throttled()) ss_fail(0xb01);
+    if (ss_live() < 0) ss_fail(0xb01);
+    if (ss_throttled()) ss_fail(0xb05);
     ss_progress();
 }
 void latency_init(void)
@@ -85,7 +86,12 @@ static int at_top(void)
 void latency_main(const struct ss_grant *grant)
 {
     (void)grant;
-    while (!ss_clock_ready()) { latency_workload_progress(); vTaskDelay(1); }
+    /* The thermal service publishes reduced load until its first fresh sensor
+     * set. Wait for that publication before measuring at the top CPU points. */
+    while (!ss_clock_ready() || ss_throttled()) {
+        if (ss_live() < 0) ss_fail(0xb01);
+        ss_progress(); vTaskDelay(1);
+    }
     if (!at_top()) ss_fail(0xb03);
     ss_activity_begin();
     latency_workload_run(&result);
