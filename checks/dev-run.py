@@ -36,6 +36,7 @@ so an interrupted helper does not lose it. No USB node, queue or FEL
 executable is opened.
 """
 import argparse
+import subprocess
 import contextlib
 import hashlib
 import importlib.util
@@ -700,6 +701,59 @@ def npu_cases(out):
             else:
                 raise AssertionError('NPU accepted another watchdog contract')
     passed('npu-image-geometry-and-exact-watchdog')
+    # Capture never opens hardware here. An attempted failed transfer must
+    # quarantine its saved instance; clean admission refusals must not.
+    for variant in ('nominal', 'nonzero', 'timeout', 'bad-hex', 'short', 'admission'):
+        state = {'locked': False, 'requests': 0, 'quarantined': 0}
+        node = Path('/modeled-usb/001/002')
+        class Access:
+            @contextlib.contextmanager
+            def board_lock(self):
+                state['locked'] = True
+                try:
+                    yield node
+                finally:
+                    state['locked'] = False
+            def require_session(self, selected):
+                assert selected == node and state['locked']
+                if variant == 'admission':
+                    raise ValueError('modeled admission refusal')
+            def require_rom(self, selected):
+                assert selected == node and state['locked']
+            def identity(self, selected):
+                return [1, 2, 3]
+            def target(self, selected):
+                return Path('/modeled-port/3-3')
+            def quarantine_instance(self, selected, reason, identity):
+                assert state['locked'] and selected == node and identity == [1, 2, 3]
+                state['quarantined'] += 1
+        def transfer(*args, **kwargs):
+            state['requests'] += 1
+            assert state['locked'] and state['requests'] == 1
+            if variant == 'timeout':
+                raise subprocess.TimeoutExpired('modeled FEL', 15)
+            return types.SimpleNamespace(returncode=int(variant == 'nonzero'), stderr='modeled failure',
+                stdout='invalid' if variant == 'bad-hex' else '1' if variant == 'short' else '1 2')
+        with patch.object(dev, 'load', side_effect=lambda name, path:
+                types.SimpleNamespace(WORDS=(0x1000, 0x1004)) if name == 'dev_npu_preparation' else Access()), \
+                patch.object(dev.subprocess, 'run', transfer):
+            try:
+                dev.npu_capture(out / 'unused-fel')
+            except (ValueError, subprocess.TimeoutExpired):
+                assert variant != 'nominal'
+            else:
+                assert variant == 'nominal'
+        assert not state['locked']
+        assert state['requests'] == int(variant != 'admission')
+        assert state['quarantined'] == int(variant not in ('nominal', 'admission')), (variant, state)
+    passed('npu-initial-capture-failure-quarantines', cases=6)
+    base = object()
+    finite.base = base
+    finite.returning = types.SimpleNamespace(run=lambda *args, **kwargs: kwargs['base'])
+    helper = types.SimpleNamespace(validator=lambda *args: lambda bundle:
+        {'execution_profile': finite.STARTUP, 'watchdog': marker})
+    assert dev.npu_run(types.SimpleNamespace(), finite, helper, None, out, {}) is base
+    passed('npu-unresolved-return-retains-ownership')
 
 
 def npu_native_cases(out, native):

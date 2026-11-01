@@ -1,11 +1,15 @@
 # Finite inference uses interrupt completion and copied outputs
 
-Observed board evidence: the startup-only image returned with
-`NPU_STARTUP=READY_CLOSED_STOPPED; inference_jobs=0` and
-`npu: returned; matched`. The coordinator recorded the run under
-`runs/01-startup-only-28c8e15a2b62-834973ec` in the NPU build directory.
-This establishes bootstrap, close and normal return on that run. Numerical
-inference and a watchdog reset during an active job remain unqualified.
+Observed board evidence: startup-only returned with no inference jobs;
+one inference and the two-network runtime returned with matching copied
+outputs. All three returned normally on 3-3 at 852 MHz and 800 mV.
+The coordinator recorded these board-qualified bounded operations beneath
+`~/.cache/sunstoneos/build/npu-wdt-1031/runs/` in
+`01-startup-only-28c8e15a2b62-834973ec/`,
+`02-single-inference-0dd327616ce6-834973ec/` and
+`03-runtime-8f51a95699b7-834973ec/`.
+Repeated operation, SDK access, domain OFF/restart and a watchdog reset during
+an active job remain unqualified.
 
 The comparisons below are observed source behavior. The vendor paths are
 relative to `vip2/` at revision

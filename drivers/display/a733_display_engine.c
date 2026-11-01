@@ -157,13 +157,15 @@ static void replay_words(uint32_t w[16],uint64_t base,uint64_t f,unsigned slot,u
 }
 int a733_de_ring_build(void *pages,uint64_t base,uint64_t f,unsigned n)
 {
- if(!pages||((uintptr_t)pages&4095)||!replay_shape(base,f,n))return 0;
+ if(!pages||((uintptr_t)pages&4095)||!replay_shape(base,f,n)||
+    !a733_span_excl_nonempty(pages,4096u*n))return 0;
  memset(pages,0,4096u*n);for(unsigned slot=0;slot<n;++slot){uint32_t words[16];
  replay_words(words,base,f,slot,n);memcpy((uint8_t *)pages+slot*4096,words,64);}return 1;
 }
 int a733_de_ring_valid(const void *pages,uint64_t base,uint64_t f,unsigned n)
 {
- if(!pages||((uintptr_t)pages&4095)||!replay_shape(base,f,n))return 0;
+ if(!pages||((uintptr_t)pages&4095)||!replay_shape(base,f,n)||
+    !a733_span_excl_nonempty(pages,4096u*n))return 0;
  for(unsigned slot=0;slot<n;++slot){uint32_t words[16];replay_words(words,base,f,slot,n);
  const uint8_t *p=(const uint8_t *)pages+slot*4096;if(memcmp(p,words,64))return 0;
  for(unsigned i=64;i<4096;++i)if(p[i])return 0;}return 1;

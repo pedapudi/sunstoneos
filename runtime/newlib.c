@@ -9,6 +9,9 @@
 #include <sys/stat.h>
 #include <string.h>
 
+/* Formatting also links syscall tables in images without a console. */
+extern void platform_puts(const char *text) __attribute__((weak));
+
 extern char __heap_start[], __heap_end[];
 static uintptr_t heap_break;
 static size_t heap_peak;
@@ -59,6 +62,8 @@ ssize_t _write(int descriptor, const void *buffer, size_t count)
         errno = EBADF;
         return -1;
     }
+    if (!count) return 0;
+    if (!platform_puts) { errno = ENOSYS; return -1; }
     const char *text = buffer;
     for (size_t i = 0; i < count; ++i) {
         char character[2] = {text[i], 0};

@@ -4,7 +4,9 @@ Status: **implemented** and host-modeled; no run has taken place on a board.
 In Unicorn emulation the image's admission accepts the 12,288 MiB map that
 its own `platform_init()` writes and the remote-writer sample that its
 monitor stores. The DMA0 cache-maintenance and reachability cases are not
-built, and admission refuses their contract bits.
+built, and admission refuses their contract bits. The legacy monitor has no
+host-armed WDT0 contract or RTC breadcrumbs, and the development runner has no
+memory-test kind. Porting that return path is required before a board launch.
 
 The [design](designs/memory-qualification.md) gives the reasoning and the
 budgets; [the measurements](designs/memory-qualification-measurements.md)
@@ -90,9 +92,17 @@ it finds and returns before any write outside the window. It refuses:
   zero or above 8 MiB, summed over the levels `CLIDR_EL1` lists;
 - an absent remote-writer sample, and a sample naming a writer other than
   OR100, the crypto engine (CE) and USB0;
+- noncanonical MMU controls, a tested block with a wrong physical address,
+  permissions or memory attributes, or a table outside the protected window;
+- a CPU alias of a table page, checked before that page is dereferenced;
 - a write translation of `0x4400_0000`, `0x8000_0000` or `0x3_3fff_f000`
-  (one per descriptor kind) that is not Normal write-back inner-shareable at
-  its own physical address.
+  that is not Normal write-back inner-shareable at its own physical address.
+
+The [complete map check](designs/memtest-map-admission.md) reads 12 level-1
+entries and 480 level-2 entries once per invocation. It requires privileged
+read/write memory and permits the existing execute-never flags. Host checks
+reject 8,347 leaf corruptions; eight native corruption cases refuse before
+writing tested RAM. Physical permission faults and cache visibility remain open.
 
 The march planner cuts the slice into *members* of at most 256 MiB from its
 start and joins consecutive members into groups of two or three whose members

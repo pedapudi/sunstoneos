@@ -25,6 +25,28 @@ enum a733_ce_cipher_result a733_ce_cipher_start(struct a733_ce_cipher *c,const s
 static int eligibility(void *v){return *(int *)v;}
 int main(void)
 {
+ /* Application expiry can revoke a request before a service poll observes
+  * the failure. Its CPU-only scrub must erase all staging without touching
+  * the retained controller, DMA page, binding or generation metadata. */
+ struct a733_ce_session retained={0},before=retained;
+ struct crypto_run revoked;memset(&revoked,0xa5,sizeof(revoked));
+ revoked.hash.engine=revoked.hash.bound_engine=&retained;
+ revoked.cipher.engine=revoked.cipher.bound_engine=&retained;
+ struct crypto_run expected=revoked;
+#define CLEAR(member) memset(expected.member,0,sizeof(expected.member))
+ CLEAR(hash.key);CLEAR(hash.buffer);CLEAR(hash.digest);
+ CLEAR(cipher.key);CLEAR(cipher.iv);CLEAR(cipher.hash_subkey);
+ CLEAR(cipher.subkey_block);CLEAR(cipher.j0);CLEAR(cipher.tag);
+ CLEAR(cipher.nonce);CLEAR(cipher.aad);CLEAR(cipher.input);CLEAR(cipher.output);
+ CLEAR(request.key);CLEAR(request.secret);CLEAR(request.input);
+ CLEAR(request.iv);CLEAR(request.aad);CLEAR(payload);
+#undef CLEAR
+ struct crypto_request producer_owned=revoked.request;
+ crypto_run_clear_clients(&revoked);
+ assert(!memcmp(&revoked.request,&producer_owned,sizeof(producer_owned)));
+ crypto_run_clear_secrets(&revoked);
+ assert(!memcmp(&revoked,&expected,sizeof(revoked)));
+ assert(!memcmp(&retained,&before,sizeof(retained)));
  unsigned total=0;
  for(unsigned test=0;test<12;++test){struct crypto_run r={0};calls=polls=0;fail_at=test;int result=0;
  for(unsigned n=0;n<30&&!result;++n)result=crypto_run_step(&r,100);

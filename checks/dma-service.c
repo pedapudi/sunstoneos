@@ -288,7 +288,7 @@ void kernel_main(void)
     struct dma_fifo_port port={A733_I2S0_RXFIFO,3,1u<<4,1u<<8,A733_DMA_READ};
     configASSERT(a733_dma_native_init(&native,0x09000000,0x09000000,&window,1,&port,1,fatal,NULL));
     profile=(struct dma_service_i2s_stream_profile){{{24576000,16000,0,32,32,1,0},
-        {{acquire,acquire_poll,release,now_us,i2s_read,i2s_write},health},&profile,A733_I2S_RECEIVE,10000,0},0};
+        {{acquire,acquire_poll,release,now_us,i2s_read,i2s_write},health},&profile,A733_I2S_RECEIVE,10000,0,0},0};
     const unsigned channels[]={0,1,1,2,3,0},destinations[]={0,0,64,128,192,64};
     for (unsigned j=0;j<6;++j) {
         unsigned ch=channels[j];

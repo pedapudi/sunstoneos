@@ -25,6 +25,12 @@ buffer ownership to a device. Before physical DMA experiments, qualify the indep
 watchdog and a reset path that returns to ROM without executing storage code.
 See [recovery requirements](watchdog.md).
 
+The [cyclic receive output check](designs/dma-rx-copy-ownership.md) excludes
+metadata and every retained channel allocation before observing progress.
+Twenty-six host refusal cases preserve memory and callback counts; an adjacent
+valid output copies its completed period. Sanitizers and twelve selected
+FreeRTOS cyclic-audio cases pass. Physical cyclic ordering remains unqualified.
+
 ## Hardware facts and unresolved addressing
 
 The pinned [board kernel DMA driver](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/dma/sunxi-dma.c)

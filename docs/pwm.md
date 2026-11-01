@@ -73,9 +73,10 @@ The fan application uses SYS_CLK24M at 24 MHz with pair divider and prescaler
 both one. A 25,000 ns period contains 600 ticks, so its period field is 599.
 Active ticks select duty in increments of 1/600. A request for 600 ticks holds
 the output high for the whole period, which runs the fan at full speed. Zero
-output uses STOP, which drives PD5 low as a GPIO. The host supervision tool,
-`tools/check-a733-pwm-supervised.py`, still accepts only 1 through 599 ticks;
-the image and the packet builder in `apps/pwm/observe.py` accept 600.
+output uses STOP, which drives PD5 low as a GPIO. The host supervision tool
+(`tools/check-a733-pwm-supervised.py`), native image and packet builder
+(`apps/pwm/observe.py`) accept 1 through 600 ticks. CLI boundary checks confirm
+full-duty acceptance and refusal of 0 and 601 before bundle or device access.
 
 The driver plans other cycle-mode profiles without rounding. It selects the
 smallest PCR prescale from 1 to 256 that gives an exact period of at most

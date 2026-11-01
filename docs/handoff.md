@@ -54,14 +54,20 @@ cards. Neither board has populated eMMC or UFS; keep the failed UFS probe disabl
   FOLLOW and refused the return. Evidence:
   `dev-runs-1031/3-1-cpu-return-204119/run/watchdog-report.json`; code:
   `apps/os/cpu.c` and `apps/os/cpu-return/cpu.patch`. The merged return path
-  handles this owner phase; the correction has no subsequent board result.
+  handles this owner phase. The corrected hello control returned normally on
+  3-1 with seven secondaries off; evidence:
+  `dev-runs-1031/3-1-cpu-return-211702/run/session.json`.
+- **CPU reliability — failed.** Image `02-reliability` ran on 3-3 and failed
+  with the CPU clock driver in RETAINED at `return-cpu.c:159`. Evidence:
+  `cpu-reliability-1031/start-1/`. Another worker owns this defect. Three-start
+  repeatability and full restoration remain unqualified.
 - **GPU firmware diagnostic — failed.** Image `2-firmware` from `ladder-wdt3`
   stopped in the compatibility callback at
   `platform/a733/gpu_backend.c:375` in its frozen build. Evidence:
   `dev-runs-1031/3-1-gpu-return-204909/run/watchdog-report.json`.
   That image uses the unmerged GPU-reference branch. The cause remains under
   investigation; the record does not prove a firmware ABI mismatch.
-- **Port 3-3 — historical quarantine, followed by a successful NPU run.** A host-side missing
+- **Earlier 3-3 host cleanup — failed.** A host-side missing
   `bundle/return-review.json` error followed a normal native return with
   `RETURN_ROM` and mode 0. Evidence:
   `dev-runs-1031/3-3-cpu-return-201331/run/session.json`.
@@ -71,11 +77,20 @@ cards. Neither board has populated eMMC or UFS; keep the failed UFS probe disabl
   Observed subsequent NPU evidence is under
   `~/.cache/sunstoneos/build/npu-wdt-1031/runs/01-startup-only-28c8e15a2b62-834973ec/`:
   `NPU_STARTUP=READY_CLOSED_STOPPED; inference_jobs=0` and
-  `npu: returned; matched`. The next proposed run is single inference, followed
-  by the two-network runtime only after matching output and normal return.
+  `npu: returned; matched`. Single inference and the two-network runtime also returned with matching
+  output. Their evidence is in that same build directory under
+  `runs/02-single-inference-0dd327616ce6-834973ec/` and
+  `runs/03-runtime-8f51a95699b7-834973ec/`. These three bounded operations
+  are board-qualified on 3-3 at 852 MHz and 800 mV.
   Both images include the post-bootstrap settling delay and startup register
   breadcrumbs; the finite runtime requires ISR notification for completion.
   Their build-directory READMEs give hashes, commands and failure stages.
+  Independent correctness, hardware-safety and recovery reviews cover the
+  NPU branch against `a0b092b5`. Capture failures now quarantine the saved USB
+  instance, and unresolved NPU returns retain the board lock. No PMIC rail
+  write, voltage target or clock point changed. Review and passing host/build
+  evidence are under `~/.cache/sunstoneos/build/npu-wdt-1031/land-review-*/`,
+  `land-checks/` and `land-baselines/`.
 
 Both recent 3-1 failures returned through WDT0. Treat DRAM as uninitialized
 after that reset and run the DDR tool before the next image uses it.
@@ -95,20 +110,20 @@ The component documents identify source files and narrower evidence boundaries.
 | Memory bus | **Board-verified:** EL3 entry restores MBUS to 600 MHz on both boards, within the recorded memory-pattern checks. | [MBUS restore](designs/mbus-restore.md) |
 | Clocks, resets, PMIC and power domains | **Implemented:** shared ownership and operating-point control; default development runs normalize CPU rails at boot clocks. | [Clocks](clock-leases.md), [PMIC](pmic-runtime.md), [power](power-domains.md), [performance modes](performance-modes.md) |
 | GPU | **Board-verified:** standalone firmware start/health/stop/restart, eight jobs and two exact-sum shapes at 1008 MHz/960 mV. Full application recognition and failure recovery remain unverified. | [GPU power](gpu-power.md), [backend](gpu-backend.md), [reference comparison](reference-backsolve-gpu.md) |
-| NPU | **Board-verified:** earlier interrupt-driven ShuffleNetV2 at 852 MHz. The watchdog-admitting startup-only image now completes scheduled startup, bootstrap, CLOSE, local stop and normal ROM return on 3-3. Current numerical inference and same-instance restart remain unverified. | [NPU](npu.md), [startup](npu-startup.md), [service](npu-service.md), [finite inference comparison](../apps/npu-finite/INFERENCE-SEQUENCE.md) |
+| NPU | **Board-verified:** earlier interrupt-driven ShuffleNetV2 at 852 MHz. The watchdog-admitting startup, one-inference and two-job/two-model runtime images are board-qualified on 3-3 at 852 MHz and 800 mV, including matching copied outputs, CLOSE, local stop and normal ROM return. Repeated start/stop, domain OFF/restart, SDK access and fault recovery remain unqualified. | [NPU](npu.md), [startup](npu-startup.md), [service](npu-service.md), [finite inference comparison](../apps/npu-finite/INFERENCE-SEQUENCE.md) |
 | microSD | **Board-verified:** 50 MHz/four-bit/3.3 V PIO, one 4 KiB DMA read and one 64 KiB DMA read match PIO references and return normally. SDR104, writes, sustained throughput and recovery remain unverified. | [Storage](storage.md), [MMC](mmc.md), [SD DMA](designs/sd-dma.md), [updates](storage-update.md) |
 | CPU memory protection and DMA | **Implemented:** mappings, reservations, cache maintenance and device address translation. Per-device DMA visibility still needs physical evidence. | [Memory](memory-protection.md), [DMA](dma.md), [device memory](device-memory-capacity.md) |
 | USB0, USB host and Type-C | **Implemented:** native device transport, bounded host class profiles and Type-C ownership. Returning FEL transport is demonstrated by the development records; it does not qualify host USB. | [USB platform](usb-platform.md), [host USB](usb2-host.md), [Type-C](typec.md) |
-| Pins, GPIO, UART and I2C | **Implemented:** native providers and ownership. Broader exposed-pin and serial qualification remains open. | [Pins](pins.md), [UART](uart.md), [I2C](../drivers/i2c/a733_i2c.c) |
+| Pins, GPIO, UART and I2C | **Partly implemented:** native pin/UART ownership and internal I2C clients. Header TWI0–3 and S_TWI2 lack native resource bindings; exposed-pin and serial qualification remains open. | [Pins](pins.md), [UART](uart.md), [I2C gaps](../drivers/i2c/README.md) |
 | SPI, PWM and ADC | **Implemented:** native paths, including SPI3 DMA; physical transfer, waveform and sampling qualification remains open. | [SPI](spi.md), [PWM](pwm.md), [ADC](adc-application.md) |
-| RTC and thermal | **Implemented:** time/alarm and thermal services. Retained watchdog breadcrumbs are board-verified; alarm, throttling and critical-temperature qualification remain open. | [RTC](rtc-application.md), [thermal](thermal.md), [watchdog](watchdog.md) |
-| Wi-Fi and Bluetooth | **Implemented:** radio transport, networking and selected Bluetooth profiles. Fitted wiring and physical interoperability remain blockers. | [Radio](radio-platform.md), [Wi-Fi](radio-wifi.md), [Bluetooth](bluetooth-native.md) |
+| RTC and thermal | **Implemented:** time/alarm and thermal services. RTC notifications after completion or failure are refused before callbacks; focused sanitizer and linked checks pass. Retained watchdog breadcrumbs are board-verified; alarm, throttling and critical-temperature qualification remain open. | [RTC](rtc-application.md), [alarm ownership](../apps/rtc/qualification.md), [thermal](thermal.md), [watchdog](watchdog.md) |
+| Wi-Fi and Bluetooth | **Implemented:** transport, networking and selected profiles; host-tested deadline checks now cover public SDIO record consumption. Fitted rails/PM2, UHS timing/tuning, returning shutdown and physical interoperability remain open. | [Radio](radio-platform.md), [SDIO reference and guarded reads](radio-sdio-reference.md), [Wi-Fi](radio-wifi.md), [Bluetooth](bluetooth-native.md) |
 | I2S and headset audio | **Implemented:** capture and bounded audio paths; no microphone is attached. Physical cyclic-DMA ordering and headset qualification remain open. | [I2S](i2s-stream.md), [headset](bluetooth-hfp.md) |
 | Camera, CSI and ISP | **Implemented:** OV5640 modes, receiver and recorded ISP paths. No MIPI camera is attached; native continuous-frame delivery remains incomplete. | [Camera](camera.md), [CSI](csi-receiver.md), [ISP](camera-isp0.md) |
-| Display and 2D processing | **Implemented:** HDMI, DSI, DisplayPort, scanout and G2D paths. No MIPI panel is attached; sink output, streaming and recovery remain unverified. | [HDMI](hdmi-native.md), [DSI](dsi-video.md), [DisplayPort](displayport-native.md), [G2D](g2d.md) |
-| Video and image processing | **Implemented:** H.264/HEVC decode, H.264/JPEG encode, JPEG decode and deinterlacing paths. Physical numerical output and drain remain unverified. | [H.264](h264-native.md), [HEVC](hevc-native.md), [encoding](h264-encode-native.md), [JPEG](jpeg-application.md), [deinterlacing](deinterlace-native.md) |
+| Display and 2D processing | **Implemented:** HDMI, DSI, DisplayPort, scanout and G2D paths. CPU command-span checks and unchanged command pages pass host checks. DisplayPort uses four lanes at 5.4 Gb/s and requires matching analog/SERDES authority. Scanout slots remain immutable. Native images need a reviewed watchdog return path; no MIPI panel is attached. Sink output, streaming and recovery remain unverified. | [HDMI](hdmi-native.md), [DSI](dsi-video.md), [DisplayPort](displayport-native.md), [G2D](g2d.md) |
+| Video and image processing | **Implemented:** H.264/HEVC decode, H.264/JPEG encode, JPEG decode and deinterlacing paths. HEVC initialization preserves retained ownership; its offline CPU pixel comparator passes host checks with CPU-generated copies. Physical numerical output and drain remain unverified. | [H.264](h264-native.md), [HEVC](hevc-native.md), [encoding](h264-encode-native.md), [JPEG](jpeg-application.md), [deinterlacing](deinterlace-native.md) |
 | PCIe and NVMe | **Implemented:** root-port, endpoint-test and bounded NVMe paths. No endpoint is available for qualification. | [PCIe](pcie.md), [NVMe](pcie-nvme.md) |
-| Crypto, entropy and identity | **Implemented:** native crypto modes, random-source and identity access. Full physical engine and recovery qualification remains open. | [Crypto](crypto-engine.md), [entropy](entropy.md), [identity](board-application.md) |
+| Crypto, entropy and identity | **Implemented:** native crypto modes, MD5/SM3 and CPU-staging erasure; host checks pass. Prior CE exclusion, secure access, IRQ/drain, raw entropy and physical qualification remain open. The existing crypto image parks and is ineligible for returning runs. | [Security inventory and evidence](security-engines.md), [entropy](entropy.md), [identity](board-application.md) |
 | Always-on management processor | **Implemented:** remote-writer ownership accounting; native management-core control and sleep/wake qualification remain open. | [Remote writers](remote-writers.md), [SCP reference](vendor-firmware/scp-firmware.md) |
 | Autonomous microSD OS boot | **Host-verified only:** packaging, cold-entry and slot/update checks; no physical installation or autonomous OS boot is established. | [Cold entry](cold-entry.md), [resident OS design](designs/autonomous-card-os.md) |
 | Generic GPU compute queue | **Not started in the merged tree:** design and prototype headers only. The implementation remains on an unmerged branch. | [Queue design](designs/gpu-compute-queue.md), [layering audit](layering-audit.md) |
@@ -120,6 +135,78 @@ returns are under `sol-resume-20261028/` and `sol-resume-20261031/`.
 The 64 KiB SD result is
 `sol-sd-warm-packet-1029/sentinel-physical-result.json`.
 Host-only autonomous boot evidence is under `resume-card-os-1026/`.
+
+## Host validation and pending device runs
+
+The combined host checks pass under
+`~/.cache/sunstoneos/build/integrate-streams-1031/`. OS-only and hello-compute
+build with empty `MIMUS_DIR`; the third baseline uses the external mimus
+checkout at `~/git/mimus-worktrees/small-fixes-1031`. Selected integration
+builds cover memory, DMA, cyclic I2S, radio dispatch and radio/headset service
+composition. Source-ownership, shared-helper and progress checks pass.
+
+Focused checks pass for complete memory-map admission, DMA/IOMMU ownership,
+raw PMIC observation, cold-session refusal, SDIO deadlines, HEVC state and
+pixels, RTC alarm lifetime and MD5/SM3 staging/upload ownership. Device effects
+remain modeled. The check index verifies 750 checks; pre-push fixtures reject
+25 blocked cases and accept 12 permitted cases. Test cleanup moves artifacts
+into the trash directory.
+
+Independent review approved the integration and two fixture/parser corrections.
+The dashboard reads the current handoff's bulleted actions. Memory preparation
+checks refusal of an existing artifact directory before using a fresh one.
+The failed setup logs and successful resumed cases remain in the evidence
+directory. No board was accessed; these results add no physical qualification.
+
+The display and CPU integration checks pass under
+`~/.cache/sunstoneos/build/integrate-streams-1031/followup/`. All three baseline
+images and the native G2D, HDMI framebuffer, DisplayPort, DSI and CPU reliability
+images build. Command-span sanitizer checks preserve 132 command pages;
+pinned G2D/DE comparisons and 18 DisplayPort rate-admission cases pass.
+The seven CPU scheduler-model cases and console-present/absent sanitizer cases
+pass. CPU-return preparation uses saved state, passes its offline checks and
+records no launch. Independent review approved the shared changes.
+
+Memory admission checks every tested block before writes. Cyclic DMA receive
+staging excludes every retained allocation and metadata range. Mapping,
+sanitizer and FreeRTOS DMA service/cyclic checks pass, as do the three baseline
+builds. The [memory admission record](designs/memtest-map-admission.md) and
+[DMA ownership record](designs/dma-rx-copy-ownership.md) define this evidence.
+The frozen memory artifact is under
+`~/.cache/sunstoneos/build/memory-dma-1031/images/memtest/`. Its legacy monitor
+needs WDT0, breadcrumbs and a matching runner before launch. DMA0 needs physical
+access authority; DMA1 remains source-blocked. Existing DRAM restore evidence
+remains valid. Full-map testing after training and restore, temperature coverage
+and per-master DMA/IOMMU behavior remain unqualified.
+
+The PMIC decoder preserves DCDC8/DCDC9 codes 88–127 as raw, undecoded
+values because pinned U-Boot and Linux references disagree. The six-rail
+observer and source/provider checks pass on the host. Its physical launch
+requires watchdog and breadcrumb integration. The
+[PMIC comparison](designs/pmic-reference-reconciliation.md) identifies artifacts
+and missing fitted-PMIC, wiring and voltage evidence. The
+[thermal and management proposal](designs/thermal-management-qualification.md)
+records processor lifecycle dependencies and E902 resource conflicts.
+
+Stage 2 rejects stale board/CPU-grant epochs and malformed typed records
+before watchdog arming. OS admission stamps its private grant copy. Under
+`~/.cache/sunstoneos/build/sd-boot-1031/`, 36 sanitizer/linked session cases,
+40 generic host-record cases, 19 slot-tool cases and connected backup, write,
+readback and restoration checks pass. The three baseline builds pass. The
+monitor occupies 32,368 bytes and leaves 400 bytes before its fixed report.
+The [stage-2 record](../boot/a733/stage2/README.md) describes the checks.
+SDR104 and sustained reads need physical tests. Physical writes, installation,
+autonomous recognition and reset recovery remain unqualified. Installation
+requires real card extents, a verified full backup, write approval and a
+qualified runner.
+
+The [bounded CPU workload](../apps/cpu-runtime-qualification/RELIABILITY.md)
+passes native builds, seven FreeRTOS scheduler-model cases and offline
+return-image preparation. Frozen image hashes and coordinator command forms
+are in `~/.cache/sunstoneos/build/cpu-reliability-1031/README.md`. The first
+reliability launch failed as recorded above. The earlier longer-recognition
+nonreturn has no recovered fault location; the corrected hello control has
+only its own recorded scope. Further trials remain held after the failure.
 
 ## Merged application and failure-record interfaces
 
@@ -214,9 +301,9 @@ normal return with boot clocks. After watchdog reset it waits until DRAM is
 initialized and the next launch normalizes rails. `--no-normalize-rails` and
 `--no-restore-rails` explicitly disable the respective default.
 
-This command does not yet demonstrate a passing hello-compute control.
-The merged REQUEST/FOLLOW correction is host-verified; a new board result
-remains outstanding. Current `gpu-return` is refused because the existing ladder uses the pre-split application layout;
+The corrected hello-compute control returned normally in the recorded 3-1
+run above. Repeated startup and broader reliability remain unqualified.
+Current `gpu-return` is refused because the existing ladder uses the pre-split application layout;
 its runner is `tools/dev-run.py` at `6a714bcf`. NPU development preparation
 also remains unimplemented. `--check-only` reads the board unless `--state FILE`
 supplies a capture; neither mode writes rails.
@@ -230,14 +317,14 @@ reuse. No board run is requested for this documentation change.
 
 ## Open problems and files
 
-- **Early CPU return:** the host-verified return path handles application
-  completion before the clock owner reaches FOLLOW. Physical confirmation
-  after the recorded hello-compute failure remains outstanding.
+- **CPU reliability:** the first reliability launch failed with the CPU clock
+  driver in RETAINED at `return-cpu.c:159`. Another worker owns the defect;
+  repeated startup, sustained work and full restoration remain unqualified.
 - **GPU service:** the latest compatibility stop belongs to the frozen
   unmerged diagnostic. The merged service still has the health-binding,
   vendor-setup, MMUCACHE, page-size and SLC gaps in
   [the reference comparison](reference-backsolve-gpu.md).
-- **NPU and hardware qualification:** current scheduled NPU startup/restart,
+- **NPU and hardware qualification:** repeated NPU start/stop, SDK access and domain OFF/restart,
   sustained CPU load, thermal protection, accelerator concurrency, autonomous
   card boot and accessories remain outstanding in [the hardware matrix](hardware.md).
 - **Known host-check failure:** mimus
@@ -248,7 +335,8 @@ reuse. No board run is requested for this documentation change.
 
 ## Open branches
 
-- `work/tool-gates-1031`: host-tool admission and merged startup fixes; prepared for integration after the listed host checks.
+- `work/board-runner-1031`: returning-image and runner changes; unmerged.
+- `work/gpu-integrate-1031`: GPU integration; unmerged.
 - `work/gpu-ref-fixes-1031`: align the GPU service with the reference sequence; diagnosis and fixes in progress, unmerged.
 - `work/gpu-queue-1031`, with mimus `port/sunstoneos-gpu-queue`: supply a generic GPU compute queue and application port; unmerged.
 

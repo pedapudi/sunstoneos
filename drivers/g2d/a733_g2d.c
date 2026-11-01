@@ -16,6 +16,7 @@
  */
 /* Bounded FreeRTOS RCQ adaptation; source pins: apps/g2d/sources.json. */
 #include "a733_g2d.h"
+#include "a733_range.h"
 #include "g2d_mixer_type.h"
 #include <string.h>
 /* RGB scaling uses the pinned g2d_scal.c coefficient banks unchanged: Lanczos
@@ -187,7 +188,8 @@ static void block(uint8_t *memory,unsigned h,unsigned at,unsigned size,unsigned 
 }
 int a733_g2d_commands(void *memory,size_t capacity,const struct a733_g2d_session *s)
 {
-    if(!memory||(uintptr_t)memory%32||capacity!=4096||!a733_g2d_geometry_valid(s))return 0;
+    if(!memory||(uintptr_t)memory%32||capacity!=4096||
+       a733_ranges_overlap_or_wrap(memory,capacity,s,sizeof(*s))||!a733_g2d_geometry_valid(s))return 0;
     memset(memory,0,capacity);uint8_t *p=memory;
     struct g2d_mixer_ovl_v_reg *v=(void *)(p+128);
     struct g2d_mixer_bld_reg *b=(void *)(p+384);

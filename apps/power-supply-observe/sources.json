@@ -1,0 +1,29 @@
+{
+  "purpose": "Host comparison of PMIC selector tables; no vendor code is linked into the observer.",
+  "sources": {
+    "bootloader": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/sunxi_power/pmu_axp8191.c",
+      "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+      "cache": "u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a/drivers/sunxi_power/pmu_axp8191.c",
+      "sha256": "e6faa518a123c374b8f9148327f5e4aeeb2d89eb2bc3e91dae9a35e06d964c59",
+      "license": "GPL-2.0-or-later",
+      "section": "pmu_axp8191_ctrl_tbl, pmu_axp8191_get_voltage"
+    },
+    "bootloader-registers": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/include/sunxi_power/pmu_axp8191.h",
+      "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+      "cache": "u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a/include/sunxi_power/pmu_axp8191.h",
+      "sha256": "7f8e6b5742b2906da8f448caedbd0de99f0300fa22814515cfed09612f19738f",
+      "license": "GPL-2.0-or-later",
+      "section": "AXP8191_DC8OUT_VOL, AXP8191_DC9OUT_VOL, AXP8191_DCDC_POWER_ON_OFF_CTL1/2"
+    },
+    "linux": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/power/regulator/axp2101-regulator.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "cache": "board-kernel/axp2101-regulator.c",
+      "sha256": "531edf18fe85ae9ccfd09e0693f01e162d579ae1aa6d4071a23485013a61ac2c",
+      "license": "GPL-2.0-or-later",
+      "section": "axp8191_dcdc8_ranges, axp8191_dcdc9_ranges, axp8191_regulators"
+    }
+  }
+}

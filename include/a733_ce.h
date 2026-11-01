@@ -18,7 +18,8 @@ enum a733_ce_profile { A733_CE_TRNG_ONLY, A733_CE_SHA256_ONLY, A733_CE_TRNG_SHA2
  * CTR. Memory, clock and security authority is the same for each method. */
 #define A733_CE_CAP_HASH A733_CE_CAP_SHA256
 #define A733_CE_CAP_AES A733_CE_CAP_AES128
-/* Values are the descriptor HASH SEL field. */
+/* SHA descriptor HASH SEL values. a733_ce_digest_methods.h adds MD5/SM3
+ * and helpers that cover every implemented hash method. */
 enum a733_ce_hash_method { A733_CE_SHA1=1,A733_CE_SHA224=2,A733_CE_SHA256=3,A733_CE_SHA384=4,A733_CE_SHA512=5 };
 /* Compression block, chained state and final digest bytes; zero if invalid.
  * The engine writes the full state of SHA-224 and SHA-384 for intermediate

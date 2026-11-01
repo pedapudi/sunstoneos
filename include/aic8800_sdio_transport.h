@@ -183,7 +183,11 @@ void aic8800_transport_poll(struct aic8800_sdio_transport *);
 /* Borrowed view valid until consume or external disposal. Copy before retaining
  * asynchronous work. Peek works after FAULT; consume refuses in FAULT. Output
  * must not alias transport/card/host, runtime, Wi-Fi worker, receive owner,
- * firmware or immutable blobs. No callbacks or hardware access occur.
+ * firmware or immutable blobs. Peek makes no callbacks or hardware accesses.
+ * Consume observes the existing monotonic counter before and after retirement,
+ * under the reentry guard. An admission failure preserves the held record;
+ * a late completion faults with the already retired state retained. Neither
+ * operation issues a peripheral command or copies the receive buffer.
  */
 int aic8800_transport_peek(const struct aic8800_sdio_transport *, struct aic8800_sdio_response *);
 int aic8800_transport_consume(struct aic8800_sdio_transport *);

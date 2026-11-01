@@ -602,21 +602,40 @@ def npu_check(image, host, finite=None, manifest=None):
             'execution_profile': profile, 'image_sha256': digest(image), 'build_id': build.hex()}
 
 
-def npu_capture(fel):
+def npu_capture(fel, evidence=None):
     """NPU system-register capture under the usual per-port lock; no engine access."""
     helper = load('dev_npu_preparation', ROOT / 'apps/npu-finite/development.py')
     access = load('dev_npu_access', ROOT / 'tools/usb-access.py')
     with access.board_lock() as node:
         access.require_session(node)
         access.require_rom(node)
-        result = subprocess.run([str(fel), '-d', f'{int(node.parent.name)}:{int(node.name)}',
-            *[item for address in helper.WORDS for item in ('readl', hex(address))]],
-            capture_output=True, text=True, timeout=15)
-        require(result.returncode == 0, 'NPU state capture failed: ' + result.stderr.strip())
-        values = [int(value, 16) for value in result.stdout.split()]
-        require(len(values) == len(helper.WORDS), 'NPU state capture word count differs.')
-        return {'identity': access.identity(node), 'port': access.target(node).name,
-                'words': {hex(address): value for address, value in zip(helper.WORDS, values)}}
+        identity, port = access.identity(node), access.target(node).name
+        record = {'identity': identity, 'port': port, 'complete': False}
+        def journal():
+            if evidence is not None:
+                save(evidence / 'capture.json', record)
+        journal()
+        try:
+            result = subprocess.run([str(fel), '-d', f'{int(node.parent.name)}:{int(node.name)}',
+                *[item for address in helper.WORDS for item in ('readl', hex(address))]],
+                capture_output=True, text=True, timeout=15)
+            record.update(exit=result.returncode, stdout=result.stdout, stderr=result.stderr)
+            require(result.returncode == 0, 'NPU state capture failed: ' + result.stderr.strip())
+            values = [int(value, 16) for value in result.stdout.split()]
+            require(len(values) == len(helper.WORDS) and all(0 <= v <= 0xffffffff for v in values),
+                    'NPU state capture words differ.')
+            require(access.identity(node) == identity, 'NPU instance changed during capture.')
+            record['complete'] = True
+            journal()
+            return {'identity': identity, 'port': port,
+                    'words': {hex(address): value for address, value in zip(helper.WORDS, values)}}
+        except BaseException as error:
+            record.update(error=f'{type(error).__name__}: {error}', instance_quarantined=True)
+            try:
+                access.quarantine_instance(node, record['error'], identity)
+            finally:
+                journal()
+            raise
 
 
 def npu_run(args, finite, helper, marker_reader, bundle, live, access=None, guard=None):
@@ -630,7 +649,7 @@ def npu_run(args, finite, helper, marker_reader, bundle, live, access=None, guar
         require({hex(a): value for a, value in zip(helper.WORDS, values)} == live['words'],
                 'NPU system state changed after preparation.')
         return finite.run_once(tx, launch, ready, bundle, prepared, args.evidence, record, journal)
-    return finite.returning.run(args, base=NoHold(finite.base), profile=p['execution_profile'],
+    return finite.returning.run(args, base=finite.base, profile=p['execution_profile'],
         validate_bundle=validate, admit=admit, execute=execute, description='NPU development return',
         watchdog=p['watchdog'], access=access, guard=guard)
 
@@ -657,7 +676,7 @@ def npu_main(args, host):
     try:
         # Validate template geometry before the first optional board read.
         finite.original.session_profile(template.read_bytes(), tuple(facts['session_layout']))
-        live = json.loads(args.state.read_bytes()) if args.state else npu_capture(args.fel)
+        live = json.loads(args.state.read_bytes()) if args.state else npu_capture(args.fel, evidence)
         save(evidence / 'state.json', live)
         bundle = evidence / 'bundle'
         meta = helper.prepare(finite, args.image, manifest, template, live, bundle, CLANG, LLD, args.objcopy)

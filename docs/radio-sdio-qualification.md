@@ -2,7 +2,9 @@
 
 This procedure is for native-driver and board-test maintainers. The four-bit
 25 MHz path is implemented and software-tested. No image or physical result
-currently qualifies it. Normal firmware owners now request that mode. Firmware
+currently qualifies it. The [vendor operating-point audit](radio-sdio-reference.md)
+records the required UHS sequence and a guarded coordinator observation list;
+25 MHz remains an initial qualification mode. Normal firmware owners now request that mode. Firmware
 loading at one bit and 400 kHz needs at least 46.7 seconds of bus time, exceeding
 the supervised bootstrap bounds; see [the firmware budget](board-radio.md).
 

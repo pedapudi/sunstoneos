@@ -84,8 +84,9 @@ int os_audio_client_admit(uint32_t capture_samples);
 #define OS_SESSION_BASE_BYTES (A733_OS_SESSION_BYTES+OS_NPU_SESSION_BYTES)
 #endif
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
-/* With A76 admission, the grant names this boot's epoch. The recorded-card
- * loader stamps a zero-epoch persisted grant together with the board epoch. */
+/* With A76 admission, the decoded grant names this boot's epoch. The loader
+ * requires a zero persisted grant epoch; OS admission stamps its private copy
+ * after the loader stamps the board epoch. */
 #include "a733_cpu_clock.h"
 #define OS_SESSION_BYTES (OS_SESSION_BASE_BYTES+96u)
 #else

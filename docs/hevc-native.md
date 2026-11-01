@@ -8,6 +8,15 @@ run on a board, and host preparation still refuses to produce a launch bundle
 because the physical allocation and page-table evidence it requires does not
 exist yet. There is no numerical or physical decode result.
 
+Initialization requires zeroed controller storage. A second begin refuses
+without changing the live or retained controller, including before acquisition
+publishes a token. Host regression cases preserve the complete controller
+across refused initialization in the nominal and retained-failure paths.
+
+The [offline pixel comparator](../apps/hevc/PIXELS.md) compares saved NV12
+pictures with FFmpeg software decoding. Its host cases validate the comparator
+with CPU-generated copies. They establish no native numerical result.
+
 The A733 manual advertises Main and Main10 decoding at level 5.2, up to
 8192×4352 at 24 fps. The supported mode below is the first useful subset; the
 remaining modes stay required hardware scope.
@@ -227,6 +236,10 @@ memory, electrical and supervision evidence that the admission schema lists.
   IDR then P sequence, error, data request, short CTB count, deadline,
   unsupported identity, copy refusal, flush error and a busy P entry. Every
   failure stays terminal with all leases retained.
+- `checks/hevc-pixel-reference.py` compares both copied NV12 pictures with an
+  independent software decode. `checks/hevc-pixel-reference-host.py` checks
+  equality, altered samples, frame order, extents and tool failures using
+  CPU-generated copies.
 - `checks/hevc-native-access.py` runs the AArch64 build of the lowest native VE
   access functions in Unicorn for every register write recorded by the model
   and for both status reads. It also checks refusal of neighboring offsets,

@@ -49,14 +49,19 @@ cold policy. This interpretation is confined to the recorded-card profile;
 headset and radio profiles retain their existing field meanings. Stage 2
 checks the actual SID before any OS entry or CPU authority publication.
 
-After the cold entry/reset prerequisites pass, stage 2 arms the resident
-watchdog and stamps its fresh counter epoch into the board session. A
-904-byte template also carries the existing CPU grant with epoch zero and
-the same slot generation. Stage 2 stamps that grant's epoch in the same
-operation, then hashes the complete session and publishes the resident
-contract. It rejects a persisted nonzero epoch instead of replaying a RAM
-launch grant. Native OS admission continues to require matching epoch,
-generation, image identity, owners, grant bounds and complete session digest.
+Stage 2 validates typed-session framing and rejects persisted nonzero board
+or CPU-grant epochs before clearing retained results or arming WDT0. An
+active grant names the selected slot generation; an inactive grant keeps
+generation zero. After the cold entry/reset prerequisites pass, the loader
+arms the resident watchdog, stamps the board epoch and hashes the complete
+session into the resident contract. OS admission stamps its private CPU-grant
+copy with that epoch and validates service policy. The persisted grant stays
+unchanged. Native admission still requires matching generation, image identity,
+owners, grant bounds and the complete session digest.
+
+[The focused cold-session check](../../checks/stage2-session.py) covers bounded
+framing, stale epochs and linked refusal before watchdog writes. Its model
+starts after slot loading; it establishes no physical SD transfer or cold boot.
 
 The cold CPU policy is an immutable reviewed record for this board, resident
 image, canonical template, operating-point maxima and transition budget per

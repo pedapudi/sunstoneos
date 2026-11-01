@@ -161,6 +161,8 @@ Cold clock provisioning, production platform authority, startup and entropy
 qualification, interrupt service and physical qualification remain required.
 Provisioning and repeated-request evidence is recorded in [entropy.md](entropy.md).
 Full engine coverage still requires the engine's remaining symmetric modes
-(CTS, OFB, CFB, CBC-MAC, OCB, XTS and its native GCM), DES, 3DES and SM4, MD5
-and SM3, asymmetric algorithms, key ladders and secure-key operations.
+(CTS, OFB, CFB, CBC-MAC, OCB, XTS and its native GCM), DES, 3DES, SM4 and RC4,
+asymmetric algorithms, key ladders and secure-key operations.
+MD5 and SM3 are implemented and host-tested through the retained hash path;
+[the security inventory](security-engines.md) records their evidence and limits.
 The first TRNG command does not satisfy those remaining hardware requirements.

@@ -17,6 +17,9 @@ struct crypto_run {
  * 1 means the private output is complete; publication checks an optional
  * runtime oracle or the diagnostic reference, then current authority. */
 void crypto_run_clear_clients(struct crypto_run *);
+/* USB owns request storage until input_ready is acquired. Only its consumer
+ * may erase the copied request after that publication. */
+void crypto_run_clear_request(struct crypto_run *);
 void crypto_run_clear_secrets(struct crypto_run *);
 int crypto_run_step(struct crypto_run *,uint64_t);
 /* Copy is private until the final eligibility callback and release publication.
