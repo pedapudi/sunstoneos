@@ -87,7 +87,15 @@ def geometry(image):
             'Copied result geometry differs.')
     result.update(application_regions=host.backup_regions(image), output_address=output['address'],
                   output_bytes=output['bytes'])
-    if 'os_thermal_record_end' in linked_symbols(image):
+    symbols = linked_symbols(image)
+    if 'os_cpu_return_rail_uv' in symbols:
+        address, size = symbols['os_cpu_return_rail_uv']
+        low, high = result['cached_writable']
+        require(size == 8 and address % 4 == 0 and low <= address < address + size <= high and
+                symbols['__bss_start'][0] <= address < address + size <= symbols['__bss_end'][0],
+                'CPU rail readback object differs from writable image BSS.')
+        result['cpu_rails'] = {'address': address, 'bytes': size}
+    if 'os_thermal_record_end' in symbols:
         result['thermal'] = thermal_capture.geometry(image)
     watchdog = host.watchdog_marker(image)
     if watchdog is not None:
@@ -121,6 +129,17 @@ def decode_record(copied, p, result, record, evidence):
     (evidence / 'result.bin').write_bytes(payload)
     base.sync_file(evidence / 'result.bin')
     result.update(payload_bytes=len(payload), payload_sha256=hashlib.sha256(payload).hexdigest())
+
+
+def decode_rails(raw):
+    """The clock owner's last confirmed PMIC readbacks; zero means unread.
+
+    These readings precede the external helper's rail normalization. START
+    can close before any inspection and reports both rails as unread.
+    """
+    dcdc5, dcdc3 = struct.unpack('<2I', raw)
+    return {'dcdc5_uv': dcdc5 or None, 'dcdc3_uv': dcdc3 or None,
+            'source': 'last confirmed PMIC readbacks at CPU clock close'}
 
 
 def run_once(tx, launch, ready, bundle, p, evidence, record, journal, *, extents=None, captures=(),
@@ -182,6 +201,8 @@ def run_once(tx, launch, ready, bundle, p, evidence, record, journal, *, extents
     copied = {}
     reads = [('return-report', q['report_address'], cpu.REPORT_BYTES),
              (OUTPUT, q['output_address'], q['output_bytes']), *captures]
+    if 'cpu_rails' in q:
+        reads.append(('cpu-rails', q['cpu_rails']['address'], q['cpu_rails']['bytes']))
     if 'thermal' in q:
         reads.extend(thermal_capture.captures(q['thermal']))
     for name, address, size in reads:
@@ -191,6 +212,9 @@ def run_once(tx, launch, ready, bundle, p, evidence, record, journal, *, extents
         base.sync_file(path)
         copied[name] = path.read_bytes()
     result = decode_report(copied['return-report'], p['epoch'])
+    if 'cpu_rails' in q:
+        result['cpu_rails'] = decode_rails(copied['cpu-rails'])
+        record['cpu_rail_capture_sha256'] = hashlib.sha256(copied['cpu-rails']).hexdigest()
     decode(copied, p, result, record, evidence)
     if 'thermal' in q:
         record['thermal_capture_sha256'] = {name: hashlib.sha256(copied[name]).hexdigest()
