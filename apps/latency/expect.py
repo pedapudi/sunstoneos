@@ -10,7 +10,7 @@ RANGE = {'min': 0, 'max': 0xffffffff}
 BUDGET_US = (50, 25, 25, 25, 25, 25, 100, 250, 250, 1000, 1000)
 
 
-def expectation():
+def expectation(dma=False):
     # workload.h pins sizeof(latency_result)==5440 and the metric/core offsets.
     words = [0] * (5440 // 4)
 
@@ -21,6 +21,8 @@ def expectation():
     u64(8, 24000000)
     u64(16, {'min': 1, 'max': 10000})
     words[6:10] = [255, 0, 0, 1]  # cores, native, no modeled DMA, CPU0 timer.
+    if dma:
+        words[8] = {'min': 2, 'max': 0xffffffff}
     for core in range(8):
         traffic = 40 + core * 32
         u64(traffic, {'min': 2, 'max': 0xffffffff})
@@ -28,9 +30,9 @@ def expectation():
             u64(offset, RANGE, RANGE)
         for metric, budget in enumerate(BUDGET_US):
             base = 320 + core * 640 + metric * 56
-            if metric >= 8 or (metric == 0 and core):
+            if metric >= 8 and not (dma and metric == 8 and core == 0) or (metric == 0 and core):
                 continue  # An unexercised path has no samples or timestamps.
-            count = 64 if metric == 6 else 128 if metric == 7 else {'min': 1, 'max': 0xffffffff}
+            count = 64 if metric == 6 else 128 if metric == 7 else {'min': 2 if metric == 8 else 1, 'max': 0xffffffff}
             u64(base, count)
             u64(base + 8, {'min': 0, 'max': budget * 24})
             u64(base + 16, RANGE, RANGE)
@@ -42,9 +44,10 @@ def expectation():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True)
+    parser.add_argument('--dma', action='store_true')
     args = parser.parse_args()
     with open(args.output, 'x') as stream:
-        json.dump(expectation(), stream, indent=2)
+        json.dump(expectation(args.dma), stream, indent=2)
         stream.write('\n')
 
 

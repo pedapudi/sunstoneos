@@ -128,6 +128,9 @@ int os_session_decode(const void *raw,size_t bytes,struct os_session *out)
 #else
     if(os_session_extent(raw,SS_EXTENT_CPU_GRANT,NULL))return 0;
 #endif
+#ifdef SUNSTONE_A733_OS_DMA
+    if(!extent_copy(raw,SS_EXTENT_DMA,&out->dma,sizeof(out->dma)))return 0;
+#endif
 #ifdef SUNSTONE_A733_OS_USB_JPEG
     size_t jpeg_bytes=0;const struct a733_jpeg_session *jpeg=os_session_extent(raw,SS_EXTENT_JPEG,&jpeg_bytes);
     if(!jpeg||jpeg_bytes!=sizeof(*jpeg)||memcmp(&jpeg->board,&out->board,sizeof(out->board))||

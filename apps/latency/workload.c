@@ -20,7 +20,13 @@ struct load_slot {
 };
 static struct wake_slot wake[LATENCY_CORES];
 static struct load_slot load[LATENCY_CORES];
+#ifdef SUNSTONE_LATENCY_MODEL
 static _Alignas(64) volatile uint64_t memory[LATENCY_CORES][LATENCY_BYTES_PER_CORE / 8];
+#else
+static volatile uint64_t (*memory)[LATENCY_BYTES_PER_CORE / 8];
+void latency_workload_bind(void *buffer)
+{ memory = buffer; }
+#endif
 static StaticTask_t wake_state[LATENCY_CORES], load_state[LATENCY_CORES];
 static StackType_t wake_stack[LATENCY_CORES][1024], load_stack[LATENCY_CORES][1024];
 static TaskHandle_t wake_task[LATENCY_CORES], load_task[LATENCY_CORES];
@@ -28,7 +34,11 @@ static atomic_uint phase, ready_mask, stop_load;
 static TickType_t began;
 
 __attribute__((weak)) void latency_workload_progress(void) {}
-#ifndef SUNSTONE_LATENCY_MODEL
+#if defined(SUNSTONE_LATENCY_DMA)
+static void latency_dma_model_tick(void) {}
+#define latency_dma_model_start latency_dma_native_start
+#define latency_dma_model_stop latency_dma_native_stop
+#elif !defined(SUNSTONE_LATENCY_MODEL)
 static void latency_dma_model_tick(void) {}
 static void latency_dma_model_start(void) {}
 static unsigned latency_dma_model_stop(void) { return 0; }
@@ -103,6 +113,9 @@ static void wake_worker(void *argument)
 static void load_worker(void *argument)
 {
     unsigned c = (unsigned)(uintptr_t)argument;
+#ifndef SUNSTONE_LATENCY_MODEL
+    for (unsigned i = 0; i < LATENCY_BYTES_PER_CORE / 8; ++i) memory[c][i] = 0;
+#endif
     atomic_store_explicit(&load[c].ready, 1, memory_order_release);
     (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     /* Every sweep reads and rewrites every word in a private 1 MiB extent.
@@ -181,7 +194,7 @@ void latency_workload_run(struct latency_result *out)
     atomic_store_explicit(&stop_load, 1, memory_order_release);
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         while (!atomic_load_explicit(&load[c].stopped, memory_order_acquire)) wait_tick();
-    out->modeled_dma_jobs = latency_dma_model_stop();
+    out->dma_jobs = latency_dma_model_stop();
     atomic_store_explicit(&phase, QUIET, memory_order_release);
     atomic_store_explicit(&phase, STOP, memory_order_release);
     for (unsigned c = 0; c < LATENCY_CORES; ++c) xTaskNotifyGive(wake_task[c]);

@@ -20,7 +20,7 @@ static void controller(void *argument)
     platform_puts("DMA model stimulus: continuous 4096-byte jobs; client priority1 and service priority4 on CPU0\n");
     number("frequency=", result.frequency);
     number(" elapsed_ticks=", result.elapsed_ticks);
-    number(" modeled_DMA_jobs=", result.modeled_dma_jobs);
+    number(" modeled_DMA_jobs=", result.dma_jobs);
     platform_puts("\n");
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
         configASSERT(result.core[c].metric[SS_LAT_SCHED_IDLE].count == LATENCY_IDLE_SAMPLES);

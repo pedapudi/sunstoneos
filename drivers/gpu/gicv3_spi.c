@@ -30,3 +30,11 @@ int gicv3_spi_rearm(const struct gicv3_spi *s)
     (void)gicv3_spi_mask(s);
     return -1;
 }
+int gicv3_spi_masked(const struct gicv3_spi *s)
+{
+    if(!valid(s))return -1;
+    /* GICD_CTLR.RWP completes propagation of ICENABLER before verification. */
+    if(*reg(s,0)&(UINT32_C(1)<<31))return 0;
+    __asm__ volatile("dsb sy":::"memory");
+    return (*reg(s,0x100+4*(s->intid/32))&(UINT32_C(1)<<(s->intid%32)))?-1:1;
+}

@@ -27,13 +27,16 @@ elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
   add_sunstone_image(sunstone-a733-os-hello LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION hello-compute)
-elseif(SUNSTONE_APPLICATION STREQUAL "latency")
+elseif(SUNSTONE_APPLICATION MATCHES "^latency(-dma)?$")
   if(NOT SUNSTONE_LATENCY)
     message(FATAL_ERROR "The latency diagnostic requires SUNSTONE_LATENCY=ON")
   endif()
+  if(SUNSTONE_APPLICATION STREQUAL "latency-dma" AND NOT SUNSTONE_A733_OS_DMA)
+    message(FATAL_ERROR "The combined latency diagnostic requires SUNSTONE_A733_OS_DMA=ON")
+  endif()
   include("${SUNSTONE_SOURCE_ROOT}/apps/latency/cmake/application.cmake")
-  add_sunstone_image(sunstone-a733-os-latency LIFETIME ${os_lifetime}
-    SERVICES ${os_services} APPLICATION latency)
+  add_sunstone_image(sunstone-a733-os-${SUNSTONE_APPLICATION} LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION ${SUNSTONE_APPLICATION})
 elseif(SUNSTONE_APPLICATION STREQUAL "queue-add")
   add_sunstone_application(queue-add
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/queue-add/main.c"

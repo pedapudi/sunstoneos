@@ -70,6 +70,12 @@ static int rearm(void *cookie)
     atomic_store_explicit(&irq_enabled, 1, memory_order_release);
     return 1;
 }
+static int retire_mask(void *cookie)
+{
+    configASSERT(cookie == &service);
+    atomic_store_explicit(&irq_enabled, 0, memory_order_release);
+    return 1;
+}
 void latency_dma_model_tick(void)
 {
     if (!atomic_load_explicit(&armed, memory_order_acquire) ||
@@ -125,6 +131,13 @@ static void client(void *argument)
         atomic_fetch_add_explicit(&jobs, 1, memory_order_release);
     }
     configASSERT(exchange(DMA_SERVICE_CLOSE).phase == DMA_SERVICE_CLOSED);
+    configASSERT(exchange(DMA_SERVICE_RETIRE).result == DMA_SERVICE_OK);
+    TickType_t began = xTaskGetTickCount();
+    while (!dma_service_retired(&service)) {
+        configASSERT((TickType_t)(xTaskGetTickCount() - began) < pdMS_TO_TICKS(100));
+        vTaskDelay(1);
+    }
+    configASSERT(!atomic_load_explicit(&irq_enabled, memory_order_acquire));
     atomic_store_explicit(&done, 1, memory_order_release);
     vTaskSuspend(NULL);
     configASSERT(0);
@@ -147,6 +160,7 @@ void latency_dma_model_init(void)
         ss_latency_frequency / 100, &job, 1, &protected, 1, 4, 1));
     struct dma_service_irq irq = {rearm, &service, 4, ss_latency_frequency / 250};
     configASSERT(dma_service_bind_irq(&service, &irq));
+    configASSERT(dma_service_bind_retirement(&service, retire_mask, &service));
     client_task = xTaskCreateStaticAffinitySet(client, "modeled-DMA", 2048, NULL, 1,
         client_stack, &client_state, 1);
     configASSERT(client_task && dma_service_bind(&service, 0, client_task, 1));
@@ -161,7 +175,6 @@ unsigned latency_dma_model_stop(void)
         configASSERT((TickType_t)(xTaskGetTickCount() - began) < pdMS_TO_TICKS(100));
         vTaskDelay(1);
     }
-    vTaskSuspend(service.worker);
     unsigned count = atomic_load_explicit(&jobs, memory_order_acquire);
     configASSERT(count >= 2);
     return count;
