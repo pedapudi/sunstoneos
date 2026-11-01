@@ -69,7 +69,7 @@ def scheduling_source(source, mutation=None):
     # A single turn preserves every scheduling statement and continue path.
     # The modeled empty receive cannot reach client request processing.
     turn = worker.split(begin, 1)[1].split(end, 1)[0]
-    code = '\n\n'.join(function(n) for n in ('sample', 'progress', 'submitting', 'step', 'burst'))
+    code = '\n\n'.join(function(n) for n in ('sample', 'progress', 'submitting', 'step_locked', 'step', 'burst'))
     code += '\nstatic void frame_worker_turn(struct pvr_gpu_service *s)\n{\n    do {\n' + turn + '        fail(29);\n    } while (0);\n}\n'
     mutations = {
         'burst-overrun': ('now - *start < PVR_GPU_SERVICE_BURST_US', 'now - *start < 1000000u'),

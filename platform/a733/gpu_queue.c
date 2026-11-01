@@ -78,6 +78,7 @@ struct pvr_compute_queue *a733_gpu_queue_prepare(struct a733_gpu_queue *s, struc
     struct pvr_compute_queue *q = &s->component;
     q->owner = s;
     q->job_cpu = (unsigned char *)s->payload_extent.cpu;
+    q->job_gpu = JOB_GPU;
     for (unsigned i = 0; i < PVR_COMPUTE_QUEUE_OBJECTS; ++i) {
         q->firmware[i] = child(s->firmware_extent, i * PAGE, PAGE, s->firmware_pages + i);
         q->firmware_address[i] = 0xc0800000u + i * 0x10000u;
@@ -95,7 +96,8 @@ static int build_context(struct a733_gpu_queue *s)
         contexts[i] = (struct pvr_compute_buffer){s->component.firmware[i].storage.cpu, context_bytes[i],
                                                 s->component.firmware_address[i]};
     if (!pvr_compute_programs_build(&s->programs, &s->program_result)) return 0;
-    struct pvr_compute_config c = {.bvnc=PVR_FW_A733_BVNC, .priority=1, .context_id=1, .owner_id=s->owner};
+    static const unsigned priority[]={1,0,2};
+    struct pvr_compute_config c = {.bvnc=PVR_FW_A733_BVNC, .priority=priority[s->component.priority], .context_id=1, .owner_id=s->owner};
     memcpy(c.switch_registers, s->program_result.switch_registers, sizeof(c.switch_registers));
     if (!pvr_compute_context_build(&c, contexts)) return 0;
     s->component.resume = s->program_result.cdm_resume_address;
@@ -105,8 +107,17 @@ static int build_context(struct a733_gpu_queue *s)
 int a733_gpu_queue_create(struct a733_gpu_queue *s, const struct gpu_queue_context_config *c)
 {
     if (!s || s->stage != BOUND || s->component.phase != PVR_COMPUTE_QUEUE_BOUND || !c ||
-        !c->lease_count || c->lease_count > GPU_QUEUE_LEASES || c->reserved) return 0;
+        !c->lease_count || c->lease_count > GPU_QUEUE_LEASES || c->reserved || c->priority>GPU_QUEUE_PRIORITY_HIGH ||
+        c->payload_cache>GPU_QUEUE_PAYLOAD_UNCACHED || (c->payload_cache && !s->component.service->config.job_irq_ack)) return 0;
     struct pvr_compute_queue *q = &s->component;
+    q->priority=c->priority;
+    q->payload_cache=c->payload_cache;
+    if (q->payload_cache==GPU_QUEUE_PAYLOAD_UNCACHED) {
+        /* The first NC cache line belongs only to the firmware timeline.
+         * Four retained 512-byte job slots fit after it in the same page. */
+        q->job_cpu=(unsigned char *)q->firmware[5].storage.cpu+64;
+        q->job_gpu=JOB_GPU+64;
+    }
     unsigned count = 0;
     for (unsigned i = 0; i < c->lease_count; ++i) {
         const struct gpu_queue_lease_request *r = &c->lease[i];
@@ -154,11 +165,11 @@ int a733_gpu_queue_create(struct a733_gpu_queue *s, const struct gpu_queue_conte
     for (unsigned i=0; i<5; ++i)
         p->excluded[i]=(struct pvr_compute_program_span){q->firmware[i].storage.cpu,context_bytes[i],q->firmware_address[i]};
     unsigned char *payload=(unsigned char *)s->payload_extent.cpu;
-    p->excluded[5]=(struct pvr_compute_program_span){payload,PAGE,JOB_GPU};
+    p->excluded[5]=(struct pvr_compute_program_span){q->payload_cache?q->firmware[5].storage.cpu:payload,PAGE,JOB_GPU};
     p->excluded[6]=(struct pvr_compute_program_span){payload+PAGE,2*PAGE,PROGRAM_GPU};
     for (unsigned i=0; i<3; ++i)
         s->maps[count++]=(struct pvr_gpu_mapping){i ? PROGRAM_GPU+(i-1)*PAGE : JOB_GPU,
-            s->payload_extent.physical+i*PAGE,PAGE,12,
+            !i && q->payload_cache?q->firmware[5].pages[0]:s->payload_extent.physical+i*PAGE,PAGE,12,
             PVR_GPU_VM_READ_ONLY | (i ? 0 : PVR_GPU_VM_SLC_BYPASS)};
     size_t off=3*PAGE;
     for (unsigned i=0; i<PVR_PROGRAM_REGIONS; ++i) {

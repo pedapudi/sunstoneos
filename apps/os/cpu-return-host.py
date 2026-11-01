@@ -27,6 +27,7 @@ spec.loader.exec_module(host)
 require = host.require
 thermal_capture = host.module('return_host_thermal', ROOT / 'apps/os/cpu-return-thermal.py')
 gpu_capture = host.module('return_host_gpu', ROOT / 'apps/os/gpu-return.py')
+npu_capture = host.module('return_host_npu', ROOT / 'apps/os/npu-report.py')
 cpu = host.module('return_host_qualification', ROOT / 'apps/cpu-runtime-qualification/host.py')
 base, digest = cpu.base, cpu.digest
 PROFILE = 'os-cpu-return-v1'
@@ -96,6 +97,25 @@ def geometry(image):
                 symbols['__bss_start'][0] <= address < address + size <= symbols['__bss_end'][0],
                 'CPU rail readback object differs from writable image BSS.')
         result['cpu_rails'] = {'address': address, 'bytes': size}
+    pool_names = ('__os_npu_pool_start', '__os_npu_pool_end')
+    present = [name in symbols for name in pool_names]
+    require(present[0] == present[1], 'Partial NPU pool geometry.')
+    if all(present):
+        low, high = [symbols[name][0] for name in pool_names]
+        require((low, high) == (0x47400000, 0x47c00000), 'NPU pool extent differs.')
+        manifest = host.image_manifest(image)['manifest']
+        for region in manifest['regions'] if manifest else []:
+            a, n = region['address'], region['bytes']
+            require(a + n <= low or a >= high, 'Application region overlaps the NPU pool.')
+        require('os_npu_published_report' in symbols, 'NPU stop producer absent.')
+        address, size = symbols['os_npu_published_report']
+        begin, end = result['cached_writable']
+        require(size == npu_capture.REPORT_BYTES and begin <= address < address + size <= end,
+                'NPU stop report outside preserved image RAM.')
+        result['npu_pool'] = {'address': low, 'bytes': high-low}
+        result['npu_stop'] = {'address': address, 'bytes': size}
+    else:
+        require('os_npu_published_report' not in symbols, 'NPU stop producer without owned pool.')
     thermal_producers = [name in symbols for name in ('os_thermal_record_begin', 'os_thermal_record_end')]
     require(thermal_producers[0] == thermal_producers[1], 'Partial thermal producer presence.')
     if all(thermal_producers):
@@ -125,6 +145,28 @@ def decode_report(raw, epoch):
                 (request, ack, off) == ((epoch,) * 3 if i else (0, 0, 0)),
                 f'CPU {i} normal shutdown incomplete.')
     return {'epoch': epoch, 'state': state, 'secondaries_off': 7}
+
+
+def decode_npu_stop(raw, epoch, generation):
+    """Mandatory native local-stop publication; application output is separate."""
+    require(len(raw) == npu_capture.REPORT_BYTES, 'Incomplete native NPU stop report.')
+    report = dict(zip(npu_capture.FIELDS, struct.unpack_from(npu_capture.LAYOUT, raw)))
+    require((report['magic'], report['version'], report['bytes'], report['epoch'], report['generation']) ==
+            (npu_capture.MAGIC, 1, npu_capture.REPORT_BYTES, epoch, generation),
+            'Native NPU stop layout or session differs.')
+    require((report['finished'], report['stopped'], report['retained']) == (1, 1, 0),
+            'Native NPU local stop incomplete or faulted.')
+    # Functional mismatch/refusal does not revoke local quiescence. Its copied
+    # operands survive restoration and are classified by the application.
+    return {key: report[key] for key in ('finished', 'stopped', 'retained', 'mismatches', 'refused', 'jobs', 'jobs_selected')}
+
+
+def mandatory_return(copied, qualification, epoch, generation):
+    """Validate CPU and optional NPU retirement before restoring saved RAM."""
+    result = decode_report(copied['return-report'], epoch)
+    if 'npu_stop' in qualification:
+        result['npu_stop'] = decode_npu_stop(copied['npu-stop'], epoch, generation)
+    return result
 
 
 def decode_record(copied, p, result, record, evidence):
@@ -169,6 +211,10 @@ def run_once(tx, launch, ready, bundle, p, evidence, record, journal, *, extents
     # SRAM; only these copied DRAM bytes may be restored after native return.
     if extents is None:
         extents = [(r['address'], r['bytes']) for r in q['application_regions']]
+    if 'npu_pool' in q:
+        pool = q['npu_pool']
+        require(pool == {'address': 0x47400000, 'bytes': 0x800000}, 'NPU backup extent differs.')
+        extents = [*extents, (pool['address'], pool['bytes'])]
     extents = [IMAGE_RAM, *extents] + [(item['address'], item['bytes']) for item in p['_inputs']]
     backups = []
     record.update(dirty=True, dram_restored=False, cpu_rail_restoration_pending=True)
@@ -208,6 +254,8 @@ def run_once(tx, launch, ready, bundle, p, evidence, record, journal, *, extents
     copied = {}
     reads = [('return-report', q['report_address'], cpu.REPORT_BYTES),
              (OUTPUT, q['output_address'], q['output_bytes']), *captures]
+    if 'npu_stop' in q:
+        reads.append(('npu-stop', q['npu_stop']['address'], q['npu_stop']['bytes']))
     if 'cpu_rails' in q:
         reads.append(('cpu-rails', q['cpu_rails']['address'], q['cpu_rails']['bytes']))
     if 'gpu_receipt' in q:
@@ -220,7 +268,7 @@ def run_once(tx, launch, ready, bundle, p, evidence, record, journal, *, extents
         require(path.stat().st_size == size, 'Incomplete copied CPU return output.')
         base.sync_file(path)
         copied[name] = path.read_bytes()
-    result = decode_report(copied['return-report'], p['epoch'])
+    result = mandatory_return(copied, q, p['epoch'], p['generation'])
     if 'cpu_rails' in q:
         result['cpu_rails'] = decode_rails(copied['cpu-rails'])
         record['cpu_rail_capture_sha256'] = hashlib.sha256(copied['cpu-rails']).hexdigest()

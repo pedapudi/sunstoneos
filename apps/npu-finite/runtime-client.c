@@ -68,6 +68,27 @@ static _Noreturn void retained_at(unsigned reason,uint32_t site,const void *call
     platform_panic("NPU client retained",reason);
 }
 #define retained(reason) retained_at((reason),SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
+#ifdef SUNSTONE_NPU_SUSTAINED
+/* Only failing predicates emit measurements; the generic retained record
+ * follows, and the existing first-failure SVC preserves this original site. */
+#define sustained_fail(stage,job,observed) do { \
+    const uint64_t measured_=(observed); \
+    const unsigned high_=measured_>UINT32_MAX; \
+    sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU) | SUNSTONE_CRUMB_NPU_MEASUREMENT | \
+        (high_?SUNSTONE_CRUMB_NPU_MEASUREMENT_HIGH_WORD:0) | \
+        ((uint32_t)((stage)-23)<<24) | ((uint32_t)(job)<<16), \
+        (uint32_t)(measured_>>(high_?32:0)),SUNSTONE_CRUMB_HERE()); \
+    retained(stage); \
+} while(0)
+static inline void sustained_live(unsigned stage,unsigned job)
+{
+    const unsigned failed=atomic_load_explicit(&a733_npu_application_failed,memory_order_acquire);
+    if(failed)sustained_fail(stage,job,failed);
+    const uint64_t now=a733_smp_counter();
+    if(now>=a733_observe_identity.deadline)sustained_fail(stage,job,now-a733_observe_identity.deadline);
+}
+#endif
+
 int npu_startup_return_ready(void)
 {
     const struct npu_runtime *rt=runtime;
@@ -115,7 +136,7 @@ static void npu_runtime_client(void *unused)
     struct storage_digest digest;
     storage_digest_init(&digest);
     __asm__ volatile("mrs %0,cntfrq_el0":"=r"(sustained_frequency));
-    if(sustained_frequency!=24000000)retained(23);
+    if(sustained_frequency!=24000000)sustained_fail(23,255,sustained_frequency);
     platform_puts("NPU_STAGE=SUSTAINED\n");
     for(unsigned job=0;job<NPU_STARTUP_JOBS;++job) {
         const unsigned n=job%NPU_FINITE_NETWORKS;
@@ -130,7 +151,7 @@ static void npu_runtime_client(void *unused)
         memset(outputs[n],0,w->reference_bytes);
         /* Model index n: the runtime was prepared with the networks in order. */
 #ifdef SUNSTONE_NPU_SUSTAINED
-        if(!live())retained(24);
+        sustained_live(24,job);
         job_ticks[job][0]=a733_smp_counter();
         if(!job)sustained_start=job_ticks[job][0];
 #endif
@@ -140,9 +161,9 @@ static void npu_runtime_client(void *unused)
         if(result!=1 || !live())retained(12+n);
         /* Qualification budget: complete the entire helper API in one second,
          * including LOAD and copies, within the existing global 20 s bound. */
-        if(job_ticks[job][1]<=job_ticks[job][0] ||
-           job_ticks[job][1]-job_ticks[job][0]>sustained_frequency)retained(25);
         const uint64_t duration=job_ticks[job][1]-job_ticks[job][0];
+        if(job_ticks[job][1]<=job_ticks[job][0])sustained_fail(25,job,duration);
+        if(duration>sustained_frequency)sustained_fail(25,job,duration);
         if(duration>sustained_max)sustained_max=duration;
 #else
         if(npu_job_run(n,w->input,w->input_bytes,outputs[n],w->reference_bytes,1000000)!=1 || !live())retained(12+n);
@@ -158,15 +179,18 @@ static void npu_runtime_client(void *unused)
             }
         }
         unsigned char one[32];storage_digest_bytes(outputs[n],w->reference_bytes,one);
-        if(!storage_digest_add(&digest,one,sizeof one))retained(26);
-        if(!live())retained(27);
+        if(!storage_digest_add(&digest,one,sizeof one))sustained_fail(26,job,digest.bytes);
+        sustained_live(27,job);
 #endif
     }
 #ifdef SUNSTONE_NPU_SUSTAINED
     sustained_end=a733_smp_counter();
     storage_digest_end(&digest,output_digest);
-    if(checked!=NPU_STARTUP_JOBS || runtime->counters.jobs!=NPU_STARTUP_JOBS ||
-       model_jobs[0]!=100 || model_jobs[1]!=100 || !live())retained(28);
+    if(checked!=NPU_STARTUP_JOBS)sustained_fail(28,255,checked);
+    if(runtime->counters.jobs!=NPU_STARTUP_JOBS)sustained_fail(28,255,runtime->counters.jobs);
+    if(model_jobs[0]!=100)sustained_fail(28,255,model_jobs[0]);
+    if(model_jobs[1]!=100)sustained_fail(28,255,model_jobs[1]);
+    sustained_live(28,255);
 #endif
     if(npu_service_irq_completions(&runtime->service)!=1+NPU_STARTUP_JOBS)retained(22);
     const unsigned status=mismatch?1:0;

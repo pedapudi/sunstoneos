@@ -38,7 +38,10 @@ int main(void)
     assert(!ss_npu_service_bind_event(NULL,&requests));
     assert(ss_npu_service_bind_event(notify,&requests));
     assert(!ss_npu_service_bind_event(notify,&requests));
-    const struct ss_npu_backend backend={run,close_backend};
+    const struct ss_npu_model models[]={
+        {"m0",1,1,4,4},{"m1",1,1,4,4},{"m2",1,1,4,4},{"m3",1,1,4,4},
+        {"m4",1,1,4,4},{"m5",1,1,4,4},{"m6",1,1,4,4},{"m7",1,1,4,4}};
+    const struct ss_npu_backend backend={run,close_backend,models,8};
     assert(ss_npu_service_bind(&backend));assert(!ss_npu_service_bind_event(notify,&requests));
     /* Publication precedes the owner's wait: its event must remain pending. */
     assert(ss_npu_run(7,input,4,output,4,100)==0);

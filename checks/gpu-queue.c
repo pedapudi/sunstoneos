@@ -69,6 +69,10 @@ static atomic_uint peer_release,peer_submitted,peer_finished;
 static unsigned reset_readbacks, fault_records;
 static const struct gicv3_spi spi = {0x08000000, 95};
 #define GICD 0x08000000u
+static int fast_kick(void *,unsigned,unsigned,unsigned char *);
+static void fast_model(void *);
+static void fast_cases(unsigned);
+static void fast_peer(void);
 
 /* GPU and firmware model state. */
 static uint32_t kicked, run, gpu_status, irq_count, hook_wakes, kick_step_count;
@@ -203,6 +207,15 @@ static int irq_read(void *ctx, uint32_t off, uint32_t *out)
 }
 static int irq_write(void *ctx, uint32_t off, uint32_t value)
 { callback(ctx); configASSERT(off == 0x8b0 && value == 1); set(&gpu_status, 0); return 1; }
+static int job_irq_ack(void *ctx)
+{ configASSERT(ctx==&config); set(&gpu_status,0); __asm__ volatile("dsb sy" ::: "memory"); return 1; }
+static int job_now(void *ctx,uint64_t *out)
+{ configASSERT(ctx==&config);*out=now_us();return 1; }
+static int job_kick(void *ctx)
+{
+    unsigned slot=((uint32_t)word(resource(0),4)-1)&127;
+    return fast_kick(ctx,0xb00,0,resource(1)+slot*88);
+}
 static int event(void *ctx, const unsigned char command[88]) { (void)ctx; (void)command; return 0; }
 void fixture_gpu_irq(void)
 {
@@ -221,6 +234,7 @@ static int kick(void *ctx, uint32_t off, uint32_t value)
 {
     unsigned next = (unsigned)word(resource(0), 4), slot = (next - 1) & 127;
     unsigned char *command = resource(1) + slot * 88;
+    if (gpu_queue_case>=54 && word(command,4)==(PVR_CCB_MAGIC|101u)) return fast_kick(ctx,off,value,command);
 #ifdef SUNSTONE_A733_OS_PERF
     if(perf_kick(ctx,next,slot,command))return 1;
 #endif
@@ -260,6 +274,7 @@ static const int8_t *weights_cpu(uint64_t gpu)
 { return (const int8_t *)(uintptr_t)gpu; }
 static void model(void *unused)
 {
+    if (gpu_queue_case>=54) fast_model(unused);
     (void)unused;
     for (;;) {
         while (__atomic_load_n(&kicked, __ATOMIC_ACQUIRE) == run) {}
@@ -392,6 +407,7 @@ static int sums_equal(unsigned job, uint32_t sequence)
 }
 static void shared_peer(void *unused)
 {
+    if (gpu_queue_case==59) fast_peer();
     (void)unused;
     while (!atomic_load(&peer_release)) vTaskDelay(1);
     struct gpu_queue_context handle;
@@ -545,12 +561,15 @@ static void pool_pages(unsigned *wb, unsigned *nc)
  * Every maintenance call on the output region must clean and invalidate:
  * DC IVAC is checked as a write and faults on the image's read-only view.
  * Case 12 makes the first such call of a job fail once. */
-uint64_t cache_calls, cache_lines, translations, output_cache_calls;
+uint64_t cache_calls, cache_lines, translations, output_cache_calls, payload_cache_calls, dirty_input_cache_calls;
 uint32_t ring_polls, fail_output_cache;
 int __real_aarch64_device_cache(enum aarch64_cache_op, uintptr_t, size_t);
 int __wrap_aarch64_device_cache(enum aarch64_cache_op op, uintptr_t address, size_t bytes)
 {
     ++cache_calls; cache_lines += (bytes + 63) / 64;
+    if (compute && compute->job_cpu && address<(uintptr_t)compute->job_cpu+PVR_COMPUTE_FAST_DEPTH*PVR_COMPUTE_FAST_STRIDE &&
+        address+bytes>(uintptr_t)compute->job_cpu) ++payload_cache_calls;
+    if (address>=FIXTURE_INPUT && address<FIXTURE_INPUT+(12u<<20)) ++dirty_input_cache_calls;
     if (fail_reopen_cache && service.epoch == 2) { fail_reopen_cache = 0; return 0; }
     if (address < FIXTURE_OUTPUT + FIXTURE_OUTPUT_BYTES && address + bytes > FIXTURE_OUTPUT) {
         configASSERT(op == AARCH64_CACHE_CLEAN_INVALIDATE && address >= FIXTURE_OUTPUT &&
@@ -712,6 +731,9 @@ static void client(void *unused)
     const unsigned c = gpu_queue_case;
     uint64_t lines0 = cache_lines, translations0 = translations;
     struct gpu_queue_context_config creation={.job_us=(c>=41&&c<=49)||c==52?200000:1000000,.program=&program,.lease_count=4};
+    if (c==55) creation.priority=GPU_QUEUE_PRIORITY_HIGH;
+    if (c==56) creation.job_us=2000;
+    if (c==62) creation.payload_cache=GPU_QUEUE_PAYLOAD_UNCACHED;
     for(unsigned i=0;i<4;++i)creation.lease[i].region=i;
     struct gpu_queue_lease_info leases[GPU_QUEUE_LEASES];
     struct gpu_queue_program boundary;
@@ -742,6 +764,43 @@ static void client(void *unused)
     struct pvr_gpu_service_reply reply;
     configASSERT(compute->phase==PVR_COMPUTE_QUEUE_READY && service.phase==PVR_GPU_SERVICE_READY &&
         session.vm.phase==A733_GPU_VM_MEMORY_PUBLISHED);
+    if (c>=54) fast_cases(c);
+    if (c==53) {
+        while (service.irq_masked) vTaskDelay(1);
+        vTaskSuspend(service.worker);
+        service.config.job_irq_ack=job_irq_ack;
+        service.config.job_now=job_now;
+        pvr_compute_fast_ready(compute);
+        /* A coalesced completion published before the waiter blocks must
+         * leave a direct notification pending without running the worker. */
+        atomic_store(&compute->fast.submitted,4);
+        atomic_store(&compute->fast.waiter[0],3);
+        put(compute->firmware[5].storage.cpu,4,4);
+        set(&gpu_status,1);
+        *(volatile uint32_t *)(uintptr_t)(GICD+0x200+4*(95/32))=1u<<(95%32);
+        __asm__ volatile("dsb sy" ::: "memory");
+        configASSERT(ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,portMAX_DELAY)==1);
+        configASSERT(atomic_load(&compute->fast.completed)==4 && !atomic_load(&compute->fast.waiter[0]) &&
+            !service.irq_masked && !uxQueueMessagesWaiting(service.requests));
+        /* Clear stale notifications before registration; a fence already
+         * acquired by the ISR is then observed without blocking. */
+        xTaskNotifyGiveIndexed(xTaskGetCurrentTaskHandle(),PVR_COMPUTE_FAST_NOTIFY);
+        configASSERT(ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,0)==1);
+        atomic_store(&compute->fast.waiter[0],4);
+        configASSERT(atomic_load_explicit(&compute->fast.completed,memory_order_acquire)>=4);
+        atomic_store(&compute->fast.waiter[0],0);
+        /* A timeline outside published work retains its actual inputs. */
+        put(compute->firmware[5].storage.cpu,4,5);
+        set(&gpu_status,1);
+        *(volatile uint32_t *)(uintptr_t)(GICD+0x200+4*(95/32))=1u<<(95%32);
+        __asm__ volatile("dsb sy" ::: "memory");
+        while (!atomic_load(&compute->fast.irq_error)) taskYIELD();
+        configASSERT(compute->fast.fault_observed==5 && compute->fast.fault_submitted==4 &&
+            atomic_load(&compute->fast.completed)==4);
+        platform_puts("PASS GPU queue case ");platform_hex(c);
+        platform_puts("; direct ISR fences, coalesced completion, stale notification and fault origin\n");
+        platform_exit(0);
+    }
     configASSERT(get(&mmu_flushes)==1 && service.flush.phase==PVR_GPU_FLUSH_COMPLETE &&
         service.flush.executed_after!=service.flush.executed_before);
     shared_mapping_flags();
@@ -1024,6 +1083,8 @@ void fixture_unused(void)
 { (void)firmware_fixture_owner; (void)firmware_fixture_event; (void)firmware_fixture_irq_read;
   (void)firmware_fixture_irq_write; (void)peer; (void)supervisor; }
 
+#include "gpu-fast.inc"
+
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
@@ -1032,7 +1093,7 @@ void kernel_main(void)
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
     ss_latency_init(frequency);
 #endif
-    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 52);
+    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 68);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (gpu_queue_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();
@@ -1067,6 +1128,8 @@ void kernel_main(void)
     config.stop = (struct pvr_gpu_stop_ops){boundary_now, read_reg, write_reg, sync_write, sync_read, isolate, NULL};
     config.enable = enable; config.context = &config; config.compute_mode = mode;
     config.irq = (struct pvr_gpu_service_irq_ops){mask, rearm};
+    if (gpu_queue_case>=54) {config.job_irq_ack=job_irq_ack;config.job_now=job_now;}
+    if (gpu_queue_case>=63) config.job_kick=job_kick;
     if(gpu_queue_case>=41) {
         config.recovery_begin=recovery_admit;
         config.stop.read=recovery_read;config.stop.isolate=recovery_isolate;
@@ -1086,7 +1149,7 @@ void kernel_main(void)
     TaskHandle_t a = xTaskCreateStaticAffinitySet(client, "client", 4096, NULL, 3, queue_stacks[0], &queue_tasks[0], 1);
     TaskHandle_t m = xTaskCreateStaticAffinitySet(model, "model", 4096, NULL, 6, queue_stacks[1], &queue_tasks[1], 2);
     configASSERT(a && m && pvr_gpu_service_bind(&service, 0, a));
-    if(gpu_queue_case>=40) {
+    if(gpu_queue_case>=40 && gpu_queue_case!=68) {
         TaskHandle_t peer=xTaskCreateStaticAffinitySet(shared_peer,"peer",4096,NULL,3,queue_stacks[2],&queue_tasks[2],1);
         configASSERT(peer && pvr_compute_queue_client_register(compute,peer));
     }

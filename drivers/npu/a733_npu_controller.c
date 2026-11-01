@@ -26,6 +26,22 @@
 /* Register sequences adapted from the pinned VIPLite 2 hardware/device code.
  * The native state machine owns bounded polling and retains resources on fault. */
 #include "a733_npu_controller.h"
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+#include "sunstone_crumb.h"
+static void diagnostic_timeout_note(struct a733_npu_controller *c,uint64_t elapsed,
+    uint32_t site,const void *where)
+{
+    c->diagnostic_elapsed=elapsed;
+    site|=SUNSTONE_CRUMB_NPU_CANCEL|(3u<<23)|((uint32_t)(c->diagnostic_ticket&127)<<16);
+    uint32_t value=(uint32_t)elapsed;
+    if(elapsed>UINT32_MAX){site|=SUNSTONE_CRUMB_NPU_CANCEL_HIGH_WORD;value=(uint32_t)(elapsed>>32);}
+    sunstone_crumb_fail(site,value,where);
+    (void)site;(void)where;
+}
+#define DIAGNOSTIC_TIMEOUT(c,value) diagnostic_timeout_note((c),(value),SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
+#else
+#define DIAGNOSTIC_TIMEOUT(c,value) ((void)0)
+#endif
 
 #define IDLE_ALL UINT32_C(0x7fffffff)
 #define EVENT_DONE 1u
@@ -189,8 +205,10 @@ int a733_npu_cancel(struct a733_npu_controller *c, uint64_t timeout)
     /* The source holds cancel for 100 us after asserting it. Preserve the
      * original hard timeout while measuring that minimum after the write. */
     c->cancel_asserted_us=c->ops.microseconds(c->cookie);
-    if(c->cancel_asserted_us-c->cancel_start>=c->cancel_timeout)
+    if(c->cancel_asserted_us-c->cancel_start>=c->cancel_timeout) {
+        DIAGNOSTIC_TIMEOUT(c,c->cancel_asserted_us-c->cancel_start);
         return fail(c,A733_NPU_TIMEOUT);
+    }
     return 1;
 }
 
@@ -200,7 +218,9 @@ enum a733_npu_state a733_npu_check_timeout(struct a733_npu_controller *c)
     int canceled=c->state==A733_NPU_CANCEL_ASSERTED || c->state==A733_NPU_CANCEL_WAIT;
     if(canceled || c->state==A733_NPU_BOOTING || c->state==A733_NPU_RUNNING) {
         uint64_t elapsed=c->ops.microseconds(c->cookie)-(canceled?c->cancel_start:c->start);
-        if(elapsed >= (canceled?c->cancel_timeout:c->timeout))fail(c,A733_NPU_TIMEOUT);
+        if(elapsed >= (canceled?c->cancel_timeout:c->timeout)) {
+            DIAGNOSTIC_TIMEOUT(c,elapsed);fail(c,A733_NPU_TIMEOUT);
+        }
     }
     return c->state;
 }
@@ -222,6 +242,7 @@ enum a733_npu_state a733_npu_advance(struct a733_npu_controller *c, int sample_e
     uint64_t sampled = c->ops.microseconds(c->cookie);
     uint64_t elapsed = sampled - (canceled ? c->cancel_start : c->start);
     if (elapsed >= (canceled ? c->cancel_timeout : c->timeout)) {
+        DIAGNOSTIC_TIMEOUT(c,elapsed);
         fail(c, A733_NPU_TIMEOUT); return c->state;
     }
     /* The configuration is checked at open and at close

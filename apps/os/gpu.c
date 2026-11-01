@@ -656,6 +656,12 @@ int pvr_compute_queue_runtime_sync(void)
     if(!gpu.opened&&!gpu.parked)return gpu.failed?-1:1;
     return os_gpu_queue_thermal();
 }
+int pvr_compute_queue_runtime_admit(void)
+{
+    if (!gpu.started || atomic_load(&gpu.manual_closed) || atomic_load(&gpu.retired)) return 0;
+    if (atomic_load(&gpu.failed) || atomic_load(&board.fatal) || !board_live(NULL)) return -1;
+    return atomic_load(&gpu.opened) && !atomic_load(&gpu.component->recovering) && !os_thermal_throttled();
+}
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
 int os_gpu_retire(void)
 {

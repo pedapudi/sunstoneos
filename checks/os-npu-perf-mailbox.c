@@ -11,6 +11,11 @@ static int action_result;
 static jmp_buf finished;
 int board_live(void *v){assert(!v);return (int)model_live;}
 void board_fail(void *v){assert(!v);++failures;model_live=0;}
+void board_fail_note(uint32_t site,uint32_t value,const void *caller)
+{(void)site;(void)value;(void)caller;}
+void board_fail_at(uint32_t site,uint32_t value,const void *caller)
+{board_fail_note(site,value,caller);board_fail(NULL);}
+uint32_t board_live_refusal(void){return model_live?0:UINT32_C(1)<<28;}
 int a733_counter_clock_now(void *v,uint64_t *out)
 {assert(v==&providers.shared.counter);*out=model_now;return 1;}
 BaseType_t xTaskGenericNotify(TaskHandle_t task,UBaseType_t index,uint32_t value,eNotifyAction action,uint32_t *previous)

@@ -51,6 +51,9 @@ struct a733_npu_controller {
     enum a733_npu_fault fault;
     uint32_t irq_seen, last_idle, chip_model, chip_revision, chip_product, chip_date;
     unsigned bootstrap;
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+    uint64_t diagnostic_ticket, diagnostic_elapsed;
+#endif
 };
 
 /* Privileged, single-owner controller core. Zero-initialize once. The platform
