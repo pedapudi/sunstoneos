@@ -1,16 +1,15 @@
 --- portmacro.h
 +++ portmacro.h
-@@ -142,10 +142,54 @@
+@@ -142,10 +142,38 @@
      extern void vInterruptCore( uint32_t ulInterruptID, uint8_t ucCoreID );
  #endif /* if !defined(__ASSEMBLER__) */
  
 +#if ( configNUMBER_OF_CORES == 1 )
  /* Use SVC so this is safe from EL0. EL1 sites in the port use direct MSR. */
 -#define portDISABLE_INTERRUPTS() __asm volatile ( "SVC %0" : : "i" ( portSVC_DISABLE_INTERRUPTS ) : "memory" )
--
--#define portENABLE_INTERRUPTS()  __asm volatile ( "SVC %0" : : "i" ( portSVC_ENABLE_INTERRUPTS ) : "memory" )
 +    #define portDISABLE_INTERRUPTS() __asm volatile ( "SVC %0" : : "i" ( portSVC_DISABLE_INTERRUPTS ) : "memory" )
-+
+ 
+-#define portENABLE_INTERRUPTS()  __asm volatile ( "SVC %0" : : "i" ( portSVC_ENABLE_INTERRUPTS ) : "memory" )
 +    #define portENABLE_INTERRUPTS()  __asm volatile ( "SVC %0" : : "i" ( portSVC_ENABLE_INTERRUPTS ) : "memory" )
 +#else
 +
@@ -36,29 +35,13 @@
 +                         "2:                         \n"                                    \
 +                         : "=&r" ( ullTaskRegister ) : "i" ( ulMask ), "i" ( ulSvc ) : "memory" ); \
 +    } while( 0 )
-+    #if defined( SUNSTONE_LATENCY ) && !defined( __ASSEMBLER__ )
-+        #include "sunstone_latency.h"
-+        /* Begin before masking; finish before restoration while this core's
-+         * bookkeeping is still protected. Nested disable calls keep the first
-+         * timestamp. The restoration instruction/barriers are outside it. */
-+        #define portDISABLE_INTERRUPTS() do { \
-+            const uint64_t latency_start = ss_latency_now(); \
-+            portSET_PRIORITY_MASK( portSVC_DISABLE_INTERRUPTS, portMAX_API_PRIORITY_MASK ); \
-+            ss_latency_mask_open( portGET_CORE_ID(), latency_start, ( uintptr_t ) __builtin_return_address( 0 ) ); \
-+        } while( 0 )
-+        #define portENABLE_INTERRUPTS() do { \
-+            ss_latency_mask_close( portGET_CORE_ID() ); \
-+            portSET_PRIORITY_MASK( portSVC_ENABLE_INTERRUPTS, portUNMASK_VALUE ); \
-+        } while( 0 )
-+    #else
 +    #define portDISABLE_INTERRUPTS()    portSET_PRIORITY_MASK( portSVC_DISABLE_INTERRUPTS, portMAX_API_PRIORITY_MASK )
 +    #define portENABLE_INTERRUPTS()     portSET_PRIORITY_MASK( portSVC_ENABLE_INTERRUPTS, portUNMASK_VALUE )
-+    #endif
 +#endif /* if ( configNUMBER_OF_CORES == 1 ) */
  
  /* In all GICs 255 can be written to the priority mask register to unmask all
   * (but the lowest) interrupt priority. */
-@@ -269,6 +313,20 @@
+@@ -269,6 +297,20 @@
                                          BaseType_t uxAcquire );
          extern uint8_t ucPortGetCoreID( void );
          extern uint8_t ucPortGetCoreIDFromIsr( void );
@@ -79,7 +62,7 @@
      #endif /* if !defined(__ASSEMBLER__) */
  
      #define portSET_INTERRUPT_MASK()         uxPortSetInterruptMask()
-@@ -293,7 +351,7 @@
+@@ -293,7 +335,7 @@
  
  #endif /* configNUMBER_OF_CORES > 1 */
  

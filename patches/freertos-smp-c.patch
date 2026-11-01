@@ -1,16 +1,6 @@
 --- port.c
 +++ port.c
-@@ -40,6 +40,9 @@
- /* Scheduler includes. */
- #include "FreeRTOS.h"
- #include "task.h"
-+#ifdef SUNSTONE_LATENCY
-+#include "sunstone_latency.h"
-+#endif
- 
- /* MPU includes. */
- #include "mpu_wrappers.h"
-@@ -260,9 +263,17 @@
+@@ -260,9 +260,17 @@
      /* Flag to signal that the primary core has done all the shared initialisations. */
      PRIVILEGED_DATA volatile uint8_t ucPrimaryCoreInitDoneFlag = 0;
  
@@ -31,7 +21,7 @@
  
      /* Set to 1 to pend a context switch from an ISR. */
      PRIVILEGED_DATA uint64_t ullPortYieldRequired[ configNUMBER_OF_CORES ] = { pdFALSE };
-@@ -304,7 +315,7 @@
+@@ -304,7 +312,7 @@
              #if ( configNUMBER_OF_CORES == 1 )
                  ullPortTaskHasFPUContext = pdTRUE;
              #else
@@ -40,7 +30,7 @@
              #endif
          #else
              #error "Invalid configUSE_TASK_FPU_SUPPORT setting - must be 1 or 2."
-@@ -505,7 +516,7 @@
+@@ -505,7 +513,7 @@
              #if ( configNUMBER_OF_CORES == 1 )
              ullPortTaskHasFPUContext = pdTRUE;
              #else
@@ -49,7 +39,7 @@
              #endif
          }
          #else /* if ( configUSE_TASK_FPU_SUPPORT == portTASK_NO_FPU_CONTEXT_BY_DEFAULT ) */
-@@ -1228,8 +1239,8 @@
+@@ -1228,8 +1236,8 @@
          /* Start the timer that generates the tick ISR. */
          configSETUP_TICK_INTERRUPT();
          ucPrimaryCoreInitDoneFlag = 1;
@@ -60,7 +50,7 @@
                           "ISB SY                    \n"
                           ::: "memory" );
          /* Hold the primary core here until all the secondary cores are ready, this would be achieved only when
-@@ -1356,11 +1367,13 @@
+@@ -1356,11 +1364,13 @@
       * necessary to turn off interrupts in the CPU itself while the ICCPMR is being
       * updated.
       */
@@ -78,7 +68,7 @@
  
      /* Increment the RTOS tick. */
      if( xTaskIncrementTick() != pdFALSE )
-@@ -1371,12 +1384,12 @@
+@@ -1371,12 +1381,12 @@
              ullPortYieldRequired[ portGET_CORE_ID_FROM_ISR() ] = pdTRUE;
          #endif
      }
@@ -97,7 +87,7 @@
  
      /* Ok to enable interrupts after the interrupt source has been cleared. */
      configCLEAR_TICK_INTERRUPT();
-@@ -1393,7 +1406,7 @@
+@@ -1393,7 +1403,7 @@
          #if  ( configNUMBER_OF_CORES == 1 )
              ullPortTaskHasFPUContext = pdTRUE;
          #else
@@ -106,13 +96,10 @@
          #endif
  
          /* Consider initialising the FPSR here - but probably not necessary in
-@@ -1406,6 +1419,21 @@
+@@ -1406,6 +1416,18 @@
  
  void vPortClearInterruptMask( UBaseType_t uxNewMaskValue )
  {
-+#ifdef SUNSTONE_LATENCY
-+    if( uxNewMaskValue > portMAX_API_PRIORITY_MASK ) ss_latency_mask_close( portGET_CORE_ID() );
-+#endif
 +    #if ( configNUMBER_OF_CORES > 1 )
 +        /* An EL1 task writes the mask in line; DAIF keeps the caller's value,
 +         * as the supervisor call returns the caller's SPSR. */
@@ -128,7 +115,7 @@
      if( uxNewMaskValue == portUNMASK_VALUE )
      {
          /* Unmask all interrupt priorities. */
-@@ -1413,9 +1441,10 @@
+@@ -1413,9 +1435,10 @@
      }
      else
      {
@@ -141,24 +128,10 @@
              : "i" ( portSVC_UNMASK_INTERRUPTS )
              : "memory"
          );
-@@ -1424,6 +1453,9 @@
- 
- void vPortClearInterruptMaskFromISR( UBaseType_t uxNewMaskValue )
- {
-+#ifdef SUNSTONE_LATENCY
-+    if( uxNewMaskValue > portMAX_API_PRIORITY_MASK ) ss_latency_mask_close( portGET_CORE_ID() );
-+#endif
-     __asm volatile (
-         "MSR DAIFSET, #2        \n"
-         "DSB SY                 \n"
-@@ -1443,6 +1475,34 @@
- UBaseType_t uxPortSetInterruptMask( void )
+@@ -1444,6 +1467,26 @@
  {
      UBaseType_t ullPMRValue;
-+#ifdef SUNSTONE_LATENCY
-+    const uint64_t latency_start = ss_latency_now();
-+#endif
-+
+ 
 +    #if ( configNUMBER_OF_CORES > 1 )
 +        if( ( ullPortGetTaskRegister() >> portTASK_REGISTER_EL1_BIT ) & 1U )
 +        {
@@ -175,58 +148,23 @@
 +                                 ::"r" ( ( uint64_t ) portMAX_API_PRIORITY_MASK ) : "memory" );
 +            }
 +
-+
-+#ifdef SUNSTONE_LATENCY
-+            if( ullPMRValue > portMAX_API_PRIORITY_MASK )
-+                ss_latency_mask_open( portGET_CORE_ID(), latency_start, ( uintptr_t ) __builtin_return_address( 0 ) );
-+#endif
 +            return ullPMRValue;
 +        }
 +    #endif
- 
++
      /* Use SVC so this can be called safely from EL0 tasks. */
      __asm volatile (
-@@ -1453,6 +1513,11 @@
-         : "x0", "memory"
-     );
- 
-+
-+#ifdef SUNSTONE_LATENCY
-+    if( ullPMRValue > portMAX_API_PRIORITY_MASK )
-+        ss_latency_mask_open( portGET_CORE_ID(), latency_start, ( uintptr_t ) __builtin_return_address( 0 ) );
-+#endif
-     return ullPMRValue;
- }
- 
-@@ -1460,6 +1525,9 @@
- UBaseType_t uxPortSetInterruptMaskFromISR( void )
- {
-     UBaseType_t ullPMRValue;
-+#ifdef SUNSTONE_LATENCY
-+    const uint64_t latency_start = ss_latency_now();
-+#endif
- 
-     __asm volatile ( "MRS %0, ICC_PMR_EL1" : "=r" ( ullPMRValue ) );
- 
-@@ -1474,9 +1542,14 @@
+         "svc %1        \n"
+@@ -1474,7 +1517,7 @@
                           "MSR DAIFCLR, #2        \n"
                           "DSB SY                 \n"
                           "ISB SY                 \n"
 -                         ::"r" ( configMAX_API_CALL_INTERRUPT_PRIORITY << portPRIORITY_SHIFT ) : "memory" );
--    }
--
 +                         ::"r" ( ( uint64_t ) configMAX_API_CALL_INTERRUPT_PRIORITY << portPRIORITY_SHIFT ) : "memory" );
-+    }
-+
-+
-+#ifdef SUNSTONE_LATENCY
-+    if( ullPMRValue > portMAX_API_PRIORITY_MASK )
-+        ss_latency_mask_open( portGET_CORE_ID(), latency_start, ( uintptr_t ) __builtin_return_address( 0 ) );
-+#endif
-     return ullPMRValue;
- }
+     }
  
-@@ -1538,27 +1611,62 @@
+     return ullPMRValue;
+@@ -1538,27 +1581,62 @@
  
  #if ( configNUMBER_OF_CORES > 1 )
  
@@ -307,17 +245,17 @@
      }
  
  /*-----------------------------------------------------------*/
-@@ -1570,8 +1678,8 @@
+@@ -1570,8 +1648,8 @@
              "dmb sy         \n"
              "mov w1, #0     \n"
              "str w1, [%x0]  \n"
-+            "dsb sy         \n"
-             "sev            \n"
--            "dsb sy         \n"
+-            "sev            \n"
+             "dsb sy         \n"
++            "sev            \n"
              "isb sy         \n"
              :
              : "r" ( ulLock )
-@@ -1614,21 +1722,25 @@
+@@ -1614,21 +1692,25 @@
  
  /*-----------------------------------------------------------*/
  
@@ -347,17 +285,7 @@
      }
  
  /*-----------------------------------------------------------*/
-@@ -1642,6 +1754,9 @@
-         configASSERT( eLockNum < eLockCount );
- 
-         uint32_t ulLockBit = 1u << eLockNum;
-+#ifdef SUNSTONE_LATENCY
-+        const uint64_t latency_start = ss_latency_now();
-+#endif
- 
-         /* Lock acquire */
-         if( uxAcquire )
-@@ -1651,21 +1766,20 @@
+@@ -1651,21 +1733,17 @@
               * If the core owns the lock wait increment the lock count by the core.
               * If core does not own the lock wait for the spinlock.
               */
@@ -372,9 +300,6 @@
 -                    prvSet64( &ullRecursionCountByLock[ eLockNum ], ( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) + 1 ) );
 +                    configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) != 255u );
 +                    prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), ( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) + 1 ) );
-+#ifdef SUNSTONE_LATENCY
-+                    ss_latency_lock_acquired( ucCoreID, eLockNum, latency_start, ( uintptr_t ) __builtin_return_address( 0 ) );
-+#endif
                      return;
                  }
  
@@ -387,7 +312,7 @@
                  {
                     /* Follow Arm's recommended way of sleeping
                      * sevl is used to prime the wait loop.
-@@ -1679,7 +1793,7 @@
+@@ -1679,7 +1757,7 @@
                          "ldr w2, [%x0]   \n"
                          "cbnz w2, 1b     \n"
                          :
@@ -396,17 +321,13 @@
                          : "memory", "w2"
                      );
                  }
-@@ -1689,27 +1803,33 @@
+@@ -1689,27 +1767,27 @@
              __asm__ __volatile__ ( "dmb sy" ::: "memory" );
  
              /* Assert the lock count is 0 when the spinlock is free and is acquired. */
 -            configASSERT( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) == 0 );
--
 +            configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) == 0 );
-+
-+#ifdef SUNSTONE_LATENCY
-+            ss_latency_lock_acquired( ucCoreID, eLockNum, latency_start, ( uintptr_t ) __builtin_return_address( 0 ) );
-+#endif
+ 
              /* Set lock count as 1. */
 -            prvSet64( &ullRecursionCountByLock[ eLockNum ], 1 );
 -            /* Set ullOwnedByCore. */
@@ -421,20 +342,15 @@
              /* Assert the lock is not free already. */
 -            configASSERT( ( prvGet64( &ullOwnedByCore[ ucCoreID ] ) & ulLockBit ) != 0 );
 -            configASSERT( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) != 0 );
--
--            /* Reduce ullRecursionCountByLock by 1. */
--            prvSet64( &ullRecursionCountByLock[ eLockNum ], ( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) - 1 ) );
--
--            if( !prvGet64( &ullRecursionCountByLock[ eLockNum ] ) )
 +            configASSERT( ( prvGet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ) ) & ulLockBit ) != 0 );
 +            configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) != 0 );
-+
-+#ifdef SUNSTONE_LATENCY
-+            ss_latency_lock_releasing( ucCoreID, eLockNum );
-+#endif
+ 
+-            /* Reduce ullRecursionCountByLock by 1. */
+-            prvSet64( &ullRecursionCountByLock[ eLockNum ], ( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) - 1 ) );
 +            /* Reduce the recursion count by 1. */
 +            prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), ( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) - 1 ) );
-+
+ 
+-            if( !prvGet64( &ullRecursionCountByLock[ eLockNum ] ) )
 +            if( !prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) )
              {
 -                prvSet64( &ullOwnedByCore[ ucCoreID ], ( prvGet64( &ullOwnedByCore[ ucCoreID ] ) & ~ulLockBit ) );
@@ -444,7 +360,7 @@
                  /* Add barrier to ensure lock status is reflected before we proceed. */
                  __asm__ __volatile__ ( "dmb sy" ::: "memory" );
              }
-@@ -1720,6 +1840,15 @@
+@@ -1720,6 +1798,15 @@
  
      uint8_t ucPortGetCoreID( void )
      {
@@ -460,7 +376,7 @@
          /* Use SVC to obtain the core ID in a way that is safe when called
           * from EL0 tasks. ISRs and EL1 code should use
           * ucPortGetCoreIDFromIsr()/portGET_CORE_ID_FROM_ISR().
-@@ -1740,7 +1869,7 @@
+@@ -1740,7 +1827,7 @@
      uint8_t ucPortGetCoreIDFromIsr ( void ) /* PRIVILEGED_FUNCTION */
      {
          uint64_t ullMpidrEl1;
@@ -469,7 +385,7 @@
  
          return ( uint8_t ) ( ullMpidrEl1 & 0xff );
      }
-@@ -1763,22 +1892,10 @@
+@@ -1763,22 +1850,10 @@
          }
          #endif /* configASSERT_DEFINED */
  

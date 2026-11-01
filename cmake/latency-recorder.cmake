@@ -1,4 +1,5 @@
 include("${CMAKE_CURRENT_LIST_DIR}/kernel-flags.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/latency-instrumentation.cmake")
 add_executable(latency-recorder-model EXCLUDE_FROM_ALL
   platform/qemu-smp/start.S platform/qemu-smp/platform.c runtime/memory.c
   runtime/latency.c checks/latency-recorder.c
@@ -13,3 +14,4 @@ target_link_options(latency-recorder-model PRIVATE -nostdlib -static -Wl,--gc-se
   "-Wl,-T,${SUNSTONE_SOURCE_ROOT}/platform/qemu-smp/link.ld")
 set_target_properties(latency-recorder-model PROPERTIES SUFFIX ".elf"
   LINK_DEPENDS "${SUNSTONE_SOURCE_ROOT}/platform/qemu-smp/link.ld")
+sunstone_enable_latency_port(latency-recorder-model)

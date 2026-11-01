@@ -1,4 +1,5 @@
 include("${CMAKE_CURRENT_LIST_DIR}/kernel-flags.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/latency-instrumentation.cmake")
 # Include after smp.cmake. Only this diagnostic enables latency recording.
 set(latency_root "${SUNSTONE_SOURCE_ROOT}")
 if(NOT latency_root)
@@ -47,3 +48,4 @@ target_link_options(latency-model PRIVATE -nostdlib -static -Wl,--gc-sections
   "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/latency-model.map")
 set_target_properties(latency-model PROPERTIES SUFFIX ".elf"
   LINK_DEPENDS "${latency_root}/platform/qemu-smp/link.ld")
+sunstone_enable_latency_port(latency-model)
