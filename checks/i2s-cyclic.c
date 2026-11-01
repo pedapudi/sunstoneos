@@ -139,6 +139,42 @@ static void finish_pair(unsigned failed_mask)
         if(!j)configASSERT(bindings[0].pin_lease.id);}
     configASSERT(!bindings[0].pin_lease.id);
 }
+static void reopen_pair(unsigned overrun)
+{
+    inject(1,2,0);struct a733_i2s_period old=cyclic_period(0);
+    configASSERT(dma_service_copy_period(&service,0,old.ticket,copied,4096));
+    if(overrun){
+        inject(1,4,0);configASSERT(wait_phase(0,DMA_SERVICE_RESULT).outcome==DMA_SERVICE_FAILED);
+    }else{
+        /* Software cancellation cannot retire a still-busy bus writer. */
+        set(&drain_enabled,0);
+        configASSERT(request(DMA_SERVICE_CANCEL,0,0,0).result==DMA_SERVICE_OK);
+        vTaskDelay(3);struct dma_service_reply r=request(DMA_SERVICE_STATUS,0,0,0);
+        configASSERT(r.phase==DMA_SERVICE_DRAINING&&r.holds_buffers&&r.owns_session);
+        configASSERT(request(DMA_SERVICE_REAP,0,0,0).result==DMA_SERVICE_BUSY);
+        configASSERT(request(DMA_SERVICE_CLOSE,0,frequency/10,0).result==DMA_SERVICE_BUSY);
+        configASSERT(dma[0x30/4]&1);set(&drain_enabled,1);
+        configASSERT(wait_phase(0,DMA_SERVICE_RESULT).outcome==DMA_SERVICE_CANCELED);
+    }
+    configASSERT(request(DMA_SERVICE_REAP,0,0,0).result==DMA_SERVICE_BUSY);
+    configASSERT(dma_service_copy_period(&service,0,old.ticket,copied,4096));
+    for(unsigned i=0;i<4096;++i)configASSERT(copied[i]==0x20);
+    configASSERT(request(DMA_SERVICE_PERIOD_PUT,0,0,old.ticket).result==DMA_SERVICE_OK);
+    configASSERT(request(DMA_SERVICE_PERIOD_PUT,0,0,old.ticket).result==DMA_SERVICE_INVALID);
+    configASSERT(request(DMA_SERVICE_REAP,0,0,0).result==DMA_SERVICE_OK);close_stream(0);
+    /* Its peer still owns the common clock/pin binding. */
+    configASSERT(request(DMA_SERVICE_OPEN,0,frequency/10,0).result==DMA_SERVICE_BUSY);
+    configASSERT(request(DMA_SERVICE_CANCEL,1,0,0).result==DMA_SERVICE_OK);wait_phase(1,DMA_SERVICE_RESULT);
+    configASSERT(request(DMA_SERVICE_REAP,1,0,0).result==DMA_SERVICE_OK);close_stream(1);
+    configASSERT(!bindings[0].pin_lease.id);
+    start_pair();inject(1,2,0);struct a733_i2s_period fresh=cyclic_period(0);
+    configASSERT(fresh.ticket>old.ticket&&!fresh.first_frame);
+    configASSERT(!dma_service_copy_period(&service,0,old.ticket,copied,4096));
+    configASSERT(request(DMA_SERVICE_PERIOD_PUT,0,0,old.ticket).result==DMA_SERVICE_INVALID);
+    configASSERT(dma_service_copy_period(&service,0,fresh.ticket,copied,4096));
+    configASSERT(request(DMA_SERVICE_PERIOD_PUT,0,0,fresh.ticket).result==DMA_SERVICE_OK);
+    finish_pair(0);configASSERT(get(&submissions)==4);
+}
 static void cyclic_client(void *unused)
 {
     (void)unused;while(!get(&peer_stage))vTaskDelay(1);
@@ -169,7 +205,8 @@ static void cyclic_client(void *unused)
             __atomic_fetch_add(&us,1000000,__ATOMIC_SEQ_CST);vTaskDelay(3);
             struct dma_service_reply r=request(DMA_SERVICE_STATUS,0,0,0);
             configASSERT(r.phase==DMA_SERVICE_RECOVERY && r.holds_buffers && bindings[0].pin_lease.id);
-        }else if(cyclic_case==3){inject(1,4,0);finish_pair(1);}
+        }else if(cyclic_case==17||cyclic_case==18){reopen_pair(cyclic_case==18);}
+        else if(cyclic_case==3){inject(1,4,0);finish_pair(1);}
         else if(cyclic_case==4 || cyclic_case==5){copy_inject=cyclic_case==4?1:2;inject(1,2,0);
             struct dma_service_reply r=wait_phase(0,DMA_SERVICE_RESULT);configASSERT(r.outcome==DMA_SERVICE_FAILED);
             configASSERT(request(DMA_SERVICE_PERIOD_GET,0,0,0).result==DMA_SERVICE_BUSY);finish_pair(1);}

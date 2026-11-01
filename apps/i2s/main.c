@@ -94,7 +94,7 @@ void a733_smp_diagnostic_start(void)
  for(unsigned j=0;j<(duplex?2u:1u);++j){
   app.stream[j].stream=(struct a733_i2s_stream_profile){{24576000,16000,0,16,32,1,0},
    a733_i2s_platform_stream_operations(),&app.binding,
-   duplex?(j?A733_I2S_TRANSMIT:A733_I2S_RECEIVE):(enum a733_i2s_direction)direction,10000,s->direction>=3&&s->direction<=5};
+   duplex?(j?A733_I2S_TRANSMIT:A733_I2S_RECEIVE):(enum a733_i2s_direction)direction,10000,s->direction>=3&&s->direction<=5,A733_I2S_ROUTE_I2S0};
   app.stream[j].duplex=duplex;
  }
  struct a733_dma_pool_config config={&s->dma,&app.shared.counter,&app.shared.clocks,&app.shared.locks,

@@ -23,7 +23,7 @@ int os_capture_start(void)
     if(periods>OS_AUDIO_RING_CAPACITY||(size_t)periods*OS_AUDIO_PERIOD_CAPACITY>ss_capture_capacity)return 0;
     capture.total=total;
     capture.config=(struct os_audio_stream_config){{f->rate_hz,f->channels,f->bits,{0}},
-        OS_AUDIO_PERIOD_CAPACITY,periods,ss_capture_buffer+SS_CAPTURE_HEADROOM};
+        OS_AUDIO_PERIOD_CAPACITY,periods,ss_capture_buffer+SS_CAPTURE_HEADROOM,0};
     return os_audio_stream_open(&capture.config);
 }
 static int capture_step(void)
