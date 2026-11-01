@@ -49,14 +49,14 @@ static int device_pages(void)
     }
     return 1;
 }
-static int output_span(struct a733_gpu_backend *b, const void *p, size_t bytes, int queue_event)
+static int output_span(struct a733_gpu_backend *b, const void *p, size_t bytes, int service_output)
 {
     if (!a733_span_excl_nonempty(p, bytes) || !a733_ranges_disjoint_nonempty(b, sizeof(*b), p, bytes) ||
         (b->external.revoked && !a733_ranges_disjoint_nonempty(b->external.revoked, sizeof(*b->external.revoked), p, bytes)) ||
         !a733_ranges_disjoint_nonempty(b->memory, sizeof(*b->memory), p, bytes) ||
         !a733_ranges_disjoint_nonempty(b->power, sizeof(*b->power), p, bytes) ||
         !a733_ranges_disjoint_nonempty(b->power->manager, sizeof(*b->power->manager), p, bytes) ||
-        (!queue_event && !a733_ranges_disjoint_nonempty(b->service, offsetof(struct pvr_gpu_service, worker_stack), p, bytes)) ||
+        (!service_output && !a733_ranges_disjoint_nonempty(b->service, offsetof(struct pvr_gpu_service, worker_stack), p, bytes)) ||
         !a733_ranges_disjoint_nonempty(b->service->config.firmware, b->service->config.firmware_bytes, p, bytes)) return 0;
     for (unsigned i = 0; i < 3 + PVR_FW_RESOURCE_COUNT; ++i) {
         const struct pvr_mips_buffer *buffer = i < 3 ? &b->memory->firmware[i] : &b->memory->resources[i - 3];
@@ -372,7 +372,15 @@ static int started(void *context, uint32_t *out)
 static int compat(void *context, uint32_t off, void *out, size_t bytes)
 {
     struct a733_gpu_backend *b = context;
-    return active(b) && (output(b, out, bytes) || fail(b, A733_GPU_BACKEND_ACCESS)) &&
+    if (!active(b)) return 0;
+    const struct pvr_gpu_control *c = &b->service->control;
+    /* The controller first polls an external byte, then copies the complete
+     * record into its own storage. Admit only that exact service destination;
+     * all other ownership and writable-mapping checks still apply. */
+    int record = !off && bytes == sizeof(c->compatibility) && out == c->compatibility &&
+        b->service->phase == PVR_GPU_SERVICE_CHECKING && c->phase == PVR_GPU_CONTROL_COMPAT &&
+        c->context == b && c->queue == &b->service->queue;
+    return (output_span(b, out, bytes, record) || fail(b, A733_GPU_BACKEND_ACCESS)) &&
         memory_result(b, a733_gpu_memory_compat(b->memory, off, out, bytes));
 }
 /* The firmware's executed kernel-command count, into one of the count

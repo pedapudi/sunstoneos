@@ -367,3 +367,46 @@ unsigned backend_event_check(void)
     }
     return 0;
 }
+
+/* Use the controller's real callback destinations. A stack-only callback
+ * check misses the full record copied into the service-owned controller. */
+unsigned backend_compat_check(void)
+{
+    CHECK(!setup()); CHECK(!bind());
+    CHECK(pvr_ccb_init(&service.queue, &config.queue, &backend, 1) == PVR_CCB_OK);
+    CHECK(!enabled()); CHECK(config.start.publish(&backend));
+    unsigned char expected[64] = {0};
+    const uint32_t version = 3;
+    const uint64_t bvnc = PVR_FW_A733_BVNC;
+    memcpy(expected, &version, 4); memcpy(expected + 16, &version, 4);
+    memcpy(expected + 8, &bvnc, 8); memcpy(expected + 24, &bvnc, 8);
+    expected[56] = 1;
+    memcpy((unsigned char *)region(PVR_FW_OS_INIT) + 40, expected, sizeof(expected));
+    service.phase = PVR_GPU_SERVICE_CHECKING;
+    service.start.phase = PVR_GPU_START_BOOTED;
+    CHECK(pvr_gpu_control_init(&service.control, &service.start, &service.queue,
+                              &config.control, &backend, operation_deadline));
+    CHECK(pvr_gpu_control_poll(&service.control, 4) == PVR_GPU_CONTROL_AGAIN);
+    CHECK(service.control.phase == PVR_GPU_CONTROL_SUBMIT_HEALTH &&
+          !memcmp(service.control.compatibility, expected, sizeof(expected)) &&
+          !atomic_load(&backend.error));
+    /* The exception permits only the exact complete record during COMPAT.
+     * Neither a shifted/truncated record nor unrelated service state may
+     * become writable through this callback. */
+    for (unsigned mode = 0; mode < 5; ++mode) {
+        CHECK(!setup()); CHECK(!bind());
+        CHECK(pvr_ccb_init(&service.queue, &config.queue, &backend, 1) == PVR_CCB_OK);
+        CHECK(!enabled()); CHECK(config.start.publish(&backend));
+        service.phase = PVR_GPU_SERVICE_CHECKING;
+        service.start.phase = PVR_GPU_START_BOOTED;
+        CHECK(pvr_gpu_control_init(&service.control, &service.start, &service.queue,
+                                  &config.control, &backend, operation_deadline));
+        if (mode == 4) service.control.phase = PVR_GPU_CONTROL_READY;
+        void *out = mode == 3 ? (void *)&service.phase : service.control.compatibility + (mode == 0);
+        unsigned off = mode == 1 ? 1 : 0;
+        size_t bytes = mode == 2 ? 63 : mode == 3 ? sizeof(service.phase) : 64;
+        CHECK(!config.control.compat(&backend, off, out, bytes));
+        CHECK(atomic_load(&backend.error) == A733_GPU_BACKEND_ACCESS);
+    }
+    return 0;
+}
