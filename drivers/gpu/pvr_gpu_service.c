@@ -589,7 +589,8 @@ static void advance(struct pvr_gpu_service *s)
             struct pvr_gpu_control_ops ops = s->config.control;
             ops.now = service_clock; ops.event = service_event;
             if (!pvr_gpu_control_init(&s->control, &s->start, &s->queue,
-                    &ops, s->config.context, s->deadline)) {
+                    &ops, s->config.context, s->deadline) ||
+                (s->config.executed && !pvr_gpu_control_count_executed(&s->control, s->config.executed))) {
                 fail(s, PVR_GPU_SERVICE_CONTROL); return;
             }
             s->phase = PVR_GPU_SERVICE_CHECKING;

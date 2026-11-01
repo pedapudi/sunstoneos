@@ -139,6 +139,12 @@ struct pvr_gpu_service_config {
     void *context;
     struct pvr_gpu_service_irq_ops irq;
     struct pvr_gpu_service_enable_ops power;
+    /* Optional bounded worker callback: acquire the firmware's executed
+     * kernel-command count. When set, the health check is judged by that
+     * count (pvr_gpu_control_count_executed), as upstream judges it; firmware
+     * that writes no return word for the health command, as the open A733
+     * firmware does, otherwise fails the check at its deadline. */
+    int (*executed)(void *, uint32_t *);
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
     /* Optional final owner action after STOPPED; 0 pending, 1 parked, -1 fault.
      * Called only by the worker under one fixed PARK deadline. */

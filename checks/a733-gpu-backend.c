@@ -239,6 +239,10 @@ unsigned backend_check(void)
     CHECK(config.control.read32(&backend, 0x8a8, &value));
     CHECK(config.control.write32(&backend, 0x8b0, 1));
     const unsigned char command[88] = {7}; CHECK(config.control.event(&backend, command));
+    /* The health check's executed count reaches only the controller's fields. */
+    *(volatile uint32_t *)((uintptr_t)region(PVR_FW_OS_DATA) + 568) = 5;
+    CHECK(config.executed && config.executed(&backend, &service.control.executed_after) &&
+          service.control.executed_after == 5);
     CHECK(config.stop.sync_write(&backend, 0));
     *(uint32_t *)region(PVR_FW_POWER_SYNC) = 1;
     service.stop.phase=PVR_GPU_STOP_WAIT_OFF;

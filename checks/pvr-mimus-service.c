@@ -179,7 +179,7 @@ static int kick(void *ctx, uint32_t off, uint32_t value)
     last_sequence = sequence;
     unsigned char *control = c->firmware[2].storage.cpu;
     put(control, 4, cursor); put(control + 4, 4, cursor % PVR_MIMUS_SERVICE_RING_BYTES);
-    put(resource(0) + 128, 4, next); put(resource(2) + slot * 4, 4, 1);
+    put(resource(0) + 128, 4, next); put(resource(2) + slot * 4, 4, 1); fixture_executed();
     kick_us = now_us();
     ++kick_step_count;
     __atomic_store_n(&kicked, sequence, __ATOMIC_RELEASE);

@@ -229,6 +229,21 @@ static int barrier(void *ctx, enum pvr_ccb_barrier kind)
     (void)kind; __asm__ volatile("dsb sy" ::: "memory"); return 1;
 #endif
 }
+static void fixture_executed(void)
+{
+    uint32_t *count = (uint32_t *)(resource(PVR_FW_OS_DATA) + 568);
+    __asm__ volatile("dsb sy" ::: "memory");
+    set(count, get(count) + 1);
+}
+static int executed(void *ctx, uint32_t *out)
+{
+    callback(ctx);
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    return a733_gpu_memory_executed(&memory, out);
+#else
+    *out = get((uint32_t *)(resource(PVR_FW_OS_DATA) + 568)); return 1;
+#endif
+}
 static int kick(void *ctx, uint32_t off, uint32_t value)
 {
     callback(ctx); configASSERT(running && off == 0xb00 && !value);
@@ -241,7 +256,15 @@ static int kick(void *ctx, uint32_t off, uint32_t value)
         if (get(&fault_mode) != 2) put(resource(PVR_FW_POWER_SYNC), 4, 1);
         if (word(command + 8, 4) == 1) stopping = 1;
     }
-    put(resource(0) + 128, 4, next); put(resource(2) + slot * 4, 4, 1); return 1;
+    /* With the executed count bound, the fixture models the open A733
+     * firmware: the health command gets no return word
+     * (board-session-20261025-18). Fixtures that bind no count model a
+     * firmware that writes it. The executed count (OS data +568) passes
+     * every consumed command. */
+    put(resource(0) + 128, 4, next);
+    if (!config.executed || type != PVR_CCB_HEALTH) put(resource(2) + slot * 4, 4, 1);
+    fixture_executed();
+    return 1;
 }
 static int irq_read(void *ctx, uint32_t off, uint32_t *out)
 {
@@ -549,6 +572,7 @@ void kernel_main(void)
     config.queue = (struct pvr_ccb_ops){read_mem, write_mem, barrier, kick};
     config.start = (struct pvr_gpu_start_ops){now, read_reg, write_reg, started, publish};
     config.control = (struct pvr_gpu_control_ops){now, irq_read, irq_write, compat, event};
+    config.executed = executed;
     config.stop = (struct pvr_gpu_stop_ops){now, read_reg, write_reg, sync_write, sync_read, isolate,NULL};
     config.enable = enable; config.context = &config;
 #ifdef SUNSTONE_GPU_ASYNC_POWER
