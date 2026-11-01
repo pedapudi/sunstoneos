@@ -21,6 +21,9 @@ spec.loader.exec_module(prepare)
 spec = importlib.util.spec_from_file_location('session_card', ROOT / 'apps/os/card.py')
 card = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(card)
+spec = importlib.util.spec_from_file_location('session_slots', ROOT / 'tools/boot-slots.py')
+slots = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(slots)
 
 
 def main():
@@ -66,6 +69,7 @@ def main():
     assert host.read_result(lambda request: exchange(request, 0), image, 0, 0) is None
     refused(lambda: host.read_result(lambda request: exchange(request)[:-1], image, 0, 0), 'frame state or size')
     prefix = bytearray(host.PREFIX_BYTES)
+    struct.pack_into('<3Q', prefix, 0, 0x4153373342535332, 2, host.PREFIX_BYTES)
     struct.pack_into('<I', prefix, 400, 2)
     # Board/service validation is outside this framing model. The extent bytes
     # are opaque and retain their native record lengths.
@@ -74,6 +78,19 @@ def main():
                      host.PREFIX_BYTES + len(thermal))
     services = {host.THERMAL: bytes(thermal)}
     wire = host.session_bytes(prefix, services, manifest, info['sha256'], 0, host.BIND_SID, [data])
+    bound = slots.os_session_generation(wire, 37)
+    assert struct.unpack_from('<2Q', bound, 24) == (0, 37)
+    assert bound[host.PREFIX_BYTES:] == wire[host.PREFIX_BYTES:]
+    assert host.session_decode(bound, manifest, info['sha256'])['manifest_sha256'] == info['sha256']
+    refused(lambda: slots.os_session_generation(bound, 38), 'unassigned zero-epoch')
+    cpu_thermal = bytearray(services[host.THERMAL])
+    struct.pack_into('<Q', cpu_thermal, 16, host.PREFIX_BYTES + len(cpu_thermal) + host.SERVICE_BYTES[host.CPU_GRANT])
+    cpu_grant = struct.pack('<6Q4I32s', host.SERVICE_MAGIC[host.CPU_GRANT], 1, 96, 0x99, 0, 0,
+                            3, 2016, 2002, 32, bytes([1]) * 32)
+    cpu_wire = host.session_bytes(prefix, {host.THERMAL: cpu_thermal, host.CPU_GRANT: cpu_grant},
+                                  manifest, info['sha256'], 0, host.BIND_SID, [data])
+    cpu_bound = slots.os_session_generation(cpu_wire, 38)
+    assert host.session_decode(cpu_bound)['extents'][host.CPU_GRANT] == cpu_grant
     decoded = host.session_decode(wire, manifest, info['sha256'])
     assert decoded['extents'][host.THERMAL] == services[host.THERMAL]
     facts, uploads = host.input_facts(manifest, [data])
@@ -108,7 +125,8 @@ def main():
     cases = ['compiled-manifest', 'C-result-producer', 'result-symbol-capacity',
              'framed-result', 'framed-result-not-ready', 'truncated-result-frame', 'typed-session-producer',
              'manifest-upload', 'headset-without-I2S-extent', 'actual-bundle-producer',
-             'actual-empty-input-bundle-and-result', 'changed-frozen-input']
+             'actual-empty-input-bundle-and-result', 'changed-frozen-input',
+             'actual-slot-generation-binder', 'assigned-slot-refused', 'slot-binder-preserves-CPU-service']
     image_raw = image.read_bytes()
     elf = host.image_manifest(image)['elf']
     table = elf.get_section_by_name('.symtab')
