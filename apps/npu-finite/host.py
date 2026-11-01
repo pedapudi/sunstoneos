@@ -20,15 +20,17 @@ RUNTIME='npu-runtime-return-v1'
 SWITCH='npu-model-switch-return-v1'
 SDK='npu-sdk-return-v1'
 POWER='npu-power-cycle-return-v1'
+LATENCY='npu-latency-return-v1'
 # The startup client's receipt magic, monitor detail, inference jobs and interrupt completions.
 STARTUP_CLIENT={STARTUP:(0x4e50555354415231,0x4e505553,0,1),INFERENCE:(0x4e5055494e463031,0x4e505549,1,2),
  RUNTIME:(0x4e50555254523031,0x4e505552,2,3),
  SWITCH:(0x4e50555357433031,0x4e505557,3,4),
- SDK:(0x4e505553444b3031,0x4e505544,2,3)}
+ SDK:(0x4e505553444b3031,0x4e505544,2,3),
+ LATENCY:(0x4e50554c41543031,0x4e50554c,1001,1002)}
 MBUS_CHECKPOINT='npu-entry-mbus-checkpoint-v1'
 IRQ_CHECKPOINT='npu-entry-irq-checkpoint-v1'
 PROVIDER_CHECKPOINT='npu-entry-provider-checkpoint-v1'
-PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT,RESTART,STARTUP,INFERENCE,RUNTIME,SWITCH,SDK,POWER);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
+PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT,RESTART,STARTUP,INFERENCE,RUNTIME,SWITCH,SDK,POWER,LATENCY);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
 HOST_SOURCES=('apps/npu-finite/host.py','apps/npu-finite/stopped-capture.py','tools/a733-returning-host.py','tools/a733-crumbs.py','include/sunstone_crumb.h','apps/npu-convolution/prepare-supervised.py','apps/npu-convolution/observe.py','tools/check-a733-smp.py','tools/check-a733-smp-supervised.py','tools/check-a733-smp-observe.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/usb_guard.py','tools/npu-models.json','platform/a733-smp-supervised/launch.c','platform/a733-smp-observe/launch.S','platform/a733-smp-observe/launch.ld','platform/a733-smp-cached/boot.h')
 def save(path,value):base.save_json(path,value)
 
@@ -72,6 +74,17 @@ def sustained_extension(startup_marker,names,read):
    'Sustained immutable extension differs.')
   require('npu_finite_reference_2' not in names,'Sustained plan requires exactly two networks.')
  return sustained
+
+def latency_extension(startup_marker,names,read):
+ latency=startup_marker==(STARTUP_CLIENT[LATENCY][0],1,1001,1002)
+ require(('npu_latency_return_profile' in names)==latency,'Latency extension/startup marker differs.')
+ if not latency:return None
+ raw=read('npu_latency_return_profile')
+ require(len(raw)==64,'Latency immutable extension length differs.')
+ words=struct.unpack('<8Q',raw)
+ require(words[:2]==(0x4e50554c41545031,1) and words[2] in (0,1) and words[3:]==(1000,1,0,4,24000000),
+  'Latency immutable extension differs.')
+ return {'mode':'queue' if words[2] else 'legacy','measured_jobs':1000,'warmup_jobs':1,'model':0}
 
 
 def image_profile(data,manifest):
@@ -129,13 +142,16 @@ def image_profile(data,manifest):
   else:
    require('npu_entry_checkpoint_provider_profile' not in symbols and all(n not in symbols for n in ('a733_npu_application_init','npu_convolution_startup_poll','npu_service_activate','vTaskStartScheduler')),'Checkpoint contains a provider or scheduler constructor.')
  else:require('npu_entry_checkpoint_profile' not in symbols,'Checkpoint image cannot use numerical profile.')
- if startup:require(sustained_extension(value,names,read)==sustained,'Sustained startup selection differs.')
- else:require('npu_sustained_return_profile' not in names,'Unexpected sustained extension.')
- runtime=manifest['execution_profile'] in (RUNTIME,SWITCH,SDK)
+ latency=None
+ if startup:
+  require(sustained_extension(value,names,read)==sustained,'Sustained startup selection differs.')
+  latency=latency_extension(value,names,read)
+ else:require('npu_sustained_return_profile' not in names and 'npu_latency_return_profile' not in names,'Unexpected workload extension.')
+ runtime=manifest['execution_profile'] in (RUNTIME,SWITCH,SDK,LATENCY)
  if manifest['execution_profile']==SDK:
   require(all(n in symbols for n in ('ss_npu_run','ss_npu_close','ss_npu_service_step','sdk_service')),'Missing linked SDK owner or public API.')
  if startup:
-  engine=('npu_runtime_client','npu_job_run','npu_runtime_stop_poll') if runtime else ('npu_startup_client','npu_convolution_stop_poll')
+  engine=('npu_latency_client' if latency else 'npu_runtime_client','npu_job_run','npu_runtime_stop_poll') if runtime else ('npu_startup_client','npu_convolution_stop_poll')
   require(read('npu_startup_return_profile')==struct.pack('<4Q',startup[0],1,startup[2],startup[3]) and
    all(n in symbols for n in ('npu_startup_return_ready','npu_service_activate','vTaskStartScheduler')+engine) and
    'client' not in symbols and (not runtime or 'npu_convolution_startup_poll' not in symbols),'Startup-only implementation differs.')
@@ -148,13 +164,19 @@ def image_profile(data,manifest):
  else:require('npu_restart_return_profile' not in symbols,'Restart image requires its distinct profile.')
  # The runtime image compares each network's copied output with its linked
  # reference; network 0 is the image's selected immutable model.
- references=[read(f'npu_finite_reference_{n}').hex() for n in range(2 if sustained else startup[2])] if runtime else []
+ references=[read(f'npu_finite_reference_{n}').hex() for n in range(2 if sustained or latency else startup[2])] if runtime else []
  if not runtime:require('npu_finite_reference_0' not in symbols,'Only the runtime image links network references.')
  geometry={'clean_start':lo,'clean_end':hi,'receipt':receipt,'log':log,'reference':read('a733_npu_application_reference').hex()}
  require(not runtime or references[0]==geometry['reference'],'Runtime network 0 is not the selected model.')
  if startup:geometry['startup_only']=True
  if runtime:geometry.update(runtime=True,references=references)
  if sustained:geometry['sustained']=True
+ if latency:
+  geometry['latency']=latency
+  require('npu_finite_reference_2' not in names,'Latency plan requires exactly two linked networks.')
+  if latency['mode']=='queue':
+   require(all(name in symbols for name in ('npu_runtime_queue_claim','npu_runtime_queue_wait','npu_runtime_queue_return','npu_queue_submit','npu_queue_release')),
+    'Missing native resident queue implementation.')
  if manifest['execution_profile']==SWITCH:geometry['model_switch']=True
  if manifest['execution_profile']==SDK:geometry['sdk']=True
  if manifest['execution_profile']==INFERENCE:geometry['single_inference']=True
@@ -184,7 +206,7 @@ def image_profile(data,manifest):
  if capture is not None:geometry['stopped_capture']=capture
  return parts,address,build,layout,geometry
 
-def geometry_profile(g):return POWER if g.get('power_cycle') else SDK if g.get('sdk') else SWITCH if g.get('model_switch') else RUNTIME if g.get('runtime') else INFERENCE if g.get('single_inference') else STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
+def geometry_profile(g):return LATENCY if g.get('latency') else POWER if g.get('power_cycle') else SDK if g.get('sdk') else SWITCH if g.get('model_switch') else RUNTIME if g.get('runtime') else INFERENCE if g.get('single_inference') else STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
 
 def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,execution_profile=PROFILE):
  """Check the actual native wire record without external process evidence."""
@@ -325,6 +347,7 @@ def validate_reports(monitor,platform,receipt,p):
  status=m[4];deadline=r[9];armed=deadline-480000000
  checkpoint=p.get('execution_profile') in (CHECKPOINT,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT)
  require(p.get('execution_profile',PROFILE) in PROFILES and bool(g.get('checkpoint'))==checkpoint and bool(g.get('thermal'))==thermal,'Report profile differs.')
+ require(bool(g.get('latency'))==(p.get('execution_profile')==LATENCY),'Latency report profile differs.')
  require(r[:6]==(0x4e505543484b3031 if checkpoint else 0x4e50555448533031 if thermal else startup[0] if startup else 0x4e50555245543031,p['epoch'],p['generation'],p['lease'],status,0x4e50554e if checkpoint else status+1) and
   r[6:9]==(g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64) and
   0<=armed<=m[6]<armed+24000000 and m[6]<=m[8]<deadline,'Receipt identity/cleanup/time differs.')
@@ -342,6 +365,11 @@ def validate_reports(monitor,platform,receipt,p):
   else:require(text==prefix,'Checkpoint log or status differs.')
   require(status==0,'Checkpoint log or status differs.')
   return {'normal_return':True,'checkpoint':('PROVIDERS_CONSTRUCTED' if p.get('execution_profile')==PROVIDER_CHECKPOINT else 'ENTRY_MEMORY_READY'),'functional_success':False,'controlled_negative':False,'jobs':0,'status':0,'diagnostic_deadline':deadline,'log':text,**mbus}
+ if g.get('latency'):
+  result=latency_report(text,status,deadline,g)
+  require(m[6]<=result['timing']['start_ticks']<result['timing']['end_ticks']<=h[9],
+   'Latency timing escapes native report.')
+  return result
  if g.get('sustained'):
   result=sustained_report(text,status,deadline,g)
   ticks=result['timing']
@@ -407,6 +435,64 @@ def inference_report(text,status,deadline,g):
  return {'normal_return':True,'single_inference':True,'functional_success':matched,'controlled_negative':not matched,
   'jobs':1,'status':status,'diagnostic_deadline':deadline,'output':bytes(output).hex(),
   'output_pattern':{k:v for k,v in output_pattern(b'',bytes(output)).items() if k!='first_unwritten'},'log':text}
+
+def latency_report(text,status,deadline,g):
+ """Check every measured latency and the digest of every checked output.
+
+ The legacy interval covers npu_job_run. The queue interval covers input copy,
+ output poison, tensor cache work, submit, interrupt wait, acquire and release.
+ Output comparison and hashing follow each interval and enter total time.
+ """
+ geometry=g.get('latency')
+ require(g.get('runtime') and len(g['references'])==2 and geometry and
+  geometry=={'mode':geometry['mode'],'measured_jobs':1000,'warmup_jobs':1,'model':0} and
+  geometry['mode'] in ('legacy','queue'),'Latency network geometry differs.')
+ head=('NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=WARMUP\nNPU_STAGE=LATENCY\nNPU_STAGE=CLOSE\n'
+  'NPU_STAGE=WAIT_LOCAL_STOP\nNPU_IRQ_COMPLETIONS=0x00000000000003ea\n'
+  'NPU_IRQ_STOPPED=0x0000000000000001\nNPU_STAGE=QUIESCENT\nNPU_LATENCY=\n')
+ pattern=(re.escape(head)+r'((?:0x[0-9a-f]{16}\n){21})NPU_DURATION_LE32=\n'
+  r'((?:[0-9a-f]{128}\n){62}[0-9a-f]{64}\n)NPU_DURATION_SHA256=\n([0-9a-f]{64})\n'
+  r'NPU_OUTPUT_SHA256=\n([0-9a-f]{64})\nNPU_INFERENCE=(MATCH|MISMATCH); inference_jobs=1001\n')
+ match=re.fullmatch(pattern,text)
+ require(match is not None,'Latency stage, sample, IRQ or output log differs.')
+ (frequency,mode,jobs,warmups,total,checked,bad,start,end,p50,p99,maximum,total_ticks,
+  submit_ticks,acquire_ticks,first_bad,offset,value,submitted,finished,irq_ticks)=(int(v,16) for v in match[1].split())
+ require(frequency==24000000 and mode==int(geometry['mode']=='queue') and
+  jobs==checked==1000 and warmups==1 and total==1001 and bad<=jobs,
+  'Latency mode, warmup or job/check counters differ.')
+ require(submitted==finished==(1000 if mode else 0),'Latency direct fence counters differ.')
+ raw=bytes.fromhex(match[2]);durations=list(struct.unpack('<1000I',raw));ordered=sorted(durations)
+ require(hashlib.sha256(raw).hexdigest()==match[3],'Latency sample checksum differs.')
+ require(all(0<t<=frequency for t in durations) and total_ticks==sum(durations) and
+  (p50,p99,maximum)==(ordered[499],ordered[989],ordered[999]),'Latency samples or quantiles differ.')
+ require(deadline-480000000<=start<end<deadline and total_ticks<=end-start and
+  submit_ticks+acquire_ticks+irq_ticks<=total_ticks and (mode or submit_ticks==acquire_ticks==irq_ticks==0),
+  'Latency timing intervals or caller phases differ.')
+ reference=bytes.fromhex(g['references'][0]);digest=match[4]
+ expected=hashlib.sha256(hashlib.sha256(reference).digest()*1000).hexdigest()
+ matched=digest==expected
+ require(matched==(bad==0)==(status==0) and (match[5]=='MATCH')==matched,
+  'Latency status disagrees with output checks/hash.')
+ sentinel=(1<<64)-1
+ if not bad:require((first_bad,offset,value)==(sentinel,sentinel,sentinel),'Unexpected latency mismatch detail.')
+ else:require(first_bad<1000 and offset<len(reference) and value<256 and value!=reference[offset],
+  'Latency first mismatch detail differs.')
+ return {'normal_return':True,'runtime':True,'latency':geometry,'functional_success':matched,
+  'controlled_negative':not matched,'jobs':total,'measured_jobs':jobs,'warmup_jobs':warmups,
+  'outputs_checked':checked,'mismatches':bad,'status':status,'diagnostic_deadline':deadline,
+  'first_mismatch':None if not bad else {'job':first_bad,'offset':offset,'byte':value},
+  'output_digest':digest,'duration_digest':match[3],
+  'timing':{'frequency_hz':frequency,'start_ticks':start,'end_ticks':end,'duration_ticks':end-start,
+   'duration_seconds':(end-start)/frequency,'jobs_per_second':jobs*frequency/(end-start),
+   'latency_ticks':{'p50':p50,'p99':p99,'max':maximum},
+   'latency_us':{k:v*1000000/frequency for k,v in {'p50':p50,'p99':p99,'max':maximum}.items()},
+   'job_duration_ticks':durations,'warmup_excluded':True,
+   'window':'legacy helper call' if not mode else 'input copy, output poison, tensor cache work, submit, interrupt wait, output acquire and record release',
+   'total_window':'measured jobs including output comparison, digest and progress checks; warmup and close excluded',
+   'caller_phases':None if not mode else {'submit_elapsed_ticks':submit_ticks,'acquire_elapsed_ticks':acquire_ticks,
+    'irq_driver_elapsed_ticks':irq_ticks,
+    'scope':'submit under local IRQ lock; output invalidate and release; direct IRQ driver including notification; wait, scheduler and preparation excluded; interrupts and preemption may contribute; CPU utilization is not measured'}},'log':text}
+
 
 def sustained_report(text,status,deadline,g):
  """Validate all 200 copied-output hashes and API latency windows in ticks."""

@@ -3,10 +3,17 @@
 #include <stdint.h>
 /* Bootstrap, inference, model-switch and SDK clients identify their return
  * contracts with immutable receipt magic, monitor detail, job count and
- * interrupt-completion count. The sustained extension runs 200 jobs.
+ * interrupt-completion count. The sustained extension runs 200 jobs. The
+ * latency extension counts one warmup and 1000 measured jobs separately.
  * Ordinary runtime clients use one job per linked entry;
  * the switch profile links the first network again after the second. */
-#ifdef SUNSTONE_NPU_SUSTAINED
+#ifdef SUNSTONE_NPU_LATENCY
+#define NPU_STARTUP_RECEIPT_MAGIC UINT64_C(0x4e50554c41543031)
+#define NPU_STARTUP_READY UINT64_C(0x4e50554c)
+#define NPU_STARTUP_JOBS 1001u
+#define NPU_STARTUP_MAX_STATUS 1u
+#define NPU_STARTUP_JOB_TEXT "1001"
+#elif defined(SUNSTONE_NPU_SUSTAINED)
 #define NPU_STARTUP_RECEIPT_MAGIC UINT64_C(0x4e50555254523031)
 #define NPU_STARTUP_READY UINT64_C(0x4e505552)
 #define NPU_STARTUP_JOBS 200u
