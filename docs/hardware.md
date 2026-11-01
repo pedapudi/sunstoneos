@@ -21,7 +21,7 @@ gaps. A passing diagnostic does not qualify every application using that device.
 
 ## Current physical results
 
-The [handoff](handoff.md) identifies the frozen images, current board access
+The [handoff](handoff.md) identifies the frozen images, launch requirements
 and physical results through 2026-10-31:
 
 | Function | Demonstrated operation | Remaining qualification |
@@ -31,15 +31,23 @@ and physical results through 2026-10-31:
 | NPU | Earlier interrupt-driven ShuffleNetV2 inference at 852 MHz; current image passes real provider/task construction before scheduling, disabled IRQ restoration, normal return and saved-RAM restoration | Current scheduled startup, inference/restart, full power-off, thermal behavior and broader integration |
 | Memory bus | Restore to 600 MHz on EL3 entry, with the preserved memory pattern verified on both boards | Broader memory and concurrent-device qualification |
 | microSD | High-speed PIO, one 4 KiB DMA read and one 64 KiB/sixteen-descriptor read at 50 MHz/four-bit/3.3 V; sentinel-prefilled chunks match PIO, with restored normal return | Sustained throughput, broader extents/cards, failure recovery, 1.8 V signalling and remaining storage/update paths |
-| DRAM training | Captures across ten lifetimes establish the inputs for the training-restore design | Executing the restore and qualifying memory after it |
+| DRAM training and restore | Full training reports 12,288 MiB and restores CPU-L/DSU boot clock words. The restore survey finds all 879 PHY writes hold; boot0 reports 12,288 MiB, but later message-block readback returns zero | Restore error 7 remains unresolved; usable restored memory and temperature policy are unqualified |
 
-Both ports are unavailable after GPU and longer CPU recognition attempts failed
-to return. Their runners were terminated and their claims closed as failed at
-the user's direction; neither produced a native result. Host locks are released,
-while board quarantine and halted queues remain. The preceding port 3-3 constructor diagnostic returned normally with its
-saved 18 MiB restored. Further physical recovery is unavailable until confirmed
-by the user. Software evidence remains separate from physical
-qualification; each board test requires its own return and failure admission.
+The 2026-10-31 development records under
+`~/.cache/sunstoneos/evidence/dev-runs-1031/` supersede the earlier access
+snapshot. `3-3-ddr-clock-plain-3/session.json` records successful cold training
+and `clock_point_result: 0`. The restore result is in
+`3-1-ddr-v5-survey/session.json` and `survey.json`; the runner resets and
+falls back to full training after the failed message-block readback.
+
+CPU rails can remain raised after failure. The retained 1050/1000 mV selectors
+are recorded in `3-3-rail-helper-2/rail-helper/kernel.log`; watchdog reset and
+USB replug do not reset the PMIC in the supplied 2026-10-31 measurement.
+The [current handoff](handoff.md#board-state-and-recovery) records the 800 mV
+CPU-return requirement and incomplete recovery helper. Saved logs do not
+establish live access. Earlier nonreturns and released host claims remain in
+[the historical access record](handoff-history-20261031.md#board-access).
+Each board test requires its own return and failure admission.
 
 ## Current software integration
 

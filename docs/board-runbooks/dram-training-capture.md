@@ -15,7 +15,7 @@ the 2040 MHz run costs about 4.4 s alone as well. The initialization-only
 run reached `Training result is = 7` after 36 ms and the size line after
 40 ms on both boards, with `dram_tpr10` `0x80010000` and a failing simple
 test, as predicted. These
-are the captures of [the training-restore design](../designs/dram-training-restore.md#captures-identify-which-registers-training-sets).
+are the captures of [the training-restore design](../designs/dram-training-restore.md#the-restore-set-comes-from-three-kinds-of-capture).
 Each lifetime trains DRAM with the unchanged FEL DDR step and then captures
 twice: the parameter block that boot0 leaves in SRAM, the SID chip ID and
 thermal calibration, and the DRAM controller and PHY registers.

@@ -199,7 +199,7 @@ returns failure at the first refusal, so `main.c` keeps its panic codes 10 and
 The mimus board image binds the same three named mimus functions directly to
 the board hooks, so its behavior is unchanged. The OS build compiles the
 mimus board application with a build patch
-([application.patch](../apps/os/application.patch)) so that its pin and
+([application.patch](https://github.com/pedapudi/mimus/blob/764e48339f6c0d7f23b0d98540d2ea0f0f18bd39/sunstoneos/apps/os/application.patch)) so that its pin and
 start entries accept the image's workloads, and replaces the mimus board's
 EL3 publication hook with [identity.c](../apps/os/identity.c).
 
@@ -329,7 +329,7 @@ The focused checks use modeled devices and task scheduling:
 - [Thermal integration](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/os-thermal-throttle.py) covers startup,
   throttle/recovery, exact freshness expiry, the 70 °C stop, terminal-row
   publication and fixed snapshot capacity across CPU, GPU and CPU-clock builds.
-- [Report capture](../checks/os-thermal-report.py) executes the linked native
+- [Report capture](https://github.com/pedapudi/mimus/blob/764e48339f6c0d7f23b0d98540d2ea0f0f18bd39/sunstoneos/checks/os-thermal-report.py) executes the linked native
   admission, thermal task, window hooks, report copy and USB exchange. It checks
   page bounds, immutable generations, malformed requests, the excluded profile,
   terminal failure and separate host artifacts.

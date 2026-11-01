@@ -11,7 +11,7 @@ the end exists. Section numbers refer to
 The design covers NPU startup ([a733_npu_startup.c](../../drivers/npu/a733_npu_startup.c)),
 the local clock and reset controller ([a733_npu_platform.c](../../drivers/npu/a733_npu_platform.c)),
 the engine controller ([a733_npu_controller.c](../../drivers/npu/a733_npu_controller.c)),
-the PLL controller ([a733_npu_pll.c](../../drivers/npu/a733_npu_pll.c)) and the
+the PLL controller ([a733_npu_pll.c](https://github.com/pedapudi/sunstoneos/blob/cea0b33194dc6081827f84b25e6aaf985e7ff3e3/drivers/npu/a733_npu_pll.c)) and the
 convolution application in `apps/npu-convolution`. Every image that runs NPU
 startup is built from that application: the multicore build, the single-core
 build, and the images built on the single-core one (`npu-runtime`,
