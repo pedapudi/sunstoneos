@@ -1,11 +1,12 @@
 # GPU recovery completes the reset write before power-off
 
-Status: implemented and host-tested; board recovery validation is pending.
+Status: implemented and host-tested; injected-timeout recovery returns normally
+on port 3-3 in queue entry `1793560094069288734-8923c447`.
 
 The recovery path stops kernel traffic, waits for the existing Sidekick, BIF
 and SLC idle conditions, asserts the full soft-reset mask, then powers off.
-Its current reset readback requires every written bit to read as one. Port
-3-3 reaches that final read but times out: entry
+Full-mask readback equality is outside its completion contract. A port 3-3 diagnostic of that equality condition
+reaches the final read but times out: entry
 `1793559451655627386-914e388f` records stop phase 8, step 15, timeout error 3
 and the last read's low word `0xe8000020`. The written low word is
 `0xfffffc3d`. This observation does not identify the meaning of each missing bit.
@@ -24,9 +25,9 @@ Neither sequence defines full-mask equality as a reset-completion condition.
 
 ## Complete one read without comparing its value
 
-Keep the existing reset write, ordered 32-bit accesses, barriers, mandatory
-idle polls and absolute deadlines. Replace the equality poll with one
-completed reset read. The native backend authorizes that read only after the
+The path preserves the reset write, ordered 32-bit accesses, barriers,
+mandatory idle polls and absolute deadlines. One completed reset read fences
+the write through SOCIF. The native backend authorizes that read only after the
 exact reset write in RECOVERING. A successful read marks write completion;
 its returned value remains diagnostic data. A failed access or expired deadline
 retains ownership and prevents power-off.
@@ -36,9 +37,10 @@ firmware-memory reclamation and the existing stopped-backend proof. Restart
 still requires fresh firmware health and MMU-cache completion. The peer's
 queued job remains retained throughout recovery.
 
-No voltage, clock, power-domain or firmware-start operation changes. The
-300 ms stop and one-second READY bounds remain. Reset performs one ordered
-64-bit read, implemented as two 32-bit accesses, without an extra delay.
+Voltage, clock, power-domain and firmware-start operations follow their
+existing sequences. Stop is bounded by 300 ms and READY by one second. Reset
+performs one ordered 64-bit read, implemented as two 32-bit accesses, without
+an extra delay.
 The acceptance budget is recovery within those bounds, exact peer and owner
 outputs, and normal GPU/CPU retirement.
 
@@ -48,7 +50,9 @@ Host fixtures return the observed partial reset value after the exact write.
 They require one read before OFF and reject failed reads, missing or incorrect
 writes, late completion, failed idle checks and failed OFF. The reset write's
 value and all earlier register operations must still match the pinned source.
-Native queue cases cover retained recovery and failure ownership. The board
-run repeats the injected timeout with this single predicate correction; its
-expected result is one recovered fault, the queued peer and next owner job
-completed, and normal return. Recognition runs only after that succeeds.
+Native queue cases cover retained recovery and failure ownership. Board entry
+`1793560094069288734-8923c447` returns normally with one recovered HANG fault,
+the queued peer and the next owner job completed. Qualified recognition entry
+`1793560622000131271-53954059` returns with 186 completed GPU jobs, reference
+CRCs and transcript, and complete thermal capture. These finite inputs do not
+qualify arbitrary stuck-device recovery.
