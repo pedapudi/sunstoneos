@@ -11,6 +11,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import sys
 
 from elftools.elf.elffile import ELFFile
 
@@ -21,7 +22,7 @@ def sha256(data):
 
 def inspect(path):
     payload = path.read_bytes()
-    sections, objects, latency = {}, [], []
+    sections, objects, latency, section_bytes = {}, [], [], {}
     with path.open('rb') as stream:
         elf = ELFFile(stream)
         if elf['e_machine'] != 'EM_AARCH64' or elf['e_type'] != 'ET_EXEC':
@@ -35,6 +36,7 @@ def inspect(path):
                 'alignment': section['sh_addralign'],
                 'sha256': sha256(section.data()),
             }
+            section_bytes[section.name] = section.data()
         symbols = elf.get_section_by_name('.symtab')
         if symbols is None:
             raise ValueError(f'{path}: symbol table required to check storage')
@@ -47,7 +49,8 @@ def inspect(path):
                 if section['sh_flags'] & 2:
                     objects.append([symbol.name, section.name, symbol['st_value'], symbol['st_size']])
     return {'path': str(path), 'sha256': sha256(payload), 'sections': sections,
-            'objects': sorted(objects), 'latency_symbols': sorted(set(latency))}
+            'objects': sorted(objects), 'latency_symbols': sorted(set(latency)),
+            '_section_bytes': section_bytes}
 
 
 def cache(path):
@@ -79,9 +82,19 @@ def compare(reference, current):
         old, new = reference['sections'].get(name), current['sections'].get(name)
         executable = bool(((old or {}).get('flags', 0) | (new or {}).get('flags', 0)) & 4)
         writable = bool(((old or {}).get('flags', 0) | (new or {}).get('flags', 0)) & 1)
-        equal = old == new
+        old_bytes = reference['_section_bytes'].get(name, b'')
+        new_bytes = current['_section_bytes'].get(name, b'')
+        equal = old == new and old_bytes == new_bytes
+        changed = [] if old_bytes == new_bytes else [
+            i for i in range(max(len(old_bytes), len(new_bytes)))
+            if old_bytes[i:i + 1] != new_bytes[i:i + 1]]
         rows.append({'name': name, 'executable': executable, 'writable': writable,
-                     'identical': equal, 'reference': old, 'current': new})
+                     'identical': equal, 'reference': old, 'current': new,
+                     'different_bytes': len(changed),
+                     'changed_instruction_words': [
+                         {'section_offset': i, 'reference': old_bytes[i:i + 4].hex(),
+                          'current': new_bytes[i:i + 4].hex()}
+                         for i in sorted({i // 4 * 4 for i in changed})] if executable else []})
         if (executable or writable) and not equal:
             failures.append(f'{name}: {"executable" if executable else "writable"} section changed')
     if not any(row['executable'] and row['reference'] and row['reference']['size'] for row in rows):
@@ -114,7 +127,9 @@ def main():
     (args.output / 'disassembly.diff').write_text(difference)
     if difference:
         failures.append('disassembly changed')
+    del reference['_section_bytes'], current['_section_bytes']
     report = {'passed': not failures, 'failures': failures, 'configurations': configurations,
+              'command': [sys.executable, *sys.argv], 'objdump': args.objdump,
               'reference': reference, 'current': current, 'section_comparison': rows,
               'disassembly_identical': old == new,
               'whole_elf_identical': reference['sha256'] == current['sha256']}
