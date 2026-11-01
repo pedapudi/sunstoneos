@@ -539,7 +539,8 @@ class Live:
         self.tx(*plan['launch'])
         self.wait(plan['watchdog']['session_seconds'] + crumbs.interval(plan['watchdog']['mode']) + 10)
         before, after, words = self.returned()
-        decoded = crumbs.decode(words, plan['epoch'], self.args.image) if plan.get('format') == 'npu' else crumbs.decode(words, plan['epoch'])
+        elf = self.args.image if plan.get('format') == 'npu' or self.args.image.suffix == '.elf' else None
+        decoded = crumbs.decode(words, plan['epoch'], elf)
         self.record['breadcrumbs'] = decoded
         save(self.evidence/'breadcrumbs.json', decoded)
         require(not after & 1, 'WDT0 did not disarm after return.')

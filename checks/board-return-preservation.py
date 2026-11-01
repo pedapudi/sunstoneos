@@ -235,6 +235,19 @@ def main():
                 assert result['return_report']['npu_report']['mode']=='sdk'
                 assert result['rail_runs']['restore-rails']['image_sha256']==board.POST_RAIL_HELPER_SHA256
         print('PASS',variant)
+    # Generic ELF failures need the same frozen caller-symbolization input as
+    # finite NPU failures. The decoder itself has separate real-ELF checks.
+    symbol_image = args.out/'symbolization.elf'
+    symbol_image.write_bytes(b'MODELED ELF PATH ONLY; decoder is spied, never executed')
+    parser = argparse.ArgumentParser(); board.run_options(parser)
+    options = parser.parse_args([str(symbol_image), '--port', '3-1'])
+    evidence = args.out/'symbolization'; evidence.mkdir()
+    owner = Owner(options, evidence, {}, 'normal')
+    decoded = {'session':True, 'last':{'stage':board.crumbs.RETURN_ROM, 'value':0}}
+    with patch.object(board.crumbs, 'decode', return_value=decoded) as decoder:
+        assert owner.launch(make_plan()) == 'returned'
+        assert decoder.call_args.args[1:] == (epoch, symbol_image)
+    print('PASS generic ELF caller symbolization receives the selected image')
     # Exercise the production pinned helper method, including its own uploads.
     if args.rail_elf:
         assert images.sha(args.rail_elf)=='ef63663020cf827f89811ef9cb60733a4965f70e518fe96ccd8821c59babfb5f'
