@@ -63,6 +63,8 @@ for name, address in (("ddr-entry", 0x85000), ("cache-off", 0x71000)):
 symbols = subprocess.check_output([nm, str(args.output / "ddr-entry.elf")], text=True)
 log_address = next(int(line.split()[0], 16) for line in symbols.splitlines()
                    if line.split()[-1] == "log_character")
+symbol = {line.split()[-1]: int(line.split()[0], 16) for line in symbols.splitlines()}
+ticks_address, poll_limit_address = symbol["clock_ticks"], symbol["clock_poll_limit"]
 restore_manifest = None
 if args.variant == "restore":
     spec = importlib.util.spec_from_file_location("training_record", ROOT / "tools/training-record.py")
@@ -154,7 +156,10 @@ if ((args.output / "ddr-entry.bin").stat().st_size > 0x1000
     sys.exit("Wrapper exceeds its reserved SRAM interval.")
 manifest = {"boot0_sha256": expected, "load": 0x47000, "head_shadow": 0x8e000,
             "wrapper": 0x85000, "mailbox": 0x86000, "log": 0xe0000,
-            "log_character": log_address, "files": {}}
+            "log_character": log_address, "clock_ticks": ticks_address,
+            "clock_poll_limit": poll_limit_address,
+            # Mailbox word 15: CPU-L/DSU return to the ROM clock point.
+            "clock_point_word": 15, "files": {}}
 if args.variant:
     manifest["variant"] = args.variant
 if restore_manifest:

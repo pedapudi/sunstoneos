@@ -147,19 +147,24 @@ by the single command recorded beside it in `restore-set-v4.command`
 ## Host evidence and SRAM bounds
 
 The frozen artifacts and check results are in
-`~/.cache/sunstoneos/evidence/dram-restore-1031b/`, with the commands in
-`commands.txt` there. The 1,036-register build that ran on port 3-1 stays
-frozen in `dram-restore-1031/`. No check opens a physical device.
+`~/.cache/sunstoneos/evidence/dram-clock-point-1031/`, with the commands in
+`commands.txt` there. Its restore set, records and restore helper equal those
+of `dram-restore-1031b/`; its wrapper adds the return of CPU-L and the DSU to
+the boot ROM clock point
+([design](../designs/dram-training-restore.md#the-wrapper-returns-cpu-l-and-the-dsu-to-the-rom-clock-point)).
+`tools/run-ddr.py` refuses the `dram-restore-1031b/` builds, which lack it.
+The 1,036-register build that ran on port 3-1 stays frozen in
+`dram-restore-1031/`. No check opens a physical device.
 
 | Check | Result and scope |
 | --- | --- |
 | `checks/ddr-capture-analysis.py` (`capture-analysis`) | Synthetic captures: the classes, the kind diff, and the two lane-offset rules, a status offset in one lane dropping the same offset in another lane and an excluded offset dropping its register. |
 | `checks/training-record-capture.py` (`from-capture`) | Both recorded P-state-0 references produce 12,320-byte records; seven altered identity/data cases refuse. Both captures of each lifetime give the same record. |
-| `checks/ddr-wrapper.py` with the restore build (`native-3-3`, `native-3-1`) | Twenty instruction cases pass for each board's record, with byte-lane register `0x73` of every lane modelled as reading 0. They include the actual patched Thumb BLX, full-width parameters, wrong SID, header/payload CRC, malformed sections, arbitrary address/mask rejection, size, missing hook, three readback failures (one mismatch, three mismatches reported with their indices, and a mismatch after `init_DRAM`) and three quick-check failures: a stuck word, an aliased address line 20 and a stuck data bit in the last window. boot0 calls and MMIO effects are modeled. |
+| `checks/ddr-wrapper.py` with the restore build (`native-3-3`, `native-3-1`) | Twenty instruction cases pass for each board's record, with byte-lane register `0x73` of every lane modelled as reading 0. They include the actual patched Thumb BLX, full-width parameters, wrong SID, header/payload CRC, malformed sections, arbitrary address/mask rejection, size, missing hook, three readback failures (one mismatch, three mismatches reported with their indices, and a mismatch after `init_DRAM`) and three quick-check failures: a stuck word, an aliased address line 20 and a stuck data bit in the last window. Every case also ends with CPU-L and the DSU returned to the ROM words in the driver's order and mailbox word 15 at 0. boot0 calls and MMIO effects are modeled. |
 | `checks/ddr-restore.py --reproduce` on the 1,036-register build (`reproduce-v3-3-1`) | Restore words 7–13 equal the port 3-1 mailbox: error 7, 20 writes, one hook call, `0x0a9200e6`, expected 6, read 0. |
-| `checks/ddr-host-retention.py` (`host`) | Twenty-eight cases pass. Restore cases model WDT0, the SID and both USB instances: success, a SID mismatch, four returned failures (the readback failure with two reported mismatches), a hang, a disarm that does not take, a failed fallback, no new instance, an unexplained reset, an arming readback mismatch, an already enabled WDT0, upload mismatches and missing arguments. |
+| `checks/ddr-host-retention.py` (`host`) | Thirty-three cases pass, including a plain run that leaves CPU-L off the ROM point, one with the DSU's LFM on, a restore that ends off the ROM point and falls back, and builds without the clock return refused before any device access. Restore cases model WDT0, the SID and both USB instances: success, a SID mismatch, four returned failures (the readback failure with two reported mismatches), a hang, a disarm that does not take, a failed fallback, no new instance, an unexplained reset, an arming readback mismatch, an already enabled WDT0, upload mismatches and missing arguments. |
 | `checks/training-record-copies.py` | Thirty-two paired-record cases and 25 sector interruption points pass with the 12,320-byte records. |
-| `checks/ddr-wrapper.py` with the plain build | Passes; the plain build's files equal those of the full trainings that passed on both boards after the 2026-10-31 watchdog reset. |
+| `checks/ddr-wrapper.py` with the plain build (`wrapper-plain.txt`) | Passes, with the CPU PLL block modelled: the driver's order and waits for CPU-L and the DSU, CPU-B untouched, a counter wrap, a lock that drops once, and ten failure and skip cases reported in mailbox word 15. Apart from the clock return, the plain wrapper's code equals that of the full trainings that passed on both boards after the 2026-10-31 watchdog reset. |
 | `checks/card-ddr.py`, `card-ddr-pio.py`, `card-ddr-host.py` | Twenty experimental and one default instruction case, thirteen timer/PIO cases and nineteen host cases pass with the shared quick check. |
 
 The nominal instruction case executes 2,236,828 instructions under a
@@ -171,7 +176,7 @@ detects gross errors; it reaches only the first 3 GiB of the 12 GiB map.
 
 | Artifact or reservation | Address and size |
 | --- | --- |
-| Wrapper | `0x85000`, 504 bytes; limit 4 KiB |
+| Wrapper | `0x85000`, 1,004 bytes (restore) and 892 bytes (plain); limit 4 KiB |
 | Mailbox | `0x86000`, 128 bytes |
 | Record | `0x87000`, 12,320 bytes; reservation 24 KiB |
 | FEL head shadow | `0x8e000`, 12 KiB |
@@ -182,9 +187,10 @@ detects gross errors; it reaches only the first 3 GiB of the 12 GiB map.
 | --- | --- |
 | `restore-set-v4.json` | `3464c8421cdeb23af51c831b38cab729c7a2ced9ecee3a746a08a57531da1cb4` |
 | `build-restore/ddr-restore.bin` | `fa27f208629932419ba110931ae8d9ff862c2c8429c1dd701cfc1a0785dbe40a` |
-| `build-restore/ddr-entry.bin`, unchanged | `34298104ea5903fb86beda94b8895bfaeb12a8a47cce0b569253ecd727c10b16` |
-| `build-restore/manifest.json` | `19b57e719b306413f460125a050d26332a3ea02aa0730658a2102016b3e4a7cf` |
-| `build-full/manifest.json`, unchanged | `4f20beed55a2759469a9b5f0c8dfc0ede3dfdb7e0487553254632386d68bdaa9` |
+| `build-restore/ddr-entry.bin` | `3e7e62aec993da2dd2e7825c958f3be35472c26fa6d6af951f4324aac0ce6e5f` |
+| `build-restore/manifest.json` | `9488adbe9bf1e4f9cb15335d8de7cd5c934c350718345b7847f1f81cac1e668d` |
+| `build-full/ddr-entry.bin` | `c40264b9961a5420dc218389931ee0a6d5e91296ca0608e028fe56a5563cf961` |
+| `build-full/manifest.json` | `635db5a01ef60c5e8168f37b10a2e878e3d4a45eb3184e370694c8402121a10f` |
 | `records/record-3-3.bin` | `44dccfa5f2e98f3beb2148b34dded8587e7772a1a9e5aa6a83a8840e98c3ecf3` |
 | `records/record-3-1.bin` | `47562252745cc4b2242bb7a5c11428aa3c9dfbb7aea2534138eca4643210e436` |
 
@@ -203,7 +209,10 @@ requires success, 921 writes, one hook call, 262,392 checked bytes
 and the 12,288 MiB size before its RAM-page checks; anything else falls
 back through WDT0. After a readback failure the runner records the
 mismatch count and the addresses and values of the second to fifth
-mismatches in `restore_result`.
+mismatches in `restore_result`. After every run it records the CPU PLL,
+pattern, LFM and mux words as `cpu_clocks` and mailbox word 15 as
+`clock_point_result`; a restore that ends off the entry clock point also
+falls back, and a plain or fallback run that does so fails.
 
 ## Commands for one board
 
@@ -218,7 +227,7 @@ there does not qualify warm restores. A board whose DRAM is already
 trained in the current FEL instance first resets through WDT0 to a new FEL
 instance, as the port 3-1 run of 2026-10-31 did, so that `init_DRAM` starts
 from reset controller and PHY state. With
-`F=~/.cache/sunstoneos/evidence/dram-restore-1031b` and `S` the session's
+`F=~/.cache/sunstoneos/evidence/dram-clock-point-1031` and `S` the session's
 evidence directory:
 
 1. Restore DDR start (`rs-ddr`), for port 3-3:

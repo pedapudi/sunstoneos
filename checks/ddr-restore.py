@@ -15,6 +15,9 @@ from pathlib import Path
 import struct
 from unicorn import Uc, UC_ARCH_ARM, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_WRITE, UC_HOOK_MEM_READ
 from unicorn.arm_const import *
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+from ddr_clock_model import ROM, ClockModel
 
 ROOT = Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser(description=__doc__)
@@ -156,6 +159,7 @@ for case, error in cases.items():
             state['phy_writes'].append(address)
         if access==16 and case=='readback' and state['phy_writes'] and address==phy[0][0] and not state['injections']:
             uc.mem_write(address,struct.pack('<H',phy[0][1]^masks[address]));state['injections']+=1;state['faulted']=True
+    clocks = ClockModel(cpu, manifest['clock_ticks']) if 'clock_ticks' in manifest else None
     cpu.hook_add(UC_HOOK_CODE,code);cpu.hook_add(UC_HOOK_MEM_READ|UC_HOOK_MEM_WRITE,memory)
     try:
         cpu.emu_start(0x85000,0xf0000,count=4000000)
@@ -170,6 +174,10 @@ for case, error in cases.items():
     for i,reg in enumerate(regs):assert cpu.reg_read(reg)==0x12340000+i,(case,i)
     assert bytes(cpu.mem_read(0x47000,0x3000))==fel
     mailbox=struct.unpack('<32I',cpu.mem_read(0x86000,128))
+    if clocks:
+        # Every return after board setup puts CPU-L and the DSU on the ROM point.
+        clocks.check_sequence('cpu-l',0x03010000);clocks.check_sequence('dsu',0x03010105)
+        assert {k:clocks.words[k] for k in ROM}==ROM and mailbox[15]==0,(case,mailbox[15])
     assert mailbox[0:2]==(0x53524444,5)
     assert mailbox[7]==error,(case,mailbox[:14],state)
     if a.reproduce:

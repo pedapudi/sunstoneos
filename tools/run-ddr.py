@@ -70,12 +70,17 @@ if restore:
     except (ValueError, struct.error) as error:
         sys.exit(f"Invalid training record: {error}")
 manifest = verified(args.build)
+# Builds before the CPU clock return leave CPU-L and the DSU at boot0's points.
+if manifest.get("clock_point_word") != 15:
+    sys.exit("--build predates the CPU clock return (manifest has no clock_point_word 15); rebuild it.")
 if restore:
     if not 0 < manifest["files"]["ddr-restore.bin"]["size"] <= 0x8000:
         sys.exit("Restore helper exceeds its SRAM reservation.")
     fallback = verified(args.fallback_build)
     if fallback.get("variant") is not None or fallback.get("boot0_sha256") != manifest.get("boot0_sha256"):
         sys.exit("--fallback-build must be the plain full-training wrapper for the same boot0.")
+    if fallback.get("clock_point_word") != 15:
+        sys.exit("--fallback-build predates the CPU clock return; rebuild it.")
 args.evidence.mkdir(parents=True, exist_ok=False)
 record = {"manifest": manifest, "tool_sha256": hashlib.sha256(args.fel.read_bytes()).hexdigest(),
           "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -180,11 +185,30 @@ def upload(build, manifest, evidence, with_restore):
             raise RuntimeError(f"Upload comparison failed: {short}")
 
 
+# CPU-L, CPU-B and DSU PLL, pattern, LFM and mux words. The wrapper returns
+# CPU-L and the DSU to the boot ROM's words after boot0's board setup
+# (boot/a733/ddr-entry.S, mailbox word 15); CPU-B keeps boot0's. The required
+# words are those the OS entry guard requires (apps/os/cpu-return-entry.c).
+CPU_CLOCKS = tuple((f"{name}_{word}", base + offset)
+                   for name, base in (("cpu_l", 0x08871000), ("cpu_b", 0x08872000), ("dsu", 0x08873000))
+                   for word, offset in (("pll", 0), ("pattern0", 4), ("pattern1", 8), ("lfm", 0x18), ("mux", 0x1c)))
+ROM_CLOCKS = {"cpu_l_pll": 0xf8802600, "cpu_l_mux": 0x03010000, "cpu_b_pll": 0xf8802700,
+              "cpu_b_mux": 0x03000000, "dsu_pll": 0xf8802600, "dsu_mux": 0x03010105}
+# Pattern (spread-spectrum) and LFM enable bits that must be clear.
+CLOCK_OFF_BITS = {"pattern0": 3 << 29, "pattern1": 1 << 31, "lfm": 1 << 31}
+
+
 def collect(evidence, outcome):
-    transaction("read", "0x86000", "128", evidence / "mailbox.bin",
-                "read", "0xe0000", "16384", evidence / "log.bin",
-                "read", "0x831f8", "128", evidence / "dram-parameters.bin")
+    stdout = transaction("read", "0x86000", "128", evidence / "mailbox.bin",
+                         "read", "0xe0000", "16384", evidence / "log.bin",
+                         "read", "0x831f8", "128", evidence / "dram-parameters.bin",
+                         *[part for _, address in CPU_CLOCKS for part in ("readl", hex(address))])
     mailbox = (evidence / "mailbox.bin").read_bytes()
+    clocks = words(stdout)
+    if len(clocks) != len(CPU_CLOCKS):
+        raise RuntimeError(f"CPU clock readback returned {len(clocks)} words.")
+    outcome["cpu_clocks"] = {name: f"{value:#010x}" for (name, _), value in zip(CPU_CLOCKS, clocks)}
+    outcome["clock_point_result"] = struct.unpack_from("<I", mailbox, 60)[0]
     values = struct.unpack("<7I", mailbox[:28])
     outcome["result"] = dict(zip(("magic", "stage", "dram_mib", "board_result",
                                   "entry_cpsr", "entry_sctlr", "log_length"), values))
@@ -193,6 +217,23 @@ def collect(evidence, outcome):
     print(log, end="", flush=True)
     save()
     return mailbox, values
+
+
+def clock_problems(outcome):
+    """Words that differ from the entry point: the boot ROM's CPU-L and DSU
+    words, boot0's CPU-B words, pattern and LFM off (apps/os/cpu-return-entry.c)."""
+    clocks = outcome["cpu_clocks"]
+    wrong = {name: clocks[name] for name, value in ROM_CLOCKS.items() if int(clocks[name], 16) != value}
+    wrong.update({name: value for name, value in clocks.items()
+                  if int(value, 16) & CLOCK_OFF_BITS.get(name.split("_", 2)[-1], 0)})
+    return wrong
+
+
+def require_rom_clocks(outcome):
+    wrong = clock_problems(outcome)
+    if wrong or outcome["clock_point_result"]:
+        raise RuntimeError(f"CPU clocks not at the entry point after the DDR start: {wrong}; "
+                           f"wrapper clock result {outcome['clock_point_result']:#x}")
 
 
 def trained(values):
@@ -225,6 +266,7 @@ def full_training(build, manifest, evidence, outcome):
     _, values = collect(evidence, outcome)
     if not trained(values):
         raise RuntimeError(f"DDR initialization did not succeed: {outcome['result']}")
+    require_rom_clocks(outcome)
     failed = ram_pages(evidence)
     if failed is not None:
         raise RuntimeError(f"RAM page comparison failed: {failed:#x}")
@@ -324,6 +366,10 @@ def restore_attempt():
             expected = (0, settings["phy_registers"], 1, settings["sample_read_bytes"])
             if restored[:4] != expected or not trained(values) or values[2] != 12288:
                 reason = f"restore reported {record['restore_result']}"
+            elif clock_problems(record) or record["clock_point_result"]:
+                # The WDT0 reset re-enters the ROM, which sets CPU-L and the DSU again.
+                reason = (f"CPU clocks not at the entry point: {clock_problems(record)}, "
+                          f"wrapper clock result {record['clock_point_result']:#x}")
             else:
                 failed = ram_pages(args.evidence)
                 if failed is None:
@@ -389,12 +435,14 @@ try:
                     # follows reads only the PHY and controller.
                     if values[0] != MAGIC or values[1] != 5 or values[3] != 0:
                         raise RuntimeError(f"Wrapper did not return normally: {record['result']}")
+                    require_rom_clocks(record)
                     record.update(untrained=True, complete=True)
                     save()
                     print(f"PASS: init-only wrapper returned, DRAM untrained ({values[2]} MiB reported). Evidence: {args.evidence}")
                 else:
                     if not trained(values):
                         raise RuntimeError(f"DDR initialization did not succeed: {record['result']}")
+                    require_rom_clocks(record)
                     failed = ram_pages(args.evidence)
                     if failed is not None:
                         raise RuntimeError(f"RAM page comparison failed: {failed:#x}")

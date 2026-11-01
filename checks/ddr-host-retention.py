@@ -31,30 +31,43 @@ spec=real_spec('training_fixture',ROOT/'tools/training-record.py');training=impo
 build=a.evidence/'build';build.mkdir();files={}
 for name,size in [('boot0-head.bin',12288),('boot0-body.bin',233472),('ddr-entry.bin',128),('cache-off.bin',40)]:
     data=bytes([size%251])*size;(build/name).write_bytes(data);files[name]={'size':size,'sha256':hashlib.sha256(data).hexdigest()}
-(build/'manifest.json').write_text(json.dumps({'files':files}));fel=a.evidence/'fake-fel';fel.write_bytes(b'Never executed')
+(build/'manifest.json').write_text(json.dumps({'files':files,'clock_point_word':15}));fel=a.evidence/'fake-fel';fel.write_bytes(b'Never executed')
 # The init-only capture variant (tools/prepare-ddr.py --variant init-only) runs with --allow-untrained.
 init_build=a.evidence/'build-init-only';init_build.mkdir()
 for name in files:(init_build/name).write_bytes((build/name).read_bytes())
-(init_build/'manifest.json').write_text(json.dumps({'files':files,'variant':'init-only'}))
+(init_build/'manifest.json').write_text(json.dumps({'files':files,'variant':'init-only','clock_point_word':15}))
+# A build from before the CPU clock return: its manifest has no clock_point_word.
+old_build=a.evidence/'build-old';old_build.mkdir()
+for name in files:(old_build/name).write_bytes((build/name).read_bytes())
+(old_build/'manifest.json').write_text(json.dumps({'files':files}))
 results=[]
-cases=['nominal','pre-device-refusal','version-timeout','upload-mismatch','post-exe-timeout','RAM-mismatch','quarantine-failure','journal-failure','init-only','init-only-flag-missing']
+cases=['nominal','pre-device-refusal','version-timeout','upload-mismatch','post-exe-timeout','RAM-mismatch','quarantine-failure','journal-failure','init-only','init-only-flag-missing','clock-not-rom','clock-lfm-on','build-before-clock-return']
 WDT_MODE,WDT_CONFIG,WDT_OUTPUT,WDT_RESTART=0x02050014,0x02050010,0x02050018,0x0205000c
+# CPU PLL and mux words after the wrapper: the ROM point for CPU-L and the DSU,
+# boot0's for CPU-B, pattern and LFM words zero. The clock cases leave CPU-L
+# at boot0's 1014 MHz or the DSU's LFM enabled.
+ROM_CLOCKS={0x08871000:0xf8802600,0x0887101c:0x03010000,0x08872000:0xf8802700,0x0887201c:0x03000000,
+            0x08873000:0xf8802600,0x0887301c:0x03010105}
 # Restore cases: the mailbox error, the expected exit, and whether the run
 # ends in a WDT0 reset (deliberate after a returned failure, or after a hang).
-RESTORE={'restore-nominal':(0,0,False),'restore-header-crc':(2,3,True),'restore-readback':(7,3,True),
+RESTORE={'restore-nominal':(0,0,False),'restore-clock-not-rom':(0,3,True),'restore-header-crc':(2,3,True),'restore-readback':(7,3,True),
          'restore-memory':(9,3,True),'restore-ram-pages':(0,3,True),'restore-hang':(None,3,True),
          'restore-chip-mismatch':(None,3,False),'restore-no-return':(None,1,False),
          'restore-unexplained-reset':(None,1,False),'restore-fallback-fails':(7,1,True),
          'restore-arm-readback':(None,1,False),'restore-wdt-enabled':(None,1,False),
          'restore-disarm-fails':(None,3,True),'restore-record-upload':(None,1,False),
          'restore-helper-upload':(None,1,False),'restore-record-missing':(None,1,False),
-         'restore-fallback-missing':(None,1,False),'restore-no-session':(None,1,False)}
+         'restore-fallback-missing':(None,1,False),'restore-no-session':(None,1,False),
+         'restore-fallback-before-clock-return':(None,1,False)}
 if a.restore_build:
     cases+=list(RESTORE)
     restore_manifest=json.loads((a.restore_build/'manifest.json').read_text())
     fallback_build=a.evidence/'build-fallback';fallback_build.mkdir()
     for name in files:(fallback_build/name).write_bytes((build/name).read_bytes())
-    (fallback_build/'manifest.json').write_text(json.dumps({'files':files,'boot0_sha256':restore_manifest['boot0_sha256']}))
+    (fallback_build/'manifest.json').write_text(json.dumps({'files':files,'boot0_sha256':restore_manifest['boot0_sha256'],'clock_point_word':15}))
+    old_fallback=a.evidence/'build-fallback-old';old_fallback.mkdir()
+    for name in files:(old_fallback/name).write_bytes((build/name).read_bytes())
+    (old_fallback/'manifest.json').write_text(json.dumps({'files':files,'boot0_sha256':restore_manifest['boot0_sha256']}))
     chip=list(struct.unpack_from('<4I',a.restore_record.read_bytes(),32))
     sample=restore_manifest['restore']['sample_read_bytes']
     phy_count=restore_manifest['restore']['phy_registers']
@@ -143,6 +156,10 @@ for case in cases:
                 if address==0x92000:board['helper'].add(node)
             elif op=='readl':
                 value={WDT_MODE:wdt['mode']|(1 if case=='restore-wdt-enabled' else 0),WDT_CONFIG:wdt['config'],WDT_OUTPUT:wdt['output']}.get(address)
+                if 0x08871000<=address<0x08874000:
+                    value=ROM_CLOCKS.get(address,0)
+                    if address==0x08871000 and node==OLD and case in ('clock-not-rom','restore-clock-not-rom'):value=0xf8802700
+                    if address==0x08873018 and case=='clock-lfm-on':value=0x80000000
                 if value is None:
                     assert 0x03006200<=address<0x03006210;value=chip[(address-0x03006200)//4]^(1 if case=='restore-chip-mismatch' else 0)
                 stdout+=f'0x{value:08x}\n';i+=2
@@ -180,10 +197,11 @@ for case in cases:
     guard.reenumeration=reenumeration
     def sleep(seconds):clock[0]+=seconds
     restore_case=case.startswith('restore-')
-    selected_build=a.restore_build if restore_case else init_build if case.startswith('init-only') else build
+    selected_build=a.restore_build if restore_case else init_build if case.startswith('init-only') else old_build if case=='build-before-clock-return' else build
     argv=[str(ROOT/'tools/run-ddr.py'),'--fel',str(fel),'--build',str(selected_build),'--evidence',str(out/'runtime')]+(['--allow-untrained'] if case=='init-only' else [])
     if restore_case and case!='restore-record-missing':argv+=['--record',str(a.restore_record)]
-    if restore_case and case!='restore-fallback-missing':argv+=['--fallback-build',str(fallback_build)]
+    if restore_case and case!='restore-fallback-missing':
+        argv+=['--fallback-build',str(old_fallback if case=='restore-fallback-before-clock-return' else fallback_build)]
     status=0
     with patch.object(sys,'argv',argv),patch.object(importlib.util,'spec_from_file_location',selected_spec),patch.object(base,'stop_after_failure',stop),patch.object(base,'hold_ownership',hold),patch.object(subprocess,'run',fake_fel),patch.object(Path,'write_text',write),patch.dict(sys.modules,{'usb_guard':guard}),patch.object(time,'monotonic',lambda:clock[0]),patch.object(time,'sleep',sleep),patch.object(os,'access',lambda path,mode:True):
         try:runpy.run_path(str(ROOT/'tools/run-ddr.py'),run_name='__main__')
@@ -192,7 +210,8 @@ for case in cases:
     expected=RESTORE[case][1] if restore_case else 0 if case in ('nominal','init-only') else 'failure'
     if expected=='failure' or expected==1:assert status not in (0,3,None),(case,status)
     else:assert status==expected,(case,status)
-    device_free=('pre-device-refusal','init-only-flag-missing','restore-record-missing','restore-fallback-missing','restore-no-session')
+    device_free=('pre-device-refusal','init-only-flag-missing','restore-record-missing','restore-fallback-missing','restore-no-session',
+                 'build-before-clock-return','restore-fallback-before-clock-return')
     retained=status not in (0,3) and case not in device_free
     assert events.count('hold')==int(retained),(case,events)
     quarantines=[e for e in events if isinstance(e,tuple) and e[0]=='quarantine']
@@ -248,7 +267,21 @@ for case in cases:
     if case=='init-only':
         record=json.loads((out/'runtime/session.json').read_text())
         assert record['complete'] and record['untrained'] and not any('0x41000000' in e for e in fel_requests)
-    if case=='nominal':assert json.loads((out/'runtime/session.json').read_text())['complete']
+    if case=='nominal':
+        record=json.loads((out/'runtime/session.json').read_text())
+        assert record['complete'] and record['cpu_clocks']['cpu_l_pll']=='0xf8802600' and record['clock_point_result']==0
+    if case=='clock-not-rom':
+        record=json.loads((out/'runtime/session.json').read_text())
+        assert not record['complete'] and 'not at the entry point' in record['failure'] and 'cpu_l_pll' in record['failure']
+        assert not any('0x41000000' in e for e in fel_requests),'RAM pages after a clock refusal'
+    if case=='clock-lfm-on':
+        record=json.loads((out/'runtime/session.json').read_text())
+        assert not record['complete'] and "'dsu_lfm': '0x80000000'" in record['failure']
+        assert not any('0x41000000' in e for e in fel_requests),'RAM pages after a clock refusal'
+    if case in ('build-before-clock-return','restore-fallback-before-clock-return'):
+        assert 'clock return' in str(status) and not (out/'runtime').exists(),(case,status)
+    if case=='restore-clock-not-rom':
+        assert 'not at the entry point' in record['watchdog']['deliberate_reset'] and record['fallback']['cpu_clocks']['cpu_l_pll']=='0xf8802600'
     with lock.open('a') as released:fcntl.flock(released,fcntl.LOCK_EX|fcntl.LOCK_NB)
     results.append({'case':case,'pass':True,'exit':status if isinstance(status,int) or status is None else 'stopped','retained':retained,'FEL_requests':len(fel_requests),'resets':events.count('reset')})
 (a.evidence/'results.json').write_text(json.dumps({'physical_access':False,'pass':True,'cases':results,'host_sha256':hashlib.sha256((ROOT/'tools/run-ddr.py').read_bytes()).hexdigest()},indent=2)+'\n')

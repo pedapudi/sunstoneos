@@ -256,10 +256,15 @@ The following reviewed implementations are integrated with software evidence:
   reads 0 whatever is written, and fell back to a full training that
   passed. The set now leaves that register and the byte-lane status offsets
   out in every lane, and a readback failure reports every mismatching
-  register in one run. Frozen builds, both records and host results are in
-  `~/.cache/sunstoneos/evidence/dram-restore-1031b/`; the commands are in the
+  register in one run. The wrapper now returns CPU-L and the DSU to the boot
+  ROM's 494 MHz words before it returns to FEL, because boot0's board setup
+  leaves them at 1014 and 780 MHz and a return to live FEL does not re-enter
+  the ROM. `tools/run-ddr.py` reads the CPU clock words after every run and
+  refuses builds without this return. Builds, both records and host results
+  are in `~/.cache/sunstoneos/evidence/dram-clock-point-1031/`; the commands
+  are in the
   [first-test runbook](board-runbooks/dram-restore-test-1.md#commands-for-one-board).
-  No board run has used the revised build.
+  No board run has used the clock-return build.
 
 ## Current integration
 

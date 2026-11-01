@@ -669,12 +669,72 @@ WDT0 reset and one full training:
 
 A missing new instance, an instance whose WDT0 was not enabled, a failed
 full training or any FEL transport failure stops the run and quarantines the
-current instance, as other runners do. The plain wrapper's bytes equal those
-that trained both boards to 12,288 MiB on the instances created by the
-2026-10-31 watchdog reset (`~/.cache/sunstoneos/evidence/resume-20261031b/`).
-The WDT0 register values match the launchers in [watchdog.md](../watchdog.md);
-the runner writes no RTC FEL flag or ROM redirect word, as in the
-measurement.
+current instance, as other runners do. Apart from the clock-point return
+described below, the plain wrapper's code equals the code that trained both
+boards to 12,288 MiB on the instances created by the 2026-10-31 watchdog reset
+(`~/.cache/sunstoneos/evidence/resume-20261031b/`). The WDT0 register values
+match the launchers in [watchdog.md](../watchdog.md); the runner writes no RTC
+FEL flag or ROM redirect word, as in the measurement.
+
+### The wrapper returns CPU-L and the DSU to the ROM clock point
+
+boot0's board setup leaves CPU-L at 1014 MHz (PLL `0xf8802700`, mux
+`0x03000000`) and the DSU at 780 MHz (`0xf8801e00`, `0x03000105`). The boot
+ROM sets both to 494 MHz (PLL `0xf8802600`, muxes `0x03010000` and
+`0x03010105`), but only when it is entered. The wrapper returns to the live FEL
+instance with `bx lr`, so without a further step the next image would start at
+boot0's points. At `finish` in `boot/a733/ddr-entry.S`, whenever the run
+reached board setup (mailbox word 1 at least 2), the wrapper writes the ROM
+words back. This covers the plain, restore and fallback runs. CPU-B keeps
+boot0's word, as it does after a ROM entry.
+
+CPU0 runs on CPU-L while this code runs, so each domain follows the CPU clock
+driver's sequence (`drivers/clock/a733_cpu_clock.c`), timed with the 24 MHz
+system counter:
+
+1. Park the mux on the oscillator, read it back and wait 20 µs.
+2. Write N = 38, then write it again with the update bit (bit 26) set.
+3. Wait up to 10 ms for the update bit to clear.
+4. Wait up to 70 ms for the lock bit (bit 28) on three consecutive reads at
+   least 3 µs apart, then wait 20 µs.
+5. Write the final mux with the source field clear (the divider alone), then
+   the final mux, and wait 20 µs.
+
+A domain that already holds the ROM words is left alone. Mailbox word 15 is 0
+on success. Otherwise it is `0x100` × domain (1 CPU-L, 3 DSU) plus a code:
+
+- 1: the PLL is not enabled, or its update bit is set. Nothing is written.
+- 2: update timeout. 3: lock timeout. Both leave that mux on the oscillator.
+- 4: the counter does not advance within `0x1000000` polls. The mux stays on
+  the oscillator unless the stop comes during the last 20 µs wait.
+- 5: the mux did not read back as parked. The PLL is not written.
+
+A CPU-L failure leaves the DSU untouched. In every failure case FEL still
+runs, at 24 MHz at worst. With the CPU on the oscillator, the 16,777,216
+polls take tens of seconds (*estimated* at 1–3 µs per poll), longer than the
+four-second WDT0 interval of a restore run, so a stopped counter there ends in
+the watchdog reset.
+
+`tools/run-ddr.py` refuses a build or fallback build whose manifest lacks
+`clock_point_word` 15, before any device access, because such a build leaves
+CPU-L and the DSU at boot0's points. After each run it reads, in the same FEL
+transaction as the mailbox, the PLL, pattern (+4, +8), LFM (+0x18) and mux
+words of the three domains, and records them as `cpu_clocks`, with word 15 as
+`clock_point_result`. It requires the words that the OS entry guard
+(`apps/os/cpu-return-entry.c`) requires: the ROM words for CPU-L and the DSU,
+`0xf8802700`/`0x03000000` for CPU-B, and pattern and LFM off. A plain or
+fallback run that does not meet them fails before the RAM-page checks; a
+restore run falls back through the watchdog reset, whose ROM entry sets CPU-L
+and the DSU again.
+
+`checks/ddr-wrapper.py` runs the wrapper against a model of the PLL block
+(`checks/ddr_clock_model.py`) in which the old lock bit stays set until the
+update bit clears. It checks the order of writes, the waits and the final
+words, including a counter that wraps and a lock bit that drops once. It also
+covers a lock timeout, an update timeout, a disabled PLL, a mux that does not
+park, a domain already at the ROM point, and a stopped counter before the
+first wait, during the update wait and during the lock wait; for the last
+three the check lowers the poll limit to 2,000.
 
 ## Two-copy host selection and standby update contract
 

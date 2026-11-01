@@ -3155,6 +3155,17 @@
   "summary": "Check wrapper control flow and FEL preservation with simulated blob calls.",
   "usb": true
  },
+ "ddr_clock_model.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/dram-training-restore.md"
+  ],
+  "library": true,
+  "pure_host": false,
+  "required_arguments": [],
+  "summary": "Model of the CPU PLL block for the DDR wrapper checks (library).",
+  "usb": false
+ },
  "deinterlace-boot.py": {
   "cache_areas": [],
   "docs": [],
