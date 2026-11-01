@@ -22,12 +22,14 @@ from harness import Image, environment, refused, skip_crumbs
 
 ROOT = Path(__file__).resolve().parents[1]
 UNITS = ('drivers/npu/npu_runtime_queue.c', 'drivers/npu/npu_service.c',
-         'drivers/npu/npu_queue.c', 'drivers/npu/npu_idle.c')
+         'drivers/npu/npu_queue.c', 'drivers/npu/npu_idle.c',
+         'runtime/deadline.c', 'runtime/deadline-a733.c')
 TYPES = {'npu_runtime_queue', 'npu_runtime', 'npu_runtime_slot', 'npu_queue', 'npu_queue_ops',
          'npu_queue_command', 'npu_queue_job', 'npu_queue_fence', 'npu_service',
          'npu_service_direct', 'npu_service_runtime_state', 'npu_service_runtime',
          'npu_service_irq_ops', 'a733_npu_ops', 'a733_npu_controller', 'a733_npu_startup',
-         'a733_npu_native', 'a733_npu_command', 'npu_runtime_counters'}
+         'a733_npu_native', 'a733_npu_command', 'npu_runtime_counters', 'npu_idle',
+         'npu_idle_failure', 'npu_runtime_queue_power_stats'}
 
 
 def sha(path):
@@ -47,7 +49,7 @@ def layouts(path):
                 if not name:
                     continue
                 name = name.value.decode()
-                if die.tag == 'DW_TAG_enumerator' and (name.startswith(('A733_NPU_', 'NPU_RUNTIME_')) or name == 'SERVICE_ACTIVE'):
+                if die.tag == 'DW_TAG_enumerator' and (name.startswith(('A733_NPU_', 'NPU_RUNTIME_', 'NPU_IDLE_')) or name == 'SERVICE_ACTIVE'):
                     value = die.attributes['DW_AT_const_value'].value
                     assert name not in image.enums or image.enums[name] == value, name
                     image.enums[name] = value
@@ -517,7 +519,17 @@ def build_images(build, output, variants):
     options = []
     for name in ('C_DEFINES', 'C_INCLUDES', 'C_FLAGS'):
         options += shlex.split(re.search(r'^' + name + r' = (.*)$', flags, re.M)[1].replace(str(source), str(ROOT)))
-    cc = re.search(r'^CMAKE_C_COMPILER:(?:STRING|FILEPATH)=(.*)$', cmake, re.M)[1]
+    compiler = re.search(r'^CMAKE_C_COMPILER:(?:STRING|FILEPATH|UNINITIALIZED)=(.*)$', cmake, re.M)
+    if compiler:
+        cc = compiler[1]
+    else:
+        # Toolchain files can set a normal variable absent from the cache.
+        # CMake's compiler record retains the effective configured executable.
+        records = list((build / 'CMakeFiles').glob('*/CMakeCCompiler.cmake'))
+        compilers = {re.search(r'^set\(CMAKE_C_COMPILER "([^"]+)"\)', path.read_text(), re.M)[1]
+                     for path in records}
+        assert len(compilers) == 1, ('missing or ambiguous configured compiler', records)
+        cc = compilers.pop()
     base_link = shlex.split((build / 'CMakeFiles/sunstone-a733-os.dir/link.txt').read_text())
     commands, inputs = [], {str(flags_path): sha(flags_path)}
     for token in base_link:
