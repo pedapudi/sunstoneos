@@ -21,21 +21,23 @@ The latest development records are in `dev-runs-1031/`:
   DynamIQ shared unit (DSU) to the boot ROM clock words. The wrapper reports
   `clock_point_result: 0`; CPU-L and DSU PLL words are `0xf8802600`.
   Evidence: `3-3-ddr-clock-plain-3/session.json` under that directory.
-- **CPU rails — board-verified retained state; recovery in progress.** DCDC3
-  and DCDC5 can remain at 1050 and 1000 mV after failure. Watchdog reset and
-  USB replug do not reset the PMIC. boot0 never programs these CPU rails.
-  The CPU-return entry requires both at 800 mV. Evidence:
-  `3-3-rail-helper-2/rail-helper/kernel.log`, the supplied 2026-10-31 replug
-  measurement, and the [boot0 rail inventory](vendor-firmware/boot-rom-and-boot0.md#pmic-rails-over-twi).
-  The pinned development helper refuses raised DCDC3. A recovery helper to
-  lower both rails is in progress, according to the supplied 2026-10-31 status.
-  A successful clock check does not establish rail readiness.
-- **DRAM restore — implemented; memory validation failed.** The helper writes
-  879 PHY registers with no final survey mismatch. boot0 reports 12,288 MiB,
-  but the later PHY message-block readback returns 0 for expected nonzero
-  values. The runner records error 7 and falls back to full training.
-  Evidence: `3-1-ddr-v5-survey/survey.json` and `session.json` under the
-  development directory. This does not establish usable restored memory.
+- **CPU rails — board-verified, with a recovery helper.** DCDC3 and DCDC5
+  can remain at 1050 and 1000 mV after a run that raised them. Watchdog
+  reset and USB replug do not reset the PMIC, and boot0 never programs these
+  rails. The CPU-return entry guard requires both at 800 mV. The rail helper
+  (board bundle 33, `work/rails-both-1031`) lowers either rail to 800 mV
+  when the CPU clocks read their boot words. On port 3-3 it read 1000 and
+  1050 mV and wrote both to 800 mV. Evidence: `3-3-rail-helper-201322/`.
+- **DRAM restore — board-verified on both boards.** The restore helper
+  writes the saved PHY training registers, boot0 continues `init_DRAM`, and
+  its memory test passes with 12,288 MiB. A DRAM start then takes about 2 s
+  instead of about 15 s for full training. A failed restore falls back to
+  full training. A restored boot cannot switch DRAM frequency. Evidence:
+  `3-1-ddr-final-survey/` and `3-3-ddr-final-restore/`.
+- **CPU control image — board-verified.** With both rails at 800 mV, the
+  CPU-return control image ran recognition at the top CPU points (CPU-L
+  1794 MHz, CPU-B 2002 MHz) and returned normally, with the reference
+  transcript. Evidence: `3-3-cpu-return-201331/run/`.
 - **Watchdog recovery — board-verified for the recorded stops.**
   `3-3-cpu-return-191044/run/watchdog-report.json` records an EL3 stop,
   a 0.5-second reset interval and retained RTC fault words. DRAM is lost;
@@ -51,7 +53,7 @@ The component documents identify source files and narrower evidence boundaries.
 
 | Subsystem | Status and demonstrated scope | Reference |
 | --- | --- | --- |
-| ROM/FEL, DDR, RAM-only loading | **Board-verified:** full training reports 12,288 MiB; clock restoration and two checked RAM pages pass in the development record above. Fast restore remains experimental. | [Boot](boot.md), [DRAM](dram.md), [restore design](designs/dram-training-restore.md) |
+| ROM/FEL, DDR, RAM-only loading | **Board-verified:** full training and the saved-record restore both report 12,288 MiB; clock restoration and two checked RAM pages pass in the development records above. | [Boot](boot.md), [DRAM](dram.md), [restore design](designs/dram-training-restore.md) |
 | CPU, GIC, timers and SMP | **Board-verified:** eight-core timer/interrupt workload at bin-4 top points; one eight-worker CPU recognition input passes. Sustained load, thermal transitions and fault recovery remain open. | [CPU startup](cpu-start.md), [coherence](cpu-coherence.md), [SMP runtime](smp-runtime.md), [CPU clocks](cpu-clock.md) |
 | Memory bus | **Board-verified:** EL3 entry restores MBUS to 600 MHz on both boards, within the recorded memory-pattern checks. | [MBUS restore](designs/mbus-restore.md) |
 | Clocks, resets, PMIC and power domains | **Implemented:** shared ownership and operating-point control; CPU rail recovery remains incomplete as stated above. | [Clocks](clock-leases.md), [PMIC](pmic-runtime.md), [power](power-domains.md), [performance modes](performance-modes.md) |
@@ -72,7 +74,7 @@ The component documents identify source files and narrower evidence boundaries.
 | Crypto, entropy and identity | **Implemented:** native crypto modes, random-source and identity access. Full physical engine and recovery qualification remains open. | [Crypto](crypto-engine.md), [entropy](entropy.md), [identity](board-application.md) |
 | Always-on management processor | **Implemented:** remote-writer ownership accounting; native management-core control and sleep/wake qualification remain open. | [Remote writers](remote-writers.md), [SCP reference](vendor-firmware/scp-firmware.md) |
 | Autonomous microSD OS boot | **Host-verified only:** packaging, cold-entry and slot/update checks; no physical installation or autonomous OS boot is established. | [Cold entry](cold-entry.md), [resident OS design](designs/autonomous-card-os.md) |
-| Generic GPU compute queue | **Not started:** the design and prototype headers exist; application execution still uses the explicit legacy GPU integration. | [Queue design](designs/gpu-compute-queue.md), [layering audit](layering-audit.md) |
+| Generic GPU compute queue | **Host-verified only:** implemented on `work/gpu-queue-1031` with a vector-add example application; under review, not yet merged or run on a board. | [Queue design](designs/gpu-compute-queue.md), [layering audit](layering-audit.md) |
 
 Earlier board results in this table retain their exact input scope. CPU, GPU
 and NPU evidence is indexed in [the preserved board results](handoff-history-20261031.md#qualified-on-the-boards)
