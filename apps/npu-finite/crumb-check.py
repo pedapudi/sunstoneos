@@ -13,6 +13,9 @@ FINITE = ('WAIT_STARTUP', 'OPEN', 'BOOTSTRAP_READY', 'SUBMIT', 'JOB_DONE',
           'OUTPUT_COPIED', 'REAPED', 'CLOSE', 'LOCAL_STOP', 'QUIESCENT', 'EXIT')
 HELPER = {0x20: 'OPEN', 0x21: 'LOAD', 0x22: 'SUBMIT', 0x23: 'DONE',
           0x24: 'COPIED', 0x25: 'CLOSE', 0x2e: 'REFUSED', 0x2f: 'FAILED'}
+PASS = ('DOMAIN', 'REFERENCE', 'SRAM', 'AHB', 'NSI', 'MBUS', 'PERI0', 'PERI0_OUTPUT',
+        'VIDEO_ENC', 'VIDEO_DEC', 'VIDEO_BUS', 'MODULE', 'RESETS', 'DRAM_CLOCK',
+        'DRAM_PHY', 'CLOCK_MODES', 'PLL_PROFILE', 'PLL_GATES', 'PLL_TUNING', 'DONE')
 
 
 def main():
@@ -27,6 +30,7 @@ def main():
     expected = {0x0600 + i: 'NPU_' + name for i, name in enumerate(FINITE, 1)}
     expected[0x06ff] = 'NPU_RETAINED'
     expected.update({0x0600 + i: 'NPU_HELPER_' + name for i, name in HELPER.items()})
+    expected.update({0x0630 + i: 'NPU_PASS_' + name for i, name in enumerate(PASS)})
     for number, name in expected.items():
         assert stages.get(number) == name, (hex(number), stages.get(number), name)
     epoch = 0x1234
@@ -56,6 +60,8 @@ def main():
                    '_Static_assert(SUNSTONE_CRUMB_FAIL_NPU == 8, "NPU failure");']
     assertions += [f'_Static_assert(NPU_JOB_CRUMB_{name} == {0x600+i}, "helper {name}");'
                    for i, name in HELPER.items()]
+    assertions += [f'_Static_assert(SUNSTONE_CRUMB_NPU_PASS_{name} == {0x630+i}, "pass {name}");'
+                   for i, name in enumerate(PASS)]
     source.write_text('#include "crumb.h"\n#include "npu_crumb.h"\n' +
                       '\n'.join(assertions) + '\nint main(void) { return 0; }\n')
     subprocess.run(['/usr/bin/clang-21', '-std=c11', '-Wall', '-Werror',
@@ -64,7 +70,7 @@ def main():
     subprocess.run([str(args.out / 'crumb-values')], check=True)
     (args.out / 'result.json').write_text(json.dumps(dict(passed=True,
         decoded_stages=len(expected), failure_groups=[7, 8], physical_access=False), indent=2) + '\n')
-    print('PASS NPU breadcrumbs: 20 stages, finite/helper constants, GPU/NPU first-failure decoding')
+    print(f'PASS NPU breadcrumbs: {len(expected)} stages, finite/helper/pass constants, GPU/NPU first-failure decoding')
 
 
 if __name__ == '__main__':

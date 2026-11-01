@@ -5,12 +5,16 @@ supplies PMIC/pin authority, not proof of physical qualification. Live pin
 readbacks supply the inherited electrical fields that native guards verify.
 """
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import secrets
 import struct
 
 ROOT = Path(__file__).resolve().parents[2]
+_mbus_spec = importlib.util.spec_from_file_location('npu_vendor_mbus', ROOT / 'tools/vendor-mbus.py')
+_mbus = importlib.util.module_from_spec(_mbus_spec)
+_mbus_spec.loader.exec_module(_mbus)
 # Accessible system/controller registers only; never the NPU engine window.
 WORDS = (0x0300624c, 0x03000008, 0x02002500, 0x02002580, 0x02002588,
          0x02002b00, 0x02002b04, 0x020022a0, 0x020025c0, 0x020025e0,
@@ -91,6 +95,11 @@ def session(finite, image_data, layout, template, live):
                 'Unsupported NPU fabric clock.')
         values.append(value)
         rates.append(parent // divisor)
+    before_values, before_rates = list(values), list(rates)
+    # EL3 authenticates/seals this record before restoring ROM's 400 MHz
+    # MBUS to boot0's 600 MHz. Name that post-entry state now; the driver's
+    # exact comparison still refuses if the restore skips or hardware differs.
+    values, rates = _mbus.fabric(values, rates)
     raw = bytearray(template)
     epoch, generation, lease = (secrets.randbits(62) | 1 for _ in range(3))
     struct.pack_into('<3Q', raw, 24, epoch, generation, lease)
@@ -104,10 +113,12 @@ def session(finite, image_data, layout, template, live):
         struct.pack_into('<3B', raw, boot + pmic + 24 + 3 * config['pin'],
                          config['function'], config['pull'], config['drive'])
     derived = {'fabric': values, 'rate_hz': rates, 'mhz': 852, 'supply_uv': 800000,
+               'fabric_before_entry': before_values, 'rate_hz_before_entry': before_rates,
+               'mbus_rule_sha256': sha((ROOT / 'tools/vendor-mbus.py').read_bytes()),
                'pmic_pins': pin_configs,
                'configuration_template_sha256': sha(template),
                'physical_qualification': False,
-               'basis': 'template PMIC/pin authority, live pin/fabric/SID readbacks and native entry guards'}
+               'basis': 'template PMIC/pin authority, live pin/fabric/SID readbacks, expected EL3 MBUS restore and native entry guards'}
     # Bind actual source-labelled records, without fabricating review or
     # measured electrical facts from a software template.
     records = [dict(live=live, derived=derived), {'clock_readbacks': live['words'], 'derived': derived},

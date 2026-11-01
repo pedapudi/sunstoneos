@@ -189,7 +189,7 @@ class Machine:
             word = self.get(at, 4)
             if word & 0xffe0001f == 0xd4000001:
                 self.svc, self.svc_return = word >> 5 & 0xffff, at + 4
-                assert self.svc == 0x5c0e
+                assert self.svc in (0x5c0d, 0x5c0e)
                 u.reg_write(UC_ARM64_REG_PC, im.address('npu_finite_svc'))
                 return
             if word == 0xd69f03e0:

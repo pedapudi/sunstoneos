@@ -17,12 +17,14 @@ PROFILES = {
         [0x0601, 0x0620, 0x0621, 0x0622, 0x0623, 0x0624,
          0x0621, 0x0622, 0x0623, 0x0624, 0x0608, 0x0625, 0x0609, 0x060a, 0x060b]),
 }
+PASS_ORDER = [*range(0x0630, 0x0637), 0x0637, 0x0637, 0x0637, *range(0x0638, 0x0644)]
 FAILURES = """| Last progress stage | Failure signature |
 | --- | --- |
 | Before EL3 entry | No matching RTC session tag; launcher/admission failure or reset before entry. |
 | `0x0101` | EL3 admission/setup failure; first-fault words or EL3_STOP identify the detail. |
 | `0x0102` | EL1 entry or task construction failed before client startup. |
 | `0x0601` | Platform readiness did not arrive: inspect the first NPU failure, clocks, supply or routing. |
+| `0x0630`–`0x0643` | Startup register-pass sub-step; the marker precedes its reads. A clean refusal preserves the first failing register/site, then the client may write retained reason 9. |
 | `0x0602` or `0x0620` | Controller/bootstrap OPEN did not finish; inspect reset, IRQ status and idle evidence. |
 | `0x0603` | Bootstrap succeeded; the next client operation did not complete. |
 | `0x0604` or `0x0622` | Numerical completion did not arrive, or the controller retained a hardware fault. |
@@ -75,6 +77,7 @@ def main():
         terminal = ('NPU_STARTUP=READY_CLOSED_STOPPED; inference_jobs=0' if not jobs else
                     f'NPU_INFERENCE=MATCH; inference_jobs={jobs}')
         sequence = ' → '.join(f'`0x{s:04x}`' for s in [0x0101, 0x0102, *stages, 0x0503])
+        pass_sequence = ' → '.join(f'`0x{s:04x}`' for s in PASS_ORDER)
         preparation_hash = digest(ROOT / 'apps/npu-finite/development.py')[:8]
         run = build / 'runs' / f'{index:02d}-{name}-{elf_hash[:12]}-{preparation_hash}'
         commands = (f'SUNSTONE_USB_PORT=3-3 {sys.executable} {ROOT}/tools/run-ddr.py '
@@ -95,7 +98,11 @@ Inferred healthy terminal report: `{terminal}`. Expected status is 0,
 IRQ completions are {jobs + 1}, IRQ stopped is 1, and the image returns normally.
 {'Startup-only performs no numerical inference and does not claim functional success.' if not jobs else 'Every copied output must match its linked reference.'}
 
-Expected breadcrumb order: {sequence}.
+Expected client/return breadcrumb order: {sequence}.
+Register-pass sub-steps: {pass_sequence}. `0x0637` values are 0, 1 and 2.
+The readiness-wait client can interleave with these markers; OPEN follows
+the completed pass. Names and the full stage comparison are in
+apps/npu-finite/FABRIC-STAGE.md.
 LAST retains only the most recent stage; the separate first-failure words survive later stages.
 
 {FAILURES}
@@ -114,6 +121,9 @@ new session identities and live PL0/PL1 mux, pull and drive settings. It also
 reads live SID, fabric, routing and local reset state. Expected and desired
 PMIC pin settings are equal; the native pin provider uses its existing
 disable/configure/restore sequence during acquisition.
+The captured MBUS word and rate remain in the evidence; the session names
+the expected post-EL3 600 MHz state using tools/vendor-mbus.py. A skipped
+restore still fails the native exact comparison.
 Active-NPU watchdog recovery remains physically unqualified.
 The startup failure diagnostic is described in apps/npu-finite/STARTUP-FAILURE.md.
 Run startup-only first; a repeated retained value 9 must now carry the earlier

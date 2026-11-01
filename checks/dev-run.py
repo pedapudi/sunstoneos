@@ -720,7 +720,11 @@ def npu_native_cases(out, native):
     # The real port-3-3 capture has PL0/PL1 pull-up and drive code 1; the
     # historical construction template has both fields zero.
     live['words'].update({hex(0x07025014): 0x11111111, hex(0x07025024): 0x5})
+    live['words'][hex(0x02002588)] = 0x84000000  # ROM capture, before EL3 restores MBUS
     raw, profile, derived, records = helper.session(finite, image.read_bytes(), layout, template, live)
+    assert struct.unpack_from('<I', raw, 224 + 72 + 8)[0] == 0x81000000, 'NPU session must name post-EL3 MBUS'
+    assert struct.unpack_from('<I', raw, 224 + 72 + 20)[0] == 600000000
+    assert live['words'][hex(0x02002588)] == 0x84000000, 'capture must retain the observed ROM value'
     assert 0x0300624c in helper.WORDS and 0x03006244 not in helper.WORDS
     shadow = json.loads(json.dumps(live))
     shadow['words'][hex(0x03006244)] = 4 << 8

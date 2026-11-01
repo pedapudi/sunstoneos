@@ -296,12 +296,14 @@ static const uint32_t fabric_offsets[]={0x500,0x580,0x588};
 static int peri0(struct a733_npu_startup *s)
 {
     uint32_t pll,a,b,automatic,status;
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_PERI0,0);
     if(!rd(s,CCU+0xa0,&pll) || !matches(s,CCU+0xa0,pll,UINT32_C(0xfe000000),UINT32_C(0xfe000000)) || !matches(s,CCU+0xa0,pll,BIT(1),0) ||
        !rd(s,CCU+0xa8,&a) || !matches(s,CCU+0xa8,a,BIT(31),0) || !rd(s,CCU+0xac,&b) || !matches(s,CCU+0xac,b,BIT(27),0) ||
        !rd(s,CCU+0x1908,&automatic) || !rd(s,CCU+0x1988,&status))return 0;
     unsigned n=((pll>>8)&255)+1;
     if(n<53 || n>105){REGISTER_FAIL(s,CCU+0xa0,pll);return 0;}
     for(unsigned i=0;i<3;++i) {
+        sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_PERI0_OUTPUT,i);
         unsigned mhz=a733_npu_parent_mhz[i][(s->config.fabric.fabric[i]>>24)&7],divisor,mask;
         switch(mhz) {
         case 24:continue;
@@ -326,37 +328,48 @@ static int peri0(struct a733_npu_startup *s)
 static int pass(struct a733_npu_startup *s)
 {
     uint32_t osc,ref,v;
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_REFERENCE,0);
     if(!rd(s,0x07090160,&osc) || !rd(s,CCU,&ref))return 0;
     if(!a733_clock_ref24_valid(osc,ref)) {
         if((osc&UINT32_C(0x10000002))!=UINT32_C(0x10000002))REGISTER_FAIL(s,0x07090160,osc);
         else REGISTER_FAIL(s,CCU,ref);
         return 0;
     }
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_SRAM,0);
     if(!check(s,SRAM_ROUTING,SRAM_TO_CPU,SRAM_TO_CPU))return 0;
     for(unsigned i=0;i<3;++i) {
+        sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_AHB+i,i);
         if(!rd(s,CCU+fabric_offsets[i],&v) || !matches(s,CCU+fabric_offsets[i],v,a733_npu_fabric_masks[i],s->config.fabric.fabric[i]) ||
            (i && !matches(s,CCU+fabric_offsets[i],v,BIT(28)|BIT(27),0)))return 0;
     }
     if((s->shared&A733_CLOCK_PERI0) && !peri0(s))return 0;
-    if(!(
-        /* Video encode and decode gates closed, selector at most 6; bus word
-         * gates closed and resets asserted. */
-        rd(s,CCU+0xa80,&v) && matches(s,CCU+0xa80,v,BIT(31),0) &&
-        (((v>>24)&7)<=6 || (REGISTER_FAIL(s,CCU+0xa80,v),0)) &&
-        rd(s,CCU+0xa88,&v) && matches(s,CCU+0xa88,v,BIT(31),0) &&
-        (((v>>24)&7)<=6 || (REGISTER_FAIL(s,CCU+0xa88,v),0)) &&
-        check(s,CCU+0xa8c,0x50005,0) &&
-        /* NPU module gate closed; bus gate closed, core, AXI and AHB resets
-         * asserted, SRAM reset released. */
-        rd(s,CCU+0xb00,&v) && matches(s,CCU+0xb00,v,BIT(31),0) &&
-        (((v>>24)&7)<=6 || (REGISTER_FAIL(s,CCU+0xb00,v),0)) &&
-        check(s,CCU+0xb04,0xf0001,BIT(19)) &&
-        /* DRAM0 gate on, DDRPLL, no update pending; the DRAM bus takes its
-         * clock from the separate PHY PLL. */
-        check(s,CCU+0xc00,BIT(31)|BIT(27)|UINT32_C(0x07010000),BIT(31)) &&
-        check(s,CCU+0xc0c,BIT(16),BIT(16)) &&
-        check(s,CCU+0x1b10,1,0) && check(s,CCU+0x1b14,1,0) && check(s,CCU+0x1b1c,1,0) &&
-        rd(s,PLL,&v)))return 0;
+    /* Video encode and decode gates closed, selector at most 6; bus word
+     * gates closed and resets asserted. Preserve the original read order. */
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_VIDEO_ENC,0);
+    if(!(rd(s,CCU+0xa80,&v) && matches(s,CCU+0xa80,v,BIT(31),0) &&
+         (((v>>24)&7)<=6 || (REGISTER_FAIL(s,CCU+0xa80,v),0))))return 0;
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_VIDEO_DEC,0);
+    if(!(rd(s,CCU+0xa88,&v) && matches(s,CCU+0xa88,v,BIT(31),0) &&
+         (((v>>24)&7)<=6 || (REGISTER_FAIL(s,CCU+0xa88,v),0))))return 0;
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_VIDEO_BUS,0);
+    if(!check(s,CCU+0xa8c,0x50005,0))return 0;
+    /* NPU module gate closed; bus gate closed, core, AXI and AHB resets
+     * asserted, SRAM reset released. */
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_MODULE,0);
+    if(!(rd(s,CCU+0xb00,&v) && matches(s,CCU+0xb00,v,BIT(31),0) &&
+         (((v>>24)&7)<=6 || (REGISTER_FAIL(s,CCU+0xb00,v),0))))return 0;
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_RESETS,0);
+    if(!check(s,CCU+0xb04,0xf0001,BIT(19)))return 0;
+    /* DRAM0 gate on, DDRPLL, no update pending; the DRAM bus takes its
+     * clock from the separate PHY PLL. */
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_DRAM_CLOCK,0);
+    if(!check(s,CCU+0xc00,BIT(31)|BIT(27)|UINT32_C(0x07010000),BIT(31)))return 0;
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_DRAM_PHY,0);
+    if(!check(s,CCU+0xc0c,BIT(16),BIT(16)))return 0;
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_CLOCK_MODES,0);
+    if(!(check(s,CCU+0x1b10,1,0) && check(s,CCU+0x1b14,1,0) && check(s,CCU+0x1b1c,1,0)))return 0;
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_PLL_PROFILE,0);
+    if(!rd(s,PLL,&v))return 0;
     s->pll_inherited=v&PLL_INHERITED;
     /* The selected profile, before any write: the vendor's point for the
      * speed bin unless a733_npu_startup_rate chose one. */
@@ -373,13 +386,17 @@ static int pass(struct a733_npu_startup *s)
      * state at the other profile is retuned by the vendor's rate change. */
     s->pll_adopted=(v&~PLL_INHERITED)==(PLL_OPEN(s->pll_factors)|PLL_LOCK);
     s->pll_retune=(v&~PLL_INHERITED)==(PLL_OPEN(other)|PLL_LOCK);
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_PLL_GATES,0);
     if(s->pll_adopted || s->pll_retune ? !check(s,CCU+0x1920,0x10001,0x10001) || !check(s,CCU+0x19a0,BIT(16),BIT(16)) :
        /* PLL_NPU disabled: enable, lock enable, LOCK and output gate clear,
         * with only the preserved inherited reserved bit outside documented fields. */
        !matches(s,PLL,v,UINT32_C(0xb8000000),0) || !matches(s,PLL,v,~(UINT32_C(0xf870ff02)|PLL_INHERITED),0))return 0;
-    return check(s,CCU+0x2a4,1,0) && check(s,CCU+0x2a8,BIT(31),0) &&
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_PLL_TUNING,0);
+    if(!(check(s,CCU+0x2a4,1,0) && check(s,CCU+0x2a8,BIT(31),0) &&
         check(s,CCU+0x2ac,UINT32_C(0xff100000),UINT32_C(0x30000000)) &&
-        check(s,CCU+0x2b0,UINT32_C(0x1f0000),UINT32_C(0xb0000));
+        check(s,CCU+0x2b0,UINT32_C(0x1f0000),UINT32_C(0xb0000))))return 0;
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_DONE,0);
+    return 1;
 }
 /* The PLL_NPU control word without LOCK: after the enable table, or as
  * adopted with the output gate open. */
@@ -509,6 +526,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
     case A733_NPU_STARTUP_PASS: {
         /* Read-only: the owner's domain-4 check and the register pass. An
          * ordinary refusal releases tokens; shared gate enables persist. */
+        sunstone_crumb(SUNSTONE_CRUMB_NPU_PASS_DOMAIN,4);
         int held=enter(s);
         if(held==0)return now(s,0) ? PENDING : refuse(s);
         if(held!=1)return fault(s);
