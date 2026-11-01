@@ -63,6 +63,14 @@ record without counter writes. The actual configured rate must be at most
 700 MHz. The register fields follow A733 manual sections 4.1.6.61 and
 4.1.6.74 and the selected clock driver's NSI and DEPLL definitions.
 
+The pinned boot0's board setup selects NSI mux 3, PERI0_600M, with divider
+zero. Its DRAM clock routine selects the same parent and retains that
+divider. The DRAM-rate branch changes an MBUS divider before rejoining the
+common NSI write. [The binary facts](../vendor-firmware/data/gpu-nsi-clock.json)
+record the binary hash, source and decoded addresses. This supports the
+existing parent decoder without assuming an NSI rate from the DRAM rate.
+Live clock readback still controls diagnostic admission.
+
 The measurement must finish before the programmed period expires. At
 700 MHz, the maximum period exceeds six seconds. End-of-job validation uses
 the decoded clock rate and architectural counter. Decreasing raw data counts

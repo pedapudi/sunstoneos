@@ -1,0 +1,26 @@
+{
+  "binary_sha256": "829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3",
+  "source_url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_orangepizero3w.fex",
+  "load_address": "0x47000",
+  "offset_rule": "Blob offset equals decoded address minus load address.",
+  "register": "0x02002580",
+  "observations": [
+    {
+      "function": "0x491b8",
+      "address_literal": "0x494d8",
+      "setup_range": "0x4932c..0x49346",
+      "setup_effect": "Clear gate bit 31 and divider bits 4:0, then set update bit 27 and poll its completion.",
+      "selection_range": "0x49362..0x49378",
+      "selection_effect": "Clear selector bits 26:24 and set 0x8b000000, selecting PERI0_600M with gate and update set. Divider remains zero."
+    },
+    {
+      "function": "0x57a4c",
+      "address_literal": "0x57b74",
+      "selection_range": "0x57b3a..0x57b44",
+      "selection_effect": "Clear selector bits 26:24 and set 0xcb000000, selecting PERI0_600M with reset deasserted, gate and update set. Other divider fields are retained.",
+      "branch_effect": "The branch at 0x57af0 through 0x57b56 changes the MBUS divider and rejoins before this NSI selection."
+    }
+  ],
+  "conclusion": "Both decoded board-setup and DRAM-clock sequences select NSI mux 3, PERI0_600M. The current read-only decoder supports that parent.",
+  "limitation": "Static binary behavior does not establish a fresh board register value or exclude a later writer. Diagnostic clock readback remains authoritative."
+}
