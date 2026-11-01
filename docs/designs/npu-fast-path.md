@@ -1,6 +1,7 @@
 # Submit resident NPU commands and complete ordered fences
 
-This design is for driver and application-kit developers. A fence is a queue
+The queue is implemented and host-checked; physical performance and idle power
+remain unqualified. This design is for driver and application-kit developers. A fence is a queue
 identity and a monotonically increasing submission number. Its completion
 permits CPU acquisition of the corresponding device output. Network decoding,
 model partitioning and tensor interpretation belong to the loader and application.
@@ -48,7 +49,8 @@ by the existing independently armed watchdog; an exact per-job deadline interrup
 is still required before this path supports independently timed production jobs.
 
 The runtime adapter parks the ordinary worker during exclusive queue ownership.
-Its initial client runs at EL1 on the IRQ route core. Local IRQ masking protects
+Its initial client runs at EL1 on the IRQ route core. Successful return
+permanently closes the old queue's admission before the worker resumes. Local IRQ masking protects
 constant-size queue updates. Output acquisition and dirty-range cache maintenance
 run outside that lock. Registration and lifecycle operations remain slow paths.
 The adapter does not establish EL0 SDK access or physical qualification.
