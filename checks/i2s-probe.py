@@ -5,6 +5,8 @@ Actual FreeRTOS service cases cover held leases, cancellation/drain, overrun and
 serializer-owned EOF. Linked native instructions cover source setup/restore,
 stale gate/RWP readbacks, late completion and MBUS FIFO drain. Common monitor
 setup/restore and MMIO effects are explicit models; physical order is unproven.
+Entry-origin cases require the shared diagnostic patch selected at configure
+time with SUNSTONE_I2S_PROBE_ENTRY_PATCH, until that patch is integrated.
 """
 import argparse
 import gc
