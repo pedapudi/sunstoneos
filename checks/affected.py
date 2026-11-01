@@ -54,7 +54,8 @@ def needs(entry):
         return []
     return (['helper module'] * entry['library'] + ['USB access'] * entry['usb'] +
             entry['required_arguments'] + ['cache/' + a for a in entry['cache_areas']
-                                          if a not in indexer.NEUTRAL_AREAS]) or ['additional inputs']
+                                          if a not in indexer.NEUTRAL_AREAS] +
+            ([entry['input_reason']] if entry.get('input_reason') else [])) or ['additional inputs']
 
 
 def plan(value=None, changed=None):

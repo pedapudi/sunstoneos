@@ -55,7 +55,11 @@ INCLUDE = re.compile(r"""^\s*#\s*include\s+"([^"]+)\"""", re.M)
 # Cache areas that hold no evidence or build output: toolchains, pinned sources, the host venv.
 NEUTRAL_AREAS = {'host', 'sources', 'venv'}
 # Checks the text scan would call pure-host but that cannot run without arguments.
-NOT_PURE = {'radio-network.py': 'every case needs the optional --tcp, --kernel, --headers and --evidence paths'}
+NOT_PURE = {
+    'radio-network.py': 'every case needs the optional --tcp, --kernel, --headers and --evidence paths',
+    'h264-input-host.py': 'the default run needs --image, --inputs, --native and --launcher',
+    'sae-openssl.py': 'the default run needs --openssl, --upstream and --evidence; --verify-source needs a pinned source tree',
+}
 
 
 def checks():
@@ -145,7 +149,7 @@ def entry(path, documents):
             and set(required) <= OUTPUT_OPTIONS and path.name not in NOT_PURE)
     return {'summary': doc.splitlines()[0] if doc else '', 'docs': documents(path.name),
             'required_arguments': required + (['sys.argv'] if uses_argv else []), 'cache_areas': areas,
-            'usb': usb, 'library': is_library, 'pure_host': pure}
+            'usb': usb, 'library': is_library, 'pure_host': pure, 'input_reason': NOT_PURE.get(path.name)}
 
 
 def generate():
@@ -274,7 +278,8 @@ def main():
         e = index[name]
         needs = 'pure-host' if e['pure_host'] else 'needs ' + ', '.join(
             ['library'] * e['library'] + ['USB'] * e['usb'] + e['required_arguments'] +
-            ['cache/' + a for a in e['cache_areas'] if a not in NEUTRAL_AREAS]) or 'needs inputs'
+            ['cache/' + a for a in e['cache_areas'] if a not in NEUTRAL_AREAS] +
+            ([e['input_reason']] if e['input_reason'] else [])) or 'needs inputs'
         print(f'checks/{name}: {needs}')
     if not args.run:
         return

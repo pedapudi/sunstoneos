@@ -75,7 +75,20 @@ def main():
     assert result['checks'][0]['check'] == 'device.py'
     assert result['checks'][0]['status'] == 'pending'
     assert 'absent' in result['checks'][0]['needs'][0]
-    (out / 'results.json').write_text(json.dumps({'paths': selected, 'range': ranged, 'removed': result}, indent=2) + '\n')
+    # These scripts declare optional argparse flags that their default runtime
+    # nevertheless requires. Classification must not execute them without inputs.
+    for name in ('h264-input-host.py', 'sae-openssl.py'):
+        shutil.copyfile(ROOT / 'checks' / name, source / 'checks' / name)
+    conditional = select('--changed', 'checks/h264-input-host.py', 'checks/sae-openssl.py')
+    pending = {check['check']: check for check in conditional['checks']}
+    assert set(pending) == {'h264-input-host.py', 'sae-openssl.py'}
+    for check in pending.values():
+        assert check['status'] == 'pending'
+    assert '--launcher' in ' '.join(pending['h264-input-host.py']['needs'])
+    assert '--openssl' in ' '.join(pending['sae-openssl.py']['needs'])
+    assert 'pinned source tree' in ' '.join(pending['sae-openssl.py']['needs'])
+    (out / 'results.json').write_text(json.dumps({'paths': selected, 'range': ranged, 'removed': result,
+                                                'conditional_inputs': conditional}, indent=2) + '\n')
     print('PASS: declared inputs, include closure, renamed/deleted dependencies and pending inputs')
 
 
