@@ -140,19 +140,62 @@ def arithmetic():
 
 
 def tas_negative_control():
-    # Core 0 requests while core 1 holds. Core 0 executes a failed trylock on
-    # every cycle; core 1 releases and reacquires before core 0's next attempt.
-    # The state repeats, so arbitrarily many overtakes are possible even though
-    # both cores execute infinitely often. Ticket admission forbids this cycle.
-    state = (1, True)
-    trace = ["core 0 requests while core 1 holds"]
-    for _ in range(3):
-        owner, waiting = state
-        assert owner == 1 and waiting
-        trace.extend(("core 0 tries and observes busy", "core 1 releases", "core 1 reacquires"))
-        state = (1, True)
-    assert state == (1, True)
-    return dict(fifo=False, starvation_cycle=True, trace=trace)
+    # Search bounded TAS try/release transitions on three cores. Core 0 has
+    # requested the lock while core 1 holds it; every nonholder may try.
+    # Require victim progress between overtakes, so the witness does not
+    # depend on preventing core 0 from executing its acquisition loop.
+    cores, victim, bound = 3, 0, 2
+    # State: holder (-1 when free), overtakes, victim tried since handoff,
+    # and cores that executed a transition. No state has more than bound+1
+    # overtakes; a successful victim acquisition ends that search branch.
+    initial = (1, 0, False, 0)
+    parents = {initial: None}
+    work = deque([initial])
+    transitions = 0
+    while work:
+        state = work.popleft()
+        holder, overtakes, probed, ran = state
+        if overtakes > bound and ran == (1 << cores) - 1:
+            # This is the actual N-1 invariant, expected to reject TAS.
+            try:
+                assert overtakes <= bound, "TAS overtaking exceeds N-1"
+            except AssertionError as error:
+                trace = []
+                cursor = state
+                while parents[cursor] is not None:
+                    previous, core, operation = parents[cursor]
+                    trace.append(dict(core=core, operation=operation,
+                                      before=list(previous), after=list(cursor)))
+                    cursor = previous
+                trace.reverse()
+                return dict(fifo=False, cores=cores, victim=victim,
+                            overtaking_bound=bound, observed_overtakes=overtakes,
+                            expected_invariant_failure=str(error),
+                            states=len(parents), transitions=transitions, trace=trace)
+        if overtakes > bound:
+            continue
+        for core in range(cores):
+            visited = ran | (1 << core)
+            if holder == core:
+                following, operation = (-1, overtakes, probed, visited), "release"
+            elif holder >= 0:
+                following = (holder, overtakes, probed or core == victim, visited)
+                operation = "try_busy"
+            elif core == victim:
+                # The victim acquired; this branch cannot witness starvation.
+                continue
+            else:
+                # A free TAS gate admits any caller. Keep witnesses with a
+                # failed victim try before each overtaking acquisition.
+                if not probed:
+                    continue
+                following = (core, overtakes + 1, False, visited)
+                operation = "try_acquire"
+            transitions += 1
+            if following not in parents:
+                parents[following] = (state, core, operation)
+                work.append(following)
+    raise AssertionError("TAS negative control found no overtaking violation")
 
 
 def digest(path):
@@ -218,7 +261,7 @@ def main():
                   qemu=qemu_checks(args.build, args.qemu, args.output, args.cpu or ("cortex-a53", "cortex-a55", "cortex-a76")) if args.build else [])
     (args.output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
     print(f"PASS ticket locks: {sum(c['states'] for c in cases)} states; "
-          f"{report['arithmetic_cases']} wrap cases; monitored waits; TAS starvation control; "
+          f"{report['arithmetic_cases']} wrap cases; monitored waits; TAS fairness control; "
           f"{len(report['qemu'])} FreeRTOS emulator runs")
 
 

@@ -61,10 +61,14 @@ addresses, writable storage and object layout match the ticket-lock control.
 Evidence resides under `~/.cache/sunstoneos/build/sched-lock-1101/`.
 
 - `final-lock-check/result.json`: 19,447 three-core states, 262,144 wraparound
-  arithmetic cases, monitored-wait races and a test-and-set starvation control.
+  arithmetic cases and monitored-wait races.
   Seven linked FreeRTOS QEMU cases cover A53 fallback, A55 capability admission,
   A76 LSE, task migration and eight-core queue soak. The model assumes coherent
   acquire/release memory; it does not qualify physical timing.
+- `fairness-control/result.json`: executable test-and-set transitions generate
+  three overtakes while the waiting core continues trying. The expected
+  two-overtake bound for three cores fails. This strengthens the negative
+  control without changing the kernel or its linked-test evidence.
 - `recorder-final.log` and `final-latency-model/result.json`: nested attribution,
   recursion, bounded retention, freeze behavior and the shared eight-core
   latency workload. QEMU timing is host evidence only.
@@ -75,12 +79,21 @@ Evidence resides under `~/.cache/sunstoneos/build/sched-lock-1101/`.
   layout match; no latency symbols remain.
 
 Independent source review accepts the lock, recursion instrumentation and
-report layout. Integration results are recorded in the gate evidence.
+report layout. The full integration gate `sched-lock-1101-full` passes at
+`9e64216c`, including all central targets, every configured OS variant, the
+kernel check, eight-core soak and indexed host checks. Its summary is
+`integration/gate-sched-lock-1101-full/summary.txt` beneath the evidence root.
+Checks needing external inputs remain listed as pending; they are not claimed
+as executed. The supervised, resident and resident-audio baseline builds,
+progress check and check index pass.
+The stronger negative control and check index also pass after the test-only
+follow-up.
 
 ## Physical comparison requires recovery of port 3-3
 
-The CPU control profile uses the baseline's workload, top CPU operating points,
-voltages and session-template inputs. `SUNSTONE_LOCK_TAS_CONTROL=1` selects the
+The CPU control profile uses the baseline's workload and top CPU operating
+points: A55 at 1,794 MHz and 1,000 mV, A76 at 2,002 MHz and 1,050 mV.
+Session-template inputs are shared. `SUNSTONE_LOCK_TAS_CONTROL=1` selects the
 original lock only in recorder builds; the default uses tickets. The two built
 images differ in that selection and their build identity. Their build
 directories are `old-v2/` and `ticket-v2/` beneath the evidence root.
