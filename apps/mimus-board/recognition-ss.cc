@@ -3,12 +3,13 @@
 #include "ss-adapter.h"
 #include "../mimus/recorded.h"
 #include "../mimus/parallel_runtime.h"
-#include "runtime.h"
 extern "C" {
 #include "FreeRTOS.h"
 #include "task.h"
-void runtime_smp_init(void);
 #ifdef SUNSTONE_A733_OS_GPU_LINEAR
+#ifndef SUNSTONE_A733_OS_LEGACY_MIMUS_GPU
+#error The mimus session backend requires explicit legacy GPU compatibility
+#endif
 #include "dispatch.h"
 #endif
 }
@@ -71,7 +72,6 @@ bool capture(unsigned current, std::span<const uint8_t> &input)
 
 extern "C" void mimus_init(void)
 {
-    runtime_smp_init(); runtime_init();
     const struct ss_grant *grant = ss_grant();
     configASSERT(grant && grant->worker_cores);
     unsigned first = 0;
@@ -90,7 +90,16 @@ extern "C" void mimus_main(const struct ss_grant *grant)
         grant->regions[3].bytes != kMimusArenaBytes) failed();
     mimus_parallel_bind();
 #ifdef SUNSTONE_A733_OS_GPU_LINEAR
-    if (grant->devices & SS_DEVICE_GPU) { wait_clock(); os_gpu_open(); }
+    if (grant->devices & SS_DEVICE_GPU) {
+        /* The compatibility session has fixed mappings until the generic
+         * queue supplies region leases; reject any other placement. */
+        if (reinterpret_cast<uintptr_t>(grant->regions[4].base) != OS_DISPATCH_OUTPUT ||
+            grant->regions[4].bytes != OS_DISPATCH_READ_ONLY_BYTES ||
+            reinterpret_cast<uintptr_t>(grant->regions[0].base) != OS_DISPATCH_MODELS ||
+            reinterpret_cast<uintptr_t>(grant->regions[1].base) != OS_DISPATCH_MODELS + OS_DISPATCH_MODEL_BYTES ||
+            grant->regions[0].bytes > OS_DISPATCH_MODEL_BYTES || grant->regions[1].bytes > OS_DISPATCH_MODEL_BYTES) failed();
+        wait_clock(); os_gpu_open();
+    }
 #endif
     std::span<const uint8_t> input[3];
     for (unsigned i = 0; i < 3; ++i)

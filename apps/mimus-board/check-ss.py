@@ -56,7 +56,7 @@ run([CLANG, '-x', 'c++', '-std=c++20', '-pthread', *common,
      ROOT / 'apps/mimus-board/check-ss.cc', '-x', 'none', out / 'keyboard.o',
      '-lstdc++', '-o', out / 'adapter'], 'compile-adapter')
 results = {}
-for case in ('staged', 'capture', 'keyboard', 'no-overlap'):
+for case in ('staged', 'capture', 'headset', 'keyboard', 'no-overlap'):
     run([out / 'adapter', case], case)
     results[case] = True
 (out / 'results.json').write_text(json.dumps(dict(passed=True, cases=results,

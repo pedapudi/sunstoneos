@@ -26,6 +26,7 @@ TaskFunction_t host_task;
 std::atomic<int> live{1};
 std::atomic<unsigned> failures{0}, calls{0}, captures{0}, clocks{0}, progresses{0}, stops{0};
 bool omit_overlap;
+bool headset;
 std::mutex mutex;
 std::condition_variable changed;
 std::deque<struct ss_key_report> keys;
@@ -82,7 +83,7 @@ extern "C" int ss_clock_ready(void)
 { if (grant.capture_frames) assert(captures.load()); ++clocks; return 1; }
 extern "C" int ss_capture(uint32_t sequence, void **pcm, size_t *bytes)
 {
-    assert(sequence == 1 && grant.capture_frames == 16000);
+    assert(sequence == 1 && grant.capture_frames == (headset ? 48000u : 16000u));
     ++captures; *pcm = capture_buffer + 64; *bytes = 32000; return 1;
 }
 extern "C" int ss_storage_read(uint64_t sector, uint8_t data[512])
@@ -129,8 +130,6 @@ extern "C" TaskHandle_t xTaskCreateStaticAffinitySet(TaskFunction_t task, const 
     assert(depth == 2048 && priority == 3 && affinity == (1u << grant.main_core));
     host_task = task; return reinterpret_cast<TaskHandle_t>(1);
 }
-extern "C" void runtime_smp_init(void) {}
-extern "C" void runtime_init(void) {}
 void mimus_parallel_init(unsigned owner, unsigned worker) { assert(owner == 6 && worker == 7); }
 void mimus_parallel_bind() {}
 void mimus_parallel_stop() { ++stops; }
@@ -159,15 +158,16 @@ int main(int argc, char **argv)
 {
     assert(argc == 2);
     const bool keyboard = !std::strcmp(argv[1], "keyboard");
-    const bool capture = !std::strcmp(argv[1], "capture");
+    headset = !std::strcmp(argv[1], "headset");
+    const bool capture = !std::strcmp(argv[1], "capture") || headset;
     omit_overlap = !std::strcmp(argv[1], "no-overlap");
     grant.main_core = 6; grant.worker_cores = 1u << 7; grant.region_count = 5;
     grant.devices = keyboard ? SS_DEVICE_USB_STORAGE | SS_DEVICE_USB_KEYBOARD :
-        capture ? SS_DEVICE_AUDIO_I2S : omit_overlap ? SS_DEVICE_USB_STORAGE : 0;
+        capture ? headset ? SS_DEVICE_AUDIO_HEADSET : SS_DEVICE_AUDIO_I2S : omit_overlap ? SS_DEVICE_USB_STORAGE : 0;
     uint8_t inputs[3][16]{};
     for (unsigned i = 0; i < 3; ++i) grant.regions[i] = {inputs[i], sizeof(inputs[i])};
     grant.regions[3] = {reinterpret_cast<void *>(kMimusArenaBase), kMimusArenaBytes};
-    grant.capture_frames = capture ? 16000 : 0;
+    grant.capture_frames = capture ? headset ? 48000 : 16000 : 0;
     std::memset(capture_buffer, 0xa5, sizeof(capture_buffer));
     mimus_init(); assert(host_task);
     host_thread = std::thread([] { try { host_task(nullptr); } catch (const Stopped &) {} catch (const Failed &) {} });

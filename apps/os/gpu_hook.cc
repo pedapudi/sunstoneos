@@ -1,4 +1,4 @@
-// The SunstoneOS side of mimus's exact-sum hook (docs/gpu-mimus-service.md,
+// The native mimus exact-sum hook (docs/gpu-mimus-service.md,
 // docs/designs/gpu-recognition.md). The recognizer task runs every function
 // here: os_gpu_open once after the model hashes, then Begin and Finish from
 // inside the engine's matmul calls. Without the engine's header the hook

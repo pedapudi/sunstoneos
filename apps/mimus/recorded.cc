@@ -3,8 +3,14 @@
 #include "task.h"
 #include "platform.h"
 #include "timing.h"
+#ifdef SUNSTONE_A733_OS
+extern "C" {
+#include "sunstone_app.h"
+}
+#else
 // Named by path: the I2S image puts its unrelated apps/i2s/runtime.h first.
 #include "../../include/runtime.h"
+#endif
 #ifdef SUNSTONE_MIMUS_NATIVE
 #include "native.h"
 #endif
@@ -19,9 +25,8 @@
 #include <cstdio>
 #include <optional>
 #include <string>
-#ifdef SUNSTONE_MIMUS_NATIVE
-// The integrated OS image supplies its CPU clock record; other native images
-// leave the weak reference null and print no clock line.
+#if defined(SUNSTONE_MIMUS_NATIVE) && !defined(SUNSTONE_A733_OS)
+// Standalone native images can supply these optional diagnostic callbacks.
 extern "C" __attribute__((weak)) int os_cpu_clock_line(char *line, size_t bytes);
 extern "C" __attribute__((weak)) void os_thermal_record_begin(void);
 extern "C" __attribute__((weak)) void os_thermal_record_end(int success);
@@ -49,6 +54,9 @@ static void report_clock()
              static_cast<unsigned long long>(configured_hz),
              static_cast<unsigned long long>(COUNTER_HZ));
     platform_puts(line);
+#elif defined(SUNSTONE_A733_OS)
+    char line[192];
+    if (ss_clock_info(line, sizeof(line)) > 0) platform_puts(line);
 #elif defined(SUNSTONE_MIMUS_NATIVE)
     char line[192];
     if (os_cpu_clock_line && os_cpu_clock_line(line, sizeof(line)) > 0) platform_puts(line);
@@ -207,7 +215,13 @@ static bool recognize(std::span<const uint8_t> inputs[3], std::span<uint8_t> int
         platform_puts(metrics);
     }
     snprintf(metrics, sizeof(metrics), "MEMORY arena_peak=%zu heap_reserved_peak=%zu yields=%llu\n",
-             arena.peak(), runtime_heap_peak(), static_cast<unsigned long long>(mimus_yield_count()));
+             arena.peak(),
+#ifdef SUNSTONE_A733_OS
+             ss_heap_peak(),
+#else
+             runtime_heap_peak(),
+#endif
+             static_cast<unsigned long long>(mimus_yield_count()));
     platform_puts(metrics);
     platform_puts("PASS mimus: recorded audio recognized locally\n");
     return true;
@@ -221,11 +235,15 @@ bool mimus_engine_finish(unsigned options, bool success)
 bool mimus_transcribe_recorded(std::span<const uint8_t> inputs[3],std::span<uint8_t> internal_arena,
                                const std::atomic<bool> *stop,unsigned options)
 {
-#ifdef SUNSTONE_MIMUS_NATIVE
+#ifdef SUNSTONE_A733_OS
+    ss_activity_begin();
+#elif defined(SUNSTONE_MIMUS_NATIVE)
     if (os_thermal_record_begin) os_thermal_record_begin();
 #endif
     const bool success = recognize(inputs, internal_arena, stop, options);
-#ifdef SUNSTONE_MIMUS_NATIVE
+#ifdef SUNSTONE_A733_OS
+    ss_activity_end(success);
+#elif defined(SUNSTONE_MIMUS_NATIVE)
     // Freeze after both compute_us and total_us, also on early error returns.
     if (os_thermal_record_end) os_thermal_record_end(success);
 #endif
