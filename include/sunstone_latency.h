@@ -7,6 +7,19 @@ enum ss_latency_region {
     SS_LAT_LOCK_WAIT1, SS_LAT_LOCK_HOLD1, SS_LAT_SCHED_IDLE, SS_LAT_SCHED_BUSY,
     SS_LAT_DMA, SS_LAT_GPU, SS_LAT_NPU, SS_LAT_METRICS
 };
+enum ss_latency_phase {
+    SS_LAT_INIT, SS_LAT_IDLE, SS_LAT_BUSY, SS_LAT_PHASES, SS_LAT_PHASE_NONE
+};
+/* Nearest-rank quantiles are upper endpoints of logarithmic bins, with sixteen
+ * subdivisions per power of two (at most 6.25% width). Zero is exact; the
+ * final bin ends at UINT64_MAX. Maximum and its provenance are exact. */
+struct ss_latency_distribution {
+    uint64_t count, p50_upper, p99_upper, maximum, start, site;
+    uint64_t overflow_bin_count; /* Samples whose bin upper endpoint is UINT64_MAX. */
+};
+struct ss_latency_phase_core {
+    struct ss_latency_distribution metric[SS_LAT_METRICS];
+};
 struct ss_latency_metric {
     uint64_t count, maximum, start, site;
     uint64_t first_over_start, first_over_ticks, first_over_site;
@@ -14,6 +27,14 @@ struct ss_latency_metric {
 struct ss_latency_core {
     struct ss_latency_metric metric[SS_LAT_METRICS];
 } __attribute__((aligned(64)));
+#define SS_LAT_SITE_KINDS 2U
+#define SS_LAT_SITE_SLOTS 8U
+/* Longest nonzero masked sections (kind 0) and task-lock holds (kind 1).
+ * Sites are return addresses at entry and exit. Tables cover each phase and
+ * an aggregate at index SS_LAT_PHASES, including gaps and crossing intervals. */
+struct ss_latency_site {
+    uint64_t ticks, start, enter_site, exit_site;
+};
 
 #ifdef SUNSTONE_LATENCY
 static inline uint64_t ss_latency_now(void)
@@ -31,14 +52,27 @@ void ss_latency_init(uint64_t frequency);
 uint64_t ss_latency_counter_frequency(void);
 void ss_latency_freeze(unsigned core);
 void ss_latency_snapshot(struct ss_latency_core out[8]);
+/* Snapshot only after every writer has frozen; packed in descending duration. */
+void ss_latency_sites_snapshot(struct ss_latency_site out[SS_LAT_PHASES + 1][8][SS_LAT_SITE_KINDS][SS_LAT_SITE_SLOTS]);
+/* Single coordinator; each named phase opens once. Only intervals wholly inside
+ * a phase enter its distribution. Crossing intervals and gaps retain their
+ * aggregate record. Bounds use a common counter across all cores. */
+void ss_latency_phase_set(unsigned phase);
+void ss_latency_phase_snapshot(struct ss_latency_phase_core out[SS_LAT_PHASES][8]);
+/* Call on this core with recording excluded, or after it has frozen. Counts
+ * include recursive acquisitions; wait/hold samples cover outer acquisitions. */
+void ss_latency_lock_counts(unsigned core, uint64_t out[2]);
+/* Phase counts use the existing acquisition-request timestamp, including recursion. */
+void ss_latency_phase_lock_counts(unsigned phase, unsigned core, uint64_t out[2]);
+void ss_latency_phase_bounds(uint64_t out[SS_LAT_PHASES][2]);
 void ss_latency_record(unsigned core, unsigned region, uint64_t start, uintptr_t site);
 void ss_latency_record_at(unsigned core, unsigned region, uint64_t start,
                           uint64_t end, uintptr_t site);
 void ss_latency_mask_open(unsigned core, uint64_t start, uintptr_t site);
-void ss_latency_mask_close(unsigned core);
+void ss_latency_mask_close(unsigned core, uintptr_t site);
 void ss_latency_lock_acquired(unsigned core, unsigned lock, uint64_t start,
                                uintptr_t site);
-void ss_latency_lock_releasing(unsigned core, unsigned lock);
+void ss_latency_lock_releasing(unsigned core, unsigned lock, uintptr_t site);
 /* One outstanding masked interrupt source per metric. Coalesced IRQs retain
  * the earliest timestamp until the worker completes its observation pass. */
 void ss_latency_event_begin(unsigned region);

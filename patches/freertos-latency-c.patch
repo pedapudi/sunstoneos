@@ -15,7 +15,7 @@
  void vPortClearInterruptMask( UBaseType_t uxNewMaskValue )
  {
 +#ifdef SUNSTONE_LATENCY
-+    if( uxNewMaskValue > portMAX_API_PRIORITY_MASK ) ss_latency_mask_close( portGET_CORE_ID() );
++    if( uxNewMaskValue > portMAX_API_PRIORITY_MASK ) ss_latency_mask_close( portGET_CORE_ID(), ( uintptr_t ) __builtin_return_address( 0 ) );
 +#endif
      #if ( configNUMBER_OF_CORES > 1 )
          /* An EL1 task writes the mask in line; DAIF keeps the caller's value,
@@ -25,7 +25,7 @@
  void vPortClearInterruptMaskFromISR( UBaseType_t uxNewMaskValue )
  {
 +#ifdef SUNSTONE_LATENCY
-+    if( uxNewMaskValue > portMAX_API_PRIORITY_MASK ) ss_latency_mask_close( portGET_CORE_ID() );
++    if( uxNewMaskValue > portMAX_API_PRIORITY_MASK ) ss_latency_mask_close( portGET_CORE_ID(), ( uintptr_t ) __builtin_return_address( 0 ) );
 +#endif
      __asm volatile (
          "MSR DAIFSET, #2        \n"
@@ -121,7 +121,7 @@
              configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) != 0 );
  
 +#ifdef SUNSTONE_LATENCY
-+            ss_latency_lock_releasing( ucCoreID, eLockNum );
++            ss_latency_lock_releasing( ucCoreID, eLockNum, ( uintptr_t ) __builtin_return_address( 0 ) );
 +#endif
              /* Reduce the recursion count by 1. */
              prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), ( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) - 1 ) );
