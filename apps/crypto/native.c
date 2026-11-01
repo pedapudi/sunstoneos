@@ -129,13 +129,13 @@ void crypto_task(void *unused)
   if(crypto_session_runtime(&crypto.session)&&!crypto.retaining&&!crypto.constructed){
    if(!atomic_load_explicit(&crypto.input_ready,memory_order_acquire)){vTaskDelay(1);continue;}
    if(!crypto_construct()){
-    crypto.retaining=1;crypto_request_clear(&crypto.run.request);
+    crypto.retaining=1;crypto_run_clear_request(&crypto.run);
     atomic_store_explicit(&crypto.result,2,memory_order_release);
    }else crypto.constructed=1;
   }
   if(xSemaphoreTake(crypto.mutex,0)==pdTRUE){
    if(crypto.retaining){
-    if(atomic_load_explicit(&crypto.input_ready,memory_order_acquire))crypto_request_clear(&crypto.run.request);
+    if(atomic_load_explicit(&crypto.input_ready,memory_order_acquire))crypto_run_clear_request(&crypto.run);
     /* CPU client staging is distinct from quarantined DMA memory. Do not
      * invoke another CE operation merely to erase this copied software key. */
     crypto_run_clear_clients(&crypto.run);

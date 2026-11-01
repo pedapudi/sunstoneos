@@ -15,13 +15,17 @@ void crypto_run_clear_clients(struct crypto_run *r)
  crypto_secret_clear(r->cipher.aad,sizeof(r->cipher.aad));
  crypto_secret_clear(r->cipher.input,sizeof(r->cipher.input));
  crypto_secret_clear(r->cipher.output,sizeof(r->cipher.output));
+ crypto_secret_clear(r->payload,sizeof(r->payload));
+}
+void crypto_run_clear_request(struct crypto_run *r)
+{
+ crypto_request_clear(&r->request);
  crypto_secret_clear(r->request.input,sizeof(r->request.input));
  crypto_secret_clear(r->request.iv,sizeof(r->request.iv));
  crypto_secret_clear(r->request.aad,sizeof(r->request.aad));
- crypto_secret_clear(r->payload,sizeof(r->payload));
 }
 void crypto_run_clear_secrets(struct crypto_run *r)
-{crypto_request_clear(&r->request);crypto_run_clear_clients(r);}
+{crypto_run_clear_request(r);crypto_run_clear_clients(r);}
 static enum a733_ce_hash_result hash_poll(struct crypto_run *r)
 {
  if(r->request.version==1)return a733_ce_hash_poll(&r->hash,r->generation,r->payload);

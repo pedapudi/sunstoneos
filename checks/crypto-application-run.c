@@ -41,6 +41,9 @@ int main(void)
  CLEAR(request.key);CLEAR(request.secret);CLEAR(request.input);
  CLEAR(request.iv);CLEAR(request.aad);CLEAR(payload);
 #undef CLEAR
+ struct crypto_request producer_owned=revoked.request;
+ crypto_run_clear_clients(&revoked);
+ assert(!memcmp(&revoked.request,&producer_owned,sizeof(producer_owned)));
  crypto_run_clear_secrets(&revoked);
  assert(!memcmp(&revoked,&expected,sizeof(revoked)));
  assert(!memcmp(&retained,&before,sizeof(retained)));
