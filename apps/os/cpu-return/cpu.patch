@@ -6,7 +6,7 @@
  #include "os.h"
 +#include "cpu-return.h"
  #include "../board/application.h"
- #include "../mimus-board/application.h"
+ #include "application.h"
  #include "a733_cpu_clock.h"
 @@ -84,6 +85,10 @@
      atomic_uint ready;

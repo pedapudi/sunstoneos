@@ -12,7 +12,7 @@
  * no cluster leaves every clock and voltage unchanged. */
 #include "os.h"
 #include "../board/application.h"
-#include "../mimus-board/application.h"
+#include "application.h"
 #include "a733_cpu_clock.h"
 #include "a733_mmio.h"
 #ifdef SUNSTONE_A733_OS_PERF

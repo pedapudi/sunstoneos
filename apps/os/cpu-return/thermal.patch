@@ -1,9 +1,9 @@
 --- input
 +++ output
-@@ -6,6 +6,8 @@
-  * images stop, resident images stop renewing the watchdog. Faults retain
+@@ -7,6 +7,8 @@
   * the clock token, the register mutex and the masked interrupt. */
  #include "os.h"
+ #include "application.h"
 +#include "cpu-return.h"
 +#include "platform.h"
  #include "../board/application.h"
@@ -21,7 +21,7 @@
 +}
  static uint64_t deadline(void){return board.session.deadline_us-10000;}
  static int live(void)
- {return board_live(NULL)&&!atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)&&
+ {return board_live(NULL)&&os_application_deadline()&&!atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)&&
 @@ -280,7 +288,22 @@
  void os_thermal_task(void *unused)
  {
