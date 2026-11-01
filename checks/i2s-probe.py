@@ -166,6 +166,12 @@ def entry_cases(elf,out,steps):
         name='actual-entry-'+label
         if steps.case(name):continue
         m=shared.Model(elf,plan)
+        expected_value=value
+        # The optional owner preflights the same inherited inputs before its
+        # policy writes and records their more specific ownership sites.
+        if 'transition' in m.e.symbols:
+            site={'dynamic-OFF':0x83,'pending-ack':0x83,'wake-enabled':0x84}.get(label,site)
+            if label=='dynamic-OFF':address=0x07053008;expected_value=0
         m.sys.update(mpidr_el1=0x81000000,sctlr_el3=0xc50838)
         if isinstance(field,str):m.sys[field]=value
         elif field is not None:m.write(field,value,4)
@@ -175,7 +181,7 @@ def entry_cases(elf,out,steps):
         rtc=m.rtc()
         if site:
             assert not reached and rtc['fault']==0xfa030000|site,(name,reached,rtc)
-            assert rtc['esr']==value and rtc['far']==address,(name,rtc)
+            assert rtc['esr']==expected_value and rtc['far']==address,(name,rtc)
         else:
             assert reached and not rtc['fault'],(name,reached,rtc)
             assert m.read(m.address('sunstone_probe_deadline'))>m.now

@@ -23,4 +23,6 @@ extern struct i2s_probe_input sunstone_probe_input;
 extern struct i2s_probe_saved i2s_probe_saved;
 void i2s_probe_irq_enable(void);
 void i2s_probe_irq_disable(void);
+uint64_t sunstone_probe_acquire_secondaries(void);
+uint64_t sunstone_probe_release_secondaries(void);
 #endif
