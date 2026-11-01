@@ -38,6 +38,7 @@ void ss_owner_init(struct ss_owner *o, unsigned cpu,
     for (unsigned p = 0; p < SS_OWNER_PRIORITIES; ++p)
         for (unsigned w = 0; w < 2; ++w) atomic_init(&o->incoming[p][w], 0);
     atomic_init(&o->dispatch, UINT64_C(1) << 3);
+    atomic_init(&o->incoming_words, 0);
     atomic_init(&o->sgi_pending, 0);
     o->cpu = cpu; o->backend = backend;
 }
@@ -100,9 +101,14 @@ void ss_owner_publish(struct ss_owner *o, unsigned slot, unsigned priority)
     if (slot >= 128 || priority >= 8) return;
     atomic_fetch_or_explicit(&o->incoming[priority][slot / 64],
                              UINT64_C(1) << (slot % 64), memory_order_release);
+    /* The head RMW linearizes empty-to-nonempty publication. A slot can be
+     * consumed by an earlier batch before this head reaches it; the resulting
+     * empty bucket inspection is harmless and never authorizes activation. */
+    uint64_t previous = atomic_fetch_or_explicit(&o->incoming_words,
+        UINT64_C(1) << (2 * priority + slot / 64), memory_order_release);
     ss_owner_barrier(o->backend);
     uint64_t status = atomic_load_explicit(&o->dispatch, memory_order_acquire);
-    if ((status & 8) || priority > (status & 7)) request_sgi(o);
+    if (!previous || (status & 8) || priority > (status & 7)) request_sgi(o);
 }
 #ifdef SS_OWNER_TEST_STATS
 /* Host fixtures count actual incoming operations; production emits no hook. */
@@ -148,6 +154,9 @@ static unsigned next_slot(struct ss_owner *o, unsigned p)
 unsigned ss_owner_drain(struct ss_owner *o, ss_owner_inspect inspect, void *ctx)
 {
     unsigned count = 0;
+    /* Detach the logical list before reading its buckets. A later first
+     * publication gets its own doorbell even while this batch is active. */
+    (void)atomic_exchange_explicit(&o->incoming_words, 0, memory_order_acquire);
     merge_from(o, 0);
     for (; count < SS_OWNER_BATCH; ++count) {
         uint32_t priorities = detached_priorities(o);
@@ -168,6 +177,7 @@ unsigned ss_owner_drain(struct ss_owner *o, ss_owner_inspect inspect, void *ctx)
 }
 bool ss_owner_has_pending(const struct ss_owner *o)
 {
+    if (atomic_load_explicit(&o->incoming_words, memory_order_acquire)) return true;
     for (unsigned p = 0; p < 8; ++p)
         for (unsigned w = 0; w < 2; ++w)
             if (o->detached[p][w] || atomic_load_explicit(&o->incoming[p][w],
@@ -180,13 +190,7 @@ bool ss_owner_commit_dispatch(struct ss_owner *o, unsigned priority, bool idle)
     atomic_store_explicit(&o->dispatch, status, memory_order_release);
     atomic_store_explicit(&o->sgi_pending, 0, memory_order_release);
     ss_owner_barrier(o->backend);
-    for (unsigned p = 0; p < 8; ++p) {
-        if (!idle && p <= priority) continue;
-        for (unsigned w = 0; w < 2; ++w)
-            if (o->detached[p][w] || atomic_load_explicit(&o->incoming[p][w],
-                                                       memory_order_acquire)) return true;
-    }
-    return false;
+    return ss_owner_has_pending(o);
 }
 void ss_owner_continue(struct ss_owner *o)
 { if (ss_owner_has_pending(o)) request_sgi(o); }
@@ -222,9 +226,12 @@ bool ss_owner_pin(struct ss_owner_descriptor *d, uint64_t incarnation,
 }
 void ss_owner_put(struct ss_owner_descriptor *d)
 {
-    if (atomic_fetch_sub_explicit(&d->references, 1, memory_order_release) == 1 &&
-        !atomic_load_explicit(&d->admission, memory_order_acquire))
-        notify_retirement(d);
+    if (atomic_fetch_sub_explicit(&d->references, 1, memory_order_release) != 1)
+        return;
+    /* Pair with close's admission-store/DMB/reference-load. Without this
+     * store-to-load barrier both sides can miss the last retirement event. */
+    ss_owner_barrier(NULL);
+    if (!atomic_load_explicit(&d->admission, memory_order_acquire)) notify_retirement(d);
 }
 void ss_owner_close(struct ss_owner_descriptor *d, const struct ss_owner_backend *b)
 {

@@ -25,6 +25,109 @@ def explore(initial, successors, invariant):
 
 
 @dataclass(frozen=True)
+class IncomingHead:
+    pc: tuple = (0, 0)
+    empty: tuple = (False, False)
+    inbox: int = 0
+    head: bool = False
+    detached: int = 0
+    observed: int = 0
+    flag: bool = False
+    pending: bool = False
+    owner: int = 0
+
+
+def incoming_head(priorities=(2, 2), signal_empty=True):
+    """SC interleavings of bucket/head publication and the nonurgent doorbell.
+
+    Existing Wake.tla separately checks buffered writes and required DMBs.
+    The owner runs priority six throughout: nonurgent work still needs the
+    first-publication interrupt to reach its owner queue, without a tick.
+    """
+    def successors(s):
+        def out(name, **kw):
+            return name, replace(s, **kw)
+        for p in range(2):
+            def advance(n):
+                return tuple(n if i == p else s.pc[i] for i in range(2))
+            if s.pc[p] == 0:
+                yield out(f'p{p} release slot bit', pc=advance(1), inbox=s.inbox | (1 << p))
+            elif s.pc[p] == 1:
+                empty = tuple(not s.head if i == p else s.empty[i] for i in range(2))
+                yield out(f'p{p} release head OR returns empty={not s.head}',
+                          pc=advance(2), head=True, empty=empty)
+            elif s.pc[p] == 2:
+                needs = (signal_empty and s.empty[p]) or priorities[p] > 6
+                yield out(f'p{p} DMB and dispatch decision needs-SGI={needs}',
+                          pc=advance(3 if needs else 5))
+            elif s.pc[p] == 3:
+                yield out(f'p{p} claim coalescing flag old={s.flag}', flag=True,
+                          pc=advance(5 if s.flag else 4))
+            elif s.pc[p] == 4:
+                yield out(f'p{p} DSB and send SGI', pending=True, pc=advance(5))
+        if s.owner == 0 and s.pending:
+            yield out('owner enter SGI', owner=1, pending=False)
+        elif s.owner == 1:
+            yield out('owner acquire detach head', owner=2, head=False)
+        elif s.owner == 2:
+            yield out('owner acquire detach bucket', owner=3,
+                      detached=s.inbox, inbox=0)
+        elif s.owner == 3:
+            yield out('owner inspect detached slots', owner=4, detached=0,
+                      observed=s.observed | s.detached)
+        elif s.owner == 4:
+            yield out('owner release pending clear', owner=5, flag=False)
+        elif s.owner == 5:
+            remaining = s.head or bool(s.inbox)
+            yield out(f'owner DMB and final all-work check remaining={remaining}',
+                      owner=6 if remaining else 0)
+        elif s.owner == 6:
+            yield out('owner request bounded continuation', owner=0,
+                      pending=s.pending or not s.flag, flag=True)
+    def invariant(s):
+        finished = all(pc == 5 for pc in s.pc)
+        quiescent = s.owner == 0 and not s.pending
+        return not (finished and quiescent and
+                    (s.inbox or s.head or s.detached or s.observed != 3))
+    return IncomingHead(), successors, invariant
+
+
+@dataclass(frozen=True)
+class LastPut:
+    put: int = 0
+    close: int = 0
+    reference_buffer: bool = False
+    close_buffer: bool = False
+    reference: bool = True
+    closed: bool = False
+    notified: bool = False
+
+
+def last_put_close(put_barrier=True):
+    """Both the closer and last release must not miss the retirement event."""
+    def successors(s):
+        def out(name, **kw):
+            return name, replace(s, **kw)
+        if s.put == 0:
+            yield out('last put release decrement buffered', put=1, reference_buffer=True)
+        if s.reference_buffer:
+            yield out('propagate zero references', reference_buffer=False, reference=False)
+        if s.put == 1 and (not put_barrier or not s.reference_buffer):
+            ordering = 'DMB then ' if put_barrier else 'no DMB before '
+            yield out('last put '+ordering+'acquire admission', put=2,
+                      notified=s.notified or s.closed)
+        if s.close == 0:
+            yield out('close release admission buffered', close=1, close_buffer=True)
+        if s.close_buffer:
+            yield out('propagate closed admission', close_buffer=False, closed=True)
+        if s.close == 1 and not s.close_buffer:
+            yield out('closer DMB then acquire references', close=2,
+                      notified=s.notified or not s.reference)
+    return LastPut(), successors, lambda s: not (
+        s.put == 2 and s.close == 2 and not s.notified)
+
+
+@dataclass(frozen=True)
 class Notify:
     word: tuple = (0, 'WAITING', False, 0)
     pc: tuple = (0, 0)

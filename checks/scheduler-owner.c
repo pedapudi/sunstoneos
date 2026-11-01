@@ -90,6 +90,66 @@ static void retirement_progress(void)
 static unsigned sgis;
 static void sgi(void *ctx, unsigned cpu) { (void)ctx; assert(cpu == 3); ++sgis; }
 static const struct ss_owner_backend backend = { .sgi = sgi };
+static bool publish_at_exit;
+static void exit_barrier(void *ctx)
+{
+    atomic_thread_fence(memory_order_seq_cst);
+    if (publish_at_exit) {
+        publish_at_exit = false;
+        ss_owner_publish(ctx, 31, 2);
+    }
+}
+static void count_hint(void *ctx, unsigned slot, unsigned priority)
+{
+    unsigned *counts = ctx;
+    assert(slot < 128 && priority == 2);
+    ++counts[slot];
+}
+static void *many_publishers(void *argument)
+{
+    struct ss_owner *o = ((void **)argument)[0];
+    unsigned start = (unsigned)(uintptr_t)((void **)argument)[1];
+    for (unsigned i = start; i < start + 32; ++i) ss_owner_publish(o, i, 2);
+    return NULL;
+}
+static void incoming_head(void)
+{
+    struct ss_owner o;
+    const struct ss_owner_backend b = { .barrier=exit_barrier, .sgi=sgi, .context=&o };
+    ss_owner_init(&o, 3, &b);
+    unsigned counts[128] = {0};
+    unsigned before = sgis;
+    assert(!ss_owner_commit_dispatch(&o, 6, false));
+    ss_owner_publish(&o, 1, 2); assert(sgis == before + 1);
+    ss_owner_publish(&o, 2, 2); assert(sgis == before + 1);
+    assert(ss_owner_drain(&o, count_hint, counts) == 2);
+    assert(!ss_owner_commit_dispatch(&o, 6, false));
+    /* A first nonurgent publication after the final pending clear must leave
+     * a continuation/SGI, even when the owner is returning to priority six. */
+    publish_at_exit = true;
+    assert(ss_owner_commit_dispatch(&o, 6, false));
+    assert(sgis == before + 2);
+    assert(ss_owner_drain(&o, count_hint, counts) == 1);
+    assert(counts[1] == 1 && counts[2] == 1 && counts[31] == 1);
+    assert(!ss_owner_commit_dispatch(&o, 6, false));
+
+    ss_owner_init(&o, 3, &backend);
+    assert(!ss_owner_commit_dispatch(&o, 6, false));
+    pthread_t producers[4];
+    void *arguments[4][2];
+    before = sgis;
+    for (unsigned i = 0; i < 4; ++i) {
+        arguments[i][0] = &o; arguments[i][1] = (void *)(uintptr_t)(i * 32);
+        assert(!pthread_create(&producers[i], NULL, many_publishers, arguments[i]));
+    }
+    for (unsigned i = 0; i < 4; ++i) assert(!pthread_join(producers[i], NULL));
+    assert(sgis == before + 1);
+    unsigned seen[128] = {0};
+    for (unsigned i = 0; i < 8; ++i) assert(ss_owner_drain(&o, count_hint, seen) == 16);
+    for (unsigned i = 0; i < 128; ++i) assert(seen[i] == 1);
+    assert(!ss_owner_has_pending(&o));
+    sgis = 0;
+}
 static struct ss_owner owner;
 static unsigned visited[128], visits;
 static void inspect(void *ctx, unsigned slot, unsigned priority)
@@ -115,6 +175,7 @@ static void *publisher(void *unused)
 int main(void)
 {
     scan_costs();
+    incoming_head();
     retirement_progress();
     ss_owner_init(&owner, 3, &backend);
     struct ss_owner_task a = {.slot=1,.priority=2}, b = {.slot=2,.priority=2};
@@ -133,12 +194,12 @@ int main(void)
     owner.current=NULL;
     assert(!ss_owner_select(&owner) && !owner.ready_bitmap);
     assert(!ss_owner_commit_dispatch(&owner, 6, false));
-    ss_owner_publish(&owner, 9, 5); assert(!sgis);
+    ss_owner_publish(&owner, 9, 5); assert(sgis==1);
     assert(ss_owner_commit_dispatch(&owner, 4, false));
-    ss_owner_publish(&owner, 10, 5); assert(sgis==1);
-    ss_owner_publish(&owner, 11, 5); assert(sgis==1);
+    ss_owner_publish(&owner, 10, 5); assert(sgis==2);
+    ss_owner_publish(&owner, 11, 5); assert(sgis==2);
     assert(ss_owner_commit_dispatch(&owner, 0, true));
-    ss_owner_publish(&owner, 127, 5); assert(sgis==2);
+    ss_owner_publish(&owner, 127, 5); assert(sgis==3);
     for (unsigned i=0; i<8 && !visited[127]; ++i)
         assert(ss_owner_drain(&owner,inspect,&owner)<=16);
     assert(visited[127] && visits<=128);

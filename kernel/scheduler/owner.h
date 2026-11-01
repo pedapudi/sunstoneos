@@ -35,6 +35,9 @@ struct ss_owner {
     struct ss_owner_task *current;
     uint32_t ready_bitmap;
     _Alignas(8) _Atomic uint64_t incoming[SS_OWNER_PRIORITIES][2];
+    /* Logical wake-list head: sixteen bucket bits. Slot bits precede their
+     * head publication; owner detach may harmlessly consume a slot early. */
+    _Atomic uint64_t incoming_words;
     uint64_t detached[SS_OWNER_PRIORITIES][2];
     unsigned cursor[SS_OWNER_PRIORITIES];
     _Atomic uint64_t dispatch;
@@ -64,7 +67,9 @@ typedef void (*ss_owner_inspect)(void *, unsigned slot, unsigned hint_priority);
 unsigned ss_owner_drain(struct ss_owner *, ss_owner_inspect, void *);
 bool ss_owner_has_pending(const struct ss_owner *);
 /* Publish selected priority (0..7) or idle, clear SGI pending, DMB, inspect.
- * True requires another owner entry before committing task execution/WFI.
+ * Any remaining publication requires a bounded continuation, including work
+ * below the selected priority. True requires another owner entry before
+ * committing task execution/WFI.
  * The final call and WFI must retain DAIF.I masking and admit the SGI at GIC. */
 bool ss_owner_commit_dispatch(struct ss_owner *, unsigned priority, bool idle);
 void ss_owner_continue(struct ss_owner *);

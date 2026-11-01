@@ -54,6 +54,11 @@ def main():
     run('negative/forwarding',model.migration(forward=False),True)
     run('negative/forwarding-retirement',model.migration(retain=False),True)
     run('negative/priority-republish',model.migration(republish=False),True)
+    for priorities in ((2, 2), (7, 2), (2, 7)):
+        run('incoming-head/'+','.join(map(str,priorities)), model.incoming_head(priorities))
+    run('negative/empty-head-SGI', model.incoming_head(signal_empty=False), True)
+    run('retirement/last-put-close', model.last_put_close())
+    run('negative/last-put-DMB', model.last_put_close(put_barrier=False), True)
     for name, values, negative in (
         ('wake',(True,True,True),False),
         ('negative/producer-DMB',(False,True,True),True),
