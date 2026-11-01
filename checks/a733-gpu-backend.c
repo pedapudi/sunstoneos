@@ -15,7 +15,7 @@ static _Alignas(4096) unsigned char firmware_arena[6 * 4096];
 _Alignas(4096) unsigned char resource_arena[64 * 4096];
 static uint64_t pages[70];
 static unsigned provider_calls, provider_mode, free_context;
-volatile unsigned mapping_mode, observe, power_enabled, identity_confirmed, late_identity;
+volatile unsigned mapping_mode, observe, power_enabled, identity_confirmed, late_identity, late_reset_read;
 volatile unsigned expected_access, expected_offset, expected_width, mmio_count;
 volatile uint64_t expected_value;
 static unsigned power_polls, clock_regression, off_mode;
@@ -84,7 +84,7 @@ static void *region(unsigned id)
 { return memory.resources[id].storage.cpu; }
 static int setup(void)
 {
-    observe = 0; mapping_mode = power_enabled = identity_confirmed = late_identity = 0;
+    observe = 0; mapping_mode = power_enabled = identity_confirmed = late_identity = late_reset_read = 0;
     expected_access = expected_offset = expected_width = mmio_count = 0;
     provider_calls = provider_mode = clock_regression = off_mode = 0;
     memset(&backend, 0, sizeof(backend)); memset(&service, 0, sizeof(service));
@@ -180,7 +180,7 @@ static int recovery_setup(void)
 unsigned backend_recovery_check(void)
 {
     const uint64_t mask=UINT64_C(0xffeffffffffffc3d);
-    for (unsigned scenario=0;scenario<11;++scenario) {
+    for (unsigned scenario=0;scenario<14;++scenario) {
         CHECK(!recovery_setup());
         unsigned before=mmio_count;
         expected_access=2;expected_offset=0x100;expected_width=8;expected_value=mask;
@@ -188,6 +188,7 @@ unsigned backend_recovery_check(void)
         if (scenario==2) { service.stop.steps[0].offset=0xb40;CHECK(!config.stop.write(&backend,0x100,8,mask));CHECK(mmio_count==before);continue; }
         if (scenario==3) { service.phase=PVR_GPU_SERVICE_READY;CHECK(!config.stop.write(&backend,0x100,8,mask));CHECK(mmio_count==before);continue; }
         if (scenario==4) {
+            service.stop.steps[0].kind=0;service.stop.steps[0].mask=0;service.stop.steps[0].value=0;
             uint64_t value=0;CHECK(!config.stop.read(&backend,0x100,8,&value));CHECK(mmio_count==before);continue;
         }
         if (scenario==9) {
@@ -200,18 +201,25 @@ unsigned backend_recovery_check(void)
             lifetime_result=1;continue;
         }
         CHECK(config.stop.write(&backend,0x100,8,mask) && mmio_count==before+2 && backend.recovery_write);
-        if (scenario==5) {
-            observe=0;*(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS+0x100)=mask^1;observe=1;
+        /* The observed partial low word is the normal model;
+         * one alternate case also allows an implementation that echoes it. */
+        if (scenario!=5) {
+            observe=0;*(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS+0x100)=UINT64_C(0xe8000020);observe=1;
         }
-        expected_access=1;service.stop.steps[0].kind=0;service.stop.steps[0].mask=UINT64_MAX;
+        if(scenario==13){service.stop.phase=PVR_GPU_STOP_ISOLATE;service.stop.index=service.stop.count;CHECK(!config.stop.isolate(&backend) && !backend.recovery_reset && !provider_calls && power.token);continue;}
+        expected_access=1;service.stop.steps[0].kind=0;service.stop.steps[0].mask=0;service.stop.steps[0].value=0;
+        if(scenario==11)mapping_mode=1;
+        if(scenario==12)late_reset_read=1;
         uint64_t value=0;
-        CHECK(config.stop.read(&backend,0x100,8,&value) && mmio_count==before+4);
-        CHECK(value==(scenario==5 ? mask^1 : mask));
-        expected_access=0;
-        service.stop.phase=PVR_GPU_STOP_ISOLATE;service.stop.index=service.stop.count;
-        if (scenario==5) {
+        if(scenario==11 || scenario==12){
+            CHECK(!config.stop.read(&backend,0x100,8,&value));
+            CHECK(mmio_count==before+(scenario==11?2:4));
             CHECK(!backend.recovery_reset && !config.stop.isolate(&backend) && !provider_calls && power.token);continue;
         }
+        CHECK(config.stop.read(&backend,0x100,8,&value) && mmio_count==before+4);
+        CHECK(value==(scenario==5 ? mask : UINT64_C(0xe8000020)));
+        expected_access=0;
+        service.stop.phase=PVR_GPU_STOP_ISOLATE;service.stop.index=service.stop.count;
         CHECK(backend.recovery_reset);
         off_mode=scenario==6 ? 1 : scenario==7 ? 2 : scenario==8 ? 3 : 0;
         int begin=config.stop.isolate(&backend);

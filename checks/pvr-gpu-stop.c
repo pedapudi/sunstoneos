@@ -20,7 +20,7 @@ static struct {
     unsigned char memory[5][128*88], commands[2][88];
     uint64_t now;
     unsigned calls, fail_at, sync, clears, sent, no_ack, no_return, status;
-    unsigned hold_register, register_reads, isolation, late_isolation, irq, irq_cleared;
+    unsigned hold_register, register_reads, isolation, late_isolation, irq, irq_cleared, late_reset_read;
     unsigned events_count, frozen;
     int isolation_result;
     unsigned isolation_polls, isolation_pending;
@@ -83,8 +83,9 @@ static int read_reg(void *ctx,uint32_t off,uint32_t width,uint64_t *v)
 {
     assert(ctx==&m); if(!operation())return 0;
     ++m.register_reads;
-    *v=off==0x3c8?0x7f:off==0x3898?0xff:off==0x8a8?m.irq:off==0x100?m.reset:0;
+    *v=off==0x3c8?0x7f:off==0x3898?0xff:off==0x8a8?m.irq:off==0x100?(m.reset&UINT64_C(0xe8000020)):0;
     if(m.hold_register==off) { *v=off==0x3c8||off==0x3898?0:1; return 1; }
+    if(off==0x100 && m.late_reset_read)m.now=s.deadline;
     event(0,off,width,*v);
     return 1;
 }
@@ -300,21 +301,30 @@ int main(int argc,char **argv)
     assert(run()==PVR_GPU_STOP_OK && m.isolation==1 && m.sent==sent && m.irq_cleared && m.events_count==s.count);
     assert(m.events[14].write && m.events[14].offset==0x100 && m.events[14].value==s.steps[14].value);
     assert(!m.events[15].write && m.events[15].offset==0x100 &&
-           m.events[15].width==8 && m.events[15].value==m.events[14].value);
+           m.events[15].width==8 && m.events[15].value==UINT64_C(0xe8000020));
     assert(c.phase==PVR_GPU_CONTROL_FAILED && q.phase==PVR_CCB_FAILED);
     save(argv[2],2);
     /* From NEW, after an external control failure. */
     prepare(image); memset(&s,0,sizeof(s)); assert(pvr_gpu_control_abort(&c)==PVR_GPU_CONTROL_FAULT);
     assert(pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000));
     assert(run()==PVR_GPU_STOP_OK && m.isolation==1 && !m.sent);
-    /* A reset write with a mismatching readback cannot authorize OFF. */
-    prepare(image); memset(&s,0,sizeof(s)); assert(pvr_gpu_control_abort(&c)==PVR_GPU_CONTROL_FAULT);
-    assert(pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000));
-    while(s.index!=15) assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
-    assert(m.reset && !m.isolation); m.reset^=1;
-    assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN && s.index==15 && !m.isolation);
-    m.now=s.deadline;
-    assert(run()==PVR_GPU_STOP_FAULT && !m.isolation && s.error==PVR_GPU_STOP_TIMEOUT); ++faults;
+    /* Reset's discarded read fences the write; the register need not echo
+     * the mask. A failed or late read must still prevent isolation. */
+    for(unsigned kind=0;kind<3;++kind) {
+        prepare(image); memset(&s,0,sizeof(s)); assert(pvr_gpu_control_abort(&c)==PVR_GPU_CONTROL_FAULT);
+        assert(pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000));
+        while(s.index!=15) assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
+        assert(m.reset==UINT64_C(0xffeffffffffffc3d) && !m.isolation);
+        m.reset=0xe8000020;
+        if(kind==1)m.fail_at=m.calls+2; /* Clock sample, then failed register read. */
+        if(kind==2)m.late_reset_read=1;
+        if(!kind){
+            assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN && s.index==s.count && !m.isolation);
+            assert(run()==PVR_GPU_STOP_OK && m.isolation==1 && s.last_read==0xe8000020);
+        }
+        else { assert(run()==PVR_GPU_STOP_FAULT && !m.isolation);
+               stopped(kind==1?PVR_GPU_STOP_IO:PVR_GPU_STOP_TIMEOUT); }
+    }
     /* Not after a register step: the stop failed on a held idle poll. */
     prepare(image); m.hold_register=held[0];
     while(s.phase!=PVR_GPU_STOP_REGISTERS || s.steps[s.index].offset!=held[0])

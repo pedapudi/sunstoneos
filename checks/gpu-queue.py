@@ -40,7 +40,7 @@ CASES = {1: 'grid replay, exact sums', 2: 'grid replay, pattern sums', 3: 'grid 
          39: 'ten public close/open cycles', 40: 'two caller slots and independent sequences',
          41: 'timeout reset resumes queued peer', 42: 'decoded reset resumes queued peer',
          43: 'queued peer kick deadline survives reset', 44: 'idle refusal retains both callers',
-         45: 'reset readback mismatch retains both callers', 46: 'failed isolation retains both callers',
+         45: 'failed reset read retains both callers', 46: 'failed isolation retains both callers',
          47: 'failed restart retains queued peer', 48: 'failed restart health retains queued peer',
          49: 'session limit clips recovery deadlines',
          50: 'maximum job duration recovers an unconsumed kernel kick',

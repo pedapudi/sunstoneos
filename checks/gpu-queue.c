@@ -172,8 +172,10 @@ static int recovery_read(void *ctx,uint32_t off,uint32_t width,uint64_t *out)
     if (service.phase==PVR_GPU_SERVICE_RECOVERING) {
         if (gpu_queue_case==44 && off==0x3c8) *out=0;
         if (off==0x100) {
-            if (gpu_queue_case==45) *out=0;
-            else { configASSERT(*out==UINT64_C(0xffeffffffffffc3d)); ++reset_readbacks; }
+            if (gpu_queue_case==45) return 0;
+            configASSERT(*out==UINT64_C(0xffeffffffffffc3d));
+            *out=0xe8000020; /* A completed read need not echo the write mask. */
+            ++reset_readbacks;
         }
     }
     return 1;
