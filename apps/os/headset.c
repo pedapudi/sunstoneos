@@ -54,7 +54,8 @@ static struct {
     atomic_uint failed,requested,captured;
     unsigned started; /* The newest generation that requested START. */
     size_t bytes;
-    _Alignas(4) uint8_t wav[BLUETOOTH_WAV_BYTES];
+    _Alignas(4) uint8_t headroom[SS_CAPTURE_HEADROOM-44];
+    uint8_t wav[BLUETOOTH_WAV_BYTES];
 } headset;
 static int live(void){return board_live(NULL)&&!atomic_load_explicit(&headset.failed,memory_order_acquire);}
 static void fail(void)

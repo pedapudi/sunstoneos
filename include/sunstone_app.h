@@ -1,7 +1,6 @@
 #ifndef SUNSTONE_APP_H
 #define SUNSTONE_APP_H
-/* SunstoneOS application interface (docs/designs/app-abi.md). Status:
- * prototype; no OS image implements these calls yet.
+/* SunstoneOS application interface (docs/designs/app-abi.md).
  *
  * An application is code linked into the OS image together with one
  * manifest. The manifest is little-endian data in the section
@@ -12,7 +11,12 @@
 #include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
+#define SS_STATIC_ASSERT static_assert
+#define SS_NORETURN [[noreturn]]
 extern "C" {
+#else
+#define SS_STATIC_ASSERT _Static_assert
+#define SS_NORETURN _Noreturn
 #endif
 
 #define SS_MANIFEST_MAGIC UINT64_C(0x5453464e4d505041) /* "APPMNFST" */
@@ -89,11 +93,11 @@ struct ss_manifest {
     struct ss_region regions[SS_REGIONS];
 };
 
-_Static_assert(sizeof(struct ss_region) == 56 && offsetof(struct ss_region, kind) == 16 &&
+SS_STATIC_ASSERT(sizeof(struct ss_region) == 56 && offsetof(struct ss_region, kind) == 16 &&
     offsetof(struct ss_region, sha256) == 24, "ss_region layout");
-_Static_assert(sizeof(struct ss_audio_format) == 16 && offsetof(struct ss_audio_format, min_frames) == 8 &&
+SS_STATIC_ASSERT(sizeof(struct ss_audio_format) == 16 && offsetof(struct ss_audio_format, min_frames) == 8 &&
     offsetof(struct ss_audio_format, max_frames) == 12, "ss_audio_format layout");
-_Static_assert(offsetof(struct ss_manifest, name) == 16 && offsetof(struct ss_manifest, devices_required) == 32 &&
+SS_STATIC_ASSERT(offsetof(struct ss_manifest, name) == 16 && offsetof(struct ss_manifest, devices_required) == 32 &&
     offsetof(struct ss_manifest, cluster) == 40 && offsetof(struct ss_manifest, stack_bytes) == 44 &&
     offsetof(struct ss_manifest, heap_bytes) == 48 && offsetof(struct ss_manifest, run_deadline_us) == 56 &&
     offsetof(struct ss_manifest, return_reserve_us) == 64 && offsetof(struct ss_manifest, progress_window_us) == 72 &&
@@ -151,7 +155,7 @@ struct ss_host_request {
     uint32_t offset;
     uint64_t argument;
 };
-_Static_assert(sizeof(struct ss_host_request) == 16 && offsetof(struct ss_host_request, offset) == 4 &&
+SS_STATIC_ASSERT(sizeof(struct ss_host_request) == 16 && offsetof(struct ss_host_request, offset) == 4 &&
     offsetof(struct ss_host_request, argument) == 8, "ss_host_request is the 16-byte wire request");
 #define SS_HOST_PAYLOAD_BYTES 1024u
 struct ss_host_reply {
@@ -182,9 +186,9 @@ int ss_key_report(struct ss_key_report *report);
  * returning lifetime the OS then returns to the host; in the resident
  * lifetime the record stays readable over the host channel. Refused
  * results (too large, after finish_by_us) end the session as ss_fail does. */
-_Noreturn void ss_finish(const void *result, size_t bytes);
+SS_NORETURN void ss_finish(const void *result, size_t bytes);
 /* End the session with an application-defined detail word. */
-_Noreturn void ss_fail(uint32_t detail);
+SS_NORETURN void ss_fail(uint32_t detail);
 
 /* Provided by the application, named after the manifest name with '-'
  * replaced by '_'; tools/sunstone-manifest.py generates their prototypes in

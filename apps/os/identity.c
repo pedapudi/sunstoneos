@@ -14,7 +14,7 @@
 #include "a733_cpu_coherence.h"
 #include "a733_mmio.h"
 #include "boot.h"
-#include "assets.h"
+#include "application.h"
 #ifdef SUNSTONE_A733_OS_HEADSET
 #include "../bluetooth/bluetooth.h"
 static struct bluetooth_profile profile;
@@ -29,8 +29,10 @@ int board_identity_prepare(uint64_t deadline)
     uint64_t el,sctlr;
     __asm__ volatile("mrs %0, CurrentEL\n mrs %1, sctlr_el3":"=r"(el),"=r"(sctlr));
     if(el!=12||(sctlr&5)||!a733_board_session_valid(s,a733_smp_counter())||!os_workload_valid(s->workload))return 0;
-    for(unsigned i=0;i<3;++i)
-        if(a733_cpu_coherence_publish(mimus_asset_address[i],mimus_asset_bytes[i],deadline)!=1)return 0;
+    const struct ss_manifest *m=ss_application.manifest;
+    for(unsigned i=0;m&&i<m->region_count;++i)
+        if(m->regions[i].kind==SS_REGION_INPUT&&
+           a733_cpu_coherence_publish(m->regions[i].address,m->regions[i].bytes,deadline)!=1)return 0;
 #ifdef SUNSTONE_A733_OS_GPU_LINEAR
     /* The GPU's 64 KiB tag area, before a733_cached_prepare maps the output
      * region read-only at EL1 too: here EL3 runs with translation off, so

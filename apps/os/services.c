@@ -6,6 +6,7 @@
  * stops and the watchdog resets the board within four seconds of the last
  * renewal. */
 #include "os.h"
+#include "application.h"
 #include <stdatomic.h>
 #ifdef SUNSTONE_A733_FAULT_PAGE
 #include "a733_fault.h"
@@ -17,23 +18,6 @@ uint64_t a733_smp_counter(void);
  * wait loops and from the yield checkpoint that inference calls. The capture
  * client reports from each pass without an unanswered DMA request. The windows
  * are configuration; no board measurement of the longest pause exists. */
-const struct os_service os_services[OS_SERVICES]={
-    {"board-pmic",1000000},{"board-usb0",1000000},{"board-typec",1000000},
-    {"board-power",1000000},{"board-usb2",1000000},{"mimus",3000000},{"thermal",1000000},
-#ifdef SUNSTONE_A733_OS_NPU
-    /* One request can spend two seconds sending and two collecting. */
-    {"npu",5000000},
-#endif
-#ifdef SUNSTONE_A733_OS_AUDIO
-    {"audio",1000000},
-#endif
-#ifdef SUNSTONE_A733_OS_RADIO
-    {"radio",1000000},{"network",1000000},
-#endif
-#ifdef SUNSTONE_A733_OS_HEADSET
-    {"bluetooth",1000000},{"headset",1000000},
-#endif
-};
 static atomic_uint_fast64_t seen[OS_SERVICES];
 void board_service_progress(unsigned service)
 {
@@ -51,7 +35,7 @@ static int services_state(uint64_t now,unsigned *first)
     static unsigned required;
     if(!required){
         const struct os_session *session=os_session_admitted();
-        if(!session){*first=OS_SERVICE_MIMUS;return 0;}
+        if(!session){*first=OS_SERVICE_APPLICATION;return 0;}
         required=(1u<<OS_SERVICES)-1;
         if(!a733_board_host_workload(session->board.workload))
             required&=~((1u<<2)|(1u<<3)|(1u<<4));
@@ -60,6 +44,7 @@ static int services_state(uint64_t now,unsigned *first)
         /* main.c creates these three tasks only for host workloads. Keep
          * their stable service IDs without demanding reports from absent tasks. */
         if(!(required&(1u<<i)))continue;
+        if(i==OS_SERVICE_APPLICATION&&(!ss_application.manifest||os_application_finished()))continue;
 #ifdef SUNSTONE_A733_OS_NPU
         /* The finite caller publishes only after actual local stop. Its
          * suspended terminal state needs no artificial heartbeat. */
@@ -86,7 +71,7 @@ static uint64_t stop_detail;
 uint64_t board_resident_stop_detail(void)
 {
     unsigned gpu=os_dispatch_gpu_state();
-    if(gpu==OS_DISPATCH_GPU_FAULT||(gpu==OS_DISPATCH_GPU_WAITING&&stop_detail==OS_SERVICE_MIMUS+1))
+    if(gpu==OS_DISPATCH_GPU_FAULT||(gpu==OS_DISPATCH_GPU_WAITING&&stop_detail==OS_SERVICE_APPLICATION+1))
         return OS_STOP_DETAIL_GPU_LOSS;
     return stop_detail;
 }
