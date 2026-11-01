@@ -3,7 +3,13 @@ memory mailbox. The privileged OS task owns the runtime slot and copies the
 concatenated input and output tensors. Applications retain their buffers until
 completion. A failed request permanently retains those buffers for the session.
 
-`ss_npu_run` selects an image-linked model index. Call with identical arguments
+`ss_npu_model_count` reports the linked catalogue size. `ss_npu_model_find`
+resolves a semantic name to an image-local index; `ss_npu_model_info` returns
+that name, tensor counts and concatenated byte sizes. Names occupy at most
+63 UTF-8 bytes plus a terminating zero. The backend checks this immutable
+metadata against decoded model tensors before publishing the catalogue.
+`ss_npu_run` refuses an unknown index or mismatched buffer extent before posting
+a request. It selects an image-linked model index. Call with identical arguments
 until it returns a nonzero result. Zero means pending, one means copied output,
 minus two means refused, and minus one means unavailable or failed. The API
 accepts at most one MiB in each direction and a SUBMIT timeout up to one second.
@@ -46,3 +52,24 @@ mailbox API and service-step function, pumping the service when the application
 waits. Backend job replies, startup publications and provider parking are
 modeled. The cases cover successful inference, final-output mismatch, missing
 IRQ completion, failed backend job and failed close.
+
+The OS catalogue generator accepts `--models <application model-list JSON>`
+and `--model-name <catalogue name>`. The default links only the selected model,
+whose local index is zero. `--all` links the entire list in data order. The
+source-list index in the diagnostic report and the local SDK index have separate
+symbols. The OS runtime admits at most sixteen resident entries; that capacity
+bounds storage and does not require a particular catalogue count or ordering.
+Model names and tensor geometry come from the reviewed catalogue, and every
+linked model and selected vector retains its size and SHA-256 checks.
+
+`catalogue-check.py --artifacts <map> --native-flags <OS flags.make> --output
+<new cache directory>` generates catalogues with one, two and three entries.
+It decodes each actual linked model, exercises the OS metadata bind and resolves
+the published ShuffleNet by name in different positions. Wrong decoded counts,
+wrong decoded sizes, unknown indices and incorrect request extents must be
+refused. The selected-only variants also check that the local index remains zero.
+No device is opened and no board image is linked.
+
+`metadata-check.c` compiles with `runtime/npu_app.c` and `-Iinclude`. Run it with
+each argument from `0` through `10` to check malformed metadata refusal before
+binding. Its backend aborts if a refused case reaches a device operation.

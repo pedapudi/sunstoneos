@@ -1,13 +1,15 @@
 #ifndef SUNSTONE_OS_NPU_H
 #define SUNSTONE_OS_NPU_H
 #include "npu_runtime.h"
-/* The linked catalogue: only the client's entry (apps/os/npu-catalogue.py). */
-#define OS_NPU_MODELS 1u
+#include "sunstone_app.h"
+/* The immutable linked catalogue (apps/os/npu-catalogue.py). */
 #define OS_NPU_CORE 1u
 #define OS_NPU_POOL_START UINT64_C(0x47400000)
 #define OS_NPU_POOL_BYTES UINT64_C(0x800000)
 #include "npu-session.h"
-extern const struct npu_runtime_model os_npu_models[OS_NPU_MODELS];
+extern const struct npu_runtime_model os_npu_models[];
+extern const unsigned os_npu_model_count,os_npu_client_entry;
+extern const struct ss_npu_model os_npu_model_info[];
 extern const uint8_t os_npu_catalogue_digest[32];
 struct os_npu_vector { const uint8_t *data; size_t bytes; };
 extern const struct os_npu_vector os_npu_inputs[],os_npu_references[];
@@ -16,9 +18,9 @@ extern const unsigned os_npu_client_model,os_npu_input_count,os_npu_output_count
 /* One application task, bound before scheduling. These finite calls refuse
  * every other task. 1 is operation completion, 0 is a refused call and -1 is
  * retained failure. Completion says nothing about numerical correctness.
- * LOAD selects a linked entry; entry 0 is entry os_npu_client_model of the
- * OS model list apps/os/npu-models.json. Tensor windows remain owned by
- * this caller until its next LOAD, SUBMIT or CLOSE; thermal STOP cannot
+ * LOAD selects a linked entry; os_npu_client_entry identifies the diagnostic
+ * model, whose source-list index is os_npu_client_model. Tensor windows
+ * remain owned by this caller until its next LOAD, SUBMIT or CLOSE; thermal STOP cannot
  * reclaim them. SUBMIT temporarily transfers both windows to the runtime.
  * After SUBMIT returns1, outputs may be read in place. No tensor copy occurs
  * in these wrappers. The caller must stop using all pointers before CLOSE.

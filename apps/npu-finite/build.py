@@ -170,7 +170,7 @@ if a.runtime:
   assert len(paths['inputs'])==len(m['inputs']) and len(paths['references'])==len(m['outputs']),m['name']
   for path,t in zip(paths['inputs']+paths['references'],m['inputs']+m['outputs']):
    assert path.stat().st_size==t['logical_bytes']==t['reference']['bytes'] and sha(path)==t['reference']['sha256'],(m['name'],path)
-  networks.append({'name':m['name'],'fixture':paths['model']==fixture['MODEL'],'model':model,'input':b''.join(x.read_bytes() for x in paths['inputs']),
+  networks.append({'name':m['name'],'inputs':len(m['inputs']),'outputs':len(m['outputs']),'fixture':paths['model']==fixture['MODEL'],'model':model,'input':b''.join(x.read_bytes() for x in paths['inputs']),
    'reference':b''.join(x.read_bytes() for x in paths['references']),'paths':{k:[str(x) for x in v] if isinstance(v,list) else str(v) for k,v in paths.items()}})
  assert len(networks)==2 and sha(fixture['MODEL'])==listed[0]['model']['sha256'],'network 0 is the baseline fixture; the client runs two networks'
  if a.model_switch:
@@ -191,6 +191,8 @@ if a.runtime:
   text+=f'const unsigned char npu_finite_reference_{i}[{len(n["reference"])}] __attribute__((used,retain))={{'+','.join(map(str,n['reference']))+'};\n'
  text+='const struct npu_finite_network npu_finite_networks[NPU_FINITE_NETWORKS]={\n'+''.join(
   f' {{model_{i},input_{i},npu_finite_reference_{i},{len(n["model"])}u,{len(n["input"])}u,{len(n["reference"])}u}},\n' for i,n in enumerate(networks))+'};\n'
+ text+='const struct ss_npu_model npu_finite_models[NPU_FINITE_NETWORKS]={\n'+''.join(
+  '{'+json.dumps(n['name'])+f',{n["inputs"]}u,{n["outputs"]}u,{len(n["input"])}u,{len(n["reference"])}u'+ '},\n' for n in networks)+'};\n'
  (generated/'networks.c').write_text(text)
  (generated/'npu_admitted_models.c').write_text(catalogue_tool.table(listed))
  runtime_objects=[compile_like('/apps/npu-convolution/native.c',root/'apps/npu-convolution/native-runtime.c','native-runtime'),

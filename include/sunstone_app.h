@@ -241,6 +241,21 @@ struct ss_key_report {
     uint8_t data[8];
 };
 int ss_key_report(struct ss_key_report *report);
+/* Immutable image-linked model metadata. Names contain at most 63 UTF-8 bytes
+ * plus a terminating zero. Byte sizes describe concatenated logical tensors,
+ * excluding device padding. A catalogue may contain any positive count that
+ * the selected backend admits; indices are local to that image's catalogue. */
+#define SS_NPU_MODEL_NAME_BYTES 64u
+struct ss_npu_model {
+    char name[SS_NPU_MODEL_NAME_BYTES];
+    unsigned inputs,outputs;
+    size_t input_bytes,output_bytes;
+};
+/* Discovery returns zero while unavailable. Info/find return 1 on success,
+ * zero for an unknown index/name or invalid output. No allocation occurs. */
+unsigned ss_npu_model_count(void);
+int ss_npu_model_info(unsigned index,struct ss_npu_model *);
+int ss_npu_model_find(const char *name,unsigned *index);
 /* One admitted application's NPU catalogue. Model is an image catalogue index.
  * Call repeatedly with identical arguments until completion: 0 pending,
  * 1 output tensors copied, -2 refused, -1 unavailable or retained failure.
@@ -317,6 +332,10 @@ int ss_usb_camera_decode(uint64_t token, struct ss_usb_decoded_frame *frame);
 SS_NORETURN void ss_finish(const void *result, size_t bytes);
 /* End the session with an application-defined detail word. */
 SS_NORETURN void ss_fail(uint32_t detail);
+/* End the session with a measured operand. The low 12 detail bits identify
+ * the check; bits 16..30 retain application context. Value is recorded
+ * unchanged in the first-failure breadcrumb. */
+SS_NORETURN void ss_fail_value(uint32_t detail,uint32_t value);
 
 /* Provided by the application, named after the manifest name with '-'
  * replaced by '_'; tools/sunstone-manifest.py generates their prototypes in

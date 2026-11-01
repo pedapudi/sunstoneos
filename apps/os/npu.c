@@ -171,7 +171,7 @@ int os_npu_open(void)
 }
 int os_npu_load(unsigned entry)
 {
-    if(!caller()||!npu.opened||entry>=OS_NPU_MODELS||os_npu_stopping())return 0;
+    if(!caller()||!npu.opened||entry>=os_npu_model_count||os_npu_stopping())return 0;
     return call(NPU_SERVICE_LOAD,entry,0);
 }
 int os_npu_tensor(enum nbg_section_id section,unsigned index,struct npu_runtime_tensor *tensor)
@@ -251,8 +251,8 @@ int os_npu_task_privileged(void (*entry)(void *),void *context)
 int os_npu_pins(struct a733_pin_handoff *pins){return pins&&os_session_admitted();}
 int os_npu_start(void)
 {
-    extern int os_npu_sdk_bind(void);
-    if(!os_npu_sdk_bind())return 0;
+    extern int os_npu_sdk_bind(const struct npu_runtime *);
+    extern int os_npu_diagnostic_bind(struct npu_runtime *) __attribute__((weak));
     const struct os_session *s=os_session_admitted();
     if(!s||npu.attempted||board.session.deadline_us<=10000)return 0;
     npu.attempted=1;
@@ -261,17 +261,18 @@ int os_npu_start(void)
     uintptr_t start=(uintptr_t)__os_npu_pool_start,end=(uintptr_t)__os_npu_pool_end;
     /* The reservation fits any one catalogue entry; the runtime takes the
      * linked entry's exact requirement from its start. */
-    const size_t need=npu_runtime_requirements(os_npu_models,OS_NPU_MODELS,1);
+    if(!os_npu_model_count||os_npu_model_count>NPU_RUNTIME_MODELS)return 0;
+    const size_t need=npu_runtime_requirements(os_npu_models,os_npu_model_count,1);
     if(start!=OS_NPU_POOL_START||end-start!=OS_NPU_POOL_BYTES||!need||need>OS_NPU_POOL_BYTES||
        !a733_mapping_check_stride(aarch64_device_translate,start,start,end-start,0x200000,&wb)||
        !device_memory_pool_init_typed(&npu.pool,start,start,end-start,DEVICE_MEMORY_CLASS_DMA32,DEVICE_MEMORY_WRITE_BACK)||
        !device_memory_acquire(&npu.pool,g->owner,need,&npu.lease,&npu.extent)||
        npu.extent.cpu!=start||npu.extent.physical!=start||npu.extent.bytes!=need)return 0;
-    struct npu_runtime_config config={.count=OS_NPU_MODELS,.slots=1,.cpu=npu.extent.cpu,
+    struct npu_runtime_config config={.count=os_npu_model_count,.slots=1,.cpu=npu.extent.cpu,
         .physical=npu.extent.physical,.bytes=npu.extent.bytes,.register_cpu=0x03600000,
         .register_physical=0x03600000,.fatal=fatal};
-    memcpy(config.models,os_npu_models,sizeof(os_npu_models));
-    if(!npu_runtime_prepare(&npu.runtime,&config)){device_memory_retain(&npu.pool,npu.lease);return 0;}
+    memcpy(config.models,os_npu_models,os_npu_model_count*sizeof(os_npu_models[0]));
+    if(!npu_runtime_prepare(&npu.runtime,&config)||!os_npu_sdk_bind(&npu.runtime)){device_memory_retain(&npu.pool,npu.lease);return 0;}
     device_memory_lookup(&npu.pool,npu.lease)->state=DEVICE_MEMORY_DEVICE;
     const struct a733_board_session *b=&s->board;
     npu.end=board.session.deadline_us-10000;
@@ -297,6 +298,7 @@ int os_npu_start(void)
     uint64_t now;
     if(!npu.bootstrap||!npu.client||!a733_npu_startup_bind_task(&npu.startup,npu.bootstrap)||
        !npu_runtime_bind(&npu.runtime,&npu.startup,clients,4,2)||!os_npu_irq_bind(&npu.runtime)||
+       (os_npu_diagnostic_bind&&!os_npu_diagnostic_bind(&npu.runtime))||
        npu.end>(UINT64_MAX>>3)-5000000||!clock_now(&now)||now>=npu.end)return 0;
     npu.initial_deadline=now+1000000;
     atomic_init(&npu.gate,npu.initial_deadline<<3);npu.started=1;return 1;

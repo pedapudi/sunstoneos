@@ -1,6 +1,7 @@
 #include "sunstone_app.h"
 #include "sunstone_npu_service.h"
 #include <stdatomic.h>
+#include <string.h>
 /* A single admitted application owns this mailbox. The request buffers remain
  * application-owned but unavailable to it until completion. */
 enum { UNBOUND, IDLE, RUN, CLOSE, DONE, FAILED, CLOSED };
@@ -26,7 +27,32 @@ static int transition(unsigned expected,unsigned desired)
 int ss_npu_service_bind(const struct ss_npu_backend *backend)
 {
     if(!backend||!backend->run||!backend->close||atomic_load(&box.state)!=UNBOUND)return 0;
+    if(!backend->models||!backend->count)return 0;
+    for(unsigned i=0;i<backend->count;++i) {
+        const struct ss_npu_model *m=&backend->models[i];
+        if(!m->name[0]||!memchr(m->name,0,sizeof(m->name))||!m->inputs||!m->outputs||
+           !m->input_bytes||m->input_bytes>SS_NPU_MAX_TENSOR_BYTES||
+           !m->output_bytes||m->output_bytes>SS_NPU_MAX_TENSOR_BYTES)return 0;
+        for(unsigned j=0;j<i;++j)if(!strcmp(m->name,backend->models[j].name))return 0;
+    }
     box.backend=*backend;atomic_store_explicit(&box.state,IDLE,memory_order_release);return 1;
+}
+unsigned ss_npu_model_count(void)
+{
+    unsigned state=atomic_load_explicit(&box.state,memory_order_acquire);
+    return state==UNBOUND||state==FAILED||state==CLOSED?0:box.backend.count;
+}
+int ss_npu_model_info(unsigned index,struct ss_npu_model *model)
+{
+    if(!model||index>=ss_npu_model_count())return 0;
+    *model=box.backend.models[index];return 1;
+}
+int ss_npu_model_find(const char *name,unsigned *index)
+{
+    if(!name||!index)return 0;
+    unsigned count=ss_npu_model_count();
+    for(unsigned i=0;i<count;++i)if(!strcmp(name,box.backend.models[i].name)){*index=i;return 1;}
+    return 0;
 }
 void ss_npu_service_fail(void)
 {atomic_store_explicit(&box.state,FAILED,memory_order_release);}
@@ -38,6 +64,8 @@ int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
     if(!input||!output||!input_bytes||!output_bytes||input_bytes>SS_NPU_MAX_TENSOR_BYTES||
        output_bytes>SS_NPU_MAX_TENSOR_BYTES||!timeout_us||timeout_us>1000000)return -1;
     if(state==IDLE) {
+        if(model>=box.backend.count||input_bytes!=box.backend.models[model].input_bytes||
+           output_bytes!=box.backend.models[model].output_bytes)return -2;
         box.model=model;box.input=input;box.input_bytes=input_bytes;
         box.output=output;box.output_bytes=output_bytes;box.timeout=timeout_us;box.operation=RUN;
         return transition(IDLE,RUN)?0:-1;
