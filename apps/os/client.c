@@ -127,7 +127,29 @@ static int usb_write(void *unused,uint64_t sequence,const void *data,size_t byte
 static void usb_input(void *unused,const struct sunstone_hid_event *e);
 #endif
 static struct {atomic_uint state;uint64_t sector;uint8_t data[512];} storage;
+/* ready: empty, published, reader copying, owner publishing. */
 static struct {atomic_uint ready;struct ss_key_report report;} keyboard;
+#ifdef SUNSTONE_A733_OS_USB_CLASSES
+/* The first unread snapshot stays published; later changes coalesce into one
+ * pending snapshot. Only the USB owner changes pending and retries publication
+ * from serve(), so an application copying a report never delays that owner. */
+static struct {struct ss_key_report report;uint64_t attachment;unsigned dirty,invalidate;} keyboard_pending;
+static void keyboard_publish(void)
+{
+    if(!keyboard_pending.dirty&&!keyboard_pending.invalidate)return;
+    unsigned state=atomic_load_explicit(&keyboard.ready,memory_order_acquire);
+    if(state>1||(state==1&&!keyboard_pending.invalidate)||
+       !atomic_compare_exchange_strong_explicit(&keyboard.ready,&state,3,
+        memory_order_acq_rel,memory_order_acquire))return;
+    if(keyboard_pending.invalidate){state=0;keyboard_pending.invalidate=0;}
+    if(!state&&keyboard_pending.dirty){
+        keyboard.report=keyboard_pending.report;
+        keyboard_pending.attachment=keyboard.report.attachment;
+        keyboard_pending.dirty=0;state=1;
+    }
+    atomic_store_explicit(&keyboard.ready,state,memory_order_release);
+}
+#endif
 int ss_storage_read(uint64_t sector,uint8_t data[512])
 {
     const struct ss_grant *g=ss_grant();
@@ -142,7 +164,9 @@ int ss_key_report(struct ss_key_report *report)
 {
     const struct ss_grant *g=ss_grant();
     if(!report||!g||!(g->devices&SS_DEVICE_USB_KEYBOARD)||ss_live()<0)return -1;
-    if(!atomic_load_explicit(&keyboard.ready,memory_order_acquire))return 0;
+    unsigned ready=1;
+    if(!atomic_compare_exchange_strong_explicit(&keyboard.ready,&ready,2,
+        memory_order_acq_rel,memory_order_acquire))return 0;
     *report=keyboard.report;atomic_store_explicit(&keyboard.ready,0,memory_order_release);return 1;
 }
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
@@ -163,6 +187,9 @@ static void usb_input(void *unused,const struct sunstone_hid_event *e)
     if(slot==8)return;
     if(e->type==SUNSTONE_HID_DETACH){
         devices[slot].capabilities=0;unsigned connected=0;for(unsigned i=0;i<8;++i)connected|=devices[i].capabilities;
+        if(keyboard_pending.report.attachment==e->generation)keyboard_pending.dirty=0;
+        if(keyboard_pending.attachment==e->generation)keyboard_pending.invalidate=1;
+        keyboard_publish();
         os_usb_service_disconnected((connected&1?0:SS_DEVICE_USB_KEYBOARD)|(connected&2?0:SS_DEVICE_USB_MOUSE));return;
     }
     uint8_t *keys=devices[slot].keys;
@@ -178,11 +205,10 @@ static void usb_input(void *unused,const struct sunstone_hid_event *e)
             if(e->value&&i==8)for(i=2;i<8;++i)if(!keys[i]){keys[i]=e->usage;break;}
         }
         event.modifiers=keys[0];
-        if(!atomic_load_explicit(&keyboard.ready,memory_order_acquire)){
-            keyboard.report=(struct ss_key_report){.attachment=e->generation,.sequence=sequence,
-                .address=e->address,.interface=e->instance,.protocol=1,.bytes=8};
-            memcpy(keyboard.report.data,keys,8);atomic_store_explicit(&keyboard.ready,1,memory_order_release);
-        }
+        keyboard_pending.report=(struct ss_key_report){.attachment=e->generation,.sequence=sequence,
+            .address=e->address,.interface=e->instance,.protocol=1,.bytes=8};
+        memcpy(keyboard_pending.report.data,keys,8);
+        keyboard_pending.dirty=1;keyboard_publish();
     }else{
         event.kind=SS_INPUT_POINTER;
         if(e->type==SUNSTONE_HID_BUTTON&&e->usage>=1&&e->usage<=32){
@@ -196,6 +222,9 @@ static void usb_input(void *unused,const struct sunstone_hid_event *e)
 #endif
 static int serve(void)
 {
+#ifdef SUNSTONE_A733_OS_USB_CLASSES
+    keyboard_publish();
+#endif
     struct a733_usb2_native *n=&board.host;
     unsigned state=atomic_load_explicit(&storage.state,memory_order_acquire);
     if(state==1){
