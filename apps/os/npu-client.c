@@ -35,13 +35,18 @@ int os_npu_complete(void)
         published.stopped&&!published.retained&&os_npu_stopped();
 }
 /* The existing privileged slot owner services the application's mailbox. */
+static unsigned sdk_loaded,sdk_model;
 static int sdk_run(unsigned model,const void *input,size_t input_bytes,
                    void *output,size_t output_bytes,uint64_t timeout)
 {
     if(model>=OS_NPU_MODELS)return 0;
-    int r=os_npu_load(model);if(r!=1)return r;
-    size_t bytes=0;
     struct npu_runtime_tensor t;
+    int r;
+    if(!sdk_loaded||sdk_model!=model||!os_npu_tensor(NBG_INPUT,0,&t)) {
+        sdk_loaded=0;r=os_npu_load(model);if(r!=1)return r;
+        sdk_model=model;sdk_loaded=1;
+    }
+    size_t bytes=0;
     for(unsigned i=0;os_npu_tensor(NBG_INPUT,i,&t);++i) {
         if(t.bytes>SIZE_MAX-bytes)return 0;bytes+=t.bytes;
     }
@@ -90,7 +95,7 @@ void os_npu_client_task(void *unused)
             if(os_npu_progress()!=1||ss_npu_service_step()<0)goto retained;
             if(sdk_closed)goto wait_stop;
             if(os_npu_stopped())goto done;
-            (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(1));
+            (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
         }
         ss_npu_service_fail();
         if(!os_npu_stopped())goto close;

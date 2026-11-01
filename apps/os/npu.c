@@ -7,6 +7,7 @@
 #include "aarch64_device_memory.h"
 #include "device_memory_pool.h"
 #include "boot.h"
+#include "sunstone_npu_service.h"
 #include <string.h>
 #define ALLOW UINT64_C(1)
 #define ACCEPTED UINT64_C(2)
@@ -30,7 +31,12 @@ extern unsigned char __os_npu_pool_start[],__os_npu_pool_end[];
 static int clock_now(uint64_t *now)
 {return a733_counter_clock_now(&providers.shared.counter,now);}
 static int fail(void)
-{atomic_store_explicit(&npu.failed,1,memory_order_release);board_fail(NULL);return -1;}
+{
+    atomic_store_explicit(&npu.failed,1,memory_order_release);board_fail(NULL);
+    if(npu.client)xTaskNotifyGive(npu.client);return -1;
+}
+static void sdk_notify(void *unused)
+{(void)unused;if(npu.client)xTaskNotifyGive(npu.client);}
 static void fatal(void *v){(void)v;(void)fail();}
 static int live(void)
 {return npu.started&&board_live(NULL)&&!atomic_load_explicit(&npu.failed,memory_order_acquire);}
@@ -46,9 +52,10 @@ void os_npu_thermal(int allow,int stop,uint64_t until,uint64_t now)
         if(end>UINT64_MAX>>3)return;
         next=(end<<3)|(old&ACCEPTED)|(stop?STOP:allow?ALLOW:0);
     } while(!atomic_compare_exchange_weak_explicit(&npu.gate,&old,next,memory_order_acq_rel,memory_order_acquire));
-    /* A freshness update alone wakes no task; the waits are bounded. */
+    /* Freshness wakes the idle mailbox owner for its own health/deadline
+     * check. Request publication independently wakes it without a tick. */
+    if(npu.client)xTaskNotifyGive(npu.client);
     if(!((old^next)&(STOP|ALLOW)))return;
-    if(stop&&npu.client)xTaskNotifyGive(npu.client);
     if(npu.bootstrap)xTaskNotifyGive(npu.bootstrap);
 }
 /* Same packed publication/claim ordering as the NPU board client: no mixed
@@ -252,7 +259,7 @@ int os_npu_pins(struct a733_pin_handoff *pins){return pins&&os_session_admitted(
 int os_npu_start(void)
 {
     extern int os_npu_sdk_bind(void);
-    if(!os_npu_sdk_bind())return 0;
+    if(!ss_npu_service_bind_event(sdk_notify,NULL)||!os_npu_sdk_bind())return 0;
     const struct os_session *s=os_session_admitted();
     if(!s||npu.attempted||board.session.deadline_us<=10000)return 0;
     npu.attempted=1;
