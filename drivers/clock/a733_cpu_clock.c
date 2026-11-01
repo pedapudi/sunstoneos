@@ -642,7 +642,12 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
     case S_UPDATE:
     case S_LOCK: {
         uint32_t pll;
-        if(!rd(c,pll_word(c->cluster),&pll) || ((pll>>8)&255)!=c->n)return fault(c);
+        if(!rd(c,pll_word(c->cluster),&pll))return fault(c);
+        /* N is manually updated: readback may remain at the old value until
+         * UPDATE clears (manual 5.1.4.2; vendor ccu_nkmp_set_rate). */
+        if(c->state==S_UPDATE && (pll&UPDATE))
+            return c->last_now<c->timer ? A733_CPU_CLOCK_PENDING : fault(c);
+        if(((pll>>8)&255)!=c->n)return fault(c);
         if(c->state==S_UPDATE ? (pll&UPDATE)!=0 : (pll&LOCK)==0) {
             if(c->state==S_LOCK)(void)a733_pll_lock_count(&c->lock,c->last_now,0);
             return c->last_now<c->timer ? A733_CPU_CLOCK_PENDING : fault(c);

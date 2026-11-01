@@ -15,6 +15,8 @@
 struct event { uint64_t at; unsigned pmic; uint32_t address, value; };
 struct cpu_model {
     unsigned bin, stuck_update, stuck_lock, ignore_pmic, reads, writes, count, read_ns, frac_ns;
+    uint32_t staged_n[3]; /* N reads stay at the old value until UPDATE completes. */
+    unsigned old_n_reads, wrong_update, fail_update_read;
     uint64_t update_at[3], lock_at[3], lock_us; /* lock_us 0: lock 20 us after the update. */
     uint64_t park_ns[3]; /* Time of each domain's latest park write, in nanoseconds. */
     /* Lock reads while parked: consecutive set reads counted at least 3 us
@@ -92,7 +94,10 @@ static int cpu_now(void *v,uint64_t *out)
 static void advance(unsigned d)
 {
     uint32_t *pll=word(PLL(d));
-    if((*pll&(1u<<26)) && !cm.stuck_update && pm.now>=cm.update_at[d])*pll&=~(1u<<26);
+    if((*pll&(1u<<26)) && !cm.stuck_update && pm.now>=cm.update_at[d]){
+        uint32_t n=cm.staged_n[d]^(cm.wrong_update ? 1u<<8 : 0);
+        *pll=(*pll&~((1u<<26)|(255u<<8)))|n;
+    }
     if(!(*pll&(1u<<28)) && !(*pll&(1u<<26)) && !cm.stuck_lock && pm.now>=cm.lock_at[d])*pll|=1u<<28;
 }
 static int cpu_read(void *v,uintptr_t a,uint32_t *out)
@@ -101,7 +106,9 @@ static int cpu_read(void *v,uintptr_t a,uint32_t *out)
     *out=*word(a);
     for(unsigned d=0;d<3;++d) {
         if(a!=PLL(d))continue;
+        if(cm.fail_update_read && (*word(a)&(1u<<26)))return 0;
         advance(d);*out=*word(a);
+        if((*out&(1u<<26)) && (*out&(255u<<8))!=cm.staged_n[d])++cm.old_n_reads;
         if(((*word(SEL(d))>>24)&7) || (*out&(1u<<26)))continue;
         if((*out&(1u<<28)) && cm.glitch && cm.lock_run[d]){--cm.glitch;*out&=~(1u<<28);}
         if(!(*out&(1u<<28))){cm.lock_run[d]=0;continue;}
@@ -122,8 +129,14 @@ static int cpu_write(void *v,uintptr_t a,uint32_t value)
              * at least boot0's 20 us after the park. */
             assert(((*word(SEL(d))>>24)&7)==0);
             assert(model_ns()>=cm.park_ns[d]+20000u);
-            *word(a)=value&~(1u<<28);cm.lock_run[d]=0;
-            if(value&(1u<<26)){cm.update_at[d]=pm.now+10;cm.lock_at[d]=pm.now+(cm.lock_us ? cm.lock_us : 20);}
+            /* N is staged, not immediately visible (manual 5.1.4.2). */
+            uint32_t visible=*word(a)&((255u<<8)|(1u<<28));
+            cm.staged_n[d]=value&(255u<<8);
+            *word(a)=(value&~((255u<<8)|(1u<<28)))|visible;
+            if(value&(1u<<26)){
+                *word(a)&=~(1u<<28);cm.lock_run[d]=0;
+                cm.update_at[d]=pm.now+10;cm.lock_at[d]=pm.now+(cm.lock_us ? cm.lock_us : 20);
+            }
         }
         if(a==SEL(d)) {
             unsigned was=(*word(a)>>24)&7,now=(value>>24)&7;
@@ -371,6 +384,54 @@ static enum a733_cpu_clock_status settle_run(enum a733_cpu_domain d,uint32_t mhz
     return r==A733_CPU_CLOCK_PENDING ? run(400) : r;
 }
 static unsigned pmic_writes(void){unsigned n=0;for(unsigned i=0;i<cm.count;++i)n+=cm.events[i].pmic;return n;}
+/* Close after actual inspection/raise: the boot floor stays 800 mV, while
+ * CPU-B now runs at 2002 MHz/1050 mV. Begin the downclock in a fast burst so
+ * at least one UPDATE read sees N=77 while N=39 is staged. */
+static void close_update_setup(void)
+{
+    const struct a733_cpu_clock_grant g={77,2,{0,2002},4};
+    board33(&g);
+    assert(a733_cpu_clock_inspect(&cpu,A733_CPU_BIG,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && pm.rails.floor_uv[0]==800000);
+    assert(settle_run(A733_CPU_BIG,2002)==A733_CPU_CLOCK_COMPLETE);
+    assert(rate(A733_CPU_BIG)==2002000000 && pm.pmic[REG_DCDC3]==55);
+    cm.count=cm.writes=cm.old_n_reads=0;cm.read_ns=80;
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_BIG,1014,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+    before_park();
+}
+static void update_cases(void)
+{
+    close_update_setup();
+    assert(a733_cpu_clock_burst(&cpu,200)==A733_CPU_CLOCK_PENDING && !cpu.failed);
+    assert(cm.old_n_reads && rate(A733_CPU_BIG)==1014000000 && pm.pmic[REG_DCDC3]==55);
+    assert(cm.writes==5 && !pmic_writes()); /* No voltage lowering before lock/unpark. */
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && released() && pm.pmic[REG_DCDC3]==30);
+    assert(cm.writes==5 && pmic_writes()==1 && cpu.applied_mhz[A733_CPU_BIG]==1014);
+    unsigned last_clock=0;
+    for(unsigned i=0;i<cm.count;++i)if(!cm.events[i].pmic)last_clock=i;
+    assert(last_clock<first(1));covered();
+    /* The same staged-readback rule applies to a raise at sufficient voltage. */
+    const struct a733_cpu_clock_grant g={77,2,{0,2002},2};
+    board33(&g);pm.pmic[REG_DCDC3]=55;
+    cm.ramp[1].from_uv=cm.ramp[1].to_uv=1050000;
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_BIG,2002,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+    before_park();assert(a733_cpu_clock_burst(&cpu,200)==A733_CPU_CLOCK_PENDING);
+    assert(cm.old_n_reads && !cpu.failed && run(400)==A733_CPU_CLOCK_COMPLETE && released());
+    for(unsigned mode=0;mode<3;++mode){
+        close_update_setup();
+        if(mode==0)cm.wrong_update=1;
+        if(mode==1)cm.stuck_update=1;
+        if(mode==2)cm.fail_update_read=1;
+        /* One poll starts UPDATE; the next reads, so read failure is targeted. */
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.state==9);
+        uint64_t began=pm.now;
+        assert(run(400)==A733_CPU_CLOCK_RETAINED && cpu.failed);
+        assert(pm.pmic[REG_DCDC3]==55 && !pmic_writes() && ((*word(SEL(1))>>24)&7)==0);
+        if(mode==1)assert(pm.now-began>=10000);
+        retained();
+    }
+    puts("PASS update readback: 5 cases; staged N on raise/close, wrong completed N, stuck UPDATE, read fault");
+}
 /* The steps of docs/designs/cpu-top-opp.md on a modeled port 3-3. */
 static void top_cases(void)
 {
@@ -508,6 +569,8 @@ int main(int argc,char **argv)
 {
     if(argc==2 && !strcmp(argv[1],"--late-policy-reproduce")){late_policy_cases(1);return 0;}
     if(argc==2 && !strcmp(argv[1],"--late-policy-only")){late_policy_cases(0);return 0;}
+    update_cases();
+    if(argc==2 && !strcmp(argv[1],"--close-update-only"))return 0;
     late_policy_cases(0);
     inherited_cases();
     if(argc==2 && !strcmp(argv[1],"--inherited-only"))return 0;

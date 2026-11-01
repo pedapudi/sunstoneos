@@ -244,6 +244,60 @@ step and waits at most 20 µs:
    change and wait for the same ramp.
 9. Release both leases.
 
+The control register's N is a manually updated parameter. The A733 manual
+V1.00, section 5.1.4.2 (pages 244-246), permits the old N to remain visible
+until UPDATE completes. The driver waits for UPDATE to clear before comparing
+N with the requested value, as `ccu_nkmp_set_rate` does. Read failures, a stuck
+UPDATE, a wrong N after completion and subsequent LOCK failures retain both
+leases. The manual is pinned by `a733-user-manual-1.00` in `sources.lock.json`
+(SHA-256 `cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d`).
+
+The 2026-10-31 close failure `0x4613f6ff` decodes as target 1014 MHz, a local
+check, close requested, CPU-B parked and both clock and rail tokens held.
+There is no PMIC request, prior shared-provider fault, elapsed deadline or
+elapsed state timer. Its auxiliary record identifies USER, FOLLOW, cursor 3
+and prior stored result COMPLETE. The fault statement compared N during UPDATE.
+The native read callback admits this CPU-B register and returns success;
+the failing condition is the premature N comparison. The record does not
+preserve the actual old N or UPDATE bit, so the staged-readback model supplies
+that source-backed reproduction rather than a measured register trace.
+
+Sustained applications wait for the top clock points and therefore request
+CPU-B's 2002-to-1014 MHz lowering during close. The short hello application
+can finish before those raises. Its successful control record reports DCDC5
+at 800 mV, rather than CPU-L's 1000 mV top rail. It therefore does not establish
+the close path after the complete top-point sequence. Earlier successful runs
+can also observe UPDATE only after completion. Heat is not required to explain
+a configuration comparison taken before its completion condition.
+
+The native close sequence and its vendor comparison are:
+
+| Operation | Vendor reference and native behavior |
+| --- | --- |
+| CPU-B registers | `ccu-sun60iw2-cpupll.c`: control at `0x08872000`, external P and mux at `0x0887201c`; both paths use these fields. |
+| Inherited controls | Linux enables modulation during probe. Native admission requires it disabled and preserves PLL, LDO, output and lock enable bits. |
+| Consumer clock | Linux adjusts N live under its modulation profile. Native parks on DCXO and settles for at least 20 us, following boot0. |
+| N update | Write N, request UPDATE, wait up to 10 ms for clear, then validate N. Comparing N before completion was the defect. |
+| Divider | Linux grows P before changing N and shrinks it after UPDATE. Native changes P while still parked, then selects the qualified PLL; no consumer sees the intermediate rate. For 2002 to 1014 MHz, P remains zero. |
+| Lock | The standard vendor helper qualifies three LOCK samples at least 3 us apart, then waits 20 us. Native uses that qualification with its existing 70 ms fault bound. |
+| Reselect | Native reads back P/mux, selects the PLL, settles at least 20 us and verifies the final decoded rate before any lower rail write. |
+| Rail | Frequency lowering precedes DCDC3 lowering and regulator settling. Voltage and its ramp precede a frequency raise. Lowering the rail first would expose the old fast CPU clock to insufficient voltage. |
+| Shared DSU | CPU-L remains at 1794 MHz and its DCDC5 rail at 1000 mV during CPU-B close. The existing 1274 MHz DSU point remains within the vendor cap and shared voltage; CPU-B close writes neither. |
+
+The manual's non-LFM recipe has duplicated UPDATE and inconsistent lock-status
+wording. The effective Linux path uses one UPDATE request and polls its clear;
+the native DCXO path preserves its existing enabled PLL and LDO. Its intervening
+lock and mux settles also exceed the manual's minimum 1 us between updates.
+The correction adds no register write or voltage transition and relaxes no
+request, update, lock, burst or release deadline.
+
+`checks/cpu-clock-model.c --close-update-only` covers staged N during raise
+and close, wrong N after completion, stuck UPDATE and read failure. The model
+keeps visible and staged N separate, instead of making an N write immediately
+visible. The close case first inspects the 800 mV boot floor and performs the
+actual top raise. It then checks that all five lowering clock writes precede
+the single DCDC3 write back to 800 mV. The old driver fails this case.
+
 The pinned Linux driver changes N in place with linear frequency modulation
 (LFM) enabled. At probe it sets these bits in each CPU PLL's control words:
 
