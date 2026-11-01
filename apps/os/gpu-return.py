@@ -68,7 +68,8 @@ def geometry(image):
         table = elf.get_section_by_name('.symtab')
         require(table is not None, 'GPU return image has no symbols.')
         names = ('os_gpu_return_report', 'os_gpu_untouched_return_version',
-                 'os_gpu_bisect_configuration', 'os_gpu_performance_configuration')
+                 'os_gpu_bisect_configuration', 'os_gpu_performance_configuration',
+                 'os_gpu_recovery_test_configuration')
         symbols = {}
         for symbol in table.iter_symbols():
             if symbol.name in names and symbol['st_shndx'] != 'SHN_UNDEF':
@@ -118,6 +119,11 @@ def geometry(image):
             require(config == (1, 1008000000, 960000, 600000000, 800000),
                     'GPU performance capability marker differs.')
             result['performance'] = list(config)
+        if 'os_gpu_recovery_test_configuration' in symbols:
+            config = struct.unpack('<5I', object_data('os_gpu_recovery_test_configuration', 20, False))
+            require(config == (0x31545247, 1, 20, 1, 200000) and 'bisect' not in result,
+                    'GPU recovery-test capability marker differs.')
+            result['recovery_test'] = {'withheld_completions': 1, 'job_us': 200000}
         return result
 
 
@@ -139,6 +145,9 @@ def decode_captured(raw, layout, epoch, generation):
                 'GPU constructor/firmware diagnostic submitted jobs.')
     elif version == 1:
         require(diagnostic is None, 'GPU diagnostic image returned a normal GPU receipt.')
+    if 'recovery_test' in layout:
+        require(version == 1, 'GPU recovery-test image returned without completed recovery.')
+        result['recovery_test'] = layout['recovery_test']
     result['qualification_passed'] = False
     result['completed_gpu_work'] = version == 1 and result['jobs'] > 0
     return result
