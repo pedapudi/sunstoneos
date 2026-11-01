@@ -172,7 +172,7 @@ CPU_PLL_CFG block at `0x08870000`.
 
 | Address | Value on the board | Written by | Purpose |
 | --- | --- | --- | --- |
-| `0x08871000` ctrl | `0xf8802600` (N=38) | ROM, on every entry | CPU-L PLL enable, N and lock |
+| `0x08871000` ctrl | `0xf8802600` (N=38) | ROM, on every ROM entry | CPU-L PLL enable, N and lock |
 | `0x0887101c` mux | `0x03010000` (src 3, P=2) | ROM | CPU-L runs from its PLL ÷2 |
 | `0x08873000` ctrl | `0xf8802600` (N=38) | ROM | DSU PLL |
 | `0x0887301c` mux | `0x03010105` (src 3, P=2) | ROM | DSU runs from its PLL ÷2 |
@@ -182,13 +182,18 @@ CPU_PLL_CFG block at `0x08870000`.
 The values in the table are confirmed on a board
 (`~/.cache/sunstoneos/evidence/cpu-clock-initial.json` and
 `board-session-20261025-1/port-3-3` bundle 14). The computed CPU-L rate is
-26 MHz × 38 ÷ 2 = 494 MHz. Each FEL return enters the ROM again, which
-writes CPU-L and the DSU back to these words and leaves CPU-B as the last
-image set it: in `board-session-cpu-top-opp-7/port-3-3`, after an image left
+26 MHz × 38 ÷ 2 = 494 MHz. A reset or an `RMR_EL3` forced-FEL return enters
+the ROM again, which writes CPU-L and the DSU back to these words and leaves
+CPU-B as the last image set it: in `board-session-cpu-top-opp-7/port-3-3`, after an image left
 all three at their top points, the next image read CPU-L and the DSU at
 `0xf8802600` and CPU-B still at `0xf8804d00` (2002 MHz). CPU-B's boot word
 comes from boot0's board setup, which the SunstoneOS cold DDR start runs once
-per power cycle. The ROM also sets the progress record at
+per power cycle. That setup also moves CPU-L to `0xf8802700`/`0x03000000`
+(1014 MHz) and the DSU to `0xf8801e00`/`0x03000105` (780 MHz). The DDR
+wrapper returns to the live FEL instance with `bx lr`, which does not enter
+the ROM, so the wrapper itself puts CPU-L and the DSU back on the ROM words
+before it returns
+([FEL clock point](../designs/dram-training-restore.md#the-wrapper-returns-cpu-l-and-the-dsu-to-the-rom-clock-point)). The ROM also sets the progress record at
 `0x07090304` and de-asserts module gates, including both crypto-engine bus
 gates, in its secondary clock setup (observed, `a8e31821@0x264`,
 `0x2444`; reported for remote-writer ownership in
@@ -274,9 +279,9 @@ multiply; the board PLL word `0xf8802600` agrees). CPU-B runs at 1014 MHz with
 N=39 and a ÷1 post-divider. boot0 reprograms the CPU PLLs unless bit 14 of
 `0x07090160` is set; the board's word has bit 14 clear. The
 [CPU backsolve](../reference-backsolve-cpu.md) reads boot0's two rate targets
-as matching CPU-B's N=39 but not N=38. The ROM is the last writer of CPU-L
-and the DSU: it rewrites them with N=38 on every entry after boot0, and it
-never writes CPU-B, so CPU-B keeps boot0's N=39.
+as matching CPU-B's N=39 but not N=38. The ROM writes CPU-L
+and the DSU with N=38 on every ROM entry, and it never writes CPU-B, so CPU-B
+keeps boot0's N=39.
 
 ### PMIC rails over TWI
 
