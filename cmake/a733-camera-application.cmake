@@ -1,4 +1,4 @@
-# One retained OV5640 exposure, existing native shared providers and USB0 sink.
+# One retained sensor exposure, existing native shared providers and USB0 sink.
 if(NOT TARGET sunstone-a733-storage-maintenance)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-storage-maintenance.cmake")
 endif()
@@ -7,15 +7,29 @@ option(SUNSTONE_CAMERA_STREAM "Finite supervised capture from a continuous two-s
 if(SUNSTONE_CAMERA_STREAM AND NOT SUNSTONE_CAMERA_SUPERVISED)
  message(FATAL_ERROR "Continuous camera capture requires the retained supervised profile")
 endif()
-set(SUNSTONE_CAMERA_SIZE "VGA" CACHE STRING "OV5640 size: QQVGA QCIF QVGA VGA NTSC PAL XGA 720P 1080P QSXGA")
+set(SUNSTONE_CAMERA_SIZE "VGA" CACHE STRING "Legacy camera geometry preset: QQVGA QCIF QVGA VGA NTSC PAL XGA 720P 1080P QSXGA")
+set(SUNSTONE_CAMERA_WIDTH "" CACHE STRING "Requested sensor width; empty selects the legacy preset")
+set(SUNSTONE_CAMERA_HEIGHT "" CACHE STRING "Requested sensor height; empty selects the legacy preset")
 set(camera_sizes QQVGA QCIF QVGA VGA NTSC PAL XGA 720P 1080P QSXGA)
 list(FIND camera_sizes "${SUNSTONE_CAMERA_SIZE}" camera_size)
 if(camera_size LESS 0)
- message(FATAL_ERROR "Unsupported OV5640 size: ${SUNSTONE_CAMERA_SIZE}")
+ message(FATAL_ERROR "Unsupported camera geometry preset: ${SUNSTONE_CAMERA_SIZE}")
 endif()
-# Still fits through PAL; the two-slot stream fits through VGA.
+if(SUNSTONE_CAMERA_WIDTH STREQUAL "" AND SUNSTONE_CAMERA_HEIGHT STREQUAL "")
+ set(camera_widths 160 176 320 640 720 720 1024 1280 1920 2592)
+ set(camera_heights 120 144 240 480 480 576 768 720 1080 1944)
+ list(GET camera_widths ${camera_size} camera_width)
+ list(GET camera_heights ${camera_size} camera_height)
+elseif(SUNSTONE_CAMERA_WIDTH MATCHES "^[1-9][0-9]*$" AND SUNSTONE_CAMERA_HEIGHT MATCHES "^[1-9][0-9]*$")
+ set(camera_width "${SUNSTONE_CAMERA_WIDTH}")
+ set(camera_height "${SUNSTONE_CAMERA_HEIGHT}")
+else()
+ message(FATAL_ERROR "Set both SUNSTONE_CAMERA_WIDTH and SUNSTONE_CAMERA_HEIGHT to positive integers")
+endif()
+# The existing inline result fits 720x576; streaming fits 640x480.
 set(camera_external OFF)
-if(camera_size GREATER 5 OR (SUNSTONE_CAMERA_STREAM AND camera_size GREATER 3))
+math(EXPR camera_frame_bytes "${camera_width} * ${camera_height} * 2")
+if(camera_frame_bytes GREATER 829440 OR (SUNSTONE_CAMERA_STREAM AND camera_frame_bytes GREATER 614400))
  set(camera_external ON)
 endif()
 set(camera_root "${SUNSTONE_SOURCE_ROOT}")
@@ -46,6 +60,8 @@ list(APPEND camera_sources "${camera_build}/boot.c")
 # the immutable 4KiB session page and does not decode a storage grant.
 foreach(source IN ITEMS apps/camera/main.c apps/camera/profile.c apps/camera/admission.c apps/camera/snapshot.c apps/camera/capture.c apps/camera/usb0.c
  drivers/camera/ov5640.c drivers/camera/a733_camera_platform.c drivers/camera/a733_csi_receiver.c
+ drivers/camera/camera_sensor.c drivers/camera/sensor_registry.c drivers/camera/ov5640_sensor.c
+ drivers/camera/ov5647_sensor.c drivers/camera/a733_camera_application.c drivers/board/orangepi_zero3w.c
  drivers/camera/a733_camera_route.c drivers/camera/a733_camera_dma.c drivers/camera/a733_camera_capture.c
  drivers/camera/a733_camera_native.c drivers/iommu/a733_iommu.c drivers/i2c/a733_twi.c
  drivers/i2c/a733_twi_native.c drivers/clock/a733_media_clock.c drivers/clock/a733_media_clock_native.c
@@ -60,7 +76,8 @@ target_include_directories(sunstone-a733-camera BEFORE PRIVATE "${camera_root}/a
  "${camera_root}/drivers/usb" "${TINYUSB_DIR}/src" "${camera_root}/include"
  "${camera_root}/runtime/include" "${FREERTOS_DIR}/include" "${storage_base}")
 target_compile_definitions(sunstone-a733-camera PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
- SUNSTONE_A733_USB=1 SUNSTONE_CAMERA_APPLICATION=1 SUNSTONE_CAMERA_SIZE=${camera_size})
+ SUNSTONE_A733_USB=1 SUNSTONE_CAMERA_APPLICATION=1 SUNSTONE_CAMERA_SIZE=${camera_size}
+ SUNSTONE_CAMERA_WIDTH=${camera_width} SUNSTONE_CAMERA_HEIGHT=${camera_height})
 if(NOT SUNSTONE_CAMERA_SUPERVISED)
  target_compile_definitions(sunstone-a733-camera PRIVATE
   A733_SMP_CONTRACT_MAGIC=0x4153373343414332ULL A733_SMP_RESULT_MAGIC=0x4153373343415232ULL)
@@ -88,7 +105,7 @@ set(camera_inputs ${camera_sources} ${camera_headers} ${storage_inputs}
  "${camera_root}/apps/board/usb0_service.h" "${camera_root}/apps/camera/boot.patch"
  "${CMAKE_CURRENT_LIST_FILE}" "${camera_root}/apps/camera/CMakeLists.txt" "${camera_root}/platform/a733-smp-supervised/boot.patch")
 list(REMOVE_DUPLICATES camera_inputs)
-set(camera_identity "native-camera-1;${SUNSTONE_CAMERA_SUPERVISED};${SUNSTONE_CAMERA_STREAM};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;OV5640;${SUNSTONE_CAMERA_SIZE};${camera_external};NV16;USB0-sink;retained")
+set(camera_identity "native-camera-1;${SUNSTONE_CAMERA_SUPERVISED};${SUNSTONE_CAMERA_STREAM};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;board-sensor;${camera_width}x${camera_height};${camera_external};NV16;USB0-sink;retained")
 foreach(input IN LISTS camera_inputs)
  file(SHA256 "${input}" camera_digest)
  string(APPEND camera_identity "${camera_digest}")

@@ -318,7 +318,7 @@ def main():
         'dsi':(DSI,['drivers/display/a733_dsi_phy.c','drivers/display/a733_dsi.c',str(a.dsi_reference)]),
         'hdmi':(HDMI,['drivers/display/a733_hdmi.c','drivers/display/sunstone_edid.c','drivers/display/a733_hdmi_phy.c','drivers/display/a733_tcon_tv.c']),
         'sensor':(SENSOR,['drivers/camera/ov5640.c']),
-        'capture':(CAPTURE,['drivers/camera/ov5640.c','drivers/camera/a733_camera_platform.c','drivers/camera/a733_csi_receiver.c','drivers/camera/a733_camera_route.c','drivers/camera/a733_camera_dma.c','drivers/iommu/a733_iommu.c','drivers/camera/a733_camera_capture.c']),
+        'capture':(CAPTURE,['drivers/camera/camera_sensor.c','drivers/camera/sensor_registry.c','drivers/camera/ov5640_sensor.c','drivers/camera/ov5647_sensor.c','drivers/camera/ov5640.c','drivers/camera/a733_camera_platform.c','drivers/camera/a733_csi_receiver.c','drivers/camera/a733_camera_route.c','drivers/camera/a733_camera_dma.c','drivers/iommu/a733_iommu.c','drivers/camera/a733_camera_capture.c']),
         'dp':(dp_wait(),[]),
         'video':(video_reset(),[]),
         'framebuffer':(framebuffer_reset(),[]),
