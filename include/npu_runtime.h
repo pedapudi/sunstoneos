@@ -11,8 +11,8 @@
  * own one slot. A slot holds one catalogue model at a time; its client loads
  * a model by catalogue index, writes inputs in place, submits, and reads
  * outputs in place. Jobs of different slots share the NPU with round-robin
- * starts. The catalogue is fixed at preparation: every entry must match the
- * privileged build-time digest table in drivers/npu/npu_session_models.inc. */
+ * starts. The catalogue is fixed at preparation: every entry must match an
+ * entry of the image's admitted table (npu_admitted_models.h). */
 #define NPU_RUNTIME_SLOTS NPU_SERVICE_CLIENTS
 #define NPU_RUNTIME_MODELS 16u
 #define NPU_RUNTIME_DEVICE_BASE 0x10000000u

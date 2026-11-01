@@ -1,21 +1,31 @@
 #!/usr/bin/env python3
 """Embed the client's authenticated NPU model and its input and reference vectors.
 
-Only the catalogue entry that the application client loads is linked; the
-other entries have no caller. os_npu_catalogue_digest is the SHA-256 of the
-linked model's SHA-256 digest, the value the session extension binds.
+The client's model is entry --model of the OS application's model list
+(apps/os/npu-models.json). Only that entry is linked; the other entries have
+no caller. os_npu_catalogue_digest is the SHA-256 of the linked model's
+SHA-256 digest, the value the session extension binds.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
+MODELS = ROOT / 'apps/os/npu-models.json'
+
+def models():
+    """The OS application's catalogue entries, in model-list order."""
+    spec = importlib.util.spec_from_file_location('npu_session_catalogue', ROOT / 'tools/npu-session-catalogue.py')
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    return tool.application_models([MODELS])
 
 def generate(artifacts, output, model=0):
-    catalogue = json.loads((ROOT / 'tools/npu-session-models.json').read_text())['models']
+    catalogue = models()
     paths = json.loads(Path(artifacts).read_text())
-    if len(catalogue) != 5 or not 0 <= model < len(catalogue):
-        raise ValueError('Unsupported OS catalogue/client selection')
+    if not 0 <= model < len(catalogue):
+        raise ValueError('Unsupported OS client selection')
     text = '#include "npu.h"\n'
     digests, rows = b'', []
     def blob(name, path, expected):

@@ -60,7 +60,11 @@ ShuffleNetV2 slot and USB0 on core 0, whose deadline cap and host request
 deadline it reads from apps/npu-runtime/main.c and apps/npu-runtime-large/host.py;
 and the board image, apps/npu-board, with one slot of the five-model catalogue
 and its worker on core 1, whose slot count, job deadline and client reply wait
-it reads from apps/npu-board.
+it reads from apps/npu-board; and the NPU runtime returning image
+(apps/npu-finite/build.py --runtime), one slot of the networks of
+apps/npu-finite/runtime-models.json with every task on core 0 and no USB0
+loop, whose job deadline and reply wait it reads from its client and platform
+sources.
 """
 import argparse
 import json
@@ -178,6 +182,10 @@ def images():
     board_slots = int(constant('apps/npu-board/npu-board.h', r'#define NPU_BOARD_SLOTS (\d+)u')[0])
     board_deadline = int(constant(board, r'\.job_timeout_us=(\d+)')[0])
     board_collect = int(constant(board, r'\.wait=pdMS_TO_TICKS\((\d+)\)')[0]) * 1000
+    finite_deadline = int(constant('apps/npu-finite/runtime-client.c', r'w->reference_bytes,(\d+)\)')[0])
+    finite_collect = int(constant('apps/npu-convolution/native-runtime.c',
+                                  r'npu_job_attach\(&app\.runtime,pdMS_TO_TICKS\((\d+)\)\)')[0]) * 1000
+    finite_models = json.loads((ROOT / 'apps/npu-finite/runtime-models.json').read_text())['npu_models']
     return [
         dict(name=check, slots=slots, deadline_us=deadline, usb0_core0=False, collect_us=collect * 1000,
              models=['conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q']),
@@ -188,6 +196,8 @@ def images():
         dict(name='apps/npu-board (board image)', slots=board_slots, deadline_us=board_deadline,
              usb0_core0=False, collect_us=board_collect,
              models=['conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q']),
+        dict(name='apps/npu-finite --runtime (returning image)', slots=1, deadline_us=finite_deadline,
+             usb0_core0=False, collect_us=finite_collect, models=finite_models),
     ]
 
 

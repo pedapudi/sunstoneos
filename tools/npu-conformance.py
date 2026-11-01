@@ -9,8 +9,9 @@
                most RUNNER_LANES runner processes at a time, run the
                references, compare, and write WORK/report.json.
 
-The model set is tools/npu-session-models.json; the references and the files
-they read are pinned in tools/npu-conformance-references.json. Every
+The model set is the models of tools/npu-conformance-references.json, which
+pins their references and the files those read; each must be an entry of
+tools/npu-session-models.json, in whose order the models run. Every
 comparison requires bit-for-bit equality. docs/npu-conformance.md describes
 the vectors, the references and the report. The harness performs no device
 I/O and never contacts USB devices or the board.
@@ -351,9 +352,9 @@ def stage(work, root=ROOT, cache=CACHE):
     """Verify every pinned identity and copy the inputs into work/inputs."""
     catalogue = load(CATALOGUE, root)
     references = load(REFERENCES, root)
-    models = {m['name']: m for m in catalogue['models']}
-    if set(models) != set(references['models']):
-        raise ValueError('the reference table and the catalogue name different models')
+    if not set(references['models']) <= {m['name'] for m in catalogue['models']}:
+        raise ValueError('the reference table names models absent from the catalogue')
+    models = {m['name']: m for m in catalogue['models'] if m['name'] in references['models']}
     inspector = references['inspector']
     (work / 'inputs').mkdir(parents=True)
     (work / 'inputs/nbinfo').write_bytes(pinned(cache / inspector['path'], inspector['sha256'], 'inspector'))

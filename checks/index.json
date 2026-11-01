@@ -7554,6 +7554,7 @@
  "npu-runtime-bounds.py": {
   "cache_areas": [],
   "docs": [
+   "apps/npu-finite/ENTRY.md",
    "docs/designs/npu-board-measurements.md",
    "docs/designs/npu-board.md",
    "docs/designs/npu-breadth-measurements.md",

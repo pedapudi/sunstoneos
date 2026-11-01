@@ -2,28 +2,12 @@
  * the one NPU. Design, budgets and failure classes:
  * docs/designs/npu-breadth.md. */
 #include "npu_runtime.h"
+#include "npu_admitted_models.h"
 #include "a733_range.h"
 #include <string.h>
 
 #define PAGE 4096u
 #define END_PAIR UINT64_C(0x10000000)
-
-struct catalogue_entry {
-    unsigned char digest[32];
-    uint32_t model_bytes, inputs, outputs;
-    uint32_t tensor_bytes[2 * NBG_ASSEMBLY_MAX_TENSORS];
-    uint32_t nn_operations, descriptor_patches, state_patches, command_body_bytes;
-};
-/* Only privileged build-time entries are executable input. A host check may
- * substitute its own generated table through NPU_RUNTIME_CATALOGUE. */
-static const struct catalogue_entry catalogue[] = {
-#if defined(NPU_RUNTIME_CATALOGUE)
-#include NPU_RUNTIME_CATALOGUE
-#else
-#include "npu_session_models.inc"
-#endif
-};
-#define CATALOGUE_COUNT (sizeof(catalogue) / sizeof(catalogue[0]))
 
 /* Worker phases. A LOAD copies the model into the staging area, hashing and
  * checksumming each chunk, opens and plans the copy, assembles it in steps,
@@ -58,11 +42,11 @@ static int admit(const unsigned char *data, size_t bytes, unsigned *entry, struc
     struct nbg_model model;
     storage_digest_bytes(data, bytes, digest);
     unsigned e = 0;
-    while (e < CATALOGUE_COUNT &&
-           (catalogue[e].model_bytes != bytes || memcmp(catalogue[e].digest, digest, 32))) ++e;
-    if (e == CATALOGUE_COUNT || nbg_model_open(data, bytes, &model) != NBG_DECODE_OK ||
+    while (e < npu_admitted_model_count && (npu_admitted_models[e].model_bytes != bytes ||
+                                            memcmp(npu_admitted_models[e].digest, digest, 32))) ++e;
+    if (e == npu_admitted_model_count || nbg_model_open(data, bytes, &model) != NBG_DECODE_OK ||
         !nbg_assembly_layout(&model, layout)) return 0;
-    const struct catalogue_entry *c = &catalogue[e];
+    const struct npu_admitted_model *c = &npu_admitted_models[e];
     if (layout->inputs != c->inputs || layout->outputs != c->outputs ||
         layout->nn_operations != c->nn_operations || layout->descriptor_patches != c->descriptor_patches ||
         layout->state_patches != c->state_patches || layout->command_body_bytes != c->command_body_bytes ||
@@ -452,7 +436,7 @@ static int load_work(struct npu_runtime *rt)
         storage_digest_end(&rt->digest, digest);
         const struct nbg_assembly_layout *plan = &rt->plans[s->model];
         targets(s, plan);
-        if (memcmp(digest, catalogue[rt->entry[s->model]].digest, 32) ||
+        if (memcmp(digest, npu_admitted_models[rt->entry[s->model]].digest, 32) ||
             nbg_model_open((const void *)rt->staging, model->bytes, &rt->view) != NBG_DECODE_OK ||
             !nbg_assembly_begin(&rt->view, s->targets, NBG_ALLOC_INPUT + plan->inputs + plan->outputs,
                                 &s->layout, &rt->cursor) || !same_plan(&s->layout, plan)) {

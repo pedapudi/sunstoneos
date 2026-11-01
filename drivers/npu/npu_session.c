@@ -1,4 +1,5 @@
 #include "npu_session.h"
+#include "npu_admitted_models.h"
 #include "a733_storage_digest.h"
 #include "a733_range.h"
 #include <string.h>
@@ -6,20 +7,6 @@
 #define PAGE 4096u
 #define SRAM_BASE 0x400000u
 #define SRAM_BYTES 0x80000u
-
-struct catalogue_entry {
-    unsigned char digest[32];
-    uint32_t model_bytes, inputs, outputs;
-    uint32_t tensor_bytes[2 * NBG_ASSEMBLY_MAX_TENSORS];
-    uint32_t nn_operations, descriptor_patches, state_patches, command_body_bytes;
-};
-/* Only privileged build-time entries are executable input. The digest fixes
- * descriptors, coefficients and relocations together; the counts are an
- * independent check of what the decoder and assembler derive from them. */
-static const struct catalogue_entry catalogue[] = {
-#include "npu_session_models.inc"
-};
-#define CATALOGUE_COUNT (sizeof(catalogue) / sizeof(catalogue[0]))
 
 static size_t pages(size_t bytes) { return (bytes + PAGE - 1) & ~(size_t)(PAGE - 1); }
 static int fault(struct npu_sessions *s)
@@ -35,11 +22,11 @@ static int admit(const unsigned char *data, size_t bytes, unsigned *entry, struc
     unsigned char digest[32];
     storage_digest_bytes(data, bytes, digest);
     unsigned e = 0;
-    while (e < CATALOGUE_COUNT &&
-           (catalogue[e].model_bytes != bytes || memcmp(catalogue[e].digest, digest, 32))) ++e;
-    if (e == CATALOGUE_COUNT || nbg_model_open(data, bytes, model) != NBG_DECODE_OK ||
+    while (e < npu_admitted_model_count && (npu_admitted_models[e].model_bytes != bytes ||
+                                            memcmp(npu_admitted_models[e].digest, digest, 32))) ++e;
+    if (e == npu_admitted_model_count || nbg_model_open(data, bytes, model) != NBG_DECODE_OK ||
         !nbg_assembly_layout(model, layout)) return 0;
-    const struct catalogue_entry *c = &catalogue[e];
+    const struct npu_admitted_model *c = &npu_admitted_models[e];
     if (layout->inputs != c->inputs || layout->outputs != c->outputs ||
         layout->nn_operations != c->nn_operations ||
         layout->descriptor_patches != c->descriptor_patches ||
@@ -137,8 +124,8 @@ static int model_intact(const struct npu_sessions *s, unsigned m, int full)
     unsigned char actual[32];
     if (full) {
         storage_digest_bytes(n->model, n->model_bytes, actual);
-        if (n->model_bytes != catalogue[n->entry].model_bytes ||
-            memcmp(actual, catalogue[n->entry].digest, 32)) return 0;
+        if (n->model_bytes != npu_admitted_models[n->entry].model_bytes ||
+            memcmp(actual, npu_admitted_models[n->entry].digest, 32)) return 0;
     }
     for (unsigned j = 0; j < 2; ++j) {
         const struct a733_npu_buffer *b = &n->buffers[j ? NBG_ALLOC_COEFF : NBG_ALLOC_NN];

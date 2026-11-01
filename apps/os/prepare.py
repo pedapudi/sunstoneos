@@ -209,7 +209,7 @@ def linked_npu_assets(elf):
         require(symbol['size'] == 4, 'NPU linked count size differs.')
         return struct.unpack('<I', elf.read(symbol['value'], 4))[0]
     model = value('os_npu_client_model')
-    catalogue = json.loads((ROOT / 'tools/npu-session-models.json').read_text())['models']
+    catalogue = module('os_npu_catalogue', ROOT / 'apps/os/npu-catalogue.py').models()
     require(model < len(catalogue), 'NPU linked catalogue entry differs.')
     selected = catalogue[model]
     for symbol, entries in [('os_npu_models', [selected['model']]),
@@ -419,7 +419,7 @@ def npu_session_check(raw):
     require(struct.unpack_from('<2Q', n, 64) == (NPU_RANGE[0], NPU_RANGE[1] - NPU_RANGE[0]) and
             all(any(n[i:i+32]) for i in range(80, 272, 32)), 'Missing NPU reservation or evidence.')
     # The image links only the client's model (apps/os/npu-catalogue.py).
-    catalogue = json.loads((ROOT / 'tools/npu-session-models.json').read_text())['models']
+    catalogue = module('os_npu_catalogue', ROOT / 'apps/os/npu-catalogue.py').models()
     expected = hashlib.sha256(bytes.fromhex(catalogue[model]['model']['sha256'])).digest()
     require(n[80:112] == expected, 'NPU catalogue differs.')
     npu_rules.fabric_check(raw)

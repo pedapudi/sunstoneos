@@ -45,7 +45,9 @@ the run's files.
 
 ## Models and references
 
-The model set is the [session catalogue](../tools/npu-session-models.json):
+The model set is the models of the
+[reference table](../tools/npu-conformance-references.json), each an entry of
+the [session catalogue](../tools/npu-session-models.json):
 
 | Model | Tensor types | Reference | Pinned files |
 | --- | --- | --- | --- |
@@ -54,6 +56,9 @@ The model set is the [session catalogue](../tools/npu-session-models.json):
 | Same graph, INT8 (`dual-i8`) | INT8 | Compiler quantized CPU inference | As above |
 | mimus query projection (`mimus-linear-q`) | INT16 | Exact integer accumulator, bias as an int32 code, one rounding to INT16 | Weight codes and scales, bias, study metadata, quantize file, `tools/npu-mimus-linear.py` |
 | Published ShuffleNetV2 | UINT8 | None | None |
+
+The catalogue's 12×12 convolution (`conv12`) has no reference entry, so the
+harness does not compare it.
 
 - **Compiler inference.** For each base vector, the harness converts the codes
   to floats with the catalogue's scale and zero point, runs the compiler's

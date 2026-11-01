@@ -38,8 +38,8 @@ assert h.timing('NPU_STAGE=OPEN\n') is None
 def ref(path):return {'path':str(path.resolve()),'sha256':sha(path.read_bytes())}
 results=[]
 with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
- t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));thermal=bool(g.get('thermal'));restart=bool(g.get('restart'));startup=bool(g.get('startup_only'));infer=bool(g.get('single_inference'));execution=h.geometry_profile(g)
- completions=4 if restart else 2 if infer else 1 if startup else 3
+ t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));thermal=bool(g.get('thermal'));restart=bool(g.get('restart'));startup=bool(g.get('startup_only'));infer=bool(g.get('single_inference'));runtime=bool(g.get('runtime'));execution=h.geometry_profile(g)
+ completions=4 if restart else 3 if runtime else 2 if infer else 1 if startup else 3
  client_profile=h.STARTUP_CLIENT.get(execution)
  IRQ_RECEIPTS=f'NPU_IRQ_COMPLETIONS=0x{completions:016x}\nNPU_IRQ_STOPPED=0x0000000000000001\n'
  if restart:
@@ -187,8 +187,9 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   rejected('finite-missing-'+key,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
  platform.write_bytes(saved_platform)
  if startup:
-  assert a.interrupt and a.client_logs
-  for execution_label in (h.PROFILE,h.RESTART,h.CHECKPOINT,h.PROVIDER_CHECKPOINT,h.STARTUP if infer else h.INFERENCE):
+  # The runtime client's logs are composed here from the linked references.
+  assert a.interrupt and (a.client_logs or runtime)
+  for execution_label in (h.PROFILE,h.RESTART,h.CHECKPOINT,h.PROVIDER_CHECKPOINT)+((h.STARTUP,h.INFERENCE) if runtime else (h.STARTUP if infer else h.INFERENCE,)):
    rejected('startup-cannot-use-'+execution_label,lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':execution_label}))
  if checkpoint:
   if g.get('checkpoint_irq'):
@@ -210,6 +211,27 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   changed={**entry,'thermal':{k:v for k,v in thermal_facts.items() if k!='electrical'}};encoded=json.dumps(changed).encode();bad=bytearray(raw);bad[80:112]=hashlib.sha256(encoded).digest()
   rejected('missing-thermal-electrical-authority',lambda:h.validate_admission(encoded,bad,build,layout,sha(data),execution_profile=execution))
  saved=(bundle/'request.bin').read_bytes();(bundle/'request.bin').write_bytes(bytes(len(saved)));rejected('changed-packet-refused',lambda:h.validate_bundle(bundle));(bundle/'request.bin').write_bytes(saved)
+ def runtime_log(variant):
+  references=[bytes.fromhex(x) for x in g['references']];outputs=[bytearray(x) for x in references];jobs=len(references)
+  if variant in ('mismatch','false-success'):outputs[1][0]^=1
+  if variant=='unwritten-second':outputs[1]=bytearray(len(outputs[1]))
+  if variant=='unwritten-tail':half=len(outputs[0])//2;outputs[0][half:]=bytes(len(outputs[0])-half)
+  claim='MATCH' if variant=='false-success' or [bytes(o) for o in outputs]==references else 'MISMATCH'
+  if variant=='runtime-match-claim':claim='MISMATCH'
+  text=('NPU_STAGE=WAIT_STARTUP\n'+''.join(f'NPU_STAGE=JOB network=0x{n:016x}\n' for n in range(jobs))+
+   'NPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n'+IRQ_RECEIPTS+'NPU_STAGE=QUIESCENT\n'+
+   ''.join(f'NPU_OUTPUT network=0x{n:016x}\n'+''.join(f'0x{x:016x}\n' for x in o) for n,o in enumerate(outputs))+
+   f'NPU_INFERENCE={claim}; inference_jobs={jobs}\n')
+  if variant=='runtime-one-job-log':text=text.replace('NPU_STAGE=JOB network=0x0000000000000001\n','')
+  if variant=='runtime-two-IRQs':text=text.replace(f'NPU_IRQ_COMPLETIONS=0x{completions:016x}','NPU_IRQ_COMPLETIONS=0x0000000000000002')
+  if variant=='runtime-reordered-outputs':
+   first,second=text.split('NPU_OUTPUT network=0x0000000000000001\n');head,first=first.split('NPU_OUTPUT network=0x0000000000000000\n')
+   values,tail=second.split('NPU_INFERENCE=')
+   text=head+'NPU_OUTPUT network=0x0000000000000001\n'+values+'NPU_OUTPUT network=0x0000000000000000\n'+first+'NPU_INFERENCE='+tail
+  if variant=='runtime-short-output':
+   lines=text.split('\n');at=lines.index('NPU_OUTPUT network=0x0000000000000001');del lines[at+1];text='\n'.join(lines)
+  if variant=='runtime-single-inference-log':text=text.replace(f'inference_jobs={jobs}','inference_jobs=1')
+  return text
  def reports(variant):
   status=int(variant in ('mismatch','unwritten-second','unwritten-tail') or variant.startswith('capture-') or thermal and variant=='restore-readback-failure');reference=bytes.fromhex(g['reference']);first=hashlib.sha256(reference).digest();second=reference
   if status:first=bytes([first[0]^1])+first[1:]
@@ -239,7 +261,8 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    if variant=='truncated-MBUS':text=text.rsplit('0x0000000081000000\n',1)[0]
    if variant=='bad-MBUS-result':text=text.replace('NPU_MBUS=\n0x0000000084000000\n0x0000000000000000','NPU_MBUS=\n0x0000000084000000\n0x0000000000000001')
    if variant=='duplicate-MBUS':text+=text[text.index('NPU_MBUS='):]
-  if startup:
+  if runtime:text=runtime_log(variant)
+  elif startup:
    text=(a.client_logs/({'mismatch':'mismatch.log','unwritten-second':'unwritten.log','false-success':'mismatch.log'}.get(variant,'matched.log') if infer else 'matched.log')).read_text()
    if variant=='infer-zero-jobs-log':text=text.replace('inference_jobs=1','inference_jobs=0')
    if variant=='infer-one-IRQ':text=text.replace('NPU_IRQ_COMPLETIONS=0x0000000000000002','NPU_IRQ_COMPLETIONS=0x0000000000000001')
@@ -275,7 +298,8 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  variants=['nominal','old-generic-monitor-magic','mismatch','unwritten-second','unwritten-tail','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','wrong-ROM-entry']
  if g.get('stopped_capture'):variants+=['capture-metadata-invalid','capture-parent-short','capture-extent-transport-failure','capture-durability-failure','capture-output-differs']
  if checkpoint or thermal or startup:variants.append('ordinary-receipt')
- if startup and not infer:variants+=['startup-inference-log','startup-two-IRQs','startup-zero-IRQs','startup-missing-close','startup-restart-log']
+ if startup and not infer and not runtime:variants+=['startup-inference-log','startup-two-IRQs','startup-zero-IRQs','startup-missing-close','startup-restart-log']
+ if runtime:variants+=['startup-receipt','runtime-one-job-log','runtime-two-IRQs','runtime-reordered-outputs','runtime-short-output','runtime-match-claim','runtime-single-inference-log']
  if infer:variants+=['startup-receipt','infer-zero-jobs-log','infer-one-IRQ','infer-missing-submit','infer-missing-reap','infer-short-output','infer-match-claim','infer-startup-log']
  if g.get('checkpoint_mbus'):variants+=['missing-MBUS','truncated-MBUS','bad-MBUS-result','duplicate-MBUS']
  if thermal:variants+=['thermal-zero','thermal-one','thermal-one-mismatch','thermal-late-drain','thermal-fault-reason']
@@ -356,8 +380,10 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   normal=variant in ('nominal','capture-output-differs') or variant in ('mismatch','unwritten-second','unwritten-tail') and not checkpoint or thermal and variant in ('thermal-zero','thermal-one','thermal-one-mismatch');assert (failure is None)==normal,(variant,failure)
   if normal:
    assert record['complete'] and record['dram_restored'] and record['ownership_release_permitted'] and not record['sram_restored']
-   assert result['functional_success']==(variant=='nominal' and not checkpoint and (infer or not startup)) and result['controlled_negative']==(variant in ('mismatch','unwritten-second','unwritten-tail','thermal-one-mismatch','capture-output-differs'))
-   if not checkpoint and (infer or not startup):
+   assert result['functional_success']==(variant=='nominal' and not checkpoint and (infer or runtime or not startup)) and result['controlled_negative']==(variant in ('mismatch','unwritten-second','unwritten-tail','thermal-one-mismatch','capture-output-differs'))
+   if runtime:
+    assert result['runtime'] and result['jobs']==2 and result['network_matches']==[variant!='unwritten-tail',variant not in ('mismatch','unwritten-second')],(variant,result)
+   elif not checkpoint and (infer or not startup):
     size=len(bytes.fromhex(g['reference']));pattern=result['output_pattern']
     assert not pattern.get('first_unwritten')
     if variant=='unwritten-second':assert pattern['second_unwritten'] and pattern['second_pattern_ranges']==[[0,size]],pattern

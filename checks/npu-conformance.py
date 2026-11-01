@@ -2,7 +2,7 @@
 """Check the NPU conformance harness's vectors, comparisons and identity pins; host only.
 
 Exercises tools/npu-conformance.py without the compiler image, the cache or a
-device: the vector plan for the session catalogue, seeded bytes, line
+device: the vector plan for the conformance models, seeded bytes, line
 coverage, the int32-bias rule, the per-model verdict, runner timing, runner
 lanes and the refusal of changed pinned files.
 """
@@ -39,9 +39,10 @@ def plan(name):
                                  entry.get('repeat', 'seeded'))
 
 
-# Vector plan for the catalogue: the design's job budget and line counts.
-assert set(CATALOGUE) == set(REFERENCES)
-jobs = {name: plan(name)[1] for name in CATALOGUE}
+# Vector plan for the conformance models: the design's job budget and line
+# counts. Catalogue entries without a reference, such as conv12, are not run.
+assert set(REFERENCES) <= set(CATALOGUE)
+jobs = {name: plan(name)[1] for name in CATALOGUE if name in REFERENCES}
 kinds = [j['kind'] for js in jobs.values() for j in js]
 assert kinds.count('base') == 24 and kinds.count('line') == 55 and kinds.count('repeat') == 5, kinds
 assert {n: sum(j['kind'] == 'line' for j in js) for n, js in jobs.items()} == {
@@ -193,7 +194,7 @@ assert t == dict(prepare_seconds=0.005, first_job_seconds=4.0, steady_job_second
                  invocation_limit_seconds=99), t
 
 # Runner lanes: the catalogue's longest invocation runs alone.
-lane_plan = dict(models={n: dict(per_vector_seconds=REFERENCES[n]['per_vector_seconds']) for n in CATALOGUE})
+lane_plan = dict(models={n: dict(per_vector_seconds=REFERENCES[n]['per_vector_seconds']) for n in jobs})
 assert tool.lanes(lane_plan, jobs) == [['shufflenet-v2-published'],
                                        ['mimus-linear-q', 'dual-u8', 'dual-i8', 'conv8']], tool.lanes(lane_plan, jobs)
 assert tool.lanes(dict(models=dict(a=dict(per_vector_seconds=1))), dict(a=[0])) == [['a']]
@@ -243,7 +244,7 @@ with tempfile.TemporaryDirectory() as temporary:
         sha256='0' * 64)), 'conv8 pinned file model.data changed')
     harness.refused(lambda: stage('tool', lambda t: t['inspector'].update(sha256='0' * 64)), 'inspector changed')
     harness.refused(lambda: stage('set', lambda t: t['models'].update(extra=t['models']['conv8'])),
-                    'name different models')
+                    'names models absent from the catalogue')
     harness.refused(lambda: stage('missing', lambda t: t['models']['conv8'].update(nbg='absent')),
                     'No such file', FileNotFoundError)
 

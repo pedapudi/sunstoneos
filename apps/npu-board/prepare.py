@@ -177,8 +177,8 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
     return cache
 
 def tensor_check(model,inputs,references):
-    """The capture inputs and references against the catalogue entry."""
-    catalogue=json.loads((ROOT/'tools/npu-session-models.json').read_text())['models']
+    """The capture inputs and references against the board model list entry."""
+    catalogue=module('npu_board_catalogue',ROOT/'apps/npu-board/catalogue.py').models()
     require(type(model) is int and 0<=model<len(catalogue),'Unknown catalogue model.')
     entry=catalogue[model]
     require(len(inputs)==len(entry['inputs']) and len(references)==len(entry['outputs']),'Tensor count differs from the catalogue.')
@@ -297,7 +297,7 @@ if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('image','manifest','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
-    parser.add_argument('--model',type=int,required=True,help='catalogue index (tools/npu-session-models.json order)')
+    parser.add_argument('--model',type=int,required=True,help='load index (apps/npu-board/npu-models.json order)')
     parser.add_argument('--input',type=Path,action='append',required=True)
     parser.add_argument('--reference',type=Path,action='append',required=True)
     a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld,a.model,a.input,a.reference)

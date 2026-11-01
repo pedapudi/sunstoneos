@@ -204,7 +204,7 @@ def main():
     struct.pack_into('<3I',raw,488,0x03000002,0x83000000,0x84000000)
     struct.pack_into('<3I',raw,500,200000000,600000000,400000000)
     # Model inputs from the actual earlier OS producer; rebinding is synthetic.
-    models=json.loads((ROOT/'tools/npu-session-models.json').read_text())['models']
+    models=module('os_npu_catalogue',ROOT/'apps/os/npu-catalogue.py').models()
     catalogue=hashlib.sha256(bytes.fromhex(models[0]['model']['sha256'])).digest()  # the linked client model only
     struct.pack_into('<6Q4I2Q',raw,808,prep.NPU_MAGIC,1,272,31,41,51,4,0,2,0,0x47400000,0x800000)
     raw[888:920]=catalogue;raw[920:1080]=bytes([1])*160
