@@ -22,9 +22,13 @@ The rules match specific formats, so ordinary words such as `token`, `key` or
 of the repository: git config core.hooksPath tools/git-hooks
 """
 import codecs
+import ast
+import os
+from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 ALLOW = 'pre-push: allow'
 BASE = 'origin/bringup'
@@ -163,6 +167,26 @@ def scan(commits):
     return findings
 
 
+def fixture_selection(commits):
+    """Select the hook fixture only when its declared repository inputs changed."""
+    root = Path(git('rev-parse', '--show-toplevel').decode().strip())
+    fixture = root / 'checks/pre-push-hook.py'
+    inputs = {'tools/git-hooks/pre-push', 'checks/pre-push-hook.py', 'checks/harness.py'}
+    if fixture.is_file():
+        for node in ast.parse(fixture.read_text()).body:
+            if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'CHECK_INPUTS' for t in node.targets):
+                declared = ast.literal_eval(node.value)
+                if not isinstance(declared, (tuple, list)) or not all(isinstance(p, str) for p in declared):
+                    raise ValueError('pre-push fixture CHECK_INPUTS must be literal repository paths')
+                inputs.update(declared)
+    changed = set()
+    if commits:
+        output = git('diff-tree', '--stdin', '--root', '-m', '--no-commit-id', '--name-only', '-r', '-z',
+                     '--no-renames', stdin=('\n'.join(commits) + '\n').encode())
+        changed = {name.decode() for name in output.split(b'\0') if name}
+    return root, fixture, sorted(inputs & changed)
+
+
 def main():
     remote = sys.argv[1] if len(sys.argv) > 1 else ''
     commits, seen = [], set()
@@ -175,14 +199,26 @@ def main():
                 seen.add(commit)
                 commits.append(commit)
     findings = scan(commits)
-    if not findings:
-        return 0
-    print(f'pre-push: refused; {len(findings)} finding(s) in {len(commits)} outgoing commit(s):', file=sys.stderr)
-    for finding in findings:
-        print('  ' + finding, file=sys.stderr)
-    print('Remove the content from the commits, or add "pre-push: allow" to a line that is a deliberate test fixture.',
-          file=sys.stderr)
-    return 1
+    if findings:
+        print(f'pre-push: refused; {len(findings)} finding(s) in {len(commits)} outgoing commit(s):', file=sys.stderr)
+        for finding in findings:
+            print('  ' + finding, file=sys.stderr)
+        print('Remove the content from the commits, or add "pre-push: allow" to a line that is a deliberate test fixture.',
+              file=sys.stderr)
+        return 1
+    root, fixture, changed = fixture_selection(commits)
+    if changed:
+        if not fixture.is_file():
+            print('pre-push: hook fixture required but checks/pre-push-hook.py is absent', file=sys.stderr)
+            return 1
+        print('pre-push: hook fixture selected by ' + ', '.join(changed), file=sys.stderr)
+        cache = Path(os.environ.get('SUNSTONE_CACHE', Path.home() / '.cache/sunstoneos'))
+        output = Path(os.environ.get('SUNSTONE_CHECK_OUTPUT', cache / 'build/pre-push-hook'))
+        # The fixture preserves every attempt rather than deleting scratch repos.
+        output.mkdir(parents=True, exist_ok=True)
+        evidence = Path(tempfile.mkdtemp(prefix='push-', dir=output)) / 'fixture'
+        return subprocess.run([str(cache / 'venv/bin/python3'), '-B', str(fixture), '--output', str(evidence)], cwd=root).returncode
+    return 0
 
 
 if __name__ == '__main__':

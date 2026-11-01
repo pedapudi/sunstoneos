@@ -15,6 +15,9 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
 from harness import CACHE, Image, hook_addresses, save, skip_crumbs
 
+# Linked image sources whose paths are not named by the boundary model.
+CHECK_INPUTS = ('apps/gpu-queue-peer/main.c',)
+
 ROOT=Path(__file__).resolve().parents[1]
 TYPES={'ss_application','ss_manifest','ss_grant','ss_gpu_share','gpu_queue_job','gpu_queue_context',
        'gpu_queue_record','gpu_queue_lease_info','board_application','a733_board_session',

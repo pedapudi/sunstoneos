@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import sqlite3
 import stat
@@ -167,7 +168,7 @@ def safe_read(root, relative, limit=MAX_DOCUMENT):
 
 
 def doc_path(path):
-    return bool(re.fullmatch(r'docs/[A-Za-z0-9][A-Za-z0-9_.-]*\.md', path))
+    return bool(re.fullmatch(r'docs/(?:status/)?[A-Za-z0-9][A-Za-z0-9_.-]*\.md', path))
 
 
 def application_declaration(repository):
@@ -189,14 +190,101 @@ def application_declaration(repository):
 def links(text, source='docs/hardware.md'):
     found = []
     for label, target in re.findall(r'\[([^\]]+)\]\(([^)]+)\)', text):
-        target = target.split('#', 1)[0]
+        target, _, fragment = target.partition('#')
         if not target or ':' in target or target.startswith('/'):
             continue
-        path = str(PurePosixPath(source).parent / target)
-        if doc_path(path) and path not in {item['path'] for item in found}:
+        path = posixpath.normpath(str(PurePosixPath(source).parent / target))
+        if doc_path(path) and (path, fragment) not in {(item['path'], item.get('fragment', '')) for item in found}:
             found.append({'label': label, 'path': path,
-                          'url': '/api/document?path=' + quote(path, safe='')})
+                          'url': '/api/document?path=' + quote(path, safe=''),
+                          **({'fragment': fragment} if fragment else {})})
     return found
+
+
+def state_documents(markdown):
+    """Find canonical state links without a subsystem-to-file map."""
+    return list(dict.fromkeys(link['path'] for link in links(markdown)
+                             if link['label'] == 'State' and link['path'].startswith('docs/status/')))
+
+
+def status_record(path, text, fragment=None):
+    """Require explicit implementation and physical scope in a state record."""
+    title = re.match(r'\A# ([^\n]+)\n', text)
+    introduction = re.split(r'^#{2,} ', text, maxsplit=1, flags=re.M)[0]
+    declarations = re.findall(r'^\*\*Status: ([^\n]+)\*\*[ \t]*$', introduction, re.M)
+    if not title or not title.group(1).strip() or declarations not in (['implemented.'], ['blocked.']):
+        return None
+    content = introduction
+    heading = title.group(1)
+    if fragment:
+        matches = [part for part in sections(text) if slug(part['title']) == fragment]
+        if len(matches) != 1:
+            return None
+        content = matches[0]['markdown']
+        heading += ': ' + matches[0]['title']
+    scopes = re.findall(r'^\*\*Board-qualified scope:\*\* ([^\n]+(?:\n(?!\n|#|\*\*)[^\n]+)*)', content, re.M)
+    if len(scopes) != 1 or not scopes[0].strip():
+        return None
+    scope = ' '.join(scopes[0].split())
+    if scope != 'None.' and re.match(r'^(?:none|no|not|pending|unavailable|untested|unrun|unqualified)\b', scope, re.I):
+        return None
+    return {'title': heading, 'markdown': content if fragment else text, 'source': path,
+            'links': links(content if fragment else text, path), 'implementation': declarations[0][:-1],
+            'board_qualified_scope': scope}
+
+
+def software_evidence(text):
+    """Classify affirmative software evidence without admitting physical results."""
+    evidence = set()
+    plain = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+    for sentence in re.split(r'(?<=[.!?])\s+', plain):
+        positive = re.search(r'\b(?:pass(?:es|ed)?|match(?:es|ed)?|covers?|evidence)\b|\*\*tested\*\*', sentence, re.I)
+        negative = re.search(r'\b(?:pending|unrun|untested|not run|not executed)\b|\b(?:no|without|lacks?)\s+(?:\w+\s+){0,2}(?:host|emulator|source|reference)', sentence, re.I)
+        if not positive or negative:
+            continue
+        if re.search(r'\bhost(?:[-/ ](?:execution|sanitizer|protocol|reference|model|ownership|native|tested|composition|checks|bounds|translation|concurrency|integration|startup|lifecycle))\b', sentence, re.I):
+            evidence.add('host')
+        if re.search(r'\b(?:emulator|emulation|QEMU|instruction[- ]model)\b', sentence, re.I):
+            evidence.add('emulator')
+        if re.search(r'\b(?:source|reference|pinned|SDK)\b', sentence, re.I):
+            evidence.add('source')
+    return evidence
+
+
+def linked_hardware(name, functions, dependencies, records, known_unqualified, warnings):
+    """Linked records replace legacy matrix prose, including on read failure."""
+    state_links = [link for link in links(dependencies) if link['label'] == 'State']
+    path = state_links[0]['path'] if len(state_links) == 1 else None
+    record = (status_record(path, records.get(path, ''), state_links[0].get('fragment'))
+              if path and path.startswith('docs/status/') else None)
+    if record is None:
+        message = 'Status record is missing or malformed for ' + name + '.'
+        warnings.append(message)
+        return {'id': slug(name), 'name': name, 'area': area(name), 'functions': functions,
+                'dependencies': dependencies, 'implementation': 'unknown',
+                'implementation_scope': 'not_recorded', 'evidence': [],
+                'qualification': 'unqualified' if known_unqualified else 'not_recorded',
+                'status': 'unknown', 'status_label': 'Status unavailable', 'summary': message,
+                'details': [], 'links': state_links, 'status_document': path,
+                'board_qualified_scope': None}
+    scope = record['board_qualified_scope']
+    # Physical evidence is admitted only through the explicit scope declaration.
+    evidence = {'board'} if scope != 'None.' else set()
+    evidence.update(software_evidence(record['markdown']))
+    implementation = record['implementation']
+    status = ('board_tested' if 'board' in evidence else
+              'host_tested' if {'host', 'emulator'} & evidence else implementation)
+    labels = {'board_tested': 'Physical result (partial)', 'host_tested': 'Host / model evidence',
+              'implemented': 'Partial implementation', 'blocked': 'Blocked'}
+    return {'id': slug(name), 'name': name, 'area': area(name), 'functions': functions,
+            'dependencies': dependencies, 'implementation': implementation,
+            'implementation_scope': 'partial' if implementation == 'implemented' else 'blocked',
+            'evidence': sorted(evidence),
+            'qualification': 'unqualified' if known_unqualified else 'not_recorded',
+            'status': status, 'status_label': labels[status],
+            'summary': ' '.join(record['markdown'].split()), 'details': [record],
+            'links': state_links + [link for link in record['links'] if link['path'] != path],
+            'status_document': path, 'board_qualified_scope': scope}
 
 
 def sections(markdown):
@@ -231,7 +319,7 @@ def area(name):
     return 'Platform'
 
 
-def parse_hardware(markdown):
+def parse_hardware(markdown, documents=None):
     warnings = []
     rows, updates = [], []
     lines = markdown.splitlines()
@@ -263,7 +351,12 @@ def parse_hardware(markdown):
         warnings.append('The matrix-wide qualification declaration changed; qualification is not inferred.')
     matched = set()
     hardware = []
+    linked_inventory = any('[State](' in row[2] for row in rows)
     for name, functions, dependencies in rows:
+        if linked_inventory:
+            hardware.append(linked_hardware(name, functions, dependencies, documents or {},
+                                            known_unqualified, warnings))
+            continue
         key = normalized(name)
         aliases = set(ALIASES.get(key, ())) | {key}
         detail = [item for item in updates if normalized(item['title']) in aliases]
@@ -275,18 +368,7 @@ def parse_hardware(markdown):
             physical_anchor = PHYSICAL_SCOPES.get(normalized(item['title']))
             if physical_anchor and normalized(physical_anchor) in normalized(text):
                 evidence.add('board')
-            plain = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
-            for sentence in re.split(r'(?<=[.!?])\s+', plain):
-                positive = re.search(r'\b(?:pass(?:es|ed)?|match(?:es|ed)?|covers?|evidence)\b|\*\*tested\*\*', sentence, re.I)
-                negative = re.search(r'\b(?:pending|unrun|untested|not run|not executed)\b|\b(?:no|without|lacks?)\s+(?:\w+\s+){0,2}(?:host|emulator|source|reference)', sentence, re.I)
-                if not positive or negative:
-                    continue
-                if re.search(r'\bhost(?:[-/ ](?:execution|sanitizer|protocol|reference|model|ownership|native|tested|composition|checks|bounds|translation|concurrency|integration|startup|lifecycle))\b', sentence, re.I):
-                    evidence.add('host')
-                if re.search(r'\b(?:emulator|emulation|QEMU|instruction[- ]model)\b', sentence, re.I):
-                    evidence.add('emulator')
-                if re.search(r'\b(?:source|reference|pinned|SDK)\b', sentence, re.I):
-                    evidence.add('source')
+            evidence.update(software_evidence(text))
         implemented = bool(re.search(r'\*\*(?:implemented|tested)\*\*', prose))
         status = ('board_tested' if 'board' in evidence else
                   'host_tested' if 'host' in evidence or 'emulator' in evidence else
@@ -311,11 +393,12 @@ def parse_hardware(markdown):
     if unmatched:
         warnings.append('Some prose updates have no inventory alias; see unmatched_updates.')
     # A reworded physical bullet must not silently demote its row.
-    for title, anchor in PHYSICAL_SCOPES.items():
+    for title, anchor in (PHYSICAL_SCOPES.items() if not linked_inventory else ()):
         if not any(normalized(item['title']) == title and normalized(anchor) in normalized(item['markdown'])
                    for item in updates):
             warnings.append('Physical-result anchor no longer matches its update: ' + title)
-    status = 'ok' if rows and known_unqualified and not any('unsupported format' in w for w in warnings) else 'unsupported'
+    status = 'ok' if rows and known_unqualified and not any(
+        'unsupported format' in w or 'Status record is missing or malformed' in w for w in warnings) else 'unsupported'
     return hardware, {'status': status, 'warnings': warnings, 'unmatched_updates': unmatched}
 
 
@@ -488,9 +571,21 @@ class Progress:
             raise ValueError('Document is outside the allowlist')
         return safe_read(self.repository, path)
 
+    def status_documents(self):
+        paths = {str(path.relative_to(self.repository))
+                 for path in (self.repository / 'docs/status').glob('*.md')
+                 if doc_path(str(path.relative_to(self.repository)))}
+        try:
+            paths.update(state_documents(self.document('docs/hardware.md').decode('utf-8')))
+        except (OSError, ValueError, UnicodeError):
+            pass
+        return sorted(paths)
+
     def signature(self):
         self.local_git, self.common_git = git_paths(self.repository)
         paths = [self.repository / name for name in SOURCES]
+        paths.extend(self.repository / name for name in self.status_documents())
+        paths.append(self.repository / 'docs/status')
         paths.append(self.repository / 'apps')
         paths.extend(sorted((self.repository / 'apps').glob('*/source.json')))
         application = application_declaration(self.repository)
@@ -519,7 +614,8 @@ class Progress:
                 return self._body, self._etag
             texts, sources, warnings = {}, [], []
             application = application_declaration(self.repository)
-            documents = (*SOURCES, *([application['document']] if application['document'] else []))
+            documents = tuple(dict.fromkeys((*SOURCES, *self.status_documents(),
+                              *([application['document']] if application['document'] else []))))
             for name in documents:
                 try:
                     texts[name] = self.document(name).decode('utf-8')
@@ -532,7 +628,7 @@ class Progress:
                 sources.append({'path': name, 'label': name.removeprefix('docs/'), 'available': available,
                                 'updated_at': iso(source_stat[0] / 1e9) if source_stat else None,
                                 'url': '/api/document?path=' + quote(name, safe='')})
-            hardware, parser = parse_hardware(texts['docs/hardware.md'])
+            hardware, parser = parse_hardware(texts['docs/hardware.md'], texts)
             queues = [(port, queue_summary(path, port)) for port, path in self.queues.items()]
             parser['warnings'].extend(warnings)
             if not texts['docs/hardware.md']:
@@ -551,6 +647,7 @@ class Progress:
                 'generated_at': datetime.now(timezone.utc).isoformat(), 'sources': sources, 'parser': parser,
                 'summary': {'total': len(hardware), 'implemented': status_counts['implemented'],
                             'planned': status_counts['planned'],
+                            'blocked': status_counts['blocked'], 'unknown': status_counts['unknown'],
                             'board_tested': sum('board' in item['evidence'] for item in hardware),
                             'host_tested': sum('host' in item['evidence'] for item in hardware),
                             'emulator_tested': sum('emulator' in item['evidence'] for item in hardware),

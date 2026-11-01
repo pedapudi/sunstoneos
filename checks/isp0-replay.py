@@ -15,6 +15,9 @@ import pickle
 import struct
 from pathlib import Path
 
+CHECK_INPUTS = ('drivers/camera/a733_isp0.c', 'apps/isp0/native.c')
+
+
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('isp0_transport', ROOT / 'checks/isp0-usb-copy.py')
 transport = importlib.util.module_from_spec(spec)

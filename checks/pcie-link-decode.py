@@ -12,6 +12,9 @@ from pathlib import Path
 import struct
 from harness import refused
 
+
+CHECK_INPUTS = ('apps/pcie/observe.py', 'apps/pcie-test/observe.py', 'apps/pcie-nvme/observe.py')
+
 ROOT = Path(__file__).resolve().parents[1]
 
 

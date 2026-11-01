@@ -5,6 +5,7 @@ Each case pushes from a temporary clone to a temporary bare repository with
 core.hooksPath set to tools/git-hooks. Blocked samples are assembled from
 separate string pieces so that this file passes the hook's own scan.
 """
+import argparse
 import hashlib
 import os
 from pathlib import Path
@@ -17,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness
 
 ROOT = Path(__file__).resolve().parents[1]
+CHECK_INPUTS = ('tools/git-hooks/pre-push', 'checks/pre-push-hook.py', 'checks/harness.py')
 HOOKS = ROOT / 'tools/git-hooks'
 ENV = {**harness.environment(), 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
        'GIT_AUTHOR_NAME': 'Check', 'GIT_AUTHOR_EMAIL': 'check@example.invalid',
@@ -120,76 +122,106 @@ def passed(repo, case, branch):
 
 
 def main():
-    with tempfile.TemporaryDirectory() as temp:
-        repo = Repo(Path(temp))
-        for case, name, text, rule in BLOCKED_CONTENT:
-            branch = repo.branch()
-            repo.write(name, text)
-            repo.commit('Add ' + case)
-            blocked(repo, case, rule, branch, f'{name}:1 in commit')
-        for name in BLOCKED_FILES:
-            branch = repo.branch()
-            repo.write(name, 'x\n')
-            repo.commit('Add ' + name)
-            blocked(repo, name, 'credential file added by name', branch, name)
-        for case, message, rule in BLOCKED_MESSAGES:
-            branch = repo.branch()
-            repo.commit(message)
-            blocked(repo, case, rule, branch, 'message line')
-        for case, name, text in PASSING_CONTENT:
-            branch = repo.branch()
-            repo.write(name, text)
-            repo.commit('Add ' + case)
-            passed(repo, case, branch)
-        for message in PASSING_MESSAGES:
-            branch = repo.branch()
-            repo.commit(message)
-            passed(repo, message.splitlines()[0], branch)
-
-        token = 'gh' + 'p_' + 'R' * 36
-        # A token that a later commit removes is still in the pushed history.
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    args.output.mkdir(parents=True, exist_ok=False)
+    ENV['SUNSTONE_CHECK_OUTPUT'] = str(args.output / 'hook-evidence')
+    temp = tempfile.mkdtemp(prefix='pushes-', dir=args.output)
+    repo = Repo(Path(temp))
+    for case, name, text, rule in BLOCKED_CONTENT:
         branch = repo.branch()
-        repo.write('later.py', f"T = '{token}'\n")
-        repo.commit('Add a token')
-        repo.write('later.py', 'T = None\n')
-        repo.commit('Remove the token')
-        blocked(repo, 'token removed later', 'GitHub token', branch, 'later.py:1')
-
-        # An update to an existing remote branch scans only the new commits.
+        repo.write(name, text)
+        repo.commit('Add ' + case)
+        blocked(repo, case, rule, branch, f'{name}:1 in commit')
+    for name in BLOCKED_FILES:
         branch = repo.branch()
-        repo.write('update.c', 'int x;\n')
-        repo.commit('Add a file')
-        passed(repo, 'first push of a branch', branch)
-        repo.write('update.c', 'int x;\n++ b/elsewhere\n' + f"const char *t = \"{token}\";\n")
-        repo.commit('Add a token to a pushed branch')
-        blocked(repo, 'update of a pushed branch', 'GitHub token', branch, 'update.c:3')
-
-        # Content already on the remote is not scanned again.
+        repo.write(name, 'x\n')
+        repo.commit('Add ' + name)
+        blocked(repo, name, 'credential file added by name', branch, name)
+    for case, message, rule in BLOCKED_MESSAGES:
         branch = repo.branch()
-        repo.write('old.py', f"T = '{token}'\n")
-        repo.commit('Add an old token')
-        assert git(repo.work, 'push', '-q', '--no-verify', 'origin', branch, check=False).returncode == 0
-        repo.write('new.py', 'x = 1\n')
-        repo.commit('Add a clean file')
-        passed(repo, 'clean commit after a published one', branch)
+        repo.commit(message)
+        blocked(repo, case, rule, branch, 'message line')
+    for case, name, text in PASSING_CONTENT:
+        branch = repo.branch()
+        repo.write(name, text)
+        repo.commit('Add ' + case)
+        passed(repo, case, branch)
+    for message in PASSING_MESSAGES:
+        branch = repo.branch()
+        repo.commit(message)
+        passed(repo, message.splitlines()[0], branch)
 
-        # A merge contributes the lines its conflict resolution wrote.
-        base = repo.branch()
-        repo.write('merge.txt', 'one\n')
-        repo.commit('Add the merge file')
-        assert git(repo.work, 'push', '-q', '--no-verify', 'origin', base, check=False).returncode == 0
-        git(repo.work, 'checkout', '-q', '-b', base + '-side')
-        repo.write('merge.txt', 'side\n')
-        repo.commit('Change on the side')
-        git(repo.work, 'checkout', '-q', base)
-        repo.write('merge.txt', 'main\n')
-        repo.commit('Change on the main line')
-        git(repo.work, 'merge', '-q', base + '-side', check=False)
-        repo.write('merge.txt', f'resolved {token}\n')
-        repo.commit('Merge the side change')
-        blocked(repo, 'merge resolution', 'GitHub token', base, 'merge.txt:1')
+    token = 'gh' + 'p_' + 'R' * 36
+    # A token that a later commit removes is still in the pushed history.
+    branch = repo.branch()
+    repo.write('later.py', f"T = '{token}'\n")
+    repo.commit('Add a token')
+    repo.write('later.py', 'T = None\n')
+    repo.commit('Remove the token')
+    blocked(repo, 'token removed later', 'GitHub token', branch, 'later.py:1')
+
+    # An update to an existing remote branch scans only the new commits.
+    branch = repo.branch()
+    repo.write('update.c', 'int x;\n')
+    repo.commit('Add a file')
+    passed(repo, 'first push of a branch', branch)
+    repo.write('update.c', 'int x;\n++ b/elsewhere\n' + f"const char *t = \"{token}\";\n")
+    repo.commit('Add a token to a pushed branch')
+    blocked(repo, 'update of a pushed branch', 'GitHub token', branch, 'update.c:3')
+
+    # Content already on the remote is not scanned again.
+    branch = repo.branch()
+    repo.write('old.py', f"T = '{token}'\n")
+    repo.commit('Add an old token')
+    assert git(repo.work, 'push', '-q', '--no-verify', 'origin', branch, check=False).returncode == 0
+    repo.write('new.py', 'x = 1\n')
+    repo.commit('Add a clean file')
+    passed(repo, 'clean commit after a published one', branch)
+
+    # A merge contributes the lines its conflict resolution wrote.
+    base = repo.branch()
+    repo.write('merge.txt', 'one\n')
+    repo.commit('Add the merge file')
+    assert git(repo.work, 'push', '-q', '--no-verify', 'origin', base, check=False).returncode == 0
+    git(repo.work, 'checkout', '-q', '-b', base + '-side')
+    repo.write('merge.txt', 'side\n')
+    repo.commit('Change on the side')
+    git(repo.work, 'checkout', '-q', base)
+    repo.write('merge.txt', 'main\n')
+    repo.commit('Change on the main line')
+    git(repo.work, 'merge', '-q', base + '-side', check=False)
+    repo.write('merge.txt', f'resolved {token}\n')
+    repo.commit('Merge the side change')
+    blocked(repo, 'merge resolution', 'GitHub token', base, 'merge.txt:1')
+    # A fixture in the pushed checkout records its invocation. Hook inputs
+    # trigger it; an unrelated driver or document must leave it untouched.
+    branch = repo.branch()
+    repo.write('checks/pre-push-hook.py', 'from pathlib import Path\n'
+               'CHECK_INPUTS = ("fixture-input.txt",)\n'
+               'Path("fixture-ran").write_text("ran")\n')
+    repo.commit('Add hook fixture')
+    code, err = repo.push(branch)
+    assert code == 0 and 'hook fixture selected' in err, err
+    marker = repo.work / 'fixture-ran'
+    assert marker.read_text() == 'ran'
+    marker.rename(Path(temp) / 'fixture-first')
+    for name in ('drivers/ordinary.c', 'docs/ordinary.md'):
+        repo.write(name, 'ordinary\n')
+        repo.commit('Change an unrelated input')
+        code, err = repo.push(branch)
+        assert code == 0 and 'hook fixture selected' not in err, err
+        assert not marker.exists()
+    for number, name in enumerate(('fixture-input.txt', 'tools/git-hooks/pre-push', 'checks/harness.py')):
+        repo.write(name, '# fixture input\n')
+        repo.commit('Change a hook fixture input')
+        code, err = repo.push(branch)
+        assert code == 0 and 'hook fixture selected' in err, err
+        assert marker.read_text() == 'ran'
+        marker.rename(Path(temp) / ('fixture-input-' + str(number)))
     print(f'PASS: {len(BLOCKED_CONTENT) + len(BLOCKED_FILES) + len(BLOCKED_MESSAGES) + 3} blocked and '
-          f'{len(PASSING_CONTENT) + len(PASSING_MESSAGES) + 2} passing pushes')
+          f'{len(PASSING_CONTENT) + len(PASSING_MESSAGES) + 8} passing pushes')
 
 
 if __name__ == '__main__':
