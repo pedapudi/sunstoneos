@@ -10,19 +10,20 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home()/'.cache/sunstoneos'
+DIMENSIONS = [(160,120),(176,144),(320,240),(640,480),(720,480),(720,576),(1024,768),(1280,720),(1920,1080),(2592,1944)]
 SOURCES = [
-    'drivers/camera/ov5640.c', 'drivers/camera/a733_camera_platform.c',
+    'drivers/camera/camera_sensor.c','drivers/camera/sensor_registry.c', 'drivers/camera/ov5640_sensor.c', 'drivers/camera/ov5647_sensor.c', 'drivers/camera/ov5640.c', 'drivers/camera/a733_camera_platform.c',
     'drivers/camera/a733_csi_receiver.c', 'drivers/camera/a733_camera_route.c',
     'drivers/camera/a733_camera_dma.c', 'drivers/camera/a733_camera_capture.c',
-    'drivers/camera/a733_camera_native.c', 'drivers/iommu/a733_iommu.c',
+    'drivers/board/orangepi_zero3w.c', 'drivers/camera/a733_camera_application.c', 'drivers/camera/a733_camera_native.c', 'drivers/iommu/a733_iommu.c',
     'drivers/i2c/a733_twi.c', 'drivers/i2c/a733_twi_native.c',
     'drivers/clock/a733_clock_leases.c', 'drivers/clock/a733_media_clock.c',
     'drivers/power/a733_rail_leases.c', 'drivers/power/a733_pmic.c',
     'drivers/gpu/a733_gpu_resources.c', 'drivers/pinctrl/a733_pins.c',
     'drivers/pinctrl/a733_pin_tables.c', 'runtime/device_memory_pool.c']
-CHANGED = ['drivers/camera/a733_camera_native.c', 'drivers/camera/a733_camera_capture.c',
+CHANGED = ['drivers/camera/a733_camera_application.c', 'drivers/camera/a733_camera_native.c', 'drivers/camera/a733_camera_capture.c',
            'drivers/camera/a733_camera_dma.c', 'drivers/camera/a733_csi_receiver.c',
-           'drivers/camera/ov5640.c', 'drivers/i2c/a733_twi.c',
+           'drivers/camera/camera_sensor.c','drivers/camera/sensor_registry.c', 'drivers/camera/ov5640_sensor.c', 'drivers/camera/ov5647_sensor.c', 'drivers/camera/ov5640.c', 'drivers/i2c/a733_twi.c',
            'drivers/i2c/a733_twi_native.c']
 
 def main():
@@ -60,11 +61,12 @@ def main():
         for mode in range(10):
             binary=out/('mode-'+str(mode))
             run('compile-'+str(mode),[compiler,'-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
-                '-Iinclude','-DSUNSTONE_CAMERA_SIZE='+str(mode),'checks/camera-mode-layout.c',
-                'drivers/camera/ov5640.c','drivers/iommu/a733_iommu.c','-o',binary])
+                '-Iinclude','-DSUNSTONE_CAMERA_SIZE='+str(mode),'-DSUNSTONE_CAMERA_WIDTH='+str(DIMENSIONS[mode][0]),
+                '-DSUNSTONE_CAMERA_HEIGHT='+str(DIMENSIONS[mode][1]),'checks/camera-mode-layout.c',
+                'drivers/camera/camera_sensor.c','drivers/camera/sensor_registry.c', 'drivers/camera/ov5640_sensor.c', 'drivers/camera/ov5647_sensor.c', 'drivers/camera/ov5640.c','drivers/board/orangepi_zero3w.c','drivers/iommu/a733_iommu.c','-o',binary])
             cases[mode]=run('mode-'+str(mode),[binary]);save(binary)
         for name in ('checks/camera-mode-layout.c','checks/a733-camera-native.py','include/a733_camera_profile.h',
-                     'include/ov5640.h','include/a733_iommu.h','drivers/camera/ov5640.c','drivers/camera/ov5640_tables.h','drivers/iommu/a733_iommu.c'):
+                     'include/ov5640.h','include/a733_iommu.h','drivers/camera/camera_sensor.c','drivers/camera/sensor_registry.c', 'drivers/camera/ov5640_sensor.c', 'drivers/camera/ov5647_sensor.c', 'drivers/camera/ov5640.c','drivers/camera/ov5640_tables.h','drivers/iommu/a733_iommu.c'):
             save(ROOT/name)
         (out/'results.json').write_text(json.dumps({'status':'PASS','physical':False,'cases':cases,'inputs':inputs},indent=2)+'\n')
         print('PASS all ten source-derived modes, still/ring spans and actual IOMMU boundaries');return
@@ -92,7 +94,8 @@ def main():
     includes = ['-Iinclude', '-I'+str(kernel/'include'), '-I'+str(kernel/'portable/GCC/ARM_AARCH64_SRE')]
     defs = ['-DINCLUDE_xSemaphoreGetMutexHolder=1', '-DINCLUDE_xTaskGetCurrentTaskHandle=1',
             '-DINCLUDE_xTaskGetSchedulerState=1']
-    common = [compiler, '-DSUNSTONE_CAMERA_SIZE='+str(a.size), '-std=c11', '-Wall', '-Wextra', '-Werror', *defs]
+    common = [compiler, '-DSUNSTONE_CAMERA_SIZE='+str(a.size),
+              '-DSUNSTONE_CAMERA_WIDTH='+str(DIMENSIONS[a.size][0]),'-DSUNSTONE_CAMERA_HEIGHT='+str(DIMENSIONS[a.size][1]), '-std=c11', '-Wall', '-Wextra', '-Werror', *defs]
     host = [*common, '-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
             '-DSUNSTONE_CAMERA_MODEL=1', *includes]
     objects = []

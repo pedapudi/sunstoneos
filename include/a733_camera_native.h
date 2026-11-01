@@ -23,8 +23,8 @@
  * owner excludes remote firmware and every local master until this image ends.
  * Both IOMMU banks and all ten master's power domains remain accessible.
  * Current memory-only boot admission does NOT produce this authority.
- * test_pattern 0 captures the ordinary sensor image; 1 selects the OV5640
- * color bars (register 0x503d = 0x84). pwdn_only 1 admits a module whose
+ * test_pattern 0 captures the ordinary sensor image; 1 selects the sensor
+ * color bars. pwdn_only 1 admits a module whose
  * RESETB has no separate GPIO: the selected power-down pin is its only control, reset_bank,
  * reset_pin and inherited[14] are zero, and only fourteen pins are claimed.
  * discard_frames (at most A733_CAMERA_NATIVE_DISCARD_LIMIT) images are captured
@@ -75,6 +75,9 @@ struct a733_camera_native {
     struct a733_twi_native twi_native;
     struct a733_twi twi;
     struct a733_camera_capture capture;
+    struct camera_sensor_bus sensor_bus;
+    const struct camera_sensor_driver *sensor_drivers[16];
+    size_t sensor_driver_count;
     struct device_memory_pool *pool;
     struct device_memory_lease memory;
     struct device_memory_extent extent;

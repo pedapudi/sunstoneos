@@ -5,11 +5,25 @@
  * Writable fields follow A733 User Manual V1.00 section15.2.10; removed
  * legacy fields in the published C bitfield structures are not written. */
 #include "a733_tcon_tv.h"
+#include "a733_display_modes.h"
 
-int a733_tcon_tv_init(struct a733_tcon_tv *t,struct a733_hdmi_io *b){
-    if(!t || t->self || !b || b->self!=b ||
-       a733_hdmi_timing(b->request.mode,&t->timing)!=1)return -1;
+int a733_tcon_tv_init_mode(struct a733_tcon_tv *t,struct a733_hdmi_io *b,const struct sunstone_display_mode *m)
+{
+    enum a733_hdmi_mode profile;
+    if(!t||t->self||!b||b->self!=b||a733_hdmi_mode_from_pixel(m,&profile)!=SUNSTONE_MODE_OK||
+       b->request.mode!=profile)return -1;
+    t->timing=(struct a733_hdmi_timing){m->pixel_hz,m->width,m->height,
+        m->width+m->hfront+m->hsync+m->hback,m->height+m->vfront+m->vsync+m->vback,
+        m->hfront,m->hsync,m->hback,m->vfront,m->vsync,m->vback,(uint8_t)profile};
     t->self=t;t->io=b;return 1;
+}
+int a733_tcon_tv_init(struct a733_tcon_tv *t,struct a733_hdmi_io *b)
+{
+    struct a733_hdmi_timing v;
+    if(!b||a733_hdmi_timing(b->request.mode,&v)!=1)return -1;
+    struct sunstone_display_mode m={v.pixel_hz,v.width,v.height,v.hfront,v.hsync,v.hback,
+        v.vfront,v.vsync,v.vback,SUNSTONE_MODE_HSYNC_POSITIVE|SUNSTONE_MODE_VSYNC_POSITIVE};
+    return a733_tcon_tv_init_mode(t,b,&m);
 }
 static int valid(struct a733_tcon_tv *t){
     return t && t->self==t && t->io && t->io->self==t->io && !t->io->fault;

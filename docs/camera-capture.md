@@ -1,12 +1,18 @@
 # One camera capture runs the native controllers under one retained owner
 
 The [capture coordinator](../drivers/camera/a733_camera_capture.c) connects the
-OV5640 sensor, shared analog PHY, system IOMMU, pass-through route, local CSI
+selected sensor adapter, shared analog PHY, system IOMMU, pass-through route, local CSI
 receiver and camera DMA. It captures progressive NV16 images through camera
 port 0 or 1, either one still image at a time or continuously into a ring of
 frame slots. An NV16 image has separate Y and interleaved UV planes, each with
 a stride equal to the width and a width × height payload: 307,200 bytes at
 640 × 480.
+
+The [sensor class](camera-native.md#sensor-selection-and-controls) owns sensor
+identification and dispatch. The capture and CSI controllers contain no sensor
+register addresses. A sensor adapter calls `before_stream` immediately before
+the first write that can transmit packets; the coordinator opens its DMA status
+interval there, including I2C latency.
 
 The implementation passes a composition model using all six native controllers
 and an AArch64 compile. It has not run on the board. Physical sensor/module
@@ -17,10 +23,11 @@ callback does not qualify its future hardware implementation.
 
 ## The sensor mode sets every controller's frame size
 
-The configuration carries an OV5640 mode from `ov5640_mode_get` in UYVY or
-YUYV; the coordinator refuses the raw format. Initialization selects that mode
-in the sensor driver and passes its width, height and byte order to three
-controllers:
+The configuration carries a negotiated `camera_mode` in UYVY or YUYV, a board
+bus description and the allowed sensor drivers. The coordinator refuses raw
+formats because this route produces NV16 without Bayer conversion. Initialization
+selects the mode through the sensor class and passes its width, height and byte
+order to three controllers:
 
 - The receiver programs the packet-port and parser byte order and the parser
   output size.

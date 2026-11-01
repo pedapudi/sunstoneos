@@ -4,6 +4,7 @@
  * Copyright (C) 2017 Allwinner.
  */
 #include "a733_display_engine.h"
+#include "a733_display_modes.h"
 #include "a733_range.h"
 #include <stddef.h>
 #include <string.h>
@@ -30,16 +31,25 @@ static int plan(unsigned width,unsigned height,unsigned pixel_bytes,unsigned for
     p.blender[0]=0x101;p.blender[1]=0xff000000;p.blender[2]=p.size;
     p.blender[0x8c/4]=p.size;p.blender[0x90/4]=0x03010301;*out=p;return 1;
 }
+int a733_de_plan_mode(const struct sunstone_display_mode *m,unsigned pixel_bytes,
+    const struct a733_de_surface *s,struct a733_de_plan *out)
+{
+    if(!sunstone_display_mode_valid(m)||m->flags&SUNSTONE_MODE_INTERLACED||m->width>1920||m->height>1200||
+       (pixel_bytes!=2&&pixel_bytes!=4)||!out||a733_ranges_overlap_or_wrap(m,sizeof(*m),out,sizeof(*out)))return 0;
+    return plan(m->width,m->height,pixel_bytes,pixel_bytes==4?4:0x0a,s,out);
+}
 int a733_de_plan(const struct a733_tcon_lcd_timing *t,const struct a733_de_surface *s,
                  struct a733_de_plan *out)
 {
     struct a733_tcon_lcd_plan lcd;
     if(!t||!out||a733_ranges_overlap_or_wrap(t,sizeof(*t),out,sizeof(*out))||
        !a733_tcon_lcd_plan(t,&lcd))return 0;
-    return plan(t->dsi.width,t->dsi.height,4,4,s,out);
+    struct sunstone_display_mode pixels=a733_dsi_pixel_mode(&t->dsi);
+    return a733_de_plan_mode(&pixels,4,s,out);
 }
 int a733_de_plan_tv0(const struct a733_de_surface *s,struct a733_de_plan *out)
-{return plan(1280,720,2,0x0a,s,out);}
+{const struct sunstone_display_mode pixels={74250000,1280,720,110,40,220,5,5,20,3};
+ return a733_de_plan_mode(&pixels,2,s,out);}
 static unsigned ring_slots(const struct a733_de_config *,const struct a733_de_plan *,uint64_t *);
 int a733_de_init(struct a733_de *d, const struct a733_de_config *c, uint64_t deadline)
 {

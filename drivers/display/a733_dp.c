@@ -3,6 +3,7 @@
  * trilinear_dp14.c, pinned in apps/displayport/sources.json.
  * Copyright (c) 2007-2022 Allwinnertech Co., Ltd. */
 #include "a733_dp_internal.h"
+#include "a733_display_modes.h"
 #include "a733_dp_regs.h"
 #include "a733_range.h"
 #include <string.h>
@@ -65,34 +66,34 @@ static int dpcd_read(struct a733_dp *d,unsigned a,uint8_t *p,unsigned n){return 
 static int dpcd_write(struct a733_dp *d,unsigned a,const uint8_t *p,unsigned n)
 {uint8_t b[16];if(n>16)return 0;memcpy(b,p,n);return aux(d,TR_DP_CMD_REQUEST_WRITE,a,b,n);}
 static int checksum(const uint8_t *p){unsigned s=0;for(unsigned i=0;i<128;i++)s+=p[i];return !(s&255);}
-static int dtd720(const uint8_t *p)
+enum sunstone_display_mode_status a733_dp_mode_valid(const struct sunstone_display_mode *m)
 {
- unsigned h=p[2]|((p[4]&0xf0)<<4),hb=p[3]|((p[4]&15)<<8);
- unsigned v=p[5]|((p[7]&0xf0)<<4),vb=p[6]|((p[7]&15)<<8);
- unsigned hf=p[8]|((p[11]&0xc0)<<2),hs=p[9]|((p[11]&0x30)<<4);
- unsigned vf=(p[10]>>4)|((p[11]&12)<<2),vs=(p[10]&15)|((p[11]&3)<<4);
- return (p[0]|(p[1]<<8))==7425&&h==1280&&hb==370&&v==720&&vb==30&&hf==110&&hs==40&&vf==5&&vs==5&&(p[17]&0x9e)==0x1e;
+ if(!sunstone_display_mode_valid(m))return SUNSTONE_MODE_INVALID;
+ if(m->flags&SUNSTONE_MODE_INTERLACED)return SUNSTONE_MODE_INTERLACE;
+ const struct sunstone_display_mode supported={74250000,1280,720,110,40,220,5,5,20,
+     SUNSTONE_MODE_HSYNC_POSITIVE|SUNSTONE_MODE_VSYNC_POSITIVE};
+ return sunstone_display_mode_equal(m,&supported)?SUNSTONE_MODE_OK:SUNSTONE_MODE_UNSUPPORTED_PROFILE;
 }
 static int edid(struct a733_dp *d)
 {
- static const uint8_t header[]={0,255,255,255,255,255,255,0};
- unsigned supports=0,blocks=1;
+ unsigned blocks=1;
  for(unsigned block=0;block<blocks;block++){
   uint8_t offset=(uint8_t)(block*128);if(!aux(d,TR_DP_CMD_REQUEST_I2C_WRITE,0x50,&offset,1))return 0;
   for(unsigned i=0;i<128;i+=16)if(!aux(d,TR_DP_CMD_REQUEST_I2C_READ,0x50,d->result.edid+block*128+i,16))return 0;
   const uint8_t *p=d->result.edid+block*128;if(!checksum(p))return a733_dp_fault(d,A733_DP_EDID);
   d->result.edid_bytes+=128;
   if(!block){
-   if(memcmp(p,header,8)||p[18]!=1||p[19]>4||!(p[20]&0x80))return a733_dp_fault(d,A733_DP_EDID);
-   for(unsigned i=54;i+18<=126;i+=18)supports|=dtd720(p+i);
-   if(p[126])blocks=2;
-  }else if(p[0]==2){
-   unsigned end=p[2];if(end&& (end<4||end>127))return a733_dp_fault(d,A733_DP_EDID);
-   if(end)for(unsigned i=4;i<end;){unsigned len=p[i]&31,tag=p[i]>>5;if(i+1+len>end)return a733_dp_fault(d,A733_DP_EDID);if(tag==2)for(unsigned j=1;j<=len;j++)supports|=(p[i+j]&127)==4;i+=1+len;}
-   if(end)for(unsigned i=end;i+18<=127;i+=18)supports|=dtd720(p+i);
+   /* The current captured-result ABI holds two blocks. Refuse a longer EDID
+    * before reading it; partial EDID never establishes mode support. */
+   if(p[126]>1)return a733_dp_fault(d,A733_DP_EDID);
+   blocks=1u+p[126];
   }
  }
- return supports?1:a733_dp_fault(d,A733_DP_EDID);
+ struct sunstone_display_modes modes;
+ if(sunstone_display_edid_parse(d->result.edid,d->result.edid_bytes,&modes)!=SUNSTONE_EDID_OK)
+  return a733_dp_fault(d,A733_DP_EDID);
+ for(size_t i=0;i<modes.count;++i)if(a733_dp_mode_valid(&modes.modes[i])==SUNSTONE_MODE_OK)return 1;
+ return a733_dp_fault(d,A733_DP_EDID);
 }
 static int trained(const uint8_t *s,unsigned eq)
 {for(unsigned i=0;i<4;i++)if(((s[i/2]>>((i&1)*4))&(eq?7:1))!=(eq?7:1))return 0;return !eq||(s[2]&1);}

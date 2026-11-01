@@ -1,3 +1,4 @@
+#include "ov5640.h"
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "a733_camera_capture.h"
 #include <assert.h>
@@ -60,7 +61,7 @@ static int handoff(void *p,uint64_t t,enum a733_capture_handoff h,const struct a
     assert(s->analog.admission.token==201 && s->analog.state==A733_CAMERA_PLATFORM_ACTIVE);
     assert(s->iommu.admission.token==202 && s->iommu.state==A733_IOMMU_ACTIVE);
     assert(s->iommu.admission.excluded_masters==A733_IOMMU_REAL_MASTERS);
-    assert(s->route.state==A733_ROUTE_ARMED && s->sensor.state==OV5640_READY);
+    assert(s->route.state==A733_ROUTE_ARMED && s->sensor.state==CAMERA_SENSOR_READY);
     assert(m->table_published && m->parameters_published && m->device_prepared && m->frames==m->rearm_admits);
     int r=operation(m);if(r!=1)return r;
     if(h==A733_CAPTURE_LOCAL){
@@ -73,7 +74,7 @@ static int handoff(void *p,uint64_t t,enum a733_capture_handoff h,const struct a
     }return 1;
 }
 static int packet_quiet(void *p,uint64_t t,uint64_t d){
-    struct model *m=p;assert(t==101 && m->now<d && m->capture->sensor.state==OV5640_READY);
+    struct model *m=p;assert(t==101 && m->now<d && m->capture->sensor.state==CAMERA_SENSOR_READY);
     assert(m->sensor[0x300e]==0x40 && m->sensor[0x4202]==15);
     int r=operation(m);if(r!=1)return r;
     if(m->pending_quiet){--m->pending_quiet;return 0;}m->quiet=1;return 1;
@@ -111,7 +112,7 @@ static int mmu_publish(void *p,uint64_t t,const void *x,size_t n,uint64_t d){
     m->table_published=1;return operation(m);
 }
 static int sensor_acquire(void *p,uint64_t d,uint64_t *t){struct model *m=p;assert(m->global_held && m->now<d);*t=203;return operation(m);}
-static int sensor_line(void *p,uint64_t t,enum ov5640_line l,int a,uint64_t d){
+static int sensor_line(void *p,uint64_t t,enum camera_sensor_line l,int a,uint64_t d){
     struct model *m=p;assert(t==203 && (l==0 || l==1) && !a && m->now<d && !m->packets);return operation(m);
 }
 static int sensor_read(void *p,uint64_t t,uint8_t a,uint16_t r,uint8_t *v,uint64_t d){
@@ -227,7 +228,7 @@ static int dma_admit(void *p,const struct a733_camera_dma_config *c,uint64_t d,u
     if(m->packets){
         /* Rearm: the previous image is still untouched and status is clear. */
         assert(m->retained && m->capture->state==A733_CAPTURE_REARM_DMA && *t==205);
-        assert(m->capture->sensor.state==OV5640_READY && !m->dma[0x254/4] && m->cache_syncs==m->frames);
+        assert(m->capture->sensor.state==CAMERA_SENSOR_READY && !m->dma[0x254/4] && m->cache_syncs==m->frames);
         expect_cpu(m->frames-1);++m->rearm_admits;
     }
     *t=205;m->device_prepared=1;return operation(m);
@@ -247,7 +248,7 @@ static int dma_write(void *p,uint64_t t,uint16_t o,uint32_t v,uint64_t d){
 }
 static int dma_drain(void *p,uint64_t t,uint64_t d){
     struct model *m=p;assert(t==205 && m->now<d && m->quiet && m->frames==1);
-    assert(m->capture->sensor.state==OV5640_CLOSED && m->capture->receiver.state==A733_CSI_CLOSED);
+    assert(m->capture->sensor.state==CAMERA_SENSOR_CLOSED && m->capture->receiver.state==A733_CSI_CLOSED);
     assert(m->route_drains && m->receiver_drains && !m->cache_syncs);
     int r=operation(m);if(r!=1)return r;
     if(m->pending_drain){--m->pending_drain;return 0;}
@@ -281,11 +282,15 @@ static void setup(unsigned port){
     model.sensor[0x300a]=0x56;model.sensor[0x300b]=0x40;
     memset(parameters,0xcc,sizeof(parameters));memset(y_cpu,0xcc,sizeof(y_cpu));memset(uv_cpu,0xcc,sizeof(uv_cpu));
     memset(y_device,0xa5,sizeof(y_device));memset(uv_device,0xa5,sizeof(uv_device));
+    struct camera_sensor_bus bus={.port=(uint8_t)port,.parser=(uint8_t)port,.lanes=2,
+        .i2c_address=0x3c,.xclk_hz=24000000,.reset={0,0,0,1},
+        .power_hold_us=5000,.reset_hold_us=1000,.bus_hold_us=20000};
     struct a733_camera_capture_config c={
         .ops={now,global_acquire,handoff,packet_quiet},.context=&model,
         .memory={{parameters,0x48000000,0x50000000,4096},{y_cpu,0x48010000,0x50100000,SPAN},{uv_cpu,0x48080000,0x50200000,SPAN}},
         .table_words=table,.table_physical=0x4f000000,.frame_id=19,
         .receiver={(uint8_t)port,(uint8_t)port,42,(uint8_t)(port?7:2),324000000},.mode=ov5640_vga_mode,
+        .sensor_bus=&bus,.sensor_drivers=camera_sensor_drivers,.sensor_driver_count=camera_sensor_driver_count,
         .color_bars=(int)port,
         .sensor={.acquire=sensor_acquire,.line=sensor_line,.read=sensor_read,.write=sensor_write,.receiver=sensor_receiver,.release=sensor_release},
         .analog={.admit=analog_admit,.read=analog_read,.write=analog_write},
@@ -294,6 +299,9 @@ static void setup(unsigned port){
         .csi={.admit=csi_admit,.read=csi_read,.write=csi_write,.drain=csi_drain,.release=csi_release},
         .dma={.admit=dma_admit,.read=dma_read,.write=dma_write,.drain=dma_drain,.sync_cpu=dma_sync,.release=dma_release}
     };
+    struct a733_camera_capture mismatch={0};struct camera_sensor_bus wrong_bus=bus;wrong_bus.port=(uint8_t)(1u-port);
+    const struct camera_sensor_bus *right_bus=c.sensor_bus;c.sensor_bus=&wrong_bus;
+    assert(a733_camera_capture_init(&mismatch,&c)==-1 && !mismatch.initialized);c.sensor_bus=right_bus;
     assert(a733_camera_capture_init(&capture,&c)==1);
     if(model.retained)assert(a733_camera_capture_open_retained(&capture,10000000)==1);
     else assert(a733_camera_capture_open(&capture,10000000)==1);
