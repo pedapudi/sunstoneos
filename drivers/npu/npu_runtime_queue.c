@@ -1,6 +1,12 @@
 #include "npu_runtime_queue.h"
 #include "a733_mmio.h"
 #include "sunstone_crumb.h"
+#include "sunstone_deadline.h"
+
+static void power_owner(void *);
+static struct npu_runtime_queue *creating_power;
+BaseType_t npu_runtime_queue_task_privileged(TaskFunction_t entry, void *argument)
+{ return creating_power && argument == creating_power && entry == power_owner ? pdTRUE : pdFALSE; }
 
 uint64_t npu_runtime_queue_lock(void)
 {
@@ -48,6 +54,7 @@ static int window(struct npu_runtime_queue *q)
 static int start(void *cookie, const struct a733_npu_command *c, uint64_t timeout)
 {
     struct npu_runtime_queue *q = cookie;
+    if (q->power.initialized && (q->power.phase != NPU_IDLE_ON || q->power_stop)) return 0;
     if (timeout > UINT64_MAX / q->frequency) {
         sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU), (uint32_t)timeout, SUNSTONE_CRUMB_HERE());
         return 0;
@@ -109,6 +116,17 @@ static void irq(void *cookie, BaseType_t *woken)
     uint64_t since = ticks();
 #endif
     q->woken = woken;
+    if (q->power.initialized && q->power.phase != NPU_IDLE_ON) {
+        /* A gated/transition IRQ cannot enter the ordinary read-to-ack path. */
+        npu_idle_retain(&q->power, NPU_IDLE_UNEXPECTED_IRQ, 0, q->power.phase, NPU_IDLE_ON);
+        atomic_store_explicit(&q->queue.failed, 1, memory_order_release);
+        atomic_store_explicit(&q->runtime->failed, 1, memory_order_release);
+        atomic_fetch_or_explicit(&q->runtime->service.irq_pending, 2u, memory_order_release);
+        vTaskNotifyGiveFromISR(q->task, woken);
+        if (q->power_task) vTaskNotifyGiveFromISR(q->power_task, woken);
+        q->woken = NULL;
+        return;
+    }
     npu_queue_irq(&q->queue);
     q->woken = NULL;
     if (atomic_load_explicit(&q->queue.failed, memory_order_acquire)) {
@@ -118,6 +136,18 @@ static void irq(void *cookie, BaseType_t *woken)
         atomic_fetch_or_explicit(&q->runtime->service.irq_pending, 2u, memory_order_release);
     }
     if (q->progress_from_isr) q->progress_from_isr(q->progress_cookie, woken);
+    if (q->power.initialized && !q->queue.head &&
+        atomic_load_explicit(&q->queue.completed, memory_order_acquire) == q->queue.submitted &&
+        !atomic_load_explicit(&q->queue.failed, memory_order_acquire) &&
+        (!q->power_config.can_idle || q->power_config.can_idle(q->power_config.context))) {
+        npu_idle_completed(&q->power, ticks());
+        /* The alarm requested this hint only after finding an active queue.
+         * Ordinary job completions neither wake nor rearm the power owner. */
+        if (q->power_completion_hint) {
+            q->power_completion_hint = 0;
+            vTaskNotifyGiveFromISR(q->power_task, woken);
+        }
+    }
 #ifdef SUNSTONE_NPU_QUEUE_TIMING
     q->irq_cpu_ticks += ticks() - since;
 #endif
@@ -190,9 +220,204 @@ int npu_runtime_queue_wait(struct npu_runtime_queue *q, struct npu_queue_fence f
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     }
 }
+static int power_health(void *cookie)
+{
+    struct npu_runtime_queue *q = cookie;
+    return window(q) && !q->queue.retired &&
+        !atomic_load_explicit(&q->queue.failed, memory_order_acquire) &&
+        !atomic_load_explicit(&q->runtime->service.irq_pending, memory_order_acquire);
+}
+static int power_read(void *cookie, uint32_t offset, uint32_t *value)
+{
+    struct npu_runtime_queue *q = cookie;
+    if (offset != 0 && offset != 4 && offset != 0x10c) return 0;
+    if (!power_health(q)) return 0;
+    *value = *(volatile uint32_t *)(q->runtime->native.registers + offset);
+    __asm__ volatile("dsb sy" ::: "memory");
+    return 1;
+}
+static int power_write(void *cookie, uint32_t offset, uint32_t value)
+{
+    struct npu_runtime_queue *q = cookie;
+    if ((offset != 0 && offset != 0x10c) || !power_health(q)) return 0;
+    a733_mmio_write32_dsb_sy_after(q->runtime->native.registers + offset, value);
+    return 1;
+}
+static uint64_t power_now(void *cookie) { (void)cookie; return ticks(); }
+static int power_idle(struct npu_runtime_queue *q)
+{
+    return !q->queue.head &&
+        atomic_load_explicit(&q->queue.completed, memory_order_acquire) == q->queue.submitted &&
+        q->last_idle == UINT32_C(0x7fffffff) &&
+        (!q->power_config.can_idle || q->power_config.can_idle(q->power_config.context));
+}
+static uint64_t ticks_to_us(struct npu_runtime_queue *q, uint64_t value)
+{
+    return value / q->frequency * UINT64_C(1000000) +
+        (value % q->frequency * UINT64_C(1000000) + q->frequency - 1) / q->frequency;
+}
+static void power_failed(struct npu_runtime_queue *q)
+{
+    atomic_store_explicit(&q->queue.failed, 1, memory_order_release);
+    atomic_store_explicit(&q->runtime->failed, 1, memory_order_release);
+    atomic_fetch_or_explicit(&q->runtime->service.irq_pending, 2u, memory_order_release);
+    sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU),
+        q->power.failure.site | q->power.failure.phase << 16, SUNSTONE_CRUMB_HERE());
+}
+int npu_runtime_queue_admit(struct npu_runtime_queue *q)
+{
+    if (!q || !q->claimed || atomic_load_explicit(&q->queue.failed, memory_order_acquire) ||
+        q->power_stop || (q->power.initialized && q->power.phase == NPU_IDLE_RETAINED)) return -1;
+    if (!q->power.initialized || q->power.phase == NPU_IDLE_ON) return 1;
+    if (!q->power_resume) {
+        q->power_resume = 1; q->power_requested_at = ticks();
+        ++q->power_stats.resume_requests;
+        /* FromISR publication preserves the caller's raw DAIF mask. The
+         * native caller blocks after unlocking; an ISR propagates its wake. */
+        BaseType_t ignored = pdFALSE;
+        vTaskNotifyGiveFromISR(q->power_task, q->woken ? q->woken : &ignored);
+    }
+    return 0;
+}
+int npu_runtime_queue_wait_ready(struct npu_runtime_queue *q)
+{
+    if (!owner(q)) return -1;
+    for (;;) {
+        const uint64_t saved = npu_runtime_queue_lock();
+        const int ready = npu_runtime_queue_admit(q);
+        npu_runtime_queue_unlock(saved);
+        if (ready) return ready;
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    }
+}
+static void power_owner(void *argument)
+{
+    struct npu_runtime_queue *q = argument;
+    q->power_task = xTaskGetCurrentTaskHandle();
+    const int registered = sunstone_deadline_register();
+    if (registered != 1) {
+        npu_idle_retain(&q->power, NPU_IDLE_OWNER, 0, (uint32_t)registered, 1);
+        power_failed(q);
+    }
+    atomic_store_explicit(&q->power_started, registered == 1 ? 1u : 2u, memory_order_release);
+    xTaskNotifyGive(q->task);
+    for (;;) {
+        const uint64_t began = ticks(), saved = npu_runtime_queue_lock();
+        ++q->power.counters.owner_wakes;
+        unsigned notify_ready = 0, stopped = 0;
+        uint64_t deadline = 0;
+        if (q->power.phase != NPU_IDLE_RETAINED && !power_health(q))
+            npu_idle_retain(&q->power, NPU_IDLE_HEALTH, 0, 0, 1);
+        if (q->power.phase != NPU_IDLE_RETAINED && (q->power_stop || q->power_resume)) {
+            const int ready = npu_idle_resume(&q->power);
+            if (ready == 1) {
+                if (q->power_resume) {
+                    const uint64_t us = ticks_to_us(q, ticks() - q->power_requested_at);
+                    q->power_stats.last_request_to_ready_us = us;
+                    if (us > q->power_stats.max_request_to_ready_us)
+                        q->power_stats.max_request_to_ready_us = us;
+                    q->power_resume = 0; notify_ready = 1;
+                }
+                if (q->power_stop) stopped = 1;
+            }
+        }
+        if (q->power.phase == NPU_IDLE_RETAINED) {
+            power_failed(q); notify_ready = 1;
+            if (q->power_stop) stopped = 1;
+        } else if (!stopped && q->power.phase == NPU_IDLE_ON) {
+            if (power_idle(q)) {
+                q->power_completion_hint = 0;
+                const uint64_t generation = q->power.generation;
+                if (npu_idle_eligible(&q->power, ticks())) {
+                    const int quiet = q->power_config.quiet(q->runtime->service.irq_cookie);
+                    /* First suspend write follows this complete predicate in
+                     * the same raw IRQ lock. No RTOS wrapper can unmask it. */
+                    if (quiet == 1 && generation == q->power.generation &&
+                        !q->power_stop && power_idle(q) && power_health(q)) {
+                        (void)npu_idle_gate(&q->power);
+                        if (!q->power.enabled) q->power_completion_hint = 1;
+                    } else {
+                        npu_idle_retain(&q->power, NPU_IDLE_OWNER, 0, (uint32_t)quiet, 1);
+                    }
+                } else deadline = ticks_to_us(q, npu_idle_deadline_ticks(&q->power));
+            } else {
+                /* Completion races are excluded by this lock. The final idle
+                 * IRQ updates time and delivers exactly one requested hint. */
+                q->power_completion_hint = 1;
+                if (power_idle(q)) deadline = ticks_to_us(q, npu_idle_deadline_ticks(&q->power));
+            }
+        }
+        if (q->power.phase == NPU_IDLE_RETAINED) { power_failed(q); notify_ready = 1; }
+        npu_runtime_queue_unlock(saved);
+        if (notify_ready) {
+            if (!q->power_stop && q->power.phase == NPU_IDLE_ON && q->power_config.ready)
+                q->power_config.ready(q->power_config.context);
+            xTaskNotifyGive(q->task);
+        }
+        q->power.counters.owner_cpu_ticks += ticks() - began;
+        if (stopped) {
+            /* Any wait_until returned and canceled its alarm before this ack.
+             * The registered static owner is parked permanently, never deleted. */
+            atomic_store_explicit(&q->power_stopped, 1, memory_order_release);
+            xTaskNotifyGive(q->task);
+            for (;;) (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        }
+        if (deadline) {
+            if (sunstone_deadline_wait_until(deadline) == SUNSTONE_DEADLINE_ERROR) {
+                const uint64_t failed_saved = npu_runtime_queue_lock();
+                npu_idle_retain(&q->power, NPU_IDLE_OWNER, 0, 0, 1);
+                npu_runtime_queue_unlock(failed_saved);
+            }
+        } else (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    }
+}
+int npu_runtime_queue_power_start(struct npu_runtime_queue *q,
+                                 const struct npu_runtime_queue_power_config *config)
+{
+    if (!owner(q) || !config || config->enabled > 1 || !config->quiet ||
+        config->priority <= uxTaskPriorityGet(q->task) || config->priority >= configMAX_PRIORITIES ||
+        q->power.initialized || q->power_task || q->queue.head ||
+        q->queue.submitted != atomic_load_explicit(&q->queue.completed, memory_order_acquire) ||
+        !power_health(q)) return 0;
+    q->power_config = *config;
+    const struct npu_idle_ops ops = {power_read, power_write, power_now, power_health};
+    if (npu_idle_init(&q->power, &ops, q, q->frequency, config->enabled) != 1) return -1;
+    const uint64_t saved = npu_runtime_queue_lock();
+    if (!power_read(q, 4, &q->last_idle) || q->last_idle != UINT32_C(0x7fffffff) ||
+        config->quiet(q->runtime->service.irq_cookie) != 1) {
+        npu_idle_retain(&q->power, NPU_IDLE_FULL_IDLE, 4, q->last_idle, UINT32_C(0x7fffffff));
+        power_failed(q); npu_runtime_queue_unlock(saved); return -1;
+    }
+    npu_runtime_queue_unlock(saved);
+    creating_power = q;
+#if configNUMBER_OF_CORES > 1
+    q->power_task = xTaskCreateStaticAffinitySet(power_owner, "npu-power", 1024, q,
+        config->priority, q->power_stack, &q->power_task_state, q->runtime->service.affinity);
+#else
+    q->power_task = xTaskCreateStatic(power_owner, "npu-power", 1024, q,
+        config->priority, q->power_stack, &q->power_task_state);
+#endif
+    creating_power = NULL;
+    if (!q->power_task) {
+        npu_idle_retain(&q->power, NPU_IDLE_OWNER, 0, 0, 1); power_failed(q); return -1;
+    }
+    unsigned started;
+    while (!(started = atomic_load_explicit(&q->power_started, memory_order_acquire)))
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    return started == 1 ? 1 : -1;
+}
 int npu_runtime_queue_return(struct npu_runtime_queue *q)
 {
     if (!owner(q) || !npu_queue_idle(&q->queue)) return -1;
+    if (q->power.initialized) {
+        const uint64_t stop_saved = npu_runtime_queue_lock();
+        q->power_stop = 1;
+        npu_runtime_queue_unlock(stop_saved);
+        xTaskNotifyGive(q->power_task);
+        while (!atomic_load_explicit(&q->power_stopped, memory_order_acquire))
+            (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (q->power.phase != NPU_IDLE_ON) return -1;
+    }
     struct npu_service *s = &q->runtime->service;
     /* The provider may enter the RTOS critical section. In the single-core
      * SRE port that can clear DAIF on exit, so invoke it before our raw lock.

@@ -2,6 +2,19 @@
 #define SUNSTONE_NPU_RUNTIME_QUEUE_H
 #include "npu_runtime.h"
 #include "npu_queue.h"
+#include "npu_idle.h"
+
+struct npu_runtime_queue_power_config {
+    unsigned enabled; /* 0: matching owner/policy control without gate writes. */
+    UBaseType_t priority;
+    int (*quiet)(void *); /* Service IRQ cookie; no RTOS critical wrapper. */
+    int (*can_idle)(void *); /* Optional public-ring predicate, raw lock held. */
+    void (*ready)(void *); /* Optional bridge progress, owner task, IRQs enabled. */
+    void *context;
+};
+struct npu_runtime_queue_power_stats {
+    uint64_t resume_requests, last_request_to_ready_us, max_request_to_ready_us;
+};
 
 /* Optional trusted EL1 client of the resident runtime. The owner is pinned to
  * the interrupt route core. Claim only after OPEN, LOAD and their replies;
@@ -24,8 +37,28 @@ struct npu_runtime_queue {
     void (*progress_from_isr)(void *, BaseType_t *);
     void *progress_cookie;
     unsigned claimed;
+    struct npu_idle power;
+    struct npu_runtime_queue_power_config power_config;
+    struct npu_runtime_queue_power_stats power_stats;
+    TaskHandle_t power_task;
+    StaticTask_t power_task_state;
+    StackType_t power_stack[1024];
+    uint64_t power_requested_at;
+    atomic_uint power_started, power_stopped;
+    unsigned power_stop, power_resume, power_completion_hint;
 };
 int npu_runtime_queue_claim(struct npu_runtime_queue *, struct npu_runtime *);
+/* Claim and bulk registration precede this optional call. The static EL1
+ * power owner runs on the IRQ core above the producer's priority. Default
+ * queues create no owner and remain on. The owner remains parked after return
+ * because the shared deadline registry retains its task identity. */
+int npu_runtime_queue_power_start(struct npu_runtime_queue *, const struct npu_runtime_queue_power_config *);
+/* Admission precedes generic submit, under the queue raw IRQ lock. Pending
+ * admission changes no job, command or fence. The power owner notifies readiness
+ * once; callers block instead of retrying. wait_ready takes its own lock. */
+int npu_runtime_queue_admit(struct npu_runtime_queue *);
+int npu_runtime_queue_wait_ready(struct npu_runtime_queue *);
+BaseType_t npu_runtime_queue_task_privileged(TaskFunction_t, void *);
 /* Device lock for submit/register/release and fence inspection. It masks
  * IRQs locally, without taking the global scheduler lock. Same-core callers
  * cannot preempt the owner inside the lock. Keep cache work outside it. */

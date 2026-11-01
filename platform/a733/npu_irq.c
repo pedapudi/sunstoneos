@@ -18,6 +18,9 @@
 #ifndef NPU_IRQ_HANDLER
 #define NPU_IRQ_HANDLER npu_application_irq
 #endif
+#ifndef NPU_IRQ_QUIET_QUERY
+#define NPU_IRQ_QUIET_QUERY npu_application_irq_quiet
+#endif
 #define GICD UINT32_C(0x03400000)
 #define BIT (UINT32_C(1)<<1)
 static const struct gicv3_spi source={GICD,97};
@@ -58,6 +61,12 @@ static int mask(void *cookie)
     if(cookie!=&binding || !on_core())return -1;
     taskENTER_CRITICAL();int result=mask_locked();taskEXIT_CRITICAL();
     return result;
+}
+int NPU_IRQ_QUIET_QUERY(void *cookie)
+{
+    if(cookie!=&binding || !on_core() || !binding.service || binding.fault || binding.stopped)return -1;
+    if(read32(0)&(1u<<31))return 0;
+    return ((read32(0x20c)|read32(0x30c))&BIT) ? 0 : 1;
 }
 static int rearm(void *cookie)
 {
