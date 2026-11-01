@@ -396,6 +396,8 @@ def main(argv=None):
     for name in ('approval', 'request', 'ddr', 'survey'):
         i.add_argument('--' + name, type=Path, help=argparse.SUPPRESS)
     i.add_argument('--profile', type=int, choices=(2, 3), default=2)
+    i.add_argument('--allow-sd-1v8', action='store_true',
+                   help='Allow profile 3; launch also needs this flag and retains ownership until whole-board power removal.')
     i.add_argument('--plan', choices=('measurement', 'first-read', 'chain-read'), default='measurement',
                    help='measurement: 240 reads; first-read: 4 KiB; chain-read: 64 KiB; finite plans require profile 2')
     i.add_argument('--return-policy', choices=RETURN_POLICIES, default=POWER_REMOVAL)
@@ -407,6 +409,8 @@ def main(argv=None):
                    help='require exact finite-plan normal return and reference before successor admission')
     args = parser.parse_args(argv)
     if args.operation == 'input':
+        require(args.profile != 3 or args.allow_sd_1v8,
+                'SD profile 3 requires --allow-sd-1v8 and whole-board power removal after execution.')
         require(args.plan != 'first-read' or args.profile == 2, 'first-read requires profile 2')
         require(args.plan != 'chain-read' or args.profile == 2, 'chain-read requires profile 2')
         require(args.return_policy != RESTORED_RETURN or (args.profile == 2 and args.plan == 'first-read'),

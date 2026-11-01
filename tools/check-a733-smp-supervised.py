@@ -213,7 +213,7 @@ def device_software_sources(sources):
 
 
 
-def launch_once(transaction,observe,bundle,prepared,evidence,record,save,ready,*,result_key="scheduler_result"):
+def launch_once(transaction,observe,bundle,prepared,evidence,record,save,ready,*,result_key="scheduler_result",power_removal_reason=None):
     require(not record.get('launch_attempted'), 'One supervised attempt only.')
     base.preload(transaction,bundle,prepared,evidence)
     require(int(transaction('readl','0x02050014').strip(),16)&1==0, 'Watchdog enabled before launch.')
@@ -221,6 +221,9 @@ def launch_once(transaction,observe,bundle,prepared,evidence,record,save,ready,*
     record.update(execution_intent={'entry':0x52000,'epoch':prepared['epoch'],'generation':prepared['generation'],
                   'native_elapsed_limit_ticks':24000,'recovery':'manual-usb-reconnect'},
                   backup_sha256=prepared['_backup_hashes'].copy(),launch_attempted=True)
+    if power_removal_reason:
+        record.update(power_removal_required=True,power_removal_reason=power_removal_reason)
+        record['execution_intent']['recovery']='whole-board-power-removal'
     save();started=time.monotonic();transaction('exe','0x52000');observe(started)
     record['launch_protocol_complete']=True
     record['complete']=record.get(result_key)=='observed-success'
@@ -244,6 +247,9 @@ def finish_after_observation(record,save,quarantine,hold=base.hold_ownership):
         require(record.get('refusal_probe_attempted') and record.get('sram_restored') and
                 record.get('rom_usable') and not record.get('transport_failed'),
                 'Clean refusal requires a verified report and actual SRAM restoration.')
+        if record.get('power_removal_required'):
+            # A nonce-bound pre-entry refusal proves no SD voltage switch ran.
+            record['power_removal_required']=False
         record['ownership_release_permitted']=True;save()
         return
     retain_after_capture(record,save,quarantine,hold)
@@ -267,7 +273,8 @@ def retain_after_capture(record,save,quarantine,hold=base.hold_ownership):
 
 def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
                 product,serial,bcd_device,capture_seconds,result_key,source_files=(),
-                description='Supervised native application; manual reconnection after capture'):
+                description='Supervised native application; manual reconnection after capture',
+                power_removal_reason=None):
     """Shared protected transport for the observer and native board application.
 
     Callers validate their image geometry and native session inputs.
@@ -354,7 +361,8 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
             require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
             with usb_guard.reenumeration('sunstoneos-a733',description,1):
                 base.verify_dram(transaction,args.evidence,record,save)
-                launch_once(transaction,observe,bundle,prepared,args.evidence,record,save,ready,result_key=result_key)
+                launch_once(transaction,observe,bundle,prepared,args.evidence,record,save,ready,result_key=result_key,
+                    power_removal_reason=power_removal_reason)
                 finish_after_observation(record,save,lambda:access.quarantine_instance(node,
                     'Supervised result captured; manual reconnection and coordinator recovery review required.',identity))
         except BaseException as error:

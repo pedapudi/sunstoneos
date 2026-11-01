@@ -133,6 +133,22 @@ def returned_to_rom(record):
             and isinstance(record.get("result"), dict))
 
 
+def sd_power_removal_reason(raw, allow_sd_1v8=False):
+    """Recognize the native SD returning input before output or board access."""
+    if raw is None or len(raw)<8 or struct.unpack_from('<Q',raw)[0]!=0x314e525445524453:
+        return None
+    if len(raw)!=2192 or struct.unpack_from('<2Q',raw,8) not in ((1,2192),(2,2192)):
+        raise ValueError('Invalid SD returning input header.')
+    profile=struct.unpack_from('<I',raw,56)[0]
+    if profile not in (2,3):
+        raise ValueError('Invalid SD returning input profile.')
+    if profile==3:
+        if not allow_sd_1v8:
+            raise ValueError('SD profile 3 requires --allow-sd-1v8 and whole-board power removal after execution.')
+        return 'SD profile 3 may leave the card at 1.8 V'
+    return None
+
+
 def retain_failure(record, save, quarantine, error, helper):
     """Called inside board_lock: a failed transport or launch keeps ownership.
 
@@ -150,7 +166,7 @@ def retain_failure(record, save, quarantine, error, helper):
             quarantined.append(True)
 
         def hold():
-            if record.get("dram_probe_dirty") or not (quarantined and returned_to_rom(record)):
+            if record.get("power_removal_required") or record.get("dram_probe_dirty") or not (quarantined and returned_to_rom(record)):
                 helper.hold_ownership()
 
         try:
@@ -174,6 +190,8 @@ def main(argv=None, observe=None, validate_result=None):
     parser.add_argument("--controlled", type=Path,
                         help="Bundle's controlled outcomes: nonzero results that pass without quarantine")
     parser.add_argument("--ram-input", type=Path, help="Input bundle loaded at 0x43000000; at most 32 MiB")
+    parser.add_argument("--allow-sd-1v8", action="store_true",
+                        help="Allow SD profile 3; retain ownership until whole-board power removal after execution")
     parser.add_argument("--ram-input-present", action="store_true", help="Verify existing RAM input instead of uploading it")
     parser.add_argument("--return-timeout", type=float, default=10)
     parser.add_argument("--ddr-evidence", type=Path, help=argparse.SUPPRESS)
@@ -197,6 +215,10 @@ def main(argv=None, observe=None, validate_result=None):
     ram_input = args.ram_input.read_bytes() if args.ram_input else None
     if ram_input is not None and not 0 < len(ram_input) <= 32 * 1024 * 1024:
         sys.exit("RAM input exceeds its reserved interval.")
+    try:
+        power_removal_reason = sd_power_removal_reason(ram_input, args.allow_sd_1v8)
+    except ValueError as error:
+        sys.exit(str(error))
     image = args.image.read_bytes()
     if not image or len(image) > 0x100000:
         sys.exit("Kernel image exceeds the reserved image interval.")
@@ -215,7 +237,7 @@ def main(argv=None, observe=None, validate_result=None):
 
 
     def save():
-        (args.evidence / "session.json").write_text(json.dumps(record, indent=2) + "\n")
+        failure_helper.save_json(args.evidence / "session.json", record)
 
 
     def transaction(*arguments, timeout=30, pass_fds=()):
@@ -285,6 +307,8 @@ def main(argv=None, observe=None, validate_result=None):
                 with usb_guard.reenumeration("sunstoneos-a733", "FreeRTOS check and forced-FEL return", 2):
                     transaction("write", "0x42000000", args.evidence / "blank.bin")
                     record["launch_attempted"] = True
+                    if power_removal_reason:
+                        record.update(power_removal_required=True, power_removal_reason=power_removal_reason)
                     save()
                     if observe is not None:
                         record["observation_start_monotonic"] = time.monotonic()
@@ -388,6 +412,12 @@ def main(argv=None, observe=None, validate_result=None):
                     node, "Kernel runner stopped; coordinator recovery required.", node_identity),
                     error, failure_helper)
                 raise
+            if record.get("power_removal_required"):
+                try:
+                    access.quarantine_instance(node,
+                        "SD profile 3 executed; whole-board power removal required.", node_identity)
+                finally:
+                    failure_helper.hold_ownership()
 
     except (OSError, ValueError, RuntimeError) as error:
         record["failure"] = str(error)

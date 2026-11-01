@@ -59,6 +59,15 @@ def session_check(raw):
         ef,ep,ed=raw[792+3*i:795+3*i];df,dp,dd=raw[813+3*i:816+3*i]
         require(ep<=2 and ed<=3 and df==(2 if (i<6 if profile else 1<=i<=3) else 0) and dp<=2 and dd<=3 and (i==2 or dp==1),'Invalid selected SD0 PF route.')
 
+def require_sd_1v8_consent(raw,allow_sd_1v8=False):
+    """Require consent for SD profile 3 without interpreting the eMMC ABI."""
+    selected=(len(raw)==880 and struct.unpack_from('<Q',raw,592)[0]==0x4153373352444131 and
+              struct.unpack_from('<I',raw,860)[0]==3)
+    require(not selected or allow_sd_1v8,
+            'SD profile 3 requires --allow-sd-1v8 and whole-board power removal after execution.')
+    return selected
+
+
 def embedded_reference(image,session):
     """Bind actual immutable geometry and const build ID before behavioral use."""
     import io
@@ -144,9 +153,10 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
     session_check(raw)
     return board.validate_admission(record,image_hash,template_hash,cache,frozen)
 
-def prepare(image,manifest,admission,template,output,clang,lld):
+def prepare(image,manifest,admission,template,output,clang,lld,*,allow_sd_1v8=False):
     snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('admission.json',admission),('session-template.bin',template)]}
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
+    require_sd_1v8_consent(raw,allow_sd_1v8)
     embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf={}
@@ -172,9 +182,9 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     for i,(path,data) in enumerate(cache.items()):
         name=f'evidence-{i}.bin';(out/name).write_bytes(data);evidence[path]={'name':name,'sha256':hashlib.sha256(data).hexdigest()}
     p=dict(schema=SCHEMA,physical_access=False,image_sha256=ih,build_id=identity.hex(),epoch=epoch,generation=generation,lease=lease,reservation=record['reservation'],session='session.bin',profile=None,manifest=None,image='image.elf',segments=uploads,entry_evidence=evidence,backup_sizes={name:n for name,a,n in base.REGIONS},files={x.name:base.digest(x) for x in out.iterdir() if x.is_file()})
-    base.save_json(out/'prepared.json',p);return validate_bundle(out)
+    base.save_json(out/'prepared.json',p);return validate_bundle(out,allow_sd_1v8=allow_sd_1v8)
 
-def validate_bundle(bundle):
+def validate_bundle(bundle,*,allow_sd_1v8=False):
     out=Path(bundle);metadata=(out/'prepared.json').read_bytes();p=json.loads(metadata);require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong STORAGE_READ bundle.')
     required={'image.elf','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
     required.update(item['name'] for item in p['segments'])
@@ -191,6 +201,7 @@ def validate_bundle(bundle):
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'STORAGE_READ protected SRAM geometry changed.')
     require(data['result-zero.bin']==bytes(16384) and data['report-zero.bin']==bytes(128),'STORAGE_READ initial report backing changed.')
     raw=data['session.bin'];session_check(raw)
+    require_sd_1v8_consent(raw,allow_sd_1v8)
     image_manifest_check(manifest,data['image.elf'],raw)
     template=data['session-template.bin'];cache={};p['entry_evidence']={}
     validate_admission(json.loads(data['admission.json']),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
@@ -211,4 +222,7 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('image','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--manifest',type=Path,help=argparse.SUPPRESS)
-    a=parser.parse_args();print(prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld)['_bundle_directory'])
+    parser.add_argument('--allow-sd-1v8',action='store_true',
+        help='Allow SD profile 3; execution requires whole-board power removal afterwards.')
+    a=parser.parse_args();print(prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld,
+        allow_sd_1v8=a.allow_sd_1v8)['_bundle_directory'])
