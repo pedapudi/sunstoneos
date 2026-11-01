@@ -117,13 +117,17 @@ int npu_runtime_queue_wait(struct npu_runtime_queue *q,struct npu_queue_fence fe
     verify(!fixture_locks&&q==active_queue&&fence.value==q->queue.submitted&&fixture_job->held);++fixture_waits;
     if(atomic_load(&q->queue.completed)==q->queue.submitted)return 1;
     fixture_now+=5000;
-    if((fixture_case==4&&current_job==3)||(fixture_case==6&&current_job==1000))return -1;
+    if((fixture_case==4&&current_job==3)||(fixture_case==6&&current_job==1000)||(fixture_case==13&&current_job==1998)||(fixture_case==14&&current_job==3499))return -1;
     q->irq_cpu_ticks+=7;
     memcpy(fixture_output,reference,4);
 #if SUNSTONE_NPU_DEPENDENT_CHAIN
     if(current_job>=1000)memcpy(fixture_dependent_output,dependent_reference,4);
 #endif
     if((fixture_case==1&&current_job==4)||(fixture_case==7&&current_job>=1000))fixture_output[0]=9;
+#if SUNSTONE_NPU_DEPENDENT_CHAIN
+    if(fixture_case==15&&current_job==1998)fixture_dependent_output[0]=0;
+    if(fixture_case==16&&current_job==3499)fixture_dependent_output[0]=0;
+#endif
     atomic_store(&q->queue.completed,q->queue.submitted);return 1;
 }
 int npu_queue_release(struct npu_queue *q,struct npu_queue_job *job)
@@ -133,7 +137,7 @@ int npu_runtime_queue_return(struct npu_runtime_queue *q)
     verify(!fixture_locks&&q==active_queue&&!fixture_job->held);
     if(q==&direct)verify(fixture_releases==1000);
 #if SUNSTONE_NPU_DEPENDENT_CHAIN
-    else verify(fixture_releases==(q==&dependent_queue[0]?1002:1003));
+    else verify(fixture_releases==(q==&dependent_queue[0]?1000+2*SUNSTONE_NPU_CHAIN_REPEATS:1000+3*SUNSTONE_NPU_CHAIN_REPEATS));
 #else
     else verify(fixture_releases==1001);
 #endif

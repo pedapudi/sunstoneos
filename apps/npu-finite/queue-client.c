@@ -324,7 +324,14 @@ static void npu_latency_client(void *unused)
     sunstone_crumb(NPU_CRUMB_QUIESCENT,status);
     platform_puts("NPU_IRQ_COMPLETIONS=");platform_hex(npu_service_irq_completions(&runtime->service));
     platform_puts("\nNPU_IRQ_STOPPED=0x0000000000000001\nNPU_STAGE=QUIESCENT\n");
-    report(hash);platform_puts(status?"NPU_INFERENCE=MISMATCH; inference_jobs=" NPU_STARTUP_JOB_TEXT "\n":"NPU_INFERENCE=MATCH; inference_jobs=" NPU_STARTUP_JOB_TEXT "\n");
+    report(hash);
+#if SUNSTONE_NPU_DEPENDENT_CHAIN
+    platform_puts(status?"NPU_INFERENCE=MISMATCH; inference_jobs=":"NPU_INFERENCE=MATCH; inference_jobs=");
+    {char text[12];unsigned n=NPU_STARTUP_JOBS,at=sizeof text-1;text[at]=0;
+     do{text[--at]=(char)('0'+n%10);n/=10;}while(n);platform_puts(text+at);platform_puts("\n");}
+#else
+    platform_puts(status?"NPU_INFERENCE=MISMATCH; inference_jobs=" NPU_STARTUP_JOB_TEXT "\n":"NPU_INFERENCE=MATCH; inference_jobs=" NPU_STARTUP_JOB_TEXT "\n");
+#endif
     if(!live()||!npu_startup_return_ready())retained(19);
     sunstone_crumb(NPU_CRUMB_EXIT,status);taskENTER_CRITICAL();platform_exit(status);
 }
