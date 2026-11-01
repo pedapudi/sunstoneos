@@ -31,6 +31,17 @@ int os_watchdog_reload(void *supervisor)
 #ifdef SUNSTONE_A733_FAULT_PAGE
 uint64_t a733_fault_pending;
 #endif
+/* No service in this model registers for precise deadlines, so every service
+ * keeps the periodic-progress path; checks/deadline-host.c covers the
+ * registered-owner path. */
+#include "FreeRTOS.h"
+#include "task.h"
+#include "sunstone_deadline.h"
+static int model_task;
+TaskHandle_t xTaskGetCurrentTaskHandle(void){return &model_task;}
+int sunstone_deadline_register(void){return 0;}
+int sunstone_deadline_owner_record(void *owner,struct sunstone_deadline_record *record){(void)owner;(void)record;return 0;}
+void sunstone_deadline_owner_progress(void *owner){(void)owner;}
 #include SERVICES_SOURCE
 #ifdef SUNSTONE_OS_APPLICATION_H
 /* Keep every service selected: the modeled application is present and live,
