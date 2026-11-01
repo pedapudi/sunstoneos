@@ -13,7 +13,8 @@ from harness import CLANG, SANITIZE, environment, save
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['include/npu_idle.h', 'drivers/npu/npu_idle.c',
-                'checks/npu-idle.c', 'checks/register_latency.h']
+                'checks/npu-idle.c', 'checks/register_latency.h',
+                'checks/npu-idle.py', 'checks/harness.py']
 CASES = ('nominal', 'threshold', 'cancellation', 'admission',
          'delayed-effects', 'partial-failure', 'readback', 'retention')
 
@@ -30,6 +31,10 @@ def main():
     env = environment()
     env['TMPDIR'] = str(temporary.resolve())
     executable = args.output.resolve() / 'npu-idle'
+    def fingerprints():
+        return {name: hashlib.sha256(((ROOT if name.startswith('checks/') else
+                args.source_root) / name).read_bytes()).hexdigest() for name in CHECK_INPUTS}
+    inputs = fingerprints()
     command = [str(CLANG), '-std=c11', '-O2', '-g', '-Wall', '-Wextra', '-Werror',
                *SANITIZE, '-I' + str(args.source_root / 'include'),
                '-I' + str(ROOT / 'checks'), str(ROOT / 'checks/npu-idle.c'),
@@ -42,10 +47,10 @@ def main():
         run = subprocess.run([str(executable), case], env=env, capture_output=True, text=True)
         (args.output / (case + '.log')).write_text(run.stdout + run.stderr)
         results.append({'case': case, 'passed': run.returncode == 0})
+        assert fingerprints() == inputs, 'fixture or production inputs changed during execution'
         save(args.output / 'result.json', {'passed': all(row['passed'] for row in results),
              'physical_access': False, 'cases': results, 'build_command': command,
-             'inputs': {name: hashlib.sha256(((ROOT if name.startswith('checks/') else
-                        args.source_root) / name).read_bytes()).hexdigest() for name in CHECK_INPUTS},
+             'inputs': inputs,
              'limits': 'Production idle C; modeled MMIO, time, admission and interrupts. No board qualification.'})
         assert run.returncode == 0, run.stdout + run.stderr
     print('PASS NPU idle transitions, forbidden gated access and retained failures')
