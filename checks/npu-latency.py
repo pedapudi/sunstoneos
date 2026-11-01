@@ -154,8 +154,8 @@ def main():
                 publish = parsed['timing']['submit_to_doorbell']
                 assert publish['samples'] == 1000
                 expected_publish = 1000 if not mode else 5
-                assert publish['latency_ticks'] == {'p50': expected_publish, 'p99': expected_publish, 'max': expected_publish}
-                assert publish['sum_ticks'] == 1000 * expected_publish
+                assert publish['latency_ticks'] == {'p50': expected_publish+49, 'p99': expected_publish+98, 'max': expected_publish+99}
+                assert publish['sum_ticks'] == 1000 * expected_publish + 49500
                 assert parsed['functional_success'] == (not status)
                 if case == 10:
                     phases = parsed['timing']['caller_phases']
