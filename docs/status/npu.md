@@ -40,10 +40,17 @@ emits one final event and no intermediate event. The complete image retires
 The EL0 application-kit ring has resident handles, image-declared tensor edges,
 connected buffer leases and an SVC doorbell only on idle-to-active publication.
 IRQ refill handles each successor without a service task hop. Eight sanitizer
-cases and a two-model native build pass; physical EL0 execution remains unqualified.
+cases and twelve native SVC/IRQ cases pass; physical EL0 execution remains
+unqualified. The selected integration gate passes the supervised, resident,
+resident-audio, normal NPU and two-model EL0-ring builds, kernel checks, check
+index and shared-helper checks.
 Host evidence under `~/.cache/sunstoneos/build/npu-fastpath-1101/` also covers
 10,000 ordered records, native handoff faults, tensor relocation, SDK events
-and diagnostic producer/parser/receipt agreement.
+and diagnostic producer/parser/receipt agreement. The final selected gate is
+`final-gates/gate-npu-final/`, with both affected NPU builds refreshed in
+`final-gates/gate-npu-final-layout/`. Native SVC evidence is `svc-final-layout/`
+and diagnostic byte-equivalence evidence is `timing-layout-check/` under the
+same task build directory. Disabled timing counters occupy no production storage.
 
 Automatic internal-clock gating is a proposal only. PCK4, shared SRAM, DCDC2,
 PLL and top-point clock leases remain owned in that proposal. A transition run

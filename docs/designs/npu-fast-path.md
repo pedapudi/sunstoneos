@@ -43,7 +43,9 @@ The control image SHA-256 is
 `862114046425739e74d6c2ad70da1e4c91ad2c949db82d7bae5539a68f98d5be`;
 the resident image is
 `2a6411ba3fcc2b1620c18ee1cbe92393b4cd26a8705d5571f821bf84e964dd3c`.
-The queue records contain the frozen host inventories, logs and output digests.
+The compiled-source snapshots match Git revisions `2ba77c83` and `f43314fd`,
+respectively, across all 176 recorded project inputs. The queue records retain
+the runner revision, frozen host inventories, logs and output digests.
 `matched-comparison.json` under the task build directory retains the numeric
 summary. The throughput includes diagnostic CPU work and is not a network
 compute-throughput limit.
@@ -140,7 +142,11 @@ The original cache-control setting is restored at close.
 status. It does not grant CPU buffer access. `ss_npu_queue_acquire_handle` remains
 available after receipt release or reuse. Close requires all receipts released
 and all used groups acquired. Faults retain buffers and prevent close.
-The ring and two-model native image have host evidence; physical EL0 execution
+Eight sanitizer cases and twelve native SVC/IRQ cases pass. The selected
+integration gate builds both NPU variants and the three baseline images and
+passes kernel, check-index and shared-helper checks. Diagnostic-only counters
+and updates disappear from production layouts. Seven recompiled diagnostic
+objects have identical executable bytes to the measured image. Physical EL0 execution
 remains unqualified. The public ring currently issues one interrupt per binary;
 the native prepared-stream interface below additionally removes intermediate events.
 
@@ -185,8 +191,8 @@ checks. Both paths perform zero interstage CPU copies. The joined 240-byte
 stream produces only the final device completion, so no CPU completion or
 submission occurs between stages. Each iteration waits before record reuse.
 This qualifies these buffers, two binaries and normal retirement; other graphs,
-fault recovery and EL0 execution need separate evidence. The repeated image
-SHA-256 is `ae8dc27e6c16b8b362bc3a2d7ecdc640d7616d677e52e760020d9930993464fd`.
+fault recovery and EL0 execution need separate evidence. The repeated image matches Git revision `f0d52118` across all 178 recorded
+project inputs. Its SHA-256 is `ae8dc27e6c16b8b362bc3a2d7ecdc640d7616d677e52e760020d9930993464fd`.
 
 ## Power and measurement require separate physical evidence
 
