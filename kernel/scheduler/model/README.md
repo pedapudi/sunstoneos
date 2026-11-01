@@ -127,3 +127,12 @@ other word. The positive case requires at least one retirement notification.
 The negative removes the last-put barrier and lets both callers miss the
 notification, even though the closer retains its own barrier. This extends the
 pin-versus-close lifetime check to the event that wakes the reclaimer.
+
+`migration_ack` begins with one already-pinned publisher that sampled the old
+route, plus the coordinator's retained reference. The publisher pauses before
+hint publication. The old owner can detach and forward hints; the destination
+ends forwarding only after publishers retire and the old owner acknowledges
+its final drain. The negative lets the old owner remember an empty inbox while
+that publisher still holds its reference. The destination can then end the
+epoch with an unprocessed old-route hint. New route acquisition and weak-memory
+ordering remain outside this small acknowledgment model.

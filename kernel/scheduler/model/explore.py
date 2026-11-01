@@ -128,6 +128,41 @@ def last_put_close(put_barrier=True):
 
 
 @dataclass(frozen=True)
+class MigrationAck:
+    # One coordinator reference and one already-pinned old-route publisher.
+    references: int = 2
+    publisher: int = 0
+    live: bool = False
+    detached: bool = False
+    old_ack: bool = False
+    retired: bool = False
+
+
+def migration_ack(ack_after_publishers=True):
+    """A remembered empty inbox cannot acknowledge a still-pinned publisher."""
+    def successors(s):
+        def out(name, **kw):
+            return name, replace(s, **kw)
+        if s.publisher == 0:
+            yield out('old-route publisher release-publishes late hint',
+                      publisher=1, live=True)
+        elif s.publisher == 1:
+            yield out('old-route publisher releases epoch reference',
+                      publisher=2, references=1)
+        if s.live and not s.detached:
+            yield out('old owner detaches hint', live=False, detached=True)
+        if s.detached:
+            yield out('old owner forwards detached hint', detached=False)
+        if not s.old_ack and not s.live and not s.detached and (
+                not ack_after_publishers or s.references == 1):
+            yield out('old owner acknowledges drained epoch', old_ack=True)
+        if s.old_ack and s.references == 1 and not s.retired:
+            yield out('destination ends old forwarding epoch', retired=True)
+    return MigrationAck(), successors, lambda s: not (
+        s.retired and (s.live or s.detached))
+
+
+@dataclass(frozen=True)
 class Notify:
     word: tuple = (0, 'WAITING', False, 0)
     pc: tuple = (0, 0)

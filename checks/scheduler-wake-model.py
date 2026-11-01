@@ -59,6 +59,8 @@ def main():
     run('negative/empty-head-SGI', model.incoming_head(signal_empty=False), True)
     run('retirement/last-put-close', model.last_put_close())
     run('negative/last-put-DMB', model.last_put_close(put_barrier=False), True)
+    run('migration/publisher-drain-ack', model.migration_ack())
+    run('negative/early-old-owner-ack', model.migration_ack(ack_after_publishers=False), True)
     for name, values, negative in (
         ('wake',(True,True,True),False),
         ('negative/producer-DMB',(False,True,True),True),
