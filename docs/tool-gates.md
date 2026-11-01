@@ -480,3 +480,28 @@ The GPU provider image builds; its linked host check remains blocked by an incom
 Standalone historical kernel/EL1 tools do not supply a complete host watchdog wrapper. Returning SD also requires the coordinator’s host-armed watchdog wrapper. The protected development runner’s NoHold failure-lock behavior needs its owner correction. No physical test was requested or performed to establish these paths.
 
 No board command is needed for this host-only cleanup. Both boards remain unavailable pending recovery. The coordinator chooses any later physical test after recovery from the documented device state. This audit establishes no new physical qualification.
+
+
+## Current integration and protected owners
+
+The following conditions remain in files assigned to other agents. These rows
+use current line numbers. The recommendations preserve live target checks,
+watchdog recovery, storage preservation and comparisons of transferred bytes.
+
+| Location | Action | Condition and recommended change |
+| --- | --- | --- |
+| [tools/dev-run.py:352](../tools/dev-run.py) | `kept-another-listed-agent` | The development bundle must carry the literal `sunstoneos-dev-bundle-v2` schema. Replace schema admission with checks of the fields and native session geometry the launcher consumes. |
+| [tools/dev-run.py:355](../tools/dev-run.py) | `kept-another-listed-agent` | Prepared files and inputs must match saved bundle hashes. Remove independently prepared bundle authority; retain immutable same-run transfer sources, image/session consistency and uploaded-byte comparisons. |
+| [tools/dev-run.py:523](../tools/dev-run.py) | `kept-another-listed-agent` | The rail helper must match a fixed reviewed binary hash. Replace that admission with explicit helper compatibility checks. Keep boot-clock checks, voltage limits and verified readbacks for each changed rail. |
+| [tools/run-ddr.py:156](../tools/run-ddr.py) | `kept-safety` | The selected build must support CPU clock restoration, and restore builds must perform final clocked PHY readback. These are hardware compatibility requirements. Preserve the corresponding behavior checks, SID match, SRAM bounds, watchdog fallback and same-run upload comparisons. |
+| [tools/training-record.py:77](../tools/training-record.py) | `replaced` | A current capture binds its embedded DDR result to its own live mailbox. An older capture binds its mailbox, device and instance identity to the DDR run it references. Both CLI modes accept relocated captures and current trained values; neither requires equality with historical register values. |
+| [tools/check-a733-smp-supervised.py:276](../tools/check-a733-smp-supervised.py) | `kept-safety` | Application capture limits come explicitly from the caller and remain bounded by 179 seconds. The shared runner also preserves the SD 1.8 V power-removal requirement. |
+
+The protected CPU rail follow-up decoder at
+[apps/os/cpu-return-followup.py:26](../apps/os/cpu-return-followup.py)
+still describes the earlier DCDC5-only helper. Its owner should accept the
+current helper's per-rail normalization results and retain boot-clock,
+voltage-limit and successful readback checks. The host checks that cover the
+integrated returning transport must accept a host-side error after a confirmed
+normal return without quarantining the instance; FEL request failures still
+quarantine it.

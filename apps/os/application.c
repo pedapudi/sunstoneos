@@ -226,9 +226,11 @@ int os_application_prepare(void)
     if(ss_application.init)ss_application.init();
     return 1;
 }
-_Noreturn void ss_fail(uint32_t detail)
+/* The first-failure record names the detail and the caller of ss_fail. */
+__attribute__((noinline)) _Noreturn void ss_fail(uint32_t detail)
 {
-    (void)detail;board_fail(NULL);
+    board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_APPLICATION<<12|(detail&0xfff),detail,
+        __builtin_return_address(0));
     for(;;)vTaskSuspend(NULL);
 }
 _Noreturn void ss_finish(const void *data,size_t bytes)

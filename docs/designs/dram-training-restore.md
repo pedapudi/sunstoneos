@@ -1,7 +1,12 @@
 # Design: restoring DRAM training from a record on the microSD card
 
-Status: **RAM-only restore implemented and host-checked; no physical restore
-has run.** The capture tools, fixed restore set, record builder, SRAM
+Status: **RAM-only restore has board evidence; physical card integration is
+unqualified.** The SID-selected default passed twice on port 3-1 on
+2026-10-31 with 34 ms quick checks. Explicit-record restores passed on both
+boards. The [record runbook](../board-runbooks/dram-restore-records.md) identifies
+the evidence, the active 879-register set and the remaining qualification.
+The capture derivation and earlier diagnostic records below retain their
+stated scope. The capture tools, fixed restore set, record builder, SRAM
 admission and restore helper are implemented. On the FEL path the restore
 runs under WDT0: a failed or hung restore resets the board to a new FEL
 instance and the host trains fully once. The card allocation and record
@@ -118,10 +123,21 @@ lists them) give the first restore sets:
   same lane had read back their written values. Its trained value is the
   same in every trained capture of both boards, a property of hardware
   status ([runbook](../board-runbooks/dram-restore-test-1.md#the-first-board-run-stopped-at-a-byte-lane-register-that-does-not-hold-a-write)).
-- **The set has 941 registers:** 432 byte-lane registers, 445
-  address/command sequencer words, 21 `0x30000` registers, 20 message-block
-  result fields, 20 parameter words and three others. 394 vary between
-  trainings; 547 are fixed by the P-state-0-only path. The
+- **Registers the PHY owns are left out** because a write survey on port
+  3-1 showed that they do not keep an APB write at the hook
+  ([runbook](../board-runbooks/dram-restore-test-1.md#the-survey-run-separated-wide-memory-words-from-registers-the-phy-owns)):
+  - byte-lane offset `0x11e` in every lane, a copy that the PHY updates from
+    offset `0x4c` (lane 0) or `0x4e` (lane 1 from lane 0);
+  - byte-lane offsets `0x1aa`–`0x1be` and `0x130`, values the PHY produces,
+    which differ between lifetimes of the same kind, also after
+    initialization only;
+  - offsets `0x15e`–`0x17c` of the two blocks at CSR `0x30000` and
+    `0x31000` (`0x0a960000`, `0x0a962000`), and `0x0a940014`, values of the
+    same kind.
+- **The set has 899 registers:** 402 byte-lane registers, 445
+  address/command sequencer (ACSM) words, 10 registers of the two
+  `0x30000`-region blocks, 20 message-block fields, 20 parameter words and
+  two others. The
   [first test's runbook](../board-runbooks/dram-restore-test-1.md) lists the
   exclusions and their reasons.
 - **The chip IDs differ in their last word only** (`0x40892413` on 3-3,
@@ -139,7 +155,7 @@ qualification ladder and the residual risk. Until cold and warm lifetimes
 exist, a record is valid only for room-temperature cold starts.
 
 **Projected DRAM time with a restore:** 40 ms for boot0's
-initialization-only path, plus about 1 ms for 921 16-bit PHY writes and
+initialization-only path, plus about 1 ms for 879 16-bit PHY writes and
 their read-back, the 20 parameter words being set before the call (*estimated* at 1 µs per APB write), plus the
 quick check (*estimated* at 30 ms for 131,196 uncached word accesses): about 70 ms against 5,093 ms of training today, a saving
 of about 5.0 s per cold boot.
@@ -479,8 +495,9 @@ For the actual record, the first valid helper uses 20 sectors and the two
 records use 50 sectors: 35,840 bytes read. A bad first helper followed by a
 valid second uses 46,080 bytes. The format caps both-helper/both-record reads
 at 226 sectors, or 115,712 bytes. One non-refreshable ten-second counter
-budget covers the attempt. Restore performs 921 masked PHY writes with
-immediate readback, followed by a separate 921-read final pass. The quick
+budget covers the attempt. Restore performs 879 masked PHY writes and up to
+89 rewrites of other wide-memory halfwords, a readback pass, and a separate
+879-read final pass. The quick
 check writes and reads 262,392 bytes each way. The instruction fixture caps each
 case at five million instructions; the largest observed case uses 4,541,947.
 This count is not a hardware performance measure.
@@ -551,13 +568,13 @@ step value (result 7 after 36 ms on both boards). These remain:
 
 ## RAM-only implementation contract
 
-The first implementation admits only the fixed 941-entry restore set and
+The first implementation admits only the fixed 899-entry restore set and
 its recorded P-state-0 captures. The builder binds the analysis file by
 SHA-256, checks the capture chip ID, training kind and stage tables, and
 uses the pinned boot0 parameter set 5 for the strap CRC. Capture words
 32–51 are 32-bit values: the record encodes their 40 little-endian
 halfwords as a run at `0x83278`, without truncating their upper halves.
-The remaining 921 entries are masked PHY halfwords. Temperature is
+The remaining 879 entries are masked PHY halfwords. Temperature is
 unknown (`INT32_MIN`, limit zero), so this profile is restricted to the
 supervised room-temperature cold-start experiment.
 
@@ -581,26 +598,61 @@ trampoline. The trampoline preserves the original arguments, applies and
 checks every PHY write with `MicroContMuxSel` clear, restores that mux to
 1, then calls boot0's original `0x4bca8`.
 
-A readback mismatch does not end the pass. The helper writes and reads
-every entry, so one run names every register that does not hold its
-value: mailbox words 11–13 keep the first mismatch's address, expected and
-read values, word 27 counts the mismatches and words 28–31 hold the second
-to fifth as profile index (upper half) and value read (lower half). The
-pass costs at most 921 further writes, under 1 ms (*estimated*), and the
-PHY state is discarded by the WDT0 reset that follows. A failed pass then
-exits directly to the wrapper's saved SRAM context; it must not resume
-boot0 and reach its memory test. After a successful
-`init_DRAM`, the wrapper checks the size and runs the
+The helper writes every entry, then reads every entry back in a separate
+pass. Two PHY memories store words wider than an APB access: the ACSM
+memory (`0x0a982000`–`0x0a983fff`) 64-bit words and the PHY data memory
+(64 KiB from `0x0a9b0000`) 32-bit words. Each holds a halfword write until
+the word's highest halfword is written, and reads return the stored word
+until then. The helper therefore writes the whole word of each entry in
+those ranges, in ascending halfword order, and rewrites the halfwords that
+are not entries with their stored values; boot0's PIE and message-block
+loaders also write every halfword in ascending order. For the 899-entry set
+that adds 89 rewrites.
+
+A readback mismatch does not end the readback pass, so one run names every
+register that does not hold its value: mailbox words 11–13 keep the first
+mismatch's address, expected and read values, word 27 counts the mismatches
+and words 28–31 hold the second to fifth as profile index (upper half) and
+value read (lower half). The PHY state is discarded by the WDT0 reset that follows. A failed pass then
+exits directly to the wrapper's saved SRAM context with error 7; it must
+not resume boot0 and reach its memory test. After a successful
+`init_DRAM`, the wrapper checks the size, reads every entry back a second
+time and runs the
 [quick check](#the-quick-check-covers-address-lines-and-sixteen-windows-below-4-gib).
+A mismatch in that second readback fails the restore with error 15, so the
+mailbox names the pass that failed.
+
+The second readback runs the PHY microcontroller clock. Between the hook
+and the return from `init_DRAM`, boot0 runs its final PHY stage
+(`0x4f46c`, here `0x5a210`), which ends with `UcclkHclkEnables` = 2
+(`0x5ae9a`) and `MicroContMuxSel` = 1, and then, for an LPDDR5 set,
+`0x57310`, called twice on these boards (`dram_tpr13` bit 6, `0x579ce`). That routine clears `MicroContMuxSel`, sets `UcclkHclkEnables`
+to 3, reads thirteen halfwords of the message block from `0x0a9b0026` to
+`0x0a9b004c`, programs controller timing from their maxima, writes
+`UcclkHclkEnables` = 0 (`0x5749a`) and sets the mux to 1 (`0x574ac`).
+No other boot0 code that runs after the hook writes the data memory or
+`UcclkHclkEnables`: `0x4bca8`, which the hook calls on to, `0x5a210`,
+`0x4b7ec`, `0x561a0`, the size probe `0x4b74c` and the simple test `0x4b4cc`
+(the message-block writers `0x58ba8`, `0x590c4` and `0x59d00` run before
+the hook). No code after the hook writes `MicroReset`, which stays 1, so the
+training firmware stays stalled while the clock runs. With the clock off, the data memory
+reads 0 over APB, as the port 3-1 run of 2026-10-31 showed. Its contents
+are kept (inferred: `0x57310` reads them after the final PHY stage has
+stopped the clock). The second readback therefore sets `UcclkHclkEnables` to 3 after
+clearing the mux, as `0x57310` and the capture reader do, and writes back
+the value it read (0 on boot0's path) before setting the mux to 1. The restored
+message-block entries matter because `0x57310` reads `0x0a9b002c` and
+`0x0a9b0030` among its thirteen halfwords.
 The quick check finds gross errors only; the separate March C-
 qualification remains required. Failures have distinct mailbox
 codes for record geometry, header CRC, payload CRC, chip ID, boot0 identity,
-strap, PHY readback, size and memory comparison. No failure retrains in
+strap, PHY readback at the hook, PHY readback after `init_DRAM`, size and
+memory comparison. No failure retrains in
 place. The host writes no RAM page after a reported restore failure.
 
-The budget is one admission pass and one ordered PHY write/readback pass,
-with bounded record parsing and no allocation. Ordered same-register
-readback follows each write; explicit barriers surround mux transitions.
+The budget is one admission pass, one ordered PHY write pass and one
+readback pass, with bounded record parsing and no allocation. The readback
+pass follows the last write; explicit barriers surround mux transitions.
 A second readback pass after
 `init_DRAM` detects changes made by boot0 before the quick check. Host instruction checks
 exercise the real wrapper/helper with modeled boot0 calls and MMIO. They
@@ -634,7 +686,7 @@ far, the address, the expected and the actual word in mailbox words 10–13.
 Mailbox words 25 and 26 hold the low word of the 24 MHz system counter at the
 start and end of `restore_check`, which boot0's own timer also reads. The
 host reports the difference as the check time. In the instruction fixture
-the nominal FEL case executes 2,236,828 instructions.
+the nominal FEL case executes 2,247,330 instructions.
 
 ### The FEL runner falls back through one watchdog reset
 
@@ -736,6 +788,60 @@ park, a domain already at the ROM point, and a stopped counter before the
 first wait, during the update wait and during the lock wait; for the last
 three the check lowers the poll limit to 2,000.
 
+### A diagnostic build records every entry around its write
+
+`tools/prepare-ddr.py --variant restore --survey` builds the restore helper
+with `RESTORE_SURVEY` defined; without the flag the helper's bytes do not
+change. The diagnostic helper fills a survey at SRAM `0x96000`, inside the
+helper reservation and above the helper's 9,912 bytes:
+
+- **Header, 64 bytes.** Word 0 is `0x59565253` once the write pass starts,
+  word 1 counts the entries recorded, word 2 holds `MicroContMuxSel` before
+  the helper clears it, and words 3–6 hold `UcclkHclkEnables`
+  (`0x0aa80100`), `MicroReset` (`0x0aaa0132`), `DctWriteProt`
+  (`0x0aaa0062`) and `UctShadowRegs` (`0x0aaa0008`) at the hook.
+- **Header word 7** counts the wide-memory halfwords rewritten with their
+  stored values.
+- **Header words 8–10.** Word 8 is 1 once the readback after `init_DRAM`
+  starts; words 9 and 10 hold the `MicroContMuxSel` and `UcclkHclkEnables`
+  values that pass found before it changed them (1 and 0 on boot0's path).
+- **Entries, 8 bytes each from `0x96040`.** For each entry in profile
+  order: the value read before the write (the helper's read-modify-write
+  already reads it), the value read straight after it, the value the
+  readback pass reads, and the mask.
+
+For the 879 PHY entries of the 899-entry set the survey takes 7,096 bytes,
+ending at `0x97bb8`. The passes, the mismatch reporting and the outcome are
+those of the production helper, plus one read of each entry straight after
+its write.
+
+`tools/run-ddr.py` uploads zeros over the survey with the helper and reads
+them back, so a helper that stops before its write pass leaves no earlier
+values. After the restore returns, it reads the survey, and
+`tools/ddr-survey.py` puts each entry in one class, from the masked
+comparison with the record's value:
+
+| Class | Values read | Meaning |
+| --- | --- | --- |
+| held | right straight after the write and in the readback pass | The register stores the value |
+| already-at-value | as held, and the value before already matched | The write could not be observed |
+| stored-later | wrong straight after the write, right in the readback pass | A wide-memory halfword stored with its word |
+| changed-later | right straight after the write, wrong in the readback pass | The PHY or a later write changed it |
+| unchanged | wrong in the readback pass and equal to the value before | The write did not reach a storage register |
+| reads-zero | 0 in the readback pass, although the value before was not | A copy or status register the PHY clears |
+| other-value | neither the value before nor the written value | The PHY produced the value |
+
+The last four are mismatches.
+
+The runner writes every entry to `survey.json`, records the class counts,
+the mismatches by register family and the control words in
+`restore_result.survey`, and checks the survey's mismatches against the
+mailbox: they equal word 27 after error 7 and are 0 otherwise, because the
+survey records only the passes at the hook. A survey without its magic word, or with
+fewer entries than the profile, is recorded as an error and the run falls
+back as usual. `tools/ddr-survey.py SURVEY.BIN --record RECORD.BIN` decodes a
+saved survey offline.
+
 ## Two-copy host selection and standby update contract
 
 The implemented host tools reuse `boot-slots.py` allocations and
@@ -787,7 +893,7 @@ each physical session. Plan ordering and CRCs do not establish card power-loss
 atomicity or physical recovery qualification.
 
 The fixed-profile read budget is two header sectors and at most two 24 KiB
-records. The observed 12,320-byte records require 25,600 card-image bytes
+records. The 11,640-byte records require 24,576 card-image bytes
 in total, including sector padding. Selection bounds CRC and profile work by these records, with no device
 access. Checks use records from the actual captures and
 allocations from the actual producer on ordinary-file fixtures. They cover
@@ -807,93 +913,31 @@ card allocation or backup authority is inferred from them. Independent
 correctness review approved the host implementation; physical qualification
 remains outstanding.
 
-## Next steps
+## Remaining qualification and card deployment
 
-Implementation and remaining physical work:
+The RAM-only helper, clocked post-initialization readback and SID-selected
+default are implemented. Explicit-record restores passed on both boards;
+the default passed twice on port 3-1. The
+[record runbook](../board-runbooks/dram-restore-records.md) identifies those
+results and the current 879-register set.
 
-| Part | Status |
-| --- | --- |
-| Capture reader, stage tables, runner, DRAM and SRAM builds, wrapper variants | Implemented, host-checked, frozen (v5 sets), run in ten lifetimes |
-| `tools/analyse-ddr-captures.py`, kind diff and block exclusion | Implemented, host-checked |
-| Restore set | Fixed: `~/.cache/sunstoneos/evidence/dram-restore-1031b/restore-set-v4.json`, command in `restore-set-v4.command` |
-| Record format, paired selection and standby plans | Implemented and host-checked; physical card stage not started |
-| Record builder from a capture | Implemented; both actual board references and identity refusals checked |
-| Restore wrapper variant | Implemented; instruction and host-runner cases checked |
-| FEL fallback through one WDT0 reset, address-line and window quick check | Implemented; 19 instruction and 28 runner cases checked; never run on a board |
-| March C- runs on the restored and P-state-0-only paths | Image implemented and host-modeled, never run on a board |
-| First restore test, [runbook](../board-runbooks/dram-restore-test-1.md) | SRAM artifacts built; physical prerequisites remain |
+Remaining work includes:
 
-**Facts the next steps rest on**, all measured on both boards on
-2026-10-25 except where marked:
+- Run the full-map March C- test after P-state-0-only training and after
+  restore, under the [memory qualification contract](../memory-qualification.md).
+  Existing quick checks do not establish full-capacity memory correctness.
+- Qualify repeated restored lifetimes, cold/warm starts, stress and a
+  temperature range. Records have no qualified temperature limit, and the
+  runner has no runtime temperature gate.
+- Establish physical fallback behavior for corrupt/wrong-board records,
+  readback failures and sampled-memory failures under the reviewed recovery
+  rules. Host instruction and protocol models retain their own narrower scope.
+- Capture and qualify lower P-states before DRAM frequency scaling. Current
+  restored boots use only the 2040 MHz P-state.
+- Complete card deployment only after FEL qualification, board-specific
+  backups, physical record reservations, temperature admission and recovery
+  qualification. The paired-record planner and card hook have host evidence;
+  they do not establish installed or autonomous card operation.
 
-- boot0's initialization-only path reaches firmware result 7 in 36 ms and
-  the size line in 40 ms; P-state-0-only training takes 4,437–4,451 ms and
-  four-P-state training 5,088–5,102 ms.
-- The restore set is 941 registers: the union of both boards'
-  P-state-0-only minus initialization-only diffs, with status pooled over
-  both boards and decided per byte-lane offset, and without the `0xa0000`
-  block, firmware controls, firmware inputs, controller read-result words
-  and byte-lane register `0x73`, which does not hold a written value; 394
-  vary between trainings and 547 are fixed by the P-state-0-only path.
-- The values come from one capture of each board's later P-state-0-only
-  lifetime: `board-session-20261025-27/port-3-3` and
-  `board-session-20261025-35/port-3-1`.
-- The `0xa0000` block is left out: the P-state-0-only path leaves it at its
-  power-on contents, and the four-P-state path writes it, probably through
-  `0x581b4` (inferred).
-- MR14 and MR15 travel in parameter words 50 and 51 through boot0's
-  `dram_tpr1` bit 31 path, which needs `dram_tpr10` bit 29 cleared as well
-  (`0x5a08e` runs only with bit 29 clear).
-
-**Work in order:**
-
-1. **Record builder, implemented.** `tools/training-record.py from-capture`: read a
-   P-state-0-only capture and `restore-set-v4.json`, refuse a capture
-   whose SID chip ID, training kind or stage tables differ, and emit the
-   record with the chip ID, the pinned boot0 checksum, the CRC of boot0's
-   parameter set 5 (the strap check; both boards select it), unknown
-   temperature fields, register runs and parameter words 32–51. The set
-   holds only 16-bit PHY registers and parameter words, so runs need no
-   width flag.
-2. **Restore wrapper variant, implemented.** `tools/prepare-ddr.py --variant restore`:
-   record in SRAM at `0x87000`, record checks before any edit (magic,
-   version, both CRCs, chip ID, boot0 checksum, strap CRC), the parameter
-   edits (`dram_tpr13` bit 2 clear, `dram_tpr10` bits 29:16 set to
-   `0x0001`, `dram_tpr1` bit 31 set, words 32–51), a Thumb-to-Arm `BLX` at
-   `0x56142` into a table-driven writer that clears `MicroContMuxSel`,
-   writes and reads back the set, sets it to 1 and calls `0x4bca8`, then
-   after `init_DRAM` the quick check below 4 GiB. Any failure stops
-   and reports in the mailbox; there is no in-place retraining.
-   `tools/run-ddr.py` uploads the record and, on a failure or hang, resets
-   through WDT0 and runs `--fallback-build` once.
-3. **Host checks, implemented.** `checks/ddr-wrapper.py` covers the
-   restore path, and `checks/ddr-host-retention.py` covers its runner cases:
-   a wrong-board record, a corrupt record, a read-back mismatch and a
-   quick-check failure must each stop with their code before any further
-   DRAM use and fall back through one WDT0 reset. Hangs, a missing or
-   unexplained reset, a failed fallback and a SID mismatch are covered too.
-4. **March C-.** Prepare the [memory qualification image](../memory-qualification.md)
-   for two board runs: after a P-state-0-only training (the reference
-   path's baseline, which has never had a full memory test) and after the
-   restore. It needs the user's acceptance of its three residuals before
-   `apps/memtest/check.py prepare` runs.
-5. **Review and freeze** `dram-restore-test-1` for both boards under the
-   design gate, then run it when power cycles are possible.
-6. **Card deployment**, only after FEL qualification: the host tools now
-   allocate two copies, select the newest eligible generation and plan
-   standby updates payload first and header last. The host-built boot0 hook
-   and helper plans are implemented and instruction-checked. Remaining
-   prerequisites are runtime temperature admission, qualified recovery,
-   physical reservations and board-specific backups. Every write
-   session still needs a host backup.
-7. **Qualification** as listed above: ten restored lifetimes per board with
-   March C-, cold and warm lifetimes with stress runs (which also set the
-   record's temperature limit and the retraining interval), the fallback
-   cases, and boot-time measurement against full training.
-
-**Open risks:** a trained register that equals its untrained value on both
-boards (about two expected), registers outside the captured address ranges,
-the excluded `0xa0000` block, MR12 and other mode registers that the
-message block does not carry, temperature (every capture is a
-room-temperature cold start), the P-state-0-only path's untested full
-memory behaviour, and the modified boot0 that a card restore needs.
+Registers outside the captured ranges, MR12 and other mode registers,
+record ageing and memory not covered by the quick check remain risks.

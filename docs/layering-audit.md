@@ -1,16 +1,32 @@
 # SunstoneOS layering: application details below the application layer
 
-SunstoneOS is meant to be a general operating system for the Allwinner A733.
-The mimus speech recognizer is one application that runs on it. An audit of
-the `bringup` branch at revision `222b070c` found the reverse arrangement: the
-image called the OS is the mimus board application with OS services added.
-No second application can be built, uploaded, launched and returned without
-editing driver, platform, boot, build and host-tool code.
+SunstoneOS builds OS-only, hello-compute and external-application images.
+Mimus lives under `sunstoneos/` in its own repository, pinned by
+[the source record](../apps/mimus/source.json) to `port/sunstoneos-split`
+at `c2dcb5a9`. The [application interface](designs/app-abi.md) and
+[image guide](os-image.md) describe the merged composition.
 
-This document states the target layering, the defects found against it and a
-refactoring order. Five read-only audits produced the findings: the GPU stack,
-the NPU stack, the composition of the OS image, the core platform and
-non-accelerator services, and the host tooling and build system.
+## Current merged boundary
+
+The OS owns device services, session admission, supervision and generic
+application launch/result handling. The application owns recognition, its
+models, manifests, capture wrappers and recognition checks. The merged
+reference cleanup keeps the shared USB emulator in SunstoneOS and accepts
+explicit application inputs for preparation and validation.
+
+The legacy GPU recognition path still crosses this boundary through
+`drivers/gpu/pvr_mimus_service.c`, `platform/a733/gpu_mimus.c` and their
+interfaces. The generic GPU queue and its mimus port remain unmerged.
+Application separation and host checks establish no new physical qualification;
+[the handoff](handoff.md) records the latest board failures and open work.
+
+## Scope of the original audit
+
+The findings below describe `bringup` at `222b070c`, before application
+separation. Their source paths and line numbers identify that baseline.
+They preserve the target layering and the reasons for the refactoring;
+they are not a claim that every original defect remains in the merged code.
+Inspect current source before assigning work from a historical finding.
 
 ## Target layering
 
@@ -174,7 +190,7 @@ mimus handler (`apps/mimus-board/usb0.c:13-35,75-110`).
 ### 7. The NPU admits only networks listed inside the driver, through one built-in client
 
 - **Admission table in the driver:** the admission table, including
-  `mimus-linear-q`, is a source file in `drivers/npu`
+  `linear-i16-per-row`, is a source file in `drivers/npu`
   (`drivers/npu/npu_session_models.inc:19-22`). The table generator writes
   that file into the driver tree (`tools/npu-session-catalogue.py:23-24`).
 - **One OS-created client:** the OS NPU service has one slot and one client
@@ -222,13 +238,17 @@ and the EL3 terminal also hard-codes it (`apps/mimus/recorded.h:9`,
   the monitor, the host tools and applications.
 - **Severity:** awkward. **Effort:** medium.
 
-### 10. Kernel core placement uses recognizer roles
+### 10. Kernel placement publishes default application roles
 
-`A733_SMP_RECOGNITION_CORE` and `A733_SMP_INFERENCE_CORE` are kernel
-configuration (`include/a733_smp_placement.h:16-22`), and the GPU interrupt
-is routed to the recognition core (`apps/os/irq.c:28`).
+`A733_SMP_APPLICATION_CORE` and `A733_SMP_APPLICATION_WORKER_CORE` name
+the default application pair in `include/a733_smp_placement.h`. They select
+A55 cores 2 and 3 before A76 admission, and A76 cores 6 and 7 afterwards.
+The legacy application adapter and the GPU compatibility interrupt route use
+these defaults. Application-kit grants select their own main and worker cores.
 
-- **Correct structure:** the kernel publishes cluster masks. Applications
+- **Remaining compatibility name:** `OS_RECOGNITION_CORE` still names the
+  GPU compatibility image's core selection.
+- **Target structure:** the kernel publishes cluster masks. Applications
   request cores, and each interrupt route names its own target core.
 - **Severity:** awkward. **Effort:** small.
 
@@ -261,6 +281,11 @@ is routed to the recognition core (`apps/os/irq.c:28`).
   and run steps, and one shared helper module. The gate builds the OS
   without applications, then runs each application's own checks.
 - **Severity:** awkward. **Effort:** large.
+- **Status:** implemented for CPU-return images. `tools/dev-run.py` builds
+  the typed session, uploads and backups from the image's manifest and runs
+  hello-compute or an external application such as mimus through
+  `apps/os/prepare.py` and `apps/os/cpu-return-host.py`. GPU-return and NPU
+  images still have per-application runners.
 
 ### 13. Application headers and tools sit in OS directories
 

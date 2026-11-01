@@ -1,66 +1,91 @@
 --- input
 +++ output
-@@ -11,6 +11,8 @@
-  * the thermal level. A grant that names
+@@ -11,6 +11,7 @@
   * no cluster leaves every clock and voltage unchanged. */
  #include "os.h"
-+#include "sunstone_crumb.h"
+ #include "sunstone_crumb.h"
 +#include "cpu-return.h"
  #include "../board/application.h"
  #include "application.h"
  #include "a733_cpu_clock.h"
-@@ -84,6 +86,10 @@
+@@ -84,6 +85,13 @@
      atomic_uint ready;
  } owner;
  enum { START, INSPECT, REQUEST, FOLLOW };
 +static unsigned entry_checked;
 +static unsigned return_request;
 +static atomic_uint return_done;
++/* DCDC5, DCDC3: last confirmed PMIC readbacks at clock close; 0 is unread.
++ * Captured after normal ROM return, before restoring image RAM. */
++uint32_t os_cpu_return_rail_uv[2];
 +int os_cpu_return_clock_done(void){return atomic_load_explicit(&return_done,memory_order_acquire);}
  static int clock_now(void *v,uint64_t *out)
  {return v==&owner&&a733_counter_clock_now(&providers.shared.counter,out);}
  static int clock_read(void *v,uintptr_t a,uint32_t *out){return v==&owner&&read_word(NULL,a,out);}
-@@ -127,7 +133,24 @@
-         if(a733_cpu_clock_inspect(c,A733_CPU_LITTLE,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return -1;
+@@ -123,7 +131,7 @@
+ {
+     struct a733_cpu_clock *c=&owner.driver;
+     const struct os_session *s=os_session_admitted();
+-    if(owner.phase==START){
++    if(owner.phase==START&&!os_cpu_return_requested()){
+         struct a733_cpu_clock_config config;
+         if(!s||!a733_cpu_clock_grant_load(&s->cpu_clock,s->board.epoch,s->board.generation,&config)||
+            !a733_cpu_clock_init(c,&config,&clock_ops,&owner,&providers.shared.clocks,&providers.shared.rails,
+@@ -132,7 +140,36 @@
+         if(a733_cpu_clock_inspect(c,A733_CPU_LITTLE,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return REFUSED(0);
          return 1;
      }
+-    enum a733_cpu_clock_status r=a733_cpu_clock_burst(c,BURST_US);
 +    /* No automatic restoration may raise a clock during successful close.
 +     * Existing thermal lowering remains permitted and bounded. */
 +    if(os_cpu_return_requested())c->throttled=0;
-     enum a733_cpu_clock_status r=a733_cpu_clock_burst(c,BURST_US);
++    /* START has no active driver when close precedes the first owner pass. */
++    enum a733_cpu_clock_status r=owner.phase==START ? A733_CPU_CLOCK_READY : a733_cpu_clock_burst(c,BURST_US);
++    /* A return may be requested in any phase, including before the raises
++     * finish: an application need not wait for ss_clock_ready(). From then
++     * on the owner starts no inspection or request of its own. A transition
++     * already in flight finishes first. Then CPU-B, if a transition left it
++     * above boot0's 1014 MHz, is lowered to that point, which also returns
++     * DCDC3 to its floor; the ROM return resets CPU-L and the DSU
++     * (docs/designs/cpu-top-opp.md). With CPU-B not raised nothing is
++     * written and no change is consumed. An expired raise or a thermal
++     * lowering can leave DCDC3 raised at 1014 MHz: report its confirmed
++     * readback for the external rail helper, which normalizes both rails. */
 +    if(os_cpu_return_requested()){
-+        if(owner.phase!=FOLLOW||!os_cpu_clock_ready()||r==A733_CPU_CLOCK_RETAINED||r==A733_CPU_CLOCK_INVALID)return -1;
++        if(r==A733_CPU_CLOCK_RETAINED||r==A733_CPU_CLOCK_INVALID)return REFUSED(r);
 +        if(r==A733_CPU_CLOCK_PENDING)return 1;
-+        if(!return_request){
-+            if(!c->changes||a733_cpu_clock_request(c,A733_CPU_BIG,1014,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return -1;
++        if(!return_request&&c->applied_mhz[A733_CPU_BIG]>1014){
++            if(a733_cpu_clock_request(c,A733_CPU_BIG,1014,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return REFUSED(0);
 +            return_request=1;return 1;
 +        }
-+        if(r!=A733_CPU_CLOCK_COMPLETE)return -1;
++        if(return_request&&r!=A733_CPU_CLOCK_COMPLETE)return REFUSED(r);
 +        struct a733_cpu_clock_report final;
 +        if(!a733_cpu_clock_report(read_word,NULL,&final)||!final.domain[A733_CPU_BIG].decoded||
 +           final.domain[A733_CPU_BIG].source!=3||final.domain[A733_CPU_BIG].hz!=UINT64_C(1014000000)||
-+           c->clock.id||c->rail.id||c->request.id)return -1;
++           c->clock.id||c->rail.id||c->request.id)return REFUSED(0);
++        os_cpu_return_rail_uv[0]=c->rail_uv[0];os_cpu_return_rail_uv[1]=c->rail_uv[1];
 +        atomic_store_explicit(&return_done,1,memory_order_release);return 1;
 +    }
  #ifdef SUNSTONE_A733_OS_PERF
      /* The performance-mode service replaces the one-request-per-cluster
       * start: its boot switch moves the CPU domains to the boot mode, and it
-@@ -157,6 +180,14 @@
+@@ -162,6 +199,15 @@
  #endif
      }
      if(owner.phase==REQUEST){
 +        if(!entry_checked){
 +            uint64_t now;
-+            if(!clock_now(&owner,&now))return -1;
++            if(!clock_now(&owner,&now))return REFUSED(0);
 +            int admitted=os_cpu_return_entry_guard(c,policy,now,read_word,NULL);
-+            if(admitted<=0)return admitted<0?-1:1;
++            if(admitted<0)return refused(SUNSTONE_CRUMB_FAIL_SITE(CPU_CLOCK)|SUNSTONE_CRUMB_CPU_GUARD,SUNSTONE_CRUMB_HERE(),os_cpu_return_entry_refusal);
++            if(!admitted)return 1;
 +            entry_checked=1;
 +            sunstone_crumb(SUNSTONE_CRUMB_CLOCK_GUARD,0);
 +        }
          /* One request per granted domain once its sensor has a reading (CPUL
           * is physical channel 3, CPUB channel 0), in the default path's order
           * (docs/designs/cpu-top-opp.md): CPU-B, CPU-L, then the DSU at the
-@@ -177,12 +208,14 @@
+@@ -182,12 +228,14 @@
                  target=c->report.binned ? a733_cpu_clock_dsu_top(c->report.bin,c->applied_mhz[A733_CPU_LITTLE],big) : 0;
                  if(!target)continue;
              }
@@ -68,7 +93,7 @@
              enum a733_cpu_clock_status q=a733_cpu_clock_request(c,(enum a733_cpu_domain)d,target,later(REQUEST_US));
              ++owner.cluster;
              if(q==A733_CPU_CLOCK_PENDING)return 1;
-             if(q==A733_CPU_CLOCK_RETAINED||q==A733_CPU_CLOCK_INVALID)return -1;
+             if(q==A733_CPU_CLOCK_RETAINED||q==A733_CPU_CLOCK_INVALID)return REFUSED(q);
          }
          owner.phase=FOLLOW;atomic_store_explicit(&owner.ready,1,memory_order_release);
 +        sunstone_crumb(SUNSTONE_CRUMB_CLOCK_READY,0);

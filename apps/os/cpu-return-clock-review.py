@@ -14,7 +14,7 @@ UNDER_TEST_SCHEMAS = (SCHEMA, COMPATIBILITY_SCHEMA)
 MARKER = (0x31544e4552505543, 1, 4, 8)
 
 
-def validate(a, data, record, image_hash, raw, profile, grant, evidence, require, Elf, *, input_reservation="input_ddr"):
+def validate(a, data, record, image_hash, raw, profile, grant, evidence, require, Elf, *, input_reservation):
     """Check concrete inputs; legacy review arguments remain call-compatible."""
     identity, port = record.get('identity'), record.get('port')
     require(isinstance(identity, list) and len(identity) == 5 and

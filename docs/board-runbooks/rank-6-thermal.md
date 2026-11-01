@@ -119,7 +119,7 @@ in its reset state.
 ## Without the patch
 
 If the coordinator rejects `common/primary.patch`, either initialize DDR
-again with `tools/run-ddr.py` before step 1 and pass only the new DDR
+again with `tools/run-ddr.py --full-training` before step 1 and pass only the new DDR
 session and survey (no `--warm-return`), or omit `--ddr-evidence`,
 `--platform-survey` and both `--warm-return` options and use the runner's
 signature path. [The README](README.md#cheapest-valid-order) compares the

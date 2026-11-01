@@ -56,7 +56,7 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         (source / 'CMakeLists.txt').write_text('project(gate-test)\n')
         record = source / 'apps/example/source.json'
         record.parent.mkdir(parents=True)
-        record.write_text('{}\n')
+        record.write_text('{"application_directory": "sunstoneos"}\n')
         git = ['git', '-c', 'user.name=gate', '-c', 'user.email=gate@example.invalid']
         for command in (['init', '-q'], ['add', '.'], ['commit', '-q', '-m', 'Gate test']):
             subprocess.run(git + command, cwd=source, check=True, capture_output=True)
@@ -131,6 +131,18 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertEqual(calls[4][1], 'tools/check-kernel.py')
         self.assertEqual(calls[5][calls[5].index('--image') + 1], str(example / 'smp-example-model.elf'))
         self.assertEqual(calls[5][1], str(checker))
+
+    def test_provenance_record_is_not_an_application_alias(self):
+        record = self.source / 'apps/pcie-test/source.json'
+        record.parent.mkdir(parents=True)
+        record.write_text('{"repository": "https://example.invalid/reference"}\n')
+        subprocess.run(['git', 'add', '.'], cwd=self.source, check=True, capture_output=True)
+        subprocess.run(['git', '-c', 'user.name=gate', '-c', 'user.email=gate@example.invalid',
+                        'commit', '-q', '-m', 'Add provenance record'], cwd=self.source, check=True, capture_output=True)
+        self.env['PCIE_TEST_DIR'] = str(self.sandbox / 'not-an-application')
+        result = self.run_gate('--reason', 'Application alias admission', '--check', 'kernel')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(any('PCIE_TEST_DIR' in arg for call in self.records() for arg in call))
 
     def test_multiple_external_applications_keep_separate_builds(self):
         self.enable_example()

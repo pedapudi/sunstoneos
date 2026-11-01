@@ -326,7 +326,7 @@ an unchanged pass and unchanged task timings.
 
 **Finding.** Boot0's main calls a routine (`0x49050`) that writes six NSI
 interconnect words through `0x48f38` and then a barrier
-([boot0](boot-rom-and-boot0.md#what-boot0-deliberately-does-not-do)). The SCP
+([boot0](boot-rom-and-boot0.md#writes-boot0-does-not-make)). The SCP
 writes the same six words on every resume, and three more
 ([SCP firmware](scp-firmware.md#resume), step 9):
 

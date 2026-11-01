@@ -101,7 +101,7 @@ assume. The model ignores the DSU (L3) clock, which this package never changes.
   run on cores 6 and 7; the PMIC owner alone is pinned to core 0. With the
   constant, only the three call sites below place work on cores 6 and 7.
   In the GPU build, `apps/os/start.c` asserts that `OS_RECOGNITION_CORE`
-  equals `A733_SMP_RECOGNITION_CORE`.
+  equals `A733_SMP_APPLICATION_CORE`.
 - **Recognizer and worker.** Under admission and without the GPU option,
   `apps/os/recognition-placement.patch` (new) creates the recognizer with
   `1 << 6`, calls `mimus_parallel_init(6, 7)` before the scheduler and

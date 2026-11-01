@@ -19,8 +19,12 @@ parser.add_argument("--output", type=Path, default=CACHE / "build/a733-ddr")
 # --variant the wrapper is byte-identical to the reviewed one.
 VARIANTS = {"pstate0": (0, 0), "init-only": (0x1fff0000, 0x00010000), "restore": None}
 parser.add_argument("--variant", choices=sorted(VARIANTS))
-parser.add_argument("--restore-set", type=Path, help="reviewed restore-set-v4.json; required for restore")
+parser.add_argument("--restore-set", type=Path, help="reviewed restore-set-v5.json; required for restore")
+parser.add_argument("--survey", action="store_true",
+                    help="diagnostic restore helper that stores every entry's values around its write at 0x96000")
 args = parser.parse_args()
+if args.survey and args.variant != "restore":
+    sys.exit("--survey applies only to --variant restore.")
 if (args.restore_set is not None) != (args.variant == "restore"):
     sys.exit("--restore-set goes with, and only with, --variant restore.")
 args.output = new_directory(args.output)
@@ -81,7 +85,8 @@ if args.variant == "restore":
         obj = args.output / (name + ".o")
         subprocess.run(["clang", "--target=arm-none-eabi", "-march=armv8-a", "-marm", "-Os",
                         "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-mno-unaligned-access",
-                        "-Wall", "-Wextra", "-Werror", "-I", str(args.output), "-c",
+                        "-Wall", "-Wextra", "-Werror", *(["-DRESTORE_SURVEY"] if args.survey else []),
+                        "-I", str(args.output), "-c",
                         str(ROOT / "boot/a733" / name), "-o", str(obj)], check=True)
         objects.append(str(obj))
     script = args.output / "restore.ld"
@@ -112,6 +117,13 @@ if args.variant == "restore":
                               "address": address, "size": size})
     if (args.output / "ddr-restore.bin").stat().st_size > 0x8000:
         sys.exit("Restore helper exceeds its SRAM interval.")
+    # Survey layout (boot/a733/ddr-restore.c): a 64-byte header, then four
+    # halfwords per entry, in the helper reservation above the helper.
+    survey = {"address": 0x96000, "header_bytes": 64, "entry_bytes": 8, "entries": len(profile),
+              "bytes": 64 + 8*len(profile), "magic": 0x59565253} if args.survey else None
+    if survey and (any(s["address"] + s["size"] > survey["address"] for s in allocated)
+                   or survey["address"] + survey["bytes"] > 0x9a000):
+        sys.exit("Restore helper and survey overlap or leave the reservation.")
     hook = next(int(line.split()[0], 16) for line in symbols.splitlines() if line.split()[-1] == "restore_hook")
     patch_source = args.output / "restore-call.S"
     # Keep the halfword-aligned call at its actual address. ELF .text defaults
@@ -138,9 +150,11 @@ if args.variant == "restore":
                         "check_ticks_words": [25, 26], "counter_hz": 24000000,
                         "allocated_sections": allocated,
                         "profile_sha256": hashlib.sha256(generated.encode()).hexdigest(),
+                        **({"survey": survey} if survey else {}),
                         "errors": {"geometry": 1, "header_crc": 2, "payload_crc": 3, "chip": 4,
                                    "boot0": 5, "strap": 6, "readback": 7, "size": 8,
-                                   "memory": 9, "hook": 10, "entry": 11}}
+                                   "memory": 9, "hook": 10, "entry": 11,
+                                   "final_readback": 15}}
 # Replace the Thumb UART character output with an interworking literal load.
 offset = 0x4a540 - 0x47000
 if blob[offset:offset + 8].hex() != "034b1b685a695206":

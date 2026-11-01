@@ -1,31 +1,31 @@
-# The vendor reads the GPU identity after three steps that SunstoneOS omits
+# GPU reference sequence and current integration gaps
 
-This document reconstructs, from every available vendor reference, what the
-vendor software stack does on the Allwinner A733 from cold boot to the first
-read of the GPU core identity and on to GPU firmware start. It then compares
-that sequence with the SunstoneOS GPU power controller and each diagnostic
-variant, and recommends one next board image. It describes analysis only; no
-board run, image or code change accompanies it.
+The A733 GPU power path selects the vendor's 1008 MHz/960 mV operating point.
+[The power controller](../drivers/gpu/a733_gpu_power.c) enables PLL_GPU0,
+releases bus reset, opens the bus/core clocks and waits for CORE6 ON.
+[The supply provider](../drivers/gpu/a733_gpu_platform.c) raises DCDC4 before
+that sequence. The disabled-PLL, 400 MHz, 800 mV path belongs to earlier images.
 
-Every SunstoneOS image that has read the GPU core identity register
-(`RGX_CR_CORE_ID__PBVNC`, `0x01800020`) has failed to return. The last two,
-which read it as the vendor does and then also in the vendor's clock and reset
-order, stalled as well. The comparison below finds three differences that no
-image has yet removed, and that the vendor applies on every boot before that
-read:
+Standalone firmware and compute success does not establish the integrated
+application service. The service still omits health-counter binding, vendor
+secure writes, first-job MMU-cache invalidation and device-cache transfers.
+A nonreturning image can fail before a workload runs; no failing-stage evidence
+identifies the cause of the complete recognition nonreturn.
 
-- **GPU clock source.** The vendor enables the GPU PLL and runs the GPU core
-  from it, at 1008 MHz. SunstoneOS leaves the GPU PLL disabled and runs the
-  core from the 400 MHz PERI0 output.
-- **GPU supply.** The vendor raises DCDC4 to 960 mV before it powers the GPU.
-  SunstoneOS keeps the PMIC's power-on value, which reads 800 mV.
-- **Secure setup.** The vendor's EL3 firmware (TF-A BL31) marks the peripheral
-  security controller ports and the clock controller's PLL, bus and MBUS
-  registers non-secure at cold boot. SunstoneOS boots through FEL with its own
-  EL3 monitor, which makes none of those writes.
+The vendor driver development kit (DDK) supplies the A733 platform reference.
+This comparison uses the code merged through `dc3d1ccd` and the source analysis in
+`~/.cache/sunstoneos/evidence/ref-gpu-hang-1031/report.md` and `analysis.md`.
+That analysis inspected native commit `9b0c7039` and a separate nine-image
+bisection ladder. Its 256 KiB workload-page correction is absent here:
+[the current application mappings](../platform/a733/gpu_mimus.c) still select
+2 MiB pages. The analysis directory's `inputs.json` and
+`firmware-metadata.json` preserve source/image hashes and firmware metadata.
 
-The reference supports removing all three in one image, and the last section
-specifies it.
+**Observed** identifies source behavior or a recorded measurement.
+**Inferred** identifies a predicted consequence. **Unknown** identifies a
+question the cited evidence does not settle. This document requests no board
+run. Use [the current handoff](handoff.md) for launch prerequisites and
+[the watchdog record](watchdog.md) for failure capture.
 
 ## Terms
 
@@ -47,9 +47,11 @@ specifies it.
   map), which decides per bus port whether non-secure software may
   reach a peripheral. Its register layout is not in the manual; BL31's use of
   it is the only reference.
-- **Stall.** A CPU load that never completes. It raises no exception, so the
-  image cannot report, the monitor's recovery timer cannot return it to the
-  ROM, and only a power removal recovers the board.
+- **SLC.** The GPU system-level cache. CPU cache maintenance alone does not
+  transfer data held in this device cache.
+- **Stall.** An access that does not complete. Ordinary CPU exception or
+  timer recovery may fail. The independent watchdog has a separate reset path;
+  a nonreturn alone does not establish a bus stall.
 
 ## References and their gaps
 
@@ -75,33 +77,32 @@ Citations without a path name these files:
 | BL31 | `monitor.fex`, SHA-256 `8af16b86…5b2632`, TF-A v2.5 debug build `7dddb263a-dirty`, loaded at `0x48000000`; offsets are file offsets |
 | SCP | `scp.fex`, SHA-256 `07e6b976…b42749`, RISC-V; offsets are file offsets |
 
-The requested references, and what they turned out to be:
+The effective vendor components are:
 
 - **Power-domain driver for the GPU PPUs.** The only one built is
-  `pck600_domains.c` (kernel config 893, `CONFIG_AW_PCK600_DOMAINS=y`), which
-  was already cached. The BSP has two other PPU drivers. `gpu_domain.c`
-  drives an older Allwinner GPU power block (compatible `allwinner,gpu-pd`,
-  power switches, isolation and a GPU power-request interrupt), and
-  `pm_domains.c` serves tv303, r528, a523 and v851. Neither is built (kernel
-  config 891–892), and no A733 device-tree node matches them. Both were
-  fetched and recorded.
-- **CCU driver.** `ccu-sun60iw2.c` and its helpers were cached; the PLL
-  enable, set-rate and lock-wait helpers are cited below.
-- **Board device tree and PMIC bindings.** The kernel dtsi and board dts were
-  cached. The AXP8191 regulator driver (`axp2101-regulator.c`, register header
-  `axp2101.h`) was fetched. The u-boot device tree of the same build
-  (`pack-uboot/sun60iw2/bin/dts/u-boot-current.dts`) was fetched; it is built
-  for a T736 demo board, registers the CORE6 domain and gives the GPU node no
-  power domain. It configures u-boot; Linux uses the kernel tree.
-- **TF-A and SCP.** Only binaries exist: `monitor.fex` (fetched) and
-  `scp.fex` (already cached). Both were disassembled. No TF-A or SCP source
-  is published for this board.
+  `pck600_domains.c` (kernel config 893, `CONFIG_AW_PCK600_DOMAINS=y`).
+  The BSP has two other PPU drivers. `gpu_domain.c` drives an older Allwinner
+  GPU block (compatible `allwinner,gpu-pd`, power switches, isolation and a
+  GPU power-request interrupt). `pm_domains.c` serves tv303, r528, a523 and
+  v851. Neither is built (kernel config 891–892), and no A733 node matches them.
+- **CCU driver.** `ccu-sun60iw2.c` and its helpers define PLL enabling,
+  rate changes and lock waits.
+- **Board device tree and PMIC bindings.** The kernel dtsi, board dts and
+  AXP8191 regulator driver (`axp2101-regulator.c`, register header `axp2101.h`)
+  define the GPU supply. The u-boot device tree of the same build
+  (`pack-uboot/sun60iw2/bin/dts/u-boot-current.dts`) is built for a T736 demo
+  board, registers CORE6 and gives the GPU node no power domain.
+  It configures u-boot; Linux uses the kernel tree.
+- **TF-A and SCP.** The pinned inputs contain binaries `monitor.fex` and
+  `scp.fex`, with behavior inventories in
+  [the vendor firmware record](vendor-firmware/README.md).
+  No source is available in the pinned inputs.
 - **Runtime PM path.** `drivers/base/platform.c`,
-  `drivers/base/power/domain.c`, `runtime.c`, `common.c` and `dd.c` were
-  fetched at the pinned kernel revision.
-- **Also fetched.** The NSI interconnect driver (`sunxi-nsi.c`), which
-  attaches a GPU bus-master device to TOP5; the SID driver for the speed-bin
-  read; and the BSP SMC call driver (`sunxi-smc.c`).
+  `drivers/base/power/domain.c`, `runtime.c`, `common.c` and `dd.c` define
+  domain attachment and runtime power management at the pinned revision.
+- **Interconnect and platform calls.** The NSI driver (`sunxi-nsi.c`) attaches
+  a GPU bus-master device to TOP5. The SID driver reads the speed bin;
+  `sunxi-smc.c` defines the BSP secure-monitor calls.
 
 Closed or unavailable:
 
@@ -118,10 +119,12 @@ Closed or unavailable:
 
 ## The vendor sequence from cold boot to firmware start
 
-SunstoneOS skips stages 1 to 3 below. It enters from the ROM's FEL mode,
-calls three boot0 functions for PMIC, clock and DRAM setup
-(`boot/a733/ddr-entry.S:44–66`), and then runs its own EL3 monitor and a
-non-secure EL1 image (`platform/a733/monitor.c:96–97`, `SCR_EL3` = `0x505`).
+The vendor chain runs boot0, BL31, SCP and Linux. SunstoneOS enters from
+ROM FEL, calls boot0 functions for PMIC, clock and DRAM setup through
+[the DDR wrapper](../boot/a733/ddr-entry.S), and uses its own EL3/EL1 images.
+The [cached EL3 boot](../platform/a733-smp-cached/boot.c) calls
+`a733_el3_security_setup()` before entering non-secure EL1. Compare each image's
+actual entry path; the vendor sequence alone does not establish inherited state.
 
 ### 1. boot0 sets no GPU state beyond a DCDC4 enable and one PLL bit
 
@@ -133,11 +136,11 @@ In the PMIC and clock function, which SunstoneOS also calls (offset `0x1fac`):
 2. It sets DCDC4's enable, AXP8191 register `0x10` bit 3 (`0x16976`–`0x16990`),
    and bit 7 of registers `0x13`–`0x1a`, which include DCDC4's voltage
    register `0x15`; bit 7 lies outside the 7-bit voltage field. DCDC4
-   therefore runs at the PMIC's power-on voltage.
+   keeps its existing voltage selector.
 3. It sets bit 24 of thirteen PLL words, the GPU PLL `0x020020e0` fourth
-   (`0x21d6`). This explains why that word reads `0x41104500` on the board,
-   where the manual gives a default of `0x40104500` (section 4.1.6.16). The
-   PLL stays disabled.
+   (`0x21d6`). This explains the earlier board snapshot's `0x41104500`,
+   where the manual gives a default of `0x40104500` (section 4.1.6.16).
+   boot0 leaves the PLL disabled; the native GPU power path enables it later.
 
 DRAM initialization (`0x2bdc`, also called by SunstoneOS) sets R_CCU
 `0x07010250` bit 0 twice, with 2 ms and 10 ms waits after (`0x4842`,
@@ -195,8 +198,7 @@ Its GPU-related work is on the resume side:
   sets enable bits 31 and 30 and then lock-enable bit 29, polls lock bit 28,
   waits, and sets bit 27 (`0x5ef4`–`0x5f80`).
 - **R_CCU `0x07010250`.** Resume clears bits 3 and 8 (`0x5e9a`, mask
-  `~0x108`). Bit 0 is left set. `docs/gpu-power.md` describes this
-  instruction as clearing bits 0, 3 and 8; bit 0 is not cleared.
+  `~0x108`). Bit 0 is left set.
 - **SMC0.** It saves and restores eight secure-region words and writes
   `+0x4`, `+0x18`, `+0x70`–`+0x84` on resume (`0x57e4`–`0x581c`,
   `0x69a2`–`0x6a40`, `0x555c`). None is GPU-specific.
@@ -306,171 +308,118 @@ On each later power-on, `RGXPostPowerState` reads `RGX_CR_TIMER`
 (`sysconfig.c:371`; `sunxi_platform.c:964–979`): SMC0 `0x0a0000b0` = 2, then
 wrapper `drm_ctrl` `0x01880014` = 0. `RGXStart` then writes
 `RGX_CR_SYS_BUS_SECURE` (`0x0180a100`) = 0 and reads it back
-(`rgxstartstop.c:859–860`), runs the soft-reset sequence (775–816), SLC,
-MIPS wrapper, AXI-ACE and BIF setup (867–945), takes the MIPS core out of
-reset (947–979) and sets `SYS_BUS_SECURE` again (984–986). The firmware is
-the DDK's `rgx.fw`.
+(`rgxstartstop.c:859–860`), runs the soft-reset sequence (775–816), initializes
+the system-level cache (SLC), MIPS wrapper and AXI-ACE interface (867–945),
+then releases the MIPS GARTEN reset (947–979).
 
-## The GPU driver itself powers CORE6, and nothing waits for it
+The Bus Interface (BIF) initialization routine returns without register programming for MIPS
+(`rgxstartstop.c:643–657`). Firmware boot uses MIPS boot/data/exception remaps
+and the BRN 63553 address-zero remap (`rgxstartstop.c:287–456`). FWCORE_BOOT
+programming belongs to the RISC-V path. The final `SYS_BUS_SECURE` enable is
+conditional on `SUPPORT_TRUSTED_DEVICE` without `SUPPORT_SECURITY_VALIDATION`
+(`rgxstartstop.c:983–986`). The selected BXM `config_kernel.h` does not enable
+trusted-device support, so that enable is absent in this build.
 
-The CORE6 writers are:
+The DDK uses its own `rgx.fw` and firmware ABI. SunstoneOS uses the pinned open
+firmware container; its structures and command identifiers follow that interface.
+Generic upstream confirms the MIPS BIF exclusion and remaps
+(`pvr_fw_startstop.c:173`, `pvr_fw_mips.c:97` at the revision below).
 
-- **Kernel GPU driver.** `sunxi_platform.c` writes CORE6 PWCR 0 and policy 8
-  at probe (72–91, 915–916), policy 8 on each power-on (352) and policy 0 on
-  each power-off (377). It never reads CORE6.
-- **Kernel PPU driver.** `pck600_domains.c` would drive CORE6 like TOP5 if
-  its node were present, but the node and its test node are commented out
-  (`sun60iw2p1.dtsi:769–773, 3416–3422`). The older `gpu_domain.c`, which
-  sequences GPU power switches itself, is not built (kernel config 891).
-- **boot0 and BL31.** No access to the PCK-600.
-- **SCP.** Only on resume from system suspend: policy 8 into every row, with
-  CORE6's status poll skipped (`0x5ec6`). Nothing at cold boot.
+## Current power sequencing matches the vendor operating point
 
-No reference shows CORE6 status reaching 8, and no reference reads the GPU
-core with CORE6 acknowledged, because no reference reads CORE6 status at all.
+**Observed:** `a733_gpu_power.c:on_steps` clears CORE6 PWCR, enables and locks
+PLL_GPU0, releases bus reset, opens bus/core gates, selects 1008 MHz and
+requests TOP5/CORE6 ON. It requires CORE6 status 8 before engine access.
+This follows the vendor's later power-on ordering
+(`sunxi_platform.c:342–352`), with an additional acknowledgement check.
+The vendor probe's initial order remains documented in section 5 above.
 
-## Clock, supply and secure state remain different after four board runs
+**Observed:** the supply provider accepts or raises DCDC4 to 960 mV and waits
+for settlement (`a733_gpu_platform.c:supply_raise`). The firmware clock field
+is set to 1008 MHz by `a733_gpu_backend_bind()` in
+[the backend](../platform/a733/gpu_backend.c). Clock source and supply are
+resolved differences for this path; they do not identify the current failure.
 
-The SunstoneOS sequence is the power-only ON of
-`drivers/gpu/a733_gpu_power.c:29–77` with its resource admission in
-`drivers/gpu/a733_gpu_resources.c:95–118`, plus the variant clients in
-`apps/gpu-power-id/`. The board records are:
+**Observed board scope:** standalone firmware start/health/stop/restart,
+eight compute jobs and two exact-sum shapes pass under their frozen inputs.
+The [handoff history](handoff-history-20261031.md#qualified-on-the-boards) indexes
+those records, including `sol-resume-20261028/port-3-1/gpu-exact-sum/` under
+`~/.cache/sunstoneos/evidence/`. Complete GPU recognition and non-idle recovery remain open.
 
-| Set | Session | Image and change | Result |
-| --- | --- | --- | --- |
-| `board-bundles-20261024-11` | `board-session-20261024-11/port-3-1` | power-only ON with the CORE6 delay row (`ade71834`) | Returned; CORE6 status 0 throughout; snapshot shows PLL_GPU0 `0x41104500` (disabled), `0xb20` `0x83000000` |
-| `board-bundles-20261024-14` | `board-session-20261024-14/port-3-1` | power-only ON, then four wrapper reads | Returned; wrapper answers with TOP5 ON and CORE6 at 0 |
-| `board-bundles-20261025-3` | `board-session-20261025-1/port-3-1` | power-only ON, wrapper `+0x14`/`+0x10`, SMC0 `+0xb0`, then the identity as two 32-bit loads (bundle 17) | Did not return within 925 s; no write made |
-| `board-bundles-20261025-4` | `board-session-20261025-3/port-3-1` | vendor clock and reset order, identity only (`3615f340…`, bundle 18) | Did not return: the host recorded "FEL did not return with access before the deadline" at 10:40:22 |
+## The firmware-only diagnostic stops in its compatibility callback
 
-`s7-ddr` and the provider-readiness run (`s9-gpr-run`) passed earlier in the
-last lifetime. The last two rows differ in the reads before the identity and
-in the clock and reset order; both stalled. The identity read itself, with
-CORE6 unacknowledged, 400 MHz from PERI0, 800 mV and no secure setup, is
-therefore the common stalling access.
+The recorded `ladder-wdt3/2-firmware` image on port 3-1 stopped in `compat()`
+at `platform/a733/gpu_backend.c:375` in that frozen build. The first-failure
+record retains caller `0x41088a50` and value `0x04040201`. Evidence is under
+`~/.cache/sunstoneos/evidence/dev-runs-1031/3-1-gpu-return-204909/` in
+`dev-run.json` and `run/watchdog-report.json`.
 
-Divergence classes: **missing step** (the reference does it, we do not),
-**order**, **value**, **missing wait**, **extra step** (we do it, the
-reference does not). Risk is the likelihood that the difference causes the
-stalled identity read.
+That diagnostic comes from the unmerged GPU-reference branch. Its line numbers
+and behavior do not describe the merged backend. The stop localizes the
+callback; it does not prove a firmware ABI mismatch or a workload page fault.
+Diagnosis remains in progress. The omissions below describe the merged code.
 
-| Reference step | Citation | Our step | Citation | Class | Risk |
-| --- | --- | --- | --- | --- | --- |
-| GPU PLL enabled (840 MHz, lock polled) before the core clock | `sunxi_platform.c:172–173`; `ccu_gate.c:157–203` | GPU PLL left disabled | `a733_gpu_power.c:64–67`; set-11 snapshot `0x0e0` = `0x41104500` | missing step | high |
-| Core clock opened on source 0, the GPU PLL, then the PLL set to 1008 MHz | `sunxi_platform.c:212–220, 922, 405–417`; `ccu_nm.c:250–345` | Core clock on source 3, PERI0 400 MHz | `a733_gpu_power.c:64–67`; `a733_gpu_power.h:7` | value | high |
-| DCDC4 960 mV, then 1 ms ramp and 200 µs, before TOP5 and CORE6 | `sunxi_platform.c:899–901, 473–485`; `sun60iw2p1.dtsi:4739` | DCDC4 checked at the power-on 800 mV, unchanged | `a733_gpu_power.h:8`; `a733_gpu_resources.h:76` | value, missing wait | high |
-| SPC ports set non-secure at EL3 | BL31 `0xc3b8` | No SPC write | `platform/a733/monitor.c:96–97` (no security setup in the tree) | missing step | medium (wrapper reads in the same window returned) |
-| `CCMU_SEC_SWITCH_REG` = 7, so PLL, bus and MBUS registers accept non-secure writes | BL31 `0xc3b8`; manual 4.1.6.278, 4.1.6.16 | Not written; all GPU clock writes are non-secure EL1 | `platform/a733/monitor.c:96–97` | missing step | high, as the prerequisite of the GPU PLL rows |
-| R_PRCM `0x07010290` \|= 7, R_SPC and R_TZMA writes | BL31 `0xc3b8` | Not written | none | missing step | medium |
-| SCP firmware loaded and running | BL31 `0xae88` (on request) | SCP never started | none | missing step | low (its cold start touches no GPU state) |
-| CORE6 PWCR 0, policy 8, no status read | `sunxi_platform.c:915–916` | Same writes; status observed but not required | `a733_gpu_power.c:58–63, 76` | none | not a divergence; status 0 in every run |
-| CORE6 delay row never written | `sun60iw2p1.dtsi:769–773` | Five delay writes and readbacks of the values held from reset | `a733_gpu_power.c:47–56` | extra step | low (set 11: inert) |
-| Reset deasserted, then bus gate, then core gate | `sunxi_platform.c:202–215` | Gates, 1 µs, then reset; reordered in the vendor-clk variant | `a733_gpu_power.c:64–72`; `vendor-clk-power.c:65–72` | order | low (set `20261025-4` used the vendor order and still stalled) |
-| Identity read as two 32-bit loads | `osfunc.h:1086–1095` | One 64-bit load in `fd3d5839`; two 32-bit loads since | `main.c:127–139`; `probe-read.c:64–79`; `vendor-clk.c:35, 54` | value | low (both later forms stalled) |
-| No access before the identity read | `rgxbvnc.c:694` | Wrapper `+0x14`, `+0x10` and SMC0 `+0xb0` read first | `probe-read.c:64–67` | extra step | low (set `20261025-4` stalled without them) |
-| No wait for CORE6 before the identity read | `sunxi_platform.c:915–922` | 200 ms observation of CORE6 status | `vendor-clk.c:75–80` | extra step | low |
-| TOP5 ON from reset, recorded ON | `pck600_domains.c:283`; `domain.c:2067` | Owner adopts the inherited ON | `docs/gpu-power.md` (owner) | none | low |
-| PPU clock R_CCU `+0x1ac` on | `pck600_domains.c:476` | Checked on | `a733_gpu_power.c:32` | none | low |
-| PERI0 outputs enabled | `sunxi_platform.c:177–198` | PERI0 400 MHz checked on, through the shared lease | `a733_gpu_resources.c:99–118` | none | low |
-| Normal-boot NSI writes after DRAM init | boot0 `0x1f38` | Skipped (FEL path) | `ddr-entry.S:44–66` | missing step | low (QoS words of memory ports) |
-| SMC0 `+0xb0` = 2 and `drm_ctrl` = 0 before `RGXStart` | `sunxi_platform.c:964–979` | Not in the firmware start | `pvr_gpu_start.c:92` | missing step | none for the identity read; required at firmware start |
-| DDK firmware `rgx.fw` | `config_kernel.h:2` | Open firmware `rogue_36.56.104.183_v1.fw` | `docs/gpu.md:92` | value | none for the identity read |
+## The service omits steps present in the standalone probe
 
-## The GPU clock source ranks first among the divergences
+The October 31 analysis compares native source with the selected DDK and
+upstream Imagination driver at
+`cbbddb6b08cc9900a87cccaa9b22bbe06aa4f50a`.
+Its cached upstream root is
+`~/.cache/sunstoneos/evidence/ref-gpu-hang-1031/linux/drivers/gpu/drm/imagination/`.
+The following omissions are also present in this checkout. Paths and symbols
+identify current code; upstream line citations use that pinned source.
 
-1. **The GPU PLL and the core clock source.** In every board run the GPU PLL
-   was disabled and the core ran from PERI0. The vendor never reads the core
-   without the GPU PLL running. The manual ties GPU clock updates to a
-   request and acknowledge handshake with the GPU (4.1.6.121, bit 27), so
-   GPU-side logic takes part in clock selection. If any GPU-side power or
-   Q-Channel logic is clocked from the GPU PLL directly, a disabled PLL
-   leaves CORE6's handshake unanswered and the core window unpowered, which
-   matches CORE6 status 0, `PPU_MISR` 0 and a stalled read. This is an
-   inference from register behaviour; no reference states the clock tree
-   inside the GPU.
-2. **The secure setup.** Linux reads the GPU from non-secure EL1 only after
-   BL31 has opened every SPC port but one bit. SunstoneOS's reads of the GPU
-   wrapper inside the same window returned, which argues that the wrapper's
-   port is already non-secure; the SPC granularity inside the GPU window is
-   not documented, so the core registers may sit behind another port. The
-   clock-controller switch matters regardless: without bit 0, the PLL rows
-   above may be ignored when written from non-secure EL1.
-3. **The supply.** 800 mV is the dtsi's voltage for 400 MHz
-   (`sun60iw2p1.dtsi:4655`, `opp@400000000`), so it is in specification for our
-   clock. It ranks below the clock because no reference ties CORE6's power
-   switches to a supply level, but the vendor never brings the GPU up at
-   800 mV, and the user has approved the change.
-4. **The SCP firmware.** Low. Its cold start, the only part that precedes
-   the vendor's identity read, touches no PCK, PLL or GPU state.
-5. **Everything else** is ruled out by board records or is inert: reset
-   order and the extra reads by set `20261025-4`, the delay row by set 11,
-   the access width by sets `20261025-3` and `20261025-4`.
+| Boundary | Observed current behavior | Reference and inferred consequence |
+| --- | --- | --- |
+| Health completion | `drivers/gpu/pvr_gpu_service.c` calls `pvr_gpu_control_init()` but never binds `pvr_gpu_control_count_executed()`. Without the callback, the control requires a health return word of 1. | The standalone `apps/gpu-power-id/fw-start.c` binds executed-count completion. Upstream `pvr_power.c:165–196` checks executed progress and submits HEALTH_CHECK without a return-slot waiter. **Inferred:** firmware can start and execute health while service startup times out before any job. |
+| Vendor secure writes | `platform/a733/gpu_backend.c:power_poll` proceeds from identity/capability checks to active state without `0x0a0000b0=2`, then `0x01880014=0`. | DDK `sunxi_platform.c:964–979` and standalone `fw-start.c:secure_config` perform these ordered 32-bit writes. **Inferred:** missing secure preparation can block firmware memory access. Its necessity in inherited board state is **unknown**. |
+| Initial timer correlation | The backend publishes clock/timer correlation during later performance changes, without an initial sample before boot. | DDK `rgxpower.c:1010–1037` and standalone `fw-start.c` publish the initial correlation before firmware start. **Inferred:** missing correlation can affect timing interpretation; evidence for a permanent stall is weaker. |
+| MMU-cache invalidation | `drivers/gpu/pvr_gpu_flush.c` implements MMUCACHE, command 102, but the service never invokes it before the first workload. CPU cleaning publishes tables without invalidating GPU translation caches. | DDK `rgxfwutils.c:4065`, upstream `pvr_job.c:742` and `pvr_mmu.c:147`, and standalone `fw-job.inc:367` perform pre-job invalidation. **Inferred:** stale translations can fault the first job independently of page size. |
+| SLC ownership | `platform/a733/gpu_mimus.c` keeps device caching enabled for shared job, arena and output mappings. `pvr_compute_mimus.c` performs CPU cache maintenance without a device-SLC ownership transfer. | DDK `rgxcompute.c:1283` supports SLC flush. Upstream `pvr_mmu.c:2601` and standalone `fw-job.inc:158` support bypass. **Inferred:** output can remain stale after timeline progress, or later jobs can reuse stale arguments. |
+| Workload page sizes | `platform/a733/gpu_mimus.c` uses shift 21, meaning 2 MiB, for models, arena and output. Firmware separately uses flat 4 KiB MIPS translations. | DDK `rgxinit.c:4948` rejects 1 MiB and 2 MiB workload pages for BRN 71317. The analysis branch uses 256 KiB; upstream implements 4 KiB and 64 KiB (`pvr_mmu.c:33`). **Inferred:** workload accesses can fault even after successful firmware boot. |
+| Register access | The backend uses 64-bit MMIO for 64-bit operations and reads additional capability registers before firmware start. | DDK `osfunc.h:1086–1095` and the successful standalone probe split accesses into 32-bit halves; generic upstream uses `ioread64`. A733 behavior for the backend's accesses is **unknown**. |
+| Close and failure | `pvr_gpu_service.c` omits legacy application context CLEANUP 106; failure retains ownership. `pvr_gpu_stop.c` requires idle before power removal. | Upstream `pvr_queue.c:1118` cleans contexts; standalone `fw-start.c` has bounded idle-checked recovery. **Inferred:** an ordinary timeout can prevent return without a bus hang. Timeout does not prove drain. |
 
-## The next image applies the vendor's state at once
+The health omission has direct earlier board evidence:
+`~/.cache/sunstoneos/evidence/board-session-20261025-18/port-3-1/s18-gfx-run/kernel.log`
+records executed count 1 with return word 0 and a health timeout.
+That observation supports a service-startup prediction; it does not establish
+the cause of the later complete-image nonreturn.
 
-### Contents
+## Firmware and job interfaces must follow the selected ABI
 
-The image keeps the vendor-clk variant's structure (power-only ON, CORE6
-observation, two 32-bit identity loads, exit with the GPU left powered) and
-changes these steps, in this order:
+**Observed:** the native loader validates and stages ELF segments and zero tails
+within a 16 MiB firmware heap at `0xc0000000` (`pvr_firmware.c`, `pvr_fw_state.c`).
+Connection, OS-init and system-init occupy `0xc0fd0000`, `0xc0fe0000` and
+`0xc0ff0000`. MIPS boot remaps and flat firmware translations are independent
+of the GPU catalogue/directory/leaf tables used by workloads.
 
-1. **At EL3, before entering non-secure EL1:** BL31's security writes of
-   section 2: the SPC port words, R_SPC, R_PRCM `0x07010290` \|= 7 and CCU
-   `0x02003f00` = 7. Read back `0x02003f00`. The R_TZMA words, the DMA words,
-   the unidentified CCU `0x2800`/`0x2850` writes and the timer write are left
-   out: none concerns a peripheral that the image reads, and R_TZMA governs
-   secure memory, which the GPU identity read does not use.
-2. **DCDC4 to 960 mV:** register `0x15` field `0x7f` = `0x2e`, keeping bit 7;
-   read back; wait 1.2 ms. This replaces the 800 mV admission check of
-   `a733_gpu_resources.c` for this image only.
-3. **TOP5** adopted ON, as today.
-4. **CORE6** PWCR 0 then policy 8, as today, without the delay row.
-5. **GPU PLL enable** at the inherited factors, by the helper sequence of
-   section 5 step 5.1, with the lock poll bounded at 100 reads 3 µs apart and
-   its result recorded.
-6. **Reset, bus gate, core gate** in the vendor order, with `0xb20` written
-   as gate bit 31, source 0, divider 0 and update bit 27; read back until
-   bit 27 clears, bounded; then the read-modify-write of bit 27.
-7. **GPU PLL to 1008 MHz** by the set-rate sequence of section 5 step 6;
-   expected word `0xe9105300`, lock recorded.
-8. **CORE6 observation** of at most 200 ms, recorded, not required.
-9. **Identity:** `0x01800024`, then `0x01800020`.
+**Observed:** the kernel command ring has 128 slots; the firmware ring has
+32 slots. Both use 88-byte commands (`include/pvr_ccb.h`). The legacy application
+submits COMPUTE 205 and UPDATE 213 before KICK 101, then schedules through
+`0x01800b00=0`
+(`pvr_mimus_service.c`, `pvr_cccb.c`, `pvr_ccb.c`). Context creation publishes
+objects and pointers; no separate CREATE command is missing. Completion uses
+the timeline, with IRQ status/clear at `0x8a8/0x8b0` (`pvr_gpu_control.c`).
+Timeline progress alone does not establish correct output or safe retirement.
 
-The vendor's own TOP5-before-voltage order is not reproduced: TOP5 is ON
-from reset in both stacks, so raising DCDC4 first changes no domain state.
+**Observed:** the DDK lists errata BRN 63553 and BRN 71317. Open-firmware
+metadata additionally advertises BRN 44079 and enhancements with different
+bit numbering.
+The analysis directory's `firmware-metadata.json` and
+[the container inventory](vendor-firmware/data/gpu-firmware-container.json)
+retain the decode and image hash. **Unknown:** whether native shader allocations
+reach the resource limits associated with those additional flags.
 
-### One image tests the reference state, where single variables have not
+## Compatibility must succeed before health or workload diagnosis
 
-- **Each run costs a lifetime.** A stall leaves no report, keeps the host
-  waiting for its deadline and needs the user's power removal, which is
-  available every several hours. The GPU runs of sets 11, 14, `20261025-3`
-  and `20261025-4` used four lifetimes. Each changed one difference, and the
-  last two stalled with the clock, supply and secure state unchanged.
-- **The reference state is the only one known to read the identity.**
-  Vendor Linux reads it on these boards with all three differences removed.
-  If an image that matches that state returns the identity, the remaining
-  SunstoneOS state is adequate. That run is then a returning baseline, and
-  later images can drop one change at a time without risking a stall. If it
-  stalls, the cause lies outside the GPU sequence, in state that SunstoneOS
-  still does not reproduce, such as the BL31 writes left out above or the
-  vendor's DRAM-controller configuration.
-- **The three changes are coupled.** The vendor never runs the GPU at
-  1008 MHz below 960 mV, and the PLL writes may need the clock controller's
-  security switch. Testing the clock without the voltage or the switch would
-  either run the GPU out of its operating point or test writes that may be
-  ignored.
+The frozen firmware-only diagnostic currently stops in the compatibility
+callback. Resolve that boundary before interpreting its later health or
+workload stages. The earlier executed-count/return-slot evidence still supports
+the health-binding gap in the merged service; it does not identify this stop.
 
-### Prerequisites and open points
-
-- The user's approval covers the GPU clock and voltage. The EL3 security
-  writes change the monitor that every image shares; they need the
-  coordinator's acceptance for this image's monitor build.
-- Whether non-secure EL1 can write PLL_GPU0 is unknown. The image reads
-  `0x02003f00` and the PLL word after each write and stops before the
-  identity read if the PLL word did not take, so a refused write ends the
-  run with a report instead of a stall.
-- The image adds a GPU PLL owner. The resource manager must hold the PLL and
-  the DCDC4 change as GPU-exclusive for the image's lifetime.
-- Performance budget: the additions cost about 40 register accesses, one
-  PMIC write and readback, at most two 300 µs lock polls and a 1.2 ms supply
-  wait, once per lifetime.
+Only after startup succeeds can a 256 KiB versus 2 MiB comparison test
+BRN 71317. A shared startup failure is uninformative about page size.
+First-job failures also leave the MMUCACHE and SLC ownership gaps unresolved.
+Fixes remain outside the merged code. The [handoff](handoff.md#open-branches)
+lists the active branches without granting their artifacts board authority.

@@ -125,6 +125,7 @@ static void setup(void)
     session_end = pm.now + 1500000;
     failed = NULL;
     submissions = completions = changes = writes = clock_reads = late_clock = bad_readback = late_settle = fail_final = 0;
+    cpu_rail_state.rail = cpu_rail_state.stage = 0;
 }
 static void change(unsigned d, unsigned from, unsigned to)
 {
@@ -133,7 +134,7 @@ static void change(unsigned d, unsigned from, unsigned to)
     struct a733_pmic_snapshot snapshot;
     cpu_rail_change((enum a733_cpu_domain)d, from, to, &snapshot);
     assert(snapshot.programmed_uv == to * 1000 && submissions == 3 && completions == 3);
-    assert(!held(clocks(d)));
+    assert(!held(clocks(d)) && cpu_rail_state.stage == CPU_RAIL_IDLE);
 }
 static void restore(void)
 {
@@ -178,10 +179,50 @@ int main(int argc, char **argv)
     change(A733_CPU_BIG, 800, 1050);
     assert(writes == 1 && pm.pmic[0x14] == 0xb7 && pm.pmic[0x16] == 0xb2);
     puts("PASS existing DCDC3 raise with CPU-L and the DSU at top rates");
+    /* Bundle 33 entries. The application skips a rail already at 800 mV,
+     * so each case calls the helper only for the rails above it. */
+    static const struct { const char *name; uint8_t dcdc5, dcdc3; unsigned five_from, three_from; } entries[] = {
+        {"1000/1050", 0xb2, 0xb7, 1000, 1050}, {"800/1050", 0x9e, 0xb7, 0, 1050},
+        {"1000/800", 0xb2, 0x9e, 1000, 0}, {"900/950", 0xa8, 0xad, 900, 950}, {"800/800", 0x9e, 0x9e, 0, 0}};
+    for (unsigned c = 0; c < sizeof(entries) / sizeof(*entries); ++c) {
+        setup(); pm.pmic[0x16] = entries[c].dcdc5; pm.pmic[0x14] = entries[c].dcdc3;
+        assert(!setjmp(failure));
+        if (entries[c].three_from)
+            change(A733_CPU_BIG, entries[c].three_from, 800);
+        if (entries[c].five_from)
+            change(A733_CPU_LITTLE, entries[c].five_from, 800);
+        const unsigned expected = !!entries[c].three_from + !!entries[c].five_from;
+        assert(!failed && writes == expected && changes == expected && pm.pmic[0x14] == 0x9e && pm.pmic[0x16] == 0x9e);
+        assert(!entries[c].three_from || written_rails[0] == 0x14);
+        printf("PASS entry DCDC5/DCDC3 %s mV: %u selector writes, both rails 0x9e\n", entries[c].name, writes);
+    }
+    /* Targets the helper refuses before any lease or bus request: no change,
+     * above the bin's top point on either rail, off the 10 mV grid. */
+    static const struct { unsigned domain, from, to; } bad[] = {
+        {A733_CPU_BIG, 800, 800}, {A733_CPU_LITTLE, 800, 800}, {A733_CPU_BIG, 1060, 800},
+        {A733_CPU_LITTLE, 1010, 800}, {A733_CPU_LITTLE, 1050, 800}, {A733_CPU_BIG, 905, 800},
+        {A733_CPU_DSU, 1000, 800}, {A733_CPU_LITTLE, 800, 1000}};
+    for (unsigned c = 0; c < sizeof(bad) / sizeof(*bad); ++c) {
+        setup();
+        if (!setjmp(failure)) {
+            active_domain = bad[c].domain;
+            struct a733_pmic_snapshot snapshot;
+            cpu_rail_change((enum a733_cpu_domain)bad[c].domain, bad[c].from, bad[c].to, &snapshot);
+            assert(!"target must be refused");
+        }
+        assert(failed && !strcmp(failed, "CPU rail target") && !writes && !changes && !submissions);
+        assert(!held(clocks(A733_CPU_BIG)) && !held(clocks(A733_CPU_LITTLE)));
+        assert(pm.pmic[0x14] == 0xb7 && pm.pmic[0x16] == 0xb2);
+    }
+    printf("PASS %u refused targets: no lease, request or selector write\n", (unsigned)(sizeof(bad) / sizeof(*bad)));
+    /* Each request names its own failure, so a log says whether the write
+     * was submitted; stages: 1 read, 2 write, 3 settle, 4 final. */
     static const char *const reasons[] = {"CPU rail boot clocks", "CPU rail boot clocks", "CPU rail before write",
-        "CPU rail result", "CPU rail result deadline", "CPU rail settle deadline", "CPU rail after settle",
-        "CPU rail boot clocks", "CPU rail boot clocks", "CPU rail clock lease"};
-    for (unsigned c = 0; c < 10; ++c) {
+        "CPU rail write result", "CPU rail read result deadline", "CPU rail settle deadline", "CPU rail after settle",
+        "CPU rail boot clocks", "CPU rail boot clocks", "CPU rail clock lease", "CPU rail write result",
+        "CPU rail settle deadline", "CPU rail after settle", "CPU rail before write", "CPU rail boot clocks"};
+    static const unsigned stages[] = {1, 2, 1, 2, 1, 3, 4, 1, 2, 1, 2, 3, 4, 1, 2};
+    for (unsigned c = 0; c < sizeof(reasons) / sizeof(*reasons); ++c) {
         setup();
         switch (c) {
         case 0: *pmic_model_word(&pm, 0x08872000) = 0xf8804d00; break;
@@ -198,17 +239,33 @@ int main(int argc, char **argv)
             assert(a733_clock_acquire(&pm.clocks, 99, 0, A733_CLOCK_CPU_DSU, session_end, &other) == A733_CLOCK_OK);
             break;
         }
+        /* DCDC5 with DCDC3 already lowered: readback mismatch, settle
+         * deadline, changed final snapshot, entry other than the caller's
+         * reading, and CPU-L leaving its boot word before the write. */
+        case 10: bad_readback = 1; break;
+        case 11: late_settle = 1; break;
+        case 12: fail_final = 1; break;
+        case 13: pm.pmic[0x16] = 0xa8; break;
+        case 14: late_clock = 0x08871000; break;
         }
+        const int five = c >= 7;
+        if (c >= 10)
+            pm.pmic[0x14] = 0x9e;
+        const uint8_t dcdc5 = pm.pmic[0x16];
         if (!setjmp(failure)) {
-            if (c >= 7)
+            if (five)
                 change(A733_CPU_LITTLE, 1000, 800);
             else
                 restore();
             assert(!"fault must stop the sequence");
         }
-        assert(failed && !strcmp(failed, reasons[c]) && changes == 1);
-        assert(writes == (c == 3 || c == 5 || c == 6));
-        assert(pm.pmic[0x16] == 0xb2);
+        const int wrote = c == 3 || c == 5 || c == 6 || c == 10 || c == 11 || c == 12;
+        assert(failed && !strcmp(failed, reasons[c]) && changes == 1 && cpu_rail_state.stage == stages[c]);
+        assert(cpu_rail_state.rail == (five ? A733_RAIL_DCDC5 : A733_RAIL_DCDC3));
+        assert(writes == (unsigned)wrote && (!wrote || written_rails[0] == (five ? 0x16 : 0x14)));
+        /* An unwritten DCDC5 keeps its entry selector; a written one holds
+         * the readback the model produced (0x9f for a mismatch). */
+        assert(five && wrote ? pm.pmic[0x16] == (c == 11 ? 0x9e : 0x9f) : pm.pmic[0x16] == dcdc5);
         printf("PASS fault %u: %s, selector_writes=%u\n", c, failed, writes);
     }
     return 0;

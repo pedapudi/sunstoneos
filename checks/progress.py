@@ -28,6 +28,33 @@ class Check(unittest.TestCase):
         self.queue = self.root / 'queue.sqlite3'
         self.view = progress.Progress(self.root, {'3-1': self.queue})
 
+    def test_application_display_comes_from_a_declaration(self):
+        first = json.loads(self.view.snapshot()[0])
+        self.assertIsNone(first['application']['document'])
+        record = self.root / 'apps/checksum/source.json'
+        record.parent.mkdir(parents=True)
+        document = self.root / 'docs/checksum.md'
+        document.write_text('# Checksum evidence\n\nThe checksum fixture passes.\n')
+        declaration = {'application_directory': 'sunstoneos',
+                       'dashboard': {'title': 'Checksum application', 'document': 'docs/checksum.md'}}
+        record.write_text(json.dumps(declaration))
+        current = json.loads(self.view.snapshot()[0])
+        self.assertEqual(current['application']['title'], 'Checksum application')
+        self.assertEqual(current['application']['document'], 'docs/checksum.md')
+        self.assertIn('checksum fixture passes', current['application']['summary'])
+        declaration['dashboard']['title'] = 'Renamed checksum application'
+        record.write_text(json.dumps(declaration))
+        changed = json.loads(self.view.snapshot()[0])
+        self.assertEqual(changed['application']['title'], 'Renamed checksum application')
+        self.assertNotEqual(current['revision'], changed['revision'])
+        declaration.pop('application_directory')
+        record.write_text(json.dumps(declaration))
+        self.assertIsNone(json.loads(self.view.snapshot()[0])['application']['document'])
+        declaration['application_directory'] = 'sunstoneos'
+        declaration['dashboard']['document'] = '../outside.md'
+        record.write_text(json.dumps(declaration))
+        self.assertIsNone(json.loads(self.view.snapshot()[0])['application']['document'])
+
     def test_inventory_and_evidence(self):
         rows, parser = progress.parse_hardware((ROOT / 'docs/hardware.md').read_text())
         inventory_text = (ROOT / 'docs/hardware.md').read_text().split('| Hardware |', 1)[1].split('\n\n', 1)[0]

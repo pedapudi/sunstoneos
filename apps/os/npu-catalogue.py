@@ -14,12 +14,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 MODELS = ROOT / 'apps/os/npu-models.json'
 
-def models():
-    """The OS application's catalogue entries, in model-list order."""
+def catalogue_tool():
+    """Load the shared catalogue and historical artifact-map compatibility."""
     spec = importlib.util.spec_from_file_location('npu_session_catalogue', ROOT / 'tools/npu-session-catalogue.py')
     tool = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(tool)
-    return tool.application_models([MODELS])
+    return tool
+
+def models():
+    """The OS application's catalogue entries, in model-list order."""
+    return catalogue_tool().application_models([MODELS])
 
 def generate(artifacts, output, model=0):
     catalogue = models()
@@ -36,7 +40,8 @@ def generate(artifacts, output, model=0):
         text += f'static const uint8_t {name}[{len(data)}] __attribute__((aligned(64),section(".data.os_npu_assets")))={{' + ','.join(map(str, data)) + '};\n'
         return data
     selected = catalogue[model]
-    data = blob('model_0', paths[selected['name']]['model'], selected['model'])
+    files = catalogue_tool().artifact_files(paths, selected['name'])
+    data = blob('model_0', files['model'], selected['model'])
     rows.append('{model_0,sizeof(model_0)}')
     digests += hashlib.sha256(data).digest()
     text += 'const struct npu_runtime_model os_npu_models[OS_NPU_MODELS]={' + ','.join(rows) + '};\n'
@@ -45,7 +50,7 @@ def generate(artifacts, output, model=0):
         rows = []
         for i, tensor in enumerate(selected[field]):
             name = f'{section}_{i}'
-            blob(name, paths[selected['name']][section][i], tensor['reference'])
+            blob(name, files[section][i], tensor['reference'])
             rows.append(f'{{{name},sizeof({name})}}')
         text += f'const struct os_npu_vector os_npu_{section}[]={{' + ','.join(rows) + '};\n'
         symbol = 'input' if section == 'inputs' else 'output'

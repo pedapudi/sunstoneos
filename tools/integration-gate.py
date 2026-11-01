@@ -79,7 +79,8 @@ def external_applications(source, paths):
 def compatibility_variables(source):
     """Optional application source records define legacy NAME_DIR selectors."""
     return [path.parent.name.upper().replace('-', '_') + '_DIR'
-            for path in sorted((source / 'apps').glob('*/source.json'))]
+            for path in sorted((source / 'apps').glob('*/source.json'))
+            if 'application_directory' in json.loads(path.read_text())]
 
 
 def tree_state(source):
