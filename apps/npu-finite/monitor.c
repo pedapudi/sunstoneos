@@ -55,6 +55,9 @@ void sd_single_core_monitor_init(void)
     /* Borrow only a disabled, inactive, nonpending virtual timer. Capture
      * before the base monitor clears PPIs, so inherited work remains visible. */
     deadline_installed=0;
+    uint64_t control;
+    __asm__ volatile("mrs %0,cntv_ctl_el0":"=r"(control));
+    if(control&1)finish(4);
     if((mmio_read(GICR_SGI+0x100)|mmio_read(GICR_SGI+0x200)|
         mmio_read(GICR_SGI+0x300))&ppi)finish(4);
     const uint32_t priorities=mmio_read(GICR_SGI+0x418);
