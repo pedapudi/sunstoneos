@@ -160,6 +160,19 @@ size_t ss_heap_peak(void);
  * a container header); 0: in progress; -1: refused or ended. */
 #define SS_CAPTURE_HEADROOM 64u
 int ss_capture(uint32_t sequence, void **pcm, size_t *bytes);
+/* Select recorded raw PCM from an authenticated INPUT region, starting at its
+ * byte offset (for example, after a WAV header). No capture device may be
+ * granted. The manifest supplies the format and reserves output storage.
+ * frames is the window size within min_frames..max_frames. A shorter final
+ * window is delivered only if it still meets min_frames. paced is 0 or 1.
+ * One application task opens replay once, then calls ss_capture with consecutive
+ * sequences starting at 1. Results are copied into capture storage with writable
+ * headroom. Repeating a completed sequence returns the same bytes. The next
+ * sequence releases that output; earlier sequences are then refused.
+ * Pacing starts at the first request and follows cumulative frame duration.
+ * A late consumer catches up to that clock. No wait, device or sample conversion
+ * occurs inside this call. 1 opened, 0 refused; ss_capture returns -1 at EOF. */
+int ss_capture_replay_open(uint32_t region, uint64_t offset, uint32_t frames, uint32_t paced);
 /* Host channel. A request carries an operation number inside the manifest's
  * range. The OS passes the next request only after the USB transfer of the
  * previous reply has completed, so each request also confirms delivery of

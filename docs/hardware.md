@@ -1437,8 +1437,18 @@ to the stated scope:
   a finite period's queue wakes the DMA worker at once; an emulator check
   passes. The [integrated OS image](os-image.md) captures recognition input
   through the same receive path in its microphone build.
-  Physical continuity, playback, wire drain, cache visibility, Bluetooth PCM
-  routing and broader audio functions remain unqualified or required work.
+  The OS capture adapter also accepts guarded cyclic staging without exposing
+  raw DMA pages. Its host checks cover copied bytes, failure retention and
+  reopening. Actual FreeRTOS/provider cases keep a busy canceled writer in
+  DRAINING, keep a held copy readable through overrun and refuse stale tickets
+  after both duplex directions close and reopen. Generic recorded/paced PCM
+  uses the same capture output/headroom through the application kit with no
+  granted device or mimus dependency; sanitizer, AArch64 and full native image
+  checks pass. Evidence: `~/.cache/sunstoneos/build/audio-1031/frozen/README.md`.
+  These are software results. Physical continuity, playback, wire drain, cache
+  visibility, Bluetooth PCM routing and broader audio functions remain
+  unqualified or required work. No audio image is admitted to the new returning
+  probe runner until its retained resources and monitor lifetime are converted.
 - G2D: **implemented** one retained fill, source-copy, source-over-solid, exact 2× enlargement, general scaling or
   image-over-image operation per session through the [native application](g2d.md), with copy and scaling
   converting between the eight 32-bit RGB channel orders. Caller geometry is bounded

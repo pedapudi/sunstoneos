@@ -112,7 +112,7 @@ The component documents identify source files and narrower evidence boundaries.
 | SPI, PWM and ADC | **Implemented:** native paths, including SPI3 DMA; physical transfer, waveform and sampling qualification remains open. | [SPI](spi.md), [PWM](pwm.md), [ADC](adc-application.md) |
 | RTC and thermal | **Implemented:** time/alarm and thermal services. RTC notifications after completion or failure are refused before callbacks; focused sanitizer and linked checks pass. Retained watchdog breadcrumbs are board-verified; alarm, throttling and critical-temperature qualification remain open. | [RTC](rtc-application.md), [alarm ownership](../apps/rtc/qualification.md), [thermal](thermal.md), [watchdog](watchdog.md) |
 | Wi-Fi and Bluetooth | **Implemented:** transport, networking and selected profiles; host-tested deadline checks now cover public SDIO record consumption. Fitted rails/PM2, UHS timing/tuning, returning shutdown and physical interoperability remain open. | [Radio](radio-platform.md), [SDIO reference and guarded reads](radio-sdio-reference.md), [Wi-Fi](radio-wifi.md), [Bluetooth](bluetooth-native.md) |
-| I2S and headset audio | **Implemented:** capture and bounded audio paths; no microphone is attached. Physical cyclic-DMA ordering and headset qualification remain open. | [I2S](i2s-stream.md), [headset](bluetooth-hfp.md) |
+| I2S and headset audio | **Host-verified only:** OS capture can consume guarded cyclic staging; busy drain, held copies, overrun and stale tickets after reopen pass host checks. Generic recorded/paced PCM reaches a device-free application without mimus. Physical ordering, wire drain, microphone and headset qualification remain open. | [I2S](i2s-stream.md), [application input](designs/app-abi.md#recorded-pcm-can-use-the-capture-interface-without-a-device), [headset](bluetooth-hfp.md) |
 | Camera, CSI and ISP | **Implemented:** OV5640 modes, receiver and recorded ISP paths. No MIPI camera is attached; native continuous-frame delivery remains incomplete. | [Camera](camera.md), [CSI](csi-receiver.md), [ISP](camera-isp0.md) |
 | Display and 2D processing | **Implemented:** HDMI, DSI, DisplayPort, scanout and G2D paths. CPU command-span checks and unchanged command pages pass host checks. DisplayPort uses four lanes at 5.4 Gb/s and requires matching analog/SERDES authority. Scanout slots remain immutable. Native images need a reviewed watchdog return path; no MIPI panel is attached. Sink output, streaming and recovery remain unverified. | [HDMI](hdmi-native.md), [DSI](dsi-video.md), [DisplayPort](displayport-native.md), [G2D](g2d.md) |
 | Video and image processing | **Implemented:** H.264/HEVC decode, H.264/JPEG encode, JPEG decode and deinterlacing paths. HEVC initialization preserves retained ownership; its offline CPU pixel comparator passes host checks with CPU-generated copies. Physical numerical output and drain remain unverified. | [H.264](h264-native.md), [HEVC](hevc-native.md), [encoding](h264-encode-native.md), [JPEG](jpeg-application.md), [deinterlacing](deinterlace-native.md) |
@@ -376,3 +376,20 @@ Use [the validation policy](validation.md) with flags selecting the changed
 branches. Reuse valid evidence after documentation edits and commits.
 A board result consists of its log, image hash and Git revision.
 Find source pins and cached manuals through [the reference index](reference-index.md).
+
+## Audio host evidence and remaining admission
+
+The focused audio evidence is under `~/.cache/sunstoneos/build/audio-1031/`.
+`frozen/README.md` names the immutable host/model images, source and image hashes,
+commands, review and shared application-kit patches. No board was accessed.
+The device-free application link and linked-instruction checks use an empty
+`MIMUS_DIR`; the capture implementation contains no recognizer dependency.
+
+No audio board run is queued. A microphone and headset are absent. Cyclic RX
+still requires a physical bound on completion/counter/reuse ordering. Existing
+I2S and OS audio images also retain their legacy supervised lifetime and have
+not been converted to the shared returning-probe contract. The conversion must
+retire workers, outstanding client leases, DMA, both audio directions and USB,
+then join the monitor's secondary shutdown and interrupt restoration. An image
+that merely holds allocations until power removal must not advertise normal
+return. Runtime file EOF still leaves serial wire drain unknown.
