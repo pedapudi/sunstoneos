@@ -333,6 +333,21 @@ static int rx_position(struct a733_dma_controller *c,unsigned channel)
        destination-m->bus>m->bytes || remaining!=m->bytes-(destination-m->bus))return 0;
     return 1;
 }
+
+static int private_output(const struct a733_dma_controller *c,void *out,size_t bytes)
+{
+    struct a733_dma_mapping output={.cpu=out,.bytes=bytes};
+    if(cpu_overlap(&output,c,sizeof(*c)))return 0;
+    for(unsigned ch=0;ch<A733_DMA_CHANNELS;++ch) {
+        const struct a733_dma_transfer *t=c->channels[ch].transfer;
+        if(!t)continue;
+        if(metadata_overlap(&output,t) || cpu_overlap(&t->descriptors,out,bytes))return 0;
+        for(size_t i=0;i<t->mapping_count;++i)
+            if(cpu_overlap(&t->mappings[i],out,bytes))return 0;
+    }
+    return 1;
+}
+
 int a733_dma_cyclic_rx_copy(struct a733_dma_controller *c,unsigned channel,uint64_t period,
     void *out,size_t bytes)
 {
@@ -340,9 +355,7 @@ int a733_dma_cyclic_rx_copy(struct a733_dma_controller *c,unsigned channel,uint6
     struct a733_dma_channel *s=&c->channels[channel];const struct a733_dma_transfer *t=s->transfer;
     if(s->cyclic!=2 || s->status!=A733_DMA_ACTIVE || !t || t->count<4 ||
        period>UINT64_MAX-t->count || bytes!=t->segments[0].bytes ||
-       (uintptr_t)out>UINTPTR_MAX-bytes || cpu_overlap(&t->descriptors,out,bytes))return -1;
-    for(size_t i=0;i<t->mapping_count;++i)if(cpu_overlap(&t->mappings[i],out,bytes))return -1;
-    if(cpu_overlap(&(struct a733_dma_mapping){c,0,sizeof(*c),A733_DMA_READ},out,bytes))return -1;
+       (uintptr_t)out>UINTPTR_MAX-bytes || !private_output(c,out,bytes))return -1;
     if(!cyclic_progress(c,channel))return -1;
     /* One whole period of guard on each side: period+1 must also have
      * completed, and at most period+count-2 may have completed, so a writer
