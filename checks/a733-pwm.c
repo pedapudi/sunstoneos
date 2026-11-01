@@ -2,7 +2,8 @@
 #define PMIC_MODEL_NO_MAIN
 #include "a733-pmic.c"
 #include "a733_pwm.h"
-struct pwm_model {struct pmic_model power;struct a733_pwm pwm;unsigned retained,admitted,writes,fail_start,contended;};
+#include "register_latency.h"
+struct pwm_model {struct pmic_model power;struct a733_pwm pwm;unsigned retained,admitted,writes,fail_start,contended,ppr_writes,control_writes;struct register_latency period;};
 static struct pwm_model m;
 static int pwm_now(void *v,uint64_t *out){*out=((struct pwm_model *)v)->power.now;return 1;}
 static int pwm_current(void *v){return !((struct pwm_model *)v)->power.worker;}
@@ -15,11 +16,22 @@ static void pwm_retain(void *v){struct pwm_model *s=v;assert(s->power.register_h
 static int pwm_outside(void *v,const void *p,size_t n)
 {struct pwm_model *s=v;return pmic_model_separate(p,n,&s->retained,sizeof(*s)-(size_t)((char *)&s->retained-(char *)s));}
 static int pwm_read(void *v,uintptr_t a,uint32_t *out)
-{struct pwm_model *s=v;assert(s->power.register_held&&!s->retained);*out=*pmic_model_word(&s->power,a);return 1;}
+{struct pwm_model *s=v;assert(s->power.register_held&&!s->retained);
+ if(a==A733_PWM_BASE+0x240)*pmic_model_word(&s->power,a)=reg_latency_apply(&s->period,s->power.now,*pmic_model_word(&s->power,a));
+ *out=*pmic_model_word(&s->power,a);return 1;}
 static int pwm_write(void *v,uintptr_t a,uint32_t value)
 {
  struct pwm_model *s=v;assert(s->power.register_held&&!s->retained&&s->admitted);++s->writes;
+ if(a==A733_PWM_BASE+0x244){assert(!s->period.pending);++s->ppr_writes;}
+ if(a==A733_PWM_BASE+0x240&&value==s->pwm.plan.pcr){
+  assert(!s->period.pending);++s->control_writes;
+  /* Manual18.7.8.25 defines readiness, without a fixed latency. Model a
+   * 1ms clock-domain propagation interval, measured in fixture microseconds. */
+  reg_latency_schedule(&s->period,s->power.now,1000,1u<<11,0);
+  *pmic_model_word(&s->power,a)=value|(1u<<11);return 1;
+ }
  if(a==A733_PWM_BASE+0x240&&(value&(1u<<10))){
+  assert(!s->period.pending);
   assert(s->pwm.report.started&&*pmic_model_word(&s->power,A733_PWM_BASE)==(1u<<5));
   assert(*pmic_model_word(&s->power,A733_PWM_BASE+0x80)==(1u<<5));
   assert(*pmic_model_word(&s->power,A733_PWM_BASE+0x244)==0x0257012c);
@@ -58,8 +70,38 @@ static void armed(void)
  assert(r==A733_PWM_ARMED&&m.pwm.supply.programmed_uv==1800000&&m.pwm.pin.id&&m.admitted==1);
  *pmic_model_word(&m.power,0x03400108)=1u<<3;
 }
+static void readiness(void)
+{
+ for(unsigned initial=0;initial<2;++initial)for(unsigned stuck=0;stuck<2;++stuck){
+  setup_pwm();
+  if(initial){
+   *pmic_model_word(&m.power,A733_PWM_BASE+0x240)=1u<<11;
+   reg_latency_schedule(&m.period,m.power.now,50000,1u<<11,0);
+  }
+  enum a733_pwm_result r=A733_PWM_PENDING;
+  for(unsigned i=0;i<2000;++i){
+   r=step_pwm(0);assert(r!=A733_PWM_RETAINED);
+   if(m.pwm.configure_step==(initial?1u:2u)&&m.period.pending)break;
+  }
+  assert(m.period.pending&&!m.ppr_writes&&!m.pwm.pin.id&&!m.pwm.report.started);
+  unsigned n=m.writes;
+  assert(a733_pwm_poll(&m.pwm,0)==A733_PWM_PENDING&&m.writes==n);
+  if(stuck){
+   m.period.stuck=1;m.power.now=m.pwm.config.deadline_us;
+   assert(a733_pwm_poll(&m.pwm,0)==A733_PWM_RETAINED&&m.pwm.clock_retained&&m.pwm.rail_retained);
+   assert(m.writes==n&&!m.ppr_writes&&!m.pwm.pin.id&&!m.pwm.report.started);
+  }else{
+   m.power.now+=50000;armed();assert(m.control_writes==1&&m.ppr_writes==1);
+  }
+ }
+ setup_pwm();
+ while(m.pwm.configure_step!=2)assert(step_pwm(0)!=A733_PWM_RETAINED);
+ *pmic_model_word(&m.power,A733_PWM_BASE+0x240)|=1u<<12;
+ assert(a733_pwm_poll(&m.pwm,0)==A733_PWM_RETAINED&&!m.ppr_writes&&!m.pwm.pin.id);
+}
 int main(void)
 {
+ readiness();
  setup_pwm();armed();assert(a733_pwm_start(&m.pwm)==A733_PWM_RUNNING);
  *pmic_model_word(&m.power,A733_PWM_BASE+4)=1u<<5;
  m.contended=1;assert(step_pwm(1)==A733_PWM_BUSY&&!m.pwm.report.irq_seen);

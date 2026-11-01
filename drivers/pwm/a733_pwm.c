@@ -182,10 +182,26 @@ static enum a733_pwm_result hardware(struct a733_pwm *p,unsigned notice)
  case RELEASE:if(!exact(p,BGR,p->initial_bgr|0x10001))return fail(p,10);
   break;
  case CONFIGURE:
+  if(!p->configure_step){
   if(!zero(p,PIER)||!zero(p,PISR)||!zero(p,PWM+0x10)||!zero(p,PWM+0x14)||!zero(p,PER)||!zero(p,PCGR)||
   !zero(p,PWM+0xc0)||!zero(p,PWM+0x68)||!zero(p,PWM+0x90)||!zero(p,PWM+0x94)||!zero(p,PWM+0x98)||!zero(p,PWM+0x9c)||
-  !zero(p,PWM+0x28)||!rd(p,PCR,&v)||(v&BIT(11))||v||!exact(p,PCR,p->plan.pcr)||
-  !exact(p,PCGR,BIT(5))||!rd(p,PCR,&v)||(v&BIT(11))||!exact(p,PPR,p->plan.ppr)||!exact(p,PWM+0x248,0))return fail(p,11);
+  !zero(p,PWM+0x28)||!rd(p,PCR,&v)||(v&~BIT(11)))return fail(p,11);
+   p->configure_step=1;return A733_PWM_PENDING;
+  }
+  if(p->configure_step==1){
+  if(!rd(p,PCR,&v)||(v&~BIT(11)))return fail(p,11);
+  if(v&BIT(11))return A733_PWM_PENDING;
+  /* PERIOD_RDY is read-only and can change while the control write crosses
+   * the peripheral clock domain. Check the owned controls independently. */
+  if(!wr(p,PCR,p->plan.pcr)||!rd(p,PCR,&v)||(v&~BIT(11))!=p->plan.pcr||
+     !exact(p,PCGR,BIT(5)))return fail(p,11);
+   p->configure_step=2;return A733_PWM_PENDING;
+  }
+  /* Manual18.7.8.25: a busy period register is not writable. Keep the
+   * completed baseline/control steps and wait under the startup deadline. */
+  if(!rd(p,PCR,&v)||(v&~BIT(11))!=p->plan.pcr)return fail(p,11);
+  if(v&BIT(11))return A733_PWM_PENDING;
+  if(!exact(p,PPR,p->plan.ppr)||!exact(p,PWM+0x248,0))return fail(p,11);
   break;
  case RUN:
   if(!rd(p,PCR,&p->report.pcr)||!rd(p,PISR,&p->report.pisr)||
