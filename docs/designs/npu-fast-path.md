@@ -1,7 +1,7 @@
 # Submit resident NPU commands and complete ordered fences
 
-The queue is implemented and host-checked; physical performance and idle power
-remain unqualified. This design is for driver and application-kit developers. A fence is a queue
+The trusted resident queue completes 1,000 checked jobs on port 3-3. Its small-model
+latency and throughput improve against a matched control. Idle power remains unqualified. This design is for driver and application-kit developers. A fence is a queue
 identity and a monotonically increasing submission number. Its completion
 permits CPU acquisition of the corresponding device output. Network decoding,
 model partitioning and tensor interpretation belong to the loader and application.
@@ -21,10 +21,32 @@ repeats loading and assembly. The public SDK wrapper also requests LOAD for
 repeated use of the same model. The job path therefore includes task dispatch,
 copies and checks proportional to the resource sizes.
 
-Port 3-3 queue entry `1793559627833816772-2003f2e7` measures 200 alternating
-jobs at 852 MHz and 800 mV: 1,441.8 jobs/s and 2.100042 ms maximum helper
-latency. Its scope includes loading, copies, comparison and hashing.
-It provides neither a 1,000-job percentile sample nor CPU cost per job.
+The matched board comparison keeps both linked model binaries, model-0 inputs,
+852 MHz and 800 mV identical. Each image checks one warmup and 1,000 measured
+outputs. Both return normally, with 1,002 interrupt completions and no mismatch.
+
+| Path and queue entry | Job p50 / p99 / max (µs) | Jobs/s | Task CPU/job (µs) | Submit-to-doorbell p50 / p99 / max (µs) |
+| --- | ---: | ---: | ---: | ---: |
+| Helper, `1793563838443635411-92c1fdae` | 463.88 / 472.46 / 478.92 | 2,029.97 | 491.16 | 401.29 / 410.38 / 411.92 |
+| Resident, `1793564135238449408-5dbdd6ad` | 10.25 / 12.83 / 18.71 | 26,925.33 | 34.19 | 0.96 / 0.96 / 2.67 |
+
+Job latency includes input preparation and output acquisition. Throughput and
+scheduled client-plus-worker CPU time also include comparison, digest and progress
+checks. CPU time excludes interrupts charged to idle and unrelated tasks; the
+resident driver separately records 1.19 µs/job of IRQ elapsed time, which can
+overlap task accounting. These counters do not measure total CPU utilization.
+Submit-to-doorbell ends after the fetch write and device barrier; its means are
+403.44 µs for the helper and 0.943 µs for the resident queue. Instrumentation
+exists only in diagnostic builds.
+
+The control image SHA-256 is
+`862114046425739e74d6c2ad70da1e4c91ad2c949db82d7bae5539a68f98d5be`;
+the resident image is
+`2a6411ba3fcc2b1620c18ee1cbe92393b4cd26a8705d5571f821bf84e964dd3c`.
+The queue records contain the frozen host inventories, logs and output digests.
+`matched-comparison.json` under the task build directory retains the numeric
+summary. The throughput includes diagnostic CPU work and is not a network
+compute-throughput limit.
 
 ## A resident command queue separates preparation from submission
 
