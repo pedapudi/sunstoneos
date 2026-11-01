@@ -67,7 +67,7 @@ is under `~/.cache/sunstoneos/board-queue/entries/`:
 | --- | --- | --- |
 | Current local stop/restart control | 2 / 4 | `1793558381244643310-6a29a71d` |
 | conv12, conv8, then conv12 | 3 / 4 | `1793558909256910454-ab3a76b4` |
-| Finite application SDK | 2 / 3 | `1793514867262701593-6a1aa965` |
+| Finite application SDK | 2 / 3 | `1793559233825594424-693cc430` |
 
 These bounded workloads do not establish repeated-transition reliability.
 Active-job reset recovery, confinement, thermal protection and full OS EL0 SDK
@@ -87,6 +87,14 @@ runtime lifetime. Entry `1793558909256910454-ab3a76b4` has status zero, four
 interrupt completions, normal return and verified DRAM restoration. Its ELF is
 `~/.cache/sunstoneos/build/npu-wdt-1031/qualification-1101/images/model-switch/image.elf`,
 SHA-256 `8ede7a8341fa28abe93f717d3d410b499333eca3e32aeafd83fa7bafe0c846d7`.
+
+The finite SDK client runs both models through `ss_npu_run` and closes through
+`ss_npu_close`. Entry `1793559233825594424-693cc430` has two matching outputs,
+three interrupt completions, status zero, normal return and restored DRAM.
+Its ELF is
+`~/.cache/sunstoneos/build/npu-wdt-1031/qualification-1101/images/sdk-access/image.elf`,
+SHA-256 `a0dd10679c00829a9a2f16357cdae57064ce6a063fdeac714f1273f235311c32`.
+This client uses an EL1 application task; OS EL0 SDK mappings remain unqualified.
 
 The runtime models up to eight catalogue clients and model switching. The board
 image has one slot and five catalogue models; direct FIFO USB and shader-graph
