@@ -304,16 +304,46 @@ initialized and the next launch normalizes rails. `--no-normalize-rails` and
 The corrected hello-compute control returned normally in the recorded 3-1
 run above. Repeated startup and broader reliability remain unqualified.
 Current `gpu-return` is refused because the existing ladder uses the pre-split application layout;
-its runner is `tools/dev-run.py` at `6a714bcf`. NPU development preparation
-also remains unimplemented. `--check-only` reads the board unless `--state FILE`
+its runner is `tools/dev-run.py` at `6a714bcf`. NPU development supports startup,
+single inference, runtime, local restart, model switching, SDK access and
+domain OFF/restart through its native session template and exact image marker.
+`--check-only` reads the board unless `--state FILE`
 supplies a capture; neither mode writes rails.
+
+The next NPU diagnostics are host-verified and await coordinator runs. Their
+source and tools are frozen at `593ce329` beneath
+`~/.cache/sunstoneos/build/npu-wdt-1031/next-host-593ce329/`. Image directories
+are under `images/` in that build directory:
+
+| Run order | Image | Expected operation |
+| --- | --- | --- |
+| 1 | `local-restart` | Two matching jobs across two local start/stop lifetimes; four IRQ completions. |
+| 2 | `model-switch` | Match conv12, conv8, then conv12 again; three jobs and four IRQ completions. |
+| 3 | `sdk-access` | Match both models through the public application API; three IRQ completions and owner-authorized quiescence. |
+| 4 | `power-cycle` | Prove domain policy/status OFF 0/0 then ON 8/8 between matching jobs; four IRQ completions. |
+
+Each directory's README gives full hashes, exact commands, breadcrumb order
+and stage failures. `images/next-images.json` binds the artifacts and frozen
+host archive. Continue only after the preceding run returns normally with
+matching output; power-cycle runs last. The SDK diagnostic uses the finite
+task privilege. Its host evidence covers the memory-only public API and
+owner checks, and does not qualify full OS EL0 mappings.
+
+Independent correctness, hardware-safety and recovery panels approve the
+branch through `593ce329` against `a0b092b5`. Review found and corrected
+capture quarantine, unresolved ownership release, SDK failure-state races,
+SDK close ownership, report capacity and transient-provider handling.
+The NPU checks, SDK ABI and interleaving cases, power transition fault models,
+all four artifact checks and the three baseline builds pass. Evidence is in
+`next-checks/`, `next-baselines/`, `next-sdk-api/`, `next-abi/`,
+`next-frozen-preparation/` and `power/root/` in the same build directory.
 
 The host arms WDT0 mode `0xb1` (16 seconds). The CPU0 supervisor restarts it
 while healthy; an EL3 stop shortens it to 0.5 seconds.
 [tools/a733-crumbs.py](../tools/a733-crumbs.py) decodes progress and the first
 failure. Normal return requires this session's `RETURN_ROM` and mode 0.
 A watchdog return is a failed run; DRAM initialization and rail checks precede
-reuse. No board run is requested for this documentation change.
+reuse.
 
 ## Open problems and files
 

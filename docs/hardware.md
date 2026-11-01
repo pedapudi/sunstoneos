@@ -49,13 +49,21 @@ and `3-1-204839/session.json` under the same directory.
 `tools/dev-run.py` now normalizes CPU rails to 800 mV before guarded
 CPU-return launches and after validated normal returns with boot clocks.
 
-The hello-compute control on 3-1 stopped because the application finished
-before the CPU clock owner reached FOLLOW. The GPU firmware-only diagnostic
-on 3-1 stopped in its frozen build's compatibility callback. Port 3-3 remains
-quarantined after a host error following a normal native return. These are
-recorded runner outcomes, not live access checks. No new complete application
-or hardware qualification follows from the split or these diagnostics.
+An earlier hello-compute control on 3-1 stopped before the CPU clock owner
+reached FOLLOW; the corrected control later returned normally. An earlier GPU
+firmware diagnostic stopped in its frozen compatibility callback. The earlier
+3-3 host cleanup error quarantined that instance; the NPU runs above later
+returned normally. These records describe named instances and operations;
+they do not establish current live access or broader qualification.
 The [handoff branch list](handoff.md#open-branches) distinguishes unmerged fixes.
+
+NPU local restart, return to the first model after switching, public SDK
+access and domain OFF/restart are implemented and host-verified at `593ce329`.
+Their frozen images and tools are under
+`~/.cache/sunstoneos/build/npu-wdt-1031/images/` and `next-host-593ce329/`
+in that same build directory. The [handoff](handoff.md#coordinator-launch-and-capture)
+gives the proposed order. These operations still require board qualification;
+the SDK diagnostic does not qualify full OS EL0 mappings.
 
 ## Current software integration
 

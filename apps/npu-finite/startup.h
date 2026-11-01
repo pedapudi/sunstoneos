@@ -1,10 +1,10 @@
 #ifndef SUNSTONE_NPU_STARTUP_RETURN_H
 #define SUNSTONE_NPU_STARTUP_RETURN_H
 #include <stdint.h>
-/* The startup client has three profiles: bootstrap only; bootstrap followed
- * by one inference job; and the NPU runtime client (runtime-client.c), which
- * runs one job of each of two catalogue networks through npu_job_run. Each
- * has its own receipt magic and monitor detail. */
+/* Bootstrap, inference, model-switch and SDK clients identify their return
+ * contracts with immutable receipt magic, monitor detail, job count and
+ * interrupt-completion count. Runtime clients use one job per linked entry;
+ * the switch profile links the first network again after the second. */
 #ifdef SUNSTONE_NPU_MODEL_SWITCH
 #define NPU_STARTUP_RECEIPT_MAGIC UINT64_C(0x4e50555357433031)
 #define NPU_STARTUP_READY UINT64_C(0x4e505557)

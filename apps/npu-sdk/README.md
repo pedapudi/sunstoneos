@@ -17,9 +17,9 @@ Images without an application retain the built-in catalogue diagnostic. The
 application must close the NPU before finishing. Thermal STOP also closes the
 slot and makes the application mailbox unavailable.
 
-For the finite diagnostic, replace `apps/npu-finite/runtime-client.c` with
-`apps/npu-sdk/finite-client.c` and add `runtime/npu_app.c`. Keep the finite
-runtime include paths and definitions. The service task owns the job helper;
+Build the finite diagnostic with `apps/npu-finite/build.py --sdk --evidence`
+followed by a new build directory. It links `apps/npu-sdk/finite-client.c`
+and `runtime/npu_app.c`. The service task owns the job helper;
 the client calls the public API for both linked models and compares copied
 outputs. The existing guarded close, local stop and quiescence checks remain.
 This diagnostic runs the client at the finite image's task privilege; the API
