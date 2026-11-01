@@ -50,10 +50,17 @@ gates and the check index pass. Host evidence is under
 The texture-frame fixture executes the service's current scheduling code with
 modeled time and task readiness. Three scheduler probes, three texture scenes
 and mutations of the burst limit, CPU scheduling interval and submission
-exemption pass. Six service cases and the hello baseline build pass. The separate
-texture QEMU fixture fails its extended-pool preparation assertion at
-`checks/gpu-texture.c:248`, before the worker starts. Evidence is under
-`~/.cache/sunstoneos/build/gpu-integrate-1031/texture-scheduling-1101/`.
+exemption pass. Six service cases and the hello baseline build pass. Evidence is
+under `~/.cache/sunstoneos/build/gpu-integrate-1031/texture-scheduling-1101/`.
+
+Extended-layout QEMU fixtures prepare their pools once after profile admission;
+local-layout images retain boot preparation. Seven texture scenarios, three
+batch scenarios and three local queue controls pass. Native translation checks
+reject incorrect attributes in the final write-back or uncached block before
+READY and GPU construction. GPU power, delayed OFF completion and ten performance
+platform cases pass with the write-ordering changes. The three baseline builds
+pass. Evidence is under
+`~/.cache/sunstoneos/build/gpu-integrate-1031/texture-prepare-1101/`.
 
 The coordinator's CPU performance measurement does not qualify GPU support or
 establish that offloading improves recognition speed. GPU performance selection

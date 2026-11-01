@@ -10,7 +10,10 @@
 #undef profile
 #undef client
 #undef kernel_main
+#include "a733_device_memory_layout.h"
+#include "a733_mapping_check.h"
 void kernel_main(void);
+extern void platform_exit_privileged(unsigned) __attribute__((noreturn));
 static unsigned model_ready,stopping,isolated,frame_width,frame_height;
 static unsigned char source[PVR_RENDER_TEXTURE_GEOMETRY_BYTES+PVR_RENDER_TEXTURE_MAX_BYTES];
 /* READY is modeled: the pools are prepared directly, without the boot record
@@ -244,8 +247,30 @@ static void texture_client(void *unused)
 }
 void kernel_main(void)
 {
-    platform_init();configASSERT(gpu_render_case<6);
+    platform_init();configASSERT(gpu_render_case<8);
     configASSERT(!a733_memory_reservations_init() && !a733_memory_uncached_init());
+    if (gpu_render_case >= 6) {
+        const int wb = gpu_render_case == 6;
+        const uintptr_t bad = (wb ? A733_DEVICE_WB_END : A733_DEVICE_NC_END) - A733_DEVICE_MEMORY_BLOCK;
+        const uintptr_t good = (wb ? A733_DEVICE_NC_END : A733_DEVICE_WB_END) - A733_DEVICE_MEMORY_BLOCK;
+        struct aarch64_translation t;
+        /* Actual AT observes the injected final-block attribute before the
+         * real pool walk rejects it. The other pool keeps its correct type. */
+        configASSERT(aarch64_device_translate(bad,1,&t) && t.physical==bad &&
+            t.attributes==(wb ? A733_MAIR_NORMAL_NC : A733_MAIR_NORMAL_WB));
+        configASSERT(aarch64_device_translate(good,1,&t) && t.physical==good &&
+            t.attributes==(wb ? A733_MAIR_NORMAL_NC : A733_MAIR_NORMAL_WB));
+        if (wb) configASSERT(!a733_memory_reservations_prepare());
+        else {
+            configASSERT(a733_memory_reservations_prepare());
+            configASSERT(!a733_memory_uncached_prepare());
+        }
+        configASSERT(!model_ready && !a733_memory_reservations_init() && !a733_memory_uncached_init());
+        configASSERT(!firmware.admitted && graphics.phase==A733_GPU_GRAPHICS_NEW && !service.initialized);
+        platform_puts(wb ? "PASS texture: final write-back block mismatch refuses preparation before GPU admission\n" :
+            "PASS texture: final uncached block mismatch refuses preparation before GPU admission\n");
+        platform_exit_privileged(0);
+    }
     configASSERT(a733_memory_reservations_prepare() && a733_memory_uncached_prepare());model_ready=1;
     configASSERT(a733_memory_reservations_init() && a733_memory_uncached_init());
     frame_width=gpu_render_case==4?1280:1920;frame_height=gpu_render_case==4?720:1080;
