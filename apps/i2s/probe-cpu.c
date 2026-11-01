@@ -30,8 +30,9 @@ static void same(uintptr_t a,uint32_t mask,uint32_t wanted,unsigned site)
 {uint32_t v=rd(a);bounded(a);if((v&mask)!=wanted)fault(site,a,v);}
 static void requests(unsigned c)
 {
-    /* Vendor CPU_OFF profile: GIC wake stays disabled; neither software
-     * start request may change while this owner holds or releases a core. */
+    /* Preserve the reset/ROM controls, including either GIC wake setting.
+     * Acknowledged static OFF owns the core independently of that setting;
+     * neither software start request may change during the operation. */
     same(control(c),UINT32_MAX,cpu.control[c],0x87);
     same(control(c)+0x20,UINT32_MAX,cpu.mode[c],0x87);
 }
@@ -70,7 +71,7 @@ uint64_t sunstone_probe_acquire_secondaries(void)
         if(p&~UINT32_C(0x100))fault(0x82,a,p);
         cpu.policy[c]=p;same(a+8,UINT32_MAX,p,0x83);
         uint32_t v=rd(control(c));bounded(control(c));
-        if((v&3)!=2)fault(0x84,control(c),v);cpu.control[c]=v;
+        if(v&1)fault(0x84,control(c),v);cpu.control[c]=v;
         v=rd(control(c)+0x20);bounded(control(c)+0x20);
         if(v&1)fault(0x85,control(c)+0x20,v);cpu.mode[c]=v;
     }

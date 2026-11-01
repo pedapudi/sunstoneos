@@ -20,7 +20,7 @@ shared=importlib.util.module_from_spec(spec);spec.loader.exec_module(shared)
 BASE=0x07052000
 
 class Model(shared.Model):
-    def __init__(self,elf,plan,cores=(1,),variant='normal'):
+    def __init__(self,elf,plan,cores=(1,),variant='normal',wake_enabled=False):
         super().__init__(elf,plan)
         # Fitted A733 A55/DSU geometry, including LoC=3. Omitting LoC would
         # silently skip the actual shared data-cache maintenance loop.
@@ -33,6 +33,8 @@ class Model(shared.Model):
         self.data_cache_count=0;self.ic_count=0
         for c in range(1,8):
             self.write(BASE+c*4096,self.policy[c],4);self.write(BASE+c*4096+8,self.status[c],4)
+        if wake_enabled:
+            for c in range(1,8):self.write(0x07050200+c*4,0,4)
         self.before=bytes(self.uc.mem_read(0x07050000,0xc000))
         self.uc.hook_add(UC_HOOK_MEM_READ,self.ppu_read,begin=0x07050000,end=0x0705bfff)
         self.uc.hook_add(UC_HOOK_MEM_WRITE,self.ppu_write,begin=0x07050000,end=0x0705bfff)
@@ -113,9 +115,12 @@ def main():
                 'counter_ticks':m.now,'fault':m.rtc(),'trace':m.trace}
         steps.case(name,record);rows.append(name);print('PASS',name,flush=True)
     for label,cores,variant in [('static',(),'normal'),('CPU1-only',(1,),'normal'),
-                                ('all-seven',tuple(range(1,8)),'normal'),('wake-completes',(1,),'wake-before-ack')]:
+                                ('all-seven',tuple(range(1,8)),'normal'),('wake-completes',(1,),'wake-before-ack'),
+                                ('wake-enabled-static',(),'normal'),
+                                ('wake-enabled-all-seven',tuple(range(1,8)),'normal'),
+                                ('wake-enabled-inflight',(1,),'wake-before-ack')]:
         if steps.case(label):rows.append(label);continue
-        m=Model(a.elf,plan,cores,variant);assert m.entry() and not m.rtc()['fault']
+        m=Model(a.elf,plan,cores,variant,wake_enabled=label.startswith('wake-enabled'));assert m.entry() and not m.rtc()['fault']
         assert not any(m.policy.values()) and not any(m.status.values())
         assert m.writes==[(BASE+c*4096,0) for c in cores]
         m.finish();assert m.events[-2:]==['disarm','rom'],m.events
@@ -139,7 +144,7 @@ def main():
         passed(variant,m);del m;gc.collect()
     for label,address,value,site in [('bad-last-identity',0x07059fc8,0,0x80),
                                      ('mismatched-ack',0x07053008,0,0x83),
-                                     ('wake-enabled',0x07050204,0,0x84)]:
+                                     ('software-start-request',0x07050204,1,0x84)]:
         if steps.case(label):rows.append(label);continue
         m=Model(a.elf,plan);m.write(address,value,4)
         if address==0x07053008:m.status[1]=value

@@ -47,25 +47,24 @@ invalidation before release too. No cache operation follows release.
 
 Preflight every secondary without writes. Require known PCK-600 identity,
 architecture 1.1, existing capabilities, PMER zero, matching PWPR/PWSR of zero
-or `0x100`, clear software-start requests and GIC wake already disabled.
+or `0x100` and clear software-start requests. Preserve either GIC wake setting.
 These retain the existing contract except for permitting an owned transition
 from acknowledged dynamic OFF. Save original policy and request/control words
 outside EL1 BSS on dedicated monitor cache lines. Do not change control or mode,
 RVBAR, CPU0, cluster/DSU policy, resets, clocks or rails.
 
 For each dynamic policy, write zero with DSB before polling. Wait for PWSR zero
-before reading PWPR for verification. Recheck the unchanged wake-disable and
+before reading PWPR for verification. Recheck the unchanged control words and
 clear software requests. All seven secondaries must be held before cache work.
 Each per-core operation writes only that core's PWPR. A CPU1-only fixture permits
 only address `0x07053000`; aggregate ownership may write all seven core policies.
 
 Keep static OFF until device and interrupt retirement, final whole-cache cleanup
 and receipt preparation finish. Restore only policies that changed, with DSB and
-matching PWSR completion before PWPR verification. Preserve the inherited vendor
-CPU_OFF profile: GIC wake remains disabled and software requests remain clear.
-The inherited vendor CPU_OFF state is a predecessor condition supplied by the
-existing reset/ROM path, not authority created by these snapshots. Restoring it
-ends static ownership. No CPU entry address or architecture word changes.
+matching PWSR completion before PWPR verification. Preserve the exact inherited reset/ROM
+control profile, with software requests clear and either GIC wake setting.
+The reset/ROM predecessor is supplied by the existing runner path, not authority
+created by these snapshots. Restoring its policy ends static ownership. No CPU entry address or architecture word changes.
 Recheck actual OFF and saved
 controls, then complete the existing uncached EL3 return tail. Dynamic policy
 restoration ends the probe's static ownership; no memory reuse or cache operation
@@ -110,3 +109,34 @@ all-seven cases consume 48,520, 75,880 and 240,040 modeled ticks, with zero, two
 and fourteen policy writes respectively. These counts characterize the fixture,
 not physical transition latency. The two aggregate 100 ms limits remain fixed.
 Panel decisions and artifact hashes are under `policy-review/` in the build root.
+
+## Static ownership is independent of the wake-control bit
+
+The control image records CPU1 control `0x07050204 = 0` at software fault 0x84.
+Its software-start request is clear, but inherited GIC wake-disable is clear too.
+Requiring wake-disable in addition to acknowledged static OFF adds a condition
+that the reset predecessor does not establish.
+
+Keep the policy-only owner and preserve the exact original control words.
+Preflight accepts either wake setting while still refusing software-start bit 0.
+Acquire matched static OFF on all seven cores, then maintain the cache hierarchy.
+Arm DEN0051E section 3.4.2 describes static transitions to the programmed policy;
+section 3.4.3 distinguishes hardware-initiated transitions when dynamic mode is
+enabled. Section 5.2.1 makes PWR_POLICY the target when PWR_DYN_EN is zero,
+and only a minimum when dynamic transitions are enabled. Once policy and status both acknowledge static OFF, a wake input cannot
+change that programmed static target. An in-flight wake still must complete and
+return to OFF before acquisition succeeds.
+
+The owner's preflight and shared held-state check do not require GIC wake-disable. Continue checking clear control/mode software requests,
+identity, policy/status agreement and exact original control/mode words. Add no
+control writes. Restore saved policies after the last cache operation; restoration
+returns the original reset/ROM profile and ends static ownership. No cache work
+or memory reuse follows that handoff. Actual OFF is checked before ROM return;
+arbitrary external wake after handoff remains outside this diagnostic's claim.
+
+The existing 100 ms aggregate deadlines, poll caps, first-fault retention and
+policy write allowlist stay unchanged. Extend linked checks to matched dynamic
+and static OFF with wake enabled, preserve byte-identical controls, test an
+in-flight wake before static acknowledgment, and continue refusing real software
+start requests. The CPU1-only trace must remain exactly two PWPR writes. The same
+three reviewers approve this correction before implementation and before a run.

@@ -170,7 +170,7 @@ def entry_cases(elf,out,steps):
         # The optional owner preflights the same inherited inputs before its
         # policy writes and records their more specific ownership sites.
         if 'transition' in m.e.symbols:
-            site={'dynamic-OFF':0x83,'pending-ack':0x83,'wake-enabled':0x84}.get(label,site)
+            site={'dynamic-OFF':0x83,'pending-ack':0x83,'wake-enabled':0}.get(label,site)
             if label=='dynamic-OFF':address=0x07053008;expected_value=0
         m.sys.update(mpidr_el1=0x81000000,sctlr_el3=0xc50838)
         if isinstance(field,str):m.sys[field]=value
