@@ -65,7 +65,13 @@
 #define SUNSTONE_CRUMB_FAIL_THERMAL 0x2u    /* thermal owner cancel/fault; value: driver fault_site (0 if none) */
 #define SUNSTONE_CRUMB_FAIL_CPU_RETURN 0x3u /* cpu-return fail(detail); low 12 bits: detail */
 #define SUNSTONE_CRUMB_FAIL_APPLICATION 0x4u /* ss_fail(detail); low 12 bits: detail, value: detail */
-#define SUNSTONE_CRUMB_FAIL_CPU_CLOCK 0x5u  /* CPU clock owner refusal; value: phase << 24 | cluster << 16 | status */
+#define SUNSTONE_CRUMB_FAIL_CPU_CLOCK 0x5u  /* CPU clock owner refusal; aux: phase << 8 | cluster; value: status */
+/* CPU clock site flags. AUX (aux bit 13) marks this layout; an image
+ * without it put phase << 24 | cluster << 16 | status & 0xffff in the value.
+ * GUARD (aux bit 14): the value is the entry guard's full refusal word,
+ * detail << 12 | line of apps/os/cpu-return-entry.c. */
+#define SUNSTONE_CRUMB_CPU_AUX 0x20000000u
+#define SUNSTONE_CRUMB_CPU_GUARD 0x40000000u
 #define SUNSTONE_CRUMB_FAIL_PMIC 0x6u       /* PMIC power service; value: authority word */
 #define SUNSTONE_CRUMB_FAIL_RETURN 0x80000000u /* site flag: caller is a return address */
 #define SUNSTONE_CRUMB_FAIL_SITE(group) (SUNSTONE_CRUMB_FAIL_##group << 12 | ((uint32_t)__LINE__ & 0xfffu))

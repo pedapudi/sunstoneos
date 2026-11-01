@@ -23,9 +23,9 @@ int os_cpu_return_entry_guard(const struct a733_cpu_clock *c,
        !c||!p||!read)return REFUSE(0);
     if(!p->initialized||!os_cpu_return_thermal_ready())return REFUSE(p->initialized);
     if(c->failed||c->inherited!=3)return REFUSE(c->inherited);
-    /* The PMIC inspection's DCDC3/DCDC5 readings, in mV. */
+    /* The PMIC inspection's DCDC5/DCDC3 readings, in 10 mV units to 1540 mV. */
     if(c->rail_uv[0]!=800000||c->rail_uv[1]!=800000)
-        return REFUSE((c->rail_uv[0]/1000u&0x3ff)<<10|(c->rail_uv[1]/1000u&0x3ff));
+        return REFUSE((c->rail_uv[0]/10000u&0x3ff)<<10|(c->rail_uv[1]/10000u&0x3ff));
     if(c->config.grant.clusters!=3||c->config.grant.max_mhz[0]!=1794||
        c->config.grant.max_mhz[1]!=2002||c->config.grant.changes<4||c->changes!=c->config.grant.changes)
         return REFUSE(c->changes);

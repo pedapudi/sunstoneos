@@ -13,6 +13,20 @@ Kinds:
   gpu-return  refused: the GPU ladder images are pre-split recognition images
               (see GPU_REFUSAL)
   npu         refused: see npu_check
+  rail-helper only the CPU rail helper (board bundle 33): DCDC3 and then DCDC5
+              to 800 mV, refused unless the CPU clocks read their boot words
+
+The CPU-return entry guard (apps/os/cpu-return-entry.c) refuses DCDC3 or
+DCDC5 other than 800 mV, and a run that raises them can end with both rails
+still raised, which a WDT0 reset does not undo. For an image that links the
+guard, the runner therefore runs the rail helper by default before the launch
+(--no-normalize-rails skips it) and after the run (--no-restore-rails skips
+it). A helper run before the launch that does not complete stops the run
+before the state capture. After the run the helper runs on a normal return,
+and on any other outcome when a read-only capture shows the CPU-L, CPU-B and
+DSU PLL and mux words at their boot values. dev-run.json records the helper's
+SUPPLY (entry rails), VOLT (each written rail's readback), RAIL (a failed
+rail change) and outcome lines.
 
 A CPU-return image is recognised by its watchdog marker and its result record
 (apps/os/host.py). Preparation builds the typed session from the image's
@@ -60,8 +74,19 @@ CONTROL_IMAGE = CACHE / 'build/mimus-split-1031/control-hello/sunstone-a733-os-h
 # The reviewed session of the CPU-return control bundle: board prefix,
 # thermal record and CPU clock grant (904-byte layout before typed sessions).
 RECORDS = EVIDENCE / 'wdt-breadcrumbs-1031/control/offline-proof/prepared/board/session-template.bin'
-RAIL_HELPER = EVIDENCE / 'wdt-breadcrumbs-1031/control/offline-proof/rails-800/probe.bin'
-RAIL_HELPER_SHA256 = 'f48a6be72b336c8990a124fd608bba5fddb5c8617ec62eac5642b2d50fb27c75'
+# Board bundle 33 built by apps/board-bundles-power/build-opp.py --bundle 33 at
+# d0dc59b5: either rail from 800 mV to the bin's top point, lowered to 800 mV.
+RAIL_HELPER = EVIDENCE / 'rails-both-1031/helper/probe.bin'
+RAIL_HELPER_SHA256 = '84af1ec5f1a095b30a2c29d836f90aac77d4252a376895fee8bc5560b858e38c'
+RAIL_COMPLETE = 'COMPLETE board bundle 33: DCDC3 and DCDC5 restored to 800 mV at boot clock words'
+# The helper's returns before any write (REFUSED) and its thermal stop, each
+# with status 1, the converter disabled and the provider parked
+# (apps/board-bundles-power/cpu-opp-step.c). The kernel runner records them
+# as controlled outcomes, so a refusal does not quarantine the board.
+RAIL_CONTROLLED = [('REFUSED', text) for text in (
+    'thermal level', 'speed bin', 'CPU-B rate', 'CPU rate not on its PLL', 'pattern or LFM enabled',
+    'boot clock words', "voltage above the bin's top point", "bin top points differ from the rail helper's",
+    'CPU supplies')] + [('STOPPED', 'thermal limit')]
 GPU_REFUSAL = ('gpu-return is refused: the GPU ladder images are pre-split mimus recognition images that need '
                'the fixed-layout session template and the three recognition inputs, which this runner no longer '
                'prepares, and the generic return path does not copy the GPU retirement report. Run them with '
@@ -73,6 +98,7 @@ WORDS = (0x2002000, 0x20020a0, 0x20020a8, 0x20020ac, 0x2002518, 0x2002fc0, 0x200
          *(0x8871000 + 0x1000 * d + o for d in range(3) for o in (0, 4, 8, 0x18, 0x1c)), 0x7090160)
 # apps/os/cpu-return-entry.c: boot CPU-L, CPU-B and DSU PLL and mux words.
 BOOT_PLL, BOOT_MUX = (0xf8802600, 0xf8802700, 0xf8802600), (0x03010000, 0x03000000, 0x03010105)
+DOMAINS = ('CPU-L', 'CPU-B', 'DSU')
 # Thermal record fields set from the live board (apps/os/os.h): APB1 word and
 # rate, and whether the thermal owner configures GPADC24M.
 THERMAL_APB1, THERMAL_CONFIGURE = 168, 176
@@ -160,7 +186,7 @@ def state_check(words):
     else:
         configure = None
         findings.append(f'GPADC24M {w[0x2002fc0]:#x} is enabled with another source or divider (thermal clocks)')
-    for d, name in enumerate(('CPU-L', 'CPU-B', 'DSU')):
+    for d, name in enumerate(DOMAINS):
         base = 0x8871000 + 0x1000 * d
         if w[base] != BOOT_PLL[d] or w[base + 0x1c] != BOOT_MUX[d]:
             findings.append(f'{name} PLL/mux {w[base]:#x}/{w[base + 0x1c]:#x} differ from the boot point '
@@ -176,11 +202,25 @@ def state_check(words):
 
 def rails_note(record):
     if record.get('complete'):
-        return ('CPU-B was lowered to 1014 MHz and DCDC3 to 800 mV before return; DCDC5 stays at 1000 mV. '
-                'The next CPU-return image refuses (detail 0x736) until the rail helper restores it.')
+        return ('A normal return can leave DCDC5 up to 1000 mV and DCDC3 up to 1050 mV. The next CPU-return '
+                'entry guard refuses until the rail helper lowers both to 800 mV.')
     return ('Unknown after a failed run: a reset restores boot PLLs but not PMIC rails. If the run raised '
-            'them, the next CPU-return entry guard refuses (detail 0x736) and the rail helper refuses '
-            'a DCDC3 other than 800 mV; only USB power removal resets both rails.')
+            'them, the next CPU-return entry guard refuses. The rail helper lowers either rail from up to '
+            'its top point while the CPU-L, CPU-B and DSU PLL and mux words read their boot values, and '
+            'refuses a rail below 800 mV, above the top point or off the 10 mV grid; only USB power removal '
+            'resets both rails.')
+
+
+def boot_clocks(words):
+    """The CPU domains whose PLL or mux word differs from the boot point."""
+    w = {int(k, 16): v for k, v in words.items()}
+    return [name for d, name in enumerate(DOMAINS)
+            if w[0x8871000 + 0x1000 * d] != BOOT_PLL[d] or w[0x887101c + 0x1000 * d] != BOOT_MUX[d]]
+
+
+def guard_requires_800(host, image):
+    """True when the image links the CPU-return entry guard, which refuses DCDC3 or DCDC5 other than 800 mV."""
+    return 'os_cpu_return_entry_profile' in host.linked_symbols(image)
 
 
 # ---- preparation --------------------------------------------------------------
@@ -382,17 +422,119 @@ def judge(decoder, payload, inputs, session):
     return 'passed', 'result ' + json.dumps(decoded, sort_keys=True) + ' as expected', decoded
 
 
-def restore_rails(args, host, evidence):
-    """The existing rail helper (board bundle 33) through the existing kernel runner."""
-    require(digest(args.rail_helper) == RAIL_HELPER_SHA256, 'Rail helper binary differs from the approved one.')
-    followup = load('dev_followup', ROOT / 'apps/os/cpu-return-followup.py')
-    out = evidence / 'rail-helper'
-    code = host.cpu.kernel.main(['--fel', str(args.fel), '--image', str(args.rail_helper), '--evidence', str(out),
-                                 '--mode', 'kernel', '--expect', followup.COMPLETE, '--return-timeout', '10'])
-    require(code in (None, 0), 'Rail helper runner failed.')
-    return followup.helper_result(json.loads((out / 'session.json').read_text()), (out / 'kernel.log').read_text())
+# The helper's clock inspections before and after the rail writes.
+BOOT_ROWS = tuple((name, BOOT_PLL[d], BOOT_MUX[d], (494, 1014, 494)[d]) for d, name in enumerate(DOMAINS))
 
 
+def helper_report(record, log):
+    """The helper's SUPPLY, VOLT, RAIL and outcome lines, and whether it returned normally with
+    both rails at 800 mV: a VOLT line for each rail above 800 mV at entry, DCDC3 first,
+    reading selector 0x1e (800 mV), and all three domains at their boot words before and after."""
+    lines = log.splitlines()
+    supply = [x for x in lines if x.startswith('SUPPLY ')]
+    volt = [x for x in lines if x.startswith('VOLT ')]
+    outcome = [x for x in lines if x.startswith(('COMPLETE ', 'REFUSED ', 'STOPPED ', 'FAIL '))]
+    # A failure inside a rail change prints the rail, the helper's stage and
+    # the provider's last selector bytes.
+    rail = [x for x in lines if x.startswith('RAIL ')]
+    report = {'supply': supply, 'volt': volt, 'outcome': outcome, 'rail_state': rail, 'complete': False}
+    def fields(line):
+        return {k: int(v, 0) for k, v in (x.split('=', 1) for x in line.split()[1:])}
+    result = record.get('result') or {}
+    if isinstance(record.get('controlled'), dict):
+        name = record['controlled']['outcome']['name']
+        report['reason'] = f"controlled outcome {name}" + (', no rail written' if name.startswith('refused') else '')
+        return report
+    if not (record.get('complete') is True and record.get('transport_failed') is False and
+            record.get('mode') == 'kernel' and 'controlled' not in record and result.get('magic') == 0x534b4552 and
+            result.get('stage') == 5 and result.get('status') == 0 and outcome == [RAIL_COMPLETE]):
+        report['reason'] = 'helper did not return normally'
+        return report
+    if len(supply) != 1:
+        report['reason'] = 'entry SUPPLY line absent or repeated'
+        return report
+    entry = fields(supply[0])
+    expected = [rail for rail in ('dcdc3', 'dcdc5') if entry.get(rail + '_uv', 0) != 800000]
+    if entry.get('bin') != 4 or entry.get('dcxo_hz') != 26000000:
+        report['reason'] = 'speed bin or DCXO differs'
+        return report
+    written = [fields(x) for x in volt]
+    if [next(iter(f))[:5] for f in written] != expected or not all(
+            f[r + '_uv'] == 800000 and f[r + '_selector'] & 127 == 30 for r, f in zip(expected, written)):
+        report['reason'] = 'VOLT lines differ from one 800 mV readback per raised rail, DCDC3 first'
+        return report
+    for name, pll, mux, mhz in BOOT_ROWS:
+        for phase in ('before', 'after'):
+            rows = [x for x in lines if x.startswith(f'{name} {phase} ')]
+            f = fields(rows[0][len(name):]) if len(rows) == 1 else {}
+            if not (f.get('pll') == pll and f.get('mux') == mux and f.get('mhz') == mhz and
+                    not (f['pat0'] & (3 << 29) or f['pat1'] >> 31 or f['lfm'] >> 31)):
+                report['reason'] = f'{name} {phase} inspection absent or not at the boot point'
+                return report
+    report.update(complete=True, entry_dcdc5_uv=entry['dcdc5_uv'], entry_dcdc3_uv=entry['dcdc3_uv'],
+                  written=expected, dcdc3_uv=800000, dcdc5_uv=800000)
+    return report
+
+
+def run_rail_helper(args, host, out):
+    """The rail helper (board bundle 33) through the existing kernel runner, which holds the
+    port lock. Returns helper_report() with the runner's status and evidence directory; never raises."""
+    report = {'evidence': str(out)}
+    if digest(args.rail_helper) != RAIL_HELPER_SHA256:
+        report.update(complete=False, supply=[], volt=[], outcome=[], rail_state=[],
+                      reason='rail helper binary differs from the reviewed one; not run')
+        return report
+    controlled = out.parent / (out.name + '-controlled.json')
+    save(controlled, {'schema': 'kernel-controlled-outcomes-v1', 'outcomes': [
+        {'name': word.lower() + '-' + ''.join(c if c.isalnum() else '-' for c in text), 'status': 1, 'interrupt': None,
+         'fail_lines': 0, 'fault': None,
+         'log_contains': ['BEGIN board bundle 33:', f'{word} board bundle 33: {text}']}
+        for word, text in RAIL_CONTROLLED]})
+    try:
+        report['runner_status'] = host.cpu.kernel.main(
+            ['--fel', str(args.fel), '--image', str(args.rail_helper), '--evidence', str(out),
+             '--mode', 'kernel', '--expect', RAIL_COMPLETE, '--return-timeout', '10',
+             '--controlled', str(controlled)])
+    except (Exception, SystemExit) as error:
+        report['runner_error'] = str(error)
+    session, log = out / 'session.json', out / 'kernel.log'
+    try:
+        record = json.loads(session.read_text()) if session.exists() else {}
+    except ValueError as error:
+        record = {}
+        report['session_error'] = str(error)
+    try:
+        report.update(helper_report(record, log.read_text(errors='replace') if log.exists() else ''))
+    except (ValueError, KeyError) as error:
+        report.update(complete=False, supply=[], volt=[], outcome=[], rail_state=[],
+                      reason=f'helper log unreadable: {error}')
+    if report['complete'] and report.get('runner_status') not in (None, 0):
+        report.update(complete=False, reason='runner status %r' % report['runner_status'])
+    return report
+
+
+def helper_lines(report):
+    return ' | '.join(report['supply'] + report['volt'] + report['rail_state'] + report['outcome'])
+
+
+def restore_rails(args, host, evidence, run_record):
+    """(helper report or None, why) for the rail helper after a launched run.
+
+    It runs after a normal return, and after any other outcome when a
+    read-only capture shows every CPU domain at its boot PLL and mux words.
+    The capture refuses a quarantined instance, so the helper never runs on
+    one."""
+    if run_record.get('complete'):
+        return run_rail_helper(args, host, evidence / 'rail-helper'), 'normal return'
+    try:
+        after = capture(args.fel)
+    except Exception as error:
+        return None, f'not run: the state read after the run failed: {error}'
+    save(evidence / 'state-after.json', after)
+    off = boot_clocks(after['words'])
+    if off:
+        return None, 'not run: ' + ', '.join(off) + ' not at the boot PLL and mux words after the run'
+    return run_rail_helper(args, host, evidence / 'rail-helper'), 'CPU clocks at their boot words after the run'
 def npu_check(image, host):
     """Bringup's NPU launcher and monitor refuse an enabled WDT0 (launch.c ADMIT,
     monitor.c finish(1)); armed, the launcher parks and the watchdog resets the
@@ -411,7 +553,7 @@ def summary_of(kind, outcome, detail):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('kind', choices=('cpu-return', 'gpu-return', 'npu'))
+    parser.add_argument('kind', choices=('cpu-return', 'gpu-return', 'npu', 'rail-helper'))
     parser.add_argument('--image', type=Path, help='CPU-return image ELF, from this tree or an application '
                         'such as mimus (default: the hello-compute control image)')
     parser.add_argument('--input', type=Path, action='append', default=[],
@@ -425,7 +567,12 @@ def main(argv=None):
     parser.add_argument('--state', type=Path, help='Use this captured state.json instead of reading the board')
     parser.add_argument('--check-only', action='store_true', help='Prepare and check; no launch')
     parser.add_argument('--force', action='store_true', help='Launch despite state findings')
-    parser.add_argument('--restore-rails', action='store_true', help='Run the rail helper after a normal return')
+    parser.add_argument('--normalize-rails', action=argparse.BooleanOptionalAction,
+                        help='Run the rail helper before the launch (default: when the image links the CPU-return '
+                        'entry guard, which requires both rails at 800 mV)')
+    parser.add_argument('--restore-rails', action=argparse.BooleanOptionalAction,
+                        help='Run the rail helper after the run, on a normal return or when the CPU clocks read '
+                        'their boot words (default: when the image links the CPU-return entry guard)')
     parser.add_argument('--rail-helper', type=Path, default=RAIL_HELPER)
     parser.add_argument('--fel', type=Path, default=FEL)
     args = parser.parse_args(argv)
@@ -444,6 +591,19 @@ def main(argv=None):
         os.environ['SUNSTONE_USB_PORT'] = args.port
     port = os.environ.get('SUNSTONE_USB_PORT')
     require(port or args.state, 'Select the board with --port or SUNSTONE_USB_PORT.')
+    if args.kind == 'rail-helper':
+        require(port and not args.state and not args.check_only, 'rail-helper runs on a board: --port, no --state.')
+        evidence = args.evidence or EVIDENCE / 'dev-runs-1031' / f"{port}-rail-helper-{time.strftime('%H%M%S')}"
+        evidence.mkdir(parents=True, exist_ok=False)
+        report = run_rail_helper(args, host, evidence / 'rail-helper')
+        record = {'kind': args.kind, 'port': port, 'rail_helper_sha256': RAIL_HELPER_SHA256, 'rail_helper': report,
+                  'outcome': 'rails-normalized' if report['complete'] else 'rail-helper-failed'}
+        record['summary'] = summary_of(args.kind, record['outcome'], helper_lines(report) +
+                                       ('' if report['complete'] else '; ' + report['reason']))
+        save(evidence / 'dev-run.json', record)
+        print(record['summary'])
+        print('evidence:', evidence / 'dev-run.json')
+        return 0 if report['complete'] else 1
     image = args.image or CONTROL_IMAGE
     info = host.host.image_manifest(image)
     require(info['manifest'] is not None, 'Image has no application manifest.')
@@ -468,11 +628,39 @@ def main(argv=None):
         print(record['summary'])
         print('evidence:', evidence / 'dev-run.json')
         return 1
+    guarded = guard_requires_800(host, image)
+    normalize = guarded if args.normalize_rails is None else args.normalize_rails
+    restore = guarded if args.restore_rails is None else args.restore_rails
+    normalized = None
+    if not normalize:
+        normalized = 'not run: ' + ('--no-normalize-rails' if guarded else
+                                    'the image links no CPU-return entry guard')
+    elif not guarded:
+        normalized = 'not run: the image links no CPU-return entry guard'
+    elif args.check_only:
+        normalized = 'not run: --check-only makes no board write'
+    elif args.state:
+        normalized = 'not run: --state supplies the capture, which the helper run would change'
+    else:
+        # Before the capture: the helper returns through the ROM, and the
+        # launch requires the identity and words captured after it.
+        normalized = run_rail_helper(args, host, evidence / 'rail-normalize')
+        if not normalized['complete']:
+            record = {'kind': args.kind, 'port': port, 'image': str(Path(image).resolve()), 'application': name,
+                      'launched': False, 'rail_helper_sha256': RAIL_HELPER_SHA256, 'normalize_rails': normalized,
+                      'outcome': 'refused-before-launch'}
+            record['summary'] = summary_of(args.kind, 'not launched', 'rail helper did not normalize the rails: ' +
+                                           helper_lines(normalized) + '; ' + normalized['reason'])
+            save(evidence / 'dev-run.json', record)
+            print(record['summary'])
+            print('evidence:', evidence / 'dev-run.json')
+            return 1
     live = json.loads(args.state.read_text()) if args.state else capture(args.fel)
     save(evidence / 'state.json', live)
     record = {'kind': args.kind, 'port': live['port'], 'identity': live['identity'], 'image': str(Path(image).resolve()),
               'application': name, 'decoder': str(decoder_path.resolve()) if decoder else None,
-              'bundle': str(evidence / 'bundle'), 'launched': False}
+              'bundle': str(evidence / 'bundle'), 'launched': False, 'normalize_rails': normalized,
+              'rail_helper_sha256': RAIL_HELPER_SHA256}
     try:
         meta = prepare(host, launcher, image, args.records, inputs, evidence / 'bundle', live)
     except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
@@ -515,12 +703,20 @@ def main(argv=None):
         session = out / 'session.json'
         run_record = json.loads(session.read_text()) if session.exists() else {}
         record['rails'] = rails_note(run_record)
-        if args.restore_rails and run_record.get('complete'):
-            try:
-                record['rail_helper'] = restore_rails(args, host, evidence)
-                record['rails'] = 'DCDC3 and DCDC5 restored to 800 mV by the rail helper.'
-            except Exception as error:
-                record['rail_helper_error'] = str(error)
+        if restore:
+            report, why = restore_rails(args, host, evidence, run_record)
+            record.update(rail_helper=report, rail_helper_reason=why)
+            if report is None:
+                record['rails'] += ' Rail helper ' + why + '.'
+            elif report['complete']:
+                record['rails'] = 'DCDC3 and DCDC5 at 800 mV after the rail helper: ' + helper_lines(report)
+            else:
+                record['rails'] = ('Rail helper did not complete: ' + report['reason'] + ': ' + helper_lines(report) +
+                                   '. ' + record['rails'])
+        else:
+            record['rail_helper_reason'] = 'not run: ' + ('--no-restore-rails' if guarded else
+                                                          'the image links no CPU-return entry guard')
+        record['summary'] += '; rails: ' + record['rails']
     save(evidence / 'dev-run.json', record)
     print(record['summary'])
     print('evidence:', evidence / 'dev-run.json')

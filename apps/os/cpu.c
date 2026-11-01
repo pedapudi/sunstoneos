@@ -114,10 +114,10 @@ static void publish(void)
 int os_cpu_clock_ready(void){return (int)atomic_load_explicit(&owner.ready,memory_order_acquire);}
 static uint64_t later(uint64_t us)
 {uint64_t now;return a733_counter_clock_now(&providers.shared.counter,&now)?now+us:0;}
-/* Each refusal records its line, phase and status before the thermal
- * owner's fault() ends the session (include/sunstone_crumb.h). */
+/* Each refusal records its line, phase, cluster and full status word before
+ * the thermal owner's fault() ends the session (include/sunstone_crumb.h). */
 static int refused(uint32_t site,const void *here,uint32_t status)
-{board_fail_note(site,(uint32_t)owner.phase<<24|(owner.cluster&0xffu)<<16|(status&0xffffu),here);return -1;}
+{board_fail_note(site|SUNSTONE_CRUMB_CPU_AUX|((uint32_t)owner.phase<<8|(owner.cluster&0xffu))<<16,status,here);return -1;}
 #define REFUSED(status) refused(SUNSTONE_CRUMB_FAIL_SITE(CPU_CLOCK),SUNSTONE_CRUMB_HERE(),(uint32_t)(status))
 int os_cpu_clock_step(const struct a733_thermal_policy *policy)
 {

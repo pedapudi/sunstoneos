@@ -20,6 +20,11 @@ RETURN_ROM = 0x0503  # SUNSTONE_CRUMB_RETURN_ROM: value is the WDT0 mode after t
 EL3_STOP = 0x0111    # SUNSTONE_CRUMB_EL3_STOP: value is min(status, 15) << 12 | detail & 0xfff
 FAIL_LEVEL = 0xb     # SUNSTONE_CRUMB_FAIL_LEVEL: the first board failure, from EL0 or EL1
 BOUNDED = 0x736      # cpu-return bounded(): its value carries board_live_refusal() bits
+# The entry guard's rail refusal (apps/os/cpu-return-entry.c), whose detail is
+# DCDC5 << 10 | DCDC3, each in 10 mV units.
+GUARD_RAIL_LINE = next((i for i, line in enumerate(
+    (Path(__file__).resolve().parents[1] / 'apps/os/cpu-return-entry.c').read_text().splitlines(), 1)
+    if 'return REFUSE((c->rail_uv[0]/' in line), None)
 # board_live_refusal() bits (apps/board/main.c) and bounded()'s margin bit.
 LIVE_REFUSAL = ((28, 'board.fatal already set'), (29, 'service window (live_until) expired'),
                 (30, 'session deadline passed'), (31, 'within 10 ms of the deadline'))
@@ -108,6 +113,20 @@ def board_failure(words, defines, elf):
         record['deadline_seconds'] = record['aux']
         record['refusal'] = [text for bit, text in LIVE_REFUSAL if value >> bit & 1]
         record['counter_ms'] = value & 0x0fffffff
+    if record['group'] == 'cpu_clock' and not site & defines['CPU_AUX']:
+        # An earlier image: the value packs phase, cluster and 16 status bits.
+        record.update(phase=value >> 24 & 0xff, cluster=value >> 16 & 0xff, status=hex(value & 0xffff),
+                      status_bits=16)
+    elif record['group'] == 'cpu_clock':
+        record.update(phase=record['aux'] >> 8 & 3, cluster=record['aux'] & 0xff, status=hex(value), status_bits=32)
+        if site & defines['CPU_GUARD']:
+            # The entry guard's refusal word: detail << 12 | guard line.
+            record['guard_line'], record['guard_detail'] = value & 0xfff, hex(value >> 12)
+            if GUARD_RAIL_LINE is not None and record['guard_line'] == GUARD_RAIL_LINE:
+                # Matched against this tree's guard source; an image of
+                # another revision can number its lines differently.
+                record['dcdc5_mv'], record['dcdc3_mv'] = 10 * (value >> 22 & 0x3ff), 10 * (value >> 12 & 0x3ff)
+                record['rail_line_source'] = 'apps/os/cpu-return-entry.c of the decoding tree'
     if caller:
         # A statement address is exact; a return address points after the call.
         record['caller_source'] = symbolize(elf, caller - 4 if site >> 31 else caller)

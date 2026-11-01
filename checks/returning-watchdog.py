@@ -98,6 +98,21 @@ def header_cases():
     words.update(fault=0xfa0b0000 | 1 << 20 | 5 << 8, esr=2 << 12 | 238, far=0x30002)
     f = crumbs.decode(words, EPOCH)['board_failure']
     assert (f['group'], f['site'], f['exception_level'], f['caller_kind']) == ('thermal', 238, 'EL1', 'statement')
+    # An entry-guard rail refusal in the REQUEST phase: the full refusal word
+    # gives both rails, DCDC5 1000 mV and DCDC3 1050 mV, in 10 mV units.
+    assert defines['CPU_GUARD'] == 1 << 30 and defines['CPU_AUX'] == 1 << 29
+    words.update(esr=1 << 30 | 1 << 29 | (2 << 8) << 16 | 5 << 12 | 192,
+                 far=(100 << 10 | 105) << 12 | crumbs.GUARD_RAIL_LINE)
+    f = crumbs.decode(words, EPOCH)['board_failure']
+    assert (f['group'], f['site'], f['phase'], f['cluster'], f['guard_line']) == ('cpu_clock', 192, 2, 0, crumbs.GUARD_RAIL_LINE)
+    assert (f['dcdc5_mv'], f['dcdc3_mv']) == (1000, 1050), f
+    words.update(esr=1 << 29 | (3 << 8 | 1) << 16 | 5 << 12 | 200, far=4)
+    f = crumbs.decode(words, EPOCH)['board_failure']
+    assert (f['phase'], f['cluster'], f['status']) == (3, 1, '0x4') and 'guard_line' not in f, f
+    # An image without the layout flag packed phase and cluster into the value.
+    words.update(esr=5 << 12 | 192, far=2 << 24 | 0x901c)
+    f = crumbs.decode(words, EPOCH)['board_failure']
+    assert (f['phase'], f['cluster'], f['status'], f['status_bits']) == (2, 0, '0x901c', 16), f
     passed('decode-board-failure-and-stop-status')
 
 

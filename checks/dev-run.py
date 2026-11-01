@@ -14,13 +14,22 @@ watchdog marker or inputs that differ from the manifest stop before the board
 is read. A modeled FEL then drives the shared transport through the runner's
 command line. Its memory reads back what was written, and every other address
 reads a pattern of its own address. A normal return whose Adler-32 matches
-passes and runs the rail helper when asked; a wrong or malformed result fails;
-every returned run leaves all DRAM as it was before the run. A result of
-another session or a bad return report quarantines the instance without
-holding the process, a watchdog reset is decoded and skips the rail helper, a
-state change since capture stops the run before any write, and an external
-decoder module decodes the result and may report it failed. No USB node,
-queue or FEL executable is opened.
+passes from a development bundle that has no return-review.json; a wrong or
+malformed result fails; every returned run leaves all DRAM as it was before
+the run. A result of another session or a bad return report quarantines the
+instance without holding the process, a watchdog reset is decoded, a state
+change since capture stops the run before any write, and an external decoder
+module decodes the result and may report it failed.
+
+The rail helper runs after every normal return and after a watchdog reset
+whose later capture shows the boot clock words, and not after a quarantine,
+a capture off the boot words or --no-restore-rails. Its report accepts only a
+normal return with one 800 mV VOLT readback per rail above 800 mV at entry,
+DCDC3 first; its REFUSED and STOPPED returns are controlled outcomes of the
+actual kernel runner. Before a launch the helper runs by default for an image
+that links the CPU-return entry guard, ahead of the capture, and a helper run
+that does not complete stops before the capture. No USB node, queue or FEL
+executable is opened.
 """
 import argparse
 import contextlib
@@ -360,13 +369,24 @@ def transport_case(host, launcher, root, live, variant, argv=(), payload=None):
     original = dev.run_return
     def modeled(args, host_module, bundle, live_state, out):
         return original(args, host_module, bundle, live_state, out, access=Access(), guard=Guard())
-    def rails(args, host_module, evidence):
+    def helper(args, host_module, out):
         state['rails'] += 1
-        return {'modeled': True}
+        assert out == root / 'evidence/rail-helper'
+        return {'modeled': True, 'complete': True, 'supply': ['SUPPLY modeled'], 'volt': [], 'rail_state': [],
+                'outcome': [dev.RAIL_COMPLETE]}
+    def after(fel):
+        """The read-only capture after a run that did not return normally."""
+        if variant in ('foreign-result', 'bad-report'):
+            raise ValueError('USB instance requires recovery after a failed transport.')   # usb-access require_rom
+        words = dict(live['words'])
+        if variant == 'state-changed':
+            words[hex(0x8872000)] = 0xf8805300   # CPU-B off its boot PLL word
+        return dict(live, words=words)
     with patch.object(host.base, 'digest', side_effect=lambda p: host.base.FEL_HASH if Path(p) == fel else dev.digest(p)), \
             patch.object(returning.subprocess, 'run', process), patch.object(returning.os, 'access', return_value=True), \
             patch.object(returning.time, 'monotonic', lambda: next(clock)), patch.object(returning.time, 'sleep', lambda s: None), \
-            patch.object(dev, 'run_return', modeled), patch.object(dev, 'restore_rails', rails), \
+            patch.object(dev, 'run_return', modeled), patch.object(dev, 'run_rail_helper', helper), \
+            patch.object(dev, 'capture', after), \
             patch.object(dev, 'kit', lambda: (host, launcher)):
         code, record = run_main(root, live, list(argv), launched=True)
     return state, code, record
@@ -379,12 +399,13 @@ def transport_cases(host, launcher, out, live):
     decoder.write_text('def decode(payload):\n    return {"first_word": int.from_bytes(payload[:4], "little")}\n')
     (out / 'input.bin').write_bytes(b'external application input')
     small = b'external application input'
-    cases = [('passed', good, ('--restore-rails',), 0, 'passed'),
-             ('result-mismatch', struct.pack('<IIQ', zlib.adler32(data) ^ 1, 0, len(data)), (), 1, 'result-mismatch'),
+    cases = [('passed', good, (), 0, 'passed'),
+             ('result-mismatch', struct.pack('<IIQ', zlib.adler32(data) ^ 1, 0, len(data)), ('--no-restore-rails',),
+              1, 'result-mismatch'),
              ('result-invalid', struct.pack('<IIQ', zlib.adler32(data), 7, len(data)), (), 1, 'result-invalid'),
              ('foreign-result', good, (), 1, 'failed'),
              ('bad-report', good, (), 1, 'failed'),
-             ('fired', None, ('--restore-rails',), 1, 'watchdog-reset'),
+             ('fired', None, (), 1, 'watchdog-reset'),
              ('state-changed', None, (), 1, 'failed'),
              ('external-decoder', struct.pack('<IIQ', zlib.adler32(small), 0, len(small)),
               ('--decoder', str(decoder), '--input', str(out / 'input.bin')), 0, 'returned')]
@@ -416,10 +437,27 @@ def transport_cases(host, launcher, out, live):
             assert session['watchdog']['mode_after_return'] == 0
             assert session['watchdog']['breadcrumbs']['last']['name'] == 'RETURN_ROM'
             assert (run / 'result.bin').read_bytes() == payload
-        # The rail helper runs only after a complete run, and only when asked.
-        assert state['rails'] == (variant == 'passed'), (variant, state['rails'])
+        # The rail helper runs after a normal return and after a reset that leaves the boot clock
+        # words; a quarantined instance, other clock words and --no-restore-rails skip it.
+        # Normalization before the launch never runs with --state.
+        restored = variant in ('passed', 'result-invalid', 'external-decoder', 'fired')
+        assert state['rails'] == restored, (variant, state['rails'], record.get('rail_helper_reason'))
+        assert record['normalize_rails'].startswith('not run: --state'), record['normalize_rails']
+        assert 'rails: ' in record['summary']
+        if restored:
+            assert record['rail_helper']['modeled'] and 'at 800 mV after the rail helper' in record['rails']
+            assert record['rail_helper_reason'] == ('CPU clocks at their boot words after the run'
+                                                    if variant == 'fired' else 'normal return'), record
+        else:
+            assert record['rail_helper'] is None if variant != 'result-mismatch' else 'rail_helper' not in record
+            reason = {'result-mismatch': 'not run: --no-restore-rails', 'foreign-result': 'requires recovery',
+                      'bad-report': 'requires recovery', 'state-changed': 'CPU-B not at the boot'}[variant]
+            assert reason in record['rail_helper_reason'], (variant, record['rail_helper_reason'])
         if variant == 'passed':
-            assert 'restored to 800 mV' in record['rails'] and record['rail_helper'] == {'modeled': True}
+            # The development bundle has no return-review.json, and the normal return passes
+            # without it: the host neither reads nor writes one.
+            assert not any(p.name == 'return-review.json' for p in (root / 'evidence').rglob('*'))
+            passed('normal-return-without-return-review')
             assert record['decoded'] == {'adler32': zlib.adler32(data), 'bytes': len(data)}
             launch = next(i for i, c in enumerate(state['calls']) if 'exe' in c)
             uploads = [c for c in state['calls'][:launch] if c[:2] == ['write', hex(0x44000000)]]
@@ -445,6 +483,141 @@ def transport_cases(host, launcher, out, live):
     passed('judge-raw-result-failures-and-abnormal-return')
 
 
+HELPER_RECORD = {'complete': True, 'transport_failed': False, 'mode': 'kernel',
+                 'result': {'magic': 0x534b4552, 'stage': 5, 'status': 0}}
+
+
+def helper_log(dcdc5, dcdc3, volt=None, end=None):
+    clocks = []
+    for phase in ('before', 'after'):
+        for name, pll, mux, mhz in dev.BOOT_ROWS:
+            clocks.append(f'{name} {phase} pll={pll:#x} mux={mux:#x} mhz={mhz} pat0=0x0 pat1=0x30000000 lfm=0x40000001')
+    if volt is None:
+        volt = [f'VOLT {r}_selector=0x9e {r}_uv=800000' for r, mv in (('dcdc3', dcdc3), ('dcdc5', dcdc5)) if mv != 800]
+    return '\n'.join(['BEGIN board bundle 33: ' + dev.RAIL_COMPLETE[len('COMPLETE board bundle 33: '):],
+                      'TEMP set=0 level=0', *clocks[:3],
+                      f'SUPPLY dcdc5_uv={dcdc5 * 1000} dcdc3_uv={dcdc3 * 1000} sid=0x496 bin=4 dcxo_hz=26000000',
+                      *volt, *clocks[3:], end or dev.RAIL_COMPLETE]) + '\n'
+
+
+def helper_cases():
+    # Every REFUSED and STOPPED text of the helper source is a controlled outcome, and no other.
+    import re
+    source = (ROOT / 'apps/board-bundles-power/cpu-opp-step.c').read_text()
+    texts = {('REFUSED', t) for t in re.findall(r'refuse\("([^"]+)"\)', source)} | \
+        {('STOPPED', t) for t in re.findall(r'controlled\("STOPPED", "([^"]+)"\)', source)}
+    assert texts == set(dev.RAIL_CONTROLLED) and len(texts) == len(dev.RAIL_CONTROLLED), texts ^ set(dev.RAIL_CONTROLLED)
+    for dcdc5, dcdc3, written in ((1000, 1050, ['dcdc3', 'dcdc5']), (800, 1050, ['dcdc3']),
+                                  (1000, 800, ['dcdc5']), (800, 800, [])):
+        r = dev.helper_report(HELPER_RECORD, helper_log(dcdc5, dcdc3))
+        assert r['complete'] and r['written'] == written and len(r['volt']) == len(written), r
+        assert r['supply'] == [f'SUPPLY dcdc5_uv={dcdc5 * 1000} dcdc3_uv={dcdc3 * 1000} sid=0x496 bin=4 dcxo_hz=26000000']
+    refused = {'complete': False, 'transport_failed': False, 'mode': 'kernel',
+               'result': {'magic': 0x534b4552, 'stage': 5, 'status': 1}}
+    for name, record, log, reason in (
+            ('refused', refused, helper_log(1000, 1050, volt=[], end='REFUSED board bundle 33: boot clock words'),
+             'did not return normally'),
+            ('missing-volt', HELPER_RECORD, helper_log(1000, 1050, volt=['VOLT dcdc3_selector=0x9e dcdc3_uv=800000']),
+             'VOLT lines'),
+            ('dcdc5-first', HELPER_RECORD, helper_log(1000, 1050, volt=['VOLT dcdc5_selector=0x9e dcdc5_uv=800000',
+                                                                       'VOLT dcdc3_selector=0x9e dcdc3_uv=800000']),
+             'VOLT lines'),
+            ('wrong-readback', HELPER_RECORD, helper_log(1000, 800, volt=['VOLT dcdc5_selector=0x9f dcdc5_uv=810000']),
+             'VOLT lines'),
+            ('clock-after', HELPER_RECORD, helper_log(1000, 1050).replace('CPU-B after pll=0xf8802700',
+                                                                          'CPU-B after pll=0xf8805300'), 'CPU-B after')):
+        r = dev.helper_report(record, log)
+        assert not r['complete'] and reason in r['reason'], (name, r)
+        assert r['supply'] and r['outcome'], (name, r)
+    passed('rail-helper-report')
+
+
+def controlled_cases(host, out):
+    """The helper's REFUSED and STOPPED returns are controlled outcomes of the actual kernel runner, so a
+    refusal is recorded without quarantine and reported as not complete; a FAIL inside a rail change is not
+    one, and its RAIL line is kept."""
+    runner = host.cpu.kernel
+    calls = []
+    def main(argv):
+        calls.append(argv)
+        outcomes = runner.controlled_outcomes(Path(argv[argv.index('--controlled') + 1]).read_bytes())
+        evidence = Path(argv[argv.index('--evidence') + 1]); evidence.mkdir()
+        log = helper_log(1000, 1050, volt=[], end=end)
+        terminal = {'magic': 0x534b4552, 'stage': 5, 'status': 1}
+        found = [[t for t in o['log_contains'] if t in log] for o in outcomes]
+        matched = [o for o, f in zip(outcomes, found) if runner.controlled_match(o, terminal, [], f)]
+        record = {'complete': bool(matched), 'transport_failed': False, 'mode': 'kernel', 'result': terminal}
+        if matched:
+            record['controlled'] = {'outcome': matched[0]}
+        (evidence / 'session.json').write_text(json.dumps(record))
+        (evidence / 'kernel.log').write_text(log)
+        if not matched:
+            raise RuntimeError('Unexpected kernel result')
+        return 0
+    helper = out / 'helper.bin'; helper.write_bytes(b'modeled helper')
+    args = types.SimpleNamespace(fel=out / 'fel', rail_helper=helper)
+    with patch.object(host.cpu.kernel, 'main', main), patch.object(dev, 'RAIL_HELPER_SHA256', dev.digest(helper)):
+        for name, end, reason in (
+                ('refused', 'REFUSED board bundle 33: boot clock words', 'refused-boot-clock-words, no rail written'),
+                ('stopped', 'STOPPED board bundle 33: thermal limit', 'controlled outcome stopped-thermal-limit'),
+                ('failed', 'RAIL rail=2 stage=2 byte_index=7 selector=0xb7 written=0x9e readback=0x9f\n'
+                           'FAIL CPU rail write result', 'did not return normally')):
+            r = dev.run_rail_helper(args, host, out / f'controlled-{name}')
+            assert not r['complete'] and reason in r['reason'] and r['supply'], (name, r)
+            assert name != 'failed' or (r['rail_state'] and 'runner_error' in r), r
+    assert len(calls) == 3
+    r = dev.run_rail_helper(types.SimpleNamespace(fel=out / 'fel', rail_helper=helper), host, out / 'controlled-hash')
+    assert not r['complete'] and 'differs from the reviewed one' in r['reason'] and len(calls) == 3, r
+    passed('rail-helper-controlled-outcomes')
+
+
+def normalize_cases(host, out):
+    """The default for an image that links the entry guard: the helper, then the capture and launch, then
+    the helper again when the clocks read their boot words; a failed helper stops before the capture."""
+    assert dev.guard_requires_800(host, dev.CONTROL_IMAGE), 'the control image links the CPU-return entry guard'
+    for name, argv, complete, expected in (
+            ('default', [], True, ['helper', 'capture', 'launch', 'capture', 'helper']),
+            ('helper-refused', [], False, ['helper']),
+            ('skipped', ['--no-normalize-rails', '--no-restore-rails'], True, ['capture', 'launch'])):
+        calls = []
+        def helper(args, host, where, complete=complete):
+            calls.append('helper')
+            return {'complete': complete, 'supply': ['SUPPLY dcdc5_uv=1000000 dcdc3_uv=1050000'], 'volt': [],
+                    'rail_state': [], 'outcome': [], 'reason': 'modeled refusal', 'evidence': str(where)}
+        def capture(fel):
+            calls.append('capture')
+            return captured_state()
+        def run(*values, **keywords):
+            calls.append('launch')
+            raise RuntimeError('modeled stop after admission')
+        evidence = out / f'normalize-{name}'
+        with patch.object(dev, 'run_rail_helper', helper), patch.object(dev, 'capture', capture), \
+                patch.object(dev, 'run_return', run):
+            code = dev.main(['cpu-return', '--port', '3-3', '--evidence', str(evidence), *argv])
+        record = json.loads((evidence / 'dev-run.json').read_text())
+        assert calls == expected and code == 1, (name, calls, record)
+        if name == 'skipped':
+            assert record['normalize_rails'] == 'not run: --no-normalize-rails', record
+            assert record['rail_helper_reason'] == 'not run: --no-restore-rails', record
+            continue
+        assert record['normalize_rails']['supply'] == ['SUPPLY dcdc5_uv=1000000 dcdc3_uv=1050000'], record
+        if complete:
+            assert record['outcome'] == 'failed' and record['launched'], record
+            assert record['rail_helper_reason'] == 'CPU clocks at their boot words after the run', record
+            assert 'Rail helper did not complete' not in record['rails'], record
+        else:
+            assert record['outcome'] == 'refused-before-launch' and not record['launched'], record
+            assert 'modeled refusal' in record['summary'] and not (evidence / 'state.json').exists()
+    calls = []
+    with patch.object(dev, 'run_rail_helper', lambda *a: calls.append('helper')):
+        evidence = out / 'normalize-check-only'
+        dev.main(['cpu-return', '--state', str(out / 'normalize-default/state.json'), '--check-only',
+                  '--evidence', str(evidence)])
+    record = json.loads((evidence / 'dev-run.json').read_text())
+    assert not calls and record['outcome'] == 'checked' and record['normalize_rails'].startswith('not run'), record
+    passed('normalize-and-restore-rails-order', cases=['default', 'helper-refused', 'skipped', 'check-only'])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--out', type=Path, required=True)
@@ -457,6 +630,9 @@ def main():
         live = preparation_cases(host, launcher, Path(temporary))
         refusal_cases(Path(temporary), live)
         transport_cases(host, launcher, Path(temporary), live)
+        helper_cases()
+        controlled_cases(host, Path(temporary))
+        normalize_cases(host, Path(temporary))
     result = {'passed': True, 'physical_access': False, 'control_image_sha256': dev.digest(dev.CONTROL_IMAGE),
               'cases': rows}
     (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
