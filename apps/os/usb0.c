@@ -39,7 +39,7 @@ void tud_vendor_rx_cb(uint8_t interface,const uint8_t *buffer,uint32_t bytes)
 void tud_vendor_tx_complete_cb(uint8_t interface){if(interface)stop();}
 void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
 {
-    if(interface||!board_live(NULL)||bytes>sent-transferred)stop();
+    if(interface||!board_live(NULL)||bytes>sent-transferred||(app_success&&os_application_export_live()<0))stop();
     transferred+=bytes;
     if(transferred==frame_bytes&&sent==frame_bytes){if(app_frame)os_host_delivered();frame_bytes=0;app_frame=0;}
 }

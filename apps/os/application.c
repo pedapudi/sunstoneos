@@ -164,6 +164,8 @@ int os_application_deadline(void)
 int os_application_prepare(void)
 {
     const struct os_session *s=os_session_admitted();const struct ss_manifest *m=ss_application.manifest;
+    if(m&&(m->priority>=configMAX_PRIORITIES||m->workers>=configNUMBER_OF_CORES||
+           m->stack_bytes<sizeof(StackType_t)||m->stack_bytes%sizeof(StackType_t)))return 0;
     if(!s||atomic_load_explicit(&prepared,memory_order_acquire))return 0;
     if(!m){
 #ifdef SUNSTONE_SMP_NEWLIB
@@ -252,21 +254,21 @@ int os_host_offer(const struct ss_host_request *request)
 {
     const struct ss_manifest *m=ss_application.manifest;
     if(!m||!request||request->op<m->host_op_first||request->op-m->host_op_first>=m->host_op_count||
-       atomic_load_explicit(&mailbox.state,memory_order_acquire))return 0;
-    mailbox.request=*request;atomic_store_explicit(&mailbox.state,1,memory_order_release);
-    TaskHandle_t waiter=atomic_load_explicit(&mailbox.waiter,memory_order_acquire);
+       atomic_load_explicit(&mailbox.state,memory_order_seq_cst))return 0;
+    mailbox.request=*request;atomic_store_explicit(&mailbox.state,1,memory_order_seq_cst);
+    TaskHandle_t waiter=atomic_load_explicit(&mailbox.waiter,memory_order_seq_cst);
     if(waiter)xTaskNotifyGive(waiter);return 1;
 }
 int ss_host_recv(struct ss_host_request *request,uint32_t wait_us)
 {
     if(!request||!board_live(NULL))return -1;
     /* Publish waiter before checking the request to avoid a lost wake-up. */
-    atomic_store_explicit(&mailbox.waiter,xTaskGetCurrentTaskHandle(),memory_order_release);
-    unsigned state=atomic_load_explicit(&mailbox.state,memory_order_acquire);
+    atomic_store_explicit(&mailbox.waiter,xTaskGetCurrentTaskHandle(),memory_order_seq_cst);
+    unsigned state=atomic_load_explicit(&mailbox.state,memory_order_seq_cst);
     if(state==0&&wait_us){
         TickType_t ticks=pdMS_TO_TICKS(((uint64_t)wait_us+999)/1000);
         (void)ulTaskNotifyTake(pdTRUE,ticks?ticks:1);
-        state=atomic_load_explicit(&mailbox.state,memory_order_acquire);
+        state=atomic_load_explicit(&mailbox.state,memory_order_seq_cst);
     }
     if(!board_live(NULL))return -1;
     if(state!=1)return 0;
@@ -275,13 +277,13 @@ int ss_host_recv(struct ss_host_request *request,uint32_t wait_us)
 int ss_host_send(const struct ss_host_reply *reply)
 {
     if(!reply||reply->bytes>SS_HOST_PAYLOAD_BYTES||(!reply->data&&reply->bytes)||
-       atomic_load_explicit(&mailbox.state,memory_order_acquire)!=2)return -1;
+       atomic_load_explicit(&mailbox.state,memory_order_seq_cst)!=2)return -1;
     mailbox.reply=*reply;if(reply->bytes)memcpy(mailbox.payload,reply->data,reply->bytes);
     mailbox.reply.data=mailbox.payload;atomic_store_explicit(&mailbox.state,3,memory_order_release);return 1;
 }
 int os_host_reply(struct ss_host_reply *reply,uint8_t payload[SS_HOST_PAYLOAD_BYTES])
 {
-    if(atomic_load_explicit(&mailbox.state,memory_order_acquire)!=3)return 0;
+    if(atomic_load_explicit(&mailbox.state,memory_order_seq_cst)!=3)return 0;
     *reply=mailbox.reply;if(reply->bytes)memcpy(payload,mailbox.payload,reply->bytes);return 1;
 }
 void os_host_delivered(void){atomic_store_explicit(&mailbox.state,0,memory_order_release);}

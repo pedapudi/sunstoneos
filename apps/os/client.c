@@ -11,7 +11,7 @@ static struct {atomic_uint ready;struct ss_key_report report;} keyboard;
 int ss_storage_read(uint64_t sector,uint8_t data[512])
 {
     const struct ss_grant *g=ss_grant();
-    if(!data||!g||!(g->devices&SS_DEVICE_USB_STORAGE)||ss_live()<0)return -1;
+    if(!data||sector>UINT32_MAX||!g||!(g->devices&SS_DEVICE_USB_STORAGE)||ss_live()<0)return -1;
     unsigned state=atomic_load_explicit(&storage.state,memory_order_acquire);
     if(!state){storage.sector=sector;atomic_store_explicit(&storage.state,1,memory_order_release);return 0;}
     if(storage.sector!=sector)return -1;

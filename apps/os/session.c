@@ -77,7 +77,7 @@ int os_session_decode(const void *raw,size_t bytes,struct os_session *out)
     if(!extent_copy(raw,SS_EXTENT_THERMAL,&out->magic,A733_OS_SESSION_BYTES-SS_SESSION_PREFIX_BYTES))return 0;
     /* On the wire this service record's bytes still names its original
      * complete record, so the existing service validator sees its layout. */
-    out->bytes=sizeof(*out);
+    if(out->bytes!=sizeof(*out))return 0;
 #ifdef SUNSTONE_A733_OS_AUDIO
     if(!extent_copy(raw,SS_EXTENT_AUDIO,&out->audio,sizeof(out->audio)))return 0;
     if(capture&&(out->audio.capture_samples<m->audio.min_frames||out->audio.capture_samples>m->audio.max_frames))return 0;

@@ -327,7 +327,7 @@ def c_tables(m):
              '    {"gpu-linear",os_gpu_linear_task_privileged,os_gpu_linear_pins,os_gpu_linear_start},', '#endif',
              '    {"%s",os_application_task_privileged,os_application_pins,os_application_start},' % m['name'],
              '};', 'const unsigned os_application_count=sizeof(os_applications)/sizeof(os_applications[0]);',
-             'const struct os_service os_services[OS_SERVICES] = {',
+             '__attribute__((used,retain)) const struct os_service os_services[OS_SERVICES] = {',
              '    {"board-pmic",1000000},{"board-usb0",1000000},{"board-typec",1000000},',
              '    {"board-power",1000000},{"board-usb2",1000000},{"%s",%du},{"thermal",1000000},' % (m['name'],m['progress_window_us']),
              '#ifdef SUNSTONE_A733_OS_NPU', '    {"npu",5000000},', '#endif',
