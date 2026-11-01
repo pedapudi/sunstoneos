@@ -19,10 +19,14 @@ python3 tools/integration-gate.py "$PWD" pmic-ownership \
   --check pmic-tree --check power-domains-tree
 ```
 
-Add `--target TARGET` for each affected central build, `--variant NAME` for
-an affected OS configuration, and `--check NAME` for each needed regression
+Add `--target TARGET` for each affected OS-core central build, `--variant NAME`
+for an affected OS configuration, and `--check NAME` for each needed regression
 check. The kernel, eight-core soak and mimus checks automatically build their
-required images. A source-only check configures no build. Duplicate selections
+required images. The OS-core central build is configured with an empty
+`MIMUS_DIR`, so its targets and checks never read a mimus checkout. Each
+application in the gate's `APPLICATIONS` table, at present only mimus, has its
+own central build and checks. Every OS variant still links mimus until the OS
+core builds without an application. A source-only check configures no build. Duplicate selections
 run once. `--help` lists the supported variants and checks; other component
 checks continue to run directly with their required inputs.
 
@@ -47,7 +51,8 @@ An integration commit alone does not justify it.
 Each invocation uses a new label under `~/.cache/sunstoneos/build/gate-LABEL`.
 It records the selection, reason, revision, commands and logs, and stops at the
 first failure. The builds use one directory per source checkout,
-`gate-central-NAME-HASH` and `gate-os-VARIANT-NAME-HASH`, where NAME is the
+`gate-central-NAME-HASH`, `gate-APPLICATION-NAME-HASH` and
+`gate-os-VARIANT-NAME-HASH`, where NAME is the
 checkout's directory name and HASH is the first ten hexadecimal digits of the
 SHA-256 of its resolved path. A gate on another worktree therefore never meets
 a CMake cache configured for a different source. A lock file,

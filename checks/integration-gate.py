@@ -88,8 +88,24 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.records()
         self.assertEqual([c[0] for c in calls], ['cfg.sh', 'cmake', 'python'])
+        # The OS-core build overrides the MIMUS_DIR that cfg.sh passes.
+        self.assertEqual(calls[0][-1], '-DMIMUS_DIR=')
         self.assertEqual(calls[1][calls[1].index('--target') + 1:], ['kernel-check', '-j', '12'])
         self.assertEqual(calls[2][1], 'tools/check-kernel.py')
+
+    def test_application_check_uses_its_own_build(self):
+        result = self.run_gate('--reason', 'Recognition scheduling', '--check', 'kernel', '--check', 'mimus-smp')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.records()
+        self.assertEqual([c[0] for c in calls], ['cfg.sh', 'cmake', 'cfg.sh', 'cmake', 'python', 'python'])
+        core = self.sandbox / 'build' / ('gate-central-' + self.tree(self.source))
+        mimus = self.sandbox / 'build' / ('gate-mimus-' + self.tree(self.source))
+        self.assertEqual(calls[0][1:], [str(self.source), str(core), '-DMIMUS_DIR='])
+        self.assertEqual(calls[1][calls[1].index('--target') + 1:], ['kernel-check', '-j', '12'])
+        self.assertEqual(calls[2][1:], [str(self.source), str(mimus)])
+        self.assertEqual(calls[3][calls[3].index('--target') + 1:], ['smp-mimus-model', '-j', '12'])
+        self.assertEqual(calls[4][1], 'tools/check-kernel.py')
+        self.assertEqual(calls[5][calls[5].index('--image') + 1], str(mimus / 'smp-mimus-model.elf'))
 
     def test_selected_variant_only(self):
         result = self.run_gate('--reason', 'Resident audio wiring', '--variant', 'resaud')
@@ -274,7 +290,10 @@ exec "$REAL" "$@"
         self.assertIn('other-image', central)
         self.assertNotIn('clean', central)
         self.assertNotIn('ignored.o', central)
-        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 13)  # central and twelve OS variants
+        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 14)  # core, mimus and twelve OS variants
+        application = next(c for c in calls if c[0] == 'cmake' and 'smp-mimus-model' in c)
+        # The fake lists the same targets in both builds; mimus builds only its own.
+        self.assertEqual(application[application.index('--target') + 1:], ['smp-mimus-model', '-j', '12'])
         runs = [c for c in calls if c[0] == 'python']
         self.assertEqual(len(runs), 8)
         soak = next(c for c in runs if 'tools/check-smp.py' in c)

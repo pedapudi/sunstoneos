@@ -47,10 +47,28 @@ VARIANTS = {
                      '-DSUNSTONE_A733_OS_PERF_BOOT=low', '-DSUNSTONE_A733_OS_NPU=ON',
                      '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
 }
-DEPENDENCIES = {'kernel': 'kernel-check', 'soak8': 'smp8-soak-model',
-                'mimus-smp': 'smp-mimus-model'}
-CHECKS = (*DEPENDENCIES, 'shared-helpers', 'progress', 'check-index', 'pmic-tree',
-          'power-domains-tree')
+# OS-core checks and the central target each needs. The core central build is
+# configured without MIMUS_DIR, so these checks never read a mimus checkout.
+DEPENDENCIES = {'kernel': 'kernel-check', 'soak8': 'smp8-soak-model'}
+CORE_CHECKS = (*DEPENDENCIES, 'shared-helpers', 'progress', 'check-index', 'pmic-tree',
+               'power-domains-tree')
+# Applications, each with its own central build and checks. A check names its
+# central target and its command; {build}, {cache}, {qemu} and {evidence} are
+# replaced. os_options select the application in an OS variant: every variant
+# still needs one, until the OS core builds alone (docs/layering-audit.md,
+# refactoring step 2). An application build keeps the MIMUS_DIR from cfg.sh.
+APPLICATIONS = {
+    'mimus': {
+        'os_options': ['-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON'],
+        'checks': {'mimus-smp': ('smp-mimus-model', [
+            'tools/check-mimus-smp.py', '--image', '{build}/smp-mimus-model.elf',
+            '--bundle', '{cache}/inputs/mimus-bench/inputs.bin', '--reference', '{cache}/evidence/mimus-host.json',
+            '--qemu', '{qemu}', '--evidence', '{evidence}/mimus-smp'])},
+    },
+}
+OS_APPLICATION = 'mimus'
+APPLICATION_CHECKS = {check: name for name, application in APPLICATIONS.items() for check in application['checks']}
+CHECKS = (*CORE_CHECKS, *APPLICATION_CHECKS)
 
 
 def tree_state(source):
@@ -95,10 +113,10 @@ def main(argv=None):
     parser.add_argument('source', type=Path)
     parser.add_argument('label', help='new evidence label; existing directories are refused')
     parser.add_argument('--reason', required=True, help='changed behavior and risk this selection checks')
-    parser.add_argument('--target', action='append', default=[], help='central CMake target; repeat to add targets')
+    parser.add_argument('--target', action='append', default=[], help='OS-core central CMake target; repeat to add targets')
     parser.add_argument('--variant', choices=VARIANTS, action='append', default=[])
     parser.add_argument('--check', choices=CHECKS, action='append', default=[])
-    parser.add_argument('--full', action='store_true', help='explicit broad integration milestone: all central targets, every OS variant and all listed checks')
+    parser.add_argument('--full', action='store_true', help='explicit broad integration milestone: all core and application central targets, every OS variant and all listed checks')
     parser.add_argument('--cache', type=Path, default=Path(os.environ.get('SUNSTONE_CACHE', Path.home() / '.cache/sunstoneos')))
     parser.add_argument('--trials', type=int, default=1, help='predeclared soak8 trials, not failure retries (default: 1)')
     parser.add_argument('--allow-dirty', action='store_true', help='build a tree with uncommitted changes; the status and diff hash are recorded')
@@ -125,6 +143,15 @@ def main(argv=None):
     for check in checks:
         if check in DEPENDENCIES and DEPENDENCIES[check] not in targets:
             targets.append(DEPENDENCIES[check])
+    # Each selected application and the central targets of its selected checks.
+    applications = {}
+    for check in checks:
+        if check in APPLICATION_CHECKS:
+            name = APPLICATION_CHECKS[check]
+            target = APPLICATIONS[name]['checks'][check][0]
+            applications.setdefault(name, [])
+            if target not in applications[name]:
+                applications[name].append(target)
     status = subprocess.run(['git', 'status', '--porcelain'], cwd=source, capture_output=True, text=True)
     if status.returncode != 0:
         parser.error('source must be a Git checkout: ' + status.stderr.strip())
@@ -144,6 +171,7 @@ def main(argv=None):
     # the path hash separates checkouts that share a name.
     tree = re.sub(r'[^A-Za-z0-9_.-]', '_', source.name) + '-' + hashlib.sha256(str(source).encode()).hexdigest()[:10]
     cfg, build = cache / 'bin/cfg.sh', cache / 'build' / ('gate-central-' + tree)
+    application_builds = {name: cache / 'build' / ('gate-' + name + '-' + tree) for name in APPLICATIONS}
     python = cache / 'venv/bin/python'
     qemu = cache / 'host/usr/bin/qemu-system-aarch64'
     evidence = output / 'evidence'
@@ -201,41 +229,62 @@ def main(argv=None):
     # while it holds the lock, both before the first step and after the last.
     if not unchanged('between the status check and the lock'):
         return 1
+    def discover(name, directory):
+        """The build targets that CMake lists, or None after a failure."""
+        if not run(name + '-targets', ['cmake', '--build', directory, '--target', 'help']):
+            return None
+        excluded = {'all', 'clean', 'depend', 'edit_cache', 'rebuild_cache', 'install', 'list_install_components'}
+        discovered = re.findall(r'^\.\.\. ([A-Za-z0-9_][A-Za-z0-9_.+-]*)\s*$',
+                                (output / (name + '-targets.log')).read_text(), re.M)
+        if not discovered:
+            note('FAIL ' + name + '-targets: unsupported target listing; select targets explicitly')
+            return None
+        return [t for t in discovered if t not in excluded and not t.endswith(('.o', '.i', '.s', '.obj'))]
+    core_targets = []
     if targets or args.full:
-        if not run('central-configure', [cfg, source, build]):
+        # The empty MIMUS_DIR overrides the one cfg.sh passes.
+        if not run('central-configure', [cfg, source, build, '-DMIMUS_DIR=']):
             return 1
         if args.full:
-            if not run('central-targets', ['cmake', '--build', build, '--target', 'help']):
+            core_targets = discover('central', build)
+            if core_targets is None:
                 return 1
-            excluded = {'all', 'clean', 'depend', 'edit_cache', 'rebuild_cache', 'install', 'list_install_components'}
-            discovered = re.findall(r'^\.\.\. ([A-Za-z0-9_][A-Za-z0-9_.+-]*)\s*$',
-                                    (output / 'central-targets.log').read_text(), re.M)
-            targets = list(dict.fromkeys(targets + [t for t in discovered if t not in excluded and
-                          not t.endswith(('.o', '.i', '.s', '.obj'))]))
-            if not discovered:
-                note('FAIL central-targets: unsupported target listing; select targets explicitly')
-                return 1
+            targets = list(dict.fromkeys(targets + core_targets))
         # One invocation lets CMake reuse shared dependencies across selected targets.
         if not run('central-build', ['cmake', '--build', build, '--target', *targets, '-j', '12']):
+            return 1
+    for name in APPLICATIONS if args.full else applications:
+        directory, selected = application_builds[name], applications.get(name, [])
+        if not run(name + '-configure', [cfg, source, directory]):
+            return 1
+        if args.full:
+            discovered = discover(name, directory)
+            if discovered is None:
+                return 1
+            # The application build repeats the core targets; build only its own.
+            selected = list(dict.fromkeys(selected + [t for t in discovered if t not in core_targets]))
+        if selected and not run(name + '-build', ['cmake', '--build', directory, '--target', *selected, '-j', '12']):
             return 1
     for variant in variants:
         directory = cache / 'build' / ('gate-os-' + variant + '-' + tree)
         options = [value.replace('{cache}', str(cache)) for value in VARIANTS[variant]]
         if not run('os-' + variant + '-configure', [cfg, source, directory,
-                   '-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON', '-DSUNSTONE_A733_OS=ON', *options]):
+                   *APPLICATIONS[OS_APPLICATION]['os_options'], '-DSUNSTONE_A733_OS=ON', *options]):
             return 1
         if not run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', '12']):
             return 1
     commands = {
         'kernel': ['tools/check-kernel.py', build / 'kernel-check.elf', '--qemu', qemu, '--evidence', evidence / 'kernel'],
         'soak8': ['tools/check-smp.py', build / 'smp8-soak-model.elf', '--case', 'soak8', '--trials', str(args.trials), '--qemu', qemu, '--evidence', evidence / 'soak8'],
-        'mimus-smp': ['tools/check-mimus-smp.py', '--image', build / 'smp-mimus-model.elf', '--bundle', cache / 'inputs/mimus-bench/inputs.bin', '--reference', cache / 'evidence/mimus-host.json', '--qemu', qemu, '--evidence', evidence / 'mimus-smp'],
         'shared-helpers': ['checks/shared-helpers.py', '--output', evidence / 'shared-helpers'],
         'progress': ['checks/progress.py'],
         'check-index': ['checks/check-index.py', '--verify'],
         'pmic-tree': ['checks/pmic-tree.py'],
         'power-domains-tree': ['checks/power-domains-tree.py'],
     }
+    for check, name in APPLICATION_CHECKS.items():
+        places = {'build': application_builds[name], 'cache': cache, 'qemu': qemu, 'evidence': evidence}
+        commands[check] = [value.format(**places) for value in APPLICATIONS[name]['checks'][check][1]]
     for check in checks:
         if not run('check-' + check, [python, *commands[check]]):
             return 1
