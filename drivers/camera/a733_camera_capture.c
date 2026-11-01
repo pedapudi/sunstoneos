@@ -327,7 +327,7 @@ int a733_camera_capture_poll(struct a733_camera_capture *s){
     /* The sensor stays stopped from here until the next packet handoff. */
     case A733_CAPTURE_REARM_QUIET:
     case A733_CAPTURE_REARM_WAIT:
-        if(s->now-s->quiet_from>=s->quiet_us)
+        if(s->now-s->quiet_from>s->quiet_us)
             next(s,s->state==A733_CAPTURE_REARM_QUIET?A733_CAPTURE_REARM_SAMPLE:A733_CAPTURE_REARM_RECEIVER);
         break;
     case A733_CAPTURE_REARM_SAMPLE:

@@ -101,8 +101,8 @@ static int barrier(void *v)
 {(void)v;if(!tokens()||!timely())return 0;__asm__ volatile("dsb sy":::"memory");return timely();}
 static int wait_io(void *v,uint32_t us,uint64_t deadline)
 {
- (void)v;uint64_t start,t;if(deadline!=app.deadline||!dp_now(NULL,&start)||us>deadline-start)return 0;
- do {if(us>=1000)vTaskDelay(1);else taskYIELD();if(!dp_now(NULL,&t))return 0;}while(t-start<us);
+ (void)v;uint64_t start,t;if(deadline!=app.deadline||!dp_now(NULL,&start)||us>=deadline-start)return 0;
+ do {if(us>=1000)vTaskDelay(1);else taskYIELD();if(!dp_now(NULL,&t))return 0;}while(t-start<=us);
  return 1;
 }
 static int supplies(void)
