@@ -147,8 +147,11 @@ static int startup(struct a733_thermal *p)
 }
 static enum a733_thermal_result finish(struct a733_thermal *p,enum a733_thermal_result r)
 {atomic_store_explicit(&p->busy,0,memory_order_release);return r;}
-static enum a733_thermal_result fault(struct a733_thermal *p)
+/* Each fault site names its line in fault_site, for the board failure record. */
+#define fault(p) fault_at((p),__LINE__)
+static enum a733_thermal_result fault_at(struct a733_thermal *p,unsigned line)
 {
+    if (!p->fault) p->fault_site=p->stage<<16|(line&0xffffu);
     p->fault=1;
     if (p->held) {p->ops.retain(p->cookie);p->held=0;}
     if (a733_clock_retain(p->registry,&p->token)==A733_CLOCK_BUSY) return finish(p,A733_THERMAL_BUSY);

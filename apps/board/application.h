@@ -67,6 +67,15 @@ extern struct board_application board;
 extern struct board_provider providers;
 int board_live(void *);
 void board_fail(void *);
+/* board_fail with a site code (include/sunstone_crumb.h); caller is the
+ * failing statement or call. The first failure or note is recorded. */
+void board_fail_at(uint32_t site,uint32_t value,const void *caller);
+/* Records a failure that the caller's caller will make through board_fail_at
+ * without failing yet, so the specific site wins the record. */
+void board_fail_note(uint32_t site,uint32_t value,const void *caller);
+/* Why board_live() is false: bit 28 board.fatal, bit 29 the service window
+ * (live_until), bit 30 the session deadline; bits 27:0 the counter in ms. */
+uint32_t board_live_refusal(void);
 /* Resident lifetime. Each listed service calls board_service_progress after
  * every bounded iteration of its loop; recording is one atomic store, safe at
  * EL0. The supervising task calls board_resident_renew every 20 ms with the

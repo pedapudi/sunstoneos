@@ -3,6 +3,7 @@
 #include "host_irq.h"
 #endif
 #include "session.h"
+#include "sunstone_crumb.h"
 #include "cached.h"
 #include "a733_memory_uncached.h"
 #include "platform.h"
@@ -31,13 +32,39 @@ int board_live(void *unused)
 {(void)unused;return !atomic_load_explicit(&board.fatal,memory_order_acquire)&&
     a733_smp_counter()/24<atomic_load_explicit(&board.live_until,memory_order_acquire)&&
     a733_smp_counter()/24<board.session.deadline_us;}
-void board_fail(void *unused)
-{(void)unused;atomic_fetch_or_explicit(&board.watchdog_state,4,memory_order_release);
+static void fail_close(void)
+{atomic_fetch_or_explicit(&board.watchdog_state,4,memory_order_release);
  atomic_store_explicit(&board.fatal,1,memory_order_release);}
+#ifdef SUNSTONE_CRUMBS
+static atomic_uint fail_recorded;
+#endif
+uint32_t board_live_refusal(void)
+{
+    const uint64_t now=a733_smp_counter()/24;
+    return (atomic_load_explicit(&board.fatal,memory_order_acquire)?1u<<28:0)|
+        (now>=atomic_load_explicit(&board.live_until,memory_order_acquire)?1u<<29:0)|
+        (now>=board.session.deadline_us?1u<<30:0)|(uint32_t)((now/1000)&0x0fffffff);
+}
+/* EL0 or EL1. The first caller records its site in the breadcrumb words. */
+__attribute__((noinline)) void board_fail_note(uint32_t site,uint32_t value,const void *caller)
+{
+#ifdef SUNSTONE_CRUMBS
+    if(!atomic_exchange_explicit(&fail_recorded,1,memory_order_acq_rel))sunstone_crumb_fail(site,value,caller);
+#else
+    (void)site;(void)value;(void)caller;
+#endif
+}
+__attribute__((noinline)) void board_fail(void *context)
+{board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD)|SUNSTONE_CRUMB_FAIL_RETURN,(uint32_t)(uintptr_t)context,
+    __builtin_return_address(0));fail_close();}
+/* Every failure still passes through board_fail, after its own record. */
+__attribute__((noinline)) void board_fail_at(uint32_t site,uint32_t value,const void *caller)
+{board_fail_note(site,value,caller);board_fail(NULL);}
 /* This hook is used by the existing cached EL1/EL3 fatal paths. It only closes
- * atomic admission. The independent watchdog owns recovery from stopped CPUs. */
+ * atomic admission; those paths record their own fault, and EL3 cannot use
+ * the breadcrumb SVC. The independent watchdog owns recovery from stopped CPUs. */
 void a733_storage_maintenance_stop(void)
-{board_fail(NULL);a733_typec_revoke(&board.typec.provider);}
+{fail_close();a733_typec_revoke(&board.typec.provider);}
 static _Noreturn void park(void){for(;;)vTaskSuspend(NULL);}
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name)
 {(void)task;platform_panic(name,2);}
@@ -51,7 +78,12 @@ static void pmic(void *unused)
         const uint32_t ticks=a733_power_service_step(&providers.domains);
         const int ready=a733_power_service_ready(&providers.domains);
         if(ready>0)atomic_store_explicit(&providers.shared.pmic_ready,1,memory_order_release);
-        else if(ready<0){board_fail(NULL);park();}
+        else if(ready<0){
+            const struct a733_pmic *p=providers.domains.pmic;
+            board_fail_at(SUNSTONE_CRUMB_FAIL_SITE(PMIC),p&&p->rails?a733_power_authority_load(&p->rails->authority):~0u,
+                SUNSTONE_CRUMB_HERE());
+            park();
+        }
         BOARD_PROGRESS(BOARD_SERVICE_PMIC);
         (void)ulTaskNotifyTake(pdTRUE,(TickType_t)ticks);
     }
@@ -183,7 +215,7 @@ static void supervise(void *unused)
         /* Software observation only. A stopped CPU/interconnect can prevent
          * this task; confirmed whole-board power removal owns recovery. */
         if(!board_live(NULL)){
-            board_fail(NULL);
+            board_fail_at(SUNSTONE_CRUMB_FAIL_SITE(BOARD),board_live_refusal(),SUNSTONE_CRUMB_HERE());
             if(a733_board_host_workload(board.session.workload))a733_typec_revoke(&board.typec.provider);
         }
         vTaskDelay(pdMS_TO_TICKS(20));

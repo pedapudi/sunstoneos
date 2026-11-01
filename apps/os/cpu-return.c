@@ -23,8 +23,9 @@ static atomic_uint closing,thermal_done,pmic_stop,pmic_done,ready;
 static StaticTask_t terminal_state[8];
 static StackType_t terminal_stack[8][1024];
 static TaskHandle_t terminal_handle[8];
-static _Noreturn void fail(unsigned detail)
-{board_fail(NULL);platform_exit(detail);}
+/* The site is the detail; the caller symbolizes the failing check. */
+__attribute__((noinline)) static _Noreturn void fail(unsigned detail)
+{board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_CPU_RETURN<<12|(detail&0xfff),0,__builtin_return_address(0));platform_exit(detail);}
 static uint64_t completion_cutoff(void)
 {
 #ifdef SUNSTONE_A733_OS_GPU_LINEAR
@@ -33,8 +34,16 @@ static uint64_t completion_cutoff(void)
     return os_cpu_return_cutoff();
 #endif
 }
-static void bounded(void)
-{if(!board_live(NULL)||a733_smp_counter()/24>=board.session.deadline_us-10000)fail(0x736);}
+/* A refusal records why: board_live_refusal() bits, bit 31 for the last
+ * 10 ms before the deadline, and the deadline in seconds in the site. */
+__attribute__((noinline)) static void bounded(void)
+{
+    const int late=a733_smp_counter()/24>=board.session.deadline_us-10000;
+    if(board_live(NULL)&&!late)return;
+    board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_CPU_RETURN<<12|0x736|(uint32_t)((board.session.deadline_us/1000000)&0x7fff)<<16,
+        board_live_refusal()|(late?1u<<31:0),__builtin_return_address(0));
+    platform_exit(0x736);
+}
 uint64_t os_cpu_return_cutoff(void)
 {return (board.session.deadline_us-OS_CPU_RETURN_RESERVE_US)*24;}
 int os_cpu_return_requested(void){return atomic_load_explicit(&closing,memory_order_acquire);}

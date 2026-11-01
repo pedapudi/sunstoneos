@@ -7,6 +7,7 @@
 #include "class/hid/hid_host.h"
 #include "boot.h"
 #include "a733_mapping_check.h"
+#include "sunstone_crumb.h"
 static atomic_uint attached,usb0_started;
 /* An undefined macro would read as 0 below and silently refuse workload 2. */
 #if defined(SUNSTONE_A733_OS) && !defined(OS_STAGED_WORKLOAD)
@@ -52,7 +53,12 @@ int mimus_board_export_live(void)
 void mimus_board_host_observed(int ready)
 {
     BOARD_PROGRESS(BOARD_SERVICE_USB2);
-    if(ready&&a733_usb2_device_kind(&board.host)!=(board.session.workload==4?A733_USB2_DEVICE_DUAL:A733_USB2_DEVICE_MSC)){board_fail(NULL);return;}
+    if(ready){
+        const unsigned kind=(unsigned)a733_usb2_device_kind(&board.host);
+        if(kind!=(unsigned)(board.session.workload==4?A733_USB2_DEVICE_DUAL:A733_USB2_DEVICE_MSC)){
+            board_fail_at(SUNSTONE_CRUMB_FAIL_SITE(BOARD),kind,SUNSTONE_CRUMB_HERE());return;
+        }
+    }
     if(!ready)return;
     int live=board.host.core.ops.live?board.host.core.ops.live(board.host.core.context,
         board.host.core.generation,board.host.platform.config.lifetime_deadline):-1;
@@ -64,7 +70,8 @@ void mimus_board_host_observed(int ready)
     }
     atomic_store_explicit(&observed_until,board.host.platform.attachment.observed_us+A733_TYPEC_FRESH_US,memory_order_release);
 }
-void mimus_board_fail(void){board_fail(NULL);}
+__attribute__((noinline)) void mimus_board_fail(void)
+{board_fail_at(SUNSTONE_CRUMB_FAIL_SITE(RECOGNIZER)|SUNSTONE_CRUMB_FAIL_RETURN,0,__builtin_return_address(0));}
 /* EL0-safe: one atomic store. A resident image lists the recognizer as its
  * first service after the board's own. */
 void mimus_board_progress(void){BOARD_PROGRESS(BOARD_SERVICES);}
