@@ -176,10 +176,7 @@ if(SUNSTONE_A733_OS_NPU)
 endif()
 set(os_include_dirs)
 if(SUNSTONE_A733_OS_HEADSET)
-  # The Bluetooth image's headset composition (cmake/a733-bluetooth.cmake),
-  # without its USB0 output and its own recognizer: the OS recognizer takes
-  # the headset segments. Version 3 profiles name the recognition models, which
-  # are the mimus board's own (apps/bluetooth/recognition-models.json).
+  # The Bluetooth capture provider shares the radio owner when selected.
   set(SUNSTONE_BT_SECURITY_DIR "" CACHE PATH "Pinned Zephyr BR/EDR security source directory")
   if(NOT SUNSTONE_BT_SECURITY_DIR)
     message(FATAL_ERROR "The headset build requires SUNSTONE_BT_SECURITY_DIR")
@@ -197,18 +194,6 @@ if(SUNSTONE_A733_OS_HEADSET)
     string(JSON name MEMBER "${os_security_record}" sources ${index})
     list(APPEND os_external_inputs "${SUNSTONE_BT_SECURITY_DIR}/${name}")
   endforeach()
-  file(READ "${os_root}/apps/bluetooth/recognition-models.json" os_models)
-  set(os_model_sizes "")
-  set(os_model_hashes "")
-  foreach(index RANGE 0 1)
-    string(JSON bytes GET "${os_models}" models ${index} bytes)
-    string(JSON hash GET "${os_models}" models ${index} sha256)
-    string(APPEND os_model_sizes "${bytes},")
-    string(REGEX REPLACE "(..)" "0x\\1," hash_bytes "${hash}")
-    string(APPEND os_model_hashes "{${hash_bytes}},")
-  endforeach()
-  file(WRITE "${os_bluetooth}/recognition-models.h"
-    "static const uint64_t bluetooth_model_bytes[2]={${os_model_sizes}};\nstatic const uint8_t bluetooth_model_sha256[2][32]={${os_model_hashes}};\n")
   list(APPEND os_added apps/os/headset.c apps/bluetooth/bluetooth.c apps/bluetooth/headset.c apps/bluetooth/pcm.c
     drivers/uart/a733_uart.c drivers/uart/a733_uart_platform.c drivers/uart/a733_uart_platform_native.c
     drivers/bluetooth/bt_h4.c drivers/bluetooth/bt_hci.c drivers/bluetooth/bt_security.c drivers/bluetooth/bt_acl.c
@@ -217,8 +202,8 @@ if(SUNSTONE_A733_OS_HEADSET)
   list(APPEND os_sources "${os_bluetooth}/zephyr-ssp.c" "${os_bluetooth}/zephyr-keys_br.c"
     "${os_bluetooth}/zephyr-security-level.c")
   list(APPEND os_external_inputs "${os_root}/apps/bluetooth/security-source.json"
-    "${os_root}/apps/bluetooth/security-source.py" "${os_root}/apps/bluetooth/recognition-models.json"
-    "${os_bluetooth}/zephyr-security-wire.h" "${os_bluetooth}/recognition-models.h")
+    "${os_root}/apps/bluetooth/security-source.py"
+    "${os_bluetooth}/zephyr-security-wire.h")
   file(GLOB os_bluetooth_headers "${os_root}/apps/bluetooth/*.h")
   list(APPEND os_external_inputs ${os_bluetooth_headers})
   list(APPEND os_include_dirs "${os_bluetooth}")
@@ -370,7 +355,7 @@ if(os_include_dirs)
   target_include_directories(sunstone-a733-os-core PRIVATE ${os_include_dirs})
 endif()
 if(SUNSTONE_A733_OS_HEADSET)
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BLUETOOTH_HEADSET=1 SUNSTONE_BLUETOOTH_RECOGNITION=1)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BLUETOOTH_HEADSET=1)
 endif()
 if(A733_A76_ADMITTED)
   target_compile_definitions(sunstone-a733-os-core PRIVATE A733_A76_ADMITTED=1

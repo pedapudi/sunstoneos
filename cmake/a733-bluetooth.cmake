@@ -85,8 +85,8 @@ endif()
       "${bluetooth_root}/runtime/newlib_syscalls_smp.c" "${bluetooth_root}/runtime/new_delete.cc"
       "${bluetooth_root}/runtime/cxx_terminate.cc"
       "${MIMUS_DIR}/firmware/components/pipeline/src/formatter.cc")
-    list(APPEND bluetooth_manifest_recognition --recognition-inputs "${bluetooth_root}/apps/bluetooth/recognition-models.json")
-    file(READ "${bluetooth_root}/apps/bluetooth/recognition-models.json" bluetooth_models)
+    list(APPEND bluetooth_manifest_recognition --recognition-inputs "${MIMUS_SUNSTONE_ROOT}/apps/bluetooth/recognition-models.json")
+    file(READ "${MIMUS_SUNSTONE_ROOT}/apps/bluetooth/recognition-models.json" bluetooth_models)
     set(bluetooth_model_sizes "")
     set(bluetooth_model_hashes "")
     foreach(index RANGE 0 1)
@@ -102,7 +102,7 @@ endif()
     file(GLOB_RECURSE bluetooth_asr_headers "${MIMUS_DIR}/firmware/components/asr/include/*.h"
       "${MIMUS_DIR}/firmware/components/pipeline/include/*.h")
     set(bluetooth_recognition_inputs ${bluetooth_sbc_inputs} ${bluetooth_recognition_sources} ${bluetooth_asr_inputs} ${bluetooth_asr_headers}
-      "${bluetooth_root}/apps/bluetooth/recognition-models.json" "${MIMUS_SUNSTONE_ROOT}/apps/mimus/recorded.h"
+      "${MIMUS_SUNSTONE_ROOT}/apps/bluetooth/recognition-models.json" "${MIMUS_SUNSTONE_ROOT}/apps/mimus/recorded.h"
       "${bluetooth_root}/apps/mimus/source.json"
       "${bluetooth_build}/recognition-models.h"
       "${MIMUS_SUNSTONE_ROOT}/cmake/mimus.cmake" "${MIMUS_SUNSTONE_ROOT}/cmake/mimus-smp.cmake"
