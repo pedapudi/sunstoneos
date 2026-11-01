@@ -6,6 +6,7 @@ include/sunstone_crumb.h, so the image and decoder use one definition.
 No device access happens here:
 callers pass the FEL transaction function they already own.
 """
+import hashlib
 import re
 import shutil
 import subprocess
@@ -70,6 +71,23 @@ def parse_return(stdout):
     if len(values) != 2 + len(WORDS):
         raise ValueError('Unexpected watchdog return readback.')
     return values[0], values[1], dict(zip(WORDS, values[2:]))
+
+
+def bundle_image(bundle, image_sha256):
+    """Select the validated bundle's ELF for caller decoding.
+
+    CPU development bundles keep it under board/. Finite NPU bundles keep
+    it at the root. Only the image matching validated metadata is eligible;
+    a present CPU-layout image retains precedence even if its hash differs.
+    """
+    bundle = Path(bundle)
+    cpu = bundle / 'board/image.elf'
+    image = cpu if cpu.exists() else bundle / 'image.elf'
+    if not image.is_file():
+        return None
+    if hashlib.sha256(image.read_bytes()).hexdigest() != image_sha256:
+        return None
+    return image
 
 
 def symbolize(elf, address):
