@@ -41,12 +41,22 @@ unchanged 125000-microsecond completeness bound. The originating check is
 that receipt invalid. The application completion text matches its expectation.
 CPU retirement and rail cleanup succeed; the instance is not quarantined.
 
-The relative 100 ms report and 25 ms sensor deadlines in `apps/os/thermal.c`
-can defer a row after small completion-time jitter. A shared-owner proposal
-uses absolute phases and skips missed slots without fabricating readings.
-It passes patch applicability and independent source review; it is not applied
-or qualified. Native jitter-path coverage and ownership authorization remain
-required. No application workaround or capture-limit change is proposed.
+Commit `e8887a23` implements absolute 25 ms sensor deadlines and a 125 ms
+report phase. Version 2 headers carry the first selected scheduled time through
+USB and returning capture. Each sample must match its consecutive scheduled
+slot within 2001 microseconds: one 1 ms wakeup tick, one 1 ms read/publication
+budget and one microsecond of timestamp quantization. Longer lock, read or
+scheduling delays fail completeness; this is an acceptance budget rather than
+a worst-case execution guarantee. Missing slots remain failures. Version 1
+reports retain their earlier decoding behavior.
+
+Eight native cases execute the actual owner step and publication with modeled
+THS completion and policy values. They cover 1 ms polling, opposite completion
+jitter, lateness boundaries, IRQs, missed periods, critical and empty windows.
+Nine decoder cases check lateness, missing samples and both report transports.
+The OS baseline and archived linked capture pass. Independent review approves
+the committed code. The queue must load the updated decoder before version 2
+board submissions; the new paced control and repeat batch remain unqualified.
 
 The five paced repeats remain unsubmitted. A new control must first pass the
 complete capture check. Each trial uses a fresh native session; these trials
