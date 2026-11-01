@@ -6,6 +6,7 @@
 #define PMIC_MODEL_NO_MAIN 1
 #include "a733-pmic.c"
 #include "a733_cpu_clock.h"
+#include "register_latency.h"
 #define PLL(d) (UINT32_C(0x08871000)+UINT32_C(0x1000)*(d))
 #define SEL(d) (PLL(d)+0x1c)
 #define LOCKED UINT32_C(0xf8000000)
@@ -15,7 +16,8 @@
 struct event { uint64_t at; unsigned pmic; uint32_t address, value; };
 struct cpu_model {
     unsigned bin, stuck_update, stuck_lock, ignore_pmic, reads, writes, count, read_ns, frac_ns;
-    uint64_t update_at[3], lock_at[3], lock_us; /* lock_us 0: lock 20 us after the update. */
+    uint64_t update_us, lock_us; /* Defaults: UPDATE 10 us, LOCK 20 us. */
+    struct register_latency update[3], lock[3];
     uint64_t park_ns[3]; /* Time of each domain's latest park write, in nanoseconds. */
     /* Lock reads while parked: consecutive set reads counted at least 3 us
      * apart, the time of the last counted one and of the third. glitch makes
@@ -92,8 +94,10 @@ static int cpu_now(void *v,uint64_t *out)
 static void advance(unsigned d)
 {
     uint32_t *pll=word(PLL(d));
-    if((*pll&(1u<<26)) && !cm.stuck_update && pm.now>=cm.update_at[d])*pll&=~(1u<<26);
-    if(!(*pll&(1u<<28)) && !(*pll&(1u<<26)) && !cm.stuck_lock && pm.now>=cm.lock_at[d])*pll|=1u<<28;
+    cm.update[d].stuck=cm.stuck_update;
+    cm.lock[d].stuck=cm.stuck_lock || cm.stuck_update;
+    *pll=reg_latency_apply(&cm.update[d],pm.now,*pll);
+    *pll=reg_latency_apply(&cm.lock[d],pm.now,*pll);
 }
 static int cpu_read(void *v,uintptr_t a,uint32_t *out)
 {
@@ -122,8 +126,18 @@ static int cpu_write(void *v,uintptr_t a,uint32_t value)
              * at least boot0's 20 us after the park. */
             assert(((*word(SEL(d))>>24)&7)==0);
             assert(model_ns()>=cm.park_ns[d]+20000u);
-            *word(a)=value&~(1u<<28);cm.lock_run[d]=0;
-            if(value&(1u<<26)){cm.update_at[d]=pm.now+10;cm.lock_at[d]=pm.now+(cm.lock_us ? cm.lock_us : 20);}
+            uint32_t old=*word(a),nmask=UINT32_C(255)<<8;
+            /* A733 manual 5.1.10.6/18/30: N may retain its old
+             * readback until UPDATE clears. 10/20 us are fixture delays
+             * within the vendor's 10 ms update / 70 ms lock bounds. */
+            *word(a)=(value&~(nmask|(1u<<28)))|(old&(nmask|(1u<<28)));
+            cm.lock_run[d]=0;
+            if(value&(1u<<26)){
+                reg_latency_schedule(&cm.update[d],pm.now,cm.update_us ? cm.update_us : 10,
+                    nmask|(1u<<26)|(1u<<28),value&nmask);
+                reg_latency_schedule(&cm.lock[d],pm.now,cm.lock_us ? cm.lock_us : 20,
+                    1u<<28,1u<<28);
+            }
         }
         if(a==SEL(d)) {
             unsigned was=(*word(a)>>24)&7,now=(value>>24)&7;

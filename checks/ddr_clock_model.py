@@ -1,19 +1,20 @@
 """Model of the CPU PLL block for the DDR wrapper checks (library).
 
 The three PLL words (CPU-L 0x08871000, CPU-B 0x08872000, DSU 0x08873000) and
-their muxes (+0x1c) start at the values boot0's board setup leaves, as both
-boards read them on 2026-10-31. Writing a PLL word with the update bit set
-keeps the old lock bit until the update bit clears, `update_reads` reads
-later; the lock bit then clears and sets again after `lock_reads` further
-reads. A domain named in `stuck_update` never clears its update bit; one in
-`stuck_lock` never locks; one in `lock_glitch` reads locked once, unlocked
-once, and then locked; one in `stuck_mux` ignores writes to its mux. The wrapper's counter routine is replaced by a fake
+muxes (+0x1c) start at recorded boot0 values. N and the old lock bit remain
+visible while UPDATE is pending. UPDATE completes after update_reads * step
+counter ticks; LOCK asserts lock_reads * step ticks later. These are fixture
+latencies within the vendor bounds, not physical measurements. Reads alone do
+not complete either event. stuck_update, stuck_lock and stuck_mux suppress the
+corresponding completion. lock_glitch injects one clear read after the first
+new locked observation. The wrapper's counter routine is replaced by a fake
 24 MHz counter that starts at `start` and advances `step` ticks per call
 until it reaches `stop` (if given). Every access is logged with the counter
 value, so a check can verify the order of writes, the waits and the final
 words. No hardware is involved.
 """
 import struct
+from register_latency import RegisterLatency
 from unicorn import UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
 from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1
 
@@ -34,7 +35,7 @@ class ClockModel:
         self.stuck_update = {DOMAINS[d] for d in stuck_update}
         self.lock_glitch = {DOMAINS[d] for d in lock_glitch}
         self.stuck_mux = {DOMAINS[d] + 0x1c for d in stuck_mux}
-        self.pending = {}          # PLL word -> lock bit for each read after the update clears
+        self.pending = {}          # PLL word -> independent UPDATE and LOCK effects
         self.tick = start
         self.log = []              # (op, address, value, tick)
         self.ticks_address = ticks_address
@@ -57,33 +58,32 @@ class ClockModel:
                 mux = self.words[address + 0x1c]
                 assert not mux & SOURCE, ("PLL written while its mux selects it", hex(address))
                 if value & UPDATE:
-                    if address in self.stuck_lock:
-                        locks = []
-                    elif address in self.lock_glitch:
-                        locks = [LOCK, 0]
-                    else:
-                        locks = [0] * (self.lock_reads - 1)
-                    self.pending[address] = [self.update_reads, locks]
-                    value = (value & ~LOCK) | (self.words[address] & LOCK)
-                else:
-                    value = (value & ~LOCK) | (self.words[address] & LOCK)
+                    nmask = 0xff00
+                    update = RegisterLatency(self.tick, self.update_reads * max(1, self.step),
+                                             nmask | UPDATE | LOCK, value & nmask,
+                                             stuck=address in self.stuck_update)
+                    lock = RegisterLatency(self.tick, (self.update_reads + self.lock_reads) * max(1, self.step),
+                                           LOCK, LOCK,
+                                           stuck=address in self.stuck_lock or address in self.stuck_update)
+                    self.pending[address] = [update, lock, 2 if address in self.lock_glitch else 0]
+                # The multiplier is latched by UPDATE, not by the preceding write.
+                value = (value & ~(LOCK | 0xff00)) | (self.words[address] & (LOCK | 0xff00))
             if address not in self.stuck_mux:
                 self.words[address] = value & 0xffffffff
             return
         word = self.words[address]
         if address in self.pending:
-            update, locks = self.pending[address]
-            if word & UPDATE:
-                if address not in self.stuck_update:
-                    update -= 1
-                    if update <= 0:
-                        word &= ~(UPDATE | LOCK)
-                self.pending[address] = [update, locks]
-            elif locks:
-                word = (word & ~LOCK) | locks.pop(0)
-            elif address not in self.stuck_lock:
-                word |= LOCK
-                del self.pending[address]
+            update, lock, glitch = self.pending[address]
+            word = update.apply(self.tick, word)
+            word = lock.apply(self.tick, word)
+            if not update.pending and not lock.pending:
+                if glitch:
+                    if glitch == 1:
+                        word &= ~LOCK
+                    self.pending[address][2] -= 1
+                else:
+                    word |= LOCK
+                    del self.pending[address]
             self.words[address] = word
         self.log.append(("r", address, word, self.tick))
         uc.mem_write(address, struct.pack("<I", word))
