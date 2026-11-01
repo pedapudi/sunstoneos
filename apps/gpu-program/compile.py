@@ -12,6 +12,12 @@ import subprocess
 
 MESA='86c7176d2dd0065555521bf8c61f208bf53c75d6'
 CLC_HASH='1281aa7e7b909d496a25f145ebc72bcdebc2755aec83bdde351b700091e9a1d4'
+LOCAL_SOURCE_HASHES={
+ 'src/imagination/pco/pco_nir.c':'9bf212b20b3a2c65eecdade6a9733836507c53824298d33e713537fff60a79b0',
+ 'src/imagination/pco/pco_nir_io.c':'0ee110906c2d9cac5eac7f5546ae0bb6b442e7289253f008777cdae1cfd29f1c',
+ 'src/imagination/pco/pco_nir_sync.c':'a79650155605cb95b0fa0f57bd1ca8377d07c9096456549e444afd765fbabfe0',
+ 'src/imagination/pco/pco_trans_nir.c':'a25cd9853a00759517c1787946d54689c2a092f14910cc055e5518d444b24025',
+}
 CODE=4032
 # A native session program (--session) has no package: its code is linked
 # into the image and copied into two 4 KiB program pages at session open.
@@ -35,15 +41,25 @@ def upstream_binary(build,out,compiler=None):
     return b''.join(struct.pack('<I',int(x,16)) for x in re.findall(r'0x[0-9a-fA-F]+',arrays[0])),command
 
 def metadata_valid(meta,profile,session=False):
-    if len(meta)!=18 or any(meta[3:10]) or any(meta[13:]) or (meta[0]+3)//4>63:return False
+    if len(meta)!=18 or any(type(v) is not int or v<0 for v in meta) or (meta[0]+3)//4>63:return False
+    if profile==4:
+        # One hardware task: PCO removes workgroup barriers and emits direct
+        # common-store accesses. No global backing, initialization or usclib.
+        start=meta[2]-meta[13]
+        return session and not any(meta[3:8]) and meta[8] in (0,1) and not meta[9] and \
+            meta[1]==5 and start in (3,7) and 0<meta[13]<=240 and not any(meta[14:]) and \
+            meta[12]==1 and 0<meta[10]<=32 and 0<meta[11]<=32 and meta[10]*meta[11]==32
+    if any(meta[3:10]) or any(meta[13:]):return False
     if profile==3:
-        # A session program may leave the workgroup counts unread: the PDS
-        # still writes all seven coefficients and the program reads three.
         return (meta[1:3]==[5,7] or (session and meta[1:3]==[5,3])) and meta[12]==1 and \
             0<meta[10]<=32 and 0<meta[11]<=32 and meta[10]*meta[11]==32
     return meta[2]==0 and meta[10:13]==[32,1,1] and meta[1]<=(6 if profile==2 else 4)
 
-def grid_compiler_source(original,mesa):
+def precomp_prefix(meta):
+    # PCO packs 12 coefficient bits followed by 12 shared-register bits.
+    return bytes(meta[:2])+int(meta[2]|(meta[3]<<12)).to_bytes(3,'little')
+
+def grid_compiler_source(original,mesa,local_memory=False):
     pipeline=(mesa/'src/imagination/vulkan/pvr_arch_pipeline.c').read_text()
     if digest(pipeline.encode())!='4e2742f0534d9de7783cb1f7180b22f5c9ada27802c23a253d3143d73171c4e8':
         raise ValueError('Pinned compute sysval allocator differs')
@@ -52,7 +68,7 @@ def grid_compiler_source(original,mesa):
         while depth:
             depth+=(pipeline[end]=='{')-(pipeline[end]=='}');end+=1
         return pipeline[start:end]
-    functions='\n'.join(extract(x) for x in ('allocate_val','check_unused_sysvals','pvr_alloc_cs_sysvals'))
+    functions='\n'.join(extract(x) for x in ('allocate_val','check_unused_sysvals','pvr_alloc_cs_sysvals')+ (('pvr_alloc_cs_shmem',) if local_memory else ()))
     source=original.decode().replace('static pco_shader *build_shader(',functions+'\nstatic pco_shader *build_shader(')
     # Same postprocess/allocate/translate order as the Vulkan compiler path.
     allocation=r'''
@@ -64,14 +80,35 @@ def grid_compiler_source(original,mesa):
    data->common.vtxins=4; /* Two explicit pointer arguments. */
    pvr_alloc_cs_sysvals(data,nir);
 '''
+    if local_memory:
+        allocation += '\n   pvr_alloc_cs_shmem(data,nir);\n'
+        # Preserve workgroup variables until the PCO lowering pass assigns their
+        # byte offsets. Other address spaces retain the upstream usclib ABI.
+        source=source.replace('''         NIR_PASS(_,
+                  s,
+                  nir_lower_vars_to_explicit_types,
+                  nir_var_mem_shared,
+                  glsl_get_cl_type_size_align);
+''','')
+        source=source.replace('.shared_addr_format = nir_address_format_62bit_generic,',
+                              '.shared_addr_format = nir_address_format_32bit_offset,')
+        source=source.replace('nir_var_mem_shared | nir_var_mem_global,\n                  nir_address_format_62bit_generic);',
+                              'nir_var_mem_global,\n                  nir_address_format_62bit_generic);')
+        # The upstream usclib tool supplies zero runtime limits. Use a bounded
+        # admitted limit so PCO can select its common-store implementation.
+        source=source.replace('struct pvr_device_runtime_info dev_runtime_info = { 0 };',
+            'struct pvr_device_runtime_info dev_runtime_info = { .cdm_max_local_mem_size_regs = 4096 };')
     return source.replace('   pco_postprocess_nir(ctx, nir, data);','   pco_postprocess_nir(ctx, nir, data);'+allocation)
 
 def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_program=False):
     """Compile a supported GPU profile and check its resource metadata."""
     if queue_program:session=True
-    if profile not in (1,2,3) or (session and profile!=3):raise ValueError('Unsupported register/dispatch ABI')
+    if profile not in (1,2,3,4) or (session and profile not in (3,4)) or (profile==4 and not session):raise ValueError('Unsupported register/dispatch ABI')
     source,mesa,build,out=map(lambda p:Path(p).resolve(),(source,mesa,build,out))
     out.mkdir(parents=True,exist_ok=True)
+    if profile==4:
+        for name,sha in LOCAL_SOURCE_HASHES.items():
+            if digest((mesa/name).read_bytes())!=sha:raise ValueError('Pinned local-memory compiler source differs: '+name)
     original=(mesa/'src/imagination/pco/uscgen/pco_clc.c').read_bytes()
     if digest(original)!=CLC_HASH:raise ValueError('Pinned Mesa pco_clc source differs')
     # Instrument only metadata export; compilation passes and code output stay upstream.
@@ -85,6 +122,7 @@ def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_pr
               m->cs.workgroup_size[0],m->cs.workgroup_size[1],m->cs.workgroup_size[2],
               m->cs.shmem.count,m->cs.zero_shmem,m->cs.global_shmem,
               m->common.uses.point_sampler,m->common.uses.ia_sampler);
+            fprintf(stderr,"SUNSTONE_LOCAL_START %u\n",m->cs.shmem.start);
 '''
     scan=r'''
    sunstone_vtxin_mask = 0;
@@ -103,11 +141,11 @@ def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_pr
       }
    }
 '''
-    base_source=grid_compiler_source(original,mesa) if profile==3 else original.decode()
+    base_source=grid_compiler_source(original,mesa,profile==4) if profile>=3 else original.decode()
     patched=base_source.replace('static pco_shader *build_shader(', 'static unsigned sunstone_vtxin_mask;\nstatic pco_shader *build_shader(')
     patched=patched.replace('   pco_postprocess_nir(ctx, nir, data);', '   pco_postprocess_nir(ctx, nir, data);'+scan)
     patched=patched.replace(anchor,anchor+export+'\n            fprintf(stderr,"SUNSTONE_VTXIN_MASK %u\\n",sunstone_vtxin_mask);\n')
-    if profile==3:
+    if profile>=3:
         sysvals=r'''
             fprintf(stderr,"SUNSTONE_SYSVALS %u %u %u %u %u %u\n",
               m->common.sys_vals[SYSTEM_VALUE_LOCAL_INVOCATION_INDEX].start,m->common.sys_vals[SYSTEM_VALUE_LOCAL_INVOCATION_INDEX].count,
@@ -115,6 +153,11 @@ def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_pr
               m->common.sys_vals[SYSTEM_VALUE_NUM_WORKGROUPS].start,m->common.sys_vals[SYSTEM_VALUE_NUM_WORKGROUPS].count);
 '''
         patched=patched.replace(export,export+sysvals)
+    if profile==4:
+        patched=patched.replace('   pco_shader *shader = pco_trans_nir(ctx, nir, data, NULL);',
+            '   nir_print_shader(nir,stderr);\n   pco_shader *shader = pco_trans_nir(ctx, nir, data, NULL);')
+        patched=patched.replace('   pco_encode_ir(ctx, shader);',
+            '   pco_encode_ir(ctx, shader);\n   pco_print_shader(shader,stderr,"local-memory compiler evidence");')
     (out/'pco_clc_metadata.c').write_text(patched)
     entries=json.loads((build/'compile_commands.json').read_text())
     entry=next(e for e in entries if e['file'].endswith('/pco_clc.c'))
@@ -129,7 +172,7 @@ def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_pr
     link=[str(out/'metadata.o') if x=='src/imagination/pco/uscgen/pco_clc.p/pco_clc.c.o' else x for x in link]
     commands.append(link);run(link,build,out,'metadata-link')
     reference_compiler=None
-    if profile==3:
+    if profile>=3:
         (out/'pco_clc_grid_reference.c').write_text(base_source)
         ref_cc=[str(out/'reference.o') if x==str(out/'metadata.o') else str(out/'pco_clc_grid_reference.c') if x==str(out/'pco_clc_metadata.c') else x for x in cc]
         commands.append(ref_cc);run(ref_cc,build,out,'reference-build')
@@ -155,27 +198,33 @@ def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_pr
     if len(arrays)!=1:raise ValueError('Require exactly one common binary')
     blob=b''.join(struct.pack('<I',int(x,16)) for x in re.findall(r'0x[0-9a-fA-F]+',arrays[0]))
     if len(blob)<12 or len(blob)!=8+int.from_bytes(blob[5:7],'little')*4 or len(blob)-8>(SESSION_CODE if session else CODE-(32 if profile==3 else 0)):raise ValueError('Invalid USC extent')
-    if blob[:2]!=bytes(meta[:2]) or blob[2:5]!=bytes([meta[2],0,0]):raise ValueError('Metadata/header disagreement')
+    if blob[:2]!=bytes(meta[:2]) or blob[2:5]!=precomp_prefix(meta)[2:5]:raise ValueError('Metadata/header disagreement')
     upstream,command=upstream_binary(build,out,reference_compiler)
     commands.append(command)
     if upstream!=blob:raise ValueError('Instrumented compiler changed USC bytes')
     sysvals=[]
-    if profile==3:
+    if profile>=3:
         fields=re.findall(r'^SUNSTONE_SYSVALS (.*)$',err,re.M)
         if len(fields)!=1:raise ValueError('Missing compiler sysval allocation')
         sysvals=list(map(int,fields[0].split()))
-        counts=[4,3] if meta[2]==7 else [0,0]
+        counts=[4,3] if (meta[2]-meta[13] if profile==4 else meta[2])==7 else [0,0]
         if sysvals!=[4,1,0,3]+counts or explicit_mask!=15:raise ValueError('Grid register ABI differs')
+    if profile==4:
+        starts=re.findall(r'^SUNSTONE_LOCAL_START (\d+)$',err,re.M)
+        if starts!=[str(meta[2]-meta[13])]:raise ValueError('Local-memory allocator range differs')
     (out/'program.bin').write_bytes(blob)
     (out/'source.cl').write_bytes(source.read_bytes())
-    manifest={'schema':'sunstone-pco-profile-v'+str(profile),'profile':profile,'session':session,'explicit_vtxin_mask':explicit_mask,'abi_vtxins':5 if profile==3 else 6 if profile==2 else 4,'sysval_ranges':sysvals,'mesa_revision':MESA,'source_sha256':digest(source.read_bytes()),
+    manifest={'schema':'sunstone-pco-profile-v'+str(profile),'profile':profile,'session':session,'explicit_vtxin_mask':explicit_mask,'abi_vtxins':5 if profile>=3 else 6 if profile==2 else 4,'sysval_ranges':sysvals,'mesa_revision':MESA,'source_sha256':digest(source.read_bytes()),
       'spirv_sha256':digest((out/'kernel.spv').read_bytes()),'program_sha256':digest(blob),'metadata':meta,
       'compiler_sha256':digest((out/'pco_clc_metadata').read_bytes()),
       'upstream_compiler_sha256':digest((build/'src/imagination/pco/uscgen/pco_clc').read_bytes()),
       'reference_compiler_sha256':digest((reference_compiler or build/'src/imagination/pco/uscgen/pco_clc').read_bytes()),
-      'reference_adapter_source_sha256':digest(base_source.encode()) if profile==3 else None,
+      'reference_adapter_source_sha256':digest(base_source.encode()) if profile>=3 else None,
       'metadata_export_source_sha256':digest(patched.encode()),'commands':commands,
       'source_bounds':'Native package validation checks the selected format and resource bounds.'}
+    if profile==4:
+        manifest['local_source_hashes']=LOCAL_SOURCE_HASHES
+        manifest['source_bounds']='Native queue admission checks descriptor and resource bounds; source review establishes accesses and uniform barriers.'
     if queue_program:
         manifest['queue_program']=True
         (out/'program.h').write_text(emit_queue_program(blob,manifest))
@@ -191,17 +240,19 @@ def emit_queue_program(blob,manifest):
     """
     m=manifest
     meta=m.get('metadata',[])
-    if m.get('profile')!=3 or m.get('schema')!='sunstone-pco-profile-v3' or m.get('mesa_revision')!=MESA:
+    profile=m.get('profile')
+    if profile not in (3,4) or m.get('schema')!='sunstone-pco-profile-v'+str(profile) or m.get('mesa_revision')!=MESA:
         raise ValueError('Queue program requires the pinned grid profile')
     if not isinstance(meta,list) or len(meta)!=18 or any(type(v) is not int or v<0 for v in meta) or \
-       not metadata_valid(meta,3,True):
+       not metadata_valid(meta,profile,True):
         raise ValueError('Unsupported queue program metadata')
-    expected_sysvals=[4,1,0,3]+([4,3] if meta[2]==7 else [0,0])
+    sysval_coeffs=meta[2]-meta[13] if profile==4 else meta[2]
+    expected_sysvals=[4,1,0,3]+([4,3] if sysval_coeffs==7 else [0,0])
     if m.get('explicit_vtxin_mask')!=15 or m.get('abi_vtxins')!=5 or m.get('sysval_ranges')!=expected_sysvals:
         raise ValueError('Queue program register ABI differs')
     if len(blob)<12 or len(blob)-8>SESSION_CODE or (len(blob)-8)%4 or \
        len(blob)!=8+int.from_bytes(blob[5:7],'little')*4 or blob[7]!=0 or \
-       blob[:5]!=bytes([meta[0],meta[1],meta[2],0,0]):
+       blob[:5]!=precomp_prefix(meta):
         raise ValueError('Queue program binary/header differs')
     hashes=[]
     for field in ('program_sha256','source_sha256','compiler_sha256'):
@@ -216,10 +267,11 @@ def emit_queue_program(blob,manifest):
     for offset in range(0,len(words),8):
         lines.append('    '+', '.join('0x%08xu'%w for w in words[offset:offset+8])+',')
     lines+=['};','static const struct gpu_queue_program gpu_queue_program = {',
-            '    .abi = GPU_QUEUE_ABI_GRID, .code_bytes = sizeof(gpu_queue_code),',
-            '    .temps = %uu, .coefficients = %uu,'%(meta[0],meta[2]),
+            '    .abi = '+('GPU_QUEUE_ABI_LOCAL' if profile==4 else 'GPU_QUEUE_ABI_GRID')+', .code_bytes = sizeof(gpu_queue_code),',
+            '    .temps = %uu, .coefficients = %uu,'%(meta[0],sysval_coeffs),
             '    .local_size = {%uu, %uu, %uu}, .reserved = 0,'%tuple(meta[10:13]),
             '    .code = gpu_queue_code,']
+    if profile==4:lines.append('    .local_words = %uu, .barriers = %uu,'%(meta[13],meta[8]))
     for field,raw in zip(('program_sha256','source_sha256','compiler_sha256'),hashes):
         lines.append('    .'+field+' = {'+', '.join('0x%02x'%b for b in raw)+'},')
     return '\n'.join(lines+['};',''])
@@ -232,12 +284,12 @@ def package(program,manifest,input_data,output_bytes,input_header_bytes,input_el
     if len(data)<4 or len(data)>INPUT or not 0<output_bytes<=3968 or output_bytes%4:raise ValueError('Invalid data bounds')
     meta=m['metadata']
     if not metadata_valid(meta,profile):raise ValueError('Unsupported profile')
-    if blob[:5]!=bytes([meta[0],meta[1],meta[2],0,0]) or meta[1]>(5 if profile==3 else 6 if profile==2 else 4) or (meta[0]+3)//4>63:raise ValueError('Compiler header/resource metadata differs')
+    if blob[:5]!=precomp_prefix(meta) or meta[1]>(5 if profile==3 else 6 if profile==2 else 4) or (meta[0]+3)//4>63:raise ValueError('Compiler header/resource metadata differs')
     count=struct.unpack_from('<I',data)[0]
     groups=(count+31)//32 if profile>=2 else 0
     if profile==2 and (count>992 or m.get('explicit_vtxin_mask')!=63 or m.get('abi_vtxins')!=6):raise ValueError('Unsupported dispatch extent or register ABI')
     geometry=b''
-    if profile==3:
+    if profile>=3:
         if len(data)<12 or input_header_bytes<12 or m.get('sysval_ranges')!=[4,1,0,3,4,3] or m.get('explicit_vtxin_mask')!=15 or m.get('abi_vtxins')!=5:
             raise ValueError('Grid metadata/input header differs')
         width,height=struct.unpack_from('<2I',data,4);lx,ly,_=meta[10:13]
@@ -254,9 +306,9 @@ if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='operation',required=True)
     c=sub.add_parser('compile')
     for x in ('source','mesa','build','output','ninja'):c.add_argument('--'+x,type=Path,required=True)
-    c.add_argument('--profile',type=int,choices=(1,2,3),default=1)
-    c.add_argument('--session',action='store_true',help='Profile three without a package: code linked into the image')
-    c.add_argument('--queue-program',action='store_true',help='Profile three with a gpu_queue_program descriptor in program.h')
+    c.add_argument('--profile',type=int,choices=(1,2,3,4),default=1)
+    c.add_argument('--session',action='store_true',help='Grid profile without a package: code linked into the image')
+    c.add_argument('--queue-program',action='store_true',help='Grid profile with a gpu_queue_program descriptor in program.h')
     b=sub.add_parser('package')
     for x in ('program','manifest','input','output'):b.add_argument('--'+x,type=Path,required=True)
     for x in ('output-bytes','input-header-bytes','input-element-bytes','output-element-bytes'):b.add_argument('--'+x,type=int,required=True)

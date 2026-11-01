@@ -68,6 +68,18 @@ void pvr_compute_job_grid_pds(void *pds, uint64_t task, const uint32_t groups[3]
                               uint64_t input, uint64_t output);
 void pvr_compute_job_grid_cdm(void *cdm, uint32_t pds, uint32_t fence,
                               const uint32_t groups[3]);
+/* Immutable descriptor admission: total coefficient allocation in words, or
+ * zero on unsupported resources. No runtime code inspection or source proof. */
+struct gpu_queue_program;
+unsigned pvr_compute_job_common_words(const struct gpu_queue_program *);
+/* Same grid stream with a per-workgroup on-chip coefficient allocation.
+ * common_words includes system values and local memory; allocation rounds up
+ * to 64 bytes. Does not set USC_COMMON_SHARED, which selects a different bank.
+ * Refuses zero or more than 247 words without changing cdm. Other arguments
+ * have the same prevalidated lifetime and extent contract as grid_cdm. */
+int pvr_compute_job_grid_cdm_resources(void *cdm, uint32_t pds, uint32_t fence,
+                                      const uint32_t groups[3], unsigned common_words);
+
 
 enum pvr_compute_job_phase { PVR_JOB_NEW, PVR_JOB_CHECK_FENCE, PVR_JOB_PUBLISH,
     PVR_JOB_SUBMIT, PVR_JOB_KICK, PVR_JOB_WAIT_FENCE, PVR_JOB_READ_OUTPUT,

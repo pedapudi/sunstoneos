@@ -37,13 +37,19 @@ elseif(SUNSTONE_APPLICATION MATCHES "^latency(-dma)?$")
   include("${SUNSTONE_SOURCE_ROOT}/apps/latency/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-${SUNSTONE_APPLICATION} LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION ${SUNSTONE_APPLICATION})
-elseif(SUNSTONE_APPLICATION STREQUAL "queue-add")
-  add_sunstone_application(queue-add
-    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/queue-add/main.c"
-    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/queue-add/manifest.json"
-    INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/queue-add")
-  add_sunstone_image(sunstone-a733-os-queue-add LIFETIME ${os_lifetime}
-    SERVICES ${os_services} APPLICATION queue-add)
+elseif(SUNSTONE_APPLICATION MATCHES "^queue-(add|gemm)$")
+  add_sunstone_application(${SUNSTONE_APPLICATION}
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/${SUNSTONE_APPLICATION}/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/${SUNSTONE_APPLICATION}/manifest.json"
+    INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/${SUNSTONE_APPLICATION}")
+  if(SUNSTONE_APPLICATION STREQUAL "queue-gemm")
+    option(SUNSTONE_GPU_GEMM_CONTROL "Use direct global loads for the GEMM control" OFF)
+    if(SUNSTONE_GPU_GEMM_CONTROL)
+      target_compile_definitions(queue-gemm PRIVATE SUNSTONE_GPU_GEMM_CONTROL=1)
+    endif()
+  endif()
+  add_sunstone_image(sunstone-a733-os-${SUNSTONE_APPLICATION} LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION ${SUNSTONE_APPLICATION})
 elseif(SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle")
   if(NOT SUNSTONE_A733_OS_GPU)
     message(FATAL_ERROR "GPU lifecycle requires SUNSTONE_A733_OS_GPU=ON")

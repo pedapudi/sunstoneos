@@ -21,6 +21,7 @@
  * SOFTWARE.
  */
 #include "pvr_compute_job.h"
+#include "gpu_queue.h"
 #include "a733_range.h"
 #include <string.h>
 #include "pvr_compute_probe.inc"
@@ -167,16 +168,33 @@ __attribute__((always_inline)) void pvr_compute_job_grid_pds(void *pds,uint64_t 
     doutw_pair(pds,80,input);put32(pds,88,2);
     doutw_pair(pds,96,output);put32(pds,104,0x4002);
 }
-__attribute__((always_inline)) void pvr_compute_job_grid_cdm(void *cdm,uint32_t pds,uint32_t fence,const uint32_t groups[3])
+unsigned pvr_compute_job_common_words(const struct gpu_queue_program *p)
 {
-    /* Five unified regs ->2x16B; seven coeffs ->1x64B, not shared memory.
+    if(!p||(p->coefficients!=3&&p->coefficients!=7))return 0;
+    if(p->abi==GPU_QUEUE_ABI_GRID)
+        return p->local_words||p->barriers?0:p->coefficients;
+    if(p->abi!=GPU_QUEUE_ABI_LOCAL||!p->local_words||p->local_words>GPU_QUEUE_LOCAL_WORDS||
+       p->barriers>GPU_QUEUE_BARRIER_TASK||p->local_size[2]!=1||
+       !p->local_size[0]||p->local_size[0]>32||!p->local_size[1]||p->local_size[1]>32||
+       p->local_size[0]*p->local_size[1]!=32)return 0;
+    return p->coefficients+p->local_words;
+}
+int pvr_compute_job_grid_cdm_resources(void *cdm,uint32_t pds,uint32_t fence,const uint32_t groups[3],unsigned common_words)
+{
+    if(!common_words||common_words>7+GPU_QUEUE_LOCAL_WORDS)return 0;
+    /* Five unified regs ->2x16B; coefficients are allocated per workgroup.
      * Three PDS temps ->1x16B;112 data bytes ->7x16B. */
-    put32(cdm,0,(1u<<18)|(2u<<12)|(1u<<8)|(7u<<2)|(1u<<1));
+    put32(cdm,0,(((common_words+15)/16)<<18)|(2u<<12)|(1u<<8)|(7u<<2)|(1u<<1));
     put32(cdm,4,pds);put32(cdm,8,pds+128);
     for(unsigned i=0;i<3;++i)put32(cdm,12+4*i,groups[i]-1);
-    put32(cdm,24,31u<<18); /* Hardware local32x1x1; NIR unflattens it. */
+    put32(cdm,24,31u<<18); /* One 32-lane hardware task per workgroup. */
     put32(cdm,28,(1u<<2)|(1u<<1)|1u);put32(cdm,32,fence|(1u<<2)|(1u<<1));
     put32(cdm,36,fence+16);put32(cdm,52,8u<<27);put32(cdm,56,2u<<30);
+    return 1;
+}
+void pvr_compute_job_grid_cdm(void *cdm,uint32_t pds,uint32_t fence,const uint32_t groups[3])
+{
+    (void)pvr_compute_job_grid_cdm_resources(cdm,pds,fence,groups,7);
 }
 /* Two callers; inlining it into pvr_compute_job_build adds 2,644 bytes. */
 __attribute__((noinline)) static void image(const struct pvr_compute_job_config *c,struct pvr_compute_job_image *out)
