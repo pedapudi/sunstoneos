@@ -5,6 +5,7 @@ ISP pixels, interrupts, register side effects and USB transport are modeled.
 This establishes software ownership and fresh completion checks, not physical
 DMA retirement, numerical correctness, interrupt delivery or safe ROM return.
 """
+import harness  # Refuse optimized Python before assertion-based verdicts.
 import argparse
 import gzip
 import hashlib

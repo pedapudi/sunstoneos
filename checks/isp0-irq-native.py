@@ -5,6 +5,7 @@ Register propagation, IRQ dispatch entry, scheduling, pixels and notification
 blocking are modeled. Native source masking, arming phases, waits and completion
 checks execute. This does not qualify physical IRQ delivery or transaction drain.
 """
+import harness  # Refuse optimized Python before assertion-based verdicts.
 import argparse
 import hashlib
 import importlib.util

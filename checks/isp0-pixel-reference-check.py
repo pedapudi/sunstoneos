@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Check CPU reference framing, neutral endpoints, Bayer phase and mismatch reporting."""
+import harness  # Refuse optimized Python before assertion-based verdicts.
 import argparse
 import importlib.util
 import json

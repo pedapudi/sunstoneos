@@ -5,6 +5,7 @@ No USB runs. Capture uses native-produced responses plus modeled failure and
 final-receipt headers; this checks host durability/sequence handling without
 physical authority.
 """
+import harness  # Refuse optimized Python before assertion-based verdicts.
 import argparse
 import hashlib
 import json
