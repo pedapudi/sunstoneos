@@ -48,6 +48,13 @@ application in this tree) is a Python module with:
   inputs()          the inputs used when no --input is given; optional
 A run passes when the image returns normally (RETURN_ROM breadcrumb, WDT0
 mode 0) and, when the decoder has expected(), the decoded result equals it.
+GPU receipts are copied before RAM restoration and checked against the image's
+capability markers. A gpu-return run requires completed GPU work, except for an
+image carrying an exact diagnostic stage/limit marker. Thermal windows, when
+linked, must decode as complete. Payload or telemetry errors remain failures
+after DRAM and CPU rail restoration; a transport error stops immediately.
+--expect-result JSON_VALUE overrides expected(inputs), which permits exact
+comparison of fixed binary result fields while a decoder bounds variable times.
 Without a decoder the runner prints the raw payload.
 """
 import argparse
@@ -404,13 +411,26 @@ def run_return(args, host, bundle, live, out, access=None, guard=None):
                                   return_timeout=90, watchdog=watchdog, access=access, guard=guard)
 
 
-def judge(decoder, payload, inputs, session):
+def judge(decoder, payload, inputs, session, *, result=None, require_gpu=False, expected_result=None):
     """(outcome, detail, decoded) of a run that returned with this payload."""
     w = session.get('watchdog', {})
     last = w.get('breadcrumbs', {}).get('last', {}).get('name')
     if w.get('mode_after_return') != 0 or last != 'RETURN_ROM':
         return 'failed', f'return not normal: WDT0 mode {w.get("mode_after_return")}, last breadcrumb {last}', None
+    result = result or {}
+    errors = [result[key] for key in ('output_error', 'gpu_error', 'thermal_error') if key in result]
+    gpu = result.get('gpu')
+    if require_gpu and gpu is None and not result.get('gpu_error'):
+        errors.append('GPU retirement receipt absent')
+    if require_gpu and gpu is not None and not gpu.get('gpu_bisect') and not gpu.get('completed_gpu_work'):
+        errors.append('GPU receipt proves no completed GPU job')
+    if 'thermal' in result and result['thermal'].get('classification') != 'complete':
+        errors.append('thermal window is ' + str(result['thermal'].get('classification')))
+    if errors:
+        return 'result-invalid', '; '.join(errors), None
     if decoder is None:
+        if expected_result is not None:
+            return 'result-invalid', '--expect-result requires a result decoder', None
         shown = payload[:64].hex() + ('...' if len(payload) > 64 else '')
         return 'returned', f'raw result {len(payload)} bytes {shown}', None
     try:
@@ -421,9 +441,9 @@ def judge(decoder, payload, inputs, session):
         found = decoder.failures(decoded)
         if found:
             return 'result-failed', 'decoder reports ' + '; '.join(found), decoded
-    if not hasattr(decoder, 'expected'):
+    if expected_result is None and not hasattr(decoder, 'expected'):
         return 'returned', 'result ' + json.dumps(decoded, sort_keys=True), decoded
-    expected = decoder.expected(inputs)
+    expected = expected_result if expected_result is not None else decoder.expected(inputs)
     if decoded != expected:
         return 'result-mismatch', 'result %s, expected %s' % (json.dumps(decoded, sort_keys=True),
                                                              json.dumps(expected, sort_keys=True)), decoded
@@ -601,6 +621,8 @@ def main(argv=None):
                         help="An INPUT region's content, once per region in manifest order")
     parser.add_argument('--decoder', type=Path, help='Python module that decodes the result payload '
                         '(default: apps/<name>/host.py in this tree when present; otherwise the raw payload)')
+    parser.add_argument('--expect-result', type=json.loads, metavar='JSON_VALUE',
+                        help='Require this decoded result, overriding decoder.expected(inputs)')
     parser.add_argument('--records', type=Path, default=RECORDS,
                         help='Reviewed session supplying the board prefix, thermal record and CPU clock grant')
     parser.add_argument('--port', help='Physical USB port, for example 3-1 (else SUNSTONE_USB_PORT)')
@@ -737,8 +759,10 @@ def main(argv=None):
         try:
             result = run_return(args, host, evidence / 'bundle', live, out)
             session = json.loads((out / 'session.json').read_text())
-            payload = (out / 'result.bin').read_bytes()
-            outcome, detail, decoded = judge(decoder, payload, inputs, session)
+            payload = (out / 'result.bin').read_bytes() if (out / 'result.bin').exists() else b''
+            outcome, detail, decoded = judge(decoder, payload, inputs, session, result=result,
+                                             require_gpu=args.kind == 'gpu-return',
+                                             expected_result=args.expect_result)
             record.update(outcome=outcome, result=result, payload=str(out / 'result.bin'), decoded=decoded)
             record['summary'] = summary_of(args.kind, outcome, 'secondaries off %d; %s' % (
                 result['secondaries_off'], detail))

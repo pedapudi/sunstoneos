@@ -152,6 +152,15 @@ def decode(words, epoch, elf=None):
         result['last'] = stage(last)
         result['last']['core'] = time >> 29
         result['last']['seconds_since_power_on'] = round((time & 0x1fffffff) * 1024 / 24e6, 4)
+        if result['last']['stage'] == 0x0204:
+            value = result['last']['value']
+            step = value >> 12
+            result['last']['clock_return'] = {
+                'step': {1: 'drain', 2: 'lower-request', 3: 'lower-wait',
+                         4: 'verify', 5: 'done'}.get(step, 'unknown'),
+                'owner_phase': value >> 10 & 3,
+                'owner': ('START', 'INSPECT', 'REQUEST', 'FOLLOW')[value >> 10 & 3],
+                'cluster': value >> 8 & 3, 'driver_state': value & 255}
         if result['last']['stage'] == EL3_STOP:
             v = result['last']['value']
             result['last']['status'] = v >> 12 if v >> 12 < 15 else '15 or more'
@@ -169,6 +178,10 @@ def decode(words, epoch, elf=None):
         parts.append(f"last stage {r['name']} ({r['stage']:#06x}) value {r['value']:#x} on core {r['core']}")
     else:
         parts.append('tagged at EL3 entry; no later stage')
+    if result.get('last', {}).get('clock_return'):
+        r = result['last']['clock_return']
+        parts.append('CPU clock return ' + r['step'] + ', owner %s, cluster %d, driver state %d' %
+                     (r['owner'], r['cluster'], r['driver_state']))
     if 'board_failure' in result:
         f = result['board_failure']
         text = (f"first board failure on core {f['core']} at {f['exception_level']}: {f['group']} "

@@ -26,6 +26,7 @@ host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)
 require = host.require
 thermal_capture = host.module('return_host_thermal', ROOT / 'apps/os/cpu-return-thermal.py')
+gpu_capture = host.module('return_host_gpu', ROOT / 'apps/os/gpu-return.py')
 cpu = host.module('return_host_qualification', ROOT / 'apps/cpu-runtime-qualification/host.py')
 base, digest = cpu.base, cpu.digest
 PROFILE = 'os-cpu-return-v1'
@@ -95,8 +96,13 @@ def geometry(image):
                 symbols['__bss_start'][0] <= address < address + size <= symbols['__bss_end'][0],
                 'CPU rail readback object differs from writable image BSS.')
         result['cpu_rails'] = {'address': address, 'bytes': size}
-    if 'os_thermal_record_end' in symbols:
+    thermal_producers = [name in symbols for name in ('os_thermal_record_begin', 'os_thermal_record_end')]
+    require(thermal_producers[0] == thermal_producers[1], 'Partial thermal producer presence.')
+    if all(thermal_producers):
         result['thermal'] = thermal_capture.geometry(image)
+    gpu = gpu_capture.geometry(image)
+    if gpu is not None:
+        result['gpu_receipt'] = gpu
     watchdog = host.watchdog_marker(image)
     if watchdog is not None:
         result['watchdog'] = watchdog
@@ -153,8 +159,9 @@ def run_once(tx, launch, ready, bundle, p, evidence, record, journal, *, extents
     the DRAM ranges backed up besides image RAM and the inputs. captures
     adds (name, address, bytes) copies after the result record.
     decode(copied, p, result, record, evidence) decodes the copied result
-    record, copied[OUTPUT], into result before DRAM restoration. Any failure
-    raises with DRAM unrestored, so the transport retains the instance."""
+    record, copied[OUTPUT], into result. Payload and device telemetry errors
+    are retained for classification after DRAM restoration. A failed transport
+    request or mandatory CPU return proof stops immediately."""
     require(not record.get('launch_attempted'), 'One CPU return attempt only.')
     ready()
     q = p['qualification']
@@ -203,6 +210,8 @@ def run_once(tx, launch, ready, bundle, p, evidence, record, journal, *, extents
              (OUTPUT, q['output_address'], q['output_bytes']), *captures]
     if 'cpu_rails' in q:
         reads.append(('cpu-rails', q['cpu_rails']['address'], q['cpu_rails']['bytes']))
+    if 'gpu_receipt' in q:
+        reads.append(('gpu-report', q['gpu_receipt']['address'], q['gpu_receipt']['bytes']))
     if 'thermal' in q:
         reads.extend(thermal_capture.captures(q['thermal']))
     for name, address, size in reads:
@@ -215,7 +224,25 @@ def run_once(tx, launch, ready, bundle, p, evidence, record, journal, *, extents
     if 'cpu_rails' in q:
         result['cpu_rails'] = decode_rails(copied['cpu-rails'])
         record['cpu_rail_capture_sha256'] = hashlib.sha256(copied['cpu-rails']).hexdigest()
-    decode(copied, p, result, record, evidence)
+    deferred_error = None
+    try:
+        decode(copied, p, result, record, evidence)
+    except (ValueError, KeyError, struct.error) as error:
+        deferred_error = error
+        result['output_error'] = str(error)
+        record['output_capture_status'] = 'malformed'
+        record['output_capture_error'] = str(error)
+    if 'gpu_receipt' in q:
+        record['gpu_capture_sha256'] = hashlib.sha256(copied['gpu-report']).hexdigest()
+        try:
+            result['gpu'] = gpu_capture.decode_captured(copied['gpu-report'], q['gpu_receipt'],
+                                                        p['epoch'], p['generation'])
+            record['gpu_capture_status'] = 'decoded'
+        except (ValueError, KeyError, struct.error) as error:
+            deferred_error = deferred_error or error
+            result['gpu_error'] = str(error)
+            record['gpu_capture_status'] = 'malformed'
+            record['gpu_capture_error'] = str(error)
     if 'thermal' in q:
         record['thermal_capture_sha256'] = {name: hashlib.sha256(copied[name]).hexdigest()
                                             for name, _, _ in thermal_capture.captures(q['thermal'])}
@@ -227,6 +254,8 @@ def run_once(tx, launch, ready, bundle, p, evidence, record, journal, *, extents
         except (ValueError, KeyError, struct.error) as error:
             record['thermal_capture_status'] = 'malformed'
             record['thermal_capture_error'] = str(error)
+            deferred_error = deferred_error or error
+            result['thermal_error'] = str(error)
     record.update(report_sha256=hashlib.sha256(copied['return-report']).hexdigest(),
                   output_sha256=hashlib.sha256(copied[OUTPUT]).hexdigest())
     journal()
@@ -246,6 +275,10 @@ def run_once(tx, launch, ready, bundle, p, evidence, record, journal, *, extents
                   cpu_rail_restoration_pending=True,
                   result_limit='RAM continuity only; verify boot clocks and restore CPU rails before shared reuse.')
     journal()
+    # Existing consumers provide their own decoder and rely on its exception
+    # to reject a run. Preserve that contract after restoring all saved RAM.
+    if decode is not decode_record and deferred_error is not None:
+        raise deferred_error
     return result
 
 

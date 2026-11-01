@@ -44,7 +44,6 @@ import json
 from pathlib import Path
 import shutil
 import struct
-import tempfile
 import types
 from unittest.mock import patch
 import zlib
@@ -219,10 +218,10 @@ def preparation_cases(host, launcher, out):
     return live
 
 
-def run_main(root, live, argv, launched=False):
+def run_main(root, live, argv, launched=False, kind='cpu-return'):
     """dev-run's main() with captured state; returns (exit code, dev-run.json)."""
     (root / 'state.json').write_text(json.dumps(live))
-    code = dev.main(['cpu-return', '--state', str(root / 'state.json'), '--evidence', str(root / 'evidence'),
+    code = dev.main([kind, '--state', str(root / 'state.json'), '--evidence', str(root / 'evidence'),
                      '--fel', str(root / 'fel'), *argv])
     record = json.loads((root / 'evidence/dev-run.json').read_text())
     assert record['launched'] is launched
@@ -312,13 +311,14 @@ def result_record(host, epoch, generation, payload, capacity):
     return raw + bytes(os_host.RESULT.size + capacity - len(raw))
 
 
-def transport_case(host, launcher, root, live, variant, argv=(), payload=None):
+def transport_case(host, launcher, root, live, variant, argv=(), payload=None, *,
+                   image=None, copied=None):
     returning = host.cpu.returning
     old, new = Path('/dev/bus/usb/003/056'), Path('/dev/bus/usb/003/057')
     state = {'locked': False, 'guard': False, 'node': old, 'launched': False, 'quarantined': 0,
              'calls': [], 'mode': 0, 'rtc': {}, 'memory': Memory(), 'writes_after_launch': 0, 'rails': 0}
     words = {int(k, 16): v for k, v in live['words'].items()}
-    geometry = host.geometry(dev.CONTROL_IMAGE)
+    geometry = host.geometry(image or dev.CONTROL_IMAGE)
     class Access:
         @contextlib.contextmanager
         def board_lock(self):
@@ -365,7 +365,10 @@ def transport_case(host, launcher, root, live, variant, argv=(), payload=None):
                 state['writes_after_launch'] += state['launched']
             elif op == 'read':
                 address, size = int(arguments[i + 1], 0), int(arguments[i + 2])
-                Path(arguments[i + 3]).write_bytes(state['memory'].read(address, size)); i += 4
+                data = state['memory'].read(address, size)
+                if variant == 'short-gpu' and address == geometry['gpu_receipt']['address']:
+                    data = data[:-1]
+                Path(arguments[i + 3]).write_bytes(data); i += 4
             elif op == 'exe':
                 assert state['guard'] and state['mode'] == 0xb1, 'exe inside the guard with WDT0 armed'
                 i += 2; state['launched'] = True; state['node'] = new
@@ -383,6 +386,9 @@ def transport_case(host, launcher, root, live, variant, argv=(), payload=None):
                     state['mode'] = 0; state['rtc'][0x104] = 0x0503 << 16
                     if variant != 'bad-report':
                         state['memory'].write(geometry['report_address'], return_report(host, epoch))
+                    if copied is not None:
+                        for address, data in copied(geometry, epoch, generation).items():
+                            state['memory'].write(address, data)
                     if payload is not None:
                         record_epoch = epoch ^ (variant == 'foreign-result')
                         state['memory'].write(geometry['output_address'], result_record(
@@ -394,6 +400,13 @@ def transport_case(host, launcher, root, live, variant, argv=(), payload=None):
     build = returning.subprocess.run
     clock = itertools.count(0, 0.5)
     original = dev.run_return
+    run_once = host.run_once
+    def callback(*args, **kwargs):
+        if variant == 'custom-decode':
+            def refuse(*values):
+                raise ValueError('custom decoder refused')
+            kwargs['decode'] = refuse
+        return run_once(*args, **kwargs)
     def modeled(args, host_module, bundle, live_state, out):
         return original(args, host_module, bundle, live_state, out, access=Access(), guard=Guard())
     def helper(args, host_module, out):
@@ -403,7 +416,7 @@ def transport_case(host, launcher, root, live, variant, argv=(), payload=None):
                 'outcome': [dev.RAIL_COMPLETE]}
     def after(fel):
         """The read-only capture after a normal return: result-invalid leaves CPU-B off its boot word."""
-        assert variant in ('passed', 'result-invalid', 'external-decoder'), 'board read after a failed run'
+        assert variant not in ('bad-report', 'fired', 'state-changed', 'short-gpu'), 'board read after a failed run'
         words = dict(live['words'])
         if variant == 'result-invalid':
             words[hex(0x8872000)] = 0xf8805300
@@ -412,9 +425,12 @@ def transport_case(host, launcher, root, live, variant, argv=(), payload=None):
             patch.object(returning.subprocess, 'run', process), patch.object(returning.os, 'access', return_value=True), \
             patch.object(returning.time, 'monotonic', lambda: next(clock)), patch.object(returning.time, 'sleep', lambda s: None), \
             patch.object(dev, 'run_return', modeled), patch.object(dev, 'run_rail_helper', helper), \
+            patch.object(host, 'run_once', callback), \
             patch.object(dev, 'capture', after), \
             patch.object(dev, 'kit', lambda: (host, launcher)):
-        code, record = run_main(root, live, list(argv), launched=True)
+        options = list(argv) + (['--image', str(image)] if image is not None else [])
+        code, record = run_main(root, live, options, launched=True,
+                                kind='gpu-return' if image is not None else 'cpu-return')
     return state, code, record
 
 
@@ -429,7 +445,7 @@ def transport_cases(host, launcher, out, live):
              ('result-mismatch', struct.pack('<IIQ', zlib.adler32(data) ^ 1, 0, len(data)), ('--no-restore-rails',),
               1, 'result-mismatch'),
              ('result-invalid', struct.pack('<IIQ', zlib.adler32(data), 7, len(data)), (), 1, 'result-invalid'),
-             ('foreign-result', good, (), 1, 'failed'),
+             ('foreign-result', good, (), 1, 'result-invalid'),
              ('bad-report', good, (), 1, 'failed'),
              ('fired', None, (), 1, 'watchdog-reset'),
              ('state-changed', None, (), 1, 'failed'),
@@ -451,7 +467,7 @@ def transport_cases(host, launcher, out, live):
             report = json.loads((run / 'watchdog-report.json').read_text())
             assert not state['quarantined'] and report['stop_shortened']
             assert report['breadcrumbs']['fault']['detail'] == '0x736', report
-        elif variant in ('foreign-result', 'bad-report'):
+        elif variant == 'bad-report':
             text = {'foreign-result': 'belongs to another session', 'bad-report': 'No successful CPU return report'}
             assert text[variant] in record['error'] and not state['quarantined'], (variant, record)
             assert session['host_failed_after_normal_return'] and session['instance_quarantined'] is False
@@ -464,12 +480,16 @@ def transport_cases(host, launcher, out, live):
             assert not state['memory'].changed_dram(), (variant, 'DRAM differs after restoration')
             assert session['watchdog']['mode_after_return'] == 0
             assert session['watchdog']['breadcrumbs']['last']['name'] == 'RETURN_ROM'
-            assert (run / 'result.bin').read_bytes() == payload
+            if variant == 'foreign-result':
+                assert session['result']['output_error'] and not (run / 'result.bin').exists()
+                assert 'belongs to another session' in record['summary']
+            else:
+                assert (run / 'result.bin').read_bytes() == payload
         # The rail helper runs after a normal return only: a watchdog reset leaves DRAM
         # uninitialized, and --no-restore-rails skips it. Normalization before the launch
         # never runs with --state.
-        restored = variant in ('passed', 'external-decoder')
-        assert (root / 'evidence/state-after.json').exists() == (variant in ('passed', 'result-invalid',
+        restored = variant in ('passed', 'external-decoder', 'foreign-result')
+        assert (root / 'evidence/state-after.json').exists() == (variant in ('passed', 'result-invalid', 'foreign-result',
                                                                            'external-decoder')), variant
         assert state['rails'] == restored, (variant, state['rails'], record.get('rail_helper_reason'))
         assert record['normalize_rails'].startswith('not run: --state'), record['normalize_rails']
@@ -511,6 +531,170 @@ def transport_cases(host, launcher, out, live):
         'mode_after_return': 0, 'breadcrumbs': {'last': {'name': 'RETURN_ROM'}}}})
     assert outcome == 'result-failed' and 'FAIL one' in detail and decoded == {'lines': ['FAIL one']}
     passed('judge-raw-result-failures-and-abnormal-return')
+
+
+def gpu_capture_cases(host, launcher, out, live, images, selected=None):
+    if not images:
+        return
+    by_name = {image.parent.name: image for image in images}
+    root_cache = dev.CACHE / 'build/gpu-integrate-1031/checks'
+    raw_normal = (root_cache / 'native-return/opened-gpu-report.bin').read_bytes()
+    raw_firmware = (root_cache / 'bisect-firmware/native/no-completed-job-gpu-report.bin').read_bytes()
+    thermal_root = root_cache / 'native-untouched-mimus'
+    queue = load('checked_queue_result', ROOT / 'apps/queue-add/host.py')
+    def payload(jobs):
+        return struct.pack('<12I', jobs, 65, 8840, jobs, *([7] * jobs + [0] * (8 - jobs)))
+    for jobs in (1, 8):
+        decoded = queue.decode(payload(jobs))
+        assert decoded == {'jobs': jobs, 'elements': 65, 'checksum': 8840, 'sequence': jobs}
+    for name, data in [('short', payload(1)[:-1]), ('long', payload(1) + b'\0'),
+                       ('wrong-count', struct.pack('<12I', 0, 65, 8840, 0, *([0] * 8))),
+                       ('wrong-sum', struct.pack('<12I', 1, 65, 8841, 1, *([0] * 8))),
+                       ('wrong-sequence', struct.pack('<12I', 1, 65, 8840, 2, *([0] * 8))),
+                       ('unused-time', struct.pack('<12I', 1, 65, 8840, 1, *([1] * 8))),
+                       ('over-budget', struct.pack('<12I', 1, 65, 8840, 1, 200000, *([0] * 7)))]:
+        try:
+            queue.decode(data)
+            raise AssertionError('accepted ' + name)
+        except ValueError:
+            pass
+    passed('queue-binary-decoder', negative_cases=7)
+    cases = [('queue-one', 'passed', 'passed'), ('queue-eight', 'passed', 'passed'),
+             ('queue-one', 'foreign-result', 'result-invalid'),
+             ('queue-one', 'bad-gpu', 'result-invalid'),
+             ('queue-one', 'short-gpu', 'failed'),
+             ('queue-one', 'custom-decode', 'failed'),
+             ('firmware', 'passed', 'returned'),
+             ('firmware', 'wrong-stage', 'result-invalid'),
+             ('recognition', 'bad-thermal', 'result-invalid')]
+    for image_name, variant, expected in cases:
+        if selected and image_name + '-' + variant not in selected:
+            continue
+        image = by_name[image_name]
+        case = out / ('capture-' + image_name + '-' + variant)
+        case.mkdir()
+        jobs = 8 if image_name == 'queue-eight' else 1
+        value = payload(jobs) if image_name.startswith('queue-') else b'PASS copied native recognition result\n'
+        argv = []
+        if image_name.startswith('queue-'):
+            argv = ['--expect-result', json.dumps(queue.decode(value))]
+        else:
+            decoder = case / 'decoder.py'
+            decoder.write_text('def decode(payload):\n    return payload.decode("utf-8")\n')
+            argv = ['--decoder', str(decoder)]
+            for source in sorted((image.parent / 'template').glob('input-*.bin')):
+                argv.extend(['--input', str(source)])
+        def captured(q, epoch, generation):
+            raw = bytearray(raw_firmware if image_name == 'firmware' else raw_normal)
+            struct.pack_into('<2Q', raw, 24, epoch, generation)
+            if image_name != 'firmware':
+                struct.pack_into('<Q', raw, 40, jobs)
+            if variant == 'bad-gpu':
+                struct.pack_into('<Q', raw, 24, epoch + 1)
+            if variant == 'wrong-stage':
+                struct.pack_into('<Q', raw, 56, 3 << 32 | 1)
+            data = {q['gpu_receipt']['address']: bytes(raw)}
+            if 'thermal' in q:
+                for name, address, size in host.thermal_capture.captures(q['thermal']):
+                    raw = bytearray((thermal_root / ('cold-ready-no-create-' + name + '.bin')).read_bytes())
+                    assert len(raw) == size
+                    if name == 'thermal-window':
+                        struct.pack_into('<2Q', raw, 16, epoch + (variant == 'bad-thermal'), generation)
+                    data[address] = bytes(raw)
+            return data
+        state, code, record = transport_case(host, launcher, case, live, variant, argv, value,
+                                             image=image, copied=captured)
+        run = case / 'evidence/run'
+        session = json.loads((run / 'session.json').read_text())
+        assert record['outcome'] == expected and code == (expected not in ('passed', 'returned')), record
+        assert not state['quarantined'] and (run / 'gpu-report.bin').exists()
+        if variant == 'short-gpu':
+            assert not session['complete'] and state['writes_after_launch'] == 0 and state['rails'] == 0
+            assert 'Incomplete copied' in record['error']
+        else:
+            assert session['complete'] and session['dram_restored'] and state['rails'] == 1
+            assert not state['memory'].changed_dram(), 'RAM changed after receipt/result failure'
+            assert (run / 'recorded-output.bin').exists()
+            if image_name == 'firmware':
+                assert (run / 'thermal-window.bin').exists() and (run / 'thermal-readings.bin').exists()
+            if variant == 'passed':
+                assert record['result']['gpu']['jobs'] == (0 if image_name == 'firmware' else jobs)
+            elif variant == 'bad-gpu':
+                assert 'GPU retirement' in record['summary'] and session['gpu_capture_status'] == 'malformed'
+            elif variant == 'wrong-stage':
+                assert 'stage or limit' in record['summary']
+            elif variant == 'bad-thermal':
+                assert 'Thermal session differs' in record['summary']
+            elif variant == 'custom-decode':
+                assert 'custom decoder refused' in record['error']
+        passed('capture-' + image_name + '-' + variant, outcome=record['outcome'])
+    layout = host.gpu_capture.geometry(by_name['firmware'])
+    epoch, generation = struct.unpack_from('<2Q', raw_firmware, 24)
+    for raw, reason in [(raw_normal, 'normal GPU receipt'),
+                        (raw_firmware[:56] + struct.pack('<Q', 2 << 32 | 1), 'stage or limit')]:
+        e, g = struct.unpack_from('<2Q', raw, 24)
+        try:
+            host.gpu_capture.decode_captured(raw, layout, e, g)
+            raise AssertionError('accepted mismatched diagnostic receipt')
+        except ValueError as error:
+            assert reason in str(error), str(error)
+    passed('diagnostic-receipt-matches-exact-image')
+    words = dict.fromkeys(crumbs.WORDS, 0)
+    words.update(tag=0x5c0d0000 | 7, last=0x0204 << 16 | 3 << 12 | 2 << 10 | 1 << 8 | 37)
+    decoded = crumbs.decode(words, 7)
+    assert decoded['last']['clock_return'] == {'step': 'lower-wait', 'owner_phase': 2,
+                                               'owner': 'REQUEST', 'cluster': 1, 'driver_state': 37}
+    assert 'owner REQUEST' in decoded['summary']
+    passed('clock-return-breadcrumb-fields')
+
+
+def gpu_geometry_cases(host, out, images):
+    """Malformed linked capability bytes refuse without transport access."""
+    if not images:
+        return
+    from elftools.elf.elffile import ELFFile
+    by_name = {image.parent.name: image for image in images}
+    firmware = by_name['firmware']
+    original = firmware.read_bytes()
+    elf = ELFFile(io.BytesIO(original))
+    table = elf.get_section_by_name('.symtab')
+    symbols = {symbol.name: (index, symbol) for index, symbol in enumerate(table.iter_symbols())}
+    def changed_marker(name, words):
+        data = bytearray(original)
+        _, symbol = symbols[name]
+        section = elf.get_section(symbol['st_shndx'])
+        offset = section['sh_offset'] + symbol['st_value'] - section['sh_addr']
+        struct.pack_into('<' + 'I' * len(words), data, offset, *words)
+        return data
+    invalid = [('firmware-limit', changed_marker('os_gpu_bisect_configuration', (1, 2, 1)), 'diagnostic'),
+               ('jobs-zero-limit', changed_marker('os_gpu_bisect_configuration', (1, 3, 0)), 'diagnostic'),
+               ('layer-limit', changed_marker('os_gpu_bisect_configuration', (1, 4, 255)), 'diagnostic'),
+               ('untouched-version', changed_marker('os_gpu_untouched_return_version', (3,)), 'untouched')]
+    data = bytearray(original)
+    index, _ = symbols['os_gpu_return_report']
+    struct.pack_into('<Q', data, table['sh_offset'] + index * table['sh_entsize'] + 16, 63)
+    invalid.append(('report-size', data, 'object geometry'))
+    data = original.replace(b'\0os_thermal_record_end\0', b'\0Os_thermal_record_end\0')
+    assert data != original
+    invalid.append(('partial-thermal', data, 'Partial thermal producer'))
+    for name, data, text in invalid:
+        image = out / (name + '.elf')
+        image.write_bytes(data)
+        try:
+            host.geometry(image)
+            raise AssertionError('accepted ' + name)
+        except ValueError as error:
+            assert text in str(error), (name, str(error))
+    raw = bytearray((dev.CACHE / 'build/gpu-integrate-1031/checks/bisect-firmware/native/'
+                     'no-completed-job-gpu-report.bin').read_bytes())
+    epoch, generation = struct.unpack_from('<2Q', raw, 24)
+    layout = host.gpu_capture.geometry(firmware)
+    layout['bisect'] = {'stage': 3, 'limit': 2}
+    struct.pack_into('<Q', raw, 40, 3)
+    struct.pack_into('<Q', raw, 56, 3 << 32 | 2)
+    assert host.gpu_capture.decode_captured(bytes(raw), layout, epoch, generation)['jobs'] == 3
+    passed('linked-gpu-capability-refusals', negative_cases=len(invalid),
+           refused_sequence_gap_admitted=True)
 
 
 HELPER_RECORD = {'complete': True, 'transport_failed': False, 'mode': 'kernel',
@@ -711,6 +895,8 @@ def main():
     live = preparation_cases(host, launcher, temporary)
     refusal_cases(temporary, live)
     gpu_preparation_cases(host, launcher, temporary, live, args.gpu_image)
+    gpu_capture_cases(host, launcher, temporary, live, args.gpu_image)
+    gpu_geometry_cases(host, temporary, args.gpu_image)
     transport_cases(host, launcher, temporary, live)
     helper_cases()
     controlled_cases(host, temporary)
