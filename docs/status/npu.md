@@ -5,7 +5,7 @@
 Native model decoding, mappings, shared-provider startup,
 IRQ97 service, runtime clients and thermal policy have software evidence.
 Finite scheduled startup and inference have scoped physical results.
-Repeated lifecycle operation remains unqualified.
+Repeated-transition reliability remains unqualified.
 
 
 **Board-qualified scope:** A finite interrupt diagnostic produces matching
@@ -256,18 +256,52 @@ Its frozen host parser verifies 200 jobs, every ordered output digest, timing
 windows, the measured maximum and the actual interrupt receipts. Host evidence
 covers 37 producer/parser, corruption, count, marker and timeout cases in
 `qualification-1101/sustained-host-7/` under the same build root.
+Failure reporting retains the job index and observed operand at the original
+predicate before generic retention. Fifteen native fault cases and decoder
+checks cover the measurement formats, explicit high-word records and legacy
+stages in `qualification-1101/sustained-fault-validation.json`. These host cases
+do not qualify physical fault recovery.
 
-The next concurrency diagnostic requires additional approval for the existing
-eight-core CPU startup, vendor top CPU/DSU points and verified post-ROM rail
-normalization. The NPU-only authorization keeps PCK4 ON and DCDC2 untouched;
-it does not authorize those CPU power transitions. The written proposal and
-three-role design reviews are under `qualification-1101/` in the build root.
-The active-job cancellation design is prepared there; its physical run follows
-the concurrency stage.
+The eight-core concurrency diagnostic is implemented and has correctness,
+hardware-safety and recovery review approval. Its host checks cover checked
+float32 matrix products, four jobs with hardware-busy overlap receipts,
+worker parking, local stop, all-core arrival and retirement, the eight MiB NPU
+pool clean, RAM restoration and the approved post-ROM rail helper. Modeled
+register, interrupt and scheduler effects establish no physical concurrency.
+The three baseline builds and selected integration gate pass.
 
-The runtime models up to eight catalogue clients and model switching. The board
-image has one slot and five catalogue models; direct FIFO USB and shader-graph
-loading remain incomplete. Configured eight NN cores and zero TP/TP-lite cores
+The approved CPU-only control precedes the combined physical run. Both await
+deployment of the reviewed runner support. That runner verifies both CPU rails
+at 800 mV before launch. For NPU images it reads the controller clock and fabric
+gates before checking that PCK4 policy and status are already ON. It refuses
+OFF or uncertain state without enabling a gate or domain. Normal return and
+restored RAM precede the DCDC5-only post-ROM helper; faults prohibit it.
+NPU stays at 852 MHz/800 mV, PCK4 stays ON and DCDC2 is untouched.
+
+The approved proposal is under `qualification-1101/` in the build root.
+`concurrency-1101/review/`, `final-checks/`, `final-native/`, `templates-final/`
+and `queue-inputs/` contain the review, checks, native artifacts, session
+provenance and image-bound submission inputs. The merged executable source is
+`03137448`; its combined ELF SHA-256 is
+`686f9c355e0997c2d78e89bf051128f7c974631fd282079de5d4cc7634ae00e9`.
+
+Active-job cancellation is implemented and independently reviewed. A finite
+WAIT stream supplies an active command; cancellation requires its acknowledgment
+and full idle before controller close, interrupt retirement and rearm, bootstrap
+and a matching real inference. Recovery retains the allocations and changes
+neither PCK4, local CCU words nor DCDC2. Host cases cover the real client,
+worker, interrupt callbacks, cleanup and failure records in `cancel-1101/`.
+Its physical run follows both concurrency controls and remains unqualified.
+
+The SDK discovers model names, tensor counts and byte sizes from its image's
+immutable catalogue. A caller resolves a name to a local index; the SDK assumes
+neither a specific model list nor a fixed number of models. The data-driven
+generator supports a selected model or every entry in a supplied list. Host
+cases cover one, two and three reordered models, check metadata against decoded
+model tensors and refuse invalid indices or tensor sizes before device access.
+The runtime admits up to sixteen models and eight catalogue clients; the
+default OS profile has one client slot and links its selected model. Direct
+FIFO USB and shader-graph loading remain incomplete. Configured eight NN cores and zero TP/TP-lite cores
 are target records, not a physical identity measurement.
 
 **Physical NPU domain OFF is unsupported.** The selected vendor configuration
@@ -291,3 +325,77 @@ CPU/GPU operation and safe fault recovery. See [startup](../npu-startup.md),
 [service](../npu-service.md), [SRAM routing](../designs/npu-sram-route.md),
 [runtime breadth](../designs/npu-breadth.md), [board image](../designs/npu-board.md)
 and [conformance](../npu-conformance.md).
+
+
+## Land the merged runner before the CPU and NPU controls
+
+The branch is `work/npu-wdt-1031`. Merge `03137448` includes `bringup`
+`35ee1836`. It preserves resident NPU queues, the EL0 submission ring, GPU fast
+paths, USB admission and the latency profile alongside concurrency and active
+cancellation. No concurrency or cancellation board entry is submitted.
+The passing queue entries above remain the physical evidence.
+
+Open work, in priority order:
+
+1. **Land and deploy.** The coordinator lands this branch and restarts the
+   queue daemon with its runner support. Keep current USB source-off and probe
+   admission, plus NPU ON-only admission, RAM preservation, image-bound decoding
+   and the approved rail-helper ordering. The old standalone
+   `concurrency-1101/runner-support.patch` is superseded by the merged branch.
+2. **Run the CPU-only control, then concurrency on 3-3.** Use the exact commands
+   in the image READMEs below. Before each run, confirm DCDC3 and DCDC5 at
+   800 mV through the runner. Stop at the first failure. The combined run checks
+   four NPU outputs and proves overlap with matrix multiplication on all eight
+   CPU cores. Record each queue entry and result before continuing.
+3. **Qualify active-job cancellation.** After both controls pass, build the
+   cancellation board package from the integrated source and rerun its focused
+   cases. Test bounded WAIT-stream cancellation followed by matching inference.
+   `cancel-1101/producer-host-4/image.elf` remains a host fixture, not a board
+   package. Cancellation and domain OFF have no physical qualification.
+
+Both rebuilt, unrun images are under
+`~/.cache/sunstoneos/build/npu-wdt-1031/land-35ee1836/`:
+
+| Image | ELF SHA-256 | README relative to that directory |
+| --- | --- | --- |
+| CPU-only control | `7f18c978f34cd3105bfdeb85aa08ac83fd907d996a1827ae60233b16216060a8` | `images/control/README.md` |
+| CPU and NPU concurrency | `686f9c355e0997c2d78e89bf051128f7c974631fd282079de5d4cc7634ae00e9` | `images/combined/README.md` |
+
+Each package has its ELF, complete receipt expectation, image-bound decoder,
+session template and exact submission command. `images/commands.json` lists
+both commands in order. The frozen host source is `host-03137448/`; use it
+with these images. The older `concurrency-1101/queue-inputs/commands.json`
+and its image hashes are superseded.
+
+Approved points are CPU-L 1794 MHz/1000 mV on DCDC5, CPU-B 2002 MHz/1050 mV
+on DCDC3 and DSU 1274 MHz. CPU-B lowers to 1014 MHz before ROM. NPU stays
+at 852 MHz/800 mV, PCK4 stays ON and DCDC2 stays untouched. The post-ROM
+DCDC5-only helper runs only after verified normal return and RAM restoration;
+faults or uncertain return prohibit it.
+
+The coordinator approves the control, concurrency and subsequent cancellation
+runs within those bounds. The three earlier independent reviews cover source
+`9dff0667`; no new reviews are requested for this bounded merge. Landing and
+runner deployment remain with the coordinator. Any NPU domain OFF, clock
+gating or new voltage/clock point needs a separate proposal and approval.
+
+Merged-tree checks are under `land-35ee1836/` in the build root.
+`final-board-runner.log`, `final-usb-disconnect.log` and
+`final-usb-discover.log` pass. `final-concurrency.log`, `final-owners.log`,
+`final-geometry.log`, `final-terminal.log` and `final-chain.log` pass.
+The linked chain includes client completion, worker and interrupt retirement,
+all-core arrival, the 8 MiB pool clean, RAM restoration and the permitted
+post-ROM helper. SDK event, failure-record and copy-guard checks also pass.
+Full gate evidence is `gate-ready.log`, label `npu-land-35ee1836-ready`.
+
+Shared files require coordination with CPU, NPU fast-path and runner workers:
+`tools/board.py`, `tools/board_images.py`, `tools/a733-crumbs.py`,
+`include/sunstone_crumb.h`, `include/sunstone_app.h`, `runtime/npu_app.c`,
+`CMakeLists.txt`, `cmake/sunstone-os-core.cmake`, `apps/os/npu*`,
+`apps/os/cpu-return*`, `apps/os/return-fail-harness.h`, `apps/os/main.c`,
+`apps/os/task.c`, `platform/a733-smp-supervised/launch.c` and `drivers/npu/*`.
+Preserve other workers' interfaces when resolving these files.
+
+Auxiliary scratch branches remain separate: `npu-cancel-1101` at `38841b70`
+and `work/npu-control-merge-1101` at `4a06665a`. Those WIP commits are
+excluded from this branch and must not be landed.

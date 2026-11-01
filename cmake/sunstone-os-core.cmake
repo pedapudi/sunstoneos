@@ -10,17 +10,31 @@ option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF
 option(SUNSTONE_A733_OS_HEADSET "OS Bluetooth headset capture service" OFF)
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
 option(SUNSTONE_A733_OS_NPU "Integrated OS with a task-bound NPU catalogue service" OFF)
+option(SUNSTONE_A733_OS_NPU_OBSERVE "Opt-in serialized NPU diagnostic sampling" OFF)
 option(SUNSTONE_A733_OS_NPU_QUEUE "EL0 resident NPU submission ring on the routed core" OFF)
 set(SUNSTONE_OS_NPU_QUEUE_MODELS "" CACHE STRING "Comma-separated resident model indices, client model first")
 if(SUNSTONE_A733_OS_NPU_QUEUE AND NOT SUNSTONE_A733_OS_NPU)
   message(FATAL_ERROR "The NPU queue requires SUNSTONE_A733_OS_NPU=ON")
 endif()
 option(SUNSTONE_A733_OS_GPU "OS GPU compute queue" OFF)
+option(SUNSTONE_GPU_TIMING "Capture optional GPU job timing records" OFF)
+option(SUNSTONE_GPU_NSI_PMU "Capture experimental GPU master NSI traffic counters" OFF)
+if(SUNSTONE_GPU_NSI_PMU AND NOT SUNSTONE_GPU_TIMING)
+  message(FATAL_ERROR "SUNSTONE_GPU_NSI_PMU requires SUNSTONE_GPU_TIMING")
+endif()
+if(SUNSTONE_GPU_TIMING AND NOT SUNSTONE_A733_OS_GPU)
+  message(FATAL_ERROR "SUNSTONE_GPU_TIMING requires SUNSTONE_A733_OS_GPU")
+endif()
 option(SUNSTONE_A733_OS_GPU_RECOVERY_TEST
   "Withhold one completion until the ordinary job deadline in a qualification image" OFF)
 set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
   "GPU diagnostic limit: constructor, firmware, jobs:N or layer:K")
 option(SUNSTONE_A733_OS_CPU_RETURN "Application result with success-only ROM return" OFF)
+if(SUNSTONE_A733_OS_NPU_OBSERVE AND
+   (NOT SUNSTONE_A733_OS_NPU OR NOT SUNSTONE_A733_OS_CPU_RETURN))
+  message(FATAL_ERROR "NPU diagnostic sampling requires returning NPU composition")
+endif()
+option(SUNSTONE_GPU_FAST_TIMING "Capture optional GPU IRQ-entry counter timestamps" OFF)
 option(SUNSTONE_A733_OS_CORE "Build the OS core without an application" OFF)
 option(SUNSTONE_A733_OS_HELLO "Build the hello-compute OS image" OFF)
 if(NOT SUNSTONE_A733_OS AND NOT SUNSTONE_A733_OS_CORE AND NOT SUNSTONE_A733_OS_HELLO)
@@ -89,11 +103,17 @@ endif()
 if(SUNSTONE_A733_OS_NPU)
   # CPU grants compose with recorded resident/supervised GPU/NPU, or performance modes.
   if(SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR
-     SUNSTONE_A733_OS_HEADSET OR (SUNSTONE_A733_OS_CPU_CLOCK AND NOT SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_RESIDENT AND NOT SUNSTONE_A733_OS_GPU))
+     SUNSTONE_A733_OS_HEADSET OR (SUNSTONE_A733_OS_CPU_CLOCK AND NOT SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_RESIDENT AND NOT SUNSTONE_A733_OS_GPU AND NOT SUNSTONE_A733_OS_CPU_RETURN))
     message(FATAL_ERROR "The NPU OS profile requires recorded recognition and a supported GPU/CPU composition")
   endif()
   set(SUNSTONE_OS_NPU_CATALOGUE "" CACHE FILEPATH "Authenticated NPU artifacts map for apps/os/npu-models.json")
-  set(SUNSTONE_OS_NPU_CLIENT_MODEL "0" CACHE STRING "Entry of apps/os/npu-models.json used by the separate NPU application")
+  set(SUNSTONE_OS_NPU_MODELS "${SUNSTONE_SOURCE_ROOT}/apps/os/npu-models.json" CACHE FILEPATH "Application NPU model-list data")
+  set(SUNSTONE_OS_NPU_CLIENT_MODEL "0" CACHE STRING "Legacy numeric selection within the model-list data")
+  set(SUNSTONE_OS_NPU_MODEL_NAME "" CACHE STRING "Semantic name of the selected linked NPU model")
+  option(SUNSTONE_OS_NPU_ALL_MODELS "Link every entry in the selected NPU model list" OFF)
+  if(NOT EXISTS "${SUNSTONE_OS_NPU_MODELS}")
+    message(FATAL_ERROR "OS NPU requires SUNSTONE_OS_NPU_MODELS model-list data")
+  endif()
   if(NOT EXISTS "${SUNSTONE_OS_NPU_CATALOGUE}")
     message(FATAL_ERROR "OS NPU requires SUNSTONE_OS_NPU_CATALOGUE")
   endif()
@@ -210,18 +230,21 @@ if(SUNSTONE_A733_OS_AUDIO)
     drivers/audio/a733_audio_leases.c drivers/audio/dma_service_i2s_irq.c)
 endif()
 if(SUNSTONE_A733_OS_NPU)
-  set(os_npu_model_args)
-  set(os_npu_model_count 1)
+  set(os_npu_select --model "${SUNSTONE_OS_NPU_CLIENT_MODEL}")
+  if(SUNSTONE_OS_NPU_MODEL_NAME)
+    set(os_npu_select --model-name "${SUNSTONE_OS_NPU_MODEL_NAME}")
+  endif()
+  if(SUNSTONE_OS_NPU_ALL_MODELS)
+    list(APPEND os_npu_select --all)
+  endif()
   if(SUNSTONE_A733_OS_NPU_QUEUE AND SUNSTONE_OS_NPU_QUEUE_MODELS)
-    set(os_npu_model_args --models "${SUNSTONE_OS_NPU_QUEUE_MODELS}")
-    string(REPLACE "," ";" os_npu_model_list "${SUNSTONE_OS_NPU_QUEUE_MODELS}")
-    list(LENGTH os_npu_model_list os_npu_model_count)
+    list(APPEND os_npu_select --queue-models "${SUNSTONE_OS_NPU_QUEUE_MODELS}")
   endif()
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/apps/os/npu-catalogue.py"
-    --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --model "${SUNSTONE_OS_NPU_CLIENT_MODEL}"
-    ${os_npu_model_args} --output "${os_build}/npu-models.c" COMMAND_ERROR_IS_FATAL ANY)
+    --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --models "${SUNSTONE_OS_NPU_MODELS}" ${os_npu_select}
+    --output "${os_build}/npu-models.c" COMMAND_ERROR_IS_FATAL ANY)
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/tools/npu-session-catalogue.py" generate
-    --application "${os_root}/apps/os/npu-models.json" --output "${os_build}/npu_admitted_models.c"
+    --application "${SUNSTONE_OS_NPU_MODELS}" --output "${os_build}/npu_admitted_models.c"
     COMMAND_ERROR_IS_FATAL ANY)
   list(APPEND os_sources "${os_build}/npu-models.c" "${os_build}/npu_admitted_models.c")
   list(APPEND os_added apps/os/npu.c apps/os/npu-client.c apps/os/npu-irq.c
@@ -231,11 +254,14 @@ if(SUNSTONE_A733_OS_NPU)
     drivers/npu/a733_npu_mmu.c drivers/npu/nbg_model.c drivers/npu/nbg_assembly.c drivers/npu/nbg_checksum.c
     drivers/npu/nbg_relocation.c drivers/npu/a733_npu_startup.c drivers/npu/a733_npu_platform.c
     drivers/npu/a733_npu_platform_native.c)
+  if(SUNSTONE_A733_OS_CPU_RETURN)
+    list(APPEND os_added apps/os/npu-observe.c)
+  endif()
   file(GLOB os_npu_headers "${os_root}/include/*npu*.h" "${os_root}/include/nbg*.h")
   list(APPEND os_external_inputs ${os_npu_headers} "${os_root}/apps/os/npu-catalogue.py"
     "${os_root}/platform/a733/npu_irq.c" "${os_root}/include/a733_npu_irq.h"
     "${os_root}/tools/npu-session-models.json" "${os_root}/tools/npu-session-catalogue.py"
-    "${os_root}/apps/os/npu-models.json" "${os_root}/drivers/npu/nbg_command.h" "${os_build}/npu-models.c"
+    "${SUNSTONE_OS_NPU_MODELS}" "${os_root}/drivers/npu/nbg_command.h" "${os_build}/npu-models.c"
     "${os_build}/npu_admitted_models.c" "${SUNSTONE_OS_NPU_CATALOGUE}")
 endif()
 set(os_include_dirs)
@@ -312,6 +338,14 @@ if(SUNSTONE_A733_OS_GPU)
   else()
     set(os_recognition_core 2)
   endif()
+  if(SUNSTONE_GPU_TIMING)
+    list(APPEND os_added apps/os/gpu-timing.c)
+    if(SUNSTONE_GPU_NSI_PMU)
+      list(APPEND os_added drivers/gpu/a733_gpu_nsi_pmu.c)
+      list(APPEND os_external_inputs "${os_root}/include/a733_gpu_nsi_pmu.h")
+    endif()
+    list(APPEND os_external_inputs "${os_root}/include/gpu_queue_timing.h")
+  endif()
   # The GPU runtime: the service, compute queue and the A733 platform,
   # backend and firmware memory, as the accelerator image composes them. The
   # service's compute, render and free-list objects come with it.
@@ -322,7 +356,7 @@ if(SUNSTONE_A733_OS_GPU)
     drivers/gpu/a733_gpu_platform_native.c drivers/gpu/pvr_compute_mode.c drivers/gpu/pvr_compute_service.c
     drivers/gpu/pvr_compute_package.c drivers/gpu/pvr_compute_job.c drivers/gpu/pvr_compute_programs.c
     drivers/gpu/pvr_compute_context.c drivers/gpu/gpu_queue.c
-    drivers/gpu/pvr_compute_queue.c drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c
+    drivers/gpu/pvr_compute_queue.c drivers/gpu/pvr_compute_fast.c runtime/gpu_call.S drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c
     drivers/gpu/pvr_render_target.c drivers/gpu/pvr_render_programs.c drivers/gpu/pvr_render_draw.c
     drivers/gpu/pvr_render_texture.c drivers/gpu/pvr_render_context.c drivers/gpu/pvr_render_job.c
     drivers/gpu/pvr_render_service.c drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_gpu_flush.c drivers/gpu/pvr_firmware.c
@@ -422,13 +456,17 @@ endif()
 target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_TASK_DEADLINES=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
   "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_A733_OS_CPU_RETURN=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_CRUMBS=1>"
+  "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
   A733_SMP_CONTRACT_MAGIC=${os_contract_magic} A733_SMP_RESULT_MAGIC=${os_result_magic}
   "$<$<BOOL:${SUNSTONE_A733_OS_RESIDENT}>:SUNSTONE_BOARD_RESIDENT=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_AUDIO}>:SUNSTONE_A733_OS_AUDIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO}>:SUNSTONE_A733_OS_RADIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_HEADSET}>:SUNSTONE_A733_OS_HEADSET=1>")
 if(SUNSTONE_A733_OS_NPU)
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU=1 OS_NPU_MODELS=${os_npu_model_count})
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU=1)
+  if(SUNSTONE_A733_OS_NPU_OBSERVE)
+    target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU_OBSERVE=1)
+  endif()
   if(SUNSTONE_A733_OS_NPU_QUEUE)
     target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU_QUEUE=1)
     target_sources(sunstone-a733-os-core PRIVATE "${os_root}/runtime/npu_app_queue.c" "${os_root}/apps/os/npu-queue.c")
@@ -528,3 +566,15 @@ else()
   set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_LINK_SCRIPT "${storage_build}/link.ld")
 endif()
 set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_DEVICE_OBJECTS "${os_service_targets}")
+
+if(SUNSTONE_GPU_TIMING)
+  target_compile_definitions(sunstone-a733-os-core PUBLIC SUNSTONE_GPU_TIMING=1)
+  target_compile_definitions(sunstone-a733-os-gpu PRIVATE SUNSTONE_GPU_TIMING=1)
+  if(SUNSTONE_GPU_NSI_PMU)
+    target_compile_definitions(sunstone-a733-os-core PUBLIC SUNSTONE_GPU_NSI_PMU=1)
+    target_compile_definitions(sunstone-a733-os-gpu PRIVATE SUNSTONE_GPU_NSI_PMU=1)
+  endif()
+  foreach(symbol gpu_queue_submit gpu_queue_wait pvr_cccb_begin pvr_cccb_poll pvr_ccb_submit aarch64_device_cache xQueueReceive)
+    target_link_options(sunstone-a733-os-core INTERFACE "-Wl,--wrap=${symbol}")
+  endforeach()
+endif()

@@ -19,7 +19,8 @@ int main(int argc,char **argv)
 {
     assert(argc==2);unsigned mode=(unsigned)(argv[1][0]-'0');char in=1,out=0;
     assert(ss_npu_service_bind_event(notify,NULL));
-    struct ss_npu_backend backend={run,close_backend};assert(ss_npu_service_bind(&backend));
+    const struct ss_npu_model model={"copy",1,1,1,1};
+    struct ss_npu_backend backend={run,close_backend,&model,1};assert(ss_npu_service_bind(&backend));
     if(mode==0) {inject=1;assert(ss_npu_run(0,&in,1,&out,1,1)==-1);}
     if(mode==1) {
         assert(ss_npu_run(0,&in,1,&out,1,1)==0);assert(ss_npu_service_step()==1);

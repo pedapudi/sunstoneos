@@ -15,7 +15,10 @@ The accepted measured intervals are 0.980–1.000 seconds and
 
 Both tasks use the existing precise deadline runtime with CNTV/PPI27. Their
 maximum service gap is 2 ms. I2C transactions use the shared byte engine with a
-5 ms deadline and 50 µs retries. The vendor requests 400 kHz; the image chooses
+5 ms deadline and 50 µs retries. Initialization adopts the shared APBS1
+parent, records inherited registers and resets S_TWI1 within 20 ms. The local
+400 kHz divider follows the selected parent; S_TWI0 and shared clocks stay
+unchanged. Software reset must self-clear and the physical bus must become idle. The vendor requests 400 kHz; the image chooses
 the fastest representable divider at or below that rate. CC measurements settle
 for at least 100 µs. STATUS1 thermal and VCONN overcurrent bits stop the
 source; the switch current limit has no independent software observation. VBUSOK must rise within 275 ms and fall within 650 ms.

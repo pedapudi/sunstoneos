@@ -13,7 +13,11 @@ BaseType_t xTaskGenericNotify(TaskHandle_t task,UBaseType_t index,uint32_t value
     else {assert(task==npu.bootstrap);++bootstrap_events;}
     return pdPASS;
 }
+void board_fail_note(uint32_t site,uint32_t value,const void *where)
+{assert(site);(void)value;(void)where;}
 void board_fail(void *unused){assert(!unused);++failures;}
+void board_fail_at(uint32_t site,uint32_t value,const void *where)
+{board_fail_note(site,value,where);board_fail(NULL);}
 static int run(unsigned model,const void *in,size_t ni,void *out,size_t no,uint64_t timeout)
 {(void)model;(void)in;(void)ni;(void)out;(void)no;(void)timeout;return 1;}
 static int close_backend(void){return 1;}
@@ -33,7 +37,8 @@ int main(void)
     os_npu_thermal(1,0,1100000,100000);
     assert(client_events==3&&bootstrap_events==2&&atomic_load(&npu.gate)==stop);
     assert(ss_npu_service_bind_event(sdk_notify,NULL));
-    const struct ss_npu_backend backend={run,close_backend};assert(ss_npu_service_bind(&backend));
+    const struct ss_npu_model model={"copy",1,1,1,1};
+    const struct ss_npu_backend backend={run,close_backend,&model,1};assert(ss_npu_service_bind(&backend));
     char input=1,output=0;
     assert(ss_npu_run(0,&input,1,&output,1,1)==0&&client_events==4);
     assert(ss_npu_run(0,&input,1,&output,1,1)==0&&client_events==4);

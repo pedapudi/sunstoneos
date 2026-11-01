@@ -7,7 +7,14 @@
  * latency extension counts one warmup and 1000 measured jobs separately.
  * Ordinary runtime clients use one job per linked entry;
  * the switch profile links the first network again after the second. */
-#ifdef SUNSTONE_NPU_LATENCY
+#ifdef SUNSTONE_NPU_ACTIVE_CANCEL
+#define NPU_STARTUP_RECEIPT_MAGIC UINT64_C(0x4e505543414e3031)
+#define NPU_STARTUP_READY UINT64_C(0x4e505543)
+#define NPU_STARTUP_JOBS 1u
+#define NPU_STARTUP_COMPLETIONS 3u
+#define NPU_STARTUP_MAX_STATUS 0u
+#define NPU_STARTUP_JOB_TEXT "1"
+#elif defined(SUNSTONE_NPU_LATENCY)
 #define NPU_STARTUP_RECEIPT_MAGIC UINT64_C(0x4e50554c41543031)
 #define NPU_STARTUP_READY UINT64_C(0x4e50554c)
 #if defined(SUNSTONE_NPU_DEPENDENT_CHAIN) && SUNSTONE_NPU_DEPENDENT_CHAIN
@@ -60,6 +67,9 @@
 #define NPU_STARTUP_READY UINT64_C(0x4e505553)
 #define NPU_STARTUP_JOBS 0u
 #define NPU_STARTUP_MAX_STATUS 0u
+#endif
+#ifndef NPU_STARTUP_COMPLETIONS
+#define NPU_STARTUP_COMPLETIONS (1u+NPU_STARTUP_JOBS)
 #endif
 /* EL1 client only. Existing quiescence and successful CLOSE remain required. */
 int npu_startup_return_ready(void);

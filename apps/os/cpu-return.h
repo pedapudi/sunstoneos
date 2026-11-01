@@ -14,6 +14,7 @@ void os_cpu_return_thermal_done(void);
 void os_cpu_return_pmic(void);
 void os_cpu_return_supervise(void);
 int os_cpu_return_ready(void);
+int os_cpu_return_devices_ready(void);
 void os_cpu_return_spi_save(void);
 int os_cpu_return_spi_restore(void);
 struct a733_cpu_clock;

@@ -1,11 +1,12 @@
 """Decode the empty TYPEC24 diagnostic; electrical voltage is not inferred."""
 import struct
 FIELDS = ('magic mode failure state rose fell rise_us fall_us max_gap cc_samples '
-          'guard_gap guard_fault on_us pl8_cfg pl8_dat twi_state twi_status rate_hz divider bus_retired').split()
+          'guard_gap guard_fault on_us pl8_cfg pl8_dat twi_state twi_status rate_hz divider bus_retired inherited_apbs1 inherited_bgr inherited_xo '
+          'inherited_ctrl inherited_status inherited_lines').split()
 def decode(payload):
     if len(payload) != 8*len(FIELDS):
         raise ValueError('Unexpected VBUS report length')
-    result = dict(zip(FIELDS, struct.unpack('<20Q', payload)))
+    result = dict(zip(FIELDS, struct.unpack('<26Q', payload)))
     if result['magic'] != 0x3154505256425353 or result['mode'] not in (0, 1, 10):
         raise ValueError('Unexpected VBUS report identity')
     return result

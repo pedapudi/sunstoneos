@@ -66,8 +66,15 @@ static int ring_write(void *ctx,enum pvr_cccb_region r,uint32_t off,const void *
         (r==PVR_CCCB_CONTROL && q->phase!=PVR_COMPUTE_QUEUE_FORMAT)) return 0;
     volatile unsigned char *d=(volatile unsigned char *)q->firmware[r==PVR_CCCB_CONTROL?CONTROL:RING].storage.cpu+off;
     const unsigned char *s=in;
-    if (!((off|n)&7)) for (size_t i=0;i<n;i+=8) {
-        uint64_t v; memcpy(&v,s+i,8); *(volatile uint64_t *)(d+i)=v;
+    if (!((off|n)&7)) {
+        if (!((uintptr_t)s&7)) {
+            const unsigned char *aligned=__builtin_assume_aligned(s,8);
+            for (size_t i=0;i<n;i+=8) {
+                uint64_t v;__builtin_memcpy(&v,aligned+i,8);*(volatile uint64_t *)(d+i)=v;
+            }
+        } else for (size_t i=0;i<n;i+=8) {
+            uint64_t v;__builtin_memcpy(&v,s+i,8);*(volatile uint64_t *)(d+i)=v;
+        }
     } else for (size_t i=0;i<n;++i) d[i]=s[i];
     return 1;
 }
@@ -154,7 +161,8 @@ int pvr_compute_queue_create(struct pvr_compute_queue *q,const struct gpu_queue_
     const uintptr_t end=(uintptr_t)__stop_sunstone_gpu_program;
     const uintptr_t code=(uintptr_t)p.code;
     uint64_t local=(uint64_t)p.local_size[0]*p.local_size[1];
-    if (p.abi!=GPU_QUEUE_ABI_GRID || p.reserved || !p.code || !p.code_bytes || (p.code_bytes&3) ||
+    unsigned common_words=pvr_compute_job_common_words(&p);
+    if (!common_words || p.reserved || !p.code || !p.code_bytes || (p.code_bytes&3) ||
         p.code_bytes>GPU_QUEUE_PROGRAM_BYTES || p.temps>252 ||
         (p.coefficients!=3 && p.coefficients!=7) || !p.local_size[0] || !p.local_size[1] ||
         !p.local_size[2] || local>32 || local*p.local_size[2]!=32 ||
@@ -166,11 +174,19 @@ int pvr_compute_queue_create(struct pvr_compute_queue *q,const struct gpu_queue_
     memset(page,0,3*PAGE);
     memcpy(page+PAGE,p.code,p.code_bytes);
     q->task_word=(A733_GPU_QUEUE_PROGRAM_GPU-UINT64_C(0xe000000000))|((uint64_t)((p.temps+3)/4)<<35);
-    q->coefficients=p.coefficients; q->job_us=c->job_us;
+    q->coefficients=p.coefficients; q->common_words=common_words; q->job_us=c->job_us;
     const uint32_t zero[3]={0,0,0};
     q->binding0=q->lease[0].address;
     pvr_compute_job_grid_pds(page,q->task_word,zero,A733_GPU_QUEUE_JOB_GPU+PVR_COMPUTE_QUEUE_ARGUMENTS,q->binding0);
     pvr_compute_job_fence_pds(page+PVR_COMPUTE_QUEUE_FENCE);
+    if (q->service->config.job_irq_ack) for (unsigned i=0;i<PVR_COMPUTE_FAST_DEPTH;++i) {
+        unsigned char *slot=q->job_cpu+i*PVR_COMPUTE_FAST_STRIDE;
+        memset(slot,0,PVR_COMPUTE_FAST_STRIDE);
+        pvr_compute_job_grid_pds(slot,q->task_word,zero,
+            q->job_gpu+i*PVR_COMPUTE_FAST_STRIDE+PVR_COMPUTE_QUEUE_ARGUMENTS,q->binding0);
+        pvr_compute_job_fence_pds(slot+PVR_COMPUTE_QUEUE_FENCE);
+        q->fast.payload[i].binding0=q->binding0;
+    }
     memset(q->command,0,sizeof(q->command));
     pvr_compute_job_command(q->command,0,A733_GPU_QUEUE_JOB_GPU+PVR_COMPUTE_QUEUE_CDM,q->resume);
     put32(q->update,q->firmware_address[TIMELINE]);
@@ -298,7 +314,8 @@ static int take(struct pvr_compute_queue *q)
     unsigned bytes=8*(q->job.bindings-1)+q->job.argument_bytes;
     memcpy(args+8*(q->job.bindings-1),q->job.arguments,q->job.argument_bytes);
     uint32_t pds=(uint32_t)(A733_GPU_QUEUE_JOB_GPU-UINT64_C(0xda00000000));
-    pvr_compute_job_grid_cdm(page+PVR_COMPUTE_QUEUE_CDM,pds,pds+PVR_COMPUTE_QUEUE_FENCE,q->job.groups);
+    (void)pvr_compute_job_grid_cdm_resources(page+PVR_COMPUTE_QUEUE_CDM,pds,
+        pds+PVR_COMPUTE_QUEUE_FENCE,q->job.groups,q->common_words);
     if (!maintain(q,0) ||
         ((pointer_changed || groups_changed) && !aarch64_device_cache(AARCH64_CACHE_CLEAN,
             (uintptr_t)page+(groups_changed?0:64),groups_changed && pointer_changed?128:64)) ||
@@ -370,6 +387,7 @@ int pvr_compute_queue_poll(struct pvr_compute_queue *q)
         if (r==PVR_CCCB_FAULT || r==PVR_CCCB_INVALID) return fault(q,GPU_QUEUE_SERVICE);
         if (q->client.phase!=PVR_CCCB_IDLE) return 0;
         q->phase=PVR_COMPUTE_QUEUE_READY;
+        if (q->service->config.job_irq_ack) pvr_compute_fast_ready(q);
         unsigned closed=PVR_COMPUTE_QUEUE_CLOSED;
         (void)atomic_compare_exchange_strong(&q->slot_state,&closed,PVR_COMPUTE_QUEUE_IDLE);
         closed=PVR_COMPUTE_QUEUE_CLOSED;
@@ -377,6 +395,8 @@ int pvr_compute_queue_poll(struct pvr_compute_queue *q)
         if (q->create_pending && !q->create_done) {q->owed=1; return post(q,0,GPU_QUEUE_OK,0,0);}
         return 1;
     }
+    if (q->service->config.job_irq_ack &&
+        (q->phase==PVR_COMPUTE_QUEUE_READY || q->phase==PVR_COMPUTE_QUEUE_IN_FLIGHT)) return pvr_compute_fast_poll(q);
     if (q->phase==PVR_COMPUTE_QUEUE_READY) return take(q);
     if (q->phase==PVR_COMPUTE_QUEUE_IN_FLIGHT) return complete(q);
     return fault(q,GPU_QUEUE_SERVICE);
@@ -396,10 +416,13 @@ int pvr_compute_queue_event(struct pvr_compute_queue *q,const unsigned char comm
 void pvr_compute_queue_abort(struct pvr_compute_queue *q)
 {
     if (!q || q->phase==PVR_COMPUTE_QUEUE_FAILED) return;
+    if (q->service->config.job_irq_ack) pvr_compute_fast_seal(q);
     q->phase=PVR_COMPUTE_QUEUE_FAILED;
     if (q->client.phase!=PVR_CCCB_NEW) (void)pvr_cccb_abort(&q->client);
     atomic_store(&q->lost,1);
     atomic_store(&q->recovering,0);
+    if (q->service->config.job_irq_ack) for (unsigned i=0;i<GPU_QUEUE_CLIENTS;++i)
+        if (q->fast.task[i]) xTaskNotifyGiveIndexed(q->fast.task[i],PVR_COMPUTE_FAST_NOTIFY);
     /* Failure alone does not return DMA ownership. Preserve every owed
      * record and slot until independently established isolation. */
 }
@@ -419,6 +442,7 @@ int pvr_compute_queue_recovered(struct pvr_compute_queue *q)
             PVR_GPU_CRUMB_HERE());
         return 0;
     }
+    if (q->service->config.job_irq_ack) return pvr_compute_fast_recovered(q);
     if (q->owed) {
         struct pvr_compute_queue_client_view v;
         if (!pvr_compute_queue_client_view(q,q->active_client,&v)) {
@@ -451,6 +475,7 @@ int pvr_compute_queue_close(struct pvr_compute_queue *q)
             atomic_store(&q->slot_state,PVR_COMPUTE_QUEUE_IDLE); return 0;
         }
     }
+    if (q->service->config.job_irq_ack) pvr_compute_fast_seal(q);
     return 1;
 }
 int pvr_compute_queue_deadline(const struct pvr_compute_queue *q,uint64_t *out)

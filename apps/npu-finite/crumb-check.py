@@ -61,6 +61,19 @@ def main():
         decoded = decoder.decode(words, epoch)
         assert decoded['board_failure'][field] == expected_value
         assert decoded['board_failure']['value'] == '0x80000001'
+    measurement_cases=0
+    for stage in (23,28):
+        for job in (0,199,255):
+            for high in (False,True):
+                flag=defines['NPU_MEASUREMENT'] | (defines['NPU_MEASUREMENT_HIGH_WORD'] if high else 0)
+                assert not flag & (defines['NPU_REGISTER'] | defines['NPU_STARTUP'])
+                words.update(esr=10 << 12 | 123 | flag | (stage-23) << 24 | job << 16,far=0x12345678)
+                decoded=decoder.decode(words,epoch);failure=decoded['board_failure']
+                assert failure['measurement_stage']==stage and failure['job_index']==(None if job==255 else job)
+                assert failure['observed_word_index']==int(high) and failure['observed_word']=='0x12345678'
+                assert 'register_offset' not in failure and 'startup_stage' not in failure
+                assert ('observed high word' if high else 'observed low word') in decoded['summary']
+                measurement_cases+=1
     # Failure groups share one retained wire field and must be distinct.
     groups = {name: value for name, value in defines.items() if name.startswith('FAIL_')
               and name not in ('FAIL_SVC', 'FAIL_LEVEL', 'FAIL_RETURN')}
@@ -104,7 +117,9 @@ def main():
                   for i, name in enumerate(FINITE, 1)]
     assertions += ['_Static_assert(NPU_CRUMB_RETAINED == 0x06ff, "retained");',
                    '_Static_assert(SUNSTONE_CRUMB_FAIL_GPU == 7, "GPU failure");',
-                   '_Static_assert(SUNSTONE_CRUMB_FAIL_NPU == 10, "NPU failure");']
+                   '_Static_assert(SUNSTONE_CRUMB_FAIL_NPU == 10, "NPU failure");',
+                   '_Static_assert(SUNSTONE_CRUMB_NPU_MEASUREMENT == 0x10000000u, "measurement flag");',
+                   '_Static_assert(SUNSTONE_CRUMB_NPU_MEASUREMENT_HIGH_WORD == 0x08000000u, "wide operand flag");']
     assertions += [f'_Static_assert(NPU_JOB_CRUMB_{name} == {0x600+i}, "helper {name}");'
                    for i, name in HELPER.items()]
     assertions += [f'_Static_assert(SUNSTONE_CRUMB_NPU_PASS_{name} == {0x630+i}, "pass {name}");'
@@ -116,7 +131,7 @@ def main():
                     str(source), '-o', str(args.out / 'crumb-values')], check=True)
     subprocess.run([str(args.out / 'crumb-values')], check=True)
     (args.out / 'result.json').write_text(json.dumps(dict(passed=True,
-        decoded_stages=len(expected), failure_groups=[7, 8, 9, 10], physical_access=False), indent=2) + '\n')
+        decoded_stages=len(expected), measurement_cases=measurement_cases, failure_groups=[7, 8, 9, 10], physical_access=False), indent=2) + '\n')
     print(f'PASS NPU breadcrumbs: {len(expected)} stages, finite/helper/pass constants, GPU/NPU first-failure decoding')
 
 

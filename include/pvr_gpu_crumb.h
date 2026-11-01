@@ -71,7 +71,7 @@ static inline void pvr_gpu_crumb_record(uint32_t site, uint32_t value, const voi
  *   RECOVERY   rejected guard inputs; its error identifies the guard */
 enum pvr_gpu_crumb_unit { PVR_GPU_CRUMB_SERVICE = 1, PVR_GPU_CRUMB_CONTROL = 2,
     PVR_GPU_CRUMB_FLUSH = 3, PVR_GPU_CRUMB_BACKEND = 4,
-    PVR_GPU_CRUMB_STOP = 5, PVR_GPU_CRUMB_RECOVERY = 6 };
+    PVR_GPU_CRUMB_STOP = 5, PVR_GPU_CRUMB_RECOVERY = 6, PVR_GPU_CRUMB_QUEUE = 7 };
 /* Health steps, in FAR bits 23:16 of the SERVICE and CONTROL details. */
 enum { PVR_GPU_CRUMB_STEP_STARTED = 1, PVR_GPU_CRUMB_STEP_COMPATIBLE = 2,
     PVR_GPU_CRUMB_STEP_HEALTH_SENT = 4, PVR_GPU_CRUMB_STEP_EXECUTED = 8,

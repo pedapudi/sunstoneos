@@ -41,6 +41,9 @@ int os_application_gpu_share_bind(struct pvr_compute_queue *q){(void)q;return 1;
 #ifdef SUNSTONE_A733_OS_HEADSET
 #include "../bluetooth/bluetooth.h"
 #endif
+#ifdef SUNSTONE_A733_OS_NPU
+#include "npu.h"
+#endif
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
 #include "cpu-return.h"
 #endif
@@ -70,6 +73,10 @@ int ss_live(void)
     return a733_smp_counter()/24<atomic_load_explicit(&observed_until,memory_order_acquire);
 }
 void ss_progress(void){board_service_progress(OS_SERVICE_APPLICATION);}
+uint64_t ss_counter_ticks(void)
+{
+    uint64_t now;__asm__ volatile("isb\n mrs %0,cntpct_el0":"=r"(now)::"memory");return now;
+}
 void os_application_usb_changed(void)
 {if(main_task)xTaskNotifyGive(main_task);}
 static int application_wait_until(uint64_t until)
@@ -340,6 +347,12 @@ int os_application_prepare(void)
     return 1;
 }
 /* The first-failure record names the detail and the caller of ss_fail. */
+__attribute__((noinline)) _Noreturn void ss_fail_value(uint32_t detail,uint32_t value)
+{
+    board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_APPLICATION<<12|
+        (detail&UINT32_C(0x7fff0fff)),value,__builtin_return_address(0));
+    for(;;)vTaskSuspend(NULL);
+}
 __attribute__((noinline)) _Noreturn void ss_fail(uint32_t detail)
 {
     board_fail_at(SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_APPLICATION<<12|(detail&0xfff),detail,
@@ -366,6 +379,15 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
     os_usb_service_retire();
     while(!os_usb_service_idle()){
         if(ss_live()<0)ss_fail(0x758);
+        ss_progress();vTaskDelay(1);
+    }
+#endif
+#if defined(SUNSTONE_A733_OS_CPU_RETURN) && defined(SUNSTONE_A733_OS_NPU)
+    /* SDK CLOSE transfers no bootstrap/local-stop authority. Wait for its
+     * immutable client report and revalidate the live IRQ/runtime state. */
+    while(!os_npu_retirement_check()){
+        if(ss_live()<0||a733_smp_counter()>=os_cpu_return_cutoff()||
+           (grant.finish_by_us&&a733_smp_counter()/24>=grant.finish_by_us))ss_fail(0x75f);
         ss_progress();vTaskDelay(1);
     }
 #endif

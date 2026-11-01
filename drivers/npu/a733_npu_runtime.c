@@ -274,6 +274,15 @@ static int write_reg(void *cookie, unsigned offset, uint32_t value)
         __asm__ volatile("dsb sy\n isb\n mrs %0,cntpct_el0" : "=r"(rt->doorbell_ticks) :: "memory");
     }
 #endif
+#ifdef SUNSTONE_A733_OS_NPU_OBSERVE
+    if(written && offset==0x3a4 && rt->service.observe) {
+#ifdef __aarch64__
+        __asm__ volatile("mrs %0,cntpct_el0":"=r"(rt->service.trigger_ticks)::"memory");
+#else
+        rt->service.trigger_ticks=a733_npu_native_operations.microseconds(&rt->native)*24;
+#endif
+    }
+#endif
     return written;
 }
 static uint64_t now(void *cookie)
@@ -850,6 +859,12 @@ static enum a733_npu_platform_result platform_step(struct npu_runtime *rt, int s
      * reset words. */
     if (!good(rt)) {
         fault(rt); return A733_NPU_PLATFORM_RETAINED;
+    }
+    /* A collected CLOSE reply can precede the worker's last runtime step.
+     * Preserve the live startup window until its explicit parked release. */
+    if(stop&&!npu_service_runtime_parked(&rt->service))return A733_NPU_PLATFORM_PENDING;
+    if(stop&&!npu_service_irq_stopped(&rt->service)){
+        fault(rt);return A733_NPU_PLATFORM_RETAINED;
     }
     enum a733_npu_platform_result result = stop ? a733_npu_startup_stop(rt->startup) :
         a733_npu_startup_step(rt->startup);

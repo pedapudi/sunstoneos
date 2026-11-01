@@ -16,4 +16,6 @@ int npu_application_irq_quiet(void *);
 void npu_application_irq(void);
 /* System counter ticks at the latest INTID97 delivery; 0 before the first. */
 uint64_t npu_application_irq_ticks(void);
+/* Actual ISR deliveries; enabled with the finite timestamp instrumentation. */
+unsigned npu_application_irq_count(void);
 #endif
