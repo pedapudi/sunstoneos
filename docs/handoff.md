@@ -54,7 +54,13 @@ cards. Neither board has populated eMMC or UFS; keep the failed UFS probe disabl
   FOLLOW and refused the return. Evidence:
   `dev-runs-1031/3-1-cpu-return-204119/run/watchdog-report.json`; code:
   `apps/os/cpu.c` and `apps/os/cpu-return/cpu.patch`. The merged return path
-  handles this owner phase; the correction has no subsequent board result.
+  handles this owner phase. The corrected hello control returned normally on
+  3-1 with seven secondaries off; evidence:
+  `dev-runs-1031/3-1-cpu-return-211702/run/session.json`.
+- **CPU reliability — failed.** Image `02-reliability` ran on 3-3 and failed
+  with the CPU clock driver in RETAINED at `return-cpu.c:159`. Evidence:
+  `cpu-reliability-1031/start-1/`. Another worker owns this defect. Three-start
+  repeatability and full restoration remain unqualified.
 - **GPU firmware diagnostic — failed.** Image `2-firmware` from `ladder-wdt3`
   stopped in the compatibility callback at
   `platform/a733/gpu_backend.c:375` in its frozen build. Evidence:
@@ -168,6 +174,14 @@ autonomous recognition and reset recovery remain unqualified. Installation
 requires real card extents, a verified full backup, write approval and a
 qualified runner.
 
+The [bounded CPU workload](../apps/cpu-runtime-qualification/RELIABILITY.md)
+passes native builds, seven FreeRTOS scheduler-model cases and offline
+return-image preparation. Frozen image hashes and coordinator command forms
+are in `~/.cache/sunstoneos/build/cpu-reliability-1031/README.md`. The first
+reliability launch failed as recorded above. The earlier longer-recognition
+nonreturn has no recovered fault location; the corrected hello control has
+only its own recorded scope. Further trials remain held after the failure.
+
 ## Merged application and failure-record interfaces
 
 Mimus lives in its own repository under `sunstoneos/`.
@@ -261,9 +275,9 @@ normal return with boot clocks. After watchdog reset it waits until DRAM is
 initialized and the next launch normalizes rails. `--no-normalize-rails` and
 `--no-restore-rails` explicitly disable the respective default.
 
-This command does not yet demonstrate a passing hello-compute control.
-The merged REQUEST/FOLLOW correction is host-verified; a new board result
-remains outstanding. Current `gpu-return` is refused because the existing ladder uses the pre-split application layout;
+The corrected hello-compute control returned normally in the recorded 3-1
+run above. Repeated startup and broader reliability remain unqualified.
+Current `gpu-return` is refused because the existing ladder uses the pre-split application layout;
 its runner is `tools/dev-run.py` at `6a714bcf`. NPU development preparation
 also remains unimplemented. `--check-only` reads the board unless `--state FILE`
 supplies a capture; neither mode writes rails.
@@ -277,9 +291,9 @@ reuse. No board run is requested for this documentation change.
 
 ## Open problems and files
 
-- **Early CPU return:** the host-verified return path handles application
-  completion before the clock owner reaches FOLLOW. Physical confirmation
-  after the recorded hello-compute failure remains outstanding.
+- **CPU reliability:** the first reliability launch failed with the CPU clock
+  driver in RETAINED at `return-cpu.c:159`. Another worker owns the defect;
+  repeated startup, sustained work and full restoration remain unqualified.
 - **GPU service:** the latest compatibility stop belongs to the frozen
   unmerged diagnostic. The merged service still has the health-binding,
   vendor-setup, MMUCACHE, page-size and SLC gaps in

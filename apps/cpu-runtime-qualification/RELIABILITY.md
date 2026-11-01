@@ -2,8 +2,11 @@
 
 Status: the CPU reliability application builds, passes its OS link check and
 passes offline return-image preparation. Its scheduler model passes seven
-cases. The image has not run on a board. Physical startup repeatability,
-sustained operation, recurring local interrupts and idle/wake remain unqualified.
+cases. Image `02-reliability` ran on 3-3 and failed with the CPU clock
+driver in RETAINED at `return-cpu.c:159`. Evidence is under
+`~/.cache/sunstoneos/evidence/cpu-reliability-1031/start-1/`. Another worker owns
+the defect. Physical startup repeatability, sustained operation, full restoration,
+recurring local interrupts and idle/wake remain unqualified.
 
 The application extends the existing finite CPU workload through the general
 [application kit](../../include/sunstone_app.h). It uses the existing FreeRTOS
