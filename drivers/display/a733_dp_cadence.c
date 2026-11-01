@@ -704,7 +704,10 @@ static void combo0_dp_phy_reset(struct sunxi_cadence_combophy *combo0, bool deas
 			}
 			reg_val = phy_readl(combo0->top_reg+0x900);
 			reg_val = (reg_val & (0x3f << 8)) >> 8;
-			phy0_pma_cmn_ready = reg_val;
+			/* The acknowledgment retains the previous power state until
+			 * this request completes (manual18.2.6.9-10). A2 is nonzero
+			 * but does not acknowledge the A0 request above. */
+			phy0_pma_cmn_ready = reg_val == 1;
 
 			udelay(5);
 		}
