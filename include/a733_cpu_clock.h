@@ -129,6 +129,13 @@ struct a733_cpu_clock {
     uint32_t words[A733_CPU_DOMAINS][3]; /* Last pattern 0, pattern 1 and LFM words read per domain. */
     uint64_t park_at, parked_max_us; /* Park write time; longest park write to select readback, us. */
 };
+/* Optional first-fault observer. The default weak definition does nothing.
+ * Called once before failed is set and before either manager is retained.
+ * line/here identify the driver's fault statement; status is the failed
+ * provider result, or UINT32_MAX for a local check. Breadcrumb emission is
+ * permitted; clock, rail and provider operations or driver mutation are not. */
+void a733_cpu_clock_retained_note(const struct a733_cpu_clock *,unsigned line,
+    const void *here,uint32_t status);
 /* Zeroed private storage once. Managers, the PMIC provider and the thermal
  * policy have platform lifetime; the policy must already be initialized. The
  * grant is copied. No hardware access. */

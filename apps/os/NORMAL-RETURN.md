@@ -361,3 +361,26 @@ CPU approval/return-review sources therefore refer to independent immutable
 follow-up policy and source evidence, not the final compound-authority record.
 Finalize the original CPU bundle first, then the compound authority, then queue
 REVIEW. This also avoids a prepared-bundle/compound-authority hash cycle.
+
+## First retained CPU-clock failure
+
+Before the driver retains either shared manager, its optional observer records
+the first fault statement as breadcrumb group `cpu_retained`. Later owner
+refusals preserve that record. The auxiliary word contains state in bits 0–3,
+domain in 4–5, transition origin in 6–7, owner phase in 8–9, request cursor in
+10–11 and the prior stored driver result in 12–14. A prior COMPLETE describes
+the preceding stored result, not completion of the active transition.
+
+The value contains provider status in bits 0–7 (`0xff` for a local check),
+target MHz in 8–18, and flags in 19–31: inspection, closing, counter failure,
+clock-manager failure, rail-ledger failure, PMIC failure, clock lease, rail
+lease, PMIC request, expired request deadline, expired state timer, parked
+consumer and critical thermal state. The observer performs no device writes
+except the existing breadcrumb SVC and starts no voltage or clock operation.
+
+The corrected PLL-update image completed one GPU job and returned on both
+boards. The eight-core reliability image still refused with FOLLOW/cursor 3
+and RETAINED on board 3-3. Its frozen disassembly contains both the UPDATE
+wait and the pre-read/post-read LOCK timing checks. Evidence is under
+`~/.cache/sunstoneos/evidence/cpu-clock-close-1031/`. The setter diagnostic
+distinguishes that remaining failure from the corrected PLL fault.

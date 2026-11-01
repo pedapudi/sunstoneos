@@ -2,6 +2,7 @@
 #include "a733_cpu_clock.h"
 #include "a733_clock_reference.h"
 #include "a733_range.h"
+#include "sunstone_crumb.h"
 #include <stddef.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define CPUPLL UINT32_C(0x08870000)
@@ -301,13 +302,22 @@ static int time_now(struct a733_cpu_clock *c)
 static enum a733_rail rail_of(unsigned cluster){return cluster==A733_CPU_BIG ? A733_RAIL_DCDC3 : A733_RAIL_DCDC5;}
 /* Uncertain state: keep both leases. Retention is metadata and is retried
  * while either manager reports BUSY. The PMIC provider retains its own. */
-static enum a733_cpu_clock_status fault(struct a733_cpu_clock *c)
+__attribute__((weak)) void a733_cpu_clock_retained_note(const struct a733_cpu_clock *c,
+    unsigned line,const void *here,uint32_t status)
+{(void)c;(void)line;(void)here;(void)status;}
+static enum a733_cpu_clock_status fault_at(struct a733_cpu_clock *c,
+    unsigned line,const void *here,uint32_t status)
 {
+    /* Record the transition once, before retention faults the shared managers.
+     * Later polls only retry retention; they must preserve the original site. */
+    if(!c->failed)a733_cpu_clock_retained_note(c,line,here,status);
     c->failed=1;
     if(c->rail.id && !(c->retained&1) && a733_rail_retain(c->rails,&c->rail)!=A733_RAIL_BUSY)c->retained|=1;
     if(c->clock.id && !(c->retained&2) && a733_clock_retain(c->clocks,&c->clock)!=A733_CLOCK_BUSY)c->retained|=2;
     return A733_CPU_CLOCK_RETAINED;
 }
+#define fault_status(c,status) fault_at((c),__LINE__,SUNSTONE_CRUMB_HERE(),(uint32_t)(status))
+#define fault(c) fault_status((c),UINT32_MAX)
 /* End a transition before or after its writes by releasing both leases. */
 static enum a733_cpu_clock_status finish(struct a733_cpu_clock *c,enum a733_cpu_clock_status result)
 {
@@ -377,7 +387,7 @@ static enum a733_cpu_clock_status inspect(struct a733_cpu_clock *c)
         enum a733_pmic_status s=a733_pmic_submit(c->pmic,c->config.owner,&c->rail,rail_of(c->cluster),c->deadline,&c->request);
         if(s==A733_PMIC_BUSY)return A733_CPU_CLOCK_PENDING;
         if(s==A733_PMIC_EXPIRED)return finish(c,A733_CPU_CLOCK_EXPIRED);
-        if(s!=A733_PMIC_PENDING || !c->request.id)return fault(c);
+        if(s!=A733_PMIC_PENDING || !c->request.id)return fault_status(c,s);
         c->state=S_READ;return A733_CPU_CLOCK_PENDING;
     }
     const struct a733_cpu_clock_domain *d=&r->domain[c->cluster];
@@ -422,7 +432,7 @@ static enum a733_cpu_clock_status inspect(struct a733_cpu_clock *c)
     enum a733_pmic_status s=a733_pmic_submit(c->pmic,c->config.owner,&c->rail,rail_of(c->cluster),c->deadline,&c->request);
     if(s==A733_PMIC_BUSY)return A733_CPU_CLOCK_PENDING;
     if(s==A733_PMIC_EXPIRED)return finish(c,A733_CPU_CLOCK_EXPIRED);
-    if(s!=A733_PMIC_PENDING || !c->request.id)return fault(c);
+    if(s!=A733_PMIC_PENDING || !c->request.id)return fault_status(c,s);
     c->state=S_READ;return A733_CPU_CLOCK_PENDING;
 }
 /* Wait for the current PMIC request. 1: result copied and reaped. 2: the
@@ -435,17 +445,17 @@ static int collect(struct a733_cpu_clock *c,uint32_t *floor,enum a733_cpu_clock_
 {
     enum a733_pmic_status s=a733_pmic_result(c->pmic,&c->request,&c->snapshot);
     if(s==A733_PMIC_PENDING || s==A733_PMIC_BUSY){*out=A733_CPU_CLOCK_PENDING;return 0;}
-    if(s!=A733_PMIC_COMPLETE && s!=A733_PMIC_EXPIRED){*out=fault(c);return 0;}
+    if(s!=A733_PMIC_COMPLETE && s!=A733_PMIC_EXPIRED){*out=fault_status(c,s);return 0;}
     if(s==A733_PMIC_COMPLETE && c->snapshot.rail!=rail_of(c->cluster)){*out=fault(c);return 0;}
     if(floor && s==A733_PMIC_COMPLETE && c->snapshot.enabled && c->snapshot.decoded) {
         enum a733_rail_result f=a733_rail_floor(c->rails,&c->rail,rail_of(c->cluster),
             c->snapshot.programmed_uv,floor);
         if(f==A733_RAIL_BUSY){*out=A733_CPU_CLOCK_PENDING;return 0;}
-        if(f!=A733_RAIL_READY){*out=fault(c);return 0;}
+        if(f!=A733_RAIL_READY){*out=fault_status(c,f);return 0;}
     }
     enum a733_pmic_status reaped=a733_pmic_reap(c->pmic,&c->request);
     if(reaped==A733_PMIC_BUSY){*out=A733_CPU_CLOCK_PENDING;return 0;}
-    if(reaped!=A733_PMIC_COMPLETE){*out=fault(c);return 0;}
+    if(reaped!=A733_PMIC_COMPLETE){*out=fault_status(c,reaped);return 0;}
     c->request=(struct a733_pmic_request){0};
     return s==A733_PMIC_EXPIRED ? 2 : 1;
 }
@@ -457,7 +467,7 @@ static enum a733_cpu_clock_status voltage(struct a733_cpu_clock *c)
     enum a733_pmic_status s=a733_pmic_submit_write(c->pmic,c->config.owner,&c->rail,
         rail_of(c->cluster),(uint8_t)(c->selector&127u),code,c->deadline,&c->request);
     if(s==A733_PMIC_BUSY)return A733_CPU_CLOCK_PENDING;
-    if(s!=A733_PMIC_PENDING || !c->request.id)return fault(c);
+    if(s!=A733_PMIC_PENDING || !c->request.id)return fault_status(c,s);
     c->state=S_WRITTEN;return A733_CPU_CLOCK_PENDING;
 }
 static enum a733_cpu_clock_status written(struct a733_cpu_clock *c)
@@ -484,13 +494,13 @@ static enum a733_cpu_clock_status release(struct a733_cpu_clock *c)
     if(c->rail.id) {
         enum a733_rail_result r=a733_rail_release(c->rails,&c->rail,c->timer);
         if(r==A733_RAIL_BUSY || r==A733_RAIL_PENDING)return A733_CPU_CLOCK_PENDING;
-        if(r!=A733_RAIL_READY)return fault(c);
+        if(r!=A733_RAIL_READY)return fault_status(c,r);
         c->rail=(struct a733_rail_token){0};
     }
     if(c->clock.id) {
         enum a733_clock_result r=a733_clock_release(c->clocks,&c->clock,c->timer);
         if(r==A733_CLOCK_BUSY)return A733_CPU_CLOCK_PENDING;
-        if(r!=A733_CLOCK_OK)return fault(c);
+        if(r!=A733_CLOCK_OK)return fault_status(c,r);
         c->clock=(struct a733_clock_token){0};
     }
     /* A completed throttle lowering is restored at NORMAL; one that did not
@@ -552,7 +562,7 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
             shared[c->cluster],own[c->cluster],c->deadline,&c->clock);
         if(r==A733_CLOCK_BUSY)return A733_CPU_CLOCK_PENDING;
         if(r==A733_CLOCK_EXPIRED)return finish(c,A733_CPU_CLOCK_EXPIRED);
-        if(r!=A733_CLOCK_OK)return fault(c);
+        if(r!=A733_CLOCK_OK)return fault_status(c,r);
         c->state=S_RAIL;return A733_CPU_CLOCK_PENDING;
     }
     case S_RAIL: {
@@ -561,11 +571,11 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
             r=a733_rail_acquire(c->rails,c->config.owner,0,A733_RAIL_BIT(rail_of(c->cluster)),c->deadline,&c->rail);
             if(r==A733_RAIL_BUSY)return A733_CPU_CLOCK_PENDING;
             if(r==A733_RAIL_EXPIRED)return finish(c,A733_CPU_CLOCK_EXPIRED);
-            if(r!=A733_RAIL_PENDING)return fault(c);
+            if(r!=A733_RAIL_PENDING)return fault_status(c,r);
         }
         r=a733_rail_poll(c->rails,&c->rail);
         if(r==A733_RAIL_BUSY || r==A733_RAIL_PENDING)return A733_CPU_CLOCK_PENDING;
-        if(r!=A733_RAIL_READY)return fault(c);
+        if(r!=A733_RAIL_READY)return fault_status(c,r);
         c->state=S_INSPECT;return A733_CPU_CLOCK_PENDING;
     }
     case S_INSPECT:return inspect(c);

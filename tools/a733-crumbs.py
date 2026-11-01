@@ -127,6 +127,28 @@ def board_failure(words, defines, elf):
                 # another revision can number its lines differently.
                 record['dcdc5_mv'], record['dcdc3_mv'] = 10 * (value >> 22 & 0x3ff), 10 * (value >> 12 & 0x3ff)
                 record['rail_line_source'] = 'apps/os/cpu-return-entry.c of the decoding tree'
+    if record['group'] == 'cpu_retained':
+        aux = record['aux']
+        state, domain, origin = aux & 15, aux >> 4 & 3, aux >> 6 & 3
+        phase, cursor, prior = aux >> 8 & 3, aux >> 10 & 3, aux >> 12 & 7
+        states = ('IDLE', 'CLOCK', 'RAIL', 'INSPECT', 'READ', 'VOLTAGE', 'WRITTEN',
+                  'SETTLE', 'PARK', 'UPDATE', 'LOCK', 'UNPARK', 'RELEASE')
+        record.update(setter='fault_at', driver_state=state,
+                      driver_state_name=states[state] if state < len(states) else 'UNKNOWN',
+                      domain=domain, domain_name=('CPU-L', 'CPU-B', 'DSU', 'INVALID')[domain],
+                      origin=origin, origin_name=('USER', 'LOWER', 'RESTORE', 'INVALID')[origin],
+                      phase=phase, phase_name=('START', 'INSPECT', 'REQUEST', 'FOLLOW')[phase],
+                      request_cursor=cursor, prior_status=prior,
+                      prior_status_source='driver.result', prior_status_name=('READY', 'PENDING', 'COMPLETE', 'BUSY', 'REFUSED',
+                                         'INVALID', 'EXPIRED', 'RETAINED')[prior],
+                      provider_status=None if value & 0xff == 0xff else value & 0xff,
+                      target_mhz=value >> 8 & 0x7ff, inspection=bool(value >> 19 & 1),
+                      closing=bool(value >> 20 & 1), counter_failed=bool(value >> 21 & 1),
+                      clocks_failed=bool(value >> 22 & 1), ledger_failed=bool(value >> 23 & 1),
+                      pmic_failed=bool(value >> 24 & 1), clock_held=bool(value >> 25 & 1),
+                      rail_held=bool(value >> 26 & 1), request_held=bool(value >> 27 & 1),
+                      deadline_expired=bool(value >> 28 & 1), timer_expired=bool(value >> 29 & 1),
+                      parked=bool(value >> 30 & 1), critical=bool(value >> 31 & 1))
     if caller:
         # A statement address is exact; a return address points after the call.
         record['caller_source'] = symbolize(elf, caller - 4 if site >> 31 else caller)
@@ -175,6 +197,15 @@ def decode(words, epoch, elf=None):
                 f"{f['site_kind']} {f['site']:#x}, value {f['value']}, caller {f['caller']}")
         if f.get('caller_source'):
             text += f" ({f['caller_source']})"
+        if f['group'] == 'cpu_retained':
+            text += (f"; setter {f['setter']}, state {f['driver_state_name']}, domain {f['domain_name']}, "
+                     f"origin {f['origin_name']}, target {f['target_mhz']} MHz, phase {f['phase_name']}, "
+                     f"request cursor {f['request_cursor']}, prior {f['prior_status_name']}, "
+                     f"provider status {f['provider_status']}, closing {f['closing']}, "
+                     f"pre-retention faults counter={f['counter_failed']} clock={f['clocks_failed']} "
+                     f"ledger={f['ledger_failed']} PMIC={f['pmic_failed']}; "
+                     f"leases clock={f['clock_held']} rail={f['rail_held']} request={f['request_held']}; "
+                     f"expired deadline={f['deadline_expired']} timer={f['timer_expired']}")
         if 'refusal' in f:
             text += '; ' + (', '.join(f['refusal']) or 'no refusal bit')
         parts.append(text)
