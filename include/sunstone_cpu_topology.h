@@ -45,7 +45,7 @@ struct ss_cpu_topology {
     size_t cpu_count, cache_count, domain_count;
     const struct ss_cpu_policy *policy;
 };
-struct ss_work_range { uint64_t begin, end; uint32_t cpu; };
+struct ss_work_range { uint64_t begin, end; uint32_t cpu, reserved; };
 /* Validate once before publishing an immutable snapshot. Query and split take
  * only validated snapshots whose storage remains alive throughout the call. */
 int ss_cpu_topology_validate(const struct ss_cpu_topology *);

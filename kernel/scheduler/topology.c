@@ -55,7 +55,11 @@ int ss_cpu_topology_validate(const struct ss_cpu_topology *t)
             const struct ss_cpu_info *other=&t->cpus[j];
             if(i!=j && c->affinity==other->affinity) return SS_TOPOLOGY_INVALID;
             if (!!(c->siblings & (UINT64_C(1)<<j)) != (c->physical_core==other->physical_core) ||
-                ((c->siblings & (UINT64_C(1)<<j)) && c->siblings!=other->siblings)) return SS_TOPOLOGY_INVALID;
+                ((c->siblings & (UINT64_C(1)<<j)) &&
+                 (c->siblings!=other->siblings || c->cluster!=other->cluster ||
+                  c->performance_domain!=other->performance_domain || c->midr!=other->midr ||
+                  c->l1i!=other->l1i || c->l1d!=other->l1d ||
+                  c->l2!=other->l2 || c->l3!=other->l3))) return SS_TOPOLOGY_INVALID;
         }
     }
     /* Every declared sharing member must link back to the same cache. */
@@ -133,7 +137,7 @@ int ss_cpu_work_split(const struct ss_cpu_topology *t,uint64_t units,uint64_t ma
     for(unsigned i=0;i<n;i++) {
         uint64_t length=shares[i]*quantum;
         if(i==n-1) length+=units%quantum;
-        out[i]=(struct ss_work_range){begin,begin+length,ids[i]}; begin+=length;
+        out[i]=(struct ss_work_range){begin,begin+length,ids[i],0}; begin+=length;
     }
     return SS_TOPOLOGY_OK;
 }

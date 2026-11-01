@@ -36,7 +36,7 @@ static void conservation(struct ss_cpu_topology *t,uint64_t units,uint32_t quant
     assert(ss_cpu_work_split(t,units,policy.application,quantum,out,64,&count)==0);
     assert(count==t->cpu_count);uint64_t end=0;
     for(size_t i=0;i<count;i++) {
-        assert(out[i].cpu==i && out[i].begin==end && out[i].end>=end);
+        assert(out[i].cpu==i && out[i].reserved==0 && out[i].begin==end && out[i].end>=end);
         if(i+1<count) assert((out[i].end-out[i].begin)%quantum==0);
         end=out[i].end;
     }
@@ -96,6 +96,13 @@ int main(void)
     t=fixture(4,1,0);cpus[0].flags=0;cpus[0].capacity_max=cpus[0].capacity_effective=0;
     assert(ss_cpu_topology_validate(&t)==0);
     assert(ss_cpu_work_split(&t,1,15,1,out,64,&count)==SS_TOPOLOGY_UNCALIBRATED);
+    t=fixture(4,2,1);assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+    t=fixture(4,1,1);cpus[1].cluster=1;
+    assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+    t=fixture(4,1,1);cpus[1].midr=0x414fd0b1;
+    assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
+    t=fixture(4,1,1);cpus[1].l3=SS_ID_NONE;
+    assert(ss_cpu_topology_validate(&t)==SS_TOPOLOGY_INVALID);
     t=fixture(4,1,1);assert(ss_cpu_topology_validate(&t)==0);
     assert(ss_cpu_work_split(&t,100,15,1,out,4,&count)==SS_TOPOLOGY_UNCALIBRATED);
     assert(ss_cpu_work_split(&t,100,5,1,out,4,&count)==0);
