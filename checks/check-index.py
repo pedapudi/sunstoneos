@@ -22,6 +22,9 @@ Changed paths are relative to the repository root; a directory selects every
 check that covers a path below it.
 Paths assembled from separate string segments are not found, so an empty
 selection is not proof that no check covers a change.
+CHECK_INPUTS supplies supplementary literal repository paths. The hook fixture
+uses its complete declared inventory plus the hook, harness and fixture itself,
+matching the pre-push hook's conditional fixture policy.
 """
 import argparse
 import ast
@@ -60,6 +63,9 @@ NOT_PURE = {
     'h264-input-host.py': 'the default run needs --image, --inputs, --native and --launcher',
     'sae-openssl.py': 'the default run needs --openssl, --upstream and --evidence; --verify-source needs a pinned source tree',
 }
+# The hook fixtures run only for their actual process inputs. References inside
+# harness helpers do not add fixture inputs; this matches pre-push.fixture_selection.
+COMPLETE_INPUTS = {'pre-push-hook.py': ('tools/git-hooks/pre-push', 'checks/harness.py')}
 
 
 def checks():
@@ -186,6 +192,28 @@ class Revision:
 
 
 @functools.lru_cache(maxsize=None)
+def declarations(path, revision=None):
+    """Literal supplementary input paths, relative to the repository root."""
+    text = revision.text(path) if revision else path.read_text(errors='replace')
+    values = ()
+    for node in ast.parse(text).body:
+        if not isinstance(node, ast.Assign):
+            continue
+        names = {target.id for target in node.targets if isinstance(target, ast.Name)}
+        if 'CHECK_INPUTS' in names:
+            values = ast.literal_eval(node.value)
+            if not isinstance(values, (list, tuple)) or not all(isinstance(v, str) for v in values):
+                raise ValueError('CHECK_INPUTS must be a literal list or tuple of repository paths')
+    inputs = set()
+    for value in values or ():
+        candidate = Path(os.path.normpath(ROOT / value))
+        if not candidate.is_relative_to(ROOT):
+            raise ValueError('CHECK_INPUTS must stay inside the repository')
+        inputs.add(candidate)
+    return frozenset(inputs)
+
+
+@functools.lru_cache(maxsize=None)
 def named(path, includes_only, revision=None):
     """Repository files and subdirectories one file names; only #include targets for non-check sources."""
     text = revision.text(path) if revision else path.read_text(errors='replace')
@@ -206,18 +234,7 @@ def named(path, includes_only, revision=None):
     if not includes_only and re.search(r'^import harness$', text, re.M):
         found.add(ROOT / 'checks/harness.py')
     if not includes_only and path.suffix == '.py':
-        # Literal declarations cover inputs assembled dynamically by a check.
-        tree = ast.parse(text)
-        for node in tree.body:
-            if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'CHECK_INPUTS' for t in node.targets):
-                values = ast.literal_eval(node.value)
-                if not isinstance(values, (list, tuple)) or not all(isinstance(v, str) for v in values):
-                    raise ValueError('CHECK_INPUTS must be a literal list or tuple of repository paths')
-                for value in values:
-                    candidate = Path(os.path.normpath(ROOT / value))
-                    if not candidate.is_relative_to(ROOT):
-                        raise ValueError('CHECK_INPUTS must stay inside the repository')
-                    found.add(candidate)
+        found.update(declarations(path, revision))
     return frozenset(found)
 
 
@@ -230,6 +247,11 @@ def covered(path, revision=None):
             continue
         seen.add(current)
         exists = current in revision.files if revision else current.is_file()
+        if exists and current.parent == ROOT / 'checks' and current.suffix == '.py':
+            if current.name in COMPLETE_INPUTS:
+                seen.update(declarations(current, revision))
+                seen.update(ROOT / name for name in COMPLETE_INPUTS[current.name])
+                continue
         if exists and current.suffix in ('.py', '.c', '.cc', '.h', '.S', '.inc'):
             stack.extend(named(current, current.parent != ROOT / 'checks', revision))
     return {p.relative_to(ROOT).as_posix() for p in seen}

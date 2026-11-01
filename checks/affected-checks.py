@@ -87,8 +87,53 @@ def main():
     assert '--launcher' in ' '.join(pending['h264-input-host.py']['needs'])
     assert '--openssl' in ' '.join(pending['sae-openssl.py']['needs'])
     assert 'pinned source tree' in ' '.join(pending['sae-openssl.py']['needs'])
+    # The real hook fixture inventories its inputs completely. Comments in the
+    # shared harness name native headers but do not make them hook inputs.
+    hook = (ROOT / 'checks/pre-push-hook.py').read_text()
+    legacy = hook.replace("'checks/harness.py')", "'checks/harness.py', 'retired-hook-input.txt')")
+    write('checks/pre-push-hook.py', legacy)
+    write('retired-hook-input.txt', 'original\n')
+    for name in ('sunstone_app.h', 'sunstone_crumb.h'):
+        shutil.copyfile(ROOT / 'include' / name, source / 'include' / name)
+    legacy_base = commit('Historical declared hook inputs')
+    for name in ('sunstone_app.h', 'sunstone_crumb.h'):
+        path = source / 'include' / name
+        path.write_text(path.read_text() + '\n/* Native-only fixture change. */\n')
+    legacy_head = commit('Unrelated native headers')
+    write('retired-hook-input.txt', 'changed\n')
+    retired_head = commit('Change a historical declared hook input')
+    write('checks/pre-push-hook.py', hook)
+    hook_native = select('--changed', 'include/sunstone_app.h', 'include/sunstone_crumb.h')
+    hook_range = select(legacy_base + '..' + legacy_head)
+    for selection in (hook_native, hook_range):
+        assert 'pre-push-hook.py' not in {check['check'] for check in selection['checks']}
+    retired = select(legacy_head + '..' + retired_head)
+    assert 'pre-push-hook.py' in {check['check'] for check in retired['checks']}
+    for changed in ('tools/git-hooks/pre-push', 'checks/harness.py', 'checks/pre-push-hook.py'):
+        selection = select('--changed', changed)
+        assert 'pre-push-hook.py' in {check['check'] for check in selection['checks']}
+    # Additional declared fixture inputs remain authoritative, and the fixture
+    # script itself is always an input even if omitted from its declaration.
+    custom = hook.replace("'checks/pre-push-hook.py', ", "'custom-hook-input.txt', ")
+    write('checks/pre-push-hook.py', custom)
+    for changed in ('custom-hook-input.txt', 'checks/pre-push-hook.py'):
+        selection = select('--changed', changed)
+        assert 'pre-push-hook.py' in {check['check'] for check in selection['checks']}
+    # Native checks retain inferred inputs from each historical endpoint, even
+    # when a later checkout removes that dependency and declares no extra inputs.
+    write('drivers/retired-input.c', 'original\n')
+    write('checks/legacy-consumer.py', 'open("drivers/retired-input.c").read()\n')
+    consumer_base = commit('Historical native consumer')
+    write('drivers/retired-input.c', 'changed\n')
+    consumer_head = commit('Change a historical native input')
+    write('checks/legacy-consumer.py', 'CHECK_INPUTS = ()\nprint("no current input")\n')
+    consumer = select(consumer_base + '..' + consumer_head)
+    assert 'legacy-consumer.py' in {check['check'] for check in consumer['checks']}
     (out / 'results.json').write_text(json.dumps({'paths': selected, 'range': ranged, 'removed': result,
-                                                'conditional_inputs': conditional}, indent=2) + '\n')
+                                                'conditional_inputs': conditional, 'hook_native': hook_native,
+                                                'hook_legacy_range': hook_range,
+                                                'hook_retired_input': retired,
+                                                'historical_consumer': consumer}, indent=2) + '\n')
     print('PASS: declared inputs, include closure, renamed/deleted dependencies and pending inputs')
 
 
