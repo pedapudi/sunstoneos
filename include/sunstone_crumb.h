@@ -73,6 +73,8 @@
 #define SUNSTONE_CRUMB_CPU_AUX 0x20000000u
 #define SUNSTONE_CRUMB_CPU_GUARD 0x40000000u
 #define SUNSTONE_CRUMB_FAIL_PMIC 0x6u       /* PMIC power service; value: authority word */
+#define SUNSTONE_CRUMB_FAIL_GPU 0x7u        /* GPU failure; value: reason or register status */
+#define SUNSTONE_CRUMB_FAIL_NPU 0x8u        /* NPU failure; value: reason or register status */
 #define SUNSTONE_CRUMB_FAIL_RETURN 0x80000000u /* site flag: caller is a return address */
 #define SUNSTONE_CRUMB_FAIL_SITE(group) (SUNSTONE_CRUMB_FAIL_##group << 12 | ((uint32_t)__LINE__ & 0xfffu))
 /* The address of this statement, for the caller word of a board failure.
@@ -120,6 +122,26 @@ enum {
     SUNSTONE_CRUMB_GPU_PARKED = 0x0440,     /* value: result */
     SUNSTONE_CRUMB_RETURN_POWER_DOWN = 0x0502, /* value: core */
     SUNSTONE_CRUMB_RETURN_ROM = 0x0503,     /* value: WDT0 mode after disarm */
+    SUNSTONE_CRUMB_NPU_WAIT_STARTUP = 0x0601,
+    SUNSTONE_CRUMB_NPU_OPEN = 0x0602,
+    SUNSTONE_CRUMB_NPU_BOOTSTRAP_READY = 0x0603,
+    SUNSTONE_CRUMB_NPU_SUBMIT = 0x0604,
+    SUNSTONE_CRUMB_NPU_JOB_DONE = 0x0605,
+    SUNSTONE_CRUMB_NPU_OUTPUT_COPIED = 0x0606,
+    SUNSTONE_CRUMB_NPU_REAPED = 0x0607,
+    SUNSTONE_CRUMB_NPU_CLOSE = 0x0608,
+    SUNSTONE_CRUMB_NPU_LOCAL_STOP = 0x0609,
+    SUNSTONE_CRUMB_NPU_QUIESCENT = 0x060a,
+    SUNSTONE_CRUMB_NPU_EXIT = 0x060b,
+    SUNSTONE_CRUMB_NPU_HELPER_OPEN = 0x0620,   /* value: runtime slot */
+    SUNSTONE_CRUMB_NPU_HELPER_LOAD = 0x0621,   /* value: model index */
+    SUNSTONE_CRUMB_NPU_HELPER_SUBMIT = 0x0622, /* value: model index */
+    SUNSTONE_CRUMB_NPU_HELPER_DONE = 0x0623, /* value: job ticket */
+    SUNSTONE_CRUMB_NPU_HELPER_COPIED = 0x0624, /* value: copied bytes */
+    SUNSTONE_CRUMB_NPU_HELPER_CLOSE = 0x0625,  /* value: runtime slot */
+    SUNSTONE_CRUMB_NPU_HELPER_REFUSED = 0x062e,
+    SUNSTONE_CRUMB_NPU_HELPER_FAILED = 0x062f,
+    SUNSTONE_CRUMB_NPU_RETAINED = 0x06ff,
 };
 
 #ifdef SUNSTONE_CRUMBS

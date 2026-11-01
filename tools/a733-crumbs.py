@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Decode returning-image breadcrumbs and arm or read WDT0 over FEL.
 
-The layout and stage names come from include/sunstone_crumb.h, so the image
-and this decoder cannot disagree silently. No device access happens here:
+The layout, NPU stage names and GPU/NPU first-failure group names come from
+include/sunstone_crumb.h, so the image and decoder use one definition.
+No device access happens here:
 callers pass the FEL transaction function they already own.
 """
 import re

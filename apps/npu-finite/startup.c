@@ -13,11 +13,13 @@ __attribute__((used,retain)) const uint64_t npu_startup_return_profile[4]={
 static struct npu_convolution *startup_convolution;
 static unsigned startup_completed;
 /* The client's last retention reason also reaches the progress record. */
-static _Noreturn void retained(unsigned reason)
+static _Noreturn void retained_at(unsigned reason,uint32_t site,const void *caller)
 {
+    sunstone_crumb_fail(site,reason,caller);
     sunstone_crumb(NPU_CRUMB_RETAINED,reason);
     npu_client_retained(reason);
 }
+#define retained(reason) retained_at((reason),SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
 int npu_startup_return_ready(void)
 {
     struct npu_convolution *c=startup_convolution;

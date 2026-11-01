@@ -6,6 +6,7 @@
  * admitted network through npu_job_run. */
 #include "native-runtime.h"
 #include "npu_job.h"
+#include "sunstone_crumb.h"
 #include "a733_npu_irq.h"
 #include <string.h>
 #include "a733_mapping_check.h"
@@ -69,8 +70,10 @@ const struct a733_npu_application_boot *a733_npu_application_boot_record(void)
 void a733_npu_application_fail(unsigned reason)
 {
     unsigned expected=0;
-    atomic_compare_exchange_strong_explicit(&a733_npu_application_failed,&expected,
-        reason ? reason : 1,memory_order_release,memory_order_relaxed);
+    if(atomic_compare_exchange_strong_explicit(&a733_npu_application_failed,&expected,
+        reason ? reason : 1,memory_order_release,memory_order_relaxed))
+        sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU)|SUNSTONE_CRUMB_FAIL_RETURN,
+            reason,__builtin_return_address(0));
 }
 static _Noreturn void fatal(void *unused)
 {

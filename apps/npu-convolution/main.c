@@ -3,6 +3,7 @@
 #include "boot.h"
 #include "cached.h"
 #include "result.h"
+#include "sunstone_crumb.h"
 #include <string.h>
 #ifdef SUNSTONE_NPU_SUPERVISED
 #include "session.h"
@@ -34,6 +35,8 @@ static int live(void)
 }
 static _Noreturn void retained(unsigned reason)
 {
+    sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU)|SUNSTONE_CRUMB_FAIL_RETURN,
+        reason,__builtin_return_address(0));
     a733_npu_application_fail(reason);vTaskSuspend(NULL);
     platform_panic("NPU client retained",reason);
 }

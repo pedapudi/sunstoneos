@@ -34,12 +34,14 @@ static int live(void)
     return !atomic_load_explicit(&a733_npu_application_failed,memory_order_acquire) &&
         a733_smp_counter()<a733_observe_identity.deadline;
 }
-static _Noreturn void retained(unsigned reason)
+static _Noreturn void retained_at(unsigned reason,uint32_t site,const void *caller)
 {
+    sunstone_crumb_fail(site,reason,caller);
     sunstone_crumb(NPU_CRUMB_RETAINED,reason);
     a733_npu_application_fail(reason);vTaskSuspend(NULL);
     platform_panic("NPU client retained",reason);
 }
+#define retained(reason) retained_at((reason),SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
 int npu_startup_return_ready(void)
 {
     const struct npu_runtime *rt=runtime;
