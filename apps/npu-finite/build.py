@@ -104,7 +104,7 @@ if a.latency:
  assert sum(v.startswith('-DCMAKE_C_FLAGS=') for v in config)==1
  config=[v+' -include '+str(root/'apps/npu-finite/latency-stats.h') if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
 if a.idle:
- config=[v+' -DSUNSTONE_NPU_IDLE_BENCH=1 -DSUNSTONE_DEADLINE_SINGLE_CORE=1' if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
+ config=[v+' -DSUNSTONE_NPU_IDLE_BENCH=1 -DSUNSTONE_DEADLINE_SINGLE_CORE=1 -DINCLUDE_uxTaskPriorityGet=1' if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
 if a.restart:
  assert sum(v.startswith('-DCMAKE_C_FLAGS=') for v in config)==1
  config=[v+' -DSUNSTONE_NPU_RESTART=1'+(' -DSUNSTONE_NPU_POWER_CYCLE=1' if a.power_cycle else '') if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]

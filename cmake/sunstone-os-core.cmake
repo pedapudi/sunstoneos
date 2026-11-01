@@ -463,7 +463,8 @@ target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICAT
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO}>:SUNSTONE_A733_OS_RADIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_HEADSET}>:SUNSTONE_A733_OS_HEADSET=1>")
 if(SUNSTONE_A733_OS_NPU)
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU=1)
+  # The optional idle owner checks its priority against the producer's.
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU=1 INCLUDE_uxTaskPriorityGet=1)
   if(SUNSTONE_A733_OS_NPU_OBSERVE)
     target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU_OBSERVE=1)
   endif()
