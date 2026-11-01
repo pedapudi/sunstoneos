@@ -86,7 +86,7 @@ counter/deadline/sample bound. These are software diagnostics.
 
 The weak `sunstone_probe_acquire_secondaries()` hook implements this owner.
 The default `sunstone_probe_release_secondaries()` retains static OFF and
-wake-disable through ROM return. A strong owner must satisfy the same held-state
+wake-disable until the ROM reset request. A strong owner must satisfy the same held-state
 checks; its release runs after final data and instruction-cache maintenance and
 receipt preparation. No cache operation follows release. A release failure
 parks with the watchdog armed. Consumers using the common owner remove private

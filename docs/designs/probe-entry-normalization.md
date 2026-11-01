@@ -6,7 +6,7 @@ remain unqualified. This contract covers returning, single-core diagnostics.
 The shared probe acquires all seven secondary CPUs after session, watchdog and
 architectural checks, before cache maintenance. It accepts acknowledged static
 or dynamic OFF as input and establishes static OFF with GIC wake disabled.
-It retains that state through ROM return. An active core refuses before any
+It retains that state until the ROM reset request. An active core refuses before any
 policy write, because entry cannot shut down an unknown owner.
 
 ## The vendor sequence needs an explicit dynamic-disable handshake
@@ -58,7 +58,7 @@ acquisition. A 65,536-sample limit also bounds a stopped counter. These limits
 bound availability; they do not claim measured hardware latency. Acquisition
 runs once at entry and adds no recurring I/O or scheduler work.
 
-## Ownership stays held through ROM return
+## Ownership stays held until the ROM reset request
 
 The weak acquire hook implements normalization. Its code runs before memory
 testing and stays outside memtest's protected recovery pages. The weak release
