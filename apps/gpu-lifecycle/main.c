@@ -2,10 +2,13 @@
 #include "gpu_lifecycle-app.h"
 #include "gpu_queue.h"
 #include "../queue-add/program.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #define ELEMENTS 65u
 #define WAIT_TICKS 4000u
 #define CYCLES 10u
+#define SUBMIT_WAIT_TICKS 500u
 #ifndef GPU_LIFECYCLE_RECOVERY
 #define GPU_LIFECYCLE_RECOVERY 0
 #endif
@@ -25,6 +28,20 @@ struct lifecycle_result {
     uint32_t kick_to_done_us[CYCLES];
 };
 _Static_assert(sizeof(struct lifecycle_result) == 88, "lifecycle result matches the manifest");
+
+static int submit_ready(struct gpu_queue_context context, const struct gpu_queue_job *job)
+{
+    const TickType_t began = xTaskGetTickCount();
+    int result;
+    /* Thermal parking queues no job. Allow bounded startup or reopen settling
+     * while the thermal owner runs; other results still stop the diagnostic. */
+    while ((result = gpu_queue_submit(context, job)) == GPU_QUEUE_PARKED) {
+        if (ss_live() < 0 || xTaskGetTickCount() - began >= SUBMIT_WAIT_TICKS) break;
+        ss_progress();
+        vTaskDelay(1);
+    }
+    return result;
+}
 
 static void inputs(uint32_t *input, uint32_t sequence)
 {
@@ -75,7 +92,7 @@ void gpu_lifecycle_main(const struct ss_grant *grant)
     inputs(input, 1);
     job.sequence = 1;
     ss_progress();
-    if (gpu_queue_submit(context, &job) != GPU_QUEUE_OK) ss_fail(4);
+    if (submit_ready(context, &job) != GPU_QUEUE_OK) ss_fail(4);
 #if GPU_LIFECYCLE_PEER
     gpu_queue_peer_release();
     if (!gpu_queue_peer_accepted(50)) ss_fail(12);
@@ -102,7 +119,7 @@ void gpu_lifecycle_main(const struct ss_grant *grant)
         inputs(input, sequence);
         job.sequence = sequence;
         ss_progress();
-        if (gpu_queue_submit(context, &job) != GPU_QUEUE_OK) ss_fail(4);
+        if (submit_ready(context, &job) != GPU_QUEUE_OK) ss_fail(4);
 #if GPU_LIFECYCLE_PEER && !GPU_LIFECYCLE_RECOVERY
         if (sequence == 1) gpu_queue_peer_release();
 #endif

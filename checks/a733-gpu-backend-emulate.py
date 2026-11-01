@@ -126,6 +126,8 @@ def access(uc, operation, address, size, value, context):
             assert address - 0x01800000 == offset, f'access {address:#x}, expected offset {offset:#x}'
             if writing:
                 assert value & 0xffffffff == wanted
+        if not writing and address==0x01800100 and word('late_reset_read'):
+            clock[0]=int.from_bytes(uc.mem_read(symbols['operation_deadline'],8),'little')+1
         count = word('mmio_count') + 1
         uc.mem_write(symbols['mmio_count'], count.to_bytes(4, 'little'))
 u.hook_add(UC_HOOK_CODE, instruction)
@@ -145,7 +147,7 @@ if a.progress_only:
     assert [stage for stage, value in progress] == [0x0469, 0x046a, 0x046b, 0x046c, 0x0468, 0x0467], \
         f'power, identity, publication, timer-read, timer and secure progress: {progress}'
 if a.recovery_only:
-    assert sum(stage==0x0451 for stage,value in progress)==4, progress
+    assert sum(stage==0x0451 for stage,value in progress)==5, progress
     print('PASS native GPU recovery: split reset write/readback, admission, OFF/reclaim proof and retained failures')
     raise SystemExit(0)
 print('PASS native GPU backend: power, identity, publication and first timer read breadcrumbs' if a.progress_only else 'PASS native GPU backend: real controller compatibility copy and restricted service-owned destination' if a.compat_only else 'PASS native GPU backend: refused bind preserves config; successful bind serializes both firmware clocks at the top point' if a.firmware_clock_only else 'PASS native GPU backend: expired lifetime permanently refuses later access' if a.lifetime_only else 'PASS native GPU backend: actual firmware event receive and restricted queue-owned destination' if a.event_only else 'PASS native GPU backend: private platform/controller clock regression refusal' if a.clock_only else 'PASS native GPU backend: identity, MMIO trace widths, memory/GIC composition, mapping refusal and retained isolation failures')

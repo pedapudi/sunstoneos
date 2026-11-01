@@ -7,6 +7,7 @@ transport and completion queues are modeled; no GPU or board is accessed.
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import shlex
 import struct
@@ -45,7 +46,7 @@ def run(command, log):
     log.write_bytes(result.stdout + result.stderr)
     assert result.returncode == 0, (command, log)
 
-types = {'pvr_compute_queue', 'pvr_compute_queue_client', 'pvr_gpu_service', 'pvr_cccb', 'gpu_queue_job', 'gpu_queue_binding',
+types = {'pvr_compute_queue', 'pvr_compute_queue_client', 'pvr_gpu_service', 'pvr_gpu_stop', 'pvr_cccb', 'gpu_queue_job', 'gpu_queue_binding',
          'gpu_queue_lease_info', 'pvr_mips_buffer', 'pvr_fw_buffer', 'a733_gpu_queue', 'device_memory_extent'}
 for enabled in (False, True):
     directory = a.output / ('enabled' if enabled else 'disabled')
@@ -61,6 +62,9 @@ for enabled in (False, True):
          '-o', str(elf)], directory / 'link.log')
     image = Image(elf, types)
     sizes, enums = {}, {}
+    stop_phase_names = re.search(r'enum pvr_gpu_stop_phase \{(.*?)\};',
+                                 (ROOT / 'include/pvr_gpu_stop.h').read_text(), re.S).group(1).split(',')
+    enums.update({name.strip(): value for value, name in enumerate(stop_phase_names)})
     with elf.open('rb') as stream:
         for cu in ELFFile(stream).get_dwarf_info().iter_CUs():
             for die in cu.iter_DIEs():
@@ -74,7 +78,9 @@ for enabled in (False, True):
                     sizes[name] = die.attributes['DW_AT_byte_size'].value
     cases = ('success', 'deadline-refused', 'fault-before-kick', 'fault-after-kick',
              'abort-submitted', 'abort-reserved', 'publication-failed', 'create-ready')
-    for scenario in cases + tuple('peer-' + case for case in cases if case != 'create-ready'):
+    recovery_cases = ('recovery-state', 'recovery-lost', 'recovery-service', 'recovery-isolation',
+                      'recovery-client', 'recovery-slot', 'recovery-post')
+    for scenario in cases + tuple('peer-' + case for case in cases if case != 'create-ready') + recovery_cases:
         peer = scenario.startswith('peer-')
         case = scenario[5:] if peer else scenario
         submit_stage, complete_stage = (0x0412, 0x0413) if peer else (0x0410, 0x0411)
@@ -88,8 +94,8 @@ for enabled in (False, True):
                         u.mem_map(page, 4096)
                         mapped.add(page)
                 u.mem_write(address, data)
-        crumbs = []
-        skip_crumbs(u, image, crumbs)
+        crumbs, failures = [], []
+        skip_crumbs(u, image, crumbs, failures)
         def put(address, value, width=4):
             u.mem_write(address, int(value).to_bytes(width, 'little'))
         def get(address, width=4):
@@ -149,7 +155,9 @@ for enabled in (False, True):
         def hook(machine, address, size, unused):
             name = hooks[address]
             args = [u.reg_read(UC_ARM64_REG_X0 + index) for index in range(4)]
-            if name == 'memcpy':
+            if name == 'a733_gpu_backend_stopped':
+                ret(case != 'recovery-isolation')
+            elif name == 'memcpy':
                 u.mem_write(args[0], bytes(u.mem_read(args[1], args[2])))
                 ret(args[0])
             elif name == 'memset':
@@ -171,10 +179,10 @@ for enabled in (False, True):
             elif name == 'xQueueGenericSend':
                 assert args[0] == (0x800d0000 if peer else 0x800c0000), (scenario, 'wrong completion queue')
                 record = struct.unpack('<IHHII', bytes(u.mem_read(args[1], 16)))
-                assert crumbs == ([(submit_stage, sequence), (complete_stage, sequence)] if enabled and case != 'create-ready' else [])
+                assert crumbs == ([(submit_stage, sequence), (complete_stage, sequence)] if enabled and case != 'create-ready' and not case.startswith('recovery-') else [])
                 assert get(field(q, 'pvr_compute_queue', 'crumb_pending')) == 0
                 state['posts'].append(record)
-                if case == 'publication-failed' and not state['publication_failed']:
+                if case in ('publication-failed', 'recovery-post') and not state['publication_failed']:
                     state['publication_failed'] = True
                     ret(0)
                 else:
@@ -194,6 +202,37 @@ for enabled in (False, True):
             u.emu_start(image.address(name), 0x80000000, count=100000)
             assert u.reg_read(UC_ARM64_REG_PC) == 0x80000000, (case, 'execution budget')
             return u.reg_read(UC_ARM64_REG_X0)
+        if case in recovery_cases:
+            setfield(q, 'pvr_compute_queue', 'recovering', case != 'recovery-state')
+            setfield(q, 'pvr_compute_queue', 'lost', case == 'recovery-lost')
+            setfield(service, 'pvr_gpu_service', 'phase', enums['PVR_GPU_SERVICE_READY'] if case == 'recovery-service' else enums['PVR_GPU_SERVICE_RECOVERING'])
+            setfield(q, 'pvr_compute_queue', 'owed', 1)
+            setfield(q, 'pvr_compute_queue', 'active_client', 2 if case == 'recovery-client' else 0)
+            setfield(q, 'pvr_compute_queue', 'slot_state', enums['PVR_COMPUTE_QUEUE_IDLE'] if case == 'recovery-slot' else enums['PVR_COMPUTE_QUEUE_TAKEN'])
+            setfield(field(q, 'pvr_compute_queue', 'job'), 'gpu_queue_job', 'sequence', sequence)
+            stop = field(service, 'pvr_gpu_service', 'stop')
+            setfield(stop, 'pvr_gpu_stop', 'phase', enums['PVR_GPU_STOP_STOPPED'])
+            setfield(stop, 'pvr_gpu_stop', 'isolation_observed', 1)
+            assert invoke('pvr_compute_queue_recovered') == 0
+            reasons = dict(zip(recovery_cases, (1, 1, 1, 2, 3, 4, 5)))
+            values = {'recovery-state': enums['PVR_GPU_SERVICE_RECOVERING'] << 16,
+                      'recovery-lost': enums['PVR_GPU_SERVICE_RECOVERING'] << 16 | 3,
+                      'recovery-service': enums['PVR_GPU_SERVICE_READY'] << 16 | 1,
+                      'recovery-isolation': enums['PVR_GPU_STOP_STOPPED'] << 16 | 1,
+                      'recovery-client': 2, 'recovery-slot': enums['PVR_COMPUTE_QUEUE_IDLE'],
+                      'recovery-post': sequence}
+            assert len(failures) == int(enabled), (case, failures)
+            if enabled:
+                site, value = failures[0]
+                assert site >> 28 == 6 and (site >> 16 & 0xfff) == reasons[case]
+                assert site & 0xfff and value == values[case], (case, failures)
+                assert crumbs == [(0x046f, 6 << 12 | (site & 0xfff))]
+            else:
+                assert not crumbs
+            assert not state['posts'] or case == 'recovery-post'
+            rows.append({'crumbs_enabled': enabled, 'case': case, 'crumbs': crumbs,
+                         'failures': failures, 'passed': True})
+            continue
         if case.startswith('abort-'):
             invoke('pvr_compute_queue_abort')
         else:

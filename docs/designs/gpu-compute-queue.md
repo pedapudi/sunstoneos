@@ -31,8 +31,9 @@ open; thermal parking retains its automatic reopen policy.
 A READY job timeout or decoded reset event starts automatic recovery when the
 native backend's clock, power ownership and session remain valid. The worker
 masks interrupts and stops kernel traffic. It runs the existing unacknowledged
-stop plan: mandatory Sidekick, BIF and SLC idle polls, full soft reset, exact reset
-readback and platform OFF. Only completed isolation and firmware-memory reclaim
+stop plan: mandatory Sidekick, BIF and SLC idle polls, full soft reset, completed reset
+readback and platform OFF. The [reset completion contract](gpu-recovery-reset-readback.md)
+defines the discarded fence read. Only completed isolation and firmware-memory reclaim
 permit the failed job's FAULT record. The failed job is never replayed.
 
 Recovery reconstructs retained firmware state, increments the service epoch and
@@ -43,7 +44,7 @@ bounded recovery; it does not consume a caller's owed record.
 
 Stop is bounded by 300 ms and READY by one second from first fault detection.
 Both bounds are clipped to the admitted session and returning-image workload
-cutoff. A failed idle check, reset readback, OFF, restart, clock or session check
+cutoff. A failed idle check, reset write/read completion, OFF, restart, clock or session check
 leaves the service failed and its backing retained. No fault record returns
 buffer ownership after unproven isolation. Recovery does not force reset through
 an idle failure, so arbitrary stuck hardware still requires external recovery.
