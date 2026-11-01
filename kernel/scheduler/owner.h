@@ -54,7 +54,12 @@ void ss_owner_preempt(struct ss_owner *);
 void ss_owner_publish(struct ss_owner *, unsigned slot, unsigned priority);
 /* Inspections validate current descriptor/wait state; hints never authorize a
  * wake. Each call inspects at most SS_OWNER_BATCH hints, highest priority first.
- * The callback alone decides whether to enqueue under local IRQ exclusion. */
+ * The callback alone decides whether to enqueue under local IRQ exclusion.
+ * Incoming scan cost is 16 acquire loads initially, then for each subsequent
+ * attempt: 16 loads if detached is empty, otherwise 2*(7-p) for its highest
+ * detached priority p. At most 16 attempts give at most 256 loads; each nonzero
+ * load adds one exchange. Sixteen priority-7 hints already detached require
+ * only the initial 16 loads and their nonzero-word exchanges. */
 typedef void (*ss_owner_inspect)(void *, unsigned slot, unsigned hint_priority);
 unsigned ss_owner_drain(struct ss_owner *, ss_owner_inspect, void *);
 bool ss_owner_has_pending(const struct ss_owner *);

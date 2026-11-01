@@ -57,6 +57,15 @@ int main(void)
     assert(!f.matched && w.active);
     f=ss_notification_wait_finish(&g,&w,2,0,true,true);
     assert(f.condition && f.value==9 && (uint32_t)g.payload==8);
+    /* An unsuccessful zero-time poll must close its owner generation. */
+    g.payload = 0;
+    assert(!ss_notification_wait_enter(&g,&w,3,SS_NOTIFY_WAIT_STATE,0,false));
+    f=ss_notification_wait_finish(&g,&w,3,0,false,true);
+    assert(f.matched && !f.condition && !w.active && !w.blocked);
+    assert(!ss_notification_wait_enter(&g,&w,4,SS_NOTIFY_WAIT_COUNT,0,false));
+    f=ss_notification_wait_finish(&g,&w,4,0,true,true);
+    assert(f.matched && !f.condition && !w.active && !w.blocked);
+    g.payload = 8;
     ss_notification_gate_end(&g);
     r=ss_notification_apply(&note,SS_NOTIFY_NO_ACTION,0,&backend); assert(r.previous==8);
     r=ss_notification_apply(&note,SS_NOTIFY_OVERWRITE,UINT32_MAX,&backend); assert(r.previous==8);

@@ -19,13 +19,14 @@ def build_and_check(build, compiler='clang-21', objdump='llvm-objdump-21'):
     binary = build / 'scheduler-owner'
     common = [compiler, '-std=c11', '-Wall', '-Wextra', '-Werror']
     sources = [str(ROOT / 'kernel/scheduler/owner.c'), str(ROOT / 'checks/scheduler-owner.c')]
-    run(common + ['-O1', '-g', '-pthread', '-fsanitize=address,undefined', *sources, '-o', str(binary)], env)
+    run(common + ['-DSS_OWNER_TEST_STATS', '-O1', '-g', '-pthread', '-fsanitize=address,undefined', *sources, '-o', str(binary)], env)
     print(run([str(binary)], env), end='')
     obj = build / 'scheduler-owner-aarch64.o'
     run(common + ['--target=aarch64-none-elf', '-march=armv8.1-a+lse', '-ffreestanding',
                   '-O2', '-c', sources[0], '-o', str(obj)], env)
     disassembly = run([objdump, '-d', str(obj)], env)
     (build / 'scheduler-owner-aarch64.disassembly').write_text(disassembly)
+    assert 'ss_owner_test_scan' not in disassembly
     assert not re.search(r'\b(?:ldaxr|stlxr|ldxr|stxr)\b', disassembly), 'LL/SC is forbidden'
     producer = disassembly.split('<ss_owner_publish>:', 1)[1].split('\n\n', 1)[0]
     assert len(re.findall(r'\bldsetl\b', producer)) == 1

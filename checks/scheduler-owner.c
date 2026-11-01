@@ -5,6 +5,44 @@
 #include <sched.h>
 #include <stdio.h>
 
+static unsigned scan_loads, scan_exchanges;
+void ss_owner_test_scan(bool exchange)
+{ if (exchange) ++scan_exchanges; else ++scan_loads; }
+static unsigned trace_slots[16], trace_priorities[16], trace_count;
+static bool inject_urgent;
+static void record(void *ctx, unsigned slot, unsigned priority)
+{
+    struct ss_owner *o = ctx;
+    assert(trace_count < 16);
+    trace_slots[trace_count] = slot;
+    trace_priorities[trace_count++] = priority;
+    if (inject_urgent && trace_count == 1) ss_owner_publish(o, 127, 7);
+}
+static void scan_costs(void)
+{
+    struct ss_owner o;
+    ss_owner_init(&o, 0, NULL);
+    scan_loads = scan_exchanges = 0;
+    assert(ss_owner_drain(&o, record, &o) == 0);
+    assert(scan_loads == 16 && scan_exchanges == 0);
+    for (unsigned i = 0; i < 8; ++i) {
+        ss_owner_publish(&o, i, 7);
+        ss_owner_publish(&o, 64 + i, 7);
+    }
+    scan_loads = scan_exchanges = trace_count = 0;
+    assert(ss_owner_drain(&o, record, &o) == 16);
+    assert(scan_loads == 16 && scan_exchanges == 2);
+    assert(!ss_owner_has_pending(&o));
+    ss_owner_publish(&o, 0, 3); ss_owner_publish(&o, 1, 3);
+    scan_loads = scan_exchanges = trace_count = 0;
+    inject_urgent = true;
+    assert(ss_owner_drain(&o, record, &o) == 3);
+    inject_urgent = false;
+    assert(trace_slots[0] == 0 && trace_priorities[0] == 3);
+    assert(trace_slots[1] == 127 && trace_priorities[1] == 7);
+    assert(trace_slots[2] == 1 && trace_priorities[2] == 3);
+    assert(scan_loads == 48 && scan_exchanges == 2);
+}
 static unsigned sgis;
 static void sgi(void *ctx, unsigned cpu) { (void)ctx; assert(cpu == 3); ++sgis; }
 static const struct ss_owner_backend backend = { .sgi = sgi };
@@ -32,6 +70,7 @@ static void *publisher(void *unused)
 }
 int main(void)
 {
+    scan_costs();
     ss_owner_init(&owner, 3, &backend);
     struct ss_owner_task a = {.slot=1,.priority=2}, b = {.slot=2,.priority=2};
     struct ss_owner_task c = {.slot=3,.priority=7};

@@ -56,7 +56,12 @@ struct ss_notification_wait {
  * state/deadline before releasing it. Enter returns true when blocking is
  * required. Observe consumes only scheduler completion, retaining the latch.
  * Finish preserves the upstream final value/state check independently of
- * irrevocable scheduler readiness. A false matching flag leaves state intact. */
+ * irrevocable scheduler readiness. A false matching flag leaves state intact.
+ * The timeout argument is terminal expiry: pass true after a real timeout OR
+ * when returning failure/zero from a zero-time API poll. This closes the active
+ * owner wait even if no notification condition or completion latch exists.
+ * Passing false with neither condition retains the active wait for a later
+ * observation; it must not be used immediately before returning to the caller. */
 bool ss_notification_wait_enter(struct ss_notification_guard *,
     struct ss_notification_wait *, uint64_t generation,
     enum ss_notification_wait_kind, uint32_t clear_entry, bool may_block);

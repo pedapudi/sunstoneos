@@ -104,12 +104,31 @@ void ss_owner_publish(struct ss_owner *o, unsigned slot, unsigned priority)
     uint64_t status = atomic_load_explicit(&o->dispatch, memory_order_acquire);
     if ((status & 8) || priority > (status & 7)) request_sgi(o);
 }
-static void merge(struct ss_owner *o)
+#ifdef SS_OWNER_TEST_STATS
+/* Host fixtures count actual incoming operations; production emits no hook. */
+extern void ss_owner_test_scan(bool exchange);
+#define SCAN_STAT(exchange) ss_owner_test_scan(exchange)
+#else
+#define SCAN_STAT(exchange) ((void)0)
+#endif
+static void merge_from(struct ss_owner *o, unsigned first_priority)
 {
-    for (unsigned p = 0; p < 8; ++p)
-        for (unsigned w = 0; w < 2; ++w)
+    for (unsigned p = first_priority; p < 8; ++p)
+        for (unsigned w = 0; w < 2; ++w) {
+            SCAN_STAT(false);
+            if (!atomic_load_explicit(&o->incoming[p][w], memory_order_acquire))
+                continue;
+            SCAN_STAT(true);
             o->detached[p][w] |= atomic_exchange_explicit(&o->incoming[p][w],
                                                           0, memory_order_acquire);
+        }
+}
+static uint32_t detached_priorities(const struct ss_owner *o)
+{
+    uint32_t priorities = 0;
+    for (unsigned p = 0; p < 8; ++p)
+        if (o->detached[p][0] | o->detached[p][1]) priorities |= 1u << p;
+    return priorities;
 }
 static unsigned first_bit(uint64_t bits)
 { return 63u - (unsigned)__builtin_clzll(bits & (0 - bits)); }
@@ -129,11 +148,17 @@ static unsigned next_slot(struct ss_owner *o, unsigned p)
 unsigned ss_owner_drain(struct ss_owner *o, ss_owner_inspect inspect, void *ctx)
 {
     unsigned count = 0;
+    merge_from(o, 0);
     for (; count < SS_OWNER_BATCH; ++count) {
-        merge(o); /* Check fresh urgent work between every activation. */
-        uint32_t priorities = 0;
-        for (unsigned p = 0; p < 8; ++p)
-            if (o->detached[p][0] | o->detached[p][1]) priorities |= 1u << p;
+        uint32_t priorities = detached_priorities(o);
+        if (count) {
+            /* Keep a priority's detached sweep intact. Refresh only bands that
+             * can outrank its next hint; an empty local set starts a new sweep. */
+            unsigned first = priorities ?
+                32u - (unsigned)__builtin_clz(priorities) : 0;
+            merge_from(o, first);
+            priorities = detached_priorities(o);
+        }
         if (!priorities) break;
         unsigned p = 31u - (unsigned)__builtin_clz(priorities);
         unsigned slot = next_slot(o, p);
