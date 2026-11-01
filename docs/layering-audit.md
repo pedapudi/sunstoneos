@@ -238,13 +238,17 @@ and the EL3 terminal also hard-codes it (`apps/mimus/recorded.h:9`,
   the monitor, the host tools and applications.
 - **Severity:** awkward. **Effort:** medium.
 
-### 10. Kernel core placement uses recognizer roles
+### 10. Kernel placement publishes default application roles
 
-`A733_SMP_RECOGNITION_CORE` and `A733_SMP_INFERENCE_CORE` are kernel
-configuration (`include/a733_smp_placement.h:16-22`), and the GPU interrupt
-is routed to the recognition core (`apps/os/irq.c:28`).
+`A733_SMP_APPLICATION_CORE` and `A733_SMP_APPLICATION_WORKER_CORE` name
+the default application pair in `include/a733_smp_placement.h`. They select
+A55 cores 2 and 3 before A76 admission, and A76 cores 6 and 7 afterwards.
+The legacy application adapter and the GPU compatibility interrupt route use
+these defaults. Application-kit grants select their own main and worker cores.
 
-- **Correct structure:** the kernel publishes cluster masks. Applications
+- **Remaining compatibility name:** `OS_RECOGNITION_CORE` still names the
+  GPU compatibility image's core selection.
+- **Target structure:** the kernel publishes cluster masks. Applications
   request cores, and each interrupt route names its own target core.
 - **Severity:** awkward. **Effort:** small.
 

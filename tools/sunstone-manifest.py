@@ -337,7 +337,7 @@ def c_tables(m):
              'const struct a733_irq_route a733_irq_routes[] = {', '    {71,0,0xd8,os_thermal_irq},',
              '#ifdef SUNSTONE_A733_OS_NPU', '    {97,OS_NPU_CORE,0xd8,os_npu_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_AUDIO', '    {143,0,0xd8,os_audio_irq},', '#endif',
-             '#ifdef SUNSTONE_A733_OS_GPU_LINEAR', '    {95,A733_SMP_RECOGNITION_CORE,0xd8,a733_gpu_mimus_irq},', '#endif', '};',
+             '#ifdef SUNSTONE_A733_OS_GPU_LINEAR', '    {95,A733_SMP_APPLICATION_CORE,0xd8,a733_gpu_mimus_irq},', '#endif', '};',
              'const unsigned a733_irq_route_count=sizeof(a733_irq_routes)/sizeof(a733_irq_routes[0]);', '']
     # Placement is an OS setting; the GPU route uses the same admitted pair.
     if noapp:
