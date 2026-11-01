@@ -188,6 +188,14 @@ int gpu_queue_open(struct gpu_queue_context, uint32_t wait_ticks);
 /* Owner only: wait for bounded worker recovery after a fault. An owed fault
  * record remains collectible; permanent recovery failure returns FAULT. */
 int gpu_queue_recover(struct gpu_queue_context, uint32_t wait_ticks);
+#ifdef SUNSTONE_GPU_TIMING
+/* Optional diagnostic builds expose copied timing records after work ends.
+ * The record layout is in gpu_queue_timing.h; no diagnostic API is linked
+ * into ordinary images. */
+struct gpu_queue_timing_record;
+unsigned gpu_queue_timing_count(void);
+int gpu_queue_timing_read(unsigned index, struct gpu_queue_timing_record *out);
+#endif
 #ifdef __cplusplus
 }
 #endif

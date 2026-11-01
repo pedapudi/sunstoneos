@@ -1,6 +1,7 @@
 #ifndef SUNSTONE_GPU_QUEUE_TIMING_H
 #define SUNSTONE_GPU_QUEUE_TIMING_H
 #include <stdint.h>
+#include "gpu_queue.h"
 #define GPU_QUEUE_TIMING_CAPACITY 192u
 /* Architectural counter ticks (24 MHz), except explicitly named raw fields. */
 enum gpu_queue_timing_stamp {
@@ -26,8 +27,6 @@ struct gpu_queue_timing_record {
 #ifdef __cplusplus
 extern "C" {
 #endif
-unsigned gpu_queue_timing_count(void);
-int gpu_queue_timing_read(unsigned, struct gpu_queue_timing_record *);
 struct pvr_compute_queue;
 void gpu_queue_timing_bind(struct pvr_compute_queue *);
 void gpu_queue_timing_crumb(uint32_t, uint32_t);
