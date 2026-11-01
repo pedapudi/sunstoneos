@@ -34,6 +34,9 @@ SERVICE_MAGIC = {THERMAL: 0x415337334f534131, AUDIO: 0x415337334f415531,
                  NPU: 0x415337334f4e5031, CPU_GRANT: 0x4153373343505531}
 RESULT_MAGIC, RESULT_VERSION, RESULT_FINISHED = 0x31544c5553455241, 1, 1
 RESULT = struct.Struct('<7Q')
+FRAME_MAGIC, RESULT_OP = 0x424d494d, 0x80
+FRAME = struct.Struct('<8I2Q16s')
+REQUEST = struct.Struct('<BBHIQ')
 
 
 def require(ok, message):
@@ -181,6 +184,33 @@ def decode_result(raw, epoch, generation, output_limit=None):
             'Application result capacity differs from manifest.')
     require(used <= len(raw) - RESULT.size, 'Application result payload exceeds capacity.')
     return raw[RESULT.size:RESULT.size + used]
+
+
+def read_result(exchange, image, epoch, generation):
+    """Read one complete OS result over the caller-owned framed transport.
+
+    Return None when the first frame reports an unfinished application. Each
+    exchange runs once; transport errors propagate to the owner without retry.
+    """
+    info = image_manifest(image)
+    require(info['manifest'] is not None, 'Result requires an application manifest.')
+    limit = info['manifest']['output_limit']
+    total, raw = RESULT.size + limit, bytearray()
+    while len(raw) < total:
+        offset, count = len(raw), min(1024, total - len(raw))
+        frame = bytes(exchange(REQUEST.pack(RESULT_OP, 0, count, offset, 0)))
+        require(len(frame) >= FRAME.size, 'Truncated result frame.')
+        magic, version, state, size, capacity, actual_offset, storage, op, actual_epoch, actual_generation, tag = FRAME.unpack_from(frame)
+        require((magic, version, capacity, actual_offset, storage, op, actual_epoch, actual_generation, tag) ==
+                (FRAME_MAGIC, 1, total, offset, 0, RESULT_OP, epoch, generation, bytes(16)),
+                'Result frame identity or geometry differs.')
+        require(state in (0, 1) and len(frame) == FRAME.size + size, 'Invalid result frame state or size.')
+        if not state:
+            require(not raw and not size, 'Result became unavailable during capture.')
+            return None
+        require(size == count, 'Incomplete result frame payload.')
+        raw.extend(frame[FRAME.size:])
+    return decode_result(raw, epoch, generation, limit)
 
 
 def backup_regions(image, uploads=()):

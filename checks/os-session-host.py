@@ -53,6 +53,15 @@ def main():
     payload = host.decode_result(result.read_bytes(), 0, 0, manifest['output_limit'])
     assert struct.unpack('<IIQ', payload) == (0x11e60398, 0, len(data))
     assert host.result_geometry(image)['bytes'] == len(result.read_bytes())
+    def exchange(request, state=1):
+        op, flags, count, offset, argument = struct.unpack('<BBHIQ', request)
+        assert (op, flags, argument) == (0x80, 0, 0)
+        part = result.read_bytes()[offset:offset + count] if state else b''
+        return struct.pack('<8I2Q16s', 0x424d494d, 1, state, len(part), len(result.read_bytes()),
+                           offset, 0, op, 0, 0, bytes(16)) + part
+    assert host.read_result(exchange, image, 0, 0) == payload
+    assert host.read_result(lambda request: exchange(request, 0), image, 0, 0) is None
+    refused(lambda: host.read_result(lambda request: exchange(request)[:-1], image, 0, 0), 'frame state or size')
     prefix = bytearray(host.PREFIX_BYTES)
     struct.pack_into('<I', prefix, 400, 2)
     # Board/service validation is outside this framing model. The extent bytes
@@ -85,7 +94,8 @@ def main():
     refused(lambda: prepare.validate_bundle(bundle), 'input changed')
     (bundle / 'input-0.bin').write_bytes(data)
     prepare.validate_bundle(bundle)
-    cases = ['compiled-manifest', 'C-result-producer', 'result-symbol-capacity', 'typed-session-producer',
+    cases = ['compiled-manifest', 'C-result-producer', 'result-symbol-capacity',
+             'framed-result', 'framed-result-not-ready', 'truncated-result-frame', 'typed-session-producer',
              'manifest-upload', 'headset-without-I2S-extent', 'actual-bundle-producer', 'changed-frozen-input']
     def bad(name, raw, reason):
         refused(lambda: host.session_decode(raw, manifest, info['sha256']), reason)
