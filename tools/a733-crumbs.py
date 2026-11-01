@@ -128,6 +128,10 @@ def board_failure(words, defines, elf):
               'caller_kind': 'return address' if site >> 31 else 'statement',
               'exception_level': 'EL0' if slot == 0 else 'EL1' if slot in (4, 5) else f'SPSR.M {slot:#x}'}
     record['site_kind'] = 'detail' if record['group'] in ('cpu_return', 'application') else 'source line'
+    if record['group'] == 'npu' and site & defines['NPU_REGISTER']:
+        record['register_offset'] = hex((record['aux'] & 0x3fff) << 2)
+    elif record['group'] == 'npu' and site & defines['NPU_STARTUP']:
+        record['startup_stage'] = record['aux'] & 0xff
     if record['group'] == 'cpu_return' and record['site'] == BOUNDED:
         record['deadline_seconds'] = record['aux']
         record['refusal'] = [text for bit, text in LIVE_REFUSAL if value >> bit & 1]
@@ -194,6 +198,10 @@ def decode(words, epoch, elf=None):
                 f"{f['site_kind']} {f['site']:#x}, value {f['value']}, caller {f['caller']}")
         if f.get('caller_source'):
             text += f" ({f['caller_source']})"
+        if 'register_offset' in f:
+            text += f"; register offset {f['register_offset']}"
+        if 'startup_stage' in f:
+            text += f"; startup stage {f['startup_stage']}"
         if 'refusal' in f:
             text += '; ' + (', '.join(f['refusal']) or 'no refusal bit')
         parts.append(text)

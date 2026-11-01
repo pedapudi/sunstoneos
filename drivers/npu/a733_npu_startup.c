@@ -3,6 +3,7 @@
 #include "a733_pll_lock.h"
 #include "a733_npu_platform_native.h"
 #include "a733_range.h"
+#include "sunstone_crumb.h"
 
 #define READY A733_NPU_PLATFORM_READY
 #define PENDING A733_NPU_PLATFORM_PENDING
@@ -167,16 +168,54 @@ static void native_wake(void *v)
 static void row_wake(void *v)
 {struct a733_npu_startup *s=v;if(s->ops.wake)s->ops.wake(s->cookie);}
 
+/* First failure only: the shared SVC handler preserves a previous record.
+ * Register aux is 0x4000 | (address & 0xffff) / 4; the caller identifies the
+ * register family. Lifecycle aux is 0x2000 | startup stage. FAR preserves
+ * every bit of the observed word or callback status. No extra MMIO read. */
+#if defined(SUNSTONE_CRUMBS) && defined(__aarch64__) && !defined(__linux__)
+#define STARTUP_REGISTER_FAIL(s,address,value,site,where) \
+    sunstone_crumb_fail((site)|SUNSTONE_CRUMB_NPU_REGISTER|((((uint32_t)(address)&0xffffu)>>2)<<16),(uint32_t)(value),(where))
+#define STARTUP_STATE_FAIL(s,value,site,where) \
+    sunstone_crumb_fail((site)|SUNSTONE_CRUMB_NPU_STARTUP|(((s)?(s)->stage&255u:255u)<<16),(uint32_t)(value),(where))
+#else
+#define STARTUP_REGISTER_FAIL(s,address,value,site,where) ((void)0)
+#define STARTUP_STATE_FAIL(s,value,site,where) ((void)0)
+#endif
+#define REGISTER_FAIL(s,address,value) STARTUP_REGISTER_FAIL(s,address,value,SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
+#define STATE_FAIL(s,value) STARTUP_STATE_FAIL(s,value,SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
+/* Keep short-circuit order: a failed comparison records the value already
+ * read, at the statement which required it, before its caller can clean up. */
+#define matches(s,address,value,mask,expected) \
+    ((((value)&(mask))==(expected)) ? 1 : (REGISTER_FAIL(s,address,value),0))
+#define state_ok(s,condition,value) ((condition) ? 1 : (STATE_FAIL(s,value),0))
+
 static int before(struct a733_npu_startup *s,uint64_t *out,uint64_t deadline)
 {
     uint64_t t;
-    if(s->ops.now(s->cookie,&t)!=1 || !a733_deadline_admit(t,&s->last_now,deadline))return 0;
+    int result=s->ops.now(s->cookie,&t);
+    if(!state_ok(s,result==1,(uint32_t)result) ||
+       !state_ok(s,a733_deadline_admit(t,&s->last_now,deadline),(uint32_t)t))return 0;
     if(out)*out=t;
     return 1;
 }
 static int now(struct a733_npu_startup *s,uint64_t *out)
 {return before(s,out,s->config.deadline_us);}
-static int rd(struct a733_npu_startup *s,uintptr_t a,uint32_t *v){return s->ops.registers.read(s->cookie,a,v)==1;}
+static int read_at(struct a733_npu_startup *s,uintptr_t a,uint32_t *v,uint32_t site,const void *where)
+{
+    int result=s->ops.registers.read(s->cookie,a,v);
+    if(result==1)return 1;
+    STARTUP_REGISTER_FAIL(s,a,(uint32_t)result,site,where);
+    (void)site;(void)where;return 0;
+}
+#define rd(s,a,v) read_at(s,a,v,SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
+static int write_at(struct a733_npu_startup *s,uintptr_t a,uint32_t v,uint32_t site,const void *where)
+{
+    int result=s->ops.registers.write(s->cookie,a,v);
+    if(result==1)return 1;
+    STARTUP_REGISTER_FAIL(s,a,(uint32_t)result,site,where);
+    (void)site;(void)where;return 0;
+}
+#define wr(s,a,v) write_at(s,a,v,SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
 /* Apply the steps in order with a readback of each write; a field that
  * already holds its value is not written. Consecutive steps on one word use
  * the value last read from it. Returns 1 when every step completed. */
@@ -187,21 +226,29 @@ static int apply(struct a733_npu_startup *s,const struct step *t,unsigned count)
         uint32_t actual,keep=~t[i].status;
         if(t[i].address!=at) {
             if(!rd(s,t[i].address,&old) ||
-               (t[i].address==PLL && (old&PLL_INHERITED)!=s->pll_inherited))return 0;
+               (t[i].address==PLL && !matches(s,PLL,old,PLL_INHERITED,s->pll_inherited)))return 0;
             at=t[i].address;
         }
         uint32_t next=((old&~t[i].mask)|(t[i].value&t[i].mask))&keep;
         if((old&keep)==next)continue;
-        if(s->ops.registers.write(s->cookie,t[i].address,next)!=1 || !rd(s,t[i].address,&actual) ||
-           (actual&keep)!=next)return 0;
+        if(!wr(s,t[i].address,next) || !rd(s,t[i].address,&actual) ||
+           !matches(s,t[i].address,actual,keep,next))return 0;
         old=actual;
     }
     return 1;
 }
-static int check(struct a733_npu_startup *s,uintptr_t a,uint32_t mask,uint32_t expected)
-{uint32_t v;return rd(s,a,&v) && (v&mask)==expected;}
-static enum a733_npu_platform_result fault(struct a733_npu_startup *s)
+static int check_at(struct a733_npu_startup *s,uintptr_t a,uint32_t mask,uint32_t expected,uint32_t site,const void *where)
 {
+    uint32_t v;
+    if(!read_at(s,a,&v,site,where))return 0;
+    if((v&mask)==expected)return 1;
+    STARTUP_REGISTER_FAIL(s,a,v,site,where);
+    (void)site;(void)where;return 0;
+}
+#define check(s,a,mask,expected) check_at(s,a,mask,expected,SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
+static enum a733_npu_platform_result fault_at(struct a733_npu_startup *s,uint32_t site,const void *where)
+{
+    STARTUP_STATE_FAIL(s,s->stage,site,where);(void)site;(void)where;
     atomic_store_explicit(&s->window_open,0,memory_order_release);
     s->failed=1;
     if(s->register_held)s->ops.retain(s->cookie);
@@ -209,18 +256,22 @@ static enum a733_npu_platform_result fault(struct a733_npu_startup *s)
 }
 /* Before local PLL/NPU writes: release tokens. Established shared gates
  * persist for the resource manager lifetime. Uncertain gate effects use fault. */
-static enum a733_npu_platform_result refuse(struct a733_npu_startup *s)
+static enum a733_npu_platform_result refuse_at(struct a733_npu_startup *s,uint32_t site,const void *where)
 {
+    STARTUP_STATE_FAIL(s,s->stage,site,where);(void)site;(void)where;
     const uint64_t deadline=s->config.deadline_us;
     if(s->pck.token)(void)a733_gpu_resources_release(s->providers.pck,s->config.pck_client,s->pck.token,deadline);
     if(s->rail.id)(void)a733_rail_release(s->providers.rails,&s->rail,deadline);
     if(s->clock.id)(void)a733_clock_release(s->providers.clocks,&s->clock,deadline);
     s->failed=1;return RETAINED;
 }
+#define fault(s) fault_at(s,SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
+#define refuse(s) refuse_at(s,SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
 static int enter(struct a733_npu_startup *s)
 {
     int held=s->ops.enter(s->cookie,s->config.deadline_us);
     if(held==1)s->register_held=1;
+    else if(held)STATE_FAIL(s,(uint32_t)held);
     return held;
 }
 static int leave(struct a733_npu_startup *s)
@@ -229,6 +280,15 @@ static int leave(struct a733_npu_startup *s)
     return now(s,0);
 }
 
+static int domain_check_at(struct a733_npu_startup *s,unsigned *domain,uint32_t site,const void *where)
+{
+    int result=a733_power_domain_check(s->providers.domains,4,domain);
+    if(result==1)return 1;
+    STARTUP_STATE_FAIL(s,(uint32_t)result,site,where);
+    (void)site;(void)where;return 0;
+}
+#define domain_check(s,domain) domain_check_at(s,domain,SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
+
 static const uint32_t fabric_offsets[]={0x500,0x580,0x588};
 /* PERI0 outputs that a fabric clock selects: the PLL is enabled, locked and
  * unmodulated, and each selected output has its No-Auto route, software
@@ -236,11 +296,11 @@ static const uint32_t fabric_offsets[]={0x500,0x580,0x588};
 static int peri0(struct a733_npu_startup *s)
 {
     uint32_t pll,a,b,automatic,status;
-    if(!rd(s,CCU+0xa0,&pll) || (pll&UINT32_C(0xfe000000))!=UINT32_C(0xfe000000) || (pll&BIT(1)) ||
-       !rd(s,CCU+0xa8,&a) || (a&BIT(31)) || !rd(s,CCU+0xac,&b) || (b&BIT(27)) ||
+    if(!rd(s,CCU+0xa0,&pll) || !matches(s,CCU+0xa0,pll,UINT32_C(0xfe000000),UINT32_C(0xfe000000)) || !matches(s,CCU+0xa0,pll,BIT(1),0) ||
+       !rd(s,CCU+0xa8,&a) || !matches(s,CCU+0xa8,a,BIT(31),0) || !rd(s,CCU+0xac,&b) || !matches(s,CCU+0xac,b,BIT(27),0) ||
        !rd(s,CCU+0x1908,&automatic) || !rd(s,CCU+0x1988,&status))return 0;
     unsigned n=((pll>>8)&255)+1;
-    if(n<53 || n>105)return 0;
+    if(n<53 || n>105){REGISTER_FAIL(s,CCU+0xa0,pll);return 0;}
     for(unsigned i=0;i<3;++i) {
         unsigned mhz=a733_npu_parent_mhz[i][(s->config.fabric.fabric[i]>>24)&7],divisor,mask;
         switch(mhz) {
@@ -249,10 +309,11 @@ static int peri0(struct a733_npu_startup *s)
         case 400:divisor=(((pll>>20)&7)+1)*3;mask=BIT(11)|BIT(2)|BIT(1);break;
         case 800:divisor=((pll>>16)&7)+1;mask=BIT(10);break;
         case 480:divisor=((pll>>2)&7)+1;mask=BIT(8)|BIT(7);break;
-        default:return 0;
+        default:STATE_FAIL(s,mhz);return 0;
         }
         unsigned gates=mask<<16;
-        if((automatic&(mask|gates))!=(mask|gates) || (status&gates)!=gates || 24u*n!=mhz*divisor)return 0;
+        if(!matches(s,CCU+0x1908,automatic,mask|gates,mask|gates) ||
+           !matches(s,CCU+0x1988,status,gates,gates) || (24u*n!=mhz*divisor && (REGISTER_FAIL(s,CCU+0xa0,pll),1)))return 0;
     }
     return 1;
 }
@@ -265,22 +326,30 @@ static int peri0(struct a733_npu_startup *s)
 static int pass(struct a733_npu_startup *s)
 {
     uint32_t osc,ref,v;
-    if(!rd(s,0x07090160,&osc) || !rd(s,CCU,&ref) || !a733_clock_ref24_valid(osc,ref) ||
-       !check(s,SRAM_ROUTING,SRAM_TO_CPU,SRAM_TO_CPU))return 0;
+    if(!rd(s,0x07090160,&osc) || !rd(s,CCU,&ref))return 0;
+    if(!a733_clock_ref24_valid(osc,ref)) {
+        if((osc&UINT32_C(0x10000002))!=UINT32_C(0x10000002))REGISTER_FAIL(s,0x07090160,osc);
+        else REGISTER_FAIL(s,CCU,ref);
+        return 0;
+    }
+    if(!check(s,SRAM_ROUTING,SRAM_TO_CPU,SRAM_TO_CPU))return 0;
     for(unsigned i=0;i<3;++i) {
-        if(!rd(s,CCU+fabric_offsets[i],&v) || (v&a733_npu_fabric_masks[i])!=s->config.fabric.fabric[i] ||
-           (i && (v&(BIT(28)|BIT(27)))))return 0;
+        if(!rd(s,CCU+fabric_offsets[i],&v) || !matches(s,CCU+fabric_offsets[i],v,a733_npu_fabric_masks[i],s->config.fabric.fabric[i]) ||
+           (i && !matches(s,CCU+fabric_offsets[i],v,BIT(28)|BIT(27),0)))return 0;
     }
     if((s->shared&A733_CLOCK_PERI0) && !peri0(s))return 0;
     if(!(
         /* Video encode and decode gates closed, selector at most 6; bus word
          * gates closed and resets asserted. */
-        rd(s,CCU+0xa80,&v) && !(v&BIT(31)) && ((v>>24)&7)<=6 &&
-        rd(s,CCU+0xa88,&v) && !(v&BIT(31)) && ((v>>24)&7)<=6 &&
+        rd(s,CCU+0xa80,&v) && matches(s,CCU+0xa80,v,BIT(31),0) &&
+        (((v>>24)&7)<=6 || (REGISTER_FAIL(s,CCU+0xa80,v),0)) &&
+        rd(s,CCU+0xa88,&v) && matches(s,CCU+0xa88,v,BIT(31),0) &&
+        (((v>>24)&7)<=6 || (REGISTER_FAIL(s,CCU+0xa88,v),0)) &&
         check(s,CCU+0xa8c,0x50005,0) &&
         /* NPU module gate closed; bus gate closed, core, AXI and AHB resets
          * asserted, SRAM reset released. */
-        rd(s,CCU+0xb00,&v) && !(v&BIT(31)) && ((v>>24)&7)<=6 &&
+        rd(s,CCU+0xb00,&v) && matches(s,CCU+0xb00,v,BIT(31),0) &&
+        (((v>>24)&7)<=6 || (REGISTER_FAIL(s,CCU+0xb00,v),0)) &&
         check(s,CCU+0xb04,0xf0001,BIT(19)) &&
         /* DRAM0 gate on, DDRPLL, no update pending; the DRAM bus takes its
          * clock from the separate PHY PLL. */
@@ -293,8 +362,8 @@ static int pass(struct a733_npu_startup *s)
      * speed bin unless a733_npu_startup_rate chose one. */
     uint32_t sid;
     if(!s->pll_factors) {
-        if(!rd(s,SID_DVFS,&sid) || !(s->pll_factors=vendor_top(sid)))return 0;
-    } else if(s->pll_factors==FACTORS_852 && !(rd(s,SID_DVFS,&sid) && bin_allows_852(sid)))return 0;
+        if(!rd(s,SID_DVFS,&sid) || (!(s->pll_factors=vendor_top(sid)) && (REGISTER_FAIL(s,SID_DVFS,sid),1)))return 0;
+    } else if(s->pll_factors==FACTORS_852 && !(rd(s,SID_DVFS,&sid) && (bin_allows_852(sid) || (REGISTER_FAIL(s,SID_DVFS,sid),0))))return 0;
     const uint32_t other=s->pll_factors==FACTORS_852 ? FACTORS_492 : FACTORS_852;
     /* PLL_NPU adopted: enabled, locked at the selected profile with its output
      * gate open and its gate controls set, as local stop of an earlier startup
@@ -307,7 +376,7 @@ static int pass(struct a733_npu_startup *s)
     if(s->pll_adopted || s->pll_retune ? !check(s,CCU+0x1920,0x10001,0x10001) || !check(s,CCU+0x19a0,BIT(16),BIT(16)) :
        /* PLL_NPU disabled: enable, lock enable, LOCK and output gate clear,
         * with only the preserved inherited reserved bit outside documented fields. */
-       (v&UINT32_C(0xb8000000)) || (v&~(UINT32_C(0xf870ff02)|PLL_INHERITED)))return 0;
+       !matches(s,PLL,v,UINT32_C(0xb8000000),0) || !matches(s,PLL,v,~(UINT32_C(0xf870ff02)|PLL_INHERITED),0))return 0;
     return check(s,CCU+0x2a4,1,0) && check(s,CCU+0x2a8,BIT(31),0) &&
         check(s,CCU+0x2ac,UINT32_C(0xff100000),UINT32_C(0x30000000)) &&
         check(s,CCU+0x2b0,UINT32_C(0x1f0000),UINT32_C(0xb0000));
@@ -321,11 +390,23 @@ static uint32_t pll_word(const struct a733_npu_startup *s)
  * (a733_pll_lock.h) spaces every read 3 us after the previous one and makes
  * at most 100, about 420 us with the 20 us settle, so the spin does not
  * yield. An adopted PLL passes the same three consecutive observations. */
-static int lock_read(void *v,uint32_t *out){return rd(v,PLL,out);}
+struct startup_lock_sample { struct a733_npu_startup *startup; uint32_t last; };
+static int lock_read(void *v,uint32_t *out)
+{
+    struct startup_lock_sample *sample=v;
+    if(!rd(sample->startup,PLL,out))return 0;
+    sample->last=*out;return 1;
+}
 static int lock_now(void *v,uint64_t *out)
-{struct a733_npu_startup *s=v;*out=s->ops.spin_us(s->cookie);return 1;}
+{struct a733_npu_startup *s=((struct startup_lock_sample *)v)->startup;*out=s->ops.spin_us(s->cookie);return 1;}
 static int lock_wait(struct a733_npu_startup *s)
-{return a733_pll_lock_wait(lock_read,lock_now,s,pll_word(s)) && now(s,0);}
+{
+    struct startup_lock_sample sample={s,0};
+    if(!a733_pll_lock_wait(lock_read,lock_now,&sample,pll_word(s))) {
+        REGISTER_FAIL(s,PLL,sample.last);return 0;
+    }
+    return now(s,0);
+}
 /* Route the shared SRAM to the NPU, with readback. The register pass found
  * the boot ROM's CPU routing, the NPU's AHB, AXI and core resets asserted
  * and its bus and module gates closed, and the exclusive NPU-local clock
@@ -333,9 +414,9 @@ static int lock_wait(struct a733_npu_startup *s)
 static int route_to_npu(struct a733_npu_startup *s)
 {
     uint32_t entry,v;
-    if(!rd(s,SRAM_ROUTING,&entry) || !(entry&SRAM_TO_CPU) ||
-       s->ops.registers.write(s->cookie,SRAM_ROUTING,entry&~SRAM_TO_CPU)!=1 ||
-       !rd(s,SRAM_ROUTING,&v) || v!=(entry&~SRAM_TO_CPU))return 0;
+    if(!rd(s,SRAM_ROUTING,&entry) || !matches(s,SRAM_ROUTING,entry,SRAM_TO_CPU,SRAM_TO_CPU) ||
+       !wr(s,SRAM_ROUTING,entry&~SRAM_TO_CPU) ||
+       !rd(s,SRAM_ROUTING,&v) || !matches(s,SRAM_ROUTING,v,UINT32_MAX,entry&~SRAM_TO_CPU))return 0;
     s->sram_routed=1;return 1;
 }
 /* After local stop has asserted the resets: route the shared SRAM back to
@@ -344,9 +425,9 @@ static int route_to_npu(struct a733_npu_startup *s)
 static int route_to_cpu(struct a733_npu_startup *s)
 {
     uint32_t routed,v;
-    if(!s->sram_routed || !rd(s,SRAM_ROUTING,&routed) || (routed&SRAM_TO_CPU) ||
-       s->ops.registers.write(s->cookie,SRAM_ROUTING,routed|SRAM_TO_CPU)!=1 ||
-       !rd(s,SRAM_ROUTING,&v) || v!=(routed|SRAM_TO_CPU))return 0;
+    if(!s->sram_routed || !rd(s,SRAM_ROUTING,&routed) || !matches(s,SRAM_ROUTING,routed,SRAM_TO_CPU,0) ||
+       !wr(s,SRAM_ROUTING,routed|SRAM_TO_CPU) ||
+       !rd(s,SRAM_ROUTING,&v) || !matches(s,SRAM_ROUTING,v,UINT32_MAX,routed|SRAM_TO_CPU))return 0;
     s->sram_routed=0;return 1;
 }
 /* The opened state: domain 4 ON, the shared SRAM routed to the NPU, the NPU
@@ -358,7 +439,7 @@ static int opened(struct a733_npu_startup *s)
     return check(s,PCK,0xf,8) && check(s,PCK+8,0xf,8) && s->sram_routed &&
         check(s,SRAM_ROUTING,SRAM_TO_CPU,0) &&
         check(s,CCU+0xb04,0xf0001,0xf0001) && check(s,CCU+0xb00,0x8700001f,BIT(31)) &&
-        rd(s,PLL,&v) && v==(PLL_OPEN(s->pll_factors)|PLL_LOCK|s->pll_inherited);
+        rd(s,PLL,&v) && matches(s,PLL,v,UINT32_MAX,PLL_OPEN(s->pll_factors)|PLL_LOCK|s->pll_inherited);
 }
 static int owner_task(const struct a733_npu_startup *s)
 {
@@ -367,7 +448,7 @@ static int owner_task(const struct a733_npu_startup *s)
 }
 enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
 {
-    if(!owner_task(s))return RETAINED;
+    if(!owner_task(s)){STATE_FAIL(s,0);return RETAINED;}
     uint64_t t;
     if(!now(s,&t))return s->stage<A733_NPU_STARTUP_ROW ? refuse(s) : fault(s);
     if(!s->entry_us)s->entry_us=t;
@@ -378,17 +459,17 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
             enum a733_clock_result r=a733_clock_acquire(s->providers.clocks,s->config.owner,s->shared,
                 A733_CLOCK_PLL_NPU|A733_CLOCK_NPU,deadline,&s->clock);
             if(r==A733_CLOCK_BUSY)return PENDING;
-            if(r!=A733_CLOCK_OK)return refuse(s);
+            if(!state_ok(s,r==A733_CLOCK_OK,(uint32_t)r))return refuse(s);
         }
         if(!s->rail.id) {
             enum a733_rail_result r=a733_rail_acquire(s->providers.rails,s->config.owner,
                 A733_RAIL_BIT(A733_RAIL_DCDC2),0,deadline,&s->rail);
             if(r==A733_RAIL_BUSY)return PENDING;
-            if(r!=A733_RAIL_PENDING && r!=A733_RAIL_READY)return refuse(s);
+            if(!state_ok(s,r==A733_RAIL_PENDING || r==A733_RAIL_READY,(uint32_t)r))return refuse(s);
         }
         enum a733_rail_result rail=a733_rail_poll(s->providers.rails,&s->rail);
         if(rail==A733_RAIL_BUSY || rail==A733_RAIL_PENDING)return PENDING;
-        if(rail!=A733_RAIL_READY)return refuse(s);
+        if(!state_ok(s,rail==A733_RAIL_READY,(uint32_t)rail))return refuse(s);
         if(!s->pck.token) {
             struct a733_gpu_power_resources ready={0};
             s->pck.mask=A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK|A733_GPU_RESOURCE_NPU_FABRIC|
@@ -399,8 +480,8 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
             if(r==A733_GPU_RESOURCE_BUSY){s->pck.token=0;return PENDING;}
             /* FAULT can follow a completed resource-gate write. Preserve its
              * retained lease and the exclusive NPU clock and rail tokens. */
-            if(r==A733_GPU_RESOURCE_FAULT)return fault(s);
-            if(r!=A733_GPU_RESOURCE_OK){s->pck.token=0;return refuse(s);}
+            if(r==A733_GPU_RESOURCE_FAULT){STATE_FAIL(s,(uint32_t)r);return fault(s);}
+            if(r!=A733_GPU_RESOURCE_OK){STATE_FAIL(s,(uint32_t)r);s->pck.token=0;return refuse(s);}
         }
         /* The owner's done bit arrives within its own bound; anchor this wait
          * at whichever of now and the PMIC provider's startup deadline is later. */
@@ -413,11 +494,14 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
     }
     case A733_NPU_STARTUP_SUPPLY: {
         const unsigned w=a733_power_authority_load(&s->providers.rails->authority);
-        if(w&SUPPLY_FAULTS)return refuse(s);
+        if(w&SUPPLY_FAULTS){STATE_FAIL(s,w);return refuse(s);}
         /* DCDC2 verified is enough; the owner may still be reading DCDC4. */
         if(!(w&A733_POWER_DCDC2_VERIFIED)) {
-            if(!(w&A733_POWER_SUPPLY_DONE))return t<s->wait_until ? PENDING : refuse(s);
-            return refuse(s);
+            if(!(w&A733_POWER_SUPPLY_DONE)) {
+                if(t<s->wait_until)return PENDING;
+                STATE_FAIL(s,w);return refuse(s);
+            }
+            STATE_FAIL(s,w);return refuse(s);
         }
         s->stage=A733_NPU_STARTUP_PASS;
         break;
@@ -429,8 +513,8 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         if(held==0)return now(s,0) ? PENDING : refuse(s);
         if(held!=1)return fault(s);
         unsigned domain=8;
-        if(!now(s,0) || a733_power_domain_check(s->providers.domains,4,&domain)!=1 ||
-           (domain!=0 && domain!=8) || !pass(s)) {
+        if(!now(s,0) || !domain_check(s,&domain) ||
+           !state_ok(s,domain==0 || domain==8,domain) || !pass(s)) {
             (void)leave(s);return refuse(s);
         }
         if(!leave(s))return refuse(s);
@@ -456,7 +540,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
     case A733_NPU_STARTUP_ROW: {
         const enum a733_power_row_state r=a733_power_domain_state(&s->row);
         if(r==A733_POWER_ROW_PENDING)return t<s->wait_until ? PENDING : fault(s);
-        if(r!=A733_POWER_ROW_ON)return fault(s);
+        if(!state_ok(s,r==A733_POWER_ROW_ON,(uint32_t)r))return fault(s);
         s->stage=s->pll_locked ? A733_NPU_STARTUP_OPEN : A733_NPU_STARTUP_ENABLE;
         break;
     }
@@ -467,10 +551,10 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         if(held!=1)return held==0 && now(s,0) ? PENDING : fault(s);
         uint32_t v;
         if(s->pll_adopted) {
-            if(!now(s,0) || !rd(s,PLL,&v) || v!=(pll_word(s)|PLL_LOCK))return fault(s);
+            if(!now(s,0) || !rd(s,PLL,&v) || !matches(s,PLL,v,UINT32_MAX,pll_word(s)|PLL_LOCK))return fault(s);
         } else if(s->pll_retune) {
             /* The other profile's running PLL: the vendor's rate change. */
-            if(!now(s,0) || !rd(s,PLL,&v) || v!=(PLL_OPEN(s->pll_factors==FACTORS_852 ? FACTORS_492 : FACTORS_852)|
+            if(!now(s,0) || !rd(s,PLL,&v) || !matches(s,PLL,v,UINT32_MAX,PLL_OPEN(s->pll_factors==FACTORS_852 ? FACTORS_492 : FACTORS_852)|
                PLL_LOCK|s->pll_inherited) || !apply_factors(s,pll_retune,STEPS(pll_retune),PLL_RETUNE_FACTOR_STEP))
                 return fault(s);
             s->pll_retune=0;
@@ -483,7 +567,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         int held=enter(s);
         if(held!=1)return held==0 && now(s,0) ? PENDING : fault(s);
         uint32_t v;
-        if(!now(s,0) || !rd(s,PLL,&v) || v!=(pll_word(s)|PLL_LOCK) ||
+        if(!now(s,0) || !rd(s,PLL,&v) || !matches(s,PLL,v,UINT32_MAX,pll_word(s)|PLL_LOCK) ||
            !check(s,CCU+0x1920,0x10001,0x10001) || !check(s,CCU+0x19a0,BIT(16),BIT(16)) ||
            !apply(s,pll_open,STEPS(pll_open)) || !route_to_npu(s) ||
            !apply(s,local_open,STEPS(local_open)) || !now(s,&t) ||
@@ -524,7 +608,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
 }
 enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *s)
 {
-    if(!owner_task(s))return RETAINED;
+    if(!owner_task(s)){STATE_FAIL(s,0);return RETAINED;}
     if(s->stage==A733_NPU_STARTUP_STOPPED)return READY;
     if(s->stage!=A733_NPU_STARTUP_READY || !now(s,0))return fault(s);
     /* The controller has closed; no register access follows. */
@@ -547,11 +631,11 @@ static int stopped(struct a733_npu_startup *s)
     return check(s,SRAM_ROUTING,SRAM_TO_CPU,SRAM_TO_CPU) && check(s,CCU+0xb00,BIT(31),0) &&
         check(s,CCU+0xb04,UINT32_C(0x70001),0) && check(s,CCU+0x1920,0x10001,0x10001) &&
         check(s,CCU+0x19a0,BIT(16),BIT(16)) &&
-        rd(s,PLL,&v) && v==(PLL_OPEN(s->pll_factors)|PLL_LOCK|s->pll_inherited);
+        rd(s,PLL,&v) && matches(s,PLL,v,UINT32_MAX,PLL_OPEN(s->pll_factors)|PLL_LOCK|s->pll_inherited);
 }
 enum a733_npu_platform_result a733_npu_startup_restart(struct a733_npu_startup *s)
 {
-    if(!owner_task(s) || s->stage!=A733_NPU_STARTUP_STOPPED)return RETAINED;
+    if(!owner_task(s) || s->stage!=A733_NPU_STARTUP_STOPPED){STATE_FAIL(s,0);return RETAINED;}
     if(!now(s,0) || atomic_load_explicit(&s->window_open,memory_order_acquire) ||
        s->row.domains!=s->providers.domains || s->row.rail!=&s->rail ||
        s->row.wake_context!=s || s->row.owner!=s->config.owner || s->row.domain!=4 ||
@@ -566,7 +650,7 @@ enum a733_npu_platform_result a733_npu_startup_restart(struct a733_npu_startup *
     int held=enter(s);
     if(held!=1)return held==0 && now(s,0) ? PENDING : fault(s);
     unsigned domain=0;
-    if(!now(s,0) || a733_power_domain_check(s->providers.domains,4,&domain)!=1 || domain!=8 ||
+    if(!now(s,0) || !domain_check(s,&domain) || !state_ok(s,domain==8,domain) ||
        !stopped(s) || !check(s,CCU+0xb04,0xf0001,BIT(19)))return fault(s);
     if(!leave(s))return fault(s);
     /* The ON row and its rail pin remain counted. Never enter PASS, whose
@@ -618,14 +702,14 @@ int a733_npu_startup_retune_until(struct a733_npu_startup *s,unsigned mhz,uint64
     if(clock==A733_CLOCK_BUSY || rail==A733_RAIL_BUSY || pck==A733_GPU_RESOURCE_BUSY)return 0;
     const uint32_t target=mhz==852 ? FACTORS_852 : FACTORS_492;
     uint32_t sid;
-    if(target==FACTORS_852 && !(rd(s,SID_DVFS,&sid) && bin_allows_852(sid)))return 0;
+    if(target==FACTORS_852 && !(rd(s,SID_DVFS,&sid) && (bin_allows_852(sid) || (REGISTER_FAIL(s,SID_DVFS,sid),0))))return 0;
     if(!before(s,0,deadline))return 0;
     int held=s->ops.enter(s->cookie,deadline);
     if(held!=1){if(held)(void)fault(s);return held ? -1 : 0;}
     s->register_held=1;
     unsigned domain=0;
     if(!before(s,0,deadline)){retune_leave(s);return 0;}
-    if(a733_power_domain_check(s->providers.domains,4,&domain)!=1 || domain!=8){(void)fault(s);return -1;}
+    if(!domain_check(s,&domain) || !state_ok(s,domain==8,domain)){(void)fault(s);return -1;}
     if(!stopped(s)){retune_leave(s);return 0;}
     if(!before(s,0,deadline)){retune_leave(s);return 0;}
     if(target==s->pll_factors){retune_leave(s);return before(s,0,deadline) ? 1 : 0;}

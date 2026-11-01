@@ -7,6 +7,7 @@
 #include "native-runtime.h"
 #include "npu_job.h"
 #include "sunstone_crumb.h"
+#include "failure.h"
 #include "a733_npu_irq.h"
 #include <string.h>
 #include "a733_mapping_check.h"
@@ -189,21 +190,25 @@ static void bootstrap(void *argument)
     if(argument!=&app)fatal(NULL);
     for(;;) {
         uint64_t now;
-        if(!live() || !parent() || !a733_counter_clock_now(&app.clock,&now) ||
-           now>=app.startup.config.deadline_us)break;
+        if(!NPU_APPLICATION_CHECK(live(),app.used) ||
+           !NPU_APPLICATION_CHECK(parent(),app.used) ||
+           !NPU_APPLICATION_CHECK(a733_counter_clock_now(&app.clock,&now),atomic_load_explicit(&app.clock.failed,memory_order_acquire)) ||
+           !NPU_APPLICATION_CHECK(now<app.startup.config.deadline_us,now-app.startup.config.deadline_us))break;
         enum a733_npu_platform_result r=npu_runtime_startup_poll(&app.runtime);
-        if(r==A733_NPU_PLATFORM_RETAINED)break;
+        if(!NPU_APPLICATION_CHECK(r!=A733_NPU_PLATFORM_RETAINED,app.startup.stage))break;
         if(r==A733_NPU_PLATFORM_READY) {
             /* The worker may run inside activate(); the client starts after it. */
             enum npu_service_result a=npu_service_activate(&app.runtime.service);
             if(a==NPU_SERVICE_OK) {
                 atomic_store_explicit(&app.ready,1,memory_order_release);
                 for(;;) {
-                    if(!live() || !parent() || !a733_counter_clock_now(&app.clock,&now) ||
-                       now>=app.startup.config.deadline_us)break;
+                    if(!NPU_APPLICATION_CHECK(live(),app.used) ||
+                       !NPU_APPLICATION_CHECK(parent(),app.used) ||
+                       !NPU_APPLICATION_CHECK(a733_counter_clock_now(&app.clock,&now),atomic_load_explicit(&app.clock.failed,memory_order_acquire)) ||
+                       !NPU_APPLICATION_CHECK(now<app.startup.config.deadline_us,now-app.startup.config.deadline_us))break;
                     if(slot_state()==NPU_RUNTIME_CLOSED) {
                         enum a733_npu_platform_result stopped=npu_runtime_stop_poll(&app.runtime);
-                        if(stopped==A733_NPU_PLATFORM_RETAINED)break;
+                        if(!NPU_APPLICATION_CHECK(stopped!=A733_NPU_PLATFORM_RETAINED,app.startup.stage))break;
                         if(stopped==A733_NPU_PLATFORM_READY) {
                             atomic_store_explicit(&app.stopped,1,memory_order_release);
                             vTaskSuspend(NULL);fatal(NULL);
@@ -213,7 +218,7 @@ static void bootstrap(void *argument)
                 }
                 break;
             }
-            if(a!=NPU_SERVICE_BUSY)break;
+            if(!NPU_APPLICATION_CHECK(a==NPU_SERVICE_BUSY,a))break;
         }
         /* A PENDING startup blocks until its power-service notification, its
          * deadline or the last tick of its settle. */

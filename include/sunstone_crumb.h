@@ -75,6 +75,12 @@
 #define SUNSTONE_CRUMB_FAIL_PMIC 0x6u       /* PMIC power service; value: authority word */
 #define SUNSTONE_CRUMB_FAIL_GPU 0x7u        /* GPU failure; value: reason or register status */
 #define SUNSTONE_CRUMB_FAIL_NPU 0x8u        /* NPU failure; value: reason or register status */
+/* NPU first-failure layouts, independent of progress stages. Register offsets
+ * are the physical address's low 16 bits, divided by four in aux bits 13:0;
+ * the symbolized source identifies the bank. Value keeps all 32 status bits.
+ * A lifecycle record instead puts enum a733_npu_startup_stage in aux bits 7:0. */
+#define SUNSTONE_CRUMB_NPU_REGISTER 0x40000000u
+#define SUNSTONE_CRUMB_NPU_STARTUP 0x20000000u
 #define SUNSTONE_CRUMB_FAIL_RETURN 0x80000000u /* site flag: caller is a return address */
 #define SUNSTONE_CRUMB_FAIL_SITE(group) (SUNSTONE_CRUMB_FAIL_##group << 12 | ((uint32_t)__LINE__ & 0xfffu))
 /* The address of this statement, for the caller word of a board failure.

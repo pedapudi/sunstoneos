@@ -42,6 +42,12 @@ def main():
         failure = decoder.decode(words, epoch)['board_failure']
         assert failure['group'] == name and failure['site'] == 123
         assert failure['value'] == '0x80000001' and failure['site_kind'] == 'source line'
+    for flag, auxiliary, field, expected_value in ((defines['NPU_REGISTER'], 0x2b04 >> 2, 'register_offset', '0x2b04'),
+                                              (defines['NPU_STARTUP'], 3, 'startup_stage', 3)):
+        words.update(esr=8 << 12 | 123 | flag | auxiliary << 16)
+        decoded = decoder.decode(words, epoch)
+        assert decoded['board_failure'][field] == expected_value
+        assert decoded['board_failure']['value'] == '0x80000001'
     source = args.out / 'crumb-values.c'
     assertions = [f'_Static_assert(NPU_CRUMB_{name} == {0x600+i}, "finite {name}");'
                   for i, name in enumerate(FINITE, 1)]

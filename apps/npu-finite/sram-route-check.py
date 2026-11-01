@@ -47,7 +47,32 @@ elf = a.evidence / 'image.elf'
 LAYOUTS = ('a733_npu_startup', 'a733_npu_startup_config', 'a733_npu_platform_config', 'a733_npu_startup_providers',
            'a733_power_domain_row', 'a733_counter_clock', 'a733_clock_leases', 'a733_platform_locks',
            'a733_power_domains', 'a733_pmic', 'a733_pmic_config', 'npu_convolution', 'supported_model')
-im = harness.Image(elf, layout_names=LAYOUTS)
+def startup_image(path, names):
+    """Use the sequencer's defining unit for conditional private layouts."""
+    from elftools.elf.elffile import ELFFile
+    image = harness.Image(path, layout_names=())
+    priorities = ('/drivers/npu/npu_convolution.c', '/apps/npu-convolution/native.c',
+                  '/drivers/npu/a733_npu_startup.c')
+    selected = {}
+    with path.open('rb') as stream:
+        units = list(ELFFile(stream).get_dwarf_info().iter_CUs())
+        assert sum(cu.get_top_DIE().attributes['DW_AT_name'].value.decode().endswith(priorities[-1]) for cu in units) == 1
+        for cu in units:
+            unit = cu.get_top_DIE().attributes['DW_AT_name'].value.decode()
+            priority = next((i + 1 for i, suffix in enumerate(priorities) if unit.endswith(suffix)), 0)
+            for die in cu.iter_DIEs():
+                if die.tag == 'DW_TAG_structure_type' and 'DW_AT_name' in die.attributes:
+                    name = die.attributes['DW_AT_name'].value.decode()
+                    if name in names and priority >= selected.get(name, -1):
+                        fields = {c.attributes['DW_AT_name'].value.decode(): int(c.attributes['DW_AT_data_member_location'].value)
+                                  for c in die.iter_children() if c.tag == 'DW_TAG_member'
+                                  and 'DW_AT_name' in c.attributes and 'DW_AT_data_member_location' in c.attributes}
+                        if fields:
+                            image.layouts[name], selected[name] = fields, priority
+    return image
+
+
+im = startup_image(elf, LAYOUTS)
 L = im.layouts
 SYSCTRL, SHARED = 0x03000008, (0x00074000, 0x000f4000)
 CCU, PCK, PLL = 0x02002000, 0x07064000, 0x020022a0
@@ -83,7 +108,9 @@ HOOKED = ('xTaskGetSchedulerState', 'xTaskGetCurrentTaskHandle', 'a733_counter_c
           'a733_platform_lock_leave', 'a733_platform_lock_retain', 'a733_power_domain_check', 'a733_clock_release',
           'a733_rail_release', 'a733_gpu_resources_release')
 CURRENTEL, CNTPCT = 0xd5384240, 0xd53be020
-SITES = sorted(harness.instruction_sites(im.parts, lambda w: w & 0xffffffe0 in (CURRENTEL, CNTPCT)))
+SITES = sorted(harness.instruction_sites(im.parts, lambda w:
+    w & 0xffffffe0 in (CURRENTEL, CNTPCT, 0xd5385200, 0xd53800a0)
+    or w == 0xd69f03e0 or w & 0xffe0001f == 0xd4000001))
 
 
 class Machine:
@@ -98,6 +125,7 @@ class Machine:
             if data:
                 u.mem_write(at, data)
         self.domain, self.stuck, self.time, self.writes, self.running = domain, stuck, 1000, [], False
+        self.rtc_writes = []
         base = 0x43000000
         self.s, self.task = base, base + 0x10000
         counter, clocks, locks, domains, pmic = base + 0x8000, base + 0x9000, base + 0xa000, base + 0xb000, base + 0xc000
@@ -159,7 +187,19 @@ class Machine:
         name = self.hooks.get(at)
         if name is None:
             word = self.get(at, 4)
-            if word & 0xffffffe0 == CURRENTEL:
+            if word & 0xffe0001f == 0xd4000001:
+                self.svc, self.svc_return = word >> 5 & 0xffff, at + 4
+                assert self.svc == 0x5c0e
+                u.reg_write(UC_ARM64_REG_PC, im.address('npu_finite_svc'))
+                return
+            if word == 0xd69f03e0:
+                u.reg_write(UC_ARM64_REG_PC, self.svc_return)
+                return
+            if word & 0xffffffe0 == 0xd5385200:
+                u.reg_write(UC_ARM64_REG_X0 + (word & 31), 0x15 << 26 | self.svc)
+            elif word & 0xffffffe0 == 0xd53800a0:
+                u.reg_write(UC_ARM64_REG_X0 + (word & 31), 0)
+            elif word & 0xffffffe0 == CURRENTEL:
                 u.reg_write(UC_ARM64_REG_X0 + (word & 31), 4)       # EL1
             else:
                 self.time += 1
@@ -183,7 +223,9 @@ class Machine:
             self.returned(1)
 
     def write(self, u, access, at, size, value, unused):
-        self.writes.append((at, value))
+        # Retained diagnostics are separate from the power/clock/routing writes
+        # whose absence and order these cases assert.
+        (self.rtc_writes if 0x07090100 <= at < 0x07090120 else self.writes).append((at, value))
 
     def read(self, u, access, at, size, value, unused):
         if at == PLL:
@@ -367,7 +409,7 @@ def end_of(start):
 rmr_writes = sites(lambda w: (w & 0xffffffe0) == 0xd51ec040)
 rom = im.address('npu_finite_rom_return')
 rom_end = end_of(rom)
-exception = im.address('sd_single_core_exception')
+exception = im.address('npu_finite_exception')
 branches_in = []
 for base, data in im.parts:
     for i in range(0, len(data) - 3, 4):

@@ -1,5 +1,6 @@
 #include "a733_npu_application.h"
 #include "sunstone_crumb.h"
+#include "failure.h"
 #ifdef SUNSTONE_ACCELERATORS
 #include "../accelerators/application.h"
 #endif
@@ -334,7 +335,7 @@ static void bootstrap(void *argument)
         /* Once accepted, finish startup and activate the service so the
          * client can perform the required OPEN/CLOSE even after refusal. */
         enum a733_npu_platform_result r=npu_convolution_startup_poll(&app.reserved.convolution);
-        if(r==A733_NPU_PLATFORM_RETAINED)break;
+        if(!NPU_APPLICATION_CHECK(r!=A733_NPU_PLATFORM_RETAINED,app.startup.stage))break;
         if(r==A733_NPU_PLATFORM_READY) {
             atomic_store_explicit(&app.worker_admitted,1,memory_order_release);
             enum npu_service_result a=npu_service_activate(&app.reserved.convolution.service);
@@ -345,7 +346,7 @@ static void bootstrap(void *argument)
                     if(!live() || !parent() || !npu_finite_thermal_step(&app.thermal))break;
                     if(atomic_load_explicit(&app.reserved.convolution.closed,memory_order_acquire)) {
                         enum a733_npu_platform_result r=npu_convolution_stop_poll(&app.reserved.convolution);
-                        if(r==A733_NPU_PLATFORM_RETAINED)break;
+                        if(!NPU_APPLICATION_CHECK(r!=A733_NPU_PLATFORM_RETAINED,app.startup.stage))break;
                         if(r==A733_NPU_PLATFORM_READY && npu_finite_thermal_quiet(&app.thermal)) {
                             atomic_store_explicit(&app.stopped,1,memory_order_release);
                             vTaskSuspend(NULL);fatal(NULL);
@@ -355,7 +356,7 @@ static void bootstrap(void *argument)
                 }
                 break;
             }
-            if(a!=NPU_SERVICE_BUSY)break;
+            if(!NPU_APPLICATION_CHECK(a==NPU_SERVICE_BUSY,a))break;
         }
         /* A PENDING startup blocks until its power-service notification, its
          * deadline or the last tick of its settle. */
@@ -372,10 +373,12 @@ static void bootstrap(void *argument)
 #endif
     for(;;) {
         uint64_t now;
-        if(!live() || !parent() || !a733_counter_clock_now(&app.clock,&now) ||
-           now>=app.startup.config.deadline_us)break;
+        if(!NPU_APPLICATION_CHECK(live(),app.used) ||
+           !NPU_APPLICATION_CHECK(parent(),app.used) ||
+           !NPU_APPLICATION_CHECK(a733_counter_clock_now(&app.clock,&now),atomic_load_explicit(&app.clock.failed,memory_order_acquire)) ||
+           !NPU_APPLICATION_CHECK(now<app.startup.config.deadline_us,now-app.startup.config.deadline_us))break;
         enum a733_npu_platform_result r=npu_convolution_startup_poll(&app.reserved.convolution);
-        if(r==A733_NPU_PLATFORM_RETAINED)break;
+        if(!NPU_APPLICATION_CHECK(r!=A733_NPU_PLATFORM_RETAINED,app.startup.stage))break;
         if(r==A733_NPU_PLATFORM_READY) {
             /* Worker may wake on another core inside activate(). Its admission
              * therefore precedes activation; client readiness follows success. */
@@ -385,19 +388,21 @@ static void bootstrap(void *argument)
                 atomic_store_explicit(&app.ready,1,memory_order_release);
 #if defined(SUNSTONE_NPU_FINITE_RETURN) || defined(SUNSTONE_NPU_RUNTIME_INPUT)
                 for(;;) {
-                    if(!live() || !parent() || !a733_counter_clock_now(&app.clock,&now) ||
-                       now>=app.startup.config.deadline_us)break;
+                    if(!NPU_APPLICATION_CHECK(live(),app.used) ||
+                       !NPU_APPLICATION_CHECK(parent(),app.used) ||
+                       !NPU_APPLICATION_CHECK(a733_counter_clock_now(&app.clock,&now),atomic_load_explicit(&app.clock.failed,memory_order_acquire)) ||
+                       !NPU_APPLICATION_CHECK(now<app.startup.config.deadline_us,now-app.startup.config.deadline_us))break;
                     if(atomic_load_explicit(&app.reserved.convolution.closed,memory_order_acquire)) {
 #ifdef SUNSTONE_NPU_RESTART
                         if(restart_pending) {
                             enum a733_npu_platform_result result=npu_convolution_restart_poll(&app.reserved.convolution);
-                            if(result==A733_NPU_PLATFORM_RETAINED)break;
+                            if(!NPU_APPLICATION_CHECK(result!=A733_NPU_PLATFORM_RETAINED,app.startup.stage))break;
                             if(result==A733_NPU_PLATFORM_READY){restarted=1;restart_pending=0;}
                             vTaskDelay(1);continue;
                         }
 #endif
                         enum a733_npu_platform_result stopped=npu_convolution_stop_poll(&app.reserved.convolution);
-                        if(stopped==A733_NPU_PLATFORM_RETAINED)break;
+                        if(!NPU_APPLICATION_CHECK(stopped!=A733_NPU_PLATFORM_RETAINED,app.startup.stage))break;
                         if(stopped==A733_NPU_PLATFORM_READY) {
 #ifdef SUNSTONE_NPU_RESTART
                             if(!restarted){restart_pending=1;continue;}
@@ -413,7 +418,7 @@ static void bootstrap(void *argument)
                 vTaskSuspend(NULL);fatal(NULL);
 #endif
             }
-            if(a!=NPU_SERVICE_BUSY)break;
+            if(!NPU_APPLICATION_CHECK(a==NPU_SERVICE_BUSY,a))break;
         }
         /* A PENDING startup blocks until its power-service notification, its
          * deadline or the last tick of its settle. */

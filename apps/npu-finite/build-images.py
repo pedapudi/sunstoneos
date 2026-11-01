@@ -35,7 +35,7 @@ FAILURES = """| Last progress stage | Failure signature |
 | `0x060b` | Exit began; monitor cleanup/handback/disarm did not finish. |
 | `0x0621` | Runtime LOAD did not finish or refused the selected model. |
 | `0x062e` or `0x062f` | Runtime helper refused or failed; value contains its reason. |
-| `0x06ff` | Finite client retained; value is the reason, first-failure words preserve the original site. |
+| `0x06ff` | Finite client retained; value 9 means readiness wait lost liveness. The symbolized first failure identifies the earlier bootstrap predicate or startup register check. Startup diagnostics include the register offset/full value or lifecycle stage. |
 | `0x0111` | EL3 stopped and shortened WDT0; decode the preserved first failure and stop detail. |
 | `0x0503` | Mode value must be zero and normal reports must validate. Failed disarm parks instead of returning. |
 """
@@ -75,7 +75,7 @@ def main():
         terminal = ('NPU_STARTUP=READY_CLOSED_STOPPED; inference_jobs=0' if not jobs else
                     f'NPU_INFERENCE=MATCH; inference_jobs={jobs}')
         sequence = ' → '.join(f'`0x{s:04x}`' for s in [0x0101, 0x0102, *stages, 0x0503])
-        run = build / 'runs' / f'{index:02d}-{name}'
+        run = build / 'runs' / f'{index:02d}-{name}-{elf_hash[:12]}'
         commands = (f'SUNSTONE_USB_PORT=3-3 {sys.executable} {ROOT}/tools/run-ddr.py '
                     f'--fel {CACHE}/build/sunxi-a733/sunxi-fel --evidence {run}-ddr\n'
                     f'{sys.executable} {ROOT}/tools/dev-run.py npu --image {directory}/image.elf '
@@ -111,6 +111,10 @@ fresh DDR initialization before another attempt and never restores old SRAM.
 The template carries historical configuration; development preparation binds
 new session identities and reads live SID, fabric, routing and local reset state.
 Active-NPU watchdog recovery remains physically unqualified.
+The startup failure diagnostic is described in apps/npu-finite/STARTUP-FAILURE.md.
+Run startup-only first; a repeated retained value 9 must now carry the earlier
+symbolized predicate or register comparison. Stop before the inference images
+unless startup-only returns normally.
 '''
         (directory / 'README.md').write_text(readme)
         provenance['images'].append(dict(name=name, elf_sha256=elf_hash,
