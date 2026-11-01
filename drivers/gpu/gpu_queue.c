@@ -80,7 +80,7 @@ int gpu_queue_context_create(const struct gpu_queue_context_config *c,uint32_t t
     if (atomic_load(&q->lost)) return GPU_QUEUE_FAULT;
     if (q->final_close || q->create_done) return GPU_QUEUE_REFUSED;
     if (!q->create_pending) {
-        if (!c->program || !pvr_compute_queue_runtime_program(c->program) || !c->lease_count || c->lease_count>GPU_QUEUE_LEASES || c->reserved) return GPU_QUEUE_REFUSED;
+        if (!c->program || !pvr_compute_queue_runtime_program(c->program) || !c->lease_count || c->lease_count>GPU_QUEUE_LEASES || c->reserved || c->priority>GPU_QUEUE_PRIORITY_HIGH) return GPU_QUEUE_REFUSED;
         q->create_program=*c->program;
         q->create_config=*c;
         q->create_config.program=&q->create_program;
@@ -108,30 +108,53 @@ static int context(struct pvr_compute_queue *q,struct gpu_queue_context c)
 /* Fixed same-task kernel entry. The argument stays on the caller's stack;
  * no function pointer or private GPU-memory pointer crosses the interface. */
 extern int pvr_gpu_call(unsigned,void *) __attribute__((weak));
-enum { FAST_SUBMIT=1, FAST_COLLECT=2 };
+enum { FAST_SUBMIT=1, FAST_COLLECT=2, FAST_BATCH=3 };
 struct fast_call {
     struct gpu_queue_context context;
     struct gpu_queue_job job;
     struct gpu_queue_record record;
-    uint32_t fence;
+    uint32_t fence,sequence;
+};
+struct fast_batch_call {
+    struct gpu_queue_context context;
+    struct gpu_queue_job job[GPU_QUEUE_DEPTH];
+    uint32_t fence[GPU_QUEUE_DEPTH],count,accepted;
 };
 int pvr_gpu_call_dispatch(unsigned operation,void *argument)
 {
     struct pvr_compute_queue *q=instance;
-    if (operation!=FAST_SUBMIT && operation!=FAST_COLLECT) return GPU_QUEUE_REFUSED;
-    if (!argument || ((uintptr_t)argument&7) || !a733_span_excl_nonempty(argument,sizeof(struct fast_call))) return GPU_QUEUE_REFUSED;
+    if (operation!=FAST_SUBMIT && operation!=FAST_COLLECT && operation!=FAST_BATCH) return GPU_QUEUE_REFUSED;
+    size_t bytes=operation==FAST_BATCH?sizeof(struct fast_batch_call):sizeof(struct fast_call);
+    if (!argument || ((uintptr_t)argument&7) || !a733_span_excl_nonempty(argument,bytes)) return GPU_QUEUE_REFUSED;
     struct aarch64_translation translation;
-    uintptr_t first=(uintptr_t)argument,last=first+sizeof(struct fast_call)-1;
+    uintptr_t first=(uintptr_t)argument,last=first+bytes-1;
     /* EL0 write permission also admits reads. Validate both pages of this
      * fixed-size kernel argument; the transport's retained maps need no walk. */
     if (!aarch64_device_translate_el0(first,1,&translation) ||
         ((first>>12)!=(last>>12) && !aarch64_device_translate_el0(last,1,&translation))) return GPU_QUEUE_REFUSED;
     struct fast_call *a=argument;
-    int r=context(q,a->context);
+    struct gpu_queue_context identity;
+    memcpy(&identity,argument,sizeof(identity));
+    int r=context(q,identity);
     if (r!=GPU_QUEUE_OK || !q->service->config.job_irq_ack) return r==GPU_QUEUE_OK?GPU_QUEUE_REFUSED:r;
-    if (operation==FAST_COLLECT) return pvr_compute_fast_collect(q,a->context.client,&a->record);
+    if (operation==FAST_COLLECT) return pvr_compute_fast_collect(q,a->context.client,a->fence,a->sequence,&a->record);
     int live=pvr_compute_queue_runtime_admit();
     if (live!=1) return live<0?GPU_QUEUE_FAULT:GPU_QUEUE_PARKED;
+    if (operation==FAST_BATCH) {
+        struct fast_batch_call *batch=argument;
+        unsigned count=batch->count;
+        if (!count || count>GPU_QUEUE_DEPTH) return GPU_QUEUE_REFUSED;
+        batch->accepted=0;
+        for (unsigned i=0;i<count;++i) {
+            int result=pvr_compute_fast_submit(q,batch->context.client,&batch->job[i],&batch->fence[i]);
+            if (result!=GPU_QUEUE_OK) {
+                if (result==GPU_QUEUE_FAULT && batch->fence[i]) ++batch->accepted;
+                return result;
+            }
+            ++batch->accepted;
+        }
+        return GPU_QUEUE_OK;
+    }
     return pvr_compute_fast_submit(q,a->context.client,&a->job,&a->fence);
 }
 static int direct_submit(struct gpu_queue_context c,const struct gpu_queue_job *job,uint32_t *fence)
@@ -140,24 +163,39 @@ static int direct_submit(struct gpu_queue_context c,const struct gpu_queue_job *
     if (!pvr_gpu_call) return GPU_QUEUE_REFUSED;
     struct fast_call call={.context=c,.job=*job};
     int r=pvr_gpu_call(FAST_SUBMIT,&call);
-    if (r==GPU_QUEUE_OK && fence) *fence=call.fence;
+    if (fence && (r==GPU_QUEUE_OK || (r==GPU_QUEUE_FAULT && call.fence))) *fence=call.fence;
     return r;
 }
 static int direct_wait(struct pvr_compute_queue *q,struct gpu_queue_context c,
-    struct gpu_queue_record *out,uint32_t ticks)
+    struct gpu_queue_record *out,uint32_t ticks,uint32_t requested,uint32_t sequence)
 {
     TickType_t begin=xTaskGetTickCount(),budget=ticks==GPU_QUEUE_WAIT_FOREVER?portMAX_DELAY:(TickType_t)ticks;
+    int queried=0;
     for (;;) {
         if (atomic_load(&q->lost)) return GPU_QUEUE_FAULT;
-        uint32_t target=atomic_load_explicit(&q->fast.pending[c.client],memory_order_acquire);
+        uint32_t target=requested?requested:atomic_load_explicit(&q->fast.pending[c.client],memory_order_acquire);
         if (!target) return atomic_load(&q->lost)?GPU_QUEUE_FAULT:GPU_QUEUE_REFUSED;
         if (target<=atomic_load_explicit(&q->fast.completed,memory_order_acquire) ||
-            !atomic_load_explicit(&q->fast.enabled,memory_order_acquire)) {
-            struct fast_call call={.context=c};
+            !atomic_load_explicit(&q->fast.enabled,memory_order_acquire) || (requested && !queried)) {
+            struct fast_call call={.context=c,.fence=requested,.sequence=sequence};
             int r=pvr_gpu_call(FAST_COLLECT,&call);
-            if (r!=GPU_QUEUE_BUSY) {
+            if (r==PVR_COMPUTE_FAST_PENDING) queried=1;
+            else if (r!=GPU_QUEUE_BUSY) {
                 if (r==GPU_QUEUE_OK || (r==GPU_QUEUE_FAULT && call.record.sequence)) *out=call.record;
                 return r;
+            }
+            if (r==GPU_QUEUE_BUSY) {
+                if (!budget || (budget!=portMAX_DELAY && !remaining(begin,budget))) return GPU_QUEUE_TIMEOUT;
+                (void)ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,0);
+                atomic_store_explicit(&q->fast.lock_waiter[c.client],1,memory_order_release);
+                if (!atomic_load_explicit(&q->fast.locked,memory_order_acquire) || atomic_load(&q->lost)) {
+                    atomic_store(&q->fast.lock_waiter[c.client],0);continue;
+                }
+                TickType_t wait=budget==portMAX_DELAY?portMAX_DELAY:remaining(begin,budget);
+                if (!wait || !ulTaskNotifyTakeIndexed(PVR_COMPUTE_FAST_NOTIFY,pdTRUE,wait)) {
+                    atomic_store(&q->fast.lock_waiter[c.client],0);return GPU_QUEUE_TIMEOUT;
+                }
+                atomic_store(&q->fast.lock_waiter[c.client],0);continue;
             }
         }
         if (!budget || (budget!=portMAX_DELAY && !remaining(begin,budget))) return GPU_QUEUE_TIMEOUT;
@@ -223,6 +261,41 @@ int gpu_queue_submit(struct gpu_queue_context c,const struct gpu_queue_job *job)
     }
     return GPU_QUEUE_OK;
 }
+int gpu_queue_submit_fence(struct gpu_queue_context c,const struct gpu_queue_job *job,struct gpu_queue_fence *out)
+{
+    if (!out) return GPU_QUEUE_REFUSED;
+    *out=(struct gpu_queue_fence){0};
+    struct pvr_compute_queue *q=instance;
+    int r=context(q,c);
+    if (r!=GPU_QUEUE_OK || !out) return r==GPU_QUEUE_OK?GPU_QUEUE_REFUSED:r;
+    if (!q->service->config.job_irq_ack) return GPU_QUEUE_REFUSED;
+    uint32_t serial=0;
+    r=direct_submit(c,job,&serial);
+    if (serial) *out=(struct gpu_queue_fence){c,serial,job->sequence};
+    return r;
+}
+int gpu_queue_submit_batch(struct gpu_queue_context c,const struct gpu_queue_job *jobs,uint32_t count,
+    struct gpu_queue_fence *out,uint32_t *accepted)
+{
+    if (!accepted) return GPU_QUEUE_REFUSED;
+    *accepted=0;
+    struct pvr_compute_queue *q=instance;
+    int r=context(q,c);
+    if (r!=GPU_QUEUE_OK) return r;
+    if (!q->service->config.job_irq_ack || !jobs || !out || !count || count>GPU_QUEUE_DEPTH) return GPU_QUEUE_REFUSED;
+    struct fast_batch_call call={.context=c,.count=count};
+    memcpy(call.job,jobs,count*sizeof(*jobs));
+    r=pvr_gpu_call(FAST_BATCH,&call);
+    for (unsigned i=0;i<call.accepted;++i) out[i]=(struct gpu_queue_fence){c,call.fence[i],jobs[i].sequence};
+    *accepted=call.accepted;return r;
+}
+int gpu_queue_wait_fence(struct gpu_queue_fence fence,struct gpu_queue_record *out,uint32_t ticks)
+{
+    struct pvr_compute_queue *q=instance;
+    if (!out || !fence.serial || !fence.sequence || !caller(q,fence.context.client) ||
+        fence.context.generation!=q->generation || !q->service->config.job_irq_ack) return GPU_QUEUE_REFUSED;
+    return direct_wait(q,fence.context,out,ticks,fence.serial,fence.sequence);
+}
 int gpu_queue_wait(struct gpu_queue_context c,struct gpu_queue_record *out,uint32_t ticks)
 {
     struct pvr_compute_queue *q=instance;
@@ -231,7 +304,7 @@ int gpu_queue_wait(struct gpu_queue_context c,struct gpu_queue_record *out,uint3
     if (!caller(q,c.client) || !out || c.generation!=q->generation ||
         !pvr_compute_queue_client_view(q,c.client,&v)) return GPU_QUEUE_REFUSED;
     if (!atomic_load(v.client_owed)) return atomic_load(&q->lost)?GPU_QUEUE_FAULT:GPU_QUEUE_REFUSED;
-    if (q->service->config.job_irq_ack) return direct_wait(q,c,out,ticks);
+    if (q->service->config.job_irq_ack) return direct_wait(q,c,out,ticks,0,0);
     struct gpu_queue_record record;
     if (xQueueReceive(v.completions,&record,(TickType_t)ticks)!=pdTRUE) return GPU_QUEUE_TIMEOUT;
     atomic_store(v.client_owed,0); *out=record;
@@ -258,9 +331,9 @@ static int lifetime(struct gpu_queue_context c,uint32_t ticks,unsigned operation
     atomic_store(&q->close_pending,transition?transition:operation+1);
     TickType_t began=xTaskGetTickCount(),budget=(TickType_t)ticks;
     if (operation==PVR_GPU_SERVICE_CLOSE) {
-        if (atomic_load(&q->client_owed)) {
+        while (atomic_load(&q->client_owed)) {
             struct gpu_queue_record record;
-            int r=gpu_queue_wait(c,&record,ticks);
+            int r=gpu_queue_wait(c,&record,(uint32_t)remaining(began,budget));
             if (r==GPU_QUEUE_TIMEOUT) return r;
             if (r==GPU_QUEUE_FAULT) {atomic_store(&q->close_pending,0);return r;}
         }

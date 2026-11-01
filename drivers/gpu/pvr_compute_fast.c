@@ -33,6 +33,8 @@ void pvr_compute_fast_unlock(struct pvr_compute_queue *q)
     atomic_store_explicit(&q->fast.locked,0,memory_order_release);
     uint32_t completed=atomic_load_explicit(&q->fast.completed,memory_order_acquire);
     for (unsigned i=0;i<GPU_QUEUE_CLIENTS;++i) {
+        if (atomic_exchange_explicit(&q->fast.lock_waiter[i],0,memory_order_acq_rel))
+            xTaskNotifyGiveIndexed(q->fast.task[i],PVR_COMPUTE_FAST_NOTIFY);
         unsigned target=atomic_load_explicit(&q->fast.waiter[i],memory_order_acquire);
         if (target && ((target<=completed && !atomic_load(&q->fast.irq_error)) ||
                 target<=atomic_load_explicit(&q->fast.fault_through[i],memory_order_acquire)) &&
@@ -217,29 +219,34 @@ int pvr_compute_fast_submit(struct pvr_compute_queue *q,unsigned client,const st
 out:
     pvr_compute_fast_unlock(q);return result;
 }
-int pvr_compute_fast_collect(struct pvr_compute_queue *q,unsigned client,struct gpu_queue_record *out)
+int pvr_compute_fast_collect(struct pvr_compute_queue *q,unsigned client,uint32_t serial,uint32_t sequence,
+    struct gpu_queue_record *out)
 {
     if (!pvr_compute_fast_lock(q)) return GPU_QUEUE_BUSY;
     if (atomic_load(&q->lost)) {pvr_compute_fast_unlock(q);return GPU_QUEUE_FAULT;}
     struct pvr_compute_fast_entry *e=NULL;
     for (unsigned i=0;i<PVR_COMPUTE_FAST_DEPTH;++i)
         if (q->fast.entry[i].serial && q->fast.entry[i].client==client &&
+            (!serial || (q->fast.entry[i].serial==serial && q->fast.entry[i].job.sequence==sequence)) &&
             (!e || q->fast.entry[i].serial<e->serial)) e=&q->fast.entry[i];
     int result=GPU_QUEUE_REFUSED;
     if (!e) goto done;
-    if (!e->fault && (atomic_load(&q->fast.irq_error) || atomic_load(&q->recovering))) {result=GPU_QUEUE_BUSY;goto done;}
-    if (!e->fault && e->serial>atomic_load_explicit(&q->fast.completed,memory_order_acquire)) {result=GPU_QUEUE_BUSY;goto done;}
+    if (!e->fault && (atomic_load(&q->fast.irq_error) || atomic_load(&q->recovering))) {result=PVR_COMPUTE_FAST_PENDING;goto done;}
+    if (!e->fault && e->serial>atomic_load_explicit(&q->fast.completed,memory_order_acquire)) {result=PVR_COMPUTE_FAST_PENDING;goto done;}
     uint64_t completed=atomic_load_explicit(&q->fast.done_us[(e->serial-1)%PVR_COMPUTE_FAST_DEPTH],memory_order_relaxed);
     if (!e->fault && (completed<e->kicked || completed>=e->deadline)) {
-        FAILED(q,GPU_QUEUE_HANG,e->serial);result=GPU_QUEUE_BUSY;goto done;
+        FAILED(q,GPU_QUEUE_HANG,e->serial);result=PVR_COMPUTE_FAST_PENDING;goto done;
     }
-    if (!e->fault && !maintenance(q,&e->job,1)) {FAILED(q,GPU_QUEUE_MAINTENANCE,e->serial);result=GPU_QUEUE_BUSY;goto done;}
+    if (!e->fault && !maintenance(q,&e->job,1)) {FAILED(q,GPU_QUEUE_MAINTENANCE,e->serial);result=PVR_COMPUTE_FAST_PENDING;goto done;}
     result=e->fault?GPU_QUEUE_FAULT:GPU_QUEUE_OK;
     *out=(struct gpu_queue_record){e->job.sequence,(uint16_t)result,(uint16_t)e->fault,
         e->fault?0:(uint32_t)(completed-e->kicked),0};
     if (!e->fault) ++q->completed_jobs;
     e->serial=0;--q->fast.used;
-    if (!q->fast.used) {q->phase=PVR_COMPUTE_QUEUE_READY;q->owed=0;}
+    if (!q->fast.used && !atomic_load(&q->recovering) &&
+        (q->phase==PVR_COMPUTE_QUEUE_IN_FLIGHT || q->phase==PVR_COMPUTE_QUEUE_READY)) {
+        q->phase=PVR_COMPUTE_QUEUE_READY;q->owed=0;
+    }
     uint32_t next=0;
     for (unsigned i=0;i<PVR_COMPUTE_FAST_DEPTH;++i)
         if (q->fast.entry[i].serial && q->fast.entry[i].client==client &&

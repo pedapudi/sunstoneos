@@ -95,7 +95,8 @@ static int build_context(struct a733_gpu_queue *s)
         contexts[i] = (struct pvr_compute_buffer){s->component.firmware[i].storage.cpu, context_bytes[i],
                                                 s->component.firmware_address[i]};
     if (!pvr_compute_programs_build(&s->programs, &s->program_result)) return 0;
-    struct pvr_compute_config c = {.bvnc=PVR_FW_A733_BVNC, .priority=1, .context_id=1, .owner_id=s->owner};
+    static const unsigned priority[]={1,0,2};
+    struct pvr_compute_config c = {.bvnc=PVR_FW_A733_BVNC, .priority=priority[s->component.priority], .context_id=1, .owner_id=s->owner};
     memcpy(c.switch_registers, s->program_result.switch_registers, sizeof(c.switch_registers));
     if (!pvr_compute_context_build(&c, contexts)) return 0;
     s->component.resume = s->program_result.cdm_resume_address;
@@ -105,8 +106,9 @@ static int build_context(struct a733_gpu_queue *s)
 int a733_gpu_queue_create(struct a733_gpu_queue *s, const struct gpu_queue_context_config *c)
 {
     if (!s || s->stage != BOUND || s->component.phase != PVR_COMPUTE_QUEUE_BOUND || !c ||
-        !c->lease_count || c->lease_count > GPU_QUEUE_LEASES || c->reserved) return 0;
+        !c->lease_count || c->lease_count > GPU_QUEUE_LEASES || c->reserved || c->priority>GPU_QUEUE_PRIORITY_HIGH) return 0;
     struct pvr_compute_queue *q = &s->component;
+    q->priority=c->priority;
     unsigned count = 0;
     for (unsigned i = 0; i < c->lease_count; ++i) {
         const struct gpu_queue_lease_request *r = &c->lease[i];

@@ -92,7 +92,7 @@ struct pvr_compute_queue {
     struct pvr_mips_object objects[PVR_COMPUTE_QUEUE_OBJECTS];
     struct pvr_cccb client;
     struct gpu_queue_lease_info lease[GPU_QUEUE_LEASES];
-    uint32_t lease_count, coefficients, phase, error, sequence, owed, held;
+    uint32_t lease_count, coefficients, phase, error, sequence, owed, held, priority;
     /* Worker-owned: one terminal breadcrumb before publishing a job record. */
     unsigned crumb_pending;
     uint64_t job_us, deadline, kicked;
@@ -107,7 +107,8 @@ struct pvr_compute_queue {
     struct pvr_compute_queue_client peer;
     atomic_uint application_sequence, recovering;
     unsigned active_client, next_client;
-    uint32_t timeline_serial, timeline_previous, completed_jobs;
+    uint32_t timeline_serial, timeline_previous;
+    atomic_uint completed_jobs;
     unsigned reset_pending;
 };
 

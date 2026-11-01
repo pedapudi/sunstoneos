@@ -8,6 +8,7 @@
 #define PVR_COMPUTE_FAST_DEPTH 4u
 #define PVR_COMPUTE_FAST_NOTIFY 1u
 #define PVR_COMPUTE_FAST_STRIDE 512u
+#define PVR_COMPUTE_FAST_PENDING 7
 struct pvr_compute_queue;
 struct pvr_compute_fast_entry {
     struct gpu_queue_job job;
@@ -18,6 +19,7 @@ struct pvr_compute_fast {
     /* Task-only transport lock. ISR never acquires it. */
     atomic_uint locked, enabled, submitted, completed, irq_error, fault_claimed;
     atomic_uint waiter[GPU_QUEUE_CLIENTS];
+    atomic_uint lock_waiter[GPU_QUEUE_CLIENTS];
     atomic_uint pending[GPU_QUEUE_CLIENTS];
     atomic_uint fault_through[GPU_QUEUE_CLIENTS];
     atomic_uint_fast64_t done_us[PVR_COMPUTE_FAST_DEPTH];
@@ -35,7 +37,8 @@ void pvr_compute_fast_snapshot(struct pvr_compute_queue *, BaseType_t *woken);
 void pvr_compute_fast_ready(struct pvr_compute_queue *);
 void pvr_compute_fast_seal(struct pvr_compute_queue *);
 int pvr_compute_fast_submit(struct pvr_compute_queue *, unsigned, const struct gpu_queue_job *, uint32_t *);
-int pvr_compute_fast_collect(struct pvr_compute_queue *, unsigned, struct gpu_queue_record *);
+int pvr_compute_fast_collect(struct pvr_compute_queue *,unsigned,uint32_t serial,uint32_t sequence,
+    struct gpu_queue_record *);
 int pvr_compute_fast_poll(struct pvr_compute_queue *);
 int pvr_compute_fast_recovered(struct pvr_compute_queue *);
 #endif

@@ -51,6 +51,18 @@ and shared KCCB with the same context lock used by service control. Lock admissi
 is nonblocking; contention returns BUSY. No allocation or service request precedes
 a successful job's kick. A batch publishes a bounded number of jobs in order.
 
+Application tasks run at EL0. A fixed supervisor-call gateway enters EL1t on
+the same task stack, calls the GPU dispatcher and restores EL0 before returning.
+The port accepts entry and exit only at the gateway's immutable instruction
+sites. IRQs and ordinary task preemption remain enabled during the operation.
+The dispatcher verifies the admitted caller and the fixed argument's EL0
+permissions. This uses the OS's existing trusted shared-address-space contract.
+
+Batch submission returns the accepted prefix, including an attempted job whose
+doorbell result is uncertain. Each returned fence remains context-bound.
+Collection can select a specific fence or the oldest record. Context priorities
+normal, low and high map to firmware values 1, 0 and 2, respectively.
+
 The interrupt handler acknowledges the device before reading the uncached
 timeline. It publishes the completed sequence and directly notifies registered
 waiters whose fences have passed. Its bound is two clients; it does no cache
@@ -70,6 +82,9 @@ releasing device ownership. A watchdog deadline schedules failure handling only;
 it does not turn a missing fence into successful completion. Failed isolation
 retains every slot and buffer. The GPU remains powered while accepted work exists;
 idle power policy and voltage/clock transitions remain with the lifecycle owner.
+The slow watchdog checks CPU fence state once per tick. It never acquires a
+firmware timeline to complete a job. A missing completion interrupt therefore
+faults at the job deadline and follows the existing isolation protocol.
 
 ## Mapping, cache and validation
 

@@ -530,6 +530,7 @@ static int render_polled(const struct pvr_gpu_service *s)
  * phase after the kick take the block. */
 static int submitting(const struct pvr_gpu_service *s)
 {
+    if (s->config.job_irq_ack) return 0;
     const struct pvr_compute_service *c = s->config.compute;
     const struct pvr_render_service *r = s->config.render;
     return (c && (c->phase == PVR_COMPUTE_SERVICE_FORMAT ||
@@ -1177,11 +1178,12 @@ static uint64_t progress(const struct pvr_gpu_service *s)
 }
 /* Return 1 when the step progressed and another may follow at once. OPEN
  * preparation and disposal perform CPU-only work and never wait on the GPU. */
-static int step(struct pvr_gpu_service *s)
+static int step_locked(struct pvr_gpu_service *s)
 {
     enum pvr_gpu_service_phase phase = s->phase;
     uint64_t before = progress(s);
-    advance(s);
+    if (s->config.job_irq_ack) advance_locked(s);
+    else advance(s);
     if (s->phase == PVR_GPU_SERVICE_FAILED) return 0;
     /* The next slot wake, interrupt or backup poll advances an idle queue. */
     if (phase == PVR_GPU_SERVICE_READY && s->phase == PVR_GPU_SERVICE_READY &&
@@ -1190,6 +1192,14 @@ static int step(struct pvr_gpu_service *s)
     if (phase == PVR_GPU_SERVICE_BUILDING || phase == PVR_GPU_SERVICE_PUBLISHING_GRAPHICS ||
         phase == PVR_GPU_SERVICE_PUBLISHING || phase == PVR_GPU_SERVICE_DISPOSING) return 1;
     return progress(s) != before;
+}
+static int step(struct pvr_gpu_service *s)
+{
+    struct pvr_compute_queue *q=s->config.compute_queue;
+    if (q && s->config.job_irq_ack && !pvr_compute_fast_lock(q)) return 0;
+    int more=step_locked(s);
+    if (q && s->config.job_irq_ack) pvr_compute_fast_unlock(q);
+    return more;
 }
 static TickType_t ticks(uint64_t us)
 {

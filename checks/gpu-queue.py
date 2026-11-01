@@ -47,7 +47,14 @@ CASES = {1: 'grid replay, exact sums', 2: 'grid replay, pattern sums', 3: 'grid 
          51: 'firmware timeline serial exhaustion refuses without a kick',
          52: 'qualification timeout refuses recovery without a queued peer',
          53: 'direct interrupt fences, coalescing and notification races',
-         54: 'EL0 caller submission and ISR collection without the service worker'}
+         54: 'EL0 caller submission and ISR collection without the service worker',
+         55: 'four-job batches, output ownership and out-of-order fences',
+         56: 'lost completion IRQ recovers without polling and preserves a contended fault wake',
+         57: 'caller timeout retains payload and conflicting output ownership',
+         58: 'permanent timeline fault wakes the caller and retains buffers',
+         59: 'two clients pipeline independent sequences and direct notification waiters',
+         60: 'forged fence under lock contention refuses after an IRQ-free unlock',
+         61: 'uncertain batch doorbell returns every retained fence in its accepted prefix'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'gpu_queue_submit', 'gpu_queue_wait', 'kick',
@@ -282,6 +289,7 @@ list(REMOVE_DUPLICATES sources)
 set_property(TARGET gpu-service-model PROPERTY SOURCES "${{sources}}")
 target_include_directories(gpu-service-model PRIVATE "{fixtures}" "{ROOT}/checks")
 target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1 {"SUNSTONE_A733_OS_PERF=1" if performance else "SUNSTONE_A733_OS_CPU_RETURN=1" if returning else "SUNSTONE_A733_OS_GPU_RECOVERY_TEST=1" if recovery else ""})
+target_compile_definitions(gpu-service-model PRIVATE INCLUDE_vTaskPrioritySet=1)
 get_target_property(options gpu-service-model LINK_OPTIONS)
 list(FILTER options EXCLUDE REGEX "-Wl,-T,")
 list(APPEND options "-Wl,-T,{linker}" -Wl,--defsym=__device_pool_size=2097152
@@ -289,6 +297,7 @@ list(APPEND options "-Wl,-T,{linker}" -Wl,--defsym=__device_pool_size=2097152
   -Wl,--wrap=pvr_cccb_poll
   -Wl,--wrap=pvr_gpu_service_now -Wl,--wrap=pvr_compute_queue_poll -Wl,--wrap=a733_gpu_backend_stopped
   -Wl,--wrap=xQueueGenericSend)
+list(APPEND options -Wl,--wrap=pvr_compute_fast_collect -Wl,--wrap=pvr_compute_fast_unlock)
 set_property(TARGET gpu-service-model PROPERTY LINK_OPTIONS "${{options}}")
 set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
 ''')
@@ -356,7 +365,7 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
             path = out / ('case-%d.elf' % case)
             path.write_bytes(image)
             if case in args.cases:
-                log = run('case-%d' % case, qemu + ['-kernel', str(path)], timeout=1800)
+                log = run('case-%d' % case, qemu + ['-kernel', str(path)], timeout=15 if case>=53 else 1800)
                 marker = 'PASS GPU queue case 0x%016x;' % case
                 assert marker in log, log[-3000:]
                 results['cases'][case] = {'name': CASES[case], 'metrics': dict(

@@ -4,8 +4,8 @@
  * service (docs/designs/gpu-compute-queue.md).
  *
  * An application creates one context with one program and up to four
- * leases of its own manifest regions, submits one job at a time and waits
- * for that job's completion record. A job binds leased ranges in place, gives
+ * leases of its own manifest regions. The native path retains up to four
+ * jobs across both clients and returns one completion record per job. A job binds leased ranges in place, gives
  * a grid of workgroups and a small argument block, and carries the
  * application's sequence number. The queue copies the job description, never
  * buffer contents. It never computes a job on the CPU; REFUSED and FAULT
@@ -27,7 +27,7 @@ extern "C" {
 
 #define GPU_QUEUE_CONTEXTS 1u
 #define GPU_QUEUE_CLIENTS 2u
-#define GPU_QUEUE_DEPTH 1u
+#define GPU_QUEUE_DEPTH 4u
 #define GPU_QUEUE_PROGRAMS 1u
 #define GPU_QUEUE_LEASES 4u
 #define GPU_QUEUE_BINDINGS 4u
@@ -40,7 +40,8 @@ extern "C" {
 /* Results. A call returns one of these; a completion record carries OK,
  * REFUSED or FAULT.
  * - OK: accepted (submit), completed (record) or done (other calls).
- * - BUSY: the context's one job is still owed a record; nothing changed.
+ * - BUSY: transport lock contention, full retained slots or overlapping
+ *   uncollected output ranges; this job was not submitted.
  * - PARKED: the OS closed the device for thermal throttling or image return;
  *   nothing was queued. The context accepts jobs again after the OS reopens
  *   the device.
@@ -64,8 +65,13 @@ enum gpu_queue_detail {
     GPU_QUEUE_HANG, GPU_QUEUE_RESET, GPU_QUEUE_TIMELINE, GPU_QUEUE_MAINTENANCE,
     GPU_QUEUE_SERVICE
 };
+enum gpu_queue_priority {GPU_QUEUE_PRIORITY_NORMAL, GPU_QUEUE_PRIORITY_LOW, GPU_QUEUE_PRIORITY_HIGH};
 
 struct gpu_queue_context { uint32_t generation, client; };
+struct gpu_queue_fence {
+    struct gpu_queue_context context;
+    uint32_t serial, sequence;
+};
 
 /* A program from apps/gpu-program/compile.py, compile --profile 3, as the
  * descriptor that the compiler step generates. The queue copies the code into
@@ -116,6 +122,7 @@ struct gpu_queue_context_config {
     const struct gpu_queue_program *program;
     uint32_t lease_count, reserved;
     struct gpu_queue_lease_request lease[GPU_QUEUE_LEASES];
+    uint32_t priority;         /* enum gpu_queue_priority; fixed until destruction */
 };
 
 /* One buffer range of a job. The program receives the GPU address
@@ -154,8 +161,8 @@ struct gpu_queue_job {
 };
 GPU_QUEUE_STATIC_ASSERT(sizeof(struct gpu_queue_job) == 160, "job record");
 
-/* kick_to_done_us is the worker's clock from the kick to the observed
- * timeline update. */
+/* kick_to_done_us covers command publication through the interrupt's
+ * acquisition of the completed timeline, in microseconds. */
 struct gpu_queue_record {
     uint32_t sequence;
     uint16_t result, detail;   /* enum gpu_queue_result, enum gpu_queue_detail */
@@ -169,16 +176,29 @@ int gpu_queue_context_create(const struct gpu_queue_context_config *, uint32_t w
                              struct gpu_queue_context *, struct gpu_queue_lease_info *info);
 /* The second task, registered by immutable image admission, joins the owner
  * context and receives its shared leases. It uses the same trusted program
- * and map, with an independent job slot, sequence and completion queue. */
+ * and map, with independent application sequences and completion records. */
 int gpu_queue_context_join(struct gpu_queue_context *, struct gpu_queue_lease_info *info);
-/* Nonblocking. Copies the job into the context's slot and wakes the worker.
- * OK means a record follows. Checks that need no worker state run here; the
- * worker repeats them on its own copy and reports a later refusal as a
- * REFUSED record. */
+/* Nonblocking native submission executes in the calling task through a fixed
+ * EL1 entry, writes the client ring and kicks firmware. OK owes a completion.
+ * Buffer ranges and command storage remain owned until collection. */
 int gpu_queue_submit(struct gpu_queue_context, const struct gpu_queue_job *);
-/* Waits at most wait_ticks for the record; 0 polls once. The wait blocks on
- * the context's record queue, which the worker fills after the completion
- * interrupt. */
+/* Return the context-bound firmware fence. A nonzero returned serial also
+ * identifies retained work after an uncertain kick returns FAULT. */
+int gpu_queue_submit_fence(struct gpu_queue_context,const struct gpu_queue_job *,struct gpu_queue_fence *);
+/* Submit up to DEPTH jobs from one kernel entry, returning a contiguous
+ * accepted prefix and one fence per accepted or uncertain job. A non-OK result leaves that
+ * prefix owned by the GPU. Slots and declared output ranges remain owned until
+ * collected; overlapping output ranges return BUSY. */
+int gpu_queue_submit_batch(struct gpu_queue_context,const struct gpu_queue_job *,uint32_t count,
+    struct gpu_queue_fence *,uint32_t *accepted);
+/* Collect a specific fence, including out of submission order. */
+int gpu_queue_wait_fence(struct gpu_queue_fence,struct gpu_queue_record *,uint32_t wait_ticks);
+/* Collect the oldest owed record. Zero wait_ticks polls once; WAIT_FOREVER
+ * waits without a timer. Explicit finite waits bound the caller's wait.
+ * Native completion uses direct task notifications, then acquires output
+ * cache ranges in the caller. Timeout retains the job and all its buffers.
+ * A permanent service fault preserves owed records and leaves *record intact
+ * until isolation establishes a collectible fault record. */
 int gpu_queue_wait(struct gpu_queue_context, struct gpu_queue_record *, uint32_t wait_ticks);
 /* Owner only: refuse new jobs, drain accepted work and close the device.
  * Pages, leases and per-client sequence numbers stay retained. An uncollected

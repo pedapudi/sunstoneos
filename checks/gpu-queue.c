@@ -71,6 +71,7 @@ static const struct gicv3_spi spi = {0x08000000, 95};
 static int fast_kick(void *,unsigned,unsigned,unsigned char *);
 static void fast_model(void *);
 static void fast_cases(unsigned);
+static void fast_peer(void);
 
 /* GPU and firmware model state. */
 static uint32_t kicked, run, gpu_status, irq_count, hook_wakes, kick_step_count;
@@ -400,6 +401,7 @@ static int sums_equal(unsigned job, uint32_t sequence)
 }
 static void shared_peer(void *unused)
 {
+    if (gpu_queue_case==59) fast_peer();
     (void)unused;
     while (!atomic_load(&peer_release)) vTaskDelay(1);
     struct gpu_queue_context handle;
@@ -720,6 +722,8 @@ static void client(void *unused)
     const unsigned c = gpu_queue_case;
     uint64_t lines0 = cache_lines, translations0 = translations;
     struct gpu_queue_context_config creation={.job_us=(c>=41&&c<=49)||c==52?200000:1000000,.program=&program,.lease_count=4};
+    if (c==55) creation.priority=GPU_QUEUE_PRIORITY_HIGH;
+    if (c==56) creation.job_us=2000;
     for(unsigned i=0;i<4;++i)creation.lease[i].region=i;
     struct gpu_queue_lease_info leases[GPU_QUEUE_LEASES];
     struct gpu_queue_program boundary;
@@ -1065,7 +1069,7 @@ void fixture_unused(void)
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
-    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 54);
+    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 61);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (gpu_queue_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();
