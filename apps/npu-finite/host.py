@@ -18,14 +18,16 @@ INFERENCE='npu-single-inference-return-v1'
 # The NPU runtime client (build.py --runtime): one job of each linked network through npu_job_run.
 RUNTIME='npu-runtime-return-v1'
 SWITCH='npu-model-switch-return-v1'
+SDK='npu-sdk-return-v1'
 # The startup client's receipt magic, monitor detail, inference jobs and interrupt completions.
 STARTUP_CLIENT={STARTUP:(0x4e50555354415231,0x4e505553,0,1),INFERENCE:(0x4e5055494e463031,0x4e505549,1,2),
  RUNTIME:(0x4e50555254523031,0x4e505552,2,3),
- SWITCH:(0x4e50555357433031,0x4e505557,3,4)}
+ SWITCH:(0x4e50555357433031,0x4e505557,3,4),
+ SDK:(0x4e505553444b3031,0x4e505544,2,3)}
 MBUS_CHECKPOINT='npu-entry-mbus-checkpoint-v1'
 IRQ_CHECKPOINT='npu-entry-irq-checkpoint-v1'
 PROVIDER_CHECKPOINT='npu-entry-provider-checkpoint-v1'
-PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT,RESTART,STARTUP,INFERENCE,RUNTIME,SWITCH);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
+PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT,RESTART,STARTUP,INFERENCE,RUNTIME,SWITCH,SDK);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
 HOST_SOURCES=('apps/npu-finite/host.py','apps/npu-finite/stopped-capture.py','tools/a733-returning-host.py','tools/a733-crumbs.py','include/sunstone_crumb.h','apps/npu-convolution/prepare-supervised.py','apps/npu-convolution/observe.py','tools/check-a733-smp.py','tools/check-a733-smp-supervised.py','tools/check-a733-smp-observe.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/usb_guard.py','tools/npu-models.json','platform/a733-smp-supervised/launch.c','platform/a733-smp-observe/launch.S','platform/a733-smp-observe/launch.ld','platform/a733-smp-cached/boot.h')
 def save(path,value):base.save_json(path,value)
 
@@ -104,7 +106,9 @@ def image_profile(data,manifest):
   else:
    require('npu_entry_checkpoint_provider_profile' not in symbols and all(n not in symbols for n in ('a733_npu_application_init','npu_convolution_startup_poll','npu_service_activate','vTaskStartScheduler')),'Checkpoint contains a provider or scheduler constructor.')
  else:require('npu_entry_checkpoint_profile' not in symbols,'Checkpoint image cannot use numerical profile.')
- runtime=manifest['execution_profile'] in (RUNTIME,SWITCH)
+ runtime=manifest['execution_profile'] in (RUNTIME,SWITCH,SDK)
+ if manifest['execution_profile']==SDK:
+  require(all(n in symbols for n in ('ss_npu_run','ss_npu_close','ss_npu_service_step','sdk_service')),'Missing linked SDK owner or public API.')
  if startup:
   engine=('npu_runtime_client','npu_job_run','npu_runtime_stop_poll') if runtime else ('npu_startup_client','npu_convolution_stop_poll')
   require(read('npu_startup_return_profile')==struct.pack('<4Q',startup[0],1,startup[2],startup[3]) and
@@ -126,6 +130,7 @@ def image_profile(data,manifest):
  if startup:geometry['startup_only']=True
  if runtime:geometry.update(runtime=True,references=references)
  if manifest['execution_profile']==SWITCH:geometry['model_switch']=True
+ if manifest['execution_profile']==SDK:geometry['sdk']=True
  if manifest['execution_profile']==INFERENCE:geometry['single_inference']=True
  if restart:geometry['restart']=True
  if thermal:
@@ -150,7 +155,7 @@ def image_profile(data,manifest):
  if capture is not None:geometry['stopped_capture']=capture
  return parts,address,build,layout,geometry
 
-def geometry_profile(g):return SWITCH if g.get('model_switch') else RUNTIME if g.get('runtime') else INFERENCE if g.get('single_inference') else STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
+def geometry_profile(g):return SDK if g.get('sdk') else SWITCH if g.get('model_switch') else RUNTIME if g.get('runtime') else INFERENCE if g.get('single_inference') else STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
 
 def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,execution_profile=PROFILE):
  """Check the actual native wire record without external process evidence."""

@@ -683,7 +683,7 @@ def npu_cases(out):
                                                {'startup_only': True}),
         geometry_profile=lambda geometry: 'npu-startup-return-v1',
         STARTUP='npu-startup-return-v1', INFERENCE='npu-single-inference-return-v1',
-        RUNTIME='npu-runtime-return-v1', RESTART='npu-finite-restart-return-v1', SWITCH='npu-model-switch-return-v1')
+        RUNTIME='npu-runtime-return-v1', RESTART='npu-finite-restart-return-v1', SWITCH='npu-model-switch-return-v1', SDK='npu-sdk-return-v1')
     image = out / 'npu-image.elf'
     image.write_bytes(b'modeled immutable NPU image')
     manifest = {'execution_profile': finite.STARTUP}

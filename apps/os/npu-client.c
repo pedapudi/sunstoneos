@@ -3,6 +3,8 @@
  * The client exercises generic model sessions and accelerator dispatch. */
 #include "os.h"
 #include "npu.h"
+#include "application.h"
+#include "sunstone_npu_service.h"
 #include "../board/application.h"
 #include <string.h>
 static struct os_npu_report published;
@@ -32,6 +34,42 @@ int os_npu_complete(void)
     return atomic_load_explicit(&published.finished,memory_order_acquire)&&
         published.stopped&&!published.retained&&os_npu_stopped();
 }
+/* The existing privileged slot owner services the application's mailbox. */
+static int sdk_run(unsigned model,const void *input,size_t input_bytes,
+                   void *output,size_t output_bytes,uint64_t timeout)
+{
+    if(model>=OS_NPU_MODELS)return 0;
+    int r=os_npu_load(model);if(r!=1)return r;
+    size_t bytes=0;
+    struct npu_runtime_tensor t;
+    for(unsigned i=0;os_npu_tensor(NBG_INPUT,i,&t);++i) {
+        if(t.bytes>SIZE_MAX-bytes)return 0;bytes+=t.bytes;
+    }
+    if(bytes!=input_bytes)return 0;
+    bytes=0;
+    for(unsigned i=0;os_npu_tensor(NBG_OUTPUT,i,&t);++i) {
+        if(t.bytes>SIZE_MAX-bytes)return 0;bytes+=t.bytes;
+    }
+    if(bytes!=output_bytes)return 0;
+    size_t offset=0;
+    for(unsigned i=0;os_npu_tensor(NBG_INPUT,i,&t);++i) {
+        memcpy(t.data,(const uint8_t *)input+offset,t.bytes);offset+=t.bytes;
+    }
+    r=os_npu_submit(timeout);if(r!=1)return r;
+    offset=0;
+    for(unsigned i=0;os_npu_tensor(NBG_OUTPUT,i,&t);++i) {
+        memcpy((uint8_t *)output+offset,t.data,t.bytes);offset+=t.bytes;
+    }
+    return 1;
+}
+static unsigned sdk_closed;
+static int sdk_close(void)
+{int r=os_npu_close();if(r==1)sdk_closed=1;return r;}
+int os_npu_sdk_bind(void)
+{
+    const struct ss_npu_backend backend={sdk_run,sdk_close};
+    return ss_npu_service_bind(&backend);
+}
 void os_npu_client_task(void *unused)
 {
     (void)unused;struct os_npu_report report={0},*r=&report;
@@ -44,6 +82,19 @@ void os_npu_client_task(void *unused)
         if(opened<0||!board_live(NULL))goto retained;
         if(os_npu_stopped()){r->refused=1;goto done;}
         (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));
+    }
+    if(ss_application.manifest) {
+        /* Application completion must follow ss_npu_close. Thermal stop also
+         * closes this slot through its sole owner. */
+        while(!os_npu_stopping()) {
+            if(os_npu_progress()!=1||ss_npu_service_step()<0)goto retained;
+            if(sdk_closed)goto wait_stop;
+            if(os_npu_stopped())goto done;
+            (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(1));
+        }
+        ss_npu_service_fail();
+        if(!os_npu_stopped())goto close;
+        goto done;
     }
     if(os_npu_stopping()){r->refused=1;goto close;}
     /* A thermal stop after the check above makes LOAD refuse. */
@@ -79,11 +130,13 @@ void os_npu_client_task(void *unused)
     }
 close:
     if(os_npu_close()!=1)goto retained;
+wait_stop:
     while(!os_npu_stopped()) {
         if(os_npu_progress()!=1)goto retained;
         (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));
     }
 done:
+    if(ss_application.manifest&&!sdk_closed)ss_npu_service_fail();
     /* One publication: the copy completes before finished becomes visible. */
     r->stopped=os_npu_stopped();
     memcpy((uint8_t *)&published+16,(const uint8_t *)r+16,OS_NPU_REPORT_BYTES-16);
@@ -91,5 +144,5 @@ done:
     atomic_store_explicit(&published.finished,1,memory_order_release);vTaskSuspend(NULL);return;
 retained:
     /* Every NPU resource stays held; board_fail ends the lifetime. */
-    r->retained=1;board_fail(NULL);goto done;
+    ss_npu_service_fail();r->retained=1;board_fail(NULL);goto done;
 }

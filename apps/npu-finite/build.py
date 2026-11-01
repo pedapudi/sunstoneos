@@ -28,12 +28,16 @@ p.add_argument('--rate-492',action='store_true',help='the optional 492 MHz mode;
 p.add_argument('--shufflenet',action='store_true',help='the published ShuffleNetV2 graph in the large NN-pool profile (needs --interrupt)')
 p.add_argument('--runtime',action='store_true',help='the NPU runtime client: one job of each runtime-models.json network through npu_job_run')
 p.add_argument('--model-switch',action='store_true',help='three runtime jobs: first model, second model, then first model again')
+p.add_argument('--sdk',action='store_true',help='two models through the public application NPU mailbox API')
 p.add_argument('--artifacts',type=Path,default=Path.home()/'.cache/sunstoneos/build/npu-board/session-artifacts.json',
  help='--runtime: catalogue artifact paths by model name; the baseline fixture supplies its own model')
 p.add_argument('--sdk-reference',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-complete-graph-proposal-20261019/sdk-reference',
  help='directory with network_binary.nb, published-input.dat and output0_2_1.dat')
 a=p.parse_args()
 if a.model_switch:a.runtime=True
+if a.sdk:
+ if a.model_switch:p.error('SDK and model-switch are separate profiles')
+ a.runtime=True
 if a.runtime:
  if a.single_inference or a.startup_only or a.restart or a.shufflenet or a.thermal or a.rate_852 or a.rate_492 or a.entry_checkpoint or a.entry_irq_checkpoint or a.entry_provider_checkpoint:
   p.error('The runtime client is the baseline interrupt profile only')
@@ -91,6 +95,7 @@ def compile_like(suffix,source,name):
  if a.single_inference:c += ['-DSUNSTONE_NPU_SINGLE_INFERENCE=1']
  if a.runtime:c += ['-DSUNSTONE_NPU_RUNTIME_RETURN=1']
  if a.model_switch:c += ['-DSUNSTONE_NPU_MODEL_SWITCH=1']
+ if a.sdk:c += ['-DSUNSTONE_NPU_SDK_RETURN=1']
  if a.entry_provider_checkpoint:c += ['-DSUNSTONE_NPU_ENTRY_PROVIDER_CHECKPOINT=1','-DSUNSTONE_NPU_INTERRUPT=1']
  if a.entry_irq_checkpoint:
   c += ['-DSUNSTONE_NPU_ENTRY_IRQ_CHECKPOINT=1']
@@ -182,17 +187,18 @@ if a.runtime:
  (generated/'networks.c').write_text(text)
  (generated/'npu_admitted_models.c').write_text(catalogue_tool.table(listed))
  runtime_objects=[compile_like('/apps/npu-convolution/native.c',root/'apps/npu-convolution/native-runtime.c','native-runtime'),
-  compile_like('/apps/npu-convolution/main.c',root/'apps/npu-finite/runtime-client.c','runtime-client'),
+  compile_like('/apps/npu-convolution/main.c',root/('apps/npu-sdk/finite-client.c' if a.sdk else 'apps/npu-finite/runtime-client.c'),'runtime-client'),
   compile_like('/platform/a733/npu_irq.c',root/'apps/npu-finite/runtime-irq.c','runtime-irq'),
   compile_like('/apps/npu-convolution/native.c',generated/'networks.c','networks')]
  for n in ('a733_npu_runtime','a733_npu_runtime_interim','npu_job'):
   runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/'drivers/npu'/(n+'.c'),n))
+ if a.sdk:runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/'runtime/npu_app.c','npu-app'))
  runtime_objects.append(compile_like('/drivers/npu/npu_service.c',generated/'npu_admitted_models.c','npu_admitted_models'))
  runtime_identity={'runtime_sources':{str(x.relative_to(root)):sha(x) for x in sorted([root/'apps/npu-convolution/native-runtime.c',root/'apps/npu-convolution/native-runtime.h',
   root/'apps/npu-finite/runtime-client.c',root/'apps/npu-finite/runtime-irq.c',root/'apps/npu-finite/networks.h',root/'apps/npu-finite/runtime-models.json',
   root/'apps/npu-finite/startup.h',root/'apps/npu-finite/crumb.h',root/'platform/a733/npu_irq.c',root/'include/a733_npu_irq.h',
   root/'drivers/npu/a733_npu_runtime.c',root/'drivers/npu/a733_npu_runtime_interim.c',root/'drivers/npu/npu_job.c',root/'include/npu_job.h',root/'include/npu_crumb.h',
-  root/'include/npu_admitted_models.h',root/'include/npu_runtime.h',root/'tools/npu-session-catalogue.py',root/'tools/npu-session-models.json',runtime_list]+([job_plan] if a.model_switch else []))},
+  root/'include/npu_admitted_models.h',root/'include/npu_runtime.h',root/'tools/npu-session-catalogue.py',root/'tools/npu-session-models.json',runtime_list]+([job_plan] if a.model_switch else [])+([root/'apps/npu-sdk/finite-client.c',root/'runtime/npu_app.c',root/'include/sunstone_app.h',root/'include/sunstone_npu_service.h'] if a.sdk else []))},
   'networks':[{'name':n['name'],'model_sha256':hashlib.sha256(n['model']).hexdigest(),'input_sha256':hashlib.sha256(n['input']).hexdigest(),
    'reference_sha256':hashlib.sha256(n['reference']).hexdigest()} for n in networks],
   'generated':{'networks.c':sha(generated/'networks.c'),'npu_admitted_models.c':sha(generated/'npu_admitted_models.c')}}
@@ -213,6 +219,7 @@ if a.startup_only:
 if a.single_inference:identity['profile']='npu-single-inference-return-v1'
 if a.runtime:identity.update(profile='npu-runtime-return-v1',**runtime_identity)
 if a.model_switch:identity.update(profile='npu-model-switch-return-v1')
+if a.sdk:identity.update(profile='npu-sdk-return-v1')
 if a.thermal:
  identity['profile']='npu-finite-thermal-return-v1'
  identity['thermal_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/thermal.c',root/'apps/npu-finite/thermal.h')}
