@@ -47,6 +47,7 @@ with nullcontext(fixture) as temporary:
  t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));thermal=bool(g.get('thermal'));restart=bool(g.get('restart'));startup=bool(g.get('startup_only'));infer=bool(g.get('single_inference'));runtime=bool(g.get('runtime'));execution=h.geometry_profile(g)
  completions=4 if restart else 3 if runtime else 2 if infer else 1 if startup else 3
  client_profile=h.STARTUP_CLIENT.get(execution)
+ if client_profile:completions=1+client_profile[2]
  IRQ_RECEIPTS=f'NPU_IRQ_COMPLETIONS=0x{completions:016x}\nNPU_IRQ_STOPPED=0x0000000000000001\n'
  if restart:
   assert a.interrupt
@@ -172,6 +173,9 @@ with nullcontext(fixture) as temporary:
   rejected('changed-'+name,lambda:h.validate_bundle(bundle));path.write_bytes(saved)
  def runtime_log(variant):
   references=[bytes.fromhex(x) for x in g['references']];outputs=[bytearray(x) for x in references];jobs=len(references)
+  compact=g.get('model_switch',False);label='NPU_OUTPUT_HEX' if compact else 'NPU_OUTPUT'
+  def encoded(o):
+   return ''.join(bytes(o[i:i+64]).hex()+'\n' for i in range(0,len(o),64)) if compact else ''.join(f'0x{x:016x}\n' for x in o)
   if variant in ('mismatch','false-success'):outputs[1][0]^=1
   if variant=='unwritten-second':outputs[1]=bytearray(len(outputs[1]))
   if variant=='unwritten-tail':half=len(outputs[0])//2;outputs[0][half:]=bytes(len(outputs[0])-half)
@@ -179,16 +183,16 @@ with nullcontext(fixture) as temporary:
   if variant=='runtime-match-claim':claim='MISMATCH'
   text=('NPU_STAGE=WAIT_STARTUP\n'+''.join(f'NPU_STAGE=JOB network=0x{n:016x}\n' for n in range(jobs))+
    'NPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n'+IRQ_RECEIPTS+'NPU_STAGE=QUIESCENT\n'+
-   ''.join(f'NPU_OUTPUT network=0x{n:016x}\n'+''.join(f'0x{x:016x}\n' for x in o) for n,o in enumerate(outputs))+
+   ''.join(f'{label} network=0x{n:016x}\n'+encoded(o) for n,o in enumerate(outputs))+
    f'NPU_INFERENCE={claim}; inference_jobs={jobs}\n')
   if variant=='runtime-one-job-log':text=text.replace('NPU_STAGE=JOB network=0x0000000000000001\n','')
   if variant=='runtime-two-IRQs':text=text.replace(f'NPU_IRQ_COMPLETIONS=0x{completions:016x}','NPU_IRQ_COMPLETIONS=0x0000000000000002')
   if variant=='runtime-reordered-outputs':
-   first,second=text.split('NPU_OUTPUT network=0x0000000000000001\n');head,first=first.split('NPU_OUTPUT network=0x0000000000000000\n')
+   first,second=text.split(label+' network=0x0000000000000001\n');head,first=first.split(label+' network=0x0000000000000000\n')
    values,tail=second.split('NPU_INFERENCE=')
-   text=head+'NPU_OUTPUT network=0x0000000000000001\n'+values+'NPU_OUTPUT network=0x0000000000000000\n'+first+'NPU_INFERENCE='+tail
+   text=head+label+' network=0x0000000000000001\n'+values+label+' network=0x0000000000000000\n'+first+'NPU_INFERENCE='+tail
   if variant=='runtime-short-output':
-   lines=text.split('\n');at=lines.index('NPU_OUTPUT network=0x0000000000000001');del lines[at+1];text='\n'.join(lines)
+   lines=text.split('\n');at=lines.index(label+' network=0x0000000000000001');del lines[at+1];text='\n'.join(lines)
   if variant=='runtime-single-inference-log':text=text.replace(f'inference_jobs={jobs}','inference_jobs=1')
   return text
  def reports(variant):
@@ -344,7 +348,8 @@ with nullcontext(fixture) as temporary:
    assert record['complete'] and record['dram_restored'] and record['ownership_release_permitted'] and not record['sram_restored']
    assert result['functional_success']==(variant=='nominal' and not checkpoint and (infer or runtime or not startup)) and result['controlled_negative']==(variant in ('mismatch','unwritten-second','unwritten-tail','thermal-one-mismatch','capture-output-differs'))
    if runtime:
-    assert result['runtime'] and result['jobs']==2 and result['network_matches']==[variant!='unwritten-tail',variant not in ('mismatch','unwritten-second')],(variant,result)
+    expected_matches=[variant!='unwritten-tail',variant not in ('mismatch','unwritten-second')]+[True]*(client_profile[2]-2)
+    assert result['runtime'] and result['jobs']==client_profile[2] and result['network_matches']==expected_matches,(variant,result)
    elif not checkpoint and (infer or not startup):
     size=len(bytes.fromhex(g['reference']));pattern=result['output_pattern']
     assert not pattern.get('first_unwritten')

@@ -58,7 +58,18 @@ int npu_startup_return_ready(void)
         a733_npu_application_result.job==NPU_STARTUP_JOBS && !a733_npu_application_result.previous_job;
 }
 static void hex_lines(const unsigned char *bytes,size_t count)
-{for(size_t i=0;i<count;++i){platform_hex(bytes[i]);platform_puts("\n");}}
+{
+#ifdef SUNSTONE_NPU_MODEL_SWITCH
+    static const char hex[]="0123456789abcdef";
+    for(size_t at=0;at<count;) {
+        char line[130];size_t n=count-at<64?count-at:64;
+        for(size_t i=0;i<n;++i){line[2*i]=hex[bytes[at+i]>>4];line[2*i+1]=hex[bytes[at+i]&15];}
+        line[2*n]='\n';line[2*n+1]=0;platform_puts(line);at+=n;
+    }
+#else
+    for(size_t i=0;i<count;++i){platform_hex(bytes[i]);platform_puts("\n");}
+#endif
+}
 static void npu_runtime_client(void *unused)
 {
     (void)unused;
@@ -103,10 +114,17 @@ static void npu_runtime_client(void *unused)
     platform_puts("NPU_IRQ_COMPLETIONS=");platform_hex(npu_service_irq_completions(&runtime->service));
     platform_puts("\nNPU_IRQ_STOPPED=0x0000000000000001\nNPU_STAGE=QUIESCENT\n");
     for(unsigned n=0;n<NPU_FINITE_NETWORKS;++n) {
-        platform_puts("NPU_OUTPUT network=");platform_hex(n);platform_puts("\n");
+        platform_puts(
+#ifdef SUNSTONE_NPU_MODEL_SWITCH
+            "NPU_OUTPUT_HEX network="
+#else
+            "NPU_OUTPUT network="
+#endif
+        );platform_hex(n);platform_puts("\n");
         hex_lines(outputs[n],npu_finite_networks[n].reference_bytes);
     }
-    platform_puts(status?"NPU_INFERENCE=MISMATCH; inference_jobs=2\n":"NPU_INFERENCE=MATCH; inference_jobs=2\n");
+    platform_puts(status?"NPU_INFERENCE=MISMATCH; inference_jobs=" NPU_STARTUP_JOB_TEXT "\n":
+                        "NPU_INFERENCE=MATCH; inference_jobs=" NPU_STARTUP_JOB_TEXT "\n");
     if(!live() || !npu_startup_return_ready())retained(19);
     sunstone_crumb(NPU_CRUMB_EXIT,status);
     taskENTER_CRITICAL();platform_exit(status);

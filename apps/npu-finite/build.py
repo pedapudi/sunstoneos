@@ -27,11 +27,13 @@ p.add_argument('--rate-852',action='store_true',help='PLL_NPU at 852 MHz, admitt
 p.add_argument('--rate-492',action='store_true',help='the optional 492 MHz mode; the default is the vendor operating point for the speed bin')
 p.add_argument('--shufflenet',action='store_true',help='the published ShuffleNetV2 graph in the large NN-pool profile (needs --interrupt)')
 p.add_argument('--runtime',action='store_true',help='the NPU runtime client: one job of each runtime-models.json network through npu_job_run')
+p.add_argument('--model-switch',action='store_true',help='three runtime jobs: first model, second model, then first model again')
 p.add_argument('--artifacts',type=Path,default=Path.home()/'.cache/sunstoneos/build/npu-board/session-artifacts.json',
  help='--runtime: catalogue artifact paths by model name; the baseline fixture supplies its own model')
 p.add_argument('--sdk-reference',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-complete-graph-proposal-20261019/sdk-reference',
  help='directory with network_binary.nb, published-input.dat and output0_2_1.dat')
 a=p.parse_args()
+if a.model_switch:a.runtime=True
 if a.runtime:
  if a.single_inference or a.startup_only or a.restart or a.shufflenet or a.thermal or a.rate_852 or a.rate_492 or a.entry_checkpoint or a.entry_irq_checkpoint or a.entry_provider_checkpoint:
   p.error('The runtime client is the baseline interrupt profile only')
@@ -88,6 +90,7 @@ def compile_like(suffix,source,name):
  if a.startup_only:c += ['-DSUNSTONE_NPU_STARTUP_ONLY=1']
  if a.single_inference:c += ['-DSUNSTONE_NPU_SINGLE_INFERENCE=1']
  if a.runtime:c += ['-DSUNSTONE_NPU_RUNTIME_RETURN=1']
+ if a.model_switch:c += ['-DSUNSTONE_NPU_MODEL_SWITCH=1']
  if a.entry_provider_checkpoint:c += ['-DSUNSTONE_NPU_ENTRY_PROVIDER_CHECKPOINT=1','-DSUNSTONE_NPU_INTERRUPT=1']
  if a.entry_irq_checkpoint:
   c += ['-DSUNSTONE_NPU_ENTRY_IRQ_CHECKPOINT=1']
@@ -141,6 +144,7 @@ if a.runtime:
  # entry; the baseline fixture (A733_NPU_MODEL) supplies the model it names.
  catalogue_tool=module_from(root/'tools/npu-session-catalogue.py')
  runtime_list=root/'apps/npu-finite/runtime-models.json'
+ job_plan=root/'apps/npu-finite/switch-jobs.json'
  listed=catalogue_tool.application_models([runtime_list])
  artifacts=json.loads(a.artifacts.read_text())
  fixture={k:next(Path(v.split('=',1)[1]) for v in config if v.startswith(f'-DA733_NPU_{k}=')) for k in ('MODEL','INPUT','REFERENCE')}
@@ -157,6 +161,11 @@ if a.runtime:
   networks.append({'name':m['name'],'fixture':paths['model']==fixture['MODEL'],'model':model,'input':b''.join(x.read_bytes() for x in paths['inputs']),
    'reference':b''.join(x.read_bytes() for x in paths['references']),'paths':{k:[str(x) for x in v] if isinstance(v,list) else str(v) for k,v in paths.items()}})
  assert len(networks)==2 and sha(fixture['MODEL'])==listed[0]['model']['sha256'],'network 0 is the baseline fixture; the client runs two networks'
+ if a.model_switch:
+  order=json.loads(job_plan.read_text())['job_order']
+  assert order==[0,1,0] and networks[0]['model']!=networks[1]['model']
+  networks=[networks[i] for i in order]
+  assert 512+sum(2*len(n['reference'])+(len(n['reference'])+63)//64 for n in networks)<=16127,'compact output exceeds report capacity'
  assert all(len(n['reference'])<=4096 for n in networks)
  generated=e/'generated';generated.mkdir(exist_ok=True)
  def array(name,data):return f'static const unsigned char {name}[{len(data)}] __attribute__((aligned(64)))={{'+','.join(map(str,data))+'};\n'
@@ -165,6 +174,7 @@ if a.runtime:
  # and input (artifacts.c), which the host's image admission names.
  text+='#include "a733_npu_application.h"\n#define model_0 a733_npu_application_model\n#define input_0 a733_npu_application_input\n'
  for i,n in enumerate(networks):
+  if n['fixture'] and i:text+=f'#define model_{i} a733_npu_application_model\n#define input_{i} a733_npu_application_input\n'
   text+=f'/* {n["name"]} */\n'+('' if n['fixture'] else array(f'model_{i}',n['model'])+array(f'input_{i}',n['input']))
   text+=f'const unsigned char npu_finite_reference_{i}[{len(n["reference"])}] __attribute__((used,retain))={{'+','.join(map(str,n['reference']))+'};\n'
  text+='const struct npu_finite_network npu_finite_networks[NPU_FINITE_NETWORKS]={\n'+''.join(
@@ -182,7 +192,7 @@ if a.runtime:
   root/'apps/npu-finite/runtime-client.c',root/'apps/npu-finite/runtime-irq.c',root/'apps/npu-finite/networks.h',root/'apps/npu-finite/runtime-models.json',
   root/'apps/npu-finite/startup.h',root/'apps/npu-finite/crumb.h',root/'platform/a733/npu_irq.c',root/'include/a733_npu_irq.h',
   root/'drivers/npu/a733_npu_runtime.c',root/'drivers/npu/a733_npu_runtime_interim.c',root/'drivers/npu/npu_job.c',root/'include/npu_job.h',root/'include/npu_crumb.h',
-  root/'include/npu_admitted_models.h',root/'include/npu_runtime.h',root/'tools/npu-session-catalogue.py',root/'tools/npu-session-models.json'])},
+  root/'include/npu_admitted_models.h',root/'include/npu_runtime.h',root/'tools/npu-session-catalogue.py',root/'tools/npu-session-models.json',runtime_list]+([job_plan] if a.model_switch else []))},
   'networks':[{'name':n['name'],'model_sha256':hashlib.sha256(n['model']).hexdigest(),'input_sha256':hashlib.sha256(n['input']).hexdigest(),
    'reference_sha256':hashlib.sha256(n['reference']).hexdigest()} for n in networks],
   'generated':{'networks.c':sha(generated/'networks.c'),'npu_admitted_models.c':sha(generated/'npu_admitted_models.c')}}
@@ -202,6 +212,7 @@ if a.startup_only:
  identity['startup_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/startup.c',root/'apps/npu-finite/startup.h',root/'apps/npu-finite/crumb.h')}
 if a.single_inference:identity['profile']='npu-single-inference-return-v1'
 if a.runtime:identity.update(profile='npu-runtime-return-v1',**runtime_identity)
+if a.model_switch:identity.update(profile='npu-model-switch-return-v1')
 if a.thermal:
  identity['profile']='npu-finite-thermal-return-v1'
  identity['thermal_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/thermal.c',root/'apps/npu-finite/thermal.h')}
