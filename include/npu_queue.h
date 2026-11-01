@@ -7,7 +7,7 @@
  * network partition policy enter this interface. The platform opens the
  * controller and validates/maps commands and buffers before queue_init.
  *
- * All calls, including irq, are serialized by the platform's device lock.
+ * Submit and release serialize with irq through the platform's device lock.
  * Submission runs in the caller; irq runs in INTID97 and completes at most
  * one record. Callbacks are bounded, allocation-free and never block. */
 struct npu_queue;
@@ -52,6 +52,9 @@ struct npu_queue {
  * may be reused only after release, command records after queue retirement.
  * There is no driver-imposed job count. Caller storage bounds admission. */
 int npu_queue_init(struct npu_queue *, const struct npu_queue_ops *, void *);
+/* Slow registration precedes the first submit, with IRQs enabled. An IRQ
+ * during validation can only retain the empty queue; success rechecks health
+ * before publishing a command. Only the owning task registers commands. */
 int npu_queue_register(struct npu_queue *, struct npu_queue_command *,
                        const struct a733_npu_command *);
 /* after is either {0,0} or an already-issued fence from this queue. FIFO

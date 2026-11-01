@@ -20,8 +20,8 @@ int npu_queue_init(struct npu_queue *q, const struct npu_queue_ops *ops, void *c
 int npu_queue_register(struct npu_queue *q, struct npu_queue_command *c,
                        const struct a733_npu_command *hardware)
 {
-    if (!healthy(q) || !c || c->owner || !hardware || q->head ||
-        !q->ops.validate(q->context, hardware)) return 0;
+    if (!healthy(q) || !c || c->owner || !hardware || q->submitted ||
+        !q->ops.validate(q->context, hardware) || !healthy(q)) return 0;
     c->hardware = *hardware; c->owner = q;
     return 1;
 }
