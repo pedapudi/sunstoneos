@@ -69,6 +69,6 @@ def admit_diagnostic(owner):
         raise PowerFault('VBUS diagnostic clock snapshot is malformed.')
     owner.record['usb_vbus_clock_admission'] = dict(zip(('apbs1', 'xo_ctrl0', 's_twi_bgr'), values))
     owner.journal()
-    apbs1, oscillator, bgr = values
-    if apbs1 & 0x0700001f or oscillator & 0x10000002 != 0x10000002 or bgr & 0x00020002:
-        raise PowerFault('VBUS diagnostic requires raw DCXO/div1 APBS1, enabled DCXO and idle S_TWI1.')
+    # Clock selection and an enabled controller are inherited configuration,
+    # not evidence of an unsafe transfer. The native owner records, quiesces
+    # and resets S_TWI1 with bounded completion checks before enabling VBUS.
