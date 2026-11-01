@@ -27,28 +27,35 @@ benchmark are integrated and host-tested. They have no physical gating result.
 The qualified resident and dependent-buffer paths remain the scope described
 below; their board evidence does not qualify the new idle policy.
 
-1. **Gating image: code review, then the board comparison.** `npu_idle.c` is
-   linked into the NPU queue OS build and every finite queue build. The
-   native owner cases (`checks/npu-queue-handoff.py`) cover start refusals,
-   gating and resume on admission, the control policy, stale alarms with an
-   active or recently completed job, a non-quiet interrupt state, partial
-   failure between suspend writes, suspended close with and without a resume
-   failure, cancellation by STOP, an interrupt while suspended and a published
-   EL0 successor, with four relink-based regression mutations. The idle
-   benchmark images (`build.py --latency queue --idle off|gate`), their report
-   decoder and the limit comparison (`apps/npu-finite/idle-compare.py`) are
-   checked by `checks/npu-idle-report.py` with synthetic reports; the producer
-   itself runs only on the board. Three independent reviewers must approve the
-   code (simplicity, performance and correctness) before the always-on control
-   and then the gating image run on port 3-3. Require throughput at least 98% of
-   control, p99 within 105%, maximum within 110%, CPU time within 105% (charging
-   the owner task), resume within 100 µs and no gating in 9 ms gaps. Cold-job
-   latency is reported separately. The PMIC provider exposes no DCDC2 current or
-   power readback, so there is no energy evidence unless an external meter is
-   added.
+1. **Gating image: board comparison.** The three independent code reviews
+   approved with required changes, which are made. The A733 gating protocol is a
+   part descriptor (`include/a733_npu_idle.h`) that the state machine reads. The
+   owner treats a busy interrupt controller as "not now" and rearms, charges no
+   wake to completions, and measures the quiet state again after a resume.
+   `npu_runtime_queue_submit()` admits and submits in one lock span. The native
+   owner cases (`checks/npu-queue-handoff.py`) cover start refusals, gating and
+   resume on admission, the control policy, stale alarms, a busy and an invalid
+   interrupt controller, partial failure between suspend writes, suspended close
+   with and without a resume failure, cancellation by STOP, an interrupt while
+   suspended and after resume, admit-and-submit in one lock span and over-budget
+   resumes, with five relink-based regression mutations. Three benchmark images
+   (`build.py --latency queue --idle none|off|gate`: baseline without an owner,
+   control, gating) each run five windows of 8,000 jobs and 100 cold jobs after
+   each of 9, 11 and 100 ms gaps. Their report decoder and the three-way limit
+   comparison (`apps/npu-finite/idle-compare.py`) are checked by
+   `checks/npu-idle-report.py` with synthetic reports; the producer itself runs
+   only on the board. Run the baseline, the control and then the gating image on
+   port 3-3 after the boards are replugged. Require, on medians of the five
+   windows, that the control stays within 98% throughput, 105% p99, 110% maximum
+   and 105% charged CPU time of the baseline, and the gating image within the
+   same limits of the control, with every resume within 100 µs and no gating in 9
+   ms gaps. Cold-job latency is reported separately. The PMIC provider exposes no
+   DCDC2 current or power readback, so there is no energy evidence unless an
+   external meter is added.
 2. **Qualify EL0 and prepared joined streams.** Review and finish the saved
    generic sequence-registration API and returning OS diagnostic, and the public
-   ring predicate that tells the power owner a published successor exists. Build
+   ring predicate that tells the power owner a published successor exists (add
+   it with a kick when the ring drains or a bounded alarm while it is false). Build
    and verify the RAM backup, drain and interrupt restoration before physical
    use. Run the returning OS control first, then the actual EL0 queue and joined
    stream through the board queue. Physical EL0 execution remains unqualified.

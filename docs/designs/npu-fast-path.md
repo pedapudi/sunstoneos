@@ -242,51 +242,77 @@ an evidence gap even after a successful normal resume.
 
 ### A one-shot timer requests gating after sustained idle
 
-Suspension is eligible once the queue and the optional public ring have been idle
-for 10 ms. A successful resume restarts that interval, so the same 10 ms also
+Suspension is eligible once the queue has been idle for 10 ms. The EL0 public ring
+needs a predicate that tells the owner a published successor exists; it is added
+with the EL0 wiring, together with a bounded alarm or a kick when the ring drains. A successful resume restarts that interval, so the same 10 ms also
 serves as the minimum on-time and no separate resume-plus-1 ms rule exists.
 These are initial hysteresis settings, not measured energy break-even points.
 Completed records awaiting release do not delay gating.
 
 A dedicated static EL1 power owner task runs on the interrupt core at a priority
-above the producer. It is created once by `npu_runtime_queue_power_start()`
-after claim and registration, and it remains parked after the queue returns,
-because the shared deadline registry retains its task identity. The owner waits
-on the shared deadline facility (`sunstone_deadline_wait_until()`), not on a tick
-and not on a device timer of its own. Submission and completion do not wake it.
-The alarm therefore fires at the deadline armed earlier and the owner
-re-evaluates: if a job is queued or the idle time was refreshed by a later
-completion, the alarm is stale and the owner arms a new deadline or sleeps until
-a completion interrupt delivers one wake hint. A completion refreshes the idle
-time and a generation counter; a stale alarm cannot gate later work.
+above the producer; the caller of `npu_runtime_queue_power_start()` guarantees
+that ordering, because the kernel build does not query priorities. The call
+happens after claim and registration, and the owner remains parked after the
+queue returns, because the shared deadline registry retains its task identity.
+The owner waits on the shared deadline facility (`sunstone_deadline_wait_until()`),
+not on a tick and not on a device timer of its own. Submission and completion
+never wake it. Every alarm is a bounded look at the state:
+
+- **Busy queue.** The owner arms the next alarm one idle delay (10 ms) ahead.
+  Under sustained load it therefore wakes about 100 times per second, and the
+  completion interrupt wakes no task.
+- **Idle but before the delay.** The alarm is the idle time plus the delay. A
+  completion refreshes the idle time and a generation counter from the
+  completion timestamp, so a stale alarm finds a recent completion and rearms.
+- **Idle for the delay.** The owner asks the interrupt controller whether it
+  is quiet. Quiet gates. "Not now" (a distributor write is in progress on
+  another core, or an NPU interrupt is pending or active) is not a fault; the
+  owner counts it and rearms 1 ms ahead. Only an invalid binding is retained.
+
+The part descriptor (`struct npu_idle_part`; `include/a733_npu_idle.h` holds the
+A733 values) carries every register offset, bit pattern, the full-idle word, the
+idle delay and the resume budget. The state machine in `npu_idle.c` and the
+register whitelist in the queue adapter read them from it and contain no
+A733 constant.
 
 The owner makes the gate decision and performs the whole suspend sequence under
-the queue's raw local interrupt lock. Immediately before the first suspend write
-it rechecks that the queue is empty, the public ring has no published successor
-(`can_idle`), STOP is clear, the lifetime window is open, the last completion
-left full idle (`+0x004 = 0x7fffffff`), and the interrupt controller reports no
-pending or active NPU interrupt (`quiet`). The event word at `+0x010` is
+the queue's raw local interrupt lock. It gates only when the queue is empty,
+completions equal submissions, the last completion left full idle, the lifetime
+window is open and the interrupt controller is quiet; no state can change inside
+the lock, so no further recheck is needed. The event word at `+0x010` is
 destructive on read, so no power path reads it. The lock bounds the suspend
-sequence by the 1 µs settle plus MMIO latency; the settle wait is capped at the
-100 µs resume budget and a longer wait retains the queue.
+sequence by the 1 µs settle plus MMIO latency; any settle wait is capped by the
+resume budget in strict mode and by the part's 1 ms hard bound otherwise.
 
-The states are ON, SUSPENDING, SUSPENDED, RESUMING and RETAINED. `ON` covers both
-running and idle-on-hysteresis. Because the owner holds the raw lock for the whole
-suspend sequence, a producer can observe only ON, SUSPENDED or RETAINED.
-Admission under the same lock (`npu_runtime_queue_admit()`) returns ready only in
-ON. In SUSPENDED it records one resume request, returns pending, changes no job,
-command or fence, and the caller wakes the owner and waits for its single
-readiness notification (`npu_runtime_queue_wait_ready()` or, for the EL0 doorbell,
-`npu_runtime_queue_power_kick()` after the supervisor call returns). The owner
-resumes, publishes readiness once and rearms the idle alarm. A partial write,
-unexpected readback, failed lifetime check, a non-quiet interrupt state or an
-expired transition deadline enters RETAINED with the first failing site, phase,
-offset, value and expectation preserved. It sets the queue and runtime failure
-flags and the service-recovery bit, and it never retries. An interrupt delivered
-while the clocks are suspended or transitioning is a fault: it is retained
-without any device access. A suspended queue resumes before CLOSE: the return
-path stops the owner, which resumes first, and returns failure if the resume
-does not leave the clocks running.
+The phases are ON, SUSPENDED and RETAINED. `ON` covers both running and
+idle-on-hysteresis. The transition in progress (suspend or resume) is recorded
+as the step of the failure record. Because the owner holds the raw lock for the
+whole transition, a producer can observe only ON, SUSPENDED or RETAINED.
+Admission under the same lock (`npu_runtime_queue_admit()`) returns ready only
+in ON. In SUSPENDED it records one resume request, returns pending, changes no
+job, command or fence, and the caller wakes the owner and waits for its single
+readiness notification (`npu_runtime_queue_wait_ready()`; the EL0 doorbell uses
+`npu_runtime_queue_power_kick()` after its supervisor call returns). A producer
+that admits and submits in separate lock spans can find the device gated between
+them, and the next submission then fails the queue permanently.
+`npu_runtime_queue_submit()` therefore admits and submits in one lock span and
+returns pending (0) without failing. The owner resumes, calls the interrupt
+quiet query once more before it unlocks, publishes readiness once and rearms
+the idle alarm.
+
+A partial write, unexpected readback, failed lifetime check, an invalid
+interrupt binding or an expired settle enters RETAINED with the first failing
+site, phase, step, offset, value and expectation preserved. It sets the queue and
+runtime failure flags and the service-recovery bit, and it never retries. A
+resume that completes but exceeds the budget records its elapsed time in both
+modes; only a strict (benchmark) queue retains it, so a production queue is not
+failed by a slow but successful resume. An interrupt delivered while the clocks
+are suspended, or with no active job, is a fault retained without any device
+access. If the post-resume quiet query found an interrupt pending, the failure
+site is `RESUME_IRQ`, which separates a glitch caused by the ungate from a later
+spurious interrupt. A suspended queue resumes before CLOSE: the return path
+stops the owner, which resumes first, and returns failure if the resume does
+not leave the clocks running.
 
 ### The internal gate preserves the top operating point
 
@@ -340,22 +366,31 @@ That model establishes neither physical startup time nor gate-only resume latenc
 
 Before a transition run, the three independent reviewers approve the code. The
 host evidence is `checks/npu-idle.py` (portable transition groups with delayed
-MMIO and access-limited suspended reads), `checks/npu-queue-handoff.py` (the
-production owner, queue and idle code executed natively against a modeled
-scheduler, deadline facility, register file and interrupt controller; it covers
-start refusals, gating and resume on admission, the control policy, stale alarms
-with an active or recently completed job, a non-quiet interrupt state, partial
-failure between suspend writes, suspended close including a resume failure,
-cancellation by STOP, an interrupt while suspended and a published EL0 successor,
-with four relink-based regression mutations) and `checks/npu-idle-report.py` (the
-benchmark report decoder and the acceptance comparison). The coordinator approves
-a frozen run separately. Its prediction is that internal gating preserves job
-output and recovery resources while reducing energy in idle gaps longer than the
-measured break-even duration.
+MMIO, access-limited suspended reads, an over-budget resume in both modes and
+every injected failure), `checks/npu-queue-handoff.py` (the production owner,
+queue, idle and service code executed natively against a modeled scheduler,
+deadline facility, register file and interrupt controller, with the part
+descriptor passed through modeled memory; it covers start refusals, gating and
+resume on admission, the control policy, stale alarms with an active or recently
+completed job, a transiently busy and an invalid interrupt controller, partial
+failure between suspend writes, suspended close with and without a resume
+failure, cancellation by STOP, an interrupt while suspended, an interrupt after
+resume, admit-and-submit in one lock span, and over-budget resumes, with five
+relink-based regression mutations of the owner) and `checks/npu-idle-report.py`
+(the benchmark report decoder and the acceptance comparison). The coordinator
+approves a frozen run separately. Its prediction is that internal gating
+preserves job output and recovery resources while reducing energy in idle gaps
+longer than the measured break-even duration.
 
-The candidate port 3-3 run changes only internal gate policy from the always-on
-852 MHz, 800 mV control. Alternate 100 busy/idle cycles and compare 9, 11 and
-100 ms idle gaps; the 9 ms case must never gate. Record each transition and
+Three images share every source and differ only in policy: a baseline that
+creates no power owner, the control (owner without register writes) and the
+gating image, all at 852 MHz and 800 mV. Each runs five windows of 8,000
+back-to-back jobs (about 300 ms, about 30 owner wakes each) and then 100 cold
+jobs after each of 9, 11 and 100 ms idle gaps; the 9 ms case must never gate.
+Comparisons use the median over the five windows, and the minimum and maximum
+are reported. The control must stay within the limits below of the baseline, so
+the owner's own cost is measured against the existing resident queue result;
+the gating run must stay within them of the control. Record each transition and
 completion, request-to-ready resume delay, first-job delay, p50/p99/maximum job
 latency, throughput, CPU time, idle power and cycle energy. Bind logs to the
 image hash, Git revision and queue entry. Require no numerical mismatch,
@@ -364,8 +399,11 @@ retained fault or cleanup failure, with normal retirement and restored DRAM.
 Continuously queued throughput must remain at least 98% of control. P99,
 maximum latency and CPU time per job must remain within 105%, 110% and 105%
 of control respectively, as well as meeting the absolute resume budgets. CPU time
-charges the client, the runtime worker and the power owner task. The control runs
-the same owner with register writes disabled, so both runs wake the owner on the
+charges the client, the runtime worker and the power owner task, and the
+non-idle time (window length minus idle-task runtime) is reported beside it.
+Interrupt time that lands while the idle task runs is charged to the idle task
+by the scheduler counter, so neither figure includes it. The control runs the
+same owner with register writes disabled, so both runs wake the owner on the
 same schedule. Cold-job latency after each idle gap is reported separately from
 the continuously queued window. Unexplained regressions block acceptance even
 within those limits.

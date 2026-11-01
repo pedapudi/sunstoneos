@@ -315,19 +315,24 @@ static void npu_latency_client(void *unused)
     platform_puts("NPU_STAGE=LATENCY\n");start=a733_smp_counter();
     const uint64_t client_before=ulTaskGetRunTimeCounter(NULL),worker_before=ulTaskGetRunTimeCounter(runtime->service.worker);
 #if SUNSTONE_NPU_IDLE_BENCH
-    const uint64_t power_before=ulTaskGetRunTimeCounter(direct.power_task),power_elapsed_before=direct.power.counters.owner_cpu_ticks;
+    const uint64_t power_before=owner_runtime(),power_elapsed_before=direct.power.counters.owner_cpu_ticks;
 #endif
     for(unsigned job=0;job<JOBS;++job) {
         current_job=job;if(!live())retained(24);sunstone_crumb(NPU_CRUMB_SUBMIT,job);
         const uint64_t before=a733_smp_counter();uint64_t entered=before;
         if(SUNSTONE_NPU_LATENCY_QUEUE) {
             prepare();struct npu_queue_fence fence;
-            uint64_t t=a733_smp_counter();entered=t;uint64_t lock=npu_runtime_queue_lock();
+            uint64_t t=a733_smp_counter();entered=t;
 #if SUNSTONE_NPU_IDLE_BENCH
-            if(npu_runtime_queue_admit(&direct)!=1)retained(81);
-#endif
+            /* Admission and submission share one lock span; a pending device is a failure here. */
+            int submitted=npu_runtime_queue_submit(&direct,&record,&command,(struct npu_queue_fence){0},1000000,&fence);
+            uint64_t lock;
+#else
+            uint64_t lock=npu_runtime_queue_lock();
             int submitted=npu_queue_submit(&direct.queue,&record,&command,(struct npu_queue_fence){0},1000000,&fence);
-            npu_runtime_queue_unlock(lock);submit_ticks+=a733_smp_counter()-t;
+            npu_runtime_queue_unlock(lock);
+#endif
+            submit_ticks+=a733_smp_counter()-t;
             if(submitted!=1)retained(43);
             if(npu_runtime_queue_wait(&direct,fence)!=1)retained(44);
             t=a733_smp_counter();acquire();lock=npu_runtime_queue_lock();
@@ -348,10 +353,11 @@ static void npu_latency_client(void *unused)
     if(client_after<client_before||worker_after<worker_before)retained(60);
     client_cpu_ticks=client_after-client_before;worker_cpu_ticks=worker_after-worker_before;
 #if SUNSTONE_NPU_IDLE_BENCH
-    idle_warm_owner_ticks=ulTaskGetRunTimeCounter(direct.power_task)-power_before;
+    idle_warm_owner_ticks=owner_runtime()-power_before;
     idle_warm_owner_elapsed=direct.power.counters.owner_cpu_ticks-power_elapsed_before;
     idle_warm_wakes=direct.power.counters.owner_wakes;idle_warm_irq_ticks=direct.irq_cpu_ticks;
     if(direct.power.counters.gates||direct.power.counters.resumes||direct.power.counters.writes)retained(81);
+    mismatch|=run_idle_windows();
     mismatch|=run_idle_cycles();
 #endif
     unsigned char hash[32];storage_digest_end(&digest,hash);
