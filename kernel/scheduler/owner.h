@@ -73,16 +73,35 @@ void ss_owner_continue(struct ss_owner *);
  * A valid task handle is required before pin. No TCB field may be read before
  * pin succeeds. Close cannot free storage: wait for references, then drain and
  * acknowledge every owner's live/detached/control hints before reopen. */
+/* Fixed routing to a retirement coordinator, independent of mutable task
+ * placement. Configuration and context live for the permanent descriptor's
+ * lifetime. Reopen and migration never change this record. The callback can
+ * run from a rejected pin, task or API IRQ and must only publish permanent
+ * control state and force a coordinator wake; it must not dereference a TCB.
+ * Close and last-put may both notify, so requests must coalesce safely. */
+struct ss_owner_retirement {
+    void (*notify)(void *context, unsigned slot, unsigned retirement_owner);
+    void *context;
+    unsigned slot, retirement_owner;
+};
 struct ss_owner_descriptor {
     _Atomic uint64_t references;
     _Atomic uint64_t admission;
     _Atomic uint64_t incarnation;
     void *task;
+    struct ss_owner_retirement retirement;
 };
+/* Initialize each permanent descriptor once; the legacy open initializer has
+ * no retirement callback. Registry initialization uses the closed initializer,
+ * then opens admission only after its fixed control routing is available. */
 void ss_owner_descriptor_init(struct ss_owner_descriptor *, void *, uint64_t);
+void ss_owner_descriptor_init_closed(struct ss_owner_descriptor *, uint64_t,
+                                     const struct ss_owner_retirement *);
 bool ss_owner_pin(struct ss_owner_descriptor *, uint64_t,
                   const struct ss_owner_backend *);
+/* Last release after closure notifies even when pin rejected admission. */
 void ss_owner_put(struct ss_owner_descriptor *);
+/* Close also notifies when references already equal zero. */
 void ss_owner_close(struct ss_owner_descriptor *, const struct ss_owner_backend *);
 bool ss_owner_references_retired(const struct ss_owner_descriptor *);
 /* Administrative caller supplies proof of all owner acknowledgments. */

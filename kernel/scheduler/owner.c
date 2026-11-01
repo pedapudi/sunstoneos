@@ -190,10 +190,25 @@ bool ss_owner_commit_dispatch(struct ss_owner *o, unsigned priority, bool idle)
 }
 void ss_owner_continue(struct ss_owner *o)
 { if (ss_owner_has_pending(o)) request_sgi(o); }
-void ss_owner_descriptor_init(struct ss_owner_descriptor *d, void *task, uint64_t i)
+static void descriptor_init(struct ss_owner_descriptor *d, void *task,
+                            uint64_t i, bool admitted,
+                            const struct ss_owner_retirement *retirement)
 {
     atomic_init(&d->references, 0); atomic_init(&d->incarnation, i);
-    d->task = task; atomic_init(&d->admission, 1);
+    d->task = task;
+    d->retirement = retirement ? *retirement : (struct ss_owner_retirement){0};
+    atomic_init(&d->admission, admitted);
+}
+void ss_owner_descriptor_init(struct ss_owner_descriptor *d, void *task, uint64_t i)
+{ descriptor_init(d, task, i, true, NULL); }
+void ss_owner_descriptor_init_closed(struct ss_owner_descriptor *d, uint64_t i,
+                                     const struct ss_owner_retirement *retirement)
+{ descriptor_init(d, NULL, i, false, retirement); }
+static void notify_retirement(const struct ss_owner_descriptor *d)
+{
+    if (d->retirement.notify)
+        d->retirement.notify(d->retirement.context, d->retirement.slot,
+                             d->retirement.retirement_owner);
 }
 bool ss_owner_pin(struct ss_owner_descriptor *d, uint64_t incarnation,
                   const struct ss_owner_backend *backend)
@@ -206,11 +221,16 @@ bool ss_owner_pin(struct ss_owner_descriptor *d, uint64_t incarnation,
     ss_owner_put(d); return false;
 }
 void ss_owner_put(struct ss_owner_descriptor *d)
-{ atomic_fetch_sub_explicit(&d->references, 1, memory_order_release); }
+{
+    if (atomic_fetch_sub_explicit(&d->references, 1, memory_order_release) == 1 &&
+        !atomic_load_explicit(&d->admission, memory_order_acquire))
+        notify_retirement(d);
+}
 void ss_owner_close(struct ss_owner_descriptor *d, const struct ss_owner_backend *b)
 {
     atomic_store_explicit(&d->admission, 0, memory_order_release);
     ss_owner_barrier(b);
+    if (ss_owner_references_retired(d)) notify_retirement(d);
 }
 bool ss_owner_references_retired(const struct ss_owner_descriptor *d)
 { return atomic_load_explicit(&d->references, memory_order_acquire) == 0; }
