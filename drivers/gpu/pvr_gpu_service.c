@@ -2,26 +2,29 @@
 #include "pvr_gpu_crumb.h"
 #include "a733_range.h"
 #include "pvr_compute_service.h"
-#include "pvr_mimus_service.h"
+#include "pvr_compute_queue.h"
 #include "a733_gpu_graphics_memory.h"
-#include "a733_gpu_mimus.h"
 #ifdef SUNSTONE_GPU_LIFECYCLE
 #include "a733_gpu_disposal.h"
 #endif
 #include <string.h>
 
-/* Only images with the mimus session link pvr_mimus_service.c. Elsewhere
- * config.mimus is null and these references stay unresolved and uncalled. */
-#pragma weak pvr_mimus_service_prepare
-#pragma weak pvr_mimus_service_publish_poll
-#pragma weak pvr_mimus_service_poll
-#pragma weak pvr_mimus_service_event
-#pragma weak pvr_mimus_service_abort
-#pragma weak pvr_mimus_service_close
-#pragma weak pvr_mimus_service_deadline
-#pragma weak pvr_mimus_service_submitting
-#pragma weak pvr_mimus_service_progress
-#pragma weak a733_gpu_mimus_reopen
+/* Images without the compute queue leave these references uncalled. */
+#pragma weak pvr_compute_queue_create
+#pragma weak pvr_compute_queue_objects
+#pragma weak pvr_compute_queue_prepare
+#pragma weak pvr_compute_queue_publish
+#pragma weak pvr_compute_queue_poll
+#pragma weak pvr_compute_queue_event
+#pragma weak pvr_compute_queue_abort
+#pragma weak pvr_compute_queue_close
+#pragma weak pvr_compute_queue_deadline
+#pragma weak pvr_compute_queue_submitting
+#pragma weak pvr_compute_queue_progress
+#pragma weak pvr_compute_queue_hold
+#pragma weak pvr_compute_queue_release
+#pragma weak pvr_compute_queue_reopen
+#pragma weak pvr_compute_queue_wake
 static struct pvr_gpu_service *instance;
 static unsigned creating_worker;
 static void worker(void *);
@@ -106,8 +109,8 @@ static int allocations(struct pvr_gpu_service *s, const struct pvr_gpu_service_c
     if (c->compute && (c->compute->service != s ||
         c->compute->phase != PVR_COMPUTE_SERVICE_BOUND)) return 0;
     if (c->render && (!c->graphics || c->render != &c->graphics->submission)) return 0;
-    if (c->mimus && (c->compute || c->graphics || c->free_lists.count || c->mimus->service != s ||
-        c->mimus->phase != PVR_MIMUS_SERVICE_BOUND)) return 0;
+    if (c->compute_queue && (c->compute || c->graphics || c->free_lists.count ||
+        c->compute_queue->service != s || c->compute_queue->phase != PVR_COMPUTE_QUEUE_BOUND)) return 0;
     if (c->graphics && !a733_gpu_graphics_memory_validate(c->graphics, c, s)) return 0;
     return free_list_allocations(s, c);
 }
@@ -188,7 +191,7 @@ static void fail_at(struct pvr_gpu_service *s, enum pvr_gpu_service_error error,
     if (!interrupt_mask(s)) error = PVR_GPU_SERVICE_INTERRUPT;
     s->phase = PVR_GPU_SERVICE_FAILED; s->error = error;
     if (s->config.compute) pvr_compute_service_abort(s->config.compute, PVR_COMPUTE_SERVICE_LIFECYCLE);
-    if (s->config.mimus) pvr_mimus_service_abort(s->config.mimus);
+    if (s->config.compute_queue) pvr_compute_queue_abort(s->config.compute_queue);
     if (s->config.graphics) a733_gpu_graphics_memory_abort(s->config.graphics);
     (void)pvr_gpu_start_cancel(&s->start);
     (void)pvr_gpu_control_abort(&s->control);
@@ -236,7 +239,7 @@ static int service_event(void *ctx, const unsigned char command[PVR_CCB_COMMAND_
     struct pvr_gpu_service *s = instance;
     if (!s || ctx != s->config.context || s->phase == PVR_GPU_SERVICE_FAILED) return 0;
     if (s->config.compute && !pvr_compute_service_event(s->config.compute, command)) return 0;
-    if (s->config.mimus && !pvr_mimus_service_event(s->config.mimus, command)) return 0;
+    if (s->config.compute_queue && !pvr_compute_queue_event(s->config.compute_queue, command)) return 0;
     uint32_t kind = (uint32_t)command[0] | (uint32_t)command[1] << 8 |
                     (uint32_t)command[2] << 16 | (uint32_t)command[3] << 24;
     if (kind == (PVR_CCB_MAGIC | 107u))
@@ -314,7 +317,7 @@ static int flush_step(struct pvr_gpu_service *s)
 static int start_firmware(struct pvr_gpu_service *s)
 {
     if ((s->config.compute && pvr_compute_service_admit_mode(s->config.compute) != 1) ||
-        (s->config.mimus && s->config.compute_mode(s->config.context) != 1)) {
+        (s->config.compute_queue && s->config.compute_mode(s->config.context) != 1)) {
         fail(s, PVR_GPU_SERVICE_COMPUTATION); return 0;
     }
     if (pvr_gpu_start_begin(&s->start, s->deadline) != PVR_GPU_START_AGAIN) {
@@ -338,8 +341,8 @@ static int enable_firmware(struct pvr_gpu_service *s)
 }
 static int publish_compute(struct pvr_gpu_service *s)
 {
-    if (s->config.mimus) {
-        if (pvr_mimus_service_prepare(s->config.mimus, s->deadline) != 1) {
+    if (s->config.compute_queue) {
+        if (pvr_compute_queue_prepare(s->config.compute_queue, s->deadline) != 1) {
             fail(s, PVR_GPU_SERVICE_COMPUTATION); return 0;
         }
         s->phase = PVR_GPU_SERVICE_PUBLISHING; return 1;
@@ -378,11 +381,10 @@ static int prepare(struct pvr_gpu_service *s)
         memcpy(s->mappings + objects, c->compute->objects, sizeof(c->compute->objects));
         objects += PVR_COMPUTE_SERVICE_OBJECTS;
     }
-    if (c->mimus) {
-        _Static_assert(PVR_FW_RESOURCE_COUNT + PVR_MIMUS_SERVICE_OBJECTS <= PVR_MIPS_MAX_OBJECTS,
-                       "mimus firmware object capacity");
-        memcpy(s->mappings + objects, c->mimus->objects, sizeof(c->mimus->objects));
-        objects += PVR_MIMUS_SERVICE_OBJECTS;
+    if (c->compute_queue) {
+        unsigned n=pvr_compute_queue_objects(c->compute_queue,s->mappings+objects,PVR_MIPS_MAX_OBJECTS-objects);
+        if (n!=PVR_COMPUTE_QUEUE_OBJECTS) { fail(s,PVR_GPU_SERVICE_PREPARATION); return 0; }
+        objects+=n;
     }
     if (c->graphics) {
         _Static_assert(PVR_FW_RESOURCE_COUNT + PVR_COMPUTE_SERVICE_OBJECTS + 2 <= PVR_MIPS_MAX_OBJECTS,
@@ -456,7 +458,7 @@ static int submitting(const struct pvr_gpu_service *s)
     return (c && (c->phase == PVR_COMPUTE_SERVICE_FORMAT ||
                   (c->phase == PVR_COMPUTE_SERVICE_RUNNING && c->job.phase <= PVR_JOB_KICK))) ||
         (r && r->phase >= PVR_RENDER_SERVICE_FORMAT_GEOMETRY && r->phase <= PVR_RENDER_SERVICE_SUBMIT) ||
-        (s->config.mimus && pvr_mimus_service_submitting(s->config.mimus));
+        (s->config.compute_queue && pvr_compute_queue_submitting(s->config.compute_queue));
 }
 #ifdef SUNSTONE_A733_OS_PERF
 static int performance_controlling(const struct pvr_gpu_service *s)
@@ -513,15 +515,14 @@ static void performance_step(struct pvr_gpu_service *s)
     uint64_t now;
     if(!sample(s,&now) || now>=s->performance.deadline) {
         const int clean=s->performance.action==A733_PERF_HOLD && s->performance.stage==1;
+        if (clean && s->config.compute_queue && s->config.compute_queue->held)
+            (void)pvr_compute_queue_release(s->config.compute_queue);
         performance_finish(s,clean ? A733_PERF_EXPIRED : A733_PERF_FAILED,(struct a733_perf_point){0});return;
     }
     const unsigned action=s->performance.action;
     if(action==A733_PERF_HOLD) {
         if(s->performance.stage==1) {
-            struct pvr_mimus_service *m=s->config.mimus;
-            if(m->phase!=PVR_MIMUS_SERVICE_IDLE || m->owed || atomic_load(&m->lost))return;
-            unsigned idle=PVR_MIMUS_SLOT_IDLE;
-            if(!atomic_compare_exchange_strong(&m->slot_state,&idle,PVR_MIMUS_SLOT_HELD))return;
+            if (!pvr_compute_queue_hold(s->config.compute_queue)) return;
             if(!pvr_gpu_clock_hold(&s->performance.clock,&s->control,&s->config.performance_clock,
                 s->config.context,s->performance.deadline,s->performance.limit)) {
                 performance_finish(s,A733_PERF_FAILED,(struct a733_perf_point){0});return;
@@ -543,8 +544,7 @@ static void performance_step(struct pvr_gpu_service *s)
             s->performance.stage=2;return;
         }
         if(clock_result==1 && s->performance.clock.phase==PVR_GPU_CLOCK_READY) {
-            unsigned held=PVR_MIMUS_SLOT_HELD;
-            if(!atomic_compare_exchange_strong(&s->config.mimus->slot_state,&held,PVR_MIMUS_SLOT_IDLE)) {
+            if(!pvr_compute_queue_release(s->config.compute_queue)) {
                 performance_finish(s,A733_PERF_FAILED,(struct a733_perf_point){0});return;
             }
             performance_finish(s,A733_PERF_DONE,(struct a733_perf_point){0});
@@ -586,7 +586,7 @@ static void advance(struct pvr_gpu_service *s)
     }
     case PVR_GPU_SERVICE_PUBLISHING: {
         if (!opening_clock(s)) return;
-        int r = s->config.mimus ? pvr_mimus_service_publish_poll(s->config.mimus) :
+        int r = s->config.compute_queue ? pvr_compute_queue_publish(s->config.compute_queue) :
             pvr_compute_service_poll(s->config.compute);
         if (r < 0) { fail(s, PVR_GPU_SERVICE_COMPUTATION); return; }
         if (!opening_clock(s)) return;
@@ -649,8 +649,8 @@ static void advance(struct pvr_gpu_service *s)
         if (render_polled(s) && pvr_render_service_poll(s->config.render) < 0) {
             fail(s, PVR_GPU_SERVICE_GRAPHICS); return;
         }
-        if (s->config.mimus && s->phase == PVR_GPU_SERVICE_READY &&
-            pvr_mimus_service_poll(s->config.mimus) < 0) {
+        if (s->config.compute_queue && s->phase == PVR_GPU_SERVICE_READY &&
+            pvr_compute_queue_poll(s->config.compute_queue) < 0) {
             fail(s, PVR_GPU_SERVICE_COMPUTATION); return;
         }
 #ifdef SUNSTONE_A733_OS_PERF
@@ -784,7 +784,7 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
                                            const struct pvr_gpu_service_message *m)
 {
     const struct pvr_gpu_service_request *r = &m->request;
-    if (((unsigned)r->operation > PVR_GPU_SERVICE_DISPOSE
+    if (((unsigned)r->operation > PVR_GPU_SERVICE_DISPOSE && r->operation!=PVR_GPU_SERVICE_QUEUE_CREATE
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
          && r->operation!=PVR_GPU_SERVICE_PARK
 #endif
@@ -817,7 +817,15 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
 #else
     if(r->operation==PVR_GPU_SERVICE_DISPOSE)return PVR_GPU_SERVICE_INVALID;
 #endif
-    if (r->operation == PVR_GPU_SERVICE_OPEN) {
+    if (r->operation == PVR_GPU_SERVICE_QUEUE_CREATE) {
+        struct pvr_compute_queue *q=s->config.compute_queue;
+        if (!q || s->phase!=PVR_GPU_SERVICE_COLD || !q->create_pending || q->create_done ||
+            pvr_compute_queue_create(q,&q->create_config)!=1) {
+            if (q && q->error) { fail(s,PVR_GPU_SERVICE_COMPUTATION); return PVR_GPU_SERVICE_FAULT; }
+            return PVR_GPU_SERVICE_INVALID;
+        }
+    }
+    if (r->operation == PVR_GPU_SERVICE_OPEN || r->operation == PVR_GPU_SERVICE_QUEUE_CREATE) {
         if (s->phase == PVR_GPU_SERVICE_FAILED) return PVR_GPU_SERVICE_FAULT;
         if (s->owner != PVR_GPU_SERVICE_CLIENTS) return PVR_GPU_SERVICE_BUSY;
 #ifdef SUNSTONE_GPU_LIFECYCLE
@@ -845,13 +853,14 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
             s->epoch == UINT64_MAX) return PVR_GPU_SERVICE_BUSY;
         if ((s->config.free_lists.count || s->config.compute) && s->phase == PVR_GPU_SERVICE_STOPPED)
             return PVR_GPU_SERVICE_BUSY;
-        int reopening_mimus = s->config.mimus && s->phase == PVR_GPU_SERVICE_STOPPED;
-        if (reopening_mimus) {
+        int reopening_queue = s->config.compute_queue && s->phase == PVR_GPU_SERVICE_STOPPED;
+        if (s->config.compute_queue && s->config.compute_queue->phase==PVR_COMPUTE_QUEUE_BOUND)
+            return PVR_GPU_SERVICE_INVALID;
+        if (reopening_queue) {
             if (m->client != s->closed_owner || m->epoch != s->closed_epoch) return PVR_GPU_SERVICE_DENIED;
-            if (!s->config.mimus_owner) return PVR_GPU_SERVICE_BUSY;
-            if (!deadline(s, r->timeout_us)) return PVR_GPU_SERVICE_FAULT;
-            int result = a733_gpu_mimus_reopen(s);
-            if (result < 0) { fail(s, PVR_GPU_SERVICE_COMPUTATION); return PVR_GPU_SERVICE_FAULT; }
+            if (!deadline(s,r->timeout_us)) return PVR_GPU_SERVICE_FAULT;
+            int result=pvr_compute_queue_reopen(s->config.compute_queue);
+            if (result<0) {fail(s,PVR_GPU_SERVICE_COMPUTATION);return PVR_GPU_SERVICE_FAULT;}
             if (!result) return PVR_GPU_SERVICE_BUSY;
         }
         s->owner = m->client; ++s->epoch;
@@ -862,7 +871,7 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
         }
 #endif
         atomic_store_explicit(&s->published_epoch,s->epoch,memory_order_release);
-        if ((!reopening_mimus && !deadline(s, r->timeout_us)) || !prepare(s)) return PVR_GPU_SERVICE_FAULT;
+        if ((!reopening_queue && !deadline(s, r->timeout_us)) || !prepare(s)) return PVR_GPU_SERVICE_FAULT;
         return PVR_GPU_SERVICE_OK;
     }
     if (s->owner != m->client) return PVR_GPU_SERVICE_DENIED;
@@ -964,7 +973,7 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
            atomic_load_explicit(&d->texture_output_state,memory_order_acquire) ||
            d->texture_draft || d->texture_preparing)return PVR_GPU_SERVICE_BUSY;
     }
-    if (s->config.mimus && !pvr_mimus_service_close(s->config.mimus)) return PVR_GPU_SERVICE_BUSY;
+    if (s->config.compute_queue && !pvr_compute_queue_close(s->config.compute_queue)) return PVR_GPU_SERVICE_BUSY;
     s->closed_owner=m->client;s->closed_epoch=s->epoch;
 #ifdef SUNSTONE_A733_OS_PERF
     if(s->config.performance_begin)
@@ -1007,7 +1016,7 @@ static uint64_t progress(const struct pvr_gpu_service *s)
         r ? r->phase : 0, r ? r->checked : 0, r ? r->texture_cursor : 0, r ? r->pair.phase : 0,
         r ? r->geometry.phase : 0, r ? r->geometry.index : 0, r ? r->geometry.cursor : 0,
         r ? r->fragment.phase : 0, r ? r->fragment.index : 0, r ? r->fragment.cursor : 0,
-        s->config.mimus ? pvr_mimus_service_progress(s->config.mimus) : 0};
+        s->config.compute_queue ? pvr_compute_queue_progress(s->config.compute_queue) : 0};
     uint64_t hash = UINT64_C(0xcbf29ce484222325);
     for (unsigned i = 0; i < sizeof(values) / sizeof(*values); ++i)
         hash = (hash ^ values[i]) * UINT64_C(0x100000001b3);
@@ -1021,10 +1030,10 @@ static int step(struct pvr_gpu_service *s)
     uint64_t before = progress(s);
     advance(s);
     if (s->phase == PVR_GPU_SERVICE_FAILED) return 0;
-    /* A ready mimus session whose step rearmed the interrupt has no CPU work
-     * until the next slot wake, the interrupt or the job poll bound. */
-    if (phase == PVR_GPU_SERVICE_READY && s->phase == PVR_GPU_SERVICE_READY && s->config.mimus &&
-        !s->irq_masked && !pvr_mimus_service_submitting(s->config.mimus)) return 0;
+    /* The next slot wake, interrupt or backup poll advances an idle queue. */
+    if (phase == PVR_GPU_SERVICE_READY && s->phase == PVR_GPU_SERVICE_READY &&
+        s->config.compute_queue && !s->irq_masked &&
+        !pvr_compute_queue_submitting(s->config.compute_queue)) return 0;
     if (phase == PVR_GPU_SERVICE_BUILDING || phase == PVR_GPU_SERVICE_PUBLISHING_GRAPHICS ||
         phase == PVR_GPU_SERVICE_PUBLISHING || phase == PVR_GPU_SERVICE_DISPOSING) return 1;
     return progress(s) != before;
@@ -1068,7 +1077,7 @@ static TickType_t wait_ticks(struct pvr_gpu_service *s)
     if (compute_polled(s)) { busy = 1; earliest = c->deadline; }
     if (render_polled(s)) { busy = 1; if (r->deadline < earliest) earliest = r->deadline; }
     uint64_t job;
-    if (s->config.mimus && pvr_mimus_service_deadline(s->config.mimus, &job)) { busy = 1; if (job < earliest) earliest = job; }
+    if (s->config.compute_queue && pvr_compute_queue_deadline(s->config.compute_queue, &job)) { busy = 1; if (job < earliest) earliest = job; }
     if (s->config.free_lists.count &&
         (s->free_lists.phase != PVR_FREE_LIST_IDLE || s->free_lists.request_count)) {
         uint64_t operation = free_list_deadline(s);
@@ -1143,9 +1152,8 @@ static void worker(void *argument)
             taskENTER_CRITICAL(); s->irq_wake_pending = 0; taskEXIT_CRITICAL();
             continue;
         }
-        /* The mimus job wake: the next step takes the slot. */
-        if (message.client == PVR_GPU_SERVICE_CLIENTS && message.ticket == PVR_GPU_SERVICE_MIMUS_WAKE &&
-            s->config.mimus) continue;
+        if (message.client == PVR_GPU_SERVICE_CLIENTS && message.ticket == PVR_GPU_SERVICE_QUEUE_WAKE &&
+            s->config.compute_queue) { pvr_compute_queue_wake(s->config.compute_queue); continue; }
         configASSERT(message.client < PVR_GPU_SERVICE_CLIENTS && message.ticket);
         struct pvr_gpu_service_reply reply = {.ticket = message.ticket};
 #ifdef SUNSTONE_A733_OS_PERF
@@ -1212,7 +1220,7 @@ int pvr_gpu_service_init(struct pvr_gpu_service *s, const struct pvr_gpu_service
     if (!s || instance || s->initialized || !c || !priority || priority >= configMAX_PRIORITIES ||
         !affinity || (affinity >> configNUMBER_OF_CORES) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
-        ((c->compute || c->mimus) && !c->compute_mode) ||
+        ((c->compute || c->compute_queue) && !c->compute_mode) ||
         (!!c->power.begin != !!c->power.poll) || (!!c->enable == !!c->power.begin) ||
         !c->queue.read || !c->queue.write || !c->queue.barrier || !c->queue.kick ||
         !c->start.now || !c->start.read || !c->start.write || !c->start.started || !c->start.publish ||
@@ -1221,7 +1229,7 @@ int pvr_gpu_service_init(struct pvr_gpu_service *s, const struct pvr_gpu_service
         !c->stop.sync_write || !c->stop.sync_read || !c->stop.isolate ||
         (!!c->irq.mask != !!c->irq.rearm) || !allocations(s, c)) return 0;
 #ifdef SUNSTONE_A733_OS_PERF
-    if(c->performance_begin && (!c->mimus || c->compute || c->render || c->free_lists.count ||
+    if(c->performance_begin && (!c->compute_queue || c->compute || c->render || c->free_lists.count ||
         !c->performance_poll || !c->performance_rate || !c->performance_client ||
         c->performance_client>=PVR_GPU_SERVICE_CLIENTS || !c->performance_clock.now ||
         !c->performance_clock.sync_write || !c->performance_clock.sync_read ||
@@ -1229,7 +1237,7 @@ int pvr_gpu_service_init(struct pvr_gpu_service *s, const struct pvr_gpu_service
     atomic_init(&s->performance.published,0);
 #endif
     s->config = *c; s->owner = PVR_GPU_SERVICE_CLIENTS; s->irq_masked = 1;
-    s->requests = xQueueCreateStatic(PVR_GPU_SERVICE_CLIENTS, sizeof(struct pvr_gpu_service_message),
+    s->requests = xQueueCreateStatic(PVR_GPU_SERVICE_REQUESTS, sizeof(struct pvr_gpu_service_message),
                                      s->request_storage, &s->request_state);
     configASSERT(s->requests);
     for (unsigned i = 0; i < PVR_GPU_SERVICE_CLIENTS; ++i) {

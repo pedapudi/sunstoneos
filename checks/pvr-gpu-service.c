@@ -140,7 +140,8 @@ static int power_update(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, 
 {
     uint32_t old;
     if (!power_read(ctx, bank, off, &old)) return 0;
-    callback(ctx); configASSERT((unsigned)bank < 2 && !(off & 3) && off < 0x6000);
+    callback(ctx); configASSERT((unsigned)bank < 3 && !(off & 3) && off < 0x6000);
+    configASSERT(bank != A733_GPU_CORE || off == 0 || off == 0x20);
     power_registers[bank][off/4] = (old & ~clear) | value;
     if (bank == A733_GPU_CCU && off == 0xb20) power_registers[bank][off/4] &= ~(1u << 27);
     return 1;

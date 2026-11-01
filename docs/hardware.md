@@ -50,6 +50,13 @@ The [handoff branch list](handoff.md#open-branches) distinguishes unmerged fixes
 
 ## Current software integration
 
+- The [GPU compute queue](designs/gpu-compute-queue.md) accepts application
+  programs and manifest-region leases with a GPU page cap of 256 KiB. Host
+  checks cover 204 exact-sum jobs, interrupts, deadlines, thermal reopen,
+  retained failures and returning-image proofs. The independent vector-add
+  application also builds and passes host checks. Physical execution of this
+  queue, interrupt qualification and complete recovery remain outstanding.
+
 - Optional eight-worker mimus passes exact recognition parity in QEMU and
   native compilation. One exact CPU-only eight-worker recording now passes physically; other profiles and broader recognition qualification remain open.
   Supervised recorded OS recognition now supports eight workers with A76

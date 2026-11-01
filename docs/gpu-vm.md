@@ -19,7 +19,7 @@ The reference MIPS startup path skips the GPU BIF initialization used by other
 firmware processors. GPU workload mappings are not a prerequisite for executing
 MIPS firmware itself.
 
-## Three translation levels cover six page sizes
+## Three translation levels admit four page sizes
 
 The root catalogue has 1,024 four-byte entries. Each valid entry points to a
 directory with 512 eight-byte entries. A directory entry selects a leaf table
@@ -31,8 +31,9 @@ and the page size for its 2 MiB virtual region.
 | 16 KiB | 128 |
 | 64 KiB | 32 |
 | 256 KiB | 8 |
-| 1 MiB | 2 |
-| 2 MiB | 1 |
+
+The A733 planner refuses 1 MiB and 2 MiB pages because of GPU erratum
+BRN 71317. The vendor driver also caps pages at 256 KiB.
 
 Each table owns a full 4 KiB backing page, including leaf tables with fewer
 entries. Only directories and leaves containing mappings are allocated.

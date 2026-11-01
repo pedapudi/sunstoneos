@@ -1,16 +1,116 @@
 # GPU compute queue
 
-Status: **design; not implemented.** Revised after its first review.
-Prototype headers:
-[`include/gpu_queue.h`](../../include/gpu_queue.h) (application interface),
-[`include/pvr_compute_queue.h`](../../include/pvr_compute_queue.h) (the
-worker's calls into the queue) and
-[`apps/mimus/gpu_linear_job.h`](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/gpu_linear_job.h) (the
-context and job that mimus passes). They compile with
-`clang -std=c11 -Wall -Wextra -Wpedantic` for the host and for
-`aarch64-none-elf`; nothing calls them. Links to `app-abi.md` refer to the
-application-interface design on branch `work/app-abi-1031`, commit
-`23c40c9e`, whose commit numbers this document cites.
+Status: **implemented and host-tested; physical queue qualification pending.**
+
+The application interface is [`include/gpu_queue.h`](../../include/gpu_queue.h).
+The service worker uses
+[`include/pvr_compute_queue.h`](../../include/pvr_compute_queue.h), and the A733
+constructor uses [`platform/a733/gpu_queue.c`](../../platform/a733/gpu_queue.c).
+`SUNSTONE_A733_OS_GPU` selects the service. The external mimus application and
+[`apps/queue-add`](../../apps/queue-add/README.md) use the same application kit.
+The reviewed migration comparisons below describe the separation base
+`cc8a7957`; their legacy paths identify that historical tree.
+
+## Implementation evidence and departures from the reviewed plan
+
+
+Review corrections cover zero-job shutdown and cold return, SLC bypass for
+CPU/GPU-shared mappings, rounded lease isolation, program-source bounds and
+application-supplied startup initialization. Program copies are confined to
+the immutable `sunstone_gpu_program` section admitted from application objects.
+The manifest and runtime independently refuse lease tails that intersect
+another region, including an unleased one. The correction evidence is under
+`review-fixes/` in the cache directory below.
+
+Returning images also produce an untouched receipt when GPU construction was
+skipped. This path requires an admitted application, its current task, entirely
+zero GPU state and an unexpired return deadline. It covers applications without
+a GPU grant and applications that never use their grant. The ordinary finish
+and CPU-return paths still require the receipt. Native regression cases run
+both paths in hello-compute and mimus images; evidence is under
+`review-followup/` in the same cache directory.
+
+The host queue model passes 38 service cases and an external 204-job replay
+with 5,870,398 checked sums. Native instruction models pass 16 thermal cases,
+10 public-client cases, 18 returning-image cases, and 71 constructor-refusal
+and cold-return cases. Output-permission checks cover two applications.
+The VM check covers four
+admitted page sizes and 36 refusals. It compares tables with the pinned driver.
+The ring trace records 23 aligned stores per job, plus five stores when a
+padding record wraps the ring. No buffer data is copied.
+
+Raw commands, input snapshots, image hashes and results are under
+`~/.cache/sunstoneos/build/gpu-queue-1031/`. The `checks/` subdirectory holds
+queue and native fixtures; `program/` holds compiler and vector checks;
+`mimus-client/` holds application arithmetic and recorded-recognition evidence.
+These models establish software behavior. They do not establish physical GPU
+interrupt delivery, performance or recovery.
+
+- **Page size:** BRN 71317 makes 1 MiB and 2 MiB pages unsafe on this GPU.
+  The queue maps data with 256 KiB pages, and the shared A733 planner refuses
+  larger pages. Lease alignment remains 2 MiB. The mimus map still needs
+  24 table pages because table allocation follows 2 MiB virtual regions.
+- **CPU storage:** the concrete queue occupies 2,240 bytes on AArch64. The
+  prototype's 1,216-byte estimate omitted retained native buffer descriptors,
+  creation tickets and the static completion queue. Device allocations remain
+  79 write-back pages and 51 uncached pages for the mimus layout.
+- **Protected return files:** the build keeps the private preprocessor name
+  `SUNSTONE_A733_OS_GPU_LINEAR` for `apps/os/cpu-return.c` and
+  `apps/os/cpu-return/terminal.patch`. Their separate owner must rename those
+  guards. It is not a CMake option. The compatibility option and application
+  GPU session are removed.
+- **Physical migration step:** the coordinator receives the requests below.
+  Board operations were prohibited, so legacy removal follows host evidence.
+  Physical qualification and the independent feature review remain open.
+- **Build selection:** the generic option lands with runtime ownership in
+  migration commit 3, so independent applications can select the service.
+  Migration commit 7 removes the legacy sources and worker configuration.
+- **Host followup scope:** the OS check validates native retirement captures
+  and the generic decoder. Compound transport, backup and restoration checks
+  belong to the external application launcher.
+
+## Coordinator board requests
+
+Both ports remain quarantined. These commands require the coordinator's
+recovery procedure, the generic launcher integration and matching prepared
+session templates. A captured descriptor alone does not authorize a launch.
+The GPU power, clock, voltage and firmware-boot sequence is unchanged from the
+base. Only context construction and job publication change.
+
+The eight-job vector image uses `QUEUE_ADD_JOBS=8`; the default example uses
+one job. Configure it with the cached `cfg.sh`, `MIMUS_DIR=`,
+`SUNSTONE_APPLICATION=queue-add`, `SUNSTONE_A733_OS=ON`,
+`SUNSTONE_A733_OS_GPU=ON`, `SUNSTONE_A733_OS_CPU_RETURN=ON`,
+`SUNSTONE_A733_OS_CPU_CLOCK=ON`, `A733_A76_ADMITTED=ON` and
+`CMAKE_C_FLAGS=-DQUEUE_ADD_JOBS=8`. Build target
+`sunstone-a733-os-queue-add` in the directory below.
+
+```sh
+os=/home/sunil/git/sunstoneos-worktrees/gpu-queue-1031
+b=$HOME/.cache/sunstoneos/build/gpu-queue-1031
+p=$HOME/.cache/sunstoneos/venv/bin/python
+"$p" "$os/tools/dev-run.py" gpu-return --port 3-1 \
+  --image "$b/queue-eight-return/sunstone-a733-os-queue-add.elf" \
+  --host-tree "$os" --template "$b/board-templates/queue-eight" \
+  --evidence "$b/board-runs/queue-eight"
+"$p" "$os/tools/dev-run.py" gpu-return --port 3-1 \
+  --image "$b/gpu-return2/sunstone-a733-os.elf" \
+  --host-tree "$os" --template "$b/board-templates/exact-sum" \
+  --evidence "$b/board-runs/exact-sum"
+```
+
+The vector result must contain eight jobs, 65 elements, checksum 8,840,
+sequence 8 and eight completion times. Every job rotates its inputs and checks
+all 65 outputs. Require acknowledged GPU shutdown, suspended worker, normal ROM
+return and restoration of every saved RAM span. Compare kick-to-timeline
+measurements with the recorded 80–83 microsecond steady-state range and
+113 microsecond first-job observation. A changed result needs investigation;
+host timing does not predict physical interrupt latency.
+
+The exact-sum run must produce the reference transcript and checksums, validate
+every GPU sum and tag, park the GPU and return normally. Submit-to-kick and
+timeline-to-record counter instrumentation remains a coordinator measurement
+request; the application record exposes kick-to-completion time only.
 
 The GPU compute queue is the OS service through which an application runs a
 compute program on the A733 GPU. The application creates one context with
@@ -430,8 +530,8 @@ and general heaps start at `0xda00000000`, `0xe000000000` and
 collide with internal mappings. A program's pointers equal the application's
 CPU pointers, and no GPU address allocator is needed.
 
-Every lease maps with 2 MiB GPU pages, since the base and the rounded size
-are 2 MiB multiples. One 2 MiB GPU region uses one page size
+Every lease maps with 256 KiB GPU pages. BRN 71317 excludes the hardware
+encodings for 1 MiB and 2 MiB pages. One 2 MiB GPU region uses one page size
 (`include/pvr_gpu_vm.h:12-17`).
 
 ### The map is built once
@@ -459,7 +559,7 @@ as `a733_gpu_mimus_reopen` does (`platform/a733/gpu_mimus.c:190-195`). No
 MMU cache flush is needed, because no mapping changes after the first kick.
 
 The mimus mappings keep today's table size. The session maps two 8 MiB
-model spans, a 12 MiB arena and a 2 MiB output region with 2 MiB pages, all
+model spans, a 12 MiB arena and a 2 MiB output region with 256 KiB pages, all
 inside one 1 GiB catalogue entry (`platform/a733/gpu_mimus.c:105-111`). The
 queue maps the same spans at different addresses in the same catalogue entry,
 so it needs the same 15 data leaves and the planner's 24 table pages
@@ -482,7 +582,7 @@ a pool, so no application buffer is cleared through a write-back alias.
 | Uncached firmware pages | 6 | 6 |
 | Write-back payload pages | 21 (`include/a733_gpu_mimus.h:11-13`) | 21 |
 | GPU table pages | 24 | 24, at most 32 for another application |
-| CPU-side state | Session, slot and record queue | `struct pvr_compute_queue`, 1,216 bytes on AArch64, and a record queue of one entry |
+| CPU-side state | Session, slot and record queue | `struct pvr_compute_queue`, 2,240 bytes on AArch64, including a record queue of one entry |
 
 Today the GPU holds 79 write-back pages (34 firmware, 21 payload, 24 table)
 and 51 uncached pages for one session
@@ -567,14 +667,19 @@ mimus keeps every policy that the OS carries for it today:
 The queue's REFUSED record takes the place of the session's REFUSED record
 (`include/pvr_mimus_job.h:15-20`), and FAULT takes the place of LOST.
 
-### The tag area clear stays at EL3
+### The application registers startup initialization
 
-The EL3 identity step zeroes the 64 KiB tag area with translation off and
-publishes it, under `SUNSTONE_A733_OS_GPU_LINEAR`
-(`apps/os/identity.c:34-47`). The application-interface design does not yet
-say where this clear goes once EL3 publication reads the region table. Until
-it does, the clear stays where it is, and the build option that selects it
-becomes `SUNSTONE_A733_OS_GPU`.
+An application may place `ss_region_initializer` records in the immutable
+`sunstone_region_initializers` section. A record names a manifest region and a
+prefix length. EL3 validates every record before the first store, clears each
+prefix with aligned 64-bit stores and publishes it before CPU read-only
+mappings take effect. Prefixes must fit CPU-readable, GPU-written WORK regions
+that the CPU cannot write. An absent registration clears nothing.
+
+Mimus registers its GPU output region and 64 KiB tag prefix in
+`sunstoneos/apps/mimus/gpu_linear.c`. The OS contains neither that output
+address nor its tag geometry. The image check verifies that registration data
+comes from application objects and remains immutable.
 
 ## Performance
 
@@ -772,10 +877,7 @@ image building and its host checks passing.
 
 ## Open decisions
 
-1. **The tag area clear.** It stays in the EL3 identity step. The
-   application-interface design decides whether a region declares a cleared
-   prefix, or whether mimus clears the tags another way.
-2. **Removing the backup poll.** Which board measurement qualifies the GPU
+1. **Removing the backup poll.** Which board measurement qualifies the GPU
    interrupt, and therefore removes the 4 ms cap.
-3. **The second application.** Which capacity it needs first: a second
+2. **The second application.** Which capacity it needs first: a second
    context, a deeper queue, or a second program.

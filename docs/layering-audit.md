@@ -157,35 +157,21 @@ mimus handler (`apps/mimus-board/usb0.c:13-35,75-110`).
   operations and an operation range assigned to each application.
 - **Severity:** blocks a second application. **Effort:** medium.
 
-### 6. The production GPU compute service is the mimus linear-layer job
+### 6. Applications use the generic GPU compute queue
 
-- **mimus job record:** the only production compute path, `pvr_mimus_service`,
-  accepts the mimus job record `{x_offset, ordinal, rows, x_stride}` against
-  a table of admitted tensors (`include/pvr_mimus_service.h:52-55`,
-  `include/pvr_compute_mimus.h:21-47`). It links the mimus kernel into the
-  driver.
-- **Worker branches on mimus:** the core GPU worker branches on the mimus
-  component by name, reaches into its slot for the performance hold, and
-  allows reopening only for mimus (`drivers/gpu/pvr_gpu_service.c:12-23,
-  108-109,492-520,804-810`). The mimus session excludes every other GPU
-  client.
-- **Fixed buffer map:** the CPU page tables and EL3 boot step encode the
-  mimus buffer map: two 8 MiB models, a 12 MiB arena and a 2 MiB read-only
-  output region (`platform/a733-smp-cached/memory.c:109-117`,
-  `apps/os/identity.c:34-47`, `platform/a733/gpu_mimus.c:74`).
-- **Recognizer-tied option:** the build option `SUNSTONE_A733_OS_GPU_LINEAR`
-  ("mimus linear layers on the GPU") is the only way to link the GPU
-  service (`cmake/a733-os.cmake:284-320`).
-- **Undersized generic service:** the generic compute service accepts one
-  fixed job with at most 4 KiB of input and 3,968 bytes of output
-  (`include/pvr_compute_package.h:7-8`), so it cannot serve real work.
-- **Correct structure:** one L1 compute queue that takes a program handle,
-  buffer bindings, a grid size and a small argument block. The GPU worker
-  accepts registered components through a function table. Buffers are
-  leased with per-buffer CPU and GPU permissions. The mimus kernel, tensor
-  table, placement generator and CPU fallback move to the mimus
-  application.
-- **Severity:** blocks a second application. **Effort:** large.
+The production service accepts a trusted program, manifest-region leases and
+160-byte jobs through `include/gpu_queue.h`. The OS owns the firmware,
+interrupt, device lifecycle and immutable GPU map. The external mimus
+application owns its linear kernel, tensor admission, placement and CPU
+fallback. `apps/queue-add` uses the queue without an application-specific
+change to the driver.
+
+Host queue, arithmetic and native instruction checks pass. Physical queue
+execution and the independent feature review remain open. The small generic
+qualification service remains separate, as the
+[queue design](designs/gpu-compute-queue.md) specifies. Startup initialization comes from immutable application registration records
+that name manifest regions and prefix lengths. Other output regions receive
+no implicit clear.
 
 ### 7. The NPU admits only networks listed inside the driver, through one built-in client
 

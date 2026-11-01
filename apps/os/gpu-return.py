@@ -1,4 +1,4 @@
-"""Exact final-retirement review and copied report for returning GPU recognition."""
+"""Exact final-retirement review and copied report for returning GPU images."""
 import struct
 
 CONDITIONS = {'output-lending-retired', 'firmware-off-isolation-and-resources',
@@ -6,10 +6,10 @@ CONDITIONS = {'output-lending-retired', 'firmware-off-isolation-and-resources',
               'local-pools-and-read-only-cache-retirement'}
 MAGIC, BYTES = 0x3152475033333741, 64
 CONSTRUCTOR_STAGES = (
-    None, 'previous GPU-loss record', 'owner identities', 'tensor table',
+    None, 'previous GPU-loss record', 'owner identities', 'queue client binding',
     'native platform constructor', 'platform constructor', 'PMIC lifetime',
-    'PMIC binding', 'performance selection', 'firmware memory', 'mimus memory',
-    'native backend binding', 'service construction', 'recognizer client binding',
+    'PMIC binding', 'performance selection', 'firmware memory', 'queue memory',
+    'native backend binding', 'service construction', 'application client binding',
     'thermal client binding')
 BISECT_STAGES = (None, 'constructor', 'firmware', 'jobs', 'layer')
 
@@ -28,8 +28,12 @@ def decode(raw, epoch, generation, require, allow_untouched=False):
     magic, version, size, actual, gen, jobs, flags, uv = struct.unpack('<8Q', raw)
     if version == 2:
         require(allow_untouched and (magic, size, actual, gen, jobs, flags) ==
-                (MAGIC, BYTES, epoch, generation, 0, 0) and 1 <= uv <= 14,
-                'GPU untouched refusal is incomplete or not admitted by this image.')
+                (MAGIC, BYTES, epoch, generation, 0, 0) and 0 <= uv <= 14,
+                'GPU untouched return is incomplete or not admitted by this image.')
+        # Reason zero covers skipped or successful construction without OPEN.
+        if uv == 0:
+            return {'jobs': 0, 'gpu_untouched': True, 'device_never_opened': True,
+                    'qualification_passed': False}
         return {'jobs': 0, 'gpu_untouched': True, 'constructor_refusal': uv,
                 'constructor_stage': CONSTRUCTOR_STAGES[uv],
                 'qualification_passed': False}
@@ -46,7 +50,7 @@ def decode(raw, epoch, generation, require, allow_untouched=False):
                 'gpu_off': flags == 63, 'gpu_never_powered': stage == 1,
                 'worker_parked': flags == 63, 'qualification_passed': False}
     require((magic, version, size, actual, gen, flags, uv) ==
-            (MAGIC, 1, BYTES, epoch, generation, 63, 960000) and 0 < jobs < 0xffffffff,
+            (MAGIC, 1, BYTES, epoch, generation, 63, 960000) and 0 <= jobs < 0xffffffff,
             'GPU retirement is incomplete or belongs to another session.')
     return {'jobs': jobs, 'gpu_off': True, 'worker_parked': True,
             'pmic_sample_retired': True, 'dcdc4_uv': uv}

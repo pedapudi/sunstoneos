@@ -27,6 +27,14 @@ elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
   add_sunstone_image(sunstone-a733-os-hello LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION hello-compute)
+elseif(SUNSTONE_APPLICATION STREQUAL "queue-add")
+  add_sunstone_application(queue-add
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/queue-add/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/queue-add/manifest.json"
+    INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/queue-add")
+  add_sunstone_image(sunstone-a733-os-queue-add LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION queue-add)
+
 else()
   if(NOT DEFINED SUNSTONE_APPLICATION_${SUNSTONE_APPLICATION}_ROOT)
     message(FATAL_ERROR "Unknown SUNSTONE_APPLICATION: ${SUNSTONE_APPLICATION}")

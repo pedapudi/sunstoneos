@@ -214,9 +214,6 @@ int os_application_prepare(void)
     main_task=xTaskCreateStaticAffinitySet(main_entry,m->name,m->stack_bytes/sizeof(StackType_t),NULL,m->priority,
         ss_application.stack,ss_application.task,(UBaseType_t)1<<grant.main_core);
     if(!main_task)return 0;
-#ifdef SUNSTONE_A733_OS_GPU_LINEAR
-    os_recognizer=main_task;
-#endif
 #ifdef SUNSTONE_SMP_NEWLIB
     void runtime_smp_init(void);runtime_smp_init();
 #endif
@@ -238,7 +235,7 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
     if((!data&&bytes)||bytes>ss_result_capacity||os_application_finished()||
        (grant.finish_by_us&&a733_smp_counter()/24>=grant.finish_by_us))ss_fail(0x756);
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
-#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+#ifdef SUNSTONE_A733_OS_GPU
     if(!os_gpu_retire())ss_fail(0x757);
 #endif
 #endif

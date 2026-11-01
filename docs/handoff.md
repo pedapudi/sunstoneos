@@ -35,12 +35,14 @@ cards. Neither board has populated eMMC or UFS; keep the failed UFS probe disabl
   FOLLOW and refused the return. Evidence:
   `dev-runs-1031/3-1-cpu-return-204119/run/watchdog-report.json`; code:
   `apps/os/cpu.c` and `apps/os/cpu-return/cpu.patch`. The fix remains unmerged.
-- **GPU firmware diagnostic — failed.** Image `2-firmware` from `ladder-wdt3`
-  stopped in the compatibility callback at
-  `platform/a733/gpu_backend.c:375` in its frozen build. Evidence:
-  `dev-runs-1031/3-1-gpu-return-204909/run/watchdog-report.json`.
-  That image uses the unmerged GPU-reference branch. The cause remains under
-  investigation; the record does not prove a firmware ABI mismatch.
+- **GPU firmware diagnostic — native return verified.** The reference startup
+  fixes at `fed5813f` started and stopped firmware with zero jobs and the
+  reference transcript on 3-1. Evidence:
+  `dev-runs-1031/3-1-gpu-return-210941/`. The native return reached `RETURN_ROM`
+  with watchdog mode 0. The host then failed on a missing
+  `bundle/return-review.json`; completed saved-RAM restoration is not established.
+  The earlier compatibility-callback failure remains recorded under
+  `dev-runs-1031/3-1-gpu-return-204909/`.
 - **Port 3-3 — quarantined by the runner.** A host-side missing
   `bundle/return-review.json` error followed a normal native return with
   `RETURN_ROM` and mode 0. Evidence:
@@ -82,7 +84,7 @@ The component documents identify source files and narrower evidence boundaries.
 | Crypto, entropy and identity | **Implemented:** native crypto modes, random-source and identity access. Full physical engine and recovery qualification remains open. | [Crypto](crypto-engine.md), [entropy](entropy.md), [identity](board-application.md) |
 | Always-on management processor | **Implemented:** remote-writer ownership accounting; native management-core control and sleep/wake qualification remain open. | [Remote writers](remote-writers.md), [SCP reference](vendor-firmware/scp-firmware.md) |
 | Autonomous microSD OS boot | **Host-verified only:** packaging, cold-entry and slot/update checks; no physical installation or autonomous OS boot is established. | [Cold entry](cold-entry.md), [resident OS design](designs/autonomous-card-os.md) |
-| Generic GPU compute queue | **Not started in the merged tree:** design and prototype headers only. The implementation remains on an unmerged branch. | [Queue design](designs/gpu-compute-queue.md), [layering audit](layering-audit.md) |
+| Generic GPU compute queue | **Host-verified only:** one context, one program, four leases, one job slot, interrupt completion and retained reopen. Physical queue execution and recovery remain unverified. | [Queue design](designs/gpu-compute-queue.md), [layering audit](layering-audit.md) |
 
 Earlier board results in this table retain their exact input scope. CPU, GPU
 and NPU evidence is indexed in [the preserved board results](handoff-history-20261031.md#qualified-on-the-boards)
@@ -96,7 +98,7 @@ Host-only autonomous boot evidence is under `resume-card-os-1026/`.
 
 Mimus lives in its own repository under `sunstoneos/`.
 [apps/mimus/source.json](../apps/mimus/source.json) pins
-`port/sunstoneos-split` at `c2dcb5a9`. The application owns recognition,
+the integration branch `port/sunstoneos-gpu-integrate`. The application owns recognition,
 models, manifests, capture wrappers and recognition checks. The merged
 reference cleanup supplies explicit OS admission inputs and the shared USB
 emulator; OS-only and hello-compute builds require no mimus sources.
@@ -139,8 +141,10 @@ port. The [source record](../apps/mimus/source.json) pins the example above.
 SunstoneOS owns device services and the [application kit](designs/app-abi.md);
 the external application owns recognition, models, manifests and capture tools.
 [The image guide](os-image.md) describes output layout and optional profiles.
-The compatibility GPU path requires `SUNSTONE_A733_OS_GPU_LINEAR=ON` and
-`SUNSTONE_A733_OS_LEGACY_MIMUS_GPU=ON`; it has the unresolved gaps below.
+`SUNSTONE_A733_OS_GPU=ON` selects the generic compute queue. Applications own
+their programs and tensor placement; `apps/queue-add` supplies an independent
+vector-add consumer. Data pages stop at 256 KiB. The GPU map is built once,
+and completion uses interrupts with the retained 4 ms backup poll.
 
 ## Coordinator launch and capture
 
@@ -204,10 +208,10 @@ reuse. No board run is requested for this documentation change.
 - **Early CPU return:** `apps/os/cpu-return/cpu.patch` refuses completion
   before the clock owner reaches FOLLOW. The hello-compute failure above
   exercises this condition; `apps/os/cpu.c` defines the owner phases.
-- **GPU service:** the latest compatibility stop belongs to the frozen
-  unmerged diagnostic. The merged service still has the health-binding,
-  vendor-setup, MMUCACHE, page-size and SLC gaps in
-  [the reference comparison](reference-backsolve-gpu.md).
+- **GPU queue qualification:** startup uses the executed-command health count,
+  vendor secure writes, initial timer correlation and MMU-cache completion before
+  READY. Shared mutable mappings bypass the GPU system cache. Physical queue
+  jobs, complete application GPU recognition and recovery remain unverified.
 - **NPU and hardware qualification:** current scheduled NPU startup/restart,
   sustained CPU load, thermal protection, accelerator concurrency, autonomous
   card boot and accessories remain outstanding in [the hardware matrix](hardware.md).
@@ -222,7 +226,9 @@ reuse. No board run is requested for this documentation change.
 - `work/tool-gates-1031`: simplify host tools and gate device access; under review, unmerged.
 - `work/quarantine-scope-1031`: preserve a normally returned instance after a host-side error; fix prepared, unmerged.
 - `work/early-return-1031`: permit application completion before CPU clock setup finishes; fix prepared, unmerged.
-- `work/gpu-ref-fixes-1031`: align the GPU service with the reference sequence; diagnosis and fixes in progress, unmerged.
+- `work/gpu-integrate-1031`: combines the reference startup fixes and generic
+  compute queue on the current application kit; prepared for host validation
+  and coordinator-run physical qualification.
 - `work/gpu-queue-1031`, with mimus `port/sunstoneos-gpu-queue`: supply a generic GPU compute queue and application port; unmerged.
 
 ## Review and validation

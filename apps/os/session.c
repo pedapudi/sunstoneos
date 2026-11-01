@@ -63,7 +63,7 @@ int os_session_decode(const void *raw,size_t bytes,struct os_session *out)
 #ifndef SUNSTONE_A733_OS_HEADSET
     if(h->devices&SS_DEVICE_AUDIO_HEADSET)return 0;
 #endif
-#ifndef SUNSTONE_A733_OS_GPU_LINEAR
+#ifndef SUNSTONE_A733_OS_GPU
     if(h->devices&SS_DEVICE_GPU)return 0;
 #endif
     memset(out,0,sizeof(*out));memcpy(&out->board,raw,sizeof(out->board));
