@@ -117,13 +117,36 @@ checks cover the measurement formats, explicit high-word records and legacy
 stages in `qualification-1101/sustained-fault-validation.json`. These host cases
 do not qualify physical fault recovery.
 
-The eight-core concurrency diagnostic has coordinator approval for the existing
-CPU startup, normal shutdown and vendor top CPU/DSU points. Its post-ROM rail
-helper requires verified normal return and restored RAM. The NPU stays at
-852 MHz/800 mV, with PCK4 ON and DCDC2 untouched. Implementation review and
-host checks precede the CPU-only control and combined physical run, in that
-order. The approved proposal and panel records are under `qualification-1101/`
-in the build root. Active-job cancellation follows the concurrency stage.
+The eight-core concurrency diagnostic is implemented and has correctness,
+hardware-safety and recovery review approval. Its host checks cover checked
+float32 matrix products, four jobs with hardware-busy overlap receipts,
+worker parking, local stop, all-core arrival and retirement, the eight MiB NPU
+pool clean, RAM restoration and the approved post-ROM rail helper. Modeled
+register, interrupt and scheduler effects establish no physical concurrency.
+The three baseline builds and selected integration gate pass.
+
+The approved CPU-only control precedes the combined physical run. Both await
+deployment of the reviewed runner support. That runner verifies both CPU rails
+at 800 mV before launch. For NPU images it reads the controller clock and fabric
+gates before checking that PCK4 policy and status are already ON. It refuses
+OFF or uncertain state without enabling a gate or domain. Normal return and
+restored RAM precede the DCDC5-only post-ROM helper; faults prohibit it.
+NPU stays at 852 MHz/800 mV, PCK4 stays ON and DCDC2 is untouched.
+
+The approved proposal is under `qualification-1101/` in the build root.
+`concurrency-1101/review/`, `final-checks/`, `final-native/`, `templates-final/`
+and `queue-inputs/` contain the review, checks, native artifacts, session
+provenance and image-bound submission inputs. The current checked source is
+`9dff0667`; its combined ELF SHA-256 is
+`2d8551bc4baa599f031e46a3f1a76e97c84cda03e3716c0474df4b2dcc86e680`.
+
+Active-job cancellation is implemented and independently reviewed. A finite
+WAIT stream supplies an active command; cancellation requires its acknowledgment
+and full idle before controller close, interrupt retirement and rearm, bootstrap
+and a matching real inference. Recovery retains the allocations and changes
+neither PCK4, local CCU words nor DCDC2. Host cases cover the real client,
+worker, interrupt callbacks, cleanup and failure records in `cancel-1101/`.
+Its physical run follows both concurrency controls and remains unqualified.
 
 The SDK discovers model names, tensor counts and byte sizes from its image's
 immutable catalogue. A caller resolves a name to a local index; the SDK assumes
