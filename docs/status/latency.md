@@ -1,8 +1,9 @@
 # Timing qualification remains open
 
 SunstoneOS has optional per-core maximum measurements and an eight-core load
-diagnostic. Physical worst-case timing remains unmeasured. The native diagnostic
-is a CPU control; it does not contain a returning DMA service or accelerator jobs.
+diagnostic. Physical worst-case timing remains unmeasured. Native CPU-control and combined
+CPU/DMA images link and pass host admission checks. GPU and NPU jobs remain
+outside this workload.
 
 ## Initial response budgets
 
@@ -13,21 +14,20 @@ delivery. Transfer size and accelerator execution time require separate bounds.
 
 | Region | Budget | Basis | Measured maximum |
 | --- | ---: | --- | --- |
-| Timer IRQ assertion to C handler entry | 50 µs | 5% of one tick | Host QEMU: 54,674.144 µs |
-| IRQ-masked or kernel critical region | 25 µs | Half the IRQ budget leaves entry and routing time | Host QEMU prefix: 24,454.160 µs |
-| Kernel ISR lock acquisition / outer hold | 25 µs each | Each contributes to the masked-region budget | Host QEMU: 0.048 / 24,453.856 µs |
-| Kernel task lock acquisition / outer hold | 25 µs each | Each contributes to the masked-region budget | Host QEMU: 909.424 / 24,856.656 µs |
-| Highest-priority ready task on an idle core | 100 µs | 10% of one tick | Host QEMU: 402.528 µs |
-| Highest-priority ready task on a busy core | 250 µs | 25% of one tick | Host QEMU: 939.104 µs |
-| DMA IRQ notification to completion observation | 250 µs | 5% of the minimum 5 ms audio period | Host QEMU, modeled DMA: 1,952.480 µs |
+| Timer IRQ assertion to C handler entry | 50 µs | 5% of one tick | Host QEMU: 54,674.128 µs |
+| IRQ-masked or kernel critical region | 25 µs | Half the IRQ budget leaves entry and routing time | Host QEMU prefix: 24,453.840 µs |
+| Kernel ISR lock acquisition / outer hold | 25 µs each | Each contributes to the masked-region budget | Host QEMU: 24,453.312 / 4,656.176 µs |
+| Kernel task lock acquisition / outer hold | 25 µs each | Each contributes to the masked-region budget | Host QEMU: 2,886.736 / 24,453.648 µs |
+| Highest-priority ready task on an idle core | 100 µs | 10% of one tick | Host QEMU: 611.456 µs |
+| Highest-priority ready task on a busy core | 250 µs | 25% of one tick | Host QEMU: 609.376 µs |
+| DMA IRQ notification to completion observation | 250 µs | 5% of the minimum 5 ms audio period | Host QEMU with modeled DMA: 493.424 µs |
 | GPU active-job IRQ to client receipt | 1,000 µs | One quarter of the 4 ms in-flight fallback | Separate two-core host fixture: 1,012.176 µs |
 | NPU mailbox publication to owner dispatch | 1,000 µs | At most one scheduler period | Uninstrumented; board unmeasured |
 
 The IRQ row measures the architectural timer, whose programmed compare value
 defines assertion. DMA and GPU lack an equivalent captured device-edge timestamp.
 Their software observations do not establish device-IRQ entry latency.
-Every board maximum is unmeasured. The host values exceed the targets except
-ISR lock acquisition. Instruction-counted virtual time includes emulator CPU
+Every board maximum is unmeasured. The host values exceed the targets. Instruction-counted virtual time includes emulator CPU
 interleaving and startup; it cannot establish a board overrun or a hardware fix.
 
 ## Measurement boundaries and coverage
@@ -42,7 +42,7 @@ It retains the first over-budget sample's start, duration and call site separate
 The budget table, core, counter frequency and region identify that check's inputs.
 No average replaces a maximum, and instrumentation overhead is not subtracted.
 
-The [port patches](../../patches/freertos-smp-c.patch) cover priority masking and
+The [optional port patches](../../patches/freertos-latency-c.patch) cover priority masking and
 both recursive kernel locks. Context restoration closes an interval before
 assembly unmasks the priority register. Nested entries retain the outer start.
 Mask samples end before recorder bookkeeping, restoration barriers and exception
@@ -72,16 +72,16 @@ the speech workload's measured bandwidth or cache-miss distribution.
 
 - Host IRQ, masking, lock-hold and task-lock-wait maxima exceed their targets
   at [timer dispatch](../../runtime/latency_irq.c:6) and
-  [the recursive port lock](../../patches/freertos-smp-c.patch:386).
+  [the recursive port lock](../../patches/freertos-latency-c.patch:104).
   Symbolization identifies `vTaskEnterCritical`, `vTaskSuspendAll` and
   `vTaskSwitchContext` in the generated kernel. Measure these holders on the
   board before moving work or changing the locking algorithm.
 - Host idle and busy scheduling maxima exceed their targets at
-  [the wake task](../../apps/latency/workload.c:83). Keep admission against the
+  [the wake task](../../apps/latency/workload.c:106). Keep admission against the
   actual running task and measure on the board before changing affinity or
   scheduler selection.
 - Host DMA and GPU delivery maxima exceed their targets at
-  [the DMA completion sweep](../../drivers/dma/dma_service.c:330) and
+  [the DMA completion sweep](../../drivers/dma/dma_service.c:371) and
   [GPU client receipt](../../drivers/gpu/gpu_queue.c:159). Bound cache-maintenance
   work and measure client placement with physical completions before a fix.
 - [The late-tick diagnostic](../../platform/a733-smp-cached/perf_session.c:173)
@@ -90,7 +90,7 @@ the speech workload's measured bandwidth or cache-miss distribution.
 - [Kernel lock contention](../../patches/freertos-smp-c.patch) has no timeout or
   fairness bound. Bound holder work and measure contention before considering a
   lock redesign. A lock timeout cannot safely substitute for scheduler ownership.
-- [The DMA worker](../../drivers/dma/dma_service.c:327) scans channels in order;
+- [The DMA worker](../../drivers/dma/dma_service.c:371) scans channels in order;
   earlier channels' cache maintenance delays later completion observation.
   Measure admitted buffer sizes before splitting or budgeting that work.
 - [NPU mailbox publication](../../runtime/npu_app.c:43) does not notify its owner.
@@ -110,58 +110,74 @@ nested regions, first-fault inputs, startup exclusion, a mid-sweep IRQ and freez
 and reports overruns independently of functional coverage. QEMU uses instruction
 counting; all its durations are host-model results. GPU queue cases 1 and 40
 pass with timing enabled, including client receipt and two independent callers.
-The combined model completes 25 continuous 4 KiB RAM-copy jobs and 64 idle plus
-128 busy samples on every core in 4,101 scheduler ticks. The synthetic DMA client
-shares priority 1 with memory workers; the real DMA service remains priority 4.
-Memory traffic stops after sampling, before the unchanged DMA close deadline.
-The run log, ELF and exact source hashes are under
-`~/.cache/sunstoneos/build/latency-1101/load/final-corrected/`; decoded maxima
-and symbolized locations are under
-`~/.cache/sunstoneos/build/latency-1101/host-final/`.
-The combined model ELF SHA-256 is
-`d8443ea4cfd309bcffa095e0aba7c26a5da41f9bb2c624c1b0082135331ddc3d`.
-The separate GPU receipt fixture is under
+The combined model completes 28 continuous 4 KiB RAM-copy jobs and retires its
+worker after collecting the retirement reply. Every core completes 64 idle and
+128 busy wake samples. Its 5,500-tick run uses modeled DMA registers and movement;
+QEMU durations establish instrumentation coverage only. Raw evidence is under
+`~/.cache/sunstoneos/build/latency-1101/return-1101/qemu-retirement/`.
+The model ELF SHA-256 is
+`40d05d64d7e9100fec000fa7d6bbc3fc8e915179aa97ece6778c1af9df26ab2d`.
+The separate GPU receipt fixture remains under
 `~/.cache/sunstoneos/build/latency-1101/gpu-latency-receipt/`.
-The frequency accessor runs after freezing; the preserved measured instructions
-and original ELF remain the timing evidence. Native objects compile with the
-accessor. The three baseline builds, kernel check, eight-core soak, mimus reference
-check and check index pass through `integration/gate-latency-final/` beneath the
-same latency build directory. Both baseline OS symbol inventories contain no
-latency code or storage. The application symbol checks pass with the latency
-header included in the public function inventory.
-Native OS and application objects compile with timing enabled; no native
-diagnostic image is frozen while the board queue is unavailable.
 
-Physical DMA needs an admitted DMA0 handoff and a returning service composition.
-The current pool retains its parent allocation and clock token, and the returning
-CPU profile excludes audio. Reusing its RAM-copy code does not establish drain,
-worker retirement, IRQ restoration or clock restoration. The combined physical
-image and repeated timing runs remain required after those prerequisites.
+The native images use application work regions for eight private 1 MiB extents.
+Their initialized data includes the global-offset table inside image RAM.
+The link check and native session-reservation checks pass. The combined image
+uses the OS RAM-copy API and DMA0 channel 0; it starts no GPU or NPU job.
+Memory traffic stops after loaded samples, before the final DMA drain.
 
-The CPU control's native selector is `SUNSTONE_APPLICATION=latency`, with
-`SUNSTONE_LATENCY=ON`, `SUNSTONE_A733_OS_CPU_RETURN=ON`,
-`SUNSTONE_A733_OS_CPU_CLOCK=ON` and `A733_A76_ADMITTED=ON`.
-It uses the existing CPU-L 1794 MHz/1000 mV and CPU-B 2002 MHz/1050 mV points.
-`apps/latency/expect.py` writes the existing runner's complete 5,440-byte word
-expectation. `apps/latency/host.py` decodes the result and rejects invented device
-coverage. The CPU control precedes any combined-device run on port 3-3.
+Normal DMA return closes the channel, restores its descriptor, collects the
+retirement reply and waits for the service worker's last-access acknowledgment.
+It masks the source interrupt and waits at most 100 µs for GIC distributor
+propagation before verifying that the interrupt is disabled. The original
+bootstrap task then verifies the adopted controller, clocks, routes and idle
+channels within a fixed 50 ms window. No clock, gate, reset or route write occurs
+on that verification path. The parent allocation and clock token remain retained.
+The CPU return path waits for this final acknowledgment before terminal cleanup.
+Failed checks retain their phase, register read, token result and deadline inputs.
 
-The queue status on the shared `bringup` checkout has no paused or queued entry
-on port 3-3, but the daemon lock is unheld. No run is submitted, no diagnostic
-board image is built and no device command is issued. Once the daemon serves,
-build the CPU control and submit it from that checkout:
+[The native mask check](../../checks/dma-return-mask.py) executes the linked code
+with delayed and stuck propagation. Removing its retry branch fails the delayed
+case. [The pool return check](../../checks/dma-pool-return.py) exercises actual
+FreeRTOS tasks through copy, close, reply collection and both acknowledgments.
+Changed routing and permanent registry contention prevent the final acknowledgment;
+transient contention completes. These models establish no physical drain bound.
 
-```sh
-b=/home/sunil/.cache/sunstoneos/build/latency-1101
-cmake --build "$b/native-objects" --target sunstone-a733-os-latency -j8
-/home/sunil/.cache/sunstoneos/venv/bin/python3 -B tools/board.py submit \
-  "$b/native-objects/sunstone-a733-os-latency.elf" --kind cpu-return \
-  --port 3-3 --worker latency-1101 \
-  --hypothesis 'CPU control at existing top points completes eight-core timing and returns' \
-  --expect "$b/cpu-expect.json"
-```
+The supervised, resident and resident-audio baseline builds and kernel check pass.
+The multithreaded QEMU soak fails the notification-count assertion at
+`checks/smp8-soak.c:104`; the observed count is unavailable. The same ELF passes
+with single-thread TCG and instruction-counted time. That control preserves
+eight guest cores, interrupts, migration and floating-point context checks;
+it does not explain the original failure or qualify concurrent host threads.
+The check index passes. Gate records and the preserved failure are under
+`return-1101/integration/`, and the control is under `return-1101/soak8-single-tcg/`
+beneath the latency build directory. The gate caps builds at four jobs.
 
-Native linking, runner admission and CPU-control timing remain untested. A combined
-DMA/GPU submission requires its own admitted image and expectations after the
-return-lifetime prerequisite is resolved; there is no executable combined-image
-submission command yet.
+## Disabled production and queued runs
+
+Disabled timing uses the unchanged base FreeRTOS patches. Enabled targets apply
+separate patches to private port copies. [The production comparison](../../checks/latency-production.py)
+compares a normal OS image against `00e9f775`, with timing disabled and no external
+application. Executable bytes and addresses, writable sections and allocated
+object layouts are identical; disassembly has no differences or latency symbols.
+The executable section contains 548,844 bytes, with SHA-256
+`e1b004427ae69c47f86c228dd020390698fea1cb95ff91cbec68903d75503a51`.
+Only build identity and debug information differ. Evidence is under
+`~/.cache/sunstoneos/build/latency-1101/return-1101/production-comparison-final/`.
+
+The CPU selector is `SUNSTONE_APPLICATION=latency`; the combined selector is
+`latency-dma` with `SUNSTONE_A733_OS_DMA=ON`. Both enable timing, returning CPU
+support and the admitted A76 cores. They use CPU-L 1794 MHz/1000 mV and CPU-B
+2002 MHz/1050 mV. No additional operating point is introduced.
+`apps/latency/expect.py` produces the complete 5,440-byte expectation; `--dma`
+requires real DMA job and completion counts. The decoder rejects device samples
+that the selected workload does not exercise.
+
+Built images, hashes, expectations and short submission instructions are under
+`~/.cache/sunstoneos/build/latency-1101/return-1101/images/`.
+The CPU control precedes the combined run on port 3-3. Both boards are paused
+for physical recovery, and no run is submitted. The combined run also requires
+independent DMA access, inherited-state, drain and recovery evidence. The runner
+binds these facts to the original USB instance and immutable session bytes before
+reset. The supplied combined template refuses admission until those physical
+facts exist; its flags do not establish them. Board timing remains unmeasured.
