@@ -8,6 +8,9 @@ monitor_entry:
     adr x0, monitor_vectors
     msr vbar_el3, x0
     isb
+#ifdef SUNSTONE_BOARD_PROBE
+    bl sunstone_probe_begin
+#endif
     bl invalidate_data_cache
     ic iallu
     dsb sy
@@ -63,9 +66,34 @@ monitor_sync:
     lsr x2, x2, #26
     cmp x2, #0x17
     b.ne 2f
+#ifdef SUNSTONE_BOARD_PROBE
+    cmp x0,#0x735
+    b.eq 5f
+#endif
     cmp x0, #0x734
     b.ne 2f
     mrs x2, cntpct_el0
+#ifdef SUNSTONE_BOARD_PROBE
+    ldr x3, =sunstone_probe_deadline
+    ldr x3, [x3]
+    cmp x2, x3
+    b.hs sunstone_probe_timeout
+    // x1-x30 stay unchanged across renewal, including x16 in memtest kernels.
+    ldr x0, =0x02050014
+    ldr w3, [x0]
+    and w3, w3, #0xffff
+    cmp w3, #0xb1
+    b.ne sunstone_probe_timeout
+    ldr x0, =0x0205000c
+    mov w3, #0x14af
+    str w3, [x0]
+    ldr x0, =0x07090104
+    movz w3, #0x0802, lsl #16
+    str w3, [x0]
+    lsr x3, x2, #10
+    str w3, [x0, #8]
+    dsb sy
+#endif
     ldr x3, =48000000
     add x2, x2, x3
     msr cntps_cval_el1, x2
@@ -73,6 +101,14 @@ monitor_sync:
     mov x0, #0
     ldp x2, x3, [sp], #16
     eret
+#ifdef SUNSTONE_BOARD_PROBE
+5:  ldp x2,x3,[sp],#16
+    mov x0,x1
+    mov x1,x2
+    mov x2,x3
+    mov x3,x4
+    b sunstone_probe_fault
+#endif
 2:  ldp x2, x3, [sp], #16
     mov x2, #1
     b monitor_exception

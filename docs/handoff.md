@@ -8,6 +8,17 @@ qualification. The [hardware matrix](hardware.md) holds the full inventory;
 
 ## Host tool admission
 
+The [board runner](board-runner.md) implements fresh-FEL preparation, returning
+CPU/GPU/probe capture and a frozen run queue. Fake FEL checks, real offline
+hello/GPU preparation and independent review pass; physical qualification is
+pending. Evidence is under `~/.cache/sunstoneos/build/board-runner-1031/`.
+Current NPU images reject the armed watchdog and remain unsupported by this
+runner. The guide gives the coordinator's port 3-1 qualification commands.
+The [native probe contract](board-probe-contract.md) now has a library, offline
+admission command and converted memtest example. Host/instruction checks cover
+its return and fatal paths. Static secondary-OFF ownership and peripheral
+retirement still need physical evidence; fresh FEL does not establish them.
+
 Host tools use direct image, session, target and hardware-condition checks.
 Queue claims, review records and archived sources do not authorize the changed
 runners. DRAM readiness uses a reversible memory comparison; CPU launchers

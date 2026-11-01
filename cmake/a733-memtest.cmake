@@ -41,3 +41,6 @@ add_custom_command(TARGET a733-memtest POST_BUILD
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/apps/memtest/beacons.py" "$<TARGET_FILE:a733-memtest>"
   COMMAND "${SUNSTONE_OBJCOPY}" -O binary "$<TARGET_FILE:a733-memtest>" "${CMAKE_CURRENT_BINARY_DIR}/a733-memtest.bin"
   VERBATIM)
+
+include("${CMAKE_CURRENT_LIST_DIR}/sunstone-probe.cmake")
+sunstone_enable_probe(a733-memtest)
