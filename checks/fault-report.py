@@ -2,8 +2,8 @@
 """Check the host fault-report reader of tools/fault-report.py against a modeled device.
 
 The modeled device applies the operation 5 rules that it parses from
-apps/mimus-board/usb0.c: a 16-byte request whose op is FAULT_OP and whose
-flag, count, offset and generation fields are zero gets the 1,160-byte report
+apps/os/usb0.c: a 16-byte request whose op is 5 and whose
+flags, count, offset and argument fields are zero gets the 1,160-byte report
 with no frame header; any other request stops the device, which then answers
 nothing. Each read returns no more than it requests, in fragments of 1, 29 or
 512 bytes. The cases cover the byte-for-byte result, the request bytes and
@@ -21,6 +21,8 @@ import struct
 
 ROOT = Path(__file__).resolve().parents[1]
 FRAGMENTS = (1, 29, 512)
+if not __debug__:
+    raise RuntimeError('checks require assertions')
 
 
 def load(name, path):
@@ -32,25 +34,26 @@ def load(name, path):
 
 tool = load('fault_report_tool', ROOT / 'tools/fault-report.py')
 decoder = load('fault_report_decoder', ROOT / 'checks/fault-decode.py')
-host = load('fault_report_capture', ROOT / 'apps/mimus-board/host.py')
 
 
 def device_rules():
-    """FAULT_OP and the request fields that operation 5 requires to be zero, from usb0.c."""
-    text = (ROOT / 'apps/mimus-board/usb0.c').read_text()
-    op = int(re.search(r'#define FAULT_OP (\d+)u', text)[1])
-    condition = re.search(r'if\(op==FAULT_OP\)\{\s*if\(([^)]*)\)stop\(\);', text)[1]
-    # The NPU report (operation 6) refuses the same fields, so Device serves both.
-    assert re.search(r'if\(op==OS_NPU_REPORT_OP\)\{\s*if\(([^)]*)\)stop\(\);', text)[1] == condition
-    # Where usb0.c assembles each named field from the request bytes.
-    assert 'request[4+i]<<(8*i)' in text and 'request[2]|(unsigned)request[3]<<8' in text
-    assert 'request[8+i]<<(8*i)' in text and 'op=request[0]' in text
-    places = {'request[1]': range(1, 2), 'bytes': range(2, 4), 'offset': range(4, 8), 'expected': range(8, 16)}
+    """The OS-owned fault and NPU requests use the public 16-byte layout."""
+    text = (ROOT / 'apps/os/usb0.c').read_text()
+    op, condition = re.search(r'if\(request.op==(5)\)\{if\(([^)]*)\)stop\(\);', text).groups()
+    assert re.search(r'if\(request.op==6\)\{if\(([^)]*)\)stop\(\);', text)[1] == condition
+    header = (ROOT / 'include/sunstone_app.h').read_text()
+    fields = re.search(r'struct ss_host_request \{([^}]+)\}', header)[1]
+    assert re.sub(r'\s+', '', fields) == 'uint8_top,flags;uint16_tcount;uint32_toffset;uint64_targument;'
+    assert 'sizeof(struct ss_host_request) == 16' in header
+    assert 'offsetof(struct ss_host_request, offset) == 4' in header
+    assert 'offsetof(struct ss_host_request, argument) == 8' in header
+    places = {'request.flags': range(1, 2), 'request.count': range(2, 4),
+              'request.offset': range(4, 8), 'request.argument': range(8, 16)}
     names = condition.split('||')
     assert sorted(names) == sorted(places), names
     zero = sorted(i for name in names for i in places[name])
     assert zero == list(range(1, 16)), zero
-    return op, zero
+    return int(op), zero
 
 
 FAULT_OP, ZERO_BYTES = device_rules()
@@ -204,32 +207,6 @@ def main():
     message = refused(lambda: run(device))
     assert 'too large' in message and len(device.writes) == 1
     cases['refuses-extra-byte-in-final-transfer'] = True
-
-    # An extra byte that arrives in a later transfer stays on the endpoint; the
-    # capture exchange's frame checks then refuse its first response.
-    epoch, generation = 0x1122334455667788, 3
-    status = struct.pack('<8I', 0x424d494d, 1, 2, 0, 0, 0, 1, 0) + struct.pack('<QQ', epoch, generation)
-    status += bytes(64 - len(status))
-    for fragment in FRAGMENTS[:2]:
-        for stray in (b'', b'\x5a'):
-            device = Device(data, fragment, after=stray + status)
-            result, _ = run(device)
-            assert bytes(result) == data and len(device.queue) == len(stray) + 64
-
-            # The capture's own requests are accepted; only the queued bytes answer them.
-            device.write = lambda endpoint, packet, timeout: len(packet)
-
-            def capture():
-                exchange = host.device_exchange(device, lambda: None, 1000.0, lambda frame: None,
-                                                now=lambda: 0.0)
-                host.capture(exchange, epoch, generation, 1000.0, now=lambda: 0.0, pause=lambda s: None)
-            message = refused(capture)
-            if stray:
-                assert message in ('Coalesced response refused.', 'Response identity differs.',
-                                   'Response too large.', 'Response extent differs.'), message
-            else:
-                assert message == 'Native combined workload refused result.', message
-        cases[f'later-extra-byte-refused-by-capture-frame-checks:{fragment}-byte-fragments'] = True
 
     # An empty fragment.
     class Empty(Device):

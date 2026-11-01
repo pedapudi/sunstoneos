@@ -147,7 +147,7 @@ TERMINAL_COUNTS = (' The record also reports, per job, interrupt_completions, fa
                    'client_wakeups. These counts are measurements, not pass conditions; zero fallback '
                    'completions over the session is the evidence that removes the tick wait.')
 TRANSPORT_SOURCES = ['tools/check-a733-smp-supervised.py', SUPERVISED_TRANSPORT]
-OS_SOURCES = ['apps/os/prepare.py', 'tools/check-a733-os-supervised.py', 'apps/mimus-board/prepare.py',
+OS_SOURCES = ['apps/os/prepare.py', 'tools/check-a733-os-supervised.py', 'apps/os/host.py',
               'apps/thermal/prepare.py', 'apps/board/prepare.py', 'tools/prepare-board-bundles.py',
               *TRANSPORT_SOURCES]
 
@@ -1139,7 +1139,7 @@ ROWS = [
              'apps/gpu-power-id/mimus-check.py', 'apps/gpu-power-id/mimus-host.py',
              'apps/gpu-power-id/mimus-host-check.py', 'drivers/gpu/pvr_compute_mimus.c',
              'drivers/gpu/pvr_compute_mimus_usc.c', 'include/pvr_compute_mimus.h',
-             'shaders/pvr_mimus_linear.cl', 'docs/designs/gpu-exact-sum-caller.md']),
+             'include/pvr_mimus_job.h', 'docs/designs/gpu-exact-sum-caller.md']),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
@@ -1184,13 +1184,6 @@ ROWS = [
                  'drivers/gpu/pvr_gpu_service.c', 'tools/prepare-board-bundles.py', *TRANSPORT_SOURCES],
      'expected_result': 'The GPU and NPU jobs complete under the arbiter and each output matches its host '
                         'reference.' + TERMINAL_COUNTS},
-    {'name': 'recognition-dispatcher', 'class': 'terminal', 'admission': None,
-     'transport': SUPERVISED_TRANSPORT,
-     'component': 'Recognition dispatcher placing mimus linear layers on the CPU or GPU in the OS image',
-     'module': 'apps/os/prepare.py', 'runner': 'tools/check-a733-os-supervised.py',
-     'sources': OS_SOURCES + ['apps/os/dispatch.c', 'apps/os/placement.py', 'drivers/gpu/pvr_gpu_service.c'],
-     'expected_result': 'Recognition of the fixed inputs matches the host transcript, with each linear layer '
-                        'on the processor the placement table names.' + TERMINAL_COUNTS},
     {'name': 'gpu-npu-hang-reset', 'class': 'excluded',
      'reason': 'An intentional GPU or NPU hang needs physical recovery.'},
     {'name': 'voltage-clock-changes', 'class': 'excluded',
