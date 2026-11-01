@@ -3380,6 +3380,17 @@
   "summary": "Execute the final DI301 USB task and linked TinyUSB FIFO/endpoint stack.",
   "usb": false
  },
+ "dev-run.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--out"
+  ],
+  "summary": "Check tools/dev-run.py without a board.",
+  "usb": true
+ },
  "device-memory-capacity.py": {
   "cache_areas": [],
   "docs": [
