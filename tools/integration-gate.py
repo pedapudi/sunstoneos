@@ -43,6 +43,9 @@ VARIANTS = {
     # The supervised NPU profile. The OS build verifies its host inputs against
     # tools/npu-session-models.json. {cache} is the --cache directory.
     'npu': ['-DSUNSTONE_A733_OS_NPU=ON', '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
+    'npu-queue': ['-DSUNSTONE_A733_OS_NPU=ON', '-DSUNSTONE_A733_OS_NPU_QUEUE=ON',
+                  '-DSUNSTONE_OS_NPU_QUEUE_MODELS=0,1',
+                  '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
     # The performance-mode service (docs/designs/performance-modes.md) on the
     # supervised A76 CPU clock build, with the high boot mode; and with the
     # NPU profile and the low boot mode.
