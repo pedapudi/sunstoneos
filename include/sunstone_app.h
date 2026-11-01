@@ -49,6 +49,9 @@ enum {
 /* One physical range; virtual address equals physical address. The build
  * assigns the address when manifest.json omits it. INPUT: bytes is the
  * maximum content length, and the exact length when sha256 is nonzero.
+ * CPU access is a trusted application contract. Current mappings keep INPUT
+ * regions writable; the existing GPU output profile enforces CPU read-only
+ * access. INPUT authentication does not protect against later application writes.
  * WORK and OUTPUT: bytes is the capacity. sha256 is zero except for an INPUT
  * whose content the manifest pins; otherwise the session supplies it. */
 struct ss_region {
