@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise actual compiled OS CPU register access policy and mux completion barrier.
+"""Exercise actual compiled OS CPU register access policy and write completion barriers.
 
 Use a CPU-clock-enabled configured OS build. Register memory and CPU identity
 are modeled; the OS adapter, clock allowlist and report decoder are actual code.
@@ -24,9 +24,9 @@ a = p.parse_args()
 a.output.mkdir(parents=True, exist_ok=a.resume)
 steps = Steps(a.output, 'commands.json')
 u = next(u for u in json.loads((a.build / 'compile_commands.json').read_text())
-         if u['file'].endswith('/apps/os/cpu.c'))
+         if u['file'].endswith(('/apps/os/cpu.c','/os-image/return-cpu.c')))
 original = shlex.split(u['command'])
-old_root = str(Path(u['file']).parents[2])
+old_root = str(ROOT) if u['file'].endswith('/os-image/return-cpu.c') else str(Path(u['file']).parents[2])
 flags = [s.replace(old_root, str(ROOT)) for s in original[:original.index('-o')]]
 assert '-DSUNSTONE_A733_OS_CPU_CLOCK=1' in flags and '-DA733_A76_ADMITTED=1' in flags
 units = ('checks/os-cpu-clock-native.c', 'drivers/clock/a733_cpu_clock.c', 'runtime/memory.c')
@@ -97,14 +97,44 @@ cases.append('all-seventeen-allowed-reads')
 for addr in (0x08871000, 0x08872000, 0x08873000, 0x0887101c, 0x0887201c, 0x0887301c):
     assert call(1, addr, registers[addr]) == 1
     expected = [('write', addr, 4, registers[addr])]
-    if addr & 0xfff == 0x1c: expected.append(('dsb-sy',))
+    expected.append(('dsb-sy',))
     assert events == expected, (hex(addr), events)
-cases.append('cluster-and-dsu-writes-and-mux-dsb')
+cases.append('cluster-and-dsu-writes-and-completion-dsb')
 for addr in (0x08870000, 0x0887001c, 0x08871004, 0x08871008, 0x08871018, 0x08873018, 0x0300624c, 0x07090160):
     assert call(1, addr, 0) == 0 and not events
 for mode, addr in ((0, 0x08870000), (0, 0x08871002), (1, 0x08871002), (2, 0x08871000), (3, 0x08871000)):
     assert call(mode, addr, 0) == 0 and not events
 cases.append('out-of-policy-and-wrong-owner-refusal')
+# The returning board bundles supply the driver's other native write adapter.
+# Use its actual translation unit and the same allowlist/DSB instruction model.
+bundle_obj=a.output/'bundle.o'
+bundle_source=ROOT/'checks/os-cpu-clock-bundle.c'
+stamp=hashlib.sha256(bundle_source.read_bytes()+(ROOT/'apps/board-bundles-power/cpu-opp-step.c').read_bytes()).hexdigest()[:12]
+steps.command('compile-bundle-'+stamp,[*flags,'-c',bundle_source,'-o',bundle_obj])
+bundle_elf=a.output/'bundle.elf'
+steps.command('link-bundle-'+hashlib.sha256(bundle_obj.read_bytes()).hexdigest()[:12],
+              [LLD,'-Ttext=0x41000000','--entry=os_cpu_bundle_adapter_check','--gc-sections',bundle_obj,*objects[1:],'-o',bundle_elf])
+image=Image(bundle_elf)
+m=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
+m.mem_map(0x200000,0x10000)
+m.mem_map(0x41000000,0x400000);m.mem_map(0x42000000,0x10000)
+for page in sorted({x&~4095 for x in registers}):m.mem_map(page,4096)
+for addr,data in image.parts:m.mem_write(addr,data)
+m.hook_add(UC_HOOK_CODE,hook)
+m.hook_add(UC_HOOK_MEM_READ|UC_HOOK_MEM_WRITE,access)
+def call(mode,addr=0,value=0):
+    events.clear()
+    m.reg_write(UC_ARM64_REG_SP,0x4200f000);m.reg_write(UC_ARM64_REG_LR,stop)
+    for r,v in ((UC_ARM64_REG_X0,mode),(UC_ARM64_REG_X1,addr),(UC_ARM64_REG_X2,value)):m.reg_write(r,v)
+    m.emu_start(image.address('os_cpu_bundle_adapter_check'),stop,count=100000)
+    assert m.reg_read(UC_ARM64_REG_PC)==stop
+    return m.reg_read(UC_ARM64_REG_X0)
+for addr in (0x08871000,0x08872000,0x08873000,0x0887101c,0x0887201c,0x0887301c):
+    assert call(1,addr,registers[addr])==1
+    assert events==[('write',addr,4,registers[addr]),('dsb-sy',)],(hex(addr),events)
+for addr in (0x08870000,0x08871004,0x08872002,0x0300624c):
+    assert call(1,addr,0)==0 and not events
+cases.append('bundle-six-writes-complete-and-out-of-policy-refusal')
 # Drive the actual owner through both inspections and both-cluster requests.
 # The driver boundary models completion; its grant decoder/DSU table are real.
 owner_obj = a.output / 'owner.o'
@@ -133,8 +163,8 @@ for mode, name in enumerate(('both-clusters-big-little-dsu', 'no-grant-read-only
     cases.append(name)
 result = dict(status='PASS', cases=cases, elf_sha256=hashlib.sha256(elf.read_bytes()).hexdigest(),
     inputs={f: hashlib.sha256((ROOT / f).read_bytes()).hexdigest() for f in
-            (*units, 'checks/os-cpu-clock-owner.c', 'checks/os-cpu-clock-native.py', 'apps/os/cpu.c', 'include/a733_cpu_clock.h', 'include/a733_mmio.h')},
+            (*units, 'checks/os-cpu-clock-bundle.c', 'apps/board-bundles-power/cpu-opp-step.c', 'checks/os-cpu-clock-owner.c', 'checks/os-cpu-clock-native.py', 'apps/os/cpu.c', 'include/a733_cpu_clock.h', 'include/a733_mmio.h')},
     owner_elf_sha256=hashlib.sha256(owner_elf.read_bytes()).hexdigest(),
     limits='Actual AArch64 adapters with modeled MMIO storage; actual request owner with modeled driver completion. No physical clock, rail or thermal qualification.')
 (a.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
-print('PASS actual OS CPU adapter: report, CPU-B above boot0 refused, seventeen reads, six writes, mux DSB, refusals')
+print('PASS actual OS CPU adapter: report, CPU-B above boot0 refused, seventeen reads, both adapters complete six writes, refusals')

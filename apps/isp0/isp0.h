@@ -1,6 +1,7 @@
 #ifndef SUNSTONE_ISP0_PRIVATE_H
 #define SUNSTONE_ISP0_PRIVATE_H
 #include "a733_isp0.h"
+#include "../../drivers/camera/isp0-replay.h"
 #include "input.h"
 #include "a733_iommu.h"
 #include "a733_camera_dma.h"
@@ -22,7 +23,9 @@ struct isp0_application {
  uint8_t *memory[ISP0_EXTENTS],*payload;size_t sizes[ISP0_EXTENTS];
  StaticTask_t task;StackType_t stack[4096];TaskHandle_t handle;
  uint64_t last_now;size_t bytes,copied;
- unsigned stage,complete,guards_ok;atomic_uint result;
+ /* result: 0 producer owns copy, 1 USB owns immutable copy, 2 fault,
+  * 3 USB has retired the consumer and requested the next capture. */
+ unsigned stage,complete,guards_ok,sequence,waiting;atomic_uint result,interrupts[3];
  uint8_t digest[32],session_digest[32];
 };
 extern struct isp0_application isp0;

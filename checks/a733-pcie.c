@@ -304,6 +304,19 @@ static void speeds(void)
     /* A later retrain to another speed fails the exact identity check. */
     setup();assert(complete()==A733_PCIE_READY);*pmic_model_word(&model,0x06000080)=0x00110000;
     assert(a733_pcie_test_claim(&port,(struct a733_pcie_epf_test *)&model)==A733_PCIE_RETAINED&&port.failed&&!port.test);
+    /* Vendor Gen3 target, including slower endpoints, binds the negotiated
+     * status only after the directed change completes. */
+    link_speed=3;
+    for(negotiated=1;negotiated<=3;++negotiated) {
+        setup();assert(complete()==A733_PCIE_READY&&port.endpoint.link_status==(0x10|negotiated)&&port.speed_change);
+        train=written(0,0x06400c00,4,1,1);clear=written(train,0x0600080c,4,1u<<17,0);
+        direct=written(clear,0x0600080c,4,1u<<17,1u<<17);window=written(0,0x06300004,4,UINT32_MAX,0);
+        assert(written(0,0x0600007c,4,15,3)&&written(0,0x060000a0,2,15,3)&&train&&clear&&direct&&direct<window);
+    }
+    negotiated=3;setup();speed_stuck=1;retained();
+    assert(port.speed_change&&!written(0,0x06300004,4,UINT32_MAX,0));
+    setup();assert(complete()==A733_PCIE_READY);*pmic_model_word(&model,0x06000080)=0x00120000;
+    assert(a733_pcie_test_claim(&port,(struct a733_pcie_epf_test *)&model)==A733_PCIE_RETAINED&&port.failed&&!port.test);
     /* Only speeds 1..3 are admitted; the Gen1 profile issues no directed change. */
     static struct a733_pcie other;struct a733_pcie_config c=port.config;
     for(unsigned i=0;i<2;++i){c.link_speed=i?4:0;assert(!a733_pcie_init(&other,&c,&port.ops,&model,&model.clocks,&model.pins,
@@ -375,6 +388,31 @@ static void hold_boundaries(void)
     assert(a733_pcie_poll(&port)==A733_PCIE_RETAINED&&trace_count==before&&!reset_rise);
     puts("PCIe minimum holds: fractional origin, costly GPIO completion, exact100ms pending and original deadline retained");
 }
+static void references(void)
+{
+    static typeof(trace) reference;
+    setup();assert(complete()==A733_PCIE_READY);
+    unsigned count=trace_count;memcpy(reference,trace,sizeof(trace));
+    /* Raw 26 MHz, PLL_REF N=96/M=104, APBS1 from normalized SYS24M. */
+    setup();*pmic_model_word(&model,0x07090160)=0x983fb0f7;*pmic_model_word(&model,0x02002000)=0xf8675f00;
+    *pmic_model_word(&model,0x07010010)=0x04000000;
+    assert(complete()==A733_PCIE_READY&&phy_done&&trace_count==count);
+    for(unsigned i=0;i<count;++i)assert(trace[i].address==reference[i].address&&
+        trace[i].width==reference[i].width&&trace[i].value==reference[i].value);
+    /* Wrong REF ratio or missing DCXO/REF stability refuses before PHY writes. */
+    for(unsigned bad=0;bad<4;++bad) {
+        setup();*pmic_model_word(&model,0x07090160)=0x983fb0f7;*pmic_model_word(&model,0x02002000)=0xf8675f00;
+        *pmic_model_word(&model,0x07010010)=0x04000000;
+        /* Reach PCIe parent admission with valid provider state first. */
+        for(unsigned i=0;port.phase!=7&&i<40000;++i)assert(step()==A733_PCIE_PENDING);
+        assert(port.phase==7&&!trace_count);
+        if(bad==0)*pmic_model_word(&model,0x02002000)^=1u<<16;
+        if(bad==1)*pmic_model_word(&model,0x07090160)&=~(1u<<28);
+        if(bad==2)*pmic_model_word(&model,0x07090160)&=~2u;
+        if(bad==3)*pmic_model_word(&model,0x02002000)&=~(1u<<28);
+        retained();assert(!phy_done&&!trace_count);
+    }
+}
 int main(int argc,char **argv)
 {
     setup();assert(complete()==A733_PCIE_READY);
@@ -400,11 +438,7 @@ int main(int argc,char **argv)
     setup();port.config.deadline=3000000;not_ready=UINT32_MAX;retained();
     assert(port.last_now-port.perst_since>=1000000&&port.last_now<3000000);
     setup();*pmic_model_word(&model,0x20000000)=0x56780001;retained();
-    /* A valid 26 MHz SYS24M pair is still refused: the PHY table is 24 MHz only.
-     * APBS1 moves to SYS24M so the PMIC TWI divider stays in range. */
-    setup();*pmic_model_word(&model,0x07090160)=0x983fb0f7;*pmic_model_word(&model,0x02002000)=0xf8675f00;
-    *pmic_model_word(&model,0x07010010)=0x04000000;
-    retained();assert(!phy_done&&!trace_count);
+    references();
     setup();model.pmic[0x20]=0;retained();assert(!phy_done&&!port.pin.id);
     setup();*pmic_model_word(&model,0x02000210)=1u<<22;retained();assert(!phy_done&&!port.pin.id);
     setup();raise_before_adopt=1;retained();
@@ -418,6 +452,6 @@ int main(int argc,char **argv)
     speeds();
     atu_latency();
     hold_boundaries();
-    puts("PASS: actual provider/rail/PCK/pin/clock composition, PCIe PHY/link/readiness/config, Gen2 directed speed change and retained failures");
+    puts("PASS: PCIe references, Gen2/Gen3 change/fallback, delayed ATU and minimum holds, retained failures");
     return 0;
 }

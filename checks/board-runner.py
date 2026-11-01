@@ -395,6 +395,112 @@ def offline(out,hello):
     passed('real-gpu-ladder-session-and-armed-launcher')
 
 
+
+def copied_return_report(epoch):
+    # Mirror the native return report fields: header, per-core retirement,
+    # device-drained epoch and secondary power-off acknowledgment.
+    raw=bytearray(8880)
+    struct.pack_into('<8Q',raw,0,0x3154525133333741,3,len(raw),epoch,1000,4,0,0)
+    for core in range(8):
+        offset=688+core*1024
+        struct.pack_into('<7Q',raw,offset,epoch,epoch,epoch,epoch,epoch if core else 0,epoch if core else 0,0)
+        struct.pack_into('<Q',raw,offset+104,epoch)
+        struct.pack_into('<Q',raw,offset+768,epoch if core else 0)
+    return bytes(raw)
+
+
+def gpu_capture_cases(out, gpu_images):
+    """Run the real generic capture after fake FEL return with exact ELF layouts."""
+    require_images = bool(gpu_images)
+    assert require_images, 'gpu-capture requires --gpu-image for each real ELF under test'
+    for index,image in enumerate(gpu_images):
+        info=images.inspect(image,'gpu-return')
+        geo=info['report_geometry'];gpu=geo['gpu_receipt']
+        assert info['generic'] and 'thermal' in geo
+        diagnostic=gpu.get('bisect')
+        host=images.load('capture_fixture_host',ROOT/'apps/os/host.py')
+        limit=host.image_manifest(image)['manifest']['output_limit']
+        variants=['normal','foreign-output','foreign-gpu','foreign-thermal','thermal-unknown','short-gpu']
+        if diagnostic:
+            variants+=['wrong-diagnostic','normal-for-diagnostic']
+        else:
+            variants+=['zero-jobs','diagnostic-for-normal']
+        for variant in variants:
+            root=out/f'gpu-{index}-{variant}';root.mkdir()
+            args=arguments(root);args.image=image;args.kind='gpu-return';args.expect=None
+            epoch,generation=1,2
+            output=bytearray(56+limit);payload=b'complete'
+            struct.pack_into('<7Q',output,0,0x31544c5553455241,1,len(output),epoch,generation,1,len(payload))
+            output[56:56+len(payload)]=payload
+            if variant=='foreign-output':struct.pack_into('<Q',output,24,epoch+1)
+            version=3 if diagnostic else 1
+            jobs=0 if diagnostic else 7
+            flags=0 if diagnostic and diagnostic['stage']==1 else 63
+            final=(diagnostic['stage']<<32)|diagnostic['limit'] if diagnostic else 960000
+            if variant=='wrong-diagnostic':final^=1
+            if variant=='normal-for-diagnostic':version,final=1,960000
+            if variant=='diagnostic-for-normal':version,final=3,2<<32
+            if variant=='zero-jobs':jobs=0
+            receipt=struct.pack('<8Q',0x3152475033333741,version,64,
+                                epoch+1 if variant=='foreign-gpu' else epoch,generation,jobs,flags,final)
+            thermal=geo['thermal'];w=bytearray(thermal['window']['bytes']);r=bytearray(thermal['readings']['bytes'])
+            # Native thermal.c publishes a 72-byte header plus existing rows.
+            struct.pack_into('<4I5Q4I',w,0,0x5448524d,1,128,1,
+                             epoch+1 if variant=='foreign-thermal' else epoch,generation,1,100,200,0,100000,56,1)
+            for field,value in [('first',0),('collecting',1),('ready',1)]:
+                struct.pack_into('<I',w,thermal['window']['members'][field],value)
+            struct.pack_into('<Q5i6I4B',r,0,100,*([50000]*5),*([0]*5),1,31,0,0,0)
+            struct.pack_into('<I',r,thermal['readings']['members']['count'],1)
+            if variant=='thermal-unknown':struct.pack_into('<I',w,thermal['window']['members']['ready'],0)
+            objects=[(geo['report_address'],copied_return_report(epoch)),(geo['output_address'],output),
+                     (gpu['address'],receipt),(thermal['window']['address'],w),(thermal['readings']['address'],r)]
+            model=Model('normal')
+            for address,data in objects:model.memory.update({address+n:b for n,b in enumerate(data)})
+            class Backend(board.Live):
+                def __init__(self,*values):
+                    super().__init__(*values,access=model,process=model.process,now=model.now,sleep=model.sleep)
+                def dram(self):pass
+                def rails(self):pass
+                def prepare(self,info):
+                    return {'epoch':epoch,'generation':generation,'watchdog':{'mode':0xb1,'session_seconds':1},
+                            'uploads':[],'launch':['exe','0x52000'],'format':'generic','geometry':geo}
+                def read(self,address,size,path):
+                    data=super().read(address,size,path)
+                    if variant=='short-gpu' and address==gpu['address']:
+                        data=data[:-1];path.write_bytes(data)
+                    return data
+            with patch.object(board.os,'access',return_value=True),contextlib.redirect_stdout(io.StringIO()):
+                result=board.run_image(args,Backend)
+            invalid=variant not in ('normal','foreign-thermal','thermal-unknown')
+            assert result['outcome']==('result-mismatch' if invalid else 'returned'),(variant,result)
+            report=result['return_report']
+            assert report['secondaries_off']==7 and not report['qualification_passed']
+            assert result['normal_return'] and not model.lock and not model.quarantined
+            assert (root/'run/return-report.bin').read_bytes()==copied_return_report(epoch)
+            assert (root/'run/output-record.bin').read_bytes()==output
+            assert (root/'run/gpu-report.bin').exists() and (root/'run/thermal-window.bin').read_bytes()==w
+            assert (root/'run/thermal-readings.bin').read_bytes()==r
+            if variant=='foreign-output':
+                assert report['output_capture_status']=='malformed' and report['gpu_capture_status']=='decoded'
+                assert (root/'run/output.bin').read_bytes()==b''
+            else:assert (root/'run/output.bin').read_bytes()==payload
+            if variant in ('foreign-thermal','thermal-unknown'):
+                assert report['thermal_capture_status']=='malformed' and 'thermal_error' in report
+            else:
+                assert report['thermal']['classification']=='complete'
+                assert not report['thermal']['qualification_passed']
+            if variant=='normal':
+                assert report['gpu_capture_status']=='decoded' and not report['gpu']['qualification_passed']
+                if diagnostic:assert report['gpu']['jobs']==0 and not report['gpu']['completed_gpu_work']
+                else:assert report['gpu']['jobs']==7 and report['gpu']['completed_gpu_work']
+            passed(f'generic-gpu-{index}-{variant}-preserves-native-return-and-raw-captures')
+        inventory=board.references(args)
+        for path in ('tools/board_images.py','apps/os/cpu-return-host.py','apps/os/gpu-return.py',
+                     'apps/os/cpu-return-thermal.py','apps/os/thermal-report.py','apps/os/host.py'):
+            assert inventory[str((ROOT/path).resolve())]==images.sha(ROOT/path)
+        passed(f'generic-gpu-{index}-freezes-all-capture-decoder-inputs')
+
+
 def report_cases(out,hello):
     root=out/'reports';root.mkdir()
     host=images.load('checked_return_report',ROOT/'apps/os/cpu-return-host.py')
@@ -431,12 +537,44 @@ def report_cases(out,hello):
         args=arguments(root);args.image=root/'malformed.elf';args.image.write_bytes(data)
         with contextlib.redirect_stdout(io.StringIO()):
             result=board.run_image(args,lambda *a:(_ for _ in ()).throw(AssertionError('preflight opened transport')))
-        assert result['outcome']=='refused-before-launch' and 'Report/cleanup stacks' in result['first_failure']['detail']
+        assert result['outcome']=='refused-before-launch' and 'CPU return Secure Device allocations differ' in result['first_failure']['detail']
         passed('malformed-report-mmio-address-refused-before-transport')
         try:images.inspect(hello,'npu')
         except ValueError as error:assert 'NPU kind requires the linked OS NPU service' in str(error)
         else:raise AssertionError('CPU image relabeled as NPU accepted')
         passed('npu-kind-refuses-image-without-native-npu-service')
+        try:images.inspect(hello,'gpu-return')
+        except ValueError as error:assert 'GPU kind requires the linked GPU return receipt' in str(error)
+        else:raise AssertionError('CPU image relabeled as GPU accepted')
+        passed('gpu-kind-refuses-image-without-linked-gpu-receipt')
+        geo=images.inspect(hello,'cpu-return')['report_geometry']
+        assert 'gpu_receipt' not in geo and 'thermal' not in geo
+        limit=host.host.image_manifest(hello)['manifest']['output_limit']
+        for foreign in (False,True):
+            control=root/('cpu-foreign-output' if foreign else 'cpu-normal-output');control.mkdir()
+            args=arguments(control);args.image=hello;args.kind='cpu-return';args.expect=None
+            model=Model('normal')
+            output=struct.pack('<7Q',0x31544c5553455241,1,56+limit,2 if foreign else 1,2,1,8)+b'complete'+bytes(limit-8)
+            for address,data in [(geo['report_address'],copied_return_report(1)),(geo['output_address'],output)]:
+                model.memory.update({address+n:b for n,b in enumerate(data)})
+            class Backend(board.Live):
+                def __init__(self,*values):
+                    super().__init__(*values,access=model,process=model.process,now=model.now,sleep=model.sleep)
+                def dram(self):pass
+                def rails(self):pass
+                def prepare(self,info):
+                    return {'epoch':1,'generation':2,'watchdog':{'mode':0xb1,'session_seconds':1},
+                            'uploads':[],'launch':['exe','0x52000'],'format':'generic','geometry':geo}
+            with patch.object(board.os,'access',return_value=True),contextlib.redirect_stdout(io.StringIO()):
+                result=board.run_image(args,Backend)
+            assert result['outcome']==('result-mismatch' if foreign else 'returned'),result
+            report=result['return_report']
+            assert report['secondaries_off']==7 and report['thermal_capture_status']=='absent'
+            assert report['output_capture_status']==('malformed' if foreign else 'decoded')
+            assert result['normal_return'] and not model.lock and not model.quarantined
+            assert (control/'run/output-record.bin').read_bytes()==output
+            assert (control/'run/output.bin').read_bytes()==(b'' if foreign else b'complete')
+            passed('generic-cpu-capture-'+('foreign' if foreign else 'normal'))
 
 
 def owned_ddr_cases(out):
@@ -533,10 +671,160 @@ def rail_cases(out):
         passed('pinned-rail-helper-'+variant)
 
 
+def generic_npu_case(out, hello):
+    root=out/'generic-npu';root.mkdir()
+    args=arguments(root,'--kind','npu');args.image=hello
+    original_symbols=images.symbols
+    def generic_symbols(image):
+        # The real hello ELF exercises the generic session producer; only
+        # the linked-service identity is modeled for NPU kind selection.
+        return dict(original_symbols(image),os_npu_client_model=(1,1))
+    with patch.object(images,'symbols',generic_symbols):
+        info=images.inspect(hello,'npu')
+        assert info['generic'] and not info.get('finite_npu')
+        source=json.loads((board.dev.EVIDENCE/'sol-resume-20261031/port-3-3/cpu-thermal-state/session.json').read_text())
+        words={}
+        for transaction in source['transactions']:
+            command=transaction['command']
+            addresses=[int(command[i+1],16) for i,value in enumerate(command) if value=='readl']
+            words.update({hex(address):int(value,16) for address,value in zip(addresses,transaction['stdout'].split())})
+        plan=images.prepare(args,info,{'words':words},root/'bundle')
+        assert plan['format']=='generic'
+        queued=arguments(root,'--kind','npu','--template',str(root/'bundle'),submit=True);queued.image=hello
+        job=board.Queue(root/'queue').submit(queued)
+        assert (Path(job['directory'])/'template/session.bin').read_bytes()==(root/'bundle/session.bin').read_bytes()
+        reached=[]
+        def backend(*args):
+            reached.append(True)
+            raise RuntimeError('modeled stop after preflight')
+        result=board.run_image(args,backend)
+        assert reached and 'modeled stop after preflight' in result['first_failure']['detail']
+    model=Model('normal');owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
+    read_words=[]
+    def tx(*commands):
+        read_words.extend(int(commands[i+1],16) for i,value in enumerate(commands) if value=='readl')
+        return ' '.join('0' for _ in read_words)
+    owner.tx=tx
+    owner.live_state(False)
+    assert tuple(read_words)==board.dev.WORDS
+    origin={'group':'npu','site':123,'caller':'0x41200100','value':'0x8'}
+    decoded={'board_failure':origin,'last':{'name':'NPU_RETAINED'},'summary':'native failure'}
+    with patch.object(board.crumbs,'decode',return_value=decoded):
+        result,_,_=lifecycle(out/'native-first-failure','watchdog')
+    assert result['first_failure']['site']=='npu:123:0x41200100'
+    assert result['first_failure']['native_site']==123 and result['first_failure']['value']=='0x8'
+    passed('generic-npu-keeps-typed-session-preflight-and-live-register-set')
+
+
+def finite_npu_cases(out, image_root, state, fixture):
+    live = json.loads(state.read_bytes())
+    template = out/'npu-template'
+    template.mkdir()
+    (template/'session.bin').write_bytes((image_root/'session-template.bin').read_bytes())
+    for name in ('local-restart','model-switch','sdk-access','power-cycle'):
+        root = out/('npu-'+name)
+        root.mkdir()
+        image = root/'image.elf'
+        image.write_bytes((image_root/name/'image.elf').read_bytes())
+        (root/'manifest.json').write_bytes((image_root/name/'manifest.json').read_bytes())
+        args = arguments(root,'--kind','npu','--template',str(template))
+        args.image = image
+        info = images.inspect(image,'npu')
+        assert info['finite_npu'] and not info['entry_guard']
+        plan = images.prepare(args,info,live,root/'bundle')
+        assert plan['format']=='npu' and plan['watchdog']=={'mode':0xb1,'session_seconds':20}
+        assert all(source.is_file() for _,source in plan['uploads'])
+        if name == 'model-switch':
+            plan.update(json.loads((fixture/'identities.json').read_bytes()))
+            backup = root/'backup.bin'
+            backup.write_bytes(bytes(plan['finite'].DRAM[1]))
+            plan.update(dram_backup=backup,dram_backup_sha256=images.sha(backup))
+            class Owner:
+                evidence=root
+                record={}
+                restored=[]
+                def read(self,address,size,path):
+                    key={0x42000000:'monitor',plan['geometry']['log']:'platform',plan['geometry']['receipt']:'receipt'}[address]
+                    raw=(fixture/'nominal'/(key+'.bin')).read_bytes()
+                    assert len(raw)==size
+                    path.write_bytes(raw)
+                    return raw
+                def upload(self,address,path):
+                    assert address==0x41000000 and path.stat().st_size==0x1200000
+                    self.restored.append(address)
+                def journal(self):pass
+            owner=Owner()
+            captured=images.capture(owner,plan,args)
+            assert captured['valid'] and owner.restored==[0x41000000] and owner.record['dram_restored']
+            owner.restored.clear()
+            original=owner.read
+            def corrupt(address,size,path):
+                raw=original(address,size,path)
+                return bytes([raw[0]^1])+raw[1:] if address==plan['geometry']['receipt'] else raw
+            owner.read=corrupt
+            try:images.capture(owner,plan,args)
+            except ValueError:pass
+            else:raise AssertionError('Malformed finite retirement accepted')
+            assert not owner.restored
+            model=Model('normal')
+            live_owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
+            live_owner.read=corrupt
+            with live_owner.locked():
+                try:live_owner.capture(plan)
+                except board.Mismatch:pass
+                else:raise AssertionError('Malformed report accepted by live capture')
+            assert live_owner.quarantined and not live_owner.record.get('dram_restored')
+        if name == 'local-restart':
+            calls=[]
+            model=Model('normal')
+            owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
+            finite=plan['finite']
+            original_check=finite.require_entry_state
+            finite.require_entry_state=lambda tx:calls.append('entry')
+            owner.read=lambda address,size,path:(path.write_bytes(bytes(size)),calls.append(('backup',address,size)))[0]
+            owner.upload=lambda address,path:calls.append(('upload',address))
+            owner.sanity=lambda:calls.append('rom')
+            owner.arm=lambda mode:None
+            def stop(*args):raise RuntimeError('stop before launch')
+            owner.tx=stop
+            try:
+                try:owner.launch(plan)
+                except RuntimeError:pass
+            finally:finite.require_entry_state=original_check
+            assert calls[0]=='entry' and calls[1]==('backup',0x41000000,0x1200000)
+            assert calls[-2:]==['rom','entry'] and owner.record['npu_dirty']
+            assert plan['dram_backup'].stat().st_size==0x1200000
+            owner.tx=lambda *args:None
+            owner.wait=lambda *args:None
+            owner.returned=lambda:(0,0,{})
+            normal={'session':True,'last':{'stage':board.crumbs.RETURN_ROM,'value':0}}
+            with patch.object(finite,'require_entry_state'),patch.object(board.crumbs,'decode',return_value=normal) as decode:
+                assert owner.launch(plan)=='returned'
+                assert decode.call_args.args[2]==image
+            try:
+                with owner.locked():raise ValueError('modeled dirty preload refusal')
+            except ValueError:pass
+            assert owner.quarantined
+            queued=arguments(root,'--kind','npu','--template',str(template),submit=True)
+            queued.image=image
+            job=board.Queue(root/'queue').submit(queued)
+            frozen=Path(job['directory'])/'template'
+            assert (frozen/'manifest.json').read_bytes()==(image.parent/'manifest.json').read_bytes()
+            assert (frozen/'session.bin').read_bytes()==(template/'session.bin').read_bytes()
+            refs=json.loads((Path(job['directory'])/'references.json').read_bytes())
+            assert str(ROOT/'apps/npu-finite/development.py') in refs
+            assert str(ROOT/'apps/npu-interrupt/host.py') in refs
+        passed('finite-npu-frozen-preparation-'+name)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--hello',type=Path)
+    parser.add_argument('--gpu-image',type=Path,action='append',help='Real generic GPU ELF for gpu-capture group; repeat for diagnostic and ordinary images.')
+    parser.add_argument('--npu-images',type=Path)
+    parser.add_argument('--npu-state',type=Path)
+    parser.add_argument('--npu-fixture',type=Path)
     parser.add_argument('--only',default='transport,queue,policy,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
     args=parser.parse_args()
     args.out.mkdir(parents=True,exist_ok=False)
@@ -549,9 +837,12 @@ def main():
         with patch.object(board,'port_idle',return_value=True):daemon_cases(args.out)
     if 'artifacts' in groups:artifacts(args.out)
     if 'reports' in groups:report_cases(args.out,args.hello)
+    if 'gpu-capture' in groups:gpu_capture_cases(args.out,args.gpu_image)
     if 'ddr' in groups:owned_ddr_cases(args.out)
     if 'rails' in groups:rail_cases(args.out)
     if args.hello and 'offline' in groups:offline(args.out,args.hello)
+    if 'generic-npu' in groups:generic_npu_case(args.out,args.hello)
+    if 'npu' in groups:finite_npu_cases(args.out,args.npu_images,args.npu_state,args.npu_fixture)
     board.save(args.out/'results.json',rows)
     print(f'{len(rows)} checks passed; no device access')
 

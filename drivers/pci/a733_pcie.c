@@ -143,11 +143,10 @@ static int lock(struct a733_pcie *p)
 static int parent_profile(struct a733_pcie *p)
 {
     uint32_t osc,ref,pll,a,b,gate,status;
-    /* Fabric and AUX parents use the normalized SYS_CLK24M reference output.
-     * The COMB1 PHY also takes raw DCXO through DCXO_SERDES1, and its fixed
-     * table is qualified only at 24 MHz. */
-    if(!rd(p,0x07090160,&osc)||!rd(p,CCU,&ref)||!a733_clock_ref24_valid(osc,ref)||
-        a733_clock_dcxo_hz(osc)!=24000000)return 0;
+    /* Fabric and AUX use normalized SYS_CLK24M. The vendor PCIe path sets
+     * SERDES to 100 MHz and uses one internal-100-MHz PHY table regardless
+     * of raw DCXO rate. REF decoding still requires enabled, stable DCXO. */
+    if(!rd(p,0x07090160,&osc)||!rd(p,CCU,&ref)||!a733_clock_ref24_valid(osc,ref))return 0;
     unsigned n;
     for(unsigned i=0;i<3;++i)
         if(!check(p,CCU+fabric_off[i],fabric_mask[i],p->config.fabric[i]))return 0;

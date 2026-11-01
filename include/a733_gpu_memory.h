@@ -50,9 +50,10 @@ int a733_gpu_memory_clock(struct a733_gpu_memory *,uint32_t hz,uint64_t host_ns,
 /* Acquire the firmware's executed kernel-command count (OS data +568). */
 int a733_gpu_memory_executed(void *, uint32_t *);
 
-/* Call only AFTER the complete healthy firmware/local-idle/reset/platform-OFF
- * sequence establishes orderly shutdown. Failed/uncertain DMA requires separate
- * physical recovery. This function does not establish either condition.
+/* Call only AFTER complete firmware/local-idle/platform-OFF establishes orderly
+ * shutdown, or the reviewed unacknowledged stop adds full reset/readback after
+ * its idle polls and completes platform OFF. Uncertain DMA retains ownership.
+ * This function does not establish shutdown or reset proof.
  * Invalidate cached firmware backing and return to OFFLINE for re-preparation.
  * A failed instance cannot be reclaimed through this API. Never access cached
  * firmware backing while PUBLISHED. Shared resources stay uncached throughout.

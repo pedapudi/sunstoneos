@@ -6,6 +6,16 @@ MEMORY {
 SECTIONS {
     .text : { KEEP(*(.text.boot)) KEEP(*(.text.vectors)) *(.text*) } > CODE
     .rodata : { *(.rodata*) } > CODE
+    sunstone_gpu_program : ALIGN(4) {
+        __start_sunstone_gpu_program = .;
+        KEEP(*(sunstone_gpu_program))
+        __stop_sunstone_gpu_program = .;
+    } > CODE
+    sunstone_region_initializers : ALIGN(8) {
+        __start_sunstone_region_initializers = .;
+        KEEP(*(sunstone_region_initializers))
+        __stop_sunstone_region_initializers = .;
+    } > CODE
     .data : { *(.data*) } > RAM
     .bss (NOLOAD) : ALIGN(64) {
         __bss_start = .;

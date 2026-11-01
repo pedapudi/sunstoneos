@@ -20,7 +20,11 @@
         "use": "SII_INT_MASK0/STAS0 offsets and INTX_RX_ASSERT bits"
       },
       "sun60iw2p1.dtsi": {
-        "use": "INTIDs 184 (sii) and 185 (msi), the 0x22000000 32-bit memory range and the INTA..INTD map"
+        "use": "INTIDs 184 (sii) and 185 (msi), the 0x22000000 32-bit memory range and the INTA..INTD map; x1 max-link-speed 3; combo1 PCIe child has no external-reference override",
+        "lock": "board-gpu-power-sun60iw2p1-dtsi",
+        "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi",
+        "sha256": "1c7313f655bdc4d018201664adcb1fa1d100280388b8975e193ebbfc6ad4ddfa",
+        "license": "GPL-2.0+ or MIT"
       },
       "drivers/nvme/host/pci.c": {
         "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/nvme/host/pci.c",
@@ -28,6 +32,30 @@
         "sha256": "555ef8afbfef7c49bc4ea97ea2ec52c0f55f49afa4450ce9354d4b7e8aa06991",
         "license": "GPL-2.0",
         "use": "Reference only: vector-zero admin IRQ, I/O CQ IEN/IV, phase observation followed by dma_rmb and CQ head doorbell. Linux does not execute on the native image."
+      },
+      "bsp/drivers/phy/sunxi-cadence-combophy.c": {
+        "lock": "pcie-sunxi-cadence-combophy-c",
+        "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/phy/sunxi-cadence-combophy.c",
+        "sha256": "84b5471d3b7bbb2ae247b75459135dff0a1d40eef9a2bb994df14eb799b5c082",
+        "license": "GPL-2.0",
+        "execution": "host reference only; adapted PCIe sequence runs on the FreeRTOS CPU",
+        "use": "combo1 PCIe init selects 100 MHz SERDES then the internal-100-MHz table without an oscillator-rate branch; native PHY table comparison"
+      },
+      "bsp/drivers/clk/sunxi-ng/ccu-sun60iw2.c": {
+        "lock": "board-gpu-power-ccu-sun60iw2-c",
+        "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu-sun60iw2.c",
+        "sha256": "1d32bb8555f8ff205d35210f638f9d42cc28aa9295c46963aa1c810d47b06d77",
+        "license": "GPL-2.0",
+        "execution": "host reference only; adapted PCIe sequence runs on the FreeRTOS CPU",
+        "use": "PLL_REF normalization, SERDES100 from PERI0-600M, PCIe AUX SYS24M and AXI PERI0-400M parents"
+      },
+      "bsp/drivers/clk/sunxi-ng/ccu-sun60iw2-rtc.c": {
+        "lock": "board-gpu-resources-ccu-sun60iw2-rtc-c",
+        "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu-sun60iw2-rtc.c",
+        "sha256": "484ef6c6cbdac224484f22ca57db8063e2f83404bfe18c18e32c12ab1bc0a3ea",
+        "license": "GPL-2.0-only",
+        "execution": "host reference only; adapted PCIe sequence runs on the FreeRTOS CPU",
+        "use": "raw DCXO selector includes 26 MHz and DCXO_SERDES1 gate definition"
       }
     }
   },

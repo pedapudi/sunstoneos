@@ -134,7 +134,7 @@ first board step: CPU-B to 1404 MHz at 800 mV with the A76 cores off.
 | --- | --- | --- | --- | --- |
 | USB2 controller and PHY | Reference SYS24M, pipe PERI0_480M ÷ 4 = 120 (`drivers/usb/a733_usb2_platform.c:141-151`) | Same parents (ccu.c `usb2_*_parents`) | Protocol rates | None |
 | USB3 PHY | Raw DCXO through RTC `0x0709016c` bit 4 (`drivers/usb/a733_usb3_phy.c:60`) | Same | 5 or 10 Gb/s | None in clock terms |
-| PCIe | Gen1, 2.5 GT/s; refused on a 26 MHz oscillator because the PHY table is verified only for 24 MHz ([PCIe](pcie.md)) | Gen3 (dtsi:5079); enabled on the board (dts:1794-1801) | Gen3, 8 GT/s (DS:1661) | Refused on both boards; link speed 3.2× below Gen3 |
+| PCIe | Gen3 target, 8 GT/s, with negotiated x1 fallback; normalized REF admits 26 MHz DCXO ([PCIe](pcie.md)) | Gen3 (dtsi:5079) | Gen3, 8 GT/s (DS:1661) | Host checks only; no endpoint exists for physical qualification |
 | SPI | Module from SYS24M, up to 24 (`drivers/spi/a733_spi.c:37-47`) | 100 module clock (dtsi:3585) | 100 (DS:1743) | Up to 4×; no board SPI device needs more today |
 | TWI, S_TWI0 (PMIC) | S_TWI0 400 kHz, inherited and checked (`drivers/power/a733_pmic.c:113-145`); TWI9 and TWI11 at most 100 kHz | 400 kHz (dts:1946-1947) | 400 kHz standard fast mode | None for the PMIC; other TWI at the standard rate their devices need |
 | UART | APB_UART 24; Bluetooth UART 1.5 Mbaud with divisor 1 ([UART](uart.md)) | Radio firmware default 1.5 Mbaud ([Bluetooth HCI](bluetooth-hci.md)) | 10 Mb/s with a 160 MHz APB clock (DS:1704) | None at the radio's rate |
@@ -398,9 +398,9 @@ GPU and NPU clock and voltage changes and the microSD 1.8 V switch.
    for this board's strap at 2400 MHz, the part's rating is unknown, and a
    failed training ends the lifetime. Identify the part first.
 
-PCIe Gen3 and SPI at 100 MHz stay unranked: PCIe is refused on the 26 MHz
-oscillator before its clock rate matters, and no board SPI device needs more
-than 24 MHz.
+PCIe requests the vendor Gen3 default and admits a normalized reference from
+26 MHz DCXO. Its physical link remains blocked on an endpoint. SPI at 100 MHz
+stays unranked because no board SPI device needs more than 24 MHz.
 
 ## Open questions
 

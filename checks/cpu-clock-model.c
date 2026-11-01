@@ -18,6 +18,12 @@ struct cpu_model {
     unsigned bin, stuck_update, stuck_lock, ignore_pmic, reads, writes, count, read_ns, frac_ns;
     uint64_t update_us, lock_us; /* Defaults: UPDATE 10 us, LOCK 20 us. */
     struct register_latency update[3], lock[3];
+    uint32_t staged_n[3]; /* N reads stay old until UPDATE completes. */
+    unsigned old_n_reads, wrong_update, fail_update_read;
+    unsigned stage_us, fail_stage_time, stop_stage_time;
+    uint64_t stage_at[3];
+    uint32_t captured_n[3];
+    unsigned lock_delay_before_us, lock_delay_after_us, fail_post_read, fail_next_time;
     uint64_t park_ns[3]; /* Time of each domain's latest park write, in nanoseconds. */
     /* Lock reads while parked: consecutive set reads counted at least 3 us
      * apart, the time of the last counted one and of the third. glitch makes
@@ -87,7 +93,8 @@ static void pmic_written(void *v,uint8_t reg,uint8_t value)
 static uint64_t model_ns(void){return pm.now*1000u+cm.frac_ns;}
 static int cpu_now(void *v,uint64_t *out)
 {
-    (void)v;int r=pmic_model_now(&pm,out);
+    (void)v;if(cm.fail_next_time){cm.fail_next_time=0;return 0;}
+    int r=pmic_model_now(&pm,out);
     cm.frac_ns+=cm.read_ns;pm.now+=cm.frac_ns/1000u;cm.frac_ns%=1000u;
     return r;
 }
@@ -96,8 +103,9 @@ static void advance(unsigned d)
     uint32_t *pll=word(PLL(d));
     cm.update[d].stuck=cm.stuck_update;
     cm.lock[d].stuck=cm.stuck_lock || cm.stuck_update;
+    cm.update[d].value=cm.captured_n[d]^(cm.wrong_update ? 1u<<8 : 0);
     *pll=reg_latency_apply(&cm.update[d],pm.now,*pll);
-    *pll=reg_latency_apply(&cm.lock[d],pm.now,*pll);
+    if(!cm.update[d].pending)*pll=reg_latency_apply(&cm.lock[d],pm.now,*pll);
 }
 static int cpu_read(void *v,uintptr_t a,uint32_t *out)
 {
@@ -105,7 +113,12 @@ static int cpu_read(void *v,uintptr_t a,uint32_t *out)
     *out=*word(a);
     for(unsigned d=0;d<3;++d) {
         if(a!=PLL(d))continue;
+        if(cm.fail_update_read && (*word(a)&(1u<<26)))return 0;
+        if(cpu.state==10 && d==cpu.cluster){
+            pm.now+=cm.lock_delay_before_us;cm.lock_delay_before_us=0;
+        }
         advance(d);*out=*word(a);
+        if((*out&(1u<<26)) && (*out&(255u<<8))!=cm.staged_n[d])++cm.old_n_reads;
         if(((*word(SEL(d))>>24)&7) || (*out&(1u<<26)))continue;
         if((*out&(1u<<28)) && cm.glitch && cm.lock_run[d]){--cm.glitch;*out&=~(1u<<28);}
         if(!(*out&(1u<<28))){cm.lock_run[d]=0;continue;}
@@ -113,6 +126,11 @@ static int cpu_read(void *v,uintptr_t a,uint32_t *out)
             cm.lock_seen_ns[d]=model_ns();
             if(++cm.lock_run[d]==3)cm.lock_third_ns[d]=model_ns();
             if(cm.lock_run[d]>cm.max_lock_run)cm.max_lock_run=cm.lock_run[d];
+        }
+        if(cpu.state==10 && d==cpu.cluster){
+            /* The MMIO observation precedes this modeled preemption. */
+            pm.now+=cm.lock_delay_after_us;cm.lock_delay_after_us=0;
+            if(cm.fail_post_read){cm.fail_post_read=0;cm.fail_next_time=1;}
         }
     }
     return 1;
@@ -126,15 +144,21 @@ static int cpu_write(void *v,uintptr_t a,uint32_t value)
              * at least boot0's 20 us after the park. */
             assert(((*word(SEL(d))>>24)&7)==0);
             assert(model_ns()>=cm.park_ns[d]+20000u);
-            uint32_t old=*word(a),nmask=UINT32_C(255)<<8;
-            /* A733 manual 5.1.10.6/18/30: N may retain its old
-             * readback until UPDATE clears. 10/20 us are fixture delays
-             * within the vendor's 10 ms update / 70 ms lock bounds. */
-            *word(a)=(value&~(nmask|(1u<<28)))|(old&(nmask|(1u<<28)));
-            cm.lock_run[d]=0;
+            /* N is staged, not immediately visible (manual 5.1.4.2).
+             * UPDATE captures the old N if boot0's staging interval is missing. */
+            uint32_t nmask=UINT32_C(255)<<8,visible=*word(a)&(nmask|(1u<<28));
+            if(!(value&(1u<<26))){
+                cm.staged_n[d]=value&nmask;cm.stage_at[d]=model_ns();
+                if(cm.fail_stage_time)cm.fail_next_time=1;
+                if(cm.stop_stage_time)cm.read_ns=0;
+            }
+            *word(a)=(value&~(nmask|(1u<<28)))|visible;
             if(value&(1u<<26)){
+                cm.captured_n[d]=model_ns()>=cm.stage_at[d]+(uint64_t)cm.stage_us*1000u ?
+                    cm.staged_n[d] : visible&nmask;
+                *word(a)&=~(1u<<28);cm.lock_run[d]=0;
                 reg_latency_schedule(&cm.update[d],pm.now,cm.update_us ? cm.update_us : 10,
-                    nmask|(1u<<26)|(1u<<28),value&nmask);
+                    nmask|(1u<<26),cm.captured_n[d]);
                 reg_latency_schedule(&cm.lock[d],pm.now,cm.lock_us ? cm.lock_us : 20,
                     1u<<28,1u<<28);
             }
@@ -385,6 +409,120 @@ static enum a733_cpu_clock_status settle_run(enum a733_cpu_domain d,uint32_t mhz
     return r==A733_CPU_CLOCK_PENDING ? run(400) : r;
 }
 static unsigned pmic_writes(void){unsigned n=0;for(unsigned i=0;i<cm.count;++i)n+=cm.events[i].pmic;return n;}
+/* Close after actual inspection/raise: the boot floor stays 800 mV, while
+ * CPU-B now runs at 2002 MHz/1050 mV. Begin the downclock in a fast burst so
+ * at least one UPDATE read sees N=77 while N=39 is staged. */
+static void close_update_setup(void)
+{
+    const struct a733_cpu_clock_grant g={77,2,{0,2002},4};
+    board33(&g);
+    assert(a733_cpu_clock_inspect(&cpu,A733_CPU_BIG,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && pm.rails.floor_uv[0]==800000);
+    assert(settle_run(A733_CPU_BIG,2002)==A733_CPU_CLOCK_COMPLETE);
+    assert(rate(A733_CPU_BIG)==2002000000 && pm.pmic[REG_DCDC3]==55);
+    cm.count=cm.writes=cm.old_n_reads=0;cm.read_ns=80;
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_BIG,1014,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+    before_park();
+}
+static void update_cases(void)
+{
+    close_update_setup();
+    assert(a733_cpu_clock_burst(&cpu,200)==A733_CPU_CLOCK_PENDING && !cpu.failed);
+    assert(cm.old_n_reads && rate(A733_CPU_BIG)==1014000000 && pm.pmic[REG_DCDC3]==55);
+    assert(cm.writes==5 && !pmic_writes()); /* No voltage lowering before lock/unpark. */
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && released() && pm.pmic[REG_DCDC3]==30);
+    assert(cm.writes==5 && pmic_writes()==1 && cpu.applied_mhz[A733_CPU_BIG]==1014);
+    unsigned last_clock=0;
+    for(unsigned i=0;i<cm.count;++i)if(!cm.events[i].pmic)last_clock=i;
+    assert(last_clock<first(1));covered();
+    /* The same staged-readback rule applies to a raise at sufficient voltage. */
+    const struct a733_cpu_clock_grant g={77,2,{0,2002},2};
+    board33(&g);pm.pmic[REG_DCDC3]=55;
+    cm.ramp[1].from_uv=cm.ramp[1].to_uv=1050000;
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_BIG,2002,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+    before_park();assert(a733_cpu_clock_burst(&cpu,200)==A733_CPU_CLOCK_PENDING);
+    assert(cm.old_n_reads && !cpu.failed && run(400)==A733_CPU_CLOCK_COMPLETE && released());
+    for(unsigned mode=0;mode<3;++mode){
+        close_update_setup();
+        if(mode==0)cm.wrong_update=1;
+        if(mode==1)cm.stuck_update=1;
+        if(mode==2)cm.fail_update_read=1;
+        /* One poll starts UPDATE; the next reads, so read failure is targeted. */
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.state==9);
+        uint64_t began=pm.now;
+        assert(run(400)==A733_CPU_CLOCK_RETAINED && cpu.failed);
+        assert(pm.pmic[REG_DCDC3]==55 && !pmic_writes() && ((*word(SEL(1))>>24)&7)==0);
+        if(mode==1)assert(pm.now-began>=10000);
+        retained();
+    }
+    puts("PASS update readback: 5 cases; staged N on raise/close, wrong completed N, stuck UPDATE, read fault");
+}
+/* Hypothesis fixture: the old-N board result is reproduced if UPDATE can
+ * capture N before a 20 us stage interval. The physical run tests the timing
+ * correction; the fixture does not claim measured silicon staging latency. */
+static void stage_cases(void)
+{
+    close_update_setup();cm.stage_us=20;
+    assert(a733_cpu_clock_burst(&cpu,200)==A733_CPU_CLOCK_PENDING && !cpu.failed);
+    assert(rate(A733_CPU_BIG)==1014000000 && pm.pmic[REG_DCDC3]==55);
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && released() && pm.pmic[REG_DCDC3]==30);
+    assert(cm.writes==5 && pmic_writes()==1);covered();
+    for(unsigned mode=0;mode<2;++mode){
+        close_update_setup();cm.stage_us=20;
+        if(mode==0)cm.fail_stage_time=1;else cm.stop_stage_time=1;
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_RETAINED && cpu.failed);
+        assert(cm.writes==2 && !pmic_writes() && pm.pmic[REG_DCDC3]==55);
+        assert(!(*word(PLL(1))&(1u<<26)) && ((*word(SEL(1))>>24)&7)==0);
+        retained();
+    }
+    puts("PASS N staging: 3 cases; delayed capture, failed and stopped post-N counter");
+}
+/* Driver LOCK is state 10. Inject preemption on either side of MMIO so
+ * a sample timestamp alone cannot establish the actual observation gap. */
+static void lock_timing_setup(void)
+{
+    close_update_setup();
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.state==9);
+    pm.now+=50;
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.state==10);
+    cm.read_ns=0;
+}
+static void lock_timing_cases(void)
+{
+    for(unsigned mode=0;mode<2;++mode){
+        lock_timing_setup();
+        if(mode==0)cm.lock_delay_before_us=20;
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.lock.locked==1);
+        /* Next observation is immediate, or only 1 us later. Preemption
+         * after an early read must not make that read eligible to count. */
+        if(mode==1){++pm.now;cm.lock_delay_after_us=20;}
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING);
+        if(cpu.lock.locked!=1)fprintf(stderr,"LOCK timing mode=%u counted=%u\n",mode,cpu.lock.locked);
+        assert(cpu.lock.locked==1);
+        cm.read_ns=80;pm.now+=5;
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.lock.locked==2);
+        pm.now+=5;
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.state==11);
+        assert(cm.lock_run[1]>=3 && model_ns()>=cm.lock_third_ns[1]+20000u);
+        assert(pm.pmic[REG_DCDC3]==55 && !pmic_writes());
+        assert(run(400)==A733_CPU_CLOCK_COMPLETE && released() && pm.pmic[REG_DCDC3]==30);
+    }
+    lock_timing_setup();cm.fail_post_read=1;
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_RETAINED && cpu.failed);
+    assert(pm.pmic[REG_DCDC3]==55 && !pmic_writes());retained();
+    /* An early observation still resets qualification when LOCK is clear. */
+    lock_timing_setup();
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.lock.locked==1);
+    cm.stuck_lock=1;*word(PLL(1))&=~(1u<<28);
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && !cpu.lock.locked);
+    /* Keep the counter fixed inside the gap, but expire the lock timer. */
+    cm.stuck_lock=0;*word(PLL(1))|=1u<<28;
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING && cpu.lock.locked==1);
+    cpu.timer=pm.now;
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_RETAINED && cpu.failed);
+    assert(pm.pmic[REG_DCDC3]==55 && !pmic_writes());retained();
+    puts("PASS LOCK observation timing: 5 cases; preemption before/after MMIO, time fault, early unlock, timeout");
+}
 /* The steps of docs/designs/cpu-top-opp.md on a modeled port 3-3. */
 static void top_cases(void)
 {
@@ -522,6 +660,12 @@ int main(int argc,char **argv)
 {
     if(argc==2 && !strcmp(argv[1],"--late-policy-reproduce")){late_policy_cases(1);return 0;}
     if(argc==2 && !strcmp(argv[1],"--late-policy-only")){late_policy_cases(0);return 0;}
+    if(argc==2 && !strcmp(argv[1],"--lock-timing-only")){lock_timing_cases();return 0;}
+    if(argc==2 && !strcmp(argv[1],"--n-stage-only")){stage_cases();return 0;}
+    stage_cases();
+    update_cases();
+    if(argc==2 && !strcmp(argv[1],"--close-update-only"))return 0;
+    lock_timing_cases();
     late_policy_cases(0);
     inherited_cases();
     if(argc==2 && !strcmp(argv[1],"--inherited-only"))return 0;
@@ -768,13 +912,13 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<4;++i)a733_rail_poll(&pm.rails,&npu);
     assert(a733_rail_poll(&pm.rails,&npu)==A733_RAIL_READY);
     assert(a733_pmic_submit_write(&pm.provider,6,&npu,A733_RAIL_DCDC2,30,35,pm.now+100000,&q)==A733_PMIC_INVALID);
-    /* DCDC4, the GPU supply: only a voltage of the GPU operating point's
-     * speed-bin row (860-960 mV), under an exclusive lease. */
+    /* DCDC4: the GPU operating points admit 800 mV and the top point's
+     * speed-bin voltages (860-960 mV), under an exclusive lease. */
     struct a733_rail_token gpu={0};
     assert(a733_rail_acquire(&pm.rails,7,0,A733_RAIL_BIT(A733_RAIL_DCDC4),pm.now+100000,&gpu)==A733_RAIL_PENDING);
     for(unsigned i=0;i<4;++i)a733_rail_poll(&pm.rails,&gpu);
     assert(a733_rail_poll(&pm.rails,&gpu)==A733_RAIL_READY);
-    assert(a733_pmic_submit_write(&pm.provider,7,&gpu,A733_RAIL_DCDC4,30,30,pm.now+100000,&q)==A733_PMIC_INVALID);
+    assert(a733_pmic_submit_write(&pm.provider,7,&gpu,A733_RAIL_DCDC4,30,29,pm.now+100000,&q)==A733_PMIC_INVALID);
     assert(a733_pmic_submit_write(&pm.provider,7,&gpu,A733_RAIL_DCDC4,30,0x2f,pm.now+100000,&q)==A733_PMIC_INVALID);
     assert(a733_pmic_submit_write(&pm.provider,7,&gpu,A733_RAIL_DCDC4,30,0x25,pm.now+100000,&q)==A733_PMIC_INVALID);
     assert(!q.id);

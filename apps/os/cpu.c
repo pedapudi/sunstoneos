@@ -87,13 +87,13 @@ enum { START, INSPECT, REQUEST, FOLLOW };
 static int clock_now(void *v,uint64_t *out)
 {return v==&owner&&a733_counter_clock_now(&providers.shared.counter,out);}
 static int clock_read(void *v,uintptr_t a,uint32_t *out){return v==&owner&&read_word(NULL,a,out);}
-/* A mux write completes before the driver's settle spin (section 1.2 of
- * docs/performance-architecture.md); the PLL words need no barrier. */
+/* Writes complete before the driver measures peripheral settling intervals
+ * (section 1.2 of docs/performance-architecture.md). */
 static int clock_write(void *v,uintptr_t a,uint32_t value)
 {
     if(v!=&owner||!a733_cpu_clock_address(a,1))return 0;
     a733_mmio_write32(a,value);
-    if((a&0xfff)==0x01c)a733_mmio_dsb_sy();
+    a733_mmio_dsb_sy();
     return 1;
 }
 static const struct a733_cpu_clock_ops clock_ops={clock_now,clock_read,clock_write};

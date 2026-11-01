@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Prepare and run one returning A733 image for development.
 
-No queue claim, review record, continuity chain or sealed manifest is read or
-written. The run keeps the safety mechanisms of the existing transport
+CPU-return development reads no queue claim, review record or continuity chain.
+NPU development uses its native session template and live system readbacks. The run keeps the safety mechanisms of the existing transport
 (tools/a733-returning-host.py): the per-port board lock, one launch, the
 host-armed WDT0, the breadcrumb decoder and the instance quarantine on an
 unresolved failure.
@@ -10,11 +10,18 @@ unresolved failure.
 Kinds:
   cpu-return  one CPU-return application image, by default the hello-compute
               control image, through apps/os/cpu-return-host.py
-  gpu-return  refused: the GPU ladder images are pre-split recognition images
-              (see GPU_REFUSAL)
-  npu         refused: see npu_check
+  gpu-return  one manifest-based GPU-capable returning image, with --image
+  npu         finite startup/inference/runtime image with an NPU session template
   rail-helper only the CPU rail helper (board bundle 33): DCDC3 and then DCDC5
               to 800 mV, refused unless the CPU clocks read their boot words
+
+For NPU, --records names its 456-byte native session template, and --manifest
+names the matching build manifest (default: beside the ELF). The runner derives
+fabric rates from system readbacks, checks bin 4 and closed local gates/resets,
+and builds the exact armed NPU launcher. The native PMIC guard verifies DCDC2
+at 800 mV; startup selects the vendor top of 852 MHz. NPU --check-only --state
+prepares offline; a launch always captures and rechecks the live system state.
+The template is configuration, not evidence of physical qualification.
 
 The CPU-return entry guard (apps/os/cpu-return-entry.c) refuses DCDC3 or
 DCDC5 other than 800 mV, and a run that raises them can end with both rails
@@ -49,6 +56,13 @@ application in this tree) is a Python module with:
   inputs()          the inputs used when no --input is given; optional
 A run passes when the image returns normally (RETURN_ROM breadcrumb, WDT0
 mode 0) and, when the decoder has expected(), the decoded result equals it.
+GPU receipts are copied before RAM restoration and checked against the image's
+capability markers. A gpu-return run requires completed GPU work, except for an
+image carrying an exact diagnostic stage/limit marker. Thermal windows, when
+linked, must decode as complete. Payload or telemetry errors remain failures
+after DRAM and CPU rail restoration; a transport error stops immediately.
+--expect-result JSON_VALUE overrides expected(inputs), which permits exact
+comparison of fixed binary result fields while a decoder bounds variable times.
 Without a decoder the runner prints the raw payload.
 """
 import argparse
@@ -90,10 +104,6 @@ RAIL_CONTROLLED = [('REFUSED', text) for text in (
     'thermal level', 'speed bin', 'CPU-B rate', 'CPU rate not on its PLL', 'pattern or LFM enabled',
     'boot clock words', "voltage above the bin's top point", "bin top points differ from the rail helper's",
     'CPU supplies')] + [('STOPPED', 'thermal limit')]
-GPU_REFUSAL = ('gpu-return is refused: the GPU ladder images are pre-split mimus recognition images that need '
-               'the fixed-layout session template and the three recognition inputs, which this runner no longer '
-               'prepares, and the generic return path does not copy the GPU retirement report. Run them with '
-               'the pre-split runner, tools/dev-run.py at revision 6a714bcf.')
 # The read-only words of the existing CPU/thermal state capture
 # (sol-resume-20261031/port-3-3/cpu-thermal-state): CCU, R_CCU, SID, CPU PLLs, RTC.
 WORDS = (0x2002000, 0x20020a0, 0x20020a8, 0x20020ac, 0x2002518, 0x2002fc0, 0x2002fe4, 0x2003908,
@@ -261,7 +271,7 @@ def kit():
             load('dev_os_launcher', ROOT / 'apps/os/prepare.py'))
 
 
-def image_check(host, image, inputs):
+def image_check(host, image, inputs, devices=None):
     """(image bytes, watchdog marker, manifest, manifest facts) of a CPU-return image with these inputs.
 
     Every refusal here depends only on the image and the inputs, so main()
@@ -272,22 +282,25 @@ def image_check(host, image, inputs):
     require(watchdog is not None, 'Image carries no host-armed watchdog marker; a hang would strand the board.')
     symbols = host.linked_symbols(image)
     require('ss_result_record' in symbols, 'Image has no result record; it is not a CPU-return application image.')
-    require('os_gpu_configuration' not in symbols, 'Image links the GPU return; the generic return path does not '
-            'copy its GPU retirement report.')
+    require('os_gpu_configuration' not in symbols or 'os_gpu_return_report' in symbols,
+            'Legacy fixed-layout GPU images are not supported; rebuild against the current application kit.')
     info = os_host.image_manifest(data)
     require(info['manifest'] is not None, 'Image has no application manifest.')
     manifest = info['manifest']
-    devices = manifest['devices_required']
+    devices = manifest['devices_required'] if devices is None else devices
+    require(devices & manifest['devices_required'] == manifest['devices_required'] and
+            not devices & ~(manifest['devices_required'] | manifest['devices_optional']),
+            'Requested device grant differs from the image manifest.')
     require(not devices & STORAGE, 'The CPU return admits only sessions without USB storage (workload 2).')
     os_host.input_facts(manifest, [bytes(v) for v in inputs])
     return data, watchdog, manifest, info
 
 
-def prepare(host, launcher, image, records, inputs, output, live):
+def prepare(host, launcher, image, records, inputs, output, live, *, devices=None):
     """Board bundle from a CPU-return image, a reviewed session's records and the inputs."""
     os_host = host.host
-    data, watchdog, manifest, info = image_check(host, image, inputs)
-    devices = manifest['devices_required']
+    data, watchdog, manifest, info = image_check(host, image, inputs, devices)
+    devices = manifest['devices_required'] if devices is None else devices
     findings, derived = state_check(live['words'])
     prefix, thermal, grant = session_records(records, os_host)
     prefix, thermal, grant = bytearray(prefix), bytearray(thermal), bytearray(grant)
@@ -406,13 +419,26 @@ def run_return(args, host, bundle, live, out, access=None, guard=None):
                                   return_timeout=90, watchdog=watchdog, access=access, guard=guard)
 
 
-def judge(decoder, payload, inputs, session):
+def judge(decoder, payload, inputs, session, *, result=None, require_gpu=False, expected_result=None):
     """(outcome, detail, decoded) of a run that returned with this payload."""
     w = session.get('watchdog', {})
     last = w.get('breadcrumbs', {}).get('last', {}).get('name')
     if w.get('mode_after_return') != 0 or last != 'RETURN_ROM':
         return 'failed', f'return not normal: WDT0 mode {w.get("mode_after_return")}, last breadcrumb {last}', None
+    result = result or {}
+    errors = [result[key] for key in ('output_error', 'gpu_error', 'thermal_error') if key in result]
+    gpu = result.get('gpu')
+    if require_gpu and gpu is None and not result.get('gpu_error'):
+        errors.append('GPU retirement receipt absent')
+    if require_gpu and gpu is not None and not gpu.get('gpu_bisect') and not gpu.get('completed_gpu_work'):
+        errors.append('GPU receipt proves no completed GPU job')
+    if 'thermal' in result and result['thermal'].get('classification') != 'complete':
+        errors.append('thermal window is ' + str(result['thermal'].get('classification')))
+    if errors:
+        return 'result-invalid', '; '.join(errors), None
     if decoder is None:
+        if expected_result is not None:
+            return 'result-invalid', '--expect-result requires a result decoder', None
         shown = payload[:64].hex() + ('...' if len(payload) > 64 else '')
         return 'returned', f'raw result {len(payload)} bytes {shown}', None
     try:
@@ -423,9 +449,9 @@ def judge(decoder, payload, inputs, session):
         found = decoder.failures(decoded)
         if found:
             return 'result-failed', 'decoder reports ' + '; '.join(found), decoded
-    if not hasattr(decoder, 'expected'):
+    if expected_result is None and not hasattr(decoder, 'expected'):
         return 'returned', 'result ' + json.dumps(decoded, sort_keys=True), decoded
-    expected = decoder.expected(inputs)
+    expected = expected_result if expected_result is not None else decoder.expected(inputs)
     if decoded != expected:
         return 'result-mismatch', 'result %s, expected %s' % (json.dumps(decoded, sort_keys=True),
                                                              json.dumps(expected, sort_keys=True)), decoded
@@ -578,16 +604,124 @@ def restore_rails(args, host, evidence, run_record):
     if off:
         return None, 'not run: ' + ', '.join(off) + ' not at the boot PLL and mux words after the return'
     return run_rail_helper(args, host, evidence / 'rail-helper'), 'normal return, CPU clocks at their boot words'
-def npu_check(image, host):
-    """Bringup's NPU launcher and monitor refuse an enabled WDT0 (launch.c ADMIT,
-    monitor.c finish(1)); armed, the launcher parks and the watchdog resets the
-    board 16 s later with no breadcrumbs. Only an image with the watchdog
-    marker admits the armed mode, and the NPU session's reviewed authority
-    records have no development producer."""
-    require(host.watchdog_marker(image) is not None, 'npu is refused: the image does not admit the host-armed '
-            'watchdog (no os_cpu_return_watchdog marker); rebuild it on work/wdt-breadcrumbs-1031.')
-    require(False, 'npu is refused: development preparation of an NPU session, whose NPU extent cites reviewed '
-            'admission, clock, power, supervision and DDR records, is not implemented.')
+def npu_check(image, host, finite=None, manifest=None):
+    """Check NPU immutable geometry and the exact finite watchdog contract."""
+    watchdog = host.watchdog_marker(image)
+    require(watchdog == {'mode': 0xb1, 'session_seconds': 20},
+            'npu is refused: exact host-armed watchdog marker (mode 0xb1, 20 seconds) required.')
+    finite = finite or load('dev_npu_interrupt', ROOT / 'apps/npu-interrupt/host.py').finite
+    require(manifest is not None, 'npu requires its exact build manifest.')
+    parts, address, build, layout, geometry = finite.image_profile(Path(image).read_bytes(), manifest)
+    profile = finite.geometry_profile(geometry)
+    require(profile in (finite.STARTUP, finite.INFERENCE, finite.RUNTIME, finite.RESTART, finite.SWITCH, finite.SDK, finite.POWER),
+            'npu development requires a supported finite NPU profile.')
+    require(layout[:3] == (456, 224, 232), 'NPU development session layout differs.')
+    return {'watchdog': watchdog, 'geometry': geometry, 'session_layout': list(layout),
+            'execution_profile': profile, 'image_sha256': digest(image), 'build_id': build.hex()}
+
+
+def npu_capture(fel, evidence=None):
+    """NPU system-register capture under the usual per-port lock; no engine access."""
+    helper = load('dev_npu_preparation', ROOT / 'apps/npu-finite/development.py')
+    access = load('dev_npu_access', ROOT / 'tools/usb-access.py')
+    with access.board_lock() as node:
+        access.require_session(node)
+        access.require_rom(node)
+        identity, port = access.identity(node), access.target(node).name
+        record = {'identity': identity, 'port': port, 'complete': False}
+        def journal():
+            if evidence is not None:
+                save(evidence / 'capture.json', record)
+        journal()
+        try:
+            result = subprocess.run([str(fel), '-d', f'{int(node.parent.name)}:{int(node.name)}',
+                *[item for address in helper.WORDS for item in ('readl', hex(address))]],
+                capture_output=True, text=True, timeout=15)
+            record.update(exit=result.returncode, stdout=result.stdout, stderr=result.stderr)
+            require(result.returncode == 0, 'NPU state capture failed: ' + result.stderr.strip())
+            values = [int(value, 16) for value in result.stdout.split()]
+            require(len(values) == len(helper.WORDS) and all(0 <= v <= 0xffffffff for v in values),
+                    'NPU state capture words differ.')
+            require(access.identity(node) == identity, 'NPU instance changed during capture.')
+            record['complete'] = True
+            journal()
+            return {'identity': identity, 'port': port,
+                    'words': {hex(address): value for address, value in zip(helper.WORDS, values)}}
+        except BaseException as error:
+            record.update(error=f'{type(error).__name__}: {error}', instance_quarantined=True)
+            try:
+                access.quarantine_instance(node, record['error'], identity)
+            finally:
+                journal()
+            raise
+
+
+def npu_run(args, finite, helper, marker_reader, bundle, live, access=None, guard=None):
+    validate = helper.validator(finite, marker_reader)
+    p = validate(bundle)
+    def admit(args, prepared, node, identity, port):
+        require(identity == live['identity'] and port == live['port'], 'NPU target changed after capture.')
+    def execute(tx, launch, ready, prepared, record, journal):
+        values = [int(value, 16) for value in tx(*[item for address in helper.WORDS
+                                                  for item in ('readl', hex(address))]).split()]
+        require({hex(a): value for a, value in zip(helper.WORDS, values)} == live['words'],
+                'NPU system state changed after preparation.')
+        return finite.run_once(tx, launch, ready, bundle, prepared, args.evidence, record, journal)
+    return finite.returning.run(args, base=finite.base, profile=p['execution_profile'],
+        validate_bundle=validate, admit=admit, execute=execute, description='NPU development return',
+        watchdog=p['watchdog'], access=access, guard=guard)
+
+
+def npu_main(args, host):
+    """Prepare the finite NPU session without using CPU application geometry."""
+    finite = load('dev_npu_interrupt', ROOT / 'apps/npu-interrupt/host.py').finite
+    helper = load('dev_npu_preparation', ROOT / 'apps/npu-finite/development.py')
+    require(args.image, 'npu is refused: --image is required.')
+    manifest = args.manifest or args.image.parent / 'manifest.json'
+    # Check the marker first: old unarmed images never reach a board read.
+    facts = npu_check(args.image, host.host, finite, json.loads(manifest.read_bytes()) if manifest.is_file() else None)
+    require(not args.input and not args.decoder and not args.force,
+            'NPU uses linked inputs and exact entry guards; --input, --decoder and --force are unsupported.')
+    require(args.normalize_rails is None and args.restore_rails is None,
+            'NPU preparation does not use CPU rail normalization options.')
+    require(args.check_only or not args.state, '--state is offline NPU preparation only; use --check-only.')
+    template = args.records
+    require(template != RECORDS, 'npu requires --records with a native 456-byte NPU session template.')
+    require(template.is_file(), 'NPU session template does not exist.')
+    evidence = args.evidence or EVIDENCE / 'dev-runs-1031' / f"npu-{time.strftime('%H%M%S')}"
+    evidence.mkdir(parents=True, exist_ok=False)
+    record = {'kind': 'npu', 'image': str(args.image.resolve()), **facts, 'launched': False}
+    try:
+        # Validate template geometry before the first optional board read.
+        finite.original.session_profile(template.read_bytes(), tuple(facts['session_layout']))
+        live = json.loads(args.state.read_bytes()) if args.state else npu_capture(args.fel, evidence)
+        save(evidence / 'state.json', live)
+        bundle = evidence / 'bundle'
+        meta = helper.prepare(finite, args.image, manifest, template, live, bundle, CLANG, LLD, args.objcopy)
+        helper.validator(finite, host.host.watchdog_marker)(bundle)
+        record.update(bundle=str(bundle), identity=live['identity'], port=live['port'],
+                      derived_session=meta['derived_session'])
+        if args.check_only:
+            record.update(outcome='checked', summary='npu: prepared and checked; no board launch')
+        else:
+            run_args = argparse.Namespace(bundle=bundle, fel=args.fel, evidence=evidence / 'run',
+                                          root_owned_claim='development NPU run')
+            record['launched'] = True
+            save(evidence / 'dev-run.json', record)
+            result = npu_run(run_args, finite, helper, host.host.watchdog_marker, bundle, live)
+            good = result.get('functional_success') or result.get('startup_bootstrap')
+            record.update(outcome='returned' if good else 'numerical-mismatch', result=result,
+                          summary='npu: returned; ' + ('matched' if good else 'numerical mismatch'))
+    except Exception as error:
+        record.update(outcome='failed' if record['launched'] else 'refused-before-launch', error=str(error),
+                      summary=f"npu: {'failed' if record['launched'] else 'not launched'}: {error}")
+        report = evidence / 'run/watchdog-report.json'
+        if report.is_file():
+            record.update(outcome='watchdog-reset', watchdog=json.loads(report.read_bytes()))
+    save(evidence / 'dev-run.json', record)
+    print(record['summary'])
+    print('evidence:', evidence / 'dev-run.json')
+    return 0 if record['outcome'] in ('checked', 'returned') else 1
 
 
 def summary_of(kind, outcome, detail):
@@ -599,12 +733,16 @@ def main(argv=None):
     parser.add_argument('kind', choices=('cpu-return', 'gpu-return', 'npu', 'rail-helper'))
     parser.add_argument('--image', type=Path, help='CPU-return image ELF, from this tree or an application '
                         'such as mimus (default: the hello-compute control image)')
+    parser.add_argument('--manifest', type=Path, help='Exact finite NPU build manifest')
+    parser.add_argument('--objcopy', type=Path, default=Path('/usr/bin/llvm-objcopy-21'))
     parser.add_argument('--input', type=Path, action='append', default=[],
                         help="An INPUT region's content, once per region in manifest order")
     parser.add_argument('--decoder', type=Path, help='Python module that decodes the result payload '
                         '(default: apps/<name>/host.py in this tree when present; otherwise the raw payload)')
+    parser.add_argument('--expect-result', type=json.loads, metavar='JSON_VALUE',
+                        help='Require this decoded result, overriding decoder.expected(inputs)')
     parser.add_argument('--records', type=Path, default=RECORDS,
-                        help='Reviewed session supplying the board prefix, thermal record and CPU clock grant')
+                        help='CPU reviewed prefix/thermal/grant session; for NPU, its native 456-byte session template')
     parser.add_argument('--port', help='Physical USB port, for example 3-1 (else SUNSTONE_USB_PORT)')
     parser.add_argument('--evidence', type=Path, help='New evidence directory')
     parser.add_argument('--state', type=Path, help='Use this captured state.json instead of reading the board')
@@ -621,19 +759,27 @@ def main(argv=None):
     args = parser.parse_args(argv)
     os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
     sys.dont_write_bytecode = True
-    if args.kind == 'gpu-return':
-        parser.exit(2, GPU_REFUSAL + '\n')
     host, launcher = kit()
-    if args.kind == 'npu':
+    if args.kind == 'gpu-return':
         try:
-            require(args.image, 'npu is refused: npu requires --image.')
-            npu_check(args.image, host.host)
+            require(args.image is not None, 'gpu-return requires --image.')
+            symbols = host.linked_symbols(args.image)
+            info = host.host.image_manifest(args.image)
+            require('ss_result_record' in symbols and 'os_gpu_return_report' in symbols and
+                    info['manifest'] is not None and
+                    (info['manifest']['devices_required'] | info['manifest']['devices_optional']) & 16,
+                    'gpu-return requires a current manifest-based GPU-capable returning image.')
         except ValueError as error:
-            parser.exit(2, f'{error}\n')
+            parser.exit(2, str(error) + '\n')
     if args.port:
         os.environ['SUNSTONE_USB_PORT'] = args.port
     port = os.environ.get('SUNSTONE_USB_PORT')
     require(port or args.state, 'Select the board with --port or SUNSTONE_USB_PORT.')
+    if args.kind == 'npu':
+        try:
+            return npu_main(args, host)
+        except (ValueError, OSError) as error:
+            parser.exit(2, f'npu is refused: {error}\n')
     if args.kind == 'rail-helper':
         require(port and not args.state and not args.check_only, 'rail-helper runs on a board: --port, no --state.')
         evidence = args.evidence or EVIDENCE / 'dev-runs-1031' / f"{port}-rail-helper-{time.strftime('%H%M%S')}"
@@ -651,6 +797,7 @@ def main(argv=None):
     info = host.host.image_manifest(image)
     require(info['manifest'] is not None, 'Image has no application manifest.')
     name = info['manifest']['name']
+    devices = info['manifest']['devices_required'] | (16 if args.kind == 'gpu-return' else 0)
     decoder_path = args.decoder or (ROOT / 'apps' / name / 'host.py')
     decoder = load('dev_decoder', decoder_path) if args.decoder or decoder_path.is_file() else None
     if args.input:
@@ -662,7 +809,7 @@ def main(argv=None):
     evidence = args.evidence or EVIDENCE / 'dev-runs-1031' / f"{port or 'offline'}-{args.kind}-{time.strftime('%H%M%S')}"
     evidence.mkdir(parents=True, exist_ok=False)
     try:
-        image_check(host, image, inputs)
+        image_check(host, image, inputs, devices)
     except ValueError as error:
         record = {'kind': args.kind, 'port': port, 'image': str(Path(image).resolve()), 'application': name,
                   'launched': False, 'outcome': 'refused-before-launch',
@@ -705,7 +852,7 @@ def main(argv=None):
               'bundle': str(evidence / 'bundle'), 'launched': False, 'normalize_rails': normalized,
               'rail_helper_sha256': RAIL_HELPER_SHA256}
     try:
-        meta = prepare(host, launcher, image, args.records, inputs, evidence / 'bundle', live)
+        meta = prepare(host, launcher, image, args.records, inputs, evidence / 'bundle', live, devices=devices)
     except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
         meta = None
         record.update(outcome='refused-before-launch', summary=summary_of(args.kind, 'not launched', str(error)))
@@ -729,8 +876,10 @@ def main(argv=None):
         try:
             result = run_return(args, host, evidence / 'bundle', live, out)
             session = json.loads((out / 'session.json').read_text())
-            payload = (out / 'result.bin').read_bytes()
-            outcome, detail, decoded = judge(decoder, payload, inputs, session)
+            payload = (out / 'result.bin').read_bytes() if (out / 'result.bin').exists() else b''
+            outcome, detail, decoded = judge(decoder, payload, inputs, session, result=result,
+                                             require_gpu=args.kind == 'gpu-return',
+                                             expected_result=args.expect_result)
             record.update(outcome=outcome, result=result, payload=str(out / 'result.bin'), decoded=decoded)
             record['summary'] = summary_of(args.kind, outcome, 'secondaries off %d; %s' % (
                 result['secondaries_off'], detail))

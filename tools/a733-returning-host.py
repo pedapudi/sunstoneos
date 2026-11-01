@@ -133,8 +133,8 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
    """Classify the returned instance before any DRAM access; return the reset report or None."""
    state=record['watchdog'];state['returned_after_seconds']=round(time.monotonic()-state['armed_monotonic'],3)
    before,after,words=crumbs.parse_return(transaction(*crumbs.return_arguments()))
-   elf=bundle/'board/image.elf'
-   decoded=crumbs.decode(words,p['epoch'],elf if elf.exists() else None)
+   elf=crumbs.bundle_image(bundle,p['image_sha256'])
+   decoded=crumbs.decode(words,p['epoch'],elf)
    state.update(mode_after_return=before,mode_after_disarm=after,disarmed=not after&1,
                 fired=bool(before&1),breadcrumbs=decoded);journal()
    require(not after&1,'WDT0 did not disarm on the returned instance.')

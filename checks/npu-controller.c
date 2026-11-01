@@ -140,8 +140,9 @@ static void started(struct device *d, struct a733_npu_controller *c)
     assert(a733_npu_open(c, &ops, d, &mmu, &boot, 1000));
     assert(c->state == A733_NPU_BOOTING && d->resets == 2);
     d->now += 40;
+    uint64_t completed_at = d->now;
     assert(a733_npu_poll(c) == A733_NPU_READY);
-    assert(d->finished == 1);
+    assert(d->finished == 1 && d->now == completed_at + 10);
 }
 static void retained(struct device *d, struct a733_npu_controller *c)
 {
@@ -281,7 +282,8 @@ int main(int argc, char **argv)
     assert(!a733_npu_submit(&c, &task, 1000) && !a733_npu_close(&c));
     d.now += 20; assert(a733_npu_poll(&c) == A733_NPU_RUNNING);
     assert(d.finished == 1 && d.cpu_output[0] == 0xa5); /* event precedes bus drain */
-    d.now += 20; assert(a733_npu_poll(&c) == A733_NPU_DONE);
+    d.now += 20; uint64_t completed_at = d.now;
+    assert(a733_npu_poll(&c) == A733_NPU_DONE && d.now == completed_at);
     assert(d.cpu_output[0] == (0x37 ^ 0x5a) && d.finished == 2);
     assert(a733_npu_poll(&c) == A733_NPU_DONE && d.finished == 2);
     void *token = NULL; int canceled = -1;
@@ -368,6 +370,11 @@ int main(int argc, char **argv)
     assert(c.fault == A733_NPU_IDENTITY && !d.resets && !d.triggers); retained(&d, &c);
     fresh(&d, &c); assert(!a733_npu_open(&c, &ops, &d, &mmu, &boot, 1));
     assert(c.fault == A733_NPU_TIMEOUT && !d.triggers); retained(&d, &c);
+    /* Bootstrap settling belongs to the original OPEN deadline. */
+    fresh(&d, &c); assert(a733_npu_open(&c, &ops, &d, &mmu, &boot, 1000));
+    d.now = c.start + 995;
+    assert(a733_npu_poll(&c) == A733_NPU_FAULT && c.fault == A733_NPU_TIMEOUT);
+    assert(d.finished == 1 && d.triggers == 1); retained(&d, &c);
     fresh(&d, &c); struct a733_npu_command bad = boot;
     bad.readable_bytes = A733_NPU_FETCH_BYTES - 1;
     assert(!a733_npu_open(&c, &ops, &d, &mmu, &bad, 1000));

@@ -70,9 +70,21 @@
  * without it put phase << 24 | cluster << 16 | status & 0xffff in the value.
  * GUARD (aux bit 14): the value is the entry guard's full refusal word,
  * detail << 12 | line of apps/os/cpu-return-entry.c. */
+#define SUNSTONE_CRUMB_FAIL_CPU_PLL 0x9u /* Mismatched PLL word; expected N/state/domain in aux. */
+#define SUNSTONE_CRUMB_FAIL_CPU_RETAINED 0x8u /* First CPU driver fault; layout in cpu-return/cpu.patch. */
 #define SUNSTONE_CRUMB_CPU_AUX 0x20000000u
 #define SUNSTONE_CRUMB_CPU_GUARD 0x40000000u
 #define SUNSTONE_CRUMB_FAIL_PMIC 0x6u       /* PMIC power service; value: authority word */
+#define SUNSTONE_CRUMB_FAIL_GPU 0x7u        /* GPU failure; value: reason or register status */
+#define SUNSTONE_CRUMB_FAIL_NPU 0xau        /* NPU failure; value: reason or register status */
+/* Frozen finite NPU images use group 8. The host distinguishes their defined
+ * finite return producers from CPU retention using the launched image ELF. */
+/* NPU first-failure layouts, independent of progress stages. Register offsets
+ * are the physical address's low 16 bits, divided by four in aux bits 13:0;
+ * the symbolized source identifies the bank. Value keeps all 32 status bits.
+ * A lifecycle record instead puts enum a733_npu_startup_stage in aux bits 7:0. */
+#define SUNSTONE_CRUMB_NPU_REGISTER 0x40000000u
+#define SUNSTONE_CRUMB_NPU_STARTUP 0x20000000u
 #define SUNSTONE_CRUMB_FAIL_RETURN 0x80000000u /* site flag: caller is a return address */
 #define SUNSTONE_CRUMB_FAIL_SITE(group) (SUNSTONE_CRUMB_FAIL_##group << 12 | ((uint32_t)__LINE__ & 0xfffu))
 /* The address of this statement, for the caller word of a board failure.
@@ -99,6 +111,11 @@ enum {
     SUNSTONE_CRUMB_CLOCK_GUARD = 0x0201,    /* CPU clock entry guard passed */
     SUNSTONE_CRUMB_CLOCK_CHANGE = 0x0202,   /* request; value: domain << 12 | MHz */
     SUNSTONE_CRUMB_CLOCK_READY = 0x0203,    /* every granted request issued */
+    /* Return step: 1 drain, 2 request CPU-B lowering, 3 wait for lowering,
+     * 4 verify clocks/leases, 5 done. Value: step << 12 | owner phase << 10 |
+     * cluster << 8 | driver state. Owner phases: START, INSPECT, REQUEST,
+     * FOLLOW, numbered 0 through 3. */
+    SUNSTONE_CRUMB_CLOCK_RETURN = 0x0204,
     SUNSTONE_CRUMB_PMIC_STOP = 0x0210,      /* PMIC owner stopped */
     SUNSTONE_CRUMB_THERMAL_DONE = 0x0221,   /* thermal service stopped */
     SUNSTONE_CRUMB_ASSET_START = 0x0301,    /* value: asset index */
@@ -114,15 +131,71 @@ enum {
     SUNSTONE_CRUMB_GPU_READY = 0x0404,      /* value: result */
     SUNSTONE_CRUMB_GPU_SUBMIT = 0x0410,     /* value: job sequence */
     SUNSTONE_CRUMB_GPU_COMPLETE = 0x0411,   /* value: job sequence */
+    SUNSTONE_CRUMB_GPU_PEER_SUBMIT = 0x0412, /* value: peer job sequence */
+    SUNSTONE_CRUMB_GPU_PEER_COMPLETE = 0x0413, /* value: peer job sequence */
     SUNSTONE_CRUMB_GPU_RETIRE = 0x0420,
     SUNSTONE_CRUMB_GPU_RETIRED = 0x0421,    /* value: result */
     SUNSTONE_CRUMB_GPU_THERMAL = 0x0430,    /* value: result */
     SUNSTONE_CRUMB_GPU_PARKED = 0x0440,     /* value: result */
+    SUNSTONE_CRUMB_GPU_RECOVERY_STOP = 0x0450, /* value: failed firmware serial */
+    SUNSTONE_CRUMB_GPU_RECOVERY_RESET = 0x0451, /* value: failed firmware serial */
+    SUNSTONE_CRUMB_GPU_RECOVERY_RESTART = 0x0452, /* value: failed firmware serial */
+    SUNSTONE_CRUMB_GPU_RECOVERY_READY = 0x0453, /* value: failed firmware serial */
     SUNSTONE_CRUMB_RETURN_POWER_DOWN = 0x0502, /* value: core */
     SUNSTONE_CRUMB_PROBE_BEGIN = 0x0801,
     SUNSTONE_CRUMB_PROBE_PROGRESS = 0x0802,
     SUNSTONE_CRUMB_PROBE_CLEAN = 0x0803,
     SUNSTONE_CRUMB_RETURN_ROM = 0x0503,     /* value: WDT0 mode after disarm */
+    SUNSTONE_CRUMB_NPU_WAIT_STARTUP = 0x0601,
+    SUNSTONE_CRUMB_NPU_OPEN = 0x0602,
+    SUNSTONE_CRUMB_NPU_BOOTSTRAP_READY = 0x0603,
+    SUNSTONE_CRUMB_NPU_SUBMIT = 0x0604,
+    SUNSTONE_CRUMB_NPU_JOB_DONE = 0x0605,
+    SUNSTONE_CRUMB_NPU_OUTPUT_COPIED = 0x0606,
+    SUNSTONE_CRUMB_NPU_REAPED = 0x0607,
+    SUNSTONE_CRUMB_NPU_CLOSE = 0x0608,
+    SUNSTONE_CRUMB_NPU_LOCAL_STOP = 0x0609,
+    SUNSTONE_CRUMB_NPU_QUIESCENT = 0x060a,
+    SUNSTONE_CRUMB_NPU_EXIT = 0x060b,
+    SUNSTONE_CRUMB_NPU_HELPER_OPEN = 0x0620,   /* value: runtime slot */
+    SUNSTONE_CRUMB_NPU_HELPER_LOAD = 0x0621,   /* value: model index */
+    SUNSTONE_CRUMB_NPU_HELPER_SUBMIT = 0x0622, /* value: model index */
+    SUNSTONE_CRUMB_NPU_HELPER_DONE = 0x0623, /* value: job ticket */
+    SUNSTONE_CRUMB_NPU_HELPER_COPIED = 0x0624, /* value: copied bytes */
+    SUNSTONE_CRUMB_NPU_HELPER_CLOSE = 0x0625,  /* value: runtime slot */
+    SUNSTONE_CRUMB_NPU_HELPER_REFUSED = 0x062e,
+    SUNSTONE_CRUMB_NPU_HELPER_FAILED = 0x062f,
+    /* Startup register pass; each marker precedes its sub-step's reads.
+     * PERI0_OUTPUT repeats for each fabric parent, with fabric index as value. */
+    SUNSTONE_CRUMB_NPU_PASS_DOMAIN = 0x0630,
+    SUNSTONE_CRUMB_NPU_PASS_REFERENCE = 0x0631,
+    SUNSTONE_CRUMB_NPU_PASS_SRAM = 0x0632,
+    SUNSTONE_CRUMB_NPU_PASS_AHB = 0x0633,
+    SUNSTONE_CRUMB_NPU_PASS_NSI = 0x0634,
+    SUNSTONE_CRUMB_NPU_PASS_MBUS = 0x0635,
+    SUNSTONE_CRUMB_NPU_PASS_PERI0 = 0x0636,
+    SUNSTONE_CRUMB_NPU_PASS_PERI0_OUTPUT = 0x0637,
+    SUNSTONE_CRUMB_NPU_PASS_VIDEO_ENC = 0x0638,
+    SUNSTONE_CRUMB_NPU_PASS_VIDEO_DEC = 0x0639,
+    SUNSTONE_CRUMB_NPU_PASS_VIDEO_BUS = 0x063a,
+    SUNSTONE_CRUMB_NPU_PASS_MODULE = 0x063b,
+    SUNSTONE_CRUMB_NPU_PASS_RESETS = 0x063c,
+    SUNSTONE_CRUMB_NPU_PASS_DRAM_CLOCK = 0x063d,
+    SUNSTONE_CRUMB_NPU_PASS_DRAM_PHY = 0x063e,
+    SUNSTONE_CRUMB_NPU_PASS_CLOCK_MODES = 0x063f,
+    SUNSTONE_CRUMB_NPU_PASS_PLL_PROFILE = 0x0640,
+    SUNSTONE_CRUMB_NPU_PASS_PLL_GATES = 0x0641,
+    SUNSTONE_CRUMB_NPU_PASS_PLL_TUNING = 0x0642,
+    SUNSTONE_CRUMB_NPU_PASS_DONE = 0x0643,
+    SUNSTONE_CRUMB_NPU_FIRST_CLOSE = 0x0644,
+    SUNSTONE_CRUMB_NPU_STOPPED = 0x0645,
+    SUNSTONE_CRUMB_NPU_RESTART_READY = 0x0646,
+    SUNSTONE_CRUMB_NPU_REOPEN = 0x0647,
+    SUNSTONE_CRUMB_NPU_POWER_OFF_REQUEST = 0x0648,
+    SUNSTONE_CRUMB_NPU_POWER_OFF_ACK = 0x0649,
+    SUNSTONE_CRUMB_NPU_POWER_ON_REQUEST = 0x064a,
+    SUNSTONE_CRUMB_NPU_POWER_ON_ACK = 0x064b,
+    SUNSTONE_CRUMB_NPU_RETAINED = 0x06ff,
 };
 
 #ifdef SUNSTONE_CRUMBS

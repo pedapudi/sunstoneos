@@ -254,7 +254,13 @@ enum a733_npu_state a733_npu_advance(struct a733_npu_controller *c, int sample_e
         fail(c, finished < 0 ? A733_NPU_COUNTER : A733_NPU_MEMORY); return c->state;
     }
     if (canceled) c->state = A733_NPU_CANCELED;
-    else if (c->bootstrap) { c->job.token = 0; c->state = A733_NPU_READY; }
+    else if (c->bootstrap) {
+        /* Preserve VIPLite's 10 us post-initialization settling delay
+         * before publishing READY (vip_drv_hardware.c:848-850). */
+        c->ops.delay(c->cookie, 10);
+        if (!deadline(c)) return c->state;
+        c->job.token = 0; c->state = A733_NPU_READY;
+    }
     else c->state = A733_NPU_DONE;
     return c->state;
 }

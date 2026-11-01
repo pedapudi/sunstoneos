@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import shlex
-from harness import Image, LLD, Steps
+from harness import Image, LLD, Steps, skip_crumbs
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0
@@ -15,18 +15,22 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--build', type=Path, required=True, help='Accepted OS build with compile_commands.json')
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--lld', type=Path, default=LLD)
-parser.add_argument('--cases', type=int, nargs='+', choices=range(31), default=list(range(14)))
+parser.add_argument('--cases', type=int, nargs='+', choices=range(16), default=list(range(16)))
 args = parser.parse_args()
 out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
 steps = Steps(out, 'commands.json')
 unit = next(v for v in json.loads((args.build / 'compile_commands.json').read_text())
-            if v['file'].endswith('/apps/os/thermal.c'))
-original = shlex.split(unit['command']); old_root = str(Path(unit['file']).parents[2])
+            if v['file'].endswith(('/apps/os/thermal.c', '/os-image/return-thermal.c')))
+original = shlex.split(unit['command'])
+old_root = str(Path(next(v[2:] for v in original if v.startswith('-I') and v.endswith('/apps/os'))).parents[1])
 flags = [v.replace(old_root, str(ROOT)) for v in original[:original.index('-o')]]
-flags += ['-DSUNSTONE_A733_OS_GPU_LINEAR=1', '-DSUNSTONE_A733_FAULT_PAGE=1', '-DOS_RECOGNITION_CORE=2']
+flags += ['-DSUNSTONE_A733_OS_GPU=1', '-DSUNSTONE_A733_FAULT_PAGE=1']
+flags=[('-I'+str(ROOT/'apps/board')) if v.startswith('-I') and not Path(v[2:]).is_dir()
+       and Path(v[2:]).parent.name=='apps' and Path(v[2:]).name.endswith('-board') else v for v in flags]
 for flag in flags:
     if flag.startswith('-I'): assert Path(flag[2:]).is_dir(), flag
 (out / 'compile-inputs.json').write_text(json.dumps(dict(unit=unit, flags=flags), indent=2) + '\n')
+flags=[v for v in flags if not v.startswith('-DSUNSTONE_A733_OS_GPU_LINEAR=')]
 objects = []
 for i, source in enumerate(('checks/os-gpu-thermal.c', 'runtime/memory.c', 'runtime/memmove.c')):
     obj = out / f'unit-{i}.o'; objects.append(obj)
@@ -36,13 +40,10 @@ steps.command('link', [args.lld, '-Ttext=0x41000000', '--entry=os_gpu_thermal_ch
                        *objects, '-o', elf])
 image = Image(elf); identity = hashlib.sha256(elf.read_bytes()).hexdigest()
 cases = ['repeated-park-reopen', 'throttle-during-reopen', 'critical-during-reopen',
-         'close-observation-deadline', 'wrong-client', 'expired-lifetime', 'stale-open-record',
+         'close-observation-deadline', 'wrong-client', 'expired-lifetime', 'stale-open-epoch',
          'terminal-retire', 'retire-close-busy', 'retire-deadline', 'retire-critical',
          'retire-wrong-client', 'retire-pending-ticket', 'retire-stale-stopped-epoch',
-         'job-timely', 'job-no-record', 'job-deadline-equality', 'job-late-record',
-         'job-revoked', 'job-counter-backwards', 'job-counter-stalled', 'job-already-pending',
-         'open-no-reply', 'open-not-queued', 'open-late-reply', 'open-no-ready-record', 'job-both-clocks-stalled',
-         'close-shared-status-budget', 'open-shared-reply-ready-budget', 'job-invalid-record', 'caller-ownership']
+         'close-shared-status-budget', 'owed-job-prevents-thermal-close']
 results = {}
 for mode, name in enumerate(cases):
     if mode not in args.cases: continue
@@ -54,6 +55,7 @@ for mode, name in enumerate(cases):
             for page in range(address & ~4095, (address + size + 4095) & ~4095, 4096):
                 if page not in pages: uc.mem_map(page, 4096); pages.add(page)
             uc.mem_write(address, segment.data())
+    skip_crumbs(uc, image)
     uc.mem_map(0x80000000, 0x10000); uc.reg_write(UC_ARM64_REG_SP, 0x8000f000)
     uc.reg_write(UC_ARM64_REG_X0, mode)
     uc.hook_add(UC_HOOK_INTR, lambda machine, interrupt, unused: machine.emu_stop())

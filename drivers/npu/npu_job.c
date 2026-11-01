@@ -27,12 +27,14 @@ static unsigned own_slot(void)
         if (job.rt->slot[i].client == self) return i;
     return NPU_RUNTIME_SLOTS;
 }
-static int failed(unsigned slot, uint32_t reason)
+static int failed_at(unsigned slot, uint32_t reason, uint32_t site, const void *caller)
 {
     job.failed[slot] = 1;
+    sunstone_crumb_fail(site, reason, caller);
     sunstone_crumb(NPU_JOB_CRUMB_FAILED, reason);
     return -1;
 }
+#define failed(slot, reason) failed_at((slot), (reason), SUNSTONE_CRUMB_FAIL_SITE(NPU), SUNSTONE_CRUMB_HERE())
 static int refused(uint32_t reason)
 {
     sunstone_crumb(NPU_JOB_CRUMB_REFUSED, reason);

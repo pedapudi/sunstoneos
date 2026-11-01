@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from harness import SANITIZE, environment
 
 
 def block(text, pattern):
@@ -60,7 +61,7 @@ commands = []
 
 
 def run(command):
-    result = subprocess.run([str(x) for x in command], text=True, capture_output=True)
+    result = subprocess.run([str(x) for x in command], text=True, capture_output=True, env=environment())
     commands.append({"command": [str(x) for x in command], "exit": result.returncode,
                      "stdout": result.stdout, "stderr": result.stderr})
     (out / "commands.json").write_text(json.dumps(commands, indent=2) + "\n")
@@ -75,7 +76,7 @@ address = '#include "a733_pcie_native.h"\n' + block(native, r"int a733_pcie_nati
 (out / "address.c").write_text(address)
 host = out / "composed"
 run([compiler, "-std=gnu11", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
-     "-Wno-unused-function", "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+     "-Wno-unused-function", *SANITIZE, "-fno-omit-frame-pointer",
      "-I" + str(root / "include"), *[root / u for u in units], out / "address.c", "-o", host])
 digest = hashlib.sha256(host.read_bytes()).hexdigest()
 shutil.copy2(host, out / (digest + ".elf"))

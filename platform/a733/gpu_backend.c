@@ -9,11 +9,20 @@
 #include "aarch64_device_memory.h"
 #include "a733_mapping_check.h"
 #include "a733_gpu_platform_native.h"
+#include "pvr_gpu_crumb.h"
+#include "pvr_compute_queue.h"
 
-static int fail(struct a733_gpu_backend *b, enum a733_gpu_backend_error error)
+/* The first backend error records its statement in the breadcrumb record
+ * (pvr_gpu_crumb.h, unit BACKEND) before the service sees the failure. */
+#define fail(b, error) fail_at((b), (error), __LINE__, PVR_GPU_CRUMB_HERE())
+static int fail_at(struct a733_gpu_backend *b, enum a733_gpu_backend_error error,
+                   unsigned line, const void *here)
 {
     unsigned expected = 0;
-    atomic_compare_exchange_strong_explicit(&b->error, &expected, error, memory_order_release, memory_order_relaxed);
+    if (atomic_compare_exchange_strong_explicit(&b->error, &expected, error, memory_order_release, memory_order_relaxed))
+        pvr_gpu_crumb_fail(PVR_GPU_CRUMB_BACKEND, error, line,
+            ((uint32_t)b->phase & 0xffu) << 24 | (b->identity_step & 0xffu) << 16 |
+            ((uint32_t)b->service->phase & 0xffu) << 8 | (b->service->control.phase & 0xffu), here);
     return 0;
 }
 static int healthy(struct a733_gpu_backend *b)
@@ -34,20 +43,21 @@ static int device_page(uintptr_t address)
 }
 static int device_pages(void)
 {
-    static const uintptr_t pages[] = {0x01800000, 0x01801000, 0x01803000, 0x0180a000, 0x0180f000, 0x03400000};
+    static const uintptr_t pages[] = {0x01800000, 0x01801000, 0x01803000, 0x0180a000, 0x0180f000, 0x03400000,
+        A733_GPU_DRM_CTRL & ~UINT32_C(4095), A733_GPU_SMC0_GPU & ~UINT32_C(4095)};
     for (unsigned i = 0; i < sizeof(pages) / sizeof(*pages); ++i) {
         if (!device_page(pages[i]) || !device_page(pages[i] + 4092)) return 0;
     }
     return 1;
 }
-static int output_span(struct a733_gpu_backend *b, const void *p, size_t bytes, int queue_event)
+static int output_span(struct a733_gpu_backend *b, const void *p, size_t bytes, int service_output)
 {
     if (!a733_span_excl_nonempty(p, bytes) || !a733_ranges_disjoint_nonempty(b, sizeof(*b), p, bytes) ||
         (b->external.revoked && !a733_ranges_disjoint_nonempty(b->external.revoked, sizeof(*b->external.revoked), p, bytes)) ||
         !a733_ranges_disjoint_nonempty(b->memory, sizeof(*b->memory), p, bytes) ||
         !a733_ranges_disjoint_nonempty(b->power, sizeof(*b->power), p, bytes) ||
         !a733_ranges_disjoint_nonempty(b->power->manager, sizeof(*b->power->manager), p, bytes) ||
-        (!queue_event && !a733_ranges_disjoint_nonempty(b->service, offsetof(struct pvr_gpu_service, worker_stack), p, bytes)) ||
+        (!service_output && !a733_ranges_disjoint_nonempty(b->service, offsetof(struct pvr_gpu_service, worker_stack), p, bytes)) ||
         !a733_ranges_disjoint_nonempty(b->service->config.firmware, b->service->config.firmware_bytes, p, bytes)) return 0;
     for (unsigned i = 0; i < 3 + PVR_FW_RESOURCE_COUNT; ++i) {
         const struct pvr_mips_buffer *buffer = i < 3 ? &b->memory->firmware[i] : &b->memory->resources[i - 3];
@@ -85,19 +95,26 @@ static int active(struct a733_gpu_backend *b)
     return (b->phase == A733_GPU_BACKEND_ACTIVE && b->power->phase == A733_GPU_PLATFORM_ON &&
             b->power->token && b->power->delegated) || fail(b, A733_GPU_BACKEND_STATE);
 }
+/* Every GPU register access is 32 bits wide. A 64-bit register is two
+ * accesses, as the vendor host makes them (OSReadHWReg64 and
+ * OSWriteHWReg64, osfunc.h:1086-1107) and as the qualified firmware-start
+ * probe does (apps/gpu-power-id/fw-start.c): the high word read first, the
+ * low word written first. A 64-bit register lies within one page. */
 static int raw_read(struct a733_gpu_backend *b, uint32_t off, uint32_t width, uint64_t *out)
 {
     if (!device_page(A733_GPU_REGISTERS + off)) return fail(b, A733_GPU_BACKEND_MAPPING);
     uintptr_t address = (uintptr_t)(A733_GPU_REGISTERS + off);
-    *out = width == 4 ? a733_mmio_read32_dsb_sy_both(address) : a733_mmio_read64_dsb_sy_both(address);
+    if (width == 4) { *out = a733_mmio_read32_dsb_sy_both(address); return 1; }
+    const uint64_t high = a733_mmio_read32_dsb_sy_both(address + 4);
+    *out = high << 32 | a733_mmio_read32_dsb_sy_both(address);
     return 1;
 }
 static int raw_write(struct a733_gpu_backend *b, uint32_t off, uint32_t width, uint64_t value)
 {
     if (!device_page(A733_GPU_REGISTERS + off)) return fail(b, A733_GPU_BACKEND_MAPPING);
     uintptr_t address = (uintptr_t)(A733_GPU_REGISTERS + off);
-    if (width == 4) a733_mmio_write32_dsb_sy_both(address, (uint32_t)value);
-    else a733_mmio_write64_dsb_sy_both(address, value);
+    a733_mmio_write32_dsb_sy_both(address, (uint32_t)value);
+    if (width != 4) a733_mmio_write32_dsb_sy_both(address + 4, (uint32_t)(value >> 32));
     return 1;
 }
 static int power_begin(void *context, uint64_t deadline)
@@ -107,8 +124,10 @@ static int power_begin(void *context, uint64_t deadline)
     if ((b->phase != A733_GPU_BACKEND_BOUND && b->phase != A733_GPU_BACKEND_ISOLATED) ||
         b->memory->phase != A733_GPU_MEMORY_OFFLINE || !before(b, deadline)) return fail(b, A733_GPU_BACKEND_STATE);
     b->deadline = deadline; b->identity = 0; b->identity_step = 0;
+    b->recovering=0; b->recovery_write=0; b->recovery_reset=0;
     b->mode = (struct pvr_compute_mode){0};
     b->phase = A733_GPU_BACKEND_POWERING;
+    sunstone_crumb(PVR_GPU_CRUMB_POWER_ON, 0);
     return a733_gpu_platform_begin(b->power, deadline) || fail(b, A733_GPU_BACKEND_POWER);
 }
 static int power_poll(void *context)
@@ -123,6 +142,7 @@ static int power_poll(void *context)
         if (result != 1 || b->power->phase != A733_GPU_PLATFORM_ON || !b->power->token || !b->power->delegated)
             return fail(b, A733_GPU_BACKEND_POWER), -1;
         b->phase = A733_GPU_BACKEND_IDENTIFY;
+        sunstone_crumb(PVR_GPU_CRUMB_IDENTITY, 0);
         return 0;
     }
     if (b->phase != A733_GPU_BACKEND_IDENTIFY || b->power->phase != A733_GPU_PLATFORM_ON ||
@@ -228,12 +248,21 @@ static int stop_read(void *context, uint32_t off, uint32_t width, uint64_t *out)
     struct a733_gpu_backend *b = context;
     if (!active(b)) return 0;
     const struct pvr_gpu_stop *s = &b->service->stop;
-    if (!read_allowed(off, width, 1) || !output(b, out, sizeof(*out)) || s->phase != PVR_GPU_STOP_REGISTERS ||
+    int reset=off==0x100 && width==8 && s->unacknowledged && b->recovering &&
+        b->service->phase==PVR_GPU_SERVICE_RECOVERING;
+    if (reset && (!b->recovery_write || s->index>=s->count ||
+        s->steps[s->index].value!=UINT64_C(0xffeffffffffffc3d) ||
+        s->steps[s->index].mask!=UINT64_MAX)) return fail(b,A733_GPU_BACKEND_ACCESS);
+    if ((!read_allowed(off, width, 1) && !reset) || !output(b, out, sizeof(*out)) || s->phase != PVR_GPU_STOP_REGISTERS ||
         s->index >= s->count || s->steps[s->index].offset != off || s->steps[s->index].width != width)
         return fail(b, A733_GPU_BACKEND_ACCESS);
     if (!before(b, s->deadline)) return 0;
     uint64_t value;
     if (!raw_read(b, off, width, &value) || !before(b, s->deadline)) return 0;
+    if (reset && value==s->steps[s->index].value) {
+        b->recovery_reset=1;
+        sunstone_crumb(SUNSTONE_CRUMB_GPU_RECOVERY_RESET,b->service->config.compute_queue->timeline_serial);
+    }
     *out = value; return 1;
 }
 static int stop_write(void *context, uint32_t off, uint32_t width, uint64_t value)
@@ -242,10 +271,14 @@ static int stop_write(void *context, uint32_t off, uint32_t width, uint64_t valu
     if (!active(b)) return 0;
     const struct pvr_gpu_stop *s = &b->service->stop;
     int allowed = ((off == 0xb40 || off == 0xb30) && width == 4 && !value) ||
-        (off == 0x8b0 && width == 4 && value == 1 && (s->irq_status & 1u));
+        (off == 0x8b0 && width == 4 && value == 1 && (s->irq_status & 1u)) ||
+        (off==0x100 && width==8 && value==UINT64_C(0xffeffffffffffc3d) && s->unacknowledged &&
+         b->recovering && b->service->phase==PVR_GPU_SERVICE_RECOVERING);
     if (!allowed || s->phase != PVR_GPU_STOP_REGISTERS || s->index >= s->count || s->steps[s->index].offset != off ||
         s->steps[s->index].width != width || s->steps[s->index].value != value) return fail(b, A733_GPU_BACKEND_ACCESS);
-    return before(b, s->deadline) && raw_write(b, off, width, value) && before(b, s->deadline);
+    if (!before(b,s->deadline) || !raw_write(b,off,width,value) || !before(b,s->deadline)) return 0;
+    if (off==0x100) b->recovery_write=1;
+    return 1;
 }
 static int control_live(struct a733_gpu_backend *b)
 {
@@ -299,8 +332,57 @@ static int queue_write(void *context, enum pvr_ccb_region region, uint32_t off, 
 }
 static int barrier(void *context, enum pvr_ccb_barrier operation)
 { struct a733_gpu_backend *b = context; return healthy(b) && memory_result(b, a733_gpu_memory_barrier(b->memory, operation)); }
+/* sunxi_secure_config (sunxi_platform.c:964-979), which the vendor host
+ * calls on every power-on just before RGXStart (rgxpower.c:865-889): 2 to
+ * the SMC0 word, then 0 to drm_ctrl. Each is read back, as the qualified
+ * firmware-start probe does (apps/gpu-power-id/fw-start.c, fws_rows). The
+ * read-backs are recorded, not required: on the board the non-secure CPU
+ * reads the SMC0 word as 0 before and after the write. */
+static int secure_configuration(struct a733_gpu_backend *b)
+{
+    if (!device_page(A733_GPU_SMC0_GPU) || !device_page(A733_GPU_DRM_CTRL))
+        return fail(b, A733_GPU_BACKEND_MAPPING);
+    a733_mmio_write32_dsb_sy_both(A733_GPU_SMC0_GPU, 2);
+    b->secure_smc0 = a733_mmio_read32_dsb_sy_both(A733_GPU_SMC0_GPU);
+    a733_mmio_write32_dsb_sy_both(A733_GPU_DRM_CTRL, 0);
+    b->secure_drm = a733_mmio_read32_dsb_sy_both(A733_GPU_DRM_CTRL);
+    sunstone_crumb(PVR_GPU_CRUMB_SECURE, (b->secure_smc0 & 0xffu) << 8 | (b->secure_drm & 0xffu));
+    return 1;
+}
+/* The first timer correlation, before the firmware starts, as the vendor
+ * host makes one on power-on (_RGXMakeTimeCorrData, rgxtimecorr.c:271-343)
+ * and as the qualified probe does before its start (apps/gpu-power-id/
+ * fw-start.c, timer_record): RGX_CR_TIMER, read again when its copy of bit
+ * 31 in bit 63 differs, bits 47:0; the OS time in ns; then the record and
+ * its sequence word through a733_gpu_memory_clock at the published rate. */
+static int timer_correlation(struct a733_gpu_backend *b)
+{
+    uint64_t cr, us;
+    unsigned reads = 1;
+    sunstone_crumb(PVR_GPU_CRUMB_TIMER_READ, 0);
+    if (!raw_read(b, 0x160, 8, &cr)) return 0;
+    if ((cr ^ (cr << 32)) & (UINT64_C(1) << 63)) {
+        reads = 2;
+        if (!raw_read(b, 0x160, 8, &cr) || ((cr ^ (cr << 32)) & (UINT64_C(1) << 63)))
+            return fail(b, A733_GPU_BACKEND_CLOCK);
+    }
+    if (!now(b, &us) || us > UINT64_MAX / 1000 ||
+        !memory_result(b, a733_gpu_memory_clock(b->memory, b->service->config.state.gpu_clock_hz, us * 1000,
+                                                cr & UINT64_C(0xffffffffffff)))) return 0;
+    sunstone_crumb(PVR_GPU_CRUMB_TIMER, reads);
+    return 1;
+}
+/* The start's first step, before any start register write, in the probe's
+ * order: the shared memory becomes device-visible, then the timer
+ * correlation and the secure configuration. */
 static int publish(void *context)
-{ struct a733_gpu_backend *b = context; return active(b) && memory_result(b, a733_gpu_memory_publish(b->memory)); }
+{
+    struct a733_gpu_backend *b = context;
+    if (!active(b)) return 0;
+    sunstone_crumb(PVR_GPU_CRUMB_PUBLISH, 0);
+    return memory_result(b, a733_gpu_memory_publish(b->memory)) && timer_correlation(b) &&
+        secure_configuration(b);
+}
 static int started(void *context, uint32_t *out)
 {
     struct a733_gpu_backend *b = context;
@@ -310,8 +392,32 @@ static int started(void *context, uint32_t *out)
 static int compat(void *context, uint32_t off, void *out, size_t bytes)
 {
     struct a733_gpu_backend *b = context;
-    return active(b) && (output(b, out, bytes) || fail(b, A733_GPU_BACKEND_ACCESS)) &&
+    if (!active(b)) return 0;
+    const struct pvr_gpu_control *c = &b->service->control;
+    /* The controller first polls an external byte, then copies the complete
+     * record into its own storage. Admit only that exact service destination;
+     * all other ownership and writable-mapping checks still apply. */
+    int record = !off && bytes == sizeof(c->compatibility) && out == c->compatibility &&
+        b->service->phase == PVR_GPU_SERVICE_CHECKING && c->phase == PVR_GPU_CONTROL_COMPAT &&
+        c->context == b && c->queue == &b->service->queue;
+    return (output_span(b, out, bytes, record) || fail(b, A733_GPU_BACKEND_ACCESS)) &&
         memory_result(b, a733_gpu_memory_compat(b->memory, off, out, bytes));
+}
+/* The firmware's executed kernel-command count, into one of the count
+ * fields of the controller or of the MMU-cache command; the open firmware writes no return word for
+ * the health command (board-session-20261025-18), so the controller judges
+ * it by this count. */
+static int executed(void *context, uint32_t *out)
+{
+    struct a733_gpu_backend *b = context;
+    if (!control_live(b)) return 0;
+    const struct pvr_gpu_control *c = &b->service->control;
+    const struct pvr_gpu_flush *f = &b->service->flush;
+    if (out != &c->executed_before && out != &c->executed_after &&
+        out != &f->executed_before && out != &f->executed_after) return fail(b, A733_GPU_BACKEND_ACCESS);
+    uint32_t count;
+    if (!memory_result(b, a733_gpu_memory_executed(b->memory, &count))) return 0;
+    *out = count; return 1;
 }
 static int sync_read(void *context, uint32_t *out)
 {
@@ -413,7 +519,8 @@ static int isolate(void *context)
     struct a733_gpu_backend *b = context;
     if (!active(b)) return 0;
     uint64_t deadline = b->service->stop.deadline;
-    if (b->service->stop.phase != PVR_GPU_STOP_ISOLATE || !before(b, deadline) ||
+    if (b->service->stop.phase != PVR_GPU_STOP_ISOLATE ||
+        (b->service->stop.unacknowledged && (!b->recovering || !b->recovery_reset)) || !before(b, deadline) ||
         (b->external.isolate ?
          b->external.isolate(b->external.context, b->power, deadline) != 1 :
          !a733_gpu_platform_off_begin(b->power, deadline)))
@@ -450,6 +557,17 @@ static int irq_mask(void *context)
     if (!b || !b->initialized) return 0;
     if (!device_page(A733_GPU_GICD)) return fail(b, A733_GPU_BACKEND_MAPPING);
     return gicv3_spi_mask(&b->irq) || fail(b, A733_GPU_BACKEND_INTERRUPT);
+}
+static int recovery_begin(void *context,uint64_t *limit)
+{
+    struct a733_gpu_backend *b=context;
+    if (!active(b) || !limit || !output(b,limit,sizeof(*limit)) || !b->service->config.compute_queue ||
+        b->service->phase!=PVR_GPU_SERVICE_READY || !b->external.recovery_limit || b->recovering ||
+        b->service->irq_fault || b->memory->phase!=A733_GPU_MEMORY_PUBLISHED) return 0;
+    uint64_t end=b->external.recovery_limit(b->external.context);
+    if (!end || end<=b->last_now) return 0;
+    b->recovering=1; b->recovery_write=0; b->recovery_reset=0; *limit=end;
+    return 1;
 }
 static int irq_rearm(void *context)
 {
@@ -547,12 +665,14 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
     c->queue = (struct pvr_ccb_ops){queue_read, queue_write, barrier, kick};
     c->start = (struct pvr_gpu_start_ops){now, start_read, start_write, started, publish};
     c->control = (struct pvr_gpu_control_ops){now, control_read, control_write, compat, event};
+    c->executed = executed; c->flush_mmu = 1;
     c->stop = (struct pvr_gpu_stop_ops){now, stop_read, stop_write, sync_write, sync_read, isolate, external->isolate ? NULL : isolate_poll};
     c->irq = (struct pvr_gpu_service_irq_ops){irq_mask, irq_rearm};
     c->power = (struct pvr_gpu_service_enable_ops){power_begin, power_poll};
     if (c->free_lists.count) c->free_lists.ops = (struct pvr_free_list_ops){free_allocate, free_page,
         free_read, free_write, free_publish, free_recover};
     c->enable = NULL; c->context = b; c->compute_mode = compute_mode;
+    c->recovery_begin=external->recovery_limit && !external->isolate ? recovery_begin : NULL;
     return 1;
 }
 
@@ -563,8 +683,12 @@ int a733_gpu_backend_stopped(struct a733_gpu_backend *b,struct pvr_gpu_service *
         b->memory && b->memory->phase==A733_GPU_MEMORY_OFFLINE && b->power &&
         b->power->phase==A733_GPU_PLATFORM_OFF && !b->power->token && !b->power->delegated &&
         b->phase==A733_GPU_BACKEND_ISOLATED && s->stop.phase==PVR_GPU_STOP_STOPPED &&
-        s->stop.isolation_observed && s->stop.acknowledgement[0]==1 && s->stop.acknowledgement[1]==1 &&
-        s->queue.phase==PVR_CCB_RETIRED && s->control.phase==PVR_GPU_CONTROL_RETIRED &&
+        s->stop.isolation_observed &&
+        (s->stop.unacknowledged ?
+            (b->recovering && b->recovery_write && b->recovery_reset && s->phase==PVR_GPU_SERVICE_RECOVERING &&
+             s->queue.phase==PVR_CCB_FAILED && s->control.phase==PVR_GPU_CONTROL_FAILED) :
+            (s->stop.acknowledgement[0]==1 && s->stop.acknowledgement[1]==1 &&
+             s->queue.phase==PVR_CCB_RETIRED && s->control.phase==PVR_GPU_CONTROL_RETIRED)) &&
         s->irq_masked && !s->irq_fault;
 }
 int a733_gpu_backend_rebind_children(struct a733_gpu_backend *b)

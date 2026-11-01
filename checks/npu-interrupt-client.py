@@ -11,7 +11,9 @@ from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,
 p=argparse.ArgumentParser(description=__doc__)
 for name in ('elf','evidence'):p.add_argument('--'+name,type=Path,required=True)
 p.add_argument('--restart',action='store_true',help='check the distinct software-only local-restart variant')
+p.add_argument('--power-cycle',action='store_true',help='check the OFF/ON receipt and producer telemetry')
 a=p.parse_args();r=Path(__file__).resolve().parents[1]
+if a.power_cycle:a.restart=True
 spec=importlib.util.spec_from_file_location('layout',r/'checks/storage-read-native.py');layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout)
 spec=importlib.util.spec_from_file_location('host',r/'apps/npu-finite/host.py');host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
 # Per job: adapter microseconds and system counter ticks at publication and
@@ -21,7 +23,7 @@ JOB_RECORD=[{'job_published_us':7000,'job_finished_us':7020,'job_start_ticks':24
             {'job_published_us':9000,'job_finished_us':9020,'job_start_ticks':4800,'job_done_ticks':5280,
              'job_submit_ticks':3600,'job_publish_ticks':4400,'job_doorbell_ticks':4900}]
 JOB_IRQ_TICKS=[2640,5040];JOB_CYCLES=[(49200,1200),(49300,1300)]
-image=layout.Image(a.elf,layout_names=('npu_convolution','npu_service','a733_observe_identity','npu_service_reply'));cases=[]
+image=layout.Image(a.elf,layout_names=('a733_npu_startup','npu_convolution','npu_service','a733_observe_identity','npu_service_reply'));cases=[]
 for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'):
     u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x40000000,0x04000000)
     for at,data in image.parts:
@@ -31,6 +33,10 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
     def ret(value=0):u.reg_write(UC_ARM64_REG_X0,value);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
     state={'ticks':24000000,'ticket':0,'job':0,'operation':None,'submits':0,'reaps':0,'copied':0,'closed':False,'stop_queries':0,'exit':None,'retained':False,'quiesced':False,'critical':False,'operations':[],'log':''}
     c=0x43000000
+    if a.power_cycle:
+        startup=0x43200000;put(c+image.layouts['npu_convolution']['startup'],startup)
+        for field,value in [('power_off_request_us',100),('power_off_ack_us',1100),('power_on_request_us',1200),('power_on_ack_us',2200)]:put(startup+image.layouts['a733_npu_startup'][field],value)
+        for field,value in [('power_off_policy',0),('power_off_status',0),('power_on_policy',8),('power_on_status',8)]:put(startup+image.layouts['a733_npu_startup'][field],value,4)
     service=c+image.layouts['npu_convolution']['service'];sl=image.layouts['npu_service']
     put(image.address('instance'),service);put(service+sl['irq_bound'],1,4)
     put(service+sl['irq_completions'],(4 if a.restart else 3)-(variant=='missing-IRQ-completion'),4)
@@ -40,6 +46,12 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
     reply=image.layouts['npu_service_reply']
     def code(cpu,at,size,cookie):
         word=int.from_bytes(u.mem_read(at,4),'little')
+        if word & 0xffe0001f == 0xd4000001:
+            svc_number=(word>>5)&0xffff
+            assert svc_number in (0x5c0d,0x5c0e)
+            if svc_number==0x5c0d:
+                state.setdefault('breadcrumbs',[]).append((u.reg_read(UC_ARM64_REG_X0),u.reg_read(UC_ARM64_REG_X0+1)))
+            u.reg_write(UC_ARM64_REG_PC,at+4);return
         if word&0xffffffe0==0xd53be020:
             u.reg_write(UC_ARM64_REG_X0+(word&31),state['ticks']);state['ticks']+=24
             u.reg_write(UC_ARM64_REG_PC,at+4);return
@@ -102,14 +114,17 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
             assert state['closed'] and state['stop_queries']>=3 and state['quiesced'] and state['critical']
             state['exit']=args[0];u.emu_stop()
     u.hook_add(UC_HOOK_CODE,code);u.reg_write(UC_ARM64_REG_SP,0x43ffe000);u.reg_write(UC_ARM64_REG_LR,0x43fff000)
-    u.emu_start(image.address('client',unit='/apps/npu-convolution/main.c'),0,count=3000000)
+    # Returning builds compile the client from their generated finite-main.c.
+    u.emu_start(image.address('client'),0,count=3000000)
     if variant in ('matched','mismatch'):assert state['exit']==(variant=='mismatch') and not state['retained'],state
     else:assert state['retained'] and state['exit'] is None and not state['critical'],state
     assert state['submits']==2 and state['copied']==2 and state['reaps']==2,state
     assert state['operations']==[1,2,6,4]+([5,1] if a.restart else [])+[2,6,4]+([] if variant=='missing-IRQ-completion' else [5]),state
     if a.restart:
         assert state['log'].count('NPU_STAGE=FIRST_CLOSE\n')==1 and state['log'].count('NPU_STAGE=RESTART_OPEN\n')==1
-        if variant=='matched':assert 'PASS NPU two matched jobs across normal local restart and parked providers\n' in state['log']
+        assert [(s,v) for s,v in state.get('breadcrumbs',[]) if 0x0644<=s<=0x0647]==[(0x0644,1),(0x0647,2)]
+        if variant=='matched':
+            assert ('PASS NPU two matched jobs across domain OFF/restart and parked providers\n' if a.power_cycle else 'PASS NPU two matched jobs across normal local restart and parked providers\n') in state['log']
     if variant!='missing-IRQ-completion':
         timing=host.timing(state['log'])
         assert timing['job_us']==[20,20] and timing['publication_gap_us']==2000,timing

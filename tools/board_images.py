@@ -63,6 +63,14 @@ def inspect(image, kind, descriptor=None, host_tree=None):
         native = load('native_probe_contract', ROOT/'tools/board_probe.py').inspect(image)
         return {'symbols':names,'watchdog':native['watchdog'],'generic':False,'entry_guard':False,
                 'descriptor':descriptor,'native_probe':native}
+    if kind == 'npu' and 'ss_result_record' not in names:
+        tree = host_tree or ROOT
+        dev = load('inspect_npu_dev', tree/'tools/dev-run.py')
+        finite = load('inspect_npu_irq', tree/'apps/npu-interrupt/host.py').finite
+        manifest = json.loads((Path(image).parent/'manifest.json').read_bytes())
+        facts = dev.npu_check(image, host, finite, manifest)
+        return dict(facts, symbols=names, generic=False, entry_guard=False,
+                    descriptor=descriptor, finite_npu=True)
     marker = host.watchdog_marker(image) if names else descriptor.get('watchdog')
     require(marker is not None, 'Image does not admit the host-armed watchdog; rebuild with RTC breadcrumbs.')
     require(set(marker) == {'mode', 'session_seconds'} and all(type(v) is int for v in marker.values()) and
@@ -76,8 +84,10 @@ def inspect(image, kind, descriptor=None, host_tree=None):
         base.image_parts(Path(image))
         if generic:
             host.result_geometry(image)
-            cpu = load('inspect_cpu_geometry', ROOT/'apps/cpu-runtime-qualification/host.py')
-            geometry = cpu.geometry(Path(image))
+            returning = load('inspect_return_geometry', ROOT/'apps/os/cpu-return-host.py')
+            geometry = returning.geometry(Path(image))
+            if kind == 'gpu-return':
+                require('gpu_receipt' in geometry, 'GPU kind requires the linked GPU return receipt.')
         else:
             dev = load('inspect_dev', ROOT/'tools/dev-run.py')
             legacy = load('inspect_legacy', (host_tree or GPU_TREE)/'apps/os/cpu-return-host.py')
@@ -158,6 +168,19 @@ def launcher(out, size, mode, seconds=60):
 
 
 def prepare(args, info, live, out):
+    if info.get('finite_npu'):
+        tree = args.host_tree or ROOT
+        finite = load('prepare_npu_irq', tree/'apps/npu-interrupt/host.py').finite
+        helper = load('prepare_npu_development', tree/'apps/npu-finite/development.py')
+        template = Path(args.template)
+        meta = helper.prepare(finite, Path(args.image), Path(args.image).parent/'manifest.json',
+                              template/'session.bin', live, out, str(CLANG), str(LLD),
+                              '/usr/lib/llvm-21/bin/llvm-objcopy')
+        helper.validator(finite, finite.watchdog_marker)(out)
+        uploads = [(part['address'], out/part['name']) for part in meta['segments']]
+        uploads += [(0x42000000,out/'result-zero.bin'),(0x42004000,out/'contract.bin'),
+                    (0x52c00,out/'request.bin'),(0x52d00,out/'report-zero.bin'),(0x52000,out/'launch.bin')]
+        return dict(meta, uploads=uploads, launch=['exe','0x52000'], format='npu', finite=finite)
     if info.get('native_probe'):
         return load('prepare_native_probe', ROOT/'tools/board_probe.py').prepare(args.image,info['native_probe'],args.input,out)
     dev = load('runner_dev', ROOT / 'tools/dev-run.py')
@@ -253,6 +276,19 @@ def write(path, data):
 
 def capture(owner, plan, args):
     out = owner.evidence
+    if plan['format'] == 'npu':
+        finite = plan['finite']
+        reports = [owner.read(address, size, out/(name+'.bin')) for name,address,size in
+                   [('monitor',0x42000000,128),('platform',plan['geometry']['log'],16384),
+                    ('receipt',plan['geometry']['receipt'],88)]]
+        decoded = finite.validate_reports(*reports,plan)
+        # Validated retirement permits restoration even after numerical mismatch.
+        backup = plan['dram_backup']
+        require(sha(backup) == plan['dram_backup_sha256'], 'Saved NPU DRAM changed.')
+        owner.upload(finite.DRAM[0], backup)
+        owner.record['dram_restored'] = True
+        owner.journal()
+        return {'valid': decoded['status'] == 0, 'payload': decoded['log'].encode(), 'report': decoded}
     if plan['format']=='native-probe':
         probe=load('capture_native_probe',ROOT/'tools/board_probe.py')
         decoded=probe.receipt(owner.read(probe.RECEIPT,128,out/'probe-receipt.bin'),plan)
@@ -279,13 +315,55 @@ def capture(owner, plan, args):
                 allow_untouched=geo['gpu'].get('untouched_report_version') == 2)
         return {'valid': True, 'payload': payload, 'report': decoded}
     records = load('runner_result_host', ROOT/'apps/os/cpu-return-host.py')
-    result = records.capture_result(owner.tx, args.image, plan['epoch'], plan['generation'], out/'output-record.bin')
-    # Copy the secure return report too; the opaque payload alone is not proof
-    # of all-core retirement. Its ABI is shared by generic and legacy images.
-    addr, size = plan['geometry']['report_address'],plan['geometry']['report_bytes']
-    report = owner.read(addr, size, out/'return-report.bin')
-    decoded = records.decode_return_report(report, plan['epoch'])
-    return {'valid': True, 'payload': result['payload'], 'report': decoded}
+    geo = plan['geometry']
+    reads = [('return-report', geo['report_address'], geo['report_bytes']),
+             ('output-record', geo['output_address'], geo['output_bytes'])]
+    if 'gpu_receipt' in geo:
+        gpu = geo['gpu_receipt']
+        reads.append(('gpu-report', gpu['address'], gpu['bytes']))
+    if 'thermal' in geo:
+        reads.extend(records.thermal_capture.captures(geo['thermal']))
+    # Preserve every returned object before decoding any of them. A malformed
+    # application result must not hide the native retirement or GPU receipt.
+    copied = {name: owner.read(address, size, out/(name + '.bin'))
+              for name, address, size in reads}
+    decoded = records.decode_return_report(copied['return-report'], plan['epoch'])
+    valid, payload = True, b''
+    decoded['output_capture_sha256'] = hashlib.sha256(copied['output-record']).hexdigest()
+    try:
+        info = records.host.image_manifest(args.image)
+        payload = records.host.decode_result(copied['output-record'], plan['epoch'], plan['generation'],
+                                              info['manifest']['output_limit'])
+        decoded['output_capture_status'] = 'decoded'
+    except (ValueError, KeyError, struct.error) as error:
+        valid = False
+        decoded.update(output_capture_status='malformed', output_error=str(error))
+    if 'gpu_receipt' in geo:
+        decoded['gpu_capture_sha256'] = hashlib.sha256(copied['gpu-report']).hexdigest()
+        try:
+            decoded['gpu'] = records.gpu_capture.decode_captured(copied['gpu-report'], geo['gpu_receipt'],
+                                                                 plan['epoch'], plan['generation'])
+            require(args.kind != 'gpu-return' or decoded['gpu'].get('gpu_bisect') or
+                    decoded['gpu'].get('completed_gpu_work'),
+                    'GPU kind requires completed GPU work or an image-bound diagnostic receipt.')
+            decoded['gpu_capture_status'] = 'decoded'
+        except (ValueError, KeyError, struct.error) as error:
+            valid = False
+            decoded.update(gpu_capture_status='malformed', gpu_error=str(error))
+    if 'thermal' in geo:
+        decoded['thermal_capture_sha256'] = {name: hashlib.sha256(copied[name]).hexdigest()
+                                             for name, _, _ in records.thermal_capture.captures(geo['thermal'])}
+        try:
+            decoded['thermal'] = records.thermal_capture.decode(geo['thermal'], copied,
+                                                                plan['epoch'], plan['generation'])
+            decoded['thermal']['qualification_passed'] = False
+            decoded['thermal_capture_status'] = 'decoded'
+        except (ValueError, KeyError, struct.error) as error:
+            decoded.update(thermal_capture_status='malformed', thermal_error=str(error))
+    else:
+        decoded['thermal_capture_status'] = 'absent'
+    decoded['qualification_passed'] = False
+    return {'valid': valid, 'payload': payload, 'report': decoded}
 
 
 
