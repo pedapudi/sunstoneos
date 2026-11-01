@@ -807,6 +807,14 @@ to the stated scope:
   [SNTP client](radio-network.md#an-sntp-client-supplies-utc-to-the-rtc-service)
   produces RTC SET requests from network time; no image runs it with the RTC
   service. Independent watchdog evidence is recorded above.
+- RTC alarm ownership: **host-verified only.** The driver refuses stale or
+  duplicate notifications after acknowledgment, completion or failure before
+  invoking callbacks. A separate review, sanitizer checks across 171 callback
+  failures, preserved alarm/calendar checks and linked alarm cases pass.
+  [The driver contract](../apps/rtc/qualification.md) records the scope; evidence
+  is under `build/buses-rtc-1031/` in the local cache. The rebuilt returning RTC
+  images need host-armed WDT0, retained breadcrumbs and current runner support
+  before physical use. Alarm IRQ, crystal, wakeup and retention remain open.
 - Combined monitoring: **implemented** [repeated thermal/ADC sampling](monitor-application.md)
   through separate native owners with a shared stable clock parent and copied
   coherent snapshots. Stop requires both owners to verify converter-disable
@@ -1083,6 +1091,10 @@ to the stated scope:
   parent cases are recorded in [its platform record](spi-platform.md).
   These checks model dependency observations and qualify no native application,
   measured frequency or physical operation. Earlier frozen image scopes remain intact.
+- Exposed I2C: **not implemented** for header TWI0–3 or S_TWI2. Internal
+  PMIC/Type-C and camera paths do not cover those controllers.
+  [The binding inventory](../drivers/i2c/README.md) records header routes,
+  selected vendor rates, pin conflicts and missing clock/mutex ownership.
 - UART: **implemented** bounded [FIFO control](uart.md) for UART0–6 and both
   always-on UARTs, with format planning, flow control where supported, interrupts,
   error reporting and transmit drain. Host checks, source comparisons and native compilation
@@ -1142,7 +1154,10 @@ to the stated scope:
   SPI4 has no DMA request in the manual. Dual and quad modes still lack an
   application consumer; the SPI3 DMA application is described below.
   Board admission, physical peers, three-wire and bit-aligned modes and SPIF
-  remain outstanding.
+  remain outstanding. [SPI media applicability](../apps/spi/qualification.md)
+  distinguishes the manual's attached W25Q64 example from fitted media.
+  No SPI storage device is established on either current board; an identified
+  connection and electrical authority precede a media-specific command.
   The [supervised SPI3 application](spi-application.md#deferred-interrupt-software-evidence)
   supports polling version 1 and deferred-IRQ version 2 for one authenticated
   FIFO-sized WRITE_READ exchange on the 1.8 V PE0–3 route. CPU0 INTID59 masks

@@ -128,8 +128,11 @@ need external recovery. This covers a poll after the transfer deadline, a failed
 register access, and a detected controller error such as an RX overflow from a
 slow channel or an invalid SS. After a detected error the register access
 itself succeeded, but the platform binding has already retained the register
-lock, so no further register write follows. No application uses SPI DMA or
-multi-lane transfers yet.
+lock, so no further register write follows. The [SPI3 DMA application](spi-application.md)
+uses an authenticated command and a 4096-byte response; both DMA channels must
+drain before copied output is published. Multi-lane transfers have no current
+application consumer. [Storage applicability](../apps/spi/qualification.md)
+requires an identified board connection before a media protocol is selected.
 
 ## Sources and focused evidence
 
