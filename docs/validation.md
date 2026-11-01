@@ -62,7 +62,12 @@ shared dependencies before accepting the resulting plan.
 `--full` explicitly requests all central targets, all configured OS variants of
 [the OS image](os-image.md), including the supervised NPU
 profile (variant `npu`), all gate checks and every indexed pure-host check once.
-It lists checks needing external inputs without claiming they ran. The `npu`
+The hook fixture remains conditional. Use `--full --affected BASE..HEAD` or
+`--full --changed PATH...` to name its input scope; ordinary full checks still
+run. Without an explicit scope, the gate uses the latest first-parent commit
+change plus staged, unstaged and nonignored untracked paths. A root commit uses
+all its tracked paths. `hook-scope.json` records the inputs and decision.
+The gate lists checks needing external inputs without claiming they ran. The `npu`
 variant builds with the
 catalogue map `~/.cache/sunstoneos/build/npu-board/session-artifacts.json`;
 the OS build verifies every file it names against
@@ -309,8 +314,9 @@ Git stores the setting in the shared repository configuration
 root of the worktree that pushes, so a worktree runs the hook from its own
 checkout, and a worktree whose branch predates the hook runs no hook.
 The hook uses the affected-input selector to run its fixtures only when an
-outgoing commit changes the hook, its fixture or a declared/transitive fixture
-input. Driver and documentation pushes still receive the complete secret scan;
+outgoing commit changes the hook, its fixture or a file in the fixture's
+complete declared input inventory. The index uses that same inventory for this
+process check; native checks retain inferred and declared endpoint dependencies. Driver and documentation pushes still receive the complete secret scan;
 they do not repeat hook fixtures or build images. The input comparison includes
 intermediate commits, so reverting a hook change does not skip fixture coverage.
 

@@ -9,9 +9,9 @@ Repeated lifecycle operation remains unqualified.
 
 **Board-qualified scope:** A finite interrupt diagnostic produces matching
 ShuffleNetV2 outputs at 852 MHz/800 mV. Startup takes 4.0 ms and inference takes
-2.91 ms doorbell-to-interrupt, about 3.3 ms end to end. Current provider-free
+2.91 ms doorbell-to-interrupt, about 3.3 ms end to end. Provider-free
 entry, disabled-IRQ installation/restoration and real provider/task construction
-before scheduler start return normally with saved RAM restored. These current
+before scheduler start return normally with saved RAM restored. These
 checkpoints perform no inference. The watchdog-admitting finite startup,
 one-inference and two-job/two-model runtime images also qualify on 3-3 at
 852 MHz/800 mV, with matching copied outputs, CLOSE, local stop and normal
@@ -50,7 +50,8 @@ states the vendor sequence and [startup failure decoding](../../apps/npu-finite/
 retains the original setting check and inputs. Three independent review roles
 cover correctness, hardware safety and recovery; review/build evidence is in
 `land-review-*/`, `land-checks/` and `land-baselines/` under the same build root.
-No new voltage target, clock point or PMIC rail write is introduced.
+These finite images use the established 852 MHz/800 mV point and do not write
+PMIC rails.
 
 Normal stop/restart preserves registered providers and service objects in
 software checks. Repeated start/stop, same-instance restart, domain power-off,
