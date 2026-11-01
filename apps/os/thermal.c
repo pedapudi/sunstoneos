@@ -73,7 +73,10 @@ static void record_reading(uint64_t now,enum a733_thermal_level level)
         uint64_t age=now-((r->seen&(1u<<i))?thermal.policy.seen_us[i]:thermal.policy.start_us);
         r->age_us[i]=age>UINT32_MAX?UINT32_MAX:(uint32_t)age;
     }
-    readings.next=now+100000;
+    /* Keep the first row's phase despite late owner passes. Missed periods
+     * produce no invented rows; an early critical row preserves the phase. */
+    if(!readings.next)readings.next=now;
+    if(now>=readings.next)readings.next+=((now-readings.next)/100000+1)*100000;
     atomic_store_explicit(&readings.count,n+1,memory_order_release);
 }
 /* Only the recognizer writes the first window. Publish once; the USB owner
@@ -278,6 +281,9 @@ static int step(void)
     }
     if(!rearm())return fault();
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    /* Snapshot the cached policy at its own deadline, including passes with
+     * no THS read. Quantizing this through 25 ms reads can exceed 125 ms. */
+    record_reading(a733_smp_counter()/24,a733_thermal_policy_level(&thermal.policy));
     /* After the thermal step, so a CRITICAL reading ends the session first. */
     if(os_cpu_clock_step(&thermal.policy)<0)return fault();
 #endif
