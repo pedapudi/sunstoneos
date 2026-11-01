@@ -11,15 +11,28 @@ The evidence is under `~/.cache/sunstoneos/build/npu-wdt-1031/runs/`:
 | One inference | `02-single-inference-0dd327616ce6-834973ec/` | `NPU_INFERENCE=MATCH; inference_jobs=1` |
 | Two-model runtime | `03-runtime-8f51a95699b7-834973ec/` | `NPU_INFERENCE=MATCH; inference_jobs=2` |
 
-Local restart, switching back to the first model, public application API access
-and domain OFF/restart are implemented and host-verified. Their board runs are
-pending, in that order. The [board queue](board-runner.md) has a host-checked
-finite NPU adapter. Submission requires the shared daemon to include it.
-The finite SDK diagnostic uses an EL1 application task;
-full OS EL0 mappings remain unqualified. Active-job reset recovery, thermal
-transitions, sustained operation and representative concurrent workloads also
-remain unqualified. The [native application record](npu-application.md)
-preserves narrower historical attempts and their recovery evidence.
+The queued returning diagnostics have these results on port 3-3 at the same
+852 MHz and 800 mV point. Evidence directories are under
+`~/.cache/sunstoneos/board-queue/entries/`. Each entry contains `run/result.json`,
+its frozen image and transfer evidence. Successful entries also contain validated
+retirement reports.
+
+| Operation | Result | Evidence directory |
+| --- | --- | --- |
+| Local stop and restart | Two matching jobs, four interrupt completions, normal return and restored DRAM | `1793514579021691740-d818fe48/` |
+| Switch conv12 to conv8 and back to conv12 | Three matching jobs, four interrupt completions, normal return and restored DRAM | `1793514712212240796-1a65224c/` |
+| Public application API | Two matching models, three interrupt completions, normal return and restored DRAM | `1793514867262701593-6a1aa965/` |
+| Domain OFF and restart | No accessible return within 46 seconds; instance quarantined and port paused | `1793514996007883230-40e64d60/` |
+
+The [board queue](board-runner.md) validates finite NPU sessions and retirement
+receipts. The power-cycle run has no returned breadcrumb or first-failure record;
+its failing sub-step is unknown. Further physical attempts require coordinator
+recovery of port 3-3. The finite SDK diagnostic uses an EL1 application task;
+full OS EL0 mappings remain unqualified. These bounded successes do not qualify
+repeated transition reliability. Active-job reset recovery, thermal transitions,
+sustained operation and representative concurrent workloads remain unqualified.
+The [native application record](npu-application.md) preserves narrower historical
+attempts and their recovery evidence.
 
 The host model inspector passes a reference comparison.
 [Page-table construction](npu-mmu.md) and the
