@@ -61,6 +61,8 @@ def build_launcher(output,clang,lld,objcopy,*,watchdog_mode=0xb1):
 
 def startup_client(prepared):
  client=STARTUP_CLIENT.get(prepared.get('execution_profile'))
+ if prepared.get('execution_profile')==LATENCY and prepared.get('geometry',{}).get('latency',{}).get('sequence_repeats'):
+  return (STARTUP_CLIENT[LATENCY][0],STARTUP_CLIENT[LATENCY][1],1002,1003)
  if prepared.get('geometry',{}).get('sustained'):
   require(prepared.get('execution_profile')==RUNTIME,'Sustained geometry requires runtime profile.')
   return (STARTUP_CLIENT[RUNTIME][0],STARTUP_CLIENT[RUNTIME][1],200,201)
@@ -76,15 +78,18 @@ def sustained_extension(startup_marker,names,read):
  return sustained
 
 def latency_extension(startup_marker,names,read):
- latency=startup_marker==(STARTUP_CLIENT[LATENCY][0],1,1001,1002)
+ latency=startup_marker in ((STARTUP_CLIENT[LATENCY][0],1,1001,1002),(STARTUP_CLIENT[LATENCY][0],1,1002,1003))
  require(('npu_latency_return_profile' in names)==latency,'Latency extension/startup marker differs.')
  if not latency:return None
  raw=read('npu_latency_return_profile')
  require(len(raw)==64,'Latency immutable extension length differs.')
  words=struct.unpack('<8Q',raw)
- require(words[:2]==(0x4e50554c41545031,1) and words[2] in (0,1) and words[3:]==(1000,1,0,4,24000000),
+ repeats=words[5]
+ require(words[:2]==(0x4e50554c41545031,1) and words[2] in (0,1) and words[3:5]==(1000,1) and
+  words[6:]==(4,24000000) and (repeats==0 or words[2]==1 and 2<=repeats<=64) and
+  (startup_marker[2]==1002)==bool(repeats),
   'Latency immutable extension differs.')
- return {'mode':'queue' if words[2] else 'legacy','measured_jobs':1000,'warmup_jobs':1,'model':0}
+ return {'mode':'queue' if words[2] else 'legacy','measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':repeats}
 
 
 def image_profile(data,manifest):
@@ -100,6 +105,7 @@ def image_profile(data,manifest):
   execution=next((name for name,description in STARTUP_CLIENT.items() if value==(description[0],1,description[2],description[3])),None)
   sustained=value==(STARTUP_CLIENT[RUNTIME][0],1,200,201)
   if sustained:execution=RUNTIME
+  if value==(STARTUP_CLIENT[LATENCY][0],1,1002,1003):execution=LATENCY
   require(execution is not None,'Unsupported native startup marker.')
  elif 'npu_restart_return_profile' in names:
   marker=symbols['npu_restart_return_profile'];start=int(marker['st_value'])
@@ -146,6 +152,7 @@ def image_profile(data,manifest):
  if startup:
   require(sustained_extension(value,names,read)==sustained,'Sustained startup selection differs.')
   latency=latency_extension(value,names,read)
+  if latency:startup=startup_client({'execution_profile':execution,'geometry':{'latency':latency}})
  else:require('npu_sustained_return_profile' not in names and 'npu_latency_return_profile' not in names,'Unexpected workload extension.')
  runtime=manifest['execution_profile'] in (RUNTIME,SWITCH,SDK,LATENCY)
  if manifest['execution_profile']==SDK:
@@ -173,6 +180,8 @@ def image_profile(data,manifest):
  if sustained:geometry['sustained']=True
  if latency:
   geometry['latency']=latency
+  require(read('npu_latency_task_stats_profile')==struct.pack('<4Q',0x4e50554350553031,1,64,24000000) and
+   'ulTaskGetRunTimeCounter' in symbols,'Missing native latency task runtime counters.')
   require('npu_finite_reference_2' not in names,'Latency plan requires exactly two linked networks.')
   if latency['mode']=='queue':
    require(all(name in symbols for name in ('npu_runtime_queue_claim','npu_runtime_queue_wait','npu_runtime_queue_return','npu_queue_submit','npu_queue_release')),
@@ -369,6 +378,9 @@ def validate_reports(monitor,platform,receipt,p):
   result=latency_report(text,status,deadline,g)
   require(m[6]<=result['timing']['start_ticks']<result['timing']['end_ticks']<=h[9],
    'Latency timing escapes native report.')
+  if result.get('repeated_sequence'):
+   require(result['timing']['end_ticks']<=result['repeated_sequence']['start_ticks']<result['repeated_sequence']['end_ticks']<=h[9],
+    'Repeated sequence timing escapes native report.')
   return result
  if g.get('sustained'):
   result=sustained_report(text,status,deadline,g)
@@ -444,21 +456,24 @@ def latency_report(text,status,deadline,g):
  Output comparison and hashing follow each interval and enter total time.
  """
  geometry=g.get('latency')
+ repeats=geometry.get('sequence_repeats',0) if geometry else 0
  require(g.get('runtime') and len(g['references'])==2 and geometry and
-  geometry=={'mode':geometry['mode'],'measured_jobs':1000,'warmup_jobs':1,'model':0} and
-  geometry['mode'] in ('legacy','queue'),'Latency network geometry differs.')
+  geometry=={'mode':geometry['mode'],'measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':repeats} and
+  geometry['mode'] in ('legacy','queue') and (repeats==0 or geometry['mode']=='queue' and 2<=repeats<=64),'Latency network geometry differs.')
  head=('NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=WARMUP\nNPU_STAGE=LATENCY\nNPU_STAGE=CLOSE\n'
-  'NPU_STAGE=WAIT_LOCAL_STOP\nNPU_IRQ_COMPLETIONS=0x00000000000003ea\n'
+  f'NPU_STAGE=WAIT_LOCAL_STOP\nNPU_IRQ_COMPLETIONS=0x{1002+bool(repeats):016x}\n'
   'NPU_IRQ_STOPPED=0x0000000000000001\nNPU_STAGE=QUIESCENT\nNPU_LATENCY=\n')
- pattern=(re.escape(head)+r'((?:0x[0-9a-f]{16}\n){21})NPU_DURATION_LE32=\n'
+ pattern=(re.escape(head)+r'((?:0x[0-9a-f]{16}\n){23})NPU_DURATION_LE32=\n'
   r'((?:[0-9a-f]{128}\n){62}[0-9a-f]{64}\n)NPU_DURATION_SHA256=\n([0-9a-f]{64})\n'
-  r'NPU_OUTPUT_SHA256=\n([0-9a-f]{64})\nNPU_INFERENCE=(MATCH|MISMATCH); inference_jobs=1001\n')
+  r'NPU_OUTPUT_SHA256=\n([0-9a-f]{64})\n'
+  r'(?:NPU_REPEATED_SEQUENCE=\n(?P<sequence_values>(?:0x[0-9a-f]{16}\n){11})NPU_SEQUENCE_OUTPUT_SHA256=\n(?P<sequence_digest>[0-9a-f]{64})\n)?'
+  r'NPU_INFERENCE=(?P<outcome>MATCH|MISMATCH); inference_jobs='+str(1001+bool(repeats))+r'\n')
  match=re.fullmatch(pattern,text)
  require(match is not None,'Latency stage, sample, IRQ or output log differs.')
  (frequency,mode,jobs,warmups,total,checked,bad,start,end,p50,p99,maximum,total_ticks,
-  submit_ticks,acquire_ticks,first_bad,offset,value,submitted,finished,irq_ticks)=(int(v,16) for v in match[1].split())
+  submit_ticks,acquire_ticks,first_bad,offset,value,submitted,finished,irq_ticks,client_cpu,worker_cpu)=(int(v,16) for v in match[1].split())
  require(frequency==24000000 and mode==int(geometry['mode']=='queue') and
-  jobs==checked==1000 and warmups==1 and total==1001 and bad<=jobs,
+  jobs==checked==1000 and warmups==1 and total==1001+bool(repeats) and bad<=jobs,
   'Latency mode, warmup or job/check counters differ.')
  require(submitted==finished==(1000 if mode else 0),'Latency direct fence counters differ.')
  raw=bytes.fromhex(match[2]);durations=list(struct.unpack('<1000I',raw));ordered=sorted(durations)
@@ -466,13 +481,32 @@ def latency_report(text,status,deadline,g):
  require(all(0<t<=frequency for t in durations) and total_ticks==sum(durations) and
   (p50,p99,maximum)==(ordered[499],ordered[989],ordered[999]),'Latency samples or quantiles differ.')
  require(deadline-480000000<=start<end<deadline and total_ticks<=end-start and
-  submit_ticks+acquire_ticks+irq_ticks<=total_ticks and (mode or submit_ticks==acquire_ticks==irq_ticks==0),
+  all(t<=total_ticks for t in (submit_ticks,acquire_ticks,irq_ticks)) and (mode or submit_ticks==acquire_ticks==irq_ticks==0),
   'Latency timing intervals or caller phases differ.')
+ require(client_cpu+worker_cpu<=end-start,'Latency scheduled task counters exceed the measured window.')
  reference=bytes.fromhex(g['references'][0]);digest=match[4]
  expected=hashlib.sha256(hashlib.sha256(reference).digest()*1000).hexdigest()
  matched=digest==expected
- require(matched==(bad==0)==(status==0) and (match[5]=='MATCH')==matched,
-  'Latency status disagrees with output checks/hash.')
+ require(matched==(bad==0),'Latency status disagrees with output checks/hash.')
+ sequence=None
+ require(bool(match['sequence_values'])==bool(repeats),'Repeated sequence report/marker differs.')
+ if repeats:
+  count,seq_start,seq_end,stream,seq_checked,seq_bad,seq_offset,seq_byte,seq_submitted,seq_finished,seq_irq=(int(v,16) for v in match['sequence_values'].split())
+  seq_match=match['sequence_digest']==hashlib.sha256(reference).hexdigest()
+  require(count==repeats and seq_checked==seq_submitted==seq_finished==1 and seq_bad in (0,1) and
+   seq_match==(seq_bad==0) and end<=seq_start<seq_end<deadline and seq_end-seq_start<=frequency and
+   0<stream<=524280 and not stream&7 and seq_irq<=seq_end-seq_start,'Repeated sequence counters, output or timing differ.')
+  sentinel=(1<<64)-1
+  if not seq_bad:require((seq_offset,seq_byte)==(sentinel,sentinel),'Unexpected repeated sequence mismatch detail.')
+  else:require(seq_offset<len(reference) and seq_byte<256 and seq_byte!=reference[seq_offset],'Repeated sequence mismatch detail differs.')
+  sequence={'semantics':'repeated same command with shared input and output; final output checked; no tensor dependency claim',
+   'repetitions':count,'start_ticks':seq_start,'end_ticks':seq_end,'duration_ticks':seq_end-seq_start,
+   'effective_commands_per_second':count*frequency/(seq_end-seq_start),'stream_bytes':stream,
+   'final_output_checked':True,'functional_success':seq_match,'output_digest':match['sequence_digest'],
+   'first_mismatch':None if not seq_bad else {'offset':seq_offset,'byte':seq_byte},'irq_driver_elapsed_ticks':seq_irq,
+   'window':'one input preparation, submit, interrupt wait, output acquisition and release; stream construction and output checking excluded'}
+  matched=matched and seq_match
+ require(matched==(status==0) and (match['outcome']=='MATCH')==matched,'Latency status disagrees with output checks/hash.')
  sentinel=(1<<64)-1
  if not bad:require((first_bad,offset,value)==(sentinel,sentinel,sentinel),'Unexpected latency mismatch detail.')
  else:require(first_bad<1000 and offset<len(reference) and value<256 and value!=reference[offset],
@@ -481,7 +515,7 @@ def latency_report(text,status,deadline,g):
   'controlled_negative':not matched,'jobs':total,'measured_jobs':jobs,'warmup_jobs':warmups,
   'outputs_checked':checked,'mismatches':bad,'status':status,'diagnostic_deadline':deadline,
   'first_mismatch':None if not bad else {'job':first_bad,'offset':offset,'byte':value},
-  'output_digest':digest,'duration_digest':match[3],
+  'output_digest':digest,'duration_digest':match[3],'repeated_sequence':sequence,
   'timing':{'frequency_hz':frequency,'start_ticks':start,'end_ticks':end,'duration_ticks':end-start,
    'duration_seconds':(end-start)/frequency,'jobs_per_second':jobs*frequency/(end-start),
    'latency_ticks':{'p50':p50,'p99':p99,'max':maximum},
@@ -489,9 +523,12 @@ def latency_report(text,status,deadline,g):
    'job_duration_ticks':durations,'warmup_excluded':True,
    'window':'legacy helper call' if not mode else 'input copy, output poison, tensor cache work, submit, interrupt wait, output acquire and record release',
    'total_window':'measured jobs including output comparison, digest and progress checks; warmup and close excluded',
+   'task_runtime':{'client_ticks':client_cpu,'worker_ticks':worker_cpu,'combined_ticks':client_cpu+worker_cpu,
+    'ticks_per_job':(client_cpu+worker_cpu)/jobs,'us_per_job':(client_cpu+worker_cpu)*1000000/frequency/jobs,
+    'scope':'FreeRTOS scheduled runtime of client and runtime worker during the measured window, including output checks and digest; hardware waits while another task runs excluded; IRQ time charged to these tasks included; IRQs charged to idle and other task/kernel work excluded'},
    'caller_phases':None if not mode else {'submit_elapsed_ticks':submit_ticks,'acquire_elapsed_ticks':acquire_ticks,
     'irq_driver_elapsed_ticks':irq_ticks,
-    'scope':'submit under local IRQ lock; output invalidate and release; direct IRQ driver including notification; wait, scheduler and preparation excluded; interrupts and preemption may contribute; CPU utilization is not measured'}},'log':text}
+    'scope':'submit under local IRQ lock; output invalidate and release; direct IRQ driver including notification; phases can overlap when an IRQ follows unlock; wait, scheduler and preparation excluded; interrupts and preemption may contribute; CPU utilization is not measured'}},'log':text}
 
 
 def sustained_report(text,status,deadline,g):

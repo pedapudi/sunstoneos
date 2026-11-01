@@ -2,7 +2,13 @@
  * native adapter effects are modeled; this is not an inference check. */
 #include "../apps/npu-finite/queue-client.c"
 static struct npu_runtime fixture_runtime;
-static unsigned char fixture_input[4],fixture_output[4];
+static unsigned char fixture_input[64] __attribute__((aligned(64))),fixture_output[64] __attribute__((aligned(64)));
+#if SUNSTONE_NPU_LATENCY_SEQUENCE
+static unsigned char fixture_command[NPU_RUNTIME_COMMAND_BYTES] __attribute__((aligned(64)));
+#endif
+static struct npu_queue_job *fixture_job;
+static struct npu_runtime_queue *fixture_last_return;
+int fixture_actual_cache(enum aarch64_cache_op,uintptr_t,size_t);
 static const unsigned char reference[4]={1,2,3,4},input[4]={5,6,7,8};
 const struct npu_finite_network npu_finite_networks[NPU_FINITE_NETWORKS]={
     {input,input,reference,4,4,4},{input,input,reference,4,4,4}};
@@ -11,10 +17,13 @@ atomic_uint a733_npu_application_failed;
 unsigned fixture_case,fixture_locks,fixture_calls,fixture_caches,fixture_claimed,fixture_releases,fixture_waits;
 unsigned fixture_closed,fixture_returned,fixture_status;
 static uint64_t fixture_now=1000000;
+static uint64_t fixture_client_cpu,fixture_worker_cpu;
 char fixture_log[16384];size_t fixture_log_bytes;
 static void verify(int condition)
 {if(!condition)platform_panic("fixture assertion",99);}
-uint64_t a733_smp_counter(void){return fixture_now+=10;}
+uint64_t a733_smp_counter(void){fixture_client_cpu+=10;return fixture_now+=10;}
+uint64_t ulTaskGetRunTimeCounter(const TaskHandle_t task)
+{verify(!task||task==fixture_runtime.service.worker);return task?fixture_worker_cpu:fixture_client_cpu;}
 unsigned a733_npu_application_ready(void){return 1;}
 struct npu_runtime *a733_npu_application_runtime(void){return &fixture_runtime;}
 void platform_puts(const char *p)
@@ -40,6 +49,7 @@ int npu_job_run(unsigned model,const void *in,size_t ni,void *out,size_t no,uint
 {
     verify(!model&&in==input&&ni==4&&no==4&&timeout==1000000&&!fixture_claimed);
     ++fixture_calls;fixture_now+=20000;
+    fixture_client_cpu+=100;fixture_worker_cpu+=200;
     if((fixture_case==2&&fixture_calls==1)||(fixture_case==3&&current_job==3))return -1;
     memcpy(out,reference,4);if(fixture_case==1&&current_job==4)((unsigned char *)out)[0]=9;
     ++fixture_runtime.counters.jobs;atomic_fetch_add(&fixture_runtime.service.irq_completions,1);return 1;
@@ -48,59 +58,89 @@ int npu_runtime_tensor(const struct npu_runtime *rt,unsigned slot,enum nbg_secti
 {
     verify(rt==&fixture_runtime&&!slot&&!fixture_claimed);
     if(index)return 0;
-    *tensor=(struct npu_runtime_tensor){.data=section==NBG_INPUT?fixture_input:fixture_output,.bytes=4};return 1;
+    *tensor=(struct npu_runtime_tensor){.data=section==NBG_INPUT?fixture_input+(fixture_case==9):fixture_output,.bytes=4};return 1;
 }
 int npu_runtime_queue_claim(struct npu_runtime_queue *q,struct npu_runtime *rt)
-{verify(rt==&fixture_runtime&&fixture_calls==1&&!fixture_claimed);q->claimed=1;q->runtime=rt;fixture_claimed=1;return 1;}
+{verify(q==active_queue&&rt==&fixture_runtime&&fixture_calls==1&&!fixture_claimed);q->claimed=1;q->runtime=rt;fixture_claimed=1;return 1;}
 uint64_t npu_runtime_queue_lock(void){verify(!fixture_locks);fixture_locks=1;return 123;}
-void npu_runtime_queue_unlock(uint64_t saved){verify(saved==123&&fixture_locks);fixture_locks=0;}
+void npu_runtime_queue_unlock(uint64_t saved)
+{
+    verify(saved==123&&fixture_locks);fixture_locks=0;
+    if(fixture_case==10&&active_queue->queue.submitted>atomic_load(&active_queue->queue.completed)&&fixture_job->held) {
+        /* An immediate IRQ lands after DAIF restore and before the caller's
+         * submit-end timestamp. Its elapsed ticks overlap the submit phase. */
+        fixture_now+=5000;active_queue->irq_cpu_ticks+=5000;memcpy(fixture_output,reference,4);
+        atomic_store(&active_queue->queue.completed,active_queue->queue.submitted);
+    }
+}
 int npu_queue_register(struct npu_queue *q,struct npu_queue_command *c,const struct a733_npu_command *hardware)
-{verify(fixture_locks&&q==&direct.queue&&hardware==&fixture_runtime.commands[1]);c->owner=q;return 1;}
+{verify(!fixture_locks&&q==&active_queue->queue&&hardware==&fixture_runtime.commands[1]);c->owner=q;return 1;}
 int aarch64_device_cache(enum aarch64_cache_op operation,uintptr_t at,size_t bytes)
 {
-    verify(!fixture_locks&&bytes==4);++fixture_caches;
+    verify(!fixture_locks);
+#if SUNSTONE_NPU_LATENCY_SEQUENCE
+    if(at==(uintptr_t)fixture_command){verify(operation==AARCH64_CACHE_CLEAN&&bytes==sizeof fixture_command);return fixture_actual_cache(operation,at,bytes);}
+#endif
+    verify(bytes==64);++fixture_caches;
     if(operation==AARCH64_CACHE_CLEAN)verify(at==(uintptr_t)fixture_input);
     else verify(at==(uintptr_t)fixture_output);
     if(fixture_case==5&&current_job==3&&operation==AARCH64_CACHE_INVALIDATE)return 0;
-    return 1;
+    return fixture_actual_cache(operation,at,bytes);
 }
 int npu_queue_submit(struct npu_queue *q,struct npu_queue_job *job,struct npu_queue_command *c,
     struct npu_queue_fence after,uint64_t timeout,struct npu_queue_fence *out)
 {
-    verify(fixture_locks&&q==&direct.queue&&c==&command&&!after.queue&&!after.value&&timeout==1000000&&!job->held);
+    verify(fixture_locks&&q==&active_queue->queue&&c->owner==q&&!after.queue&&!after.value&&timeout==1000000&&!job->held);
     verify(!memcmp(fixture_input,input,4)&&fixture_output[0]==0xa5&&fixture_output[1]==0x3c);
     if(fixture_case==3&&current_job==3)return -1;
-    ++q->submitted;job->held=1;*out=(struct npu_queue_fence){q,q->submitted};return 1;
+    ++q->submitted;job->held=1;fixture_job=job;*out=(struct npu_queue_fence){q,q->submitted};return 1;
 }
 int npu_runtime_queue_wait(struct npu_runtime_queue *q,struct npu_queue_fence fence)
 {
-    verify(!fixture_locks&&q==&direct&&fence.value==q->queue.submitted&&record.held);++fixture_waits;fixture_now+=5000;
-    if(fixture_case==4&&current_job==3)return -1;
+    verify(!fixture_locks&&q==active_queue&&fence.value==q->queue.submitted&&fixture_job->held);++fixture_waits;
+    if(atomic_load(&q->queue.completed)==q->queue.submitted)return 1;
+    fixture_now+=5000;
+    if((fixture_case==4&&current_job==3)||(fixture_case==6&&current_job==1000))return -1;
     q->irq_cpu_ticks+=7;
-    memcpy(fixture_output,reference,4);if(fixture_case==1&&current_job==4)fixture_output[0]=9;
+    memcpy(fixture_output,reference,4);if((fixture_case==1&&current_job==4)||(fixture_case==7&&current_job==1000))fixture_output[0]=9;
     atomic_store(&q->queue.completed,q->queue.submitted);return 1;
 }
 int npu_queue_release(struct npu_queue *q,struct npu_queue_job *job)
-{verify(fixture_locks&&q==&direct.queue&&job->held&&fixture_caches%3==0);job->held=0;++fixture_releases;return 1;}
+{verify(fixture_locks&&q==&active_queue->queue&&job->held&&fixture_caches%3==0);job->held=0;++fixture_releases;return 1;}
 int npu_runtime_queue_return(struct npu_runtime_queue *q)
 {
-    verify(!fixture_locks&&q==&direct&&!record.held&&fixture_releases==1000);
-    if(!fixture_returned++)return 0;
+    verify(!fixture_locks&&q==active_queue&&!fixture_job->held&&fixture_releases==1000+(q!=&direct));
+    ++fixture_returned;if(fixture_last_return!=q){fixture_last_return=q;return 0;}
     fixture_runtime.counters.jobs+=q->queue.submitted;
     atomic_fetch_add(&fixture_runtime.service.irq_completions,(unsigned)q->queue.submitted);
     q->claimed=0;fixture_claimed=0;return 1;
 }
 int npu_job_close(void)
-{verify(!fixture_claimed&&fixture_runtime.counters.jobs==1001);fixture_closed=1;fixture_runtime.slot[0].closed=1;atomic_store(&fixture_runtime.slot[0].state,NPU_RUNTIME_CLOSED);fixture_runtime.service.controller.state=A733_NPU_CLOSED;return 1;}
+{verify(!fixture_claimed&&fixture_runtime.counters.jobs==NPU_STARTUP_JOBS);fixture_closed=1;fixture_runtime.slot[0].closed=1;atomic_store(&fixture_runtime.slot[0].state,NPU_RUNTIME_CLOSED);fixture_runtime.service.controller.state=A733_NPU_CLOSED;return 1;}
 unsigned a733_npu_application_stopped(void){return fixture_closed;}
 unsigned a733_npu_application_quiesce(void){return fixture_closed;}
 unsigned a733_npu_application_quiescent(void){return fixture_closed;}
 int npu_service_irq_stopped(const struct npu_service *s){verify(s==&fixture_runtime.service);return fixture_closed;}
 unsigned npu_service_irq_completions(const struct npu_service *s){return atomic_load(&s->irq_completions);}
+int npu_runtime_reference_step(struct npu_runtime *rt,struct npu_runtime_slot *s)
+{verify(rt==&fixture_runtime&&s==&rt->slot[0]&&!fixture_claimed&&!fixture_locks&&s->span==0&&s->offset==0&&s->crc==UINT32_MAX);return 1;}
 void fixture_entry(void)
 {
     a733_observe_identity=(struct a733_observe_identity){7,8,9,0,480000000};
+    verify(!fixture_actual_cache(AARCH64_CACHE_CLEAN,(uintptr_t)fixture_input,4));
+    verify(!fixture_actual_cache(AARCH64_CACHE_CLEAN,(uintptr_t)fixture_input+1,64));
     fixture_runtime.slot[0].opened=1;atomic_store(&fixture_runtime.service.irq_completions,1);
+    fixture_runtime.service.worker=(TaskHandle_t)&fixture_runtime.service.worker;
+    fixture_runtime.slot[0].layout.inputs=1;fixture_runtime.slot[0].layout.outputs=1;
+    fixture_runtime.slot[0].targets[NBG_ALLOC_INPUT]=(struct nbg_assembly_buffer){fixture_input+(fixture_case==9),fixture_case==8?4:64,0};
+    fixture_runtime.slot[0].targets[NBG_ALLOC_INPUT+1]=(struct nbg_assembly_buffer){fixture_output,64,0};
+#if SUNSTONE_NPU_LATENCY_SEQUENCE
+    const uint32_t tail[]={0x08010e02,0x30000701,0x48000000,0x30000701,0x08010e03,0xc23,0x08010e01,0x40,0x10000000,0,0,0,0,0};
+    memcpy(fixture_command,tail,sizeof tail);
+    fixture_runtime.slot[0].command.cpu=(uintptr_t)fixture_command;
+    fixture_runtime.slot[0].command.bytes=sizeof fixture_command;
+    fixture_runtime.slot[0].stream_bytes=sizeof tail;
+#endif
     npu_latency_client(NULL);
 }
 /* Compile the actual receipt writer under a separate fixture entry. */
