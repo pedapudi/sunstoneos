@@ -110,9 +110,8 @@ def session_decode(raw, manifest=None, manifest_sha256=None):
                     'Invalid service record header.')
     if USB_MEMORY in extents:
         value=extents[USB_MEMORY]
-        require(len(value)==64 and struct.unpack_from('<4Q',value)==(1,0x47000000,0x1000000,0x7a000000),
+        require(len(value)==64 and struct.unpack_from('<4Q',value)==(1,0x42200000,0x800000,0x7a000000),
                 'Invalid USB memory profile geometry.')
-        require(any(value[32:]), 'USB memory reservation evidence is missing.')
     if JPEG in extents:
         value=extents[JPEG]
         require(len(value)==856 and value[:PREFIX_BYTES]==raw[:PREFIX_BYTES], 'JPEG extent prefix differs.')
@@ -270,6 +269,21 @@ def backup_regions(image, uploads=()):
     spans = [(r['address'], r['address'] + r['bytes']) for r in
              regions(info['manifest'], (manifest_tool.KIND['work'], manifest_tool.KIND['output']))]
     spans.extend((r['address'], r['address'] + r['bytes']) for r in uploads if r['bytes'])
+    pool = info['elf'].get_section_by_name('.uncached_pool')
+    if pool is not None and pool['sh_size'] and pool['sh_addr'] >= 0x42200000:
+        low, size = pool['sh_addr'], pool['sh_size']
+        table = info['elf'].get_section_by_name('.symtab')
+        bounds = {name: [s for s in table.iter_symbols() if s.name == name and
+                        s['st_shndx'] != 'SHN_UNDEF'] if table else []
+                  for name in ('__uncached_pool_start', '__uncached_pool_end')}
+        require((low, size) == (0x42200000, 0x800000) and pool['sh_type'] == 'SHT_NOBITS' and
+                pool['sh_flags'] & 7 == 3 and all(len(found) == 1 and
+                found[0]['st_info']['bind'] == 'STB_GLOBAL' and found[0]['st_value'] == expected
+                for found, expected in zip(bounds.values(), (low, low + size))) and
+                any(p['p_type'] == 'PT_LOAD' and p['p_flags'] & 7 == 6 and
+                    p['p_vaddr'] <= low < low + size <= p['p_vaddr'] + p['p_memsz']
+                    for p in info['elf'].iter_segments()), 'USB backup pool lacks its exact linked allocation.')
+        spans.append((low, low + size))
     merged = []
     for low, high in sorted(spans):
         require(0 <= low < high <= 1 << 64, 'Invalid backup region.')

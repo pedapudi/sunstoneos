@@ -86,10 +86,15 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
     descriptor = descriptor or {}
     if descriptor:
         require(descriptor.get('image_sha256') == sha(image), 'Image descriptor hash differs.')
-    if kind=='probe' and 'sunstone_probe_marker' in names:
+    if kind == 'usb-class':
+        require('sunstone_probe_marker' in names,
+                'USB class images require the native probe contract and real device cleanup; retained OS images cannot return.')
+        require('a733_usb2_native_poll' in names,
+                'USB class kind requires the linked native USB host controller.')
+    if kind in ('probe', 'usb-class') and 'sunstone_probe_marker' in names:
         native = load('native_probe_contract', ROOT/'tools/board_probe.py').inspect(image)
         return {'symbols':names,'watchdog':native['watchdog'],'generic':False,'entry_guard':False,
-                'descriptor':descriptor,'native_probe':native}
+                'descriptor':descriptor,'native_probe':native,'usb_class':'a733_usb2_native_poll' in names}
     if kind == 'npu' and 'ss_result_record' not in names:
         tree = host_tree or ROOT
         finite = load('inspect_npu_irq', tree/'apps/npu-interrupt/host.py').finite
@@ -127,13 +132,15 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
                 'Probe entry/report reservations differ.')
     return {'symbols': names, 'watchdog': marker, 'generic': generic,
             'entry_guard': 'os_cpu_return_entry_profile' in names, 'descriptor': descriptor,
-            'report_geometry': geometry}
+            'report_geometry': geometry, 'usb_class': 'os_usb_service_dispatch' in names}
 
 
 def policy(info, args, session=None):
     """Approval adds authority; it never creates a storage grant or a backup."""
     d = info['descriptor']
     approved = args.approved_by == 'coordinator'
+    if info.get('usb_class'):
+        require(approved, 'USB class launch requires --approved-by coordinator after review of source and current-cutoff evidence.')
     storage = d.get('storage_write') or args.storage_write
     require(not storage or approved, 'Storage write requires --approved-by coordinator.')
     if storage:
@@ -245,7 +252,7 @@ def prepare(args, info, live, out):
     image_info = records.image_manifest(args.image)
     if struct.unpack_from('<Q', raw, 592)[0] == records.SESSION_MAGIC:
         old = records.session_decode(raw)
-        services = {k: v for k, v in old['extents'].items() if k in records.SERVICE_BYTES}
+        services = {k: v for k, v in old['extents'].items() if k != records.INPUTS}
         devices, flags = old['devices'], old['flags']
     else:
         require(len(raw) == 904, 'Supply a typed session bundle for NPU/audio images.')
@@ -256,6 +263,12 @@ def prepare(args, info, live, out):
     struct.pack_into('<3Q', prefix, 24, epoch, generation, lease)
     parts, address, identity = base.image_parts(Path(args.image))
     prefix[48:80] = identity
+    if records.JPEG in services:
+        # The JPEG service embeds the same board prefix. Rebind its session
+        # identity together with the outer prefix, preserving its evidence.
+        jpeg = bytearray(services[records.JPEG])
+        jpeg[:records.PREFIX_BYTES] = prefix
+        services[records.JPEG] = jpeg
     if records.CPU_GRANT in services:
         grant = bytearray(services[records.CPU_GRANT])
         if struct.unpack_from('<I', grant, 48)[0]:

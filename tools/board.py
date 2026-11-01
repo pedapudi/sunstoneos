@@ -443,7 +443,7 @@ class Live:
         return {'identity': self.identity, 'port': self.args.port, 'words': {hex(a):v for a,v in zip(words,values)}}
 
     def prepare(self, info):
-        return images.prepare(self.args, info, {} if self.args.kind=='probe' else self.live_state(info.get('finite_npu',False)), self.evidence/'bundle')
+        return images.prepare(self.args, info, {} if info.get('native_probe') or self.args.kind=='probe' else self.live_state(info.get('finite_npu',False)), self.evidence/'bundle')
 
     def launch(self, plan):
         if plan.get('format') == 'npu':
@@ -826,13 +826,15 @@ def load_decoder(args):
 def development(argv=None):
     """Translate the development CLI; all admission and execution use this runner."""
     parser = argparse.ArgumentParser(description='Compatibility commands for tools/board.py')
-    parser.add_argument('kind', choices=('cpu-return', 'gpu-return', 'npu', 'rail-helper'))
+    parser.add_argument('kind', choices=('cpu-return', 'gpu-return', 'npu', 'usb-class', 'rail-helper'))
     parser.add_argument('--image', type=Path)
     parser.add_argument('--input', type=Path, action='append', default=[])
     parser.add_argument('--decoder', type=Path)
     parser.add_argument('--records', type=Path)
     parser.add_argument('--template', type=Path)
     parser.add_argument('--manifest', type=Path)
+    parser.add_argument('--descriptor', type=Path)
+    parser.add_argument('--approved-by', choices=('coordinator',))
     parser.add_argument('--host-tree', type=Path)
     parser.add_argument('--objcopy', type=Path)
     parser.add_argument('--expect-result', type=json.loads)
@@ -865,12 +867,12 @@ def development(argv=None):
         command += ['--records', str(args.records or state.RECORDS)]
     elif args.records:
         command += ['--records', str(args.records)]
-    for name in ('template', 'manifest', 'host_tree', 'objcopy'):
+    for name in ('template', 'manifest', 'descriptor', 'host_tree', 'objcopy', 'approved_by'):
         if getattr(args, name):
             command += ['--'+name.replace('_','-'), str(getattr(args, name))]
     if args.expect_result is not None:
         command += ['--expect-result', json.dumps(args.expect_result)]
-    if args.restore_rails and args.kind != 'npu':
+    if args.restore_rails and args.kind not in ('npu', 'usb-class'):
         command += ['--restore-rails']
     if args.decoder:
         command += ['--decoder', str(args.decoder)]
@@ -984,7 +986,7 @@ class Queue:
             target.write_bytes(descriptor.read_bytes())
             options['descriptor'] = str(target)
         template = args.template or (images.GPU_TEMPLATE if args.kind=='gpu-return' else images.CONTROL)
-        if args.kind not in ('probe', 'rail-helper'):
+        if args.kind not in ('probe', 'usb-class', 'rail-helper'):
             if args.kind == 'npu' and 'ss_result_record' not in images.symbols(source):
                 manifest, session = images.finite_npu_files(args)
                 destination = directory/'template'
@@ -1181,7 +1183,7 @@ class Queue:
 def run_options(parser, submit=False):
     parser.add_argument('image', type=Path)
     parser.add_argument('--port', choices=('any',*PORTS) if submit else PORTS, required=True)
-    parser.add_argument('--kind', choices=('cpu-return','gpu-return','npu','probe','rail-helper'), default='cpu-return', required=submit)
+    parser.add_argument('--kind', choices=('cpu-return','gpu-return','npu','probe','usb-class','rail-helper'), default='cpu-return', required=submit)
     parser.add_argument('--expect', required=submit, help='File: exact bytes or sunstone-board-expect-u32-v1 JSON; otherwise UTF-8 substring.')
     parser.add_argument('--expect-result', type=json.loads, help='Required decoded JSON result; needs a result decoder.')
     parser.add_argument('--manifest', type=Path, help='Exact finite NPU build manifest.')

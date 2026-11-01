@@ -1,6 +1,8 @@
 # Native probes return through a shared watchdog contract
 
 This contract admits A733 RAM-only diagnostics to `tools/board.py --kind probe`.
+USB class diagnostics use the same contract through the runner's
+[`usb-class` kind](board-runner.md#usb-class-probes-require-finite-device-cleanup).
 It supplies the watchdog marker, session nonce, progress and first-fault records,
 result receipt and ROM-return epilogue. It does not qualify a peripheral or
 establish ownership from a host declaration. No board was accessed while building
