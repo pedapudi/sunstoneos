@@ -8,7 +8,7 @@ struct storage_model {
     struct a733_mmc_platform platform;
     struct model card;
     unsigned accesses,writes,admitted,register_retained,fail_write,late_take,late_calls;
-    uint64_t module_at;
+    uint64_t module_at,write_cost_ns,write_returned_ns;
 };
 static struct storage_model m;
 static int storage_now(void *v,uint64_t *out)
@@ -68,6 +68,7 @@ static int storage_write(void *v,uintptr_t a,uint32_t value)
         *pmic_model_word(&s->power,a)=value;
         if(s->fail_write)return 0;
     }
+    if(s->write_cost_ns){pmic_model_cost(&s->power,s->write_cost_ns);s->write_returned_ns=s->power.now*1000+s->power.frac_ns;}
     return 1;
 }
 /* Bursts repeat the installed per-word operation, so fixtures that replace
@@ -137,6 +138,21 @@ static void retained(void)
     assert(a733_mmc_platform_poll(&m.platform)==A733_MMC_RETAINED&&a==m.accesses);
     assert(a733_clock_token_status(&m.power.clocks,&m.platform.clock)==A733_CLOCK_FAULT);
     if(m.platform.rail.id)assert(a733_rail_status(&m.power.rails,&m.platform.rail)==A733_RAIL_RETAINED);
+}
+static void reset_boundary(void)
+{
+    storage_setup(SUNXI_MMC_SD);
+    while(m.platform.stage!=9)assert(step()!=A733_MMC_RETAINED); /* ENABLE */
+    m.power.frac_ns=23;m.write_cost_ns=25023;
+    assert(a733_mmc_platform_poll(&m.platform)==A733_MMC_PENDING&&m.platform.stage==10);
+    assert(m.write_returned_ns&&m.platform.reset_since==m.write_returned_ns/1000);
+    m.power.now=m.platform.reset_since+10;m.power.frac_ns=0;
+    assert(a733_mmc_platform_poll(&m.platform)==A733_MMC_PENDING&&m.platform.stage==10);
+    assert(m.power.now*1000-m.write_returned_ns<10000);
+    ++m.power.now;
+    assert(a733_mmc_platform_poll(&m.platform)==A733_MMC_PENDING&&m.platform.stage==11);
+    assert(m.power.now*1000-m.write_returned_ns>=10000);
+    puts("MMC reset hold: fractional origin and costly writes, exact10us pending then release");
 }
 int main(int argc,char **argv)
 {
@@ -213,6 +229,7 @@ int main(int argc,char **argv)
         assert(!a733_mmc_platform_native_address(kind,0x02000070,1));
         assert(!a733_mmc_platform_native_address(kind,(k==SUNXI_MMC_SD?0x04020000:0x04022000)+0x200,1));
     }
+    reset_boundary();
     puts("PASS: real MMC/clock/pin/rail/PMIC composition, selected routes, read release and retained faults");
     return 0;
 }
