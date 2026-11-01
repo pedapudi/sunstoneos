@@ -119,10 +119,16 @@ enum {
     SUNSTONE_CRUMB_GPU_READY = 0x0404,      /* value: result */
     SUNSTONE_CRUMB_GPU_SUBMIT = 0x0410,     /* value: job sequence */
     SUNSTONE_CRUMB_GPU_COMPLETE = 0x0411,   /* value: job sequence */
+    SUNSTONE_CRUMB_GPU_PEER_SUBMIT = 0x0412, /* value: peer job sequence */
+    SUNSTONE_CRUMB_GPU_PEER_COMPLETE = 0x0413, /* value: peer job sequence */
     SUNSTONE_CRUMB_GPU_RETIRE = 0x0420,
     SUNSTONE_CRUMB_GPU_RETIRED = 0x0421,    /* value: result */
     SUNSTONE_CRUMB_GPU_THERMAL = 0x0430,    /* value: result */
     SUNSTONE_CRUMB_GPU_PARKED = 0x0440,     /* value: result */
+    SUNSTONE_CRUMB_GPU_RECOVERY_STOP = 0x0450, /* value: failed firmware serial */
+    SUNSTONE_CRUMB_GPU_RECOVERY_RESET = 0x0451, /* value: failed firmware serial */
+    SUNSTONE_CRUMB_GPU_RECOVERY_RESTART = 0x0452, /* value: failed firmware serial */
+    SUNSTONE_CRUMB_GPU_RECOVERY_READY = 0x0453, /* value: failed firmware serial */
     SUNSTONE_CRUMB_RETURN_POWER_DOWN = 0x0502, /* value: core */
     SUNSTONE_CRUMB_RETURN_ROM = 0x0503,     /* value: WDT0 mode after disarm */
 };

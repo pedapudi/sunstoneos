@@ -161,6 +161,16 @@ def decode(words, epoch, elf=None):
                 'owner_phase': value >> 10 & 3,
                 'owner': ('START', 'INSPECT', 'REQUEST', 'FOLLOW')[value >> 10 & 3],
                 'cluster': value >> 8 & 3, 'driver_state': value & 255}
+        if result['last']['stage'] in (0x0410, 0x0411, 0x0412, 0x0413):
+            result['last']['gpu_job'] = {
+                'client': 1 if result['last']['stage'] in (0x0412, 0x0413) else 0,
+                'boundary': 'submit' if result['last']['stage'] in (0x0410, 0x0412) else 'complete',
+                'sequence_low16': result['last']['value']}
+        if result['last']['stage'] in (0x0450, 0x0451, 0x0452, 0x0453):
+            result['last']['gpu_recovery'] = {
+                'phase': {0x0450: 'stop', 0x0451: 'reset', 0x0452: 'restart', 0x0453: 'ready'}[
+                    result['last']['stage']],
+                'failed_serial_low16': result['last']['value']}
         if result['last']['stage'] == EL3_STOP:
             v = result['last']['value']
             result['last']['status'] = v >> 12 if v >> 12 < 15 else '15 or more'
