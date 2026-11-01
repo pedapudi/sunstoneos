@@ -266,6 +266,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   if runtime:text=runtime_log(variant)
   elif startup:
    text=(a.client_logs/({'mismatch':'mismatch.log','unwritten-second':'unwritten.log','false-success':'mismatch.log'}.get(variant,'matched.log') if infer else 'matched.log')).read_text()
+   if infer and variant=='unwritten-tail':text=text.split('NPU_OUTPUT=\n')[0]+'NPU_OUTPUT=\n'+''.join(f'0x{x:016x}\n' for x in second)+'NPU_INFERENCE=MISMATCH; inference_jobs=1\n'
    if variant=='infer-zero-jobs-log':text=text.replace('inference_jobs=1','inference_jobs=0')
    if variant=='infer-one-IRQ':text=text.replace('NPU_IRQ_COMPLETIONS=0x0000000000000002','NPU_IRQ_COMPLETIONS=0x0000000000000001')
    if variant=='infer-missing-submit':text=text.replace('NPU_STAGE=SUBMIT job=0x0000000000000001\n','')
