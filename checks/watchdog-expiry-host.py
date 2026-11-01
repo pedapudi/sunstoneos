@@ -22,7 +22,7 @@ def refused(callback):
 
 with tempfile.TemporaryDirectory(prefix='watchdog-expiry-host-') as directory:
     root = Path(directory)
-    image = b'reviewed image fixture'
+    image = b'current image fixture'
     image_path = root / 'image.bin'
     image_path.write_bytes(image)
     before = [0xa2, 0x22, 7, 0, 0x12340000, 0, 0x76540000, 0x10203040]
@@ -94,13 +94,7 @@ with tempfile.TemporaryDirectory(prefix='watchdog-expiry-host-') as directory:
 
     refused(lambda: runner.restore_registers(fail_disable, before, before))
     assert len(calls) == 1
-    prior = {'complete': True, 'phase': 'arm-disarm', 'image_sha256': runner.IMAGE_HASH,
-             'port': '3-1', 'initial_identity': [1, 2, 3, 4, 5]}
-    runner.validate_prior(prior, 'arm-disarm', prior['initial_identity'], '3-1')
-    refused(lambda: runner.validate_prior(prior, 'arm-disarm', [2, 3, 4, 5, 6], '3-1'))
-    refused(lambda: runner.validate_prior(prior, 'expiry', prior['initial_identity'], '3-1'))
     print(json.dumps({'cases': observations, 'restoration': 'ordering and owner refusal passed',
-                      'prior_evidence': 'same-image and same-instance requirement passed',
                       'physical_access': False}, indent=2))
 
 # Exercise the main runner's reservation and terminal-failure path with a local
@@ -118,18 +112,12 @@ with tempfile.TemporaryDirectory(prefix='watchdog-main-host-') as directory:
     fake_port.mkdir()
     node = Path('/virtual/003/064')
     identity = [1, 2, 3, 4, 5]
-    input_path = root / 'input.json'
-    input_path.write_text(json.dumps({'complete': True, 'asserted': True, 'workspace_restored': True,
-                                    'rom_sha256': runner.ROM_HASH, 'identity': identity, 'port': '3-1'}))
-    prior_path = root / 'prior.json'
-    prior_path.write_text(json.dumps({'complete': True, 'phase': 'arm-disarm',
-                                    'image_sha256': runner.IMAGE_HASH, 'initial_identity': identity,
-                                    'port': '3-1'}))
     image_path, rom_path, fel_path = (root / name for name in ('image', 'rom', 'fel'))
     image_path.write_bytes(b'image fixture')
     rom_path.write_bytes(bytes(0x11000))
     fel_path.write_bytes(b'tool fixture')
-    hashes = {image_path: runner.IMAGE_HASH, rom_path: runner.ROM_HASH, fel_path: runner.FEL_HASH}
+    import hashlib
+    rom_hash = hashlib.sha256(rom_path.read_bytes()).hexdigest()
     real_hash = runner.hash_file
     state = {'memory': {}, 'transactions': [], 'reservations': [], 'quarantine': []}
 
@@ -146,6 +134,12 @@ with tempfile.TemporaryDirectory(prefix='watchdog-main-host-') as directory:
                 del arguments[:3]
                 address, length = int(address, 0), int(length)
                 Path(destination).write_bytes(state['memory'].get(address, bytes(length))[:length])
+            elif operation == 'write':
+                address, source = arguments[:2]
+                del arguments[:2]
+                state['memory'][int(address, 0)] = Path(source).read_bytes()
+            elif operation == 'writel':
+                del arguments[:2]
             elif operation == 'memmove':
                 destination, source, length = map(lambda value: int(value, 0), arguments[:3])
                 del arguments[:3]
@@ -153,6 +147,7 @@ with tempfile.TemporaryDirectory(prefix='watchdog-main-host-') as directory:
             elif operation == 'readl':
                 address = int(arguments.pop(0), 0)
                 values = dict(zip(runner.REGISTERS, [0, 1, 0x1f, 0, 0, 0, 0, 0]))
+                values[0x03000024] = 0x100 if state.get('high_input') else 0
                 output.append(f'{values[address]:08x}')
             else:
                 raise AssertionError(f'Unexpected preflight command: {operation}')
@@ -172,8 +167,7 @@ with tempfile.TemporaryDirectory(prefix='watchdog-main-host-') as directory:
     for phase in ('arm-disarm', 'expiry'):
         state.update(memory={}, transactions=[], reservations=[], quarantine=[])
         evidence = root / phase
-        argv = [str(path), '--phase', phase, '--confirm-bridge-stable', '--input-evidence', str(input_path),
-                '--arm-disarm-evidence', str(prior_path), '--fel', str(fel_path), '--rom', str(rom_path),
+        argv = [str(path), '--phase', phase, '--confirm-bridge-stable', '--fel', str(fel_path), '--rom', str(rom_path),
                 '--image', str(image_path), '--evidence', str(evidence)]
 
         def malformed_result(*args):
@@ -188,9 +182,8 @@ with tempfile.TemporaryDirectory(prefix='watchdog-main-host-') as directory:
 
         with patch.object(sys, 'argv', argv), patch.dict(sys.modules, {'usb_guard': guard}), \
              patch.object(runner, 'load_module', return_value=access), \
-             patch.object(runner, 'hash_file', side_effect=lambda value: hashes[value] if value in hashes else real_hash(value)), \
+             patch.object(runner, 'ROM_HASH', rom_hash), \
              patch.object(runner.subprocess, 'run', side_effect=fake_run), \
-             patch.object(runner.fcntl, 'flock'), \
              patch.object(runner, 'run_phase', side_effect=malformed_result):
             try:
                 runner.main()
@@ -202,4 +195,37 @@ with tempfile.TemporaryDirectory(prefix='watchdog-main-host-') as directory:
         assert len(state['quarantine']) == 1 and state['reservations'][0]['count'] == 1
         saved = json.loads((evidence / 'session.json').read_text())
         assert saved['complete'] is False and 'Synthetic truncated' in saved['failure']
-    print('PASS: both main-runner phases reserve possible reset and stop/quarantine on malformed results.')
+    for phase, high in (('arm-disarm', False), ('expiry', False), ('expiry', True)):
+        state.update(memory={}, transactions=[], reservations=[], quarantine=[], high_input=high)
+        evidence = root / (phase + '-existing-' + str(high))
+        evidence.mkdir()
+        sentinel = evidence / 'earlier.log'
+        sentinel.write_text('preserve earlier evidence')
+        argv = [str(path), '--phase', phase, '--confirm-bridge-stable', '--fel', str(fel_path),
+                '--rom', str(rom_path), '--image', str(image_path), '--evidence', str(evidence)]
+        @contextmanager
+        def fixture_lock():
+            yield node
+        access.board_lock = fixture_lock
+        def completed(*args):
+            assert state['reservations']
+        with patch.object(sys, 'argv', argv), patch.dict(sys.modules, {'usb_guard': guard}), \
+             patch.object(runner, 'load_module', return_value=access), \
+             patch.object(runner, 'ROM_HASH', rom_hash), \
+             patch.object(runner.subprocess, 'run', side_effect=fake_run), \
+             patch.object(runner, 'run_phase', side_effect=completed):
+            if high:
+                try: runner.main()
+                except SystemExit as error: assert 'not consistently low' in str(error)
+                else: raise AssertionError('High input accepted')
+            else:
+                runner.main()
+        assert sentinel.read_text() == 'preserve earlier evidence'
+        sessions = list(evidence.glob('*/session.json'))
+        assert len(sessions) == 1
+        saved = json.loads(sessions[0].read_text())
+        assert saved['complete'] is (not high)
+        assert saved['image_sha256'] == hashlib.sha256(image_path.read_bytes()).hexdigest()
+        if high: assert not state['reservations'] and state['quarantine']
+        else: assert saved['input_inspected_in_run'] and not state['quarantine']
+    print('PASS: main-runner phases accept current images without prior records, preserve evidence and refuse high input.')

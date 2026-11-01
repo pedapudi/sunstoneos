@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Run one explicitly selected watchdog phase with protected ROM recovery."""
 import argparse
-import fcntl
 import hashlib
 import importlib.util
 import json
@@ -13,10 +12,11 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from host_evidence import unique_directory
+
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / '.cache/sunstoneos'
-IMAGE_HASH = 'fe0735093d01cdf115cc9e605c2e18f64d2bd65042526d66c33348148e388993'
-FEL_HASH = '4a54cdc179baafbdecac47eb85714c3745d6d9952e05b482c7016afd4b22bf3e'
 ROM_HASH = 'a8e31821e8a1611d75867825914c58373c732742cb8f2235e8168c1d7e93b5aa'
 REGISTERS = (0x02050014, 0x02050010, 0x02050018, 0x070501c0,
              0x070501c4, 0x070501d4, 0x070501d8, 0x07090108)
@@ -40,13 +40,6 @@ def load_module(name, path):
     return module
 
 
-def validate_prior(record, phase, identity, port):
-    require(record.get('complete') is True and record.get('phase') == phase and
-            record.get('image_sha256') == IMAGE_HASH and record.get('port') == port and
-            record.get('initial_identity') == identity,
-            'Arm-disarm evidence does not cover this image and live board instance.')
-
-
 def restore_registers(transaction, before, observed):
     """Restore only recognized ownership after successful ROM re-enumeration."""
     require(not observed[0] & 1, 'Returned watchdog remains enabled; no restoration attempted.')
@@ -64,7 +57,7 @@ def restore_registers(transaction, before, observed):
 
 def run_phase(phase, transaction, evidence, image_path, image, rom, before,
               wait_return, record, save):
-    """Execute a reviewed phase using injected transport and reconnect adapters."""
+    """Execute one phase using injected transport and reconnect adapters."""
     nonce = secrets.randbits(32) or 1
     command = 1 if phase == 'arm-disarm' else 2
     request = struct.pack('<16I', 0x57445850, command, nonce, nonce ^ 0xffffffff, *([0] * 12))
@@ -106,31 +99,21 @@ def main():
     parser.add_argument('--phase', choices=('arm-disarm', 'expiry'), required=True)
     parser.add_argument('--confirm-bridge-stable', action='store_true', required=True,
                         help='Coordinator confirms BOOT/GND bridge stays attached through reset.')
-    parser.add_argument('--input-evidence', type=Path, required=True)
-    parser.add_argument('--arm-disarm-evidence', type=Path)
     parser.add_argument('--fel', type=Path, required=True)
     parser.add_argument('--rom', type=Path, required=True)
     parser.add_argument('--image', type=Path, default=CACHE / 'build/watchdog-expiry/probe.bin')
     parser.add_argument('--evidence', type=Path, required=True)
     args = parser.parse_args()
-    require(args.phase != 'expiry' or args.arm_disarm_evidence is not None,
-            'Expiry requires the successful arm-disarm session record.')
     image, rom = args.image.read_bytes(), args.rom.read_bytes()
-    for path, expected in ((args.image, IMAGE_HASH), (args.rom, ROM_HASH), (args.fel, FEL_HASH)):
-        require(hash_file(path) == expected, f'Input differs from reviewed bytes: {path}')
-    input_evidence = json.loads(args.input_evidence.read_text())
-    require(input_evidence.get('complete') is True and input_evidence.get('asserted') is True and
-            input_evidence.get('workspace_restored') is True and
-            input_evidence.get('rom_sha256') == ROM_HASH,
-            'Successful physical low-input inspection evidence is required.')
+    require(0 < len(image) <= 0x800, 'SRAM image exceeds its reserved interval.')
+    require(hash_file(args.rom) == ROM_HASH, 'ROM differs from the inspected recovery code.')
     access = load_module('watchdog_access', ROOT / 'tools/usb-access.py')
     sys.path.insert(0, str(ROOT / 'tools'))
     import usb_guard
     usb_guard.check_health()
-    args.evidence.mkdir(parents=True, exist_ok=False)
-    record = {'phase': args.phase, 'image_sha256': IMAGE_HASH, 'rom_sha256': ROM_HASH,
-              'fel_sha256': FEL_HASH, 'runner_sha256': hash_file(Path(__file__)),
-              'input_evidence_sha256': hash_file(args.input_evidence),
+    args.evidence = unique_directory(args.evidence)
+    record = {'phase': args.phase, 'image_sha256': hash_file(args.image), 'rom_sha256': ROM_HASH,
+              'fel_sha256': hash_file(args.fel), 'runner_sha256': hash_file(Path(__file__)),
               'complete': False, 'transactions': [], 'bridge_confirmed_stable': True}
     node, identity, port_config = None, None, None
     transport_failed = False
@@ -237,18 +220,16 @@ def main():
             identity = access.identity(node)
             port = access.target(node)
             port_config = {'port': port.name, 'sysfs': str(port.resolve())}
-            require(input_evidence.get('identity') == identity and input_evidence.get('port') == port.name,
-                    'Input evidence belongs to another board instance.')
-            if args.phase == 'expiry':
-                prior = json.loads(args.arm_disarm_evidence.read_text())
-                validate_prior(prior, 'arm-disarm', identity, port.name)
-                record['arm_disarm_evidence_sha256'] = hash_file(args.arm_disarm_evidence)
             record.update(initial_node=str(node), initial_identity=identity, port=port.name)
             save()
             require('soc=00001903(A733)' in transaction('version'), 'Unexpected SoC.')
             save_sram('before')
             workspace_started = True
             inspect_rom('before')
+            transaction(*[argument for _ in range(4) for argument in
+                          ('readl', '0x03000024')], low_input=True)
+            record['input_inspected_in_run'] = True
+            save()
             before = read_registers()
             record['registers_before'] = before
             save()

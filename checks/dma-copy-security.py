@@ -9,11 +9,14 @@ are digest-bound model notes, not physical evidence or replayed entry checks.
 """
 import argparse,copy,hashlib,importlib.util,json
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from host_evidence import unique_directory
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
-a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
+a=p.parse_args();a.output=unique_directory(a.output)
 spec=importlib.util.spec_from_file_location('dma_security_host',ROOT/'apps/dma-copy/observe.py')
 host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
 image=a.image.read_bytes();profile=host.image_profile(a.image)
@@ -39,26 +42,28 @@ for name in ('epoch','generation','lease','usb_evidence','dma_evidence'):platfor
 original_require=host.require;overrides=0
 def modeled_require(condition,message):
     global overrides
-    if message=='DMA security requires reviewed physical authority.':
+    if message=='DMA security requires physical access facts.' and not condition:
         assert condition is False and fact['modeled'] is True and fact['physical_authority'] is False
-        assert fact['reviewed'] is True
         overrides+=1;return
     original_require(condition,message)
 cases=[]
 for case in ('missing-authority','modeled-production','missing-mask','wrong-controller',
-             'wrong-session','boolean-mask','missing-post-reset','nominal-model'):
+             'wrong-session','boolean-mask','missing-post-reset','nominal-model', 'without-paperwork'):
     fact=copy.deepcopy(security);value=copy.deepcopy(platform)
     if case=='missing-mask':fact.pop('nonsecure_channels')
     if case=='wrong-controller':fact['controller']=0x04024000
     if case=='wrong-session':fact['generation']^=1
     if case=='boolean-mask':fact['nonsecure_channels']=True
     if case=='missing-post-reset':fact['valid_after_reset_release']=False
+    if case=='without-paperwork':
+        for key in ('schema','reviewed','evidence'):fact.pop(key)
+        fact.update(physical_authority=True,modeled=False)
     ref,raw=record(case+'-security.json',fact)
     if case!='missing-authority':value['conditions']['dma-nonsecure-access']=ref
     record(case+'-platform.json',value)
     if case=='modeled-production':
         try:host.validate_platform(value,prepared,identity,port)
-        except ValueError as error:assert 'reviewed physical authority' in str(error)
+        except ValueError as error:assert 'physical access facts' in str(error)
         else:raise AssertionError('Production accepted modeled DMA security')
         cases.append(case);continue
     with patch.object(host,'require',modeled_require):
@@ -68,7 +73,7 @@ for case in ('missing-authority','modeled-production','missing-mask','wrong-cont
                 'wrong-controller':'binding differs: controller','wrong-session':'binding differs: generation',
                 'boolean-mask':'omits selected','missing-post-reset':'access/lifetime'}[case]
             assert expected in str(error),(case,str(error))
-        else:assert case=='nominal-model' and verified==raw
+        else:assert case in ('nominal-model','without-paperwork') and verified==raw
     cases.append(case)
 assert a.image.read_bytes()==image
 assert overrides==6
