@@ -185,8 +185,11 @@ the supervision deadline and the mutation cases.
 
 ## Find the checks that cover a change
 
-[checks/index.json](../checks/index.json) lists every Python check under
-`checks/` except the two policy modules. Each entry records:
+[checks/check-index.py](../checks/check-index.py) builds an index of every
+Python check under `checks/` except the two policy modules. It reads the
+checks and documents in the checkout on every call, so the index always matches
+the checkout and is never committed; `checks/index.json` is ignored by Git.
+Each entry records:
 
 - the first line of the check's docstring;
 - the Markdown documents that name the check;
@@ -202,12 +205,12 @@ required argument. Pinned sources and host toolchains under the cache are
 allowed. Most checks are not pure-host, because they need an image, a bundle or
 earlier evidence; the index names those inputs.
 
-[checks/check-index.py](../checks/check-index.py) maintains the index and
+Generating the index takes about four seconds. The tool prints the index or
 selects checks for changed paths:
 
 ```sh
-python3 checks/check-index.py --write     # regenerate after adding or editing a check
-python3 checks/check-index.py --verify    # fail if the index is missing, extra or out of date
+python3 checks/check-index.py --json      # print the index
+python3 checks/check-index.py --verify    # fail if a check cannot be classified
 python3 checks/check-index.py --changed drivers/rtc include/a733_rtc.h
 ~/.cache/sunstoneos/venv/bin/python checks/check-index.py --changed drivers/rtc \
   --run --output /absolute/new/directory
@@ -220,6 +223,55 @@ a path when the check, or a `checks/` file that it names, names that path or a
 directory above it, or reaches it through `#include`. A path assembled from
 separate string segments is not found. An empty selection therefore does not
 show that no check covers the change.
+
+`--verify`, which the integration gate runs as its `check-index` check, fails
+when a check does not parse, when the tool's list of checks that cannot be
+pure-host (`NOT_PURE`) names a check that no longer exists, or when
+`checks/index.json` is tracked again.
+
+## Scan outgoing commits before a push
+
+[tools/git-hooks/pre-push](../tools/git-hooks/pre-push) runs before every
+`git push` and refuses the push when an outgoing commit adds any of:
+
+- a private key block (`-----BEGIN ... PRIVATE KEY-----`);
+- a GitHub, AWS, Slack, OpenAI, Anthropic or Google API token in its published
+  format, such as `ghp_` followed by 36 characters or `AKIA` followed by 16;
+- a credential file by name: `.env` and `.env.*` other than
+  `.env.example`, `.env.sample` and `.env.template`, an SSH private key such
+  as `id_rsa`, a `.pem`, `.p12` or `.pfx` file, `credentials.json`, `.netrc`;
+- a path into an assistant session's scratch or memory directory
+  (`/tmp/claude-` or `.claude/projects/`); <!-- pre-push: allow -->
+- in a commit message, an assistant co-author line, an assistant
+  "Generated with" credit or an assistant session link.
+
+The token rules also apply to commit messages. The outgoing commits of a ref
+are those that the remote does not have. A new branch is compared with its
+merge base with `origin/bringup`, and the hook leaves out commits that any of
+the remote's tracking branches already hold. Only added lines are read, so
+deleting a secret never blocks a push, and a merge contributes only the lines
+that its conflict resolution wrote. The rules match formats, so a variable
+named `token` or `key`, Python's `secrets` module and SHA-256 digests pass.
+Each finding names the file and line, or the commit message line, and the rule.
+
+A line containing `pre-push: allow` is skipped; use it on test fixtures that
+must contain a sample. A credential file has no such marker, so a fixture
+needs a different name. The scan of the 73 commits in the last 50 first-parent
+steps of `bringup`, about 20,000 added lines, takes 0.2 seconds; the full
+history of 2,764 commits takes under 4 seconds.
+
+The hook is installed once for every worktree of the clone:
+
+```sh
+git config core.hooksPath tools/git-hooks
+```
+
+Git stores the setting in the shared repository configuration
+(`git rev-parse --git-common-dir`). The relative path resolves against the
+root of the worktree that pushes, so a worktree runs the hook from its own
+checkout, and a worktree whose branch predates the hook runs no hook.
+[checks/pre-push-hook.py](../checks/pre-push-hook.py) pushes each blocked
+class and each passing case from a temporary clone and asserts the result.
 
 ## Reuse valid evidence
 

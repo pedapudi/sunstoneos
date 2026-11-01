@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""Refuse a push whose outgoing commits add secrets, credential files, session paths or assistant credits.
+
+Git runs this hook before it sends anything. The arguments are the remote name
+and URL, and standard input holds one line per pushed ref:
+`<local ref> <local object> <remote ref> <remote object>`.
+
+For each ref the outgoing commits are those reachable from the local object
+and not from the remote object. A new remote branch has no remote object, so
+its outgoing commits start after the merge base with origin/bringup, and
+commits on any remote-tracking branch of the same remote are left out. The hook
+reads each outgoing commit once, and checks only the lines that the commit
+adds, plus its message. A merge contributes the lines that differ from every
+parent, which are the lines its conflict resolution wrote.
+
+A line that contains the marker `pre-push: allow` is skipped, so a test fixture
+can carry a sample of a blocked pattern. A credential file name has no line to
+mark; rename the fixture instead.
+
+The rules match specific formats, so ordinary words such as `token`, `key` or
+`secrets` and hexadecimal digests do not match. Installation, for every worktree
+of the repository: git config core.hooksPath tools/git-hooks
+"""
+import codecs
+import re
+import subprocess
+import sys
+
+ALLOW = 'pre-push: allow'
+BASE = 'origin/bringup'
+
+# Patterns for content lines and commit messages. Each is written so that its
+# own source text does not match it, so this file passes its own scan.
+CONTENT = [
+    ('private key block', re.compile(r'-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----')),
+    ('GitHub token', re.compile(r'\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b')),
+    ('GitHub fine-grained token', re.compile(r'\bgithub_pat_[A-Za-z0-9_]{40,}')),
+    ('AWS access key ID', re.compile(r'\b(?:AKIA|ASIA)[0-9A-Z]{16}\b')),
+    ('Slack token', re.compile(r'\bxox[abposr]-[0-9A-Za-z-]{10,}')),
+    ('Anthropic API key', re.compile(r'\bsk-ant-[A-Za-z0-9_-]{20,}')),
+    # An OpenAI key is sk-, an optional project or service prefix and at least 32
+    # characters that include a digit; kebab-case names have no digits that long.
+    ('OpenAI API key', re.compile(r'\bsk-(?!ant-)(?:proj-|svcacct-|admin-)?(?=[A-Za-z_-]{0,31}[0-9])[A-Za-z0-9_-]{32,}')),
+    ('Google API key', re.compile(r'\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])')),
+    ('session scratch path', re.compile(r'/tmp/claude[-]|[.]claude/projects[/]')),
+]
+# Patterns for commit messages only.
+ASSISTANTS = (r'(?:Claude|Anthropic|ChatGPT|OpenAI|GPT-?[0-9]|Codex|Copilot|Gemini|Cursor|Devin|Aider|Windsurf|'
+              r'Codeium|Tabnine|CodeWhisperer|Amazon Q)')
+MESSAGE = [
+    ('assistant co-author line', re.compile(r'^\s*Co-Authored-By:.*(?:\b' + ASSISTANTS + r'\b|noreply@anthropic[.]com)',
+                                            re.I)),
+    ('assistant generation credit', re.compile(r'Generated (?:with|by) \[?' + ASSISTANTS + r'\b|\U0001F916 Generated', re.I)),
+    ('assistant session link', re.compile(r'^\s*Claude-Session:|claude[.]ai/code/session_', re.I)),
+]
+# Credential files, by base name, when a commit adds, copies or renames them.
+CREDENTIAL_FILES = re.compile(r'(?:^|/)(?:\.env(?:\.(?!example$|sample$|template$)[\w.-]+)?|id_(?:rsa|dsa|ecdsa|ed25519)|'
+                              r'[^/]+\.(?:pem|p12|pfx)|credentials\.json|[._]netrc)$')
+HUNK = re.compile(r'^(@+) .*?\+(\d+)(?:,\d+)? @+')
+
+
+def git(*args, stdin=None):
+    return subprocess.run(['git', *args], input=stdin, capture_output=True, check=True).stdout
+
+
+def exists(name):
+    return subprocess.run(['git', 'rev-parse', '--verify', '--quiet', name + '^{commit}'],
+                          capture_output=True).returncode == 0
+
+
+def remote_branches(remote):
+    """rev-list arguments that leave out every remote-tracking branch of a configured remote."""
+    return ['--not', '--remotes=' + remote] if remote in git('remote').decode().split() else []
+
+
+def outgoing(local, remote_object, remote):
+    """Commits reachable from local and not already on the remote."""
+    if set(remote_object) != {'0'} and exists(remote_object):
+        excluded = ['^' + remote_object]
+    else:
+        excluded = []
+        if exists(BASE):
+            base = subprocess.run(['git', 'merge-base', BASE, local], capture_output=True, text=True).stdout.strip()
+            excluded = ['^' + base] if base else []
+        excluded += remote_branches(remote)
+    return git('rev-list', local, *excluded).decode().split()
+
+
+def unquote(path):
+    if path.startswith('"') and path.endswith('"'):
+        return codecs.escape_decode(path[1:-1].encode())[0].decode(errors='replace')
+    return path
+
+
+def header_path(line):
+    """Path of a new file from `diff --git a/P b/P`, where both halves are equal."""
+    rest = line[len('diff --git '):]
+    if rest.startswith('"'):
+        return unquote(rest[:rest.index('" ') + 1])[2:]
+    return rest[2:(len(rest) - 1) // 2]
+
+
+def check_line(text, where, rules, findings):
+    if ALLOW in text:
+        return
+    for name, pattern in rules:
+        found = pattern.search(text)
+        if found:
+            findings.append(f'{where}: {name} ({found.group(0)[:8]}...)')
+
+
+def scan(commits):
+    """Return one finding per matching line, message line or added credential file."""
+    findings = []
+    if not commits:
+        return findings
+    output = git('-c', 'core.quotePath=false', 'log', '--no-walk=unsorted', '--stdin', '--no-color', '--no-ext-diff',
+                 '--no-textconv', '-p', '-U0', '--diff-merges=dense-combined', '--format=%x01%H%n%B%x02',
+                 stdin='\n'.join(commits).encode())
+    commit = path = pending = None
+    in_message = in_header = False
+    message_line = new_line = 0
+    columns = 1
+    for raw in output.decode(errors='replace').split('\n'):
+        if raw.startswith('\x01'):
+            commit, in_message, message_line = raw[1:13], True, 0
+            continue
+        if in_message:
+            if raw.endswith('\x02'):
+                in_message = False
+                raw = raw[:-1]
+                if not raw:
+                    continue
+            message_line += 1
+            check_line(raw, f'commit {commit} message line {message_line}', CONTENT + MESSAGE, findings)
+            continue
+        if raw.startswith(('diff --git ', 'diff --cc ', 'diff --combined ')):
+            path, in_header = None, True
+            pending = header_path(raw) if raw.startswith('diff --git ') else unquote(raw.split(' ', 2)[2])
+            continue
+        if in_header and raw.startswith(('new file mode', 'rename to ', 'copy to ')):
+            added = pending if raw.startswith('new file mode') else unquote(raw.split(' ', 2)[2])
+            if CREDENTIAL_FILES.search(added):
+                findings.append(f'{added} in commit {commit}: credential file added by name')
+            continue
+        if in_header and raw.startswith('+++ '):
+            target = unquote(raw[4:])
+            path = None if target == '/dev/null' else target[2:]
+            continue
+        hunk = HUNK.match(raw)
+        if hunk:
+            in_header = False
+            columns, new_line = len(hunk.group(1)) - 1, int(hunk.group(2))
+            continue
+        if path is None or not raw or raw[0] not in '+- ':
+            continue
+        prefix = raw[:columns]
+        if '-' in prefix:
+            continue
+        if '+' in prefix:
+            check_line(raw[columns:], f'{path}:{new_line} in commit {commit}', CONTENT, findings)
+        new_line += 1
+    return findings
+
+
+def main():
+    remote = sys.argv[1] if len(sys.argv) > 1 else ''
+    commits, seen = [], set()
+    for line in sys.stdin.read().splitlines():
+        fields = line.split()
+        if len(fields) != 4 or set(fields[1]) == {'0'}:
+            continue
+        for commit in outgoing(fields[1], fields[3], remote):
+            if commit not in seen:
+                seen.add(commit)
+                commits.append(commit)
+    findings = scan(commits)
+    if not findings:
+        return 0
+    print(f'pre-push: refused; {len(findings)} finding(s) in {len(commits)} outgoing commit(s):', file=sys.stderr)
+    for finding in findings:
+        print('  ' + finding, file=sys.stderr)
+    print('Remove the content from the commits, or add "pre-push: allow" to a line that is a deliberate test fixture.',
+          file=sys.stderr)
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
