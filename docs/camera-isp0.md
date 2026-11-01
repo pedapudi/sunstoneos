@@ -1,58 +1,44 @@
 # Recorded Bayer processing through ISP0
 
-The native ISP0 application accepts one recorded 640×480 BGGR12 frame and
-configures the A733 ISP600 processing path to produce one NV16 frame through
-VIPP0 and DMA0. It supplies input from the TOP DDR pattern reader, so this path
-does not require a sensor. Physical pixel output remains unqualified. The
-existing [camera route](camera-route.md) uses ISP1 pass-through and has a separate
-sensor-dependent qualification boundary.
+The native application processes a recorded 640×480 BGGR12 frame through the
+A733 TOP DDR reader, ISP600, VIPP0 and camera DMA0. A host can request repeated
+captures of the same immutable input. Each capture produces a private NV16 copy
+that remains immutable until USB finishes delivery and accepts its acknowledgment.
+No sensor is required. Physical output and numerical parity remain unqualified.
 
-## Source and fixed processing profile
+## The fixed profile follows the selected vendor source
 
-The implementation follows Linux revision
-`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f` with the effective
-`ARCH_SUN60IW2`/`ARCH_SUN60IW2P1` configuration. That configuration selects
-`ISP_600` and `isp600_reg_cfg.o`. The pinned implementation, complete A733
-parameter defaults, manual references, hashes and execution roles are recorded
-in [the source manifest](../drivers/camera/isp0-sources.json). Adapted source
-retains its original licensing notices. No opaque runtime firmware or tuning
-binary is required for this fixed profile.
+The driver follows OrangePi Linux revision
+`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f` with `ISP_600` and
+`CONFIG_ARCH_SUN60IW2`. The [initialization sources](../drivers/camera/isp0-sources.json)
+and [replay sources](../drivers/camera/isp0-replay-sources.json) record URLs,
+hashes, licenses and execution roles. Linux supplies development references;
+FreeRTOS runs the native driver. This profile requires no opaque runtime tuning
+blob. Existing adapted code retains its license notices.
 
-The TOP reader at `0x05800800` uses source mode 12, Bayer12 input delivered to
-ISPFE. Each input sample occupies a little-endian sixteen-bit container; native
-upload validates that its upper four bits are zero. A frame contains 614,400
-bytes, with a 1280-byte stride. Another 64 zero bytes are mapped for the
-source-backed prefetch requirement and excluded from the input digest.
+TOP mode 12 supplies Bayer samples in little-endian sixteen-bit containers.
+Each sample must be at most 4095. The input has a 1280-byte stride and 614400
+payload bytes, followed by 64 mapped zero prefetch bytes outside its digest.
+ISP0 uses the complete vendor default coefficient image with optional modules
+and 3A disabled. VIPP0 uses unity geometry. Output contains a 307200-byte Y plane
+followed by 307200 bytes of interleaved U and V, with a 640-byte stride.
 
-ISP0 at `0x05900000` consumes the complete source-default parameter image. Its
-mandatory Bayer conversion remains configured; optional processing and 3A
-modules are disabled. The application writes the effective load RAM format and
-independent save-load input format fields, rather than replaying the default
-image's example AHB addresses into MMIO. Full load, save and save-load extents
-remain mapped even with optional modules disabled. VIPP0 uses unity geometry.
-Its parameter image, enable order and parameter-ready readback rule are those
-of the [camera route](camera-route.md), defined once in
-`include/a733_camera_common.h`. ISP0 still reads, writes and verifies each
-register within one poll.
-Output is contiguous NV16: a 307,200-byte Y plane followed by 307,200 bytes of
-interleaved U and V, both with stride 640.
+The shared provider retains VI/IOMMU clocks and verifies DCDC2 at 800 mV.
+The effective Zero 3W DTS overrides the generic SoC rates with 324 MHz for both
+CSI and ISP. Sensor MCLK and sensor programming remain disabled. The separate
+[sensor camera route](camera-route.md) uses ISP1 pass-through; live sensor
+routing into ISP0 remains unfinished.
 
-The shared media clock provider holds VI and IOMMU clocks, with 324 MHz CSI/ISP
-module rates. The power path retains the DCDC2 lease and verifies its decoded
-800 mV setting. Local COMBO0/parser0 clocks follow source power preparation;
-sensor MCLK, the MIPI PHY stream and sensor programming remain disabled.
+## Capture completion permits retained reuse
 
-## Memory and completion ownership
-
-TOP/CSI memory traffic uses IOMMU master 1; ISP parameter traffic independently
-uses master 2. The native application authorizes only those two micro-register
-sets while preserving initial global exclusion of all masters. It installs the
-same camera directory in both IOMMU banks. Every DMA extent is retained through
-success, fault, timeout and host acknowledgment.
+TOP/CSI traffic uses IOMMU master 1; ISP parameters use master 2. Both banks
+share the guarded camera directory. CPU and physical addresses must match for
+this fixed mapping. The uncached pool holds device backing; a separate cached
+pool holds upload storage and the immutable output copy.
 
 | Extent | Device address | Mapped bytes | Access |
 | --- | --- | ---: | --- |
-| Recorded Bayer input and prefetch | `0x100000` | 618496 | Read |
+| Bayer input and prefetch | `0x100000` | 618496 | Read |
 | ISP load | `0x200000` | 32768 | Read |
 | ISP save | `0x210000` | 28672 | Read/write |
 | ISP save-load | `0x220000` | 16384 | Read/write |
@@ -60,63 +46,90 @@ success, fault, timeout and host acknowledgment.
 | Y output | `0x300000` | 307200 | Read/write |
 | UV output | `0x380000` | 307200 | Read/write |
 
-The ordinary 2 MiB uncached pool holds the directory and guarded DMA allocations.
-Each mapped data extent has an unmapped page before and after it. The allocator
-must return equal physical and CPU addresses for this fixed identity-mapped
-profile. The separate 2 MiB cached pool holds upload storage and the private
-output copy. Preparation validates actual allocator rows and all table entries;
-a reservation alone does not prove this mapping.
+Each capture requires fresh ISP SAVE/LOAD, VIPP load and DMA capture-done flags,
+TOP START self-clear and a zero cycle count. IOMMU scans cover both masters
+before and after copying. Guard scans bracket copying; completion and DMA
+status checks also surround each bounded copy chunk.
 
-Before submission, the driver clears and reads back ISP/VIPP status, then arms
-the downstream DMA before starting one TOP input frame. Completion requires
-fresh ISP parameter load/save bits, VIPP load completion, DMA capture completion,
-and TOP START self-clear with its one-frame cycle field still zero. Two complete
-IOMMU scans cover masters 1 and 2, including a scan after the copied output is
-hashed. Completion and DMA status are checked around each bounded copy chunk.
-Guards are scanned once before the first chunk and once after the last chunk
-is copied and hashed. A changed guard byte stays changed, so the second scan
-detects a change made at any point during the copy.
-Neither status readback nor a deadline establishes transaction drain, so the
-application never releases or reuses device backing.
+After consumer acknowledgment, the owner scans for faults and rechecks retained
+completion. It clears observed ISP/VIPP flags and verifies zero, reloads the
+same parameter address and READY fields, then calls the existing retained DMA
+rearm operation. TOP accepts its idle enabled state and starts one further frame.
+Input, parameters, mappings, allocations and provider leases remain retained.
+Neither successful replay nor capture-done establishes global bus drain.
 
-The authenticated session has a single 20-second native lifetime. USB exports
-only the immutable copied output. Its callback and acknowledgment gates retain
-the full frame until terminal transfer completion; ACK binds generation and the
-copied digest and returns a header-only receipt. See [preparation and capture](isp0-preparation.md)
-for the exact producer, result fields and supervised host contract.
+## Interrupts wake the owner within the original deadline
 
-## Software evidence and remaining physical work
+The IRQ build routes DMA0 interrupt 149, VIPP0 interrupt 153 and ISP0 channel-0
+interrupt 161 to CPU0 at priority `0xd8`. Handlers mask their GIC source and notify
+the owner while preserving raw device status. ISP enables SAVE bit 2 and error
+interrupts; LOAD bit 3 stays disabled because its earlier event must not mask
+the later SAVE wake. Completion still requires both SAVE and LOAD.
 
-The frozen native ELF is
-`32eb5b933c9e6146618e16724a59405e86ed79ccae92888b989ed7ae1f82e2c1`, with build ID
-`6fbc3d6611fc41390c50badcdf7b4027cc4269724487316cf4450700644fe26a`.
-Evidence is retained below
-`~/.cache/sunstoneos/evidence/isp0-native-20261020/`.
-The complete parameter image was compared against the effective pinned Linux
-setters under ASan/UBSan. Selected media/PMIC and cold USB platform profiles were
-checked separately. Actual ELF instructions cover allocation, upload, shared
-resource ledgers, ISP/DMA programming, IOMMU fault scans and copied output.
-Explicit modeled effects supply device status and synthetic output bytes; they
-do not establish ISP numerical correctness or physical completion.
+Arming retains its source index and phase through GIC write propagation and
+active-interrupt deferrals. It masks once, waits for RWP and inactive state,
+clears only the owned pending bit, programs source enables and rearms the GIC.
+A deferred poll never repeats an earlier source's writes. The task blocks on
+notifications only while waiting for DMA or the final producer fence. The
+original 20-second session deadline bounds every capture and wait.
 
-The nominal allocation/copy evidence uses an EL1h bounded call fixture with
-`CurrentEL=4`. Corrected downstream checks enter fresh functions in the linked
-application's EL1t mode with an explicit SP_EL0. These fixtures do not resume
-abandoned task stack frames or validate scheduler execution. Classified failure
-cases retain terminal CPU/RAM checkpoints and require their intended injection
-plus the matching native failure state. Earlier negative results with aliased
-model state are excluded explicitly in the evidence scope record.
+## Sequence-bound acknowledgments retire the copied consumer
 
-Root-owned checks cover seven inherited interrupt guards and three SRAM launcher
-cases on the same image. Host checks cover complete table admission, malformed
-input/geometry/proof refusals, durable capture, final ACK receipt and the actual
-supervisor readiness boundary. Shared provider initialization and USB electrical
-operation remain outside the native instruction fixture where callbacks are
-modeled.
+The first capture preserves the version-1 response and legacy final ACK.
+Command 2 consists of one command byte, little-endian generation and capture
+sequence as two 64-bit words, then the copied digest. It acknowledges the
+current frame and requests the next capture. Command 3 uses the same body and
+acknowledges the final replay frame without requesting another.
 
-Physical qualification needs reviewed cold USB and power ownership, VI/ISP/TOP
-exclusion, both IOMMU masters' retained recovery, and a known recorded Bayer
-input. The first bounded board run must compare captured output against an
-independent ISP reference or an explicitly reviewed expected image, then retain
-all resources until external recovery. Sensor capture, wider formats, scaling,
-3A tuning, interrupt completion and performance work remain separate work.
+Subsequent responses use version 2. The 32-bit field at byte 148 contains the
+capture sequence for copied results, failures and receipts, and zero for pending results.
+The remaining geometry fields keep their sealed values. Sequence overflow,
+stale acknowledgment, legacy ACK after replay and replay after final ACK fail.
+A query while the producer owns the copy returns only a pending header.
+
+The USB serializer transfers ownership only after its final data or zero-length
+packet callback. Atomic publication transfers the copy from producer to USB,
+and the accepted acknowledgment transfers it back. Every replay keeps the
+same immutable recorded input. Uploading a different input sequence requires
+separate admission and is not implemented by this protocol.
+
+The host capture API defaults to one frame. Its optional `frames` argument
+accepts one through sixteen captures under the same absolute deadline. It
+saves each complete frame before ACK and records partial outputs if a later
+capture fails. The final receipt binds the last sequence, digest and proofs.
+
+## Independent CPU output is available for comparison
+
+[The CPU reference checker](../checks/isp0-pixel-reference.py) uses the identified
+host FFmpeg build for Bayer interpolation, RGB24 conversion and BT.601 output.
+It interleaves planar output into NV16 and records input, output, executable and
+shared-library hashes. Its [source record](../drivers/camera/isp0-reference-sources.json)
+identifies the host-only dependency and available source.
+
+The caller declares full or limited range and a maximum per-component error
+before capture. The default error budget is zero.
+The checker reports errors separately for Y, U and V. The available vendor source
+does not define ISP600 interpolation, rounding or mandatory color conversion.
+A reference file therefore supplies an independent comparison, without proving
+that its algorithm is equivalent to this ISP profile.
+
+## Host evidence leaves physical qualification open
+
+Evidence is under `~/.cache/sunstoneos/build/camera-isp-1031/`; its README records
+commands, hashes and frozen image locations. ASan/UBSan checks cover retained
+rearm and deferred IRQ arming. The complete parameter image matches the pinned
+vendor setters. Linked-image checks cover repeated full/high-speed delivery,
+sequence refusals, late faults, staggered IRQ completion, timeout and a second
+capture after USB acknowledgment. QEMU runs the rearm check in a FreeRTOS task.
+CPU reference checks cover neutral endpoints, Bayer phase and mismatch reporting.
+
+Register effects, pixels, USB and IRQ entry are modeled in the linked checks.
+They do not establish physical completion, electrical USB operation or numerical
+parity. Independent review approved each code commit. The frozen retained ISP
+ELF fails the new probe runner's watchdog admission and is host-only.
+
+A board run needs a source-backed finite stop and retirement condition covering
+TOP reads, ISP/VIPP parameters, output writes and IOMMU page walks, followed by
+integration with the shared probe contract. No board run is queued. Physical
+IRQ delivery, pixels and repeated operation remain unqualified; OV5640/CSI
+qualification also needs the absent camera module.

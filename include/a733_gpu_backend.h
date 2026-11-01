@@ -10,6 +10,11 @@
 #define A733_GPU_REGISTERS UINT32_C(0x01800000)
 #define A733_GPU_GICD UINT32_C(0x03400000)
 #define A733_GPU_INTID 95u
+/* The vendor secure configuration's two words (sunxi_platform.c:964-979):
+ * the SMC0 DRAM-firewall word SMC_DRM_GPU_HW_RST and the GPU wrapper's
+ * drm_ctrl (drm_bypass bit 0, tb_bypass bit 8). */
+#define A733_GPU_SMC0_GPU UINT32_C(0x0a0000b0)
+#define A733_GPU_DRM_CTRL UINT32_C(0x01880014)
 
 struct a733_gpu_backend_external {
     /* Optional synchronous platform override for healthy orderly shutdown.
@@ -27,6 +32,9 @@ struct a733_gpu_backend_external {
     /* Optional nonblocking, IRQ-safe current lifetime admission. Exactly 1
      * permits normal access; any other result permanently faults and retains. */
     int (*live)(void *);
+    /* Current absolute session end, including the owner's return reserve.
+     * Zero disables automatic timeout/reset recovery. */
+    uint64_t (*recovery_limit)(void *);
 };
 enum a733_gpu_backend_phase { A733_GPU_BACKEND_NEW, A733_GPU_BACKEND_BOUND,
     A733_GPU_BACKEND_POWERING, A733_GPU_BACKEND_IDENTIFY, A733_GPU_BACKEND_ACTIVE,
@@ -49,6 +57,10 @@ struct a733_gpu_backend {
     uint64_t deadline, last_now, identity;
     uint32_t identity_step, legacy_revision, initialized;
     enum a733_gpu_backend_phase phase;
+    /* Read-backs of the last secure configuration; the non-secure CPU
+     * reads SMC0 as 0 (board run of apps/gpu-power-id fw-start). */
+    uint32_t secure_smc0, secure_drm;
+    unsigned recovering, recovery_write, recovery_reset;
 };
 /* Zero storage. Bind before service initialization, at EL1 with MMU/cache on.
  * memory is initialized and OFFLINE; power is initialized and NEW. Config must
@@ -61,7 +73,8 @@ struct a733_gpu_backend {
  * CPU register reads occur; no GPU/GIC access or power operation occurs.
  *
  * All allowlisted GPU and GIC pages, including 0x0180f000 for core count and
- * capabilities, need pinned identity Device-nGnRnE mappings. Post-power reads
+ * capabilities, and the SMC0 and GPU-wrapper pages of the secure
+ * configuration, need pinned identity Device-nGnRnE mappings. Post-power reads
  * admit only the documented A733 MC1 profile before firmware startup. A count
  * above one faults with MULTICORE_REQUIRED and performs no secondary-bank reads.
  * Backend/service/memory/power/control storage, firmware and page lists must

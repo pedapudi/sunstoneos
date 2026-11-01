@@ -13,6 +13,8 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn.arm64_const import UC_ARM64_REG_PC,UC_ARM64_REG_LR
 from harness import Image,save
+spec_crumb=importlib.util.spec_from_file_location('owner_cpu_crumbs',Path(__file__).resolve().parents[1]/'tools/a733-crumbs.py')
+cpu_crumbs=importlib.util.module_from_spec(spec_crumb);spec_crumb.loader.exec_module(cpu_crumbs)
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('owner_entry_check',ROOT/'checks/os-cpu-return-entry.py')
 entry=importlib.util.module_from_spec(spec);spec.loader.exec_module(entry)
@@ -21,7 +23,7 @@ return_host=importlib.util.module_from_spec(spec);spec.loader.exec_module(return
 prior=entry.prior
 class Model(entry.Model):
  def __init__(self,image,layout,owner_fields):
-  super().__init__(image,layout);self.requests=[];self.check_ready_fixture=True;self.owner=layout.address('owner','return-cpu.c')
+  super().__init__(image,layout);self.requests=[];self.crumb_trace=[];self.check_ready_fixture=True;self.owner=layout.address('owner','return-cpu.c')
   self.uc.mem_write(self.owner,bytes(self.uc.mem_read(self.c,owner_fields['phase'])))
   self.c=self.owner;self.put32(self.owner+owner_fields['phase'],2)
   self.hooks={layout.address('a733_cpu_clock_burst'):lambda:0,
@@ -33,6 +35,8 @@ class Model(entry.Model):
  def now(self):self.put64(self.uc.reg_read(prior.fault.REGS[1]),1000100);return 1
  def request(self):self.requests.append((self.uc.reg_read(prior.fault.REGS[1]),self.uc.reg_read(prior.fault.REGS[2])));return 1
  def code(self,uc,a,size,unused):
+  if bytes(uc.mem_read(a,4))==bytes.fromhex('a1810bd4'):
+   self.crumb_trace.append((uc.reg_read(prior.fault.REGS[0]),uc.reg_read(prior.fault.REGS[1])))
   if a in self.hooks:
    uc.reg_write(prior.fault.REGS[0],self.hooks[a]());uc.reg_write(UC_ARM64_REG_PC,uc.reg_read(UC_ARM64_REG_LR));return
   if not self.check_ready_fixture and a==self.layout.address('os_cpu_return_thermal_ready'):
@@ -43,7 +47,7 @@ class Model(entry.Model):
 # Boot (boot0) and top-point PLL/mux words of CPU-L, CPU-B and the DSU.
 BOOT=((0xf8802600,0x03010000),(0xf8802700,0x03000000),(0xf8802600,0x03010105))
 TOP={0:(1794,0xf8804500,0x03000000),1:(2002,0xf8804d00,0x03000000),2:(1274,0xf8803100,0x03000105)}
-PENDING,COMPLETE,EXPIRED=1,2,6
+PENDING,COMPLETE,EXPIRED,RETAINED=1,2,6,7
 class ReturnModel(Model):
  """A return requested while the owner is in a given phase.
 
@@ -54,6 +58,7 @@ class ReturnModel(Model):
  def __init__(self,image,layout,owner_fields,phase,cluster,raised=(),flight=None):
   super().__init__(image,layout,owner_fields)
   self.fields=owner_fields;self.cf=layout.layouts['a733_cpu_clock']
+  self.initial_owner_phase=phase
   self.put32(self.owner+owner_fields['phase'],phase);self.put32(self.owner+owner_fields['cluster'],cluster)
   if phase==3:self.put32(self.owner+owner_fields['ready'],1)
   self.put32(self.c+self.cf['applied_mhz'],494);self.put32(self.c+self.cf['applied_mhz']+4,1014)
@@ -111,7 +116,14 @@ def returns(image,layout,members):
     assert return_host.geometry(image.path)['cpu_rails']=={'address':address,'bytes':8}
     decoded=return_host.decode_rails(raw)
     assert (decoded['dcdc5_uv'],decoded['dcdc3_uv'])==tuple(v or None for v in readbacks),(name,decoded)
-  rows.append({'name':name,'passed':True,'requests':m.requests,'returned':ok})
+  trace=[value for stage,value in m.crumb_trace if stage==0x0204]
+  assert trace and trace[0]>>12==1,(name,'missing drain breadcrumb',trace)
+  assert all((value>>10&3)==m.initial_owner_phase for value in trace),(name,trace)
+  assert all(a!=b for a,b in zip(trace,trace[1:])),(name,'repeated unchanged phase',trace)
+  if requests:assert any(value>>12==2 for value in trace),(name,'missing lowering request',trace)
+  if ok:assert [value>>12 for value in trace[-2:]]==[4,5],(name,'missing verification/completion',trace)
+  else:assert all(value>>12!=5 for value in trace),(name,'failed return reported done',trace)
+  rows.append({'name':name,'passed':True,'requests':m.requests,'returned':ok,'clock_return_breadcrumbs':trace})
  F=0xffffffff
  # Before the first owner pass: no driver initialization, inspection or poll.
  # Successful setup hooks let the old START path reach its unwanted inspection.
@@ -154,9 +166,87 @@ def returns(image,layout,members):
  run('return-reports-thermal-lowering-voltage',m,[((PENDING,),1),((COMPLETE,),1)],[],0,(1000000,1050000))
  return rows
 
+def retained_diagnostics(image,layout,members):
+ """Actual driver setters and the real SVC recorder; only failing APIs are modeled."""
+ rows=[];defines,_=cpu_crumbs.header()
+ # State numbers are private to the frozen driver; guard their mapping below.
+ states=('IDLE','CLOCK','RAIL','INSPECT','READ','VOLTAGE','WRITTEN','SETTLE',
+         'PARK','UPDATE','LOCK','UNPARK','RELEASE')
+ driver=(ROOT/'drivers/clock/a733_cpu_clock.c').read_text()
+ enum=driver.split('enum { S_IDLE,',1)[1].split('};',1)[0]
+ assert ('S_IDLE,'+enum).replace('\n','').replace(' ','').split(',')==['S_'+x for x in states]
+ cases=[('counter-failed-idle',0,2,0,0,None,0xffff),
+        ('clock-acquire-fault',1,1,0,1,('a733_clock_acquire',4),4),
+        ('rail-acquire-retained',2,1,0,1,('a733_rail_poll',5),5),
+        ('inspection-PMIC-invalid',3,1,0,1,('a733_pmic_submit',5),5),
+        ('PMIC-result-retained',4,1,0,1,('a733_pmic_result',6),6),
+        ('thermal-lowering-PLL-mismatch',9,0,1,1,None,0xffff),
+        ('restore-lock-expired',10,0,2,0,None,0xffff),
+        ('return-lowering-release-timeout',12,1,0,1,None,0xffff)]
+ for name,state,domain,origin,closing,hook,status in cases:
+  m=ReturnModel(image,layout,members,3,3,raised=(0,1,2));m.closing=closing
+  c=m.cf
+  m.put64(m.c+c['self'],m.c)
+  m.put64(m.c+c['ops'],layout.address('clock_now','return-cpu.c'))
+  m.put64(m.c+c['ops']+8,layout.address('clock_read','return-cpu.c'))
+  m.put64(m.c+c['cookie'],m.owner)
+  m.put32(m.c+c['state'],state);m.put32(m.c+c['cluster'],domain)
+  m.put32(m.c+c['thermal'],origin);m.put32(m.c+c['target_mhz'],1014)
+  m.put32(m.c+c['result'],2 if state else 0)
+  m.put64(m.c+c['deadline'],2000000)
+  # Real tokens remain live. Retain callbacks poison the modeled managers
+  # after the observer, so a late snapshot would report false causes.
+  for field,value in (('clock',7),('rail',9)):
+   m.put64(m.c+c[field],value)
+  shared=layout.address('providers')+layout.layouts['board_provider']['shared']
+  nf=layout.layouts['a733_native_usb']
+  clock_failed=shared+nf['clocks']+layout.layouts['a733_clock_leases']['failed']
+  authority=shared+nf['rails']+layout.layouts['a733_rail_leases']['authority']
+  counter_failed=shared+nf['counter']+layout.layouts['a733_counter_clock']['failed']
+  def retain_clock():m.put32(clock_failed,1);return 4
+  def retain_rail():m.put32(authority,1<<10);return 5
+  m.hooks[layout.address('a733_clock_retain')]=retain_clock
+  m.hooks[layout.address('a733_rail_retain')]=retain_rail
+  if state==0:m.put32(counter_failed,1)
+  m.put64(m.c+c['timer'],1000000) # already expired for RELEASE and LOCK
+  if state==0:m.hooks[layout.address('a733_counter_clock_now')]=lambda:0
+  if state==3:m.put32(m.c+c['inspect_only'],1)
+  if hook:m.hooks[layout.address(hook[0])]=lambda value=hook[1]:value
+  # Read actual PLL N=69 for CPU-L: requested N=0 makes S_UPDATE fail.
+  # LOCK with the whole request expired distinguishes expiry from a lock read.
+  if state==10:m.put64(m.c+c['deadline'],1000000)
+  assert m.call(0,'a733_cpu_clock_poll',(m.c,))==RETAINED,name
+  words={k:m.u32(0x07090000+off) for k,off in cpu_crumbs.WORDS.items()}
+  failure=cpu_crumbs.board_failure(words,defines,image.path)
+  if state==9:
+   assert failure['group']=='cpu_pll' and failure['expected_n']==0 and failure['observed_n']==69,(name,failure)
+   assert failure['domain']==domain and failure['driver_state']==state and failure['closing']==bool(closing),(name,failure)
+   rows.append({'name':name,'passed':True,'failure':failure});continue
+  assert failure['group']=='cpu_retained',(name,failure)
+  assert (failure['driver_state'],failure['domain'],failure['origin'])==(state,domain,origin),(name,failure)
+  assert (failure['phase'],failure['request_cursor'],failure['target_mhz'])==(3,3,1014),(name,failure)
+  assert failure['prior_status']==(0 if state==0 else 2),(name,failure)
+  assert failure['provider_status']==(None if status==0xffff else status),(name,failure)
+  assert failure['closing']==bool(closing) and failure['inspection']==(state==3),(name,failure)
+  assert not failure['clocks_failed'] and not failure['ledger_failed'],(name,failure)
+  assert 'a733_cpu_clock.c:' in failure['caller_source'],(name,failure)
+  assert m.u32(m.c+c['failed'])==1,name
+  assert failure['clock_held'] and failure['rail_held'],(name,failure)
+  assert m.u32(clock_failed)==1 and m.u32(authority)==1<<10,name
+  assert failure['counter_failed']==(state==0),(name,failure)
+  assert not failure['pmic_failed'],(name,failure)
+  assert not [w for w in m.writes if 0x08871000<=w[1]<0x08874000],name
+  # Repeated RETAINED and the later owner refusal cannot replace the setter.
+  original={k:words[k] for k in ('fault','esr','elr','far')}
+  assert m.call(0,'a733_cpu_clock_poll',(m.c,))==RETAINED,name
+  m.script=[RETAINED];assert m.step()==0xffffffff,name
+  assert {k:m.u32(0x07090000+cpu_crumbs.WORDS[k]) for k in original}==original,name
+  rows.append({'name':name,'passed':True,'failure':failure})
+ return rows
+
 def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('elf',type=Path);p.add_argument('--out',type=Path,required=True);a=p.parse_args();a.out.mkdir(parents=True,exist_ok=False)
- names={'a733_cpu_clock','a733_cpu_clock_grant','a733_cpu_clock_config','a733_cpu_clock_report','a733_thermal_policy','os_thermal_service','a733_thermal'}
+ names={'a733_cpu_clock','a733_cpu_clock_grant','a733_cpu_clock_config','a733_cpu_clock_report','a733_thermal_policy','os_thermal_service','a733_thermal','board_provider','a733_native_usb','a733_counter_clock','a733_clock_leases','a733_rail_leases'}
  layout=Image(a.elf,names);image=prior.fault.Image(a.elf)
  with a.elf.open('rb') as f:
   dwarf=ELFFile(f).get_dwarf_info();members=None
@@ -183,6 +273,7 @@ def main():
   assert m.call(0,'os_cpu_return_thermal_ready')==expected,name
   rows.append({'name':'actual-THS-accessor-'+name,'passed':True})
  rows+=returns(image,layout,members)
+ rows+=retained_diagnostics(image,layout,members)
  save(a.out/'results.json',{'scope':'actual patched owner/guard/readiness with modeled driver API, counter and clock-token status; no hardware','cases':rows})
  print('PASS',len(rows),'owner ordering/readiness/return cases')
 if __name__=='__main__':main()

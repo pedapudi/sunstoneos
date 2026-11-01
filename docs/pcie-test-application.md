@@ -57,7 +57,7 @@ image-owned pool; no runtime attribute transition is introduced.
 
 The endpoint receives exactly one COPY command with `FLAG_USE_DMA=1`. Its
 source and destination are disjoint. Successful publication requires one new
-MSI event, exact COPY-success/IRQ-raised status, cleared command, healthy x1 Gen1
+MSI event, exact COPY-success/IRQ-raised status, cleared command, healthy x1 negotiated Gen1–Gen3
 links and resources, independently expected source/data/guard bytes, and a
 checked copy into private application backing. The source pattern depends on
 the session generation. Comparing destination bytes only with mutable source
@@ -120,6 +120,7 @@ the selected memory resource and MSI trigger/number. The kernel root-port MSI
 handler clears controller status before dispatch.
 
 This bounded client leaves bridge enumeration, general BAR/resource allocation,
-other endpoint drivers, root embedded DMA, INTx/MSI-X, Gen2/Gen3, power transitions
-and shutdown outstanding. Preserve both microSD cards. No hardware launch is
+other endpoint drivers, root embedded DMA and physical link, power-transition
+and shutdown qualification outstanding. The separate function client implements
+INTx/MSI-X and D0/D3hot. This COPY client retains its finite MSI-only scope. Preserve both microSD cards. No hardware launch is
 admitted while board recovery and the actual endpoint prerequisites are absent.

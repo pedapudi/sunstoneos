@@ -10,9 +10,10 @@
  * restarts the frame count at zero.
  *
  * The DMA0 interrupt wakes the DMA worker at each period's queue end. The
- * receive DMA writes each period into its own DMA page; the stream task copies
- * that page once into the next free slot of the client's ring and returns the
- * page to DMA. When every slot is read but not released, the stream drops the
+ * receive DMA writes each period into its own DMA page. Finite mode copies
+ * that page into the next client slot before returning it to DMA. Cyclic mode
+ * copies the driver's guarded staging lease and never reads raw DMA pages.
+ * When every slot is read but not released, the stream drops the
  * completed period instead, and the next delivered period's first frame
  * shows the gap. A stream fault, a discontinuity reported by the DMA service
  * or a stream that stops by itself ends the session through board_fail and
@@ -54,6 +55,10 @@ struct os_audio_stream_config {
     /* periods * period_bytes bytes, 4-byte aligned, owned by the client and
      * never moved; only the stream task writes it while a run is active. */
     uint8_t *buffer;
+    /* 0 finite periods; 1 hardware-linked RX with guarded staging copies.
+     * Physical cyclic use requires measured DMA completion/reuse ordering
+     * (docs/i2s-stream.md); choosing this mode establishes no such evidence. */
+    unsigned cyclic;
 };
 /* One delivered period. data lies in the client's buffer and stays valid
  * until the client releases it. The two counter-clock times bracket the

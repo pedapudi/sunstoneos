@@ -72,9 +72,9 @@ if interrupt:
      members={c.attributes['DW_AT_name'].value.decode():c.attributes['DW_AT_data_member_location'].value for c in die.iter_children() if c.tag=='DW_TAG_member' and 'DW_AT_name' in c.attributes and 'DW_AT_data_member_location' in c.attributes}
      if 'npu_irq' in members and 'spi_enabled' in members:IRQ_SNAPSHOT=members['npu_irq']
  assert IRQ_SNAPSHOT is not None
-variants=['success','numerical-mismatch','SRAM-already-CPU','SRAM-restore-ignored','SRAM-reset-released','SRAM-module-gate-open','wrong-magic','wrong-epoch','wrong-generation','wrong-lease','wrong-status','wrong-complete','wrong-start','wrong-end','wrong-lines','wrong-deadline','long-log','unexpected-SMC','recovery-IRQ','late','EL1-cache-live','secondary-on','GICD-timeout','GICR-timeout']
+variants=['watchdog-disarm-ignored','success','numerical-mismatch','SRAM-already-CPU','SRAM-restore-ignored','SRAM-reset-released','SRAM-module-gate-open','wrong-magic','wrong-epoch','wrong-generation','wrong-lease','wrong-status','wrong-complete','wrong-start','wrong-end','wrong-lines','wrong-deadline','long-log','unexpected-SMC','recovery-IRQ','late','EL1-cache-live','secondary-on','GICD-timeout','GICR-timeout']
 for variant in variants:
- u=machine();status=int(variant=='numerical-mismatch');u.mem_write(receipt,receipts[status]);admission=im.address('admission');c=im.layouts['a733_smp_contract'];state={'time':24000000,'return':False,'retained':False,'writes':[]}
+ u=machine();put(u,0x02050014,0xb1,4);status=int(variant=='numerical-mismatch');u.mem_write(receipt,receipts[status]);admission=im.address('admission');c=im.layouts['a733_smp_contract'];state={'time':24000000,'return':False,'retained':False,'writes':[]}
  for name,v in [('epoch',7),('generation',8),('lease',9),('diagnostic_deadline',480000000)]:put(u,admission+c[name],v)
  # Original saved GIC record has eight uint32 fields followed by 32 enable words.
  saved=im.address('saved');u.mem_write(saved,struct.pack('<8I',1,4,0x33,0x123,0x456,0,0,0))
@@ -98,6 +98,8 @@ for variant in variants:
    state['stop']=[u.reg_read(UC_ARM64_REG_X0),u.reg_read(UC_ARM64_REG_X0+1)];u.emu_stop();return
   value=None
   if kind==0xd53be020:value=state['time'];state['time']+=240000
+  elif kind in (0xd53e4020,0xd53e6000):value=0
+  elif kind==0xd53800a0:value=0
   elif kind==0xd53e5200:value=0x17<<26
   elif kind==0xd5381000:value=4 if variant=='EL1-cache-live' else 0
   elif interrupt and kind==0xd5384240:value=12 # CurrentEL: EL3.
@@ -105,6 +107,7 @@ for variant in variants:
   if value is not None:u.reg_write(UC_ARM64_REG_X0+reg,value);u.reg_write(UC_ARM64_REG_PC,at+4)
  def writes(cpu,access,at,size,value,cookie):state['writes'].append([at,value])
  def reads(cpu,access,at,size,value,cookie):
+  if variant=='watchdog-disarm-ignored' and at==0x02050014:put(u,at,0xb1,4)
   if variant=='SRAM-restore-ignored' and at==SRAM_ROUTING:put(u,at,0,4)  # A word that ignores writes.
   if variant=='GICD-timeout' and at==0x03400000:put(u,at,1<<31,4)
   if variant=='GICR-timeout' and at==0x03460000:put(u,at,8,4)
@@ -127,8 +130,14 @@ for variant in variants:
  # a refused receipt or a failed cleanup parks before that step.
  routing=[i for i,(at,v) in enumerate(state['writes']) if at==SRAM_ROUTING]
  report=[i for i,(at,v) in enumerate(state['writes']) if REPORT<=at<REPORT+0x1000]
- if variant in ('success','numerical-mismatch'):
-  assert len(routing)==1 and state['writes'][routing[0]][1]==2 and report and all(i>routing[0] for i in report),(variant,state['writes'])
+ if variant in ('success','numerical-mismatch','watchdog-disarm-ignored'):
+  if variant=='watchdog-disarm-ignored':
+   assert state['stop']==[7,0x02050014] and not report,(variant,state)
+  else:
+   disarm=[i for i,(at,v) in enumerate(state['writes']) if at==0x02050014 and v==0x16aa0000]
+   terminal=[i for i,(at,v) in enumerate(state['writes']) if at==0x07090104 and v==0x05030000]
+   assert len(disarm)==len(terminal)==1 and routing[0]<disarm[0]<terminal[0]<report[0],state
+  assert len(routing)==1 and state['writes'][routing[0]][1]==2 and (variant=='watchdog-disarm-ignored' or report) and all(i>routing[0] for i in report),(variant,state['writes'])
  elif variant=='SRAM-already-CPU':assert not routing
  elif variant in ('SRAM-reset-released','SRAM-module-gate-open'):
   # The held-reset check parks before the routing write and the report.

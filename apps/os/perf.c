@@ -133,7 +133,7 @@ static enum a733_perf_status release_rail(uint64_t deadline)
 static enum a733_perf_status read_block(enum a733_perf_block b,uint64_t deadline,int start,struct a733_perf_point *out)
 {
     if(perf.failed)return A733_PERF_FAILED;
-#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+#ifdef SUNSTONE_A733_OS_GPU
     if(b==A733_PERF_GPU && os_gpu_perf_owner()) {
         if(start && (perf.cancelled || perf.cpu_busy || a733_thermal_policy_level(perf.policy)!=A733_THERMAL_NORMAL))
             return A733_PERF_REFUSED;
@@ -188,7 +188,7 @@ static enum a733_perf_status act(void *v,enum a733_perf_action a,enum a733_perf_
     if((perf.cancelled || a733_thermal_policy_level(perf.policy)!=A733_THERMAL_NORMAL) &&
        ((a==A733_PERF_HOLD && start) || ((a==A733_PERF_RATE || a==A733_PERF_VOLTAGE) && start) ||
         (a==A733_PERF_CHANGE_CPU && (start || !perf.cpu_started))))return A733_PERF_REFUSED;
-#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+#ifdef SUNSTONE_A733_OS_GPU
     if(b==A733_PERF_GPU && a!=A733_PERF_READ) {
         enum a733_perf_status r=os_gpu_perf_action(a,value,deadline,start,out);
         if(r==A733_PERF_FAILED)perf.failed=1;
@@ -252,7 +252,7 @@ static enum a733_perf_reason admit(void *v,unsigned blocks,unsigned cpu)
 #else
     (void)blocks;
 #endif
-#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+#ifdef SUNSTONE_A733_OS_GPU
     if((blocks&A733_PERF_BIT(A733_PERF_GPU)) && !os_gpu_perf_ready())return A733_PERF_NOT_READY;
 #endif
     return A733_PERF_OK;
@@ -297,7 +297,7 @@ int os_perf_step(struct a733_cpu_clock *cpu,const struct a733_thermal_policy *po
 #ifdef SUNSTONE_A733_OS_NPU
         owned|=A733_PERF_BIT(A733_PERF_NPU);
 #endif
-#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+#ifdef SUNSTONE_A733_OS_GPU
         owned|=A733_PERF_BIT(A733_PERF_GPU);
 #endif
         /* A bin without an entry still reads back; every switch is refused. */

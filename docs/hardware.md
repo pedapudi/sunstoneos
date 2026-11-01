@@ -20,13 +20,15 @@ inventory that follows also records earlier implementations and their remaining
 gaps. A passing diagnostic does not qualify every application using that device.
 
 The [bounded CPU reliability application](../apps/cpu-runtime-qualification/RELIABILITY.md)
-has host evidence for repeated scheduling, saved `d8` context and payload
-publication across all eight cores. Its `02-reliability` image ran on 3-3
-and failed with the CPU clock driver in RETAINED at `return-cpu.c:159`;
-evidence is under `~/.cache/sunstoneos/evidence/cpu-reliability-1031/start-1/`.
-Another worker owns the defect. Startup repeatability, full restoration and
-the longer-recording application remain unqualified, as do recurring per-core
-IRQs, idle/wake and thermal transitions.
+passed one run on 3-3 with all eight pinned cores completing 4096 rounds,
+independently matching payload digests, seven secondaries off and WDT0
+disarmed. Queue entry `1793513595977482947-679bf1ea` under
+`~/.cache/sunstoneos/board-queue/entries/` binds its image and result. The matching native fix is `f2131e76`.
+The CPU clock driver now completes N writes and waits boot0's
+20 us before UPDATE. The earlier RETAINED failure had read old N=77 after
+UPDATE cleared while requesting N=39. Startup repeatability, full restoration
+and the longer-recording application remain unqualified, as do recurring
+per-core IRQs, idle/wake and thermal transitions.
 
 ## Current physical results
 
@@ -37,7 +39,7 @@ and physical results through 2026-10-31:
 | --- | --- | --- |
 | CPU | Eight-core top-point timer/interrupt workload; one eight-worker mimus recording with exact 90-frame/reference parity, seven secondary OFF proofs, RAM restoration and boot-clock/CPU-rail restoration | Sustained load, thermal transitions, fault recovery, other inputs/profiles and complete recognition performance qualification |
 | GPU | Firmware start/health/stop/restart, eight compute jobs, and two production exact-sum shapes with all 1,122 sums/tags/guards correct at 1008 MHz; cleanup, shutdown and ROM return passed | Failure recovery, complete GPU recognition, graphics and representative concurrent workloads |
-| NPU | Earlier interrupt-driven ShuffleNetV2 inference at 852 MHz; current image passes real provider/task construction before scheduling, disabled IRQ restoration, normal return and saved-RAM restoration | Current scheduled startup, inference/restart, full power-off, thermal behavior and broader integration |
+| NPU | Earlier interrupt-driven ShuffleNetV2 inference at 852 MHz; watchdog-admitting startup, one-inference and two-job/two-model runtime images are board-qualified on 3-3 at 852 MHz/800 mV, including matching outputs, CLOSE, local stop and normal ROM return; evidence: `~/.cache/sunstoneos/build/npu-wdt-1031/runs/01-startup-only-28c8e15a2b62-834973ec/`, `02-single-inference-0dd327616ce6-834973ec/` and `03-runtime-8f51a95699b7-834973ec/` under the same runs directory | Repeated start/stop, SDK access, domain OFF/restart, reset during an active job, thermal behavior and broader integration |
 | Memory bus | Restore to 600 MHz on EL3 entry, with the preserved memory pattern verified on both boards | Broader memory and concurrent-device qualification |
 | microSD | High-speed PIO, one 4 KiB DMA read and one 64 KiB/sixteen-descriptor read at 50 MHz/four-bit/3.3 V; sentinel-prefilled chunks match PIO, with restored normal return | Sustained throughput, broader extents/cards, failure recovery, 1.8 V signalling and remaining storage/update paths |
 | DRAM training and restore | Full training and explicit-record restores report 12,288 MiB on both boards. The SID-selected default passed twice on 3-1 with 879 writes and 34 ms quick checks; CPU-L/DSU boot clock restoration passed | Full-map restored-memory tests, temperature range, lower P-states and card deployment remain unqualified |
@@ -49,15 +51,36 @@ and `3-1-204839/session.json` under the same directory.
 `tools/dev-run.py` now normalizes CPU rails to 800 mV before guarded
 CPU-return launches and after validated normal returns with boot clocks.
 
-The hello-compute control on 3-1 stopped because the application finished
-before the CPU clock owner reached FOLLOW. The GPU firmware-only diagnostic
-on 3-1 stopped in its frozen build's compatibility callback. Port 3-3 remains
-quarantined after a host error following a normal native return. These are
-recorded runner outcomes, not live access checks. No new complete application
-or hardware qualification follows from the split or these diagnostics.
+An earlier hello-compute control on 3-1 stopped before the CPU clock owner
+reached FOLLOW; the corrected control later returned normally. An earlier GPU
+firmware diagnostic stopped in its frozen compatibility callback. The earlier
+3-3 host cleanup error quarantined that instance; the NPU runs above later
+returned normally. These records describe named instances and operations;
+they do not establish current live access or broader qualification.
 The [handoff branch list](handoff.md#open-branches) distinguishes unmerged fixes.
 
+NPU local restart, return to the first model after switching, public SDK
+access and domain OFF/restart are implemented and host-verified at `593ce329`.
+Their frozen images and tools are under
+`~/.cache/sunstoneos/build/npu-wdt-1031/images/` and `next-host-593ce329/`
+in that same build directory. The [handoff](handoff.md#coordinator-launch-and-capture)
+gives the proposed order. These operations still require board qualification;
+the SDK diagnostic does not qualify full OS EL0 mappings.
+
 ## Current software integration
+
+- The [GPU compute queue](designs/gpu-compute-queue.md) accepts application
+  programs and manifest-region leases with a GPU page cap of 256 KiB. Host
+  checks cover 204 exact-sum jobs, interrupts, deadlines, thermal reopen,
+  retained failures and returning-image proofs. Two admitted applications have
+  independent slots and sequences in one trusted shared context. Host checks
+  cover ten powered open/close cycles, reset/readback/OFF recovery with queued
+  peer preservation, and bounded quiescence before return or resident completion.
+    The mimus shader passes the host exact-sum and readout parity checks, with
+  exhaustive sum qualification enabled. Frozen proposals are under `gpu-integrate-1031/images-lifecycle/` in the
+  build cache; rebuild them with the separate CPU clock fix before physical
+  qualification. Physical queue execution, interrupt delivery, recovery and
+  application GPU recognition remain unqualified.
 
 The shared PMIC decoder preserves raw DCDC8/DCDC9 selectors 88–127 without
 publishing a programmed voltage. The pinned references disagree in that range.
@@ -167,7 +190,7 @@ Unless stated below, implementation is **planned**. Partial results apply only
 to the stated scope:
 
 - PCIe: **implemented** [native root-port preparation](pcie.md) with shared
-  clock, rail, pin and PMIC ownership, COMB1 PHY initialization, x1 Gen1 link
+  clock, rail, pin and PMIC ownership, COMB1 PHY initialization, x1 Gen3 link
   observation and read-only configuration access to one direct endpoint.
   Source comparison, composed host checks and native compilation pass. The
   [supervised application](pcie-application.md) connects the existing providers
@@ -198,8 +221,11 @@ to the stated scope:
   validates and records each request; the native write filter admits an iATU
   write only when it repeats that record. A configuration field selects a 2.5, 5
   or 8 GT/s target, and above 2.5 GT/s the port follows the board kernel's
-  directed speed change after training. Host-model checks pass; both
-  applications still select 2.5 GT/s, and no board test ran. A general
+  directed speed change after training. All three native applications request
+  the vendor Gen3 default and accept negotiated x1 Gen1–Gen3. Normalized REF
+  admission supports the boards' 26 MHz DCXO using the unchanged vendor
+  internal-100-MHz PHY sequence. Sanitizer, linked-image and QEMU checks pass
+  under `~/.cache/sunstoneos/build/pcie-1031/`; no endpoint is attached. A general
   [endpoint function client](pcie.md) is **implemented**. It scans the direct
   endpoint's functions 0–7 and refuses bridges, assigns memory BARs below
   4 GiB inside the aperture, delivers polling, INTx or MSI-X interrupts, moves
@@ -208,7 +234,7 @@ to the stated scope:
   asserting PERST. Twenty-four host-model cases pass, and both units compile
   for AArch64. The supervised board image
   [`sunstone-a733-pcie-nvme`](pcie-nvme.md) links both. One task brings the
-  port up at 2.5 GT/s, reads one admitted 4096-byte block with polled
+  port up with a Gen3 target, reads one admitted 4096-byte block with polled
   completion, shuts the controller down, stops the port with PERST held and
   reports the copied block through USB0. Any failure retains the port's leases
   and the queue and data pages. Linked-image and host checks pass against a
@@ -217,8 +243,10 @@ to the stated scope:
   authority. Ten linked native cases, thirteen route/dispatch cases, twenty
   host checks and default polling validation pass under `sol-nvme-msix-1028/`.
   Faults retain pages and port leases. No endpoint, NVMe device, interrupt or power transition has
-  run on hardware; the endpoint test driver keeps its own BAR and MSI setup. Bridges and switches, ASPM, embedded root DMA, Gen2
-  selection by the applications and physical Gen2/Gen3 links remain required.
+  run on hardware; the endpoint test driver keeps its own BAR and MSI setup.
+  Bridges and switches, ASPM, embedded root DMA and physical Gen3/fallback
+  qualification remain required. The frozen images are host-only: the shared
+  probe contract still needs complete PCIe/USB retirement and return restoration.
 - HDMI: **implemented** [controller, PHY and TV0 diagnostic output](hdmi.md)
   for 720p60 and 1080p60. Composed host checks, primary-source comparisons and
   native compilation pass. The [native startup binding](hdmi-native.md) now
@@ -1437,8 +1465,18 @@ to the stated scope:
   a finite period's queue wakes the DMA worker at once; an emulator check
   passes. The [integrated OS image](os-image.md) captures recognition input
   through the same receive path in its microphone build.
-  Physical continuity, playback, wire drain, cache visibility, Bluetooth PCM
-  routing and broader audio functions remain unqualified or required work.
+  The OS capture adapter also accepts guarded cyclic staging without exposing
+  raw DMA pages. Its host checks cover copied bytes, failure retention and
+  reopening. Actual FreeRTOS/provider cases keep a busy canceled writer in
+  DRAINING, keep a held copy readable through overrun and refuse stale tickets
+  after both duplex directions close and reopen. Generic recorded/paced PCM
+  uses the same capture output/headroom through the application kit with no
+  granted device or mimus dependency; sanitizer, AArch64 and full native image
+  checks pass. Evidence: `~/.cache/sunstoneos/build/audio-1031/frozen/README.md`.
+  These are software results. Physical continuity, playback, wire drain, cache
+  visibility, Bluetooth PCM routing and broader audio functions remain
+  unqualified or required work. No audio image is admitted to the new returning
+  probe runner until its retained resources and monitor lifetime are converted.
 - G2D: **implemented** one retained fill, source-copy, source-over-solid, exact 2× enlargement, general scaling or
   image-over-image operation per session through the [native application](g2d.md), with copy and scaling
   converting between the eight 32-bit RGB channel orders. Caller geometry is bounded
@@ -2439,23 +2477,21 @@ to the stated scope:
   through USB, then retains hardware because packet and transaction drain remain
   unproved. Live sensor frames do not reach ISP0: raw receiver input,
   parser-to-ISP0 routing and live ISP0 operation remain required.
-  A separate [recorded-image ISP0 application](camera-isp0.md) now accepts one
-  640×480 BGGR12 frame and produces an immutable copied NV16 frame through
-  TOP's DDR reader, ISP600, VIPP0 and camera DMA0. It needs no sensor. Pinned
-  GPL ISP600 defaults/setters run natively; no opaque tuning or runtime blob is
-  required. Guarded mappings retain both IOMMU masters 1 and 2, every parameter
-  extent, input/output buffers and provider leases through completion or ACK.
-  Final image `32eb5b93…` has one nominal EL1h bounded-call result, seven classified
-  failures and five serializer cases. Device effects and output pixels are modeled;
-  the fixtures establish neither numerical processing nor full task scheduling.
-  Old invalid negative runs are excluded. The [host workflow](isp0-preparation.md)
-  passes fifteen stream cases, geometry/input/proof and six allocation refusals,
-  plus readiness; seven root boot guards and three SRAM cases remain separate.
-  Evidence is under `isp0-native-20261020/`. The only current compiled/declared
-  source difference adds an independent CE clock writer without changing existing
-  functions. No full TinyUSB/DCD, physical, numerical, sensor or scheduler
-  qualification is established. Independent pixel comparison, wider processing,
-  scaling, 3A tuning, interrupt completion and physical recovery remain required.
+  The [recorded ISP0 application](camera-isp0.md) has **host-tested** replay of
+  one immutable 640×480 BGGR12 input through TOP, ISP600, VIPP0 and camera DMA0.
+  Each NV16 copy remains immutable through USB completion and sequence-bound
+  acknowledgment. Fresh status and fault checks precede retained buffer reuse;
+  memory, both IOMMU masters and provider leases remain owned. IRQ completion
+  uses DMA0, VIPP0 load and ISP0 SAVE with the original session deadline.
+  Sanitizer, linked-image and FreeRTOS QEMU checks pass, including a second
+  capture after USB acknowledgment and staggered IRQ events. An identified
+  host FFmpeg build supplies independent CPU comparison files; its algorithm
+  is not established as equivalent to ISP600. Evidence and frozen host-only
+  ELFs are under `~/.cache/sunstoneos/build/camera-isp-1031/`. The retained ISP
+  ELF fails the new probe runner's watchdog admission. Source-backed global
+  drain and probe conversion are required before a board run. Physical pixels,
+  interrupts, repeated operation, sensor input, wider processing and tuning
+  remain unqualified. No board was accessed for this work.
 
 - NPU: **tested** for interrupt completion and matching ShuffleNetV2 outputs
   in the returning diagnostics described above. The resident runtime and OS

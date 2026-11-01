@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Linked PCIe application boundaries; controller returns/shared manager state modeled."""
 import argparse,hashlib,importlib.util,json,struct
+import harness
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_READ
@@ -91,10 +92,12 @@ class Machine:
    elif name=='a733_pcie_identity':
     vendor,device=struct.unpack_from('<2H',self.session,788)
     if self.variant=='wrong-endpoint':device^=1
-    cpu.mem_write(args[1],struct.pack('<4HI4B',vendor,device,2,0x11,0x02000001,0,0x40,0x80,0));self.returned(1)
+    link={'gen2':0x12,'gen3':0x13,'retrain':0x13,'invalid-speed':0x14,'invalid-width':0x21}.get(self.variant,0x11)
+    cpu.mem_write(args[1],struct.pack('<4HI4B',vendor,device,2,link,0x02000001,0,0x40,0x80,0));self.returned(1)
    else:
     assert args[1]==0 and args[2]&3==0
     vendor,device=struct.unpack_from('<2H',self.session,788);values={0:device<<16|vendor,4:0x00100002,8:0x02000001,12:0,0x34:0x40,0x40:0x00018010,0x80:0x00009005,0x90:0x00000011,0x50:0x00110000}
+    if self.variant in ('gen2','gen3','retrain'):values[0x50]={'gen2':0x12,'gen3':0x13,'retrain':0x12}[self.variant]<<16
     if self.variant=='msi-enabled':values[0x80]|=1<<16
     if self.variant=='msix-enabled':values[0x90]|=1<<31
     if self.variant=='cap-cycle':values[0x90]|=0x40<<8
@@ -126,7 +129,7 @@ def run(image,session_path,out):
  assert setup.call('admitted',setup.base,setup.port+elf.layouts['a733_pcie']['config'],unit='/apps/pcie/native.c')==1
  assert setup.call('current',setup.native,unit='/drivers/pci/a733_pcie_native.c')==1
  (out/'nominal-provider-preflight.json').write_text(json.dumps(dict(actual_core_init=True,actual_core_config_valid=True,actual_native_admission=True,actual_native_current=True,physical_access=False),indent=2)+'\n')
- for variant in ('unsealed-consumer','prefix-mismatch-consumer','success','wrapper-delegation','cancel-before-work','wrong-endpoint','msi-enabled','msix-enabled','cap-cycle','partial-config-failure','publish-revokes','output-cutoff','snapshot-revokes','queued-revokes'):
+ for variant in ('unsealed-consumer','prefix-mismatch-consumer','success','gen2','gen3','invalid-speed','invalid-width','retrain','wrapper-delegation','cancel-before-work','wrong-endpoint','msi-enabled','msix-enabled','cap-cycle','partial-config-failure','publish-revokes','output-cutoff','snapshot-revokes','queued-revokes'):
   if results.get(variant,{}).get('passed'):continue
   m=Machine(elf,session,variant)
   if variant in ('unsealed-consumer','prefix-mismatch-consumer'):
@@ -150,7 +153,7 @@ def run(image,session_path,out):
      result=m.call('pcie_step')
      if result in (1,0xffffffff):break
     else:raise AssertionError('Unbounded PCIe application stage')
-    failure=variant in ('cancel-before-work','wrong-endpoint','msi-enabled','msix-enabled','cap-cycle','partial-config-failure','publish-revokes')
+    failure=variant in ('cancel-before-work','wrong-endpoint','msi-enabled','msix-enabled','cap-cycle','partial-config-failure','publish-revokes','invalid-speed','invalid-width','retrain')
     assert result==(0xffffffff if failure else 1) and m.field('result')==(2 if failure else 1),(variant,result,m.field('result'))
     if failure:
      before=len(m.calls);m.call('pcie_step');m.call('pcie_step');m.call('pcie_step');assert len(m.calls)==before
@@ -159,6 +162,7 @@ def run(image,session_path,out):
      if variant=='output-cutoff':m.time=60990000;assert m.call('pcie_output_ready')==0
      m.snapshot=variant=='snapshot-revokes';m.call('board_usb0_task');count=128 if variant in ('output-cutoff','snapshot-revokes') else 192
      frame=bytes(m.cpu.mem_read(elf.address('pcie_response'),count));decoded=decoder.decode(frame,session);assert decoded['status']==(2 if count==128 else 1)
+     if variant in ('gen2','gen3'):assert decoded['link_status']&0x3ff=={'gen2':0x12,'gen3':0x13}[variant]
      if variant=='success':(out/'native-frame.bin').write_bytes(frame)
      if variant=='queued-revokes':m.field('failed',1);m.call('board_usb0_task');assert not m.tx
     results[variant]=dict(passed=True,component_calls=len(m.calls),retention_calls=m.retain_calls,status=m.field('result'))

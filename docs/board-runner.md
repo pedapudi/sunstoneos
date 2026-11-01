@@ -44,9 +44,14 @@ prints its JSON path. `--no-wait` prints the future result path immediately.
 `--port 3-1` or `--port 3-3` fixes the target. `any` selects the first eligible
 board, respecting submission order among entries eligible for that board.
 
-An existing `--expect` file requires an exact byte match. Other expectation text
-requires a substring in the UTF-8 output. The queue freezes this distinction at
-submission. `--input FILE` supplies each manifest input in order. Without an
+An existing `--expect` file requires an exact byte match, unless it declares
+`schema: sunstone-board-expect-u32-v1`. That JSON format has a `words` array
+covering the entire little-endian 32-bit payload. Each entry is either an exact
+unsigned word or an inclusive `{"min": 0, "max": 199999}` range for a measured
+hardware duration. Missing words, extra bytes and malformed ranges are refused.
+The runner validates both original files and frozen queue specifications before
+device access. Other expectation text requires a substring in the UTF-8 output.
+The queue freezes the expectation at submission. `--input FILE` supplies each manifest input in order. Without an
 input argument, hello-compute receives `SunstoneOS board control` followed by a
 newline. Its result is the little-endian Adler-32 checksum, a zero reserved
 word and the input length, packed as `<IIQ`.
@@ -143,6 +148,8 @@ There is no smaller per-run count limit.
 uses `$board resume 3-1`. Resume archives the pause file. It does not clear a
 failed USB instance or repeat an image. Daemon restart collects an existing
 child result after that process stops; it never replays an interrupted image.
+Resume changes only the selected port's pause. Only the daemon collects orphan
+results; recovery skips a live runner even after it has written its result.
 An interrupted spawn with no recorded child identity remains paused for
 coordinator inspection. Shutdown waits for existing children.
 
@@ -167,12 +174,11 @@ storage grants or execute storage-write sessions, even with that flag. Those
 operations remain in the existing backup-first update path and must meet
 [goal section 4](goal.md). Read-only execution grants no card or NVMe writes.
 
-`--kind npu` admits only an image with the returning watchdog contract and the
-linked OS NPU service, using its typed service session. The current checkout's
-standalone NPU images reject an armed watchdog, and its CPU-return build excludes
-NPU. Such images are refused before device access. NPU execution remains
-unsupported until a compatible native watchdog and return path is supplied and
-checked; session serialization alone does not establish that support.
+`--kind npu` supports two returning image formats. Generic OS images require
+both the returning watchdog contract and the linked OS NPU service, and use
+typed service sessions. Finite native NPU diagnostics use the preparation and
+retirement rules described below. Neither format's serialization establishes
+physical qualification.
 
 ## Qualify on port 3-1
 
@@ -209,3 +215,31 @@ processor operating points. Its expected outcome is `watchdog-reset`, with
 `quarantined=false`. Its CLI exit code is 1 because a watchdog reset is a failed
 image run. It tests recovery without repeating a failed workload. Stop after
 any unexpected transport failure or no-return and preserve the result path.
+
+Finite NPU diagnostics use `--kind npu`. Supply a `--template` directory with
+`session.bin`, the reviewed 456-byte native NPU session template. The matching
+`manifest.json` may be in that directory or beside the ELF. Submission copies
+both files into the queue entry and hashes the finite NPU host dependencies.
+`--host-tree` selects the finite NPU source tree when it differs from the runner.
+The runner checks the image, manifest and template before opening the board.
+
+The finite adapter initializes DDR through the shared queue path, captures the
+NPU system-register set and rebinds the native session through the existing NPU
+preparation helper. It does not run the CPU rail helper. Before uploads it saves
+the complete 18 MiB NPU DRAM reservation. Immediately before watchdog arming it
+checks the reviewed ROM instructions and native NPU entry state again.
+
+After normal return, the interrupt-profile parser validates the monitor,
+platform log and cleanup receipt before restoring the saved DRAM. Numerical
+mismatch still permits restoration after validated retirement and remains a
+failed result. An invalid receipt or incomplete restoration quarantines the
+instance. The new ROM retains ownership of SRAM; the adapter never restores
+old SRAM over it. Watchdog recovery follows the shared runner path and does
+not restore potentially invalid DRAM. These host paths do not qualify hardware.
+
+The development wrapper accepts a finite NPU session file through `--records`
+and an exact build record through `--manifest`. Both inputs reach the same
+runner preparation as `--template`; `--state` selects offline checking.
+`--expect-result` compares the decoded JSON result for application decoders.
+Malformed or incomplete thermal captures fail result validation while retaining
+the native return, application, GPU and thermal bytes.

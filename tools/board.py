@@ -128,6 +128,9 @@ class Live:
             except UnresolvedReturn as error:
                 self.quarantine(str(error))
                 raise
+            finally:
+                if self.record.get('npu_dirty') and not self.record.get('dram_restored'):
+                    self.quarantine('NPU RAM ownership remains unresolved.')
 
     def adopt(self, node):
         self.access.require_session(node)
@@ -433,17 +436,30 @@ class Live:
         run['rails'] = self.record['rails']
         self.journal()
 
-    def live_state(self):
-        values = [int(v,16) for v in self.tx(*[x for a in state.WORDS for x in ('readl', hex(a))]).split()]
-        require(len(values) == len(state.WORDS), 'Live state word count differs.')
-        return {'identity': self.identity, 'port': self.args.port, 'words': {hex(a):v for a,v in zip(state.WORDS,values)}}
+    def live_state(self, finite_npu=False):
+        words = images.load('npu_live_words', (self.args.host_tree or ROOT)/'apps/npu-finite/development.py').WORDS if finite_npu else state.WORDS
+        values = [int(v,16) for v in self.tx(*[x for a in words for x in ('readl', hex(a))]).split()]
+        require(len(values) == len(words), 'Live state word count differs.')
+        return {'identity': self.identity, 'port': self.args.port, 'words': {hex(a):v for a,v in zip(words,values)}}
 
     def prepare(self, info):
-        return images.prepare(self.args, info, {} if self.args.kind=='probe' else self.live_state(), self.evidence/'bundle')
+        return images.prepare(self.args, info, {} if self.args.kind=='probe' else self.live_state(info.get('finite_npu',False)), self.evidence/'bundle')
 
     def launch(self, plan):
+        if plan.get('format') == 'npu':
+            plan['finite'].require_entry_state(self.tx)
+            backup = self.evidence/'npu-DRAM-before.bin'
+            self.read(*plan['finite'].DRAM, backup)
+            self.record['dram_restored'] = False
+            self.record['npu_dirty'] = True
+            plan.update(dram_backup=backup, dram_backup_sha256=images.sha(backup))
+            self.record['dram_backup_sha256'] = plan['dram_backup_sha256']
+            self.journal()
         for address, source in plan['uploads']:
             self.upload(address, source)
+        if plan.get('format') == 'npu':
+            self.sanity()
+            plan['finite'].require_entry_state(self.tx)
         self.record['launch_attempted'] = True
         self.journal()
         self.arm(plan['watchdog']['mode'])
@@ -451,7 +467,7 @@ class Live:
         self.tx(*plan['launch'])
         self.wait(plan['watchdog']['session_seconds'] + crumbs.interval(plan['watchdog']['mode']) + 10)
         before, after, words = self.returned()
-        decoded = crumbs.decode(words, plan['epoch'])
+        decoded = crumbs.decode(words, plan['epoch'], self.args.image) if plan.get('format') == 'npu' else crumbs.decode(words, plan['epoch'])
         self.record['breadcrumbs'] = decoded
         save(self.evidence/'breadcrumbs.json', decoded)
         require(not after & 1, 'WDT0 did not disarm after return.')
@@ -468,8 +484,12 @@ class Live:
     def capture(self, plan):
         try:
             return images.capture(self, plan, self.args)
-        except ValueError as error:
-            raise Mismatch(str(error)) from error
+        except BaseException as error:
+            if plan.get('format') == 'npu' and not self.record.get('dram_restored'):
+                self.quarantine('NPU retirement or DRAM restoration unverified: '+str(error))
+            if isinstance(error, ValueError):
+                raise Mismatch(str(error)) from error
+            raise
 
 
 def expectation(value):
@@ -477,8 +497,58 @@ def expectation(value):
         return None
     path = Path(value)
     if path.is_file():
-        return {'mode': 'bytes', 'hex': path.read_bytes().hex()}
+        raw = path.read_bytes()
+        try:
+            spec = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            spec = None
+        if isinstance(spec, dict) and isinstance(spec.get('schema'), str) and spec['schema'].startswith('sunstone-board-expect-'):
+            require(set(spec) == {'schema', 'words'} and spec['schema'] == 'sunstone-board-expect-u32-v1',
+                    'Unknown binary expectation schema.')
+            return validate_expectation({'mode': 'u32le', 'words': spec['words']})
+        return {'mode': 'bytes', 'hex': raw.hex()}
     return {'mode': 'text', 'text': value}
+
+
+def validate_expectation(expected):
+    """Validate a file-derived or frozen queue expectation before device access."""
+    require(isinstance(expected, dict), 'Invalid frozen expectation.')
+    mode = expected.get('mode')
+    if mode == 'bytes':
+        require(set(expected) == {'mode', 'hex'} and isinstance(expected['hex'], str),
+                'Invalid exact-byte expectation.')
+        bytes.fromhex(expected['hex'])
+    elif mode == 'text':
+        require(set(expected) == {'mode', 'text'} and isinstance(expected['text'], str),
+                'Invalid text expectation.')
+    else:
+        require(mode == 'u32le' and set(expected) == {'mode', 'words'},
+                'Unknown frozen expectation mode.')
+        words = expected['words']
+        require(isinstance(words, list) and 1 <= len(words) <= 16384,
+                'Binary expectation must name every 32-bit word.')
+        for word in words:
+            require(type(word) is int and 0 <= word <= 0xffffffff or
+                    isinstance(word, dict) and set(word) == {'min', 'max'} and
+                    all(type(word[k]) is int for k in ('min', 'max')) and
+                    0 <= word['min'] <= word['max'] <= 0xffffffff,
+                    'Invalid fixed word or inclusive range in binary expectation.')
+    return expected
+
+
+def matches_expectation(expected, payload):
+    """Compare every binary field while allowing declared hardware timings."""
+    if expected['mode'] == 'bytes':
+        return payload == bytes.fromhex(expected['hex'])
+    if expected['mode'] == 'text':
+        return expected['text'] in payload.decode(errors='replace')
+    require(expected['mode'] == 'u32le', 'Unknown frozen expectation mode.')
+    words = expected['words']
+    if len(payload) != 4 * len(words):
+        return False
+    actual = struct.unpack('<' + 'I' * len(words), payload)
+    return all(got == want if type(want) is int else want['min'] <= got <= want['max']
+               for got, want in zip(actual, words))
 
 
 def port_idle(port):
@@ -517,7 +587,13 @@ def references(args):
             paths.update(p for p in (tree/directory).glob('*') if p.is_file())
         paths.add(tree/'drivers/clock/a733_cpu_clock.c')
         paths.add(tree/'apps/board/launch.c')
+        if args.kind == 'npu' and 'ss_result_record' not in images.symbols(args.image):
+            finite = images.load('reference_npu_irq', tree/'apps/npu-interrupt/host.py').finite
+            paths.update(tree/name for name in finite.HOST_SOURCES)
+            paths.update(tree/name for name in ('apps/npu-finite/development.py','tools/vendor-mbus.py'))
     paths.update((args.fel,args.rail_helper))
+    if args.kind == 'npu':
+        paths.add(args.objcopy)
     for directory in (args.ddr_build,args.ddr_restore):
         manifest = directory/'manifest.json'
         paths.add(manifest)
@@ -563,6 +639,14 @@ def run_image(args, backend=Live):
         descriptor = json.loads(descriptor_path.read_text()) if descriptor_path.exists() else None
         if descriptor:
             save(evidence/'image.board.json', descriptor)
+        if args.kind == 'npu' and 'ss_result_record' not in images.symbols(args.image):
+            manifest, session = images.finite_npu_files(args)
+            shutil.copy2(manifest, evidence/'manifest.json')
+            shutil.copy2(session, evidence/'npu-session-template.bin')
+            args.manifest = evidence/'manifest.json'
+            args.records = evidence/'npu-session-template.bin'
+            finite = images.load('preflight_npu_irq',(args.host_tree or ROOT)/'apps/npu-interrupt/host.py').finite
+            finite.original.session_profile(args.records.read_bytes(), (456,224,232,72,96,128))
         args.image = frozen
         if args.reference_inventory:
             verify_references(json.loads(args.reference_inventory.read_text()))
@@ -576,7 +660,9 @@ def run_image(args, backend=Live):
             info = images.inspect(frozen, args.kind, descriptor,args.host_tree)
             images.policy(info, args)
             application_inputs(args, info, evidence)
-        expected = json.loads(args.expect_spec.read_text()) if args.expect_spec else expectation(args.expect)
+            require(getattr(args, 'expect_result', None) is None or getattr(args, 'decoder', None) is not None,
+                    '--expect-result requires a result decoder.')
+        expected = validate_expectation(json.loads(args.expect_spec.read_text())) if args.expect_spec else expectation(args.expect)
         if expected is not None:
             save(evidence/'expect.json', expected)
         owner = backend(args, evidence, result)
@@ -602,7 +688,7 @@ def run_image(args, backend=Live):
                     result['output_sha256'] = hashlib.sha256(payload).hexdigest()
                     matched = captured['valid']
                     if expected:
-                        matched &= payload == bytes.fromhex(expected['hex']) if expected['mode'] == 'bytes' else expected['text'] in payload.decode(errors='replace')
+                        matched &= matches_expectation(expected, payload)
                     if not matched:
                         raise Mismatch('Returned result differs from expectation.')
                     if getattr(args, 'decoder', None):
@@ -616,11 +702,12 @@ def run_image(args, backend=Live):
                             failures = decoder.failures(decoded)
                             if failures:
                                 raise Mismatch('Decoder reported failures: '+str(failures))
-                        if hasattr(decoder, 'expected'):
+                        if getattr(args, 'expect_result', None) is not None or hasattr(decoder, 'expected'):
                             values = [p.read_bytes() for p in args.input]
                             if not values:
                                 values = [p.read_bytes() for p in sorted((evidence/'bundle').glob('input-*.bin'))]
-                            if decoded != decoder.expected(values):
+                            wanted = args.expect_result if getattr(args, 'expect_result', None) is not None else decoder.expected(values)
+                            if decoded != wanted:
                                 raise Mismatch('Decoded result differs from expectation.')
                     if info['entry_guard'] and getattr(args, 'restore_rails', False):
                         after = timed('restore-state', owner.live_state)
@@ -634,8 +721,12 @@ def run_image(args, backend=Live):
                     decoded = result.get('breadcrumbs',{})
                     fault = decoded.get('fault',{})
                     last = decoded.get('last',{})
-                    result['first_failure'] = {'site': fault.get('elr') or last.get('name','before-entry'),
-                                                'detail': decoded.get('summary','Watchdog reset')}
+                    origin = decoded.get('board_failure')
+                    result['first_failure'] = dict(origin, native_site=origin['site'],
+                        site=f"{origin['group']}:{origin['site']}:{origin['caller']}",
+                        detail=decoded.get('summary','Watchdog reset')) if origin else {
+                            'site': fault.get('elr') or last.get('name','before-entry'),
+                            'detail': decoded.get('summary','Watchdog reset')}
                 if owner.journal_error is not None:
                     raise owner.journal_error
             except BaseException as error:
@@ -673,9 +764,12 @@ def finish_result(result, evidence, started, stage):
 def check_image(args):
     """Apply launch admission and prepare uploads without constructing a USB owner."""
     descriptor = args.descriptor or Path(str(args.image)+'.board.json')
+    manifest = None
+    if args.kind == 'npu' and 'ss_result_record' not in images.symbols(args.image):
+        manifest = json.loads(images.finite_npu_files(args)[0].read_bytes())
     info = images.inspect(args.image, args.kind,
                           json.loads(descriptor.read_text()) if descriptor.exists() else None,
-                          args.host_tree)
+                          args.host_tree, manifest=manifest)
     images.policy(info, args)
     evidence = evidence_directory(args.evidence)
     application_inputs(args, info, evidence)
@@ -736,7 +830,12 @@ def development(argv=None):
     parser.add_argument('--image', type=Path)
     parser.add_argument('--input', type=Path, action='append', default=[])
     parser.add_argument('--decoder', type=Path)
-    parser.add_argument('--records', type=Path, default=state.RECORDS)
+    parser.add_argument('--records', type=Path)
+    parser.add_argument('--template', type=Path)
+    parser.add_argument('--manifest', type=Path)
+    parser.add_argument('--host-tree', type=Path)
+    parser.add_argument('--objcopy', type=Path)
+    parser.add_argument('--expect-result', type=json.loads)
     parser.add_argument('--port', default=os.environ.get('SUNSTONE_USB_PORT'), choices=PORTS)
     parser.add_argument('--evidence', type=Path)
     parser.add_argument('--state', type=Path)
@@ -763,8 +862,15 @@ def development(argv=None):
     if args.state:
         command += ['--state', str(args.state)]
     if args.kind == 'cpu-return':
+        command += ['--records', str(args.records or state.RECORDS)]
+    elif args.records:
         command += ['--records', str(args.records)]
-    if args.restore_rails:
+    for name in ('template', 'manifest', 'host_tree', 'objcopy'):
+        if getattr(args, name):
+            command += ['--'+name.replace('_','-'), str(getattr(args, name))]
+    if args.expect_result is not None:
+        command += ['--expect-result', json.dumps(args.expect_result)]
+    if args.restore_rails and args.kind != 'npu':
         command += ['--restore-rails']
     if args.decoder:
         command += ['--decoder', str(args.decoder)]
@@ -844,16 +950,19 @@ class Queue:
         image.write_bytes(data)
         if args.decode_application:
             descriptor = args.descriptor or Path(str(source)+'.board.json')
+            manifest = None
+            if args.kind == 'npu' and 'ss_result_record' not in images.symbols(source):
+                manifest = json.loads(images.finite_npu_files(args)[0].read_bytes())
             info = images.inspect(source, args.kind,
                                   json.loads(descriptor.read_text()) if descriptor.exists() else None,
-                                  args.host_tree)
+                                  args.host_tree, manifest=manifest)
             application_inputs(args, info, directory)
         # Freeze all caller-controlled launch inputs before queue visibility.
         options = {}
-        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','decode_application'):
+        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','decode_application','objcopy'):
             value = getattr(args,name)
             options[name] = str(value.resolve()) if isinstance(value,Path) else value
-        for name in ('records', 'decoder'):
+        for name in ('records', 'decoder', 'manifest'):
             path = getattr(args, name, None)
             if path:
                 target = directory/(name+path.suffix)
@@ -862,6 +971,8 @@ class Queue:
                 options[name] = str(target)
         if getattr(args, 'decoder_origin', None):
             options['decoder_origin'] = str(args.decoder_origin)
+        if args.expect_result is not None:
+            options['expect_result'] = json.dumps(args.expect_result)
         options['input'] = []
         for i,path in enumerate(args.input):
             target = directory/f'input-{i}.bin'
@@ -874,7 +985,13 @@ class Queue:
             options['descriptor'] = str(target)
         template = args.template or (images.GPU_TEMPLATE if args.kind=='gpu-return' else images.CONTROL)
         if args.kind not in ('probe', 'rail-helper'):
-            if args.kind=='gpu-return':
+            if args.kind == 'npu' and 'ss_result_record' not in images.symbols(source):
+                manifest, session = images.finite_npu_files(args)
+                destination = directory/'template'
+                destination.mkdir()
+                shutil.copy2(session, destination/'session.bin')
+                shutil.copy2(manifest, destination/'manifest.json')
+            elif args.kind=='gpu-return':
                 shutil.copytree(template, directory/'template')
             else:
                 # Generic sessions need service facts and manifest inputs,
@@ -1065,7 +1182,10 @@ def run_options(parser, submit=False):
     parser.add_argument('image', type=Path)
     parser.add_argument('--port', choices=('any',*PORTS) if submit else PORTS, required=True)
     parser.add_argument('--kind', choices=('cpu-return','gpu-return','npu','probe','rail-helper'), default='cpu-return', required=submit)
-    parser.add_argument('--expect', required=submit, help='Existing file: exact bytes; otherwise UTF-8 substring.')
+    parser.add_argument('--expect', required=submit, help='File: exact bytes or sunstone-board-expect-u32-v1 JSON; otherwise UTF-8 substring.')
+    parser.add_argument('--expect-result', type=json.loads, help='Required decoded JSON result; needs a result decoder.')
+    parser.add_argument('--manifest', type=Path, help='Exact finite NPU build manifest.')
+    parser.add_argument('--objcopy', type=Path, default=Path('/usr/bin/llvm-objcopy-21'))
     parser.add_argument('--approved-by', choices=('coordinator',))
     parser.add_argument('--storage-write', action='store_true')
     parser.add_argument('--descriptor', type=Path, help='Hash-bound image metadata; defaults to IMAGE.board.json.')
@@ -1075,7 +1195,7 @@ def run_options(parser, submit=False):
     parser.add_argument('--decode-application', action='store_true', help='Use the application decoder and its default inputs when available.')
     parser.add_argument('--records', type=Path, help='Board, thermal and CPU session records for a generic image.')
     parser.add_argument('--template', type=Path, help='Typed-session bundle, or legacy bundle with board/ and assets/.')
-    parser.add_argument('--host-tree', type=Path, help='Legacy GPU image source tree; generic images use this OS tree.')
+    parser.add_argument('--host-tree', type=Path, help='Legacy GPU or finite NPU host source tree; generic images use this OS tree.')
     parser.add_argument('--input', action='append', type=Path, default=[])
     parser.add_argument('--fel', type=Path, default=state.FEL)
     parser.add_argument('--rail-helper', type=Path, default=state.RAIL_HELPER)

@@ -251,6 +251,8 @@ int os_npu_task_privileged(void (*entry)(void *),void *context)
 int os_npu_pins(struct a733_pin_handoff *pins){return pins&&os_session_admitted();}
 int os_npu_start(void)
 {
+    extern int os_npu_sdk_bind(void);
+    if(!os_npu_sdk_bind())return 0;
     const struct os_session *s=os_session_admitted();
     if(!s||npu.attempted||board.session.deadline_us<=10000)return 0;
     npu.attempted=1;

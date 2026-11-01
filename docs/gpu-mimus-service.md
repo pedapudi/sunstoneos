@@ -31,9 +31,9 @@ integration only.
 
 | GPU range | Physical | Page, access | Owner of its bytes |
 | --- | --- | --- | --- |
-| `0x43000000`, `0x43800000`, 8 MiB each | Base and overlay models at `0x44000000`, `0x44800000` | 2 MiB, read-only | Loader; published at boot |
-| `0x46000000`, 12 MiB | Same: mimus's arena with the codes | 2 MiB, read-only | Recognizer |
-| `0x46C00000`, 2 MiB | Same: 64 KiB of tags, then sums | 2 MiB, read-write | GPU; read-only at EL0 and EL1 |
+| `0x43000000`, `0x43800000`, 8 MiB each | Base and overlay models at `0x44000000`, `0x44800000` | 256 KiB, read-only | Loader; published at boot |
+| `0x46000000`, 12 MiB | Same: mimus's arena with the codes | 256 KiB, read-only | Recognizer |
+| `0x46C00000`, 2 MiB | Same: 64 KiB of tags, then sums | 256 KiB, read-write | GPU; read-only at EL0 and EL1 |
 | PDS heap `+0x1e0000`; USC heap `+0x100000`, `+0x101000` | Job page; two program pages | 4 KiB, read-only | Worker |
 | Context-switch programs at the compute heap addresses | 18 pages | 4 KiB; shared and resume pages read-write | Worker |
 

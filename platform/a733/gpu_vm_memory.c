@@ -68,6 +68,11 @@ enum a733_gpu_vm_memory_result a733_gpu_vm_memory_build(struct a733_gpu_vm_memor
         (count && (!a733_span_excl_nonempty(maps, count * sizeof(*maps)) ||
         ((uintptr_t)maps % _Alignof(struct pvr_gpu_mapping)) ||
                    !a733_extents_disjoint_prechecked((uintptr_t)m, sizeof(*m), (uintptr_t)maps, count * sizeof(*maps))))) return A733_GPU_VM_MEMORY_INVALID;
+    /* This core (BVNC 36.56.104.183) has hardware erratum BRN 71317: 2 MiB
+     * and 1 MiB GPU pages cause page faults, so the vendor driver caps GPU
+     * pages at 256 KiB (rgxinit.c). */
+    for (size_t i = 0; i < count; ++i)
+        if (maps[i].page_shift == 20 || maps[i].page_shift == 21) return A733_GPU_VM_MEMORY_INVALID;
     struct pvr_gpu_vm_requirements required;
     if (!pvr_gpu_vm_require(maps, count, &required) || required.table_bytes != m->tables.bytes)
         return A733_GPU_VM_MEMORY_INVALID;

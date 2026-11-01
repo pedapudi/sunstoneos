@@ -153,7 +153,7 @@ static void setup(unsigned bits, unsigned channels)
     health_result = A733_I2S_RESOURCE_READY;
     profile = (struct a733_i2s_stream_profile){{24576000, 16000, 0, bits, 32, channels, 0},
         {{acquire, acquire_poll, release, now_us, i2s_read, i2s_write}, health},
-        &stream, A733_I2S_RECEIVE, 1000, 0};
+        &stream, A733_I2S_RECEIVE, 1000, 0, A733_I2S_ROUTE_I2S0};
     for (unsigned i = 0; i < 2; ++i) {
         mappings[i] = (struct a733_dma_mapping){samples[i], 0x41000100u + i*64, 64, A733_DMA_WRITE};
         segments[i] = (struct a733_dma_segment){{A733_I2S0_RXFIFO, 3, bits/8, 8},

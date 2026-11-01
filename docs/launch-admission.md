@@ -28,7 +28,7 @@ images. It does not imply physical qualification.
 | `tools/a733-returning-host.py` | Separate bundle validation, target ownership, watchdog arm/return and repeat admission callbacks | Live execution delegates to the runner. Failure utilities used by native fixtures remain. |
 | `apps/cpu-runtime-qualification/host.py` | Returning CPU bundle, DRAM/caller checks and disabled-watchdog precondition | Its live entry reaches the shared runner adapter. Legacy `run_once` remains for instruction/host fixtures and has no live CLI caller. Unsupported images fail runner admission. |
 | `apps/gpu-finite/host.py`, `apps/gpu-entry-checkpoint/host.py` | GPU bundle, memory restoration, disabled watchdog and retirement reports | Live entries use the shared adapter. Legacy callbacks remain for device-specific validation; the runner admits only supported image/report formats. |
-| `apps/npu-finite/host.py`, `apps/npu-interrupt/host.py` | NPU profile, bundle and disabled-watchdog requirements | Live entries reach the shared adapter. Existing standalone images lack the runner's return contract and are refused. Native NPU ownership and retirement checks remain. |
+| `apps/npu-finite/host.py`, `apps/npu-interrupt/host.py` | NPU profile, bundle and watchdog requirements | Live entries reach runner admission. Supported finite profiles use their exact watchdog, session and manifest, with verified retirement and DRAM restoration. Older unarmed images remain refused. |
 | `apps/os/cpu-return-host.py` | Result geometry, nonce, cleanup, drain and output integrity | Runner capture calls these checks. They validate returned data and remain required. |
 | `tools/run-launch-survey.py` | Frozen survey sources/files, identity, workspace and launch sequence | Its launch command delegates to native-probe admission. The caller-survey helper remains available to existing preparation/fixture consumers. |
 | `tools/run-a64-entry-probe.py`, `tools/run-native-startup-probe.py` | Frozen build, source/native identity, platform state and launch sequence | Launch commands delegate to the runner. Preparation and decoding remain. Old overlays need the native probe contract before physical execution. |
@@ -92,9 +92,10 @@ preparation and native watchdog instruction checks complement those fixtures.
 The bundle fixture retains conditional MMIO, SRAM restoration, native monitor
 limits, object equivalence and controlled-outcome validation.
 
-The measured runner/development check pair replaces duplicate transport cases
+For the admission consolidation ending at `78888bb6`, the measured
+runner/development check pair replaces duplicate transport cases
 with active-runner failure cases. Its total remains 56 named cases; elapsed time
-falls from 18.55 to 4.29 seconds on this host. The index still contains 762
+falls from 18.55 to 4.29 seconds on this host. Its check index contains 762
 scripts. Across changed code and build files, line count falls from 12,912 to
 9,928, excluding documentation. Raw counts and timings are in `metrics.json`
 and the `before-*`, `check-runner-4` and `check-dev-final` logs.
@@ -116,3 +117,12 @@ No physical run or new hardware qualification is recorded here. Existing images
 without a compatible watchdog, finite cleanup and return receipt remain blocked
 at runner admission. Historical cached READMEs are retained as evidence; new
 builds use the shared renderer.
+
+GPU receipt/thermal capture, complete binary expectations and finite NPU queue
+adapters share runner admission. Finite NPU inputs and host dependencies are
+frozen at submission; optional stopped-state capture precedes verified DRAM
+restoration. Thermal decode failure or incomplete evidence yields a result
+mismatch after normal return and preserves every raw capture. Resuming a port
+does not collect orphan jobs; daemon recovery skips live runner processes.
+The merge checks and three baseline builds are recorded under the evidence
+directory's `resume-merge/` subdirectory.

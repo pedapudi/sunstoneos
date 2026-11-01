@@ -1,5 +1,6 @@
 #include "a733_gpu_backend.h"
 #include "a733_gpu_platform_native.h"
+#include "pvr_compute_queue.h"
 #include <string.h>
 #include "gpu-backend-traces.h"
 
@@ -23,6 +24,7 @@ static unsigned lifetime_calls;
 static int lifetime_live(void *context)
 { (void)context; ++lifetime_calls; return lifetime_result; }
 static uint64_t operation_deadline;
+static struct pvr_compute_queue recovery_queue;
 #define CHECK(x) do { if (!(x)) return __LINE__; } while (0)
 
 /* The real power provider has separate native integration evidence. These
@@ -154,6 +156,85 @@ static int enabled(void)
     CHECK(result == 1 && backend.identity == PVR_FW_A733_BVNC);
     identity_confirmed = 1; return 0;
 }
+static uint64_t admitted_recovery_limit(void *ctx)
+{ return ctx==&provider_calls ? operation_deadline : 0; }
+static int recovery_setup(void)
+{
+    CHECK(!setup());
+    external.isolate=NULL;external.recovery_limit=admitted_recovery_limit;
+    config.compute_queue=&recovery_queue;
+    CHECK(!bind());CHECK(!enabled());
+    memory.phase=A733_GPU_MEMORY_PUBLISHED;
+    service.phase=PVR_GPU_SERVICE_READY;
+    CHECK(config.irq.mask(&backend));service.irq_masked=1;
+    uint64_t limit=0;
+    CHECK(config.recovery_begin && config.recovery_begin(&backend,&limit) &&
+        limit==operation_deadline && backend.recovering && !backend.recovery_write && !backend.recovery_reset);
+    service.phase=PVR_GPU_SERVICE_RECOVERING;
+    service.queue.phase=PVR_CCB_FAILED;service.control.phase=PVR_GPU_CONTROL_FAILED;
+    service.stop.phase=PVR_GPU_STOP_REGISTERS;service.stop.deadline=operation_deadline;
+    service.stop.unacknowledged=1;service.stop.count=1;
+    service.stop.steps[0]=(struct pvr_gpu_stop_step){1,0x100,8,0,UINT64_C(0xffeffffffffffc3d)};
+    return 0;
+}
+unsigned backend_recovery_check(void)
+{
+    const uint64_t mask=UINT64_C(0xffeffffffffffc3d);
+    for (unsigned scenario=0;scenario<11;++scenario) {
+        CHECK(!recovery_setup());
+        unsigned before=mmio_count;
+        expected_access=2;expected_offset=0x100;expected_width=8;expected_value=mask;
+        if (scenario==1) { CHECK(!config.stop.write(&backend,0x100,8,mask^1)); CHECK(mmio_count==before);continue; }
+        if (scenario==2) { service.stop.steps[0].offset=0xb40;CHECK(!config.stop.write(&backend,0x100,8,mask));CHECK(mmio_count==before);continue; }
+        if (scenario==3) { service.phase=PVR_GPU_SERVICE_READY;CHECK(!config.stop.write(&backend,0x100,8,mask));CHECK(mmio_count==before);continue; }
+        if (scenario==4) {
+            uint64_t value=0;CHECK(!config.stop.read(&backend,0x100,8,&value));CHECK(mmio_count==before);continue;
+        }
+        if (scenario==9) {
+            power.last_now=operation_deadline+1;
+            CHECK(!config.stop.write(&backend,0x100,8,mask) && mmio_count==before && power.token);continue;
+        }
+        if (scenario==10) {
+            backend.external.live=lifetime_live;lifetime_result=0;
+            CHECK(!config.stop.write(&backend,0x100,8,mask) && mmio_count==before && power.token);
+            lifetime_result=1;continue;
+        }
+        CHECK(config.stop.write(&backend,0x100,8,mask) && mmio_count==before+2 && backend.recovery_write);
+        if (scenario==5) {
+            observe=0;*(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS+0x100)=mask^1;observe=1;
+        }
+        expected_access=1;service.stop.steps[0].kind=0;service.stop.steps[0].mask=UINT64_MAX;
+        uint64_t value=0;
+        CHECK(config.stop.read(&backend,0x100,8,&value) && mmio_count==before+4);
+        CHECK(value==(scenario==5 ? mask^1 : mask));
+        expected_access=0;
+        service.stop.phase=PVR_GPU_STOP_ISOLATE;service.stop.index=service.stop.count;
+        if (scenario==5) {
+            CHECK(!backend.recovery_reset && !config.stop.isolate(&backend) && !provider_calls && power.token);continue;
+        }
+        CHECK(backend.recovery_reset);
+        off_mode=scenario==6 ? 1 : scenario==7 ? 2 : scenario==8 ? 3 : 0;
+        int begin=config.stop.isolate(&backend);
+        if (scenario==6) {CHECK(!begin && power.token && memory.phase==A733_GPU_MEMORY_PUBLISHED);continue;}
+        CHECK(begin);service.stop.isolation_started=1;
+        int result=config.stop.isolate_poll(&backend);
+        if (scenario==7) {CHECK(result<0 && power.token && memory.phase==A733_GPU_MEMORY_PUBLISHED);continue;}
+        CHECK(result==0);
+        result=config.stop.isolate_poll(&backend);
+        if (scenario==8) {CHECK(result<0 && memory.phase==A733_GPU_MEMORY_PUBLISHED);continue;}
+        CHECK(result==1 && memory.phase==A733_GPU_MEMORY_OFFLINE && backend.phase==A733_GPU_BACKEND_ISOLATED && !power.token);
+        service.stop.phase=PVR_GPU_STOP_STOPPED;service.stop.isolation_observed=1;
+        CHECK(a733_gpu_backend_stopped(&backend,&service));
+        before=mmio_count;
+        backend.recovery_write=0;CHECK(!a733_gpu_backend_stopped(&backend,&service));backend.recovery_write=1;
+        backend.recovery_reset=0;CHECK(!a733_gpu_backend_stopped(&backend,&service));backend.recovery_reset=1;
+        service.phase=PVR_GPU_SERVICE_READY;CHECK(!a733_gpu_backend_stopped(&backend,&service));service.phase=PVR_GPU_SERVICE_RECOVERING;
+        service.irq_masked=0;CHECK(!a733_gpu_backend_stopped(&backend,&service));service.irq_masked=1;
+        service.queue.phase=PVR_CCB_ACTIVE;CHECK(!a733_gpu_backend_stopped(&backend,&service));service.queue.phase=PVR_CCB_FAILED;
+        CHECK(a733_gpu_backend_stopped(&backend,&service) && mmio_count==before);
+    }
+    return 0;
+}
 static int accesses(const struct trace *trace, unsigned count, int stopping)
 {
     for (unsigned i = 0; i < count; ++i) {
@@ -171,7 +252,8 @@ static int accesses(const struct trace *trace, unsigned count, int stopping)
         unsigned previous = mmio_count; uint64_t value = 0;
         int success = t->write ? (stopping ? config.stop.write : config.start.write)(&backend, t->offset, t->width, t->value) :
                                 (stopping ? config.stop.read : config.start.read)(&backend, t->offset, t->width, &value);
-        CHECK(success && mmio_count == previous + 1);
+        /* A 64-bit register is two 32-bit transactions. */
+        CHECK(success && mmio_count == previous + (t->width == 8 ? 2 : 1));
     }
     expected_access = 0; return 0;
 }
@@ -223,6 +305,13 @@ unsigned backend_check(void)
     CHECK(!accesses(start_trace_0, sizeof(start_trace_0) / sizeof(*start_trace_0), 0));
     CHECK(!accesses(start_trace_1, sizeof(start_trace_1) / sizeof(*start_trace_1), 0));
     CHECK(config.start.publish(&backend) && memory.phase == A733_GPU_MEMORY_PUBLISHED);
+    /* The model's secure pages are plain memory, so both writes read back. */
+    CHECK(backend.secure_smc0 == 2 && !backend.secure_drm);
+    /* The first timer correlation: record 1 at the core rate, then sequence 1. */
+    const volatile uint64_t *record = (const volatile uint64_t *)((uintptr_t)region(PVR_FW_UTILIZATION) + 40);
+    CHECK(*(const volatile uint32_t *)((uintptr_t)region(PVR_FW_UTILIZATION) + 10240) == 1 &&
+          record[0] && record[1] == record[0] && record[4] == A733_GPU_CORE_HZ &&
+          record[3] == (UINT64_C(256000000) << 20) / (A733_GPU_CORE_HZ / 1000));
     *(unsigned char *)((uintptr_t)region(PVR_FW_SYSTEM_INIT) + 352) = 1;
     uint32_t value = 0;
     CHECK(config.start.started(&backend, &value) && value == 1);
@@ -239,6 +328,10 @@ unsigned backend_check(void)
     CHECK(config.control.read32(&backend, 0x8a8, &value));
     CHECK(config.control.write32(&backend, 0x8b0, 1));
     const unsigned char command[88] = {7}; CHECK(config.control.event(&backend, command));
+    /* The health check's executed count reaches only the controller's fields. */
+    *(volatile uint32_t *)((uintptr_t)region(PVR_FW_OS_DATA) + 568) = 5;
+    CHECK(config.executed && config.executed(&backend, &service.control.executed_after) &&
+          service.control.executed_after == 5);
     CHECK(config.stop.sync_write(&backend, 0));
     *(uint32_t *)region(PVR_FW_POWER_SYNC) = 1;
     service.stop.phase=PVR_GPU_STOP_WAIT_OFF;
@@ -255,7 +348,9 @@ unsigned backend_check(void)
     CHECK(!setup()); observe = 0;
     *(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS + 0x20) = 0x243800;
     *(volatile uint32_t *)(uintptr_t)(A733_GPU_REGISTERS + 0x18) = 0x68b7;
-    observe = 1; CHECK(!bind()); CHECK(!enabled()); CHECK(mmio_count == 5);
+    /* Identity 0x20 as two halves, then 0x20 and 0x18, the system word and
+     * the capabilities as two halves: seven 32-bit transactions. */
+    observe = 1; CHECK(!bind()); CHECK(!enabled()); CHECK(mmio_count == 7);
 
     CHECK(!setup()); observe = 0;
     *(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS + 0x20) = PVR_FW_A733_BVNC + 1;
@@ -351,5 +446,55 @@ unsigned backend_event_check(void)
         CHECK(atomic_load(&backend.error) == A733_GPU_BACKEND_ACCESS && !mmio_count);
         for (unsigned i = 0; i < PVR_CCB_COMMAND_BYTES; ++i) CHECK(service.queue.last_event[i] == 0);
     }
+    return 0;
+}
+
+/* Use the controller's real callback destinations. A stack-only callback
+ * check misses the full record copied into the service-owned controller. */
+unsigned backend_compat_check(void)
+{
+    CHECK(!setup()); CHECK(!bind());
+    CHECK(pvr_ccb_init(&service.queue, &config.queue, &backend, 1) == PVR_CCB_OK);
+    CHECK(!enabled()); CHECK(config.start.publish(&backend));
+    unsigned char expected[64] = {0};
+    const uint32_t version = 3;
+    const uint64_t bvnc = PVR_FW_A733_BVNC;
+    memcpy(expected, &version, 4); memcpy(expected + 16, &version, 4);
+    memcpy(expected + 8, &bvnc, 8); memcpy(expected + 24, &bvnc, 8);
+    expected[56] = 1;
+    memcpy((unsigned char *)region(PVR_FW_OS_INIT) + 40, expected, sizeof(expected));
+    service.phase = PVR_GPU_SERVICE_CHECKING;
+    service.start.phase = PVR_GPU_START_BOOTED;
+    CHECK(pvr_gpu_control_init(&service.control, &service.start, &service.queue,
+                              &config.control, &backend, operation_deadline));
+    CHECK(pvr_gpu_control_poll(&service.control, 4) == PVR_GPU_CONTROL_AGAIN);
+    CHECK(service.control.phase == PVR_GPU_CONTROL_SUBMIT_HEALTH &&
+          !memcmp(service.control.compatibility, expected, sizeof(expected)) &&
+          !atomic_load(&backend.error));
+    /* The exception permits only the exact complete record during COMPAT.
+     * Neither a shifted/truncated record nor unrelated service state may
+     * become writable through this callback. */
+    for (unsigned mode = 0; mode < 5; ++mode) {
+        CHECK(!setup()); CHECK(!bind());
+        CHECK(pvr_ccb_init(&service.queue, &config.queue, &backend, 1) == PVR_CCB_OK);
+        CHECK(!enabled()); CHECK(config.start.publish(&backend));
+        service.phase = PVR_GPU_SERVICE_CHECKING;
+        service.start.phase = PVR_GPU_START_BOOTED;
+        CHECK(pvr_gpu_control_init(&service.control, &service.start, &service.queue,
+                                  &config.control, &backend, operation_deadline));
+        if (mode == 4) service.control.phase = PVR_GPU_CONTROL_READY;
+        void *out = mode == 3 ? (void *)&service.phase : service.control.compatibility + (mode == 0);
+        unsigned off = mode == 1 ? 1 : 0;
+        size_t bytes = mode == 2 ? 63 : mode == 3 ? sizeof(service.phase) : 64;
+        CHECK(!config.control.compat(&backend, off, out, bytes));
+        CHECK(atomic_load(&backend.error) == A733_GPU_BACKEND_ACCESS);
+    }
+    return 0;
+}
+
+unsigned backend_progress_check(void)
+{
+    CHECK(!setup()); CHECK(!bind()); CHECK(!enabled());
+    CHECK(config.start.publish(&backend));
     return 0;
 }

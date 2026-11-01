@@ -5,7 +5,7 @@
  * docs/designs/power-domains.md).
  *
  * One owner per image is the only writer of PCK600 domains 1 (DE_SYS),
- * 4 (NPU) and 5 (GPU_TOP). Only domain 5 supports a healthy OFF request.
+ * 4 (NPU) and 5 (GPU_TOP). Domains 4 and 5 support a healthy OFF request.
  * One service task per image runs a733_power_service_step(): every PMIC
  * transaction, the once-per-boot supply verification and every domain
  * transition. The task must be the PMIC provider's designated task. */

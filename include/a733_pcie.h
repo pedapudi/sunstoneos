@@ -23,7 +23,7 @@ struct a733_pcie_config {
     uint32_t fabric[3]; /* Exact AHB/NSI/MBUS selectors/divisors/gates. */
     uint32_t fabric_hz[3];
     /* Advertised and target link speed: 1, 2 or 3 for 2.5, 5 or 8 GT/s. The
-     * board kernel DTS sets max-link-speed 3. The applications select 1. */
+     * board kernel DTS and native applications select max-link-speed 3. */
     unsigned link_speed;
 };
 struct a733_pcie_ops {

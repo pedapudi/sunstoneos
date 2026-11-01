@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Prepare or capture the exact NPU returning profile; no admission defaults."""
-import argparse,hashlib,importlib.util,io,json,re,secrets,shutil,struct,sys
+import argparse,hashlib,importlib.util,io,json,re,secrets,shutil,struct,sys,subprocess
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[2]
@@ -17,17 +17,48 @@ STARTUP='npu-startup-return-v1'
 INFERENCE='npu-single-inference-return-v1'
 # The NPU runtime client (build.py --runtime): one job of each linked network through npu_job_run.
 RUNTIME='npu-runtime-return-v1'
+SWITCH='npu-model-switch-return-v1'
+SDK='npu-sdk-return-v1'
+POWER='npu-power-cycle-return-v1'
 # The startup client's receipt magic, monitor detail, inference jobs and interrupt completions.
 STARTUP_CLIENT={STARTUP:(0x4e50555354415231,0x4e505553,0,1),INFERENCE:(0x4e5055494e463031,0x4e505549,1,2),
- RUNTIME:(0x4e50555254523031,0x4e505552,2,3)}
+ RUNTIME:(0x4e50555254523031,0x4e505552,2,3),
+ SWITCH:(0x4e50555357433031,0x4e505557,3,4),
+ SDK:(0x4e505553444b3031,0x4e505544,2,3)}
 MBUS_CHECKPOINT='npu-entry-mbus-checkpoint-v1'
 IRQ_CHECKPOINT='npu-entry-irq-checkpoint-v1'
 PROVIDER_CHECKPOINT='npu-entry-provider-checkpoint-v1'
-PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT,RESTART,STARTUP,INFERENCE,RUNTIME);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
+PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT,RESTART,STARTUP,INFERENCE,RUNTIME,SWITCH,SDK,POWER);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
 HOST_SOURCES=('apps/npu-finite/host.py','apps/npu-finite/stopped-capture.py','tools/a733-returning-host.py','tools/a733-crumbs.py','include/sunstone_crumb.h','apps/npu-convolution/prepare-supervised.py','apps/npu-convolution/observe.py','tools/check-a733-smp.py','tools/check-a733-smp-supervised.py','tools/check-a733-smp-observe.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/usb_guard.py','tools/npu-models.json','platform/a733-smp-supervised/launch.c','platform/a733-smp-observe/launch.S','platform/a733-smp-observe/launch.ld','platform/a733-smp-cached/boot.h')
 def save(path,value):base.save_json(path,value)
 
+def watchdog_marker(data):
+ elf=ELFFile(io.BytesIO(data))
+ markers=[x for x in elf.get_section_by_name('.symtab').iter_symbols() if x.name=='os_cpu_return_watchdog' and x['st_shndx']!='SHN_UNDEF']
+ require(len(markers)==1 and markers[0]['st_size']==40,'Missing or malformed finite watchdog marker.')
+ marker=markers[0];section=elf.get_section(marker['st_shndx']);offset=marker['st_value']-section['sh_addr']
+ words=struct.unpack('<5Q',section.data()[offset:offset+40])
+ require(words==(0x31544457534f5243,2,0xb1,0x07090000,20),'Finite watchdog marker differs.')
+ return {'mode':words[2],'session_seconds':words[4]}
+
+def build_launcher(output,clang,lld,objcopy,*,watchdog_mode=0xb1):
+ """Build the explicitly selected finite NPU armed-mode launcher."""
+ require(watchdog_mode==0xb1,'Finite NPU watchdog mode differs.')
+ for name,path in [('launch.c',ROOT/'platform/a733-smp-supervised/launch.c'),('launch.S',ROOT/'platform/a733-smp-observe/launch.S'),('launch.ld',ROOT/'platform/a733-smp-observe/launch.ld'),('boot.h',ROOT/'platform/a733-smp-cached/boot.h')]:
+  (output/name).write_bytes(path.read_bytes())
+ flags=['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Os','-g','-Wall','-Wextra','-Werror','-DSUNSTONE_NPU_FINITE_WATCHDOG=1',f'-DA733_SMP_CONTRACT_MAGIC={original.CONTRACT_MAGIC}ULL','-DA733_SUPERVISED_CONTRACT_VERSION=3','-DA733_SUPERVISED_SESSION_BYTES=0','-I'+str(output)]
+ commands=[[clang,*flags,'-MD','-MF',output/(name+'.d'),'-c',output/name,'-o',output/(name+'.o')] for name in ('launch.c','launch.S')]
+ commands += [[lld,'-T',output/'launch.ld',output/'launch.c.o',output/'launch.S.o','-o',output/'launch.elf'],[objcopy,'-O','binary',output/'launch.elf',output/'launch.bin']]
+ for command in commands:
+  command=list(map(str,command));result=subprocess.run(command,capture_output=True,text=True)
+  with (output/'build.log').open('a') as stream:stream.write(result.stdout+result.stderr)
+  require(result.returncode==0,'Finite NPU armed launcher build failed.')
+ save(output/'commands.json',[list(map(str,c)) for c in commands])
+ require(0<(output/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM reservation.')
+
+
 def image_profile(data,manifest):
+ watchdog_marker(data)
  parts,address,build,layout=original.image_data(data)
  elf=ELFFile(io.BytesIO(data));symbols={s.name:s for s in elf.get_section_by_name('.symtab').iter_symbols()}
  # Select the parser from native immutable markers rather than a manifest.
@@ -38,7 +69,10 @@ def image_profile(data,manifest):
   value=struct.unpack_from('<4Q',part['data'],start-part['address'])
   execution=next((name for name,description in STARTUP_CLIENT.items() if value==(description[0],1,description[2],description[3])),None)
   require(execution is not None,'Unsupported native startup marker.')
- elif 'npu_restart_return_profile' in names:execution=RESTART
+ elif 'npu_restart_return_profile' in names:
+  marker=symbols['npu_restart_return_profile'];start=int(marker['st_value'])
+  part=next(p for p in parts if p['address']<=start and start+32<=p['address']+len(p['data']))
+  execution=POWER if struct.unpack_from('<Q',part['data'],start-part['address'])[0]==0x4e50555057523031 else RESTART
  elif 'npu_entry_checkpoint_provider_profile' in names:execution=PROVIDER_CHECKPOINT
  elif 'npu_entry_checkpoint_irq_profile' in names:execution=IRQ_CHECKPOINT
  elif 'npu_entry_checkpoint_mbus_profile' in names:execution=MBUS_CHECKPOINT
@@ -76,16 +110,18 @@ def image_profile(data,manifest):
   else:
    require('npu_entry_checkpoint_provider_profile' not in symbols and all(n not in symbols for n in ('a733_npu_application_init','npu_convolution_startup_poll','npu_service_activate','vTaskStartScheduler')),'Checkpoint contains a provider or scheduler constructor.')
  else:require('npu_entry_checkpoint_profile' not in symbols,'Checkpoint image cannot use numerical profile.')
- runtime=manifest['execution_profile']==RUNTIME
+ runtime=manifest['execution_profile'] in (RUNTIME,SWITCH,SDK)
+ if manifest['execution_profile']==SDK:
+  require(all(n in symbols for n in ('ss_npu_run','ss_npu_close','ss_npu_service_step','sdk_service')),'Missing linked SDK owner or public API.')
  if startup:
   engine=('npu_runtime_client','npu_job_run','npu_runtime_stop_poll') if runtime else ('npu_startup_client','npu_convolution_stop_poll')
   require(read('npu_startup_return_profile')==struct.pack('<4Q',startup[0],1,startup[2],startup[3]) and
    all(n in symbols for n in ('npu_startup_return_ready','npu_service_activate','vTaskStartScheduler')+engine) and
    'client' not in symbols and (not runtime or 'npu_convolution_startup_poll' not in symbols),'Startup-only implementation differs.')
  else:require('npu_startup_return_profile' not in symbols,'Startup-only image requires its distinct profile.')
- restart=manifest['execution_profile']==RESTART
+ restart=manifest['execution_profile'] in (RESTART,POWER)
  if restart:
-  require(read('npu_restart_return_profile')==struct.pack('<4Q',0x4e50555253543031,1,2,4) and
+  require(read('npu_restart_return_profile')==struct.pack('<4Q',0x4e50555057523031 if manifest['execution_profile']==POWER else 0x4e50555253543031,1,2,4) and
    all(n in symbols and symbols[n]['st_value'] for n in ('npu_convolution_restart_poll','npu_service_restart_prepare','npu_service_restart_resume','npu_application_irq_restart')),
    'Missing exact returning restart implementation.')
  else:require('npu_restart_return_profile' not in symbols,'Restart image requires its distinct profile.')
@@ -97,8 +133,13 @@ def image_profile(data,manifest):
  require(not runtime or references[0]==geometry['reference'],'Runtime network 0 is not the selected model.')
  if startup:geometry['startup_only']=True
  if runtime:geometry.update(runtime=True,references=references)
+ if manifest['execution_profile']==SWITCH:geometry['model_switch']=True
+ if manifest['execution_profile']==SDK:geometry['sdk']=True
  if manifest['execution_profile']==INFERENCE:geometry['single_inference']=True
  if restart:geometry['restart']=True
+ if manifest['execution_profile']==POWER:
+  require(all(n in symbols for n in ('a733_npu_startup_power_off','a733_npu_startup_power_restart')),'Missing domain OFF/ON sequencer.')
+  geometry['power_cycle']=True
  if thermal:
   require(read('npu_finite_thermal_profile')==struct.pack('<4Q',0x4e50555448533031,1,160,2) and
    layout[:3]==(616,224,392),'Thermal marker/session layout differs.')
@@ -121,7 +162,7 @@ def image_profile(data,manifest):
  if capture is not None:geometry['stopped_capture']=capture
  return parts,address,build,layout,geometry
 
-def geometry_profile(g):return RUNTIME if g.get('runtime') else INFERENCE if g.get('single_inference') else STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
+def geometry_profile(g):return POWER if g.get('power_cycle') else SDK if g.get('sdk') else SWITCH if g.get('model_switch') else RUNTIME if g.get('runtime') else INFERENCE if g.get('single_inference') else STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
 
 def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,execution_profile=PROFILE):
  """Check the actual native wire record without external process evidence."""
@@ -166,7 +207,7 @@ def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
  for name,source in [('image.elf',image),('session.bin',session)]:shutil.copy2(source,output/name)
  save(output/'manifest.json',{'execution_profile':execution,'build_id':build.hex(),'final_elf':sha(data)})
  save(output/'admission.json',{})
- original.build_launcher(output,clang,lld,objcopy)
+ build_launcher(output,clang,lld,objcopy)
  request,contract=original.request_bytes(address,build,raw,profile)
  for name,value in [('request.bin',request),('contract.bin',contract),('result-zero.bin',bytes(16384)),('report-zero.bin',bytes(128))]:(output/name).write_bytes(value)
  segments=[]
@@ -287,7 +328,14 @@ def validate_reports(monitor,platform,receipt,p):
    'NPU_STAGE=QUIESCENT\nNPU_STARTUP=READY_CLOSED_STOPPED; inference_jobs=0\n')
   require(status==0 and text==expected,'Startup-only stage, job or IRQ result differs.')
   return {'normal_return':True,'startup_bootstrap':True,'functional_success':False,'controlled_negative':False,'jobs':0,'status':0,'diagnostic_deadline':deadline,'log':text}
- passed='PASS NPU two matched jobs across normal local restart and parked providers' if p.get('execution_profile')==RESTART else 'PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers'
+ power=p.get('execution_profile')==POWER
+ passed='PASS NPU two matched jobs across domain OFF/restart and parked providers' if power else 'PASS NPU two matched jobs across normal local restart and parked providers' if p.get('execution_profile')==RESTART else 'PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers'
+ if power:
+  samples=[]
+  for name,expected in (('OFF',0),('ON',8)):
+   fields=re.findall(r'NPU_POWER_CYCLE_'+name+r'=\n(0x[0-9a-f]{16})\n(0x[0-9a-f]{16})\n(0x[0-9a-f]{16})\n',text)
+   require(len(fields)==1 and tuple(int(v,16) for v in fields[0][:2])==(expected,expected) and 0<int(fields[0][2],16)<20000000,'Missing or invalid physical power transition.')
+   samples.append({'policy_nibble':expected,'status_nibble':expected,'request_to_observation_us':int(fields[0][2],16)})
  pattern=r'NPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n((?:0x[0-9a-f]{16}\n){32})NPU_SECOND_OUTPUT=\n((?:0x[0-9a-f]{16}\n)+)('+re.escape(passed)+r'|FAIL NPU numerical comparison|REFUSED NPU thermal admission; configured sensor disabled and providers parked)\n'
  matches=list(re.finditer(pattern,text));require(len(matches)==1 and matches[0].end()==len(text),'Missing or ambiguous finite output/terminal marker.')
  values=lambda raw:[int(x,16) for x in raw.splitlines()]
@@ -314,7 +362,7 @@ def validate_reports(monitor,platform,receipt,p):
    'first_digest':bytes(first).hex(),'last_output':bytes(second).hex(),'output_pattern':output_pattern(first,second),
    'timing':timing(text),'log':text}
  require(matched==(status==0) and matches[0][3].startswith('PASS')==(status==0),'Numerical status disagrees with copied outputs.')
- return {'normal_return':True,'functional_success':matched,'controlled_negative':not matched,'status':status,'diagnostic_deadline':deadline,'first_digest':bytes(first).hex(),'second_output':bytes(second).hex(),'output_pattern':output_pattern(first,second),'timing':timing(text),'log':text}
+ return {'normal_return':True,'functional_success':matched,'controlled_negative':not matched,'status':status,'diagnostic_deadline':deadline,'first_digest':bytes(first).hex(),'second_output':bytes(second).hex(),'output_pattern':output_pattern(first,second),'timing':timing(text),'log':text,**({'power_cycle':samples} if power else {})}
 
 def inference_report(text,status,deadline,g):
  """The single-inference log: startup, one job, CLOSE, then the copied output.
@@ -342,10 +390,13 @@ def runtime_report(text,status,deadline,g):
  head=('NPU_STAGE=WAIT_STARTUP\n'+''.join(f'NPU_STAGE=JOB network=0x{n:016x}\n' for n in range(jobs))+
   'NPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n'
   f'NPU_IRQ_COMPLETIONS=0x{1+jobs:016x}\nNPU_IRQ_STOPPED=0x0000000000000001\nNPU_STAGE=QUIESCENT\n')
- body=''.join(re.escape(f'NPU_OUTPUT network=0x{n:016x}\n')+r'((?:0x[0-9a-f]{16}\n)+)' for n in range(jobs))
+ compact=g.get('model_switch',False)
+ label='NPU_OUTPUT_HEX' if compact else 'NPU_OUTPUT'
+ encoded=r'((?:(?:[0-9a-f]{2}){1,64}\n)+)' if compact else r'((?:0x[0-9a-f]{16}\n)+)'
+ body=''.join(re.escape(f'{label} network=0x{n:016x}\n')+encoded for n in range(jobs))
  match=re.fullmatch(re.escape(head)+body+r'NPU_INFERENCE=(MATCH|MISMATCH); inference_jobs='+str(jobs)+r'\n',text)
  require(match is not None,'Runtime stage, job, IRQ or output log differs.')
- outputs=[bytes(int(x,16) for x in match[n+1].splitlines()) if all(int(x,16)<256 for x in match[n+1].splitlines()) else None for n in range(jobs)]
+ outputs=[bytes.fromhex(match[n+1]) if compact else bytes(int(x,16) for x in match[n+1].splitlines()) if all(int(x,16)<256 for x in match[n+1].splitlines()) else None for n in range(jobs)]
  require(all(o is not None for o in outputs),'Invalid copied output byte.')
  require([len(o) for o in outputs]==[len(r) for r in references],'Copied output extent differs.')
  matches=[o==r for o,r in zip(outputs,references)];matched=all(matches)
@@ -357,9 +408,16 @@ def transfer(transaction,address,data,destination):
  with base.sealed_source(data) as (source,fd):transaction('write',hex(address),source,'read',hex(address),len(data),destination,pass_fds=(fd,))
  require(destination.read_bytes()==data,'Restoration readback differs.');base.sync_file(destination)
 
+def require_entry_state(transaction):
+ values=[int(v,16) for v in transaction(*[a for address in ('0x02050014','0x070501c0','0x070501d4','0x03000008','0x02002b04','0x02002b00') for a in ('readl',address)]).split()]
+ require(len(values)==6 and not values[0]&1 and values[1:3]==[0,0], 'Watchdog or reset redirect enabled before execution.')
+ require(values[3]&2 and not values[4]&0x70001 and not values[5]&0x80000000,'NPU SRAM/clock/reset entry state differs.')
+
 def run_once(transaction,launch,ready,bundle,p,evidence,record,save):
  """Root owns the lock/claim; every transport failure is terminal to this call."""
- require(not record.get('launch_attempted'),'One attempt only.');ready();base.verify_dram(transaction,evidence,record,save)
+ require(not record.get('launch_attempted'),'One attempt only.');ready()
+ require_entry_state(transaction)
+ base.verify_dram(transaction,evidence,record,save)
  backup=evidence/'before-DRAM.bin';transaction('read',hex(DRAM[0]),DRAM[1],backup)
  require(backup.stat().st_size==DRAM[1],'Incomplete full DRAM backup.');base.sync_file(backup);backup_hash=base.digest(backup)
  record.update(dram_backup_sha256=backup_hash,dram_restored=False);save()
@@ -368,7 +426,11 @@ def run_once(transaction,launch,ready,bundle,p,evidence,record,save):
  # readl uses SRAM scratch, so preserve it through preload before this batch.
  words=[int(v,16) for v in transaction(*[a for address in ('0x20','0x24','0x28','0x3c','0x40') for a in ('readl',address)]).split()]
  require(words==[0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d],'Forced-FEL ROM entry differs from the reviewed instructions.')
- ready();require(int(transaction('readl','0x02050014').strip(),16)&1==0,'Watchdog enabled before execution.')
+ # The shared returning host arms WDT0 inside launch(), after these checks.
+ # Require a fresh CPU-route/held-reset baseline after any whole-system reset;
+ # DDR evidence is separately validated before this DRAM preload is allowed.
+ ready()
+ require_entry_state(transaction)
  record.update(backup_sha256=p['_backup_hashes'].copy());save();launch()
  require('soc=00001903(A733)' in transaction('version'),'Returned service is not A733 ROM.')
  reports=[]
@@ -403,7 +465,7 @@ def run(args):
   return run_once(transaction,launch,ready,args.bundle.resolve(),p,args.evidence,record,journal)
  execution=json.loads((args.bundle/'prepared.json').read_bytes()).get('execution_profile')
  require(execution in PROFILES,'Unsupported execution profile.')
- result=returning.run(args,base=base,profile=execution,validate_bundle=validate_bundle,admit=admit,execute=execute,description='NPU finite inference and validated RAM return')
+ result=returning.run(args,base=base,profile=execution,validate_bundle=validate_bundle,admit=admit,execute=execute,description='NPU finite inference and validated RAM return',watchdog=watchdog_marker((args.bundle/'image.elf').read_bytes()))
  return 0 if result['functional_success'] or result.get('checkpoint') in ('ENTRY_MEMORY_READY','PROVIDERS_CONSTRUCTED') or result.get('startup_bootstrap') else 2
 
 def main(argv=None):

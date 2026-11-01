@@ -116,16 +116,18 @@ with tempfile.TemporaryDirectory(prefix='returning-transport-') as temporary:
   # Check the production NPU adapter delegates admission and execution, without replaying reports.
   npu=load('npu_host',root/'apps/npu-finite/host.py');identity=[1,56,3,4,5];seen=[]
   # run() selects the execution profile from the prepared bundle record.
+  (bundle/'image.elf').write_bytes(b'modeled marker input; actual ELF marker checked in watchdog-linked-check.py')
   (bundle/'prepared.json').write_text(json.dumps({'execution_profile':npu.PROFILE})+'\n')
   prepared={};a=types.SimpleNamespace(bundle=bundle,evidence=t/'adapter')
   def delegated(arguments,**callbacks):
+   assert callbacks['watchdog']=={'mode':0xb1,'session_seconds':20}
    assert arguments is a and callbacks['base'] is npu.base and callbacks['profile']==npu.PROFILE and callbacks['validate_bundle'] is npu.validate_bundle
    callbacks['admit'](a,prepared,old,identity,'3-3.11')
    return callbacks['execute']('transaction','wait','ready',prepared,{'marker':'record'},'journal')
   for successful in (True,False):
    def execute(*values):
     assert values==('transaction','wait','ready',bundle,prepared,a.evidence,{'marker':'record'},'journal');return {'functional_success':successful}
-   with patch.object(npu,'validate_bundle',return_value=prepared),patch.object(npu.returning,'run',delegated),patch.object(npu,'run_once',execute):assert npu.run(a)==(0 if successful else 2)
+   with patch.object(npu,'validate_bundle',return_value=prepared),patch.object(npu,'watchdog_marker',return_value={'mode':0xb1,'session_seconds':20}),patch.object(npu.returning,'run',delegated),patch.object(npu,'run_once',execute):assert npu.run(a)==(0 if successful else 2)
    results.append({'name':'NPU-adapter-'+('success' if successful else 'mismatch'),'passed':True})
  # Exercise the real shared churn decision without opening its registry.
  real_guard=load('pinned_usb_guard',root/'tools/usb_guard.py')

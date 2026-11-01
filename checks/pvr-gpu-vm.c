@@ -11,8 +11,8 @@ static const struct pvr_gpu_mapping fixture[] = {
     {0x400000,      UINT64_C(0x200000000), 0x8000,   14, 8},
     {0x800000,      UINT64_C(0x220000000), 0x20000,  16, 15},
     {0x1000000,     UINT64_C(0x230000000), 0x80000,  18, 0},
-    {0x20000000,    UINT64_C(0x240000000), 0x200000, 20, 2},
-    {0x3fe00000,    UINT64_C(0x260000000), 0x400000, 21, 4},
+    {0x20000000,    UINT64_C(0x240000000), 0x200000, 18, 2},
+    {0x3fe00000,    UINT64_C(0x260000000), 0x400000, 18, 4},
     {UINT64_C(0xda00000000), UINT64_C(0x300000000), 0x1000, 12, 1},
     {UINT64_C(0xe000000000), UINT64_C(0x310000000), 0x1000, 12, 1},
     {UINT64_C(0xfffffff000), UINT64_C(0xffffff000), 0x1000, 12, 8}
@@ -57,7 +57,7 @@ static int walk(uint64_t address, uint64_t *physical, uint64_t *permission)
     if (!(de & 1)) return 0;
     unsigned code = (de >> 1) & 7;
     static const unsigned shifts[] = {12, 14, 16, 18, 20, 21};
-    assert(code < 6);
+    assert(code < 4);
     unsigned shift = shifts[code];
     const unsigned char *pt = table_at(de & UINT64_C(0xfffffff000));
     uint64_t leaf = read_le(pt + ((address & 0x1fffff) >> shift) * 8, 8);
@@ -77,7 +77,7 @@ int main(int argc, char **argv)
     assert(argc == 2);
     struct pvr_gpu_vm_requirements r;
     assert(pvr_gpu_vm_require(fixture, COUNT, &r));
-    assert(r.table_pages == 17 && r.directory_pages == 5 && r.leaf_tables == 11 && r.mapped_pages == 18);
+    assert(r.table_pages == 17 && r.directory_pages == 5 && r.leaf_tables == 11 && r.mapped_pages == 38);
     uint64_t pages[17];
     for (unsigned i = 0; i < 17; ++i) pages[i] = UINT64_C(0x800001000) + i * 0x3000;
     storage = malloc((size_t)r.table_bytes + 130); assert(storage);
@@ -127,7 +127,9 @@ int main(int argc, char **argv)
         {UINT64_C(1)<<40,0x1000,4096,12,0},
         {UINT64_C(0xfffffff000),0x1000,8192,12,0},
         {0,UINT64_C(1)<<36,4096,12,0}, {0,UINT64_C(0xffffff000),8192,12,0},
-        {0,0x1000,UINT64_MAX,12,0}
+        {0,0x1000,UINT64_MAX,12,0},
+        /* BRN 71317: otherwise aligned 1 MiB and 2 MiB data pages refuse. */
+        {0,0x100000,0x100000,20,0}, {0,0x200000,0x200000,21,0}
     };
     for (unsigned i = 0; i < sizeof(invalid)/sizeof(invalid[0]); ++i) {
         struct pvr_gpu_vm_requirements before; memset(&before, 0xa5, sizeof(before)); r = before;
@@ -169,5 +171,5 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < 4096; ++i) assert(!((unsigned char *)bad.cpu)[i]);
     pattern((unsigned char *)bad.cpu + 4096, tables.bytes - 4096);
     free(storage);
-    printf("PASS GPU VM six page sizes, boundary translations, flags, empty contexts and %u atomic refusals\n", refusals);
+    printf("PASS GPU VM four page sizes, BRN 71317 page-size cap, boundary translations, flags, empty contexts and %u atomic refusals\n", refusals);
 }

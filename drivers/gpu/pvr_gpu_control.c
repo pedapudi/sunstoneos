@@ -4,6 +4,7 @@
  * Copyright (c) 2023 Imagination Technologies Ltd. See LICENSE.pvr.
  */
 #include "pvr_gpu_control.h"
+#include "pvr_gpu_crumb.h"
 #include "a733_range.h"
 #include <string.h>
 
@@ -18,8 +19,32 @@ static uint64_t le(const unsigned char *p, unsigned n)
     for (unsigned i = 0; i < n; ++i) v |= (uint64_t)p[i] << (8 * i);
     return v;
 }
-static enum pvr_gpu_control_result fail(struct pvr_gpu_control *s, unsigned reason)
+uint32_t pvr_gpu_control_steps(const struct pvr_gpu_control *s)
 {
+    const uint32_t phase = s->phase == PVR_GPU_CONTROL_FAILED ? s->failed_phase :
+        s->phase == PVR_GPU_CONTROL_RETIRED ? PVR_GPU_CONTROL_READY : s->phase;
+    uint32_t steps = 0;
+    if (phase >= PVR_GPU_CONTROL_COMPAT) steps |= PVR_GPU_CRUMB_STEP_STARTED;
+    if (phase >= PVR_GPU_CONTROL_SUBMIT_HEALTH) steps |= PVR_GPU_CRUMB_STEP_COMPATIBLE;
+    if (phase >= PVR_GPU_CONTROL_WAIT_HEALTH) steps |= PVR_GPU_CRUMB_STEP_HEALTH_SENT;
+    if (s->health_done || (s->executed && phase == PVR_GPU_CONTROL_WAIT_HEALTH &&
+                           s->executed_after != s->executed_before))
+        steps |= PVR_GPU_CRUMB_STEP_EXECUTED;
+    if (s->health_done) steps |= PVR_GPU_CRUMB_STEP_RETURN;
+    return steps;
+}
+/* The first failure keeps its phase and source line; the breadcrumb record
+ * names the statement (pvr_gpu_crumb.h, unit CONTROL). */
+#define fail(s, reason) fail_at((s), (reason), __LINE__, PVR_GPU_CRUMB_HERE())
+static enum pvr_gpu_control_result fail_at(struct pvr_gpu_control *s, unsigned reason,
+                                           unsigned line, const void *here)
+{
+    if (s->phase != PVR_GPU_CONTROL_FAILED) {
+        s->failed_phase = s->phase; s->failed_line = line;
+        pvr_gpu_crumb_fail(PVR_GPU_CRUMB_CONTROL, reason, line,
+            (s->phase & 0xffu) << 24 | pvr_gpu_control_steps(s) << 16 |
+            ((s->executed_after - s->executed_before) & 0xffu) << 8 | (s->health_status & 0xffu), here);
+    }
     s->error = reason; s->phase = PVR_GPU_CONTROL_FAILED;
     (void)pvr_ccb_abort(s->queue);
     return PVR_GPU_CONTROL_FAULT;
@@ -91,6 +116,7 @@ enum pvr_gpu_control_result pvr_gpu_control_poll(struct pvr_gpu_control *s, unsi
         if (!clock_now(s, &now)) return PVR_GPU_CONTROL_FAULT;
         if (pvr_ccb_start(s->queue, now) != PVR_CCB_OK) return fail(s, PVR_GPU_CONTROL_QUEUE);
         s->phase = PVR_GPU_CONTROL_SUBMIT_HEALTH;
+        sunstone_crumb(PVR_GPU_CRUMB_COMPATIBLE, 0);
         return PVR_GPU_CONTROL_AGAIN;
     }
     uint32_t irq;
@@ -120,6 +146,7 @@ enum pvr_gpu_control_result pvr_gpu_control_poll(struct pvr_gpu_control *s, unsi
         if (result == PVR_CCB_AGAIN) return PVR_GPU_CONTROL_AGAIN;
         if (result != PVR_CCB_OK) return fail(s, PVR_GPU_CONTROL_QUEUE);
         s->phase = PVR_GPU_CONTROL_WAIT_HEALTH;
+        sunstone_crumb(PVR_GPU_CRUMB_HEALTH_SENT, s->executed_before);
     } else if (s->phase == PVR_GPU_CONTROL_WAIT_HEALTH) {
         if (!s->health_done && s->executed) {
             /* The firmware counts the command executed; its return word is
@@ -128,17 +155,23 @@ enum pvr_gpu_control_result pvr_gpu_control_poll(struct pvr_gpu_control *s, unsi
             const uint32_t done = s->executed_after - s->executed_before;
             if (done > 1) return fail(s, PVR_GPU_CONTROL_HEALTH);
             if (!done) return PVR_GPU_CONTROL_AGAIN;
+            if (!s->health_counted) {
+                s->health_counted = 1;
+                sunstone_crumb(PVR_GPU_CRUMB_EXECUTED, s->executed_after);
+            }
             enum pvr_ccb_result result = pvr_ccb_settle(s->queue, s->health_token, &s->health_status);
             if (result == PVR_CCB_AGAIN) return PVR_GPU_CONTROL_AGAIN;
             if (result != PVR_CCB_OK) return fail(s, PVR_GPU_CONTROL_QUEUE);
             if (s->health_status > 1) return fail(s, PVR_GPU_CONTROL_HEALTH);
             s->health_done = 1;
+            sunstone_crumb(PVR_GPU_CRUMB_RETURN, s->health_status);
         } else if (!s->health_done) {
             enum pvr_ccb_result result = pvr_ccb_collect(s->queue, s->health_token, &s->health_status);
             if (result == PVR_CCB_AGAIN) return PVR_GPU_CONTROL_AGAIN;
             if (result != PVR_CCB_OK) return fail(s, PVR_GPU_CONTROL_QUEUE);
             if (s->health_status != 1) return fail(s, PVR_GPU_CONTROL_HEALTH);
             s->health_done = 1;
+            sunstone_crumb(PVR_GPU_CRUMB_RETURN, s->health_status);
         }
         if (!clock_now(s, &now)) return PVR_GPU_CONTROL_FAULT;
         if (!more) s->phase = PVR_GPU_CONTROL_READY;
@@ -159,5 +192,9 @@ enum pvr_gpu_control_result pvr_gpu_control_abort(struct pvr_gpu_control *s)
     if (!s || s->phase < PVR_GPU_CONTROL_COMPAT || s->phase > PVR_GPU_CONTROL_RETIRED)
         return PVR_GPU_CONTROL_INVALID;
     if (s->phase == PVR_GPU_CONTROL_FAILED) return PVR_GPU_CONTROL_FAULT;
-    return fail(s, PVR_GPU_CONTROL_EXTERNAL);
+    /* The owner's failure has its own breadcrumb record. */
+    s->failed_phase = s->phase; s->failed_line = __LINE__;
+    s->error = PVR_GPU_CONTROL_EXTERNAL; s->phase = PVR_GPU_CONTROL_FAILED;
+    (void)pvr_ccb_abort(s->queue);
+    return PVR_GPU_CONTROL_FAULT;
 }
