@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Check the shared host patch against actual linked ISP0 replay responses.
 
-No USB runs. Capture uses native-produced response bytes and a modeled final
-receipt; this checks host durability/sequence handling without physical authority.
+No USB runs. Capture uses native-produced responses plus modeled failure and
+final-receipt headers; this checks host durability/sequence handling without
+physical authority.
 """
 import argparse
 import hashlib
@@ -28,7 +29,7 @@ def main():
     upload = namespace['preparation'].upload_bytes(raw, session)
     wires = [(args.responses / f'full-speed-{sequence}.bin').read_bytes() for sequence in range(1, 5)]
     results = {}
-    for case in ('legacy', 'replay', 'previous-sequence', 'wrong-sequence', 'save-failure'):
+    for case in ('legacy', 'replay', 'previous-sequence', 'wrong-sequence', 'save-failure', 'native-failure'):
         output = args.output / case
         output.mkdir()
         frames = 1 if case == 'legacy' else 4
@@ -37,6 +38,9 @@ def main():
             supplied[1] = wires[0]
         if case == 'wrong-sequence':
             changed = bytearray(supplied[1]);struct.pack_into('<I', changed, 148, 3);supplied[1] = bytes(changed)
+        if case == 'native-failure':
+            changed = bytearray(supplied[1][:192]);struct.pack_into('<2I', changed, 8, 2, 0)
+            changed[96:128] = bytes(32);supplied[1] = bytes(changed)
         final = bytearray(wires[frames - 1][:192])
         struct.pack_into('<2I', final, 8, 3, 0)
         supplied.append(bytes(final))
@@ -69,9 +73,12 @@ def main():
             assert len(acks) == 1 and record['isp0_result'] == 'unobserved'
             assert 'durable_result' not in record
         else:
-            assert case in ('legacy', 'replay') and result['frames'] == frames
-            assert len(acks) == frames and record['isp0_result'] == 'observed-success'
-            assert all(value['ack_observed'] for value in record['isp0_outputs'])
+            if case == 'native-failure':
+                assert result['status'] == 2 and record['isp0_result'] == 'observed-failure' and len(acks) == 1
+            else:
+                assert case in ('legacy', 'replay') and result['frames'] == frames
+                assert len(acks) == frames and record['isp0_result'] == 'observed-success'
+                assert all(value['ack_observed'] for value in record['isp0_outputs'])
             for sequence, packet in enumerate(acks, 1):
                 if frames == 1:
                     assert packet == b'\1' + session[32:40] + wires[0][96:128]
