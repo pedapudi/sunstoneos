@@ -20,11 +20,17 @@ static unsigned handle_hash(uintptr_t handle)
 void ss_kernel_registry_init(struct ss_kernel_registry *r,
                              const struct ss_owner_backend *backend)
 {
+    ss_kernel_registry_init_retirement(r, backend, NULL, NULL, 0);
+}
+void ss_kernel_registry_init_retirement(struct ss_kernel_registry *r,
+    const struct ss_owner_backend *backend,
+    void (*notify)(void *, unsigned, unsigned), void *context, unsigned coordinator)
+{
     r->backend = backend;
     r->next_incarnation = 1;
     for (unsigned i = 0; i < SS_OWNER_SLOTS; ++i) {
-        ss_owner_descriptor_init(&r->descriptor[i], NULL, 0);
-        atomic_store_explicit(&r->descriptor[i].admission, 0, memory_order_relaxed);
+        struct ss_owner_retirement retirement = { notify, context, i, coordinator };
+        ss_owner_descriptor_init_closed(&r->descriptor[i], 0, &retirement);
         r->registered[i] = false;
     }
     for (unsigned i = 0; i < SS_KERNEL_HANDLE_BUCKETS; ++i) {

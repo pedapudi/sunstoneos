@@ -28,6 +28,10 @@ struct ss_kernel_pin {
 };
 void ss_kernel_registry_init(struct ss_kernel_registry *,
                              const struct ss_owner_backend *);
+/* Boot-only permanent routing; register/reopen never changes this callback. */
+void ss_kernel_registry_init_retirement(struct ss_kernel_registry *,
+    const struct ss_owner_backend *,
+    void (*notify)(void *, unsigned, unsigned), void *, unsigned coordinator);
 /* NULL and UINTPTR_MAX are reserved keys. Registration initializes all slot
  * state before release-publishing a key. Returns SS_KERNEL_NO_SLOT on exhaustion
  * or duplicate handle. An optional nonblocking initializer fills external slot
