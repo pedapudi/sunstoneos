@@ -135,12 +135,14 @@ region requires privileged writes to be excluded, while the CPU-only image
 maps that reservation writable. CPU and GPU manifest-generation host checks
 cover the correction. Model hashes and region addresses remain fixed.
 
-The corrected run's queue outcome is `result-mismatch` because the submission
-reuses a legacy `mode/text` JSON expectation. The current runner treats that
-file as literal text. The intended formatted text is present, and independent
-reference comparison passes. No repeat run is needed to recover those bytes.
-The comparison, file hashes and expectation-format diagnosis are preserved in
-`~/.cache/sunstoneos/build/scheduler-rt-1101/mimus-parity.json`.
+The queue outcome is `returned`. An audited offline amendment interprets the
+legacy `mode/text` wrapper as its intended substring predicate and independently
+checks full reference parity. The frozen expectation and original mismatch
+remain preserved under the entry's `corrections/expectation-format-20261101/`.
+Its amendment SHA-256 is
+`3175283ed44282b93358fa3eea247534cdf9488b793c64eb0e55b128001a707c`.
+The authoritative queue state and result agree; the append-only ledger records
+the correction. Native retirement and thermal qualification fields are unchanged.
 These results establish one recorded-input pass; sustained physical scheduling
 and broader recognition inputs remain unqualified.
 
@@ -206,7 +208,7 @@ This path remains unimplemented. It requires measured overshoot distributions,
 burst expiry, cancellation and cross-core delivery before driver adoption.
 Increasing the scheduler tick rate does not satisfy this requirement.
 
-## Retain shared ready lists until contention is isolated
+## The current kernel is the control for a partitioned fork
 
 Per-core ready lists would change migration, affinity, simultaneous wake-up
 placement, priority inheritance and task deletion. Splitting only the port's
@@ -214,7 +216,9 @@ locks would expose shared kernel lists to concurrent mutation. The current
 records include startup contention and cannot establish that the additional
 coordination improves steady-state scheduling.
 
-Retain the upstream lock ownership and ready lists. Phase-separated hold/wait
-samples, percentiles, holder call sites, throughput and CPU cost remain needed
-from the latency measurement stream. Reconsider partitioning only with those physical
-measurements and the unchanged recognition reference as a regression check.
+[The reviewed research](scheduler-research.md) ranks removal of shared ownership
+above fairness-only changes. [The partitioned design](scheduler-partitioned.md)
+specifies the fork's local queues, publication protocol, object locking,
+topology and timing. The current kernel remains its buildable physical control.
+Every live stage requires phase-separated percentiles, complete lock/mask
+attribution and exact recognition output before a performance claim.

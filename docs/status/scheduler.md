@@ -1,5 +1,13 @@
 # Scheduler traversal is bounded; real-time qualification remains open
 
+**Status: implemented.**
+
+**Board-qualified scope:** The returning CPU controls complete 64 idle and
+128 loaded wake samples per core on all eight CPUs. One eight-worker recorded
+mimus input preserves exact CRCs and text and returns normally. These records
+establish those bounded workloads; scheduler timing exceeds its budgets and
+the partitioned fork remains unimplemented.
+
 The eight-core A733 FreeRTOS port implements direct notification wake-ups,
 priority preemption, affinity, mutex priority inheritance and wait-for-interrupt
 (WFI) idle.
@@ -75,10 +83,20 @@ Recorded eight-worker recognition returns normally in queue entry
 raw text `there was silence` and formatted text `There was silence.` match
 the host reference. The external application's CPU-manifest correction is
 mimus commit `8308b79aa`; its separate branch still requires integration.
-The queue reports an expectation mismatch because a legacy JSON text wrapper
-is supplied to a runner that treats it literally. Independent comparison of
-the captured output passes; the [design note](../designs/scheduler-realtime.md)
-records both that error and the preceding application-mapping watchdog failure.
+The queue records `returned` after an audited offline correction of the legacy
+JSON expectation wrapper. The original mismatch and frozen inputs remain
+preserved. The amendment has SHA-256
+`3175283ed44282b93358fa3eea247534cdf9488b793c64eb0e55b128001a707c`.
+Exact reference comparison includes both CRCs, raw/formatted text, marks and
+capitalization. The [design note](../designs/scheduler-realtime.md) records the
+capture and the preceding application-mapping watchdog failure.
+
+The [scheduler research](../designs/scheduler-research.md) has an independent
+source-accuracy review. Two independent reviews approve
+[the partitioned design](../designs/scheduler-partitioned.md). It specifies
+owner-only runqueues, bounded remote wake publication, notification transactions,
+topology-based placement, one-shot timing and staged physical comparisons.
+These approvals do not establish implementation or board performance.
 
 Remaining acceptance work comprises phase-separated percentile capture,
 tickless timekeeping, sub-tick deadlines, isolated priority inheritance,
