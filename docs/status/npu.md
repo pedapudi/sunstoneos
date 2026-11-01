@@ -53,6 +53,11 @@ cover correctness, hardware safety and recovery; review/build evidence is in
 These finite images use the established 852 MHz/800 mV point and do not write
 PMIC rails.
 
+The host output check `checks/npu-source-output.py` cannot import NumPy in the
+mandated shared virtual environment. The shared host-environment coordinator
+owns pinning and installing a compatible host NumPy, then running that check.
+The compiler image's separate NumPy pin does not satisfy this host dependency.
+
 Normal stop/restart preserves registered providers and service objects in
 software checks. Repeated start/stop, same-instance restart, domain power-off,
 reset during an active job, confinement and thermal protection remain

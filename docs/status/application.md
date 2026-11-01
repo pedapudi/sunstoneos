@@ -23,19 +23,29 @@ The three baseline builds and recorded QEMU parity have evidence under
 `~/.cache/sunstoneos/build/tool-gates-land-1031/` and
 `~/.cache/sunstoneos/build/integrate-streams-1031/`. Current OS-only,
 hello-compute and external-mimus baseline builds pass under
-`~/.cache/sunstoneos/build/check-selection-1031/final/`. The selected kernel,
+`~/.cache/sunstoneos/build/check-selection-1031/followup-e124/`. The selected kernel,
 eight-core scheduling model, shared-helper, dashboard, PMIC and power-domain
-integration gate passes there.
+integration gate passes under
+`~/.cache/sunstoneos/build/check-selection-1031/final/gate-final-core/`.
 
-The frozen full integration attempt covers 83 runnable checks: 78 pass and five
-fail. The failures concern the SPI platform expectation, obsolete
-supervised-claim interface, GPU texture macro,
-missing NumPy and provider-clock fixture. The full attempt and failed-case logs
-are in `gate-final-full/` and `full-host/` under that build directory.
-The missing I2S stream-profile `route` initializer in that attempt is fixed.
-These frozen results do not establish the combined tree's full integration result.
-The corrected toolchain-lookup case retains its resumed result in
-`safety-resumed.log`; the dashboard result is in `gate-final-core/`.
+The SPI fixture exercises DMA interrupt completion, including latched DONE,
+request shutdown and reap cleanup. The provider-clock fixture supplies valid
+TWI controller, divider and settling inputs. Both focused sanitizer checks pass
+under `followup-e124/host-fixes/` in the check-selection build directory.
+The I2S runtime initializer includes its route; `baseline-os-build.log` records
+a successful `i2s-file-model` build.
+
+Three host checks have assigned blockers:
+
+- The board-runner/admission maintainer owns
+  `checks/audit-build-harness-supervised-claims.py`. It calls removed admission
+  APIs and checks the superseded queue policy. Reconcile its refusal cases with
+  the shared runner contract before using it as admission evidence.
+- The GPU lifecycle maintainer owns the obsolete texture fairness fixture;
+  [GPU status](gpu.md) states the required timing model.
+- The shared host-environment coordinator owns the missing NumPy dependency;
+  [NPU status](npu.md) states the affected check.
+
 H.264 capture and SAE checks require external inputs and remain pending.
 
 Supervised/resident builds

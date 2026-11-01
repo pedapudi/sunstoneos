@@ -47,6 +47,12 @@ quiescence. The mimus shader/readout checks preserve exhaustive sum comparison.
 These modeled results add no physical queue qualification. The OS uses the
 [application kit](../designs/app-abi.md) and does not depend on mimus.
 
+The texture fairness fixture `checks/gpu-texture-frame.c` references the removed
+`PVR_GPU_SERVICE_BURST_STEPS` scheduler limit. The GPU lifecycle maintainer owns
+its repair: exercise the service's actual 200 microsecond timed bursts and
+1 millisecond CPU scheduling interval, including the submitting-caller exemption.
+The fixture's compile failure leaves that fairness check unresolved.
+
 GPU capture supports image-bound GPU/thermal receipts and bounded binary
 expectations. The shared daemon needs the reviewed capture changes from
 `2e679bc9`, `2110837c`, `a00b8341` and `9d7aa701`. Capture, malformed-result,
