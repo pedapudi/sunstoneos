@@ -150,12 +150,14 @@ static void keyboard_publish(void)
        !atomic_compare_exchange_strong_explicit(&keyboard.ready,&state,3,
         memory_order_acq_rel,memory_order_acquire))return;
     if(keyboard_pending.invalidate){state=0;keyboard_pending.invalidate=0;}
+    int published=0;
     if(!state&&keyboard_pending.dirty){
         keyboard.report=keyboard_pending.report;
         keyboard_pending.attachment=keyboard.report.attachment;
-        keyboard_pending.dirty=0;state=1;
+        keyboard_pending.dirty=0;state=1;published=1;
     }
     atomic_store_explicit(&keyboard.ready,state,memory_order_release);
+    if(published)os_application_usb_changed();
 }
 #endif
 int ss_storage_read(uint64_t sector,uint8_t data[512])

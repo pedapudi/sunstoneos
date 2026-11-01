@@ -72,9 +72,11 @@ int main(void)
     for(unsigned i=0;i<512;++i)assert(sector[i]==0x5a);
     struct ss_key_report report;
     attach();key(1);key(0);
+    assert(atomic_load(&application_notifications)==1);
     assert(ss_key_report(&report)==1&&report.data[2]==4);
     assert(atomic_exchange(&owner_notifications,0)==1);
     keyboard_publish();assert(ss_key_report(&report)==1&&!report.data[2]);
+    assert(atomic_exchange(&application_notifications,0)==2);
     assert(ss_key_report(&report)==0);
     key(1);key(0);detach();
     assert(ss_key_report(&report)==0);

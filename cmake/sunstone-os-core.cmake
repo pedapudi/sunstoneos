@@ -382,7 +382,12 @@ if(SUNSTONE_A733_OS_USB_JPEG)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_JPEG=1)
 endif()
 if(SUNSTONE_A733_OS_USB_CLASSES)
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_CLASSES=1 SUNSTONE_USB_HOST_GENERIC=1 SUNSTONE_USB_APP_ALIAS=1 SUNSTONE_BOARD_HOST_DEADLINE=1)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_CLASSES=1 SUNSTONE_USB_HOST_GENERIC=1 SUNSTONE_USB_APP_ALIAS=1)
+  if(NOT SUNSTONE_A733_OS_USB_JPEG)
+    # The retained JPEG adapter still needs owner passes for setup and copied
+    # readout. Enable its precise wait only after IRQ81 and readiness are wired.
+    target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_HOST_DEADLINE=1)
+  endif()
 endif()
 target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_TASK_DEADLINES=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
   "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_A733_OS_CPU_RETURN=1>"
