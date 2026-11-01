@@ -5,7 +5,7 @@ The acceptance branch `port/sunstoneos-acceptance-on-split` is based on CPU
 engine revision `0cbc96950`. Commits `1a485bad4` and `8f0e0f127` supply paced
 replay and CPU-only manifest permissions. The separate build patch selects
 paced replay. The recorded result uses SunstoneOS `e124d65f`; the fresh paced
-image uses `cbf591ff`, including `bringup` `6ebe687a`. The cached C++ layout
+image uses `8008acb1`, including `bringup` `f9375cb7`. The cached C++ layout
 includes the CPU worker's fix. No duplicate linker patch is required.
 
 ## Recorded input passes physical acceptance
@@ -23,44 +23,41 @@ The image reports CPU-L/B at 1794/2002 MHz and 1000/1050 mV, with three
 completed domain transitions. The printed DSU rate of 494 MHz is the admission
 snapshot from `apps/os/cpu.c:mhz`; it does not measure the active DSU clock.
 
-## Paced recognition passes; thermal capture remains incomplete
+## Paced recognition and thermal capture pass six finite runs
 
-Queue entry `1793558023604334567-7e722543` on 3-1 returns normally with seven
-secondary CPUs OFF and exact segmented reference parity. It processes all
-57,440 samples and consumes one segment spanning `[19520, 57440)`. Feature CRC
-is `efcd0911`, probability CRC is `c78d3801`, and formatting produces
-`There was silence` followed by flush `.`. Recognition takes `92684`
-microseconds; replay takes `3683197`, maximum lateness is `445`, and latency
-from speech end is `93166` microseconds. Loading takes `92091` microseconds.
+The paced image uses OS build `8008acb1`, including `bringup` `f9375cb7`,
+and the same external CPU engine and inputs. Every run on 3-1 returns normally,
+passes full segmented parity, retires seven secondary CPUs and completes rail
+cleanup. Every thermal report is version 2 and classifies complete.
 
-The runner outcome is `result-mismatch` at capture. Its thermal window has
-36 fresh rows, no overflow and successful recognition, but three adjacent
-row gaps are 125002, 125003 and 125002 microseconds. These exceed the
-unchanged 125000-microsecond completeness bound. The originating check is
-`apps/os/thermal-report.py:classify`; `tools/board_images.py:capture` marks
-that receipt invalid. The application completion text matches its expectation.
-CPU retirement and rail cleanup succeed; the instance is not quarantined.
+| Run and queue entry | Outcome | Compute (microseconds) | Maximum pacing lateness (microseconds) | Maximum thermal-slot lateness (microseconds) |
+| --- | --- | --- | --- | --- |
+| Control, `1793560017211439012-ff8c6091` | returned | 92585 | 415 | 891 |
+| Repeat 1, `1793560102532814944-02caa432` | returned | 92670 | 932 | 887 |
+| Repeat 2, `1793560276720214904-91d5e0c3` | returned | 92703 | 388 | 889 |
+| Repeat 3, `1793560482537824782-7589f457` | returned | 92607 | 415 | 903 |
+| Repeat 4, `1793560555177262469-0e251bd4` | returned | 92719 | 910 | 885 |
+| Repeat 5, `1793560636888545789-06c0bafb` | returned | 92610 | 901 | 901 |
 
-Commit `e8887a23` implements absolute 25 ms sensor deadlines and a 125 ms
-report phase. Version 2 headers carry the first selected scheduled time through
-USB and returning capture. Each sample must match its consecutive scheduled
-slot within 2001 microseconds: one 1 ms wakeup tick, one 1 ms read/publication
-budget and one microsecond of timestamp quantization. Longer lock, read or
-scheduling delays fail completeness; this is an acceptance budget rather than
-a worst-case execution guarantee. Missing slots remain failures. Version 1
-reports retain their earlier decoding behavior.
+All runs process 57,440 samples and consume one segment spanning
+`[19520, 57440)`. Feature CRC is `efcd0911`, probability CRC is `c78d3801`,
+and formatting produces `There was silence` followed by flush `.`.
+The five repeats have median compute 92670 microseconds and range 92607–92719.
+Replay elapsed time ranges from 3683089 to 3683697 microseconds, and speech-end
+latency ranges from 93060 to 93666 microseconds across those repeats.
 
-Eight native cases execute the actual owner step and publication with modeled
-THS completion and policy values. They cover 1 ms polling, opposite completion
-jitter, lateness boundaries, IRQs, missed periods, critical and empty windows.
-Nine decoder cases check lateness, missing samples and both report transports.
-The OS baseline and archived linked capture pass. Independent review approves
-the committed code. The queue must load the updated decoder before version 2
-board submissions; the new paced control and repeat batch remain unqualified.
+The producer preserves absolute 25 ms sensor and 125 ms report phases.
+Version 2 headers carry the first selected scheduled time through USB and
+returning capture. Each sample must match its consecutive slot within 2001
+microseconds: one 1 ms wakeup tick, one 1 ms read/publication budget and one
+microsecond of timestamp quantization. Longer delays and missing slots fail.
+This is an acceptance budget rather than a worst-case execution guarantee.
+Version 1 reports retain their earlier decoding behavior.
 
-The five paced repeats remain unsubmitted. A new control must first pass the
-complete capture check. Each trial uses a fresh native session; these trials
-do not qualify five replays within one retained application session.
+The six runs qualify this finite input across fresh native sessions. They do
+not establish retained-state replay, sustained multi-utterance capture or
+thermal/fault recovery. The metadata watcher path issue and its direct-result
+workaround are recorded in `cadence-1101/metadata-watch-note.md`.
 
 ## Host validation passes
 
@@ -69,14 +66,18 @@ paced image also passes linked-image and public-interface checks. Actual kit
 adapters with eight FreeRTOS workers pass recorded and paced QEMU parity.
 The QEMU kit grant models five regions; physical recorded admission checks the
 production manifest's six regions, including packed weights.
+Eight native cadence cases and nine versioned decoder cases pass, including
+USB/returning equivalence, jitter and missed-slot refusal. The linked version 2
+image passes capture geometry and immutable-window checks.
 Both adapter sanitizer checks and QEMU parity retain their evidence for the
 unchanged application sources. Fresh baseline builds, the CPU clock model,
 three returning-watchdog cases, the selected integration gate and check index
 pass on the updated OS. Independent review finds no blocking rebase or build-patch defect.
 Firmware and host sources equal the requested engine revision.
 
-Fresh images, submission metadata, parity and fault-origin records are in
-`~/.cache/sunstoneos/build/app-acceptance-1031/queue-1101/`; its
-`shared-patches/` directory holds integration patches. Recorded and existing
-host parity evidence remain in the sibling `on-split/` directory. Sustained replay, live input,
+Current images, submission commands, transcripts and per-run parity are in
+`~/.cache/sunstoneos/build/app-acceptance-1031/cadence-1101/`;
+`paced-series.json` records per-run metrics and `shared-patches/` holds status
+integration patches. Recorded and earlier host evidence remain in the sibling
+`on-split/` directory. Sustained replay, live input,
 session expiry and accelerator-assisted execution remain unqualified.
