@@ -74,10 +74,10 @@
 +                        continue;
 +                    }
 +
-+                    /* Above the idle priority a core yields its slice only to a
-+                     * ready task that is not running and may run on it. Tasks
-+                     * pinned to other cores would only reselect the same task
-+                     * after an inter-processor interrupt. */
++                    /* Short lists yield only to a ready, not-running task
++                     * whose affinity admits the core. A task pinned elsewhere
++                     * would only reselect the same task after an inter-processor
++                     * interrupt. Longer lists use the bounded fallback below. */
 +                    for( uxIndex = 0U; ( uxIndex < uxSeen ) && ( uxPriorities[ uxIndex ] != uxPriority ); uxIndex++ )
 +                    {
 +                    }
