@@ -47,6 +47,14 @@ and complete binary-result matching. The three baseline builds, both integration
 gates and the check index pass. Host evidence is under
 `~/.cache/sunstoneos/build/gpu-integrate-1031/qualified/`.
 
+The texture-frame fixture executes the service's current scheduling code with
+modeled time and task readiness. Three scheduler probes, three texture scenes
+and mutations of the burst limit, CPU scheduling interval and submission
+exemption pass. Six service cases and the hello baseline build pass. The separate
+texture QEMU fixture fails its extended-pool preparation assertion at
+`checks/gpu-texture.c:248`, before the worker starts. Evidence is under
+`~/.cache/sunstoneos/build/gpu-integrate-1031/texture-scheduling-1101/`.
+
 The coordinator's CPU performance measurement does not qualify GPU support or
 establish that offloading improves recognition speed. GPU performance selection
 is a separate task. The queue serves applications through the

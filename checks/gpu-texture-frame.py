@@ -6,19 +6,25 @@ Builds checks/gpu-texture-frame.c with the worker and texture sources of
 frame and while the worker runs: bytes stored by memory region, cache
 maintenance by operation, stage-1 translations, loads from the output
 allocation during completion checks, instructions, barriers and store-release
-instructions, worker polls, and the worker's tick waits between CPU-only steps
-under its burst rule. Client rings, clock, ownership and GPU results are stubs;
-nothing touches a device. Runs 1080p profile 4 with 16 batches and
-read-back, 720p profile 2 with read-back, and 720p profile 2 presented.
+instructions, worker polls, and scheduling waits. Executes the current service's
+200 us burst and 1 ms CPU-run scheduling code with 50/75 us atomic polls and
+an empty request queue. A lower-priority task runs only during a blocking wait.
+Slow ring submission must remain exempt from that wait. Client rings, elapsed
+time, ownership and GPU results are modeled; sustained request traffic and
+physical performance are outside this check. Runs three scheduler probes,
+1080p profile 4 with 16 batches and read-back, and 720p profile 2 with read-back
+and presentation.
 """
 import argparse
 import hashlib
 import json
+import re
 import struct
 import subprocess
 from pathlib import Path
+from harness import CLANG, LLD
 from elftools.elf.elffile import ELFFile
-from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_BLOCK, UC_HOOK_CODE, UC_HOOK_MEM_WRITE, UC_HOOK_MEM_READ
+from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_BLOCK, UC_HOOK_CODE, UC_HOOK_MEM_WRITE, UC_HOOK_MEM_READ, UC_HOOK_INTR
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_PC
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +32,7 @@ FREERTOS = Path.home() / '.cache/sunstoneos/sources/FreeRTOS-Kernel-97f50c0ecf5b
 NEWLIB = Path.home() / '.cache/sunstoneos/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include'
 SOURCES = ['drivers/gpu/pvr_render_service.c', 'drivers/gpu/pvr_render_texture.c', 'drivers/gpu/pvr_render_job.c',
            'drivers/gpu/pvr_render_programs.c', 'drivers/gpu/pvr_render_draw.c', 'runtime/memory.c']
+SCHEDULER = 'drivers/gpu/pvr_gpu_service.c'
 # The C flags of the A733 SMP images that run the render worker
 # (cmake/a733-smp-cached.cmake and its siblings), which include
 # -mgeneral-regs-only, so no copy loop uses SIMD registers.
@@ -44,17 +51,52 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def build(source, out, clang, lld):
+def scheduling_source(source, mutation=None):
+    """Compile the actual scheduler; device progress and RTOS calls are boundaries."""
+    text = (source / SCHEDULER).read_text()
+    def function(name):
+        matches = list(re.finditer(r'^static [^\n]*\b' + name + r'\([^;]*?\)\n\{', text, re.M))
+        assert len(matches) == 1, ('scheduler function boundary', name)
+        start = matches[0].start(); opening = matches[0].end() - 1; depth = 1
+        for end in range(opening + 1, len(text)):
+            depth += (text[end] == '{') - (text[end] == '}')
+            if not depth: return text[start:end + 1]
+        raise AssertionError(('unclosed scheduler function', name))
+    worker = function('worker')
+    begin = '    for (;;) {\n'
+    end = '        if (message.client == PVR_GPU_SERVICE_CLIENTS && !message.ticket)'
+    assert worker.count(begin) == worker.count(end) == 1, 'worker scheduling boundary changed'
+    # A single turn preserves every scheduling statement and continue path.
+    # The modeled empty receive cannot reach client request processing.
+    turn = worker.split(begin, 1)[1].split(end, 1)[0]
+    code = '\n\n'.join(function(n) for n in ('sample', 'progress', 'submitting', 'step', 'burst'))
+    code += '\nstatic void frame_worker_turn(struct pvr_gpu_service *s)\n{\n    do {\n' + turn + '        fail(29);\n    } while (0);\n}\n'
+    mutations = {
+        'burst-overrun': ('now - *start < PVR_GPU_SERVICE_BURST_US', 'now - *start < 1000000u'),
+        'task-starvation': ('if (run >= PVR_GPU_SERVICE_CPU_RUN_US)', 'if (run >= 1000000u)'),
+        'submission-delay': ('if (submitting(s)) s->yield_running = 0;', 'if (0) s->yield_running = 0;'),
+    }
+    if mutation:
+        before, after = mutations[mutation]
+        assert code.count(before) == 1, ('scheduler mutation boundary', mutation)
+        code = code.replace(before, after)
+    return code
+
+
+def build(source, out, clang, lld, mutation=None):
+    out.mkdir(parents=True, exist_ok=True)
+    (out / 'frame-scheduler.inc').write_text(scheduling_source(source, mutation))
     objects = []
     for name in SOURCES + ['checks/gpu-texture-frame.c']:
         root = ROOT if name.startswith('checks/') else source
         obj = out / (Path(name).stem + '.o')
-        subprocess.run([clang, *FLAGS, '-I', str(source / 'include'), '-I', str(FREERTOS / 'include'),
+        subprocess.run([clang, *FLAGS, '-I', str(out), '-I', str(source / 'include'), '-I', str(FREERTOS / 'include'),
                         '-I', str(FREERTOS / 'portable/GCC/ARM_CR82'), '-isystem', str(NEWLIB),
                         '-c', str(root / name), '-o', str(obj)], check=True)
         objects.append(str(obj))
     elf = out / 'frame.elf'
-    subprocess.run([lld, '-static', '--gc-sections', '-e', 'frame_main', '-Ttext=0x40000000', '-o', str(elf), *objects],
+    subprocess.run([lld, '-static', '--gc-sections', '--undefined=frame_scheduling_check',
+                    '-e', 'frame_main', '-Ttext=0x40000000', '-o', str(elf), *objects],
                    check=True)
     return elf
 
@@ -94,6 +136,21 @@ class Frame:
         for address, _, data in self.segments:
             self.u.mem_write(address, data)
         self.u.mem_map(STACK, 0x1000000)
+
+    def scheduling(self, expected_failure=0):
+        u = self.u
+        def stop(machine, interrupt, unused): machine.emu_stop()
+        hook = u.hook_add(UC_HOOK_INTR, stop)
+        u.reg_write(UC_ARM64_REG_SP, STACK + 0xff0000)
+        u.reg_write(UC_ARM64_REG_LR, SENTINEL)
+        u.emu_start(self.symbols['frame_scheduling_check'], SENTINEL, count=2000000)
+        failure = int.from_bytes(u.mem_read(self.symbols['frame_failure'], 4), 'little')
+        assert failure == expected_failure, ('scheduler failure', failure, expected_failure)
+        if not failure: assert u.reg_read(UC_ARM64_REG_PC) == SENTINEL, 'scheduler instruction budget exhausted'
+        u.hook_del(hook)
+        fields = 'max_burst_us max_cpu_gap_us cpu_blocks task_runs yields submitting_turns'.split()
+        words = struct.unpack('<18I', u.mem_read(self.symbols['frame_probe_results'], 72))
+        return [dict(zip(fields, words[i:i + 6])) for i in range(0, 18, 6)]
 
     def run(self, scene):
         u = self.u
@@ -151,7 +208,11 @@ class Frame:
                     if self.layout is None:
                         fields = 'output output_allocation image geometry depth depth_bytes copy upload download total program_bytes payload_bytes'.split()
                         self.layout = dict(zip(fields, struct.unpack('<12I', uc.mem_read(self.symbols['frame_layout'], 48))))
-                elif 32 < x0 < 48: self.stage = 'output'
+                elif 32 < x0 < 48:
+                    self.stage = 'output'
+                    fields = 'max_burst_us max_cpu_gap_us cpu_blocks task_runs yields submitting_turns'.split()
+                    current()['scheduling'] = dict(zip(fields,
+                        struct.unpack('<6I', uc.mem_read(self.symbols['frame_scheduling'], 24))))
                 if x0 == 1: add(current(), 'read_requests' if self.stage == 'output' else 'requests', 1)
                 if x0 == 2: current()['polls'] += 1
                 if x0 == 3: current()['tick_waits'] += 1
@@ -181,6 +242,7 @@ class Frame:
             u.hook_add(UC_HOOK_CODE, code, begin=at, end=at)
         u.hook_add(UC_HOOK_BLOCK, block)
         u.hook_add(UC_HOOK_MEM_WRITE, write, begin=SHARED, end=PAYLOAD + 0x8000000)
+        u.hook_add(UC_HOOK_INTR, lambda machine, interrupt, unused: machine.emu_stop())
         self.read_hook = u.hook_add(UC_HOOK_MEM_READ, read, begin=PAYLOAD, end=PAYLOAD + 0x8000000)
         u.reg_write(UC_ARM64_REG_SP, STACK + 0xff0000)
         u.reg_write(UC_ARM64_REG_LR, SENTINEL)
@@ -202,6 +264,7 @@ class Frame:
         # maintains the depth extent.
         for f in self.frames.values():
             assert 'depth' not in f['stores'] and not any(k.endswith(':depth') for k in f['cache']), f
+            assert f['gpu_waits'], ('GPU wait must execute before completion', f)
         return dict(layout=self.layout, input_bytes=len(data), frames=self.frames)
 
 
@@ -209,20 +272,33 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--source', type=Path, default=ROOT, help='Checkout whose worker sources are measured')
-    p.add_argument('--clang', default='clang')
-    p.add_argument('--lld', default='ld.lld')
+    p.add_argument('--clang', default=str(CLANG))
+    p.add_argument('--lld', default=str(LLD))
     p.add_argument('--scene', choices=sorted(SCENES), action='append')
+    p.add_argument('--scheduler-only', action='store_true')
+    p.add_argument('--verify-mutations', action='store_true')
     a = p.parse_args()
     a.output.mkdir(parents=True, exist_ok=True)
     source = a.source.resolve()
     elf = build(source, a.output, a.clang, a.lld)
+    scheduler = Frame(elf).scheduling()
+    print('PASS timed service scheduler:', json.dumps(scheduler), flush=True)
+    mutations = {}
+    if a.verify_mutations:
+        for name, failure in [('burst-overrun', 23), ('task-starvation', 25), ('submission-delay', 21)]:
+            mutant = build(source, a.output / name, a.clang, a.lld, name)
+            Frame(mutant).scheduling(expected_failure=failure)
+            mutations[name] = dict(refused=True, failure=failure, elf_sha256=sha(mutant))
     results = {}
-    for name in a.scene or sorted(SCENES):
+    for name in ([] if a.scheduler_only else a.scene or sorted(SCENES)):
         results[name] = Frame(elf).run(SCENES[name])
         f = results[name]['frames'][2]
         print(name, json.dumps({k: v for k, v in f.items()}, sort_keys=True), flush=True)
     record = dict(passed=True, physical_access=False, source=str(source), elf_sha256=sha(elf),
-                  sources_sha256={n: sha(source / n) for n in SOURCES}, scenes=results, scope=__doc__)
+                  sources_sha256={n: sha(source / n) for n in SOURCES + [SCHEDULER, 'include/pvr_gpu_service.h']},
+                  fixture_sha256=sha(ROOT / 'checks/gpu-texture-frame.c'),
+                  scheduler_include_sha256=sha(a.output / 'frame-scheduler.inc'),
+                  scheduling=scheduler, mutations=mutations, scenes=results, scope=__doc__)
     (a.output / 'frame.json').write_text(json.dumps(record, indent=1, sort_keys=True) + '\n')
 
 

@@ -7,6 +7,7 @@
  * gpu_model_render() and is not counted. Nothing here touches a device. */
 #include "a733_gpu_graphics_memory.h"
 #include "pvr_gpu_service.h"
+#include "pvr_compute_queue.h"
 #include "aarch64_device_memory.h"
 #include <string.h>
 
@@ -14,6 +15,15 @@
 static struct a733_gpu_graphics_memory owner;
 static struct pvr_gpu_service service;
 static uint64_t clock_us;
+static unsigned device_pending, device_ready;
+static unsigned scheduler_probe, probe_left, frame_complete, poll_cost = 50;
+static unsigned turn_steps;
+static uint64_t turn_start, task_last;
+struct frame_scheduling {
+    uint32_t max_burst_us, max_cpu_gap_us, cpu_blocks, task_runs, yields, submitting_turns;
+};
+volatile struct frame_scheduling frame_scheduling;
+volatile struct frame_scheduling frame_probe_results[3];
 
 /* Written by the harness before frame_main. */
 struct frame_config {
@@ -42,7 +52,7 @@ __attribute__((noinline, noreturn)) static void fail(unsigned where)
 int a733_gpu_graphics_memory_render_admitted(struct a733_gpu_graphics_memory *s) { return s == &owner; }
 uintptr_t a733_gpu_graphics_memory_render_shared(const struct a733_gpu_graphics_memory *s)
 { (void)s; return (uintptr_t)frame_config.shared; }
-int pvr_gpu_service_now(struct pvr_gpu_service *s, uint64_t *out) { (void)s; *out = ++clock_us; return 1; }
+int pvr_gpu_service_now(struct pvr_gpu_service *s, uint64_t *out) { (void)s; *out = clock_us; return 1; }
 int pvr_compute_service_admit_mode(struct pvr_compute_service *s) { (void)s; return 1; }
 /* Counted by the harness at entry. The image version takes whole 64-byte
  * lines and issues DSB SY before and after the maintenance. */
@@ -101,26 +111,118 @@ int pvr_cccb_pair_begin(struct pvr_cccb_pair *p, struct pvr_cccb *g, struct pvr_
 {
     (void)gclean; (void)gcleans; (void)fclean; (void)fcleans;
     p->geometry = g; p->fragment = f; p->deadline = deadline; p->fragment_tail = 0; p->phase = 1;
+    device_ready = 0;
     return ring_write(g, gc, gn) && ring_write(f, fc, fn);
 }
 int pvr_cccb_pair_fragment_tail_begin(struct pvr_cccb_pair *p, const struct pvr_cccb_command *c, unsigned n,
     const uint32_t *clean, unsigned cleans, uint64_t deadline)
 {
     (void)clean; (void)cleans; (void)deadline;
-    p->fragment_tail = 1; return ring_write(p->fragment, c, n);
+    p->fragment_tail = 1; device_ready = 0; return ring_write(p->fragment, c, n);
 }
-/* Set by each pair poll. On the device, the poll after a kick waits for the
- * GPU, so the worker sleeps until the next tick or interrupt before it. */
-static unsigned device_polled;
+/* A pair poll remains pending until the modeled device wait completes.
+ * The fixture uses the 4 ms backup wait without delivering an interrupt. */
 int pvr_cccb_pair_poll(struct pvr_cccb_pair *p)
 {
-    device_polled = 1;
+    if (!device_ready) { device_pending = 1; return 0; }
     if (p->fragment_tail && p->phase != 3) {
         uint32_t sequence = owner.submission.sequence;
         gpu_model_render(sequence);
         p->geometry->serial = sequence; p->fragment->serial = (uint64_t)sequence * 2u; p->phase = 3;
     }
     return 1;
+}
+
+/* The generated include contains the current service's sample, progress,
+ * step, submitting, burst and worker scheduling body. Only device progress,
+ * time and scheduler callbacks are modeled here. No timing rule is copied. */
+static void advance(struct pvr_gpu_service *s);
+static TickType_t wait_ticks(struct pvr_gpu_service *s);
+static void frame_yield(void);
+#undef taskYIELD
+#define taskYIELD() frame_yield()
+#include "frame-scheduler.inc"
+
+int pvr_compute_queue_submitting(const struct pvr_compute_queue *q) { (void)q; return 0; }
+uint64_t pvr_compute_queue_progress(const struct pvr_compute_queue *q) { (void)q; return 0; }
+static int frame_clock(void *unused, uint64_t *out)
+{ (void)unused; *out = clock_us; return 1; }
+UBaseType_t uxQueueMessagesWaiting(QueueHandle_t q) { (void)q; return 0; }
+static void frame_yield(void) { ++frame_scheduling.yields; }
+static TickType_t wait_ticks(struct pvr_gpu_service *s)
+{ (void)s; return device_pending ? 4 : 0; }
+BaseType_t xQueueReceive(QueueHandle_t q, void *out, TickType_t ticks)
+{
+    (void)q; (void)out;
+    uint64_t elapsed = clock_us - turn_start;
+    if (elapsed > frame_scheduling.max_burst_us) frame_scheduling.max_burst_us = elapsed;
+    /* A final atomic poll may cross 200 us; no further poll may start there. */
+    if (elapsed > 200u + poll_cost) fail(20);
+    if (submitting(&service)) {
+        ++frame_scheduling.submitting_turns;
+        if (ticks && !device_pending) fail(21);
+    }
+    if (ticks) {
+        if (ticks != (device_pending ? 4u : 1u)) fail(22);
+        if (device_pending) { frame_mark(4); device_ready = 1; device_pending = 0; }
+        else { frame_mark(3); ++frame_scheduling.cpu_blocks; }
+        ++frame_scheduling.task_runs;
+        /* The lower-priority task runs only while the worker blocks, through
+         * the next tick. taskYIELD cannot schedule it while the worker is ready. */
+        clock_us = (clock_us / 1000u + ticks) * 1000u;
+        task_last = clock_us;
+    }
+    return pdFALSE;
+}
+static void advance(struct pvr_gpu_service *s)
+{
+    if (frame_complete) return;
+    if (turn_steps++ && clock_us - turn_start >= 200u) fail(23);
+    clock_us += poll_cost;
+    if (scheduler_probe) {
+        if (!probe_left--) fail(24);
+        if (scheduler_probe == 2) ++s->config.render->geometry.index;
+        else ++s->config.render->texture_cursor;
+        if (!probe_left) frame_complete = 1;
+    } else {
+        frame_mark(2);
+        int result = pvr_render_service_poll(s->config.render);
+        frame_mark(0);
+        if (result < 0) fail(13);
+        if (result == 1) frame_complete = 1;
+    }
+    if (!submitting(s)) {
+        uint64_t gap = clock_us - task_last;
+        if (gap > frame_scheduling.max_cpu_gap_us) frame_scheduling.max_cpu_gap_us = gap;
+        /* The CPU run may end one burst and one atomic poll past 1 ms. */
+        if (gap > 1000u + 200u + poll_cost) fail(25);
+    }
+}
+static void scheduled_frame(void)
+{
+    frame_complete = 0; service.yield_running = 0; task_last = clock_us;
+    for (unsigned turns = 0; !frame_complete; ++turns) {
+        if (turns > 1000000) fail(26);
+        turn_start = clock_us; turn_steps = 0;
+        frame_worker_turn(&service);
+    }
+}
+void frame_scheduling_check(void)
+{
+    service.config.render = &owner.submission;
+    service.config.start.now = frame_clock;
+    service.phase = PVR_GPU_SERVICE_READY;
+    for (unsigned mode = 1; mode <= 3; ++mode) {
+        scheduler_probe = mode; probe_left = 80; poll_cost = mode == 3 ? 75 : 50;
+        frame_scheduling = (struct frame_scheduling){0};
+        owner.submission.phase = mode == 2 ? PVR_RENDER_SERVICE_FORMAT_GEOMETRY : PVR_RENDER_SERVICE_TEXTURE_PREPARE;
+        scheduled_frame();
+        if (mode == 2) {
+            if (frame_scheduling.cpu_blocks || frame_scheduling.task_runs || !frame_scheduling.submitting_turns) fail(27);
+        } else if (!frame_scheduling.cpu_blocks || !frame_scheduling.task_runs || !frame_scheduling.max_cpu_gap_us) fail(28);
+        frame_probe_results[mode - 1] = frame_scheduling;
+    }
+    scheduler_probe = 0; poll_cost = 50;
 }
 
 static uintptr_t base(void) { return (uintptr_t)frame_config.payload + owner.render.payload_bytes; }
@@ -146,6 +248,7 @@ void frame_main(void)
     owner.payload_extent.bytes = l.total;
     owner.target.data_firmware[0] = 0xc0b00000u; owner.target.data_firmware[1] = 0xc0b01000u;
     service.config.render = s; service.config.graphics = &owner; service.phase = PVR_GPU_SERVICE_READY;
+    service.config.start.now = frame_clock;
     service.queue.phase = PVR_CCB_ACTIVE; service.epoch = 1;
     s->owner = &owner;
     if (!pvr_render_texture_programs_build_profile((void *)base(), PVR_RENDER_PROGRAM_BYTES, c->width, c->height,
@@ -172,25 +275,8 @@ void frame_main(void)
         q = (struct pvr_render_texture_request){.operation = PVR_TEXTURE_SUBMIT, .previous = frame - 1,
             .generation = generation};
         if (request(&q) != 1) fail(12);
-        /* The worker loop in pvr_gpu_service.c: after a request it steps
-         * while each step progresses, up to PVR_GPU_SERVICE_BURST_STEPS, and
-         * then waits one tick on its queue before the next burst. The fields
-         * below are the render part of its progress identity. */
-        unsigned burst = 0;
-        for (unsigned i = 0;; ++i) {
-            const uint32_t before[4] = {s->phase, s->checked, s->texture_cursor, s->pair.phase | s->pair.fragment_tail << 4};
-            device_polled = 0;
-            frame_mark(2);
-            int r = pvr_render_service_poll(s);
-            frame_mark(0);
-            if (r < 0 || i > 1000000) fail(13);
-            const uint32_t after[4] = {s->phase, s->checked, s->texture_cursor, s->pair.phase | s->pair.fragment_tail << 4};
-            /* A poll that waited for the GPU starts a new burst. */
-            if (device_polled) { frame_mark(4); burst = 1; }
-            else if (!memcmp(before, after, sizeof(before))) fail(18);
-            else if (++burst == PVR_GPU_SERVICE_BURST_STEPS) { frame_mark(3); burst = 0; }
-            if (r == 1) break;
-        }
+        frame_scheduling = (struct frame_scheduling){0};
+        scheduled_frame();
         frame_mark(32 + frame);
         uint32_t bytes = l.output_bytes - 128;
         if (c->present) {
