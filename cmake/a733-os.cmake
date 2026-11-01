@@ -53,6 +53,13 @@ elseif(SUNSTONE_APPLICATION MATCHES "^latency(-dma)?$")
   include("${SUNSTONE_SOURCE_ROOT}/apps/latency/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-${SUNSTONE_APPLICATION} LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION ${SUNSTONE_APPLICATION})
+elseif(SUNSTONE_APPLICATION STREQUAL "cpu-capacity")
+  if(NOT SUNSTONE_A733_CPU_TOPOLOGY)
+    message(FATAL_ERROR "CPU capacity observations require SUNSTONE_A733_CPU_TOPOLOGY=ON")
+  endif()
+  include("${SUNSTONE_SOURCE_ROOT}/apps/scheduler-capacity/cmake/application.cmake")
+  add_sunstone_image(sunstone-a733-os-cpu-capacity LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION cpu-capacity)
 elseif(SUNSTONE_APPLICATION STREQUAL "queue-add")
   add_sunstone_application(queue-add
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/queue-add/main.c"

@@ -22,6 +22,7 @@ set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
   "GPU diagnostic limit: constructor, firmware, jobs:N or layer:K")
 option(SUNSTONE_A733_OS_CPU_RETURN "Application result with success-only ROM return" OFF)
 option(SUNSTONE_A733_OS_CORE "Build the OS core without an application" OFF)
+option(SUNSTONE_A733_CPU_TOPOLOGY "Expose read-only topology and per-core architectural observations" OFF)
 option(SUNSTONE_A733_OS_HELLO "Build the hello-compute OS image" OFF)
 if(NOT SUNSTONE_A733_OS AND NOT SUNSTONE_A733_OS_CORE AND NOT SUNSTONE_A733_OS_HELLO)
   return()
@@ -164,6 +165,7 @@ apply_build_patch("${os_build}/boot.c" "${os_boot_base}" "${os_root}/apps/os/boo
 # Retained per-core fault records and their previous-boot report
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
+  runtime/cpu_topology_app.c
   apps/os/usb-service.c apps/os/application.c apps/os/session.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
   apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
@@ -348,6 +350,10 @@ if(SUNSTONE_A733_OS_USB_JPEG)
     drivers/video/a733_video_jpeg.c drivers/video/a733_video_jpeg_run.c
     drivers/video/a733_video_platform.c drivers/video/a733_video_unit.c drivers/iommu/a733_iommu.c)
 endif()
+if(SUNSTONE_A733_CPU_TOPOLOGY)
+  list(APPEND os_added kernel/scheduler/topology.c platform/a733/cpu_topology.c
+    platform/a733/cpu_observation.c drivers/board/orangepi_zero3w.c)
+endif()
 list(TRANSFORM os_added PREPEND "${os_root}/")
 if(SUNSTONE_LATENCY)
   list(APPEND os_sources "${os_root}/runtime/latency.c" "${os_root}/runtime/latency_irq.c")
@@ -441,6 +447,9 @@ if(SUNSTONE_A733_OS_GPU)
     PROPERTIES COMPILE_OPTIONS "-iquote${os_root}/platform/a733")
 endif()
 target_include_directories(sunstone-a733-os-core BEFORE PRIVATE "${os_root}/apps/os" "${os_build}")
+if(SUNSTONE_A733_CPU_TOPOLOGY)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_CPU_TOPOLOGY=1)
+endif()
 if(os_include_dirs)
   target_include_directories(sunstone-a733-os-core PRIVATE ${os_include_dirs})
 endif()

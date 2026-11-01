@@ -56,6 +56,13 @@ struct ss_cpu_topology {
     const struct ss_cpu_policy *policy;
 };
 struct ss_work_range { uint64_t begin, end; uint32_t cpu, reserved; };
+/* Pointer-free application snapshot metadata. Observed is separate from the
+ * board's admitted mask; zero epochs mean capacity is not calibrated. */
+struct ss_cpu_topology_info {
+    uint32_t version, cpu_count, cache_count, domain_count;
+    uint64_t calibration_epoch, operating_epoch;
+    uint64_t admitted, reserved, irq, observed;
+};
 /* Validate once before publishing an immutable snapshot. Query and split take
  * only validated snapshots whose storage remains alive throughout the call. */
 int ss_cpu_topology_validate(const struct ss_cpu_topology *);
