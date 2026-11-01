@@ -4,6 +4,9 @@
 The source owners' completion acknowledgments are fixture inputs. Cache-line
 maintenance is modeled in contiguous batches ending at each 2 MiB boundary;
 the actual loop validates every visited block's mapping and both range ends.
+The terminal cleans image RAM and the WORK and OUTPUT regions of the image's
+application manifest; an image without such regions skips the region alias case.
+Images linked before the application manifest clean the fixed recognizer arena.
 """
 import argparse
 import importlib.util
@@ -17,13 +20,24 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('os_return_prior_check', ROOT / 'checks/cpu-runtime-qualification.py')
 prior = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(prior)
+spec = importlib.util.spec_from_file_location('os_return_records', ROOT / 'apps/os/host.py')
+records = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(records)
 from harness import save
+
+
+def cleaned_regions(path):
+    """The application ranges that the success terminal cleans after image RAM."""
+    if records.image_manifest(path)['manifest'] is None:
+        return [(0x46000000, 0x47000000)]
+    return [(r['address'], r['address'] + r['bytes']) for r in records.backup_regions(path)]
 
 
 class Model(prior.Model):
     def __init__(self, image):
         super().__init__(image)
         self.ranges = [[] for _ in range(8)]
+        self.regions = cleaned_regions(image.path)
         with image.path.open('rb') as stream:
             elf = ELFFile(stream)
             symbols = list(elf.get_section_by_name('.symtab').iter_symbols())
@@ -51,7 +65,7 @@ class Model(prior.Model):
 
     def write(self, uc, access, address, size, value, unused):
         super().write(uc, access, address, size, value, unused)
-        if self.clean_started and 0x46000000 <= address < 0x47000000:
+        if self.clean_started and any(low <= address < high for low, high in self.regions):
             self.postclean.append((self.core, address, size, value))
         if 0x03400180 <= address < 0x03400200 or 0x03400280 <= address < 0x03400300:
             dst = address - 0x80
@@ -121,9 +135,12 @@ def main():
     args.out.mkdir(parents=True, exist_ok=False)
     image = prior.fault.Image(args.elf)
     rows = []
+    regions = cleaned_regions(args.elf)
     cases = ('success', 'ordinary-exit-zero', 'wrong-core', 'missing-peer', 'active-interrupt',
-                 'unrelated-pending', 'wrong-image-alias', 'wrong-arena-alias', 'expired-deadline',
-                 'restore-readback', 'ack-without-off', 'ths-active', 'spi-restore-readback', 'service-not-ready')
+             'unrelated-pending', 'wrong-image-alias', 'expired-deadline',
+             'restore-readback', 'ack-without-off', 'ths-active', 'spi-restore-readback', 'service-not-ready')
+    if regions:
+        cases += ('wrong-region-alias',)
     if 'os_gpu_return_report' in image.symbols:
         cases += ('gpu-active','gpu-spi-restore-readback','wrong-pool-alias')
     if args.case:
@@ -149,8 +166,8 @@ def main():
             model.put32(0x03460000 + 3 * 0x20000 + 0x10300, 1)
         elif case == 'unrelated-pending':
             model.put32(0x03460000 + 3 * 0x20000 + 0x10200, 0x40000003)
-        elif case in ('wrong-image-alias', 'wrong-arena-alias'):
-            block = 9 if case == 'wrong-image-alias' else (0x46000000 - 0x40000000) >> 21
+        elif case in ('wrong-image-alias', 'wrong-region-alias'):
+            block = 9 if case == 'wrong-image-alias' else (regions[0][0] - 0x40000000) >> 21
             entry = image.symbols['a733_cached_el3_l2'] + block * 8
             model.put64(entry, model.u64(entry) & ~32)
         elif case == 'expired-deadline':
@@ -180,7 +197,7 @@ def main():
         assert not model.postclean, (case, model.postclean[:4])
         if case == 'success':
             for ranges in model.ranges:
-                expected = [(0x41200000, image.symbols['__device_pool_end'] if 'os_gpu_return_report' in image.symbols else image.symbols['__heap_end']), (0x46000000, 0x47000000)]
+                expected = [(0x41200000, image.symbols['__device_pool_end'] if 'os_gpu_return_report' in image.symbols else image.symbols['__heap_end']), *regions]
                 merged = []
                 for lo, hi in ranges:
                     if merged and merged[-1][1] == lo:

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Check the host-armed watchdog and RTC breadcrumbs of returning images.
 
-  returning-watchdog.py --out DIR [--image ELF] [--baseline ELF]
-                        [--clang C --lld L --launcher-prepare PREPARE.PY]
+  returning-watchdog.py --out DIR [--image ELF] [--baseline ELF] [--clang C --lld L]
 
 Cases without --image use a modeled FEL: the shared transport arms WDT0 just
 before exe, classifies the returned instance before any DRAM request, writes
@@ -11,17 +10,14 @@ the linked return image runs in the instruction model: an EL1 breadcrumb SVC,
 the EL3 first-fault record and the disarm on the normal ROM return. No USB
 node, queue or FEL executable is opened.
 
-The OS-request launcher is built by an application's OS-image preparation
-module, which provides build_launcher(out, session_bytes, clang, lld,
-watchdog_mode). The launcher case loads that module from --launcher-prepare
-with SUNSTONEOS_DIR set to this tree.
+With --clang and --lld, the OS-request launcher of apps/os/prepare.py is built
+with and without a WDT0 mode.
 """
 import argparse
 import contextlib
 import importlib.util
 import itertools
 import json
-import os
 from pathlib import Path
 import re
 import shutil
@@ -225,9 +221,8 @@ def transport_cases():
             passed('transport-' + variant, fel_requests=len(state['calls']))
 
 
-def launcher_case(out, clang, lld, preparation):
-    os.environ['SUNSTONEOS_DIR'] = str(ROOT)
-    prepare = load('checked_os_prepare', Path(preparation).resolve())
+def launcher_case(out, clang, lld):
+    prepare = load('checked_os_prepare', 'apps/os/prepare.py')
     for mode, name in ((None, 'disabled'), (0xb1, 'armed')):
         target = out / ('launcher-' + name); target.mkdir()
         prepare.build_launcher(target, 904, clang, lld, mode)
@@ -328,16 +323,14 @@ def main():
     parser.add_argument('--baseline', type=Path)
     parser.add_argument('--clang', type=Path)
     parser.add_argument('--lld', type=Path)
-    parser.add_argument('--launcher-prepare', type=Path,
-                        help="Application OS-image preparation module providing build_launcher")
     args = parser.parse_args()
-    if (args.clang or args.lld or args.launcher_prepare) and not (args.clang and args.lld and args.launcher_prepare):
-        parser.error('the launcher case needs --clang, --lld and --launcher-prepare together')
+    if bool(args.clang) != bool(args.lld):
+        parser.error('the launcher case needs --clang and --lld together')
     args.out.mkdir(parents=True, exist_ok=False)
     header_cases()
     transport_cases()
     if args.clang and args.lld:
-        launcher_case(args.out, args.clang, args.lld, args.launcher_prepare)
+        launcher_case(args.out, args.clang, args.lld)
     if args.image:
         native_cases(args.image, args.baseline)
     (args.out / 'results.json').write_text(json.dumps({'physical_access': False, 'cases': rows}, indent=1) + '\n')
