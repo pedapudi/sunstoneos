@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--post-rail-elf', type=Path)
     parser.add_argument('--npu-parser-tree', type=Path, help='Actual report parser checkout before source integration.')
     parser.add_argument('--sdk-report', type=Path, help='Nominal report captured from the real SDK owner host fixture.')
+    parser.add_argument('--legacy-host', action='store_true', help='Explicit historical CPU-only comparison without NPU cases.')
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=False)
     sys.path.insert(0, str(args.tool_tree/'tools'))
@@ -47,7 +48,10 @@ def main():
            'application_regions':[{'address':0x45000000,'bytes':4096}],
            'npu_pool':{'address':0x47400000,'bytes':0x800000},
            'npu_stop':{'address':0x41200100,'bytes':104}, 'thermal':{}}
-    has_npu = hasattr(records, 'mandatory_return')
+    has_npu = not args.legacy_host
+    if has_npu:
+        assert callable(getattr(records,'mandatory_return',None)), 'Mandatory native return validator is missing.'
+        assert callable(getattr(records,'decode_npu_stop',None)), 'Mandatory native NPU stop validator is missing.'
     if not has_npu:
         geo.pop('npu_pool'); geo.pop('npu_stop')
     stop = struct.pack('<4I2Q10I', 0x5255504e, 1, 104, 1, epoch, generation,
