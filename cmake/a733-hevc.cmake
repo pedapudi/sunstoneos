@@ -43,7 +43,7 @@ sunstone_board_application(hevc BOOT "${hevc_build}/boot.c" LINK_SCRIPT "${hevc_
   "${hevc_gst}/gst-hevc-parser.c" "${hevc_gst}/gst-nal.c"
   drivers/video/a733_video_hevc.c drivers/video/a733_video_platform.c
   drivers/video/a733_video_unit.c drivers/iommu/a733_iommu.c platform/a733/device_memory_layout.c
- INPUTS include/a733_hevc_application.h include/a733_video_hevc.h include/a733_video_platform.h
+ INPUTS apps/hevc/a733_hevc_application.h include/a733_video_hevc.h include/a733_video_platform.h
   include/a733_video_unit.h apps/hevc/sources.json apps/hevc/gst-source.py apps/h264/gst-port.h
   apps/hevc/extended-boot.patch apps/hevc/extended-link.patch platform/a733-smp-cached/link-devices.ld
   "${hevc_gst}/gst-hevc-types.h" "${hevc_gst}/gst-nal.h" "${hevc_gst}/cedrus-hevc-regs.h"

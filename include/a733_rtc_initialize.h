@@ -2,7 +2,14 @@
 #ifndef SUNSTONE_A733_RTC_INITIALIZE_H
 #define SUNSTONE_A733_RTC_INITIALIZE_H
 #include "a733_rtc.h"
-struct a733_rtc_setting;
+/* The requested RTC operation. flags select the external source, a boot
+ * calendar set or a runtime calendar set; the source may be combined with one
+ * calendar set. day and hms stay zero unless a calendar set is requested. */
+#define A733_RTC_INIT_SOURCE 1u
+#define A733_RTC_SET_CALENDAR 2u
+#define A733_RTC_RUNTIME_CALENDAR 4u
+struct a733_rtc_setting {uint32_t flags,day,hms,reserved;};
+int a733_rtc_setting_valid(const struct a733_rtc_setting *);
 /* Retained even on partial failure; raw inherited state is never decoded as a
  * valid calendar. stages1..6 identify admission/source/HMS/DAY/readback/success. */
 struct a733_rtc_initialization {

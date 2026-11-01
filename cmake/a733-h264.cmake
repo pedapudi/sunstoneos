@@ -54,7 +54,7 @@ sunstone_board_application(h264 BOOT "${h264_build}/boot.c" ${h264_script}
   apps/h264/stream-storage.c apps/h264/stream-usb.c apps/h264/native.c apps/h264/usb0.c
   apps/h264/admission.c apps/h264/snapshot.c drivers/video/a733_video_h264.c
   drivers/video/a733_video_platform.c drivers/video/a733_video_unit.c drivers/iommu/a733_iommu.c
- INPUTS include/a733_h264_application.h include/a733_video_h264.h include/a733_video_platform.h
+ INPUTS apps/h264/a733_h264_application.h include/a733_video_h264.h include/a733_video_platform.h
   include/a733_video_unit.h apps/h264/sources.json apps/h264/fullhd-boot.patch
-  apps/h264/fullhd-link.patch platform/a733-smp-cached/link-devices.ld include/a733_h264_input.h
+  apps/h264/fullhd-link.patch platform/a733-smp-cached/link-devices.ld apps/h264/a733_h264_input.h
   ${h264_extra_inputs})

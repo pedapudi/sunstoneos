@@ -8,4 +8,4 @@ sunstone_board_application(jpeg
   apps/jpeg/admission.c apps/jpeg/snapshot.c drivers/video/a733_video_jpeg.c
   drivers/video/a733_video_jpeg_run.c drivers/video/a733_video_platform.c
   drivers/video/a733_video_unit.c drivers/iommu/a733_iommu.c
- INPUTS apps/jpeg/fixtures.json apps/jpeg/fixture.py include/a733_jpeg_application.h)
+ INPUTS apps/jpeg/fixtures.json apps/jpeg/fixture.py apps/jpeg/a733_jpeg_application.h)

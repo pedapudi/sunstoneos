@@ -519,7 +519,7 @@
      "checks/a733-smp-observe.py",
      "checks/gpu-display-capture-native.py",
      "checks/usb-first-fault.py",
-     "include/a733_dma_copy_application.h"
+     "apps/dma-copy/a733_dma_copy_application.h"
     ],
     "status": "observed"
    },
@@ -542,7 +542,7 @@
      "checks/a733-usb-platform.py",
      "checks/gpu-display-capture-native.py",
      "checks/usb-first-fault.py",
-     "include/a733_dma_copy_application.h"
+     "apps/dma-copy/a733_dma_copy_application.h"
     ],
     "status": "observed"
    },

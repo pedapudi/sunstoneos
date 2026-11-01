@@ -10,4 +10,4 @@ sunstone_board_application(jpeg-encode BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/jp
   drivers/video/a733_video_encode_platform.c drivers/video/a733_video_unit.c
   drivers/iommu/a733_iommu.c
  INPUTS apps/jpeg-encode/sources.json apps/jpeg-encode/producer.py
-  include/a733_jpeg_encode_application.h)
+  apps/jpeg-encode/a733_jpeg_encode_application.h)

@@ -1,5 +1,5 @@
 #define _GNU_SOURCE
-#include "a733_h264_application.h"
+#include "../apps/h264/a733_h264_application.h"
 #include "a733_storage_digest.h"
 #include "boot.h"
 #include <assert.h>
