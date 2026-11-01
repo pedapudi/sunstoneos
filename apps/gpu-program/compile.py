@@ -66,8 +66,9 @@ def grid_compiler_source(original,mesa):
 '''
     return source.replace('   pco_postprocess_nir(ctx, nir, data);','   pco_postprocess_nir(ctx, nir, data);'+allocation)
 
-def compile_program(source,mesa,build,out,ninja,profile=1,session=False):
+def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_program=False):
     """The supplied source requires a trusted reviewer; syntax is not a sandbox."""
+    if queue_program:session=True
     if profile not in (1,2,3) or (session and profile!=3):raise ValueError('Unsupported register/dispatch ABI')
     source,mesa,build,out=map(lambda p:Path(p).resolve(),(source,mesa,build,out))
     out.mkdir(parents=True,exist_ok=True)
@@ -175,8 +176,53 @@ def compile_program(source,mesa,build,out,ninja,profile=1,session=False):
       'reference_adapter_source_sha256':digest(base_source.encode()) if profile==3 else None,
       'metadata_export_source_sha256':digest(patched.encode()),'commands':commands,
       'source_admission':'Required independently; metadata does not prove USC memory behavior.'}
+    if queue_program:
+        manifest['queue_program']=True
+        (out/'program.h').write_text(emit_queue_program(blob,manifest))
     (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     return manifest
+
+def emit_queue_program(blob,manifest):
+    """Emit a trusted grid program after checking its compiler metadata and identity.
+
+    program_sha256 covers the complete compiler binary, including its eight-byte
+    resource header. The code array contains only the following USC instructions.
+    Source admission remains an independent review requirement.
+    """
+    m=manifest
+    meta=m.get('metadata',[])
+    if m.get('profile')!=3 or m.get('schema')!='sunstone-pco-profile-v3' or m.get('mesa_revision')!=MESA:
+        raise ValueError('Queue program requires the pinned grid profile')
+    if not isinstance(meta,list) or len(meta)!=18 or any(type(v) is not int or v<0 for v in meta) or \
+       not metadata_valid(meta,3,True):
+        raise ValueError('Unsupported queue program metadata')
+    expected_sysvals=[4,1,0,3]+([4,3] if meta[2]==7 else [0,0])
+    if m.get('explicit_vtxin_mask')!=15 or m.get('abi_vtxins')!=5 or m.get('sysval_ranges')!=expected_sysvals:
+        raise ValueError('Queue program register ABI differs')
+    if len(blob)<12 or len(blob)-8>SESSION_CODE or (len(blob)-8)%4 or \
+       len(blob)!=8+int.from_bytes(blob[5:7],'little')*4 or blob[7]!=0 or \
+       blob[:5]!=bytes([meta[0],meta[1],meta[2],0,0]):
+        raise ValueError('Queue program binary/header differs')
+    hashes=[]
+    for field in ('program_sha256','source_sha256','compiler_sha256'):
+        value=m.get(field,'')
+        if not isinstance(value,str) or not re.fullmatch('[0-9a-f]{64}',value):
+            raise ValueError('Invalid queue program '+field)
+        hashes.append(bytes.fromhex(value))
+    if digest(blob)!=m['program_sha256']:raise ValueError('Queue program identity differs')
+    words=struct.unpack('<'+'I'*((len(blob)-8)//4),blob[8:])
+    lines=['/* SPDX-License-Identifier: MIT */','#include "gpu_queue.h"',
+           'static const uint32_t gpu_queue_code[] = {']
+    for offset in range(0,len(words),8):
+        lines.append('    '+', '.join('0x%08xu'%w for w in words[offset:offset+8])+',')
+    lines+=['};','static const struct gpu_queue_program gpu_queue_program = {',
+            '    .abi = GPU_QUEUE_ABI_GRID, .code_bytes = sizeof(gpu_queue_code),',
+            '    .temps = %uu, .coefficients = %uu,'%(meta[0],meta[2]),
+            '    .local_size = {%uu, %uu, %uu}, .reserved = 0,'%tuple(meta[10:13]),
+            '    .code = gpu_queue_code,']
+    for field,raw in zip(('program_sha256','source_sha256','compiler_sha256'),hashes):
+        lines.append('    .'+field+' = {'+', '.join('0x%02x'%b for b in raw)+'},')
+    return '\n'.join(lines+['};',''])
 
 def package(program,manifest,input_data,output_bytes,input_header_bytes,input_element_bytes,output_element_bytes):
     m=json.loads(Path(manifest).read_text());blob=Path(program).read_bytes();data=Path(input_data).read_bytes()
@@ -210,9 +256,10 @@ if __name__=='__main__':
     for x in ('source','mesa','build','output','ninja'):c.add_argument('--'+x,type=Path,required=True)
     c.add_argument('--profile',type=int,choices=(1,2,3),default=1)
     c.add_argument('--session',action='store_true',help='Profile three without a package: code linked into the image')
+    c.add_argument('--queue-program',action='store_true',help='Profile three with a gpu_queue_program descriptor in program.h')
     b=sub.add_parser('package')
     for x in ('program','manifest','input','output'):b.add_argument('--'+x,type=Path,required=True)
     for x in ('output-bytes','input-header-bytes','input-element-bytes','output-element-bytes'):b.add_argument('--'+x,type=int,required=True)
     a=p.parse_args()
-    if a.operation=='compile':compile_program(a.source,a.mesa,a.build,a.output,a.ninja,a.profile,a.session)
+    if a.operation=='compile':compile_program(a.source,a.mesa,a.build,a.output,a.ninja,a.profile,a.session,a.queue_program)
     else:a.output.write_bytes(package(a.program,a.manifest,a.input,a.output_bytes,a.input_header_bytes,a.input_element_bytes,a.output_element_bytes))

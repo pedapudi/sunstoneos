@@ -27,6 +27,13 @@ elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
   add_sunstone_image(sunstone-a733-os-hello LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION hello-compute)
+elseif(SUNSTONE_APPLICATION STREQUAL "queue-add")
+  add_sunstone_application(queue-add
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/queue-add/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/queue-add/manifest.json"
+    INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/queue-add")
+  add_sunstone_image(sunstone-a733-os-queue-add LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION queue-add)
 elseif(SUNSTONE_APPLICATION STREQUAL "mimus")
   if(NOT MIMUS_DIR)
     message(FATAL_ERROR "The mimus application requires its external MIMUS_DIR")
