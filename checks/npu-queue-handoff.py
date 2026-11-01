@@ -80,6 +80,7 @@ class Machine:
         self.pause_read, self.paused_read, self.pause_notify, self.stop_after_notify = False, False, False, False
         self.mask_fault, self.mask_runtime_fault, self.clear_daif, self.guard_after_first = False, False, False, False
         self.reads, self.mmio, self.arms, self.masks, self.acks = 0, [], 0, 0, []
+        self.bridge_calls, self.default_notices = [], 0
         self.clock = 24000000
         self.q, self.rt, self.startup, self.runtime = self.BASE + 0x1000, self.BASE + 0x10000, self.BASE + 0x90000, self.BASE + 0xa0000
         self.task, self.worker = self.BASE + 0xb0000, self.BASE + 0xb1000
@@ -88,7 +89,7 @@ class Machine:
         self.ctrl = self.field(self.s, 'npu_service', 'controller')
         self.slot = self.field(self.rt, 'npu_runtime', 'slot')
         self.callbacks = {self.BASE + 0xc0000 + 16 * n: name for n, name in enumerate(
-            ('mask', 'rearm', 'read', 'clock', 'step', 'finished'))}
+            ('mask', 'rearm', 'read', 'clock', 'step', 'finished', 'bridge'))}
         cb = {name: address for address, name in self.callbacks.items()}
         self.set(self.rt, 'npu_runtime', 'bound', 1)
         self.set(self.rt, 'npu_runtime', 'slots', 1)
@@ -247,6 +248,15 @@ class Machine:
             self.ret(1)  # No ordinary job work; return to the safe loop entry.
         elif name == 'finished':
             self.ret()
+        elif name == 'bridge':
+            assert args[0] == self.q and args[1] == self.BASE + 0xd0000
+            failed = self.getfield(self.queue, 'npu_queue', 'failed')
+            if failed:
+                assert self.getfield(self.rt, 'npu_runtime', 'failed') == 1
+                assert self.getfield(self.s, 'npu_service', 'irq_pending') & 2
+            self.bridge_calls.append({'failed': failed, 'completed': self.getfield(self.queue, 'npu_queue', 'completed', 8)})
+            self.notifications[self.task] = self.notifications.get(self.task, 0) + 1
+            self.ret()
         elif name == 'rearm':
             assert self.getfield(self.s, 'npu_service', 'direct_ready') == 1, 'claim armed before worker ACK'
             self.arms += 1
@@ -272,6 +282,7 @@ class Machine:
                 return
             self.ret(1)
         elif name in ('vTaskNotifyGiveFromISR', 'vTaskGenericNotifyGiveFromISR'):
+            self.default_notices += 1
             self.ret()
         else:
             raise AssertionError(name)
@@ -331,6 +342,43 @@ def cases(image, disassembly, only=None):
                      'masks': machine.masks, 'trace': machine.trace, 'mmio': machine.mmio,
                      'crumbs': machine.crumbs, 'failures': machine.failures})
         print('PASS', label, flush=True)
+
+    for outcome in ('success', 'event-error', 'idle-missing', 'runtime-lost'):
+        label = 'bridge-notifies-after-' + outcome
+        if only not in (None, label):
+            continue
+        m = Machine(image, disassembly)
+        bridge = next(address for address, name in m.callbacks.items() if name == 'bridge')
+        m.set(m.q, 'npu_runtime_queue', 'progress_from_isr', bridge, 8)
+        m.set(m.q, 'npu_runtime_queue', 'progress_cookie', m.q, 8)
+        m.claim()
+        m.notifications.clear()
+        job = m.BASE + 0xd1000
+        m.set(m.queue, 'npu_queue', 'head', job, 8)
+        m.set(m.queue, 'npu_queue', 'tail', job, 8)
+        m.set(m.queue, 'npu_queue', 'submitted', 1, 8)
+        m.set(m.queue, 'npu_queue', 'held', 1, 8)
+        fence = m.field(job, 'npu_queue_job', 'fence')
+        m.set(fence, 'npu_queue_fence', 'queue', m.queue, 8)
+        m.set(fence, 'npu_queue_fence', 'value', 1, 8)
+        m.set(job, 'npu_queue_job', 'held', 1)
+        m.set(m.q, 'npu_runtime_queue', 'started', m.clock - 24, 8)
+        m.set(m.q, 'npu_runtime_queue', 'timeout_ticks', 24000, 8)
+        m.put(m.MMIO + 0x10, 2 if outcome == 'event-error' else 1)
+        m.put(m.MMIO + 4, 0 if outcome == 'idle-missing' else 0x7fffffff)
+        if outcome == 'runtime-lost':
+            m.set(m.rt, 'npu_runtime', 'failed', 1)
+        function = image.address('irq', unit='/drivers/npu/npu_runtime_queue.c')
+        assert m.run('bridge-irq', function, m.q, m.BASE + 0xd0000)[0] == 'returned'
+        good = outcome == 'success'
+        assert m.bridge_calls == [{'failed': int(not good), 'completed': int(good)}]
+        assert m.default_notices == 0 and m.notifications.get(m.task) == 1
+        assert m.getfield(job, 'npu_queue_job', 'held') == 1
+        assert m.getfield(m.queue, 'npu_queue', 'held', 8) == 1
+        assert all(offset != 0x3a4 for unused, offset, width in m.mmio)
+        if not good:
+            assert m.getfield(m.queue, 'npu_queue', 'head', 8) == job
+        record(label, m)
 
     if only in (None, 'worker-resumes-before-safe-entry-ack'):
         m = Machine(image, disassembly)
@@ -492,9 +540,33 @@ def build_images(build, output, variants):
         log.write_bytes(result.stdout + result.stderr)
         assert result.returncode == 0, ('build failed', log)
 
-    sources = {unit: (ROOT / unit).read_text() for unit in UNITS}
-    for unit in UNITS:
-        inputs[str(ROOT / unit)] = sha(ROOT / unit)
+    units = {unit: (ROOT / unit, options) for unit in UNITS}
+    # Cached objects may predate a private structure change. Recompile every
+    # linked consumer with its own target flags instead of mixing old offsets
+    # with new adapters or suppressing conflicting DWARF layouts.
+    headers = ('include/npu_runtime.h', 'include/npu_runtime_queue.h',
+               'include/npu_service.h', 'include/npu_queue.h')
+    for token in base_link:
+        if not token.endswith('.obj') or '.dir/' not in token:
+            continue
+        dependency = build / (token + '.d')
+        if not dependency.is_file() or not any(h in dependency.read_text() for h in headers):
+            continue
+        unit = token.split('.dir/', 1)[1][:-4]
+        path = ROOT / unit
+        if not path.is_file():
+            path = build / unit
+        assert path.is_file(), ('missing cached compilation input', path)
+        target_flags = build / (token.split('.dir/', 1)[0] + '.dir/flags.make')
+        text = target_flags.read_text()
+        own_options = []
+        for name in ('C_DEFINES', 'C_INCLUDES', 'C_FLAGS'):
+            own_options += shlex.split(re.search(r'^' + name + r' = (.*)$', text, re.M)[1].replace(str(source), str(ROOT)))
+        units[unit] = (path, own_options)
+        inputs[str(target_flags)] = sha(target_flags)
+    sources = {unit: path.read_text() for unit, (path, unused) in units.items()}
+    for path, unused in units.values():
+        inputs[str(path)] = sha(path)
     images = {}
     for variant in variants:
         directory = output / variant
@@ -520,11 +592,11 @@ def build_images(build, output, variants):
                 assert text != original
             generated = directory / unit
             generated.parent.mkdir(parents=True, exist_ok=True)
-            obj, dep = (directory / (Path(unit).stem + suffix) for suffix in ('.o', '.d'))
+            obj, dep = (directory / (unit.replace('/', '-') + suffix) for suffix in ('.o', '.d'))
             # Keep real production units as the compilation input in the nominal build.
             generated.write_text(text)
-            compile_source = ROOT / unit if variant == 'actual' else generated
-            run([cc, '--target=aarch64-none-elf', *options, '-MD', '-MF', str(dep), '-c', str(compile_source), '-o', str(obj)], directory / (obj.stem + '-compile.log'))
+            compile_source = units[unit][0] if variant == 'actual' else generated
+            run([cc, '--target=aarch64-none-elf', *units[unit][1], '-MD', '-MF', str(dep), '-c', str(compile_source), '-o', str(obj)], directory / (obj.stem + '-compile.log'))
             for token in shlex.split(dep.read_text().replace('\\\n', ' ').split(':', 1)[1]):
                 path = Path(token)
                 if path.is_file():
