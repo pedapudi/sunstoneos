@@ -215,6 +215,14 @@ with nullcontext(fixture) as temporary:
   if thermal:text=text.replace('NPU_STAGE=QUIESCENT',f'NPU_THERMAL_REASON=0x{reason:016x}\nNPU_JOBS=0x{jobs:016x}\nNPU_STAGE=QUIESCENT')
   if restart:text=text.replace('NPU_STAGE=WAIT_STARTUP\n',
    'NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=OPEN\nNPU_STAGE=SUBMIT job=0x0000000000000001\nNPU_STAGE=FIRST_CLOSE\nNPU_STAGE=RESTART_OPEN\nNPU_STAGE=SUBMIT job=0x0000000000000002\nNPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n',1)
+  if g.get('power_cycle'):
+   text=text.replace('across normal local restart','across domain OFF/restart')
+   text='NPU_POWER_CYCLE_OFF=\n0x0000000000000000\n0x0000000000000000\n0x00000000000003e8\nNPU_POWER_CYCLE_ON=\n0x0000000000000008\n0x0000000000000008\n0x00000000000003e8\n'+text
+   if variant=='power-missing-OFF':text=text.replace('NPU_POWER_CYCLE_OFF=','NPU_POWER_CYCLE_UNKNOWN=')
+   if variant=='power-missing-ON':text=text.replace('NPU_POWER_CYCLE_ON=','NPU_POWER_CYCLE_UNKNOWN=')
+   if variant=='power-wrong-OFF':text=text.replace('NPU_POWER_CYCLE_OFF=\n0x0000000000000000','NPU_POWER_CYCLE_OFF=\n0x0000000000000008')
+   if variant=='power-zero-time':text=text.replace('0x00000000000003e8','0x0000000000000000')
+   if variant=='power-long-time':text=text.replace('0x00000000000003e8','0x0000000001312d00')
   if a.interrupt:text=text.replace('NPU_STAGE=QUIESCENT\n',IRQ_RECEIPTS+'NPU_STAGE=QUIESCENT\n',1)
   if checkpoint:
    text=('NPU_CHECKPOINT=PROVIDERS_CONSTRUCTED; scheduler never started; jobs=0\n' if g.get('checkpoint_provider') else 'NPU_CHECKPOINT=ENTRY_MEMORY_READY; providers never constructed; jobs=0\n')
@@ -262,6 +270,7 @@ with nullcontext(fixture) as temporary:
  variants=['nominal','old-generic-monitor-magic','mismatch','unwritten-second','unwritten-tail','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','wrong-ROM-entry']
  if startup and not infer and not runtime:variants=[v for v in variants if v not in ('mismatch','unwritten-second','unwritten-tail','false-success')]
  variants+=['watchdog-enabled','reset-redirect','alternate-redirect','NPU-route','NPU-core-reset','NPU-module-gate']
+ if g.get('power_cycle'):variants+=['power-missing-OFF','power-missing-ON','power-wrong-OFF','power-zero-time','power-long-time']
  if g.get('stopped_capture'):variants+=['capture-metadata-invalid','capture-parent-short','capture-extent-transport-failure','capture-durability-failure','capture-output-differs']
  if checkpoint or thermal or startup:variants.append('ordinary-receipt')
  if startup and not infer and not runtime:variants+=['startup-inference-log','startup-two-IRQs','startup-zero-IRQs','startup-missing-close','startup-restart-log']

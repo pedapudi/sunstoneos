@@ -676,6 +676,93 @@ enum a733_npu_platform_result a733_npu_startup_restart(struct a733_npu_startup *
     s->pll_adopted=1;s->pll_locked=0;s->stage=A733_NPU_STARTUP_ENABLE;
     return a733_npu_startup_step(s);
 }
+/* Power transitions retain the shared leases even after this row's rail pin
+ * is dropped. The power owner alone changes the counted pin and PCK policy. */
+/* 1 healthy, 0 transient ledger contention, -1 invalid ownership. */
+static int power_owned(struct a733_npu_startup *s)
+{
+    if(atomic_load_explicit(&s->window_open,memory_order_acquire) ||
+       s->row.domains!=s->providers.domains || s->row.rail!=&s->rail ||
+       s->row.wake_context!=s || s->row.owner!=s->config.owner || s->row.domain!=4)return -1;
+    enum a733_clock_result clock=a733_clock_token_status(s->providers.clocks,&s->clock);
+    enum a733_rail_result rail=a733_rail_status(s->providers.rails,&s->rail);
+    enum a733_gpu_resource_result pck=a733_gpu_resources_status(s->providers.pck,s->config.pck_client,&s->pck);
+    if((clock!=A733_CLOCK_OK && clock!=A733_CLOCK_BUSY) ||
+       (rail!=A733_RAIL_READY && rail!=A733_RAIL_BUSY) ||
+       (pck!=A733_GPU_RESOURCE_OK && pck!=A733_GPU_RESOURCE_BUSY))return -1;
+    return clock!=A733_CLOCK_BUSY && rail!=A733_RAIL_BUSY && pck!=A733_GPU_RESOURCE_BUSY;
+}
+static int power_queue(struct a733_npu_startup *s,unsigned on)
+{
+    unsigned domain;
+    int held=enter(s);
+    if(held!=1)return held==0 ? 0 : -1;
+    if(!now(s,0) || !domain_check(s,&domain) || domain!=(on ? 0u : 8u) ||
+       !stopped(s) || !check(s,CCU+0xb04,0xf0001,BIT(19)))return -1;
+    sunstone_crumb(on ? SUNSTONE_CRUMB_NPU_POWER_ON_REQUEST : SUNSTONE_CRUMB_NPU_POWER_OFF_REQUEST,on);
+    if(!leave(s) || !now(s,on ? &s->power_on_request_us : &s->power_off_request_us) ||
+       !a733_power_domain_request(&s->row,on))return -1;
+    s->power_request=atomic_load_explicit(&s->row.request,memory_order_relaxed);
+    s->wait_until=s->config.deadline_us;
+    return 1;
+}
+static enum a733_npu_platform_result power_answer(struct a733_npu_startup *s,unsigned on)
+{
+    if(!now(s,0) ||
+       atomic_load_explicit(&s->row.request,memory_order_relaxed)!=s->power_request)return fault(s);
+    enum a733_power_row_state state=a733_power_domain_state(&s->row);
+    if(state==A733_POWER_ROW_PENDING)return PENDING;
+    unsigned domain;
+    if(state!=(on ? A733_POWER_ROW_ON : A733_POWER_ROW_OFF) ||
+       !domain_check(s,&domain) || domain!=(on ? 8u : 0u) || !now(s,0))return fault(s);
+    if(on) {
+        sunstone_crumb(SUNSTONE_CRUMB_NPU_POWER_ON_ACK,domain);
+        s->power_on_policy=s->power_on_status=domain;s->power_on_ack_us=s->last_now;
+        s->stage=A733_NPU_STARTUP_STOPPED;
+        return a733_npu_startup_restart(s);
+    }
+    s->power_off_policy=s->power_off_status=domain;s->power_off_ack_us=s->last_now;
+    sunstone_crumb(SUNSTONE_CRUMB_NPU_POWER_OFF_ACK,domain);
+    s->stage=A733_NPU_STARTUP_POWER_OFF;
+    return READY;
+}
+enum a733_npu_platform_result a733_npu_startup_power_off(struct a733_npu_startup *s)
+{
+    if(!owner_task(s)){STATE_FAIL(s,0);return RETAINED;}
+    if(!now(s,0))return fault(s);
+    int owned=power_owned(s);
+    if(owned<0)return fault(s);
+    if(!owned)return PENDING;
+    if(s->stage==A733_NPU_STARTUP_POWER_OFF)return READY;
+    if(s->stage==A733_NPU_STARTUP_POWER_OFF_WAIT)return power_answer(s,0);
+    if(s->stage!=A733_NPU_STARTUP_STOPPED ||
+       a733_power_domain_state(&s->row)!=A733_POWER_ROW_ON)return fault(s);
+    int result=power_queue(s,0);
+    if(result<0)return fault(s);
+    if(!result)return PENDING;
+    s->stage=A733_NPU_STARTUP_POWER_OFF_WAIT;
+    return PENDING;
+}
+enum a733_npu_platform_result a733_npu_startup_power_restart(struct a733_npu_startup *s)
+{
+    if(!owner_task(s)){STATE_FAIL(s,0);return RETAINED;}
+    if(!now(s,0))return fault(s);
+    /* After ON, the existing restart advances through ENABLE..READY. */
+    if(s->power_on_ack_us && (s->stage==A733_NPU_STARTUP_STOPPED ||
+       (s->stage>=A733_NPU_STARTUP_ENABLE && s->stage<=A733_NPU_STARTUP_READY)))
+        return s->stage==A733_NPU_STARTUP_STOPPED ? a733_npu_startup_restart(s) : a733_npu_startup_step(s);
+    int owned=power_owned(s);
+    if(owned<0)return fault(s);
+    if(!owned)return PENDING;
+    if(s->stage==A733_NPU_STARTUP_POWER_ON_WAIT)return power_answer(s,1);
+    if(s->stage!=A733_NPU_STARTUP_POWER_OFF ||
+       a733_power_domain_state(&s->row)!=A733_POWER_ROW_OFF)return fault(s);
+    int result=power_queue(s,1);
+    if(result<0)return fault(s);
+    if(!result)return PENDING;
+    s->stage=A733_NPU_STARTUP_POWER_ON_WAIT;
+    return PENDING;
+}
 void a733_npu_startup_retain(struct a733_npu_startup *s)
 {
     if(owner_task(s))(void)fault(s);
@@ -779,7 +866,8 @@ uint32_t a733_npu_startup_wait_ticks(struct a733_npu_startup *s)
     if(!owner_task(s) || !now(s,&t))return 1;
     if(s->stage==A733_NPU_STARTUP_SETTLE)
         return t>=s->wait_until ? 0 : (uint32_t)((s->wait_until-t)/TICK_US);
-    if((s->stage==A733_NPU_STARTUP_SUPPLY || s->stage==A733_NPU_STARTUP_ROW) && s->ops.wake) {
+    if((s->stage==A733_NPU_STARTUP_SUPPLY || s->stage==A733_NPU_STARTUP_ROW ||
+        s->stage==A733_NPU_STARTUP_POWER_OFF_WAIT || s->stage==A733_NPU_STARTUP_POWER_ON_WAIT) && s->ops.wake) {
         /* A notification ends the wait; the deadline bounds it. */
         if(t>=s->wait_until)return 0;
         const uint64_t ticks=(s->wait_until-t+TICK_US-1)/TICK_US;

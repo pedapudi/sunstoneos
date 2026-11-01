@@ -23,6 +23,7 @@ p.add_argument('--interrupt',action='store_true',help='build the interrupt-drive
 p.add_argument('--startup-only',action='store_true',help='interrupt bootstrap OPEN/READY/CLOSE with no inference')
 p.add_argument('--single-inference',action='store_true',help='interrupt bootstrap OPEN/READY, one job with copied output and REAP, then CLOSE')
 p.add_argument('--restart',action='store_true',help='IRQ returning diagnostic: local stop/restart between two baseline jobs')
+p.add_argument('--power-cycle',action='store_true',help='clean domain OFF/ON between two interrupt-driven baseline jobs')
 p.add_argument('--rate-852',action='store_true',help='PLL_NPU at 852 MHz, admitted only for a speed bin that lists 800 mV for it')
 p.add_argument('--rate-492',action='store_true',help='the optional 492 MHz mode; the default is the vendor operating point for the speed bin')
 p.add_argument('--shufflenet',action='store_true',help='the published ShuffleNetV2 graph in the large NN-pool profile (needs --interrupt)')
@@ -34,6 +35,7 @@ p.add_argument('--artifacts',type=Path,default=Path.home()/'.cache/sunstoneos/bu
 p.add_argument('--sdk-reference',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-complete-graph-proposal-20261019/sdk-reference',
  help='directory with network_binary.nb, published-input.dat and output0_2_1.dat')
 a=p.parse_args()
+if a.power_cycle:a.restart=True;a.interrupt=True
 if a.model_switch:a.runtime=True
 if a.sdk:
  if a.model_switch:p.error('SDK and model-switch are separate profiles')
@@ -71,7 +73,7 @@ config=[v.replace(old_root,str(root)).replace(str(base/'native'),str(e/'native')
 config=[v+' -DSUNSTONE_CRUMBS=1 -DSUNSTONE_NPU_FINITE_WATCHDOG=1 -DINCLUDE_xTaskDelayUntil=1' if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
 if a.restart:
  assert sum(v.startswith('-DCMAKE_C_FLAGS=') for v in config)==1
- config=[v+' -DSUNSTONE_NPU_RESTART=1' if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
+ config=[v+' -DSUNSTONE_NPU_RESTART=1'+(' -DSUNSTONE_NPU_POWER_CYCLE=1' if a.power_cycle else '') if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
 if a.interrupt or a.entry_provider_checkpoint:config+=['-DA733_NPU_INTERRUPT=ON']
 if a.shufflenet:
  # artifacts.py admits these only by their catalogue hashes (tools/npu-models.json).
@@ -220,6 +222,7 @@ if a.single_inference:identity['profile']='npu-single-inference-return-v1'
 if a.runtime:identity.update(profile='npu-runtime-return-v1',**runtime_identity)
 if a.model_switch:identity.update(profile='npu-model-switch-return-v1')
 if a.sdk:identity.update(profile='npu-sdk-return-v1')
+if a.power_cycle:identity.update(profile='npu-power-cycle-return-v1')
 if a.thermal:
  identity['profile']='npu-finite-thermal-return-v1'
  identity['thermal_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/thermal.c',root/'apps/npu-finite/thermal.h')}

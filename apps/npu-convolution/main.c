@@ -14,7 +14,11 @@
 #ifdef SUNSTONE_NPU_RESTART
 #define EXPECTED_IRQ_COMPLETIONS 4u
 __attribute__((used,retain)) const uint64_t npu_restart_return_profile[4]={
+#ifdef SUNSTONE_NPU_POWER_CYCLE
+    UINT64_C(0x4e50555057523031),1,2,4
+#else
     UINT64_C(0x4e50555253543031),1,2,4
+#endif
 };
 #else
 #define EXPECTED_IRQ_COMPLETIONS 3u
@@ -154,6 +158,19 @@ static void client(void *unused)
     /* Startup entry and READY, then each job's publication and completion
      * observation, in counter microseconds. */
     const struct a733_npu_startup *startup=c->startup;
+#ifdef SUNSTONE_NPU_POWER_CYCLE
+    if(!startup || !startup->power_off_ack_us || !startup->power_on_ack_us ||
+       startup->power_off_policy || startup->power_off_status ||
+       startup->power_on_policy!=8 || startup->power_on_status!=8)retained(25);
+    platform_puts("NPU_POWER_CYCLE_OFF=\n");
+    platform_hex(startup->power_off_policy);platform_puts("\n");
+    platform_hex(startup->power_off_status);platform_puts("\n");
+    platform_hex(startup->power_off_ack_us-startup->power_off_request_us);platform_puts("\n");
+    platform_puts("NPU_POWER_CYCLE_ON=\n");
+    platform_hex(startup->power_on_policy);platform_puts("\n");
+    platform_hex(startup->power_on_status);platform_puts("\n");
+    platform_hex(startup->power_on_ack_us-startup->power_on_request_us);platform_puts("\n");
+#endif
     platform_puts("NPU_TIME_US=\n");platform_hex(startup ? startup->entry_us : 0);platform_puts("\n");
     platform_hex(startup ? startup->ready_us : 0);platform_puts("\n");
     for(unsigned i=0;i<4;++i){platform_hex(job_us[i]);platform_puts("\n");}
@@ -208,7 +225,9 @@ finished_engine:
     taskENTER_CRITICAL();
     platform_puts(status==1?"FAIL NPU numerical comparison\n":status==2?
         "REFUSED NPU thermal admission; configured sensor disabled and providers parked\n":
-#ifdef SUNSTONE_NPU_RESTART
+#ifdef SUNSTONE_NPU_POWER_CYCLE
+        "PASS NPU two matched jobs across domain OFF/restart and parked providers\n");
+#elif defined(SUNSTONE_NPU_RESTART)
         "PASS NPU two matched jobs across normal local restart and parked providers\n");
 #else
         "PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers\n");

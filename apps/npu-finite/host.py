@@ -19,6 +19,7 @@ INFERENCE='npu-single-inference-return-v1'
 RUNTIME='npu-runtime-return-v1'
 SWITCH='npu-model-switch-return-v1'
 SDK='npu-sdk-return-v1'
+POWER='npu-power-cycle-return-v1'
 # The startup client's receipt magic, monitor detail, inference jobs and interrupt completions.
 STARTUP_CLIENT={STARTUP:(0x4e50555354415231,0x4e505553,0,1),INFERENCE:(0x4e5055494e463031,0x4e505549,1,2),
  RUNTIME:(0x4e50555254523031,0x4e505552,2,3),
@@ -27,7 +28,7 @@ STARTUP_CLIENT={STARTUP:(0x4e50555354415231,0x4e505553,0,1),INFERENCE:(0x4e50554
 MBUS_CHECKPOINT='npu-entry-mbus-checkpoint-v1'
 IRQ_CHECKPOINT='npu-entry-irq-checkpoint-v1'
 PROVIDER_CHECKPOINT='npu-entry-provider-checkpoint-v1'
-PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT,RESTART,STARTUP,INFERENCE,RUNTIME,SWITCH,SDK);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
+PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT,RESTART,STARTUP,INFERENCE,RUNTIME,SWITCH,SDK,POWER);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
 HOST_SOURCES=('apps/npu-finite/host.py','apps/npu-finite/stopped-capture.py','tools/a733-returning-host.py','tools/a733-crumbs.py','include/sunstone_crumb.h','apps/npu-convolution/prepare-supervised.py','apps/npu-convolution/observe.py','tools/check-a733-smp.py','tools/check-a733-smp-supervised.py','tools/check-a733-smp-observe.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/usb_guard.py','tools/npu-models.json','platform/a733-smp-supervised/launch.c','platform/a733-smp-observe/launch.S','platform/a733-smp-observe/launch.ld','platform/a733-smp-cached/boot.h')
 def save(path,value):base.save_json(path,value)
 
@@ -68,7 +69,10 @@ def image_profile(data,manifest):
   value=struct.unpack_from('<4Q',part['data'],start-part['address'])
   execution=next((name for name,description in STARTUP_CLIENT.items() if value==(description[0],1,description[2],description[3])),None)
   require(execution is not None,'Unsupported native startup marker.')
- elif 'npu_restart_return_profile' in names:execution=RESTART
+ elif 'npu_restart_return_profile' in names:
+  marker=symbols['npu_restart_return_profile'];start=int(marker['st_value'])
+  part=next(p for p in parts if p['address']<=start and start+32<=p['address']+len(p['data']))
+  execution=POWER if struct.unpack_from('<Q',part['data'],start-part['address'])[0]==0x4e50555057523031 else RESTART
  elif 'npu_entry_checkpoint_provider_profile' in names:execution=PROVIDER_CHECKPOINT
  elif 'npu_entry_checkpoint_irq_profile' in names:execution=IRQ_CHECKPOINT
  elif 'npu_entry_checkpoint_mbus_profile' in names:execution=MBUS_CHECKPOINT
@@ -115,9 +119,9 @@ def image_profile(data,manifest):
    all(n in symbols for n in ('npu_startup_return_ready','npu_service_activate','vTaskStartScheduler')+engine) and
    'client' not in symbols and (not runtime or 'npu_convolution_startup_poll' not in symbols),'Startup-only implementation differs.')
  else:require('npu_startup_return_profile' not in symbols,'Startup-only image requires its distinct profile.')
- restart=manifest['execution_profile']==RESTART
+ restart=manifest['execution_profile'] in (RESTART,POWER)
  if restart:
-  require(read('npu_restart_return_profile')==struct.pack('<4Q',0x4e50555253543031,1,2,4) and
+  require(read('npu_restart_return_profile')==struct.pack('<4Q',0x4e50555057523031 if manifest['execution_profile']==POWER else 0x4e50555253543031,1,2,4) and
    all(n in symbols and symbols[n]['st_value'] for n in ('npu_convolution_restart_poll','npu_service_restart_prepare','npu_service_restart_resume','npu_application_irq_restart')),
    'Missing exact returning restart implementation.')
  else:require('npu_restart_return_profile' not in symbols,'Restart image requires its distinct profile.')
@@ -133,6 +137,9 @@ def image_profile(data,manifest):
  if manifest['execution_profile']==SDK:geometry['sdk']=True
  if manifest['execution_profile']==INFERENCE:geometry['single_inference']=True
  if restart:geometry['restart']=True
+ if manifest['execution_profile']==POWER:
+  require(all(n in symbols for n in ('a733_npu_startup_power_off','a733_npu_startup_power_restart')),'Missing domain OFF/ON sequencer.')
+  geometry['power_cycle']=True
  if thermal:
   require(read('npu_finite_thermal_profile')==struct.pack('<4Q',0x4e50555448533031,1,160,2) and
    layout[:3]==(616,224,392),'Thermal marker/session layout differs.')
@@ -155,7 +162,7 @@ def image_profile(data,manifest):
  if capture is not None:geometry['stopped_capture']=capture
  return parts,address,build,layout,geometry
 
-def geometry_profile(g):return SDK if g.get('sdk') else SWITCH if g.get('model_switch') else RUNTIME if g.get('runtime') else INFERENCE if g.get('single_inference') else STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
+def geometry_profile(g):return POWER if g.get('power_cycle') else SDK if g.get('sdk') else SWITCH if g.get('model_switch') else RUNTIME if g.get('runtime') else INFERENCE if g.get('single_inference') else STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
 
 def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,execution_profile=PROFILE):
  """Check the actual native wire record without external process evidence."""
@@ -321,7 +328,14 @@ def validate_reports(monitor,platform,receipt,p):
    'NPU_STAGE=QUIESCENT\nNPU_STARTUP=READY_CLOSED_STOPPED; inference_jobs=0\n')
   require(status==0 and text==expected,'Startup-only stage, job or IRQ result differs.')
   return {'normal_return':True,'startup_bootstrap':True,'functional_success':False,'controlled_negative':False,'jobs':0,'status':0,'diagnostic_deadline':deadline,'log':text}
- passed='PASS NPU two matched jobs across normal local restart and parked providers' if p.get('execution_profile')==RESTART else 'PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers'
+ power=p.get('execution_profile')==POWER
+ passed='PASS NPU two matched jobs across domain OFF/restart and parked providers' if power else 'PASS NPU two matched jobs across normal local restart and parked providers' if p.get('execution_profile')==RESTART else 'PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers'
+ if power:
+  samples=[]
+  for name,expected in (('OFF',0),('ON',8)):
+   fields=re.findall(r'NPU_POWER_CYCLE_'+name+r'=\n(0x[0-9a-f]{16})\n(0x[0-9a-f]{16})\n(0x[0-9a-f]{16})\n',text)
+   require(len(fields)==1 and tuple(int(v,16) for v in fields[0][:2])==(expected,expected) and 0<int(fields[0][2],16)<20000000,'Missing or invalid physical power transition.')
+   samples.append({'policy_nibble':expected,'status_nibble':expected,'request_to_observation_us':int(fields[0][2],16)})
  pattern=r'NPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n((?:0x[0-9a-f]{16}\n){32})NPU_SECOND_OUTPUT=\n((?:0x[0-9a-f]{16}\n)+)('+re.escape(passed)+r'|FAIL NPU numerical comparison|REFUSED NPU thermal admission; configured sensor disabled and providers parked)\n'
  matches=list(re.finditer(pattern,text));require(len(matches)==1 and matches[0].end()==len(text),'Missing or ambiguous finite output/terminal marker.')
  values=lambda raw:[int(x,16) for x in raw.splitlines()]
@@ -348,7 +362,7 @@ def validate_reports(monitor,platform,receipt,p):
    'first_digest':bytes(first).hex(),'last_output':bytes(second).hex(),'output_pattern':output_pattern(first,second),
    'timing':timing(text),'log':text}
  require(matched==(status==0) and matches[0][3].startswith('PASS')==(status==0),'Numerical status disagrees with copied outputs.')
- return {'normal_return':True,'functional_success':matched,'controlled_negative':not matched,'status':status,'diagnostic_deadline':deadline,'first_digest':bytes(first).hex(),'second_output':bytes(second).hex(),'output_pattern':output_pattern(first,second),'timing':timing(text),'log':text}
+ return {'normal_return':True,'functional_success':matched,'controlled_negative':not matched,'status':status,'diagnostic_deadline':deadline,'first_digest':bytes(first).hex(),'second_output':bytes(second).hex(),'output_pattern':output_pattern(first,second),'timing':timing(text),'log':text,**({'power_cycle':samples} if power else {})}
 
 def inference_report(text,status,deadline,g):
  """The single-inference log: startup, one job, CLOSE, then the copied output.
