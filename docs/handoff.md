@@ -284,7 +284,17 @@ The following reviewed implementations are integrated with software evidence:
   words; builds and records are in
   `~/.cache/sunstoneos/evidence/dram-restore-v5-1031/`, commands in the
   [runbook](board-runbooks/dram-restore-test-1.md#commands-for-one-board).
-  No board run has used the v5 build.
+  The v5 survey build ran on port 3-1 (2026-10-31, after a WDT0 reset):
+  every PHY entry held at the hook, boot0 resumed and its simple test passed
+  on the restored state. The helper's readback after `init_DRAM` then read
+  the 18 PHY data-memory entries with nonzero expected values as 0, because
+  boot0 leaves the PHY microcontroller clock off (`UcclkHclkEnables` 0), and
+  the fallback trained fully. The helper now sets that clock to 3 for the
+  readback and restores it, and reports a failure there as error 15. Builds
+  are in `~/.cache/sunstoneos/evidence/dram-final-readback-1031/`, with the
+  commands and expected output in the
+  [runbook](board-runbooks/dram-restore-test-1.md#the-v5-run-held-every-write-the-readback-after-init_dram-read-the-data-memory-with-its-clock-stopped);
+  no board run has used them.
 
 ## Current integration
 

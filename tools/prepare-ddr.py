@@ -154,7 +154,8 @@ if args.variant == "restore":
                         **({"survey": survey} if survey else {}),
                         "errors": {"geometry": 1, "header_crc": 2, "payload_crc": 3, "chip": 4,
                                    "boot0": 5, "strap": 6, "readback": 7, "size": 8,
-                                   "memory": 9, "hook": 10, "entry": 11}}
+                                   "memory": 9, "hook": 10, "entry": 11,
+                                   "final_readback": 15}}
 # Replace the Thumb UART character output with an interworking literal load.
 offset = 0x4a540 - 0x47000
 if blob[offset:offset + 8].hex() != "034b1b685a695206":

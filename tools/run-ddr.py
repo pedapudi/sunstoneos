@@ -86,6 +86,10 @@ if manifest.get("clock_point_word") != 15:
 if restore:
     if not 0 < manifest["files"]["ddr-restore.bin"]["size"] <= 0x8000:
         sys.exit("Restore helper exceeds its SRAM reservation.")
+    # Helpers up to f0595d83 read the PHY data memory after
+    # init_DRAM with its clock stopped, and report that pass as "readback".
+    if manifest["restore"]["errors"].get("final_readback") != 15:
+        sys.exit("--build predates the clocked final readback (no final_readback error); rebuild it.")
     fallback = verified(args.fallback_build)
     if fallback.get("variant") is not None or fallback.get("boot0_sha256") != manifest.get("boot0_sha256"):
         sys.exit("--fallback-build must be the plain full-training wrapper for the same boot0.")
@@ -378,16 +382,19 @@ def restore_attempt():
         if restore_launch(watchdog):
             mailbox, values = collect(args.evidence, record)
             restored = struct.unpack_from("<7I", mailbox, 28)
+            errors = manifest["restore"]["errors"]
             start, end = struct.unpack_from("<2I", mailbox, 100)
             record["restore_result"] = dict(zip(("error", "phy_writes", "hook_calls", "sample_read_bytes",
                                                  "failure_address", "expected", "actual"), restored))
             if not restored[0]:
                 # Words 25 and 26: 24 MHz counter at the start and end of restore_check.
                 record["restore_result"]["check_ms"] = round(((end - start) & 0xffffffff) / 24000, 3)
-            elif restored[0] == manifest["restore"]["errors"]["readback"]:
+            elif restored[0] in (errors["readback"], errors["final_readback"]):
                 # Word 27 counts readback mismatches; words 28-31 hold the
                 # second to fifth as (profile index << 16) | value read.
                 count, *more = struct.unpack_from("<5I", mailbox, 108)
+                record["restore_result"]["failed_pass"] = (
+                    "hook" if restored[0] == errors["readback"] else "after init_DRAM")
                 record["restore_result"]["mismatches"] = count
                 record["restore_result"]["later_mismatches"] = [
                     {"address": f"{profile_addresses[word >> 16]:#010x}"
@@ -395,11 +402,14 @@ def restore_attempt():
                      "actual": f"{word & 0xffff:#06x}"}
                     for word in more[:max(0, min(count, 5) - 1)]]
             if survey:
-                # The helper's word 27 counts entries wrong at its readback pass.
+                # The survey records the hook's passes. Word 27 counts the
+                # failing pass's mismatches; a failure after init_DRAM means
+                # the hook's readback passed.
                 result = record["restore_result"]["survey"] = read_survey(args.evidence)
                 if "mismatches" in result:
-                    result["agrees_with_mailbox"] = (
-                        result["mismatches"] == record["restore_result"].get("mismatches", 0))
+                    hook_mismatches = (record["restore_result"]["mismatches"]
+                                       if restored[0] == errors["readback"] else 0)
+                    result["agrees_with_mailbox"] = result["mismatches"] == hook_mismatches
             save()
             settings = manifest["restore"]
             expected = (0, settings["phy_registers"], 1, settings["sample_read_bytes"])

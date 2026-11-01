@@ -11,6 +11,13 @@ The ACSM memory (0x0a982000-0x0a983fff, 64-bit words) and the PHY data memory
 word's highest halfword is written, and read the stored word until then, as
 the port 3-1 survey showed; the helper must write each touched word whole,
 in ascending order, with the other halfwords' stored values.
+After the hook, boot0 stops the PHY microcontroller clock (UcclkHclkEnables 0
+on return from init_DRAM, 0x5749a), and the data memory then reads 0, as the
+port 3-1 run of 2026-10-31 showed; the readback after init_DRAM must set the
+clock on and restore it. The clock-stopped case ignores that write and must
+reproduce the board's mailbox signature: error final_readback, every data
+memory entry with nonzero expected bits reading 0. The clock-two case returns
+from init_DRAM with UcclkHclkEnables 2; the helper must write back 2.
 For a survey build (tools/prepare-ddr.py --survey) every case also checks the
 survey at 0x96000, and the survey-classes case makes one entry each drop its
 write, read 0, read another value, change after a later write and already
@@ -60,6 +67,9 @@ if not a.reproduce:
 WIDE = ((0x0a982000, 0x2000, 8), (0x0a9b0000, 0x10000, 4))
 def width(address):
     return next((w for base, size, w in WIDE if base <= address < base+size), 2)
+UCCLK, DMEM = 0x0aa80100, 0x0a9b0000
+# Data memory entries that read wrong while its clock is stopped.
+CLOCKED = [n for n,(address,value) in enumerate(phy) if DMEM <= address < DMEM+0x10000 and value&masks[address]]
 # Halfwords of touched wide words that are not profile entries hold this value.
 OTHER = 0xc3c3
 WIDE_WORDS = sorted({address & ~(width(address)-1) for address,_ in phy if width(address) > 2})
@@ -80,7 +90,7 @@ def repair(data, payload=False):
 cases = {'nominal':0, 'wrong-board':4, 'header-crc':2, 'payload-crc':3, 'strap':6,
          'boot0':5, 'geometry':1, 'run-overflow':1, 'unauthorized-address':1,
          'unauthorized-mask':1, 'mode-register-section':1, 'parameter-high-half':0,
-         'readback':7, 'readback-survey':7, 'final-readback':7, 'memory':9, 'address-alias':9,
+         'readback':7, 'readback-survey':7, 'final-readback':15, 'clock-stopped':15, 'clock-two':0, 'memory':9, 'address-alias':9,
          'window-bit':9, 'size':8, 'missing-hook':10}
 SURVEYED = manifest['restore'].get('survey')
 if SURVEYED:
@@ -98,6 +108,7 @@ if a.reproduce:
     cases = {'nominal': board[0]}
 for case, error in cases.items():
     record = bytearray(original)
+    RETURN_CLOCK = 2 if case=='clock-two' else 0
     if case=='wrong-board': record = bytearray(other)
     if case=='header-crc': record[24] ^= 1
     if case=='payload-crc': record[136] ^= 1
@@ -115,6 +126,8 @@ for case, error in cases.items():
     wide={'stored':{},'held':{},'writes':[]}
     def wide_read(uc,offset,size,base):
         assert size==2,('wide read size',size)
+        if base==DMEM and state['continuation'] and (case=='clock-stopped' or not struct.unpack('<H',uc.mem_read(UCCLK,2))[0]&1):
+            return 0
         return wide['stored'].get(base+offset,0)
     def wide_write(uc,offset,size,value,base):
         assert size==2,('wide write size',size)
@@ -149,7 +162,7 @@ for case, error in cases.items():
     cpu.reg_write(UC_ARM_REG_CPSR,0x60000053);cpu.reg_write(UC_ARM_REG_SP,0xf3000);cpu.reg_write(UC_ARM_REG_LR,0xf0000)
     regs=(UC_ARM_REG_R4,UC_ARM_REG_R5,UC_ARM_REG_R6,UC_ARM_REG_R7,UC_ARM_REG_R8,UC_ARM_REG_R9,UC_ARM_REG_R10,UC_ARM_REG_R11)
     for i,reg in enumerate(regs):cpu.reg_write(reg,0x12340000+i)
-    state={'instructions':0,'init':0,'timing':0,'continuation':0,'injections':0,'dram_reads':0,'dram_writes':0,'phy_writes':[], 'faulted':False, 'survey':set()}
+    state={'instructions':0,'init':0,'timing':0,'continuation':0,'injections':0,'dram_reads':0,'dram_writes':0,'phy_writes':[], 'faulted':False, 'survey':set(), 'ucclk_writes':[]}
     selected=(a.build/'boot0-head.bin').read_bytes()[0x574:0x5f4]
     wanted=list(struct.unpack('<32I',selected));wanted[30]&=~4;wanted[27]=(wanted[27]&~0x3fff0000)|0x10000;wanted[23]|=0x80000000
     def ret(uc,result=0):
@@ -182,6 +195,9 @@ for case, error in cases.items():
             assert not state['faulted']
             if case=='final-readback':
                 address,value=phy[0];poke(uc,address,value^masks[address]);state['injections']+=1
+            # boot0's PIE stage and 0x57310 leave the microcontroller clock off;
+            # clock-two leaves HCLK on, so the helper must write back what it read.
+            uc.mem_write(UCCLK,struct.pack('<H',RETURN_CLOCK))
             for reg,value in zip(regs,state['saved']):uc.reg_write(reg,value)
             uc.reg_write(UC_ARM_REG_SP,state['sp']);uc.reg_write(UC_ARM_REG_LR,state['return'])
             ret(uc,4096 if case=='size' else 12288)
@@ -208,7 +224,11 @@ for case, error in cases.items():
                     current=struct.unpack('<I',uc.mem_read(address,4))[0]
                     if current&0x100:
                         uc.mem_write(address,struct.pack('<I',current&~0x100));state['injections']+=1;state['faulted']=True
-        if access==17 and address in masks:
+        if access==17 and address==UCCLK:
+            # Only the readback after init_DRAM, with the mux cleared.
+            assert size==2 and state['continuation'] and struct.unpack('<H',uc.mem_read(0x0aaa0000,2))[0]==0
+            state['ucclk_writes'].append(value&0xffff)
+        elif access==17 and address in masks:
             assert size==2
             assert struct.unpack('<H',uc.mem_read(0x0aaa0000,2))[0]==0
             state['phy_writes'].append(address)
@@ -248,6 +268,11 @@ for case, error in cases.items():
         assert {k:clocks.words[k] for k in ROM}==ROM and mailbox[15]==0,(case,mailbox[15])
     assert mailbox[0:2]==(0x53524444,5)
     assert mailbox[7]==error,(case,mailbox[:14],state)
+    # The readback after init_DRAM runs the clock, then writes back the value it read.
+    final_pass=error in (0,9,15)
+    assert state['ucclk_writes']==([3,RETURN_CLOCK] if final_pass else []),(case,state['ucclk_writes'])
+    assert struct.unpack('<H',cpu.mem_read(UCCLK,2))[0]==(RETURN_CLOCK if state['continuation'] else 3)
+    assert struct.unpack('<H',cpu.mem_read(0x0aaa0000,2))[0]==1
     if SURVEYED:
         data=bytes(cpu.mem_read(SURVEYED['address'],SURVEYED['bytes']))
         if not mailbox[9]:
@@ -269,8 +294,10 @@ for case, error in cases.items():
                             for n in range(PHY_COUNT)}
             assert summary['refilled_halfwords']==sum(1 for word in WIDE_WORDS for h in range(word,word+width(word),2)
                                                       if h not in masks),summary['refilled_halfwords']
-            # The survey describes the write pass; final-readback fails only the later pass.
-            assert summary['mismatches']==(0 if case=='final-readback' else mailbox[27]),(case,summary,mailbox[27])
+            # The survey describes the hook's passes; error 15 fails only the later pass.
+            assert summary['mismatches']==(0 if error==15 else mailbox[27]),(case,summary,mailbox[27])
+            assert summary['after_init']==({'micro_cont_mux_sel':'0x0001','ucclk_hclk_enables':f'{RETURN_CLOCK:#06x}'}
+                                           if final_pass else None),(case,summary['after_init'])
             if case=='survey-classes':
                 expected_class.update(SURVEY_CLASS)
                 assert {e['index']:e['class'] for e in entries}==expected_class,summary
@@ -284,7 +311,7 @@ for case, error in cases.items():
         # The board restore stopped before boot0 resumed; so must this one.
         assert mailbox[7:14]==board,(mailbox[7:14],board)
         assert state['timing']==state['continuation']==0 and not state['dram_reads'] and not state['dram_writes']
-    elif case in ('nominal','parameter-high-half'):
+    elif case in ('nominal','parameter-high-half','clock-two'):
         assert state['phy_writes']==[a for a,v in phy]
         for address,value in phy:
             actual=peek(cpu,address)
@@ -314,6 +341,12 @@ for case, error in cases.items():
         assert mailbox[11:14]==(phy[0][0],phy[0][1],phy[0][1]^masks[phy[0][0]])
         assert mailbox[27:32]==(3,100<<16|phy[100][1]^masks[phy[100][0]],500<<16|phy[500][1]^masks[phy[500][0]],0,0)
     elif case in ('size','final-readback','missing-hook'):assert not state['dram_reads'] and not state['dram_writes']
+    elif case=='clock-stopped':
+        # The port 3-1 v5 signature: the first nonzero data memory entry reads 0,
+        # every such entry counts, and the quick check never runs.
+        assert mailbox[8:10]==(PHY_COUNT,1) and CLOCKED and mailbox[11:14]==(*phy[CLOCKED[0]],0),mailbox[8:14]
+        assert mailbox[27]==len(CLOCKED) and mailbox[28:32]==tuple(n<<16 for n in CLOCKED[1:5]),mailbox[27:32]
+        assert not state['dram_reads'] and not state['dram_writes'] and mailbox[10]==0
     elif case=='survey-classes':
         assert state['phy_writes']==[a for a,v in phy] and state['injections']==1 and len(state['survey'])==3
         assert state['timing']==state['continuation']==0 and not state['dram_reads'] and not state['dram_writes']

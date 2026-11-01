@@ -609,14 +609,40 @@ register that does not hold its value: mailbox words 11–13 keep the first
 mismatch's address, expected and read values, word 27 counts the mismatches
 and words 28–31 hold the second to fifth as profile index (upper half) and
 value read (lower half). The PHY state is discarded by the WDT0 reset that follows. A failed pass then
-exits directly to the wrapper's saved SRAM context; it must not resume
-boot0 and reach its memory test. After a successful
-`init_DRAM`, the wrapper checks the size and runs the
+exits directly to the wrapper's saved SRAM context with error 7; it must
+not resume boot0 and reach its memory test. After a successful
+`init_DRAM`, the wrapper checks the size, reads every entry back a second
+time and runs the
 [quick check](#the-quick-check-covers-address-lines-and-sixteen-windows-below-4-gib).
+A mismatch in that second readback fails the restore with error 15, so the
+mailbox names the pass that failed.
+
+The second readback runs the PHY microcontroller clock. Between the hook
+and the return from `init_DRAM`, boot0 runs its final PHY stage
+(`0x4f46c`, here `0x5a210`), which ends with `UcclkHclkEnables` = 2
+(`0x5ae9a`) and `MicroContMuxSel` = 1, and then, for an LPDDR5 set,
+`0x57310`, called twice on these boards (`dram_tpr13` bit 6, `0x579ce`). That routine clears `MicroContMuxSel`, sets `UcclkHclkEnables`
+to 3, reads thirteen halfwords of the message block from `0x0a9b0026` to
+`0x0a9b004c`, programs controller timing from their maxima, writes
+`UcclkHclkEnables` = 0 (`0x5749a`) and sets the mux to 1 (`0x574ac`).
+No other boot0 code that runs after the hook writes the data memory or
+`UcclkHclkEnables`: `0x4bca8`, which the hook calls on to, `0x5a210`,
+`0x4b7ec`, `0x561a0`, the size probe `0x4b74c` and the simple test `0x4b4cc`
+(the message-block writers `0x58ba8`, `0x590c4` and `0x59d00` run before
+the hook). No code after the hook writes `MicroReset`, which stays 1, so the
+training firmware stays stalled while the clock runs. With the clock off, the data memory
+reads 0 over APB, as the port 3-1 run of 2026-10-31 showed. Its contents
+are kept (inferred: `0x57310` reads them after the final PHY stage has
+stopped the clock). The second readback therefore sets `UcclkHclkEnables` to 3 after
+clearing the mux, as `0x57310` and the capture reader do, and writes back
+the value it read (0 on boot0's path) before setting the mux to 1. The restored
+message-block entries matter because `0x57310` reads `0x0a9b002c` and
+`0x0a9b0030` among its thirteen halfwords.
 The quick check finds gross errors only; the separate March C-
 qualification remains required. Failures have distinct mailbox
 codes for record geometry, header CRC, payload CRC, chip ID, boot0 identity,
-strap, PHY readback, size and memory comparison. No failure retrains in
+strap, PHY readback at the hook, PHY readback after `init_DRAM`, size and
+memory comparison. No failure retrains in
 place. The host writes no RAM page after a reported restore failure.
 
 The budget is one admission pass, one ordered PHY write pass and one
@@ -655,7 +681,7 @@ far, the address, the expected and the actual word in mailbox words 10–13.
 Mailbox words 25 and 26 hold the low word of the 24 MHz system counter at the
 start and end of `restore_check`, which boot0's own timer also reads. The
 host reports the difference as the check time. In the instruction fixture
-the nominal FEL case executes 2,236,828 instructions.
+the nominal FEL case executes 2,247,330 instructions.
 
 ### The FEL runner falls back through one watchdog reset
 
@@ -762,7 +788,7 @@ three the check lowers the poll limit to 2,000.
 `tools/prepare-ddr.py --variant restore --survey` builds the restore helper
 with `RESTORE_SURVEY` defined; without the flag the helper's bytes do not
 change. The diagnostic helper fills a survey at SRAM `0x96000`, inside the
-helper reservation and above the helper's 9,808 bytes:
+helper reservation and above the helper's 9,912 bytes:
 
 - **Header, 64 bytes.** Word 0 is `0x59565253` once the write pass starts,
   word 1 counts the entries recorded, word 2 holds `MicroContMuxSel` before
@@ -771,6 +797,9 @@ helper reservation and above the helper's 9,808 bytes:
   (`0x0aaa0062`) and `UctShadowRegs` (`0x0aaa0008`) at the hook.
 - **Header word 7** counts the wide-memory halfwords rewritten with their
   stored values.
+- **Header words 8–10.** Word 8 is 1 once the readback after `init_DRAM`
+  starts; words 9 and 10 hold the `MicroContMuxSel` and `UcclkHclkEnables`
+  values that pass found before it changed them (1 and 0 on boot0's path).
 - **Entries, 8 bytes each from `0x96040`.** For each entry in profile
   order: the value read before the write (the helper's read-modify-write
   already reads it), the value read straight after it, the value the
@@ -801,8 +830,9 @@ The last four are mismatches.
 
 The runner writes every entry to `survey.json`, records the class counts,
 the mismatches by register family and the control words in
-`restore_result.survey`, and checks that the mismatches equal mailbox
-word 27. A survey without its magic word, or with
+`restore_result.survey`, and checks the survey's mismatches against the
+mailbox: they equal word 27 after error 7 and are 0 otherwise, because the
+survey records only the passes at the hook. A survey without its magic word, or with
 fewer entries than the profile, is recorded as an error and the run falls
 back as usual. `tools/ddr-survey.py SURVEY.BIN --record RECORD.BIN` decodes a
 saved survey offline.
@@ -886,7 +916,7 @@ Implementation and remaining physical work:
 | --- | --- |
 | Capture reader, stage tables, runner, DRAM and SRAM builds, wrapper variants | Implemented, host-checked, frozen (v5 sets), run in ten lifetimes |
 | `tools/analyse-ddr-captures.py`, kind diff and block exclusion | Implemented, host-checked |
-| Restore set | Fixed: `~/.cache/sunstoneos/evidence/dram-restore-1031b/restore-set-v4.json`, command in `restore-set-v4.command` |
+| Restore set | Fixed: `~/.cache/sunstoneos/evidence/dram-final-readback-1031/restore-set-v5.json`, command in `restore-set-v5.command` |
 | Record format, paired selection and standby plans | Implemented and host-checked; physical card stage not started |
 | Record builder from a capture | Implemented; both actual board references and identity refusals checked |
 | Restore wrapper variant | Implemented; instruction and host-runner cases checked |

@@ -23,8 +23,11 @@ value ("end") and, where it matters, the value straight after the write:
   PHY produced it.
 
 The current helper's mailbox word 27 counts entries wrong at the readback
-pass ("mismatches"). Helpers before the whole-word writes counted entries
-wrong straight after their write ("immediate_mismatches").
+pass at the hook ("mismatches") or, with error final_readback, at the
+readback after init_DRAM, which the survey does not record per entry; its
+"after_init" control words show the PHY clock state that pass found. Helpers
+before the whole-word writes counted entries wrong straight after their
+write ("immediate_mismatches").
 
 Usage: tools/ddr-survey.py SURVEY.BIN --record RECORD.BIN [--output JSON]
 """
@@ -43,6 +46,9 @@ REFILLS_WORD = 7
 # Header words 2-6, read by the helper at the start of the write pass.
 CONTROL = ("micro_cont_mux_sel_at_hook", "ucclk_hclk_enables", "micro_reset", "dct_write_prot",
            "uct_shadow_regs")
+# Header word 8 is 1 once the readback after init_DRAM starts; words 9 and 10
+# hold the MicroContMuxSel and UcclkHclkEnables values it found.
+AFTER_INIT = ("micro_cont_mux_sel", "ucclk_hclk_enables")
 
 
 def family(address):
@@ -96,6 +102,8 @@ def decode(data, addresses, expected):
                "mismatches": sum(counts.get(c, 0) for c in MISMATCH_CLASSES),
                "immediate_mismatches": immediate,
                "refilled_halfwords": header[REFILLS_WORD],
+               "after_init": ({name: f"{value:#06x}" for name, value in zip(AFTER_INIT, header[9:11])}
+                              if header[8] == 1 else None),
                "mismatch_families": dict(sorted(families.items()))}
     return entries, summary
 

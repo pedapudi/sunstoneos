@@ -15,10 +15,12 @@ typedef uint8_t u8;
 #define MAIL ((volatile u32 *)0x86000)
 #define PARAM ((volatile u32 *)0x831f8)
 #define MUX ((volatile u16 *)0x0aaa0000)
+#define UCCLK ((volatile u16 *)0x0aa80100) /* UcclkHclkEnables, CSR 0xc0080 */
 #define LIMIT 0x6000u
-/* Codes are shared with the host through the build manifest. */
+/* Codes are shared with the host through the build manifest. The card
+ * path's own stop codes are 12-14 (boot/a733/card-ddr-entry.S). */
 enum { GEOMETRY=1, HEADER_CRC, PAYLOAD_CRC, CHIP, BOOT0, STRAP,
-       READBACK, SIZE, MEMORY, HOOK, ENTRY };
+       READBACK, SIZE, MEMORY, HOOK, ENTRY, FINAL_READBACK=15 };
 
 static u32 word(const u8 *p) { return *(const u32 *)p; }
 static u32 crc(const u8 *p, u32 n)
@@ -102,8 +104,10 @@ u32 restore_admit(void)
  * holds a magic word, the entries recorded, the hook-time PHY control words
  * (MicroContMuxSel before the helper clears it, then UcclkHclkEnables,
  * MicroReset, DctWriteProt and UctShadowRegs) and, in word 7, the number of
- * wide-memory halfwords rewritten with their stored values. The host decodes
- * it with tools/ddr-survey.py. */
+ * wide-memory halfwords rewritten with their stored values. Words 8-10 hold
+ * 1 once the readback after init_DRAM starts, then the MicroContMuxSel and
+ * UcclkHclkEnables values it found. The host decodes the survey with
+ * tools/ddr-survey.py. */
 #define SURVEY ((volatile u32 *)0x96000)
 #define SURVEY_ENTRY ((volatile u16 *)0x96040)
 #define SURVEY_MAGIC 0x59565253u /* "SRVY" */
@@ -131,15 +135,25 @@ static u32 refill(u32 from, u32 to)
     return n;
 }
 
-/* One write pass, then one readback pass. In a wide memory the pass writes
+/* One write pass, then one readback pass; restore_check runs the readback
+ * pass again after init_DRAM. In a wide memory the pass writes
  * the whole word of each entry, in ascending halfword order: halfwords that
  * are not profile entries are rewritten with their stored values, so the
  * write of the highest halfword stores the restored word. The readback pass
  * follows the last write. A mismatch does not stop it: one board run names
  * every register that does not hold its value. Words 11-13 keep the first
  * mismatch, word 27 counts them and words 28-31 hold the next four as
- * (profile index << 16) | value read. Any mismatch fails the restore, which
- * then never resumes boot0. */
+ * (profile index << 16) | value read. A mismatch at the hook fails the
+ * restore with READBACK, which then never resumes boot0; one after init_DRAM
+ * fails it with FINAL_READBACK.
+ *
+ * After the hook boot0 stops the PHY microcontroller clock: its PIE stage
+ * writes UcclkHclkEnables = 2 (0x5ae9a), and 0x57310 sets 3, reads the
+ * message block, then writes 0 (0x5749a). With the clock off, the data memory
+ * reads 0 over APB (port 3-1, 2026-10-31). Its contents are kept
+ * (inferred: 0x57310 reads them after the PIE stage has stopped the clock). The readback after
+ * init_DRAM therefore sets UcclkHclkEnables to 3 while it reads, as 0x57310
+ * and the capture reader do, and then writes back the value it found. */
 static u32 restore_phy(u32 write)
 {
     const u8 *r = RECORD, *p = r+128;
@@ -148,10 +162,22 @@ static u32 restore_phy(u32 write)
     if (write) {
         for (u32 i = 0; i < 16; ++i) SURVEY[i] = 0;
         SURVEY[2] = *MUX;
+    } else {
+        SURVEY[8] = 1;
+        SURVEY[9] = *MUX;
     }
 #endif
     *MUX = 0;
     barrier();
+    u16 clocks = 0;
+    if (!write) {
+        clocks = *UCCLK;
+#ifdef RESTORE_SURVEY
+        SURVEY[10] = clocks;
+#endif
+        *UCCLK = 3;
+        barrier();
+    }
 #ifdef RESTORE_SURVEY
     if (write) {
         SURVEY[3] = PHY16(0x0aa80100);
@@ -219,9 +245,10 @@ static u32 restore_phy(u32 write)
         }
         offset += (count*2+3)&~3u;
     }
+    if (!write) *UCCLK = clocks;
     *MUX = 1;
     barrier();
-    return mismatches ? READBACK : 0;
+    return !mismatches ? 0 : write ? READBACK : FINAL_READBACK;
 }
 
 u32 restore_write(void)
