@@ -9500,6 +9500,17 @@
   "summary": "Build and run the host model of the resident reboot path.",
   "usb": false
  },
+ "returning-watchdog.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--out"
+  ],
+  "summary": "Check the host-armed watchdog and RTC breadcrumbs of returning images.",
+  "usb": true
+ },
  "rtc-application-cases.py": {
   "cache_areas": [],
   "docs": [],

@@ -10,7 +10,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP
-from harness import Image, save, refused
+from harness import Image, save, refused, skip_crumbs
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--case',action='append');p.add_argument('--session',type=Path)
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
@@ -46,6 +46,7 @@ for name,fail_step,mutation in cases:
  u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x41000000,0x1200000);u.mem_map(0x80000000,0x20000)
  for address,data in im.parts:
   if data:u.mem_write(address,data)
+ skip_crumbs(u,im)
  def put(address,value,n=4):u.mem_write(address,int(value).to_bytes(n,'little'))
  def get(address,n=4):return int.from_bytes(u.mem_read(address,n),'little')
  def sf(base,typ,n,value,size=4):put(field(base,typ,n),value,size)

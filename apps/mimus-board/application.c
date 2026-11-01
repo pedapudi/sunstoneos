@@ -92,10 +92,13 @@ int board_application_start(void){return mimus_board_application_start();}
 #endif
 
 int mimus_board_keyboard(void){return board.session.workload==4;}
+#include "sunstone_crumb.h"
 int mimus_board_trigger_step(void)
 {
     if(!mimus_board_live())return -1;
-    return mimus_board_keyboard()?mimus_keyboard_step():1;
+    if(mimus_board_keyboard())return mimus_keyboard_step();
+    sunstone_crumb(SUNSTONE_CRUMB_RECOGNITION_START,0);
+    return 1;
 }
 int mimus_board_trigger_copy(uint8_t out[128])
 {

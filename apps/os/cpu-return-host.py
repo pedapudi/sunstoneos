@@ -62,6 +62,10 @@ def geometry(image):
     result['output_address'] = output['value']
     result['output_bytes'] = OUTPUT_BYTES
     result['thermal'] = thermal_capture.geometry(image)
+    mode = os_image.watchdog_marker(elf)
+    if mode is not None:
+        # Host-armed WDT0 and RTC breadcrumbs (include/sunstone_crumb.h).
+        result['watchdog'] = {'mode': mode}
     config=os_image.os_link.gpu_configuration(elf)
     if config:
         require('return' in config, 'GPU return capability absent.')
@@ -366,7 +370,7 @@ def run(args):
         return run_once(tx, launch, ready, args.bundle, p, args.evidence, record, journal)
     return cpu.returning.run(args, base=base, profile=PROFILE, validate_bundle=validate_bundle,
                              admit=admit, execute=execute, description='One recorded CPU recognition and RAM return',
-                             return_timeout=90)
+                             return_timeout=90, watchdog=validate_bundle(args.bundle)['qualification'].get('watchdog'))
 
 
 def check_admission(args):
@@ -384,6 +388,7 @@ def check_admission(args):
     return {'passed': True, 'physical_access': False, 'queue_access': False,
             'live_identity_checked': False, 'captured_target': captured,
             'image_sha256': prepared['image_sha256'],
+            'watchdog': prepared['qualification'].get('watchdog'),
             'claim': args.root_owned_claim,
             'scope': 'Actual bundle and launch admission with recorded identity; live execution rechecks target.'}
 

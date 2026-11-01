@@ -22,7 +22,7 @@
      add x25, x25, #63
      and x25, x25, #-64
      mov x2, #0x42000000
-@@ -248,6 +248,15 @@
+@@ -248,6 +252,15 @@
      add x24, x24, #64
      cmp x24, x25
      b.lo .Lclean
@@ -38,3 +38,36 @@
      dsb sy
      add x2, x23, #688
      add x2, x2, x20, lsl #10
+@@ -369,9 +382,32 @@
+     dsb sy
+     str x1, [x2, #40]
+     dsb sy
++    // Breadcrumb LAST/TIME (include/sunstone_crumb.h): power-down, value core.
++    mov x3, #0x07090000
++    mov w4, #0x05020000
++    orr w4, w4, w0
++    str w4, [x3, #0x104]
++    mrs x4, cntpct_el0
++    ubfx x4, x4, #10, #29
++    orr w4, w4, w0, lsl #29
++    str w4, [x3, #0x10c]
++    dsb sy
+     b qualification_park
+ 
+ a733_qualification_rom:
++    // Disarm the host-armed WDT0 (include/sunstone_crumb.h) before the only
++    // normal return, then record the mode read back.
++    mov x0, #0x02050000
++    mov w1, #0x16aa0000
++    str w1, [x0, #0x14]
++    dsb sy
++    ldr w1, [x0, #0x14]
++    and w1, w1, #0xffff
++    mov x0, #0x07090000
++    mov w2, #0x05030000
++    orr w2, w2, w1
++    str w2, [x0, #0x104]
++    dsb sy
+     mov x0, #0x08000000
+     add x0, x0, #0x1000
+     mov w1, #0x20

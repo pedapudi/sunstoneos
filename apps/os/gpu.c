@@ -7,6 +7,9 @@
  * initially, reconciles thermal state between calls, and begins and finishes
  * each job; INTID 95 calls irq. */
 #include "os.h"
+#include "sunstone_crumb.h"
+/* Job sequence numbers for the breadcrumbs; one recognizer submits and collects. */
+static uint32_t crumb_submitted, crumb_completed;
 #include "../board/application.h"
 #include "a733_fault.h"
 #include "a733_gpu_backend.h"
@@ -168,7 +171,15 @@ static int start_refused(unsigned reason)
 #endif
     return 1;
 }
+static int gpu_start_body(unsigned core);
 int a733_gpu_mimus_start(unsigned core)
+{
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_CONSTRUCT, (uint32_t)(core));
+    int r = gpu_start_body(core);
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_CONSTRUCTED, (uint32_t)(gpu.started));
+    return r;
+}
+static int gpu_start_body(unsigned core)
 {
     if (core >= configNUMBER_OF_CORES || gpu.started || !os_recognizer ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
@@ -293,7 +304,15 @@ retry:
         }
     }
 }
+static int gpu_open_body(void);
 int a733_gpu_mimus_open(void)
+{
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_FIRMWARE, (uint32_t)(0));
+    int r = gpu_open_body();
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_READY, (uint32_t)(r));
+    return r;
+}
+static int gpu_open_body(void)
 {
     struct gpu_wait wait;
     if (xTaskGetCurrentTaskHandle() != os_recognizer) return OS_GPU_CALL_LOST;
@@ -330,7 +349,15 @@ static int runtime_close(void)
     gpu.opened = 0; gpu.parked = 1;
     return 1;
 }
+static int gpu_thermal_body(void);
 int a733_gpu_mimus_thermal(void)
+{
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_THERMAL, (uint32_t)(0xffff));
+    int r = gpu_thermal_body();
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_THERMAL, (uint32_t)(r));
+    return r;
+}
+static int gpu_thermal_body(void)
 {
     if (!gpu.started || gpu.failed || xTaskGetCurrentTaskHandle() != os_recognizer) return -1;
     if (gpu.retired) return 0;
@@ -349,7 +376,15 @@ int a733_gpu_mimus_thermal(void)
     os_dispatch_waiting(0);
     return !throttled;
 }
+static int gpu_retire_body(void);
 int a733_gpu_mimus_retire(void)
+{
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_RETIRE, (uint32_t)(0));
+    int r = gpu_retire_body();
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_RETIRED, (uint32_t)(r));
+    return r;
+}
+static int gpu_retire_body(void)
 {
     if (!gpu.started || gpu.failed || xTaskGetCurrentTaskHandle() != os_recognizer) return 0;
     if (gpu.retired) return gpu.parked && !gpu.opened;
@@ -379,7 +414,15 @@ static int zero_bytes(const void *address,size_t bytes)
 }
 /* A constructor refusal precedes the scheduler and every accepted OPEN.
  * Allocated RAM stays owned until the returning host restores its backup. */
+static int gpu_return_untouched_body(void);
 int a733_gpu_mimus_return_untouched(void)
+{
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_PARKED, (uint32_t)(0xfffe));
+    int r = gpu_return_untouched_body();
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_PARKED, (uint32_t)(r));
+    return r;
+}
+static int gpu_return_untouched_body(void)
 {
     const struct a733_gpu_platform *p=&gpu.power;
     const struct a733_gpu_backend *b=&gpu.backend;
@@ -435,7 +478,15 @@ static int return_park(void *context,uint64_t deadline)
        !a733_gpu_backend_stopped(&gpu.backend,&gpu.service))return -1;
     return a733_gpu_platform_park(&gpu.power,deadline);
 }
+static int gpu_return_body(uint64_t completed);
 int a733_gpu_mimus_return(uint64_t completed)
+{
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_PARKED, (uint32_t)(0xffff));
+    int r = gpu_return_body(completed);
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_PARKED, (uint32_t)(r));
+    return r;
+}
+static int gpu_return_body(uint64_t completed)
 {
     if(!completed || xTaskGetCurrentTaskHandle()!=os_recognizer || !gpu.started ||
        gpu.failed || gpu.job_pending || !gpu.epoch || os_gpu_return_started() ||
@@ -468,7 +519,14 @@ int a733_gpu_mimus_return(uint64_t completed)
     return 1;
 }
 #endif
+static int gpu_begin_body(const struct pvr_mimus_request *job);
 int a733_gpu_mimus_begin(const struct pvr_mimus_request *job)
+{
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_SUBMIT, (uint32_t)(++crumb_submitted));
+    int r = gpu_begin_body(job);
+    return r;
+}
+static int gpu_begin_body(const struct pvr_mimus_request *job)
 {
     if (xTaskGetCurrentTaskHandle() != os_recognizer) return OS_GPU_CALL_LOST;
     if (gpu.failed) return -(int)gpu.failed;
@@ -543,7 +601,14 @@ enum a733_perf_status os_gpu_perf_action(enum a733_perf_action action,uint32_t v
     return result;
 }
 #endif
+static int gpu_finish_body(struct pvr_mimus_record *record);
 int a733_gpu_mimus_finish(struct pvr_mimus_record *record)
+{
+    int r = gpu_finish_body(record);
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_COMPLETE, (uint32_t)(++crumb_completed));
+    return r;
+}
+static int gpu_finish_body(struct pvr_mimus_record *record)
 {
     if (xTaskGetCurrentTaskHandle() != os_recognizer) return OS_GPU_CALL_LOST;
     if (gpu.failed) return -(int)gpu.failed;

@@ -16,7 +16,7 @@ prior=importlib.util.module_from_spec(spec);spec.loader.exec_module(prior)
 class Model(prior.Model):
     def __init__(self,image,layout):
         super().__init__(image);self.layout=layout;self.thermal_ready=1
-        for a,n in ((0x08871000,0x3000),(0x07090000,0x1000),(0x03006000,0x1000)):
+        for a,n in ((0x08871000,0x3000),(0x03006000,0x1000)):
             self.uc.mem_map(a,n)
         self.put32(0x07090160,0x10008002);self.put32(0x0300624c,0x400)
         for i,(pll,mux) in enumerate(zip((0xf8802600,0xf8802700,0xf8802600),(0x03010000,0x03000000,0x03010105))):
