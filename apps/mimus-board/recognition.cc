@@ -10,6 +10,7 @@ void runtime_smp_init(void);
 }
 #include <atomic>
 #include <cstring>
+#include "sunstone_crumb.h"
 namespace {
 StaticTask_t task;
 StackType_t stack[16384];
@@ -26,6 +27,7 @@ void recognize(void *)
      * EL0 CPU work; publication in EL3 alone does not authenticate inputs. */
     while(!mimus_board_live()){if(stopped.load()||!mimus_board_session_live()){failed();}mimus_board_progress();vTaskDelay(1);}
     for(unsigned i=0;i<3;++i){
+        sunstone_crumb(SUNSTONE_CRUMB_ASSET_START,i);
         storage_digest digest;storage_digest_init(&digest);
         const auto *p=reinterpret_cast<const uint8_t *>(mimus_asset_address[i]);
         for(size_t n=0;n<mimus_asset_bytes[i];){
@@ -33,6 +35,7 @@ void recognize(void *)
             if(!storage_digest_add(&digest,p+n,count)){failed();}n+=count;mimus_board_progress();taskYIELD();
         }
         uint8_t hash[32];storage_digest_end(&digest,hash);
+        sunstone_crumb(SUNSTONE_CRUMB_ASSET_DONE,i);
         if(std::memcmp(hash,mimus_asset_sha256[i],32)){failed();}
     }
     std::span<const uint8_t> input[3];for(unsigned i=0;i<3;++i)

@@ -1,14 +1,15 @@
 --- input
 +++ output
-@@ -11,6 +11,7 @@
+@@ -11,6 +11,8 @@
   * the thermal level. A grant that names
   * no cluster leaves every clock and voltage unchanged. */
  #include "os.h"
++#include "sunstone_crumb.h"
 +#include "cpu-return.h"
  #include "../board/application.h"
  #include "../mimus-board/application.h"
  #include "a733_cpu_clock.h"
-@@ -84,6 +85,10 @@
+@@ -84,6 +86,10 @@
      atomic_uint ready;
  } owner;
  enum { START, INSPECT, REQUEST, FOLLOW };
@@ -19,7 +20,7 @@
  static int clock_now(void *v,uint64_t *out)
  {return v==&owner&&a733_counter_clock_now(&providers.shared.counter,out);}
  static int clock_read(void *v,uintptr_t a,uint32_t *out){return v==&owner&&read_word(NULL,a,out);}
-@@ -127,7 +132,24 @@
+@@ -127,7 +133,24 @@
          if(a733_cpu_clock_inspect(c,A733_CPU_LITTLE,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return -1;
          return 1;
      }
@@ -44,7 +45,7 @@
  #ifdef SUNSTONE_A733_OS_PERF
      /* The performance-mode service replaces the one-request-per-cluster
       * start: its boot switch moves the CPU domains to the boot mode, and it
-@@ -157,6 +179,13 @@
+@@ -157,6 +180,14 @@
  #endif
      }
      if(owner.phase==REQUEST){
@@ -54,7 +55,23 @@
 +            int admitted=os_cpu_return_entry_guard(c,policy,now,read_word,NULL);
 +            if(admitted<=0)return admitted<0?-1:1;
 +            entry_checked=1;
++            sunstone_crumb(SUNSTONE_CRUMB_CLOCK_GUARD,0);
 +        }
          /* One request per granted domain once its sensor has a reading (CPUL
           * is physical channel 3, CPUB channel 0), in the default path's order
           * (docs/designs/cpu-top-opp.md): CPU-B, CPU-L, then the DSU at the
+@@ -177,12 +208,14 @@
+                 target=c->report.binned ? a733_cpu_clock_dsu_top(c->report.bin,c->applied_mhz[A733_CPU_LITTLE],big) : 0;
+                 if(!target)continue;
+             }
++            sunstone_crumb(SUNSTONE_CRUMB_CLOCK_CHANGE,d<<12|target);
+             enum a733_cpu_clock_status q=a733_cpu_clock_request(c,(enum a733_cpu_domain)d,target,later(REQUEST_US));
+             ++owner.cluster;
+             if(q==A733_CPU_CLOCK_PENDING)return 1;
+             if(q==A733_CPU_CLOCK_RETAINED||q==A733_CPU_CLOCK_INVALID)return -1;
+         }
+         owner.phase=FOLLOW;atomic_store_explicit(&owner.ready,1,memory_order_release);
++        sunstone_crumb(SUNSTONE_CRUMB_CLOCK_READY,0);
+     }
+     return 1;
+ }

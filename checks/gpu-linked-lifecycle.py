@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
-from harness import Image
+from harness import Image, skip_crumbs
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_PC
 
@@ -40,6 +40,7 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
     uc.mem_map(0x41000000, 0x1200000); uc.mem_map(0x80000000, 0x10000)
     for address, data in image.parts:
         if data: uc.mem_write(address, data)
+    skip_crumbs(uc, image)
     def put(address, value, size=4): uc.mem_write(address, int(value).to_bytes(size, 'little'))
     def get(address, size=4): return int.from_bytes(uc.mem_read(address, size), 'little')
     def field(base, typ, name): return base + layouts[typ][name]

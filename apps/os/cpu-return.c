@@ -6,7 +6,14 @@
 #include "cpu-return-runtime.h"
 #include "a733_usb_platform.h"
 #include "platform.h"
+#include "sunstone_crumb.h"
 #include <string.h>
+/* The host arms WDT0 in this mode before launch, waits for the session
+ * length plus one interval, and reads the breadcrumbs at this address after a
+ * watchdog reset (apps/os/cpu-return-host.py). */
+__attribute__((used,retain)) const uint64_t os_cpu_return_watchdog[5]={
+    UINT64_C(0x31544457534f5243),2,SUNSTONE_CRUMB_WATCHDOG_MODE,SUNSTONE_CRUMB_RTC,A733_BOARD_SUPERVISED_SECONDS
+};
 struct os_cpu_return_output {
     uint64_t magic,version,bytes,epoch,generation,text_bytes;
     uint8_t text[16384];
@@ -36,6 +43,7 @@ static void terminal(void *argument)
 {
     unsigned core=(unsigned)(uintptr_t)argument;
     if(ulTaskNotifyTake(pdTRUE,portMAX_DELAY)!=1||portGET_CORE_ID()!=core||!os_cpu_return_ready())fail(0x737);
+    sunstone_crumb(SUNSTONE_CRUMB_TERMINAL,core);
     a733_qualification_worker_done(core);
 }
 int os_cpu_return_task_privileged(void (*entry)(void *),void *argument)
@@ -63,10 +71,11 @@ void os_cpu_return_begin(const uint8_t *text,size_t bytes)
     os_cpu_return_output.version=1;os_cpu_return_output.bytes=sizeof(os_cpu_return_output);
     os_cpu_return_output.epoch=board.session.epoch;os_cpu_return_output.generation=board.session.generation;
     os_cpu_return_output.text_bytes=bytes;memcpy(os_cpu_return_output.text,text,bytes);
+    sunstone_crumb(SUNSTONE_CRUMB_OUTPUT,(uint32_t)bytes);
     atomic_store_explicit(&closing,1,memory_order_release);
 }
 void os_cpu_return_thermal_done(void)
-{atomic_store_explicit(&thermal_done,1,memory_order_release);}
+{sunstone_crumb(SUNSTONE_CRUMB_THERMAL_DONE,0);atomic_store_explicit(&thermal_done,1,memory_order_release);}
 /* Called at the top of the sole PMIC owner loop, before another service step. */
 void os_cpu_return_pmic(void)
 {
@@ -78,12 +87,16 @@ void os_cpu_return_pmic(void)
     for(unsigned i=0;i<A733_PMIC_REQUESTS;++i)
         if(p->pmic.slots[i].state||p->pmic.slots[i].borrow.id)fail(0x73a);
     if(xSemaphoreGetMutexHolder(p->locks.mutex[0])||xSemaphoreGetMutexHolder(p->locks.mutex[1]))fail(0x73b);
+    sunstone_crumb(SUNSTONE_CRUMB_PMIC_STOP,0);
     atomic_store_explicit(&pmic_done,1,memory_order_release);
     for(;;)vTaskSuspend(NULL);
 }
 void os_cpu_return_supervise(void)
 {
     bounded();
+    /* Live and before the deadline: restart WDT0. fail() never returns, and a
+     * stalled supervisor stops the restarts, so WDT0 resets one interval later. */
+    sunstone_watchdog_restart();
     if(!os_cpu_return_requested()){
         uint64_t cutoff=os_cpu_return_cutoff();
 #ifdef SUNSTONE_A733_OS_GPU_LINEAR
@@ -107,6 +120,7 @@ void os_cpu_return_supervise(void)
     /* The supervisor is pinned to CPU0. Notify it last so its higher-priority
      * terminal cannot preempt publication to the other seven CPUs. */
     if(portGET_CORE_ID()!=0)fail(0x73f);
+    sunstone_crumb(SUNSTONE_CRUMB_CLOSE,0);
     for(unsigned c=1;c<8;++c)xTaskNotifyGive(terminal_handle[c]);
     xTaskNotifyGive(terminal_handle[0]);
     for(;;)vTaskSuspend(NULL);

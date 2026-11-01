@@ -481,16 +481,44 @@ def request_bytes(address, identity, raw):
     return request, bytes(contract)
 
 
-def build_launcher(out, session_bytes, clang, lld):
-    """The board's SRAM launcher with the OS request, contract and session size."""
+WATCHDOG_MARKER = 0x31544457534f5243
+
+
+def watchdog_marker(elf):
+    """{'mode', 'session_seconds'} of a returning image's watchdog, or None (apps/os/cpu-return.c).
+
+    The host arms that WDT0 mode before launch. The image restarts it while its
+    session is live, disarms it on its only normal return and records
+    breadcrumbs in RTC words (include/sunstone_crumb.h)."""
+    found = [s for s in elf.symbols if s['name'] == 'os_cpu_return_watchdog' and s['shndx'] != 0]
+    if not found:
+        return None
+    require(len(found) == 1 and found[0]['size'] == 40, 'Watchdog marker geometry differs.')
+    magic, version, mode, rtc, seconds = struct.unpack('<5Q', elf.read(found[0]['value'], 40))
+    require((magic, version, rtc) == (WATCHDOG_MARKER, 2, 0x07090000) and mode & 0xff0f == 1 and
+            1 <= mode >> 4 <= 11 and 1 <= seconds <= 600, 'Watchdog marker differs.')
+    return {'mode': mode, 'session_seconds': seconds}
+
+
+def build_launcher(out, session_bytes, clang, lld, watchdog_mode=None):
+    """The board's SRAM launcher with the OS request, contract and session size.
+
+    With watchdog_mode the launcher admits exactly that host-armed WDT0 state,
+    system reset and reset output instead of a disabled watchdog; its refusal
+    path then parks, and the watchdog returns the board to FEL."""
     text = (ROOT / 'platform/a733-smp-supervised/launch.c').read_text()
     (out / 'base-supervised-launch.c').write_text(text)
-    text = board.adapt_launcher(text, {
+    changes = {
         '0x4153373353554c33': '0x415337334f534c31', 'REQUEST[1]==3': 'REQUEST[1]==2',
         'CONTRACT->version==3': 'CONTRACT->version==2',
         'CONTRACT->reserved[0] && !CONTRACT->reserved[1]':
             'CONTRACT->reserved[0]==A733_BOARD_SESSION_ADDRESS && CONTRACT->reserved[1]==%du' % session_bytes,
-        '20*A733_SMP_COUNTER_HZ': 'A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ'})
+        '20*A733_SMP_COUNTER_HZ': 'A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ'}
+    if watchdog_mode is not None:
+        changes['!(rd(0x02050014)&1) && !(rd(0x02050010)&0x100) &&'] = (
+            '(rd(0x02050014)&0xffff)==%#x && (rd(0x02050010)&0xffff)==1 && (rd(0x02050018)&0xffff)==2 &&'
+            % watchdog_mode)
+    text = board.adapt_launcher(text, changes)
     (out / 'board-launch-base.c').write_text(text)
     for name, path in [('launch.c', ROOT / 'apps/board/launch.c'), ('launch.S', ROOT / 'platform/a733-smp-observe/launch.S'),
                        ('launch.ld', ROOT / 'platform/a733-smp-observe/launch.ld'),
@@ -686,7 +714,8 @@ def prepare(image, link_check, admission, template, assets, output, clang, lld, 
         (out / name).write_bytes(data)
     segments, address, identity = base.image_parts(out / 'image.elf')
     raw[48:80] = identity
-    build_launcher(out, len(raw), clang, lld)
+    watchdog = watchdog_marker(os_link.Elf(snapshots['image.elf'])) if cpu_return else None
+    build_launcher(out, len(raw), clang, lld, watchdog and watchdog['mode'])
     uploads = []
     for index, segment in enumerate(segments):
         if segment['data']:

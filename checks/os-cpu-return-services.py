@@ -4,6 +4,8 @@
 The thermal driver's STOPPED result and completed clock transition are API
 fixtures. The actual thermal owner masks its SPI and publishes completion;
 the actual PMIC idle predicate and supervisor notification order execute.
+In an image with the host-armed watchdog, each live supervisor step restarts
+WDT0 and a step that fails its liveness check does not.
 """
 import argparse
 import importlib.util
@@ -118,11 +120,15 @@ def main():
     layout = Image(args.elf, names)
     image = prior.fault.Image(args.elf)
     rows = []
+    armed = 'os_cpu_return_watchdog' in image.symbols
+    restarts = lambda m: sum(1 for _, a, _, v in m.writes if a == 0x0205000c and v == 0x14af)
     model = Model(image, layout)
     assert model.call(0, 'os_cpu_return_start') == 1 and len(model.handles) == 8
+    model.call(0, 'os_cpu_return_supervise')
+    assert model.stop == 'return' and restarts(model) == armed
     model.put32(model.flags['closing'], 1)
     model.call(0, 'os_cpu_return_supervise')
-    assert not model.events and not model.u32(model.flags['pmic_stop'])
+    assert not model.events and not model.u32(model.flags['pmic_stop']) and restarts(model) == 2 * armed
     model.call(0, 'os_thermal_task')
     assert model.stop == 'suspended' and model.events == [('thermal-stop', 7), ('suspend', 0)]
     assert model.u32(model.flags['thermal_done']) == 1 and not model.u32(model.flags['pmic_stop'])
@@ -135,10 +141,11 @@ def main():
     model.events.clear()
     model.call(0, 'os_cpu_return_supervise')
     assert model.events == [('notify', h) for h in model.handles[1:] + model.handles[:1]] + [('suspend', 0)]
-    assert model.u32(model.flags['ready']) == 1
-    rows.append({'name': 'thermal-pmic-and-cpu0-last-order', 'passed': True, 'events': model.events})
+    assert model.u32(model.flags['ready']) == 1 and restarts(model) == 4 * armed
+    rows.append({'name': 'thermal-pmic-and-cpu0-last-order', 'passed': True, 'events': model.events,
+                 'watchdog_restarts': restarts(model)})
     for case in ('pmic-retained', 'pmic-slot-owned', 'mutex-held', 'usb-started', 'thermal-stop-failed',
-                 'pmic-deadline', 'ths-rwp-deadline'):
+                 'pmic-deadline', 'ths-rwp-deadline', 'session-failed'):
         model = Model(image, layout)
         model.put32(model.flags['closing'], 1)
         if case in ('thermal-stop-failed', 'ths-rwp-deadline'):
@@ -164,7 +171,12 @@ def main():
                 model.put32(model.shared + layout.layouts['a733_native_usb']['usb_step'], 1)
             elif case == 'pmic-deadline':
                 model.time = (60000000 - 10000) * 24
-            model.call(0, 'os_cpu_return_supervise' if case in ('usb-started', 'pmic-deadline') else 'os_cpu_return_pmic')
+            elif case == 'session-failed':
+                model.put32(model.board + layout.layouts['board_application']['fatal'], 1)
+            model.call(0, 'os_cpu_return_supervise' if case in ('usb-started', 'pmic-deadline', 'session-failed')
+                       else 'os_cpu_return_pmic')
+            if case in ('pmic-deadline', 'session-failed'):
+                assert not restarts(model), 'no WDT0 restart once the session is not live'
         assert model.stop == 'failure', (case, model.events)
         assert not model.u32(model.flags['ready'])
         assert not any(event[0] == 'notify' for event in model.events)
