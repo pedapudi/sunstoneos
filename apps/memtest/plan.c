@@ -120,3 +120,46 @@ uint64_t memtest_dcache_bytes(uint64_t clidr, const uint64_t ccsidr[7], unsigned
     }
     return total;
 }
+
+/* Refuse all table flags, output aliases and noncanonical leaf flags except
+ * the two execute-never bits. The low tested blocks share the returning
+ * platform's executable mapping; all blocks must still be closed to EL0. */
+static int table_page(uint64_t address)
+{
+    return !(address & 4095u) && address >= MEMTEST_DRAM_BASE &&
+           address <= block_address(MEMTEST_WINDOW_BLOCKS) - 4096u;
+}
+
+uint64_t memtest_mapping_fault(const struct memtest_geometry *g, const struct memtest_mmu *m,
+                               int (*read)(void *, uint64_t, uint64_t *), void *context)
+{
+    uint64_t first = g ? block_address(g->first_block) : MEMTEST_DRAM_BASE;
+    if (!g || !m || !read || g->first_block < MEMTEST_WINDOW_BLOCKS ||
+        g->first_block >= g->end_block || g->end_block > MEMTEST_DRAM_BLOCKS ||
+        m->tcr != MEMTEST_TCR || m->mair != MEMTEST_MAIR ||
+        (m->sctlr & (UINT64_C(1) << 25 | 0x1005u)) != 0x1005u ||
+        !table_page(m->ttbr0)) return first;
+    const uint64_t attributes = (UINT64_C(1) << 10) | (UINT64_C(3) << 8) | 5u;
+    const uint64_t xn = (UINT64_C(1) << 53) | (UINT64_C(1) << 54);
+    uint64_t end = block_address(g->end_block);
+    for (uint64_t at = first; at < end;) {
+        uint64_t entry;
+        if (!read(context, m->ttbr0 + (at >> 30) * 8u, &entry)) return at;
+        uint64_t limit = ((at >> 30) + 1u) << 30;
+        if ((entry & 3u) == 1u) {
+            if ((entry & ~xn) != ((at & ~((UINT64_C(1) << 30) - 1u)) | attributes)) return at;
+            at = limit < end ? limit : end;
+            continue;
+        }
+        /* Only a plain table pointer is accepted: subtracting the type also
+         * leaves any reserved or hierarchical permission bits to be refused. */
+        if ((entry & 3u) != 3u || !table_page(entry - 3u)) return at;
+        uint64_t table = entry - 3u;
+        while (at < end && at < limit) {
+            if (!read(context, table + ((at >> 21) & 511u) * 8u, &entry) ||
+                (entry & ~xn) != (at | attributes)) return at;
+            at += MEMTEST_BLOCK_BYTES;
+        }
+    }
+    return 0;
+}

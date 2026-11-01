@@ -171,6 +171,18 @@ enum memtest_refusal memtest_admit(const struct memtest_geometry *, const struct
  * ccsidr[i] is CCSIDR_EL1 for level i + 1 with CSSELR.InD = 0;
  * extended selects the FEAT_CCIDX layout. */
 uint64_t memtest_dcache_bytes(uint64_t clidr, const uint64_t ccsidr[7], unsigned extended);
+/* Canonical stage-1 controls of this image: 39-bit VA, 4 KiB granule,
+ * cacheable inner-shareable table walks, TTBR1 disabled, 40-bit PA. */
+#define MEMTEST_TCR ((UINT64_C(2) << 32) | (UINT64_C(1) << 23) | (UINT64_C(3) << 12) | \
+                     (UINT64_C(1) << 10) | (UINT64_C(1) << 8) | 25u)
+#define MEMTEST_MAIR UINT64_C(0x44ff00)
+struct memtest_mmu { uint64_t ttbr0, tcr, mair, sctlr; };
+/* Read only protected table memory. Native readers must establish that a CPU
+ * table pointer translates to the same physical page before dereferencing it.
+ * Tables and their CPU aliases remain private and immutable during the run.
+ * Returns zero on success, otherwise the first unverified tested address. */
+uint64_t memtest_mapping_fault(const struct memtest_geometry *, const struct memtest_mmu *,
+                               int (*read)(void *, uint64_t, uint64_t *), void *);
 /* FNV-1a over 64-bit words, used for the record checksum, the contract
  * digest and the recovery-region digest. */
 static inline uint64_t memtest_hash(uint64_t hash, const volatile uint64_t *words, size_t count)

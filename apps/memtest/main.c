@@ -489,11 +489,28 @@ static uint64_t data_cache_bytes(void)
     __asm__ volatile("mrs %0, clidr_el1\n mrs %1, id_aa64mmfr2_el1\n mrs %2, csselr_el1"
                      : "=r"(clidr), "=r"(mmfr2), "=r"(saved));
     for (unsigned level = 0; level < 7; ++level) {
+        unsigned type = (unsigned)(clidr >> (3u * level)) & 7u;
+        if (!type) break;
+        if (type < 2u) continue;
         uint64_t select = (uint64_t)level << 1;
         __asm__ volatile("msr csselr_el1, %1\n isb\n mrs %0, ccsidr_el1" : "=r"(ccsidr[level]) : "r"(select));
     }
     __asm__ volatile("msr csselr_el1, %0\n isb" :: "r"(saved));
     return memtest_dcache_bytes(clidr, ccsidr, ((mmfr2 >> 20) & 15u) != 0);
+}
+
+static int table_read(void *context, uint64_t address, uint64_t *value)
+{
+    uint64_t *last_page = context;
+    uint64_t page = address & ~UINT64_C(4095);
+    if (page != *last_page) {
+        static const struct a733_mapping_rule rule = {
+            A733_MAPPING_READ, 1, {{A733_MAIR_NORMAL_WB, A733_SH_INNER}}, 0, 1};
+        if (!a733_mapping_check(aarch64_device_translate, (uintptr_t)page, page, &rule)) return 0;
+        *last_page = page;
+    }
+    *value = *(const volatile uint64_t *)(uintptr_t)address;
+    return 1;
 }
 
 static void admit(void)
@@ -521,6 +538,15 @@ static void admit(void)
     if (reason != MEMTEST_ADMITTED) refuse(reason);
     r->budget_ticks = plan.budget_ticks;
     deadline = start + plan.budget_ticks;
+    struct memtest_mmu mmu;
+    __asm__ volatile("mrs %0, ttbr0_el1\n mrs %1, tcr_el1\n mrs %2, mair_el1\n mrs %3, sctlr_el1"
+                     : "=r"(mmu.ttbr0), "=r"(mmu.tcr), "=r"(mmu.mair), "=r"(mmu.sctlr));
+    uint64_t last_table_page = 0;
+    uint64_t bad = memtest_mapping_fault(&memtest_geometry, &mmu, table_read, &last_table_page);
+    if (bad) {
+        r->progress = bad;
+        refuse(MEMTEST_REFUSE_MAPPING);
+    }
     /* One write translation per descriptor kind: level-2 block, low and high
      * level-1 blocks, each Normal write-back inner-shareable at its own
      * physical address. */
