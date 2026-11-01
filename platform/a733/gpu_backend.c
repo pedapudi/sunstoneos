@@ -1,3 +1,6 @@
+#ifdef SUNSTONE_GPU_TIMING
+#include "gpu_queue_timing.h"
+#endif
 /* SPDX-License-Identifier: MIT
  * Identity decoding and register facts follow pvr_device.c, pvr_fw_startstop.c,
  * pvr_fw_mips.c and pvr_rogue_cr_defs.h.
@@ -11,6 +14,9 @@
 #include "a733_gpu_platform_native.h"
 #include "pvr_gpu_crumb.h"
 #include "pvr_compute_queue.h"
+#ifdef SUNSTONE_GPU_NSI_PMU
+#include "a733_gpu_nsi_pmu.h"
+#endif
 
 /* The first backend error records its statement in the breadcrumb record
  * (pvr_gpu_crumb.h, unit BACKEND) before the service sees the failure. */
@@ -305,13 +311,188 @@ static int control_write(void *context, uint32_t off, uint32_t value)
     if (off != 0x8b0 || value != 1) return fail(b, A733_GPU_BACKEND_ACCESS);
     return raw_write(b, off, 4, value);
 }
+#ifdef SUNSTONE_GPU_TIMING
+static struct a733_gpu_backend *timing_backend;
+static struct a733_gpu_backend *timing_live(void)
+{
+    struct a733_gpu_backend *b=timing_backend;
+    /* COMPLETE also covers refused jobs and recovery faults. Diagnostics
+     * must never wake a stopped device or turn a missing sample into a fault. */
+    if(!b || !b->initialized || !b->service || !b->power || !b->memory ||
+       !gpu_queue_timing_active() ||
+       b->phase!=A733_GPU_BACKEND_ACTIVE || b->power->phase!=A733_GPU_PLATFORM_ON ||
+       !b->power->token || !b->power->delegated || b->memory->phase!=A733_GPU_MEMORY_PUBLISHED ||
+       b->service->phase!=PVR_GPU_SERVICE_READY || b->service->queue.phase!=PVR_CCB_ACTIVE ||
+       b->recovering || atomic_load_explicit(&b->error,memory_order_acquire) ||
+       (b->external.revoked && atomic_load_explicit(b->external.revoked,memory_order_acquire)) ||
+       (b->external.live && b->external.live(b->external.context)!=1))return NULL;
+    return b;
+}
+#ifdef SUNSTONE_GPU_NSI_PMU
+static struct a733_gpu_nsi_pmu nsi_pmu;
+static struct a733_gpu_nsi_record *nsi_active;
+static uint64_t nsi_ticks(void *context)
+{
+    (void)context;uint64_t t;
+    __asm__ volatile("isb; mrs %0, cntpct_el0":"=r"(t)::"memory");return t;
+}
+static int nsi_register(enum a733_gpu_nsi_register reg)
+{ return reg==A733_NSI_ENABLE || reg==A733_NSI_CLEAR || reg==A733_NSI_CYCLE || reg==A733_NSI_READ || reg==A733_NSI_WRITE; }
+static int nsi_read(void *context,enum a733_gpu_nsi_register reg,uint32_t *v)
+{
+    (void)context;
+    if(!nsi_register(reg) || !device_page(UINT32_C(0x02020000)+reg))return 0;
+    *v=a733_mmio_read32_dsb_sy_both(UINT32_C(0x02020000)+reg);return 1;
+}
+static int nsi_write(void *context,enum a733_gpu_nsi_register reg,uint32_t v)
+{
+    (void)context;
+    if((reg!=A733_NSI_ENABLE && reg!=A733_NSI_CLEAR && reg!=A733_NSI_CYCLE) ||
+       !device_page(UINT32_C(0x02020000)+reg))return 0;
+    a733_mmio_write32_dsb_sy_both(UINT32_C(0x02020000)+reg,v);return 1;
+}
+static int nsi_clock_read(uintptr_t address,uint32_t *v)
+{
+    if(!device_page(address))return 0;
+    *v=a733_mmio_read32_dsb_sy_both(address);return 1;
+}
+void a733_gpu_backend_nsi_sample(unsigned position,struct a733_gpu_nsi_record *r)
+{
+    if(!r)return;
+    /* Cleanup remains permitted after a job failure while the GPU's existing
+     * owner and its NSI counter ownership remain retained. No device power,
+     * parent clock, reset or QoS operations are performed. */
+    if(position==2){
+        if(!nsi_pmu.owned)return;
+        a733_gpu_nsi_end(&nsi_pmu,r);
+        nsi_active=NULL;
+        if(r->samples) {
+            uint32_t oscillator,reference,peri0,peri_pattern0,peri_pattern1,de,pattern0,pattern1,gate;
+            if(!nsi_clock_read(0x02002580,&r->clock_end_raw) || r->clock_end_raw!=r->clock_raw ||
+               !nsi_clock_read(0x07090160,&oscillator) || oscillator!=r->oscillator_raw ||
+               !nsi_clock_read(0x02002000,&reference) || reference!=r->reference_raw ||
+               !nsi_clock_read(0x020020a0,&peri0) || peri0!=r->peri0_raw ||
+               !nsi_clock_read(0x020020a8,&peri_pattern0) || peri_pattern0!=r->peri_pattern0_raw ||
+               !nsi_clock_read(0x020020ac,&peri_pattern1) || peri_pattern1!=r->peri_pattern1_raw ||
+               !nsi_clock_read(0x020022e0,&de) || de!=r->de_raw ||
+               !nsi_clock_read(0x020022e8,&pattern0) || pattern0!=r->pattern0_raw ||
+               !nsi_clock_read(0x020022ec,&pattern1) || pattern1!=r->pattern1_raw ||
+               !nsi_clock_read(0x02002584,&gate) || gate!=r->gate_raw) {
+                if(r->status!=A733_NSI_IO)r->status=A733_NSI_CLOCK;
+            }
+        }
+        return;
+    }
+    if(!timing_live())return;
+    if(position==1){a733_gpu_nsi_after_kick(&nsi_pmu,r);return;}
+    if(position!=0)return;
+    uint32_t oscillator,reference,peri0,peri_pattern0,peri_pattern1,de,pattern0,pattern1,clock;
+    r->status=A733_NSI_CLOCK;
+    uint32_t gate;
+    if(!nsi_clock_read(0x07090160,&oscillator) || !nsi_clock_read(0x02002000,&reference) ||
+       !nsi_clock_read(0x020020a0,&peri0) || !nsi_clock_read(0x020022e0,&de) ||
+       !nsi_clock_read(0x020020a8,&peri_pattern0) || !nsi_clock_read(0x020020ac,&peri_pattern1) ||
+       !nsi_clock_read(0x020022e8,&pattern0) || !nsi_clock_read(0x020022ec,&pattern1) ||
+       !nsi_clock_read(0x02002580,&clock) || !nsi_clock_read(0x02002584,&gate) ||
+       (gate&0x10001)!=0x10001)return;
+    const uint32_t hz=a733_gpu_nsi_hz(oscillator,reference,peri0,peri_pattern0,peri_pattern1,de,pattern0,pattern1,clock);
+    const struct a733_gpu_nsi_ops ops={nsi_read,nsi_write,nsi_ticks};
+    a733_gpu_nsi_begin(&nsi_pmu,&ops,timing_backend,hz,clock,r);
+    r->oscillator_raw=oscillator;r->reference_raw=reference;r->peri0_raw=peri0;
+    r->peri_pattern0_raw=peri_pattern0;r->peri_pattern1_raw=peri_pattern1;
+    r->de_raw=de;r->pattern0_raw=pattern0;r->pattern1_raw=pattern1;
+    r->gate_raw=gate;
+    if(nsi_pmu.owned)nsi_active=r;
+}
+#endif
+void a733_gpu_backend_timing_sample(unsigned position)
+{
+    struct a733_gpu_backend *b=timing_live();
+    if(!b || (position<2 && !gpu_queue_timing_kicking()))return;
+    uint64_t begin,end,cr;
+    __asm__ volatile("isb; mrs %0, cntpct_el0":"=r"(begin)::"memory");
+    if(!raw_read(b,0x160,8,&cr))return;
+    if((cr^(cr<<32))&(UINT64_C(1)<<63)) {
+        if(!raw_read(b,0x160,8,&cr) || ((cr^(cr<<32))&(UINT64_C(1)<<63)))return;
+    }
+    __asm__ volatile("isb; mrs %0, cntpct_el0":"=r"(end)::"memory");
+    gpu_queue_timing_cr(position,cr&UINT64_C(0xffffffffffff),begin,end);
+}
+/* All resources below are constructor-validated, retained Normal NC pages.
+ * Read-only diagnostics never call adapters whose refusal latches a fault. */
+int a733_gpu_backend_timing_state(struct gpu_queue_timing_state *s)
+{
+    struct a733_gpu_backend *b=timing_live();
+    if(!b || !s || !b->power->ops.read)return 0;
+    if(b->power->ops.read(b->power->context,A733_GPU_CCU,0xe0,&s->pll_raw)==1)s->valid|=1u;
+    if(b->power->ops.read(b->power->context,A733_GPU_CCU,0xb20,&s->clock_raw)==1)s->valid|=2u;
+    if(b->power->ops.read(b->power->context,A733_GPU_CCU,0xb24,&s->bgr_raw)==1)s->valid|=4u;
+    if(b->power->ops.read(b->power->context,A733_GPU_CORE,0,&s->core_policy_raw)==1 &&
+       b->power->ops.read(b->power->context,A733_GPU_CORE,8,&s->core_status_raw)==1)s->valid|=8u;
+    const struct pvr_fw_buffer *system=&b->memory->resources[PVR_FW_SYSTEM_DATA].storage;
+    const struct pvr_fw_buffer *runtime=&b->memory->resources[PVR_FW_RUNTIME_CONFIG].storage;
+    const struct pvr_fw_buffer *util=&b->memory->resources[PVR_FW_UTILIZATION].storage;
+    if(system->cpu && system->bytes>=3576 && runtime->cpu && runtime->bytes>=16 &&
+       !((uintptr_t)system->cpu&7) && !((uintptr_t)runtime->cpu&3)) {
+        const volatile uint32_t *sy=system->cpu,*rt=runtime->cpu;
+        s->fw_flags_raw=sy[0];s->fw_power_raw=sy[2];
+        s->fw_apm_latency_ms=rt[0];s->fw_apm_flags=rt[1];s->fw_apm_persistent=rt[2];s->fw_core_hz=rt[3];
+        s->firmware_idle_start_raw=*(const volatile uint64_t *)((const unsigned char *)system->cpu+3568);
+        __asm__ volatile("dmb oshld":::"memory");s->valid|=16u;
+    }
+    if(util->cpu && util->bytes>=10280 && !((uintptr_t)util->cpu&7)) {
+        const volatile uint32_t *u32=(const volatile uint32_t *)((const unsigned char *)util->cpu+10240);
+        const volatile uint64_t *u64=(const volatile uint64_t *)((const unsigned char *)util->cpu+10248);
+        uint64_t before=u64[0];
+        __asm__ volatile("dmb oshld":::"memory");
+        s->utilization_sequence=u32[0];s->utilization_flags=u32[1];
+        for(unsigned i=0;i<3;++i)s->utilization_raw[i]=u64[i+1];
+        __asm__ volatile("dmb oshld":::"memory");s->utilization_last_raw=u64[0];
+        if(before==s->utilization_last_raw)s->valid|=32u;
+    }
+    uint64_t sidekick,slc;
+    if(raw_read(b,0x3c8,4,&sidekick) && raw_read(b,0x3898,4,&slc)) {
+        s->sidekick_idle_raw=(uint32_t)sidekick;s->slc_idle_raw=(uint32_t)slc;s->valid|=64u;
+    }
+    s->driver_hz=b->service->config.state.gpu_clock_hz;
+    s->driver_uv=b->power->perf.enabled?b->power->perf.current_uv:A733_GPU_SUPPLY_UV;
+    /* Startup readback retained under its original provider borrow. These
+     * are immutable consumer bytes, not a fresh transaction or analog voltage. */
+    const struct a733_pmic_consumer *pm=&b->power->pmic;
+    s->pmic_observed=b->power->pmic_observed;s->pmic_rail_id=pm->rail.id;s->pmic_request_id=pm->request.id;
+    s->pmic_selector_raw=pm->snapshot.selector;s->pmic_enable_raw=pm->snapshot.enable;
+    s->pmic_programmed_uv=pm->snapshot.programmed_uv;
+    s->pmic_retained=s->pmic_observed && pm->self==pm && !pm->failed && pm->rail.id && pm->request.id &&
+        pm->rail.owner==pm->config.owner && pm->request.owner==pm->config.owner &&
+        pm->config.provider==pm->sealed.provider && pm->config.owner==pm->sealed.owner &&
+        pm->request.lifetime.provider==pm->config.lifetime.provider &&
+        pm->request.lifetime.identity==pm->config.lifetime.identity &&
+        ((pm->rail.shared|pm->rail.exclusive)&A733_RAIL_BIT(A733_RAIL_DCDC4)) &&
+        pm->snapshot.rail==A733_RAIL_DCDC4 && !pm->snapshot.page_before && !pm->snapshot.page_after &&
+        pm->snapshot.chip==3 && !pm->snapshot.revision && pm->snapshot.enabled==1 && pm->snapshot.decoded==1 &&
+        (pm->snapshot.enable&8) && pm->snapshot.programmed_uv==500000+10000*(pm->snapshot.selector&127);
+    return 1;
+}
+
+#endif
 static int kick(void *context, uint32_t off, uint32_t value)
 {
     struct a733_gpu_backend *b = context;
     if (!control_live(b)) return 0;
     if (off != 0xb00 || value != 0 || b->memory->phase != A733_GPU_MEMORY_PUBLISHED)
         return fail(b, A733_GPU_BACKEND_ACCESS);
-    return raw_write(b, off, 4, value);
+#ifdef SUNSTONE_GPU_TIMING
+    timing_backend=b;
+    a733_gpu_backend_timing_sample(0);
+    if(gpu_queue_timing_kicking())gpu_queue_timing_state_sample(0);
+    gpu_queue_timing_stamp(GPU_TIMING_KICK_BEGIN);
+#endif
+    int result=raw_write(b, off, 4, value);
+#ifdef SUNSTONE_GPU_TIMING
+    gpu_queue_timing_stamp(GPU_TIMING_KICK_END);
+    a733_gpu_backend_timing_sample(1);
+#endif
+    return result;
 }
 static int memory_result(struct a733_gpu_backend *b, int result)
 { return result || fail(b, A733_GPU_BACKEND_MEMORY); }
@@ -521,6 +702,14 @@ static int isolate(void *context)
 {
     struct a733_gpu_backend *b = context;
     if (!active(b)) return 0;
+#ifdef SUNSTONE_GPU_NSI_PMU
+    /* IA6 belongs to GPU_TOP in the vendor device tree. Restore its counter
+     * before domain teardown; recovered completion is posted after power-off. */
+    if(nsi_active) {
+        nsi_active->status=A733_NSI_IO;
+        a733_gpu_backend_nsi_sample(2,nsi_active);
+    }
+#endif
     uint64_t deadline = b->service->stop.deadline;
     if (b->service->stop.phase != PVR_GPU_STOP_ISOLATE ||
         (b->service->stop.unacknowledged && (!b->recovering || !b->recovery_reset)) || !before(b, deadline) ||
