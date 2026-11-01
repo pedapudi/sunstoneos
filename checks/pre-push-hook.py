@@ -20,7 +20,10 @@ import harness
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ('tools/git-hooks/pre-push', 'checks/pre-push-hook.py', 'checks/harness.py')
 HOOKS = ROOT / 'tools/git-hooks'
-ENV = {**harness.environment(), 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
+# Drop GIT_DIR and the other GIT_* variables that git exports to hooks, so the
+# fixture's own repositories are not redirected to the repository being pushed.
+ENV = {**{k: v for k, v in harness.environment().items() if not k.startswith('GIT_')},
+       'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
        'GIT_AUTHOR_NAME': 'Check', 'GIT_AUTHOR_EMAIL': 'check@example.invalid',
        'GIT_COMMITTER_NAME': 'Check', 'GIT_COMMITTER_EMAIL': 'check@example.invalid'}
 
