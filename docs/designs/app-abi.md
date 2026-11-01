@@ -33,7 +33,14 @@ The kit includes:
   generator, runs hello-compute at input boundaries, and checks malformed
   manifests. Repeatable `--manifest PATH` arguments add external manifests.
   Application-specific input and runtime-bound assertions live in each
-  application repository.
+  application repository;
+- the CPU-return launch path for any application: `apps/os/prepare.py` builds
+  the SRAM launcher, launch request and contract, `apps/os/cpu-return-host.py`
+  reads the return layout and performs one returning run, and
+  `tools/dev-run.py` prepares the typed session from the image's manifest and
+  runs the image. Its default image is hello-compute built with the CPU-return
+  lifetime; mimus runs through the same path with its own inputs and its
+  result decoder.
 
 The native OS image implements the calls and links applications through the
 kit. Mimus lives in its own repository; hello-compute remains in SunstoneOS.

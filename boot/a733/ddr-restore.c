@@ -15,10 +15,12 @@ typedef uint8_t u8;
 #define MAIL ((volatile u32 *)0x86000)
 #define PARAM ((volatile u32 *)0x831f8)
 #define MUX ((volatile u16 *)0x0aaa0000)
+#define UCCLK ((volatile u16 *)0x0aa80100) /* UcclkHclkEnables, CSR 0xc0080 */
 #define LIMIT 0x6000u
-/* Codes are shared with the host through the build manifest. */
+/* Codes are shared with the host through the build manifest. The card
+ * path's own stop codes are 12-14 (boot/a733/card-ddr-entry.S). */
 enum { GEOMETRY=1, HEADER_CRC, PAYLOAD_CRC, CHIP, BOOT0, STRAP,
-       READBACK, SIZE, MEMORY, HOOK, ENTRY };
+       READBACK, SIZE, MEMORY, HOOK, ENTRY, FINAL_READBACK=15 };
 
 static u32 word(const u8 *p) { return *(const u32 *)p; }
 static u32 crc(const u8 *p, u32 n)
@@ -94,32 +96,147 @@ u32 restore_admit(void)
     return 0;
 }
 
-/* A mismatch does not stop the pass: every entry is written and read, so
- * one board run names every register that does not hold its value. Words
- * 11-13 keep the first mismatch, word 27 counts them and words 28-31 hold
- * the next four as (profile index << 16) | value read. Any mismatch fails
- * the restore, which then never resumes boot0. */
+#ifdef RESTORE_SURVEY
+/* Diagnostic build only (tools/prepare-ddr.py --survey). The write pass
+ * stores, for every profile entry, the value read before the write, the
+ * value read straight after it, the value the readback pass reads after the
+ * last write, and the mask, as four halfwords from SURVEY+64. The header
+ * holds a magic word, the entries recorded, the hook-time PHY control words
+ * (MicroContMuxSel before the helper clears it, then UcclkHclkEnables,
+ * MicroReset, DctWriteProt and UctShadowRegs) and, in word 7, the number of
+ * wide-memory halfwords rewritten with their stored values. Words 8-10 hold
+ * 1 once the readback after init_DRAM starts, then the MicroContMuxSel and
+ * UcclkHclkEnables values it found. The host decodes the survey with
+ * tools/ddr-survey.py. */
+#define SURVEY ((volatile u32 *)0x96000)
+#define SURVEY_ENTRY ((volatile u16 *)0x96040)
+#define SURVEY_MAGIC 0x59565253u /* "SRVY" */
+#endif
+#define PHY16(address) (*(volatile u16 *)(address))
+
+/* Halfwords per stored word. The ACSM memory (CSR 0x41000-0x41fff) stores
+ * 64-bit words and the PHY data memory (64 KiB from CSR 0x58000) 32-bit words.
+ * APB writes 16 bits at a time; a halfword write is held until the word's
+ * highest halfword is written, which stores the word, and reads return the
+ * stored word until then (survey on port 3-1, 2026-10-31). boot0's PIE and
+ * message-block loaders write every halfword in ascending order. */
+static u32 word_bytes(u32 address)
+{
+    if (address - 0x0a982000u < 0x2000u) return 8;
+    if (address - 0x0a9b0000u < 0x10000u) return 4;
+    return 2;
+}
+
+/* Rewrites halfwords [from, to) with their stored values. */
+static u32 refill(u32 from, u32 to)
+{
+    u32 n = 0;
+    for (; from < to; from += 2, ++n) PHY16(from) = PHY16(from);
+    return n;
+}
+
+/* One write pass, then one readback pass; restore_check runs the readback
+ * pass again after init_DRAM. In a wide memory the pass writes
+ * the whole word of each entry, in ascending halfword order: halfwords that
+ * are not profile entries are rewritten with their stored values, so the
+ * write of the highest halfword stores the restored word. The readback pass
+ * follows the last write. A mismatch does not stop it: one board run names
+ * every register that does not hold its value. Words 11-13 keep the first
+ * mismatch, word 27 counts them and words 28-31 hold the next four as
+ * (profile index << 16) | value read. A mismatch at the hook fails the
+ * restore with READBACK, which then never resumes boot0; one after init_DRAM
+ * fails it with FINAL_READBACK.
+ *
+ * After the hook boot0 stops the PHY microcontroller clock: its PIE stage
+ * writes UcclkHclkEnables = 2 (0x5ae9a), and 0x57310 sets 3, reads the
+ * message block, then writes 0 (0x5749a). With the clock off, the data memory
+ * reads 0 over APB (port 3-1, 2026-10-31). Its contents are kept
+ * (inferred: 0x57310 reads them after the PIE stage has stopped the clock). The readback after
+ * init_DRAM therefore sets UcclkHclkEnables to 3 while it reads, as 0x57310
+ * and the capture reader do, and then writes back the value it found. */
 static u32 restore_phy(u32 write)
 {
     const u8 *r = RECORD, *p = r+128;
-    u32 offset = 88, index = 0, mismatches = 0; /* Skip the admitted parameter run. */
+    u32 offset, index, mismatches = 0;
+#ifdef RESTORE_SURVEY
+    if (write) {
+        for (u32 i = 0; i < 16; ++i) SURVEY[i] = 0;
+        SURVEY[2] = *MUX;
+    } else {
+        SURVEY[8] = 1;
+        SURVEY[9] = *MUX;
+    }
+#endif
     *MUX = 0;
     barrier();
+    u16 clocks = 0;
+    if (!write) {
+        clocks = *UCCLK;
+#ifdef RESTORE_SURVEY
+        SURVEY[10] = clocks;
+#endif
+        *UCCLK = 3;
+        barrier();
+    }
+#ifdef RESTORE_SURVEY
+    if (write) {
+        SURVEY[3] = PHY16(0x0aa80100);
+        SURVEY[4] = PHY16(0x0aaa0132);
+        SURVEY[5] = PHY16(0x0aaa0062);
+        SURVEY[6] = PHY16(0x0aaa0008);
+        SURVEY[0] = SURVEY_MAGIC;
+    }
+#endif
+    if (write) {
+        u32 next = 0, refills = 0; /* First halfword of the open wide word not yet written. */
+        offset = 88; index = 0;    /* Skip the admitted parameter run. */
+        for (u32 run = 1; run < word(r+80); ++run) {
+            u32 address = word(p+offset), count = word(p+offset+4);
+            offset += 8;
+            for (u32 i = 0; i < count; ++i, ++index, address += 2) {
+                volatile u16 *reg = (volatile u16 *)address;
+                u16 mask = restore_profile[index].mask;
+                u16 expected = *(const u16 *)(p+offset+2*i);
+                u32 width = word_bytes(address), base = address & ~(width-1);
+                if (width > 2) refills += refill(next > base ? next : base, address);
+                /* MMU/cache-off FEL accesses are ordered Device accesses. */
+                u16 before = *reg;
+                *reg = (before & ~mask) | (expected & mask);
+                MAIL[8] = index+1;
+#ifdef RESTORE_SURVEY
+                SURVEY_ENTRY[4*index] = before;
+                SURVEY_ENTRY[4*index+1] = *reg;
+                SURVEY_ENTRY[4*index+3] = mask;
+                SURVEY[1] = index+1;
+#endif
+                if (width > 2) {
+                    u32 following = index+1 < PROFILE_COUNT ? restore_profile[index+1].address : 0;
+                    next = address+2;
+                    if (following - base >= width) {
+                        refills += refill(next, base+width); /* Stores the word. */
+                        next = base+width;
+                    }
+                }
+            }
+            offset += (count*2+3)&~3u;
+        }
+#ifdef RESTORE_SURVEY
+        SURVEY[7] = refills;
+#else
+        (void)refills;
+#endif
+    }
+    offset = 88; index = 0;
     for (u32 run = 1; run < word(r+80); ++run) {
         u32 address = word(p+offset), count = word(p+offset+4);
         offset += 8;
         for (u32 i = 0; i < count; ++i, ++index, address += 2) {
-            volatile u16 *reg = (volatile u16 *)address;
             u16 mask = restore_profile[index].mask;
             u16 expected = *(const u16 *)(p+offset+2*i);
-            if (write) {
-                /* MMU/cache-off FEL accesses are ordered Device accesses.
-                 * The same-register read below observes the preceding write;
-                 * only mux ownership transitions need an explicit DSB. */
-                *reg = (*reg & ~mask) | (expected & mask);
-                MAIL[8] = index+1;
-            }
-            u16 actual = *reg;
+            u16 actual = PHY16(address);
+#ifdef RESTORE_SURVEY
+            if (write) SURVEY_ENTRY[4*index+2] = actual;
+#endif
             if ((actual ^ expected) & mask) {
                 if (!mismatches) { MAIL[11] = address; MAIL[12] = expected; MAIL[13] = actual; }
                 else if (mismatches < 5) MAIL[27+mismatches] = index << 16 | actual;
@@ -128,9 +245,10 @@ static u32 restore_phy(u32 write)
         }
         offset += (count*2+3)&~3u;
     }
+    if (!write) *UCCLK = clocks;
     *MUX = 1;
     barrier();
-    return mismatches ? READBACK : 0;
+    return !mismatches ? 0 : write ? READBACK : FINAL_READBACK;
 }
 
 u32 restore_write(void)

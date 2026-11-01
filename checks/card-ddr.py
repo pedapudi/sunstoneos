@@ -73,7 +73,7 @@ if a.case:
     assert set(a.case)<=set(cases)
     cases=[case for case in cases if case in a.case]
 for case in cases:
-    cpu=fixture();state={'ticks':0,'instructions':0,'reads':0,'init':0,'timing':0,'continuation':0,'writes':0,'dram':0,'stop':0,'fault':False}
+    cpu=fixture();state={'ticks':0,'instructions':0,'reads':0,'init':0,'timing':0,'continuation':0,'writes':0,'dram':0,'stop':0,'fault':False,'ucclk':[]}
     spec_b=dict(parsed);spec_b['generation']=parsed['generation']+1
     rb=t.build(spec_b);ra=record
     if case=='tie-A':rb=ra
@@ -131,11 +131,14 @@ for case in cases:
                 uc.reg_write(UC_ARM_REG_R0,0);uc.reg_write(UC_ARM_REG_R1,0x831f8);uc.reg_write(UC_ARM_REG_PC,0x56143);return
             if case=='final-readback':
                 address,value=phy[0];uc.mem_write(address,struct.pack('<H',value^masks[address]))
+            # boot0 returns from init_DRAM with the PHY microcontroller clock off.
+            uc.mem_write(0x0aa80100,b'\0\0')
             for reg,value in zip(regs,state['saved']):uc.reg_write(reg,value)
             uc.reg_write(UC_ARM_REG_SP,state['sp']);uc.reg_write(UC_ARM_REG_LR,state['return'])
             ret(uc,4096 if case=='size' else 12288)
     def memory(uc,access,address,size,value,_):
         if access==17 and address in masks:state['writes']+=1
+        if access==17 and address==0x0aa80100:state['ucclk'].append(value&0xffff)
         if access==16 and case=='readback' and state['writes'] and address==phy[0][0] and not state['fault']:
             uc.mem_write(address,struct.pack('<H',phy[0][1]^masks[address]));state['fault']=True
         if address>=0x40000000:
@@ -146,8 +149,12 @@ for case in cases:
     except BaseException:
         print(case,state,'PC',hex(cpu.reg_read(UC_ARM_REG_PC)));raise
     assert state['instructions']<5000000,(case,state)
-    errors={'read-error':13,'readback':7,'size':8,'memory':9,'final-readback':7}
+    errors={'read-error':13,'readback':7,'size':8,'memory':9,'final-readback':15}
     assert state['stop']==errors.get(case,0),(case,state)
+    # The readback after init_DRAM runs the clock, then writes back boot0's 0.
+    final=state['writes'] and case not in ('read-error','readback','size')
+    assert state['ucclk']==([3,0] if final else []),(case,state['ucclk'])
+    if final:assert struct.unpack('<H',cpu.mem_read(0x0aa80100,2))[0]==0
     if case in errors:
         assert r(cpu,0x8601c)==errors[case],(case,state)
         if case in ('read-error','readback'):assert not state['dram'] and not state['continuation']

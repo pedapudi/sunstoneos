@@ -33,7 +33,17 @@
  *   0x118 ELR   low 32 bits of ELR at that level
  *   0x11c FAR   low 32 bits of FAR at that level
  * The first fault after entry fills FAULT, ESR, ELR and FAR; later ones leave
- * them. The success SMC (x0 = 0) records nothing. */
+ * them. The success SMC (x0 = 0) records nothing.
+ *
+ * The first board failure (board_fail_at, apps/board/main.c) fills the same
+ * words, from EL0 or EL1, through SVC #0x5c0e, before any later exit:
+ *   FAULT 0xfa << 24 | core << 20 | 0xb << 16 | SPSR_EL1.M << 8 (0 EL0, 4/5 EL1)
+ *   ESR   site: group << 12 | source line or detail, aux << 16 (bits 30:16),
+ *         bit 31 set when ELR is a return address
+ *   ELR   caller: the failing statement (SUNSTONE_CRUMB_HERE) or, with ESR
+ *         bit 31, the return address of the failing call (symbolize ELR - 4);
+ *         a caller that tail-calls board_fail shows its own caller instead
+ *   FAR   value given by the site */
 #include <stdint.h>
 
 #define SUNSTONE_CRUMB_DEFINED 1
@@ -48,6 +58,24 @@
 #define SUNSTONE_CRUMB_TAG_MAGIC 0x5c0du
 #define SUNSTONE_CRUMB_FAULT_MAGIC 0xfau
 #define SUNSTONE_CRUMB_SVC 0x5c0d
+#define SUNSTONE_CRUMB_FAIL_SVC 0x5c0e
+#define SUNSTONE_CRUMB_FAIL_LEVEL 0xbu
+/* Board failure site groups (ESR bits 15:12). */
+#define SUNSTONE_CRUMB_FAIL_BOARD 0x1u      /* board_fail(context) or a board site; value: context or site detail */
+#define SUNSTONE_CRUMB_FAIL_THERMAL 0x2u    /* thermal owner cancel/fault; value: driver fault_site (0 if none) */
+#define SUNSTONE_CRUMB_FAIL_CPU_RETURN 0x3u /* cpu-return fail(detail); low 12 bits: detail */
+#define SUNSTONE_CRUMB_FAIL_APPLICATION 0x4u /* ss_fail(detail); low 12 bits: detail, value: detail */
+#define SUNSTONE_CRUMB_FAIL_CPU_CLOCK 0x5u  /* CPU clock owner refusal; value: phase << 24 | cluster << 16 | status */
+#define SUNSTONE_CRUMB_FAIL_PMIC 0x6u       /* PMIC power service; value: authority word */
+#define SUNSTONE_CRUMB_FAIL_RETURN 0x80000000u /* site flag: caller is a return address */
+#define SUNSTONE_CRUMB_FAIL_SITE(group) (SUNSTONE_CRUMB_FAIL_##group << 12 | ((uint32_t)__LINE__ & 0xfffu))
+/* The address of this statement, for the caller word of a board failure.
+ * Unlike a return address it survives inlining and tail calls. */
+#if defined(SUNSTONE_CRUMBS) && defined(__aarch64__)
+#define SUNSTONE_CRUMB_HERE() __extension__({ const void *here_; __asm__ volatile("adr %0, ." : "=r"(here_)); here_; })
+#else
+#define SUNSTONE_CRUMB_HERE() ((const void *)0)
+#endif
 /* WDT0 mode the host arms before launch: 16 s interval (index 11), enabled. */
 #define SUNSTONE_CRUMB_WATCHDOG_MODE 0xb1u
 #define SUNSTONE_CRUMB_WDT_RESTART 0x0205000cu
@@ -104,6 +132,12 @@ static inline void sunstone_crumb_el3(uint32_t stage, uint32_t value)
     rtc[SUNSTONE_CRUMB_TIME / 4] = (uint32_t)((mpidr >> 8) & 7) << 29 | (uint32_t)((now >> 10) & 0x1fffffff);
     __asm__ volatile("dsb sy" ::: "memory");
 }
+/* EL0 or EL1 only: the first board failure's site, value and caller. */
+static inline void sunstone_crumb_fail(uint32_t site, uint32_t value, const void *caller)
+{
+    __asm__ volatile("mov x0, %0\n mov x1, %1\n mov x2, %2\n svc #0x5c0e"
+        :: "r"((uint64_t)site), "r"((uint64_t)value), "r"((uint64_t)(uintptr_t)caller) : "x0", "x1", "x2", "memory");
+}
 /* EL1 or EL3 only (the Device map of 0-1 GiB is privileged): restart WDT0. */
 static inline void sunstone_watchdog_restart(void)
 {
@@ -125,5 +159,6 @@ static inline void sunstone_crumb(uint32_t stage, uint32_t value) { (void)stage;
 static inline void sunstone_crumb_el3(uint32_t stage, uint32_t value) { (void)stage; (void)value; }
 static inline void sunstone_crumb_el3_start(uint64_t epoch) { (void)epoch; }
 static inline void sunstone_watchdog_restart(void) {}
+static inline void sunstone_crumb_fail(uint32_t site, uint32_t value, const void *caller) { (void)site; (void)value; (void)caller; }
 #endif
 #endif

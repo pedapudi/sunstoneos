@@ -66,9 +66,16 @@ def main():
         for off in (0,0x1c):cases.append((f'domain-{i}-boot-{off:x}',lambda m,i=i,off=off:m.put32(0x08871000+4096*i+off,0),-1))
         for off,bit in ((4,29),(8,31),(0x18,31)):
             cases.append((f'domain-{i}-pattern-{off:x}',lambda m,i=i,off=off,bit=bit:m.put32(0x08871000+4096*i+off,1<<bit),-1))
+    refusal=layout.address('os_cpu_return_entry_refusal') if 'os_cpu_return_entry_refusal' in layout.symbols else None
     for name,change,expected in cases:
         model=Model(image,layout);change(model);actual=model.guard();assert actual==expected,(name,actual,expected)
-        rows.append({'name':name,'passed':True,'result':actual})
+        row={'name':name,'passed':True,'result':actual}
+        if refusal is not None:
+            # A refusal names its line and detail; the board failure record carries it.
+            word=model.u32(refusal);assert (word!=0)==(actual<0),(name,hex(word))
+            if name.startswith('rail-'):assert word>>12==(1000<<10|800 if name=='rail-0-not800' else 800<<10|1000),(name,hex(word))
+            row['refusal']=hex(word)
+        rows.append(row)
     save(a.out/'results.json',{'scope':'actual linked guard with modeled registers/THS readiness; no hardware','cases':rows})
     print('PASS',len(rows),'linked initial-state guard cases')
 if __name__=='__main__':main()

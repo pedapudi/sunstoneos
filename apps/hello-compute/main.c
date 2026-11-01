@@ -1,8 +1,10 @@
 /* hello-compute: the smallest application on the SunstoneOS interface
  * (docs/designs/app-abi.md). It computes the Adler-32 checksum (RFC 1950)
  * of its one input region and returns it with ss_finish. It uses no device.
- * Status: compiles against include/sunstone_app.h and runs on the host
- * model in checks/sunstone-app-abi.py; no board image links it yet. */
+ * It runs on the host model in checks/sunstone-app-abi.py and links into the
+ * hello-compute OS image; built with the CPU-return lifetime, that image is
+ * the control image of tools/dev-run.py, and apps/hello-compute/host.py
+ * decodes its result. */
 #include "hello_compute-app.h"
 
 /* The result that ss_finish returns, little-endian. */

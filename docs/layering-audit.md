@@ -261,6 +261,11 @@ is routed to the recognition core (`apps/os/irq.c:28`).
   and run steps, and one shared helper module. The gate builds the OS
   without applications, then runs each application's own checks.
 - **Severity:** awkward. **Effort:** large.
+- **Status:** implemented for CPU-return images. `tools/dev-run.py` builds
+  the typed session, uploads and backups from the image's manifest and runs
+  hello-compute or an external application such as mimus through
+  `apps/os/prepare.py` and `apps/os/cpu-return-host.py`. GPU-return and NPU
+  images still have per-application runners.
 
 ### 13. Application headers and tools sit in OS directories
 

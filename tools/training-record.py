@@ -2,6 +2,8 @@
 """Build, check and plan the DRAM training record (docs/designs/dram-training-restore.md).
 
   build --input SPEC.json --output RECORD.bin
+  from-capture --capture DIR --restore-set SET --boot0 BOOT0 --output RECORD.bin
+               --generation N [--recapture]
   parse --record RECORD.bin
   plan --record RECORD.bin --allocation ALLOC.json --card-image IMAGE --output DIR
   invalidate --allocation ALLOC.json --card-image IMAGE --output DIR
@@ -28,7 +30,7 @@ MAGIC = b"AS73DTRN"
 VERSION, HEADER_SIZE, SECTOR = 1, 128, 512
 PLAN_KIND = "a733-training-record-plan"
 BOOT0_SHA256 = "829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3"
-RESTORE_SET_SHA256 = "3464c8421cdeb23af51c831b38cab729c7a2ced9ecee3a746a08a57531da1cb4"
+RESTORE_SET_SHA256 = "7c8ae56d522515bc50acce99793436dfaed75805a33b6b87aa7c8e4681d40868"
 CAPTURE_LAYOUT_SHA256 = "c7a012ca80a27eb6c666d4db0f9e5e10dbfefa23b1ba30ff08eac3206f594b2d"
 PARAMETERS = 0x831f8
 RECORD_LIMIT = 0x6000
@@ -37,24 +39,33 @@ RECORD_LIMIT = 0x6000
 def restore_set(path):
     data = Path(path).read_bytes()
     if hashlib.sha256(data).hexdigest() != RESTORE_SET_SHA256:
-        raise ValueError("Restore set differs from the reviewed ten-lifetime analysis (restore-set-v4.json)")
+        raise ValueError("Restore set differs from the reviewed ten-lifetime analysis (restore-set-v5.json)")
     return json.loads(data)
 
 
 def profile(analysis):
     """Ordered PHY addresses and masks; parameters use a separate full-width run."""
     entries = analysis["kind_diff"]["registers"]
-    assert len(entries) == 941
+    assert len(entries) == 899
     assert {k for k in entries if k.startswith("param[")} == {f"param[{i}]" for i in range(32, 52)}
     return [(int(k, 16), v["mask"]) for k, v in sorted(entries.items()) if k.startswith("0x")]
 
 
-def from_capture(directory, set_path, boot0_path, generation):
+def from_capture(directory, set_path, boot0_path, generation, recapture=False):
+    """A record from a P-state-0-only capture. Without recapture the capture
+    must be one of the restore set's references, and every value must equal
+    the frozen analysis. With recapture it is a later capture of a board the
+    set covers (docs/board-runbooks/dram-restore-records.md): the same
+    identity, layout and training-kind checks apply, and the values are the
+    capture's own."""
     directory = Path(directory).resolve()
     analysis = restore_set(set_path)
-    metadata = next((c for c in analysis["captures"] if Path(c["path"]).resolve() == directory), None)
-    if metadata is None or metadata["training_kind"] != "pstate0":
-        raise ValueError("Capture is not an admitted P-state-0 reference")
+    if recapture:
+        metadata = None
+    else:
+        metadata = next((c for c in analysis["captures"] if Path(c["path"]).resolve() == directory), None)
+        if metadata is None or metadata["training_kind"] != "pstate0":
+            raise ValueError("Capture is not an admitted P-state-0 reference")
     session = json.loads((directory / "session.json").read_text())
     stages = session["manifest"]["stages"]
     layout = [(s["name"], s["output_bytes"],
@@ -68,6 +79,13 @@ def from_capture(directory, set_path, boot0_path, generation):
             or ddr["manifest"]["boot0_sha256"] != BOOT0_SHA256
             or ddr["result"]["dram_mib"] != 12288 or ddr["result"]["board_result"] != 0):
         raise ValueError("Capture training kind or DDR identity differs")
+    # The capture runner bound itself to the DDR run's SRAM mailbox on the same
+    # USB instance; recapture values are not checked against the analysis, so
+    # this binding is what ties them to a P-state-0-only training.
+    if ((directory / "mailbox.bin").read_bytes() != (Path(session["ddr_evidence"]) / "mailbox.bin").read_bytes()
+            or session.get("device") != ddr.get("device") or session.get("node_identity") != ddr.get("node_identity")
+            or session.get("ddr_variant") != "pstate0"):
+        raise ValueError("Capture and DDR run are not one lifetime of one P-state-0-only training")
     values = {}
     for stage, outcome in zip(stages, session["stages"]):
         if not outcome["done"] or outcome["name"] != stage["name"]:
@@ -83,7 +101,12 @@ def from_capture(directory, set_path, boot0_path, generation):
                 # The vendor-window stage overlaps the later full PHY capture.
                 values[address] = value
     chip = [values[0x03006200 + 4 * n] for n in range(4)]
-    if "chip-" + "-".join(f"{v:08x}" for v in chip) != metadata["board"]:
+    board = "chip-" + "-".join(f"{v:08x}" for v in chip)
+    if recapture:
+        # The set is derived from these boards only; another board needs a new set.
+        if board not in analysis["kind_diff"]["per_board"]:
+            raise ValueError("Capture SID is not a board of the restore set")
+    elif board != metadata["board"]:
         raise ValueError("Capture SID differs from the analysis board")
     params = [int(word, 16) for word in session["parameter_block"]]
     if len(params) != 128 or params[30] & 4 or (params[27] >> 16) & 0x1fff != 0x125f:
@@ -91,6 +114,10 @@ def from_capture(directory, set_path, boot0_path, generation):
     # Every selected register is in varying, including the fixed trained values:
     # they differ from initialization-only captures. Bind bytes to that evidence.
     for key in analysis["kind_diff"]["registers"]:
+        if not key.startswith("param[") and int(key, 16) not in values:
+            raise ValueError("Capture lacks a restore-set register: " + key)
+        if recapture:
+            continue
         actual = params[int(key[6:-1])] if key.startswith("param[") else values[int(key, 16)]
         if analysis["varying"][key]["values"][str(directory)] != actual:
             raise ValueError("Capture value differs from the frozen analysis: " + key)
@@ -413,6 +440,8 @@ def main(argv=None):
     for option in ("capture", "restore-set", "boot0", "output"):
         p.add_argument("--" + option, type=Path, required=True)
     p.add_argument("--generation", type=int, required=True)
+    p.add_argument("--recapture", action="store_true",
+                   help="a later P-state-0-only capture of a board the restore set covers")
     for name in ('select', 'plan-standby'):
         p = sub.add_parser(name)
         for option in ('allocation', 'card-image', 'restore-set', 'record'):
@@ -428,7 +457,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command in ("build", "from-capture"):
-            spec = (from_capture(args.capture, args.restore_set, args.boot0, args.generation)
+            spec = (from_capture(args.capture, args.restore_set, args.boot0, args.generation, args.recapture)
                     if args.command == "from-capture" else json.loads(args.input.read_text()))
             record = build(spec)
             if args.command == "from-capture" and len(record) > RECORD_LIMIT:
@@ -436,7 +465,8 @@ def main(argv=None):
             parse(record)
             with args.output.open("xb") as handle:
                 handle.write(record)
-            result = {"bytes": len(record), "crc": crc(record)}
+            result = {"bytes": len(record), "crc": crc(record),
+                      "record_name": "chip-" + "-".join(f"{v:08x}" for v in parse(record)["chip_id"]) + ".bin"}
         elif args.command == "parse":
             result = parse(args.record.read_bytes())
         elif args.command in ('select', 'plan-standby'):

@@ -6,6 +6,8 @@ and this decoder cannot disagree silently. No device access happens here:
 callers pass the FEL transaction function they already own.
 """
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +17,12 @@ WORDS = {'tag': 0x100, 'last': 0x104, 'time': 0x10c, 'fault': 0x110, 'esr': 0x11
 WDT_MODE, WDT_CONFIG, WDT_OUTPUT, WDT_RESTART = 0x02050014, 0x02050010, 0x02050018, 0x0205000c
 KEY = 0x16aa0000
 RETURN_ROM = 0x0503  # SUNSTONE_CRUMB_RETURN_ROM: value is the WDT0 mode after the disarm
+EL3_STOP = 0x0111    # SUNSTONE_CRUMB_EL3_STOP: value is min(status, 15) << 12 | detail & 0xfff
+FAIL_LEVEL = 0xb     # SUNSTONE_CRUMB_FAIL_LEVEL: the first board failure, from EL0 or EL1
+BOUNDED = 0x736      # cpu-return bounded(): its value carries board_live_refusal() bits
+# board_live_refusal() bits (apps/board/main.c) and bounded()'s margin bit.
+LIVE_REFUSAL = ((28, 'board.fatal already set'), (29, 'service window (live_until) expired'),
+                (30, 'session deadline passed'), (31, 'within 10 ms of the deadline'))
 # Watchdog interval for mode bits 7:4 (drivers/watchdog/a733_watchdog.c).
 INTERVALS = {0: 0.5, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 8, 8: 10, 9: 12, 10: 14, 11: 16}
 
@@ -58,8 +66,57 @@ def parse_return(stdout):
     return values[0], values[1], dict(zip(WORDS, values[2:]))
 
 
-def decode(words, epoch):
-    """Summarize the seven words; a tag of another session yields no stages."""
+def symbolize(elf, address):
+    """Source location of a code address in the image ELF, or None."""
+    if elf is None or not Path(elf).exists():
+        return None
+    for tool in ('llvm-symbolizer-21', 'llvm-symbolizer'):
+        path = shutil.which(tool)
+        if path:
+            result = subprocess.run([path, '--obj', str(elf), '--inlining', '--functions=linkage', hex(address)],
+                                    capture_output=True, text=True, timeout=30)
+            lines = [x for x in result.stdout.splitlines() if x.strip()]
+            if result.returncode == 0 and lines and not lines[0].startswith('??'):
+                return ' <- '.join(f'{lines[i]} {lines[i + 1]}' for i in range(0, len(lines) - 1, 2))
+    try:
+        from elftools.elf.elffile import ELFFile
+    except ImportError:
+        return None
+    with open(elf, 'rb') as f:
+        table = ELFFile(f).get_section_by_name('.symtab')
+        best = None
+        for sym in table.iter_symbols() if table else ():
+            v, n = sym['st_value'], sym['st_size']
+            if sym['st_info']['type'] == 'STT_FUNC' and v <= address < v + max(n, 1):
+                best = f"{sym.name}+{address - v:#x}"
+        return best
+
+
+def board_failure(words, defines, elf):
+    """Decode a level 0xb record: the first board_fail and its site."""
+    fault, site, caller, value = words['fault'], words['esr'], words['elr'], words['far']
+    groups = {v: k[len('FAIL_'):].lower() for k, v in defines.items()
+              if k.startswith('FAIL_') and k not in ('FAIL_SVC', 'FAIL_LEVEL', 'FAIL_RETURN')}
+    group = (site >> 12) & 15
+    slot = (fault >> 8) & 255
+    record = {'core': (fault >> 20) & 15, 'level': FAIL_LEVEL, 'group': groups.get(group, f'unknown {group}'),
+              'site': site & 0xfff, 'aux': site >> 16 & 0x7fff, 'caller': hex(caller), 'value': hex(value),
+              'caller_kind': 'return address' if site >> 31 else 'statement',
+              'exception_level': 'EL0' if slot == 0 else 'EL1' if slot in (4, 5) else f'SPSR.M {slot:#x}'}
+    record['site_kind'] = 'detail' if record['group'] in ('cpu_return', 'application') else 'source line'
+    if record['group'] == 'cpu_return' and record['site'] == BOUNDED:
+        record['deadline_seconds'] = record['aux']
+        record['refusal'] = [text for bit, text in LIVE_REFUSAL if value >> bit & 1]
+        record['counter_ms'] = value & 0x0fffffff
+    if caller:
+        # A statement address is exact; a return address points after the call.
+        record['caller_source'] = symbolize(elf, caller - 4 if site >> 31 else caller)
+    return record
+
+
+def decode(words, epoch, elf=None):
+    """Summarize the seven words; a tag of another session yields no stages.
+    elf, the image ELF, symbolizes a board failure's caller."""
     defines, stages = header()
     def stage(word):
         number = word >> 16
@@ -76,7 +133,13 @@ def decode(words, epoch):
         result['last'] = stage(last)
         result['last']['core'] = time >> 29
         result['last']['seconds_since_power_on'] = round((time & 0x1fffffff) * 1024 / 24e6, 4)
-    if fault >> 24 == defines['FAULT_MAGIC']:
+        if result['last']['stage'] == EL3_STOP:
+            v = result['last']['value']
+            result['last']['status'] = v >> 12 if v >> 12 < 15 else '15 or more'
+            result['last']['detail'] = hex(v & 0xfff)
+    if fault >> 24 == defines['FAULT_MAGIC'] and (fault >> 16) & 15 == FAIL_LEVEL:
+        result['board_failure'] = board_failure(words, defines, elf)
+    elif fault >> 24 == defines['FAULT_MAGIC']:
         level = (fault >> 16) & 15
         result['fault'] = {'core': (fault >> 20) & 15, 'level': level, 'vector_slot': (fault >> 8) & 255,
                            'x0': fault & 255, 'esr' if level == 3 or fault & 255 == 4 else 'detail': hex(words['esr']),
@@ -87,6 +150,15 @@ def decode(words, epoch):
         parts.append(f"last stage {r['name']} ({r['stage']:#06x}) value {r['value']:#x} on core {r['core']}")
     else:
         parts.append('tagged at EL3 entry; no later stage')
+    if 'board_failure' in result:
+        f = result['board_failure']
+        text = (f"first board failure on core {f['core']} at {f['exception_level']}: {f['group']} "
+                f"{f['site_kind']} {f['site']:#x}, value {f['value']}, caller {f['caller']}")
+        if f.get('caller_source'):
+            text += f" ({f['caller_source']})"
+        if 'refusal' in f:
+            text += '; ' + (', '.join(f['refusal']) or 'no refusal bit')
+        parts.append(text)
     if 'fault' in result:
         f = result['fault']
         kind = 'EL1 fault' if f['level'] == 1 and f['x0'] == 4 else (

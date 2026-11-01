@@ -315,10 +315,40 @@ The following reviewed implementations are integrated with software evidence:
   reset): 125 of 921 registers did not hold their write and the fallback
   trained fully. The five the mailbox names are hardware copies of other
   byte-lane registers and PHY-produced values; the other 120 are not named.
-  A diagnostic run that stores every entry's value before and after its
-  write decides whether this hook can restore training
-  ([runbook](board-runbooks/dram-restore-test-1.md#the-second-board-run-found-125-registers-that-do-not-hold-a-write)).
-  No board run has used the clock-return build.
+  The clock-return build then passed on both boards (plain twice on 3-3;
+  restore with fallback on 3-1, which failed the readback again with 124
+  mismatches). A diagnostic restore build in
+  `~/.cache/sunstoneos/evidence/dram-survey-1031/` stores every entry's
+  value before its write, after it and at the end of the pass, and the
+  runner classifies each one; its run decides whether this hook can restore
+  training ([runbook](board-runbooks/dram-restore-test-1.md#the-survey-run-classifies-every-entry)).
+  The survey (port 3-1) separated the 125: 88 are ACSM and PHY data-memory
+  halfwords that the memory stores only when the word's highest halfword is
+  written (83 were stored by a later entry; five never were), and 37 are
+  registers the PHY owns (copies and values it produces). None is a trained
+  delay or VREF. The 899-entry v5 set leaves
+  out the PHY-owned registers and the helper writes whole wide-memory
+  words; builds and records are in
+  `~/.cache/sunstoneos/evidence/dram-restore-v5-1031/`, commands in the
+  [runbook](board-runbooks/dram-restore-test-1.md#commands-for-one-board).
+  The v5 survey build ran on port 3-1 (2026-10-31, after a WDT0 reset):
+  every PHY entry held at the hook, boot0 resumed and its simple test passed
+  on the restored state. The helper's readback after `init_DRAM` then read
+  the 18 PHY data-memory entries with nonzero expected values as 0, because
+  boot0 leaves the PHY microcontroller clock off (`UcclkHclkEnables` 0), and
+  the fallback trained fully. The helper now sets that clock to 3 for the
+  readback and restores it, and reports a failure there as error 15. Builds
+  are in `~/.cache/sunstoneos/evidence/dram-final-readback-1031/`, with the
+  commands and expected output in the
+  [runbook](board-runbooks/dram-restore-test-1.md#the-v5-run-held-every-write-the-readback-after-init_dram-read-the-data-memory-with-its-clock-stopped).
+  Those builds restored DRAM on both boards on 2026-10-31 (quick check
+  34–36 ms; about 2.0 s for the runner command on 3-3 against about 6.6 s
+  for a plain full training). `tools/run-ddr.py` without `--build` now restores by
+  the board's SID from `~/.cache/sunstoneos/ddr-records` and trains fully,
+  saying why, when it cannot; `--full-training` skips the restore. Setup,
+  record capture, recapture and the restore's limits are in the
+  [records runbook](board-runbooks/dram-restore-records.md); the default
+  has not run on a board.
 
 ## Current integration
 
