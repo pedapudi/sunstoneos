@@ -8,7 +8,7 @@ def module(name,path):
 crumbs=module('returning_crumbs',ROOT/'tools/a733-crumbs.py')
 
 _directories=module('returning_evidence',ROOT/'tools/host_evidence.py')
-output_directory=_directories.unique_directory
+output_directory=_directories.evidence_directory
 artifact_directory=_directories.new_directory
 
 class WatchdogReset(RuntimeError):

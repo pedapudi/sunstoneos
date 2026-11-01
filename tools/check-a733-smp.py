@@ -21,7 +21,7 @@ import sys
 import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
-from host_evidence import new_directory, unique_directory
+from host_evidence import evidence_directory, new_directory, unique_directory
 FEL_HASH = '4a54cdc179baafbdecac47eb85714c3745d6d9952e05b482c7016afd4b22bf3e'
 ROM_HASH = 'a8e31821e8a1611d75867825914c58373c732742cb8f2235e8168c1d7e93b5aa'
 REQUEST_MAGIC = 0x415337334c4e4331
@@ -87,7 +87,7 @@ def present_instance(access, config):
 
 
 
-output_directory = unique_directory
+output_directory = evidence_directory
 artifact_directory = new_directory
 
 
