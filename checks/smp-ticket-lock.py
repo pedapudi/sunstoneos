@@ -14,6 +14,8 @@ from pathlib import Path
 import re
 import subprocess
 
+from harness import CACHE, environment
+
 MASK = 0xFFFF
 
 
@@ -168,7 +170,7 @@ def qemu_checks(build, emulator, output):
                        "-accel", "tcg,thread=multi", "-cpu", cpu, "-smp", str(cores), "-m", "128M",
                        "-nographic", "-monitor", "none", "-semihosting-config", "enable=on,target=native",
                        "-device", f"loader,file={image.resolve()},cpu-num=0", "-d", "in_asm", "-D", str(trace)]
-            result = subprocess.run(command, capture_output=True, text=True, timeout=45)
+            result = subprocess.run(command, capture_output=True, text=True, timeout=45, env=environment())
             log = result.stdout + result.stderr
             (output / (cpu + "-" + name + ".run.log")).write_text(log)
             assert result.returncode == 0 and marker in log and "FAIL" not in log, (cpu, name, log)
@@ -188,7 +190,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--build", type=Path, help="Built FreeRTOS SMP model images; enables QEMU checks")
-    parser.add_argument("--qemu", type=Path, default=Path("/home/sunil/.cache/sunstoneos/host/usr/bin/qemu-system-aarch64"))
+    parser.add_argument("--qemu", type=Path, default=CACHE / "host/usr/bin/qemu-system-aarch64")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     cases = [explore(seed, lse, rounds) for seed in (0, 65534)
