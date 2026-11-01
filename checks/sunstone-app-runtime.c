@@ -23,6 +23,7 @@ uint64_t a733_smp_counter(void){return 24000000;}
 void board_service_progress(unsigned n){(void)n;}
 void board_fail(void *p){(void)p;__builtin_trap();}
 void vTaskSuspend(TaskHandle_t t){(void)t;__builtin_trap();}
+void vTaskDelay(TickType_t ticks){(void)ticks;__builtin_trap();}
 void runtime_smp_init(void){}
 void runtime_init(void){}
 TaskHandle_t xTaskCreateStaticAffinitySet(TaskFunction_t entry,const char *name,configSTACK_DEPTH_TYPE depth,
