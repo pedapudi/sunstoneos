@@ -3,6 +3,10 @@
 
 Clock driver completion/request and counter APIs are modeled. The actual
 initial-state guard executes before the first requested transition.
+The return cases request the return in each owner phase. A modeled
+transition completion writes its domain's PLL and mux words; the actual
+owner then lowers what it needs and reads the CPU-B words back. CPU-L and the
+DSU are compared with their boot words after a modeled ROM reset of both.
 """
 import argparse,importlib.util,struct
 from pathlib import Path
@@ -34,6 +38,89 @@ class Model(entry.Model):
   super().code(uc,a,size,unused)
  def step(self):return self.call(0,'os_cpu_clock_step',(self.p,))&0xffffffff
 
+# Boot (boot0) and top-point PLL/mux words of CPU-L, CPU-B and the DSU.
+BOOT=((0xf8802600,0x03010000),(0xf8802700,0x03000000),(0xf8802600,0x03010105))
+TOP={0:(1794,0xf8804500,0x03000000),1:(2002,0xf8804d00,0x03000000),2:(1274,0xf8803100,0x03000105)}
+PENDING,COMPLETE,EXPIRED=1,2,6
+class ReturnModel(Model):
+ """A return requested while the owner is in a given phase.
+
+ Each modeled burst takes the next scripted result. A completion applies the
+ in-flight transition: its point in applied_mhz and its words in the clock
+ registers. Inspection and requests are recorded; the owner must start no
+ inspection after the return request."""
+ def __init__(self,image,layout,owner_fields,phase,cluster,raised=(),flight=None):
+  super().__init__(image,layout,owner_fields)
+  self.fields=owner_fields;self.cf=layout.layouts['a733_cpu_clock']
+  self.put32(self.owner+owner_fields['phase'],phase);self.put32(self.owner+owner_fields['cluster'],cluster)
+  if phase==3:self.put32(self.owner+owner_fields['ready'],1)
+  self.put32(self.c+self.cf['applied_mhz'],494);self.put32(self.c+self.cf['applied_mhz']+4,1014)
+  for d in raised:self.apply(d,TOP[d])
+  self.flight=flight;self.script=[];self.inspections=[];self.guards=0;self.closing=1
+  self.hooks[layout.address('os_cpu_return_requested')]=lambda:self.closing
+  self.hooks[layout.address('a733_cpu_clock_burst')]=self.burst
+  self.hooks[layout.address('a733_cpu_clock_inspect')]=self.inspect
+  self.hooks[layout.address('os_cpu_return_entry_guard')]=self.guard
+ def apply(self,d,point):
+  mhz,pll,mux=point;self.put32(self.c+self.cf['applied_mhz']+4*d,mhz)
+  self.put32(0x08871000+4096*d,pll);self.put32(0x0887101c+4096*d,mux)
+ def burst(self):
+  r=self.script.pop(0) if self.script else 0
+  if r==COMPLETE and self.flight is not None:self.apply(*self.flight);self.flight=None
+  return r
+ def inspect(self):self.inspections.append(self.uc.reg_read(prior.fault.REGS[1]));return PENDING
+ def guard(self):self.guards+=1;return 1
+ def request(self):
+  d,mhz=self.uc.reg_read(prior.fault.REGS[1]),self.uc.reg_read(prior.fault.REGS[2])
+  self.requests.append((d,mhz))
+  self.flight=(d,(mhz,*BOOT[d])) if (d,mhz)==(1,1014) else (d,TOP[d])
+  self.put32(self.c+self.cf['changes'],self.u32(self.c+self.cf['changes'])-1)
+  return PENDING
+ def done(self):return self.call(0,'os_cpu_return_clock_done')
+ def failed(self):return self.u32(self.layout.address('fail_recorded','return-main-pinned.c'))
+ def words(self):return tuple((self.u32(0x08871000+4096*d),self.u32(0x0887101c+4096*d)) for d in range(3))
+
+def returns(image,layout,members):
+ """A return in every phase finishes with no raise after the request."""
+ rows=[]
+ def run(name,m,steps,requests,changes):
+  """steps: (scripted burst results for this step, expected step result)."""
+  for script,expected in steps:
+   m.script=list(script);assert m.step()==expected,(name,script,expected)
+  assert m.requests==requests and not m.inspections and not m.guards,(name,m.requests,m.inspections,m.guards)
+  assert m.u32(m.c+m.cf['changes'])==changes,(name,m.u32(m.c+m.cf['changes']))
+  ok=all(e!=0xffffffff for _,e in steps)
+  assert m.done()==ok and m.failed()==(not ok),(name,m.done(),m.failed())
+  if ok:
+   assert m.words()[1]==BOOT[1],(name,[hex(w) for w in m.words()[1]])
+   # The ROM return resets CPU-L and the DSU; CPU-B keeps what the image left.
+   for d in (0,2):m.put32(0x08871000+4096*d,BOOT[d][0]);m.put32(0x0887101c+4096*d,BOOT[d][1])
+   assert m.words()==BOOT,name
+  rows.append({'name':name,'passed':True,'requests':m.requests,'returned':ok})
+ F=0xffffffff
+ # CPU-L's inspection in flight: it finishes; CPU-B is never inspected.
+ run('return-in-INSPECT',ReturnModel(image,layout,members,1,0),[((PENDING,),1),((COMPLETE,),1)],[],4)
+ # Inspected, before the entry guard and any request: no guard, no request.
+ run('return-in-REQUEST-before-any-request',ReturnModel(image,layout,members,2,0),[((0,),1)],[],4)
+ # CPU-B's raise to 2002 MHz in flight: it completes, then CPU-B is lowered.
+ run('return-in-REQUEST-with-request-in-flight',
+     ReturnModel(image,layout,members,2,1,flight=(1,TOP[1])),
+     [((PENDING,),1),((COMPLETE,),1),((PENDING,),1),((COMPLETE,),1)],[(1,1014)],3)
+ # CPU-L's raise in flight after CPU-B's: CPU-L is left to the ROM return.
+ run('return-in-REQUEST-with-CPU-L-in-flight',
+     ReturnModel(image,layout,members,2,2,raised=(1,),flight=(0,TOP[0])),
+     [((COMPLETE,),1),((COMPLETE,),1)],[(1,1014)],3)
+ # Every domain at its top point: CPU-B lowered, as before.
+ run('return-in-FOLLOW',ReturnModel(image,layout,members,3,3,raised=(0,1,2)),
+     [((0,),1),((PENDING,),1),((COMPLETE,),1)],[(1,1014)],3)
+ # Thermal lowering left CPU-B at 1014 MHz: nothing to lower, no change spent.
+ m=ReturnModel(image,layout,members,3,3,raised=(0,2));m.put32(m.c+m.cf['changes'],0)
+ run('return-in-FOLLOW-with-nothing-to-lower',m,[((0,),1)],[],0)
+ # A lowering that cannot finish before its deadline still ends the session.
+ run('return-lowering-expired',ReturnModel(image,layout,members,3,3,raised=(0,1,2)),
+     [((0,),1),((EXPIRED,),F)],[(1,1014)],3)
+ return rows
+
 def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('elf',type=Path);p.add_argument('--out',type=Path,required=True);a=p.parse_args();a.out.mkdir(parents=True,exist_ok=False)
  names={'a733_cpu_clock','a733_cpu_clock_grant','a733_cpu_clock_config','a733_cpu_clock_report','a733_thermal_policy','os_thermal_service','a733_thermal'}
@@ -62,6 +149,7 @@ def main():
   m.put32(t+tf['active'],1);m.put32(t+tf['driver']+df['initialized'],1);change(m,t)
   assert m.call(0,'os_cpu_return_thermal_ready')==expected,name
   rows.append({'name':'actual-THS-accessor-'+name,'passed':True})
+ rows+=returns(image,layout,members)
  save(a.out/'results.json',{'scope':'actual patched owner/guard/readiness with modeled driver API, counter and clock-token status; no hardware','cases':rows})
- print('PASS',len(rows),'owner ordering/readiness cases')
+ print('PASS',len(rows),'owner ordering/readiness/return cases')
 if __name__=='__main__':main()
