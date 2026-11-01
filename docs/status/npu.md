@@ -10,51 +10,42 @@ Repeated lifecycle operation remains unqualified.
 
 ## Resident command submission
 
-**Implemented; physically unqualified.** The generic command queue submits in
-its caller's context, uses caller-owned job records and ordered timeline fences,
-and directly notifies its waiting task from IRQ97. Several records may be
-pending. Prepared sequences retain device synchronization between command
-streams and emit one final event. The queue handles commands and fences without
-interpreting a model or application partition.
+**Implemented; matched small-model timing has physical evidence.** The generic
+queue accepts caller-owned records and ordered fences, submits from the caller,
+and notifies its waiting task directly from IRQ97. Commands and buffers remain
+resident. Dirty ranges receive cache maintenance outside the device lock.
+Acknowledged worker handoff and permanent queue retirement prevent stale triggers.
+The legacy mailbox wakes its owner on publication and reuses READY models.
 
-The native adapter obtains an acknowledged worker handoff before accessing the
-engine. Returning ownership retires the queue's admission; stale handles cannot
-trigger hardware. Commands and buffers remain resident, with CPU cache work on
-the caller's dirty tensor ranges. The legacy application mailbox also wakes its
-owner on publication and reuses a READY model. These software changes establish
-no physical latency improvement.
+Port 3-3 control `1793563838443635411-92c1fdae` and resident comparison
+`1793564135238449408-5dbdd6ad` each check 1,000 measured model-0 outputs, with
+identical linked models and inputs at 852 MHz/800 mV. Both return normally.
+Helper versus resident p50/p99/maximum latency is 463.88/472.46/478.92 µs versus
+10.25/12.83/18.71 µs. Throughput is 2,029.97 versus 26,925.33 jobs/s.
+Scheduled client-plus-worker CPU time is 491.16 versus 34.19 µs/job, including
+output checks and digest. This excludes IRQ time charged to idle. Mean
+API-entry-to-completed-doorbell delay is 403.44 versus 0.943 µs.
+[The design](../designs/npu-fast-path.md) records hashes, timing scope and vendor references.
 
-Host evidence under `~/.cache/sunstoneos/build/npu-fastpath-1101/` covers ordered
-queues of 10,000 records, failure retention, sequence encoding, native handoff
-interleavings and regression mutations, SDK notifications, and measurement
-producer/parser/return-receipt agreement. The OS, hello and NPU baseline builds
-pass. The integration gate's selected builds, check index and affected pure-host
-checks pass; its broader inferred coverage remains incomplete because indexed
-checks require additional images, captures or physical inputs.
+Port 3-3 entry `1793564565759310818-479eba75` returns with matching outputs
+from two binaries sharing one 400-byte output/input allocation. Two FIFO records
+are pending together; a prepared joined stream instead emits one final event.
+Both forms require no interstage CPU copy. Repeated chaining remains unqualified.
 
-The finite diagnostic selects `--latency legacy` or `--latency queue`, checks
-one warmup and 1,000 measured jobs, and records every latency sample plus p50,
-p99, maximum, throughput and scheduled client/worker task time. An optional
-`--sequence 32` measures a resident repeated-command sequence. It uses the same
-input and output windows repeatedly; it does not establish dataflow between
-different network binaries. Task-time counters exclude idle-task time and IRQ
-execution charged to the idle task; IRQ driver elapsed time is reported separately.
+The EL0 application-kit ring has resident handles, image-declared tensor edges,
+connected buffer leases and an SVC doorbell only on idle-to-active publication.
+IRQ refill handles each successor without a service task hop. Eight sanitizer
+cases and a two-model native build pass; physical EL0 execution remains unqualified.
+Host evidence under `~/.cache/sunstoneos/build/npu-fastpath-1101/` also covers
+10,000 ordered records, native handoff faults, tensor relocation, SDK events
+and diagnostic producer/parser/receipt agreement.
 
-The legacy control is built and admitted offline. Its ELF is
-`~/.cache/sunstoneos/build/npu-fastpath-1101/images/legacy/image.elf`, SHA-256
-`743b3bd492b4c69a4859cac2a2d6a3d2b7c580b375a1c4e19a16369617f9908b`.
-Port 3-3 submissions require the coordinator to integrate runner commit
-`1cdb6e2485421979f0aa4d8e7ff59053157449b6`, which admits the typed finite latency
-profile while retaining the existing watchdog, image, session and receipt checks.
-No new physical measurement or queue entry exists for this path.
-
-Approved measurements retain 852 MHz and 800 mV. Automatic idle clock gating is
-a proposal, with transition budgets in [the design](../designs/npu-fast-path.md);
-its physical run needs coordinator approval and an identified power meter.
-The direct adapter currently supports a trusted EL1 owner on the IRQ route core.
-Exact per-job deadline interrupts, EL0 SDK access to this queue, physical
-multiple-in-flight evidence and buffer-dependent sequences remain open.
-
+Automatic internal-clock gating is a proposal only. PCK4, shared SRAM, DCDC2,
+PLL and top-point clock leases remain owned in that proposal. A transition run
+needs coordinator approval and an identified power meter. Current jobs keep the
+NPU powered at 852 MHz/800 mV. Exact per-job deadline interrupts remain open;
+the independent session watchdog bounds a lost IRQ. Repeated lifecycle and
+thermal/fault recovery also remain unqualified.
 
 **Board-qualified scope:** A finite interrupt diagnostic produces matching
 ShuffleNetV2 outputs at 852 MHz/800 mV. Startup takes 4.0 ms and inference takes

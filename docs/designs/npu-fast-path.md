@@ -75,7 +75,7 @@ Its initial client runs at EL1 on the IRQ route core. Successful return
 permanently closes the old queue's admission before the worker resumes. Local IRQ masking protects
 constant-size queue updates. Output acquisition and dirty-range cache maintenance
 run outside that lock. Registration and lifecycle operations remain slow paths.
-The adapter does not establish EL0 SDK access or physical qualification.
+The application-kit bridge below extends this adapter to one trusted EL0 producer.
 
 The CPU cleans only input ranges it modifies, and cleans/invalidates output
 ranges it modifies before submission. After completion it invalidates output
@@ -83,6 +83,65 @@ ranges before reading them. Device-only intermediate buffers need no CPU cache
 maintenance. CPU access to shared output waits for its last queued device user.
 Immutable descriptors and workspace remain resident; the loader must establish
 any required initial workspace contents before admission.
+
+## The application kit publishes into a shared ring
+
+[The public interface](../../include/sunstone_npu_queue.h), also included by
+`sunstone_app.h`, provides resident handles, tensor windows, dirty ranges,
+fences and a bounded single-producer submission ring. Enable
+`SUNSTONE_A733_OS_NPU_QUEUE=ON` with `SUNSTONE_A733_OS_NPU=ON`.
+`SUNSTONE_OS_NPU_QUEUE_MODELS` lists the image catalogue indices to authenticate
+and preload before scheduling; its first entry is `SUNSTONE_OS_NPU_CLIENT_MODEL`.
+The current image admits eight resident handles and up to 64 outstanding receipts,
+within an 8 MiB reservation. Capacity exhaustion returns backpressure.
+The lower-level caller-backed command queue has no job-count limit.
+
+The image places the producer on core 1, the interrupt route core. Applications
+requiring Cortex-A76 placement are refused in this configuration. Open and close
+use the existing privileged owner for lifecycle work. Submission writes a handle,
+dependency and timeout into shared memory from EL0. A supervisor-call exception, SVC 120, rings the hardware
+only when publication changes the consumer from idle to active. IRQ97 completes
+one private record and starts at most one successor. No service task dispatch,
+allocation, command patching or tensor maintenance runs in that interrupt.
+
+The consumer clears its active flag and rechecks publication with sequentially
+consistent atomics. A racing publisher either rings the doorbell or becomes
+visible to that recheck. A final-fence waiter receives a persistent direct
+notification. Waiting uses no tick interval. The exception returns submission
+failure directly to its running producer; it enters no task notification path.
+Terminal thermal stop is checked before every successor trigger.
+
+An application may declare immutable tensor edges between prepared entries:
+
+```c
+static const struct ss_npu_queue_edge edges[] = {
+    {.producer = 0, .output = 0, .consumer = 1, .input = 0},
+};
+const struct ss_npu_queue_edges ss_npu_queue_edges = {edges, 1};
+```
+
+Indices refer to the prepared-entry order and each network's tensor order.
+The loader validates dimensions, representation and allocation size, then
+reassembles the consumer with the producer's output address before binding.
+Register both handles, fill the first input, submit the producer, and submit
+the consumer with the producer's fence as its dependency. The shared intermediate
+requires no CPU copy or cache operation between jobs.
+
+Connected handles share a buffer lease. The first submit maintains every dirty
+range in the group before hardware starts. Repeated device-owned uses perform
+no further cache work. After CPU acquisition, mark subsequent writes with
+`ss_npu_queue_dirty`; maintenance rounds only those ranges to owned cache lines.
+Acquisition waits for the group's last published use. It uses the EL0-enabled cache clean/invalidate instruction (`DC CIVAC`),
+which is safe because the CPU cannot dirty output lines during the device lease.
+The original cache-control setting is restored at close.
+
+`ss_npu_queue_release` returns receipt capacity in FIFO order and preserves fence
+status. It does not grant CPU buffer access. `ss_npu_queue_acquire_handle` remains
+available after receipt release or reuse. Close requires all receipts released
+and all used groups acquired. Faults retain buffers and prevent close.
+The ring and two-model native image have host evidence; physical EL0 execution
+remains unqualified. The public ring currently issues one interrupt per binary;
+the native prepared-stream interface below additionally removes intermediate events.
 
 ## Vendor interfaces define command ordering and completion
 
@@ -108,8 +167,11 @@ fence. It preserves each native stream's flush/stall footer and emits only the
 final event and END. Preparing
 links and validating dependencies happens once, while the sequence is idle.
 A live command must never be patched while the fetch engine can read it.
-Physical chained-throughput evidence remains required; ISR-started FIFO jobs
-still make one CPU interrupt per command.
+Port 3-3 entry `1793564565759310818-479eba75` checks two distinct binaries
+with an aliased 400-byte intermediate. Two queued records and a joined stream
+both produce exact stage outputs and return normally. The joined 240-byte stream
+uses one final IRQ and performs no intermediate CPU copy. Its single-pass
+timing establishes operation; repeated chained-throughput qualification is separate.
 
 ## Power and measurement require separate physical evidence
 
