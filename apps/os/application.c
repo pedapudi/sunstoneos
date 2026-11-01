@@ -7,6 +7,7 @@
 #include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
 #include "sunstone_crumb.h"
+#include "sunstone_deadline.h"
 #ifdef SUNSTONE_A733_OS_GPU
 #include "gpu-share.h"
 #include "pvr_compute_queue.h"
@@ -63,7 +64,7 @@ const struct ss_grant *ss_grant(void)
 int os_application_finished(void)
 {return atomic_load_explicit(&finished,memory_order_acquire);}
 void os_application_usb_ready(void)
-{atomic_store_explicit(&usb_ready,1,memory_order_release);}
+{atomic_store_explicit(&usb_ready,1,memory_order_release);if(main_task)xTaskNotifyGive(main_task);}
 int ss_live(void)
 {
     if(!board_live(NULL)||os_application_finished()||atomic_load_explicit(&board.result,memory_order_acquire)==2)return -1;
@@ -78,10 +79,21 @@ uint64_t ss_counter_ticks(void)
 }
 void os_application_usb_changed(void)
 {if(main_task)xTaskNotifyGive(main_task);}
+static int application_wait_until(uint64_t until)
+{
+    if(xTaskGetCurrentTaskHandle()==main_task){
+        uint64_t limit=board.session.deadline_us;
+        uint64_t window=os_services[OS_SERVICE_APPLICATION].window_us;
+        uint64_t health=until>UINT64_MAX-window?UINT64_MAX:until+window;
+        if(health>limit)health=limit;
+        if(!board_service_blocked_until(OS_SERVICE_APPLICATION,health))return SUNSTONE_DEADLINE_ERROR;
+    }
+    return sunstone_deadline_wait_until(until);
+}
 void ss_usb_wait(uint32_t wait_us)
 {
-    TickType_t ticks=pdMS_TO_TICKS(((uint64_t)wait_us+999)/1000);
-    (void)ulTaskNotifyTake(pdTRUE,ticks?ticks:1);
+    uint64_t now=a733_smp_counter()/24;
+    if(application_wait_until(now+(wait_us?wait_us:1))==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
 }
 int ss_throttled(void){return os_thermal_throttled();}
 int ss_clock_ready(void)
@@ -130,20 +142,23 @@ unsigned os_application_activity_generation(void)
 void os_application_host_observed(int ready)
 {
     BOARD_PROGRESS(BOARD_SERVICE_USB2);
+
     if(!ready)return;
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
     if(!(grant.devices&SS_DEVICE_USB_STORAGE)){
-        atomic_store_explicit(&board.result,3,memory_order_release);return;
+        atomic_store_explicit(&board.result,3,memory_order_release);if(main_task)xTaskNotifyGive(main_task);return;
     }
 #endif
     enum a733_usb2_device_kind expected=(grant.devices&SS_DEVICE_USB_KEYBOARD)?A733_USB2_DEVICE_DUAL:A733_USB2_DEVICE_MSC;
     if(a733_usb2_device_kind(&board.host)!=expected){board_fail(NULL);return;}
     int live=board.host.core.ops.live?board.host.core.ops.live(board.host.core.context,
         board.host.core.generation,board.host.platform.config.lifetime_deadline):-1;
-    if(live<0){atomic_store_explicit(&observed_until,0,memory_order_release);return;}
+    if(live<0){atomic_store_explicit(&observed_until,0,memory_order_release);if(main_task)xTaskNotifyGive(main_task);return;}
     if(!live)return;
     attachment=board.host.platform.attachment;
     atomic_store_explicit(&observed_until,attachment.observed_us+A733_TYPEC_FRESH_US,memory_order_release);
+    if(main_task)xTaskNotifyGive(main_task);
+
 }
 int os_application_export_live(void)
 {
@@ -187,9 +202,10 @@ static int peer_within_session(void)
 static void peer_entry(void *unused)
 {
     (void)unused;
+    if(!sunstone_deadline_register())ss_fail(0x758);
     while (!atomic_load_explicit(&peer_ready,memory_order_acquire)) {
         if (!peer_within_session()) ss_fail(0x759);
-        ss_progress();vTaskDelay(1);
+        if(sunstone_deadline_wait_until(board.session.deadline_us)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x758);
     }
     ss_gpu_share.main(&peer_grant);
     /* Returning from the entry does not release a GPU-owned buffer. */
@@ -210,8 +226,13 @@ static void peer_entry(void *unused)
 static void main_entry(void *unused)
 {
     (void)unused;
+    if(!board_service_deadline_register(OS_SERVICE_APPLICATION))ss_fail(0x756);
     int live;
-    while(!(live=ss_live())){ss_progress();vTaskDelay(1);}
+    while(!(live=ss_live())){
+        ss_progress();
+        if(application_wait_until(board.session.deadline_us-10000)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x757);
+        if(a733_smp_counter()/24>=board.session.deadline_us-10000&&ss_live()!=1)ss_fail(0x750);
+    }
     if(live<0)ss_fail(0x750);
     const struct ss_manifest *m=ss_application.manifest;
     unsigned input=0,count=0;
@@ -239,6 +260,7 @@ static void main_entry(void *unused)
     if (peer_task) {
         peer_grant.finish_by_us=grant.finish_by_us;
         atomic_store_explicit(&peer_ready,1,memory_order_release);
+        xTaskNotifyGive(peer_task);
     }
 #endif
     ss_application.main(&grant);ss_fail(0x755);
@@ -270,6 +292,11 @@ int os_application_prepare(void)
     grant.main_core=m->cluster==SS_CLUSTER_A76?6:2;
 #else
     grant.main_core=2;
+#endif
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+    /* The current queue route is core 1, a Cortex-A55. */
+    if(m->cluster==SS_CLUSTER_A76)return 0;
+    grant.main_core=1;
 #endif
     unsigned workers=m->workers;
     unsigned pair=grant.main_core+1;
@@ -370,6 +397,7 @@ _Noreturn void ss_finish(const void *data,size_t bytes)
     r->payload_bytes=bytes;if(bytes)memcpy(r+1,data,bytes);
     r->status=SS_RESULT_FINISHED;
     atomic_store_explicit(&finished,1,memory_order_release);
+
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
     os_cpu_return_begin(data,bytes);
 #endif
@@ -395,8 +423,7 @@ int ss_host_recv(struct ss_host_request *request,uint32_t wait_us)
     atomic_store_explicit(&mailbox.waiter,xTaskGetCurrentTaskHandle(),memory_order_seq_cst);
     unsigned state=atomic_load_explicit(&mailbox.state,memory_order_seq_cst);
     if(state==0&&wait_us){
-        TickType_t ticks=pdMS_TO_TICKS(((uint64_t)wait_us+999)/1000);
-        (void)ulTaskNotifyTake(pdTRUE,ticks?ticks:1);
+        if(application_wait_until(a733_smp_counter()/24+wait_us)==SUNSTONE_DEADLINE_ERROR)return -1;
         state=atomic_load_explicit(&mailbox.state,memory_order_seq_cst);
     }
     if(!board_live(NULL))return -1;

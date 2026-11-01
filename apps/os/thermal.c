@@ -65,12 +65,14 @@ static struct os_thermal_readings {
 } readings;
 static void record_reading(uint64_t now,enum a733_thermal_level level)
 {
-    if(!readings.next){
-        thermal_record_origin_us=thermal.next_read?thermal.next_read:now;
-        readings.next=thermal_record_origin_us;
-    }
     if(now<readings.next&&level!=A733_THERMAL_CRITICAL)return;
     unsigned n=atomic_load_explicit(&readings.count,memory_order_relaxed);
+    /* Startup throttling precedes complete sensor coverage. Its first usable
+     * sample must be recorded before publish_load releases that throttling. */
+    if(!n&&level!=A733_THERMAL_CRITICAL&&(thermal.policy.seen!=31||thermal.policy.stale))return;
+    /* The first usable row starts the immutable record phase. Partial startup
+     * sensor sets cannot establish a slot that no usable row can cover. */
+    if(!readings.next){thermal_record_origin_us=now;readings.next=now;}
     if(n==THERMAL_RECORDS){atomic_store_explicit(&readings.overflow,1,memory_order_release);return;}
     struct os_thermal_reading *r=&readings.rows[n];
     r->time_us=now;r->sequence=thermal.policy.sequence;r->seen=thermal.policy.seen;
@@ -299,6 +301,9 @@ static int step(void)
     }
     if(!rearm())return fault();
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    /* Snapshot the cached policy at its own deadline, including passes with
+     * no THS read. Quantizing this through 25 ms reads can exceed 125 ms. */
+    record_reading(a733_smp_counter()/24,a733_thermal_policy_level(&thermal.policy));
     /* After the thermal step, so a CRITICAL reading ends the session first. */
     if(os_cpu_clock_step(&thermal.policy)<0)return fault();
 #endif

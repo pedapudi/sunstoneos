@@ -47,11 +47,17 @@ ALLOWED_BY_DIRECTORY = {
     'platform/a733': {'cpu_continue.c': 'non-cacheable continuation profile (MAIR 0x4400)',
                       'cpu_continue.S': 'non-cacheable continuation profile (MAIR 0x4400)'},
     'checks': {'a733-cpu-continue.py': 'non-cacheable continuation profile (MAIR 0x4400)',
-               'native-startup-probe.py': FROZEN},
-    'apps/gpu-finite': {'return-check.py': 'frozen returning image'},
+               'native-startup-probe.py': FROZEN,
+               'primary-publication-probe.py': 'inactive EL1 control fault fixture'},
+    'apps/board-bundles-cpu': {'main.c': 'explicit cached versus uncached walk comparison'},
+    'apps/gpu-cache-permission': {'main.c': 'fixed cached GPU permission diagnostic',
+                                  'check.py': 'models that diagnostic control state'},
+    'apps/gpu-entry-checkpoint': {'check.py': 'frozen uncached GPU entry fixture'},
+    'apps/gpu-finite': {'host-check.py': 'frozen uncached returning image fixture'},
     'boot/a733': {'native-el1-cache-probe.S': FROZEN},
     'tools': {'run-native-startup-probe.py': FROZEN, 'prepare-primary-cache-probe.py': FROZEN,
-              'secondary-cache-host.py': FROZEN, 'all-core-pre-scheduler-host.py': FROZEN},
+              'secondary-cache-host.py': FROZEN, 'all-core-pre-scheduler-host.py': FROZEN,
+              'prepare-board-bundles.py': 'cached versus uncached comparison description'},
 }
 ALLOWED = {f'{d}/{n}': why for d, names in ALLOWED_BY_DIRECTORY.items() for n, why in names.items()}
 # The previous and the current EL1 value, as a literal or as a mov/movk triple.
@@ -207,7 +213,7 @@ def prepared(image):
 
 
 def measure(image_path, baseline):
-    image = harness.Image(image_path)
+    image = harness.Image(image_path, layout_names=set())
     functions = disassemble(image_path)
     start, end = image.address('__tables_start'), image.address('__tables_end')
     pages = {n: image.address(n) for n in ('a733_cached_el3_l1', 'a733_cached_el3_l2', 'a733_cached_el3_l3',

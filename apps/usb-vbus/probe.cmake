@@ -1,0 +1,27 @@
+function(sunstone_usb_vbus_probe)
+  get_target_property(sources a733-kernel-check SOURCES)
+  list(REMOVE_ITEM sources checks/kernel.c checks/fp-context.S platform/a733/platform.c)
+  set(private_platform "${CMAKE_CURRENT_BINARY_DIR}/vbus-platform.c")
+  configure_file("${SUNSTONE_SOURCE_ROOT}/platform/a733/platform.c" "${private_platform}" COPYONLY)
+  set_source_files_properties("${private_platform}" PROPERTIES COMPILE_DEFINITIONS
+    "vApplicationFPUSafeIRQHandler=vbus_platform_irq")
+  foreach(mode 0 1 10)
+    set(target sunstone-a733-usb-vbus-${mode})
+    add_executable(${target} EXCLUDE_FROM_ALL ${sources} "${private_platform}" apps/usb-vbus/main.c
+      runtime/deadline.c runtime/deadline-a733.c
+      apps/usb-vbus/diagnostic.c drivers/i2c/a733_twi.c drivers/board/orangepi_zero3w.c)
+    foreach(property INCLUDE_DIRECTORIES COMPILE_OPTIONS COMPILE_DEFINITIONS LINK_OPTIONS LINK_DEPENDS)
+      get_target_property(value a733-kernel-check ${property})
+      if(NOT value STREQUAL "value-NOTFOUND")
+        set_property(TARGET ${target} PROPERTY ${property} "${value}")
+      endif()
+    endforeach()
+    target_compile_definitions(${target} PRIVATE USB_VBUS_MODE=${mode}
+      INCLUDE_xTaskGetCurrentTaskHandle=1 INCLUDE_vTaskSuspend=1 SUNSTONE_DEADLINE_SINGLE_CORE=1)
+    set_source_files_properties(apps/usb-vbus/main.c PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
+    set_target_properties(${target} PROPERTIES SUFFIX ".elf")
+    include("${SUNSTONE_SOURCE_ROOT}/cmake/sunstone-probe.cmake")
+    sunstone_enable_probe(${target})
+  endforeach()
+endfunction()
+cmake_language(DEFER CALL sunstone_usb_vbus_probe)

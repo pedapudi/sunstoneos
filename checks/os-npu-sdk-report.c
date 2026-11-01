@@ -33,7 +33,7 @@ int os_npu_tensor(enum nbg_section_id section,unsigned index,struct npu_runtime_
         if(index>=2||(after_submit&&step==1&&index==1))return 0;
         t->data=tensor_output+4*index;t->bytes=4;return 1;
     }
-    if(section==NBG_INPUT&&!index&&mode==4&&step==1&&input_visits++)return 0;
+    if(section==NBG_INPUT&&!index&&mode==4&&step==1&&input_visits++>=2)return 0;
     if(index||(section==NBG_OUTPUT&&after_submit&&((mode==1&&step==1)||(mode==2&&step==3))))return 0;
     t->data=section==NBG_INPUT?tensor_input:tensor_output;
     t->bytes=section==NBG_INPUT?sizeof(tensor_input):sizeof(tensor_output);return 1;
@@ -59,6 +59,9 @@ void ss_npu_service_fail(void){++failed;}
 int ss_npu_service_step(void)
 {
     uint8_t output[8]={0};int result;
+    /* READY-model reuse probes tensor zero before the size and copy walks.
+     * Each request begins with the preceding completed window readable. */
+    after_submit=0;input_visits=0;
     if(step==0)result=sdk_run(0,input,sizeof(input)-1,output,sizeof(output),100);
     else if(step==4||(mode==3&&step==2))result=sdk_close();
     else {

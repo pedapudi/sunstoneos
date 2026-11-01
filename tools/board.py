@@ -37,6 +37,7 @@ POST_RAIL_HELPER_DRAM = (0x41000000, 0x47300)
 OUTCOMES = ('returned', 'result-mismatch', 'watchdog-reset', 'no-return', 'refused-before-launch', 'host-error')
 crumbs = images.load('board_crumbs', ROOT/'tools/a733-crumbs.py')
 import board_state as state
+import board_usb_power as usb_power
 require = images.require
 
 
@@ -72,6 +73,10 @@ class DramFailure(RuntimeError):
 
 class DdrAbort(BaseException):
     """Escape the legacy DDR fallback after a terminal transport failure."""
+
+
+class DdrPowerAbort(BaseException):
+    """Prevent a PL8 fault from entering the legacy DDR fallback."""
 
 
 class Mismatch(ValueError):
@@ -124,7 +129,11 @@ class Live:
                         self.recovering = True
                         self.wait(max(0, self.recovery_deadline-self.now()))
                         self.disarm()
+                        self.usb_source_off('transport-recovery')
                         self.record['transport_recovered'] = True
+                    except usb_power.PowerFault as cleanup_error:
+                        self.record['cleanup_failure'] = str(cleanup_error)
+                        self.journal()
                     except (NoReturn, TransportFailure):
                         self.quarantine(str(error))
                         raise
@@ -220,6 +229,11 @@ class Live:
         require(words == [0xeb00008f, 0xe3a00911, 0xe3a0193d, 0xe3a0605c, 0xea00004d], 'Forced-FEL ROM entry differs.')
         self.upload(0x71000, images.write(self.evidence/f'rom-scratch-restore-{self.sequence}.bin', before))
 
+    def usb_source_off(self, phase, enforce=True):
+        usb_power.observe(self, phase)
+        if enforce:
+            usb_power.enforce(self)
+
     def arm(self, mode, clear=True, configuration=1):
         self.recovery_deadline = self.now()+crumbs.interval(mode)+10
         args = crumbs.arm_arguments(mode)
@@ -258,9 +272,25 @@ class Live:
             # A host decoder failure must not leave a possibly armed image or
             # quarantine a healthy returned instance. Verify disarm separately.
             self.disarm()
+            self.observe_return_power('invalid-return-report')
             raise RuntimeError('Invalid watchdog return report: '+str(error)) from error
         self.confirm_disarmed(after)
+        self.record['watchdog_return'] = {'before': before, 'after': after, 'words': words}
+        self.journal()
+        self.observe_return_power('native-return')
         return before,after,words
+
+    def observe_return_power(self, phase):
+        # Preserve the copied WDT/breadcrumb origin before a cleanup failure.
+        # The caller classifies these bytes before any DRAM result read.
+        try:
+            self.usb_source_off(phase, enforce=False)
+        except (usb_power.PowerFault, TransportFailure) as error:
+            self.record['usb_vbus_cleanup_failure'] = str(error)
+            self.record['cleanup_failure'] = str(error)
+            if isinstance(error, TransportFailure):
+                self.quarantine(str(error))
+            self.journal()
 
     def wait(self, seconds, old=None):
         old = self.identity if old is None else old
@@ -288,6 +318,7 @@ class Live:
         self.arm(0x41, clear=False)
         self.wait(14, old)
         self.disarm()
+        self.usb_source_off('fresh-fel')
         self.sanity()
         self.record['fresh_fel'] = True
 
@@ -297,6 +328,7 @@ class Live:
             self.recovering = True
             self.wait(max(0, self.recovery_deadline-self.now()))
             self.disarm()
+            self.usb_source_off('pending-return')
 
     def dram(self):
         owner = self
@@ -361,8 +393,11 @@ class Live:
             require(outcome.get('complete'), 'DRAM bring-up did not complete.')
             # Restore fallback may have changed the instance inside run-ddr.
             self.adopt(self.access.discover(self.args.port))
-        except (TransportFailure, NoReturn):
+            self.usb_source_off('ddr-complete')
+        except (TransportFailure, NoReturn, usb_power.PowerFault):
             raise
+        except DdrPowerAbort as error:
+            raise usb_power.PowerFault(str(error)) from error
         except DdrAbort as error:
             raise TransportFailure(str(error)) from error
         except (ValueError, RuntimeError) as error:
@@ -376,6 +411,10 @@ class Live:
             require(self.access.identity(node) == identity, 'DDR returned identity changed.')
             self.adopt(node)
             self.failed = False
+            try:
+                self.usb_source_off('ddr-new-instance')
+            except usb_power.PowerFault as error:
+                raise DdrPowerAbort(str(error)) from error
         record['device_access_attempted'] = True
         record['launch_attempted'] |= 'exe' in commands
         # The full-training and cache-off helpers predate host WDT support.
@@ -404,6 +443,11 @@ class Live:
                 self.confirm_disarmed(value)
             if helper and not restore_armed:
                 self.disarm()
+            if 'exe' in commands:
+                try:
+                    self.usb_source_off('ddr-helper-return')
+                except usb_power.PowerFault as error:
+                    raise DdrPowerAbort(str(error)) from error
         except TransportFailure as error:
             record['transport_failed'] = True
             save_record()
@@ -455,6 +499,7 @@ class Live:
         if not (before&0xffff==0xb1 and not after&1 and 0<=elapsed<14):
             self.record.update(dram_lost=True,setup_watchdog_reset=True)
             raise ValueError('Rail helper possible watchdog reset; no DRAM result read; rails were not normalized.')
+        usb_power.enforce(self)
         data = self.read(0x42000000, 16384, evidence/'rail-result.bin')
         values = struct.unpack_from('<16Q', data)
         require(values[3] <= 16384-257, 'Invalid rail helper log length.')
@@ -504,9 +549,11 @@ class Live:
         return proof['words']
 
     def prepare(self, info):
+        if 'usb_vbus_probe_profile' in info.get('symbols', {}):
+            usb_power.admit_diagnostic(self)
         if info.get('dma'):
             require(self.dma_binding is not None, 'DMA runner has no original-instance admission.')
-        live = {} if self.args.kind=='probe' else self.live_state(info.get('finite_npu',False))
+        live = {} if info.get('native_probe') or self.args.kind=='probe' else self.live_state(info.get('finite_npu',False))
         if images.npu_on_required(info):
             live['words'].update(self.npu_on_state())
         return images.prepare(self.args, info, live, self.evidence/'bundle', dma_binding=self.dma_binding)
@@ -552,6 +599,7 @@ class Live:
                 decoded['last']['value'] == 0 and not decoded.get('fault') and not decoded.get('board_failure')):
             raise UnresolvedReturn('Return lacks the matching RETURN_ROM breadcrumb.')
         self.record['normal_return'] = True
+        usb_power.enforce(self)
         return 'returned'
 
     def capture(self, plan):
@@ -750,6 +798,7 @@ def run_image(args, backend=Live):
         with owner.locked():
             try:
                 timed('identity', owner.sanity)
+                timed('usb-source-off', lambda: owner.usb_source_off('admission'))
                 if dma_binding is not None:
                     owner.dma_binding = timed('dma-identity', lambda: images.bind_dma_identity(dma_binding, args, owner.identity))
                 timed('reset', owner.reset)
@@ -819,11 +868,18 @@ def run_image(args, backend=Live):
                 # Wait out any armed helper/image if a host exception interrupted
                 # the launch path. Never send another request to a failed instance.
                 if owner.armed and not owner.failed and not isinstance(error, NoReturn):
-                    owner.finish_pending()
+                    try:
+                        owner.finish_pending()
+                    except usb_power.PowerFault as cleanup_error:
+                        result['cleanup_failure'] = str(cleanup_error)
+                        owner.journal()
                 raise
     except NoReturn as error:
         result['outcome'] = 'no-return'
         result['first_failure'] = {'site': stage, 'detail': str(error)}
+    except usb_power.PowerFault as error:
+        result['outcome'] = 'result-mismatch' if result.get('launch_attempted') else 'refused-before-launch'
+        result['first_failure'] = result.get('usb_vbus_fault', {'site': stage, 'detail': str(error)})
     except Mismatch as error:
         result['outcome'] = 'result-mismatch'
         result['first_failure'] = {'site': stage, 'detail': str(error)}
@@ -917,13 +973,15 @@ def load_decoder(args):
 def development(argv=None):
     """Translate the development CLI; all admission and execution use this runner."""
     parser = argparse.ArgumentParser(description='Compatibility commands for tools/board.py')
-    parser.add_argument('kind', choices=('cpu-return', 'gpu-return', 'npu', 'rail-helper'))
+    parser.add_argument('kind', choices=('cpu-return', 'gpu-return', 'npu', 'usb-class', 'rail-helper'))
     parser.add_argument('--image', type=Path)
     parser.add_argument('--input', type=Path, action='append', default=[])
     parser.add_argument('--decoder', type=Path)
     parser.add_argument('--records', type=Path)
     parser.add_argument('--template', type=Path)
     parser.add_argument('--manifest', type=Path)
+    parser.add_argument('--descriptor', type=Path)
+    parser.add_argument('--approved-by', choices=('coordinator',))
     parser.add_argument('--host-tree', type=Path)
     parser.add_argument('--objcopy', type=Path)
     parser.add_argument('--expect-result', type=json.loads)
@@ -956,12 +1014,12 @@ def development(argv=None):
         command += ['--records', str(args.records or state.RECORDS)]
     elif args.records:
         command += ['--records', str(args.records)]
-    for name in ('template', 'manifest', 'host_tree', 'objcopy'):
+    for name in ('template', 'manifest', 'descriptor', 'host_tree', 'objcopy', 'approved_by'):
         if getattr(args, name):
             command += ['--'+name.replace('_','-'), str(getattr(args, name))]
     if args.expect_result is not None:
         command += ['--expect-result', json.dumps(args.expect_result)]
-    if args.restore_rails and args.kind != 'npu':
+    if args.restore_rails and args.kind not in ('npu', 'usb-class'):
         command += ['--restore-rails']
     if args.decoder:
         command += ['--decoder', str(args.decoder)]
@@ -1075,7 +1133,7 @@ class Queue:
             target.write_bytes(descriptor.read_bytes())
             options['descriptor'] = str(target)
         template = args.template or (images.GPU_TEMPLATE if args.kind=='gpu-return' else images.CONTROL)
-        if args.kind not in ('probe', 'rail-helper'):
+        if args.kind not in ('probe', 'usb-class', 'rail-helper'):
             if args.kind == 'npu' and 'ss_result_record' not in images.symbols(source):
                 manifest, session = images.finite_npu_files(args)
                 destination = directory/'template'
@@ -1274,7 +1332,7 @@ class Queue:
 def run_options(parser, submit=False):
     parser.add_argument('image', type=Path)
     parser.add_argument('--port', choices=('any',*PORTS) if submit else PORTS, required=True)
-    parser.add_argument('--kind', choices=('cpu-return','gpu-return','npu','probe','rail-helper'), default='cpu-return', required=submit)
+    parser.add_argument('--kind', choices=('cpu-return','gpu-return','npu','probe','usb-class','rail-helper'), default='cpu-return', required=submit)
     parser.add_argument('--expect', required=submit, help='File: exact bytes or sunstone-board-expect-u32-v1 JSON; otherwise UTF-8 substring.')
     parser.add_argument('--expect-result', type=json.loads, help='Required decoded JSON result; needs a result decoder.')
     parser.add_argument('--manifest', type=Path, help='Exact finite NPU build manifest.')

@@ -65,7 +65,8 @@ shared dependencies before accepting the resulting plan.
 
 `--full` explicitly requests all central targets, all configured OS variants of
 [the OS image](os-image.md), including the supervised NPU
-profile (variant `npu`), all gate checks and every indexed pure-host check once.
+profile (variant `npu`), the two-model EL0 submission ring (variant `npu-queue`),
+all gate checks and every indexed pure-host check once.
 The hook fixture remains conditional. Use `--full --affected BASE..HEAD` or
 `--full --changed PATH...` to name its input scope; ordinary full checks still
 run. Without an explicit scope, the gate uses the latest first-parent commit

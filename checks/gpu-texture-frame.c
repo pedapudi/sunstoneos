@@ -9,6 +9,7 @@
 #include "pvr_gpu_service.h"
 #include "pvr_compute_queue.h"
 #include "aarch64_device_memory.h"
+#include "pvr_compute_fast.h"
 #include <string.h>
 
 #define SHARED_BYTES 65536u
@@ -134,9 +135,14 @@ int pvr_cccb_pair_poll(struct pvr_cccb_pair *p)
 }
 
 /* The generated include contains the current service's sample, progress,
- * step, submitting, burst and worker scheduling body. Only device progress,
+ * step_locked, step, submitting, burst and worker scheduling body. Only device progress,
  * time and scheduler callbacks are modeled here. No timing rule is copied. */
 static void advance(struct pvr_gpu_service *s);
+/* The fixture leaves job_irq_ack unset. The interrupt-fence path locks the
+ * fast ring and advances under it; reaching either fails the fixture. */
+static void advance_locked(struct pvr_gpu_service *s) { (void)s; fail(30); }
+int pvr_compute_fast_lock(struct pvr_compute_queue *q) { (void)q; fail(31); }
+void pvr_compute_fast_unlock(struct pvr_compute_queue *q) { (void)q; fail(32); }
 static TickType_t wait_ticks(struct pvr_gpu_service *s);
 static void frame_yield(void);
 #undef taskYIELD

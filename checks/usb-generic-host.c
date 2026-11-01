@@ -27,6 +27,9 @@ static struct ss_grant application_grant;
 const struct ss_grant *ss_grant(void){return &application_grant;}
 int ss_live(void){return 1;}
 static unsigned fixture_class,inputs,packets,payload_bytes,control_count,serial_echoes;
+static unsigned direct_write,gate_held,gate_busy;
+static uint64_t tx_ready_at,completed_tx;
+static unsigned completed_dci,completed_slot;
 static uint64_t received_pa;
 static unsigned frame_sent,bulk_sent,hold_data;
 static uint64_t seen_iso[A733_XHCI_ISOCH_TDS];
@@ -145,7 +148,11 @@ static void generic_wire(void)
             uint8_t *p=dma+(destination-MODEL_PHYSICAL);
             if(fixture_class==1){assert(e->length==8);memset(p,0,8);p[2]=4;++hid_reports;}
             else if(fixture_class==2&&e->direction){actual=64;for(unsigned k=0;k<actual;++k)p[k]=(uint8_t)(k*17+3);received_pa=destination;++bulk_sent;}
-            else if(fixture_class==2){assert(destination==received_pa&&e->length==64);for(unsigned k=0;k<64;++k)assert(p[k]==(uint8_t)(k*17+3));++serial_echoes;}
+            else if(fixture_class==2){
+                if(tx_ready_at&&m.now<tx_ready_at){last_transfer[j][i]=0;return;}
+                assert(destination==received_pa&&e->length==64);for(unsigned k=0;k<64;++k)assert(p[k]==(uint8_t)(k*17+3));++serial_echoes;
+                completed_tx=e->pending_trb;completed_dci=e->number;completed_slot=d->slot;
+            }
             else if(fixture_class==4)actual=camera_payload(p,e->length);
             else assert(0);
         }
@@ -157,7 +164,12 @@ static void input(void *context,const struct sunstone_hid_event *e)
 static void released(void *context,unsigned device,uint64_t token)
 {(void)context;assert(device==SS_DEVICE_USB_SERIAL);os_usb_serial_native_release(token);}
 static int write_serial(void *context,uint64_t sequence,const void *data,size_t bytes)
-{return usb_write(context,sequence,data,bytes);}
+{if(direct_write)assert(gate_held);return usb_write(context,sequence,data,bytes);}
+extern uint32_t a733_tinyusb_next_timeout_ms(uint32_t);
+static int client_enter(void *context)
+{(void)context;assert(!gate_held);if(gate_busy)return 0;gate_held=1;return 1;}
+static void client_leave(void *context)
+{(void)context;assert(gate_held);gate_held=0;}
 int main(int argc,char **argv)
 {
 #if SUNSTONE_USB_APP_ALIAS
@@ -170,14 +182,29 @@ int main(int argc,char **argv)
                     MAP_SHARED|MAP_FIXED_NOREPLACE,fd,A733_USB_MEMORY_DATA_OFFSET);
     assert(alias==(void *)A733_USB_MEMORY_APP_START);
 #endif
-    assert(argc==2);fixture_class=!strcmp(argv[1],"hid")?1:!strcmp(argv[1],"serial")?2:!strcmp(argv[1],"iso")?3:!strcmp(argv[1],"bulk")?4:!strcmp(argv[1],"mjpeg")?5:6;
+    assert(argc==2);fixture_class=!strcmp(argv[1],"hid")?1:!strncmp(argv[1],"serial",6)?2:!strcmp(argv[1],"iso")?3:!strcmp(argv[1],"bulk")?4:!strcmp(argv[1],"mjpeg")?5:6;
+    direct_write=!strcmp(argv[1],"serial-direct")||!strcmp(argv[1],"serial-stale");
     application_grant.devices=SS_DEVICE_USB_KEYBOARD|SS_DEVICE_USB_MOUSE|SS_DEVICE_USB_SERIAL|SS_DEVICE_USB_CAMERA;
-    const struct os_usb_service_ops ops={.release=released,.write=write_serial};os_usb_service_init(&ops,NULL);
+    const struct os_usb_service_ops ops={.release=released,.write=write_serial,
+        .enter=direct_write?client_enter:NULL,.leave=direct_write?client_leave:NULL};os_usb_service_init(&ops,NULL);
     make_configuration();device_speed=fixture_class==2?1:3;irq_model=1;setup();prepare();assert(a733_usb2_generic_enable(&n));
     a733_usb2_set_input(&n,input,NULL);start_core();assert(os_usb_serial_native_start(a733_usb2_transport(&n))==1);
-    for(unsigned k=0;k<18000&&!tuh_mounted(1)&&!n.failed;++k)poll();
+    unsigned deferred_timers=0,ready_batches=0;
+    for(unsigned k=0;k<18000&&!tuh_mounted(1)&&!n.failed;++k){
+        poll();
+        if(!n.failed){
+            uint64_t next=a733_usb2_host_deadline(&n);assert(next&&next<=n.platform.config.lifetime_deadline);
+            ready_batches+=a733_usb2_host_work_pending(&n)!=0;
+            uint32_t ms=a733_tinyusb_next_timeout_ms((uint32_t)(m.now/1000));
+            if(ms!=UINT32_MAX){uint64_t at=m.now-m.now%1000+(uint64_t)ms*1000;
+                if(at<m.now)at=m.now;
+                assert(next<=at);++deferred_timers;
+            }
+        }
+    }
     if(n.failed||!tuh_mounted(1))fprintf(stderr,"enumeration failed class%u phase%u controls%u time%llu\n",fixture_class,n.core.phase,control_count,(unsigned long long)m.now);
     assert(!n.failed&&tuh_mounted(1));
+    assert(deferred_timers&&ready_batches); /* Removing either timer or ready export fails. */
     if(fixture_class==1){
         for(unsigned k=0;k<10000&&!inputs&&!n.failed;++k)poll();assert(inputs==1&&!n.failed);
         puts("PASS generic TinyUSB HID enumeration, report parsing and IRQ completion");
@@ -192,9 +219,25 @@ int main(int argc,char **argv)
         assert(b.data>=dma&&b.data<dma+sizeof(dma));
 #endif
         for(unsigned k=0;k<64;++k)assert(b.data[k]==(uint8_t)(k*17+3));
-        assert(ss_usb_serial_write(1,b.data,b.bytes)==1);os_usb_service_dispatch();size_t actual=0;int sent=0;
+        if(direct_write){gate_busy=1;assert(ss_usb_serial_write(1,b.data,b.bytes)==0);gate_busy=0;tx_ready_at=m.now+3500;}
+        assert(ss_usb_serial_write(1,b.data,b.bytes)==1);
+        if(direct_write){
+            assert(!gate_held);unsigned on_ring=0;
+            for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i){struct a733_xhci_endpoint *e=&n.core.devices[0].endpoints[i];
+                if(e->address==1&&e->pending==2)on_ring=1;}
+            assert(on_ring); /* No dispatch or owner poll between caller and doorbell. */
+        }
+        os_usb_service_dispatch();size_t actual=0;int sent=0;
+        if(direct_write)for(unsigned k=0;m.now<tx_ready_at&&k<1000;++k){
+            assert(ss_usb_serial_write_result(1,&actual)==0);poll();}
         for(unsigned k=0;k<10000&&!sent&&!n.failed;++k){poll();os_usb_service_dispatch();sent=ss_usb_serial_write_result(1,&actual);}
         assert(sent==1&&actual==64&&serial_echoes==1&&!n.failed);
+        if(!strcmp(argv[1],"serial-stale")){
+            /* Replay the hardware record only after its real callback. It must
+             * retain the session, never complete another ticket or reuse DMA. */
+            event(32,completed_tx,1,0,completed_dci,completed_slot);poll();
+            assert(n.failed&&serial_echoes==1);puts("PASS stale direct TX record retains after delayed matched completion");return 0;
+        }
         hold_data=1;registers[0x440/4]=(1u<<17);event(34,UINT64_C(1)<<24,1,0,0,0);
         for(unsigned k=0;k<10000&&(!removals||!disables)&&!n.failed;++k){poll();os_usb_service_dispatch();}
         assert(removals==1&&disables==1&&!n.failed);

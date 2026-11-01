@@ -45,7 +45,23 @@ CASES = {1: 'grid replay, exact sums', 2: 'grid replay, pattern sums', 3: 'grid 
          49: 'session limit clips recovery deadlines',
          50: 'maximum job duration recovers an unconsumed kernel kick',
          51: 'firmware timeline serial exhaustion refuses without a kick',
-         52: 'qualification timeout refuses recovery without a queued peer'}
+         52: 'qualification timeout refuses recovery without a queued peer',
+         53: 'direct interrupt fences, coalescing and notification races',
+         54: 'EL0 caller submission and ISR collection without the service worker',
+         55: 'four-job batches, output ownership and out-of-order fences',
+         56: 'lost completion IRQ recovers without polling and preserves a contended fault wake',
+         57: 'caller timeout retains payload and conflicting output ownership',
+         58: 'permanent timeline fault wakes the caller and retains buffers',
+         59: 'two clients pipeline independent sequences and direct notification waiters',
+         60: 'forged fence under lock contention refuses after an IRQ-free unlock',
+         61: 'uncertain batch doorbell returns every retained fence in its accepted prefix',
+         62: 'uncached retained payloads preserve the timeline and application maintenance',
+         63: 'admitted KCCB publication wraps without provider validation',
+         64: 'admitted KCCB rejects a jumping firmware cursor and retains its origin',
+         65: 'admitted KCCB preserves full-ring and reserved-slot backpressure',
+         66: 'admitted KCCB view is revoked on close and restored after fresh READY',
+         67: 'uncertain admitted doorbell preserves the accepted batch prefix',
+         68: 'idle direct queue preserves the forced-idle hold deadline'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'gpu_queue_submit', 'gpu_queue_wait', 'kick',
@@ -231,15 +247,16 @@ def main():
     parser.add_argument('--cases', nargs='*', type=int, choices=sorted(CASES), default=list(range(1, 25)))
     parser.add_argument('--trace', nargs='*', type=int, default=[], help='cases to run instrumented')
     parser.add_argument('--latency', action='store_true', help='Enable latency hooks and check client receipt samples')
+    parser.add_argument('--timing', action='store_true', help='compile optional GPU IRQ counter capture')
     for name in ('freertos', 'tinyusb', 'firmware', 'qemu', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
-    performance = any(25 <= c <= 30 for c in args.cases)
+    performance = any(25 <= c <= 30 or c==68 for c in args.cases)
     returning = any(31 <= c <= 33 for c in args.cases)
     recovery = any(41 <= c <= 49 or c==52 for c in args.cases)
     assert not recovery or all(41 <= c <= 49 or c==52 for c in args.cases) and not args.trace
     assert not returning or all(31 <= c <= 33 for c in args.cases) and not args.trace
-    assert not performance or all(25 <= c <= 30 for c in args.cases) and not args.trace
+    assert not performance or all(25 <= c <= 30 or c==68 for c in args.cases) and not args.trace
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     project, build, fixtures = out / 'project', out / 'build', out / 'fixtures'
@@ -267,7 +284,8 @@ def main():
     platform.write_text(text)
     extra = ' '.join('"%s"' % (ROOT / p) for p in (
         'checks/gpu-queue.c', 'platform/a733/gpu_memory.c', 'platform/a733/gpu_reserved.c',
-        'platform/a733/gpu_queue.c', 'drivers/gpu/pvr_compute_queue.c', 'drivers/gpu/gpu_queue.c', 'drivers/gpu/gicv3_spi.c'))
+        'platform/a733/gpu_queue.c', 'drivers/gpu/pvr_compute_queue.c', 'drivers/gpu/pvr_compute_fast.c',
+        'drivers/gpu/gpu_queue.c', 'runtime/gpu_call.S', 'drivers/gpu/gicv3_spi.c'))
     if performance:
         extra += ' \"%s\"' % (ROOT / 'drivers/gpu/pvr_gpu_clock.c')
     if args.latency:
@@ -283,6 +301,8 @@ set_property(TARGET gpu-service-model PROPERTY SOURCES "${{sources}}")
 target_include_directories(gpu-service-model PRIVATE "{fixtures}" "{ROOT}/checks")
 target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1 {"SUNSTONE_A733_OS_PERF=1" if performance else "SUNSTONE_A733_OS_CPU_RETURN=1" if returning else "SUNSTONE_A733_OS_GPU_RECOVERY_TEST=1" if recovery else ""})
 {'target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_LATENCY=1)' if args.latency else ''}
+target_compile_definitions(gpu-service-model PRIVATE INCLUDE_vTaskPrioritySet=1)
+target_compile_definitions(gpu-service-model PRIVATE {"SUNSTONE_GPU_FAST_TIMING=1" if args.timing else ""})
 get_target_property(options gpu-service-model LINK_OPTIONS)
 list(FILTER options EXCLUDE REGEX "-Wl,-T,")
 list(APPEND options "-Wl,-T,{linker}" -Wl,--defsym=__device_pool_size=2097152
@@ -290,6 +310,7 @@ list(APPEND options "-Wl,-T,{linker}" -Wl,--defsym=__device_pool_size=2097152
   -Wl,--wrap=pvr_cccb_poll
   -Wl,--wrap=pvr_gpu_service_now -Wl,--wrap=pvr_compute_queue_poll -Wl,--wrap=a733_gpu_backend_stopped
   -Wl,--wrap=xQueueGenericSend)
+list(APPEND options -Wl,--wrap=pvr_compute_fast_collect -Wl,--wrap=pvr_compute_fast_unlock)
 set_property(TARGET gpu-service-model PROPERTY LINK_OPTIONS "${{options}}")
 set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
 ''')
@@ -357,7 +378,7 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
             path = out / ('case-%d.elf' % case)
             path.write_bytes(image)
             if case in args.cases:
-                log = run('case-%d' % case, qemu + ['-kernel', str(path)], timeout=1800)
+                log = run('case-%d' % case, qemu + ['-kernel', str(path)], timeout=15 if case>=53 else 1800)
                 marker = 'PASS GPU queue case 0x%016x;' % case
                 assert marker in log, log[-3000:]
                 results['cases'][case] = {'name': CASES[case], 'metrics': dict(

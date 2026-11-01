@@ -17,7 +17,7 @@ struct model {
     uint64_t now,flush_start;
     unsigned writes,reads,publications,admissions,admit_pending,publish_pending;
     unsigned drop,late,late_read,deny,unresolved,undrained,regression,token_change;
-    unsigned fractional;
+    unsigned fractional,camera;
     uint64_t counter;
     uint32_t flush_busy;
     struct register_latency flush;
@@ -35,8 +35,9 @@ static int admit(void *p,const struct a733_iommu_tables *t,uint64_t d,
 {
     struct model *m=p;(void)t;(void)d;++m->admissions;
     *a=(struct a733_iommu_admission){.token=37,.excluded_masters=A733_IOMMU_REAL_MASTERS,
-        .powered_masters=A733_IOMMU_REAL_MASTERS,.inherited_resolved=!m->unresolved,
-        .transactions_drained=!m->undrained,.clocks_held=1,.recovery_qualified=1};
+        .powered_masters=m->camera?6:A733_IOMMU_REAL_MASTERS,.inherited_resolved=!m->unresolved,
+        .transactions_drained=!m->undrained,.clocks_held=1,.recovery_qualified=!m->camera,
+        .retained_power_removal=m->camera};
     if(m->token_change && m->admissions>1)a->token=38;
     if(m->deny)a->excluded_masters=2; /* CSI idle cannot authorize global writes. */
     if(m->admit_pending) { --m->admit_pending;return 0; }return 1;
@@ -160,6 +161,7 @@ static void controller_checks(struct a733_iommu_tables *t,const char *dump)
     assert(run(&s)==1 && s.state==A733_IOMMU_ACTIVE && s.admission.token==37);
     assert(m->regs[0x14/4]==1 && m->regs[0x10014/4]==1);
     assert(!memcmp(arena,m->published,sizeof(arena)));
+    assert(m->regs[0x2c/4]==0x3007f && m->regs[0x1002c/4]==0x3007f);
     uint64_t pa;assert(walk(m->published,t->physical,maps[1].iova+4096,2,&pa) && pa==0x100000000);
     if(dump) { FILE *f=fopen(dump,"wb");assert(f);assert(fwrite(m->regs,1,sizeof(m->regs),f)==sizeof(m->regs));assert(!fclose(f)); }
     unsigned writes=m->writes;
@@ -198,6 +200,16 @@ static void controller_checks(struct a733_iommu_tables *t,const char *dump)
         writes=m->writes;assert(a733_iommu_poll(&s)==-1 && m->writes==writes);
     }
     free(m);
+}
+static void isp_prefetch_checks(struct a733_iommu_tables *t)
+{
+    struct model *m=calloc(1,sizeof(*m));assert(m);m->camera=1;
+    struct a733_iommu s={0};
+    assert(a733_iommu_init_isp0(&s,&ops,m,t)==1 && a733_iommu_open(&s,10000)==1);
+    assert(run(&s)==1 && s.state==A733_IOMMU_ACTIVE);
+    assert(m->regs[0x2c/4]==0 && m->regs[0x1002c/4]==0);
+    free(m);
+    puts("PASS ISP0 installs zero prefetch in both banks");
 }
 static void inherited_walk_checks(void)
 {
@@ -261,6 +273,11 @@ static void capacity_checks(void)
 }
 int main(int argc,char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"--isp-prefetch-only")) {
+        struct a733_iommu_tables t={0};
+        assert(a733_iommu_build(&t,arena,0x140000000,maps,3)==1);
+        isp_prefetch_checks(&t);return 0;
+    }
     if(argc==2 && !strcmp(argv[1],"--completion-only")) {
         struct a733_iommu_tables t={0};struct a733_iommu s={0};
         struct model *m=calloc(1,sizeof(*m));assert(m);m->fractional=1;
@@ -276,6 +293,7 @@ int main(int argc,char **argv)
     }
     struct a733_iommu_tables t={0};builder_checks(&t);
     controller_checks(&t,argc>1?argv[1]:NULL);
+    isp_prefetch_checks(&t);
     puts("A733 IOMMU: page walks, guards, atomic refusal, global admission, publication, cold install and retained faults passed");
     return 0;
 }

@@ -1,6 +1,8 @@
 # Native probes return through a shared watchdog contract
 
 This contract admits A733 RAM-only diagnostics to `tools/board.py --kind probe`.
+USB class diagnostics use the same contract through the runner's
+[`usb-class` kind](board-runner.md#usb-class-probes-require-finite-device-cleanup).
 It supplies the watchdog marker, session nonce, progress and first-fault records,
 result receipt and ROM-return epilogue. It does not qualify a peripheral or
 establish ownership from a host declaration. No board was accessed while building
@@ -52,7 +54,15 @@ Input, payload, code, session and receipt allocations must not overlap.
 The immutable marker and all required helpers must have real file-backed load
 coverage. Host admission rejects writable executable loads, malformed lengths,
 MMIO input or payload addresses, missing cleanup hooks and unknown versions.
-The complete image allocation must stay within `0x41000000..0x41efffff`.
+The ordinary image allocation must stay within `0x41000000..0x41efffff`.
+Native USB probes through `usb-class` or its `probe` alias may additionally
+reserve the exact `0x42200000..0x42a00000` USB arena. The shared OS host validator
+requires an allocated, writable, non-executable `.uncached_pool` NOBITS section,
+strong exact linker bounds and one matching standalone load with zero file bytes.
+Every other external load is refused. The arena is excluded from uploads and
+host initialization; marker input, payload and helper bounds retain their
+ordinary limits. This linked geometry establishes neither physical RAM authority
+nor a live backup or restoration procedure.
 
 ## Begin before cache maintenance and report actual progress
 
@@ -62,12 +72,42 @@ Entry requires CPU0 at EL3 with EL3 translation and caches disabled, a valid
 session, matching input checksum and the exact host-armed WDT0 mode/configuration.
 It retains the full nonce and absolute deadline outside EL1's BSS.
 
-**Physical prerequisite:** all seven secondary CPUs must already have matching
-static OFF policy, OFF acknowledgment/status, clear start requests and disabled
-GIC wake. The library checks the PCK-600 identity and these fields again before
-return. It makes no PPU policy or power-domain writes. Fresh FEL alone does not
-establish this prerequisite; no current physical result qualifies that baseline.
-A dynamic-OFF sample or a WFE loop does not establish equivalent ownership.
+The default EL3 owner normalizes all seven secondary CPUs to acknowledged
+static OFF before whole-hierarchy cache maintenance. Preflight checks identify
+the PCK-600 PPUs and accept only matching static or dynamic OFF policy/status,
+zero operating-mode policy and clear software-start requests. It rejects active
+cores before any policy write. Each dynamic policy becomes zero with DSB SY;
+the owner waits for PWSR dynamic-disable acknowledgment and actual OFF before
+verifying PWPR. It then sets only that core's GIC wake-disable bit. One 100 ms
+deadline, capped by the session deadline, and a 65,536-sample limit bound the
+entire acquisition. The inherited policy and core appear in the `PROBE_POLICY`
+RTC breadcrumb before mutation. With FAULT clear, ELR marker `0x50505531`
+identifies a retained summary: ESR bits 1–7 identify inherited dynamic-OFF
+policies, and FAR bits 1–7 identify completed static-OFF acquisitions. The other
+inherited policies are zero. Later progress preserves this summary; a real first
+fault replaces all three words before publishing FAULT. The decoder reports
+the summary as `probe_policy`.
+
+The existing strict held-state checks retain their predicates and read order.
+Entry refusal sites `0x10..0x12` retain the sampled CPU word. PPU sites
+`0x20..0x27` retain the first rejected raw register in ESR and its address in
+FAR; ELR identifies the checking statement. Site `0x28` reports an acquisition
+counter/deadline/sample bound. These are software diagnostics.
+
+The weak `sunstone_probe_acquire_secondaries()` hook implements this owner.
+The default `sunstone_probe_release_secondaries()` retains static OFF and
+wake-disable until the ROM reset request. A strong owner must satisfy the same held-state
+checks; its release runs after final data and instruction-cache maintenance and
+receipt preparation. No cache operation follows release. A release failure
+parks with the watchdog armed. Consumers using the common owner remove private
+policy-owner overrides and build-time runtime patches.
+
+The [entry ownership design](designs/probe-entry-normalization.md) supplies the
+source comparison, write scope and validation limits. A subsequent multicore
+consumer needs a reviewed held-policy release after publishing the target entry;
+the resident startup path supplies that operation. Peripheral owners establish
+their own reset and gate state before dependent access. Shared entry cannot
+reset camera, audio or other blocks without their ownership and drain proof.
 
 Call `sunstone_probe_progress()` at bounded points of completed work. EL1 uses
 SMC `0x734`; EL3 uses the library's direct helper. The common monitor preserves

@@ -133,11 +133,14 @@ int npu_application_irq_bind(struct npu_service *service)
 #include "npu_runtime.h"
 /* Before the scheduler, on the boot core. The idle-register hint stays until
  * the board shows one INTID 97 per job. */
+#ifndef NPU_IRQ_IDLE_HINT
+#define NPU_IRQ_IDLE_HINT 1
+#endif
 int NPU_IRQ_EXTERNAL_BIND(struct npu_runtime *rt)
 {
     if(!rt || !bind_ready())return 0;
     binding.masked=1;
-    if(!npu_runtime_bind_irq(rt,&ops,&binding,UINT32_C(1)<<NPU_IRQ_CORE,1))return 0;
+    if(!npu_runtime_bind_irq(rt,&ops,&binding,UINT32_C(1)<<NPU_IRQ_CORE,NPU_IRQ_IDLE_HINT))return 0;
     binding.service=&rt->service;return 1;
 }
 #endif
@@ -157,6 +160,19 @@ unsigned npu_application_irq_count(void)
 #endif
 void NPU_IRQ_HANDLER(void)
 {
+    /* A claimed resident queue owns the destructive event read. Leave the
+     * level SPI enabled: the queue acknowledges the device before EOI and
+     * directly notifies its waiting client. Errors mask this same source. */
+    if(binding.service && binding.service->direct) {
+        BaseType_t woken=pdFALSE;
+        binding.service->direct->irq(binding.service->direct->context,&woken);
+        if(atomic_load_explicit(&binding.service->irq_pending,memory_order_acquire)) {
+            if(!gicv3_spi_mask(&source))binding.fault=1;
+            binding.masked=1;
+        }
+        portYIELD_FROM_ISR(woken);
+        return;
+    }
 #if !defined(NPU_IRQ_EXTERNAL_BIND) || defined(NPU_IRQ_CAPTURE_TICKS)
     uint64_t now;__asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(now) :: "memory");
     __atomic_store_n(&delivered_ticks,now,__ATOMIC_RELEASE);

@@ -110,7 +110,8 @@ def finite_npu_info(image, host, finite, manifest):
     parts, address, build, layout, geometry = finite.image_profile(Path(image).read_bytes(), manifest)
     profile = finite.geometry_profile(geometry)
     profiles = [finite.STARTUP, finite.INFERENCE, finite.RUNTIME, finite.RESTART,
-                finite.SWITCH, finite.SDK, finite.POWER]
+                finite.SWITCH, finite.SDK, finite.POWER,
+                getattr(finite, 'LATENCY', 'npu-latency-return-v1')]
     # Older frozen decoders have no cancellation extension. The new decoder
     # validates its immutable command marker and controller-only recovery path.
     if getattr(finite, 'ACTIVE_CANCEL', None) == 'npu-active-cancel-return-v1':
@@ -128,10 +129,23 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
     descriptor = descriptor or {}
     if descriptor:
         require(descriptor.get('image_sha256') == sha(image), 'Image descriptor hash differs.')
-    if kind=='probe' and 'sunstone_probe_marker' in names:
-        native = load('native_probe_contract', ROOT/'tools/board_probe.py').inspect(image)
+    if 'usb_vbus_probe_profile' in names:
+        profile = symbol_bytes(image, 'usb_vbus_probe_profile')
+        require(profile in [struct.pack('<3Q', 0x3153554256535355, 1, mode) for mode in (0, 1, 10)],
+                'Unsupported PL8 VBUS diagnostic profile.')
+        require(kind == 'probe' and 'sunstone_probe_marker' in names,
+                'PL8 VBUS diagnostic requires the native probe contract.')
+    if kind == 'usb-class':
+        require('sunstone_probe_marker' in names,
+                'USB class images require the native probe contract and real device cleanup; retained OS images cannot return.')
+        require('a733_usb2_native_poll' in names,
+                'USB class kind requires the linked native USB host controller.')
+    if kind in ('probe', 'usb-class') and 'sunstone_probe_marker' in names:
+        usb_class = 'a733_usb2_native_poll' in names
+        native = load('native_probe_contract', ROOT/'tools/board_probe.py').inspect(
+            image, usb_pool=host.usb_pool_geometry if usb_class else None)
         return {'symbols':names,'watchdog':native['watchdog'],'generic':False,'entry_guard':False,
-                'descriptor':descriptor,'native_probe':native}
+                'descriptor':descriptor,'native_probe':native,'usb_class':usb_class}
     if kind == 'npu' and 'ss_result_record' not in names:
         tree = host_tree or ROOT
         finite = load('inspect_npu_irq', tree/'apps/npu-interrupt/host.py').finite
@@ -179,7 +193,8 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
                 'Probe entry/report reservations differ.')
     return {'symbols': names, 'watchdog': marker, 'generic': generic,
             'entry_guard': 'os_cpu_return_entry_profile' in names, 'descriptor': descriptor,
-            'report_geometry': geometry, 'dma': dma}
+            'report_geometry': geometry, 'dma': dma,
+            'usb_class': 'os_usb_service_dispatch' in names}
 
 
 def session_template(args):
@@ -245,10 +260,15 @@ def bind_dma_identity(admission, args, identity):
     return admission._replace(identity_verified=True)
 
 
+
 def policy(info, args, session=None):
     """Approval adds authority; it never creates a storage grant or a backup."""
     d = info['descriptor']
     approved = args.approved_by == 'coordinator'
+    if 'usb_vbus_probe_profile' in info.get('symbols', {}):
+        require(approved and args.port == '3-1', 'PL8 VBUS probe requires coordinator approval on port 3-1.')
+    if info.get('usb_class'):
+        require(approved, 'USB class launch requires --approved-by coordinator after review of source and current-cutoff evidence.')
     storage = d.get('storage_write') or args.storage_write
     require(not storage or approved, 'Storage write requires --approved-by coordinator.')
     if storage:
@@ -367,7 +387,7 @@ def prepare(args, info, live, out, *, dma_binding=None):
     image_info = records.image_manifest(args.image)
     if struct.unpack_from('<Q', raw, 592)[0] == records.SESSION_MAGIC:
         old = records.session_decode(raw)
-        services = {k: v for k, v in old['extents'].items() if k in records.SERVICE_BYTES}
+        services = {k: v for k, v in old['extents'].items() if k != records.INPUTS}
         devices, flags = old['devices'], old['flags']
     else:
         require(len(raw) == 904, 'Supply a typed session bundle for NPU/audio images.')
@@ -378,6 +398,12 @@ def prepare(args, info, live, out, *, dma_binding=None):
     struct.pack_into('<3Q', prefix, 24, epoch, generation, lease)
     parts, address, identity = base.image_parts(Path(args.image))
     prefix[48:80] = identity
+    if records.JPEG in services:
+        # The JPEG service embeds the same board prefix. Rebind its session
+        # identity together with the outer prefix, preserving its evidence.
+        jpeg = bytearray(services[records.JPEG])
+        jpeg[:records.PREFIX_BYTES] = prefix
+        services[records.JPEG] = jpeg
     if records.CPU_GRANT in services:
         grant = bytearray(services[records.CPU_GRANT])
         if struct.unpack_from('<I', grant, 48)[0]:

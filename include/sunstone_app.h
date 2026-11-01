@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "gpu_queue.h"
+#include "sunstone_npu_queue.h"
 #ifdef __cplusplus
 #define SS_STATIC_ASSERT static_assert
 #define SS_NORETURN [[noreturn]]
@@ -159,9 +160,9 @@ struct ss_gpu_share {
 extern const struct ss_gpu_share ss_gpu_share;
 
 /* Calls from application to OS. All are plain function calls into the image
- * and are safe at EL0 and EL1: they use atomics and memory that EL0 maps, and
- * never MMIO, locks shared with interrupt handlers or system registers.
- * Device work happens in OS-owned EL1 tasks that these calls signal.
+ * and are safe at EL0 and EL1. They use mapped memory, atomics and OS
+ * synchronization. Task notifications enter the RTOS through its existing
+ * privilege-safe port. Device MMIO stays in the OS-owned EL1 tasks.
  * Applications are trusted code. Device calls enforce grants; they do not
  * isolate hostile application memory accesses. */
 const struct ss_grant *ss_grant(void);
@@ -269,7 +270,8 @@ int ss_npu_model_find(const char *name,unsigned *index);
  * LOAD and CLOSE use the runtime request waits and session deadline; this
  * argument is not an end-to-end API deadline.
  * A failed service permanently retains the request and buffers until session
- * teardown. These calls use only ordinary memory and atomics at EL0. */
+ * teardown. Request publication wakes the owner through an EL0-safe RTOS
+ * notification; completion is acquired through the mailbox atomics. */
 #define SS_NPU_MAX_TENSOR_BYTES (1024u * 1024u)
 int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
                void *output,size_t output_bytes,uint64_t timeout_us);

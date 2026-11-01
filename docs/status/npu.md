@@ -7,6 +7,7 @@ IRQ97 service, runtime clients and thermal policy have software evidence.
 Finite scheduled startup and inference have scoped physical results.
 Repeated-transition reliability remains unqualified.
 
+
 **Board-qualified scope:** A finite interrupt diagnostic produces matching
 ShuffleNetV2 outputs at 852 MHz/800 mV. Startup takes 4.0 ms and inference takes
 2.91 ms doorbell-to-interrupt, about 3.3 ms end to end. Provider-free
@@ -15,7 +16,59 @@ before scheduler start return normally with saved RAM restored. These
 checkpoints perform no inference. The watchdog-admitting finite startup,
 one-inference and two-job/two-model runtime images also qualify on 3-3 at
 852 MHz/800 mV, with matching copied outputs, CLOSE, local stop and normal
-ROM return.
+ROM return. The resident command queue runs 1,000 matched jobs at 10.25 µs
+p50 and 26,925 jobs/s, and 1,000 fence-chained two-stage jobs, on 3-3.
+
+## Resident command submission
+
+**Implemented; matched small-model timing has physical evidence.** The generic
+queue accepts caller-owned records and ordered fences, submits from the caller,
+and notifies its waiting task directly from IRQ97. Commands and buffers remain
+resident. Dirty ranges receive cache maintenance outside the device lock.
+Acknowledged worker handoff and permanent queue retirement prevent stale triggers.
+The legacy mailbox wakes its owner on publication and reuses READY models.
+
+Port 3-3 control `1793563838443635411-92c1fdae` and resident comparison
+`1793564135238449408-5dbdd6ad` each check 1,000 measured model-0 outputs, with
+identical linked models and inputs at 852 MHz/800 mV. Both return normally.
+Helper versus resident p50/p99/maximum latency is 463.88/472.46/478.92 µs versus
+10.25/12.83/18.71 µs. Throughput is 2,029.97 versus 26,925.33 jobs/s.
+Scheduled client-plus-worker CPU time is 491.16 versus 34.19 µs/job, including
+output checks and digest. This excludes IRQ time charged to idle. Mean
+API-entry-to-completed-doorbell delay is 403.44 versus 0.943 µs.
+[The design](../designs/npu-fast-path.md) records hashes, timing scope and vendor references.
+
+Port 3-3 entry `1793565141195481474-2e135a8c` returns normally after 1,000
+two-record FIFO chains and 1,000 joined streams. Two distinct binaries share a
+400-byte output/input allocation and every intermediate and final output matches.
+FIFO and joined throughput is 45,987.32 and 48,166.66 logical stages/s, including
+output checks and digest. Scheduled task CPU cost is 19.87 and 18.70 µs/stage.
+Each chain has two stages; its mean interval excluding those checks is 13.94
+and 12.02 µs. Both forms perform zero interstage CPU copies. The joined stream
+emits one final event and no intermediate event. The complete image retires
+4,001 hardware jobs and 4,002 IRQs, with restored DRAM.
+
+The EL0 application-kit ring has resident handles, image-declared tensor edges,
+connected buffer leases and an SVC doorbell only on idle-to-active publication.
+IRQ refill handles each successor without a service task hop. Eight sanitizer
+cases and twelve native SVC/IRQ cases pass; physical EL0 execution remains
+unqualified. The selected integration gate passes the supervised, resident,
+resident-audio, normal NPU and two-model EL0-ring builds, kernel checks, check
+index and shared-helper checks.
+Host evidence under `~/.cache/sunstoneos/build/npu-fastpath-1101/` also covers
+10,000 ordered records, native handoff faults, tensor relocation, SDK events
+and diagnostic producer/parser/receipt agreement. The final selected gate is
+`final-gates/gate-npu-final/`, with both affected NPU builds refreshed in
+`final-gates/gate-npu-final-layout/`. Native SVC evidence is `svc-final-layout/`
+and diagnostic byte-equivalence evidence is `timing-layout-check/` under the
+same task build directory. Disabled timing counters occupy no production storage.
+
+Automatic internal-clock gating is a proposal only. PCK4, shared SRAM, DCDC2,
+PLL and top-point clock leases remain owned in that proposal. A transition run
+needs coordinator approval and an identified power meter. Current jobs keep the
+NPU powered at 852 MHz/800 mV. Exact per-job deadline interrupts remain open;
+the independent session watchdog bounds a lost IRQ. Repeated lifecycle and
+thermal/fault recovery also remain unqualified.
 
 Evidence paths are relative to `~/.cache/sunstoneos/evidence/`:
 

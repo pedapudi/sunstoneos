@@ -3,7 +3,8 @@
 #include <stdint.h>
 /* Bootstrap, inference, model-switch and SDK clients identify their return
  * contracts with immutable receipt magic, monitor detail, job count and
- * interrupt-completion count. The sustained extension runs 200 jobs.
+ * interrupt-completion count. The sustained extension runs 200 jobs. The
+ * latency extension counts one warmup and 1000 measured jobs separately.
  * Ordinary runtime clients use one job per linked entry;
  * the switch profile links the first network again after the second. */
 #ifdef SUNSTONE_NPU_ACTIVE_CANCEL
@@ -13,6 +14,25 @@
 #define NPU_STARTUP_COMPLETIONS 3u
 #define NPU_STARTUP_MAX_STATUS 0u
 #define NPU_STARTUP_JOB_TEXT "1"
+#elif defined(SUNSTONE_NPU_LATENCY)
+#define NPU_STARTUP_RECEIPT_MAGIC UINT64_C(0x4e50554c41543031)
+#define NPU_STARTUP_READY UINT64_C(0x4e50554c)
+#if defined(SUNSTONE_NPU_DEPENDENT_CHAIN) && SUNSTONE_NPU_DEPENDENT_CHAIN
+#ifndef SUNSTONE_NPU_CHAIN_REPEATS
+#define SUNSTONE_NPU_CHAIN_REPEATS 1
+#endif
+#if SUNSTONE_NPU_CHAIN_REPEATS<1 || SUNSTONE_NPU_CHAIN_REPEATS>1000
+#error "Dependent chain requires 1..1000 repetitions"
+#endif
+#define NPU_STARTUP_JOBS (1001u+3u*SUNSTONE_NPU_CHAIN_REPEATS)
+#elif defined(SUNSTONE_NPU_LATENCY_SEQUENCE) && SUNSTONE_NPU_LATENCY_SEQUENCE
+#define NPU_STARTUP_JOBS 1002u
+#define NPU_STARTUP_JOB_TEXT "1002"
+#else
+#define NPU_STARTUP_JOBS 1001u
+#define NPU_STARTUP_JOB_TEXT "1001"
+#endif
+#define NPU_STARTUP_MAX_STATUS 1u
 #elif defined(SUNSTONE_NPU_SUSTAINED)
 #define NPU_STARTUP_RECEIPT_MAGIC UINT64_C(0x4e50555254523031)
 #define NPU_STARTUP_READY UINT64_C(0x4e505552)

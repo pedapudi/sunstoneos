@@ -455,6 +455,7 @@ def runner_cleanup(args, machine, geometry_host, epoch, generation, frozen):
             self.events, self.clock, self.helper_running = [], 0, False
             self.record['physical_access']=False
             self.record['modeled_transport']=True
+            self.identity=('modeled-current-instance',)
             self.memory = [(address, bytearray(bytes([17+index])*size)) for index,(address,size)
                            in enumerate(plan['preserve_regions'])]
             self.saved = {address:bytes(data) for address,data in self.memory}
@@ -503,7 +504,8 @@ def runner_cleanup(args, machine, geometry_host, epoch, generation, frozen):
             self.events.append('actual-post-helper-restoration')
         def tx(self,*values):
             if values and all(values[i]=='readl' for i in range(0,len(values),2)):
-                modeled={0x07090160:0x10008002,**images.NPU_ENTRY_GATES,
+                modeled={0x07090160:0x10008002,board.usb_power.CFG:1,
+                         board.usb_power.DAT:0,board.usb_power.PULL:0,**images.NPU_ENTRY_GATES,
                          **{address:8 for address in images.NPU_PCK4}}
                 return ' '.join(hex(modeled[int(values[i],0)]) for i in range(1,len(values),2))
             if values==('exe','0x52000'):

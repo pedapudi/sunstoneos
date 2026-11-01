@@ -94,7 +94,7 @@ for index, expected in enumerate(({'mode': 'u32le', 'words': []},
         entered.append(True)
         raise AssertionError('Malformed frozen expectation reached device construction.')
 
-    with patch.object(board.images, 'inspect', return_value={}), \
+    with patch.object(board.images, 'inspect', return_value={'entry_guard': False}), \
             patch.object(board.images, 'policy'), contextlib.redirect_stdout(io.StringIO()):
         result = board.run_image(launch, backend=forbidden_backend)
     assert result['outcome'] == 'refused-before-launch' and not entered, result

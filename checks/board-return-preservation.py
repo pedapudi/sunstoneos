@@ -89,6 +89,9 @@ def main():
         def quarantine(self, reason):
             self.quarantined = True; self.record['quarantined'] = True
         def journal(self):pass
+        def usb_source_off(self,phase,enforce=True):
+            self.identity=('modeled-current-instance',)
+            return board.Live.usb_source_off(self,phase,enforce)
         def sanity(self):pass
         def reset(self):pass
         def dram(self):pass
@@ -125,6 +128,10 @@ def main():
         def prepare(self,info):return make_plan()
         def arm(self,mode,**kwargs):self.armed=True
         def tx(self,*values):
+            if values==tuple(part for address in (board.usb_power.CFG,board.usb_power.DAT,board.usb_power.PULL)
+                             for part in ('readl',hex(address))):
+                return '0x1 0x0 0x0' # modeled PL8 output-low, no source power
+
             if values==('readl','0x07090160'):return '0x10008002'
             if values==('reset64','0x41000000'):
                 self.helper_running=True

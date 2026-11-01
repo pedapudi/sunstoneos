@@ -24,7 +24,10 @@ def models(model_list=MODELS):
     """The OS application's catalogue entries, in model-list order."""
     return catalogue_tool().application_models([model_list])
 
-def generate(artifacts, output, model=0, model_list=MODELS, all_models=False, model_name=None):
+def generate(artifacts, output, model=0, model_list=MODELS, all_models=False, model_name=None, queue_models=None):
+    # Keep the resident queue producer's positional list compatible.
+    if isinstance(model_list, (list, tuple)):
+        queue_models, model_list = model_list, MODELS
     catalogue = models(model_list)
     if model_name is not None:
         names = [m['name'] for m in catalogue]
@@ -34,7 +37,14 @@ def generate(artifacts, output, model=0, model_list=MODELS, all_models=False, mo
     paths = json.loads(Path(artifacts).read_text())
     if not 0 <= model < len(catalogue):
         raise ValueError('Unsupported OS client selection')
-    linked = catalogue if all_models else [catalogue[model]]
+    if queue_models is not None:
+        if all_models or not queue_models or queue_models[0]!=model or len(queue_models)>8 or len(set(queue_models))!=len(queue_models):
+            raise ValueError('Queue entries must be distinct, begin with the client model and fit eight slots')
+        if any(not 0<=i<len(catalogue) for i in queue_models):
+            raise ValueError('Unsupported queue model selection')
+        linked = [catalogue[i] for i in queue_models]
+    else:
+        linked = catalogue if all_models else [catalogue[model]]
     # The native runtime has a bounded resident catalogue, independent of this
     # application's actual entry count.
     if len(linked) > 16:
@@ -89,7 +99,13 @@ if __name__ == '__main__':
     p.add_argument('--output', required=True)
     p.add_argument('--model', type=int, default=0)
     p.add_argument('--model-name', help='semantic diagnostic model name; overrides --model')
-    p.add_argument('--models', type=Path, default=MODELS, help='application model-list JSON')
+    p.add_argument('--models', default=str(MODELS), help='application model-list JSON or legacy comma-separated queue indices')
+    p.add_argument('--queue-models', help='comma-separated resident entries, client first')
     p.add_argument('--all', action='store_true', help='link all listed models')
     a = p.parse_args()
-    generate(a.artifacts, a.output, a.model, a.models, a.all, a.model_name)
+    queue = None if a.queue_models is None else [int(i) for i in a.queue_models.split(',')]
+    model_list = Path(a.models)
+    if not model_list.is_file() and all(i.strip().isdigit() for i in a.models.split(',')):
+        if queue is not None:p.error('Specify queue indices once')
+        queue = [int(i) for i in a.models.split(',')]; model_list = MODELS
+    generate(a.artifacts, a.output, a.model, model_list, a.all, a.model_name, queue)

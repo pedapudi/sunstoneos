@@ -28,6 +28,8 @@
  * memory, scratch, spilling, textures or library linkage. This is a producer
  * contract, not executable validation. Admission must establish source/build
  * provenance; hashes and this header cannot prove arbitrary USC behavior.
+ * Queue local-memory programs use a separate gpu_queue_program descriptor
+ * (GPU_QUEUE_ABI_LOCAL); they are not admitted by this package wire format.
  * All integer fields are little endian on the wire. */
 struct pvr_compute_package {
     uint32_t magic, version, bytes, profile;

@@ -280,6 +280,13 @@ def decode(words, epoch, elf=None):
         result['fault'] = {'core': (fault >> 20) & 15, 'level': level, 'vector_slot': (fault >> 8) & 255,
                            'x0': fault & 255, 'esr' if level == 3 or fault & 255 == 4 else 'detail': hex(words['esr']),
                            'elr': hex(words['elr']), 'far': hex(words['far'])}
+    if fault >> 24 != defines['FAULT_MAGIC'] and words['elr'] == defines['PROBE_POLICY_MAGIC']:
+        inherited, normalized = words['esr'], words['far']
+        if not (inherited | normalized) & ~0xfe:
+            result['probe_policy'] = {
+                'inherited_dynamic_mask': inherited, 'normalized_mask': normalized,
+                'inherited_policy': {str(c): 0x100 if inherited & (1 << c) else 0 for c in range(1, 8)},
+                'normalized_policy': {str(c): 0 for c in range(1, 8) if normalized & (1 << c)}}
     parts = []
     if 'last' in result:
         r = result['last']

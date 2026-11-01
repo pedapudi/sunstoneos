@@ -36,16 +36,27 @@ struct pvr_ccb_ops {
 };
 struct pvr_ccb_token { uint64_t epoch, serial; uint32_t slot; };
 struct pvr_ccb_slot { uint64_t serial, deadline; uint32_t state, status; };
+/* Optional job-only view admitted once by the native backend and installed
+ * at READY. Exact retained NC regions, aligned to at least eight bytes.
+ * kick completes the one MTS write. The same lock owns this view and all
+ * guarded KCCB producers. Revoke it before abort, stop or mapping retirement. */
+struct pvr_ccb_direct {
+    volatile unsigned char *control,*commands,*returns;
+    int (*doorbell)(void *);
+    void *context;
+};
 
 /* Caller-owned state. Zero once before initialization. Fields are private to
  * this component except phase and last_event, which may be read for diagnosis.
  * Serialize every API call through one privileged FreeRTOS worker or lock.
  */
 struct pvr_ccb {
+    struct pvr_ccb_direct direct;
     struct pvr_ccb_ops ops;
     void *context;
     uint64_t epoch, serial, last_now;
     uint32_t phase, host_write, host_read, firmware_read;
+    uint32_t failed_line,failed_read,failed_write;
     struct pvr_ccb_slot slots[PVR_CCB_HOST_SLOTS];
     unsigned char last_event[PVR_CCB_COMMAND_BYTES];
 };
@@ -73,6 +84,10 @@ enum pvr_ccb_result pvr_ccb_start(struct pvr_ccb *, uint64_t now);
  */
 enum pvr_ccb_result pvr_ccb_submit(struct pvr_ccb *, const void *command,
                                   uint64_t now, uint64_t deadline, struct pvr_ccb_token *);
+/* KICK without a return-slot reservation, as the reference job path uses.
+ * Firmware read-offset ownership still prevents reuse before consumption.
+ * The producer retains its own GPU fence and hang deadline. */
+enum pvr_ccb_result pvr_ccb_submit_noreply(struct pvr_ccb *,const void *,uint64_t,uint64_t);
 /* One bounded scan, at most 128 return-word reads. Service this on interrupts
  * and before pending deadlines. Timeout, corrupt metadata, or callback failure
  * latches FAILED; subsequent APIs perform no device access. No internal retries.

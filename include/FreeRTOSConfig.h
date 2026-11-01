@@ -6,6 +6,10 @@
 extern "C" {
 #define _Noreturn [[noreturn]]
 #endif
+#ifdef SUNSTONE_GPU_TIMING
+void gpu_queue_timing_block_receive(void *queue);
+#define traceBLOCKING_ON_QUEUE_RECEIVE(queue) gpu_queue_timing_block_receive((void *)(queue))
+#endif
 void platform_tick_setup(void);
 void platform_tick_ack(void);
 _Noreturn void platform_panic(const char *file, unsigned line);
@@ -48,6 +52,7 @@ _Noreturn void platform_panic(const char *file, unsigned line);
 #define configUSE_COUNTING_SEMAPHORES 1
 #define configUSE_TIMERS 0
 #define configUSE_TASK_NOTIFICATIONS 1
+#define configTASK_NOTIFICATION_ARRAY_ENTRIES 2
 #define configCHECK_FOR_STACK_OVERFLOW 2
 #define configUSE_TASK_FPU_SUPPORT 2
 #ifdef SUNSTONE_SECURE_MONITOR

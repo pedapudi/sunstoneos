@@ -29,6 +29,11 @@ int npu_finite_runtime_irq_bind(struct npu_runtime *);
 /* The parent allocation: whole 2 MiB blocks of image RAM after the stacks,
  * reserved by apps/npu-finite/link.ld when the build defines its size. */
 extern unsigned char __npu_runtime_parent_start[], __npu_runtime_parent_end[];
+/* Finite clients may prepare several resident commands before scheduling.
+ * The default retains the ordinary single-slot runtime behavior. */
+__attribute__((weak)) unsigned a733_npu_runtime_resident_slots(void) { return 0; }
+__attribute__((weak)) int a733_npu_runtime_resident_prepare(struct npu_runtime *rt)
+{ (void)rt; return 0; }
 
 static struct {
     struct a733_counter_clock clock;
@@ -302,13 +307,16 @@ static int runtime_prepare(const struct npu_runtime_model *models,unsigned count
     const uintptr_t start=(uintptr_t)__npu_runtime_parent_start,end=(uintptr_t)__npu_runtime_parent_end;
     if(!models || !count || count>NPU_RUNTIME_MODELS || (start|end)&(NPU_RUNTIME_GROUP_BYTES-1) || end<=start)return 0;
     for(unsigned m=0;m<count;++m)if(!image(models[m].data,models[m].bytes,0))return 0;
-    const size_t need=npu_runtime_requirements(models,count,1);
+    const unsigned resident=a733_npu_runtime_resident_slots();
+    const unsigned slots=resident?resident:1;
+    const size_t need=npu_runtime_requirements(models,count,slots);
     if(!need || need>end-start ||
        !a733_mapping_check_stride(aarch64_device_translate,start,start,need,NPU_RUNTIME_GROUP_BYTES,&wb))return 0;
-    struct npu_runtime_config config={.count=count,.slots=1,.cpu=start,.physical=start,.bytes=need,
+    struct npu_runtime_config config={.count=count,.slots=slots,.cpu=start,.physical=start,.bytes=need,
         .register_cpu=0x03600000,.register_physical=0x03600000,.fatal=runtime_fatal};
     memcpy(config.models,models,count*sizeof(*models));
-    return npu_runtime_prepare(&app.runtime,&config);
+    return npu_runtime_prepare(&app.runtime,&config)&&
+        (!resident||a733_npu_runtime_resident_prepare(&app.runtime));
 }
 int a733_npu_application_runtime_init(TaskHandle_t client,const struct npu_runtime_model *models,unsigned count)
 {
@@ -358,7 +366,9 @@ int a733_npu_application_runtime_init(TaskHandle_t client,const struct npu_runti
      * and the OPEN bootstrap deadline are the client's, at most 1 s. */
     if(!a733_npu_startup_init(&app.startup,&startup,&providers,NULL,NULL) ||
        !a733_npu_startup_bind_task(&app.startup,app.bootstrap_task) ||
-       !npu_runtime_bind(&app.runtime,&app.startup,clients,4,1) ||
+       !(a733_npu_runtime_resident_slots()?
+         npu_runtime_bind_resident(&app.runtime,&app.startup,client,4,1):
+         npu_runtime_bind(&app.runtime,&app.startup,clients,4,1)) ||
        !npu_finite_runtime_irq_bind(&app.runtime) ||
        !npu_job_attach(&app.runtime,pdMS_TO_TICKS(2000)) ||
        !preparation_admitted())goto failed;

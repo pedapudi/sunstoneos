@@ -8,6 +8,8 @@ enum { UNBOUND, IDLE, RUN, CLOSE, DONE, FAILED, CLOSED };
 static struct {
     atomic_uint state;
     struct ss_npu_backend backend;
+    void (*notify)(void *);
+    void *event_context;
     unsigned model,operation;
     const void *input;
     void *output;
@@ -15,6 +17,8 @@ static struct {
     uint64_t timeout;
     int result;
 } box;
+static void notify_owner(void)
+{if(box.notify)box.notify(box.event_context);}
 #ifndef SS_NPU_BEFORE_TRANSITION
 #define SS_NPU_BEFORE_TRANSITION() ((void)0)
 #endif
@@ -54,8 +58,16 @@ int ss_npu_model_find(const char *name,unsigned *index)
     for(unsigned i=0;i<count;++i)if(!strcmp(name,box.backend.models[i].name)){*index=i;return 1;}
     return 0;
 }
+int ss_npu_service_bind_event(void (*notify)(void *),void *context)
+{
+    if(!notify||box.notify||atomic_load(&box.state)!=UNBOUND)return 0;
+    box.notify=notify;box.event_context=context;return 1;
+}
 void ss_npu_service_fail(void)
-{atomic_store_explicit(&box.state,FAILED,memory_order_release);}
+{
+    if(atomic_exchange_explicit(&box.state,FAILED,memory_order_release)!=FAILED)
+        notify_owner();
+}
 int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
                void *output,size_t output_bytes,uint64_t timeout_us)
 {
@@ -68,7 +80,8 @@ int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
            output_bytes!=box.backend.models[model].output_bytes)return -2;
         box.model=model;box.input=input;box.input_bytes=input_bytes;
         box.output=output;box.output_bytes=output_bytes;box.timeout=timeout_us;box.operation=RUN;
-        return transition(IDLE,RUN)?0:-1;
+        if(!transition(IDLE,RUN))return -1;
+        notify_owner();return 0;
     }
     if(box.operation!=RUN||box.model!=model||box.input!=input||box.input_bytes!=input_bytes||
        box.output!=output||box.output_bytes!=output_bytes||box.timeout!=timeout_us)return -1;
@@ -80,7 +93,10 @@ int ss_npu_close(void)
     unsigned state=atomic_load_explicit(&box.state,memory_order_acquire);
     if(state==CLOSED)return 1;
     if(state==UNBOUND||state==FAILED)return -1;
-    if(state==IDLE){box.operation=CLOSE;return transition(IDLE,CLOSE)?0:-1;}
+    if(state==IDLE){
+        box.operation=CLOSE;if(!transition(IDLE,CLOSE))return -1;
+        notify_owner();return 0;
+    }
     if(box.operation!=CLOSE)return -1;
     if(state!=DONE)return 0;
     int result=box.result;

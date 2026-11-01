@@ -3,6 +3,9 @@
 #include "application.h"
 #include "../board/session.h"
 #include "a733_storage_digest.h"
+#ifdef SUNSTONE_A733_OS_USB_CLASSES
+#include "a733_usb_memory.h"
+#endif
 #include <string.h>
 #ifdef SUNSTONE_A733_OS_USB_JPEG
 #include "../jpeg/a733_jpeg_application.h"
@@ -37,20 +40,13 @@ const void *os_session_extent(const void *raw,uint32_t type,size_t *bytes)
 static int extent_copy(const void *raw,uint32_t type,void *target,size_t expected)
 {size_t bytes=0;const void *p=os_session_extent(raw,type,&bytes);if(!p||bytes!=expected)return 0;memcpy(target,p,bytes);return 1;}
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
-static int usb_memory_extent_valid(const void *raw,const struct a733_board_session *board)
+static int usb_memory_extent_valid(const void *raw)
 {
     size_t bytes=0;const struct ss_usb_memory_extent *m=os_session_extent(raw,SS_EXTENT_USB_MEMORY,&bytes);
-    uint8_t present=0;if(!m||bytes!=sizeof(*m)||m->version!=1||
-       m->base!=UINT64_C(0x47000000)||m->bytes!=UINT64_C(0x01000000)||m->alias!=UINT64_C(0x7a000000)||
-       !board->memory_authority)return 0;
-    for(unsigned i=0;i<32;++i)present|=m->evidence[i];return !!present;
-}
-/* The primary EL3 memory-table builder calls this after the board session was
- * sealed and its complete SHA-256 was checked against the launch contract. */
-int os_usb_memory_admitted(void)
-{
-    const void *raw=board_session_sealed();const struct a733_board_session *prefix=board_session_snapshot();
-    return raw&&prefix&&usb_memory_extent_valid(raw,prefix);
+    /* Optional geometry describes the immutable linked allocation. Physical
+     * ownership is established by the runner, not an evidence digest here. */
+    return !m || (bytes==sizeof(*m)&&m->version==1&&m->base==A733_USB_MEMORY_BASE&&
+        m->bytes==A733_USB_MEMORY_BYTES&&m->alias==A733_USB_MEMORY_ALIAS_BASE);
 }
 #endif
 int os_session_decode(const void *raw,size_t bytes,struct os_session *out)
@@ -71,7 +67,7 @@ int os_session_decode(const void *raw,size_t bytes,struct os_session *out)
     if(memcmp(hash,h->manifests_sha256,32)||(h->devices&m->devices_required)!=m->devices_required||
        h->devices&~(m->devices_required|m->devices_optional))return 0;
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
-    if(!usb_memory_extent_valid(raw,(const void *)raw))return 0;
+    if(!usb_memory_extent_valid(raw))return 0;
 #else
     if(os_session_extent(raw,SS_EXTENT_USB_MEMORY,NULL))return 0;
 #endif

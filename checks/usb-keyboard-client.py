@@ -29,10 +29,13 @@ def main():
     source = (ROOT / 'apps/os/client.c').read_text()
     begin = source.index('/* ready: empty, published, reader copying, owner publishing. */')
     end = source.index('int ss_storage_read(', begin)
-    mailbox = source[begin:end]
+    storage = re.search(r'^static struct \{[^\n]+\} storage;$', source, re.M)
+    assert storage, 'Actual storage mailbox declaration missing'
+    mailbox = storage.group(0) + '\n' + source[begin:end]
     assert 'keyboard_publish();' in function(source, 'serve'), 'Owner must retry pending publication'
-    (out / 'usb-keyboard-client.inc').write_text(mailbox + function(source, 'ss_key_report') + '\n' +
-                                               function(source, 'usb_input') + '\n')
+    (out / 'usb-keyboard-client.inc').write_text(mailbox + function(source, 'ss_storage_read') + '\n' +
+        function(source, 'ss_key_report') + '\n' + function(source, 'usb_input') + '\n' +
+        function(source, 'serve') + '\n')
     flags = ['-fsanitize=thread', '-fno-sanitize-recover=all'] if args.thread_sanitizer else SANITIZE
     command = [str(CLANG), '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-pthread', *flags,
                '-DSUNSTONE_A733_OS_USB_CLASSES=1', '-I' + str(ROOT / 'include'), '-I' + str(out),

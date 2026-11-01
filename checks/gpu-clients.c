@@ -2,6 +2,8 @@
 #include "pvr_compute_queue.h"
 #include "pvr_gpu_service.h"
 #include "gpu-share.h"
+#include "aarch64_device_memory.h"
+#include "pvr_compute_fast.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +14,17 @@ static TaskHandle_t current=(void *)1;
 static unsigned scheduler,ticks,phase=PVR_GPU_SERVICE_READY,operation,delay_reply,recover_at;
 static uint64_t ticket_counter;
 static unsigned peer_queue_creates;
+/* The modeled service leaves job_irq_ack unset, so the queued client path
+ * must never reach the caller-submission fast path or EL0 translation. */
+uint32_t ulTaskNotifyTakeIndexed(UBaseType_t index,BaseType_t clear,TickType_t wait)
+{(void)index;(void)clear;(void)wait;assert(!"queued path took a task notification");return 0;}
+int aarch64_device_translate_el0(uintptr_t address,int write,struct aarch64_translation *out)
+{(void)address;(void)write;(void)out;assert(!"queued path translated an EL0 address");return -1;}
+int pvr_compute_fast_submit(struct pvr_compute_queue *queue,unsigned slot,const struct gpu_queue_job *job,uint32_t *serial)
+{(void)queue;(void)slot;(void)job;(void)serial;assert(!"queued path used fast submission");return -1;}
+int pvr_compute_fast_collect(struct pvr_compute_queue *queue,unsigned slot,uint32_t serial,uint32_t sequence,
+    struct gpu_queue_record *out)
+{(void)queue;(void)slot;(void)serial;(void)sequence;(void)out;assert(!"queued path collected a fast fence");return -1;}
 QueueHandle_t xQueueCreateStatic(unsigned length,unsigned bytes,uint8_t *storage,StaticQueue_t *state)
 {
     assert(length==1 && bytes==sizeof(struct gpu_queue_record));
