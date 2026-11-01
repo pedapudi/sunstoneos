@@ -431,7 +431,10 @@ enum a733_dma_control_status a733_dma_poll(struct a733_dma_controller *c, unsign
     } else if (pending & 8) s->outcome = A733_DMA_FAILED;
 
     if (idle(c, channel)) {
-        if(s->cyclic && !cyclic_progress(c,channel))return recovery(s);
+        /* PKG_NUM describes one transmission (manual 13.1.7.16).
+         * The board clears it after disable. Keep the last ACTIVE observation
+         * as a lower bound; vendor terminate_all also never samples it here.
+         * ENABLE=0 and BUSY=0 establish channel drain, not package arithmetic. */
         /* A late event is handled by the next bounded poll. */
         barrier(c);
         if (!read_channel(c, channel, PENDING)) {

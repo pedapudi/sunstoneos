@@ -234,14 +234,18 @@ def stream_origin_case(elf,steps):
     routed_fault=list(m.smc)
     # The manual does not promise preservation of PKG_NUM after disable.
     # Model a reset only after the channel is idle, with earlier progress24.
-    # Present code must expose that exact rejected transition, not FAULT4.
+    # Drain must use the completion bits without reading the ended counter.
     m.write(D+0x38,0,4);m.write(ch+cl['status'],2,4);m.write(ch+cl['cyclic'],2,4)
     m.write(ch+cl['package_last'],24,4);m.write(ch+cl['packages'],24)
     m.write(ch+cl['timeout'],24000000);m.write(ch+cl['observed'],m.now)
-    m.call('a733_dma_poll',controller,0,count=10000)
-    assert m.smc[:3]==[0x735,0xd4,0] and m.smc[4]==24,m.smc
-    assert m.address('a733_dma_poll')<m.smc[3]<m.address('a733_dma_event_wait'),m.smc
-    steps.case(name,{'passed':True,'routing_smc':routed_fault,'counter_reset_smc':m.smc});return name
+    m.write(ch+cl['outcome'],4,4);m.write(ch+cl['transfer'],m.address('retained'))
+    counter_reads=[]
+    m.uc.hook_add(UC_HOOK_MEM_READ,lambda *args:counter_reads.append(True),begin=D+0x130,end=D+0x133)
+    assert m.call('a733_dma_poll',controller,0,count=10000)==4
+    assert not counter_reads and m.read(ch+cl['packages'])==24
+    assert not m.read(ch+cl['transfer']) and m.read(ch+cl['status'],4)==4
+    steps.case(name,{'passed':True,'routing_smc':routed_fault,'idle_counter_reads':0,
+                     'canceled_packages_lower_bound':24});return name
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--build',type=Path,required=True);p.add_argument('--out',type=Path,required=True)
