@@ -237,6 +237,20 @@ processor operating points. Its expected outcome is `watchdog-reset`, with
 image run. It tests recovery without repeating a failed workload. Stop after
 any unexpected transport failure or no-return and preserve the result path.
 
+NPU image preparation requires the domain already ON. Under the port lock,
+after reset, DDR preparation and the pre-run rail helper, the runner reads the
+PCK clock gate at `0x070101ac`. A closed gate refuses PPU access. It then
+requires the existing NPU AHB and MBUS gates at `0x020025c0` bit 6 and
+`0x020025e0` bit 18 before reading PCK4 policy and status at `0x07064000`
+and `0x07064008`. Both low nibbles must be 8. This admission writes no gate,
+clock or power register and accesses no NPU engine register. CPU-only images
+skip these reads. The session journal retains the fresh raw observations.
+
+Offline `board.py check` requires captured values for all five registers;
+missing, OFF or uncertain values refuse preparation. Modeled values in host
+checks are specimens and establish no physical admission. A historical ON
+observation cannot replace the live runner check.
+
 Finite NPU diagnostics use `--kind npu`. Supply a `--template` directory with
 `session.bin`, the reviewed 456-byte native NPU session template. The matching
 `manifest.json` may be in that directory or beside the ELF. Submission copies

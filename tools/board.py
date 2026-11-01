@@ -475,10 +475,40 @@ class Live:
         require(len(values) == len(words), 'Live state word count differs.')
         return {'identity': self.identity, 'port': self.args.port, 'words': {hex(a):v for a,v in zip(words,values)}}
 
+    def npu_on_state(self):
+        # Match power_domains level()/coherent(): gated PPU reads only, no
+        # engine access and no request that could power an OFF domain ON.
+        proof = {'source': 'fresh read-only FEL under the port lock', 'status': 'refused',
+                 'raw': [], 'words': {}}
+        self.record['npu_on_admission'] = proof
+        def read_words(addresses):
+            raw = self.tx(*[item for address in addresses for item in ('readl', hex(address))])
+            proof['raw'].append({'addresses': [hex(a) for a in addresses], 'stdout': raw})
+            self.journal()
+            values = [int(value, 16) for value in raw.split()]
+            require(len(values) == len(addresses), 'Incomplete NPU entry state readback.')
+            for address, value in zip(addresses, values):
+                require(0 <= value <= 0xffffffff, 'Invalid NPU entry state readback.')
+                proof['words'][hex(address)] = value
+            self.journal()
+        read_words([0x070101ac])
+        require(proof['words']['0x70101ac'] & 1, 'PCK clock gate is closed; PPU access refused.')
+        read_words([0x020025c0, 0x020025e0])
+        require(all(proof['words'][hex(address)] & mask == mask
+                    for address, mask in images.NPU_ENTRY_GATES.items()),
+                'NPU fabric gate is closed; PPU access refused.')
+        read_words(images.NPU_PCK4)
+        images.validate_npu_on(proof['words'])
+        proof['status'] = 'ON'
+        self.journal()
+        return proof['words']
+
     def prepare(self, info):
         if info.get('dma'):
             require(self.dma_binding is not None, 'DMA runner has no original-instance admission.')
         live = {} if self.args.kind=='probe' else self.live_state(info.get('finite_npu',False))
+        if images.npu_on_required(info):
+            live['words'].update(self.npu_on_state())
         return images.prepare(self.args, info, live, self.evidence/'bundle', dma_binding=self.dma_binding)
 
     def launch(self, plan):

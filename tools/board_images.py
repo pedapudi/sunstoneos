@@ -17,6 +17,8 @@ CONTROL = CACHE/'evidence/wdt-breadcrumbs-1031/control/offline-proof/prepared'
 GPU_TREE = Path.home()/'git/sunstoneos-worktrees/gpu-bisect-1031-crumbs'
 GPU_TEMPLATE = CACHE/'evidence/sol-gpu-completion-1031/prepared'
 CLANG, LLD = Path('/usr/bin/clang-21'), CACHE/'host/usr/bin/ld.lld-21'
+NPU_ENTRY_GATES = {0x070101ac: 1, 0x020025c0: 1 << 6, 0x020025e0: 1 << 18}
+NPU_PCK4 = (0x07064000, 0x07064008)
 DMA_EXTENT, DMA_MAGIC = 7, 0x41533733444d4131
 DMA_FACTS = ('dma_bus_enabled', 'dma_reset_deasserted', 'dma_mbus_enabled',
              'dma_exclusive_writers', 'cpu_quiet', 'mcu_quiet', 'producers_quiet',
@@ -43,6 +45,25 @@ def load(name, path):
 def require(ok, message):
     if not ok:
         raise ValueError(message)
+
+
+def npu_on_required(info):
+    return bool(info.get('finite_npu') or 'os_npu_client_model' in info.get('symbols', {}))
+
+
+def validate_npu_on(words):
+    """Captured gates and coherent policy/status must establish an already ON NPU."""
+    for address, mask in NPU_ENTRY_GATES.items():
+        value = words.get(hex(address))
+        require(type(value) is int and 0 <= value <= 0xffffffff,
+                f'Missing captured NPU entry gate at {address:#x}.')
+        require(value & mask == mask, f'NPU entry gate is closed at {address:#x}; PPU access refused.')
+    for address in NPU_PCK4:
+        value = words.get(hex(address))
+        require(type(value) is int and 0 <= value <= 0xffffffff,
+                f'Missing captured NPU PCK4 state at {address:#x}.')
+    require(all(words[hex(address)] & 15 == 8 for address in NPU_PCK4),
+            'NPU PCK4 policy/status must both be ON (8); OFF or uncertain state is refused.')
 
 
 def sha(path):
@@ -283,6 +304,8 @@ def launcher(out, size, mode, seconds=60, tree=ROOT):
 
 
 def prepare(args, info, live, out, *, dma_binding=None):
+    if npu_on_required(info):
+        validate_npu_on(live.get('words', {}))
     if info.get('finite_npu'):
         tree = args.host_tree or ROOT
         finite = load('prepare_npu_irq', tree/'apps/npu-interrupt/host.py').finite
