@@ -156,6 +156,13 @@ int npu_runtime_bind(struct npu_runtime *, struct a733_npu_startup *, const Task
  * One OPEN/CLOSE owns this resident set. This keeps network interpretation
  * in the loader while the queue accepts generic prepared command handles. */
 int npu_runtime_preload(struct npu_runtime *, unsigned slot, unsigned model);
+/* Slow, pre-bind device-only edge between two preloaded slots. Tensor shape,
+ * representation and allocation size must agree. Reassembles the consumer's
+ * resident addresses once; no copy or cache operation is needed between jobs.
+ * Submit the consumer after the producer's fence, or prepare one stream that
+ * preserves their flush/stall boundary. CPU access waits for the final user. */
+int npu_runtime_link_tensor(struct npu_runtime *, unsigned producer, unsigned output,
+                            unsigned consumer, unsigned input);
 int npu_runtime_bind_resident(struct npu_runtime *, struct a733_npu_startup *, TaskHandle_t,
                               UBaseType_t priority, UBaseType_t affinity);
 /* Required, after bind and before scheduling: interrupt completion through

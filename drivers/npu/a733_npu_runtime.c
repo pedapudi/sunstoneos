@@ -785,6 +785,46 @@ int npu_runtime_preload(struct npu_runtime *rt, unsigned slot, unsigned model)
     return maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->read.cpu, s->read.bytes) &&
         maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->write.cpu, s->write.bytes);
 }
+int npu_runtime_link_tensor(struct npu_runtime *rt, unsigned producer, unsigned output,
+                            unsigned consumer, unsigned input)
+{
+    if (!good(rt) || rt->bound || producer >= rt->slots || consumer >= rt->slots ||
+        producer == consumer || xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
+    struct npu_runtime_slot *p = &rt->slot[producer], *s = &rt->slot[consumer];
+    if (state(p) != NPU_RUNTIME_READY || state(s) != NPU_RUNTIME_READY ||
+        output >= p->layout.outputs || input >= s->layout.inputs) return 0;
+    const unsigned pi = p->layout.inputs + output;
+    const struct nbg_tensor *from = &p->tensors[pi].tensor, *to = &s->tensors[input].tensor;
+    /* Names are local metadata. The complete tensor representation preceding
+     * them, including dimensions and quantization, must agree at this edge. */
+    if (memcmp(from, to, offsetof(struct nbg_tensor, name)) ||
+        p->targets[NBG_ALLOC_INPUT + pi].bytes != s->targets[NBG_ALLOC_INPUT + input].bytes) return 0;
+    struct nbg_assembly_buffer targets_copy[NBG_LAYOUT_MAX_BUFFERS];
+    memcpy(targets_copy, s->targets, sizeof(targets_copy));
+    targets_copy[NBG_ALLOC_INPUT + input] = p->targets[NBG_ALLOC_INPUT + pi];
+    const struct npu_runtime_model *model = &rt->catalogue[s->model];
+    struct nbg_model view;
+    struct nbg_assembly_layout layout;
+    struct nbg_assembly_cursor cursor;
+    /* begin verifies every target placement before any descriptor is changed.
+     * Both slots' backing allocations already belong to this runtime's MMU. */
+    if (nbg_model_open(model->data, model->bytes, &view) != NBG_DECODE_OK ||
+        !nbg_assembly_begin(&view, targets_copy, NBG_ALLOC_INPUT + s->layout.inputs + s->layout.outputs,
+                            &layout, &cursor) || !same_plan(&layout, &s->layout)) return 0;
+    int result;
+    do {
+        result = nbg_assembly_next(&view, targets_copy, &layout, &cursor, NPU_RUNTIME_ASSEMBLY_STEP);
+    } while (!result);
+    if (result < 0) return fault(rt); /* Partial assembly can never be submitted. */
+    memcpy(s->targets, targets_copy, sizeof(targets_copy));
+    s->tensors[input].data = targets_copy[NBG_ALLOC_INPUT + input].cpu;
+    s->layout = layout; s->stream_bytes = cursor.offset; s->end_mark = cursor.offset;
+    fill_end(s->command.cpu + cursor.offset, s->command.bytes - cursor.offset);
+    s->span = 0; s->offset = 0; s->crc = UINT32_MAX;
+    while (!npu_runtime_reference_step(rt, s)) { }
+    return maintain(rt, AARCH64_CACHE_CLEAN, s->constant.cpu, s->constant.bytes) &&
+        maintain(rt, AARCH64_CACHE_CLEAN, s->command.cpu, s->command.bytes);
+}
 int npu_runtime_bind_irq(struct npu_runtime *rt, const struct npu_service_irq_ops *ops, void *cookie,
                          UBaseType_t route, unsigned idle_hint)
 {
