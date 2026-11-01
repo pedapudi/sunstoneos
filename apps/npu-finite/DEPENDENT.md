@@ -16,7 +16,7 @@ interrupt delivery resumes. The second pass joins the two command streams while
 preserving their flush and stall operations, and emits one final completion
 event. Both passes prepare buffers once, perform no CPU tensor copy between
 stages and acquire outputs after the final command. The joined stream also
-requires no CPU wake between stages. Both stage outputs are checked after the
+emits no device completion notification between stages. Both stage outputs are checked after the
 final completion; no intermediate CPU observation is claimed.
 
 The immutable `npu_dependent_return_profile` identifies the edge from slot 0,

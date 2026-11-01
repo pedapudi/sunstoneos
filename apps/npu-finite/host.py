@@ -558,7 +558,8 @@ def latency_report(text,status,deadline,g):
    chain.append({'mode':'single_device_stream' if index else 'fifo_two_pending','boundary':boundary,
     'start_ticks':dbegin,'end_ticks':dend,'duration_ticks':dend-dbegin,'submitted_before_wait':before_wait,
     'queue_records':issued,'device_commands':2,'interrupt_completions':done,'outputs_checked_after_final_completion':checks,
-    'interstage_cpu_copy_bytes':0,'interstage_cpu_wakes':0 if index else None,
+    'interstage_cpu_copy_bytes':0,'intermediate_device_completion_events':0 if index else 1,
+    'completion_scope':'one final hardware event; no interstage device completion notification' if index else 'one hardware event per command; the final fence may wake at the first event',
     'functional_success':ok,'output_digest':match[f'dependent_digest_{index}'],'stream_bytes':stream,
     'irq_driver_elapsed_ticks':irq,'first_mismatch':None if not fault else {'stage':stage,'offset':at,'byte':byte}})
    previous=dend;matched=matched and ok

@@ -173,7 +173,7 @@ def main():
                     chain=parsed['dependent_chain']
                     assert len(chain)==2 and [p['queue_records'] for p in chain]==[2,1]
                     assert [p['submitted_before_wait'] for p in chain]==[2,1]
-                    assert chain[1]['interstage_cpu_wakes']==0
+                    assert chain[1]['intermediate_device_completion_events']==0
                     assert all(p['interstage_cpu_copy_bytes']==0 for p in chain)
                     assert all(p['functional_success']==(case!=7) for p in chain)
                 # Run the linked native receipt writer before checking the
