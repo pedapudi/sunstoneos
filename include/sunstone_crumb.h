@@ -92,6 +92,12 @@
  * and its expected value. REGISTER and STARTUP remain clear. */
 #define SUNSTONE_CRUMB_NPU_MEASUREMENT 0x10000000u
 #define SUNSTONE_CRUMB_NPU_MEASUREMENT_HIGH_WORD 0x08000000u
+/* OS request failures use this flag only when REGISTER, STARTUP and
+ * MEASUREMENT are clear. Aux bits 10:8 hold the service operation; bits 7:0
+ * retain the expected ticket's low byte. FAR holds the failed predicate's
+ * observed low 32 bits. The retained OS snapshot keeps full identities and
+ * operands; the RTC record alone cannot reconstruct a full 64-bit ticket. */
+#define SUNSTONE_CRUMB_NPU_REQUEST 0x08000000u
 #define SUNSTONE_CRUMB_FAIL_RETURN 0x80000000u /* site flag: caller is a return address */
 #define SUNSTONE_CRUMB_FAIL_SITE(group) (SUNSTONE_CRUMB_FAIL_##group << 12 | ((uint32_t)__LINE__ & 0xfffu))
 /* The address of this statement, for the caller word of a board failure.

@@ -167,6 +167,11 @@ def board_failure(words, defines, elf):
                       job_index=None if job==255 else job,
                       observed_word=hex(value),
                       observed_word_index=int(bool(site & defines['NPU_MEASUREMENT_HIGH_WORD'])))
+    elif record['group'] == 'npu' and site & defines.get('NPU_REQUEST', 0):
+        operations=('STATUS','OPEN','SUBMIT','CANCEL','REAP','CLOSE','WAIT','LOAD')
+        record.update(request_operation=operations[site >> 24 & 7],
+                      expected_ticket_low8=site >> 16 & 255,
+                      observed_word=hex(value),ticket_bits=8)
     if record['group'] == 'cpu_return' and record['site'] == BOUNDED:
         record['deadline_seconds'] = record['aux']
         record['refusal'] = [text for bit, text in LIVE_REFUSAL if value >> bit & 1]

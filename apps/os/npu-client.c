@@ -35,6 +35,7 @@ int os_npu_complete(void)
     return atomic_load_explicit(&published.finished,memory_order_acquire)&&
         published.stopped&&!published.retained&&os_npu_stopped();
 }
+static uint32_t sdk_jobs,sdk_output_bytes;
 /* The existing privileged slot owner services the application's mailbox. */
 static int sdk_run(unsigned model,const void *input,size_t input_bytes,
                    void *output,size_t output_bytes,uint64_t timeout)
@@ -56,11 +57,14 @@ static int sdk_run(unsigned model,const void *input,size_t input_bytes,
     for(unsigned i=0;os_npu_tensor(NBG_INPUT,i,&t);++i) {
         memcpy(t.data,(const uint8_t *)input+offset,t.bytes);offset+=t.bytes;
     }
+    if(offset!=input_bytes)return -1;
     r=os_npu_submit(timeout);if(r!=1)return r;
     offset=0;
     for(unsigned i=0;os_npu_tensor(NBG_OUTPUT,i,&t);++i) {
         memcpy((uint8_t *)output+offset,t.data,t.bytes);offset+=t.bytes;
     }
+    if(offset!=output_bytes)return -1;
+    ++sdk_jobs;sdk_output_bytes=(uint32_t)output_bytes;
     return 1;
 }
 static unsigned sdk_closed;
@@ -147,7 +151,10 @@ wait_stop:
         (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));
     }
 done:
-    if(ss_application.manifest&&!sdk_closed)ss_npu_service_fail();
+    if(ss_application.manifest) {
+        r->jobs=sdk_jobs;r->output_bytes=sdk_output_bytes;r->pattern=0;
+        if(!sdk_closed)ss_npu_service_fail();
+    }
     /* One publication: the copy completes before finished becomes visible. */
     r->stopped=os_npu_stopped();
     memcpy((uint8_t *)&published+16,(const uint8_t *)r+16,OS_NPU_REPORT_BYTES-16);

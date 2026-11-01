@@ -59,7 +59,11 @@ void os_npu_thermal(int allow,int stop,uint64_t until,uint64_t now);
  * that, operation 6 returns the header and session identities with
  * finished=0 and every other field zero. A completed job counts in jobs;
  * a job whose outputs differ from the linked reference also counts in
- * mismatches. retained=1 is a runtime, transport or hardware failure, or the
+ * mismatches. For an SDK application, jobs counts successful output copies
+ * and output_bytes is the last copy's extent. The application checks numerical
+ * results; mismatches, pattern_bytes, pattern and last_digest remain zero.
+ * Model always identifies the session's diagnostic selection, rather than
+ * generic SDK request history. retained=1 is a runtime, transport or hardware failure, or the
  * end of the lifetime, that kept every NPU resource; the board has failed and
  * USB0 sends no further frame, so that report is readable only from RAM.
  * refused=1 means a thermal stop, including one for stale thermal data,
@@ -76,6 +80,19 @@ struct os_npu_report {
     uint8_t last_digest[32]; /* SHA-256 of the last completed job's outputs */
 };
 _Static_assert(sizeof(struct os_npu_report)==OS_NPU_REPORT_BYTES,"OS NPU report geometry");
+/* First local NPU failure, retained without further device operations. Ready
+ * is 0 empty, 1 being copied, 2 published. The RTC first-failure latch remains
+ * authoritative when an earlier device/provider failure already exists. */
+struct os_npu_failure {
+    atomic_uint ready;
+    uint32_t site,operation,model,reply_valid;
+    uint64_t ticket,expected,observed;
+    uintptr_t caller;
+    struct npu_service_reply reply;
+    unsigned slot_state,runtime_failed,irq_pending,irq_stopped,watch_valid;
+    uint64_t now,end,gate;
+};
+extern struct os_npu_failure os_npu_first_failure;
 /* USB0 owner: copies the published report, or the pending header. */
 void os_npu_report_copy(uint8_t out[OS_NPU_REPORT_BYTES]);
 #ifdef SUNSTONE_A733_OS_PERF
