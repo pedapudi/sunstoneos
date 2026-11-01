@@ -28,6 +28,7 @@ static int store(uintptr_t a,uint32_t v)
  if(!owner()||!mapped(a)||(a&3))return 0;
  a733_mmio_write32_dsb_sy_after(a,v);return live();
 }
+#include "irq.h"
 static int enter(void *v,uint64_t d)
 {return v==&isp0&&d==deadline()&&owner()?a733_platform_lock_enter(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK,d):-1;}
 static void leave(void *v)
@@ -172,10 +173,15 @@ static int step(void)
   if(a733_camera_dma_init(&isp0.dma,&ops,&isp0,&c)!=1||a733_camera_dma_open(&isp0.dma,deadline())!=1)return -1;
   isp0.stage=3;return 0;}
  if(isp0.stage==3){r=a733_camera_dma_poll(&isp0.dma);if(r!=1)return r;
+  r=isp0_irq_arm();if(r!=1)return r;
   if(a733_camera_dma_capture(&isp0.dma,deadline())!=1)return -1;isp0.stage=4;return 0;}
  if(isp0.stage==4){
   if(isp0.dma.state==A733_CAM_DMA_STOP&&!isp0.dma.retained_readout&&a733_camera_dma_readout(&isp0.dma,deadline())!=1)return -1;
-  r=a733_camera_dma_poll(&isp0.dma);if(r!=1)return r;
+  enum a733_camera_dma_state previous=isp0.dma.state;
+  r=a733_camera_dma_poll(&isp0.dma);
+  isp0.waiting=r==0&&previous==isp0.dma.state&&
+    (previous==A733_CAM_DMA_WAIT||previous==A733_CAM_DMA_STOP);
+  if(r!=1)return r;
   if(isp0.dma.state!=A733_CAM_DMA_READABLE||isp0.dma.owner!=A733_CAMERA_DEVICE||!stable()||
      a733_iommu_scan(&isp0.iommu,deadline())!=1)return -1;isp0.stage=5;return 0;}
  if(isp0.stage==5){r=a733_iommu_poll(&isp0.iommu);if(r!=1)return r;
@@ -200,6 +206,7 @@ static int step(void)
  if(isp0.stage==9){r=a733_isp0_rearm(&isp0.engine);if(r!=1)return r;
   if(a733_camera_dma_rearm(&isp0.dma,deadline())!=1)return -1;isp0.stage=10;return 0;}
  if(isp0.stage==10){r=a733_camera_dma_poll(&isp0.dma);if(r!=1)return r;
+  r=isp0_irq_arm();if(r!=1)return r;
   if(isp0.dma.state!=A733_CAM_DMA_ARMED||!isp0_guards()||
      a733_camera_dma_capture(&isp0.dma,deadline())!=1)return -1;
   isp0.complete=isp0.guards_ok=0;isp0.copied=0;isp0.stage=4;return 0;}
@@ -208,7 +215,8 @@ static int step(void)
 void isp0_task(void *unused)
 {
  (void)unused;for(;;){
-  if(!live()){atomic_store_explicit(&isp0.result,2,memory_order_release);board_fail(NULL);}
+  isp0.waiting=0;
+  if(!live()||!isp0_irq_healthy()){atomic_store_explicit(&isp0.result,2,memory_order_release);board_fail(NULL);}
   else if(atomic_load_explicit(&isp0.result,memory_order_acquire)==3){
    if(isp0.stage!=7||!isp0.complete||isp0.sequence==UINT32_MAX||!stable()||
       a733_iommu_scan(&isp0.iommu,deadline())!=1){
@@ -221,6 +229,6 @@ void isp0_task(void *unused)
     else{atomic_store_explicit(&isp0.result,1,memory_order_release);
      if(!live()){atomic_store_explicit(&isp0.result,2,memory_order_release);board_fail(NULL);}}}
   }
-  vTaskDelay(1);
+  isp0_wait();
  }
 }

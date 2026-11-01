@@ -42,12 +42,13 @@ class Transport(native.Machine):
 def main():
  p=argparse.ArgumentParser(description=__doc__)
  for n in ('image','session','contract','input','checkpoint','output'):p.add_argument('--'+n,type=Path,required=True)
+ p.add_argument('--write-revoked-only',action='store_true',help='Resume the first-write revocation case')
  a=p.parse_args();a.output.mkdir(exist_ok=False);im=native.helper.Image(a.image);state=pickle.loads(gzip.decompress(a.checkpoint.read_bytes()));results={}
  def fresh(speed=1):
   m=Transport(im,a.session.read_bytes(),a.contract.read_bytes(),a.input.read_bytes());m.image_path=a.image;m.output=a.output;m.restore(state);m.symbols(a.image);m.speed=speed
   assert m.get(m.base+m.f['result'],4)==1 and m.get(m.base+m.f['copied'])==614400
   return m
- for label,speed in [('full',1),('high',3)]:
+ for label,speed in ([] if a.write_revoked_only else [('full',1),('high',3)]):
   m=fresh(speed);payload=bytes(m.u.mem_read(m.get(m.base+m.f['payload']),614400))
   # Changing device output after publication must not change the owned copy.
   m.u.mem_write(m.memory(2),bytes(307200));m.u.mem_write(m.memory(3),bytes(307200));m.incoming.extend(b'\0');m.exchange();m.exchange();m.drain()
@@ -66,11 +67,13 @@ def main():
  assert m.value('terminal_zlp')==1 and m.value('delivered')==0
  m.incoming.extend(b'\1');m.exchange();assert m.value('acked')==0 and m.incoming==b'\1'
  m.call('tud_vendor_tx_cb',0,0);assert m.value('delivered')==1;results['terminal-gate']=dict(passed=True)
- for label in ('result-revoked','write-revoked'):
-  m=fresh();m.incoming.extend(b'\0');m.exchange()
+ for label in (('write-revoked',) if a.write_revoked_only else ('result-revoked','write-revoked')):
+  m=fresh();m.incoming.extend(b'\0')
+  # One service burst can serialize the query and refill the FIFO. Arm the
+  # failure before that burst so the first accepted write is the injection.
   if label=='write-revoked':m.revoke_write=True;m.exchange()
   else:
-   m.exchange();m.put(m.base+m.f['result'],2);n=min(len(m.fifo),512);del m.fifo[:n];m.call('tud_vendor_tx_cb',0,n)
+   m.exchange();m.exchange();m.put(m.base+m.f['result'],2);n=min(len(m.fifo),512);del m.fifo[:n];m.call('tud_vendor_tx_cb',0,n)
   assert m.failed and m.fail_calls==1 and m.value('delivered')==0 and m.value('acked')==0
   if label=='write-revoked':assert m.write_calls==1 and len(m.fifo)==512
   assert all(row['state']==2 for row in m.rows()['uncached_pool']);m.checkpoint(a.output/(label+'.pkl.gz'));results[label]=dict(passed=True,resources_retained=True)

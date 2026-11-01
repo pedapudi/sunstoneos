@@ -25,7 +25,7 @@ struct isp0_application {
  uint64_t last_now;size_t bytes,copied;
  /* result: 0 producer owns copy, 1 USB owns immutable copy, 2 fault,
   * 3 USB has retired the consumer and requested the next capture. */
- unsigned stage,complete,guards_ok,sequence;atomic_uint result;
+ unsigned stage,complete,guards_ok,sequence,waiting;atomic_uint result,interrupts[3];
  uint8_t digest[32],session_digest[32];
 };
 extern struct isp0_application isp0;
