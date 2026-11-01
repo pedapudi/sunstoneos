@@ -120,6 +120,13 @@ int a733_gpu_queue_create(struct a733_gpu_queue *s, const struct gpu_queue_conte
             !(a & SS_ACCESS_READ) || !(a & (SS_ACCESS_GPU_READ | SS_ACCESS_GPU_WRITE)) ||
             ((a & SS_ACCESS_WRITE) && (a & SS_ACCESS_GPU_WRITE)) ||
             (a & ~(SS_ACCESS_READ | SS_ACCESS_WRITE | SS_ACCESS_GPU_READ | SS_ACCESS_GPU_WRITE))) return 0;
+        /* GPU pages and the CPU read-only view cover the rounded lease.
+         * An unleased manifest region still owns every byte it declares. */
+        for (unsigned j = 0; j < s->region_count; ++j) {
+            const struct ss_region *other = &s->regions[j];
+            if (j != r->region && !a733_extents_disjoint_checked(region->address, bytes,
+                    other->address, other->bytes)) return 0;
+        }
         for (unsigned j = 0; j < i; ++j)
             if (!a733_extents_disjoint_checked(region->address, bytes, q->lease[j].address, q->lease[j].bytes)) return 0;
         if (!a733_extents_disjoint_checked(region->address,bytes,UINT64_C(0x41000000),

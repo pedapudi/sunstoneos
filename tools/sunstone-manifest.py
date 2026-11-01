@@ -154,6 +154,8 @@ def load(path):
         if address is not None:
             address = integer(address, where + ' address')
             require(address % PAGE == 0, where + ': a pinned address is 4 KiB aligned')
+            if access & (ACCESS['gpu-read'] | ACCESS['gpu-write']):
+                require(address % BLOCK == 0, where + ': a pinned GPU address is 2 MiB aligned')
         regions.append({'address': address, 'bytes': size, 'kind': kind, 'access': access,
                         'sha256': digest or '0' * 64})
     m['regions'] = regions
@@ -162,7 +164,9 @@ def load(path):
 
 
 def span(r):
-    return r['address'], r['address'] + -(-r['bytes'] // PAGE) * PAGE
+    # GPU leases and CPU output permissions reserve complete 2 MiB blocks.
+    alignment = BLOCK if r['access'] & (ACCESS['gpu-read'] | ACCESS['gpu-write']) else PAGE
+    return r['address'], r['address'] + -(-r['bytes'] // alignment) * alignment
 
 
 def assign(m):

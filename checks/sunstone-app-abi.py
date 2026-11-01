@@ -201,9 +201,47 @@ refused(lambda v: v.update(devices={'required': ['radio']}), "unknown device 'ra
 refused(lambda v: v['cpu'].update(privilege='el1'), 'unknown cpu keys')
 refused(lambda v: v['regions'].append({'name': 'scratch', 'kind': 'work', 'access': ['read', 'write'], 'bytes': 100}),
         'capacity is a multiple of 4 KiB')
+# GPU leases cover whole 2 MiB CPU blocks, including bytes beyond an input's
+# exact content length. Pinned neighbours cannot occupy that rounded tail.
+for access,kind,size in ((['read','gpu-read'],'input',17),
+                         (['read','gpu-write'],'work',4096),
+                         (['read','write','gpu-read'],'work',4096)):
+    def gpu_tail(v,access=access,kind=kind,size=size):
+        v['regions'][0].update(address='0x44000000',access=access,kind=kind,bytes=size)
+        v['regions'].append({'name':'neighbour','kind':'work','access':['read','write'],
+                             'bytes':4096,'address':'0x44001000'})
+    refused(gpu_tail,'overlaps region')
+refused(lambda v:v['regions'][0].update(address='0x44001000',access=['read','gpu-read']),
+        'a pinned GPU address is 2 MiB aligned')
+refused(lambda v:v['regions'][0].update(address='0x46e00000',bytes=0x200001,access=['read','gpu-read']),
+        'outside the application window')
+
+def automatic_gpu_tail(v):
+    v['regions'][0].update(bytes=tool.WINDOW[1]-tool.WINDOW[0]-tool.PAGE,access=['read','gpu-read'])
+    v['regions'].append({'name':'neighbour','kind':'work','access':['read','write'],
+                         'bytes':tool.PAGE,'address':tool.WINDOW[1]-tool.PAGE})
+refused(automatic_gpu_tail,'outside the application window')
+
+# Automatic GPU placement skips a CPU region inside its candidate's rounded
+# tail; the exact boundary remains available to another pinned region.
+placement_paths=[]
+for name,gpu_address,neighbour_address,expected in (
+        ('automatic-gpu',None,0x44001000,0x44200000),
+        ('rounded-boundary',0x44000000,0x44200000,0x44000000)):
+    value=json.loads(HELLO.read_text())
+    value['regions'][0].update(bytes=17,access=['read','gpu-read'])
+    if gpu_address is not None:value['regions'][0]['address']=gpu_address
+    value['regions'].append({'name':'neighbour','kind':'work','access':['read','write'],
+                             'bytes':4096,'address':neighbour_address})
+    source=a.build/(name+'.json');source.write_text(json.dumps(value))
+    manifest=tool.assign(tool.load(source))
+    assert manifest['regions'][0]['address']==expected
+    assert tool.span(manifest['regions'][0])==(expected,expected+tool.BLOCK)
+    placement_paths.append(name)
 result = {'passed': True, 'manifest_bytes': tool.MANIFEST_BYTES,
           'hello_sha256': hashlib.sha256((generated['hello_compute'] / 'manifest.bin').read_bytes()).hexdigest(),
-          'generic_sha256': hashlib.sha256((generated['abi_fixture'] / 'manifest.bin').read_bytes()).hexdigest()}
+          'generic_sha256': hashlib.sha256((generated['abi_fixture'] / 'manifest.bin').read_bytes()).hexdigest(),
+          'gpu_rounded_span_cases':{'refusals':6,'accepted':placement_paths}}
 if a.mimus_dir:
     result['mimus_sha256'] = hashlib.sha256((generated['mimus'] / 'manifest.bin').read_bytes()).hexdigest()
 print(json.dumps(result))

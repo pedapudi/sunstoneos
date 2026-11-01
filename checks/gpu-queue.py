@@ -31,7 +31,11 @@ CASES = {1: 'grid replay, exact sums', 2: 'grid replay, pattern sums', 3: 'grid 
          21: 'two healthy retained reopens', 22: 'reopen proof refusals', 23: 'reopen cache failure',
          24: 'creation result publication failure', 25: 'performance transition and reopen', 26: 'accepted job drains before forced idle',
          27: 'forced idle acknowledgement absent', 28: 'cancel acknowledgement absent', 29: 'clean drain refusal', 30: 'firmware reset while performance HOLD drains a job', 31: 'final PARK',
-         32: 'thermal close and reopen before final PARK', 33: 'final PARK callback failure'}
+         32: 'thermal close and reopen before final PARK', 33: 'final PARK callback failure',
+         34: 'unleased neighbour in GPU output rounded tail',
+         35: 'unleased neighbour in model rounded tail',
+         36: 'unleased neighbour in CPU-written input rounded tail',
+         37: 'unleased neighbour at exact rounded boundary'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'gpu_queue_submit', 'gpu_queue_wait', 'kick',
@@ -220,9 +224,9 @@ def main():
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
     performance = any(25 <= c <= 30 for c in args.cases)
-    returning = any(c >= 31 for c in args.cases)
-    assert not returning or all(c >= 31 for c in args.cases) and not args.trace
-    assert not performance or all(c >= 25 for c in args.cases) and not args.trace
+    returning = any(31 <= c <= 33 for c in args.cases)
+    assert not returning or all(31 <= c <= 33 for c in args.cases) and not args.trace
+    assert not performance or all(25 <= c <= 30 for c in args.cases) and not args.trace
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     project, build, fixtures = out / 'project', out / 'build', out / 'fixtures'

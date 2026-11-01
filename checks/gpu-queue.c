@@ -50,7 +50,7 @@ static const struct gpu_queue_program program = {
     .abi=GPU_QUEUE_ABI_GRID,.code_bytes=sizeof(program_code),.temps=1,
     .coefficients=3,.local_size={32,1,1},.code=program_code
 };
-static const struct ss_region regions[] = {
+static struct ss_region regions[5] = {
     {.address=FIXTURE_OUTPUT,.bytes=FIXTURE_OUTPUT_BYTES,.kind=SS_REGION_OUTPUT,
      .access=SS_ACCESS_READ|SS_ACCESS_GPU_WRITE},
     {.address=FIXTURE_WEIGHTS,.bytes=8u<<20,.kind=SS_REGION_INPUT,
@@ -494,6 +494,13 @@ static void client(void *unused)
     struct gpu_queue_lease_info leases[GPU_QUEUE_LEASES];
     if(c==24)fail_reopen_post=1;
     int created=gpu_queue_context_create(&creation,gpu_queue_slow?60000:3000,&context,leases);
+    if(c>=34 && c<=36){
+        configASSERT(created==GPU_QUEUE_REFUSED && service.phase==PVR_GPU_SERVICE_COLD && !service.epoch &&
+            !enabled && !running && !kick_step_count && !session.table_lease.generation && !session.requirements.table_pages);
+        configASSERT(session.payload_lease.generation && session.firmware_lease.generation);
+        platform_puts("PASS GPU queue case ");platform_hex(c);
+        platform_puts("; rounded lease refuses an unleased manifest neighbour before GPU access\n");platform_exit(0);
+    }
     if(c==24) {
         configASSERT(created==GPU_QUEUE_FAULT && !fail_reopen_post && service.phase==PVR_GPU_SERVICE_FAILED && atomic_load(&compute->lost));
         configASSERT(session.payload_lease.generation && session.table_lease.generation && session.firmware_lease.generation);
@@ -524,6 +531,11 @@ static void client(void *unused)
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
     if(c>=31)return_client();
 #endif
+    if(c==37){
+        configASSERT(grid_job(0));
+        platform_puts("PASS GPU queue case ");platform_hex(c);
+        platform_puts("; unleased neighbour at the rounded boundary remains disjoint\n");platform_exit(0);
+    }
     if (c >= 21 && c <= 24) {
         configASSERT(grid_job(0));
         closed();
@@ -776,7 +788,7 @@ void fixture_unused(void)
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
-    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 33);
+    configASSERT(gpu_queue_case >= 1 && gpu_queue_case <= 37);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (gpu_queue_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();
@@ -792,7 +804,15 @@ void kernel_main(void)
     struct pvr_gpu_service_config *rc = a733_gpu_reserved_prepare(&firmware, 9, gpu_firmware,
         (size_t)(gpu_firmware_end - gpu_firmware), 400000000);
     configASSERT(rc);
-    compute = a733_gpu_queue_prepare(&session, &firmware, &service, 10, regions, 4);
+    unsigned region_count=4;
+    if(gpu_queue_case>=34){
+        unsigned target=gpu_queue_case==35?1:gpu_queue_case==36?3:0;
+        regions[target].bytes=target==1?17:4096;
+        regions[4]=(struct ss_region){.address=regions[target].address+(gpu_queue_case==37?FIXTURE_OUTPUT_BYTES:4096),
+            .bytes=4096,.kind=SS_REGION_WORK,.access=SS_ACCESS_READ|SS_ACCESS_WRITE};
+        region_count=5;
+    }
+    compute = a733_gpu_queue_prepare(&session, &firmware, &service, 10, regions, region_count);
     configASSERT(compute && compute->phase == PVR_COMPUTE_QUEUE_BOUND && firmware.config.compute_queue == compute);
     configASSERT(pvr_compute_queue_client_bind(compute));
     config = firmware.config;
