@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Count the render worker's per-frame CPU work on the texture path.
+"""Count the render service's per-frame CPU work on the texture path.
 
-Builds checks/gpu-texture-frame.c with the worker and texture sources of
+Builds checks/gpu-texture-frame.c with the render-service and texture sources of
 --source (default: this checkout) and runs it under Unicorn. Counts, per
-frame and while the worker runs: bytes stored by memory region, cache
+frame and while the render service runs: bytes stored by memory region, cache
 maintenance by operation, stage-1 translations, loads from the output
 allocation during completion checks, instructions, barriers and store-release
-instructions, worker polls, and the worker's tick waits between CPU-only steps
-under its burst rule. Client rings, clock, ownership and GPU results are stubs;
+instructions and render-service polls. Scheduler pacing is covered by the
+actual FreeRTOS worker checks in pvr-gpu-service.c and pvr-compute-service.c.
+Client rings, clock, ownership and GPU results are stubs;
 nothing touches a device. Runs 1080p profile 4 with 16 batches and
 read-back, 720p profile 2 with read-back, and 720p profile 2 presented.
 """
@@ -146,16 +147,13 @@ class Frame:
                 elif 16 < x0 < 32:
                     self.frame = x0 - 16; self.stage = 'render'
                     self.frames[self.frame] = dict(stores={}, cache={}, cache_calls=0, translations=0, output_loads=0,
-                        instructions=0, read_instructions=0, dsb=0, dmb=0, stlr=0, polls=0, requests=0, read_requests=0,
-                        tick_waits=0, gpu_waits=0)
+                        instructions=0, read_instructions=0, dsb=0, dmb=0, stlr=0, polls=0, requests=0, read_requests=0)
                     if self.layout is None:
                         fields = 'output output_allocation image geometry depth depth_bytes copy upload download total program_bytes payload_bytes'.split()
                         self.layout = dict(zip(fields, struct.unpack('<12I', uc.mem_read(self.symbols['frame_layout'], 48))))
                 elif 32 < x0 < 48: self.stage = 'output'
                 if x0 == 1: add(current(), 'read_requests' if self.stage == 'output' else 'requests', 1)
                 if x0 == 2: current()['polls'] += 1
-                if x0 == 3: current()['tick_waits'] += 1
-                if x0 == 4: current()['gpu_waits'] += 1
             elif name == 'gpu_model_render':
                 l = self.layout; frame = bytes(((x * 3 + x0) & 255) for x in range(4096))
                 total = ((scene['width'] + 1) & ~1) * scene['height'] * 4
