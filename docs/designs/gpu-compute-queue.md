@@ -5,7 +5,7 @@ Prototype headers:
 [`include/gpu_queue.h`](../../include/gpu_queue.h) (application interface),
 [`include/pvr_compute_queue.h`](../../include/pvr_compute_queue.h) (the
 worker's calls into the queue) and
-[`apps/mimus/gpu_linear_job.h`](../../apps/mimus/gpu_linear_job.h) (the
+[`apps/mimus/gpu_linear_job.h`](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/gpu_linear_job.h) (the
 context and job that mimus passes). They compile with
 `clang -std=c11 -Wall -Wextra -Wpedantic` for the host and for
 `aarch64-none-elf`; nothing calls them. Links to `app-abi.md` refer to the

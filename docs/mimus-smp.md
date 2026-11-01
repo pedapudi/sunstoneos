@@ -37,7 +37,7 @@ the same priority, with a statically allocated 64 KiB stack. Paced capture runs
 on core 1 at priority 4, so it can preempt inference. The application deadline
 task runs at priority 5 and can run on either core.
 
-The [parallel adapter](../apps/mimus/parallel_runtime.cc) installs the existing
+The [parallel adapter](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/parallel_runtime.cc) installs the existing
 mimus `ParallelFor` interface. In two-worker mode, for at least two items, it sends the upper half
 to the worker and computes the lower half on the recognition task. Smaller
 ranges execute locally. Worker indices remain 0 and 1, matching the engine's

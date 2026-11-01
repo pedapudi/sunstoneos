@@ -151,7 +151,7 @@ in shared code where it already exists, is cheaper than fixing each instance.
 **Files:** [docs/mimus.md](../mimus.md),
 [docs/bringup-sequence.md](../bringup-sequence.md),
 [drivers/power/a733_pmic.c](../../drivers/power/a733_pmic.c),
-[apps/mimus/recorded.cc](../../apps/mimus/recorded.cc).
+[apps/mimus/recorded.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/recorded.cc).
 
 **Current behavior.** No SunstoneOS stage changes the CPU supply voltage or
 reprograms a cluster PLL. The only CPU clock code is a read-only decode of the
@@ -276,7 +276,7 @@ the recorded parity CRCs, and the exactness section of
 **How to measure.** Extend the mimus Unicorn kernel check
 (`tools/aarch64_kernel_check.py`) with multi-row cases at the accumulator
 extremes (|x| = 32767, w = −128, k = 511, 512 and 1024) and compare bytes with the
-portable kernel. Run [checks/mimus-linear.cc](../../checks/mimus-linear.cc) and
+portable kernel. Run [checks/mimus-linear.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/mimus-linear.cc) and
 `checks/mimus-parity.py` in QEMU and require identical feature and
 log-probability CRCs. Physical timing follows on the board.
 
@@ -316,7 +316,7 @@ int32 kernel of `mimus-perf-2`, and 5–7 times over today's kernel. The estimat
 is unmeasured; memory bandwidth may bound it.
 
 **Prerequisites.** `mimus-perf-2` (the row-blocking structure), a per-file
-compiler flag override in [cmake/mimus-smp.cmake](../../cmake/mimus-smp.cmake),
+compiler flag override in [cmake/mimus-smp.cmake](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/cmake/mimus-smp.cmake),
 and a Unicorn build that executes dot-product instructions.
 
 **How to measure.** Unicorn or QEMU (`-cpu max`) comparison against the
@@ -330,9 +330,9 @@ parity on the bench and paced bundles.
 (medium), `build-system-1` (medium).
 **Files:** [cmake/smp-runtime.cmake](../../cmake/smp-runtime.cmake),
 [cmake/cxx-runtime.cmake](../../cmake/cxx-runtime.cmake),
-[cmake/mimus.cmake](../../cmake/mimus.cmake),
-[cmake/mimus-smp.cmake](../../cmake/mimus-smp.cmake),
-[cmake/a733-mimus-native.cmake](../../cmake/a733-mimus-native.cmake).
+[cmake/mimus.cmake](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/cmake/mimus.cmake),
+[cmake/mimus-smp.cmake](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/cmake/mimus-smp.cmake),
+[cmake/a733-mimus-native.cmake](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/cmake/a733-mimus-native.cmake).
 
 **Current behavior.** `sunstone_smp_compile` and `sunstone_cxx_compile` apply
 kernel flags to every target, including the recognition libraries `mimus_asr`
@@ -389,9 +389,9 @@ QEMU as a proxy until board timing is possible.
 
 **Findings:** `smp-3` (medium), `bringup-gaps-8` (medium), `x-concurrency-2`
 (medium).
-**Files:** [apps/mimus/parallel_runtime.cc](../../apps/mimus/parallel_runtime.cc),
-[apps/mimus/main.cc](../../apps/mimus/main.cc),
-[cmake/a733-mimus-board.cmake](../../cmake/a733-mimus-board.cmake),
+**Files:** [apps/mimus/parallel_runtime.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/parallel_runtime.cc),
+[apps/mimus/main.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/main.cc),
+[cmake/a733-mimus-board.cmake](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/cmake/a733-mimus-board.cmake),
 [platform/a733/cpu_entry.c](../../platform/a733/cpu_entry.c),
 [docs/mimus-smp.md](../mimus-smp.md).
 
@@ -448,7 +448,7 @@ with the host reference. Physical speed-up is measured on the board with the
 ### Install the asynchronous job interface
 
 **Finding:** `mimus-perf-7` (medium).
-**Files:** [apps/mimus/parallel_runtime.cc](../../apps/mimus/parallel_runtime.cc);
+**Files:** [apps/mimus/parallel_runtime.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/parallel_runtime.cc);
 mimus `parallel.cc`, `encoder.cc`, `kernels.cc`.
 
 **Current behavior.** `mimus_parallel_bind` calls `SetParallelFor` but never
@@ -509,8 +509,8 @@ NaN and infinity rows), then QEMU bench parity.
 ### Stop yielding on every matrix row
 
 **Finding:** `mimus-perf-9` (medium).
-**Files:** [apps/mimus/recorded.cc](../../apps/mimus/recorded.cc),
-[apps/mimus/main.cc](../../apps/mimus/main.cc),
+**Files:** [apps/mimus/recorded.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/recorded.cc),
+[apps/mimus/main.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/main.cc),
 [include/FreeRTOSConfig.h](../../include/FreeRTOSConfig.h); mimus
 `gemm_combine_portable.cc`, `gemm_portable.cc`, `parallel.h`.
 
@@ -539,8 +539,8 @@ from one helper instead of three copies.
 
 **Finding:** `mimus-perf-4` (medium).
 **Files:** mimus `model.cc`, `crc32.cc`, `pipeline/src/crc32.cc`;
-[apps/mimus/service.cc](../../apps/mimus/service.cc),
-[tools/usb-mimus.py](../../tools/usb-mimus.py).
+[apps/mimus/service.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/service.cc),
+[tools/usb-mimus.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/tools/usb-mimus.py).
 
 **Current behavior.** The span overload of `mimus::asr::Crc32` in `model.cc`
 runs eight shift-and-xor steps per byte. Clang partly vectorizes it, but it
@@ -571,11 +571,11 @@ for the instruction path. The QEMU bench parity record must not change.
 ### Load and verify models once per session
 
 **Findings:** `bluetooth-2` (medium), `audio-8` (low), `bringup-gaps-7` (low).
-**Files:** [apps/bluetooth/recognition.cc](../../apps/bluetooth/recognition.cc),
-[apps/i2s/recognition.cc](../../apps/i2s/recognition.cc),
-[apps/mimus-board/recognition.cc](../../apps/mimus-board/recognition.cc),
-[apps/mimus/recorded.cc](../../apps/mimus/recorded.cc),
-[apps/mimus/paced.cc](../../apps/mimus/paced.cc).
+**Files:** [apps/bluetooth/recognition.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/bluetooth/recognition.cc),
+[apps/i2s/recognition.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/i2s/recognition.cc),
+[apps/mimus-board/recognition.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus-board/recognition.cc),
+[apps/mimus/recorded.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/recorded.cc),
+[apps/mimus/paced.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/paced.cc).
 
 **Current behavior.**
 
@@ -1693,7 +1693,7 @@ renewal window.
 
 **Findings:** `security-misc-11` (low), `supervisor-apps-11` (low).
 **Files:** [drivers/storage/storage_digest.c](../../drivers/storage/storage_digest.c),
-[apps/mimus/native.c](../../apps/mimus/native.c),
+[apps/mimus/native.c](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/native.c),
 [platform/a733-smp/launch.c](../../platform/a733-smp/launch.c).
 
 **Current behavior.** `a733_smp_diagnostic_start` hashes the whole input bundle
@@ -1813,7 +1813,7 @@ unchanged write traces; an identical 65,536-byte modeled register image in
 
 **Finding:** `build-system-7` (medium).
 **Files:** [cmake/a733-board.cmake](../../cmake/a733-board.cmake),
-[cmake/a733-mimus-native.cmake](../../cmake/a733-mimus-native.cmake),
+[cmake/a733-mimus-native.cmake](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/cmake/a733-mimus-native.cmake),
 [cmake/a733-smp-cached.cmake](../../cmake/a733-smp-cached.cmake).
 
 **Current behavior.** Each image hashes its inputs during CMake configuration and

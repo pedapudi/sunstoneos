@@ -39,7 +39,7 @@ not establish a thermal-trip transition or equilibrium under sustained load.
 
 ## Reproduce the longer input variant
 
-The [fixed-input patch](../../apps/os/cpu-return/longer-recording-input.patch)
+The [fixed-input patch](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/os/cpu-return/longer-recording-input.patch)
 selects the existing 8.87-second recording without changing model declarations
 or the default build. Apply it in an isolated checkout of source-equivalent
 base `bd6b15d6ecbff00ed07c65bfb1cac5f9f8f50d5c`, then configure the existing CPU return profile with

@@ -36,14 +36,14 @@ See [eight-worker GPU ownership](designs/gpu-eight-workers.md),
 
 | Part | Source | Role |
 | --- | --- | --- |
-| Placement table | [placement.py](../apps/os/placement.py), generated `placement.h` | One row per model tensor: GPU channels and the largest job |
-| Dispatcher | [dispatch.c](../apps/os/dispatch.c), [dispatch.h](../apps/os/dispatch.h) | Session state, the per-call lookup, the dispatch record and the failure path |
-| Recognizer change | [recognition-dispatch.patch](../apps/os/recognition-dispatch.patch) | OPEN after the model hashes, failure path, recognition core, 12 MiB arena assertion |
-| GPU runtime | [gpu.c](../apps/os/gpu.c), [gpu_hook.cc](../apps/os/gpu_hook.cc) | Start, OPEN, jobs and INTID 95 ([gpu-mimus-service.md](gpu-mimus-service.md)); the engine's exact-sum hook |
+| Placement table | [placement.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/os/placement.py), generated `placement.h` | One row per model tensor: GPU channels and the largest job |
+| Dispatcher | [dispatch.c](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/os/dispatch.c), [dispatch.h](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/os/dispatch.h) | Session state, the per-call lookup, the dispatch record and the failure path |
+| Recognizer change | [recognition-dispatch.patch](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/os/recognition-dispatch.patch) | OPEN after the model hashes, failure path, recognition core, 12 MiB arena assertion |
+| GPU runtime | [gpu.c](../apps/os/gpu.c), [gpu_hook.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/os/gpu_hook.cc) | Start, OPEN, jobs and INTID 95 ([gpu-mimus-service.md](gpu-mimus-service.md)); the engine's exact-sum hook |
 | Mapping check | [application.patch](../apps/os/application.patch) | The 4 MiB above the arena, which holds the GPU output region, read-only at EL0 |
 | Start entry and interrupt | [start.c](../apps/os/start.c), [irq.c](../apps/os/irq.c) | `gpu-linear` and INTID 95 on the recognition core |
 | Build gate | [a733-os.cmake](../cmake/a733-os.cmake) | `SUNSTONE_A733_OS_GPU_LINEAR` and its prerequisites |
-| Host checks | [os-image-dispatch.py](../checks/os-image-dispatch.py), [os-image-dispatch.c](../checks/os-image-dispatch.c), [os-image-link.py](../checks/os-image-link.py) | Table, dispatcher, supervision, link layout |
+| Host checks | [os-image-dispatch.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/os-image-dispatch.py), [os-image-dispatch.c](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/os-image-dispatch.c), [os-image-link.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/os-image-link.py) | Table, dispatcher, supervision, link layout |
 
 The GPU kernel and its cache maintenance belong to the GPU kernel design
 ([gpu-mimus-compute.md](designs/gpu-mimus-compute.md)); the session in the GPU

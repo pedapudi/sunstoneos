@@ -3019,7 +3019,7 @@ to the stated scope:
   programmed-I/O implementation, inherited clock state, and remaining modes.
   The [native mimus session](mimus-usb.md) also passes asset loading, status polling
   during recognition, repeated results, and host-lease return with automatic access.
-  The [combined keyboard/recognition/storage application](../apps/mimus-board/README.md)
+  The [combined keyboard/recognition/storage application](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus-board/README.md)
   repeats workload-4 recorded recognition within the retained session. Every
   generation requires a fresh neutral→unmodified Enter trigger and a fresh
   generation-bound sector-zero copy while recognition is active. One privileged
@@ -3039,7 +3039,7 @@ to the stated scope:
   timing and performance remain unqualified. All memory remains retained; keyboard/hub/MSC
   and image-bound electrical/DDR/model-memory admission are still required.
   No desktop keyboard events are sent.
-  The [combined coordinator](../tools/check-a733-mimus-board-supervised.py)
+  The [combined coordinator](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/tools/check-a733-mimus-board-supervised.py)
   validates the outer prepared bundle and supplies exact frozen assets through
   the shared sealed-source/readback launcher. Workload 4 captures 1–32 generations
   (default one); workload 0 remains one-shot. All generations share one 59-second

@@ -25,7 +25,7 @@ integration only.
 | Service points | [pvr_gpu_service.c](../drivers/gpu/pvr_gpu_service.c) | `config.mimus`: configuration checks at init, objects, publication, mode admission, READY poll, events, wait bound, submit window, progress, end of a burst once the session has nothing to submit, failure, job wake |
 | Native construction | [gpu_mimus.c](../platform/a733/gpu_mimus.c), [a733_gpu_mimus.h](../include/a733_gpu_mimus.h) | Pool pages, GPU address space, context-switch programs, compute context |
 | Runtime | [gpu.c](../apps/os/gpu.c) | Start, OPEN, per-job begin and finish, INTID 95, tensor admission |
-| Engine hook | [gpu_hook.cc](../apps/os/gpu_hook.cc) | Splits a call into jobs, checks tags, hands sums to the engine |
+| Engine hook | [gpu_hook.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/os/gpu_hook.cc) | Splits a call into jobs, checks tags, hands sums to the engine |
 
 ## Address space and memory
 
@@ -48,7 +48,7 @@ uncached pages. Nothing is released; a failure retains every page.
 
 ## One job
 
-1. The hook ([gpu_hook.cc](../apps/os/gpu_hook.cc)) runs in the recognizer
+1. The hook ([gpu_hook.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/os/gpu_hook.cc)) runs in the recognizer
    task at EL0. It accepts a call only when the engine's tensor ordinal,
    weight address, weight stride, K and N all match the tensor admitted at
    start under that ordinal, and the codes lie in the arena span. It writes

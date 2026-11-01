@@ -468,7 +468,7 @@ reservation tables. The arena ends where the cold-boot monitor reservation
    displayport applications take their digest from the extended record and
    move in the same step.
 4. Add the recognition layout header and replace the literal copies, including
-   [apps/mimus/service.cc](../../apps/mimus/service.cc),
+   [apps/mimus/service.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/service.cc),
    [apps/bluetooth/application.c](../../apps/bluetooth/application.c) and
    the `prepare.py` scripts of mimus, i2s and bluetooth.
 

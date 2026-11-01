@@ -140,7 +140,7 @@ cmake --build "$cache/build/qemu-virt" --target a733-mimus-usb -j 16
 The default recording comes from the prepared input manifest. To run several
 recordings in one boot, repeat `--wav PATH --reference HOST_JSON` in matching
 order. The tool requires successful host references with matching input hashes.
-The [parity checker](../checks/mimus-parity.py) compares feature and log-probability
+The [parity checker](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/mimus-parity.py) compares feature and log-probability
 CRCs, frame counts, text, punctuation, capitalization, and formatted output.
 
 For a preserved DDR lifetime, supply the cold DDR record, a returning platform
