@@ -144,6 +144,64 @@ cached in `~/.cache/sunstoneos/sources/tf-a-st-ddrphy-v2.12.0`. It describes
 the DDR4/LPDDR4 member of the family, so its absence of a byte-lane `0x73`
 is supporting evidence only.
 
+## The survey run separated wide-memory words from registers the PHY owns
+
+- **Conditions.** Port 3-1, 2026-10-31, after a WDT0 reset; the 941-entry
+  set with the diagnostic helper of `dram-survey-1031/`. The fallback trained
+  fully. Evidence: `~/.cache/sunstoneos/evidence/dev-runs-1031/3-1-ddr-survey`.
+- **Hook-time PHY state.** `MicroContMuxSel` 1 (the helper then clears it),
+  `UcclkHclkEnables` 3, `MicroReset` 1 (the PHY microcontroller stalled),
+  `DctWriteProt` 1 and `UctShadowRegs` 3. The last two are the firmware
+  message mailbox handshake, which no restore entry addresses; the clocks
+  are on and the APB owns the CSRs.
+- **Result.** Of the 921 entries, 399 held their write and 397 already had
+  their value. The other 125 read their old value straight after the write.
+  83 of those 125 read the written value in the end-of-pass read and 42
+  never did:
+
+  | Group | Entries | Wrong at the end |
+  | --- | --- | --- |
+  | ACSM memory, `0x0a982000` block (CSR `0x41000`) | 80 | 1 |
+  | PHY data memory, `0x0a9b0000` block (CSR `0x58000`, message block) | 8 | 4 |
+  | Blocks `0x0a960000`, `0x0a962000` (CSR `0x30000`, `0x31000`), offsets `0x15e`–`0x17c` | 10 | 10 |
+  | Byte-lane offset `0x11e` | 8 | 8 |
+  | Byte-lane offsets `0x1ac`–`0x1ba` and `0x130` | 19 | 19 |
+
+- **Wide memories.** In the ACSM block every late entry sits in halfword 0
+  or 1 of an 8-byte word whose halfword 3 is also an entry; the 52 entries
+  at halfword 3 held at once and the lower halfwords read right at the end.
+  In the data memory the late entries sit in the lower halfword of a 4-byte
+  word whose upper halfword is an entry. The memories hold a halfword write
+  until the word's highest halfword is written, which stores the word, and
+  reads return the stored word until then. The five entries wrong at the
+  end are the only ones whose highest halfword is not in the set
+  (`0x0a9822b8`, `0x0a9b0030`, `0x0a9b0058`, `0x0a9b00dc`, `0x0a9b00e0`), so
+  their words were never stored. boot0's PIE and message-block loaders
+  (`0x59100`, `0x590c4`) write these memories one halfword at a time in
+  ascending order, which always completes each word. These entries differ
+  between initialization-only and trained lifetimes and are restorable.
+- **Registers the PHY owns.** The other 37 never took a write. Byte-lane
+  offset `0x11e` copies offset `0x4c` or `0x4e` in all twenty captures. The
+  lane-0 group `0x1aa`–`0x1be`, offset `0x130`, and offsets `0x15e`–`0x17c`
+  of the two `0x30000`-region blocks change between lifetimes of the same
+  kind, also after initialization only; `0x0a9201b6` and `0x0a9201b8` read
+  `0x0fb5` and `0x0196` here, a third pair of values in three runs. None of
+  them is a trained delay or VREF: their values exist without training and
+  the PHY replaces them. Every other byte-lane register of the set, which
+  holds the trained delays and VREF settings, held its write or already had
+  its value.
+- **Rule and expected result.** The v5 set leaves out every register in
+  these PHY-owned groups, 42 in all (the 37, and five of the same groups that
+  happened to hold their value already, including `0x0a940014`, whose values
+  vary between lifetimes as those of the `0x30000`-region offset `0x17c` do). The helper writes whole
+  ACSM and data-memory words and reads every entry back after the last
+  write. `checks/ddr-restore-survey-set.py` checks the rule against this
+  survey: every mismatch is either left out or completed by the whole-word
+  writes. The expected result of the v5 restore is no readback mismatch, a
+  return into boot0, the post-`init_DRAM` readback and the quick check;
+  whether boot0's later steps then leave working memory is what the run
+  tests.
+
 ## The restore set comes from the existing lifetimes
 
 Each board has two four-P-state, two P-state-0-only and one
@@ -223,29 +281,33 @@ by the single command recorded beside it in `restore-set-v4.command`
 ## Host evidence and SRAM bounds
 
 The frozen artifacts and check results are in
-`~/.cache/sunstoneos/evidence/dram-clock-point-1031/`, with the commands in
-`commands.txt` there. Its restore set, records and restore helper equal those
-of `dram-restore-1031b/`; its wrapper adds the return of CPU-L and the DSU to
-the boot ROM clock point
+`~/.cache/sunstoneos/evidence/dram-restore-v5-1031/`, with the commands in
+`commands.txt` there: the 899-entry set, both boards' records, the restore
+helper with whole-word writes, its survey build, and the plain wrapper with
+the return of CPU-L and the DSU to the boot ROM clock point
 ([design](../designs/dram-training-restore.md#the-wrapper-returns-cpu-l-and-the-dsu-to-the-rom-clock-point)).
-`tools/run-ddr.py` refuses the `dram-restore-1031b/` builds, which lack it.
+`tools/run-ddr.py` refuses the `dram-restore-1031b/` builds, which lack the
+clock return. Earlier builds stay frozen in `dram-clock-point-1031/` and
+`dram-survey-1031/`.
 The 1,036-register build that ran on port 3-1 stays frozen in
 `dram-restore-1031/`. No check opens a physical device.
 
 | Check | Result and scope |
 | --- | --- |
 | `checks/ddr-capture-analysis.py` (`capture-analysis`) | Synthetic captures: the classes, the kind diff, and the two lane-offset rules, a status offset in one lane dropping the same offset in another lane and an excluded offset dropping its register. |
-| `checks/training-record-capture.py` (`from-capture`) | Both recorded P-state-0 references produce 12,320-byte records; seven altered identity/data cases refuse. Both captures of each lifetime give the same record. |
-| `checks/ddr-wrapper.py` with the restore build (`native-3-3`, `native-3-1`) | Twenty instruction cases pass for each board's record, with byte-lane register `0x73` of every lane modelled as reading 0. They include the actual patched Thumb BLX, full-width parameters, wrong SID, header/payload CRC, malformed sections, arbitrary address/mask rejection, size, missing hook, three readback failures (one mismatch, three mismatches reported with their indices, and a mismatch after `init_DRAM`) and three quick-check failures: a stuck word, an aliased address line 20 and a stuck data bit in the last window. Every case also ends with CPU-L and the DSU returned to the ROM words in the driver's order and mailbox word 15 at 0. boot0 calls and MMIO effects are modeled. |
+| `checks/ddr-restore-survey-set.py` | The port 3-1 survey against the v5 set: every one of its 42 mismatches is left out (37) or completed by the whole-word writes (5). |
+| `checks/training-record-capture.py` (`from-capture`) | Both recorded P-state-0 references produce 11,640-byte records; seven altered identity/data cases refuse. Both captures of each lifetime give the same record. |
+| `checks/ddr-restore.py` with the restore build (`native-restore-3-3`, `native-restore-3-1`) and the survey build (`native-survey-3-3`, `native-survey-3-1`) | Twenty instruction cases pass for each board's record, 21 with the survey build, with byte-lane register `0x73` of every lane modelled as reading 0 and the ACSM and data memories modelled as storing a word on its highest halfword. Each touched wide word must be written once, whole and in ascending order, with the other halfwords' values kept; five helper mutations of the whole-word writes are caught. They include the actual patched Thumb BLX, full-width parameters, wrong SID, header/payload CRC, malformed sections, arbitrary address/mask rejection, size, missing hook, three readback failures (one mismatch, three mismatches reported with their indices, and a mismatch after `init_DRAM`) and three quick-check failures: a stuck word, an aliased address line 20 and a stuck data bit in the last window. Every case also ends with CPU-L and the DSU returned to the ROM words in the driver's order and mailbox word 15 at 0. boot0 calls and MMIO effects are modeled. |
 | `checks/ddr-restore.py --reproduce` on the 1,036-register build (`reproduce-v3-3-1`) | Restore words 7–13 equal the port 3-1 mailbox: error 7, 20 writes, one hook call, `0x0a9200e6`, expected 6, read 0. |
-| `checks/ddr-host-retention.py` (`host`) | Thirty-three cases pass, including a plain run that leaves CPU-L off the ROM point, one with the DSU's LFM on, a restore that ends off the ROM point and falls back, and builds without the clock return refused before any device access. Restore cases model WDT0, the SID and both USB instances: success, a SID mismatch, four returned failures (the readback failure with two reported mismatches), a hang, a disarm that does not take, a failed fallback, no new instance, an unexplained reset, an arming readback mismatch, an already enabled WDT0, upload mismatches and missing arguments. |
-| `checks/training-record-copies.py` | Thirty-two paired-record cases and 25 sector interruption points pass with the 12,320-byte records. |
+| `checks/ddr-host-retention.py` (`host`) | Thirty-six cases pass, three of them with the survey build, including a plain run that leaves CPU-L off the ROM point, one with the DSU's LFM on, a restore that ends off the ROM point and falls back, and builds without the clock return refused before any device access. Restore cases model WDT0, the SID and both USB instances: success, a SID mismatch, four returned failures (the readback failure with two reported mismatches), a hang, a disarm that does not take, a failed fallback, no new instance, an unexplained reset, an arming readback mismatch, an already enabled WDT0, upload mismatches and missing arguments. |
+| `checks/training-record-copies.py` | Thirty-two paired-record cases and 24 sector interruption points pass with the 11,640-byte records. |
 | `checks/ddr-wrapper.py` with the plain build (`wrapper-plain.txt`) | Passes, with the CPU PLL block modelled: the driver's order and waits for CPU-L and the DSU, CPU-B untouched, a counter wrap, a lock that drops once, and ten failure and skip cases reported in mailbox word 15. Apart from the clock return, the plain wrapper's code equals that of the full trainings that passed on both boards after the 2026-10-31 watchdog reset. |
 | `checks/card-ddr.py`, `card-ddr-pio.py`, `card-ddr-host.py` | Twenty experimental and one default instruction case, thirteen timer/PIO cases and nineteen host cases pass with the shared quick check. |
 
-The nominal instruction case executes 2,236,828 instructions under a
-4,000,000-instruction fixture limit. It performs 921 masked PHY writes,
-immediate readback, a second readback pass after modeled `init_DRAM` and the
+The nominal instruction case executes 2,247,301 instructions under a
+4,000,000-instruction fixture limit. It performs 879 masked PHY writes and
+89 wide-memory rewrites, a readback pass, a second readback pass after
+modeled `init_DRAM` and the
 quick check: 31 address-line words and sixteen 4 KiB windows 192 MiB apart
 below 4 GiB, 262,392 bytes written and read each way. The quick check
 detects gross errors; it reaches only the first 3 GiB of the 12 GiB map.
@@ -254,21 +316,24 @@ detects gross errors; it reaches only the first 3 GiB of the 12 GiB map.
 | --- | --- |
 | Wrapper | `0x85000`, 1,004 bytes (restore) and 892 bytes (plain); limit 4 KiB |
 | Mailbox | `0x86000`, 128 bytes |
-| Record | `0x87000`, 12,320 bytes; reservation 24 KiB |
+| Record | `0x87000`, 11,640 bytes; reservation 24 KiB |
 | FEL head shadow | `0x8e000`, 12 KiB |
-| Helper and address/mask table | `0x92000`, 9,484 bytes; reservation 32 KiB |
+| Helper and address/mask table | `0x92000`, 9,560 bytes (9,808 with the survey); reservation 32 KiB |
+| Survey (survey build only) | `0x96000`, 7,096 bytes |
 | Private stack | `0x9b000..0x9f000`, 16 KiB |
 
 | File | SHA-256 |
 | --- | --- |
-| `restore-set-v4.json` | `3464c8421cdeb23af51c831b38cab729c7a2ced9ecee3a746a08a57531da1cb4` |
-| `build-restore/ddr-restore.bin` | `fa27f208629932419ba110931ae8d9ff862c2c8429c1dd701cfc1a0785dbe40a` |
+| `restore-set-v5.json` | `7c8ae56d522515bc50acce99793436dfaed75805a33b6b87aa7c8e4681d40868` |
+| `build-restore/ddr-restore.bin` | `39db1d92cb2768293981ab084d61b3b02b7823bf6dcd76041d6c61df68aa7897` |
 | `build-restore/ddr-entry.bin` | `3e7e62aec993da2dd2e7825c958f3be35472c26fa6d6af951f4324aac0ce6e5f` |
-| `build-restore/manifest.json` | `9488adbe9bf1e4f9cb15335d8de7cd5c934c350718345b7847f1f81cac1e668d` |
+| `build-restore/manifest.json` | `0237cb4586a8632f574cd336f44fcc7af31ffc154ee01916367d92604c029f0f` |
+| `build-survey/ddr-restore.bin` | `ca3ae6b23fc3f05abf498c1ff655d06f1a16aa079df7f7e4bde84f3fc419f36d` |
+| `build-survey/manifest.json` | `d7bb3dfde6d12ea47a0512d73249dd85d4fd8017595362ade5b599c9839ea44e` |
 | `build-full/ddr-entry.bin` | `c40264b9961a5420dc218389931ee0a6d5e91296ca0608e028fe56a5563cf961` |
 | `build-full/manifest.json` | `635db5a01ef60c5e8168f37b10a2e878e3d4a45eb3184e370694c8402121a10f` |
-| `records/record-3-3.bin` | `44dccfa5f2e98f3beb2148b34dded8587e7772a1a9e5aa6a83a8840e98c3ecf3` |
-| `records/record-3-1.bin` | `47562252745cc4b2242bb7a5c11428aa3c9dfbb7aea2534138eca4643210e436` |
+| `records/record-3-3.bin` | `c82e0a324c9748984b98081d61a3deb65ffd9e73e823d86fb883ab771cce22fa` |
+| `records/record-3-1.bin` | `932c68a42f9c3da996359855b21bdd8287b66899d1d85deb901f2ea2265c130a` |
 
 The records use generation 1, boot0 checksum `0x2fce7bb3`, parameter-set
 index 5 and strap CRC `0xf874a6a5`. Unknown temperature is encoded as
@@ -281,7 +346,7 @@ Runtime failures return 7 (PHY readback), 8 (size), 9 (quick check),
 10 (missing or repeated hook) or 11 (cache/MMU state after boot0).
 A readback failure inside boot0 restores the wrapper context from SRAM,
 swaps the FEL head back and returns without resuming boot0. The runner
-requires success, 921 writes, one hook call, 262,392 checked bytes
+requires success, 879 writes, one hook call, 262,392 checked bytes
 and the 12,288 MiB size before its RAM-page checks; anything else falls
 back through WDT0. After a readback failure the runner records the
 mismatch count and the addresses and values of the second to fifth
@@ -303,12 +368,14 @@ there does not qualify warm restores. A board whose DRAM is already
 trained in the current FEL instance first resets through WDT0 to a new FEL
 instance, as the port 3-1 run of 2026-10-31 did, so that `init_DRAM` starts
 from reset controller and PHY state. With
-`F=~/.cache/sunstoneos/evidence/dram-clock-point-1031` and `S` the session's
+`F=~/.cache/sunstoneos/evidence/dram-restore-v5-1031` and `S` the session's
 evidence directory:
 
-1. Restore DDR start (`rs-ddr`), for port 3-3:
-   `tools/run-ddr.py --fel ~/.cache/sunstoneos/build/sunxi-a733/sunxi-fel --build $F/build-restore --record $F/records/record-3-3.bin --fallback-build $F/build-full --evidence $S/rs-ddr`.
-   Port 3-1 uses `record-3-1.bin`. Exit status 0 means restored, 3 means
+1. Restore DDR start (`rs-ddr`), first with the survey build, for port 3-1:
+   `tools/run-ddr.py --fel ~/.cache/sunstoneos/build/sunxi-a733/sunxi-fel --build $F/build-survey --record $F/records/record-3-1.bin --fallback-build $F/build-full --evidence $S/rs-ddr`.
+   The survey build restores as the restore build does and also leaves
+   `survey.json`. Port 3-3 uses `record-3-3.bin`; `$F/build-restore` is the
+   same restore without the survey. Exit status 0 means restored, 3 means
    the restore failed and the fallback training passed; either leaves
    trained DRAM for the next image.
 2. The v5 capture (`rs-capture-1`) with `--ddr-evidence $S/rs-ddr`, only

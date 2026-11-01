@@ -97,27 +97,53 @@ u32 restore_admit(void)
 #ifdef RESTORE_SURVEY
 /* Diagnostic build only (tools/prepare-ddr.py --survey). The write pass
  * stores, for every profile entry, the value read before the write, the
- * value read straight after it, the value read again once every entry is
- * written, and the mask, as four halfwords from SURVEY+64. The header holds
- * a magic word, the entries recorded, and the hook-time PHY control words:
- * MicroContMuxSel before the helper clears it, then UcclkHclkEnables,
- * MicroReset, DctWriteProt and UctShadowRegs. The host decodes it with
- * tools/ddr-survey.py. */
+ * value read straight after it, the value the readback pass reads after the
+ * last write, and the mask, as four halfwords from SURVEY+64. The header
+ * holds a magic word, the entries recorded, the hook-time PHY control words
+ * (MicroContMuxSel before the helper clears it, then UcclkHclkEnables,
+ * MicroReset, DctWriteProt and UctShadowRegs) and, in word 7, the number of
+ * wide-memory halfwords rewritten with their stored values. The host decodes
+ * it with tools/ddr-survey.py. */
 #define SURVEY ((volatile u32 *)0x96000)
 #define SURVEY_ENTRY ((volatile u16 *)0x96040)
 #define SURVEY_MAGIC 0x59565253u /* "SRVY" */
-#define PHY16(address) (*(volatile u16 *)(address))
 #endif
+#define PHY16(address) (*(volatile u16 *)(address))
 
-/* A mismatch does not stop the pass: every entry is written and read, so
- * one board run names every register that does not hold its value. Words
- * 11-13 keep the first mismatch, word 27 counts them and words 28-31 hold
- * the next four as (profile index << 16) | value read. Any mismatch fails
- * the restore, which then never resumes boot0. */
+/* Halfwords per stored word. The ACSM memory (CSR 0x41000-0x41fff) stores
+ * 64-bit words and the PHY data memory (64 KiB from CSR 0x58000) 32-bit words.
+ * APB writes 16 bits at a time; a halfword write is held until the word's
+ * highest halfword is written, which stores the word, and reads return the
+ * stored word until then (survey on port 3-1, 2026-10-31). boot0's PIE and
+ * message-block loaders write every halfword in ascending order. */
+static u32 word_bytes(u32 address)
+{
+    if (address - 0x0a982000u < 0x2000u) return 8;
+    if (address - 0x0a9b0000u < 0x10000u) return 4;
+    return 2;
+}
+
+/* Rewrites halfwords [from, to) with their stored values. */
+static u32 refill(u32 from, u32 to)
+{
+    u32 n = 0;
+    for (; from < to; from += 2, ++n) PHY16(from) = PHY16(from);
+    return n;
+}
+
+/* One write pass, then one readback pass. In a wide memory the pass writes
+ * the whole word of each entry, in ascending halfword order: halfwords that
+ * are not profile entries are rewritten with their stored values, so the
+ * write of the highest halfword stores the restored word. The readback pass
+ * follows the last write. A mismatch does not stop it: one board run names
+ * every register that does not hold its value. Words 11-13 keep the first
+ * mismatch, word 27 counts them and words 28-31 hold the next four as
+ * (profile index << 16) | value read. Any mismatch fails the restore, which
+ * then never resumes boot0. */
 static u32 restore_phy(u32 write)
 {
     const u8 *r = RECORD, *p = r+128;
-    u32 offset = 88, index = 0, mismatches = 0; /* Skip the admitted parameter run. */
+    u32 offset, index, mismatches = 0;
 #ifdef RESTORE_SURVEY
     if (write) {
         for (u32 i = 0; i < 16; ++i) SURVEY[i] = 0;
@@ -135,31 +161,55 @@ static u32 restore_phy(u32 write)
         SURVEY[0] = SURVEY_MAGIC;
     }
 #endif
-    for (u32 run = 1; run < word(r+80); ++run) {
-        u32 address = word(p+offset), count = word(p+offset+4);
-        offset += 8;
-        for (u32 i = 0; i < count; ++i, ++index, address += 2) {
-            volatile u16 *reg = (volatile u16 *)address;
-            u16 mask = restore_profile[index].mask;
-            u16 expected = *(const u16 *)(p+offset+2*i);
-            if (write) {
-                /* MMU/cache-off FEL accesses are ordered Device accesses.
-                 * The same-register read below observes the preceding write;
-                 * only mux ownership transitions need an explicit DSB. */
+    if (write) {
+        u32 next = 0, refills = 0; /* First halfword of the open wide word not yet written. */
+        offset = 88; index = 0;    /* Skip the admitted parameter run. */
+        for (u32 run = 1; run < word(r+80); ++run) {
+            u32 address = word(p+offset), count = word(p+offset+4);
+            offset += 8;
+            for (u32 i = 0; i < count; ++i, ++index, address += 2) {
+                volatile u16 *reg = (volatile u16 *)address;
+                u16 mask = restore_profile[index].mask;
+                u16 expected = *(const u16 *)(p+offset+2*i);
+                u32 width = word_bytes(address), base = address & ~(width-1);
+                if (width > 2) refills += refill(next > base ? next : base, address);
+                /* MMU/cache-off FEL accesses are ordered Device accesses. */
                 u16 before = *reg;
                 *reg = (before & ~mask) | (expected & mask);
                 MAIL[8] = index+1;
 #ifdef RESTORE_SURVEY
                 SURVEY_ENTRY[4*index] = before;
+                SURVEY_ENTRY[4*index+1] = *reg;
                 SURVEY_ENTRY[4*index+3] = mask;
-#endif
-            }
-            u16 actual = *reg;
-#ifdef RESTORE_SURVEY
-            if (write) {
-                SURVEY_ENTRY[4*index+1] = actual;
                 SURVEY[1] = index+1;
+#endif
+                if (width > 2) {
+                    u32 following = index+1 < PROFILE_COUNT ? restore_profile[index+1].address : 0;
+                    next = address+2;
+                    if (following - base >= width) {
+                        refills += refill(next, base+width); /* Stores the word. */
+                        next = base+width;
+                    }
+                }
             }
+            offset += (count*2+3)&~3u;
+        }
+#ifdef RESTORE_SURVEY
+        SURVEY[7] = refills;
+#else
+        (void)refills;
+#endif
+    }
+    offset = 88; index = 0;
+    for (u32 run = 1; run < word(r+80); ++run) {
+        u32 address = word(p+offset), count = word(p+offset+4);
+        offset += 8;
+        for (u32 i = 0; i < count; ++i, ++index, address += 2) {
+            u16 mask = restore_profile[index].mask;
+            u16 expected = *(const u16 *)(p+offset+2*i);
+            u16 actual = PHY16(address);
+#ifdef RESTORE_SURVEY
+            if (write) SURVEY_ENTRY[4*index+2] = actual;
 #endif
             if ((actual ^ expected) & mask) {
                 if (!mismatches) { MAIL[11] = address; MAIL[12] = expected; MAIL[13] = actual; }
@@ -169,13 +219,6 @@ static u32 restore_phy(u32 write)
         }
         offset += (count*2+3)&~3u;
     }
-#ifdef RESTORE_SURVEY
-    /* Every entry again, after the last write: a value that held at first
-     * and changed later was rewritten by the PHY or by a later entry. */
-    if (write)
-        for (u32 i = 0; i < PROFILE_COUNT; ++i)
-            SURVEY_ENTRY[4*i+2] = PHY16(restore_profile[i].address);
-#endif
     *MUX = 1;
     barrier();
     return mismatches ? READBACK : 0;

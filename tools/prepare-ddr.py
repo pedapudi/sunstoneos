@@ -18,7 +18,7 @@ parser.add_argument("--output", type=Path, default=CACHE / "build/a733-ddr")
 # --variant the wrapper is byte-identical to the reviewed one.
 VARIANTS = {"pstate0": (0, 0), "init-only": (0x1fff0000, 0x00010000), "restore": None}
 parser.add_argument("--variant", choices=sorted(VARIANTS))
-parser.add_argument("--restore-set", type=Path, help="reviewed restore-set-v4.json; required for restore")
+parser.add_argument("--restore-set", type=Path, help="reviewed restore-set-v5.json; required for restore")
 parser.add_argument("--survey", action="store_true",
                     help="diagnostic restore helper that stores every entry's values around its write at 0x96000")
 args = parser.parse_args()

@@ -84,8 +84,9 @@ if a.restore_build:
         survey_manifest=json.loads((a.survey_build/'manifest.json').read_text())['restore']['survey']
         values=[v for run in parsed['runs'][1:] for v in run['values']];mask_of={m['address']:m['mask'] for m in parsed['masks']}
         # The first entry with a nonzero expected value reads 0 and index 5
-        # reads 0x42 (two mismatches, as the mailbox reports), index 3 changes
-        # later, index 4 already held its value; every other entry holds.
+        # reads 0x42 (two mismatches, as the mailbox reports), index 3 is
+        # stored later (as a wide-memory halfword), index 4 already held its
+        # value; every other entry holds.
         zero=next(n for n,(address,value) in enumerate(zip(profile,values)) if n>5 and value&mask_of[address])
         fake_survey=bytearray(struct.pack('<4I',survey_tool.MAGIC,len(profile),1,3)+bytes(48))
         for n,(address,value) in enumerate(zip(profile,values)):
@@ -94,7 +95,7 @@ if a.restore_build:
             after=end=(before&~m)|want
             if n==zero:after=end=0
             if n==5:after=end=0x42
-            if n==3:end=after^m
+            if n==3:after=before
             if n==4:before=after
             fake_survey+=struct.pack('<4H',before,after,end,m)
         assert len(fake_survey)==survey_manifest['bytes']
@@ -311,8 +312,8 @@ for case in cases:
         assert 'clock return' in str(status) and not (out/'runtime').exists(),(case,status)
     if case=='restore-survey':
         result=record['restore_result']['survey']
-        assert result['classes']=={'reads-zero':1,'other-value':1,'changed-later':1,'already-at-value':1,'held':len(profile)-4},result
-        assert result['immediate_mismatches']==2 and result['agrees_with_mailbox'] and result['control']['micro_cont_mux_sel_at_hook']=='0x0001'
+        assert result['classes']=={'reads-zero':1,'other-value':1,'stored-later':1,'already-at-value':1,'held':len(profile)-4},result
+        assert result['mismatches']==2 and result['agrees_with_mailbox'] and result['control']['micro_cont_mux_sel_at_hook']=='0x0001'
         decoded=json.loads((out/'runtime/survey.json').read_text())['entries']
         assert len(decoded)==len(profile) and decoded[5]['after']=='0x0042' and decoded[zero]['class']=='reads-zero'
     if case=='restore-survey-missing':

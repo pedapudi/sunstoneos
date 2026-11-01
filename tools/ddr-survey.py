@@ -3,21 +3,28 @@
 
 The diagnostic restore build (tools/prepare-ddr.py --survey) stores, at SRAM
 0x96000, a 64-byte header and four halfwords per profile entry: the value
-read before the write, the value read straight after it, the value read once
-every entry is written, and the mask. With the record's expected values, each
-entry falls in one class:
+read before the write, the value read straight after it, the value read by
+the readback pass after the last write, and the mask. With the record's
+expected values, each entry falls in one class, decided by the readback-pass
+value ("end") and, where it matters, the value straight after the write:
 
-- held: the written bits read back, before and after the rest of the pass,
-  and the value before the write differed from them under the mask.
+- held: the written bits read back at both points, and the value before
+  the write differed from them under the mask.
 - already-at-value: as held, but the value before already matched, so the
   write was not observable.
-- changed-later: held straight after the write, changed by the end of the
-  pass (by the PHY or by a later entry's write).
-- unchanged: the value after the write equals the value before it in all
-  16 bits; the write did not reach a storage register.
-- reads-zero: reads 0 after the write although it did not before.
+- stored-later: wrong straight after the write, right at the readback pass:
+  a wide-memory halfword that is stored with its word's highest halfword.
+- changed-later: right straight after the write, wrong at the readback pass
+  (changed by the PHY or by a later write).
+- unchanged: wrong at the readback pass and equal to the value before the
+  write in all 16 bits; the write did not reach a storage register.
+- reads-zero: reads 0 at the readback pass although it did not before.
 - other-value: reads neither the value before nor the written value; the
   PHY produced it.
+
+The current helper's mailbox word 27 counts entries wrong at the readback
+pass ("mismatches"). Helpers before the whole-word writes counted entries
+wrong straight after their write ("immediate_mismatches").
 
 Usage: tools/ddr-survey.py SURVEY.BIN --record RECORD.BIN [--output JSON]
 """
@@ -31,6 +38,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MAGIC = 0x59565253
 HEADER_BYTES, ENTRY_BYTES = 64, 8
 MISMATCH_CLASSES = ("changed-later", "unchanged", "reads-zero", "other-value")
+# Header word 7: wide-memory halfwords rewritten with their stored values.
+REFILLS_WORD = 7
 # Header words 2-6, read by the helper at the start of the write pass.
 CONTROL = ("micro_cont_mux_sel_at_hook", "ucclk_hclk_enables", "micro_reset", "dct_write_prot",
            "uct_shadow_regs")
@@ -44,13 +53,16 @@ def family(address):
 
 
 def classify(before, after, end, mask, expected):
-    if not (after ^ expected) & mask:
-        if (end ^ expected) & mask:
-            return "changed-later"
+    after_ok, end_ok = not (after ^ expected) & mask, not (end ^ expected) & mask
+    if end_ok:
+        if not after_ok:
+            return "stored-later"
         return "held" if (before ^ expected) & mask else "already-at-value"
-    if after == before:
+    if after_ok:
+        return "changed-later"
+    if end == before:
         return "unchanged"
-    if after == 0:
+    if end == 0:
         return "reads-zero"
     return "other-value"
 
@@ -71,16 +83,19 @@ def decode(data, addresses, expected):
                         "mask": f"{mask:#06x}", "expected": f"{wanted & mask:#06x}",
                         "before": f"{before:#06x}", "after": f"{after:#06x}", "end": f"{end:#06x}",
                         "class": classify(before, after, end, mask, wanted)})
-    counts, families = {}, {}
+    counts, families, immediate = {}, {}, 0
     for entry in entries:
+        mask, wanted = int(entry["mask"], 16), int(entry["expected"], 16)
+        immediate += bool((int(entry["after"], 16) ^ wanted) & mask)
         counts[entry["class"]] = counts.get(entry["class"], 0) + 1
         if entry["class"] in MISMATCH_CLASSES:
             row = families.setdefault(entry["family"], {})
             row[entry["class"]] = row.get(entry["class"], 0) + 1
     summary = {"control": {name: f"{value:#06x}" for name, value in zip(CONTROL, header[2:7])},
                "classes": counts,
-               # Mismatches as the helper counts them: wrong straight after the write.
-               "immediate_mismatches": sum(counts.get(c, 0) for c in MISMATCH_CLASSES[1:]),
+               "mismatches": sum(counts.get(c, 0) for c in MISMATCH_CLASSES),
+               "immediate_mismatches": immediate,
+               "refilled_halfwords": header[REFILLS_WORD],
                "mismatch_families": dict(sorted(families.items()))}
     return entries, summary
 

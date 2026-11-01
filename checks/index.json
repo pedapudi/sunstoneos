@@ -3123,6 +3123,21 @@
   "summary": "Run the production DDR script with fake FEL and a real private file lock.",
   "usb": true
  },
+ "ddr-restore-survey-set.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/board-runbooks/dram-restore-test-1.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--survey",
+   "--record",
+   "--set"
+  ],
+  "summary": "Check a restore set against a board write survey.",
+  "usb": false
+ },
  "ddr-restore.py": {
   "cache_areas": [],
   "docs": [

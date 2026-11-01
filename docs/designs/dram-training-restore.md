@@ -118,10 +118,21 @@ lists them) give the first restore sets:
   same lane had read back their written values. Its trained value is the
   same in every trained capture of both boards, a property of hardware
   status ([runbook](../board-runbooks/dram-restore-test-1.md#the-first-board-run-stopped-at-a-byte-lane-register-that-does-not-hold-a-write)).
-- **The set has 941 registers:** 432 byte-lane registers, 445
-  address/command sequencer words, 21 `0x30000` registers, 20 message-block
-  result fields, 20 parameter words and three others. 394 vary between
-  trainings; 547 are fixed by the P-state-0-only path. The
+- **Registers the PHY owns are left out** because a write survey on port
+  3-1 showed that they do not keep an APB write at the hook
+  ([runbook](../board-runbooks/dram-restore-test-1.md#the-survey-run-separated-wide-memory-words-from-registers-the-phy-owns)):
+  - byte-lane offset `0x11e` in every lane, a copy that the PHY updates from
+    offset `0x4c` (lane 0) or `0x4e` (lane 1 from lane 0);
+  - byte-lane offsets `0x1aa`–`0x1be` and `0x130`, values the PHY produces,
+    which differ between lifetimes of the same kind, also after
+    initialization only;
+  - offsets `0x15e`–`0x17c` of the two blocks at CSR `0x30000` and
+    `0x31000` (`0x0a960000`, `0x0a962000`), and `0x0a940014`, values of the
+    same kind.
+- **The set has 899 registers:** 402 byte-lane registers, 445
+  address/command sequencer (ACSM) words, 10 registers of the two
+  `0x30000`-region blocks, 20 message-block fields, 20 parameter words and
+  two others. The
   [first test's runbook](../board-runbooks/dram-restore-test-1.md) lists the
   exclusions and their reasons.
 - **The chip IDs differ in their last word only** (`0x40892413` on 3-3,
@@ -139,7 +150,7 @@ qualification ladder and the residual risk. Until cold and warm lifetimes
 exist, a record is valid only for room-temperature cold starts.
 
 **Projected DRAM time with a restore:** 40 ms for boot0's
-initialization-only path, plus about 1 ms for 921 16-bit PHY writes and
+initialization-only path, plus about 1 ms for 879 16-bit PHY writes and
 their read-back, the 20 parameter words being set before the call (*estimated* at 1 µs per APB write), plus the
 quick check (*estimated* at 30 ms for 131,196 uncached word accesses): about 70 ms against 5,093 ms of training today, a saving
 of about 5.0 s per cold boot.
@@ -479,8 +490,9 @@ For the actual record, the first valid helper uses 20 sectors and the two
 records use 50 sectors: 35,840 bytes read. A bad first helper followed by a
 valid second uses 46,080 bytes. The format caps both-helper/both-record reads
 at 226 sectors, or 115,712 bytes. One non-refreshable ten-second counter
-budget covers the attempt. Restore performs 921 masked PHY writes with
-immediate readback, followed by a separate 921-read final pass. The quick
+budget covers the attempt. Restore performs 879 masked PHY writes and up to
+89 rewrites of other wide-memory halfwords, a readback pass, and a separate
+879-read final pass. The quick
 check writes and reads 262,392 bytes each way. The instruction fixture caps each
 case at five million instructions; the largest observed case uses 4,541,947.
 This count is not a hardware performance measure.
@@ -551,13 +563,13 @@ step value (result 7 after 36 ms on both boards). These remain:
 
 ## RAM-only implementation contract
 
-The first implementation admits only the fixed 941-entry restore set and
+The first implementation admits only the fixed 899-entry restore set and
 its recorded P-state-0 captures. The builder binds the analysis file by
 SHA-256, checks the capture chip ID, training kind and stage tables, and
 uses the pinned boot0 parameter set 5 for the strap CRC. Capture words
 32–51 are 32-bit values: the record encodes their 40 little-endian
 halfwords as a run at `0x83278`, without truncating their upper halves.
-The remaining 921 entries are masked PHY halfwords. Temperature is
+The remaining 879 entries are masked PHY halfwords. Temperature is
 unknown (`INT32_MIN`, limit zero), so this profile is restricted to the
 supervised room-temperature cold-start experiment.
 
@@ -581,13 +593,22 @@ trampoline. The trampoline preserves the original arguments, applies and
 checks every PHY write with `MicroContMuxSel` clear, restores that mux to
 1, then calls boot0's original `0x4bca8`.
 
-A readback mismatch does not end the pass. The helper writes and reads
-every entry, so one run names every register that does not hold its
-value: mailbox words 11–13 keep the first mismatch's address, expected and
-read values, word 27 counts the mismatches and words 28–31 hold the second
-to fifth as profile index (upper half) and value read (lower half). The
-pass costs at most 921 further writes, under 1 ms (*estimated*), and the
-PHY state is discarded by the WDT0 reset that follows. A failed pass then
+The helper writes every entry, then reads every entry back in a separate
+pass. Two PHY memories store words wider than an APB access: the ACSM
+memory (`0x0a982000`–`0x0a983fff`) 64-bit words and the PHY data memory
+(64 KiB from `0x0a9b0000`) 32-bit words. Each holds a halfword write until
+the word's highest halfword is written, and reads return the stored word
+until then. The helper therefore writes the whole word of each entry in
+those ranges, in ascending halfword order, and rewrites the halfwords that
+are not entries with their stored values; boot0's PIE and message-block
+loaders also write every halfword in ascending order. For the 899-entry set
+that adds 89 rewrites.
+
+A readback mismatch does not end the readback pass, so one run names every
+register that does not hold its value: mailbox words 11–13 keep the first
+mismatch's address, expected and read values, word 27 counts the mismatches
+and words 28–31 hold the second to fifth as profile index (upper half) and
+value read (lower half). The PHY state is discarded by the WDT0 reset that follows. A failed pass then
 exits directly to the wrapper's saved SRAM context; it must not resume
 boot0 and reach its memory test. After a successful
 `init_DRAM`, the wrapper checks the size and runs the
@@ -598,9 +619,9 @@ codes for record geometry, header CRC, payload CRC, chip ID, boot0 identity,
 strap, PHY readback, size and memory comparison. No failure retrains in
 place. The host writes no RAM page after a reported restore failure.
 
-The budget is one admission pass and one ordered PHY write/readback pass,
-with bounded record parsing and no allocation. Ordered same-register
-readback follows each write; explicit barriers surround mux transitions.
+The budget is one admission pass, one ordered PHY write pass and one
+readback pass, with bounded record parsing and no allocation. The readback
+pass follows the last write; explicit barriers surround mux transitions.
 A second readback pass after
 `init_DRAM` detects changes made by boot0 before the quick check. Host instruction checks
 exercise the real wrapper/helper with modeled boot0 calls and MMIO. They
@@ -741,21 +762,24 @@ three the check lowers the poll limit to 2,000.
 `tools/prepare-ddr.py --variant restore --survey` builds the restore helper
 with `RESTORE_SURVEY` defined; without the flag the helper's bytes do not
 change. The diagnostic helper fills a survey at SRAM `0x96000`, inside the
-helper reservation and above the helper's 9,780 bytes:
+helper reservation and above the helper's 9,808 bytes:
 
 - **Header, 64 bytes.** Word 0 is `0x59565253` once the write pass starts,
   word 1 counts the entries recorded, word 2 holds `MicroContMuxSel` before
   the helper clears it, and words 3–6 hold `UcclkHclkEnables`
   (`0x0aa80100`), `MicroReset` (`0x0aaa0132`), `DctWriteProt`
   (`0x0aaa0062`) and `UctShadowRegs` (`0x0aaa0008`) at the hook.
-- **Entries, 8 bytes each from `0x96040`.** For each of the 921 entries in
-  profile order: the value read before the write (the helper's
-  read-modify-write already reads it), the value read straight after it,
-  the value read again after the last entry is written, and the mask.
+- **Header word 7** counts the wide-memory halfwords rewritten with their
+  stored values.
+- **Entries, 8 bytes each from `0x96040`.** For each entry in profile
+  order: the value read before the write (the helper's read-modify-write
+  already reads it), the value read straight after it, the value the
+  readback pass reads, and the mask.
 
-The survey takes 7,432 bytes, ending at `0x97d08`. The write pass,
-its mismatch reporting and the outcome are those of the production helper,
-plus one read of each entry at the end of the pass.
+For the 879 PHY entries of the 899-entry set the survey takes 7,096 bytes,
+ending at `0x97bb8`. The passes, the mismatch reporting and the outcome are
+those of the production helper, plus one read of each entry straight after
+its write.
 
 `tools/run-ddr.py` uploads zeros over the survey with the helper and reads
 them back, so a helper that stops before its write pass leaves no earlier
@@ -763,19 +787,22 @@ values. After the restore returns, it reads the survey, and
 `tools/ddr-survey.py` puts each entry in one class, from the masked
 comparison with the record's value:
 
-| Class | After the write | Meaning |
+| Class | Values read | Meaning |
 | --- | --- | --- |
-| held | matches, and still matches at the end | The register stores the value |
+| held | right straight after the write and in the readback pass | The register stores the value |
 | already-at-value | as held, and the value before already matched | The write could not be observed |
-| changed-later | matches, but not at the end of the pass | The PHY or a later entry's write changed it |
-| unchanged | equals the value before in all 16 bits | The write did not reach a storage register |
-| reads-zero | 0, although the value before was not | A copy or status register the PHY clears |
+| stored-later | wrong straight after the write, right in the readback pass | A wide-memory halfword stored with its word |
+| changed-later | right straight after the write, wrong in the readback pass | The PHY or a later write changed it |
+| unchanged | wrong in the readback pass and equal to the value before | The write did not reach a storage register |
+| reads-zero | 0 in the readback pass, although the value before was not | A copy or status register the PHY clears |
 | other-value | neither the value before nor the written value | The PHY produced the value |
+
+The last four are mismatches.
 
 The runner writes every entry to `survey.json`, records the class counts,
 the mismatches by register family and the control words in
-`restore_result.survey`, and checks that the entries wrong straight after
-their write equal mailbox word 27. A survey without its magic word, or with
+`restore_result.survey`, and checks that the mismatches equal mailbox
+word 27. A survey without its magic word, or with
 fewer entries than the profile, is recorded as an error and the run falls
 back as usual. `tools/ddr-survey.py SURVEY.BIN --record RECORD.BIN` decodes a
 saved survey offline.
@@ -831,7 +858,7 @@ each physical session. Plan ordering and CRCs do not establish card power-loss
 atomicity or physical recovery qualification.
 
 The fixed-profile read budget is two header sectors and at most two 24 KiB
-records. The observed 12,320-byte records require 25,600 card-image bytes
+records. The 11,640-byte records require 24,576 card-image bytes
 in total, including sector padding. Selection bounds CRC and profile work by these records, with no device
 access. Checks use records from the actual captures and
 allocations from the actual producer on ordinary-file fixtures. They cover
@@ -873,12 +900,12 @@ Implementation and remaining physical work:
 - boot0's initialization-only path reaches firmware result 7 in 36 ms and
   the size line in 40 ms; P-state-0-only training takes 4,437–4,451 ms and
   four-P-state training 5,088–5,102 ms.
-- The restore set is 941 registers: the union of both boards'
+- The restore set is 899 registers: the union of both boards'
   P-state-0-only minus initialization-only diffs, with status pooled over
   both boards and decided per byte-lane offset, and without the `0xa0000`
-  block, firmware controls, firmware inputs, controller read-result words
-  and byte-lane register `0x73`, which does not hold a written value; 394
-  vary between trainings and 547 are fixed by the P-state-0-only path.
+  block, firmware controls, firmware inputs, controller read-result words,
+  byte-lane register `0x73`, and the 42 registers that the port 3-1 survey
+  showed the PHY owns.
 - The values come from one capture of each board's later P-state-0-only
   lifetime: `board-session-20261025-27/port-3-3` and
   `board-session-20261025-35/port-3-1`.

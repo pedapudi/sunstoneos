@@ -395,11 +395,11 @@ def restore_attempt():
                      "actual": f"{word & 0xffff:#06x}"}
                     for word in more[:max(0, min(count, 5) - 1)]]
             if survey:
-                # The helper's word 27 counts entries wrong straight after their write.
+                # The helper's word 27 counts entries wrong at its readback pass.
                 result = record["restore_result"]["survey"] = read_survey(args.evidence)
-                if "immediate_mismatches" in result:
+                if "mismatches" in result:
                     result["agrees_with_mailbox"] = (
-                        result["immediate_mismatches"] == record["restore_result"].get("mismatches", 0))
+                        result["mismatches"] == record["restore_result"].get("mismatches", 0))
             save()
             settings = manifest["restore"]
             expected = (0, settings["phy_registers"], 1, settings["sample_read_bytes"])

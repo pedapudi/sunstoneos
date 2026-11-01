@@ -275,7 +275,16 @@ The following reviewed implementations are integrated with software evidence:
   value before its write, after it and at the end of the pass, and the
   runner classifies each one; its run decides whether this hook can restore
   training ([runbook](board-runbooks/dram-restore-test-1.md#the-survey-run-classifies-every-entry)).
-  No board run has used the diagnostic build.
+  The survey (port 3-1) separated the 125: 88 are ACSM and PHY data-memory
+  halfwords that the memory stores only when the word's highest halfword is
+  written (83 were stored by a later entry; five never were), and 37 are
+  registers the PHY owns (copies and values it produces). None is a trained
+  delay or VREF. The 899-entry v5 set leaves
+  out the PHY-owned registers and the helper writes whole wide-memory
+  words; builds and records are in
+  `~/.cache/sunstoneos/evidence/dram-restore-v5-1031/`, commands in the
+  [runbook](board-runbooks/dram-restore-test-1.md#commands-for-one-board).
+  No board run has used the v5 build.
 
 ## Current integration
 

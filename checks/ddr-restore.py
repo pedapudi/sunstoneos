@@ -6,6 +6,11 @@ This establishes instruction ordering, not PHY or physical RAM operation.
 Byte-lane register 0x73 (offset 0xe6 in each lane) reads 0 whatever is
 written, as port 3-1 showed on 2026-10-31. With --reproduce MAILBOX only the
 nominal case runs, and restore words 7-13 must equal that board mailbox's.
+The ACSM memory (0x0a982000-0x0a983fff, 64-bit words) and the PHY data memory
+(0x0a9b0000-0x0a9bffff, 32-bit words) hold each halfword write until the
+word's highest halfword is written, and read the stored word until then, as
+the port 3-1 survey showed; the helper must write each touched word whole,
+in ascending order, with the other halfwords' stored values.
 For a survey build (tools/prepare-ddr.py --survey) every case also checks the
 survey at 0x96000, and the survey-classes case makes one entry each drop its
 write, read 0, read another value, change after a later write and already
@@ -52,6 +57,12 @@ HARDWARE_OWNED = {0x0a920000 + 0x2000*block + 0x200*lane + 0xe6 for block in ran
 if not a.reproduce:
     assert not HARDWARE_OWNED & set(masks)
 # readback-survey: three profile entries that read a mismatching value.
+WIDE = ((0x0a982000, 0x2000, 8), (0x0a9b0000, 0x10000, 4))
+def width(address):
+    return next((w for base, size, w in WIDE if base <= address < base+size), 2)
+# Halfwords of touched wide words that are not profile entries hold this value.
+OTHER = 0xc3c3
+WIDE_WORDS = sorted({address & ~(width(address)-1) for address,_ in phy if width(address) > 2})
 SURVEY = [phy[0][0], phy[100][0], phy[500][0]]
 results = []
 # Quick check layout (boot/a733/ddr-restore.c): 31 address-line words and
@@ -76,7 +87,9 @@ if SURVEYED:
     cases['survey-classes'] = 7
     # Entries whose write is observable from the fixture's 0x5a5a and whose
     # expected value is nonzero under the mask.
-    observable = [n for n,(address,value) in enumerate(phy) if (0x5a5a^value)&masks[address] and value&masks[address]]
+    observable = [n for n,(address,value) in enumerate(phy)
+                  if (0x5a5a^value)&masks[address] and value&masks[address] and width(address) == 2 and n+1 < PHY_COUNT
+                  and width(phy[n+1][0]) == 2]
     SURVEY_CLASS = dict(zip([observable[k*len(observable)//5] for k in range(5)],
                             ('unchanged', 'reads-zero', 'other-value', 'changed-later', 'already-at-value')))
     assert len(SURVEY_CLASS) == 5 and all(n+1 < PHY_COUNT for n in SURVEY_CLASS)
@@ -98,16 +111,36 @@ for case, error in cases.items():
     if case=='parameter-high-half': record[138] ^= 0x80; repair(record,True)
     cpu = Uc(UC_ARCH_ARM,UC_MODE_ARM)
     cpu.mem_map(0x40000,0xc0000); cpu.mem_map(0x03006000,0x1000);cpu.mem_map(0x0a900000,0x200000)
+    # Wide memories: stored halfwords, halfwords held per word, and every write.
+    wide={'stored':{},'held':{},'writes':[]}
+    def wide_read(uc,offset,size,base):
+        assert size==2,('wide read size',size)
+        return wide['stored'].get(base+offset,0)
+    def wide_write(uc,offset,size,value,base):
+        assert size==2,('wide write size',size)
+        address=base+offset;w=width(address);word=address&~(w-1)
+        wide['writes'].append((address,value&0xffff))
+        wide['held'].setdefault(word,{})[address]=value&0xffff
+        if address==word+w-2:wide['stored'].update(wide['held'].pop(word))
+    for base,size,_ in WIDE:
+        cpu.mem_unmap(base,size);cpu.mmio_map(base,size,wide_read,base,wide_write,base)
+    def poke(uc,address,value):
+        if width(address)>2:wide['stored'][address]=value&0xffff
+        else:uc.mem_write(address,struct.pack('<H',value&0xffff))
+    def peek(uc,address):
+        return wide['stored'].get(address,0) if width(address)>2 else struct.unpack('<H',uc.mem_read(address,2))[0]
+    for word in WIDE_WORDS:
+        for h in range(word,word+width(word),2):wide['stored'][h]=OTHER
     for page in DRAM_PAGES:cpu.mem_map(page,0x1000)
     fel = bytes(range(256))*48
     cpu.mem_write(0x47000,fel)
     for address,name in ((0x8e000,'boot0-head.bin'),(0x4a000,'boot0-body.bin'),(0x85000,'ddr-entry.bin'),(0x92000,'ddr-restore.bin')):
         cpu.mem_write(address,(a.build/name).read_bytes())
     cpu.mem_write(0x87000,bytes(record));cpu.mem_write(0x03006200,struct.pack('<4I',*parsed['chip_id']))
-    for address,_ in phy:cpu.mem_write(address,struct.pack('<H',0x5a5a))
+    for address,_ in phy:poke(cpu,address,0x5a5a)
     if case=='survey-classes':
         already=next(n for n,c in SURVEY_CLASS.items() if c=='already-at-value')
-        cpu.mem_write(phy[already][0],struct.pack('<H',(0x5a5a&~masks[phy[already][0]])|(phy[already][1]&masks[phy[already][0]])))
+        poke(cpu,phy[already][0],(0x5a5a&~masks[phy[already][0]])|(phy[already][1]&masks[phy[already][0]]))
         injected={phy[n][0]:c for n,c in SURVEY_CLASS.items()}
         later={phy[n+1][0]:phy[n][0] for n,c in SURVEY_CLASS.items() if c=='changed-later'}
     cpu.mem_write(0x0aaa0000,struct.pack('<H',1))
@@ -148,7 +181,7 @@ for case, error in cases.items():
             state['continuation']+=1
             assert not state['faulted']
             if case=='final-readback':
-                address,value=phy[0];uc.mem_write(address,struct.pack('<H',value^masks[address]));state['injections']+=1
+                address,value=phy[0];poke(uc,address,value^masks[address]);state['injections']+=1
             for reg,value in zip(regs,state['saved']):uc.reg_write(reg,value)
             uc.reg_write(UC_ARM_REG_SP,state['sp']);uc.reg_write(UC_ARM_REG_LR,state['return'])
             ret(uc,4096 if case=='size' else 12288)
@@ -157,7 +190,7 @@ for case, error in cases.items():
     def memory(uc,access,address,size,value,data):
         if access==16 and address in HARDWARE_OWNED:uc.mem_write(address,b'\0\0')
         if access==16 and case=='readback-survey' and address in SURVEY:
-            uc.mem_write(address,struct.pack('<H',dict(phy)[address]^masks[address]));state['survey'].add(address);state['faulted']=True
+            poke(uc,address,dict(phy)[address]^masks[address]);state['survey'].add(address);state['faulted']=True
         if address>=0x40000000:
             assert not state['faulted'],('DRAM after fault',hex(address))
             if access==17:
@@ -179,17 +212,21 @@ for case, error in cases.items():
             assert size==2
             assert struct.unpack('<H',uc.mem_read(0x0aaa0000,2))[0]==0
             state['phy_writes'].append(address)
+        elif access==17 and 0x0a900000<=address<0x0ab00000 and address not in (0x0aaa0000,):
+            # Only the other halfwords of a touched wide word, with their stored value.
+            assert width(address)>2 and address&~(width(address)-1) in WIDE_WORDS,('PHY write outside the profile',hex(address))
+            assert value&0xffff==wide['stored'][address],('refill changes a halfword',hex(address))
+            assert struct.unpack('<H',uc.mem_read(0x0aaa0000,2))[0]==0
         if case=='survey-classes':
             if access==17 and address in later:
                 # A later entry's write changes the earlier one, as a hardware copy would.
-                earlier=later[address];old=struct.unpack('<H',uc.mem_read(earlier,2))[0]
-                uc.mem_write(earlier,struct.pack('<H',old^masks[earlier]));state['injections']+=1
+                earlier=later[address];poke(uc,earlier,peek(uc,earlier)^masks[earlier]);state['injections']+=1
             if access==16 and injected.get(address) in ('unchanged','reads-zero','other-value') and address in state['phy_writes']:
                 kind=injected[address];m=masks[address];written=(0x5a5a&~m)|(dict(phy)[address]&m)
                 value={'unchanged':0x5a5a,'reads-zero':0,'other-value':written^m^0x8000}[kind]
-                uc.mem_write(address,struct.pack('<H',value));state['survey'].add(address);state['faulted']=True
+                poke(uc,address,value);state['survey'].add(address);state['faulted']=True
         if access==16 and case=='readback' and state['phy_writes'] and address==phy[0][0] and not state['injections']:
-            uc.mem_write(address,struct.pack('<H',phy[0][1]^masks[address]));state['injections']+=1;state['faulted']=True
+            poke(uc,address,phy[0][1]^masks[address]);state['injections']+=1;state['faulted']=True
     clocks = ClockModel(cpu, manifest['clock_ticks']) if 'clock_ticks' in manifest else None
     cpu.hook_add(UC_HOOK_CODE,code);cpu.hook_add(UC_HOOK_MEM_READ|UC_HOOK_MEM_WRITE,memory)
     try:
@@ -222,18 +259,26 @@ for case, error in cases.items():
             # Hook-time control words as the fixture holds them: the mux was 1.
             assert summary['control']['micro_cont_mux_sel_at_hook']=='0x0001'
             assert summary['control']['ucclk_hclk_enables']=='0x0003' and summary['control']['micro_reset']=='0x0001'
+            # Fixture classes: an entry whose 0x5a5a already matches cannot show its
+            # write; a wide-memory entry below its word's highest halfword reads
+            # the stored word straight after its write.
+            natural={n for n,(address,value) in enumerate(phy) if not (0x5a5a^value)&masks[address]}
+            late={n for n,(address,value) in enumerate(phy) if n not in natural and width(address)>2
+                  and address!=(address&~(width(address)-1))+width(address)-2}
+            expected_class={n:'already-at-value' if n in natural else 'stored-later' if n in late else 'held'
+                            for n in range(PHY_COUNT)}
+            assert summary['refilled_halfwords']==sum(1 for word in WIDE_WORDS for h in range(word,word+width(word),2)
+                                                      if h not in masks),summary['refilled_halfwords']
+            # The survey describes the write pass; final-readback fails only the later pass.
+            assert summary['mismatches']==(0 if case=='final-readback' else mailbox[27]),(case,summary,mailbox[27])
             if case=='survey-classes':
-                wanted={n:c for n,c in SURVEY_CLASS.items()}
-                natural={n for n,(address,value) in enumerate(phy) if not (0x5a5a^value)&masks[address]}
-                assert {e['index']:e['class'] for e in entries
-                        if e['class']!='held' and e['index'] not in natural}==wanted,summary
-                assert summary['immediate_mismatches']==mailbox[27]==3,(summary,mailbox[27])
+                expected_class.update(SURVEY_CLASS)
+                assert {e['index']:e['class'] for e in entries}==expected_class,summary
+                assert mailbox[27]==4,mailbox[27]
             elif case in ('readback','readback-survey'):
-                assert summary['immediate_mismatches']==mailbox[27] and set(summary['classes'])<={'held','already-at-value','other-value','unchanged'},summary
+                assert set(summary['classes'])<={'held','already-at-value','stored-later','other-value','unchanged'},summary
             else:
-                # Entries whose fixture value 0x5a5a already matches cannot show their write.
-                matched=sum(1 for address,value in phy if not (0x5a5a^value)&masks[address])
-                assert summary['classes']=={'held':PHY_COUNT-matched,'already-at-value':matched},(case,summary)
+                assert {e['index']:e['class'] for e in entries}==expected_class,(case,summary)
                 assert all(int(e['before'],16)==0x5a5a for e in entries)
     if a.reproduce:
         # The board restore stopped before boot0 resumed; so must this one.
@@ -242,8 +287,15 @@ for case, error in cases.items():
     elif case in ('nominal','parameter-high-half'):
         assert state['phy_writes']==[a for a,v in phy]
         for address,value in phy:
-            actual=struct.unpack('<H',cpu.mem_read(address,2))[0]
+            actual=peek(cpu,address)
             assert actual==((0x5a5a&~masks[address])|(value&masks[address]))
+        # Each touched wide word is written once, whole and in ascending order;
+        # its other halfwords keep their values and nothing stays held.
+        words=[address&~(width(address)-1) for address,_ in wide['writes']]
+        assert sorted(set(words))==WIDE_WORDS and not wide['held']
+        for word in WIDE_WORDS:
+            assert [address for address,_ in wide['writes'] if address&~(width(address)-1)==word]==list(range(word,word+width(word),2)),hex(word)
+            assert all(wide['stored'][h]==OTHER for h in range(word,word+width(word),2) if h not in masks)
         assert mailbox[8:11]==(PHY_COUNT,1,SAMPLE) and mailbox[27:32]==(0,)*5
         assert state['dram_reads']==state['dram_writes']==SAMPLE
         assert mailbox[25] or mailbox[26]
