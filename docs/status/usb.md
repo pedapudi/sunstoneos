@@ -71,7 +71,8 @@ watchdog marker, real quiescence hook and normal-return receipt. It requires
 coordinator approval for USB source/cutoff authority, including alternate
 probe launch kinds. The four OS images retain resources and still lack real
 host drain and a returning lifetime; the probe route does not admit them.
-VBUS enable requires coordinator approval and an admitted source session.
+The coordinator approves the separate empty-port diagnostics on port `3-1`.
+Normal class attachment retains its admitted source session.
 Gen1 needs at least 900 mA plus image-bound COMB0/topology authority; no physical
 bundle exists. Earlier queue entries need corrected hashes or revalidation.
 
@@ -164,121 +165,95 @@ HTTP 403. The vendor DTS revision is
 change the physical connector route. [Type-C sources](../typec-pd-sources.json)
 pin the corresponding vendor driver.
 
-## Proposed source qualification and bounded bench test
+## Coordinator approval and empty-port diagnostics
 
-**Status: physical enable is blocked at the design gate.** The simplicity,
-hardware-performance and correctness reviewers verify the source corrections.
-They withhold approval for enabled tests until independent cutoff, shared-input
-headroom and exit handling have measurable limits. No power-control code or
-source authority is changed. The coordinator must approve the target board
-and source session before any physical PL8 enable.
+The coordinator approves TYPEC24 VBUS enable on board port `3-1` using the
+vendor's active-high PL8 regulator practice. U3's nominal 1.447 A current limit
+and thermal shutdown provide the accepted protection for this step. Independent
+cutoff equipment and bench measurement of shared-input headroom are not
+prerequisites. TYPEC16 supplies board power, and TYPEC24 stays physically empty
+for the first diagnostics. This decision replaces the earlier design refusal.
+It does not establish loaded-port performance or a latched overload cutoff.
 
-The first source profile supplies USB2 default current with at least 500 mA
-available to TYPEC24. Admission requires measured shared-input headroom,
-including board load, cable drop, current limit and startup transients. Under
-the selected board workload plus a 500 mA connector load, require VCC-5V to
-remain within 4.75–5.25 V. Require VBUS_TYPEC to reach that range within the
-rise budget and stay there during operation, without overshooting 5.25 V.
-Record the source, cable, board revision, fitted switch, resistor and
-measurement bounds.
-The nominal 1.447 A switch limit cannot replace these measurements. Leave
-Gen1, higher-current advertisement and larger PD contracts unadmitted.
+Run a source-disabled control, then a pulse lasting at most one second from
+the first PL8-high effect, then a ten-second hold. Each run uses the shared
+native probe owner and returns normally. The enabled diagnostics observe VBUS
+rise within 275 ms through the FUSB302 VBUS-OK comparator. They monitor CC for
+unexpected attachment, lower PL8 and observe comparator deassertion within
+650 ms. Comparator deassertion is a voltage-threshold observation; it does
+not establish the USB 800 mV safe-zero threshold. The diagnostic publishes no
+attachment token and does not start xHCI, PHY or DMA. No connected data device
+is possible under the required physically empty connector and open-CC checks.
 
-That 500 mA budget does not admit a hub and four arbitrary peripherals. Count
-the hub's own draw, each device's descriptor budget and startup transients.
-A webcam can need the complete 500 mA budget. For the requested simultaneous
-keyboard, mouse, webcam and serial topology, use a separately powered USB2 hub
-whose upstream port has demonstrated no backfeed. Do not raise source current
-from the SY6280's nominal limit. TYPEC16 continues to power the board.
+The separate GPIO guard operates independently of a pending I2C transaction.
+A service gap above 2 ms revokes the source. Normal close, fault revocation,
+operation timeout and the session deadline request PL8 low before return.
+The work deadline reserves the full 650 ms shutdown interval and cleanup time
+before the absolute session deadline. Delayed or uncertain I2C completion
+cannot postpone the GPIO stop. A failed PL8-low acknowledgment prohibits a
+normal return. A failed comparator observation records a failed diagnostic;
+it cannot become a successful source-off measurement.
 
-Reuse the existing provider's CC debounce, VBUS checks, permanent revocation
-and independent GPIO shutdown. Preserve its current budgets: a 120 ms stable
-sink termination (Rd) observation before enable, VBUS rise within 275 ms,
-service-entry gaps at most 2 ms, observations younger than 10 ms, and at most
-5 ms to finish a
-pending GPIO shutdown. Confirm low VBUS within the 650 ms shutdown budget
-using a qualified comparator threshold no greater than the 800 mV safe-zero
-limit and an external measurement.
-Measure before and after any implementation change with identical inputs.
-Record p50, p99 and maximum service gap and shutdown latency, CPU time and
-idle input current; an unexplained regression blocks integration.
+A weak shared probe abort hook lets this diagnostic lower its owned PL8 from
+EL3 before the existing fatal park, including session expiry. The hook performs
+no allocation, RTOS call, I2C transaction or wait. It clears only the dedicated PL8 data bit and preserves neighboring GPIO
+bits. The published first-fault marker suppresses recursive attempts. The
+override requires no EL1 ownership flag, so Secure EL3 never depends on dirty
+Nonsecure EL1 data. A failed MMIO access cannot erase the recorded origin.
+This is bounded software cleanup while the CPU and MMIO path work. It cannot
+promise cleanup after an interconnect stall; WDT recovery and runner readback
+handle the observed return state.
 
-Timestamp the fault observation, revocation, first GPIO stop, PL8-low
-acknowledgment and externally confirmed VBUS below 800 mV. The 5 ms GPIO
-timer starts when the GPIO task recognizes shutdown. Progress expiry can
-take 10 ms after the last observation, followed by the GPIO task's measured
-service gap and its disable interval. A measured gap of at most 2 ms would
-give a conditional 17 ms bound while the CPU and GPIO path remain live.
-The provider's 2 ms entry guard does not enforce the GPIO task's cadence.
-Bound discharge within 650 ms of the shutdown request. A five-second test
-must request shutdown by 4.330 seconds, reserving the detection and cleanup
-intervals. Compare the same
-image with source disabled before enabling it, at identical clocks, board
-load, supply, cable and meter settings. Record meter uncertainty; an idle
-current increase outside that uncertainty needs an explanation before acceptance.
+The runner captures PL8 configuration, data and pull before admission and after
+every accessible return, including watchdog returns and setup helpers. It checks
+these registers before DDR result reads or another native launch. An output-high
+observation fails the run even if recovery succeeds. Recovery clears only PL8's
+data bit, preserves neighboring pins, verifies the low state, and records both
+snapshots before another admission. Failed transport stops commands to that
+instance. Unconfirmed recovery retains quarantine and requires coordinator
+physical recovery. R45 cannot overcome an actively driven high output.
 
-The vendor selects 400 kHz for S_TWI1. The current native provider caps it at
-100 kHz; that cap remains an implementation gap. The default needs a derived
-400 kHz divider for each admitted oscillator rate, supported by the FUSB302
-timing and the board's measured rise time. Preserve vendor write ordering,
-STOP completion and deadlines. Do not retune the shared APBS1/OSC parent.
+The native diagnostic reuses the TWI engine and vendor FUSB302 initialization,
+keeps PD and VCONN disabled, and owns only the TYPEC24 board pins and local
+S_TWI1 controls. It preserves shared APBS parents. Use the vendor's 400 kHz
+S_TWI1 operating rate with its documented divider and completion ordering.
+The existing provider's 100 kHz cap remains a separate open implementation gap.
 
-The first control run lasts at most five seconds and confirms PL8 low,
-no attachment token and no VBUS rise on an empty TYPEC24. A physically empty
-connector has no Rd termination, so the normal provider cannot enable it.
+Three reviewers approve the implementation design for simplicity, hardware
+performance and correctness. The same reviewers assess the resulting code. Host checks must exercise
+the real diagnostic state machine with delayed comparator and I2C completion,
+service-gap loss, all shutdown reasons and GPIO write failures. Runner checks
+cover pre-admission recovery, normal and watchdog returns, neighboring bits,
+transport failure and preservation of the first failure. Physical runs establish
+rise/fall and actual reset behavior; host models do not qualify these effects.
 
-The requested empty-port enable/disable test needs a separate diagnostic
-pulse, authorized only through the runner after the power gate. It never
-publishes an attachment token or starts xHCI/PHY/DMA. After confirming PL8
-low, it enables the owned switch for at most 1,000 ms from the first enable
-effect, including the vendor's 1,000 µs ramp interval, and then disables it.
-The complete image/session budget is five seconds. Arm independent protection
-before issuing enable, or trigger it from the physical PL8/VBUS rising edge.
-It must cut the output by 1.350 seconds after that edge and establish VBUS
-below 800 mV by two seconds, including CPU/interconnect failure or reset.
-Reserve the full 650 ms discharge bound after cutoff; software acknowledgment
-cannot start or extend these independent limits. The protection must discharge
-the output even if the CPU leaves PL8 high. Permit no repeated pulse or
-automatic rearm. Record no attached data device, PL8 high/low acknowledgments
-and externally measured VBUS rise/discharge separately. Normal return requires
-confirmed source-off and interrupt restoration. No pulse image is implemented
-or frozen before cutoff and coordinator approval.
+## PL8 reset state and return admission
 
-Loaded-source qualification uses a reviewed Rd sink/load fixture and retains
-normal attachment checks. It runs for at most five seconds: verify off,
-attach, enable, observe the measured load, revoke and verify off. The
-source-disabled control precedes either enable test. Missing protection or
-measurement equipment blocks both enable tests; the Rd fixture is required
-only for normal attachment/load qualification.
+The A733 V1.00 manual, sections 18.14.5.2 and 18.14.7.2–.3/.6, documents
+S_GPIO at `0x07025000`. PL8 uses configuration word `+0x04[3:0]`, data word
+`+0x10[8]` and pull word `+0x24[17:16]`. Documented defaults are mux 15
+(IO disabled), data zero and pull zero (disabled). Output mode is mux 1;
+input mode is mux 0. The manual hash is
+`cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d`.
 
-Cleanup first closes host admission and requests provider revocation. Keep
-the Type-C and GPIO tasks running until PL8 low is acknowledged. Continue
-the I2C task, when usable, until low VBUS is observed; a retained bus leaves
-discharge uncertain. Record PL8 acknowledgment and low-VBUS evidence
-separately. Retain all provider resources and prohibit automatic reattachment.
-A failed disable, uncertain GPIO write or expired cleanup deadline requires
-the supervised physical recovery already established for that board. Do not
-interpret CPU return or system reset as proof that source power stopped.
+Manual section 8.3.6.5 calls WDT configuration 01 a whole-system reset without
+specifying S_GPIO reset-domain coverage. The vendor R_PIO node uses APBS0 and
+has no reset binding. The captured ROM's direct FEL entry at `0x20..0x40`
+reaches dispatcher `0x2514` and bypasses reset prefix `0x44..0x178`. Thus neither
+a documented register default nor normal CPU RMR return proves PL8 becomes low.
+The runner uses live readback for both normal and watchdog returns.
 
-USB idle gating additionally requires demonstrated controller halt and
-completed DMA writes before releasing clocks, power or DMA storage. Keep
-shared parents and other USB controllers live. The [real-time audit](driver-realtime-audit.md)
-records the missing drain evidence; VBUS-off acknowledgment alone cannot
-satisfy that prerequisite.
+The vendor DTS and R_PIO driver are pinned at
+`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`; their SHA-256 values are
+`1c7313f655bdc4d018201664adcb1fa1d100280388b8975e193ebbfc6ad4ddfa`
+and `431fac7b767f5be39015cdf67fdd3dec230cbc1ebeb2fa0c0de08ca0f6e223a1`.
+The captured FIXS ROM hash is
+`a8e31821e8a1611d75867825914c58373c732742cb8f2235e8168c1d7e93b5aa`.
+No complete verified ROM/boot0 PL8 write trace establishes a stronger reset
+contract. Observations must retain the raw configuration, data and pull words.
 
-This implementation can provide bounded software shutdown for observable
-CC/VBUS/controller faults while the required execution path remains live.
-A requirement to latch off on U3 overload, or to guarantee disable across
-CPU/interconnect failure and reset, needs independent hardware current
-detection, a latching cutoff and a verified watchdog/enable path. Those
-capabilities are not established by the fitted schematic. Their absence
-remains a blocker to that stronger fault guarantee and must not be hidden
-in qualification flags or source-session identifiers.
-
-Success, a diagnostic mismatch, assertion, timeout, cancellation and host loss
-must all request shutdown before retiring either provider task. Transport
-failure stops further board communication. A CPU/interconnect stall or reset
-needs an independent cutoff; software cleanup cannot establish source-off
-in those cases. Before implementation, the coordinator must select that
-protection and approve numerical overload current, cutoff latency and maximum
-delivered energy. No such equipment or reset-to-PL8 proof is established here.
+The class attach phase uses a separately powered high-speed USB2 hub with
+upstream backfeed protection. Keep TYPEC16 connected for power and recovery.
+The hub supply covers the webcam, keyboard, mouse and serial adapter. Gen1,
+PD, VCONN and increased source-current advertisements remain outside this step.
+Controller halt and completed DMA writes still precede any clock or PHY gating.
