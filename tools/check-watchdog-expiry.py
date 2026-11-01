@@ -97,7 +97,7 @@ def run_phase(phase, transaction, evidence, image_path, image, rom, before,
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--phase', choices=('arm-disarm', 'expiry'), required=True)
-    parser.add_argument('--confirm-bridge-stable', action='store_true',
+    parser.add_argument('--confirm-bridge-stable', action='store_true', required=True,
                         help='Coordinator confirms BOOT/GND bridge stays attached through reset.')
     parser.add_argument('--fel', type=Path, required=True)
     parser.add_argument('--rom', type=Path, required=True)

@@ -51,9 +51,6 @@ def main():
         raise SystemExit('Platform object count changed')
     save(e, 'origins.json', origins)
     platform.record(__file__, {'origins_sha256': digest(e / 'origins.json')})
-    for name in ('README.md',):
-        source = ROOT / 'apps/storage-read-returning' / name
-        if source.exists(): shutil.copy2(source, e / name)
     print(f'Built the returning SD0 read image: {e / "probe.bin"} ({digest(e / "probe.bin")})')
 
 

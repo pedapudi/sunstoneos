@@ -5,6 +5,14 @@ capture. The host implementation has fake-board and offline-image checks.
 Physical qualification remains the coordinator's responsibility. Workers submit
 images without opening a USB device.
 
+`tools/dev-run.py` is a compatibility wrapper around this runner. Its existing
+`cpu-return`, `gpu-return`, `npu` and `rail-helper` commands remain available.
+`--state` always selects offline preparation; force and skip-normalization
+options cannot bypass admission. Offline application checks use `board.py check
+IMAGE --kind cpu-return --state CAPTURE --evidence OUTPUT`; native probes keep
+the default `probe` kind. The [admission inventory](launch-admission.md) lists
+retired transports, retained hardware checks and manifest-generated READMEs.
+
 Use `~/.cache/sunstoneos/venv/bin/python3 -B tools/board.py` in this checkout.
 The examples abbreviate that command as `$board`:
 
