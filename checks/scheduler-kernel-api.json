@@ -16,7 +16,7 @@
     "Defer priority inheritance donation under object protection and repair through owner control; no object-to-control lock nesting.",
     "Complete port IRQ-exit and voluntary-yield hooks; preserve trace, runtime accounting, errno, TLS and task-switch hooks.",
     "Exclude all legacy global ready/delayed/suspended lists and all legacy task dispatch from enabled code.",
-    "Fix control migration publisher-drain acknowledgment and permanent control-slot lock races found by ordering review.",
+    "Fix control migration publisher-drain acknowledgment found by ordering review; permanent FIFO and retirement-incarnation reuse fixes have a targeted threaded check.",
     "Run concurrent eight-core QEMU task/object/timer/deletion/migration stress after complete API conversion; no board admission before review."
   ],
   "validation_limits": "Host fixture links actual FreeRTOS tasks/list code. It advances owner checkpoints explicitly and does not execute task stacks concurrently.",
@@ -494,5 +494,21 @@
   ],
   "private_helpers": [
     "prvAddNewTaskToReadyList"
+  ],
+  "validation_flags": {
+    "configSS_PARTITIONED_SCHEDULER": 1,
+    "SUNSTONE_SMP_CORES": 8,
+    "configUSE_TIMERS": 1,
+    "INCLUDE_xTaskDelayUntil": 1,
+    "INCLUDE_eTaskGetState": 1,
+    "INCLUDE_uxTaskPriorityGet": 1,
+    "INCLUDE_vTaskPrioritySet": 1,
+    "INCLUDE_xTaskAbortDelay": 1,
+    "INCLUDE_xTaskResumeFromISR": 1
+  },
+  "validation_commands": [
+    "checks/scheduler-kernel-adapter.py --freertos FREERTOS --build-dir BUILD --sysroot SYSROOT",
+    "checks/scheduler-kernel-registry.py --build-dir BUILD",
+    "checks/scheduler-control.py --build-dir BUILD"
   ]
 }

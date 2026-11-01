@@ -48,9 +48,10 @@ static struct ss_control ssKernelControl;
 static _Atomic uint64_t ssKernelTime;
 static _Atomic uint64_t ssKernelAdminNext, ssKernelAdminServing;
 static bool ssKernelInitialized;
-/* Registered live task count, serialized by registry administration. This is
- * the series-B placement input; it includes running and blocked home tasks. */
-static unsigned ssKernelLoad[configNUMBER_OF_CORES];
+/* Registered live task count. Registration is administration-serialized;
+ * migration updates estimates atomically without reversing the control order.
+ * The series-B placement input includes running and blocked home tasks. */
+static _Atomic unsigned ssKernelLoad[configNUMBER_OF_CORES];
 static unsigned ssKernelIdleNext;
 
 static void ssKernelSGI(void *context, unsigned cpu)
@@ -90,7 +91,7 @@ static bool ssKernelApply(void *, unsigned, void *, const struct ss_control_stat
 static bool ssKernelDetach(void *, unsigned, void *, struct ss_control_transfer *);
 static void ssKernelAdopt(void *, unsigned, void *, const struct ss_control_transfer *);
 static bool ssKernelDrained(void *, unsigned, unsigned);
-static void ssKernelRetired(void *, unsigned);
+static void ssKernelRetired(void *, unsigned, uint64_t);
 static bool ssKernelDispatch(void *, unsigned);
 static void ssKernelInspect(void *, unsigned, unsigned);
 static void ssKernelExpired(void *, const struct ss_deadline_result *);
@@ -156,7 +157,8 @@ static bool ssKernelAddTask(TCB_t *t)
     uint64_t admin = ssKernelAdminEnter();
     unsigned owner = (unsigned)__builtin_ctzll(mask);
     for (unsigned c = owner + 1; c < configNUMBER_OF_CORES; ++c)
-        if ((mask & (UINT64_C(1) << c)) && ssKernelLoad[c] < ssKernelLoad[owner])
+        if ((mask & (UINT64_C(1) << c)) && atomic_load_explicit(&ssKernelLoad[c], memory_order_relaxed) <
+            atomic_load_explicit(&ssKernelLoad[owner], memory_order_relaxed))
             owner = c;
     if ((t->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0) {
         configASSERT(!xSchedulerRunning && ssKernelIdleNext < configNUMBER_OF_CORES);
@@ -167,7 +169,7 @@ static bool ssKernelAddTask(TCB_t *t)
     unsigned slot = ss_kernel_handle_register(&ssKernelRegistry, t,
                                               ssKernelSlotInitialize, &creation);
     if (slot < SS_OWNER_SLOTS) {
-        ++ssKernelLoad[owner];
+        atomic_fetch_add_explicit(&ssKernelLoad[owner], 1, memory_order_relaxed);
         ++uxCurrentNumberOfTasks;
         ++uxTaskNumber;
 #if configUSE_TRACE_FACILITY == 1
@@ -706,11 +708,11 @@ static bool ssKernelDetach(void *context, unsigned slot, void *task,
     transfer->wait_generation = s->generation;
     transfer->wait_outcome = atomic_load_explicit(&s->outcome, memory_order_acquire);
     ssKernelCancel(s);
-    uint64_t admin = ssKernelAdminEnter();
-    configASSERT(ssKernelLoad[transfer->old_owner]);
-    --ssKernelLoad[transfer->old_owner];
-    ++ssKernelLoad[transfer->new_owner];
-    ssKernelAdminExit(admin);
+    /* Registration takes administration before this control FIFO. Migration
+     * must never reverse that order merely to update placement estimates. */
+    configASSERT(atomic_load_explicit(&ssKernelLoad[transfer->old_owner], memory_order_relaxed));
+    atomic_fetch_sub_explicit(&ssKernelLoad[transfer->old_owner], 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&ssKernelLoad[transfer->new_owner], 1, memory_order_relaxed);
     /* A release owner change is the only point after which foreign hints may
      * be forwarded. The destination alone adopts the saved queue/deadline. */
     atomic_store_explicit(&s->owner, transfer->new_owner, memory_order_release);
@@ -740,16 +742,18 @@ static bool ssKernelDrained(void *context, unsigned cpu, unsigned slot)
             return false;
     return !ssKernelCPUs[cpu].reference[slot].descriptor;
 }
-static void ssKernelRetired(void *context, unsigned slot)
+static void ssKernelRetired(void *context, unsigned slot, uint64_t incarnation)
 {
     (void)context;
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     uint64_t admin = ssKernelAdminEnter();
     TCB_t *t = ssKernelRegistry.descriptor[slot].task;
-    if (ss_kernel_handle_retire(&ssKernelRegistry, slot, true)) {
+    if (atomic_load_explicit(&ssKernelRegistry.descriptor[slot].incarnation,
+                              memory_order_acquire) == incarnation &&
+        ss_kernel_handle_retire(&ssKernelRegistry, slot, true)) {
         unsigned owner = atomic_load_explicit(&ssKernelTasks[slot].owner, memory_order_relaxed);
-        configASSERT(ssKernelLoad[owner] && uxCurrentNumberOfTasks);
-        --ssKernelLoad[owner];
+        configASSERT(atomic_load_explicit(&ssKernelLoad[owner], memory_order_relaxed) && uxCurrentNumberOfTasks);
+        atomic_fetch_sub_explicit(&ssKernelLoad[owner], 1, memory_order_relaxed);
         --uxCurrentNumberOfTasks;
         prvDeleteTCB(t);
     }

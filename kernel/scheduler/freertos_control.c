@@ -34,9 +34,20 @@ void ss_control_register(struct ss_control *c, unsigned slot,
                          unsigned owner, unsigned priority, uint64_t affinity)
 {
     struct ss_control_slot *s = &c->slot[slot];
-    *s = (struct ss_control_slot){ .descriptor = d, .owner = owner,
-        .desired = { .incarnation = incarnation, .priority = priority,
-                     .effective_priority = priority, .affinity = affinity } };
+    /* A closed, unreferenced slot can still have a retirement consumer queued
+     * on this permanent FIFO. Never reset its ticket counters on reuse. */
+    lock(c, s);
+    s->descriptor = d;
+    s->desired = (struct ss_control_state){ .incarnation = incarnation,
+        .priority = priority, .effective_priority = priority, .affinity = affinity };
+    s->transfer = (struct ss_control_transfer){0};
+    atomic_store_explicit(&s->owner, owner, memory_order_release);
+    atomic_store_explicit(&s->applied, 0, memory_order_release);
+    s->phase = 0;
+    s->retained = false;
+    s->old_drained = false;
+    s->drain_mask = 0;
+    unlock(c, s);
 }
 uint64_t ss_control_publish(struct ss_control *c, unsigned slot,
                             ss_control_mutate mutate, void *context)
@@ -84,7 +95,9 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
 {
     struct ss_control_slot *s = &c->slot[slot];
     bool put = false, retire = false;
+    uint64_t incarnation;
     lock(c, s);
+    incarnation = s->desired.incarnation;
     if (!s->desired.dead && !s->retained && cpu == s->owner &&
         ss_owner_pin(s->descriptor, s->desired.incarnation, c->backend)) {
         s->retained = true;
@@ -147,7 +160,7 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
     unlock(c, s);
     /* A last-put callback may publish retirement; never invoke under lock. */
     if (put) ss_owner_put(s->descriptor);
-    if (retire && c->ops.retired) c->ops.retired(c->ops.context, slot);
+    if (retire && c->ops.retired) c->ops.retired(c->ops.context, slot, incarnation);
     ss_owner_event(c->backend);
 }
 unsigned ss_control_drain(struct ss_control *c, unsigned cpu)
