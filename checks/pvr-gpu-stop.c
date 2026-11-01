@@ -1,4 +1,15 @@
 #include "pvr_gpu_stop.h"
+#ifdef PVR_GPU_STOP_CRUMB_TEST
+#include "gpu-stop-crumbs.h"
+static uint32_t stop_fault_site, stop_fault_value, stop_fault_count;
+void sunstone_crumb_fail(uint32_t site, uint32_t value, const void *caller)
+{
+    if ((site >> 28 & 7u) != 5u) return;
+    ++stop_fault_count;
+    if (!stop_fault_site) { stop_fault_site=site;stop_fault_value=value; }
+    (void)caller;
+}
+#endif
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,6 +118,9 @@ static int isolation_poll(void *ctx)
 static const struct pvr_gpu_stop_ops ops={now,read_reg,write_reg,sync_write,sync_read,isolate,NULL};
 static void prepare(const void *fw)
 {
+#ifdef PVR_GPU_STOP_CRUMB_TEST
+    stop_fault_site=stop_fault_value=stop_fault_count=0;
+#endif
     memset(&m,0,sizeof(m)); memset(&q,0,sizeof(q)); memset(&c,0,sizeof(c)); memset(&s,0,sizeof(s));
     assert(pvr_ccb_init(&q,&qops,&m,21)==PVR_CCB_OK);
     assert(pvr_ccb_start(&q,m.now)==PVR_CCB_OK);
@@ -126,10 +140,21 @@ static void stopped(unsigned reason)
 {
     assert(s.phase==PVR_GPU_STOP_FAILED && s.error==reason &&
            c.phase==PVR_GPU_CONTROL_FAILED && q.phase==PVR_CCB_FAILED);
+#ifdef PVR_GPU_STOP_CRUMB_TEST
+    assert(stop_fault_count==1 && (stop_fault_site >> 16 & 15u)==reason);
+    assert((stop_fault_site >> 20 & 15u)==(s.index & 15u));
+    assert((stop_fault_site >> 24 & 15u)>=PVR_GPU_STOP_CLEAR_IDLE);
+    assert((stop_fault_site >> 24 & 15u)<=PVR_GPU_STOP_ISOLATE);
+    assert((stop_fault_site & 0xfffu) && stop_fault_value==(uint32_t)s.last_read);
+#endif
     unsigned calls=m.calls;
     assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_FAULT);
     assert(pvr_gpu_control_poll(&c,4)==PVR_GPU_CONTROL_FAULT);
-    assert(pvr_ccb_poll(&q,m.now)==PVR_CCB_FAULT && calls==m.calls); ++faults;
+    assert(pvr_ccb_poll(&q,m.now)==PVR_CCB_FAULT && calls==m.calls);
+#ifdef PVR_GPU_STOP_CRUMB_TEST
+    assert(stop_fault_count==1);
+#endif
+    ++faults;
 }
 static FILE *output(const char *dir,const char *name)
 {

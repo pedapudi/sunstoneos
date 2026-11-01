@@ -6,6 +6,7 @@
  * a MIPS core (rgxstartstop.c:992-1241; docs/designs/gpu-firmware-stop.md).
  */
 #include "pvr_gpu_stop.h"
+#include "pvr_gpu_crumb.h"
 #include "a733_range.h"
 #include <string.h>
 
@@ -76,8 +77,14 @@ int pvr_gpu_stop_init_unacknowledged(struct pvr_gpu_stop *s, struct pvr_gpu_cont
                                      const void *image, size_t bytes, const struct pvr_gpu_stop_ops *ops,
                                      void *ctx, uint64_t deadline)
 { return plan(s,c,image,bytes,ops,ctx,deadline,0); }
-static enum pvr_gpu_stop_result fail(struct pvr_gpu_stop *s, unsigned error)
+#define fail(s, error) fail_at((s), (error), __LINE__, PVR_GPU_CRUMB_HERE())
+static enum pvr_gpu_stop_result fail_at(struct pvr_gpu_stop *s, unsigned error,
+                                       unsigned line, const void *here)
 {
+    if (s->phase != PVR_GPU_STOP_FAILED)
+        pvr_gpu_crumb_fail(PVR_GPU_CRUMB_STOP,
+            (s->phase & 15u) << 8 | (s->index & 15u) << 4 | (error & 15u),
+            line, (uint32_t)s->last_read, here);
     s->phase=PVR_GPU_STOP_FAILED; s->error=error;
     (void)pvr_gpu_control_abort(s->control);
     return PVR_GPU_STOP_FAULT;
@@ -155,6 +162,7 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
             if (!s->ops.write(s->context,op->offset,op->width,op->value)) return fail(s,PVR_GPU_STOP_IO);
         } else if (op->kind==IRQ_READ) {
             if (!s->ops.read(s->context,op->offset,op->width,&value)) return fail(s,PVR_GPU_STOP_IO);
+            s->last_read=value;
             s->irq_status=(uint32_t)value;
         } else if (op->kind==IRQ_CLEAR) {
             /* Clear only the event bit, and only when it was pending. */
@@ -165,6 +173,7 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
             struct a733_gpu_spin wait={0};
             for (;;) {
                 if (!s->ops.read(s->context,op->offset,op->width,&value)) return fail(s,PVR_GPU_STOP_IO);
+                s->last_read=value;
                 if ((value&op->mask)==op->value) break;
                 if (!clock_now(s,&now)) return PVR_GPU_STOP_FAULT;
                 if (!a733_gpu_spin_again(&wait,now)) return PVR_GPU_STOP_AGAIN;

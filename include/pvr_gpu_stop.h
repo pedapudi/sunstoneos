@@ -46,6 +46,7 @@ struct pvr_gpu_stop {
     struct pvr_gpu_control *control;
     void *context;
     uint64_t deadline, last_now;
+    uint64_t last_read; /* Last successful register sample, retained on failure. */
     uint32_t phase, error, index, count;
     uint32_t acknowledgement[2], command_status[2], isolation_observed, isolation_started, irq_status;
     uint32_t unacknowledged;
