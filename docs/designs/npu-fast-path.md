@@ -79,11 +79,13 @@ its retained MIT notices and runs only as a development reference here.
 - `vip_lite_config.h:409–420` labels parallel asynchronous mode unsupported
   and selects mode 3. Source presence alone does not qualify live chaining.
 
-A prepared sequence is a command resource with one completion fence. Preparing
+`a733_npu_sequence_prepare` constructs a resident sequence with one completion
+fence. It preserves each native stream's flush/stall footer and emits only the
+final event and END. Preparing
 links and validating dependencies happens once, while the sequence is idle.
 A live command must never be patched while the fetch engine can read it.
-Hardware sequence construction and physical chained-throughput evidence remain
-required; ISR-started FIFO jobs still make one CPU interrupt per command.
+Physical chained-throughput evidence remains required; ISR-started FIFO jobs
+still make one CPU interrupt per command.
 
 ## Power and measurement require separate physical evidence
 
@@ -91,18 +93,31 @@ Approved measurements retain 852 MHz at 800 mV while jobs are queued.
 Physical domain OFF remains unsupported: ROM recovery shares NPU SRAM, and
 DCDC2 also supplies system and DRAM logic. See [the power boundary](../npu.md#the-supported-npu-power-boundary-preserves-shared-sram).
 
-The proposed idle policy suspends only the vendor's internal NPU clocks after
-10 ms with no queued or active work, and keeps them running for at least 1 ms
-after resume. Submission cancels an unexecuted idle request; a suspended engine
-resumes on the lifecycle path before accepting work. The design requires
-simplicity, performance and correctness review before implementation.
+The proposed idle policy suspends only the vendor's internal NPU clocks.
+A one-shot idle timer becomes eligible at the later of full-idle plus 10 ms
+and resume plus 1 ms. Completed records awaiting release do not delay gating.
+Submission cancels an unexecuted idle request. A suspended engine resumes on
+the lifecycle path before accepting work; the 1 ms minimum never delays a job.
+
+The gate-only transition preserves the top-point scaler fields. This differs
+from the vendor's enclosing `power_clock_state_in/out` routines, which also
+change scaling at `vip_drv_pm.c:445–448,461–464`. Resume must complete the
+vendor's 1 µs settle and top-point verification within a 100 µs deadline.
+The first resumed job may add at most 100 µs to p99 and maximum latency.
+The design requires simplicity, performance and correctness approval before
+implementation.
 
 A proposed 3-3 transition run alternates 100 busy/idle cycles using the vendor
 suspend/resume sequence at `vip_drv_pm.c:157–209`. It retains domain power and
 the approved operating point. Record every completion, resume delay, p50/p99/max
 job latency, throughput, CPU time and idle power before and after. Require no
 numerical mismatch, no retained fault, normal retirement and restored DRAM.
-Reject unexplained latency or power regressions. This power-state run needs
+Compare 9, 11 and 100 ms idle gaps. Continuously queued throughput must remain
+at least 98% of control; p99, maximum and CPU/job must stay within 105%, 110%
+and 105% of control respectively. Reject unexplained regressions within those
+limits too. Idle savings must exceed 95% meter uncertainty, and total cycle
+energy must not increase beyond measurement uncertainty. Record the break-even
+idle duration, including transition energy. This power-state run needs
 coordinator approval before submission.
 
 The performance comparison needs a control and a queue variant with identical

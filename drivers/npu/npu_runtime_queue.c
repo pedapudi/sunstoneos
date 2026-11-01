@@ -1,5 +1,6 @@
 #include "npu_runtime_queue.h"
 #include "a733_mmio.h"
+#include "sunstone_crumb.h"
 
 uint64_t npu_runtime_queue_lock(void)
 {
@@ -38,7 +39,10 @@ static int validate(void *cookie, const struct a733_npu_command *c)
 static int start(void *cookie, const struct a733_npu_command *c, uint64_t timeout)
 {
     struct npu_runtime_queue *q = cookie;
-    if (timeout > UINT64_MAX / q->frequency) return 0;
+    if (timeout > UINT64_MAX / q->frequency) {
+        sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU), (uint32_t)timeout, SUNSTONE_CRUMB_HERE());
+        return 0;
+    }
     q->timeout_ticks = timeout * q->frequency / 1000000;
     if (!q->timeout_ticks) return 0;
     q->started = ticks();
@@ -60,7 +64,22 @@ static int complete(void *cookie)
     const uint32_t idle = *(volatile uint32_t *)(base + 4);
     __asm__ volatile("dsb sy" ::: "memory");
     q->last_events = events; q->last_idle = idle; q->observed = ticks();
-    return events == 1 && idle == UINT32_C(0x7fffffff) && q->observed - q->started < q->timeout_ticks;
+    if (events != 1) {
+        sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU) | SUNSTONE_CRUMB_NPU_REGISTER | (4u << 16),
+                            events, SUNSTONE_CRUMB_HERE());
+        return 0;
+    }
+    if (idle != UINT32_C(0x7fffffff)) {
+        sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU) | SUNSTONE_CRUMB_NPU_REGISTER | (1u << 16),
+                            idle, SUNSTONE_CRUMB_HERE());
+        return 0;
+    }
+    if (q->observed - q->started >= q->timeout_ticks) {
+        sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU),
+                            (uint32_t)(q->observed - q->started), SUNSTONE_CRUMB_HERE());
+        return 0;
+    }
+    return 1;
 }
 static void notify(void *cookie)
 {
@@ -70,9 +89,15 @@ static void notify(void *cookie)
 static void irq(void *cookie, BaseType_t *woken)
 {
     struct npu_runtime_queue *q = cookie;
+#ifdef SUNSTONE_NPU_QUEUE_TIMING
+    uint64_t since = ticks();
+#endif
     q->woken = woken;
     npu_queue_irq(&q->queue);
     q->woken = NULL;
+#ifdef SUNSTONE_NPU_QUEUE_TIMING
+    q->irq_cpu_ticks += ticks() - since;
+#endif
     if (atomic_load_explicit(&q->queue.failed, memory_order_acquire)) {
         /* The first IRQ's status/deadline inputs remain in the queue adapter;
          * no controller operation or release follows this retained failure. */
