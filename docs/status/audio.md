@@ -1,8 +1,13 @@
-# Audio capture and playback
+# Audio
 
-Status: internal I2S0 capture/playback, cyclic cancellation and drain pass a
-returning board diagnostic. External microphone and headset operation remain
-unqualified.
+**Status: implemented.**
+
+I2S0 capture, playback, cyclic cancellation and drain run through the FreeRTOS
+DMA service, the cyclic stream driver and the native cache adapter.
+
+**Board-qualified scope:** Internal I2S0 loopback capture and playback, cyclic
+cancellation and drain, and raw-ring overrun pass a returning board diagnostic
+on port 3-3. External microphone and headset operation remain unqualified.
 
 The diagnostic in `apps/i2s/probe.c` uses the FreeRTOS DMA service, cyclic stream
 driver and native cache adapter. I2S0 CTL bit 3 connects DOUT to DIN internally,
