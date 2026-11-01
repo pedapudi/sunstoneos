@@ -70,8 +70,10 @@ so the reference remains 24 MHz. It never programs that shared reference.
 | Optional MCLK | Capture core divider code 2 | Divide module clock by 2; 12.288 MHz |
 
 The multiplier is within the source range 75–129 and the PLL range
-1.8–3.096 GHz. The binding requires modulation disabled in the AUDIO1
-control and pattern words. Admission conservatively checks both AUDIO1 outputs,
+1.8–3.096 GHz. The binding requires modulation disabled in the AUDIO1 pattern words: PAT0
+bit 31 and PAT1 bit 27. AUDIO1 CTRL bits 26–23 are reserved under manual
+section 4.1.6.51. The observed bit 24 is preserved without being interpreted
+as AUDIO0's modulation control. Admission conservatively checks both AUDIO1 outputs,
 although I2S0 selects DIV5. At CCU offset `0x191c`, bits 1 and 2 must be set
 to select No-Auto mode, and software-enable bits 17 and 18 must also be set.
 Bits 17 and 18 at offset `0x199c` report the effective gate state. An inherited

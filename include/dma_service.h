@@ -41,7 +41,7 @@ struct dma_service_reply {
     enum dma_service_outcome outcome;
     unsigned owns_session, holds_buffers;
     struct a733_i2s_period period; /* Kind distinguishes raw, copied and metadata-only progress. */
-    uint64_t stream_frames; /* Cumulative completed cyclic frames, including final drain. */
+    uint64_t stream_frames; /* Completed cyclic prefix; cancel preserves the last ACTIVE observation. */
 };
 /* Metadata is copied at initialization; pointed-to RAM allocations remain
  * reserved/pinned for service lifetime. RAM jobs prohibit FIFO requests.

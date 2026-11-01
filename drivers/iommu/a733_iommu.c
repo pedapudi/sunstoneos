@@ -240,7 +240,7 @@ static struct operation operation(unsigned i,uint64_t table,uint16_t translated)
 {
     struct operation p={0,0,0};
     if(i<2) { p.off=i*0x10000+0x20;p.value=(uint32_t)(table>>14); }
-    else if(i<4) { p.off=(i-2)*0x10000+0x2c;p.value=0x3007f; }
+    else if(i<4) { p.off=(i-2)*0x10000+0x2c;p.value=translated==6?0:0x3007f; /* Effective ISP vendor parser leaves prefetch zero. */ }
     else if(i<6) { p.off=(i-4)*0x10000+0x40;p.value=1; }
     else if(i<8) { p.off=(i-6)*0x10000+0x60;p.value=1; }
     else if(i<10) { p.off=(i-8)*0x10000+0x80;p.value=0; }
