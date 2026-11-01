@@ -78,7 +78,7 @@ Retained reopen repeats the same startup sequence and flush. The queue changes
 neither the vendor operating point nor the order of power and clock operations.
 
 Four frozen image packages live under
-`~/.cache/sunstoneos/build/gpu-integrate-1031/images/`. Each package has a README
+`~/.cache/sunstoneos/build/gpu-integrate-1031/images-er/`. Each package has a README
 with its image hash, runner command, session template, inputs, expected result,
 breadcrumbs and failure signatures. Run them in this order:
 
@@ -95,8 +95,22 @@ and runner readiness. Native return requires `RETURN_ROM`, watchdog mode 0,
 acknowledged GPU shutdown and a suspended GPU worker. Host completion also
 requires restoration of every saved RAM span and the admitted rail procedure.
 The reference firmware diagnostic's native return does not establish those host
-steps: its followup failed on a missing review file. The CPU clock owner's early
-REQUEST/FOLLOW return defect remains a separate integration dependency.
+steps: its followup failed on a missing review file. The merged early CPU-return path drains an in-flight transition and verifies
+clock and lease state without requiring the owner to have reached FOLLOW.
+
+The bringup runner's `tools/dev-run.py gpu-return` accepts these manifest-based
+images. It copies the GPU receipt and any linked thermal window before restoring
+saved RAM, then classifies payload and telemetry failures after restoration.
+Receipts are bound to the frozen image's capabilities and session identity.
+The queue-add decoder checks all fixed fields and bounds variable timing words;
+`--expect-result` selects exactly one or eight jobs.
+
+Worker job claims and terminal publication emit RTC stages `0x0410` and `0x0411`
+with the sequence number; the retained word keeps its low 16 bits. Each claimed
+job emits two markers, including refused or faulted jobs. CPU-return stage
+`0x0204` identifies drain, lowering request, lowering wait, verification or done,
+plus the owner phase, cluster and driver state. Unchanged pending polls emit no
+additional marker. The native fixtures check the actual marker arguments.
 
 Physical queue interrupts, timing and recovery remain unqualified. Measure
 submit-to-kick and timeline-to-record latency on the board; host timing cannot

@@ -210,10 +210,10 @@ normal return with boot clocks. After watchdog reset it waits until DRAM is
 initialized and the next launch normalizes rails. `--no-normalize-rails` and
 `--no-restore-rails` explicitly disable the respective default.
 
-This command does not yet demonstrate a passing hello-compute control.
-The merged REQUEST/FOLLOW correction is host-verified; a new board result
-remains outstanding. Current `gpu-return` is refused because the existing ladder uses the pre-split application layout;
-its runner is `tools/dev-run.py` at `6a714bcf`. NPU development preparation
+The historical REQUEST/FOLLOW refusal has a host-verified correction. The runner
+now accepts generic GPU images with image-bound GPU and thermal receipt capture
+and strict queue-add result decoding. Frozen rebuilds and exact commands are in
+`~/.cache/sunstoneos/build/gpu-integrate-1031/images-er/`. NPU development preparation
 also remains unimplemented. `--check-only` reads the board unless `--state FILE`
 supplies a capture; neither mode writes rails.
 
