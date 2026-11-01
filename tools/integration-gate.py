@@ -273,6 +273,14 @@ def main(argv=None):
         # One invocation lets CMake reuse shared dependencies across selected targets.
         if not run('central-build', ['cmake', '--build', build, '--target', *targets, '-j', '12']):
             return 1
+    for variant in variants:
+        directory = build_root / ('gate-os-' + variant + '-' + tree)
+        options = [value.replace('{cache}', str(cache)) for value in VARIANTS[variant]]
+        if not run('os-' + variant + '-configure', [cfg, source, directory,
+                   '-DMIMUS_DIR=', '-DSUNSTONE_APPLICATION=', '-DSUNSTONE_A733_OS=ON', *options]):
+            return 1
+        if not run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', '12']):
+            return 1
     for name in (APPLICATIONS if args.full and mimus else applications):
         directory, selected = application_builds[name], applications.get(name, [])
         selected = list(dict.fromkeys(['sunstone-a733-os', *selected]))
@@ -286,14 +294,6 @@ def main(argv=None):
             # The application build repeats the core targets; build only its own.
             selected = list(dict.fromkeys(selected + [t for t in discovered if t not in core_targets]))
         if selected and not run(name + '-build', ['cmake', '--build', directory, '--target', *selected, '-j', '12']):
-            return 1
-    for variant in variants:
-        directory = build_root / ('gate-os-' + variant + '-' + tree)
-        options = [value.replace('{cache}', str(cache)) for value in VARIANTS[variant]]
-        if not run('os-' + variant + '-configure', [cfg, source, directory,
-                   '-DMIMUS_DIR=', '-DSUNSTONE_APPLICATION=', '-DSUNSTONE_A733_OS=ON', *options]):
-            return 1
-        if not run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', '12']):
             return 1
     commands = {
         'kernel': ['tools/check-kernel.py', build / 'kernel-check.elf', '--qemu', qemu, '--evidence', evidence / 'kernel'],

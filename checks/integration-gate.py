@@ -129,6 +129,18 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertIn('mimus checks require', result.stderr)
         self.assertEqual(self.records(), [])
 
+    def test_os_variant_build_precedes_external_application(self):
+        self.enable_mimus()
+        result = self.run_gate('--reason', 'OS and optional application composition',
+                               '--variant', 'sup', '--check', 'mimus-smp')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.records()
+        configured = [call for call in calls if call[0] == 'cfg.sh']
+        self.assertEqual(len(configured), 2)
+        self.assertIn('-DMIMUS_DIR=', configured[0])
+        self.assertIn('-DSUNSTONE_APPLICATION=', configured[0])
+        self.assertIn('-DSUNSTONE_APPLICATION=mimus', configured[1])
+
     def test_selected_variant_only(self):
         result = self.run_gate('--reason', 'Resident audio wiring', '--variant', 'resaud')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
