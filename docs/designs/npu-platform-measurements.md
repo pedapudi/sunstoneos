@@ -20,9 +20,9 @@ USB devices or the board.
   `A733_NPU_INTERRUPT`, `A733_NPU_LARGE_GRAPH`, `A733_NPU_NN_POOL_GRAPH` and
   `A733_NPU_RUNTIME_INPUT`.
 - **Register-model counts.** Two harnesses count callbacks in the existing
-  register models: [checks/npu-platform-budget.c](../../checks/npu-platform-budget.c)
+  register models: [checks/npu-platform-budget.c](https://github.com/pedapudi/sunstoneos/blob/da54be8d4a6333fe3822b73fd5a1fe437983c136/checks/npu-platform-budget.c)
   for local startup and local stop, and
-  [checks/npu-platform-pll-budget.c](../../checks/npu-platform-pll-budget.c)
+  [checks/npu-platform-pll-budget.c](https://github.com/pedapudi/sunstoneos/blob/da54be8d4a6333fe3822b73fd5a1fe437983c136/checks/npu-platform-pll-budget.c)
   for PLL preparation. One poll stands for one bootstrap tick, as in the
   native bootstrap loop. The same harness sources were compiled against both
   revisions with `clang-21 -fsanitize=address,undefined`.

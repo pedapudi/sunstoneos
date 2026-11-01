@@ -1,7 +1,12 @@
 # Design: restoring DRAM training from a record on the microSD card
 
-Status: **RAM-only restore implemented and host-checked; no physical restore
-has run.** The capture tools, fixed restore set, record builder, SRAM
+Status: **RAM-only restore has board evidence; physical card integration is
+unqualified.** The SID-selected default passed twice on port 3-1 on
+2026-10-31 with 34 ms quick checks. Explicit-record restores passed on both
+boards. The [record runbook](../board-runbooks/dram-restore-records.md) identifies
+the evidence, the active 879-register set and the remaining qualification.
+The capture derivation and earlier diagnostic records below retain their
+stated scope. The capture tools, fixed restore set, record builder, SRAM
 admission and restore helper are implemented. On the FEL path the restore
 runs under WDT0: a failed or hung restore resets the board to a new FEL
 instance and the host trains fully once. The card allocation and record
@@ -908,94 +913,31 @@ card allocation or backup authority is inferred from them. Independent
 correctness review approved the host implementation; physical qualification
 remains outstanding.
 
-## Next steps
+## Remaining qualification and card deployment
 
-Implementation and remaining physical work:
+The RAM-only helper, clocked post-initialization readback and SID-selected
+default are implemented. Explicit-record restores passed on both boards;
+the default passed twice on port 3-1. The
+[record runbook](../board-runbooks/dram-restore-records.md) identifies those
+results and the current 879-register set.
 
-| Part | Status |
-| --- | --- |
-| Capture reader, stage tables, runner, DRAM and SRAM builds, wrapper variants | Implemented, host-checked, frozen (v5 sets), run in ten lifetimes |
-| `tools/analyse-ddr-captures.py`, kind diff and block exclusion | Implemented, host-checked |
-| Restore set | Fixed: `~/.cache/sunstoneos/evidence/dram-final-readback-1031/restore-set-v5.json`, command in `restore-set-v5.command` |
-| Record format, paired selection and standby plans | Implemented and host-checked; physical card stage not started |
-| Record builder from a capture | Implemented; both actual board references and identity refusals checked |
-| Restore wrapper variant | Implemented; instruction and host-runner cases checked |
-| FEL fallback through one WDT0 reset, address-line and window quick check | Implemented and host-checked; the fallback ran on port 3-1 and the quick check passed on both boards (2026-10-31) |
-| March C- runs on the restored and P-state-0-only paths | Image implemented and host-modeled, never run on a board |
-| First restore test, [runbook](../board-runbooks/dram-restore-test-1.md) | Passed on both boards on 2026-10-31 (FEL path) |
-| Restore by SID as the development default, [records runbook](../board-runbooks/dram-restore-records.md) | Implemented and host-checked; not yet run on a board |
+Remaining work includes:
 
-**Facts the next steps rest on**, all measured on both boards on
-2026-10-25 except where marked:
+- Run the full-map March C- test after P-state-0-only training and after
+  restore, under the [memory qualification contract](../memory-qualification.md).
+  Existing quick checks do not establish full-capacity memory correctness.
+- Qualify repeated restored lifetimes, cold/warm starts, stress and a
+  temperature range. Records have no qualified temperature limit, and the
+  runner has no runtime temperature gate.
+- Establish physical fallback behavior for corrupt/wrong-board records,
+  readback failures and sampled-memory failures under the reviewed recovery
+  rules. Host instruction and protocol models retain their own narrower scope.
+- Capture and qualify lower P-states before DRAM frequency scaling. Current
+  restored boots use only the 2040 MHz P-state.
+- Complete card deployment only after FEL qualification, board-specific
+  backups, physical record reservations, temperature admission and recovery
+  qualification. The paired-record planner and card hook have host evidence;
+  they do not establish installed or autonomous card operation.
 
-- boot0's initialization-only path reaches firmware result 7 in 36 ms and
-  the size line in 40 ms; P-state-0-only training takes 4,437–4,451 ms and
-  four-P-state training 5,088–5,102 ms.
-- The restore set is 899 registers: the union of both boards'
-  P-state-0-only minus initialization-only diffs, with status pooled over
-  both boards and decided per byte-lane offset, and without the `0xa0000`
-  block, firmware controls, firmware inputs, controller read-result words,
-  byte-lane register `0x73`, and the 42 registers that the port 3-1 survey
-  showed the PHY owns.
-- The values come from one capture of each board's later P-state-0-only
-  lifetime: `board-session-20261025-27/port-3-3` and
-  `board-session-20261025-35/port-3-1`.
-- The `0xa0000` block is left out: the P-state-0-only path leaves it at its
-  power-on contents, and the four-P-state path writes it, probably through
-  `0x581b4` (inferred).
-- MR14 and MR15 travel in parameter words 50 and 51 through boot0's
-  `dram_tpr1` bit 31 path, which needs `dram_tpr10` bit 29 cleared as well
-  (`0x5a08e` runs only with bit 29 clear).
-
-**Work in order:**
-
-1. **Record builder, implemented.** `tools/training-record.py from-capture`: read a
-   P-state-0-only capture and `restore-set-v4.json`, refuse a capture
-   whose SID chip ID, training kind or stage tables differ, and emit the
-   record with the chip ID, the pinned boot0 checksum, the CRC of boot0's
-   parameter set 5 (the strap check; both boards select it), unknown
-   temperature fields, register runs and parameter words 32–51. The set
-   holds only 16-bit PHY registers and parameter words, so runs need no
-   width flag.
-2. **Restore wrapper variant, implemented.** `tools/prepare-ddr.py --variant restore`:
-   record in SRAM at `0x87000`, record checks before any edit (magic,
-   version, both CRCs, chip ID, boot0 checksum, strap CRC), the parameter
-   edits (`dram_tpr13` bit 2 clear, `dram_tpr10` bits 29:16 set to
-   `0x0001`, `dram_tpr1` bit 31 set, words 32–51), a Thumb-to-Arm `BLX` at
-   `0x56142` into a table-driven writer that clears `MicroContMuxSel`,
-   writes and reads back the set, sets it to 1 and calls `0x4bca8`, then
-   after `init_DRAM` the quick check below 4 GiB. Any failure stops
-   and reports in the mailbox; there is no in-place retraining.
-   `tools/run-ddr.py` uploads the record and, on a failure or hang, resets
-   through WDT0 and runs `--fallback-build` once.
-3. **Host checks, implemented.** `checks/ddr-wrapper.py` covers the
-   restore path, and `checks/ddr-host-retention.py` covers its runner cases:
-   a wrong-board record, a corrupt record, a read-back mismatch and a
-   quick-check failure must each stop with their code before any further
-   DRAM use and fall back through one WDT0 reset. Hangs, a missing or
-   unexplained reset, a failed fallback and a SID mismatch are covered too.
-4. **March C-.** Prepare the [memory qualification image](../memory-qualification.md)
-   for two board runs: after a P-state-0-only training (the reference
-   path's baseline, which has never had a full memory test) and after the
-   restore. It needs the user's acceptance of its three residuals before
-   `apps/memtest/check.py prepare` runs.
-5. **Review and freeze** `dram-restore-test-1` for both boards under the
-   design gate, then run it when power cycles are possible.
-6. **Card deployment**, only after FEL qualification: the host tools now
-   allocate two copies, select the newest eligible generation and plan
-   standby updates payload first and header last. The host-built boot0 hook
-   and helper plans are implemented and instruction-checked. Remaining
-   prerequisites are runtime temperature admission, qualified recovery,
-   physical reservations and board-specific backups. Every write
-   session still needs a host backup.
-7. **Qualification** as listed above: ten restored lifetimes per board with
-   March C-, cold and warm lifetimes with stress runs (which also set the
-   record's temperature limit and the retraining interval), the fallback
-   cases, and boot-time measurement against full training.
-
-**Open risks:** a trained register that equals its untrained value on both
-boards (about two expected), registers outside the captured address ranges,
-the excluded `0xa0000` block, MR12 and other mode registers that the
-message block does not carry, temperature (every capture is a
-room-temperature cold start), the P-state-0-only path's untested full
-memory behaviour, and the modified boot0 that a card restore needs.
+Registers outside the captured ranges, MR12 and other mode registers,
+record ageing and memory not covered by the quick check remain risks.
