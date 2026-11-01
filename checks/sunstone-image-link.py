@@ -165,12 +165,15 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, legacy_g
         output = subprocess.run(command, check=True, capture_output=True, text=True).stdout
         return {line.split()[0] for line in output.splitlines()
                 if len(line.split()) >= 2 and not line.endswith(':')}
+    assert objects, 'application object inventory is empty'
     own = symbols(objects + libraries, True)
     external = symbols(objects + libraries, False) - own
     allowed = symbols(runtime_libraries, True)
     linked = {symbol['name'] for symbol in elf.symbols if symbol['shndx'] != 0}
-    allowed |= {name for name in linked if name.startswith('ss_') or
-                re.match(r'^(?:[xv]|ux|ul|uc|pv|pc)[A-Z]', name)}
+    header = (Path(__file__).resolve().parents[1] / 'include/sunstone_app.h').read_text()
+    public_calls = set(re.findall(r'\b(ss_[a-z0-9_]+)\s*\([^;{}]*\)\s*;', header))
+    allowed |= linked & public_calls
+    allowed |= {name for name in linked if re.match(r'^(?:[xv]|ux|ul|uc|pv|pc)[A-Z]', name)}
     # FreeRTOS configASSERT is a board-supplied kernel callback.
     allowed.update(('vApplicationAssert', 'platform_panic'))
     if legacy_gpu:

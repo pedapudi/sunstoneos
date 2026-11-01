@@ -59,8 +59,8 @@ if(SUNSTONE_I2S_TRANSCRIBE)
   message(FATAL_ERROR "I2S transcription requires root composition with pinned mimus and SMP newlib")
  endif()
  set(i2s_recognition_sources
-  "${i2s_root}/apps/i2s/recognition.cc" "${i2s_root}/apps/mimus/recorded.cc"
-  "${i2s_root}/apps/mimus/platform.cc" "${i2s_root}/runtime/newlib.c"
+  "${MIMUS_SUNSTONE_ROOT}/apps/i2s/recognition.cc" "${MIMUS_SUNSTONE_ROOT}/apps/mimus/recorded.cc"
+  "${MIMUS_SUNSTONE_ROOT}/apps/mimus/platform.cc" "${i2s_root}/runtime/newlib.c"
   "${i2s_root}/runtime/newlib_smp.c" "${i2s_root}/runtime/newlib_syscalls_smp.c"
   "${i2s_root}/runtime/new_delete.cc" "${i2s_root}/runtime/cxx_terminate.cc"
   "${MIMUS_DIR}/firmware/components/pipeline/src/formatter.cc")
@@ -70,7 +70,7 @@ if(SUNSTONE_I2S_TRANSCRIBE)
  list(REMOVE_ITEM i2s_includes "${i2s_root}/runtime/include")
  set_property(TARGET sunstone-a733-i2s PROPERTY INCLUDE_DIRECTORIES "${i2s_includes}")
  sunstone_smp_compile(sunstone-a733-i2s)
- target_include_directories(sunstone-a733-i2s PRIVATE "${i2s_root}/apps/mimus"
+ target_include_directories(sunstone-a733-i2s PRIVATE "${MIMUS_SUNSTONE_ROOT}/apps/mimus"
   "${MIMUS_DIR}/firmware/components/pipeline/include")
  target_compile_definitions(sunstone-a733-i2s PRIVATE SUNSTONE_I2S_TRANSCRIBE=1 "$<$<COMPILE_LANGUAGE:CXX>:SUNSTONE_MIMUS_NATIVE=1>")
  target_compile_options(sunstone-a733-i2s PRIVATE "$<$<COMPILE_LANGUAGE:C>:-include;stdint.h>")
@@ -91,8 +91,8 @@ if(SUNSTONE_I2S_TRANSCRIBE)
  file(GLOB_RECURSE i2s_model_headers "${MIMUS_DIR}/firmware/components/asr/include/*.h"
   "${MIMUS_DIR}/firmware/components/pipeline/include/*.h")
  list(APPEND i2s_inputs ${i2s_asr_sources} ${i2s_model_headers}
-  "${i2s_root}/apps/mimus/recorded.h" "${i2s_root}/apps/mimus/timing.h"
-  "${i2s_root}/cmake/mimus.cmake" "${i2s_root}/cmake/mimus-smp.cmake"
+  "${MIMUS_SUNSTONE_ROOT}/apps/mimus/recorded.h" "${MIMUS_SUNSTONE_ROOT}/apps/mimus/timing.h"
+  "${MIMUS_SUNSTONE_ROOT}/cmake/mimus.cmake" "${MIMUS_SUNSTONE_ROOT}/cmake/mimus-smp.cmake"
   "${newlib_sysroot}/lib/libstdc++.a" "${newlib_sysroot}/lib/libsupc++.a"
   "${smp_libc}/lib/libm.a" "${smp_libc}/lib/libc.a"
   "${NEWLIB_ROOT}/lib/gcc/aarch64-none-elf/14.3.1/libgcc.a")
