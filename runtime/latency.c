@@ -147,7 +147,7 @@ static void site_insert(struct site_table *table, struct ss_latency_site sample)
 {
     if (sample.ticks <= table->sample[table->minimum].ticks) return;
     table->sample[table->minimum] = sample;
-    /* Fixed eight-entry scan only when a new duration enters the table. */
+    /* Fixed three-entry scan only when a new duration enters the table. */
     for (unsigned i = 0; i < SS_LAT_SITE_SLOTS; ++i)
         if (table->sample[i].ticks < table->sample[table->minimum].ticks)
             table->minimum = i;

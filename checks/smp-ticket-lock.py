@@ -156,14 +156,16 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def qemu_checks(build, emulator, output):
+def qemu_checks(build, emulator, output, cpus):
     from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
     decoder = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
     reports = []
-    for cpu in ("cortex-a53", "cortex-a76"):
+    for cpu in cpus:
         for name, cores, marker in (("smp-kernel-model", 2, "PASS SMP: 256"),
                                     ("smp-context-model", 2, "PASS SMP context: 64"),
                                     ("smp8-soak-model", 8, "PASS SMP8 soak: 64-lap")):
+            if cpu == "cortex-a55" and name != "smp-kernel-model":
+                continue
             image = build / (name + ".elf")
             trace = output / (cpu + "-" + name + ".asm.log")
             command = [str(emulator), "-machine", "virt,gic-version=3,secure=off,virtualization=off",
@@ -176,13 +178,21 @@ def qemu_checks(build, emulator, output):
             assert result.returncode == 0 and marker in log and "FAIL" not in log, (cpu, name, log)
             # This QEMU build prints OBJD-T bytes instead of instruction names.
             instructions = set()
+            capability_read = False
             for match in re.finditer(r"OBJD-T: ([0-9a-f]+)", trace.read_text()):
-                instructions.update(i.mnemonic for i in decoder.disasm(bytes.fromhex(match[1]), 0))
+                for instruction in decoder.disasm(bytes.fromhex(match[1]), 0):
+                    instructions.add(instruction.mnemonic)
+                    capability_read |= (instruction.mnemonic == "mrs" and
+                                        "id_aa64isar0_el1" in instruction.op_str)
             assert "ldaxr" in instructions and "stlrh" in instructions
-            assert ("ldadda" in instructions) == (cpu == "cortex-a76"), (cpu, instructions)
+            assert ("ldadda" in instructions) == (cpu != "cortex-a53"), (cpu, instructions)
+            assert capability_read, (cpu, "per-core LSE capability read not executed")
             reports.append(dict(cpu=cpu, image=name, image_sha256=digest(image), command=command,
+                                capability_read_executed=capability_read,
                                 lse_executed="ldadda" in instructions,
                                 monitored_wait_executed="ldaxrh" in instructions, passed=True))
+    for cpu in cpus:
+        assert any(r["monitored_wait_executed"] for r in reports if r["cpu"] == cpu), (cpu, "no contended monitored wait executed")
     return reports
 
 
@@ -191,6 +201,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--build", type=Path, help="Built FreeRTOS SMP model images; enables QEMU checks")
     parser.add_argument("--qemu", type=Path, default=CACHE / "host/usr/bin/qemu-system-aarch64")
+    parser.add_argument("--cpu", action="append", choices=("cortex-a53", "cortex-a55", "cortex-a76"),
+                        help="Run only these QEMU CPUs; default runs all three")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     cases = [explore(seed, lse, rounds) for seed in (0, 65534)
@@ -200,7 +212,7 @@ def main():
                   tas_negative_control=tas_negative_control(),
                   limitations="Coherent acquire/release model; no weak-memory propagation or physical timing qualification.",
                   checker_sha256=digest(Path(__file__)),
-                  qemu=qemu_checks(args.build, args.qemu, args.output) if args.build else [])
+                  qemu=qemu_checks(args.build, args.qemu, args.output, args.cpu or ("cortex-a53", "cortex-a55", "cortex-a76")) if args.build else [])
     (args.output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
     print(f"PASS ticket locks: {sum(c['states'] for c in cases)} states; "
           f"{report['arithmetic_cases']} wrap cases; monitored waits; TAS starvation control; "

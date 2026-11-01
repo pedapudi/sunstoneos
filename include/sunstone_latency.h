@@ -28,7 +28,7 @@ struct ss_latency_core {
     struct ss_latency_metric metric[SS_LAT_METRICS];
 } __attribute__((aligned(64)));
 #define SS_LAT_SITE_KINDS 2U
-#define SS_LAT_SITE_SLOTS 8U
+#define SS_LAT_SITE_SLOTS 3U
 /* Longest nonzero masked sections (kind 0) and task-lock holds (kind 1).
  * Sites are return addresses at entry and exit. Tables cover each phase and
  * an aggregate at index SS_LAT_PHASES, including gaps and crossing intervals. */
