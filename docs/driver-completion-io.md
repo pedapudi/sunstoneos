@@ -45,7 +45,7 @@ manifests preserve URLs and hashes:
 | `audio/a733_i2s_platform.c`, `local_poll` | I2S0 bus gate/reset +0x120c | Holds reset for 10µs before release. This is a conservative local reset interval; no controller completion bit is defined for this CCU R/W field. |
 | `audio/a733_i2s_stream.c`, `a733_i2s_stream_start`, `a733_i2s_stream_poll` | `FCTL.FRX/FTX`, bits24/25; manual 17.1.8.6, p1058 | Writes flush once, enters FLUSH, and waits for self-clear before arming DMA. The provider excludes self-clearing bits from configuration readback. Correct. |
 | `audio/a733_i2s_stream.c`, `a733_i2s_stream_poll` | `FSTA.TX_CNT`; manual 17.1.8.7, p1059 | EOF waits for the DMA owner to retire and FIFO free count to reach 128. FIFO empty alone is not a serializer fence; the stream retains its platform resources until stop/close. |
-| `audio/a733_hdmi_audio.c`, `a733_hdmi_audio_prepare` | HDMI sampler FIFO reset +0x3100, MC reset +0x4002, CTS calculation +0x3205 | Uses a 5µs delay after sampler reset and 5ms after CTS trigger, following pinned `dw_avp.c`/`dw_fc.c` referenced by the driver. MC reset is treated as a command. A focused delayed sampler/CTS model is still needed; no completion bit is asserted by this audit. |
+| `audio/a733_hdmi_audio.c`, `a733_hdmi_audio_prepare` | HDMI sampler FIFO reset +0x3100, MC reset +0x4002, CTS calculation +0x3205 | Requires true 5µs after sampler reset and 5ms after CTS trigger, following pinned `dw_avp.c`. Checked rounded-clock endpoints add 1µs. MC reset is a command. The focused adapter fixture covers both fractional-time boundaries and deadline refusal. |
 | `i2c/a733_i2c.c`, `step` | `S_TWI0.CNTR.INT_FLAG`, status +0x10; manual 18.11.5.1/.6.2–.3, pp1474–1481 | Clears the old flag with the command, waits for the new flag and checks the exact protocol status. Correct; bounded by 10ms for the transaction. |
 | `i2c/a733_i2c.c`, `a733_i2c_read8` | `CNTR.M_STP`, status IDLE=0xf8; manual 18.11.9.4/.5 and 18.11.10 equivalents | Waits for STOP clear and idle status before publishing output. Arbitration loss skips STOP. Correct. Close changes only configuration after the completed transaction. |
 | `i2c/a733_twi.c`, `a733_twi_poll` | `CNTR.INT_FLAG`, `CNTR.M_STP`, status +0x10 | SEND/WAIT and STOP/STOP_WAIT preserve the same predicates as above across bounded polling calls. No next byte is sent before the preceding status is accepted. Correct. |
@@ -180,6 +180,48 @@ busy after control programming records the planned PCR with bit11 set.
 Unexpected control bits retain error11 and the originating observation.
 Focused assertions verify that later retained calls preserve these fields.
 
+## Source minimum intervals account for clock rounding
+
+The native provider in `platform/a733/counter_clock.c` converts the 24MHz
+counter with integer division by 24. A difference of N floor-rounded
+microseconds can represent an actual interval almost 1µs shorter than N.
+The source minimum intervals therefore include one unit of rounding margin.
+
+| Sequencer | Source minimum and exact cached reference | Implemented threshold and time origin |
+| --- | --- | --- |
+| I2S PLL | 3µs lock-sample spacing recommendation and 20µs after three stable samples; manual 4.1.4.1–.2, pp25–27 | Strictly more than 3 and 20 reported microseconds. Each origin follows the completed register access and its time check. |
+| RTC calendar | 2ms after access-busy clear; `rtc-native/rtc-sunxi.c`, `wait_bits_cleared`, lines319–337 | Checked 2001µs target from a fresh post-status-read sample. The original deadline remains. A stopped provider fails after 4096 consecutive unchanged samples, resetting the count on progress. |
+| HDMI audio | 5µs sampler reset and 5ms CTS calculation; `hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_avp.c`, lines148/297 | Checked 6µs/5001µs targets from the real adapter's post-write time. A target at or after the existing deadline fails before dependent programming. |
+| Radio power | 10ms supply before REGON and 50ms after REGON; `radio-platform/sunxi-wlan.c`, line160, and `radio/kernel/drivers/net/wireless/aic8800/aic8800_bsp/aicsdio.c`, line430 | Strictly more than 10000/50000µs, anchored after completed pin operations and their fresh time checks. |
+| AIC pad configuration/restoration | 1ms after pad writes; the same cached `aicsdio.c`, line1685 | One extra provider tick after observed SDIO command completion. Addition is checked; polling intervals and maximum deadlines remain. |
+| Bluetooth patch power entry | 500µs after the type4 writes; `radio/kernel/drivers/net/wireless/aic8800/aic8800_bsp/aic_bsp_driver.c`, lines719–720 | Round half a millisecond up to provider ticks, then add one tick. The hold begins from a receive timestamp sampled after the triggering write completed. |
+| SPI chip select | Caller-defined minimum setup/hold; `include/a733_spi.h`, public transfer contract | Strict elapsed comparison for nonzero minima, with zero remaining zero. Setup starts after the CS write; hold starts after accepted controller completion. |
+
+Native radio sessions require 1000 provider ticks per millisecond, giving a
+1µs guard. The generic transport can use a coarser provider: the firmware
+fixture uses a 100µs tick, and a 1ms provider can add up to 1ms per hold.
+Those conservative guards must fit the original deadlines. No timer API,
+operating point, voltage, power policy or polling cadence changed.
+
+The local I2S, UART, SPI and SDHC reset holds use a conservative 10µs software
+threshold. The cited sources establish no corresponding hardware minimum;
+those thresholds remain unchanged. UART CHANGE_UPDATE, SPI reset, I2S flush
+and conversion-ready waits observe hardware status rather than a minimum time.
+
+Focused tests supply independent 24MHz fractional timestamps and charge 17µs
+to triggering callbacks. They reject exact rounded endpoints and accept the
+next microsecond, while verifying no dependent register write. RTC also covers
+frozen time and endpoint refusal. HDMI covers both FIFO and CTS deadline
+refusal. The native AIC fixture covers pad configuration/restoration and
+deadline refusal; its published-firmware fixture independently checks the
+500µs hold at the last fractional phase of a 100µs provider tick.
+
+The radio positive fixture explicitly constructs a BLDO5 1.8V supply. An
+independent negative case preserves the fitted-topology blocker: DCDC8
+selector 100 is undecoded and fails during rail admission, with its raw
+snapshot retained and no radio MMIO or pin acquisition. Constructed supply
+evidence does not qualify the fitted board's DCDC8 route.
+
 One execution of the same four focused host closures measured the following
 wall times, including process and sanitizer startup. The corrected fixtures
 include the additional completion cases; these times are check costs, with no
@@ -187,18 +229,25 @@ inference about device throughput.
 
 | Closure | Baseline milliseconds | Corrected milliseconds |
 | --- | ---: | ---: |
-| SPI | 4.754 | 4.448 |
+| SPI | 4.754 | 4.742 |
 | UART | 4.243 | 4.669 |
 | PWM | 4.268 | 4.774 |
-| I2S platform | 4.318 | 4.203 |
+| I2S platform | 4.318 | 4.542 |
 
 Raw logs, baseline source snapshots, executable hashes and timing records are
-under `~/.cache/sunstoneos/build/model-fidelity-1031/io/`. The PWM change adds
-63 lines and removes five across its driver, private structure and fixture.
-The other timing fixtures add 92 lines and remove eight. Test binaries used
+under `~/.cache/sunstoneos/build/model-fidelity-1031/io/`. Test binaries used
 the same compiler and sanitizer flags before and after.
 
-The full native PWM profile remains blocked during CMake configuration by
+The final minimum guards add fractional-time and callback-cost cases to the
+SPI and I2S closures. Their final necessary rerun updates the table above;
+unchanged UART/PWM timings are reused. The combined host cost is 18.727ms,
+against 17.583ms for the baseline. Process startup and the added cases are
+included; these small host timings do not measure hardware performance.
+All six changed driver translation units compile for AArch64. The RTC,
+HDMI audio, radio and AIC transport sanitizer checks pass; the AIC firmware
+check also preserves its independent source transcript and published bytes.
+
+The attempted full native PWM profile was blocked during CMake configuration by
 the existing `apps/pwm/single-core.patch` hunk at `platform/a733/platform.c`.
 The failed cache and configure log are preserved. No board was accessed;
 physical transition latency and peripheral qualification remain open.
