@@ -692,7 +692,7 @@ def latency_report(text,status,deadline,g):
    'window':'one input preparation, submit, interrupt wait, output acquisition and release; stream construction and output checking excluded'}
   matched=matched and seq_match
  idle_result=None
- require(bool(match['idle_totals'])==bool(idle),'Idle report/marker differs.')
+ require(bool(match.groupdict().get('idle_totals'))==bool(idle),'Idle report/marker differs.')
  if idle:
   idle_result=idle_report(match,g,frequency,end,deadline,idle['enabled'])
   idle_result['warm']['charged_cpu_ticks']=client_cpu+worker_cpu+idle_result['warm']['owner_runtime_ticks']

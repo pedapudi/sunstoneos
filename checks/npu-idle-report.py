@@ -21,6 +21,8 @@ import struct
 from harness import refused
 
 ROOT = Path(__file__).resolve().parents[1]
+CHECK_INPUTS = ['apps/npu-finite/host.py', 'apps/npu-finite/idle-compare.py', 'apps/npu-finite/idle-client.h',
+                'apps/npu-finite/queue-client.c', 'apps/npu-finite/build.py', 'apps/npu-interrupt/host.py']
 FREQUENCY = 24000000
 GAPS = (9000, 11000, 100000)
 CYCLES = 100
