@@ -352,6 +352,34 @@ def queue_cases(out):
     passed('generous-hourly-backstop')
 
 
+def queue_integrity_cases(out):
+    """A queue claim checks frozen bytes and consumed host helpers before launch."""
+    for target in ('image', 'host-helper'):
+        for mutation in ('unchanged', 'changed', 'missing'):
+            root=out/f'integrity-{target}-{mutation}';root.mkdir()
+            args=arguments(root,submit=True)
+            args.fel=root/'model-fel';args.fel.write_bytes(b'MODEL ONLY - never execute')
+            queue=board.Queue(root/'state')
+            job=queue.submit(args)
+            path=Path(job['image']) if target=='image' else args.fel
+            if mutation=='changed':
+                path.write_bytes(b'changed after submission')
+            elif mutation=='missing':
+                path.rename(root/'saved-input')
+            claimed=queue.claim('3-1')
+            if mutation=='unchanged':
+                assert claimed and claimed['id']==job['id']
+                continue
+            assert claimed is None
+            result=json.loads(Path(job['result_path']).read_text())
+            assert result['outcome']=='refused-before-launch' and not result['launch_attempted']
+            assert result['first_failure']['site']=='queue'
+            reason='Queued input bytes changed' if target=='image' else 'Queued host code or helper inputs changed'
+            assert result['first_failure']['detail'].startswith(reason)
+            assert not queue.status()['boards']['3-1']['running']
+        passed('queued-'+target+'-integrity-before-launch')
+
+
 def policy_cases(out):
     root=out/'policy';root.mkdir();args=arguments(root)
     info={'generic':False,'descriptor':{}}
@@ -900,7 +928,7 @@ def main():
     parser.add_argument('--npu-images',type=Path)
     parser.add_argument('--npu-state',type=Path)
     parser.add_argument('--npu-fixture',type=Path)
-    parser.add_argument('--only',default='transport,decoded-expectation,queue,policy,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
+    parser.add_argument('--only',default='transport,decoded-expectation,queue,queue-integrity,policy,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
     args=parser.parse_args()
     args.out.mkdir(parents=True,exist_ok=False)
     groups=args.only.split(',')
@@ -908,6 +936,8 @@ def main():
     if 'decoded-expectation' in groups:decoded_expectation_cases(args.out)
     if 'queue' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
+    if 'queue-integrity' in groups:
+        with patch.object(board,'port_idle',return_value=True):queue_integrity_cases(args.out)
     if 'policy' in groups:policy_cases(args.out)
     if 'daemon' in groups:
         with patch.object(board,'port_idle',return_value=True):daemon_cases(args.out)
