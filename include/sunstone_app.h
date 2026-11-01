@@ -141,6 +141,23 @@ struct ss_grant {
     uint64_t finish_by_us;          /* counter microseconds; 0 when resident */
 };
 
+/* Optional fixed composition of two trusted GPU applications. The immutable
+ * image defines ss_gpu_share to consent to one shared program and every GPU
+ * region of the owner manifest. The peer manifest repeats those exact regions;
+ * its task receives a GPU-only grant on one of the owner's worker cores.
+ * Both applications can address the shared map. They must use disjoint writes
+ * or synchronize access until each accepted job's record has been collected.
+ * The owner controls create/open/close/recover and final session completion.
+ * The peer entry returns after its work; the OS drains its owed record before
+ * publishing completion. No descriptor means one application as before. */
+struct ss_gpu_share {
+    const struct ss_manifest *owner, *manifest;
+    void (*main)(const struct ss_grant *);
+    const struct gpu_queue_program *program;
+    uint32_t shared_regions, reserved;
+};
+extern const struct ss_gpu_share ss_gpu_share;
+
 /* Calls from application to OS. All are plain function calls into the image
  * and are safe at EL0 and EL1: they use atomics and memory that EL0 maps, and
  * never MMIO, locks shared with interrupt handlers or system registers.
