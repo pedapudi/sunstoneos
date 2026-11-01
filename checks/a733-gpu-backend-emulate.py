@@ -83,6 +83,7 @@ def instruction(uc, address, size, context):
         uc.reg_write(UC_ARM64_REG_X0 + register, value)
         uc.reg_write(UC_ARM64_REG_PC, address + 4)
 secure = []
+half = [0]
 def access(uc, operation, address, size, value, context):
     if address in SECURE:
         writing = operation == UC_MEM_WRITE
@@ -102,11 +103,20 @@ def access(uc, operation, address, size, value, context):
         expected = word('expected_access')
         if expected:
             assert expected == (2 if writing else 1)
-            assert address - 0x01800000 == word('expected_offset')
-            assert size == word('expected_width'), 'wrong device transaction width'
+            assert size == 4, 'every device transaction is 32 bits wide'
+            wanted = int.from_bytes(uc.mem_read(symbols['expected_value'], 8), 'little')
+            offset = word('expected_offset')
+            if word('expected_width') == 8:
+                # Two halves: the high word read first, the low word written first.
+                second = half[0]; half[0] ^= 1
+                upper = second if writing else 1 - second
+                offset += 4 * upper
+                wanted = (wanted >> (32 * upper)) & 0xffffffff
+            else:
+                assert word('expected_width') == 4
+            assert address - 0x01800000 == offset, f'access {address:#x}, expected offset {offset:#x}'
             if writing:
-                wanted = int.from_bytes(uc.mem_read(symbols['expected_value'], 8), 'little')
-                assert value & ((1 << (size*8)) - 1) == wanted
+                assert value & 0xffffffff == wanted
         count = word('mmio_count') + 1
         uc.mem_write(symbols['mmio_count'], count.to_bytes(4, 'little'))
 u.hook_add(UC_HOOK_CODE, instruction)

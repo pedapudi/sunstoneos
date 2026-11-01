@@ -171,7 +171,8 @@ static int accesses(const struct trace *trace, unsigned count, int stopping)
         unsigned previous = mmio_count; uint64_t value = 0;
         int success = t->write ? (stopping ? config.stop.write : config.start.write)(&backend, t->offset, t->width, t->value) :
                                 (stopping ? config.stop.read : config.start.read)(&backend, t->offset, t->width, &value);
-        CHECK(success && mmio_count == previous + 1);
+        /* A 64-bit register is two 32-bit transactions. */
+        CHECK(success && mmio_count == previous + (t->width == 8 ? 2 : 1));
     }
     expected_access = 0; return 0;
 }
@@ -266,7 +267,9 @@ unsigned backend_check(void)
     CHECK(!setup()); observe = 0;
     *(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS + 0x20) = 0x243800;
     *(volatile uint32_t *)(uintptr_t)(A733_GPU_REGISTERS + 0x18) = 0x68b7;
-    observe = 1; CHECK(!bind()); CHECK(!enabled()); CHECK(mmio_count == 5);
+    /* Identity 0x20 as two halves, then 0x20 and 0x18, the system word and
+     * the capabilities as two halves: seven 32-bit transactions. */
+    observe = 1; CHECK(!bind()); CHECK(!enabled()); CHECK(mmio_count == 7);
 
     CHECK(!setup()); observe = 0;
     *(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS + 0x20) = PVR_FW_A733_BVNC + 1;

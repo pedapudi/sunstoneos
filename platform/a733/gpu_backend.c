@@ -94,19 +94,26 @@ static int active(struct a733_gpu_backend *b)
     return (b->phase == A733_GPU_BACKEND_ACTIVE && b->power->phase == A733_GPU_PLATFORM_ON &&
             b->power->token && b->power->delegated) || fail(b, A733_GPU_BACKEND_STATE);
 }
+/* Every GPU register access is 32 bits wide. A 64-bit register is two
+ * accesses, as the vendor host makes them (OSReadHWReg64 and
+ * OSWriteHWReg64, osfunc.h:1086-1107) and as the qualified firmware-start
+ * probe does (apps/gpu-power-id/fw-start.c): the high word read first, the
+ * low word written first. A 64-bit register lies within one page. */
 static int raw_read(struct a733_gpu_backend *b, uint32_t off, uint32_t width, uint64_t *out)
 {
     if (!device_page(A733_GPU_REGISTERS + off)) return fail(b, A733_GPU_BACKEND_MAPPING);
     uintptr_t address = (uintptr_t)(A733_GPU_REGISTERS + off);
-    *out = width == 4 ? a733_mmio_read32_dsb_sy_both(address) : a733_mmio_read64_dsb_sy_both(address);
+    if (width == 4) { *out = a733_mmio_read32_dsb_sy_both(address); return 1; }
+    const uint64_t high = a733_mmio_read32_dsb_sy_both(address + 4);
+    *out = high << 32 | a733_mmio_read32_dsb_sy_both(address);
     return 1;
 }
 static int raw_write(struct a733_gpu_backend *b, uint32_t off, uint32_t width, uint64_t value)
 {
     if (!device_page(A733_GPU_REGISTERS + off)) return fail(b, A733_GPU_BACKEND_MAPPING);
     uintptr_t address = (uintptr_t)(A733_GPU_REGISTERS + off);
-    if (width == 4) a733_mmio_write32_dsb_sy_both(address, (uint32_t)value);
-    else a733_mmio_write64_dsb_sy_both(address, value);
+    a733_mmio_write32_dsb_sy_both(address, (uint32_t)value);
+    if (width != 4) a733_mmio_write32_dsb_sy_both(address + 4, (uint32_t)(value >> 32));
     return 1;
 }
 static int power_begin(void *context, uint64_t deadline)
