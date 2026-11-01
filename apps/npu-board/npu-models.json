@@ -1,0 +1,1 @@
+{"npu_models": ["conv8", "dual-u8", "dual-i8", "shufflenet-v2-published", "mimus-linear-q"]}

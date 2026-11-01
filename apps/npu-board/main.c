@@ -91,14 +91,15 @@ int board_application_start(void)
     a->session=*source;
     if(!npu_board_session_valid(&a->session)||memcmp(a->session.board.image,a733_smp_build_id,32))return 0;
     struct device_memory_pool *pool=a733_memory_reservations_init();
-    const size_t bytes=npu_runtime_requirements(npu_board_models,NPU_BOARD_MODELS,NPU_BOARD_SLOTS);
+    if(!npu_board_model_count||npu_board_model_count>NPU_RUNTIME_MODELS)return 0;
+    const size_t bytes=npu_runtime_requirements(npu_board_models,npu_board_model_count,NPU_BOARD_SLOTS);
     if(!pool||!bytes||!device_memory_acquire(pool,a->session.owner,bytes,&a->lease,&a->extent) ||
        a->extent.bytes!=bytes)return 0;
     a->pool=pool;
-    struct npu_runtime_config config={.count=NPU_BOARD_MODELS,.slots=NPU_BOARD_SLOTS,.cpu=a->extent.cpu,
+    struct npu_runtime_config config={.count=npu_board_model_count,.slots=NPU_BOARD_SLOTS,.cpu=a->extent.cpu,
         .physical=a->extent.physical,.bytes=a->extent.bytes,.register_cpu=0x03600000,
         .register_physical=0x03600000,.fatal=fatal};
-    memcpy(config.models,npu_board_models,sizeof(npu_board_models));
+    memcpy(config.models,npu_board_models,npu_board_model_count*sizeof(npu_board_models[0]));
     if(!npu_runtime_prepare(&a->runtime,&config))return 0;
     const struct a733_board_session *s=&a->session.board;
     const struct a733_npu_startup_config startup={{{s->fabric[0],s->fabric[1],s->fabric[2]},

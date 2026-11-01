@@ -175,11 +175,12 @@ The thermal facts sit under `thermal` in the admission record and must carry
 physical authority. A model record cannot authorize a board launch. Older
 808-byte sessions are refused.
 
-The catalogue is the five models of `drivers/npu/npu_session_models.inc`.
+The catalogue is the five models of `apps/npu-board/npu-models.json`, from
+which the build generates the image's admitted table.
 `apps/npu-board/catalogue.py` checks each model file against
 `tools/npu-session-models.json` and links it read-only, with
-`npu_board_catalogue_digest`, the SHA-256 over the five model digests, which
-the record must carry. One slot and one client serve every board step; a
+`npu_board_catalogue_digest`, the SHA-256 over the model digests in list
+order, which the record must carry. One slot and one client serve every board step; a
 second slot has no board step that needs it.
 
 **Window hand-offs** (`apps/npu-board/client.h`). After activation the

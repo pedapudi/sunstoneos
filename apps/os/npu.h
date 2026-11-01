@@ -16,8 +16,8 @@ extern const unsigned os_npu_client_model,os_npu_input_count,os_npu_output_count
 /* One application task, bound before scheduling. These finite calls refuse
  * every other task. 1 is operation completion, 0 is a refused call and -1 is
  * retained failure. Completion says nothing about numerical correctness.
- * LOAD selects a linked entry; entry 0 is os_npu_client_model of the
- * catalogue in tools/npu-session-models.json. Tensor windows remain owned by
+ * LOAD selects a linked entry; entry 0 is entry os_npu_client_model of the
+ * OS model list apps/os/npu-models.json. Tensor windows remain owned by
  * this caller until its next LOAD, SUBMIT or CLOSE; thermal STOP cannot
  * reclaim them. SUBMIT temporarily transfers both windows to the runtime.
  * After SUBMIT returns1, outputs may be read in place. No tensor copy occurs

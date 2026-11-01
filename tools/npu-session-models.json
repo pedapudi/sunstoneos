@@ -364,6 +364,64 @@
    "state_patches": 3,
    "command_body_bytes": 144,
    "compiler": "tools/npu-mimus-linear.sh, mimus encoder.layers.0.self_attn.linear_q, int16 activations, mimus int8 codes and per-row scales"
+  },
+  {
+   "name": "conv12",
+   "model": {
+    "bytes": 2056,
+    "sha256": "d8de2e7a886741959d7806783e0a4bf96addc726f6c18804a420bbf4a250d3d9"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      12,
+      12,
+      3,
+      1
+     ],
+     "logical_bytes": 432,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 2,
+     "quantization": 2,
+     "scale_bits": 1015054465,
+     "fixed_position": 0,
+     "zero_point": 127,
+     "reference": {
+      "bytes": 432,
+      "sha256": "026d44d8d5de9f3b1bee86c3794909e093ded7b5386536d94b90eaad71d72b71"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      10,
+      10,
+      4,
+      1
+     ],
+     "logical_bytes": 400,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 2,
+     "quantization": 2,
+     "scale_bits": 1016995358,
+     "fixed_position": 0,
+     "zero_point": 122,
+     "reference": {
+      "bytes": 400,
+      "sha256": "a22da3d747cb4e689785aa2b0d79feef8a96957cfadc8d3a188a7f714cf8419f"
+     }
+    }
+   ],
+   "vip_sram_bytes": 101376,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 3,
+   "state_patches": 1,
+   "command_body_bytes": 80,
+   "compiler": "tools/npu-conv-pipeline.sh 12 4, asymmetric_affine uint8"
   }
  ]
 }

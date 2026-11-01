@@ -1,6 +1,6 @@
 # The supervised board provider composition with the NPU runtime: one slot,
-# the five-model catalogue, the startup sequencer on the power-domain owner
-# and INTID 97 on core 1, in the extended-memory profile
+# the models of apps/npu-board/npu-models.json, the startup sequencer on the
+# power-domain owner and INTID 97 on core 1, in the extended-memory profile
 # (docs/designs/npu-board.md).
 set(SUNSTONE_NPU_BOARD_CATALOGUE "" CACHE FILEPATH "Catalogue artifacts map (name to model path) for the NPU board image")
 if(NOT EXISTS "${SUNSTONE_NPU_BOARD_CATALOGUE}")
@@ -19,6 +19,9 @@ apply_build_patch("${npub_build}/link.ld" "${SUNSTONE_SOURCE_ROOT}/platform/a733
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${SUNSTONE_SOURCE_ROOT}/apps/npu-board/catalogue.py"
  --artifacts "${SUNSTONE_NPU_BOARD_CATALOGUE}" --output "${npub_build}/models.c" COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${SUNSTONE_SOURCE_ROOT}/tools/npu-session-catalogue.py" generate
+ --application "${SUNSTONE_SOURCE_ROOT}/apps/npu-board/npu-models.json"
+ --output "${npub_build}/npu_admitted_models.c" COMMAND_ERROR_IS_FATAL ANY)
 sunstone_board_application(npu-board BOOT "${npub_build}/boot.c" LINK_SCRIPT "${npub_build}/link.ld"
  BUILD_DIR "${npub_build}"
  TAG "runtime-native-npu-board1;supervised20;five-model-catalogue;one-slot;intid97-core1;extended-WB"
@@ -28,7 +31,7 @@ sunstone_board_application(npu-board BOOT "${npub_build}/boot.c" LINK_SCRIPT "${
  INCLUDES apps/npu-board platform/a733-smp-cached
  SOURCES apps/npu-board/main.c apps/npu-board/client.c apps/npu-board/irq.c apps/npu-board/usb.c
   apps/npu-board/thermal.c drivers/thermal/a733_thermal.c drivers/thermal/a733_thermal_native.c
-  apps/npu-board/admission.c apps/npu-board/snapshot.c "${npub_build}/models.c"
+  apps/npu-board/admission.c apps/npu-board/snapshot.c "${npub_build}/models.c" "${npub_build}/npu_admitted_models.c"
   platform/a733/device_memory_layout.c platform/a733-smp-cached/irq_table.c drivers/gpu/gicv3_spi.c
   platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c
   drivers/npu/npu_service.c drivers/npu/a733_npu_controller.c drivers/npu/a733_npu_memory.c
@@ -36,8 +39,9 @@ sunstone_board_application(npu-board BOOT "${npub_build}/boot.c" LINK_SCRIPT "${
   drivers/npu/nbg_checksum.c drivers/npu/nbg_relocation.c drivers/npu/a733_npu_startup.c
   drivers/npu/a733_npu_platform.c drivers/npu/a733_npu_platform_native.c
  INPUTS apps/npu-interrupt/irq.c apps/npu-interrupt/irq.h apps/npu-board/boot.patch apps/npu-board/extended-boot.patch apps/npu-board/extended-link.patch
-  apps/npu-board/catalogue.py tools/npu-session-models.json platform/a733-smp-cached/link-devices.ld
-  "${SUNSTONE_NPU_BOARD_CATALOGUE}" include/npu_runtime.h include/a733_npu_startup.h)
+  apps/npu-board/catalogue.py apps/npu-board/npu-models.json tools/npu-session-catalogue.py
+  tools/npu-session-models.json platform/a733-smp-cached/link-devices.ld
+  "${SUNSTONE_NPU_BOARD_CATALOGUE}" include/npu_runtime.h include/npu_admitted_models.h include/a733_npu_startup.h)
 # apps/npu-board/tusb_config.h, first in the image's include path, replaces the
 # board's TinyUSB configuration. A build that compiled the TinyUSB sources
 # before that file existed recorded the board's file as their dependency, so
