@@ -4,13 +4,19 @@
 
 Native firmware loading, power/interrupt ownership,
 compute, rendering and application bindings have software evidence.
-Complete recognition and general recovery remain unqualified.
+The reference recognition input passes physical GPU correctness qualification.
+General recovery, graphics and broader recognition inputs remain unqualified.
 
 **Board-qualified scope:** Standalone firmware start, health, stop and restart,
 eight compute jobs and two production exact-sum shapes pass at 1008 MHz/960 mV.
 The shapes use K=512 and K=516, each with 33 rows and 17 channels. All 1,122
 sums, tags and guards match; context cleanup, firmware OFF, isolation, provider
 parking and normal ROM return pass for those frozen inputs.
+The external recognizer also completes 154 batched submissions and compares
+1,737,312 sums with zero mismatches on port 3-1. Its reference CRCs are
+`ac657a3b` and `a7ade80e`, and its transcript is `There was silence.`
+The qualification entry is `1793558596353360282-28c39811` under
+`~/.cache/sunstoneos/board-queue/entries/`.
 
 Evidence paths are relative to `~/.cache/sunstoneos/evidence/`:
 
@@ -21,11 +27,6 @@ Evidence paths are relative to `~/.cache/sunstoneos/evidence/`:
   and healthy retirement.
 - `sol-resume-20261028/port-3-1/gpu-cache-permission/` tests the CPU-only
   read-only-output cache helper; it does not establish general GPU visibility.
-
-The reference firmware image at `fed5813f` starts and stops firmware with zero
-jobs and returns the reference transcript on 3-1. Its evidence is in
-`dev-runs-1031/3-1-gpu-return-210941/`, with RETURN_ROM and watchdog mode 0.
-This result does not qualify the later combined queue image.
 
 The generic compute queue is implemented with one retained program and memory
 map, up to four buffer leases and two trusted application slots. One job executes
@@ -64,10 +65,166 @@ Their CPU clock-close defect requires rebuild with the merged correction before
 qualification. The [lifecycle guide](../../apps/gpu-lifecycle/README.md) and
 [queue design](../designs/gpu-compute-queue.md) define the bounded operations.
 
-Remaining work includes current queue firmware start/stop, one/eight jobs,
-ten physical open/close cycles, queued-peer timeout recovery, complete GPU
-recognition, graphics, thermal transitions and representative concurrency.
+Remaining work includes ten physical open/close cycles, queued-peer timeout
+recovery, broader GPU recognition inputs, graphics, thermal transitions and
+representative concurrency.
 CPU performance evidence does not establish GPU speedup. Frozen earlier failed
 inputs and fault origins remain in [the hardware worklog](../hardware-worklog-20261031.md).
 See [backend](../gpu-backend.md), [power](../gpu-power.md),
 [rendering](../gpu-render.md) and [compiled programs](../gpu-compiled-programs.md).
+
+## Device execution dominates reference recognition latency
+
+The forced GPU placement takes 444.437 ms without timing diagnostics, against
+135.474 ms for CPU-only recognition of the same 3.59 s recording.
+Both paths use CPU-L 1794 MHz, CPU-B 2002 MHz and DSU 1274 MHz.
+The GPU uses 1008 MHz at 960 mV. Exhaustive CPU sum comparison is disabled
+in these timing runs; the qualification entry above covers that comparison.
+
+| Port 3-1 entry | Diagnostic timing | Compute | Aggregate `kick_us` | Outcome |
+| --- | --- | ---: | ---: | --- |
+| `1793560651607761780-3cb221f5` | OFF, control | 444.437 ms | 339.188 ms | 154 jobs, reference CRCs/text, healthy shutdown and ROM return |
+| `1793561022387122671-06be5388` | ON, firmware timestamps | 448.492 ms | 342.515 ms | Same result, all 154 timing rows present |
+
+Raw output and result records are in each entry's `run/` directory under
+`~/.cache/sunstoneos/board-queue/entries/`.
+The images' SHA-256 values are respectively
+`1d169eb93ab45c52c06b032809bcb214a3b7aeea3b2d14e31a42ad685a6efea4` and
+`935573354591c78c9c4bef570557e47faae777f9673ef7bd76c4851db0a29297`.
+Parsed records, `analyze.py`, `phase-summary.json`, parity checks and build
+evidence are under `~/.cache/sunstoneos/build/gpu-job-timing-1101/`.
+The diagnostic pair differs by 4.055 ms, or 0.91% of recognition time.
+One pair cannot separate instrumentation cost from run variation.
+
+The following intervals partition submit-to-client-return time for each job.
+The means cover all 154 jobs; independent minima need not sum to a job's minimum.
+
+| Interval | Mean per job | Observed range |
+| --- | ---: | ---: |
+| Client submit to worker dispatch | 17.585 µs | 15.542–27.958 µs |
+| CPU preparation excluding cache publication | 1.890 µs | 1.625–3.625 µs |
+| Input/argument cache publication, including barriers | 8.011 µs | 2.958–55.375 µs |
+| Client command construction/write through firmware command preparation | 20.442 µs | 19.208–23.875 µs |
+| Firmware kick register write and barrier | 0.499 µs | 0.458–0.875 µs |
+| Kick to firmware PRE timestamp | 39.593 µs | 34.780–47.771 µs |
+| Firmware PRE to POST: device scheduling and execution | 2160.780 µs | 644.064–11176.889 µs |
+| Firmware POST to interrupt-handler entry | 8.455 µs | 7.341–9.262 µs |
+| Interrupt-handler entry to blocked GPU worker resumption | 2.320 µs | 1.792–3.292 µs |
+| Worker resumption to output acquisition | 15.615 µs | 13.167–17.500 µs |
+| Output cache acquisition, including barriers | 1.838 µs | 0.292–4.583 µs |
+| Completion record preparation | 0.635 µs | 0.542–1.292 µs |
+| Completion marker to waiting client's return | 7.303 µs | 6.875–13.042 µs |
+| **Total submit to client return** | **2284.966 µs** | **758.000–11349.125 µs** |
+
+For example, job 97 executes a 3 × 3 × 1 grid. Its device interval is
+644.064 µs, `kick_us` is 705 µs and submit-to-client-return time is 758 µs.
+Every job has one completion interrupt that resumes a blocked GPU worker.
+The 171 total worker blocks include 17 backup-poll expirations during longer
+jobs. No job waits for a backup poll after its firmware POST timestamp.
+
+CPU timing uses the 24 MHz architectural counter.
+The GPU timer advances at 3.93747 ticks/µs, matching 1008 MHz divided by 256.
+Firmware PRE/POST intervals match rounded integer nanoseconds within 0.953 ns
+of a GPU timer quantum. This establishes their nanosecond interpretation by
+independent clock correlation; the unit remains inferred from measurements.
+The PRE/POST interval includes firmware/device scheduling and command setup.
+It does not isolate arithmetic cycles or GPU memory stalls.
+
+The PRE/POST span totals 332.760 ms, or 94.6% of aggregate job elapsed time.
+`kick_us` encloses this span; its name does not identify firmware overhead.
+Removing every measured interval outside PRE/POST would save only 19.125 ms
+across these jobs, before accounting for CPU/GPU overlap or trace overhead.
+Interrupt polling cannot recover the roughly 309 ms penalty over CPU-only.
+
+## Optional diagnostics preserve the disabled path
+
+`SUNSTONE_GPU_TIMING=ON` enables
+[the bounded timing recorder](../../apps/os/gpu-timing.c).
+It uses link wrappers, the existing GPU breadcrumbs and the FreeRTOS queue-block
+trace hook. [The backend](../../platform/a733/gpu_backend.c) records the actual
+kick write and brackets GPU timer reads with CPU timestamps.
+[The GPU service](../../apps/os/gpu.c) records interrupt-handler entry.
+No file under `drivers/gpu/` changes for these measurements.
+
+The recorder inserts firmware PRE/POST timestamp commands around the existing
+compute command, before its completion update. The pinned native DDK declares
+PRE/POST command IDs 209 and 217 with eight-byte firmware-address payloads.
+Its `rgxccb.c` brackets the device task with these commands, and
+`rgxfwutils.c` allocates 64-bit CPU-readable timestamp destinations.
+The native payload declarations are in `rogue/rgx_fwif_km.h`.
+These cached references belong to the existing `gpu-first-job-ddk-2ac08e8c`
+source selection documented in [the compute queue design](../designs/gpu-compute-queue.md).
+
+Timestamp destinations use unused words in the retained uncached timeline page.
+Publication and acquisition barriers preserve ordering with the device.
+The original timeline update remains the completion condition.
+Diagnostic GPU timer reads require a live, admitted backend and an actual kick;
+refusals and failed recovery paths do not gain register access.
+
+The external application's `GPUTIME` records print after timed recognition.
+`GPUTIME_FIELDS` names the columns; stamp values are 24 MHz tick deltas from
+`base`, and -1 denotes an absent stamp. Cache fields are accumulated CPU ticks.
+Firmware fields and GPU counter samples remain raw in the output.
+`GPUTIME_END rows=154 total=154` establishes complete capture for this input.
+The public diagnostic record API is declared in
+[gpu_queue.h](../../include/gpu_queue.h) and
+[gpu_queue_timing.h](../../include/gpu_queue_timing.h).
+
+With the option OFF, no timing buffer, wrappers, timestamp commands, trace calls
+or diagnostic output is linked. Compared with the qualified control, executable
+instructions are unchanged; source-line fault constants move where lines shift.
+The sanitized [producer check](../../checks/gpu-job-timing.py), native ON build,
+all three baseline builds, selected integration gate and check index pass.
+
+## Proposed driver changes target measured costs
+
+The current workload's observed overhead outside device PRE/POST is
+112.266 µs at best and 124.186 µs on average. These are observed overheads
+with diagnostics; a universal firmware minimum is not established.
+Within `kick_us`, the residual outside PRE/POST is 58.111–71.063 µs,
+averaging 63.343 µs. A timestamped minimal kernel is needed to separate fixed
+device setup inside PRE/POST from shader execution and establish a firmware floor.
+The smallest production job already spends 644 µs inside that interval.
+
+The estimates below are inferred ceilings or targets from measured intervals.
+They are not demonstrated speedups, and overlapping savings cannot be added.
+Driver implementation belongs to the GPU queue owner.
+
+1. **Characterize and reduce device execution first.** Compare minimal, small
+   and large kernels using the same timestamp commands and retained context.
+   Then vary tile size, load reuse and occupancy while preserving exact sums.
+   Halving the measured device span saves up to 166.4 ms per utterance before
+   overlap. The factor of two is a hypothetical target.
+2. **Batch ready descriptors behind fewer kicks.** Extend `pvr_compute_queue`
+   and its service to retain multiple independently ready descriptors, emit
+   their commands in order and retire each sequence from timeline updates.
+   Assume 60–90 µs of amortizable transport per job, using the measured
+   63.343 µs `kick_us` residual as a reference and including some CPU dispatch.
+   A four-job burst would reduce that cost to 15–23 µs per logical job.
+   Across 154 jobs the ceiling under this assumption is 6.9–10.4 ms,
+   before dependencies and CPU overlap. Admission, lease lifetimes, cancellation
+   and per-sequence failures require explicit ownership throughout the burst.
+3. **Keep command streams resident where they repeat.** The program, context,
+   model mappings and firmware already persist. Cache validated command
+   templates and stage the next descriptor while the device runs.
+   Assume a target reduction of 20–40 µs per job, informed by the measured
+   20.442 µs command preparation and 39.593 µs launch delay.
+   This target would save up to 3.1–6.2 ms per utterance.
+   Removing firmware launch latency requires measured support for streaming
+   commands; a CPU-side template alone cannot remove it.
+4. **Publish only CPU-dirtied ranges.** Track ownership and dirty generations
+   for arguments, activations and outputs instead of maintaining every declared
+   range. Cache calls total 1.517 ms for the utterance, or 9.849 µs per job.
+   That total is the maximum direct saving; immutable model mappings already
+   persist. Skipping required publication without ownership tracking is invalid.
+5. **Keep interrupts; consider only bounded completion polling.** Eliminating
+   IRQ-to-worker resumption saves at most 2.320 µs per job, or 0.357 ms total.
+   Even eliminating POST-to-acquisition saves at most 26.390 µs per job,
+   or 4.064 ms. Polling consumes a CPU and can reduce useful CPU/GPU overlap.
+
+An application-visible job below 100 µs needs reduced transport overhead and
+a device interval below the remaining budget. At a hypothetical 40 µs total
+host/firmware overhead, the device interval must fall below 60 µs: more than
+10 times faster for the smallest job and 36 times faster at the observed mean.
+Batching amortizes overhead per logical projection; it increases the work in
+each physical kick and does not make a larger physical job finish in 100 µs.
