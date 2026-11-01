@@ -6049,6 +6049,7 @@
   "docs": [
    "docs/designs/multicore-performance-1025.md",
    "docs/handoff.md",
+   "docs/layering-audit.md",
    "docs/validation.md"
   ],
   "library": false,
@@ -8066,11 +8067,13 @@
  "os-image-link.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/app-abi.md",
    "docs/designs/gpu-eight-workers.md",
    "docs/designs/gpu-recognition.md",
    "docs/designs/recognition-dispatch.md",
    "docs/gpu-mimus-service.md",
    "docs/handoff.md",
+   "docs/layering-audit.md",
    "docs/os-image.md",
    "docs/recognition-dispatch.md"
   ],
@@ -10538,6 +10541,19 @@
    "--output"
   ],
   "summary": "Decode UHS-I SD0 records (version 4) and refuse inconsistent ones; summarize throughput.",
+  "usb": false
+ },
+ "sunstone-app-abi.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/app-abi.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build"
+  ],
+  "summary": "Check the prototype application interface (docs/designs/app-abi.md) on the host.",
   "usb": false
  },
  "sunxi-mmc-uhs.py": {
