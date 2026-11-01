@@ -15,6 +15,7 @@ from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--out',type=Path,required=True)
 p.add_argument('--baseline',type=Path,default=Path.home()/'.cache/sunstoneos/build/npu-wdt-1031/images/runtime')
+p.add_argument('--case',action='append',help='run only the named native case(s), without unrelated parser cases')
 p.add_argument('--before-tree',type=Path,help='unchanged checkout whose parser must refuse the actual sustained log')
 a=p.parse_args();a.out.mkdir(parents=True,exist_ok=False)
 commands=json.loads((a.baseline/'commands.json').read_text())
@@ -56,7 +57,7 @@ image=a.out/'client-host-only.elf'
 link=[str(LLD),'--image-base=0x41100000','-Ttext=0x41200000','-e','a733_smp_diagnostic_start','--defsym=__npu_clean_start=0x41200000','--defsym=__device_pool_end=0x41f00000','--defsym=__npu_platform_log=0x42000000',str(client),str(digest),str(networks),str(stubs),str(layout),str(receipt_writer),'-o',str(image)]
 subprocess.run(link,check=True,env=environment());compiled.append(link)
 (a.out/'commands.json').write_text(json.dumps(compiled,indent=2)+'\n')
-im=Image(image,layout_names=('npu_runtime','npu_runtime_slot','npu_runtime_counters','npu_service','a733_npu_controller','a733_observe_identity','npu_finite_network'))
+im=Image(image,layout_names=('npu_runtime','npu_runtime_slot','npu_runtime_counters','npu_service','a733_npu_controller','a733_observe_identity','npu_finite_network','storage_digest'))
 L=im.layouts;enums={}
 with image.open('rb') as f:
  elf=ELFFile(f);sizes={s.name:int(s['st_size']) for s in elf.get_section_by_name('.symtab').iter_symbols()}
@@ -66,9 +67,27 @@ with image.open('rb') as f:
 def load_host(root,name):
  spec=importlib.util.spec_from_file_location(name,root/'apps/npu-interrupt/host.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 host=load_host(ROOT,'sustained_host');h=host.finite
+spec=importlib.util.spec_from_file_location('sustained_crumbs',ROOT/'tools/a733-crumbs.py');crumbs=importlib.util.module_from_spec(spec);spec.loader.exec_module(crumbs)
+fault_cases={
+ 'wrong-counter-frequency':(23,255,12000000,'sustained_frequency!=24000000'),
+ 'slow-helper':(25,100,24004824,'duration>sustained_frequency'),
+ 'reversed-helper':(25,100,(1<<64)-1,'job_ticks[job][1]<=job_ticks[job][0]'),
+ 'last-counter-missing':(28,255,199,'runtime->counters.jobs!=NPU_STARTUP_JOBS'),
+ 'wide-runtime-counter':(28,255,1<<40,'runtime->counters.jobs!=NPU_STARTUP_JOBS'),
+ 'checked-missing':(28,255,199,'checked!=NPU_STARTUP_JOBS'),
+ 'model-zero-missing':(28,255,99,'model_jobs[0]!=100'),
+ 'model-one-missing':(28,255,99,'model_jobs[1]!=100'),
+ 'digest-overflow':(26,100,((1<<64)-1)//8-31,'storage_digest_add'),
+ 'pre-job-failed':(24,100,0xa5,'if(failed)'),
+ 'pre-job-expired':(24,100,55,'if(now>='),
+ 'post-job-failed':(27,100,0xb6,'if(failed)'),
+ 'post-job-expired':(27,100,77,'if(now>='),
+ 'final-failed':(28,255,0xc7,'if(failed)'),
+ 'final-expired':(28,255,88,'if(now>='),
+}
 rows=[];logs={};references=None
 variants=('matched','first-output-mismatch','middle-output-mismatch','last-output-mismatch','last-IRQ-missing','last-counter-missing','middle-timeout','global-timeout','close-failed','slow-helper','wrong-counter-frequency')
-for variant in variants:
+for variant in (a.case if a.case else variants):
  u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x40000000,0x04000000)
  for at,data in im.parts:
   if data:u.mem_write(at,data)
@@ -81,13 +100,18 @@ for variant in variants:
  references=[r.hex() for r in refs]
  assert [get(im.address('npu_startup_return_profile')+i*8) for i in range(4)]==[h.STARTUP_CLIENT[h.RUNTIME][0],1,200,201]
  assert [get(im.address('npu_sustained_return_profile')+i*8) for i in range(4)]==[0x4e50555355533031,1,200,2]
- state={'ticks':24000000,'models':[],'exit':None,'retained':False,'closed':False,'log':'','close_calls':0,'native_receipt':None,'compares':0,'retained_reason':None}
+ state={'ticks':24000000,'models':[],'exit':None,'retained':False,'closed':False,'log':'','close_calls':0,'native_receipt':None,'compares':0,'retained_reason':None,'failure_attempts':[],'first_failure':None,'injections':0}
  names=undefined|{'storage_digest_bytes','storage_digest_add','storage_digest_end','storage_digest_init'}
  hooks={im.address(n):n for n in names if n in im.symbols}
  def code(cpu,at,size,cookie):
   word=get(at,4)
   if word&0xffe0001f==0xd4000001:
-   assert (word>>5)&0xffff in (0x5c0d,0x5c0e);u.reg_write(UC_ARM64_REG_PC,at+4);return
+   svc=(word>>5)&0xffff;assert svc in (0x5c0d,0x5c0e)
+   if svc==0x5c0e:
+    attempt=[u.reg_read(UC_ARM64_REG_X0+i)&0xffffffff for i in range(3)]
+    state['failure_attempts'].append(attempt)
+    if state['first_failure'] is None:state['first_failure']=attempt
+   u.reg_write(UC_ARM64_REG_PC,at+4);return
   if word&0xffffffe0==0xd53be020:
    u.reg_write(UC_ARM64_REG_X0+(word&31),state['ticks']);state['ticks']+=24;u.reg_write(UC_ARM64_REG_PC,at+4);return
   if word&0xffffffe0==0xd53be000:
@@ -96,6 +120,20 @@ for variant in variants:
   name=hooks.get(at)
   if name is None:return
   args=[u.reg_read(UC_ARM64_REG_X0+i) for i in range(6)]
+  if name=='storage_digest_add' and args[2]==32 and len(state['models'])==101:
+   if variant=='digest-overflow':put(args[0]+L['storage_digest']['bytes'],((1<<64)-1)//8-31);state['injections']+=1
+   if variant in ('post-job-failed','post-job-expired'):
+    if variant=='post-job-failed':put(im.address('a733_npu_application_failed'),0xb6,4)
+    else:state['ticks']=480000077
+    state['injections']+=1
+  if name=='storage_digest_end' and get(args[0]+L['storage_digest']['bytes'])==6400:
+   if variant=='checked-missing':put(im.address('checked'),199,4);state['injections']+=1
+   if variant=='model-zero-missing':put(im.address('model_jobs'),99,4);state['injections']+=1
+   if variant=='model-one-missing':put(im.address('model_jobs')+4,99,4);state['injections']+=1
+   if variant in ('final-failed','final-expired'):
+    if variant=='final-failed':put(im.address('a733_npu_application_failed'),0xc7,4)
+    else:state['ticks']=480000088
+    state['injections']+=1
   if name.startswith('storage_digest_'):return # Execute the linked SHA256 implementation.
   if name=='a733_smp_counter':ret(state['ticks']);state['ticks']+=24
   elif name=='a733_npu_application_ready':ret(1)
@@ -109,11 +147,13 @@ for variant in variants:
    if variant=='middle-timeout' and job==100:ret((1<<64)-1);return
    if variant=='global-timeout' and job==100:state['ticks']=480000000
    if variant=='slow-helper' and job==100:state['ticks']+=24000000
+   if variant=='reversed-helper' and job==100:state['ticks']=get(im.address('job_ticks')+100*16)-1
    output=refs[n]
    bad={'first-output-mismatch':0,'middle-output-mismatch':100,'last-output-mismatch':199}.get(variant)
    if job==bad:output=bytes([output[0]^1])+output[1:]
    u.mem_write(args[3],output)
    put(rt+L['npu_runtime']['counters']+L['npu_runtime_counters']['jobs'],job+int(not(variant=='last-counter-missing' and job==199)))
+   if variant=='wide-runtime-counter' and job==199:put(rt+L['npu_runtime']['counters']+L['npu_runtime_counters']['jobs'],1<<40);state['injections']+=1
    put(service+L['npu_service']['irq_completions'],1+job+int(not(variant=='last-IRQ-missing' and job==199)),4);ret(1)
   elif name=='npu_job_close':
    state['close_calls']+=1;assert len(state['models'])==200
@@ -125,7 +165,12 @@ for variant in variants:
   elif name=='npu_service_irq_completions':ret(get(service+L['npu_service']['irq_completions'],4))
   elif name=='npu_service_irq_stopped':ret(int(state['closed']))
   elif name in ('a733_npu_application_stopped','a733_npu_application_quiesce','a733_npu_application_quiescent'):ret(int(state['closed']))
-  elif name=='memset':u.mem_write(args[0],bytes([args[1]&255])*args[2]);ret(args[0])
+  elif name=='memset':
+   if len(state['models'])==100 and variant in ('pre-job-failed','pre-job-expired') and args[0]==im.address('outputs'):
+    if variant=='pre-job-failed':put(im.address('a733_npu_application_failed'),0xa5,4)
+    else:state['ticks']=480000055
+    state['injections']+=1
+   u.mem_write(args[0],bytes([args[1]&255])*args[2]);ret(args[0])
   elif name=='memcpy':u.mem_write(args[0],bytes(u.mem_read(args[1],args[2])));ret(args[0])
   elif name=='memcmp':
    state['compares']+=1;ret(int(bytes(u.mem_read(args[0],args[2]))!=bytes(u.mem_read(args[1],args[2]))))
@@ -144,7 +189,7 @@ for variant in variants:
  sites=instruction_sites(im.parts,lambda word:word&0xffe0001f==0xd4000001 or system_register_access(word))
  hook_addresses(u,set(hooks)|set(sites),code);u.reg_write(UC_ARM64_REG_SP,0x43ffe000);u.reg_write(UC_ARM64_REG_LR,0x43fff000)
  u.emu_start(im.address('npu_runtime_client'),0,count=20000000)
- expected_jobs=0 if variant=='wrong-counter-frequency' else 101 if variant in ('middle-timeout','global-timeout','slow-helper') else 200
+ expected_jobs=0 if variant=='wrong-counter-frequency' else 100 if variant.startswith('pre-job-') else 101 if variant in ('middle-timeout','global-timeout','slow-helper','reversed-helper','digest-overflow','post-job-failed','post-job-expired') else 200
  assert state['models']==[n%2 for n in range(expected_jobs)],variant
  if variant in variants[:4]:
   status=int(variant!='matched');assert state['exit']==status and not state['retained'] and state['close_calls']==1,state
@@ -154,67 +199,83 @@ for variant in variants:
   assert value['timing']['maximum_api_ticks']==7200 and value['timing']['jobs_per_second']>0
   assert value['first_mismatch']==(None if not status else {'job':{'first-output-mismatch':0,'middle-output-mismatch':100,'last-output-mismatch':199}[variant],'offset':0,'byte':refs[0 if variant!='last-output-mismatch' else 1][0]^1})
  else:
-  reason={'last-IRQ-missing':22,'last-counter-missing':28,'middle-timeout':12,'global-timeout':12,'close-failed':17,'slow-helper':25,'wrong-counter-frequency':23}[variant]
+  reason=fault_cases[variant][0] if variant in fault_cases else {'last-IRQ-missing':22,'middle-timeout':12,'global-timeout':12,'close-failed':17}[variant]
   assert state['retained'] and state['exit'] is None and state['retained_reason']==reason,state
+ if variant in fault_cases:
+  stage,job,observed,origin=fault_cases[variant]
+  first=state['first_failure'];assert first is not None
+  words=dict.fromkeys(crumbs.WORDS,0);words.update(tag=0x5c0d0007,fault=0xfa0b0400,esr=first[0],far=first[1],elr=first[2])
+  decoded=crumbs.decode(words,7,image)['board_failure'];state['decoded_first_failure']=decoded
+  # Preserve red-case evidence before any assertion about the missing format.
+  (a.out/(variant+'-fault.json')).write_text(json.dumps(state,indent=2)+'\n')
+  assert decoded.get('measurement_stage')==stage,(variant,decoded)
+  assert decoded['job_index']==(None if job==255 else job) and decoded['observed_word_index']==int(observed>0xffffffff)
+  assert first[1]==(observed>>32 if observed>0xffffffff else observed) and decoded['observed_word']==hex(first[1])
+  assert not first[0]&(0x40000000|0x20000000)
+  assert origin in (ROOT/'apps/npu-finite/runtime-client.c').read_text().splitlines()[decoded['site']-1]
+  assert 'runtime-client.c' in decoded['caller_source']
+  assert len(state['failure_attempts'])>=2 and state['failure_attempts'][1][1]==reason
+  assert state['first_failure']==first and not state['failure_attempts'][1][0]&0x10000000
  logs[variant]=state['log'];(a.out/(variant+'.log')).write_text(state['log'])
  if state['native_receipt']:(a.out/(variant+'-receipt.bin')).write_bytes(bytes.fromhex(state['native_receipt']))
  rows.append({'case':variant,'passed':True,**state})
-# The pre-feature parser refuses the actual producer log.
-if a.before_tree:
- before=load_host(a.before_tree,'before_sustained').finite
- refused(lambda:before.runtime_report(logs['matched'],0,480000000,{'runtime':True,'references':references}),'Runtime stage')
- rows.append({'case':'before-feature-parser-refuses','passed':True})
-# Full monitor/platform/receipt frames preserve the actual producer log.
-import struct
-def frames(text,status=0,native_receipt=None):
- raw=text.encode();assert len(raw)<=16127
- monitor=[0x415337334e505231,7,8,5,status,0x4e505552,1000000,1,26000000]+[0]*7
- receipt=[0x4e50555254523031,7,8,9,status,status+1,0x41200000,0x41f00000,(0x41f00000-0x41200000)//64,480000000,len(raw)]
- platform=bytearray(16384);struct.pack_into('<16Q',platform,0,0x534b4552,5,status,len(raw),0,0,0,0,1000000,26000000,*([0]*6));platform[256:256+len(raw)]=raw
- return struct.pack('<16Q',*monitor),bytes(platform),native_receipt if native_receipt is not None else struct.pack('<11Q',*receipt)
-prepared={'epoch':7,'generation':8,'lease':9,'execution_profile':h.RUNTIME,'geometry':{'runtime':True,'sustained':True,'startup_only':True,'references':references,'clean_start':0x41200000,'clean_end':0x41f00000}}
-for name in variants[:4]:
- native_receipt=(a.out/(name+'-receipt.bin')).read_bytes()
- value=host.validate_reports(*frames(logs[name],int(name!='matched'),native_receipt),prepared)
- assert value['interrupt_completions']==201 and value['interrupt_stopped'] and value['jobs']==200
- rows.append({'case':name+'-complete-receipts','passed':True})
-def read_native(name):
- at=im.address(name);size=sizes[name]
- return next(data[at-base:at-base+size] for base,data in im.parts if base<=at and at+size<=base+len(data))
-marker=struct.unpack('<4Q',read_native('npu_startup_return_profile'));names=set(im.symbols)
-assert h.sustained_extension(marker,names,read_native)
-for name,changed_marker,changed_names,reader,reason in (
- ('missing-extension',marker,names-{'npu_sustained_return_profile'},read_native,'extension/startup'),
- ('ordinary-marker-with-extension',(marker[0],1,2,3),names,read_native,'extension/startup'),
- ('wrong-extension',marker,names,lambda n:bytes(32),'immutable extension'),
- ('extra-network',marker,names|{'npu_finite_reference_2'},read_native,'exactly two')):
- refused(lambda:h.sustained_extension(changed_marker,changed_names,reader),reason)
- rows.append({'case':name+'-refused','passed':True})
-# Existing frozen image geometries retain their exact contracts.
-for name in ('runtime','model-switch','sdk-access'):
- old_image=a.baseline.parent/name/'image.elf'
- parts,address,build,layout,geometry=host.image_profile(old_image.read_bytes(),{})
- assert not geometry.get('sustained') and len(geometry['references'])==(3 if name=='model-switch' else 2)
- rows.append({'case':name+'-immutable-image-compatible','passed':True})
-text=logs['matched'];lines=text.splitlines(keepends=True);summary=lines.index('NPU_SUSTAINED=\n')+1;ticks=lines.index('NPU_JOB_TICKS=\n')+1;digest_line=lines.index('NPU_OUTPUT_DIGEST=\n')+1
-cases={}
-for name,index,value in [('jobs199',summary+4,199),('checked199',summary+5,199),('mismatch-status',summary+6,1),('model99',summary+7,99),('maximum-wrong',summary+3,1),('frequency-wrong',summary,12000000),('digest-wrong',digest_line,255),('digest-byte-overflow',digest_line,256)]:
- changed=lines.copy();changed[index]=f'0x{value:016x}\n';cases[name]=''.join(changed)
-changed=lines.copy();changed[ticks]=changed[ticks].split()[1]+' '+changed[ticks].split()[0]+'\n';cases['reversed-window']=''.join(changed)
-changed=lines.copy();changed[ticks+1]=changed[ticks];cases['overlapping-windows']=''.join(changed)
-changed=lines.copy();changed[ticks]=f'0x{24000000:016x} 0x{48000001:016x}\n';cases['API-budget-exceeded']=''.join(changed)
-cases['missing-job-window']=''.join(lines[:ticks+199]+lines[ticks+200:])
-cases['wrong-IRQ']=text.replace('NPU_IRQ_COMPLETIONS=0x00000000000000c9','NPU_IRQ_COMPLETIONS=0x00000000000000c8')
-cases['intermediate-close']=text.replace('NPU_STAGE=SUSTAINED\n','NPU_STAGE=SUSTAINED\nNPU_STAGE=CLOSE\n')
-for name,text in cases.items():
- refused(lambda:host.validate_reports(*frames(text),prepared),'Sustained')
- rows.append({'case':name+'-refused','passed':True})
+if not a.case:
+ # The pre-feature parser refuses the actual producer log.
+ if a.before_tree:
+  before=load_host(a.before_tree,'before_sustained').finite
+  refused(lambda:before.runtime_report(logs['matched'],0,480000000,{'runtime':True,'references':references}),'Runtime stage')
+  rows.append({'case':'before-feature-parser-refuses','passed':True})
+ # Full monitor/platform/receipt frames preserve the actual producer log.
+ import struct
+ def frames(text,status=0,native_receipt=None):
+  raw=text.encode();assert len(raw)<=16127
+  monitor=[0x415337334e505231,7,8,5,status,0x4e505552,1000000,1,26000000]+[0]*7
+  receipt=[0x4e50555254523031,7,8,9,status,status+1,0x41200000,0x41f00000,(0x41f00000-0x41200000)//64,480000000,len(raw)]
+  platform=bytearray(16384);struct.pack_into('<16Q',platform,0,0x534b4552,5,status,len(raw),0,0,0,0,1000000,26000000,*([0]*6));platform[256:256+len(raw)]=raw
+  return struct.pack('<16Q',*monitor),bytes(platform),native_receipt if native_receipt is not None else struct.pack('<11Q',*receipt)
+ prepared={'epoch':7,'generation':8,'lease':9,'execution_profile':h.RUNTIME,'geometry':{'runtime':True,'sustained':True,'startup_only':True,'references':references,'clean_start':0x41200000,'clean_end':0x41f00000}}
+ for name in variants[:4]:
+  native_receipt=(a.out/(name+'-receipt.bin')).read_bytes()
+  value=host.validate_reports(*frames(logs[name],int(name!='matched'),native_receipt),prepared)
+  assert value['interrupt_completions']==201 and value['interrupt_stopped'] and value['jobs']==200
+  rows.append({'case':name+'-complete-receipts','passed':True})
+ def read_native(name):
+  at=im.address(name);size=sizes[name]
+  return next(data[at-base:at-base+size] for base,data in im.parts if base<=at and at+size<=base+len(data))
+ marker=struct.unpack('<4Q',read_native('npu_startup_return_profile'));names=set(im.symbols)
+ assert h.sustained_extension(marker,names,read_native)
+ for name,changed_marker,changed_names,reader,reason in (
+  ('missing-extension',marker,names-{'npu_sustained_return_profile'},read_native,'extension/startup'),
+  ('ordinary-marker-with-extension',(marker[0],1,2,3),names,read_native,'extension/startup'),
+  ('wrong-extension',marker,names,lambda n:bytes(32),'immutable extension'),
+  ('extra-network',marker,names|{'npu_finite_reference_2'},read_native,'exactly two')):
+  refused(lambda:h.sustained_extension(changed_marker,changed_names,reader),reason)
+  rows.append({'case':name+'-refused','passed':True})
+ # Existing frozen image geometries retain their exact contracts.
+ for name in ('runtime','model-switch','sdk-access'):
+  old_image=a.baseline.parent/name/'image.elf'
+  parts,address,build,layout,geometry=host.image_profile(old_image.read_bytes(),{})
+  assert not geometry.get('sustained') and len(geometry['references'])==(3 if name=='model-switch' else 2)
+  rows.append({'case':name+'-immutable-image-compatible','passed':True})
+ text=logs['matched'];lines=text.splitlines(keepends=True);summary=lines.index('NPU_SUSTAINED=\n')+1;ticks=lines.index('NPU_JOB_TICKS=\n')+1;digest_line=lines.index('NPU_OUTPUT_DIGEST=\n')+1
+ cases={}
+ for name,index,value in [('jobs199',summary+4,199),('checked199',summary+5,199),('mismatch-status',summary+6,1),('model99',summary+7,99),('maximum-wrong',summary+3,1),('frequency-wrong',summary,12000000),('digest-wrong',digest_line,255),('digest-byte-overflow',digest_line,256)]:
+  changed=lines.copy();changed[index]=f'0x{value:016x}\n';cases[name]=''.join(changed)
+ changed=lines.copy();changed[ticks]=changed[ticks].split()[1]+' '+changed[ticks].split()[0]+'\n';cases['reversed-window']=''.join(changed)
+ changed=lines.copy();changed[ticks+1]=changed[ticks];cases['overlapping-windows']=''.join(changed)
+ changed=lines.copy();changed[ticks]=f'0x{24000000:016x} 0x{48000001:016x}\n';cases['API-budget-exceeded']=''.join(changed)
+ cases['missing-job-window']=''.join(lines[:ticks+199]+lines[ticks+200:])
+ cases['wrong-IRQ']=text.replace('NPU_IRQ_COMPLETIONS=0x00000000000000c9','NPU_IRQ_COMPLETIONS=0x00000000000000c8')
+ cases['intermediate-close']=text.replace('NPU_STAGE=SUSTAINED\n','NPU_STAGE=SUSTAINED\nNPU_STAGE=CLOSE\n')
+ for name,text in cases.items():
+  refused(lambda:host.validate_reports(*frames(text),prepared),'Sustained')
+  rows.append({'case':name+'-refused','passed':True})
 closure={}
 for dependency in a.out.glob('*.o.d'):
  for item in shlex.split(dependency.read_text().replace('\\\n','').split(':',1)[1]):
   path=Path(item)
   if path.is_file():closure[str(path)]={'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
-for path in (Path(__file__),ROOT/'apps/npu-finite/host.py',ROOT/'apps/npu-interrupt/host.py',a.baseline/'commands.json'):
+for path in (Path(__file__),ROOT/'apps/npu-finite/host.py',ROOT/'apps/npu-interrupt/host.py',ROOT/'tools/a733-crumbs.py',a.baseline/'commands.json'):
  closure[str(path)]={'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
 (a.out/'input-identities.json').write_text(json.dumps({'compiled_inputs':closure,'physical_access':False,'board_image':False},indent=2)+'\n')
 (a.out/'result.json').write_text(json.dumps({'passed':True,'physical_access':False,'scope':__doc__,'image_sha256':hashlib.sha256(image.read_bytes()).hexdigest(),'cases':rows},indent=2)+'\n')

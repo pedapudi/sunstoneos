@@ -85,6 +85,13 @@
  * A lifecycle record instead puts enum a733_npu_startup_stage in aux bits 7:0. */
 #define SUNSTONE_CRUMB_NPU_REGISTER 0x40000000u
 #define SUNSTONE_CRUMB_NPU_STARTUP 0x20000000u
+/* Sustained NPU measurements: bits 26:24 hold stage minus 23 (23..28),
+ * bits 23:16 hold job index (0..199, 255 for global checks). FAR holds the
+ * observed operand's low word when it fits, otherwise its high word and
+ * HIGH_WORD is set. The original site/caller identifies the exact predicate
+ * and its expected value. REGISTER and STARTUP remain clear. */
+#define SUNSTONE_CRUMB_NPU_MEASUREMENT 0x10000000u
+#define SUNSTONE_CRUMB_NPU_MEASUREMENT_HIGH_WORD 0x08000000u
 #define SUNSTONE_CRUMB_FAIL_RETURN 0x80000000u /* site flag: caller is a return address */
 #define SUNSTONE_CRUMB_FAIL_SITE(group) (SUNSTONE_CRUMB_FAIL_##group << 12 | ((uint32_t)__LINE__ & 0xfffu))
 /* The address of this statement, for the caller word of a board failure.

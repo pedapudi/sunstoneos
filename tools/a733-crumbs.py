@@ -161,6 +161,12 @@ def board_failure(words, defines, elf):
         record['register_offset'] = hex((record['aux'] & 0x3fff) << 2)
     elif record['group'] == 'npu' and site & defines['NPU_STARTUP']:
         record['startup_stage'] = record['aux'] & 0xff
+    elif record['group'] == 'npu' and site & defines['NPU_MEASUREMENT']:
+        job=site >> 16 & 255
+        record.update(measurement_stage=23+(site >> 24 & 7),
+                      job_index=None if job==255 else job,
+                      observed_word=hex(value),
+                      observed_word_index=int(bool(site & defines['NPU_MEASUREMENT_HIGH_WORD'])))
     if record['group'] == 'cpu_return' and record['site'] == BOUNDED:
         record['deadline_seconds'] = record['aux']
         record['refusal'] = [text for bit, text in LIVE_REFUSAL if value >> bit & 1]
@@ -281,6 +287,10 @@ def decode(words, epoch, elf=None):
             text += f"; register offset {f['register_offset']}"
         if 'startup_stage' in f:
             text += f"; startup stage {f['startup_stage']}"
+        if 'measurement_stage' in f:
+            text += (f"; NPU measurement stage {f['measurement_stage']}, "
+                     f"job {f['job_index'] if f['job_index'] is not None else 'global'}, "
+                     f"observed {'high' if f['observed_word_index'] else 'low'} word {f['observed_word']}")
         if f['group'] == 'cpu_retained':
             text += (f"; setter {f['setter']}, state {f['driver_state_name']}, domain {f['domain_name']}, "
                      f"origin {f['origin_name']}, target {f['target_mhz']} MHz, phase {f['phase_name']}, "
