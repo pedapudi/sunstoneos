@@ -2,6 +2,7 @@
 """Check range selection across deleted dependencies, renames and required inputs."""
 import argparse
 import json
+import importlib.util
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,12 +15,41 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ('checks/affected.py', 'checks/check-index.py', 'checks/harness.py')
 
 
+def current_inputs():
+    """Check dynamically selected native sources against the current checkout."""
+    spec = importlib.util.spec_from_file_location('current_check_index', ROOT / 'checks/check-index.py')
+    indexer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(indexer)
+    expected = {
+        'gpu-linked-lifecycle.py': ('drivers/gpu/gpu_queue.c',),
+        'gpu-peer-native.py': ('apps/gpu-queue-peer/main.c',),
+        'os-audio-replay-linked.py': ('apps/os/capture.c', 'checks/os-audio-replay-application.c'),
+        'isp0-replay.py': ('drivers/camera/a733_isp0.c', 'apps/isp0/native.c'),
+        'isp0-irq-native.py': ('apps/isp0/native.c', 'apps/isp0/irq.h'),
+        'pcie-link-decode.py': ('apps/pcie/observe.py', 'apps/pcie-test/observe.py',
+                                'apps/pcie-nvme/observe.py'),
+    }
+    index = {}
+    for name, paths in expected.items():
+        inputs = indexer.covered(ROOT / 'checks' / name)
+        assert set(paths) <= inputs, (name, sorted(set(paths) - inputs))
+        index[name] = {'inputs': sorted(inputs), 'input_directories': []}
+    selections = {}
+    for name, paths in expected.items():
+        for path in paths:
+            selected = indexer.select(index, [path])
+            assert name in selected, (path, name, selected)
+            selections[path] = selected
+    return selections
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
+    current = current_inputs()
     source = out / 'source'
     (source / 'checks').mkdir(parents=True)
     for name in ('affected.py', 'check-index.py', 'harness.py'):
@@ -129,7 +159,7 @@ def main():
     write('checks/legacy-consumer.py', 'CHECK_INPUTS = ()\nprint("no current input")\n')
     consumer = select(consumer_base + '..' + consumer_head)
     assert 'legacy-consumer.py' in {check['check'] for check in consumer['checks']}
-    (out / 'results.json').write_text(json.dumps({'paths': selected, 'range': ranged, 'removed': result,
+    (out / 'results.json').write_text(json.dumps({'current_inputs': current, 'paths': selected, 'range': ranged, 'removed': result,
                                                 'conditional_inputs': conditional, 'hook_native': hook_native,
                                                 'hook_legacy_range': hook_range,
                                                 'hook_retired_input': retired,
