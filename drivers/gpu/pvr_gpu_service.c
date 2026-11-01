@@ -293,6 +293,24 @@ static int opening_clock(struct pvr_gpu_service *s)
     if (!sample(s, &now) || now >= s->deadline) { fail(s, PVR_GPU_SERVICE_CLOCK); return 0; }
     return 1;
 }
+static int flush_publish(void *ctx)
+{
+    /* The session's tables were published before the firmware started. */
+    struct pvr_gpu_service *s = instance;
+    if (!s || ctx != s->config.context) return 0;
+    __asm__ volatile("dsb sy" ::: "memory");
+    return 1;
+}
+/* The MMU-cache command before READY: -1 fault, 0 pending, 1 complete. */
+static int flush_step(struct pvr_gpu_service *s)
+{
+    static const struct pvr_gpu_flush_ops ops = {service_clock, flush_publish};
+    if (s->flush.phase == PVR_GPU_FLUSH_NEW &&
+        !pvr_gpu_flush_init(&s->flush, &s->control, &ops, s->config.context, PVR_GPU_FLUSH_CATALOGUE, s->deadline))
+        return -1;
+    enum pvr_gpu_flush_result r = pvr_gpu_flush_poll(&s->flush);
+    return r == PVR_GPU_FLUSH_OK ? 1 : r == PVR_GPU_FLUSH_AGAIN ? 0 : -1;
+}
 static int start_firmware(struct pvr_gpu_service *s)
 {
     if ((s->config.compute && pvr_compute_service_admit_mode(s->config.compute) != 1) ||
@@ -593,6 +611,7 @@ static void advance(struct pvr_gpu_service *s)
                 (s->config.executed && !pvr_gpu_control_count_executed(&s->control, s->config.executed))) {
                 fail(s, PVR_GPU_SERVICE_CONTROL); return;
             }
+            s->flush = (struct pvr_gpu_flush){0};
             s->phase = PVR_GPU_SERVICE_CHECKING;
             sunstone_crumb(PVR_GPU_CRUMB_STARTED, s->start.count);
         } else if (r != PVR_GPU_START_AGAIN) { fail(s, PVR_GPU_SERVICE_START); return; }
@@ -606,7 +625,12 @@ static void advance(struct pvr_gpu_service *s)
         else
 #endif
         r=pvr_gpu_control_poll(&s->control,4);
-        if (r == PVR_GPU_CONTROL_OK) { s->phase = PVR_GPU_SERVICE_READY; rearm = 1; }
+        if (r == PVR_GPU_CONTROL_OK && s->phase == PVR_GPU_SERVICE_CHECKING && s->config.flush_mmu) {
+            const int flushed = flush_step(s);
+            if (flushed < 0) { fail(s, PVR_GPU_SERVICE_CONTROL); return; }
+            if (flushed) { s->phase = PVR_GPU_SERVICE_READY; rearm = 1; }
+        }
+        else if (r == PVR_GPU_CONTROL_OK) { s->phase = PVR_GPU_SERVICE_READY; rearm = 1; }
         else if (r != PVR_GPU_CONTROL_AGAIN) { fail(s, PVR_GPU_SERVICE_CONTROL); return; }
         if (s->config.free_lists.count) {
             if (free_list_progress(s, 0) == PVR_FREE_LIST_FAULT) return;

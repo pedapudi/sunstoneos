@@ -8,6 +8,9 @@ struct model {
     uint64_t now;
     unsigned calls, fail_at, publishes, kicks, events, automatic, status, irq;
     unsigned host_table, device_table, cached_translation, late_publish, rewind_after_irq, irq_reads;
+    /* The firmware's executed command count, and a command that gets no
+     * return word, as the open A733 firmware treats MMU-cache commands. */
+    unsigned executed, no_return, executed_fails;
 };
 static struct model m;
 static struct pvr_ccb q;
@@ -39,8 +42,11 @@ static void complete(void)
     unsigned next=word(m.memory[PVR_CCB_HOST_CONTROL]),slot=(next-1)&127;
     put(m.memory[PVR_CCB_HOST_CONTROL]+128,next);
     m.cached_translation=m.device_table;
-    put(m.memory[PVR_CCB_RETURNS]+slot*4,m.status); m.irq=1;
+    if(!m.no_return)put(m.memory[PVR_CCB_RETURNS]+slot*4,m.status);
+    ++m.executed; m.irq=1;
 }
+static int executed(void *ctx,uint32_t *out)
+{ assert(ctx==&m); if(m.executed_fails || !operation())return 0; *out=m.executed; return 1; }
 static int kick(void *ctx,uint32_t reg,uint32_t value)
 {
     assert(ctx==&m && reg==0xb00 && !value && m.publishes==1);
@@ -155,6 +161,22 @@ int main(int argc,char **argv)
         prepare(2); m.status=status; assert(run()==PVR_GPU_FLUSH_FAULT);
         assert(f.error==PVR_GPU_FLUSH_COMMAND && f.status==status); retained();
     }
+    /* Judged by the executed count: no return word is needed, but the
+     * firmware must consume the command and count it executed. */
+    prepare(2); c.executed=executed; m.no_return=1; m.executed=7;
+    assert(run()==PVR_GPU_FLUSH_OK && m.kicks==1 && !f.status && f.consumed);
+    assert(f.executed_before==7 && f.executed_after==8 && m.cached_translation==0x2222);
+    prepare(2); c.executed=executed; m.no_return=1; m.automatic=0;
+    assert(pvr_gpu_flush_poll(&f)==PVR_GPU_FLUSH_AGAIN);
+    assert(pvr_gpu_flush_poll(&f)==PVR_GPU_FLUSH_AGAIN && m.kicks==1);
+    put(m.memory[PVR_CCB_HOST_CONTROL]+128,1);
+    assert(pvr_gpu_flush_poll(&f)==PVR_GPU_FLUSH_AGAIN);
+    assert(pvr_gpu_flush_poll(&f)==PVR_GPU_FLUSH_AGAIN && f.phase==PVR_GPU_FLUSH_WAIT && f.consumed);
+    ++m.executed; assert(run()==PVR_GPU_FLUSH_OK && f.executed_after==f.executed_before+1);
+    prepare(2); c.executed=executed; m.status=3; assert(run()==PVR_GPU_FLUSH_FAULT);
+    assert(f.error==PVR_GPU_FLUSH_COMMAND && f.status==3); retained();
+    prepare(2); c.executed=executed; m.executed_fails=1; assert(run()==PVR_GPU_FLUSH_FAULT);
+    assert(f.error==PVR_GPU_FLUSH_IO && !m.kicks); retained();
     prepare(0); m.now=98; assert(run()==PVR_GPU_FLUSH_FAULT && f.error==PVR_GPU_FLUSH_CLOCK); retained();
     prepare(0); m.late_publish=1; assert(run()==PVR_GPU_FLUSH_FAULT && !m.kicks);
     assert(f.error==PVR_GPU_FLUSH_TIMEOUT); retained();

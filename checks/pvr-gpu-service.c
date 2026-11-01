@@ -26,7 +26,7 @@ static unsigned char *guards[22];
 static StaticTask_t tasks[3];
 static StackType_t stacks[3][4096];
 static uint32_t stage, peer_done, publish_waiting, publish_release, fault_mode;
-static uint32_t calls, published, enabled, isolated, handled, cores;
+static uint32_t calls, published, enabled, isolated, handled, cores, mmu_flushes;
 static unsigned char registers[0xa108];
 static unsigned running, stopping, first_publish = 1;
 
@@ -250,19 +250,27 @@ static int kick(void *ctx, uint32_t off, uint32_t value)
     unsigned next = (unsigned)word(resource(0), 4), slot = (next - 1) & 127;
     unsigned char *command = resource(1) + slot * 88;
     uint32_t type = (uint32_t)word(command, 4);
-    configASSERT(type == PVR_CCB_HEALTH || type == (PVR_CCB_MAGIC | 107));
-    if (type != PVR_CCB_HEALTH) {
+    configASSERT(type == PVR_CCB_HEALTH || type == (PVR_CCB_MAGIC | 107) || type == (PVR_CCB_MAGIC | 102));
+    if (type == (PVR_CCB_MAGIC | 102)) {
+        /* The MMU-cache command once, after the health check and before
+         * READY: catalogue level, the MMU sync object, update value 0. */
+        configASSERT(service.phase == PVR_GPU_SERVICE_CHECKING && service.control.phase == PVR_GPU_CONTROL_READY);
+        configASSERT(word(command + 8, 4) == 0x0400001f &&
+                     word(command + 12, 4) == pvr_fw_state_layout(PVR_FW_MMU_SYNC)->address && !word(command + 16, 4));
+        __atomic_fetch_add(&mmu_flushes, 1, __ATOMIC_RELEASE);
+    } else if (type != PVR_CCB_HEALTH) {
         configASSERT(!word(resource(PVR_FW_POWER_SYNC), 4));
         if (get(&fault_mode) != 2) put(resource(PVR_FW_POWER_SYNC), 4, 1);
         if (word(command + 8, 4) == 1) stopping = 1;
     }
     /* With the executed count bound, the fixture models the open A733
-     * firmware: the health command gets no return word
-     * (board-session-20261025-18). Fixtures that bind no count model a
-     * firmware that writes it. The executed count (OS data +568) passes
-     * every consumed command. */
+     * firmware: the health and MMU-cache commands get no return word
+     * (board-session-20261025-18, apps/gpu-power-id/fw-job.inc). Fixtures
+     * that bind no count model a firmware that writes it. The executed count
+     * (OS data +568) passes every consumed command. */
     put(resource(0) + 128, 4, next);
-    if (!config.executed || type != PVR_CCB_HEALTH) put(resource(2) + slot * 4, 4, 1);
+    if (!config.executed || (type != PVR_CCB_HEALTH && type != (PVR_CCB_MAGIC | 102)))
+        put(resource(2) + slot * 4, 4, 1);
     fixture_executed();
     return 1;
 }
@@ -463,6 +471,8 @@ static void owner(void *arg)
     configASSERT(request(PVR_GPU_SERVICE_OPEN, 1000000).result == PVR_GPU_SERVICE_OK);
     set(&stage, 1); wait_flag(&peer_done, 1);
     configASSERT(wait_phase(PVR_GPU_SERVICE_READY).owns_session);
+    configASSERT(get(&mmu_flushes) == 1 && service.flush.phase == PVR_GPU_FLUSH_COMPLETE &&
+                 service.flush.executed_after != service.flush.executed_before);
     if (gpu_service_case == 1) {
         /* Firmware model publishes one known event. Worker polls without a
          * request; release/acquire on the cursor makes payload publication safe. */
@@ -572,7 +582,7 @@ void kernel_main(void)
     config.queue = (struct pvr_ccb_ops){read_mem, write_mem, barrier, kick};
     config.start = (struct pvr_gpu_start_ops){now, read_reg, write_reg, started, publish};
     config.control = (struct pvr_gpu_control_ops){now, irq_read, irq_write, compat, event};
-    config.executed = executed;
+    config.executed = executed; config.flush_mmu = 1;
     config.stop = (struct pvr_gpu_stop_ops){now, read_reg, write_reg, sync_write, sync_read, isolate,NULL};
     config.enable = enable; config.context = &config;
 #ifdef SUNSTONE_GPU_ASYNC_POWER

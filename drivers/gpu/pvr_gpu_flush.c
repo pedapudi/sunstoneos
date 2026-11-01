@@ -3,6 +3,7 @@
  * Copyright (c) 2023 Imagination Technologies Ltd. See LICENSE.pvr.
  */
 #include "pvr_gpu_flush.h"
+#include "pvr_gpu_crumb.h"
 #include "a733_range.h"
 #include "pvr_fw_state.h"
 
@@ -37,8 +38,16 @@ int pvr_gpu_flush_init(struct pvr_gpu_flush *s, struct pvr_gpu_control *c,
      * command return slot. Reading the initially-zero sync word is no proof. */
     *s=result; return 1;
 }
-static enum pvr_gpu_flush_result fail(struct pvr_gpu_flush *s, unsigned error)
+/* The first failure records its statement (pvr_gpu_crumb.h, unit FLUSH). */
+#define fail(s,error) fail_at((s),(error),__LINE__,PVR_GPU_CRUMB_HERE())
+static enum pvr_gpu_flush_result fail_at(struct pvr_gpu_flush *s, unsigned error,
+                                         unsigned line, const void *here)
 {
+    if (s->phase!=PVR_GPU_FLUSH_FAILED) {
+        s->failed_phase=s->phase; s->failed_line=line;
+        pvr_gpu_crumb_fail(PVR_GPU_CRUMB_FLUSH,error,line,(s->phase&0xffu)<<24|
+            ((s->executed_after-s->executed_before)&0xffu)<<8|(s->status&0xffu),here);
+    }
     s->phase=PVR_GPU_FLUSH_FAILED; s->error=error;
     (void)pvr_gpu_control_abort(s->control);
     (void)pvr_ccb_abort(s->queue);
@@ -78,19 +87,38 @@ enum pvr_gpu_flush_result pvr_gpu_flush_poll(struct pvr_gpu_flush *s)
         if (!s->ops.publish(s->context)) return fail(s,PVR_GPU_FLUSH_IO);
         s->phase=PVR_GPU_FLUSH_SUBMIT;
     } else if (s->phase==PVR_GPU_FLUSH_SUBMIT) {
+        const struct pvr_gpu_control *c=s->control;
+        if (c->executed && !c->executed(c->context,&s->executed_before)) return fail(s,PVR_GPU_FLUSH_IO);
         enum pvr_ccb_result r=pvr_ccb_submit(s->queue,s->command,now,s->deadline,&s->token);
         if (r==PVR_CCB_AGAIN) {
             if (!service(s)) return PVR_GPU_FLUSH_FAULT;
         } else if (r!=PVR_CCB_OK) return fail(s,PVR_GPU_FLUSH_COMMAND);
-        else s->phase=PVR_GPU_FLUSH_WAIT;
+        else { s->phase=PVR_GPU_FLUSH_WAIT; sunstone_crumb(PVR_GPU_CRUMB_MMU_SENT,s->executed_before); }
     } else {
         if (!service(s)) return PVR_GPU_FLUSH_FAULT;
-        enum pvr_ccb_result r=pvr_ccb_collect(s->queue,s->token,&s->status);
-        if (r!=PVR_CCB_OK && r!=PVR_CCB_AGAIN) return fail(s,PVR_GPU_FLUSH_COMMAND);
-        if (r==PVR_CCB_OK) {
-            if (s->status!=1) return fail(s,PVR_GPU_FLUSH_COMMAND);
-            s->phase=PVR_GPU_FLUSH_COMPLETE;
+        const struct pvr_gpu_control *c=s->control;
+        if (c->executed) {
+            if (!s->consumed) {
+                enum pvr_ccb_result r=pvr_ccb_settle(s->queue,s->token,&s->status);
+                if (r!=PVR_CCB_OK && r!=PVR_CCB_AGAIN) return fail(s,PVR_GPU_FLUSH_COMMAND);
+                if (r==PVR_CCB_OK) {
+                    if (s->status>1) return fail(s,PVR_GPU_FLUSH_COMMAND);
+                    s->consumed=1;
+                }
+            }
+            if (s->consumed) {
+                if (!c->executed(c->context,&s->executed_after)) return fail(s,PVR_GPU_FLUSH_IO);
+                if (s->executed_after!=s->executed_before) s->phase=PVR_GPU_FLUSH_COMPLETE;
+            }
+        } else {
+            enum pvr_ccb_result r=pvr_ccb_collect(s->queue,s->token,&s->status);
+            if (r!=PVR_CCB_OK && r!=PVR_CCB_AGAIN) return fail(s,PVR_GPU_FLUSH_COMMAND);
+            if (r==PVR_CCB_OK) {
+                if (s->status!=1) return fail(s,PVR_GPU_FLUSH_COMMAND);
+                s->phase=PVR_GPU_FLUSH_COMPLETE;
+            }
         }
+        if (s->phase==PVR_GPU_FLUSH_COMPLETE) sunstone_crumb(PVR_GPU_CRUMB_MMU_FLUSHED,s->status);
     }
     if (!clock_now(s,&now)) return PVR_GPU_FLUSH_FAULT;
     return s->phase==PVR_GPU_FLUSH_COMPLETE ? PVR_GPU_FLUSH_OK : PVR_GPU_FLUSH_AGAIN;

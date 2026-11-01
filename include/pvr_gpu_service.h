@@ -6,6 +6,7 @@
 #include <stdatomic.h>
 #include "pvr_fw_state.h"
 #include "pvr_gpu_stop.h"
+#include "pvr_gpu_flush.h"
 #include "pvr_free_list.h"
 #ifdef SUNSTONE_A733_OS_PERF
 #include "pvr_gpu_clock.h"
@@ -145,6 +146,13 @@ struct pvr_gpu_service_config {
      * that writes no return word for the health command, as the open A733
      * firmware does, otherwise fails the check at its deadline. */
     int (*executed)(void *, uint32_t *);
+    /* Nonzero: after the health check and before READY, invalidate the GPU
+     * MMU caches with the catalogue-level MMU-cache command (pvr_gpu_flush.h)
+     * and wait for it, as the references do before the first job
+     * (pvr_job.c:806 and pvr_mmu.c:124-158; the vendor's
+     * RGXPreKickCacheCommand). With executed set, the command is judged by
+     * the executed count. */
+    unsigned flush_mmu;
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
     /* Optional final owner action after STOPPED; 0 pending, 1 parked, -1 fault.
      * Called only by the worker under one fixed PARK deadline. */
@@ -249,6 +257,7 @@ struct pvr_gpu_service {
     struct pvr_ccb queue;
     struct pvr_gpu_start start;
     struct pvr_gpu_control control;
+    struct pvr_gpu_flush flush; /* With config.flush_mmu: the MMU-cache command before READY. */
     struct pvr_gpu_stop stop;
 #ifdef SUNSTONE_A733_OS_PERF
     struct {

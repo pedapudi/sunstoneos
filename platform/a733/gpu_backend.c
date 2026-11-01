@@ -368,8 +368,8 @@ static int compat(void *context, uint32_t off, void *out, size_t bytes)
     return active(b) && (output(b, out, bytes) || fail(b, A733_GPU_BACKEND_ACCESS)) &&
         memory_result(b, a733_gpu_memory_compat(b->memory, off, out, bytes));
 }
-/* The firmware's executed kernel-command count, into one of the
- * controller's own count fields; the open firmware writes no return word for
+/* The firmware's executed kernel-command count, into one of the count
+ * fields of the controller or of the MMU-cache command; the open firmware writes no return word for
  * the health command (board-session-20261025-18), so the controller judges
  * it by this count. */
 static int executed(void *context, uint32_t *out)
@@ -377,7 +377,9 @@ static int executed(void *context, uint32_t *out)
     struct a733_gpu_backend *b = context;
     if (!control_live(b)) return 0;
     const struct pvr_gpu_control *c = &b->service->control;
-    if (out != &c->executed_before && out != &c->executed_after) return fail(b, A733_GPU_BACKEND_ACCESS);
+    const struct pvr_gpu_flush *f = &b->service->flush;
+    if (out != &c->executed_before && out != &c->executed_after &&
+        out != &f->executed_before && out != &f->executed_after) return fail(b, A733_GPU_BACKEND_ACCESS);
     uint32_t count;
     if (!memory_result(b, a733_gpu_memory_executed(b->memory, &count))) return 0;
     *out = count; return 1;
@@ -616,7 +618,7 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
     c->queue = (struct pvr_ccb_ops){queue_read, queue_write, barrier, kick};
     c->start = (struct pvr_gpu_start_ops){now, start_read, start_write, started, publish};
     c->control = (struct pvr_gpu_control_ops){now, control_read, control_write, compat, event};
-    c->executed = executed;
+    c->executed = executed; c->flush_mmu = 1;
     c->stop = (struct pvr_gpu_stop_ops){now, stop_read, stop_write, sync_write, sync_read, isolate, external->isolate ? NULL : isolate_poll};
     c->irq = (struct pvr_gpu_service_irq_ops){irq_mask, irq_rearm};
     c->power = (struct pvr_gpu_service_enable_ops){power_begin, power_poll};
