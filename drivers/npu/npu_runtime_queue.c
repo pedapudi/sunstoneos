@@ -62,6 +62,9 @@ static int start(void *cookie, const struct a733_npu_command *c, uint64_t timeou
     a733_mmio_write32_dsb_sy_after(base + 0x654, c->device);
     if (!window(q)) return 0;
     a733_mmio_write32_dsb_sy_after(base + 0x3a4, 0x1ffff);
+#ifdef SUNSTONE_NPU_QUEUE_TIMING
+    q->runtime->doorbell_ticks = ticks();
+#endif
     return 1;
 }
 static int complete(void *cookie)

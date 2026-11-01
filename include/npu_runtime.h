@@ -118,6 +118,9 @@ struct npu_runtime {
     struct nbg_assembly_cursor cursor;
     unsigned loading, checking, last_started;
     uint64_t finishes;
+    /* Diagnostic timestamp after the fetch doorbell and its DSB complete.
+     * Updated only when SUNSTONE_NPU_QUEUE_TIMING is enabled. */
+    uint64_t doorbell_ticks;
     struct npu_runtime_counters counters;
     atomic_uint failed;
     unsigned prepared, bound, resident;

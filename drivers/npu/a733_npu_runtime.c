@@ -266,8 +266,15 @@ static int write_reg(void *cookie, unsigned offset, uint32_t value)
 {
     struct npu_runtime *rt = cookie;
     ++rt->counters.register_writes;
-    return good(rt) && a733_npu_startup_window_open(rt->startup) &&
+    int written = good(rt) && a733_npu_startup_window_open(rt->startup) &&
         a733_npu_native_operations.write(&rt->native, offset, value);
+#ifdef SUNSTONE_NPU_QUEUE_TIMING
+    if (written && offset == 0x3a4) {
+        /* Match the direct adapter's timestamp after completed device writes. */
+        __asm__ volatile("dsb sy\n isb\n mrs %0,cntpct_el0" : "=r"(rt->doorbell_ticks) :: "memory");
+    }
+#endif
+    return written;
 }
 static uint64_t now(void *cookie)
 { struct npu_runtime *rt = cookie; return a733_npu_native_operations.microseconds(&rt->native); }
