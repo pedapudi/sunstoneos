@@ -697,6 +697,10 @@ def main(argv=None):
         run_record = json.loads(session.read_text()) if session.exists() else {}
         record['rails'] = rails_note(run_record)
         if restore:
+            # The run's record first, so a helper that hangs or is interrupted cannot lose it;
+            # it is rewritten when the helper ends.
+            save(evidence / 'dev-run.json', dict(record, rail_helper_reason='started after the run',
+                                                 summary=record['summary'] + '; rails: rail helper started'))
             report, why = restore_rails(args, host, evidence, run_record)
             record.update(rail_helper=report, rail_helper_reason=why)
             if report is None:

@@ -28,7 +28,9 @@ accepts only a normal return with one 800 mV VOLT readback per rail above
 controlled outcomes of the actual kernel runner. Before a launch the helper
 runs by default for an image that links the CPU-return entry guard, ahead of
 the capture, and a helper run that does not complete stops before the
-capture. No USB node, queue or FEL executable is opened.
+capture. The launched run's record is saved before the helper runs after it,
+so an interrupted helper does not lose it. No USB node, queue or FEL
+executable is opened.
 """
 import argparse
 import contextlib
@@ -600,6 +602,31 @@ def normalize_cases(host, out):
         else:
             assert record['outcome'] == 'refused-before-launch' and not record['launched'], record
             assert 'modeled refusal' in record['summary'] and not (evidence / 'state.json').exists()
+    # A helper interrupted after a normal return: the run's record is already saved.
+    calls = []
+    def helper(args, host, where):
+        calls.append('helper')
+        if where.name == 'rail-helper':
+            raise KeyboardInterrupt
+        return {'complete': True, 'supply': [], 'volt': [], 'rail_state': [], 'outcome': [], 'evidence': str(where)}
+    def returned(args, host, bundle, live, run, **keywords):
+        calls.append('launch')
+        run.mkdir()
+        (run / 'session.json').write_text(json.dumps({'complete': True, 'watchdog': {
+            'mode_after_return': 0, 'breadcrumbs': {'last': {'name': 'RETURN_ROM'}}}}))
+        (run / 'result.bin').write_bytes(b'')
+        return {'secondaries_off': 7}
+    evidence = out / 'normalize-interrupted'
+    with patch.object(dev, 'run_rail_helper', helper), patch.object(dev, 'capture', lambda fel: captured_state()), \
+            patch.object(dev, 'run_return', returned):
+        try:
+            dev.main(['cpu-return', '--port', '3-3', '--evidence', str(evidence)])
+            raise AssertionError('the interrupt did not propagate')
+        except KeyboardInterrupt:
+            pass
+    record = json.loads((evidence / 'dev-run.json').read_text())
+    assert calls == ['helper', 'launch', 'helper'] and record['launched'], (calls, record)
+    assert record['outcome'] == 'result-invalid' and record['rail_helper_reason'] == 'started after the run', record
     calls = []
     with patch.object(dev, 'run_rail_helper', lambda *a: calls.append('helper')):
         evidence = out / 'normalize-check-only'
@@ -607,7 +634,8 @@ def normalize_cases(host, out):
                   '--evidence', str(evidence)])
     record = json.loads((evidence / 'dev-run.json').read_text())
     assert not calls and record['outcome'] == 'checked' and record['normalize_rails'].startswith('not run'), record
-    passed('normalize-and-restore-rails-order', cases=['default', 'helper-refused', 'skipped', 'check-only'])
+    passed('normalize-and-restore-rails-order',
+           cases=['default', 'helper-refused', 'skipped', 'interrupted-after-return', 'check-only'])
 
 
 def main():
