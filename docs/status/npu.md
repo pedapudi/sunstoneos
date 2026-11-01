@@ -22,56 +22,57 @@ p50 and 26,925 jobs/s, and 1,000 fence-chained two-stage jobs, on 3-3.
 ## Continuation priorities and saved work
 
 The continuation branch is `work/npu-fastpath-1101`. Its internal-clock owner,
-portable transition checks and finite shared-timer wiring are committed through
-`11e50073`. These additions are incomplete and have no physical gating result.
+portable transition checks, native owner cases, shared-timer wiring and idle
+benchmark are integrated and host-tested. They have no physical gating result.
 The qualified resident and dependent-buffer paths remain the scope described
 below; their board evidence does not qualify the new idle policy.
 
-1. **Complete internal-clock gating validation.** Link `npu_idle.c` into every
-   NPU queue build and finish the finite shared-timer composition. Reconcile
-   `docs/designs/npu-fast-path.md` with the approved policy and suspended-register
-   rules below. Finish the native owner cases
-   for cancellation, stale timers, pending GIC interrupts, partial failure,
-   suspended close and published EL0 successors. The portable transition fixture
-   passes eight groups with delayed MMIO and restricted suspended reads;
-   evidence is `gate-correctness-check-03/`, with fault-origin follow-ups in
-   `gate-correctness-check-04/` and `gate-correctness-check-05/`. Obtain the same
-   three independent reviewers' code approval for simplicity, performance and
-   correctness; their design approvals alone do not authorize the board step.
-   Complete the finite benchmark decoder and shared-timer build composition,
-   then run the always-on control before the gating comparison on port 3-3.
-   Require throughput at least 98% of control, p99 within 105%, maximum within
-   110%, CPU time within 105%, resume within 100 µs, and no gating in 9 ms gaps.
-   Charge the owner task's CPU time and report cold-job latency separately.
+1. **Gating image: code review, then the board comparison.** `npu_idle.c` is
+   linked into the NPU queue OS build and every finite queue build. The
+   native owner cases (`checks/npu-queue-handoff.py`) cover start refusals,
+   gating and resume on admission, the control policy, stale alarms with an
+   active or recently completed job, a non-quiet interrupt state, partial
+   failure between suspend writes, suspended close with and without a resume
+   failure, cancellation by STOP, an interrupt while suspended and a published
+   EL0 successor, with four relink-based regression mutations. The idle
+   benchmark images (`build.py --latency queue --idle off|gate`), their report
+   decoder and the limit comparison (`apps/npu-finite/idle-compare.py`) are
+   checked by `checks/npu-idle-report.py` with synthetic reports; the producer
+   itself runs only on the board. Three independent reviewers must approve the
+   code (simplicity, performance and correctness) before the always-on control
+   and then the gating image run on port 3-3. Require throughput at least 98% of
+   control, p99 within 105%, maximum within 110%, CPU time within 105% (charging
+   the owner task), resume within 100 µs and no gating in 9 ms gaps. Cold-job
+   latency is reported separately. The PMIC provider exposes no DCDC2 current or
+   power readback, so there is no energy evidence unless an external meter is
+   added.
 2. **Qualify EL0 and prepared joined streams.** Review and finish the saved
-   generic sequence-registration API and returning OS diagnostic. Build and
-   verify its RAM backup, drain and interrupt restoration before physical use.
-   Run the returning OS control first, then the actual EL0 queue and joined
+   generic sequence-registration API and returning OS diagnostic, and the public
+   ring predicate that tells the power owner a published successor exists. Build
+   and verify the RAM backup, drain and interrupt restoration before physical
+   use. Run the returning OS control first, then the actual EL0 queue and joined
    stream through the board queue. Physical EL0 execution remains unqualified.
 3. **Add exact per-job deadline interrupts through the scheduler facility.**
    The landed `sunstone_deadline_wait_until()` facility supports task waits.
    It does not provide asynchronous device-alarm arm/cancel operations from
    submission and completion. Coordinate that extension with
    `work/scheduler-rt-1101`, then connect queue deadlines and test stale alarms
-   and completion races. Do not create an independent device timer.
+   and completion races. Do not create an independent device timer. This item
+   is open.
 
-Incomplete implementation is preserved in separate commits, without integration
-into the continuation branch:
+The EL0 joined registration and diagnostic remain a separate incomplete
+implementation, preserved without integration:
 
 | Work | Branch and commit | Missing work |
 | --- | --- | --- |
 | EL0 joined registration and diagnostic | `npu-el0-next-1101`, `088d3144` | Review, complete native builds, power bridge validation and physical control/EL0 runs |
-| Idle comparison workload | `npu-idle-bench`, `a9931f03` | Host decoder, timer composition, build, review and board comparison |
-| Native owner fixture support | `work/npu-idle-1101`, `267b8e94` | Actual owner race cases and their execution |
 
-Their worktrees are `el0-next/`, `idle-bench/` and `idle-impl/` under
-`~/.cache/sunstoneos/build/npu-fastpath-1101/`. The commits require selective
-integration: their prerequisite idle commits already exist on the continuation
-branch with different hashes. Preserved EL0 host artifacts are in
-`el0-next-evidence/` and `el0-ring-evidence/` under the same build directory.
-The full baseline builds and integration gate must be refreshed after these
-unfinished changes are integrated; the earlier gate evidence below covers the
-resident submission implementation.
+Its worktree is `el0-next/` under `~/.cache/sunstoneos/build/npu-fastpath-1101/`.
+The commit requires selective integration: its prerequisite idle commits already
+exist on the continuation branch with different hashes. Preserved EL0 host
+artifacts are in `el0-next-evidence/` and `el0-ring-evidence/` under the same
+build directory. The full baseline builds and integration gate must be refreshed
+after the EL0 changes are integrated.
 
 **Built images awaiting physical execution:** no new internal-gating or physical
 EL0 diagnostic image is built or submitted. Build-only OS artifacts remain
@@ -102,9 +103,8 @@ failure retains ownership and its first fault inputs.
 consumers through `include/sunstone_npu_queue.h`, `runtime/npu_app_queue.c` and
 `apps/os/npu-queue.c`; the API remains generic. The scheduler worker owns the
 shared deadline facility in `include/sunstone_deadline.h` and `runtime/deadline*`.
-The saved benchmark changes overlap `apps/npu-finite/build.py`,
-`queue-client.c` and `startup.h`; integrate them with the committed finite
-`deadline.c`, `monitor.c` and `runtime-irq.c` wiring.
+The idle benchmark composes the committed finite `deadline.c`, `monitor.c` and
+`runtime-irq.c` wiring with `queue-client.c`, `idle-client.h` and `startup.h`.
 
 ## Resident command submission
 
