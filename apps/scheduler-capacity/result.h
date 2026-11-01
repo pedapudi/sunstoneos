@@ -9,7 +9,8 @@
 struct capacity_sample { uint64_t ticks, digest; };
 struct capacity_core {
     struct ss_cpu_observation observation;
-    uint32_t observed_core, reserved;
+    /* Bits: clock ready before/after (0/2), unthrottled before/after (1/3). */
+    uint32_t observed_core, readiness;
     char clock_before[256], clock_after[256];
     struct capacity_sample samples[2][CAPACITY_REPS];
 };

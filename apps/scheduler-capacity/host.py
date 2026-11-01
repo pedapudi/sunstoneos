@@ -35,6 +35,8 @@ def decode(payload):
         raise ValueError('capacity workload or architectural counter configuration differs')
     reference = expected_digest()
     cores = []
+    calibration_errors = []
+    clock_epoch = None
     for core in range(8):
         base = 32 + core * CORE_BYTES
         mpidr, midr, isar0, mmfr2, clidr, slot, flags, atomic, ccidx, count, reserved = struct.unpack_from('<5Q6I', payload, base)
@@ -58,21 +60,34 @@ def decode(payload):
             caches.append(dict(level=level, kind=kind, bytes=size, line_bytes=line, ways=ways, sets=sets, ccsidr=raw))
         if clidr & 0x1ff != 3 | 4 << 3 | 4 << 6:
             raise ValueError('private L1/L2 and shared L3 cache types differ')
-        actual, padding = struct.unpack_from('<2I', payload, base + OBS_BYTES)
-        if actual != core or padding:
+        actual, readiness = struct.unpack_from('<2I', payload, base + OBS_BYTES)
+        if actual != core:
             raise ValueError('worker ran on a different CPU')
+        if readiness != 15:
+            calibration_errors.append(f'CPU {core} clock readiness or thermal admission changed')
         clocks = []
         clock_lines = []
         for offset in (312, 568):
             raw = payload[base + offset:base + offset + 256]
             line = raw.split(b'\0', 1)[0].decode('ascii')
             clock_lines.append(line)
-            clock = re.search(r'^CLOCK cpu_l_mhz=(\d+) cpu_b_mhz=(\d+) cpu_l_mv=(\d+) cpu_b_mv=(\d+) ', line)
+            clock = re.fullmatch(r'CLOCK cpu_l_mhz=(\d+) cpu_b_mhz=(\d+) cpu_l_mv=(\d+) cpu_b_mv=(\d+) transitions=(\d+) dsu_mhz=(\d+) sid=([0-9a-fA-F]{8}) bin=(\d+) core=(\d+) pattern=(\d+) parked_max_us=(\d+)\n?', line)
             if not clock:
-                raise ValueError('clock observation is missing')
-            clocks.append(dict(zip(('cpu_l_mhz', 'cpu_b_mhz', 'cpu_l_mv', 'cpu_b_mv'), map(int, clock.groups()))))
-        if clocks[0] != clocks[1]:
-            raise ValueError('operating point changed around timed work')
+                calibration_errors.append(f'CPU {core} clock observation is missing or unknown')
+                clocks.append(None)
+                continue
+            keys = ('cpu_l_mhz', 'cpu_b_mhz', 'cpu_l_mv', 'cpu_b_mv', 'transitions',
+                    'dsu_mhz', 'sid', 'bin', 'observer_core', 'pattern', 'parked_max_us')
+            values = [int(value, 16 if key == 'sid' else 10) for key, value in zip(keys, clock.groups())]
+            observation = dict(zip(keys, values))
+            clocks.append(observation)
+            epoch = {key: value for key, value in observation.items() if key != 'observer_core'}
+            if any(not epoch[key] for key in ('cpu_l_mhz', 'cpu_b_mhz', 'cpu_l_mv', 'cpu_b_mv', 'dsu_mhz')) or epoch['bin'] == 99:
+                calibration_errors.append(f'CPU {core} operating point is unknown')
+            if clock_epoch is None:
+                clock_epoch = epoch
+            elif epoch != clock_epoch:
+                calibration_errors.append(f'CPU {core} clock epoch changed during sequential work')
         samples = {}
         for kernel, name in enumerate(('integer', 'neon')):
             values = [struct.unpack_from('<2Q', payload, base + 824 + (kernel * REPS + rep) * 16) for rep in range(REPS)]
@@ -81,13 +96,14 @@ def decode(payload):
             samples[name] = [dict(ticks=ticks, digest=digest) for ticks, digest in values]
         cores.append(dict(core=core, mpidr=mpidr, midr=midr, isar0=isar0, mmfr2=mmfr2,
                           clidr=clidr, flags=flags, atomic=atomic, ccidx=ccidx, caches=caches,
-                          clocks=clocks, clock_lines=clock_lines, samples=samples))
+                          clocks=clocks, clock_lines=clock_lines, readiness=readiness, samples=samples))
     # Raw durations remain available; ratios describe only this fixed workload.
     medians = {name: [statistics.median(s['ticks'] for s in c['samples'][name]) for c in cores]
                for name in ('integer', 'neon')}
-    ratios = {name: statistics.median(values[:6]) / statistics.median(values[6:]) for name, values in medians.items()}
+    ratios = None if calibration_errors else {name: statistics.median(values[:6]) / statistics.median(values[6:]) for name, values in medians.items()}
     return dict(counter_hz=hz, words=words, rounds=rounds, warm=warm, reps=reps,
-                digest=reference, cores=cores, measured_a76_over_a55=ratios,
+                digest=reference, cores=cores, calibration_valid=not calibration_errors,
+                calibration_errors=calibration_errors, measured_a76_over_a55=ratios,
                 qualification='finite diagnostic; sustained, thermal and fault qualification remain open')
 
 

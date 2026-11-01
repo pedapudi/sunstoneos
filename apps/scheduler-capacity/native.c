@@ -56,10 +56,12 @@ void cpu_capacity_main(const struct ss_grant *g)
         struct capacity_core *c=&result.core[core];
         if(!ss_cpu_observations(core,&c->observation))ss_fail(0xca20|core);
         if(ss_clock_info(c->clock_before,sizeof(c->clock_before))<=0)ss_fail(0xca30|core);
+        c->readiness=(ss_clock_ready()?1u:0u)|(!ss_throttled()?2u:0u);
         xTaskNotifyGive(workers[core]);
         if(ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(1000))!=1)ss_fail(0xca40|core);
         if(ss_clock_info(c->clock_after,sizeof(c->clock_after))<=0)ss_fail(0xca50|core);
-        if(ss_live()<0||ss_throttled())ss_fail(0xca60|core);
+        c->readiness|=(ss_clock_ready()?4u:0u)|(!ss_throttled()?8u:0u);
+        if(ss_live()<0)ss_fail(0xca60|core);
         ss_progress();
     }
     ss_activity_end(1);ss_finish(&result,sizeof(result));

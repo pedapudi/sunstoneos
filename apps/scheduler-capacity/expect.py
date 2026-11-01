@@ -17,6 +17,8 @@ spec.loader.exec_module(host)
 
 def expectation(baseline):
     decoded = host.decode(baseline)
+    if not decoded['calibration_valid']:
+        raise ValueError('baseline clock epoch is invalid for calibration')
     words = list(struct.unpack('<' + 'I' * (len(baseline) // 4), baseline))
     for core in range(8):
         for kernel in range(2):
@@ -48,7 +50,7 @@ def discovery_expectation():
             words[offset // 4:(offset + 16) // 4] = [raw] * 4
             level, kind = ((1, 2), (1, 1), (2, 4), (3, 4))[index]
             words[(offset + 16) // 4:(offset + 40) // 4] = [level, kind, 64, raw, raw, 0]
-        words[(base + 304) // 4] = core
+        words[(base + 304) // 4:(base + 312) // 4] = [core, 15]
         # Clock text is retained for host decoding, including its variable telemetry.
         words[(base + 312) // 4:(base + 824) // 4] = [raw] * 128
         for kernel in range(2):

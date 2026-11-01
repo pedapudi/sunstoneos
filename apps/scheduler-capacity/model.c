@@ -12,7 +12,7 @@ int main(void)
     r.magic=CAPACITY_MAGIC;r.counter_hz=24000000;
     r.words=CAPACITY_WORDS;r.rounds=CAPACITY_ROUNDS;r.warm=CAPACITY_WARM;r.reps=CAPACITY_REPS;
     for(unsigned core=0;core<8;++core){
-        struct capacity_core *c=&r.core[core];c->observed_core=core;
+        struct capacity_core *c=&r.core[core];c->observed_core=core;c->readiness=15;
         struct ss_cpu_observation *o=&c->observation;
         o->core=core;o->mpidr=UINT64_C(0x80000000)|(core<<8);
         o->midr=core<6?0x412fd050:0x414fd0b1;o->isar0=2<<20;
@@ -23,7 +23,7 @@ int main(void)
             cache->line_bytes=64;cache->ways=4;cache->sets=128;
             cache->bytes=32768;cache->ccsidr=2|(3<<3)|(127<<13);
         }
-        snprintf(c->clock_before,sizeof(c->clock_before),"CLOCK cpu_l_mhz=1794 cpu_b_mhz=2002 cpu_l_mv=1000 cpu_b_mv=1050 ");
+        snprintf(c->clock_before,sizeof(c->clock_before),"CLOCK cpu_l_mhz=1794 cpu_b_mhz=2002 cpu_l_mv=1000 cpu_b_mv=1050 transitions=3 dsu_mhz=1274 sid=12340400 bin=0 core=6 pattern=0 parked_max_us=40\n");
         memcpy(c->clock_after,c->clock_before,sizeof(c->clock_before));
         for(unsigned k=0;k<2;++k)for(unsigned j=0;j<CAPACITY_REPS;++j)
             c->samples[k][j]=(struct capacity_sample){1000+j,integer};
