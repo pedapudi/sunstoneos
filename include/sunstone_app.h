@@ -33,7 +33,10 @@ enum {
     SS_DEVICE_AUDIO_I2S = 1u << 2,     /* I2S0 microphone capture */
     SS_DEVICE_AUDIO_HEADSET = 1u << 3, /* Bluetooth headset capture */
     SS_DEVICE_GPU = 1u << 4,
-    SS_DEVICE_ALL = (1u << 5) - 1
+    SS_DEVICE_USB_MOUSE = 1u << 5,
+    SS_DEVICE_USB_SERIAL = 1u << 6,
+    SS_DEVICE_USB_CAMERA = 1u << 7,
+    SS_DEVICE_ALL = (1u << 8) - 1
 };
 /* Preferred cluster of the main task. Without A76 admission the OS grants
  * the A55 pair 2-3 instead of the A76 pair 6-7. */
@@ -129,7 +132,8 @@ struct ss_grant {
  * and are safe at EL0 and EL1: they use atomics and memory that EL0 maps, and
  * never MMIO, locks shared with interrupt handlers or system registers.
  * Device work happens in OS-owned EL1 tasks that these calls signal.
- * Applications are trusted code; the calls do not check ownership. */
+ * Applications are trusted code. Device calls enforce grants; they do not
+ * isolate hostile application memory accesses. */
 const struct ss_grant *ss_grant(void);
 /* 1 live with the granted devices ready, 0 not ready yet, -1 ended. */
 int ss_live(void);
@@ -212,6 +216,57 @@ int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
  * Successful CLOSE is terminal for this session. */
 int ss_npu_close(void);
 
+/* USB class calls return 1 for a result, 0 while pending, -1 on refusal or
+ * disconnect. Input events are copied. Serial and camera payloads stay in
+ * OS-owned buffers until explicit release; applications must not modify them.
+ * One application consumer may use each queue. */
+enum { SS_INPUT_KEY = 1, SS_INPUT_POINTER = 2 };
+struct ss_input_event {
+    uint64_t attachment, sequence;
+    uint32_t kind, usage;
+    int32_t value, x, y, wheel;
+    uint32_t buttons, modifiers;
+};
+int ss_input_event(struct ss_input_event *event);
+/* Main application task: sleep until a class completion or wait_us expires.
+ * Call the class operation again after waking; notifications may coalesce. */
+void ss_usb_wait(uint32_t wait_us);
+struct ss_usb_serial_buffer {
+    uint64_t token, sequence;
+    const uint8_t *data;
+    size_t bytes;
+};
+int ss_usb_serial_acquire(struct ss_usb_serial_buffer *buffer);
+int ss_usb_serial_release(uint64_t token);
+/* The caller keeps data immutable until write_result returns 1 or -1.
+ * A pending write retains ownership even after disconnect until OS drain. */
+int ss_usb_serial_write(uint64_t sequence, const void *data, size_t bytes);
+int ss_usb_serial_write_result(uint64_t sequence, size_t *actual);
+struct ss_usb_serial_line {
+    uint32_t baud;
+    uint8_t bits, parity, stop, rtscts; /* CDC parity/stop encodings */
+};
+int ss_usb_serial_configure(uint64_t sequence, const struct ss_usb_serial_line *line);
+int ss_usb_serial_config_result(uint64_t sequence);
+struct ss_usb_frame_slice { const uint8_t *data; size_t bytes; };
+enum { SS_USB_FRAME_MJPEG = 1, SS_USB_FRAME_YUYV = 2 };
+struct ss_usb_camera_frame {
+    uint64_t token, sequence;
+    const struct ss_usb_frame_slice *slices;
+    size_t slice_count, bytes;
+    uint32_t width, height, format, reserved;
+};
+int ss_usb_camera_acquire(struct ss_usb_camera_frame *frame);
+int ss_usb_camera_release(uint64_t token);
+struct ss_usb_decoded_frame {
+    const uint8_t *data; /* packed active planar Y, Cb, Cr rows (YU12) */
+    size_t bytes;
+    uint32_t width, height;
+};
+/* One MJPEG decode per image, through the optional OS JPEG hardware owner.
+ * Retain token until this call returns 1 or -1. Output stays read-only and
+ * retained for the image lifetime. 0 pending; -1 refused or failed. */
+int ss_usb_camera_decode(uint64_t token, struct ss_usb_decoded_frame *frame);
 /* Copy the result into the OS result record and end this application. In a
  * returning lifetime the OS then returns to the host; in the resident
  * lifetime the record stays readable over the host channel. Refused

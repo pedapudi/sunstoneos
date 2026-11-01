@@ -27,7 +27,8 @@ SECTIONS {
         . = 0x41002000;
     } > RAM
     .recovery_code 0x41002000 : {
-        KEEP(*(.text.monitor_recovery))
+        KEEP(*(.text.monitor_recovery)) KEEP(*(.text.probe_irq_restore))
+        KEEP(*(.probe_marker))
         */platform/a733/monitor.c.obj(.text.monitor_exception .text.finish)
         */arch/aarch64/cache.S.obj(.text)
         __memtest_recovery_code_end = .;
@@ -39,11 +40,19 @@ SECTIONS {
     .recovery_state 0x41003000 : {
         *(.monitor_state)
         __memtest_recovery_state_end = .;
+    } > RAM
+    .recovery_probe : ALIGN(64) {
+        __memtest_probe_start = .;
+        KEEP(*(.text.probe_recovery)) KEEP(*(.text.sunstone_crumb_el3))
+        . = ALIGN(64);
+        __memtest_probe_end = .;
+        __memtest_recovery_probe_end = .;
         . = 0x410037c0;
         QUAD(0)
         . = 0x41004000;
     } > RAM
     ASSERT(__memtest_recovery_state_end <= 0x410037c0, "monitor state exceeds lines 0-30")
+    ASSERT(__memtest_recovery_probe_end <= 0x410037c0, "probe recovery exceeds lines 0-30")
     .recovery_stack 0x41004000 : {
         . = 0x410047c0;
         __monitor_stack_top = .;

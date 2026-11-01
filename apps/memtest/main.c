@@ -8,6 +8,17 @@
 #include "platform.h"
 #include "boot.h"
 #include "memtest.h"
+#include "sunstone_probe.h"
+SUNSTONE_PROBE_IMAGE(MEMTEST_RECORD_ADDRESS,4096,0x41005000,128,20);
+extern struct memtest_contract sunstone_probe_input __attribute__((alias("memtest_contract")));
+uint64_t sunstone_probe_quiesce(void)
+{
+    /* This image accepts only CPU work; it starts no DMA or peripheral.
+     * The monitor retires its timer PPIs and restores owned IRQ state. */
+    volatile const struct memtest_record *r=(const void *)MEMTEST_RECORD_ADDRESS;
+    if(r->stop==MEMTEST_STOP_DIGEST || r->stop==MEMTEST_STOP_SCAN || r->stop==MEMTEST_STOP_DECODE)return 0;
+    return SUNSTONE_PROBE_READY;
+}
 #include "a733_mapping_check.h"
 #include "a733_cpu_clock.h"
 
@@ -37,6 +48,7 @@ _Static_assert(MEMTEST_CLEAR_OF_K(DRAM_END), "chase pointers clear of K");
 struct memtest_contract memtest_contract __attribute__((section(".memtest_contract"), aligned(64)));
 /* Recovery region: four pages, from the linker script. */
 extern unsigned char __memtest_recovery_start[], __memtest_recovery_end[];
+extern unsigned char __memtest_probe_start[], __memtest_probe_end[];
 /* Geometry; the emulation checks replace it with a smaller map. */
 struct memtest_geometry memtest_geometry = MEMTEST_GEOMETRY_BOARD;
 
@@ -69,9 +81,14 @@ static uint64_t renew(void)
     return now;
 }
 
+static uint64_t recovery_digest(void);
 static _Noreturn void finish(unsigned status, unsigned stop)
 {
     volatile struct memtest_record *r = RECORD;
+    if(r->digest_admission){
+        r->digest_last=recovery_digest();
+        if(r->digest_last!=r->digest_admission){status=MEMTEST_RUN_STOPPED;stop=MEMTEST_STOP_DIGEST;}
+    }
     r->status = status;
     r->stop = stop;
     r->renewals = walk.renewals;
@@ -112,7 +129,10 @@ static uint64_t recovery_digest(void)
     for (unsigned page = 0; page < 4; ++page)
         for (unsigned line = page < 2 ? 0 : 32; line < PAGE_LINES; ++line)
             clean_invalidate(base + page * 4096u + line * 64u);
+    for(uintptr_t p=(uintptr_t)__memtest_probe_start;p<(uintptr_t)__memtest_probe_end;p+=64)clean_invalidate(p);
     barrier_dsb();
+    hash=memtest_hash(hash,(const volatile uint64_t *)__memtest_probe_start,
+                      (__memtest_probe_end-__memtest_probe_start)/8u);
     for (unsigned page = 0; page < 4; ++page)
         for (unsigned line = page < 2 ? 0 : 32; line < PAGE_LINES; ++line)
             hash = memtest_hash(hash, (const volatile uint64_t *)(uintptr_t)(base + page * 4096u + line * 64u), 8);

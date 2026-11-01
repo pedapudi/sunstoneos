@@ -8,6 +8,18 @@ qualification. The [hardware matrix](hardware.md) holds the full inventory;
 
 ## Host tool admission
 
+The [board runner](board-runner.md) implements fresh-FEL preparation, returning
+CPU/GPU/probe capture and a frozen run queue. Fake FEL checks, real offline
+hello/GPU preparation and independent review pass; physical qualification is
+pending. Evidence is under `~/.cache/sunstoneos/build/board-runner-1031/`.
+Finite NPU images admit the armed watchdog and have board-qualified startup
+and inference. Their receipt format still needs an adapter in the queued runner.
+The guide gives the coordinator's port 3-1 qualification commands.
+The [native probe contract](board-probe-contract.md) now has a library, offline
+admission command and converted memtest example. Host/instruction checks cover
+its return and fatal paths. Static secondary-OFF ownership and peripheral
+retirement still need physical evidence; fresh FEL does not establish them.
+
 Host tools use direct image, session, target and hardware-condition checks.
 Queue claims, review records and archived sources do not authorize the changed
 runners. DRAM readiness uses a reversible memory comparison; CPU launchers
@@ -148,7 +160,7 @@ composition. Source-ownership, shared-helper and progress checks pass.
 Focused checks pass for complete memory-map admission, DMA/IOMMU ownership,
 raw PMIC observation, cold-session refusal, SDIO deadlines, HEVC state and
 pixels, RTC alarm lifetime and MD5/SM3 staging/upload ownership. Device effects
-remain modeled. The check index verifies 750 checks; pre-push fixtures reject
+remain modeled. The check index verifies 760 checks; pre-push fixtures reject
 25 blocked cases and accept 12 permitted cases. Test cleanup moves artifacts
 into the trash directory.
 
@@ -207,6 +219,36 @@ are in `~/.cache/sunstoneos/build/cpu-reliability-1031/README.md`. The first
 reliability launch failed as recorded above. The earlier longer-recognition
 nonreturn has no recovered fault location; the corrected hello control has
 only its own recorded scope. Further trials remain held after the failure.
+
+## USB host classes await physical qualification
+
+The OS exposes separately granted keyboard/mouse events, retained USB serial
+buffers and UVC camera frames. Native input, serial, camera and hardware JPEG
+camera images link with interrupt completion and application payload aliases.
+The [image guide](usb-host-images.md) records their hashes, host checks and exact
+offline preparation commands. Public descriptor and traffic fixtures supplement
+the composed host checks; physical throughput and device operation remain open.
+
+The USB host connector is TYPEC24, the USB-C/DisplayPort port. Accessories
+need a USB-C adapter or hub. Enabling VBUS requires coordinator approval and
+an explicit admitted source session; the images grant no electrical authority.
+
+Board launch still needs reviewed TYPEC24/VBUS authority, the new exclusive RAM
+reservation and a supervised USB-class route in the protected development
+runner. The images retain resources and refuse the CPU-return lifetime.
+Host checks cover hot-plug within an admitted Type-C adapter/hub connection;
+removing that connection requires a new source session. No board access occurred.
+Four earlier proposals in the 3-3 queue identify pre-review images. The
+coordinator must replace or revalidate them with the corrected image hashes;
+the image guide lists their IDs and unmet prerequisites.
+
+Independent review found and corrected reused-address lookup, truncated HID
+report descriptors and legacy keyboard state publication. All USB sanitizer,
+ThreadSanitizer, captured-traffic, memory and composition checks pass under
+`~/.cache/sunstoneos/build/integrate-streams-1031/usb/`. The three baseline
+builds, four USB class images, legacy JPEG image and selected integration gate
+pass. The corrected image package is in that directory's `images/` child.
+Physical device operation, DMA visibility and VBUS behavior remain unqualified.
 
 ## Merged application and failure-record interfaces
 

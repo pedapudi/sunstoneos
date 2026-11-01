@@ -7,6 +7,12 @@
 #include "a733_range.h"
 #include "a733_task_context.h"
 #include "task.h"
+#if SUNSTONE_USB_APP_ALIAS
+#include "a733_usb_memory.h"
+_Static_assert(A733_XHCI_MEMORY_BYTES==A733_USB_MEMORY_PARENT_BYTES&&
+    A733_XHCI_DATA_OFFSET==A733_USB_MEMORY_DATA_OFFSET&&
+    A733_XHCI_DATA_BYTES==A733_USB_MEMORY_DATA_BYTES,"USB application alias geometry");
+#endif
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
 #error "USB2 requires scheduler, current-task and mutex-owner APIs"
 #endif
@@ -146,9 +152,18 @@ int a733_usb2_native_init(struct a733_usb2_native *n,const struct a733_usb2_plat
     if(!mappings(0x06a00000,0x8000,0))return 0;
     if(c->superspeed&&(!mappings(0x06c01000,4096,0)||!mappings(0x06c06000,8192,0)||
        !mappings(0x06c80000,0x20000,0)||!mappings(0x06a0d000,4096,0)))return 0;
+#if SUNSTONE_USB_APP_ALIAS
+    if(pool->backing.cpu!=A733_USB_MEMORY_BASE||pool->backing.physical!=A733_USB_MEMORY_BASE||
+       pool->backing.bytes!=A733_USB_MEMORY_END-A733_USB_MEMORY_BASE)return 0;
+#endif
     *n=(struct a733_usb2_native){.self=n,.locks=locks,.owner_task=task,.parent_pool=pool,
         .admit=admission,.admission_context=context};
     if(!device_memory_acquire(pool,c->owner,A733_XHCI_MEMORY_BYTES,&n->parent,&n->backing))return 0;
+#if SUNSTONE_USB_APP_ALIAS
+    if(n->backing.cpu!=A733_USB_MEMORY_BASE||n->backing.physical!=A733_USB_MEMORY_BASE){
+        device_memory_retain(pool,n->parent);return 0;
+    }
+#endif
     if(!mappings(n->backing.cpu,n->backing.bytes,0x44)||n->backing.cpu!=n->backing.physical||
         !a733_ranges_disjoint(n,sizeof(*n),(void *)n->backing.cpu,n->backing.bytes)||
         !device_memory_pool_init_typed(&n->private_pool,n->backing.cpu,n->backing.physical,n->backing.bytes,

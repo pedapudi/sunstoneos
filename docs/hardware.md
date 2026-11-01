@@ -3174,7 +3174,18 @@ to the stated scope:
 
 - USB host and Type-C: **implemented** native [source power and attachment
   control](typec.md), plus [high-speed USB2 host transfers](usb2-host.md) through
-  xHCI and TinyUSB. Focused checks cover attachment, independent power cutoff,
+  xHCI and TinyUSB. Generic host images expose OS-owned keyboard/mouse,
+  CDC and bridge serial, and UVC services through separate application grants.
+  Serial and camera buffers have retained zero-copy application views; an
+  optional MJPEG consumer reuses the hardware JPEG decoder. The
+  [image guide](usb-host-images.md) records four native builds and composed host
+  checks. Physical source power, peripherals, DMA visibility and sustained
+  traffic remain unqualified; supervised runner and RAM admission remain open.
+  The host connector is TYPEC24, the USB-C/DisplayPort port; accessories need
+  a USB-C adapter or hub. VBUS enable requires coordinator approval and an
+  explicit admitted source session. Review corrections and merged-tree checks
+  are recorded in the image guide. Full Type-C detach needs a new admitted
+  session. Focused checks cover attachment, independent power cutoff,
   mass-storage enumeration, copied sector reads, malformed responses,
   cancellation and disconnects. The [native board application](board-application.md)
   connects startup, separate Type-C tasks, host reads and simultaneous USB0

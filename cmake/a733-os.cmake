@@ -27,6 +27,18 @@ elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
   add_sunstone_image(sunstone-a733-os-hello LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION hello-compute)
+elseif(SUNSTONE_APPLICATION MATCHES "^usb-(input|serial|camera)$")
+  if(NOT SUNSTONE_A733_OS_USB_CLASSES)
+    message(FATAL_ERROR "USB demos require SUNSTONE_A733_OS_USB_CLASSES=ON")
+  endif()
+  add_sunstone_application(${SUNSTONE_APPLICATION}
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/${SUNSTONE_APPLICATION}/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/${SUNSTONE_APPLICATION}/manifest.json")
+  if(SUNSTONE_A733_OS_USB_JPEG)
+    target_compile_definitions(${SUNSTONE_APPLICATION} PRIVATE SUNSTONE_A733_OS_USB_JPEG=1)
+  endif()
+  add_sunstone_image(sunstone-a733-os-${SUNSTONE_APPLICATION} LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION ${SUNSTONE_APPLICATION})
 else()
   if(NOT DEFINED SUNSTONE_APPLICATION_${SUNSTONE_APPLICATION}_ROOT)
     message(FATAL_ERROR "Unknown SUNSTONE_APPLICATION: ${SUNSTONE_APPLICATION}")

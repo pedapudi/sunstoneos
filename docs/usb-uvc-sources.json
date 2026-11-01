@@ -1,0 +1,31 @@
+{
+  "sources": [
+    {
+      "component": "Linux UVC protocol reference",
+      "url": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/media/usb/uvc/uvc_video.c",
+      "revision": "v6.12",
+      "sha256": "d5c1f227b0423736a4acfeb9da8ff57ff5f44c9fd8df33af56280cb76a20b2a9",
+      "license": "GPL-2.0-only",
+      "use": "Streaming probe layout, negotiation, payload flags and alternate bandwidth reference; adapted class runs on the FreeRTOS CPU. Linux itself runs only as a development reference.",
+      "source_available": true
+    },
+    {
+      "component": "Logitech C270 public descriptor report",
+      "url": "https://gist.githubusercontent.com/kasparsd/5793374/raw/0a61f9885cd28d691c533e0733ea7191c3fe9392/logitech-c270-lsusb-webcam",
+      "revision": "0a61f9885cd28d691c533e0733ea7191c3fe9392",
+      "sha256": "4d6c25cc089a8a3b9f6d4eb790fad1b8cc47a95e3d29f90b5c425a8f9b67dd9d",
+      "license": "No explicit license in gist; raw report stays outside source control. Tracked fixture contains derived numerical device descriptor facts only.",
+      "use": "Host test input: all 38 video mode descriptors and 11 streaming endpoint alternate settings, projected from author kasparsd's 2013 lsusb report. Not a raw binary configuration capture.",
+      "source_available": true
+    },
+    {
+      "component": "Captured Logitech streaming probe controls",
+      "url": "https://gitlab.com/wireshark/wireshark/uploads/758300515a5dabb6900fdf43d739fb75/logitech_mjpeg_switch.pcap",
+      "revision": "Wireshark issue 8414 immutable attachment 758300515a5dabb6900fdf43d739fb75",
+      "sha256": "bd1ab6f2775fae9ad8b8732598c42e89f4a6b50915a1203302e7d41fb4f635e7",
+      "license": "No explicit attachment license; raw capture stays outside source control. Tracked fixture contains derived numerical protocol facts only.",
+      "use": "Host replay of nine captured GET_CUR streaming probe responses. The capture has no completed isochronous video payloads, so it cannot establish frame decoding or image parity. Device identity is not asserted to be C270.",
+      "source_available": true
+    }
+  ]
+}

@@ -70,6 +70,9 @@ def layout(elf, table):
     pages = {'monitor_vectors': 0x41001000, 'monitor_sync': 0x41002000, 'monitor_reset': 0x41002000,
              'monitor_exception': 0x41002000, 'clean_data_cache': 0x41002000, 'invalidate_data_cache': 0x41002000,
              'saved': 0x41003000}
+    if 'sunstone_probe_marker' in table:
+        pages.update(sunstone_probe_marker=0x41002000,sunstone_probe_restore_interrupts=0x41002000,
+                     sunstone_probe_return=0x41003000,sunstone_probe_fault=0x41003000,sunstone_probe_rom=0x41003000)
     placed = {}
     for name, page in pages.items():
         for s in table[name]:

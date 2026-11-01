@@ -28,7 +28,7 @@ BIND_SID = 1
 HEADER = struct.Struct('<QQIIII32s')
 EXTENT = struct.Struct('<II')
 INPUT = struct.Struct('<Q32s')
-THERMAL, AUDIO, NPU, CPU_GRANT, INPUTS = 1, 2, 3, 4, 16
+THERMAL, AUDIO, NPU, CPU_GRANT, JPEG, USB_MEMORY, INPUTS = 1, 2, 3, 4, 5, 6, 16
 SERVICE_BYTES = {THERMAL: 216, AUDIO: 184, NPU: 272, CPU_GRANT: 96}
 SERVICE_MAGIC = {THERMAL: 0x415337334f534131, AUDIO: 0x415337334f415531,
                  NPU: 0x415337334f4e5031, CPU_GRANT: 0x4153373343505531}
@@ -86,7 +86,7 @@ def session_decode(raw, manifest=None, manifest_sha256=None):
     require(PREFIX_BYTES + HEADER.size <= len(raw) <= MAX_BYTES, 'Invalid typed session size.')
     magic, version, size, count, devices, flags, digest = HEADER.unpack_from(raw, PREFIX_BYTES)
     require((magic, version, size) == (SESSION_MAGIC, SESSION_VERSION, len(raw)), 'Invalid typed session header.')
-    require(not flags & ~BIND_SID and not devices & ~31, 'Unknown session devices or flags.')
+    require(not flags & ~BIND_SID and not devices & ~sum(manifest_tool.DEVICES.values()), 'Unknown session devices or flags.')
     extents, offsets, offset = {}, {}, PREFIX_BYTES + HEADER.size
     for _ in range(count):
         require(offset + EXTENT.size <= len(raw), 'Truncated session extent header.')
@@ -108,6 +108,16 @@ def session_decode(raw, manifest=None, manifest_sha256=None):
             size = legacy_bytes if kind == THERMAL else SERVICE_BYTES[kind]
             require(struct.unpack_from('<3Q', extents[kind]) == (SERVICE_MAGIC[kind], 1, size),
                     'Invalid service record header.')
+    if USB_MEMORY in extents:
+        value=extents[USB_MEMORY]
+        require(len(value)==64 and struct.unpack_from('<4Q',value)==(1,0x47000000,0x1000000,0x7a000000),
+                'Invalid USB memory profile geometry.')
+        require(any(value[32:]), 'USB memory reservation evidence is missing.')
+    if JPEG in extents:
+        value=extents[JPEG]
+        require(len(value)==856 and value[:PREFIX_BYTES]==raw[:PREFIX_BYTES], 'JPEG extent prefix differs.')
+        require(struct.unpack_from('<3Q',value,PREFIX_BYTES)==(0x415337334a504132,4,856), 'Invalid camera JPEG extent header.')
+        require(not any(value[768:832]), 'Camera JPEG extent must not fabricate fixture or reference identity.')
     if manifest_sha256 is not None:
         require(digest.hex() == manifest_sha256, 'Session manifest digest differs from image.')
     if manifest is not None or manifest_sha256 is not None:
@@ -117,12 +127,12 @@ def session_decode(raw, manifest=None, manifest_sha256=None):
                 'Session device grant differs from manifest.')
         capture = devices & 12
         require(capture in (0, 4, 8), 'Multiple capture devices granted.')
-        require(not devices & 2 or devices & 1, 'Keyboard grant requires storage.')
+
         require(devices & 1 or not capture and flags & BIND_SID,
                 'Session without storage requires SID binding and no capture.')
         workload = struct.unpack_from('<I', raw, 400)[0]
-        expected = 4 if devices & 2 else 0 if devices & 1 else 2
-        require(workload == expected or workload == 1 and expected == 0,
+        expected = 0 if devices & 0xe2 else 0 if devices & 1 else 2
+        require(workload == expected or workload == 4 and devices & 3 == 3 or workload == 1 and expected == 0,
                 'Board workload differs from device grant.')
         facts = extents.get(INPUTS, b'')
         declared = regions(manifest, (manifest_tool.KIND['input'],))

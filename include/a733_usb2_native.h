@@ -3,6 +3,11 @@
 #define SUNSTONE_A733_USB2_NATIVE_H
 #include "a733_usb2_platform.h"
 #include "a733_xhci.h"
+#include "sunstone_usb_transport.h"
+struct sunstone_hid_event;
+struct sunstone_uvc_frame;
+struct sunstone_uvc_mode;
+typedef void (*a733_usb2_input_emit)(void *,const struct sunstone_hid_event *);
 struct a733_platform_locks;
 #define A733_USB2_HID_REPORT_BYTES 64u
 #define A733_USB2_HUBS 2u /* Hub states: the root-port hub and one hub below it. */
@@ -30,8 +35,21 @@ struct a733_usb2_ss {
     unsigned ss_u1,ss_u2,ss_burst[2];
     uint8_t ss_bos[256];
 };
+#define A733_USB2_GENERIC_ENDPOINTS 64u
+struct a733_usb2_generic_endpoint {
+    uint8_t address,type,interval,interface,alternate;
+    uint16_t packet;
+};
+struct a733_usb2_generic {
+    unsigned ready,mounted,endpoints;
+    uint32_t interfaces,alternates[32];
+    uint8_t classes[32];
+    uint16_t reports[32];
+    struct a733_usb2_generic_endpoint endpoint[A733_USB2_GENERIC_ENDPOINTS];
+};
 struct a733_usb2_descriptor {
     struct a733_usb2_ss ss;
+    struct a733_usb2_generic generic;
     unsigned kind,device_probe,configuration_probe,string_bytes,string_id,string_language;
     uint8_t device_prefix[8],configuration_prefix[9];
 };
@@ -96,7 +114,8 @@ struct a733_usb2_native {
      * without local power within the upstream current budget; audio_capture
      * admits one USB Audio Class 1 capture device in images built with the
      * TinyUSB audio class. */
-    unsigned hub_tiers,bus_powered_hubs,audio_capture;
+    unsigned hub_tiers,bus_powered_hubs,audio_capture,generic_host;
+    struct sunstone_usb_transport transport;
     unsigned dual_leaf,msc_seen,hid_seen,audio_seen,msc_mounted,hid_mounted,audio_mounted,hid_address,msc_in,msc_out;
     unsigned initialized,core_started,stack_started,failed,address,mounted,
         read_pending,read_complete,read_failed;
@@ -147,6 +166,16 @@ int a733_usb2_audio_start(struct a733_usb2_native *,uint32_t rate,unsigned chann
 /* Copy the captured frames available now, at most one block, after a fresh
  * live attachment observation. Returns1 with frames, 0 with none, -1 failed. */
 int a733_usb2_audio_read(struct a733_usb2_native *,struct a733_usb2_audio_block *);
+const struct sunstone_uvc_mode *a733_usb2_camera_mode(struct a733_usb2_native *);
+int a733_usb2_camera_start(struct a733_usb2_native *);
+/* Select a UVC format before starting. A requested format has no fallback
+ * to another encoding; zero restores the default YUYV preference. */
+int a733_usb2_camera_select_format(struct a733_usb2_native *,unsigned format);
+const struct sunstone_uvc_frame *a733_usb2_camera_acquire(struct a733_usb2_native *);
+int a733_usb2_camera_release(struct a733_usb2_native *,const struct sunstone_uvc_frame *,uint64_t generation,uint64_t sequence);
+void a733_usb2_set_input(struct a733_usb2_native *,a733_usb2_input_emit,void *);
+int a733_usb2_generic_enable(struct a733_usb2_native *);
+struct sunstone_usb_transport *a733_usb2_transport(struct a733_usb2_native *);
 void a733_usb2_native_lost(struct a733_usb2_native *);
 /* Internal TinyUSB composition; singleton static stack, one task and one host.
  * These entry points also permit the actual HCD/MSC stack in the host fixture. */

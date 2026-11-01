@@ -1,0 +1,40 @@
+{
+  "capture": {
+    "url": "https://gitlab.com/wireshark/wireshark/uploads/b1f3d325b18bf8760d61ac30bbd8a1a5/FT2232H-OpenVizsla-FPGA-download-and-capture-start.pcapng.gz",
+    "context_url": "https://gitlab.com/wireshark/wireshark/-/issues/11743",
+    "revision": "Immutable upload b1f3d325b18bf8760d61ac30bbd8a1a5; issue updated 2025-03-30T16:11:38.588Z; retrieved 2026-10-31",
+    "sha256": "830669237027c7298ce85f8f71020e71cbf6e8c69851715ed3e04c3329a501f7",
+    "decompressed_sha256": "b53b1bf157a1a7d23ede9a4e62fb5ee5be9cea5786bf6cbf566563376f3bcdaf",
+    "license": "No capture-content license identified in the public issue. No raw capture or payload is committed.",
+    "source_availability": "Public downloadable capture attached to the Wireshark FTDI dissector issue.",
+    "execution_location": "Host replay only; no board access.",
+    "cache_path": "sources/usb-serial-traffic/FT2232H-OpenVizsla-FPGA-download-and-capture-start.pcapng.gz",
+    "description": "FT2232H programming an OpenVizsla FPGA and starting capture. The recorded device identity is VID 0x1d50, PID 0x607c, bcdDevice 0x0700.",
+    "selection": "Successful nonempty endpoint 0x81 bulk-IN completion records; USBPcap info byte 1, transfer type 3, status 0. Endpoint descriptor supplies 512-byte maximum packet size.",
+    "scope": "The capture includes FPGA programming and FIFO operation. The selected endpoint 0x81 stream follows channel A synchronous-FIFO mode selection. It establishes actual FTDI status-prefixed USB payloads, not UART-mode operation, one-megabaud line behavior, no-loss timing or physical A733 DMA."
+  },
+  "expected": {
+    "records": 1401,
+    "raw_bytes": 475370,
+    "payload_bytes": 472568,
+    "payload_sha256": "37ddff80f76f9bee31033faf48c01253c809045cd5a0ac51fb50bbcc54097446",
+    "status_only_records": 346,
+    "full_packet_records": 459,
+    "first_frame": 278,
+    "last_frame": 3156
+  },
+  "format_reference": {
+    "url": "https://raw.githubusercontent.com/desowin/usbpcap/37a8e3cf12234df96a7e101eec336085dbb3e4c7/USBPcapDriver/include/USBPcap.h",
+    "revision": "37a8e3cf12234df96a7e101eec336085dbb3e4c7",
+    "sha256": "54d020927f2fc50937a2d3fb67e933e1d04d053e2967c8d4dd992d7797e2f6ed",
+    "license": "BSD-2-Clause",
+    "use": "Reference for packed USBPcap field offsets, transfer type 3 and info-bit completion direction. No source code is imported or compiled.",
+    "execution_location": "Host reference only.",
+    "cache_path": "sources/usb-serial-traffic/USBPcap.h"
+  },
+  "check": {
+    "command": "checks/usb-serial-capture.py --output OUT",
+    "behavior": "The independent Python decoder removes two status bytes from each captured USB packet. The C replay submits the original captured completion payloads to the serial receive API and writes bytes from the returned application views. The check compares all output bytes and their fixed SHA-256.",
+    "limits": "All selected recorded completions contain at most one 512-byte USB packet. Multiple packets within one transfer are covered by the separate constructed lifetime check, not by this recording."
+  }
+}

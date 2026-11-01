@@ -396,7 +396,7 @@ def main():
     p.add_argument('--run-log', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--mask', action='append', default=[], choices=sorted(MASK))
-    p.add_argument('--budget', type=float, default=20.0)
+    p.add_argument('--budget', type=float, default=18.0)
     v = sub.add_parser('verify')
     v.add_argument('--result', type=Path, required=True)
     v.add_argument('--contract', type=Path)
