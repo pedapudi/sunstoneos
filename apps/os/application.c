@@ -202,8 +202,10 @@ int os_application_prepare(void)
     }
 #endif
 #ifndef SUNSTONE_BOARD_RESIDENT
-    if(s->board.deadline_us<=m->return_reserve_us)return 0;
-    grant.finish_by_us=s->board.deadline_us-m->return_reserve_us;
+    /* board.session holds the contract-derived absolute deadline. The
+     * sealed session returned by os_session_admitted retains zero times. */
+    if(board.session.deadline_us<=m->return_reserve_us)return 0;
+    grant.finish_by_us=board.session.deadline_us-m->return_reserve_us;
 #endif
     atomic_store_explicit(&prepared,1,memory_order_release);
     main_task=xTaskCreateStaticAffinitySet(main_entry,m->name,m->stack_bytes/sizeof(StackType_t),NULL,m->priority,

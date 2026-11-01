@@ -106,9 +106,12 @@ int os_session_decode(const void *raw,size_t bytes,struct os_session *out)
         if(f->bytes>r->bytes||(pinned&&(f->bytes!=r->bytes||memcmp(f->sha256,r->sha256,32))))return 0;
     }
 #ifndef SUNSTONE_BOARD_RESIDENT
-    uint64_t start=out->board.epoch/24;
-    if(out->board.deadline_us<=start||m->return_reserve_us>=out->board.deadline_us-start||
-       m->run_deadline_us>out->board.deadline_us-start-m->return_reserve_us)return 0;
+    /* The immutable supervised board prefix has zero time fields. Contract
+     * admission binds the run to armed_at plus this configured lifetime;
+     * main.c derives the absolute runtime deadline only after admission. */
+    const uint64_t lifetime_us=(uint64_t)A733_BOARD_SUPERVISED_SECONDS*1000000;
+    if(m->return_reserve_us>=lifetime_us||
+       m->run_deadline_us>lifetime_us-m->return_reserve_us)return 0;
 #endif
     return os_session_valid(out);
 }
