@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+from host_evidence import unique_directory
 
 import numpy as np
 import onnx
@@ -31,9 +32,9 @@ def convolution(values, weights, bias):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('output', type=Path, help='new fixture directory')
+    parser.add_argument('output', type=Path, help='fixture directory; existing directories receive a unique child')
     out = parser.parse_args().output
-    out.mkdir(parents=True, exist_ok=False)
+    out = unique_directory(out)
     # Dyadic values keep every accumulator and every float result exact.
     x0 = ((np.arange(192, dtype=np.int32) * 7) % 33 - 16).reshape(1, 3, 8, 8)
     x1 = ((np.arange(36, dtype=np.int32) * 5) % 29 - 14).reshape(1, 1, 6, 6)
@@ -72,6 +73,7 @@ def main():
                   quantization_applied=False, device_execution=False,
                   files={p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(out.iterdir())})
     (out / 'fixture.json').write_text(json.dumps(report, indent=2) + '\n')
+    print(f'Output: {out}')
     print('Generated dual graph:', [a.size for a in (y0, y1)], 'reference outputs')
 
 

@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+from host_evidence import unique_directory
 import subprocess
 
 
@@ -26,7 +27,7 @@ def main():
     if selected is None: raise ValueError('Model is absent from reviewed catalogue')
     raw = a.input.read_bytes()
     if len(raw) != selected['input']['bytes']: raise ValueError('Input shape differs')
-    if not a.check_saved: a.output.mkdir(parents=True,exist_ok=False)
+    if not a.check_saved: a.output = unique_directory(a.output)
     text = a.output/'input.qnt.tensor'
     encoded = ''.join(str(v)+'\n' for v in raw).encode()
     if a.check_saved:
@@ -50,7 +51,10 @@ def main():
                   input_exact=True,reexecuted=not a.check_saved,
                   files={str(v.resolve()):dict(bytes=v.stat().st_size,sha256=sha(v))
                          for v in (a.executable,a.model,a.input,text,a.output/'input_0.dat',matches[0])})
-    with (a.output/'input-check.json').open('x') as f: f.write(json.dumps(report,indent=2)+'\n')
+    report_directory = unique_directory(a.output/'input-checks') if a.check_saved else a.output
+    report_path = report_directory/'input-check.json'
+    with report_path.open('x') as f: f.write(json.dumps(report,indent=2)+'\n')
+    print(f'Report: {report_path}')
     print('PASS SDK simulator consumed exact same-shape UINT8 input and bound output')
 
 
