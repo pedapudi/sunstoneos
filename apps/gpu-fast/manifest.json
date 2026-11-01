@@ -1,0 +1,13 @@
+{
+  "name": "gpu-fast",
+  "devices": {"required": ["gpu"], "optional": []},
+  "cpu": {"cluster": "a55", "workers": 0, "priority": 2, "stack_bytes": 8192},
+  "regions": [
+    {"name": "config", "kind": "input", "access": ["read"], "bytes": 16},
+    {"name": "input", "kind": "work", "access": ["read", "write", "gpu-read"], "bytes": 4096},
+    {"name": "output", "kind": "work", "access": ["read", "gpu-write"], "bytes": 4096},
+    {"name": "samples", "kind": "work", "access": ["read", "write"], "bytes": 131072}
+  ],
+  "deadlines": {"run_us": 30000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
+  "output_limit": 96
+}

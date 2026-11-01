@@ -34,6 +34,15 @@ elseif(SUNSTONE_APPLICATION STREQUAL "queue-add")
     INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/queue-add")
   add_sunstone_image(sunstone-a733-os-queue-add LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION queue-add)
+elseif(SUNSTONE_APPLICATION STREQUAL "gpu-fast")
+  if(NOT SUNSTONE_A733_OS_GPU OR NOT SUNSTONE_GPU_TIMING)
+    message(FATAL_ERROR "GPU benchmark requires the GPU and optional GPU timing")
+  endif()
+  add_sunstone_application(gpu-fast
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/gpu-fast/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/gpu-fast/manifest.json")
+  add_sunstone_image(sunstone-a733-os-gpu-fast LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION gpu-fast)
 elseif(SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle")
   if(NOT SUNSTONE_A733_OS_GPU)
     message(FATAL_ERROR "GPU lifecycle requires SUNSTONE_A733_OS_GPU=ON")
