@@ -4,7 +4,8 @@
 
 static struct dma_service *instance;
 static unsigned creating_worker;
-enum { SERVICE_ACTIVE, SERVICE_WAITING, SERVICE_CHECKING, SERVICE_RETAINED };
+enum { SERVICE_ACTIVE, SERVICE_WAITING, SERVICE_CHECKING, SERVICE_RETAINED,
+       SERVICE_RETIRING, SERVICE_RETIRED };
 static void worker(void *);
 BaseType_t dma_service_task_privileged(TaskFunction_t entry, void *argument)
 { return creating_worker && entry == worker && argument == instance ? pdTRUE : pdFALSE; }
@@ -240,12 +241,48 @@ static enum dma_service_result stream_execute(struct dma_service *s,
     if(result==A733_I2S_CONFLICT)return DMA_SERVICE_BUSY;
     return c->phase==DMA_SERVICE_RECOVERY?DMA_SERVICE_FAULT:DMA_SERVICE_OK;
 }
+static enum dma_service_result retire(struct dma_service *s,const struct dma_service_message *m)
+{
+    if(!s->retirement_mask || m->request.job || m->request.timeout || m->request.period_ticket)
+        return DMA_SERVICE_INVALID;
+    enum dma_service_result result=DMA_SERVICE_BUSY;
+    taskENTER_CRITICAL();
+    if(s->retirement_senders || uxQueueMessagesWaiting(s->requests))goto done;
+    for(unsigned i=0;i<A733_DMA_CHANNELS;++i){
+        const struct dma_service_channel *c=&s->channels[i];
+        const struct a733_dma_channel *d=&s->controller.channels[i];
+        if(c->phase!=DMA_SERVICE_CLOSED || c->owner!=DMA_SERVICE_CLIENTS ||
+           c->profile!=DMA_SERVICE_NO_JOB || c->job!=DMA_SERVICE_NO_JOB ||
+           c->job_ticket || c->holds_buffers || c->outcome!=DMA_SERVICE_NO_RESULT ||
+           d->claimed || d->transfer)goto done;
+    }
+    for(unsigned i=0;i<DMA_SERVICE_CLIENTS;++i)
+        if(s->clients[i].pending!=(i==m->client?m->ticket:0) ||
+           uxQueueMessagesWaiting(s->clients[i].replies))goto done;
+    /* Admission closes before the mask callback, including an ISR it exposes.
+     * Registered senders hold a reservation across their queue publication. */
+    s->retirement_client=m->client;s->retirement_ticket=m->ticket;
+    atomic_store_explicit(&s->activation_state,SERVICE_RETIRING,memory_order_release);
+    if(s->retirement_mask(s->retirement_cookie)==1){
+        s->irq_armed=0;
+        atomic_store_explicit(&s->irq_pending,0,memory_order_release);
+        result=DMA_SERVICE_OK;
+    }else{
+        s->irq_retained=1;
+        atomic_store_explicit(&s->activation_state,SERVICE_RETAINED,memory_order_release);
+        result=DMA_SERVICE_FAULT;
+    }
+done:
+    taskEXIT_CRITICAL();
+    return result;
+}
 static enum dma_service_result execute(struct dma_service *s,const struct dma_service_message *m,
     struct a733_i2s_period *period)
 {
     const struct dma_service_request *r=&m->request;
-    if ((unsigned)r->operation > DMA_SERVICE_PERIOD_END || r->job >= s->job_count) return DMA_SERVICE_INVALID;
+    if ((unsigned)r->operation > DMA_SERVICE_RETIRE || r->job >= s->job_count) return DMA_SERVICE_INVALID;
     if (!(s->clients[m->client].jobs & (UINT32_C(1)<<r->job))) return DMA_SERVICE_DENIED;
+    if(r->operation==DMA_SERVICE_RETIRE)return retire(s,m);
     struct dma_service_private_job *j=&s->jobs[r->job];
     struct dma_service_channel *c=&s->channels[j->channel];
     refresh_stream(s,j->channel);
@@ -317,6 +354,12 @@ static void worker(void *argument)
     (void)stack;
 #endif
     for (;;) {
+        if(atomic_load_explicit(&s->activation_state,memory_order_acquire)==SERVICE_RETIRING){
+            while(!atomic_load_explicit(&s->retirement_collected,memory_order_acquire))
+                (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+            atomic_store_explicit(&s->activation_state,SERVICE_RETIRED,memory_order_release);
+            for(;;)vTaskSuspend(NULL);
+        }
         if (atomic_load_explicit(&s->activation_state,memory_order_acquire)!=SERVICE_ACTIVE) {
             (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
             continue;
@@ -440,6 +483,7 @@ static int initialize(struct dma_service *s,const struct a733_dma_operations *op
     s->activation=activation ? *activation : (struct dma_service_activation){0};
     atomic_init(&s->activation_state,activation ? SERVICE_WAITING : SERVICE_ACTIVE);
     atomic_init(&s->irq_pending,0);
+    atomic_init(&s->retirement_collected,0);
     s->initialized=1; instance=s; creating_worker=1;
 #if configNUMBER_OF_CORES > 1
     s->worker=xTaskCreateStaticAffinitySet(worker,"dma-service",DMA_SERVICE_STACK_WORDS,s,priority,
@@ -497,12 +541,31 @@ int dma_service_bind_irq(struct dma_service *s,const struct dma_service_irq *irq
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
     s->irq=*irq; s->irq_bound=1; return 1;
 }
+int dma_service_bind_retirement(struct dma_service *s,int (*mask)(void *),void *cookie)
+{
+    if(!s || s!=instance || !s->initialized || !s->irq_bound || s->retirement_mask ||
+       !mask || !cookie || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
+    s->retirement_mask=mask;s->retirement_cookie=cookie;return 1;
+}
+int dma_service_retired(const struct dma_service *s)
+{
+    return s && s==instance && s->initialized && s->retirement_mask &&
+        atomic_load_explicit(&s->activation_state,memory_order_acquire)==SERVICE_RETIRED;
+}
 void dma_service_irq_notify_from_isr(struct dma_service *s,int mask_ok,BaseType_t *woken)
 {
     configASSERT(s && s == instance && s->initialized && s->irq_bound && woken);
+    if(atomic_load_explicit(&s->activation_state,memory_order_acquire)!=SERVICE_ACTIVE)return;
+    UBaseType_t saved=0;
+    if(s->retirement_mask)saved=taskENTER_CRITICAL_FROM_ISR();
+    if(atomic_load_explicit(&s->activation_state,memory_order_acquire)!=SERVICE_ACTIVE){
+        if(s->retirement_mask)taskEXIT_CRITICAL_FROM_ISR(saved);
+        return;
+    }
     SS_LATENCY_EVENT_BEGIN(SS_LAT_DMA);
     atomic_fetch_or_explicit(&s->irq_pending,IRQ_EVENT|(mask_ok == 1 ? 0 : IRQ_FAILED),memory_order_release);
     vTaskNotifyGiveFromISR(s->worker,woken);
+    if(s->retirement_mask)taskEXIT_CRITICAL_FROM_ISR(saved);
 }
 static struct dma_service_client *caller(struct dma_service *s,unsigned *slot)
 {
@@ -534,12 +597,28 @@ int dma_service_send(struct dma_service *s,const struct dma_service_request *req
 {
     if (!request || !ticket || wait == portMAX_DELAY) return 0;
     unsigned slot;
+    /* Only an opted-in returning service needs to serialize admission against
+     * retirement. Never hold the kernel critical section across a queue wait. */
+    int guarded=s && s==instance && s->initialized && s->retirement_mask;
+    if(guarded)taskENTER_CRITICAL();
     struct dma_service_client *c=caller(s,&slot);
-    if (!c || c->pending || c->next_ticket == UINT64_MAX) return 0;
+    if (!c || c->pending || c->next_ticket == UINT64_MAX){
+        if(guarded)taskEXIT_CRITICAL();
+        return 0;
+    }
     struct dma_service_message m={*request,c->next_ticket+1,slot};
     c->pending=m.ticket;
-    if (xQueueSend(s->requests,&m,wait) != pdTRUE) { c->pending=0; return 0; }
+    if(guarded){++s->retirement_senders;taskEXIT_CRITICAL();}
+    BaseType_t sent=xQueueSend(s->requests,&m,wait);
+    if(guarded)taskENTER_CRITICAL();
+    if(guarded)--s->retirement_senders;
+    if(sent!=pdTRUE){
+        c->pending=0;
+        if(guarded)taskEXIT_CRITICAL();
+        return 0;
+    }
     c->next_ticket=m.ticket; *ticket=m.ticket;
+    if(guarded)taskEXIT_CRITICAL();
     if (s->irq_bound) xTaskNotifyGive(s->worker);
     return 1;
 }
@@ -548,9 +627,23 @@ int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service
     if (!out || !ticket || wait == portMAX_DELAY) return 0;
     unsigned slot;
     struct dma_service_client *c=caller(s,&slot);
+    if(!c && s && s==instance && s->initialized && s->retirement_ticket==ticket &&
+       xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
+       s->retirement_client<DMA_SERVICE_CLIENTS &&
+       s->clients[s->retirement_client].task==xTaskGetCurrentTaskHandle())
+        c=&s->clients[s->retirement_client];
     (void)slot;
     if (!c || c->pending != ticket) return 0;
     struct dma_service_reply reply;
     if (xQueueReceive(c->replies,&reply,wait) != pdTRUE) return 0;
-    configASSERT(reply.ticket == ticket); c->pending=0; *out=reply; return 1;
+    configASSERT(reply.ticket == ticket);
+    if(s->retirement_mask)taskENTER_CRITICAL();
+    c->pending=0; *out=reply;
+    if(s->retirement_ticket==ticket && c==&s->clients[s->retirement_client] &&
+       atomic_load_explicit(&s->activation_state,memory_order_acquire)==SERVICE_RETIRING){
+        atomic_store_explicit(&s->retirement_collected,1,memory_order_release);
+        xTaskNotifyGive(s->worker);
+    }
+    if(s->retirement_mask)taskEXIT_CRITICAL();
+    return 1;
 }
