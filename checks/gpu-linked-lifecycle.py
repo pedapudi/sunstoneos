@@ -16,7 +16,7 @@ p.add_argument('--output', type=Path, required=True)
 a = p.parse_args()
 names = ['board_application', 'a733_board_session', 'pvr_gpu_service_request', 'pvr_gpu_service_reply',
          'gpu_application', 'a733_gpu_backend', 'a733_gpu_platform', 'a733_gpu_reserved',
-         'pvr_gpu_service', 'a733_gpu_backend_external']
+         'pvr_gpu_service', 'a733_gpu_backend_external', 'a733_gpu_queue', 'pvr_compute_queue']
 image = Image(a.image, layout_names=names)
 layouts = image.layouts
 if a.profile == 'os':
@@ -51,7 +51,7 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
     def call(name, *args, unit=None):
         uc.reg_write(UC_ARM64_REG_SP, 0x8000f000); uc.reg_write(UC_ARM64_REG_LR, 0x80000000)
         for i, value in enumerate(args): uc.reg_write(UC_ARM64_REG_X0 + i, value)
-        uc.emu_start(image.address(name, unit), 0x80000000, count=100000)
+        uc.emu_start(image.address(name, unit), 0x80000000, count=2000000)
         assert uc.reg_read(UC_ARM64_REG_PC) == 0x80000000, 'instruction budget exhausted'
         return uc.reg_read(UC_ARM64_REG_X0)
     state = dict(time=100, live=1, waiting=0, sent=[], pending=0, collects=0)
@@ -59,11 +59,14 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
         gpu = image.address('gpu', '/apps/os/gpu.c'); board = image.address('board')
         for name in ('started', 'opened'): setf(gpu, 'os_gpu_state', name, 1)
         setf(gpu, 'os_gpu_state', 'epoch', 1, 8)
-        put(image.address('os_recognizer'), 0x1234, 8)
+        put(image.address('os_gpu_client_task', '/apps/os/gpu.c'), 0x1234, 8)
+        component=field(field(gpu, 'os_gpu_state', 'session'), 'a733_gpu_queue', 'component')
+        setf(gpu, 'os_gpu_state', 'component', component, 8)
+        setf(component, 'pvr_compute_queue', 'completions', 0x8900, 8)
         setf(board, 'board_application', 'live_until', 3000000, 8)
         setf(field(board, 'board_application', 'session'), 'a733_board_session', 'deadline_us', 60000000, 8)
         hooks = {image.address(n): n for n in ('board_live', 'a733_smp_counter', 'xTaskGetCurrentTaskHandle',
-            'xTaskGetTickCount', 'os_thermal_throttled', 'os_dispatch_waiting', 'vTaskDelay', 'pvr_gpu_service_send_epoch', 'pvr_gpu_service_collect')}
+            'xTaskGetTickCount', 'os_thermal_throttled', 'vTaskDelay', 'uxQueueMessagesWaiting', 'pvr_gpu_service_send_epoch', 'pvr_gpu_service_collect')}
         def hook(machine, address, size, unused):
             name = hooks.get(address)
             if not name: return
@@ -73,13 +76,13 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
             elif name == 'xTaskGetTickCount': ret(state['time'] // 1000)
             elif name == 'xTaskGetCurrentTaskHandle': ret(0x1234)
             elif name == 'os_thermal_throttled': ret(0)
-            elif name == 'os_dispatch_waiting': state['waiting'] = args[0]; ret()
+            elif name == 'uxQueueMessagesWaiting': ret(0)
             elif name == 'vTaskDelay': assert args[0] == 1; state['time'] += 1000; ret()
             elif name == 'pvr_gpu_service_send_epoch':
                 assert args[0] == field(gpu, 'os_gpu_state', 'service') and args[1] == 1 and args[3] == 10
-                assert not state['pending'] and get(field(gpu, 'os_gpu_state', 'retired')) == 1 and state['waiting']
+                assert not state['pending'] and get(field(gpu, 'os_gpu_state', 'retired')) == 1 and get(field(gpu, 'os_gpu_state', 'waiting'))
                 operation = get(field(args[2], 'pvr_gpu_service_request', 'operation'))
-                assert operation == (2 if not state['sent'] else 0)
+                assert operation == (2 if not state['sent'] or case == 'close-busy' else 0)
                 state['sent'].append(operation); state['pending'] = len(state['sent']); put(args[4], state['pending'], 8); ret(1)
             else:
                 assert args[1] == state['pending'] and args[3] == 10
@@ -90,16 +93,15 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
                 if case == 'critical-during-close': state['live'] = 0
                 state['pending'] = 0; ret(1)
         uc.hook_add(UC_HOOK_CODE, hook)
-        result = call('a733_gpu_mimus_retire')
+        result = call('os_gpu_queue_retire')
         assert result == (case == 'retire')
         assert get(field(gpu, 'os_gpu_state', 'retired')) == 1
         assert get(field(gpu, 'os_gpu_state', 'failed')) == (case != 'retire')
         assert get(field(gpu, 'os_gpu_state', 'parked')) == (case == 'retire')
         before = list(state['sent']); state['live'] = 1
-        assert call('a733_gpu_mimus_open') == 0
-        assert call('a733_gpu_mimus_begin', 0) == (0 if case == 'retire' else 0xffffffff)
-        assert call('a733_gpu_mimus_thermal') == (0 if case == 'retire' else 0xffffffff)
-        assert state['sent'] == before and state['waiting'] == (case != 'retire')
+        assert call('os_gpu_queue_retire') == (case == 'retire')
+        assert call('os_gpu_queue_thermal') == (0 if case == 'retire' else 0xffffffff)
+        assert state['sent'] == before and get(field(gpu, 'os_gpu_state', 'waiting')) == (case != 'retire')
     else:
         app = image.address('app'); gpu = field(app, 'gpu_application', 'backend')
         power = field(app, 'gpu_application', 'power'); service = field(app, 'gpu_application', 'service')
@@ -125,6 +127,7 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
         assert get(field(gpu, 'a733_gpu_backend', 'identity_step')) == 0
         assert get(field(gpu, 'a733_gpu_backend', 'error')) == (7 if case == 'power-failed' else 0)
     results.append(dict(case=case, passed=True, model=state))
+a.output.parent.mkdir(parents=True,exist_ok=True)
 a.output.write_text(json.dumps(dict(passed=True, image_sha256=identity, profile=a.profile, cases=results, physical_access=False,
     scope='Actual linked caller/backend boundaries; service replies, platform progress, lifetime and scheduler modeled. Device MMIO is unmapped and forbidden. No firmware or numerical execution.'), indent=2) + '\n')
 print(f'PASS {len(results)} focused {a.profile} full-image boundary cases')

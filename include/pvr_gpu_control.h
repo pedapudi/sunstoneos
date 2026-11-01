@@ -39,6 +39,9 @@ struct pvr_gpu_control {
     struct pvr_ccb_token health_token;
     int (*executed)(void *, uint32_t *);
     uint32_t phase, error, health_done, health_status, executed_before, executed_after;
+    /* The phase and source line of the first failure, and whether the
+     * executed count has passed the health command. */
+    uint32_t failed_phase, failed_line, health_counted;
     unsigned char compatibility[64], last_event[PVR_CCB_COMMAND_BYTES];
 };
 
@@ -73,6 +76,9 @@ int pvr_gpu_control_count_executed(struct pvr_gpu_control *, int (*executed)(voi
  * Known event handlers and physical IRQ/GIC integration remain platform work.
  */
 enum pvr_gpu_control_result pvr_gpu_control_poll(struct pvr_gpu_control *, unsigned event_budget);
+/* The health-check steps reached, as PVR_GPU_CRUMB_STEP_* bits
+ * (pvr_gpu_crumb.h); after a failure, those reached before it. No I/O. */
+uint32_t pvr_gpu_control_steps(const struct pvr_gpu_control *);
 /* Close READY control/queue service after the owner's power-off handshake.
  * No I/O, device isolation, or buffer release. Polls then return INVALID. */
 enum pvr_gpu_control_result pvr_gpu_control_retire(struct pvr_gpu_control *);

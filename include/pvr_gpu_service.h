@@ -6,6 +6,7 @@
 #include <stdatomic.h>
 #include "pvr_fw_state.h"
 #include "pvr_gpu_stop.h"
+#include "pvr_gpu_flush.h"
 #include "pvr_free_list.h"
 #ifdef SUNSTONE_A733_OS_PERF
 #include "pvr_gpu_clock.h"
@@ -15,20 +16,20 @@
 #define PVR_GPU_PERF_FAILED 4u
 #endif
 struct pvr_compute_service;
-struct pvr_mimus_service;
+struct pvr_compute_queue;
+struct a733_gpu_queue;
 struct pvr_gpu_service;
 struct pvr_render_service;
 struct a733_gpu_graphics_memory;
 struct a733_gpu_disposal;
-struct a733_gpu_mimus;
 struct pvr_render_texture_request;
 struct pvr_render_texture_frame;
 
 #define PVR_GPU_SERVICE_CLIENTS 8u
 /* Wake messages carry client PVR_GPU_SERVICE_CLIENTS. Ticket 0 is the
- * interrupt handler's, the only one that clears irq_wake_pending; ticket
- * PVR_GPU_SERVICE_MIMUS_WAKE is the mimus session's job wake. */
-#define PVR_GPU_SERVICE_MIMUS_WAKE 1u
+ * interrupt handler's; the compute queue coalesces its own wake ticket. */
+#define PVR_GPU_SERVICE_QUEUE_WAKE 1u
+#define PVR_GPU_SERVICE_REQUESTS (PVR_GPU_SERVICE_CLIENTS + 2u)
 #define PVR_GPU_SERVICE_STACK_WORDS 4096u
 #define PVR_GPU_SERVICE_IRQ_REARM_ATTEMPTS 32u
 /* Worker pacing, in microseconds. Steps that progress continue without waiting
@@ -53,12 +54,15 @@ enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED, PVR_GPU_SERVICE_ENABLING,
     PVR_GPU_SERVICE_BUILDING, PVR_GPU_SERVICE_DRAINING, PVR_GPU_SERVICE_PUBLISHING, PVR_GPU_SERVICE_PUBLISHING_GRAPHICS,
     PVR_GPU_SERVICE_COMPUTE_CLEANUP, PVR_GPU_SERVICE_GRAPHICS_CLEANUP, PVR_GPU_SERVICE_DISPOSING, PVR_GPU_SERVICE_DISPOSED,
-    PVR_GPU_SERVICE_RECONSTRUCTING, PVR_GPU_SERVICE_PARKING, PVR_GPU_SERVICE_PARKED };
+    PVR_GPU_SERVICE_RECONSTRUCTING, PVR_GPU_SERVICE_PARKING, PVR_GPU_SERVICE_PARKED,
+    PVR_GPU_SERVICE_RECOVERING };
+#define PVR_GPU_SERVICE_RECOVERY_STOP_US UINT64_C(300000)
+#define PVR_GPU_SERVICE_RECOVERY_READY_US UINT64_C(1000000)
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
     PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE, PVR_GPU_SERVICE_RENDER, PVR_GPU_SERVICE_RENDER_OUTPUT,
     PVR_GPU_SERVICE_COMPUTE_OUTPUT, PVR_GPU_SERVICE_COMPUTE_CANCEL, PVR_GPU_SERVICE_COMPUTE_INPUT,
     PVR_GPU_SERVICE_DRAW, PVR_GPU_SERVICE_TEXTURE, PVR_GPU_SERVICE_DISPOSE,
-    PVR_GPU_SERVICE_PERFORMANCE, PVR_GPU_SERVICE_PARK };
+    PVR_GPU_SERVICE_PERFORMANCE, PVR_GPU_SERVICE_PARK, PVR_GPU_SERVICE_QUEUE_CREATE };
 enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
     PVR_GPU_SERVICE_DENIED, PVR_GPU_SERVICE_BUSY, PVR_GPU_SERVICE_FAULT };
 enum pvr_gpu_service_error { PVR_GPU_SERVICE_NO_ERROR, PVR_GPU_SERVICE_CLOCK,
@@ -139,6 +143,19 @@ struct pvr_gpu_service_config {
     void *context;
     struct pvr_gpu_service_irq_ops irq;
     struct pvr_gpu_service_enable_ops power;
+    /* Optional bounded worker callback: acquire the firmware's executed
+     * kernel-command count. When set, the health check is judged by that
+     * count (pvr_gpu_control_count_executed), as upstream judges it; firmware
+     * that writes no return word for the health command, as the open A733
+     * firmware does, otherwise fails the check at its deadline. */
+    int (*executed)(void *, uint32_t *);
+    /* Nonzero: after the health check and before READY, invalidate the GPU
+     * MMU caches with the catalogue-level MMU-cache command (pvr_gpu_flush.h)
+     * and wait for it, as the references do before the first job
+     * (pvr_job.c:806 and pvr_mmu.c:124-158; the vendor's
+     * RGXPreKickCacheCommand). With executed set, the command is judged by
+     * the executed count. */
+    unsigned flush_mmu;
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
     /* Optional final owner action after STOPPED; 0 pending, 1 parked, -1 fault.
      * Called only by the worker under one fixed PARK deadline. */
@@ -157,10 +174,13 @@ struct pvr_gpu_service_config {
     /* Standalone lifecycle images only: the exclusive owner of child disposal
      * and reconstruction. NULL, as in every other image, refuses DISPOSE. */
     struct a733_gpu_disposal *disposal;
-    /* Optional mimus session (pvr_mimus_service.h); excludes compute. */
-    struct pvr_mimus_service *mimus;
-    /* Concrete retained native owner; permits healthy STOPPED reopen only. */
-    struct a733_gpu_mimus *mimus_owner;
+    /* Optional generic compute queue; excludes fixed compute and graphics. */
+    struct pvr_compute_queue *compute_queue;
+    struct a733_gpu_queue *queue_owner;
+    /* Worker-only admission for recoverable queue timeout/reset. Return 1
+     * with the current absolute session limit; retain all resources on refusal.
+     * Recovery keeps the original stop and restart deadlines across polls. */
+    int (*recovery_begin)(void *,uint64_t *session_limit);
 #ifdef SUNSTONE_A733_OS_PERF
     /* Concrete OS GPU performance owner, using a second pre-bound client. */
     struct pvr_gpu_clock_ops performance_clock;
@@ -243,6 +263,7 @@ struct pvr_gpu_service {
     struct pvr_ccb queue;
     struct pvr_gpu_start start;
     struct pvr_gpu_control control;
+    struct pvr_gpu_flush flush; /* With config.flush_mmu: the MMU-cache command before READY. */
     struct pvr_gpu_stop stop;
 #ifdef SUNSTONE_A733_OS_PERF
     struct {
@@ -259,6 +280,8 @@ struct pvr_gpu_service {
     struct pvr_mips_boot boot;
     struct pvr_mips_object mappings[PVR_MIPS_MAX_OBJECTS];
     uint64_t epoch, deadline, last_now;
+    uint64_t recovery_detected, recovery_stop_deadline, recovery_ready_deadline;
+    unsigned recovery_stage, recovery_count;
     enum pvr_gpu_service_phase phase;
     enum pvr_gpu_service_error error;
     unsigned owner, initialized, closed_owner;
@@ -280,7 +303,7 @@ struct pvr_gpu_service {
     uint64_t yield_start, longest_yield_us;
     QueueHandle_t requests;
     StaticQueue_t request_state;
-    uint8_t request_storage[PVR_GPU_SERVICE_CLIENTS * sizeof(struct pvr_gpu_service_message)];
+    uint8_t request_storage[PVR_GPU_SERVICE_REQUESTS * sizeof(struct pvr_gpu_service_message)];
     struct pvr_gpu_service_client clients[PVR_GPU_SERVICE_CLIENTS];
     TaskHandle_t worker;
     StaticTask_t worker_state;

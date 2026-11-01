@@ -7,6 +7,8 @@ from pathlib import Path
 import struct
 import subprocess
 
+from harness import environment
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -14,8 +16,9 @@ def main():
     parser.add_argument("--qemu", type=Path, required=True)
     parser.add_argument("--nm", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--cases", type=int, nargs="+", choices=(1, 2, 3, 4, 5, 6), default=[1, 2, 3],
-                        help="Case 4 requires native memory; cases 5/6 require asynchronous power")
+    parser.add_argument("--cases", type=int, nargs="+", choices=range(1, 10), default=[1, 2, 3],
+                        help="Case 4 requires native memory; cases 5/6 require asynchronous power; "
+                             "cases 7/8/9 check the opening deadline after controller READY")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     original = args.elf.read_bytes()
@@ -49,7 +52,7 @@ def main():
                    "-kernel", str(path)]
         (args.output / f"case-{case}-command.json").write_text(json.dumps(command, indent=2) + "\n")
         run = subprocess.run(command, text=True, stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT, timeout=10)
+                             stderr=subprocess.STDOUT, timeout=10, env=environment())
         (args.output / f"case-{case}.log").write_text(run.stdout)
         marker = f"PASS GPU service: case 0x{case:016x};"
         result = {"case": case, "sha256": hashlib.sha256(image).hexdigest(),

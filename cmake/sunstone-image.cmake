@@ -199,9 +199,6 @@ function(add_sunstone_image target)
         "${NEWLIB_ROOT}/lib/gcc/aarch64-none-elf/14.3.1/libgcc.a")
       list(APPEND symbol_arguments --runtime-library "${library}")
     endforeach()
-    if(SUNSTONE_A733_OS_LEGACY_MIMUS_GPU)
-      list(APPEND symbol_arguments --legacy-mimus-gpu)
-    endif()
   endif()
   add_custom_command(TARGET ${target} POST_BUILD
     COMMAND "${Python3_EXECUTABLE}" "${SUNSTONE_SOURCE_ROOT}/checks/sunstone-image-link.py"

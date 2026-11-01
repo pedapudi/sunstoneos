@@ -134,6 +134,7 @@ static int kick(void *ctx,uint32_t off,uint32_t value)
         ++cleanup_kicks;put(resource(0)+128,4,next);
         if(compute_service_case==19)put(resource(2)+((slot+1)&127)*4,4,1);
         else put(resource(2)+slot*4,4,compute_service_case==17?3:compute_service_case==18?5:1);
+        fixture_executed();
         return 1;
     }
     if(word(command,4)==(PVR_CCB_MAGIC|107u)&&compute_service_case>=15) {
@@ -176,7 +177,7 @@ static int kick(void *ctx,uint32_t off,uint32_t value)
     configASSERT(word(ring,4)==(PVR_CCB_MAGIC|PVR_CCCB_TASK|205u));
     configASSERT(!memcmp(ring+40,job_image.compute,96)&&!memcmp(ring+176,compute.job.update,8));
     put(computation.firmware[2].storage.cpu,4,word(command+12,4));
-    put(resource(0)+128,4,next);put(resource(2)+slot*4,4,1);set(&job_kicks,get(&job_kicks)+1);return 1;
+    put(resource(0)+128,4,next);put(resource(2)+slot*4,4,1);fixture_executed();set(&job_kicks,get(&job_kicks)+1);return 1;
 }
 static int event(void *ctx,const unsigned char command[88])
 { callback(ctx);configASSERT(word(command,4)==(PVR_CCB_MAGIC|106));set(&event_forwarded,1);return 1; }
@@ -519,6 +520,7 @@ void kernel_main(void)
     config.queue=(struct pvr_ccb_ops){read_mem,write_mem,barrier,kick};
     config.start=(struct pvr_gpu_start_ops){now,read_reg,write_reg,started,publish};
     config.control=(struct pvr_gpu_control_ops){now,irq_read,irq_write,compat,event};
+    config.executed=executed;config.flush_mmu=1;
     config.stop=(struct pvr_gpu_stop_ops){now,read_reg,write_reg,sync_write,sync_read,isolate,NULL};
     config.enable=enable;config.context=&config;
     unsigned byte=0,page=0;

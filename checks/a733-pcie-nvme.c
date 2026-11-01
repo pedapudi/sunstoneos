@@ -491,6 +491,12 @@ int main(int argc,char **argv)
     else if(!strcmp(mode,"msix"))nominal(A733_PCIE_IRQ_MSIX);
     else if(!strcmp(mode,"intx"))nominal(A733_PCIE_IRQ_INTX);
     else if(!strcmp(mode,"gen2")){link_speed=negotiated=2;nominal(A733_PCIE_IRQ_MSIX);assert(port.endpoint.link_status==0x12);}
+    else if(!strncmp(mode,"gen3",4)){
+        link_speed=3;negotiated=!strcmp(mode,"gen3-fallback")?1:3;
+        nominal(!strcmp(mode,"gen3-poll")?A733_PCIE_IRQ_POLL:
+            !strcmp(mode,"gen3-intx")?A733_PCIE_IRQ_INTX:A733_PCIE_IRQ_MSIX);
+        assert(port.endpoint.link_status==(0x10|negotiated));
+    }
     else if(!strcmp(mode,"forged"))forged();
     else if(!strcmp(mode,"inherited")){inherited=1;start(A733_PCIE_IRQ_POLL);refused(0);assert(nvme.stage==1&&!dma_count);}
     else if(!strcmp(mode,"fatal")){fatal_at_enable=1;start(A733_PCIE_IRQ_POLL);refused(1);assert(!dma_count);}

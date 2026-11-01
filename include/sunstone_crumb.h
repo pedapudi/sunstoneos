@@ -111,6 +111,11 @@ enum {
     SUNSTONE_CRUMB_CLOCK_GUARD = 0x0201,    /* CPU clock entry guard passed */
     SUNSTONE_CRUMB_CLOCK_CHANGE = 0x0202,   /* request; value: domain << 12 | MHz */
     SUNSTONE_CRUMB_CLOCK_READY = 0x0203,    /* every granted request issued */
+    /* Return step: 1 drain, 2 request CPU-B lowering, 3 wait for lowering,
+     * 4 verify clocks/leases, 5 done. Value: step << 12 | owner phase << 10 |
+     * cluster << 8 | driver state. Owner phases: START, INSPECT, REQUEST,
+     * FOLLOW, numbered 0 through 3. */
+    SUNSTONE_CRUMB_CLOCK_RETURN = 0x0204,
     SUNSTONE_CRUMB_PMIC_STOP = 0x0210,      /* PMIC owner stopped */
     SUNSTONE_CRUMB_THERMAL_DONE = 0x0221,   /* thermal service stopped */
     SUNSTONE_CRUMB_ASSET_START = 0x0301,    /* value: asset index */
@@ -126,10 +131,16 @@ enum {
     SUNSTONE_CRUMB_GPU_READY = 0x0404,      /* value: result */
     SUNSTONE_CRUMB_GPU_SUBMIT = 0x0410,     /* value: job sequence */
     SUNSTONE_CRUMB_GPU_COMPLETE = 0x0411,   /* value: job sequence */
+    SUNSTONE_CRUMB_GPU_PEER_SUBMIT = 0x0412, /* value: peer job sequence */
+    SUNSTONE_CRUMB_GPU_PEER_COMPLETE = 0x0413, /* value: peer job sequence */
     SUNSTONE_CRUMB_GPU_RETIRE = 0x0420,
     SUNSTONE_CRUMB_GPU_RETIRED = 0x0421,    /* value: result */
     SUNSTONE_CRUMB_GPU_THERMAL = 0x0430,    /* value: result */
     SUNSTONE_CRUMB_GPU_PARKED = 0x0440,     /* value: result */
+    SUNSTONE_CRUMB_GPU_RECOVERY_STOP = 0x0450, /* value: failed firmware serial */
+    SUNSTONE_CRUMB_GPU_RECOVERY_RESET = 0x0451, /* value: failed firmware serial */
+    SUNSTONE_CRUMB_GPU_RECOVERY_RESTART = 0x0452, /* value: failed firmware serial */
+    SUNSTONE_CRUMB_GPU_RECOVERY_READY = 0x0453, /* value: failed firmware serial */
     SUNSTONE_CRUMB_RETURN_POWER_DOWN = 0x0502, /* value: core */
     SUNSTONE_CRUMB_PROBE_BEGIN = 0x0801,
     SUNSTONE_CRUMB_PROBE_PROGRESS = 0x0802,

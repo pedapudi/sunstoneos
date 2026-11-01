@@ -12,8 +12,10 @@ static unsigned model_bytes=4096,model_frame=2;
 static uint64_t sent,held_ticket;
 static struct dma_service_request queued;
 static uint8_t memory[PERIODS][4096];
+static uint8_t staging[4096];
 static char log[512];static unsigned logged;
 int board_live(void *v){(void)v;return board_up;}
+uint64_t a733_smp_counter(void){return 0;} /* Replay is not selected in this model. */
 void board_fail(void *v){(void)v;board_failed=1;}
 static void check(int ok,unsigned code){if(!ok){os_check_result=code;__asm__ volatile("brk #0");for(;;){}}}
 #ifdef SUNSTONE_BOARD_RESIDENT
@@ -61,10 +63,14 @@ int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service
         /* Mode 2: the stream stops by itself after two periods. */
         if(mode==2&&produced==2){out->result=DMA_SERVICE_BUSY;phase=DMA_SERVICE_RESULT;break;}
         unsigned n=produced++,frames=model_bytes/model_frame;
-        for(unsigned i=0;i<model_bytes;++i)memory[n%PERIODS][i]=sample(opens,n,i);
+        for(unsigned i=0;i<model_bytes;++i){
+            memory[n%PERIODS][i]=audio.client.cyclic?0xee:sample(opens,n,i);
+            staging[i]=sample(opens,n,i);
+        }
         out->period=(struct a733_i2s_period){.ticket=1000+sent,.slot=n%PERIODS,.frames=frames,
             .first_frame=(uint64_t)(mode==1&&n==2?n+1:n)*frames,.observed_before_us=model_before(n),
-            .observed_after_us=model_after(n),.kind=A733_I2S_CAPTURED};
+            .observed_after_us=mode==10?model_before(n)-1:model_after(n),
+            .kind=audio.client.cyclic?A733_I2S_CAPTURED_COPY:A733_I2S_CAPTURED};
         held_ticket=out->period.ticket;break;}
     case DMA_SERVICE_PERIOD_PUT:check(queued.period_ticket==held_ticket,15);++puts_done;held_ticket=0;break;
     case DMA_SERVICE_CANCEL:check(phase==DMA_SERVICE_RUNNING,16);phase=DMA_SERVICE_DRAINING;break;
@@ -73,4 +79,11 @@ int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service
     default:out->result=DMA_SERVICE_INVALID;
     }
     return 1;
+}
+int dma_service_copy_period(struct dma_service *s,unsigned job,uint64_t ticket,void *out,size_t bytes)
+{
+    check(s==&audio.pool.service&&!job&&!audio.pending&&audio.client.cyclic&&
+          ticket==held_ticket&&out&&bytes==model_bytes,19);
+    if(mode==9)return 0;
+    memcpy(out,staging,bytes);return 1;
 }

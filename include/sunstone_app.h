@@ -10,6 +10,7 @@
  * C compiler lays out with the bytes that the tool packs. */
 #include <stddef.h>
 #include <stdint.h>
+#include "gpu_queue.h"
 #ifdef __cplusplus
 #define SS_STATIC_ASSERT static_assert
 #define SS_NORETURN [[noreturn]]
@@ -64,6 +65,18 @@ struct ss_region {
     uint32_t access;
     uint8_t sha256[32];
 };
+
+/* Optional application registration in the immutable section
+ * "sunstone_region_initializers", aligned to 8 bytes. Before CPU mappings
+ * become read-only, EL3 clears and publishes this prefix of a GPU-written
+ * WORK region. No record means no initialization. The prefix must be a
+ * positive multiple of eight within the region; reserved must be zero. */
+struct ss_region_initializer {
+    uint32_t region, reserved;
+    uint64_t zero_prefix_bytes;
+};
+SS_STATIC_ASSERT(sizeof(struct ss_region_initializer) == 16 &&
+    offsetof(struct ss_region_initializer, zero_prefix_bytes) == 8, "region initializer layout");
 
 /* Capture format; rate_hz zero means no capture. Samples are little-endian
  * signed integers, channels interleaved. Admission requires the session's
@@ -128,6 +141,23 @@ struct ss_grant {
     uint64_t finish_by_us;          /* counter microseconds; 0 when resident */
 };
 
+/* Optional fixed composition of two trusted GPU applications. The immutable
+ * image defines ss_gpu_share to consent to one shared program and every GPU
+ * region of the owner manifest. The peer manifest repeats those exact regions;
+ * its task receives a GPU-only grant on one of the owner's worker cores.
+ * Both applications can address the shared map. They must use disjoint writes
+ * or synchronize access until each accepted job's record has been collected.
+ * The owner controls create/open/close/recover and final session completion.
+ * The peer entry returns after its work; the OS drains its owed record before
+ * publishing completion. No descriptor means one application as before. */
+struct ss_gpu_share {
+    const struct ss_manifest *owner, *manifest;
+    void (*main)(const struct ss_grant *);
+    const struct gpu_queue_program *program;
+    uint32_t shared_regions, reserved;
+};
+extern const struct ss_gpu_share ss_gpu_share;
+
 /* Calls from application to OS. All are plain function calls into the image
  * and are safe at EL0 and EL1: they use atomics and memory that EL0 maps, and
  * never MMIO, locks shared with interrupt handlers or system registers.
@@ -160,6 +190,19 @@ size_t ss_heap_peak(void);
  * a container header); 0: in progress; -1: refused or ended. */
 #define SS_CAPTURE_HEADROOM 64u
 int ss_capture(uint32_t sequence, void **pcm, size_t *bytes);
+/* Select recorded raw PCM from an authenticated INPUT region, starting at its
+ * byte offset (for example, after a WAV header). No capture device may be
+ * granted. The manifest supplies the format and reserves output storage.
+ * frames is the window size within min_frames..max_frames. A shorter final
+ * window is delivered only if it still meets min_frames. paced is 0 or 1.
+ * One application task opens replay once, then calls ss_capture with consecutive
+ * sequences starting at 1. Results are copied into capture storage with writable
+ * headroom. Repeating a completed sequence returns the same bytes. The next
+ * sequence releases that output; earlier sequences are then refused.
+ * Pacing starts at the first request and follows cumulative frame duration.
+ * A late consumer catches up to that clock. No wait, device or sample conversion
+ * occurs inside this call. 1 opened, 0 refused; ss_capture returns -1 at EOF. */
+int ss_capture_replay_open(uint32_t region, uint64_t offset, uint32_t frames, uint32_t paced);
 /* Host channel. A request carries an operation number inside the manifest's
  * range. The OS passes the next request only after the USB transfer of the
  * previous reply has completed, so each request also confirms delivery of

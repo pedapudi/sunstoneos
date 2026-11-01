@@ -10,6 +10,7 @@ their recorded results, and provider status, translations, the RTOS and USB
 transport are modeled. Nothing here establishes physical behavior.
 """
 import argparse,hashlib,importlib.util,json,re,shutil,struct,subprocess
+import harness
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_READ,UC_HOOK_MEM_WRITE
@@ -382,9 +383,11 @@ def early_irq(m):
 def main():
  p=argparse.ArgumentParser(description=__doc__)
  for key in ('image','session','output'):p.add_argument('--'+key,type=Path,required=True)
+ p.add_argument('--link-speed',type=int,choices=(1,2,3),default=3,help='Modeled negotiated x1 speed after port startup')
  p.add_argument('--case',action='append',choices=('nominal','unmapped-window','timeout','shutdown-stuck','lba-outside','repeat-irq','lost-irq','irq-lifecycle','irq-before-cq','irq-unconfigured'))
  a=p.parse_args();out=a.output;out.mkdir(parents=True,exist_ok=True)
  image=Image(a.image);session=a.session.read_bytes();words,fields=registers(out)
+ words[0x06000080]=(0x10|a.link_speed)<<16;words[0x20000050]=(0x10|a.link_speed)<<16
  decoder=module('pcie_nvme_native_decode',ROOT/'apps/pcie-nvme/observe.py')
  results={};msix='pcie_nvme_irq_bind' in image.symbols
  cases=a.case or ['nominal','unmapped-window','timeout','shutdown-stuck','lba-outside']+(['repeat-irq','lost-irq','irq-lifecycle','irq-before-cq','irq-unconfigured'] if msix else [])

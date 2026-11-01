@@ -22,28 +22,45 @@ Evidence paths are relative to `~/.cache/sunstoneos/evidence/`:
 - `sol-resume-20261028/port-3-1/gpu-cache-permission/` tests the CPU-only
   read-only-output cache helper; it does not establish general GPU visibility.
 
-The complete recognition attempt in `sol-gpu-completion-1031/recognition-return/`
-produces no native result. The frozen firmware diagnostic from the unmerged GPU-reference branch in
-`dev-runs-1031/3-1-gpu-return-204909/run/watchdog-report.json` stops in its
-compatibility callback at `gpu_backend.c:375`, caller `0x41088a50`, detail
-`0x04040201`. Its source location describes that frozen image rather than the merged backend.
-The callback stop does not establish an ABI mismatch or workload fault.
+The reference firmware image at `fed5813f` starts and stops firmware with zero
+jobs and returns the reference transcript on 3-1. Its evidence is in
+`dev-runs-1031/3-1-gpu-return-210941/`, with RETURN_ROM and watchdog mode 0.
+This result does not qualify the later combined queue image.
 
-The [reference comparison](../reference-backsolve-gpu.md) identifies missing
-executed-count health binding, secure-setup writes, initial timer correlation,
-pre-job MMUCACHE invocation and device-SLC ownership handling. Production uses
-2 MiB workload pages despite the selected DDK's BRN 71317 restriction.
-These source differences have inferred consequences; no recorded failure is
-attributed to them without further evidence.
+The generic compute queue is implemented with one retained program and memory
+map, up to four buffer leases and two trusted application slots. One job executes
+at a time. Completion uses interrupts with a 4 ms backup poll. Shared mutable
+mappings bypass the GPU system cache; data pages are at most 256 KiB.
+Startup uses executed-command health, vendor secure writes, initial timer
+correlation and MMU-cache completion before READY.
 
-Trusted programs, graphics profiles, cleanup/disposal/reopen and GPU/NPU
-composition have modeled evidence. `gpu-compute-lifecycle-20261020/root-integration.json`
-does not prove physical reuse. The generic compute queue has design/prototype
-headers in the merged base; its implementation is not merged.
+Healthy close powers off while retaining memory for reopen. Timeout/reset
+recovery requires idle checks, reset readback, power-off and firmware-memory
+reclaim before queue resumption. Failed isolation retains buffers and owed
+records. Final completion quiesces both callers before CPU return or resident
+suspension. The primary application owns lifecycle; the second has independent
+manifest admission, submission sequence and completion queue.
 
-Remaining work includes current service startup, complete recognition, graphics,
-physical failure recovery, buffer reclamation/reopen, cache visibility,
-thermal transitions and representative concurrent workloads.
+Host checks cover 204 exact-sum jobs, ten shared open/close cycles, queued-peer
+preservation during reset recovery, native reset access policy and final
+quiescence. The mimus shader/readout checks preserve exhaustive sum comparison.
+These modeled results add no physical queue qualification. The OS uses the
+[application kit](../designs/app-abi.md) and does not depend on mimus.
+
+GPU capture supports image-bound GPU/thermal receipts and bounded binary
+expectations. The shared daemon needs the reviewed capture changes from
+`2e679bc9`, `2110837c`, `a00b8341` and `9d7aa701`. Capture, malformed-result,
+CPU-adapter and binary-field checks pass under
+`~/.cache/sunstoneos/build/gpu-integrate-1031/qualified/`.
+Frozen lifecycle proposals are under `images-lifecycle/` in that build root.
+Their CPU clock-close defect requires rebuild with the merged correction before
+qualification. The [lifecycle guide](../../apps/gpu-lifecycle/README.md) and
+[queue design](../designs/gpu-compute-queue.md) define the bounded operations.
+
+Remaining work includes current queue firmware start/stop, one/eight jobs,
+ten physical open/close cycles, queued-peer timeout recovery, complete GPU
+recognition, graphics, thermal transitions and representative concurrency.
+CPU performance evidence does not establish GPU speedup. Frozen earlier failed
+inputs and fault origins remain in [the hardware worklog](../hardware-worklog-20261031.md).
 See [backend](../gpu-backend.md), [power](../gpu-power.md),
-[rendering](../gpu-render.md), [compiled programs](../gpu-compiled-programs.md)
-and [the application adapter](../gpu-mimus.md).
+[rendering](../gpu-render.md) and [compiled programs](../gpu-compiled-programs.md).

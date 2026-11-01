@@ -11,7 +11,8 @@
 
 /* One physically contiguous span. Sort spans by ascending virtual address;
  * split scatter/gather allocations into spans. Supported page shifts are
- * 12, 14, 16, 18, 20 and 21. A single 2 MiB virtual region must use one page
+ * 12, 14, 16 and 18. BRN 71317 limits this A733 profile to 256 KiB data
+ * pages. A single 2 MiB virtual region must use one page
  * size, including disjoint spans within that region. All mappings permit reads;
  * writes are allowed unless READ_ONLY or firmware/parameter-manager protection
  * restricts them. The hardware format has no execute-disable bit here.

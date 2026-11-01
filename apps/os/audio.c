@@ -141,15 +141,19 @@ static int step(void)
         /* No completed period: a stream that stopped by itself has failed. */
         if(!r){if(!audio.pending&&audio.reply.result==DMA_SERVICE_BUSY)audio.stage=CHECK;return 0;}
         struct a733_i2s_period p=audio.reply.period;
-        if(p.kind!=A733_I2S_CAPTURED||p.slot>=PERIODS||p.frames!=audio.period_frames||!p.ticket||
-           p.ticket==audio.held||p.first_frame!=audio.frames)return -1;
+        if(p.kind!=(audio.client.cyclic?A733_I2S_CAPTURED_COPY:A733_I2S_CAPTURED)||
+           p.slot>=PERIODS||p.frames!=audio.period_frames||!p.ticket||
+           p.ticket<=audio.held||p.first_frame!=audio.frames||audio.frames>UINT64_MAX-p.frames||
+           p.observed_before_us>p.observed_after_us)return -1;
         audio.frames+=p.frames;audio.held=p.ticket;audio.stage=PUT;
         /* The next slot is free once the client has released the period that
          * last used it; otherwise this period is dropped. */
         uint64_t n=atomic_load_explicit(&audio.written,memory_order_relaxed);
         if(n-atomic_load_explicit(&audio.released,memory_order_acquire)>=audio.client.periods)return 0;
         uint8_t *slot=audio.client.buffer+(size_t)((n-audio.first)%audio.client.periods)*audio.client.period_bytes;
-        memcpy(slot,audio.pool.stream_mappings[p.slot].cpu,audio.client.period_bytes);
+        if(audio.client.cyclic){
+            if(!dma_service_copy_period(&audio.pool.service,0,p.ticket,slot,audio.client.period_bytes))return -1;
+        }else memcpy(slot,audio.pool.stream_mappings[p.slot].cpu,audio.client.period_bytes);
         audio.ring[(n-audio.first)%audio.client.periods]=(struct os_audio_period){slot,audio.client.period_bytes,
             p.frames,p.first_frame,p.observed_before_us,p.observed_after_us};
         atomic_store_explicit(&audio.written,n+1,memory_order_release);return 0;}
@@ -250,7 +254,7 @@ int os_audio_pins(struct a733_pin_handoff *pins)
 static int configure(const struct os_audio_stream_config *c)
 {
     struct a733_i2s_plan plan;
-    if(!c||audio.client.buffer||c->format.reserved[0]||c->format.reserved[1])return 0;
+    if(!c||audio.client.buffer||c->format.reserved[0]||c->format.reserved[1]||c->cyclic>1)return 0;
     const struct a733_i2s_format f={MODULE_HZ,c->format.rate_hz,0,c->format.bits,SLOT_BITS,c->format.channels,0};
     if(!a733_i2s_plan(&f,&plan)||!c->period_bytes||c->period_bytes>OS_AUDIO_PERIOD_CAPACITY||
        c->period_bytes%plan.frame_bytes||c->period_bytes%(plan.dma_width*8)||
@@ -282,7 +286,7 @@ int os_audio_stream_open(const struct os_audio_stream_config *c)
        !a733_i2s_platform_stream_init(&audio.binding,&audio.parent,&providers.shared.pins,&audio.leases,
            owner,pins,3,A733_I2S_RECEIVE))return 0;
     audio.stream.stream=(struct a733_i2s_stream_profile){audio.stream.stream.format,
-        a733_i2s_platform_stream_operations(),&audio.binding,A733_I2S_RECEIVE,10000,0,A733_I2S_ROUTE_I2S0};
+        a733_i2s_platform_stream_operations(),&audio.binding,A733_I2S_RECEIVE,10000,c->cyclic,A733_I2S_ROUTE_I2S0};
     audio.config=(struct a733_dma_pool_config){&audio.dma,&providers.shared.counter,&providers.shared.clocks,
         &providers.shared.locks,240000,4096,5,1,dma_fatal,&audio};
 #ifdef SUNSTONE_BOARD_RESIDENT

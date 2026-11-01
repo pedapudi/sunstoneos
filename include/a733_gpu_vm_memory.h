@@ -32,7 +32,8 @@ int a733_gpu_vm_memory_init(struct a733_gpu_vm_memory *, const struct pvr_gpu_vm
 
 /* OFFLINE only: validate CPU mappings, exclude context-page data aliases, and
  * call the existing offline builder. Invalid maps leave outputs/state unchanged;
- * lost CPU mappings latch FAILED. All table/context bytes remain private until
+ * lost CPU mappings latch FAILED. Maps with 1 MiB or 2 MiB pages are invalid
+ * on this GPU (erratum BRN 71317). All table/context bytes remain private until
  * publication completes. Maps must not alias adapter state. Data allocation,
  * permissions, GPU cache policy, and data publication remain platform duties.
  */
