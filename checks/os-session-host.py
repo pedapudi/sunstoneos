@@ -68,6 +68,15 @@ def main():
     assert decoded['extents'][host.INPUTS] == facts
     assert uploads == [{'index': 0, 'address': manifest['regions'][0]['address'], 'bytes': len(data),
                         'sha256': hashlib.sha256(data).hexdigest()}]
+    headset = copy.deepcopy(manifest)
+    headset['devices_optional'] = 1 | 8
+    headset['audio'] = {'rate_hz': 16000, 'channels': 1, 'bits': 16,
+                        'min_frames': 16000, 'max_frames': 80000}
+    headset_digest = hashlib.sha256(host.manifest_tool.pack(headset)).hexdigest()
+    headset_prefix = bytearray(prefix)
+    struct.pack_into('<I', headset_prefix, 400, 0)
+    headset_wire = host.session_bytes(headset_prefix, services, headset, headset_digest, 1 | 8, inputs=[data])
+    assert host.AUDIO not in host.session_decode(headset_wire, headset, headset_digest)['extents']
     bundle = out / 'bundle'
     frozen = prepare.prepare(image, prefix, services, [data], bundle, devices=0, flags=host.BIND_SID)
     assert frozen['uploads'][0]['address'] == manifest['regions'][0]['address']
@@ -77,7 +86,7 @@ def main():
     (bundle / 'input-0.bin').write_bytes(data)
     prepare.validate_bundle(bundle)
     cases = ['compiled-manifest', 'C-result-producer', 'result-symbol-capacity', 'typed-session-producer',
-             'manifest-upload', 'actual-bundle-producer', 'changed-frozen-input']
+             'manifest-upload', 'headset-without-I2S-extent', 'actual-bundle-producer', 'changed-frozen-input']
     def bad(name, raw, reason):
         refused(lambda: host.session_decode(raw, manifest, info['sha256']), reason)
         cases.append(name)

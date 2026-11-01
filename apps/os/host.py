@@ -130,7 +130,7 @@ def session_decode(raw, manifest=None, manifest_sha256=None):
             require(0 < size <= region['bytes'], 'Input length exceeds manifest region.')
             require(not any(pinned) or size == region['bytes'] and actual == pinned,
                     'INPUTS extent differs from pinned manifest digest or length.')
-        if capture:
+        if capture == manifest_tool.DEVICES['audio-i2s']:
             require(AUDIO in extents, 'Capture grant requires audio service extent.')
             samples = struct.unpack_from('<I', extents[AUDIO], 164)[0]
             require(m['audio']['min_frames'] <= samples <= m['audio']['max_frames'],
