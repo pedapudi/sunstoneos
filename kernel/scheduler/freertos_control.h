@@ -34,7 +34,9 @@ struct ss_control_ops {
     bool (*detach)(void *, unsigned, void *, struct ss_control_transfer *);
     void (*adopt)(void *, unsigned, void *, const struct ss_control_transfer *);
     bool (*drained)(void *, unsigned, unsigned); /* local CPU only; live/detached hints */
-    void (*retired)(void *, unsigned); /* no TCB dereference; retry registry retire */
+    /* No TCB dereference; registry administration rejects a callback from an
+     * earlier incarnation before retrying retirement of this slot. */
+    void (*retired)(void *, unsigned, uint64_t incarnation);
     bool (*dispatch)(void *, unsigned); /* drain local pending; return local yield */
     void *context;
 };

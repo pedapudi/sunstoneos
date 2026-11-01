@@ -29,8 +29,8 @@ static void adopt(void *context, unsigned slot, void *task, const struct ss_cont
 }
 static bool drained(void *context, unsigned cpu, unsigned slot)
 { (void)context; (void)cpu; (void)slot; return true; }
-static void retirement(void *context, unsigned slot)
-{ (void)context; (void)slot; atomic_fetch_add(&retired, 1); }
+static void retirement(void *context, unsigned slot, uint64_t incarnation)
+{ (void)context; (void)slot; assert(incarnation == 1); atomic_fetch_add(&retired, 1); }
 static void wait_event(void *context)
 {
     (void)context;
