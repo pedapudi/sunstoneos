@@ -3,6 +3,9 @@
 #include "../drivers/usb/a733_xhci_tinyusb.c"
 #include <assert.h>
 #include <stdio.h>
+/* Any lifetime failure in these metadata-only cases is unexpected. */
+void a733_xhci_lost(struct a733_xhci *x){(void)x;assert(0);}
+void a733_usb2_platform_lost(struct a733_usb2_platform *p){(void)p;assert(0);}
 static const uint8_t receiver[]={
     9,2,59,0,2,1,0,0xa0,50,
     9,4,0,0,1,3,1,1,0,
@@ -32,9 +35,31 @@ static void address_reuse(void)
     }
     host=NULL;
 }
+static void report_descriptor_length(void)
+{
+    static struct a733_usb2_native native;
+    uint8_t report[44]={0};report[43]=0xc0; /* A stale END_COLLECTION. */
+    host=&native;host->control_address=2;host->descriptors[0].generic.ready=1;
+    const uint8_t setup[8]={0x81,6,0,0x22,0,0,sizeof(report),0};
+    memcpy(host->control_setup,setup,sizeof(setup));
+    struct a733_xhci_notice event={.address=2,.endpoint=128,.bytes=43};
+    for(unsigned bytes=0;bytes<sizeof(report);++bytes){
+        host->control_buffer=report;host->control_bytes=sizeof(report);event.bytes=bytes;
+        assert(!control_response(&event));
+        assert(host->control_buffer==report&&host->control_bytes==sizeof(report));
+    }
+    event.bytes=sizeof(report);assert(control_response(&event));
+    assert(!host->control_buffer&&!host->control_bytes);
+    /* UVC/bridge class responses retain their actual short-transfer contract. */
+    host->control_setup[0]=0xa1;host->control_setup[1]=0x81;
+    host->control_buffer=report;host->control_bytes=sizeof(report);event.bytes=43;
+    assert(control_response(&event));
+    host=NULL;
+}
 int main(void)
 {
     address_reuse();
+    report_descriptor_length();
     struct a733_usb2_generic g;
     assert(generic_configuration(&g,receiver,sizeof(receiver))==1);
     assert(g.ready&&g.interfaces==3&&g.endpoints==2&&g.reports[0]==63&&g.reports[1]==52);

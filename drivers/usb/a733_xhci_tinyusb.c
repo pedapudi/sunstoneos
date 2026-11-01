@@ -493,6 +493,9 @@ static int control_response(const struct a733_xhci_notice *e)
     }
     if(desc->generic.ready&&((s[0]&0x60)||s[0]==0x81)){
         if(e->endpoint!=128||e->bytes>bytes||bytes!=le16(s+6))return 0;
+        /* The pinned HID host mounts with wLength rather than actual_len.
+         * A short report descriptor would include stale enumeration bytes. */
+        if(s[0]==0x81&&s[1]==6&&s[3]==0x22&&e->bytes!=bytes)return 0;
         n->control_buffer=NULL;n->control_bytes=0;return 1;
     }
     if(e->endpoint!=128||e->result||e->bytes!=bytes||bytes!=le16(s+6))return 0;
