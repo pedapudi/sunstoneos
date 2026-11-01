@@ -52,7 +52,7 @@
 +            uint64_t now;
 +            if(!clock_now(&owner,&now))return REFUSED(0);
 +            int admitted=os_cpu_return_entry_guard(c,policy,now,read_word,NULL);
-+            if(admitted<0)return REFUSED(os_cpu_return_entry_refusal);
++            if(admitted<0)return refused(SUNSTONE_CRUMB_FAIL_SITE(CPU_CLOCK)|SUNSTONE_CRUMB_CPU_GUARD,SUNSTONE_CRUMB_HERE(),os_cpu_return_entry_refusal);
 +            if(!admitted)return 1;
 +            entry_checked=1;
 +            sunstone_crumb(SUNSTONE_CRUMB_CLOCK_GUARD,0);

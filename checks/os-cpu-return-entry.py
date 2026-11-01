@@ -62,18 +62,25 @@ def main():
         ('unstable-oscillator',lambda m:m.put32(0x07090160,0x8002),-1),
         ('wrong-reference',lambda m:m.put32(0x07090160,0x10000002),-1)]
     for i in range(2):cases.append((f'rail-{i}-not800',lambda m,i=i:m.put32(m.c+c['rail_uv']+4*i,1000000),-1))
+    # The rails a failed top-point image leaves: DCDC5 1000 mV, DCDC3 1050 mV.
+    cases.append(('rail-both',lambda m:(m.put32(m.c+c['rail_uv'],1000000),m.put32(m.c+c['rail_uv']+4,1050000)),-1))
     for i in range(3):
         for off in (0,0x1c):cases.append((f'domain-{i}-boot-{off:x}',lambda m,i=i,off=off:m.put32(0x08871000+4096*i+off,0),-1))
         for off,bit in ((4,29),(8,31),(0x18,31)):
             cases.append((f'domain-{i}-pattern-{off:x}',lambda m,i=i,off=off,bit=bit:m.put32(0x08871000+4096*i+off,1<<bit),-1))
     refusal=layout.address('os_cpu_return_entry_refusal') if 'os_cpu_return_entry_refusal' in layout.symbols else None
+    # tools/a733-crumbs.py finds the rail refusal by this source line.
+    rail_line=next(i for i,l in enumerate((ROOT/'apps/os/cpu-return-entry.c').read_text().splitlines(),1)
+        if 'return REFUSE((c->rail_uv[0]/10000u' in l)
     for name,change,expected in cases:
         model=Model(image,layout);change(model);actual=model.guard();assert actual==expected,(name,actual,expected)
         row={'name':name,'passed':True,'result':actual}
         if refusal is not None:
             # A refusal names its line and detail; the board failure record carries it.
             word=model.u32(refusal);assert (word!=0)==(actual<0),(name,hex(word))
-            if name.startswith('rail-'):assert word>>12==(1000<<10|800 if name=='rail-0-not800' else 800<<10|1000),(name,hex(word))
+            # Both readings in 10 mV units, so 1050 mV is not truncated.
+            if name.endswith('-not800'):assert word>>12==(100<<10|80 if name=='rail-0-not800' else 80<<10|100),(name,hex(word))
+            if name=='rail-both':assert word>>12==(100<<10|105) and word&0xfff==rail_line,(name,hex(word))
             row['refusal']=hex(word)
         rows.append(row)
     save(a.out/'results.json',{'scope':'actual linked guard with modeled registers/THS readiness; no hardware','cases':rows})
