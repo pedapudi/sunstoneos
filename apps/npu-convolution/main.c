@@ -8,7 +8,7 @@
 #include "session.h"
 #endif
 #ifdef SUNSTONE_NPU_INTERRUPT
-#include "../npu-interrupt/irq.h"
+#include "a733_npu_irq.h"
 #endif
 #ifdef SUNSTONE_NPU_RESTART
 #define EXPECTED_IRQ_COMPLETIONS 4u

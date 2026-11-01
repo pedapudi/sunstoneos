@@ -35,7 +35,7 @@ sunstone_board_application(npu-board BOOT "${npub_build}/boot.c" LINK_SCRIPT "${
   drivers/npu/a733_npu_mmu.c drivers/npu/nbg_model.c drivers/npu/nbg_assembly.c
   drivers/npu/nbg_checksum.c drivers/npu/nbg_relocation.c drivers/npu/a733_npu_startup.c
   drivers/npu/a733_npu_platform.c drivers/npu/a733_npu_platform_native.c
- INPUTS apps/npu-interrupt/irq.c apps/npu-interrupt/irq.h apps/npu-board/boot.patch apps/npu-board/extended-boot.patch apps/npu-board/extended-link.patch
+ INPUTS platform/a733/npu_irq.c include/a733_npu_irq.h apps/npu-board/boot.patch apps/npu-board/extended-boot.patch apps/npu-board/extended-link.patch
   apps/npu-board/catalogue.py tools/npu-session-models.json platform/a733-smp-cached/link-devices.ld
   "${SUNSTONE_NPU_BOARD_CATALOGUE}" include/npu_runtime.h include/a733_npu_startup.h)
 # apps/npu-board/tusb_config.h, first in the image's include path, replaces the

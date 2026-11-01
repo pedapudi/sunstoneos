@@ -1,6 +1,7 @@
-#ifndef SUNSTONE_NPU_APPLICATION_IRQ_H
-#define SUNSTONE_NPU_APPLICATION_IRQ_H
+#ifndef A733_NPU_IRQ_H
+#define A733_NPU_IRQ_H
 #include <stdint.h>
+/* The single-core NPU interrupt binding, platform/a733/npu_irq.c. */
 struct npu_service;
 /* Bind once, after service construction and before starting the scheduler. */
 int npu_application_irq_bind(struct npu_service *);

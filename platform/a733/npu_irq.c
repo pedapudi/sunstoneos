@@ -1,10 +1,10 @@
-/* INTID 97 (SPI 65, level high) bound to the NPU service. The single-core
- * images compile this file as it is: the route is core 0 at priority 0xb0.
- * The runtime images include it (apps/npu-board/irq.c, apps/os/npu-irq.c)
- * with NPU_IRQ_CORE, NPU_IRQ_PRIORITY and NPU_IRQ_HANDLER set and
- * NPU_IRQ_EXTERNAL_BIND naming their bind function, which attaches the
- * callbacks to an NPU runtime. */
-#include "irq.h"
+/* INTID 97 (SPI 65, level high) bound to the NPU service: mask, rearm, stop
+ * and the ISR. The route is configuration. A single-core image compiles this
+ * file as it is: core 0, priority 0xb0, the API in a733_npu_irq.h. A runtime
+ * image includes it (apps/os/npu-irq.c, apps/npu-board/irq.c) after defining
+ * NPU_IRQ_CORE, NPU_IRQ_PRIORITY, NPU_IRQ_HANDLER and NPU_IRQ_EXTERNAL_BIND,
+ * the bind function that attaches the callbacks to an NPU runtime. */
+#include "a733_npu_irq.h"
 #include "npu_service.h"
 #include "gicv3_spi.h"
 #include "a733_mmio.h"

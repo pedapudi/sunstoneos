@@ -33,7 +33,7 @@ NPU holds the line while its event word `+0x010` is nonzero, and a read of
 | Step | Vendor driver | SunstoneOS interrupt profile |
 | --- | --- | --- |
 | Enable | `+0x014` = `0xffffffff`, every event (`vip2/vip_drv_hardware.c:509`) | `+0x014` = `0xc0000001`, completion and the two error events (`a733_npu_controller.c:32`, `:152`) |
-| Delivery | `request_irq` with `drv_irq_handler` (`vip2/os/linux/vip_drv_device_driver.c:956`) | The SRE port's dispatch acknowledges the GIC and calls `npu_application_irq` (`apps/npu-interrupt/irq.c:142`) |
+| Delivery | `request_irq` with `drv_irq_handler` (`vip2/os/linux/vip_drv_device_driver.c:956`) | The SRE port's dispatch acknowledges the GIC and calls `npu_application_irq` (`platform/a733/npu_irq.c:151`) |
 | In the handler | Reads `+0x010`, which acknowledges the device events, records the bits, counts them and wakes the waiter (`vip_drv_device_driver.c:382`, `:392`) | Records the system counter, masks SPI 65 at the distributor and notifies the service worker; no device access |
 | End of interrupt | The GIC end of interrupt after the handler returns; the line is already low | The combined end of interrupt; the line stays high but masked |
 | Event read | Done in the handler | The worker reads `+0x010` (`a733_npu_controller.c:213`), which acknowledges the events, then requires full idle at `+0x004` (`:226`) and reads `+0x010` once more for a late event (`:227`) |

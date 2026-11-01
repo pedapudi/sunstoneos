@@ -32,7 +32,7 @@ def main():
             if s['st_info']['type']=='STT_FILE':unit=s.name
             if s['st_value']:
                 symbols.setdefault(s.name,set()).add(int(s['st_value']))
-                if unit=='irq.c':locals[s.name]=int(s['st_value'])
+                if unit=='npu_irq.c':locals[s.name]=int(s['st_value'])
         offsets=set();layouts={}
         for cu in elf.get_dwarf_info().iter_CUs():
             for die in cu.iter_DIEs():
