@@ -1,39 +1,75 @@
-# Audio
+# Audio capture and playback
 
-**Status: implemented.**
+Status: internal I2S0 capture/playback, cyclic cancellation and drain pass a
+returning board diagnostic. External microphone and headset operation remain
+unqualified.
 
-I2S0 finite/repeated capture, playback, duplex,
-hardware TX rings, guarded cyclic RX and DMA0 interrupt notification have
-software evidence. USB periods have copied ownership; PCM files supply playback.
-The OS capture adapter consumes cyclic staging through exact tickets without
-exposing raw DMA pages. Recorded and paced PCM also use the application kit's
-capture buffer and headroom without a device grant or recognizer dependency.
+The diagnostic in `apps/i2s/probe.c` uses the FreeRTOS DMA service, cyclic stream
+driver and native cache adapter. I2S0 CTL bit 3 connects DOUT to DIN internally,
+as specified in A733 manual section 17.1.8.1. The format is 16 kHz mono in
+32-bit containers, with eight 1,024-byte periods and a 24.576 MHz module clock.
+The audio driver preserves reserved AUDIO1 control bit 24, accepts the observed
+LDO-on/PLL-off baseline and waits for lock, settling and effective output gates.
 
-**Board-qualified scope:** None.
+The board result for entry `1793561377196205560-f9163edf` verifies 18,419 patterned
+samples in 72 capture copies across three cancel/drain/close/reopen rounds.
+It records 150 DMA interrupts, three completed retirements and no retained fault.
+Entry `1793561406349236252-f1275fd8` verifies the held capture copy after raw-ring
+overrun, then retires both streams and returns normally. The same image's
+audio-disabled control, `1793561347028719264-5a2bab37`, also returns normally.
 
-No microphone or headset is attached. Capture, playback,
-continuity, IRQs, DMA visibility, serializer drain and sound remain unqualified.
+Retirement returns exact client tickets, cancels and drains both directions,
+reaps and closes each stream, and waits for the global DMA MBUS FIFO to empty
+before reuse. The hardware clears its package counter during cancellation.
+Canceled progress preserves the last ACTIVE observation as a lower bound;
+channel completion and cache ownership establish drain. The diagnostic retains
+original fault callers and operands before later service refusals can hide them.
 
-Cyclic RX needs a physical ordering bound: the package counter has no
-source-established ordering against destination writes or cursor updates.
-Both uncertainties must measure below one period. Four-period rings give a
-128 ms application copy deadline; no qualifying record exists.
-`i2s-hardware-cyclic-20261019/root-integration.json` and
-`i2s-hardware-cyclic-20261019/identity-reuse-clarification.json` under `~/.cache/sunstoneos/evidence/`
-define that modeled scope. Retained-allocation exclusion has focused evidence
-in [DMA status](memory-dma.md#dma).
+Final cleanup masks the DMA interrupt, suspends its worker and releases parent
+leases. The monitor restores its saved DMA routing, security, clock and interrupt
+fields before returning through the shared probe contract. CPU operating points
+and supply voltages retain their inherited settings.
 
-Evidence at `~/.cache/sunstoneos/build/audio-1031/frozen/README.md` binds the
-current host/model images, hashes and reviews. Actual FreeRTOS/provider cases
-keep a busy canceled writer in DRAINING, preserve a held copy through overrun,
-and refuse stale tickets after both duplex directions close and reopen.
-Sanitizer, AArch64 and linked-image checks cover device-free PCM replay with an
-empty `MIMUS_DIR`. Registers, DMA effects and cache visibility are modeled.
+## Secondary CPU ownership and host evidence
 
-I2S and OS audio images retain their legacy supervised lifetime. Returning-probe
-conversion must retire workers, client leases, DMA, both audio directions and
-USB, then join monitor secondary shutdown and interrupt restoration. No audio
-board run is queued.
+The probe acquires acknowledged static OFF before whole-hierarchy cache
+maintenance. It restores the exact original policies after final cache cleanup
+and receipt preparation. It accepts matched static or dynamic OFF policies and
+preserves either inherited GIC wake setting. Only changed secondary policy words
+are written; CPU0 and cluster policies retain their original values.
+
+The CPU1-specific check writes only `0x07053000` and verifies neighboring pages.
+The aggregate check acquires and restores all seven secondaries. Return executes
+18,944 data-cache operations and one I-cache invalidation before policy release.
+Acquisition and restoration failures retain their original inputs, keep the
+watchdog armed and prevent normal return. Three independent reviewers approve
+the design, source and linked image; their records are under
+`~/.cache/sunstoneos/build/audio-1031/policy-review/`.
+
+Sanitizer checks, twenty focused cases, seventeen CPU ownership cases
+and seventeen cyclic FreeRTOS cases pass under
+`~/.cache/sunstoneos/build/audio-1031/counter-drain/`. The models cover delayed
+readbacks and busy drain, counter reset at idle, overrun, held copies, stale
+tickets, wraps and reopening. The OS-only, hello-compute and external mimus
+baseline builds, selected integration gate and check index pass there too.
+
+The returning image SHA-256 is
+`63840ec870d4045a3537c6a8fdcce95b97247cdfc4bb71d224f5147b9fa5019b`.
+Its ELF, inputs, expectations, README, commands and every submission result are
+under `~/.cache/sunstoneos/build/audio-1031/counter-drain/`.
+Shared patches `0006` through `0011` are under `shared-patches/` beside that
+directory and pass `git apply --check`. Patch 0006 replaces patch 0005; the
+CMake hook compiles patched shared sources without editing their tracked copies.
+Patch 0011 documents cancellation's conservative progress count in shared
+headers and the stream contract.
+
+The guarded-copy diagnostic checks continuity and cache visibility. Measuring
+the unguarded DMA ordering margin remains open. No microphone or headset is
+attached; external capture, audible playback and Bluetooth I2S1 routing require
+physical qualification. The generic capture and paced/recorded input services
+remain independent of the external recognition application.
+
+## Other audio paths
 
 PCM EOF establishes declared DMA consumption and FIFO empty. It does not
 establish serializer drain, so TX/GEN, clocks, pins and buffers stay owned;
