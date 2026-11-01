@@ -78,9 +78,25 @@ static void rejected(void *out,size_t bytes)
     assert(reads+caches+barriers+writes+validations+times==before_callbacks);
 }
 
-int main(void)
+static void valid_copy(void)
+{
+    /* A read-only peer allocation ending exactly at output is disjoint. */
+    mappings[1][0].cpu=adjacent[0];
+    memset(adjacent,0xa5,sizeof(adjacent));
+    assert(a733_dma_cyclic_rx_copy(&controller,0,0,adjacent[1],BYTES)==1);
+    assert(!memcmp(adjacent[1],payload[0][0],BYTES));
+    for(unsigned i=0;i<BYTES;++i)assert(adjacent[0][i]==0xa5);
+    assert(caches==1 && barriers==2 && writes==0 && validations==0 && times==2 && reads==15);
+}
+
+int main(int argc,char **argv)
 {
     setup();
+    if(argc==2 && !strcmp(argv[1],"valid-only")) {
+        valid_copy();
+        puts("PASS DMA copy budget: 15 reads, 2 clock samples, 1 invalidation, 2 barriers, 0 writes/translations");
+        return 0;
+    }
     struct a733_dma_transfer saved_transfers[2];
     struct a733_dma_segment saved_segments[2][PERIODS];
     struct a733_dma_mapping saved_mappings[2][PERIODS];
@@ -111,12 +127,6 @@ int main(void)
     assert(!memcmp(saved_mappings,mappings,sizeof(mappings)));
     assert(!memcmp(saved_payload,payload,sizeof(payload)));
     assert(!memcmp(saved_descriptors,descriptors,sizeof(descriptors)));
-    /* A read-only peer allocation ending exactly at output is disjoint. */
-    mappings[1][0].cpu=adjacent[0];
-    memset(adjacent,0xa5,sizeof(adjacent));
-    assert(a733_dma_cyclic_rx_copy(&controller,0,0,adjacent[1],BYTES)==1);
-    assert(!memcmp(adjacent[1],payload[0][0],BYTES));
-    for(unsigned i=0;i<BYTES;++i)assert(adjacent[0][i]==0xa5);
-    assert(caches==1 && barriers==2 && writes==0 && validations==0 && times==2 && reads==15);
+    valid_copy();
     printf("PASS %u DMA output refusals preserve leases and callbacks; adjacent staging copies one period\n",cases);
 }
