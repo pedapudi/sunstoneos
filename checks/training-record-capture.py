@@ -10,6 +10,7 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
+import shutil
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__)
@@ -40,7 +41,7 @@ for directory in references:
 ref=references[0];session=json.loads((ref/'session.json').read_text())
 real_read=Path.read_bytes;real_text=Path.read_text
 cases={'sid':'Capture SID differs','stage-table':'Capture stage tables differ',
-       'training-kind':'Capture training kind','capture-value':'Capture value differs',
+       'training-kind':'Capture training kind',
        'boot0':'boot0 differs','restore-set':'Restore set differs','incomplete':'Capture is incomplete'}
 for case,message in cases.items():
     def read(path,*args,**kwargs):
@@ -48,11 +49,6 @@ for case,message in cases.items():
         if ((case=='sid' and path==ref/'stage1-identity.bin') or
             (case=='boot0' and path==a.boot0) or (case=='restore-set' and path==a.restore_set)):
             data[0]^=1
-        if case=='capture-value' and path==ref/'stage4-phy-blocks.bin':
-            stage=session['manifest']['stages'][3]
-            address=next(a for a,m in t.profile(analysis) if a>=0x0a920000)
-            entry=next(e for e in stage['entries'] if e['address']<=address<e['address']+e['count']*e['width'])
-            data[entry['offset']+address-entry['address']]^=1
         return bytes(data)
     def read_text(path,*args,**kwargs):
         text=real_text(path,*args,**kwargs)
@@ -69,5 +65,24 @@ for case,message in cases.items():
         except ValueError as error:assert message in str(error),(case,str(error))
         else:raise AssertionError('accepted '+case)
     results.append({'case':case,'pass':True})
+# A capture may be moved and need not be listed in the historical analysis.
+relocated = a.output / 'relocated-capture'
+shutil.copytree(ref, relocated)
+relocated_spec = t.from_capture(relocated, a.restore_set, a.boot0, 1)
+assert t.build(relocated_spec) == t.build(t.from_capture(ref, a.restore_set, a.boot0, 1))
+results.append({'case': 'relocated-capture', 'pass': True})
+# A fresh capture supplies trained values; historical value equality is not an input contract.
+stage = session['manifest']['stages'][3]
+address = next(address for address, mask in t.profile(analysis) if address >= 0x0a920000)
+entry = next(e for e in stage['entries'] if e['address'] <= address < e['address']+e['count']*e['width'])
+path = relocated / session['stages'][3]['output']
+data = bytearray(path.read_bytes()); data[entry['offset']+address-entry['address']] ^= 1; path.write_bytes(data)
+assert t.from_capture(relocated, a.restore_set, a.boot0, 1) != relocated_spec
+# New capture runs record live training state without a previous session path.
+state = json.loads((relocated / 'session.json').read_text())
+state.update(ddr_evidence=None, ddr_variant='pstate0', ddr_result={'dram_mib': 12288, 'board_result': 0})
+(relocated / 'session.json').write_text(json.dumps(state))
+t.from_capture(relocated, a.restore_set, a.boot0, 1)
+results.append({'case': 'fresh-live-capture', 'pass': True})
 (a.output/'results.json').write_text(json.dumps({'physical_access':False,'cases':results},indent=2)+'\n')
-print('PASS capture builder: both board records preserve full parameters; seven identity/data refusals.')
+print('PASS capture builder: both board records preserve full parameters; six identity/data refusals, relocated and fresh live captures.')

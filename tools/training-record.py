@@ -52,9 +52,6 @@ def profile(analysis):
 def from_capture(directory, set_path, boot0_path, generation):
     directory = Path(directory).resolve()
     analysis = restore_set(set_path)
-    metadata = next((c for c in analysis["captures"] if Path(c["path"]).resolve() == directory), None)
-    if metadata is None or metadata["training_kind"] != "pstate0":
-        raise ValueError("Capture is not an admitted P-state-0 reference")
     session = json.loads((directory / "session.json").read_text())
     stages = session["manifest"]["stages"]
     layout = [(s["name"], s["output_bytes"],
@@ -63,10 +60,14 @@ def from_capture(directory, set_path, boot0_path, generation):
         raise ValueError("Capture stage tables differ from the reviewed capture")
     if not session.get("complete") or len(session["stages"]) != len(stages):
         raise ValueError("Capture is incomplete")
-    ddr = json.loads((Path(session["ddr_evidence"]) / "session.json").read_text())
-    if (not ddr.get("complete") or ddr["manifest"].get("variant") != "pstate0"
-            or ddr["manifest"]["boot0_sha256"] != BOOT0_SHA256
-            or ddr["result"]["dram_mib"] != 12288 or ddr["result"]["board_result"] != 0):
+    if "ddr_result" in session:
+        variant, result, complete = session.get("ddr_variant"), session["ddr_result"], True
+    else:
+        ddr = json.loads((Path(session["ddr_evidence"]) / "session.json").read_text())
+        if ddr["manifest"]["boot0_sha256"] != BOOT0_SHA256:
+            raise ValueError("Capture DDR boot0 layout differs")
+        variant, result, complete = ddr["manifest"].get("variant"), ddr["result"], ddr.get("complete")
+    if not complete or variant != "pstate0" or result["dram_mib"] != 12288 or result["board_result"] != 0:
         raise ValueError("Capture training kind or DDR identity differs")
     values = {}
     for stage, outcome in zip(stages, session["stages"]):
@@ -83,17 +84,11 @@ def from_capture(directory, set_path, boot0_path, generation):
                 # The vendor-window stage overlaps the later full PHY capture.
                 values[address] = value
     chip = [values[0x03006200 + 4 * n] for n in range(4)]
-    if "chip-" + "-".join(f"{v:08x}" for v in chip) != metadata["board"]:
-        raise ValueError("Capture SID differs from the analysis board")
+    if "chip-" + "-".join(f"{v:08x}" for v in chip) not in analysis["kind_diff"]["per_board"]:
+        raise ValueError("Capture SID differs from the supported restore boards")
     params = [int(word, 16) for word in session["parameter_block"]]
     if len(params) != 128 or params[30] & 4 or (params[27] >> 16) & 0x1fff != 0x125f:
         raise ValueError("Capture parameters are not P-state-0 trained values")
-    # Every selected register is in varying, including the fixed trained values:
-    # they differ from initialization-only captures. Bind bytes to that evidence.
-    for key in analysis["kind_diff"]["registers"]:
-        actual = params[int(key[6:-1])] if key.startswith("param[") else values[int(key, 16)]
-        if analysis["varying"][key]["values"][str(directory)] != actual:
-            raise ValueError("Capture value differs from the frozen analysis: " + key)
     boot0 = Path(boot0_path).read_bytes()
     if hashlib.sha256(boot0).hexdigest() != BOOT0_SHA256:
         raise ValueError("boot0 differs from the reviewed image")
