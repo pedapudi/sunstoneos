@@ -484,6 +484,7 @@ set_property(TARGET sunstone-a733-os-core PROPERTY SUNSTONE_DEVICE_OBJECTS "${os
 
 if(SUNSTONE_GPU_TIMING)
   target_compile_definitions(sunstone-a733-os-core PUBLIC SUNSTONE_GPU_TIMING=1)
+  target_compile_definitions(sunstone-a733-os-gpu PRIVATE SUNSTONE_GPU_TIMING=1)
   foreach(symbol gpu_queue_submit gpu_queue_wait pvr_cccb_begin pvr_cccb_poll pvr_ccb_submit aarch64_device_cache xQueueReceive)
     target_link_options(sunstone-a733-os-core INTERFACE "-Wl,--wrap=${symbol}")
   endforeach()
