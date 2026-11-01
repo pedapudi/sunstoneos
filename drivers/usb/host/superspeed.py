@@ -50,6 +50,22 @@ bool msch_xfer_cb(uint8_t dev_addr,''')
         return s
     change('class/hid/hid_host.c',hid)
     def host(s):
+        s=replace(s,'bool tuh_task_event_ready(void) {','''/* Owner-serialized metadata for the native one-shot deadline waiter. */
+uint32_t a733_tinyusb_next_timeout_ms(uint32_t now_ms) {
+  uint32_t next=UINT32_MAX;
+  if (!tuh_inited()) return next;
+  if (_usbh_data.call_after.func) {
+    int32_t remaining=(int32_t)(_usbh_data.call_after.at_ms-now_ms);
+    next=remaining>0?(uint32_t)remaining:0;
+  }
+  if (_usbh_data.ctrl_xfer_info.stage!=CONTROL_STAGE_IDLE) {
+    int32_t remaining=(int32_t)(_usbh_data.ctrl_xfer_info.timeout_at_ms-now_ms);
+    uint32_t timeout=remaining>0?(uint32_t)remaining:0;
+    if(timeout<next) next=timeout;
+  }
+  return next;
+}
+bool tuh_task_event_ready(void) {''')
         s=replace(s,'uint8_t max_packet_size)', 'uint16_t max_packet_size)')
         s=replace(s,'usbh_edpt_control_open(0, 8)', 'usbh_edpt_control_open(0, dev0_bus->speed==TUSB_SPEED_SUPER?512:8)')
         s=replace(s,'usbh_edpt_control_open(new_addr, new_dev->desc_device.bMaxPacketSize0)', 'usbh_edpt_control_open(new_addr, new_dev->bus_info.speed==TUSB_SPEED_SUPER?512:new_dev->desc_device.bMaxPacketSize0)')

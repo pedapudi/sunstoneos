@@ -37,7 +37,7 @@ def main():
     parser.add_argument('--resume', action='store_true')
     parser.add_argument('--alias', action='store_true', help='Model the real application RO alias and compile its actual TX adapter')
     parser.add_argument('--cases', nargs='+', default=['hid', 'serial', 'iso', 'bulk', 'mjpeg', 'format-refusal'],
-                        choices=['hid', 'serial', 'iso', 'bulk', 'mjpeg', 'format-refusal'])
+                        choices=['hid', 'serial', 'serial-direct', 'serial-stale', 'iso', 'bulk', 'mjpeg', 'format-refusal'])
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=args.resume)

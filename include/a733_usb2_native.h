@@ -4,6 +4,7 @@
 #include "a733_usb2_platform.h"
 #include "a733_xhci.h"
 #include "sunstone_usb_transport.h"
+#include <stdatomic.h>
 struct sunstone_hid_event;
 struct sunstone_uvc_frame;
 struct sunstone_uvc_mode;
@@ -92,6 +93,11 @@ struct a733_usb2_native {
     struct a733_usb2_native *self;
     struct a733_platform_locks *locks;
     void *owner_task,*admission_context;
+    /* Optional serialized caller submission. The owner enables this before
+     * sharing the transport and holds it across each complete owner pass. */
+    unsigned shared_execution;
+    void *client_task;
+    _Atomic(void *) execution_task;
     int (*admit)(void *,const struct a733_usb2_platform_config *);
     struct a733_usb2_platform platform;
     struct a733_usb2_platform_ops platform_ops;
@@ -146,6 +152,20 @@ int a733_usb2_native_init(struct a733_usb2_native *,const struct a733_usb2_platf
  * READY means MSC enumeration/capacity or HID configuration completed; no data result is implied.
  */
 enum a733_usb2_result a733_usb2_native_poll(struct a733_usb2_native *);
+/* Enable from the designated owner before publishing the transport. Entry is
+ * nonblocking: 1 acquired, 0 contended, -1 invalid context. All owner and client
+ * controller calls then require entry; callbacks stay in the owner pass. */
+int a733_usb2_native_share(struct a733_usb2_native *);
+/* Owner gate held, before transport publication: admit one immutable EL1
+ * client task identity. This API does not raise application privilege. */
+int a733_usb2_native_client(struct a733_usb2_native *,void *task);
+int a733_usb2_native_enter(struct a733_usb2_native *);
+void a733_usb2_native_leave(struct a733_usb2_native *);
+/* Metadata deadline, in the provider's microseconds. Call under execution
+ * ownership; includes class timers and startup's noninterruptible status retry.
+ * Zero means invalid. A deadline does not establish hardware completion. */
+uint64_t a733_usb2_host_deadline(struct a733_usb2_native *);
+int a733_usb2_host_work_pending(struct a733_usb2_native *);
 /* Read one logical512-byte sector from LUN0. Driver-owned backing persists;
  * no caller address reaches DMA. Result copies only after successful READ10
  * data plus command status and a fresh live attachment observation. */
