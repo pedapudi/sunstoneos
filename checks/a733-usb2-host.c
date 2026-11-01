@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include "register_latency.h"
 static int usb_gpu_init(struct a733_gpu_resource_manager *,const struct a733_gpu_resource_ops *,void *);
 #define PMIC_MODEL_NO_MAIN
 #define a733_gpu_resources_init usb_gpu_init
@@ -42,6 +43,15 @@ static unsigned speed_for(unsigned j){return dual_mode?(is_hid(j)?device_speed:3
 static uint8_t request[8],cbw[31];
 static unsigned root_unplug,root_unplugged,removals,remove_result,after_remove,teardown_stuck,disables;
 static unsigned busy_stuck,platform_reads;
+static struct register_latency reset_effect,cnr_effect,run_effect,port_effect;
+static unsigned latency_stuck,reset_busy_reads,cnr_busy_reads,run_busy_reads,port_busy_reads;
+static void core_completion(void)
+{
+    registers[0x40/4]=reg_latency_apply(&reset_effect,m.now,registers[0x40/4]);
+    registers[0x44/4]=reg_latency_apply(&cnr_effect,m.now,registers[0x44/4]);
+    registers[0x44/4]=reg_latency_apply(&run_effect,m.now,registers[0x44/4]);
+    registers[0x440/4]=reg_latency_apply(&port_effect,m.now,registers[0x440/4]);
+}
 static int gpu_read(void *v,uintptr_t a,uint32_t *out){*out=*pmic_model_word(v,a);return 1;}
 static int gpu_update(void *v,uintptr_t a,uint32_t required,uint32_t set,uint64_t d)
 {struct pmic_model *p=v;assert(a==0x070101ac&&set==1&&p->now<d);uint32_t *w=pmic_model_word(p,a);assert((*w&required)==required);*w|=set;return 1;}
@@ -468,10 +478,20 @@ static int live(void *v,uint64_t g,uint64_t d)
     if(accessed){accessed=0;if(++live_calls%3==0){++live_busy;return 0;}}
     return a733_usb2_platform_live(&n.platform,g,d);
 }
-static int rr(void *v,uint32_t off,uint32_t *out){(void)v;assert(off<0x8000&&!(off&3));accessed=busy_inject||busy_stuck;*out=registers[off/4];return 1;}
+static int rr(void *v,uint32_t off,uint32_t *out){(void)v;assert(off<0x8000&&!(off&3));core_completion();
+    /* While HCRST is set only its command register may be polled. */
+    assert(!reset_effect.pending||off==0x40);
+    /* The admitted start sequence observes HCHalted clear before port setup. */
+    if(off>=0x440&&off<0x460)assert(!run_effect.pending);
+    if(off==0x40&&reset_effect.pending)++reset_busy_reads;
+    if(off==0x44){if(cnr_effect.pending)++cnr_busy_reads;if(run_effect.pending)++run_busy_reads;}
+    if(off==0x440&&port_effect.pending)++port_busy_reads;
+    accessed=busy_inject||busy_stuck;*out=registers[off/4];return 1;}
 static int ww(void *v,uint32_t off,uint32_t value)
 {
     (void)v;assert(off<0x8000&&!(off&3));accessed=busy_inject||busy_stuck;
+    core_completion();
+    if(off>=0x2000)assert(!reset_effect.pending&&!cnr_effect.pending&&!run_effect.pending&&!port_effect.pending);
     if(irq_model&&off==0x44){assert(value==8);registers[off/4]&=~value;return 1;}
     if(irq_model&&off==0x1020){
         if(value&1)assert(!(registers[0x44/4]&8));
@@ -480,12 +500,30 @@ static int ww(void *v,uint32_t off,uint32_t value)
         return 1;
     }
     registers[off/4]=value;
-    if(off==0x40){if(value&2){registers[off/4]=0;registers[0x44/4]=1;}else if(value&1)registers[0x44/4]=0;}
-    if(off==0x440){registers[off/4]=(root_unplugged?0:1)|(1u<<9);if(value&(1u<<4))registers[off/4]|=2|((hub_mode?3:device_speed)<<10);}
+    if(off==0x40){
+        if(value&2){
+            registers[0x44/4]=1|(1u<<11);
+            reg_latency_schedule(&reset_effect,m.now,200,2,0);reset_effect.stuck=latency_stuck==1;
+            reg_latency_schedule(&cnr_effect,m.now,800,1u<<11,0);cnr_effect.stuck=latency_stuck==2;
+        }else if(value&1){
+            assert(!reset_effect.pending&&!cnr_effect.pending);
+            if(registers[0x44/4]&1){reg_latency_schedule(&run_effect,m.now,250,1,0);run_effect.stuck=latency_stuck==3;}
+        }
+    }
+    if(off==0x440){
+        if(port_effect.pending){registers[off/4]=(root_unplugged?0:1)|(1u<<9)|(1u<<4);return 1;}
+        registers[off/4]=(root_unplugged?0:1)|(1u<<9);
+        if(value&(1u<<4)){
+            registers[off/4]|=1u<<4;
+            reg_latency_schedule(&port_effect,m.now,50000,(1u<<4)|2u|(15u<<10),2u|((hub_mode?3:device_speed)<<10));
+            port_effect.stuck=latency_stuck==4;
+        }
+    }
     return 1;
 }
 static int w64(void *v,uint32_t off,uint64_t value){
     assert(!(off&7));
+    core_completion();assert(!reset_effect.pending&&!cnr_effect.pending);
     if(irq_model&&off==0x1038){
         if(n.core.irq_mode){
             assert((value&~UINT64_C(15))!=irq_last_erdp);++irq_advances;
@@ -735,6 +773,15 @@ int main(int argc,char **argv)
         device_packet=device_speed==3?64:device_speed==1?32:8;hid_packet=device_speed==2?8:64;hid_interval=device_speed==3?4:10;
     }
     start_core();
+    if(!strncmp(mode,"latency-",8)){
+        latency_stuck=strstr(mode,"reset")?1:strstr(mode,"cnr")?2:strstr(mode,"run")?3:4;
+        for(unsigned i=0;i<25000&&!n.failed;++i)poll();
+        assert(n.failed&&n.core.failed&&!commands&&!n.mounted);
+        if(latency_stuck<=2)assert(!n.core.publication);
+        else assert(n.core.publication);
+        printf("PASS delayed xHCI stuck phase%u retains; pending reads reset%u CNR%u run%u port%u\n",
+            latency_stuck,reset_busy_reads,cnr_busy_reads,run_busy_reads,port_busy_reads);return 0;
+    }
     if(ss_hub||companion_mode){
         for(unsigned i=0;i<24000&&!n.mounted&&!n.failed;++i)poll();
         if(topology_fault){assert(n.failed&&n.core.failed&&!n.mounted);puts("PASS bounded SS hub setup refusal retains");return 0;}
