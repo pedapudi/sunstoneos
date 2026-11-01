@@ -57,7 +57,8 @@ struct ss_cpu_topology {
 };
 struct ss_work_range { uint64_t begin, end; uint32_t cpu, reserved; };
 /* Pointer-free application snapshot metadata. Observed is separate from the
- * board's admitted mask; zero epochs mean capacity is not calibrated. */
+ * board's admitted policy mask; each application grant controls task placement.
+ * Zero epochs mean capacity is not calibrated. */
 struct ss_cpu_topology_info {
     uint32_t version, cpu_count, cache_count, domain_count;
     uint64_t calibration_epoch, operating_epoch;
