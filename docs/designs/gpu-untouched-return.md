@@ -1,10 +1,10 @@
 # Return a GPU construction refusal without claiming GPU execution
 
-The returning recognition profile requires a validated GPU job before its
-successful GPU retirement. A pre-scheduler GPU constructor refusal instead leaves
-GPU OPEN disabled and allows CPU recognition. Its subsequent zero-job retirement
-currently retains the image. This path can explain a host nonreturn without any
-GPU power-up, but it does not identify the cause of the failed physical attempt.
+The returning recognition profile distinguishes validated GPU retirement from
+proven constructor refusal. A pre-scheduler refusal leaves GPU OPEN disabled and
+allows CPU recognition; its return must report that GPU execution did not occur.
+The earlier failed image retained this zero-job outcome. That path can produce a
+host nonreturn without GPU power-up, but the physical failure's cause is unknown.
 
 A distinct return outcome covers only a recorded pre-scheduler construction
 refusal. The refusal reason is written by that constructor's failure exit, after

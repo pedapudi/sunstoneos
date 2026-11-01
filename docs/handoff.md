@@ -4,22 +4,51 @@ This section states where SunstoneOS bring-up stands. The sections after it
 are the dated record that produced it; read them only for a subsystem's
 history.
 
-## Paused after the 2026-10-29 tranche
+## Paused after the 2026-10-31 tranche
 
-The user requested this pause after the current tranche. Resume only when asked.
-All implementation workers have handed off. Both board queues have no active
-claim, and no board operation remains running. Full board support is unfinished.
+Both boards are unavailable after one GPU recognition attempt and one longer
+CPU recognition attempt failed to return. No native result was recovered from
+either attempt. Preserve their runners and claims; do not contact either board
+or retry the images. The preceding NPU constructor diagnostic passed on port
+3-3 with normal return and full saved-RAM restoration. Work continues offline
+on safe GPU refusal reporting, NPU startup and source-backed failure diagnosis.
+Full board support is unfinished. No new end-to-end device capability was
+qualified in this tranche. Implementation is paused after closeout; resume only
+when the user asks. Workers have completed their handoffs. The two retained
+runners remain alive solely to preserve failed-session ownership.
 
 ## Board access
 
-Both boards use USB-only power and speed bin 4. They last returned to responsive
-ROM with automatic host access. No reconnect is requested. Refresh identity,
-cache/survey and device admission before another native launch.
+Both boards use USB-only power and speed bin 4. Port 3-1 is unavailable after
+the GPU image did not return within 90 seconds. Its old FEL descriptor does not
+establish a responsive ROM. Preserve runner PID `1921828`, execution session
+`43472` and queue claim
+`222b773655fe191da4c858869a92220a5a5afdea05c076f86a1391bb7e54b5e9`.
+Do not probe or retry it. Reuse requires explicit USB power removal and
+reconnection, followed by the recorded recovery procedure; no repeated user
+request has been made.
 
-| Port | Last ROM node | Last host identity | Initialized memory |
+Before the failed CPU attempt, port 3-3 returned from the constructor diagnostic
+to `003/016`. A subsequent 32-word source-admitted clock/calibration capture,
+returning cache-off helper and SRAM survey passed with scratch restoration.
+Those pre-attempt records are under
+`~/.cache/sunstoneos/evidence/sol-resume-20261031/port-3-3/`:
+`cpu-long-target.json`, `cpu-thermal-state/session.json`,
+`cpu-long-cacheoff/session.json` and `cpu-long-survey/session.json`. These
+observations are not native warm-return links. Its preparation claims are closed.
+The failed longer CPU attempt retains port 3-3 under claim
+`aaf8d09c6e05031fa819ca0db14bc7d672c930b41803bf05d8030422bc2d4fdb`,
+runner PID `1975112` and execution session `11523`. Its frozen inputs and failure
+journal are under `~/.cache/sunstoneos/evidence/sol-cpu-robustness-1031/`.
+No CPU receipt, thermal window or restoration proof was recovered. Reuse requires
+explicit USB power removal and reconnection; preserve the retained process until
+that recovery is verified. Do not use the earlier successful entry records as
+current launch authority.
+
+| Port | Last node | Host identity | Current access |
 | --- | --- | --- | --- |
-| 3-1 | `003/014` | `[7,2486,1096973,0,0]` | 12,288 MiB reported; training and bounded RAM comparisons passed |
-| 3-3 | `003/015` | `[7,2490,1096974,0,0]` | 12,288 MiB reported; training and bounded RAM comparisons passed |
+| 3-1 | `003/014` | `[7,2486,1096973,0,0]` | Quarantined after native nonreturn; retained claim and process |
+| 3-3 | `003/016` | `[7,2569,1096975,0,0]` | Quarantined after CPU nonreturn; retained claim and process |
 
 The evidence root is `~/.cache/sunstoneos/evidence/sol-resume-20261028/`.
 Keep every native warm-return link in order; same-instance observations are not
@@ -32,7 +61,8 @@ warm returns:
   ownership retirement; it supplements the native return chain.
 - **Port 3-3:** `ddr-after-npu-recovery/` → `npu-entry-mbus-checkpoint/` →
   `~/.cache/sunstoneos/evidence/sol-sd-warm-packet-1029/attempt-sentinel64k/` →
-  `~/.cache/sunstoneos/evidence/sol-resume-20261028/port-3-3/npu-entry-irq-checkpoint/`.
+  `~/.cache/sunstoneos/evidence/sol-resume-20261028/port-3-3/npu-entry-irq-checkpoint/`
+  → `~/.cache/sunstoneos/evidence/sol-resume-20261031/port-3-3/npu-provider-construction/`.
   The strict SD result is `sol-sd-warm-packet-1029/sentinel-physical-result.json`.
 
 The earlier NPU restart failed without a native report. The user removed USB
@@ -46,23 +76,34 @@ Legacy GPU/SD returns also establish only their stated RAM continuity. Both NPU
 checkpoints restored and compared all saved 18 MiB; none restored old SRAM over
 new ROM. These are distinct claims.
 
-THS remains clocked and configured but stopped on port 3-1. The rail helper was
-its last writer and successfully used the existing warm clock mode. Future
-admission must account for that stopped state. GPU warm-predecessor evidence
-remains unarmed; no analog-drain or filter-flush qualification is claimed.
+Before the failed GPU launch, port 3-1 THS was configured and stopped by the
+rail helper, with its normalized clock enabled. Its state after the failed
+launch is unknown. The reviewed warm admission did not claim analog drain or
+filter-history flush. Do not transfer that predecessor state to port 3-3.
 
 Only the coordinator operates boards, with the existing per-port locks and
 queues. No eMMC/UFS, MIPI camera/display or microphone is attached. Preserve both
 microSD cards. The former pre-recovery port 3-3 chain is historical.
 
-## Next work when resumed
+## Resume with a narrower target
 
-1. Qualify complete GPU-assisted recognition. Firmware/compute/two exact-sum
-   shapes and the relocated cache-permission operation pass physically; complete
-   GPU recognition and its new return path have software evidence only.
-2. Continue NPU diagnosis after the now-proven shared entry and disabled IRQ97
-   installation/restoration. Provider construction, enabled IRQ delivery and
-   current-image inference/restart remain outside those checkpoint results.
+Recover one board only after the user confirms power removal and reconnection.
+Preserve the failed-session records and close their exact retained processes
+under the existing recovery procedure. Use existing returning probes to locate
+the failed phase while holding the image, model and recording fixed. Do not
+launch another complete CPU/GPU image merely because a new package passes its
+software checks. Select one device outcome and a concrete failure hypothesis;
+defer parallel expansion until that outcome produces usable physical evidence.
+
+## Remaining priorities
+
+1. Diagnose the nonreturning full GPU recognition image from its exact frozen
+   bytes and source references. No native result was recovered. Earlier compute,
+   two exact-sum shapes and the cache-permission probe remain their stated
+   physical evidence; complete GPU recognition remains unproven.
+2. Continue NPU diagnosis after proven shared entry, disabled IRQ97 restoration
+   and real provider/task construction before scheduling. Scheduled provider
+   startup, enabled IRQ delivery and current-image inference/restart remain open.
    Do not repeat the failed full launch without a concrete correction or a
    narrower source-backed diagnostic.
 3. Broaden CPU/load/concurrency and thermal coverage with a stated new question.
@@ -87,6 +128,56 @@ Focused accepted checks were reused. The new SD sentinel case addressed a real
 weakness: zero-filled references could otherwise match untouched zeroed RAM.
 No repeated performance sweep was run. Keep documentation and issue updates at
 integration boundaries rather than on the board-validation critical path.
+
+## Results from the current tranche
+
+- The NPU constructor image
+  `09ec8dd6e736c59f84038c4f28539b343c7c77dcb25cbd4752ccb59de23a906f`
+  passed real provider, task, queue and IRQ-binding construction before scheduler
+  start. Its stage-5 receipt has status zero and no inference. The disabled IRQ
+  route was restored, ROM returned normally and all saved 18 MiB were restored
+  and compared. The session above is canonical; this does not qualify NPU startup.
+- GPU recognition image
+  `6d28a8340c08ba4a3d07eb46a6cd578cb8b8a72f9102c43052e31690f8c89c66`
+  failed to return once. Exact input uploads/readbacks and the failure journal
+  are under `~/.cache/sunstoneos/evidence/sol-gpu-completion-1031/recognition-return/`.
+  Its cause is unresolved. No transcription, thermal or cleanup result is claimed.
+- Returning recognition can now capture the existing immutable thermal window
+  by exact ELF/DWARF geometry. Reporting or reference failures complete established
+  RAM and rail cleanup after independently validated native quiescence. Focused
+  nominal and failure checks pass without a firmware or recognition hot-path change.
+- A fixed-input eight-core image for the existing 8.87-second recording is
+  compiled and software-checked under `sol-cpu-robustness-1031/`. It preserves
+  the original model and reference. Its single physical attempt failed to return;
+  no new recognition or thermal result is established. Fresh
+  CPU-only compilation also fixed a GPU-only macro reference and a missing
+  TinyUSB host FIFO link input.
+
+The CPU upload audit found all thirteen readbacks identical to the sealed
+inputs. Its startup, thermal, clock, PMIC, scheduler and inference sources match
+the previously successful CPU image; the source and build differences are
+recorded in `sol-cpu-failure-delta-1031/`. A separate exact-ELF call accepts both
+actual sealed sessions in the native session validator, under
+`sol-root-cpu-session-audit-1031/`. These results do not locate the failure or
+establish that either image reached native admission on the board.
+
+The following reviewed implementations are integrated with software evidence:
+
+- [Untouched GPU refusal return](designs/gpu-untouched-return.md): a distinct
+  receipt proves only pre-scheduler constructor refusal with no activation.
+  Complete modeled CPU/thermal/PMIC/RAM/rail cleanup passes while GPU and overall
+  qualification remain false. The staged image is `c9e8b908...`; it has no
+  current board authority and is not a demonstrated fix for the failed attempt.
+- [NPU startup diagnostic](../apps/npu-finite/ENTRY.md): real scheduled startup,
+  OPEN/bootstrap READY and ordinary CLOSE, with one bootstrap IRQ and zero
+  inference jobs. Native/provider/service/controller code is reused. Linked,
+  host and FreeRTOS composition checks pass under `sol-npu-startup-1031/`.
+  Its staged packet has no current target, admission or production bundle.
+- [USB transition ownership](designs/returning-usb-guard.md): the per-port lock
+  covers the complete operation, while the shared churn guard covers launch
+  through the permitted successor. Focused interleaving and failure-order checks
+  pass. Existing frozen attempts retain their original transport bytes; physical
+  concurrent transfers remain unqualified.
 
 ## Qualified on the boards
 

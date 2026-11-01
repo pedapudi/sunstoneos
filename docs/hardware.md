@@ -21,24 +21,24 @@ gaps. A passing diagnostic does not qualify every application using that device.
 
 ## Current physical results
 
-The [handoff](handoff.md#qualified-on-the-boards) identifies the frozen images
-and board sessions for these results from 2026-10-25 and 2026-10-28:
+The [handoff](handoff.md) identifies the frozen images, current board access
+and physical results through 2026-10-31:
 
 | Function | Demonstrated operation | Remaining qualification |
 | --- | --- | --- |
 | CPU | Eight-core top-point timer/interrupt workload; one eight-worker mimus recording with exact 90-frame/reference parity, seven secondary OFF proofs, RAM restoration and boot-clock/CPU-rail restoration | Sustained load, thermal transitions, fault recovery, other inputs/profiles and complete recognition performance qualification |
 | GPU | Firmware start/health/stop/restart, eight compute jobs, and two production exact-sum shapes with all 1,122 sums/tags/guards correct at 1008 MHz; cleanup, shutdown and ROM return passed | Failure recovery, complete GPU recognition, graphics and representative concurrent workloads |
-| NPU | Interrupt completion and matching ShuffleNetV2 outputs at 852 MHz; 2.91 ms inference and about 3.3 ms per job end to end | Full power-off and restart, thermal behavior and broader application integration |
+| NPU | Earlier interrupt-driven ShuffleNetV2 inference at 852 MHz; current image passes real provider/task construction before scheduling, disabled IRQ restoration, normal return and saved-RAM restoration | Current scheduled startup, inference/restart, full power-off, thermal behavior and broader integration |
 | Memory bus | Restore to 600 MHz on EL3 entry, with the preserved memory pattern verified on both boards | Broader memory and concurrent-device qualification |
 | microSD | High-speed PIO, one 4 KiB DMA read and one 64 KiB/sixteen-descriptor read at 50 MHz/four-bit/3.3 V; sentinel-prefilled chunks match PIO, with restored normal return | Sustained throughput, broader extents/cards, failure recovery, 1.8 V signalling and remaining storage/update paths |
 | DRAM training | Captures across ten lifetimes establish the inputs for the training-restore design | Executing the restore and qualifying memory after it |
 
-Both ports retain initialized sessions. After the NPU restart failed to return,
-the user power-cycled port 3-3 and its fresh standard DDR start passed. The
-failed attempt produced no native result. Further physical recovery is
-unavailable until confirmed by the user. New software results remain separate from
-physical qualification; the coordinator admits each proposed board test against
-its return and failure paths.
+Both ports are unavailable after GPU and longer CPU recognition attempts failed
+to return. Their claims and runners remain retained; neither produced a native
+result. The preceding port 3-3 constructor diagnostic returned normally with its
+saved 18 MiB restored. Further physical recovery is unavailable until confirmed
+by the user. Software evidence remains separate from physical
+qualification; each board test requires its own return and failure admission.
 
 ## Current software integration
 
@@ -59,7 +59,22 @@ its return and failure paths.
   parking precedes CPU cleanup; read-only output and both interrupt records
   are preserved. Focused native/service/host checks and independent review
   pass under `sol-gpu-return-1028/`. Physical recognition and complete return
-  remain unqualified.
+  remain unqualified. The complete GPU attempt on 2026-10-31 did not return;
+  its cause remains unresolved.
+- Returning recognition now copies its existing immutable thermal window before
+  saved RAM is restored. Host decoding uses exact ELF/DWARF geometry. Reference
+  and optional telemetry errors remain separate from independently verified
+  native retirement, so they do not skip established RAM or rail restoration.
+  Focused nominal and failure checks pass; this adds no native hot-path work.
+- A proven pre-scheduler GPU constructor refusal now has a distinct
+  [untouched return](designs/gpu-untouched-return.md). Focused native and full
+  modeled followup checks preserve CPU parity, complete thermal evidence and
+  safe cleanup while GPU qualification remains false. This claims no GPU OFF,
+  isolation or voltage state and does not identify the physical failure's cause.
+- The [NPU startup diagnostic](../apps/npu-finite/ENTRY.md) now reuses scheduled
+  startup, OPEN/bootstrap READY and ordinary CLOSE with one interrupt and no
+  inference. Linked, host and FreeRTOS composition checks pass; its staged
+  package has no current board admission. Physical startup remains unqualified.
 - A CPU-only [cache-permission probe](../apps/gpu-cache-permission/README.md)
   passed on port 3-1 with production read-only output attributes. The unchanged
   EL1 helper maintained all 4 MiB and preserved initialized bytes before normal
@@ -85,8 +100,8 @@ The default 3.3 V read-only microSD DMA diagnostic restores its controller,
 clock and pins before normal return. One 4 KiB physical read now matches the
 same-card PIO reference and passes strict close/restoration/ROM validation under
 `sol-resume-20261028/port-3-3/`. The queue claim remained held through decoding
-and exact input/image/reference checks. Uncertain completion parks. Larger DMA
-transfers, sustained throughput and fault recovery remain unqualified; another
+and exact input/image/reference checks. Uncertain completion parks. Transfers beyond 64 KiB,
+sustained throughput and fault recovery remain unqualified; another
 SD operation needs fresh provider/CMD0 admission.
 
 An optional 64 KiB read now uses sixteen existing descriptors and compares

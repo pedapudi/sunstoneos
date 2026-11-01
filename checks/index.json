@@ -7829,7 +7829,9 @@
   "usb": false
  },
  "os-cpu-return-host.py": {
-  "cache_areas": [],
+  "cache_areas": [
+   "evidence"
+  ],
   "docs": [],
   "library": false,
   "pure_host": false,
@@ -7863,6 +7865,18 @@
    "--out"
   ],
   "summary": "Execute linked close coordination with modeled RTOS and completed CPU DVFS.",
+  "usb": false
+ },
+ "os-cpu-return-thermal.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Exercise returned thermal capture against the exact native writer in an ELF.",
   "usb": false
  },
  "os-cpu-return.py": {
@@ -7924,6 +7938,18 @@
    "--output"
   ],
   "summary": "Check the actual AArch64 native GPU thermal caller with modeled service replies.",
+  "usb": false
+ },
+ "os-gpu-untouched.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Actual constructor refusal exits and untouched-return proof over modeled setup APIs.",
   "usb": false
  },
  "os-gpu-wait-linked.py": {

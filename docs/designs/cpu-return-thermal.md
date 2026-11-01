@@ -31,8 +31,25 @@ malformed captures. These checks establish the native writer/host reader
 contract; physical sensor operation and sustained thermal control need board
 evidence.
 
-The next CPU case uses one longer existing recording with eight workers and a
+The longer CPU case uses one existing recording with eight workers and a
 matching host reference. Acceptance requires parity, complete thermal evidence,
 all secondary CPUs OFF, normal return and verified boot-rail restoration. A
 cool run establishes sampled operation across that finite load interval; it does
 not establish a thermal-trip transition or equilibrium under sustained load.
+
+## Reproduce the longer input variant
+
+The [fixed-input patch](../../apps/os/cpu-return/longer-recording-input.patch)
+selects the existing 8.87-second recording without changing model declarations
+or the default build. Apply it in an isolated checkout of source-equivalent
+base `bd6b15d6ecbff00ed07c65bfb1cac5f9f8f50d5c`, then configure the existing CPU return profile with
+`SUNSTONE_A733_OS=ON`, `A733_A76_ADMITTED=ON`,
+`SUNSTONE_A733_OS_CPU_CLOCK=ON`, `SUNSTONE_A733_OS_CPU_RETURN=ON` and
+`SUNSTONE_MIMUS_WORKERS=8` through the cached `cfg.sh`. Build
+`sunstone-a733-os` using its configured toolchain and dependency pins.
+
+The frozen variant's ELF SHA-256 is
+`518bdd0efed7ab297090b4859108c493e6fb54ea834b7aa36ed15d7f9ce6911c`.
+Its physical attempt failed to return; there is no longer-input transcription
+or thermal qualification. Build identities and current entry authority must be
+verified for another attempt; this fixture grants no launch permission.

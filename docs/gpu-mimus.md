@@ -10,13 +10,16 @@ compare the result with them. The OS image's
 [placement of linear layers](recognition-dispatch.md) decides which output
 channels of each layer run here.
 
-Status: **implemented** and host-modeled. No GPU has executed the program. The
-OS image's GPU linear build links the session code through the GPU service's
+Status: **implemented**, with two production exact-sum shapes passing on the
+physical GPU under the conditions below. The OS image's GPU linear build links
+the session code through the GPU service's
 mimus component ([gpu-mimus-service.md](gpu-mimus-service.md)). The local
 mimus engine pinned in [the source record](../apps/mimus/source.json) supplies
 `mimus/asr/exact_sum_hook.h` and the engine callbacks;
 `apps/os/gpu_hook.cc` installs the GPU implementation.
-Physical execution through that hook remains unqualified. Two design
+Complete recognition through that hook remains unqualified. The latest full
+recognition attempt failed to return; no native result established its cause.
+The [handoff](handoff.md) records the retained board and frozen inputs. Two design
 budgets are missed: the program has 3.39 GPU instructions per
 multiply-accumulate (MAC) against 1.75, and 7,624 code bytes against 4,000.
 

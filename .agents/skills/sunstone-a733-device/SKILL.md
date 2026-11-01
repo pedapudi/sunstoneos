@@ -165,6 +165,19 @@ USB transfers do not establish another task's completion when its summary fields
 remain pending. Match host success to the native producer's required status and
 count fields, and preserve partial results when those conditions disagree.
 
+After independently validated native quiescence and normal return, copy optional
+telemetry before restoring saved RAM. A telemetry decoding error or reference
+mismatch must not skip the established RAM and rail restoration. Record cleanup
+completion separately from functional qualification. When adding receipt fields,
+exercise the complete nominal producer, host and followup path; validate required
+device fields and optional reporting data separately.
+
+Before retaining a device after a constructor refusal, trace whether any device
+operation was possible. The [GPU untouched-return proof](../../../docs/designs/gpu-untouched-return.md)
+covers one pre-scheduler RAM-only construction path; it does not establish OFF
+or drain after accepted OPEN. When a shared launch callback changes, update each
+real caller and its dedicated nominal fixture before running a longer batch.
+
 Trace each new register access through the complete native access policy.
 A controller adapter may allow an offset that the lower MMIO provider rejects.
 Check the complete address and peripheral base, then exercise the real provider
