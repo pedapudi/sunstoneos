@@ -12,7 +12,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 import shutil
 import struct
 import subprocess
@@ -141,7 +141,7 @@ def main():
     parser.add_argument("--memory", choices=("dram", "sram"), default="dram",
                         help="where the tables and results live; sram for untrained DRAM")
     args = parser.parse_args()
-    args.output = unique_directory(args.output)
+    args.output = new_directory(args.output)
     linker = shutil.which("ld.lld") or str(CACHE / "host/usr/lib/llvm-21/bin/ld.lld")
     objcopy = shutil.which("llvm-objcopy") or "/usr/lib/llvm-21/bin/llvm-objcopy"
     for name, address in (("ddr-capture", READER), ("cache-off", 0x71000)):

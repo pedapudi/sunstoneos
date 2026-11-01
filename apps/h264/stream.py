@@ -79,7 +79,7 @@ def prepare_inputs(clip,output,reference=None,version=2):
     limits=profile(version);frame_bytes=limits['frame_bytes']
     frames=split_clip(Path(clip).read_bytes());pixels=Path(reference).read_bytes() if reference else None
     require(pixels is None or len(pixels)==len(frames)*frame_bytes,'VGA oracle length differs.')
-    out=unique_directory(output);manifest=bytearray()
+    out=new_directory(output);manifest=bytearray()
     for i,(number,data) in enumerate(frames):
         require(len(data)<=limits['input_limit'],'VGA access unit exceeds bound.');(out/f'frame-{i:03}.h264').write_bytes(data)
         oracle=pixels[i*frame_bytes:(i+1)*frame_bytes] if pixels else b''

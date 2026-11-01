@@ -17,7 +17,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 from returning_build import CENTRAL_PLATFORM, PROVIDER_UNITS, ReturningPlatform, digest, save
-from host_evidence import unique_directory  # noqa: E402
+from host_evidence import new_directory, unique_directory  # noqa: E402
 
 UNITS = ['apps/storage-read-returning/main.c', 'apps/storage-read-returning/return.c', 'drivers/storage/sunxi_mmc.c', 'drivers/storage/a733_mmc_platform.c',
          'drivers/storage/a733_mmc_platform_native.c', 'drivers/storage/a733_storage_update.c',
@@ -35,7 +35,7 @@ def main():
     parser.add_argument('--evidence', type=Path, required=True)
     args = parser.parse_args()
     e = args.evidence.resolve(); central = args.platform_build.resolve()
-    e = unique_directory(e)
+    e = new_directory(e)
     apps = load('storage_read_returning_bba', ROOT / 'checks/board-bundles-apps.py')
     platform = ReturningPlatform(e, build=central)
     monitor = e / 'build/monitor-counter-option.obj'

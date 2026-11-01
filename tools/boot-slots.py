@@ -207,7 +207,7 @@ def new_directory(path):
     import importlib.util
     spec = importlib.util.spec_from_file_location('boot_slots_output', Path(__file__).with_name('host_evidence.py'))
     helper = importlib.util.module_from_spec(spec); spec.loader.exec_module(helper)
-    path = helper.unique_directory(path)
+    path = helper.new_directory(path)
     os.chmod(path, 0o700)
     return path
 

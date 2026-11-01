@@ -7,7 +7,7 @@ ROOT=Path(__file__).resolve().parents[3]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 def produce(image,out,host):
-    out=module('emmc_fixture_evidence',ROOT/'tools/host_evidence.py').unique_directory(out)
+    out=module('emmc_fixture_evidence',ROOT/'tools/host_evidence.py').new_directory(out)
     prep=module('emmc_fixture_prepare',ROOT/'apps/emmc-read/prepare.py')
     ih=hashlib.sha256(image.read_bytes()).hexdigest();_,_,identity=prep.base.image_parts(image)
     baseline=Path.home()/'.cache/sunstoneos/evidence/board-supervised-20261017/batch1/session-fixture.bin'

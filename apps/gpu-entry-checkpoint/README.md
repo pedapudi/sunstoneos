@@ -141,8 +141,8 @@ SUNSTONE_USB_PORT=3-3 ~/.cache/sunstoneos/venv/bin/python -B \
   apps/gpu-entry-checkpoint/host.py --bundle BUNDLE --fel FEL --evidence RESULT
 ```
 
-Preparation prints the actual bundle directory. Existing output directories
-receive unique timestamped children. Optional `--manifest` accepts build
+Preparation prints the bundle directory and refuses an existing output path.
+Choose a new artifact path before preparing another version. Optional `--manifest` accepts build
 metadata; optional `--admission CONFIG` reads only `ram_disposition` and
 `reservation`. RAM restoration is the default. Discard requires that both full
 ranges contain no data that must survive. Native owner and geometry checks,

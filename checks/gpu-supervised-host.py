@@ -7,6 +7,7 @@ import importlib.util
 import inspect
 import json
 from pathlib import Path
+from harness import artifact_refused
 import shutil
 import sqlite3
 import struct
@@ -38,12 +39,14 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--evidence',type=Path,required=True)
     parser.add_argument('--image',type=Path,required=True,help='Existing GPU ELF; never rebuilt or executed')
     parser.add_argument('--session-template',type=Path)
+    parser.add_argument('--case',action='append',help='Run a named host case')
     a=parser.parse_args();out=a.evidence;out.mkdir(parents=True,exist_ok=True)
     host=load(ROOT/'tools/check-a733-gpu-supervised.py');sup=host.supervisor
     sources=[Path(__file__),Path(host.__file__),Path(sup.__file__),Path(sup.base.__file__),Path(sup.observer.__file__),Path(host.preparation.__file__),Path(host.preparation.board.__file__),Path(host.decoder.__file__)]
     identities={str(p.relative_to(ROOT)):host.digest(p) for p in sources}
     state_path=out/'results.json';state=json.loads(state_path.read_text()) if state_path.exists() else {'physical_access':False,'cases':{}}
     def case(name,fn):
+        if a.case and name not in a.case:return
         fingerprint=hashlib.sha256((inspect.getsource(fn)+inspect.getsource(Clock)+inspect.getsource(session)+inspect.getsource(frame)+inspect.getsource(compute_frame)+json.dumps(identities,sort_keys=True)+host.digest(a.image)).encode()).hexdigest()
         if name in state['cases']:
             assert state['cases'][name]['inputs']==fingerprint,'Changed completed inputs: '+name
@@ -137,9 +140,8 @@ def main():
                 '/usr/lib/llvm-21/bin/clang',Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
             assert prepared['entry_evidence']=={}
             sentinel=d/'bundle/prior.txt';sentinel.write_bytes(b'previous evidence')
-            second=host.preparation.prepare(a.image,None,None,a.session_template,d/'bundle',
-                '/usr/lib/llvm-21/bin/clang',Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
-            assert sentinel.read_bytes()==b'previous evidence' and prepared['image_sha256']==second['image_sha256']
+            artifact_refused(lambda:host.preparation.prepare(a.image,None,None,a.session_template,d/'bundle',
+                '/usr/lib/llvm-21/bin/clang',Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld'),d/'bundle')
             runtime=prepared['files']
             for path in (d/'bundle').iterdir():
                 if path.is_file() and path.name not in runtime and path.name!='prepared.json':
@@ -153,7 +155,7 @@ def main():
             except ValueError:pass
             else:raise AssertionError('Changed native contract accepted')
             finally:contract.write_bytes(original)
-            return {'direct_native_inputs':True,'existing_output_preserved':True,'changed_contract_refused':True,'archive_changes_accepted':True}
+            return {'direct_native_inputs':True,'existing_output_refused_without_changes':True,'changed_contract_refused':True,'archive_changes_accepted':True}
         case('direct-preparation',direct_preparation)
 
     def software(d):

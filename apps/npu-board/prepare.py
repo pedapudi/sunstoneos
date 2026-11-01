@@ -144,7 +144,7 @@ def tensor_check(model,inputs,references):
         require(len(data)==tensor['reference']['bytes'],'Tensor size differs from the catalogue.')
     return entry
 
-output_directory=module('accelerator_host_evidence',ROOT/'tools/host_evidence.py').unique_directory
+output_directory=module('accelerator_host_evidence',ROOT/'tools/host_evidence.py').new_directory
 
 def prepare(image,manifest,admission,template,output,clang,lld,model,inputs,references):
     snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('session-template.bin',template)]}

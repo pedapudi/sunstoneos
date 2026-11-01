@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+from harness import artifact_refused
 import struct
 import time
 from unittest.mock import patch
@@ -134,10 +135,9 @@ def main():
                     assert p.validate_bundle(bundle)['_frozen']==prepared_bundle['_frozen']
                 finally:path.write_bytes(original)
         marker=bundle/'preserved.txt';marker.write_bytes(b'previous evidence')
-        p.prepare(a.image,None,a.root_session,None,bundle,'/usr/lib/llvm-21/bin/clang',
-            Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld','/usr/lib/llvm-21/bin/llvm-objcopy')
-        assert marker.read_bytes()==b'previous evidence'
+        artifact_refused(lambda:p.prepare(a.image,None,a.root_session,None,bundle,'/usr/lib/llvm-21/bin/clang',
+            Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld','/usr/lib/llvm-21/bin/llvm-objcopy'),bundle)
         passed('bundle',{'passed':True,'direct_native_inputs':True,'upload_tamper_refused':True,
-            'existing_output_preserved':True,'archive_changes_accepted':True})
+            'existing_output_refused_without_changes':True,'archive_changes_accepted':True})
 
 if __name__=='__main__':main()

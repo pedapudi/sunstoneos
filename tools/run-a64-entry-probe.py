@@ -28,7 +28,7 @@ def prepare(a):
     with a.observer.open('rb') as f:
         symbols={s.name:s['st_value'] for s in ELFFile(f).get_section_by_name('.symtab').iter_symbols()}
     require(tuple(symbols[n] for n in SYMBOLS)==LAYOUT,'Native ELF layout changed.')
-    a.build=returning.output_directory(a.build);shutil.copy2(ROOT/'boot/a733/a64-entry-probe.S',a.build/'probe.S')
+    a.build=returning.artifact_directory(a.build);shutil.copy2(ROOT/'boot/a733/a64-entry-probe.S',a.build/'probe.S')
     commands=[[a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',a.build/'probe.S','-o',a.build/'probe.o'],
         [a.lld,'-Ttext=0x41000000','-e','_start',a.build/'probe.o','-o',a.build/'probe.elf'],
         [a.objcopy,'-O','binary',a.build/'probe.elf',a.build/'probe.bin']]

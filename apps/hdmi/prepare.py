@@ -11,7 +11,7 @@ import sys
 from elftools.elf.elffile import ELFFile
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 CONTRACT_MAGIC = 0x4153373348444331
 SESSION_MAGIC = 0x4153373348444131
 REQUEST_MAGIC = 0x4153373353554c33
@@ -173,7 +173,7 @@ def main():
     p.add_argument('--objcopy', type=Path, required=True)
     a = p.parse_args()
     parts, address, build, raw, epoch, generation, lease, supervisor, snapshots = validate(a.image, a.session, a.admission)
-    out = unique_directory(a.output.resolve())
+    out = new_directory(a.output.resolve())
     paths = {'launch.c': ROOT/'platform/a733-smp-supervised/launch.c',
              'launch.S': ROOT/'platform/a733-smp-observe/launch.S',
              'launch.ld': ROOT/'platform/a733-smp-observe/launch.ld',

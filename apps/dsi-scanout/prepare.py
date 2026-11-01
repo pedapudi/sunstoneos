@@ -86,7 +86,7 @@ def prepare(image,manifest,admission,template,output,clang,lld,frames=None):
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();record=json.loads(snapshots['admission.json'])
     image_manifest_check(json.loads(snapshots['image-input-manifest.json']),snapshots['image.elf'],raw)
     cache=validate_admission(record,ih,hashlib.sha256(raw).hexdigest(),raw)
-    out=board.unique_directory(output)
+    out=board.new_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=base.image_parts(out/'image.elf');epoch,generation,lease=(secrets.randbits(64) or 1 for unused in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease);raw[48:80]=identity;build_launcher(out,clang,lld)

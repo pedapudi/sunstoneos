@@ -15,8 +15,8 @@ Prepare a bundle from the repository root:
   --output BUNDLE --clang CLANG --lld LLD
 ```
 
-The producer prints the actual bundle directory. An existing output directory
-receives a unique timestamped child, preserving previous evidence. Optional
+The producer prints the bundle directory and refuses an existing output path.
+Choose a new artifact path before preparing another version. Optional
 `--manifest` accepts build metadata. Optional `--admission CONFIG` reads only
 `ram_disposition` and `reservation`; these configure the RAM policy and native
 session identity. The default policy restores RAM. Set `ram_disposition` to

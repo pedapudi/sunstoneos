@@ -21,6 +21,16 @@ with tempfile.TemporaryDirectory(prefix='sunstone-evidence-check-') as temporary
     assert second.parent == requested and third.parent == requested and second != third
     assert (first / 'session.json').read_text() == 'earlier result\n'
     assert not list(second.iterdir()) and not list(third.iterdir())
+    artifact = evidence.new_directory(Path(temporary) / 'bundle')
+    (artifact / 'grant.bin').write_bytes(b'version one')
+    try:
+        evidence.new_directory(artifact)
+    except FileExistsError:
+        pass
+    else:
+        raise AssertionError('A consumed artifact path cannot redirect into a child.')
+    assert list(artifact.iterdir()) == [artifact / 'grant.bin']
+    assert (artifact / 'grant.bin').read_bytes() == b'version one'
     file = Path(temporary) / 'file'
     file.write_text('preserve\n')
     try:

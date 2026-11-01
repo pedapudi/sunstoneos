@@ -82,7 +82,7 @@ def prepare(args):
     for address, size in (OVERLAY, REPORT):
         require(all(address+size <= s['address'] or s['address']+s['bytes'] <= address
                     for s in sections), 'Probe storage overlaps native ELF storage.')
-    args.output = _output.unique_directory(args.output)
+    args.output = _output.new_directory(args.output)
     # Reuse the existing overlay linker bounds; only its entry symbol differs.
     commands = [
         [args.clang, '--target=aarch64-none-elf', '-march=armv8-a', '-c',

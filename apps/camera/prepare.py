@@ -249,7 +249,7 @@ def build_launcher(output,session_size,clang,lld,objcopy):
 def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
     image_raw=Path(image).read_bytes();manifest_raw=b'{}' if manifest is None else Path(manifest).read_bytes();raw=Path(session).read_bytes();admission_raw=Path(admission).read_bytes()
     parts,address,identity,layout=image_data(image_raw);profile=session_profile(raw,layout,identity);m={}
-    cache=validate_admission(admission_raw,raw,layout,identity,sha(image_raw));output=board.unique_directory(output)
+    cache=validate_admission(admission_raw,raw,layout,identity,sha(image_raw));output=board.new_directory(output)
     build_launcher(output,len(raw),clang,lld,objcopy)
     data={'image.elf':image_raw,'image-input-manifest.json':manifest_raw,'session.bin':raw,'admission.json':admission_raw};uploads=[]
     for i,p in enumerate(parts):

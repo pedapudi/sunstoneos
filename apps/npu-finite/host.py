@@ -5,7 +5,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tools'))
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 stopped=module('finite_npu_stopped',ROOT/'apps/npu-finite/stopped-capture.py')
@@ -156,14 +156,13 @@ def construct_session(image,manifest,boot,admission,output):
  struct.pack_into('<2Q',raw,208,*identities[3:]);raw[offset:]=typed
  validate_admission(b'',bytes(raw),build,layout,sha(data),execution_profile=geometry_profile(geometry))
  output=Path(output)
- if output.exists():output=unique_directory(output.parent)/output.name
  with output.open('xb') as stream:stream.write(raw)
  return output
 
 def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
  data=image.read_bytes();parts,address,build,layout,geometry=image_profile(data,{});raw=session.read_bytes();entry=b'{}'
  execution=geometry_profile(geometry)
- profile,cache=validate_admission(entry,raw,build,layout,sha(data),execution_profile=execution);output=unique_directory(output)
+ profile,cache=validate_admission(entry,raw,build,layout,sha(data),execution_profile=execution);output=new_directory(output)
  for name,source in [('image.elf',image),('session.bin',session)]:shutil.copy2(source,output/name)
  save(output/'manifest.json',{'execution_profile':execution,'build_id':build.hex(),'final_elf':sha(data)})
  save(output/'admission.json',{})

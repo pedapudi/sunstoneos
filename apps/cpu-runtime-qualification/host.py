@@ -121,7 +121,7 @@ def prepare(image, manifest_path, admission_path, output, clang, lld, objcopy):
     supervised.validate_admission(admission, digest(image))
     # Linked extents bound every writer; the native contract carries the session identity.
     segments, address, identity = supervised.image_parts(image)
-    output = returning.output_directory(output)
+    output = returning.artifact_directory(output)
     for name, source in [('launch.S', ROOT / 'platform/a733-smp-observe/launch.S'),
                          ('launch.ld', ROOT / 'platform/a733-smp-observe/launch.ld'),
                          ('launch.c', ROOT / 'platform/a733-smp-supervised/launch.c'),

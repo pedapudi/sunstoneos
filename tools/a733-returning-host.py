@@ -7,7 +7,9 @@ def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 crumbs=module('returning_crumbs',ROOT/'tools/a733-crumbs.py')
 
-output_directory=module('returning_evidence',ROOT/'tools/host_evidence.py').unique_directory
+_directories=module('returning_evidence',ROOT/'tools/host_evidence.py')
+output_directory=_directories.unique_directory
+artifact_directory=_directories.new_directory
 
 class WatchdogReset(RuntimeError):
  """The armed WDT0 reset the board to a new ROM instance; DRAM is lost, the run failed."""

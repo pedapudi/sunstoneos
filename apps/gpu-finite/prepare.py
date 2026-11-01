@@ -5,7 +5,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tools'))
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 original=module('gpu_finite_original',ROOT/'apps/gpu-render/prepare.py');base=original.base
@@ -56,7 +56,7 @@ def validate_admission(record,image_hash,template,build,cache=None,frozen=False)
 
 def prepare(image,manifest,admission,session_template,output,clang,lld):
  m={};parts,address,build,geometry=image_profile(image,m);template=session_template.read_bytes();record=json.loads(admission.read_bytes()) if admission else {};record={k:record[k] for k in ('ram_disposition','reservation') if k in record};record.setdefault('reservation',secrets.randbits(64) or 1);cache=validate_admission(record,sha(image.read_bytes()),template,build)
- output=unique_directory(output)
+ output=new_directory(output)
  for name,source in [('image.elf',image),('session-template.bin',session_template)]:shutil.copy2(source,output/name)
  save(output/'manifest.json',{'execution_profile':PROFILE,'build_id':build.hex(),'final_elf':sha(image.read_bytes())})
  save(output/'admission.json',record)

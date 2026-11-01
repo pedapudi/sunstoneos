@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Mock only the new NPU host profile; never discover hardware or touch queues."""
-import argparse,hashlib,importlib.util,json,os,shutil,struct,tempfile
+import sys
+import argparse,hashlib,importlib.util,json,os,shutil,struct
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import patch
 p=argparse.ArgumentParser(description=__doc__)
@@ -8,6 +10,8 @@ p.add_argument('--case',action='append',default=[],help='Run only named transfer
 p.add_argument('--interrupt',action='store_true',help='check the interrupt host (apps/npu-interrupt/host.py) and its admission record')
 p.add_argument('--client-logs',type=Path,help='interrupt client logs from checks/npu-interrupt-client.py, for the receipt cases');p.add_argument('--native',type=Path,required=True);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args()
 r=Path(__file__).resolve().parents[2];HOST=r/('apps/npu-interrupt/host.py' if a.interrupt else 'apps/npu-finite/host.py')
+sys.path.insert(0,str(r/'checks'))
+from harness import artifact_refused
 spec=importlib.util.spec_from_file_location('host',HOST);h=importlib.util.module_from_spec(spec);spec.loader.exec_module(h)
 a.evidence=(h.finite if a.interrupt else h).unique_directory(a.evidence)
 # The interrupt host wraps a private copy of the finite host; check that copy.
@@ -38,7 +42,8 @@ assert board['startup_us']==4024 and board['job_us']==[None,None] and board['pub
 assert h.timing('NPU_STAGE=OPEN\n') is None
 def ref(path):return {'path':str(path.resolve()),'sha256':sha(path.read_bytes())}
 results=[]
-with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
+fixture=a.evidence/'modeled-fixture';fixture.mkdir()
+with nullcontext(fixture) as temporary:
  t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));thermal=bool(g.get('thermal'));restart=bool(g.get('restart'));startup=bool(g.get('startup_only'));infer=bool(g.get('single_inference'));runtime=bool(g.get('runtime'));execution=h.geometry_profile(g)
  completions=4 if restart else 3 if runtime else 2 if infer else 1 if startup else 3
  client_profile=h.STARTUP_CLIENT.get(execution)
@@ -114,9 +119,10 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  admission=write('identities.json',{k:profile[k] for k in ('epoch','generation','lease','supervisor','whole_platform')})
  session=t/'session.bin';h.construct_session(image,None,boot_path,admission,session)
  raw=bytearray(session.read_bytes())
- again=h.construct_session(image,None,boot_path,None,session)
- assert again!=session and session.is_file() and again.is_file()
- results.append({'name':'session-without-process-records-and-existing-output-preserved','passed':True})
+ artifact_refused(lambda:h.construct_session(image,None,boot_path,None,session),t)
+ fresh=h.construct_session(image,None,boot_path,None,t/'fresh-session.bin')
+ assert fresh==t/'fresh-session.bin' and fresh.read_bytes()!=session.read_bytes()
+ results.append({'name':'session-without-process-records-and-existing-output-refused','passed':True})
  for name,change in [('version',lambda b:struct.pack_into('<Q',b,8,2)),
                      ('build',lambda b:b.__setitem__(slice(48,80),bytes(32))),
                      ('digest',lambda b:b.__setitem__(slice(112,144),bytes(32))),
@@ -129,8 +135,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  bundle=t/'bundle'
  with patch.object(h.original,'build_launcher',launcher_copy):
   h.prepare(image,None,session,None,bundle,'mock-compiler','mock-linker','mock-objcopy')
-  second=h.prepare(image,None,session,None,bundle,'mock-compiler','mock-linker','mock-objcopy')
- assert Path(second['output']).parent==bundle
+  artifact_refused(lambda:h.prepare(image,None,session,None,bundle,'mock-compiler','mock-linker','mock-objcopy'),bundle)
  prepared=h.validate_bundle(bundle)
  assert not prepared['entry_evidence'] and 'host_sources' not in prepared
  results.append({'name':'bundle-without-manifest-review-or-external-evidence','passed':True})
@@ -392,4 +397,4 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
     if restart:assert value['normal_restart'] and 'startup_us' not in value['timing'] and 'initial_entry_to_restart_ready_us' in value['timing']
     results.append({'name':variant+'-producer-log-report','passed':True})
    else:rejected(variant+'-receipt-refused',lambda:h.validate_reports(*frames,prepared))
-(a.evidence/'host-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'native_elf_sha256':sha(image.read_bytes()),'host_sha256':sha(HOST.read_bytes()),'checker_sha256':sha(Path(__file__).read_bytes()),'stopped_capture_sha256':sha((r/'apps/npu-finite/stopped-capture.py').read_bytes()),'execution_profile':execution,'native_initializer':{'raw':'native-initial-report.bin','sha256':sha(initialized),'magic':hex(native_report[0]),'boundary':'Actual linked monitor report initialization; contract-validator success and counter modeled, stopped before session seal. Completion fields are modeled; final receipt/status writer covered separately.'},'cases':results,'scope':'New host packaging/admission/report validation/sealed preload/DRAM restoration/retention with mocked FEL and ROM enumeration. Temporary modeled evidence uses a nonexistent test port and is removed. Existing launcher bytes reused; no full native admission, hardware or queues.'},indent=2)+'\n');print('PASS new NPU returned-RAM host cases:',len(results))
+(a.evidence/'host-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'native_elf_sha256':sha(image.read_bytes()),'host_sha256':sha(HOST.read_bytes()),'checker_sha256':sha(Path(__file__).read_bytes()),'stopped_capture_sha256':sha((r/'apps/npu-finite/stopped-capture.py').read_bytes()),'execution_profile':execution,'native_initializer':{'raw':'native-initial-report.bin','sha256':sha(initialized),'magic':hex(native_report[0]),'boundary':'Actual linked monitor report initialization; contract-validator success and counter modeled, stopped before session seal. Completion fields are modeled; final receipt/status writer covered separately.'},'cases':results,'scope':'New host packaging/admission/report validation/sealed preload/DRAM restoration/retention with mocked FEL and ROM enumeration. Modeled evidence uses a nonexistent test port and is retained. Existing launcher bytes reused; no full native admission, hardware or queues.'},indent=2)+'\n');print('PASS new NPU returned-RAM host cases:',len(results))

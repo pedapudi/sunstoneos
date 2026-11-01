@@ -322,7 +322,7 @@ def image_layout(elf):
 
 
 def prepare(args):
-    args.output = unique_directory(args.output)
+    args.output = new_directory(args.output)
     lib = library(args.output / 'host-build')
     log = json.loads(args.run_log.read_text())
     contract, plan = next_contract(log, lib, args.mask, args.budget)

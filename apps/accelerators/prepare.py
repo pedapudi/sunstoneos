@@ -141,7 +141,7 @@ def request_bytes(address,build,raw,profile):
     contract+=struct.pack('<14Q',0,0,0,0,lease,0,0,0,0,0,0,0,profile['supervisor'],len(raw))+hashlib.sha256(raw).digest()
     require(len(contract)==224,'Combined contract differs.');return request,contract+bytes(4096-len(contract))
 
-output_directory=module('accelerator_host_evidence',ROOT/'tools/host_evidence.py').unique_directory
+output_directory=module('accelerator_host_evidence',ROOT/'tools/host_evidence.py').new_directory
 
 def prepare(image,manifest,session,admission,output,clang,lld,objcopy,*,package=None):
     image_raw=Path(image).read_bytes();manifest_raw=Path(manifest).read_bytes() if manifest else b'{}';raw=Path(session).read_bytes();admission_raw=Path(admission).read_bytes() if admission else b'{}'

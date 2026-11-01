@@ -13,7 +13,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 # The SRAM and status patches came first, the execute-argument fix afterward,
@@ -38,7 +38,7 @@ def main():
     archive = args.cache / source["archive"]
     if digest(archive) != source["sha256"]:
         raise SystemExit(f"{archive} differs from the sunxi-tools pin; fetch it with tools/fetch-sources.py")
-    args.output = unique_directory(args.output)
+    args.output = new_directory(args.output)
     with tarfile.open(archive) as bundle:
         bundle.extractall(args.output, filter="data")
     tree = args.output / source["directory"]

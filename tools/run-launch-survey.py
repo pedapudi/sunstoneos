@@ -22,7 +22,7 @@ REGIONS=(('code',0x85000,0x400),('report',0x86000,128))
 MAGIC=0x3153564c
 
 def prepare(args):
-    out=returning.output_directory(args.build.resolve());args.build=out
+    out=returning.artifact_directory(args.build.resolve());args.build=out
     source=ROOT/'boot/a733/launch-survey.S';shutil.copy2(source,out/'launch-survey.S')
     commands=[[args.clang,'--target=arm-none-eabi','-march=armv8-a','-marm','-c',out/'launch-survey.S','-o',out/'launch-survey.o'],
         [args.lld,'-Ttext=0x85000','-e','_start',out/'launch-survey.o','-o',out/'launch-survey.elf'],

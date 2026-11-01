@@ -9,7 +9,7 @@ import sys
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools'))
 from returning_build import ROOT, PROVIDER_UNITS, platform_arguments, platform_from
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 
 SCHEMA = 'a733-radio-sdio-id-v1'
 FACTS = {
@@ -120,7 +120,7 @@ def main():
         source, inputs, record = profile_source(a.profile)
     e = a.evidence.resolve()
     require(ROOT not in e.parents and e != ROOT, 'external evidence directory required')
-    e = unique_directory(e)
+    e = new_directory(e)
     (e / 'profile.c').write_text(source)
     for i, (name, data) in enumerate(inputs.items()):
         (e / f'authority-{i}.json').write_bytes(data)

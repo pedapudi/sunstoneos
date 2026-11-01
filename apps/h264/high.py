@@ -44,7 +44,7 @@ def validate_inputs(directory,manifest):
 def prepare_inputs(clip,output,reference,helper):
     import re
     data=Path(clip).read_bytes();starts=list(re.finditer(b'\x00\x00(?:\x00)?\x01',data));require(starts and starts[0].start()==0,'AnnexB required.')
-    config={};frames=[];out=unique_directory(output)
+    config={};frames=[];out=new_directory(output)
     for i,m in enumerate(starts):
         nal=data[m.end():starts[i+1].start() if i+1<len(starts) else len(data)].rstrip(b'\0');require(nal and not nal[0]&128,'Invalid High NAL.');kind=nal[0]&31
         if kind in (7,8):config[kind]=b'\0\0\0\1'+nal

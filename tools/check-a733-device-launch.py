@@ -109,7 +109,7 @@ def prepare(image, manifest_path, output, clang, lld, reservation):
     reservation = reservation or secrets.randbits(64) or 1
     require(type(reservation) is int and 0 < reservation < 2**64, 'Invalid native reservation identity.')
     segments, build_address, build_id = image_parts(image)
-    output = base.output_directory(output)
+    output = base.artifact_directory(output)
     for name in ('launch.S', 'launch.c', 'launch.ld', 'contract.h'):
         shutil.copy2(ROOT / 'platform/a733-device-launch' / name, output / name)
     commands = []

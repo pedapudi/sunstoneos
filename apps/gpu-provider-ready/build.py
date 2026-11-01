@@ -12,7 +12,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'checks'))
 sys.path.insert(0, str(ROOT / 'tools'))
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 import harness
 
 
@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--baseline',type=Path,default=harness.CACHE/'evidence/gpu-power-id-20261024/final-image')
     parser.add_argument('--flags-record',type=Path,default=harness.CACHE/'build/usb-session-takeover/central-2/CMakeFiles/a733-power-probe.dir/flags.make')
-    args=parser.parse_args();out=unique_directory(args.output.resolve())
+    args=parser.parse_args();out=new_directory(args.output.resolve())
     base_dir=args.baseline.resolve()
     base = json.loads((base_dir / 'build.json').read_text())
     assert sha(base_dir / 'image.elf') == base['image_sha256']

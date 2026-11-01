@@ -73,7 +73,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('output', type=Path)
     p.add_argument('--ffmpeg', required=True, type=Path)
-    a = p.parse_args(); a.output=unique_directory(a.output)
+    a = p.parse_args(); a.output=new_directory(a.output)
     stream, slice_nal, pixels, header_bits = construct()
     for name, data in [('input.h264', stream), ('slice.bin', slice_nal), ('expected.yuv', pixels)]:
         (a.output/name).write_bytes(data)

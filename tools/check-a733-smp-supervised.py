@@ -42,7 +42,7 @@ def prepare(image, manifest_path, admission_path, output, clang, lld):
     segments, build_address, build_id = image_parts(image)
     admission = {'reservation': secrets.randbits(64) or 1}
     admission_digest = secrets.token_bytes(32)
-    output = base.output_directory(output)
+    output = base.artifact_directory(output)
     for name in ('launch.S', 'launch.c', 'launch.ld'):
         source=ROOT/('platform/a733-smp-supervised' if name=='launch.c' else 'platform/a733-smp-observe')/name
         shutil.copy2(source, output / name)

@@ -260,7 +260,7 @@ def validate(image,session,admission,pcm):
 
 def prepare(image,session,admission,pcm,output,clang,lld,objcopy):
     (parts,address,identity,fields,locations),snapshots=validate(image,session,admission,pcm)
-    out=base.unique_directory(output.resolve())
+    out=base.new_directory(output.resolve())
     for name,path in [('launch.c',ROOT/'platform/a733-smp-supervised/launch.c'),
         ('launch.S',ROOT/'platform/a733-smp-observe/launch.S'),('launch.ld',ROOT/'platform/a733-smp-observe/launch.ld'),
         ('boot.h',ROOT/'platform/a733-smp-cached/boot.h')]:shutil.copy2(path,out/name)

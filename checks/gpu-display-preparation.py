@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+from harness import artifact_refused
 import struct
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
@@ -56,9 +57,8 @@ def main():
     launch=bundle/'launch.bin';before=launch.read_bytes();launch.write_bytes(before+b'x')
     refused(lambda:p.validate_bundle(bundle));launch.write_bytes(before);cases.append('launcher-tamper')
     marker=bundle/'preserved.txt';marker.write_bytes(b'previous evidence')
-    second=p.prepare(a.image,None,hpath,inputs,None,bundle,a.clang,a.lld,a.objcopy)
-    assert marker.read_bytes()==b'previous evidence' and second['image_sha256']==prepared['image_sha256']
-    cases.append('existing-output-preserved')
+    artifact_refused(lambda:p.prepare(a.image,None,hpath,inputs,None,bundle,a.clang,a.lld,a.objcopy),bundle)
+    cases.append('existing-output-refused-without-changes')
     p.save_json(out/'result.json',dict(passed=True,physical_access=False,cases=cases,image_sha256=p.sha(image)))
     print('PASS GPU/display preparation:',len(cases),'case groups')
 if __name__=='__main__':main()

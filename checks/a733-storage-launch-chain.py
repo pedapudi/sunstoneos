@@ -11,6 +11,7 @@ import argparse
 import importlib.util
 import os
 from pathlib import Path
+from harness import artifact_refused
 if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -54,10 +55,9 @@ def main():
     with api.ProtectedDirectory(capture) as store:
         actual,decoded,_=launch.storage_inputs(store)
         assert actual==raw and decoded['mode']==0 and decoded['first']==128
-    with api.ProtectedDirectory(capture,create=True) as nested:
-        assert nested.path.parent==capture and nested.path!=capture
-        assert (capture/'grant.bin').read_bytes()==raw
-        assert (nested.path.stat().st_mode & 0o777)==0o700
+    artifact_refused(lambda:api.ProtectedDirectory(capture,create=True),capture)
+    artifact_refused(lambda:launch.prepare_capture(source,None,None,None,capture),capture)
+    assert (capture.stat().st_mode & 0o777)==0o700
     link=out/'capture-link';link.symlink_to(capture,target_is_directory=True)
     try:api.ProtectedDirectory(link,create=True)
     except ValueError as error:assert 'symlink' in str(error)
@@ -66,7 +66,7 @@ def main():
     try:launch.prepare_capture(source,None,None,None,out/'write-capture')
     except ValueError as error:assert 'only a read-only grant' in str(error)
     else:raise AssertionError('Write grant admitted by read-only capture')
-    print('PASS storage launch: complete backup, commitment tables, direct read capture and output preservation')
+    print('PASS storage launch: complete backup, commitment tables, direct read capture and existing-output refusal')
 
 
 if __name__=='__main__':main()

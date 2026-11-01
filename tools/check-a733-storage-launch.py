@@ -137,7 +137,7 @@ def prepare(image,manifest,config_path,storage,output,clang,lld):
         raw,grant,storage_manifest=storage_inputs(store)
     config=json.loads(config_path.read_text());epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     session=session_bytes(raw,config,digest(image),epoch,generation,lease)
-    output=base.module('storage_launch_output',ROOT/'tools/host_evidence.py').unique_directory(output)
+    output=base.module('storage_launch_output',ROOT/'tools/host_evidence.py').new_directory(output)
     build_launcher(output,ROOT/'platform/a733-storage-maintenance/session.h',(clang,lld))
     shutil.copy2(image,output/'image.elf')
     save_json(output/'configuration.json',config)

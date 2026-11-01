@@ -2,6 +2,7 @@
 """New adc copied-output/session binding, durability and actual access routing."""
 import argparse,hashlib,importlib.util,json,sqlite3,struct,sys,time,types
 from pathlib import Path
+from harness import artifact_refused
 from unittest.mock import patch
 from contextlib import ExitStack,nullcontext
 ROOT=Path(__file__).resolve().parents[1]
@@ -93,6 +94,7 @@ def direct_inputs(out,image=None):
         prepared=prep.prepare(image,None,inputs,template,out/'prepared',CLANG,LLD)
         assert json.loads((out/'prepared'/'image-input-manifest.json').read_bytes())=={}
         assert len(prepared['entry_evidence'])==4
+        artifact_refused(lambda:prep.prepare(image,None,inputs,template,out/'prepared',CLANG,LLD),out/'prepared')
         for name in ('launch.c','launch.S','launch.ld','boot.h','launcher-build.log','launcher-commands.json','image-input-manifest.json'):
             archived=out/'prepared'/name
             if archived.exists():
@@ -110,7 +112,7 @@ def direct_inputs(out,image=None):
     (out/'direct-input-results.json').write_text(json.dumps({'status':'PASS','physical_access':False,
         'cases':['ADC-direct-inputs-without-schema-or-review','remote-writer-refusal','supply-mismatch-refusal',
                  'unsupported-clock-refusal','LRADC-direct-electrical-rating','unsafe-idle-overrange-refusal','archive-mutation-and-removal-accepted','uploaded-session-mutation-refused'],
-        'packaged_without_manifest':packaged},indent=2)+'\n')
+        'packaged_without_manifest':packaged,'existing_output_refused_without_changes':packaged},indent=2)+'\n')
     print('PASS: direct ADC/LRADC inputs retain ownership, supply, clock and overrange checks')
 
 def run(bundle,frame_path,out,routing_only=False):

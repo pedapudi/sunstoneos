@@ -4,13 +4,13 @@
 Run in the pinned compiler Python environment. This creates no compiled NBG.
 """
 from pathlib import Path
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 import argparse
 import numpy as np
 import onnx
 from onnx import helper as h,numpy_helper as n,TensorProto as T
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('output',type=Path)
-p=unique_directory(parser.parse_args().output)
+p=new_directory(parser.parse_args().output)
 heads,time=4,128
 x=((np.arange(heads*time*(2*time-1),dtype=np.int32)*37)%251-125).astype(np.float32).reshape(heads,time,2*time-1)/16+np.float32(2**-15)
 # Pad, reshape, discard the first row, reshape back and crop to time steps.
