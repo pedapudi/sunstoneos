@@ -119,6 +119,9 @@ enum {
     SUNSTONE_CRUMB_GPU_THERMAL = 0x0430,    /* value: result */
     SUNSTONE_CRUMB_GPU_PARKED = 0x0440,     /* value: result */
     SUNSTONE_CRUMB_RETURN_POWER_DOWN = 0x0502, /* value: core */
+    SUNSTONE_CRUMB_PROBE_BEGIN = 0x0801,
+    SUNSTONE_CRUMB_PROBE_PROGRESS = 0x0802,
+    SUNSTONE_CRUMB_PROBE_CLEAN = 0x0803,
     SUNSTONE_CRUMB_RETURN_ROM = 0x0503,     /* value: WDT0 mode after disarm */
 };
 

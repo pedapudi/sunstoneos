@@ -7,7 +7,7 @@
 #define A733_DP_PAD_BASE UINT32_C(0x05760000)
 #define A733_DP_TV_BASE UINT32_C(0x05731000)
 #define A733_DP_TOP_BASE UINT32_C(0x05510000)
-/* Closed profile: four DP-only lanes, 1.62Gb/s, RGB888 720p60, one immutable
+/* Closed profile: four DP-only lanes, 5.4Gb/s, RGB888 720p60, one immutable
  * DE1 RGB565 surface. Source-dependent physical admission belongs to native
  * construction. Callback success is exactly1; failure permanently retains. */
 enum a733_dp_error { A733_DP_OK,A733_DP_ARGUMENT,A733_DP_AUTHORITY,

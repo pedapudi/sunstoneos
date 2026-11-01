@@ -1,4 +1,7 @@
 #include "boot.h"
+#ifdef SUNSTONE_BOARD_PROBE
+#include "sunstone_probe.h"
+#endif
 #include "a733_el3_security.h"
 #include "a733_el3_mbus.h"
 
@@ -253,17 +256,30 @@ static int restore_interrupts(void)
            mmio_read(GICD_BASE) == restored_ctlr && counter() < deadline;
 }
 
+#ifdef SUNSTONE_BOARD_PROBE
+__attribute__((section(".text.probe_irq_restore"))) uint64_t sunstone_probe_restore_interrupts(void)
+{
+    __asm__ volatile("msr cntps_ctl_el1,xzr\n msr cntp_ctl_el0,xzr\n msr cntv_ctl_el0,xzr\n isb":::"memory");
+    return saved.ready && restore_interrupts() ? SUNSTONE_PROBE_READY : 0;
+}
+#endif
+
 static _Noreturn void finish(unsigned status)
 {
     __asm__ volatile("msr daifset, #0xf\n msr cntps_ctl_el1, xzr\n"
                      "msr cntp_ctl_el0, xzr\n isb" ::: "memory");
     RESULT->end_counter = counter();
+#ifndef SUNSTONE_BOARD_PROBE
     if (saved.ready && !restore_interrupts()) {
         // ROM return is permitted, but interrupt ownership is retained. The
         // replaced status, which can itself report a failure, stays visible.
+#ifdef SUNSTONE_BOARD_PROBE
+        sunstone_probe_fault(6,0,0,0);
+#endif
         RESULT->replaced_status = status;
         status = 6;
     }
+    #endif
     RESULT->status = status;
     RESULT->stage = 5;
     __asm__ volatile("dsb sy" ::: "memory");
@@ -276,7 +292,11 @@ static _Noreturn void finish(unsigned status)
     argument = (uintptr_t)block;
     __asm__ volatile("hlt #0xf000" : "+r"(op) : "r"(argument) : "memory");
 #endif
+#ifdef SUNSTONE_BOARD_PROBE
+    sunstone_probe_return(status);
+#else
     monitor_reset();
+#endif
 }
 
 _Noreturn void monitor_exception(uint64_t operation, uint64_t status, uint64_t kind)
@@ -284,6 +304,10 @@ _Noreturn void monitor_exception(uint64_t operation, uint64_t status, uint64_t k
     uint64_t esr, elr, far;
     __asm__ volatile("mrs %0, esr_el3\n mrs %1, elr_el3\n mrs %2, far_el3"
                      : "=r"(esr), "=r"(elr), "=r"(far));
+#ifdef SUNSTONE_BOARD_PROBE
+    if(kind!=1 || (esr>>26)!=0x17 || operation!=0x733 || status==0xffffffffu)
+        sunstone_probe_fault(kind,esr,elr,far);
+#endif
     RESULT->esr = esr;
     RESULT->elr = elr;
     RESULT->far = far;

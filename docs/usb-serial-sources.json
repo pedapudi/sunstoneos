@@ -1,0 +1,135 @@
+{
+  "sources": [
+    {
+      "component": "TinyUSB CDC host",
+      "url": "https://github.com/hathach/tinyusb/blob/d668b0abb7219b9ce324fa88d46604bb9e869973/src/class/cdc/cdc_host.c",
+      "revision": "d668b0abb7219b9ce324fa88d46604bb9e869973",
+      "sha256": "07a8843a16083fcadc4197eccad6a59d8fea7c6c2e88ec9d75947a1268516dd2",
+      "license": "MIT",
+      "use": "Runtime enumeration, bridge baud controls and protocol dispatch; generated RX ownership adaptation preserves upstream license.",
+      "execution_location": "A733 CPU under FreeRTOS",
+      "cache_path": "tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973/src/class/cdc/cdc_host.c",
+      "related_files": {
+        "LICENSE": "b01185698f530f4f61b28f42d5a4d6bbe7834bde6a63f00773235628a7bdce22",
+        "src/class/cdc/serial/cp210x.h": "3d39b34f9d05563dccc6055ba7ddd77d7d079d15d1cd9cc6ca97b940b13a8f3f",
+        "src/class/cdc/serial/ch34x.h": "0262df0cc7718b604dbb6178814901f0d953a59a0b15ccb321ba8ac8dfdcc43d",
+        "src/class/cdc/serial/ftdi_sio.h": "49fb7a9a43017eefe0efdb66367425b8b154be0dcc17f6851d05b2e03e962133",
+        "src/class/cdc/serial/pl2303.h": "69adac9c92d425b851b6e25c9bf64e26f441c5d4d13a2300beca415cfd71a6ce"
+      }
+    },
+    {
+      "component": "Linux cp210x",
+      "url": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/serial/cp210x.c",
+      "revision": "v6.12",
+      "sha256": "b377d87d64b77686e8fe70f6fd054a7bbe2780e219e522dcfd0200d330ed2314",
+      "license": "GPL-2.0",
+      "use": "Reference for wire protocols; source is not compiled or copied into SunstoneOS.",
+      "execution_location": "Host reference only",
+      "cache_path": "usb-serial-linux-v6.12/cp210x.c"
+    },
+    {
+      "component": "Linux pl2303",
+      "url": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/serial/pl2303.c",
+      "revision": "v6.12",
+      "sha256": "0abe88e090f97a85938f8f04ae249d6ea1bc2161c14983c175c49706336c1b5c",
+      "license": "GPL-2.0",
+      "use": "Reference for wire protocols; source is not compiled or copied into SunstoneOS.",
+      "execution_location": "Host reference only",
+      "cache_path": "usb-serial-linux-v6.12/pl2303.c"
+    },
+    {
+      "component": "Linux ch341",
+      "url": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/serial/ch341.c",
+      "revision": "v6.12",
+      "sha256": "b928af8940e9e8e2f757bbdc0eebcaa74c71a8c30eb20e10d6b0e2bb9114f31c",
+      "license": "GPL-2.0",
+      "use": "Reference for wire protocols; source is not compiled or copied into SunstoneOS.",
+      "execution_location": "Host reference only",
+      "cache_path": "usb-serial-linux-v6.12/ch341.c"
+    },
+    {
+      "component": "WCH CH341",
+      "url": "https://raw.githubusercontent.com/WCHSoftGroup/ch341ser_linux/72f9aa45cc01b7b1ed928523c1192c6c67a3dd83/driver/ch341.c",
+      "revision": "72f9aa45cc01b7b1ed928523c1192c6c67a3dd83",
+      "sha256": "c42cba1341886de8717bf39a535e2fe97cddfee91698a4b558b938c510fa68da",
+      "license": "GPL-2.0-or-later",
+      "use": "Reference for automatic RTS/CTS register address and values; source is not compiled or copied.",
+      "execution_location": "Host reference only",
+      "cache_path": "usb-serial-linux-v6.12/wch-ch341.c"
+    },
+    {
+      "component": "RPLIDAR CP2102 descriptor recording",
+      "url": "https://raw.githubusercontent.com/wiki/EVictorson/tormund/udev-rules.md",
+      "revision": "wiki HEAD 77941d93f9dcf1ad19d5a4e57b21b9f1fc42489c; retrieved 2026-10-31",
+      "sha256": "054670b862049c1b32f9f10418e6b2b374d967d4e1045682d9afeaac7ea9b43f",
+      "license": "No source-content license identified; only descriptor facts are tracked.",
+      "use": "Original operator lsusb recording associated with RPLIDAR udev setup.",
+      "execution_location": "Host fixture reference only",
+      "cache_path": "usb-serial-descriptors/rplidar-cp2102.md"
+    },
+    {
+      "component": "CH340 descriptor recording",
+      "url": "https://raw.githubusercontent.com/davidrihtarsic/davidrihtarsic.github.io/11abcb8e9535ac439935c74560a73962e3174020/Linux/Arduino.md",
+      "revision": "11abcb8e9535ac439935c74560a73962e3174020",
+      "sha256": "3942e41b1cdc02a21ab9797c18df4ddfa50482d728cfb584ae68556c68eab561",
+      "license": "No source-content license identified; only descriptor facts are tracked.",
+      "use": "Original operator Arduino tutorial lsusb recording.",
+      "execution_location": "Host fixture reference only",
+      "cache_path": "usb-serial-descriptors/ch340.md"
+    },
+    {
+      "component": "FT232R descriptor recording",
+      "url": "https://api.github.com/repos/hathach/tinyusb/issues/3192",
+      "revision": "issue3192 updated2026-06-04T15:48:20Z; retrieved2026-10-31",
+      "sha256": "25e1877d09a44464827591eb3da9fbcbd182100f8513de8f74f557e0da0b030e",
+      "license": "No source-content license identified; only descriptor facts are tracked.",
+      "use": "Original reporter computer descriptor recording in TinyUSB issue3192.",
+      "execution_location": "Host fixture reference only",
+      "cache_path": "usb-serial-descriptors/ft232r-issue.json"
+    }
+  ],
+  "descriptor_facts": [
+    {
+      "component": "RPLIDAR CP2102",
+      "vid": 4292,
+      "pid": 60000,
+      "interface": [
+        255,
+        0,
+        0
+      ],
+      "bulk_in": 129,
+      "bulk_out": 1,
+      "packet": 64
+    },
+    {
+      "component": "CH340",
+      "vid": 6790,
+      "pid": 29987,
+      "interface": [
+        255,
+        1,
+        2
+      ],
+      "bulk_in": 130,
+      "bulk_out": 2,
+      "packet": 32,
+      "interrupt_in": 129,
+      "interrupt_packet": 8
+    },
+    {
+      "component": "FT232R",
+      "vid": 1027,
+      "pid": 24577,
+      "bcdDevice": 1536,
+      "interface": [
+        255,
+        255,
+        255
+      ],
+      "bulk_in": 129,
+      "bulk_out": 2,
+      "packet": 64
+    }
+  ]
+}

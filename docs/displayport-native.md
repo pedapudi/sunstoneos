@@ -7,7 +7,7 @@ comes from negotiated USB Power Delivery messages, including HPD level and
 HPD events. Physical board revision, negotiation and visible output remain
 unqualified.
 
-The closed profile uses four DisplayPort lanes at 1.62 Gb/s, 1280×720 at
+The closed profile uses four DisplayPort lanes at 5.4 Gb/s, 1280×720 at
 60 Hz, and eight-bit RGB transmission. It accepts Type-C pin assignment C or E.
 A sink must advertise four lanes, the selected rate, and the complete 720p60
 timing through a checked EDID base block or its first CTA extension. Unsupported
@@ -25,7 +25,7 @@ released after a failure or successful output stop.
 
 The [component manifest](../apps/displayport/sources.json) pins the Linux source
 revision, source hashes and licenses. The Cadence adaptation retains the original
-16-bit analog-register accesses, cold bootstrap, 1.62 Gb/s table, signal-level
+16-bit analog-register accesses, cold bootstrap, 5.4 Gb/s table, signal-level
 tables and four-lane configuration. Every PHY readiness timeout becomes a
 terminal failure. The exact-board lane inversion is enabled on all four lanes;
 the lane map stays in identity order. The negotiated orientation controls the
@@ -131,3 +131,30 @@ can demonstrate device sequencing; it does not establish SMP scheduling,
 priority inheritance, contention tolerance or physical service timing. A
 preserved alternate ordering makes the power observer encounter a busy register
 lock and conservatively shut down. Neither ordering qualifies physical output.
+
+
+## The fixed profile uses the vendor maximum link rate
+
+The native default uses four lanes at 5.4 Gb/s, the maximum reported by the
+pinned Trilinear controller. A lower-capability sink is refused. The Cadence
+rate and signal-level paths select the corresponding existing vendor tables.
+Channel equalization uses training pattern 3 when the sink advertises it and
+pattern 2 otherwise, with the receiver programmed before the source.
+The [rate design](designs/displayport-top-rate.md) records transport values,
+source functions, cost bounds and qualification requirements.
+
+Host preparation requires an immutable `displayport_link_rate_mbps` marker
+of 5400 and `qualified_link_rate_mbps: 5400` in both analog and SERDES facts.
+Missing, lower-rate or noninteger authority is refused. Earlier 1.62 Gb/s
+records cannot authorize this image. The preparer checks the linked rate
+and revalidates the frozen bundle. A physical run also needs
+coordinator approval of the rate, independent AUX host-clock evidence and a
+reviewed watchdog return path.
+
+`checks/displayport-top-rate.py` compares the linked PHY with unchanged pinned
+vendor functions for both polarities and all ten legal swing/pre-emphasis
+pairs. Separate source calculations check timestamps, transfer-unit fields and
+the secondary-data window. Linked controller cases check source/receiver rate
+writes, training pattern 2 and 3, lower-rate sink refusal and retained stop.
+These are software models; physical link quality, visible pixels, unplug
+behavior, interrupts and drain remain unqualified.

@@ -81,6 +81,7 @@
   },
   "manual": "A733 User Manual V1.00 sections4.1(CCU),15.2(TV1),15.4(DP),18.2(SERDES); manual pin remains in sources.lock.json.",
   "source_selection": "bsp/drivers/drm/Makefile selects trilinear_dp14.o with CONFIG_AW_DRM_TRILINEAR_EDP14. The A733 manual DP register offsets independently match the adapter. The cached A733 kernel build configuration enables this option; that configuration is a comparison input, not a runtime dependency.",
-  "boundary": "Four-lane DP-only C/E,1.62Gb/s,26MHz raw oscillator,720p60 RGB888,one retained DE1 RGB565 frame. AUX host rate is an independently qualified cold-profile fact, not inferred from the Linux hardcoded200MHz FIXME. Physical negotiation/link/output and independent drain remain unqualified.",
-  "license_notice": "The complete GPL-2.0 text is preserved in docs/typec-pd-GPL-2.0.txt; SPDX and original copyright notices remain in adapted source files."
+  "boundary": "Four-lane DP-only C/E,5.4Gb/s,26MHz raw oscillator,720p60 RGB888,one retained DE1 RGB565 frame. AUX host rate is an independently qualified cold-profile fact, not inferred from the Linux hardcoded200MHz FIXME. Physical negotiation/link/output and independent drain remain unqualified.",
+  "license_notice": "The complete GPL-2.0 text is preserved in docs/typec-pd-GPL-2.0.txt; SPDX and original copyright notices remain in adapted source files.",
+  "top_link_rate": "The effective Trilinear support_max_rate callback returns BIT_RATE_5G4; Cadence DP-only configuration and dp_lv_table_5g4 provide the matching rate and signal levels. Native defaults to four lanes at5.4Gb/s, refuses lower-capability sinks, and selects TPS3 when advertised. Linked immutable rate marker and analog/SERDES qualified_link_rate_mbps5400 authority are required before host preparation."
 }

@@ -1,3 +1,6 @@
+#ifdef SUNSTONE_BOARD_PROBE
+#include "sunstone_probe.h"
+#endif
 #include "FreeRTOS.h"
 #include "platform.h"
 #include "boot.h"
@@ -49,6 +52,10 @@ void platform_hex(uint64_t value)
 
 _Noreturn void platform_exit(unsigned status)
 {
+#ifdef SUNSTONE_BOARD_PROBE
+    sunstone_probe_complete(status,sunstone_probe_marker.payload_bytes);
+#endif
+
     register uint64_t operation __asm__("x0") = 0x733;
     register uint64_t argument __asm__("x1") = status;
     RESULT->stage = 4;
@@ -59,6 +66,9 @@ _Noreturn void platform_exit(unsigned status)
 _Noreturn void platform_panic(const char *file, unsigned line)
 {
     __asm__ volatile("msr daifset, #0xf" ::: "memory");
+#ifdef SUNSTONE_BOARD_PROBE
+    sunstone_probe_fail(line,(uintptr_t)file);
+#endif
     platform_puts("FAIL ");
     platform_puts(file);
     platform_puts(":");
@@ -72,6 +82,7 @@ _Noreturn void platform_panic(const char *file, unsigned line)
 #include "task.h"
 #include "a733_fault.h"
 #include "a733_range.h"
+#ifndef SUNSTONE_BOARD_PROBE
 _Noreturn void platform_exception(void)
 {
     /* The shared fault record (docs/fault-capture.md), written as one line.
@@ -105,6 +116,7 @@ _Noreturn void platform_exception(void)
     platform_exit(1);
 }
 
+#endif
 void platform_init(void)
 {
     // Identity-map peripheral space as Device-nGnRnE, and the 128 MiB RAM

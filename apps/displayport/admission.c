@@ -1,12 +1,14 @@
 #include "a733_displayport_application.h"
 #include "boot-record.h"
 #include "a733_device_memory_layout.h"
+#include "../../drivers/display/a733_dp_internal.h"
 #define a733_smp_contract_valid board_contract_unused
 #include "../board/admission.c"
 #undef a733_smp_contract_valid
 _Static_assert(A733_BOARD_SUPERVISED_SECONDS==A733_DISPLAYPORT_SESSION_SECONDS,
     "DP and board providers must use the same session lifetime");
 /* Read from the linked ELF by host preparation. */
+__attribute__((used,retain)) const uint64_t displayport_link_rate_mbps=A733_DP_LINK_RATE_MBPS;
 __attribute__((used,retain)) const uint64_t displayport_geometry[13]={
     A733_DISPLAYPORT_SESSION_MAGIC,1,sizeof(struct a733_displayport_session),
     sizeof(struct displayport_boot_contract),A733_BOARD_SESSION_ADDRESS,

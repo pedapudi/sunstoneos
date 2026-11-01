@@ -6,7 +6,8 @@ operation per boot. Copy and general scaling may also convert between 32-bit
 RGB channel orders. This document assumes familiarity with DMA,
 IOMMU translation and the supervised A733 launch contract. Software
 implementation does not establish physical pixel correctness or safe resource
-reclamation. Board testing is blocked while physical recovery is unavailable.
+reclamation. A physical test requires a reviewed watchdog return path and current
+coordinator admission.
 
 The caller supplies width, height, byte stride, operation, destination rectangle,
 source origin and fill color in the sealed 904-byte session. Eight further
@@ -349,3 +350,26 @@ focused checks. None executes a G2D job or establishes physical pixels.
 The earlier scaling and blending register checks and host capture checks pass
 with the changed code. Physical pixels, interpolation, X-channel handling,
 alpha rounding, DMA visibility and performance remain unqualified.
+
+
+## CPU command construction rejects overlapping inputs
+
+The command builder rejects an overlapping session or a wrapping CPU span
+before reading geometry or clearing the command page. The display-ring helpers
+also reject wrapping CPU command spans before clearing or validating pages.
+The [command-span design](designs/display-command-admission.md) gives the
+admission and cost bounds.
+
+`checks/display-command-admission.py` passes under address and undefined-behavior
+sanitizers. It reproduces the prior G2D overlap and ring-builder wrap failures,
+then checks refusal without writes, adjacent sessions, unchanged bytes for 132
+operation/format combinations and two- to four-slot ring validation.
+Freestanding AArch64 compilation and the pinned G2D and DE register comparisons
+pass. Evidence is under `~/.cache/sunstoneos/build/display-g2d-1031/`:
+`command-admission-2/`, `g2d-reference/` and `de-reference/`.
+
+With Clang 21 at `-O2`, the G2D builder grows from 1752 to 1884 text bytes.
+The ring builder grows from 512 to 532 bytes, and its validator from 700 to
+708 bytes. The extra instructions check CPU spans at admission; accepted calls
+add no copies, allocations, barriers or register accesses. Physical output,
+interrupt delivery and retirement remain unqualified.

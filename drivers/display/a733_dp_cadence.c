@@ -2053,13 +2053,13 @@ static void construct(struct a733_dp *d,struct sunxi_cadence_combophy *c,struct 
 {
  memset(c,0,sizeof(*c));p->top_combo_reg=0x06c06000;
  c->dp=d;c->sunxi_cphy=p;c->top_reg=0x06c01000;c->phy_reg=0x06c80000;
- c->orientation=d->config.polarity;c->link_rate=1620;
+ c->orientation=d->config.polarity;c->link_rate=A733_DP_LINK_RATE_MBPS;
  for(unsigned i=0;i<4;i++){c->lane_remap[i]=i;c->typec_remap[i]=i;c->lane_invert[i]=1;}
 }
 int a733_dp_cadence_prepare(struct a733_dp *d)
 {
  struct sunxi_cadence_phy p;struct sunxi_cadence_combophy c,*combo0=&c;
- struct phy_configure_opts_dp o={.set_lanes=1,.set_rate=1,.lanes=4,.link_rate=1620};
+ struct phy_configure_opts_dp o={.set_lanes=1,.set_rate=1,.lanes=4,.link_rate=A733_DP_LINK_RATE_MBPS};
  construct(d,&c,&p);
  /* Exact-board lane_invert1111, identity remap. Orientation is handled by
   * PHY0_TYPEC_CONN_DIR in reset, not by reversing the remap as well. */
@@ -2083,7 +2083,7 @@ int a733_dp_cadence_prepare(struct a733_dp *d)
 int a733_dp_cadence_levels(struct a733_dp *d,const uint8_t training[4])
 {
  struct sunxi_cadence_phy p;struct sunxi_cadence_combophy c;
- struct phy_configure_opts_dp o={.set_voltages=1,.lanes=4,.link_rate=1620};
+ struct phy_configure_opts_dp o={.set_voltages=1,.lanes=4,.link_rate=A733_DP_LINK_RATE_MBPS};
  construct(d,&c,&p);
  for(unsigned i=0;i<4;i++){
   o.voltage[i]=training[i]&3;o.pre[i]=(training[i]>>3)&3;
