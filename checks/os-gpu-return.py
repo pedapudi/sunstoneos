@@ -40,7 +40,7 @@ with a.image.open('rb') as f:
                         for d in die.get_DIE_from_attribute('DW_AT_type').iter_children() if d.tag=='DW_TAG_member'}
 epoch,generation=struct.unpack_from('<2Q',a.session.read_bytes(),24) if a.session else (123,456)
 rows=[]
-cases=('opened','thermal-parked','borrowed-job','no-completed-job','sequence-mismatch','unconsumed-record',
+cases=('opened','thermal-parked','borrowed-job','no-completed-job','thermal-parked-no-jobs','sequence-mismatch','unconsumed-record',
              'stop-proof-missing','close-refused','park-failed','park-timeout','reply-epoch','queue-not-empty',
              'late-finalizer','recognition-cutoff','finalizing-window','finalizing-expired','begin-expired')
 if a.case:
@@ -60,13 +60,15 @@ for case in cases:
     component=field(field(gpu,'gpu_private','session'),'a733_gpu_queue','component')
     power=field(gpu,'gpu_private','power');board=image.address('board')
     session=field(board,'board_application','session')
-    sf(gpu,'gpu_private','started',1);sf(gpu,'gpu_private','opened',case!='thermal-parked')
-    sf(gpu,'gpu_private','parked',case=='thermal-parked');sf(gpu,'gpu_private','epoch',3,8)
+    zero_jobs=case in ('no-completed-job','thermal-parked-no-jobs')
+    parked=case in ('thermal-parked','thermal-parked-no-jobs')
+    sf(gpu,'gpu_private','started',1);sf(gpu,'gpu_private','opened',not parked)
+    sf(gpu,'gpu_private','parked',parked);sf(gpu,'gpu_private','epoch',3,8)
     sf(gpu,'gpu_private','component',component,8)
     sf(component,'pvr_compute_queue','owed',case=='borrowed-job')
     sf(component,'pvr_compute_queue','client_owed',case=='unconsumed-record')
     sf(service,'pvr_gpu_service','worker',0x4567,8)
-    sf(component,'pvr_compute_queue','sequence',7)
+    sf(component,'pvr_compute_queue','sequence',0 if zero_jobs else 7)
     sf(component,'pvr_compute_queue','slot_state',enums['PVR_COMPUTE_QUEUE_CLOSED'])
     put(image.address('os_gpu_client_task','/apps/os/gpu.c'),0x1234,8)
     sf(board,'board_application','live_until',60000000,8)
@@ -125,13 +127,13 @@ for case in cases:
         rows.append({'name':case,'passed':True,'terminal_detail':state['exit']})
         continue
     if case=='late-finalizer':state['time']=55000000
-    result=invoke('os_gpu_queue_return',0 if case=='no-completed-job' else 6 if case=='sequence-mismatch' else 7)
-    success=case in ('opened','thermal-parked','begin-expired')
+    result=invoke('os_gpu_retire') if zero_jobs else invoke('os_gpu_queue_return',6 if case=='sequence-mismatch' else 7)
+    success=case in ('opened','thermal-parked','begin-expired','no-completed-job','thermal-parked-no-jobs')
     assert bool(result)==success and state['suspended']==int(success),(case,result,state)
     assert bool(invoke('os_gpu_return_ready'))==success
     if success:
         raw=bytes(u.mem_read(image.address('os_gpu_return_report'),64))
-        assert struct.unpack('<8Q',raw)==(0x3152475033333741,1,64,epoch,generation,7,63,960000)
+        assert struct.unpack('<8Q',raw)==(0x3152475033333741,1,64,epoch,generation,0 if zero_jobs else 7,63,960000)
         (a.output/(case+'-gpu-report.bin')).write_bytes(raw)
         text=b'MODEL ONLY GPU application output\n';u.mem_write(0x80001000,text)
         state['time']=57000000 if case=='begin-expired' else 56000000
@@ -144,7 +146,7 @@ for case in cases:
         assert state['exit']==(0x738 if case=='begin-expired' else None),(case,state)
         assert bool(invoke('os_cpu_return_requested'))==(case!='begin-expired')
         (a.output/(case+'-result.bin')).write_bytes(u.mem_read(result_address,56))
-        assert state['requests']==([] if case=='thermal-parked' else [2])+[enums['PVR_GPU_SERVICE_PARK']]
+        assert state['requests']==([] if parked else [2])+[enums['PVR_GPU_SERVICE_PARK']]
     else:assert get(image.address('os_gpu_return_report'),8)==0
     rows.append({'name':case,'passed':True,'requests':state['requests'],'worker_suspensions':state['suspended']})
 save(a.output/'results.json',{'physical_access':False,'cases':rows,'image_sha256':identity})

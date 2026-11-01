@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Actual constructor refusal exits and untouched-return proof over modeled setup APIs.
+"""Run constructor refusal and cold-service return proofs over modeled setup APIs.
 
-Constructor APIs before the selected refusal return modeled RAM metadata. The
-linked startup branch, refusal marker, worker suspension, all receipt predicates
-and copied record execute. No GPU/MMIO effects, scheduling or power qualification.
+The linked constructor and return branches, worker suspension, receipt predicates
+and copied report execute. Cold cases include no CREATE and a collected refused
+CREATE. Setup APIs, worker clock samples and queue contents are modeled RAM
+metadata. No GPU/MMIO effects, scheduling or power qualification are established.
 """
 import argparse, hashlib, importlib.util, json, struct, re
 from pathlib import Path
@@ -37,6 +38,12 @@ steps={3:'pvr_compute_queue_client_bind',4:'a733_gpu_platform_native_init',5:'a7
 cases=[('constructor-'+str(n),n,None) for n in (1,2,3,4,5,6,7,9,10,11,12,13)]
 cases += [(name,13,name) for name in ('started','opened','ticket','epoch','owed','runtime-fault','not-suspended',
  'power-token','pmic-request','rail','row-request','row-state','row-count','backend-deadline','service-epoch','reply-pending','context-generation','create-ticket','create-pending','unconsumed-record')]
+cases += [(name,0,None) for name in ('cold-no-create','cold-refused-create','cold-refused-create-pending2','cold-refused-create-failed','cold-ready-no-create','cold-ready-refused-create')]
+cases += [('cold-'+name,0,name) for name in ('not-started','opened','ticket','epoch','owed','runtime-fault',
+ 'worker-running','power-token','pmic-request','rail','row-request','row-state','row-count','backend-deadline',
+ 'service-epoch','published-epoch','service-owner','component-owner','backend-clock','reply-pending',
+ 'queued-request','queued-reply','queued-record','context-generation','create-ticket','create-pending',
+ 'unconsumed-record','refused-create-live-ticket','lost','service-error','backend-error','client-task','close-ticket')]
 if a.case:
  assert set(a.case)<={x[0] for x in cases}
  cases=[x for x in cases if x[0] in a.case]
@@ -61,7 +68,7 @@ for name,fail_step,mutation in cases:
   previous=im.address('a733_fault_previous');sf(previous,'a733_fault_report','header',0x31544c46|(1<<32),8)
   slot=field(previous,'a733_fault_report','slot');sf(slot,'a733_fault_record','info',int(re.search(r'#define A733_FAULT_KIND_EXIT (\d+)',(ROOT/'include/a733_fault.h').read_text())[1]),8)
   sf(slot,'a733_fault_record','status',5,8);sf(slot,'a733_fault_record','detail',0x4750554c,8)
- state={'time_us':1000000,'scheduler':1,'suspended':False,'setup':[],'getter':0,'queue_reads':0}
+ state={'time_us':1000000,'scheduler':1,'suspended':False,'worker_ready':False,'worker_state':None,'setup':[],'getter':0,'queue_reads':0}
  hooks={im.address(n):n for n in [*steps.values(),'xTaskGetSchedulerState','os_session_admitted','xTaskGetCurrentTaskHandle','a733_smp_counter','vTaskSuspend','eTaskGetState','uxQueueMessagesWaiting','os_application_activity_generation']}
  def ret(value=0):u.reg_write(UC_ARM64_REG_X0,value);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
  def hook(cpu,address,size,unused):
@@ -73,9 +80,12 @@ for name,fail_step,mutation in cases:
   elif n=='xTaskGetCurrentTaskHandle':ret(0x1234)
   elif n=='a733_smp_counter':ret(state['time_us']*24)
   elif n=='vTaskSuspend':
-   assert state['scheduler']==1 and u.reg_read(UC_ARM64_REG_X0)==0x4567;state['suspended']=True;ret()
-  elif n=='eTaskGetState':state['getter']+=1;ret(enums['eSuspended'] if state['suspended'] else enums['eReady'])
-  elif n=='uxQueueMessagesWaiting':state['queue_reads']+=1;ret(0)
+   assert state['scheduler']==(2 if fail_step==0 else 1) and u.reg_read(UC_ARM64_REG_X0)==0x4567;state['suspended']=True;ret()
+  elif n=='eTaskGetState':state['getter']+=1;ret(enums['eSuspended'] if state['suspended'] else enums[state['worker_state']] if state['worker_state'] else enums['eBlocked'] if fail_step==0 and not state['worker_ready'] else enums['eReady'])
+  elif n=='uxQueueMessagesWaiting':
+   state['queue_reads']+=1;queue=u.reg_read(UC_ARM64_REG_X0)
+   bad={'queued-request':0x8200,'queued-reply':0x8300,'queued-record':0x8100}.get(mutation)
+   ret(queue==bad)
   else:
    stage=next(k for k,v in steps.items() if v==n);state['setup'].append(stage)
    if stage==fail_step:ret(0 if stage!=6 else -1);return
@@ -88,8 +98,10 @@ for name,fail_step,mutation in cases:
     for key,val in [('service',service),('power',power),('memory',field(field(gpu,'gpu_private','firmware'),'a733_gpu_reserved','memory'))]:sf(backend,'a733_gpu_backend',key,val,8)
    elif stage==12:
     sf(service,'pvr_gpu_service','initialized',1);sf(service,'pvr_gpu_service','worker',0x4567,8);sf(service,'pvr_gpu_service','requests',0x8200,8)
+    sf(service,'pvr_gpu_service','owner',client_count);sf(service,'pvr_gpu_service','irq_masked',1)
     clients=field(service,'pvr_gpu_service','clients')
     for i in range(client_count):sf(clients+i*client_size,'pvr_gpu_service_client','replies',0x8300+i*16,8)
+   elif stage==13:sf(field(service,'pvr_gpu_service','clients'),'pvr_gpu_service_client','task',0x1234,8)
    ret(field(field(gpu,'gpu_private','firmware'),'a733_gpu_reserved','config') if stage==9 else component if stage==10 else enums['A733_PMIC_READY'] if stage==6 else 1)
  u.hook_add(UC_HOOK_CODE,hook)
  def call(fn,arg=0,arg1=0):
@@ -104,9 +116,32 @@ for name,fail_step,mutation in cases:
  assert get(field(gpu,'gpu_private','constructor_refusal'))==fail_step,(name,state,get(field(gpu,'gpu_private','constructor_refusal')))
  assert call('os_gpu_queue_start',6)==0 # immutable reason, no second construction
  state['scheduler']=2
+ if fail_step==0:
+  # The COLD worker samples the counter before it blocks; no enable runs.
+  sampled=0 if name=='cold-ready-no-create' else state['time_us']
+  sf(backend,'a733_gpu_backend','last_now',sampled,8)
+  sf(service,'pvr_gpu_service','last_now',sampled,8)
+  state['worker_ready']=name.startswith('cold-ready-')
+  if 'refused-create' in name:
+   sf(component,'pvr_compute_queue','create_done',2)
+   sf(component,'pvr_compute_queue','create_pending',2 if name.endswith('pending2') else 1)
+   sf(field(service,'pvr_gpu_service','clients'),'pvr_gpu_service_client','next_ticket',1,8)
+   if name.endswith('failed'):sf(component,'pvr_compute_queue','phase',enums['PVR_COMPUTE_QUEUE_FAILED'])
  if mutation:
   direct={'started':'started','opened':'opened','ticket':'accepted_ticket','epoch':'epoch','runtime-fault':'failed'}
-  if mutation in direct:put(field(gpu,'gpu_private',direct[mutation]),1,8 if mutation in ('ticket','epoch') else 4)
+  if mutation=='not-started':sf(gpu,'gpu_private','started',0)
+  elif mutation in direct:put(field(gpu,'gpu_private',direct[mutation]),1,8 if mutation in ('ticket','epoch') else 4)
+  elif mutation=='worker-running':state['worker_state']='eRunning'
+  elif mutation=='lost':sf(component,'pvr_compute_queue','lost',1)
+  elif mutation=='service-error':sf(service,'pvr_gpu_service','error',1)
+  elif mutation=='backend-error':sf(backend,'a733_gpu_backend','error',1)
+  elif mutation=='client-task':sf(field(service,'pvr_gpu_service','clients'),'pvr_gpu_service_client','task',0x9999,8)
+  elif mutation=='close-ticket':sf(component,'pvr_compute_queue','close_ticket',1,8)
+  elif mutation=='published-epoch':sf(service,'pvr_gpu_service','published_epoch',1,8)
+  elif mutation=='service-owner':sf(service,'pvr_gpu_service','owner',0)
+  elif mutation=='component-owner':sf(component,'pvr_compute_queue','owner',0,8)
+  elif mutation=='backend-clock':sf(backend,'a733_gpu_backend','last_now',state['time_us']+1,8)
+  elif mutation=='refused-create-live-ticket':sf(component,'pvr_compute_queue','create_ticket',1,8)
   elif mutation=='not-suspended':state['suspended']=False
   elif mutation=='power-token':sf(power,'a733_gpu_platform','token',1,8)
   elif mutation=='pmic-request':sf(field(pmic,'a733_pmic_consumer','request'),'a733_pmic_request','id',1,8)
@@ -118,15 +153,18 @@ for name,fail_step,mutation in cases:
   elif mutation in ('owed','context-generation','create-ticket','create-pending','unconsumed-record'):
    member={'owed':'owed','context-generation':'generation','create-ticket':'create_ticket','create-pending':'create_pending','unconsumed-record':'client_owed'}[mutation]
    sf(component,'pvr_compute_queue',member,1,8 if member=='create_ticket' else 4)
- result=call('os_gpu_queue_return_untouched')
+ result=call('os_gpu_retire') if fail_step==0 else call('os_gpu_queue_return_untouched')
  assert bool(result) is (mutation is None),(name,result,state)
  if result:
   raw=bytes(u.mem_read(im.address('os_gpu_return_report'),64));decoded=decoder.decode(raw,epoch,generation,require,allow_untouched=True)
-  assert decoded=={'jobs':0,'gpu_untouched':True,'constructor_refusal':fail_step,'constructor_stage':decoder.CONSTRUCTOR_STAGES[fail_step],'qualification_passed':False}
+  expected={'jobs':0,'gpu_untouched':True,'qualification_passed':False}
+  expected.update({'device_never_opened':True} if fail_step==0 else {'constructor_refusal':fail_step,'constructor_stage':decoder.CONSTRUCTOR_STAGES[fail_step]})
+  assert decoded==expected
+  assert get(field(gpu,'gpu_private','constructor_refusal'))==fail_step
   refused(lambda:decoder.decode(raw,epoch,generation,require),'not admitted')
   assert call('os_gpu_return_ready')==1 and call('os_gpu_queue_return_untouched')==0
   (a.output/(name+'-report.bin')).write_bytes(raw)
-  text=b'MODEL ONLY CPU fallback after refused GPU construction\n';u.mem_write(0x80001000,text)
+  text=b'MODEL ONLY CPU return with GPU never opened\n';u.mem_write(0x80001000,text)
   result_address=im.address('ss_result_record')
   sf(result_address,'ss_result','magic',0x31544c5553455241,8)
   sf(result_address,'ss_result','status',1,8)
