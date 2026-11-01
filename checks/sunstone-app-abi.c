@@ -2,14 +2,11 @@
  * (checks/sunstone-app-abi.py). It grants the one input region from a file,
  * runs hello_compute_main, and writes the OS result record that ss_finish
  * produces. Device calls refuse; liveness is always 1. */
-#include "sunstone_app.h"
+#include "hello_compute-app.h"
 #include "sunstone_session.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-extern const struct ss_manifest hello_compute_manifest;
-void hello_compute_main(const struct ss_grant *);
 
 static struct ss_grant grant;
 static unsigned long progress;
@@ -19,8 +16,9 @@ const struct ss_grant *ss_grant(void) { return &grant; }
 int ss_live(void) { return 1; }
 void ss_progress(void) { ++progress; }
 int ss_throttled(void) { return 0; }
-int ss_capture(uint32_t sequence, uint32_t frames, void **pcm, size_t *bytes)
-{ (void)sequence; (void)frames; (void)pcm; (void)bytes; return -1; }
+int ss_clock_ready(void) { return 1; }
+int ss_capture(uint32_t sequence, void **pcm, size_t *bytes)
+{ (void)sequence; (void)pcm; (void)bytes; return -1; }
 int ss_host_recv(struct ss_host_request *request, uint32_t wait_us) { (void)request; (void)wait_us; return 0; }
 int ss_host_send(const struct ss_host_reply *reply) { (void)reply; return -1; }
 int ss_storage_read(uint64_t sector, uint8_t data[512]) { (void)sector; (void)data; return -1; }
@@ -37,7 +35,7 @@ _Noreturn void ss_finish(const void *result, size_t bytes)
     if (bytes > m->output_limit) ss_fail(0x100);
     static uint8_t record[sizeof(struct ss_result) + 65536];
     struct ss_result header = {SS_RESULT_MAGIC, SS_RESULT_VERSION, sizeof(struct ss_result) + m->output_limit,
-                               0, 0, 0, SS_RESULT_FINISHED, bytes};
+                               0, 0, SS_RESULT_FINISHED, bytes};
     memcpy(record, &header, sizeof(header));
     memcpy(record + sizeof(header), result, bytes);
     FILE *f = fopen(result_path, "wb");

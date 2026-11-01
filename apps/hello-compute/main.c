@@ -3,8 +3,7 @@
  * of its one input region and returns it with ss_finish. It uses no device.
  * Status: compiles against include/sunstone_app.h and runs on the host
  * model in checks/sunstone-app-abi.py; no board image links it yet. */
-#include "sunstone_app.h"
-#include "hello_compute-regions.h"
+#include "hello_compute-app.h"
 
 /* The result that ss_finish returns, little-endian. */
 struct hello_compute_result {

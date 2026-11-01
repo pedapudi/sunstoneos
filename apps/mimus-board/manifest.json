@@ -1,7 +1,7 @@
 {
   "name": "mimus",
   "devices": {"required": [], "optional": ["usb-storage", "usb-keyboard", "audio-i2s", "audio-headset", "gpu"]},
-  "cpu": {"privilege": "el0", "cluster": "a76", "workers": 7, "priority": 3, "stack_bytes": 131072, "heap_bytes": 4194304},
+  "cpu": {"cluster": "a76", "workers": 7, "priority": 3, "stack_bytes": 131072, "heap_bytes": 4194304},
   "regions": [
     {"name": "base_model", "kind": "input", "access": ["read", "gpu-read"], "address": "0x44000000",
      "bytes": 7501968, "sha256": "f73ccd024645387d2679eea97ae11d0c33f5e4be81b39a9430d1f5d285e8089d"},
@@ -14,9 +14,8 @@
     {"name": "gpu_output", "kind": "work", "access": ["read", "gpu-write"], "address": "0x46c00000",
      "bytes": "0x400000"}
   ],
-  "audio": {"rate_hz": 16000, "channels": 1, "bits": 16, "max_frames": 80000},
+  "audio": {"rate_hz": 16000, "channels": 1, "bits": 16, "min_frames": 16000, "max_frames": 80000},
   "deadlines": {"run_us": 0, "return_reserve_us": 5000000, "progress_window_us": 3000000},
   "output_limit": 16384,
-  "params_limit": 16,
   "host_ops": {"first": 0, "count": 5}
 }
