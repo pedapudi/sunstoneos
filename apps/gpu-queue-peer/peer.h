@@ -4,6 +4,8 @@
 extern const struct ss_manifest gpu_queue_peer_manifest;
 void gpu_queue_peer_main(const struct ss_grant *);
 void gpu_queue_peer_release(void);
+/* 1 once the peer owns an accepted queue slot; 0 on timeout. */
+int gpu_queue_peer_accepted(uint32_t wait_ticks);
 /* 1 after the peer verified and collected its job; 0 when the wait expires. */
 int gpu_queue_peer_wait(uint32_t wait_ticks);
 #define GPU_QUEUE_PEER_COMPOSITION(owner_manifest, shared_program) \

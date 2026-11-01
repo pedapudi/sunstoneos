@@ -6,9 +6,19 @@
 #define PEER_ELEMENTS 65u
 #define PEER_OFFSET 1024u
 #define PEER_WAIT_TICKS 4000u
-static atomic_uint released,completed;
+#define PEER_ACCEPT_TICKS 50u
+static atomic_uint released,accepted,completed;
 void gpu_queue_peer_release(void)
 {atomic_store_explicit(&released,1,memory_order_release);}
+int gpu_queue_peer_accepted(uint32_t ticks)
+{
+    TickType_t began=xTaskGetTickCount();
+    while (!atomic_load_explicit(&accepted,memory_order_acquire)) {
+        if (ss_live()<0 || xTaskGetTickCount()-began>=ticks) return 0;
+        ss_progress();vTaskDelay(1);
+    }
+    return 1;
+}
 int gpu_queue_peer_wait(uint32_t ticks)
 {
     TickType_t began=xTaskGetTickCount();
@@ -42,10 +52,11 @@ void gpu_queue_peer_main(const struct ss_grant *grant)
     TickType_t began=xTaskGetTickCount();
     int submitted;
     while ((submitted=gpu_queue_submit(c,&job))==GPU_QUEUE_PARKED) {
-        if (ss_live()<0 || xTaskGetTickCount()-began>=PEER_WAIT_TICKS) ss_fail(0x764);
+        if (ss_live()<0 || xTaskGetTickCount()-began>=PEER_ACCEPT_TICKS) ss_fail(0x764);
         ss_progress();vTaskDelay(1);
     }
     if (submitted!=GPU_QUEUE_OK) ss_fail(0x765);
+    atomic_store_explicit(&accepted,1,memory_order_release);
     struct gpu_queue_record record;
     if (gpu_queue_wait(c,&record,PEER_WAIT_TICKS)!=GPU_QUEUE_OK ||
         record.sequence!=1 || record.result!=GPU_QUEUE_OK) ss_fail(0x766);
