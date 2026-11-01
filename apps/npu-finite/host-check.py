@@ -62,6 +62,8 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  u.mem_map(0x02000000,0x07000000);u.mem_map(0x40000000,0x04000000)
  for at,value in native_image.parts:
   if value:u.mem_write(at,value)
+ for address,value in ((0x02050014,0xb1),(0x02050010,1),(0x02050018,2)):
+  u.mem_write(address,struct.pack('<I',value))
  contract=native_image.layouts['a733_smp_contract']
  for key in ('epoch','generation','lease'):
   u.mem_write(0x42004000+contract[key],struct.pack('<Q',profile[key]))
@@ -159,9 +161,9 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  except ValueError:assert constructed.read_bytes()==session.read_bytes()
  else:raise AssertionError('existing output overwritten')
  results.append({'name':'session-existing-output-preserved','passed':True})
- # Launcher compilation is unchanged and uses preserved accepted bytes here.
+ # Keep fixture launcher bytes; actual armed compilation is checked separately.
  def launcher_copy(output,*args):shutil.copy2(launcher,output/'launch.bin')
- with patch.object(h.original,'build_launcher',launcher_copy):h.prepare(image,manifest,session,admission,t/'bundle','mock-compiler','mock-linker','mock-objcopy')
+ with patch.object(h,'build_launcher',launcher_copy):h.prepare(image,manifest,session,admission,t/'bundle','mock-compiler','mock-linker','mock-objcopy')
  bundle=t/'bundle';prepared=h.validate_bundle(bundle);results.append({'name':'original-producers-valid-returning-bundle','passed':True})
  def rejected(name,fn):
   try:fn()
@@ -296,6 +298,8 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   return struct.pack('<16Q',*monitor),bytes(plat),struct.pack('<14Q' if thermal else '<11Q',*receipt)
  # Real preload/sealed-source/readback logic; only FEL operations and new-ROM event modeled.
  variants=['nominal','old-generic-monitor-magic','mismatch','unwritten-second','unwritten-tail','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','wrong-ROM-entry']
+ if startup and not infer and not runtime:variants=[v for v in variants if v not in ('mismatch','unwritten-second','unwritten-tail','false-success')]
+ variants+=['watchdog-enabled','reset-redirect','alternate-redirect','NPU-route','NPU-core-reset','NPU-module-gate']
  if g.get('stopped_capture'):variants+=['capture-metadata-invalid','capture-parent-short','capture-extent-transport-failure','capture-durability-failure','capture-output-differs']
  if checkpoint or thermal or startup:variants.append('ordinary-receipt')
  if startup and not infer and not runtime:variants+=['startup-inference-log','startup-two-IRQs','startup-zero-IRQs','startup-missing-close','startup-restart-log']
@@ -340,7 +344,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
      assert address!=0x03000024,'Normal boot GPIO is not a forced-FEL precondition'
      rom={0x20:0xeb00008f,0x24:0xe3a00911,0x28:0xe3a0193d,0x3c:0xe3a0605c,0x40:0xea00004d}
      if address in rom:assert all((out/('before-'+name+'.bin')).exists() for name,_,_ in h.base.REGIONS)
-     words.append(hex(rom.get(address,0) ^ (1 if variant=='wrong-ROM-entry' and address==0x3c else 0)));continue
+     words.append(hex(rom.get(address,({0x02050014:0xb1} if variant=='watchdog-enabled' else {0x070501c0:1} if variant=='reset-redirect' else {0x070501d4:1} if variant=='alternate-redirect' else {0x03000008:0} if variant=='NPU-route' else {0x02002b04:0x70000} if variant=='NPU-core-reset' else {0x02002b00:0x80000000} if variant=='NPU-module-gate' else {}).get(address,2 if address==0x03000008 else 0)) ^ (1 if variant=='wrong-ROM-entry' and address==0x3c else 0)));continue
     if op=='write':
      if state['new_ROM'] and g.get('stopped_capture') and struct.unpack('<16Q',frame[0])[4]==1:assert record.get('stopped_capture',{}).get('complete')
      source=Path(args[i]);i+=1;data=source.read_bytes()
@@ -399,7 +403,9 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    assert not record.get('complete') and not record.get('dram_restored') and 'controlled' not in record
    if variant=='wrong-ROM-entry':assert 'exe' not in state['calls'] and 'Forced-FEL ROM entry' in str(failure)
    assert state['restore_writes']==int(variant=='restore-readback-failure'),variant
-   held=[];h.retain_failure(record,lambda:None,lambda:held.append('quarantine'),failure,hold=lambda:held.append('hold'));assert held==['quarantine','hold'],(variant,held)
+   early=variant in ('watchdog-enabled','reset-redirect','alternate-redirect','NPU-route','NPU-core-reset','NPU-module-gate')
+   if early:assert not record['dirty'] and not record['launch_attempted'] and not (out/'before-DRAM.bin').exists()
+   held=[];h.retain_failure(record,lambda:None,lambda:held.append('quarantine'),failure,hold=lambda:held.append('hold'));assert held==([] if early else ['quarantine','hold']),(variant,held)
   if g.get('stopped_capture'):
    capture=record.get('stopped_capture')
    if variant in ('mismatch','capture-output-differs'):

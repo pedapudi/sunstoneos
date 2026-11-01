@@ -19,11 +19,13 @@ static unsigned checkpoint_mbus_restore(void)
 }
 #define a733_el3_mbus_restore checkpoint_mbus_restore
 #endif
+#include "sunstone_crumb.h"
+#include "watchdog.h"
 #define sd_single_core_exception npu_finite_retained_exception
 #ifdef SUNSTONE_NPU_FINITE_THERMAL
 #define sd_single_core_monitor_init npu_finite_base_monitor_init
 #endif
-#include "../storage-read-single-core/monitor.c"
+#include SUNSTONE_NPU_BASE_MONITOR
 #ifdef SUNSTONE_NPU_ENTRY_CHECKPOINT
 #undef a733_el3_mbus_restore
 #endif
@@ -121,8 +123,25 @@ static void return_sram_to_cpu(void)
     if(!(value&SRAM_TO_CPU))a733_smp_stop(7,SRAM_ROUTING);
 }
 #endif
-_Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint64_t kind)
+static void record_exception(uint64_t operation,uint64_t kind,uint64_t slot)
 {
+    uint64_t esr,elr,far,mpidr;
+    volatile uint32_t *rtc=(void *)(uintptr_t)SUNSTONE_CRUMB_RTC;
+    if(rtc[SUNSTONE_CRUMB_FAULT/4])return;
+    __asm__ volatile("mrs %0,esr_el3\n mrs %1,elr_el3\n mrs %2,far_el3\n mrs %3,mpidr_el1"
+        :"=r"(esr),"=r"(elr),"=r"(far),"=r"(mpidr));
+    if(kind==1 && (esr>>26)==0x17 && operation==0x733)return;
+    rtc[SUNSTONE_CRUMB_ESR/4]=(uint32_t)esr;
+    rtc[SUNSTONE_CRUMB_ELR/4]=(uint32_t)elr;
+    rtc[SUNSTONE_CRUMB_FAR/4]=(uint32_t)far;
+    __asm__ volatile("dsb sy":::"memory");
+    rtc[SUNSTONE_CRUMB_FAULT/4]=UINT32_C(0xfa030000)|
+        (uint32_t)((mpidr>>8)&7)<<20|(uint32_t)(slot&15)<<8|(uint32_t)(operation&255);
+    __asm__ volatile("dsb sy":::"memory");
+}
+_Noreturn void npu_finite_exception(uint64_t operation,uint64_t status,uint64_t kind,uint64_t slot)
+{
+    record_exception(operation,kind,slot);
     uint64_t esr,control;
     __asm__ volatile("msr daifset,#15\n msr cntps_ctl_el1,xzr\n msr cntp_ctl_el0,xzr\n msr cntv_ctl_el0,xzr\n isb\n mrs %0,esr_el3\n mrs %1,sctlr_el1":"=r"(esr),"=r"(control)::"memory");
     const struct npu_finite_receipt *r=&npu_finite_receipt;
@@ -173,6 +192,9 @@ _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint6
 #ifndef SUNSTONE_NPU_ENTRY_CHECKPOINT
     return_sram_to_cpu();
 #endif
+    uint32_t watchdog_mode=npu_finite_watchdog_disarm();
+    sunstone_crumb_el3(SUNSTONE_CRUMB_RETURN_ROM,watchdog_mode);
+    if(watchdog_mode&1)a733_smp_stop(7,0x02050014);
     REPORT->status=status;
 #ifdef SUNSTONE_NPU_ENTRY_CHECKPOINT
     REPORT->detail=NPU_ENTRY_MEMORY_READY;
@@ -193,3 +215,6 @@ _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint6
     __asm__ volatile("dsb sy":::"memory");
     npu_finite_rom_return();
 }
+
+__attribute__((used,retain)) _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint64_t kind)
+{npu_finite_exception(operation,status,kind,0);}

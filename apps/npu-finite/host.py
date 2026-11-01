@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Prepare or capture the exact NPU returning profile; no admission defaults."""
-import argparse,hashlib,importlib.util,io,json,re,shutil,struct,sys
+import argparse,hashlib,importlib.util,io,json,re,shutil,struct,sys,subprocess
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[2]
@@ -30,8 +30,34 @@ def evidence_ref(item,cache=None):
  data=path.read_bytes() if cache is None else cache[str(path)]
  require(sha(data)==item['sha256'],'Evidence changed: '+str(path));return data
 
+def watchdog_marker(data):
+ elf=ELFFile(io.BytesIO(data))
+ markers=[x for x in elf.get_section_by_name('.symtab').iter_symbols() if x.name=='os_cpu_return_watchdog' and x['st_shndx']!='SHN_UNDEF']
+ require(len(markers)==1 and markers[0]['st_size']==40,'Missing or malformed finite watchdog marker.')
+ marker=markers[0];section=elf.get_section(marker['st_shndx']);offset=marker['st_value']-section['sh_addr']
+ words=struct.unpack('<5Q',section.data()[offset:offset+40])
+ require(words==(0x31544457534f5243,2,0xb1,0x07090000,20),'Finite watchdog marker differs.')
+ return {'mode':words[2],'session_seconds':words[4]}
+
+def build_launcher(output,clang,lld,objcopy,*,watchdog_mode=0xb1):
+ """Build the explicitly selected finite NPU armed-mode launcher."""
+ require(watchdog_mode==0xb1,'Finite NPU watchdog mode differs.')
+ for name,path in [('launch.c',ROOT/'platform/a733-smp-supervised/launch.c'),('launch.S',ROOT/'platform/a733-smp-observe/launch.S'),('launch.ld',ROOT/'platform/a733-smp-observe/launch.ld'),('boot.h',ROOT/'platform/a733-smp-cached/boot.h')]:
+  (output/name).write_bytes(path.read_bytes())
+ flags=['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Os','-g','-Wall','-Wextra','-Werror','-DSUNSTONE_NPU_FINITE_WATCHDOG=1',f'-DA733_SMP_CONTRACT_MAGIC={original.CONTRACT_MAGIC}ULL','-DA733_SUPERVISED_CONTRACT_VERSION=3','-DA733_SUPERVISED_SESSION_BYTES=0','-I'+str(output)]
+ commands=[[clang,*flags,'-MD','-MF',output/(name+'.d'),'-c',output/name,'-o',output/(name+'.o')] for name in ('launch.c','launch.S')]
+ commands += [[lld,'-T',output/'launch.ld',output/'launch.c.o',output/'launch.S.o','-o',output/'launch.elf'],[objcopy,'-O','binary',output/'launch.elf',output/'launch.bin']]
+ for command in commands:
+  command=list(map(str,command));result=subprocess.run(command,capture_output=True,text=True)
+  with (output/'build.log').open('a') as stream:stream.write(result.stdout+result.stderr)
+  require(result.returncode==0,'Finite NPU armed launcher build failed.')
+ save(output/'commands.json',[list(map(str,c)) for c in commands])
+ require(0<(output/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM reservation.')
+
+
 def image_profile(data,manifest):
  require(manifest.get('execution_profile') in PROFILES and manifest.get('final_elf')==sha(data),'Exact returning image manifest required.')
+ watchdog_marker(data)
  parts,address,build,layout=original.image_data(data)
  elf=ELFFile(io.BytesIO(data));symbols={s.name:s for s in elf.get_section_by_name('.symtab').iter_symbols()}
  # Finite profiles use ROM transport after return; none starts a
@@ -218,7 +244,7 @@ def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
  execution=geometry_profile(geometry)
  profile,cache=validate_admission(entry,raw,build,layout,sha(data),execution_profile=execution);output.mkdir(parents=True,exist_ok=False)
  for name,source in [('image.elf',image),('manifest.json',manifest),('session.bin',session),('admission.json',admission)]:shutil.copy2(source,output/name)
- original.build_launcher(output,clang,lld,objcopy)
+ build_launcher(output,clang,lld,objcopy)
  root_review=json.loads(cache[json.loads(entry)['root_review']['path']])
  require(root_review.get('launcher_sha256')==sha((output/'launch.bin').read_bytes()),'Launcher differs from reviewed bytes.')
  request,contract=original.request_bytes(address,build,raw,profile)
@@ -415,9 +441,15 @@ def transfer(transaction,address,data,destination):
  with base.sealed_source(data) as (source,fd):transaction('write',hex(address),source,'read',hex(address),len(data),destination,pass_fds=(fd,))
  require(destination.read_bytes()==data,'Restoration readback differs.');base.sync_file(destination)
 
+def require_entry_state(transaction):
+ values=[int(v,16) for v in transaction(*[a for address in ('0x02050014','0x070501c0','0x070501d4','0x03000008','0x02002b04','0x02002b00') for a in ('readl',address)]).split()]
+ require(len(values)==6 and not values[0]&1 and values[1:3]==[0,0], 'Watchdog or reset redirect enabled before execution.')
+ require(values[3]&2 and not values[4]&0x70001 and not values[5]&0x80000000,'NPU SRAM/clock/reset entry state differs.')
+
 def run_once(transaction,launch,ready,bundle,p,evidence,record,save):
  """Root owns the lock/claim; every transport failure is terminal to this call."""
  require(not record.get('launch_attempted'),'One attempt only.');ready()
+ require_entry_state(transaction)
  backup=evidence/'before-DRAM.bin';transaction('read',hex(DRAM[0]),DRAM[1],backup)
  require(backup.stat().st_size==DRAM[1],'Incomplete full DRAM backup.');base.sync_file(backup);backup_hash=base.digest(backup)
  record.update(dram_backup_sha256=backup_hash,dram_restored=False);save()
@@ -426,7 +458,11 @@ def run_once(transaction,launch,ready,bundle,p,evidence,record,save):
  # readl uses SRAM scratch, so preserve it through preload before this batch.
  words=[int(v,16) for v in transaction(*[a for address in ('0x20','0x24','0x28','0x3c','0x40') for a in ('readl',address)]).split()]
  require(words==[0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d],'Forced-FEL ROM entry differs from the reviewed instructions.')
- ready();require(int(transaction('readl','0x02050014').strip(),16)&1==0,'Watchdog enabled before execution.')
+ # The shared returning host arms WDT0 inside launch(), after these checks.
+ # Require a fresh CPU-route/held-reset baseline after any whole-system reset;
+ # DDR evidence is separately validated before this DRAM preload is allowed.
+ ready()
+ require_entry_state(transaction)
  record.update(backup_sha256=p['_backup_hashes'].copy());save();launch()
  require('soc=00001903(A733)' in transaction('version'),'Returned service is not A733 ROM.')
  reports=[]
@@ -465,7 +501,7 @@ def run(args):
   return run_once(transaction,launch,ready,args.bundle.resolve(),p,args.evidence,record,journal)
  execution=json.loads((args.bundle/'prepared.json').read_bytes()).get('execution_profile')
  require(execution in PROFILES,'Unsupported execution profile.')
- result=returning.run(args,base=base,profile=execution,validate_bundle=validate_bundle,admit=admit,execute=execute,description='NPU finite inference and validated RAM return')
+ result=returning.run(args,base=base,profile=execution,validate_bundle=validate_bundle,admit=admit,execute=execute,description='NPU finite inference and validated RAM return',watchdog=watchdog_marker((args.bundle/'image.elf').read_bytes()))
  return 0 if result['functional_success'] or result.get('checkpoint') in ('ENTRY_MEMORY_READY','PROVIDERS_CONSTRUCTED') or result.get('startup_bootstrap') else 2
 
 def main(argv=None):

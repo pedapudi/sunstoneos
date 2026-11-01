@@ -60,6 +60,9 @@ def run(name,c,cwd=None):
 # model, provider and service inputs. No fixture admission is generated here.
 old=json.loads((base/'configure-command.json').read_text());old_root=next(v[:-len('/apps/npu-convolution-single-core')] for v in old if v.endswith('/apps/npu-convolution-single-core'))
 config=[v.replace(old_root,str(root)).replace(str(base/'native'),str(e/'native')) for v in old]
+# Every finite producer opts into RTC progress and armed-WDT behavior. The
+# original retained producer and other single-core consumers remain unchanged.
+config=[v+' -DSUNSTONE_CRUMBS=1 -DSUNSTONE_NPU_FINITE_WATCHDOG=1 -DINCLUDE_xTaskDelayUntil=1' if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
 if a.restart:
  assert sum(v.startswith('-DCMAKE_C_FLAGS=') for v in config)==1
  config=[v+' -DSUNSTONE_NPU_RESTART=1' if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
@@ -80,6 +83,7 @@ def compile_like(suffix,source,name):
  entry=next(x for x in entries if x['file'].endswith(suffix));c=shlex.split(entry['command']);dest=obj/(name+'.obj')
  c[c.index('-o')+1]=str(dest);c[c.index('-c')+1]=str(source)
  c += ['-MD','-MF',str(dest)+'.d']
+ if source==root/'apps/npu-finite/monitor.c':c += ['-DSUNSTONE_NPU_BASE_MONITOR="'+str(e/'monitor-base.c')+'"']
  if a.entry_checkpoint:c += ['-DSUNSTONE_NPU_ENTRY_CHECKPOINT=1']
  if a.startup_only:c += ['-DSUNSTONE_NPU_STARTUP_ONLY=1']
  if a.single_inference:c += ['-DSUNSTONE_NPU_SINGLE_INFERENCE=1']
@@ -89,6 +93,22 @@ def compile_like(suffix,source,name):
   c += ['-DSUNSTONE_NPU_ENTRY_IRQ_CHECKPOINT=1']
   if source==root/'apps/npu-finite/monitor.c':c += ['-DSUNSTONE_NPU_INTERRUPT=1']
  commands.append(c);run(name,c,cwd=entry['directory']);return dest
+# Adapt the shared monitor privately so no storage/GPU admission changes.
+monitor_base=(root/'apps/storage-read-single-core/monitor.c').read_text()
+monitor_old='if((mmio_read(0x02050014)&1)||(mmio_read(0x02050010)&0x100)||'
+assert monitor_base.count(monitor_old)==1
+monitor_base=monitor_base.replace(monitor_old,'if(!npu_finite_watchdog_admitted()||')
+monitor_old='    volatile const struct a733_smp_contract *source=(void *)A733_SMP_CONTRACT_ADDRESS;'
+assert monitor_base.count(monitor_old)==1
+monitor_base=monitor_base.replace(monitor_old,monitor_old+'\n    sunstone_crumb_el3_start(source->epoch);\n    sunstone_crumb_el3(SUNSTONE_CRUMB_EL3_ENTRY,0);')
+monitor_old='    REPORT->magic=A733_SMP_RESULT_MAGIC;REPORT->epoch=admission.epoch;'
+assert monitor_base.count(monitor_old)==1
+monitor_base=monitor_base.replace(monitor_old,'    sunstone_crumb_el3(SUNSTONE_CRUMB_EL3_ADMITTED,0);\n'+monitor_old)
+monitor_old='    REPORT->stage=5;__asm__ volatile("dsb sy":::"memory");'
+assert monitor_base.count(monitor_old)==1
+monitor_base=monitor_base.replace(monitor_old,monitor_old+'\n    sunstone_crumb_el3(SUNSTONE_CRUMB_EL3_STOP,((status>15?15:status)<<12)|(detail&0xfff));\n    npu_finite_watchdog_stop();')
+monitor_base=monitor_base.replace('#include "../npu-interrupt/irq-route.h"','#include "'+str(root/'apps/npu-interrupt/irq-route.h')+'"')
+(e/'monitor-base.c').write_text(monitor_base)
 monitor=compile_like('/apps/storage-read-single-core/monitor.c',root/'apps/npu-finite/monitor.c','monitor')
 platform=e/'platform.c';text=(e/'native/npu-single-core/platform.c').read_text();assert text.count('_Noreturn void platform_exit(')==1
 platform.write_text(text.replace('_Noreturn void platform_exit(','_Noreturn void npu_finite_legacy_exit('))
@@ -102,6 +122,18 @@ if a.rate_852 or a.rate_492:
  native=obj/f'native-{rate}.obj';c[c.index('-o')+1]=str(native);c+=[f'-DSUNSTONE_NPU_RATE_{rate}=1','-MD','-MF',str(native)+'.d']
  commands.append(c);run(f'native-{rate}',c,cwd=entry['directory'])
 assembly=compile_like('/arch/aarch64/cache.S',root/'apps/npu-finite/return.S','return-assembly')
+watchdog=compile_like('/apps/npu-convolution/native.c',root/'apps/npu-finite/watchdog.c','watchdog')
+vectors=compile_like('/arch/aarch64/vectors.S',root/'apps/npu-finite/vectors.S','vectors')
+boot_start=compile_like('/apps/storage-read-single-core/start.S',root/'apps/npu-finite/start.S','boot-start')
+# The ordinary finite client also starts the same supervisor after admission.
+finite_main=None
+if not a.startup_only and not a.entry_checkpoint:
+ text=(root/'apps/npu-convolution/main.c').read_text()
+ old='    configASSERT(a733_npu_application_observer_admit());'
+ assert text.count(old)==1
+ text='#include "'+str(root/'apps/npu-finite/watchdog.h')+'"\n'+text.replace(old,old+'\n    configASSERT(npu_finite_watchdog_start());')
+ (e/'finite-main.c').write_text(text)
+ finite_main=compile_like('/apps/npu-convolution/main.c',e/'finite-main.c','finite-main')
 startup_main=compile_like('/apps/npu-convolution/main.c',root/'apps/npu-finite/startup.c','startup-client') if a.startup_only and not a.runtime else None
 runtime_objects=[];runtime_identity={}
 if a.runtime:
@@ -190,9 +222,11 @@ if a.entry_irq_checkpoint:
 if a.entry_provider_checkpoint:
  identity['profile']='npu-entry-provider-checkpoint-v1'
  identity['provider_checkpoint_sources']={'apps/npu-finite/provider-checkpoint.h':sha(root/'apps/npu-finite/provider-checkpoint.h')}
+identity['watchdog_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/watchdog.c',root/'apps/npu-finite/watchdog.h',root/'apps/npu-finite/vectors.S',root/'apps/npu-finite/start.S',root/'include/sunstone_crumb.h',root/'apps/storage-read-single-core/monitor.c')}
+identity['watchdog']={'mode':0xb1,'session_seconds':20,'reset_route':'whole-system-no-redirect','active_npu_reset_measured':False}
 build_id=hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest();source=e/'build-id.c';source.write_text('const unsigned char a733_smp_build_id[32]={'+','.join('0x'+build_id[i:i+2] for i in range(0,64,2))+'};\n')
 build_obj=compile_like('/npu-single-core/build-id.c',source,'build-id')
-replacements={'/apps/storage-read-single-core/monitor.c.obj':monitor,'/npu-single-core/platform.c.obj':platform_obj,'/npu-single-core/build-id.c.obj':build_obj}
+replacements={'/arch/aarch64/vectors.S.obj':vectors,'/apps/storage-read-single-core/start.S.obj':boot_start,'/apps/storage-read-single-core/monitor.c.obj':monitor,'/npu-single-core/platform.c.obj':platform_obj,'/npu-single-core/build-id.c.obj':build_obj}
 # The runtime image replaces the convolution object, its reservation and the
 # single-core client and IRQ binding, and reserves the runtime's 6 MiB parent:
 # read-only, read-window and write-window groups of 2 MiB for one slot.
@@ -203,6 +237,7 @@ for value in link:
  if any(value.endswith(x) for x in dropped):continue
  if a.runtime and value=='-Wl,--defsym=__device_pool_size=2097152':value='-Wl,--defsym=__npu_runtime_parent_bytes=6291456'
  if startup_main and value.endswith('/apps/npu-convolution/main.c.obj'):value=str(startup_main)
+ elif finite_main and value.endswith('/apps/npu-convolution/main.c.obj'):value=str(finite_main)
  if a.entry_checkpoint and value.endswith('/apps/npu-convolution/main.c.obj'):continue
  if a.entry_checkpoint and value.endswith('/apps/npu-convolution/native.c.obj'):value=str(checkpoint)
  elif native and value.endswith('/apps/npu-convolution/native.c.obj'):value=str(native)
@@ -212,7 +247,7 @@ for value in link:
   for suffix,replacement in replacements.items():
    if value.endswith(suffix):value=str(replacement);break
  newlink.append(value)
-newlink[-1]=str(e/'image.elf');newlink[-2:-2]=[str(ret),str(assembly),'-Wl,--undefined=a733_npu_application_artifact_hashes']
+newlink[-1]=str(e/'image.elf');newlink[-2:-2]=[str(ret),str(assembly),str(watchdog),'-Wl,--undefined=os_cpu_return_watchdog','-Wl,--undefined=a733_npu_application_artifact_hashes']
 if a.thermal:newlink[-2:-2]=['-Wl,--undefined=npu_finite_thermal_profile']
 if a.runtime:newlink[-2:-2]=[str(x) for x in runtime_objects]+['-Wl,--undefined='+n for n in ('npu_startup_return_profile','a733_npu_application_reference')]
 if checkpoint_irq and not a.entry_provider_checkpoint:newlink[-2:-2]=[str(checkpoint_irq)]
@@ -221,7 +256,8 @@ commands.append(newlink);run('link',newlink,cwd=e/'native')
 copy=['/usr/lib/llvm-21/bin/llvm-objcopy','-O','binary',str(e/'image.elf'),str(e/'image.bin')];commands.append(copy);run('binary',copy)
 save('commands.json',commands)
 # Preserve the effective compiler closure, including generated SRE/platform units.
-inputs={root/'apps/npu-finite/link.ld',Path(__file__).resolve(),script,platform,source}
+inputs={root/'apps/npu-finite/link.ld',Path(__file__).resolve(),script,platform,source,e/'monitor-base.c'}
+if finite_main:inputs.add(e/'finite-main.c')
 if a.runtime:inputs|={e/'generated/networks.c',e/'generated/npu_admitted_models.c',root/'apps/npu-finite/runtime-models.json',a.artifacts.resolve()}
 for dep in list((e/'native').rglob('*.obj.d'))+list(obj.glob('*.obj.d')):
  text=dep.read_text().replace('\\\n',' ');inputs.update(Path(x).resolve() for x in shlex.split(text.split(':',1)[1]))

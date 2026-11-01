@@ -7,6 +7,7 @@
 #undef a733_smp_diagnostic_start
 #include "startup.h"
 #include "crumb.h"
+#include "watchdog.h"
 __attribute__((used,retain)) const uint64_t npu_startup_return_profile[4]={
     NPU_STARTUP_RECEIPT_MAGIC,1,NPU_STARTUP_JOBS,1+NPU_STARTUP_JOBS};
 static struct npu_convolution *startup_convolution;
@@ -126,6 +127,7 @@ void a733_smp_diagnostic_start(void)
     configASSERT(a733_smp_device_preparation_admitted());
     configASSERT(npu_session_copy());
     configASSERT(a733_npu_application_observer_admit());
+    configASSERT(npu_finite_watchdog_start());
     TaskHandle_t task=xTaskCreateStaticAffinitySet(npu_startup_client,"npu-startup",4096,NULL,2,
         client_stack,&client_state,1);
     configASSERT(task && a733_npu_application_init(task));

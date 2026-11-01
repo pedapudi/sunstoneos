@@ -14,6 +14,7 @@
 #include "session.h"
 #include "startup.h"
 #include "crumb.h"
+#include "watchdog.h"
 #include "networks.h"
 #include <string.h>
 #if !defined(SUNSTONE_NPU_RUNTIME_RETURN) || NPU_STARTUP_JOBS != NPU_FINITE_NETWORKS
@@ -115,6 +116,7 @@ void a733_smp_diagnostic_start(void)
     configASSERT(a733_smp_device_preparation_admitted());
     configASSERT(npu_session_copy());
     configASSERT(a733_npu_application_observer_admit());
+    configASSERT(npu_finite_watchdog_start());
     struct npu_runtime_model models[NPU_FINITE_NETWORKS];
     for(unsigned n=0;n<NPU_FINITE_NETWORKS;++n)
         models[n]=(struct npu_runtime_model){npu_finite_networks[n].model,npu_finite_networks[n].model_bytes};

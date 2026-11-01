@@ -113,6 +113,7 @@ with tempfile.TemporaryDirectory(prefix='returning-transport-') as temporary:
   # Check the production NPU adapter delegates admission and execution, without replaying reports.
   npu=load('npu_host',root/'apps/npu-finite/host.py');identity=[1,56,3,4,5];seen=[]
   # run() selects the execution profile from the prepared bundle record.
+  (bundle/'image.elf').write_bytes(b'modeled marker input; actual ELF marker checked in watchdog-linked-check.py')
   (bundle/'prepared.json').write_text(json.dumps({'execution_profile':npu.PROFILE})+'\n')
   paths=[]
   for name in ('ddr','survey','warm'):
@@ -123,13 +124,14 @@ with tempfile.TemporaryDirectory(prefix='returning-transport-') as temporary:
   a=types.SimpleNamespace(bundle=bundle,evidence=t/'adapter',ddr_evidence=paths[0],platform_survey=paths[1],warm_return=[paths[2]])
   kernel=types.SimpleNamespace(validate_platform_admission=lambda *values:seen.append(values))
   def delegated(arguments,**callbacks):
+   assert callbacks['watchdog']=={'mode':0xb1,'session_seconds':20}
    assert arguments is a and callbacks['base'] is npu.base and callbacks['profile']==npu.PROFILE and callbacks['validate_bundle'] is npu.validate_bundle
    callbacks['admit'](a,prepared,old,identity,'3-3.11')
    return callbacks['execute']('transaction','wait','ready',prepared,{'marker':'record'},'journal')
   for successful in (True,False):
    def execute(*values):
     assert values==('transaction','wait','ready',bundle,prepared,a.evidence,{'marker':'record'},'journal');return {'functional_success':successful}
-   with patch.object(npu,'module',return_value=kernel),patch.object(npu.returning,'run',delegated),patch.object(npu,'run_once',execute):assert npu.run(a)==(0 if successful else 2)
+   with patch.object(npu,'module',return_value=kernel),patch.object(npu.returning,'run',delegated),patch.object(npu,'run_once',execute),patch.object(npu,'watchdog_marker',side_effect=lambda raw: {'mode':0xb1,'session_seconds':20} if raw==(bundle/'image.elf').read_bytes() else (_ for _ in ()).throw(AssertionError('Wrong marker input'))):assert npu.run(a)==(0 if successful else 2)
    assert seen[-1]==((b'ddr',b'survey'),old,identity,'3-3.11',base.FEL_HASH,base.FEL_HASH,(b'warm',))
    results.append({'name':'NPU-adapter-'+('success' if successful else 'mismatch'),'passed':True})
  # Exercise the real shared churn decision without opening its registry.
