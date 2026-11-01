@@ -1,4 +1,4 @@
-#include "a733_h264_input.h"
+#include "../apps/h264/a733_h264_input.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>

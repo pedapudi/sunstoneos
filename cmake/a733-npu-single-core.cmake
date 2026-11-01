@@ -26,7 +26,7 @@ list(APPEND npsc_sources "${npsc_shared}/start.S" "${npsc_shared}/monitor.c" "${
  "${npsc_root}/drivers/usb/a733_usb_platform.c" "${npsc_root}/drivers/usb/a733_usb_platform_native.c"
  "${npsc_root}/arch/aarch64/start.S" "${npsc_root}/arch/aarch64/vectors.S" "${npsc_root}/arch/aarch64/cache.S")
 if(A733_NPU_INTERRUPT)
- list(APPEND npsc_sources "${npsc_root}/apps/npu-interrupt/irq.c"
+ list(APPEND npsc_sources "${npsc_root}/platform/a733/npu_irq.c"
   "${npsc_root}/apps/npu-interrupt/irq-route.c" "${npsc_root}/drivers/gpu/gicv3_spi.c")
 endif()
 if(A733_NPU_RUNTIME_INPUT)
@@ -106,7 +106,7 @@ if(A733_NPU_LARGE_GRAPH)
   "${npsc_root}/include/nbg_sh_nt.h")
 endif()
 if(A733_NPU_INTERRUPT)
- list(APPEND npsc_inputs "${npsc_root}/apps/npu-interrupt/irq.h"
+ list(APPEND npsc_inputs "${npsc_root}/include/a733_npu_irq.h"
   "${npsc_root}/apps/npu-interrupt/irq-route.h")
 endif()
 if(A733_NPU_FINITE_THERMAL)

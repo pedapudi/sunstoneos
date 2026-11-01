@@ -1,4 +1,4 @@
-#include "a733_rtc_application.h"
+#include "a733_rtc_initialize.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

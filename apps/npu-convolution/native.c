@@ -3,7 +3,7 @@
 #include "../accelerators/application.h"
 #endif
 #ifdef SUNSTONE_NPU_INTERRUPT
-#include "../npu-interrupt/irq.h"
+#include "a733_npu_irq.h"
 #endif
 #ifdef SUNSTONE_NPU_FINITE_THERMAL
 #include "../npu-finite/thermal.h"

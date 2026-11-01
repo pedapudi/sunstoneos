@@ -79,7 +79,7 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
             k=state['copied']-1;cl=image.layouts['npu_convolution']
             for key,value in JOB_RECORD[k].items():put(c+cl[key],value)
             for i in range(2):put(c+cl['job_cycles']+4*i,JOB_CYCLES[k][i],4)
-            put(image.address('delivered_ticks',unit='/apps/npu-interrupt/irq.c'),JOB_IRQ_TICKS[k])
+            put(image.address('delivered_ticks',unit='/platform/a733/npu_irq.c'),JOB_IRQ_TICKS[k])
             data=bytes(u.mem_read(image.address('a733_npu_application_reference'),args[2]))
             if variant=='mismatch' and state['copied']==1:data=bytes([data[0]^1])+data[1:]
             u.mem_write(args[1],data);ret(1)

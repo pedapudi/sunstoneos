@@ -18,11 +18,11 @@ sunstone_board_application(displayport BOOT "${displayport_build}/boot.c"
  SOURCES platform/a733/device_memory_layout.c apps/displayport/main.c apps/displayport/memory.c
   apps/displayport/native.c apps/displayport/output.c apps/displayport/admission.c
   apps/displayport/snapshot.c drivers/display/a733_dp.c drivers/display/a733_dp_cadence.c
-  drivers/display/a733_dp_profile.c drivers/display/a733_display_engine.c
+  apps/displayport/profile.c drivers/display/a733_display_engine.c
   drivers/display/a733_display_framebuffer.c
   drivers/display/a733_tcon_lcd.c drivers/display/a733_dsi_video.c drivers/display/a733_dsi_phy.c
   drivers/clock/a733_media_clock.c drivers/clock/a733_media_clock_native.c
   drivers/iommu/a733_iommu.c
  INPUTS apps/displayport/extended-boot.patch apps/displayport/extended-link.patch
-  platform/a733-smp-cached/link-devices.ld include/a733_displayport_application.h include/a733_dp.h
+  platform/a733-smp-cached/link-devices.ld apps/displayport/a733_displayport_application.h include/a733_dp.h
   drivers/display/a733_dp_internal.h drivers/display/a733_dp_regs.h apps/displayport/sources.json)

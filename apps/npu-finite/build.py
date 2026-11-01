@@ -92,7 +92,7 @@ checkpoint_irq=compile_like('/apps/npu-convolution/native.c',root/'apps/npu-inte
 identity={'base_build_id':(e/'native/npu-single-core/build-id.txt').read_text().strip(),'sources':{str(x.relative_to(root)):sha(x) for x in sorted(root/'apps/npu-finite'/n for n in ('monitor.c','return.c','return.S','return.h','link.ld','build.py'))},'platform_sha256':sha(platform),'profile':'npu-finite-return-v1'}
 script=Path(__file__).resolve()
 if a.interrupt:
- identity['irq_sources']={str(x.relative_to(root)):sha(x) for x in sorted(root/'apps/npu-interrupt'/n for n in ('irq.c','irq.h','irq-route.c','irq-route.h','build.py'))}
+ identity['irq_sources']={str(x.relative_to(root)):sha(x) for x in sorted(root/n for n in ('platform/a733/npu_irq.c','include/a733_npu_irq.h','apps/npu-interrupt/irq-route.c','apps/npu-interrupt/irq-route.h','apps/npu-interrupt/build.py'))}
  identity['profile']='npu-interrupt-finite-return-v1';script=root/'apps/npu-interrupt/build.py'
 if a.restart:identity['profile']='npu-interrupt-restart-return-v1'
 if a.startup_only:

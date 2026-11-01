@@ -5,7 +5,7 @@
 #include "a733_counter_clock.h"
 #include "a733_mmio.h"
 #include "a733_range.h"
-#include "a733_rtc_application.h"
+#include "a733_rtc_initialize.h"
 #include "monitor.h"
 
 static StaticTask_t task;

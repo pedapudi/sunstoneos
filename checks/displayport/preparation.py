@@ -103,7 +103,7 @@ def main():
         source=a.reuse_launcher
         sources={'launch.c':'apps/displayport/launch.c','launch.S':'platform/a733-smp-observe/launch.S',
             'launch.ld':'platform/a733-smp-observe/launch.ld','boot.h':'platform/a733-smp-cached/boot.h',
-            'a733_displayport_application.h':'include/a733_displayport_application.h',
+            'a733_displayport_application.h':'apps/displayport/a733_displayport_application.h',
             'a733_board_application.h':'include/a733_board_application.h','a733_pins.h':'include/a733_pins.h',
             'base-supervised-launch.c':'platform/a733-smp-supervised/launch.c'}
         for name,relative in sources.items():assert (source/name).read_bytes()==(ROOT/relative).read_bytes(),name

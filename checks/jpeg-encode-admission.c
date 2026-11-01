@@ -1,5 +1,5 @@
 #define _GNU_SOURCE
-#include "a733_jpeg_encode_application.h"
+#include "../apps/jpeg-encode/a733_jpeg_encode_application.h"
 #include "a733_storage_digest.h"
 #include "boot.h"
 #include <assert.h>

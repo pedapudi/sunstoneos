@@ -98,14 +98,13 @@ endif()
     endforeach()
     file(WRITE "${bluetooth_build}/recognition-models.h"
       "static const uint64_t bluetooth_model_bytes[2]={${bluetooth_model_sizes}};\nstatic const uint8_t bluetooth_model_sha256[2][32]={${bluetooth_model_hashes}};\n")
-    apply_build_patch("${bluetooth_build}/recognition-link.ld" "${storage_build}/link.ld" "${bluetooth_root}/apps/mimus/link.patch")
     get_target_property(bluetooth_asr_inputs mimus_asr_smp SOURCES)
     file(GLOB_RECURSE bluetooth_asr_headers "${MIMUS_DIR}/firmware/components/asr/include/*.h"
       "${MIMUS_DIR}/firmware/components/pipeline/include/*.h")
     set(bluetooth_recognition_inputs ${bluetooth_sbc_inputs} ${bluetooth_recognition_sources} ${bluetooth_asr_inputs} ${bluetooth_asr_headers}
       "${bluetooth_root}/apps/bluetooth/recognition-models.json" "${bluetooth_root}/apps/mimus/recorded.h"
-      "${bluetooth_root}/apps/mimus/source.json" "${bluetooth_root}/apps/mimus/link.patch"
-      "${bluetooth_build}/recognition-models.h" "${bluetooth_build}/recognition-link.ld"
+      "${bluetooth_root}/apps/mimus/source.json"
+      "${bluetooth_build}/recognition-models.h"
       "${bluetooth_root}/cmake/mimus.cmake" "${bluetooth_root}/cmake/mimus-smp.cmake"
       "${newlib_sysroot}/lib/libstdc++.a" "${newlib_sysroot}/lib/libsupc++.a"
       "${smp_libc}/lib/libm.a" "${smp_libc}/lib/libc.a" "${NEWLIB_ROOT}/lib/gcc/aarch64-none-elf/14.3.1/libgcc.a")
@@ -215,10 +214,7 @@ endif()
   list(FILTER bluetooth_link EXCLUDE REGEX "Map,")
   set_property(TARGET sunstone-a733-bluetooth PROPERTY LINK_OPTIONS "${bluetooth_link}")
   if(SUNSTONE_BLUETOOTH_MIMUS)
-    list(FILTER bluetooth_link EXCLUDE REGEX "-T,")
-    set_property(TARGET sunstone-a733-bluetooth PROPERTY LINK_OPTIONS "${bluetooth_link}")
-    target_link_options(sunstone-a733-bluetooth PRIVATE "-Wl,-T,${bluetooth_build}/recognition-link.ld"
-      -Wl,--wrap=_impure_ptr -Wl,--defsym=__runtime_heap_size=4194304)
+    target_link_options(sunstone-a733-bluetooth PRIVATE -Wl,--wrap=_impure_ptr -Wl,--defsym=__runtime_heap_size=4194304)
   endif()
   target_link_options(sunstone-a733-bluetooth PRIVATE "-Wl,-Map,${bluetooth_build}/image.map")
   set(bluetooth_inputs ${board_inputs} ${bluetooth_sources} ${bluetooth_security_inputs} ${bluetooth_recognition_inputs} "${CMAKE_CURRENT_LIST_FILE}" "${bluetooth_build}/bluetooth-usb-base.c")

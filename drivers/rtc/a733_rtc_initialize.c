@@ -3,7 +3,7 @@
  * Copyright (c) 2020, Martin <wuyan@allwinnertech.com>
  * Calendar ordering/settling adapted from pinned rtc-sunxi.c:settime.
  * Source mux/gate fields follow ccu-sun60iw2-rtc.c and manual9.1.7 tables. */
-#include "a733_rtc_application.h"
+#include "a733_rtc_initialize.h"
 #include "a733_range.h"
 #include <stddef.h>
 struct initialization {const struct a733_rtc_ops *ops;void *context;uint64_t deadline,last,start;struct a733_rtc_initialization *out;

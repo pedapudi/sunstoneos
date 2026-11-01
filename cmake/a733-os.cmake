@@ -177,7 +177,7 @@ if(SUNSTONE_A733_OS_NPU)
     drivers/npu/a733_npu_platform_native.c)
   file(GLOB os_npu_headers "${os_root}/include/*npu*.h" "${os_root}/include/nbg*.h")
   list(APPEND os_external_inputs ${os_npu_headers} "${os_root}/apps/os/npu-catalogue.py"
-    "${os_root}/apps/npu-interrupt/irq.c" "${os_root}/apps/npu-interrupt/irq.h"
+    "${os_root}/platform/a733/npu_irq.c" "${os_root}/include/a733_npu_irq.h"
     "${os_root}/tools/npu-session-models.json" "${os_root}/drivers/npu/npu_session_models.inc"
     "${os_root}/drivers/npu/nbg_command.h" "${os_build}/npu-models.c" "${SUNSTONE_OS_NPU_CATALOGUE}")
 endif()

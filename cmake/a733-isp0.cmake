@@ -10,4 +10,4 @@ sunstone_board_application(isp0
   drivers/camera/a733_camera_dma.c drivers/clock/a733_media_clock.c
   drivers/clock/a733_media_clock_native.c drivers/iommu/a733_iommu.c
  INPUTS drivers/camera/isp0-sources.json drivers/camera/isp600_default.h include/a733_isp0.h
-  include/a733_isp0_application.h)
+  apps/isp0/a733_isp0_application.h)

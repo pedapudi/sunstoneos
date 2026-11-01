@@ -20,5 +20,5 @@ sunstone_board_application(h264-encode BUILD_DIR "${h264_encode_build}"
   drivers/video/a733_video_encode_platform.c drivers/video/a733_video_unit.c
   drivers/iommu/a733_iommu.c
  INPUTS apps/h264-encode/extended-boot.patch apps/h264-encode/extended-link.patch
-  platform/a733-smp-cached/link-devices.ld include/a733_h264_encode_application.h
+  platform/a733-smp-cached/link-devices.ld apps/h264-encode/a733_h264_encode_application.h
   include/a733_video_h264_encode.h include/a733_video_encode_platform.h include/a733_video_unit.h)

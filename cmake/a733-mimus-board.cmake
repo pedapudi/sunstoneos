@@ -13,7 +13,8 @@ execute_process(COMMAND "${Python3_EXECUTABLE}" "${mb_root}/apps/mimus-board/con
 if(NOT mb_status EQUAL 0)
   message(FATAL_ERROR "Mimus board fixed input generation failed")
 endif()
-apply_build_patch("${mb_build}/link.ld" "${storage_build}/link.ld" "${mb_root}/apps/mimus/link.patch")
+# The OS image also links with this copy (cmake/a733-os.cmake).
+configure_file("${storage_build}/link.ld" "${mb_build}/link.ld" COPYONLY)
 get_target_property(mb_sources sunstone-a733-board SOURCES)
 # The board's runtime/memory.c and memmove.c stay linked: newlib's SIMD string
 # routines fault when EL3 boot code clears or copies Device memory.
@@ -63,7 +64,7 @@ set(mb_inputs ${board_inputs} ${mb_sources} ${mb_headers} ${mb_asr_sources} ${mb
   "${mb_root}/cmake/mimus-smp.cmake" "${mb_root}/cmake/mimus.cmake"
   "${mb_root}/CMakeLists.txt" "${mb_root}/cmake/smp.cmake"
   "${mb_root}/apps/mimus/source.json" "${mb_root}/apps/mimus/recorded.h"
-  "${mb_root}/apps/mimus/link.patch" "${newlib_sysroot}/lib/libstdc++.a"
+  "${newlib_sysroot}/lib/libstdc++.a"
   "${newlib_sysroot}/lib/libsupc++.a" "${smp_libc}/lib/libm.a" "${smp_libc}/lib/libc.a"
   "${NEWLIB_ROOT}/lib/gcc/aarch64-none-elf/14.3.1/libgcc.a")
 list(REMOVE_DUPLICATES mb_inputs)

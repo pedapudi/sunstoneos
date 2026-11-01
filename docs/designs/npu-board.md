@@ -253,7 +253,7 @@ are modeled; this check does not execute inference or qualify physical USB.
   level-sensitive and at its priority; the mask, rearm and stop callbacks then
   check only the calling core. The worker is pinned to core 1, and
   `npu_runtime_bind_irq` passes the route mask `1 << 1`, equal to that
-  affinity. The board's `irq.c` includes `apps/npu-interrupt/irq.c` with
+  affinity. The board's `irq.c` includes `platform/a733/npu_irq.c` with
   core 1 and priority `0xd8`; the single-core images compile the same source
   for core 0.
 - **Unqualified delivery.** Until the board shows one interrupt per job, the

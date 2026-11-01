@@ -200,7 +200,7 @@ implement on the host:
 
 ## Session, startup and preparation
 
-`include/a733_hevc_application.h` defines the 856-byte immutable session: the
+`apps/hevc/a733_hevc_application.h` defines the 856-byte immutable session: the
 592-byte supervised board session, identities and owners, digests of the four
 physical evidence records, the clip digest, the two picture ranges, and the
 clock, IOMMU gate and supply fields. The extended boot copies the 288-byte

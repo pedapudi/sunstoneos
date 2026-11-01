@@ -15,16 +15,11 @@ struct a733_rtc_session {
  uint32_t alarm_seconds,reserved;
 };
 _Static_assert(sizeof(struct a733_rtc_session)==768,"RTC session wire layout");
-#define A733_RTC_INIT_SOURCE 1u
-#define A733_RTC_SET_CALENDAR 2u
-#define A733_RTC_RUNTIME_CALENDAR 4u
-struct a733_rtc_setting {uint32_t flags,day,hms,reserved;};
 struct a733_rtc_session_set {
  struct a733_rtc_session base;
  struct a733_rtc_setting setting;
 };
 _Static_assert(sizeof(struct a733_rtc_session_set)==784,"RTC explicit setting session");
-int a733_rtc_setting_valid(const struct a733_rtc_setting *);
 const struct a733_rtc_setting *rtc_admitted_setting(void);
 const struct a733_rtc_initialization *rtc_admitted_initialization(void);
 int a733_rtc_session_valid(const struct a733_rtc_session *);

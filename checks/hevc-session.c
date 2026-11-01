@@ -1,4 +1,4 @@
-#include "a733_hevc_application.h"
+#include "../apps/hevc/a733_hevc_application.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

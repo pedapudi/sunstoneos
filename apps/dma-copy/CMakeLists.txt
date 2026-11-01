@@ -103,7 +103,7 @@ foreach(property INCLUDE_DIRECTORIES COMPILE_OPTIONS LINK_OPTIONS LINK_DEPENDS)
   set_property(TARGET a733-dma-copy PROPERTY ${property} "${value}")
 endforeach()
 target_include_directories(a733-dma-copy PRIVATE "${a733_root}/platform/a733-smp-observe"
-  "${a733_root}/drivers/usb" "${TINYUSB_DIR}/src")
+  "${a733_root}/drivers/usb" "${TINYUSB_DIR}/src" "${a733_root}/apps/dma-copy")
 target_compile_definitions(a733-dma-copy PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
   SUNSTONE_A733_USB=1 A733_SMP_CONTRACT_MAGIC=0x415337334f424331ULL A733_SMP_RESULT_MAGIC=0x41533733444d5231ULL
   INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1

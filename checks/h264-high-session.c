@@ -1,4 +1,4 @@
-#include "a733_h264_application.h"
+#include "../apps/h264/a733_h264_application.h"
 #include "stream-profile.h"
 #include "a733_storage_digest.h"
 #include <assert.h>
