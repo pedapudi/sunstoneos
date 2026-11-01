@@ -207,7 +207,7 @@ def prepared(image):
 
 
 def measure(image_path, baseline):
-    image = harness.Image(image_path)
+    image = harness.Image(image_path, layout_names=set())
     functions = disassemble(image_path)
     start, end = image.address('__tables_start'), image.address('__tables_end')
     pages = {n: image.address(n) for n in ('a733_cached_el3_l1', 'a733_cached_el3_l2', 'a733_cached_el3_l3',
