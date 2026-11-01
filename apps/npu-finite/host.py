@@ -12,6 +12,9 @@ base=original.supervisor.base
 require,sha=base.require,original.sha
 RESTART='npu-interrupt-restart-return-v1'
 STARTUP='npu-startup-return-v1'
+INFERENCE='npu-single-inference-return-v1'
+# The startup client's receipt magic, monitor detail, inference jobs and interrupt completions.
+STARTUP_CLIENT={STARTUP:(0x4e50555354415231,0x4e505553,0,1),INFERENCE:(0x4e5055494e463031,0x4e505549,1,2)}
 MBUS_CHECKPOINT='npu-entry-mbus-checkpoint-v1'
 IRQ_CHECKPOINT='npu-entry-irq-checkpoint-v1'
 PROVIDER_CHECKPOINT='npu-entry-provider-checkpoint-v1'
@@ -34,7 +37,7 @@ def image_profile(data,manifest):
   if s['st_info']['type']=='STT_FUNC' and s['st_shndx']!='SHN_UNDEF']
  require(not any('usb' in n.lower() or n.startswith(('tud_','tuh_','dcd_','hcd_')) or
   n=='a733_observe_service_start' for n in functions),'Finite image contains native USB functions.')
- startup=manifest['execution_profile']==STARTUP
+ startup=STARTUP_CLIENT.get(manifest['execution_profile'])
  checkpoint=manifest['execution_profile'] in (CHECKPOINT,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT);thermal=manifest['execution_profile']==THERMAL
  for name in ('npu_finite_receipt','npu_finite_smc','npu_finite_rom_return', 'npu_entry_checkpoint_ready' if checkpoint else 'a733_npu_application_quiescent'):
   require(name in symbols and symbols[name]['st_value'],'Missing returning producer: '+name)
@@ -59,7 +62,7 @@ def image_profile(data,manifest):
    require('npu_entry_checkpoint_provider_profile' not in symbols and all(n not in symbols for n in ('a733_npu_application_init','npu_convolution_startup_poll','npu_service_activate','vTaskStartScheduler')),'Checkpoint contains a provider or scheduler constructor.')
  else:require('npu_entry_checkpoint_profile' not in symbols,'Checkpoint image cannot use numerical profile.')
  if startup:
-  require(read('npu_startup_return_profile')==struct.pack('<4Q',0x4e50555354415231,1,0,1) and
+  require(read('npu_startup_return_profile')==struct.pack('<4Q',startup[0],1,startup[2],startup[3]) and
    all(n in symbols for n in ('npu_startup_return_ready','npu_startup_client','npu_service_activate','npu_convolution_stop_poll','vTaskStartScheduler')) and
    'client' not in symbols,'Startup-only implementation differs.')
  else:require('npu_startup_return_profile' not in symbols,'Startup-only image requires its distinct profile.')
@@ -71,6 +74,7 @@ def image_profile(data,manifest):
  else:require('npu_restart_return_profile' not in symbols,'Restart image requires its distinct profile.')
  geometry={'clean_start':lo,'clean_end':hi,'receipt':receipt,'log':log,'reference':read('a733_npu_application_reference').hex()}
  if startup:geometry['startup_only']=True
+ if manifest['execution_profile']==INFERENCE:geometry['single_inference']=True
  if restart:geometry['restart']=True
  if thermal:
   require(read('npu_finite_thermal_profile')==struct.pack('<4Q',0x4e50555448533031,1,160,2) and
@@ -94,7 +98,7 @@ def image_profile(data,manifest):
  if capture is not None:geometry['stopped_capture']=capture
  return parts,address,build,layout,geometry
 
-def geometry_profile(g):return STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
+def geometry_profile(g):return INFERENCE if g.get('single_inference') else STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
 
 def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,execution_profile=PROFILE):
  """Preserve original NPU facts; require a distinct reviewed returning lifetime.
@@ -297,15 +301,15 @@ def job_counters(text):
 
 
 def validate_reports(monitor,platform,receipt,p):
- thermal=p.get('execution_profile')==THERMAL;startup=p.get('execution_profile')==STARTUP
+ thermal=p.get('execution_profile')==THERMAL;startup=STARTUP_CLIENT.get(p.get('execution_profile'))
  require(len(monitor)==128 and len(platform)==16384 and len(receipt)==(112 if thermal else 88),'Incomplete returned reports.')
  m=struct.unpack('<16Q',monitor);h=struct.unpack_from('<16Q',platform);r=struct.unpack('<14Q' if thermal else '<11Q',receipt);g=p['geometry']
  magic=0x415337334e505231
- require(m[0]==magic and (m[1],m[2])==(p['epoch'],p['generation']) and m[3]==5 and m[4] in ((0,1,2) if thermal else (0,1)) and m[5]==(0x4e50554e if p.get('execution_profile') in (CHECKPOINT,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT) else 0x4e505553 if startup else 0) and m[7]==1,'No matched normal monitor completion.')
+ require(m[0]==magic and (m[1],m[2])==(p['epoch'],p['generation']) and m[3]==5 and m[4] in ((0,1,2) if thermal else (0,1)) and m[5]==(0x4e50554e if p.get('execution_profile') in (CHECKPOINT,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT) else startup[1] if startup else 0) and m[7]==1,'No matched normal monitor completion.')
  status=m[4];deadline=r[9];armed=deadline-480000000
  checkpoint=p.get('execution_profile') in (CHECKPOINT,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT)
  require(p.get('execution_profile',PROFILE) in PROFILES and bool(g.get('checkpoint'))==checkpoint and bool(g.get('thermal'))==thermal,'Report profile differs.')
- require(r[:6]==(0x4e505543484b3031 if checkpoint else 0x4e50555448533031 if thermal else 0x4e50555354415231 if startup else 0x4e50555245543031,p['epoch'],p['generation'],p['lease'],status,0x4e50554e if checkpoint else status+1) and
+ require(r[:6]==(0x4e505543484b3031 if checkpoint else 0x4e50555448533031 if thermal else startup[0] if startup else 0x4e50555245543031,p['epoch'],p['generation'],p['lease'],status,0x4e50554e if checkpoint else status+1) and
   r[6:9]==(g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64) and
   0<=armed<=m[6]<armed+24000000 and m[6]<=m[8]<deadline,'Receipt identity/cleanup/time differs.')
  require(h[0]==0x534b4552 and h[1]==5 and h[2]==status and h[9]==m[8] and h[3]==r[10] and h[3]<=16127 and m[6]<=h[8]<=h[9] and h[4:8]==(0,0,0,0),'Platform completion/log differs.')
@@ -322,6 +326,7 @@ def validate_reports(monitor,platform,receipt,p):
   else:require(text==prefix,'Checkpoint log or status differs.')
   require(status==0,'Checkpoint log or status differs.')
   return {'normal_return':True,'checkpoint':('PROVIDERS_CONSTRUCTED' if p.get('execution_profile')==PROVIDER_CHECKPOINT else 'ENTRY_MEMORY_READY'),'functional_success':False,'controlled_negative':False,'jobs':0,'status':0,'diagnostic_deadline':deadline,'log':text,**mbus}
+ if startup and startup[2]:return inference_report(text,status,deadline,g)
  if startup:
   expected=('NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=OPEN\nNPU_STAGE=BOOTSTRAP_READY\nNPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n'
    'NPU_IRQ_COMPLETIONS=0x0000000000000001\nNPU_IRQ_STOPPED=0x0000000000000001\n'
@@ -357,6 +362,23 @@ def validate_reports(monitor,platform,receipt,p):
  require(matched==(status==0) and matches[0][3].startswith('PASS')==(status==0),'Numerical status disagrees with copied outputs.')
  return {'normal_return':True,'functional_success':matched,'controlled_negative':not matched,'status':status,'diagnostic_deadline':deadline,'first_digest':bytes(first).hex(),'second_output':bytes(second).hex(),'output_pattern':output_pattern(first,second),'timing':timing(text),'log':text}
 
+def inference_report(text,status,deadline,g):
+ """The single-inference log: startup, one job, CLOSE, then the copied output.
+ Status 0 requires the output to equal the image's reference; status 1 is a
+ normal return whose output differs and is reported, not refused."""
+ head=('NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=OPEN\nNPU_STAGE=BOOTSTRAP_READY\nNPU_STAGE=SUBMIT job=0x0000000000000001\n'
+  'NPU_STAGE=REAPED\nNPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n'
+  'NPU_IRQ_COMPLETIONS=0x0000000000000002\nNPU_IRQ_STOPPED=0x0000000000000001\nNPU_STAGE=QUIESCENT\nNPU_OUTPUT=\n')
+ match=re.fullmatch(re.escape(head)+r'((?:0x[0-9a-f]{16}\n)+)NPU_INFERENCE=(MATCH|MISMATCH); inference_jobs=1\n',text)
+ require(match is not None,'Single-inference stage, job, IRQ or output log differs.')
+ output=[int(x,16) for x in match[1].splitlines()];require(all(v<256 for v in output),'Invalid copied output byte.')
+ reference=bytes.fromhex(g['reference']);require(len(output)==len(reference),'Copied output extent differs.')
+ matched=bytes(output)==reference
+ require(matched==(status==0) and (match[2]=='MATCH')==matched,'Inference status disagrees with copied output.')
+ return {'normal_return':True,'single_inference':True,'functional_success':matched,'controlled_negative':not matched,
+  'jobs':1,'status':status,'diagnostic_deadline':deadline,'output':bytes(output).hex(),
+  'output_pattern':{k:v for k,v in output_pattern(b'',bytes(output)).items() if k!='first_unwritten'},'log':text}
+
 def transfer(transaction,address,data,destination):
  with base.sealed_source(data) as (source,fd):transaction('write',hex(address),source,'read',hex(address),len(data),destination,pass_fds=(fd,))
  require(destination.read_bytes()==data,'Restoration readback differs.');base.sync_file(destination)
@@ -386,7 +408,7 @@ def run_once(transaction,launch,ready,bundle,p,evidence,record,save):
   # Publish continuity only after the complete saved DRAM has been restored.
   # The nonzero result and failed functional result remain unchanged.
   kernel=module('finite_npu_controlled',ROOT/'tools/check-a733-kernel.py')
-  terminal='FAIL NPU numerical comparison' if result['status']==1 else 'REFUSED NPU thermal admission; configured sensor disabled and providers parked'
+  terminal='NPU_INFERENCE=MISMATCH; inference_jobs=1' if result.get('single_inference') else 'FAIL NPU numerical comparison' if result['status']==1 else 'REFUSED NPU thermal admission; configured sensor disabled and providers parked'
   markers=['NPU_STAGE=QUIESCENT',terminal]
   controlled={'outcome':{'name':'npu-numerical-mismatch-after-quiescence' if result['status']==1 else 'npu-thermal-refusal-after-quiescence',
    'status':result['status'],'interrupt':None,'fail_lines':0,'fault':None,'log_contains':markers},
