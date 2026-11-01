@@ -15,6 +15,11 @@ SECTIONS {
         KEEP(*(sunstone_gpu_program))
         __stop_sunstone_gpu_program = .;
     } > CODE
+    sunstone_region_initializers : ALIGN(8) {
+        __start_sunstone_region_initializers = .;
+        KEEP(*(sunstone_region_initializers))
+        __stop_sunstone_region_initializers = .;
+    } > CODE
     sunstone_manifest : ALIGN(8) {
         __start_sunstone_manifest = .;
         KEEP(*(sunstone_manifest))

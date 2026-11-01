@@ -153,9 +153,9 @@ change to the driver.
 Host queue, arithmetic and native instruction checks pass. Physical queue
 execution and the independent feature review remain open. The small generic
 qualification service remains separate, as the
-[queue design](designs/gpu-compute-queue.md) specifies. The EL3 clear of the
-existing output profile's tag prefix remains until its manifest policy is
-settled; other output regions receive no implicit clear.
+[queue design](designs/gpu-compute-queue.md) specifies. Startup initialization comes from immutable application registration records
+that name manifest regions and prefix lengths. Other output regions receive
+no implicit clear.
 
 ### 7. The NPU admits only networks listed inside the driver, through one built-in client
 

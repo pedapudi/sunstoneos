@@ -1,5 +1,5 @@
-/* EL3 publication hook of the integrated OS image. It publishes the fixed
- * recognition inputs, as the mimus board image does. The radio build also
+/* EL3 publishes application inputs and registered initialization before CPU
+ * mappings take effect. The radio build also
  * reads the four chip-ID words and publishes the radio profile span, as the
  * board image does for its radio workloads. The headset build reads the
  * Bluetooth profile and the chip-ID words and publishes both, as the
@@ -21,6 +21,44 @@ static struct bluetooth_profile profile;
 #endif
 static struct board_radio_chip_id identity;
 static unsigned attempted;
+#ifdef SUNSTONE_A733_OS_GPU
+extern const unsigned char __start_sunstone_region_initializers[];
+extern const unsigned char __stop_sunstone_region_initializers[];
+/* The caller has checked EL3 with translation and caches disabled. Validate
+ * the complete application registration before the first store. */
+__attribute__((noinline)) int os_application_initialize_regions(uint64_t deadline)
+{
+    const struct ss_manifest *m=ss_application.manifest;
+    const uintptr_t begin=(uintptr_t)__start_sunstone_region_initializers;
+    const uintptr_t end=(uintptr_t)__stop_sunstone_region_initializers;
+    if(end<begin || (begin&7) || (end-begin)%sizeof(struct ss_region_initializer))return 0;
+    const size_t count=(end-begin)/sizeof(struct ss_region_initializer);
+    if(count>SS_REGIONS || (count&&(!m || m->region_count>SS_REGIONS)))return 0;
+    const struct ss_region_initializer *initializers=(const void *)begin;
+    unsigned seen=0;
+    for(size_t i=0;i<count;++i){
+        const struct ss_region_initializer *init=&initializers[i];
+        if(init->reserved || init->region>=m->region_count || (seen&(1u<<init->region)))return 0;
+        const struct ss_region *r=&m->regions[init->region];
+        const uint64_t bytes=init->zero_prefix_bytes;
+        if(r->kind!=SS_REGION_WORK || !(r->access&SS_ACCESS_READ) ||
+           !(r->access&SS_ACCESS_GPU_WRITE) || (r->access&SS_ACCESS_WRITE) ||
+           !bytes || (bytes&7) || bytes>r->bytes || (r->address&7) ||
+           r->address<UINT64_C(0x44000000) || r->address>=UINT64_C(0x47000000) ||
+           r->bytes>UINT64_C(0x47000000)-r->address)return 0;
+        seen|=1u<<init->region;
+    }
+    for(size_t i=0;i<count;++i){
+        const struct ss_region_initializer *init=&initializers[i];
+        const uintptr_t address=(uintptr_t)m->regions[init->region].address;
+        volatile uint64_t *words=(volatile uint64_t *)address;
+#pragma clang loop unroll(disable)
+        for(uint64_t j=0;j<init->zero_prefix_bytes/8;++j)words[j]=0;
+        if(a733_cpu_coherence_publish(address,init->zero_prefix_bytes,deadline)!=1)return 0;
+    }
+    return 1;
+}
+#endif
 int board_identity_prepare(uint64_t deadline)
 {
     if(attempted)return 0;
@@ -34,26 +72,7 @@ int board_identity_prepare(uint64_t deadline)
         if(m->regions[i].kind==SS_REGION_INPUT&&
            a733_cpu_coherence_publish(m->regions[i].address,m->regions[i].bytes,deadline)!=1)return 0;
 #ifdef SUNSTONE_A733_OS_GPU
-    /* The GPU's 64 KiB tag area, before a733_cached_prepare maps the output
-     * region read-only at EL1 too: here EL3 runs with translation off, so
-     * every access is a Device access and only aligned 64-bit volatile stores
-     * are made, no memset or DC ZVA. The stores reach DRAM directly;
-     * publication cleans the range to the point of coherency (DC CVAC, then
-     * DSB SY) and invalidates nothing. No cached copy of the area can hold an
-     * earlier tag: the loader runs with caches off, nothing in the image
-     * writes the area, and each job's completion cleans and invalidates its
-     * tags before the recognizer reads them. */
-    /* The existing output profile clears its tag prefix before read-only
-     * CPU mapping. Other GPU consumers receive no implicit buffer clear. */
-    for(unsigned r=0;m&&r<m->region_count;++r){
-        const struct ss_region *region=&m->regions[r];
-        if(region->address!=UINT64_C(0x46c00000)||region->bytes<65536u||
-           !(region->access&SS_ACCESS_GPU_WRITE)||(region->access&SS_ACCESS_WRITE))continue;
-        volatile uint64_t *tags=(volatile uint64_t *)(uintptr_t)region->address;
-#pragma clang loop unroll(disable)
-        for(unsigned i=0;i<65536u/8;++i)tags[i]=0;
-        if(a733_cpu_coherence_publish(region->address,65536u,deadline)!=1)return 0;
-    }
+    if(!os_application_initialize_regions(deadline))return 0;
 #endif
 #if defined(SUNSTONE_A733_OS_RADIO) || defined(SUNSTONE_A733_OS_HEADSET)
 #ifdef SUNSTONE_A733_OS_HEADSET

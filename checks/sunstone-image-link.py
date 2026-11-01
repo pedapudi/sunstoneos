@@ -179,29 +179,42 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm):
     allowed.update(('vApplicationAssert', 'platform_panic'))
     forbidden = sorted(external - allowed)
     assert not forbidden, 'application references private OS symbols: ' + ', '.join(forbidden)
-    # The worker may copy only code admitted from application object files.
-    # The linker retains that code in an immutable section with exact bounds.
-    name = 'sunstone_gpu_program'
-    chunks = []
-    for path in objects:
-        obj = Elf(Path(path).read_bytes())
-        chunks += [obj.data[s[4]:s[4] + s[5]] for n, s in zip(obj.names, obj.sections) if n == name]
-    sections = [s for n, s in zip(elf.names, elf.sections) if n == name]
-    assert len(sections) <= 1, 'multiple GPU program sections'
-    raw = b'' if not sections else elf.data[sections[0][4]:sections[0][4] + sections[0][5]]
-    assert raw == b''.join(chunks), 'GPU program section contains code outside application objects'
-    bounds = []
-    for marker in ('__start_' + name, '__stop_' + name):
-        values = [s['value'] for s in elf.symbols if s['name'] == marker and s['shndx']]
-        assert len(values) == 1, 'missing GPU program bound: ' + marker
-        bounds.append(values[0])
-    assert bounds[1] - bounds[0] == len(raw), 'GPU program section bounds differ'
-    if raw:
-        section = sections[0]
-        assert section[2] & 2 and not section[2] & 1, 'GPU program code must be immutable allocated data'
-        assert section[3] == bounds[0], 'GPU program start differs from section'
+    # Application registration and program bytes enter immutable image
+    # sections with exact bounds. Neither section may contain OS-owned data.
+    admitted = {}
+    for name, alignment in (('sunstone_gpu_program', 4), ('sunstone_region_initializers', 8)):
+        chunks = []
+        for path in objects:
+            obj = Elf(Path(path).read_bytes())
+            chunks += [obj.data[s[4]:s[4] + s[5]] for n, s in zip(obj.names, obj.sections) if n == name]
+        sections = [s for n, s in zip(elf.names, elf.sections) if n == name]
+        assert len(sections) <= 1, 'multiple application sections: ' + name
+        raw = b'' if not sections else elf.data[sections[0][4]:sections[0][4] + sections[0][5]]
+        assert raw == b''.join(chunks), 'section contains data outside application objects: ' + name
+        bounds = []
+        for marker in ('__start_' + name, '__stop_' + name):
+            values = [s['value'] for s in elf.symbols if s['name'] == marker and s['shndx']]
+            assert len(values) == 1, 'missing application section bound: ' + marker
+            bounds.append(values[0])
+        assert bounds[0] % alignment == 0 and bounds[1] - bounds[0] == len(raw), 'section bounds differ: ' + name
+        if raw:
+            section = sections[0]
+            assert section[2] & 2 and not section[2] & 1, 'application section must be immutable: ' + name
+            assert section[3] == bounds[0], 'section start differs: ' + name
+        admitted[name] = raw
+    initializers = admitted['sunstone_region_initializers']
+    assert len(initializers) % 16 == 0 and len(initializers) <= 8 * 16, 'region initializer extent'
+    regions = application_manifest(elf)['regions']
+    seen = set()
+    for index, reserved, size in struct.iter_unpack('<IIQ', initializers):
+        assert not reserved and index < len(regions) and index not in seen, 'region initializer index'
+        region = regions[index]
+        assert region['kind'] == 2 and region['access'] & 1 and region['access'] & 8 and not region['access'] & 2, 'region initializer access'
+        assert size > 0 and size % 8 == 0 and size <= region['bytes'], 'region initializer prefix'
+        seen.add(index)
     return {'objects': len(objects), 'libraries': len(libraries), 'external_symbols': len(external),
-            'gpu_program_bytes': len(raw)}
+            'gpu_program_bytes': len(admitted['sunstone_gpu_program']),
+            'region_initializers': len(initializers) // 16}
 
 
 def main():

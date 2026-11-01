@@ -63,6 +63,18 @@ struct ss_region {
     uint8_t sha256[32];
 };
 
+/* Optional application registration in the immutable section
+ * "sunstone_region_initializers", aligned to 8 bytes. Before CPU mappings
+ * become read-only, EL3 clears and publishes this prefix of a GPU-written
+ * WORK region. No record means no initialization. The prefix must be a
+ * positive multiple of eight within the region; reserved must be zero. */
+struct ss_region_initializer {
+    uint32_t region, reserved;
+    uint64_t zero_prefix_bytes;
+};
+SS_STATIC_ASSERT(sizeof(struct ss_region_initializer) == 16 &&
+    offsetof(struct ss_region_initializer, zero_prefix_bytes) == 8, "region initializer layout");
+
 /* Capture format; rate_hz zero means no capture. Samples are little-endian
  * signed integers, channels interleaved. Admission requires the session's
  * capture length to lie within min_frames..max_frames. */

@@ -13,6 +13,15 @@ The reviewed migration comparisons below describe the separation base
 
 ## Implementation evidence and departures from the reviewed plan
 
+
+Review corrections cover zero-job shutdown and cold return, SLC bypass for
+CPU/GPU-shared mappings, rounded lease isolation, program-source bounds and
+application-supplied startup initialization. Program copies are confined to
+the immutable `sunstone_gpu_program` section admitted from application objects.
+The manifest and runtime independently refuse lease tails that intersect
+another region, including an unleased one. The correction evidence is under
+`review-fixes/` in the cache directory below.
+
 The host queue model passes 33 service cases and an external 204-job replay
 with 5,870,398 checked sums. Native instruction models pass 16 thermal cases,
 10 public-client cases, 17 returning-image cases, 32 constructor-refusal cases
@@ -649,14 +658,19 @@ mimus keeps every policy that the OS carries for it today:
 The queue's REFUSED record takes the place of the session's REFUSED record
 (`include/pvr_mimus_job.h:15-20`), and FAULT takes the place of LOST.
 
-### The tag area clear stays at EL3
+### The application registers startup initialization
 
-The EL3 identity step zeroes the 64 KiB tag area with translation off and
-publishes it, under `SUNSTONE_A733_OS_GPU_LINEAR`
-(`apps/os/identity.c:34-47`). The application-interface design does not yet
-say where this clear goes once EL3 publication reads the region table. Until
-it does, the clear stays where it is, and the build option that selects it
-becomes `SUNSTONE_A733_OS_GPU`.
+An application may place `ss_region_initializer` records in the immutable
+`sunstone_region_initializers` section. A record names a manifest region and a
+prefix length. EL3 validates every record before the first store, clears each
+prefix with aligned 64-bit stores and publishes it before CPU read-only
+mappings take effect. Prefixes must fit CPU-readable, GPU-written WORK regions
+that the CPU cannot write. An absent registration clears nothing.
+
+Mimus registers its GPU output region and 64 KiB tag prefix in
+`sunstoneos/apps/mimus/gpu_linear.c`. The OS contains neither that output
+address nor its tag geometry. The image check verifies that registration data
+comes from application objects and remains immutable.
 
 ## Performance
 
@@ -854,10 +868,7 @@ image building and its host checks passing.
 
 ## Open decisions
 
-1. **The tag area clear.** It stays in the EL3 identity step. The
-   application-interface design decides whether a region declares a cleared
-   prefix, or whether mimus clears the tags another way.
-2. **Removing the backup poll.** Which board measurement qualifies the GPU
+1. **Removing the backup poll.** Which board measurement qualifies the GPU
    interrupt, and therefore removes the 4 ms cap.
-3. **The second application.** Which capacity it needs first: a second
+2. **The second application.** Which capacity it needs first: a second
    context, a deeper queue, or a second program.

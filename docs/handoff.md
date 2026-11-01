@@ -21,7 +21,10 @@ is built once; completion uses interrupts with the retained 4 ms backup poll.
 The mimus application owns its kernel and tensor jobs in its external checkout.
 `apps/queue-add` is an independent consumer with one- and eight-job variants.
 
-Host service, arithmetic, mapping, thermal and returning-image fixtures pass.
+Review corrections cover zero-job and COLD returns, SLC bypass on shared
+mappings, isolation of rounded leases, immutable application program bounds
+and application-registered startup initialization. Host service, arithmetic,
+mapping, thermal and returning-image fixtures pass.
 Evidence and requested physical runs are recorded in the
 [queue design](designs/gpu-compute-queue.md). Physical queue qualification and
 independent feature review remain open. No board state changed. The separate
