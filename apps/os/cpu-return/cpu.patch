@@ -8,18 +8,21 @@
  #include "../board/application.h"
  #include "application.h"
  #include "a733_cpu_clock.h"
-@@ -84,6 +85,10 @@
+@@ -84,6 +85,13 @@
      atomic_uint ready;
  } owner;
  enum { START, INSPECT, REQUEST, FOLLOW };
 +static unsigned entry_checked;
 +static unsigned return_request;
 +static atomic_uint return_done;
++/* DCDC5, DCDC3: last confirmed PMIC readbacks at clock close; 0 is unread.
++ * Captured after normal ROM return, before restoring image RAM. */
++uint32_t os_cpu_return_rail_uv[2];
 +int os_cpu_return_clock_done(void){return atomic_load_explicit(&return_done,memory_order_acquire);}
  static int clock_now(void *v,uint64_t *out)
  {return v==&owner&&a733_counter_clock_now(&providers.shared.counter,out);}
  static int clock_read(void *v,uintptr_t a,uint32_t *out){return v==&owner&&read_word(NULL,a,out);}
-@@ -123,7 +128,7 @@
+@@ -123,7 +131,7 @@
  {
      struct a733_cpu_clock *c=&owner.driver;
      const struct os_session *s=os_session_admitted();
@@ -28,7 +31,7 @@
          struct a733_cpu_clock_config config;
          if(!s||!a733_cpu_clock_grant_load(&s->cpu_clock,s->board.epoch,s->board.generation,&config)||
             !a733_cpu_clock_init(c,&config,&clock_ops,&owner,&providers.shared.clocks,&providers.shared.rails,
-@@ -132,7 +137,33 @@
+@@ -132,7 +140,36 @@
          if(a733_cpu_clock_inspect(c,A733_CPU_LITTLE,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return REFUSED(0);
          return 1;
      }
@@ -45,7 +48,9 @@
 +     * above boot0's 1014 MHz, is lowered to that point, which also returns
 +     * DCDC3 to its floor; the ROM return resets CPU-L and the DSU
 +     * (docs/designs/cpu-top-opp.md). With CPU-B not raised nothing is
-+     * written and no change is consumed. */
++     * written and no change is consumed. An expired raise or a thermal
++     * lowering can leave DCDC3 raised at 1014 MHz: report its confirmed
++     * readback for the external rail helper, which normalizes both rails. */
 +    if(os_cpu_return_requested()){
 +        if(r==A733_CPU_CLOCK_RETAINED||r==A733_CPU_CLOCK_INVALID)return REFUSED(r);
 +        if(r==A733_CPU_CLOCK_PENDING)return 1;
@@ -58,12 +63,13 @@
 +        if(!a733_cpu_clock_report(read_word,NULL,&final)||!final.domain[A733_CPU_BIG].decoded||
 +           final.domain[A733_CPU_BIG].source!=3||final.domain[A733_CPU_BIG].hz!=UINT64_C(1014000000)||
 +           c->clock.id||c->rail.id||c->request.id)return REFUSED(0);
++        os_cpu_return_rail_uv[0]=c->rail_uv[0];os_cpu_return_rail_uv[1]=c->rail_uv[1];
 +        atomic_store_explicit(&return_done,1,memory_order_release);return 1;
 +    }
  #ifdef SUNSTONE_A733_OS_PERF
      /* The performance-mode service replaces the one-request-per-cluster
       * start: its boot switch moves the CPU domains to the boot mode, and it
-@@ -162,6 +193,15 @@
+@@ -162,6 +199,15 @@
  #endif
      }
      if(owner.phase==REQUEST){
@@ -79,7 +85,7 @@
          /* One request per granted domain once its sensor has a reading (CPUL
           * is physical channel 3, CPUB channel 0), in the default path's order
           * (docs/designs/cpu-top-opp.md): CPU-B, CPU-L, then the DSU at the
-@@ -182,12 +222,14 @@
+@@ -182,12 +228,14 @@
                  target=c->report.binned ? a733_cpu_clock_dsu_top(c->report.bin,c->applied_mhz[A733_CPU_LITTLE],big) : 0;
                  if(!target)continue;
              }

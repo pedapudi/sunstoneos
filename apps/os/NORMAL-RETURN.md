@@ -105,6 +105,19 @@ lease or PMIC request. `checks/os-cpu-return-entry-owner.py` runs the linked
 owner with a return requested during inspection, before the first request,
 with a request in flight and after every raise.
 
+An expired raise can leave DCDC3 at 1050 mV without changing CPU-B's 1014 MHz
+clock. Thermal lowering also preserves the higher voltage. These states return
+normally. Before publishing clock completion, the owner records its last
+confirmed DCDC5 and DCDC3 PMIC readbacks in `os_cpu_return_rail_uv`. The host
+copies this eight-byte report before restoring image RAM, saves `cpu-rails.bin`
+and its hash, and includes both values in `result.cpu_rails`. Zero is decoded
+as unread; a return before the first inspection issues no PMIC transaction.
+`tools/dev-run.py` reports these readings and runs its general rail helper
+after normal return. That helper accepts either rail from 800 mV to its vendor
+top voltage at the boot clock words and restores both to 800 mV. The separate
+fixed-DCDC3 helper used by the recorded recognition continuation has a narrower
+entry contract.
+
 After clock completion and lease release, the thermal owner masks its SPI,
 waits for distributor write propagation and stops the converter and local
 interrupt enables. Its owner acknowledgment follows the driver's STOPPED result.
