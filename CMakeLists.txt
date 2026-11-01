@@ -317,3 +317,5 @@ endif()
 include(cmake/latency-recorder.cmake)
 include(cmake/latency.cmake)
 include(cmake/a733-os.cmake)
+
+include(cmake/dma-authority-control.cmake)
