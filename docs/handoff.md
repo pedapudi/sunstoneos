@@ -115,6 +115,26 @@ Host-only autonomous boot evidence is under `resume-card-os-1026/`.
 
 ## Host validation and pending device runs
 
+The combined host checks pass under
+`~/.cache/sunstoneos/build/integrate-streams-1031/`. OS-only and hello-compute
+build with empty `MIMUS_DIR`; the third baseline uses the external mimus
+checkout at `~/git/mimus-worktrees/small-fixes-1031`. Selected integration
+builds cover memory, DMA, cyclic I2S, radio dispatch and radio/headset service
+composition. Source-ownership, shared-helper and progress checks pass.
+
+Focused checks pass for complete memory-map admission, DMA/IOMMU ownership,
+raw PMIC observation, cold-session refusal, SDIO deadlines, HEVC state and
+pixels, RTC alarm lifetime and MD5/SM3 staging/upload ownership. Device effects
+remain modeled. The check index verifies 747 checks; pre-push fixtures reject
+25 blocked cases and accept 12 permitted cases. Test cleanup moves artifacts
+into the trash directory.
+
+Independent review approved the integration and two fixture/parser corrections.
+The dashboard reads the current handoff's bulleted actions. Memory preparation
+checks refusal of an existing artifact directory before using a fresh one.
+The failed setup logs and successful resumed cases remain in the evidence
+directory. No board was accessed; these results add no physical qualification.
+
 Memory admission checks every tested block before writes. Cyclic DMA receive
 staging excludes every retained allocation and metadata range. Mapping,
 sanitizer and FreeRTOS DMA service/cyclic checks pass, as do the three baseline
@@ -275,7 +295,8 @@ reuse. No board run is requested for this documentation change.
 
 ## Open branches
 
-- `work/tool-gates-1031`: host-tool admission and merged startup fixes; prepared for integration after the listed host checks.
+- `work/board-runner-1031`: returning-image and runner changes; unmerged.
+- `work/gpu-integrate-1031`: GPU integration; unmerged.
 - `work/gpu-ref-fixes-1031`: align the GPU service with the reference sequence; diagnosis and fixes in progress, unmerged.
 - `work/gpu-queue-1031`, with mimus `port/sunstoneos-gpu-queue`: supply a generic GPU compute queue and application port; unmerged.
 
