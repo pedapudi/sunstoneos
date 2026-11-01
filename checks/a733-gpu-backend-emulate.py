@@ -14,6 +14,7 @@ mode.add_argument('--event-only', action='store_true')
 mode.add_argument('--lifetime-only', action='store_true')
 mode.add_argument('--firmware-clock-only', action='store_true')
 mode.add_argument('--compat-only', action='store_true')
+mode.add_argument('--progress-only', action='store_true')
 a = p.parse_args()
 u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
 # The GPU window, the GIC, and the GPU-wrapper and SMC0 pages of the secure
@@ -31,6 +32,7 @@ with a.elf.open('rb') as f:
     symbols = {s.name: s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
 u.cpr_write(3, 3, 14, 0, 0, 24000000)
 clock = [100]
+progress = []
 def word(name):
     return int.from_bytes(u.mem_read(symbols[name], 4), 'little')
 def instruction(uc, address, size, context):
@@ -52,6 +54,11 @@ def instruction(uc, address, size, context):
         uc.reg_write(UC_ARM64_REG_PC, uc.reg_read(UC_ARM64_REG_LR))
         return
     opcode = int.from_bytes(uc.mem_read(address, 4), 'little')
+    if opcode in (0xd40b81a1, 0xd40b81c1):  # Progress / first-failure SVC
+        if opcode == 0xd40b81a1:
+            progress.append((uc.reg_read(UC_ARM64_REG_X0), uc.reg_read(UC_ARM64_REG_X0 + 1)))
+        uc.reg_write(UC_ARM64_REG_PC, address + 4)
+        return
     masked, register = opcode & 0xffffffe0, opcode & 31
     value = None
     if masked == 0xd53be020:  # CNTPCT_EL0
@@ -124,7 +131,7 @@ u.hook_add(UC_HOOK_CODE, instruction)
 u.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, access)
 u.reg_write(UC_ARM64_REG_SP, 0x40400000 - 16)
 u.reg_write(UC_ARM64_REG_LR, 0x403ff000)
-u.emu_start(symbols['backend_compat_check' if a.compat_only else 'backend_firmware_clock_check' if a.firmware_clock_only else 'backend_lifetime_check' if a.lifetime_only else 'backend_clock_check' if a.clock_only else 'backend_event_check' if a.event_only else 'backend_check'], 0x403ff000, timeout=20000000, count=5000000)
+u.emu_start(symbols['backend_progress_check' if a.progress_only else 'backend_compat_check' if a.compat_only else 'backend_firmware_clock_check' if a.firmware_clock_only else 'backend_lifetime_check' if a.lifetime_only else 'backend_clock_check' if a.clock_only else 'backend_event_check' if a.event_only else 'backend_check'], 0x403ff000, timeout=20000000, count=5000000)
 assert u.reg_read(UC_ARM64_REG_PC) == 0x403ff000, 'execution budget exhausted'
 assert u.reg_read(UC_ARM64_REG_X0) == 0, f"backend check failed at line {u.reg_read(UC_ARM64_REG_X0)}"
 # Every start publication makes the vendor secure configuration in its order,
@@ -133,4 +140,7 @@ SEQUENCE = [('smc0', 2), ('smc0', None), ('drm_ctrl', 0), ('drm_ctrl', None)]
 publishes = not (a.clock_only or a.lifetime_only or a.firmware_clock_only)
 assert bool(secure) == publishes, f'secure configuration required={publishes}, accesses={secure}'
 assert secure == SEQUENCE * (len(secure) // 4), f'secure configuration accesses {secure}'
-print('PASS native GPU backend: real controller compatibility copy and restricted service-owned destination' if a.compat_only else 'PASS native GPU backend: refused bind preserves config; successful bind serializes both firmware clocks at the top point' if a.firmware_clock_only else 'PASS native GPU backend: expired lifetime permanently refuses later access' if a.lifetime_only else 'PASS native GPU backend: actual firmware event receive and restricted queue-owned destination' if a.event_only else 'PASS native GPU backend: private platform/controller clock regression refusal' if a.clock_only else 'PASS native GPU backend: identity, MMIO trace widths, memory/GIC composition, mapping refusal and retained isolation failures')
+if a.progress_only:
+    assert [stage for stage, value in progress] == [0x0469, 0x046a, 0x046b, 0x046c, 0x0468, 0x0467], \
+        f'power, identity, publication, timer-read, timer and secure progress: {progress}'
+print('PASS native GPU backend: power, identity, publication and first timer read breadcrumbs' if a.progress_only else 'PASS native GPU backend: real controller compatibility copy and restricted service-owned destination' if a.compat_only else 'PASS native GPU backend: refused bind preserves config; successful bind serializes both firmware clocks at the top point' if a.firmware_clock_only else 'PASS native GPU backend: expired lifetime permanently refuses later access' if a.lifetime_only else 'PASS native GPU backend: actual firmware event receive and restricted queue-owned destination' if a.event_only else 'PASS native GPU backend: private platform/controller clock regression refusal' if a.clock_only else 'PASS native GPU backend: identity, MMIO trace widths, memory/GIC composition, mapping refusal and retained isolation failures')

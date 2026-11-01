@@ -51,6 +51,10 @@ static inline void pvr_gpu_crumb_record(uint32_t site, uint32_t value, const voi
 #define PVR_GPU_CRUMB_MMU_FLUSHED 0x0466u  /* MMU-cache command executed; value: return word */
 #define PVR_GPU_CRUMB_SECURE 0x0467u       /* secure configuration read back; value: SMC0 << 8 | drm_ctrl */
 #define PVR_GPU_CRUMB_TIMER 0x0468u        /* first timer correlation published; value: CR_TIMER reads */
+#define PVR_GPU_CRUMB_POWER_ON 0x0469u     /* entering platform power-on; value: 0 */
+#define PVR_GPU_CRUMB_IDENTITY 0x046au     /* platform ON, before identity/capability reads; value: 0 */
+#define PVR_GPU_CRUMB_PUBLISH 0x046bu      /* entering shared-memory publication; value: 0 */
+#define PVR_GPU_CRUMB_TIMER_READ 0x046cu   /* before the first CR_TIMER read; value: 0 */
 #define PVR_GPU_CRUMB_FAILED 0x046fu       /* first failure of a unit; value: unit << 12 | source line */
 
 #define PVR_GPU_CRUMB_FAIL_GROUP 0x7u

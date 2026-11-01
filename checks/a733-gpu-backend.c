@@ -410,3 +410,10 @@ unsigned backend_compat_check(void)
     }
     return 0;
 }
+
+unsigned backend_progress_check(void)
+{
+    CHECK(!setup()); CHECK(!bind()); CHECK(!enabled());
+    CHECK(config.start.publish(&backend));
+    return 0;
+}

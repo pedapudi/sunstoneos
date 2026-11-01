@@ -125,6 +125,7 @@ static int power_begin(void *context, uint64_t deadline)
     b->deadline = deadline; b->identity = 0; b->identity_step = 0;
     b->mode = (struct pvr_compute_mode){0};
     b->phase = A733_GPU_BACKEND_POWERING;
+    sunstone_crumb(PVR_GPU_CRUMB_POWER_ON, 0);
     return a733_gpu_platform_begin(b->power, deadline) || fail(b, A733_GPU_BACKEND_POWER);
 }
 static int power_poll(void *context)
@@ -139,6 +140,7 @@ static int power_poll(void *context)
         if (result != 1 || b->power->phase != A733_GPU_PLATFORM_ON || !b->power->token || !b->power->delegated)
             return fail(b, A733_GPU_BACKEND_POWER), -1;
         b->phase = A733_GPU_BACKEND_IDENTIFY;
+        sunstone_crumb(PVR_GPU_CRUMB_IDENTITY, 0);
         return 0;
     }
     if (b->phase != A733_GPU_BACKEND_IDENTIFY || b->power->phase != A733_GPU_PLATFORM_ON ||
@@ -342,6 +344,7 @@ static int timer_correlation(struct a733_gpu_backend *b)
 {
     uint64_t cr, us;
     unsigned reads = 1;
+    sunstone_crumb(PVR_GPU_CRUMB_TIMER_READ, 0);
     if (!raw_read(b, 0x160, 8, &cr)) return 0;
     if ((cr ^ (cr << 32)) & (UINT64_C(1) << 63)) {
         reads = 2;
@@ -360,7 +363,9 @@ static int timer_correlation(struct a733_gpu_backend *b)
 static int publish(void *context)
 {
     struct a733_gpu_backend *b = context;
-    return active(b) && memory_result(b, a733_gpu_memory_publish(b->memory)) && timer_correlation(b) &&
+    if (!active(b)) return 0;
+    sunstone_crumb(PVR_GPU_CRUMB_PUBLISH, 0);
+    return memory_result(b, a733_gpu_memory_publish(b->memory)) && timer_correlation(b) &&
         secure_configuration(b);
 }
 static int started(void *context, uint32_t *out)
