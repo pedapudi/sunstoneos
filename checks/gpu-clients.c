@@ -11,6 +11,13 @@ static struct pvr_gpu_service service;
 static TaskHandle_t current=(void *)1;
 static unsigned scheduler,ticks,phase=PVR_GPU_SERVICE_READY,operation,delay_reply,recover_at;
 static uint64_t ticket_counter;
+static unsigned peer_queue_creates;
+QueueHandle_t xQueueCreateStatic(unsigned length,unsigned bytes,uint8_t *storage,StaticQueue_t *state)
+{
+    assert(length==1 && bytes==sizeof(struct gpu_queue_record));
+    assert(storage==q.peer.completion_storage && state==&q.peer.completion_state);
+    ++peer_queue_creates;return &peer_records;
+}
 int xTaskGetSchedulerState(void){return scheduler;}
 TaskHandle_t xTaskGetCurrentTaskHandle(void){return current;}
 TickType_t xTaskGetTickCount(void){return ticks;}
@@ -75,7 +82,7 @@ static void initialize(void)
 {
     q.service=&service;q.generation=7;q.create_done=1;q.lease_count=1;
     q.lease[0]=(struct gpu_queue_lease_info){.address=0x44000000,.bytes=4096};
-    q.completions=&owner_records;q.peer.completions=&peer_records;
+    q.completions=&owner_records;
     q.slot_state=PVR_COMPUTE_QUEUE_IDLE;q.peer.slot_state=PVR_COMPUTE_QUEUE_IDLE;
     service.clients[0].task=(void *)1;service.worker=(void *)4;service.requests=&requests;
     scheduler=taskSCHEDULER_NOT_STARTED;
@@ -120,6 +127,7 @@ int main(void)
 #else
     assert(!pvr_compute_queue_client_register(&q,(void *)1));
     assert(pvr_compute_queue_client_register(&q,(void *)2));
+    assert(peer_queue_creates==1 && q.peer.completions==&peer_records);
     assert(!pvr_compute_queue_client_register(&q,(void *)3));
     scheduler=taskSCHEDULER_RUNNING;
     struct gpu_queue_context owner={7,0},peer;

@@ -17,8 +17,13 @@ int pvr_compute_queue_client_bind(struct pvr_compute_queue *q)
 int pvr_compute_queue_client_register(struct pvr_compute_queue *q,TaskHandle_t task)
 {
     if (!q || q!=instance || !task || q->peer.task ||
-        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED ||
-        !pvr_gpu_service_bind(q->service,2,task)) return 0;
+        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED) return 0;
+    if (!q->peer.completions) {
+        q->peer.completions=xQueueCreateStatic(1,sizeof(struct gpu_queue_record),
+            q->peer.completion_storage,&q->peer.completion_state);
+        if (!q->peer.completions) return 0;
+    }
+    if (!pvr_gpu_service_bind(q->service,2,task)) return 0;
     q->peer.task=task; return 1;
 }
 static int caller(struct pvr_compute_queue *q,unsigned client)
