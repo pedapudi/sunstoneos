@@ -81,13 +81,19 @@ int os_session_decode(const void *raw,size_t bytes,struct os_session *out)
 #ifdef SUNSTONE_A733_OS_AUDIO
     if(!extent_copy(raw,SS_EXTENT_AUDIO,&out->audio,sizeof(out->audio)))return 0;
     if(capture&&(out->audio.capture_samples<m->audio.min_frames||out->audio.capture_samples>m->audio.max_frames))return 0;
+#else
+    if(os_session_extent(raw,SS_EXTENT_AUDIO,NULL))return 0;
 #endif
 #ifdef SUNSTONE_A733_OS_NPU
     if(!extent_copy(raw,SS_EXTENT_NPU,&out->npu,sizeof(out->npu)))return 0;
+#else
+    if(os_session_extent(raw,SS_EXTENT_NPU,NULL))return 0;
 #endif
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
     if(!extent_copy(raw,SS_EXTENT_CPU_GRANT,&out->cpu_clock,sizeof(out->cpu_clock)))return 0;
     if(out->cpu_clock.clusters)out->cpu_clock.epoch=out->board.epoch;
+#else
+    if(os_session_extent(raw,SS_EXTENT_CPU_GRANT,NULL))return 0;
 #endif
     /* Scan INPUTS even for an application without inputs, validating the
      * complete extent framing and duplicate-type rule. */
@@ -97,7 +103,7 @@ int os_session_decode(const void *raw,size_t bytes,struct os_session *out)
     n=0;for(unsigned i=0;i<m->region_count;++i)if(m->regions[i].kind==SS_REGION_INPUT){
         const struct ss_region *r=&m->regions[i];const struct ss_input_fact *f=&inputs[n++];
         uint8_t pinned=0;for(unsigned j=0;j<32;++j)pinned|=r->sha256[j];
-        if(!f->bytes||f->bytes>r->bytes||(pinned&&(f->bytes!=r->bytes||memcmp(f->sha256,r->sha256,32))))return 0;
+        if(f->bytes>r->bytes||(pinned&&(f->bytes!=r->bytes||memcmp(f->sha256,r->sha256,32))))return 0;
     }
 #ifndef SUNSTONE_BOARD_RESIDENT
     uint64_t start=out->board.epoch/24;
