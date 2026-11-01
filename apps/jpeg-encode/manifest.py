@@ -2,11 +2,14 @@
 """Freeze the existing linked-object and compiler-dependency evidence format."""
 import argparse,hashlib,importlib.util,json,shutil
 from pathlib import Path
+_output_spec=importlib.util.spec_from_file_location('device_evidence_directory',Path(__file__).resolve().parents[2]/'tools/host_evidence.py')
+_output_module=importlib.util.module_from_spec(_output_spec);_output_spec.loader.exec_module(_output_module)
+unique_directory=_output_module.unique_directory
 ROOT=Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('jpeg_runtime_snapshot',ROOT/'tools/evidence-snapshot.py')
 snapshot=importlib.util.module_from_spec(spec);spec.loader.exec_module(snapshot)
 def freeze(build,out):
-    out.mkdir(parents=True,exist_ok=False)
+    out=unique_directory(out)
     dependencies,commands,records=snapshot.collect_dependencies(build,'sunstone-a733-jpeg-encode')
     image=build/'sunstone-a733-jpeg-encode.elf';shutil.copy2(image,out/'image.elf')
     (out/'compiled-dependencies.json').write_text(json.dumps(dependencies,indent=2)+'\n')

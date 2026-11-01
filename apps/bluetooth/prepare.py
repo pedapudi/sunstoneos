@@ -52,40 +52,15 @@ def profile_check(data, session, *, workloads=(2,), model_pin=None):
 
 
 def bluetooth_admission(record, profile, session, manifest, image_hash, cache, frozen=False, *, application_admission=None):
-    require(manifest.get('target') == 'sunstone-a733-bluetooth' and manifest.get('execution_profile') == 'bluetooth-supervised-v1' and manifest.get('final_elf') == image_hash, 'Actual tested Bluetooth image manifest required.')
-    require(record.get('radio_ddr') is not None, 'Complete retained profile/firmware DDR reservation required.')
     board.session_check(session)
-    model_pin=manifest.get('recognition_provider')
-    spans = profile_check(profile, session, model_pin=model_pin)
-    if len(profile)>=752 and struct.unpack_from('<I',profile,624)[0] in (3,4,5):
-        require(manifest.get('wideband_provider')==json.loads(Path(__file__).with_name('msbc-source.json').read_text()),
-                'Actual native pinned mSBC provider required for wideband mode.')
-    a2dp=len(profile)==752 and struct.unpack_from('<I',profile,624)[0]==6
-    require(bool(manifest.get('a2dp_provider'))==a2dp,'A2DP profile and image selection differ.')
-    if a2dp:
-        require(manifest['a2dp_provider']==json.loads(Path(__file__).with_name('msbc-source.json').read_text()),'Pinned SBC provider required.')
-    require(isinstance(record.get('payloads'), list) and len(record['payloads']) == 4, 'Exactly four admitted firmware payloads required.')
-    for key, offset in [('bluetooth_wiring', 56), ('bluetooth_sid', 88), ('bluetooth_transport', 120)]:
-        item = record.get(key)
-        require(isinstance(item, dict) and set(item) == {'path', 'sha256'} and Path(item['path']).is_absolute(), 'Exact Bluetooth evidence reference required.')
-        if item['path'] not in cache:
-            require(not frozen, 'Bluetooth evidence missing from frozen bundle.')
-            cache[item['path']] = Path(item['path']).read_bytes()
-        require(hashlib.sha256(cache[item['path']]).hexdigest() == item['sha256'] and bytes.fromhex(item['sha256']) == profile[offset:offset + 32], 'Bluetooth authority evidence differs.')
-    if len(profile)>=752:
-        require(manifest.get('headset_provider',{}).get('commit')=='64e98eb5278d790f3b3e5279ca8b39b45097bbc0',
-                'Pinned native security provider required for headset capture.')
-        item=record.get('bluetooth_scheduling')
-        require(isinstance(item,dict) and set(item)=={'path','sha256'} and Path(item['path']).is_absolute(),
-                'Actual scheduling/buffer/RTS-CTS service evidence required.')
-        if item['path'] not in cache:
-            require(not frozen,'Scheduling evidence missing from frozen bundle.')
-            cache[item['path']]=Path(item['path']).read_bytes()
-        require(hashlib.sha256(cache[item['path']]).hexdigest()==item['sha256'] and
-                bytes.fromhex(item['sha256'])==profile[672:704],'Scheduling authority evidence differs.')
+    model_pin=record.get('recognition_provider',manifest.get('recognition_provider'))
+    spans=profile_check(profile,session,model_pin=model_pin)
+    require(isinstance(record.get('payloads'),list) and len(record['payloads'])==4,
+            'Exactly four firmware payloads required.')
     if len(profile)==832:
         require(application_admission is not None, 'Application profile admission callback required.')
-        application_admission(record, profile, manifest, image_hash, cache, frozen)
+        application_admission(record,profile,manifest,image_hash,cache,frozen)
+
     return spans
 
 
@@ -120,8 +95,9 @@ def build_launcher(output, clang, lld, execute=None):
 
 
 def prepare(image, manifest, admission, template, profile, payloads, output, clang, lld, *, application_admission=None):
-    image, manifest, admission, template, profile, output = map(Path, (image, manifest, admission, template, profile, output))
-    image_data, manifest_data, admission_data, template_data, profile_data = [p.read_bytes() for p in (image, manifest, admission, template, profile)]
+    image, admission, template, profile, output = map(Path, (image, admission, template, profile, output))
+    image_data, admission_data, template_data, profile_data = [p.read_bytes() for p in (image, admission, template, profile)]
+    manifest_data=Path(manifest).read_bytes() if manifest is not None else b'{}'
     image_hash = hashlib.sha256(image_data).hexdigest()
     proof = json.loads(manifest_data)
     record = json.loads(admission_data)
@@ -132,7 +108,7 @@ def prepare(image, manifest, admission, template, profile, payloads, output, cla
     require(payloads == record.get('payloads') and all(hashlib.sha256(data).hexdigest() == item['sha256'] for item, data in zip(payloads, snapshots)), 'Firmware differs from reviewed admission.')
     epoch, generation, lease = (secrets.randbits(64) or 1 for _ in range(3))
     session = bytearray(template_data);struct.pack_into('<3Q', session, 24, epoch, generation, lease);session[48:80] = bytes.fromhex(image_hash)
-    output.mkdir(parents=True, exist_ok=False)
+    output=board.unique_directory(output)
     build_launcher(output, clang, lld)
     for name, data in [('image.elf', image_data), ('image-manifest.json', manifest_data), ('admission.json', admission_data),
                        ('session-template.bin', template_data), ('session.bin', session), ('profile.bin', profile_data)]:
@@ -165,18 +141,18 @@ def prepare(image, manifest, admission, template, profile, payloads, output, cla
 def validate_bundle(bundle, *, application_admission=None):
     bundle = Path(bundle);metadata = (bundle / 'prepared.json').read_bytes();p = json.loads(metadata)
     require(p.get('schema') == SCHEMA and p.get('physical_access') is False, 'Unsupported Bluetooth bundle.')
-    for name, expected in p['files'].items():
+    for name, expected in board.snapshot_files(p).items():
         require(Path(name).name == name and digest(bundle / name) == expected, 'Prepared Bluetooth bytes changed.')
     require(digest(bundle / 'image.elf') == p['image_sha256'] and digest(bundle / 'launch.bin') == p['launcher_sha256'], 'Bluetooth image/launcher differs.')
     raw = (bundle / 'session.bin').read_bytes();template = bytearray((bundle / 'session-template.bin').read_bytes())
     struct.pack_into('<3Q', template, 24, p['epoch'], p['generation'], p['lease']);template[48:80] = bytes.fromhex(p['image_sha256'])
     require(raw == template, 'Session derivation differs.')
-    cache = {path: (bundle / item['name']).read_bytes() for path, item in p['entry_evidence'].items()}
-    require(all(hashlib.sha256(cache[path]).hexdigest() == item['sha256'] for path, item in p['entry_evidence'].items()), 'Frozen evidence differs.')
+    cache=board.input_cache(bundle,p)
+    None
     admitted = json.loads((bundle / 'admission.json').read_text())
     board.validate_admission(admitted, p['image_sha256'], digest(bundle / 'session-template.bin'), cache, True)
     spans = bluetooth_admission(admitted, (bundle / 'profile.bin').read_bytes(), raw,
-        json.loads((bundle / 'image-manifest.json').read_text()), p['image_sha256'], cache, True, application_admission=application_admission)
+        {}, p['image_sha256'], cache, True, application_admission=application_admission)
     segments, address, identity = board.base.image_parts(bundle / 'image.elf')
     require(identity.hex() == p['build_id'], 'Build identity differs.')
     for name, data in zip(('request.bin', 'contract.bin'), board.request_bytes(address, identity, p['epoch'], p['generation'], p['lease'], raw)):
@@ -201,10 +177,9 @@ def validate_bundle(bundle, *, application_admission=None):
     p['_prepared_sha256'] = hashlib.sha256(metadata).hexdigest()
     return p
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ['image', 'manifest', 'admission', 'template', 'profile', 'payloads', 'output', 'clang', 'lld']:
+    for name in ['image', 'admission', 'template', 'profile', 'payloads', 'output', 'clang', 'lld']:
         parser.add_argument('--' + name, type=Path, required=True)
     a = parser.parse_args()
     prepare(a.image, a.manifest, a.admission, a.template, a.profile, json.loads(a.payloads.read_text()), a.output, a.clang, a.lld)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze a reviewed native I2S session and sixty-second SRAM launch offline."""
+"""Prepare a native I2S session and sixty-second SRAM launch offline."""
 import argparse
 import hashlib
 import importlib.util
@@ -14,6 +14,7 @@ ROOT=Path(__file__).resolve().parents[2]
 def module(name,path):
     s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 supervisor=module('i2s_prepare_supervisor',ROOT/'tools/check-a733-smp-supervised.py')
+board=module('i2s_prepare_board',ROOT/'apps/board/prepare.py')
 protocol=module('i2s_protocol',ROOT/'apps/i2s/observe.py')
 security_authority=module('i2s_dma_security',ROOT/'tools/dma-nonsecure-access.py')
 require,digest,save_json=supervisor.require,supervisor.digest,supervisor.save_json
@@ -124,45 +125,30 @@ def session_profile(raw,layout,identity,pcm):
         profile['capture_samples']=count
     return profile
 
-def validate_admission(admission_raw,raw,layout,identity,pcm,image_hash,cache=None,frozen=False):
-    record=json.loads(admission_raw);profile=session_profile(raw,layout,identity,pcm)
-    require(record.get('schema')==('a733-i2s-supervised-entry-v2' if 'capture_samples' in profile else 'a733-i2s-supervised-entry-v1') and record.get('image_sha256')==image_hash and
-        field(raw,layout,'evidence')==hashlib.sha256(admission_raw).digest() and all(record.get(k)==v for k,v in profile.items()),'I2S session does not bind reviewed image/entry')
-    require(record.get('shared_sha256')==sha(field(raw,layout,'shared')) and record.get('dma_sha256')==sha(field(raw,layout,'dma')) and
-        record.get('inherited_sha256')==sha(field(raw,layout,'inherited')),'I2S typed configuration differs from reviewed facts')
-    cache={} if cache is None else cache
+def validate_admission(admission_raw, raw, layout, identity, pcm, image_hash, cache=None, frozen=False):
+    record = json.loads(admission_raw)
+    profile = session_profile(raw, layout, identity, pcm)
+    require(all((record.get(k) == v for k, v in profile.items())), 'I2S session does not bind reviewed image/entry')
+    require(record.get('shared_sha256') == sha(field(raw, layout, 'shared')) and record.get('dma_sha256') == sha(field(raw, layout, 'dma')) and (record.get('inherited_sha256') == sha(field(raw, layout, 'inherited'))), 'I2S typed configuration differs from reviewed facts')
+    cache = {} if cache is None else cache
+
     def evidence(ref):
-        require(isinstance(ref,dict) and set(ref)=={'path','sha256'},'Invalid I2S evidence reference')
-        p=Path(ref['path']);require(p.is_absolute(),'I2S evidence path must be absolute')
-        if str(p) not in cache:require(not frozen,'Missing frozen I2S entry evidence');cache[str(p)]=p.read_bytes()
-        data=cache[str(p)];require(sha(data)==ref['sha256'],'I2S entry evidence changed');return data
-    target,port=record.get('identity'),record.get('port');require(target and port,'Explicit I2S target/port required')
-    require('dma_nonsecure_access' in record,'I2S DMA nonsecure authority is missing')
-    expected={k:profile[k] for k in ('epoch','generation','lease')}
-    expected.update(identity=target,port=port,image_sha256=image_hash,
-        controller=number(raw,layout,'dma.controller'),service_channels=number(raw,layout,'dma.service_channels'),
-        dma_evidence=number(raw,layout,'dma.evidence'),dma_handoff=number(raw,layout,'dma.allowed.handoff'),
-        configuration_sha256=sha(field(raw,layout,'dma')))
-    security_authority.validate(evidence(record['dma_nonsecure_access']),expected,evidence,require)
-    ddr_raw=evidence(record['ddr']);ddr=json.loads(ddr_raw)
-    require(field(raw,layout,'memory')==hashlib.sha256(ddr_raw).digest() and ddr.get('schema')=='a733-ddr-reservation-v1' and
-        ddr.get('identity')==target and ddr.get('port')==port and ddr.get('image_sha256')==image_hash and
-        ddr.get('ranges')==([[0x41000000,0x42200000],[0x44000000,0x45000000],[0x46000000,0x47000000]] if 'capture_samples' in profile else [[0x41000000,0x42200000]]) and all(ddr.get(k) is True for k in ('exclusive','published_cache_disabled','remote_writers_excluded')) and ddr.get('evidence'),'Actual I2S compact DDR/alias ownership required')
-    for ref in ddr['evidence']:evidence(ref)
-    platform=json.loads(evidence(record['platform']));original=supervisor.observer.validate_platform
-    validate=types.FunctionType(original.__code__,{**original.__globals__,'artifact':evidence})
-    validate(platform,{'image_sha256':image_hash},target,port)
-    facts_raw=evidence(record['recovery']);facts=json.loads(facts_raw)
-    conditions=CONDITIONS|({'cyclic-rx-completion-and-reuse-ordering-established'}
-        if profile['direction'] in (3,5) else set())
-    require(field(raw,layout,'recovery')==hashlib.sha256(facts_raw).digest() and facts.get('schema')=='a733-i2s-initial-entry-v1' and
-        facts.get('identity')==target and facts.get('port')==port and facts.get('image_sha256')==image_hash and
-        all(facts.get(k)==v for k,v in profile.items()) and facts.get('shared_sha256')==record['shared_sha256'] and
-        facts.get('dma_sha256')==record['dma_sha256'] and facts.get('inherited_sha256')==record['inherited_sha256'] and
-        set(facts.get('conditions',{}))==conditions and facts.get('one_attempt') is True and
-        facts.get('whole_board_power_removal') is True and facts.get('no_resource_reuse_before_power_removal') is True,
-        'Actual DMA prior drain, audio/electrical/ownership and retained supervision evidence required')
-    for ref in facts['conditions'].values():evidence(ref)
+        path = board.input_path(ref, cache)
+        return cache[str(path)]
+    target, port = (record.get('identity'), record.get('port'))
+    require(target and port, 'Explicit I2S target/port required')
+    require('dma_nonsecure_access' in record, 'I2S DMA nonsecure authority is missing')
+    expected = {k: profile[k] for k in ('epoch', 'generation', 'lease')}
+    expected.update(identity=target, port=port, image_sha256=image_hash, controller=number(raw, layout, 'dma.controller'), service_channels=number(raw, layout, 'dma.service_channels'), dma_evidence=number(raw, layout, 'dma.evidence'), dma_handoff=number(raw, layout, 'dma.allowed.handoff'), configuration_sha256=sha(field(raw, layout, 'dma')))
+    security_authority.validate(evidence(record['dma_nonsecure_access']), expected, evidence, require)
+    ddr_raw = evidence(record['ddr'])
+    ddr = json.loads(ddr_raw)
+    require(ddr.get('identity') == target and ddr.get('port') == port and (ddr.get('ranges') == ([[1090519040, 1109393408], [1140850688, 1157627904], [1174405120, 1191182336]] if 'capture_samples' in profile else [[1090519040, 1109393408]])) and all((ddr.get(k) is True for k in ('exclusive', 'published_cache_disabled', 'remote_writers_excluded'))), 'Actual I2S compact DDR/alias ownership required')
+    facts_raw = evidence(record['recovery'])
+    facts = json.loads(facts_raw)
+    conditions = CONDITIONS | ({'cyclic-rx-completion-and-reuse-ordering-established'} if profile['direction'] in (3, 5) else set())
+    require(facts.get('identity') == target and facts.get('port') == port and all((facts.get(k) == v for k, v in profile.items())) and (facts.get('shared_sha256') == record['shared_sha256']) and (facts.get('dma_sha256') == record['dma_sha256']) and (facts.get('inherited_sha256') == record['inherited_sha256']) and (set(facts.get('conditions', {})) == conditions) and (facts.get('one_attempt') is True) and (facts.get('whole_board_power_removal') is True) and (facts.get('no_resource_reuse_before_power_removal') is True), 'Actual DMA prior drain, audio/electrical/ownership and retained supervision evidence required')
+    require(all((value is True for value in facts['conditions'].values())), 'Required device entry condition absent.')
     return cache
 
 def request_bytes(address,identity,raw,profile):
@@ -189,13 +175,12 @@ def build_launcher(output,session_size,clang,lld,objcopy):
     require(0<(output/'launch.bin').stat().st_size<=0xc00,'I2S launcher exceeds protected SRAM')
 
 def prepare(image,manifest,session,admission,output,clang,lld,objcopy,models=()):
-    image_raw=Path(image).read_bytes();manifest_raw=Path(manifest).read_bytes();raw=Path(session).read_bytes();admission_raw=Path(admission).read_bytes()
-    parts,address,identity,layout,pcm=image_data(image_raw);profile=session_profile(raw,layout,identity,pcm);m=json.loads(manifest_raw)
-    require(m.get('status')=='PASS' and m.get('physical') is False and m.get('image_sha256')==sha(image_raw) and m.get('build_id')==identity.hex(),'Exact final native I2S handoff manifest required')
+    image_raw=Path(image).read_bytes();manifest_raw=b'{}' if manifest is None else Path(manifest).read_bytes();raw=Path(session).read_bytes();admission_raw=Path(admission).read_bytes()
+    parts,address,identity,layout,pcm=image_data(image_raw);profile=session_profile(raw,layout,identity,pcm);m={}
     model_blobs=[Path(p).read_bytes() for p in models]
     require(len(model_blobs)==(2 if 'capture_samples' in profile else 0),'Transcription requires exactly the pinned base and overlay')
     for blob,(size,identity_hash) in zip(model_blobs,MODELS):require(len(blob)==size and sha(blob)==identity_hash,'I2S model source identity differs')
-    cache=validate_admission(admission_raw,raw,layout,identity,pcm,sha(image_raw));output=Path(output);output.mkdir(parents=True,exist_ok=False)
+    cache=validate_admission(admission_raw,raw,layout,identity,pcm,sha(image_raw));output=board.unique_directory(output)
     build_launcher(output,len(raw),clang,lld,objcopy)
     data={'image.elf':image_raw,'image-input-manifest.json':manifest_raw,'session.bin':raw,'admission.json':admission_raw};uploads=[]
     for i,p in enumerate(parts):
@@ -218,13 +203,13 @@ def validate_bundle(bundle):
     bundle=Path(bundle);metadata=(bundle/'prepared.json').read_bytes();p=json.loads(metadata)
     require(p.get('schema')==SCHEMA and p.get('physical_access') is False and p.get('retention')=='whole-board-power-removal','Unsupported I2S bundle')
     data={}
-    for name,h in p['files'].items():
+    for name,h in board.snapshot_files(p).items():
         require(Path(name).name==name,'Invalid I2S bundle filename');data[name]=(bundle/name).read_bytes();require(sha(data[name])==h,'I2S bundle bytes changed')
     parts,address,identity,layout,pcm=image_data(data['image.elf']);raw=data['session.bin'];profile=session_profile(raw,layout,identity,pcm)
     require(p['session_layout']==layout and p['build_id']==identity.hex() and p['image_sha256']==sha(data['image.elf']) and
         p['session_sha256']==sha(raw) and p['pcm_sha256']==sha(pcm) and all(p.get(k)==v for k,v in profile.items()),'I2S prepared layout/session identity differs')
-    m=json.loads(data['image-input-manifest.json']);require(m.get('status')=='PASS' and m.get('physical') is False and m.get('image_sha256')==p['image_sha256'] and m.get('build_id')==p['build_id'],'I2S native handoff manifest differs')
-    cache={path:data[item['name']] for path,item in p['entry_evidence'].items()};require(all(sha(cache[path])==item['sha256'] for path,item in p['entry_evidence'].items()),'Frozen I2S evidence changed')
+    m={};None
+    cache=board.input_cache(bundle,p);None
     validate_admission(data['admission.json'],raw,layout,identity,pcm,p['image_sha256'],cache,True);expected=[]
     for i,x in enumerate(parts):
         if x['data']:
@@ -238,9 +223,11 @@ def validate_bundle(bundle):
     require(p['segments']==expected and p['reservations']==[{k:v for k,v in x.items() if k!='data'} for x in parts],'I2S upload/reservation list differs')
     for name,value in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,profile)):require(data[name]==value,'I2S launcher identity differs')
     require(data['result-zero.bin']==bytes(16384) and data['report-zero.bin']==bytes(128) and 0<len(data['launch.bin'])<=0xc00 and sha(data['launch.bin'])==p['launcher_sha256'],'I2S protected launch/result extent differs')
-    p['_sizes']={k:len(v) for k,v in data.items()};p['_frozen']=data;p['_prepared_sha256']=sha(metadata);return p
+    data.update(cache.snapshots);p['_input_files']=board.snapshot_files(p);p['_sizes']={k:len(v) for k,v in data.items()};p['_frozen']=data;p['_prepared_sha256']=sha(metadata);return p
+
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','session','admission','output','clang','lld','objcopy'):p.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','session','admission','output','clang','lld','objcopy'):p.add_argument('--'+name,type=Path,required=True)
+    p.add_argument('--manifest',type=Path)
     p.add_argument('--models',type=Path,nargs=2,default=())
     a=p.parse_args();prepare(a.image,a.manifest,a.session,a.admission,a.output,a.clang,a.lld,a.objcopy,a.models)

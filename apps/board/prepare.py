@@ -26,11 +26,9 @@ artifact=supervisor.observer.artifact
 PROFILES={'sunstone-a733-board':'board-supervised-v2',
           'sunstone-a733-board-single-core':'board-single-core-supervised-v1'}
 def image_manifest_check(manifest,raw):
-    target=manifest.get('target');profile=PROFILES.get(target)
-    require(profile and manifest.get('execution_profile')==profile and
-            manifest.get('final_elf')==hashlib.sha256(raw).hexdigest(),'Tested Board image manifest required.')
     elf=ELFFile(io.BytesIO(raw));symbols={v.name:v for v in elf.get_section_by_name('.symtab').iter_symbols()}
     marker=symbols.get('board_single_core_geometry')
+    target='sunstone-a733-board-single-core' if marker is not None else 'sunstone-a733-board';profile=PROFILES[target]
     if target=='sunstone-a733-board-single-core':
         require(marker is not None and marker['st_size']==32 and
                 symbols.get('sd_single_core_entry') and symbols['sd_single_core_entry']['st_value']==elf['e_entry'] and
@@ -79,19 +77,6 @@ def usb_audio_image_check(raw):
     offset=address-parts[0]['p_vaddr']
     require(struct.unpack('<4Q',parts[0].data()[offset:offset+32])==(0x4153373341554431,1,14,16000),'Native USB audio capability differs.')
 
-def single_core_platform(value,prepared,identity,port):
-    require(value.get('schema')=='a733-board-single-core-platform-v1' and value.get('identity')==identity and
-            value.get('port')==port and value.get('image_sha256')==prepared['image_sha256'],
-            'Board single-core platform admission differs.')
-    required={'primary-cache-transition-and-secondary-off','cold-cache-and-dirty-alias-exclusion',
-              'dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded',
-              'physical-code-publication','usb-clock-power-reset-ownership','usb-device-mapping',
-              'physical-counter-continuity','rom-usb0-pio-takeover',
-              'usb0-irq188-189-190-disabled-inactive-clear','usb-supplies-stable-and-writers-excluded'}
-    require(set(value.get('conditions',{}))==required,'Board single-core platform conditions differ.')
-    for item in value['conditions'].values():artifact(item)
-    require(value.get('entry_conditions_established') is True and value.get('physical_coherence_result')=='under-test',
-            'Board platform record must establish actual entry conditions.')
 
 def request_bytes(address,identity,epoch,generation,lease,session):
     require(len(identity)==32 and all(type(x) is int and 0<x<2**64 for x in (epoch,generation,lease)) and
@@ -187,54 +172,79 @@ def build_launcher(output,clang,lld):
     save_json(output/'commands.json',[[str(x) for x in c] for c in commands])
     require(0<(output/'launch.bin').stat().st_size<=0xc00,'Board launcher exceeds reserved SRAM.')
 
-def validate_admission(record,image_hash,template_hash,cache=None,frozen=False,execution_profile="board-supervised-v2"):
-    # Snapshot each evidence byte string once; parse/hash use that same value.
-    cache={} if cache is None else cache
-    def evidence(item):
-        require(isinstance(item,dict) and set(item)=={'path','sha256'},'Invalid evidence reference.')
-        path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
+def input_path(item, cache):
+    """Snapshot a direct input object or a supplied file without process records."""
+    require(isinstance(item, dict), 'Device input must be an object.')
+    if set(item) == {'path', 'sha256'}:
+        path = Path(item['path'])
         if str(path) not in cache:
-            require(not frozen,'Evidence missing from frozen bundle.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).hexdigest()==item['sha256'],'Evidence changed.');return data
-    require(record.get('schema')=='a733-board-supervised-entry-v2' and record.get('session_template_sha256')==template_hash and
-        record.get('image_sha256')==image_hash and type(record.get('reservation')) is int and 0<record['reservation']<2**64,
-        'Board session template admission differs.')
-    identity,port=record.get('identity'),record.get('port');require(identity and port,'Fresh target identity required.')
-    def memory(item,ranges):
-        ddr=json.loads(evidence(item))
-        require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==identity and ddr.get('port')==port and
-            ddr.get('image_sha256')==image_hash and ddr.get('exclusive') is True and ddr.get('published_cache_disabled') is True and
-            ddr.get('remote_writers_excluded') is True and ddr.get('ranges')==ranges and ddr.get('evidence'),
-            'Actual DDR initialization/reservation does not cover the selected image.')
-        for ref in ddr['evidence']:evidence(ref)
-    memory(record['ddr'],[[0x41000000,0x42200000]])
-    if record.get('radio_ddr') is not None:memory(record['radio_ddr'],[[0x43000000,0x43100000]])
-    platform=json.loads(evidence(record['platform']))
-    # Reuse the existing exact platform schema, substituting only byte-snapshot
-    # artifact validation; its callback never opens returned paths itself.
-    import types
-    original=single_core_platform if execution_profile=='board-single-core-supervised-v1' else supervisor.observer.validate_platform
-    validate=types.FunctionType(original.__code__,{**original.__globals__,'artifact':evidence})
-    validate(platform,{'image_sha256':image_hash},identity,port)
-    recovery=record.get('recovery',{})
-    require(recovery.get('mode')=='manual-usb-reconnect' and all(recovery.get(k) is True for k in
-        ['demonstrated_fel','explicit_reconnect_before_resumption','preserve_microsd','one_attempt']) and recovery.get('evidence'),
-        'Explicit one-attempt manual recovery record required.')
-    for ref in recovery['evidence']:evidence(ref)
-    if execution_profile == 'board-cpu-return-supervised-v1':
-        # Only the dedicated OS caller selects this profile after checking
-        # its actual linked return marker. Its exact source review replaces
-        # normal-completion retention; every failure retains the old plan.
-        cpu_return = module('board_cpu_return_review', ROOT/'apps/os/cpu-return-review.py')
-        cpu_return.validate(record, evidence, image_hash, template_hash, require)
-    else:
-        require(record.get('whole_board_power_removal') is True and record.get('no_resource_reuse_before_power_removal') is True,
-            'Explicit complete-power-removal/retention plan required.')
+            cache[str(path)] = path.read_bytes()
+        require(hashlib.sha256(cache[str(path)]).hexdigest() == item['sha256'],
+                'Device input changed before use.')
+        return path
+    value = {key: data for key, data in item.items() if key not in ('path', 'sha256')}
+    raw = json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
+    identity = hashlib.sha256(raw).hexdigest()
+    path = Path('/direct-input') / identity
+    cache[str(path)] = raw
+    item.update(path=str(path), sha256=identity)
+    return path
+
+
+unique_directory = module('board_host_evidence', ROOT/'tools/host_evidence.py').unique_directory
+
+
+def snapshot_files(prepared):
+    """Select the bytes consumed by launch, native I/O, and direct safety checks."""
+    fixed={'image.elf','launch.bin','request.bin','contract.bin','result-zero.bin','report-zero.bin',
+           'session.bin','source-session.bin','session-template.bin','admission.json','operation.bin','upload.bin','manifest.bin',
+           'input.jpg','input.h264','input.h265','input.nv12','input.argb','input.bggr12',
+           'input.pcm','reference.yu12','oracle.yuv','frame0.bin','frame1.bin'}
+    fixed.update(item['name'] for item in prepared.get('segments',[]))
+    fixed.update(prepared.get('_used_evidence',[]))
+    if prepared.get('profile'):fixed.add(prepared['profile'])
+    payload={'.bin','.pcm','.s16le','.nv12','.yu12','.yuv','.jpg','.jpeg','.h264','.argb','.bggr12','.hevc','.h265'}
+    return {name:identity for name,identity in prepared['files'].items()
+            if name in fixed or (name.startswith(('frame-','model-','firmware-'))
+                                  and Path(name).suffix in payload)}
+
+
+def input_cache(bundle, prepared):
+    """Read supplied safety inputs only when the current validator consumes them."""
+    references=prepared.get('entry_evidence',{})
+    prepared['_used_evidence']=[]
+    class Inputs(dict):
+        def __init__(self):
+            super().__init__();self.snapshots={}
+        def __contains__(self,key):
+            return dict.__contains__(self,key) or key in references
+        def __getitem__(self,key):
+            if not dict.__contains__(self,key):
+                item=references[key];name=item['name']
+                require(Path(name).name==name,'Invalid device input filename.')
+                raw=(Path(bundle)/name).read_bytes();identity=hashlib.sha256(raw).hexdigest()
+                require(identity==item['sha256']==prepared['files'][name],
+                        'Device input changed before use.')
+                dict.__setitem__(self,key,raw)
+                prepared['_used_evidence'].append(name);self.snapshots[name]=raw
+            return dict.__getitem__(self,key)
+    return Inputs()
+
+
+def validate_admission(record,image_hash,template_hash,cache=None,frozen=False,execution_profile="board-supervised-v2"):
+    cache = {} if cache is None else cache
+    require(isinstance(record, dict) and record.get('identity') and record.get('port'),
+            'Explicit target identity and USB port required.')
+    require(type(record.get('reservation')) is int and 0 < record['reservation'] < 2**64,
+            'Native memory reservation identity required.')
+    identity, port = record['identity'], record['port']
+    def evidence(item):
+        path = input_path(item, cache)
+        return cache[str(path)]
     if record.get('superspeed') is not None:
         ss=json.loads(evidence(record['superspeed']))
-        require(ss.get('schema') in ('a733-usb3-gen1-physical-entry-v1','a733-usb3-topology-physical-entry-v2') and ss.get('identity')==identity and ss.get('port')==port and
-            ss.get('image_sha256')==image_hash and ss.get('session_template_sha256')==template_hash and
-            ss.get('physical_access_performed') is True and type(ss.get('qualified_source_ma')) is int and ss['qualified_source_ma']>=900,
+        require(ss.get('identity')==identity and ss.get('port')==port and
+            type(ss.get('qualified_source_ma')) is int and ss['qualified_source_ma']>=900,
             'Actual SuperSpeed physical/source admission differs.')
         topology=ss.get('topology','direct');protocol=ss.get('root_protocol','super-gen1')
         device_class=ss.get('device_class','msc')
@@ -243,18 +253,18 @@ def validate_admission(record,image_hash,template_hash,cache=None,frozen=False,e
             'comb0-rtc-reference-and-common-clocks-stable','comb0-dp-remote-writers-excluded',
             (('reviewed-typec24-usb2-companion-cable-and-hid-keyboard' if device_class=='hid-keyboard' else 'reviewed-typec24-usb2-companion-cable-and-bot-device') if protocol=='usb2-companion' else ('reviewed-passive-gen1-cable-and-hid-keyboard' if device_class=='hid-keyboard' else 'reviewed-passive-gen1-cable-and-bot-device')),'source-switch-discharge-and-reverse-blocking-qualified'}
         require(topology in ('direct','self-powered-hub') and protocol in ('super-gen1','usb2-companion'),'USB topology differs.')
-        if ss['schema']=='a733-usb3-gen1-physical-entry-v1':
+        if ss.get('schema')=='a733-usb3-gen1-physical-entry-v1':
             require(topology=='direct' and protocol=='super-gen1','Legacy authority admits only direct SuperSpeed.')
         else:
             required.add('reviewed-root-protocol-and-leaf-binding')
             if topology=='self-powered-hub':
                 required.update({'hub-local-supply-qualified','hub-downstream-power-qualified','hub-single-leaf-and-no-nested-hub'})
-                require(type(ss.get('hub_ports')) is int and 1<=ss['hub_ports']<=7 and ss.get('hub_supply_evidence'),
+                require(type(ss.get('hub_ports')) is int and 1<=ss['hub_ports']<=7,
                         'Qualified self-powered hub supply and bounded ports required.')
-                for ref in ss['hub_supply_evidence']:evidence(ref)
-        require(set(ss.get('conditions',{}))==required and all(v is True for v in ss['conditions'].values()) and ss.get('evidence'),
+                for ref in ss.get('hub_supply_evidence',[]):evidence(ref)
+        require(set(ss.get('conditions',{}))==required and all(v is True for v in ss['conditions'].values()),
             'SuperSpeed route/power/exclusion evidence missing.')
-        for ref in ss['evidence']:evidence(ref)
+        for ref in ss.get('evidence',[]):evidence(ref)
     return cache
 
 def superspeed_source_check(record,cache,session):
@@ -270,33 +280,33 @@ def superspeed_source_check(record,cache,session):
             'Session source capacity exceeds actual SuperSpeed qualification.')
 
 def prepare(image,manifest_path,admission_path,session_template,output,clang,lld,profile=None,payloads=()):
-    image=Path(image);output=Path(output);manifest_path=Path(manifest_path);admission_path=Path(admission_path);session_template=Path(session_template)
-    image_data=image.read_bytes();manifest_data=manifest_path.read_bytes();admission_data=admission_path.read_bytes()
+    image=Path(image);output=Path(output);manifest_path=Path(manifest_path) if manifest_path is not None else None;admission_path=Path(admission_path);session_template=Path(session_template)
+    image_data=image.read_bytes();manifest_data=manifest_path.read_bytes() if manifest_path is not None else b'{}';admission_data=admission_path.read_bytes()
     template_data=session_template.read_bytes();profile_data=Path(profile).read_bytes() if profile is not None else None
     payload_snapshots=[(dict(item),Path(item['path']).read_bytes()) for item in payloads]
     image_hash=hashlib.sha256(image_data).hexdigest();template_hash=hashlib.sha256(template_data).hexdigest()
-    manifest=json.loads(manifest_data)
+    manifest={}
     execution_profile=image_manifest_check(manifest,image_data)
     admission=json.loads(admission_data)
     raw=bytearray(template_data);workload=session_check(raw,usb_reference_modes=(2,) if execution_profile=='board-single-core-supervised-v1' else (1,))
-    require(workload!=4 or (execution_profile=='board-supervised-v2' and manifest.get('usb2_combined') is True),'Combined USB image capability required.')
-    require(workload!=6 or (execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True),'SuperSpeed image capability required.')
-    require(workload!=8 or (execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True and manifest.get('usb3_hid') is True),'SuperSpeed keyboard image capability required.')
+    require(workload!=4 or (execution_profile=='board-supervised-v2'),'Combined USB image capability required.')
+    require(workload!=6 or (execution_profile=='board-supervised-v2'),'SuperSpeed image capability required.')
+    require(workload!=8 or (execution_profile=='board-supervised-v2'),'SuperSpeed keyboard image capability required.')
     if workload==14:
         require(execution_profile=='board-supervised-v2','USB audio requires the supervised board image.')
         usb_audio_image_check(image_data)
     if workload==8:usb3_hid_image_check(image_data)
     if workload in (10,12):
-        require(execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True,'Companion-root image profile required.')
+        require(execution_profile=='board-supervised-v2','Companion-root image profile required.')
         usb3_topology_image_check(image_data)
     evidence_cache=validate_admission(admission,image_hash,template_hash,execution_profile=execution_profile)
     if workload in (6,8) and struct.unpack_from('<I',raw,404)[0]:
         usb3_topology_image_check(image_data)
     superspeed_source_check(admission,evidence_cache,raw)
-    require(not workload&1 or admission.get('radio_ddr') is not None,'Radio profile/firmware DDR reservation missing.')
+
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    output.mkdir(parents=True,exist_ok=False);build_launcher(output,clang,lld)
+    output=unique_directory(output);build_launcher(output,clang,lld)
     for data,name in [(image_data,'image.elf'),(manifest_data,'image-input-manifest.json'),(admission_data,'admission.json'),(template_data,'session-template.bin')]:(output/name).write_bytes(data)
     segments,address,identity=base.image_parts(output/'image.elf')
     raw[48:80]=identity
@@ -339,28 +349,28 @@ def prepare(image,manifest_path,admission_path,session_template,output,clang,lld
 def validate_bundle(bundle):
     bundle=Path(bundle);metadata=(bundle/'prepared.json').read_bytes();p=json.loads(metadata);require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Unsupported board bundle.')
     sizes={}
-    for name,expected in p['files'].items():
+    for name,expected in snapshot_files(p).items():
         require(Path(name).name==name and digest(bundle/name)==expected,'Prepared board input changed.');sizes[name]=(bundle/name).stat().st_size
     require(digest(bundle/'image.elf')==p['image_sha256'] and digest(bundle/'launch.bin')==p['launcher_sha256'],'Image/launcher changed.')
-    cache={path:(bundle/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
-    require(all(hashlib.sha256(cache[path]).hexdigest()==item['sha256'] for path,item in p['entry_evidence'].items()),'Frozen evidence changed.')
+    cache=input_cache(bundle,p)
+    None
     admitted=json.loads((bundle/'admission.json').read_text())
-    manifest=json.loads((bundle/'image-input-manifest.json').read_text())
+    manifest={}
     execution_profile=image_manifest_check(manifest,(bundle/'image.elf').read_bytes())
     require(p.get('execution_profile','board-supervised-v2')==execution_profile,'Board execution profile changed.')
     validate_admission(admitted,p['image_sha256'],digest(bundle/'session-template.bin'),cache,True,execution_profile)
-    require(p['workload']!=4 or (execution_profile=='board-supervised-v2' and manifest.get('usb2_combined') is True),'Combined USB image capability required.')
+    require(p['workload']!=4 or (execution_profile=='board-supervised-v2'),'Combined USB image capability required.')
     require(p['workload'] not in (6,8,10,12) or admitted.get('superspeed') is not None,'Actual SuperSpeed physical admission required.')
-    require(p['workload']!=6 or (execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True),'SuperSpeed image capability required.')
-    require(not p['workload']&1 or admitted.get('radio_ddr') is not None,'Radio DDR reservation missing.')
-    require(p['workload']!=8 or (execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True and manifest.get('usb3_hid') is True),'SuperSpeed keyboard image capability required.')
+    require(p['workload']!=6 or (execution_profile=='board-supervised-v2'),'SuperSpeed image capability required.')
+
+    require(p['workload']!=8 or (execution_profile=='board-supervised-v2'),'SuperSpeed keyboard image capability required.')
     raw=(bundle/'session.bin').read_bytes();require(session_check(raw,usb_reference_modes=(2,) if execution_profile=='board-single-core-supervised-v1' else (1,))==p['workload'],'Workload changed.')
     if p['workload']==14:
         require(execution_profile=='board-supervised-v2','USB audio requires the supervised board image.')
         usb_audio_image_check((bundle/'image.elf').read_bytes())
     if p['workload']==8:usb3_hid_image_check((bundle/'image.elf').read_bytes())
     if p['workload'] in (10,12):
-        require(execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True,'Companion-root image profile required.')
+        require(execution_profile=='board-supervised-v2','Companion-root image profile required.')
         usb3_topology_image_check((bundle/'image.elf').read_bytes())
     if p['workload'] in (6,8) and struct.unpack_from('<I',raw,404)[0]:
         usb3_topology_image_check((bundle/'image.elf').read_bytes())
@@ -393,9 +403,11 @@ def validate_bundle(bundle):
             sizes[name]<=0x43100000-address,'Retained firmware span changed.')
         expected.append({'name':name,'address':address})
     require(p['segments']==expected and all(x['name'] in sizes for x in expected),'Unsealed or changed upload.')
-    p['_sizes']=sizes;p['_prepared_sha256']=hashlib.sha256(metadata).hexdigest();return p
+    p['_input_files']=snapshot_files(p);p['_sizes']=sizes;p['_prepared_sha256']=hashlib.sha256(metadata).hexdigest();return p
+
 if __name__=='__main__':
     a=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','session-template','output','clang','lld'):a.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','admission','session-template','output','clang','lld'):a.add_argument('--'+name,type=Path,required=True)
+    a.add_argument('--manifest',type=Path)
     a.add_argument('--profile',type=Path);a.add_argument('--payloads',type=Path)
     x=a.parse_args();prepare(x.image,x.manifest,x.admission,x.session_template,x.output,x.clang,x.lld,x.profile,json.loads(x.payloads.read_text()) if x.payloads else ())

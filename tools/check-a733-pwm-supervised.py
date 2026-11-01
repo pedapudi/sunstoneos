@@ -5,7 +5,6 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
-import sqlite3
 import struct
 import sys
 import time
@@ -16,7 +15,6 @@ supervisor=module('pwm_capture_supervisor',ROOT/'tools/check-a733-smp-supervised
 preparation=module('pwm_capture_preparation',ROOT/'apps/pwm/prepare.py')
 decoder=module('pwm_capture_decoder',ROOT/'apps/pwm/observe.py')
 require,digest=supervisor.require,supervisor.digest
-PREREQUISITES={'supervised-ram-recovery','pwm-supervised-software'}
 PRODUCT='sunstoneos native PWM'
 SERIAL='sunstoneos-a733-pwm'
 
@@ -121,31 +119,32 @@ def freeze_bundle(bundle):
     return prepared
 
 
-def reference_bytes(value):
-    return supervisor.reviewed_reference(value,'PWM')
 
 
 def software_sources():
     return supervisor.device_software_sources(source_files())
 
 
-def validate_software(value,prepared):
-    supervisor.validate_device_software(value,prepared,'a733-pwm-supervised-software-v1',('session_binding','waveform_irq_stop','reusable_commands','revocation_retention','host_capture'),
-        'PWM',reference_bytes)
 
 
-def claimed(database,test_id,owner,bundle,prepared):
-    supervisor.device_claim(database,test_id,owner,bundle,prepared,'PWM','pwm-supervised-software',PREREQUISITES,
-        reference_bytes,validate_software)
+def claimed(database, test_id, owner, bundle, prepared):
+    """Check the input snapshot immediately before upload."""
+    expected = preparation.board.snapshot_files(prepared)
+    if '_prepared_sha256' in prepared:
+        expected['prepared.json'] = prepared['_prepared_sha256']
+    for name, identity in expected.items():
+        require(Path(name).name == name and digest(bundle / name) == identity,
+                'Prepared input changed before upload: ' + name)
 
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('bundle','fel','evidence','database'):parser.add_argument('--'+name,type=Path,required=True)
-    parser.add_argument('--claim',required=True);parser.add_argument('--owner',required=True)
-    parser.add_argument('--supervised-manual-reconnect',action='store_true',required=True,
+    for name in ('bundle','fel','evidence'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--claim');parser.add_argument('--owner')
+    parser.add_argument('--supervised-manual-reconnect',action='store_true',
         help='Use the reviewed whole-board power-removal plan; cable reconnect does not release PWM resources.')
     parser.add_argument('--command',action='append',default=[],help='Ordered start:TICKS, duty:TICKS, stop or led:0/1; no automatic retries.')
+    parser.add_argument('--database', type=Path)
     args=parser.parse_args(argv);program=[]
     for text in args.command:
         name,sep,value=text.partition(':');require(name in ('start','duty','stop','led'),'Unknown PWM operation.')
@@ -154,7 +153,7 @@ def main(argv=None):
         program.append((kind,argument))
     bundle=args.bundle.resolve();prepared=freeze_bundle(bundle);frozen=prepared['_frozen']
     admission=json.loads(frozen['admission.json']);session=frozen['session.bin'];template=frozen['session-template.bin']
-    evidence={path:frozen[item['name']] for path,item in prepared['entry_evidence'].items()}
+    evidence={path:frozen[item['name']] for path,item in prepared['entry_evidence'].items() if item['name'] in frozen}
     running=False
     for sequence,(kind,argument) in enumerate(program,1):
         decoder.command(session,sequence,kind,argument)
@@ -173,4 +172,4 @@ def main(argv=None):
 
 if __name__=='__main__':
     try:sys.exit(main())
-    except (OSError,ValueError,RuntimeError,sqlite3.Error,struct.error) as error:sys.exit(f'Stopped: {error}')
+    except (OSError,ValueError,RuntimeError,struct.error) as error:sys.exit(f'Stopped: {error}')

@@ -5,6 +5,9 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+_output_spec=importlib.util.spec_from_file_location('device_evidence_directory',Path(__file__).resolve().parents[2]/'tools/host_evidence.py')
+_output_module=importlib.util.module_from_spec(_output_spec);_output_spec.loader.exec_module(_output_module)
+unique_directory=_output_module.unique_directory
 import struct
 spec=importlib.util.spec_from_file_location('hdmi_audio_capture_prepare',Path(__file__).with_name('prepare.py'))
 preparation=importlib.util.module_from_spec(spec);spec.loader.exec_module(preparation)
@@ -59,7 +62,7 @@ def capture(image,session,pcm,result,ready,output,*,save=durable):
         'HDMI audio session names another linked image.')
     decoded=decode(result,ready,session,pcm)
     # Requiring an existing parent keeps directory-entry durability bounded.
-    output.mkdir(exist_ok=False)
+    output=unique_directory(output)
     descriptor=os.open(output.parent,os.O_RDONLY|os.O_DIRECTORY)
     try:os.fsync(descriptor)
     finally:os.close(descriptor)

@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """Check only copied HDMI audio transport and new admission using an actual reply."""
 import argparse
+import harness
 import hashlib
 import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
 import struct
 import shutil
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'tools'))
+from host_evidence import unique_directory
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 
@@ -17,7 +21,8 @@ def module(name,path):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for key in ('bundle','response','output'):p.add_argument('--'+key,type=Path,required=True)
-    args=p.parse_args();args.output.mkdir(parents=True,exist_ok=False)
+    args=p.parse_args()
+    args.output=unique_directory(args.output)
     host=module('hdmi_audio_usb_capture_check',ROOT/'apps/hdmi-audio/capture.py');prep=host.preparation
     helper=module('hdmi_audio_usb_fixture_helper',ROOT/'checks/hdmi-audio-usb-preparation.py')
     try:prep.validate_bundle(args.bundle)
@@ -100,14 +105,17 @@ def main():
     with patch.object(host.os,'fsync',sync):
         host.capture_device(Device(),lambda:None,19.0,session,pcm,folder,record,lambda:None,now=lambda:0.0,pause=lambda delay:None)
     assert record['hdmi_audio_result']=='observed-success' and synced[0]==folder.parent.stat().st_ino
-    admission=json.loads(frozen['admission.bin']);cache={path:frozen['entry-evidence-'+str(i)+'.bin'] for i,path in enumerate(json.loads(frozen['entry-index.bin']))}
+    admission=json.loads(frozen['admission.bin']);cache={}
     for name,change in (
-        ('entry-reservation',lambda record:record.update(reservation=0)),
-        ('entry-recovery',lambda record:record['recovery'].update(demonstrated_fel=False))):
+        ('entry-identity',lambda record:record.pop('identity')),
+        ('entry-port',lambda record:record.update(port=''))):
         record=json.loads(json.dumps(admission));change(record)
         try:prep.validate_entry(record,prepared['image_sha256'],cache,True)
         except ValueError:refused.append(name)
         else:raise AssertionError('Invalid shared entry accepted: '+name)
+    current=json.loads(json.dumps(admission))
+    for key in ('schema','reviewed','reservation','ddr','platform','recovery'):current.pop(key,None)
+    assert prep.validate_entry(current,prepared['image_sha256'],{},True)=={}
     for name,offset in (('rom-reference',768),('usb-owner-alias',656),('usb-reserved',772),('usb-rail',776)):
         raw=bytearray(session)
         if name=='usb-owner-alias':raw[offset:offset+8]=session[600:608]

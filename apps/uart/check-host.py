@@ -2,11 +2,13 @@
 """Check production UART preparation and copied-result capture without USB."""
 import hashlib,importlib.util,json,struct,sys
 from pathlib import Path
+if not __debug__:raise SystemExit('Host checks require assertions; do not use optimized Python.')
 def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 root=Path(__file__).resolve().parent
 prep=module('uart_check_prepare',root/'prepare.py')
 host=module('uart_check_capture',root/'capture.py')
+evidence=module('uart_check_evidence',root.parents[1]/'tools/host_evidence.py')
 def run(bundle,output):
  prepared=prep.validate_bundle(bundle);session=(bundle/'session.bin').read_bytes();prep.session_check(session)
  for offset,value in ((780,5),(774,1),(796,31)):
@@ -37,7 +39,7 @@ def run(bundle,output):
  try:host.decoder.decode(old,session)
  except ValueError:pass
  else:raise AssertionError('Polling response accepted as IRQ completion')
- output.mkdir(parents=True,exist_ok=False);record={};frames=iter([pending,success]);calls=[]
+ output=evidence.unique_directory(output);record={};frames=iter([pending,success]);calls=[]
  def exchange(packet,timeout):calls.append((packet,timeout));return next(frames)
  result=host.capture(exchange,session,output,record,lambda:None,10,now=lambda:1,pause=lambda n:None)
  assert result['status']==1 and len(calls)==2 and (output/'output.bin').read_bytes()==payload
@@ -51,4 +53,5 @@ def run(bundle,output):
  assert count==1
  (output/'result.json').write_text(json.dumps(dict(physical_access=False,prepared_image=prepared['image_sha256'],launcher_sha256=prepared['files']['launch.bin'],production_bundle_validation=True,pin_and_extent_refusals=True,decoder_and_capture=True,stop_on_first_transport_failure=True),indent=2)+'\n')
  print('UART production bundle/launcher, pin/extent refusals, copied echo decoder, durable pending/success capture and first-transport-failure stop passed.')
+ print('Output:',output)
 if __name__=='__main__':run(Path(sys.argv[1]),Path(sys.argv[2]))

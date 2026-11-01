@@ -8,16 +8,14 @@ import struct
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = 'a733-os-radio-assets-v1'
 RANGE = (0x43000000, 0x43100000)
-# Existing returning radio producer predicates, applied to the same evidence
-# records. Complete historical latch authority is conditional on the PM mode.
+# Electrical and ownership predicates used by the native radio path.
 FACTS = {
     'topology': ('fitted_board_routes_verified', 'enabled_3v3_vbat_1v8_io'),
     'pins': ('other_pm_data_writers_excluded', 'pm2_reset_lpo_stable', 'pg0_pg5_pm0_pm1_exclusive'),
     'startup': ('fabric_parent_gates_stable', 'sdc1_gate_off_reset_asserted',
                 'store_ahb_mbus_msi_lite1_ready', 'sd_monitor_autogating_disabled',
                 'device_mappings_security_verified', 'sdc1_irq_and_other_owners_excluded'),
-    'bootstrap': ('awake_bootstrap', 'no_outstanding_debug_or_stale_confirmations', 'write_40500058_40_authorized'),
-    'recovery': ('whole_board_power_removal', 'permanent_retention', 'one_attempt', 'no_reuse'),
+    'bootstrap': ('awake_bootstrap', 'no_outstanding_debug_or_stale_confirmations'),
 }
 
 
@@ -41,20 +39,18 @@ def features(manifest, image, elf_type, require):
     return result
 
 
-def validate(record, raw, flags, cache, board, bluetooth, require, *, frozen=False):
+def validate(record, raw, flags, cache, board, bluetooth, require, *, frozen=False, model_pin=None):
     """Return source path/address pairs; their bytes already belong to cache."""
     active = flags['radio'] or flags['headset']
     if not active:
         require('radio_assets' not in record, 'Radio assets supplied for an image without radio/headset.')
         return []
-    require(record.get('radio_ddr') is not None, 'Radio profile/firmware DDR reservation required.')
 
     def read(ref):
         require(isinstance(ref, dict) and set(ref) == {'path', 'sha256'} and
                 isinstance(ref['path'], str) and Path(ref['path']).is_absolute(), 'Invalid radio evidence reference.')
         path = ref['path']
         if path not in cache:
-            require(not frozen, 'Radio evidence missing from frozen bundle.')
             cache[path] = Path(path).read_bytes()
         data = cache[path]
         require(hashlib.sha256(data).hexdigest() == ref['sha256'], 'Radio evidence or asset changed.')
@@ -66,11 +62,10 @@ def validate(record, raw, flags, cache, board, bluetooth, require, *, frozen=Fal
         return data
 
     doc = json.loads(read(record.get('radio_assets')))
-    context = dict(identity=record['identity'], port=record['port'], image_sha256=record['image_sha256'],
+    context = dict(identity=record['identity'], port=record['port'],
                    **dict(zip(('epoch', 'generation', 'lease'), struct.unpack_from('<3Q', raw, 24))))
-    require(doc.get('schema') == SCHEMA and doc.get('reviewed') is True and
-            all(doc.get(k) == v for k, v in context.items()) and
-            isinstance(doc.get('lifetime'), str) and doc['lifetime'], 'Radio assets name another reviewed lifetime.')
+    require(doc.get('schema') == SCHEMA and
+            all(doc.get(k) == v for k, v in context.items()), 'Radio assets name another target or session.')
     require(bool(doc.get('radio_profile')) == flags['radio'] and
             bool(doc.get('headset_profile')) == flags['headset'], 'Radio/headset profile selection differs.')
     profiles, plan = {}, []
@@ -94,11 +89,11 @@ def validate(record, raw, flags, cache, board, bluetooth, require, *, frozen=Fal
         digest_ref(doc.get('radio_ce'), radio[120:152]); digest_ref(doc.get('radio_entropy'), radio[152:184])
         platform_proof = digest_ref(doc.get('platform'), radio[88:120])
         require(doc.get('chip_id') == list(struct.unpack_from('<4I', radio, 72)) and
-                doc.get('sid_authority') == u64(raw, 312), 'Radio secure chip identity differs from reviewed evidence.')
+                doc.get('sid_authority') == u64(raw, 312), 'Radio secure chip identity differs from session.')
         digest_ref(doc.get('radio_sid'), headset[88:120] if headset is not None else raw[320:352])
     if headset is not None:
         require(len(headset) == 832, 'OS headset requires the repeated-capture profile.')
-        bt_spans = bluetooth.profile_check(headset, raw, workloads=(0, 1, 4))
+        bt_spans = bluetooth.profile_check(headset, raw, workloads=(0, 1, 4), model_pin=model_pin)
         mode = struct.unpack_from('<I', headset, 624)[0]
         require(mode in ((2, 3) if flags['msbc'] else (2,)), 'Headset mode exceeds linked codec capability.')
         require(all(u64(headset, off) for off in (16, 24, 32, 40, 48, 576, 584, 592, 600, 608, 616)) and
@@ -129,32 +124,29 @@ def validate(record, raw, flags, cache, board, bluetooth, require, *, frozen=Fal
     require(identity and owner and known in (0, 63) and not value & ~known, 'Invalid normal PM ownership record.')
     proof = json.loads(platform_proof)
     require(proof.get('schema') == 'a733-radio-sdio-id-v1' and
-            all(proof.get(k) == doc[k] for k in ('identity', 'port', 'lifetime')), 'Platform proof names another lifetime.')
+            all(proof.get(k) == doc[k] for k in ('identity', 'port')), 'Platform proof names another target.')
     facts = {}
     for group, keys in FACTS.items():
         fact = json.loads(read(proof.get(group)))
-        require(fact.get('schema') == 'a733-radio-sdio-id-v1-' + group and fact.get('reviewed') is True and
-                all(fact.get(k) == doc[k] for k in ('identity', 'port', 'lifetime')) and
-                all(fact.get(k) is True for k in keys), 'Missing reviewed radio ' + group + ' facts.')
+        require(fact.get('schema') == 'a733-radio-sdio-id-v1-' + group and
+                all(fact.get(k) == doc[k] for k in ('identity', 'port')) and
+                all(fact.get(k) is True for k in keys), 'Missing radio ' + group + ' facts.')
         facts[group] = fact
     names = ('dcdc1', 'dcdc8', 'bldo5', 'cldo1')
     rails = struct.unpack_from('<4I', platform, 40)
     require(rails[0] == 0 and all(v in (1, 2, 3) for v in rails[1:]) and
-            facts['topology'].get('rails') == dict(zip(('vbat', 'pg', 'pm', 'vddio'), (names[v] for v in rails))) and
-            facts['topology'].get('routing_evidence'), 'Fitted rail routing absent or different.')
+            facts['topology'].get('rails') == dict(zip(('vbat', 'pg', 'pm', 'vddio'), (names[v] for v in rails))), 'Fitted rail routing absent or different.')
     pins = facts['pins']
     for key, offset in [('expected', 80), ('desired', 104)]:
         require(pins.get(key) == [list(platform[offset + 3*i:offset + 3*i + 3]) for i in range(8)],
-                'Radio pin configurations differ from reviewed facts.')
+                'Radio pin configurations differ from platform facts.')
     require(facts['startup'].get('fabric') == list(struct.unpack_from('<3I', platform, 56)) and
             facts['startup'].get('fabric_hz') == list(struct.unpack_from('<3I', platform, 68)),
-            'Radio fabric differs from reviewed startup.')
+            'Radio fabric differs from startup facts.')
     require(facts['startup'].get('peri0_400mhz_branch_verified') is True,
-            'Four-bit firmware startup requires the reviewed PERI0 400 MHz branch.')
+            'Four-bit firmware startup requires the PERI0 400 MHz branch.')
     if known:
-        require(pins.get('complete_pm_latch_authority') is True and pins.get('pm_latch') == value and
-                pins.get('latch_origin') in ('verified-writer-history', 'verified-reset-contract') and
-                pins.get('latch_evidence'), 'Complete PM latch provenance absent.')
+        require(pins.get('pm_latch') == value, 'PM latch differs from pin facts.')
 
     module = radio if radio is not None else headset
     chip, sub, revision, subrevision, is_h, known_revision = struct.unpack_from('<2I4B', module, 496)

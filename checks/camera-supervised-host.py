@@ -286,45 +286,24 @@ def main():
         if mode=='fault':assert (d/'camera-fragment-001-001.bin').read_bytes()==response[:17]
         return {'calls':calls}
     for m in ('success','fault','short-write'):case('fragment-'+m,lambda d,m=m:fragments(d,m))
-    def queue(d):
-        for name in ['admission.json','prepared.json','launch.bin','image.elf']:shutil.copy2(bundle/name,d/name)
-        def ref(path):return {'path':str(path.absolute()),'sha256':host.digest(path)}
-        paths=host.software_sources();note=d/'model.txt';note.write_text('Software queue model only; never physical admission.\n')
-        software={'schema':'a733-camera-supervised-software-v1','physical_access':False,'admission_cases':True,'launcher_cases':True,'host_capture':True,'host_lifecycle':True,
-            'image':ref(d/'image.elf'),'launcher':ref(d/'launch.bin'),'sources':{k:ref(v) for k,v in paths.items()},'evidence':[ref(note)]}
+    def inputs(d):
+        for name in ['admission.json','prepared.json','launch.bin','image.elf']:
+            shutil.copy2(bundle/name,d/name)
         prepared={'files':{n:host.digest(d/n) for n in ['image.elf','launch.bin','admission.json']},
-            '_prepared_sha256':host.digest(d/'prepared.json'),'_source_hashes':{k:host.digest(v) for k,v in paths.items()}}
-        value=d/'software.json';value.write_text(json.dumps(software))
-        prerequisites={'supervised-ram-recovery':ref(d/'admission.json'),'camera-supervised-software':ref(value)}
-        submission={'prerequisites':list(prerequisites),'artifacts':[ref(d/n) for n in ['prepared.json','image.elf','launch.bin']]};review={'prerequisites':prerequisites}
-        database=d/'queue.sqlite';db=sqlite3.connect(database);db.executescript('CREATE TABLE settings(key TEXT,value INTEGER);INSERT INTO settings VALUES("halted",0);CREATE TABLE tests(id TEXT,state TEXT,owner TEXT,submission TEXT,review TEXT);')
-        db.execute('INSERT INTO tests VALUES(?,?,?,?,?)',('camera-test','claimed','coordinator',json.dumps(submission),json.dumps(review)));db.commit()
-        host.claimed(database,'camera-test','coordinator',d,prepared)
-        try:host.claimed(database,'camera-test','another owner',d,prepared)
-        except ValueError:pass
-        else:raise AssertionError('Foreign claim accepted')
-        db.execute('UPDATE settings SET value=1');db.commit()
-        try:host.claimed(database,'camera-test','coordinator',d,prepared)
-        except ValueError:pass
-        else:raise AssertionError('Halted queue accepted')
-        # Replacement refs match every current replacement file, but not the
-        # initial snapshots whose bytes would be uploaded by shared preload.
-        db.execute('UPDATE settings SET value=0')
-        (d/'image.elf').write_bytes(b'Replacement software-only image, never executed')
-        (d/'prepared.json').write_bytes(b'Replacement software-only metadata')
-        software['image']=ref(d/'image.elf');value.write_text(json.dumps(software))
-        review['prerequisites']['camera-supervised-software']=ref(value)
-        submission['artifacts']=[ref(d/n) for n in ['prepared.json','image.elf','launch.bin']]
-        db.execute('UPDATE tests SET submission=?,review=?',(json.dumps(submission),json.dumps(review)));db.commit()
-        try:host.claimed(database,'camera-test','coordinator',d,prepared)
-        except ValueError:pass
-        else:raise AssertionError('Replacement review authorized earlier upload bytes')
-        db.close();return {'claim':'exact owner and frozen reviewed executable/admission identities','refused':['foreign owner','halted queue','post-validation replacement metadata/image with matching replacement refs']}
-    case('queue-admission',queue)
+            '_prepared_sha256':host.digest(d/'prepared.json')}
+        host.claimed(None,None,None,d,prepared)
+        for name in ('image.elf','launch.bin','admission.json','prepared.json'):
+            path=d/name;original=path.read_bytes();path.write_bytes(original+b'changed')
+            try:host.claimed(None,None,None,d,prepared)
+            except ValueError as error:assert 'Prepared input changed before upload' in str(error)
+            else:raise AssertionError('Changed upload bytes accepted')
+            path.write_bytes(original)
+        return {'accepted_without_queue':True,'rejected_changed_inputs':4}
+    case('input-snapshot',inputs)
 
     def wiring(d):
         # Exercise canonical runner dispatch only; shared physical lifecycle is reused.
-        args=['--bundle',str(bundle),'--fel','/no-device','--evidence',str(d/'physical-never-created'),'--database','/no-queue','--claim','fixture','--owner','fixture','--supervised-manual-reconnect']
+        args=['--bundle',str(bundle),'--fel','/no-device','--evidence',str(d/'physical-never-created')]
         def run(*args,**kw):
             assert kw['result_key']=='camera_result' and kw['capture_seconds']==59 and kw['product']=='sunstoneos native camera' and kw['serial']=='sunstoneos-a733-camera';assert args[2]['_frozen']['session.bin']==session;return 0
         with patch.object(sup,'run_session',run):assert host.main(args)==0

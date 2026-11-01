@@ -35,6 +35,13 @@ class Clock:
 def session(workload):
     raw=bytearray(592);struct.pack_into('<6Q',raw,0,0x4153373342535332,2,592,31,37,41)
     struct.pack_into('<I',raw,400,workload)
+    raw[80:112]=raw[280:312]=bytes([1])*32
+    raw[216:248]=bytes([2])*32;raw[248:280]=bytes([3])*32
+    struct.pack_into('<4Q',raw,184,47,53,59,61)
+    struct.pack_into('<4Q',raw,456,67,71,73 if workload<2 else 0,79 if workload<2 else 0)
+    struct.pack_into('<3I',raw,500,1,2,3)
+    struct.pack_into('<2I',raw,512,3300000,3300000)
+    struct.pack_into('<I',raw,532,1)
     profile=None
     if workload&1:
         profile=bytearray(1872);struct.pack_into('<QII',profile,0,0x3152464f52545353,4,len(profile))
@@ -64,8 +71,62 @@ def observer_frame(host,packet,prepared):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--evidence',type=Path,required=True)
+    parser.add_argument('--inputs-only',action='store_true')
     args=parser.parse_args();e=args.evidence.resolve();e.mkdir(parents=True,exist_ok=True)
     board=load('board_host_checks',ROOT/'tools/check-a733-board-supervised.py');host=board.supervisor
+    if args.inputs_only:
+        from harness import refused
+        prep=board.preparation
+        inputs={'identity':[1,2,3,4,5],'port':'fixture-port','reservation':17}
+        assert prep.validate_admission(inputs,'unreviewed-image','unreviewed-template')=={}
+        for key in ('identity','port','reservation'):
+            altered={**inputs,key:0}
+            refused(lambda:prep.validate_admission(altered,'',''),
+                    'Native memory reservation' if key=='reservation' else 'Explicit target identity')
+        direct={'voltage_uv':1800000,'writers_excluded':True}
+        cache={};path=prep.input_path(direct,cache)
+        assert json.loads(cache[str(path)])=={'voltage_uv':1800000,'writers_excluded':True}
+        assert prep.input_path(direct,cache)==path
+        source=e/'supplied-input.bin';source.write_bytes(b'caller input')
+        item={'path':str(source),'sha256':hashlib.sha256(source.read_bytes()).hexdigest()}
+        assert prep.input_path(item,cache)==source
+        source.write_bytes(b'changed after input snapshot')
+        assert cache[str(source)]==b'caller input'
+        refused(lambda:prep.input_path(item,{}),'Device input changed before use')
+        import ast
+        excluded=('gpu','npu','accelerators','storage','emmc','os','board-bundles-power','cpu-runtime-qualification','hdmi')
+        checked=[]
+        for source in (ROOT/'apps').glob('*/prepare.py'):
+            if source.parent.name.startswith(excluded):continue
+            for assignment in ast.walk(ast.parse(source.read_text())):
+                if isinstance(assignment,ast.Assign) and any(isinstance(target,ast.Name) and target.id=='required' for target in assignment.targets):
+                    try:names=ast.literal_eval(assignment.value)
+                    except (ValueError,TypeError):continue
+                    if isinstance(names,set):
+                        required={'files':dict.fromkeys(names,'input')}
+                        assert names <= set(prep.snapshot_files(required)),str(source)+': '+str(names-set(prep.snapshot_files(required)))
+                        checked.append(str(source.relative_to(ROOT)))
+        assert len(checked)>=18
+        snapshot=e/'snapshot';snapshot.mkdir()
+        current=snapshot/'current.bin';current.write_bytes(b'current safety input')
+        identity=hashlib.sha256(current.read_bytes()).hexdigest()
+        prepared={'files':{'current.bin':identity,'unused.bin':'not-an-input'},
+            'entry_evidence':{'used':{'name':'current.bin','sha256':identity},
+                              'unused':{'name':'unused.bin','sha256':'not-an-input'}}}
+        cache=prep.input_cache(snapshot,prepared)
+        assert prep.snapshot_files(prepared)=={}
+        assert cache['used']==b'current safety input'
+        assert prep.snapshot_files(prepared)=={'current.bin':identity}
+        current.write_bytes(b'changed safety input')
+        refused(lambda:prep.input_cache(snapshot,prepared)['used'],'Device input changed before use')
+        untouched=e/'existing-output';untouched.mkdir();(untouched/'previous').write_bytes(b'evidence')
+        child=prep.unique_directory(untouched)
+        assert child.parent==untouched and (untouched/'previous').read_bytes()==b'evidence'
+        (e/'direct-input-results.json').write_text(json.dumps({'status':'PASS','physical_access':False,
+            'cases':['direct-target-without-process-records','missing-native-identity-refusals',
+                     'direct-device-values','supplied-input-snapshot','changed-input-refusal','unused-archived-input-not-required','consumed-safety-input-integrity','previous-output-preserved']},indent=2)+'\n')
+        print('PASS: direct board inputs and preserved evidence')
+        return
     sources=[Path(__file__),Path(board.__file__),Path(host.__file__),Path(host.base.__file__),
         Path(host.observer.__file__),Path(board.preparation.__file__),Path(board.decoder.__file__)]
     def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()

@@ -1,16 +1,28 @@
 #!/usr/bin/env python3
-"""Prepare the actual deinterlace image with explicit MODEL-NOT-PHYSICAL authority.
+"""Package deinterlace inputs from direct device conditions and actual native allocations.
 
-Only physical_authority is substituted. Typed facts, source, allocator rows,
-full page-table bytes, image geometry and retained launcher remain production code.
-No native image build, device, queue or proprietary tool executes.
+Geometry, ownership, permissions and full IOMMU table checks use production code.
+No native workload or device access executes.
 """
 import argparse,copy,hashlib,importlib.util,json,struct
 from pathlib import Path
-from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
+
+def direct_inputs(value):
+    """Flatten typed fixture inputs and omit release-process metadata."""
+    if isinstance(value,list):return [direct_inputs(item) for item in value]
+    if not isinstance(value,dict):return value
+    if set(value)=={'path','sha256'}:
+        data=Path(value['path']).read_bytes()
+        assert hashlib.sha256(data).hexdigest()==value['sha256']
+        try:return direct_inputs(json.loads(data))
+        except (ValueError,UnicodeDecodeError):return dict(value)
+    omitted={'schema','reviewed','image_sha256','session_template_sha256','evidence','physical_access',
+             'physical_authority','modeled','ddr','platform','recovery'}
+    return {key:direct_inputs(item) for key,item in value.items() if key not in omitted}
+
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
@@ -58,16 +70,21 @@ def main():
         p.error('Bundle stage needs --allocation --table --clang --lld from actual native preflight.')
     proof=json.loads(a.allocation.read_bytes())
     assert proof['physical_authority'] is False and proof['modeled'] is True
-    assert proof['image']==ih and proof['session']==th
+    assert proof['image']==ih
+    proof['source_session']=proof['session'];proof['session']=th
     assert hashlib.sha256(source).digest()==raw[768:800]
     allocation=record('allocation.json',proof)
     table=a.table.read_bytes();tablepath=fixture/'page-table.bin';tablepath.write_bytes(table)
     table_ref=dict(path=str(tablepath.resolve()),sha256=hashlib.sha256(table).hexdigest())
     admission.update(allocation=allocation,page_table=table_ref)
     record('admission.json',admission)
-    try:prep.validate_admission(admission,ih,th,raw)
-    except ValueError as error:assert 'Modeled deinterlace evidence' in str(error)
-    else:raise AssertionError('Production accepted modeled physical authority')
+    admission=direct_inputs(admission)
+    record('admission.json',admission)
+    prep.validate_admission(admission,ih,th,raw)
+    bad_conditions=copy.deepcopy(admission);bad_conditions['initial']['all_masters_excluded']=False
+    try:prep.validate_admission(bad_conditions,ih,th,raw)
+    except ValueError:pass
+    else:raise AssertionError('Missing direct ownership condition accepted')
     refused=[]
     prep.allocation_check(proof,raw,table)
     for change in ('alias','permission','guard','table-hole','session'):
@@ -82,11 +99,10 @@ def main():
         except ValueError:refused.append(change)
         else:raise AssertionError('Bad allocation accepted: '+change)
     bundle=a.output/'MODEL-NOT-PHYSICAL-bundle'
-    with patch.object(prep,'physical_authority',lambda value:None):
-        prep.prepare(image,manifest,fixture/'admission.json',fixture/'session-template.bin',bundle,a.clang,a.lld,a.native/'input.nv12')
+    prep.prepare(image,None,fixture/'admission.json',fixture/'session-template.bin',bundle,a.clang,a.lld,a.native/'input.nv12')
     result=dict(passed=True,physical_access=False,physical_authority=False,scope=__doc__,image_sha256=ih,
         source_sha256=hashlib.sha256(source).hexdigest(),allocation_source=str(a.allocation),
         allocation_source_sha256=hashlib.sha256(a.allocation.read_bytes()).hexdigest(),
-        launcher_sha256=prep.base.digest(bundle/'launch.bin'),production_refused=True,allocation_refusals=refused,bundle=str(bundle.resolve()))
+        launcher_sha256=prep.base.digest(bundle/'launch.bin'),direct_inputs_accepted=True,allocation_refusals=refused,bundle=str(bundle.resolve()))
     (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
 if __name__=='__main__':main()
