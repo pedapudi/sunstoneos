@@ -27,10 +27,10 @@ retirement reports.
 The [board queue](board-runner.md) validates finite NPU sessions and retirement
 receipts. The power-cycle run has no returned breadcrumb or first-failure record;
 its failing sub-step is unknown. Port 3-3 is physically reconnected in FEL mode;
-further physical attempts require coordinator approval. The finite SDK diagnostic uses an EL1 application task;
+power-state changes require coordinator approval. The finite SDK diagnostic uses an EL1 application task;
 full OS EL0 mappings remain unqualified. These bounded successes do not qualify
 repeated transition reliability. Active-job reset recovery, thermal transitions,
-sustained operation and representative concurrent workloads remain unqualified.
+long-duration operation and representative concurrent workloads remain unqualified.
 The [native application record](npu-application.md) preserves narrower historical
 attempts and their recovery evidence.
 

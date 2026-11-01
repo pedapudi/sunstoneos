@@ -68,6 +68,7 @@ is under `~/.cache/sunstoneos/board-queue/entries/`:
 | Current local stop/restart control | 2 / 4 | `1793558381244643310-6a29a71d` |
 | conv12, conv8, then conv12 | 3 / 4 | `1793558909256910454-ab3a76b4` |
 | Finite application SDK | 2 / 3 | `1793559233825594424-693cc430` |
+| Alternating conv12/conv8 batch | 200 / 201 | `1793559627833816772-2003f2e7` |
 
 These bounded workloads do not establish repeated-transition reliability.
 Active-job reset recovery, confinement, thermal protection and full OS EL0 SDK
@@ -95,6 +96,29 @@ Its ELF is
 `~/.cache/sunstoneos/build/npu-wdt-1031/qualification-1101/images/sdk-access/image.elf`,
 SHA-256 `a0dd10679c00829a9a2f16357cdae57064ce6a063fdeac714f1273f235311c32`.
 This client uses an EL1 application task; OS EL0 SDK mappings remain unqualified.
+
+The sustained diagnostic checks every copied output across 200 consecutive
+jobs, 100 per model, in one runtime lifetime. Entry
+`1793559627833816772-2003f2e7` reports zero mismatches, 201 interrupt completions,
+normal return and restored DRAM. The batch takes 0.138715625 seconds:
+1,441.8 jobs/second including model loading, copies, comparisons and hashing.
+Maximum `npu_job_run` API latency is 2.100042 ms. This is a bounded batch;
+long-duration and thermal reliability remain unqualified.
+The ELF is
+`~/.cache/sunstoneos/build/npu-wdt-1031/qualification-1101/images/sustained/image.elf`,
+SHA-256 `f9cc623ab7debeb388d9e9ea0be05f64424623ea5e8ef03525afe43b3798478f`.
+Its frozen host parser verifies 200 jobs, every ordered output digest, timing
+windows, the measured maximum and the actual interrupt receipts. Host evidence
+covers 37 producer/parser, corruption, count, marker and timeout cases in
+`qualification-1101/sustained-host-7/` under the same build root.
+
+The next concurrency diagnostic requires additional approval for the existing
+eight-core CPU startup, vendor top CPU/DSU points and verified post-ROM rail
+normalization. The NPU-only authorization keeps PCK4 ON and DCDC2 untouched;
+it does not authorize those CPU power transitions. The written proposal and
+three-role design reviews are under `qualification-1101/` in the build root.
+The active-job cancellation design is prepared there; its physical run follows
+the concurrency stage.
 
 The runtime models up to eight catalogue clients and model switching. The board
 image has one slot and five catalogue models; direct FIFO USB and shader-graph
