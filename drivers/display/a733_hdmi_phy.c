@@ -2,6 +2,7 @@
 /* Register definitions and sequences adapted from the A733 HDMI driver.
  * Copyright (C) 2016 Allwinner. */
 #include "a733_hdmi_phy.h"
+#include "a733_display_modes.h"
 #include "a733_range.h"
 
 int a733_hdmi_timing(enum a733_hdmi_mode m,struct a733_hdmi_timing *t){
@@ -12,6 +13,19 @@ int a733_hdmi_timing(enum a733_hdmi_mode m,struct a733_hdmi_timing *t){
         148500000,1920,1080,2200,1125,88,44,148,4,5,36,16};
     else return -1;
     return 1;
+}
+enum sunstone_display_mode_status a733_hdmi_mode_from_pixel(const struct sunstone_display_mode *m,enum a733_hdmi_mode *out)
+{
+    if(!out||!sunstone_display_mode_valid(m))return SUNSTONE_MODE_INVALID;
+    if(m->flags&SUNSTONE_MODE_INTERLACED)return SUNSTONE_MODE_INTERLACE;
+    const enum a733_hdmi_mode supported[]={A733_HDMI_720P60,A733_HDMI_1080P60};
+    for(unsigned i=0;i<2;++i){struct a733_hdmi_timing t;
+        if(a733_hdmi_timing(supported[i],&t)!=1)return SUNSTONE_MODE_INVALID;
+        struct sunstone_display_mode v={t.pixel_hz,t.width,t.height,t.hfront,t.hsync,t.hback,
+            t.vfront,t.vsync,t.vback,SUNSTONE_MODE_HSYNC_POSITIVE|SUNSTONE_MODE_VSYNC_POSITIVE};
+        if(sunstone_display_mode_equal(m,&v)){*out=supported[i];return SUNSTONE_MODE_OK;}
+    }
+    return SUNSTONE_MODE_UNSUPPORTED_PROFILE;
 }
 int a733_hdmi_fail(struct a733_hdmi_io *b){
     if(!b || b->self!=b)return -1;

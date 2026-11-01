@@ -88,7 +88,8 @@ def finite_npu_info(image, host, finite, manifest):
     parts, address, build, layout, geometry = finite.image_profile(Path(image).read_bytes(), manifest)
     profile = finite.geometry_profile(geometry)
     require(profile in (finite.STARTUP, finite.INFERENCE, finite.RUNTIME, finite.RESTART,
-                        finite.SWITCH, finite.SDK, finite.POWER), 'Unsupported finite NPU profile.')
+                        finite.SWITCH, finite.SDK, finite.POWER,
+                        getattr(finite, 'LATENCY', 'npu-latency-return-v1')), 'Unsupported finite NPU profile.')
     require(layout[:3] == (456, 224, 232), 'NPU development session layout differs.')
     return {'watchdog': watchdog, 'geometry': geometry, 'session_layout': list(layout),
             'execution_profile': profile, 'image_sha256': sha(image), 'build_id': build.hex()}

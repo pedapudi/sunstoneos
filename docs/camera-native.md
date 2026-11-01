@@ -1,9 +1,11 @@
 # Native reference camera capture
 
-The native camera binding selects CAM1 or CAM2, prepares OV5640 exposures and
+The native camera binding selects CAM1 or CAM2 from the board description,
+prepares exposures through the selected sensor adapter and
 copies one completed NV16 image into an application-owned memory reservation.
-The build selects any of the sensor's ten existing sizes, up to 2592 × 1944;
-the default is 640 × 480. NV16 stores equally sized luminance and interleaved
+The build requests width and height; mode enumeration selects a matching
+UYVY sensor mode. Legacy size presets retain the ten OV5640 dimensions, up to
+2592 × 1944. The default is 640 × 480. NV16 stores equally sized luminance and interleaved
 chroma planes, each containing width × height bytes. The sensor sends two-lane UYVY; the pass-through route and camera DMA
 produce these planes without an ISP image-processing pipeline.
 
@@ -13,6 +15,66 @@ memory allocator. It executes the existing sensor, analog calibration, CSI,
 route and DMA controllers. The [native camera application](camera-application.md) connects these providers
 to executable startup and USB output. Physical operation and its protected boot
 admission remain unqualified.
+
+## Sensor selection and controls
+
+The sensor class uses a generic mode, bus description and driver operations in
+[`camera_sensor.h`](../include/camera_sensor.h). The board description selects
+CSI lanes, I2C controller and address, clock output, pin roles and candidate
+driver names. The admitted module record supplies reset wiring and rail
+identities where the bare connector description leaves them unspecified.
+Native preparation continues to verify the existing PMIC snapshots and retain
+clock, rail, pin, IOMMU and DMA ownership.
+
+The class acquires the bus resources, waits for the selected drivers' minimum
+power and reset holds, and reads their chip IDs at the admitted I2C address.
+A mismatching ID permits the next listed candidate at that address. A failed
+bus transaction faults immediately and retains ownership. The class never scans
+other I2C addresses or retries a failed transfer.
+
+The OV5640 adapter preserves its existing register tables, timing calculations,
+masked writes, stream readbacks and fault retention. Its power holds remain at
+least 5 ms after acquisition, 1 ms after PWDN release and 20 ms after reset
+release. Each minimum hold includes an extra microsecond for a clock rounded
+down to whole microseconds. Mode validation compares fields independently of
+structure padding.
+
+The second adapter reuses the Linux v6.12 OV5647 VGA RAW10 table. Its software
+reset and complete mode table run only after receiver admission. Host checks
+compare the entire table with the pinned upstream file and exercise start,
+stop, readback, receiver pending, wrong IDs and failed transfers.
+[`sensor-sources.json`](../drivers/camera/sensor-sources.json) records the URL,
+revision, hash, license and execution boundary. RAW10 requires a compatible ISP
+conversion path; the current UYVY/YUYV capture path refuses it. No OV5647 module
+or OV5640 module is physically qualified.
+
+Control queries report supported ranges and when a control can be set. The
+adapters support test-pattern selection before opening. Exposure, gain and
+white-balance controls return unsupported. The class forwards control setters
+to the selected driver's operations, so a driver can implement those controls
+without changing the class manager.
+
+A sensor addition supplies a driver translation unit, an entry in the separate
+[`sensor registry`](../drivers/camera/sensor_registry.c), a build source entry
+and board/module selection data. It does not change capture, CSI or the generic
+class lifecycle. The sensor driver declares its ID registers, safe power holds,
+mode enumeration and stream/control operations.
+
+## A shared camera interface retains DMA slots
+
+[`a733_camera_application.h`](../include/a733_camera_application.h) exposes an
+admitted continuous CSI stream through the shared
+[`sunstone_camera.h`](../include/sunstone_camera.h) application contract. It
+reports the selected NV16 mode and returns direct Y/UV views of a held DMA
+slot. Releasing the matching frame token returns that slot to the ring. A stale
+token or a second outstanding frame is refused.
+
+The interface carries CSI planes or USB frame spans without copying pixel
+payloads. The native CSI adapter authenticates the existing owner and session
+deadline through the native capture entry point. It serves privileged callers;
+EL0 capability publication and buffer mappings remain an integration gap.
+Stopping the current native stream stops the sensor and then retains a fault
+because independent packet drain remains unqualified.
 
 ## Boot admission and wiring
 

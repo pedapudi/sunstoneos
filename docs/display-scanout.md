@@ -462,3 +462,7 @@ An independent Sol 6.1 review found no substantive issue. No native application
 caller uses the retirement query; the existing frozen DSI application evidence
 remains evidence for immutable replay. This check does not establish physical
 scanout or retirement.
+
+Generic pixel timing, connector discovery and selected panel descriptions follow
+the [display class contract](display-classes.md). Board wiring and authenticated
+panel selection remain separate from the retained scanout ownership contract.
