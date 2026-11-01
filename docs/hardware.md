@@ -49,12 +49,12 @@ and `3-1-204839/session.json` under the same directory.
 `tools/dev-run.py` now normalizes CPU rails to 800 mV before guarded
 CPU-return launches and after validated normal returns with boot clocks.
 
-The hello-compute control on 3-1 stopped because the application finished
-before the CPU clock owner reached FOLLOW. The GPU firmware-only diagnostic
-on 3-1 stopped in its frozen build's compatibility callback. Port 3-3 remains
-quarantined after a host error following a normal native return. These are
-recorded runner outcomes, not live access checks. No new complete application
-or hardware qualification follows from the split or these diagnostics.
+The corrected hello-compute control returned normally on 3-1 after the early
+CPU-return fix. An earlier GPU firmware image also started and stopped firmware
+and reached native ROM return. The later combined firmware image fails during
+the CPU-B close transition to 1014 MHz, which the CPU-only reliability image also
+reproduces. The CPU clock worker owns that defect. These recorded outcomes do
+not establish current board access or physical queue qualification.
 The [handoff branch list](handoff.md#open-branches) distinguishes unmerged fixes.
 
 ## Current software integration
@@ -62,9 +62,16 @@ The [handoff branch list](handoff.md#open-branches) distinguishes unmerged fixes
 - The [GPU compute queue](designs/gpu-compute-queue.md) accepts application
   programs and manifest-region leases with a GPU page cap of 256 KiB. Host
   checks cover 204 exact-sum jobs, interrupts, deadlines, thermal reopen,
-  retained failures and returning-image proofs. The independent vector-add
-  application also builds and passes host checks. Physical execution of this
-  queue, interrupt qualification and complete recovery remain outstanding.
+  retained failures and returning-image proofs. Two admitted applications have
+  independent slots and sequences in one trusted shared context. Host checks
+  cover ten powered open/close cycles, reset/readback/OFF recovery with queued
+  peer preservation, and bounded quiescence before return or resident completion.
+    The mimus shader passes the host exact-sum and readout parity checks, with
+  exhaustive sum qualification enabled. Frozen proposals are under `gpu-integrate-1031/images-lifecycle/` in the
+  build cache; rebuild them with the separate CPU clock fix before physical
+  qualification. Physical queue execution, interrupt delivery, recovery and
+  application GPU recognition remain unqualified.
+
 The shared PMIC decoder preserves raw DCDC8/DCDC9 selectors 88–127 without
 publishing a programmed voltage. The pinned references disagree in that range.
 The [source comparison](designs/pmic-reference-reconciliation.md) and finite

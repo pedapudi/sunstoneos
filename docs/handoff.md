@@ -107,7 +107,7 @@ The component documents identify source files and narrower evidence boundaries.
 | Crypto, entropy and identity | **Implemented:** native crypto modes, MD5/SM3 and CPU-staging erasure; host checks pass. Prior CE exclusion, secure access, IRQ/drain, raw entropy and physical qualification remain open. The existing crypto image parks and is ineligible for returning runs. | [Security inventory and evidence](security-engines.md), [entropy](entropy.md), [identity](board-application.md) |
 | Always-on management processor | **Implemented:** remote-writer ownership accounting; native management-core control and sleep/wake qualification remain open. | [Remote writers](remote-writers.md), [SCP reference](vendor-firmware/scp-firmware.md) |
 | Autonomous microSD OS boot | **Host-verified only:** packaging, cold-entry and slot/update checks; no physical installation or autonomous OS boot is established. | [Cold entry](cold-entry.md), [resident OS design](designs/autonomous-card-os.md) |
-| Generic GPU compute queue | **Host-verified only:** one context, one program, four leases, one job slot, interrupt completion and retained reopen. Physical queue execution and recovery remain unverified. | [Queue design](designs/gpu-compute-queue.md), [layering audit](layering-audit.md) |
+| Generic GPU compute queue | **Host-verified only:** one shared context, one program, four leases, two caller slots, interrupt completion, retained reopen and bounded reset recovery. Physical queue execution and recovery remain unverified. | [Queue design](designs/gpu-compute-queue.md), [layering audit](layering-audit.md) |
 
 Earlier board results in this table retain their exact input scope. CPU, GPU
 and NPU evidence is indexed in [the preserved board results](handoff-history-20261031.md#qualified-on-the-boards)
@@ -270,6 +270,14 @@ the external application owns recognition, models, manifests and capture tools.
 their programs and tensor placement; `apps/queue-add` supplies an independent
 vector-add consumer. Data pages stop at 256 KiB. The GPU map is built once,
 and completion uses interrupts with the retained 4 ms backup poll.
+The optional second GPU application has its own admitted manifest, task and
+completion queue, with explicit consent to the same program and memory map.
+The primary owns device lifecycle. Host checks cover ten open/close cycles,
+reset recovery preserving a queued peer, native reset access policy and final
+quiescence for returning and resident completion. The frozen mimus recognition
+proposal keeps exhaustive GPU sum checks enabled. These software checks
+establish no new physical GPU qualification.
+
 
 ## Coordinator launch and capture
 
@@ -317,8 +325,10 @@ initialized and the next launch normalizes rails. `--no-normalize-rails` and
 The corrected hello-compute control returned normally in the recorded 3-1
 run above. Repeated startup and broader reliability remain unqualified.
 The runner accepts generic GPU images with image-bound GPU and thermal receipt
-capture and strict queue-add result decoding. Frozen rebuilds and exact commands
-are in `~/.cache/sunstoneos/build/gpu-integrate-1031/images-er/`. NPU development preparation
+capture and strict binary result decoding. Current frozen proposals and exact
+commands are in `~/.cache/sunstoneos/build/gpu-integrate-1031/images-lifecycle/`.
+They contain the known CPU clock close defect and require rebuild and refreeze
+with the separate correction before qualification. NPU development preparation
 also remains unimplemented. `--check-only` reads the board unless `--state FILE`
 supplies a capture; neither mode writes rails.
 
@@ -350,8 +360,9 @@ reuse. No board run is requested for this documentation change.
 ## Open branches
 
 - `work/gpu-integrate-1031`: combines the reference startup fixes and generic
-  compute queue on the current application kit. Host checks and independent
-  review pass; physical qualification waits for CPU clock close.
+  compute queue on the current application kit, including two trusted callers,
+  retained restart, reset recovery and final quiescence. Host checks and three
+  lifecycle reviews pass; physical qualification waits for CPU clock close.
 - `work/gpu-queue-1031`, with mimus `port/sunstoneos-gpu-queue`: supply a generic GPU compute queue and application port; unmerged.
 
 ## Review and validation
