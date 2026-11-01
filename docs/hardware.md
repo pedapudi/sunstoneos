@@ -2922,6 +2922,11 @@ to the stated scope:
   no vendor trace covers the P picture's control bits. No numerical or
   physical decode result exists. Main10, larger pictures, several slices,
   tiles, wavefront parallel processing and B pictures remain required.
+  Repeated initialization now preserves live and terminal controller state;
+  the host model covers refusal before token acquisition and throughout both
+  pictures. An [offline comparator](../apps/hevc/PIXELS.md) checks captured NV12
+  output against CPU decoding; its own host cases use CPU-generated copies
+  and do not qualify the VE.
   The attached board ROM profile, actual memory/cache/drain authority, physical
   decoding and remaining codec modes remain outstanding.
 
