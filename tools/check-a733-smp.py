@@ -418,7 +418,7 @@ def main(argv=None):
     for label, path in [('host-tool.py', Path(__file__)), ('qualification.json', args.qualification), ('input-evidence.json', args.input_evidence), ('ddr-contract.json', args.ddr_contract), ('prepared.json', bundle/'prepared.json')]:
         shutil.copy2(path,args.evidence/label)
     access=module('smp_usb_access',ROOT/'tools/usb-access.py')
-    sys.path.insert(0,str(Path.home()/'git/mimus/tools')); import usb_guard
+    import usb_guard
     usb_guard.check_health()
     record={'complete':False,'transactions':[],'claim':args.claim,'owner':args.owner,'bundle_sha256':digest(bundle/'prepared.json'),'launch_attempted':False}
     def save(): save_json(args.evidence/'session.json',record)

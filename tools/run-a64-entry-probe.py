@@ -92,7 +92,7 @@ def run(a):
     a.evidence.mkdir(parents=True,exist_ok=False)
     record={'complete':False,'launch_attempted':False,'transactions':[],'claim':a.claim,'owner':a.owner,'physical_access':True,'survey_sha256':expected[a.survey.resolve()],'recovery_sha256':recovery_hash,'binary_sha256':m['files']['probe.bin']}
     def journal():save(a.evidence/'session.json',record)
-    access=module('a64_probe_access',ROOT/'tools/usb-access.py');sys.path.insert(0,str(Path.home()/'git/mimus/tools'));import usb_guard
+    access=module('a64_probe_access',ROOT/'tools/usb-access.py');import usb_guard
     usb_guard.check_health()
     with access.board_lock() as node:
         access.require_session(node);access.require_rom(node);identity=access.identity(node);port=access.target(node);config={'port':port.name,'sysfs':str(port.resolve())};failed=False;dirty=False

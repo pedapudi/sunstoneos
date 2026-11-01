@@ -291,7 +291,7 @@ void usb_runtime_start(unsigned priority)
     configASSERT(xTaskCreateStatic(usb_task, "usb", 2048, NULL, priority, task_stack, &task_state));
 }
 
-#ifndef SUNSTONE_MIMUS_USB
+#ifndef SUNSTONE_USB_DIAGNOSTIC_EMBEDDED
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 {
     (void)task;

@@ -17,9 +17,13 @@ and refuses to select among multiple matching devices. Python 3 and the host
 `usb_guard.py` limits how often board tools re-enumerate USB devices and refuses
 board work after the host's xHCI controller has died. Board tools import it from
 this directory, and bundles that run a frozen host runner carry a copy. The file
-is a byte-identical copy of `tools/usb_guard.py` from mimus revision `d0723ea9`.
-Both copies share one churn state file under `/tmp`. Note for mimus: import the
-guard from SunstoneOS `tools/usb_guard.py` and remove the mimus copy.
+provides the shared board re-enumeration budget and controller-health checks.
+Board tools import it from this directory. Every consumer uses the
+`/tmp/board-usb-churn.json` state under `/tmp/board-usb-churn.lock`.
+`SUNSTONE_USB_SPACING_S`, `SUNSTONE_USB_BOARD_CAP` and
+`SUNSTONE_USB_BOARD_WINDOW_S` select the shared budget; `SUNSTONE_USB_HEALTH`
+selects the existing warning override. Update all consumers together while no
+board operation is active, so the common state and settings stay consistent.
 
 ## Access across board resets
 

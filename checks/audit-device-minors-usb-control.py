@@ -30,7 +30,7 @@ def main():
     model = HERE / 'usb-diagnostic-protocol'
     subprocess.run([args.compiler, '--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mgeneral-regs-only',
                     '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-fdata-sections',
-                    '-O2', '-g', '-Wall', '-Wextra', '-Werror', '-DSUNSTONE_MIMUS_USB=1',
+                    '-O2', '-g', '-Wall', '-Wextra', '-Werror', '-DSUNSTONE_USB_DIAGNOSTIC_EMBEDDED=1',
                     '-I' + str(HERE), '-I' + str(model / 'include'), '-I' + str(ROOT / 'drivers/usb'),
                     '-I' + str(args.tinyusb / 'src'), '-I' + str(args.headers),
                     str(HERE / 'audit-device-minors-usb-control.c'), str(ROOT / 'runtime/memory.c'),
