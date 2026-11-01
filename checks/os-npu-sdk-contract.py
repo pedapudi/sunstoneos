@@ -33,7 +33,8 @@ def value(name):
 args = value('C_DEFINES') + value('C_INCLUDES')
 old_root = next(arg[2:-len('/apps/os')] for arg in args if arg.startswith('-I') and arg.endswith('/apps/os'))
 args = [arg.replace(old_root, str(ROOT)) for arg in args]
-args += ['-std=c11', '-O2', '-g', '-ffunction-sections', '-fdata-sections', *SANITIZE]
+# Host mocks retain note packing; ARM SVC assembly is checked by the native ELF.
+args += ['-USUNSTONE_CRUMBS', '-std=c11', '-O2', '-g', '-ffunction-sections', '-fdata-sections', *SANITIZE]
 commands, results = [], []
 
 def run(command, red=False):

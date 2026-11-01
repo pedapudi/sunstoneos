@@ -16,6 +16,10 @@ static const uint64_t sent_ticket=UINT64_C(0x123456789abc);
 static jmp_buf suspended;
 _Noreturn void __assert_func(const char *file,int line,const char *function,const char *condition)
 {(void)file;(void)line;(void)function;(void)condition;abort();}
+/* Model successful worker parking before the stop-refusal case. The complete
+ * linked lifecycle fixture establishes the actual worker park transition. */
+int npu_service_runtime_parked(const struct npu_service *service)
+{assert(service==&npu.runtime.service);return 1;}
 int board_live(void *context){assert(!context);return (int)live_value;}
 uint32_t board_live_refusal(void){return live_value?0:UINT32_C(1)<<28;}
 void board_fail_note(uint32_t site,uint32_t value,const void *caller)
@@ -76,7 +80,10 @@ int main(int argc,char **argv)
     if(mode==18)npu.started=0;
     if(mode==19)atomic_store(&npu.failed,1);
     if(mode>=11&&mode<=13) {
-        if(mode==13)atomic_store(&npu.closed,1);
+        if(mode==13) {
+            atomic_store(&npu.closed,1);
+            atomic_store(&npu.runtime.service.irq_stopped,1);
+        }
         if(!setjmp(suspended))bootstrap(NULL);
         assert(board_failures==1&&atomic_load(&os_npu_first_failure.ready)==2);
         unsigned op=mode==13?NPU_SERVICE_CLOSE:NPU_SERVICE_OPEN;
