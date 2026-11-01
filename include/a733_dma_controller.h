@@ -132,7 +132,10 @@ enum a733_dma_control_status a733_dma_submit_cyclic_rx(struct a733_dma_controlle
     unsigned,const struct a733_dma_transfer *,uint64_t);
 int a733_dma_cyclic_progress(const struct a733_dma_controller *,unsigned,uint64_t *);
 /* Copy only one completed, not-yet-reused RX range into private staging. No
- * raw lease escapes. Period k is copied only while period+2 <= packages <=
+ * raw lease escapes. Output must be disjoint from every retained channel's
+ * descriptors, payload allocations and transfer metadata, including faulted
+ * channels. Overlap is refused before hardware callbacks.
+ * Period k is copied only while period+2 <= packages <=
  * period+count-2, so a ring needs at least four periods. Return1 verified
  * copy,0 not yet stable/ready,-1 overrun or ambiguous history. A failed copy
  * remains unpublished. Serialized worker only. */

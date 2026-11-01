@@ -633,7 +633,11 @@ to the stated scope:
   12,224 MiB outside its protected window in an estimated three to five runs is
   **implemented** and host-modeled. In emulation its admission accepts the
   12,288 MiB map its platform writes and its monitor's remote-writer sample;
-  its DMA0 cases are not built, and no run has taken place on a board. The second board also passes its
+  complete block-map admission now rejects aliases, wrong permissions and
+  attributes in host and native corruption checks. Its DMA0 cases are not built.
+  The image needs the WDT0 return contract, breadcrumbs and a development-runner
+  handler before a board launch. No memory qualification run has taken place.
+  The second board also passes its
   returning platform survey with SRAM restoration under
   `second-board-20261018-3-3/platform-attempt1/`.
   The thermal policy throttles at 85 °C on the DDR temperature channel; this is
@@ -1305,6 +1309,11 @@ to the stated scope:
   changed no native/runtime image or wire layout; HDMI USB observation has separate
   typed authority and image evidence above. Production refuses modeled records; independently established
   physical access and each device's remaining admission prerequisites stay required.
+  Cyclic receive output now excludes metadata and every retained channel's
+  allocations before callbacks. Twenty-six sanitizer cases and twelve selected
+  FreeRTOS cyclic cases pass; [the copy-cost record](designs/dma-rx-copy-ownership.md)
+  retains unchanged valid-copy callback counts. These results do not qualify
+  physical DMA ordering.
   [DMA1 applicability](dma.md#dma1-request-routing-remains-unresolved) remains
   source-blocked. Its register layout, dedicated gates/reset and interrupts are
   identified, but the CPUX request table does not establish the CPUS controller's

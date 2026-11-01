@@ -113,6 +113,20 @@ The 64 KiB SD result is
 `sol-sd-warm-packet-1029/sentinel-physical-result.json`.
 Host-only autonomous boot evidence is under `resume-card-os-1026/`.
 
+## Host validation and pending device runs
+
+Memory admission checks every tested block before writes. Cyclic DMA receive
+staging excludes every retained allocation and metadata range. Mapping,
+sanitizer and FreeRTOS DMA service/cyclic checks pass, as do the three baseline
+builds. The [memory admission record](designs/memtest-map-admission.md) and
+[DMA ownership record](designs/dma-rx-copy-ownership.md) define this evidence.
+The frozen memory artifact is under
+`~/.cache/sunstoneos/build/memory-dma-1031/images/memtest/`. Its legacy monitor
+needs WDT0, breadcrumbs and a matching runner before launch. DMA0 needs physical
+access authority; DMA1 remains source-blocked. Existing DRAM restore evidence
+remains valid. Full-map testing after training and restore, temperature coverage
+and per-master DMA/IOMMU behavior remain unqualified.
+
 ## Merged application and failure-record interfaces
 
 Mimus lives in its own repository under `sunstoneos/`.
