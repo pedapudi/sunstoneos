@@ -12,8 +12,11 @@ The [board runner](board-runner.md) implements fresh-FEL preparation, returning
 CPU/GPU/probe capture and a frozen run queue. Fake FEL checks, real offline
 hello/GPU preparation and independent review pass; physical qualification is
 pending. Evidence is under `~/.cache/sunstoneos/build/board-runner-1031/`.
-Current NPU images reject the armed watchdog and remain unsupported by this
-runner. The guide gives the coordinator's port 3-1 qualification commands.
+Finite NPU images admit the armed watchdog and have board-qualified startup
+and inference. The queued runner now prepares their native sessions, validates
+interrupt receipts and restores DRAM after retirement. Its adapter passes host
+checks; physical runs require the shared daemon to include that adapter.
+The guide gives the coordinator's port 3-1 qualification commands.
 The [native probe contract](board-probe-contract.md) now has a library, offline
 admission command and converted memtest example. Host/instruction checks cover
 its return and fatal paths. Static secondary-OFF ownership and peripheral
@@ -38,8 +41,8 @@ changes and earlier unverified component checks.
 
 ## Board state and recovery
 
-This page describes the merged startup, host-tool and application interfaces
-and recorded board results from 2026-10-31. Evidence paths are relative to
+This page describes the combined application kit and recorded board results
+from 2026-10-31. Evidence paths are relative to
 `~/.cache/sunstoneos/evidence/`. Saved USB identities do not establish live
 access. Only the coordinator checks identity, permissions, locks and failure
 records under [AGENTS.md](../AGENTS.md#hardware-access). Preserve both microSD
@@ -82,12 +85,11 @@ cards. Neither board has populated eMMC or UFS; keep the failed UFS probe disabl
   under `~/.cache/sunstoneos/board-queue/entries/`; the two preceding
   diagnostic entries identify the setter and raw PLL word. Three-start
   repeatability, thermal coverage and full CPU qualification remain open.
-- **GPU firmware diagnostic — failed.** Image `2-firmware` from `ladder-wdt3`
-  stopped in the compatibility callback at
-  `platform/a733/gpu_backend.c:375` in its frozen build. Evidence:
-  `dev-runs-1031/3-1-gpu-return-204909/run/watchdog-report.json`.
-  That image uses the unmerged GPU-reference branch. The cause remains under
-  investigation; the record does not prove a firmware ABI mismatch.
+- **GPU firmware diagnostic — native return verified on the earlier image.**
+  The reference startup fixes at `fed5813f` started and stopped firmware with
+  zero jobs and the reference transcript on 3-1. Evidence:
+  `dev-runs-1031/3-1-gpu-return-210941/`. The native return reached `RETURN_ROM`
+  with watchdog mode 0. The later combined image stops in CPU clock close.
 - **Earlier 3-3 host cleanup — failed.** A host-side missing
   `bundle/return-review.json` error followed a normal native return with
   `RETURN_ROM` and mode 0. Evidence:
@@ -95,6 +97,23 @@ cards. Neither board has populated eMMC or UFS; keep the failed UFS probe disabl
   A normal return does not establish completed host RAM restoration.
   The merged transport keeps a confirmed normally returned instance usable
   after a host-side failure. That behavior is covered without a board.
+  Observed subsequent NPU evidence is under
+  `~/.cache/sunstoneos/build/npu-wdt-1031/runs/01-startup-only-28c8e15a2b62-834973ec/`:
+  `NPU_STARTUP=READY_CLOSED_STOPPED; inference_jobs=0` and
+  `npu: returned; matched`. Single inference and the two-network runtime also returned with matching
+  output. Their evidence is in that same build directory under
+  `runs/02-single-inference-0dd327616ce6-834973ec/` and
+  `runs/03-runtime-8f51a95699b7-834973ec/`. These three bounded operations
+  are board-qualified on 3-3 at 852 MHz and 800 mV.
+  Both images include the post-bootstrap settling delay and startup register
+  breadcrumbs; the finite runtime requires ISR notification for completion.
+  Their build-directory READMEs give hashes, commands and failure stages.
+  Independent correctness, hardware-safety and recovery reviews cover the
+  NPU branch against `a0b092b5`. Capture failures now quarantine the saved USB
+  instance, and unresolved NPU returns retain the board lock. No PMIC rail
+  write, voltage target or clock point changed. Review and passing host/build
+  evidence are under `~/.cache/sunstoneos/build/npu-wdt-1031/land-review-*/`,
+  `land-checks/` and `land-baselines/`.
 
 Both recent 3-1 failures returned through WDT0. Treat DRAM as uninitialized
 after that reset and run the DDR tool before the next image uses it.
@@ -114,7 +133,7 @@ The component documents identify source files and narrower evidence boundaries.
 | Memory bus | **Board-verified:** EL3 entry restores MBUS to 600 MHz on both boards, within the recorded memory-pattern checks. | [MBUS restore](designs/mbus-restore.md) |
 | Clocks, resets, PMIC and power domains | **Implemented:** shared ownership and operating-point control; default development runs normalize CPU rails at boot clocks. | [Clocks](clock-leases.md), [PMIC](pmic-runtime.md), [power](power-domains.md), [performance modes](performance-modes.md) |
 | GPU | **Board-verified:** standalone firmware start/health/stop/restart, eight jobs and two exact-sum shapes at 1008 MHz/960 mV. Full application recognition and failure recovery remain unverified. | [GPU power](gpu-power.md), [backend](gpu-backend.md), [reference comparison](reference-backsolve-gpu.md) |
-| NPU | **Board-verified:** earlier interrupt-driven ShuffleNetV2 at 852 MHz. Current constructor/disabled-IRQ checkpoints pass; current scheduled startup and same-instance restart remain unverified. | [NPU](npu.md), [startup](npu-startup.md), [service](npu-service.md) |
+| NPU | **Board-verified:** earlier interrupt-driven ShuffleNetV2 at 852 MHz. The watchdog-admitting startup, one-inference and two-job/two-model runtime images are board-qualified on 3-3 at 852 MHz and 800 mV, including matching copied outputs, CLOSE, local stop and normal ROM return. Repeated start/stop, domain OFF/restart, SDK access and fault recovery remain unqualified. | [NPU](npu.md), [startup](npu-startup.md), [service](npu-service.md), [finite inference comparison](../apps/npu-finite/INFERENCE-SEQUENCE.md) |
 | microSD | **Board-verified:** 50 MHz/four-bit/3.3 V PIO, one 4 KiB DMA read and one 64 KiB DMA read match PIO references and return normally. SDR104, writes, sustained throughput and recovery remain unverified. | [Storage](storage.md), [MMC](mmc.md), [SD DMA](designs/sd-dma.md), [updates](storage-update.md) |
 | CPU memory protection and DMA | **Implemented:** mappings, reservations, cache maintenance and device address translation. Per-device DMA visibility still needs physical evidence. | [Memory](memory-protection.md), [DMA](dma.md), [device memory](device-memory-capacity.md) |
 | USB0, USB host and Type-C | **Implemented:** native device transport, bounded host class profiles and Type-C ownership. Returning FEL transport is demonstrated by the development records; it does not qualify host USB. | [USB platform](usb-platform.md), [host USB](usb2-host.md), [Type-C](typec.md) |
@@ -130,7 +149,7 @@ The component documents identify source files and narrower evidence boundaries.
 | Crypto, entropy and identity | **Implemented:** native crypto modes, MD5/SM3 and CPU-staging erasure; host checks pass. Prior CE exclusion, secure access, IRQ/drain, raw entropy and physical qualification remain open. The existing crypto image parks and is ineligible for returning runs. | [Security inventory and evidence](security-engines.md), [entropy](entropy.md), [identity](board-application.md) |
 | Always-on management processor | **Implemented:** remote-writer ownership accounting; native management-core control and sleep/wake qualification remain open. | [Remote writers](remote-writers.md), [SCP reference](vendor-firmware/scp-firmware.md) |
 | Autonomous microSD OS boot | **Host-verified only:** packaging, cold-entry and slot/update checks; no physical installation or autonomous OS boot is established. | [Cold entry](cold-entry.md), [resident OS design](designs/autonomous-card-os.md) |
-| Generic GPU compute queue | **Not started in the merged tree:** design and prototype headers only. The implementation remains on an unmerged branch. | [Queue design](designs/gpu-compute-queue.md), [layering audit](layering-audit.md) |
+| Generic GPU compute queue | **Host-verified only:** one shared context, one program, four leases, two caller slots, interrupt completion, retained reopen and bounded reset recovery. Physical queue execution and recovery remain unverified. | [Queue design](designs/gpu-compute-queue.md), [layering audit](layering-audit.md) |
 
 Earlier board results in this table retain their exact input scope. CPU, GPU
 and NPU evidence is indexed in [the preserved board results](handoff-history-20261031.md#qualified-on-the-boards)
@@ -246,7 +265,7 @@ Physical device operation, DMA visibility and VBUS behavior remain unqualified.
 
 Mimus lives in its own repository under `sunstoneos/`.
 [apps/mimus/source.json](../apps/mimus/source.json) pins
-`port/sunstoneos-split` at `c0872ac1`. The application owns recognition,
+the integration branch `port/sunstoneos-gpu-integrate`. The application owns recognition,
 models, manifests, capture wrappers and recognition checks. The merged
 reference cleanup supplies explicit OS admission inputs and the shared USB
 emulator; OS-only and hello-compute builds require no mimus sources.
@@ -289,8 +308,18 @@ port. The [source record](../apps/mimus/source.json) pins the example above.
 SunstoneOS owns device services and the [application kit](designs/app-abi.md);
 the external application owns recognition, models, manifests and capture tools.
 [The image guide](os-image.md) describes output layout and optional profiles.
-The compatibility GPU path requires `SUNSTONE_A733_OS_GPU_LINEAR=ON` and
-`SUNSTONE_A733_OS_LEGACY_MIMUS_GPU=ON`; it has the unresolved gaps below.
+`SUNSTONE_A733_OS_GPU=ON` selects the generic compute queue. Applications own
+their programs and tensor placement; `apps/queue-add` supplies an independent
+vector-add consumer. Data pages stop at 256 KiB. The GPU map is built once,
+and completion uses interrupts with the retained 4 ms backup poll.
+The optional second GPU application has its own admitted manifest, task and
+completion queue, with explicit consent to the same program and memory map.
+The primary owns device lifecycle. Host checks cover ten open/close cycles,
+reset recovery preserving a queued peer, native reset access policy and final
+quiescence for returning and resident completion. The frozen mimus recognition
+proposal keeps exhaustive GPU sum checks enabled. These software checks
+establish no new physical GPU qualification.
+
 
 ## Coordinator launch and capture
 
@@ -337,28 +366,61 @@ initialized and the next launch normalizes rails. `--no-normalize-rails` and
 
 The corrected hello-compute control returned normally in the recorded 3-1
 run above. Repeated startup and broader reliability remain unqualified.
-Current `gpu-return` is refused because the existing ladder uses the pre-split application layout;
-its runner is `tools/dev-run.py` at `6a714bcf`. NPU development preparation
-also remains unimplemented. `--check-only` reads the board unless `--state FILE`
+The runner accepts generic GPU images with image-bound GPU and thermal receipt
+capture and strict binary result decoding. Current frozen proposals and exact
+commands are in `~/.cache/sunstoneos/build/gpu-integrate-1031/images-lifecycle/`.
+They contain the known CPU clock close defect and require rebuild and refreeze
+with the separate correction before qualification. NPU development supports startup,
+single inference, runtime, local restart, model switching, SDK access and
+domain OFF/restart through its native session template and exact image marker.
+`--check-only` reads the board unless `--state FILE`
 supplies a capture; neither mode writes rails.
+
+The next NPU diagnostics are host-verified and await queued runs on port 3-3.
+Their native source and compatible finite host decoder are frozen at `593ce329` beneath
+`~/.cache/sunstoneos/build/npu-wdt-1031/next-host-593ce329/`. Image directories
+are under `images/` in that build directory:
+
+| Run order | Image | Expected operation |
+| --- | --- | --- |
+| 1 | `local-restart` | Two matching jobs across two local start/stop lifetimes; four IRQ completions. |
+| 2 | `model-switch` | Match conv12, conv8, then conv12 again; three jobs and four IRQ completions. |
+| 3 | `sdk-access` | Match both models through the public application API; three IRQ completions and owner-authorized quiescence. |
+| 4 | `power-cycle` | Prove domain policy/status OFF 0/0 then ON 8/8 between matching jobs; four IRQ completions. |
+
+Each directory's short README gives its image hash, queue command, expected
+result and first-failure decode. `images/next-images.json` binds the artifacts
+and frozen host archive. The shared daemon must include the finite NPU adapter
+before submission; `docs/board-runner.md` defines its session template. Continue only after the preceding run returns normally with
+matching output; power-cycle runs last. The SDK diagnostic uses the finite
+task privilege. Its host evidence covers the memory-only public API and
+owner checks, and does not qualify full OS EL0 mappings.
+
+Independent correctness, hardware-safety and recovery panels approve the
+branch through `593ce329` against `a0b092b5`. Review found and corrected
+capture quarantine, unresolved ownership release, SDK failure-state races,
+SDK close ownership, report capacity and transient-provider handling.
+The NPU checks, SDK ABI and interleaving cases, power transition fault models,
+all four artifact checks and the three baseline builds pass. Evidence is in
+`next-checks/`, `next-baselines/`, `next-sdk-api/`, `next-abi/`,
+`next-frozen-preparation/` and `power/root/` in the same build directory.
 
 The host arms WDT0 mode `0xb1` (16 seconds). The CPU0 supervisor restarts it
 while healthy; an EL3 stop shortens it to 0.5 seconds.
 [tools/a733-crumbs.py](../tools/a733-crumbs.py) decodes progress and the first
 failure. Normal return requires this session's `RETURN_ROM` and mode 0.
 A watchdog return is a failed run; DRAM initialization and rail checks precede
-reuse. No board run is requested for this documentation change.
+reuse.
 
 ## Open problems and files
 
-- **CPU reliability:** the first reliability launch failed with the CPU clock
-  driver in RETAINED at `return-cpu.c:159`. Another worker owns the defect;
-  repeated startup, sustained work and full restoration remain unqualified.
-- **GPU service:** the latest compatibility stop belongs to the frozen
-  unmerged diagnostic. The merged service still has the health-binding,
-  vendor-setup, MMUCACHE, page-size and SLC gaps in
-  [the reference comparison](reference-backsolve-gpu.md).
-- **NPU and hardware qualification:** current scheduled NPU startup/restart,
+- **CPU reliability:** repeated startup, sustained work, thermal coverage and
+  full restoration remain unqualified beyond the recorded corrected run.
+- **GPU queue qualification:** startup uses the executed-command health count,
+  vendor secure writes, initial timer correlation and MMU-cache completion before
+  READY. Shared mutable mappings bypass the GPU system cache. Physical queue
+  jobs, complete application GPU recognition and recovery remain unverified.
+- **NPU and hardware qualification:** repeated NPU start/stop, SDK access and domain OFF/restart,
   sustained CPU load, thermal protection, accelerator concurrency, autonomous
   card boot and accessories remain outstanding in [the hardware matrix](hardware.md).
 - **Known host-check failure:** mimus
@@ -369,9 +431,10 @@ reuse. No board run is requested for this documentation change.
 
 ## Open branches
 
-- `work/board-runner-1031`: returning-image and runner changes; unmerged.
-- `work/gpu-integrate-1031`: GPU integration; unmerged.
-- `work/gpu-ref-fixes-1031`: align the GPU service with the reference sequence; diagnosis and fixes in progress, unmerged.
+- `work/gpu-integrate-1031`: combines the reference startup fixes and generic
+  compute queue on the current application kit, including two trusted callers,
+  retained restart, reset recovery and final quiescence. Host checks and three
+  lifecycle reviews pass; physical qualification waits for CPU clock close.
 - `work/gpu-queue-1031`, with mimus `port/sunstoneos-gpu-queue`: supply a generic GPU compute queue and application port; unmerged.
 
 ## Review and validation

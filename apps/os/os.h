@@ -215,10 +215,22 @@ struct board_radio *os_board_radio(void);
 void os_module_poll(void);
 #endif
 #endif
-#ifdef SUNSTONE_A733_OS_GPU_LINEAR
-/* mimus linear layers on the GPU: the gpu-linear start entry and INTID 95 on
- * the recognition core OS_RECOGNITION_CORE (docs/recognition-dispatch.md). */
-#include "dispatch.h"
+#ifdef SUNSTONE_A733_OS_GPU
+#define OS_GPU_CLIENT 7u
+#define OS_GPU_FIRMWARE_OWNER UINT64_C(0x4f53475055464d31)
+#define OS_GPU_SESSION_OWNER UINT32_C(0x4f534731)
+#define OS_STOP_DETAIL_GPU_LOSS UINT64_C(0x4750554c)
+enum { OS_GPU_CALL_LOST=-1,OS_GPU_CALL_TIMEOUT=-2 };
+int os_gpu_queue_task_privileged(void (*)(void *),void *);
+int os_gpu_queue_pins(struct a733_pin_handoff *);
+int os_gpu_queue_start_entry(void);
+void os_gpu_queue_irq(void);
+unsigned os_gpu_queue_state(void);
+int os_gpu_queue_thermal(void);
+int os_gpu_queue_retire(void);
+int os_gpu_retire(void);
+int os_gpu_return_ready(void);
+int os_gpu_return_started(void);
 #endif
 #if defined(SUNSTONE_A733_OS_AUDIO) || defined(SUNSTONE_A733_OS_HEADSET)
 /* The recognizer's capture source: the I2S microphone or the headset. */

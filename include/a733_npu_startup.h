@@ -51,7 +51,8 @@ struct a733_npu_startup_ops {
 enum { A733_NPU_STARTUP_TOKENS, A733_NPU_STARTUP_SUPPLY, A733_NPU_STARTUP_PASS,
     A733_NPU_STARTUP_ROW, A733_NPU_STARTUP_ENABLE, A733_NPU_STARTUP_OPEN,
     A733_NPU_STARTUP_SETTLE, A733_NPU_STARTUP_FINAL, A733_NPU_STARTUP_READY,
-    A733_NPU_STARTUP_STOPPED };
+    A733_NPU_STARTUP_STOPPED, A733_NPU_STARTUP_POWER_OFF_WAIT,
+    A733_NPU_STARTUP_POWER_OFF, A733_NPU_STARTUP_POWER_ON_WAIT };
 struct a733_npu_startup {
     struct a733_npu_startup_config config;
     struct a733_npu_startup_providers providers;
@@ -83,6 +84,11 @@ struct a733_npu_startup {
     /* Counter microseconds of the first step and of READY. Written by the
      * bootstrap task; readable by a client once the service is active. */
     uint64_t entry_us, ready_us;
+    /* Bootstrap-only transition telemetry, counter microseconds. Request times
+     * precede the service command; acknowledgement times follow physical checks.
+     * Policy and status contain their coherent low nibbles. */
+    uint64_t power_off_request_us, power_off_ack_us, power_on_request_us, power_on_ack_us;
+    unsigned power_request, power_off_policy, power_off_status, power_on_policy, power_on_status;
     /* 1 from the readback that shows the shared SRAM routed to the NPU until
      * local stop routes it back. Bootstrap task only. */
     unsigned sram_routed;
@@ -132,6 +138,14 @@ int a733_npu_startup_prepared(struct a733_npu_startup *);
  * registered row, tokens, SRAM grant and deadline; no acquire, OFF or reset
  * recovery. Reuses the adopted PLL/local-open stages. Failure is terminal. */
 enum a733_npu_platform_result a733_npu_startup_restart(struct a733_npu_startup *);
+/* Bound bootstrap, after controller CLOSE and local STOPPED: call power_off
+ * until READY, then power_restart until READY. PENDING waits for the existing
+ * power service; RETAINED is terminal and preserves all remaining ownership.
+ * OFF READY requires physical coherent OFF and full domain gate checks; a
+ * released row alone is insufficient. Restart uses the same row with a fresh
+ * generation and reuses the ordinary adopted-PLL restart. No rail or PLL writes. */
+enum a733_npu_platform_result a733_npu_startup_power_off(struct a733_npu_startup *);
+enum a733_npu_platform_result a733_npu_startup_power_restart(struct a733_npu_startup *);
 /* Bound bootstrap only: close software register admission after a failed
  * restart handshake. No hardware write, token release or ownership reset. */
 void a733_npu_startup_retain(struct a733_npu_startup *);

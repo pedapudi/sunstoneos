@@ -23,7 +23,7 @@ return_host=importlib.util.module_from_spec(spec);spec.loader.exec_module(return
 prior=entry.prior
 class Model(entry.Model):
  def __init__(self,image,layout,owner_fields):
-  super().__init__(image,layout);self.requests=[];self.check_ready_fixture=True;self.owner=layout.address('owner','return-cpu.c')
+  super().__init__(image,layout);self.requests=[];self.crumb_trace=[];self.check_ready_fixture=True;self.owner=layout.address('owner','return-cpu.c')
   self.uc.mem_write(self.owner,bytes(self.uc.mem_read(self.c,owner_fields['phase'])))
   self.c=self.owner;self.put32(self.owner+owner_fields['phase'],2)
   self.hooks={layout.address('a733_cpu_clock_burst'):lambda:0,
@@ -35,6 +35,8 @@ class Model(entry.Model):
  def now(self):self.put64(self.uc.reg_read(prior.fault.REGS[1]),1000100);return 1
  def request(self):self.requests.append((self.uc.reg_read(prior.fault.REGS[1]),self.uc.reg_read(prior.fault.REGS[2])));return 1
  def code(self,uc,a,size,unused):
+  if bytes(uc.mem_read(a,4))==bytes.fromhex('a1810bd4'):
+   self.crumb_trace.append((uc.reg_read(prior.fault.REGS[0]),uc.reg_read(prior.fault.REGS[1])))
   if a in self.hooks:
    uc.reg_write(prior.fault.REGS[0],self.hooks[a]());uc.reg_write(UC_ARM64_REG_PC,uc.reg_read(UC_ARM64_REG_LR));return
   if not self.check_ready_fixture and a==self.layout.address('os_cpu_return_thermal_ready'):
@@ -56,6 +58,7 @@ class ReturnModel(Model):
  def __init__(self,image,layout,owner_fields,phase,cluster,raised=(),flight=None):
   super().__init__(image,layout,owner_fields)
   self.fields=owner_fields;self.cf=layout.layouts['a733_cpu_clock']
+  self.initial_owner_phase=phase
   self.put32(self.owner+owner_fields['phase'],phase);self.put32(self.owner+owner_fields['cluster'],cluster)
   if phase==3:self.put32(self.owner+owner_fields['ready'],1)
   self.put32(self.c+self.cf['applied_mhz'],494);self.put32(self.c+self.cf['applied_mhz']+4,1014)
@@ -113,7 +116,14 @@ def returns(image,layout,members):
     assert return_host.geometry(image.path)['cpu_rails']=={'address':address,'bytes':8}
     decoded=return_host.decode_rails(raw)
     assert (decoded['dcdc5_uv'],decoded['dcdc3_uv'])==tuple(v or None for v in readbacks),(name,decoded)
-  rows.append({'name':name,'passed':True,'requests':m.requests,'returned':ok})
+  trace=[value for stage,value in m.crumb_trace if stage==0x0204]
+  assert trace and trace[0]>>12==1,(name,'missing drain breadcrumb',trace)
+  assert all((value>>10&3)==m.initial_owner_phase for value in trace),(name,trace)
+  assert all(a!=b for a,b in zip(trace,trace[1:])),(name,'repeated unchanged phase',trace)
+  if requests:assert any(value>>12==2 for value in trace),(name,'missing lowering request',trace)
+  if ok:assert [value>>12 for value in trace[-2:]]==[4,5],(name,'missing verification/completion',trace)
+  else:assert all(value>>12!=5 for value in trace),(name,'failed return reported done',trace)
+  rows.append({'name':name,'passed':True,'requests':m.requests,'returned':ok,'clock_return_breadcrumbs':trace})
  F=0xffffffff
  # Before the first owner pass: no driver initialization, inspection or poll.
  # Successful setup hooks let the old START path reach its unwanted inspection.

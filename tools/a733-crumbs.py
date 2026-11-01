@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Decode returning-image breadcrumbs and arm or read WDT0 over FEL.
 
-The layout and stage names come from include/sunstone_crumb.h, so the image
-and this decoder cannot disagree silently. No device access happens here:
+The layout, NPU stage names and GPU/NPU first-failure group names come from
+include/sunstone_crumb.h, so the image and decoder use one definition.
+No device access happens here:
 callers pass the FEL transaction function they already own.
 """
+import hashlib
 import re
 import shutil
 import subprocess
@@ -71,6 +73,23 @@ def parse_return(stdout):
     return values[0], values[1], dict(zip(WORDS, values[2:]))
 
 
+def bundle_image(bundle, image_sha256):
+    """Select the validated bundle's ELF for caller decoding.
+
+    CPU development bundles keep it under board/. Finite NPU bundles keep
+    it at the root. Only the image matching validated metadata is eligible;
+    a present CPU-layout image retains precedence even if its hash differs.
+    """
+    bundle = Path(bundle)
+    cpu = bundle / 'board/image.elf'
+    image = cpu if cpu.exists() else bundle / 'image.elf'
+    if not image.is_file():
+        return None
+    if hashlib.sha256(image.read_bytes()).hexdigest() != image_sha256:
+        return None
+    return image
+
+
 def symbolize(elf, address):
     """Source location of a code address in the image ELF, or None."""
     if elf is None or not Path(elf).exists():
@@ -97,18 +116,51 @@ def symbolize(elf, address):
         return best
 
 
+def finite_npu_failure_image(elf):
+    """Frozen finite NPU images used group 8 before CPU retention used it.
+
+    Require the finite return producers, rather than a general NPU service:
+    a mixed CPU/NPU OS image can legitimately emit CPU retention failures.
+    The caller supplies the validated launched ELF, not the current source tree.
+    """
+    if elf is None:
+        return False
+    try:
+        from elftools.elf.elffile import ELFFile
+        from elftools.common.exceptions import ELFError
+    except ImportError:
+        return False
+    try:
+        with open(elf, 'rb') as stream:
+            table = ELFFile(stream).get_section_by_name('.symtab')
+            names = {s.name for s in table.iter_symbols()
+                     if s['st_shndx'] != 'SHN_UNDEF'} if table else set()
+        return {'npu_finite_receipt', 'npu_finite_rom_return'} <= names
+    except (OSError, ELFError):
+        return False
+
+
 def board_failure(words, defines, elf):
     """Decode a level 0xb record: the first board_fail and its site."""
     fault, site, caller, value = words['fault'], words['esr'], words['elr'], words['far']
     groups = {v: k[len('FAIL_'):].lower() for k, v in defines.items()
               if k.startswith('FAIL_') and k not in ('FAIL_SVC', 'FAIL_LEVEL', 'FAIL_RETURN')}
     group = (site >> 12) & 15
+    legacy_npu = group == 8 and finite_npu_failure_image(elf)
+    if legacy_npu:
+        groups[group] = 'npu'
     slot = (fault >> 8) & 255
     record = {'core': (fault >> 20) & 15, 'level': FAIL_LEVEL, 'group': groups.get(group, f'unknown {group}'),
               'site': site & 0xfff, 'aux': site >> 16 & 0x7fff, 'caller': hex(caller), 'value': hex(value),
               'caller_kind': 'return address' if site >> 31 else 'statement',
               'exception_level': 'EL0' if slot == 0 else 'EL1' if slot in (4, 5) else f'SPSR.M {slot:#x}'}
+    if legacy_npu:
+        record['group_source'] = 'finite NPU ELF (legacy group 8)'
     record['site_kind'] = 'detail' if record['group'] in ('cpu_return', 'application') else 'source line'
+    if record['group'] == 'npu' and site & defines['NPU_REGISTER']:
+        record['register_offset'] = hex((record['aux'] & 0x3fff) << 2)
+    elif record['group'] == 'npu' and site & defines['NPU_STARTUP']:
+        record['startup_stage'] = record['aux'] & 0xff
     if record['group'] == 'cpu_return' and record['site'] == BOUNDED:
         record['deadline_seconds'] = record['aux']
         record['refusal'] = [text for bit, text in LIVE_REFUSAL if value >> bit & 1]
@@ -179,6 +231,25 @@ def decode(words, epoch, elf=None):
         result['last'] = stage(last)
         result['last']['core'] = time >> 29
         result['last']['seconds_since_power_on'] = round((time & 0x1fffffff) * 1024 / 24e6, 4)
+        if result['last']['stage'] == 0x0204:
+            value = result['last']['value']
+            step = value >> 12
+            result['last']['clock_return'] = {
+                'step': {1: 'drain', 2: 'lower-request', 3: 'lower-wait',
+                         4: 'verify', 5: 'done'}.get(step, 'unknown'),
+                'owner_phase': value >> 10 & 3,
+                'owner': ('START', 'INSPECT', 'REQUEST', 'FOLLOW')[value >> 10 & 3],
+                'cluster': value >> 8 & 3, 'driver_state': value & 255}
+        if result['last']['stage'] in (0x0410, 0x0411, 0x0412, 0x0413):
+            result['last']['gpu_job'] = {
+                'client': 1 if result['last']['stage'] in (0x0412, 0x0413) else 0,
+                'boundary': 'submit' if result['last']['stage'] in (0x0410, 0x0412) else 'complete',
+                'sequence_low16': result['last']['value']}
+        if result['last']['stage'] in (0x0450, 0x0451, 0x0452, 0x0453):
+            result['last']['gpu_recovery'] = {
+                'phase': {0x0450: 'stop', 0x0451: 'reset', 0x0452: 'restart', 0x0453: 'ready'}[
+                    result['last']['stage']],
+                'failed_serial_low16': result['last']['value']}
         if result['last']['stage'] == EL3_STOP:
             v = result['last']['value']
             result['last']['status'] = v >> 12 if v >> 12 < 15 else '15 or more'
@@ -196,12 +267,20 @@ def decode(words, epoch, elf=None):
         parts.append(f"last stage {r['name']} ({r['stage']:#06x}) value {r['value']:#x} on core {r['core']}")
     else:
         parts.append('tagged at EL3 entry; no later stage')
+    if result.get('last', {}).get('clock_return'):
+        r = result['last']['clock_return']
+        parts.append('CPU clock return ' + r['step'] + ', owner %s, cluster %d, driver state %d' %
+                     (r['owner'], r['cluster'], r['driver_state']))
     if 'board_failure' in result:
         f = result['board_failure']
         text = (f"first board failure on core {f['core']} at {f['exception_level']}: {f['group']} "
                 f"{f['site_kind']} {f['site']:#x}, value {f['value']}, caller {f['caller']}")
         if f.get('caller_source'):
             text += f" ({f['caller_source']})"
+        if 'register_offset' in f:
+            text += f"; register offset {f['register_offset']}"
+        if 'startup_stage' in f:
+            text += f"; startup stage {f['startup_stage']}"
         if f['group'] == 'cpu_retained':
             text += (f"; setter {f['setter']}, state {f['driver_state_name']}, domain {f['domain_name']}, "
                      f"origin {f['origin_name']}, target {f['target_mhz']} MHz, phase {f['phase_name']}, "

@@ -71,8 +71,13 @@ struct supported_model {
 #else
 #define NPU_MODEL_FAMILY(v)
 #endif
+/* Standalone consumers use the checked compatibility view. Application builds
+ * select the freshly rendered table beside their authenticated artifacts. */
+#ifndef SUNSTONE_NPU_MODEL_TABLE
+#define SUNSTONE_NPU_MODEL_TABLE "npu_models.inc"
+#endif
 static const struct supported_model models[]={
-#include "npu_models.inc"
+#include SUNSTONE_NPU_MODEL_TABLE
 };
 #undef NPU_MODEL_FAMILY
 static const unsigned immutable[4]={NPU_CONVOLUTION_NN,NPU_CONVOLUTION_COEFF,
@@ -552,12 +557,24 @@ enum a733_npu_platform_result npu_convolution_restart_poll(struct npu_convolutio
         c->restarting=1;
     }
     if(c->restarting==1) {
+#ifdef SUNSTONE_NPU_POWER_CYCLE
+        enum a733_npu_platform_result result=a733_npu_startup_power_off(c->startup);
+#else
         enum a733_npu_platform_result result=c->startup->stage==A733_NPU_STARTUP_STOPPED ?
             a733_npu_startup_restart(c->startup) : a733_npu_startup_step(c->startup);
+#endif
         if(result==A733_NPU_PLATFORM_RETAINED)goto retained;
         if(result!=A733_NPU_PLATFORM_READY)return result;
         c->restarting=2;
     }
+#ifdef SUNSTONE_NPU_POWER_CYCLE
+    if(c->restarting==2) {
+        enum a733_npu_platform_result result=a733_npu_startup_power_restart(c->startup);
+        if(result==A733_NPU_PLATFORM_RETAINED)goto retained;
+        if(result!=A733_NPU_PLATFORM_READY)return result;
+        c->restarting=3;
+    }
+#endif
     enum npu_service_result result=npu_service_restart_resume(&c->service);
     if(result==NPU_SERVICE_BUSY)return A733_NPU_PLATFORM_PENDING;
     if(result!=NPU_SERVICE_OK || !restart_live(c))goto retained;

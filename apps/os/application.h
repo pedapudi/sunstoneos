@@ -28,6 +28,8 @@ int os_application_task_privileged(void (*)(void *),void *);
 int os_application_pins(struct a733_pin_handoff *);
 int os_application_start(void);
 int os_application_prepare(void);
+struct pvr_compute_queue;
+int os_application_gpu_share_bind(struct pvr_compute_queue *);
 int os_application_deadline(void);
 unsigned os_application_activity_generation(void);
 int os_application_finished(void);

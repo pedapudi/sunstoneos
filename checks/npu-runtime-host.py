@@ -43,7 +43,7 @@ def run(image,manifest,accepted,out):
  else:raise AssertionError('Transport loss swallowed')
  assert len(partial['runtime_fragments'])==1 and (broken/partial['runtime_fragments'][0]['path']).read_bytes()==frames[0][:128]
  calls=[];bad=out/'wrong-shape.bin';bad.write_bytes(b'x')
- argv=['--bundle',str(out/'bundle'),'--fel','unused','--evidence',str(out/'unused'),'--database','unused','--claim','fixture','--owner','fixture','--supervised-manual-reconnect','--input',str(bad)]
+ argv=['--bundle',str(out/'bundle'),'--fel','unused','--evidence',str(out/'unused'),'--supervised-manual-reconnect','--input',str(bad)]
  with patch.object(tool.supervisor,'run_session',lambda *a,**kw:calls.append(kw) or 0):
   try:tool.main(argv)
   except ValueError:pass

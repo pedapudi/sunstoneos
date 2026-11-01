@@ -32,6 +32,10 @@ struct pvr_gpu_flush {
     uint64_t epoch, deadline, last_now;
     struct pvr_ccb_token token;
     uint32_t phase, error, status;
+    /* With the controller's executed count: the count before submission
+     * and the latest sample, whether the firmware consumed the command, and
+     * the phase and source line of the first failure. */
+    uint32_t executed_before, executed_after, consumed, failed_phase, failed_line;
     unsigned char command[PVR_CCB_COMMAND_BYTES];
 };
 
@@ -56,7 +60,12 @@ int pvr_gpu_flush_init(struct pvr_gpu_flush *, struct pvr_gpu_control *,
                        enum pvr_gpu_flush_level, uint64_t deadline);
 
 /* One bounded step. While waiting, service at most four firmware events and
- * one command-return scan. A full queue is serviced without resubmitting any
+ * one command-return scan. When the controller judges commands by the
+ * executed count (pvr_gpu_control_count_executed), completion is the
+ * firmware's read offset passing the command, any return word being 0 or 1,
+ * and the executed count advancing past its value before submission, as
+ * the qualified A733 probe waits (apps/gpu-power-id/fw-job.inc); the open
+ * firmware writes no return word here. Otherwise the return word must be 1. A full queue is serviced without resubmitting any
  * published command. Absolute deadline covers publication and completion.
  * Failure aborts control/queue I/O and retains ownership; no reset or retries.
  * Terminal calls make no callbacks. After COMPLETE the owner may discard this

@@ -131,10 +131,11 @@ static void ledger_hook(struct pmic_model *p)
  * These callbacks retain the ordinary register/clock model everywhere else. */
 static uint64_t target_read_finish;
 static unsigned target_clock_fault,target_injected,clock_fault_pending;
+static unsigned fault_domain=5;
 static int deadline_read(void *v,uintptr_t address,uint32_t *out)
 {
     const int result=owner_read(v,address,out);
-    if(address==A733_POWER_PCK_DOMAIN(5)+8 && !target_injected) {
+    if(address==A733_POWER_PCK_DOMAIN(fault_domain)+8 && !target_injected) {
         ++target_injected;
         if(target_read_finish)m.now=target_read_finish;
         clock_fault_pending=target_clock_fault;
@@ -216,7 +217,7 @@ static unsigned delay_fault,delay_index,delay_hits;
 static int delay_write(void *v,uintptr_t a,uint32_t value)
 {
     const int result=owner_write(v,a,value);
-    if(delay_fault==1 && a==A733_POWER_PCK_DOMAIN(5)+delay_offsets[delay_index]) {
+    if(delay_fault==1 && a==A733_POWER_PCK_DOMAIN(fault_domain)+delay_offsets[delay_index]) {
         ++delay_hits;return 0; /* the write may already have reached the device */
     }
     return result;
@@ -224,7 +225,7 @@ static int delay_write(void *v,uintptr_t a,uint32_t value)
 static int delay_read(void *v,uintptr_t a,uint32_t *out)
 {
     const int result=owner_read(v,a,out);
-    if(delay_fault>=2 && a==A733_POWER_PCK_DOMAIN(5)+delay_offsets[delay_index]) {
+    if(delay_fault>=2 && a==A733_POWER_PCK_DOMAIN(fault_domain)+delay_offsets[delay_index]) {
         ++delay_hits;
         if(delay_fault==2)return 0;
         if(delay_fault==3)*out^=1;
@@ -232,6 +233,48 @@ static int delay_read(void *v,uintptr_t a,uint32_t *out)
         if(delay_fault>=5)clock_fault_pending=delay_fault-4;
     }
     return result;
+}
+static void npu_transition_failures(void)
+{
+    fault_domain=4;
+    for(unsigned fault=1;fault<=6;++fault)for(unsigned index=0;index<(fault<=3 ? 5u : 1u);++index) {
+        setup();d.ack_us=0;d.ppu[4][0]|=8;d.ppu[4][2]|=8;
+        struct a733_rail_token token={0};struct a733_power_domain_row row={0};
+        assert(a733_power_domain_row_init(&row,&d.owner,4,78,&token));
+        domains_boot();token=domains_rail(78,A733_RAIL_DCDC2);
+        assert(a733_power_domain_request(&row,1));service_step();
+        assert(a733_power_domain_state(&row)==A733_POWER_ROW_ON && !d.owner.domain[1].delays_ready);
+        delay_fault=fault;delay_index=fault<=3 ? index : 4;delay_hits=clock_fault_pending=0;
+        d.owner.ops.read=delay_read;d.owner.ops.write=delay_write;m.provider.pmic_bus_ops.now=deadline_clock;
+        assert(a733_power_domain_request(&row,0));service_step();
+        assert(delay_hits==1 && a733_power_domain_state(&row)==A733_POWER_ROW_FAILED && row.counted);
+        assert((d.ppu[4][0]&15)==8 && (d.ppu[4][2]&15)==8);
+        assert(a733_power_authority_load(&m.rails.authority)&A733_POWER_DOMAIN4_FAULT);
+        assert(a733_rail_release(&m.rails,&token,m.now+1000)==A733_RAIL_BUSY);
+        delay_fault=0;
+    }
+    for(unsigned on=0;on<2;++on)for(unsigned mode=0;mode<7;++mode) {
+        setup();
+        struct a733_rail_token token={0};struct a733_power_domain_row row={0};
+        assert(a733_power_domain_row_init(&row,&d.owner,4,76,&token));
+        domains_boot();token=domains_rail(76,A733_RAIL_DCDC2);
+        if(!on){assert(a733_power_domain_request(&row,1));service_step();}
+        d.stall[4]=1;assert(a733_power_domain_request(&row,on));service_step();
+        assert(a733_power_domain_state(&row)==A733_POWER_ROW_PENDING && row.counted);
+        const uint64_t deadline=d.owner.domain[1].deadline;
+        m.now=mode==1 ? deadline : mode==2 ? deadline+1 : deadline-1;
+        m.now_step=0;d.stall[4]=0;d.ack_at[4]=0;
+        target_read_finish=mode==3 ? deadline : mode==4 ? deadline+1 : 0;
+        target_clock_fault=mode==5 ? 1 : mode==6 ? 2 : 0;
+        target_injected=clock_fault_pending=0;
+        d.owner.ops.read=deadline_read;m.provider.pmic_bus_ops.now=deadline_clock;
+        service_step();
+        assert(target_injected==(mode==1 || mode==2 ? 0u : 1u));
+        assert(a733_power_domain_state(&row)==(!mode ? (on ? A733_POWER_ROW_ON : A733_POWER_ROW_OFF) : A733_POWER_ROW_FAILED));
+        assert(row.counted==(!mode ? on : 1));
+    }
+    fault_domain=5;
+    puts("PASS domain4: 18 partial delay I/O/readback/time failures and 14 exact transition deadline/clock cases");
 }
 static void delay_trace(unsigned from,unsigned initialized,unsigned on)
 {
@@ -334,7 +377,8 @@ int main(int argc,char **argv)
         transition_delays();puts("PASS first-transition delay initialization and retained failures");return 0;
     }
     if(argc==2 && !strcmp(argv[1],"--deadlines")) {
-        transition_deadlines();puts("PASS power-domain transition deadline boundaries and retained pins");return 0;
+        transition_deadlines();
+    npu_transition_failures();puts("PASS power-domain transition deadline boundaries and retained pins");return 0;
     }
     if(argc==2)gpu_trace_run(argv[1]);
     /* An image with no row verifies nothing and reads no PMIC register. */
@@ -605,11 +649,16 @@ int main(int argc,char **argv)
     assert(!writes_since(from) && a733_power_domain_check(&d.owner,2,NULL)==0);
     n2=domains_rail(72,A733_RAIL_DCDC2);assert(a733_power_domain_request(&npu,1));
     service_step();assert(a733_power_domain_state(&npu)==A733_POWER_ROW_ON && (d.ppu[4][0]&15)==8);
-    assert(!a733_power_domain_request(&npu,0));
+    assert(a733_power_domain_request(&npu,0));
+    service_step();assert(a733_power_domain_state(&npu)==A733_POWER_ROW_OFF && !npu.counted);
+    assert((d.ppu[4][0]&15)==0 && (d.ppu[4][2]&15)==0);
+    assert(a733_power_domain_request(&npu,1));service_step();
+    assert(a733_power_domain_state(&npu)==A733_POWER_ROW_ON && npu.counted);
     /* Registration closes once the service runs. */
     struct a733_power_domain_row late={0};assert(!a733_power_domain_row_init(&late,&d.owner,4,72,&n2));
 
     transition_deadlines();
+    npu_transition_failures();
 
     printf("{\"boot_transactions\":%u,\"row_transactions\":0,\"ppu_accesses_per_on\":%u,"
         "\"level_reads_per_admission\":%u,\"slow_ack\":{\"spin_us\":%llu,\"retries\":%u,\"failed_after_us\":%llu}}\n",

@@ -47,6 +47,7 @@ with nullcontext(fixture) as temporary:
  t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));thermal=bool(g.get('thermal'));restart=bool(g.get('restart'));startup=bool(g.get('startup_only'));infer=bool(g.get('single_inference'));runtime=bool(g.get('runtime'));execution=h.geometry_profile(g)
  completions=4 if restart else 3 if runtime else 2 if infer else 1 if startup else 3
  client_profile=h.STARTUP_CLIENT.get(execution)
+ if client_profile:completions=1+client_profile[2]
  IRQ_RECEIPTS=f'NPU_IRQ_COMPLETIONS=0x{completions:016x}\nNPU_IRQ_STOPPED=0x0000000000000001\n'
  if restart:
   assert a.interrupt
@@ -68,6 +69,8 @@ with nullcontext(fixture) as temporary:
  u.mem_map(0x02000000,0x07000000);u.mem_map(0x40000000,0x04000000)
  for at,value in native_image.parts:
   if value:u.mem_write(at,value)
+ for address,value in ((0x02050014,0xb1),(0x02050010,1),(0x02050018,2)):
+  u.mem_write(address,struct.pack('<I',value))
  contract=native_image.layouts['a733_smp_contract']
  for key in ('epoch','generation','lease'):
   u.mem_write(0x42004000+contract[key],struct.pack('<Q',profile[key]))
@@ -133,7 +136,7 @@ with nullcontext(fixture) as temporary:
  launcher=Path.home()/'.cache/sunstoneos/evidence/npu-single-core-20261018/package-final/bundle/launch.bin'
  def launcher_copy(output,*args):shutil.copy2(launcher,output/'launch.bin')
  bundle=t/'bundle'
- with patch.object(h.original,'build_launcher',launcher_copy):
+ with patch.object(h,'build_launcher',launcher_copy):
   h.prepare(image,None,session,None,bundle,'mock-compiler','mock-linker','mock-objcopy')
   artifact_refused(lambda:h.prepare(image,None,session,None,bundle,'mock-compiler','mock-linker','mock-objcopy'),bundle)
  prepared=h.validate_bundle(bundle)
@@ -170,6 +173,9 @@ with nullcontext(fixture) as temporary:
   rejected('changed-'+name,lambda:h.validate_bundle(bundle));path.write_bytes(saved)
  def runtime_log(variant):
   references=[bytes.fromhex(x) for x in g['references']];outputs=[bytearray(x) for x in references];jobs=len(references)
+  compact=g.get('model_switch',False);label='NPU_OUTPUT_HEX' if compact else 'NPU_OUTPUT'
+  def encoded(o):
+   return ''.join(bytes(o[i:i+64]).hex()+'\n' for i in range(0,len(o),64)) if compact else ''.join(f'0x{x:016x}\n' for x in o)
   if variant in ('mismatch','false-success'):outputs[1][0]^=1
   if variant=='unwritten-second':outputs[1]=bytearray(len(outputs[1]))
   if variant=='unwritten-tail':half=len(outputs[0])//2;outputs[0][half:]=bytes(len(outputs[0])-half)
@@ -177,16 +183,16 @@ with nullcontext(fixture) as temporary:
   if variant=='runtime-match-claim':claim='MISMATCH'
   text=('NPU_STAGE=WAIT_STARTUP\n'+''.join(f'NPU_STAGE=JOB network=0x{n:016x}\n' for n in range(jobs))+
    'NPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n'+IRQ_RECEIPTS+'NPU_STAGE=QUIESCENT\n'+
-   ''.join(f'NPU_OUTPUT network=0x{n:016x}\n'+''.join(f'0x{x:016x}\n' for x in o) for n,o in enumerate(outputs))+
+   ''.join(f'{label} network=0x{n:016x}\n'+encoded(o) for n,o in enumerate(outputs))+
    f'NPU_INFERENCE={claim}; inference_jobs={jobs}\n')
   if variant=='runtime-one-job-log':text=text.replace('NPU_STAGE=JOB network=0x0000000000000001\n','')
   if variant=='runtime-two-IRQs':text=text.replace(f'NPU_IRQ_COMPLETIONS=0x{completions:016x}','NPU_IRQ_COMPLETIONS=0x0000000000000002')
   if variant=='runtime-reordered-outputs':
-   first,second=text.split('NPU_OUTPUT network=0x0000000000000001\n');head,first=first.split('NPU_OUTPUT network=0x0000000000000000\n')
+   first,second=text.split(label+' network=0x0000000000000001\n');head,first=first.split(label+' network=0x0000000000000000\n')
    values,tail=second.split('NPU_INFERENCE=')
-   text=head+'NPU_OUTPUT network=0x0000000000000001\n'+values+'NPU_OUTPUT network=0x0000000000000000\n'+first+'NPU_INFERENCE='+tail
+   text=head+label+' network=0x0000000000000001\n'+values+label+' network=0x0000000000000000\n'+first+'NPU_INFERENCE='+tail
   if variant=='runtime-short-output':
-   lines=text.split('\n');at=lines.index('NPU_OUTPUT network=0x0000000000000001');del lines[at+1];text='\n'.join(lines)
+   lines=text.split('\n');at=lines.index(label+' network=0x0000000000000001');del lines[at+1];text='\n'.join(lines)
   if variant=='runtime-single-inference-log':text=text.replace(f'inference_jobs={jobs}','inference_jobs=1')
   return text
  def reports(variant):
@@ -209,6 +215,14 @@ with nullcontext(fixture) as temporary:
   if thermal:text=text.replace('NPU_STAGE=QUIESCENT',f'NPU_THERMAL_REASON=0x{reason:016x}\nNPU_JOBS=0x{jobs:016x}\nNPU_STAGE=QUIESCENT')
   if restart:text=text.replace('NPU_STAGE=WAIT_STARTUP\n',
    'NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=OPEN\nNPU_STAGE=SUBMIT job=0x0000000000000001\nNPU_STAGE=FIRST_CLOSE\nNPU_STAGE=RESTART_OPEN\nNPU_STAGE=SUBMIT job=0x0000000000000002\nNPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n',1)
+  if g.get('power_cycle'):
+   text=text.replace('across normal local restart','across domain OFF/restart')
+   text='NPU_POWER_CYCLE_OFF=\n0x0000000000000000\n0x0000000000000000\n0x00000000000003e8\nNPU_POWER_CYCLE_ON=\n0x0000000000000008\n0x0000000000000008\n0x00000000000003e8\n'+text
+   if variant=='power-missing-OFF':text=text.replace('NPU_POWER_CYCLE_OFF=','NPU_POWER_CYCLE_UNKNOWN=')
+   if variant=='power-missing-ON':text=text.replace('NPU_POWER_CYCLE_ON=','NPU_POWER_CYCLE_UNKNOWN=')
+   if variant=='power-wrong-OFF':text=text.replace('NPU_POWER_CYCLE_OFF=\n0x0000000000000000','NPU_POWER_CYCLE_OFF=\n0x0000000000000008')
+   if variant=='power-zero-time':text=text.replace('0x00000000000003e8','0x0000000000000000')
+   if variant=='power-long-time':text=text.replace('0x00000000000003e8','0x0000000001312d00')
   if a.interrupt:text=text.replace('NPU_STAGE=QUIESCENT\n',IRQ_RECEIPTS+'NPU_STAGE=QUIESCENT\n',1)
   if checkpoint:
    text=('NPU_CHECKPOINT=PROVIDERS_CONSTRUCTED; scheduler never started; jobs=0\n' if g.get('checkpoint_provider') else 'NPU_CHECKPOINT=ENTRY_MEMORY_READY; providers never constructed; jobs=0\n')
@@ -221,6 +235,7 @@ with nullcontext(fixture) as temporary:
   if runtime:text=runtime_log(variant)
   elif startup:
    text=(a.client_logs/({'mismatch':'mismatch.log','unwritten-second':'unwritten.log','false-success':'mismatch.log'}.get(variant,'matched.log') if infer else 'matched.log')).read_text()
+   if infer and variant=='unwritten-tail':text=text.split('NPU_OUTPUT=\n')[0]+'NPU_OUTPUT=\n'+''.join(f'0x{x:016x}\n' for x in second)+'NPU_INFERENCE=MISMATCH; inference_jobs=1\n'
    if variant=='infer-zero-jobs-log':text=text.replace('inference_jobs=1','inference_jobs=0')
    if variant=='infer-one-IRQ':text=text.replace('NPU_IRQ_COMPLETIONS=0x0000000000000002','NPU_IRQ_COMPLETIONS=0x0000000000000001')
    if variant=='infer-missing-submit':text=text.replace('NPU_STAGE=SUBMIT job=0x0000000000000001\n','')
@@ -253,6 +268,9 @@ with nullcontext(fixture) as temporary:
   return struct.pack('<16Q',*monitor),bytes(plat),struct.pack('<14Q' if thermal else '<11Q',*receipt)
  # Real preload/sealed-source/readback logic; only FEL operations and new-ROM event modeled.
  variants=['nominal','old-generic-monitor-magic','mismatch','unwritten-second','unwritten-tail','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','wrong-ROM-entry']
+ if startup and not infer and not runtime:variants=[v for v in variants if v not in ('mismatch','unwritten-second','unwritten-tail','false-success')]
+ variants+=['watchdog-enabled','reset-redirect','alternate-redirect','NPU-route','NPU-core-reset','NPU-module-gate']
+ if g.get('power_cycle'):variants+=['power-missing-OFF','power-missing-ON','power-wrong-OFF','power-zero-time','power-long-time']
  if g.get('stopped_capture'):variants+=['capture-metadata-invalid','capture-parent-short','capture-extent-transport-failure','capture-durability-failure','capture-output-differs']
  if checkpoint or thermal or startup:variants.append('ordinary-receipt')
  if startup and not infer and not runtime:variants+=['startup-inference-log','startup-two-IRQs','startup-zero-IRQs','startup-missing-close','startup-restart-log']
@@ -297,7 +315,7 @@ with nullcontext(fixture) as temporary:
      assert address!=0x03000024,'Normal boot GPIO is not a forced-FEL precondition'
      rom={0x20:0xeb00008f,0x24:0xe3a00911,0x28:0xe3a0193d,0x3c:0xe3a0605c,0x40:0xea00004d}
      if address in rom:assert all((out/('before-'+name+'.bin')).exists() for name,_,_ in h.base.REGIONS)
-     words.append(hex(rom.get(address,0) ^ (1 if variant=='wrong-ROM-entry' and address==0x3c else 0)));continue
+     words.append(hex(rom.get(address,({0x02050014:0xb1} if variant=='watchdog-enabled' else {0x070501c0:1} if variant=='reset-redirect' else {0x070501d4:1} if variant=='alternate-redirect' else {0x03000008:0} if variant=='NPU-route' else {0x02002b04:0x70000} if variant=='NPU-core-reset' else {0x02002b00:0x80000000} if variant=='NPU-module-gate' else {}).get(address,2 if address==0x03000008 else 0)) ^ (1 if variant=='wrong-ROM-entry' and address==0x3c else 0)));continue
     if op=='write':
      if state['new_ROM'] and g.get('stopped_capture') and struct.unpack('<16Q',frame[0])[4]==1:assert record.get('stopped_capture',{}).get('complete')
      source=Path(args[i]);i+=1;data=source.read_bytes()
@@ -339,7 +357,8 @@ with nullcontext(fixture) as temporary:
    assert record['complete'] and record['dram_restored'] and record['ownership_release_permitted'] and not record['sram_restored']
    assert result['functional_success']==(variant=='nominal' and not checkpoint and (infer or runtime or not startup)) and result['controlled_negative']==(variant in ('mismatch','unwritten-second','unwritten-tail','thermal-one-mismatch','capture-output-differs'))
    if runtime:
-    assert result['runtime'] and result['jobs']==2 and result['network_matches']==[variant!='unwritten-tail',variant not in ('mismatch','unwritten-second')],(variant,result)
+    expected_matches=[variant!='unwritten-tail',variant not in ('mismatch','unwritten-second')]+[True]*(client_profile[2]-2)
+    assert result['runtime'] and result['jobs']==client_profile[2] and result['network_matches']==expected_matches,(variant,result)
    elif not checkpoint and (infer or not startup):
     size=len(bytes.fromhex(g['reference']));pattern=result['output_pattern']
     assert not pattern.get('first_unwritten')
@@ -356,7 +375,9 @@ with nullcontext(fixture) as temporary:
    assert not record.get('complete') and not record.get('dram_restored') and 'controlled' not in record
    if variant=='wrong-ROM-entry':assert 'exe' not in state['calls'] and 'Forced-FEL ROM entry' in str(failure)
    assert state['restore_writes']==int(variant=='restore-readback-failure'),variant
-   held=[];h.retain_failure(record,lambda:None,lambda:held.append('quarantine'),failure,hold=lambda:held.append('hold'));assert held==['quarantine','hold'],(variant,held)
+   early=variant in ('watchdog-enabled','reset-redirect','alternate-redirect','NPU-route','NPU-core-reset','NPU-module-gate')
+   if early:assert not record['dirty'] and not record['launch_attempted'] and not (out/'before-DRAM.bin').exists()
+   held=[];h.retain_failure(record,lambda:None,lambda:held.append('quarantine'),failure,hold=lambda:held.append('hold'));assert held==([] if early else ['quarantine','hold']),(variant,held)
   if g.get('stopped_capture'):
    capture=record.get('stopped_capture')
    if variant in ('mismatch','capture-output-differs'):

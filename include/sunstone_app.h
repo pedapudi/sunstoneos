@@ -10,6 +10,7 @@
  * C compiler lays out with the bytes that the tool packs. */
 #include <stddef.h>
 #include <stdint.h>
+#include "gpu_queue.h"
 #ifdef __cplusplus
 #define SS_STATIC_ASSERT static_assert
 #define SS_NORETURN [[noreturn]]
@@ -64,6 +65,18 @@ struct ss_region {
     uint32_t access;
     uint8_t sha256[32];
 };
+
+/* Optional application registration in the immutable section
+ * "sunstone_region_initializers", aligned to 8 bytes. Before CPU mappings
+ * become read-only, EL3 clears and publishes this prefix of a GPU-written
+ * WORK region. No record means no initialization. The prefix must be a
+ * positive multiple of eight within the region; reserved must be zero. */
+struct ss_region_initializer {
+    uint32_t region, reserved;
+    uint64_t zero_prefix_bytes;
+};
+SS_STATIC_ASSERT(sizeof(struct ss_region_initializer) == 16 &&
+    offsetof(struct ss_region_initializer, zero_prefix_bytes) == 8, "region initializer layout");
 
 /* Capture format; rate_hz zero means no capture. Samples are little-endian
  * signed integers, channels interleaved. Admission requires the session's
@@ -127,6 +140,23 @@ struct ss_grant {
     uint32_t reserved;
     uint64_t finish_by_us;          /* counter microseconds; 0 when resident */
 };
+
+/* Optional fixed composition of two trusted GPU applications. The immutable
+ * image defines ss_gpu_share to consent to one shared program and every GPU
+ * region of the owner manifest. The peer manifest repeats those exact regions;
+ * its task receives a GPU-only grant on one of the owner's worker cores.
+ * Both applications can address the shared map. They must use disjoint writes
+ * or synchronize access until each accepted job's record has been collected.
+ * The owner controls create/open/close/recover and final session completion.
+ * The peer entry returns after its work; the OS drains its owed record before
+ * publishing completion. No descriptor means one application as before. */
+struct ss_gpu_share {
+    const struct ss_manifest *owner, *manifest;
+    void (*main)(const struct ss_grant *);
+    const struct gpu_queue_program *program;
+    uint32_t shared_regions, reserved;
+};
+extern const struct ss_gpu_share ss_gpu_share;
 
 /* Calls from application to OS. All are plain function calls into the image
  * and are safe at EL0 and EL1: they use atomics and memory that EL0 maps, and
@@ -198,6 +228,24 @@ struct ss_key_report {
     uint8_t data[8];
 };
 int ss_key_report(struct ss_key_report *report);
+/* One admitted application's NPU catalogue. Model is an image catalogue index.
+ * Call repeatedly with identical arguments until completion: 0 pending,
+ * 1 output tensors copied, -2 refused, -1 unavailable or retained failure.
+ * Inputs/outputs concatenate logical tensors in model order. The caller must
+ * keep both buffers alive and untouched while pending. Only one request may
+ * be outstanding; a mismatched call does not cancel that request. The service
+ * task bounds hardware SUBMIT to timeout_us (1..1000000). Queue, OPEN,
+ * LOAD and CLOSE use the runtime request waits and session deadline; this
+ * argument is not an end-to-end API deadline.
+ * A failed service permanently retains the request and buffers until session
+ * teardown. These calls use only ordinary memory and atomics at EL0. */
+#define SS_NPU_MAX_TENSOR_BYTES (1024u * 1024u)
+int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
+               void *output,size_t output_bytes,uint64_t timeout_us);
+/* After the final run, repeat until 1 (slot closed), or a negative failure.
+ * Successful CLOSE is terminal for this session. */
+int ss_npu_close(void);
+
 /* USB class calls return 1 for a result, 0 while pending, -1 on refusal or
  * disconnect. Input events are copied. Serial and camera payloads stay in
  * OS-owned buffers until explicit release; applications must not modify them.

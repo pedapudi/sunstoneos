@@ -39,7 +39,7 @@ and physical results through 2026-10-31:
 | --- | --- | --- |
 | CPU | Eight-core top-point timer/interrupt workload; one eight-worker mimus recording with exact 90-frame/reference parity, seven secondary OFF proofs, RAM restoration and boot-clock/CPU-rail restoration | Sustained load, thermal transitions, fault recovery, other inputs/profiles and complete recognition performance qualification |
 | GPU | Firmware start/health/stop/restart, eight compute jobs, and two production exact-sum shapes with all 1,122 sums/tags/guards correct at 1008 MHz; cleanup, shutdown and ROM return passed | Failure recovery, complete GPU recognition, graphics and representative concurrent workloads |
-| NPU | Earlier interrupt-driven ShuffleNetV2 inference at 852 MHz; current image passes real provider/task construction before scheduling, disabled IRQ restoration, normal return and saved-RAM restoration | Current scheduled startup, inference/restart, full power-off, thermal behavior and broader integration |
+| NPU | Earlier interrupt-driven ShuffleNetV2 inference at 852 MHz; watchdog-admitting startup, one-inference and two-job/two-model runtime images are board-qualified on 3-3 at 852 MHz/800 mV, including matching outputs, CLOSE, local stop and normal ROM return; evidence: `~/.cache/sunstoneos/build/npu-wdt-1031/runs/01-startup-only-28c8e15a2b62-834973ec/`, `02-single-inference-0dd327616ce6-834973ec/` and `03-runtime-8f51a95699b7-834973ec/` under the same runs directory | Repeated start/stop, SDK access, domain OFF/restart, reset during an active job, thermal behavior and broader integration |
 | Memory bus | Restore to 600 MHz on EL3 entry, with the preserved memory pattern verified on both boards | Broader memory and concurrent-device qualification |
 | microSD | High-speed PIO, one 4 KiB DMA read and one 64 KiB/sixteen-descriptor read at 50 MHz/four-bit/3.3 V; sentinel-prefilled chunks match PIO, with restored normal return | Sustained throughput, broader extents/cards, failure recovery, 1.8 V signalling and remaining storage/update paths |
 | DRAM training and restore | Full training and explicit-record restores report 12,288 MiB on both boards. The SID-selected default passed twice on 3-1 with 879 writes and 34 ms quick checks; CPU-L/DSU boot clock restoration passed | Full-map restored-memory tests, temperature range, lower P-states and card deployment remain unqualified |
@@ -51,15 +51,36 @@ and `3-1-204839/session.json` under the same directory.
 `tools/dev-run.py` now normalizes CPU rails to 800 mV before guarded
 CPU-return launches and after validated normal returns with boot clocks.
 
-The hello-compute control on 3-1 stopped because the application finished
-before the CPU clock owner reached FOLLOW. The GPU firmware-only diagnostic
-on 3-1 stopped in its frozen build's compatibility callback. Port 3-3 remains
-quarantined after a host error following a normal native return. These are
-recorded runner outcomes, not live access checks. No new complete application
-or hardware qualification follows from the split or these diagnostics.
+An earlier hello-compute control on 3-1 stopped before the CPU clock owner
+reached FOLLOW; the corrected control later returned normally. An earlier GPU
+firmware diagnostic stopped in its frozen compatibility callback. The earlier
+3-3 host cleanup error quarantined that instance; the NPU runs above later
+returned normally. These records describe named instances and operations;
+they do not establish current live access or broader qualification.
 The [handoff branch list](handoff.md#open-branches) distinguishes unmerged fixes.
 
+NPU local restart, return to the first model after switching, public SDK
+access and domain OFF/restart are implemented and host-verified at `593ce329`.
+Their frozen images and tools are under
+`~/.cache/sunstoneos/build/npu-wdt-1031/images/` and `next-host-593ce329/`
+in that same build directory. The [handoff](handoff.md#coordinator-launch-and-capture)
+gives the proposed order. These operations still require board qualification;
+the SDK diagnostic does not qualify full OS EL0 mappings.
+
 ## Current software integration
+
+- The [GPU compute queue](designs/gpu-compute-queue.md) accepts application
+  programs and manifest-region leases with a GPU page cap of 256 KiB. Host
+  checks cover 204 exact-sum jobs, interrupts, deadlines, thermal reopen,
+  retained failures and returning-image proofs. Two admitted applications have
+  independent slots and sequences in one trusted shared context. Host checks
+  cover ten powered open/close cycles, reset/readback/OFF recovery with queued
+  peer preservation, and bounded quiescence before return or resident completion.
+    The mimus shader passes the host exact-sum and readout parity checks, with
+  exhaustive sum qualification enabled. Frozen proposals are under `gpu-integrate-1031/images-lifecycle/` in the
+  build cache; rebuild them with the separate CPU clock fix before physical
+  qualification. Physical queue execution, interrupt delivery, recovery and
+  application GPU recognition remain unqualified.
 
 The shared PMIC decoder preserves raw DCDC8/DCDC9 selectors 88–127 without
 publishing a programmed voltage. The pinned references disagree in that range.
