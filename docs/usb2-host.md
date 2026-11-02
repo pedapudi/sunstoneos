@@ -1135,8 +1135,10 @@ reset sequence. Other bulk stalls, control stalls and uncertain recovery retain
 the session. Generic clear-halt and recovery from invalid or phase-error status
 blocks remain unsupported. These are implementation limits.
 
-Further required work includes more device records and endpoints per device
-for additional leaves and classes such as CDC-ACM, simultaneous enumeration on
+The generic host sizes its device records from `SUNSTONE_USB_HOST_DEVICES` (up
+to the 127 addresses of a USB bus), and its USB memory lease from that count
+([USB host DMA](usb-host-dma.md)); the legacy profile keeps three records.
+Further required work includes classes such as CDC-ACM, simultaneous enumeration on
 the USB2 and SuperSpeed roots, longer application audio capture, wider xHCI endpoint modes, physical interrupt
 qualification,
 USB2 device/OTG roles, wider SuperSpeed classes and topology, Type-C role/PD

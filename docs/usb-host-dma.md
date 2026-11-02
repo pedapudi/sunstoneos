@@ -7,20 +7,30 @@ implemented and checked against a modeled controller; physical DMA visibility,
 service timing and sustained camera capture remain unqualified.
 
 The generic class profile selects `SUNSTONE_USB_HOST_GENERIC=1` consistently
-for the core and its header consumers. Its native constructor reserves a fixed
-5 MiB parent before concurrent device operation. The boot pool must accommodate this parent and every other consumer.
-The core supports as many device records as the 5 MiB parent holds, subject to
-the controller's slot limit, with EP0 and three data endpoints per record. A
-record takes 40 KiB: two context pages, and one ring page and one copy-buffer
-page per endpoint. The controller pages (16 KiB) and eight scratch pages come
-first, then five records fill the space before the 4 MiB shared data pool and
-nineteen follow it, 24 records in all (`A733_XHCI_DEVICES_FIT`). Build with
-`-DSUNSTONE_USB_HOST_DEVICES=N` for fewer records, or
-`-DSUNSTONE_USB_HOST_ENDPOINTS=N` (2 to 31, the endpoint contexts of an xHCI
-device context) for more endpoints per record; a static assertion refuses a
-geometry that exceeds the parent. More than 24 records, up to the 127 addresses
-of a USB bus, needs a larger USB arena (`A733_USB_MEMORY_PARENT_BYTES`), which
-the memory layout owns. Every page remains at its original address. The parent stays
+for the core and its header consumers. Its native constructor reserves the
+parent lease before concurrent device operation. The boot pool must accommodate
+this parent and every other consumer.
+The lease is sized from the device count in
+[a733_usb_memory.h](../include/a733_usb_memory.h). A record takes
+`4 KiB * (2 + 2 * endpoints)`: two context pages, and one ring page and one
+copy-buffer page per endpoint, EP0 included (40 KiB at the default four
+endpoints). The controller pages (16 KiB) and eight scratch pages come first,
+then the records that fit before the 4 MiB shared data pool, then the rest
+after it. `A733_USB_MEMORY_PARENT_FOR(n)` gives the lease for `n` records and
+`A733_USB_MEMORY_ARENA_FOR(n)` the arena the layout must reserve: the lease plus
+the 3 MiB kept for retained JPEG buffers, in whole 2 MiB blocks.
+`-DSUNSTONE_USB_HOST_DEVICES=N` (1 to 127, the addresses of a USB bus; init also
+honours the controller's MaxSlots) and `-DSUNSTONE_USB_HOST_ENDPOINTS=N` (2 to
+31, the endpoint contexts of an xHCI device context) set the geometry. Without
+`N`, the default is the number of records the linked arena holds, 24 in the
+8 MiB arena now linked. Raising `N` above that fails a static assertion that
+names `A733_USB_MEMORY_ARENA_FOR`. For 127 records of four endpoints the lease
+is 0x904000 bytes (9.02 MiB: 5 records before the pool, 122 after it) and the
+arena is 0xe00000 (14 MiB), which ends at 0x43000000, the limit the header
+asserts. The arena's placement belongs to the memory layout record
+(`apps/os/usb-memory-link.patch`, the platform linker scripts and
+`A733_USB_MEMORY_END`); the sizing here changes none of them. `checks/a733-xhci-dma.py --devices 127`
+builds the core with the larger arena and runs the cases. Every page remains at its original address. The parent stays
 DEVICE-owned during operation and is never returned to the allocator.
 
 ## Bulk and interrupt transfers retain completed pages

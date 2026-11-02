@@ -15,6 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--cases', nargs='+', choices=CASES+['legacy-iso'])
+    parser.add_argument('--devices', type=int, help='device records; the arena grows to the largest the layout limit allows')
     parser.add_argument('--profile', choices=['generic', 'legacy'], default='generic')
     args = parser.parse_args()
     args.cases = args.cases or (CASES if args.profile == 'generic' else ['legacy-iso'])
@@ -35,10 +36,11 @@ def main():
             raise SystemExit(f'{name} failed; see {out/(name+".log")}')
 
     run('build', [str(CLANG), '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-                  *SANITIZE, '-DSUNSTONE_USB_HOST_GENERIC='+str(int(args.profile == 'generic')), '-I'+str(ROOT/'include'), *map(str, units), '-o', str(binary)])
+                  *SANITIZE, '-DSUNSTONE_USB_HOST_GENERIC='+str(int(args.profile == 'generic')),
+                  *(['-DSUNSTONE_USB_HOST_DEVICES=%d' % args.devices, '-DA733_USB_MEMORY_END=0x43000000'] if args.devices else []), '-I'+str(ROOT/'include'), *map(str, units), '-o', str(binary)])
     for case in args.cases:
         run(case, [str(binary), case])
-    record = {'result': 'PASS', 'hardware_access': False, 'profile': args.profile, 'cases': args.cases, 'steps': steps,
+    record = {'result': 'PASS', 'hardware_access': False, 'profile': args.profile, 'devices': args.devices, 'cases': args.cases, 'steps': steps,
               'inputs': {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs},
               'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
               'compiler': {'path': str(CLANG), 'sha256': hashlib.sha256(CLANG.resolve().read_bytes()).hexdigest(),
