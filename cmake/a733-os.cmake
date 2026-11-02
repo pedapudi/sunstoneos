@@ -6,13 +6,6 @@ if(NOT TARGET sunstone-a733-os-core)
   return()
 endif()
 include("${CMAKE_CURRENT_LIST_DIR}/sunstone-image.cmake")
-# A diagnostic build: the application's main stack stays in the image instead of coming from the ledger with a guard
-# block (apps/os/large.c). The ledger stack is the default and the production configuration.
-option(SUNSTONE_OS_STATIC_MAIN_STACK "Diagnostic: keep the main stack in the image" OFF)
-if(SUNSTONE_OS_STATIC_MAIN_STACK)
-  set_property(SOURCE "${SUNSTONE_SOURCE_ROOT}/apps/os/large.c" TARGET_DIRECTORY sunstone-a733-os-core
-    APPEND PROPERTY COMPILE_DEFINITIONS SUNSTONE_OS_STATIC_MAIN_STACK=1)
-endif()
 set(os_lifetime supervised)
 if(SUNSTONE_A733_OS_RESIDENT)
   set(os_lifetime resident)
@@ -40,9 +33,15 @@ elseif(SUNSTONE_APPLICATION STREQUAL "large-region-test")
   if(NOT SUNSTONE_A733_DRAM_DECODE_PROBE)
     message(FATAL_ERROR "large-region-test needs -DSUNSTONE_A733_DRAM_DECODE_PROBE=ON")
   endif()
+  # The CPU-return lifetime is the 60 s supervised session: its run deadline must fit it (apps/os/session.c), so that profile runs the
+  # A76 cluster for 50 s; the resident and plain supervised images keep the original manifest.
+  set(large_region_manifest "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest.json")
+  if(SUNSTONE_A733_OS_CPU_RETURN)
+    set(large_region_manifest "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest-return.json")
+  endif()
   add_sunstone_application(large-region
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/main.c"
-    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest.json")
+    MANIFEST "${large_region_manifest}")
   add_sunstone_image(sunstone-a733-os-large-region-test LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION large-region)
 elseif(SUNSTONE_APPLICATION STREQUAL "heap-test")
@@ -71,6 +70,18 @@ elseif(SUNSTONE_APPLICATION STREQUAL "slot1-test")
   target_compile_definitions(slot1-test PRIVATE SLOT1_TEST_MODE=${SUNSTONE_SLOT1_TEST_MODE})
   add_sunstone_image(sunstone-a733-os-slot1-test LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION slot1-test)
+elseif(SUNSTONE_APPLICATION STREQUAL "large-6g")
+  # A 6 GiB region with no source: bandwidth and integrity (probe 0), or one isolation fault (probes 1 to 3).
+  if(NOT SUNSTONE_A733_DRAM_DECODE_PROBE)
+    message(FATAL_ERROR "large-6g needs -DSUNSTONE_A733_DRAM_DECODE_PROBE=ON")
+  endif()
+  set(SUNSTONE_LARGE_6G_PROBE 0 CACHE STRING "large-6g: 0 bandwidth and integrity, 1 below, 2 above, 3 other space")
+  set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/apps/large-6g/main.c" PROPERTIES COMPILE_DEFINITIONS LARGE_6G_PROBE=${SUNSTONE_LARGE_6G_PROBE})
+  add_sunstone_application(large-6g
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/large-6g/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/large-6g/manifest.json")
+  add_sunstone_image(sunstone-a733-os-large-6g LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION large-6g)
 elseif(SUNSTONE_APPLICATION STREQUAL "storage-write-test")
   # Creates the region test file through the FAT32 write service; the image is write-capable, so the runner needs the
   # coordinator's approval record for its bounds (tools/storage_bounds.py).
@@ -79,6 +90,7 @@ elseif(SUNSTONE_APPLICATION STREQUAL "storage-write-test")
   endif()
   add_sunstone_application(storage-write
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/storage-write-test/main.c"
+            "${SUNSTONE_SOURCE_ROOT}/apps/storage-write-test/sha256_ce.S"
             "${SUNSTONE_SOURCE_ROOT}/drivers/storage/fat32_rw.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/storage-write-test/manifest.json")
   add_sunstone_image(sunstone-a733-os-storage-write-test LIFETIME ${os_lifetime}

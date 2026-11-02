@@ -53,6 +53,8 @@ static atomic_uint prepared,finished,usb_ready,activity_generation;
 static atomic_uint_fast64_t observed_until;
 static struct a733_typec_token attachment;
 static TaskHandle_t main_task;
+/* The main task, for the virtual board's tests that give it a notification the OS would not (platform/qemu-os). */
+TaskHandle_t os_application_main_task(void){return main_task;}
 static atomic_uint_fast64_t finish_by;
 const struct ss_grant *ss_grant(void)
 {
@@ -221,8 +223,11 @@ int os_application_export_live(void)
  * their worker tasks, which therefore run at EL1. The symbol is weak so that no other image links the application. */
 extern void dram_nsi_worker(void *) __attribute__((weak));
 extern void dram_qos_worker(void *) __attribute__((weak));
+/* The SD owner task of a write-capable image touches the CCU and the controller, so it runs at EL1 (apps/os/sd_owner.c). */
+extern int os_sd_owner_task_privileged(void (*)(void *),void *) __attribute__((weak));
 int os_application_task_privileged(void (*entry)(void *),void *context)
-{(void)context;return (dram_nsi_worker&&entry==dram_nsi_worker)||(dram_qos_worker&&entry==dram_qos_worker);}
+{return (dram_nsi_worker&&entry==dram_nsi_worker)||(dram_qos_worker&&entry==dram_qos_worker)||
+        (os_sd_owner_task_privileged&&os_sd_owner_task_privileged(entry,context));}
 int os_application_pins(struct a733_pin_handoff *pins)
 {
     const struct ss_manifest *m=ss_application.manifest;

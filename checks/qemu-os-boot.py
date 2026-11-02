@@ -84,7 +84,7 @@ DRIVER_SOURCES = ['drivers/thermal/a733_thermal.c', 'drivers/thermal/a733_therma
                   'drivers/power/a733_power_domains_native.c', 'drivers/pinctrl/a733_pins.c',
                   'drivers/pinctrl/a733_pin_tables.c', 'drivers/pinctrl/a733_pins_native.c',
                   'drivers/gpu/a733_gpu_resources.c', 'drivers/i2c/a733_i2c.c', 'drivers/usb/a733_usb_platform.c',
-                  'drivers/storage/storage_digest.c', 'platform/a733/shared_locks.c', 'platform/a733/native_usb.c',
+                  'drivers/storage/storage_digest.c', 'drivers/storage/storage_digest_ce.S', 'platform/a733/shared_locks.c', 'platform/a733/native_usb.c',
                   'platform/a733/counter_clock.c', 'arch/aarch64/device_memory.c', 'runtime/memory.c',
                   'runtime/memmove.c', 'runtime/gpu_call.S']
 # Units that include the A733 platform's boot.h.
@@ -292,7 +292,7 @@ def board_prefix(identity, epoch=0x1101, generation=0x2202, lease=0x3303):
     return raw
 
 
-def thermal_service(total):
+def thermal_service(total, cpu_critical=0):
     """The thermal owner's record (struct os_session after the board prefix)."""
     h = lambda n: hashlib.sha256(n.encode()).digest()
     record = struct.pack('<5Q', OS_SERVICE_MAGIC, 1, total, 0x7e40a1, 0x7e40a2)
@@ -300,18 +300,18 @@ def thermal_service(total):
     record += struct.pack('<2I4B', 0, 24000000, 0, 31, 31, 0)
     for hot, hysteresis, critical in ((1500, 1600, 1400),) * 5:
         record += struct.pack('<3H', hot, hysteresis, critical)
-    record += bytes(2) + struct.pack('<I', 0)
+    record += bytes(2) + struct.pack('<I', cpu_critical)       # cpu_critical_millicelsius; zero keeps the 110 C default
     assert len(record) == host.SERVICE_BYTES[host.THERMAL], len(record)
     return record
 
 
-def session_for(elf, input_bytes):
+def session_for(elf, input_bytes, cpu_critical=0):
     """The complete sealed session of the image's application and its launch contract."""
     info = host.image_manifest(elf)
     identity = elf_bytes(elf, 'a733_smp_build_id', 32)
-    services = {host.THERMAL: thermal_service(host.PREFIX_BYTES + host.SERVICE_BYTES[host.THERMAL])}
-    raw = host.session_bytes(board_prefix(identity), services, info['manifest'], info['sha256'], 0,
-                             host.BIND_SID, [input_bytes] if input_bytes is not None else [])
+    services = {host.THERMAL: thermal_service(host.PREFIX_BYTES + host.SERVICE_BYTES[host.THERMAL], cpu_critical)}
+    given = input_bytes if isinstance(input_bytes, list) else [input_bytes] if input_bytes is not None else []
+    raw = host.session_bytes(board_prefix(identity), services, info['manifest'], info['sha256'], 0, host.BIND_SID, given)
     epoch, generation, lease = struct.unpack_from('<3Q', raw, 24)
     # The supervised launch contract (apps/board/prepare.py request_bytes): the loader
     # stamps the times and the magic when it launches.
@@ -356,13 +356,13 @@ for _word in struct.iter_unpack('<Q', LARGE_FILE):
 RAMDISK_ADDRESS = 0x48000000
 
 
-def large_manifest_path(path, digest, file):
+def large_manifest_path(path, digest, file, with_digest=True):
     """manifest.json of the large-region test application: one 1 GiB region loaded from a 4 MiB file."""
     manifest = {"name": "large-test", "devices": {"required": [], "optional": []},
                 "cpu": {"cluster": "a55", "workers": 1, "priority": 2, "stack_bytes": 8192},
                 "regions": [{"name": "input", "kind": "input", "access": ["read"], "bytes": 4096}],
                 "large_regions": [{"name": "weights", "bytes": 1 << 30, "source_bytes": len(file), "access": ["read"],
-                                   "file": "/sunstone-test/sunstone-region-test.bin", "sha256": digest}],
+                                   "file": "/sunstone-test/sunstone-region-test.bin", **({"sha256": digest} if with_digest else {})}],
                 "deadlines": {"run_us": 2000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
                 "output_limit": 64}
     Path(path).write_text(json.dumps(manifest, indent=2) + '\n')
@@ -477,6 +477,23 @@ def reverted_services(work):
     return path
 
 
+def reverted_owner(work):
+    """apps/os/sd_owner.c as the fourth board submission had it: start() sleeps once on the caller's default notification index,
+    so any hint on that index ends the wait before the owner has opened the card."""
+    source = (ROOT / 'apps/os/sd_owner.c').read_text()
+    begin = source.index('    /* The owner gives the notification once the card is open or has failed.')
+    end = source.index('    ready_waiter = NULL;')
+    old = ('    if (atomic_load(&ready) == 0) (void)ulTaskNotifyTake(pdTRUE, 8000u);\n')
+    source = source[:begin] + old + source[end:]
+    marker = '    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) {'
+    stop = source.index('    return atomic_load(&ready) == 1;\n}', source.index(marker))
+    source = source[:source.index(marker)] + '    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) os_sd_diag[0] = 11;\n' + source[stop:]
+    source = source.replace('xTaskNotifyGiveIndexed(ready_waiter, WAIT_INDEX)', 'xTaskNotifyGive(ready_waiter)')
+    path = Path(work) / 'sd_owner_reverted.c'
+    path.write_text(source)
+    return path
+
+
 def unguarded_prestart_scheduler(work):
     """The directory of a kernel/scheduler/freertos.c from before the owner scheduler refused to
     yield or wait for an owner while the scheduler is not running (round 10 of the series).
@@ -550,6 +567,28 @@ def main():
         application = image.application('large-test', ['checks/qemu-os/large-main.c'], manifest)
         return image.build(application)
 
+    def build_6g(name, manifest):
+        """The 6 GiB test application (apps/large-6g) with a region of the emulator's size."""
+        image = Image(out / name, extra_defines=['-DQEMU_OS_UPPER=1'])
+        application = image.application('large-6g', ['apps/large-6g/main.c'], manifest)
+        return image.build(application)
+
+    def build_storage_write(owner_source=None):
+        """The storage-write application on the write-capable owner (apps/os/sd_owner.c) over the board's RAM-disk card."""
+        image = Image(out / ('build-storage-write' + ('-reverted' if owner_source else '')),
+                      extra_sources=[str(owner_source or 'apps/os/sd_owner.c'), 'platform/qemu-os/sd_hw.c',
+                                                                   'drivers/storage/a733_storage_bounds.c'])
+        application = image.application('storage-write', ['apps/storage-write-test/main.c', 'drivers/storage/fat32_rw.c',
+                                                           'apps/storage-write-test/sha256_ce.S'],
+                                        ROOT / 'apps/storage-write-test/manifest.json')
+        return image.build(application)
+
+    def build_notify():
+        """An application that is given the OS's notifications while it waits (docs/notifications.md)."""
+        image = Image(out / 'build-notify')
+        application = image.application('notify-test', ['checks/qemu-os/notify-main.c'], ROOT / 'checks/qemu-os/notify-manifest.json')
+        return image.build(application)
+
     def build_heap(name, manifest):
         """An application whose heap is above the linked limit, so that the ledger serves it (step 1 of
         docs/designs/application-memory-layout.md). The C library's sbrk is linked in; its allocator is not."""
@@ -563,12 +602,6 @@ def main():
                       extra_sources=['runtime/newlib.c', 'checks/qemu-os/heap-early.c'])
         application = image.application('heap-test', ['checks/qemu-os/heap-main.c'], manifest)
         return image.build(application, wraps=['os_large_prepare'])
-
-    def build_notify():
-        """An application that is given the OS's notifications while it waits (docs/notifications.md)."""
-        image = Image(out / 'build-notify')
-        application = image.application('notify-test', ['checks/qemu-os/notify-main.c'], ROOT / 'checks/qemu-os/notify-manifest.json')
-        return image.build(application)
 
     def build_slot1():
         """An application with a manifest region in level-1 slot 1 above the EL0 window."""
@@ -601,22 +634,33 @@ def main():
         el0_elf = pool.submit(build_el0_abort)
         facts_elf = pool.submit(build_facts)
         large_elf = pool.submit(build_large, 'build-large', large_manifest_path(out / 'large-manifest.json', LARGE_DIGEST, LARGE_FILE))
+        large_nodigest_elf = pool.submit(build_large, 'build-large-nodigest', large_manifest_path(out / 'large-nodigest-manifest.json', LARGE_DIGEST, LARGE_FILE, False))
         large_big_elf = pool.submit(build_large, 'build-large-too-big', ROOT / 'checks/qemu-os/large-too-big-manifest.json')
+        manifest_6g = json.loads((ROOT / 'apps/large-6g/manifest.json').read_text())
+        manifest_6g['large_regions'][0]['bytes'] = 256 << 20
+        (out / 'large-6g-manifest.json').write_text(json.dumps(manifest_6g))
+        large_6g_elf = pool.submit(build_6g, 'build-large-6g', out / 'large-6g-manifest.json')
+        storage_write_elf = pool.submit(build_storage_write)
         heap_elf = pool.submit(build_heap, 'build-heap', ROOT / 'checks/qemu-os/heap-manifest.json')
         heap_big_elf = pool.submit(build_heap, 'build-heap-too-big', ROOT / 'checks/qemu-os/heap-too-big-manifest.json')
-        large_elf, large_big_elf = large_elf.result(), large_big_elf.result()
         heap_early = pool.submit(build_heap_early, 'build-heap-early', ROOT / 'checks/qemu-os/heap-manifest.json')
-        notify_elf = pool.submit(build_notify).result()
         slot1_elf = pool.submit(build_slot1).result()
         heap_elf, heap_big_elf, heap_early_elf = heap_elf.result(), heap_big_elf.result(), heap_early.result()
+        notify_elf = pool.submit(build_notify).result()
+        (out / 'build-reverted-owner').mkdir()
+        reverted_owner_elf = pool.submit(build_storage_write, reverted_owner(out / 'build-reverted-owner'))
+        large_elf, large_big_elf, large_6g_elf, large_nodigest_elf = large_elf.result(), large_big_elf.result(), large_6g_elf.result(), large_nodigest_elf.result()
+        storage_write_elf = storage_write_elf.result()
+        reverted_owner_elf = reverted_owner_elf.result()
         os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
             os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result(),
             partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result(), facts_elf.result())
     built = time.monotonic() - started
 
-    def run_case(name, elf, scenario_bytes, input_bytes=data, memory='512M', extra_inputs=()):
-        raw, contract, info = session_for(elf, input_bytes)
-        inputs = [(info['manifest']['regions'][0]['address'], input_bytes)] if input_bytes is not None else []
+    def run_case(name, elf, scenario_bytes, input_bytes=data, memory='512M', extra_inputs=(), cpu_critical=0):
+        raw, contract, info = session_for(elf, input_bytes, cpu_critical)
+        given = input_bytes if isinstance(input_bytes, list) else [input_bytes] if input_bytes is not None else []
+        inputs = [(info['manifest']['regions'][i]['address'], b) for i, b in enumerate(given)]
         inputs += list(extra_inputs)
         output, status, seconds = boot(elf, raw, contract, scenario_bytes, inputs, out / (name + '.log'), memory=memory)
         case = Case(name, output, status, seconds, out / (name + '.log'))
@@ -659,6 +703,14 @@ def main():
     c = run_case('sensor-lost', os_elf, scenario(first_ms=(2, 2, None, 2, 2), usb_ready_ms=usb_delay_ms, limit_ms=9000))
     c.failed_with('THERMAL')
     c.require(5_000_000 <= int(c.failure['t_us']) < 6_500_000, 'the lost sensor was reported at %s us' % c.failure['t_us'])
+
+    # 4b. A sensor that reads above the critical limit: the stop record carries the reading that caused it (a stop returns no
+    # report; the runner reads this record after the reset). Channel 3 at 62 C against a session limit of 60 C (the board model's sensors top out near 65 C).
+    c = run_case('sensor-critical-reading', os_elf, scenario(temperature_c=(52, 60, 48, 62, 50), usb_ready_ms=usb_delay_ms, limit_ms=9000), cpu_critical=60000)
+    c.failed_with('THERMAL')
+    word = int(c.failure['value'], 16)
+    c.require(word >> 31 == 1 and not word >> 30 & 1 and (word >> 24 & 7) == 3 and 61_000 <= (word & 0xffffff) <= 63_000,
+              'the stop record holds %#x, not channel 3 near 62000 mC' % word)
 
     # 5. An OS service that fails to start ends the session with a named record, not a hang.
     for fault, group in ((1, 'THERMAL'), (2, 'THERMAL'), (3, 'PMIC')):
@@ -801,6 +853,24 @@ def main():
     c.clean()
     tag, error = struct.unpack('<QQ', bytes.fromhex(c.finished['result']))
     c.require(tag == 0x4c415247464c and error == 0xfffffff5, 'digest mismatch: result %#x %#x' % (tag, error))
+    # A region declared without a digest is not hashed: the corrupted file loads, the loader reports READY, and the
+    # application (which compares the fold itself) sees the corruption.
+    c = run_case('large-region-no-digest', large_nodigest_elf, scenario(usb_ready_ms=usb_delay_ms), mode0, '4G', [(RAMDISK_ADDRESS, corrupt)])
+    c.clean()
+    c.require(c.finished is not None and c.finished['status'] == '1', 'the application did not finish')
+    tag, fold = struct.unpack('<QQ', bytes.fromhex(c.finished['result']))
+    c.require(tag == 0x4c4152474d4d, 'no-digest load: result tag %#x, not a loaded region with a differing fold' % tag)
+    # A region with no source is ready at once, above 4 GiB it would not fit the emulator, so the emulator's region is 256 MiB: The emulator's level-1 slot 1 starts at 0x50000000, where the ledger places it.
+    # the application times its passes, writes and reads back the address pattern, and reports no mismatch.
+    c = run_case('large-region-unfilled', large_6g_elf, scenario(usb_ready_ms=usb_delay_ms), None, '4G')
+    c.clean()
+    c.require(c.finished is not None and c.finished['status'] == '1', 'the application did not finish')
+    parts = {int(o): h for o, h in re.findall(r'APP-RESULT offset=(\d+) hex=([0-9a-f]+)', c.output)}
+    words = struct.unpack('<64Q', bytes.fromhex(''.join(parts[o] for o in sorted(parts))))
+    c.require(words[0] == 0x36474f4e45 and words[1] == 2 and words[2] == 0, 'tag/state/error %#x %d %d' % words[:3])
+    c.require(words[3] == 256 << 20 and words[4] == 0x50000000, 'region %#x at %#x' % (words[3], words[4]))
+    c.require(all(t > 0 for t in words[8:8 + 24 + 6]), 'a pass has no time: %s' % (words[8:38],))
+    c.require(words[38] == (256 << 20) // 8 and words[39] == 0, 'integrity: %d words, %d mismatches' % (words[38], words[39]))
     # A second EL0 task that runs in no application space reads the region: a permission fault, reported with the region's address.
     c = run_case('large-region-other-space-faults', large_elf, scenario(usb_ready_ms=usb_delay_ms), mode1, '4G', [(RAMDISK_ADDRESS, good)])
     c.failed_with('APPLICATION', 0xe24)
@@ -872,14 +942,6 @@ def main():
     # make it: the heap of the ledger cannot replace it, so the application does not start.
     c = run_case('heap-after-early-sbrk', heap_early_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x50000000, stale)])
     c.require(c.main is None and c.failure is not None, 'the application started although the linked heap was already in use')
-    # The OS gives the main task its usb-ready and live-state notifications while the main task sleeps in the deadline
-    # wait and in ss_host_recv: each ends at its own condition (the deadline; the timeout), not at the OS's notification.
-    c = run_case('os-notifications-do-not-end-waits', notify_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0))
-    c.clean()
-    tag, wait, e1, recv, e2 = struct.unpack('<5q', bytes.fromhex(c.finished['result']))
-    c.require(wait == 1 and e1 >= 30000, 'the deadline wait ended with status %d after %d us, expected expiry after 30000 us' % (wait, e1))
-    c.require(recv == 0 and e2 >= 30000, 'ss_host_recv returned %d after %d us, expected the timeout (0) after 30000 us' % (recv, e2))
-
     # A manifest region above the 48 MiB window lies in level-1 slot 1 and is mapped for its application alone.
     c = run_case('region-in-slot-1', slot1_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G')
     c.clean()
@@ -900,10 +962,88 @@ def main():
     guard = int(c.failure['value'], 16)
     c.require(0x50000000 <= guard < 0x50200000, 'the overflow faulted at %#x, not in the guard block 0x50000000..0x50200000' % guard)
 
-    # A heap that the ledger cannot hold stops the start before any task runs.
-    c = run_case('heap-too-big', heap_big_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G')
-    c.require(c.main is None and not lines(c.output, 'LARGE-ADMITTED'), 'the application started although the ledger refused its heap')
-    c.require(c.failure is not None, 'the heap refusal left no failure record')
+    # The OS gives the main task its usb-ready and live-state notifications while the main task sleeps in the deadline
+    # wait and in ss_host_recv: each ends at its own condition (the deadline; the timeout), not at the OS's notification.
+    c = run_case('os-notifications-do-not-end-waits', notify_elf, scenario(usb_ready_ms=usb_delay_ms), bytes(4096))
+    c.clean()
+    tag, wait, e1, recv, e2 = struct.unpack('<5q', bytes.fromhex(c.finished['result']))
+    c.require(wait == 1 and e1 >= 30000, 'the deadline wait ended with status %d after %d us, expected expiry after 30000 us' % (wait, e1))
+    c.require(recv == 0 and e2 >= 30000, 'ss_host_recv returned %d after %d us, expected the timeout (0) after 30000 us' % (recv, e2))
+
+    # 12. The storage-write application through ss_storage_enable on the write-capable owner (apps/os/sd_owner.c), over a RAM-disk
+    # card that holds the real card's 395 backup sectors at their sector numbers and the runner's bounds blob. The software path
+    # (owner start, mailbox, blob copy, parse, verify against the backup hash) must succeed; the native register binding is the one
+    # step this board cannot model (platform/qemu-os/sd_hw.c), so the case stops at it and says so. A corrupted backup sector must
+    # be refused at the verify stage, which also shows that the diagnostic names it.
+    backup_dir = CACHE / 'sd-backup'
+    backup = (backup_dir / 'backup-395-sectors.bin').read_bytes()
+    blob = (backup_dir / 'bounds-input.bin').read_bytes()
+    storage_host = load('storage_write_host', ROOT / 'apps/storage-write-test/host.py')
+
+    def card_image(corrupt=None):
+        disk = bytearray(65536 * 512)
+        for at in range(0, len(backup), 520):
+            sector = struct.unpack_from('<Q', backup, at)[0]
+            disk[sector * 512:(sector + 1) * 512] = backup[at + 8:at + 520]
+        if corrupt is not None:
+            disk[corrupt * 512 + 100] ^= 1
+        return bytes(disk)
+
+    def decode_result(c):
+        chunks = sorted((int(l['offset']), l['hex']) for l in lines(c.output, 'APP-RESULT'))
+        c.require(chunks and [o for o, _ in chunks] == list(range(0, 512, 96)), 'the 512-byte result was not printed whole')
+        return storage_host.decode(bytes.fromhex(''.join(h for _, h in chunks)))
+    mode4 = storage_host.mode_input(4)
+    c = run_case('storage-write-enable', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, mode4], '512M',
+                 [(RAMDISK_ADDRESS, card_image())])
+    c.clean()
+    c.require(c.finished is not None, 'the application did not finish')
+    d = decode_result(c)
+    c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'enable did not succeed: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
+    # A hint on the application's default notification index during the owner's open (a USB-change event, as application.c sends
+    # them) must not end the wait: enable succeeds. The owner as the fourth board submission had it (one sleep on that index)
+    # returns early with stage 11, which is the control.
+    stray = scenario(usb_ready_ms=usb_delay_ms, fault=10)
+    c = run_case('storage-write-enable-stray-notification', storage_write_elf, stray, [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
+    c.clean()
+    d = decode_result(c)
+    c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'a stray notification ended the owner wait: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
+    c = run_case('storage-write-enable-stray-reverted', reverted_owner_elf, stray, [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
+    c.clean()
+    d = decode_result(c)
+    c.require(d['status'] == 1 and d['diag0'] == 11, 'the earlier owner wait survived the stray notification: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
+    # A retained platform register lock (what a failed controller transaction leaves): the thermal service cannot read its sensors
+    # and, after the five seconds without a reading, ends the session as CRITICAL for lack of a reading, with the stale marker and
+    # the channel in the record (nothing in the SD path is at fault in this record).
+    c = run_case('storage-write-lock-retained', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms, fault=11, limit_ms=14000),
+                 [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
+    c.failed_with('THERMAL')
+    word = int(c.failure['value'], 16)
+    c.require(word >> 31 == 1 and word >> 30 & 1, 'the stop record %#x does not mark a channel lost for lack of a reading' % word)
+    # A failed clock provider ends the thermal owner's liveness: the record names the term (bit 2) and not a reading.
+    c = run_case('storage-write-clocks-failed', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms, fault=12, limit_ms=8000),
+                 [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
+    c.failed_with('THERMAL')
+    word = int(c.failure['value'], 16)
+    c.require(word >> 29 == 1 and word >> 2 & 1, 'the stop record %#x does not name the failed clock provider' % word)
+    # A failed open leaves its stage as the first failure record, so a later thermal or watchdog stop cannot hide it.
+    c = run_case('storage-write-open-fails', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms, fault=13), [blob, mode4], '512M',
+                 [(RAMDISK_ADDRESS, card_image())])
+    c.require(c.failure is not None and c.failure['group'] == 'APPLICATION', 'a failed SD open left no application failure record')
+    word = int(c.failure['value'], 16)
+    c.require(word & 0xff == 7 and (word >> 8 & 0xffff) == 0x0903, 'the record %#x does not carry stage 7 and its detail' % word)
+    # The read-back modes open the card for reading and verify no bounds: a card whose backup sectors have changed (every session changes them) opens.
+    c = run_case('storage-write-open-read-backup-changed', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, storage_host.mode_input(6)], '512M',
+                 [(RAMDISK_ADDRESS, card_image(corrupt=32770))])
+    c.clean()
+    d = decode_result(c)
+    c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'the read-only open did not succeed on a card with changed backup sectors: status %d' % d['status'])
+    c = run_case('storage-write-enable-backup-changed', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, mode4], '512M',
+                 [(RAMDISK_ADDRESS, card_image(corrupt=32770))])
+    c.clean()
+    d = decode_result(c)
+    c.require(d['status'] == 1 and d['diag0'] == 23 and d['diag3'] == 395,
+              'a changed backup sector was not refused at the verify stage: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
 
     elapsed = time.monotonic() - started
     summary = {'large_region_switch_cost': switch_cost, 'passed': True, 'physical_access': False, 'seconds': round(elapsed, 2), 'build_seconds': round(built, 2),

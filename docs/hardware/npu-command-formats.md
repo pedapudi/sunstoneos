@@ -318,6 +318,15 @@ satisfy neither the old nor the new rule are mutated shader experiments (`rn_a`:
 doubled) and two compiled graphs (an einsum and a scatter) whose channel stride is not the product of the row stride and the
 height field; the loader refuses them, as before.
 
+### Maximum of negative values
+
+A maximum over values that are all negative is kept. A probe graph took `Max(a, b)` and `ReduceMax(a)` of 16-bit fixed-point tensors
+(four rows of 64: maxima -2.35, a mix, -30 and +10.8) in four forms: `Max`, `ReduceMax`, `ReduceMax(a + 40) - 40` and
+`-ReduceMin(-a)`. The simulator returned -2.35, 10.20, -30.0 and 10.77 in every form that reduces, and the board returned the same bytes
+as the simulator (20 jobs; entry in the board queue for 2026-11-02). An earlier suspicion that the reduction starts at zero came from
+feeding half-precision inputs to the simulator as 16-bit codes instead of decimal values (`npu_encoder_simulate.sh` now writes an
+input the compiler left in half precision as decimal text, which the program converts), and a lift of the scores is not needed.
+
 ### Command segments
 
 The doorbell word `+0x3a4` carries the fetch size in 16 bits of 8-byte units, so one fetch is at most 524,280 bytes

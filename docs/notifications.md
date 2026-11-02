@@ -18,7 +18,7 @@ The indices are defined in [include/sunstone_notify.h](../include/sunstone_notif
 | `os_application_usb_ready`, `os_application_usb_changed`, `os_application_host_observed` (`apps/os/application.c`) | main task, index 0 | Always. It ended any index 0 wait of the main task, including the application's deadline wait (status "notified" after microseconds) | Only while the main task sleeps in an OS wait that registered (`application_wait_until`: `main_entry`, `ss_usb_wait`, `ss_host_recv`); that wait removes what the OS gave |
 | `os_host_offer` (mailbox) | the task in `ss_host_recv` | Always | Same gating |
 | `os_large_finish` (`apps/os/large.c`) | a task registered in `ss_large_wait` | Without a lock; a notification after the wait returned stayed pending | Under the kernel lock the waiter also takes; the waiter removes what the loader gave |
-| `read_blocking` / SD owner ready wait (`apps/os/sd_owner.c`) | the caller | Ready wait on index 0 (an unrelated notification ended it before the card opened) | Index 1, and the wait repeats until the owner has answered or the timeout has passed |
+| `read_blocking` / SD owner ready wait (`apps/os/sd_owner.c`) | the caller | Index 1, and the ready wait repeats until the owner has answered or its time bound has passed | Unchanged |
 
 `ss_host_recv` also repeats its wait until a request arrives, the session ends or the timeout has passed, so a wake-up
 for another reason does not end the call.

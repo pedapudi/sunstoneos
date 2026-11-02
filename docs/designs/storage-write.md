@@ -248,6 +248,26 @@ reads, then the writer's reads and write pieces. A write piece is at most 256 se
 loader's mailbox between pieces, so a model-loading read waits for at most the piece in flight. Callers sleep on a task
 notification until the owner finishes; the owner sleeps on one until a request arrives.
 
+**The owner runs at EL1.** The owner reads the CCU, configures the pins and drives SMHC0, none of which an EL0 task may touch. A new
+task takes the privilege level its creator passes to the scheduler's hook, and the application's EL0 task creates the owner on its first
+`ss_storage_enable` call (the loader that creates it in a read-only image never runs for an application without large regions). The
+scheduler therefore asks `board_application_task_privileged`, which reaches `os_sd_owner_task_privileged` (`apps/os/sd_owner.c`) through
+`os_application_task_privileged`. Any image that lets an application create the owner must keep that path: the image link check
+(`checks/sunstone-image-link.py`) disassembles the hook in every image that links `ss_storage_enable` and refuses one that does not reach
+the owner's predicate. The second board submission faulted on the owner's first CCU read (0x02002500) at EL0 for this reason.
+
+**One device's clock fault must not fail the shared provider (open defect).** A faulted SD0 binding takes the thermal service down with it. The
+call path is `a733_mmc_platform.c fail()` (lines 57 to 64), which calls `a733_clock_retain` on the SD0 token; `a733_clock_leases.c` then latches
+`fail(m)`, which sets the registry-wide `failed` flag and the power authority's CLOCK_FAULT bit, so that `enter()` returns FAULT to every later caller
+of any token. The thermal service reads that flag in `live()` and in every register access (`apps/os/thermal.c`), so it ends the session within a second
+or two, before the owner can report the SD fault. The platform's own retention of the register lock has the same reach (the thermal service enters the
+same lock). A single device's token fault should retain that token and its pins and rails and nothing else; whether that holds for the registry
+is a change to shared OS code that the coordinator decides. Until then the owner leaves its stage as the first-failure note, so the record names the
+SD0 binding when it came first.
+
+**Why an open or an enable stopped.** `ss_storage_diagnostic` returns the stage and a detail (`apps/os/large_sd.c` lists the stages); the
+application copies it into its result, so a refused enable can be read without another instrumented image.
+
 **Completion by interrupt and one-shot timer.** No transfer polls the controller in a loop. The core arms the SMHC0 interrupt
 mask for each DMA command as the board kernel does (`sunxi_mmc_exe_cmd`, `sunxi-mmc.c:2754`: the mask is written before the
 argument and command): the error bits plus the automatic-stop-done bit for a CMD25 or CMD18 that carries a stop, else the
@@ -432,6 +452,20 @@ The write ranges are FSInfo `[32769, 1]`, both FATs, `[62656, 128]` and the data
 (`[0,1] [32768,8] [32832,129] [47744,129] [62656,128]`). The service writes 267 metadata sectors and the data in 4,110 calls:
 4,096 data pieces of 256 sectors and 14 metadata writes. The boot sector, its backup, the backup FSInfo and every other FAT sector
 are never written. The data start follows the allocation unit, so the plan is regenerated if a different card is used.
+
+### Each write session needs a fresh capture, blob and record
+
+The blob's backup hash covers the card's state before the session, and the writer's enable re-reads those sectors and refuses to bind when the
+hash differs. A session changes the very sectors the backup holds (FSInfo, the FAT starts, the root and directory clusters), so the blob of
+one session does not verify the card the next session finds. The v14 mode 2 run showed it: all 395 sectors were read and the hash differed. For every
+session that writes (modes 0, 1 and 5):
+
+1. read the backup ranges again with the read-only backup probe, so the capture is the card as it is now;
+2. encode a new blob from the same ranges and the new capture's hash (`tools/storage_bounds.py` `encode_input`);
+3. the coordinator checks the blob against the capture and writes a new approval record for the blob and the image, retiring the old one.
+
+The first backup (`backup-395-sectors.bin`, the card before any write) stays as the restore point and is never replaced. The read-back modes (2, 3 and 6) open the
+card for reading (`ss_storage_open_read`), verify no bounds and bind none, so the controller refuses every write command, and they run on a card whose backup has changed.
 
 ## Remaining work
 

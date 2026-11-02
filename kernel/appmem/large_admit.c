@@ -22,7 +22,7 @@ int ss_large_records_valid(const struct ss_large_region *r, unsigned count)
     if (count > APP_REGION_MAX_REGIONS || (count && !r)) return 0;
     uint64_t total = 0;
     for (unsigned i = 0; i < count; ++i) {
-        if (r[i].index != i || (r[i].flags & ~(unsigned)(SS_LARGE_WRITE | SS_LARGE_EXTENT | SS_LARGE_HEAP))) return 0;
+        if (r[i].index != i || (r[i].flags & ~(unsigned)(SS_LARGE_WRITE | SS_LARGE_EXTENT | SS_LARGE_UNFILLED | SS_LARGE_HEAP))) return 0;
         if (!r[i].bytes || r[i].bytes % APP_REGION_BLOCK || r[i].bytes > APP_REGION_LIMIT - APP_REGION_FLOOR) return 0;
         total += r[i].bytes;
         if (total > APP_REGION_LIMIT - APP_REGION_FLOOR) return 0;
@@ -31,12 +31,14 @@ int ss_large_records_valid(const struct ss_large_region *r, unsigned count)
         int n = path_ok(r[i].path);
         if (n < 0) return 0;
         if (r[i].flags & SS_LARGE_HEAP) {
-            /* The heap has no source: read-write, the last record, nothing to load or to verify. */
-            if (r[i].flags != (SS_LARGE_HEAP | SS_LARGE_WRITE) || i != count - 1 || r[i].source_bytes || r[i].first_sector ||
-                n || !zero) return 0;
+            /* The heap is the last record, read-write and unfilled. */
+            if (r[i].flags != (SS_LARGE_HEAP | SS_LARGE_UNFILLED | SS_LARGE_WRITE) || i != count - 1) return 0;
+        }
+        if (r[i].flags & SS_LARGE_UNFILLED) {                      /* nothing to load: no source of any kind */
+            if ((r[i].flags & SS_LARGE_EXTENT) || r[i].source_bytes || r[i].first_sector || !zero || n) return 0;
             continue;
         }
-        if (!r[i].source_bytes || r[i].source_bytes > r[i].bytes || zero) return 0;
+        if (!r[i].source_bytes || r[i].source_bytes > r[i].bytes) return 0;   /* a zero digest: no check */
         if (r[i].flags & SS_LARGE_EXTENT) {
             if (n || !r[i].first_sector) return 0;                 /* sector 0 holds the partition table */
         } else if (!n || r[i].path[0] != '/' || r[i].first_sector) return 0;

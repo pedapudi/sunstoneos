@@ -217,12 +217,17 @@ def load_large(name, items):
         names.append(r['name'])
         size = integer(r['bytes'], where + ' bytes', BLOCK, LARGE_GIB)
         require(size % BLOCK == 0, where + ': capacity is a multiple of 2 MiB')
-        source = integer(r['source_bytes'], where + ' source_bytes', 1, size)
         access = r.get('access', ['read'])
         require(access in (['read'], ['read', 'write']), where + ': access is [read] or [read, write]')
-        digest = r.get('sha256', '')
-        require(re.fullmatch(r'[0-9a-f]{64}', digest) is not None and digest != '0' * 64,
-                where + ': a 64-digit lowercase SHA-256 other than zero is required')
+        if not ({'source_bytes', 'file', 'first_sector', 'sha256'} & set(r)):
+            # No source: the region is ready at once with whatever the memory held (SS_LARGE_UNFILLED).
+            records.append({'index': i, 'flags': 4 | (1 if 'write' in access else 0), 'bytes': size, 'source_bytes': 0,
+                            'first_sector': 0, 'sha256': '0' * 64, 'path': ''})
+            continue
+        source = integer(r['source_bytes'], where + ' source_bytes', 1, size)
+        digest = r.get('sha256', '0' * 64)      # absent: the loader does not hash this region
+        require(re.fullmatch(r'[0-9a-f]{64}', digest) is not None,
+                where + ': sha256 is 64 lowercase hex digits, or absent for no check')
         file, sector = r.get('file'), r.get('first_sector')
         require((file is None) != (sector is None), where + ': name a file or a first_sector, not both')
         flags = 1 if 'write' in access else 0
@@ -240,7 +245,7 @@ def load_large(name, items):
     return records, names
 
 
-LARGE_HEAP = 4          # SS_LARGE_HEAP in include/sunstone_large.h
+LARGE_HEAP = 13         # SS_LARGE_HEAP | SS_LARGE_UNFILLED | SS_LARGE_WRITE in include/sunstone_large.h
 
 
 def add_heap_region(name, m):
@@ -252,7 +257,7 @@ def add_heap_region(name, m):
     if m['heap_bytes'] <= layout['heap_link_max']:
         return
     size = -(-(m['heap_bytes'] + layout['heap_base']) // BLOCK) * BLOCK
-    m['large_regions'].append({'index': len(m['large_regions']), 'flags': LARGE_HEAP | 1, 'bytes': size, 'source_bytes': 0,
+    m['large_regions'].append({'index': len(m['large_regions']), 'flags': LARGE_HEAP, 'bytes': size, 'source_bytes': 0,
                                'first_sector': 0, 'sha256': '0' * 64, 'path': ''})
     require(sum(r['bytes'] for r in m['large_regions']) <= LARGE_GIB,
             name + ': large regions and heap together exceed the 11 GiB of upper memory')
@@ -268,9 +273,10 @@ def unpack_large(raw):
     out = []
     for base in range(0, len(raw), LARGE.size):
         index, flags, size, source, sector, digest, path = LARGE.unpack_from(raw, base)
-        heap = flags == LARGE_HEAP | 1
-        require(index == base // LARGE.size and not flags & ~7 and size and size % BLOCK == 0 and
-                (heap and not source and not sector and not any(digest) or 0 < source <= size and any(digest) and not flags & LARGE_HEAP),
+        heap = flags == LARGE_HEAP
+        require(index == base // LARGE.size and not flags & ~15 and size and size % BLOCK == 0 and
+                ((flags & 4 and not source and not any(digest)) or (not flags & 4 and 0 < source <= size)) and
+                (not flags & 8 or heap),
                 'large record at %d is malformed' % base)
         text = path.rstrip(b'\0')
         require(b'\0' not in text and len(path) - len(text) >= 1, 'large record at %d: path has no terminator' % base)
