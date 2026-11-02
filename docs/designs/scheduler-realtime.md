@@ -3,8 +3,42 @@
 Status: **bounded time-slice traversal is implemented and reviewed; scheduler
 qualification is incomplete.** This note addresses the eight-core A733 port
 and the pinned FreeRTOS kernel. The reader is assumed to know interrupt
-handling, task priorities and mutual exclusion. Current evidence and the
-service priority map are in [scheduler status](../status/scheduler.md).
+handling, task priorities and mutual exclusion. Current qualification is in [scheduler status](../status/scheduler.md);
+the service priority map below describes the control configuration.
+
+## Service priorities fit within the current eight levels
+
+Larger numbers preempt smaller numbers on an eligible core. Application
+manifests supply their priority; the table describes current services and
+reserves the available levels. It does not enforce an application policy.
+
+| Priority | Current use or reservation | Source |
+| ---: | --- | --- |
+| 0 | Kernel idle tasks, one pinned to each core | [cached configuration](../../platform/a733-smp-cached/FreeRTOSConfig.h#L13) |
+| 1 | Diagnostic memory/background load; available for background application work | [latency workload](../../apps/latency/workload.c#L171) |
+| 2 | CPU latency application's main task | [latency manifest](../../apps/latency/manifest.json#L4) |
+| 3 | PMIC owner, NPU application client and recorded mimus board application | [board tasks](../../apps/board/main.c#L339), [NPU tasks](../../apps/os/npu.c#L294), external application's manifest |
+| 4 | USB, radio, watchdog supervision, thermal, audio, Bluetooth, GPU and DMA service work | [board tasks](../../apps/board/main.c#L339), [thermal](../../apps/os/thermal.c#L319), [GPU](../../apps/os/gpu-runtime.h#L4), [DMA](../../apps/os/dma.c#L58) |
+| 5 | Type-C and power owners | [board tasks](../../apps/board/main.c#L339) |
+| 6 | Available for a bounded urgent service with a demonstrated need | [priority count](../../include/FreeRTOSConfig.h#L38) |
+| 7 | Returning CPU terminal tasks and highest-priority latency probes | [CPU return](../../apps/os/cpu-return.c#L60), [latency workload](../../apps/latency/workload.c#L169) |
+
+Eight levels cover these classes, but several services share priority four.
+Their execution budgets and affinities still require combined-load evidence.
+Default OS affinity covers the six A55 cores. Explicit placements admit the
+two A76 cores. The latency workload pins its probe and memory task to each
+physical core; CPU0's timer wakes remote probes through production SGIs.
+
+The pinned upstream `xTaskPriorityInherit` raises a contended mutex holder and
+reschedules an eligible core if that ready holder is not running. Ordinary
+release restores base priority only after the holder releases its last mutex.
+Timeout disinheritance adjusts a holder with one outstanding mutex. These are
+the simplified upstream semantics. Full transitive inheritance and a priority
+ceiling protocol require different mechanisms. Avoid nested mutex dependencies
+on a bounded response path.
+Cross-core priority inversion with a high-priority waiter and medium-priority
+interferers still needs an isolated physical test.
+
 
 ## The global tick already has one owner
 
