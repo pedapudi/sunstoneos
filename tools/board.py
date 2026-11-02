@@ -34,6 +34,7 @@ POST_RAIL_HELPER = CACHE/'evidence/sol-cpu-normal-return-1028/rails-800/probe.bi
 POST_RAIL_HELPER_SHA256 = 'f48a6be72b336c8990a124fd608bba5fddb5c8617ec62eac5642b2d50fb27c75'
 # Linked __heap_end from ELF SHA-256 ae00ce1d4a1f82b77ab1e016dc1a08f795e56c9c6f4c92d166f6434d75590098.
 POST_RAIL_HELPER_DRAM = (0x41000000, 0x47300)
+DRAM_UNRESOLVED = 'DRAM ownership remains unresolved.'
 OUTCOMES = ('returned', 'failure-return', 'result-mismatch', 'watchdog-reset', 'no-return', 'refused-before-launch', 'host-error')
 crumbs = images.load('board_crumbs', ROOT/'tools/a733-crumbs.py')
 import board_state as state
@@ -147,8 +148,18 @@ class Live:
                 self.quarantine(str(error))
                 raise
             finally:
-                if (self.record.get('npu_dirty') or self.record.get('dram_dirty')) and not self.record.get('dram_restored'):
-                    self.quarantine('DRAM ownership remains unresolved.')
+                self.settle_dram_ownership()
+
+    def settle_dram_ownership(self):
+        if not ((self.record.get('npu_dirty') or self.record.get('dram_dirty')) and not self.record.get('dram_restored')):
+            return
+        if self.record.get('rom_returned') and self.record.get('dram_lost') and not self.armed and not self.failed:
+            # A watchdog reset loses DRAM and returns a fresh ROM instance whose
+            # disarm was read back; no saved DRAM can be restored or trusted.
+            self.record['dram_released_by_reset'] = True
+            self.journal()
+        else:
+            self.quarantine(DRAM_UNRESOLVED)
 
     def adopt(self, node):
         self.access.require_session(node)
@@ -1265,6 +1276,39 @@ class Queue:
                 path.rename(archive/f'{time.time_ns()}-{port}.json')
             self.event('resumed',port=port)
 
+    def release(self, port, reason, access=None):
+        """Coordinator only: clear the DRAM-ownership quarantine of a fresh instance after a watchdog reset.
+
+        Uses sysfs metadata and the device node's inode identity; the device is never opened."""
+        require(port in PORTS,'Invalid port.')
+        require(bool(reason.strip()),'A nonempty reason is required.')
+        access = access or images.load('board_access', ROOT/'tools/usb-access.py')
+        node = access.discover(port)
+        observed = access.identity(node)
+        require(access.target(node).name==port,'The enumerated instance is not on the requested port.')
+        base = access.RECOVERY_REQUIRED
+        paths = ([base] if base.exists() else []) + sorted(base.parent.glob(base.stem+'-*.json'))
+        found = [(p,json.loads(p.read_text())) for p in paths]
+        found = [(p,r) for p,r in found if r['identity']==observed]
+        require(found,f'The instance enumerated on {port} has no quarantine record.')
+        require(all(r['reason']==DRAM_UNRESOLVED for _,r in found),
+                'Only an unresolved-DRAM-ownership quarantine can be released; other reasons need a replug.')
+        with self.locked() as state:
+            jobs = [j for j in state['jobs'] if j['state']=='done' and j.get('assigned_port')==port]
+        run = next((j for j in reversed(jobs) if (j['result'].get('instances') or [{}])[-1].get('identity')==observed),None)
+        require(run is not None,'No finished run on this port ended on the quarantined instance.')
+        result = run['result']
+        require(result.get('outcome')=='watchdog-reset' and result.get('rom_returned') is True and result.get('dram_lost') is True,
+                'The run did not end in a watchdog reset with a verified ROM return; a replug is required.')
+        require(not any(result.get(key) for key in ('cleanup_failure','usb_vbus_cleanup_failure','transport_recovered')),
+                'The run recorded a cleanup or transport failure; a replug is required.')
+        trash = CACHE/'trash/recovery-required-released'
+        trash.mkdir(parents=True,exist_ok=True)
+        for path,_ in found:
+            shutil.move(str(path),str(trash/f'{time.time_ns()}-{path.name}'))
+        self.event('released',port=port,job=run['id'],identity=observed,reason=reason.strip())
+        return run['id']
+
     def withdraw(self, identifier, reason):
         """Refuse one queued entry before launch; running and finished entries are never touched."""
         require(re.fullmatch(r'[0-9]+-[a-f0-9]{8}',identifier),'Invalid entry ID.')
@@ -1422,6 +1466,9 @@ def main(argv=None):
     withdraw = commands.add_parser('withdraw',help='Coordinator only: refuse one queued entry before launch.')
     withdraw.add_argument('entry')
     withdraw.add_argument('--reason',required=True)
+    release = commands.add_parser('release',help='Coordinator only: clear the quarantine of a fresh instance after a watchdog reset.')
+    release.add_argument('port',choices=PORTS)
+    release.add_argument('--reason',required=True)
     args = parser.parse_args(argv)
     if args.command=='check':
         return check_image(args)
@@ -1443,6 +1490,8 @@ def main(argv=None):
     elif args.command=='resume':
         queue.resume(args.port)
         print(f'{args.port} resumed')
+    elif args.command=='release':
+        print(f"{args.port} released (run {queue.release(args.port,args.reason)}); resume the port if it is paused")
     elif args.command=='withdraw':
         queue.withdraw(args.entry,args.reason)
         print(f'{args.entry} withdrawn')
