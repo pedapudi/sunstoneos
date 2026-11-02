@@ -209,8 +209,12 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
             s->phase = 0; s->retained = false; put = true;
             all(c, slot);
         } else {
-            if (s->phase == 0 && !(s->desired.affinity & (UINT64_C(1) << cpu))) {
-                unsigned next = destination(s->desired.affinity & c->active_mask);
+            const unsigned want = s->desired.move_to_plus_one ? s->desired.move_to_plus_one - 1 : SS_CONTROL_NONE;
+            const uint64_t eligible_mask = s->desired.affinity & c->active_mask;
+            const bool pulled = want != SS_CONTROL_NONE && want != cpu && (eligible_mask & (UINT64_C(1) << want));
+            if (s->desired.move_to_plus_one && s->phase == 0) s->desired.move_to_plus_one = 0;
+            if (s->phase == 0 && (pulled || !(s->desired.affinity & (UINT64_C(1) << cpu)))) {
+                unsigned next = pulled ? want : destination(s->desired.affinity & c->active_mask);
                 if (next != SS_CONTROL_NONE) {
                     s->transfer.old_owner = cpu; s->transfer.new_owner = next;
                     s->transfer.route_epoch = route_close(s);
