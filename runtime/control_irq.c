@@ -8,7 +8,7 @@
  * minus programmed deadline) and period jitter in per-core histograms, and puts a sample into a
  * single-producer single-consumer ring. A task drains the rings and checks the sequence numbers.
  *
- * A core arms its timer from its own first interrupt after ss_control_start, because the redistributor
+ * A core arms its timer from its own first interrupt after ulSunstoneControlStart, because the redistributor
  * and the virtual timer are configured by the core that owns them. Core 0 keeps the task-deadline timer. */
 #include "FreeRTOS.h"
 #include "task.h"
@@ -128,7 +128,7 @@ static void consumer(void *unused)
     vTaskSuspend(NULL);
 }
 
-unsigned ss_control_start(const unsigned *cores, const unsigned *rate_hz, unsigned n)
+unsigned ulSunstoneControlStart(const unsigned *cores, const unsigned *rate_hz, unsigned n)
 {
     unsigned started = 0;
     if (!running) {
@@ -145,7 +145,7 @@ unsigned ss_control_start(const unsigned *cores, const unsigned *rate_hz, unsign
     }
     return started;
 }
-void ss_control_stop(void)
+void vSunstoneControlStop(void)
 {
     for (unsigned c = FIRST_CORE; c < FIRST_CORE + CORES - 1u; ++c) state[c].stop = 1;
 }
@@ -162,7 +162,7 @@ static uint32_t percentile_ns(const uint32_t *bins, uint64_t total, uint32_t max
     }
     return maximum * 1000u / TICKS_PER_US;
 }
-unsigned ss_control_stats_read(unsigned core, struct ss_control_stats *out)
+unsigned ulSunstoneControlStatsRead(unsigned core, struct ss_control_stats *out)
 {
     if (core < FIRST_CORE || core >= FIRST_CORE + CORES - 1u || !state[core].rate_hz) return 0;
     const struct core_state *s = &state[core];
