@@ -1,0 +1,52 @@
+{
+  "name": "large-test",
+  "devices": {
+    "required": [],
+    "optional": []
+  },
+  "cpu": {
+    "cluster": "a55",
+    "workers": 0,
+    "priority": 2,
+    "stack_bytes": 4096
+  },
+  "regions": [
+    {
+      "name": "input",
+      "kind": "input",
+      "access": [
+        "read"
+      ],
+      "bytes": 1048576
+    }
+  ],
+  "large_regions": [
+    {
+      "name": "a",
+      "bytes": 1610612736,
+      "source_bytes": 1048576,
+      "file": "/a.bin",
+      "sha256": "a0ab21dca50740b257c495faa888058cb757ec5165d27afb0c13cc5bef48eabd"
+    },
+    {
+      "name": "b",
+      "bytes": 1610612736,
+      "source_bytes": 1048576,
+      "file": "/b.bin",
+      "sha256": "a0ab21dca50740b257c495faa888058cb757ec5165d27afb0c13cc5bef48eabd"
+    },
+    {
+      "name": "c",
+      "bytes": 67108864,
+      "source_bytes": 1048576,
+      "file": "/c.bin",
+      "sha256": "a0ab21dca50740b257c495faa888058cb757ec5165d27afb0c13cc5bef48eabd"
+    }
+  ],
+  "deadlines": {
+    "run_us": 2000000,
+    "return_reserve_us": 5000000,
+    "progress_window_us": 1000000
+  },
+  "output_limit": 16
+}

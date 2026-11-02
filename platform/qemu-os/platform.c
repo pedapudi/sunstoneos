@@ -169,6 +169,12 @@ void platform_init(void) {
     for (unsigned i = 0; i < 128; ++i)
         level2[i] = (0x40000000UL + i * 0x200000UL) | (1UL << 10) |
             (3UL << 8) | (1UL << 6) | (1UL << 2) | (1UL << 54) | (1UL << 53) | 1;
+#ifdef QEMU_OS_UPPER
+    /* The upper memory of the 4 GiB virtual board (0x80000000 to 0x140000000): EL1-only write-back blocks
+     * that carry an ASID (nG), as the A733 tables map it behind the decode check. */
+    for (unsigned i = 2; i < 5; ++i)
+        level1[i] = ((uint64_t)i << 30) | (1UL << 54) | (1UL << 53) | (1UL << 11) | (1UL << 10) | (3UL << 8) | (1UL << 2) | 1;
+#endif
     /* Code is read-only at both EL0 and EL1; data lies in later blocks. */
     level2[8] = 0x41000000UL | (1UL << 10) | (3UL << 8) | (3UL << 6) | (1UL << 2) | 1;
     __asm__ volatile("dsb sy" ::: "memory");

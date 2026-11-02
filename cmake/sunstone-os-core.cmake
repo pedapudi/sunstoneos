@@ -187,7 +187,7 @@ apply_build_patch("${os_build}/boot.c" "${os_boot_base}" "${os_root}/apps/os/boo
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
   runtime/cpu_topology_app.c
-  apps/os/usb-service.c apps/os/application.c apps/os/session.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
+  apps/os/usb-service.c apps/os/large.c kernel/appmem/app_region.c kernel/appmem/large_admit.c apps/os/application.c apps/os/session.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/deadline.c runtime/deadline-a733.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
   apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c

@@ -204,7 +204,7 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm):
     # Application registration and program bytes enter immutable image
     # sections with exact bounds. Neither section may contain OS-owned data.
     admitted = {}
-    for name, alignment in (('sunstone_gpu_program', 4), ('sunstone_region_initializers', 8)):
+    for name, alignment in (('sunstone_gpu_program', 4), ('sunstone_region_initializers', 8), ('sunstone_large_regions', 8)):
         chunks = []
         for path in objects:
             obj = Elf(Path(path).read_bytes())
@@ -224,6 +224,13 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm):
             assert section[2] & 2 and not section[2] & 1, 'application section must be immutable: ' + name
             assert section[3] == bounds[0], 'section start differs: ' + name
         admitted[name] = raw
+    large = admitted['sunstone_large_regions']
+    assert len(large) % 112 == 0 and len(large) <= 4 * 112, 'large region records extent'
+    large_records = [dict(zip(('index', 'flags', 'bytes', 'source_bytes', 'first_sector', 'sha256', 'path'),
+                              struct.unpack_from('<IIQQQ32s48s', large, 112 * i))) for i in range(len(large) // 112)]
+    for i, record in enumerate(large_records):
+        assert record['index'] == i and not record['flags'] & ~3 and record['bytes'] % 0x200000 == 0 and \
+            0 < record['source_bytes'] <= record['bytes'] and any(record['sha256']), 'large region record %d' % i
     initializers = admitted['sunstone_region_initializers']
     assert len(initializers) % 16 == 0 and len(initializers) <= 8 * 16, 'region initializer extent'
     regions = application_manifest(elf)['regions']
@@ -236,7 +243,7 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm):
         seen.add(index)
     return {'objects': len(objects), 'libraries': len(libraries), 'external_symbols': len(external),
             'gpu_program_bytes': len(admitted['sunstone_gpu_program']),
-            'region_initializers': len(initializers) // 16}
+            'region_initializers': len(initializers) // 16, 'large_regions': len(large_records)}
 
 
 def main():

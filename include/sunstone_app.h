@@ -14,6 +14,7 @@
 #include "sunstone_npu_queue.h"
 #include "sunstone_cpu_topology.h"
 #include "sunstone_cpu_observation.h"
+#include "sunstone_large.h"
 #ifdef __cplusplus
 #define SS_STATIC_ASSERT static_assert
 #define SS_NORETURN [[noreturn]]
@@ -168,6 +169,14 @@ extern const struct ss_gpu_share ss_gpu_share;
  * Applications are trusted code. Device calls enforce grants; they do not
  * isolate hostile application memory accesses. */
 const struct ss_grant *ss_grant(void);
+/* Large regions declared in the section "sunstone_large_regions" (sunstone_large.h). */
+/* Base of large region index once it is ready, else NULL; *bytes receives its capacity. */
+void *ss_large_base(unsigned index, size_t *bytes);
+int ss_large_status(unsigned index, struct ss_large_status *out);
+/* Block until the region is ready or failed or timeout_us passes: 1 ready, -1 failed, 0 timeout. */
+int ss_large_wait(unsigned index, uint64_t timeout_us);
+/* Take and load a region after start with the same record; 0 or a negative app_region_status. */
+int ss_large_request(const struct ss_large_region *record);
 /* 1 live with the granted devices ready, 0 not ready yet, -1 ended. */
 int ss_live(void);
 /* One atomic store: this application's supervision record. */

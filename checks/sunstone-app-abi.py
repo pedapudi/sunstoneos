@@ -56,6 +56,13 @@ RICH = {
         {'name': 'fixed_scratch', 'kind': 'work', 'access': ['read', 'write'],
          'address': '0x46e00000', 'bytes': 8192},
     ],
+    'large_regions': [
+        {'name': 'weights', 'bytes': 1 << 30, 'source_bytes': 536870912, 'access': ['read'],
+         'file': '/sunstone-test/sunstone-region-test.bin',
+         'sha256': 'a0ab21dca50740b257c495faa888058cb757ec5165d27afb0c13cc5bef48eabd'},
+        {'name': 'cache', 'bytes': 4 << 20, 'source_bytes': 4 << 20, 'access': ['read', 'write'],
+         'first_sector': 1 << 33, 'sha256': hashlib.sha256(b'extent').hexdigest()},
+    ],
     'audio': {'rate_hz': 32000, 'channels': 2, 'bits': 32, 'min_frames': 32, 'max_frames': 1024},
     'deadlines': {'run_us': 1234567, 'return_reserve_us': 7654321, 'progress_window_us': 2345678},
     'output_limit': 64512,
@@ -84,6 +91,12 @@ hello = json.loads((generated['hello_compute'] / 'manifest.json').read_text())[0
 rich = json.loads((generated['abi_fixture'] / 'manifest.json').read_text())[0]
 assert (rich['devices_required'], rich['devices_optional'], rich['cluster'], rich['workers'], rich['priority']) == (1, 30, 1, 7, 7)
 assert len(rich['regions']) == 8 and rich['regions'][3]['access'] == 15
+large = rich['large_regions']
+assert [r['index'] for r in large] == [0, 1] and large[0]['flags'] == 0 and large[1]['flags'] == 3
+assert large[0]['path'] == '/sunstone-test/sunstone-region-test.bin' and large[1]['first_sector'] == 1 << 33
+assert (generated['hello_compute'] / 'large.bin').read_bytes() == b''
+assert '#define ABI_FIXTURE_LARGE_WEIGHTS 0u' in (generated['abi_fixture'] / 'abi_fixture-app.h').read_text()
+assert json.loads(run(*TOOL, 'decode-large', generated['abi_fixture'] / 'large.bin').stdout) == large
 assert rich['regions'][0]['address'] == 0x44000000 and rich['regions'][2]['address'] == 0x44200000
 assert rich['regions'][6]['sha256'] == '0' * 64
 assert rich['audio'] == RICH['audio']
@@ -112,8 +125,15 @@ for target, compiler, flags in [('host', a.cc, []),
         section = out / (name + '-manifest.bin')
         run(a.objcopy, '-O', 'binary', '--only-section=sunstone_manifest', obj, section)
         assert section.read_bytes() == packed, '%s %s compiler layout differs from the tool' % (target, name)
+        packed_large = (gen / 'large.bin').read_bytes()
+        section_large = out / (name + '-large.bin')
+        run(a.objcopy, '-O', 'binary', '--only-section=sunstone_large_regions', obj, section_large)
+        assert section_large.read_bytes() == packed_large, '%s %s large section differs from the tool' % (target, name)
         decoded = json.loads(run(*TOOL, 'decode', gen / 'manifest.bin').stdout)
-        assert decoded == json.loads((gen / 'manifest.json').read_text()), name + ' decoder differs'
+        described = json.loads((gen / 'manifest.json').read_text())
+        for entry in described:
+            entry.pop('large_regions')      # the manifest section does not carry them; decode-large does
+        assert decoded == described, name + ' decoder differs'
     include = ['-I', ROOT / 'include', '-I', generated['hello_compute']]
     main = out / 'main.o'
     run(compiler, *warn, *flags, *include, '-O2', '-c', ROOT / 'apps/hello-compute/main.c', '-o', main)
@@ -163,6 +183,32 @@ def refused(change, message):
                        capture_output=True, text=True)
     assert r.returncode and message in r.stderr, (message, r.stderr)
 
+
+def large_refused(change, message):
+    value = json.loads(RICH_PATH.read_text())
+    change(value['large_regions'])
+    path = a.build / 'large-refused.json'
+    path.write_text(json.dumps(value))
+    r = subprocess.run(TOOL + ['emit', '--manifest', str(path), '--output', str(a.build / 'large-refused')],
+                       capture_output=True, text=True)
+    assert r.returncode and message in r.stderr, (message, r.stderr)
+
+
+large_refused(lambda v: v[0].update(bytes=(1 << 30) + 4096), 'multiple of 2 MiB')
+large_refused(lambda v: v[0].update(source_bytes=(1 << 30) + 1), 'outside 1..')
+large_refused(lambda v: v[0].update(sha256='0' * 64), 'SHA-256 other than zero')
+large_refused(lambda v: v[0].update(sha256='A' * 64), 'lowercase SHA-256')
+large_refused(lambda v: v[0].update(file='relative/path.bin'), 'absolute path')
+large_refused(lambda v: v[0].update(file='/' + 'a' * 47), 'at most 47 characters')
+large_refused(lambda v: v[0].update(file='/bad name.bin'), 'absolute path')
+large_refused(lambda v: v[0].update(first_sector=5), 'not both')
+large_refused(lambda v: v[0].pop('file'), 'not both')
+large_refused(lambda v: v[1].update(first_sector=0), 'first_sector')
+large_refused(lambda v: v[1].update(access=['write']), 'access is [read]')
+large_refused(lambda v: v[1].update(name='weights'), 'distinct name')
+large_refused(lambda v: v.extend([dict(v[0], name='c%d' % i) for i in range(3)]), 'at most 4 large regions')
+large_refused(lambda v: v[0].update(unknown=1), 'unknown keys')
+large_refused(lambda v: v[0].update(bytes=12 << 30), 'outside')
 
 capture = {'rate_hz': 16000, 'channels': 1, 'bits': 16, 'min_frames': 16000, 'max_frames': 80000}
 refused(lambda v: v['regions'][0].update(access=['read', 'write']), 'an input is read-only')

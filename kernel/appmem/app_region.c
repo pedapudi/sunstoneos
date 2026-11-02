@@ -137,9 +137,13 @@ int app_space_build_view(struct app_space *s, struct app_table_arena *a, const u
                          const struct app_region_ledger *l, uint8_t owner, uint8_t asid, unsigned flags)
 {
     if (!s || !a || !base_l1 || !l || !asid || !owner || !a->page || (flags & ~APP_SPACE_NO_GIB_BLOCKS)) return APP_REGION_INVALID;
+    /* Each upper-memory slot is either unmapped (the board maps less than 12 GiB) or the kernel's EL1-only
+     * block with nG set; a slot that a region covers must be the block. */
     for (unsigned slot = SLOT_FIRST; slot < SLOT_END; ++slot) {
-        uint64_t want = KERNEL_BLOCK(UINT64_C(0x40000000) * slot);
-        if (base_l1[slot] != want) return APP_REGION_INVALID;    /* block, EL1-only, nG set */
+        uint64_t want = KERNEL_BLOCK(UINT64_C(0x40000000) * slot), lo = APP_REGION_GIB * slot;
+        int whole;
+        if (base_l1[slot] != want && base_l1[slot] != 0) return APP_REGION_INVALID;
+        if (base_l1[slot] == 0 && covered(l, owner, lo, lo + APP_REGION_GIB, &whole)) return APP_REGION_INVALID;
     }
     unsigned need = 1;
     for (unsigned slot = SLOT_FIRST; slot < SLOT_END; ++slot) {
