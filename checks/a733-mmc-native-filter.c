@@ -95,7 +95,7 @@ static int command(uint32_t word, uint32_t arg, uint32_t blksz, uint32_t bcnt)
 int main(void)
 {
     make_blob();
-#ifndef SUNXI_MMC_READ_ONLY
+#if !defined(SUNXI_MMC_READ_ONLY) && defined(A733_MMC_BOUNDED_WRITER)
     /* Write-capable build. */
     fresh(SUNXI_MMC_SD, SUNXI_MMC_SD_HIGH_SPEED4, 1);
     assert(!command(EXACT, 1000, 512, 512 * 100));                      /* unbound */
@@ -167,7 +167,7 @@ int main(void)
          "32 single-bit changes, block size and count, edges, straddles, clock-update form, unbound, unverified, closed, eMMC and foreign task refused; "
          "threshold writable only when verified; byte-addressed card refused");
 #else
-    /* Read-only build: nothing makes CMD25 or the threshold writable, even a forced binding to a verified object. */
+    /* Read-only build, or a build without the bounded writer: nothing makes CMD25 or the threshold writable, even a forced binding to a verified object. */
     fresh(SUNXI_MMC_SD, SUNXI_MMC_SD_HIGH_SPEED4, 1);
     n.bounds = &bounds;
     assert(!command(EXACT, 1000, 512, 512 * 100) && !command(EXACT, 2000, 512, 512 * 256));
@@ -176,7 +176,7 @@ int main(void)
     assert(!command(SUNXI_SMHC_CMD_START | SUNXI_SMHC_CMD_RESP | SUNXI_SMHC_CMD_CRC | SUNXI_SMHC_CMD_DATA | SUNXI_SMHC_CMD_WRITE | SUNXI_SMHC_CMD_WAIT | 24u, 1000, 512, 512));
     assert(command(SUNXI_SMHC_CMD_START | SUNXI_SMHC_CMD_RESP | SUNXI_SMHC_CMD_CRC | SUNXI_SMHC_CMD_WAIT | 13u, 0, 0, 0));   /* reads still work */
     assert(command(SUNXI_SMHC_CMD_START | SUNXI_SMHC_CMD_RESP | SUNXI_SMHC_CMD_CRC | SUNXI_SMHC_CMD_DATA | SUNXI_SMHC_CMD_WAIT | 18u, 1000, 512, 512));
-    puts("PASS: read-only filter refuses CMD25 (the exact word, 32 single-bit changes) and the threshold write even with a forced verified binding; reads and CMD13 still pass");
+    puts("PASS: read-only or writer-less filter refuses CMD25 (the exact word, 32 single-bit changes) and the threshold write even with a forced verified binding; reads and CMD13 still pass");
 #endif
     return 0;
 }

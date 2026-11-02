@@ -20,7 +20,7 @@ def main():
     a = ap.parse_args()
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    for name, define in (('write-capable', []), ('read-only', ['-DSUNXI_MMC_READ_ONLY'])):
+    for name, define in (('write-capable', ['-DA733_MMC_BOUNDED_WRITER']), ('without-writer', []), ('read-only', ['-DSUNXI_MMC_READ_ONLY'])):
         binary = out / name
         r = subprocess.run([str(harness.CLANG), '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', *harness.SANITIZE,
                             '-DA733_MMC_NATIVE_HOST_TEST', *define, '-I', str(ROOT / 'include'), '-I', str(ROOT / 'checks/host'),

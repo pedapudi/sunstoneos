@@ -139,7 +139,7 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
     if(a==base+SUNXI_SMHC_FIFO) {
         if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;
     } else if(a==base+SUNXI_SMHC_THLD) {
-#ifndef SUNXI_MMC_READ_ONLY
+#if !defined(SUNXI_MMC_READ_ONLY) && defined(A733_MMC_BOUNDED_WRITER)
         /* The SDR104 read threshold, or the write threshold of a verified bounded writer. */
         if(!uhs&&!(n->kind==SUNXI_MMC_SD&&a733_storage_bounds_threshold_ok(n->bounds)))return 0;
 #else
@@ -173,12 +173,12 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
         }
         if((v&SUNXI_SMHC_CMD_INDEX)==25u) {
             /* Whatever its other bits (a clock-update word included), a command with index 25 must pass the bounded rule. */
-#ifndef SUNXI_MMC_READ_ONLY
+#if !defined(SUNXI_MMC_READ_ONLY) && defined(A733_MMC_BOUNDED_WRITER)
             if(n->kind!=SUNXI_MMC_SD||!n->bounds||
                !a733_storage_bounds_cmd25_ok(n->bounds,v,MMIO_LOAD(base+SUNXI_SMHC_ARG),
                     MMIO_LOAD(base+SUNXI_SMHC_BLKSZ),MMIO_LOAD(base+SUNXI_SMHC_BCNT)))return 0;
 #else
-            return 0;
+            return 0;          /* an image without the bounded writer (A733_MMC_BOUNDED_WRITER) never writes data through CMD25 */
 #endif
         } else if(!(v&SUNXI_SMHC_CMD_UPDATE_CLOCK))switch(v&SUNXI_SMHC_CMD_INDEX) {
         case 0:case 1:case 2:case 3:case 7:case 8:case 9:case 13:
@@ -237,7 +237,7 @@ int a733_mmc_platform_native_init(struct a733_mmc_platform_native *n,
     int (*admission)(void *,const struct a733_mmc_platform_config *,const struct a733_clock_token *),void *cookie)
 {return a733_mmc_platform_native_init_selected(n,locks,task,kind,A733_MMC_EMMC_SDC2,admission,cookie);}
 
-#ifndef SUNXI_MMC_READ_ONLY
+#if !defined(SUNXI_MMC_READ_ONLY) && defined(A733_MMC_BOUNDED_WRITER)
 int a733_mmc_platform_native_bind_bounds(struct a733_mmc_platform_native *n,const struct a733_mmc_platform *p,
                                          const struct a733_storage_bounds *b)
 {

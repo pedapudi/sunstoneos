@@ -582,6 +582,8 @@ target_link_options(sunstone-a733-os-core PRIVATE "-Wl,-Map,${os_build}/image.ma
 if(SUNSTONE_A733_OS_SD_WRITE)
   # The write-capable build: the SD core keeps its write path, and the loader's binding and the owner task know it.
   set_source_files_properties("${os_root}/apps/os/large_sd.c" "${os_root}/apps/os/sd_owner.c" PROPERTIES COMPILE_DEFINITIONS OS_SD_WRITE=1)
+  # The bounded writer's rule in the native register filter exists only where the bounds object is linked.
+  set_source_files_properties("${os_root}/drivers/storage/a733_mmc_platform_native.c" PROPERTIES COMPILE_DEFINITIONS A733_MMC_BOUNDED_WRITER=1)
 else()
   set_source_files_properties("${os_root}/drivers/storage/sunxi_mmc.c" "${os_root}/drivers/storage/a733_mmc_platform.c"
     "${os_root}/drivers/storage/a733_mmc_platform_native.c" PROPERTIES COMPILE_DEFINITIONS SUNXI_MMC_READ_ONLY=1)
