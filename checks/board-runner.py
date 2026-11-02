@@ -44,7 +44,7 @@ def arguments(root, *extra, submit=False, development=False):
         image.write_bytes(b'MODEL ONLY - never launch')
     values = [str(image),'--port','3-1','--evidence',str(root/'run')]
     if submit:
-        values += ['--kind','probe','--expect','complete']
+        values += ['--kind','probe','--expect','complete','--reference','docs/board-runner.md#submit-a-frozen-image-and-hypothesis']
     # Existing cases exercise the qualification behavior; development cases opt in.
     return parser.parse_args(values+([] if development else ['--preserve-dram'])+list(extra))
 
@@ -333,6 +333,85 @@ def development_dram_cases(out):
         job=queue.submit(args)
         assert job['options']['preserve_dram']==flag
     passed('dram-mode-frozen-in-queue-entry')
+
+
+def reference_cases(out):
+    """A submission cites a tracked docs heading before anything is queued; only the coordinator exempts one."""
+    tree = out/'reference-tree';(tree/'docs').mkdir(parents=True)
+    (tree/'docs/known.md').write_text('# Vendor sequence\n\n```\n# not a heading\n```\n\n## Step `one`, with: punctuation?\n## Repeat\n## Repeat\n')
+    (tree/'docs/untracked.md').write_text('# Untracked\n')
+    (tree/'outside.md').write_text('# Outside\n')
+    for command in (['init','-q'],['add','docs/known.md','outside.md'],
+                    ['-c','user.name=t','-c','user.email=t@example.invalid','commit','-q','-m','fixture']):
+        subprocess.run(['git','-C',str(tree),*command],check=True,capture_output=True)
+    assert board.heading_anchors((tree/'docs/known.md').read_text())==[
+        'vendor-sequence','step-one-with-punctuation','repeat','repeat-1']
+    def attempt(name,*extra,reference=True):
+        root=out/('reference-'+name);root.mkdir()
+        args=arguments(root,submit=True,development=True)
+        args.host_tree=tree
+        args.reference=None
+        queue=board.Queue(root/'queue')
+        before=list((queue.root/'entries').glob('*')) if (queue.root/'entries').exists() else []
+        for key,value in zip(extra[::2],extra[1::2]):setattr(args,key,value)
+        try:job=queue.submit(args)
+        except ValueError as error:
+            entries=list((queue.root/'entries').glob('*')) if (queue.root/'entries').exists() else []
+            assert entries==before and not (queue.root/'state.json').exists(),(name,entries)
+            return str(error)
+        return job
+    for name,reference,message in (
+            ('missing',None,'requires --reference PATH#ANCHOR'),
+            ('no-anchor','docs/known.md','must read PATH#ANCHOR'),
+            ('absent-file','docs/absent.md#vendor-sequence','does not exist'),
+            ('outside-docs','outside.md#outside','not under docs/'),
+            ('untracked','docs/untracked.md#untracked','not tracked'),
+            ('unknown-anchor','docs/known.md#vendor','matches no heading'),
+            ('fenced-heading','docs/known.md#not-a-heading','matches no heading')):
+        error=attempt(name,'reference',reference)
+        assert isinstance(error,str) and message in error,(name,error)
+        passed('reference-refused-before-queue-'+name)
+    job=attempt('valid','reference','docs/known.md#repeat-1')
+    assert job['reference']['path']=='docs/known.md' and job['reference']['anchor']=='repeat-1'
+    assert job['options']['reference']=='docs/known.md#repeat-1' and len(job['reference']['sha256'])==64
+    assert json.loads((Path(job['directory'])/'entry.json').read_text())['reference']==job['reference']
+    # The same entry reaches the runner as a flag and lands in the result.
+    parsed=argparse.ArgumentParser();board.run_options(parsed)
+    run=parsed.parse_args([job['image'],'--port','3-1','--reference',job['options']['reference']])
+    assert board.run_reference(run)=={'path':'docs/known.md','anchor':'repeat-1'}
+    passed('reference-stored-in-entry-and-passed-to-the-run')
+    absolute=attempt('absolute','reference',str(tree/'docs/known.md')+'#step-one-with-punctuation')
+    assert absolute['reference']['path']=='docs/known.md'
+    passed('reference-accepts-absolute-path-and-github-anchor-rules')
+    for name,fields,message in (
+            ('none-alone',('reference','none'),'requires --approved-by coordinator'),
+            ('none-no-reason',('reference','none','approved_by','coordinator'),'nonempty --reference-reason'),
+            ('none-blank-reason',('reference','none','approved_by','coordinator','reference_reason','  '),'nonempty --reference-reason'),
+            ('none-reason-only',('reference','none','reference_reason','reads hardware facts'),'requires --approved-by coordinator')):
+        error=attempt(name,*fields)
+        assert isinstance(error,str) and message in error,(name,error)
+        passed('reference-'+name+'-refused')
+    exempt=attempt('exempt','reference','none','approved_by','coordinator','reference_reason','reads hardware facts')
+    assert exempt['reference']=={'none':True,'approved_by':'coordinator','reason':'reads hardware facts'}
+    assert exempt['options']['reference']=='none' and exempt['options']['reference_reason']=='reads hardware facts'
+    run=parsed.parse_args([exempt['image'],'--port','3-1','--reference','none','--approved-by','coordinator',
+                           '--reference-reason','reads hardware facts'])
+    assert board.run_reference(run)['reason']=='reads hardware facts'
+    passed('reference-none-accepted-only-with-coordinator-and-reason')
+    # A queue-level refusal keeps the reference in its result; evidence records copy it.
+    queue=board.Queue(out/'reference-valid'/'queue')
+    with queue.locked() as state:
+        entry=next(j for j in state['jobs'] if j['id']==job['id'])
+        queue.refused(state,entry,'modeled refusal')
+    assert entry['result']['reference']==job['reference']
+    evidence=images.load('runner_evidence',ROOT/'tools/evidence.py')
+    record=evidence.queue_record(queue.root,job['id'],'cpu')
+    assert record['reference']=='docs/known.md#repeat-1'
+    problems=[];evidence.check_value(record,evidence.load_schema(),'record',problems);assert not problems,problems
+    record=evidence.queue_record(board.Queue(out/"reference-exempt"/"queue").root,exempt['id'],'cpu')
+    assert record['reference']=='none: reads hardware facts'
+    problems=[];evidence.check_value(record,evidence.load_schema(),'record',problems);assert not problems,problems
+    passed('reference-copied-into-evidence-record-and-schema')
 
 
 def reset_release_cases(out):
@@ -1130,7 +1209,7 @@ def main():
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):withdraw_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):reset_release_cases(args.out)
-    if 'transport' in groups:development_dram_cases(args.out)
+    if 'transport' in groups:development_dram_cases(args.out);reference_cases(args.out)
     if 'queue-integrity' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_integrity_cases(args.out)
     if 'policy' in groups:policy_cases(args.out)

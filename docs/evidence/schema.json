@@ -12,6 +12,7 @@
     "image_sha256": {"type": ["string", "null"], "pattern": "[0-9a-f]{64}"},
     "git_revision": {"type": ["string", "null"], "pattern": "[0-9a-f]{40}"},
     "hypothesis": {"type": "string"},
+    "reference": {"type": "string", "minLength": 1, "$comment": "The docs heading (PATH#ANCHOR) that derives the vendor sequence and the diff the run tested, copied from the queue entry; 'none: REASON' for a coordinator exemption. Absent for runs queued before the flag."},
     "outcome": {"type": "string", "enum": ["returned", "failure-return", "watchdog-reset", "result-mismatch", "refused-before-launch", "host-error", "no-return", "not-run"], "$comment": "The runner outcome, copied from result.json."},
     "verdict": {"type": "string", "enum": ["passed", "failed", "inconclusive"], "$comment": "Whether the hypothesis held."},
     "measurements": {

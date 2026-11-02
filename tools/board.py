@@ -88,6 +88,61 @@ class UnresolvedReturn(ValueError):
     pass
 
 
+def heading_anchors(text):
+    """GitHub heading anchors of a Markdown text: ATX headings outside fences, duplicates numbered."""
+    anchors, seen, fence = [], {}, None
+    for line in text.splitlines():
+        marker = re.match(r' {0,3}(`{3,}|~{3,})', line)
+        if marker:
+            if fence is None:
+                fence = marker.group(1)[0]
+            elif marker.group(1)[0] == fence:
+                fence = None
+            continue
+        heading = None if fence else re.fullmatch(r' {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*', line)
+        if not heading:
+            continue
+        label = re.sub(r'<[^>]+>', '', re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', heading.group(1)))
+        slug = re.sub(r'[^\w\- ]', '', label.lower()).replace(' ', '-')
+        count = seen.get(slug, 0)
+        seen[slug] = count + 1
+        anchors.append(slug if count == 0 else f'{slug}-{count}')
+    return anchors
+
+
+def check_reference(args):
+    """Validate the --reference of a submission; return the record kept in the entry and the result."""
+    value = getattr(args, 'reference', None)
+    require(bool(value), 'A submission requires --reference PATH#ANCHOR naming the docs heading that derives the vendor sequence and the diff against it; '
+                         '--reference none needs --approved-by coordinator and --reference-reason.')
+    if value == 'none':
+        reason = (getattr(args, 'reference_reason', None) or '').strip()
+        require(getattr(args, 'approved_by', None) == 'coordinator' and bool(reason),
+                '--reference none requires --approved-by coordinator and a nonempty --reference-reason.')
+        return {'none': True, 'approved_by': 'coordinator', 'reason': reason}
+    path, separator, anchor = value.partition('#')
+    anchor = anchor.lstrip('#')
+    require(bool(separator and path and anchor), '--reference must read PATH#ANCHOR.')
+    tree = (getattr(args, 'host_tree', None) or ROOT).resolve()
+    target = (Path(path) if Path(path).is_absolute() else tree/path).resolve()
+    require(target.is_relative_to(tree/'docs'), f'Reference {path} is not under docs/ in the host tree.')
+    require(target.is_file(), f'Reference file {path} does not exist.')
+    relative = target.relative_to(tree).as_posix()
+    tracked = subprocess.run(['git', '-C', str(tree), 'ls-files', '--error-unmatch', '--', relative],
+                             capture_output=True, text=True)
+    require(tracked.returncode == 0, f'Reference file {relative} is not tracked in the host tree.')
+    anchors = heading_anchors(target.read_text(errors='replace'))
+    require(anchor in anchors, f'Reference anchor #{anchor} matches no heading in {relative}.')
+    return {'path': relative, 'anchor': anchor, 'sha256': images.sha(target)}
+
+
+def reference_text(record):
+    """The one-line form kept in evidence records."""
+    if not record:
+        return None
+    return f"none: {record['reason']}" if record.get('none') else f"{record['path']}#{record['anchor']}"
+
+
 class Live:
     """The only FEL owner. Every request verifies the selected current instance."""
     def __init__(self, args, evidence, record, access=None, process=None, now=None, sleep=None, elapsed_now=None):
@@ -770,6 +825,18 @@ def verify_references(inventory):
             'Queued host code or helper inputs changed; resubmit the frozen image.')
 
 
+def run_reference(args):
+    """The reference a queued run carries; the submission already validated it."""
+    value = getattr(args, 'reference', None)
+    if not value:
+        return None
+    if value == 'none':
+        return {'none': True, 'approved_by': getattr(args, 'approved_by', None),
+                'reason': getattr(args, 'reference_reason', None)}
+    path, _, anchor = value.partition('#')
+    return {'path': path, 'anchor': anchor}
+
+
 def run_image(args, backend=Live):
     started = time.monotonic()
     evidence = args.evidence or CACHE/'board-queue/runs'/f'{time.time_ns()}-{args.port}-{uuid.uuid4().hex[:8]}'
@@ -780,6 +847,7 @@ def run_image(args, backend=Live):
               'quarantined': False, 'launch_attempted': False, 'time': time.time(),
               'git_revision': subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'], capture_output=True,text=True).stdout.strip()}
     result['dram_mode'] = 'preserved' if images.preserving(args) else 'development'
+    result['reference'] = run_reference(args)
     owner = None
     stage = 'preflight'
     def timed(name, action):
@@ -1140,7 +1208,8 @@ class Queue:
         result = {'schema': 'sunstone-board-result-v1', 'outcome': 'refused-before-launch',
                   'image_sha256': job['image_sha256'], 'port': job['port'], 'kind': job['kind'],
                   'first_failure': {'site': 'queue', 'detail': detail}, 'quarantined': False,
-                  'launch_attempted': False, 'durations': {}, 'evidence_path': job['directory']}
+                  'launch_attempted': False, 'durations': {}, 'evidence_path': job['directory'],
+                  'reference': job.get('reference')}
         save(job['result_path'], result)
         job.update(state='done', result=result, completed=time.time())
         self.event('result', job=job['id'], result_path=job['result_path'], result=result)
@@ -1148,6 +1217,7 @@ class Queue:
     def submit(self, args):
         require(re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', args.worker), 'Invalid worker name.')
         require(bool(args.hypothesis.strip()), 'A nonempty hypothesis is required.')
+        reference = check_reference(args)
         identifier = f'{time.time_ns()}-{uuid.uuid4().hex[:8]}'
         directory = self.root/'entries'/identifier
         directory.mkdir(parents=True, exist_ok=False)
@@ -1167,7 +1237,9 @@ class Queue:
                                   args.host_tree, manifest=manifest)
             application_inputs(args, info, directory)
         # Freeze all caller-controlled launch inputs before queue visibility.
-        options = {}
+        options = {'reference': 'none' if reference.get('none') else f"{reference['path']}#{reference['anchor']}"}
+        if reference.get('none'):
+            options['reference_reason'] = reference['reason']
         for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','decode_application','objcopy'):
             value = getattr(args,name)
             options[name] = str(value.resolve()) if isinstance(value,Path) else value
@@ -1229,7 +1301,7 @@ class Queue:
         frozen = {str(p.relative_to(directory)): images.sha(p) for p in directory.rglob('*') if p.is_file()}
         job = {'id': identifier, 'submitted': time.time(), 'image': str(image),
                'image_sha256': hashlib.sha256(data).hexdigest(), 'port': args.port, 'kind': args.kind,
-               'worker': args.worker, 'hypothesis': args.hypothesis.strip(), 'state': 'queued',
+               'worker': args.worker, 'hypothesis': args.hypothesis.strip(), 'state': 'queued', 'reference': reference,
                'directory': str(directory), 'result_path': str(directory/'run/result.json'), 'options': options, 'frozen': frozen}
         with self.locked() as state:
             history = state['jobs']
@@ -1442,6 +1514,9 @@ def run_options(parser, submit=False):
     parser.add_argument('--manifest', type=Path, help='Exact finite NPU build manifest.')
     parser.add_argument('--objcopy', type=Path, default=Path('/usr/bin/llvm-objcopy-21'))
     parser.add_argument('--approved-by', choices=('coordinator',))
+    parser.add_argument('--reference', help='PATH#ANCHOR of the tracked docs heading that derives the subsystem vendor sequence and the diff against it; '
+                        '"none" needs --approved-by coordinator and --reference-reason.')
+    parser.add_argument('--reference-reason', help='Why a coordinator exempts this run from a reference.')
     parser.add_argument('--storage-write', action='store_true')
     parser.add_argument('--descriptor', type=Path, help='Hash-bound image metadata; defaults to IMAGE.board.json.')
     parser.add_argument('--restore-rails', action='store_true', help='Restore guarded CPU rails after a validated normal return.')

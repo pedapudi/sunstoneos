@@ -82,10 +82,28 @@ readback, at about 0.55 MB/s in each direction. The remaining stages take about
 $board submit /absolute/image.elf --kind cpu-return --port any \
   --worker cpu-integration \
   --hypothesis 'The corrected cache cleanup permits all cores to retire' \
+  --reference docs/cpu-clock.md#operating-points-come-from-the-26-mhz-table-columns \
   --expect /absolute/expected-output.bin
 $board status
 $board watch
 ```
+
+`--reference PATH#ANCHOR` is required. PATH is a file under `docs/` that is
+tracked in the host tree (`--host-tree`, otherwise this checkout), as an absolute
+path or relative to that tree's root. ANCHOR is the anchor GitHub derives from a
+heading in that file: the heading text in lowercase, with punctuation removed,
+spaces replaced by hyphens, and `-1`, `-2` appended to repeated headings. The
+heading holds the subsystem's vendor sequence and the diff of our code against
+it, so the run tests only predictions from that diff. `submit` refuses a missing
+flag, a missing or untracked file, a file outside `docs/` and an unknown anchor,
+before it creates an entry. The entry and the result record the reference
+(`reference`, with the file's SHA-256 in the entry), and `tools/evidence.py add`
+copies it into the evidence record.
+
+`--reference none` exempts a run whose purpose is to read hardware facts, such as
+an image that only reports register values. It is accepted only with
+`--approved-by coordinator` and a nonempty `--reference-reason`; the reason is
+stored with the entry and the result.
 
 `submit` copies the image, inputs, session template and expectation into
 `~/.cache/sunstoneos/board-queue/entries/`. It blocks until a result exists and
