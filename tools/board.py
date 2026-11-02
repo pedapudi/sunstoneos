@@ -896,6 +896,7 @@ def run_image(args, backend=Live):
                         'Approved post-ROM rail helper is absent or changed; refused before device access.')
             dma_binding = images.dma_admission(args, info)
             application_inputs(args, info, evidence)
+            images.load('storage_bounds', ROOT/'tools/storage_bounds.py').verify_delivered(args)
             require(getattr(args, 'expect_result', None) is None or getattr(args, 'decoder', None) is not None,
                     '--expect-result requires a result decoder.')
         expected = validate_expectation(json.loads(args.expect_spec.read_text())) if args.expect_spec else expectation(args.expect)
@@ -1040,6 +1041,7 @@ def check_image(args):
     images.policy(info, args)
     evidence = evidence_directory(args.evidence)
     application_inputs(args, info, evidence)
+    images.load('storage_bounds', ROOT/'tools/storage_bounds.py').verify_delivered(args)
     live = json.loads(args.state.read_text()) if args.state else {}
     dma_binding = images.dma_admission(args, info, live if live.get('identity') is not None else None)
     require(info.get('native_probe') or live.get('words'),
