@@ -99,6 +99,12 @@ struct app_space {
  * the arena and the space are as before. */
 int app_space_build(struct app_space *, struct app_table_arena *, const uint64_t base_l1[512],
                     const struct app_region_ledger *, uint8_t asid);
+/* The same with a separate view: the space carries the ASID asid and exposes the regions that
+ * owner holds. APP_SPACE_NO_GIB_BLOCKS maps every slot with 2 MiB blocks even when a region covers it
+ * whole, to measure what the 1 GiB blocks save in TLB entries. */
+#define APP_SPACE_NO_GIB_BLOCKS 1u
+int app_space_build_view(struct app_space *, struct app_table_arena *, const uint64_t base_l1[512],
+                         const struct app_region_ledger *, uint8_t owner, uint8_t asid, unsigned flags);
 /* The TTBR0_EL1 word that installs the space: table base and ASID in bits 63:48. */
 static inline uint64_t app_space_ttbr0(const struct app_space *s)
 { return s->root_physical | ((uint64_t)s->asid << 48); }

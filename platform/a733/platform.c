@@ -117,6 +117,11 @@ _Noreturn void platform_exception(void)
 }
 
 #endif
+#ifdef SUNSTONE_PLATFORM_UPPER_MAP
+#include "a733_dram.h"
+/* 1 when the decode check passed and the tables map DRAM up to 0x3_4000_0000. */
+int platform_upper_mapped;
+#endif
 void platform_init(void)
 {
     // Identity-map peripheral space as Device-nGnRnE, and the 128 MiB RAM
@@ -134,13 +139,24 @@ void platform_init(void)
     for (unsigned i = 0; i < 64; ++i)
         level2[i] = (0x40000000UL + i * 0x200000UL) | (1UL << 10) |
                     (3UL << 8) | (1UL << 2) | 1;
-#ifdef SUNSTONE_MEMTEST
+#if defined(SUNSTONE_MEMTEST) || defined(SUNSTONE_PLATFORM_UPPER_MAP)
+#ifdef SUNSTONE_PLATFORM_UPPER_MAP
+    // Images that opt in map the rest of DRAM only after the address-test decode check passes, with
+    // the MMU off and Non-secure accesses (drivers/dram/a733_dram_decode_probe.c).
+    static const struct a733_dram_range upper_ranges[] = {{UINT64_C(0x48000000), UINT64_C(0x38000000)},
+        {UINT64_C(0x80000000), UINT64_C(0x2c0000000)}};
+    platform_upper_mapped = a733_dram_decode_check(upper_ranges, 2) == 1;
+    if (platform_upper_mapped) {
+#endif
     // The memory qualification image maps the rest of DRAM, up to
     // 0x3_4000_0000, as non-executable write-back blocks closed to EL0.
     for (unsigned i = 64; i < 512; ++i)
         level2[i] = A733_EL1_DRAM_BLOCK(0x40000000UL + i * 0x200000UL);
     for (unsigned i = 2; i < 13; ++i)
         level1[i] = A733_EL1_DRAM_BLOCK((uint64_t)i << 30);
+#ifdef SUNSTONE_PLATFORM_UPPER_MAP
+    }
+#endif
 #endif
     // Result writes must reach DRAM for the cache-disabled EL3 monitor and ROM.
     // Map this 2 MiB block as normal non-cacheable memory (attribute index 2).
