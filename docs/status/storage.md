@@ -9,7 +9,11 @@ Native SD identification, bounded reads, backup-first updates, slot loading and 
 3.3 V complete. One 4 KiB DMA read and one sentinel-prefilled 64 KiB read match
 same-card PIO references and restore controller, clocks, pins and saved RAM
 before normal ROM return. The sixteen-descriptor 64 KiB transfer takes
-3,332 microseconds; it does not measure sustained throughput.
+3,332 microseconds; it does not measure sustained throughput. A read-only probe
+on port 3-1 read 160 sequential 128 KiB requests at 21.9 MB/s per request in the
+same profile; it ran at boot clocks (CPU 494 MHz), so the figure is not a top-point
+performance figure and the OS image re-measures it. The same probe mounted the card's
+FAT32 volume read-only (32 KiB clusters, 1,907,436 clusters free, empty root directory).
 
 ## Open work
 
