@@ -29,6 +29,17 @@ FAT32 volume read-only (32 KiB clusters, 1,907,436 clusters free, empty root dir
 
 Any physical card write needs its full host backup and the approved target-bound path in [goal section 4](../goal.md).
 
+## A class of host-coverage gap
+
+The platform's admission of the bounded write had no host coverage until `checks/a733-mmc-platform-write.py`. The strict CMD25 model
+(`checks/sunxi-mmc-write-dma.c`) drives the core with the model's own callbacks, so it never ran the platform's descriptor-chain check
+(`dma_chain` in `drivers/storage/a733_mmc_platform.c`), which refused every write-direction command. The first board writes, runs v11 and v12,
+stopped there: the controller was retained with no refused register and no deadline. The class of gap is a strict model tested with its own
+callbacks instead of the platform's: the model proves the core against the protocol and proves nothing about the layer that admits the core's accesses.
+A model of a layer's callee must be driven through that layer. `checks/a733-mmc-platform-write.py` now runs the same model through the platform's core
+callbacks and the native adapter's register filter with a verified bounds object, and `checks/a733-mmc-dma-chain.py` pins the predicate. Both fail
+on the platform source of v12. The same check applies to any other service that gets a strict model for its core.
+
 ## Evidence
 
 Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-storage-20261101.md).
