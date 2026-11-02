@@ -40,17 +40,23 @@ struct path {
     uint64_t count, missed;
     uint32_t seq, latency_max, jitter_max;
     uint32_t latency_bin[BINS], jitter_bin[BINS];
+    /* Task path only: the wake split at the handler. entry = handler start minus the deadline (the time the core
+     * held the interrupt off); gap = task start minus handler start (handler, exit work, switch). */
+    uint32_t entry_max, gap_max;
+    uint32_t entry_bin[BINS], gap_bin[BINS];
 };
 static struct core_state {
     volatile uint32_t requested, armed, stop;
     uint32_t rate_hz, paths;
     struct path control, task;   /* the interrupt handler's samples; the woken task's samples */
     struct worst worst[WORST];
+    struct worst entry_worst[WORST]; /* task path: the largest handler entry delays with the interrupted context */
     struct ss_ring ring;
     uint64_t consumed, gaps;
     uint32_t expected;
     TaskHandle_t task_handle;
     uint64_t fired_deadline;     /* the deadline whose interrupt woke the task */
+    uint64_t fired_entry;        /* the counter value at that interrupt's handler start */
 } __attribute__((aligned(64))) state[CORES];
 
 static inline uint64_t counter(void)
@@ -164,7 +170,23 @@ static void handle_task_path(struct core_state *s)
     const unsigned missed = advance(&s->task, now, &served);
     program_task(s->task.deadline, 1);
     s->fired_deadline = served;
+    s->fired_entry = now;
     s->task.missed += missed;
+    {
+        const uint64_t late = now - served;
+        const uint32_t entry = late > 0xffffffffu ? 0xffffffffu : (uint32_t)late;
+        ++s->task.entry_bin[entry / SS_CONTROL_BIN_TICKS < BINS ? entry / SS_CONTROL_BIN_TICKS : BINS - 1u];
+        if (entry > s->task.entry_max) s->task.entry_max = entry;
+        unsigned low = 0;
+        for (unsigned i = 1; i < WORST; ++i) if (s->entry_worst[i].latency < s->entry_worst[low].latency) low = i;
+        if (entry > s->entry_worst[low].latency) {
+            struct worst *w = &s->entry_worst[low];
+            uint64_t pmr, rpr;
+            __asm__ volatile("mrs %0, icc_pmr_el1\n mrs %1, icc_rpr_el1\n mrs %2, elr_el1\n mrs %3, spsr_el1\n mrs %4, tpidrro_el0"
+                             : "=r"(pmr), "=r"(rpr), "=r"(w->elr), "=r"(w->spsr), "=r"(w->task));
+            w->latency = entry; w->pmr = (uint32_t)pmr; w->rpr = rpr; w->nesting = ullCriticalNestings[this_core()]; w->when = now;
+        }
+    }
     BaseType_t woken = pdFALSE;
     if (s->task_handle) vTaskNotifyGiveFromISR(s->task_handle, &woken);
     portYIELD_FROM_ISR(woken);
@@ -178,6 +200,12 @@ static void task_path(void *argument)
         const uint64_t now = counter();
         if (s->stop) continue;
         const uint64_t deadline = s->fired_deadline;
+        {
+            const uint64_t gap = now - s->fired_entry;
+            const uint32_t g = gap > 0xffffffffu ? 0xffffffffu : (uint32_t)gap;
+            ++s->task.gap_bin[g / SS_CONTROL_BIN_TICKS < BINS ? g / SS_CONTROL_BIN_TICKS : BINS - 1u];
+            if (g > s->task.gap_max) s->task.gap_max = g;
+        }
         record(&s->task, now, deadline, 0);
     }
 }
@@ -274,9 +302,29 @@ unsigned ulSunstoneControlStatsRead(unsigned core, unsigned path, struct ss_cont
 }
 const uint32_t *ulSunstoneControlHistogram(unsigned core, unsigned path, unsigned kind)
 {
-    if (core < FIRST_CORE || core >= FIRST_CORE + CORES - 1u || path > 1u || kind > 1u) return 0;
+    if (core < FIRST_CORE || core >= FIRST_CORE + CORES - 1u || path > 1u || kind > (path ? 3u : 1u)) return 0;
     const struct path *p = path ? &state[core].task : &state[core].control;
-    return kind ? p->jitter_bin : p->latency_bin;
+    switch (kind) {
+    case 0: return p->latency_bin;
+    case 1: return p->jitter_bin;
+    case 2: return p->entry_bin;
+    default: return p->gap_bin;
+    }
+}
+/* Rank r (0 largest) of the task path's handler entry delays with the interrupted context. */
+unsigned ulSunstoneTaskEntryWorst(unsigned core, unsigned rank, struct ss_control_worst *out)
+{
+    if (core < FIRST_CORE || core >= FIRST_CORE + CORES - 1u || rank >= WORST || !state[core].rate_hz) return 0;
+    const struct worst *copy[WORST];
+    for (unsigned i = 0; i < WORST; ++i) copy[i] = &state[core].entry_worst[i];
+    for (unsigned i = 0; i < WORST; ++i)
+        for (unsigned j = i + 1; j < WORST; ++j)
+            if (copy[j]->latency > copy[i]->latency) { const struct worst *t = copy[i]; copy[i] = copy[j]; copy[j] = t; }
+    const struct worst *w = copy[rank];
+    if (!w->latency) return 0;
+    out->latency_ns = w->latency * 1000u / TICKS_PER_US; out->pmr = w->pmr; out->elr = w->elr; out->spsr = w->spsr;
+    out->rpr = w->rpr; out->task = w->task; out->nesting = w->nesting; out->when_us = w->when / TICKS_PER_US;
+    return 1;
 }
 /* Rank r (0 largest) of the worst control-path latencies of a core; fields in the order of struct ss_control_worst. */
 unsigned ulSunstoneControlWorst(unsigned core, unsigned rank, struct ss_control_worst *out)

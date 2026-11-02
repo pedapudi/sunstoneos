@@ -17,7 +17,8 @@ struct ss_control_stats {
 #define SS_CONTROL_BIN_TICKS 4u
 /* Paths to run per core: bit 0 the control interrupt handler, bit 1 the woken task. */
 unsigned ulSunstoneControlStartPaths(const unsigned *cores, const unsigned *rate_hz, const unsigned *paths, unsigned n);
-/* The latency (kind 0) or jitter (kind 1) histogram of a path, SS_CONTROL_BINS counts of one tick each. */
+/* The latency (kind 0) or jitter (kind 1) histogram of a path, SS_CONTROL_BINS counts of one tick each. The task
+ * path also has kind 2, the handler's entry delay after the deadline, and kind 3, the task start after the handler. */
 const uint32_t *ulSunstoneControlHistogram(unsigned core, unsigned path, unsigned kind);
 /* Start `rate_hz[i]` on `cores[i]` (not core 0). Returns the number started. Call once, from a task. */
 unsigned ulSunstoneControlStart(const unsigned *cores, const unsigned *rate_hz, unsigned n);
@@ -25,6 +26,8 @@ void vSunstoneControlStop(void);
 struct ss_control_worst { uint32_t latency_ns, pmr; uint64_t elr, spsr, rpr, task, nesting, when_us; };
 /* The rank-th largest control-path latency of a core with the interrupted context (see runtime/control_irq.c). */
 unsigned ulSunstoneControlWorst(unsigned core, unsigned rank, struct ss_control_worst *out);
+/* The rank-th largest task-path handler entry delay of a core with the interrupted context. */
+unsigned ulSunstoneTaskEntryWorst(unsigned core, unsigned rank, struct ss_control_worst *out);
 /* Owner-work drains of a CPU: which 0 from interrupt exit, 1 skipped at exit by the mask guard, 2 from the tick, 3 service passes run. */
 uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which);
 unsigned ulSunstoneControlWfi(unsigned core, uint64_t *count, uint64_t *max_ticks, uint64_t *over5, const uint32_t **bins);
