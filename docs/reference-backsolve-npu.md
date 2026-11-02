@@ -891,3 +891,27 @@ uses development DRAM mode, with the watchdog armed, at 852 MHz and 800 mV, with
 register file that raises the exception, answers the cancel handshake, and optionally answers the interrupt mask late,
 never completes the cancel, or blocks one read. It shows the recovery in three scenarios and the record of each of five
 blocking sites, and two controls that let the access through. It shows the plumbing, not the hardware behaviour.
+
+### Shader operations through the loader
+
+The loader admits shader operations (kind 1) by the rules of the loader specification in
+[the command formats](hardware/npu-command-formats.md#loader-specification-shader-operations): the packet grammar
+(S1), the register set (S2a: only the registers the compiler writes, with the flush and synchronization writes pinned,
+and the uniform bank), the uniform bank (S4), the program length (S5), the patches and their regions (S6), the
+descriptor extents (S7, S8) and the shader table (S9). The MMU, flush, command-fetch and control registers are refused
+by name in `checks/nbg-graph-admission.py`. The program section is copied into the slot's read-only region at a multiple
+of 256 bytes, after the dynamic-input section.
+
+**Board containment of the shader path.** Whether the engine's shader and program-fetch paths go through the page
+tables is the open question of the specification. One image runs six shader graphs with recovery between them (all on
+3-1 at 852 MHz and 800 mV, development DRAM mode, watchdog armed): job 0 (floor) has the address word of its first tensor
+descriptor aimed at the 1 MiB canary 64 KiB in, which the NPU page tables do not map; job 1 (sin) has its program
+address (source 0, register `0x040a`) aimed at the same place; jobs 2 to 5 (exp, gather, resize, pad) are untouched and
+must equal the SDK simulator's output byte for byte.
+
+**Prediction.** If the page tables confine the shader path, the image returns normally with the receipt of six records:
+jobs 0 and 1 with status "fault", the faulting address (the canary position) and the unchanged canary CRC `0x4696ca8e`,
+a nonzero MMU status, and the reply-path marks as for the earlier runs; jobs 2 to 5 with status "match". A completion of
+job 0 or 1 without an exception (ticket byte `0xee` in a watchdog record) would show that the shader path reaches
+memory outside the tables. If the image ends at the watchdog, the first-failure record names the step (ticket byte
+stage, marks, window) and the cause is derived from it before another run.

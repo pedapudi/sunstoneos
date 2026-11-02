@@ -68,6 +68,11 @@ done = run(exe, 27)
 (out / 'case-27.log').write_text(done.stdout + done.stderr)
 assert done.returncode == 0, (27, done.returncode, done.stdout[-400:], done.stderr[-600:])
 print('case 27', done.stdout.strip().splitlines()[-1])
+# Case 28: thirty-one slots.
+done = run(exe, 28)
+(out / 'case-28.log').write_text(done.stdout + done.stderr)
+assert done.returncode == 0, (28, done.returncode, done.stdout[-400:], done.stderr[-600:])
+print('case 28', done.stdout.strip().splitlines()[-1])
 # Case 26: far more jobs than the former quota, in a session whose job field is 1. A session never fails because it has
 # run a number of jobs.
 done = run(exe, 26)

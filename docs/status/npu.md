@@ -29,7 +29,7 @@ at an address the tables do not map (an input or an output; a DRAM canary of the
 one), failed one by one with an NPU MMU exception at the aimed address, MMU status 1 (slave not present), the canary
 CRC unchanged after each and the session usable; a relu job after the five equals the simulator. Each recovery takes about
 32 ms, of which 20 ms is the vendor's cancel poll, whose completion bit never appeared; the reset and re-initialization
-that follow restore the NPU. See [the reference](../reference-backsolve-npu.md#npu-mmu-exceptions). The finite idle benchmark qualifies internal clock gating on 3-3 at 852 MHz/800 mV: five rounds of baseline, control and gating pass every limit of the design (throughput, p99, maximum latency, CPU time), every resume of the 11 ms and 100 ms gaps is within 100 µs (largest 25 µs) and the 9 ms gaps never gate.
+that follow restore the NPU. See [the reference](../reference-backsolve-npu.md#npu-mmu-exceptions). Shader operations (kind 1) are admitted by the shader specification: exp, gather, resize and pad match the simulator byte for byte on the board, and a tensor descriptor pointing at an unmapped address and a program address pointing at one each fault at that address with the canary unchanged and the NPU recovered, so the shader and program-fetch paths go through the page tables. Tensor-processor and software operations (kinds 3 and 4) stay refused: the board's NPU reports zero tensor-processor engines and the compiler emits neither kind for this target. The finite idle benchmark qualifies internal clock gating on 3-3 at 852 MHz/800 mV: five rounds of baseline, control and gating pass every limit of the design (throughput, p99, maximum latency, CPU time), every resume of the 11 ms and 100 ms gaps is within 100 µs (largest 25 µs) and the 9 ms gaps never gate.
 
 ## Open work
 
@@ -47,7 +47,7 @@ that follow restore the NPU. See [the reference](../reference-backsolve-npu.md#n
 Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-40 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+41 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -91,4 +91,5 @@ Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added
 | `1793601039576662539-3cfb241d` | 2026-11-02 | 3-1 | `dbc06474fcbc` | watchdog-reset | inconclusive | run_total 18.69 s |
 | `1793601982806302701-49b951b4` | 2026-11-02 | 3-1 | `69a7aa80419f` | returned | passed | run_total 21.817 s |
 | `1793602347321241109-498efad0` | 2026-11-02 | 3-1 | `cfb505b770a8` | returned | passed | run_total 21.199 s |
+| `1793605718512399089-e43229a0` | 2026-11-02 | 3-1 | `808f31915bb4` | returned | passed | run_total 65.724 s |
 <!-- evidence-table:end -->

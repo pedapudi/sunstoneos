@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ('drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_relocation.c', 'drivers/npu/nbg_model.c',
                 'include/nbg_assembly.h', 'tools/npu-nbg-mutate.py', 'checks/nbg-graph-admission.py')
 GRAPHS = ('add', 'sub', 'mul', 'relu', 'sig', 'tanh', 'swish', 'ln176', 'ln64', 'sm64', 'sm32', 'chainA', 'chainB',
-          'chainC', 'deep', 'mm', 'glu')
+          'chainC', 'deep', 'mm', 'glu', 'sh-exp', 'sh-gather', 'sh-resize', 'sh-pad')
 
 
 def module(name, path):
@@ -89,6 +89,28 @@ class Graph:
         assert self.native_obj.lib.nbg_model_table(c.byref(self.native_obj.view), 26, self.native_obj.operations()[op][3], c.byref(span)) == 1
         return span.data - self.native_obj.view.data - self.section(20).offset
 
+    def state_words(self, op):
+        """The load-state words of an operation, with the byte offset of the stream in the load-states section."""
+        span = nm.Span()
+        assert self.native_obj.lib.nbg_model_table(c.byref(self.native_obj.view), 26, self.native_obj.operations()[op][3], c.byref(span)) == 1
+        at = self.state_offset(op)
+        raw = self.data[self.section(20).offset + at:self.section(20).offset + at + span.bytes]
+        return at, struct.unpack('<%dI' % (len(raw) // 4), raw)
+
+    def state_word_offset(self, op, value, occurrence=0):
+        """Byte offset in the load-states section of the n-th word equal to value."""
+        at, words = self.state_words(op)
+        found = [i for i, w in enumerate(words) if w == value]
+        return at + 4 * found[occurrence]
+
+    def kind0_patch_offset(self, op, destination):
+        """Byte offset in the patch section of the state-stream patch of an operation with this destination."""
+        operation = self.native_obj.operations()[op]
+        for i in range(operation[4], operation[4] + operation[5]):
+            if self.native_obj.patches()[i][1] == destination:
+                return 28 * i
+        raise KeyError(destination)
+
     def word_offset(self, op, word):
         return self.native_obj.operations()[op][1] * 192 + word * 4
 
@@ -128,6 +150,7 @@ def main():
         print('refused:', label, '(without its rule: admitted)' if control else '(refused by the relocation bound)')
     g = graphs
     NN, PATCH, INPUT, STATES = 6, 9, 0, 20
+    PATCH_SECTION = PATCH
     # 1. A second input outside the mapping.
     case('second input names a graph input that does not exist', 'add', [(PATCH, g['add'].patch_offset(1, 136) + 12, u32(7))], None)
     case('second input ring lies beyond VIP SRAM', 'chainB', [(PATCH, g['chainB'].patch_offset(2, 136) + 16, u32(98304 + 0x100000)),
@@ -166,6 +189,48 @@ def main():
                   [(STATES, g['ln176'].state_offset(2) + 4, u32(6))])
     case('a program placed beyond the program memory', 'ln176', [(STATES, g['ln176'].state_offset(2) + 4, u32(256))],
          [('nbg_assembly.c', 'if (word(span.data + 4) > 255) return 0;', '')])
+    # 6. Shader operations (docs/hardware/npu-command-formats.md, "Loader specification (shader operations)"). A shader
+    # stream may write only the registers the compiler writes and the uniform bank. The MMU, cache-flush and
+    # command-fetch registers are refused one by one; each case has a control that rebuilds the assembler without the
+    # rule, and the changed graph must then be admitted.
+    SH, SHP = 'sh-exp', 9
+    REGISTER_RULE = [('nbg_assembly.c', 'if (!uniform && !shader_register(r)) return 0;', 'if (0) return 0;')]
+    base = g[SH].native_obj.operations()[1]
+    header_02a4 = 0x080102a4
+    for label, register in (('the MMU control register (0x388)', 0x00e2), ('the MMU status register (0x38c)', 0x00e3),
+                            ('the command-fetch size register (0x3a4)', 0x00e9), ('the command-fetch control register (0x3a8)', 0x00ea),
+                            ('the command-fetch address register (0x654)', 0x0195), ('the control register (0x000)', 0x0000),
+                            ('a register that the compiler does not write (0x1234)', 0x1234)):
+        case('a shader stream writes ' + label, SH, [(STATES, g[SH].state_word_offset(1, header_02a4), u32(0x08010000 | register))],
+             REGISTER_RULE)
+    flush = 0x08010e03
+    case('a shader stream selects other cache-flush bits than the loader-owned 0x24', SH,
+         [(STATES, g[SH].state_word_offset(1, flush) + 4, u32(0x25))],
+         [('nbg_assembly.c', 'if ((r == 0x0e02 && v != 0x701) || (r == 0x0e03 && v != 0x24)) return 0;', 'if (0) return 0;')])
+    case('a shader stream uses another synchronization token than 0x701', SH,
+         [(STATES, g[SH].state_word_offset(1, 0x48000000) + 4, u32(0x700))],
+         [('nbg_assembly.c', 'word(state.data + 4 * (i + 1)) != 0x701) return 0;', '0) return 0;')])
+    case('a shader stream writes a uniform word twice', SH,
+         [(STATES, g[SH].state_word_offset(1, 0x0804d804), u32(0x0804d800))],
+         [('nbg_assembly.c', 'if (uniform_seen[bit / 8] & (1u << (bit % 8))) return 0;', 'if (0) return 0;')])
+    case('a shader program length differs from its instruction count', SH,
+         [(STATES, g[SH].state_word_offset(1, 0x08010424) + 4, u32(5))],
+         [('nbg_assembly.c', '(uint64_t)instructions * 16 != program.bytes) return 0;', '0) return 0;'),
+          ('nbg_assembly.c', 'last_pc != instructions - 1 ||', '0 ||')])
+    case('a shader operation patches a second program address', SH,
+         [(PATCH_SECTION, g[SH].kind0_patch_offset(1, 28) + 8, u32(0))],
+         [('nbg_assembly.c', 'if (reg != 0x040a || p.index != -1 || p.source_offset || p.transformed || program_patch) return 0;', 'if (0) return 0;')])
+    case('a shader patch names a source that the loader does not know', 'sh-gather',
+         [(PATCH_SECTION, 28 * (g['sh-gather'].native_obj.operations()[1][4] + 1) + 8, u32(4))], None)
+    case('a shader patch has an unknown transformed field', 'sh-gather',
+         [(PATCH_SECTION, 28 * (g['sh-gather'].native_obj.operations()[1][4] + 1) + 20, u32(5))],
+         [('nbg_assembly.c', 'if (p.transformed && !(p.transformed == 14 && p.source == 6)) return 0;', 'if (0) return 0;'),
+          ('nbg_relocation.c', 'p->source_offset >= p->source_bytes ||', '0 ||')])
+    case('a shader program is not 256-byte aligned', SH, [(24, 0, u32(128))],
+         [('nbg_assembly.c', 'if ((start & 255) || !program.bytes', 'if (!program.bytes')])
+    case('a shader descriptor reaches beyond the tensor it names', SH,
+         [(PATCH_SECTION, g[SH].kind0_patch_offset(1, 28) + 16, u32(64))],
+         [('nbg_assembly.c', 'if ((uint64_t)p.source_offset + extent > region) return 0;', 'if (0) return 0;'), *RELOCATION_OFF])
     print('PASS %d graphs, %d unseen programs admitted and %d refusal cases' % (len(GRAPHS), len(admitted), len(results)))
 
 

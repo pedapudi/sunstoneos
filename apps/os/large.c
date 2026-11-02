@@ -33,7 +33,7 @@ __attribute__((weak)) void os_large_report(const struct large_slot *slot, const 
 
 /* The application's ASID, taken once from the pool and never given back (include/app_region.h). */
 static struct app_asid_pool asids;
-static uint8_t owner_asid;
+static uint16_t owner_asid;
 /* Sized by the image's generated tables from the manifest. */
 extern const unsigned os_large_capacity;
 extern struct large_slot os_large_slot_storage[];
@@ -63,6 +63,9 @@ int os_large_prepare(void)
     const uint64_t *base_l1 = (const uint64_t *)(uintptr_t)(ttbr & APP_PTE_ADDR_MASK);
     struct app_region_range usable[APP_REGION_SLOTS];
     unsigned ranges = usable_ranges(base_l1, usable, APP_REGION_SLOTS);
+    uint64_t mmfr0, tcr;
+    __asm__ volatile("mrs %0, id_aa64mmfr0_el1\n mrs %1, tcr_el1" : "=r"(mmfr0), "=r"(tcr));
+    app_asid_pool_init(&asids, mmfr0, tcr);
     owner_asid = app_asid_alloc(&asids);
     if (!owner_asid || !ranges || count > os_large_capacity ||
         app_region_ledger_init(&ledger, usable_storage, APP_REGION_SLOTS, os_large_entry_storage, os_large_capacity, usable, ranges)) return 0;
