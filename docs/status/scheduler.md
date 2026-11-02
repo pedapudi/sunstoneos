@@ -22,6 +22,7 @@ qualification.
 
 ## Open work
 
+0c. Known limits of the unmasked task-lock wait (`runtime/lock_prewait.c`): (1) an EL0 task cannot read the interrupt mask, so it infers an open mask from a zero critical nesting count and the absence of the task lock; a bare `portSET_INTERRUPT_MASK` outside a critical section, which does not take the task lock, can therefore wait with the mask raised, for at most the 100 us limit; (2) the 100 us limit is checked only when an event wakes the core, so a wait behind a long holder can last as long as the holder (914 us once, on the fork, core 3); the wait is unmasked either way.
 0b. Step 2 of the measure-first plan: fix the spans in the sweep table longest first on both kernels, each with a
    before and after span and a model-time check against 2%; then the above-mask control path, the robot workload and
    the tickless comparison. The sweep under the mimus load is below.

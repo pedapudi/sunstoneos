@@ -417,6 +417,20 @@ execute-never bits). The model aborts on a descriptor bit it does not model
   with global kernel entries;
 - a mutation that gives read-only regions write permission fails the check.
 
+## Status of the OS integration
+
+- **Admission (implemented, host- and QEMU-checked).** `tools/sunstone-manifest.py` takes `large_regions` in
+  `manifest.json` (a file or a raw extent, a size that is a multiple of 2 MiB, the source length and its SHA-256)
+  and emits the section `sunstone_large_regions` beside the manifest. `apps/os/large.c` runs in
+  `os_application_prepare()`, before any task exists: it derives the usable upper memory from the installed kernel
+  table (each level-1 slot that holds the EL1-only non-global block, which the table builder writes only when the
+  decode check passed), takes every record from the ledger all or nothing, and builds the application's space. A
+  refusal stops the start. `checks/qemu-os-boot.py` boots an application that declares a 1 GiB file region and a
+  64 MiB extent region on a 4 GiB virtual board: both are placed (`0x8000_0000`, `0xc000_0000`), the application
+  runs, and an application whose regions exceed the upper memory never starts.
+- **Not yet implemented:** the task-switch hook that selects the space, the `ss_large_*` calls, the loader task and
+  the 1 GiB test application with its bandwidth measurement at the approved top points.
+
 ## Prerequisites and changes outside this design's files
 
 1. **Upper memory must be mapped.** The memory qualification image's run on

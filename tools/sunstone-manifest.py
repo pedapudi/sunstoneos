@@ -75,7 +75,7 @@ def integer(value, where, low=0, high=(1 << 64) - 1):
 def load(path):
     """manifest.json -> normalized dict with integer fields."""
     raw = json.loads(Path(path).read_text())
-    known = {'name', 'devices', 'cpu', 'regions', 'audio', 'deadlines', 'output_limit', 'host_ops', 'npu'}
+    known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'deadlines', 'output_limit', 'host_ops', 'npu'}
     require(set(raw) <= known, '%s: unknown keys %s' % (path, sorted(set(raw) - known)))
     name = raw['name']
     require(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9-]{0,14}', name) is not None,
@@ -117,10 +117,12 @@ def load(path):
     if 'npu' in raw:
         n = raw['npu']
         require(set(n) <= {'slots', 'in_flight', 'graphs', 'links'}, name + ': unknown npu keys')
+        require({'slots', 'in_flight', 'graphs'} <= set(n), name + ': npu declares slots, in_flight and graphs')
+
         def count(value, label, low):
-            return integer(len(value) if isinstance(value, list) else value, name + ' npu ' + label, low, 255)
-        m['npu'] = {'slots': count(n.get('slots', 1), 'slots', 1), 'in_flight': count(n.get('in_flight', 1), 'in_flight', 1),
-                    'graphs': count(n.get('graphs', 1), 'graphs', 1), 'links': count(n.get('links', 0), 'links', 0)}
+            return integer(len(value) if isinstance(value, list) else value, name + ' npu ' + label, low, (1 << 32) - 1)
+        m['npu'] = {'slots': count(n['slots'], 'slots', 1), 'in_flight': count(n['in_flight'], 'in_flight', 1),
+                    'graphs': count(n['graphs'], 'graphs', 1), 'links': count(n.get('links', 0), 'links', 0)}
     audio = raw.get('audio')
     if audio is not None or (required | optional) & CAPTURE:
         require(audio is not None, name + ': a capture device needs an audio format')
@@ -169,7 +171,69 @@ def load(path):
                         'sha256': digest or '0' * 64})
     m['regions'] = regions
     m['region_names'] = names
+    m['large_regions'], m['large_names'] = load_large(name, raw.get('large_regions', []))
     return m
+
+
+LARGE = struct.Struct('<IIQQQ32s48s')
+assert LARGE.size == 112
+LARGE_MAX = 4
+LARGE_GIB = 11 << 30
+LARGE_PATH = re.compile(r'/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*')
+
+
+def load_large(name, items):
+    """The large_regions of manifest.json: regions of upper memory loaded from the card (sunstone_large.h)."""
+    require(isinstance(items, list) and len(items) <= LARGE_MAX, name + ': at most %d large regions' % LARGE_MAX)
+    records, names = [], []
+    for i, r in enumerate(items):
+        where = '%s large region %d' % (name, i)
+        require(set(r) <= {'name', 'bytes', 'source_bytes', 'access', 'file', 'first_sector', 'sha256'},
+                where + ': unknown keys %s' % sorted(set(r) - {'name', 'bytes', 'source_bytes', 'access', 'file', 'first_sector', 'sha256'}))
+        require(re.fullmatch(r'[a-z][a-z0-9_]{0,23}', r.get('name', '')) is not None and r['name'] not in names,
+                where + ': distinct name [a-z0-9_] required')
+        names.append(r['name'])
+        size = integer(r['bytes'], where + ' bytes', BLOCK, LARGE_GIB)
+        require(size % BLOCK == 0, where + ': capacity is a multiple of 2 MiB')
+        source = integer(r['source_bytes'], where + ' source_bytes', 1, size)
+        access = r.get('access', ['read'])
+        require(access in (['read'], ['read', 'write']), where + ': access is [read] or [read, write]')
+        digest = r.get('sha256', '')
+        require(re.fullmatch(r'[0-9a-f]{64}', digest) is not None and digest != '0' * 64,
+                where + ': a 64-digit lowercase SHA-256 other than zero is required')
+        file, sector = r.get('file'), r.get('first_sector')
+        require((file is None) != (sector is None), where + ': name a file or a first_sector, not both')
+        flags = 1 if 'write' in access else 0
+        if file is not None:
+            require(isinstance(file, str) and len(file) <= 47 and LARGE_PATH.fullmatch(file) is not None,
+                    where + ': file is an absolute path of at most 47 characters [A-Za-z0-9._/-]')
+            sector = 0
+        else:
+            flags |= 2
+            sector = integer(sector, where + ' first_sector', 1, (1 << 40))
+            file = ''
+        records.append({'index': i, 'flags': flags, 'bytes': size, 'source_bytes': source, 'first_sector': sector,
+                        'sha256': digest, 'path': file})
+    return records, names
+
+
+def pack_large(m):
+    return b''.join(LARGE.pack(r['index'], r['flags'], r['bytes'], r['source_bytes'], r['first_sector'],
+                               bytes.fromhex(r['sha256']), r['path'].encode()) for r in m['large_regions'])
+
+
+def unpack_large(raw):
+    require(len(raw) % LARGE.size == 0, 'large section size %d is not a record multiple' % len(raw))
+    out = []
+    for base in range(0, len(raw), LARGE.size):
+        index, flags, size, source, sector, digest, path = LARGE.unpack_from(raw, base)
+        require(index == base // LARGE.size and not flags & ~3 and size and size % BLOCK == 0 and 0 < source <= size and any(digest),
+                'large record at %d is malformed' % base)
+        text = path.rstrip(b'\0')
+        require(b'\0' not in text and len(path) - len(text) >= 1, 'large record at %d: path has no terminator' % base)
+        out.append({'index': index, 'flags': flags, 'bytes': size, 'source_bytes': source, 'first_sector': sector,
+                    'sha256': digest.hex(), 'path': text.decode()})
+    return out
 
 
 def span(r):
@@ -208,12 +272,6 @@ def assign(m):
                 r['address'] = -(-max(clash) // BLOCK) * BLOCK
             place(i, r)
     return m
-
-
-def npu_word(m):
-    """The four bytes of the session record's NPU declaration (include/npu_declaration.h), 0 when none is declared."""
-    n = m.get('npu')
-    return 0 if n is None else n['slots'] | n['in_flight'] << 8 | n['graphs'] << 16 | n['links'] << 24
 
 
 def pack(m):
@@ -261,7 +319,7 @@ def unpack(raw):
 
 
 def public(m):
-    return {k: v for k, v in m.items() if k != 'region_names'}
+    return {k: v for k, v in m.items() if k not in ('region_names', 'large_names')}
 
 
 def cname(name):
@@ -294,6 +352,14 @@ def c_source(m):
         lines.append('        {UINT64_C(%#x), UINT64_C(%#x), %d, %#xu, {%s}},' % (
             r['address'], r['bytes'], r['kind'], r['access'], digest))
     lines += ['    },', '};', '']
+    if m['large_regions']:
+        lines += ['__attribute__((used, retain, section("sunstone_large_regions"), aligned(8)))',
+                  'const struct ss_large_region %s_large_regions[] = {' % c]
+        for r in m['large_regions']:
+            digest = ','.join('0x' + r['sha256'][i:i + 2] for i in range(0, 64, 2))
+            lines.append('    {%du, %#xu, UINT64_C(%#x), UINT64_C(%#x), UINT64_C(%d), {%s}, "%s"},' % (
+                r['index'], r['flags'], r['bytes'], r['source_bytes'], r['first_sector'], digest, r['path']))
+        lines += ['};', '']
     return '\n'.join(lines)
 
 
@@ -311,6 +377,8 @@ def c_header(m):
              'void %s_main(const struct ss_grant *grant);' % c]
     for i, n in enumerate(m['region_names']):
         lines.append('#define %s_REGION_%s %du' % (c.upper(), n.upper(), i))
+    for i, n in enumerate(m['large_names']):
+        lines.append('#define %s_LARGE_%s %du' % (c.upper(), n.upper(), i))
     lines += ['#ifdef __cplusplus', '}', '#endif', '#endif', '']
     return '\n'.join(lines)
 
@@ -389,9 +457,15 @@ def main():
     e.add_argument('--output', type=Path, required=True)
     d = sub.add_parser('decode')
     d.add_argument('section', type=Path)
+    dl = sub.add_parser('decode-large')
+    dl.add_argument('section', type=Path)
     a = p.parse_args()
     if a.command == 'decode':
         json.dump(unpack(a.section.read_bytes()), sys.stdout, indent=2)
+        print()
+        return
+    if a.command == 'decode-large':
+        json.dump(unpack_large(a.section.read_bytes()), sys.stdout, indent=2)
         print()
         return
     require(bool(a.manifest) != a.no_application, 'select --manifest or --no-application')
@@ -408,6 +482,7 @@ def main():
     (a.output / (c + '-app.h')).write_text(c_header(m))
     (a.output / 'sunstone-tables.c').write_text(c_tables(m))
     (a.output / 'manifest.bin').write_bytes(pack(m))
+    (a.output / 'large.bin').write_bytes(pack_large(m))
     (a.output / 'manifest.json').write_text(json.dumps([public(m)], indent=2) + '\n')
 
 
