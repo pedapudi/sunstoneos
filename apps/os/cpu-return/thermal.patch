@@ -9,15 +9,26 @@
  #include "../board/application.h"
  #include "../board/session.h"
  #include "a733_thermal.h"
-@@ -123,6 +125,12 @@
+@@ -123,6 +125,24 @@
  #else
  #define record_reading(now,level) ((void)0)
  #endif
++/* 1 ready, 0 not ready, 2 ready except that another core is inside the clock lease registry at this moment (the status
++ * is a try-lock): that is a retry, not a refusal. */
 +int os_cpu_return_thermal_ready(void)
 +{
-+    return thermal.active&&thermal.driver.initialized&&!thermal.driver.fault&&!thermal.retaining&&
-+        !atomic_load_explicit(&thermal.failed,memory_order_acquire)&&
-+        a733_clock_token_status(&providers.shared.clocks,&thermal.token)==A733_CLOCK_OK;
++    if(!(thermal.active&&thermal.driver.initialized&&!thermal.driver.fault&&!thermal.retaining&&
++         !atomic_load_explicit(&thermal.failed,memory_order_acquire)))return 0;
++    const enum a733_clock_result token=a733_clock_token_status(&providers.shared.clocks,&thermal.token);
++    return token==A733_CLOCK_OK?1:token==A733_CLOCK_BUSY?2:0;
++}
++/* Which predicates fail, one bit each, for the refusal record of the entry guard. */
++uint32_t os_cpu_return_thermal_state(void)
++{
++    return (thermal.active?0:1)|(thermal.driver.initialized?0:2)|(thermal.driver.fault?4:0)|(thermal.retaining?8:0)|
++        (atomic_load_explicit(&thermal.failed,memory_order_acquire)?16:0)|
++        (a733_clock_token_status(&providers.shared.clocks,&thermal.token)==A733_CLOCK_OK?0:32)|(board_live(NULL)?0:64)|
++        (os_application_deadline()?0:128)|(atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)?256:0);
 +}
  static uint64_t deadline(void){return board.session.deadline_us-10000;}
  static int live(void)

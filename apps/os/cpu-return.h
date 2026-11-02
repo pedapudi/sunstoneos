@@ -28,6 +28,7 @@ int os_cpu_return_spi_restore(void);
 struct a733_cpu_clock;
 struct a733_thermal_policy;
 int os_cpu_return_thermal_ready(void);
+uint32_t os_cpu_return_thermal_state(void);
 int os_cpu_return_entry_guard(const struct a733_cpu_clock *,const struct a733_thermal_policy *,
     uint64_t,int (*)(void *,uintptr_t,uint32_t *),void *);
 /* The last guard refusal: detail << 12 | source line in cpu-return-entry.c;

@@ -21,7 +21,11 @@ int os_cpu_return_entry_guard(const struct a733_cpu_clock *c,
     os_cpu_return_entry_refusal=0;
     if(*(volatile const uint64_t *)os_cpu_return_entry_profile!=UINT64_C(0x31544e4552505543)||
        !c||!p||!read)return REFUSE(0);
-    if(!p->initialized||!os_cpu_return_thermal_ready())return REFUSE(p->initialized);
+    /* The clock lease registry is a try-lock: another core inside it at this moment (the NPU start-up takes its clocks
+     * there) says busy, which is a pass to try again, not a refusal. */
+    const int thermal=os_cpu_return_thermal_ready();
+    if(thermal==2&&p->initialized)return 0;
+    if(!p->initialized||thermal!=1)return REFUSE(p->initialized|os_cpu_return_thermal_state()<<1);
     if(c->failed||c->inherited!=3)return REFUSE(c->inherited);
     /* The PMIC inspection's DCDC5/DCDC3 readings, in 10 mV units to 1540 mV. */
     if(c->rail_uv[0]!=800000||c->rail_uv[1]!=800000)
