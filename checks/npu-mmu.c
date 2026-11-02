@@ -172,6 +172,21 @@ int main(void)
     refuses(arena, capacity, arena_pa, regions, A733_NPU_MMU_MAX_REGIONS + 1, &image);
     refuses((void *)(UINTPTR_MAX - 4095), capacity, arena_pa, regions, 1, &image);
 
+    /* Page zero. The OS loader admits an unpatched descriptor pointer word below 0x1000 because no table the
+     * builder generates maps device page zero (nbg_assembly.c, ring()). Every page size refuses a mapping at
+     * device 0, the lowest mapping the builder accepts for a page size starts at that page size (at least 4096), and
+     * with such mappings present every address below 0x1000 faults on translation, for reads and writes. */
+    for (unsigned i = 0; i < 4; ++i) {
+        const enum a733_npu_page_size size = (enum a733_npu_page_size)shifts[i];
+        const uint64_t page = UINT64_C(1) << shifts[i];
+        regions[0] = (struct a733_npu_region){UINT64_C(0x1200000000), page, 0, size, 1};
+        refuse(1);
+        regions[0].device = (uint32_t)page;
+        build(1);
+        assert(image.tables == 1);
+        translated((uint32_t)page, 1, UINT64_C(0x1200000000));
+        for (uint32_t address = 0; address < 0x1000; ++address) { faults(address, 0, 0); faults(address, 1, 0); }
+    }
     build(0); /* Rebuilding an offline image removes every previous mapping. */
     assert(image.bytes == 4096 && image.tables == 0);
     for (unsigned i = 0; i < 256; ++i) faults(i << 24, 0, 0);

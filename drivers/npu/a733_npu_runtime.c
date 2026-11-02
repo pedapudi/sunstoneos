@@ -61,6 +61,8 @@ struct sizes { size_t constant, read, write, staging; };
 static void need(const struct nbg_assembly_layout *l, size_t model_bytes, struct sizes *s)
 {
     size_t constant = l->buffers[NBG_ALLOC_NN].allocation_bytes + l->buffers[NBG_ALLOC_COEFF].allocation_bytes;
+    /* The dynamic-input allocation follows the coefficients in the same read-only region. */
+    if (l->dynamic) constant += l->buffers[nbg_layout_dynamic_index(l)].allocation_bytes;
     size_t read = 0, write = l->buffers[NBG_ALLOC_POOL].allocation_bytes;
     for (unsigned i = 0; i < l->inputs; ++i) read += l->buffers[NBG_ALLOC_INPUT + i].allocation_bytes;
     for (unsigned i = 0; i < l->outputs; ++i)
@@ -358,6 +360,11 @@ static void targets(struct npu_runtime_slot *s, const struct nbg_assembly_layout
     s->targets[NBG_ALLOC_NN] = (struct nbg_assembly_buffer){(void *)s->constant.cpu, nn, s->constant.device};
     s->targets[NBG_ALLOC_COEFF] = (struct nbg_assembly_buffer){(void *)(s->constant.cpu + nn),
         l->buffers[NBG_ALLOC_COEFF].allocation_bytes, s->constant.device + nn};
+    if (l->dynamic) {
+        const uint32_t at = nn + l->buffers[NBG_ALLOC_COEFF].allocation_bytes;
+        s->targets[nbg_layout_dynamic_index(l)] = (struct nbg_assembly_buffer){(void *)(s->constant.cpu + at),
+            l->buffers[nbg_layout_dynamic_index(l)].allocation_bytes, s->constant.device + at};
+    }
     s->targets[NBG_ALLOC_COMMAND] = (struct nbg_assembly_buffer){(void *)s->command.cpu,
         NPU_RUNTIME_COMMAND_BYTES, s->command.device};
     uint32_t pool = l->buffers[NBG_ALLOC_POOL].allocation_bytes, read = 0, write = pool;
@@ -374,8 +381,8 @@ static void targets(struct npu_runtime_slot *s, const struct nbg_assembly_layout
 static int same_plan(const struct nbg_assembly_layout *a, const struct nbg_assembly_layout *b)
 {
     if (a->inputs != b->inputs || a->outputs != b->outputs || a->nn_operations != b->nn_operations ||
-        a->command_body_bytes != b->command_body_bytes) return 0;
-    for (unsigned i = 0; i < NBG_ALLOC_INPUT + a->inputs + a->outputs; ++i)
+        a->command_body_bytes != b->command_body_bytes || a->dynamic != b->dynamic) return 0;
+    for (unsigned i = 0; i < nbg_layout_buffers(a); ++i)
         if (memcmp(&a->buffers[i], &b->buffers[i], sizeof(a->buffers[i]))) return 0;
     return 1;
 }
@@ -454,7 +461,7 @@ static int load_work(struct npu_runtime *rt)
         targets(s, plan);
         if (memcmp(digest, npu_admitted_models[rt->entry[s->model]].digest, 32) ||
             nbg_model_open((const void *)rt->staging, model->bytes, &rt->view) != NBG_DECODE_OK ||
-            !nbg_assembly_begin(&rt->view, s->targets, NBG_ALLOC_INPUT + plan->inputs + plan->outputs,
+            !nbg_assembly_begin(&rt->view, s->targets, nbg_layout_buffers(plan),
                                 &s->layout, &rt->cursor) || !same_plan(&s->layout, plan)) {
             load_end(rt, s, 0); return 1;
         }
@@ -489,23 +496,38 @@ static int load_work(struct npu_runtime *rt)
     case LOAD_PAD: {
         for (unsigned i = NBG_ALLOC_NN; i <= NBG_ALLOC_COEFF; ++i) {
             uint32_t payload = s->layout.buffers[i].payload_bytes;
-            memset((unsigned char *)s->targets[i].cpu + payload, 0, s->targets[i].bytes - payload);
+            if (s->targets[i].bytes) memset((unsigned char *)s->targets[i].cpu + payload, 0, s->targets[i].bytes - payload);
+        }
+        if (s->layout.dynamic) {
+            const unsigned d = nbg_layout_dynamic_index(&s->layout);
+            memset((unsigned char *)s->targets[d].cpu + s->layout.buffers[d].payload_bytes, 0,
+                   s->targets[d].bytes - s->layout.buffers[d].payload_bytes);
         }
         next_phase(s, LOAD_COEFF);
         return 1;
     }
     case LOAD_COEFF: {
-        struct nbg_span coeff;
-        uint32_t bytes = s->layout.buffers[NBG_ALLOC_COEFF].payload_bytes;
-        if (!nbg_model_section(&rt->view, NBG_COEFF, &coeff) || coeff.bytes != bytes) {
+        /* The coefficients, then the dynamic-input section, copied in order with one cursor. */
+        struct nbg_span coeff = {0}, dyna = {0};
+        const uint32_t coeff_bytes = s->layout.buffers[NBG_ALLOC_COEFF].payload_bytes,
+            dyna_bytes = s->layout.dynamic ? s->layout.buffers[nbg_layout_dynamic_index(&s->layout)].payload_bytes : 0;
+        if ((coeff_bytes && (!nbg_model_section(&rt->view, NBG_COEFF, &coeff) || coeff.bytes != coeff_bytes)) ||
+            (dyna_bytes && (!nbg_model_section(&rt->view, NBG_DYNA_IO, &dyna) || dyna.bytes != dyna_bytes))) {
             load_end(rt, s, 0); return 1;
         }
-        size_t n = bytes - s->offset;
+        const uint32_t total = coeff_bytes + dyna_bytes;
+        size_t n = total - s->offset;
         if (n > NPU_RUNTIME_CACHE_CHUNK) n = NPU_RUNTIME_CACHE_CHUNK;
-        memcpy((unsigned char *)s->targets[NBG_ALLOC_COEFF].cpu + s->offset, coeff.data + s->offset, n);
+        if (s->offset < coeff_bytes) {
+            if (n > coeff_bytes - s->offset) n = coeff_bytes - s->offset;
+            memcpy((unsigned char *)s->targets[NBG_ALLOC_COEFF].cpu + s->offset, coeff.data + s->offset, n);
+        } else {
+            const unsigned d = nbg_layout_dynamic_index(&s->layout);
+            memcpy((unsigned char *)s->targets[d].cpu + (s->offset - coeff_bytes), dyna.data + (s->offset - coeff_bytes), n);
+        }
         rt->counters.copied_bytes += n;
         s->offset += n;
-        if (s->offset == bytes) { next_phase(s, LOAD_STAGED); s->crc = UINT32_MAX; }
+        if (s->offset >= total) { next_phase(s, LOAD_STAGED); s->crc = UINT32_MAX; }
         return 1;
     }
     case LOAD_STAGED: {
@@ -527,11 +549,13 @@ static int load_work(struct npu_runtime *rt)
         return 1;
     case LOAD_CLEAN: {
         uint32_t extent = s->end_mark > s->stream_bytes ? s->end_mark : s->stream_bytes;
-        struct npu_runtime_span spans[3] = {
+        const unsigned d = nbg_layout_dynamic_index(&s->layout);
+        struct npu_runtime_span spans[4] = {
             {(uintptr_t)s->targets[NBG_ALLOC_NN].cpu, s->targets[NBG_ALLOC_NN].bytes},
             {(uintptr_t)s->targets[NBG_ALLOC_COEFF].cpu, s->targets[NBG_ALLOC_COEFF].bytes},
-            {s->command.cpu, lines(extent)}};
-        if (walk(rt, s, spans, 3, NPU_RUNTIME_CACHE_CHUNK, WALK_CLEAN) && good(rt)) load_end(rt, s, 1);
+            {s->command.cpu, lines(extent)},
+            {s->layout.dynamic ? (uintptr_t)s->targets[d].cpu : 0, s->layout.dynamic ? s->targets[d].bytes : 0}};
+        if (walk(rt, s, spans, 4, NPU_RUNTIME_CACHE_CHUNK, WALK_CLEAN) && good(rt)) load_end(rt, s, 1);
         return 1;
     }
     default:
@@ -818,7 +842,7 @@ int npu_runtime_link_tensor(struct npu_runtime *rt, unsigned producer, unsigned 
     /* begin verifies every target placement before any descriptor is changed.
      * Both slots' backing allocations already belong to this runtime's MMU. */
     if (nbg_model_open(model->data, model->bytes, &view) != NBG_DECODE_OK ||
-        !nbg_assembly_begin(&view, targets_copy, NBG_ALLOC_INPUT + s->layout.inputs + s->layout.outputs,
+        !nbg_assembly_begin(&view, targets_copy, nbg_layout_buffers(&s->layout),
                             &layout, &cursor) || !same_plan(&layout, &s->layout)) return 0;
     int result;
     do {

@@ -257,6 +257,35 @@ static void verify(void *unused)
     if (bootstrap_us > JOB_US * 4) assert(state_after_load == A733_NPU_BOOTING);
 }
 
+/* Walk the NPU page tables that the runtime built (the generated directory and leaf entries; the pool is identity
+ * mapped on the host, so a physical table address is a pointer). Returns 1 translated, 2 write fault, 0 fault. */
+static uint32_t entry_word(uint64_t at) { uint32_t v; memcpy(&v, (const void *)(uintptr_t)at, 4); return v; }
+static int walk_tables(uint32_t device, int write)
+{
+    static const uint64_t page_sizes[] = {4096, 65536, 1048576, 16777216};
+    const uint64_t directory = (uint64_t)(runtime_of_model->native.memory.image.pd_entry & ~15u) * 256;
+    const uint32_t root = entry_word(directory + (device / 16777216u) * 4u);
+    if (!(root & 1)) return 0;
+    const uint64_t page = page_sizes[(root / 4) & 3], table = (directory & UINT64_C(0xff00000000)) | (root & UINT32_C(0xffffffc0));
+    const uint32_t leaf = entry_word(table + ((device % 16777216u) / page) * 4);
+    if (!(leaf & 1)) return 0;
+    if (write && !(leaf & 4)) return 2;
+    return 1;
+}
+/* The slot's constant region holds the descriptors, the coefficients and, for a model with a dynamic-input section,
+ * that section after them (a733_npu_runtime.c, targets()). The NPU maps the region read-only: every page reads and
+ * every write faults. */
+static void check_constant_region_read_only(void)
+{
+    const struct npu_runtime_region *constant = &npu.runtime.slot[0].constant;
+    for (uint64_t at = 0; at < constant->bytes; at += 4096) {
+        assert(walk_tables((uint32_t)(constant->device + at), 0) == 1);
+        assert(walk_tables((uint32_t)(constant->device + at), 1) == 2);
+    }
+    assert(walk_tables((uint32_t)(constant->device + constant->bytes), 0) == 0); /* the guard page after it */
+    assert(walk_tables(0, 0) == 0 && walk_tables(0xfff, 1) == 0);
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -283,6 +312,7 @@ int main(int argc, char **argv)
         .register_physical = 0x03600000, .fatal = fatal};
     memcpy(config.models, os_npu_models, os_npu_model_count * sizeof(os_npu_models[0]));
     assert(npu_runtime_prepare(&npu.runtime, &config));
+    check_constant_region_read_only();
     npu.end = 60000000;
     npu.bootstrap = xTaskCreateStatic(bootstrap, "os-npu-boot", STACK, NULL, 4, npu.stacks[0], &npu.tasks[0]);
     npu.client = xTaskCreateStatic(client, "os-npu-app", STACK, NULL, 3, npu.stacks[1], &npu.tasks[1]);

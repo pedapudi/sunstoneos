@@ -19,12 +19,23 @@ struct nbg_assembly_plan {
  * input tensor in model order, then one per output tensor. With one input
  * and one output this is the six-slot plan order. */
 #define NBG_ASSEMBLY_MAX_TENSORS 8u
-#define NBG_LAYOUT_MAX_BUFFERS (NBG_ALLOC_INPUT + 2u * NBG_ASSEMBLY_MAX_TENSORS)
+#define NBG_LAYOUT_MAX_BUFFERS (NBG_ALLOC_INPUT + 2u * NBG_ASSEMBLY_MAX_TENSORS + 1u)
 struct nbg_assembly_layout {
     struct nbg_allocation_requirement buffers[NBG_LAYOUT_MAX_BUFFERS];
     uint32_t inputs, outputs;
     uint32_t nn_operations, descriptor_patches, state_patches, command_body_bytes;
+    /* 1 when the model has a dynamic-input section (directory format): one more allocation follows the output
+     * tensors, filled from the model with that section's bytes, that patch source 6 addresses. The assembler maps
+     * nothing and cannot make it read-only; the runtime places it after the coefficients in the slot's constant
+     * region, which the NPU page tables map read-only (a733_npu_runtime.c targets(); checks/os-npu-service.c). */
+    uint32_t dynamic;
 };
+/* The number of allocations of a layout, in plan order: the four fixed ones, the inputs, the outputs
+ * and the dynamic-input allocation when present. */
+static inline uint32_t nbg_layout_buffers(const struct nbg_assembly_layout *l)
+{ return NBG_ALLOC_INPUT + l->inputs + l->outputs + l->dynamic; }
+static inline uint32_t nbg_layout_dynamic_index(const struct nbg_assembly_layout *l)
+{ return NBG_ALLOC_INPUT + l->inputs + l->outputs; }
 struct nbg_assembly_buffer {
     void *cpu;
     size_t bytes;
@@ -106,7 +117,9 @@ int nbg_assemble_layout(const struct nbg_model *, const struct nbg_assembly_buff
  * else: coefficients, END pairs after the stream, padding and the tensor and
  * pool allocations are the caller's, and a refusal can leave earlier
  * operations written, so the caller discards the whole assembly. */
-struct nbg_assembly_cursor { uint32_t operation, patch, offset; };
+/* program: the number of stream-processor instructions of the operations done so far (their positions in the
+ * 256-entry program memory are checked against it). */
+struct nbg_assembly_cursor { uint32_t operation, patch, offset, program; };
 int nbg_assembly_begin(const struct nbg_model *, const struct nbg_assembly_buffer *, size_t count,
                        struct nbg_assembly_layout *, struct nbg_assembly_cursor *);
 int nbg_assembly_next(const struct nbg_model *, const struct nbg_assembly_buffer *,

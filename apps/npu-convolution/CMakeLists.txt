@@ -76,7 +76,7 @@ set(npu_units
   drivers/npu/a733_npu_platform.c drivers/npu/a733_npu_platform_native.c drivers/i2c/a733_i2c.c
   drivers/npu/npu_service.c drivers/npu/a733_npu_controller.c
   drivers/npu/a733_npu_memory.c drivers/npu/a733_npu_mmu.c drivers/npu/nbg_model.c
-  drivers/npu/nbg_assembly.c drivers/npu/nbg_checksum.c drivers/npu/nbg_relocation.c
+  drivers/npu/nbg_assembly.c drivers/npu/nbg_checksum.c drivers/npu/nbg_relocation.c drivers/storage/storage_digest.c
   drivers/power/a733_pmic_consumer.c drivers/power/a733_pmic.c drivers/power/a733_rail_leases.c
   drivers/power/a733_power_domains.c drivers/power/a733_power_domains_native.c
   drivers/pinctrl/a733_pins.c drivers/pinctrl/a733_pin_tables.c

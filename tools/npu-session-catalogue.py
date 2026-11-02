@@ -15,7 +15,8 @@ that image only.
 
 Build the host library with:
   clang-21 -std=c11 -O2 -shared -fPIC -Iinclude drivers/npu/nbg_assembly.c \
-    drivers/npu/nbg_model.c drivers/npu/nbg_relocation.c drivers/npu/nbg_checksum.c -o native.so
+    drivers/npu/nbg_model.c drivers/npu/nbg_relocation.c drivers/npu/nbg_checksum.c drivers/storage/storage_digest.c \
+    drivers/npu/nbg_layout_abi.c -o native.so
 """
 import argparse
 import ctypes as c
@@ -41,9 +42,32 @@ class Requirement(c.Structure):
 
 
 class Layout(c.Structure):
-    _fields_ = [('buffers', Requirement * (4 + 2 * MAX_TENSORS))] + [(n, c.c_uint32) for n in (
+    # Mirrors struct nbg_assembly_layout (include/nbg_assembly.h): four fixed allocations, the tensors and the
+    # dynamic-input allocation, then the counts and the dynamic-input flag.
+    _fields_ = [('buffers', Requirement * (4 + 2 * MAX_TENSORS + 1))] + [(n, c.c_uint32) for n in (
         'inputs', 'outputs', 'nn_operations', 'descriptor_patches', 'state_patches',
-        'command_body_bytes')]
+        'command_body_bytes', 'dynamic')]
+
+
+# The values of nbg_layout_abi (drivers/npu/nbg_layout_abi.c) in the order of this table: the C size and offsets that the
+# ctypes mirror above must equal.
+ABI = (('sizeof', None), ('requirement', None), ('buffers', 'buffers'), ('inputs', 'inputs'), ('outputs', 'outputs'),
+       ('nn_operations', 'nn_operations'), ('descriptor_patches', 'descriptor_patches'),
+       ('state_patches', 'state_patches'), ('command_body_bytes', 'command_body_bytes'), ('dynamic', 'dynamic'))
+
+
+def check_abi(lib, layout=Layout):
+    """Refuse a mirror of struct nbg_assembly_layout whose size or field offsets differ from the compiled C structure."""
+    lib.nbg_layout_abi.argtypes = [c.c_uint]
+    lib.nbg_layout_abi.restype = c.c_ulong
+    for index, (label, field) in enumerate(ABI):
+        want = lib.nbg_layout_abi(index)
+        have = c.sizeof(layout) if label == 'sizeof' else c.sizeof(Requirement) if label == 'requirement' else \
+            getattr(layout, field).offset
+        if have != want:
+            raise ValueError(f'the Layout mirror differs from struct nbg_assembly_layout in {label}: {have} against {want}')
+    if layout.buffers.size // c.sizeof(Requirement) != lib.nbg_layout_abi(10):
+        raise ValueError('the Layout mirror holds a different number of buffers')
 
 
 def identity(path):
@@ -55,6 +79,7 @@ def add(args):
     decoder = module('decoder', ROOT / 'checks/nbg-model.py')
     data = args.model.read_bytes()
     native = decoder.Native(args.native, data)
+    check_abi(native.lib)
     native.lib.nbg_assembly_layout.argtypes = [c.POINTER(decoder.View), c.POINTER(Layout)]
     layout = Layout()
     if native.lib.nbg_assembly_layout(c.byref(native.view), c.byref(layout)) != 1:

@@ -45,7 +45,8 @@ def run(command):
         raise SystemExit(result.stdout + result.stderr)
 
 sources = ['apps/os/npu-client.c', 'runtime/npu_app.c', 'drivers/npu/nbg_model.c',
-           'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_relocation.c', 'drivers/npu/nbg_checksum.c']
+           'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_relocation.c', 'drivers/npu/nbg_checksum.c',
+           'drivers/storage/storage_digest.c']
 objects = []
 for i, source in enumerate(sources):
     output = a.output / f'source-{i}.o'
