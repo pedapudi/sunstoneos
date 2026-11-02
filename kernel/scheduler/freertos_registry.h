@@ -17,7 +17,7 @@ struct ss_kernel_handle_bucket {
 struct ss_kernel_registry {
     struct ss_owner_descriptor descriptor[SS_OWNER_SLOTS];
     struct ss_kernel_handle_bucket bucket[SS_KERNEL_HANDLE_BUCKETS];
-    bool registered[SS_OWNER_SLOTS];
+    bool registered[SS_OWNER_SLOTS], mapped[SS_OWNER_SLOTS];
     uint64_t next_incarnation;
     const struct ss_owner_backend *backend;
 };
@@ -47,8 +47,13 @@ bool ss_kernel_handle_pin(struct ss_kernel_registry *, void *,
 void ss_kernel_handle_put(struct ss_kernel_pin *);
 /* Close before owner eviction and publisher retirement. Retire neither spins
  * nor frees memory. The administrator retries it after acknowledgments, with
- * API interrupts enabled and no object/control lock held. */
+ * brief API interrupt exclusion and no object/control lock held. */
 bool ss_kernel_handle_close(struct ss_kernel_registry *, unsigned);
+/* Remove a closed handle key after owner drainage, while reserving its slot
+ * through resource destruction. A recycled raw address can then map another
+ * slot; late retirement of the old slot never removes that new key. */
+bool ss_kernel_handle_unmap(struct ss_kernel_registry *, unsigned,
+                            bool owners_drained);
 bool ss_kernel_handle_retire(struct ss_kernel_registry *, unsigned,
                              bool owners_drained);
 #endif
