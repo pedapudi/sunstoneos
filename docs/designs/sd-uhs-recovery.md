@@ -459,6 +459,19 @@ Host evidence. The card model has a failing delay that leaves the command stuck 
 completes the masked update and finishes the sweep with the same window; a controller that stays stuck through reset and update makes the sweep stop with TIMEOUT after 12 recoveries;
 removing the mask from the update makes the stuck-DAT0 case fail.
 
+### Request-pattern experiment, second submission (entry `1793651292191500240-5493408d`): stopped in the sweep at delay 16 or 17
+
+Stop word `0x8a073be8`, site 3: core error 7 (CARD), step `P_SD_TUNE`, delay 16 or 17, platform stage `IDENTIFY`. With the recovery matched to the vendor's (reset at once), the sweep got past
+delays 12 and 13, where the previous submission had stopped, and stopped later, on a delay that the first successful trial had passed. The core faults when a command's R1 response carries a card
+status error (`CARD_ERRORS`), at the response of any command with data and again in the `P_SD_TUNE` step. After a transfer aborted by a controller reset the card reports COM_CRC_ERROR once in its next
+response (modelled; inferred, not observed). The board kernel's loop does not look at R1 at all: it judges a delay by the host's command and data errors and the pattern compare. The core now does the same
+in the sweep, and the tolerated sampling errors are the vendor's whole error set (bits 1, 6, 7, 8, 9, 11, 12, 13, 15) plus data starvation (bit 10); only card insert and remove (bit 18, bit 31) stay terminal.
+The card model's failing delays now include a hardware-locked and a starvation error, and a response with COM_CRC_ERROR after an aborted command: with the old core they fault, with the new one the sweep
+completes with the same window.
+
+This is the third stop in the sweep, each on a difference from the vendor loop that the host model did not have. Where the core and the vendor loop can still differ is listed in the table above; the sweep
+has not been audited for any other check that fires on a marginal delay beyond those found.
+
 ### Request-pattern experiment (approved, one run)
 
 One lifetime, re-entry then SDR104 as before (`--uhs-mode 3`), then eight phases over the slow zone and controls (`--phase FIRST:BLOCKS:READS[:quick]`; `quick` skips the per-request CRC and the progress call

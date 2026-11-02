@@ -82,7 +82,7 @@ static void begin(unsigned pf_mode, unsigned fast, unsigned caps)
     pf_flip = 0; pf_settle = 3; pf_writes = module_writes = restore_writes = restore_settle = commands_at_mismatch = 0; last_module = 0;
     pmic_model_setup(&m.power); seed(&u.base, &m.platform.core, SUNXI_MMC_SD, 1);
     field(u.base.csd, 84, 12, 5 | (1u << 10)); field(u.base.csd, 96, 8, 0x32); u.scr[0] = 2; u.scr[1] = 5;
-    u.caps = caps; u.s18a = 1; u.sdr104 = 1; u.tune_kinds = 6; u.fatal_delay = 99; u.window[0][0] = 20; u.window[0][1] = cfg_nowindow ? 0 : 24;
+    u.caps = caps; u.s18a = 1; u.sdr104 = 1; u.tune_kinds = 8; u.fatal_delay = 99; u.window[0][0] = 20; u.window[0][1] = cfg_nowindow ? 0 : 24;
     if (cfg_start18) u.phase = 3;                      /* the card still signals 1.8 V from the earlier lifetime */
     m.power.pmic[0x11] = 1u << 4; m.power.pmic[0x33] = 13;
     *pmic_model_word(&m.power, 0x02002000) = 0xf8000000u | (99u << 16) | (99u << 8);

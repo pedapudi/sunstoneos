@@ -137,7 +137,7 @@ int main(void)
     /* A controller that a reset does not free: the recovery repeats the reset and gives up after 12 consecutive recoveries that did not complete. */
     want_reenter = 1; begin(u, &h, 3); want_reenter = 0; u->stuck_always = 1; u->unfixable = 1; faulted(u, &h, SUNXI_MMC_TIMEOUT);
     /* A card that fails the sweep the way the board's does: every kind of sampling error, including the FIFO run error. */
-    want_reenter = 1; begin(u, &h, 3); want_reenter = 0; u->tune_kinds = 6; u->s18a = 0; drive(u, &h);
+    want_reenter = 1; begin(u, &h, 3); want_reenter = 0; u->tune_kinds = 8; u->s18a = 0; drive(u, &h);
     assert(h.state == SUNXI_MMC_READY && h.card.uhs_outcome == SUNXI_MMC_UHS_SDR104 && h.card.sample_delay == 32);
     /* Both options are for the UHS-I profile, before open. */
     {
