@@ -555,10 +555,11 @@ int os_npu_start(void)
         bounds.slot_model=slot_model;
     }
 #endif
-    const enum npu_declaration_result fit=npu_runtime_reservation_with(os_npu_models,os_npu_model_count,slots,OS_NPU_POOL_BYTES,&need,&bounds);
-    if(fit!=NPU_DECLARATION_OK){board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),(uint32_t)fit,SUNSTONE_CRUMB_HERE());return 0;}
+    /* The lease is the whole pool and prepare takes what the declaration needs from its start (it refuses if that is more).
+     * Sizing the reservation first would admit every graph twice before the scheduler, which the secondary cores wait for
+     * one second at most: a layout takes tens of milliseconds on a Cortex-A55 at the boot clock. */
+    need=OS_NPU_POOL_BYTES;
     if(start!=OS_NPU_POOL_START||end-start!=OS_NPU_POOL_BYTES)return REFUSE();
-    if(!need)return REFUSE();
     if(!a733_mapping_check_stride(aarch64_device_translate,start,start,end-start,0x200000,&wb))return REFUSE();
     if(!device_memory_pool_init_typed(&npu.pool,start,start,end-start,DEVICE_MEMORY_CLASS_DMA32,DEVICE_MEMORY_WRITE_BACK))return REFUSE();
     if(!device_memory_acquire(&npu.pool,g->owner,need,&npu.lease,&npu.extent))return REFUSE();
@@ -566,7 +567,13 @@ int os_npu_start(void)
     struct npu_runtime_config config={.models=os_npu_models,.count=os_npu_model_count,.slots=slots,.bounds=bounds,.cpu=npu.extent.cpu,
         .physical=npu.extent.physical,.bytes=npu.extent.bytes,.register_cpu=0x03600000,
         .register_physical=0x03600000,.fatal=fatal};
-    if(!npu_runtime_prepare(&npu.runtime,&config)){device_memory_retain(&npu.pool,npu.lease);return REFUSE();}
+    if(!npu_runtime_prepare(&npu.runtime,&config)){
+        /* Name the cause: the reservation says whether a graph is refused or the declaration does not fit the pool. */
+        size_t needed=0;
+        const enum npu_declaration_result fit=npu_runtime_reservation_with(os_npu_models,os_npu_model_count,slots,OS_NPU_POOL_BYTES,&needed,&bounds);
+        if(fit!=NPU_DECLARATION_OK)board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),(uint32_t)fit,SUNSTONE_CRUMB_HERE());
+        device_memory_retain(&npu.pool,npu.lease);return REFUSE();
+    }
     if(!os_npu_sdk_bind(&npu.runtime)){device_memory_retain(&npu.pool,npu.lease);return REFUSE();}
     device_memory_lookup(&npu.pool,npu.lease)->state=DEVICE_MEMORY_DEVICE;
     const struct a733_board_session *b=&s->board;

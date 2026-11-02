@@ -260,7 +260,7 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     rt->plans = (struct nbg_assembly_layout *)(v.cpu + entries * sizeof(struct npu_runtime_model));
     rt->model_digest = (unsigned char (*)[32])(v.cpu + entries * (sizeof(struct npu_runtime_model) +
                                                                   sizeof(struct nbg_assembly_layout)));
-    if (!sized(v.models, v.count, v.slots, &v.bounds, rt->model_digest, rt->plans, &z, &p) || p.bytes != v.bytes) return fault(rt);
+    if (!sized(v.models, v.count, v.slots, &v.bounds, rt->model_digest, rt->plans, &z, &p) || p.bytes > v.bytes) return fault(rt);
     for (unsigned m = 0; m < v.count; ++m) rt->catalogue[m] = (struct npu_runtime_model){v.models[m].data, v.models[m].bytes, NULL};
     atomic_init(&rt->count, v.count); rt->capacity = v.count + v.bounds.capacity; rt->slots = v.slots;
     rt->command_bytes = z.command; rt->constant_bytes = z.constant; rt->read_bytes = z.read; rt->write_bytes = z.write;
