@@ -184,6 +184,36 @@ static int ring(const unsigned char *descriptor, struct nbg_relocation *nn,
     return 1;
 }
 
+/* The byte range an input or output pointer occupies in its region after ring() and the second-input ring have
+ * run: the ring when it has an end field, else the addressed byte. */
+static void extent(const struct nbg_relocation *nn, const uint32_t *slot, unsigned pointer, unsigned end,
+                   uint64_t *begin, uint64_t *stop)
+{
+    if (slot[end] != UINT32_MAX) {
+        *begin = nn[slot[end]].source_offset; *stop = *begin + nn[slot[end]].referenced_bytes;
+    } else {
+        *begin = nn[slot[pointer]].source_offset; *stop = *begin + 1;
+    }
+}
+/* No second input overlaps the output range in the same region (0 of 54 in the examined graphs), and neither
+ * does the first input of a stream-processor, activation or transpose operation (0 of 534). A neural-network
+ * operation may overlap its first input and output, as the compiler emits for the published graph (7 of
+ * 535 operations): the engine consumes a ring as it writes behind it. */
+static int aliased(const struct nbg_relocation *nn, const uint32_t *slot, const uint32_t *source, uint32_t kind)
+{
+    if (slot[OUTPUT] == UINT32_MAX) return 0;
+    uint64_t ob, oe;
+    extent(nn, slot, OUTPUT, OUTPUT_END, &ob, &oe);
+    for (unsigned which = 0; which < 2; ++which) {
+        const unsigned pointer = which ? INPUT2 : INPUT, end = which ? INPUT2_END : INPUT_END;
+        if (slot[pointer] == UINT32_MAX || (!which && kind == 2) || source[slot[pointer]] != source[slot[OUTPUT]] ||
+            nn[slot[pointer]].source_device != nn[slot[OUTPUT]].source_device) continue;
+        uint64_t ib, ie;
+        extent(nn, slot, pointer, end, &ib, &ie);
+        if (ib < oe && ob < ie) return 1;
+    }
+    return 0;
+}
 static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
                      const struct nbg_assembly_buffer *buffers,
                      const struct nbg_assembly_layout *plan, struct operation_image *image,
@@ -248,6 +278,7 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
     memcpy(image->nn, m->data + m->sections[NBG_NN].offset + op.index * 192, 192);
     struct nbg_relocation nn[POINTER_COUNT], command = {0};
     uint32_t slot[POINTER_COUNT], source[POINTER_COUNT];
+    int32_t tensor_index[POINTER_COUNT];
     for (unsigned i = 0; i < POINTER_COUNT; ++i) slot[i] = UINT32_MAX;
     uint32_t nn_count = 0, command_count = 0;
     for (uint32_t i = 0; i < op.patch_count; ++i) {
@@ -294,6 +325,7 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
             if (slot[field] != UINT32_MAX) return 0;
             slot[field] = nn_count;
             source[nn_count] = p.source;
+            tensor_index[nn_count] = p.index;
             unsigned id;
             switch (p.source) {
             case 1: case 2:
@@ -344,19 +376,51 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
             nn[nn_count++] = r;
         }
     }
-    /* A second input has both fields, and its end lies after its start in the same region. The ring
-     * size word of the second input is not identified, so no size is checked (docs/designs/
-     * npu-encoder-loader.md, limit 3). */
+    /* Second input (descriptor words 32 to 35, all observed in 441 operations of the layer graphs and
+     * single-operation graphs; docs/hardware/npu-command-formats.md). Without one, word 33 is zero. An input
+     * that is not in VIP SRAM has word 33 equal to 1 (0 for a batched matrix product) and a disabled end word. An input in VIP SRAM is a ring
+     * like the first input's: word 33 holds its size in 32-byte units, the end field its limit, and the
+     * start lies inside [limit - size, limit). */
     if (second != (slot[INPUT2] != UINT32_MAX)) return 0;
-    if (second) {
-        const int sram = source[slot[INPUT2]] == 8;
-        if (sram != (slot[INPUT2_END] != UINT32_MAX)) return 0;
-        if (sram && nn[slot[INPUT2_END]].source_offset <= nn[slot[INPUT2]].source_offset) return 0;
+    if (!second) {
+        if (word(image->nn + 132)) return 0;
+    } else if (source[slot[INPUT2]] != 8) {
+        if (slot[INPUT2_END] != UINT32_MAX || word(image->nn + 132) > 1 ||
+            (word(image->nn + 140) & 0x03ffffff) != 0x03ffffff) return 0;
+    } else {
+        if (slot[INPUT2_END] == UINT32_MAX) return 0;
+        struct nbg_relocation *start = &nn[slot[INPUT2]], *end = &nn[slot[INPUT2_END]];
+        const uint64_t size = (uint64_t)(word(image->nn + 132) & 0x03ffffff) << 5, limit = end->source_offset;
+        if (!size || size > limit || limit > end->source_bytes || start->source_device != end->source_device ||
+            start->source_bytes != end->source_bytes || start->source_offset < limit - size ||
+            start->source_offset >= limit) return 0;
+        end->source_offset = (uint32_t)(limit - size);
+        end->referenced_bytes = size;
+        end->encoding = NBG_ADDRESS_END_SHIFT6;
+    }
+    /* An input taken from a graph input names no more bytes than the tensor holds (word 16 for the first
+     * input, word 32 for the second: the byte count in the upper half). Two graph inputs of one operation
+     * agree in type and size; their fixed-point positions may differ. */
+    for (unsigned which = 0; which < 2; ++which) {
+        const unsigned field = which ? INPUT2 : INPUT, word_index = which ? 32 : 16;
+        if (slot[field] == UINT32_MAX || source[slot[field]] != 1) continue;
+        struct nbg_tensor t;
+        if (!nbg_model_tensor(m, NBG_INPUT, (uint32_t)tensor_index[slot[field]], &t) ||
+            (word(image->nn + word_index * 4) >> 16) > t.logical_bytes) return 0;
+    }
+    if (slot[INPUT] != UINT32_MAX && slot[INPUT2] != UINT32_MAX && source[slot[INPUT]] == 1 &&
+        source[slot[INPUT2]] == 1) {
+        struct nbg_tensor a, b;
+        if (!nbg_model_tensor(m, NBG_INPUT, (uint32_t)tensor_index[slot[INPUT]], &a) ||
+            !nbg_model_tensor(m, NBG_INPUT, (uint32_t)tensor_index[slot[INPUT2]], &b) ||
+            a.format != b.format || a.quantization != b.quantization ||
+            a.logical_bytes != b.logical_bytes) return 0;
     }
     if ((slot[WEIGHTS] == UINT32_MAX && word(image->nn + 20) >= 0x1000) ||
         (slot[INPUT2] == UINT32_MAX && word(image->nn + 136) >= 0x1000)) return 0;
     if (!ring(image->nn, nn, slot, source, INPUT, INPUT_END, 20) ||
         !ring(image->nn, nn, slot, source, OUTPUT, OUTPUT_END, 18) ||
+        aliased(nn, slot, source, op.kind) ||
         command_count != 1 || !nbg_relocate(image->command, image->command_bytes, &command, 1) ||
         (nn_count && !nbg_relocate(image->nn, sizeof(image->nn), nn, nn_count))) return 0;
     *count = op.patch_count;

@@ -83,12 +83,27 @@ All words are pairs of a register header and an operand.
 
 ## Second input
 
-An operation with a second input has patches at descriptor words 34 and, when the input is in VIP SRAM,
-35, and `0x0e4c` bit 12 set. Observed sources of the second input: a graph input (patch source 1, index 1; an
-element-wise multiplication compiles to a neural-network operation and an addition or subtraction to a
-stream-processor operation, both with two graph inputs), VIP SRAM (source 8), and the dynamic-input section
-(source 6, stream-processor operations). Words 32 and 33 describe it as words 16 and 17 describe the
-first (`0x16000160` for an input of the same shape; word 33 is 1).
+An operation with a second input has patches at descriptor word 34 and, when the input is in VIP SRAM, word
+35, and `0x0e4c` bit 12 set. Observed sources of the second input: a graph input (patch source 1; an
+element-wise multiplication compiles to a neural-network operation, an addition or subtraction to a
+stream-processor operation, a batched matrix product to neural-network operations that take both operands from
+graph inputs), VIP SRAM (source 8), and the dynamic-input section (source 6, stream-processor operations).
+
+Rules that hold in all 441 operations of five layer graphs and the single-operation graphs, and that the loader
+verifies (class **Inferred**; they only refuse):
+
+| Case | Word 33 | Word 35 (low 26 bits) | Pointer words |
+| --- | --- | --- | --- |
+| No second input | 0 | not examined | word 34 below `0x1000` |
+| Second input from a graph input or the dynamic-input section | 1, or 0 for a batched matrix product | `0x03ffffff` (disabled) | word 34 patched |
+| Second input in VIP SRAM | ring size in 32-byte units | the ring limit, patched as an end address | word 34 patched; the start lies in [limit - size, limit) |
+
+Words 32 and 33 describe the second input as words 16 and 17 describe the first (for graph inputs the upper half
+of the byte-count word never exceeds the tensor's size in bytes, in 58 of 58 operations). An operation reads its
+inputs from rings and writes its own: no input range overlaps the output range in VIP SRAM for kinds 6, 7 and 8
+(534 of 534 first inputs) or for any second input (54 of 54); a neural-network operation of the published
+ShuffleNetV2 graph overlaps its first input with its output in 7 of 535 operations, which the loader still admits.
+Two graph inputs of one operation have the same type and size (fixed-point positions may differ).
 
 Findings from variants that bear on the loader:
 

@@ -25,9 +25,11 @@ SECTION = {'nn': 6, 'load_states': 20, 'dyna_io': 19, 'ppu_instr': 18, 'coeff': 
 def u32(data, at): return struct.unpack_from('<I', data, at)[0]
 
 
-def repair(data, native_path):
+def repair(data, native_path, view=None):
+    """Recompute the checksums of data. The section layout comes from view (the decoder's view of the original file)
+    when given, since a mutation may make the decoder refuse the file."""
     data = bytearray(data)
-    view = nm.Native(native_path, bytes(data)).view
+    view = view or nm.Native(native_path, bytes(data)).view
     sums = view.sections[39]            # NBG_SECTION_CHECKSUM
     for at in range(0, sums.bytes, 8):
         kind = u32(data, sums.offset + at)
