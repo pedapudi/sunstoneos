@@ -25,6 +25,7 @@ LAYOUTS = ('board_application', 'a733_board_session', 'os_application', 'a733_np
            'a733_native_usb', 'a733_counter_clock', 'a733_platform_locks', 'a733_power_domains', 'a733_pmic',
            'a733_pmic_config', 'a733_clock_leases')
 PREFIX = 592
+IMAGE_FIELD = 48  # a733_board_session.image
 RET = 0x43fff000
 STACK = 0x43ffe000
 NOW_US = 5_000_000
@@ -205,7 +206,14 @@ def run(image, session_path, case='accept'):
     data = bytearray(Path(session_path).read_bytes())
     if case == 'wrong-catalogue':
         data[1072] ^= 1
+    # The runner binds a bundle's session to the ELF it launches by writing the
+    # image's build identifier into the record; do the same for this ELF.
     s = Start(image, bytes(data))
+    build_id = bytes(s.uc.mem_read(s.addr('a733_smp_build_id'), 32))
+    bound = bytes(data[IMAGE_FIELD:IMAGE_FIELD + 32]) == build_id
+    data[IMAGE_FIELD:IMAGE_FIELD + 32] = build_id
+    s.session = bytes(data)
+    s.uc.mem_write(s.sealed, s.session)
     e = s.e
     L = e.layouts
     board = e.address('board', 'return-main-pinned.c') if ('board', ) else None
@@ -241,6 +249,7 @@ def run(image, session_path, case='accept'):
     result['returned'] = value
     result['refusals'] = s.refusals
     result['case'] = case
+    result['session_already_bound_to_image'] = bound
     result['notes'] = s.notes
     result['trace'] = s.trace[-40:]
     compact = []
