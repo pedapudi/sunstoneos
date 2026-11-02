@@ -36,6 +36,13 @@ struct ss_latency_site {
     uint64_t ticks, start, enter_site, exit_site;
 };
 
+/* Optional PMU capture (SUNSTONE_LATENCY_PMU, off by default): the counts a core
+ * executed inside each of its longest masked spans, parallel to ss_latency_site
+ * entries of kind 0. Differences are modulo 2^32. */
+struct ss_latency_site_pmu {
+    uint32_t instructions, cycles, l1d_refills, l2d_refills;
+};
+
 #ifdef SUNSTONE_LATENCY
 static inline uint64_t ss_latency_now(void)
 {
@@ -54,6 +61,12 @@ void ss_latency_freeze(unsigned core);
 void ss_latency_snapshot(struct ss_latency_core out[8]);
 /* Snapshot only after every writer has frozen; packed in descending duration. */
 void ss_latency_sites_snapshot(struct ss_latency_site out[SS_LAT_PHASES + 1][8][SS_LAT_SITE_KINDS][SS_LAT_SITE_SLOTS]);
+#ifdef SUNSTONE_LATENCY_PMU
+/* Same order as the kind-0 site table; zero for a span measured before the
+ * core's counters were enabled. Enable runs from the IRQ hook at EL1. */
+void ss_latency_site_pmu_snapshot(struct ss_latency_site_pmu out[SS_LAT_PHASES + 1][8][SS_LAT_SITE_SLOTS]);
+void ss_latency_pmu_enable(void);
+#endif
 /* Single coordinator; each named phase opens once. Only intervals wholly inside
  * a phase enter its distribution. Crossing intervals and gaps retain their
  * aggregate record. Bounds use a common counter across all cores. */

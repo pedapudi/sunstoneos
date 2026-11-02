@@ -459,6 +459,11 @@ def prepare(args, info, live, out, *, dma_binding=None):
     return plan
 
 
+def preserving(args):
+    """True when the run saves and restores DRAM. A caller without the option keeps the safe behavior."""
+    return bool(getattr(args, 'preserve_dram', True))
+
+
 def preservation_regions(plan):
     """Union the linked image/monitor, manifest, input and device DRAM extents."""
     geo = plan['geometry']
@@ -540,11 +545,12 @@ def capture(owner, plan, args):
         if plan['geometry'].get('stopped_capture'):
             finite.stopped.capture(owner.tx, finite.base, plan, out, owner.record, owner.journal, decoded)
         # Validated retirement permits restoration even after numerical mismatch.
-        backup = plan['dram_backup']
-        require(sha(backup) == plan['dram_backup_sha256'], 'Saved NPU DRAM changed.')
-        owner.upload(finite.DRAM[0], backup)
-        owner.record['dram_restored'] = True
-        owner.journal()
+        if preserving(args):
+            backup = plan['dram_backup']
+            require(sha(backup) == plan['dram_backup_sha256'], 'Saved NPU DRAM changed.')
+            owner.upload(finite.DRAM[0], backup)
+            owner.record['dram_restored'] = True
+            owner.journal()
         return {'valid': decoded['status'] == 0, 'payload': decoded['log'].encode(), 'report': decoded}
     if plan['format']=='native-probe':
         probe=load('capture_native_probe',ROOT/'tools/board_probe.py')
@@ -671,9 +677,10 @@ def capture(owner, plan, args):
     finally:
         require(plan['preserve_regions'] == preservation_regions(plan),
                 'Preservation plan changed after launch.')
-        restore_dram(owner, plan['dram_backups'], plan['preserve_regions'])
-        owner.record.update(dram_restored=True, dram_dirty=False)
-        owner.journal()
+        if preserving(args):
+            restore_dram(owner, plan['dram_backups'], plan['preserve_regions'])
+            owner.record.update(dram_restored=True, dram_dirty=False)
+            owner.journal()
 
 
 

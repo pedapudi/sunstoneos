@@ -17,6 +17,10 @@ void ss_owner_barrier(const struct ss_owner_backend *b)
 }
 void ss_owner_wait(const struct ss_owner_backend *b)
 {
+#ifdef SS_LATENCY_OPS
+    extern uint64_t ss_ops_wait[8];
+    ss_ops_wait[ss_ops_core()]++; /* host model: a masked span that waits is not an uncontended path */
+#endif
     if (b && b->wait) { b->wait(b->context); return; }
 #if defined(__aarch64__)
     __asm__ volatile("wfe" ::: "memory");

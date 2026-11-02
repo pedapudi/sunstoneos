@@ -316,14 +316,14 @@ static int fixture_retirement_pin(void)
     for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
         fixture_cpu = c;
         ssKernelControlDrain();
-        assert(!atomic_load(&ssKernelControl.pending[c][slot / 64]));
+        assert(!atomic_load(&ssKernelControl.pending[c].word[slot / 64]));
     }
     assert(uxTaskGetNumberOfTasks() == 1);
     /* The task caller must be allowed to run until its final pin release.
      * That release, rather than repeated IRQs, restarts owner retirement. */
     ss_kernel_handle_put(&pin);
     for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
-        assert(atomic_load(&ssKernelControl.pending[c][slot / 64]));
+        assert(atomic_load(&ssKernelControl.pending[c].word[slot / 64]));
         fixture_cpu = c;
         ssKernelControlDrain();
     }
@@ -445,7 +445,7 @@ static int fixture_cleanup_shield(void)
     assert(atomic_load(&task->effective) == 7 && !task->dead);
     ssKernelCleanupRelease(task);
     assert(!atomic_load(&task->cleanup_shield));
-    assert(atomic_load(&ssKernelControl.pending[0][deletion.slot / 64]) &
+    assert(atomic_load(&ssKernelControl.pending[0].word[deletion.slot / 64]) &
            (UINT64_C(1) << (deletion.slot % 64)));
     for (unsigned pass = 0; pass < 3; ++pass)
         for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) enter(c);

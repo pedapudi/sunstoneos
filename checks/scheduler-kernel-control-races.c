@@ -37,7 +37,7 @@ int main(void)
     /* A duplicate retirement hint may outlive the last reference and the
      * registry's first successful retirement. The consumer owns no TCB pin. */
     control.slot[0].desired.dead = true;
-    atomic_store(&control.pending[0][0], 1);
+    atomic_store(&control.pending[0].word[0], 1);
     pthread_t consumer, registrar;
     assert(!pthread_create(&consumer, NULL, consume, NULL));
     while (!atomic_load(&entered)) sched_yield();

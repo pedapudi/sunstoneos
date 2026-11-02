@@ -1,0 +1,78 @@
+# Paths that a worker may not land without --approved-by coordinator.
+# One glob per line; a line that starts with # is a comment. "*" matches within
+# one path component and "**" matches across components. Every pattern is
+# preceded by a comment that states why the path is protected.
+# tools/land.py reads this file from bringup, not from the branch being landed.
+
+# The board runner, its image preparation and its power control decide what runs on a board.
+tools/board.py
+tools/board_images.py
+tools/board_probe.py
+tools/board_state.py
+tools/board_usb_power.py
+# Direct USB access and USB power switching.
+tools/usb-access.py
+tools/usb_guard.py
+tools/usb_power*
+# The host side of the normal-return application sets the CPU rails before a run.
+apps/os/cpu-return-host.py
+
+# The default-kernel scheduler and port patches.
+patches/freertos-smp-*.patch
+
+# CPU, DSU and bus clock owners and the CPU operating points.
+drivers/clock/a733_cpu_clock.c
+drivers/clock/a733_cpu_cycles_native.c
+drivers/clock/a733_clock_leases.c
+include/a733_cpu_clock.h
+include/a733_cpu_power.h
+include/a733_clock_leases.h
+include/a733_pll_lock.h
+# The performance-mode service selects operating points for every block.
+drivers/power/a733_perf_mode.c
+include/a733_perf_mode.h
+apps/os/perf.c
+apps/os/perf.h
+# The PMIC driver, the rail helper and the rail leases set every supply voltage.
+drivers/power/a733_pmic*.c
+drivers/power/a733_rail_leases.c
+drivers/power/a733_power_domains*.c
+include/a733_pmic*.h
+include/a733_rail_leases.h
+include/a733_power_authority.h
+include/a733_power_domain*.h
+# GPU clock, operating points, supply and performance control.
+drivers/gpu/a733_gpu_power.c
+drivers/gpu/a733_gpu_performance.c
+drivers/gpu/a733_gpu_clock_parent.c
+drivers/gpu/pvr_gpu_clock.c
+drivers/clock/a733_media_clock*.c
+include/a733_gpu_opp.h
+include/a733_gpu_power.h
+include/a733_gpu_clock_parent.h
+include/pvr_gpu_clock.h
+# NPU clock and supply start-up.
+drivers/npu/a733_npu_startup.c
+include/a733_npu_startup.h
+# Display PLL and DDR frequency programming.
+include/a733_display_pll.h
+drivers/dram/a733_dram.c
+
+# Storage write paths: the card write driver, the update service and the tools that write cards.
+drivers/storage/sunxi_mmc.c
+drivers/storage/a733_mmc_platform*.c
+drivers/storage/a733_storage_update.c
+drivers/storage/storage_update_usb.c
+include/sunxi_mmc.h
+include/a733_mmc_platform*.h
+include/a733_storage_update*.h
+platform/a733-storage-update/**
+platform/a733-storage-maintenance/**
+tools/storage-update.py
+tools/prepare-microsd-boot.py
+tools/prepare-card-ddr.py
+tools/boot-slots.py
+
+# The landing tool and its protected list.
+tools/land.py
+tools/land-protected.txt

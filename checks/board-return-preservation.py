@@ -108,12 +108,16 @@ def main():
         def rails(self, phase='rails'):
             self.events.append(phase)
             if phase=='restore-rails':
-                assert self.record['dram_restored'] and self.record['native_retirement_validated']
-                assert all(bytes(data)==self.saved[a] for a,data in self.memory)
+                preserve=images.preserving(self.args)
+                assert self.record['native_retirement_validated']
+                assert (self.record['dram_restored'] if preserve else self.record['dram_unsaved'] and not self.record['dram_restored'])
+                assert not preserve or all(bytes(data)==self.saved[a] for a,data in self.memory)
                 if self.variant in ('npu-sdk','decoder-bound'):
+                    before={a:bytes(data) for a,data in self.memory}
                     board.Live.rails(self,phase)
-                    assert self.record['rail_runs'][phase]['dram_restored']
-                    assert all(bytes(data)==self.saved[a] for a,data in self.memory)
+                    assert self.record['rail_runs'][phase].get('dram_restored',False)==preserve
+                    assert all(bytes(data)==(self.saved[a] if preserve else before[a]) for a,data in self.memory) or not preserve
+                    assert preserve or 'restore-rails' not in self.record.get('rail_dram_backups',{})
         def read(self,address,size,path):
             self.events.append(('read', address, size))
             for a,data in self.memory:
@@ -211,10 +215,14 @@ def main():
     if has_npu:variants.extend(('npu-sdk','npu-late-fault','npu-mismatch','npu-refused','npu-telemetry-malformed',
                                 'npu-unstarted-no-failure',*UNSTARTED))
     else:variants=[v for v in variants if v not in UNSTARTED]
-    for variant in variants:
-        evidence=args.out/variant
+    # Development runs save and restore no DRAM; these variants cover every way a run can end.
+    development=['normal','output-malformed','retirement-invalid','late-fault','failure-return','failure-return-unlinked',
+                 'watchdog','decoder-bound']
+    if has_npu:development.append('npu-sdk')
+    for preserve,variant in [(True,v) for v in variants]+[(False,v) for v in development]:
+        evidence=args.out/(variant if preserve else 'development-'+variant)
         parser=argparse.ArgumentParser();board.run_options(parser)
-        options=parser.parse_args([str(source),'--port','3-1','--restore-rails'])
+        options=parser.parse_args([str(source),'--port','3-1','--restore-rails']+(['--preserve-dram'] if preserve else []))
         options.evidence=evidence
         if variant in FAILURES:
             # An exact expectation of the failure record; the mismatch case expects a different one.
@@ -245,6 +253,35 @@ def main():
             result=board.run_image(options,backend)
         good=variant in ('normal','output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed','npu-sdk','decoder-bound',
                          'failure-return','failure-return-mismatch','failure-return-npu-unstarted')
+        if not preserve:
+            owner=owners[0]
+            assert result['dram_mode']=='development',result
+            assert 'dram_backups' not in result and not result.get('dram_dirty') and not result.get('dram_restored'),result
+            chunks={(b['address'],b['bytes']) for b in [{'address':a+o,'bytes':min(4*1024*1024,n-o)}
+                    for a,n in images.preservation_regions(make_plan()) for o in range(0,n,4*1024*1024)]}
+            assert not any(e[0]=='read' and (e[1],e[2]) in chunks for e in owner.events if isinstance(e,tuple)),variant
+            assert not (evidence/'dram-before-0.bin').exists() and not (evidence/'npu-DRAM-before.bin').exists()
+            if variant not in ('npu-sdk','decoder-bound'):
+                assert not any(e[0]=='write-restore' for e in owner.events if isinstance(e,tuple)),variant
+            assert bool(result.get('rails_restored'))==good,(variant,result)
+            assert result['outcome']==('returned' if variant in ('normal','npu-sdk','decoder-bound') else
+                                      'failure-return' if variant=='failure-return' else
+                                      'watchdog-reset' if variant=='watchdog' else
+                                      'host-error' if variant in ('late-fault','failure-return-unlinked') else 'result-mismatch'),(variant,result)
+            # No DRAM was promised, so only unproven retirement quarantines.
+            assert result['quarantined']==(variant=='retirement-invalid'),(variant,result)
+            assert bool(result.get('native_retirement_validated'))==(variant in ('normal','output-malformed','failure-return','decoder-bound','npu-sdk')),(variant,result)
+            if good:
+                assert result['dram_unsaved'] and (evidence/'output-record.bin').exists() and (evidence/'return-report.bin').exists()
+                assert any(bytes(data)!=owner.saved[a] for a,data in owner.memory),'development run restored saved DRAM'
+                assert 'restore-rails' in owner.events
+            if variant=='watchdog':assert result['dram_lost'] and 'dram_released_by_reset' not in result
+            if variant=='failure-return':
+                assert result['first_failure']['record']['core']==6 and result['rails_restored']
+            if variant=='decoder-bound':assert result['decoded']=={'bytes':8}
+            print('PASS development',variant)
+            continue
+        assert result['dram_mode']=='preserved' and (variant!='normal' or len(result['dram_backups'])>=1),result
         assert result.get('dram_restored',False)==good,(variant,result)
         assert bool(result.get('rails_restored'))==good,(variant,result)
         assert result['outcome']==('returned' if variant in ('normal','npu-sdk','decoder-bound') else
@@ -296,7 +333,7 @@ def main():
     symbol_image = args.out/'symbolization.elf'
     symbol_image.write_bytes(b'MODELED ELF PATH ONLY; decoder is spied, never executed')
     parser = argparse.ArgumentParser(); board.run_options(parser)
-    options = parser.parse_args([str(symbol_image), '--port', '3-1'])
+    options = parser.parse_args([str(symbol_image), '--port', '3-1', '--preserve-dram'])
     evidence = args.out/'symbolization'; evidence.mkdir()
     owner = Owner(options, evidence, {}, 'normal')
     decoded = {'session':True, 'last':{'stage':board.crumbs.RETURN_ROM, 'value':0}}
@@ -363,7 +400,7 @@ def main():
     # The post-ROM profile uses the distinct reviewed DCDC5-only binary and
     # the real parser; its continuation gate is independent of CLI input paths.
     followup=images.load('preservation_helper_followup', args.tool_tree/'apps/os/cpu-return-followup.py')
-    for variant in ('normal','dcdc3-raised','unretired','unrestored'):
+    for variant in ('normal','dcdc3-raised','unretired','unrestored','development'):
         evidence=args.out/('post-helper-'+variant);evidence.mkdir()
         helper=evidence/'post-model.bin';helper.write_bytes(b'MODEL POST HELPER')
         lines=[f'{name} {phase} pll={pll:#x} mux={mux:#x} mhz={mhz} pat0=0 pat1=0 lfm=0'
@@ -375,7 +412,11 @@ def main():
             def __init__(self):
                 super().__init__()
                 self.record={'normal_return':True,'native_retirement_validated':variant!='unretired',
-                             'dram_restored':variant!='unrestored'}
+                             'dram_restored':variant not in ('unrestored','development')}
+                if variant=='development':
+                    # A development run saved nothing, so the helper saves and restores nothing either.
+                    self.record['dram_unsaved']=True
+                    self.args=types.SimpleNamespace(rail_helper=helper,preserve_dram=False)
                 self.memory[0x41000000]=bytes([71])*board.POST_RAIL_HELPER_DRAM[1]
                 self.before=self.memory.copy()
             def tx(self,*values):
@@ -388,10 +429,13 @@ def main():
         owner=PostOwner()
         with patch.object(board,'POST_RAIL_HELPER',helper),patch.object(board,'POST_RAIL_HELPER_SHA256',images.sha(helper)):
             try:board.Live.rails(owner,'restore-rails')
-            except ValueError:assert variant!='normal'
-            else:assert variant=='normal'
-        assert len(owner.events)==(4 if variant=='normal' else 2 if variant=='dcdc3-raised' else 0)
+            except ValueError:assert variant not in ('normal','development')
+            else:assert variant in ('normal','development')
+        assert len(owner.events)==(4 if variant=='normal' else 2 if variant in ('dcdc3-raised','development') else 0)
         if variant=='normal':assert owner.memory==owner.before
+        if variant=='development':
+            assert 'rail_dram_backups' not in owner.record and not owner.record['dram_restored']
+            assert owner.record['rail_runs']['restore-rails'].get('dram_restored') is None
         print('PASS post helper '+variant)
     evidence=args.out/'missing-post-helper'
     parser=argparse.ArgumentParser();board.run_options(parser)

@@ -24,7 +24,7 @@ DEFAULT_QUEUE = Path('~/.cache/sunstoneos/board-queue').expanduser()
 ENTRY = re.compile(r'\b\d{19}-[0-9a-f]{8}\b')
 BEGIN, END = '<!-- evidence-table:begin -->', '<!-- evidence-table:end -->'
 FIELD_ORDER = ('id', 'subsystem', 'date', 'entry_id', 'port', 'image_sha256', 'git_revision',
-               'hypothesis', 'outcome', 'verdict', 'measurements', 'conditions', 'evidence', 'note')
+               'hypothesis', 'reference', 'outcome', 'verdict', 'measurements', 'conditions', 'evidence', 'note')
 
 
 def load_schema():
@@ -152,6 +152,12 @@ def queue_record(queue, entry_id, subsystem):
     result = json.loads(result_path.read_text()) if result_path.exists() else {}
     stamp = result.get('time') or entry.get('submitted')
     outcome = result.get('outcome', 'not-run')
+    reference = entry.get('reference')
+    if isinstance(reference, dict):
+        reference = f"none: {reference['reason']}" if reference.get('none') else f"{reference['path']}#{reference['anchor']}"
+    conditions = {'kind': entry.get('kind')} if entry.get('kind') else {}
+    if result.get('dram_mode'):
+        conditions['dram_mode'] = result['dram_mode']
     measurements = []
     total = (result.get('durations') or {}).get('total')
     if isinstance(total, (int, float)):
@@ -162,8 +168,9 @@ def queue_record(queue, entry_id, subsystem):
             'image_sha256': result.get('image_sha256') or entry.get('image_sha256'),
             'git_revision': result.get('git_revision'),
             'hypothesis': entry.get('hypothesis') or '', 'outcome': outcome,
+            **({'reference': reference} if reference else {}),
             'verdict': default_verdict(outcome, result), 'measurements': measurements,
-            'conditions': {'kind': entry.get('kind')} if entry.get('kind') else {},
+            'conditions': conditions,
             'evidence': [str(directory / 'run').replace(str(Path.home()), '~')], 'note': ''}
 
 

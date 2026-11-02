@@ -6,7 +6,7 @@
 #include <threads.h>
 
 _Static_assert(sizeof(struct ss_deadline_entry) == 48, "measurement entry layout");
-_Static_assert(offsetof(struct ss_deadline_heap, published) == 1040, "measurement publication layout");
+_Static_assert(offsetof(struct ss_deadline_heap, published) == 1088, "measurement publication layout");
 
 static struct ss_deadline_heap h, other;
 static struct ss_deadline_entry e[129];

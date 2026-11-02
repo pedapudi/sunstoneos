@@ -5,6 +5,7 @@
 #ifndef SS_FREERTOS_TASKS_TRANSLATION
 #error "Include this adapter only from the patched FreeRTOS tasks.c"
 #endif
+#include <stddef.h>
 #include "freertos.h"
 #include "freertos_registry.h"
 #include "freertos_control.h"
@@ -29,7 +30,7 @@ enum ssKernelExecution { SS_K_READY, SS_K_RUNNING, SS_K_BLOCKED, SS_K_SUSPENDED,
 enum ssKernelWait { SS_K_NONE, SS_K_DELAY, SS_K_EVENT, SS_K_NOTIFICATION };
 enum ssKernelOutcome { SS_K_WAITING, SS_K_EVENT_READY, SS_K_TIMED_OUT, SS_K_ABORTED };
 struct ssKernelTask {
-    struct ss_owner_task ready;
+    _Alignas(SS_CACHE_LINE) struct ss_owner_task ready;
     struct ss_deadline_entry deadline;
     struct ss_notification notification[configTASK_NOTIFICATION_ARRAY_ENTRIES];
     struct ss_notification_wait notify_wait;
@@ -54,7 +55,6 @@ struct ssKernelCPU {
     struct ss_deadline_heap deadlines;
     unsigned preempt, object_depth, critical_depth, suspend_depth, isr_depth;
     UBaseType_t object_mask;
-    _Atomic uint64_t slice_deadline;
     bool yield_tail, reschedule, irq_drained, command_finishing, control_draining, selecting;
     bool command_no_wait[SS_OWNER_SLOTS], command_delete[SS_OWNER_SLOTS];
     uint64_t publication[2];
@@ -62,7 +62,15 @@ struct ssKernelCPU {
     uint64_t command_pending[2], command_sequence[SS_OWNER_SLOTS];
     struct ss_kernel_pin command_reference[SS_OWNER_SLOTS];
     struct ss_kernel_pin reference[SS_OWNER_SLOTS];
+    /* CPU0's tick samples this deadline of every owner. */
+    _Alignas(SS_CACHE_LINE) _Atomic uint64_t slice_deadline;
 };
+_Static_assert(sizeof(struct ssKernelCPU) % SS_CACHE_LINE == 0 && _Alignof(struct ssKernelCPU) == SS_CACHE_LINE,
+               "owners do not share cache lines");
+_Static_assert(offsetof(struct ss_owner, incoming) % SS_CACHE_LINE == 0 &&
+               offsetof(struct ss_owner, detached) % SS_CACHE_LINE == 0 &&
+               offsetof(struct ss_owner, incoming) / SS_CACHE_LINE != offsetof(struct ss_owner, current) / SS_CACHE_LINE,
+               "remote wake words have their own lines");
 /* Critical-section commands belong to their caller across migration. Keep
  * these bounded slow-path cookies separate from hot owner/task metadata. No
  * lifetime pin may remain on a stack that another CPU can delete. */
@@ -129,6 +137,9 @@ static struct ssKernelTask *ssKernelCurrent(void)
 }
 static bool ssKernelCanPreempt(void)
 {
+    /* Boot-time controls can mark ready work before a task owns SP_EL0.
+     * The first-task restore establishes that stack before ordinary yields. */
+    if (!xSchedulerRunning) return false;
 #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
     TCB_t *task = ssKernelSelf();
     if (task && task->xPreemptionDisable) {
@@ -1275,6 +1286,20 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
     struct ssKernelMutation mutation = { .command = command, .argument = argument, .slot = pin.slot };
     uint64_t sequence = ss_control_publish(&ssKernelControl, pin.slot, ssKernelMutate, &mutation);
     bool changed = mutation.changed;
+    if (!xSchedulerRunning) {
+        /* Boot has no running owner on another CPU and no task stack to save.
+         * The boot CPU initializes every owner's queue until startup. Remove
+         * changed tasks until owner maintenance applies their controls and
+         * makes them ready; a bounded drain can leave other controls pending. */
+        struct ssKernelTask *task = &ssKernelTasks[pin.slot];
+        unsigned owner = atomic_load_explicit(&task->owner, memory_order_relaxed);
+        configASSERT(task->off_cpu);
+        if (changed && task->ready.queued)
+            configASSERT(ss_owner_remove(&ssKernelCPUs[owner].run, &task->ready));
+        ss_kernel_handle_put(&pin);
+        if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
+        return changed;
+    }
     bool self = handle == current;
     unsigned slot = pin.slot;
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
@@ -1366,14 +1391,20 @@ static void ssKernelCommandsFinish(bool can_wait)
     if (!can_wait) {
         /* IRQ flush may release ISR/self records, but cannot consume task
          * obligations or wait for runtime resource destruction. */
-        for (unsigned slot = 0; slot < SS_OWNER_SLOTS; ++slot) {
-            uint64_t bit = UINT64_C(1) << (slot % 64);
-            if (!(cpu->command_pending[slot / 64] & bit) || !cpu->command_no_wait[slot]) continue;
-            struct ss_kernel_pin pin = cpu->command_reference[slot];
-            cpu->command_pending[slot / 64] &= ~bit;
-            cpu->command_reference[slot] = (struct ss_kernel_pin){0};
-            cpu->command_delete[slot] = false;
-            ss_kernel_handle_put(&pin);
+        /* Most flushes have no pending obligation; visit set bits only. */
+        for (unsigned w = 0; w < 2; ++w) {
+            uint64_t bits = cpu->command_pending[w];
+            while (bits) {
+                unsigned b = (unsigned)__builtin_ctzll(bits), slot = w * 64 + b;
+                uint64_t bit = UINT64_C(1) << b;
+                bits &= bits - 1;
+                if (!cpu->command_no_wait[slot]) continue;
+                struct ss_kernel_pin pin = cpu->command_reference[slot];
+                cpu->command_pending[w] &= ~bit;
+                cpu->command_reference[slot] = (struct ss_kernel_pin){0};
+                cpu->command_delete[slot] = false;
+                ss_kernel_handle_put(&pin);
+            }
         }
         portCLEAR_INTERRUPT_MASK(irq);
         return;
@@ -1402,6 +1433,11 @@ static unsigned ssKernelPriority(TaskHandle_t handle, bool base)
     if (!ss_kernel_handle_pin(&ssKernelRegistry, handle, &pin)) { portCLEAR_INTERRUPT_MASK(irq); return 0; }
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
     unsigned priority = atomic_load_explicit(base ? &s->base : &s->effective, memory_order_acquire);
+    if (!xSchedulerRunning) {
+        struct ss_control_state desired;
+        ss_control_snapshot(&ssKernelControl, pin.slot, &desired);
+        priority = base ? desired.priority : desired.effective_priority;
+    }
     ss_kernel_handle_put(&pin);
     portCLEAR_INTERRUPT_MASK(irq);
     return priority;
@@ -1452,7 +1488,7 @@ static BaseType_t ssKernelResumeAll(void)
     configASSERT(ssKernelCPUs[c].preempt);
     --ssKernelCPUs[c].preempt;
     yield |= ssKernelCPUs[c].reschedule;
-    yield &= ssKernelCPUs[c].preempt == 0;
+    yield &= xSchedulerRunning && ssKernelCPUs[c].preempt == 0;
     portCLEAR_INTERRUPT_MASK(irq);
     if (yield && ssKernelCanPreempt()) portYIELD();
     return yield ? pdTRUE : pdFALSE;

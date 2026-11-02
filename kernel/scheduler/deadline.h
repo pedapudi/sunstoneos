@@ -29,7 +29,8 @@ struct ss_deadline_heap {
     struct ss_deadline_entry *entries[SS_DEADLINE_CAPACITY];
     uint64_t order;
     uint16_t count;
-    struct ss_deadline_publication published;
+    /* CPU0's tick reads this snapshot of every owner: keep it off the owner's lines. */
+    _Alignas(64) struct ss_deadline_publication published;
 };
 /* All mutations and local queries require this heap's owner CPU with local API
  * interrupts excluded. Entry storage outlives membership. Each entry represents
