@@ -435,7 +435,7 @@ def runner_cleanup(args, machine, geometry_host, epoch, generation, frozen):
     output = args.out/'runner'
     parser = argparse.ArgumentParser()
     board.run_options(parser)
-    options = parser.parse_args([str(args.elf), '--port', '3-1', '--restore-rails',
+    options = parser.parse_args([str(args.elf), '--port', '3-1', '--restore-rails', '--preserve-dram',
                                  '--decoder', str(frozen), '--host-tree', str(args.tool_tree)])
     options.evidence = output
     uploads = []

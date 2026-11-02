@@ -32,7 +32,7 @@ def passed(name):
     print('PASS',name)
 
 
-def arguments(root, *extra, submit=False):
+def arguments(root, *extra, submit=False, development=False):
     parser = argparse.ArgumentParser()
     board.run_options(parser,submit)
     parser.add_argument('--evidence',type=Path)
@@ -45,7 +45,8 @@ def arguments(root, *extra, submit=False):
     values = [str(image),'--port','3-1','--evidence',str(root/'run')]
     if submit:
         values += ['--kind','probe','--expect','complete']
-    return parser.parse_args(values+list(extra))
+    # Existing cases exercise the qualification behavior; development cases opt in.
+    return parser.parse_args(values+([] if development else ['--preserve-dram'])+list(extra))
 
 
 class Model:
@@ -283,6 +284,55 @@ def transport_cases(out):
     else:raise AssertionError('transport error accepted')
     assert model.quarantined and len(model.calls)==0
     passed('transport-error-quarantines-unknown-instance')
+
+
+def development_dram_cases(out):
+    """A development run transfers no DRAM; --preserve-dram keeps the save, restore and DRAM quarantine."""
+    normal={'session':True,'last':{'stage':board.crumbs.RETURN_ROM,'value':0}}
+    for preserve in (False,True):
+        root=out/('dram-mode-'+('preserve' if preserve else 'development'));root.mkdir()
+        args=arguments(root,development=not preserve)
+        assert images.preserving(args)==preserve
+        model=Model('normal')
+        owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
+        owner.node,owner.identity=Path('/MODEL/003/009'),[1]
+        owner.tx=lambda *values:'';owner.wait=lambda *values:None;owner.arm=lambda *values,**keywords:None
+        owner.returned=lambda:(0,0,{});owner.usb_source_off=lambda *values,**keywords:None
+        plan={'format':'generic','uploads':[],'preserve_regions':[(0x41000000,4096)],'epoch':1,
+              'watchdog':{'mode':0xb1,'session_seconds':1},'launch':['exe','0x52000']}
+        saved=[{'address':0x41000000,'bytes':4096,'file':'x','sha256':'0'}]
+        with patch.object(images,'validate_uploads'),patch.object(images,'backup_dram',return_value=saved) as backup,\
+             patch.object(board.crumbs,'decode',return_value=normal):
+            assert owner.launch(plan)=='returned'
+        assert backup.called==preserve and ('dram_backups' in owner.record)==preserve
+        assert bool(owner.record.get('dram_dirty'))==preserve and bool(owner.record.get('dram_unsaved'))==(not preserve)
+        # A failure after validated retirement: development keeps the instance, preserve quarantines it.
+        for validated in (True,False):
+            owner.quarantined=False;owner.record['quarantined']=False
+            owner.record['native_retirement_validated']=validated
+            with patch.object(images,'capture',side_effect=ValueError('modeled decode failure')),\
+                 patch.object(owner.access,'quarantine_instance') as quarantine:
+                try:owner.capture(plan)
+                except board.Mismatch:pass
+                else:raise AssertionError('capture failure accepted')
+            expected=True if preserve else not validated
+            assert bool(quarantine.called)==expected,(preserve,validated)
+            if quarantine.called:
+                reason=quarantine.call_args.args[1]
+                assert ('DRAM restoration' in reason)==preserve and 'retirement' in reason
+        # Settling ownership: only a run that saved DRAM can leave it unresolved.
+        owner.quarantined=False;owner.record.pop('quarantined',None)
+        with patch.object(owner.access,'quarantine_instance') as quarantine:
+            owner.settle_dram_ownership()
+        assert bool(quarantine.called)==preserve
+        passed('dram-mode-'+('preserve-keeps-save-restore-and-quarantine' if preserve else 'development-skips-transfers-and-never-quarantines-for-dram'))
+    # The mode is recorded in the result and travels through the queue as a frozen option.
+    root=out/'dram-mode-queue';root.mkdir()
+    for flag in (False,True):
+        queue=board.Queue(root/('q-'+str(flag)));args=arguments(root,submit=True,development=not flag)
+        job=queue.submit(args)
+        assert job['options']['preserve_dram']==flag
+    passed('dram-mode-frozen-in-queue-entry')
 
 
 def reset_release_cases(out):
@@ -1080,6 +1130,7 @@ def main():
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):withdraw_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):reset_release_cases(args.out)
+    if 'transport' in groups:development_dram_cases(args.out)
     if 'queue-integrity' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_integrity_cases(args.out)
     if 'policy' in groups:policy_cases(args.out)
