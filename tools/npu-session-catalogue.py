@@ -41,9 +41,11 @@ class Requirement(c.Structure):
 
 
 class Layout(c.Structure):
-    _fields_ = [('buffers', Requirement * (4 + 2 * MAX_TENSORS))] + [(n, c.c_uint32) for n in (
+    # Mirrors struct nbg_assembly_layout (include/nbg_assembly.h): four fixed allocations, the tensors and the
+    # dynamic-input allocation, then the counts and the dynamic-input flag.
+    _fields_ = [('buffers', Requirement * (4 + 2 * MAX_TENSORS + 1))] + [(n, c.c_uint32) for n in (
         'inputs', 'outputs', 'nn_operations', 'descriptor_patches', 'state_patches',
-        'command_body_bytes')]
+        'command_body_bytes', 'dynamic')]
 
 
 def identity(path):
