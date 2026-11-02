@@ -47,9 +47,13 @@ static inline int a733_device_memory_local_pool_valid(uintptr_t start, uintptr_t
  * index 1 (Normal write-back) and AP = 0b00 (EL1 read/write, no EL0 access).
  * Level-1 (1 GiB) and level-2 (2 MiB) blocks share the format. The cached
  * builder's DRAM map above the boot image and the memory qualification
- * image's tested map both use it. */
+ * image's tested map both use it. The entry is non-global (nG, bit 11), so a
+ * TLB entry filled through the kernel's table carries the kernel's ASID, 0.
+ * Application spaces map parts of the same addresses with their own ASIDs
+ * (docs/designs/large-app-regions.md); a global kernel entry would match
+ * under every ASID and hide or conflict with those mappings. */
 #define A733_EL1_DRAM_BLOCK(pa) ((uint64_t)(pa) | (UINT64_C(1) << 54) | (UINT64_C(1) << 53) | \
-    (UINT64_C(1) << 10) | (UINT64_C(3) << 8) | (UINT64_C(1) << 2) | 1)
+    (UINT64_C(1) << 11) | (UINT64_C(1) << 10) | (UINT64_C(3) << 8) | (UINT64_C(1) << 2) | 1)
 /* The top of DRAM that the EL1 tables can map: 12 GiB from 0x40000000. The
  * cached builder maps DRAM above the boot image only when
  * a733_dram_decode_check() of a733_dram.h passes for those ranges. */

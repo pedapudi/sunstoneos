@@ -2,6 +2,13 @@
 #include "a733_clock_reference.h"
 #include "a733_range.h"
 #include "a733_storage_update.h"
+/* A read-only core (SUNXI_MMC_READ_ONLY) links no storage-update service: no update
+ * binding exists, and the write operation of command() is refused. */
+#ifdef SUNXI_MMC_READ_ONLY
+#define UPDATE_ALIVE(u) 0
+#else
+#define UPDATE_ALIVE(u) a733_storage_update_alive(u)
+#endif
 #include "sunxi_smhc.h"
 #include "a733_mmc_read.h"
 #define CCU UINT32_C(0x02002000)
@@ -64,7 +71,7 @@ static enum a733_mmc_platform_result fail(struct a733_mmc_platform *p)
 static int timely(struct a733_mmc_platform *p)
 {
     uint64_t now;
-    if((p->update&&!a733_storage_update_alive(p->update))||p->ops.now_us(p->cookie,&now)!=1||
+    if((p->update&&!UPDATE_ALIVE(p->update))||p->ops.now_us(p->cookie,&now)!=1||
        !a733_monotonic_advance(now,&p->last_now))return 0;
     return now<p->deadline&&now<p->config.lifetime_deadline_us;
 }
@@ -222,7 +229,7 @@ static int supply_poll(struct a733_mmc_platform *p)
 /* Core callbacks execute only within one admitted, mutex-held poll. Pin and
  * shared-manager methods are never called recursively through these callbacks. */
 static int core_guard(struct a733_mmc_platform *p)
-{return p->core_call&&p->held&&!p->fault&&!atomic_load_explicit(&p->clocks->failed,memory_order_acquire)&&(!p->update||a733_storage_update_alive(p->update))&&p->ops.current(p->cookie)==1&&timely(p);}
+{return p->core_call&&p->held&&!p->fault&&!atomic_load_explicit(&p->clocks->failed,memory_order_acquire)&&(!p->update||UPDATE_ALIVE(p->update))&&p->ops.current(p->cookie)==1&&timely(p);}
 static int core_read(void *v,uint32_t off,uint32_t *out)
 {struct a733_mmc_platform *p=v;int ok=core_guard(p)&&rd(p,p->base+off,out);if(!ok)fail(p);return ok;}
 /* The IDMAC registers take only the values of a DMA read, and only with a
@@ -555,11 +562,16 @@ static enum a733_mmc_platform_result command(struct a733_mmc_platform *p,unsigne
     p->core_call=1;
     if(operation==0||operation==3) {
         int ok;
+#ifdef SUNXI_MMC_READ_ONLY
+        if(operation==3){p->core_call=0;return finish(p,A733_MMC_INVALID);}
+        ok=sunxi_mmc_read(&p->core,first,blocks,out,bytes,deadline);
+#else
         if(operation==3) {
             const struct sunxi_mmc_write_authority authority={owner,a733_storage_update_authorize};
             ok=owner&&a733_storage_update_owned(owner,p)&&
                 sunxi_mmc_write(&p->core,&owner->request,&authority);
         }else ok=sunxi_mmc_read(&p->core,first,blocks,out,bytes,deadline);
+#endif
         p->core_call=0;
         if(p->fault||p->core.state==SUNXI_MMC_FAULT)return finish(p,fail(p));
         return finish(p,ok?A733_MMC_PENDING:A733_MMC_INVALID);
@@ -582,6 +594,7 @@ enum a733_mmc_platform_result a733_mmc_platform_card(struct a733_mmc_platform *p
 
 enum a733_mmc_platform_result a733_mmc_platform_poll(struct a733_mmc_platform *p)
 {return poll_owned(p,NULL);}
+#ifndef SUNXI_MMC_READ_ONLY
 int a733_mmc_platform_update_bind(struct a733_mmc_platform *p,struct a733_storage_update *u)
 {
     if(!p||!p->initialized||!u||!outside(p,u,sizeof(*u))||!a733_storage_update_owned(u,p)||!enter_api(p))return 0;
@@ -613,6 +626,7 @@ enum a733_mmc_platform_result a733_mmc_platform_update_io(struct a733_mmc_platfo
 void a733_mmc_platform_update_retain(struct a733_mmc_platform *p,struct a733_storage_update *u)
 {if(p&&p->update==u&&enter_api(p))finish(p,fail(p));}
 
+#endif
 int a733_mmc_platform_storage(struct a733_mmc_platform *p,const void *v,size_t n)
 {return p&&p->initialized&&outside(p,v,n);}
 

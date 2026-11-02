@@ -154,6 +154,19 @@ void a733_dram_window_block(const struct a733_dram_window *,const struct a733_dr
 struct a733_dram_range {
     uint64_t base, size;
 };
+/* Word access for the address-test decode check of
+ * drivers/dram/a733_dram_decode_probe.c: 64-bit reads and writes of physical
+ * addresses, and a barrier that completes the writes before any read. The
+ * image uses volatile accesses at EL3; host checks use a memory model. */
+struct a733_dram_probe_io {
+    void *context;
+    uint64_t (*read)(void *, uint64_t);
+    void (*write)(void *, uint64_t, uint64_t);
+    void (*barrier)(void *);
+};
+/* Returns 1 when every probe address of every range returns its own token.
+ * Refuses (0) ranges outside the qualification image's tested map. */
+int a733_dram_decode_probe(const struct a733_dram_probe_io *, const struct a733_dram_range *, unsigned count);
 /* The per-boot DRAM decode check. platform/a733-smp-cached/memory.c calls it
  * once on core 0 at EL3 with the MMU off, before it writes the EL1 entries
  * for `ranges`. The ranges lie in 0x4800_0000-0x7900_0000 and

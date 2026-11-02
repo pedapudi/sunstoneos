@@ -12,6 +12,7 @@ p.add_argument('--sources', type=Path, required=True, help='External SunstoneOS 
 p.add_argument('--evidence', type=Path, required=True, help='Fresh external directory')
 p.add_argument('--cc', default='/usr/bin/clang-21')
 p.add_argument('--auto-stop-argument-only', action='store_true')
+p.add_argument('--read-only', action='store_true', help='build the core with SUNXI_MMC_READ_ONLY')
 a = p.parse_args()
 a.evidence.mkdir(parents=True, exist_ok=False)
 root = Path(__file__).resolve().parents[1]
@@ -101,7 +102,7 @@ reference = (mmc[:mmc.index('#include')] + sd[:sd.index('#include')] + shim + ar
              function(sd, 'mmc_decode_csd').replace('mmc_decode_csd(', 'sd_reference(', 1) + '\n' +
              function(mmc, 'mmc_decode_csd').replace('mmc_decode_csd(', 'mmc_reference(', 1) + '\n')
 (a.evidence / 'mmc-reference.h').write_text(reference)
-common = [a.cc, '-std=gnu11', '-Wall', '-Wextra', '-Werror', '-Iinclude']
+common = [a.cc, '-std=gnu11', '-Wall', '-Wextra', '-Werror', '-Iinclude'] + (['-DSUNXI_MMC_READ_ONLY'] if a.read_only else [])
 host = a.evidence / 'mmc-model'
 run(common + ['-O1', '-g', '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer',
               '-I' + str(a.evidence), 'drivers/storage/sunxi_mmc.c', 'checks/sunxi-mmc.c', '-o', str(host)])
