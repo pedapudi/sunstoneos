@@ -17,13 +17,17 @@
 #include <string.h>
 
 #define MIB (UINT64_C(1) << 20)
+#ifndef FILE_BYTES                                /* the host guard check shrinks the file and the guard */
 #define FILE_BYTES (512 * MIB)
+#endif
 #define PATH "/sunstone-test/sunstone-region-test.bin"
 #define CHUNK 65536u
 #define SYNC_EVERY (8 * MIB)
 #define MAX_FLUSHES 4096u
 #define TAG UINT64_C(0x5357544553544f4b)          /* "SWTESTOK" */
+#ifndef GUARD_US
 #define GUARD_US UINT64_C(40000000)               /* the write stops after this long and closes cleanly */
+#endif
 #define COUNTER_HZ UINT64_C(24000000)
 
 /* One SHA-256 compression of a 64-byte block from the standard initial state (sha256_ce.S; ARMv8 Cryptographic Extension). */
@@ -86,6 +90,10 @@ static void stream_fill(uint8_t *dst, uint64_t offset, size_t n)
 /* --- the CPU clock: a chain of dependent adds timed against the 24 MHz counter ------------------------------------- */
 static uint64_t cpu_cycles_per_second(uint64_t *ticks_out)
 {
+#ifndef __aarch64__                                      /* the host guard check */
+    *ticks_out = 0;
+    return 0;
+#else
     const uint64_t loops = 20000000u;                       /* 64 dependent adds each */
     uint64_t t0 = ss_counter_ticks(), x = 0, n = loops;
     __asm__ volatile(
@@ -94,6 +102,7 @@ static uint64_t cpu_cycles_per_second(uint64_t *ticks_out)
     uint64_t t1 = ss_counter_ticks();
     *ticks_out = t1 - t0;
     return x == loops * 64 && t1 > t0 ? loops * 64 * 24000000u / (t1 - t0) : 0;
+#endif
 }
 
 /* --- the result -------------------------------------------------------------------------------------------------------- */
