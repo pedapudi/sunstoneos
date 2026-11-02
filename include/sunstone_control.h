@@ -6,7 +6,9 @@
 #define SUNSTONE_CONTROL_H
 #include <stdint.h>
 #define SS_CONTROL_CORES 8u
+/* path 0: the control interrupt handler; path 1: a task woken by an interrupt at the API floor through the kernel */
 struct ss_control_stats {
+    uint32_t path;
     uint32_t core, rate_hz;
     uint64_t count, consumed, gaps, dropped, missed;
     uint32_t latency_max_ns, latency_p9999_ns, jitter_max_ns, jitter_p9999_ns;
@@ -14,5 +16,5 @@ struct ss_control_stats {
 /* Start `rate_hz[i]` on `cores[i]` (not core 0). Returns the number started. Call once, from a task. */
 unsigned ulSunstoneControlStart(const unsigned *cores, const unsigned *rate_hz, unsigned n);
 void vSunstoneControlStop(void);
-unsigned ulSunstoneControlStatsRead(unsigned core, struct ss_control_stats *out);
+unsigned ulSunstoneControlStatsRead(unsigned core, unsigned path, struct ss_control_stats *out);
 #endif

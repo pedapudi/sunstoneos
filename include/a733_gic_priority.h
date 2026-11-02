@@ -30,6 +30,9 @@ _Static_assert(A733_GIC_STORED_FROM_NS(0xb0) == 0xd8, "the API mask 0xb0 is stor
 /* The GIC signals an interrupt to the core when its Non-secure-view priority is below the mask (Non-secure view). */
 #define A733_GIC_SIGNALLED(stored, pmr_ns) (A733_GIC_NS_VIEW(stored) < (unsigned)(pmr_ns))
 
+/* The task path of the comparison: the API floor itself, the highest priority that may call the FromISR API. */
+#define A733_GIC_TASK_PATH_STORED A733_GIC_STORED_API_FLOOR(0xb0)
+_Static_assert(A733_GIC_STORED_FROM_NS(A733_GIC_NS_WRITE_FOR_STORED(A733_GIC_TASK_PATH_STORED)) == A733_GIC_TASK_PATH_STORED, "the task path priority is the value stored by its Non-secure write");
 _Static_assert(A733_GIC_STORED_FROM_NS(A733_GIC_NS_WRITE_FOR_STORED(A733_GIC_CONTROL_STORED)) == A733_GIC_CONTROL_STORED,
                "the control priority is the value stored by its Non-secure write");
 _Static_assert(A733_GIC_CONTROL_STORED < A733_GIC_STORED_API_FLOOR(0xb0), "the control class is above the API floor");
