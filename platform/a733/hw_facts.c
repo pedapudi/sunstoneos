@@ -10,7 +10,8 @@
  *                   is restored.
  *   GICR_IPRIORITYR priority bytes of PPI 27 and PPI 30 on core 0, with the values the platform writes
  *                   next; the value on entry is restored.
- * No other register is written. The device words are read only after the gates that the runner checks. */
+ * No other register is written. Group 0 CPU interface registers (ICC_IGRPEN0_EL1, ICC_BPR0_EL1, ICC_AP0Rn_EL1) are
+ * never accessed: at Non-secure EL1 they trap to the EL3 monitor. The device words are read only after the gates that the runner checks. */
 #include <stddef.h>
 #include "a733_hw_facts.h"
 #include "irq_table.h"
@@ -60,7 +61,7 @@ static uint64_t id_register(unsigned id)
     case 0x001a: return MRS(id_aa64mmfr2_el1);
     case 0x001b: return MRS(S3_0_C0_C7_3);
     case 0x001c: return MRS(S3_0_C0_C4_4);
-    default: return MRS(pmcr_el0);
+    default: return 0;
     }
 }
 static void put(struct hwf_slot *slot, unsigned id, unsigned core, unsigned flags, uint32_t aux, uint64_t value)
@@ -95,8 +96,6 @@ static void capture_core(unsigned core)
         case 0x0033: v = MRS(ICC_SRE_EL1); break;
         case 0x0034: v = MRS(ICC_IGRPEN1_EL1); break;
         case 0x0035: v = MRS(ICC_BPR1_EL1); break;
-        case 0x0036: v = MRS(ICC_IGRPEN0_EL1); break;
-        case 0x0037: v = MRS(ICC_BPR0_EL1); break;
         case 0x0038:
             out_aux = 0xff; pmr_write(out_aux); v = pmr_ff = pmr_read(); break;
         case 0x0039:

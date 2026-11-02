@@ -102,7 +102,7 @@ ID_REGS = [
     (0x0016, 'cpu.id_aa64isar1_el1', 'ID_AA64ISAR1_EL1', []), (0x0017, 'cpu.id_aa64isar2_el1', 'ID_AA64ISAR2_EL1', []),
     (0x0018, 'cpu.id_aa64mmfr0_el1', 'ID_AA64MMFR0_EL1', MMFR0), (0x0019, 'cpu.id_aa64mmfr1_el1', 'ID_AA64MMFR1_EL1', []),
     (0x001a, 'cpu.id_aa64mmfr2_el1', 'ID_AA64MMFR2_EL1', MMFR2), (0x001b, 'cpu.id_aa64mmfr3_el1', 'ID_AA64MMFR3_EL1', []),
-    (0x001c, 'cpu.id_aa64zfr0_el1', 'ID_AA64ZFR0_EL1', []), (0x001d, 'cpu.pmcr_el0', 'PMCR_EL0', []),
+    (0x001c, 'cpu.id_aa64zfr0_el1', 'ID_AA64ZFR0_EL1', []),
 ]
 CPUIF = [
     (0x0030, 'gic.cpuif.icc_ctlr_el1', 'ICC_CTLR_EL1', ICC_CTLR),
@@ -111,9 +111,8 @@ CPUIF = [
     (0x0033, 'gic.cpuif.icc_sre_el1', 'ICC_SRE_EL1', []),
     (0x0034, 'gic.cpuif.icc_igrpen1_el1', 'ICC_IGRPEN1_EL1', []),
     (0x0035, 'gic.cpuif.icc_bpr1_el1', 'ICC_BPR1_EL1', []),
-    (0x0036, 'gic.cpuif.icc_igrpen0_el1', 'ICC_IGRPEN0_EL1', []),
-    (0x0037, 'gic.cpuif.icc_bpr0_el1', 'ICC_BPR0_EL1', []),
 ]
+# ICC_IGRPEN0_EL1 and ICC_BPR0_EL1 are not read: a Non-secure EL1 read of a Group 0 register traps to EL3 on the A733 (see SEEDS).
 # Writes of ICC_PMR_EL1 with values that every image writes (0xff, and the FreeRTOS API mask); the
 # value on entry is restored. aux 0 writes 0xff, aux 1 writes the image's API mask; the slot's aux
 # field returns the written value.
@@ -373,6 +372,17 @@ for name, value in (('dcdc3_uv', 800000), ('dcdc5_uv', 800000), ('dcxo_hz', 2600
     SEEDS.append(dict(name='runner.rail.' + name, source='rail helper SUPPLY line (SID 0x496)', view=FEL_VIEW, core=None,
                       status='observed', value=value, queue_entry=NPU_ENTRY,
                       note='the rail helper reads the PMIC and the SID before an image with the CPU entry guard'))
+
+
+TRAP_ENTRY = '1793590176547518274-e819ce89'
+SEEDS.append(dict(name='gic.cpuif.icc_igrpen0_el1.read_traps_to_el3', source='ICC_IGRPEN0_EL1 (mrs at Non-secure EL1)',
+                  view=view('cpuif'), core=4, status='measured', value=1, queue_entry=TRAP_ENTRY,
+                  note='measured: the first EL3 exception was ESR 0x623c32b9 (EC 0x18, a trapped system register access) at the mrs of '
+                       'ICC_IGRPEN0_EL1, ELR 0x4107c1c0, on core 4, and the monitor stopped. Inferred, not measured: the monitor runs with '
+                       'SCR_EL3.FIQ set (its entry code writes 0x535), and with FIQ set the GIC architecture routes Group 0 interrupts to EL3, '
+                       'so Non-secure EL1 accesses to the Group 0 CPU interface registers (ICC_IGRPEN0_EL1, ICC_BPR0_EL1, ICC_AP0Rn_EL1, '
+                       'ICC_IAR0_EL1, ICC_EOIR0_EL1, ICC_HPPIR0_EL1) trap to EL3 (IHI0069, the ICC_IGRPEN0_EL1 and ICC_BPR0_EL1 register '
+                       'descriptions; Linux irq-gic-v3.c gic_has_group0 skips Group 0 registers when SCR_EL3.FIQ shifts the PMR)'))
 
 
 def seeded_document():

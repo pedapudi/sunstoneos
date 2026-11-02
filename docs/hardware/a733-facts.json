@@ -3759,18 +3759,6 @@
    "value": null
   },
   {
-   "name": "cpu.pmcr_el0",
-   "source": "PMCR_EL0",
-   "view": {
-    "el": 1,
-    "security": "non-secure",
-    "interface": "cpu-register"
-   },
-   "core": "all",
-   "status": "unmeasured",
-   "value": null
-  },
-  {
    "name": "gic.cpuif.icc_ctlr_el1",
    "source": "ICC_CTLR_EL1",
    "view": {
@@ -3941,30 +3929,6 @@
   {
    "name": "gic.cpuif.icc_bpr1_el1",
    "source": "ICC_BPR1_EL1",
-   "view": {
-    "el": 1,
-    "security": "non-secure",
-    "interface": "gic-cpu-interface"
-   },
-   "core": "all",
-   "status": "unmeasured",
-   "value": null
-  },
-  {
-   "name": "gic.cpuif.icc_igrpen0_el1",
-   "source": "ICC_IGRPEN0_EL1",
-   "view": {
-    "el": 1,
-    "security": "non-secure",
-    "interface": "gic-cpu-interface"
-   },
-   "core": "all",
-   "status": "unmeasured",
-   "value": null
-  },
-  {
-   "name": "gic.cpuif.icc_bpr0_el1",
-   "source": "ICC_BPR0_EL1",
    "view": {
     "el": 1,
     "security": "non-secure",
@@ -4567,6 +4531,20 @@
    "core": "all",
    "status": "unmeasured",
    "value": null
+  },
+  {
+   "name": "gic.cpuif.icc_igrpen0_el1.read_traps_to_el3",
+   "source": "ICC_IGRPEN0_EL1 (mrs at Non-secure EL1)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "gic-cpu-interface"
+   },
+   "core": 4,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1793590176547518274-e819ce89",
+   "note": "measured: the first EL3 exception was ESR 0x623c32b9 (EC 0x18, a trapped system register access) at the mrs of ICC_IGRPEN0_EL1, ELR 0x4107c1c0, on core 4, and the monitor stopped. Inferred, not measured: the monitor runs with SCR_EL3.FIQ set (its entry code writes 0x535), and with FIQ set the GIC architecture routes Group 0 interrupts to EL3, so Non-secure EL1 accesses to the Group 0 CPU interface registers (ICC_IGRPEN0_EL1, ICC_BPR0_EL1, ICC_AP0Rn_EL1, ICC_IAR0_EL1, ICC_EOIR0_EL1, ICC_HPPIR0_EL1) trap to EL3 (IHI0069, the ICC_IGRPEN0_EL1 and ICC_BPR0_EL1 register descriptions; Linux irq-gic-v3.c gic_has_group0 skips Group 0 registers when SCR_EL3.FIQ shifts the PMR)"
   },
   {
    "name": "runner.mmio.0x020025c0",

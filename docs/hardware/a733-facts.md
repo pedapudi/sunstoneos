@@ -48,8 +48,8 @@ value and a 64-bit value. The slot order comes from `tools/hw_facts.py`, which w
 
 | Scope | Facts |
 | --- | --- |
-| Each core | `MPIDR_EL1`, `MIDR_EL1`, `REVIDR_EL1`, `CNTFRQ_EL0`, `CTR_EL0`, `CLIDR_EL1`, `DCZID_EL0`; `CCSIDR_EL1` for `CSSELR_EL1` 0 to 7; `ID_AA64PFR0/1`, `DFR0/1`, `AFR0`, `ISAR0/1/2`, `MMFR0/1/2/3`, `ZFR0`; `PMCR_EL0`. |
-| Each core, GIC CPU interface | `ICC_CTLR_EL1` (PRIbits, IDbits and the other fields), `ICC_PMR_EL1` on entry, `ICC_RPR_EL1` with no interrupt active, `ICC_SRE_EL1`, `ICC_IGRPEN0/1_EL1`, `ICC_BPR0/1_EL1`; the read-back of `ICC_PMR_EL1` after writing 0xff and after writing the FreeRTOS API mask. |
+| Each core | `MPIDR_EL1`, `MIDR_EL1`, `REVIDR_EL1`, `CNTFRQ_EL0`, `CTR_EL0`, `CLIDR_EL1`, `DCZID_EL0`; `CCSIDR_EL1` for `CSSELR_EL1` 0 to 7; `ID_AA64PFR0/1`, `DFR0/1`, `AFR0`, `ISAR0/1/2`, `MMFR0/1/2/3`, `ZFR0`. |
+| Each core, GIC CPU interface | `ICC_CTLR_EL1` (PRIbits, IDbits and the other fields), `ICC_PMR_EL1` on entry, `ICC_RPR_EL1` with no interrupt active, `ICC_SRE_EL1`, `ICC_IGRPEN1_EL1`, `ICC_BPR1_EL1`; the read-back of `ICC_PMR_EL1` after writing 0xff and after writing the FreeRTOS API mask. |
 | Each core, redistributor | `GICR_TYPER`, `GICR_WAKER`, `GICR_IIDR`; in the SGI and PPI frame the group, group modifier, enable, pending, active and configuration words, and the priority byte of every SGI and PPI (INTID 0 to 31, including PPI 27). |
 | Core 0, distributor | `GICD_CTLR` (DS, ARE and the enables), `GICD_TYPER`, `GICD_IIDR`, `GICD_TYPER2`, `GICD_PIDR2`. |
 | Core 0, SPIs | For INTID 56 to 61, 67, 69, 70, 71, 80, 81, 95, 97, 143, 149, 153, 161, 185, 187, 200, 201, 228 and 242: priority, group, group modifier, enable, pending, active, configuration and route, with the route the image requested, so that the configured Secure value and the Non-secure read-back sit side by side. |
@@ -71,6 +71,15 @@ The image also installs, at EL3 and through the ordinary route installer, routes
 for INTID 97, 143 and 95 with priority 0xd8 on core 0, with disabled stub handlers
 (`tools/sunstone-manifest.py`, `SUNSTONE_A733_HW_FACTS`). The NPU, audio and GPU images route the same INTIDs
 with the same priority. No interrupt is enabled.
+
+Registers the probe never accesses, because a Non-secure EL1 access traps to the monitor: the Group 0 CPU
+interface registers `ICC_IGRPEN0_EL1`, `ICC_BPR0_EL1` and `ICC_AP0Rn_EL1`. Queue entry
+`1793590176547518274-e819ce89` measured the read of `ICC_IGRPEN0_EL1` trapping to EL3 (ESR class 0x18, the
+monitor stopped); the fact `gic.cpuif.icc_igrpen0_el1.read_traps_to_el3` records it. The inference is that the
+monitor sets `SCR_EL3.FIQ` (its entry code writes 0x535), which gives EL3 the Group 0 interface. `PMCR_EL0` is
+not read either: no image reads it at EL1 on a board. `checks/hw-facts.py` disassembles the capture code and
+refuses any system register outside an allowed list of registers that board images already read at EL1 or that
+lie in the ID space.
 
 Not measured, with the reason:
 
@@ -158,7 +167,7 @@ measurement.
 | 22 | `ID_AA64ISAR0_EL1` atomics (LSE), `ID_AA64MMFR2_EL1.CCIDX` | `platform/a733/cpu_observation.c` | `checks/a733-smp-cached.py` | `cpu.id_aa64isar0_el1.atomic`, `cpu.id_aa64mmfr2_el1.ccidx` |
 | 23 | `ID_AA64MMFR0_EL1` physical address range, granules | `arch/aarch64`, `platform/a733-smp-cached/memory.c` table geometry | `checks/a733-smp-cached.py` (`id_aa64mmfr0_el1: 2`) | `cpu.id_aa64mmfr0_el1.*` |
 | 24 | `ID_AA64PFR0_EL1` EL levels, GIC system registers, FP and AdvSIMD | the cached boot and the port | the models | `cpu.id_aa64pfr0_el1.*` |
-| 25 | `PMCR_EL0.N` event counters | `platform/a733/cpu_pmu.c`, `continue.S` MDCR_EL2.HPMN | `checks/cpu-pmu.py` | `cpu.pmcr_el0` |
+| 25 | `PMCR_EL0.N` event counters | `platform/a733/cpu_pmu.c`, `continue.S` MDCR_EL2.HPMN | `checks/cpu-pmu.py` | not in the probe: no image reads it at EL1 on a board |
 | 26 | NPU admission words: PCK clock gate, two fabric gates, PCK4 policy and status (both 8) | `tools/board_images.py` validate_npu_on, `tools/board.py` npu_on_state, `drivers/power/a733_power_domains.c` | `checks/board-npu-on-admission.py` | `mmio.0x070101ac`, `0x020025c0`, `0x020025e0`, `0x07064000`, `0x07064008`; runner copies in `runner.mmio.*` |
 | 27 | PMIC rails DCDC3 and DCDC5 at 800 mV, DCXO 26 MHz, voltage bin | rail helper (`tools/board_state.py`), `drivers/power/a733_pmic.c` | `platform/qemu-os/mmio.c`, `checks/a733-pmic.c` | `runner.rail.*` (not in the probe) |
 | 28 | TWI controller idle state `0xf8` status, control `0x40`, divider | `drivers/power/a733_pmic.c`, `drivers/i2c/a733_twi.c` | `platform/qemu-os/mmio.c`, `checks/board-bundles-apps-model.c` | not a probe fact: the probe makes no TWI access |

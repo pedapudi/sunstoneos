@@ -236,9 +236,59 @@ def test_no_hardcoded_values():
     assert not problems, 'a host model hard-codes values that docs/hardware/a733-facts.json states:\n' + '\n'.join(problems)
 
 
+ALLOWED_SYSREGS = {
+    'MPIDR_EL1', 'MIDR_EL1', 'REVIDR_EL1', 'CNTFRQ_EL0', 'CTR_EL0', 'CLIDR_EL1', 'DCZID_EL0', 'CCSIDR_EL1', 'CSSELR_EL1',
+    'ID_AA64PFR0_EL1', 'ID_AA64PFR1_EL1', 'ID_AA64DFR0_EL1', 'ID_AA64DFR1_EL1', 'ID_AA64AFR0_EL1', 'ID_AA64ISAR0_EL1',
+    'ID_AA64ISAR1_EL1', 'ID_AA64ISAR2_EL1', 'ID_AA64MMFR0_EL1', 'ID_AA64MMFR1_EL1', 'ID_AA64MMFR2_EL1', 'ID_AA64MMFR3_EL1',
+    'ID_AA64ZFR0_EL1', 'ICC_CTLR_EL1', 'ICC_PMR_EL1', 'ICC_RPR_EL1', 'ICC_SRE_EL1', 'ICC_IGRPEN1_EL1', 'ICC_BPR1_EL1'}
+# Registers whose Non-secure EL1 access traps to EL3 or EL2 on the monitor (queue entry 1793590176547518274-e819ce89 for the first).
+TRAPPING = re.compile(r'ICC_(IGRPEN0|BPR0|AP0R\d|IAR0|EOIR0|HPPIR0|SRE_EL[23])|^(PM|DBG|OSL|MDS|MDC|S3_[1-7]|S[2-3]_)|_EL[23]$|^TRC|^CPU|^ACTLR|^AMU', re.I)
+
+
+def disassemble(object_or_image, symbols=None):
+    import subprocess
+    command = ['/usr/lib/llvm-21/bin/llvm-objdump', '-d', '--no-show-raw-insn']
+    for symbol in symbols or ():
+        command.append('--disassemble-symbols=' + symbol)
+    return subprocess.run(command + [str(object_or_image)], capture_output=True, text=True, check=True).stdout
+
+
+def registers_of(line):
+    match = re.search(r'\b(mrs|msr)\s+(.+)$', line)
+    if not match:
+        return []
+    operands = [o.strip() for o in match.group(2).split(',')]
+    return [o for o in operands if not re.fullmatch(r'[xw]\d+|xzr|wzr', o)]
+
+
+def test_instructions(image):
+    """The capture code reads and writes only registers that cannot trap at Non-secure EL1."""
+    import subprocess, tempfile
+    if image is None:
+        build = Path(tempfile.mkdtemp(dir=variant.directory))
+        obj = build / 'hw_facts.o'
+        subprocess.run(['/usr/bin/clang-21', '--target=aarch64-none-elf', '-ffreestanding', '-O2', '-mgeneral-regs-only',
+                        '-mstrict-align', '-I', str(ROOT / 'include'), '-I', str(ROOT / 'platform/a733-smp-cached'), '-c',
+                        str(ROOT / 'platform/a733/hw_facts.c'), '-o', str(obj)], check=True)
+        text = disassemble(obj)
+    else:
+        text = disassemble(image, ('hwf_capture', 'capture_core', 'capture_shared', 'ccsidr', 'id_register', 'pmr_read', 'pmr_write'))
+    used = {r for line in text.splitlines() for r in registers_of(line)}
+    assert used, 'no system register access found; the disassembly is empty'
+    assert 'ICC_PMR_EL1' in used and 'MIDR_EL1' in used
+    trapping = sorted(r for r in used if TRAPPING.search(r))
+    assert not trapping, 'the probe accesses registers that trap at Non-secure EL1: %s' % trapping
+    unknown = sorted(used - ALLOWED_SYSREGS)
+    assert not unknown, 'the probe accesses registers outside the allowed list: %s' % unknown
+    # Negative control: the register that trapped in entry 1793590176547518274-e819ce89 is refused.
+    assert TRAPPING.search('ICC_IGRPEN0_EL1') and registers_of('mrs x21, ICC_IGRPEN0_EL1') == ['ICC_IGRPEN0_EL1']
+    return sorted(used)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--image', type=Path, help='also disassemble the capture code of this linked image')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     variant.directory = args.output
@@ -248,10 +298,13 @@ def main():
     test_document()
     test_models()
     test_no_hardcoded_values()
+    registers = test_instructions(None)
+    if args.image:
+        test_instructions(args.image)
     assumed = hw.GicModel().facts.assumed
     (args.output / 'result.json').write_text(json.dumps({'passed': True, 'table_bytes': hw.TABLE_BYTES,
         'core_slots': len(hw.CORE_SPECS), 'shared_slots': len(hw.SHARED_SPECS), 'models': MODELS,
-        'assumptions': sorted(assumed)}, indent=2) + '\n')
+        'assumptions': sorted(assumed), 'system_registers': registers}, indent=2) + '\n')
     print('PASS hw-facts: layout, decoder, facts file and %d host models' % len(MODELS))
 
 
