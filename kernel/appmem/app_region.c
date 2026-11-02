@@ -104,6 +104,12 @@ int app_region_release(struct app_region_ledger *l, uint8_t owner, uint64_t base
     return APP_REGION_NOT_OWNED;
 }
 
+uint8_t app_asid_alloc(struct app_asid_pool *pool)
+{
+    if (!pool || pool->next >= 255) return 0;
+    return (uint8_t)++pool->next;
+}
+
 uint8_t app_region_owner_of(const struct app_region_ledger *l, uint64_t pa)
 {
     for (unsigned i = 0; i < l->capacity; ++i)

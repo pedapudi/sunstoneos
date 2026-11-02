@@ -25,6 +25,8 @@ struct os_large_device {
 };
 #define OS_LARGE_BUFFER_BYTES (256u * 512u)
 const struct os_large_device *os_large_device(void);
+/* Called by the loader task after its last region: release the device (the SD binding restores clock, pins and rail). */
+void os_large_device_close(void);
 /* The loader's access to the admitted regions (apps/os/large.c). */
 unsigned os_large_count(void);
 struct large_slot *os_large_slot_mutable(unsigned index);

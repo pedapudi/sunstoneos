@@ -124,12 +124,15 @@ static void loader(void *unused)
         if (!d) { os_large_finish(i, SS_LARGE_FAILED, (uint32_t)FAT32_IO); continue; }
         load(i, d, mounted);
     }
+    os_large_device_close();
     vTaskDelete(NULL);
 }
 
 /* The loader runs at EL1: it writes regions that the application sees read-only and drives the device. */
 int os_large_task_privileged(void (*entry)(void *), void *context) { (void)context; return entry == loader; }
-int os_large_pins(struct a733_pin_handoff *pins) { (void)pins; return 1; }
+/* The SD binding authorizes the pins its card needs (apps/os/large_sd.c); a board without one authorizes none. */
+__attribute__((weak)) int os_large_sd_pins(struct a733_pin_handoff *pins) { (void)pins; return 1; }
+int os_large_pins(struct a733_pin_handoff *pins) { return os_large_sd_pins(pins); }
 int os_large_start(void)
 {
     if (!os_large_count()) return 1;
@@ -138,3 +141,4 @@ int os_large_start(void)
 }
 
 __attribute__((weak)) const struct os_large_device *os_large_device(void) { return 0; }
+__attribute__((weak)) void os_large_device_close(void) {}
