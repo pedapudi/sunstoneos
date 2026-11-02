@@ -437,6 +437,13 @@ entries that `memory.c` writes for the pool at boot (the model does not execute
 that code) and the NPU itself with a pool in slot 1; both need the board.
 `checks/memory-layout.py` ties the bounds in the build, the header, the terminal and the platform to the record.
 
+**Result: mode 3 with the notification wait, after the notification index change (port 3-1, entry
+`1793650900758260472-be096b75`, bringup `5d93918e`).** The image returned normally and its 128-byte output is
+byte-identical to the predicted result: `worker_ran` 1 on core 3, `same_tag` 1, `main_tag_set` 1, `notify_count` 1, and the
+fold of the worker's write equal to the main task's read of it over the 1 GiB heap at `0x80000000`. The wait on index 0
+that the OS's wake-ups used to end now lasts until the worker's own give, so the change holds on the board. The mode's
+other results (modes 0 to 2) were recorded earlier.
+
 ### Predicted board run of the NPU pool in the slot 1 area
 
 Hypothesis: an `npu-graphs` image built from the recipe of the passing run `1793599845892192862-30dc9323` (seven
