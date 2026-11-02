@@ -27,8 +27,9 @@ between jobs (READ, such as a job input), constant device-readable data
 
 Buffer bases and lengths must align to 4 KiB. Device addresses fit 32 bits;
 physical addresses fit 40 bits. CPU, physical, and device ranges must each be
-disjoint, including read-only aliases. Command allocations cover the controller's
-full 524,280-byte prefetch span. Device address zero and the internal-SRAM
+disjoint, including read-only aliases. Command allocations cover the fetch window the
+controller is told (the allocation size, at most 524,280 bytes; see `docs/reference-backsolve-npu.md`, "Command allocation
+sized by the graph"). Device address zero and the internal-SRAM
 window at `0x400000..0x47ffff` remain unmapped.
 
 The caller supplies dedicated, pinned RAM with stable mappings and no aliases
