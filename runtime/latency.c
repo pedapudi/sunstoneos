@@ -132,7 +132,17 @@ static void histogram_record(unsigned core, unsigned region, uint64_t start,
         h->site = site;
     }
 }
+#ifdef SS_LATENCY_OPS
+/* Host model (checks/latency-ops.h). QEMU timing cannot attribute time to one
+ * core, so a masked span is reported as the number of scheduler atomic
+ * operations the core executed in it: stores and read-modify-writes
+ * (SS_LATENCY_OPS=1) or loads (SS_LATENCY_OPS=2). Each is a lower bound of the
+ * cache-line transfers the span causes on the A733. */
+uint64_t ss_ops_rmw[8], ss_ops_store[8], ss_ops_load[8], ss_ops_wait[8];
+#define OPS_NOW(core) (SS_LATENCY_OPS == 1 ? ss_ops_rmw[core] + ss_ops_store[core] : ss_ops_load[core])
+#endif
 struct local_state {
+    uint64_t ops_start, waits_start;
     uint64_t mask_start, mask_site, lock_start[2], lock_site[2];
     unsigned mask_active, lock_depth[2], frozen;
 } __attribute__((aligned(64)));
@@ -232,6 +242,10 @@ void ss_latency_mask_open(unsigned core, uint64_t start, uintptr_t site)
 {
     if (enabled(core) && !local[core].mask_active) {
         local[core].mask_start = start;
+#ifdef SS_LATENCY_OPS
+        local[core].ops_start = OPS_NOW(core);
+        local[core].waits_start = ss_ops_wait[core];
+#endif
         local[core].mask_site = site;
         local[core].mask_active = 1;
     }
@@ -239,8 +253,14 @@ void ss_latency_mask_open(unsigned core, uint64_t start, uintptr_t site)
 void ss_latency_mask_close(unsigned core, uintptr_t site)
 {
     if (core < 8 && local[core].mask_active) {
+#ifdef SS_LATENCY_OPS
+        /* A span that waited for another core is not a path of this core. */
+        const uint64_t end = local[core].mask_start + (OPS_NOW(core) - local[core].ops_start) + 1;
+        if (enabled(core) && ss_ops_wait[core] == local[core].waits_start) {
+#else
         const uint64_t end = ss_latency_now();
         if (enabled(core)) {
+#endif
             ss_latency_record_at(core, SS_LAT_MASKED, local[core].mask_start, end, local[core].mask_site);
             site_record(core, 0, local[core].mask_start, end, local[core].mask_site, site);
         }
