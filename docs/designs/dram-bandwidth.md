@@ -395,3 +395,51 @@ needs an interconnect register write and waits for approval (next subsection).
 4. **Not proposed**: a change of the DRAM clock to the 2400 MHz parameter set (19.2 GB/s pin
    rate) needs a clock and voltage decision, and a change of the A55 prefetch registers
    (`CPUECTLR`, L1 and L3 prefetch limits) would test over-fetching but is not a vendor setting.
+
+## Interconnect words
+
+The coordinator approved a read of the nine NSI words of boot0 routine `0x48f38` from Non-secure EL1, and,
+if the read succeeds, a write of boot0's values in boot0's order followed by a repeat of the scaling study.
+`apps/dram-nsi/` implements both. Its worker tasks run at EL1 (`os_application_task_privileged` returns true
+for `dram_nsi_worker`). A job on core 6 reads the nine words and 13 further registers (the CCU words
+`0x02002580`, `0x02002584` and `0x02002588`, and the words `+0x10`, `+0x14`, `+0x18`, `+0xc0` and `+0xc8` of NSI
+ports 32 and 33). The write image then runs the variants once with the words as found, writes the words,
+reads them back and runs the variants again.
+
+### Earlier access to the NSI
+
+No earlier work accessed the NSI from Non-secure EL1 on a board. The memory-bus priority hook
+(`drivers/dram/a733_dram.c`) is host-modeled only and linked into no image
+([dram-bus-priority.md](dram-bus-priority.md#register-sources), "Unproven on the board"). The GPU NSI counters
+(`drivers/gpu/a733_gpu_nsi_pmu.c`) have no board record. The FEL read of the words that the action plan
+proposes (item 4) has not run. The risk is therefore unknown: a Secure-only NSI answers with an external abort,
+which ends the image at the watchdog, and an abort from a lower exception level (ESR class `0x24`) would instead
+show that the worker was not privileged.
+
+### Counters
+
+The vendor driver reads the total DRAM traffic from the counters of the target-agent ports 32 and 33
+(`sunxi-nsi-bw.c`, `MBUS_PMU_TAG`): read and write request counts (`+0xcc`, `+0xd0`), data counts (`+0xd4`,
+`+0xd8`) and the read latency sum (`+0xdc`), enabled through `+0xc0` and cleared through `+0xc4`. These are the
+only DRAM-side counters in the sources held. No source documents row hits, row misses or bank conflicts of the
+controller, and the Arm performance counters are not enabled for EL1 in this boot path (`docs/cpu-pmu.md`,
+prerequisite). The image clears and enables the two ports at every window and reads them after the window.
+The data unit is assumed to be 16 bytes, as for port 2; the single-stream ratio of counted bytes to consumed bytes
+checks the assumption.
+
+### Predictions, written before the runs
+
+1. **Read image.** If Non-secure EL1 can read the NSI, the words read reset or ROM-left values and not boot0's
+   values, because the FEL wrapper skips routine `0x48f38`; the CCU words read gates open and `MBUS_CLK_REG` reads
+   600 MHz. Otherwise the board returns by the watchdog and the breadcrumbs name an abort.
+2. **Locality hypothesis.** If the loss comes from DRAM row and bank locality, the DRAM-side figures show
+   (a) counted read bytes within 5 percent of the bytes the cores consumed for every core set (no prefetch waste),
+   (b) a mean read latency per request at the target agents that rises with the number of streams (more than
+   1.5 times the one-stream value at eight cores), and (c) the total DRAM data rate equal to the total consumed
+   rate, so that the controller delivers 8.25 GB/s at eight cores while one stream shows 14.8 GB/s. If instead the
+   limit is on the CPU side, the mean latency at the target agents stays within 20 percent of the one-stream
+   value. If counted bytes exceed consumed bytes by more than 10 percent at eight cores, prefetch waste
+   contributes.
+3. **Write image.** If the nine words affect CPU traffic, the eight-core total changes by more than 3 percent
+   after the write. If it stays within 3 percent, the words are not a cause. A readback that differs from
+   boot0's values shows a write that the NSI does not accept from Non-secure EL1.

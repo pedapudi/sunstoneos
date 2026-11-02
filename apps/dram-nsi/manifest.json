@@ -1,0 +1,10 @@
+{
+  "name": "dram-nsi",
+  "devices": {"required": [], "optional": []},
+  "cpu": {"cluster": "a76", "workers": 7, "priority": 2, "stack_bytes": 8192},
+  "regions": [
+    {"name": "buffer", "kind": "work", "access": ["read", "write"], "bytes": "0x2800000"}
+  ],
+  "deadlines": {"run_us": 20000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
+  "output_limit": 16384
+}
