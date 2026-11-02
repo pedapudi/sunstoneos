@@ -30,10 +30,12 @@ EXTENT = struct.Struct('<II')
 INPUT = struct.Struct('<Q32s')
 THERMAL, AUDIO, NPU, CPU_GRANT, JPEG, USB_MEMORY, INPUTS = 1, 2, 3, 4, 5, 6, 16
 DMA = 7
-SERVICE_BYTES = {THERMAL: 216, AUDIO: 184, NPU: 288, CPU_GRANT: 96, DMA: 160}
-# The NPU record is version 2: it carries the application's declaration of NPU resources (apps/os/npu-session.h).
-SERVICE_VERSION = {NPU: 2}
+SERVICE_BYTES = {THERMAL: 216, AUDIO: 184, NPU: 296, CPU_GRANT: 96, DMA: 160}
+# The NPU record is version 3: it carries the application's declaration of NPU resources and the bounds of its run-time
+# graphs (apps/os/npu-session.h). Versions 1 (272 bytes) and 2 (288) are read only to be upgraded.
+SERVICE_VERSION = {NPU: 3}
 NPU_V1_BYTES = 272
+NPU_V2_BYTES = 288
 NPU_DECLARATION_OFFSET = 272  # slots, in_flight, graphs, links: four u32
 SERVICE_MAGIC = {THERMAL: 0x415337334f534131, AUDIO: 0x415337334f415531,
                  NPU: 0x415337334f4e5031, CPU_GRANT: 0x4153373343505531,
@@ -80,7 +82,7 @@ def npu_declaration(manifest_path):
     m = manifest_tool.load(manifest_path)
     require('npu' in m, 'The manifest declares no NPU resources.')
     n = m['npu']
-    return (n['slots'], n['in_flight'], n['graphs'], n['links'])
+    return (n['slots'], n['in_flight'], n['graphs'], n['links'], n.get('graph_bytes', 0), n.get('tensor_bytes', 0))
 
 
 def upgrade_services(extents, declaration):
@@ -88,13 +90,14 @@ def upgrade_services(extents, declaration):
 
     extents is the dictionary session_decode(..., legacy=True) returns; a version 1 NPU record gains the declaration, a
     version 2 record has it replaced."""
-    require(len(declaration) == 4 and all(isinstance(x, int) and 0 <= x < 1 << 32 for x in declaration),
-            'The declaration is four 32-bit values.')
+    declaration = tuple(declaration) + (0,) * (6 - len(declaration))
+    require(len(declaration) == 6 and all(isinstance(x, int) and 0 <= x < 1 << 32 for x in declaration),
+            'The declaration is four to six 32-bit values.')
     require(declaration[0] and declaration[1] and declaration[2], 'The declaration needs slots, depth and graphs.')
     services = {k: v for k, v in extents.items() if k != INPUTS}
-    npu = bytearray(services[NPU][:NPU_V1_BYTES]) + bytearray(16)
+    npu = bytearray(services[NPU][:NPU_V1_BYTES]) + bytearray(SERVICE_BYTES[NPU] - NPU_V1_BYTES)
     struct.pack_into('<QQ', npu, 8, SERVICE_VERSION[NPU], SERVICE_BYTES[NPU])
-    struct.pack_into('<4I', npu, NPU_DECLARATION_OFFSET, *declaration)
+    struct.pack_into('<6I', npu, NPU_DECLARATION_OFFSET, *declaration)
     services[NPU] = bytes(npu)
     thermal = bytearray(services[THERMAL])
     struct.pack_into('<Q', thermal, 16, PREFIX_BYTES + sum(SERVICE_BYTES[k] for k in services if k in SERVICE_BYTES))
@@ -143,6 +146,8 @@ def session_decode(raw, manifest=None, manifest_sha256=None, legacy=False):
     versions = {kind: SERVICE_VERSION.get(kind, 1) for kind in SERVICE_BYTES}
     if legacy and NPU in extents and len(extents[NPU]) == NPU_V1_BYTES:
         sizes[NPU], versions[NPU] = NPU_V1_BYTES, 1
+    elif legacy and NPU in extents and len(extents[NPU]) == NPU_V2_BYTES:
+        sizes[NPU], versions[NPU] = NPU_V2_BYTES, 2
     for kind, size in sizes.items():
         require(kind not in extents or len(extents[kind]) == size, 'Invalid service extent size.')
     require(THERMAL in extents, 'Missing thermal service extent.')
@@ -153,7 +158,7 @@ def session_decode(raw, manifest=None, manifest_sha256=None, legacy=False):
             require(struct.unpack_from('<3Q', extents[kind]) == (SERVICE_MAGIC[kind], versions[kind], size),
                     'Invalid service record header.')
     if NPU in extents and sizes[NPU] == SERVICE_BYTES[NPU]:
-        declaration = struct.unpack_from('<4I', extents[NPU], NPU_DECLARATION_OFFSET)
+        declaration = struct.unpack_from('<6I', extents[NPU], NPU_DECLARATION_OFFSET)
         require(declaration[0] and declaration[1] and declaration[2],
                 'The NPU record declares no slots, in-flight depth or graphs.')
     if USB_MEMORY in extents:

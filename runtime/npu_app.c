@@ -5,6 +5,7 @@
 /* A single admitted application owns this mailbox. The request buffers remain
  * application-owned but unavailable to it until completion. */
 enum { UNBOUND, IDLE, RUN, CLOSE, DONE, FAILED, CLOSED };
+#define REGISTER_OPERATION 7u /* box.operation of a graph registration, which uses the RUN state */
 static struct {
     atomic_uint state;
     struct ss_npu_backend backend;
@@ -19,6 +20,8 @@ static struct {
     struct ss_npu_fault_info fault;
     int fault_valid;
     void (*describe_fault)(struct ss_npu_fault_info *);
+    int (*register_graph)(const void *,size_t,unsigned *);
+    unsigned registered; /* graphs added at run time; their models are checked by the OS, not here */
 } box;
 static void notify_owner(void)
 {if(box.notify)box.notify(box.event_context);}
@@ -84,8 +87,10 @@ int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
     if(!input||!output||!input_bytes||!output_bytes||input_bytes>SS_NPU_MAX_TENSOR_BYTES||
        output_bytes>SS_NPU_MAX_TENSOR_BYTES||!timeout_us||timeout_us>1000000)return -1;
     if(state==IDLE) {
-        if(model>=box.backend.count||input_bytes!=box.backend.models[model].input_bytes||
-           output_bytes!=box.backend.models[model].output_bytes)return -2;
+        /* A graph registered at run time has no entry here: the OS compares its tensor sizes with the request. */
+        if(model>=box.backend.count+box.registered)return -2;
+        if(model<box.backend.count&&(input_bytes!=box.backend.models[model].input_bytes||
+           output_bytes!=box.backend.models[model].output_bytes))return -2;
         box.model=model;box.input=input;box.input_bytes=input_bytes;
         box.output=output;box.output_bytes=output_bytes;box.timeout=timeout_us;box.operation=RUN;
         if(!transition(IDLE,RUN))return -1;
@@ -101,6 +106,25 @@ int ss_npu_last_fault(struct ss_npu_fault_info *out)
     unsigned state=atomic_load_explicit(&box.state,memory_order_acquire);
     if(!out||state!=IDLE||!box.fault_valid)return 0;
     *out=box.fault;box.fault_valid=0;return 1;
+}
+int ss_npu_service_bind_register(int (*function)(const void *,size_t,unsigned *))
+{
+    if(!function||box.register_graph||atomic_load(&box.state)!=UNBOUND)return 0;
+    box.register_graph=function;return 1;
+}
+int ss_npu_register_graph(const void *graph,size_t bytes,unsigned *index)
+{
+    unsigned state=atomic_load_explicit(&box.state,memory_order_acquire);
+    if(state==UNBOUND||state==FAILED||state==CLOSED||!box.register_graph)return -1;
+    if(state==IDLE){
+        if(!graph||!bytes||!index)return -1;
+        box.input=graph;box.input_bytes=bytes;box.output=index;box.output_bytes=sizeof(*index);box.operation=REGISTER_OPERATION;
+        if(!transition(IDLE,RUN))return -1;
+        notify_owner();return 0;
+    }
+    if(box.operation!=REGISTER_OPERATION||box.input!=graph||box.input_bytes!=bytes||box.output!=index)return -1;
+    if(state!=DONE)return 0;
+    int result=box.result;return transition(DONE,IDLE)?result:-1;
 }
 int ss_npu_close(void)
 {
@@ -121,7 +145,12 @@ int ss_npu_service_step(void)
     unsigned state=atomic_load_explicit(&box.state,memory_order_acquire);
     if(state==FAILED)return -1;
     if(state!=RUN&&state!=CLOSE)return 0;
-    int result=state==RUN?box.backend.run(box.model,box.input,box.input_bytes,
+    int result;
+    if(state==RUN&&box.operation==REGISTER_OPERATION){
+        unsigned index=0;
+        result=box.register_graph(box.input,box.input_bytes,&index);
+        if(result==1){*(unsigned *)box.output=index;++box.registered;}
+    } else result=state==RUN?box.backend.run(box.model,box.input,box.input_bytes,
         box.output,box.output_bytes,box.timeout):box.backend.close();
     if(result<0){ss_npu_service_fail();return -1;}
     /* Public completion distinguishes a rejected operation from pending. */

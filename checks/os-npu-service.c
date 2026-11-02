@@ -96,6 +96,8 @@ static unsigned char sunstone_npu_canary[1];
 static int sunstone_npu_hook_slot = -1;
 static uint32_t sunstone_npu_hook_address;
 #endif
+static unsigned registered_case; /* case 29: graphs handed over after the scheduler started */
+static unsigned registered_ok, registered_refused, registered_job, registered_changed_result;
 static unsigned long_run; /* case 26: many jobs through a session whose job field is 1 */
 static unsigned long_jobs_done;
 static unsigned fault_case; /* case 25: descriptors aimed at unmapped addresses; each such job must fail alone and the NPU recover */
@@ -338,6 +340,37 @@ static void client(void *unused)
         finished = 1;
         vTaskSuspend(NULL);
     }
+    if (registered_case) {
+        /* Graphs the build has never seen. The reservation was made for 2 more graphs of at most 16 KiB with tensors of at
+         * most 64 KiB. */
+        static unsigned char graph[16384];
+        FILE *f = fopen(getenv("REG_MODEL"), "rb");
+        assert(f);
+        const size_t n = fread(graph, 1, sizeof graph, f);
+        assert(n > 0 && n < sizeof graph);
+        fclose(f);
+        unsigned entry = 99;
+        static unsigned char damaged[16384];
+        memcpy(damaged, graph, n); damaged[n / 2] ^= 0xff;
+        assert(os_npu_register(damaged, n, &entry) == 0);                       /* not admissible */
+        assert(os_npu_register(graph, n, &entry) == 1 && entry == os_npu_model_count);
+        const unsigned first = entry;
+        assert(os_npu_register(graph, n, &entry) == 1 && entry == first + 1);
+        assert(os_npu_register(graph, n, &entry) == 0);                         /* beyond the declared capacity */
+        registered_ok = 2; registered_refused = 2;
+        assert(os_npu_load(first) == 1);
+        struct npu_runtime_tensor t;
+        f = fopen(getenv("REG_INPUT"), "rb");
+        assert(f && os_npu_tensor(NBG_INPUT, 0, &t) == 1 && fread(t.data, 1, t.bytes, f) == t.bytes);
+        fclose(f);
+        registered_job = (unsigned)os_npu_submit(1000000);
+        /* The application changes the bytes it handed over: LOAD refuses the copy, which no longer matches. */
+        graph[n / 3] ^= 1;
+        registered_changed_result = (unsigned)os_npu_load(first + 1);
+        result_load = result_submit = 1;
+        finished = 1;
+        vTaskSuspend(NULL);
+    }
     if (long_run) {
         /* A session never fails because it has run a number of jobs: the session record says 1, and the job count is
          * far beyond the former limit of eight. */
@@ -414,6 +447,14 @@ static void verify(void *unused)
                (unsigned long long)npu.runtime.counters.faulted_jobs, pattern_crc(), canary_now(),
                npu.runtime.service.runtime ? npu.runtime.service.runtime->marks : 0);
         fflush(stdout);
+        return;
+    }
+    if (registered_case) {
+        printf("registered: %u graphs registered, %u refusals, job %u, load after the bytes changed %d, failures %u\n", registered_ok,
+               registered_refused, registered_job, (int)registered_changed_result, board_failures);
+        fflush(stdout);
+        assert(registered_ok == 2 && registered_refused == 2 && registered_job == 1 && (int)registered_changed_result == -1 &&
+               board_failures == 1);
         return;
     }
     if (long_run) {
@@ -533,7 +574,7 @@ int main(int argc, char **argv)
         printf("declarations: one slot %zu bytes, four slots %zu bytes; every refusal names its resource\n", one, many);
         return 0;
     }
-    assert(mode == 20 || mode == 21 || mode == 26 || mode == 27 || mode == 28 || ((mode == 22 || mode == 25) && argc == 3));
+    assert(mode == 20 || mode == 21 || mode == 26 || mode == 27 || mode == 28 || mode == 29 || ((mode == 22 || mode == 25) && argc == 3));
     if (argc == 3) input_directory = argv[2];
     if (mode == 21) bootstrap_us = 30000;
     if (mode == 26) { long_run = (unsigned)strtoul(getenv("LONG_JOBS") ? getenv("LONG_JOBS") : "120000", NULL, 0); job_us = 3; }
@@ -552,8 +593,10 @@ int main(int argc, char **argv)
     model.regs[0x30 / 4] = 0x1000003b; model.regs[0x28 / 4] = 0x20240101; model.regs[1] = IDLE;
     model.masked = 1;
     session_record.npu.jobs = long_run ? 1 : 64;
+    const struct npu_runtime_bounds bounds = {mode == 29 ? 2u : 0u, 16384, 65536};
+    if (mode == 29) registered_case = 1;
     const unsigned slots = mode == 28 ? NPU_RUNTIME_SLOTS : 1; /* case 28: the 31 slots of the command mask */
-    const size_t need = npu_runtime_requirements(os_npu_models, os_npu_model_count, slots);
+    const size_t need = npu_runtime_requirements_with(os_npu_models, os_npu_model_count, slots, &bounds);
     assert(need && !(need & (NPU_RUNTIME_GROUP_BYTES - 1)));
     /* The runtime registers physical addresses below 2^40, so the pool is placed in the low
      * 2 GiB of the host address space and aligned to the allocation group. */
@@ -562,7 +605,7 @@ int main(int argc, char **argv)
     assert(raw != MAP_FAILED);
     void *pool = (void *)(((uintptr_t)raw + NPU_RUNTIME_GROUP_BYTES - 1) & ~(uintptr_t)(NPU_RUNTIME_GROUP_BYTES - 1));
     static _Alignas(4096) uint8_t register_page[4096];
-    struct npu_runtime_config config = {.count = os_npu_model_count, .slots = slots, .cpu = (uintptr_t)pool,
+    struct npu_runtime_config config = {.count = os_npu_model_count, .slots = slots, .bounds = bounds, .cpu = (uintptr_t)pool,
         .physical = (uintptr_t)pool, .bytes = need, .register_cpu = (uintptr_t)register_page,
         .register_physical = 0x03600000, .fatal = fatal};
     config.models = os_npu_models;

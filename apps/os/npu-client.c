@@ -50,12 +50,15 @@ int os_npu_complete(void)
         published.stopped&&!published.retained&&os_npu_stopped();
 }
 static uint32_t sdk_jobs,sdk_output_bytes;
+static const struct npu_runtime *os_npu_runtime_for_sdk; /* set by os_npu_sdk_bind: its count grows with registered graphs */
+static int sdk_register(const void *graph,size_t bytes,unsigned *entry)
+{return os_npu_register(graph,bytes,entry)?1:0;}
 /* The existing privileged slot owner services the application's mailbox. */
 static unsigned sdk_loaded,sdk_model;
 static int sdk_run(unsigned model,const void *input,size_t input_bytes,
                    void *output,size_t output_bytes,uint64_t timeout)
 {
-    if(model>=os_npu_model_count)return 0;
+    if(model>=(os_npu_runtime_for_sdk?atomic_load_explicit(&os_npu_runtime_for_sdk->count,memory_order_acquire):os_npu_model_count))return 0;
     struct npu_runtime_tensor t;
     int r;
     if(!sdk_loaded||sdk_model!=model||!os_npu_tensor(NBG_INPUT,0,&t)) {
@@ -117,7 +120,8 @@ int os_npu_sdk_bind(const struct npu_runtime *runtime)
         if(inputs!=m->input_bytes||outputs!=m->output_bytes)return 0;
     }
     const struct ss_npu_backend backend={sdk_run,sdk_close,os_npu_model_info,os_npu_model_count};
-    return ss_npu_service_bind_fault(sdk_fault)&&ss_npu_service_bind(&backend);
+    os_npu_runtime_for_sdk=runtime;
+    return ss_npu_service_bind_fault(sdk_fault)&&ss_npu_service_bind_register(sdk_register)&&ss_npu_service_bind(&backend);
 }
 void os_npu_client_task(void *unused)
 {
