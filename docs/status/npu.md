@@ -28,20 +28,20 @@ transposes and a stream-processor gate with its second input in VIP SRAM). The l
 ## Open work
 
 1. Run the layer-normalization test graphs (dynamic-input section) and show on a board that NPU accesses outside the mapping fault, including a stream-processor operation's reads and writes; then drop the stream-processor program catalogue from the loader (`docs/designs/npu-loader-admission.md`).
-1. Call the idle power owner from the OS NPU service (`npu_runtime_queue_power_start` is not called by the operating system image), then repeat the idle benchmark there. Measure energy and the break-even idle time: the PMIC provider exposes no DCDC2 current or power readback. Qualify shared SRAM access while the clocks are gated and recovery from a fault while suspended.
-2. Qualify the combined image repeatedly and across both models: the active-cancellation image, and a 20-cycle start, inference, CLOSE and local-stop image.
-3. Qualify the EL0 queue and prepared joined streams: review and finish the saved generic sequence registration and returning diagnostic (`npu-el0-next-1101`), add the public-ring predicate to the power owner, then run the control and the EL0 images.
-4. Add exact per-job deadline interrupts through the scheduler's deadline facility (`work/scheduler-rt-1101`); do not add a device timer.
-5. Measure energy: the PMIC provider exposes no DCDC2 current or power readback, so idle savings and break-even time have no evidence without an external meter.
-6. Qualify repeated start and stop, shared SRAM access while the clocks are gated, and recovery from a fault while suspended.
-7. Run the `restart-*` cases of `checks/npu-irq-route.py` on a restart image; the other cases pass.
+2. Call the idle power owner from the OS NPU service (`npu_runtime_queue_power_start` is not called by the operating system image), then repeat the idle benchmark there. Measure energy and the break-even idle time: the PMIC provider exposes no DCDC2 current or power readback. Qualify shared SRAM access while the clocks are gated and recovery from a fault while suspended.
+3. Qualify the combined image repeatedly and across both models: the active-cancellation image, and a 20-cycle start, inference, CLOSE and local-stop image.
+4. Qualify the EL0 queue and prepared joined streams: review and finish the saved generic sequence registration and returning diagnostic (`npu-el0-next-1101`), add the public-ring predicate to the power owner, then run the control and the EL0 images.
+5. Add exact per-job deadline interrupts through the scheduler's deadline facility (`work/scheduler-rt-1101`); do not add a device timer.
+6. Measure energy: the PMIC provider exposes no DCDC2 current or power readback, so idle savings and break-even time have no evidence without an external meter.
+7. Qualify repeated start and stop, shared SRAM access while the clocks are gated, and recovery from a fault while suspended.
+8. Run the `restart-*` cases of `checks/npu-irq-route.py` on a restart image; the other cases pass.
 
 ## Evidence
 
 Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-35 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+36 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -78,6 +78,7 @@ Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added
 | `1793595865267017264-80a35307` | 2026-11-02 | 3-3 | `1417c8183b75` | returned | passed | run_total 24.23 s, jobs 61231, window_jobs_per_s 26964.4 jobs/s, window_latency_p99_ticks 257, window_latency_max_ticks 432, charged_cpu_per_job_ticks 816.772, gates 0, resumes 0, register_writes 0, resume_max_ticks 0, resume_limit_ticks 2400, value_deviation_cycles 0, deviation_mask 0 |
 | `1793595893101543391-d845400a` | 2026-11-02 | 3-3 | `b3e4795f525c` | returned | passed | run_total 24.01 s, jobs 61231, window_jobs_per_s 26967 jobs/s, window_latency_p99_ticks 294, window_latency_max_ticks 429, charged_cpu_per_job_ticks 816.553, gates 130, resumes 130, register_writes 780, resume_max_ticks 169, resume_limit_ticks 2400, value_deviation_cycles 0, deviation_mask 0 |
 | `1793599212547775355-868652d5` | 2026-11-02 | 3-1 | `835daa9f532d` | result-mismatch | failed | run_total 23.118 s, graphs_listed 15, graphs_run 1, first_difference_byte 2, observed_byte 60, expected_byte 59, first_graph_us 998.8 |
+| `1793599501583289076-4e5e8892` | 2026-11-02 | 3-1 | `83ef6b2a55fb` | result-mismatch | failed | run_total 22.181 s, graphs 8, graphs_matching 3, max_error_16bit 17 |
 | `1793599785143842348-e58c3f38` | 2026-11-02 | 3-1 | `653e167425fb` | result-mismatch | passed | run_total 21.663 s, graphs 8, graphs_matching 8, differing_bytes 0, graph_us_min 984.3 us, graph_us_max 999.5 us |
 | `1793599845892192862-30dc9323` | 2026-11-02 | 3-1 | `7a00716d1fd9` | returned | passed | run_total 21.941 s, graphs 7, graphs_matching 7, differing_bytes 0, graph_us_min 984.9 us, graph_us_max 999.2 us |
 <!-- evidence-table:end -->
