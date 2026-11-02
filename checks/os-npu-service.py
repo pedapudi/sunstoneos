@@ -51,12 +51,13 @@ def build(name, wrapper=None, extra=()):
     defines = DEFINES + list(extra) + (['OS_NPU_SOURCE="%s"' % wrapper] if wrapper else [])
     sources = [*UNITS, generated / 'npu-models.c', generated / 'npu_admitted_models.c']
     return host_rtos.build(out / name, sources, 'os-npu-service', defines=defines, includes=includes,
-                           flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'],
-                           link=['-Wl,--gc-sections'])
+                           flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections', '-fno-pie'],
+                           link=['-Wl,--gc-sections', '-no-pie'])
 
 
-def run(exe, case):
-    return subprocess.run([str(exe), str(case)], capture_output=True, text=True, env=environment(), timeout=900)
+def run(exe, case, extra=None):
+    return subprocess.run([str(exe), str(case)], capture_output=True, text=True, env={**environment(), **(extra or {})},
+                          timeout=900)
 
 
 exe = build('fixed')
@@ -69,11 +70,23 @@ for case in CASES:
 # 0x20000000 (SUNSTONE_NPU_UNMAPPED_*, drivers/npu/nbg_assembly.c). The register model faults the job when it finds that
 # address in a descriptor; the wrapper must record the MMU status and the address. The ordinary build (the control)
 # never finds one and must complete the job, which cases 20 and 21 above already show.
-hooked = build('unmapped', extra=['SUNSTONE_NPU_UNMAPPED_SLOT=INPUT', 'SUNSTONE_NPU_UNMAPPED_ADDRESS=0x20000000u'])
+hooked = build('unmapped', extra=['SUNSTONE_NPU_UNMAPPED_SLOT=INPUT'])
 done = run(hooked, 23)
 (out / 'case-23.log').write_text(done.stdout + done.stderr)
 assert done.returncode == 0, (23, done.returncode, done.stdout[-400:], done.stderr[-600:])
 print('case 23', done.stdout.strip().splitlines()[-1])
+# The same image against a model that lets the access through (the MMU does not fault): the job completes, and the
+# wrapper must record that, with the canary CRC unchanged for a read and changed for a write.
+for label, extra in (('read bypass', {'UNMAPPED_BYPASS': '1'}), ('write bypass', {'UNMAPPED_BYPASS': '1', 'UNMAPPED_BYPASS_WRITE': '1'})):
+    done = run(hooked, 23, extra)
+    (out / ('case-23-%s.log' % label.replace(' ', '-'))).write_text(done.stdout + done.stderr)
+    assert done.returncode == 0, (label, done.returncode, done.stdout[-400:], done.stderr[-600:])
+    print('case 23', label, done.stdout.strip().splitlines()[-1])
+# A register read of the MMU status that never returns: the record shows the stage.
+done = run(hooked, 23, {'UNMAPPED_STALL_READ': '0x384'})
+(out / 'case-23-stall.log').write_text(done.stdout + done.stderr)
+assert done.returncode == 0, ('stall', done.returncode, done.stdout[-400:], done.stderr[-600:])
+print('case 23 stalled read', done.stdout.strip().splitlines()[-1])
 if not args.no_negative_control:
     # The wrapper before the OPEN fix: the reply to OPEN must be READY.
     old = (ROOT / 'apps/os/npu.c').read_text()

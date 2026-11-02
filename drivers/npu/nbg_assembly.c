@@ -467,18 +467,35 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
         (nn_count && !nbg_relocate(image->nn, sizeof(image->nn), nn, nn_count))) return 0;
 #ifdef SUNSTONE_NPU_UNMAPPED_SLOT
     /* NEGATIVE-TEST IMAGES ONLY (docs/reference-backsolve-npu.md, "NPU MMU exceptions"). Point one descriptor
-     * pointer of the first operation at a device address that the page tables do not map, to show that the NPU's
-     * own access faults. SUNSTONE_NPU_UNMAPPED_SLOT is a pointer_slot value. The address is encoded as the
-     * relocation of that field would encode it. */
+     * pointer of the first operation at an address that the NPU page tables do not map, to show that the NPU's own
+     * access faults. SUNSTONE_NPU_UNMAPPED_SLOT is a pointer_slot value. The address is
+     * SUNSTONE_NPU_UNMAPPED_ADDRESS, or else a position 64 KiB into the test image's canary buffer
+     * (apps/os/npu.c), a DRAM region that the tables do not map. A pointer with an end field keeps its extent:
+     * the end moves by the same distance. The new values are encoded as the relocation of the field would. */
+#ifndef SUNSTONE_NPU_UNMAPPED_ADDRESS
+    extern unsigned char sunstone_npu_canary[];
+#define SUNSTONE_NPU_UNMAPPED_ADDRESS ((uint32_t)(uintptr_t)(sunstone_npu_canary + 0x10000))
+#endif
     if (number == 1) {
-        if (slot[SUNSTONE_NPU_UNMAPPED_SLOT] == UINT32_MAX) return 0; /* a test build must never silently skip its fault */
-        const struct nbg_relocation *r = &nn[slot[SUNSTONE_NPU_UNMAPPED_SLOT]];
+        const unsigned field = SUNSTONE_NPU_UNMAPPED_SLOT;
+        if (slot[field] == UINT32_MAX) return 0; /* a test build must never silently skip its fault */
+        const unsigned end_field = field == INPUT ? INPUT_END : field == OUTPUT ? OUTPUT_END :
+            field == INPUT2 ? INPUT2_END : POINTER_COUNT;
+        const struct nbg_relocation *r = &nn[slot[field]];
         unsigned char *d = image->nn + r->destination_offset;
-        uint32_t value = SUNSTONE_NPU_UNMAPPED_ADDRESS;
-        if (r->encoding == NBG_ADDRESS_SHIFT6 || r->encoding == NBG_ADDRESS_END_SHIFT6)
-            value = (word(d) & UINT32_C(0xfc000000)) | (value >> 6);
+        const int shifted = r->encoding == NBG_ADDRESS_SHIFT6 || r->encoding == NBG_ADDRESS_END_SHIFT6;
+        const uint32_t before = word(d), target = SUNSTONE_NPU_UNMAPPED_ADDRESS;
+        uint32_t value = shifted ? (before & UINT32_C(0xfc000000)) | (target >> 6) : target;
         d[0] = (unsigned char)value; d[1] = (unsigned char)(value >> 8);
         d[2] = (unsigned char)(value >> 16); d[3] = (unsigned char)(value >> 24);
+        if (end_field != POINTER_COUNT && slot[end_field] != UINT32_MAX) {
+            unsigned char *e = image->nn + nn[slot[end_field]].destination_offset;
+            const uint32_t old_start = shifted ? (before & 0x03ffffffu) : before >> 6, old_end = word(e) & 0x03ffffffu;
+            const uint32_t end_units = old_end + (target >> 6) - old_start;
+            value = (word(e) & UINT32_C(0xfc000000)) | (end_units & 0x03ffffffu);
+            e[0] = (unsigned char)value; e[1] = (unsigned char)(value >> 8);
+            e[2] = (unsigned char)(value >> 16); e[3] = (unsigned char)(value >> 24);
+        }
     }
 #endif
     *count = op.patch_count;

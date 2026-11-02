@@ -55,6 +55,9 @@ struct a733_npu_controller {
      * violation, 4 out of bound, 5 and 6 security violations) and the faulting device address +0x380
      * (vip2/vip_drv_debug.c:340-420; event bit 30 is IRQ_VALUE_MMU, vip_drv_hardware.h:86). */
     uint32_t mmu_status, mmu_address;
+    /* How far the MMU capture got, for a capture that stalls: 1 event seen, 2 reading +0x384, 4 reading +0x380,
+     * 5 both read. Another core may read it; volatile. */
+    volatile uint32_t mmu_stage;
     unsigned bootstrap;
 #ifdef SUNSTONE_NPU_ACTIVE_CANCEL
     uint64_t diagnostic_ticket, diagnostic_elapsed;

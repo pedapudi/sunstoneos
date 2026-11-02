@@ -57,11 +57,10 @@ void npu_arch_zero_line(uintptr_t at) { memset((void *)at, 0, 64); }
 int board_live(void *context) { assert(!context); return (int)live_value; }
 uint32_t board_live_refusal(void) { return live_value ? 0 : UINT32_C(1) << 28; }
 static unsigned board_failures;
-static uint32_t first_site, first_value;
+static uint32_t first_site, first_value, first_caller;
 void board_fail_note(uint32_t site, uint32_t value, const void *caller)
 {
-    (void)caller;
-    if (!first_site) { first_site = site; first_value = value; }
+    if (!first_site) { first_site = site; first_value = value; first_caller = (uint32_t)(uintptr_t)caller; }
 }
 void board_fail(void *context) { assert(!context); ++board_failures; live_value = 0; }
 void board_fail_at(uint32_t site, uint32_t value, const void *caller)
@@ -88,7 +87,12 @@ static struct {
     uint32_t regs[0x800 / 4];
     unsigned masked, latched, running, bootstrap, triggers, delivered, mmu_exception;
 } model;
-static uint32_t unmapped_address = 0x20000000u;
+#ifdef SUNSTONE_NPU_UNMAPPED_SLOT
+extern unsigned char sunstone_npu_canary[];
+#else
+static unsigned char sunstone_npu_canary[1];
+#endif
+static uint32_t unmapped_address; /* set in main: the test image's canary position, or UNMAPPED_ADDRESS */
 static unsigned unmapped_case; /* case 23: the descriptor points at an unmapped address; the job must fault and be recorded */
 static struct npu_runtime *runtime_of_model;
 static void deliver(void)
@@ -127,6 +131,8 @@ static int register_read(void *cookie, unsigned offset, uint32_t *value)
     if (!modeled(offset, 0)) { fprintf(stderr, "unmodeled register read %#x\n", offset); abort(); }
     /* The event register is read only while the interrupt is masked. */
     if (offset == 0x10) assert(model.masked);
+    /* UNMAPPED_STALL_READ: the register read never returns (a bus that does not answer). */
+    if (getenv("UNMAPPED_STALL_READ") && offset == (unsigned)strtoul(getenv("UNMAPPED_STALL_READ"), NULL, 0)) for (;;) vTaskDelay(1);
     *value = model.regs[offset / 4];
     if (offset == 0x10) model.regs[offset / 4] = 0;
     return 1;
@@ -145,10 +151,11 @@ static int register_write(void *cookie, unsigned offset, uint32_t value)
         /* A descriptor pointer at an unmapped device address (the negative-test build) makes the job fault. */
         model.mmu_exception = 0;
         if (!model.bootstrap && unmapped_case) {
+            const int bypass = getenv("UNMAPPED_BYPASS") != NULL;
             const struct npu_runtime_region *c = &runtime_of_model->slot[0].constant;
             for (size_t at = 0; at + 4 <= c->bytes; at += 4) {
                 uint32_t w; memcpy(&w, (const void *)(uintptr_t)(c->cpu + at), 4);
-                if (w == unmapped_address || (!(unmapped_address & 63) && (w & 0x03ffffffu) == unmapped_address >> 6)) { model.mmu_exception = unmapped_address; break; }
+                if (w == unmapped_address || (!(unmapped_address & 63) && (w & 0x03ffffffu) == unmapped_address >> 6)) { if (bypass) { /* a bypassing access: the job completes, and a write changes the canary */ if (getenv("UNMAPPED_BYPASS_WRITE")) sunstone_npu_canary[0x10000 + 8] ^= 0xff; } else model.mmu_exception = unmapped_address; break; }
             }
         }
         /* UNMAPPED_HANG: the faulting job never raises an event (an NPU that stalls on the unmapped access). */
@@ -294,10 +301,42 @@ static void client(void *unused)
     finished = 1;
     vTaskSuspend(NULL);
 }
+/* CRC-32 of the canary pattern (apps/os/npu.c): word i is i * 0x9e3779b1 xor 0xc0ffee11, 1 MiB in all. */
+static uint32_t pattern_crc(void)
+{
+    uint32_t crc = ~0u;
+    for (uint32_t i = 0; i < (1u << 18); ++i) {
+        const uint32_t v = i * UINT32_C(0x9e3779b1) ^ UINT32_C(0xc0ffee11);
+        for (unsigned b = 0; b < 4; ++b) {
+            crc ^= (v >> (8 * b)) & 255u;
+            for (unsigned k = 0; k < 8; ++k) crc = crc >> 1 ^ (UINT32_C(0xedb88320) & (0u - (crc & 1u)));
+        }
+    }
+    return ~crc;
+}
 static void verify(void *unused)
 {
     (void)unused;
-    for (unsigned waited = 0; !finished && live_value && waited < 5000; ++waited) vTaskDelay(pdMS_TO_TICKS(1));
+    for (unsigned waited = 0; !finished && live_value && waited < (getenv("UNMAPPED_STALL_READ") ? 20000u : 5000u); ++waited) vTaskDelay(pdMS_TO_TICKS(1));
+    if (unmapped_case && getenv("UNMAPPED_BYPASS")) {
+        /* A job that completes although a pointer is unmapped: the wrapper records ticket byte 0xee, the canary CRC as
+         * the value and the output CRC as the caller word. */
+        const uint32_t crc = pattern_crc();
+        printf("bypass: submit %d site %#x value %#x pattern crc %#x\n", (int)result_submit, first_site, first_value, crc);
+        fflush(stdout);
+        assert(finished && board_failures == 1 && (int)result_submit == -1 && ((first_site >> 16) & 255u) == 0xee);
+        if (getenv("UNMAPPED_BYPASS_WRITE")) assert(first_value != crc); else assert(first_value == crc);
+        return;
+    }
+    if (unmapped_case && getenv("UNMAPPED_STALL_READ")) {
+        /* The worker is stuck in the read. The wrapper's wait ends and records the capture stage (low nibble of the
+         * ticket byte) and the fault code (high nibble); the value is the event bits the controller saw. */
+        printf("stall: submit %d site %#x value %#x caller %#x\n", (int)result_submit, first_site, first_value, first_caller);
+        fflush(stdout);
+        assert(finished && board_failures == 1 && (int)result_submit == -1);
+        assert(((first_site >> 16) & 255u) == 2u && first_value == 0x40000000u && first_caller == pattern_crc());
+        return;
+    }
     if (unmapped_case) {
         printf("submit %d failures %u site %#x value %#x controller fault %u status %u address %#x\n", (int)result_submit,
                board_failures, first_site, first_value, (unsigned)npu.runtime.service.controller.fault,
@@ -306,6 +345,7 @@ static void verify(void *unused)
         assert(finished && board_failures == 1 && (int)result_submit == -1 && model.mmu_exception == unmapped_address);
         assert(npu.runtime.service.controller.fault == A733_NPU_MMU);
         assert(first_value == unmapped_address && ((first_site >> 16) & 255u) == 2u); /* the address and the status code */
+        assert(first_caller == pattern_crc()); /* the canary is unchanged */
         assert(os_npu_first_failure.ready == 2 && os_npu_first_failure.reply_valid &&
                os_npu_first_failure.reply.mmu_address == unmapped_address && os_npu_first_failure.reply.mmu_status == 2);
         return;
@@ -368,6 +408,10 @@ int main(int argc, char **argv)
     if (mode == 21) bootstrap_us = 30000;
     if (mode == 23 || mode == 24) unmapped_case = 1;
     if (getenv("UNMAPPED_ADDRESS")) unmapped_address = (uint32_t)strtoul(getenv("UNMAPPED_ADDRESS"), NULL, 0);
+    else if (unmapped_case) {
+        assert((uintptr_t)sunstone_npu_canary + (1u << 20) < UINT64_C(0x100000000)); /* build this check without PIE */
+        unmapped_address = (uint32_t)(uintptr_t)(sunstone_npu_canary + 0x10000);
+    }
     runtime_of_model = &npu.runtime;
     model.regs[0x20 / 4] = 0x9000; model.regs[0x24 / 4] = 0x9202;
     model.regs[0x30 / 4] = 0x1000003b; model.regs[0x28 / 4] = 0x20240101; model.regs[1] = IDLE;
@@ -402,6 +446,6 @@ int main(int argc, char **argv)
     npu.started = 1; npu.attempted = 1;
     /* The thermal owner allows work until its first deadline. */
     os_npu_thermal(1, 0, npu.end, 0);
-    host_rtos_run(verify, NULL, 6, 10000000);
+    host_rtos_run(verify, NULL, 6, 30000000);
     return 0;
 }

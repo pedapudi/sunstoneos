@@ -779,36 +779,68 @@ The vendor driver treats an MMU or AXI event as a timeout that needs recovery (`
 core. No register distinguishes a read from a write for "page not present": the type of the access comes from the
 descriptor field that was changed, not from the status.
 
+**The vendor handling, compared with this controller.**
+
+| Step | Vendor driver | This controller |
+| --- | --- | --- |
+| Interrupt enable | Writes `0xffffffff` to `+0x014` (`vip_drv_hardware.c:509`). | Writes `0xc0000001` (bits 31, 30 and 0). Bit 30 is enabled, so an MMU exception does raise the interrupt. Bits 26 to 29 (error, flag, bypass, cancel) are not enabled. |
+| Interrupt handler | Reads `+0x010` once, keeps the value, wakes the waiter (`os/linux/vip_drv_device_driver.c:382-391`). | The handler masks the source and notifies the service worker, which reads `+0x010` while the source is masked. |
+| MMU event | Reads only `+0x388` (bit 0, MMU enabled) and reports a timeout that needs recovery (`task/vip_drv_task_common.c:621-631`). The status and address registers are read only by the debug dump, which runs after a hang (`vip_drv_debug.c:336-420`, `:693`). | Read `+0x384` and `+0x380` in `a733_npu_advance`. This is the one read on the event path that the vendor does not make there. |
+| Recovery | Cancels the hardware through `+0x3a8` and submits the initial command again, or powers the core off and on, resets and initialises it (`task/vip_drv_task_common.c:463-535`). | Fault state; the owner retains the device and the image ends at the watchdog. Fault recovery is a separate stage. |
+
+The enable mask therefore does not explain a silent stall. What does follow from the code is this. One worker task
+(`runtime_worker`, `drivers/npu/npu_service.c`) services the interrupt, checks the job timeout and sends every reply.
+The timeout check itself (`a733_npu_check_timeout`) reads no register and only sets the fault, so on the host, where
+nothing blocks, a job that never completes gets its timeout reply after 1 s. On the board the reply did not come within
+2 s. The only steps on the path that can wait on hardware are the worker's own register accesses: the event read
+(`+0x010`), the new reads of `+0x384` and `+0x380`, the idle hint read (`+0x004`) and the interrupt controller calls.
+A read that never returns stops the worker, and with it both the exception handling and the timeout reply, which is
+the behaviour seen. The code cannot show which read stalled, or whether there was any event at all. The test images
+therefore record, in the first-failure record, the capture stage of the controller (`mmu_stage`: 1 event seen,
+2 reading `+0x384`, 4 reading `+0x380`, 5 both read), its fault code and the event bits, and they wait 8 s for the
+reply. The host check stalls the `+0x384` read to show that the record names it.
+
 **What the controller records.** When an event has bit 30, the controller reads `+0x384` and `+0x380`, keeps them in
 `mmu_status` and `mmu_address`, and enters the fault state `A733_NPU_MMU`. The service copies both values into the
 reply, and the OS wrapper (`apps/os/npu.c`) records the failure with the faulting address as the value and the status
 code in the ticket byte (bits 23:16) of the site word. A NPU failure ends the image at the watchdog, not at the
-failure return, because the owner retains the device (`docs/designs/failure-return.md`, "Device failure").
+failure return, because the owner retains the device (`docs/designs/failure-return.md`, "Device failure"). Only the
+first-failure record survives the watchdog, so the test images carry the CRC-32 of the canary buffer in its caller word.
 
 **The runs.** Each image runs one SunstoneOS test graph through the OS NPU service. A compile-time test option
-(`SUNSTONE_NPU_UNMAPPED_SLOT`, `SUNSTONE_NPU_UNMAPPED_ADDRESS` in `drivers/npu/nbg_assembly.c`) overwrites one
-descriptor pointer of the first operation after relocation, in the encoding of that field, with a device address that
-the page tables do not map. No OS physical address is used. A descriptor that lacks the field is refused at load, so the
-option cannot silently do nothing.
+(`SUNSTONE_NPU_UNMAPPED_SLOT`, `drivers/npu/nbg_assembly.c`) overwrites one descriptor pointer of the first operation
+after relocation, in the encoding of that field, and moves the end field of a ring by the same distance so that the
+stated extent is kept. A descriptor that lacks the field is refused at load, so the option cannot silently do nothing.
 
-| Run | Graph | Pointer | Device address | Access |
+The target is a canary: a 1 MiB buffer in the image's own DRAM that the NPU page tables do not map (the tables map
+only the NPU pool, whose device addresses equal its physical addresses). The buffer holds the word pattern
+`i * 0x9e3779b1 xor 0xc0ffee11` and the pointer is aimed 64 KiB into it, so that a bypassing access of the descriptor's
+stated extent, read or write, stays inside it. The device address is therefore a valid DRAM physical address, not an
+address of OS memory. The image cleans the buffer from the cache after filling it.
+
+| Run | Graph | Pointer | Target | Access |
 | --- | --- | --- | --- | --- |
-| R1 | relu | input | `0x20000000` | read |
-| R2 | relu | output | `0x20000000` | write |
-| R3 | add | first input | `0x20000000` | read |
-| R4 | add | output | `0x20000000` | write |
+| R1 | relu | input | canary + 64 KiB | read |
+| R2 | relu | output | canary + 64 KiB | write |
+| R3 | add | first input | canary + 64 KiB | read |
+| R4 | add | output | canary + 64 KiB | write |
 | R5 | relu | input | `0x180` (page 0) | read |
 
-**Prediction.** Each image starts the single job, the NPU reaches the changed pointer, and event bit 30 is raised with
-no completion. The first-failure record names the NPU request failure (`SUNSTONE_CRUMB_FAIL_NPU`) with status code 2
-(page not present) in the ticket byte and the faulting address as the value: `0x20000000` for R1 to R4 and `0x180`
-for R5 (the descriptor stores this pointer in 64-byte units, so `0x160` cannot be encoded and the nearest
-encodable address in page 0 is used). A read or a write is told apart by which pointer was changed. The outcome is
-`watchdog-reset`, the board returns to FEL without a replug, and the DRAM is lost. A status code 4 or 1 would show a
-different reason for the exception; a normal return, a completion without an exception, or a failure without an MMU
-record means the case failed, because the NPU did not fault on the access. The runs use development DRAM mode, with
-the watchdog armed, at 852 MHz and 800 mV, with no change of rail, clock or storage.
+**Prediction.** If the page tables confine the NPU, each image starts the single job, the NPU reaches the changed
+pointer, and event bit 30 is raised with no completion. The first-failure record names the NPU request failure
+(`SUNSTONE_CRUMB_FAIL_NPU`) with status code 2 (page not present) in the ticket byte, the faulting address as the value
+(the canary position for R1 to R4, `0x180` for R5) and the unchanged canary CRC in the caller word
+(`0x4696ca8e` for the pattern). A read or a write is told apart by which pointer was changed. The outcome is
+`watchdog-reset`, the board returns to FEL without a replug, and the DRAM is lost.
 
-The host check `checks/os-npu-service.py` (case 23) and the per-run host reproduction exercise the hook, the
-controller capture, the reply and the wrapper record on the production sources with a modeled register file; they show
-the plumbing, not the hardware behaviour.
+If the access bypasses the MMU, the record is different: a read completes, and the wrapper records ticket byte `0xee`
+(a job completed although a pointer is unmapped), the canary CRC as the value and the CRC of the output tensor as the
+caller word, which differs from the reference output because the input came from the pattern; a write completes with a
+canary CRC other than `0x4696ca8e`. If neither happens, the ticket byte is the capture stage (low nibble) and the fault
+code (high nibble), and the value the event bits seen: it names the step that stalled. The runs use development DRAM
+mode, with the watchdog armed, at 852 MHz and 800 mV, with no change of rail, clock or storage.
+
+The host check `checks/os-npu-service.py` (case 23) exercises the hook, the controller capture, the reply and the
+wrapper record on the production sources with a modeled register file, for the fault, for an access that bypasses
+(read and write) and for a stalled status read; the per-run host reproduction does the same for each of R1 to R5. They
+show the plumbing, not the hardware behaviour.

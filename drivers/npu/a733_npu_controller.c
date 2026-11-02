@@ -213,6 +213,16 @@ int a733_npu_cancel(struct a733_npu_controller *c, uint64_t timeout)
     return 1;
 }
 
+static int mmu_capture(struct a733_npu_controller *c)
+{
+    c->mmu_stage = 2;
+    if (!read_reg(c, 0x384, &c->mmu_status)) return 0;
+    c->mmu_stage = 4;
+    if (!read_reg(c, 0x380, &c->mmu_address)) return 0;
+    c->mmu_stage = 5;
+    return 1;
+}
+
 enum a733_npu_state a733_npu_check_timeout(struct a733_npu_controller *c)
 {
     if(!c)return A733_NPU_FAULT;
@@ -220,7 +230,13 @@ enum a733_npu_state a733_npu_check_timeout(struct a733_npu_controller *c)
     if(canceled || c->state==A733_NPU_BOOTING || c->state==A733_NPU_RUNNING) {
         uint64_t elapsed=c->ops.microseconds(c->cookie)-(canceled?c->cancel_start:c->start);
         if(elapsed >= (canceled?c->cancel_timeout:c->timeout)) {
-            DIAGNOSTIC_TIMEOUT(c,elapsed);fail(c,A733_NPU_TIMEOUT);
+            DIAGNOSTIC_TIMEOUT(c,elapsed);
+#ifdef SUNSTONE_NPU_MMU_CAPTURE_ON_TIMEOUT
+            /* Test images only: keep the MMU registers of a job that stalled, so that the record shows whether the
+             * MMU had reported. The reads can stall too; mmu_stage then shows where. */
+            (void)mmu_capture(c);
+#endif
+            fail(c,A733_NPU_TIMEOUT);
         }
     }
     return c->state;
@@ -244,11 +260,6 @@ enum a733_npu_state a733_npu_advance(struct a733_npu_controller *c, int sample_e
     uint64_t elapsed = sampled - (canceled ? c->cancel_start : c->start);
     if (elapsed >= (canceled ? c->cancel_timeout : c->timeout)) {
         DIAGNOSTIC_TIMEOUT(c,elapsed);
-        /* Keep what the vendor reads on an exception (event, +0x384, +0x380) for the failure record, so that a job
-         * that stalled without a completion shows whether the MMU had reported. A failed read leaves the field 0. */
-        uint32_t seen = 0;
-        if (read_reg(c, 0x10, &seen)) c->irq_seen |= seen;
-        (void)(read_reg(c, 0x384, &c->mmu_status) && read_reg(c, 0x380, &c->mmu_address));
         fail(c, A733_NPU_TIMEOUT); return c->state;
     }
     /* The configuration is checked at open and at close
@@ -259,9 +270,11 @@ enum a733_npu_state a733_npu_advance(struct a733_npu_controller *c, int sample_e
         c->irq_seen |= value;
     }
     if (c->irq_seen & EVENT_MMU) {
-        /* The vendor driver reads the MMU status and the exception address when this event is set
-         * (vip_drv_debug.c:355, :406). Record them before the fault; a failed read leaves the fault an I/O one. */
-        if (read_reg(c, 0x384, &c->mmu_status) && read_reg(c, 0x380, &c->mmu_address)) fail(c, A733_NPU_MMU);
+        /* The vendor driver checks +0x388 on this event (vip_drv_task_common.c:621) and reads the status and address
+         * registers in its dump (vip_drv_debug.c:355, :406). Record them before the fault. A failed read leaves the
+         * fault an I/O one; a read that never returns is visible in mmu_stage. */
+        c->mmu_stage = 1;
+        if (mmu_capture(c)) fail(c, A733_NPU_MMU);
         return c->state;
     }
     if (c->irq_seen & ~EVENT_DONE) { fail(c, A733_NPU_IRQ); return c->state; }
