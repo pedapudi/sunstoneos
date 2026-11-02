@@ -291,6 +291,28 @@ void kernel_main(void)
 
 #ifdef QEMU_OS_UPPER
 #include "app_large.h"
+/* The virtual board's block device: a 40 MiB RAM disk that the check loads at 0x48000000 (a bare FAT32 volume). */
+#define LARGE_DISK ((const uint8_t *)(uintptr_t)0x48000000)
+#define LARGE_DISK_SECTORS 81920u
+static uint8_t large_buffers[3 * OS_LARGE_BUFFER_BYTES] __attribute__((aligned(64)));
+static unsigned large_polls;
+static int large_read(void *unused, uint64_t sector, uint32_t count, uint8_t *buffer)
+{
+    (void)unused;
+    if (!count || sector + count > LARGE_DISK_SECTORS) return 0;
+    memcpy(buffer, LARGE_DISK + sector * 512u, (size_t)count * 512u);
+    return 1;
+}
+static int large_submit(void *unused, uint64_t sector, uint32_t count, uint8_t *buffer)
+{ large_polls = 0; return large_read(unused, sector, count, buffer); }
+/* The request completes on the second poll: the loader's busy path runs. */
+static int large_poll(void *unused) { (void)unused; return ++large_polls >= 2; }
+const struct os_large_device *os_large_device(void)
+{
+    static const struct os_large_device device = {{0, large_read, LARGE_DISK_SECTORS}, {0, large_submit, large_poll},
+                                                  0, LARGE_DISK_SECTORS, large_buffers};
+    return &device;
+}
 void os_large_report(const struct large_slot *slot, const struct app_space *space)
 {
     struct line l = {.used = 0};

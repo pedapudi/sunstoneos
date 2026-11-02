@@ -19,12 +19,13 @@ static int path_ok(const char *path)
 
 int ss_large_records_valid(const struct ss_large_region *r, unsigned count)
 {
-    if (count > SS_LARGE_REGIONS || (count && !r)) return 0;
-    unsigned seen = 0;
+    if (count > APP_REGION_MAX_REGIONS || (count && !r)) return 0;
+    uint64_t total = 0;
     for (unsigned i = 0; i < count; ++i) {
-        if (r[i].index >= count || (seen & (1u << r[i].index)) || (r[i].flags & ~(unsigned)(SS_LARGE_WRITE | SS_LARGE_EXTENT))) return 0;
-        seen |= 1u << r[i].index;
+        if (r[i].index != i || (r[i].flags & ~(unsigned)(SS_LARGE_WRITE | SS_LARGE_EXTENT))) return 0;
         if (!r[i].bytes || r[i].bytes % APP_REGION_BLOCK || r[i].bytes > APP_REGION_LIMIT - APP_REGION_BASE) return 0;
+        total += r[i].bytes;
+        if (total > APP_REGION_LIMIT - APP_REGION_BASE) return 0;
         if (!r[i].source_bytes || r[i].source_bytes > r[i].bytes) return 0;
         int zero = 1;
         for (unsigned k = 0; k < 32; ++k) if (r[i].sha256[k]) zero = 0;
@@ -39,21 +40,21 @@ int ss_large_records_valid(const struct ss_large_region *r, unsigned count)
 }
 
 int large_admit(struct app_region_ledger *l, uint8_t owner, const struct ss_large_region *r, unsigned count,
-                struct large_slot out[SS_LARGE_REGIONS])
+                struct large_slot *out, unsigned out_capacity)
 {
-    memset(out, 0, sizeof(struct large_slot) * SS_LARGE_REGIONS);
-    if (!l || !owner || !ss_large_records_valid(r, count)) return APP_REGION_INVALID;
+    if (out_capacity) memset(out, 0, sizeof(struct large_slot) * out_capacity);
+    if (!l || !owner || out_capacity < count || (count && !out) || !ss_large_records_valid(r, count)) return APP_REGION_INVALID;
     int status = APP_REGION_OK;
     for (unsigned i = 0; i < count && status == APP_REGION_OK; ++i) {
-        struct large_slot *s = &out[r[i].index];
+        struct large_slot *s = &out[i];
         unsigned access = APP_REGION_READ | (r[i].flags & SS_LARGE_WRITE ? APP_REGION_WRITE : 0);
         status = app_region_acquire(l, owner, r[i].bytes, access, &s->base, &s->bytes);
         if (status == APP_REGION_OK) { s->index = r[i].index; s->flags = r[i].flags; s->state = SS_LARGE_PENDING; }
     }
     if (status != APP_REGION_OK) {                               /* all or nothing */
-        for (unsigned i = 0; i < SS_LARGE_REGIONS; ++i)
+        for (unsigned i = 0; i < count; ++i)
             if (out[i].bytes) app_region_release(l, owner, out[i].base);
-        memset(out, 0, sizeof(struct large_slot) * SS_LARGE_REGIONS);
+        memset(out, 0, sizeof(struct large_slot) * out_capacity);
     }
     return status;
 }
