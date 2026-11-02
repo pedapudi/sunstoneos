@@ -12,6 +12,7 @@
 #include <stdatomic.h>
 #include <string.h>
 #include "result.h"
+#include "portable.h"
 _Static_assert(configNUMBER_OF_CORES == BW_CORES, "eight physical cores required");
 _Static_assert(sizeof(struct bw_result) <= 16384, "output grant");
 static struct bw_result result;
@@ -22,15 +23,10 @@ static uint64_t *buffer;
 /* Job description, written by the controller before it notifies the workers. */
 static struct {
     uint32_t mask, cores, pass, mode;       /* mode 0 fill, 1 read */
-    atomic_uint arrived, go, finished;
+    atomic_uint generation, arrived, go, finished;
     uint64_t start[BW_CORES], finish[BW_CORES], digest[BW_CORES];
 } job;
-static uint64_t counter(void)
-{
-    uint64_t v;
-    __asm__ volatile("isb; mrs %0,cntpct_el0" : "=r"(v) :: "memory");
-    return v;
-}
+#define counter bw_counter
 static unsigned rank_of(uint32_t mask, unsigned core)
 {
     return (unsigned)__builtin_popcount(mask & ((1u << core) - 1u));
@@ -38,8 +34,15 @@ static unsigned rank_of(uint32_t mask, unsigned core)
 static void worker(void *arg)
 {
     const unsigned core = (unsigned)(uintptr_t)arg;
+    unsigned seen = 0;
     for (;;) {
+        /* The OS may notify the application's tasks for its own purposes, so a wake-up
+         * counts only when the job generation has advanced and names this core. */
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        const unsigned generation = atomic_load_explicit(&job.generation, memory_order_acquire);
+        if (generation == seen) continue;
+        seen = generation;
+        if (!(job.mask >> core & 1u)) continue;
         if (portGET_CORE_ID() != core) ss_fail(0xb710 | core);
         const unsigned rank = rank_of(job.mask, core);
         /* A reading core takes slice (rank + pass) modulo eight; the fill writes slice `core`. */
@@ -48,7 +51,7 @@ static void worker(void *arg)
         /* Barrier: the last core to arrive opens the gate, so all start together. */
         if (atomic_fetch_add_explicit(&job.arrived, 1, memory_order_acq_rel) + 1 == job.cores)
             atomic_store_explicit(&job.go, 1, memory_order_release);
-        while (!atomic_load_explicit(&job.go, memory_order_acquire)) __asm__ volatile("yield");
+        while (!atomic_load_explicit(&job.go, memory_order_acquire)) bw_relax();
         const uint64_t t0 = counter();
         uint64_t digest = 0;
         if (job.mode == 0) {
@@ -58,7 +61,7 @@ static void worker(void *arg)
                 p[i] = w;
                 digest ^= w;
             }
-            __asm__ volatile("dsb ish" ::: "memory");
+            bw_publish();
         } else {
             digest = bw_read(p, BW_SLICE_BYTES);
         }
@@ -66,8 +69,8 @@ static void worker(void *arg)
         job.start[core] = t0;
         job.finish[core] = t1;
         job.digest[core] = digest;
-        if (atomic_fetch_add_explicit(&job.finished, 1, memory_order_acq_rel) + 1 == job.cores)
-            xTaskNotifyGive(controller);
+        atomic_fetch_add_explicit(&job.finished, 1, memory_order_acq_rel);
+        xTaskNotifyGive(controller);
     }
 }
 void dram_bandwidth_init(void)
@@ -90,9 +93,14 @@ static uint64_t run(uint32_t mask, unsigned mode, unsigned pass)
     atomic_store(&job.arrived, 0);
     atomic_store(&job.go, 0);
     atomic_store(&job.finished, 0);
+    atomic_fetch_add_explicit(&job.generation, 1, memory_order_release);
     for (unsigned core = 0; core < BW_CORES; ++core)
         if (mask >> core & 1u) xTaskNotifyGive(workers[core]);
-    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000)) != 1) ss_fail(0xb720 | mode);
+    const uint64_t deadline = counter() + 2 * 24000000u;
+    while (atomic_load_explicit(&job.finished, memory_order_acquire) != job.cores) {
+        if (counter() > deadline) ss_fail(0xb720 | mode);
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
+    }
     uint64_t first = UINT64_MAX, last = 0;
     for (unsigned core = 0; core < BW_CORES; ++core) {
         if (!(mask >> core & 1u)) continue;
@@ -121,7 +129,7 @@ void dram_bandwidth_main(const struct ss_grant *g)
         vTaskDelay(1);
     }
     memcpy(result.magic, BW_MAGIC, 8);
-    __asm__ volatile("mrs %0,cntfrq_el0" : "=r"(result.counter_hz));
+    result.counter_hz = bw_counter_hz();
     result.slice_bytes = BW_SLICE_BYTES;
     result.slices = BW_SLICES;
     result.warm = BW_WARM;

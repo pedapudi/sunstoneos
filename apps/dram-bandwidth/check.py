@@ -32,3 +32,44 @@ for offset, replacement in ((0, 0x58), (16, 7), (host.HEAD.size, 1), (config + h
     else:
         raise AssertionError(f'decoder accepted corruption at {offset}')
 print('DRAM bandwidth result layout, fill and pass digests pass; corrupt header, fill digest, core set, pass digest and duration rejected')
+
+# The task protocol: the real main.c and kernel.c run on host threads with a stand-in for the
+# FreeRTOS calls. Without early wake-ups and with them, every digest equals the fill pattern.
+# The earlier protocol, which treated any notification as completion, fails with early wake-ups.
+import re
+shim = here / 'shim'
+def build(source, name):
+    out = a.build / name
+    subprocess.run([a.cc, '-std=gnu11', '-O2', '-pthread', '-Wall', '-Wextra', '-Werror', '-I' + str(shim),
+                    '-I' + str(here), '-I' + str(here.parents[1] / 'include'), str(source),
+                    str(shim / 'shim.c'), str(here / 'kernel.c'), '-o', str(out)], check=True)
+    return out
+def run(exe, spurious):
+    env = {'SHIM_SPURIOUS': '1'} if spurious else {}
+    done = subprocess.run([str(exe)], capture_output=True, env=env, timeout=120)
+    return done.returncode, done.stdout
+current = build(here / 'main.c', 'bandwidth-protocol')
+for spurious in (False, True):
+    code, out = run(current, spurious)
+    assert code == 0, (spurious, code)
+    host.decode(out)
+earlier = subprocess.check_output(['git', '-C', str(here), 'show', 'd4cd997d:apps/dram-bandwidth/main.c'], text=True)
+earlier = earlier.replace('#include "result.h"', '#include "result.h"\n#include "portable.h"', 1)
+earlier = re.sub(r'static uint64_t counter\(void\)\n\{.*?\n\}\n', '#define counter bw_counter\n', earlier, count=1, flags=re.S)
+earlier = earlier.replace('__asm__ volatile("yield")', 'bw_relax()').replace('__asm__ volatile("dsb ish" ::: "memory");', 'bw_publish();')
+earlier = earlier.replace('__asm__ volatile("mrs %0,cntfrq_el0" : "=r"(result.counter_hz));', 'result.counter_hz = bw_counter_hz();')
+(a.build / 'main-earlier.c').write_text(earlier)
+legacy = build(a.build / 'main-earlier.c', 'bandwidth-protocol-earlier')
+code, out = run(legacy, False)
+assert code == 0
+host.decode(out)
+rejected = False
+try:
+    code, out = run(legacy, True)
+    if code == 0:
+        host.decode(out)
+except ValueError:
+    rejected = True
+rejected = rejected or code != 0
+assert rejected, 'the earlier protocol survived early wake-ups'
+print('task protocol passes with and without early wake-ups; the earlier protocol fails with them')

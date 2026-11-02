@@ -20,8 +20,9 @@ one Cortex-A76 core (core 6), both A76 cores (6 and 7), the six A55 cores (0 to
 - In a pass each participating core reads one slice with 128-byte vector loads
   and no software prefetch. The slice a core reads advances by one on every
   pass, so a core never reads the slice its own caches received in the pass
-  before. The caches of the A55 and A76 cores hold at most 512 KiB each, and the
-  shared L3 holds 1 MiB, so at most a few percent of a pass can hit in cache.
+  before. Each A55 core has a 128 KiB private L2 cache and each A76 core a 256 KiB
+  one (read from the cache ID registers on the board); all cores share a 1 MiB L3.
+  Against 5 MiB read per core, at most a few percent of a pass can hit in cache.
 - The cores start together at a barrier. A pass lasts from the first start to the
   last finish. The counter runs at 24 MHz, so a pass of a few milliseconds has an
   error below 0.01 percent.
