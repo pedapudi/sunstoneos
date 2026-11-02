@@ -165,12 +165,36 @@ static __attribute__((unused)) _Noreturn void npu_graphs_queue_main(void)
     }
     offset = 0;
     unsigned wrong = 0;
+    /* The 16-bit elements: the largest difference from the reference, the sum of absolute differences (modulo 2^32) and the
+     * number of elements that differ by more than 8 steps (receipt.max_error[0..2]). */
+    uint32_t largest = 0, sum_abs = 0, far = 0;
     for (unsigned i = 0;; ++i) {
         struct ss_npu_tensor t;
         if (!ss_npu_queue_tensor(q, h, SS_NPU_OUTPUT, i, &t)) break;
         for (size_t b = 0; b < t.bytes && offset + b < v->reference_bytes; ++b) wrong += ((const uint8_t *)t.data)[b] != v->reference[offset + b];
+        for (size_t b = 0; b + 1 < t.bytes && offset + b + 1 < v->reference_bytes; b += 2) {
+            const int a = (int16_t)((const uint8_t *)t.data)[b] | ((int16_t)(int8_t)((const uint8_t *)t.data)[b + 1] << 8);
+            const int r = (int16_t)v->reference[offset + b] | ((int16_t)(int8_t)v->reference[offset + b + 1] << 8);
+            const uint32_t d = a > r ? (uint32_t)(a - r) : (uint32_t)(r - a);
+            if (d > largest) largest = d;
+            sum_abs += d; far += d > 8;
+        }
         offset += t.bytes;
     }
+    receipt.max_error[0] = largest; receipt.max_error[1] = sum_abs; receipt.max_error[2] = far;
+#ifdef NPU_GRAPHS_QUEUE_DUMP
+    /* Diagnostic image: the result is the output tensors as the NPU wrote them (not the receipt), so that a difference
+     * from the simulator can be located; the manifest's output_limit (at most 65,536) holds them. */
+    static uint8_t dump[NPU_GRAPHS_QUEUE_DUMP];
+    size_t dump_at = 0;
+    for (unsigned i = 0;; ++i) {
+        struct ss_npu_tensor t;
+        if (!ss_npu_queue_tensor(q, h, SS_NPU_OUTPUT, i, &t)) break;
+        if (dump_at + t.bytes > sizeof(dump)) queue_fault(12, (uint32_t)dump_at);
+        memcpy(dump + dump_at, t.data, t.bytes);
+        dump_at += t.bytes;
+    }
+#endif
     receipt.matched = (wrong == 0 && offset == v->reference_bytes) ? receipt.completed : 0;
     for (unsigned i = 0; i < sweeps; ++i) receipt.differing_bytes[i] = wrong;
     begin = ss_counter_ticks();
@@ -182,7 +206,11 @@ static __attribute__((unused)) _Noreturn void npu_graphs_queue_main(void)
     receipt.count = records; receipt.sdk_closed = 1;
     receipt.stop = ss_counter_ticks();
     receipt.magic = NPU_GRAPHS_MAGIC; receipt.version = 1; receipt.bytes = sizeof(receipt);
+#ifdef NPU_GRAPHS_QUEUE_DUMP
+    ss_finish(dump, dump_at);
+#else
     ss_finish(&receipt, sizeof(receipt));
+#endif
 }
 #endif
 
