@@ -84,7 +84,7 @@ if(SUNSTONE_PARTITIONED_SCHEDULER)
   target_compile_definitions(scheduler-partitioned-qemu PRIVATE SUNSTONE_SMP_CORES=8)
   target_compile_options(scheduler-partitioned-qemu PRIVATE ${SUNSTONE_KERNEL_FLAGS})
   target_link_options(scheduler-partitioned-qemu PRIVATE -nostdlib -static -Wl,--gc-sections
-    -Wl,--defsym=SUNSTONE_SMP_STACKS=8 -Wl,--wrap=vTaskSwitchContext -Wl,--wrap=vPortRecursiveLock
+    -Wl,--defsym=SUNSTONE_SMP_STACKS=8 -Wl,--wrap=vTaskSwitchContext -Wl,--wrap=vPortRecursiveLock -Wl,--wrap=xTaskGenericNotify
     "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
     "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/scheduler-partitioned-qemu.map")
   set_target_properties(scheduler-partitioned-qemu PROPERTIES SUFFIX ".elf"

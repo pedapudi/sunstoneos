@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import signal
 import subprocess
+import time
 
 
 CHECK_INPUTS = ['checks/scheduler-partitioned-qemu.c', 'checks/scheduler-partitioned-qemu-config/FreeRTOSConfig.h', 'checks/smp-kernel.c', 'checks/smp8-soak.c', 'checks/smp-runtime.cc', 'cmake/scheduler-partitioned.cmake', 'cmake/smp.cmake', 'patches/freertos-partitioned-port-asm.patch', 'kernel/scheduler']
@@ -42,6 +43,7 @@ def main():
             '-cpu', args.cpu, '-smp', str(cores), '-m', '128M', '-nographic', '-monitor', 'none',
             '-semihosting-config', 'enable=on,target=native',
             '-device', f'loader,file={image},cpu-num=0']
+        started = time.monotonic()
         process = subprocess.Popen(['/usr/bin/time', '-v', *command], stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, start_new_session=True, env=env)
         try:
@@ -55,12 +57,32 @@ def main():
             stdout, stderr = process.communicate()
             log = stdout + stderr + '\nQEMU timeout after 45 seconds\n'
             passed = False
+        elapsed = time.monotonic() - started
+        counters = {}
+        if case == 'concurrent':
+            owners = []
+            for row in re.finditer(r'owner cpu=(0x[0-9a-f]+) switches=(0x[0-9a-f]+) idle-selections=(0x[0-9a-f]+) busy-progress=(0x[0-9a-f]+) switch-path-global-locks=(0x[0-9a-f]+)', log):
+                owners.append(dict(zip(('cpu', 'switches', 'idle_selections', 'busy_progress', 'switch_path_global_locks'),
+                    (int(value, 16) for value in row.groups()))))
+            local = re.search(r'local-wake attempts=(0x[0-9a-f]+) completions=(0x[0-9a-f]+) ticks=(0x[0-9a-f]+) tick-hz=(0x[0-9a-f]+) busy-home-progress=(0x[0-9a-f]+) idle-peer-samples=(0x[0-9a-f]+) all-global-locks=(0x[0-9a-f]+)', log)
+            counters['owners'] = owners
+            if local:
+                counters['local'] = dict(zip(('attempts', 'completions', 'ticks', 'tick_hz', 'busy_home_progress', 'idle_peer_samples', 'all_global_locks'),
+                    (int(value, 16) for value in local.groups())))
+                measured = counters['local']
+                counters['local']['completions_per_second'] = (
+                    measured['completions'] * measured['tick_hz'] / measured['ticks']
+                    if measured['ticks'] else None)
+            passed = passed and len(owners) == 8 and local is not None
+            passed = passed and all(owner['switch_path_global_locks'] == 0 for owner in owners)
+            if local:
+                passed = passed and measured['all_global_locks'] == 0 and measured['ticks'] > 0
         path = args.output / (args.cpu + '-' + case + '.log')
         path.write_text(log)
         peak = re.search(r'Maximum resident set size \(kbytes\): (\d+)', log)
         reports.append({'case': case, 'cpu': args.cpu, 'cores': cores,
             'image': str(image), 'sha256': hashlib.sha256(image.read_bytes()).hexdigest(),
-            'command': command, 'passed': passed, 'peak_rss_kib': int(peak[1]) if peak else None,
+            'command': command, 'passed': passed, 'elapsed_seconds': elapsed, 'counters': counters, 'peak_rss_kib': int(peak[1]) if peak else None,
             'log': str(path.resolve())})
         (args.output / (args.cpu + '-report.json')).write_text(json.dumps(reports, indent=2) + '\n')
         print(('PASS' if passed else 'FAIL') + f' {case}: {path}', flush=True)
