@@ -33,6 +33,7 @@ SMP patches in `patches/`. The board description
 | Latency CPU control | A76 composition with the latency instrumentation | The application reaches its main entry on core 6 with the OS live |
 | Resident start | Resident lifetime, four-second watchdog armed by the loader | The supervisor renews the watchdog; the session runs past the first expiry and the application finishes |
 | Resident service stall | The USB transport stops reporting 100 ms after it was ready | The supervisor stops renewing and stops with status 5, naming the transport as the first stale service |
+| EL0 data abort | A test application stores to an unmapped address | The failure return's vector (`apps/os/cpu-return-el0.S`) abandons the task on a reserved stack; the board records group application, detail 0xe24, the address and the instruction; the task is suspended and no exception is reported |
 | Resident service silent | The USB transport never reports | The watchdog resets the board at its first expiry and the application never starts |
 
 The negative control runs the whole check against the file from the commit

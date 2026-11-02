@@ -4,6 +4,7 @@
 #endif
 #include "session.h"
 #include "sunstone_crumb.h"
+#include "../os/cpu-return-el0.h"
 #include "cached.h"
 #include "a733_memory_uncached.h"
 #include "platform.h"
@@ -68,7 +69,11 @@ void a733_storage_maintenance_stop(void)
 {fail_close();a733_typec_revoke(&board.typec.provider);}
 static _Noreturn void park(void){for(;;)vTaskSuspend(NULL);}
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name)
-{(void)task;platform_panic(name,2);}
+{
+    /* The EL0 fault vector abandons its task on a reserved stack, outside the task's own. */
+    if(os_cpu_return_el0_stack_current())return;
+    (void)task;platform_panic(name,2);
+}
 /* The power service task: every PMIC transaction and domain transition. It
  * blocks until a submit or row request notifies it, or for the ticks the step
  * returns; faults park it with ownership held. */

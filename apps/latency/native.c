@@ -99,6 +99,14 @@ void latency_main(const struct ss_grant *grant)
      * lower CPU-B, stop every core and return to the ROM with this record. */
     ss_fail_value(0xb7f, 0x4641494c);
 #endif
+#ifdef SUNSTONE_LATENCY_FORCE_EL0_ABORT
+    /* EL0 exception control: store to an address that no EL1 table entry maps
+     * (invalid in both memory layouts), at the same point. The vector must
+     * abandon this task, and the board must return to the ROM with the
+     * exception's record (docs/designs/failure-return.md). */
+    *(volatile uint32_t *)(uintptr_t)UINT32_C(0x7a000000) = 0x41424f52;
+    ss_fail(0xb7e);
+#endif
     ss_activity_begin();
     latency_workload_run(&result);
     if (!at_top()) ss_fail(0xb03);

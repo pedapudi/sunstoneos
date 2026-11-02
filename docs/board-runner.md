@@ -120,7 +120,7 @@ and retained RTC breadcrumbs are classified before any DRAM result read.
 | Outcome | Meaning |
 | --- | --- |
 | `returned` | Matching return breadcrumbs, valid retirement report and matching output. This does not qualify the device's complete functionality. |
-| `failure-return` | The image linked the [failure return](designs/failure-return.md) and returned normally after its first failure. Retirement is valid and DRAM is restored; the breadcrumbs and the returned `ss_failure` record describe the failure. The result is failed (exit status 1) and `first_failure` holds the record. The port is not quarantined and not paused. |
+| `failure-return` | The image linked the [failure return](designs/failure-return.md) and returned normally after its first failure. Retirement is valid (an NPU image may publish the never-started stop report, `finished` 2, which is accepted only here) and DRAM is restored; the breadcrumbs and the returned `ss_failure` record describe the failure. The result is failed (exit status 1) and `first_failure` holds the record. The port is not quarantined and not paused. |
 | `result-mismatch` | Uploaded bytes, the native report or the returned output differ from the required values. A failure return whose record differs from `--expect` is also reported here, after DRAM restoration. |
 | `watchdog-reset` | A new permitted FEL instance returned with WDT0 still enabled. Breadcrumbs identify the last stage and any first fault. DRAM is lost. |
 | `no-return` | No accessible new FEL instance appeared within the watchdog window and margin. Recovery is unresolved. |

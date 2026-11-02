@@ -1,6 +1,7 @@
 /* One finite staged CPU recognition. Service callbacks run on their existing
  * owners. Only the final per-core terminal stops the scheduler context. */
 #include "cpu-return.h"
+#include "cpu-return-el0.h"
 #include "application.h"
 #include "os.h"
 #include "../board/application.h"
@@ -117,7 +118,7 @@ static int core_can_schedule(void)
 {
     uint64_t daif,mask;
     __asm__ volatile("mrs %0,daif\n mrs %1,icc_pmr_el1":"=r"(daif),"=r"(mask)::"memory");
-    return !(daif&0x80)&&mask==portUNMASK_VALUE;
+    return !(daif&0x80)&&mask>portMAX_API_PRIORITY_MASK;
 }
 extern volatile uint8_t ucPrimaryCoreInitDoneFlag;
 /* Claim the return for the first failure. The caller has recorded the
@@ -152,7 +153,6 @@ static int failure_claim(unsigned context,uint32_t site,uint32_t value,const voi
     uint64_t epoch=board.session.epoch;
     if(!epoch&&before_scheduler)epoch=a733_cached_runtime[0].epoch;
     os_application_failed(&record,epoch,board.session.generation);
-    atomic_store_explicit(&failing,1,memory_order_release);
 #ifdef SUNSTONE_A733_OS_NPU
     /* The host validates the NPU stop report of every failure return. Before the
      * scheduler no NPU task can run, so a service that has not run (a refusal
@@ -162,11 +162,31 @@ static int failure_claim(unsigned context,uint32_t site,uint32_t value,const voi
      * power the NPU, so no such report is made here. */
     if(before_scheduler)os_npu_report_unstarted(epoch,board.session.generation);
 #endif
+    atomic_store_explicit(&failing,1,memory_order_release);
     if(!before_scheduler)return 1;
     atomic_store_explicit(&prefail,1,memory_order_release);
     atomic_store_explicit(&ready,1,memory_order_release);
     sunstone_crumb(SUNSTONE_CRUMB_CLOSE,0);
     a733_qualification_worker_done(0);
+}
+/* Synchronous exceptions from an application task at EL0 (docs/designs/
+ * failure-return.md). The EL1 vector calls os_cpu_return_el0_try
+ * (apps/os/cpu-return-el0.S), which admits the exception, abandons the faulting
+ * context (its stack pointer and registers may be corrupt, and the kernel stack
+ * is not used) and returns the task to EL0 in the function below on a reserved
+ * stack. A fault that is not admitted ends at the watchdog. */
+/* Runs at EL0 on the faulting task, in place of the faulting instruction: the
+ * same claim as ss_fail, with the ESR class as the detail, the low ESR syndrome
+ * bits as the site's auxiliary field, the faulting address as the value and
+ * ELR_EL1 as the caller. The task never runs application code again. The
+ * address is meaningful only for instruction aborts, data aborts and PC
+ * alignment faults. */
+__attribute__((noinline)) _Noreturn void os_cpu_return_el0_fault(uint64_t esr,uint64_t far,uint64_t elr)
+{
+    const uint32_t site=os_cpu_return_el0_site(esr),value=os_cpu_return_el0_value(esr,far);
+    board_fail_note(site,value,(const void *)(uintptr_t)elr);
+    if(!failure_claim(SS_FAILURE_FAULT,site,value,(const void *)(uintptr_t)elr))board_fail(NULL);
+    for(;;)vTaskSuspend(NULL);
 }
 /* An application failure (ss_fail) takes the failure return in any phase. */
 int os_cpu_return_failure(uint32_t site,uint32_t value,const void *caller)
