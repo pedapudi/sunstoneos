@@ -30,7 +30,7 @@
  savefuncontextgpregs
  /* Call the C handler. */
  BL vApplicationIRQHandler
-@@ -1164,6 +1180,22 @@
+@@ -1164,6 +1180,28 @@
  /* Has interrupt nesting unwound? */
  CMP X1, # 0
  B.NE Exit_IRQ_No_Context_Switch
@@ -40,6 +40,12 @@
 + * Preserve the saved exception frame and feed the ordinary yield decision. */
 +savefuncontextgpregs
 +BL ssKernelOwnerIRQExit
++/* 2: the interrupted code held the API mask, so this was an interrupt above it. It must not switch tasks. */
++CMP X0, #2
++B.NE 89f
++restorefuncontextgpregs
++B Exit_IRQ_No_Context_Switch
++89:
 +CBZ X0, 90f
 +adrp X0, ullPortYieldRequired
 +add X0, X0, :lo12:ullPortYieldRequired
