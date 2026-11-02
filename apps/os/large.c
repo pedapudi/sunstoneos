@@ -166,11 +166,6 @@ void os_large_finish(unsigned index, unsigned state, uint32_t error)
 int ss_large_wait(unsigned index, uint64_t timeout_us)
 {
     if (index >= slot_count) return -1;
-    /* The task-switch hook installs the application's table when a tagged task is switched in, but a task that never
-     * blocks before this call (a region that is ready at once) was dispatched the first time without it, and a core's
-     * boot table has no upper memory. One tick of delay is a switch-out and a switch-in, after which the table is the
-     * application's; a task that already waited for a region has been through it. */
-    if (state_of(index) == SS_LARGE_READY) vTaskDelay(1);
     TaskHandle_t self = xTaskGetCurrentTaskHandle();
     unsigned entry = os_large_waiter_capacity;
     taskENTER_CRITICAL();
