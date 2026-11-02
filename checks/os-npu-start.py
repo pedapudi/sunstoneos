@@ -230,6 +230,13 @@ def run(image, session_path, case='accept'):
     s.put(0x03400000, 0x30, 4)
     s.put(0x03400004, 31, 4)
     routed = s.call('a733_irq_table_route', 1 << 62, s.addr('a733_smp_counter')) if case != 'no-route' else None
+    # The routine writes the Secure-view priority of INTID 97. The OS reads it from
+    # Nonsecure EL1 with the distributor's DS bit clear, where GICD_IPRIORITYR
+    # returns the stored byte shifted left by one (IHI0069D; the board read 0xb0
+    # for the stored 0xd8 of PPI 27). Present that view; a RAM-backed distributor
+    # would return the Secure value and hide a comparison of the wrong view.
+    stored = s.get(0x03400000 + 0x400 + 97, 1)
+    s.put(0x03400000 + 0x400 + 97, (stored << 1) & 0xff, 1)
     # The shared providers as the board's main leaves them before the hooks run
     # (apps/board/main.c): counter, locks and the power-domain provider ready.
     L = e.layouts
