@@ -19,6 +19,7 @@
 #define configINTERRUPT_CONTROLLER_BASE_ADDRESS 0x080b0000UL
 #define configINTERRUPT_CONTROLLER_CPU_INTERFACE_OFFSET 0
 #define INCLUDE_vTaskDelete 1
+#define INCLUDE_eTaskGetState 1
 #define INCLUDE_xSemaphoreGetMutexHolder 1
 #ifndef INCLUDE_xTaskGetSchedulerState
 #define INCLUDE_xTaskGetSchedulerState 1

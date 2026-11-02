@@ -1,0 +1,10 @@
+{
+  "component": "TLA+ TLC host model checker",
+  "url": "https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar",
+  "revision": "v1.8.0",
+  "sha256": "011267fca25d0752cf18894dd585cd28b96960c112ea8a20b823ea770e7e10cd",
+  "source": "https://github.com/tlaplus/tlaplus/tree/v1.8.0",
+  "license": "MIT; bundled dependencies retain their respective notices in the jar",
+  "execution": "Host JVM only, with -Xmx1g; no target runtime dependency",
+  "storage": "External build cache; jar and model-checker output are untracked"
+}

@@ -590,7 +590,8 @@ def capture(owner, plan, args):
     require(owner.record.get('normal_return') and not owner.record.get('dram_lost'),
             'DRAM restoration requires a verified normal return.')
     if hasattr(records, 'mandatory_return'):
-        decoded = records.mandatory_return(copied, geo, plan['epoch'], plan['generation'])
+        decoded = records.mandatory_return(copied, geo, plan['epoch'], plan['generation'],
+                                           failure_return=bool(owner.record.get('failure_return')))
     else:
         require('npu_pool' not in geo and 'npu_stop' not in geo, 'NPU retirement parser is missing.')
         decoded = records.decode_return_report(copied['return-report'], plan['epoch'])
@@ -601,7 +602,9 @@ def capture(owner, plan, args):
         if 'npu_stop' in decoded:
             decoded['npu_capture_sha256'] = hashlib.sha256(copied['npu-stop']).hexdigest()
             try:
-                decoded['npu_report'] = records.npu_capture.decode(copied['npu-stop'], plan['epoch'], plan['generation'])
+                decoded['npu_report'] = records.npu_capture.decode(
+                    copied['npu-stop'], plan['epoch'], decoded['npu_stop'].get('generation', plan['generation']),
+                    never_started=decoded['npu_stop']['finished'] == 2)
                 valid = not (decoded['npu_report']['mismatches'] or decoded['npu_report']['refused'])
                 decoded['npu_capture_status'] = 'decoded'
             except (ValueError, KeyError, struct.error) as error:

@@ -91,7 +91,8 @@ DRIVER_SOURCES = ['drivers/thermal/a733_thermal.c', 'drivers/thermal/a733_therma
 QUOTE_A733 = {'drivers/gpu/a733_gpu_resources_native.c', 'drivers/i2c/a733_i2c.c'}
 # The virtual board.
 BOARD_SOURCES = ['platform/qemu-os/start.S', 'platform/qemu-os/platform.c', 'platform/qemu-os/board.c',
-                 'platform/qemu-os/mmio.c', 'platform/qemu-os/absent.c', 'platform/qemu-os/snprintf.c', 'drivers/gpu/a733_gpu_resources_native.c']
+                 'platform/qemu-os/mmio.c', 'platform/qemu-os/absent.c', 'platform/qemu-os/snprintf.c', 'drivers/gpu/a733_gpu_resources_native.c',
+                 'apps/os/cpu-return-el0.S']
 
 
 class Image:
@@ -436,20 +437,27 @@ def main():
                                          ROOT / 'apps/latency/manifest.json')
         return image.build(application)
 
+    def build_el0_abort():
+        image = Image(out / 'build-el0-abort')
+        application = image.application('el0-abort', ['checks/qemu-os/el0-abort-main.c'],
+                                         ROOT / 'checks/qemu-os/el0-abort-manifest.json')
+        return image.build(application)
+
     def build_resident():
         image = Image(out / 'build-resident', services_source=args.services_source, resident=True)
         application = image.application('hello-compute', ['apps/hello-compute/main.c'],
                                          ROOT / 'apps/hello-compute/manifest.json')
         return image.build(application)
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         os_elf = pool.submit(build_hello, 'build-os', args.services_source)
         (out / 'build-reverted').mkdir()
         control_elf = pool.submit(build_hello, 'build-reverted-services', reverted_services(out / 'build-reverted'))
         latency_elf = pool.submit(build_latency)
         resident_elf = pool.submit(build_resident)
-        os_elf, control_elf, latency_elf, resident_elf = (os_elf.result(), control_elf.result(),
-                                                          latency_elf.result(), resident_elf.result())
+        el0_elf = pool.submit(build_el0_abort)
+        os_elf, control_elf, latency_elf, resident_elf, el0_elf = (
+            os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result())
     built = time.monotonic() - started
 
     def run_case(name, elf, scenario_bytes, input_bytes=data):
@@ -531,11 +539,32 @@ def main():
     c.require(4_000_000 <= int(lines(c.output, 'WATCHDOG-RESET')[0]['t_us']) < 4_300_000, 'the reset came at the wrong time')
     c.require(c.main is None, 'the application started with the transport silent')
 
+    # 8. A data abort at EL0 (the failure return's admission, apps/os/cpu-return-el0.S): the real
+    # translation fault reaches the EL1 vector, which abandons the task on a reserved stack. The
+    # board's function records the application failure with the exception class, the faulting
+    # address and the faulting instruction, and suspends the task. The other cores go on until the
+    # monitor ends the run, with no unhandled-exception report.
+    c = run_case('el0-data-abort', el0_elf, scenario(usb_ready_ms=usb_delay_ms))
+    c.failed_with('APPLICATION', 0xe24)
+    c.require('EXCEPTION' not in c.output, 'the vector did not admit the EL0 exception')
+    c.require(c.main is not None and c.main['name'] == 'el0-abort' and c.main['core'] == '2', 'the application did not start')
+    c.require(int(c.failure['value'], 16) == 0x7a000000, 'the record holds the address %s' % c.failure['value'])
+    # Bit 31 marks a return address, bits 30:16 hold ESR bits 14:0 (WnR and a level 2 translation fault: 0x46).
+    c.require(int(c.failure['site'], 16) == 0x80464e24, 'the record holds the site %s' % c.failure['site'])
+    symbol = [x for x in host.ELFFile(open(el0_elf, 'rb')).get_section_by_name('.symtab').iter_symbols()
+              if x.name == 'el0_abort_main'][0]
+    c.require(symbol['st_value'] <= int(c.failure['caller'], 16) < symbol['st_value'] + symbol['st_size'],
+              'the faulting instruction %s lies outside the application main' % c.failure['caller'])
+    c.require(c.failure['core'] == '2', 'the fault was taken on core %s' % c.failure['core'])
+    state = lines(c.output, 'APP-TASK-STATE')
+    c.require(state and state[0]['state'] == '3', 'the faulting task is not suspended: %s' % state)
+    c.require(c.finished is None, 'the application went on past the fault')
+
     elapsed = time.monotonic() - started
     summary = {'passed': True, 'physical_access': False, 'seconds': round(elapsed, 2), 'build_seconds': round(built, 2),
                'qemu_sha256': hashlib.sha256(QEMU.read_bytes()).hexdigest(),
                'images': {p.parent.name: hashlib.sha256(p.read_bytes()).hexdigest()
-                          for p in (os_elf, control_elf, latency_elf, resident_elf)},
+                          for p in (os_elf, control_elf, latency_elf, resident_elf, el0_elf)},
                'cases': [{'name': r.name, 'status': r.status, 'wall_seconds': round(r.seconds, 3),
                           'failure': r.failure and r.failure['line'], 'main': r.main and r.main['line'],
                           'finished': r.finished and r.finished['line'][:80]} for r in results]}

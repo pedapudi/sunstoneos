@@ -1,0 +1,70 @@
+--- portASM.S
++++ portASM.S
+@@ -1036,6 +1036,15 @@
+ LDP X0, X1, [SP], #0x10
+ portSAVE_CONTEXT
+ savefuncontextgpregs
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++/* C callbacks execute at EL1 even when the saved task executes at EL0.
++ * Full task restoration reconstructs the tag from that task's SPSR. */
++MRS X0, TPIDRRO_EL0
++ORR X0, X0, #(1 << 56)
++MSR TPIDRRO_EL0, X0
++/* Only the SVC yield path rotates a runnable task at its priority. */
++BL ssKernelOwnerYieldTail
++#endif
+ #if ( configNUMBER_OF_CORES > 1 )
+    MRS x0, tpidr_el1
+    AND x0, x0, 255
+@@ -1137,6 +1146,13 @@
+ /* Maintain the interrupt ID value across the function call. */
+ STP X0, X1, [ SP, # - 0x10 ] !
+ 
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++/* Make context-safe mask helpers use privileged instructions during IRQ work.
++ * A nested IRQ saves EL1 in its SPSR, so its return retains this tag. */
++MRS X2, TPIDRRO_EL0
++ORR X2, X2, #(1 << 56)
++MSR TPIDRRO_EL0, X2
++#endif
+ savefuncontextgpregs
+ /* Call the C handler. */
+ BL vApplicationIRQHandler
+@@ -1164,6 +1180,22 @@
+ /* Has interrupt nesting unwound? */
+ CMP X1, # 0
+ B.NE Exit_IRQ_No_Context_Switch
++
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++/* Drain remote owner work only after the outermost handler has completed.
++ * Preserve the saved exception frame and feed the ordinary yield decision. */
++savefuncontextgpregs
++BL ssKernelOwnerIRQExit
++CBZ X0, 90f
++adrp X0, ullPortYieldRequired
++add X0, X0, :lo12:ullPortYieldRequired
++MRS X1, tpidr_el1
++AND X1, X1, #0xff
++MOV X2, #1
++STR X2, [X0, X1, LSL #3]
++90:
++restorefuncontextgpregs
++#endif
+ 
+ /* Is a context switch required? */
+ adrp    X0, ullPortYieldRequired
+@@ -1226,6 +1258,14 @@
+  * ERET with no DSB or ISB between. */
+ LDP X4, X5, [ SP ], # 0x10 /* SPSR and ELR. */
+ 
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++/* Restore actual privilege context before returning from outer or nested IRQ.
++ * The saved SPSR.M[2] distinguishes EL0 from EL1, including EL1h. */
++MRS X0, TPIDRRO_EL0
++UBFX X1, X5, #2, #1
++BFI X0, X1, #56, #1
++MSR TPIDRRO_EL0, X0
++#endif
+ MSR SPSR_EL1, X5
+ MSR ELR_EL1, X4
+ 

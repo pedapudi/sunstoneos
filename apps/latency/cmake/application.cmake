@@ -18,3 +18,7 @@ option(SUNSTONE_LATENCY_FORCE_FAILURE "Fail deliberately after the CPU clocks re
 if(SUNSTONE_LATENCY_FORCE_FAILURE)
   target_compile_definitions(${latency_name} PRIVATE SUNSTONE_LATENCY_FORCE_FAILURE=1)
 endif()
+option(SUNSTONE_LATENCY_FORCE_EL0_ABORT "Take a data abort at EL0 after the CPU clocks reach their top points" OFF)
+if(SUNSTONE_LATENCY_FORCE_EL0_ABORT)
+  target_compile_definitions(${latency_name} PRIVATE SUNSTONE_LATENCY_FORCE_EL0_ABORT=1)
+endif()

@@ -1,0 +1,18 @@
+{
+  "reviews": [
+    {
+      "scope": "correctness",
+      "date": "2026-11-01",
+      "verdict": "approved for staged implementation; no remaining design blocker",
+      "report_sha256": "e074df0f3948db2d7c8f5f6aa15cc80605b7094b76b4e66aba226421455d32e8",
+      "qualification": "Design approval only; executable models, linked-kernel cases, code review and physical timing remain required"
+    },
+    {
+      "scope": "performance and progress",
+      "date": "2026-11-01",
+      "verdict": "approved for staged implementation; no remaining design blocker",
+      "report_sha256": "937b8bde0a1d688764edcdf0b09478d1db18d0848eb1ddf516e0232aceb0808b",
+      "qualification": "Design approval only; executable models, linked-kernel cases, code review and physical timing remain required"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+--- queue.c
++++ queue.c
+@@ -36,6 +36,11 @@
+ 
+ #include "FreeRTOS.h"
+ #include "task.h"
++
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++#define SS_FREERTOS_OBJECT_TRANSLATION 1
++#include "freertos.h"
++#endif
+ #include "queue.h"
+ 
+ #if ( configUSE_CO_ROUTINES == 1 )
+--- event_groups.c
++++ event_groups.c
+@@ -37,6 +37,11 @@
+ /* FreeRTOS includes. */
+ #include "FreeRTOS.h"
+ #include "task.h"
++
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++#define SS_FREERTOS_OBJECT_TRANSLATION 1
++#include "freertos.h"
++#endif
+ #include "timers.h"
+ #include "event_groups.h"
+ 
+--- stream_buffer.c
++++ stream_buffer.c
+@@ -37,6 +37,11 @@
+ /* FreeRTOS includes. */
+ #include "FreeRTOS.h"
+ #include "task.h"
++
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++#define SS_FREERTOS_OBJECT_TRANSLATION 1
++#include "freertos.h"
++#endif
+ #include "stream_buffer.h"
+ 
+ /* The MPU ports require MPU_WRAPPERS_INCLUDED_FROM_API_FILE to be defined
+--- timers.c
++++ timers.c
+@@ -36,6 +36,11 @@
+ 
+ #include "FreeRTOS.h"
+ #include "task.h"
++
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++#define SS_FREERTOS_OBJECT_TRANSLATION 1
++#include "freertos.h"
++#endif
+ #include "queue.h"
+ #include "timers.h"
+ 

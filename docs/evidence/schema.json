@@ -12,7 +12,7 @@
     "image_sha256": {"type": ["string", "null"], "pattern": "[0-9a-f]{64}"},
     "git_revision": {"type": ["string", "null"], "pattern": "[0-9a-f]{40}"},
     "hypothesis": {"type": "string"},
-    "outcome": {"type": "string", "enum": ["returned", "watchdog-reset", "result-mismatch", "refused-before-launch", "host-error", "no-return", "not-run"], "$comment": "The runner outcome, copied from result.json."},
+    "outcome": {"type": "string", "enum": ["returned", "failure-return", "watchdog-reset", "result-mismatch", "refused-before-launch", "host-error", "no-return", "not-run"], "$comment": "The runner outcome, copied from result.json."},
     "verdict": {"type": "string", "enum": ["passed", "failed", "inconclusive"], "$comment": "Whether the hypothesis held."},
     "measurements": {
       "type": "array",

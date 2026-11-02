@@ -147,25 +147,48 @@ def decode_report(raw, epoch):
     return {'epoch': epoch, 'state': state, 'secondaries_off': 7}
 
 
-def decode_npu_stop(raw, epoch, generation):
-    """Mandatory native local-stop publication; application output is separate."""
+def decode_npu_stop(raw, epoch, generation, failure_generation=None):
+    """Mandatory native local-stop publication; application output is separate.
+
+    failure_generation is None unless the image returned after a failure
+    (mandatory_return). Then it is the generation of the failure record: a
+    report with finished=2 (apps/os/npu.h) says that the NPU service never
+    ran, so nothing was powered, submitted or retained, and carries that
+    generation. Without a failure return such a report is refused."""
     require(len(raw) == npu_capture.REPORT_BYTES, 'Incomplete native NPU stop report.')
     report = dict(zip(npu_capture.FIELDS, struct.unpack_from(npu_capture.LAYOUT, raw)))
+    never = report['finished'] == 2
+    require(not never or failure_generation is not None,
+            'A never-started NPU report is valid only with a failure return.')
     require((report['magic'], report['version'], report['bytes'], report['epoch'], report['generation']) ==
-            (npu_capture.MAGIC, 1, npu_capture.REPORT_BYTES, epoch, generation),
+            (npu_capture.MAGIC, 1, npu_capture.REPORT_BYTES, epoch, failure_generation if never else generation),
             'Native NPU stop layout or session differs.')
-    require((report['finished'], report['stopped'], report['retained']) == (1, 1, 0),
-            'Native NPU local stop incomplete or faulted.')
+    if never:
+        require((report['stopped'], report['retained']) == (1, 0) and not any(
+                report[key] for key in npu_capture.FIELDS[6:] if key not in ('retained', 'stopped')) and
+                not any(raw[72:]), 'Native NPU never-started report carries results or retention.')
+    else:
+        require((report['finished'], report['stopped'], report['retained']) == (1, 1, 0),
+                'Native NPU local stop incomplete or faulted.')
     # Functional mismatch/refusal does not revoke local quiescence. Its copied
     # operands survive restoration and are classified by the application.
-    return {key: report[key] for key in ('finished', 'stopped', 'retained', 'mismatches', 'refused', 'jobs', 'jobs_selected')}
+    return {key: report[key] for key in ('finished', 'stopped', 'retained', 'mismatches', 'refused', 'jobs', 'jobs_selected',
+                                         'generation')}
 
 
-def mandatory_return(copied, qualification, epoch, generation):
-    """Validate CPU and optional NPU retirement before restoring saved RAM."""
+def mandatory_return(copied, qualification, epoch, generation, failure_return=False):
+    """Validate CPU and optional NPU retirement before restoring saved RAM.
+
+    failure_return: the image returned after its first failure. The NPU stop
+    report may then be the never-started report, bound to the failure
+    record's epoch and generation (decode_npu_stop)."""
     result = decode_report(copied['return-report'], epoch)
     if 'npu_stop' in qualification:
-        result['npu_stop'] = decode_npu_stop(copied['npu-stop'], epoch, generation)
+        failure_generation = None
+        if failure_return:
+            failure, _ = host.decode_failure(copied.get(OUTPUT, copied.get('output-record')), epoch, generation)
+            failure_generation = generation if failure['generation_bound'] else 0
+        result['npu_stop'] = decode_npu_stop(copied['npu-stop'], epoch, generation, failure_generation)
     return result
 
 

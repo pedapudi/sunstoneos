@@ -32,7 +32,9 @@ def main():
     if args.npu_parser_tree:
         records.npu_capture=images.load('preservation_real_npu_parser',args.npu_parser_tree/'apps/os/npu-report.py')
     cpu = records.cpu
-    FAILURES = ('failure-return','failure-return-mismatch','failure-return-unlinked')
+    UNSTARTED = ('failure-return-npu-unstarted','failure-return-npu-unstarted-stale','failure-return-npu-unstarted-missing',
+                 'failure-return-npu-unstarted-retained','failure-return-npu-unstarted-other-generation')
+    FAILURES = ('failure-return','failure-return-mismatch','failure-return-unlinked',*UNSTARTED)
     FAILURE_SITE, FAILURE_CALLER = 0x80004b7f, 0x41070123
     # include/sunstone_session.h struct ss_failure: running context, core 6.
     FAILURE_RECORD = records.host.FAILURE.pack(records.host.FAILURE_MAGIC,1,1,FAILURE_SITE,0x4641,FAILURE_CALLER,6,0,123456)
@@ -60,6 +62,8 @@ def main():
         geo.pop('npu_pool'); geo.pop('npu_stop')
     stop = struct.pack('<4I2Q10I', 0x5255504e, 1, 104, 1, epoch, generation,
                        0, 0, 0, 0, 0, 0, 1, 0, 0, 0xc35a3ca5) + bytes(32)
+    # apps/os/npu.h OS_NPU_REPORT_NOT_STARTED: the failure return before the NPU service ran.
+    unstarted = struct.pack('<4I2Q10I', 0x5255504e, 1, 104, 2, epoch, generation, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0) + bytes(32)
     sdk_stop=args.sdk_report.read_bytes() if args.sdk_report else struct.pack(
         '<4I2Q10I',0x5255504e,1,104,1,epoch,generation,3,2,2,0,0,0,1,8,0,0)+bytes(32)
     # Use the actual producer's public constants/layout once NPU support is present.
@@ -132,7 +136,7 @@ def main():
         def prepare(self,info):
             plan=make_plan(self.variant)
             # The image inspection marks images that link the failure return.
-            plan['failure_return']=self.variant in ('failure-return','failure-return-mismatch')
+            plan['failure_return']=self.variant in ('failure-return','failure-return-mismatch',*UNSTARTED)
             return plan
         def arm(self,mode,**kwargs):self.armed=True
         def tx(self,*values):
@@ -166,6 +170,12 @@ def main():
                     struct.pack_into('<3I',native_stop,36,1,1,1)
                     struct.pack_into('<I',native_stop,60,2)
                 if self.variant=='npu-telemetry-malformed':struct.pack_into('<I',native_stop,68,1)
+                if self.variant in UNSTARTED or self.variant=='npu-unstarted-no-failure':
+                    native_stop=bytearray(unstarted)
+                if self.variant=='failure-return-npu-unstarted-stale':struct.pack_into('<Q',native_stop,16,epoch+1)
+                if self.variant=='failure-return-npu-unstarted-missing':native_stop=bytearray(104)
+                if self.variant=='failure-return-npu-unstarted-retained':struct.pack_into('<I',native_stop,52,1)
+                if self.variant=='failure-return-npu-unstarted-other-generation':struct.pack_into('<Q',native_stop,24,generation+1)
                 if self.variant=='npu-refused':struct.pack_into('<I',native_stop,48,1)
                 self.put(geo['npu_stop']['address'],native_stop if self.variant!='npu-late-fault' else bytes(104))
             if self.variant=='retirement-invalid':self.put(geo['report_address'],bytes(len(report)))
@@ -199,7 +209,9 @@ def main():
     variants=['normal','output-malformed','thermal-malformed','retirement-invalid','backup-corrupt',
               'range-omitted','restore-readback','watchdog','late-fault','decoder-bound',
               'failure-return','failure-return-mismatch','failure-return-unlinked']
-    if has_npu:variants.extend(('npu-sdk','npu-late-fault','npu-mismatch','npu-refused','npu-telemetry-malformed'))
+    if has_npu:variants.extend(('npu-sdk','npu-late-fault','npu-mismatch','npu-refused','npu-telemetry-malformed',
+                                'npu-unstarted-no-failure',*UNSTARTED))
+    else:variants=[v for v in variants if v not in UNSTARTED]
     for variant in variants:
         evidence=args.out/variant
         parser=argparse.ArgumentParser();board.run_options(parser)
@@ -233,11 +245,11 @@ def main():
              contextlib.redirect_stdout(io.StringIO()):
             result=board.run_image(options,backend)
         good=variant in ('normal','output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed','npu-sdk','decoder-bound',
-                         'failure-return','failure-return-mismatch')
+                         'failure-return','failure-return-mismatch','failure-return-npu-unstarted')
         assert result.get('dram_restored',False)==good,(variant,result)
         assert bool(result.get('rails_restored'))==good,(variant,result)
         assert result['outcome']==('returned' if variant in ('normal','npu-sdk','decoder-bound') else
-                                  'failure-return' if variant=='failure-return' else
+                                  'failure-return' if variant in ('failure-return','failure-return-npu-unstarted') else
                                   'watchdog-reset' if variant=='watchdog' else
                                   'host-error' if variant in ('late-fault','failure-return-unlinked') else 'result-mismatch'),(variant,result)
         assert result['quarantined']==(not good),(variant,result)
@@ -262,6 +274,11 @@ def main():
                 assert failure['record']['context']=='running' and failure['record']['core']==6,failure
                 assert result['rails_restored'] and 'restore-rails' in owner.events and result['dram_restored']
                 assert result['return_report']['failure']==failure['record']
+            if variant=='failure-return-npu-unstarted':
+                # The refusal before the NPU service ran: DRAM and rails restored, port kept, report decoded.
+                assert result['rails_restored'] and result['dram_restored'] and not result['quarantined']
+                assert result['return_report']['npu_stop']['finished']==2 and result['return_report']['npu_capture_status']=='decoded'
+                assert result['return_report']['npu_report']['mode']=='never-started'
             if variant=='failure-return-mismatch':
                 assert result['first_failure']['detail']=='Failure record differs from expectation.',result
             if variant=='decoder-bound':

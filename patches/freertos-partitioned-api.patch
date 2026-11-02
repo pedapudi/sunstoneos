@@ -1,0 +1,2443 @@
+--- tasks.c
++++ tasks.c
+@@ -810,6 +810,11 @@
+ 
+ #endif /* #if ( ( configUSE_TRACE_FACILITY == 1 ) && ( configUSE_STATS_FORMATTING_FUNCTIONS > 0 ) ) */
+ /*-----------------------------------------------------------*/
++
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++#define SS_FREERTOS_TASKS_TRANSLATION 1
++#include "freertos.c"
++#endif
+ 
+ #if ( configNUMBER_OF_CORES > 1 )
+     STATIC void prvCheckForRunStateChange( void )
+@@ -1351,6 +1356,16 @@
+                                     StackType_t * const puxStackBuffer,
+                                     StaticTask_t * const pxTaskBuffer )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskCreateStatic( pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer );
++if (!ssKernelStaticAvailable(pxTaskBuffer)) { traceRETURN_xTaskCreateStatic(NULL); return NULL; }
++TaskHandle_t handle = NULL;
++TCB_t *task = prvCreateStaticTask(pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer, &handle);
++if (!task) { TaskHandle_t ss_trace_result = (NULL); traceRETURN_xTaskCreateStatic(ss_trace_result); return ss_trace_result; }
++task->uxCoreAffinityMask = configTASK_DEFAULT_CORE_AFFINITY;
++{ TaskHandle_t ss_trace_result = (ssKernelAdmitTask(task) ? handle : NULL); traceRETURN_xTaskCreateStatic(ss_trace_result); return ss_trace_result; }
++#else
++
+         TaskHandle_t xReturn = NULL;
+         TCB_t * pxNewTCB;
+ 
+@@ -1377,7 +1392,9 @@
+         traceRETURN_xTaskCreateStatic( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ /*-----------------------------------------------------------*/
+ 
+     #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+@@ -1390,6 +1407,16 @@
+                                                    StaticTask_t * const pxTaskBuffer,
+                                                    UBaseType_t uxCoreAffinityMask )
+         {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskCreateStaticAffinitySet( pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer, uxCoreAffinityMask );
++if (!ssKernelStaticAvailable(pxTaskBuffer)) { traceRETURN_xTaskCreateStaticAffinitySet(NULL); return NULL; }
++TaskHandle_t handle = NULL;
++TCB_t *task = prvCreateStaticTask(pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer, &handle);
++if (!task) { TaskHandle_t ss_trace_result = (NULL); traceRETURN_xTaskCreateStaticAffinitySet(ss_trace_result); return ss_trace_result; }
++task->uxCoreAffinityMask = uxCoreAffinityMask;
++{ TaskHandle_t ss_trace_result = (ssKernelAdmitTask(task) ? handle : NULL); traceRETURN_xTaskCreateStaticAffinitySet(ss_trace_result); return ss_trace_result; }
++#else
++
+             TaskHandle_t xReturn = NULL;
+             TCB_t * pxNewTCB;
+ 
+@@ -1412,7 +1439,9 @@
+             traceRETURN_xTaskCreateStaticAffinitySet( xReturn );
+ 
+             return xReturn;
+-        }
++        
++#endif
++}
+     #endif /* #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) ) */
+ 
+ #endif /* SUPPORT_STATIC_ALLOCATION */
+@@ -1759,6 +1788,23 @@
+                             UBaseType_t uxPriority,
+                             TaskHandle_t * const pxCreatedTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskCreate( pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, pxCreatedTask );
++TaskHandle_t handle = NULL;
++if (pxCreatedTask) *pxCreatedTask = NULL;
++TCB_t *task = prvCreateTask(pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, &handle);
++BaseType_t result = errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
++if (task) {
++    task->uxCoreAffinityMask = configTASK_DEFAULT_CORE_AFFINITY;
++    if (ssKernelAdmitTask(task)) {
++        if (pxCreatedTask) *pxCreatedTask = handle;
++        result = pdPASS;
++    }
++}
++traceRETURN_xTaskCreate(result);
++return result;
++#else
++
+         TCB_t * pxNewTCB;
+         BaseType_t xReturn;
+ 
+@@ -1786,7 +1832,9 @@
+         traceRETURN_xTaskCreate( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ /*-----------------------------------------------------------*/
+ 
+     #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+@@ -1798,6 +1846,23 @@
+                                            UBaseType_t uxCoreAffinityMask,
+                                            TaskHandle_t * const pxCreatedTask )
+         {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskCreateAffinitySet( pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, uxCoreAffinityMask, pxCreatedTask );
++TaskHandle_t handle = NULL;
++if (pxCreatedTask) *pxCreatedTask = NULL;
++TCB_t *task = prvCreateTask(pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, &handle);
++BaseType_t result = errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
++if (task) {
++    task->uxCoreAffinityMask = uxCoreAffinityMask;
++    if (ssKernelAdmitTask(task)) {
++        if (pxCreatedTask) *pxCreatedTask = handle;
++        result = pdPASS;
++    }
++}
++traceRETURN_xTaskCreateAffinitySet(result);
++return result;
++#else
++
+             TCB_t * pxNewTCB;
+             BaseType_t xReturn;
+ 
+@@ -1821,7 +1886,9 @@
+             traceRETURN_xTaskCreateAffinitySet( xReturn );
+ 
+             return xReturn;
+-        }
++        
++#endif
++}
+     #endif /* #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) ) */
+ 
+ #endif /* configSUPPORT_DYNAMIC_ALLOCATION */
+@@ -2143,6 +2210,10 @@
+ 
+     STATIC void prvAddNewTaskToReadyList( TCB_t * pxNewTCB )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++configASSERT(ssKernelAddTask(pxNewTCB));
++#else
++
+         /* Ensure interrupts don't access the task lists while the lists are being
+          * updated. */
+         taskENTER_CRITICAL();
+@@ -2195,7 +2266,9 @@
+             }
+         }
+         taskEXIT_CRITICAL();
+-    }
++    
++#endif
++}
+ 
+ #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
+ /*-----------------------------------------------------------*/
+@@ -2237,6 +2310,12 @@
+ 
+     void vTaskDelete( TaskHandle_t xTaskToDelete )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskDelete( xTaskToDelete );
++(void)ssKernelCommand(xTaskToDelete, SS_K_DELETE, 0, false);
++traceRETURN_vTaskDelete();
++#else
++
+         TCB_t * pxTCB;
+         BaseType_t xDeleteTCBInIdleTask = pdFALSE;
+         BaseType_t xTaskIsRunningOrYielding;
+@@ -2381,7 +2460,9 @@
+         #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
+ 
+         traceRETURN_vTaskDelete();
+-    }
++    
++#endif
++}
+ 
+ #endif /* INCLUDE_vTaskDelete */
+ /*-----------------------------------------------------------*/
+@@ -2391,6 +2472,16 @@
+     TickType_t xTaskPeriodicDelay( TickType_t * const pxPreviousWakeTime,
+                                    const TickType_t xTimeIncrement )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskPeriodicDelay( pxPreviousWakeTime, xTimeIncrement );
++configASSERT(pxPreviousWakeTime && xTimeIncrement);
++TickType_t elapsed = (TickType_t)ssKernelNow() - *pxPreviousWakeTime;
++TickType_t increments = elapsed / xTimeIncrement;
++*pxPreviousWakeTime += increments * xTimeIncrement;
++vTaskDelay(xTimeIncrement - elapsed % xTimeIncrement);
++{ TickType_t ss_trace_result = (increments); traceRETURN_xTaskPeriodicDelay(ss_trace_result); return ss_trace_result; }
++#else
++
+         TickType_t xIncrements, xTicksIncrements, xTicksToWait;
+ 
+         traceENTER_xTaskPeriodicDelay( pxPreviousWakeTime, xTimeIncrement );
+@@ -2434,12 +2525,26 @@
+         traceRETURN_xTaskPeriodicDelay( xIncrements );
+ 
+         return xIncrements;
+-    }
++    
++#endif
++}
+ 
+ 
+     BaseType_t xTaskDelayUntil( TickType_t * const pxPreviousWakeTime,
+                                 const TickType_t xTimeIncrement )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskDelayUntil( pxPreviousWakeTime, xTimeIncrement );
++configASSERT(pxPreviousWakeTime && xTimeIncrement);
++TickType_t now = (TickType_t)ssKernelNow();
++TickType_t previous = *pxPreviousWakeTime;
++TickType_t wake = previous + xTimeIncrement;
++bool delay = now < previous ? (wake < previous && wake > now) : (wake < previous || wake > now);
++*pxPreviousWakeTime = wake;
++if (delay) vTaskDelay(wake - now);
++{ BaseType_t ss_trace_result = (delay ? pdTRUE : pdFALSE); traceRETURN_xTaskDelayUntil(ss_trace_result); return ss_trace_result; }
++#else
++
+         TickType_t xTimeToWake;
+         BaseType_t xAlreadyYielded, xShouldDelay = pdFALSE;
+ 
+@@ -2522,7 +2627,9 @@
+         traceRETURN_xTaskDelayUntil( xShouldDelay );
+ 
+         return xShouldDelay;
+-    }
++    
++#endif
++}
+ 
+ #endif /* INCLUDE_xTaskDelayUntil */
+ /*-----------------------------------------------------------*/
+@@ -2531,6 +2638,16 @@
+ 
+     void vTaskDelay( const TickType_t xTicksToDelay )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskDelay( xTicksToDelay );
++UBaseType_t irq = portSET_INTERRUPT_MASK();
++if (xTicksToDelay) ssKernelBlock(xTicksToDelay, false, SS_K_DELAY);
++else ssKernelCPUs[ssKernelCPUId()].yield_tail = true;
++portCLEAR_INTERRUPT_MASK(irq);
++portYIELD();
++traceRETURN_vTaskDelay();
++#else
++
+         BaseType_t xAlreadyYielded = pdFALSE;
+ 
+         traceENTER_vTaskDelay( xTicksToDelay );
+@@ -2572,7 +2689,9 @@
+         }
+ 
+         traceRETURN_vTaskDelay();
+-    }
++    
++#endif
++}
+ 
+ #endif /* INCLUDE_vTaskDelay */
+ /*-----------------------------------------------------------*/
+@@ -2581,6 +2700,11 @@
+ 
+     eTaskState eTaskGetState( TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_eTaskGetState( xTask );
++{ eTaskState ss_trace_result = (ssKernelState(xTask)); traceRETURN_eTaskGetState(ss_trace_result); return ss_trace_result; }
++#else
++
+         eTaskState eReturn;
+         List_t const * pxStateList;
+         List_t const * pxEventList;
+@@ -2704,7 +2828,9 @@
+         traceRETURN_eTaskGetState( eReturn );
+ 
+         return eReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* INCLUDE_eTaskGetState */
+ /*-----------------------------------------------------------*/
+@@ -2713,6 +2839,11 @@
+ 
+     UBaseType_t uxTaskPriorityGet( const TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_uxTaskPriorityGet( xTask );
++{ UBaseType_t ss_trace_result = (ssKernelPriority(xTask, false)); traceRETURN_uxTaskPriorityGet(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t const * pxTCB;
+         UBaseType_t uxReturn;
+ 
+@@ -2732,7 +2863,9 @@
+         traceRETURN_uxTaskPriorityGet( uxReturn );
+ 
+         return uxReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* INCLUDE_uxTaskPriorityGet */
+ /*-----------------------------------------------------------*/
+@@ -2741,6 +2874,11 @@
+ 
+     UBaseType_t uxTaskPriorityGetFromISR( const TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_uxTaskPriorityGetFromISR( xTask );
++{ UBaseType_t ss_trace_result = (ssKernelPriority(xTask, false)); traceRETURN_uxTaskPriorityGetFromISR(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t const * pxTCB;
+         UBaseType_t uxReturn;
+         UBaseType_t uxSavedInterruptStatus;
+@@ -2782,7 +2920,9 @@
+         traceRETURN_uxTaskPriorityGetFromISR( uxReturn );
+ 
+         return uxReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* INCLUDE_uxTaskPriorityGet */
+ /*-----------------------------------------------------------*/
+@@ -2791,6 +2931,11 @@
+ 
+     UBaseType_t uxTaskBasePriorityGet( const TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_uxTaskBasePriorityGet( xTask );
++{ UBaseType_t ss_trace_result = (ssKernelPriority(xTask, true)); traceRETURN_uxTaskBasePriorityGet(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t const * pxTCB;
+         UBaseType_t uxReturn;
+ 
+@@ -2810,7 +2955,9 @@
+         traceRETURN_uxTaskBasePriorityGet( uxReturn );
+ 
+         return uxReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* #if ( ( INCLUDE_uxTaskPriorityGet == 1 ) && ( configUSE_MUTEXES == 1 ) ) */
+ /*-----------------------------------------------------------*/
+@@ -2819,6 +2966,11 @@
+ 
+     UBaseType_t uxTaskBasePriorityGetFromISR( const TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_uxTaskBasePriorityGetFromISR( xTask );
++{ UBaseType_t ss_trace_result = (ssKernelPriority(xTask, true)); traceRETURN_uxTaskBasePriorityGetFromISR(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t const * pxTCB;
+         UBaseType_t uxReturn;
+         UBaseType_t uxSavedInterruptStatus;
+@@ -2860,7 +3012,9 @@
+         traceRETURN_uxTaskBasePriorityGetFromISR( uxReturn );
+ 
+         return uxReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* #if ( ( INCLUDE_uxTaskPriorityGet == 1 ) && ( configUSE_MUTEXES == 1 ) ) */
+ /*-----------------------------------------------------------*/
+@@ -2870,6 +3024,13 @@
+     void vTaskPrioritySet( TaskHandle_t xTask,
+                            UBaseType_t uxNewPriority )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskPrioritySet( xTask, uxNewPriority );
++configASSERT(uxNewPriority < configMAX_PRIORITIES);
++(void)ssKernelCommand(xTask, SS_K_PRIORITY, uxNewPriority, false);
++traceRETURN_vTaskPrioritySet();
++#else
++
+         TCB_t * pxTCB;
+         UBaseType_t uxCurrentBasePriority, uxPriorityUsedOnEntry;
+         BaseType_t xYieldRequired = pdFALSE;
+@@ -3075,7 +3236,9 @@
+         taskEXIT_CRITICAL();
+ 
+         traceRETURN_vTaskPrioritySet();
+-    }
++    
++#endif
++}
+ 
+ #endif /* INCLUDE_vTaskPrioritySet */
+ /*-----------------------------------------------------------*/
+@@ -3084,6 +3247,14 @@
+     void vTaskCoreAffinitySet( const TaskHandle_t xTask,
+                                UBaseType_t uxCoreAffinityMask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskCoreAffinitySet( xTask, uxCoreAffinityMask );
++uint64_t mask = uxCoreAffinityMask & ((UINT64_C(1) << configNUMBER_OF_CORES) - 1);
++configASSERT(mask);
++(void)ssKernelCommand(xTask, SS_K_AFFINITY, mask, false);
++traceRETURN_vTaskCoreAffinitySet();
++#else
++
+         TCB_t * pxTCB;
+         BaseType_t xCoreID;
+ 
+@@ -3133,13 +3304,28 @@
+         taskEXIT_CRITICAL();
+ 
+         traceRETURN_vTaskCoreAffinitySet();
+-    }
++    
++#endif
++}
+ #endif /* #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) ) */
+ /*-----------------------------------------------------------*/
+ 
+ #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+     UBaseType_t vTaskCoreAffinityGet( ConstTaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskCoreAffinityGet( xTask );
++UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
++struct ss_kernel_pin pin;
++if (!ssKernelPin((TaskHandle_t)xTask, &pin)) { UBaseType_t ss_trace_result = (0); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskCoreAffinityGet(ss_trace_result); return ss_trace_result; }
++struct ss_control_state state;
++UBaseType_t irq = portSET_INTERRUPT_MASK_FROM_ISR();
++ss_control_snapshot(&ssKernelControl, pin.slot, &state);
++portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
++ss_kernel_handle_put(&pin);
++{ UBaseType_t ss_trace_result = ((UBaseType_t)state.affinity); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskCoreAffinityGet(ss_trace_result); return ss_trace_result; }
++#else
++
+         const TCB_t * pxTCB;
+         UBaseType_t uxCoreAffinityMask;
+ 
+@@ -3157,7 +3343,9 @@
+         traceRETURN_vTaskCoreAffinityGet( uxCoreAffinityMask );
+ 
+         return uxCoreAffinityMask;
+-    }
++    
++#endif
++}
+ #endif /* #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) ) */
+ 
+ /*-----------------------------------------------------------*/
+@@ -3166,6 +3354,12 @@
+ 
+     void vTaskPreemptionDisable( const TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskPreemptionDisable( xTask );
++(void)ssKernelCommand(xTask, SS_K_PREEMPT, 1, false);
++traceRETURN_vTaskPreemptionDisable();
++#else
++
+         TCB_t * pxTCB;
+ 
+         traceENTER_vTaskPreemptionDisable( xTask );
+@@ -3180,7 +3374,9 @@
+         taskEXIT_CRITICAL();
+ 
+         traceRETURN_vTaskPreemptionDisable();
+-    }
++    
++#endif
++}
+ 
+ #endif /* #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 ) */
+ /*-----------------------------------------------------------*/
+@@ -3189,6 +3385,12 @@
+ 
+     void vTaskPreemptionEnable( const TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskPreemptionEnable( xTask );
++(void)ssKernelCommand(xTask, SS_K_PREEMPT, 0, false);
++traceRETURN_vTaskPreemptionEnable();
++#else
++
+         TCB_t * pxTCB;
+         BaseType_t xCoreID;
+ 
+@@ -3213,7 +3415,9 @@
+         taskEXIT_CRITICAL();
+ 
+         traceRETURN_vTaskPreemptionEnable();
+-    }
++    
++#endif
++}
+ 
+ #endif /* #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 ) */
+ /*-----------------------------------------------------------*/
+@@ -3222,6 +3426,12 @@
+ 
+     void vTaskSuspend( TaskHandle_t xTaskToSuspend )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskSuspend( xTaskToSuspend );
++(void)ssKernelCommand(xTaskToSuspend, SS_K_SUSPEND, 0, false);
++traceRETURN_vTaskSuspend();
++#else
++
+         TCB_t * pxTCB;
+ 
+         traceENTER_vTaskSuspend( xTaskToSuspend );
+@@ -3376,7 +3586,9 @@
+         #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
+ 
+         traceRETURN_vTaskSuspend();
+-    }
++    
++#endif
++}
+ 
+ #endif /* INCLUDE_vTaskSuspend */
+ /*-----------------------------------------------------------*/
+@@ -3455,6 +3667,13 @@
+ 
+     void vTaskResume( TaskHandle_t xTaskToResume )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskResume( xTaskToResume );
++configASSERT(xTaskToResume);
++(void)ssKernelCommand(xTaskToResume, SS_K_RESUME, 0, false);
++traceRETURN_vTaskResume();
++#else
++
+         TCB_t * const pxTCB = xTaskToResume;
+ 
+         traceENTER_vTaskResume( xTaskToResume );
+@@ -3506,7 +3725,9 @@
+         }
+ 
+         traceRETURN_vTaskResume();
+-    }
++    
++#endif
++}
+ 
+ #endif /* INCLUDE_vTaskSuspend */
+ 
+@@ -3516,6 +3737,13 @@
+ 
+     BaseType_t xTaskResumeFromISR( TaskHandle_t xTaskToResume )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskResumeFromISR( xTaskToResume );
++configASSERT(xTaskToResume);
++(void)ssKernelCommand(xTaskToResume, SS_K_RESUME, 0, true);
++{ BaseType_t ss_trace_result = (ssKernelOwnerIRQExit()); traceRETURN_xTaskResumeFromISR(ss_trace_result); return ss_trace_result; }
++#else
++
+         BaseType_t xYieldRequired = pdFALSE;
+         TCB_t * const pxTCB = xTaskToResume;
+         UBaseType_t uxSavedInterruptStatus;
+@@ -3606,7 +3834,9 @@
+         traceRETURN_xTaskResumeFromISR( xYieldRequired );
+ 
+         return xYieldRequired;
+-    }
++    
++#endif
++}
+ 
+ #endif /* ( ( INCLUDE_xTaskResumeFromISR == 1 ) && ( INCLUDE_vTaskSuspend == 1 ) ) */
+ /*-----------------------------------------------------------*/
+@@ -3749,7 +3979,11 @@
+             {
+                 /* Assign idle task to each core before SMP scheduler is running. */
+                 xIdleTaskHandles[ xCoreID ]->xTaskRunState = xCoreID;
++                #if ( configSS_PARTITIONED_SCHEDULER == 1 )
++                __atomic_store_n(&pxCurrentTCBs[xCoreID], xIdleTaskHandles[xCoreID], __ATOMIC_RELEASE);
++#else
+                 pxCurrentTCBs[ xCoreID ] = xIdleTaskHandles[ xCoreID ];
++#endif
+                 #if ( ( configIDLE_AFFINITY == 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+                 {
+                     xIdleTaskHandles[ xCoreID ]->uxCoreAffinityMask = ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID );
+@@ -3767,6 +4001,32 @@
+ 
+ void vTaskStartScheduler( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskStartScheduler();
++configASSERT(!xSchedulerRunning);
++BaseType_t result = prvCreateIdleTasks();
++if (result != pdPASS) { configASSERT(result != errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY); { traceRETURN_vTaskStartScheduler(); return; } }
++ssKernelBootstrap();
++#if ( configUSE_TIMERS == 1 )
++result = xTimerCreateTimerTask();
++if (result != pdPASS) { configASSERT(result != errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY); { traceRETURN_vTaskStartScheduler(); return; } }
++#endif
++#ifdef FREERTOS_TASKS_C_ADDITIONS_INIT
++freertos_tasks_c_additions_init();
++#endif
++portDISABLE_INTERRUPTS();
++#if ( configUSE_C_RUNTIME_TLS_SUPPORT == 1 )
++configSET_TLS_BLOCK(ssKernelSelf()->xTLSBlock);
++#endif
++atomic_store_explicit(&ssKernelTime, configINITIAL_TICK_COUNT, memory_order_release);
++xSchedulerRunning = pdTRUE;
++portCONFIGURE_TIMER_FOR_RUN_TIME_STATS();
++traceTASK_SWITCHED_IN();
++traceSTARTING_SCHEDULER(xIdleTaskHandles);
++(void)xPortStartScheduler();
++traceRETURN_vTaskStartScheduler();
++#else
++
+     BaseType_t xReturn;
+ 
+     traceENTER_vTaskStartScheduler();
+@@ -3867,11 +4127,19 @@
+     ( void ) uxTopUsedPriority;
+ 
+     traceRETURN_vTaskStartScheduler();
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+ void vTaskEndScheduler( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskEndScheduler();
++vPortEndScheduler(); /* This Arm port explicitly asserts: scheduler stop is unsupported. */
++traceRETURN_vTaskEndScheduler();
++#else
++
+     traceENTER_vTaskEndScheduler();
+ 
+     #if ( INCLUDE_vTaskDelete == 1 )
+@@ -3910,11 +4178,19 @@
+     vPortEndScheduler();
+ 
+     traceRETURN_vTaskEndScheduler();
++
++#endif
+ }
+ /*----------------------------------------------------------*/
+ 
+ void vTaskSuspendAll( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskSuspendAll();
++ssKernelSuspendAll();
++traceRETURN_vTaskSuspendAll();
++#else
++
+     traceENTER_vTaskSuspendAll();
+ 
+     #if ( configNUMBER_OF_CORES == 1 )
+@@ -4019,6 +4295,8 @@
+     #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
+ 
+     traceRETURN_vTaskSuspendAll();
++
++#endif
+ }
+ 
+ /*----------------------------------------------------------*/
+@@ -4089,6 +4367,11 @@
+ 
+ BaseType_t xTaskResumeAll( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskResumeAll();
++{ BaseType_t ss_trace_result = (ssKernelResumeAll()); traceRETURN_xTaskResumeAll(ss_trace_result); return ss_trace_result; }
++#else
++
+     TCB_t * pxTCB = NULL;
+     BaseType_t xAlreadyYielded = pdFALSE;
+ 
+@@ -4233,11 +4516,18 @@
+     traceRETURN_xTaskResumeAll( xAlreadyYielded );
+ 
+     return xAlreadyYielded;
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+ TickType_t xTaskGetTickCount( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGetTickCount();
++{ TickType_t ss_trace_result = ((TickType_t)ssKernelNow()); traceRETURN_xTaskGetTickCount(ss_trace_result); return ss_trace_result; }
++#else
++
+     TickType_t xTicks;
+ 
+     traceENTER_xTaskGetTickCount();
+@@ -4252,11 +4542,18 @@
+     traceRETURN_xTaskGetTickCount( xTicks );
+ 
+     return xTicks;
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+ TickType_t xTaskGetTickCountFromISR( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGetTickCountFromISR();
++{ TickType_t ss_trace_result = ((TickType_t)ssKernelNow()); traceRETURN_xTaskGetTickCountFromISR(ss_trace_result); return ss_trace_result; }
++#else
++
+     TickType_t xReturn;
+     UBaseType_t uxSavedInterruptStatus;
+ 
+@@ -4287,11 +4584,21 @@
+     traceRETURN_xTaskGetTickCountFromISR( xReturn );
+ 
+     return xReturn;
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+ UBaseType_t uxTaskGetNumberOfTasks( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_uxTaskGetNumberOfTasks();
++UBaseType_t result = 0;
++for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu)
++    result += atomic_load_explicit(&ssKernelLoad[cpu], memory_order_acquire);
++{ UBaseType_t ss_trace_result = (result); traceRETURN_uxTaskGetNumberOfTasks(ss_trace_result); return ss_trace_result; }
++#else
++
+     traceENTER_uxTaskGetNumberOfTasks();
+ 
+     /* A critical section is not required because the variables are of type
+@@ -4299,11 +4606,34 @@
+     traceRETURN_uxTaskGetNumberOfTasks( uxCurrentNumberOfTasks );
+ 
+     return uxCurrentNumberOfTasks;
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+ char * pcTaskGetName( TaskHandle_t xTaskToQuery )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_pcTaskGetName( xTaskToQuery );
++UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
++struct ss_kernel_pin ss_pin;
++if (!ssKernelPin(xTaskToQuery, &ss_pin)) { char * ss_trace_result = (NULL); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_pcTaskGetName(ss_trace_result); return ss_trace_result; }
++
++    TCB_t * pxTCB;
++
++    
++
++    /* If null is passed in here then the name of the calling task is being
++     * queried. */
++    pxTCB = (TCB_t *)ss_pin.descriptor->task;
++    configASSERT( pxTCB != NULL );
++
++    
++
++{ __auto_type ss_result = (&( pxTCB->pcTaskName[ 0 ] )); ss_kernel_handle_put(&ss_pin); { char * ss_trace_result = (ss_result); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_pcTaskGetName(ss_trace_result); return ss_trace_result; } }
++
++#else
++
+     TCB_t * pxTCB;
+ 
+     traceENTER_pcTaskGetName( xTaskToQuery );
+@@ -4316,6 +4646,8 @@
+     traceRETURN_pcTaskGetName( &( pxTCB->pcTaskName[ 0 ] ) );
+ 
+     return &( pxTCB->pcTaskName[ 0 ] );
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+@@ -4395,6 +4727,26 @@
+ 
+     TaskHandle_t xTaskGetHandle( const char * pcNameToQuery )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGetHandle( pcNameToQuery );
++configASSERT(pcNameToQuery);
++if (!pcNameToQuery) { TaskHandle_t ss_trace_result = (NULL); traceRETURN_xTaskGetHandle(ss_trace_result); return ss_trace_result; }
++TaskHandle_t result = NULL;
++ssKernelSuspendAll();
++for (unsigned bucket = 0; bucket < SS_KERNEL_HANDLE_BUCKETS; ++bucket) {
++    uintptr_t handle = atomic_load_explicit(&ssKernelRegistry.bucket[bucket].handle, memory_order_acquire);
++    if (!handle || handle == UINTPTR_MAX) continue;
++    struct ss_kernel_pin pin;
++    if (!ssKernelPin((TaskHandle_t)handle, &pin)) continue;
++    TCB_t *task = pin.descriptor->task;
++    if (!strncmp(task->pcTaskName, pcNameToQuery, configMAX_TASK_NAME_LEN)) result = task;
++    ss_kernel_handle_put(&pin);
++    if (result) break;
++}
++(void)ssKernelResumeAll();
++{ TaskHandle_t ss_trace_result = (result); traceRETURN_xTaskGetHandle(ss_trace_result); return ss_trace_result; }
++#else
++
+         UBaseType_t uxQueue = configMAX_PRIORITIES;
+         TCB_t * pxTCB;
+ 
+@@ -4454,7 +4806,9 @@
+         traceRETURN_xTaskGetHandle( pxTCB );
+ 
+         return pxTCB;
+-    }
++    
++#endif
++}
+ 
+ #endif /* INCLUDE_xTaskGetHandle */
+ /*-----------------------------------------------------------*/
+@@ -4465,15 +4819,21 @@
+                                       StackType_t ** ppuxStackBuffer,
+                                       StaticTask_t ** ppxTaskBuffer )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGetStaticBuffers( xTask, ppuxStackBuffer, ppxTaskBuffer );
++UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
++struct ss_kernel_pin ss_pin;
++if (!ssKernelPin(xTask, &ss_pin)) { BaseType_t ss_trace_result = (pdFALSE); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_xTaskGetStaticBuffers(ss_trace_result); return ss_trace_result; }
++
+         BaseType_t xReturn;
+         TCB_t * pxTCB;
+ 
+-        traceENTER_xTaskGetStaticBuffers( xTask, ppuxStackBuffer, ppxTaskBuffer );
++        
+ 
+         configASSERT( ppuxStackBuffer != NULL );
+         configASSERT( ppxTaskBuffer != NULL );
+ 
+-        pxTCB = prvGetTCBFromHandle( xTask );
++        pxTCB = (TCB_t *)ss_pin.descriptor->task;
+         configASSERT( pxTCB != NULL );
+ 
+         #if ( tskSTATIC_AND_DYNAMIC_ALLOCATION_POSSIBLE == 1 )
+@@ -4506,10 +4866,59 @@
+         }
+         #endif /* tskSTATIC_AND_DYNAMIC_ALLOCATION_POSSIBLE == 1 */
+ 
++        
++
++{ __auto_type ss_result = (xReturn); ss_kernel_handle_put(&ss_pin); { BaseType_t ss_trace_result = (ss_result); traceRETURN_xTaskGetStaticBuffers(ss_trace_result); return ss_trace_result; } }
++    
++#else
++
++        BaseType_t xReturn;
++        TCB_t * pxTCB;
++
++        traceENTER_xTaskGetStaticBuffers( xTask, ppuxStackBuffer, ppxTaskBuffer );
++
++        configASSERT( ppuxStackBuffer != NULL );
++        configASSERT( ppxTaskBuffer != NULL );
++
++        pxTCB = prvGetTCBFromHandle( xTask );
++        configASSERT( pxTCB != NULL );
++
++        #if ( tskSTATIC_AND_DYNAMIC_ALLOCATION_POSSIBLE == 1 )
++        {
++            if( pxTCB->ucStaticallyAllocated == tskSTATICALLY_ALLOCATED_STACK_AND_TCB )
++            {
++                *ppuxStackBuffer = pxTCB->pxStack;
++                /* MISRA Ref 11.3.1 [Misaligned access] */
++                /* More details at: https://github.com/FreeRTOS/FreeRTOS-Kernel/blob/main/MISRA.md#rule-113 */
++                /* coverity[misra_c_2012_rule_11_3_violation] */
++                *ppxTaskBuffer = ( StaticTask_t * ) pxTCB;
++                xReturn = pdTRUE;
++            }
++            else if( pxTCB->ucStaticallyAllocated == tskSTATICALLY_ALLOCATED_STACK_ONLY )
++            {
++                *ppuxStackBuffer = pxTCB->pxStack;
++                *ppxTaskBuffer = NULL;
++                xReturn = pdTRUE;
++            }
++            else
++            {
++                xReturn = pdFALSE;
++            }
++        }
++        #else /* tskSTATIC_AND_DYNAMIC_ALLOCATION_POSSIBLE == 1 */
++        {
++            *ppuxStackBuffer = pxTCB->pxStack;
++            *ppxTaskBuffer = ( StaticTask_t * ) pxTCB;
++            xReturn = pdTRUE;
++        }
++        #endif /* tskSTATIC_AND_DYNAMIC_ALLOCATION_POSSIBLE == 1 */
++
+         traceRETURN_xTaskGetStaticBuffers( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configSUPPORT_STATIC_ALLOCATION */
+ /*-----------------------------------------------------------*/
+@@ -4593,6 +5002,16 @@
+                                        void * pvCallbackContext,
+                                        configRUN_TIME_COUNTER_TYPE * const pulTotalRunTime )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++configASSERT(pxCallbackFunction);
++if (!pxCallbackFunction) return 0;
++ssKernelSuspendAll();
++UBaseType_t count = ssKernelForEach(pxCallbackFunction, pvCallbackContext);
++prvGetTotalRunTime(pulTotalRunTime);
++(void)ssKernelResumeAll();
++return count;
++#else
++
+         UBaseType_t uxTask;
+ 
+         configASSERT( pxCallbackFunction != NULL );
+@@ -4610,12 +5029,28 @@
+         ( void ) xTaskResumeAll();
+ 
+         return uxTask;
+-    }
++    
++#endif
++}
+ 
+     UBaseType_t uxTaskGetSystemState( TaskStatus_t * const pxTaskStatusArray,
+                                       const UBaseType_t uxArraySize,
+                                       configRUN_TIME_COUNTER_TYPE * const pulTotalRunTime )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_uxTaskGetSystemState( pxTaskStatusArray, uxArraySize, pulTotalRunTime );
++configASSERT(pxTaskStatusArray);
++ssKernelSuspendAll();
++UBaseType_t count = 0;
++if (uxArraySize >= uxTaskGetNumberOfTasks()) {
++    TaskStatusArrayWriterContext_t context = { .pxTaskStatusArray = pxTaskStatusArray, .uxIndex = 0 };
++    count = ssKernelForEach(prvTaskStatusArrayWriter, &context);
++    prvGetTotalRunTime(pulTotalRunTime);
++}
++(void)ssKernelResumeAll();
++{ UBaseType_t ss_trace_result = (count); traceRETURN_uxTaskGetSystemState(ss_trace_result); return ss_trace_result; }
++#else
++
+         UBaseType_t uxTask = 0;
+ 
+         traceENTER_uxTaskGetSystemState( pxTaskStatusArray, uxArraySize, pulTotalRunTime );
+@@ -4641,7 +5076,9 @@
+         traceRETURN_uxTaskGetSystemState( uxTask );
+ 
+         return uxTask;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_TRACE_FACILITY */
+ /*----------------------------------------------------------*/
+@@ -4651,6 +5088,11 @@
+     #if ( configNUMBER_OF_CORES == 1 )
+         TaskHandle_t xTaskGetIdleTaskHandle( void )
+         {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGetIdleTaskHandle();
++configASSERT(xIdleTaskHandles[0]); { TaskHandle_t ss_trace_result = (xIdleTaskHandles[0]); traceRETURN_xTaskGetIdleTaskHandle(ss_trace_result); return ss_trace_result; }
++#else
++
+             traceENTER_xTaskGetIdleTaskHandle();
+ 
+             /* If xTaskGetIdleTaskHandle() is called before the scheduler has been
+@@ -4660,11 +5102,20 @@
+             traceRETURN_xTaskGetIdleTaskHandle( xIdleTaskHandles[ 0 ] );
+ 
+             return xIdleTaskHandles[ 0 ];
+-        }
++        
++#endif
++}
+     #endif /* if ( configNUMBER_OF_CORES == 1 ) */
+ 
+     TaskHandle_t xTaskGetIdleTaskHandleForCore( BaseType_t xCoreID )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGetIdleTaskHandleForCore( xCoreID );
++configASSERT(xCoreID >= 0 && xCoreID < configNUMBER_OF_CORES);
++if (xCoreID < 0 || xCoreID >= configNUMBER_OF_CORES) { TaskHandle_t ss_trace_result = (NULL); traceRETURN_xTaskGetIdleTaskHandleForCore(ss_trace_result); return ss_trace_result; }
++{ TaskHandle_t ss_trace_result = (xIdleTaskHandles[xCoreID]); traceRETURN_xTaskGetIdleTaskHandleForCore(ss_trace_result); return ss_trace_result; }
++#else
++
+         traceENTER_xTaskGetIdleTaskHandleForCore( xCoreID );
+ 
+         /* Ensure the core ID is valid. */
+@@ -4677,7 +5128,9 @@
+         traceRETURN_xTaskGetIdleTaskHandleForCore( xIdleTaskHandles[ xCoreID ] );
+ 
+         return xIdleTaskHandles[ xCoreID ];
+-    }
++    
++#endif
++}
+ 
+ #endif /* INCLUDE_xTaskGetIdleTaskHandle */
+ /*----------------------------------------------------------*/
+@@ -4732,6 +5185,19 @@
+ 
+ BaseType_t xTaskCatchUpTicks( TickType_t xTicksToCatchUp )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskCatchUpTicks( xTicksToCatchUp );
++configASSERT(!ssKernelCPUs[ssKernelCPUId()].preempt);
++UBaseType_t irq = portSET_INTERRUPT_MASK();
++atomic_fetch_add_explicit(&ssKernelTime, (uint64_t)xTicksToCatchUp, memory_order_acq_rel);
++for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) ssKernelForce(cpu);
++ssKernelService();
++bool result = ssKernelCPUs[ssKernelCPUId()].reschedule;
++portCLEAR_INTERRUPT_MASK(irq);
++if (result && ssKernelCanPreempt()) portYIELD();
++{ BaseType_t ss_trace_result = (result ? pdTRUE : pdFALSE); traceRETURN_xTaskCatchUpTicks(ss_trace_result); return ss_trace_result; }
++#else
++
+     BaseType_t xYieldOccurred;
+ 
+     traceENTER_xTaskCatchUpTicks( xTicksToCatchUp );
+@@ -4755,6 +5221,8 @@
+     traceRETURN_xTaskCatchUpTicks( xYieldOccurred );
+ 
+     return xYieldOccurred;
++
++#endif
+ }
+ /*----------------------------------------------------------*/
+ 
+@@ -4762,6 +5230,11 @@
+ 
+     BaseType_t xTaskAbortDelay( TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskAbortDelay( xTask );
++{ BaseType_t ss_trace_result = (ssKernelCommand(xTask, SS_K_ABORT, 0, false) ? pdTRUE : pdFALSE); traceRETURN_xTaskAbortDelay(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t * pxTCB = xTask;
+         BaseType_t xReturn;
+ 
+@@ -4849,13 +5322,20 @@
+         traceRETURN_xTaskAbortDelay( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* INCLUDE_xTaskAbortDelay */
+ /*----------------------------------------------------------*/
+ 
+ BaseType_t xTaskIncrementTick( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskIncrementTick();
++{ BaseType_t ss_trace_result = (ssKernelTick()); traceRETURN_xTaskIncrementTick(ss_trace_result); return ss_trace_result; }
++#else
++
+     TCB_t * pxTCB;
+     TickType_t xItemValue;
+     BaseType_t xSwitchRequired = pdFALSE;
+@@ -5171,6 +5651,8 @@
+     traceRETURN_xTaskIncrementTick( xSwitchRequired );
+ 
+     return xSwitchRequired;
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+@@ -5179,6 +5661,18 @@
+     void vTaskSetApplicationTaskTag( TaskHandle_t xTask,
+                                      TaskHookFunction_t pxHookFunction )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskSetApplicationTaskTag( xTask, pxHookFunction );
++UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
++struct ss_kernel_pin pin;
++if (!ssKernelPin(xTask, &pin)) { portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskSetApplicationTaskTag(); return; }
++UBaseType_t irq = ssKernelObjectEnterFromISR();
++((TCB_t *)pin.descriptor->task)->pxTaskTag = pxHookFunction;
++ssKernelObjectExitFromISR(irq);
++ss_kernel_handle_put(&pin);
++portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskSetApplicationTaskTag();
++#else
++
+         TCB_t * xTCB;
+ 
+         traceENTER_vTaskSetApplicationTaskTag( xTask, pxHookFunction );
+@@ -5203,7 +5697,9 @@
+         taskEXIT_CRITICAL();
+ 
+         traceRETURN_vTaskSetApplicationTaskTag();
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_APPLICATION_TASK_TAG */
+ /*-----------------------------------------------------------*/
+@@ -5212,6 +5708,18 @@
+ 
+     TaskHookFunction_t xTaskGetApplicationTaskTag( TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGetApplicationTaskTag( xTask );
++UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
++struct ss_kernel_pin pin;
++if (!ssKernelPin(xTask, &pin)) { TaskHookFunction_t ss_trace_result = (NULL); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_xTaskGetApplicationTaskTag(ss_trace_result); return ss_trace_result; }
++UBaseType_t irq = ssKernelObjectEnterFromISR();
++TaskHookFunction_t result = ((TCB_t *)pin.descriptor->task)->pxTaskTag;
++ssKernelObjectExitFromISR(irq);
++ss_kernel_handle_put(&pin);
++{ TaskHookFunction_t ss_trace_result = (result); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_xTaskGetApplicationTaskTag(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t * pxTCB;
+         TaskHookFunction_t xReturn;
+ 
+@@ -5232,7 +5740,9 @@
+         traceRETURN_xTaskGetApplicationTaskTag( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_APPLICATION_TASK_TAG */
+ /*-----------------------------------------------------------*/
+@@ -5241,6 +5751,18 @@
+ 
+     TaskHookFunction_t xTaskGetApplicationTaskTagFromISR( TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGetApplicationTaskTagFromISR( xTask );
++UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
++struct ss_kernel_pin pin;
++if (!ssKernelPin(xTask, &pin)) { TaskHookFunction_t ss_trace_result = (NULL); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_xTaskGetApplicationTaskTagFromISR(ss_trace_result); return ss_trace_result; }
++UBaseType_t irq = ssKernelObjectEnterFromISR();
++TaskHookFunction_t result = ((TCB_t *)pin.descriptor->task)->pxTaskTag;
++ssKernelObjectExitFromISR(irq);
++ss_kernel_handle_put(&pin);
++{ TaskHookFunction_t ss_trace_result = (result); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_xTaskGetApplicationTaskTagFromISR(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t * pxTCB;
+         TaskHookFunction_t xReturn;
+         UBaseType_t uxSavedInterruptStatus;
+@@ -5265,7 +5787,9 @@
+         traceRETURN_xTaskGetApplicationTaskTagFromISR( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_APPLICATION_TASK_TAG */
+ /*-----------------------------------------------------------*/
+@@ -5275,6 +5799,12 @@
+     BaseType_t xTaskCallApplicationTaskHook( TaskHandle_t xTask,
+                                              void * pvParameter )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskCallApplicationTaskHook( xTask, pvParameter );
++TaskHookFunction_t hook = xTaskGetApplicationTaskTag(xTask);
++{ BaseType_t ss_trace_result = (hook ? hook(pvParameter) : pdFAIL); traceRETURN_xTaskCallApplicationTaskHook(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t * xTCB;
+         BaseType_t xReturn;
+ 
+@@ -5302,7 +5832,9 @@
+         traceRETURN_xTaskCallApplicationTaskHook( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_APPLICATION_TASK_TAG */
+ /*-----------------------------------------------------------*/
+@@ -5395,6 +5927,12 @@
+ #else /* if ( configNUMBER_OF_CORES == 1 ) */
+     void vTaskSwitchContext( BaseType_t xCoreID )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskSwitchContext();
++ssKernelSwitch((unsigned)xCoreID);
++traceRETURN_vTaskSwitchContext();
++#else
++
+         traceENTER_vTaskSwitchContext();
+ 
+         /* Acquire both locks:
+@@ -5491,13 +6029,21 @@
+         portRELEASE_TASK_LOCK( xCoreID );
+ 
+         traceRETURN_vTaskSwitchContext();
+-    }
++    
++#endif
++}
+ #endif /* if ( configNUMBER_OF_CORES > 1 ) */
+ /*-----------------------------------------------------------*/
+ 
+ void vTaskPlaceOnEventList( List_t * const pxEventList,
+                             const TickType_t xTicksToWait )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskPlaceOnEventList( pxEventList, xTicksToWait );
++ssKernelEventBlock(pxEventList, 0, xTicksToWait, false, true);
++traceRETURN_vTaskPlaceOnEventList();
++#else
++
+     traceENTER_vTaskPlaceOnEventList( pxEventList, xTicksToWait );
+ 
+     configASSERT( pxEventList );
+@@ -5521,6 +6067,8 @@
+     prvAddCurrentTaskToDelayedList( xTicksToWait, pdTRUE );
+ 
+     traceRETURN_vTaskPlaceOnEventList();
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+@@ -5528,6 +6076,12 @@
+                                      const TickType_t xItemValue,
+                                      const TickType_t xTicksToWait )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskPlaceOnUnorderedEventList( pxEventList, xItemValue, xTicksToWait );
++ssKernelEventBlock(pxEventList, xItemValue, xTicksToWait, true, true);
++traceRETURN_vTaskPlaceOnUnorderedEventList();
++#else
++
+     traceENTER_vTaskPlaceOnUnorderedEventList( pxEventList, xItemValue, xTicksToWait );
+ 
+     configASSERT( pxEventList );
+@@ -5551,6 +6105,8 @@
+     prvAddCurrentTaskToDelayedList( xTicksToWait, pdTRUE );
+ 
+     traceRETURN_vTaskPlaceOnUnorderedEventList();
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+@@ -5560,6 +6116,12 @@
+                                           TickType_t xTicksToWait,
+                                           const BaseType_t xWaitIndefinitely )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskPlaceOnEventListRestricted( pxEventList, xTicksToWait, xWaitIndefinitely );
++ssKernelEventBlock(pxEventList, 0, xTicksToWait, false, xWaitIndefinitely != pdFALSE);
++traceRETURN_vTaskPlaceOnEventListRestricted();
++#else
++
+         traceENTER_vTaskPlaceOnEventListRestricted( pxEventList, xTicksToWait, xWaitIndefinitely );
+ 
+         configASSERT( pxEventList );
+@@ -5588,13 +6150,21 @@
+         prvAddCurrentTaskToDelayedList( xTicksToWait, xWaitIndefinitely );
+ 
+         traceRETURN_vTaskPlaceOnEventListRestricted();
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_TIMERS */
+ /*-----------------------------------------------------------*/
+ 
+ BaseType_t xTaskRemoveFromEventList( const List_t * const pxEventList )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskRemoveFromEventList( pxEventList );
++configASSERT(!listLIST_IS_EMPTY(pxEventList));
++{ BaseType_t ss_trace_result = (ssKernelEventWake(listGET_HEAD_ENTRY(pxEventList), 0, false)); traceRETURN_xTaskRemoveFromEventList(ss_trace_result); return ss_trace_result; }
++#else
++
+     TCB_t * pxUnblockedTCB;
+     BaseType_t xReturn;
+ 
+@@ -5683,12 +6253,20 @@
+ 
+     traceRETURN_xTaskRemoveFromEventList( xReturn );
+     return xReturn;
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+ void vTaskRemoveFromUnorderedEventList( ListItem_t * pxEventListItem,
+                                         const TickType_t xItemValue )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskRemoveFromUnorderedEventList( pxEventListItem, xItemValue );
++(void)ssKernelEventWake(pxEventListItem, xItemValue, true);
++traceRETURN_vTaskRemoveFromUnorderedEventList();
++#else
++
+     TCB_t * pxUnblockedTCB;
+ 
+     traceENTER_vTaskRemoveFromUnorderedEventList( pxEventListItem, xItemValue );
+@@ -5755,11 +6333,22 @@
+     #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
+ 
+     traceRETURN_vTaskRemoveFromUnorderedEventList();
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+ void vTaskSetTimeOutState( TimeOut_t * const pxTimeOut )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskSetTimeOutState( pxTimeOut );
++configASSERT(pxTimeOut);
++uint64_t now = ssKernelNow();
++pxTimeOut->xOverflowCount = (sizeof(TickType_t) == sizeof(uint64_t) ? 0 : (BaseType_t)(now >> ((sizeof(TickType_t) * 8) % 64)));
++pxTimeOut->xTimeOnEntering = (TickType_t)now;
++traceRETURN_vTaskSetTimeOutState();
++#else
++
+     traceENTER_vTaskSetTimeOutState( pxTimeOut );
+ 
+     configASSERT( pxTimeOut );
+@@ -5771,11 +6360,22 @@
+     taskEXIT_CRITICAL();
+ 
+     traceRETURN_vTaskSetTimeOutState();
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+ void vTaskInternalSetTimeOutState( TimeOut_t * const pxTimeOut )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskInternalSetTimeOutState( pxTimeOut );
++configASSERT(pxTimeOut);
++uint64_t now = ssKernelNow();
++pxTimeOut->xOverflowCount = (sizeof(TickType_t) == sizeof(uint64_t) ? 0 : (BaseType_t)(now >> ((sizeof(TickType_t) * 8) % 64)));
++pxTimeOut->xTimeOnEntering = (TickType_t)now;
++traceRETURN_vTaskInternalSetTimeOutState();
++#else
++
+     traceENTER_vTaskInternalSetTimeOutState( pxTimeOut );
+ 
+     /* For internal use only as it does not use a critical section. */
+@@ -5783,12 +6383,46 @@
+     pxTimeOut->xTimeOnEntering = xTickCount;
+ 
+     traceRETURN_vTaskInternalSetTimeOutState();
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+ BaseType_t xTaskCheckForTimeOut( TimeOut_t * const pxTimeOut,
+                                  TickType_t * const pxTicksToWait )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskCheckForTimeOut( pxTimeOut, pxTicksToWait );
++configASSERT(pxTimeOut && pxTicksToWait);
++UBaseType_t irq = portSET_INTERRUPT_MASK();
++uint64_t now = ssKernelNow();
++TickType_t tick = (TickType_t)now;
++TickType_t elapsed = tick - pxTimeOut->xTimeOnEntering;
++BaseType_t overflow = (sizeof(TickType_t) == sizeof(uint64_t) ? 0 : (BaseType_t)(now >> ((sizeof(TickType_t) * 8) % 64)));
++BaseType_t result;
++#if ( INCLUDE_xTaskAbortDelay == 1 )
++if (ssKernelSelf()->ucDelayAborted) {
++    ssKernelSelf()->ucDelayAborted = pdFALSE;
++    result = pdTRUE;
++} else
++#endif
++#if ( INCLUDE_vTaskSuspend == 1 )
++if (*pxTicksToWait == portMAX_DELAY) result = pdFALSE;
++else
++#endif
++if ((overflow != pxTimeOut->xOverflowCount && tick >= pxTimeOut->xTimeOnEntering) || elapsed >= *pxTicksToWait) {
++    *pxTicksToWait = 0;
++    result = pdTRUE;
++} else {
++    *pxTicksToWait -= elapsed;
++    pxTimeOut->xOverflowCount = overflow;
++    pxTimeOut->xTimeOnEntering = tick;
++    result = pdFALSE;
++}
++portCLEAR_INTERRUPT_MASK(irq);
++{ BaseType_t ss_trace_result = (result); traceRETURN_xTaskCheckForTimeOut(ss_trace_result); return ss_trace_result; }
++#else
++
+     BaseType_t xReturn;
+ 
+     traceENTER_xTaskCheckForTimeOut( pxTimeOut, pxTicksToWait );
+@@ -5852,17 +6486,27 @@
+     traceRETURN_xTaskCheckForTimeOut( xReturn );
+ 
+     return xReturn;
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+ void vTaskMissedYield( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskMissedYield();
++ssKernelMissedYield();
++traceRETURN_vTaskMissedYield();
++#else
++
+     traceENTER_vTaskMissedYield();
+ 
+     /* Must be called from within a critical section. */
+     xYieldPendings[ portGET_CORE_ID() ] = pdTRUE;
+ 
+     traceRETURN_vTaskMissedYield();
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+@@ -5870,6 +6514,18 @@
+ 
+     UBaseType_t uxTaskGetTaskNumber( TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_uxTaskGetTaskNumber( xTask );
++UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
++struct ss_kernel_pin pin;
++if (!ssKernelPin(xTask, &pin)) { UBaseType_t ss_trace_result = (0); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_uxTaskGetTaskNumber(ss_trace_result); return ss_trace_result; }
++UBaseType_t irq = ssKernelObjectEnterFromISR();
++UBaseType_t result = ((TCB_t *)pin.descriptor->task)->uxTaskNumber;
++ssKernelObjectExitFromISR(irq);
++ss_kernel_handle_put(&pin);
++{ UBaseType_t ss_trace_result = (result); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_uxTaskGetTaskNumber(ss_trace_result); return ss_trace_result; }
++#else
++
+         UBaseType_t uxReturn;
+         TCB_t const * pxTCB;
+ 
+@@ -5888,7 +6544,9 @@
+         traceRETURN_uxTaskGetTaskNumber( uxReturn );
+ 
+         return uxReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_TRACE_FACILITY */
+ /*-----------------------------------------------------------*/
+@@ -5898,6 +6556,18 @@
+     void vTaskSetTaskNumber( TaskHandle_t xTask,
+                              const UBaseType_t uxHandle )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskSetTaskNumber( xTask, uxHandle );
++UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
++struct ss_kernel_pin pin;
++if (!ssKernelPin(xTask, &pin)) { portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskSetTaskNumber(); return; }
++UBaseType_t irq = ssKernelObjectEnterFromISR();
++((TCB_t *)pin.descriptor->task)->uxTaskNumber = uxHandle;
++ssKernelObjectExitFromISR(irq);
++ss_kernel_handle_put(&pin);
++portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskSetTaskNumber();
++#else
++
+         TCB_t * pxTCB;
+ 
+         traceENTER_vTaskSetTaskNumber( xTask, uxHandle );
+@@ -5909,7 +6579,9 @@
+         }
+ 
+         traceRETURN_vTaskSetTaskNumber();
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_TRACE_FACILITY */
+ /*-----------------------------------------------------------*/
+@@ -5961,7 +6633,11 @@
+                  * the ready list at the idle priority contains one more task than the
+                  * number of idle tasks, which is equal to the configured numbers of cores
+                  * then a task other than the idle task is ready to execute. */
+-                if( listCURRENT_LIST_LENGTH( &( pxReadyTasksLists[ tskIDLE_PRIORITY ] ) ) > ( UBaseType_t ) configNUMBER_OF_CORES )
++                #if ( configSS_PARTITIONED_SCHEDULER == 1 )
++            if (ssKernelIdleShouldYield())
++#else
++            if( listCURRENT_LIST_LENGTH( &( pxReadyTasksLists[ tskIDLE_PRIORITY ] ) ) > ( UBaseType_t ) configNUMBER_OF_CORES )
++#endif
+                 {
+                     taskYIELD();
+                 }
+@@ -6051,7 +6727,11 @@
+              * the ready list at the idle priority contains one more task than the
+              * number of idle tasks, which is equal to the configured numbers of cores
+              * then a task other than the idle task is ready to execute. */
++            #if ( configSS_PARTITIONED_SCHEDULER == 1 )
++            if (ssKernelIdleShouldYield())
++#else
+             if( listCURRENT_LIST_LENGTH( &( pxReadyTasksLists[ tskIDLE_PRIORITY ] ) ) > ( UBaseType_t ) configNUMBER_OF_CORES )
++#endif
+             {
+                 taskYIELD();
+             }
+@@ -6197,6 +6877,19 @@
+                                             BaseType_t xIndex,
+                                             void * pvValue )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskSetThreadLocalStoragePointer( xTaskToSet, xIndex, pvValue );
++UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
++if (xIndex < 0 || xIndex >= configNUM_THREAD_LOCAL_STORAGE_POINTERS) { portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskSetThreadLocalStoragePointer(); return; }
++struct ss_kernel_pin pin;
++if (!ssKernelPin(xTaskToSet, &pin)) { portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskSetThreadLocalStoragePointer(); return; }
++UBaseType_t irq = ssKernelObjectEnterFromISR();
++((TCB_t *)pin.descriptor->task)->pvThreadLocalStoragePointers[xIndex] = pvValue;
++ssKernelObjectExitFromISR(irq);
++ss_kernel_handle_put(&pin);
++portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_vTaskSetThreadLocalStoragePointer();
++#else
++
+         TCB_t * pxTCB;
+ 
+         traceENTER_vTaskSetThreadLocalStoragePointer( xTaskToSet, xIndex, pvValue );
+@@ -6210,7 +6903,9 @@
+         }
+ 
+         traceRETURN_vTaskSetThreadLocalStoragePointer();
+-    }
++    
++#endif
++}
+ 
+ #endif /* configNUM_THREAD_LOCAL_STORAGE_POINTERS */
+ /*-----------------------------------------------------------*/
+@@ -6220,6 +6915,19 @@
+     void * pvTaskGetThreadLocalStoragePointer( TaskHandle_t xTaskToQuery,
+                                                BaseType_t xIndex )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_pvTaskGetThreadLocalStoragePointer( xTaskToQuery, xIndex );
++UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
++if (xIndex < 0 || xIndex >= configNUM_THREAD_LOCAL_STORAGE_POINTERS) { void * ss_trace_result = (NULL); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_pvTaskGetThreadLocalStoragePointer(ss_trace_result); return ss_trace_result; }
++struct ss_kernel_pin pin;
++if (!ssKernelPin(xTaskToQuery, &pin)) { void * ss_trace_result = (NULL); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_pvTaskGetThreadLocalStoragePointer(ss_trace_result); return ss_trace_result; }
++UBaseType_t irq = ssKernelObjectEnterFromISR();
++void *result = ((TCB_t *)pin.descriptor->task)->pvThreadLocalStoragePointers[xIndex];
++ssKernelObjectExitFromISR(irq);
++ss_kernel_handle_put(&pin);
++{ void * ss_trace_result = (result); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_pvTaskGetThreadLocalStoragePointer(ss_trace_result); return ss_trace_result; }
++#else
++
+         void * pvReturn = NULL;
+         TCB_t * pxTCB;
+ 
+@@ -6241,7 +6949,9 @@
+         traceRETURN_pvTaskGetThreadLocalStoragePointer( pvReturn );
+ 
+         return pvReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configNUM_THREAD_LOCAL_STORAGE_POINTERS */
+ /*-----------------------------------------------------------*/
+@@ -6302,6 +7012,11 @@
+ 
+ STATIC void prvCheckTasksWaitingTermination( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++ssKernelService();
++ssKernelCleanup();
++#else
++
+     /** THIS FUNCTION IS CALLED FROM THE RTOS IDLE TASK **/
+ 
+     #if ( INCLUDE_vTaskDelete == 1 )
+@@ -6373,6 +7088,8 @@
+         }
+     }
+     #endif /* INCLUDE_vTaskDelete */
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+@@ -6383,6 +7100,12 @@
+                        BaseType_t xGetFreeStackSpace,
+                        eTaskState eState )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskGetInfo( xTask, pxTaskStatus, xGetFreeStackSpace, eState );
++(void)eState; ssKernelInfo(xTask, pxTaskStatus, xGetFreeStackSpace != pdFALSE);
++traceRETURN_vTaskGetInfo();
++#else
++
+         TCB_t * pxTCB;
+ 
+         traceENTER_vTaskGetInfo( xTask, pxTaskStatus, xGetFreeStackSpace, eState );
+@@ -6519,7 +7242,9 @@
+         }
+ 
+         traceRETURN_vTaskGetInfo();
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_TRACE_FACILITY */
+ /*-----------------------------------------------------------*/
+@@ -6590,11 +7315,17 @@
+  * applications that expect an 8-bit return type. */
+     configSTACK_DEPTH_TYPE uxTaskGetStackHighWaterMark2( TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_uxTaskGetStackHighWaterMark2( xTask );
++UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
++struct ss_kernel_pin ss_pin;
++if (!ssKernelPin(xTask, &ss_pin)) { configSTACK_DEPTH_TYPE ss_trace_result = (0); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_uxTaskGetStackHighWaterMark2(ss_trace_result); return ss_trace_result; }
++
+         TCB_t * pxTCB;
+         uint8_t * pucEndOfStack;
+         configSTACK_DEPTH_TYPE uxReturn;
+ 
+-        traceENTER_uxTaskGetStackHighWaterMark2( xTask );
++        
+ 
+         /* uxTaskGetStackHighWaterMark() and uxTaskGetStackHighWaterMark2() are
+          * the same except for their return type.  Using configSTACK_DEPTH_TYPE
+@@ -6603,6 +7334,40 @@
+          * backward compatibility for applications that expect an 8-bit return
+          * type. */
+ 
++        pxTCB = (TCB_t *)ss_pin.descriptor->task;
++        configASSERT( pxTCB != NULL );
++
++        #if portSTACK_GROWTH < 0
++        {
++            pucEndOfStack = ( uint8_t * ) pxTCB->pxStack;
++        }
++        #else
++        {
++            pucEndOfStack = ( uint8_t * ) pxTCB->pxEndOfStack;
++        }
++        #endif
++
++        uxReturn = prvTaskCheckFreeStackSpace( pucEndOfStack );
++
++        
++
++{ __auto_type ss_result = (uxReturn); ss_kernel_handle_put(&ss_pin); { configSTACK_DEPTH_TYPE ss_trace_result = (ss_result); traceRETURN_uxTaskGetStackHighWaterMark2(ss_trace_result); return ss_trace_result; } }
++    
++#else
++
++        TCB_t * pxTCB;
++        uint8_t * pucEndOfStack;
++        configSTACK_DEPTH_TYPE uxReturn;
++
++        traceENTER_uxTaskGetStackHighWaterMark2( xTask );
++
++        /* uxTaskGetStackHighWaterMark() and uxTaskGetStackHighWaterMark2() are
++         * the same except for their return type.  Using configSTACK_DEPTH_TYPE
++         * allows the user to determine the return type.  It gets around the
++         * problem of the value overflowing on 8-bit types without breaking
++         * backward compatibility for applications that expect an 8-bit return
++         * type. */
++
+         pxTCB = prvGetTCBFromHandle( xTask );
+         configASSERT( pxTCB != NULL );
+ 
+@@ -6621,7 +7386,9 @@
+         traceRETURN_uxTaskGetStackHighWaterMark2( uxReturn );
+ 
+         return uxReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* INCLUDE_uxTaskGetStackHighWaterMark2 */
+ /*-----------------------------------------------------------*/
+@@ -6630,10 +7397,43 @@
+ 
+     UBaseType_t uxTaskGetStackHighWaterMark( TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_uxTaskGetStackHighWaterMark( xTask );
++UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
++struct ss_kernel_pin ss_pin;
++if (!ssKernelPin(xTask, &ss_pin)) { UBaseType_t ss_trace_result = (0); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_uxTaskGetStackHighWaterMark(ss_trace_result); return ss_trace_result; }
++
+         TCB_t * pxTCB;
+         uint8_t * pucEndOfStack;
+         UBaseType_t uxReturn;
+ 
++        
++
++        pxTCB = (TCB_t *)ss_pin.descriptor->task;
++        configASSERT( pxTCB != NULL );
++
++        #if portSTACK_GROWTH < 0
++        {
++            pucEndOfStack = ( uint8_t * ) pxTCB->pxStack;
++        }
++        #else
++        {
++            pucEndOfStack = ( uint8_t * ) pxTCB->pxEndOfStack;
++        }
++        #endif
++
++        uxReturn = ( UBaseType_t ) prvTaskCheckFreeStackSpace( pucEndOfStack );
++
++        
++
++{ __auto_type ss_result = (uxReturn); ss_kernel_handle_put(&ss_pin); { UBaseType_t ss_trace_result = (ss_result); traceRETURN_uxTaskGetStackHighWaterMark(ss_trace_result); return ss_trace_result; } }
++    
++#else
++
++        TCB_t * pxTCB;
++        uint8_t * pucEndOfStack;
++        UBaseType_t uxReturn;
++
+         traceENTER_uxTaskGetStackHighWaterMark( xTask );
+ 
+         pxTCB = prvGetTCBFromHandle( xTask );
+@@ -6654,7 +7454,9 @@
+         traceRETURN_uxTaskGetStackHighWaterMark( uxReturn );
+ 
+         return uxReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* INCLUDE_uxTaskGetStackHighWaterMark */
+ /*-----------------------------------------------------------*/
+@@ -6756,6 +7558,11 @@
+     #else /* #if ( configNUMBER_OF_CORES == 1 ) */
+         TaskHandle_t xTaskGetCurrentTaskHandle( void )
+         {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGetCurrentTaskHandle();
++{ TaskHandle_t ss_trace_result = (ssKernelSelf()); traceRETURN_xTaskGetCurrentTaskHandle(ss_trace_result); return ss_trace_result; }
++#else
++
+             TaskHandle_t xReturn;
+             UBaseType_t uxSavedInterruptStatus;
+ 
+@@ -6778,11 +7585,19 @@
+             traceRETURN_xTaskGetCurrentTaskHandle( xReturn );
+ 
+             return xReturn;
+-        }
++        
++#endif
++}
+     #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
+ 
+     TaskHandle_t xTaskGetCurrentTaskHandleForCore( BaseType_t xCoreID )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGetCurrentTaskHandleForCore( xCoreID );
++if (xCoreID < 0 || xCoreID >= configNUMBER_OF_CORES) { TaskHandle_t ss_trace_result = (NULL); traceRETURN_xTaskGetCurrentTaskHandleForCore(ss_trace_result); return ss_trace_result; }
++{ TaskHandle_t ss_trace_result = (ssKernelCurrentSnapshot((unsigned)xCoreID)); traceRETURN_xTaskGetCurrentTaskHandleForCore(ss_trace_result); return ss_trace_result; }
++#else
++
+         TaskHandle_t xReturn = NULL;
+ 
+         traceENTER_xTaskGetCurrentTaskHandleForCore( xCoreID );
+@@ -6799,7 +7614,9 @@
+         traceRETURN_xTaskGetCurrentTaskHandleForCore( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* ( ( INCLUDE_xTaskGetCurrentTaskHandle == 1 ) || ( configUSE_RECURSIVE_MUTEXES == 1 ) ) */
+ /*-----------------------------------------------------------*/
+@@ -6808,6 +7625,12 @@
+ 
+     BaseType_t xTaskGetSchedulerState( void )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGetSchedulerState();
++if (!xSchedulerRunning) { BaseType_t ss_trace_result = (taskSCHEDULER_NOT_STARTED); traceRETURN_xTaskGetSchedulerState(ss_trace_result); return ss_trace_result; }
++{ BaseType_t ss_trace_result = (ssKernelSchedulerState()); traceRETURN_xTaskGetSchedulerState(ss_trace_result); return ss_trace_result; }
++#else
++
+         BaseType_t xReturn;
+ 
+         traceENTER_xTaskGetSchedulerState();
+@@ -6839,7 +7662,9 @@
+         traceRETURN_xTaskGetSchedulerState( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* ( ( INCLUDE_xTaskGetSchedulerState == 1 ) || ( configUSE_TIMERS == 1 ) ) */
+ /*-----------------------------------------------------------*/
+@@ -6848,6 +7673,11 @@
+ 
+     BaseType_t xTaskPriorityInherit( TaskHandle_t const pxMutexHolder )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskPriorityInherit( pxMutexHolder );
++{ BaseType_t ss_trace_result = (ssKernelInherit(pxMutexHolder)); traceRETURN_xTaskPriorityInherit(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t * const pxMutexHolderTCB = pxMutexHolder;
+         BaseType_t xReturn = pdFALSE;
+ 
+@@ -6942,7 +7772,9 @@
+         traceRETURN_xTaskPriorityInherit( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_MUTEXES */
+ /*-----------------------------------------------------------*/
+@@ -6951,6 +7783,11 @@
+ 
+     BaseType_t xTaskPriorityDisinherit( TaskHandle_t const pxMutexHolder )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskPriorityDisinherit( pxMutexHolder );
++{ BaseType_t ss_trace_result = (ssKernelDisinherit(pxMutexHolder, false, 0)); traceRETURN_xTaskPriorityDisinherit(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t * const pxTCB = pxMutexHolder;
+         BaseType_t xReturn = pdFALSE;
+ 
+@@ -7036,7 +7873,9 @@
+         traceRETURN_xTaskPriorityDisinherit( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_MUTEXES */
+ /*-----------------------------------------------------------*/
+@@ -7046,6 +7885,12 @@
+     void vTaskPriorityDisinheritAfterTimeout( TaskHandle_t const pxMutexHolder,
+                                               UBaseType_t uxHighestPriorityWaitingTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskPriorityDisinheritAfterTimeout( pxMutexHolder, uxHighestPriorityWaitingTask );
++(void)ssKernelDisinherit(pxMutexHolder, true, uxHighestPriorityWaitingTask);
++traceRETURN_vTaskPriorityDisinheritAfterTimeout();
++#else
++
+         TCB_t * const pxTCB = pxMutexHolder;
+         UBaseType_t uxPriorityUsedOnEntry, uxPriorityToUse;
+         const UBaseType_t uxOnlyOneMutexHeld = ( UBaseType_t ) 1;
+@@ -7156,7 +8001,9 @@
+         }
+ 
+         traceRETURN_vTaskPriorityDisinheritAfterTimeout();
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_MUTEXES */
+ /*-----------------------------------------------------------*/
+@@ -7169,6 +8016,12 @@
+  */
+     void vTaskYieldWithinAPI( void )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskYieldWithinAPI();
++ssKernelOwnerYield();
++traceRETURN_vTaskYieldWithinAPI();
++#else
++
+         UBaseType_t ulState;
+ 
+         traceENTER_vTaskYieldWithinAPI();
+@@ -7189,7 +8042,9 @@
+         portCLEAR_INTERRUPT_MASK( ulState );
+ 
+         traceRETURN_vTaskYieldWithinAPI();
+-    }
++    
++#endif
++}
+ #endif /* #if ( configNUMBER_OF_CORES > 1 ) */
+ 
+ /*-----------------------------------------------------------*/
+@@ -7232,6 +8087,15 @@
+ 
+     void vTaskEnterCritical( void )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskEnterCritical();
++if (!xSchedulerRunning) { portDISABLE_INTERRUPTS(); { traceRETURN_vTaskEnterCritical(); return; } }
++ssKernelObjectEnter();
++portINCREMENT_CRITICAL_NESTING_COUNT(ssKernelCPUId());
++if (portGET_CRITICAL_NESTING_COUNT(ssKernelCPUId()) == 1) portASSERT_IF_IN_ISR();
++traceRETURN_vTaskEnterCritical();
++#else
++
+         traceENTER_vTaskEnterCritical();
+ 
+         portDISABLE_INTERRUPTS();
+@@ -7275,7 +8139,9 @@
+         }
+ 
+         traceRETURN_vTaskEnterCritical();
+-    }
++    
++#endif
++}
+ 
+ #endif /* #if ( configNUMBER_OF_CORES > 1 ) */
+ 
+@@ -7285,6 +8151,15 @@
+ 
+     UBaseType_t vTaskEnterCriticalFromISR( void )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskEnterCriticalFromISR();
++if (!xSchedulerRunning) { UBaseType_t ss_trace_result = (0); traceRETURN_vTaskEnterCriticalFromISR(ss_trace_result); return ss_trace_result; }
++UBaseType_t irq = ssKernelObjectEnterFromISR();
++++ssKernelCPUs[ssKernelCPUId()].preempt;
++portINCREMENT_CRITICAL_NESTING_COUNT(ssKernelCPUId());
++{ UBaseType_t ss_trace_result = (irq); traceRETURN_vTaskEnterCriticalFromISR(ss_trace_result); return ss_trace_result; }
++#else
++
+         UBaseType_t uxSavedInterruptStatus = 0;
+         const BaseType_t xCoreID = ( BaseType_t ) portGET_CORE_ID();
+ 
+@@ -7309,7 +8184,9 @@
+         traceRETURN_vTaskEnterCriticalFromISR( uxSavedInterruptStatus );
+ 
+         return uxSavedInterruptStatus;
+-    }
++    
++#endif
++}
+ 
+ #endif /* #if ( configNUMBER_OF_CORES > 1 ) */
+ /*-----------------------------------------------------------*/
+@@ -7363,6 +8240,16 @@
+ 
+     void vTaskExitCritical( void )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskExitCritical();
++if (!xSchedulerRunning) { traceRETURN_vTaskExitCritical(); return; }
++configASSERT(portGET_CRITICAL_NESTING_COUNT(ssKernelCPUId()));
++portASSERT_IF_IN_ISR();
++portDECREMENT_CRITICAL_NESTING_COUNT(ssKernelCPUId());
++ssKernelObjectExit();
++traceRETURN_vTaskExitCritical();
++#else
++
+         const BaseType_t xCoreID = ( BaseType_t ) portGET_CORE_ID();
+ 
+         traceENTER_vTaskExitCritical();
+@@ -7417,7 +8304,9 @@
+         }
+ 
+         traceRETURN_vTaskExitCritical();
+-    }
++    
++#endif
++}
+ 
+ #endif /* #if ( configNUMBER_OF_CORES > 1 ) */
+ /*-----------------------------------------------------------*/
+@@ -7426,6 +8315,16 @@
+ 
+     void vTaskExitCriticalFromISR( UBaseType_t uxSavedInterruptStatus )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskExitCriticalFromISR( uxSavedInterruptStatus );
++if (!xSchedulerRunning) { traceRETURN_vTaskExitCriticalFromISR(); return; }
++configASSERT(portGET_CRITICAL_NESTING_COUNT(ssKernelCPUId()) && ssKernelCPUs[ssKernelCPUId()].preempt);
++portDECREMENT_CRITICAL_NESTING_COUNT(ssKernelCPUId());
++--ssKernelCPUs[ssKernelCPUId()].preempt;
++ssKernelObjectExitFromISR(uxSavedInterruptStatus);
++traceRETURN_vTaskExitCriticalFromISR();
++#else
++
+         BaseType_t xCoreID;
+ 
+         traceENTER_vTaskExitCriticalFromISR( uxSavedInterruptStatus );
+@@ -7463,7 +8362,9 @@
+         }
+ 
+         traceRETURN_vTaskExitCriticalFromISR();
+-    }
++    
++#endif
++}
+ 
+ #endif /* #if ( configNUMBER_OF_CORES > 1 ) */
+ /*-----------------------------------------------------------*/
+@@ -7855,6 +8756,17 @@
+ 
+ TickType_t uxTaskResetEventItemValue( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_uxTaskResetEventItemValue();
++UBaseType_t irq = ssKernelObjectEnterFromISR();
++TCB_t *t = ssKernelSelf();
++TickType_t result = listGET_LIST_ITEM_VALUE(&t->xEventListItem);
++listSET_LIST_ITEM_VALUE(&t->xEventListItem, configMAX_PRIORITIES - atomic_load_explicit(&ssKernelCurrent()->effective, memory_order_acquire));
++ssKernelCurrent()->unordered = false;
++ssKernelObjectExitFromISR(irq);
++{ TickType_t ss_trace_result = (result); traceRETURN_uxTaskResetEventItemValue(ss_trace_result); return ss_trace_result; }
++#else
++
+     TickType_t uxReturn;
+ 
+     traceENTER_uxTaskResetEventItemValue();
+@@ -7868,6 +8780,8 @@
+     traceRETURN_uxTaskResetEventItemValue( uxReturn );
+ 
+     return uxReturn;
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+@@ -7875,6 +8789,11 @@
+ 
+     TaskHandle_t pvTaskIncrementMutexHeldCount( void )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_pvTaskIncrementMutexHeldCount();
++{ TaskHandle_t ss_trace_result = (ssKernelMutexTaken()); traceRETURN_pvTaskIncrementMutexHeldCount(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t * pxTCB;
+ 
+         traceENTER_pvTaskIncrementMutexHeldCount();
+@@ -7891,7 +8810,9 @@
+         traceRETURN_pvTaskIncrementMutexHeldCount( pxTCB );
+ 
+         return pxTCB;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_MUTEXES */
+ /*-----------------------------------------------------------*/
+@@ -7902,6 +8823,11 @@
+                                       BaseType_t xClearCountOnExit,
+                                       TickType_t xTicksToWait )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_ulTaskGenericNotifyTake( uxIndexToWaitOn, xClearCountOnExit, xTicksToWait );
++{ uint32_t ss_trace_result = (ssKernelNotifyWait(uxIndexToWaitOn, 0, 0, true, xClearCountOnExit == pdFALSE, xTicksToWait, NULL)); traceRETURN_ulTaskGenericNotifyTake(ss_trace_result); return ss_trace_result; }
++#else
++
+         uint32_t ulReturn;
+         BaseType_t xAlreadyYielded, xShouldBlock = pdFALSE;
+ 
+@@ -7993,7 +8919,9 @@
+         traceRETURN_ulTaskGenericNotifyTake( ulReturn );
+ 
+         return ulReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_TASK_NOTIFICATIONS */
+ /*-----------------------------------------------------------*/
+@@ -8006,6 +8934,14 @@
+                                        uint32_t * pulNotificationValue,
+                                        TickType_t xTicksToWait )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGenericNotifyWait( uxIndexToWaitOn, ulBitsToClearOnEntry, ulBitsToClearOnExit, pulNotificationValue, xTicksToWait );
++bool matched;
++uint32_t value = ssKernelNotifyWait(uxIndexToWaitOn, ulBitsToClearOnEntry, ulBitsToClearOnExit, false, false, xTicksToWait, &matched);
++if (pulNotificationValue) *pulNotificationValue = value;
++{ BaseType_t ss_trace_result = (matched ? pdTRUE : pdFALSE); traceRETURN_xTaskGenericNotifyWait(ss_trace_result); return ss_trace_result; }
++#else
++
+         BaseType_t xReturn, xAlreadyYielded, xShouldBlock = pdFALSE;
+ 
+         traceENTER_xTaskGenericNotifyWait( uxIndexToWaitOn, ulBitsToClearOnEntry, ulBitsToClearOnExit, pulNotificationValue, xTicksToWait );
+@@ -8107,7 +9043,9 @@
+         traceRETURN_xTaskGenericNotifyWait( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_TASK_NOTIFICATIONS */
+ /*-----------------------------------------------------------*/
+@@ -8120,6 +9058,13 @@
+                                    eNotifyAction eAction,
+                                    uint32_t * pulPreviousNotificationValue )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGenericNotify( xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue );
++BaseType_t result = ssKernelNotify(xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue, NULL, false);
++if (ssKernelCPUs[ssKernelCPUId()].reschedule && ssKernelCanPreempt()) portYIELD();
++{ BaseType_t ss_trace_result = (result); traceRETURN_xTaskGenericNotify(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t * pxTCB;
+         BaseType_t xReturn = pdPASS;
+         uint8_t ucOriginalNotifyState;
+@@ -8227,7 +9172,9 @@
+         traceRETURN_xTaskGenericNotify( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_TASK_NOTIFICATIONS */
+ /*-----------------------------------------------------------*/
+@@ -8241,6 +9188,11 @@
+                                           uint32_t * pulPreviousNotificationValue,
+                                           BaseType_t * pxHigherPriorityTaskWoken )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGenericNotifyFromISR( xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue, pxHigherPriorityTaskWoken );
++{ BaseType_t ss_trace_result = (ssKernelNotify(xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue, pxHigherPriorityTaskWoken, true)); traceRETURN_xTaskGenericNotifyFromISR(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t * pxTCB;
+         uint8_t ucOriginalNotifyState;
+         BaseType_t xReturn = pdPASS;
+@@ -8409,7 +9361,9 @@
+         traceRETURN_xTaskGenericNotifyFromISR( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_TASK_NOTIFICATIONS */
+ /*-----------------------------------------------------------*/
+@@ -8420,6 +9374,12 @@
+                                         UBaseType_t uxIndexToNotify,
+                                         BaseType_t * pxHigherPriorityTaskWoken )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_vTaskGenericNotifyGiveFromISR( xTaskToNotify, uxIndexToNotify, pxHigherPriorityTaskWoken );
++(void)ssKernelNotify(xTaskToNotify, uxIndexToNotify, 0, eIncrement, NULL, pxHigherPriorityTaskWoken, true);
++traceRETURN_vTaskGenericNotifyGiveFromISR();
++#else
++
+         TCB_t * pxTCB;
+         uint8_t ucOriginalNotifyState;
+         UBaseType_t uxSavedInterruptStatus;
+@@ -8541,7 +9501,9 @@
+         taskEXIT_CRITICAL_FROM_ISR( uxSavedInterruptStatus );
+ 
+         traceRETURN_vTaskGenericNotifyGiveFromISR();
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_TASK_NOTIFICATIONS */
+ /*-----------------------------------------------------------*/
+@@ -8551,6 +9513,11 @@
+     BaseType_t xTaskGenericNotifyStateClear( TaskHandle_t xTask,
+                                              UBaseType_t uxIndexToClear )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_xTaskGenericNotifyStateClear( xTask, uxIndexToClear );
++{ BaseType_t ss_trace_result = (ssKernelNotifyClear(xTask, uxIndexToClear, 0, true) ? pdTRUE : pdFALSE); traceRETURN_xTaskGenericNotifyStateClear(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t * pxTCB;
+         BaseType_t xReturn;
+ 
+@@ -8580,7 +9547,9 @@
+         traceRETURN_xTaskGenericNotifyStateClear( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_TASK_NOTIFICATIONS */
+ /*-----------------------------------------------------------*/
+@@ -8591,6 +9560,11 @@
+                                             UBaseType_t uxIndexToClear,
+                                             uint32_t ulBitsToClear )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_ulTaskGenericNotifyValueClear( xTask, uxIndexToClear, ulBitsToClear );
++{ uint32_t ss_trace_result = (ssKernelNotifyClear(xTask, uxIndexToClear, ulBitsToClear, false)); traceRETURN_ulTaskGenericNotifyValueClear(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t * pxTCB;
+         uint32_t ulReturn;
+ 
+@@ -8615,7 +9589,9 @@
+         traceRETURN_ulTaskGenericNotifyValueClear( ulReturn );
+ 
+         return ulReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_TASK_NOTIFICATIONS */
+ /*-----------------------------------------------------------*/
+@@ -8624,6 +9600,11 @@
+ 
+     configRUN_TIME_COUNTER_TYPE ulTaskGetRunTimeCounter( const TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_ulTaskGetRunTimeCounter( xTask );
++{ configRUN_TIME_COUNTER_TYPE ss_trace_result = (ssKernelRuntime(xTask)); traceRETURN_ulTaskGetRunTimeCounter(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t * pxTCB;
+         configRUN_TIME_COUNTER_TYPE ulTotalTime = 0, ulTimeSinceLastSwitchedIn = 0, ulTaskRunTime = 0;
+ 
+@@ -8656,7 +9637,9 @@
+         traceRETURN_ulTaskGetRunTimeCounter( ulTaskRunTime );
+ 
+         return ulTaskRunTime;
+-    }
++    
++#endif
++}
+ 
+ #endif /* if ( configGENERATE_RUN_TIME_STATS == 1 ) */
+ /*-----------------------------------------------------------*/
+@@ -8665,6 +9648,13 @@
+ 
+     configRUN_TIME_COUNTER_TYPE ulTaskGetRunTimePercent( const TaskHandle_t xTask )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_ulTaskGetRunTimePercent( xTask );
++configRUN_TIME_COUNTER_TYPE runtime = ssKernelRuntime(xTask);
++configRUN_TIME_COUNTER_TYPE divisor = ssKernelRuntimeNow() / 100;
++{ configRUN_TIME_COUNTER_TYPE ss_trace_result = (divisor ? runtime / divisor : 0); traceRETURN_ulTaskGetRunTimePercent(ss_trace_result); return ss_trace_result; }
++#else
++
+         TCB_t * pxTCB;
+         configRUN_TIME_COUNTER_TYPE ulTotalTime, ulReturn, ulTaskRunTime;
+ 
+@@ -8697,7 +9687,9 @@
+         traceRETURN_ulTaskGetRunTimePercent( ulReturn );
+ 
+         return ulReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* if ( configGENERATE_RUN_TIME_STATS == 1 ) */
+ /*-----------------------------------------------------------*/
+@@ -8706,6 +9698,15 @@
+ 
+     configRUN_TIME_COUNTER_TYPE ulTaskGetIdleRunTimeCounter( void )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_ulTaskGetIdleRunTimeCounter();
++ssKernelSuspendAll();
++configRUN_TIME_COUNTER_TYPE result = 0;
++for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) result += ssKernelRuntime(xIdleTaskHandles[cpu]);
++(void)ssKernelResumeAll();
++{ configRUN_TIME_COUNTER_TYPE ss_trace_result = (result); traceRETURN_ulTaskGetIdleRunTimeCounter(ss_trace_result); return ss_trace_result; }
++#else
++
+         configRUN_TIME_COUNTER_TYPE ulTotalTime = 0, ulTimeSinceLastSwitchedIn = 0, ulIdleTaskRunTime = 0;
+         BaseType_t i;
+ 
+@@ -8742,7 +9743,9 @@
+         traceRETURN_ulTaskGetIdleRunTimeCounter( ulIdleTaskRunTime );
+ 
+         return ulIdleTaskRunTime;
+-    }
++    
++#endif
++}
+ 
+ #endif /* if ( ( configGENERATE_RUN_TIME_STATS == 1 ) && ( INCLUDE_xTaskGetIdleTaskHandle == 1 ) ) */
+ /*-----------------------------------------------------------*/
+@@ -8751,6 +9754,12 @@
+ 
+     configRUN_TIME_COUNTER_TYPE ulTaskGetIdleRunTimePercent( void )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++traceENTER_ulTaskGetIdleRunTimePercent();
++configRUN_TIME_COUNTER_TYPE divisor = (ssKernelRuntimeNow() * configNUMBER_OF_CORES) / 100;
++{ configRUN_TIME_COUNTER_TYPE ss_trace_result = (divisor ? ulTaskGetIdleRunTimeCounter() / divisor : 0); traceRETURN_ulTaskGetIdleRunTimePercent(ss_trace_result); return ss_trace_result; }
++#else
++
+         configRUN_TIME_COUNTER_TYPE ulTotalTime, ulReturn;
+         configRUN_TIME_COUNTER_TYPE ulRunTimeCounter = 0;
+ 
+@@ -8781,7 +9790,9 @@
+         traceRETURN_ulTaskGetIdleRunTimePercent( ulReturn );
+ 
+         return ulReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* if ( ( configGENERATE_RUN_TIME_STATS == 1 ) && ( INCLUDE_xTaskGetIdleTaskHandle == 1 ) ) */
+ /*-----------------------------------------------------------*/
+@@ -9019,6 +10030,22 @@
+  */
+ void vTaskResetState( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++configASSERT(!xSchedulerRunning);
++if (ssKernelInitialized) {
++    for (unsigned slot = 0; slot < SS_OWNER_SLOTS; ++slot)
++        configASSERT(!atomic_load_explicit(&ssKernelRegistry.descriptor[slot].references, memory_order_acquire));
++}
++ssKernelInitialized = false;
++ssKernelIdleNext = 0;
++memset(ssKernelCPUs, 0, sizeof(ssKernelCPUs));
++memset(ssKernelTasks, 0, sizeof(ssKernelTasks));
++for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) {
++    atomic_store_explicit(&ssKernelLoad[cpu], 0, memory_order_relaxed);
++    __atomic_store_n(&pxCurrentTCBs[cpu], NULL, __ATOMIC_RELEASE);
++    xIdleTaskHandles[cpu] = NULL;
++}
++
+     BaseType_t xCoreID;
+ 
+     /* Task control block. */
+@@ -9067,5 +10094,58 @@
+         }
+     }
+     #endif /* #if ( configGENERATE_RUN_TIME_STATS == 1 ) */
++
++#else
++
++    BaseType_t xCoreID;
++
++    /* Task control block. */
++    #if ( configNUMBER_OF_CORES == 1 )
++    {
++        pxCurrentTCB = NULL;
++    }
++    #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
++
++    #if ( INCLUDE_vTaskDelete == 1 )
++    {
++        uxDeletedTasksWaitingCleanUp = ( UBaseType_t ) 0U;
++    }
++    #endif /* #if ( INCLUDE_vTaskDelete == 1 ) */
++
++    #if ( configUSE_POSIX_ERRNO == 1 )
++    {
++        FreeRTOS_errno = 0;
++    }
++    #endif /* #if ( configUSE_POSIX_ERRNO == 1 ) */
++
++    /* Other file private variables. */
++    uxCurrentNumberOfTasks = ( UBaseType_t ) 0U;
++    xTickCount = ( TickType_t ) configINITIAL_TICK_COUNT;
++    uxTopReadyPriority = tskIDLE_PRIORITY;
++    xSchedulerRunning = pdFALSE;
++    xPendedTicks = ( TickType_t ) 0U;
++
++    for( xCoreID = 0; xCoreID < configNUMBER_OF_CORES; xCoreID++ )
++    {
++        xYieldPendings[ xCoreID ] = pdFALSE;
++    }
++
++    xNumOfOverflows = ( BaseType_t ) 0;
++    uxTaskNumber = ( UBaseType_t ) 0U;
++    xNextTaskUnblockTime = ( TickType_t ) 0U;
++
++    uxSchedulerSuspended = ( UBaseType_t ) 0U;
++
++    #if ( configGENERATE_RUN_TIME_STATS == 1 )
++    {
++        for( xCoreID = 0; xCoreID < configNUMBER_OF_CORES; xCoreID++ )
++        {
++            ulTaskSwitchedInTime[ xCoreID ] = 0U;
++            ulTotalRunTime[ xCoreID ] = 0U;
++        }
++    }
++    #endif /* #if ( configGENERATE_RUN_TIME_STATS == 1 ) */
++
++#endif
+ }
+ /*-----------------------------------------------------------*/

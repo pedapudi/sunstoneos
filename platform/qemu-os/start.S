@@ -133,4 +133,6 @@ synchronous_exception:
     b platform_exit_privileged
 .Lexception:
     ldp x0, x1, [sp], #16
+    // An exception from an EL0 task that the failure return admits does not return here.
+    bl os_cpu_return_el0_try
     b platform_exception
