@@ -38,11 +38,11 @@ An interrupt may call the FromISR API when its stored priority is at least 0xd8,
 | 27 | Shared timer (CNTV) | Non-secure 1 (`continue.c:120-121`) | 0xe8 when the OS writes 0xd8 (`platform.c:121`); 0xd8 where EL3 sets it (NPU finite image, `apps/npu-finite/deadline.c:15-20`) | 0xd0 (`config.intid27.stored_priority_written_ns`, measured `priority_after_write`); 0xb0 in the NPU finite image (entry `1793587317962103239-5bbfc48d`) | Per core; core 0 handles it | Level (`continue.c:122-124`) |
 | 30 | Scheduler tick (CNTP) | Non-secure 1 (`cpu_continue.c:115`) | 0xf0 for the OS write of 0xe0 (`platform.c:116`) | 0xe0 (measured `priority_after_write`) | Per core; core 0 handles it | Level (`cpu_continue.c:118`) |
 | 97 | NPU | Non-secure 1 (`irq_table.c:70-71`) | 0xd8 (`sunstone-manifest.py:347`) | 0xb0 (measured) | Core 1, `OS_NPU_CORE` (`apps/os/npu.h:6`, `irq_table.c:76`) | Level (`irq_table.c:72`) |
-| 187 | USB2 host | Non-secure 1 | 0xb0 (`sunstone-manifest.py:346`) | 0x60 (derived, `config.spi187.ns_view_priority`) | Core 0 | Level |
+| 187 | USB2 host | Non-secure 1 | 0xd8 (`sunstone-manifest.py:346`) | 0xb0 (derived, `config.spi187.ns_view_priority`) | Core 0 | Level |
 | 71, 143, 95 | Thermal, DMA0, GPU | Non-secure 1 | 0xd8 (`sunstone-manifest.py:345-350`) | 0xb0 | Core 0 (GPU: application core) | Level |
 
-The USB2 route stores 0xb0, below the 0xd8 floor of the API mask, and `apps/board/host_irq.c:40` compares the
-Non-secure read with 0xb0 where the rule gives 0x60. That file belongs to the USB stream.
+Every route stores at least 0xd8, the stored value of the API mask; the route installer refuses a lower priority
+(`A733_IRQ_TABLE_MIN_PRIORITY`, `platform/a733-smp-cached/irq_table.h`).
 
 ## CPU identity (every core read at EL1)
 

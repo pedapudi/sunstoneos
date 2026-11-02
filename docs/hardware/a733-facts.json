@@ -21612,7 +21612,7 @@
    },
    "core": null,
    "status": "from-source",
-   "value": 176,
+   "value": 216,
    "source_ref": "tools/sunstone-manifest.py:346 applied at platform/a733-smp-cached/irq_table.c:73-74",
    "note": "route of images with SUNSTONE_BOARD_USB2_IRQ"
   },
@@ -21640,7 +21640,7 @@
    },
    "core": null,
    "status": "derived",
-   "value": 96,
+   "value": 176,
    "note": "IHI0069 4.8.1: (stored << 1) & 0xff; INTID 97 measured 0xb0 for stored 0xd8; route of images with SUNSTONE_BOARD_USB2_IRQ",
    "derived_from": "config.spi187.stored_priority"
   },

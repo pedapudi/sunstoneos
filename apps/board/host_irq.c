@@ -1,6 +1,7 @@
 #include "application.h"
 #include "host_irq.h"
 #include "gicv3_spi.h"
+#include "a733_gic_priority.h"
 #ifdef SUNSTONE_BOARD_HOST_DEADLINE
 #include "sunstone_deadline.h"
 static struct {uint64_t deadline;unsigned initialized,ready;} schedule;
@@ -18,11 +19,13 @@ int board_host_irq_deadline_init(void)
 void board_host_irq_schedule(uint64_t deadline,int ready)
 {schedule.deadline=deadline;schedule.ready=!!ready;}
 #endif
-/* The EL3 route installer establishes Group1NS, level-high, CPU0 and0xb0.
+/* The EL3 route installer establishes Group1NS, level-high, CPU0 and stored
+ * priority 0xd8, which reads as A733_GIC_NS_VIEW(0xd8) at Non-secure EL1.
  * All task/ISR binding fields share the existing kernel critical section. */
 static const struct gicv3_spi source={0x03400000,187};
 static struct {unsigned bound,armed,masked,stopped,fault,draining,burst,deferred;atomic_uint pending,notifications;} irq;
-_Static_assert((configMAX_API_CALL_INTERRUPT_PRIORITY<<portPRIORITY_SHIFT)<=0xb0,
+#define USB2_IRQ_STORED_PRIORITY 0xd8u
+_Static_assert(USB2_IRQ_STORED_PRIORITY>=A733_GIC_STORED_API_FLOOR(configMAX_API_CALL_INTERRUPT_PRIORITY<<portPRIORITY_SHIFT),
     "USB2 priority must permit FreeRTOS FromISR calls");
 static uint32_t read32(unsigned off)
 {return *(volatile const uint32_t *)(uintptr_t)(0x03400000u+off);}
@@ -37,7 +40,7 @@ int board_host_irq_bind(void)
 {
     if(irq.bound||!board.handles[4]||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED||
        (read32(0)&(1u<<31))||((read32(0x114)|read32(0x214)|read32(0x314))&(1u<<27))||
-       ((read32(0xc2c)>>22)&3)||(read32(0x4b8)>>24)!=0xb0)return 0;
+       ((read32(0xc2c)>>22)&3)||(read32(0x4b8)>>24)!=A733_GIC_NS_VIEW(USB2_IRQ_STORED_PRIORITY))return 0;
     irq.bound=irq.masked=1;return 1;
 }
 void board_host_irq(void)

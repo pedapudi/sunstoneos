@@ -454,7 +454,7 @@ SEEDS.append(dict(name='gic.cpuif.icc_igrpen0_el1.read_traps_to_el3', source='IC
 FROM_SOURCE = 'from-source'
 ROUTES = (  # INTID, core, stored (Secure) priority, route-table file and line, images
     (71, 0, 0xd8, 'tools/sunstone-manifest.py:345', 'every OS image'),
-    (187, 0, 0xb0, 'tools/sunstone-manifest.py:346', 'images with SUNSTONE_BOARD_USB2_IRQ'),
+    (187, 0, 0xd8, 'tools/sunstone-manifest.py:346', 'images with SUNSTONE_BOARD_USB2_IRQ'),
     (97, 1, 0xd8, 'tools/sunstone-manifest.py:347', 'NPU images (OS_NPU_CORE is 1, apps/os/npu.h:6)'),
     (143, 0, 0xd8, 'tools/sunstone-manifest.py:348-349', 'audio and DMA images'),
     (95, 0, 0xd8, 'tools/sunstone-manifest.py:350', 'GPU images (core 2 or the application core)'),

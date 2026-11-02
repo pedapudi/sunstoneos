@@ -327,14 +327,13 @@ def test_instructions(image):
 # (include/a733_gic_priority.h, tools/hw_facts.py ns_view and stored_from_ns). These reviewed files still do, each with
 # the number of comparisons: the stream that owns the file changes it, or the image reads the GIC in its own monitor's view.
 LITERAL_COMPARISONS = {
-    'apps/board/host_irq.c': (2, 'USB stream: the route stores 0xb0, whose Non-secure view is 0x60, and the ceiling check compares in the stored view'),
     'apps/npu-finite/deadline.c': (1, 'NPU stream: expects the Non-secure view 0xb0 of the stored 0xd8'),
     'apps/spi/irq.c': (2, 'single-core SPI image: compares with 0xb0 in its own monitor view'),
     'drivers/pwm/a733_pwm.c': (1, 'single-core PWM image: compares with 0xd8 in its own monitor view'),
     'checks/a733-irq-table.c': (1, 'model of the route installer: stored priority'),
     'checks/gpu-single-core.py': (1, 'single-core GPU image model'), 'checks/hdmi-audio-boot.py': (1, 'single-core image model'),
     'checks/pwm-single-core.py': (1, 'single-core PWM image model'), 'checks/thermal-single-core.py': (1, 'single-core thermal image model'),
-    'checks/sunstone-image-link.py': (1, 'route floor 0xb0 compared with the stored priority; the API floor in the stored view is 0xd8'),
+    'checks/sunstone-image-link.py': (1, 'route floor: the stored API floor 0xd8 compared with the stored priority'),
 }
 PRIORITY_LITERAL = re.compile(r'(?:==|!=|<=|>=|(?<![<])<(?![<])|(?<![>])>(?![>]))\s*(?:UINT32_C\()?0x(?:b0|d8)(?:0{6})?u?\b|'
                               r'\b0x(?:b0|d8)(?:0{6})?u?\)?\s*(?:==|!=|<=|>=)')

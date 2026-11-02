@@ -343,7 +343,7 @@ def c_tables(m):
              '#ifdef SUNSTONE_BOARD_USB2_IRQ', 'extern void board_host_irq(void);', '#endif',
              '#ifdef SUNSTONE_A733_HW_FACTS', 'extern void os_hw_facts_irq(void);', '#endif',
              'const struct a733_irq_route a733_irq_routes[] = {', '    {71,0,0xd8,os_thermal_irq},',
-             '#ifdef SUNSTONE_BOARD_USB2_IRQ', '    {187,0,0xb0,board_host_irq},', '#endif',
+             '#ifdef SUNSTONE_BOARD_USB2_IRQ', '    {187,0,0xd8,board_host_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_NPU', '    {97,OS_NPU_CORE,0xd8,os_npu_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_AUDIO', '    {143,0,0xd8,os_audio_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_DMA', '    {143,0,0xd8,os_dma_irq},', '#endif',
