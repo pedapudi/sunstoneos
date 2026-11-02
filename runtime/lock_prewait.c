@@ -45,6 +45,7 @@ static inline uint32_t pw_arm(const volatile uint32_t *word)
 extern uint32_t xPortLocks[][16];
 /* One 64-byte line per core: the second word is the set of locks the core holds. */
 extern volatile uint64_t xPortCoreStates[][8];
+extern volatile uint64_t ullCriticalNestings[];
 #ifdef SUNSTONE_LATENCY_SWEEP
 #define REJECT(core, reason) ss_latency_prewait_reject((unsigned)(core), (reason))
 extern void ss_latency_prewait_reject(unsigned core, unsigned reason);
@@ -58,12 +59,20 @@ void ss_lock_prewait(void)
     uint64_t task, pmr, daif;
     __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(task));
     const unsigned core = (unsigned)((task >> CORE_SHIFT) & 0xffu);
-    if (!((task >> EL1_BIT) & 1u) || !(task & TCB_MASK)) { REJECT(core, 0); return; }
-    __asm__ volatile("mrs %0, icc_pmr_el1\n mrs %1, daif" : "=r"(pmr), "=r"(daif));
-    /* The mask reads back in the Non-secure view (a733_gic_priority.h), so test it as the port does: open is any
-     * value above the API mask, not the 0xff that was written. */
-    if (pmr <= portMAX_API_PRIORITY_MASK) { REJECT(core, 1); return; }
-    if (daif & 0x80u) { REJECT(core, 2); return; }
+    if (!(task & TCB_MASK)) { REJECT(core, 0); return; }
+    if ((task >> EL1_BIT) & 1u) {
+        __asm__ volatile("mrs %0, icc_pmr_el1\n mrs %1, daif" : "=r"(pmr), "=r"(daif));
+        /* The mask reads back in the Non-secure view (a733_gic_priority.h), so test it as the port does: open is
+         * any value above the API mask, not the 0xff that was written. */
+        if (pmr <= portMAX_API_PRIORITY_MASK) { REJECT(core, 1); return; }
+        if (daif & 0x80u) { REJECT(core, 2); return; }
+    } else if (ullCriticalNestings[core]) {
+        /* An EL0 task cannot read the mask. It is outside every critical section when the nesting count is zero,
+         * and then the mask is open: the only other way to mask is a bare portSET_INTERRUPT_MASK, which the lock
+         * ownership test below also excludes whenever it holds the task lock. */
+        REJECT(core, 1);
+        return;
+    }
     /* A task that suspended the scheduler holds the task lock with the mask open. Waiting for the
      * queue behind its own hold to shrink would wait for itself. */
     if (xPortCoreStates[core][1] & (UINT64_C(1) << TASK_LOCK)) { REJECT(core, 3); return; }
