@@ -38,7 +38,7 @@ DMA0 needs physical channel, controller and data-access authority and transfer t
 Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-memory-dma-20261101.md).
 
 <!-- evidence-table:begin -->
-5 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+6 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -47,4 +47,5 @@ Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `too
 | `1793600534434449836-8f1652a3` | 2026-11-02 | 3-1 | `1a8e6ff37cc0` | returned | failed | run_total 20.572 s, sum_one_a55 5.46 GB/s, sum_two_a55 10.02 GB/s, sum_four_a55 10.76 GB/s, sum_six_a55 9.07 GB/s, sum_one_a76 14.81 GB/s, sum_two_a76 14.15 GB/s, sum_four_a55_two_a76 9.34 GB/s, sum_eight 8.27 GB/s, sum_one_a55_swprefetch 4.19 GB/s, sum_two_a55_swprefetch 6.62 GB/s, sum_four_a55_swprefetch 9.53 GB/s, sum_six_a55_swprefetch 8.36 GB/s, sum_one_a76_swprefetch 13.8 GB/s, sum_two_a76_swprefetch 13.75 GB/s, sum_four_a55_two_a76_swprefetch 8.93 GB/s, sum_eight_swprefetch 7.94 GB/s |
 | `1793600624723356256-fb710c2d` | 2026-11-02 | 3-1 | `5c6bbac1b12b` | returned | failed | run_total 21.112 s, sum_one_a55 5.49 GB/s, sum_two_a55 10.01 GB/s, sum_four_a55 10.82 GB/s, sum_six_a55 9.07 GB/s, sum_one_a76 14.86 GB/s, sum_two_a76 14.08 GB/s, sum_four_a55_two_a76 9.36 GB/s, sum_eight 8.25 GB/s, sum_one_a55_mode5 5.17 GB/s, sum_two_a55_mode5 4.8 GB/s, sum_four_a55_mode5 7.32 GB/s, sum_six_a55_mode5 7.22 GB/s, sum_one_a76_mode5 12.45 GB/s, sum_two_a76_mode5 11.75 GB/s, sum_four_a55_two_a76_mode5 8.38 GB/s, sum_eight_mode5 7.45 GB/s, sum_four_a55_mode6 6.88 GB/s, sum_six_a55_mode6 5.93 GB/s, sum_two_a76_mode6 11.3 GB/s, sum_eight_mode6 5.84 GB/s |
 | `1793600664425885881-a871e54d` | 2026-11-02 | 3-1 | `e271e3b62bb8` | result-mismatch | passed | run_total 12.065 s, scan_pages 6.25869e+06, signature_pages 3.12934e+06, scan_time 0.555 s, signature_time 0.975 s, address_failed 0, mismatches 0 |
+| `1793603354809199340-a4ed0f70` | 2026-11-02 | 3-1 | `1b2b6e8734ca` | returned | failed | run_total 15.295 s, region_bytes 1.07374e+09 B, read_control_40mib 1.87 GB/s, read_gib_blocks 1.87 GB/s, read_mib2_blocks 1.87 GB/s, cpu_clock 494 MHz, l1d_tlb_refill_gib_blocks 262314, l2d_tlb_refill_gib_blocks 3, l2d_tlb_refill_mib2_blocks 513, dtlb_walk_gib_blocks 2, dtlb_walk_mib2_blocks 512, el0_cases_faulted 7, el0_cases_succeeded 6 |
 <!-- evidence-table:end -->
