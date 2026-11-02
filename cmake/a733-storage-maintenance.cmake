@@ -88,7 +88,7 @@ set(storage_inputs ${storage_sources} ${storage_headers} ${storage_usb_headers}
   "${storage_root}/platform/a733-smp-cached/FreeRTOSConfig.h" "${storage_root}/include/a733_smp_placement.h"
   "${storage_base}/portmacro.h" "${storage_build}/tinyusb/musb_def.h")
 file(GLOB storage_kernel_headers "${FREERTOS_DIR}/include/*.h")
-list(APPEND storage_inputs ${storage_kernel_headers})
+list(APPEND storage_inputs ${storage_kernel_headers} ${a733_owner_inputs})
 list(REMOVE_DUPLICATES storage_inputs)
 # The literal profile names the intended code generation; the effective flags
 # and inherited options record what the compiler actually receives.

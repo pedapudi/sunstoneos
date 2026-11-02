@@ -9,12 +9,16 @@ import re
 import subprocess
 
 
+CHECK_INPUTS = ['checks/scheduler-partitioned-qemu.c', 'checks/scheduler-partitioned-qemu-config/FreeRTOSConfig.h', 'checks/smp-kernel.c', 'checks/smp8-soak.c', 'checks/smp-runtime.cc', 'cmake/scheduler-partitioned.cmake', 'cmake/smp.cmake', 'patches/freertos-partitioned-port-asm.patch', 'kernel/scheduler']
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-dir', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--qemu', required=True, type=Path)
     parser.add_argument('--cpu', default='cortex-a76')
+    parser.add_argument('--nm', default='/usr/bin/llvm-nm-21', type=Path)
     parser.add_argument('--case', action='append', choices=['kernel', 'soak', 'concurrent', 'runtime'])
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -29,6 +33,9 @@ def main():
     for case in args.case or ['kernel', 'concurrent', 'soak']:
         name, cores, marker = cases[case]
         image = args.build_dir.resolve() / (name + '.elf')
+        symbols = subprocess.check_output([str(args.nm), '--defined-only', str(image)], text=True)
+        for hook in ('ssKernelOwnerIRQExit', 'ssKernelOwnerYieldTail'):
+            assert re.search(r' [Tt] ' + hook + r'$' , symbols, re.M), f'{image}: private fork hook {hook} missing'
         command = [str(args.qemu.resolve()), '-machine',
             'virt,gic-version=3,secure=off,virtualization=off', '-accel', 'tcg,thread=multi',
             '-cpu', args.cpu, '-smp', str(cores), '-m', '128M', '-nographic', '-monitor', 'none',

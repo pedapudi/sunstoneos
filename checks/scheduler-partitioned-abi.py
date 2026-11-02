@@ -8,6 +8,9 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 
 
+CHECK_INPUTS = ['cmake/scheduler-partitioned.cmake', 'cmake/a733-smp-cached.cmake', 'cmake/a733-board.cmake', 'cmake/a733-storage-maintenance.cmake', 'include/FreeRTOSConfig.h', 'platform/qemu-smp/freertos_tasks_c_additions.h', 'platform/a733-smp-cached/freertos_tasks_c_additions.h', 'patches/freertos-partitioned-layout.patch', 'patches/freertos-partitioned-tasks.patch', 'patches/freertos-partitioned-api.patch', 'kernel/scheduler']
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-dir', required=True, type=Path)
@@ -43,6 +46,24 @@ def main():
             'static_assert(__is_trivially_copyable(StaticTask_t), "application task storage ABI");\n'
             'StaticTask_t external_task_storage;\n')
         subprocess.run([str(args.cc), '-std=c++23', *flags, str(application)], check=True, env=env)
+    private = args.build_dir.resolve() / 'freertos-a733-smp-cached'
+    native = args.output / 'native-network'
+    native.mkdir(exist_ok=True)
+    (native / 'FreeRTOSConfig.h').write_text('#include "' + str(ROOT / 'apps/board/FreeRTOSConfig.h') + '"\n')
+    text = (private / 'tasks.c').read_text()
+    prefix = text.split('#define SS_FREERTOS_TASKS_TRANSLATION 1', 1)[0]
+    # The adapter insertion follows an opening selector conditional. Complete
+    # that conditional after retaining the exact upstream private TCB layout.
+    prefix += '#endif\n'
+    translation = native / 'layout.c'
+    translation.write_text(prefix + '\n#include <stddef.h>\n'
+        '_Static_assert(configSUPPORT_DYNAMIC_ALLOCATION == 1, "native network selector");\n'
+        '_Static_assert(sizeof(TCB_t) == sizeof(StaticTask_t), "native network storage size");\n'
+        '_Static_assert(_Alignof(TCB_t) == _Alignof(StaticTask_t), "native network storage alignment");\n'
+        '_Static_assert(offsetof(TCB_t, xTLSBlock) == offsetof(StaticTask_t, xDummy17), "native network TLS offset");\n')
+    subprocess.run([str(args.cc), '-std=c11', '-I' + str(native), *flags,
+                    str(translation)], check=True, env=env)
+    print('PASS native board/network task layout with dynamic selector; dynamic task execution remains gated')
     print('PASS partitioned ABI: native and QEMU TCB size/alignment, owner slot, real newlib TLS and external C++ storage')
 
 

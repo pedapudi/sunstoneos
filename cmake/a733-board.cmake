@@ -153,6 +153,9 @@ list(APPEND board_sources ${board_tcp_sources} "${FREERTOS_DIR}/event_groups.c"
   "${FREERTOS_DIR}/portable/MemMang/heap_4.c"
   "${SUNSTONE_TCP_DIR}/source/portable/BufferManagement/BufferAllocation_1.c")
 set_source_files_properties(${board_tcp_sources} PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter")
+if(SUNSTONE_PARTITIONED_SCHEDULER)
+  sunstone_scheduler_partitioned_sources(board_sources "${storage_base}")
+endif()
 add_executable(sunstone-a733-board EXCLUDE_FROM_ALL ${board_sources} $<TARGET_OBJECTS:a733-board-usb2-host>)
 target_include_directories(sunstone-a733-board PRIVATE "${board_build}")
 if(SUNSTONE_BOARD_USB2_IRQ)

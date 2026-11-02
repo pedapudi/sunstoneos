@@ -59,7 +59,19 @@ set(a733_identity_inputs ${a733_sources}
 file(GLOB a733_kernel_headers "${FREERTOS_DIR}/include/*.h")
 list(APPEND a733_identity_inputs ${a733_kernel_headers}
   "${a733_root}/include/platform.h" "${a733_root}/runtime/include/string.h")
-set(a733_identity "partitioned=${SUNSTONE_PARTITIONED_SCHEDULER};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};armv8-a;O2;WBWA;Device-monitor;8")
+set(a733_identity "${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};armv8-a;O2;WBWA;Device-monitor;8")
+if(SUNSTONE_PARTITIONED_SCHEDULER)
+  file(GLOB a733_owner_headers "${a733_root}/kernel/scheduler/*.h"
+    "${a733_build}/include/*.h")
+  set(a733_owner_inputs ${a733_owner_headers}
+    "${a733_root}/kernel/scheduler/freertos.c"
+    "${a733_root}/cmake/scheduler-partitioned.cmake")
+  foreach(name queue event_groups stream_buffer timers)
+    list(APPEND a733_owner_inputs "${a733_build}/${name}.c")
+  endforeach()
+  list(APPEND a733_identity_inputs ${a733_owner_inputs})
+  string(APPEND a733_identity ";partitioned")
+endif()
 if(SUNSTONE_A733_PERF_SESSION)
   list(APPEND a733_identity_inputs "${a733_root}/platform/a733-smp-cached/perf_session.h")
   string(APPEND a733_identity ";perf-session")
