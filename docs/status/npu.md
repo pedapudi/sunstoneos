@@ -23,11 +23,17 @@ operations with a second input from a graph input), `mul` (neural-network operat
 input from VIP SRAM), `deep` (three neural-network operations with second inputs and an activation, outputs in VIP
 SRAM), `mm` (batched matrix product, four operations, second input from a graph input at slice offsets) and `glu` (two
 transposes and a stream-processor gate with its second input in VIP SRAM). The layer-normalization graphs `ln176` and
-`ln64`, which use the dynamic-input section, are not yet run. Per-graph time with the LOAD is about 1 ms. The finite idle benchmark qualifies internal clock gating on 3-3 at 852 MHz/800 mV: five rounds of baseline, control and gating pass every limit of the design (throughput, p99, maximum latency, CPU time), every resume of the 11 ms and 100 ms gaps is within 100 µs (largest 25 µs) and the 9 ms gaps never gate.
+`ln64`, which use the dynamic-input section, are not yet run. Per-graph time with the LOAD is about 1 ms. An NPU access outside the page tables
+faults and the service recovers (3-1, 852 MHz/800 mV, normal return): five graphs, each with one descriptor pointer aimed
+at an address the tables do not map (an input or an output; a DRAM canary of the image for four, page 0 at `0x180` for
+one), failed one by one with an NPU MMU exception at the aimed address, MMU status 1 (slave not present), the canary
+CRC unchanged after each and the session usable; a relu job after the five equals the simulator. Each recovery takes about
+32 ms, of which 20 ms is the vendor's cancel poll, whose completion bit never appeared; the reset and re-initialization
+that follow restore the NPU. See [the reference](../reference-backsolve-npu.md#npu-mmu-exceptions). The finite idle benchmark qualifies internal clock gating on 3-3 at 852 MHz/800 mV: five rounds of baseline, control and gating pass every limit of the design (throughput, p99, maximum latency, CPU time), every resume of the 11 ms and 100 ms gaps is within 100 µs (largest 25 µs) and the 9 ms gaps never gate.
 
 ## Open work
 
-1. Run the layer-normalization test graphs (dynamic-input section) and show on a board that NPU accesses outside the mapping fault, including a stream-processor operation's reads and writes; then drop the stream-processor program catalogue from the loader (`docs/designs/npu-loader-admission.md`).
+1. Run the layer-normalization test graphs (dynamic-input section); the faults of the unmapped accesses are shown (input and output, activation and stream-processor operations); then drop the stream-processor program catalogue from the loader (`docs/designs/npu-loader-admission.md`).
 2. Call the idle power owner from the OS NPU service (`npu_runtime_queue_power_start` is not called by the operating system image), then repeat the idle benchmark there. Measure energy and the break-even idle time: the PMIC provider exposes no DCDC2 current or power readback. Qualify shared SRAM access while the clocks are gated and recovery from a fault while suspended.
 3. Qualify the combined image repeatedly and across both models: the active-cancellation image, and a 20-cycle start, inference, CLOSE and local-stop image.
 4. Qualify the EL0 queue and prepared joined streams: review and finish the saved generic sequence registration and returning diagnostic (`npu-el0-next-1101`), add the public-ring predicate to the power owner, then run the control and the EL0 images.
@@ -41,7 +47,7 @@ transposes and a stream-processor gate with its second input in VIP SRAM). The l
 Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-36 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+39 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -81,4 +87,7 @@ Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added
 | `1793599501583289076-4e5e8892` | 2026-11-02 | 3-1 | `83ef6b2a55fb` | result-mismatch | failed | run_total 22.181 s, graphs 8, graphs_matching 3, max_error_16bit 17 |
 | `1793599785143842348-e58c3f38` | 2026-11-02 | 3-1 | `653e167425fb` | result-mismatch | passed | run_total 21.663 s, graphs 8, graphs_matching 8, differing_bytes 0, graph_us_min 984.3 us, graph_us_max 999.5 us |
 | `1793599845892192862-30dc9323` | 2026-11-02 | 3-1 | `7a00716d1fd9` | returned | passed | run_total 21.941 s, graphs 7, graphs_matching 7, differing_bytes 0, graph_us_min 984.9 us, graph_us_max 999.2 us |
+| `1793600480786110831-4d4877ee` | 2026-11-02 | 3-1 | `bd9603642b7c` | watchdog-reset | failed | run_total 18.745 s |
+| `1793601039576662539-3cfb241d` | 2026-11-02 | 3-1 | `dbc06474fcbc` | watchdog-reset | inconclusive | run_total 18.69 s |
+| `1793601982806302701-49b951b4` | 2026-11-02 | 3-1 | `69a7aa80419f` | returned | passed | run_total 21.817 s |
 <!-- evidence-table:end -->
