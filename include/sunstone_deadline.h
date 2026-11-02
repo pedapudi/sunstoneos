@@ -6,6 +6,18 @@
  * including expiry: a completion can race the deadline or cancellation.
  * Register once in each owning task. Registered tasks must not be deleted or
  * have their handles reused. There is no allocation or registration hot path. */
+/* Owner slots, one for each task that registers. The OS image counts its own
+ * tasks from the service declaration (apps/os/os-services.h). Probe and
+ * host-check builds that name no count get this small default, enough for
+ * their handful of tasks. */
+#ifndef SUNSTONE_DEADLINE_SLOTS
+#ifdef SUNSTONE_A733_OS
+#include "os-services.h"
+#define SUNSTONE_DEADLINE_SLOTS OS_DEADLINE_OWNERS
+#else
+#define SUNSTONE_DEADLINE_SLOTS 16u
+#endif
+#endif
 enum sunstone_deadline_result {
     SUNSTONE_DEADLINE_ERROR=-1,
     SUNSTONE_DEADLINE_NOTIFIED=0,

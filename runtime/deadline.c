@@ -2,10 +2,11 @@
 #include "task.h"
 #include "sunstone_deadline.h"
 #include <stdatomic.h>
-/* Fixed admission bound, including application and board device owners. Task
- * handles remain valid for this image's lifetime. Each wait uses its owner's
- * slot even when the scheduler migrates the task to another CPU. */
-#define DEADLINE_SLOTS 16u
+/* One slot for each registering task, sized by the image build
+ * (SUNSTONE_DEADLINE_SLOTS, sunstone_deadline.h). Task handles remain valid for
+ * this image's lifetime. Each wait uses its owner's slot even when the
+ * scheduler migrates the task to another CPU. */
+#define DEADLINE_SLOTS SUNSTONE_DEADLINE_SLOTS
 struct deadline_slot {
     _Atomic(TaskHandle_t) owner;
     atomic_uint_fast64_t deadline;

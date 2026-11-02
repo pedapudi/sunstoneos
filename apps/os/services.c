@@ -17,6 +17,9 @@ uint64_t a733_smp_counter(void);
 uint64_t board_runtime_deadline_us(void);
 /* Windows bound active work and the interval from a wake to its checked
  * result. They are configuration, not board measurements of worst latency. */
+/* Every service, the SD owner and the GPU peer register a deadline owner. */
+_Static_assert(SUNSTONE_DEADLINE_SLOTS >= OS_DEADLINE_OWNERS,
+    "SUNSTONE_DEADLINE_SLOTS is smaller than the image's deadline owners");
 static atomic_uint_fast64_t seen[OS_SERVICES];
 static _Atomic(TaskHandle_t) blocked_owner[OS_SERVICES];
 /* Protected by the kernel critical section, including paired publication. */
