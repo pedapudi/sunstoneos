@@ -83,7 +83,7 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
             a733_extents_intersect(b->device, b->bytes, 0x400000, 0x80000)) return 0;
         if (b->role == A733_NPU_BUFFER_BOOTSTRAP) ++bootstraps;
         if ((b->role == A733_NPU_BUFFER_COMMAND || b->role == A733_NPU_BUFFER_BOOTSTRAP) &&
-            b->bytes < A733_NPU_FETCH_BYTES) return 0;
+            b->bytes < A733_NPU_MIN_COMMAND_BYTES) return 0;
         for (size_t j = 0; j < i; ++j) {
             const struct a733_npu_buffer *p = &buffers[j];
             if (a733_extents_intersect(b->cpu, b->bytes, p->cpu, p->bytes) ||

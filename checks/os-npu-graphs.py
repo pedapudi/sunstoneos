@@ -53,7 +53,10 @@ for label, listing in (('a1', 'models-a1.json'), ('a2', 'models-a2.json'), ('b',
     exe = host_rtos.build(work / 'exe', [*UNITS, generated / 'npu-models.c'],
                           'os-npu-graphs', defines=DEFINES, includes=includes,
                           flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'], link=['-Wl,--gc-sections'])
-    done = subprocess.run([str(exe), '22', str(inputs)], capture_output=True, text=True, env=environment(), timeout=1800)
+    # The reservation also covers graphs registered later (7 more of 262144 bytes, tensors of 262144 bytes, as the manifest of
+    # the graphs application declares): small graphs make those bounds the size of every region, whole pages.
+    done = subprocess.run([str(exe), '22', str(inputs)], capture_output=True, text=True,
+                          env={**environment(), 'NPU_BOUNDS': '7,262144,262144'}, timeout=1800)
     (work / 'run.log').write_text(done.stdout + done.stderr)
     assert done.returncode == 0, (label, done.stdout[-600:], done.stderr[-800:])
     ran.append((label, len(names)))
@@ -94,4 +97,17 @@ done = subprocess.run([str(exe), '22', str(inputs)], capture_output=True, text=T
 (work / 'run.log').write_text(done.stdout + done.stderr)
 assert done.returncode == 0, ('unseen', done.stdout[-600:], done.stderr[-800:])
 print('unseen graph (digest in no table):', done.stdout.strip().splitlines()[-1])
+# The queue study's receipt (apps/npu-graphs, NPU_GRAPHS_QUEUE): the decoder and the expectation agree on a receipt of seven rows.
+import struct
+hostspec = importlib.util.spec_from_file_location('npu_graphs_host', ROOT / 'apps/npu-graphs/host.py')
+graphs_host = importlib.util.module_from_spec(hostspec); hostspec.loader.exec_module(graphs_host)
+depths = [1, 2, 4, 8, 16, 32, 64]
+words = [0] * 216
+words[0:9] = [graphs_host.MAGIC, 1, graphs_host.BYTES, 7, 7, 7, 1, 100, 24 * 7000]
+for i, k in enumerate(depths):
+    words[16 + 8 * i:24 + 8 * i] = [i, k, 1000, 0, 24 * 50000, 3, 0, 24 * 50]
+rows = graphs_host.decode(struct.pack('<216Q', *words), sizes=[(k, 1000) for k in depths], queue=True)
+assert rows['passed'] and [r['k'] for r in rows['queue']] == depths and rows['queue'][0]['jobs_per_s'] == 20000
+expected = graphs_host.queue_expectation(depths, 1000)['words']
+assert len(expected) == 2 * 216 and expected[0:2] == [graphs_host.MAGIC & 0xffffffff, graphs_host.MAGIC >> 32]
 print('PASS %d graphs through the real OS NPU runtime and service (%s)' % (sum(n for _, n in ran), ', '.join('%s: %d' % r for r in ran)))

@@ -112,7 +112,7 @@ struct npu_runtime {
     struct a733_npu_buffer buffers[1 + 4 * NPU_RUNTIME_SLOTS]; /* the registered NPU buffers, built by prepare */
     atomic_uint count;   /* catalogue entries in use; register publishes the next one with release order */
     unsigned capacity, slots;
-    size_t constant_bytes, read_bytes, write_bytes, staging_bytes;
+    size_t command_bytes, constant_bytes, read_bytes, write_bytes, staging_bytes;
     uintptr_t parent_cpu, staging;
     size_t parent_bytes;
     struct a733_npu_buffer bootstrap;
