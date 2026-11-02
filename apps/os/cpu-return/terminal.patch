@@ -39,7 +39,7 @@
  .Lclean:
      check_time
      mov x2, #0x40000000
-@@ -248,6 +262,52 @@
+@@ -248,6 +262,74 @@
      add x24, x24, #64
      cmp x24, x25
      b.lo .Lclean
@@ -75,11 +75,33 @@
 +.Lpool_sized:
 +    mov x2, #0x47000000
 +    cmp x25, x2
-+    b.ne qualification_park
++    b.ne .Lpool_slot1
 +    sub x28, x25, x24
 +    tst x28, #0x1fffff
 +    b.ne qualification_park
 +    mov x2, #0x3000000
++    cmp x28, x2
++    b.hi qualification_park
++    mov x2, #0xa00000
++    cmp x28, x2
++    mov x28, #0
++    b.lo qualification_park
++    b .Lclean
++.Lpool_slot1:
++    // A pool that the build placed in the slot 1 area (docs/designs/application-memory-layout.md, step 5): whole 2 MiB
++    // blocks, 10 MiB to 768 MiB, inside 0x48000000..0x79000000, which the platform maps at EL3 for this clean.
++    mov x2, #0x48000000
++    cmp x24, x2
++    b.lo qualification_park
++    mov x2, #0x79000000
++    cmp x25, x2
++    b.hi qualification_park
++    tst x24, #0x1fffff
++    b.ne qualification_park
++    sub x28, x25, x24
++    tst x28, #0x1fffff
++    b.ne qualification_park
++    mov x2, #0x30000000
 +    cmp x28, x2
 +    b.hi qualification_park
 +    mov x2, #0xa00000
@@ -92,7 +114,7 @@
      dsb sy
      add x2, x23, #688
      add x2, x2, x20, lsl #10
-@@ -369,9 +425,40 @@
+@@ -369,9 +447,40 @@
      dsb sy
      str x1, [x2, #40]
      dsb sy

@@ -290,6 +290,50 @@ static void large_cases(void)
 
 /* Level-1 slot 1 above the 128 MiB that EL0 reaches in every space: a space that owns bytes there gets its own copy of
  * the kernel's level-2 table. */
+/* The NPU pool of an image that places it in the slot 1 area (docs/designs/application-memory-layout.md, step 5): the
+ * ledger holds it for the kernel, so nothing of the application takes it and no application space maps it, while the
+ * kernel (EL1) keeps its own mapping. */
+static void pool_cases(void)
+{
+    build_kernel(0);
+    for (unsigned j = 64; j < 512; ++j) kernel_l2[j] = A733_EL1_DRAM_BLOCK(GIB + (uint64_t)j * 0x200000);
+    struct app_region_range usable[] = {{APP_REGION_FLOOR, 0x31000000}, {APP_REGION_BASE, 11 * GIB}};
+    struct app_region_ledger l;
+    const uint64_t pool = 0x60000000, bytes = 96 * MIB;
+    assert(linit(&l, 0, 8, usable, 2) == 0);
+    assert(app_region_acquire_at(&l, APP_REGION_KERNEL_OWNER, pool, bytes, APP_REGION_READ | APP_REGION_WRITE) == 0);
+    assert(app_region_owner_of(&l, pool) == APP_REGION_KERNEL_OWNER && app_region_owner_of(&l, pool + bytes - 1) == APP_REGION_KERNEL_OWNER &&
+           app_region_owner_of(&l, pool - 1) == 0 && app_region_owner_of(&l, pool + bytes) == 0);
+    /* No region of the application overlaps it, wherever the request starts. */
+    assert(app_region_acquire_at(&l, 1, pool - 2 * MIB, 4 * MIB, APP_REGION_READ) == APP_REGION_NO_SPACE);
+    assert(app_region_acquire_at(&l, 1, pool + bytes - 2 * MIB, 4 * MIB, APP_REGION_READ) == APP_REGION_NO_SPACE);
+    assert(app_region_acquire_at(&l, 1, pool + 10 * MIB, 2 * MIB, APP_REGION_READ) == APP_REGION_NO_SPACE);
+    /* A free-choice request around it never lands inside, however many it makes. */
+    for (unsigned i = 0; i < 6; ++i) {
+        uint64_t b, n;
+        assert(app_region_acquire(&l, 1, 64 * MIB, APP_REGION_READ | APP_REGION_WRITE, &b, &n) == 0);
+        assert(b + n <= pool || b >= pool + bytes);
+    }
+    /* The owner's space has no entry for the pool: a permission fault at EL0 at its first and last byte. EL1 keeps its
+     * own access, so the kernel and its devices still reach it. */
+    struct app_space space;
+    arena.used = 0;
+    assert(app_space_build_l2(&space, &arena, base_l1, kernel_l2, &l, 1, 1, 0) == 0);
+    uint64_t t = app_space_ttbr0(&space);
+    EXPECT(walk(t, pool, 0), FAULT_PERMISSION); EXPECT(walk(t, pool, 1), FAULT_PERMISSION);
+    EXPECT(walk(t, pool + bytes - 1, 0), FAULT_PERMISSION); EXPECT(walk(t, pool + 40 * MIB, 1), FAULT_PERMISSION);
+    EXPECT(walk(t, pool, 2), FAULT_NONE); EXPECT(walk(t, pool + bytes - 1, 3), FAULT_NONE);
+    /* The pool of the kernel is not a region of any owner: releasing it as one is refused. */
+    assert(app_region_release(&l, 1, pool) == APP_REGION_NOT_OWNED);
+    /* With the pool in the extent that the stack pair and the heap would take, they take another extent. */
+    struct app_region_ledger full;
+    struct app_region_range tight[] = {{pool, bytes + 4 * MIB}};
+    assert(linit(&full, 0, 8, tight, 1) == 0 && app_region_acquire_at(&full, APP_REGION_KERNEL_OWNER, pool, bytes, APP_REGION_READ | APP_REGION_WRITE) == 0);
+    uint64_t b, n;
+    assert(app_region_acquire(&full, 1, 8 * MIB, APP_REGION_READ, &b, &n) == APP_REGION_NO_SPACE);
+    assert(app_region_acquire(&full, 1, 4 * MIB, APP_REGION_READ, &b, &n) == 0 && b == pool + bytes);
+}
+
 static void slot1_cases(void)
 {
     build_kernel(0);
@@ -608,6 +652,7 @@ int main(void)
     }
     large_cases();
     slot1_cases();
+    pool_cases();
     puts("app-region host check passed");
     return 0;
 }

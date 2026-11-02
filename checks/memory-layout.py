@@ -48,6 +48,8 @@ TODAY = {
     'npu_pool.min': 0xa00000,
     'npu_pool.max': 0x3000000,
     'npu_pool.block': 0x200000,
+    'npu_pool.ledger': (0x48000000, 0x79000000),
+    'npu_pool.ledger_max': 0x30000000,
     'runner_dram': (0x40000000, 0x100000000),
     'fel_bytes_per_second': 550000,
     'boot_slot_load': (0x41000000, 0x47000000),
@@ -89,6 +91,32 @@ def linker_script(path, record):
     require(regions.get('RAM') == tuple(record['image']['ram']), '%s: RAM differs from the record' % path)
     require(regions.get('MONITOR') == tuple(record['monitor']['range']), '%s: MONITOR differs from the record' % path)
     return text
+
+
+def check_pool_sources(record):
+    """A pool in the slot 1 area: the build, the OS header, the normal-return terminal and the table builder agree with the record."""
+    low, high = record['npu_pool']['ledger']
+    biggest = record['npu_pool']['ledger_max']
+    cmake = (ROOT / 'cmake/sunstone-os-core.cmake').read_text()
+    require('LESS %d ' % low in cmake and 'GREATER %d ' % high in cmake and 'GREATER %d)' % biggest in cmake,
+            'cmake/sunstone-os-core.cmake: the placed NPU pool bounds differ from the record')
+    header = (ROOT / 'apps/os/npu.h').read_text()
+    require(all('UINT64_C(0x%x)' % v in header for v in (low, high, biggest)), 'apps/os/npu.h: the placed NPU pool bounds differ from the record')
+    terminal = (ROOT / 'apps/os/cpu-return/terminal.patch').read_text()
+    require(all(('#0x%x' % v) in terminal for v in (low, high, biggest, record['npu_pool']['min'])),
+            'apps/os/cpu-return/terminal.patch: the placed NPU pool bounds differ from the record')
+    memory = (ROOT / 'platform/a733-smp-cached/memory.c').read_text()
+    require('pool_low >= UINT64_C(0x%x)' % low in memory, 'platform/a733-smp-cached/memory.c: the placed NPU pool start differs from the record')
+    require('slot1_area' in record and tuple(record['slot1_area']) == (low, high), 'the placed NPU pool lies in the slot 1 area')
+    valid = memory_layout.npu_pool_valid
+    for extent in ((0x47400000, 0x47c00000), (0x45a00000, 0x47000000), (low, low + 10 * MIB), (low, low + biggest),
+                   (high - 2 * MIB * 5, high), (0x60000000, 0x66000000)):
+        require(valid(*extent), 'a pool the build may place is refused: %#x..%#x' % extent)
+    for extent in ((low - 2 * MIB * 5, low), (low + 2 * MIB, low + 2 * MIB + 4 * MIB),            # below the area, under the minimum
+                   (low, low + biggest + 2 * MIB), (high - 8 * MIB, high + 2 * MIB),                 # over the maximum, past the area
+                   (low + 1 * MIB, low + 11 * MIB), (low, low + 11 * MIB),                          # not whole blocks
+                   (0x47400000, 0x47e00000), (0x44000000, 0x46000000), (0x80000000, 0x84000000)):
+        require(not valid(*extent), 'a pool the build may not place is accepted: %#x..%#x' % extent)
 
 
 def check_sources(record):
@@ -274,6 +302,7 @@ def main():
     require(record is not memory_layout.record(), 'the record is shared between calls')
     check_shape(record)
     check_sources(record)
+    check_pool_sources(record)
     check_consumers(record)
     check_placement(record)
     check_pools(record, args.image)

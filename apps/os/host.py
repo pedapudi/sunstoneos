@@ -22,6 +22,7 @@ def module(name, path):
 
 
 manifest_tool = module('ss_host_manifest', ROOT / 'tools/sunstone-manifest.py')
+memory_layout = module('ss_host_memory_layout', ROOT / 'tools/memory_layout.py')
 PREFIX_BYTES, MAX_BYTES = 592, 4096
 SESSION_MAGIC, SESSION_VERSION = 0x324e4f4953534553, 1
 BIND_SID = 1
@@ -126,8 +127,8 @@ def bind_npu_pool(image, services):
     if pool is None or NPU not in services:
         return services
     start, end = pool
-    require(0x40000000 <= start < end <= 0x48000000 and not (start | end) & 0x1fffff,
-            'The NPU pool must be whole 2 MiB blocks inside the write-back RAM that EL0 reaches.')
+    require(memory_layout.npu_pool_valid(start, end) and not (start | end) & 0x1fffff,
+            'The NPU pool must be whole 2 MiB blocks: the legacy pool, one ending at 0x47000000, or one in the slot 1 area.')
     services = dict(services)
     npu = bytearray(services[NPU])
     struct.pack_into('<QQ', npu, NPU_POOL_OFFSET, start, end - start)

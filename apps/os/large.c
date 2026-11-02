@@ -63,6 +63,8 @@ static struct app_space space;
 static unsigned slot_count;
 static int admitted;
 static void *main_stack;
+static uint64_t kernel_base, kernel_bytes;
+int os_large_kernel_reserved(uint64_t base, uint64_t bytes) { return admitted && kernel_bytes && kernel_base == base && kernel_bytes == bytes; }
 void *os_large_main_stack(void) { return main_stack; }
 
 static void install_space(uint64_t kernel_ttbr);
@@ -105,6 +107,13 @@ int os_large_prepare(void)
     owner_asid = app_asid_alloc(&asids);
     if (!owner_asid || !ranges || count > os_large_capacity ||
         app_region_ledger_init(&ledger, usable_storage, APP_REGION_SLOTS, os_large_entry_storage, os_ledger_capacity, usable, ranges)) return 0;
+#ifdef OS_NPU_POOL_BASE
+    /* The NPU pool of an image that places it in the slot 1 area: held for the kernel before any application region, so
+     * that a manifest region, the heap or the stack cannot take it, and no application space maps it. */
+    if (app_region_acquire_at(&ledger, APP_REGION_KERNEL_OWNER, OS_NPU_POOL_BASE, OS_NPU_POOL_BYTES,
+                              APP_REGION_READ | APP_REGION_WRITE)) return 0;
+    kernel_base = OS_NPU_POOL_BASE; kernel_bytes = OS_NPU_POOL_BYTES;
+#endif
     for (unsigned i = 0; manifest && i < manifest->region_count; ++i) {
         const struct ss_region *r = &manifest->regions[i];
         if (r->address < APP_REGION_FLOOR || r->address >= APP_REGION_BASE) continue;

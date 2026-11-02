@@ -40,6 +40,10 @@ void os_kernel_l2_slot1(uint64_t out[512]) { for (unsigned i = 0; i < 512; ++i) 
 extern unsigned char __tables_start[], __tables_end[], __bss_end[], __heap_end[];
 extern unsigned char __device_pool_start[], __device_pool_end[];
 extern unsigned char __uncached_pool_start[], __uncached_pool_end[];
+#if defined(SUNSTONE_A733_OS)
+/* Defined by an image that links an NPU pool; an absent symbol reads as address zero. */
+extern unsigned char __os_npu_pool_start[] __attribute__((weak)), __os_npu_pool_end[] __attribute__((weak));
+#endif
 /* DRAM above the boot image that EL1 maps when this boot's decode check
  * passes: level-2 blocks below 0x80000000, level-1 blocks from there. The same
  * table is the list the check receives and drives the entry writes. The
@@ -203,6 +207,14 @@ int a733_cached_memory_prepare(void)
                 a733_cached_el3_l2[(a - UINT64_C(0x40000000)) >> 21] = common | BIT(5) | BIT(6);
             }
         }
+        /* The same for an NPU pool that the build placed in the slot 1 area: the terminal cleans the whole pool at EL3
+         * (the symbols exist only in an NPU image, and a pool below 0x48000000 is in the mapped window already). */
+        uint64_t pool_low = (uint64_t)(uintptr_t)__os_npu_pool_start, pool_high = (uint64_t)(uintptr_t)__os_npu_pool_end;
+        if (pool_low >= UINT64_C(0x48000000) && pool_high <= UINT64_C(0x80000000))
+            for (uint64_t a = pool_low & ~UINT64_C(0x1fffff); a < pool_high; a += 0x200000) {
+                uint64_t common = a | BIT(54) | BIT(10) | (UINT64_C(3) << 8) | 4 | 1;
+                a733_cached_el3_l2[(a - UINT64_C(0x40000000)) >> 21] = common | BIT(5) | BIT(6);
+            }
 #endif
     }
 #endif

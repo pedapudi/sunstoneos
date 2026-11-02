@@ -380,6 +380,52 @@ estimate, scratch allowed on an input, no upper bound) each fail it. The board
 run listed for this step (an 8 MiB OUTPUT and a 16 MiB WORK at `0x88000000`,
 restored bytes equal to the backup) is not yet done.
 
+**NPU pool and GPU buffers (step 5).** What each reaches today, before the change:
+
+| | Memory | Who maps it | What contains the device |
+| --- | --- | --- | --- |
+| NPU pool | 8 MiB at `0x47400000`, or 10 to 48 MiB of whole blocks ending at `0x47000000` (`OS_NPU_POOL_BYTES`, linker symbols `__os_npu_pool_start` and `__os_npu_pool_end`, bound into the session record by `apps/os/host.py` and compared by `apps/os/admission.c`) | The CPU: EL1 read-write write-back blocks of the kernel table, none in an application's space. EL3: cleaned by the normal-return terminal, which parks on an extent it does not know (`apps/os/cpu-return/terminal.patch`). The NPU: only through its own page tables, built once at admission in an arena inside the pool (`drivers/npu/a733_npu_runtime.c`, `place`; `a733_npu_memory.c`; `a733_npu_mmu.c`) | The NPU MMU. The tables map the bootstrap stream and each slot's command, constant, read and write buffers at 4 KiB granularity, with an unmapped guard page after each; they do not map the arena, the runtime's own tables, the CPU-only staging area or any byte of the pool the layout leaves unused. The write bit follows the buffer's role. The graphs run as compiled |
+| GPU buffers | Manifest regions with a GPU access bit, 2 MiB aligned (`tools/sunstone-manifest.py`), in the window or, since step 3, in the slot 1 area | The CPU: a GPU-written region has no writable alias (EL1 read-only blocks, `platform/a733-smp-cached/memory.c`) and an application sees it through its own space. The GPU: only through its own MMU, one mapping per lease (`platform/a733/gpu_queue.c`) | The GPU MMU maps the leases the application asked for, rounded to 2 MiB; the admission refuses a region that overlaps the image, the device pools or another lease and one that is not identity mapped write-back |
+
+The GPU buffers already come from the ledger's placement (step 3: the manifest
+tool places them, the ledger holds them for the application at admission), and
+the GPU admission accepts any 2 MiB aligned region below 2^36, so no GPU change
+was needed.
+
+The NPU pool changes only where its memory comes from. An image built with
+`SUNSTONE_OS_NPU_POOL_BASE` places the pool in the slot 1 area instead of below
+`0x47000000`: any whole-block size from 10 to 768 MiB, below 4 GiB so that the
+device memory class (DMA32) and the one-span rule of the table builder stay
+true. The linker symbols still carry the address, so the session record, the
+runner's preservation list (the runner reaches 4 GiB since step 4) and the
+terminal need no second source. At admission `os_large_prepare` holds the pool
+in the ledger for the kernel (`APP_REGION_KERNEL_OWNER`) before any region of the
+application, so a manifest region, the heap or a stack cannot overlap it and no
+application space maps it; `npu.c` refuses to start the NPU unless the ledger
+holds exactly that extent. The platform maps the pool's blocks at EL3 for the
+terminal's clean, as it does for manifest regions in slot 1, and the terminal
+accepts a pool in the slot 1 area (block aligned, 10 to 768 MiB). Nothing about
+the table builder, the loader, the graph formats or the buffers' layout inside
+the pool changes, and an image without the option is unchanged.
+
+Evidence: `checks/npu-pool-isolation.py` builds the tables with the production
+memory layer at the legacy pool, a declared-size pool, two pools in slot 1 and
+one above 4 GiB, walks them with an independent walker over the whole 32-bit
+device space, and requires exactly the declared pages (addresses, physical
+pages, write permission by role), no page of the arena, the staging area, the
+unused bytes or the 2 MiB beside the pool, and no page after a buffer. Four
+mutations of the builder (a page past each buffer, every page writable, the
+high physical bits dropped, a buffer allowed over the tables) each fail it.
+`checks/app-region.py` shows the kernel's hold: no request overlaps the pool,
+the application's space faults at its first and last byte, EL1 keeps access, and
+dropping that rule fails the check. The linked terminal model
+(`checks/os-cpu-return.py`) runs 16 cases on images with the pool at 8 MiB, 96 MiB
+at `0x60000000`, the 768 MiB maximum and the last 10 MiB of the area, and the old
+terminal parks on the ledger image. Not covered on the host: the EL3 table
+entries that `memory.c` writes for the pool at boot (the model does not execute
+that code) and the NPU itself with a pool in slot 1; both need the board.
+`checks/memory-layout.py` ties the bounds in the build, the header, the terminal and the platform to the record.
+
 ### Predicted board run of the heap
 
 Hypothesis: with the OS image built with the address-test decode check
