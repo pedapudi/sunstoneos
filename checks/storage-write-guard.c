@@ -17,18 +17,22 @@ static uint64_t dev_sectors, part_base, part_sectors, delay_us;
 static const char *result_path;
 static uint64_t region_fat1, region_fat2, region_data, region_end, region_fsinfo;
 
-uint64_t ss_counter_ticks(void)
-{
-    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
-    return ((uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec) / 1000u * 24u;      /* 24 MHz */
-}
+/* The model's clock is virtual: it advances only by the waits the application asks for (ss_usb_wait) and by the modeled card's
+ * time per write call. Host load therefore never moves a deadline relative to the writes: a session that must be cut after N
+ * write calls is cut after N write calls on any host. */
+static uint64_t virtual_us;
+uint64_t ss_counter_ticks(void) { return virtual_us * 24u; }                               /* 24 MHz */
 int ss_clock_ready(void) { return 1; }
 static uint64_t finish_by_us;             /* the session's own deadline in the counter's microseconds; 0 none */
 static int cut_enabled;
-static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000u + (uint64_t)t.tv_nsec / 1000u; }
+static uint64_t now_us(void) { return virtual_us; }
 static void maybe_cut(void) { if (cut_enabled && finish_by_us && now_us() >= finish_by_us) _exit(77); }       /* the OS ends the session at its deadline */
 void ss_progress(void) { maybe_cut(); }
-void ss_usb_wait(uint32_t us) { struct timespec d = {0, (long)us * 1000}; nanosleep(&d, NULL); maybe_cut(); }
+void ss_usb_wait(uint32_t us)
+{
+    virtual_us += us; maybe_cut();
+    if (!cut_enabled && finish_by_us && virtual_us > finish_by_us + 10000000u) _exit(78);        /* a deadline with no cut: the session would wait forever */
+}
 void ss_activity_begin(void) {}
 void ss_activity_end(int success) { (void)success; }
 void sha256_block_ce(const uint8_t b[64], uint8_t d[32]) { (void)b; (void)d; abort(); }          /* the CE path is verified in QEMU */
@@ -85,8 +89,7 @@ static int dev_write(void *c, uint64_t s, uint32_t n, const uint8_t *buf)
         (void)pwrite(image_fd, buf, (size_t)half * 512, (off_t)s * 512);
         _exit(77);
     }
-    struct timespec d = {(time_t)(delay_us / 1000000u), (long)(delay_us % 1000000u) * 1000};
-    nanosleep(&d, NULL);                                     /* the slow card */
+    virtual_us += delay_us;                                  /* the slow card */
     return pwrite(image_fd, buf, (size_t)n * 512, (off_t)s * 512) == (ssize_t)n * 512;
 }
 int ss_storage_device(struct fwr_device *d)

@@ -30,7 +30,8 @@ MIB = 1 << 20
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--output', type=Path, required=True)
-    ap.add_argument('--finish-after-us', type=int, default=1200000, help='the session deadline after the start; the write starts 400 ms before it')
+    ap.add_argument('--finish-after-us', type=int, default=1200000, help='the session deadline after the start, in the model virtual time (waits and modeled card time, never the host clock); the write starts 400 ms before it')
+    ap.add_argument('--no-cut', action='store_true', help='mutation: run session 1 without the cut; the check must fail')
     a = ap.parse_args()
     out = a.output; out.mkdir(parents=True, exist_ok=True)
     binary = out / 'interrupt'
@@ -50,7 +51,7 @@ def main():
     _, first, size = v.lookup(REGION)
     region_chain = v.chain(first)
     # session 1: cut at the session's deadline, mid-write
-    env = {**harness.environment(), 'FINISH_AFTER_US': str(a.finish_after_us), 'CUT': '1', 'WRITE_LOG': str(out / 'write1.log')}
+    env = {**harness.environment(), 'FINISH_AFTER_US': str(a.finish_after_us), **({} if a.no_cut else {'CUT': '1'}), 'WRITE_LOG': str(out / 'write1.log')}
     (out / 'write1.log').write_text('')
     r = subprocess.run([str(binary), str(img), str(g.BASE), str(g.PART), '1', str(out / 'cut.result'), '8000'], capture_output=True, text=True, env=env)
     assert r.returncode == 77, f'session 1 was not cut mid-write: exit {r.returncode}: {r.stdout}{r.stderr[-400:]}'

@@ -12,6 +12,21 @@ static const uint32_t k[64]={
 0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
 0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
 0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
+/* The extension path (storage_digest_ce.S), linked only into images that ask for it; the C path is the reference and
+ * stays the default. Whole blocks go through it in one call, so the per-call cost is paid once per piece. */
+#if defined(__aarch64__)
+extern void storage_sha256_ce(uint32_t h[8],const uint8_t *p,size_t blocks) __attribute__((weak));
+#endif
+static int use_ce;
+int storage_digest_use_extensions(int on)
+{
+#if defined(__aarch64__)
+    use_ce=on&&storage_sha256_ce;
+#else
+    (void)on;use_ce=0;
+#endif
+    return use_ce;
+}
 static void compress(uint32_t h[8],const uint8_t p[64])
 {
     uint32_t w[64];
@@ -49,6 +64,9 @@ int storage_digest_add(struct storage_digest *d,const void *data,size_t n)
     d->bytes+=n;
     while(n){
         /* Compress complete blocks in place; copy only partial blocks. */
+#if defined(__aarch64__)
+        if(!d->used&&n>=64&&use_ce){size_t b=n/64;storage_sha256_ce(d->h,p,b);p+=64*b;n-=64*b;continue;}
+#endif
         if(!d->used&&n>=64){compress(d->h,p);p+=64;n-=64;continue;}
         size_t k=64-d->used;if(k>n)k=n;memcpy(d->tail+d->used,p,k);d->used+=(unsigned)k;p+=k;n-=k;
         if(d->used==64){compress(d->h,d->tail);d->used=0;}}

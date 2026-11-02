@@ -3,6 +3,7 @@
  * "sunstone_large_regions"; the usable upper memory comes from the board: the ranges that the DRAM
  * decode check passed. */
 #include "app_large.h"
+#include "os_space.h"
 #include "app_region.h"
 #include <stdint.h>
 #include <string.h>
@@ -49,6 +50,16 @@ static unsigned slot_count;
 static int admitted;
 
 static void install_space(uint64_t kernel_ttbr);
+/* The eight-core images walk their tables without the data caches (TCR_EL1 IRGN0 = ORGN0 = 0,
+ * include/a733_cpu_coherence.h), so a descriptor the CPU wrote stays invisible to the walker until its line reaches
+ * memory. Clean and invalidate every line of the built tables before any task uses the space; a space built long
+ * before its first use would have been evicted by then, and one built just before it is not. */
+static void clean_tables(const void *base, size_t bytes)
+{
+    for (uintptr_t a = (uintptr_t)base & ~(uintptr_t)63; a < (uintptr_t)base + bytes; a += 64)
+        __asm__ volatile("dc civac, %0" :: "r"(a) : "memory");
+    __asm__ volatile("dsb sy" ::: "memory");
+}
 unsigned os_large_count(void) { return slot_count; }
 const struct large_slot *os_large_slot(unsigned index) { return index < slot_count ? &slots[index] : 0; }
 const struct app_space *os_large_space(void) { return admitted ? &space : 0; }
@@ -60,7 +71,9 @@ int os_large_prepare(void)
     if (admitted) return 0;
     uint64_t ttbr;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
-    const uint64_t *base_l1 = (const uint64_t *)(uintptr_t)(ttbr & APP_PTE_ADDR_MASK);
+    /* The table's pages may be unmapped at EL1, so its entries come from the platform's copy (os_space.h). */
+    static uint64_t base_l1[512];
+    os_kernel_l1_head(base_l1);
     struct app_region_range usable[APP_REGION_SLOTS];
     unsigned ranges = usable_ranges(base_l1, usable, APP_REGION_SLOTS);
     uint64_t mmfr0, tcr;
@@ -76,6 +89,7 @@ int os_large_prepare(void)
         memset(slots, 0, sizeof *slots * count);
         return 0;
     }
+    clean_tables(arena_pages, sizeof arena_pages);
     slot_count = count;
     admitted = 1;
     install_space((uint64_t)ttbr);
@@ -137,6 +151,7 @@ int ss_large_status(unsigned index, struct ss_large_status *out)
     out->total = slots[index].total;
     uint64_t end = slots[index].finished_us ? slots[index].finished_us : 0;
     out->elapsed_us = end ? end - slots[index].started_us : 0;
+    out->copy_us = slots[index].copy_us; out->digest_us = slots[index].digest_us;
     return 0;
 }
 
