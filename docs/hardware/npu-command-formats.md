@@ -108,7 +108,9 @@ An operation with a second input has patches at descriptor word 34 and, when the
 element-wise multiplication compiles to a neural-network operation, an addition or subtraction to a
 stream-processor operation, a batched matrix product to neural-network operations that take both operands from
 graph inputs), VIP SRAM (source 8), the dynamic-input section (source 6, stream-processor operations) and a range of the
-memory pool (source 3; the attention products of a layer of 184 frames or more, once the scores no longer fit VIP SRAM).
+memory pool (source 3; the attention products of a layer of 184 frames or more, once the scores no longer fit VIP SRAM), and a graph
+output that an earlier operation wrote (source 2; the residual stream that the entry graph of a tiled layer both uses and exports). The
+first input may come from the same four sources, and from a graph output.
 
 Rules that hold in all 441 operations of five layer graphs and the single-operation graphs, and that the loader
 verifies (class **Inferred**; they only refuse):

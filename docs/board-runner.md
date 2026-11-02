@@ -142,6 +142,34 @@ launch. Status includes running entries, eligible queued entries and the last
 start, result, withdrawal, pause and resume. Entry files and earlier evidence are retained.
 `--queue DIR`, before the subcommand, selects an isolated queue.
 
+## The runner checks the image's own admission before the board
+
+`check` and `submit` run, on the host, the same EL3 admission code the image runs
+([host_admission.py](../tools/host_admission.py)). The tool builds
+`a733_smp_contract_refusal` and `os_session_decode_why` (`apps/os/admission.c`
+or its cpu-return copy, `apps/os/session.c`, `apps/board/admission.c`) with the
+compile definitions of the image's own configured build, links the image's build
+ID and manifest section, and runs them on the exact session bytes the runner
+uploads and the contract the launcher completes (arming time, startup, the
+image's lifetime). A refusal stops `check` and `submit` before any device access
+and names the term the board's stop would name:
+
+    EL3 admission would stop the board with a733_smp_stop(1, 0x168): session_decode (run_deadline);
+    manifest run_us 300000000 plus return_reserve_us 5000000 exceeds the 60 s session lifetime of this image by
+    245000000 us; the decoder needs a lifetime of at least 305 s, and the build derives 308 s with the 1 s startup
+    and 2 s setup allowance
+
+`submit` builds the session from the frozen inputs with the captured board
+words (`board_images.offline_words`) in place of a live read. The result, or the
+reason the check could not run (an image outside its build directory with no
+cached harness, a write-capable image without its approval record, a missing
+capture), is stored in the queue entry as `preflight` and printed. The harness
+is cached by the image's SHA-256, so the queued copy reuses it. The terms and
+their sub-terms are in [a733_admission_refusal.h](../include/a733_admission_refusal.h);
+`tools/a733-crumbs.py` decodes the same table from the breadcrumbs of a board
+stop (`last.admission_refusal`). [admission-preflight.py](../checks/admission-preflight.py)
+checks the refusals of a built image.
+
 ## A run establishes its prerequisites
 
 ```sh
@@ -173,10 +201,19 @@ DCDC5, and verifies each changed rail. Helper refusals stop the run. A reset alo
 The pinned helper returns without disarming WDT0 or writing breadcrumbs. For
 this helper, the runner verifies the raw 26 MHz oscillator and selects its
 divided watchdog clock. The interval is 512,000 cycles of DCXO/750, about
-14.769 seconds. Return and disarm must complete strictly before 14 seconds,
-measured with Linux `CLOCK_BOOTTIME`, which includes host suspend. A later or
-altered return is refused without reading DRAM. Ordinary returning images use
-their breadcrumb contract and the existing RTC watchdog clock.
+14.769 seconds. The countdown runs on the board, so the runner decides from
+what the board and the kernel report, not from how long the host took to notice:
+the kernel's creation time of the new instance's device node (`statx` birth time)
+minus the host's stamp before the arm must be under 14 seconds, WDT0 must read
+back armed on that instance and then clear after the disarm, and the host must
+have talked to that one instance throughout (a later expiry would have removed
+its node and failed the transaction). Under a loaded host the old host-elapsed
+figure reached 16.8 s on a normal run (usual 2 s) and refused a healthy board.
+A return the kernel dates later than the cutoff is refused without reading DRAM;
+a node the kernel cannot date falls back to the host's `CLOCK_BOOTTIME` elapsed
+time. A wait for a new instance extends by 30 s once an instance has enumerated
+but udev's permission grant is late. Ordinary returning images use their
+breadcrumb contract and the existing RTC watchdog clock.
 
 Preparation creates fresh session identities, checks the native allocations and
 CPU grants, and builds the SRAM launcher for the image's watchdog mode and
@@ -257,7 +294,13 @@ It reads sysfs metadata and the device node identity and never opens the USB
 device. It accepts only the instance currently enumerated on PORT, only when the
 quarantine reason is the unresolved-DRAM-ownership reason, and only when the
 finished run that ended on that instance has outcome `watchdog-reset`,
-`rom_returned` and `dram_lost` true, and no cleanup failure. It moves the
+`rom_returned` and `dram_lost` true, or was refused before any launch (outcome
+`refused-before-launch`, `launch_attempted` false) with the rail helper's disarm
+read back clear and a reset to a fresh instance, on an instance whose sysfs ROM
+descriptor is the A733 service; either way with no cleanup failure. A run refused
+before launch leaves no DRAM owner: no image ran, the helper wrote only its two
+runner-owned regions, and the next run's DRAM stage reinitializes DRAM from the
+training record before anything depends on it. It moves the
 quarantine record to `~/.cache/sunstoneos/trash/recovery-required-released/`,
 records the reason and run in `ledger.jsonl` (event `released`), and refuses a
 no-return, transport failure, unresolved return or another instance. It does not

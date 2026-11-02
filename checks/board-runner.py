@@ -727,13 +727,13 @@ def offline(out,hello):
     raw=(root/'hello/session.bin').read_bytes();decoded=records.session_decode(raw)
     assert decoded['devices']==0 and decoded['flags']==records.BIND_SID
     assert records.INPUTS in decoded['extents'] and plan['format']=='generic'
+    assert plan['host_admission'].get('admitted') is True, plan['host_admission']      # the image's own EL3 admission ran on these bytes
     assert not (root/'hello/assets').exists()
     assert (root/'hello/launch.bin').stat().st_size<=0xc00
     passed('real-hello-typed-session-inputs-and-armed-launcher')
-    args.kind='gpu-return';args.image=board.CACHE/'build/gpu-bisect-1031/crumbs/ladder-wdt4/2-firmware/sunstone-a733-os.elf'
-    plan=images.prepare(args,images.inspect(args.image,args.kind),{'words':words},root/'gpu')
-    assert plan['format']=='legacy' and plan['watchdog']==images.inspect(args.image,args.kind)['watchdog'] and 'gpu' in plan['geometry']
-    passed('real-gpu-ladder-session-and-armed-launcher')
+    # The legacy GPU ladder case is retired: it prepared an image built outside this tree and needed that build's host
+    # tree (the removed gpu-bisect-1031-crumbs worktree), so it failed wherever the tree was absent. The generic GPU
+    # return path is covered by the gpu-capture group, which takes real generic GPU ELFs with --gpu-image.
 
 
 
@@ -988,8 +988,11 @@ def rail_cases(out):
     except ValueError as error:assert 'refused' in str(error)
     else:raise AssertionError('unsafe rail helper refusal accepted')
     passed('rail-normalization-idempotence-and-unsafe-supply-refusal')
-    for variant in ('normal','expired','boundary','delayed-disarm','suspend'):
-        expired=variant!='normal'
+    # (seconds from the arm to the board's return and enumeration, seconds more before the host notices and talks to it).
+    # A loaded host delays the second figure only; the countdown runs on the board, so only the first decides.
+    timing={'normal':(6,0),'expired':(20,0),'boundary':(14,0),'delayed-disarm':(6,0),'suspend':(6,0),'loaded-host':(2,15)}
+    for variant in timing:
+        expired=variant in ('expired','boundary','suspend')
         root=out/('rail-'+variant);root.mkdir();args=arguments(root)
         args.rail_helper=root/'pinned-model.bin';args.rail_helper.write_bytes(b'MODEL PINNED HELPER')
         raw=bytearray(16384)
@@ -998,7 +1001,9 @@ def rail_cases(out):
             suspended=0
             def discover(self,port):
                 if self.pending:
-                    self.clock+={'normal':6,'expired':20,'boundary':14,'delayed-disarm':6,'suspend':6}[variant]
+                    returned,noticed=timing[variant]
+                    self.created=self.clock+returned+(20 if variant=='suspend' else 0)       # the kernel's node creation, in the wall clock
+                    self.clock+=returned+noticed
                     if variant=='suspend':self.suspended=20
                 return super().discover(port)
             def process(self,command,**kwargs):
@@ -1011,9 +1016,11 @@ def rail_cases(out):
                 if variant=='delayed-disarm' and command[3:]==board.crumbs.return_arguments():self.clock+=8
                 return result
         model=RailModel('normal')
+        model.created=None
         model.registers[0x07090160]=0x10008002
         owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep,
-                         elapsed_now=lambda:model.clock+model.suspended)
+                         elapsed_now=lambda:model.clock+model.suspended,wall_now=lambda:model.clock+model.suspended,
+                         instance_created=lambda node:model.created)
         with patch.object(board.state,'RAIL_HELPER_SHA256',images.sha(args.rail_helper)),patch.object(board.os,'access',return_value=True),owner.locked():
             try:owner.rails()
             except ValueError as error:assert expired and 'watchdog' in str(error)

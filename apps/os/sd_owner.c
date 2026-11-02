@@ -144,6 +144,9 @@ static int start(void)
     if (owner) return atomic_load(&ready) == 1;
     ready_waiter = xTaskGetCurrentTaskHandle();
     owner = xTaskCreateStatic(owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb);
+    /* A task takes the creator's application tag; the owner is an OS service task and keeps its own index 0
+     * (include/sunstone_notify.h). */
+    if (owner) vTaskSetApplicationTaskTag(owner, NULL);
     if (!owner) { os_sd_diag[0] = 10; return 0; }
     /* The owner gives the notification once the card is open or has failed. A wake is only a hint (any other notification would end a
      * single wait early), so wait on the state, on the caller's own index, until a time bound measured in microseconds. */

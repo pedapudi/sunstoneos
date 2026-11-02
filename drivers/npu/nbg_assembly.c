@@ -638,12 +638,14 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
                 /* A graph input (source 1), a range of the memory pool (source 3; the compiler puts the second input of an
                  * attention product there once the scores no longer fit VIP SRAM) or a dynamic input (source 6, kind 6)
                  * has no end field; an input in VIP SRAM (source 8) has one. */
-                if (p.destination == 136 ? (p.source != 8 && p.source != 1 && p.source != 3 && !(p.source == 6 && op.kind == 6)) :
+                if (p.destination == 136 ? (p.source != 8 && p.source != 1 && p.source != 2 && p.source != 3 && !(p.source == 6 && op.kind == 6)) :
                     p.source != 8) return 0;
                 if (p.transformed != (p.destination == 140)) return 0;
                 field = p.destination == 136 ? INPUT2 : INPUT2_END; break;
             case 24:
-                if ((p.source != 1 && p.source != 3 && p.source != 6 && p.source != 8) || p.transformed) return 0;
+                /* A graph input, the pool, a dynamic input, VIP SRAM, or a graph output that an earlier operation wrote and a
+                 * later one reads again (source 2: a tensor that is both an intermediate and a result of the graph). */
+                if ((p.source != 1 && p.source != 2 && p.source != 3 && p.source != 6 && p.source != 8) || p.transformed) return 0;
                 if (p.source == 6 && op.kind != 6) return 0;
                 field = INPUT; break;
             case 28:

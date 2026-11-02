@@ -39,8 +39,14 @@
 #define A733_OS_RESIDENT_CONTRACT_MAGIC UINT64_C(0x415337334f524331)
 #define A733_OS_RESIDENT_RESULT_MAGIC UINT64_C(0x415337334f525231)
 #define A733_OS_SESSION_BYTES 808u
+/* The session lifetime in seconds. The OS image build derives it from the application manifest
+ * (tools/session_lifetime.py, cmake/sunstone-image.cmake); this default serves images with no
+ * application and the other board images. The limit matches tools/session_lifetime.py MAX_SECONDS. */
 #ifndef A733_BOARD_SUPERVISED_SECONDS
 #define A733_BOARD_SUPERVISED_SECONDS 60u
+#endif
+#if A733_BOARD_SUPERVISED_SECONDS < 2 || A733_BOARD_SUPERVISED_SECONDS > 3600
+#error The session lifetime is outside 2..3600 seconds
 #endif
 #ifndef A733_BOARD_STARTUP_SECONDS
 #define A733_BOARD_STARTUP_SECONDS 1u
@@ -94,5 +100,8 @@ _Static_assert(sizeof(struct a733_board_session)==592,"sealed board session geom
 _Static_assert(offsetof(struct a733_board_session,usb_topology)==404,"sealed USB topology offset");
 int a733_board_session_valid(const struct a733_board_session *,uint64_t now_ticks);
 int a733_board_contract_valid(const struct a733_smp_contract *,
+    const struct a733_board_session *,const uint8_t build_id[32],uint64_t now_ticks);
+/* Zero, or the named refusal of include/a733_admission_refusal.h; a733_board_contract_valid is its zero test. */
+unsigned a733_board_contract_refusal(const struct a733_smp_contract *,
     const struct a733_board_session *,const uint8_t build_id[32],uint64_t now_ticks);
 #endif
