@@ -20,7 +20,7 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     units = [ROOT/'checks/usb-host-ready-work.c', ROOT/'drivers/usb/a733_xhci.c',
              ROOT/'runtime/device_memory_pool.c']
-    inputs = units + [ROOT/'apps/board/host_irq.c', ROOT/'apps/board/host_irq.h',
+    inputs = units + [ROOT/'checks/usb-host-irq.c', ROOT/'apps/board/host_irq.c', ROOT/'apps/board/host_irq.h',
                       ROOT/'checks/a733-xhci-detach.c', ROOT/'checks/register_latency.h',
                       ROOT/'include/a733_xhci.h', ROOT/'checks/harness.py', Path(__file__).resolve()]
     steps = {}
@@ -58,6 +58,18 @@ def main():
     build(baseline, ['SUNSTONE_HOST_IRQ_SOURCE="'+str(original)+'"'])
     run('baseline', [baseline, 'baseline'])
     run('reject-original-wait', [baseline], 'ready software step slept for a tick')
+    # The owner's interrupt mask, claim and rearm code on the same kernel and shim.
+    irq_binary = host_rtos.build(out, ['checks/usb-host-irq.c'], 'host-irq', defines=['SUNSTONE_USB_HOST_GENERIC=1'],
+                                 includes=[ROOT/'checks', ROOT/'apps/board'], link=link + ['-Wl,--wrap=xTaskGetSchedulerState'])
+    run('host-irq', [irq_binary])
+    # Negative control: claiming a pending interrupt without masking the source must fail it.
+    mutant = host_rtos.mutated(out, 'apps/board/host_irq.c',
+                               'else if(irq.draining||atomic_load_explicit(&irq.pending,memory_order_acquire))r=quiescent_mask();',
+                               'else if(irq.draining)r=quiescent_mask();', 'claim-unmasked.c')
+    control = host_rtos.build(out, ['checks/usb-host-irq.c'], 'host-irq-control', flags=['-w'],
+                              defines=['SUNSTONE_USB_HOST_GENERIC=1', 'SUNSTONE_HOST_IRQ_SOURCE="%s"' % mutant],
+                              includes=[ROOT/'checks', ROOT/'apps/board'], link=link + ['-Wl,--wrap=xTaskGetSchedulerState'])
+    run('reject-unmasked-claim', [control], 'Assertion')
     result = dict(result='PASS', hardware_access=False, steps=steps,
                   inputs={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs},
                   compiler=dict(path=str(CLANG), version=subprocess.check_output([str(CLANG), '--version'], text=True)),
