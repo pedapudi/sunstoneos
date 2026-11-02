@@ -626,3 +626,43 @@ static void fixture_ready_traces(TaskHandle_t task)
     }
     printf("linked FreeRTOS ready traces: caller CPU and committed notification payload precede SGI; one hook per notify/timeout/resume generation\n");
 }
+
+static unsigned fixture_api_trace[6], fixture_api_notify_result;
+void ssFixtureAPI(unsigned operation, unsigned value)
+{
+    assert(operation < 6);
+    ++fixture_api_trace[operation];
+    if (operation == 1) fixture_api_notify_result = value;
+}
+static void fixture_api_contract(TaskHandle_t task)
+{
+    /* A value-changing API return expression executes exactly once despite a
+     * trace-return macro observing it. Duplicate evaluation would increment
+     * the notification twice or alter its previous-value result. */
+    fixture_cpu = 1;
+    assert(ulTaskGenericNotifyValueClear(task, 0, UINT32_MAX) == 0);
+    uint32_t previous = UINT32_MAX;
+    unsigned entry = fixture_api_trace[0], leave = fixture_api_trace[1];
+    BaseType_t woken = pdFALSE;
+    assert(xTaskGenericNotifyFromISR(task, 0, 0, eIncrement, &previous, &woken) == pdPASS);
+    assert(previous == 0 && fixture_api_notify_result == (unsigned)pdPASS);
+    assert(fixture_api_trace[0] == entry + 1 && fixture_api_trace[1] == leave + 1);
+    assert(ulTaskGenericNotifyValueClear(task, 0, UINT32_MAX) == 1);
+    entry = fixture_api_trace[0]; leave = fixture_api_trace[1];
+    assert(xTaskGenericNotifyFromISR(NULL, 0, 0, eIncrement, NULL, &woken) == pdFAIL);
+    assert(fixture_api_trace[0] == entry + 1 && fixture_api_trace[1] == leave + 1);
+    assert(fixture_api_notify_result == (unsigned)pdFAIL);
+    entry = fixture_api_trace[2]; leave = fixture_api_trace[3];
+    assert(xTaskGetCurrentTaskHandleForCore(0));
+    assert(!xTaskGetCurrentTaskHandleForCore(-1));
+    assert(fixture_api_trace[2] == entry + 2 && fixture_api_trace[3] == leave + 2);
+    fixture_cpu = 0;
+    unsigned suspend_entry = fixture_api_trace[4], suspend_leave = fixture_api_trace[5];
+    vTaskSuspendAll();
+    assert(fixture_api_trace[4] == suspend_entry + 1 && fixture_api_trace[5] == suspend_leave + 1);
+    (void)xTaskResumeAll();
+    assert(fixture_api_trace[0] == fixture_api_trace[1]);
+    assert(fixture_api_trace[2] == fixture_api_trace[3]);
+    assert(fixture_api_trace[4] == fixture_api_trace[5]);
+    printf("linked FreeRTOS API traces: entry/return pairing, early returns and single evaluation of notification mutation\n");
+}

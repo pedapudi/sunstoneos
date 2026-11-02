@@ -218,6 +218,7 @@ int main(int argc, char **argv)
     fixture_runtime_accounting(task);
     fixture_preemption(task);
     fixture_switch_hooks(task);
+    fixture_api_contract(task);
     invariant();
     printf("linked FreeRTOS owner transitions: 10000 remote wakes, block-commit races, zero local scheduler locks, delay/event timeout\n");
     return 0;

@@ -35,6 +35,9 @@ def audit(source, inventory):
         assert branch, f"{entry['name']}: missing definition route"
         assert branch[1].splitlines()[0] == entry['definition_route'], (
             f"{entry['name']}: definition route changed")
+        helpers = set(re.findall(r'\b(ssKernel\w+)\s*\(', branch[1]))
+        assert helpers == set(entry.get('definition_helpers', helpers)), (
+            f"{entry['name']}: intended adapter helpers changed")
         assert body.count('#if ( configSS_PARTITIONED_SCHEDULER == 1 )') == 1, (
             f"{entry['name']}: nested call-site route")
     # A wrapper at a call site must never satisfy the definition check.
