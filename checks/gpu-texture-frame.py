@@ -6,9 +6,10 @@ Builds checks/gpu-texture-frame.c with the render-service and texture sources of
 frame and while the render service runs: bytes stored by memory region, cache
 maintenance by operation, stage-1 translations, loads from the output
 allocation during completion checks, instructions, barriers and store-release
-instructions, worker polls, and scheduling waits. Executes the current service's
-200 us burst and 1 ms CPU-run scheduling code with 50/75 us atomic polls and
-an empty request queue. A lower-priority task runs only during a blocking wait.
+instructions, worker polls, and scheduling waits. Runs the image's own worker task
+(drivers/gpu/pvr_gpu_service.c, compiled whole into the fixture) with its 200 us burst, 1 ms
+CPU-run block and wait computation, 50/75 us atomic polls and an empty request
+queue; only the render poll's cost, device progress and the RTOS boundary are modeled. A lower-priority task runs only during a blocking wait.
 Slow ring submission must remain exempt from that wait. Client rings, elapsed
 time, ownership and GPU results are modeled; sustained request traffic and
 physical performance are outside this check. Runs three scheduler probes,
@@ -18,7 +19,6 @@ and presentation.
 import argparse
 import hashlib
 import json
-import re
 import struct
 import subprocess
 from pathlib import Path
@@ -51,52 +51,36 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def scheduling_source(source, mutation=None):
-    """Compile the actual scheduler; device progress and RTOS calls are boundaries."""
-    text = (source / SCHEDULER).read_text()
-    def function(name):
-        matches = list(re.finditer(r'^static [^\n]*\b' + name + r'\([^;]*?\)\n\{', text, re.M))
-        assert len(matches) == 1, ('scheduler function boundary', name)
-        start = matches[0].start(); opening = matches[0].end() - 1; depth = 1
-        for end in range(opening + 1, len(text)):
-            depth += (text[end] == '{') - (text[end] == '}')
-            if not depth: return text[start:end + 1]
-        raise AssertionError(('unclosed scheduler function', name))
-    worker = function('worker')
-    begin = '    for (;;) {\n'
-    end = '        if (message.client == PVR_GPU_SERVICE_CLIENTS && !message.ticket)'
-    assert worker.count(begin) == worker.count(end) == 1, 'worker scheduling boundary changed'
-    # A single turn preserves every scheduling statement and continue path.
-    # The modeled empty receive cannot reach client request processing.
-    turn = worker.split(begin, 1)[1].split(end, 1)[0]
-    code = '\n\n'.join(function(n) for n in ('sample', 'progress', 'submitting', 'step_locked', 'step', 'burst'))
-    code += '\nstatic void frame_worker_turn(struct pvr_gpu_service *s)\n{\n    do {\n' + turn + '        fail(29);\n    } while (0);\n}\n'
-    mutations = {
-        'burst-overrun': ('now - *start < PVR_GPU_SERVICE_BURST_US', 'now - *start < 1000000u'),
-        'task-starvation': ('if (run >= PVR_GPU_SERVICE_CPU_RUN_US)', 'if (run >= 1000000u)'),
-        'submission-delay': ('if (submitting(s)) s->yield_running = 0;', 'if (0) s->yield_running = 0;'),
-    }
-    if mutation:
-        before, after = mutations[mutation]
-        assert code.count(before) == 1, ('scheduler mutation boundary', mutation)
-        code = code.replace(before, after)
-    return code
+# Each mutant reintroduces a scheduling bug into a copy of the real service source.
+MUTATIONS = {
+    'burst-overrun': ('now - *start < PVR_GPU_SERVICE_BURST_US', 'now - *start < 1000000u'),
+    'task-starvation': ('if (run >= PVR_GPU_SERVICE_CPU_RUN_US)', 'if (run >= 1000000u)'),
+    'submission-delay': ('if (submitting(s)) s->yield_running = 0;', 'if (0) s->yield_running = 0;'),
+}
 
 
 def build(source, out, clang, lld, mutation=None):
     out.mkdir(parents=True, exist_ok=True)
-    (out / 'frame-scheduler.inc').write_text(scheduling_source(source, mutation))
+    service = source / SCHEDULER
+    if mutation:
+        before, after = MUTATIONS[mutation]
+        text = service.read_text()
+        assert text.count(before) == 1, ('scheduler mutation boundary', mutation)
+        service = out / 'pvr_gpu_service.c'
+        service.write_text(text.replace(before, after))
     objects = []
-    for name in SOURCES + ['checks/gpu-texture-frame.c']:
+    for name in SOURCES + ['checks/gpu-texture-frame.c', 'checks/gpu-texture-frame-stubs.c']:
         root = ROOT if name.startswith('checks/') else source
         obj = out / (Path(name).stem + '.o')
-        subprocess.run([clang, *FLAGS, '-I', str(out), '-I', str(source / 'include'), '-I', str(FREERTOS / 'include'),
+        # The scheduler is the real source file, compiled into the fixture's unit.
+        subprocess.run([clang, *FLAGS, '-DPVR_GPU_SERVICE_SOURCE="%s"' % service,
+                        '-I', str(service.parent), '-I', str(source / 'include'), '-I', str(FREERTOS / 'include'),
                         '-I', str(FREERTOS / 'portable/GCC/ARM_CR82'), '-isystem', str(NEWLIB),
                         '-c', str(root / name), '-o', str(obj)], check=True)
         objects.append(str(obj))
     elf = out / 'frame.elf'
     subprocess.run([lld, '-static', '--gc-sections', '--undefined=frame_scheduling_check',
-                    '-e', 'frame_main', '-Ttext=0x40000000', '-o', str(elf), *objects],
+                    '--wrap=pvr_render_service_poll', '-e', 'frame_main', '-Ttext=0x40000000', '-o', str(elf), *objects],
                    check=True)
     return elf
 
@@ -297,7 +281,7 @@ def main():
     record = dict(passed=True, physical_access=False, source=str(source), elf_sha256=sha(elf),
                   sources_sha256={n: sha(source / n) for n in SOURCES + [SCHEDULER, 'include/pvr_gpu_service.h']},
                   fixture_sha256=sha(ROOT / 'checks/gpu-texture-frame.c'),
-                  scheduler_include_sha256=sha(a.output / 'frame-scheduler.inc'),
+                  stubs_sha256=sha(ROOT / 'checks/gpu-texture-frame-stubs.c'),
                   scheduling=scheduler, mutations=mutations, scenes=results, scope=__doc__)
     (a.output / 'frame.json').write_text(json.dumps(record, indent=1, sort_keys=True) + '\n')
 
