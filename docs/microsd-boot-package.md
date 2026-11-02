@@ -24,19 +24,21 @@ outside this tool's scope.
 
 ## Inputs
 
-Supply the exact pinned board boot0 and `dragonsecboot` executable explicitly.
-The preparer verifies their entire contents before using private copies. It does
-not download dependencies or execute downloaded shell scripts.
+Supply the exact pinned board boot0 explicitly. The preparer verifies its entire
+contents before use. It does not download dependencies or execute downloaded
+shell scripts. The vendor `dragonsecboot` executable is an optional cross-check
+(see [the TOC1 packer](#toc1-packer)); when supplied, the preparer verifies it
+the same way.
 
 | Input | SHA256 |
 | --- | --- |
 | `boot0_sdcard_orangepizero3w.fex` | `829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3` |
-| `external/packages/pack-uboot/tools/dragonsecboot` | `e5f9076504a0ccde29c5978bcfc341c1c5ac02d947c47b849a5e8d26433545f6` |
+| `external/packages/pack-uboot/tools/dragonsecboot` (optional) | `e5f9076504a0ccde29c5978bcfc341c1c5ac02d947c47b849a5e8d26433545f6` |
 
 Both files come from Orange Pi build revision
-`a95129bf30ea11886cc35f08ebb3e69695a26656`. The packer is a static x86-64 GNU/Linux
-executable with no dynamic loader or shared-library dependencies. Packaging does
-not require a Linux runtime on the board.
+`a95129bf30ea11886cc35f08ebb3e69695a26656`. The vendor packer is a static x86-64
+GNU/Linux executable with no dynamic loader or shared-library dependencies.
+Packaging does not require a Linux runtime on the board.
 
 The input JSON has exactly these fields. Replace the example length and hash
 with the whole payload's actual identity:
@@ -76,17 +78,21 @@ not a CPU entry or memory-ownership qualification.
 python3 tools/prepare-microsd-boot.py \
   --input /ordinary/path/input.json \
   --boot0 /ordinary/cache/boot0_sdcard_orangepizero3w.fex \
-  --packer /ordinary/cache/dragonsecboot \
   --output /ordinary/path/new-package
 ```
+
+Add `--packer /ordinary/cache/dragonsecboot` to also run the vendor executable;
+the preparer then requires its package to equal the repository packer's byte for
+byte and fails otherwise.
 
 The output parent must already exist. For this example, filenames begin with
 `new-package.`; no output directory is created. The packer runs with a fixed two-line
 CRLF configuration naming only `monitor.fex`. No stock monitor, U-Boot, SCP or
 OP-TEE component is inserted automatically. A temporary private workspace holds
-the verified executable, copied payload and configuration. Before publication,
-the wrapper checks the actual produced table of contents (TOC), sole item, reserved fields,
-full payload, padding, extent and checksum. A failed pack or validation emits no
+the copied payload and configuration (and the verified vendor executable, when
+cross-checking). Before publication, the wrapper checks the produced table of
+contents (TOC), sole item, reserved fields, full payload, padding, extent and
+checksum with a decoder separate from the packer. A failed pack or validation emits no
 output files. A failure during final publication can leave an incomplete set of
 new files. Publication holds the existing parent directory open and creates each
 file exclusively; a concurrent existing entry is preserved. The manifest is
@@ -99,8 +105,10 @@ Output suffixes are `monitor.bin`, `boot_package.cfg`, `boot_package.fex`,
 `packer.log`, `microsd-monitor-container.bin` and `manifest.json`. Each suffix is
 appended to the caller-selected prefix, separated by a period. These files hold
 the copied monitor, exact configuration, actual package, log, merged container
-and JSON manifest. The manifest records complete file hashes, dependency URLs and hashes,
-monitor format and extent, and explicit false qualification fields. It has no
+and JSON manifest. The manifest records complete file hashes, the boot0 dependency URL and hash,
+the packer that produced the package (the hash of `tools/toc_package.py` and
+whether the vendor cross-check ran and matched), monitor format and extent, and
+explicit false qualification fields. It has no
 board-admission flag. Its `card_writes` list names the two extents that carry
 container data, boot0 and the TOC1 package, with offset, length and hash.
 A card install writes only those extents; the
@@ -117,7 +125,7 @@ bounded storage sessions that never write the backup package unit at sector
 | Remaining bytes | Zero padding; no partitions or filesystems |
 
 The pinned [A733 build recipe](https://github.com/orangepi-xunlong/orangepi-build/blob/a95129bf30ea11886cc35f08ebb3e69695a26656/external/config/sources/families/sun60iw2.conf#L182)
-selects this executable and merged-file placement. Its normal configuration
+selects the vendor executable and the merged-file placement. Its normal configuration
 contains other firmware components; the monitor-only configuration is an explicit
 separate host input. The U-Boot header also defines backup sector 24576, but the
 published merged producer does not populate that backup, and this wrapper does
@@ -131,19 +139,52 @@ and index, and exact input length. Padding is zero. The checksum is a modulo
 32-bit sum of little-endian words over the declared padded extent, replacing
 the checksum field with `0x5f0a6c39` for calculation.
 
-Published [packer source](https://github.com/HandsomeMod/allwinner-bsp-tools/blob/9906775be064de771723ec2e2b716f0a531f93f4/toc_tools/toc/create_package.c)
-defines matching geometry and checksum behavior. Exact correspondence between
-that source and the board executable remains unproved. Those source files carry
-All Rights Reserved notices, and their repository has no top-level license grant.
-The Orange Pi build repository's GPLv2 root license does not resolve the
-individual tool's licensing. The wrapper preserves this unresolved provenance;
-it reuses the published executable and does not rewrite TOC generation.
+## TOC1 packer
+
+`tools/toc_package.py` builds the TOC1 package without the vendor executable. It
+follows the published
+[packer source](https://github.com/HandsomeMod/allwinner-bsp-tools/blob/9906775be064de771723ec2e2b716f0a531f93f4/toc_tools/toc/create_package.c)
+and its configuration parser, and runs as a command
+(`toc_package.py boot_package.cfg --directory DIR --output boot_package.fex`) or as
+a module (`pack`, `unpack`, `pack_config`).
+
+The configuration is the vendor `[package]` section: one `item=name, file` line
+per item, at most 16 items, `;` and `#` comments, spaces, tabs or commas between
+the two names. Items are laid out in order. The item table starts at offset 64 and
+the first payload at the next 1 KiB boundary after the table; each later payload
+starts at the next 1 KiB boundary; the total is rounded to 16 KiB. Every item has
+type 3, no encryption and zero `run_addr` and index. The packer refuses inputs
+the vendor tool mishandles without checking: more than 16 items, names of 64
+bytes or more, a configuration line of 255 bytes or more, a package section over
+1023 bytes, or a package over 10 MiB.
+
+Not implemented: encryption, signing, certificates, key ladders and the TOC0
+container (the vendor tool's other modes). The monitor-only and normal
+(U-Boot, monitor, SCP) packages use only plain binary items, so the boot path
+needs none of them.
+
+`checks/toc-package.py` packs 15 monitor sizes (on and around the 1 KiB and 16 KiB
+boundaries, and an empty file), the vendor's normal three- and four-item
+configurations, a 16-item package with random lengths, empty middle items, a
+63-byte item name and configuration syntax variants. It checks each package
+against the layout above with a separate decoder, and, when the pinned vendor
+executable is present (`--packer`, or `sources/board-boot/dragonsecboot` in the
+cache), requires identical package bytes and an identical log. When the
+executable is absent it skips the comparison and keeps the layout checks. It also
+corrupts each format field and requires the decoder to refuse every corruption.
+A packer with a different checksum seed or different rounding fails it, with or
+without the executable.
+
+The packer is written from the published source above, whose files carry
+Allwinner copyright notices; the project owner confirmed that this use is
+permitted.
 
 `checks/microsd-boot-package.py` runs one synthetic, nonbootable monitor through
-the actual wrapper and packer, then checks changed bounds and preservation
-conditions locally. Its output proves host packaging only. Production monitor
-instructions, cold entry, physical storage/security and board boot require
-separate root-owned evidence.
+the actual wrapper, then checks changed bounds and preservation conditions
+locally; with `--packer` it also requires the vendor executable's package to
+match. Its output proves host packaging only. Production monitor instructions,
+cold entry, physical storage/security and board boot require separate root-owned
+evidence.
 
 ## Optional card DRAM restore image
 

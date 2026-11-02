@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare an unqualified microSD monitor container using the pinned host packer."""
+"""Prepare an unqualified microSD monitor container with the repository TOC1 packer."""
 import argparse
 import hashlib
 import importlib.util
@@ -17,12 +17,17 @@ BOOT0_URL = BASE_URL + '/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_
 PACKER_URL = BASE_URL + '/external/packages/pack-uboot/tools/dragonsecboot'
 BOOT0_HASH = '829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3'
 PACKER_HASH = 'e5f9076504a0ccde29c5978bcfc341c1c5ac02d947c47b849a5e8d26433545f6'
-BOOT0_BYTES, PACKER_BYTES = 0x3c000, 9105656
+BOOT0_BYTES, PACKER_BYTES = 0x3c000, 9105656  # PACKER_*: optional vendor cross-check only
 IMAGE_BYTES, BOOT0_OFFSET, PACKAGE_OFFSET = 20 << 20, 8192, 16793600
 LOAD_ADDRESS, LOAD_LIMIT, HEADER_BYTES = 0x47000000, 0x47400000, 0x108
 PACKAGE_CAPACITY = IMAGE_BYTES - PACKAGE_OFFSET
 INPUT_KIND = 'a733-microsd-monitor-container-input'
 MONITOR_FORMAT = 'sunstone-a733-flat-monitor-v1'
+PACKER_PATH = Path(__file__).with_name('toc_package.py')
+_spec = importlib.util.spec_from_file_location('toc_package', PACKER_PATH)
+toc_package = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(toc_package)
+PACKAGE_CONFIG = b'[package]\r\nitem=monitor, monitor.fex\r\n'
 
 
 def digest(data):
@@ -196,24 +201,27 @@ def prepare(args):
         spec = importlib.util.spec_from_file_location('card_ddr', Path(__file__).with_name('prepare-card-ddr.py'))
         tool = importlib.util.module_from_spec(spec); spec.loader.exec_module(tool)
         boot0, variant = tool.validate_variant(args.restore_variant, boot0)
-    packer = pinned(args.packer, PACKER_BYTES, PACKER_HASH)
-    # Execute a verified private copy, never a path that can change after hashing.
+    cross_check = getattr(args, 'packer', None)
+    packer = pinned(cross_check, PACKER_BYTES, PACKER_HASH) if cross_check else None
+    config = PACKAGE_CONFIG
     with tempfile.TemporaryDirectory(prefix='sunstone-monitor-package-') as temporary:
         workspace = Path(temporary)
-        tool = workspace / 'dragonsecboot'
-        tool.write_bytes(packer)
-        tool.chmod(0o700)
         (workspace / 'monitor.fex').write_bytes(monitor)
-        config = b'[package]\r\nitem=monitor, monitor.fex\r\n'
         (workspace / 'boot_package.cfg').write_bytes(config)
-        log_path = workspace / 'packer.log'
-        with log_path.open('xb') as log:
-            subprocess.run([str(tool), '-pack', 'boot_package.cfg'], cwd=workspace,
-                           env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'},
-                           stdout=log, stderr=subprocess.STDOUT, timeout=30, check=True)
-        package = read_regular(workspace / 'boot_package.fex', PACKAGE_CAPACITY)
+        package, log = toc_package.pack_config(workspace / 'boot_package.cfg', workspace)
+        log = log.encode()
         validate_package(package, monitor)
-        log = read_regular(log_path, 65536)
+        if packer:
+            # Execute a verified private copy, never a path that can change after hashing.
+            tool = workspace / 'dragonsecboot'
+            tool.write_bytes(packer)
+            tool.chmod(0o700)
+            with (workspace / 'vendor.log').open('xb') as vendor_log:
+                subprocess.run([str(tool), '-pack', 'boot_package.cfg'], cwd=workspace,
+                               env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'},
+                               stdout=vendor_log, stderr=subprocess.STDOUT, timeout=30, check=True)
+            if read_regular(workspace / 'boot_package.fex', PACKAGE_CAPACITY) != package:
+                raise ValueError('Repository packer and vendor executable produced different packages')
     if BOOT0_OFFSET + len(boot0) > PACKAGE_OFFSET or PACKAGE_OFFSET + len(package) > IMAGE_BYTES:
         raise ValueError('Container extent overlap or overflow')
     image = bytearray(IMAGE_BYTES)
@@ -236,11 +244,12 @@ def prepare(args):
                      'sha256': digest(boot0)},
                     {'name': 'monitor-package', 'offset': PACKAGE_OFFSET,
                      'bytes': len(package), 'sha256': digest(package)}],
-                'dependencies': {'boot0': {'url': BOOT0_URL, 'sha256': BOOT0_HASH},
-                                 'packer': {'url': PACKER_URL, 'sha256': PACKER_HASH}},
-                'provenance_limit': 'Exact packer/source equivalence and individual tool license '
-                                    'grant unresolved; published tool source has All Rights Reserved notices.',
-                'command': ['dragonsecboot', '-pack', 'boot_package.cfg'],
+                'dependencies': {'boot0': {'url': BOOT0_URL, 'sha256': BOOT0_HASH}},
+                'packer': {'name': 'tools/toc_package.py', 'sha256': digest(PACKER_PATH.read_bytes()),
+                           'vendor_cross_check': (
+                               {'url': PACKER_URL, 'sha256': PACKER_HASH, 'identical': True}
+                               if packer else None)},
+                'command': ['toc_package.py', 'boot_package.cfg'],
                 'files': {name: {'bytes': len(data), 'sha256': digest(data)}
                           for name, data in files.items()}}
     if variant:
@@ -255,7 +264,7 @@ def main():
     parser.add_argument('--input', type=Path, required=True, help='Typed JSON monitor contract')
     parser.add_argument('--boot0', type=Path, required=True, help='Exact pinned unmodified board boot0')
     parser.add_argument('--restore-variant', type=Path, help='Explicit unqualified card restore manifest')
-    parser.add_argument('--packer', type=Path, required=True, help='Exact pinned dragonsecboot executable')
+    parser.add_argument('--packer', type=Path, help='Optional pinned dragonsecboot executable; its package must match byte for byte')
     parser.add_argument('--output', type=Path, required=True, help='New filename prefix under an existing ordinary parent')
     args = parser.parse_args()
     try:

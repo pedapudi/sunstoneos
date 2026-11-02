@@ -416,7 +416,7 @@ SunstoneOS uses these binaries as follows:
 - **Shared-SRAM routing: not yet reproduced.** SunstoneOS inherits the BROM's
   CPU routing and has not added the U-Boot write that gives the SRAM to the NPU;
   [NPU backsolve](../reference-backsolve-npu.md) specifies the fix.
-- **Host microSD packaging: reuses the pinned boot0 and packer.** The card
+- **Host microSD packaging: reuses the pinned boot0.** The card
   packager places the unmodified pinned boot0 in the container
   ([microsd-boot-package.md](../microsd-boot-package.md)).
 

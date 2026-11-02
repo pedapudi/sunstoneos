@@ -57,9 +57,8 @@ The 4,164-byte monitor has SHA256
 `8aaac1fa719eea8d3ddd161566a74dd9d962ead7768da347e49538e0f383c760`.
 The native ELF is
 `d274456709da2623cfa907ebdc716613f07cf7b91cbef666b07d0d8295370d5e`.
-One invocation of the pinned packer produced the 20 MiB ordinary container
+One invocation of the vendor packer produced the 20 MiB ordinary container
 `60561dc7f3a9111749b7935330ac7aaa8bf0f6e2e4f5b44a60b3d06a0fa697c8`.
-The packer's source equivalence and individual licensing remain unresolved.
 
 [The instruction check](../checks/cold-entry.py) feeds the actual payload to the
 pinned boot0 parser, then executes its main tail from `0x5e34c`, including the
