@@ -318,7 +318,8 @@ operating points, not from probe images.
 ## Migration in small landable steps
 
 1. **Heap from the ledger.** The heap becomes an application region obtained at admission when `heap_bytes` exceeds what is linked, the manifest's cap becomes the ledger's free space, and `runtime/newlib.c` takes the heap base and limit from the region. This has the most application impact for the least risk: heap size is the limit that today fails at link time, the change reuses the large-region ledger and tables that already pass host and QEMU checks, and an image that asks for no heap above the linked size behaves as before. The step also supplies the first board run of the per-application tables.
-2. **Planner and layout record**, producing today's constants. Host only, with no image change.
+2. **Planner and layout record**, producing today's constants. Host only, with no image change. (Implemented before step 1.)
+2b. **Every application heap from the ledger.** Remove `heap_link_max`: the heap of any manifest is a ledger region when the image maps upper memory, and an image whose decode check fails falls back to the linked heap. This changes the mimus image, so it waits for the qualified board run of step 1 and for a board run of mimus.
 3. **Manifest regions placed by the planner, and the 48 MiB window lifted**, with the slot 1 per-application page and the ledger's lowest slot at 1. Stack pool with guard blocks in the same step.
 4. **Runner and backup/restore from the record**, with the `preserve` attribute and the time estimate.
 5. **NPU pool and GPU buffers from the ledger**, using the hardware bounds table.
@@ -340,14 +341,20 @@ The linked hello, hello (CPU return) and large-region images are byte-identical
 before and after, including the generated manifest tables.
 
 **Heap from the ledger (step 1).** A manifest whose `heap_bytes` exceeds
-`heap_link_max` in the record (4 MiB, the largest heap any image links today)
-gets its heap from the ledger:
+`heap_link_max` in the record (4 MiB) gets its heap from the ledger. The
+threshold exists only so that the image of mimus, whose manifest asks for exactly
+4 MiB, and every image without the upper memory map keep their current heap while
+step 1 is qualified on a board. It is not a limit and a later step removes it
+(migration step 2 below): every application heap then comes from the ledger
+whenever the decode check passes, and the linked heap remains only as the
+fallback of an image whose decode check fails. The heap from the ledger works
+like this:
 
 - The manifest tool appends one more large record, the last, with the flag `SS_LARGE_HEAP`: read-write, no source, no digest, a size of `heap_bytes` plus the OS's 1 MiB share rounded up to 2 MiB. The manifest cap on `heap_bytes` is the 11 GiB of upper memory.
 - The image links only the OS's 1 MiB share of the heap, and the build refuses such a manifest unless the image maps upper memory (`-DSUNSTONE_A733_DRAM_DECODE_PROBE=ON`).
 - At admission the ledger takes the region, the loader skips it (a heap alone opens no card and authorizes no card pins), and `runtime_heap_attach()` makes it the C library's heap before the C library initializes. Attachment fails, and with it the admission, when the linked heap has already handed out a byte.
 - `_sbrk` zeroes each range it hands out of an attached heap, so memory that an earlier run left in DRAM never reaches the application. The cost is one pass over the memory the application takes, and none for memory it never takes.
-- Tasks that the application creates and that use the heap call `ss_large_attach`, as for any large region.
+- Every task of the application starts in its space with no call: a new task takes the address-space tag of the task that creates it (`traceTASK_CREATE` in `FreeRTOSConfig.h` with `os_space_inherit()` in `include/os_space.h`; both the stock SMP scheduler and the partitioned scheduler call it before the task becomes ready). The main task is tagged at admission. A task of the OS is created from boot code or from an OS task, neither of which has a tag, so it stays in the kernel's table. `ss_large_attach` remains for a task that other code created. Neither scheduler prevents this.
 
 A manifest with `heap_bytes` of 4 MiB or less links its heap as before. The
 OS core code differs in every image (the admission, the loader loop and
@@ -377,6 +384,7 @@ What the run does not show: the rate at which `_sbrk` zeroes memory (the result 
 - **Decode check coverage.** The check proves linear decode, not that the memory firewall passes Non-secure accesses or that no other master writes. Upper memory above `0x4800_0000` has the board-recorded result for the address test only; a bus error there resets the board through the watchdog. Step 1's board run is also the first OS-image run of it.
 - **FEL address width.** The protocol limit is verified on the host from the pinned tool source (see the bounds table); whether this ROM implements a wider private extension is irrelevant, because the tool cannot send one. The runner check in step 4 refuses higher addresses.
 - **Upload time.** An initialized image above tens of megabytes costs minutes per run at 0.55 MB/s. Data of that size belongs in INPUT or large regions.
+- **Start-up order.** The heap of the ledger replaces the linked heap only if the linked heap has handed out no byte. A static constructor that calls `malloc` before admission therefore refuses the application at admission (the QEMU case `heap-after-early-sbrk` shows the refusal and that the application does not start). Step 2b removes the dependency by running the constructors after the heap is attached.
 - **Stale memory.** Every extent handed out must be zeroed, and boot-time zeroing of the heap and bss has to be measured against the supervision window.
 - **EL1 execution of application text.** The kernel tables must map it, and the application's EL1 worker functions have to be listed in the layout record. A function at an unmapped address faults at EL1.
 - **Branch thunks and code model.** The thunk check must run for the application's real size. An application that places more than 4 GiB of bss in link-time symbols is outside the code model; it uses the heap or a region instead.

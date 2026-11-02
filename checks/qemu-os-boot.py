@@ -219,7 +219,7 @@ class Image:
                  (generated / 'wrap.c', ())] + [(ROOT / s, ()) for s in sources]
         return generated, units, '--wrap=%s_main' % cname
 
-    def build(self, application, services_source=None, define=(), cache=None):
+    def build(self, application, services_source=None, define=(), cache=None, wraps=()):
         """Link the image; returns the ELF path."""
         generated, app_units, wrap = application
         k = self.prepare_kernel()
@@ -236,7 +236,7 @@ class Image:
         units = [(self.services_source if u[0] == ROOT / 'apps/os/services.c' else u[0], u[1]) for u in units]
         objects = self.compile_all(units, generated)
         elf = self.work / 'os.elf'
-        done = run([LLD, '--error-limit=0', '-nostdlib', '-static', '--gc-sections', wrap,
+        done = run([LLD, '--error-limit=0', '-nostdlib', '-static', '--gc-sections', wrap, *['--wrap=' + w for w in wraps],
                     *(['--wrap=vApplicationIRQHandler'] if self.latency else []),
                     '-T', ROOT / 'platform/qemu-os/link.ld', '-Map', self.work / 'os.map',
                     '-o', elf, *objects], self.log)
@@ -557,6 +557,13 @@ def main():
         application = image.application('heap-test', ['checks/qemu-os/heap-main.c'], manifest)
         return image.build(application)
 
+    def build_heap_early(name, manifest):
+        """The same application, with a call of sbrk before the admission, as a static constructor would make."""
+        image = Image(out / name, extra_defines=['-DQEMU_OS_UPPER=1'],
+                      extra_sources=['runtime/newlib.c', 'checks/qemu-os/heap-early.c'])
+        application = image.application('heap-test', ['checks/qemu-os/heap-main.c'], manifest)
+        return image.build(application, wraps=['os_large_prepare'])
+
     def build_facts():
         image = Image(out / 'build-hw-facts', extra_defines=['-DSUNSTONE_A733_HW_FACTS=1'],
                       extra_sources=['platform/a733/hw_facts.c'])
@@ -586,7 +593,8 @@ def main():
         heap_elf = pool.submit(build_heap, 'build-heap', ROOT / 'checks/qemu-os/heap-manifest.json')
         heap_big_elf = pool.submit(build_heap, 'build-heap-too-big', ROOT / 'checks/qemu-os/heap-too-big-manifest.json')
         large_elf, large_big_elf = large_elf.result(), large_big_elf.result()
-        heap_elf, heap_big_elf = heap_elf.result(), heap_big_elf.result()
+        heap_early = pool.submit(build_heap_early, 'build-heap-early', ROOT / 'checks/qemu-os/heap-manifest.json')
+        heap_elf, heap_big_elf, heap_early_elf = heap_elf.result(), heap_big_elf.result(), heap_early.result()
         os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
             os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result(),
             partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result(), facts_elf.result())
@@ -823,7 +831,8 @@ def main():
     tag, base, size, peak, error = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
     c.require(tag == 0x48454150204f4b and base == 0x80000000 and size == 8 << 20 and peak == 8 << 20 and error == 12,
               'heap result tag %#x base %#x bytes %#x peak %#x errno %d' % (tag, base, size, peak, error))
-    # A task in no application space reads the heap: a permission fault at its first byte.
+    # A task that is in no application space creates a task: the child stays out, and its read of the heap is a
+    # permission fault at the first byte.
     c = run_case('heap-other-space-faults', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(1), '4G', [(0x80000000, stale)])
     c.failed_with('APPLICATION', 0xe24)
     c.require(int(c.failure['value'], 16) == 0x80000000 and int(c.failure['site'], 16) == 0x800d4e24,
@@ -840,6 +849,15 @@ def main():
     for i in range(4096):
         expected_fold ^= (0x9e3779b97f4a7c15 * (i + 1)) & (2 ** 64 - 1)
     c.require(tag == 0x48454150204f4b and fold == expected_fold, 'worker result %#x fold %#x, expected %#x' % (tag, fold, expected_fold))
+    # A task of a task of the application creates a task that writes the heap: no call puts any of them in the space.
+    c = run_case('heap-grandchild-shares', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(4), '4G', [(0x80000000, stale)])
+    c.clean()
+    tag, base, size, peak, fold = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
+    c.require(tag == 0x48454150204f4b and fold == expected_fold, 'grandchild result %#x fold %#x, expected %#x' % (tag, fold, expected_fold))
+    # The linked heap has handed out a byte before the admission, as a static constructor that calls malloc would
+    # make it: the heap of the ledger cannot replace it, so the application does not start.
+    c = run_case('heap-after-early-sbrk', heap_early_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x80000000, stale)])
+    c.require(c.main is None and c.failure is not None, 'the application started although the linked heap was already in use')
     # A heap that the ledger cannot hold stops the start before any task runs.
     c = run_case('heap-too-big', heap_big_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G')
     c.require(c.main is None and not lines(c.output, 'LARGE-ADMITTED'), 'the application started although the ledger refused its heap')

@@ -6,9 +6,12 @@
  * Its input region holds a mode (u64):
  *   mode 0: take memory from sbrk, check that it is zero, write it, shrink and grow it again, run out of it, and
  *           finish with the result {tag, base, bytes, peak, fold}.
- *   mode 1: start a task that runs in no application space and reads the heap: it must fault.
+ *   mode 1: a task that runs in no application space creates a task, which must run in none either; the child
+ *           reads the heap: it must fault.
+ *   mode 4: the main task creates a task that creates a task that writes the heap; no call puts either in the
+ *           application's space, and the main task reads what the grandchild wrote.
  *   mode 2: read the byte after the region from the application's own space: it must fault.
- *   mode 3: let a worker task of the application, attached to its space, write the heap that the main task reads. */
+ *   mode 3: a worker task of the application writes the heap that the main task reads; no call attaches it. */
 #include "heap_test-app.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -26,8 +29,8 @@ struct _reent *_impure_ptr = &test_reent;
 #define TAG_BAD UINT64_C(0x48454150204241)      /* "HEAP BA" */
 #define MIB (1u << 20)
 
-static StaticTask_t intruder_state, worker_state;
-static StackType_t intruder_stack[512], worker_stack[512];
+static StaticTask_t intruder_state, worker_state, helper_state, grandchild_state;
+static StackType_t intruder_stack[512], worker_stack[512], helper_stack[512], grandchild_stack[512];
 static volatile uint8_t *heap_base;
 static size_t heap_bytes;
 static TaskHandle_t main_handle;
@@ -37,6 +40,31 @@ static void intruder(void *unused)
     (void)unused;
     (void)*heap_base;                             /* no application space: a permission fault at EL0 */
     ss_fail(0xe02);
+}
+
+static void helper(void *unused)
+{
+    (void)unused;
+    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);             /* until the main task has taken it out of the space */
+    xTaskCreateStatic(intruder, "child", 512, NULL, 3, intruder_stack, &intruder_state);   /* inherits no space */
+    for (;;) vTaskDelay(1000);
+}
+
+static void worker(void *unused);
+static void grandchild(void *unused)
+{
+    (void)unused;
+    volatile uint64_t *words = (volatile uint64_t *)(heap_base + 4 * MIB);
+    for (unsigned i = 0; i < 4096; ++i) words[i] = UINT64_C(0x9e3779b97f4a7c15) * (i + 1);
+    xTaskNotifyGive(main_handle);
+    for (;;) vTaskDelay(1000);
+}
+
+static void middle(void *unused)
+{
+    (void)unused;
+    xTaskCreateStatic(grandchild, "grandchild", 512, NULL, 3, grandchild_stack, &grandchild_state);
+    for (;;) vTaskDelay(1000);
 }
 
 static void worker(void *unused)
@@ -63,7 +91,9 @@ void heap_test_main(const struct ss_grant *grant)
     heap_base = base;
     heap_bytes = capacity;
     if (mode == 1) {
-        xTaskCreateStatic(intruder, "intruder", 512, NULL, 3, intruder_stack, &intruder_state);
+        TaskHandle_t h = xTaskCreateStatic(helper, "helper", 512, NULL, 3, helper_stack, &helper_state);
+        vTaskSetApplicationTaskTag(h, 0);                      /* a task of no application */
+        xTaskNotifyGive(h);
         for (;;) vTaskDelay(10);
     }
     if (mode == 2) {
@@ -74,9 +104,20 @@ void heap_test_main(const struct ss_grant *grant)
         main_handle = xTaskGetCurrentTaskHandle();
         TaskHandle_t w = xTaskCreateStaticAffinitySet(worker, "worker", 512, NULL, 3, worker_stack, &worker_state,
                                                       (UBaseType_t)(grant->worker_cores & -grant->worker_cores));
-        ss_large_attach(w);
+        (void)w;
         (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
         volatile const uint64_t *words = (volatile const uint64_t *)(base + 2 * MIB);
+        uint64_t fold = 0;
+        for (unsigned i = 0; i < 4096; ++i) fold ^= words[i];
+        finish(TAG_OK, (uintptr_t)base, capacity, 0, fold);
+    }
+
+    if (mode == 4) {
+        main_handle = xTaskGetCurrentTaskHandle();
+        xTaskCreateStaticAffinitySet(middle, "middle", 512, NULL, 3, worker_stack, &worker_state,
+                                     (UBaseType_t)(grant->worker_cores & -grant->worker_cores));
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
+        volatile const uint64_t *words = (volatile const uint64_t *)(base + 4 * MIB);
         uint64_t fold = 0;
         for (unsigned i = 0; i < 4096; ++i) fold ^= words[i];
         finish(TAG_OK, (uintptr_t)base, capacity, 0, fold);

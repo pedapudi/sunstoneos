@@ -5,10 +5,12 @@
  * HEAP_TEST_MODE selects what the image does (the CMake cache variable SUNSTONE_HEAP_TEST_MODE):
  *   0  take 512 MiB with malloc, check that it lies in the region and reads as zero, write a pattern into every
  *      word, read it back, run the allocator out of memory, free and allocate again, and report the result.
- *   1  start a task that runs in no application space and reads the first byte of the heap: the OS ends the
- *      session with a permission fault at 0x80000000.
+ *   1  start a task, take it out of the application's space, and let it read the first byte of the heap: the OS
+ *      ends the session with a permission fault at 0x80000000.
+ *      (Every task the application creates starts in its space; the task leaves it only for this test.)
  *   2  read the first byte after the region from the application's own space: a permission fault at 0xc0000000.
- *   3  let a worker task attached to the application's space write the heap, and the main task read it back.
+ *   3  let a worker task write the heap, and the main task read it back. No call attaches the worker: a task
+ *      starts in the space of the task that creates it.
  * The result is deterministic: it holds no time or address that varies between boots. */
 #include "heap_test-app.h"
 #include "FreeRTOS.h"
@@ -43,6 +45,7 @@ static TaskHandle_t main_handle;
 static void intruder(void *unused)
 {
     (void)unused;
+    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);   /* until the creator has taken it out of the space */
     (void)*region_base;                          /* no application space: a permission fault at EL0 */
     ss_fail(0x1e02);
 }
@@ -67,16 +70,17 @@ void heap_test_main(const struct ss_grant *grant)
     r.bytes = bytes;
     region_base = base;
 #if HEAP_TEST_MODE == 1
-    xTaskCreateStatic(intruder, "intruder", 512, NULL, 3, intruder_stack, &intruder_state);
+    TaskHandle_t intruder_handle = xTaskCreateStatic(intruder, "intruder", 512, NULL, 3, intruder_stack, &intruder_state);
+    vTaskSetApplicationTaskTag(intruder_handle, 0);
+    xTaskNotifyGive(intruder_handle);
     for (;;) vTaskDelay(10);
 #elif HEAP_TEST_MODE == 2
     (void)*(volatile uint8_t *)(base + bytes);
     ss_fail(0x1e03);
 #elif HEAP_TEST_MODE == 3
     main_handle = xTaskGetCurrentTaskHandle();
-    TaskHandle_t w = xTaskCreateStaticAffinitySet(worker, "worker", 512, NULL, 3, worker_stack, &worker_state,
-                                                  (UBaseType_t)(grant->worker_cores & -grant->worker_cores));
-    ss_large_attach(w);
+    (void)xTaskCreateStaticAffinitySet(worker, "worker", 512, NULL, 3, worker_stack, &worker_state,
+                                       (UBaseType_t)(grant->worker_cores & -grant->worker_cores));
     (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
     volatile const uint64_t *check = (volatile const uint64_t *)(base + 2 * MIB);
     for (unsigned i = 0; i < 4096; ++i) r.fold_read ^= check[i];
