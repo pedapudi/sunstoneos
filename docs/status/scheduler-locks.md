@@ -6,8 +6,8 @@
 return normally with CPU rails restored: test-and-set, tickets, and tickets
 with the thermal fast path. The matched lock pair reduces worst loaded wait
 from 137.625 to 29.625 microseconds and masking from 127.667 to 33.792.
-The thermal follow-up records 32.500 microseconds wait and 38.458 masking;
-its unexplained tail regressions block performance acceptance and merge.
+The ticket locks are integrated. The thermal fast path is not: its single run
+records 32.500 microseconds wait and 38.458 masking, so it is reverted.
 The 25 microsecond budget remains unmet. These finite runs do not qualify
 worst-case timing, sustained operation or power behavior.
 
@@ -168,7 +168,11 @@ Scheduler notification and suspension changes require broader ownership work.
 They remain with the partitioned-scheduler stream; this branch does not change
 `freertos-smp-tasks.patch` or owner run queues.
 
-## Already-armed thermal rearm avoids a global critical section
+## A thermal rearm fast path was measured and is not integrated
+
+The change described in this section is reverted on the integrated branch.
+Its measurement is retained because the thermal rearm site appears in the
+test-and-set control.
 
 `apps/os/thermal.c:rearm` checks an atomic masked flag before entering the
 kernel critical section. An already-armed interrupt returns without acquiring
@@ -223,7 +227,7 @@ worst task-lock wait rises from 29.625 to 32.500. The largest per-core masking
 p99 upper endpoint rises from 30.625 to 34.625; masking maximum rises from
 33.792 to 38.458. The masking and wait regressions are unexplained by this
 single window. They cannot be dismissed as variation or accepted as a timing
-improvement. Performance acceptance and merge remain blocked.
+improvement, so the change is reverted.
 
 The largest follow-up mask still begins in `ulTaskGenericNotifyTake` /
 `vTaskYieldWithinAPI` and ends in `FreeRTOS_Yield`. The largest task-lock hold
