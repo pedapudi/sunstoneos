@@ -582,10 +582,15 @@ def policy_cases(out):
     info={'generic':False,'descriptor':{}}
     args.storage_write=True
     try:images.policy(info,args)
-    except ValueError as e:assert 'requires --approved-by coordinator' in str(e)
+    except ValueError as e:assert 'Storage write requires descriptor storage_bounds' in str(e) or 'port 3-1' in str(e),str(e)
     else:raise AssertionError('storage write accepted')
     passed('unapproved-storage-write-refused')
     args.storage_write=False
+    # Classification is default-deny (tools/storage_bounds.py): the raw stand-in counts as write-capable,
+    # so the operating-point case uses an ELF with no SD core.
+    elf=root/'no-core.o';src=root/'no-core.c';src.write_text('int stand_in(void) { return 1; }\n')
+    subprocess.run(['/usr/bin/clang-21','--target=aarch64-none-elf','-c','-O1',str(src),'-o',str(elf)],check=True)
+    args.image=elf
     info['descriptor']={'operating_points':[{'block':'gpu','mhz':1200,'mv':960}]}
     try:images.policy(info,args)
     except ValueError as e:assert 'requires --approved-by coordinator' in str(e)
