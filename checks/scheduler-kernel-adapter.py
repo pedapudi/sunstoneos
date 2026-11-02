@@ -64,12 +64,14 @@ def main():
         'void ssFixtureTLSDelete(uintptr_t);\n'
         'void ssFixtureSwitch(void *);\n'
         'void ssFixtureTrace(unsigned);\n'
+        'void ssFixtureReady(void *);\n'
         '#define configINIT_TLS_BLOCK(block, stack) ((block) = (uintptr_t)(stack))\n'
         '#define configSET_TLS_BLOCK(block) ssFixtureTLS(block)\n'
         '#define configDEINIT_TLS_BLOCK(block) ssFixtureTLSDelete(block)\n'
         '#define portTASK_SWITCH_HOOK(task) ssFixtureSwitch(task)\n'
         '#define traceTASK_SWITCHED_OUT() ssFixtureTrace(0)\n'
-        '#define traceTASK_SWITCHED_IN() ssFixtureTrace(1)\n')
+        '#define traceTASK_SWITCHED_IN() ssFixtureTrace(1)\n'
+        '#define tracePOST_MOVED_TASK_TO_READY_STATE(task) ssFixtureReady(task)\n')
     patched = build / 'tasks-api.c'
     run(['patch', '--fuzz=0', '--reject-file=-', '--output', patched,
          build / 'tasks.c', ROOT / 'patches/freertos-partitioned-api.patch'])

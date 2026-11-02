@@ -627,5 +627,6 @@
     "configUSE_STATS_FORMATTING_FUNCTIONS": "positive"
   },
   "placement_validation": "A host checkpoint fixture records one observation of ready work waiting on its busy owner beside an idle core. This confirms no idle pull in series B; it is not a concurrent imbalance measurement.",
-  "slice_validation": "A separate linked process uses public CPU0 ticks, owner IRQ exit and explicit saved-frame checkpoints to rotate two equal-priority CPU-bound tasks on CPU2 for six slices with no timeout deadlines. It checks immediate local first-peer admission, resume and priority-change rearming, and no slice SGIs for a single task, a preemption-disabled task or an idle owner."
+  "slice_validation": "A separate linked process uses public CPU0 ticks, owner IRQ exit and explicit saved-frame checkpoints to rotate two equal-priority CPU-bound tasks on CPU2 for six slices with no timeout deadlines. It checks immediate local first-peer admission, resume and priority-change rearming, and no slice SGIs for a single task, a preemption-disabled task or an idle owner.",
+  "ready_trace_validation": "The selected ready-hook fixture checks the waker CPU, committed notification payload and hook completion before the destination SGI. Repeated notification, owner consumption, timeout followed by late notification, repeated resume and both abort/notification orderings each retain one ready hook per logical wake. Queue and event-group wake hooks retain caller origin. Current-task queries use a nonblocking atomic snapshot."
 }

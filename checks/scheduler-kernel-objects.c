@@ -40,18 +40,23 @@ static void fixture_objects(void)
     assert(fixture_queue);
     uint32_t value = 0;
     assert(xQueueReceive(fixture_queue, &value, 0) == pdFAIL);
+    unsigned waiter_slot = ssKernelCurrent()->ready.slot;
+    unsigned ready_before = fixture_ready_count[waiter_slot];
     fixture_yield_action = fixture_object_complete;
     assert(xQueueReceive(fixture_queue, &value, 3) == pdPASS);
     assert(value == 0x12345678 && fixture_object_wakes == 1);
+    assert(fixture_ready_count[waiter_slot] == ready_before + 1 && fixture_ready_cpu[waiter_slot] == 1);
     vQueueDelete(fixture_queue);
     fixture_queue = NULL;
 
     StaticEventGroup_t event_storage;
     fixture_events = xEventGroupCreateStatic(&event_storage);
     assert(fixture_events);
+    ready_before = fixture_ready_count[waiter_slot];
     fixture_yield_action = fixture_object_complete;
     assert(xEventGroupWaitBits(fixture_events, 4, pdTRUE, pdTRUE, 3) == 4);
     assert(xEventGroupGetBits(fixture_events) == 0 && fixture_object_wakes == 2);
+    assert(fixture_ready_count[waiter_slot] == ready_before + 1 && fixture_ready_cpu[waiter_slot] == 1);
     vEventGroupDelete(fixture_events);
     fixture_events = NULL;
 
@@ -512,4 +517,112 @@ static int fixture_slices(void)
     assert(fixture_sgi[3] == idle_sgi);
     printf("linked FreeRTOS slicing: secondary equal-priority FIFO rotation without timeout deadlines; single/disabled owners receive no slice SGIs\n");
     return 0;
+}
+
+void ssFixtureReady(void *task)
+{
+    TCB_t *t = task;
+    unsigned slot = t->uxOwnerSlot;
+    assert(slot < SS_OWNER_SLOTS);
+    ++fixture_ready_count[slot];
+    fixture_ready_cpu[slot] = fixture_cpu;
+    /* A ready trace may run in the waker's ISR or under a control FIFO. Its
+     * current-task query must be a nonblocking snapshot, never a global gate. */
+    assert(xTaskGetCurrentTaskHandleForCore(fixture_cpu) == pxCurrentTCBs[fixture_cpu]);
+    if (task == fixture_ready_watch) {
+        uint64_t word = atomic_load(&ssKernelTasks[slot].notification[0].word);
+        assert(fixture_cpu == 1 && ss_notification_payload_state(word) == SS_NOTIFY_RECEIVED);
+        assert((word & SS_NOTIFICATION_VALUE) == 1 && (word & SS_NOTIFICATION_COMPLETED));
+        fixture_ready_payload = true;
+    }
+}
+static void fixture_trace_wait(struct ssKernelTask *s)
+{
+    struct ss_notification_guard guard;
+    ss_notification_gate_begin(&s->notification[0], &ssKernelBackend, &guard);
+    uint64_t generation = s->generation + 1;
+    assert(ss_notification_wait_enter(&guard, &s->notify_wait, generation,
+                                      SS_NOTIFY_WAIT_COUNT, 0, true));
+    s->notify_index = 0;
+    ssKernelBlock(3, true, SS_K_NOTIFICATION);
+    ss_notification_gate_end(&guard);
+}
+static void fixture_ready_traces(TaskHandle_t task)
+{
+    fixture_cpu = 0;
+    struct ssKernelTask *s = record(task);
+    unsigned slot = s->ready.slot;
+    fixture_trace_wait(s);
+    enter(0);
+    fixture_ready_baseline = fixture_ready_count[slot];
+    fixture_ready_watch = task;
+    fixture_ready_payload = false;
+    fixture_cpu = 1;
+    BaseType_t woken = pdFALSE;
+    assert(xTaskGenericNotifyFromISR(task, 0, 0, eIncrement, NULL, &woken) == pdPASS);
+    assert(fixture_ready_payload && fixture_ready_count[slot] == fixture_ready_baseline + 1);
+    assert(xTaskGenericNotifyFromISR(task, 0, 0, eSetBits, NULL, &woken) == pdPASS);
+    assert(fixture_ready_count[slot] == fixture_ready_baseline + 1);
+    fixture_ready_watch = NULL;
+    enter(0);
+    assert(fixture_ready_count[slot] == fixture_ready_baseline + 1 && fixture_ready_cpu[slot] == 1);
+    struct ss_notification_guard guard;
+    ss_notification_gate_begin(&s->notification[0], &ssKernelBackend, &guard);
+    struct ss_notification_finish finish = ss_notification_wait_finish(
+        &guard, &s->notify_wait, s->generation, 0, false, false);
+    ss_notification_gate_end(&guard);
+    assert(finish.matched && finish.value == 1);
+    fixture_trace_wait(s);
+    enter(0);
+    unsigned before_timeout = fixture_ready_count[slot];
+    for (unsigned tick = 0; tick < 3; ++tick) (void)xTaskIncrementTick();
+    assert(fixture_ready_count[slot] == before_timeout + 1 && fixture_ready_cpu[slot] == 0);
+    fixture_cpu = 1;
+    assert(xTaskGenericNotifyFromISR(task, 0, 0, eIncrement, NULL, &woken) == pdPASS);
+    assert(fixture_ready_count[slot] == before_timeout + 1);
+    enter(0);
+    ss_notification_gate_begin(&s->notification[0], &ssKernelBackend, &guard);
+    finish = ss_notification_wait_finish(&guard, &s->notify_wait, s->generation, 0, false, true);
+    ss_notification_gate_end(&guard);
+    assert(finish.matched && finish.value == 1);
+    vTaskSuspend(task);
+    enter(0);
+    unsigned before_resume = fixture_ready_count[slot];
+    struct ss_owner_backend progress = ssKernelBackend;
+    progress.wait = fixture_control_progress;
+    ssKernelControl.backend = &progress;
+    fixture_progress_task = task;
+    fixture_cpu = 1;
+    vTaskResume(task);
+    assert(fixture_ready_count[slot] == before_resume + 1 && fixture_ready_cpu[slot] == 1);
+    vTaskResume(task);
+    assert(fixture_ready_count[slot] == before_resume + 1);
+    ssKernelControl.backend = &ssKernelBackend;
+    fixture_cpu = 0;
+    for (unsigned notify_first = 0; notify_first < 2; ++notify_first) {
+        fixture_trace_wait(s);
+        enter(0);
+        unsigned before_abort = fixture_ready_count[slot];
+        ssKernelControl.backend = &progress;
+        fixture_progress_task = task;
+        fixture_cpu = 1;
+        if (notify_first)
+            assert(xTaskGenericNotifyFromISR(task, 0, 0, eIncrement, NULL, &woken) == pdPASS);
+        assert(xTaskAbortDelay(task));
+        fixture_cpu = 1;
+        if (!notify_first)
+            assert(xTaskGenericNotifyFromISR(task, 0, 0, eIncrement, NULL, &woken) == pdPASS);
+        assert(fixture_ready_count[slot] == before_abort + 1);
+        enter(0);
+        ss_notification_gate_begin(&s->notification[0], &ssKernelBackend, &guard);
+        finish = ss_notification_wait_finish(&guard, &s->notify_wait, s->generation, 0, false, true);
+        ss_notification_gate_end(&guard);
+        assert(finish.matched && finish.value == 1);
+        TimeOut_t timeout;
+        TickType_t remaining = 3;
+        vTaskSetTimeOutState(&timeout);
+        assert(xTaskCheckForTimeOut(&timeout, &remaining)); /* Clears abort latch. */
+        ssKernelControl.backend = &ssKernelBackend;
+    }
+    printf("linked FreeRTOS ready traces: caller CPU and committed notification payload precede SGI; one hook per notify/timeout/resume generation\n");
 }

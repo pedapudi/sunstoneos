@@ -6,6 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 static unsigned fixture_cpu, fixture_sgi[configNUMBER_OF_CORES], fixture_locks;
+static unsigned fixture_ready_count[SS_OWNER_SLOTS], fixture_ready_cpu[SS_OWNER_SLOTS];
+static TaskHandle_t fixture_ready_watch;
+static unsigned fixture_ready_baseline;
+static bool fixture_ready_payload;
 volatile uint64_t ullCriticalNestings[configNUMBER_OF_CORES];
 uint64_t ullPortYieldRequired[configNUMBER_OF_CORES];
 void platform_panic(const char *file, unsigned line)
@@ -21,6 +25,11 @@ void vPortRecursiveLock(uint8_t cpu, ePortRTOSLock lock, BaseType_t acquire)
 { (void)cpu; (void)lock; if (acquire) ++fixture_locks; }
 void vInterruptCore(uint32_t interrupt, uint8_t cpu)
 {
+    if (fixture_ready_watch && cpu == 0) {
+        unsigned slot = ((TCB_t *)fixture_ready_watch)->uxOwnerSlot;
+        assert(fixture_ready_count[slot] == fixture_ready_baseline + 1);
+        assert(fixture_ready_payload);
+    }
     (void)interrupt; ++fixture_sgi[cpu];
     /* Explicit delivery of gate checkpoints; no concurrent task stacks. */
     if (atomic_load(&ssKernelControl.gate_phase) == SS_GATE_ACQUIRING)
@@ -197,6 +206,7 @@ int main(int argc, char **argv)
     (void)xTaskIncrementTick();
     enter(0);
     assert(listLIST_IS_EMPTY(&event) && pxCurrentTCBs[0] == task);
+    fixture_ready_traces(task);
     fixture_objects();
     fixture_inheritance(task, second);
     fixture_diagnostics();
