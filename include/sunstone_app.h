@@ -15,6 +15,7 @@
 #include "sunstone_cpu_topology.h"
 #include "sunstone_cpu_observation.h"
 #include "sunstone_large.h"
+#include "sunstone_storage.h"
 #ifdef __cplusplus
 #define SS_STATIC_ASSERT static_assert
 #define SS_NORETURN [[noreturn]]

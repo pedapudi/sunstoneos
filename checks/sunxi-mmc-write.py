@@ -57,6 +57,7 @@ native=common+['--target=aarch64-none-elf','-O2','-ffreestanding','-fno-builtin'
  '-I'+str(kernel/'include'),'-I'+str(kernel/'portable/GCC/ARM_AARCH64_SRE'),
  '-DINCLUDE_xSemaphoreGetMutexHolder=1','-DINCLUDE_xTaskGetSchedulerState=1','-DINCLUDE_xTaskGetCurrentTaskHandle=1']
 host_sources=['drivers/storage/sunxi_mmc.c','checks/sunxi-mmc-write.c']
+dma_sources=['drivers/storage/sunxi_mmc.c','drivers/storage/storage_wait.c','checks/sunxi-mmc-write-dma.c']
 compile_fixtures=['checks/sunxi-mmc.c','checks/a733-mmc-platform.c','checks/a733-mmc-sdc3.c']
 native_sources=['drivers/storage/sunxi_mmc.c','drivers/storage/a733_mmc_platform.c','drivers/storage/a733_mmc_platform_native.c']
 commands=[]
@@ -69,7 +70,7 @@ def run(command,name):
 for i,s in enumerate(host_sources+compile_fixtures):run(host+['-M','-MF',a.evidence/f'host-{i}.d',s],f'deps-host-{i}.log')
 for i,s in enumerate(native_sources):run(native+['-M','-MF',a.evidence/f'native-{i}.d',s],f'deps-native-{i}.log')
 paths={a.sources/n for n in reference_hashes}|{pathlib.Path(cc).resolve(),a.read_reference}
-paths.update(root/n for n in host_sources+compile_fixtures+native_sources+['checks/sunxi-mmc-write.py'])
+paths.update(root/n for n in host_sources+dma_sources+compile_fixtures+native_sources+['checks/sunxi-mmc-write.py'])
 for dep in a.evidence.glob('*.d'):
  paths.update((root/n).resolve() for n in dep.read_text().replace('\\\n',' ').split(':',1)[1].split())
 records=[];(a.evidence/'inputs').mkdir()
@@ -78,6 +79,11 @@ for path in sorted(paths):
  records.append({'path':str(path),'sha256':digest,'snapshot':str(target.relative_to(a.evidence))})
 (a.evidence/'inputs.json').write_text(json.dumps(records,indent=2)+'\n')
 binary=a.evidence/'write-model';run(host+host_sources+['-o',binary],'build-host.log');run([binary],'host.log')
+# CMD25 through descriptor DMA against the strict controller model (docs/designs/mmc-multiblock-write.md). The
+# model maps memory below 4 GiB, which the sanitizers' address space refuses, so it builds with UBSan only.
+dma_binary=a.evidence/'write-dma-model'
+run(common+['-Idrivers/storage','-O1','-g','-fsanitize=undefined','-fno-sanitize-recover=all','drivers/storage/sunxi_mmc.c','drivers/storage/storage_wait.c','checks/sunxi-mmc-write-dma.c','-o',dma_binary],'build-dma.log')
+run([dma_binary],'dma.log')
 for i,s in enumerate(compile_fixtures):run(host+['-c',s,'-o',a.evidence/(pathlib.Path(s).stem+'-fixture.o')],f'fixture-{i}.log')
 for i,s in enumerate(native_sources):run(native+['-c',s,'-o',a.evidence/(pathlib.Path(s).stem+'.o')],f'native-{i}.log')
 assert all(hashlib.sha256(pathlib.Path(r['path']).read_bytes()).hexdigest()==r['sha256'] for r in records)

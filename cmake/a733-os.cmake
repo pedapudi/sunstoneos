@@ -38,6 +38,18 @@ elseif(SUNSTONE_APPLICATION STREQUAL "large-region-test")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest.json")
   add_sunstone_image(sunstone-a733-os-large-region-test LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION large-region)
+elseif(SUNSTONE_APPLICATION STREQUAL "storage-write-test")
+  # Creates the region test file through the FAT32 write service; the image is write-capable, so the runner needs the
+  # coordinator's approval record for its bounds (tools/storage_bounds.py).
+  if(NOT SUNSTONE_A733_OS_SD_WRITE)
+    message(FATAL_ERROR "storage-write-test needs -DSUNSTONE_A733_OS_SD_WRITE=ON")
+  endif()
+  add_sunstone_application(storage-write
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/storage-write-test/main.c"
+            "${SUNSTONE_SOURCE_ROOT}/drivers/storage/fat32_rw.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/storage-write-test/manifest.json")
+  add_sunstone_image(sunstone-a733-os-storage-write-test LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION storage-write)
 elseif(SUNSTONE_APPLICATION STREQUAL "latency-cost")
   include("${SUNSTONE_SOURCE_ROOT}/apps/latency-cost/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-latency-cost LIFETIME ${os_lifetime}
