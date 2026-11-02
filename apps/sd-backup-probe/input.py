@@ -13,21 +13,23 @@ import struct
 INPUT_MAGIC = 0x3144524450445353
 REPORT_MAGIC = 0x3154505250445353
 MAX_CAPTURE = 512
-INPUT_BYTES = 2184
+INPUT_BYTES = 2320
 # Byte offsets in struct sdp_report (apps/sd-backup-probe/probe.h); checks/sd-backup-probe.py compares them with the compiler's.
 OFFSET = dict(magic=0, stage=16, reason=24, done=32, planned=40, identified_us=48, elapsed_us=56, cid=80, csd=112, ocr=144,
               rca=152, sectors=160, scr=168, mode=184, card_hz=192, baseline_start=200, baseline_end=328, clock_off=456,
               pmic_parked=464, capture_done=472, elapsed=480, crc=2528, sector=5344, sd_status=274896, status_result=274960, au_sectors=274968,
-              au_sectors_uhs=274976, status_us=274984, switch_status=274992, uhs=275056)
-REPORT_BYTES = 275184
+              au_sectors_uhs=274976, status_us=274984, switch_status=274992, uhs=275056, stat=275184)
+REPORT_BYTES = 275568
 
 
-def pack_input(sectors, uhs_mode=0, reads=1, blocks=8):
+def pack_input(sectors, uhs_mode=0, reads=1, blocks=8, phases=()):
     if not 1 <= len(sectors) <= MAX_CAPTURE or sectors != sorted(set(sectors)):
         raise SystemExit('give 1 to 512 distinct sectors')
     raw = struct.pack('<Q4I', INPUT_MAGIC, reads, blocks, 0, len(sectors)) + struct.pack(f'<{MAX_CAPTURE}I', *(sectors + [0] * (MAX_CAPTURE - len(sectors))))
     raw += struct.pack('<2Q', 0, 0) + struct.pack('<QII48s32s', 0, 0, uhs_mode, b'', bytes(32))
-    assert len(raw) == INPUT_BYTES
+    phases = list(phases)[:8]
+    raw += struct.pack('<2I', len(phases), 0) + b''.join(struct.pack('<4I', *p) for p in phases) + bytes(16 * (8 - len(phases)))
+    assert len(raw) == INPUT_BYTES, len(raw)
     return raw
 
 
@@ -96,7 +98,10 @@ def decode(raw, requested):
                              tuning=dict(map=f'{u[12]:016x}', passing_delays=[d for d in range(64) if u[12] >> d & 1], chosen_delay=u[13] & 255,
                                          window_start=u[13] >> 8 & 255, window_width=u[13] >> 16 & 255, outcome_code=u[13] >> 24 & 255),
                              card_clock_hz=u[14], module_clock_hz=u[15])
-    n = out['done']
+    st = [struct.unpack_from('<4Q4I', raw, OFFSET['stat'] + 48 * p) for p in range(8)]
+    out['phases'] = [dict(phase=p, requests=x[4], mean_ms=round(x[0] / x[4] / 1000, 3), min_ms=round(x[1] / 1000, 3), max_ms=round(x[2] / 1000, 3),
+                          over_5ms=x[5], over_10ms=x[6], window_s=round(x[3] / 24e6, 4), sum_s=round(x[0] / 1e6, 4)) for p, x in enumerate(st) if x[4]]
+    n = min(out['done'], 512)
     el = struct.unpack_from(f'<{n}I', raw, OFFSET['elapsed']); crc = struct.unpack_from(f'<{n}I', raw, OFFSET['crc'])
     win, nbytes = struct.unpack_from('<2Q', raw, 64)
     out['sustained'] = dict(bytes=nbytes, seconds=round(win / 24e6, 4), MBps=round(nbytes / (win / 24e6) / 1e6, 2) if win else 0)
@@ -116,6 +121,7 @@ def main():
     i.add_argument('--ranges', nargs='+', required=True, help='FIRST:COUNT pairs, for example 0:1 32768:2')
     i.add_argument('--uhs-mode', type=int, default=0, choices=(0, 1, 2, 3), help='0 high speed with S18A observed, 1 UHS-I lifetime 1, 2 UHS-I lifetime 2, 3 re-entry then SDR104 with tuning')
     i.add_argument('--reads', type=int, default=1)
+    i.add_argument('--phase', action='append', default=[], metavar='FIRST_SECTOR:BLOCKS:READS[:quick]', help='one phase of a multi-phase plan (up to 8), run in order in one lifetime')
     i.add_argument('--blocks', type=int, default=8)
     d = sub.add_parser('decode')
     d.add_argument('--report', type=Path, required=True)
@@ -130,7 +136,8 @@ def main():
     sectors = sorted({s for r in a.ranges for s in range(int(r.split(':')[0]), int(r.split(':')[0]) + int(r.split(':')[1]))})
     if a.cmd == 'input':
         with a.output.open('xb') as f:
-            f.write(pack_input(sectors, a.uhs_mode, a.reads, a.blocks))
+            ph = [tuple(int(x) for x in p.replace(':quick', ':1').split(':')) + ((0,) if p.count(':') == 2 else ()) for p in a.phase]
+            f.write(pack_input(sectors, a.uhs_mode, a.reads, a.blocks, ph))
         print(a.output, len(sectors), 'sectors')
     else:
         out, records = decode(a.report.read_bytes(), sectors)

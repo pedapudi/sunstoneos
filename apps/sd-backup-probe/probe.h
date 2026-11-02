@@ -23,7 +23,14 @@ struct sdp_input {
                                           3: the same entry, then SDR104 with tuning (SDR25 if no window) */
     char file_name[48];                /* root-directory path of the file to load */
     uint8_t file_sha256[32];           /* its SHA-256 */
+    /* A plan of up to SDP_PHASES sequential phases, run one after the other in one lifetime: phase p reads reads sectors-runs of blocks sectors
+     * from first, request after request. phase_count zero: the single plan above (reads, blocks, first). flags: SDP_PH_QUICK skips the per-request CRC
+     * and the progress call except every 32nd request, so requests follow one another as closely as the platform allows. */
+    uint32_t phase_count, reserved2;
+    struct sdp_phase { uint32_t first, blocks, reads, flags; } phase[8];
 };
+#define SDP_PHASES 8u
+#define SDP_PH_QUICK 1u
 #define SDP_REGION_LOAD 1u
 
 #define SDP_FAT_ENTRIES 64u
@@ -102,7 +109,10 @@ struct sdp_report {
      * [12] the tuning map (bit d set: sample delay d passed), [13] chosen sample delay | window start << 8 | window width << 16 | outcome << 24,
      * [14] card clock, Hz, [15] module clock, Hz. */
     uint64_t uhs[16];
+    /* Per phase: the sum, least and greatest request time in microseconds and the window from the first submission to the last completion in ticks of
+     * the 24 MHz counter, the requests, those over 5 ms and those over 10 ms. */
+    struct sdp_phase_stat { uint64_t sum_us, min_us, max_us, window_ticks; uint32_t n, over5, over10, reserved; } stat[8];
 };
-_Static_assert(sizeof(struct sdp_input) == 160 - 6 * 4 + 4 * SDP_MAX_CAPTURE, "input wire size");
+_Static_assert(sizeof(struct sdp_input) == 2320, "input wire size");
 
 #endif

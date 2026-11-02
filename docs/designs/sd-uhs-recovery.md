@@ -403,6 +403,52 @@ limit, the card is. The OS loader overlaps requests, so it would recover the 0.3
 50 MHz (14.4 MB/s sustained by the same probe over 4 MiB). A card with better sequential reads would show more. The decision to adopt SDR104 rests on a gain of 1.4 to 2.4 times,
 depending on whether the card's stalls count.
 
+### Where the 5 to 17 ms requests are (from the 512 requests already measured)
+
+Requests are 128 KiB from sector 0 on, so request n starts at n x 128 KiB; 32 requests make one 4 MiB allocation unit. Of the 512, 127 took over 5 ms; their positions:
+
+| Requests | Span | Time per request | Note |
+| --- | --- | --- | --- |
+| 0 to 7 | first 1 MiB | 9.3 to 17.4 ms | cold start: the SDR25 run's first 8 requests on the same sectors took 12.8 to 21.0 ms against 6.1 ms after, **the same extra time (6.7 to 14.9 ms) at 50 and at 150 MHz** |
+| 8 to 384 | 1 MiB to 48 MiB | 2.43 to 2.80 ms, flat, 2.51 ms in the first AU, 2.76 ms after | clean: 47 to 52 MB/s |
+| 385 to 511 | 48 MiB to 64 MiB | 5.0 to 17.4 ms, 5.1, 7.5, 10.0, 12.4 ms recurring | 119 of 127 requests; a few clean ones between |
+
+- **Not periodic.** The stalls are one block at the start and one block of 127 requests (115 consecutive from request 385 with a few gaps), not spaced by the 512 KiB, 1 MiB, 2 MiB or 4 MiB
+  position (counts by position are flat), not at allocation-unit boundaries (AU 0 stalls in 8 of 32 requests, AUs 1 to 11 in none, AUs 12 to 15 in 28 to 32 of 32), and not after a fixed count of requests or bytes
+  apart from the one change at 48 MiB.
+- **Not the bus.** The extra time of the first eight requests is the same in absolute terms at SDR25 and SDR104, so it is not transfer time.
+- **Quantised.** In the slow zone the times cluster at 2.5 ms plus multiples of about 2.5 ms (5.1, 7.5, 10.0, 12.4), so the card inserts waits in steps, not a smooth transfer.
+- **Not data content.** The slow requests are mostly blocks of zeros (constant CRC `0x7ee8cdcd`: 125 of the 127) and fast requests include 263 of the 265 non-constant blocks, so it is not slow-to-read data versus fast zeros.
+- **What this says.** The pattern follows the address (a slow first MiB, a fast 1 to 48 MiB, a slow 48 MiB onwards) and the time is independent of the bus speed: a card behaviour tied to regions of the flash translation or the card's read-ahead, which no address periodicity or fixed count explains. What it cannot separate is the card's cost per
+  command (a read-ahead that does not carry across our CMD12 and next CMD18) from its cost per byte of media. The SDR25 64 MiB run was never made, so whether the slow zone is slow at 50 MHz is not known; only the first 4 MiB were read there.
+
+### Request-pattern experiment (approved, one run)
+
+One lifetime, re-entry then SDR104 as before (`--uhs-mode 3`), then eight phases over the slow zone and controls (`--phase FIRST:BLOCKS:READS[:quick]`; `quick` skips the per-request CRC and the progress call
+except every 32nd request, which brings the gap between requests down from about 0.67 ms to what the platform's take and submit need):
+
+| Phase | Region | Request | Count | Mode | Asks |
+| --- | --- | --- | --- | --- | --- |
+| A | 48 to 64 MiB | 128 KiB | 128 | normal | the zone again |
+| B | the same | 128 KiB | 128 | quick | does the gap matter, or the second pass |
+| C | the same | 128 KiB | 128 | normal | third pass: if slow again, B was the gap; if fast, the card remembers |
+| D | the same | 64 KiB | 256 | normal | request size down |
+| E | the same | 32 KiB | 512 | normal | request size down again |
+| F | 4 to 12 MiB | 128 KiB | 64 | normal | the fast zone as a control |
+| G | 100 to 116 MiB | 128 KiB | 128 | normal | an unseen region |
+| H | 200 to 216 MiB | 128 KiB | 128 | quick | another unseen region, back to back |
+
+Requests of 1 MiB and 4 MiB per CMD18 are not in it: the descriptor ring holds 33 descriptors, so a command reads at most 256 sectors (128 KiB), and the larger sizes need the ring, the buffers and the
+platform's chain check extended; if the result points at the per-command cost they are the next step.
+
+Prediction (written before the run). My best guess is a card behaviour that costs time per command, not per byte, and that our pattern does not cause:
+
+- **A**: slow as before, mean 6 to 10 ms per request, 14 to 20 MB/s. **B and C**: the same as A within 20 percent (no gap or second-pass effect). If B is much faster than A and C slow again, the gap provokes it; if B and C are both fast, the card remembers.
+- **D and E**: the per-command extra time stays about the same, so time per MiB rises: D about 1.5 to 1.8 times A per MiB, E about 2.5 to 3.5 times. If instead the time per MiB equals A's, the cost is per byte of media.
+- **F**: fast, 2.4 to 2.8 ms per 128 KiB, 47 to 54 MB/s. **G and H**: slow like A (the zone beyond 48 MiB is where files lie), with H equal to G.
+- **No error** in any phase; normal close; return normally.
+- **What would change the plan:** a clear difference between A and B or C, or D and E not rising, points at something our pattern does (or a media-bound card). A rise in D and E with B equal to A points at the per-command cost.
+
 ## Board plan
 
 Each stage has one hypothesis. Nothing runs without the coordinator's approval and none writes to the card. Stage 2 below is the
