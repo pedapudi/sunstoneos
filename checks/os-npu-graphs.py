@@ -109,6 +109,7 @@ for i, k in enumerate(depths):
 words[16 + 64:24 + 64] = [8, 1, 1, 0, 24 * 20, 0, 0, 24 * 20]   # the link row
 rows = graphs_host.decode(struct.pack('<216Q', *words), sizes=[(k, 1000) for k in depths] + [(1, 1)], queue=True)
 assert rows['passed'] and [r.get('k') for r in rows['queue'][:8]] == depths and rows['queue'][0]['jobs_per_s'] == 20000
+assert rows['clock']['before']['little_mhz'] == 0 and rows['clock']['after']['core'] == 0
 assert rows['queue'][8] == {'link': True, 'pair_us': 20.0, 'wrong_output_bytes': 0, 'status': 'match'}
 expected = graphs_host.queue_expectation(depths, 1000)['words']
 assert len(expected) == 2 * 216 and expected[0:2] == [graphs_host.MAGIC & 0xffffffff, graphs_host.MAGIC >> 32]

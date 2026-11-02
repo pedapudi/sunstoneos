@@ -8,6 +8,7 @@
 #include "sunstone_npu_queue.h"
 #endif
 #include <string.h>
+#include <stdlib.h>
 
 static struct npu_graph_receipt receipt;
 static uint8_t output[1024 * 1024 / 16];
@@ -29,6 +30,17 @@ void npu_graphs_init(void) {}
 #define QUEUE_JOBS 1000u
 #define QUEUE_TIMEOUT_US 1000000u
 static void queue_fault(unsigned stage, uint32_t value) { ss_fail_value((0xb0u << 8) | stage, value); }
+/* The CPU clock record of the OS (ss_clock_info) as it is when read: the applied points of the little (Cortex-A55) and big
+ * clusters in MHz, their rails in mV, the DSU point, the transitions made and the core of the caller, in three words. */
+static void clock_words(uint64_t *a, uint64_t *b, uint64_t *c)
+{
+    static const char *const keys[] = {"cpu_l_mhz=", "cpu_b_mhz=", "cpu_l_mv=", "cpu_b_mv=", "transitions=", "dsu_mhz=", "core="};
+    char line[192];
+    unsigned long v[7] = {0};
+    if (ss_clock_info(line, sizeof(line)) > 0)
+        for (unsigned i = 0; i < 7; ++i) { const char *at = strstr(line, keys[i]); if (at) v[i] = strtoul(at + strlen(keys[i]), NULL, 10); }
+    *a = v[0] | v[1] << 16 | v[6] << 32 | v[4] << 40; *b = v[2] | v[3] << 16 | v[5] << 32; *c = 1;
+}
 static _Noreturn void npu_graphs_queue_main(void)
 {
     const struct npu_graph_vector *v = &npu_graph_vectors[0];
@@ -56,6 +68,7 @@ static _Noreturn void npu_graphs_queue_main(void)
     if (offset != v->input_bytes) queue_fault(5, (uint32_t)offset);
     static struct ss_npu_fence fences[SS_NPU_QUEUE_MAX_DEPTH];
     unsigned records = 0;
+    clock_words(&receipt.reserved[0], &receipt.reserved[1], &receipt.reserved[2]);   /* before the sweep */
     receipt.start = ss_counter_ticks();
     /* The last k is twice the ring: the ring, not k, then limits the jobs in flight and refuses the rest. */
     for (unsigned k = 1; k <= 2 * SS_NPU_QUEUE_MAX_DEPTH; k *= 2, ++records) {
@@ -82,6 +95,7 @@ static _Noreturn void npu_graphs_queue_main(void)
         ++receipt.completed;
     }
     const unsigned sweeps = records;
+    clock_words(&receipt.reserved[3], &receipt.reserved[4], &receipt.reserved[5]);   /* after the sweep */
     /* The link: only handle 1 has its input written. Handle 2 runs after it and reads handle 1's output as its input, so its
      * output equals the reference only if the link was made (its own input was never written and is zero). Record i holds
      * 1 link (input_bytes), 1 pair (output_bytes), the ticks of the pair (first_difference) and the wrong bytes of handle
