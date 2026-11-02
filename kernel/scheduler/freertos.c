@@ -11,12 +11,21 @@
 #include "notification.h"
 #include "deadline.h"
 
+/* The private fork rejects optional configurations whose API branches have
+ * not been converted. No enabled public API may fall through to legacy lists.
+ * Tickless scheduling belongs to series D. The current OS uses static tasks
+ * and the non-MPU AArch64 port. */
+#if ( configSUPPORT_DYNAMIC_ALLOCATION == 1 ) || ( portUSING_MPU_WRAPPERS != 0 ) || \
+    ( configUSE_TICKLESS_IDLE != 0 ) || ( configUSE_STATS_FORMATTING_FUNCTIONS > 0 )
+#error "partitioned scheduler: optional API configuration is not converted"
+#endif
+
 _Static_assert(configNUMBER_OF_CORES > 1 && configNUMBER_OF_CORES <= 8,
                "the admitted owner fork supports two through eight CPUs");
 _Static_assert(configMAX_PRIORITIES == SS_OWNER_PRIORITIES,
                "owner priorities must match FreeRTOS priorities");
 
-enum ssKernelExecution { SS_K_READY, SS_K_RUNNING, SS_K_BLOCKED, SS_K_SUSPENDED, SS_K_DEAD };
+enum ssKernelExecution { SS_K_READY, SS_K_RUNNING, SS_K_BLOCKED, SS_K_SUSPENDED, SS_K_DEAD, SS_K_TRANSFERRING };
 enum ssKernelWait { SS_K_NONE, SS_K_DELAY, SS_K_EVENT, SS_K_NOTIFICATION };
 enum ssKernelOutcome { SS_K_WAITING, SS_K_EVENT_READY, SS_K_TIMED_OUT, SS_K_ABORTED };
 struct ssKernelTask {
@@ -26,6 +35,10 @@ struct ssKernelTask {
     struct ss_notification_wait notify_wait;
     struct ss_kernel_pin event_reference;
     _Atomic unsigned owner, execution, outcome, effective, base;
+    _Atomic unsigned transfer_execution;
+    /* Compatibility object exclusion serializes donation writers. Owners read
+     * committed donation without acquiring an object lock before their FIFO. */
+    _Atomic unsigned donation, mutexes;
     uint64_t generation;
     unsigned wait_kind, notify_index;
     bool indefinite, unordered, off_cpu;
@@ -39,6 +52,7 @@ struct ssKernelCPU {
     UBaseType_t object_mask;
     bool yield_tail, reschedule, irq_drained;
     uint64_t publication[2];
+    uint64_t repair[2];
     struct ss_kernel_pin reference[SS_OWNER_SLOTS];
 };
 static struct ssKernelTask ssKernelTasks[SS_OWNER_SLOTS];
@@ -95,6 +109,7 @@ static void ssKernelRetired(void *, unsigned, uint64_t);
 static bool ssKernelDispatch(void *, unsigned);
 static void ssKernelInspect(void *, unsigned, unsigned);
 static void ssKernelExpired(void *, const struct ss_deadline_result *);
+static void ssKernelPublishReference(struct ss_kernel_pin);
 static void ssKernelRetirement(void *context, unsigned slot, unsigned coordinator)
 {
     (void)context; (void)coordinator;
@@ -137,9 +152,12 @@ static void ssKernelSlotInitialize(void *opaque, unsigned slot, uint64_t incarna
         ss_notification_init(&s->notification[n], 0);
     atomic_init(&s->owner, creation->owner);
     atomic_init(&s->execution, SS_K_READY);
+    atomic_init(&s->transfer_execution, SS_K_READY);
     atomic_init(&s->outcome, SS_K_WAITING);
     atomic_init(&s->effective, (unsigned)t->uxPriority);
     atomic_init(&s->base, (unsigned)t->uxPriority);
+    atomic_init(&s->donation, 0);
+    atomic_init(&s->mutexes, 0);
     s->off_cpu = true;
     t->uxOwnerSlot = slot;
     ss_control_register(&ssKernelControl, slot, &ssKernelRegistry.descriptor[slot],
@@ -183,7 +201,9 @@ static bool ssKernelAddTask(TCB_t *t)
         if (!xSchedulerRunning || owner == ssKernelCPUId()) {
             configASSERT(ss_owner_enqueue(&ssKernelCPUs[owner].run, &ssKernelTasks[slot].ready, false));
         } else {
-            ss_owner_publish(&ssKernelCPUs[owner].run, slot, (unsigned)t->uxPriority);
+            struct ss_kernel_pin pin;
+            configASSERT(ss_kernel_handle_pin(&ssKernelRegistry, t, &pin));
+            ssKernelPublishReference(pin);
         }
     }
     portCLEAR_INTERRUPT_MASK(irq);
@@ -214,10 +234,18 @@ static void ssKernelBootstrap(void)
 static void ssKernelPublishReference(struct ss_kernel_pin pin)
 {
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
-    unsigned owner = atomic_load_explicit(&s->owner, memory_order_acquire);
     unsigned priority = atomic_load_explicit(&s->effective, memory_order_acquire);
-    if (owner == ssKernelCPUId()) ssKernelInspect(NULL, pin.slot, priority);
-    else ss_owner_publish(&ssKernelCPUs[owner].run, pin.slot, priority);
+    struct ss_control_route route;
+    if (ss_control_route_pin(&ssKernelControl, pin.slot, &route)) {
+        if (route.owner == ssKernelCPUId()) ssKernelInspect(NULL, pin.slot, priority);
+        else ss_owner_publish(&ssKernelCPUs[route.owner].run, pin.slot, priority);
+        ss_control_route_put(&route);
+    } else {
+        /* One failed admission never waits for a moving route. Ordinary hints
+         * let each owner inspect authoritative completion after adoption. */
+        for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu)
+            ss_owner_publish(&ssKernelCPUs[cpu].run, pin.slot, priority);
+    }
     ss_kernel_handle_put(&pin);
 }
 static void ssKernelFlush(void)
@@ -232,6 +260,11 @@ static void ssKernelFlush(void)
             bits &= bits - 1;
             struct ss_kernel_pin pin = cpu->reference[slot];
             cpu->reference[slot] = (struct ss_kernel_pin){0};
+            uint64_t bit = UINT64_C(1) << b;
+            if (cpu->repair[w] & bit) {
+                cpu->repair[w] &= ~bit;
+                ss_control_repair(&ssKernelControl, slot);
+            }
             ssKernelPublishReference(pin);
         }
     }
@@ -391,6 +424,10 @@ static void ssKernelInspect(void *context, unsigned slot, unsigned hint_priority
     }
     if (s->dead) return;
     unsigned state = atomic_load_explicit(&s->execution, memory_order_acquire);
+    if (state == SS_K_TRANSFERRING) {
+        ss_control_forward(&ssKernelControl, slot);
+        return;
+    }
     if (state == SS_K_READY) { ssKernelMakeReady(s); return; }
     if (state != SS_K_BLOCKED) return;
     bool complete = atomic_load_explicit(&s->outcome, memory_order_acquire) != SS_K_WAITING;
@@ -470,6 +507,21 @@ static void ssKernelSwitch(unsigned c)
     }
     struct ss_owner_task *previous = cpu->run.current;
     if (previous) {
+        traceTASK_SWITCHED_OUT();
+#if ( configGENERATE_RUN_TIME_STATS == 1 )
+#ifdef portALT_GET_RUN_TIME_COUNTER_VALUE
+        portALT_GET_RUN_TIME_COUNTER_VALUE(ulTotalRunTime[c]);
+#else
+        ulTotalRunTime[c] = portGET_RUN_TIME_COUNTER_VALUE();
+#endif
+        if (ulTotalRunTime[c] > ulTaskSwitchedInTime[c])
+            ((TCB_t *)previous->context)->ulRunTimeCounter += ulTotalRunTime[c] - ulTaskSwitchedInTime[c];
+        ulTaskSwitchedInTime[c] = ulTotalRunTime[c];
+#endif
+        taskCHECK_FOR_STACK_OVERFLOW();
+#if ( configUSE_POSIX_ERRNO == 1 )
+        ((TCB_t *)previous->context)->iTaskErrno = FreeRTOS_errno;
+#endif
         struct ssKernelTask *s = &ssKernelTasks[previous->slot];
         s->off_cpu = true;
         ((TCB_t *)previous->context)->xTaskRunState = taskTASK_NOT_RUNNING;
@@ -480,9 +532,24 @@ static void ssKernelSwitch(unsigned c)
             configASSERT(ss_owner_enqueue(&cpu->run, previous, !cpu->yield_tail));
         }
     }
+    bool voluntary = cpu->yield_tail;
     cpu->yield_tail = false;
     ssKernelService();
-    struct ss_owner_task *selected = ss_owner_select(&cpu->run);
+    struct ss_owner_task *selected = NULL;
+#if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
+    if (previous && !voluntary) {
+        struct ssKernelTask *s = &ssKernelTasks[previous->slot];
+        if (((TCB_t *)previous->context)->xPreemptionDisable && previous->queued &&
+            atomic_load_explicit(&s->execution, memory_order_acquire) == SS_K_READY &&
+            atomic_load_explicit(&s->owner, memory_order_acquire) == c) {
+            configASSERT(ss_owner_remove(&cpu->run, previous));
+            cpu->run.current = selected = previous;
+        }
+    }
+#else
+    (void)voluntary;
+#endif
+    if (!selected) selected = ss_owner_select(&cpu->run);
     configASSERT(selected); /* A pinned idle task always exists on each CPU. */
     struct ssKernelTask *s = &ssKernelTasks[selected->slot];
     configASSERT(!s->dead && !s->suspended && s->off_cpu);
@@ -491,6 +558,14 @@ static void ssKernelSwitch(unsigned c)
     s->off_cpu = false;
     pxCurrentTCBs[c] = selected->context;
     pxCurrentTCBs[c]->xTaskRunState = (BaseType_t)c;
+    traceTASK_SWITCHED_IN();
+    portTASK_SWITCH_HOOK(pxCurrentTCBs[c]);
+#if ( configUSE_POSIX_ERRNO == 1 )
+    FreeRTOS_errno = pxCurrentTCBs[c]->iTaskErrno;
+#endif
+#if ( configUSE_C_RUNTIME_TLS_SUPPORT == 1 )
+    configSET_TLS_BLOCK(pxCurrentTCBs[c]->xTLSBlock);
+#endif
     cpu->reschedule = false;
     bool idle = (pxCurrentTCBs[c]->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0;
     if (ss_owner_commit_dispatch(&cpu->run, selected->priority, idle)) {
@@ -580,14 +655,9 @@ static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
                                              actions[action], value, &ssKernelBackend);
     if (previous) *previous = result.previous;
     if (result.completed_wait) {
-        unsigned c = atomic_load_explicit(&s->owner, memory_order_acquire);
-        unsigned p = atomic_load_explicit(&s->effective, memory_order_acquire);
-        if (c == ssKernelCPUId()) {
-            ssKernelInspect(NULL, pin.slot, p);
-            if (woken && ssKernelCPUs[c].reschedule) *woken = pdTRUE;
-        } else ss_owner_publish(&ssKernelCPUs[c].run, pin.slot, p);
-    }
-    ss_kernel_handle_put(&pin);
+        ssKernelPublishReference(pin);
+        if (woken && ssKernelCPUs[ssKernelCPUId()].reschedule) *woken = pdTRUE;
+    } else ss_kernel_handle_put(&pin);
     portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
     return result.accepted ? pdPASS : pdFAIL;
 }
@@ -654,7 +724,9 @@ static bool ssKernelApply(void *context, unsigned slot, void *task,
         if (!s->off_cpu) { cpu->reschedule = true; return false; }
         s->offcpu_ack = state->offcpu_sequence;
     }
-    unsigned priority = state->effective_priority;
+    unsigned priority = state->priority;
+    unsigned donation = atomic_load_explicit(&s->donation, memory_order_acquire);
+    if (donation > priority) priority = donation;
     if (s->ready.priority != priority) {
         bool queued = s->ready.queued;
         if (queued) configASSERT(ss_owner_remove(&cpu->run, &s->ready));
@@ -674,6 +746,9 @@ static bool ssKernelApply(void *context, unsigned slot, void *task,
         cpu->reschedule = true;
     }
     t->uxBasePriority = state->priority;
+#if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
+    t->xPreemptionDisable = state->preemption_disabled ? pdTRUE : pdFALSE;
+#endif
     t->uxCoreAffinityMask = (UBaseType_t)state->affinity;
     atomic_store_explicit(&s->base, state->priority, memory_order_release);
     if (state->dead || state->suspended) return true;
@@ -703,6 +778,10 @@ static bool ssKernelDetach(void *context, unsigned slot, void *task,
     struct ssKernelTask *s = &ssKernelTasks[slot];
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
     if (!s->off_cpu) { cpu->reschedule = true; return false; }
+    unsigned execution = atomic_load_explicit(&s->execution, memory_order_acquire);
+    configASSERT(execution != SS_K_TRANSFERRING);
+    atomic_store_explicit(&s->transfer_execution, execution, memory_order_relaxed);
+    atomic_store_explicit(&s->execution, SS_K_TRANSFERRING, memory_order_release);
     if (s->ready.queued) configASSERT(ss_owner_remove(&cpu->run, &s->ready));
     transfer->deadline = s->deadline.owner ? s->deadline.deadline : UINT64_MAX;
     transfer->wait_generation = s->generation;
@@ -713,9 +792,8 @@ static bool ssKernelDetach(void *context, unsigned slot, void *task,
     configASSERT(atomic_load_explicit(&ssKernelLoad[transfer->old_owner], memory_order_relaxed));
     atomic_fetch_sub_explicit(&ssKernelLoad[transfer->old_owner], 1, memory_order_relaxed);
     atomic_fetch_add_explicit(&ssKernelLoad[transfer->new_owner], 1, memory_order_relaxed);
-    /* A release owner change is the only point after which foreign hints may
-     * be forwarded. The destination alone adopts the saved queue/deadline. */
-    atomic_store_explicit(&s->owner, transfer->new_owner, memory_order_release);
+    /* Keep source identity while neither owner may activate the task. The
+     * destination publishes identity only after adopting its queue/deadline. */
     return true;
 }
 static void ssKernelAdopt(void *context, unsigned slot, void *task,
@@ -725,9 +803,13 @@ static void ssKernelAdopt(void *context, unsigned slot, void *task,
     struct ssKernelTask *s = &ssKernelTasks[slot];
     unsigned c = ssKernelCPUId();
     configASSERT(s->off_cpu && c == transfer->new_owner && !s->ready.queued);
+    configASSERT(atomic_load_explicit(&s->execution, memory_order_acquire) == SS_K_TRANSFERRING);
     if (transfer->deadline != UINT64_MAX)
         configASSERT(ss_deadline_insert(&ssKernelCPUs[c].deadlines, &s->deadline,
                                         s, transfer->wait_generation, transfer->deadline));
+    atomic_store_explicit(&s->owner, c, memory_order_release);
+    atomic_store_explicit(&s->execution,
+        atomic_load_explicit(&s->transfer_execution, memory_order_relaxed), memory_order_release);
     ssKernelInspect(NULL, slot, atomic_load_explicit(&s->effective, memory_order_acquire));
 }
 static bool ssKernelDrained(void *context, unsigned cpu, unsigned slot)
@@ -762,7 +844,7 @@ static void ssKernelRetired(void *context, unsigned slot, uint64_t incarnation)
 }
 
 enum ssKernelCommand { SS_K_PRIORITY, SS_K_AFFINITY, SS_K_SUSPEND, SS_K_RESUME,
-                       SS_K_ABORT, SS_K_DELETE };
+                       SS_K_ABORT, SS_K_DELETE, SS_K_PREEMPT };
 struct ssKernelMutation { enum ssKernelCommand command; uint64_t argument; unsigned slot; bool changed; };
 static bool ssKernelMutateState(void *opaque, struct ss_control_state *state)
 {
@@ -797,6 +879,10 @@ static bool ssKernelMutateState(void *opaque, struct ss_control_state *state)
     case SS_K_DELETE:
         state->dead = true;
         configASSERT(ss_kernel_handle_close(&ssKernelRegistry, m->slot));
+        return true;
+    case SS_K_PREEMPT:
+        if (state->preemption_disabled == (m->argument != 0)) return false;
+        state->preemption_disabled = m->argument != 0;
         return true;
     }
     return false;
@@ -860,11 +946,21 @@ static unsigned ssKernelPriority(TaskHandle_t handle, bool base)
     ss_kernel_handle_put(&pin);
     return priority;
 }
+static bool ssKernelPin(TaskHandle_t handle, struct ss_kernel_pin *pin)
+{
+    if (!handle) handle = pxCurrentTCBs[ssKernelCPUId()];
+    return ss_kernel_handle_pin(&ssKernelRegistry, handle, pin);
+}
+static unsigned ssKernelLogicalExecution(struct ssKernelTask *s)
+{
+    unsigned state = atomic_load_explicit(&s->execution, memory_order_acquire);
+    return state == SS_K_TRANSFERRING ? atomic_load_explicit(&s->transfer_execution, memory_order_acquire) : state;
+}
 static eTaskState ssKernelState(TaskHandle_t handle)
 {
     struct ss_kernel_pin pin;
     if (!ss_kernel_handle_pin(&ssKernelRegistry, handle, &pin)) return eDeleted;
-    unsigned state = atomic_load_explicit(&ssKernelTasks[pin.slot].execution, memory_order_acquire);
+    unsigned state = ssKernelLogicalExecution(&ssKernelTasks[pin.slot]);
     static const eTaskState states[] = { eReady, eRunning, eBlocked, eSuspended, eDeleted };
     ss_kernel_handle_put(&pin);
     return states[state];
@@ -917,3 +1013,170 @@ static uint32_t ssKernelNotifyClear(TaskHandle_t handle, UBaseType_t index,
     portCLEAR_INTERRUPT_MASK(irq);
     return clear_state ? result.previous_state == SS_NOTIFY_RECEIVED : result.previous;
 }
+
+/* Called with compatibility object exclusion. The donor commits metadata and
+ * retains lifetime before publishing a control hint after the outer unlock. */
+static void ssKernelDonationDefer(struct ss_kernel_pin pin)
+{
+    struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
+    cpu->repair[pin.slot / 64] |= UINT64_C(1) << (pin.slot % 64);
+    ssKernelDefer(pin);
+}
+static BaseType_t ssKernelInherit(TaskHandle_t holder)
+{
+    if (!holder) return pdFALSE;
+    UBaseType_t irq = ssKernelObjectEnterFromISR();
+    struct ss_kernel_pin pin;
+    if (!ssKernelPin(holder, &pin)) {
+        ssKernelObjectExitFromISR(irq);
+        return pdFALSE;
+    }
+    struct ssKernelTask *s = &ssKernelTasks[pin.slot];
+    unsigned priority = atomic_load_explicit(&ssKernelCurrent()->effective, memory_order_acquire);
+    unsigned base = atomic_load_explicit(&s->base, memory_order_acquire);
+    unsigned donation = atomic_load_explicit(&s->donation, memory_order_relaxed);
+    if (priority > donation && priority > base) {
+        atomic_store_explicit(&s->donation, priority, memory_order_release);
+        ssKernelDonationDefer(pin);
+    } else ss_kernel_handle_put(&pin);
+    ssKernelObjectExitFromISR(irq);
+    return base < priority ? pdTRUE : pdFALSE;
+}
+static BaseType_t ssKernelDisinherit(TaskHandle_t holder, bool timeout, unsigned waiting)
+{
+    if (!holder) return pdFALSE;
+    UBaseType_t irq = ssKernelObjectEnterFromISR();
+    struct ss_kernel_pin pin;
+    if (!ssKernelPin(holder, &pin)) {
+        ssKernelObjectExitFromISR(irq);
+        return pdFALSE;
+    }
+    struct ssKernelTask *s = &ssKernelTasks[pin.slot];
+    unsigned count = atomic_load_explicit(&s->mutexes, memory_order_relaxed);
+    configASSERT(count);
+    if (!timeout) {
+        configASSERT(holder == pxCurrentTCBs[ssKernelCPUId()]);
+        atomic_store_explicit(&s->mutexes, --count, memory_order_release);
+    }
+    bool change = (!timeout && !count) || (timeout && count == 1);
+    unsigned donation = atomic_load_explicit(&s->donation, memory_order_relaxed);
+    unsigned target = timeout ? waiting : 0;
+    bool lowered = change && donation > target &&
+        donation > atomic_load_explicit(&s->base, memory_order_acquire);
+    if (change && donation != target) {
+        atomic_store_explicit(&s->donation, target, memory_order_release);
+        ssKernelDonationDefer(pin);
+    } else ss_kernel_handle_put(&pin);
+    ssKernelObjectExitFromISR(irq);
+    return lowered ? pdTRUE : pdFALSE;
+}
+static TaskHandle_t ssKernelMutexTaken(void)
+{
+    struct ssKernelTask *s = ssKernelCurrent();
+    unsigned count = atomic_fetch_add_explicit(&s->mutexes, 1, memory_order_relaxed);
+    configASSERT(count != UINT32_MAX);
+    return s->ready.context;
+}
+
+#if ( configUSE_TRACE_FACILITY == 1 )
+#if ( configGENERATE_RUN_TIME_STATS == 1 )
+static configRUN_TIME_COUNTER_TYPE ssKernelRuntime(TaskHandle_t);
+#endif
+static void ssKernelInfo(TaskHandle_t handle, TaskStatus_t *status, bool stack)
+{
+    configASSERT(status);
+    ssKernelSuspendAll();
+    struct ss_kernel_pin pin;
+    if (!ssKernelPin(handle, &pin)) {
+        *status = (TaskStatus_t){ .eCurrentState = eDeleted };
+        (void)ssKernelResumeAll();
+        return;
+    }
+    TCB_t *t = pin.descriptor->task;
+    struct ssKernelTask *s = &ssKernelTasks[pin.slot];
+    UBaseType_t irq = ssKernelObjectEnterFromISR();
+    *status = (TaskStatus_t){0};
+    status->xHandle = t;
+    status->pcTaskName = t->pcTaskName;
+    status->uxCurrentPriority = atomic_load_explicit(&s->effective, memory_order_acquire);
+    status->pxStackBase = t->pxStack;
+#if ( ( portSTACK_GROWTH > 0 ) || ( configRECORD_STACK_HIGH_ADDRESS == 1 ) )
+    status->pxTopOfStack = (StackType_t *)t->pxTopOfStack;
+    status->pxEndOfStack = t->pxEndOfStack;
+#endif
+    status->xTaskNumber = t->uxTCBNumber;
+    status->uxCoreAffinityMask = t->uxCoreAffinityMask;
+#if ( configUSE_MUTEXES == 1 )
+    status->uxBasePriority = atomic_load_explicit(&s->base, memory_order_acquire);
+#endif
+#if ( configGENERATE_RUN_TIME_STATS == 1 )
+    status->ulRunTimeCounter = ssKernelRuntime(t);
+#endif
+    static const eTaskState states[] = { eReady, eRunning, eBlocked, eSuspended, eDeleted };
+    status->eCurrentState = states[ssKernelLogicalExecution(s)];
+    ssKernelObjectExitFromISR(irq);
+    if (stack) {
+#if ( portSTACK_GROWTH > 0 )
+        status->usStackHighWaterMark = prvTaskCheckFreeStackSpace((uint8_t *)t->pxEndOfStack);
+#else
+        status->usStackHighWaterMark = prvTaskCheckFreeStackSpace((uint8_t *)t->pxStack);
+#endif
+    }
+    ss_kernel_handle_put(&pin);
+    (void)ssKernelResumeAll();
+}
+static UBaseType_t ssKernelForEach(TaskStatusCallbackFunction_t callback, void *context)
+{
+    UBaseType_t count = 0;
+    /* Caller holds the global compatibility gate. Registry buckets are
+     * permanent; each callback also has a task lifetime pin. */
+    for (unsigned b = 0; b < SS_KERNEL_HANDLE_BUCKETS; ++b) {
+        uintptr_t handle = atomic_load_explicit(&ssKernelRegistry.bucket[b].handle, memory_order_acquire);
+        if (!handle || handle == UINTPTR_MAX) continue;
+        struct ss_kernel_pin pin;
+        if (!ssKernelPin((TaskHandle_t)handle, &pin)) continue;
+        unsigned execution = ssKernelLogicalExecution(&ssKernelTasks[pin.slot]);
+        static const eTaskState states[] = { eReady, eRunning, eBlocked, eSuspended, eDeleted };
+        callback((TaskHandle_t)handle, states[execution], context);
+        ++count;
+        ss_kernel_handle_put(&pin);
+    }
+    return count;
+}
+#endif
+
+static bool ssKernelIdleShouldYield(void)
+{
+    return ssKernelCPUs[ssKernelCPUId()].run.ready[tskIDLE_PRIORITY].head != NULL;
+}
+
+#if ( configGENERATE_RUN_TIME_STATS == 1 )
+static configRUN_TIME_COUNTER_TYPE ssKernelRuntimeNow(void)
+{
+    configRUN_TIME_COUNTER_TYPE now;
+#ifdef portALT_GET_RUN_TIME_COUNTER_VALUE
+    portALT_GET_RUN_TIME_COUNTER_VALUE(now);
+#else
+    now = portGET_RUN_TIME_COUNTER_VALUE();
+#endif
+    return now;
+}
+static configRUN_TIME_COUNTER_TYPE ssKernelRuntime(TaskHandle_t handle)
+{
+    ssKernelSuspendAll();
+    struct ss_kernel_pin pin;
+    configRUN_TIME_COUNTER_TYPE result = 0;
+    if (ssKernelPin(handle, &pin)) {
+        struct ssKernelTask *s = &ssKernelTasks[pin.slot];
+        TCB_t *t = pin.descriptor->task;
+        result = t->ulRunTimeCounter;
+        if (ssKernelLogicalExecution(s) == SS_K_RUNNING) {
+            unsigned owner = atomic_load_explicit(&s->owner, memory_order_acquire);
+            result += ssKernelRuntimeNow() - ulTaskSwitchedInTime[owner];
+        }
+        ss_kernel_handle_put(&pin);
+    }
+    (void)ssKernelResumeAll();
+    return result;
+}
+#endif
