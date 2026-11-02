@@ -267,6 +267,15 @@ def main():
     try:
         result = check(args.image, args.manifest, args.application)
         assert result['build_id'] == args.build_id.read_text().strip(), 'linked build identity differs from generated identity'
+        if args.lifetime in ('supervised', 'return') and result.get('manifest'):
+            # OS session admission (apps/os/session.c) refuses a manifest whose run deadline plus return reserve exceeds the
+            # supervised session; the EL3 monitor then stops the board before the image runs.
+            header = (Path(__file__).resolve().parents[1] / 'include/a733_board_application.h').read_text()
+            seconds = int(re.search(r'#define A733_BOARD_SUPERVISED_SECONDS (\d+)u', header).group(1))
+            lifetime_us, manifest = seconds * 1000000, result['manifest']
+            assert manifest['return_reserve_us'] < lifetime_us and manifest['run_deadline_us'] <= lifetime_us - manifest['return_reserve_us'], \
+                (f"manifest run_us {manifest['run_deadline_us']} plus return_reserve_us {manifest['return_reserve_us']} exceeds the "
+                 f'{seconds} s supervised session; session admission would refuse it')
         if args.application != 'none':
             result['symbol_boundary'] = application_symbols(Elf(args.image.read_bytes()),
                 args.application_objects, args.application_library, args.runtime_library,
