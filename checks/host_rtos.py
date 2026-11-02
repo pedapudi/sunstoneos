@@ -8,6 +8,7 @@ other host checks use. Include roots are checks/host first, so the shim's
 FreeRTOSConfig.h and portmacro.h win, then the kernel headers, then include/.
 """
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 from harness import CLANG, SANITIZE, CACHE, environment
@@ -15,6 +16,7 @@ from harness import CLANG, SANITIZE, CACHE, environment
 ROOT = Path(__file__).resolve().parents[1]
 HOST = ROOT / 'checks/host'
 KERNEL = CACHE / 'sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2'
+OBJECTS = CACHE / 'build/host-shim-objects'
 KERNEL_SOURCES = ('tasks.c', 'queue.c', 'list.c')
 FLAGS = ['-std=gnu11', '-g', '-O1', '-Wall', '-Wextra', '-Werror', '-Wno-missing-field-initializers', '-Wno-unused-parameter',
          '-Wno-sign-compare', *SANITIZE]
@@ -39,11 +41,19 @@ def build(output, sources, name, defines=(), includes=(), flags=(), shim=True, l
         units.append(str(HOST / 'host_deadline.c'))
     # The kernel is third-party code: its own warnings are not the fixture's.
     objects = []
+    # The kernel and the shim are the same for every check that uses the same flags, so
+    # their objects are shared across runs and checks. The key covers the full command,
+    # the unit and every shim header; a write is atomic, so concurrent builds are safe.
+    shim_text = b''.join(p.read_bytes() for p in sorted(HOST.iterdir()) if p.suffix in ('.h', '.c'))
     for unit in units:
-        obj = output / (Path(unit).name + '.o')
+        quiet = ['-Wno-error', '-w'] if unit.startswith(str(KERNEL)) else []
+        key = hashlib.sha256(repr((command, quiet, unit)).encode() + Path(unit).read_bytes() + shim_text).hexdigest()[:24]
+        obj = OBJECTS / (Path(unit).name + '-' + key + '.o')
         if not obj.exists():
-            quiet = ['-Wno-error', '-w'] if unit.startswith(str(KERNEL)) else []
-            subprocess.run([*command, *quiet, '-c', unit, '-o', str(obj)], check=True, env=environment())
+            OBJECTS.mkdir(parents=True, exist_ok=True)
+            partial = obj.with_name(obj.name + '.%d' % os.getpid())
+            subprocess.run([*command, *quiet, '-c', unit, '-o', str(partial)], check=True, env=environment())
+            os.replace(partial, obj)
         objects.append(str(obj))
     for source in sources:
         path = Path(source)
