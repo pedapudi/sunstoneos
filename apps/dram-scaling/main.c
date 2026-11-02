@@ -69,7 +69,7 @@ static void worker(void *arg)
             uint32_t j = 0;
             do {
                 for (uint32_t k = 0; k < per_check; ++k, ++j)
-                    digest ^= ds_read(region + (size_t)ds_chunk_index(mode, j) * (bytes / 8), bytes);
+                    digest ^= (mode == 4 ? ds_read_pf : ds_read)(region + (size_t)ds_chunk_index(mode, j) * (bytes / 8), bytes);
                 end = counter();
             } while (end < deadline);
             chunks = j;

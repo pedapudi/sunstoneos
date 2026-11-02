@@ -30,7 +30,7 @@ result = host.decode(payload)
 assert len({(c['mask'], c['mode'], c['stagger']) for c in result['configs']}) == host.CONFIGS
 # Every chunk order visits each chunk equally often over a whole number of passes.
 import numpy as np
-for mode in range(4):
+for mode in range(5):
     n = host.REGION_BYTES // host.chunk_bytes(mode)
     visits = np.bincount(host.chunk_index(mode, np.arange(n, dtype=np.int64)), minlength=n)
     assert (visits == 1).all(), mode

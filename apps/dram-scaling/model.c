@@ -47,7 +47,7 @@ int main(void)
                                          + ds_region_offset(core, config->stagger) / 8;
                 uint64_t digest = 0;
                 for (uint32_t j = 0; j < chunks; ++j)
-                    digest ^= ds_read(region + (size_t)ds_chunk_index(config->mode, j) * (bytes / 8), bytes);
+                    digest ^= (config->mode == 4 ? ds_read_pf : ds_read)(region + (size_t)ds_chunk_index(config->mode, j) * (bytes / 8), bytes);
                 config->digest[core] = digest;
             }
     }

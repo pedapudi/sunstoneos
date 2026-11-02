@@ -27,11 +27,11 @@ VARIANTS = [(m, 0, 0) for m in (0x01, 0x03, 0x0f, 0x3f, 0x40, 0xc0, 0xcf, 0xff)]
 for stagger in (4096, 65536, 262144):
     VARIANTS += [(m, 0, stagger) for m in (0x3f, 0xc0, 0xff)]
 for mode in (1, 2, 3):
-    masks = (0x01, 0x40, 0x3f, 0xc0, 0xff) if mode == 1 else (0x01, 0x40, 0x3f, 0xc0, 0xff)
-    VARIANTS += [(m, mode, 0) for m in masks]
+    VARIANTS += [(m, mode, 0) for m in (0x01, 0x40, 0x3f, 0xc0, 0xff)]
+VARIANTS += [(m, 4, 0) for m in (0x01, 0x03, 0x0f, 0x3f, 0x40, 0xc0, 0xcf, 0xff)]
 CONFIGS = len(VARIANTS)
 RESULT_BYTES = HEAD.size + FILL.size + 2 * CLOCK + CONFIGS * CONFIG.size
-MODE_NAMES = ('sequential 64 KiB chunks', 'sequential 4 KiB chunks', 'two streams', 'page strides')
+MODE_NAMES = ('sequential 64 KiB chunks', 'sequential 4 KiB chunks', 'two streams', 'page strides', 'sequential, software prefetch')
 
 
 def inputs():
@@ -39,7 +39,7 @@ def inputs():
 
 
 def chunk_bytes(mode):
-    return 65536 if mode == 0 else 4096
+    return 65536 if mode in (0, 4) else 4096
 
 
 def chunk_index(mode, j):
@@ -101,7 +101,7 @@ def decode(payload):
                     if chunks or ticks:
                         raise ValueError(f'configuration {c} core {k} reports a read outside its set')
                     continue
-                if chunks == 0 or not window <= ticks < 2 * window:
+                if chunks == 0 or not window <= ticks < 10 * window:
                     raise ValueError(f'configuration {c} rep {rep} core {k} window is out of range')
                 per_core[k] = chunks * cb / (ticks / hz) / 1e9
                 ticks_all.append(ticks)

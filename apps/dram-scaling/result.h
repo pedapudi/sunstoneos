@@ -17,8 +17,9 @@
 /* Access patterns of one core. A chunk is read with 128-byte loads.
  * 0: sequential, 64 KiB chunks.   1: sequential, 4 KiB chunks (control for the chunk size).
  * 2: two sequential streams half a region apart, alternating 4 KiB chunks.
- * 3: 4 KiB chunks in the order (7 * j) modulo the chunk count: page-granular strides. */
-#define DS_MODES 4u
+ * 3: 4 KiB chunks in the order (7 * j) modulo the chunk count: page-granular strides.
+ * 4: as 0, with a software prefetch into the L2 cache 2 KiB ahead of the loads. */
+#define DS_MODES 5u
 #define DS_CHUNK_BYTES_0 (64u << 10)
 #define DS_CHUNK_BYTES_N (4u << 10)
 /* Core sets: 0x01 one A55, 0x03 two, 0x0f four, 0x3f six A55; 0x40 one A76, 0xc0 two A76;
@@ -31,8 +32,9 @@ struct ds_variant { uint32_t mask, mode, stagger; };
     {0x3f,0,262144},{0xc0,0,262144},{0xff,0,262144}, \
     {0x01,1,0},{0x40,1,0},{0x3f,1,0},{0xc0,1,0},{0xff,1,0}, \
     {0x01,2,0},{0x40,2,0},{0x3f,2,0},{0xc0,2,0},{0xff,2,0}, \
-    {0x01,3,0},{0x40,3,0},{0x3f,3,0},{0xc0,3,0},{0xff,3,0} }
-#define DS_CONFIGS 32u
+    {0x01,3,0},{0x40,3,0},{0x3f,3,0},{0xc0,3,0},{0xff,3,0}, \
+    {0x01,4,0},{0x03,4,0},{0x0f,4,0},{0x3f,4,0},{0x40,4,0},{0xc0,4,0},{0xcf,4,0},{0xff,4,0} }
+#define DS_CONFIGS 40u
 struct ds_core_sample { uint32_t chunks; uint32_t ticks; };   /* chunks read; ticks from the common gate to the core's last chunk */
 struct ds_config {
     uint32_t mask, mode, stagger, reserved;
@@ -51,10 +53,11 @@ struct ds_result {
 };
 /* Streams `bytes` (a multiple of 128) from `p` with 128-byte loads; returns the XOR of all 64-bit words. */
 uint64_t ds_read(const uint64_t *p, size_t bytes);
+uint64_t ds_read_pf(const uint64_t *p, size_t bytes);
 /* The word at index i of the whole buffer. */
 static inline uint64_t ds_word(uint64_t i) { return i * UINT64_C(0x9e3779b97f4a7c15) + UINT64_C(0x1234567); }
 /* Chunk geometry and visit order shared by the image, the host model and the decoder. */
-static inline uint32_t ds_chunk_bytes(uint32_t mode) { return mode == 0 ? DS_CHUNK_BYTES_0 : DS_CHUNK_BYTES_N; }
+static inline uint32_t ds_chunk_bytes(uint32_t mode) { return (mode == 0 || mode == 4) ? DS_CHUNK_BYTES_0 : DS_CHUNK_BYTES_N; }
 static inline uint32_t ds_chunk_count(uint32_t mode) { return DS_REGION_BYTES / ds_chunk_bytes(mode); }
 static inline uint32_t ds_chunk_index(uint32_t mode, uint32_t j)
 {
