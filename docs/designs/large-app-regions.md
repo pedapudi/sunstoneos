@@ -353,7 +353,7 @@ is below 100 (the entry, the routine's stack and code windows, and the kernel's 
 one entry per block: 512 for the pass, so 512 to 700 refills, which is about 0.5 to 0.7 refills per MiB, and none
 of them are 4 KiB-page misses. A DTLB walk count of the same order follows when the core counts that event.
 
-Loader prediction (the file on the card). Streaming `sunstone-region-test.bin` (512 MiB) through two 128 KiB
+Loader prediction (the file on the card). Streaming `/sunstone-test/sunstone-region-test.bin` (512 MiB) through two 128 KiB
 buffers reads at the measured 21.9 MB/s per request; copy and SHA-256 overlap the next request and the chain
 lookups run between requests, so the load takes 24 to 27 seconds (19 to 22 MB/s) and the SHA-256 equals
 `a0ab21dca50740b257c495faa888058cb757ec5165d27afb0c13cc5bef48eabd`. Without the file the probe reports it absent,

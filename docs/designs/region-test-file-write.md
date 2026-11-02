@@ -1,10 +1,17 @@
 # Design: creating the region test file on the card
 
+Scope. The module here creates one file in the root directory's first cluster and is host-checked as such. The
+general storage-write path of the OS image, which a separate worker owns, builds on it and creates the file at the
+path above, so its directory handling (creating or finding `sunstone-test` and placing the entry there) and its write
+bounds replace the root-directory rows below. The probe image does not write the card; the earlier probe-lifetime
+plan in the open points is superseded by that path.
+
 Status: the file-create module is **implemented** and checked on the host (`checks/fat32-create.py`). The
 storage-write image and its runner admission are **design**. Nothing is written to a card; the write needs the
 coordinator's approval with `--storage-write` on port 3-1.
 
-The large application region test loads `sunstone-region-test.bin` (512 MiB) from the card's FAT32 volume. A PC
+The large application region test loads `/sunstone-test/sunstone-region-test.bin` (512 MiB) from the card's FAT32 volume,
+in the directory `sunstone-test` below the root. A PC
 cannot put the file there, so the board creates it: it generates the content with the counter-mode SHA-256 stream
 of `tools/region_test_file.py`, so nothing is uploaded, and writes one file into the empty volume.
 
