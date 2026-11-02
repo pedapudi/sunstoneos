@@ -147,15 +147,37 @@ write each step issues:
    state, the clean bit is set again in FAT copy 2 first, then copy 1. Mount
    reads the flag from copy 1, so copy 1 is cleared last and set first.
 
-The ordering follows the reference behaviour of Linux `fs/fat`: file data is
-written back before the inode and FAT blocks that name it when a file is
-synced (`fat_file_fsync` in `fs/fat/file.c`); the dirty state is recorded at mount and cleared at unmount (`fat_set_state` in
-`fs/fat/inode.c`, which records it in the boot sector's state byte; this
-service records it in FAT[1], the field that `fsck.fat` and Windows also read);
-and FSInfo is written at sync and unmount (`fat_clusters_flush` in
-`fs/fat/misc.c`). A deleted entry marks the long-name entries and then the short
-entry (`fat_remove_entries`), and so does `entry_delete` here. The Linux
-sources are not in the local cache; this paragraph cites function names only.
+The reference is Linux `fs/fat` (stable tree, `linux-6.12.y`, read from
+git.kernel.org). Linux differs from this service in three ways, each deliberate:
+
+- **Dirty flag.** `fat_set_state` (`fs/fat/inode.c`) sets and clears
+  `FAT_STATE_DIRTY` in the boot sector's state byte (`b->fat32.state`), at mount
+  (`fat_set_state(sb, 1, 0)`) and in `fat_put_super` (`fat_set_state(sb, 0, 0)`),
+  and warns "Volume was not properly unmounted" when the bit was already set. This
+  service records the state in FAT[1] bit 27 instead, because the boot sector is
+  outside the writable regions and `fsck.fat` reads FAT[1]; it sets the flag
+  lazily, before the first metadata write, so a session that writes nothing writes
+  nothing.
+- **Ordering at fsync.** `fat_file_fsync` (`fs/fat/file.c`) calls
+  `__generic_file_fsync` (data pages, then the inode, which holds the directory
+  entry), then `sync_mapping_buffers` on the FAT inode, then
+  `blkdev_issue_flush`. The directory entry therefore reaches the device before the
+  FAT blocks. This service writes the FAT chain before the directory entry, so
+  that a directory entry never names a chain the FAT does not hold; recovery
+  handles the opposite case (a chain longer than its entry) by truncation.
+- **FSInfo.** `fat_clusters_flush` (`fs/fat/misc.c`) copies the in-memory free
+  count and next-free hint into the FSInfo buffer and marks it dirty; it is written
+  back with the superblock, not at every file sync. This service does the same at
+  checkpoint and unmount.
+
+Where Linux and this service agree: the FAT copies are written in order, the second
+by `fat_mirror_bhs` after the first (`fs/fat/fatent.c`); a new directory
+cluster is zeroed before it is linked; and a deleted file marks its short
+entry and long-name entries deleted (`fat_remove_entries` in `fs/fat/dir.c`).
+Linux deletes the short entry (with the long entries in the same buffer) first and the
+remaining long entries second, which can leave orphaned long-name entries after a
+cut. `entry_delete` here deletes long entries in other sectors first, so a cut leaves a
+valid file under its short name.
 
 The cost of a sync is one write for the partial AU, one or two FAT sector runs
 (two copies), one directory sector, and on the first metadata write of a session
@@ -309,7 +331,8 @@ For every cut point, a power cut leaves the first k logged sectors. The check
 then runs mount-time recovery, runs `fsck.fat -n` (exit status 0 required),
 reads the volume with an independent Python FAT32 reader and compares each file
 with the constraints the scenario recorded, and mounts again to confirm that
-nothing is written. Results of the committed run: 1339 cuts (one per sector
+nothing is written. The independent reader stands in for mtools, which is not installed on the host.
+Results of the committed run: 1339 cuts (one per sector
 write of the scenario), 2482 random subsets of multi-sector calls, 133 cuts in
 the recovery itself, all clean with synced bytes intact.
 
