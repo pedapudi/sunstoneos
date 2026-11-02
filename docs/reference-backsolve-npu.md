@@ -674,6 +674,44 @@ decoded `board_failure` of the result, as in the entry 7c8b2818 record).
 
 A normal return with the receipt of `expect.json` ends the run.
 
+### Test graphs through the OS NPU service
+
+SunstoneOS holds 17 single-operation graphs, built by the pinned compiler from the model descriptions of
+`tools/npu-graph-variants.py` and catalogued in `tools/npu-session-models.json` (names `graph-*`). Run A sends the
+first 15 through the OS NPU service one after another; run B sends the last two. The application
+(`apps/npu-graphs`) loads each graph, submits one job with the graph's input and compares the output with the SDK
+simulator's, byte for byte. Operating point 852 MHz at 800 mV; no other change.
+
+| Graphs | Operations | Paths first used on a board |
+| --- | --- | --- |
+| add, sub | one stream-processor operation | stream-processor program; second input from a graph input |
+| mul | one neural-network operation | second input from a graph input |
+| relu, sig, tanh, swish | one activation operation | activation table through patch source 5 |
+| sm32, sm64 | five stream-processor operations | stream-processor programs without a second input |
+| chainA, chainB, chainC | a neural-network and a stream-processor operation | second input in VIP SRAM (chainB, chainC) |
+| deep | three neural-network operations and an activation | second input and output in VIP SRAM |
+| mm | four neural-network operations | batched product; second input from a graph input at slice offsets |
+| glu | two transposes and one stream-processor operation | second input in VIP SRAM |
+| ln176, ln64 (run B) | five to seven stream-processor operations | dynamic-input section, placed read-only after the coefficients |
+
+**Prediction.** Every device path the graphs use is one that the host checks run on the production code with a modeled
+register file (`checks/os-npu-graphs.py`), and the loader admits each graph; the device has so far run kinds 2 and 8
+only. The prediction for run A is a normal return and a receipt with 15 records, each with status `match`,
+`completed` and `matched` equal to 15 and the SDK closed. The per-graph time (`us`) is the whole `ss_npu_run`
+including the LOAD of the model.
+What a different result means:
+
+- A record with status `mismatch` names the first differing byte: the NPU ran the graph and computed another value.
+  A first byte of the second half of a ring (offset half the output) points at the second-input ring; a whole-output
+  difference points at the operation's own semantics. This reflects an unmapped field of the command format
+  (`docs/hardware/npu-command-formats.md`), not a loader defect.
+- Status `refused` (the SDK refused the request) or `failed` (the service retains a fault) names the first graph that
+  could not run; later graphs read `not run`. The failure record of the board (`NPU_FAILURE`, or the breadcrumb site
+  of `apps/os/npu.c`) names the request that failed.
+- A watchdog return without a receipt means the NPU hung on a command. The cause is then derived from the records
+  (the last stage, the `0x0e5b` position of the failing program) before any further run; the failing graph is
+  identified by the order of the list.
+
 ### Assumptions that need hardware state
 
 | Assertion or refusal | Value assumed | Evidence |
