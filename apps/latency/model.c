@@ -80,10 +80,11 @@ static void controller(void *argument)
                         configASSERT(s->ticks <= result.phase_bounds[p][1] - s->start);
                     }
 #ifdef SUNSTONE_LATENCY_PMU
-                    if (k == 0) {
-                        const struct ss_latency_site_pmu *q = &result.site_pmu[p][c][i];
+                    if (k == 0 && (p == SS_LAT_BUSY || p == SS_LAT_PHASES)) {
+                        const struct ss_latency_site_pmu *q = &result.site_pmu[p == SS_LAT_BUSY ? 0 : 1][c][i];
                         number("site_pmu instructions=", q->instructions); number(" cycles=", q->cycles);
-                        number(" l1d_refills=", q->l1d_refills); number(" l2d_refills=", q->l2d_refills);
+                        number(" stall_backend=", q->stall_backend); number(" mem_access=", q->mem_access);
+                        number(" bus_access=", q->bus_access); number(" l1d_refills=", q->l1d_refills);
                         platform_puts("\n");
                     }
 #endif

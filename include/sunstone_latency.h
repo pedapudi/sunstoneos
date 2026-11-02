@@ -38,10 +38,13 @@ struct ss_latency_site {
 
 /* Optional PMU capture (SUNSTONE_LATENCY_PMU, off by default): the counts a core
  * executed inside each of its longest masked spans, parallel to ss_latency_site
- * entries of kind 0. Differences are modulo 2^32. */
+ * entries of kind 0. Differences are modulo 2^32. An event the core does not
+ * implement counts zero; ss_latency_pmu_supported tells which are implemented. */
 struct ss_latency_site_pmu {
-    uint32_t instructions, cycles, l1d_refills, l2d_refills;
+    uint32_t instructions, cycles, stall_backend, mem_access, bus_access, l1d_refills;
 };
+/* Rows of the exported tail: the busy phase and the aggregate. */
+#define SS_LAT_PMU_ROWS 2U
 
 #ifdef SUNSTONE_LATENCY
 static inline uint64_t ss_latency_now(void)
@@ -64,7 +67,10 @@ void ss_latency_sites_snapshot(struct ss_latency_site out[SS_LAT_PHASES + 1][8][
 #ifdef SUNSTONE_LATENCY_PMU
 /* Same order as the kind-0 site table; zero for a span measured before the
  * core's counters were enabled. Enable runs from the IRQ hook at EL1. */
-void ss_latency_site_pmu_snapshot(struct ss_latency_site_pmu out[SS_LAT_PHASES + 1][8][SS_LAT_SITE_SLOTS]);
+void ss_latency_site_pmu_snapshot(struct ss_latency_site_pmu out[SS_LAT_PMU_ROWS][8][SS_LAT_SITE_SLOTS]);
+/* Bit i is set when counter i's event (INST_RETIRED, STALL_BACKEND, MEM_ACCESS,
+ * BUS_ACCESS, L1D_CACHE_REFILL) is implemented on that core; zero if the PMU is unavailable. */
+uint32_t ss_latency_pmu_supported(unsigned core);
 void ss_latency_pmu_enable(void);
 #endif
 /* Single coordinator; each named phase opens once. Only intervals wholly inside

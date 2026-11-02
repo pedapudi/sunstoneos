@@ -34,8 +34,10 @@ struct latency_result {
     struct ss_latency_site sites[SS_LAT_PHASES + 1][LATENCY_CORES][SS_LAT_SITE_KINDS][SS_LAT_SITE_SLOTS]
         __attribute__((aligned(64)));
 #ifdef SUNSTONE_LATENCY_PMU
-    /* Counts inside the kind-0 sites above, same phase, core and slot. */
-    struct ss_latency_site_pmu site_pmu[SS_LAT_PHASES + 1][LATENCY_CORES][SS_LAT_SITE_SLOTS];
+    /* Implemented-event mask of each core, then the counts inside the kind-0 sites above
+     * (row 0 busy phase, row 1 aggregate; same core and slot). */
+    uint32_t pmu_supported[LATENCY_CORES];
+    struct ss_latency_site_pmu site_pmu[SS_LAT_PMU_ROWS][LATENCY_CORES][SS_LAT_SITE_SLOTS];
 #endif
 };
 _Static_assert(offsetof(struct latency_result, core) == 320 &&
@@ -44,7 +46,7 @@ _Static_assert(offsetof(struct latency_result, core) == 320 &&
     offsetof(struct latency_result, wakes) == 20848 &&
     offsetof(struct latency_result, sites) == 57728 &&
 #ifdef SUNSTONE_LATENCY_PMU
-    sizeof(struct latency_result) == 63872 + 1536,
+    sizeof(struct latency_result) == 63872 + 1216,
 #else
     sizeof(struct latency_result) == 63872,
 #endif
