@@ -35,7 +35,8 @@ enum qemu_os_fault {
     QEMU_OS_FAULT_DISK_MOUNT,          /* the block device refuses every read of the first 64 sectors */
     QEMU_OS_FAULT_DISK_SUBMIT,         /* the block device refuses to start a streamed request */
     QEMU_OS_FAULT_DISK_MIDWAY,         /* the block device fails the fifth streamed request */
-    QEMU_OS_FAULT_DISK_ABSENT          /* the board offers no block device */
+    QEMU_OS_FAULT_DISK_ABSENT,         /* the board offers no block device */
+    QEMU_OS_FAULT_STRAY_NOTIFY         /* the SD open is slow, and a USB-change hint reaches the application's task during it */
 };
 /* The scenario is data, written by the check. Times are microseconds of
  * guest time after the board's start. */

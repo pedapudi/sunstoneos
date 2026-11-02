@@ -11,6 +11,9 @@
 #include <string.h>
 #include "FreeRTOS.h"
 #include "task.h"
+#include "qemu_os.h"
+
+void os_application_usb_changed(void);               /* apps/os/application.c: xTaskNotifyGive(main_task), a real default-index hint */
 
 #define DISK ((uint8_t *)(uintptr_t)0x48000000)
 #define DISK_SECTORS 65536u
@@ -77,7 +80,15 @@ static struct os_large_device device;
 static struct os_sd_hw hw;
 const struct os_sd_hw *os_sd_open_owner(void)
 {
-    vTaskDelay(pdMS_TO_TICKS(50));                   /* the real open takes the PMIC, the rail and identification: the application waits for it */
+    /* The real open takes the PMIC, the rail and identification: the application waits for it. A hint on its default notification
+     * index (a USB attachment change, the USB-ready event, a deadline hint) may arrive meanwhile and must not end the wait. */
+    if (qemu_os_scenario()->fault == QEMU_OS_FAULT_STRAY_NOTIFY) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        os_application_usb_changed();
+        vTaskDelay(pdMS_TO_TICKS(40));
+    } else {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
     device = (struct os_large_device){{0, ram_read, CARD_SECTORS}, {0, ram_submit, ram_poll}, 0, 0, buffers};
     hw = (struct os_sd_hw){&device, CARD_SECTORS, 1, allocation_unit, enable_writes, write_piece, live, set_write_region, wait_async,
                            owner_sleep_us, owner_wakes, irq_cores, os_sd_close_owner};

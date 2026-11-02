@@ -477,6 +477,23 @@ def reverted_services(work):
     return path
 
 
+def reverted_owner(work):
+    """apps/os/sd_owner.c as the fourth board submission had it: start() sleeps once on the caller's default notification index,
+    so any hint on that index ends the wait before the owner has opened the card."""
+    source = (ROOT / 'apps/os/sd_owner.c').read_text()
+    begin = source.index('    /* The owner gives the notification once the card is open or has failed.')
+    end = source.index('    ready_waiter = NULL;')
+    old = ('    if (atomic_load(&ready) == 0) (void)ulTaskNotifyTake(pdTRUE, 8000u);\n')
+    source = source[:begin] + old + source[end:]
+    marker = '    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) {'
+    stop = source.index('    return atomic_load(&ready) == 1;\n}', source.index(marker))
+    source = source[:source.index(marker)] + '    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) os_sd_diag[0] = 11;\n' + source[stop:]
+    source = source.replace('xTaskNotifyGiveIndexed(ready_waiter, WAIT_INDEX)', 'xTaskNotifyGive(ready_waiter)')
+    path = Path(work) / 'sd_owner_reverted.c'
+    path.write_text(source)
+    return path
+
+
 def unguarded_prestart_scheduler(work):
     """The directory of a kernel/scheduler/freertos.c from before the owner scheduler refused to
     yield or wait for an owner while the scheduler is not running (round 10 of the series).
@@ -550,9 +567,10 @@ def main():
         application = image.application('large-test', ['checks/qemu-os/large-main.c'], manifest)
         return image.build(application)
 
-    def build_storage_write():
+    def build_storage_write(owner_source=None):
         """The storage-write application on the write-capable owner (apps/os/sd_owner.c) over the board's RAM-disk card."""
-        image = Image(out / 'build-storage-write', extra_sources=['apps/os/sd_owner.c', 'platform/qemu-os/sd_hw.c',
+        image = Image(out / ('build-storage-write' + ('-reverted' if owner_source else '')),
+                      extra_sources=[str(owner_source or 'apps/os/sd_owner.c'), 'platform/qemu-os/sd_hw.c',
                                                                    'drivers/storage/a733_storage_bounds.c'])
         application = image.application('storage-write', ['apps/storage-write-test/main.c', 'drivers/storage/fat32_rw.c',
                                                            'apps/storage-write-test/sha256_ce.S'],
@@ -586,8 +604,11 @@ def main():
         large_elf = pool.submit(build_large, 'build-large', large_manifest_path(out / 'large-manifest.json', LARGE_DIGEST, LARGE_FILE))
         large_big_elf = pool.submit(build_large, 'build-large-too-big', ROOT / 'checks/qemu-os/large-too-big-manifest.json')
         storage_write_elf = pool.submit(build_storage_write)
+        (out / 'build-reverted-owner').mkdir()
+        reverted_owner_elf = pool.submit(build_storage_write, reverted_owner(out / 'build-reverted-owner'))
         large_elf, large_big_elf = large_elf.result(), large_big_elf.result()
         storage_write_elf = storage_write_elf.result()
+        reverted_owner_elf = reverted_owner_elf.result()
         os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
             os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result(),
             partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result(), facts_elf.result())
@@ -841,6 +862,18 @@ def main():
     c.require(c.finished is not None, 'the application did not finish')
     d = decode_result(c)
     c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'enable did not succeed: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
+    # A hint on the application's default notification index during the owner's open (a USB-change event, as application.c sends
+    # them) must not end the wait: enable succeeds. The owner as the fourth board submission had it (one sleep on that index)
+    # returns early with stage 11, which is the control.
+    stray = scenario(usb_ready_ms=usb_delay_ms, fault=10)
+    c = run_case('storage-write-enable-stray-notification', storage_write_elf, stray, [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
+    c.clean()
+    d = decode_result(c)
+    c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'a stray notification ended the owner wait: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
+    c = run_case('storage-write-enable-stray-reverted', reverted_owner_elf, stray, [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
+    c.clean()
+    d = decode_result(c)
+    c.require(d['status'] == 1 and d['diag0'] == 11, 'the earlier owner wait survived the stray notification: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
     c = run_case('storage-write-enable-backup-changed', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, mode4], '512M',
                  [(RAMDISK_ADDRESS, card_image(corrupt=32770))])
     c.clean()
