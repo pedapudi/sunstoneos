@@ -36,6 +36,7 @@ def main():
     run('build-deep', [a.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-DSS_NPU_QUEUE_MAX_DEPTH=2000u',
                        '-fsanitize=address,undefined', '-Iinclude', 'checks/npu-app-queue.c', '-o', a.output.resolve() / 'npu-app-queue-deep'])
     run('depth-default', [exe, '8'])
+    run('links-at-open', [exe, '9'])
     run('depth-2000', [a.output.resolve() / 'npu-app-queue-deep', '8'])
     for label, args in [('normal', []), ('start-failure', ['1']), ('completion-failure', ['2']), ('linked', ['3']),
                         ('undeclared-alias', ['4']), ('bad-edge-index', ['5']),

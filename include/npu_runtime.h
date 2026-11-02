@@ -192,6 +192,10 @@ int npu_runtime_preload(struct npu_runtime *, unsigned slot, unsigned model);
  * preserves their flush/stall boundary. CPU access waits for the final user. */
 int npu_runtime_link_tensor(struct npu_runtime *, unsigned producer, unsigned output,
                             unsigned consumer, unsigned input);
+/* The same link after the scheduler has started, from the resident client task while every slot is loaded and idle and
+ * before the direct queue is claimed (a queue open links, then claims). It re-assembles the consumer and cleans its caches. */
+int npu_runtime_link_tensor_running(struct npu_runtime *, unsigned producer, unsigned output,
+                                    unsigned consumer, unsigned input);
 int npu_runtime_bind_resident(struct npu_runtime *, struct a733_npu_startup *, TaskHandle_t,
                               UBaseType_t priority, UBaseType_t affinity);
 /* Required, after bind and before scheduling: interrupt completion through

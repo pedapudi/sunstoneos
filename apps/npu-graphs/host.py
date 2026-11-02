@@ -91,6 +91,12 @@ def queue_rows(result):
     bytes after the last job."""
     rows = []
     for g in result['graphs']:
+        if g['input_bytes'] == 1 and g['output_bytes'] == 1 and g is result['graphs'][-1]:
+            # The link row: one link chosen at open, one pair of jobs; the output of the second handle is the reference
+            # only if the first handle's output reached its input.
+            rows.append({'link': True, 'pair_us': g['first_difference'] / 24, 'wrong_output_bytes': g['differing_bytes'],
+                         'status': g['status']})
+            continue
         total_us = g['first_difference'] / 24
         rows.append({'k': g['input_bytes'], 'jobs': g['output_bytes'], 'refusals': g['observed'], 'total_us': total_us,
                      'us_per_job': total_us / g['output_bytes'], 'jobs_per_s': g['output_bytes'] / (total_us / 1e6),
@@ -98,13 +104,15 @@ def queue_rows(result):
     return rows
 
 
-def queue_expectation(depths, jobs):
+def queue_expectation(depths, jobs, link=True):
     """The queue-mode receipt as u32 words: the counts and the output check are exact; the times and the refusals,
     which the study measures, are not."""
-    n = len(depths)
+    n = len(depths) + (1 if link else 0)
     words64 = [MAGIC, 1, BYTES, n, n, n, 1, None, None] + [0] * 7
     for i, k in enumerate(depths):
         words64 += [i, k, jobs, 0, None, None, 0, None]
+    if link:  # one link, one pair; the pair's time is measured, its output must equal the reference
+        words64 += [len(depths), 1, 1, 0, None, 0, 0, None]
     words64 += [0] * (BYTES // 8 - len(words64))
     words = []
     for value in words64:

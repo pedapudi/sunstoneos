@@ -57,6 +57,7 @@ struct os_npu_session;
 enum npu_declaration_result os_npu_declaration_admitted(const struct os_npu_session *);
 /* The in-flight depth the session declares: the deepest queue the application may open. */
 unsigned os_npu_in_flight(void);
+unsigned os_npu_links(void);
 int os_npu_never_ran(void);
 void os_npu_report_unstarted(uint64_t epoch,uint64_t generation);
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE

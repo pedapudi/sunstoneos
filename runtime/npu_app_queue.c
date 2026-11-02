@@ -15,20 +15,25 @@ int ss_npu_queue_service_bind(struct ss_npu_queue *q,const struct ss_npu_queue_b
        !b->start||!b->finish||!b->cache||!b->doorbell||!b->notify||!b->wait)return 0;
     q->backend=*b;q->context=ctx;q->job_limit=UINT64_MAX;bound=q;atomic_store(&q->state,IDLE);return 1;
 }
-int ss_npu_queue_open(unsigned depth,struct ss_npu_queue **out)
+int ss_npu_queue_open_linked(unsigned depth,const struct ss_npu_queue_edge *links,size_t count,struct ss_npu_queue **out)
 {
     struct ss_npu_queue *q=bound;
     if(!q||!out||!depth||depth>SS_NPU_QUEUE_MAX_DEPTH||!q->backend.on_core(q->context))return -1;
     unsigned s=atomic_load_explicit(&q->state,memory_order_acquire);
     if(s==IDLE){
+        if(count>sizeof(q->requested)/sizeof(*q->requested)||(count&&!links))return -1;
         q->depth=depth;q->producer=q->backend.identity(q->context);
         if(!q->producer)return -1;
+        if(count)memcpy(q->requested,links,count*sizeof(*links));
+        q->requested_links=count;
         atomic_store_explicit(&q->state,OPEN_REQUEST,memory_order_release);
         q->backend.request(q->context);return 0;
     }
     if(!producer(q)||depth!=q->depth)return -1;
     if(s==READY){*out=q;return 1;}return s==OPEN_REQUEST?0:-1;
 }
+int ss_npu_queue_open(unsigned depth,struct ss_npu_queue **out)
+{return ss_npu_queue_open_linked(depth,NULL,0,out);}
 static int within(struct ss_npu_tensor t,struct ss_npu_cache_span s)
 {return t.data&&t.bytes&&!((uintptr_t)t.data&63)&&t.bytes<=SIZE_MAX-63&&
     ((t.bytes+63)&~(size_t)63)<=s.bytes&&(uintptr_t)t.data>=s.cpu&&
