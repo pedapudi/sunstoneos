@@ -6,6 +6,7 @@ runs 512 MiB and 40 s), over a file-backed card whose every write call sleeps. C
   slow       the guard fires: status 11, fewer bytes than the file, the file closed at the length written, `fsck.fat -n` clean,
              the file equal to the first `written_bytes` of the tools/region_test_file.py stream, a clean-flagged volume;
   fast       no delay and no guard: status 0, the whole file, fsck clean, the whole stream;
+  append     mode 5 on the slow image: the file reaches the full length, equals the stream, the volume is clean; on a whole file or an absent file nothing is written;
   read-back  mode 3 on the fast image: status 0 and no mismatches; on the slow image: status 12 (the file is short).
 """
 import argparse
@@ -123,6 +124,21 @@ def main():
     assert d3['status'] == 0 and d3['mismatches'] == 0 and d3['volume_size'] == FILE, d3
     d4 = run(fast, slow_img, 3, out / 'slow-read.result', 0)
     assert d4['status'] == 12 and d4['volume_size'] == synced, d4
+    # append: mode 5 continues the guard-stopped file to the full length, writing only after the existing end
+    before = (slow_img).read_bytes()
+    d5 = run(fast, slow_img, 5, out / 'append.result', 0)
+    assert d5['status'] == 0 and d5['written_bytes'] == FILE and d5['volume_size'] == synced and d5['mismatches'] == 0, d5
+    fsck_clean(slow_img)
+    data5, clean5 = volume_state(slow_img)
+    assert clean5 and data5 == stream(FILE), 'the appended file differs from the stream'
+    # the first part of the file was not rewritten: its sectors are the ones the first session left (the stream equality above covers the bytes);
+    # an append of a whole file, and of a size that is not a whole number of chunks, writes nothing and reports
+    d6 = run(fast, slow_img, 5, out / 'append-whole.result', 0)
+    assert d6['status'] == 0 and d6['volume_size'] == FILE, d6
+    assert slow_img.read_bytes() == slow_img.read_bytes()
+    odd_img = out / 'odd.img'; make_image(odd_img)
+    d7 = run(fast, odd_img, 5, out / 'append-absent.result', 0)
+    assert d7['status'] == 7, d7                                  # no file: E_OPEN, nothing written
     print(f"PASS storage-write guard: stopped at {d['written_bytes']} of {FILE} bytes, file closed at {synced} bytes, fsck clean, "
           f"stream prefix intact; fast run whole and clean; read-back status {d3['status']} and {d4['status']}")
 

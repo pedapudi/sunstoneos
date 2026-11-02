@@ -36,8 +36,13 @@ def decode(payload):
     out['irq_entries'] = [out['irq_counts'] >> (8 * c) & 255 for c in range(8)]
     sec = lambda ticks: ticks / COUNTER_HZ
     out['cpu_mhz'] = out['cpu_hz'] / 1e6
+    appended = out['written_bytes'] - (out['volume_size'] if out['mode'] == 5 else 0)
+    out['session_bytes'] = appended
     if out['flush_ticks']:
-        out['flush_rate_mb_s'] = out['written_bytes'] / sec(out['flush_ticks']) / 1e6
+        out['flush_rate_mb_s'] = appended / sec(out['flush_ticks']) / 1e6
+    if out['total_ticks']:
+        out['session_rate_mb_s'] = appended / sec(out['total_ticks']) / 1e6
+    out['phase_seconds'] = {k: sec(out[k + '_ticks']) for k in ('create', 'generate', 'flush', 'close', 'total')}
     out['flush_latency_ms'] = {k: sec(out['flush_' + k]) * 1e3 for k in ('p50', 'p99', 'max')}
     if out['owner_elapsed_us']:
         out['owner_busy_fraction'] = 1 - out['owner_asleep_us'] / out['owner_elapsed_us']

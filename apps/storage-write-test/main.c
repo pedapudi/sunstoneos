@@ -6,6 +6,8 @@
  * selects a mode (a little-endian u32, then a u64):
  *   0  create the file, sync, close, unmount and report (no read-back); a time guard (GUARD_US) stops the write, syncs and
  *      closes, and reports E_TIMEOUT with the bytes written;
+ *   5  continue the file to FILE_BYTES: the existing file must be a whole number of CHUNKs and at most FILE_BYTES, and its first CHUNK must be the
+ *      stream's; the stream then appends from that offset under the same guard, with the per-phase timings (volume_size is the size found);
  *   4  open the card, enable the writes and report (the QEMU boot check; no mount, no write);
  *   3  read the whole file back against the stream and report (a separate run; the file must be FILE_BYTES long);
  *   1  interruption test, lifetime 1: write with a sync every 8 MiB, and after `cut_bytes` stop reporting progress so the
@@ -129,6 +131,7 @@ static void finish_report(void)
     if (card_open) { (void)ss_storage_close(); card_open = 0; }
     ss_finish(&r, sizeof r);
 }
+#define E_MISMATCH 13
 enum { OK = 0, E_BOUNDS = 1, E_REGION = 2, E_DEVICE = 3, E_MBR = 4, E_MOUNT = 5, E_DIR = 6, E_OPEN = 7, E_WRITE = 8, E_CLOSE = 9, E_READ = 10, E_TIMEOUT = 11, E_SIZE = 12 };
 
 static uint32_t flush_ticks[MAX_FLUSHES];
@@ -228,6 +231,12 @@ void storage_write_main(const struct ss_grant *grant)
         r.isar0 = pick.isar0;
         use_ce = have && ((pick.isar0 >> 12) & 15) != 0;
         r.sha_ce = use_ce;
+        if (!have) {
+            /* No core was observed (the boot snapshot is not published in this profile). The measured facts of the chip (docs/hardware/a733-facts.json,
+             * cpu.id_aa64isar0_el1, status measured) hold 0x100010211120 on all eight cores: SHA2 = 1. The SHA-256 instructions are used on that record;
+             * the result says so (sha_ce 2). */
+            use_ce = 1; r.sha_ce = 2;
+        }
     }
     r.cpu_hz = cpu_cycles_per_second(&r.cpu_calibration_ticks);
     ss_progress();
@@ -254,16 +263,39 @@ void storage_write_main(const struct ss_grant *grant)
         (void)fwr_unmount(&volume);
         finish_report();
     }
+    uint64_t start_off = 0;
+    unsigned open_mode = mode_id == 1 ? (FWR_O_CREATE | FWR_O_APPEND) : FWR_O_CREATE;
+    if (mode_id == 5) {                                              /* continue the file */
+        uint64_t size = 0; int dir = 0;
+        if (fwr_exists(&volume, PATH, &size, &dir) != FWR_OK || dir) r.status = E_OPEN;
+        else {
+            r.volume_size = size;
+            size_t got = 0;
+            if (!size || size % CHUNK || size > FILE_BYTES) r.status = E_SIZE;
+            else if (fwr_read(&volume, PATH, 0, check, CHUNK, &got) || got != CHUNK) r.status = E_READ;
+            else {
+                stream_fill(chunk, 0, CHUNK);
+                for (size_t i = 0; i < CHUNK; ++i) if (check[i] != chunk[i]) { if (!r.mismatches++) r.first_mismatch = i; }
+                if (r.mismatches) r.status = E_MISMATCH;
+            }
+        }
+        if (r.status || r.volume_size == FILE_BYTES) {             /* nothing is written: refuse, or the file is already whole */
+            collect(); r.total_ticks = ss_counter_ticks() - t_start;
+            (void)fwr_unmount(&volume);
+            finish_report();
+        }
+        start_off = r.volume_size; open_mode = FWR_O_APPEND;
+    }
     int d = fwr_mkdir(&volume, "/sunstone-test");
     if (d && d != FWR_EXISTS) { r.status = E_DIR; r.detail = (uint64_t)-d; finish_report(); }
     uint64_t t0 = ss_counter_ticks();
-    rc = fwr_open(&volume, &file, PATH, mode_id == 1 ? (FWR_O_CREATE | FWR_O_APPEND) : FWR_O_CREATE, FILE_BYTES, flush->base, flush->bytes);
+    rc = fwr_open(&volume, &file, PATH, open_mode, FILE_BYTES, flush->base, flush->bytes);
     if (rc) { r.status = E_OPEN; r.detail = (uint64_t)-rc; finish_report(); }
     r.create_ticks = ss_counter_ticks() - t0;
     unsigned flushes = 0;
     uint64_t synced = 0;
     int timed_out = 0;
-    for (uint64_t off = 0; off < FILE_BYTES; off += CHUNK) {
+    for (uint64_t off = start_off; off < FILE_BYTES; off += CHUNK) {
         uint64_t g0 = ss_counter_ticks();
         stream_fill(chunk, off, CHUNK);
         r.generate_ticks += ss_counter_ticks() - g0;
@@ -295,7 +327,7 @@ void storage_write_main(const struct ss_grant *grant)
             for (;;) { __asm__ volatile("nop"); }
         }
         ss_progress();
-        if (mode_id == 0 && (ss_counter_ticks() - t_start) * 1000000u / COUNTER_HZ >= GUARD_US && off + CHUNK < FILE_BYTES) { timed_out = 1; break; }
+        if ((mode_id == 0 || mode_id == 5) && (ss_counter_ticks() - t_start) * 1000000u / COUNTER_HZ >= GUARD_US && off + CHUNK < FILE_BYTES) { timed_out = 1; break; }
     }
     uint64_t c0 = ss_counter_ticks();
     rc = fwr_close(&file);

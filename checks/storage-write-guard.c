@@ -66,6 +66,10 @@ static int dev_write(void *c, uint64_t s, uint32_t n, const uint8_t *buf)
     if (s + n > dev_sectors) { fprintf(stderr, "write outside device\n"); exit(3); }
     for (uint32_t i = 0; i < n; ++i)
         if (!allowed(s + i)) { fprintf(stderr, "model refused write to sector %llu\n", (unsigned long long)(s + i)); exit(4); }
+    if (getenv("WRITE_LOG")) {                                   /* every write call: first sector and count, for the geometry check */
+        FILE *log = fopen(getenv("WRITE_LOG"), "a");
+        if (log) { fprintf(log, "%llu %u\n", (unsigned long long)s, n); fclose(log); }
+    }
     struct timespec d = {(time_t)(delay_us / 1000000u), (long)(delay_us % 1000000u) * 1000};
     nanosleep(&d, NULL);                                     /* the slow card */
     return pwrite(image_fd, buf, (size_t)n * 512, (off_t)s * 512) == (ssize_t)n * 512;
