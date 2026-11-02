@@ -57,7 +57,7 @@ native=common+['--target=aarch64-none-elf','-O2','-ffreestanding','-fno-builtin'
  '-I'+str(kernel/'include'),'-I'+str(kernel/'portable/GCC/ARM_AARCH64_SRE'),
  '-DINCLUDE_xSemaphoreGetMutexHolder=1','-DINCLUDE_xTaskGetSchedulerState=1','-DINCLUDE_xTaskGetCurrentTaskHandle=1']
 host_sources=['drivers/storage/sunxi_mmc.c','checks/sunxi-mmc-write.c']
-dma_sources=['drivers/storage/sunxi_mmc.c','checks/sunxi-mmc-write-dma.c']
+dma_sources=['drivers/storage/sunxi_mmc.c','drivers/storage/storage_wait.c','checks/sunxi-mmc-write-dma.c']
 compile_fixtures=['checks/sunxi-mmc.c','checks/a733-mmc-platform.c','checks/a733-mmc-sdc3.c']
 native_sources=['drivers/storage/sunxi_mmc.c','drivers/storage/a733_mmc_platform.c','drivers/storage/a733_mmc_platform_native.c']
 commands=[]
@@ -82,7 +82,7 @@ binary=a.evidence/'write-model';run(host+host_sources+['-o',binary],'build-host.
 # CMD25 through descriptor DMA against the strict controller model (docs/designs/mmc-multiblock-write.md). The
 # model maps memory below 4 GiB, which the sanitizers' address space refuses, so it builds with UBSan only.
 dma_binary=a.evidence/'write-dma-model'
-run(common+['-O1','-g','-fsanitize=undefined','-fno-sanitize-recover=all','drivers/storage/sunxi_mmc.c','checks/sunxi-mmc-write-dma.c','-o',dma_binary],'build-dma.log')
+run(common+['-Idrivers/storage','-O1','-g','-fsanitize=undefined','-fno-sanitize-recover=all','drivers/storage/sunxi_mmc.c','drivers/storage/storage_wait.c','checks/sunxi-mmc-write-dma.c','-o',dma_binary],'build-dma.log')
 run([dma_binary],'dma.log')
 for i,s in enumerate(compile_fixtures):run(host+['-c',s,'-o',a.evidence/(pathlib.Path(s).stem+'-fixture.o')],f'fixture-{i}.log')
 for i,s in enumerate(native_sources):run(native+['-c',s,'-o',a.evidence/(pathlib.Path(s).stem+'.o')],f'native-{i}.log')

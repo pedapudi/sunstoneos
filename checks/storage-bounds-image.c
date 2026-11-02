@@ -78,6 +78,26 @@ int main(int argc, char **argv)
         assert(!a733_storage_bounds_cmd25_ok(&b, cmd, (uint32_t)f0, 512, 257 * 512));
         assert(a733_storage_bounds_threshold_ok(&b) && !a733_storage_bounds_threshold_ok(NULL));
     }
+    /* The blob must not change after parse: with every kernel byte writable at EL0, each use re-hashes it. */
+    {
+        static uint8_t copy[65536];
+        memcpy(copy, blob, n);
+        struct a733_storage_bounds t = {0};
+        assert(a733_storage_bounds_parse(&t, copy, n) && a733_storage_bounds_verify(&t, read_sector, NULL));
+        uint64_t f0 = wfirst(&t, 0);
+        assert(a733_storage_bounds_allows(&t, f0, 1) && a733_storage_bounds_intact(&t) && a733_storage_bounds_threshold_ok(&t));
+        for (size_t at = 0; at < n; at += (at < 64 ? 1 : 97)) {
+            copy[at] ^= 0x01;                                         /* any single changed bit, in the header or the ranges */
+            assert(!a733_storage_bounds_intact(&t) && !a733_storage_bounds_allows(&t, f0, 1) && !a733_storage_bounds_threshold_ok(&t));
+            copy[at] ^= 0x01;
+            assert(a733_storage_bounds_allows(&t, f0, 1));
+        }
+        struct a733_storage_bounds u = {0};
+        memcpy(copy, blob, n);
+        assert(a733_storage_bounds_parse(&u, copy, n));
+        copy[20] ^= 0x80;                                             /* changed between parse and verify */
+        assert(!a733_storage_bounds_verify(&u, read_sector, NULL));
+    }
     assert(!a733_storage_bounds_allows(&b, 0, 1));
     assert(!a733_storage_bounds_parse(&b, blob, n));                   /* one parse per object */
     /* A card that changed since the backup closes the object for good. */

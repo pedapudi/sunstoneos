@@ -33,14 +33,15 @@ int a733_storage_bounds_parse(struct a733_storage_bounds *b, const uint8_t *blob
     uint32_t w = le32(blob + 8), k = le32(blob + 12);
     if (!w || !k || (bytes - HEADER) % 16u || (bytes - HEADER) / 16u != (size_t)w + k) return 0;
     if (!walk(blob + HEADER, w) || !walk(blob + HEADER + 16u * (size_t)w, k)) return 0;
-    b->blob = blob; b->writes = w; b->backups = k;
+    b->blob = blob; b->bytes = bytes; b->writes = w; b->backups = k;
+    storage_digest_bytes(blob, bytes, b->digest);
     b->state = A733_BOUNDS_PARSED;
     return 1;
 }
 
 int a733_storage_bounds_verify(struct a733_storage_bounds *b, int (*read)(void *, uint64_t, uint8_t *), void *context)
 {
-    if (!b || !read || b->state != A733_BOUNDS_PARSED) return 0;
+    if (!b || !read || b->state != A733_BOUNDS_PARSED || !a733_storage_bounds_intact(b)) return 0;
     struct storage_digest d;
     storage_digest_init(&d);
     uint8_t record[520];
@@ -60,9 +61,16 @@ int a733_storage_bounds_verify(struct a733_storage_bounds *b, int (*read)(void *
     return 1;
 }
 
+int a733_storage_bounds_intact(const struct a733_storage_bounds *b)
+{
+    uint8_t d[32];
+    storage_digest_bytes(b->blob, b->bytes, d);
+    return !memcmp(d, b->digest, 32);
+}
+
 int a733_storage_bounds_allows(const struct a733_storage_bounds *b, uint64_t first, uint64_t blocks)
 {
-    if (!b || b->state != A733_BOUNDS_VERIFIED || !blocks || first > UINT64_MAX - blocks) return 0;
+    if (!b || b->state != A733_BOUNDS_VERIFIED || !blocks || first > UINT64_MAX - blocks || !a733_storage_bounds_intact(b)) return 0;
     for (uint32_t i = 0; i < b->writes; ++i) {
         uint64_t f = le64(write_range(b, i)), c = le64(write_range(b, i) + 8);
         if (first >= f && first + blocks <= f + c) return 1;      /* f + c cannot wrap: parse checked it */
@@ -70,3 +78,11 @@ int a733_storage_bounds_allows(const struct a733_storage_bounds *b, uint64_t fir
     }
     return 0;
 }
+
+static int authorize(void *context, const struct sunxi_mmc_write_identity *identity, const struct sunxi_mmc_write_request *request)
+{
+    (void)identity;
+    return request->policy_token == A733_BOUNDED_WRITE_TOKEN && a733_storage_bounds_allows(context, request->first_sector, request->blocks);
+}
+void a733_storage_bounds_authority(const struct a733_storage_bounds *b, struct sunxi_mmc_write_authority *out)
+{ *out = (struct sunxi_mmc_write_authority){(void *)b, authorize}; }

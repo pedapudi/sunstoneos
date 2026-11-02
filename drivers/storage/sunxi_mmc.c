@@ -198,7 +198,7 @@ static void queue(struct sunxi_mmc *h, unsigned protocol, uint32_t cmd, uint32_t
 #endif
     h->protocol = (uint16_t)protocol; h->command = cmd | START;
     h->argument = arg; h->data = data; h->data_bytes = bytes; h->position = 0;
-    h->command_step = 0; h->seen = 0; h->response_seen = 0;
+    h->command_step = 0; h->seen = 0; h->response_seen = 0; h->wait_us = 0;
     for (unsigned i = 0; i < 4; ++i) h->response[i] = 0;
 }
 int sunxi_mmc_read(struct sunxi_mmc *h, uint64_t first, uint32_t blocks,
@@ -372,6 +372,8 @@ static int interrupts(struct sunxi_mmc *h)
 {
     uint32_t v;
     if (!rd(h, 0x38, &v)) return 0;
+    /* Bits the interrupt handler already acknowledged: read after the raw status, so none is lost to either order. */
+    if (h->irq_taken) v |= h->irq_taken(h->irq_context);
     h->result.interrupts = v; h->seen |= v;
     /* Bit 10 reports switch completion while the CMD11 sequence runs. */
     uint32_t errors = v & ERRORS & ~(UHS_ON && h->signal_window ? VSD : 0u);
@@ -536,6 +538,14 @@ static int dma_finish(struct sunxi_mmc *h)
     h->result.invalidate_us=t1-t0;
     return 1;
 }
+/* Card or data busy has no interrupt on this controller (the board kernel's v5p3x path never enables the busy-clear
+ * interrupt either and polls card busy in its bottom half), so the caller sleeps on a one-shot timer. The delay doubles
+ * from 100 us to 2 ms, so a busy of hundreds of milliseconds costs a few hundred wakes, not a spin. */
+static void busy_wait(struct sunxi_mmc *h)
+{
+    h->wait = SUNXI_MMC_WAIT_TIMER;
+    h->wait_us = !h->wait_us ? 100u : h->wait_us < 2000u ? h->wait_us * 2u : 2000u;
+}
 static int command_step(struct sunxi_mmc *h)
 {
     uint32_t v;
@@ -544,10 +554,11 @@ static int command_step(struct sunxi_mmc *h)
         if (!rd(h, 0x18, &v)) return 0;
         if (v & START) { fault(h, SUNXI_MMC_CONTROLLER); return 0; }
         if (!rd(h, 0x3c, &h->result.status)) return 0;
-        if (h->result.status & BUSY) return 0;
+        if (h->result.status & BUSY) { busy_wait(h); return 0; }
         if (!interrupts(h)) return 0;
         /* Acknowledge stale command/data flags only; leave card-detect/SDIO. */
         if (!wr(h, 0x38, h->result.interrupts & 0xffffu)) return 0;
+        if (h->irq_taken) (void)h->irq_taken(h->irq_context);
         h->seen = 0;
         /* Programmed I/O routes the FIFO to the CPU (bit 31); a DMA read
          * leaves it to IDMAC and also resets the DMA interface and IDMAC. */
@@ -586,6 +597,10 @@ static int command_step(struct sunxi_mmc *h)
         }
         if ((h->command & AUTO) && !wr(h, 0x58, 0)) return 0;
         if (dma_command(h) && !dma_start(h)) return 0;
+        /* Interrupt mask for a DMA command (board kernel sunxi_mmc_parse_cmd): the error bits, and the one completion bit
+         * that ends it, the automatic stop for a command that carries one, else data over. */
+        if (h->irq_taken && dma_command(h) &&
+            !wr(h, 0x30, ERRORS | ((h->command & AUTO) ? ACD : DTC))) return 0;
         if (!wr(h, 0x1c, h->argument) || !fence(h)) return 0;
         if(h->command&WRITE)h->result.write_started=1;
         if(!wr(h, 0x18, h->command))return 0;
@@ -627,7 +642,7 @@ static int command_step(struct sunxi_mmc *h)
         if (!dma_command(h) && h->position < h->data_bytes && (!(h->command & WRITE) || h->response_seen) &&
             !fifo_step(h)) return 0;
         v = command_done | (h->data_bytes ? DTC : 0) | ((h->command & AUTO) ? ACD : 0);
-        if ((h->seen & v) != v) return 0;
+        if ((h->seen & v) != v) { if (h->irq_taken && dma_command(h)) h->wait = SUNXI_MMC_WAIT_IRQ; return 0; }
         if (dma_command(h)) {
             /* The done bits first, then the OWN bits (uncached reads). */
             if (!dma_closed(h)) return 0;
@@ -641,7 +656,8 @@ static int command_step(struct sunxi_mmc *h)
          * bit; the switch sequence (sd_signal) follows. */
         if (UHS_ON && h->protocol == P_SD_VOLTAGE) return interrupts(h);
         if (!rd(h, 0x18, &v) || (v & START)) return 0;
-        if (!rd(h, 0x3c, &h->result.status) || (h->result.status & BUSY)) return 0;
+        if (!rd(h, 0x3c, &h->result.status)) return 0;
+        if (h->result.status & BUSY) { busy_wait(h); return 0; }
         if (h->data_bytes && !(h->result.status & FIFO_EMPTY)) { fault(h, SUNXI_MMC_CONTROLLER); return 0; }
         if (!interrupts(h)) return 0;
         if (h->command & AUTO) {
@@ -678,6 +694,8 @@ static int command_step(struct sunxi_mmc *h)
     case 6:
         if (!rd(h,SUNXI_SMHC_GCTRL,&v) || (v&SUNXI_SMHC_GCTRL_FIFO_RESET)) return 0;
         if (v&(SUNXI_SMHC_GCTRL_DMA_ENABLE|SUNXI_SMHC_GCTRL_DMA_RESET)) { fault(h,SUNXI_MMC_CONTROLLER);return 0; }
+        /* The DMA command is over: disarm the interrupt mask the command armed. */
+        if (h->irq_taken && !wr(h, 0x30, 0)) return 0;
         return interrupts(h)&&dma_finish(h);
     default: fault(h, SUNXI_MMC_CONTROLLER); return 0;
     }
@@ -1169,16 +1187,29 @@ void sunxi_mmc_poll(struct sunxi_mmc *h)
 #ifndef SUNXI_MMC_READ_ONLY
     if(h->writing&&(!write_admitted(h)||!time_ok(h)))goto out;
 #endif
+    h->wait = SUNXI_MMC_WAIT_NONE;
     if (h->state == SUNXI_MMC_READING) ++h->result.polls;
     if (h->setup < 6) setup(h);
     else if(h->protocol==P_SD_CLOCK)sd_clock(h);
-    else if(h->last_us<h->retry_us){}
+    else if(h->last_us<h->retry_us){h->wait=SUNXI_MMC_WAIT_TIMER;h->wait_us=(uint32_t)(h->retry_us-h->last_us>UINT32_MAX?UINT32_MAX:h->retry_us-h->last_us);}
     else if(UHS_ON&&h->protocol==P_SD_SIGNAL)sd_signal(h);
     else if(UHS_ON&&(h->tune_failed||h->protocol==P_SD_TUNE_RECOVER))tune_recover(h);
     else if(command_step(h))protocol(h);
     if (h->state != SUNXI_MMC_FAULT) (void)time_ok(h);
 out:
     h->entered = 0;
+}
+int sunxi_mmc_set_irq(struct sunxi_mmc *h, uint32_t (*taken)(void *), void *context)
+{
+    if (!h || !h->initialized || h->entered || h->state != SUNXI_MMC_READY || !taken || h->irq_taken) return 0;
+    h->irq_taken = taken; h->irq_context = context;
+    return 1;
+}
+enum sunxi_mmc_wait sunxi_mmc_wait_hint(const struct sunxi_mmc *h, uint32_t *delay_us)
+{
+    if (!h || h->wait == SUNXI_MMC_WAIT_NONE || h->state == SUNXI_MMC_DONE || h->state == SUNXI_MMC_FAULT) return SUNXI_MMC_WAIT_NONE;
+    if (delay_us) *delay_us = h->wait == SUNXI_MMC_WAIT_TIMER ? h->wait_us : 0;
+    return (enum sunxi_mmc_wait)h->wait;
 }
 int sunxi_mmc_take(struct sunxi_mmc *h, struct sunxi_mmc_result *out)
 {

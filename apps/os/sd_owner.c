@@ -21,7 +21,7 @@
 #define READY_TIMEOUT_TICKS 8000u
 #define WAIT_INDEX 1u              /* notification index a caller sleeps on; index 0 is the owner's */
 
-enum kind { K_READ, K_ASYNC_READ, K_WRITE, K_ENABLE, K_UNIT };
+enum kind { K_READ, K_ASYNC_READ, K_WRITE, K_ENABLE, K_UNIT, K_REGION };
 struct request {
     enum kind kind;
     uint64_t sector;
@@ -56,16 +56,13 @@ static void serve(struct request *r)
     switch (r->kind) {
     case K_READ: ok = d->sync.read(d->sync.context, r->sector, r->count, r->buffer) == 1; break;
     case K_ASYNC_READ:
-        ok = d->async.submit(d->async.context, r->sector, r->count, r->buffer) == 1;
-        {
-            int p = 0;
-            while (ok && !(p = d->async.poll(d->async.context))) taskYIELD();
-            if (p < 0) ok = 0;
-        }
+        /* The loader's pipelined request: start it, sleep until it finishes, and leave the verdict in `done`. */
+        ok = d->async.submit(d->async.context, r->sector, r->count, r->buffer) == 1 && hw->wait_async();
         break;
     case K_WRITE: ok = hw->write_piece(r->sector, r->count, r->source); break;
     case K_ENABLE: ok = hw->enable_writes(r->source, r->bytes); break;
     case K_UNIT: ok = hw->allocation_unit(&r->value); break;
+    case K_REGION: ok = hw->set_write_region(r->buffer, r->bytes); break;
     }
     /* A failed async read reports -1 from poll; the proxy's poll reads the stored result. */
     finish(r, ok);
@@ -174,6 +171,13 @@ int os_sd_writes_enable(const uint8_t *blob, size_t bytes)
     if (!post(&writer_slot, &writer_request, 1)) return 0;
     unit_sectors = writer_request.value;
     return 1;
+}
+/* Register the application's flush buffer so the FAT32 service flushes from it straight into the controller. */
+int os_sd_write_region(uint8_t *base, size_t bytes)
+{
+    if (!start()) return 0;
+    writer_request = (struct request){.kind = K_REGION, .buffer = base, .bytes = bytes};
+    return post(&writer_slot, &writer_request, 1);
 }
 /* The block device for the FAT32 write service; call after os_sd_writes_enable. */
 int os_sd_writer_device(struct fwr_device *d)

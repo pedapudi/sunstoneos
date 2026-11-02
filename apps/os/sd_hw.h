@@ -22,6 +22,11 @@ struct os_sd_hw {
     /* One CMD25 write of 1 to OS_SD_WRITE_PIECE_SECTORS sectors from src, to completion. Returns 1. */
     int (*write_piece)(uint64_t sector, uint32_t count, const uint8_t *src);
     int (*live)(void);
+    /* The application's flush buffer (a WORK region in cacheable DRAM, 64-byte aligned): write pieces that lie in it go to the
+     * controller without a copy. Once. */
+    int (*set_write_region)(uint8_t *base, size_t bytes);
+    /* Wait for the loader's submitted read to finish (interrupt or one-shot timer), then leave it for async.poll to take. */
+    int (*wait_async)(void);
 };
 /* Open the card in the calling task (it becomes the owner) and return the hardware operations; NULL on failure. */
 const struct os_sd_hw *os_sd_open_owner(void);
@@ -33,4 +38,5 @@ void os_sd_close_owner_device(void);
 struct fwr_device;
 int os_sd_writes_enable(const uint8_t *blob, size_t bytes);
 int os_sd_writer_device(struct fwr_device *);
+int os_sd_write_region(uint8_t *base, size_t bytes);
 #endif

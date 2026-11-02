@@ -7,12 +7,17 @@
 #define _GNU_SOURCE
 #include "sunxi_mmc.h"
 #include "sunxi_smhc.h"
+#include "storage_wait.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 
 #define SECTORS 600u
+#ifndef SUNXI_SMHC_MISTA
+#define SUNXI_SMHC_MISTA 0x34u          /* masked interrupt status */
+#endif
 struct model {
     uint32_t reg[0x304 / 4];
     uint8_t *media;
@@ -27,6 +32,10 @@ struct model {
     unsigned revoke_after, authority_calls, cache_before, cache_after, sync_order_bad;
     unsigned thld_initial;
     unsigned commands[16], command_count;
+    /* interrupt mode: events fire by model time, the line is MISTA = RINT & IMASK, the handler acknowledges in the vendor order */
+    unsigned timed, irq_mode, drop_irq, spurious, isr_runs, sleeps, polls, spins, notified, early_isr;
+    uint64_t t_done, busy_until, dma_us, busy_us, tick;
+    uint32_t pending_taken;
     unsigned writes_seen, reads_seen;
 };
 static struct model m;
@@ -71,20 +80,42 @@ static void dma_step(void)
     ++m.next_desc;
 }
 
+static void timed_progress(void)
+{
+    if (!m.timed || !m.cmd_active || m.data_cmd != 25 || m.next_desc >= m.descs || m.now < m.t_done) return;
+    while (m.next_desc < m.descs) dma_step();
+    m.reg[SUNXI_SMHC_RINT / 4] |= SUNXI_SMHC_INT_DATA_DONE | SUNXI_SMHC_INT_AUTO_STOP_DONE;
+    m.busy_until = m.now + m.busy_us;
+}
+static uint32_t irq_line(void) { return m.reg[SUNXI_SMHC_RINT / 4] & m.reg[SUNXI_SMHC_IMASK / 4]; }
+/* The handler, in the board kernel's order (sunxi_mmc_irq): read the masked status, accumulate, write the raw bits back. */
+static void isr(void)
+{
+    ++m.isr_runs;
+    uint32_t mista = irq_line();
+    m.pending_taken |= mista;
+    m.reg[SUNXI_SMHC_RINT / 4] &= ~mista;
+    m.notified = 1;
+}
+static uint32_t irq_taken(void *c) { (void)c; uint32_t v = m.pending_taken; m.pending_taken = 0; return v; }
+
 static int read32(void *ctx, uint32_t off, uint32_t *out)
 {
     (void)ctx; ++m.reads_seen;
     assert(!(off & 3) && off < 0x304);
+    timed_progress();
     switch (off) {
     case SUNXI_SMHC_GCTRL: *out = m.reg[0] & ~7u; return 1;                /* resets self-clear */
     case SUNXI_SMHC_CMD:
         *out = m.reg[off / 4];
         if (m.start_pending_reads && !--m.start_pending_reads) m.reg[off / 4] &= ~SUNXI_SMHC_CMD_START;
         return 1;
+    case SUNXI_SMHC_MISTA: *out = irq_line(); return 1;
+    case SUNXI_SMHC_IMASK: *out = m.reg[off / 4]; return 1;
     case SUNXI_SMHC_RESP0: case SUNXI_SMHC_RESP1: case SUNXI_SMHC_DMAC: case SUNXI_SMHC_THLD:
         *out = off == SUNXI_SMHC_DMAC ? m.reg[off / 4] & ~SUNXI_SMHC_DMAC_RESET : m.reg[off / 4]; return 1;
     case SUNXI_SMHC_RINT:
-        if (m.cmd_active) {
+        if (m.cmd_active && !m.timed) {
             if (m.ticks_cc) { if (!--m.ticks_cc) m.reg[off / 4] |= SUNXI_SMHC_INT_CMD_DONE; }
             if (m.data_cmd == 25 && m.dma_on) {
                 if (m.next_desc < m.descs) dma_step();
@@ -97,8 +128,9 @@ static int read32(void *ctx, uint32_t off, uint32_t *out)
         *out = m.reg[off / 4]; return 1;
     case SUNXI_SMHC_STATUS:
         *out = SUNXI_SMHC_STATUS_FIFO_EMPTY;
-        if (m.busy_left > 0 || m.hang_busy) { *out |= 1u << 9; if (m.busy_left > 0) --m.busy_left; }
-        else if (m.cmd_active && m.data_cmd == 25 && m.ticks_dtc) *out |= 1u << 10;
+        if (m.timed && m.now < m.busy_until) *out |= 1u << 9;
+        else if (m.busy_left > 0 || m.hang_busy) { *out |= 1u << 9; if (m.busy_left > 0) --m.busy_left; }
+        else if (!m.timed && m.cmd_active && m.data_cmd == 25 && m.ticks_dtc) *out |= 1u << 10;
         return 1;
     case SUNXI_SMHC_CBCR: *out = (uint32_t)((size_t)m.next_desc * 4096 < m.bytes ? (size_t)m.next_desc * 4096 : m.bytes); return 1;
     case SUNXI_SMHC_IDST:
@@ -118,6 +150,7 @@ static void command(uint32_t value)
     m.reg[SUNXI_SMHC_CMD / 4] = value;
     m.start_pending_reads = 1;
     m.cmd_active = 1; m.data_cmd = 0; m.reg[SUNXI_SMHC_RINT / 4] = 0; m.ticks_cc = 1;
+    if (m.timed) m.reg[SUNXI_SMHC_RINT / 4] |= SUNXI_SMHC_INT_CMD_DONE;
     if (index == 13) {
         assert(value == (SUNXI_SMHC_CMD_START | SUNXI_SMHC_CMD_WAIT | SUNXI_SMHC_CMD_CRC | SUNXI_SMHC_CMD_RESP | 13u));
         assert(m.reg[SUNXI_SMHC_ARG / 4] == 0x12340000u);
@@ -138,7 +171,12 @@ static void command(uint32_t value)
     assert(!(m.reg[0] & SUNXI_SMHC_GCTRL_CPU_FIFO));
     assert(m.cache_before == 1 && !m.cache_after);                             /* cleaned before the command */
     check_chain();
+    if (m.irq_mode) {
+        /* Armed as the board kernel arms a data command with an automatic stop: errors and auto-stop done only. */
+        assert(m.reg[SUNXI_SMHC_IMASK / 4] == (SUNXI_SMHC_MMC_ERRORS | SUNXI_SMHC_INT_AUTO_STOP_DONE));
+    }
     m.data_cmd = 25; m.dma_on = 1; m.next_desc = 0; m.ticks_dtc = 2; m.ticks_acd = 2;
+    if (m.timed) { m.t_done = m.now + m.dma_us; m.reg[SUNXI_SMHC_RINT / 4] |= SUNXI_SMHC_INT_CMD_DONE; }
     m.reg[SUNXI_SMHC_RESP0 / 4] = m.card_error_cmd ? 1u << 25 : 0x900;
     m.reg[SUNXI_SMHC_RESP1 / 4] = m.card_error_stop ? 1u << 25 : 0x900;
     ++m.writes_seen;
@@ -154,6 +192,7 @@ static int write32(void *ctx, uint32_t off, uint32_t value)
         if (off == SUNXI_SMHC_GCTRL && (value & SUNXI_SMHC_GCTRL_DMA_ENABLE)) assert(m.cache_before == 1);
         return 1;
     case SUNXI_SMHC_THLD: m.reg[off / 4] = value; return 1;
+    case SUNXI_SMHC_IMASK: m.reg[off / 4] = value; return 1;
     case SUNXI_SMHC_RINT: m.reg[off / 4] &= ~value; return 1;
     case SUNXI_SMHC_IDST: m.reg[off / 4] &= ~value; return 1;
     case SUNXI_SMHC_DMAC:
@@ -166,7 +205,7 @@ static int write32(void *ctx, uint32_t off, uint32_t value)
 static int no_fifo_read(void *c, uint32_t *w, unsigned n) { (void)c; (void)w; (void)n; assert(!"a DMA write used the FIFO"); return 0; }
 static int no_fifo_write(void *c, const uint32_t *w, unsigned n) { (void)c; (void)w; (void)n; assert(!"a DMA write used the FIFO"); return 0; }
 static int barrier(void *c) { (void)c; return 1; }
-static int clock_now(void *c, uint64_t *out) { (void)c; m.now += 50; *out = m.now; return 1; }
+static int clock_now(void *c, uint64_t *out) { (void)c; m.now += m.tick ? m.tick : 50; *out = m.now; return 1; }
 static int admit(void *c, uintptr_t token, enum sunxi_mmc_kind kind, uint32_t hz) { (void)c; assert(token == 77 && kind == SUNXI_MMC_SD && hz == 800000); return 1; }
 static int retained(void *c, uintptr_t token) { (void)c; assert(token == 77); return 1; }
 static int dma_sync(void *c, uint8_t *b, size_t n, unsigned phase)
@@ -239,6 +278,53 @@ static void media_untouched_outside(unsigned blocks)
         if (!(i >= m.first * 512 && i < (m.first + blocks) * 512)) assert(m.media[i] == sentinel(i));
 }
 
+/* The wait loop of the image (drivers/storage/storage_wait.c) against the interrupt model. */
+static unsigned hints_irq, hints_timer;
+static int w_poll(void *c) { (void)c; ++m.polls; sunxi_mmc_poll(&h); if (m.early_isr && irq_line()) isr(); return h.state != SUNXI_MMC_WRITING; }
+static enum sunxi_mmc_wait w_hint(void *c, uint32_t *us)
+{
+    (void)c; enum sunxi_mmc_wait k = sunxi_mmc_wait_hint(&h, us);
+    if (k == SUNXI_MMC_WAIT_IRQ) ++hints_irq; else if (k == SUNXI_MMC_WAIT_TIMER) ++hints_timer; else ++m.spins;
+    return k;
+}
+static uint64_t w_now(void *c) { (void)c; return m.now; }
+static int w_live(void *c) { (void)c; return 1; }
+static void w_sleep(void *c, uint64_t until)
+{
+    (void)c; ++m.sleeps;
+    if (m.notified) { m.notified = 0; m.now += 5; timed_progress(); return; }          /* a notification that came before the sleep */
+    uint64_t target = until;
+    if (m.timed && m.next_desc < m.descs && m.t_done < target) target = m.t_done;
+    if (target > m.now) m.now = target;
+    timed_progress();
+    if (irq_line()) {
+        if (m.drop_irq) { m.drop_irq = 0; if (m.now < until) m.now = until; }          /* the interrupt is lost: only the recheck finds it */
+        else { isr(); m.notified = 0; }
+    }
+}
+static void irq_case(const char *name, unsigned blocks, uint64_t dma_us, uint64_t busy_us, unsigned drop, unsigned early, unsigned stale)
+{
+    setup(1, blocks, 20); csd_writable();
+    assert(sunxi_mmc_set_irq(&h, irq_taken, NULL) && !sunxi_mmc_set_irq(&h, irq_taken, NULL));
+    m.timed = m.irq_mode = 1; m.tick = 1; m.dma_us = dma_us; m.busy_us = busy_us; m.drop_irq = drop; m.early_isr = early;
+    hints_irq = hints_timer = 0;
+    if (stale) { m.notified = 1; isr(); isr(); }                                       /* stale and spurious wakes before the start */
+    assert(start(blocks));
+    const struct storage_wait_ops ops = {NULL, w_poll, w_hint, w_now, w_sleep, w_live};
+    uint64_t begin = m.now;
+    int r = storage_wait_run(&ops, m.now + 5000000);
+    if (h.state != SUNXI_MMC_DONE || r != 1) { fprintf(stderr, "%s: state %d result %d error %d now %llu deadline %llu polls %u sleeps %u isr %u step %u\n", name, h.state, r, h.result.error, (unsigned long long)m.now, (unsigned long long)h.deadline_us, m.polls, m.sleeps, m.isr_runs, h.command_step); exit(1); }
+    assert(h.result.confirmed_blocks == blocks && m.now - begin >= dma_us + busy_us && m.reg[SUNXI_SMHC_IMASK / 4] == 0);   /* disarmed */
+    media_is(blocks);
+    /* A busy of hundreds of milliseconds costs a few hundred timed wakes, not a spin: polls and sleeps stay in step. */
+    unsigned expected_max = (unsigned)(dma_us / 1000 + busy_us / 1500 + 60);
+    printf("  %-22s %6llu us: %4u polls, %4u sleeps (irq %u, timer %u), %2u spins, %u interrupts\n", name,
+           (unsigned long long)(m.now - begin), m.polls, m.sleeps, hints_irq, hints_timer, m.spins, m.isr_runs);
+    assert(m.sleeps <= expected_max && m.polls <= 2 * expected_max + 200 && hints_irq >= 1 && hints_timer >= (busy_us ? 1u : 0u));
+    assert(m.isr_runs >= (drop ? 0u : 1u));
+    { struct sunxi_mmc_result result; assert(sunxi_mmc_take(&h, &result) && result.error == SUNXI_MMC_OK); }
+}
+
 int main(void)
 {
     static const unsigned counts[] = {1, 2, 7, 8, 9, 64, 255, 256};
@@ -309,6 +395,13 @@ int main(void)
     assert(start(64)); finish();
     assert(h.state == SUNXI_MMC_FAULT && h.result.error == SUNXI_MMC_ADMISSION);
     media_untouched_outside(64);
-    puts("PASS: CMD25 descriptor-DMA writes of 1 to 256 blocks, vendor register sequence and threshold, descriptor chain, DAT0 busy and programming status, cache phases, refusals without access, six retained faults and revocation");
+    /* Interrupt completion: command done and data over never poll; the busy waits on a one-shot timer. */
+    printf("interrupt-driven completion (model time, 1 us per clock read):\n");
+    irq_case("normal 128 KiB", 256, 4000, 300000, 0, 0, 0);
+    irq_case("early interrupt", 64, 2000, 50000, 0, 1, 0);
+    irq_case("lost interrupt", 64, 2000, 50000, 1, 0, 0);
+    irq_case("stale+spurious wakes", 8, 500, 5000, 0, 0, 1);
+    irq_case("no busy", 1, 100, 0, 0, 0, 0);
+    puts("PASS: CMD25 descriptor-DMA writes of 1 to 256 blocks, vendor register sequence and threshold, descriptor chain, DAT0 busy and programming status, cache phases, refusals without access, six retained faults, revocation, and interrupt completion with early, lost and stale interrupts");
     return 0;
 }
