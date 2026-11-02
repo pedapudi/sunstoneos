@@ -45,6 +45,7 @@ static uint64_t round_trips(void)
 static void intruder(void *unused)
 {
     (void)unused;
+    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);   /* until the creator has taken it out of the space */
     (void)*region;                                /* no application space: a permission fault at EL0 */
     ss_fail(0xe02);                               /* never reached */
 }
@@ -83,7 +84,10 @@ void large_test_main(const struct ss_grant *grant)
     }
     if (mode == 1) {
         region = (volatile uint8_t *)p;
-        xTaskCreateStatic(intruder, "intruder", 512, NULL, 3, intruder_stack, &intruder_state);
+        /* A task takes the space of its creator, so the intruder leaves the space before it reads. */
+        TaskHandle_t intruder_handle = xTaskCreateStatic(intruder, "intruder", 512, NULL, 3, intruder_stack, &intruder_state);
+        vTaskSetApplicationTaskTag(intruder_handle, 0);
+        xTaskNotifyGive(intruder_handle);
         for (;;) vTaskDelay(10);
     }
     const uint64_t ok[2] = {TAG_OK, fold};

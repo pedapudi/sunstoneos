@@ -138,6 +138,9 @@ static int post(_Atomic(struct request *) *slot, struct request *r, int wait)
  * caller is the application's EL0 task, which would otherwise pass its own level on to the task it creates. */
 int os_sd_owner_task_privileged(void (*entry)(void *), void *context) { (void)context; return entry == owner_main; }
 
+/* The owner task, once started: for the QEMU check that it holds no application tag. */
+TaskHandle_t os_sd_owner_task(void) { return owner; }
+
 /* Start the owner task; the caller is told when the card is open (os_large_device) or has failed. */
 static int start(void)
 {

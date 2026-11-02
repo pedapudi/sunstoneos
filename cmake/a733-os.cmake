@@ -44,6 +44,32 @@ elseif(SUNSTONE_APPLICATION STREQUAL "large-region-test")
     MANIFEST "${large_region_manifest}")
   add_sunstone_image(sunstone-a733-os-large-region-test LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION large-region)
+elseif(SUNSTONE_APPLICATION STREQUAL "heap-test")
+  # The heap is a region of upper memory (step 1 of docs/designs/application-memory-layout.md); the table builder
+  # maps upper memory only after the address-test decode check (cmake/a733-smp-cached.cmake).
+  if(NOT SUNSTONE_A733_DRAM_DECODE_PROBE)
+    message(FATAL_ERROR "heap-test needs -DSUNSTONE_A733_DRAM_DECODE_PROBE=ON")
+  endif()
+  set(SUNSTONE_HEAP_TEST_MODE "0" CACHE STRING "0: use the heap; 1: read it from a task in no space; 2: read the byte after it; 3: share it with a worker")
+  add_sunstone_application(heap-test
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/heap-test/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/heap-test/manifest.json")
+  set(SUNSTONE_HEAP_TEST_NOTIFY_WAIT "0" CACHE STRING "1: mode 3 waits for the worker's task notification, not its flag")
+  target_compile_definitions(heap-test PRIVATE HEAP_TEST_MODE=${SUNSTONE_HEAP_TEST_MODE}
+    HEAP_TEST_NOTIFY_WAIT=${SUNSTONE_HEAP_TEST_NOTIFY_WAIT})
+  add_sunstone_image(sunstone-a733-os-heap-test LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION heap-test)
+elseif(SUNSTONE_APPLICATION STREQUAL "slot1-test")
+  if(NOT SUNSTONE_A733_DRAM_DECODE_PROBE)
+    message(FATAL_ERROR "slot1-test needs -DSUNSTONE_A733_DRAM_DECODE_PROBE=ON")
+  endif()
+  set(SUNSTONE_SLOT1_TEST_MODE "0" CACHE STRING "0: use the region; 1: use it, then read the byte after it; 2: overflow the main stack")
+  add_sunstone_application(slot1-test
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/slot1-test/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/slot1-test/manifest.json")
+  target_compile_definitions(slot1-test PRIVATE SLOT1_TEST_MODE=${SUNSTONE_SLOT1_TEST_MODE})
+  add_sunstone_image(sunstone-a733-os-slot1-test LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION slot1-test)
 elseif(SUNSTONE_APPLICATION STREQUAL "large-6g")
   # A 6 GiB region with no source: bandwidth and integrity (probe 0), or one isolation fault (probes 1 to 3).
   if(NOT SUNSTONE_A733_DRAM_DECODE_PROBE)

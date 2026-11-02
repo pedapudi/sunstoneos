@@ -40,7 +40,7 @@
 #define READ_US 500000u
 #define DMA_BUFFER (SUNXI_MMC_MAX_DMA_BLOCKS * 512u)
 
-/* True when the image declares large regions: the PF bank must then be authorized at boot. */
+/* True when the image declares a large region that the card loads: the PF bank must then be authorized at boot. */
 extern const struct ss_large_region __start_sunstone_large_regions[] __attribute__((weak));
 extern const struct ss_large_region __stop_sunstone_large_regions[] __attribute__((weak));
 int os_large_sd_declared(void)
@@ -48,7 +48,10 @@ int os_large_sd_declared(void)
 #ifdef OS_SD_WRITE
     return 1;                           /* a write-capable image always uses the card */
 #else
-    return __start_sunstone_large_regions && __stop_sunstone_large_regions > __start_sunstone_large_regions;
+    if (!__start_sunstone_large_regions) return 0;
+    for (const struct ss_large_region *r = __start_sunstone_large_regions; r < __stop_sunstone_large_regions; ++r)
+        if (!(r->flags & SS_LARGE_HEAP)) return 1;      /* the heap alone reads nothing from the card */
+    return 0;
 #endif
 }
 /* PF0 to PF6 are SD0 and its card detect (apps/sd-read-probe/main.c). */

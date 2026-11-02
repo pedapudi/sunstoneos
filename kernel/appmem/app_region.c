@@ -13,7 +13,7 @@ int app_region_ledger_init(struct app_region_ledger *l, struct app_region_range 
 {
     if (!l || !usable_storage || (entry_capacity && !entry_storage) || count > usable_capacity || (count && !r) ||
         entry_capacity > APP_REGION_MAX_REGIONS) return APP_REGION_INVALID;
-    uint64_t previous_end = APP_REGION_BASE;
+    uint64_t previous_end = APP_REGION_FLOOR;
     for (unsigned i = 0; i < count; ++i) {
         if (!r[i].bytes || !aligned(r[i].base, APP_REGION_BLOCK) || !aligned(r[i].bytes, APP_REGION_BLOCK) ||
             r[i].base < previous_end || r[i].base > APP_REGION_LIMIT ||
@@ -67,7 +67,7 @@ int app_region_acquire(struct app_region_ledger *l, uint16_t owner, uint64_t byt
 {
     if (!l || !owner || !bytes || !base_out || !bytes_out ||
         (access != APP_REGION_READ && access != (APP_REGION_READ | APP_REGION_WRITE)) ||
-        bytes > APP_REGION_LIMIT - APP_REGION_BASE) return APP_REGION_INVALID;
+        bytes > APP_REGION_LIMIT - APP_REGION_FLOOR) return APP_REGION_INVALID;
     bytes = (bytes + APP_REGION_BLOCK - 1) & ~(APP_REGION_BLOCK - 1);
     unsigned slot = l->capacity;
     for (unsigned i = 0; i < l->capacity; ++i) if (!l->entry[i].owner) { slot = i; break; }
@@ -93,6 +93,25 @@ int app_region_acquire(struct app_region_ledger *l, uint16_t owner, uint64_t byt
     return APP_REGION_OK;
 }
 
+int app_region_acquire_at(struct app_region_ledger *l, uint16_t owner, uint64_t base, uint64_t bytes, unsigned access)
+{
+    if (!l || !owner || !bytes || !aligned(base, APP_REGION_BLOCK) || bytes > APP_REGION_LIMIT ||
+        (access != APP_REGION_READ && access != (APP_REGION_READ | APP_REGION_WRITE))) return APP_REGION_INVALID;
+    bytes = (bytes + APP_REGION_BLOCK - 1) & ~(APP_REGION_BLOCK - 1);
+    if (base < APP_REGION_FLOOR || base > APP_REGION_LIMIT || bytes > APP_REGION_LIMIT - base) return APP_REGION_INVALID;
+    unsigned slot = l->capacity;
+    for (unsigned i = 0; i < l->capacity; ++i) if (!l->entry[i].owner) { slot = i; break; }
+    if (slot == l->capacity) return APP_REGION_QUOTA;
+    struct gap_walk w = {0, 0, 0};
+    struct gap g;
+    while (gap_next(l, &w, &g))
+        if (g.base <= base && base + bytes <= g.end) {
+            l->entry[slot] = (struct app_region_entry){base, bytes, owner, (uint8_t)access};
+            return APP_REGION_OK;
+        }
+    return APP_REGION_NO_SPACE;
+}
+
 int app_region_release(struct app_region_ledger *l, uint16_t owner, uint64_t base)
 {
     if (!l || !owner) return APP_REGION_INVALID;
@@ -107,7 +126,7 @@ int app_region_release(struct app_region_ledger *l, uint16_t owner, uint64_t bas
 void app_asid_pool_init(struct app_asid_pool *pool, uint64_t id_aa64mmfr0_el1, uint64_t tcr_el1)
 {
     pool->next = 0;
-    pool->limit = APP_ID_AA64MMFR0_ASIDBITS(id_aa64mmfr0_el1) == 2 && APP_TCR_AS(tcr_el1) ? 65535u : 255u;
+    pool->limit = APP_ID_AA64MMFR0_ASIDBITS(id_aa64mmfr0_el1) == 2 && APP_TCR_AS(tcr_el1) ? 65534u : 255u;   /* 65535 owns the guard blocks */
 }
 
 uint16_t app_asid_alloc(struct app_asid_pool *pool)
@@ -151,8 +170,24 @@ int app_space_build(struct app_space *s, struct app_table_arena *a, const uint64
 
 int app_space_build_view(struct app_space *s, struct app_table_arena *a, const uint64_t base_l1[512],
                          const struct app_region_ledger *l, uint16_t owner, uint16_t asid, unsigned flags)
+{ return app_space_build_l2(s, a, base_l1, 0, l, owner, asid, flags); }
+
+int app_space_build_l2(struct app_space *s, struct app_table_arena *a, const uint64_t base_l1[512], const uint64_t base_l2[512],
+                       const struct app_region_ledger *l, uint16_t owner, uint16_t asid, unsigned flags)
 {
     if (!s || !a || !base_l1 || !l || !asid || !owner || !a->page || (flags & ~APP_SPACE_NO_GIB_BLOCKS)) return APP_REGION_INVALID;
+    /* Level-1 slot 1 above the floor: the owner's blocks there need a private copy of the kernel's level-2 table. */
+    int whole1;
+    const int low = covered(l, owner, APP_REGION_FLOOR, APP_REGION_BASE, &whole1) != 0;
+    if (low) {
+        if (!base_l2 || (base_l1[1] & 3) != APP_PTE_TABLE) return APP_REGION_INVALID;
+        for (unsigned j = (unsigned)((APP_REGION_FLOOR - UINT64_C(0x40000000)) / APP_REGION_BLOCK); j < BLOCKS_PER_SLOT; ++j) {
+            uint64_t pa = UINT64_C(0x40000000) + (uint64_t)j * APP_REGION_BLOCK;
+            int unused;
+            if (!covered(l, owner, pa, pa + APP_REGION_BLOCK, &unused)) continue;
+            if (base_l2[j] != KERNEL_BLOCK(pa)) return APP_REGION_INVALID;
+        }
+    }
     /* Each upper-memory slot is either unmapped (the board maps less than 12 GiB) or the kernel's EL1-only
      * block with nG set; a slot that a region covers must be the block. */
     for (unsigned slot = SLOT_FIRST; slot < SLOT_END; ++slot) {
@@ -161,7 +196,7 @@ int app_space_build_view(struct app_space *s, struct app_table_arena *a, const u
         if (base_l1[slot] != want && base_l1[slot] != 0) return APP_REGION_INVALID;
         if (base_l1[slot] == 0 && covered(l, owner, lo, lo + APP_REGION_GIB, &whole)) return APP_REGION_INVALID;
     }
-    unsigned need = 1;
+    unsigned need = 1 + (low ? 1u : 0u);
     for (unsigned slot = SLOT_FIRST; slot < SLOT_END; ++slot) {
         uint64_t lo = APP_REGION_GIB * slot;
         int whole;
@@ -172,6 +207,19 @@ int app_space_build_view(struct app_space *s, struct app_table_arena *a, const u
     uint64_t (*root)[512] = &a->page[a->used];
     memcpy(*root, base_l1, 512 * sizeof(uint64_t));
     unsigned used = a->used + 1;
+    if (low) {
+        uint64_t (*l2)[512] = &a->page[used];
+        const unsigned first = (unsigned)((APP_REGION_FLOOR - UINT64_C(0x40000000)) / APP_REGION_BLOCK);
+        memcpy(*l2, base_l2, 512 * sizeof(uint64_t));
+        for (unsigned j = first; j < BLOCKS_PER_SLOT; ++j) {
+            uint64_t pa = UINT64_C(0x40000000) + (uint64_t)j * APP_REGION_BLOCK;
+            int unused;
+            unsigned block_access = covered(l, owner, pa, pa + APP_REGION_BLOCK, &unused);
+            if (block_access) (*l2)[j] = (KERNEL_BLOCK(pa) & ~APP_PTE_AP_RO) | ap_bits(block_access);
+        }
+        (*root)[1] = (a->physical + (uint64_t)used * 4096) | APP_PTE_TABLE;
+        ++used;
+    }
     for (unsigned slot = SLOT_FIRST; slot < SLOT_END; ++slot) {
         uint64_t lo = APP_REGION_GIB * slot;
         int whole;

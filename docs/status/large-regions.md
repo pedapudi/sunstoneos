@@ -8,6 +8,10 @@ An application declares regions of upper memory, up to the 11 GiB the board maps
 
 **Board-qualified scope:** A read-only probe image (boot clocks, CPU 494 MHz) took a 1 GiB region, ran EL0 routines in three address spaces and showed the isolation, the 2 MiB and 1 GiB block walk counts and one read rate that does not depend on the block size; it read the card at 21.9 MB/s per 128 KiB request and mounted its FAT32 volume. No OS image has run on a board with a large region, and no performance figure at the approved top operating points exists.
 
+## Heap from the ledger
+
+A manifest heap above 4 MiB is the application's last large region (`SS_LARGE_HEAP`): the C library's heap, zero filled by `_sbrk`, with no card file. Host evidence: `checks/app-region.c` (records, admission, refusals) and the host layout check. Emulator evidence: `checks/qemu-os-boot.py` cases `heap-from-ledger`, `heap-other-space-faults`, `heap-end-faults`, `heap-worker-shares` and `heap-too-big`. The board image is `sunstone-a733-os-heap-test` (`apps/heap-test`); it has not run on a board. Design: [application memory layout](../designs/application-memory-layout.md).
+
 ## Defect found on a board and fixed
 
 The first run of `sunstone-a733-os-large-region-test` in the CPU-return profile (found by the storage agent on a board) took a data abort in `os_large_prepare`: the admission read the boot level-1 table through `TTBR0_EL1`, and the A733 EL1 table leaves the 2 MiB block that holds the tables unmapped. Admission now reads a copy the platform makes (`os_kernel_l1_head`). The QEMU OS platform maps its tables the same way, and the cases that admit a region fault with ESR 0x96000006 if the read returns. No board run of the fix yet.

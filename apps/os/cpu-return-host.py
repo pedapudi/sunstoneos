@@ -18,9 +18,13 @@ import io
 import json
 from pathlib import Path
 import struct
+import sys
 from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'tools'))
+import memory_layout
+LAYOUT = memory_layout.record()
 spec = importlib.util.spec_from_file_location('return_host_records', ROOT / 'apps/os/host.py')
 host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)
@@ -35,7 +39,9 @@ CHUNK = 4 * 1024 * 1024
 # The forced-FEL boot ROM words at 0x20, 0x24, 0x28, 0x3c and 0x40.
 ROM_ENTRY = {0x20: 0xeb00008f, 0x24: 0xe3a00911, 0x28: 0xe3a0193d, 0x3c: 0xe3a0605c, 0x40: 0xea00004d}
 # Image RAM below the session page; every run backs it up and restores it.
-IMAGE_RAM = (0x41000000, 0x1200000)
+IMAGE_RAM = memory_layout.extent(LAYOUT['image']['image_ram'])
+# The cached writable RAM: data, bss, stacks and heap, below the monitor interval.
+RAM = tuple(LAYOUT['image']['ram'])
 # The copied result record's evidence name, which follow-up tools read.
 OUTPUT = 'recorded-output'
 
@@ -45,8 +51,8 @@ OUTPUT = 'recorded-output'
 # 0x47400000, or a pool sized from the session's declaration: a multiple of 2 MiB between 10 and 48 MiB that ends at
 # 0x47000000, the bottom of the monitor interval. Both lie in the write-back RAM that EL0 reaches (0x40000000 to
 # 0x48000000), above the application regions' lowest address 0x44000000, and clear of the image RAM below 0x42200000.
-NPU_POOL_LEGACY = (0x47400000, 0x47c00000)
-NPU_POOL_TOP, NPU_POOL_MIN, NPU_POOL_MAX, NPU_POOL_BLOCK = 0x47000000, 0xa00000, 0x3000000, 0x200000
+NPU_POOL_LEGACY = tuple(LAYOUT['npu_pool']['legacy'])
+NPU_POOL_TOP, NPU_POOL_MIN, NPU_POOL_MAX, NPU_POOL_BLOCK = (LAYOUT['npu_pool'][k] for k in ('top', 'min', 'max', 'block'))
 
 
 def npu_pool_extent_valid(low, high):
@@ -77,18 +83,18 @@ def layout(image):
         return symbols[name][0]
     monitor = [at('__monitor_bss_start'), at('__monitor_bss_end')]
     report, stacks = at('a733_qualification_report'), at('a733_qualification_stacks')
-    require(0x42005000 <= monitor[0] < monitor[1] <= at('__a733_smp_boot_stack_top') <= 0x421f0000 and
+    require(LAYOUT['monitor']['bss_first'] <= monitor[0] < monitor[1] <= at('__a733_smp_boot_stack_top') <= LAYOUT['monitor']['tables'] and
             symbols['a733_qualification_report'][1] == cpu.REPORT_BYTES and
             symbols['a733_qualification_stacks'][1] == 32768 and
             monitor[0] <= report < report + cpu.REPORT_BYTES <= monitor[1] and
             monitor[0] <= stacks < stacks + 32768 <= monitor[1] and
             (report + cpu.REPORT_BYTES <= stacks or stacks + 32768 <= report),
             'CPU return Secure Device allocations differ.')
-    require(0x41200000 <= at('__bss_start') <= at('__bss_end') <= at('__heap_end') <= 0x41c00000,
+    require(RAM[0] <= at('__bss_start') <= at('__bss_end') <= at('__heap_end') <= LAYOUT['image']['writable_ceiling'],
             'CPU return cached writable range differs.')
     return {'report_address': report, 'report_bytes': cpu.REPORT_BYTES,
             'cleanup_stacks': [stacks, stacks + 32768], 'monitor': monitor,
-            'cached_writable': [0x41200000, (at('__heap_end') + 63) & ~63]}
+            'cached_writable': [RAM[0], (at('__heap_end') + 63) & ~63]}
 
 
 def geometry(image):
@@ -101,7 +107,7 @@ def geometry(image):
     image = Path(image)
     result = layout(image)
     output = host.result_geometry(image)
-    require(0x41200000 <= output['address'] < output['address'] + output['bytes'] <= 0x42000000,
+    require(RAM[0] <= output['address'] < output['address'] + output['bytes'] <= RAM[1],
             'Copied result geometry differs.')
     result.update(application_regions=host.backup_regions(image), output_address=output['address'],
                   output_bytes=output['bytes'])

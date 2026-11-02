@@ -13,7 +13,9 @@
 extern void platform_puts(const char *text) __attribute__((weak));
 
 extern char __heap_start[], __heap_end[];
-static uintptr_t heap_break;
+/* The heap's extent: the linked heap, or the region that runtime_heap_attach() names. */
+static uintptr_t heap_low, heap_high, heap_break;
+static int heap_attached;
 static size_t heap_peak;
 
 size_t runtime_heap_peak(void) { return heap_peak; }
@@ -36,18 +38,38 @@ void __malloc_unlock(struct _reent *context)
 }
 #endif
 
+/* Use a region from the application memory ledger as the heap (docs/designs/application-memory-layout.md,
+ * large regions flagged SS_LARGE_HEAP). It succeeds only before the linked heap has handed out a byte, since
+ * the allocator cannot move what it already holds. The attached heap is zeroed as sbrk hands it out, so memory
+ * left by an earlier run never reaches the application. */
+int runtime_heap_attach(uintptr_t base, size_t bytes)
+{
+    if (heap_attached || (heap_break && heap_break != (uintptr_t)__heap_start) || !bytes || (base & 63) || (bytes & 63) ||
+        base + bytes < base) return 0;
+    heap_low = base;
+    heap_high = base + bytes;
+    heap_break = base;
+    heap_attached = 1;
+    return 1;
+}
+
 static void *adjust_heap(struct _reent *context, ptrdiff_t change)
 {
-    if (!heap_break) heap_break = (uintptr_t)__heap_start;
+    if (!heap_low) {
+        heap_low = (uintptr_t)__heap_start;
+        heap_high = (uintptr_t)__heap_end;
+    }
+    if (!heap_break) heap_break = heap_low;
     uintptr_t previous = heap_break;
     uintptr_t magnitude = change < 0 ? (uintptr_t)(-(change + 1)) + 1 : (uintptr_t)change;
-    if ((change >= 0 && magnitude > (uintptr_t)__heap_end - heap_break) ||
-        (change < 0 && magnitude > heap_break - (uintptr_t)__heap_start)) {
+    if ((change >= 0 && magnitude > heap_high - heap_break) ||
+        (change < 0 && magnitude > heap_break - heap_low)) {
         context->_errno = ENOMEM;
         return (void *)-1;
     }
+    if (change > 0 && heap_attached) memset((void *)previous, 0, magnitude);
     heap_break = change < 0 ? heap_break - magnitude : heap_break + magnitude;
-    size_t used = heap_break - (uintptr_t)__heap_start;
+    size_t used = heap_break - heap_low;
     if (used > heap_peak) heap_peak = used;
     return (void *)previous;
 }

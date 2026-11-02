@@ -20,6 +20,11 @@
 #ifndef __ASSEMBLER__
 #include "../../include/os_space.h"
 #define traceTASK_SWITCHED_IN() os_space_switch_in((const void *)pxCurrentTCBs[portGET_CORE_ID()]->pxTaskTag)
+/* A task starts in the address space of the task that creates it (include/os_space.h). The application's main task
+ * is tagged at admission, so every task the application creates, directly or through other tasks, runs in the
+ * application's space and can use its heap and regions. OS services create their tasks from boot code or from
+ * their own untagged tasks, so they stay in the kernel's table. */
+#define traceTASK_CREATE(pxNewTask) os_space_inherit(pxCurrentTCBs[portGET_CORE_ID()], (pxNewTask))
 #endif
 #define configCORES_SHARE_TYPE(a, b) \
     ((((A733_SMP_A55_MASK >> (a)) ^ (A733_SMP_A55_MASK >> (b))) & 1u) == 0u)

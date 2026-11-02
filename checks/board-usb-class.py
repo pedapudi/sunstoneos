@@ -63,7 +63,7 @@ def fixture(out, flags=1, host=True, weak=False, generic=False, pool=None, class
         text += '.section .rodata,"a"\n.global os_cpu_return_watchdog\n.type os_cpu_return_watchdog,%object\n'
         text += 'os_cpu_return_watchdog: .quad 0x31544457534f5243,2,0xb1,0x07090000,20\n.size os_cpu_return_watchdog,40\n'
         text += '.section .bss,"aw",%nobits\n.global ss_result_record,__bss_start,__bss_end,__heap_end\n'
-        text += '__bss_start:\n.type ss_result_record,%object\nss_result_record: .zero 72\n.size ss_result_record,72\n'
+        text += '__bss_start:\n.type ss_result_record,%object\nss_result_record: .zero 120\n.size ss_result_record,120\n'
         text += '__bss_end:\n.set __heap_end,0x41300000\n'
         text += '.section .monitor,"aw",%nobits\n.global __monitor_bss_start,__monitor_bss_end,__a733_smp_boot_stack_top\n'
         text += '.global a733_qualification_report,a733_qualification_stacks\n__monitor_bss_start:\n'

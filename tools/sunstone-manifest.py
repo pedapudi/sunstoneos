@@ -18,6 +18,9 @@ import re
 import struct
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import memory_layout
+
 MAGIC = 0x5453464e4d505041
 VERSION = 1
 MANIFEST_BYTES = 552
@@ -37,7 +40,9 @@ KIND = {'input': 1, 'work': 2, 'output': 3}
 ACCESS = {'read': 1, 'write': 2, 'gpu-read': 4, 'gpu-write': 8}
 # Application regions lie in the EL0 read-write blocks above the OS-owned
 # radio and Bluetooth profile reservation and below the loader limit.
-WINDOW = (0x44000000, 0x47000000)
+WINDOW = tuple(memory_layout.record()['window'])
+SLOT1 = tuple(memory_layout.record()['slot1_area'])
+AREAS = (WINDOW, SLOT1)
 PAGE = 0x1000
 BLOCK = 0x200000
 # OS host operations: the fault, NPU, thermal and performance reports keep
@@ -45,6 +50,18 @@ BLOCK = 0x200000
 OS_REPORTS = (0x05, 0x09)
 OS_HOST_FIRST = 0x80
 OUTPUT_LIMIT = 65536
+
+
+def failure_record_bytes():
+    """The size of struct ss_failure, from the static assertion beside it in include/sunstone_session.h."""
+    text = (Path(__file__).resolve().parents[1] / 'include/sunstone_session.h').read_text()
+    found = re.search(r'sizeof\(struct ss_failure\)\s*==\s*(\d+)', text)
+    if found is None:
+        raise SystemExit('include/sunstone_session.h has no size assertion for struct ss_failure')
+    return int(found.group(1))
+
+
+FAILURE_RECORD_BYTES = failure_record_bytes()
 
 
 def fail(message):
@@ -98,13 +115,16 @@ def load(path):
          'workers': integer(cpu.get('workers', 0), name + ' workers', 0, 7),
          'priority': integer(cpu['priority'], name + ' priority', 1, 30),
          'stack_bytes': integer(cpu['stack_bytes'], name + ' stack_bytes', 1024, 1 << 20),
-         'heap_bytes': integer(cpu.get('heap_bytes', 0), name + ' heap_bytes', 0, 64 << 20)}
+         'heap_bytes': integer(cpu.get('heap_bytes', 0), name + ' heap_bytes', 0, LARGE_GIB)}
     require(m['stack_bytes'] % 16 == 0 and m['heap_bytes'] % 16 == 0, name + ': stack and heap are 16-byte multiples')
     d = raw['deadlines']
     m['run_deadline_us'] = integer(d.get('run_us', 0), name + ' run_us')
     m['return_reserve_us'] = integer(d['return_reserve_us'], name + ' return_reserve_us')
     m['progress_window_us'] = integer(d['progress_window_us'], name + ' progress_window_us', 1, 60000000)
     m['output_limit'] = integer(raw.get('output_limit', 0), name + ' output_limit', 0, OUTPUT_LIMIT)
+    require(m['output_limit'] >= FAILURE_RECORD_BYTES,
+            '%s: output_limit %d is smaller than the %d-byte failure record (struct ss_failure in '
+            'include/sunstone_session.h), which the failure return publishes in the output' % (name, m['output_limit'], FAILURE_RECORD_BYTES))
     ops = raw.get('host_ops', {'first': 0, 'count': 0})
     first = m['host_op_first'] = integer(ops['first'], name + ' host_ops.first', 0, OS_HOST_FIRST - 1)
     count = m['host_op_count'] = integer(ops['count'], name + ' host_ops.count', 0, OS_HOST_FIRST)
@@ -150,7 +170,7 @@ def load(path):
         for a in r.get('access', []):
             require(a in ACCESS, where + ': unknown access %r' % a)
             access |= ACCESS[a]
-        size = integer(r['bytes'], where + ' bytes', 1, WINDOW[1] - WINDOW[0])
+        size = integer(r['bytes'], where + ' bytes', 1, SLOT1[1] - SLOT1[0])
         digest = r.get('sha256')
         if digest is not None:
             require(kind == KIND['input'] and re.fullmatch(r'[0-9a-f]{64}', digest) is not None,
@@ -174,6 +194,7 @@ def load(path):
     m['regions'] = regions
     m['region_names'] = names
     m['large_regions'], m['large_names'] = load_large(name, raw.get('large_regions', []))
+    add_heap_region(name, m)
     return m
 
 
@@ -224,6 +245,24 @@ def load_large(name, items):
     return records, names
 
 
+LARGE_HEAP = 13         # SS_LARGE_HEAP | SS_LARGE_UNFILLED | SS_LARGE_WRITE in include/sunstone_large.h
+
+
+def add_heap_region(name, m):
+    """A heap above the linked limit is a region of the ledger: the last large record, read-write, with no source.
+
+    The image links only the OS's share of the heap then (cmake/sunstone-image.cmake), so the region holds the
+    manifest's heap_bytes on top of that share, rounded up to 2 MiB."""
+    layout = memory_layout.record()
+    if m['heap_bytes'] <= layout['heap_link_max']:
+        return
+    size = -(-(m['heap_bytes'] + layout['heap_base']) // BLOCK) * BLOCK
+    m['large_regions'].append({'index': len(m['large_regions']), 'flags': LARGE_HEAP, 'bytes': size, 'source_bytes': 0,
+                               'first_sector': 0, 'sha256': '0' * 64, 'path': ''})
+    require(sum(r['bytes'] for r in m['large_regions']) <= LARGE_GIB,
+            name + ': large regions and heap together exceed the 11 GiB of upper memory')
+
+
 def pack_large(m):
     return b''.join(LARGE.pack(r['index'], r['flags'], r['bytes'], r['source_bytes'], r['first_sector'],
                                bytes.fromhex(r['sha256']), r['path'].encode()) for r in m['large_regions'])
@@ -234,8 +273,10 @@ def unpack_large(raw):
     out = []
     for base in range(0, len(raw), LARGE.size):
         index, flags, size, source, sector, digest, path = LARGE.unpack_from(raw, base)
-        require(index == base // LARGE.size and not flags & ~7 and size and size % BLOCK == 0 and
-                ((flags & 4 and not source and not any(digest)) or (not flags & 4 and 0 < source <= size)),
+        heap = flags == LARGE_HEAP
+        require(index == base // LARGE.size and not flags & ~15 and size and size % BLOCK == 0 and
+                ((flags & 4 and not source and not any(digest)) or (not flags & 4 and 0 < source <= size)) and
+                (not flags & 8 or heap),
                 'large record at %d is malformed' % base)
         text = path.rstrip(b'\0')
         require(b'\0' not in text and len(path) - len(text) >= 1, 'large record at %d: path has no terminator' % base)
@@ -246,7 +287,7 @@ def unpack_large(raw):
 
 def span(r):
     # GPU leases and CPU output permissions reserve complete 2 MiB blocks.
-    alignment = BLOCK if r['access'] & (ACCESS['gpu-read'] | ACCESS['gpu-write']) else PAGE
+    alignment = BLOCK if r['access'] & (ACCESS['gpu-read'] | ACCESS['gpu-write']) or r['address'] >= SLOT1[0] else PAGE
     return r['address'], r['address'] + -(-r['bytes'] // alignment) * alignment
 
 
@@ -261,7 +302,9 @@ def assign(m):
     def place(i, r):
         where = '%s region %s' % (m['name'], m['region_names'][i])
         low, high = span(r)
-        require(WINDOW[0] <= low < high <= WINDOW[1], '%s: [%#x, %#x) outside the application window' % (where, low, high))
+        require(any(a <= low and high <= b for a, b in AREAS),
+                '%s: [%#x, %#x) outside the application window and the slot 1 area' % (where, low, high))
+        require(low < SLOT1[0] or low % BLOCK == 0, '%s: a region in the slot 1 area starts on a 2 MiB boundary' % where)
         for other, (a, b) in taken:
             require(high <= a or b <= low, '%s overlaps region %s' % (where, other))
         taken.append((m['region_names'][i], (low, high)))
@@ -274,6 +317,9 @@ def assign(m):
             r['address'] = WINDOW[0]
             while True:
                 low, high = span(r)
+                if high > WINDOW[1] and low < SLOT1[0]:          # the window is full: continue in the slot 1 area
+                    r['address'] = SLOT1[0]
+                    continue
                 clash = [b for _, (a, b) in taken if not (high <= a or b <= low)]
                 if not clash:
                     break
@@ -411,7 +457,9 @@ def c_tables(m):
              '/* Storage for the large regions this manifest declares: the count is the manifest\'s, not a constant. */',
              'const unsigned os_large_capacity = %du;' % len(m.get('large_regions', [])),
              'struct large_slot os_large_slot_storage[%d];' % max(1, len(m.get('large_regions', []))),
-             'struct app_region_entry os_large_entry_storage[%d];' % max(1, len(m.get('large_regions', []))),
+             '/* The ledger also holds the manifest regions that lie in the slot 1 area. */',
+             'const unsigned os_ledger_capacity = %du;' % (len(m.get('large_regions', [])) + len(m.get('regions', [])) + 2),
+             'struct app_region_entry os_large_entry_storage[%d];' % max(1, len(m.get('large_regions', [])) + len(m.get('regions', [])) + 2),
              '/* A task waits on one region at a time: one entry per task of the application. */',
              'const unsigned os_large_waiter_capacity = %du;' % (m.get('workers', 0) + 1),
              'TaskHandle_t os_large_waiter_task[%d];' % (m.get('workers', 0) + 1),

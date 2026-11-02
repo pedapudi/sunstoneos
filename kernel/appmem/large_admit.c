@@ -22,14 +22,18 @@ int ss_large_records_valid(const struct ss_large_region *r, unsigned count)
     if (count > APP_REGION_MAX_REGIONS || (count && !r)) return 0;
     uint64_t total = 0;
     for (unsigned i = 0; i < count; ++i) {
-        if (r[i].index != i || (r[i].flags & ~(unsigned)(SS_LARGE_WRITE | SS_LARGE_EXTENT | SS_LARGE_UNFILLED))) return 0;
-        if (!r[i].bytes || r[i].bytes % APP_REGION_BLOCK || r[i].bytes > APP_REGION_LIMIT - APP_REGION_BASE) return 0;
+        if (r[i].index != i || (r[i].flags & ~(unsigned)(SS_LARGE_WRITE | SS_LARGE_EXTENT | SS_LARGE_UNFILLED | SS_LARGE_HEAP))) return 0;
+        if (!r[i].bytes || r[i].bytes % APP_REGION_BLOCK || r[i].bytes > APP_REGION_LIMIT - APP_REGION_FLOOR) return 0;
         total += r[i].bytes;
-        if (total > APP_REGION_LIMIT - APP_REGION_BASE) return 0;
+        if (total > APP_REGION_LIMIT - APP_REGION_FLOOR) return 0;
         int zero = 1;
         for (unsigned k = 0; k < 32; ++k) if (r[i].sha256[k]) zero = 0;
         int n = path_ok(r[i].path);
         if (n < 0) return 0;
+        if (r[i].flags & SS_LARGE_HEAP) {
+            /* The heap is the last record, read-write and unfilled. */
+            if (r[i].flags != (SS_LARGE_HEAP | SS_LARGE_UNFILLED | SS_LARGE_WRITE) || i != count - 1) return 0;
+        }
         if (r[i].flags & SS_LARGE_UNFILLED) {                      /* nothing to load: no source of any kind */
             if ((r[i].flags & SS_LARGE_EXTENT) || r[i].source_bytes || r[i].first_sector || !zero || n) return 0;
             continue;
@@ -52,7 +56,10 @@ int large_admit(struct app_region_ledger *l, uint16_t owner, const struct ss_lar
         struct large_slot *s = &out[i];
         unsigned access = APP_REGION_READ | (r[i].flags & SS_LARGE_WRITE ? APP_REGION_WRITE : 0);
         status = app_region_acquire(l, owner, r[i].bytes, access, &s->base, &s->bytes);
-        if (status == APP_REGION_OK) { s->index = r[i].index; s->flags = r[i].flags; s->state = SS_LARGE_PENDING; }
+        if (status == APP_REGION_OK) {
+            s->index = r[i].index; s->flags = r[i].flags;
+            s->state = r[i].flags & SS_LARGE_HEAP ? SS_LARGE_READY : SS_LARGE_PENDING;    /* nothing loads the heap */
+        }
     }
     if (status != APP_REGION_OK) {                               /* all or nothing */
         for (unsigned i = 0; i < count; ++i)
