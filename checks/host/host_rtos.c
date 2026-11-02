@@ -24,6 +24,8 @@ void __sanitizer_finish_switch_fiber(void *fake, const void **bottom, size_t *si
 #define HOST_EVENTS 32
 
 unsigned host_core_id;
+void *pvPortMalloc(size_t bytes) { return malloc(bytes); }
+void vPortFree(void *p) { free(p); }
 struct host_context {
     ucontext_t uc;
     void *stack;
@@ -253,6 +255,13 @@ void host_set_time_us(uint64_t us)
     if (running && us != now_us) fail("host_set_time_us after the scheduler started; use host_advance_us");
     now_us = us;
     next_tick_us = (us / 1000u + 1u) * 1000u;
+}
+void host_reset_time_us(uint64_t us)
+{
+    if (in_isr || critical || mask_level) fail("host_reset_time_us inside an interrupt or critical section");
+    now_us = us;
+    next_tick_us = (us / 1000u + 1u) * 1000u;
+    tick_debt = 0;
 }
 void host_advance_us(uint64_t us)
 {

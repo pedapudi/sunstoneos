@@ -48,6 +48,10 @@ void host_advance_us(uint64_t us);
 /* Sets time. Allowed before the scheduler starts, or in a task while no task is
  * blocked on a timeout. Time never moves backward. */
 void host_set_time_us(uint64_t us);
+/* Restarts the clock at any value, backward included, for fixtures that run
+ * independent scenarios against code that reads only the counter. The kernel's tick
+ * count is not changed, so no task may be blocked on a timeout. */
+void host_reset_time_us(uint64_t us);
 
 /* Runs an interrupt handler now, as the CPU would on exception entry, and switches
  * tasks on return if the handler requested it. The handler runs on the current

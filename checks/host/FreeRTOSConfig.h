@@ -20,7 +20,13 @@ void host_trace_give(void);
 #define configUSE_16_BIT_TICKS 0
 #define configIDLE_SHOULD_YIELD 1
 #define configSUPPORT_STATIC_ALLOCATION 1
-#define configSUPPORT_DYNAMIC_ALLOCATION 0
+/* As network/include/FreeRTOSConfig.h: the network headers need dynamic allocation, which the
+ * host serves from the C heap. */
+#define FREERTOS_CONFIG_H
+#define configSUPPORT_DYNAMIC_ALLOCATION 1
+#define configAPPLICATION_ALLOCATED_HEAP 1
+#define configTOTAL_HEAP_SIZE (256u * 1024u)
+#define configUSE_MALLOC_FAILED_HOOK 0
 #define configKERNEL_PROVIDED_STATIC_MEMORY 1
 #define configUSE_MUTEXES 1
 #define configUSE_RECURSIVE_MUTEXES 0
