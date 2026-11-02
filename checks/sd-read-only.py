@@ -6,8 +6,9 @@ write functions are absent from the core's object code; queue() is the only
 function that assigns the controller command word and refuses every index
 outside the read set, including CMD24, CMD25 and CMD38 (run directly on the
 host); the command-register store of the core sits only in command_step,
-which takes h->command; and, with --elf, the linked image defines none of the
-write-path symbols and holds no call to them.
+which takes h->command; and the shared scan of tools/sd_read_only_scan.py,
+which the runner also runs, finds the marker and no write symbol or call in a
+linked image (--elf), and behaves as designed on four synthetic images.
 """
 import argparse
 from pathlib import Path
@@ -20,8 +21,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness
 
 ROOT = Path(__file__).resolve().parents[1]
-FORBIDDEN_SYMBOLS = ('sunxi_mmc_write', 'next_write', 'write_admitted', 'a733_storage_update_authorize',
-                     'a733_storage_update_write')
+sys.path.insert(0, str(ROOT / 'tools'))
+import sd_read_only_scan as scan
+LLD = str(Path.home() / '.cache/sunstoneos/host/usr/lib/llvm-21/bin/lld')
+FORBIDDEN_SYMBOLS = ('sunxi_mmc_write', 'next_write', 'write_admitted')
 FORBIDDEN_COMMANDS = (24, 25, 38)
 
 
@@ -71,15 +74,36 @@ def main():
     for symbol in FORBIDDEN_SYMBOLS:
         assert not re.search(rf'\b{symbol}\b', nm['read-only']), symbol
 
+    # The shared scan on synthetic linked images: clean, a call to the write path, a write path that
+    # is defined but not called, and a missing marker.
+    cases = args.output / 'scan'
+    cases.mkdir(exist_ok=True)
+    marker = 'const unsigned sunxi_mmc_read_only_build __attribute__((used)) = 0x52444f4eu;\n'
+    body = ('__attribute__((noinline,used)) int next_write(int v) { return v * 3 + 1; }\n'
+            'int __attribute__((used)) entry(int v) { return %s; }\n')
+    images = {}
+    for name, text in {'clean': marker + body.replace('next_write(int v) { return v * 3 + 1; }', 'other(int v) { return v + 7; }') % 'other(v)',
+                       'called': marker + body % 'next_write(v)',
+                       'defined-only': marker + body % 'v',
+                       'no-marker': body % 'v'}.items():
+        source = cases / f'{name}.c'
+        source.write_text(text)
+        run(['clang-21', '--target=aarch64-none-elf', '-O1', '-ffreestanding', '-fno-builtin', '-c', str(source),
+             '-o', str(cases / f'{name}.o')], cases / f'{name}-cc.log')
+        image = cases / f'{name}.elf'
+        run([LLD, '-flavor', 'gnu', '-nostdlib', '-e', 'entry', '-Ttext=0x41000000', str(cases / f'{name}.o'),
+             '-o', str(image)], cases / f'{name}-ld.log')
+        images[name] = scan.scan(image)
+    assert images['clean'] == [], images['clean']
+    assert any('call to next_write' in p for p in images['called']), images['called']
+    assert images['defined-only'] == ['defines next_write'], images['defined-only']
+    assert images['no-marker'] == ['defines next_write', f'lacks {scan.MARKER}'], images['no-marker']
+
     if args.elf:
+        problems = scan.scan(args.elf)
+        assert not problems, problems
         table = run(['llvm-nm-21', str(args.elf)], args.output / 'image-nm.log')
-        for symbol in FORBIDDEN_SYMBOLS:
-            assert not re.search(rf'\b{symbol}\b', table), f'{symbol} is linked in {args.elf}'
-        listing = run(['llvm-objdump-21', '-d', '--no-show-raw-insn', str(args.elf)], args.output / 'image-objdump.log')
-        for symbol in FORBIDDEN_SYMBOLS:
-            assert not re.search(rf'\b(bl|b)\s+.*<{symbol}>', listing), f'call to {symbol}'
-        for needed in ('sunxi_mmc_read',):
-            assert re.search(rf'\b{needed}\b', table), f'{needed} is missing: not an SD image'
+        assert re.search(r'\bsunxi_mmc_read\b', table), 'sunxi_mmc_read is missing: not an SD image'
     print('sd-read-only check passed')
 
 

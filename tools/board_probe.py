@@ -16,13 +16,18 @@ FIELDS=('magic','version','bytes','watchdog_mode','seconds','session_address','s
         'result_address','result_bytes','payload_address','payload_bytes','input_address','input_bytes','flags')
 RETURNABLE=1
 STORAGE_READ_ONLY=4
-# Symbols of the card write path (docs/designs/large-app-regions.md, checks/sd-read-only.py).
-# An image that declares STORAGE_READ_ONLY defines none of them and defines the marker of
-# a core built with SUNXI_MMC_READ_ONLY, whose command funnel refuses CMD24, CMD25 and CMD38.
-SD_WRITE_SYMBOLS=('sunxi_mmc_write','a733_storage_update_authorize','a733_storage_update_write')
-SD_READ_ONLY_MARKER='sunxi_mmc_read_only_build'
+# An image that declares STORAGE_READ_ONLY passes the card write-path scan of
+# tools/sd_read_only_scan.py, which checks/sd-read-only.py also runs: the marker of a core
+# built with SUNXI_MMC_READ_ONLY (its command funnel refuses CMD24, CMD25 and CMD38), no
+# write-path symbol and no call into one.
 RESULT_FIELDS=('magic','version','bytes','epoch','generation','lease','status','payload_bytes','payload_hash',
                'cleanup','retired','start_ticks','end_ticks','failure_site','watchdog_mode','complete')
+
+
+def load_scan():
+    import importlib.util
+    spec=importlib.util.spec_from_file_location('sd_read_only_scan',Path(__file__).with_name('sd_read_only_scan.py'))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 
 
 def require(ok,text):
@@ -54,9 +59,8 @@ def inspect(image, usb_pool=None):
     require((m['magic'],m['version'],m['bytes'])==(MAGIC,1,112),'Unsupported native probe ABI.')
     require(m['flags'] in (RETURNABLE,RETURNABLE|STORAGE_READ_ONLY),'Probe requires power removal or lacks normal-return capability.')
     if m['flags']&STORAGE_READ_ONLY:
-        require(SD_READ_ONLY_MARKER in defined,'Read-only storage probe lacks the read-only SD core marker.')
-        linked=[n for n in SD_WRITE_SYMBOLS if n in defined]
-        require(not linked,'Read-only storage probe links the card write path: '+', '.join(linked))
+        problems=load_scan().scan(data)
+        require(not problems,'Read-only storage probe fails the card write-path scan: '+'; '.join(problems))
     require(m['watchdog_mode']==0xb1 and 1<=m['seconds']<=600 and
             (m['session_address'],m['session_bytes'],m['result_address'],m['result_bytes'])==
             (SESSION,128,RECEIPT,128),'Probe watchdog or session/receipt geometry differs.')
