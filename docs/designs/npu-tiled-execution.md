@@ -1,8 +1,11 @@
 # Length-independent NPU execution: tile graphs and job lists
 
-**Status: design, not implemented.** Nothing in this note has run except the measurements in section 8, which are single-graph
-board runs of the conformer layer of the mimus speech encoder (176 channels, four attention heads, 704-wide feed-forward,
-depthwise convolution kernel 31).
+**Status: the tile graphs are implemented and run on the board through the existing queue; the rebinding calls of section 6 are not
+implemented.** The graphs (entry, attention step, output, convolution, subsampling and head) are built, quantized and compiled for
+the 16 layers of the conformer encoder of the mimus speech recognizer (176 channels, four attention heads, 704-wide feed-forward,
+depthwise convolution kernel 31). The model-specific builders live in the mimus repository; this note covers the part that
+belongs to the operating system and the application kit. Sections 1 to 5 describe the decomposition as built. Section 6 is a
+proposal. Section 8 states what runs and what it costs, and section 11 lists the open items.
 
 ## 1. Requirement
 
@@ -83,9 +86,8 @@ T are computed and discarded. The score tensor of a step is 4 x N x N and the ga
 **Where the merge runs.** The carried-state form puts the merge inside the step graph, so consecutive steps of one query tile
 are chained by the queue's tensor links and the CPU is not in the loop. The alternative is for the step to return its block-local
 `o`, `m`, `l` and for the CPU to merge: per layer and tile pair that is 4 x N x 44 multiply-accumulates, 22,500 for N = 128, and
-`n^2` pairs of tiles with a few operations each, about 0.8 ms per layer at 500 frames (an estimate, not measured), 13 ms over 16 layers, about 4% of the NPU time. The decision rests on two measurements to be made on the proof layer: the error of the carried form in 16-bit
-fixed point against float, and the time of each. The carried form is the default because it avoids the CPU round trip; the CPU
-merge is the fallback if the exponentials and the rescale do not hold their precision in 16 bits.
+`n^2` pairs of tiles with a few operations each, about 0.8 ms per layer at 500 frames (an estimate, not measured), 13 ms over 16 layers, about 4% of the NPU time. The carried form is the implemented one: its error in 16-bit fixed point against float is in section 8, and it avoids the CPU
+round trip. The CPU merge remains the fallback if a layer's exponentials and rescale lose precision in 16 bits.
 
 ## 4. Runtime schedule
 
@@ -111,8 +113,10 @@ all 16 layers the step is compiled once per layer (about 0.2 MB each, no weights
 
 ## 6. SDK interface
 
-The queue today binds each tensor of a handle to a buffer fixed at registration. A tile loop needs the same graph on many
-windows of one buffer. The proposal adds three calls and one invariant.
+**Status: proposed, not implemented.** None of `ss_npu_queue_register_set`, `ss_npu_queue_region` and `ss_npu_queue_submit_jobs`
+exists in `include/sunstone_npu_queue.h` or in the operating system service. The queue binds each tensor of a handle to a buffer
+fixed at registration, and a tile loop needs the same graph on many windows of one buffer. The proposal adds three calls and one
+invariant. Section 8 states how the tile graphs run until they exist.
 
 ```
 /* Register a set of tile graphs once (slots, handles, tensor sizes as now). */
@@ -197,12 +201,40 @@ the compiled set, so a model with different costs picks its own.
 Beyond about 400 frames the quadratic attention work, not the overhead, sets the time: at 500 frames the attention core is
 70% of the NPU time. That is a property of full attention and applies to the CPU path too.
 
-## 8. Numerics of the attention step (measured on the host and the SDK simulator)
+## 8. Implementation, numerics and measured cost
 
-The step graph of section 3 compiles (the running maximum is `rowmax + relu(m - rowmax)`, the row maximum is a plain `ReduceMax`,
-`Exp`, `Div`, and the row sum is a product with a column of ones) in 422,879 estimated cycles per step at N = 128. The step in float
-equals full attention to 1e-7. Run in the simulator over every tile pair of one real layer (carrying the state as the simulator returned it), against float full
-attention:
+**What runs.** Every tile graph of the 16 layers is compiled and runs on the board with outputs equal to the SDK simulator's
+(byte for byte for the neural-network, stream-processor and activation graphs; within the engine's half-precision rounding for
+graphs that carry half-precision tensors). The loader admits the entry graph, whose residual-stream tensor is both an intermediate
+and a result, because it accepts a graph output that later operations read again as an input. The compiled set needs an NPU pool
+of 24 MiB or more for the subsampling graphs; an 8 MiB pool refuses the reservation.
+
+**How the jobs run now.** The current queue runs the schedule of section 4. Each tile graph is one resident handle with tensors
+fixed at registration, so tile data reach a graph only by writing its input tensors (`ss_npu_queue_tensor`, then
+`ss_npu_queue_dirty` for the written ranges) and leave it by acquiring the handle and reading its output tensors. State that
+passes between two graphs without the CPU uses a tensor link declared at open (`ss_npu_queue_open_linked`). This is the
+copy-per-job form named in section 11: each job costs a copy of its tile in and out, and a handle is never rebound while in
+flight. The tiled encoder's time at 100, 250 and 498 frames is 44.9, 117 and 345 ms. These figures are composed from
+board-measured per-job times (the four tile graphs at tile 128 take 752.5, 217.8, 177.3 and 320.2 microseconds per job, multiplied
+by the job count, plus subsampling and head). They are not an end-to-end run, and no board entry holds them. The whole-clip CPU
+path takes 118, 255 and 585 ms at the same lengths, but that is whole recognition (front end, encoder and decode), so the two
+columns are not comparable. The word error rate on held-out utterances of 90 to 130 encoder frames, outside the calibration sets,
+equals the float encoder's, 5.63%; it comes from running every graph in the SDK simulator, not from the board.
+
+**What is not implemented.** Regions, per-job bindings, `submit_jobs` and the EL1 rebinding service of section 9 do not exist,
+so section 9's tests have not been written and its containment argument has not been exercised. The copies in the previous
+paragraph are the cost that those calls would remove.
+
+**Per-layer constants.** The score range of the last layer (about -515 to 661, against near zero in the first layers) shows that
+one mask value and one initial running maximum cannot serve all layers: with the first layer's values a padded key (a zero key
+row, scoring up to +131) won the maximum, the exponentials of the valid keys underflowed to zero, and the encoder output at 100
+frames had cosine 0.940 with float. Each layer's step therefore takes its own mask and initial maximum, derived from the layer's
+score statistics (largest padded-key score, smallest row maximum over valid keys, lowest valid score), declared in a manifest
+beside the five graphs of the layer and checked on the host: the check re-derives the constants and requires every masked padded
+key to lie at least 25 below the smallest valid row maximum. With them the output at 100 frames has cosine 0.9998.
+
+**Numerics of the step (host and SDK simulator, one real layer).** The step graph in float equals full attention to 1e-7. Run in
+the simulator over every tile pair of one layer, carrying the state as the simulator returned it, against float full attention:
 
 | Frames | Steps | Calibration | RMS error (signal RMS) | Largest error | Cosine |
 | --- | --- | --- | --- | --- | --- |
@@ -211,23 +243,27 @@ attention:
 | 500 | 16 | the 500 frames themselves | 0.089 (8.89) | 1.28 | 0.999950 |
 | 100 | 1 | the 500 frames | 0.044 (7.82) | 0.33 | 0.999984 |
 
-Sixteen-bit fixed point therefore holds: 1% relative RMS error at 500 frames when the ranges cover the data. The 7 bad rows of the
-second line are head-rows whose largest score is 20 to 22 while the calibration (one 184-frame utterance, largest score 16.3) clipped
-at 16: a calibration range, not a limit of the form. The production calibration uses many utterances with headroom. The
-resolution that matters is the row sum `l` (range 512 when it must reach 500 keys, step 0.016), which costs accuracy on rows whose
-softmax is concentrated on one key; it can carry `l / 64` instead.
+Sixteen-bit fixed point holds: 1% relative RMS error at 500 frames when the ranges cover the data. The seven bad head-rows of the
+second line have a largest score of 20 to 22 while that calibration (largest score 16.3) clipped at 16, which is a range limit of
+the calibration and not of the form. The production calibration uses many utterances with headroom. The resolution that matters
+is the row sum `l` (range 512 when it must reach 500 keys, step 0.016), which costs accuracy on rows whose softmax is concentrated
+on one key; carrying `l / 64` instead would reduce that cost. The maximum of negative values is kept by the compiler, the
+simulator and the hardware (`docs/hardware/npu-command-formats.md`, "Maximum of negative values"). The step has nine inputs
+and three outputs, more than the loader's default of eight tensors, so `qu` and `qv` travel as one tensor of eight heads.
 
-The compiler leaves some inputs of this graph in half precision on its own (the mask and the running maximum): it offers a float16
-path per tensor, with 11 bits of mantissa, where 16-bit fixed point lacks the range. An input in half precision is written to the
-simulator as decimal values, not codes. A whole-graph half-precision compile was not tried.
+**Cost of the attention step (board, N = 128, one slot, 852 MHz and 800 mV).** The step, not the per-frame graphs, sets the time
+at 500 frames: 16 layers of 16 steps. The step form with the gather that aligns the relative-position scores took about 1.1 ms.
+The best form measured so far takes 859 microseconds; the target is 600. Which engine runs each operation decides the cost:
 
-The maximum of negative values is kept by the compiler, the simulator and the hardware (a probe graph with row maxima -2.35 and
--30, four forms, returned the same bytes in the simulator and on the board; `docs/hardware/npu-command-formats.md`, "Maximum of negative
-values"). The step has nine inputs and three outputs, more than the loader's default of eight tensors, so an image that runs it takes
-the tensor count from the manifest declaration (`npu.tensors`, in preparation) or, until then, a build define; the step may also pack
-`qu` and `qv`, `k` and `v`, and `m` and `l` in pairs.
+- The shader runs `Gather`, and `Exp` and `Div` at full tensor size. It dominates the step, and the compiler gives no cycle
+  estimate for shader operations, so only measurement locates its cost.
+- The neural-network core runs `BatchGemm` and `Add` or `Mul` of equal shapes.
+- The transpose unit runs `StrideSlice`, `Transpose` and `Concat`.
+- The stream processor runs operations with a broadcast operand, `ReduceMax` and `Softmax`.
+- The activation unit runs `Exp` of small tensors.
+- Each job carries about 5 microseconds of overhead.
 
-## 9. The rebinding service in EL1: containment and tests
+## 9. The rebinding service in EL1: containment and tests (proposed)
 
 The OS service that applies a job's bindings is the only new code on the job path, so its argument is stated here.
 
@@ -257,6 +293,8 @@ is correct (as the existing fault tests).
 
 ## 10. Proof plan
 
+The plan below was run on all 16 layers; section 8 has the results.
+
 On one layer (a real layer of the trained model, real weights), build the tile graphs for N = 128, compile and calibrate them, and
 run a job list on the board at three lengths: 100, 250 and 500 frames. Compare:
 
@@ -273,10 +311,22 @@ If they fail, the merge moves to the CPU (section 3) and the step graph returns 
 
 ## 11. Limits and open questions
 
-- The compiler must accept `ReduceMax`, `Exp`, `ReduceSum` and `Div` on the shapes of the step; it accepted `Softmax` and
-  `Gather`, and the shader corpus includes `Exp`, but the combination has not been compiled.
-- Mask values and the first-tile initial state must be representable in the scales of `m` and `l`.
-- The rebinding service (section 6) is new OS code with its own containment proof; the proof layer can run with a CPU copy per
-  job through the existing queue (one handle per tile graph, the application copying tile data into the graph's own tensors) to
-  measure numerics and time before that exists, at the cost of a copy per job.
-- Subsampling with halo and the head need the same treatment and are not designed in detail here.
+Resolved by the implementation:
+
+- The compiler accepts `ReduceMax`, `Exp`, `ReduceSum` (as a product with a column of ones), `Softmax`, `Gather` and `Div` on the
+  shapes of the step, and the step runs on the board. Mask values and the initial state are representable in the scales of
+  `m` and `l` once each layer has its own constants (section 8).
+- The proof layer ran through the existing queue with a copy per job, which measured numerics and time without the rebinding
+  service.
+
+Open:
+
+- **The rebinding calls are not implemented.** `ss_npu_queue_register_set`, `ss_npu_queue_region` and `ss_npu_queue_submit_jobs`
+  (section 6) and the EL1 service with its containment tests (section 9) do not exist. Until they do, every tile job pays the
+  copy of section 8 and an application cannot publish a layer's `2n + n^2` jobs in one call. The share of the copy in the
+  step time is not measured.
+- **The attention step misses its target.** The best form takes 859 microseconds against 600. Shader operations are the
+  largest part, and the compiler gives no cycle estimate for them, so each reformulation needs a board measurement.
+- **The production image needs an NPU pool of 24 MiB or more** for the subsampling graphs.
+- **The subsampling tile sizes are untuned.** Subsampling graphs named for 32, 64 and 128 were timed on the board at 2.2, 3.7
+  and 8.7 ms, and none has been compared with the schedule's other costs.
