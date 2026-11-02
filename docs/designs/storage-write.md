@@ -248,6 +248,17 @@ reads, then the writer's reads and write pieces. A write piece is at most 256 se
 loader's mailbox between pieces, so a model-loading read waits for at most the piece in flight. Callers sleep on a task
 notification until the owner finishes; the owner sleeps on one until a request arrives.
 
+**The owner runs at EL1.** The owner reads the CCU, configures the pins and drives SMHC0, none of which an EL0 task may touch. A new
+task takes the privilege level its creator passes to the scheduler's hook, and the application's EL0 task creates the owner on its first
+`ss_storage_enable` call (the loader that creates it in a read-only image never runs for an application without large regions). The
+scheduler therefore asks `board_application_task_privileged`, which reaches `os_sd_owner_task_privileged` (`apps/os/sd_owner.c`) through
+`os_application_task_privileged`. Any image that lets an application create the owner must keep that path: the image link check
+(`checks/sunstone-image-link.py`) disassembles the hook in every image that links `ss_storage_enable` and refuses one that does not reach
+the owner's predicate. The second board submission faulted on the owner's first CCU read (0x02002500) at EL0 for this reason.
+
+**Why an open or an enable stopped.** `ss_storage_diagnostic` returns the stage and a detail (`apps/os/large_sd.c` lists the stages); the
+application copies it into its result, so a refused enable can be read without another instrumented image.
+
 **Completion by interrupt and one-shot timer.** No transfer polls the controller in a loop. The core arms the SMHC0 interrupt
 mask for each DMA command as the board kernel does (`sunxi_mmc_exe_cmd`, `sunxi-mmc.c:2754`: the mask is written before the
 argument and command): the error bits plus the automatic-stop-done bit for a CMD25 or CMD18 that carries a stop, else the

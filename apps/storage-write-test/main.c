@@ -116,7 +116,7 @@ struct result {
     uint64_t mismatches, first_mismatch, volume_size, recoveries, recovered_clusters;
     uint64_t histogram[FWR_HIST];
     uint64_t app_core, irq_cores, owner_cores, caller_cores, sha_ce, guard_us;
-    uint64_t reserved[512 / 8 - 42 - FWR_HIST];
+    uint64_t diag[4], isar0, observed;               /* where an open or enable stopped (ss_storage_diagnostic); the core's ISAR0 */
 };
 _Static_assert(sizeof(struct result) == 512, "result is the manifest's output_limit");
 static struct result r;
@@ -212,16 +212,18 @@ void storage_write_main(const struct ss_grant *grant)
     r.mode = mode_id;
     r.app_core = grant->main_core; r.guard_us = GUARD_US;
     {
-        struct ss_cpu_observation o;
-        use_ce = ss_cpu_observations(grant->main_core, &o) && ((o.isar0 >> 12) & 15) != 0;
+        struct ss_cpu_observation o = {0};
+        r.observed = (uint64_t)ss_cpu_observations(grant->main_core, &o);
+        r.isar0 = o.isar0;
+        use_ce = r.observed && ((o.isar0 >> 12) & 15) != 0;
         r.sha_ce = use_ce;
     }
     r.cpu_hz = cpu_cycles_per_second(&r.cpu_calibration_ticks);
     ss_progress();
     card_open = 1;                                             /* enabling opens the card in the owner task, even if it then refuses */
-    if (!ss_storage_enable(bounds->base, bounds->bytes)) { r.status = E_BOUNDS; finish_report(); }
-    if (!ss_storage_region(flush->base, flush->bytes)) { r.status = E_REGION; finish_report(); }
-    if (!ss_storage_device(&device)) { r.status = E_DEVICE; finish_report(); }
+    if (!ss_storage_enable(bounds->base, bounds->bytes)) { r.status = E_BOUNDS; (void)ss_storage_diagnostic(r.diag); finish_report(); }
+    if (!ss_storage_region(flush->base, flush->bytes)) { r.status = E_REGION; (void)ss_storage_diagnostic(r.diag); finish_report(); }
+    if (!ss_storage_device(&device)) { r.status = E_DEVICE; (void)ss_storage_diagnostic(r.diag); finish_report(); }
     r.au_sectors = device.au_sectors;
     uint64_t base, sectors;
     if (!mbr_partition(&base, &sectors)) { r.status = E_MBR; finish_report(); }

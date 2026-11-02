@@ -12,7 +12,7 @@ FIELDS = ('tag mode status detail file_bytes written_bytes au_sectors cpu_hz cpu
           'wear_bytes wear_data_bytes wear_metadata_bytes wear_writes wear_aligned wear_unaligned wear_syncs wear_flushes '
           'owner_elapsed_us owner_asleep_us owner_wakes mismatches first_mismatch volume_size recoveries recovered_clusters').split()
 HIST = 16
-TAIL = 'app_core irq_cores owner_cores caller_cores sha_ce guard_us'.split()
+TAIL = ('app_core irq_cores owner_cores caller_cores sha_ce guard_us diag0 diag1 diag2 diag3 isar0 observed').split()
 TAG = 0x5357544553544f4b
 COUNTER_HZ = 24_000_000
 

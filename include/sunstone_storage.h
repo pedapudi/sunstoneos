@@ -24,4 +24,7 @@ int ss_storage_close(void);
  * posted requests to it. */
 struct ss_storage_owner_stats { uint64_t elapsed_us, asleep_us, wakes; uint32_t irq_cores, owner_cores, caller_cores; };
 int ss_storage_owner_stats(struct ss_storage_owner_stats *);
+/* Where the last open or enable stopped: [0] stage, [1] detail, [2] first failed bounds read (sector + 1), [3] bounds reads made
+ * (apps/os/large_sd.c lists the stages). All zero when nothing failed. */
+int ss_storage_diagnostic(uint64_t out[4]);
 #endif

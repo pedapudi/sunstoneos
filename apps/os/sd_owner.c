@@ -45,6 +45,7 @@ static uint32_t unit_sectors;
 static _Atomic uint64_t idle_us, wake_count, first_us;
 static _Atomic uint32_t owner_core_mask, caller_core_mask;
 static struct os_large_device proxy;
+extern uint64_t os_sd_diag[4];
 
 static void finish(struct request *r, int ok)
 {
@@ -121,9 +122,10 @@ static int start(void)
     if (owner) return atomic_load(&ready) == 1;
     ready_waiter = xTaskGetCurrentTaskHandle();
     owner = xTaskCreateStatic(owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb);
-    if (!owner) return 0;
+    if (!owner) { os_sd_diag[0] = 10; return 0; }
     if (atomic_load(&ready) == 0) (void)ulTaskNotifyTake(pdTRUE, READY_TIMEOUT_TICKS);   /* the owner gives it once the card is open or has failed */
     ready_waiter = NULL;
+    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) os_sd_diag[0] = 11;      /* no answer from the owner in time */
     return atomic_load(&ready) == 1;
 }
 
@@ -213,6 +215,12 @@ int ss_storage_close(void)
     if (!hw) return 0;
     writer_request = (struct request){.kind = K_CLOSE};
     return post(&writer_slot, &writer_request, 1);
+}
+int ss_storage_diagnostic(uint64_t out[4])
+{
+    if (!out) return 0;
+    for (unsigned i = 0; i < 4; ++i) out[i] = os_sd_diag[i];
+    return 1;
 }
 int ss_storage_owner_stats(struct ss_storage_owner_stats *out)
 {

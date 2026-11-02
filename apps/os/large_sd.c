@@ -118,6 +118,13 @@ static int dma_sync(void *cookie, uint8_t *b, size_t n, unsigned phase)
     return aarch64_device_cache(phase == SUNXI_MMC_DMA_BEFORE ? AARCH64_CACHE_CLEAN : AARCH64_CACHE_INVALIDATE, (uintptr_t)b, n) == 1;
 }
 
+/* Where an open or an enable stopped, for the application's report (ss_storage_diagnostic): [0] the stage, [1] a detail, [2] the first
+ * failed bounds read (sector + 1), [3] the bounds reads made. Stages: 1 declared or already open, 2 PMIC service, 3 descriptor memory,
+ * 4 configure, 5 native binding, 6 platform init, 7 identification (detail: result), 8 card query (result), 9 interrupt and timer
+ * registration, 20 enable preconditions, 21 blob copy, 22 blob parse, 23 bounds verify (detail: object state), 24 write binding. */
+uint64_t os_sd_diag[4];
+#define DIAG(stage, detail) (os_sd_diag[0] = (stage), os_sd_diag[1] = (uint64_t)(detail), 0)
+#define DIAGP(stage, detail) ((void)DIAG(stage, detail), (const struct os_large_device *)0)
 /* The three CCU words that the provider checks, and the rates they imply (apps/sd-read-probe/main.c). */
 static int fabric(void)
 {
@@ -215,22 +222,22 @@ const struct os_large_device *os_sd_open_owner_device(void)
 const struct os_large_device *os_large_device(void)
 #endif
 {
-    if (!os_large_sd_declared() || opened) return 0;
+    if (!os_large_sd_declared() || opened) return DIAGP(1, opened);
     /* The PMIC service must be up before the SD rail can be leased. */
     for (unsigned waited = 0; !atomic_load_explicit(&providers.shared.pmic_ready, memory_order_acquire); ++waited) {
-        if (waited > 10000 || !board_live(NULL)) return 0;
+        if (waited > 10000 || !board_live(NULL)) return DIAGP(2, waited);
         vTaskDelay(1);
     }
     struct device_memory_pool *pool = a733_memory_uncached_init();
     struct device_memory_extent extent;
-    if (!pool || device_memory_acquire(pool, UINT64_C(0x53443044), 4096, &descriptor_lease, &extent) != 1) return 0;
+    if (!pool || device_memory_acquire(pool, UINT64_C(0x53443044), 4096, &descriptor_lease, &extent) != 1) return DIAGP(3, 0);
     descriptors = (volatile struct sunxi_mmc_dma_descriptor *)extent.cpu;
-    if (!configure()) return 0;
+    if (!configure()) return DIAGP(4, 0);
     if (!a733_mmc_platform_native_init_selected(&native, &providers.shared.locks, xTaskGetCurrentTaskHandle(), SUNXI_MMC_SD,
-            A733_MMC_EMMC_SDC2, admit, &platform)) return 0;
+            A733_MMC_EMMC_SDC2, admit, &platform)) return DIAGP(5, 0);
     native.operations.dma_sync = dma_sync;
     if (!a733_mmc_platform_init(&platform, &config, &native.operations, &native, &providers.shared.clocks,
-            &providers.shared.pins, &providers.shared.rails, &providers.shared.pmic)) return 0;
+            &providers.shared.pins, &providers.shared.rails, &providers.shared.pmic)) return DIAGP(6, 0);
     opened = 1;
     /* Identification polls for up to a millisecond per wake and yields so that the PMIC task can answer. */
     for (;;) {
@@ -244,14 +251,14 @@ const struct os_large_device *os_large_device(void)
         if (r == A733_MMC_READY) break;
         if ((r != A733_MMC_PENDING && r != A733_MMC_BUSY) || !board_live(NULL) || now_us() >= config.deadline_us) {
             (void)a733_mmc_platform_retain(&platform);
-            return 0;
+            return DIAGP(7, r);
         }
         vTaskDelay(1);
     }
     enum a733_mmc_platform_result r;
     do { r = a733_mmc_platform_card(&platform, &card, config.deadline_us); if (r == A733_MMC_BUSY) vTaskDelay(1); }
     while (r == A733_MMC_BUSY && board_live(NULL));
-    if (r != A733_MMC_READY || !card.sectors) { (void)a733_mmc_platform_retain(&platform); return 0; }
+    if (r != A733_MMC_READY || !card.sectors) { (void)a733_mmc_platform_retain(&platform); return DIAGP(8, r); }
     device = (struct os_large_device){{NULL, sd_read, card.sectors}, {NULL, sd_submit, sd_poll}, 0, 0, buffers};
     return &device;
 }
@@ -362,17 +369,27 @@ static int hw_allocation_unit(uint32_t *sectors)
     *sectors = sunxi_mmc_au_sectors(status, platform.core.card.signal_1v8 != 0);
     return 1;
 }
-static int bounds_read(void *unused, uint64_t sector, uint8_t *out) { (void)unused; return sd_read(NULL, sector, 1, out); }
+static int bounds_read(void *unused, uint64_t sector, uint8_t *out)
+{
+    (void)unused;
+    ++os_sd_diag[3];
+    int ok = sd_read(NULL, sector, 1, out);
+    if (!ok && !os_sd_diag[2]) os_sd_diag[2] = sector + 1;                /* the first read that failed (sector + 1) */
+    return ok;
+}
 static int hw_enable_writes(const uint8_t *blob, size_t bytes)
 {
     /* All kernel data is writable at EL0 in this OS, so no mapping protects the blob. The runner's input is copied once into
      * private memory and parsed there; the bounds object re-hashes the copy on every use (a733_storage_bounds_allows). */
-    if (!blob || !bytes || blob_copy || !card.sector_addressed) return 0;
+    if (!blob || !bytes || blob_copy || !card.sector_addressed) return DIAG(20, card.sector_addressed);
     blob_copy = malloc(bytes);                       /* the OS heap; the only refusal is that it has no room */
-    if (!blob_copy) return 0;
+    if (!blob_copy) return DIAG(21, bytes);
     memcpy(blob_copy, blob, bytes);
-    return a733_storage_bounds_parse(&bounds, blob_copy, bytes) && a733_storage_bounds_verify(&bounds, bounds_read, NULL) &&
-        a733_mmc_platform_native_bind_bounds(&native, &platform, &bounds);
+    if (!a733_storage_bounds_parse(&bounds, blob_copy, bytes)) return DIAG(22, bytes);
+    os_sd_diag[3] = 0;                               /* count the verify reads */
+    if (!a733_storage_bounds_verify(&bounds, bounds_read, NULL)) return DIAG(23, bounds.state);
+    if (!a733_mmc_platform_native_bind_bounds(&native, &platform, &bounds)) return DIAG(24, 0);
+    return 1;
 }
 /* The application's flush buffer: the FAT32 service flushes from here straight into the controller (one crossing of
  * memory per byte). It must be cacheable DRAM that the controller can reach, 64-byte aligned, and apart from the image's
@@ -418,7 +435,7 @@ const struct os_sd_hw *os_sd_open_owner(void)
     if (!d) return 0;
     /* The owner task sleeps on the controller interrupt and on one-shot timers (sunstone_deadline), never on the tick. */
     owner_task = xTaskGetCurrentTaskHandle();
-    if (sunstone_deadline_register() != 1 || !sunxi_mmc_set_irq(&platform.core, irq_taken, NULL)) return 0;
+    if (sunstone_deadline_register() != 1 || !sunxi_mmc_set_irq(&platform.core, irq_taken, NULL)) { (void)DIAG(9, 0); return 0; }
     irq_live = 1;
     hw = (struct os_sd_hw){d, card.sectors, card.sector_addressed, hw_allocation_unit, hw_enable_writes, hw_write_piece, hw_live,
                            hw_set_write_region, hw_wait_async, hw_owner_sleep_us, hw_owner_wakes, hw_irq_cores, os_sd_close_owner};
