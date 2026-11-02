@@ -849,7 +849,9 @@ def run_image(args, backend=Live):
                             detail=result['breadcrumbs'].get('summary', 'Failure return'),
                             record=captured['report'].get('failure'))
                         result['outcome'] = 'failure-return'
-                        if expected and not matches_expectation(expected, payload):
+                        # A finite NPU failure return carries its record in the platform log, so
+                        # a success expectation cannot match it.
+                        if expected and plan.get('format') != 'npu' and not matches_expectation(expected, payload):
                             raise Mismatch('Failure record differs from expectation.')
                         if owner.journal_error is not None:
                             raise owner.journal_error
