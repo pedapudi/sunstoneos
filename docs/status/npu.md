@@ -23,7 +23,7 @@ operations with a second input from a graph input), `mul` (neural-network operat
 input from VIP SRAM), `deep` (three neural-network operations with second inputs and an activation, outputs in VIP
 SRAM), `mm` (batched matrix product, four operations, second input from a graph input at slice offsets) and `glu` (two
 transposes and a stream-processor gate with its second input in VIP SRAM). The layer-normalization graphs `ln176` and
-`ln64`, which use the dynamic-input section, are not yet run. Per-graph time with the LOAD is about 1 ms. An NPU access outside the page tables
+`ln64` (dynamic-input section, placed read-only after the coefficients) also match byte for byte, 17 of 17. The OS runtime admits a graph by structure and addresses; the digest and program catalogues are gone from the OS path (the finite session driver keeps its table). Per-graph time with the LOAD is about 1 ms. An NPU access outside the page tables
 faults and the service recovers (3-1, 852 MHz/800 mV, normal return): five graphs, each with one descriptor pointer aimed
 at an address the tables do not map (an input or an output; a DRAM canary of the image for four, page 0 at `0x180` for
 one), failed one by one with an NPU MMU exception at the aimed address, MMU status 1 (slave not present), the canary
@@ -33,7 +33,7 @@ that follow restore the NPU. See [the reference](../reference-backsolve-npu.md#n
 
 ## Open work
 
-1. Run the layer-normalization test graphs (dynamic-input section); the faults of the unmapped accesses are shown (input and output, activation and stream-processor operations); then drop the stream-processor program catalogue from the loader (`docs/designs/npu-loader-admission.md`).
+1. Replace the eight-job session quota (`apps/os/admission.c`) and the fixed arrays (`NPU_SERVICE_CLIENTS`, the queue handle, entry and tensor counts, `OS_NPU_POOL_BYTES`) by resources the application declares and the OS admits against the real capacity, with backpressure when the declared in-flight depth is full; then allow tensor linking after the scheduler has started. Shader, tensor-processor and software-operation integration follows the format study.
 2. Call the idle power owner from the OS NPU service (`npu_runtime_queue_power_start` is not called by the operating system image), then repeat the idle benchmark there. Measure energy and the break-even idle time: the PMIC provider exposes no DCDC2 current or power readback. Qualify shared SRAM access while the clocks are gated and recovery from a fault while suspended.
 3. Qualify the combined image repeatedly and across both models: the active-cancellation image, and a 20-cycle start, inference, CLOSE and local-stop image.
 4. Qualify the EL0 queue and prepared joined streams: review and finish the saved generic sequence registration and returning diagnostic (`npu-el0-next-1101`), add the public-ring predicate to the power owner, then run the control and the EL0 images.
@@ -47,7 +47,7 @@ that follow restore the NPU. See [the reference](../reference-backsolve-npu.md#n
 Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-39 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+40 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -90,4 +90,5 @@ Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added
 | `1793600480786110831-4d4877ee` | 2026-11-02 | 3-1 | `bd9603642b7c` | watchdog-reset | failed | run_total 18.745 s |
 | `1793601039576662539-3cfb241d` | 2026-11-02 | 3-1 | `dbc06474fcbc` | watchdog-reset | inconclusive | run_total 18.69 s |
 | `1793601982806302701-49b951b4` | 2026-11-02 | 3-1 | `69a7aa80419f` | returned | passed | run_total 21.817 s |
+| `1793602347321241109-498efad0` | 2026-11-02 | 3-1 | `cfb505b770a8` | returned | passed | run_total 21.199 s |
 <!-- evidence-table:end -->

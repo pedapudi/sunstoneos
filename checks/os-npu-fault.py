@@ -53,8 +53,6 @@ models = ROOT / 'apps/npu-graphs/models-r.json'
 (out / 'artifacts.json').write_text(json.dumps(artifacts))
 subprocess.run([sys.executable, str(ROOT / 'apps/os/npu-catalogue.py'), '--artifacts', str(out / 'artifacts.json'),
                 '--models', str(models), '--model', '0', '--all', '--output', str(generated / 'npu-models.c')], check=True)
-subprocess.run([sys.executable, str(ROOT / 'tools/npu-session-catalogue.py'), 'generate', '--application', str(models),
-                '--output', str(generated / 'npu_admitted_models.c')], check=True)
 inputs = out / 'inputs'; inputs.mkdir()
 for number, name in enumerate(json.loads(models.read_text())['npu_models']):
     for k, path in enumerate(artifacts[name]['inputs']):
@@ -62,7 +60,7 @@ for number, name in enumerate(json.loads(models.read_text())['npu_models']):
 includes = [ROOT / 'apps/os', generated, ROOT / 'apps/board', ROOT / 'platform/a733-storage-update',
             ROOT / 'platform/a733-smp-cached', ROOT / 'drivers/usb', ROOT / 'network/include', ROOT / 'platform/qemu-smp',
             NETWORK / 'include', NETWORK / 'portable/Compiler/GCC']
-exe = host_rtos.build(out / 'exe', [*UNITS, generated / 'npu-models.c', generated / 'npu_admitted_models.c'],
+exe = host_rtos.build(out / 'exe', [*UNITS, generated / 'npu-models.c'],
                       'os-npu-fault', defines=DEFINES, includes=includes,
                       flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections', '-fno-pie'],
                       link=['-Wl,--gc-sections', '-no-pie'])

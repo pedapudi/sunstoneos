@@ -11,8 +11,8 @@
  * own one slot. A slot holds one catalogue model at a time; its client loads
  * a model by catalogue index, writes inputs in place, submits, and reads
  * outputs in place. Jobs of different slots share the NPU with round-robin
- * starts. The catalogue is fixed at preparation: every entry must match an
- * entry of the image's admitted table (npu_admitted_models.h). */
+ * starts. The catalogue is fixed at preparation; the runtime admits each model by its structure and addresses
+ * (nbg_assembly.h), not by a table of digests. */
 #define NPU_RUNTIME_SLOTS NPU_SERVICE_CLIENTS
 #define NPU_RUNTIME_MODELS 16u
 #define NPU_RUNTIME_DEVICE_BASE 0x10000000u
@@ -102,7 +102,7 @@ struct npu_runtime {
     struct npu_runtime_slot slot[NPU_RUNTIME_SLOTS];
     struct npu_runtime_model catalogue[NPU_RUNTIME_MODELS];
     struct nbg_assembly_layout plans[NPU_RUNTIME_MODELS];
-    unsigned entry[NPU_RUNTIME_MODELS];
+    unsigned char model_digest[NPU_RUNTIME_MODELS][32]; /* SHA-256 of each model at prepare time, for LOAD's copy check */
     unsigned count, slots;
     size_t constant_bytes, read_bytes, write_bytes, staging_bytes;
     uintptr_t parent_cpu, staging;
