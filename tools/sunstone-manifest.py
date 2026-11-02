@@ -93,7 +93,13 @@ BLOCK = 0x200000
 # 0x05..0x08, and new OS operations start at 0x80.
 OS_REPORTS = (0x05, 0x09)
 OS_HOST_FIRST = 0x80
-OUTPUT_LIMIT = 65536
+# The result record lives in the image's RAM, 0x41000000..0x41f00000 (the host's
+# result_geometry check and platform/a733/link.ld), so a record never exceeds
+# that window. The ss_finish payload is the manifest's declared output_limit;
+# the linker and the host check refuse an image whose record does not fit.
+IMAGE_RAM_BYTES = 0x41f00000 - 0x41000000
+RESULT_HEADER_BYTES = 56
+OUTPUT_LIMIT = IMAGE_RAM_BYTES - RESULT_HEADER_BYTES
 
 
 def failure_record_bytes():

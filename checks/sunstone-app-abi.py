@@ -231,6 +231,8 @@ radio['devices'] = {'required': ['radio'], 'optional': []}
 run(*TOOL, 'emit', '--manifest', a.build / 'radio.json', '--output', a.build / 'radio')
 assert json.loads((a.build / 'radio' / 'manifest.json').read_text())[0]['devices_required'] == 1 << 8
 refused(lambda v: v['cpu'].update(privilege='el1'), 'unknown cpu keys')
+refused(lambda v: v.update(output_limit=tool.OUTPUT_LIMIT + 1), 'output_limit')
+assert tool.OUTPUT_LIMIT + tool.RESULT_HEADER_BYTES == 0xf00000
 refused(lambda v: v['regions'].append({'name': 'scratch', 'kind': 'work', 'access': ['read', 'write'], 'bytes': 100}),
         'capacity is a multiple of 4 KiB')
 # GPU leases cover whole 2 MiB CPU blocks, including bytes beyond an input's

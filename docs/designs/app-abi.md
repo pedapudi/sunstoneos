@@ -64,7 +64,7 @@ authority for a linked image.
 | `run_deadline_us` | Longest time from the start of `<name>_main` to `ss_finish`. Zero means the session deadline less the return reserve bounds the run. |
 | `return_reserve_us` | Time between the latest permitted `ss_finish` and the session deadline, which the return path uses. |
 | `progress_window_us` | Longest permitted gap between `ss_progress` calls from any task of the application. |
-| `output_limit` | Maximum bytes of the `ss_finish` result. |
+| `output_limit` | Maximum bytes of the `ss_finish` result. The image reserves `56 + output_limit` bytes for the record, so the only bound is the image RAM window `0x41000000`–`0x41f00000` that holds it; the link and the host's result geometry check refuse an image whose record does not fit. |
 | `host_op_first`, `host_op_count` | The application's host-channel operation numbers, inside `0x00`-`0x7f` and outside `0x05`-`0x08`. The OS owns `0x05`-`0x08` and `0x80`-`0xff`. |
 
 The OS image derives its session lifetime from `run_deadline_us` and
