@@ -10,11 +10,29 @@ Native mappings, privileged reservation pools, cache maintenance, DMA0 services 
 boards report 12,288 MiB and pass two 4 KiB page comparisons. SID-selected
 restoration on 3-1 passes twice with 879 PHY writes and quick checks of 34.116
 and 34.117 ms. CPU-L/DSU boot clocks restore. EL3 entry restores MBUS to 600 MHz
-on both boards while preserving the checked pattern. The RAM-only DDR wrapper writes the nine boot0 NSI words, and the memory probe over
-12,224 MiB passes with it on 3-1; the write changes the CPU read rate by 0.3 percent. Sustained DRAM reads on 3-1 in
-development mode reach 14.8 GB/s for one A76 core and fall to 8.25 GB/s for all
-eight cores, as the number of independent streams grows (see
-[DRAM bandwidth](../designs/dram-bandwidth.md#board-measurements-of-the-scaling-study)).
+on both boards while preserving the checked pattern. The runner's default DDR builds run boot0's post-DRAM
+interconnect step (nine NSI words, boot0 order), and the 12,224 MiB memory probe passes through them on 3-1.
+Sustained DRAM reads on 3-1 (development mode): one A76 core 14.8 GB/s, all eight cores 8.25 GB/s.
+
+**Final state of the DRAM scaling stream (2026-11-02).**
+
+- *Found.* The falling aggregate read rate is a property of the memory system under several independent streams, not of
+  SunstoneOS configuration. The sum of per-core rates equals the old last-finish rate; the old pass-based figures understated the
+  A76 sets by 14 to 19 percent. Start offsets, chunk size, software prefetch and boot0's nine NSI words change the total by
+  under 8 percent (the words by 0.3 percent). Refill traffic equals consumed bytes (no prefetch waste); backend stalls rise from 0.40
+  to 0.89 (A55) with eight cores. No counter sees row hits; locality is supported by exclusion and by the address dependence of
+  barrier-synchronized runs, not proven. No NSI counter observes CPU traffic. All 21 initiator ports start at priority 0 with no limit.
+- *Changed.* `boot/a733/ddr-entry.S` calls boot0 routine `0x49050` after `init_DRAM` (case `checks/ddr-nsi-words.py`). The
+  runner's default DDR builds were rebuilt from it (old builds in `~/.cache/sunstoneos/trash/ddr-defaults-20261102/`). New
+  `ddr-entry.bin` SHA-256 prefixes: plain `24031cba`, restore `896cf767`; `ddr-restore.bin` `364ba9f1` (unchanged);
+  manifests `f28e5175` (plain) and `b5302bf4` (restore). A memtest through the default path froze these hashes and passed.
+  Apps `dram-scaling`, `dram-nsi` and `dram-qos` hold the studies. CPU port priorities are unchanged from the inherited defaults.
+- *Backlog.* (1) CPU memory latency with the NPU job stream alongside the control loop and the CPU port priorities raised: the
+  scheduler's robot table owns it; the probes in `apps/dram-qos` are available to link. Unmeasured; the decision rule is in
+  `docs/designs/dram-bandwidth.md`. (2) Lead, not investigated: the A55 pointer chase on core 0 has a 99.99th percentile of 2.6 µs
+  and a maximum of 9 µs with no load, and 16.6 µs and 32 µs with the cores streaming, against 0.64 µs for the A76. The OS tick on
+  core 0 is the candidate. (3) DMA-engine load needs a captured DMA session record. (4) Row-hit and bank-conflict
+  counters of the controller are undocumented; locality stays unproven.
 
 ## Open work
 
@@ -39,7 +57,7 @@ DMA0 needs physical channel, controller and data-access authority and transfer t
 Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-memory-dma-20261101.md).
 
 <!-- evidence-table:begin -->
-20 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+21 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -63,4 +81,5 @@ Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `too
 | `1793603527212274330-dcf070c1` | 2026-11-02 | 3-1 | `a1c426ac14b4` | refused-before-launch | inconclusive | run_total 0.675 s |
 | `1793604009006779744-6a685222` | 2026-11-02 | 3-1 | `2fd76e2a81a0` | returned | passed | run_total 25.627 s, a76_p50_ns_s0 152 ns, a76_p9999_ns_s0 639 ns, a76_max_ns_s0 643 ns, a55_p50_ns_s0 136 ns, a55_p9999_ns_s0 2569 ns, a55_max_ns_s0 9271 ns, ctrl_p50_ns_s0 2302 ns, ctrl_p9999_ns_s0 3069 ns, ctrl_max_ns_s0 3042 ns, ctrl_misses_s0 0, a76_p50_ns_s1 152 ns, a76_p9999_ns_s1 639 ns, a76_max_ns_s1 632 ns, a55_p50_ns_s1 136 ns, a55_p9999_ns_s1 2711 ns, a55_max_ns_s1 8843 ns, ctrl_p50_ns_s1 2302 ns, ctrl_p9999_ns_s1 3069 ns, ctrl_max_ns_s1 3011 ns, ctrl_misses_s1 0, a76_p50_ns_s2 152 ns, a76_p9999_ns_s2 639 ns, a76_max_ns_s2 628 ns, a55_p50_ns_s2 136 ns, a55_p9999_ns_s2 2569 ns, a55_max_ns_s2 9438 ns, ctrl_p50_ns_s2 2302 ns, ctrl_p9999_ns_s2 3069 ns, ctrl_max_ns_s2 3015 ns, ctrl_misses_s2 0 |
 | `1793604009213366498-b525353f` | 2026-11-02 | 3-1 | `861b2416c428` | returned | passed | run_total 25.796 s, a76_p50_ns_s0 416 ns, a76_p9999_ns_s0 1662 ns, a76_max_ns_s0 2005 ns, a55_p50_ns_s0 392 ns, a55_p9999_ns_s0 16553 ns, a55_max_ns_s0 32424 ns, ctrl_p50_ns_s0 7417 ns, ctrl_p9999_ns_s0 10230 ns, ctrl_max_ns_s0 10571 ns, ctrl_misses_s0 0, a76_p50_ns_s1 416 ns, a76_p9999_ns_s1 1598 ns, a76_max_ns_s1 1965 ns, a55_p50_ns_s1 392 ns, a55_p9999_ns_s1 16553 ns, a55_max_ns_s1 29009 ns, ctrl_p50_ns_s1 7417 ns, ctrl_p9999_ns_s1 10230 ns, ctrl_max_ns_s1 10061 ns, ctrl_misses_s1 0, a76_p50_ns_s2 416 ns, a76_p9999_ns_s2 1598 ns, a76_max_ns_s2 1979 ns, a55_p50_ns_s2 392 ns, a55_p9999_ns_s2 16553 ns, a55_max_ns_s2 30056 ns, ctrl_p50_ns_s2 7417 ns, ctrl_p9999_ns_s2 10230 ns, ctrl_max_ns_s2 10083 ns, ctrl_misses_s2 0, stream_gb_per_s 8.78 GB/s |
+| `1793604795633560445-80bc01fb` | 2026-11-02 | 3-1 | `e271e3b62bb8` | result-mismatch | passed | run_total 12 s, scan_ticks 1.33194e+07, signature_ticks 2.33961e+07, address_failed 0, mismatch_count 0 |
 <!-- evidence-table:end -->
