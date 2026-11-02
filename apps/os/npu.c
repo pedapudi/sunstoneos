@@ -284,9 +284,12 @@ static int call(enum npu_service_operation op,unsigned model,uint64_t timeout)
         return FAIL_REQUEST(op,model,0,NULL,1,atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire));
     if(!npu_runtime_collect(&npu.runtime,0,ticket,&reply,wait)) {
 #ifdef SUNSTONE_NPU_UNMAPPED_SLOT
-        /* No reply in time: the ticket byte holds the controller's MMU capture stage (low nibble) and fault code (high
-         * nibble), the value the event bits it saw. These fields are read from another core, for this image only. */
+        /* No reply in time. If the controller completed its MMU capture, the ticket byte is the MMU status (low byte)
+         * and the value the faulting address. Otherwise the ticket byte holds the capture stage (low nibble) and fault
+         * code (high nibble) and the value the event bits it saw. These fields are read from another core, for this image only. */
         const struct a733_npu_controller *c=&npu.runtime.service.controller;
+        if(c->mmu_stage==5&&c->fault==A733_NPU_MMU) /* captured, but the reply did not arrive: the capture itself */
+            return fail_at(__LINE__,op,model,c->mmu_status&255u,NULL,1,c->mmu_address,RECORD_WHERE(),NULL);
         return fail_at(__LINE__,op,model,(c->mmu_stage&15u)|((unsigned)c->fault&15u)<<4,NULL,1,c->irq_seen,RECORD_WHERE(),NULL);
 #endif
         return FAIL_REQUEST(op,model,ticket,NULL,1,atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire));

@@ -406,6 +406,7 @@ int main(int argc, char **argv)
     assert(mode == 20 || mode == 21 || mode == 23 || ((mode == 22 || mode == 24) && argc == 3));
     if (argc == 3) input_directory = argv[2];
     if (mode == 21) bootstrap_us = 30000;
+    if (getenv("JOB_US")) job_us = (unsigned)strtoul(getenv("JOB_US"), NULL, 0);
     if (mode == 23 || mode == 24) unmapped_case = 1;
     if (getenv("UNMAPPED_ADDRESS")) unmapped_address = (uint32_t)strtoul(getenv("UNMAPPED_ADDRESS"), NULL, 0);
     else if (unmapped_case) {
