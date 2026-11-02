@@ -57,9 +57,16 @@ below; their board evidence does not qualify the new idle policy.
    watchdog reset; its cause is unresolved. A refused return and a panic now
    record a crumb naming the failed predicate or the source line, and a refused
    interrupt bind records the failed clause, so the next failure names itself.
-   The finite images cannot yet use the failure return of the OS image: their
-   refusal ends at the watchdog. No further run is made until the boards are
-   replugged and the run is approved.
+   The benchmark images link a failure return (`build.py --failure-return`,
+   implied by `--idle`): a refused or failed return of a quiesced NPU ends at
+   the monitor with status 2, a receipt and a last log line `NPU_FAILURE=<reason>`,
+   and the runner reports `failure-return` with DRAM restored. A failure with
+   the NPU still running keeps the watchdog ending. The host evidence is
+   `checks/npu-failure-return.py` (the production return writer, the report
+   validator, a stale and a missing receipt, and the runner capture and
+   admission); the monitor and the runner's outcome mapping are not executed.
+   No further run is made until the boards are replugged and the run is
+   approved.
 2. **Qualify EL0 and prepared joined streams.** Review and finish the saved
    generic sequence-registration API and returning OS diagnostic, and the public
    ring predicate that tells the power owner a published successor exists (add
