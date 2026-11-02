@@ -199,10 +199,9 @@ Beyond about 400 frames the quadratic attention work, not the overhead, sets the
 
 ## 8. Numerics of the attention step (measured on the host and the SDK simulator)
 
-The step graph of section 3 compiles (`Max`-free form: the running maximum is `rowmax + relu(m - rowmax)`, the row maximum is
-taken over scores lifted by 40 because the reduction starts at zero and loses negative maxima, `Exp`, `Div` and the row sum as a
-product with a column of ones) in 422,879 estimated cycles per step at N = 128. The step in float equals full attention to 1e-7.
-Run in the simulator over every tile pair of one real layer (carrying the state as the simulator returned it), against float full
+The step graph of section 3 compiles (the running maximum is `rowmax + relu(m - rowmax)`, the row maximum is a plain `ReduceMax`,
+`Exp`, `Div`, and the row sum is a product with a column of ones) in 422,879 estimated cycles per step at N = 128. The step in float
+equals full attention to 1e-7. Run in the simulator over every tile pair of one real layer (carrying the state as the simulator returned it), against float full
 attention:
 
 | Frames | Steps | Calibration | RMS error (signal RMS) | Largest error | Cosine |
@@ -222,10 +221,11 @@ The compiler leaves some inputs of this graph in half precision on its own (the 
 path per tensor, with 11 bits of mantissa, where 16-bit fixed point lacks the range. An input in half precision is written to the
 simulator as decimal values, not codes. A whole-graph half-precision compile was not tried.
 
-Two compiler findings that shaped the graph: a `Max` of values that may be negative and a `ReduceMax` of negative values return 0 in
-the simulator; and the step has nine inputs and three outputs, more than the loader's default of eight tensors, so an image that
-runs it is built with a larger `SUNSTONE_OS_NPU_MAX_TENSORS` (or the step packs `qu` and `qv`, `k` and `v`, and `m` and `l` in
-pairs).
+The maximum of negative values is kept by the compiler, the simulator and the hardware (a probe graph with row maxima -2.35 and
+-30, four forms, returned the same bytes in the simulator and on the board; `docs/hardware/npu-command-formats.md`, "Maximum of negative
+values"). The step has nine inputs and three outputs, more than the loader's default of eight tensors, so an image that runs it takes
+the tensor count from the manifest declaration (`npu.tensors`, in preparation) or, until then, a build define; the step may also pack
+`qu` and `qv`, `k` and `v`, and `m` and `l` in pairs.
 
 ## 9. The rebinding service in EL1: containment and tests
 
