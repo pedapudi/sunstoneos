@@ -30,7 +30,10 @@ def main():
     assert r.returncode == 0, r.stderr
     # A card image holding the backup sectors; the backup file's records are those sectors in order.
     card = out / 'card.img'
-    sectors = [0, 32768, 32769] + list(range(62656, 62720))
+    # 100 backup ranges (the MBR, boot and FSInfo, the root cluster, then 97 single FAT sectors) and 400 write ranges:
+    # far more than a fixed array would hold, since the image walks the delivered input in place.
+    backup_ranges = sorted([(0, 1), (32768, 2), (62656, 64)] + [(40000 + 3 * i, 1) for i in range(97)])
+    sectors = [s for first, count in backup_ranges for s in range(first, first + count)]
     content = {s: bytes((s * 7 + i) & 0xff for i in range(512)) for s in sectors}
     with open(card, 'wb') as f:
         f.truncate(70000 * 512)
@@ -39,8 +42,9 @@ def main():
             f.write(data)
     backup = b''.join(struct.pack('<Q', s) + content[s] for s in sectors)
     digest = hashlib.sha256(backup).hexdigest()
-    ranges = [(32768, 2), (62656, 64), (62720, 64), (65536, 4000)]
-    backup_ranges = [(0, 1), (32768, 2), (62656, 64)]
+    ranges = [(32768, 2), (62656, 64), (62720, 64), (65536, 4000)] + [(40000 + 3 * i, 1) for i in range(97)] + \
+        [(100000 + 10 * i, 5) for i in range(300)]
+    ranges.sort()
     blob = out / 'blob.bin'
     blob.write_bytes(bounds.encode_input(ranges, backup_ranges, digest))
     r = subprocess.run([str(binary), str(blob), str(card)], capture_output=True, text=True, env=harness.environment())

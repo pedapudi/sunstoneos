@@ -9,16 +9,16 @@
 #include <stdint.h>
 
 #define A733_BOUNDS_MAGIC "SSBW0002"
-#define A733_BOUNDS_MAX 32u            /* ranges of each kind */
-struct a733_bounds_range { uint64_t first, count; };
+/* No copy of the ranges is made: the object keeps a pointer to the blob the runner delivered as the first input and
+ * walks the ranges from there, so the only limit is the size of that input. The image keeps the input read-only for as
+ * long as the object is used. Ranges are little-endian (first sector, sector count) u64 pairs. */
 enum a733_bounds_state { A733_BOUNDS_EMPTY, A733_BOUNDS_PARSED, A733_BOUNDS_VERIFIED, A733_BOUNDS_CLOSED };
 struct a733_storage_bounds {
     enum a733_bounds_state state;
-    unsigned writes, backups;
-    uint8_t hash[32];
-    struct a733_bounds_range write[A733_BOUNDS_MAX], backup[A733_BOUNDS_MAX];
+    const uint8_t *blob;
+    uint32_t writes, backups;
 };
-/* Parse and check the blob: magic, counts, sorted disjoint nonempty ranges, length exactly. Returns 1. */
+/* Check the blob (magic, counts, exact length, sorted disjoint nonempty ranges) and keep a pointer to it. Returns 1. */
 int a733_storage_bounds_parse(struct a733_storage_bounds *, const uint8_t *blob, size_t bytes);
 /* Read every backup sector in order with `read` (one sector per call, 512 bytes), hash the records (u64 little-endian
  * sector, 512 bytes) and compare. Returns 1 and opens the write ranges only when the hash matches. */
@@ -41,4 +41,8 @@ static inline int a733_storage_bounds_cmd25_ok(const struct a733_storage_bounds 
 /* The write threshold register is writable by a verified bounded writer in every profile (the vendor sets it for each write). */
 static inline int a733_storage_bounds_threshold_ok(const struct a733_storage_bounds *b)
 { return b && b->state == A733_BOUNDS_VERIFIED; }
+/* Whether a bounded writer may bind to this card: an SD card (kind 1), addressed by sector (SDHC and SDXC), with a
+ * verified object. The register rule above takes the argument as a sector number. */
+static inline int a733_storage_bounds_card_ok(const struct a733_storage_bounds *b, unsigned kind_is_sd, unsigned sector_addressed)
+{ return kind_is_sd && sector_addressed && a733_storage_bounds_threshold_ok(b); }
 #endif

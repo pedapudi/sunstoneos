@@ -3,12 +3,30 @@
 #include "a733_platform_locks.h"
 #include "a733_range.h"
 #include "sunxi_smhc.h"
+#ifdef A733_MMC_NATIVE_HOST_TEST
+/* Host build for checks/a733-mmc-native-filter.c, which runs the register filter's own rules: the AArch64 task-state
+ * test and the register accesses go through hooks the check supplies. Never defined for an image. */
+#include <stdint.h>
+uint32_t a733_native_host_load(uintptr_t address);
+void a733_native_host_store(uintptr_t address, uint32_t value);
+int a733_native_host_current(void *binding);
+#define MMIO_LOAD(a) a733_native_host_load((uintptr_t)(a))
+#define MMIO_STORE(a,v) a733_native_host_store((uintptr_t)(a),(v))
+#define BARRIER() ((void)0)
+#else
 #include "task.h"
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
 #error "MMC native binding requires scheduler-state, task and mutex-owner APIs"
 #endif
+#define MMIO_LOAD(a) (*(volatile const uint32_t *)(a))
+#define MMIO_STORE(a,v) (*(volatile uint32_t *)(a)=(v))
+#define BARRIER() __asm__ volatile("dsb sy" ::: "memory")
+#endif
 static int current(void *cookie)
 {
+#ifdef A733_MMC_NATIVE_HOST_TEST
+    return a733_native_host_current(cookie);
+#else
     struct a733_mmc_platform_native *n=cookie;
     uint64_t el,flags,nesting,critical;
     __asm__ volatile("mrs %0, CurrentEL\n mrs %1, daif" : "=r"(el),"=r"(flags));
@@ -30,6 +48,7 @@ static int current(void *cookie)
     __asm__ volatile("msr daif, %0" :: "r"(flags) : "memory");
     return !nesting && !critical && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
         xTaskGetCurrentTaskHandle()==(TaskHandle_t)n->owner_task;
+#endif
 }
 
 static int now(void *cookie,uint64_t *v)
@@ -76,15 +95,15 @@ static int allowed(struct a733_mmc_platform_native *n,uintptr_t a,unsigned writi
 static int load(struct a733_mmc_platform_native *n,uintptr_t a,uint32_t *v,unsigned count)
 {
     if(!v||!count||count>SUNXI_MMC_FIFO_WORDS||!allowed(n,a,0))return 0;
-    __asm__ volatile("dsb sy" ::: "memory");
-    for(unsigned i=0;i<count;++i)v[i]=*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    BARRIER();
+    for(unsigned i=0;i<count;++i)v[i]=MMIO_LOAD(a);
+    BARRIER();return 1;
 }
 static int store(uintptr_t a,const uint32_t *v,unsigned count)
 {
-    __asm__ volatile("dsb sy" ::: "memory");
-    for(unsigned i=0;i<count;++i)*(volatile uint32_t *)a=v[i];
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    BARRIER();
+    for(unsigned i=0;i<count;++i)MMIO_STORE(a,v[i]);
+    BARRIER();return 1;
 }
 static int read32(void *cookie,uintptr_t a,uint32_t *v)
 {return load(cookie,a,v,1);}
@@ -130,8 +149,8 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
         if(v!=A733_MMC_GIC_BIT(slot))return 0;
     } else if(a==module||a==A733_MMC_BUS(slot)) {
         uint32_t mask=a==module?UINT32_C(0x87001f1f):UINT32_C(0x10001);
-        __asm__ volatile("dsb sy" ::: "memory");
-        uint32_t old=*(volatile const uint32_t *)a;
+        BARRIER();
+        uint32_t old=MMIO_LOAD(a);
         if((old^v)&~mask)return 0;
         if(a==module){
             uint32_t setting=v&(mask&~UINT32_C(0x80000000));
@@ -144,7 +163,7 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
                  * Arbitrary factors can never enable a running clock here. */
                 if(n->kind!=SUNXI_MMC_SD||n->sd_profile!=SUNXI_MMC_SD_HIGH_SPEED4||
                    ((old|v)&UINT32_C(0x80000000))||
-                   (*(volatile const uint32_t *)(uintptr_t)A733_MMC_BUS(slot)&0x10001))return 0;
+                   (MMIO_LOAD((uintptr_t)A733_MMC_BUS(slot))&0x10001))return 0;
             }
         }
     } else if(a==base+SUNXI_SMHC_CMD) {
@@ -152,13 +171,22 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
         if((v&SUNXI_SMHC_CMD_WRITE)&&(v&SUNXI_SMHC_CMD_INDEX)!=25u) {   /* CMD25 has its own bounded rule below */
             if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;
         }
-        if(!(v&SUNXI_SMHC_CMD_UPDATE_CLOCK))switch(v&SUNXI_SMHC_CMD_INDEX) {
+        if((v&SUNXI_SMHC_CMD_INDEX)==25u) {
+            /* Whatever its other bits (a clock-update word included), a command with index 25 must pass the bounded rule. */
+#ifndef SUNXI_MMC_READ_ONLY
+            if(n->kind!=SUNXI_MMC_SD||!n->bounds||
+               !a733_storage_bounds_cmd25_ok(n->bounds,v,MMIO_LOAD(base+SUNXI_SMHC_ARG),
+                    MMIO_LOAD(base+SUNXI_SMHC_BLKSZ),MMIO_LOAD(base+SUNXI_SMHC_BCNT)))return 0;
+#else
+            return 0;
+#endif
+        } else if(!(v&SUNXI_SMHC_CMD_UPDATE_CLOCK))switch(v&SUNXI_SMHC_CMD_INDEX) {
         case 0:case 1:case 2:case 3:case 7:case 8:case 9:case 13:
         case 16:case 17:case 18:case 41:case 55:break;
         case 11:case 19:
             /* UHS-I only: CMD11 with the voltage-switch flag and the CMD19
              * tuning read, each with a zero argument. */
-            {uint32_t argument=*(volatile const uint32_t *)(base+SUNXI_SMHC_ARG);
+            {uint32_t argument=MMIO_LOAD(base+SUNXI_SMHC_ARG);
              uint32_t flags=SUNXI_SMHC_CMD_START|SUNXI_SMHC_CMD_CRC|SUNXI_SMHC_CMD_RESP;
              if(!uhs||argument||v!=((v&SUNXI_SMHC_CMD_INDEX)==11?flags|SUNXI_SMHC_CMD_VOLTAGE_SWITCH|11u:
                 flags|SUNXI_SMHC_CMD_WAIT|SUNXI_SMHC_CMD_DATA|19u))return 0;}
@@ -167,7 +195,7 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
             if(n->kind!=SUNXI_MMC_SD||!n->sd_profile)return 0;
             /* New SD commands have fixed read-only protocol forms. No eMMC
              * SWITCH or write-direction command is admitted by this path. */
-            {uint32_t argument=*(volatile const uint32_t *)(base+SUNXI_SMHC_ARG);
+            {uint32_t argument=MMIO_LOAD(base+SUNXI_SMHC_ARG);
              uint32_t flags=SUNXI_SMHC_CMD_START|SUNXI_SMHC_CMD_WAIT|SUNXI_SMHC_CMD_CRC|SUNXI_SMHC_CMD_RESP;
              if((v&SUNXI_SMHC_CMD_INDEX)==51){if(v!=(flags|SUNXI_SMHC_CMD_DATA|51u)||argument)return 0;}
              else if(v==(flags|6u)){if(argument!=2)return 0;}
@@ -176,14 +204,6 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
              else return 0;}
             break;
         case 24:if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;break;
-#ifndef SUNXI_MMC_READ_ONLY
-        case 25:
-            /* The descriptor-DMA write: only SD, only with a verified bounds object, and only for a range it admits. */
-            if(n->kind!=SUNXI_MMC_SD||!n->bounds||
-               !a733_storage_bounds_cmd25_ok(n->bounds,v,*(volatile const uint32_t *)(base+SUNXI_SMHC_ARG),
-                    *(volatile const uint32_t *)(base+SUNXI_SMHC_BLKSZ),*(volatile const uint32_t *)(base+SUNXI_SMHC_BCNT)))return 0;
-            break;
-#endif
         default:return 0;
         }
     }
@@ -192,7 +212,7 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
 static int barrier(void *cookie)
 {
     if(!current(cookie))return 0;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    BARRIER();return 1;
 }
 static int outside(void *cookie,const void *v,size_t bytes)
 {
