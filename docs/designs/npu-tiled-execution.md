@@ -2,7 +2,7 @@
 
 **Status: design, not implemented.** Nothing in this note has run except the measurements in section 8, which are single-graph
 board runs of the conformer layer of the mimus speech encoder (176 channels, four attention heads, 704-wide feed-forward,
-convolution kernel 15).
+depthwise convolution kernel 31).
 
 ## 1. Requirement
 
@@ -28,12 +28,12 @@ frames.
 
 | Graph | Per-job input | Per-job output | Weights it holds |
 | --- | --- | --- | --- |
-| Entry (fused: convolution-module tail of the previous layer and head of this one) | tile `g` window of N + 14 frames (depthwise input), tile `x2` of N frames | tile `x1` (after feed-forward 1), `q+u`, `q+v`, `k`, `v` (4 x N x 44 each) | depthwise kernel, pointwise 2, feed-forward 2 and final norm of layer L - 1; feed-forward 1, layer norm and projections of layer L |
+| Entry (fused: convolution-module tail of the previous layer and head of this one) | tile `g` window of N + 30 frames (depthwise input), tile `x2` of N frames | tile `x1` (after feed-forward 1), `q+u`, `q+v`, `k`, `v` (4 x N x 44 each) | depthwise kernel, pointwise 2, feed-forward 2 and final norm of layer L - 1; feed-forward 1, layer norm and projections of layer L |
 | Attention step | `q+u`, `q+v` tile i; `k`, `v` tile j; positional slice (4 x 44 x (2N - 1)); key mask (N); carried `o`, `m`, `l` | updated `o`, `m`, `l` | none |
 | Output (per-frame) | `o` tile, `x1` tile | `x2` tile (after output projection), `g` tile (pointwise 1 and gate) | output projection, layer norm and pointwise 1 |
 
-The depthwise convolution (kernel 15) needs 7 frames either side. The entry graph of the next layer consumes `g` as a window of
-N + 14 frames, so the application keeps `g` in one buffer of T + 14 frames (zeros in the 7 frames at each end and in the padding
+The depthwise convolution (kernel 31) needs 15 frames either side. The entry graph of the next layer consumes `g` as a window of
+N + 30 frames, so the application keeps `g` in one buffer of T + 30 frames (zeros in the 15 frames at each end and in the padding
 beyond T) and the job reads the window that starts N frames after the previous one. A tile is exact at its edges because the
 halo frames are the true neighbours, not a recomputation. Each weight appears in exactly one graph, so the weights are stored
 once whatever the length. The layer count is 16: 16 output graphs, 17 entry graphs (the first has no convolution tail, the last
@@ -42,6 +42,14 @@ subsampling and head tiles.
 
 The subsampling convolution (two stride-2 convolutions) tiles in the same way with a halo of the receptive field in input
 frames. The head is per-frame.
+
+**Two sizes for the per-frame graphs.** Only the attention step is bounded by the 16-bit limit; a per-frame graph has no
+quadratic tensor. A tile set therefore holds each per-frame graph at two sizes, a large one (for example 256 frames) and a small one
+(32), and the runtime covers T with as many large tiles as fit and small tiles for the rest, so that the last tile pads at most 31
+frames and a 500-frame segment is one tile of 256 and seven of 32 for 480 frames plus one more of 32 (padded by 12), or simply two of 256 (padded by 12). The
+attention step stays at N = 128 for the query side and the key side; its query tiles are the per-frame tiles regrouped (two tiles of 64
+or one of 128), which is a view in the same buffer. The SDK keeps the several sizes of a set in the API (section 6): a set is a list of
+(size, handle) pairs and the job list names the handle of the size it uses.
 
 ## 3. Attention in two directions
 
@@ -143,12 +151,14 @@ Measurements (one slot, 852 MHz and 800 mV, byte-exact against the simulator unl
 | 368-frame feed-forward block alone | 1.32 ms (3.6 us a frame) |
 | 368-frame layer in 64-row attention blocks | 12.8 ms |
 | 368-frame attention part (norm, projections, 64-row blocks, output projection) | 9.79 ms |
+| 368-frame convolution module alone (norm, pointwise 1 with gate, depthwise, pointwise 2) | 1.31 ms (3.6 us a frame; output position -2) |
 | 460 and 512 frames in 64-row blocks | 25.9 and 38.6 ms |
 | per-job overhead of the SDK handshake (chain run) | about 0.025 ms |
 | subsampling, head and rescales at 92 frames (chain minus 16 layers) | 4.4 ms |
 
-From these, per layer: the per-frame parts cost about 10 us a frame (two feed-forwards 7.2, four projections 1.8, convolution
-module 1.0). The attention core costs 40 ns per query-key pair for all four heads when the block sits in VIP SRAM (the 92-frame
+From these, per layer: the per-frame parts cost 10 to 12.6 us a frame (two feed-forwards 7.2, four projections 1.8, convolution
+module 3.6 measured alone; the sum of the separately measured parts is 7% above the whole layer because the compiler overlaps
+neighbouring operations, which a tile graph of one part loses); the table uses 10, the fit to the whole layers. The attention core costs 40 ns per query-key pair for all four heads when the block sits in VIP SRAM (the 92-frame
 layer) and 67 ns per pair in the 64-row blocks at 368 frames. The model for a segment of T frames, tile N, padded length
 `Tp = n N`, `n = ceil(T / N)`:
 
@@ -187,7 +197,65 @@ the compiled set, so a model with different costs picks its own.
 Beyond about 400 frames the quadratic attention work, not the overhead, sets the time: at 500 frames the attention core is
 70% of the NPU time. That is a property of full attention and applies to the CPU path too.
 
-## 8. Proof plan
+## 8. Numerics of the attention step (measured on the host and the SDK simulator)
+
+The step graph of section 3 compiles (`Max`-free form: the running maximum is `rowmax + relu(m - rowmax)`, the row maximum is
+taken over scores lifted by 40 because the reduction starts at zero and loses negative maxima, `Exp`, `Div` and the row sum as a
+product with a column of ones) in 422,879 estimated cycles per step at N = 128. The step in float equals full attention to 1e-7.
+Run in the simulator over every tile pair of one real layer (carrying the state as the simulator returned it), against float full
+attention:
+
+| Frames | Steps | Calibration | RMS error (signal RMS) | Largest error | Cosine |
+| --- | --- | --- | --- | --- | --- |
+| 100 | 1 | 184 frames, other utterance | 0.032 (7.82) | 0.83 | 0.999992 |
+| 500 | 16 | 184 frames, other utterance | 0.245 (8.89) | 23.7, in 7 of 2,000 head-rows | 0.99962 |
+| 500 | 16 | the 500 frames themselves | 0.089 (8.89) | 1.28 | 0.999950 |
+| 100 | 1 | the 500 frames | 0.044 (7.82) | 0.33 | 0.999984 |
+
+Sixteen-bit fixed point therefore holds: 1% relative RMS error at 500 frames when the ranges cover the data. The 7 bad rows of the
+second line are head-rows whose largest score is 20 to 22 while the calibration (one 184-frame utterance, largest score 16.3) clipped
+at 16: a calibration range, not a limit of the form. The production calibration uses many utterances with headroom. The
+resolution that matters is the row sum `l` (range 512 when it must reach 500 keys, step 0.016), which costs accuracy on rows whose
+softmax is concentrated on one key; it can carry `l / 64` instead.
+
+The compiler leaves some inputs of this graph in half precision on its own (the mask and the running maximum): it offers a float16
+path per tensor, with 11 bits of mantissa, where 16-bit fixed point lacks the range. An input in half precision is written to the
+simulator as decimal values, not codes. A whole-graph half-precision compile was not tried.
+
+Two compiler findings that shaped the graph: a `Max` of values that may be negative and a `ReduceMax` of negative values return 0 in
+the simulator; and the step has nine inputs and three outputs, more than the loader's default of eight tensors, so an image that
+runs it is built with a larger `SUNSTONE_OS_NPU_MAX_TENSORS` (or the step packs `qu` and `qv`, `k` and `v`, and `m` and `l` in
+pairs).
+
+## 9. The rebinding service in EL1: containment and tests
+
+The OS service that applies a job's bindings is the only new code on the job path, so its argument is stated here.
+
+- **What the application controls.** For each tensor of a job it names a region it registered and a byte offset. It never writes an
+  address.
+- **What the service checks, in EL1, before it writes anything.** The region belongs to this queue; the access kind of the region
+  admits the tensor (read for an input, write for an output); `offset + tensor bytes` lies inside the region (no overflow in 64
+  bits); the offset keeps the alignment the tensor requires (64 bytes); no output window of the job overlaps another output window
+  of an unfinished job of the same queue. A job failing any check is refused whole, with nothing rewritten.
+- **What it rewrites.** The address words at the positions the loader recorded when it admitted the graph, with the value
+  `region device base + offset` (plus the tensor's own sub-offset). The positions come from the loader's own relocation list, which
+  were already confined at admission; the service adds no position.
+- **Why containment holds without the service being right.** The NPU's page tables map only registered regions and the
+  buffers of loaded graphs. A wrong word faults at an unmapped address; it cannot reach other memory. The service's checks
+  keep a job inside its own regions; the page tables keep the NPU inside the union of all regions.
+- **Stale bindings.** A rewrite for a handle is applied only when no job of that handle is in flight or queued ahead of it; the
+  service orders a job's rewrite after the completion of the handle's previous job, in the same step that publishes the job, and
+  cleans the rewritten cache lines before the doorbell. A job published before its rewrite completes is impossible by
+  construction; a job whose handle still runs waits, and the application's second handle (section 4) avoids the wait.
+
+Negative tests (host, with the real runtime and service as in `checks/os-npu-service.c`): an offset one byte past the region is refused
+and the command stream is byte-for-byte unchanged; an offset that overflows 64 bits is refused; a region of another queue is refused;
+an output window overlapping the output window of an unfinished job is refused; a rewrite for a handle with a job in flight is
+refused, and after that job completes the rewrite succeeds; a binding that names a region the application then unregisters leaves
+no job able to reach it. Board: one job with an address one page past its region faults with an NPU MMU exception and the next job
+is correct (as the existing fault tests).
+
+## 10. Proof plan
 
 On one layer (a real layer of the trained model, real weights), build the tile graphs for N = 128, compile and calibrate them, and
 run a job list on the board at three lengths: 100, 250 and 500 frames. Compare:
@@ -203,7 +271,7 @@ run a job list on the board at three lengths: 100, 250 and 500 frames. Compare:
 The step graph's numerics (exponentials, running maximum, rescale in 16-bit fixed point) are the main risk and are tested first.
 If they fail, the merge moves to the CPU (section 3) and the step graph returns block-local `o`, `m`, `l`.
 
-## 9. Limits and open questions
+## 11. Limits and open questions
 
 - The compiler must accept `ReduceMax`, `Exp`, `ReduceSum` and `Div` on the shapes of the step; it accepted `Softmax` and
   `Gather`, and the shader corpus includes `Exp`, but the combination has not been compiled.
