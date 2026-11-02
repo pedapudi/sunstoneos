@@ -276,6 +276,14 @@ def main():
             assert manifest['return_reserve_us'] < lifetime_us and manifest['run_deadline_us'] <= lifetime_us - manifest['return_reserve_us'], \
                 (f"manifest run_us {manifest['run_deadline_us']} plus return_reserve_us {manifest['return_reserve_us']} exceeds the "
                  f'{seconds} s supervised session; session admission would refuse it')
+        owner = subprocess.run([args.nm, '--defined-only', str(args.image)], capture_output=True, text=True).stdout
+        if ' ss_storage_enable' in owner:
+            # The SD owner reads the CCU and drives SMHC0. The application's EL0 task creates it on first use, so the scheduler
+            # must be told to create it at EL1: board_application_task_privileged has to reach os_sd_owner_task_privileged.
+            # (The first board run faulted reading 0x02002500 at EL0 in the owner task.)
+            asm = subprocess.run(['llvm-objdump-21', '-d', '--disassemble-symbols=os_application_task_privileged', str(args.image)],
+                                 capture_output=True, text=True).stdout
+            assert 'os_sd_owner_task_privileged' in asm, 'the SD owner task is not created at EL1 (os_application_task_privileged does not reach os_sd_owner_task_privileged)'
         if args.application != 'none':
             result['symbol_boundary'] = application_symbols(Elf(args.image.read_bytes()),
                 args.application_objects, args.application_library, args.runtime_library,

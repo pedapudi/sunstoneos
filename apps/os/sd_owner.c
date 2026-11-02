@@ -111,6 +111,10 @@ static int post(_Atomic(struct request *) *slot, struct request *r, int wait)
     return atomic_load(&r->done) == 1;
 }
 
+/* The owner reads the CCU and drives SMHC0, so the scheduler creates it at EL1 (board_application_task_privileged). The first
+ * caller is the application's EL0 task, which would otherwise pass its own level on to the task it creates. */
+int os_sd_owner_task_privileged(void (*entry)(void *), void *context) { (void)context; return entry == owner_main; }
+
 /* Start the owner task; the caller is told when the card is open (os_large_device) or has failed. */
 static int start(void)
 {
