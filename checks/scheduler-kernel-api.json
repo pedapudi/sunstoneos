@@ -569,7 +569,8 @@
       "definition_helpers": [
         "ssKernelCPUId",
         "ssKernelForce",
-        "ssKernelService"
+        "ssKernelService",
+        "ssKernelCanPreempt"
       ]
     },
     {
@@ -630,7 +631,8 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_xTaskCreateStatic( pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer );",
       "definition_helpers": [
-        "ssKernelAdmitTask"
+        "ssKernelAdmitTask",
+        "ssKernelStaticAvailable"
       ]
     },
     {
@@ -639,7 +641,8 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_xTaskCreateStaticAffinitySet( pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer, uxCoreAffinityMask );",
       "definition_helpers": [
-        "ssKernelAdmitTask"
+        "ssKernelAdmitTask",
+        "ssKernelStaticAvailable"
       ]
     },
     {
@@ -658,7 +661,8 @@
       "definition_route": "traceENTER_xTaskGenericNotify( xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue );",
       "definition_helpers": [
         "ssKernelCPUId",
-        "ssKernelNotify"
+        "ssKernelNotify",
+        "ssKernelCanPreempt"
       ]
     },
     {

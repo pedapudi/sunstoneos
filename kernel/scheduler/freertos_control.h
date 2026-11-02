@@ -32,6 +32,9 @@ struct ss_control_ops {
      * detach returns false until saved frame is off CPU; it preserves wait result.
      * adopt rechecks authoritative object completion before making runnable. */
     bool (*apply)(void *, unsigned, void *, const struct ss_control_state *);
+    /* A false apply can wait on a task-context resource destructor. Its
+     * release republishes work; do not issue self-renewing SGIs meanwhile. */
+    bool (*deferred)(void *, unsigned);
     bool (*detach)(void *, unsigned, void *, struct ss_control_transfer *);
     void (*adopt)(void *, unsigned, void *, const struct ss_control_transfer *);
     bool (*drained)(void *, unsigned, unsigned); /* local CPU only; live/detached hints */

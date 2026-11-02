@@ -7,6 +7,7 @@
 #include <stdlib.h>
 static size_t fixture_allocations, fixture_frees, fixture_live;
 static long fixture_fail_after = -1;
+static bool fixture_heap_protocol;
 void *pvPortMalloc(size_t size)
 {
     if (fixture_fail_after == 0) return NULL;
@@ -17,12 +18,26 @@ void *pvPortMalloc(size_t size)
 }
 void vPortFree(void *memory)
 {
+    if (fixture_heap_protocol) {
+        assert(atomic_load(&ssKernelAdminNext) == atomic_load(&ssKernelAdminServing));
+        assert(!ssKernelCPUs[ssKernelCPUId()].control_draining);
+        assert(!ssKernelCPUs[ssKernelCPUId()].preempt);
+        UBaseType_t mask = portSET_INTERRUPT_MASK();
+        portCLEAR_INTERRUPT_MASK(mask);
+        assert(!mask);
+        vTaskSuspendAll(); /* Match heap_4's shared allocator exclusion. */
+    }
     if (memory) { assert(fixture_live); --fixture_live; ++fixture_frees; }
     free(memory);
+    if (fixture_heap_protocol) (void)xTaskResumeAll();
 }
+static unsigned fixture_admin;
+void ss_kernel_test_admin_enter(unsigned cpu)
+{ assert(!ssKernelCPUs[cpu].selecting); ++fixture_admin; }
 static unsigned fixture_cpu, fixture_sgi[configNUMBER_OF_CORES], fixture_locks;
 static unsigned fixture_cleanup, fixture_task_masks, fixture_isr_masks;
 static UBaseType_t fixture_api_mask[configNUMBER_OF_CORES];
+static void (*fixture_unmask_action)(void);
 void ssFixtureCleanup(void *task) { assert(task); ++fixture_cleanup; }
 static unsigned fixture_ready_count[SS_OWNER_SLOTS], fixture_ready_cpu[SS_OWNER_SLOTS];
 static TaskHandle_t fixture_ready_watch;
@@ -55,6 +70,12 @@ void vPortClearInterruptMask(UBaseType_t mask)
      * partially completed control maintenance, as the real QEMU run did. */
     assert(mask || !ssKernelCPUs[fixture_cpu].control_draining);
     fixture_api_mask[fixture_cpu] = mask;
+    if (!mask && fixture_cpu == 0 && fixture_unmask_action && !ssKernelCPUs[fixture_cpu].object_depth &&
+        !ssKernelCPUs[fixture_cpu].preempt) {
+        void (*action)(void) = fixture_unmask_action;
+        fixture_unmask_action = NULL;
+        action();
+    }
 }
 void vPortClearInterruptMaskFromISR(UBaseType_t mask)
 { vPortClearInterruptMask(mask); }
@@ -97,7 +118,14 @@ static TaskHandle_t create(unsigned index, unsigned priority)
 static struct ssKernelTask *record(TaskHandle_t task)
 { return &ssKernelTasks[((TCB_t *)task)->uxOwnerSlot]; }
 static void enter(unsigned cpu)
-{ fixture_cpu = cpu; ssKernelSwitch(cpu); }
+{
+    fixture_cpu = cpu;
+    (void)ssKernelOwnerIRQExit();
+    unsigned locks = fixture_locks, administration = fixture_admin;
+    ssKernelSwitch(cpu);
+    assert(fixture_locks == locks && fixture_admin == administration);
+    if (!ssKernelCPUs[cpu].preempt) ssKernelCleanup();
+}
 static void invariant(void)
 {
     unsigned running[SS_OWNER_SLOTS] = {0};
@@ -117,6 +145,8 @@ static void invariant(void)
     }
 }
 #include "scheduler-kernel-objects.c"
+void ssFixturePortYield(void)
+{ ssKernelOwnerYieldTail(); ssFixtureYield(); }
 static void fixture_command_progress(void *opaque)
 {
     (void)opaque;
@@ -158,7 +188,7 @@ static void fixture_critical_commands(TaskHandle_t task)
     assert(ssKernelCPUs[owner].command_pending[0] || ssKernelCPUs[owner].command_pending[1]);
     ssKernelControlDrain();
     assert(ssKernelCPUs[owner].command_pending[0] || ssKernelCPUs[owner].command_pending[1]);
-    ssKernelCommandsFinish();
+    ssKernelCommandsFinish(true);
     assert(!ssKernelCPUs[owner].command_pending[0] && !ssKernelCPUs[owner].command_pending[1]);
     fixture_cpu = 0;
     vTaskPrioritySet(task, priority);
@@ -176,6 +206,53 @@ static void fixture_critical_commands(TaskHandle_t task)
     ssKernelControl.backend = &ssKernelBackend;
     fixture_cpu = 0;
     puts("linked FreeRTOS critical commands: nested task/ISR publication defers owner repair and acknowledgment until compatibility unlock; no FIFO acquires ISR lock");
+}
+static TaskHandle_t fixture_unlock_caller;
+static unsigned fixture_unlock_victim_slot;
+static void fixture_unlock_migrate(void)
+{
+    struct ssKernelTaskCommands *batch = &ssKernelTaskCommands[((TCB_t *)fixture_unlock_caller)->uxOwnerSlot];
+    assert(batch->pending[fixture_unlock_victim_slot / 64] &
+           (UINT64_C(1) << (fixture_unlock_victim_slot % 64)));
+    struct ssKernelMutation mutation = { .command = SS_K_AFFINITY, .argument = 4,
+        .slot = ((TCB_t *)fixture_unlock_caller)->uxOwnerSlot };
+    (void)ss_control_publish(&ssKernelControl, mutation.slot, ssKernelMutate, &mutation);
+    enter(0);
+    enter(2);
+    assert(pxCurrentTCBs[2] == fixture_unlock_caller);
+}
+static void fixture_deferred_delete_migration(TaskHandle_t caller)
+{
+    static StaticTask_t victim_storage;
+    static StackType_t victim_stack[configMINIMAL_STACK_SIZE];
+    fixture_cpu = 0;
+    assert(ssKernelSelf() == caller);
+    fixture_api_mask[0] = 0;
+    TaskHandle_t victim = xTaskCreateStaticAffinitySet(fixture_entry, "deferred", configMINIMAL_STACK_SIZE,
+        NULL, 1, victim_stack, &victim_storage, 2);
+    assert(victim);
+    fixture_unlock_caller = caller;
+    fixture_unlock_victim_slot = ((TCB_t *)victim)->uxOwnerSlot;
+    struct ss_owner_backend progress = ssKernelBackend;
+    progress.wait = fixture_command_progress;
+    ssKernelControl.backend = &progress;
+    vTaskEnterCritical();
+    vTaskDelete(victim);
+    unsigned cleaned = fixture_cleanup;
+    /* Interrupt return migrates the caller exactly between outer unlock and
+     * task-context acknowledgment processing. Its obligation follows it. */
+    fixture_unmask_action = fixture_unlock_migrate;
+    vTaskExitCritical();
+    assert(fixture_cpu == 2 && fixture_cleanup == cleaned + 1);
+    assert(xTaskCreateStaticAffinitySet(fixture_entry, "reuse", configMINIMAL_STACK_SIZE,
+        NULL, 1, victim_stack, &victim_storage, 2));
+    vTaskDelete((TaskHandle_t)&victim_storage);
+    fixture_progress_task = caller;
+    progress.wait = fixture_control_progress;
+    vTaskCoreAffinitySet(caller, 1);
+    assert(fixture_cpu == 0 && ssKernelSelf() == caller);
+    ssKernelControl.backend = &ssKernelBackend;
+    puts("linked FreeRTOS deferred deletion: caller migration at outer unlock preserves cleanup completion and immediate static buffer reuse");
 }
 static int fixture_admission(void)
 {
@@ -230,7 +307,9 @@ static int fixture_retirement_pin(void)
     struct ss_kernel_pin pin;
     assert(ss_kernel_handle_pin(&ssKernelRegistry, task, &pin));
     unsigned slot = pin.slot;
-    vTaskDelete(task);
+    struct ssKernelMutation mutation = { .command = SS_K_DELETE, .slot = slot };
+    assert(ss_control_publish(&ssKernelControl, slot, ssKernelMutate, &mutation) == 1);
+    ssKernelControlDrain();
     assert(ssKernelControl.slot[slot].desired.dead);
     assert(ss_control_applied(&ssKernelControl, slot, 1));
     assert(atomic_load(&pin.descriptor->references) == 1);
@@ -248,22 +327,34 @@ static int fixture_retirement_pin(void)
         fixture_cpu = c;
         ssKernelControlDrain();
     }
+    ssKernelCleanup();
     assert(uxTaskGetNumberOfTasks() == 0);
     puts("linked FreeRTOS retirement: a retained caller pin emits no repeated owner hints; final release completes retirement");
     return 0;
 }
 static void fixture_dynamic_delete(TaskHandle_t task)
 {
-    fixture_cpu = 0;
+    fixture_cpu = configNUMBER_OF_CORES - 1;
     vTaskDelete(task);
     for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
         fixture_cpu = c;
         ssKernelControlDrain();
     }
-    fixture_cpu = 0;
+    fixture_cpu = configNUMBER_OF_CORES - 1;
 }
 static int fixture_dynamic(void)
 {
+    for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
+        TaskHandle_t idle = create(c, 0);
+        xIdleTaskHandles[c] = pxCurrentTCBs[c] = idle;
+        ((TCB_t *)idle)->uxTaskAttributes |= taskATTRIBUTE_IS_IDLE;
+    }
+    ssKernelBootstrap();
+    xSchedulerRunning = pdTRUE;
+    struct ss_owner_backend progress = ssKernelBackend;
+    progress.wait = fixture_command_progress;
+    ssKernelControl.backend = &progress;
+    fixture_heap_protocol = true;
     TaskHandle_t handle;
     for (long allocation = 0; allocation < 2; ++allocation) {
         fixture_fail_after = allocation;
@@ -287,14 +378,14 @@ static int fixture_dynamic(void)
     assert(((TCB_t *)handle)->ucStaticallyAllocated == tskDYNAMICALLY_ALLOCATED_STACK_AND_TCB);
     assert(fixture_live == 2);
     fixture_dynamic_delete(handle);
-    assert(!fixture_live && !uxTaskGetNumberOfTasks());
+    assert(!fixture_live && uxTaskGetNumberOfTasks() == configNUMBER_OF_CORES);
     assert(xTaskCreateAffinitySet(fixture_entry, "nohandle", configMINIMAL_STACK_SIZE,
         NULL, 1, 1, NULL) == pdPASS);
     handle = xTaskGetHandle("nohandle");
     assert(handle);
     fixture_dynamic_delete(handle);
-    TaskHandle_t tasks[SS_OWNER_SLOTS];
-    for (unsigned n = 0; n < SS_OWNER_SLOTS; ++n)
+    TaskHandle_t tasks[SS_OWNER_SLOTS - configNUMBER_OF_CORES];
+    for (unsigned n = 0; n < SS_OWNER_SLOTS - configNUMBER_OF_CORES; ++n)
         assert(xTaskCreateAffinitySet(fixture_entry, "dynamic", configMINIMAL_STACK_SIZE,
             NULL, 1, 1, &tasks[n]) == pdPASS);
     assert(uxTaskGetNumberOfTasks() == SS_OWNER_SLOTS);
@@ -306,15 +397,15 @@ static int fixture_dynamic(void)
     handle = (TaskHandle_t)(uintptr_t)1;
     assert(xTaskCreateAffinitySet(fixture_entry, "full", configMINIMAL_STACK_SIZE,
         NULL, 1, 1, &handle) == errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY);
-    assert(!handle && fixture_live == 2 * SS_OWNER_SLOTS);
+    assert(!handle && fixture_live == 2 * (SS_OWNER_SLOTS - configNUMBER_OF_CORES));
     assert(fixture_cleanup == cleaned + 2 && fixture_tls_deleted == deleted + 2);
     unsigned slot = ((TCB_t *)tasks[0])->uxOwnerSlot;
     fixture_dynamic_delete(tasks[0]);
     assert(xTaskCreateAffinitySet(fixture_entry, "reuse", configMINIMAL_STACK_SIZE,
         NULL, 1, 1, &tasks[0]) == pdPASS);
     assert(((TCB_t *)tasks[0])->uxOwnerSlot == slot);
-    for (unsigned n = 0; n < SS_OWNER_SLOTS; ++n) fixture_dynamic_delete(tasks[n]);
-    assert(!uxTaskGetNumberOfTasks() && !fixture_live);
+    for (unsigned n = 0; n < SS_OWNER_SLOTS - configNUMBER_OF_CORES; ++n) fixture_dynamic_delete(tasks[n]);
+    assert(uxTaskGetNumberOfTasks() == configNUMBER_OF_CORES && !fixture_live);
     assert(fixture_allocations == fixture_frees);
     puts("linked FreeRTOS dynamic creation: allocation failures, invalid affinity, admission exhaustion, slot reuse and deletion balance stack/TCB allocations and TLS/port cleanup");
     return 0;
@@ -463,6 +554,7 @@ int main(int argc, char **argv)
     fixture_diagnostics();
     fixture_critical();
     fixture_critical_commands(second);
+    fixture_deferred_delete_migration(task);
     fixture_migration(task);
     fixture_migration_wake(task);
     fixture_delete_reuse(task, second);
