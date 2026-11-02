@@ -125,6 +125,28 @@ assert rows['passed'] and [r.get('k') for r in rows['queue'][:8]] == depths and 
 assert rows['clock']['before']['little_mhz'] == 0 and rows['clock']['after']['core'] == 0
 assert rows['queue'][8] == {'link': True, 'pair_us': 20.0, 'wrong_output_bytes': 0, 'status': 'match'}
 expected = graphs_host.queue_expectation(depths, 1000)['words']
+def reads(words, raw):
+    got = struct.unpack('<%dI' % (len(raw) // 4), raw)
+    return len(got) == len(words) and all(g == w if isinstance(w, int) else w['min'] <= g <= w['max'] for g, w in zip(got, words))
+
+
+# A receipt of an image with measured single-job latencies, and one whose graph differs from the simulator by one step.
+receipt = bytearray(struct.pack('<216Q', *words))
+struct.pack_into('<I', receipt, 1280, 100)
+struct.pack_into('<100I', receipt, 1284, *[24 * (100 + i) for i in range(100)])
+assert not reads(graphs_host.queue_expectation(depths, 1000)['words'], bytes(receipt))
+assert reads(graphs_host.queue_expectation(depths, 1000, latency=100)['words'], bytes(receipt))
+assert graphs_host.decode(bytes(receipt), sizes=[(k, 1000) for k in depths] + [(1, 1)], queue=True)['latency'] == {
+    'count': 100, 'min_us': 100.0, 'p50_us': 150.0, 'p99_us': 199.0, 'max_us': 199.0}
+off_by_one = bytearray(receipt)
+struct.pack_into('<Q', off_by_one, 8 * 5, 8)                       # one graph no longer matches
+struct.pack_into('<Q', off_by_one, 8 * (16 + 8 * 2 + 3), 1)        # its status reads mismatch
+struct.pack_into('<I', off_by_one, 1152 + 8, 29)                   # 29 differing bytes
+struct.pack_into('<I', off_by_one, 1216 + 8, 1)                    # of one 16-bit step
+assert not reads(graphs_host.queue_expectation(depths, 1000, latency=100)['words'], bytes(off_by_one))
+assert reads(graphs_host.queue_expectation(depths, 1000, latency=100, engine_tolerance=2)['words'], bytes(off_by_one))
+struct.pack_into('<I', off_by_one, 1216 + 8, 3)                    # three steps is a failure even with the tolerance
+assert not reads(graphs_host.queue_expectation(depths, 1000, latency=100, engine_tolerance=2)['words'], bytes(off_by_one))
 assert len(expected) == 2 * 216 and expected[0:2] == [graphs_host.MAGIC & 0xffffffff, graphs_host.MAGIC >> 32]
 # The chain study's result (apps/npu-graphs, NPU_GRAPHS_CHAIN): the decoder reads the statistics, the times and the tokens.
 chain = bytearray(graphs_host.CHAIN_BYTES)

@@ -6,14 +6,25 @@
 #define OS_NPU_CORE 1u
 /* The pool is sized from the application's declaration (cmake SUNSTONE_OS_NPU_POOL_BYTES, docs/designs/npu-resources.md,
  * "The pool"): 8 MiB at 0x47400000 as always, or a larger multiple of 2 MiB that ends at 0x47000000, the bottom of the
- * monitor interval, so that it stays inside the write-back RAM that EL0 reaches and below the application regions. */
+ * monitor interval, so that it stays inside the write-back RAM that EL0 reaches and below the application regions.
+ * A pool that the build places in the slot 1 area (cmake SUNSTONE_OS_NPU_POOL_BASE, OS_NPU_POOL_BASE here) may be larger:
+ * the ledger holds it for the kernel at admission, so no application region, heap or stack can take it and no
+ * application space maps it (docs/designs/application-memory-layout.md, step 5). */
 #ifndef OS_NPU_POOL_BYTES
 #define OS_NPU_POOL_BYTES UINT64_C(0x800000)
 #endif
 #define OS_NPU_POOL_LEGACY_BYTES UINT64_C(0x800000)
+#ifdef OS_NPU_POOL_BASE
+#define OS_NPU_POOL_START ((uint64_t)OS_NPU_POOL_BASE)
+_Static_assert((uint64_t)OS_NPU_POOL_BASE>=UINT64_C(0x48000000)&&(uint64_t)OS_NPU_POOL_BASE+OS_NPU_POOL_BYTES<=UINT64_C(0x79000000)&&
+               !((uint64_t)OS_NPU_POOL_BASE&(UINT64_C(0x200000)-1))&&OS_NPU_POOL_BYTES<=UINT64_C(0x30000000)&&
+               OS_NPU_POOL_BYTES>=UINT64_C(0xa00000)&&!(OS_NPU_POOL_BYTES&(UINT64_C(0x200000)-1)),
+               "a ledger NPU pool is 10 MiB to 768 MiB of whole 2 MiB blocks inside the slot 1 area");
+#else
 #define OS_NPU_POOL_START (OS_NPU_POOL_BYTES==OS_NPU_POOL_LEGACY_BYTES?UINT64_C(0x47400000):UINT64_C(0x47000000)-OS_NPU_POOL_BYTES)
 _Static_assert(OS_NPU_POOL_BYTES>=OS_NPU_POOL_LEGACY_BYTES&&OS_NPU_POOL_BYTES<=UINT64_C(0x3000000)&&
                !(OS_NPU_POOL_BYTES&(UINT64_C(0x200000)-1)),"the NPU pool is 8 to 48 MiB in blocks of 2 MiB");
+#endif
 #include "npu-session.h"
 extern const struct npu_runtime_model os_npu_models[];
 extern const unsigned os_npu_model_count,os_npu_client_entry;

@@ -630,7 +630,13 @@ class Live:
         log = data[256:256+values[3]].decode(errors='replace')
         (evidence/'rail.log').write_text(log)
         # The helper performs all boot-clock, speed-bin and PMIC readbacks.
-        self.record['rails'] = images.post_rail_result(values, log) if post else images.rail_result(values, log)
+        refusal = None
+        try:
+            self.record['rails'] = images.post_rail_outcome(values, log) if post else images.rail_result(values, log)
+        except images.RailRestoreRefused as error:
+            # The helper's DRAM is still restored below; the refusal is raised afterwards, with its record.
+            refusal = error
+            self.record['rails'] = error.record
         run['image_sha256'] = expected
         run['rails'] = self.record['rails']
         if save:
@@ -638,6 +644,8 @@ class Live:
             self.record.update(dram_restored=True, dram_dirty=False)
             run['dram_restored'] = True
         self.journal()
+        if refusal:
+            raise refusal
 
     def live_state(self, finite_npu=False):
         words = images.load('npu_live_words', (self.args.host_tree or ROOT)/'apps/npu-finite/development.py').WORDS if finite_npu else state.WORDS
@@ -693,6 +701,9 @@ class Live:
         if plan.get('format') == 'generic':
             images.validate_uploads(plan)
             if preserve:
+                total, seconds = images.require_budget(plan, getattr(self.args, 'preserve_budget_s', None))
+                self.record.update(preserve_bytes=total, preserve_estimate_s=round(seconds, 1))
+                print('preservation: %d MiB backed up and restored, estimated %.0f s' % (total >> 20, seconds), flush=True)
                 plan['dram_backups'] = images.backup_dram(self, plan['preserve_regions'])
                 self.record['dram_backups'] = plan['dram_backups']
                 self.record.update(dram_restored=False, dram_dirty=True)
@@ -986,8 +997,17 @@ def run_image(args, backend=Live):
                         require(not state.boot_clocks(after['words']),
                                 'CPU clocks differ from boot words before rail restoration.')
                         # Mandatory retirement and RAM restoration precede optional result validation.
-                        timed('restore-rails', lambda: owner.rails('restore-rails'))
-                        result['rails_restored'] = True
+                        # The application's result is valid whatever the helper says: record the helper's outcome
+                        # beside it. A refusal that leaves the rails not shown to be at the target pauses the port
+                        # (the daemon reads rails_unrestored); a board already at the target is a verified no-op.
+                        try:
+                            timed('restore-rails', lambda: owner.rails('restore-rails'))
+                            result['rails_restored'] = True
+                        except images.RailRestoreRefused as error:
+                            result['rails_restored'] = False
+                            result['rails_unrestored'] = True
+                            result['first_failure_rails'] = str(error)
+                        result['rail_restore'] = owner.record.get('rails')
                     matched = captured['valid']
                     if expected:
                         matched &= matches_expectation(expected, payload)
@@ -1203,6 +1223,7 @@ def development(argv=None):
     parser.add_argument('--normalize-rails', action=argparse.BooleanOptionalAction)
     parser.add_argument('--restore-rails', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--preserve-dram', action='store_true')
+    parser.add_argument('--preserve-budget-s', type=float)
     parser.add_argument('--rail-helper', type=Path, default=state.RAIL_HELPER)
     parser.add_argument('--fel', type=Path, default=state.FEL)
     args = parser.parse_args(argv)
@@ -1234,6 +1255,8 @@ def development(argv=None):
         command += ['--restore-rails']
     if args.preserve_dram:
         command += ['--preserve-dram']
+    if getattr(args, 'preserve_budget_s', None) is not None:
+        command += ['--preserve-budget-s', repr(args.preserve_budget_s)]
     if args.decoder:
         command += ['--decoder', str(args.decoder)]
     command += ['--decode-application']
@@ -1325,7 +1348,7 @@ class Queue:
         options = {'reference': 'none' if reference.get('none') else f"{reference['path']}#{reference['anchor']}"}
         if reference.get('none'):
             options['reference_reason'] = reference['reason']
-        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','decode_application','objcopy'):
+        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy'):
             value = getattr(args,name)
             options[name] = str(value.resolve()) if isinstance(value,Path) else value
         for name in ('records', 'decoder', 'manifest'):
@@ -1453,6 +1476,8 @@ class Queue:
             history = [j for j in state['jobs'] if j.get('assigned_port')==port and j['state']=='done']
             if len(history)>=2 and all(j['result'].get('stage')=='dram' and j['result']['outcome']!='returned' for j in history[-2:]):
                 self.pause(state,port,'Two consecutive DRAM bring-ups failed.')
+            if result.get('rails_unrestored'):
+                self.pause(state,port,'The CPU rails were not restored and are not shown to be at 800 mV; check them before resuming.')
             failure = result.get('first_failure')
             if failure and result['outcome'] not in ('returned','refused-before-launch'):
                 matches = [j for j in history if j['hypothesis']==job['hypothesis'] and
@@ -1646,6 +1671,8 @@ def run_options(parser, submit=False):
     parser.add_argument('--restore-rails', action='store_true', help='Restore guarded CPU rails after a validated normal return.')
     parser.add_argument('--preserve-dram', action='store_true',
                         help='Qualification run: save the image DRAM before launch and restore it after retirement. Development runs skip both.')
+    parser.add_argument('--preserve-budget-s', type=float,
+                        help='Longest estimated backup and restore time, in seconds, that a --preserve-dram run accepts; the plan is refused above it.')
     parser.add_argument('--decoder', type=Path, help='Application payload decoder with optional expected(inputs).')
     parser.add_argument('--decoder-origin', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--decode-application', action='store_true', help='Use the application decoder and its default inputs when available.')

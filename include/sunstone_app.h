@@ -52,7 +52,8 @@ enum {
     SS_ACCESS_READ = 1u << 0,      /* CPU read at the application's level */
     SS_ACCESS_WRITE = 1u << 1,     /* CPU write */
     SS_ACCESS_GPU_READ = 1u << 2,
-    SS_ACCESS_GPU_WRITE = 1u << 3
+    SS_ACCESS_GPU_WRITE = 1u << 3,
+    SS_ACCESS_SCRATCH = 1u << 4    /* work or output the board runner does not back up or restore; no OS code reads it */
 };
 
 /* One physical range; virtual address equals physical address. The build

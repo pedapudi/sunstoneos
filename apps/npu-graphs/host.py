@@ -54,6 +54,8 @@ def decode(raw, names=None, sizes=None, faults=(), queue=False, sequence=False):
         result['clock'] = clock_of(words[9:16])
     if queue:
         result['queue'] = queue_rows(result)
+        if latency_of(raw):
+            result['latency'] = latency_of(raw)
         result['clock'] = clock_of(words[9:16])
     result['passed'] = (matched == count - len(faults) and completed == matched and closed == 1 and
                         all(g['status'] == ('fault' if g['index'] in faults else 'match') for g in graphs))
@@ -146,9 +148,29 @@ def queue_rows(result):
     return rows
 
 
-def queue_expectation(depths, jobs, link=True):
+LATENCY_AT = 1280 // 4      # word of the latency count in the receipt's padding (NPU_GRAPHS_QUEUE_LAT); 100 tick words follow
+DIFFER_AT, MAX_ERROR_AT = 1152 // 4, 1216 // 4
+
+
+def latency_of(raw):
+    """The single-job latencies of an image built with NPU_GRAPHS_QUEUE_LAT: percentiles in microseconds, or None."""
+    count = struct.unpack_from('<I', raw, 4 * LATENCY_AT)[0]
+    if not 0 < count <= 100:
+        return None
+    ticks = sorted(struct.unpack_from('<%dI' % count, raw, 4 * LATENCY_AT + 4))
+    return {'count': count, 'min_us': ticks[0] / 24, 'p50_us': ticks[count // 2] / 24,
+            'p99_us': ticks[min(count - 1, int(count * 0.99))] / 24, 'max_us': ticks[-1] / 24}
+
+
+def queue_expectation(depths, jobs, link=True, latency=0, engine_tolerance=None):
     """The queue-mode receipt as u32 words: the counts and the output check are exact; the times and the refusals,
-    which the study measures, are not."""
+    which the study measures, are not.
+
+    latency is the NPU_GRAPHS_QUEUE_LAT job count of the image: the receipt's padding then holds that count and as many
+    measured ticks, which are not predicted. engine_tolerance is for graphs with half-precision tensors, whose engine
+    results differ from the SDK simulator's by rounding (at most this many 16-bit steps, the same on every run): the match
+    counts and statuses may read mismatch, the number of differing bytes is measured and the largest error must not exceed
+    the tolerance. Without it the outputs must equal the simulator's byte for byte."""
     n = len(depths) + (1 if link else 0)
     words64 = [MAGIC, 1, BYTES, n, n, n, 1, None, None] + [None] * 6 + [0]   # the clock words are measured
     for i, k in enumerate(depths):
@@ -159,6 +181,15 @@ def queue_expectation(depths, jobs, link=True):
     words = []
     for value in words64:
         words += [ANY, ANY] if value is None else [value & 0xffffffff, value >> 32]
+    if latency:
+        words[LATENCY_AT] = latency
+        words[LATENCY_AT + 1:LATENCY_AT + 1 + latency] = [ANY] * latency
+    if engine_tolerance is not None:
+        words[10] = {'min': 0, 'max': n}                           # graphs matched
+        for i in range(len(depths) + (1 if link else 0)):
+            words[2 * (HEADER + 8 * i + 3)] = {'min': 0, 'max': 1}   # status: match or mismatch
+            words[DIFFER_AT + i] = ANY
+            words[MAX_ERROR_AT + i] = {'min': 0, 'max': engine_tolerance}
     return {'schema': 'sunstone-board-expect-u32-v1', 'words': words}
 
 
