@@ -216,7 +216,7 @@ Per-object locking and shorter lock holds (the task-lock convoy: 82 to 96% of ma
 Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-61 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+70 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -281,4 +281,13 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793613102942277574-dfc0978e` | 2026-11-02 | 3-3 | `da6d553b7bd7` | returned | passed | run_total 118.47 s, recognition_mean 110.408 ms, soak_iterations 226 |
 | `1793613285642527139-50993bfe` | 2026-11-02 | 3-3 | `54471f8407d6` | returned | passed | run_total 192.824 s, recognition_mean 110.765 ms, soak_iterations 225 |
 | `1793613482426622002-7cef3e33` | 2026-11-02 | 3-3 | `54471f8407d6` | returned | passed | run_total 183.378 s, recognition_mean 110.65 ms, soak_iterations 225 |
+| `1793615594715919660-cd3ee23f` | 2026-11-02 | 3-3 | `96b1d71741f7` | returned | passed | run_total 149.154 s, control_latency_max 3.38 us, control_jitter_max 3.12 us, recognition_mean 110.594 ms |
+| `1793615747063569155-173a0d54` | 2026-11-02 | 3-3 | `96b1d71741f7` | returned | passed | run_total 125.623 s, control_latency_max 3.54 us, control_jitter_max 3.25 us, recognition_mean 110.594 ms |
+| `1793615873648308943-3eabd2f7` | 2026-11-02 | 3-3 | `96b1d71741f7` | returned | passed | run_total 170.263 s, control_latency_max 3.58 us, control_jitter_max 3.29 us, recognition_mean 110.584 ms |
+| `1793616048963593965-e8fc961d` | 2026-11-02 | 3-3 | `96b1d71741f7` | returned | passed | run_total 173.379 s, control_latency_max 3.29 us, control_jitter_max 3 us, recognition_mean 110.826 ms |
+| `1793616388485243353-0fb2da02` | 2026-11-02 | 3-3 | `591ef3007a46` | returned | passed | run_total 110.751 s, control_latency_max 3.33 us, control_jitter_max 3.04 us, recognition_mean 110.777 ms |
+| `1793616500737293739-0207eacf` | 2026-11-02 | 3-3 | `591ef3007a46` | returned | passed | run_total 156.797 s, control_latency_max 3.42 us, control_jitter_max 3.12 us, recognition_mean 110.866 ms |
+| `1793616666248085091-827a73a9` | 2026-11-02 | 3-3 | `591ef3007a46` | returned | passed | run_total 126.483 s, control_latency_max 3.62 us, control_jitter_max 3.38 us, recognition_mean 110.757 ms |
+| `1793616794846609508-07db9f51` | 2026-11-02 | 3-3 | `591ef3007a46` | returned | passed | run_total 109.47 s, control_latency_max 3.58 us, control_jitter_max 3.33 us, recognition_mean 110.898 ms |
+| `1793616907929869657-01e648b2` | 2026-11-02 | 3-3 | `591ef3007a46` | returned | passed | run_total 95.776 s, control_latency_max 3.38 us, control_jitter_max 3.08 us, recognition_mean 110.965 ms |
 <!-- evidence-table:end -->

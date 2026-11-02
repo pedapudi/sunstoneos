@@ -27,5 +27,8 @@ struct ss_control_worst { uint32_t latency_ns, pmr; uint64_t elr, spsr, rpr, tas
 unsigned ulSunstoneControlWorst(unsigned core, unsigned rank, struct ss_control_worst *out);
 /* Owner-work drains of a CPU: which 0 from interrupt exit, 1 skipped at exit by the mask guard, 2 from the tick, 3 service passes run. */
 uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which);
+unsigned ulSunstoneControlWfi(unsigned core, uint64_t *count, uint64_t *max_ticks, uint64_t *over5, const uint32_t **bins);
+unsigned long ulSunstoneIdleWaiting(unsigned core);
+unsigned long ulSunstoneIdlePulls(void);
 unsigned ulSunstoneControlStatsRead(unsigned core, unsigned path, struct ss_control_stats *out);
 #endif
