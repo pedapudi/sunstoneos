@@ -3,6 +3,7 @@
  * "sunstone_large_regions"; the usable upper memory comes from the board: the ranges that the DRAM
  * decode check passed. */
 #include "app_large.h"
+#include "os_space.h"
 #include "app_region.h"
 #include <stdint.h>
 #include <string.h>
@@ -60,7 +61,9 @@ int os_large_prepare(void)
     if (admitted) return 0;
     uint64_t ttbr;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
-    const uint64_t *base_l1 = (const uint64_t *)(uintptr_t)(ttbr & APP_PTE_ADDR_MASK);
+    /* The table's pages may be unmapped at EL1, so its entries come from the platform's copy (os_space.h). */
+    static uint64_t base_l1[512];
+    os_kernel_l1_head(base_l1);
     struct app_region_range usable[APP_REGION_SLOTS];
     unsigned ranges = usable_ranges(base_l1, usable, APP_REGION_SLOTS);
     uint64_t mmfr0, tcr;

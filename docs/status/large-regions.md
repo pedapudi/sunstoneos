@@ -8,6 +8,10 @@ An application declares regions of upper memory, up to the 11 GiB the board maps
 
 **Board-qualified scope:** A read-only probe image (boot clocks, CPU 494 MHz) took a 1 GiB region, ran EL0 routines in three address spaces and showed the isolation, the 2 MiB and 1 GiB block walk counts and one read rate that does not depend on the block size; it read the card at 21.9 MB/s per 128 KiB request and mounted its FAT32 volume. No OS image has run on a board with a large region, and no performance figure at the approved top operating points exists.
 
+## Defect found on a board and fixed
+
+The first run of `sunstone-a733-os-large-region-test` in the CPU-return profile (board entry `1793621306043398415-1a83935f`, found by the storage agent) took a data abort in `os_large_prepare`: the admission read the boot level-1 table through `TTBR0_EL1`, and the A733 EL1 table leaves the 2 MiB block that holds the tables unmapped. Admission now reads a copy the platform makes (`os_kernel_l1_head`). The QEMU OS platform maps its tables the same way, and the cases that admit a region fault with ESR 0x96000006 if the read returns. No board run of the fix yet.
+
 ## Open work
 
 1. Run the SD0 binding in an OS image on a board. `apps/os/large_sd.c` (`os_large_device`, `os_large_device_close`, `os_large_sd_pins`) uses the OS's shared providers and the read-only SD core, builds into `sunstone-a733-os-large-region-test` and passes the read-only scan, but only the standalone probe has driven the card on a board. QEMU has no SD controller: its RAM disk covers the loader, and four scenarios cover a device that is present and fails (metadata, request start, mid-stream, absent).
