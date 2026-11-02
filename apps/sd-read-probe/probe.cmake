@@ -4,7 +4,8 @@ function(sunstone_sd_read_probe)
   get_target_property(sources a733-kernel-check SOURCES)
   list(REMOVE_ITEM sources checks/kernel.c)
   add_executable(sunstone-a733-sd-read-probe EXCLUDE_FROM_ALL ${sources}
-    apps/sd-read-probe/main.c arch/aarch64/device_memory.c
+    apps/sd-read-probe/main.c apps/sd-read-probe/region.c apps/sd-read-probe/el0.S kernel/appmem/app_region.c
+    drivers/dram/a733_dram_decode_probe.c drivers/storage/storage_digest.c arch/aarch64/device_memory.c
     drivers/storage/sunxi_mmc.c drivers/storage/fat32_ro.c drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c
     platform/a733/shared_locks.c platform/a733/counter_clock.c
     drivers/clock/a733_clock_leases.c drivers/power/a733_rail_leases.c drivers/power/a733_pmic.c
@@ -18,7 +19,7 @@ function(sunstone_sd_read_probe)
     endif()
   endforeach()
   # SUNXI_MMC_READ_ONLY removes the card write path (checks/sd-read-only.py scans the image).
-  target_compile_definitions(sunstone-a733-sd-read-probe PRIVATE SUNXI_MMC_READ_ONLY=1
+  target_compile_definitions(sunstone-a733-sd-read-probe PRIVATE SUNXI_MMC_READ_ONLY=1 SUNSTONE_PLATFORM_UPPER_MAP=1
     INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1 INCLUDE_xSemaphoreGetMutexHolder=1)
   target_include_directories(sunstone-a733-sd-read-probe AFTER PRIVATE "${SUNSTONE_SOURCE_ROOT}/apps/sd-read-probe")
   set_target_properties(sunstone-a733-sd-read-probe PROPERTIES SUFFIX ".elf")

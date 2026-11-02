@@ -39,7 +39,7 @@ DMA0 needs physical channel, controller and data-access authority and transfer t
 Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-memory-dma-20261101.md).
 
 <!-- evidence-table:begin -->
-11 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+12 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -54,4 +54,5 @@ Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `too
 | `1793601581524930927-ca5ca9c7` | 2026-11-02 | 3-1 | `ccab62e48743` | returned | failed | run_total 20.118 s, sum_one_a55_before 5.5 GB/s, sum_two_a55_before 9.95 GB/s, sum_four_a55_before 10.84 GB/s, sum_six_a55_before 9.07 GB/s, sum_one_a76_before 14.84 GB/s, sum_two_a76_before 14.11 GB/s, sum_four_a55_two_a76_before 9.37 GB/s, sum_eight_before 8.23 GB/s, sum_one_a55_after 5.51 GB/s, sum_one_a76_after 14.82 GB/s, sum_eight_after 8.25 GB/s |
 | `1793601713672636837-caad23bd` | 2026-11-02 | 3-1 | `9b1160dc1361` | returned | passed | run_total 19.352 s, sum_one_a55 5.5 GB/s, sum_two_a55 9.89 GB/s, sum_four_a55 10.68 GB/s, sum_six_a55 8.97 GB/s, sum_one_a76 14.83 GB/s, sum_two_a76 14.18 GB/s, sum_four_a55_two_a76 9.35 GB/s, sum_eight 8.26 GB/s, a55_l2_refill_to_consumed_eight 1.006, a55_stall_fraction_eight 0.897, a55_l2_refill_to_consumed_one_a55 1.002, a55_stall_fraction_one_a55 0.398 |
 | `1793601793681778248-4e7e5868` | 2026-11-02 | 3-1 | `20c13110294c` | returned | passed | run_total 19.83 s, port2_priority 0, port6_priority 0, port18_priority 0, port19_priority 0, port20_priority 0 |
+| `1793603354809199340-a4ed0f70` | 2026-11-02 | 3-1 | `1b2b6e8734ca` | returned | failed | run_total 15.295 s, region_bytes 1.07374e+09 B, read_control_40mib 1.87 GB/s, read_gib_blocks 1.87 GB/s, read_mib2_blocks 1.87 GB/s, cpu_clock 494 MHz, l1d_tlb_refill_gib_blocks 262314, l2d_tlb_refill_gib_blocks 3, l2d_tlb_refill_mib2_blocks 513, dtlb_walk_gib_blocks 2, dtlb_walk_mib2_blocks 512, el0_cases_faulted 7, el0_cases_succeeded 6 |
 <!-- evidence-table:end -->
