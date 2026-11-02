@@ -197,9 +197,9 @@ static int ring(const unsigned char *descriptor, struct nbg_relocation *nn,
          * and constants) keeps an unpatched pointer word inside the first page, which the page tables
          * never map: the table builder refuses a region at device address 0 and every region it accepts starts
          * at or above its page size (checks/npu-mmu.c, "page zero"; checks/os-npu-service.c walks the runtime's
-         * own tables), and placed() requires buffers at device addresses of at least 4096. The ring stays disabled. */
+         * own tables), and placed() requires buffers at device addresses of at least NBG_ASSEMBLY_LOW_RESERVED. The ring stays disabled. */
         return slot[end_slot] == UINT32_MAX && !size &&
-            word(descriptor + (size_word == 20 ? 24 : 28)) < 0x1000 &&
+            word(descriptor + (size_word == 20 ? 24 : 28)) < NBG_ASSEMBLY_LOW_RESERVED &&
             (word(descriptor + (size_word + 1) * 4) & 0x03ffffff) == 0x03ffffff;
     }
     if (!size)
@@ -692,8 +692,8 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
             a.format != b.format || a.quantization != b.quantization ||
             a.logical_bytes != b.logical_bytes) return 0;
     }
-    if ((slot[WEIGHTS] == UINT32_MAX && word(image->nn + 20) >= 0x1000) ||
-        (slot[INPUT2] == UINT32_MAX && word(image->nn + 136) >= 0x1000)) return 0;
+    if ((slot[WEIGHTS] == UINT32_MAX && word(image->nn + 20) >= NBG_ASSEMBLY_LOW_RESERVED) ||
+        (slot[INPUT2] == UINT32_MAX && word(image->nn + 136) >= NBG_ASSEMBLY_LOW_RESERVED)) return 0;
     if (!ring(image->nn, nn, slot, source, INPUT, INPUT_END, 20) ||
         !ring(image->nn, nn, slot, source, OUTPUT, OUTPUT_END, 18) ||
         aliased(nn, slot, source, op.kind) ||
@@ -778,7 +778,7 @@ static inline __attribute__((always_inline)) int placed(const struct nbg_model *
             continue;
         }
         if (b[i].bytes != p->buffers[i].allocation_bytes || !a733_span_excl_nonempty(b[i].cpu, b[i].bytes) ||
-            ((uintptr_t)b[i].cpu & 4095) || !b[i].device || (b[i].device & 4095) ||
+            ((uintptr_t)b[i].cpu & 4095) || b[i].device < NBG_ASSEMBLY_LOW_RESERVED || (b[i].device & 4095) ||
             b[i].bytes > (UINT64_C(1) << 32) - b[i].device ||
             a733_extents_overlap_prechecked(b[i].device, b[i].bytes, 0x400000, 0x80000) ||
             !separate(b[i].cpu, b[i].bytes, out, out_bytes) ||

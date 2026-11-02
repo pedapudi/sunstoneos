@@ -27,7 +27,13 @@ void npu_graphs_init(void) {}
  * most k jobs in flight, for k = 1, 2, 4 ... up to twice the ring. The submit call answers 0 when the ring is full; each such
  * answer is counted. Record i holds k (input_bytes), the jobs (output_bytes), the counter ticks for all of them
  * (first_difference), the submit refusals (observed) and a check of the output at the end (status). */
+#ifndef QUEUE_JOBS
 #define QUEUE_JOBS 1000u
+#endif
+/* The largest in-flight limit of the sweep (default: twice the ring, so that the ring refuses). */
+#ifndef QUEUE_KMAX
+#define QUEUE_KMAX (2 * SS_NPU_QUEUE_MAX_DEPTH)
+#endif
 #define QUEUE_TIMEOUT_US 1000000u
 static void queue_fault(unsigned stage, uint32_t value) { ss_fail_value((0xb0u << 8) | stage, value); }
 /* The CPU clock record of the OS (ss_clock_info) as it is when read: the applied points of the little (Cortex-A55) and big
@@ -50,7 +56,12 @@ static _Noreturn void npu_graphs_queue_main(void)
     /* One tensor link chosen now, after the scheduler started: the output of the first resident graph feeds the input of the
      * second (the graph is the same one under two names, and it maps its input to an output of the same representation). */
     static const struct ss_npu_queue_edge link = {0, 0, 1, 0};
-    while ((opened = ss_npu_queue_open_linked(SS_NPU_QUEUE_MAX_DEPTH, &link, 1, &q)) != 1) {
+#ifdef NPU_GRAPHS_QUEUE_NO_LINK
+    const size_t links = 0;   /* an image with one resident graph has nothing to link */
+#else
+    const size_t links = 1;
+#endif
+    while ((opened = ss_npu_queue_open_linked(SS_NPU_QUEUE_MAX_DEPTH, &link, links, &q)) != 1) {
         if (opened < 0 || (ss_counter_ticks() - begin) / 24 > 3000000) queue_fault(1, (uint32_t)opened);
         ss_progress(); vTaskDelay(1);
     }
@@ -71,7 +82,7 @@ static _Noreturn void npu_graphs_queue_main(void)
     clock_words(&receipt.reserved[0], &receipt.reserved[1], &receipt.reserved[2]);   /* before the sweep */
     receipt.start = ss_counter_ticks();
     /* The last k is twice the ring: the ring, not k, then limits the jobs in flight and refuses the rest. */
-    for (unsigned k = 1; k <= 2 * SS_NPU_QUEUE_MAX_DEPTH; k *= 2, ++records) {
+    for (unsigned k = 1; k <= QUEUE_KMAX; k *= 2, ++records) {
         struct npu_graph_record *r = &receipt.graph[records];
         r->index = records; r->input_bytes = k; r->output_bytes = QUEUE_JOBS; r->status = NPU_GRAPH_NOT_RUN;
         unsigned submitted = 0, completed = 0, refused = 0;
@@ -96,6 +107,7 @@ static _Noreturn void npu_graphs_queue_main(void)
     }
     const unsigned sweeps = records;
     clock_words(&receipt.reserved[3], &receipt.reserved[4], &receipt.reserved[5]);   /* after the sweep */
+#ifndef NPU_GRAPHS_QUEUE_NO_LINK
     /* The link: only handle 1 has its input written. Handle 2 runs after it and reads handle 1's output as its input, so its
      * output equals the reference only if the link was made (its own input was never written and is zero). Record i holds
      * 1 link (input_bytes), 1 pair (output_bytes), the ticks of the pair (first_difference) and the wrong bytes of handle
@@ -140,6 +152,7 @@ static _Noreturn void npu_graphs_queue_main(void)
         if (r->status == NPU_GRAPH_MATCH) ++receipt.completed;
         ++records;
     }
+#endif
     /* The output after the last job equals the reference. */
     begin = ss_counter_ticks();
     int acquired;

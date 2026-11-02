@@ -170,6 +170,16 @@ def main():
     case('output overlaps the second input', 'deep',
          [(PATCH, g['deep'].patch_offset(3, 28) + 16, u32(104448)), (PATCH, g['deep'].patch_offset(3, 76) + 16, u32(110080))],
          [('nbg_assembly.c', 'aliased(nn, slot, source, op.kind) ||', '0 ||')])
+    # 4b. A stream-processor operation that keeps its result in the engine's scratch carries an offset in its output
+    # pointer word that no patch sets (the steps of a softmax over 92 positions in compiled attention layers hold 0x4220 to 0x1cee0). The low
+    # device range below NBG_ASSEMBLY_LOW_RESERVED is never given to a buffer (placed()), so such a word cannot reach a mapped
+    # byte: it is admitted, and a word at or above the range is refused.
+    low = g['sm64'].with_bytes(NN, g['sm64'].word_offset(1, 7), u32(0x4220))
+    assert admit(native, low.data), 'an unpatched output pointer inside the reserved low range is refused'
+    print('admitted: an unpatched output pointer word of 0x4220 (inside the reserved low device range)')
+    case('an unpatched output pointer word lies outside the reserved low device range', 'sm64',
+         [(NN, g['sm64'].word_offset(1, 7), u32(0x100000))],
+         [('nbg_assembly.c', 'word(descriptor + (size_word == 20 ? 24 : 28)) < NBG_ASSEMBLY_LOW_RESERVED &&', '1 &&')])
     # 5. Stream-processor programs and unseen graphs. There is no table of reviewed programs or of reviewed graphs: a
     # program the loader has never seen, and so a graph whose digest nobody listed, is admitted, because the engine
     # reaches memory only through the page tables (docs/designs/npu-loader-admission.md). The operand that places the
