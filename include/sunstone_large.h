@@ -12,13 +12,15 @@
 enum {
     SS_LARGE_WRITE = 1u << 0,    /* the application may write the region at EL0 */
     SS_LARGE_EXTENT = 1u << 1,   /* the source is a raw card extent (first_sector), not a file */
-    SS_LARGE_UNFILLED = 1u << 2  /* no source: the region is READY at once and its contents are whatever the memory held;
+    SS_LARGE_UNFILLED = 1u << 2, /* no source: the region is READY at once and its contents are whatever the memory held;
                                   * source_bytes, first_sector, the digest and the path are all zero */
+    SS_LARGE_HEAP = 1u << 3      /* with UNFILLED and WRITE: the application's C and C++ heap, the last record; the C library
+                                  * takes it and zeroes what it hands out */
 };
 struct ss_large_region {
     uint32_t index, flags;
     uint64_t bytes;              /* capacity: a multiple of 2 MiB */
-    uint64_t source_bytes;       /* exact length of the source; at most bytes */
+    uint64_t source_bytes;       /* exact length of the source; at most bytes; zero for the heap */
     uint64_t first_sector;       /* raw extent only */
     uint8_t sha256[32];          /* digest of the source bytes; all zero: the loader does not hash and READY follows the last byte */
     char path[SS_LARGE_PATH_BYTES];   /* file path from the root, NUL-padded; empty for an extent */

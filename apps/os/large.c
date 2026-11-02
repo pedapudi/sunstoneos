@@ -3,6 +3,8 @@
  * "sunstone_large_regions"; the usable upper memory comes from the board: the ranges that the DRAM
  * decode check passed. */
 #include "app_large.h"
+#include "application.h"
+#include "sunstone_app.h"
 #include "os_space.h"
 #include "app_region.h"
 #include "sunstone_notify.h"
@@ -12,23 +14,34 @@
 extern const struct ss_large_region __start_sunstone_large_regions[] __attribute__((weak));
 extern const struct ss_large_region __stop_sunstone_large_regions[] __attribute__((weak));
 
-/* The usable upper memory is what the installed kernel table maps: each level-1 slot from 0x80000000 that holds
- * the EL1-only non-global block. The table builder maps them only when the boot's DRAM decode check passed
+/* The usable upper memory is what the installed kernel tables map as the EL1-only non-global block: the 2 MiB blocks
+ * of level-1 slot 1 from 0x48000000 (the first 128 MiB are the window every space shares) and each level-1 slot from
+ * 0x80000000. The table builder maps them only when the boot's DRAM decode check passed
  * (platform/a733-smp-cached/memory.c), so an image whose check fails has no usable range. */
-static unsigned usable_ranges(const uint64_t *base_l1, struct app_region_range *out, unsigned capacity)
+#define KERNEL_BLOCK(pa) ((pa) | APP_PTE_VALID | APP_PTE_ATTR_WB | APP_PTE_SH_INNER | APP_PTE_AF | APP_PTE_NG | \
+                          APP_PTE_PXN | APP_PTE_UXN)
+static int add_range(struct app_region_range *out, unsigned *count, unsigned capacity, uint64_t base, uint64_t bytes)
+{
+    if (*count && out[*count - 1].base + out[*count - 1].bytes == base) out[*count - 1].bytes += bytes;
+    else if (*count < capacity) out[(*count)++] = (struct app_region_range){base, bytes};
+    else return 0;
+    return 1;
+}
+static unsigned usable_ranges(const uint64_t *base_l1, const uint64_t *base_l2, struct app_region_range *out, unsigned capacity)
 {
     unsigned count = 0;
+    for (uint64_t pa = APP_REGION_FLOOR; pa < APP_REGION_BASE; pa += APP_REGION_BLOCK)
+        if (base_l2[(pa - UINT64_C(0x40000000)) / APP_REGION_BLOCK] == KERNEL_BLOCK(pa) &&
+            !add_range(out, &count, capacity, pa, APP_REGION_BLOCK)) return 0;
     for (unsigned slot = 2; slot < 13; ++slot) {
         uint64_t block = (UINT64_C(1) << 30) * slot;
-        int mapped = base_l1[slot] == (block | APP_PTE_VALID | APP_PTE_ATTR_WB | APP_PTE_SH_INNER | APP_PTE_AF | APP_PTE_NG |
-                                       APP_PTE_PXN | APP_PTE_UXN);
-        if (!mapped) continue;
-        if (count && out[count - 1].base + out[count - 1].bytes == block) out[count - 1].bytes += UINT64_C(1) << 30;
-        else if (count < capacity) out[count++] = (struct app_region_range){block, UINT64_C(1) << 30};
-        else return 0;
+        if (base_l1[slot] == KERNEL_BLOCK(block) && !add_range(out, &count, capacity, block, UINT64_C(1) << 30)) return 0;
     }
     return count;
 }
+/* The allocator hook of the C library (runtime/newlib.c); absent in an image without one. */
+extern int runtime_heap_attach(uintptr_t base, size_t bytes) __attribute__((weak));
+
 /* The board's report of an admitted region, for consoles that show it; the default is silent. */
 __attribute__((weak)) void os_large_report(const struct large_slot *slot, const struct app_space *space)
 { (void)slot; (void)space; }
@@ -39,6 +52,7 @@ static uint16_t owner_asid;
 /* Sized by the image's generated tables from the manifest. */
 extern const unsigned os_large_capacity;
 extern struct large_slot os_large_slot_storage[];
+extern const unsigned os_ledger_capacity;
 extern struct app_region_entry os_large_entry_storage[];
 static struct app_region_ledger ledger;
 static struct app_region_range usable_storage[APP_REGION_SLOTS];
@@ -49,6 +63,8 @@ static struct large_slot *const slots = os_large_slot_storage;
 static struct app_space space;
 static unsigned slot_count;
 static int admitted;
+static void *main_stack;
+void *os_large_main_stack(void) { return main_stack; }
 
 static void install_space(uint64_t kernel_ttbr);
 /* The eight-core images walk their tables without the data caches (TCR_EL1 IRGN0 = ORGN0 = 0,
@@ -68,24 +84,58 @@ const struct app_space *os_large_space(void) { return admitted ? &space : 0; }
 int os_large_prepare(void)
 {
     unsigned count = __start_sunstone_large_regions ? (unsigned)(__stop_sunstone_large_regions - __start_sunstone_large_regions) : 0;
-    if (!count) return 1;
+    /* The manifest's own regions that the build placed in the slot 1 area belong to this application's space. */
+    const struct ss_manifest *manifest = ss_application.manifest;
+    unsigned placed = 0;
+    for (unsigned i = 0; manifest && i < manifest->region_count; ++i)
+        placed += manifest->regions[i].address >= APP_REGION_FLOOR && manifest->regions[i].address < APP_REGION_BASE;
     if (admitted) return 0;
     uint64_t ttbr;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
     /* The table's pages may be unmapped at EL1, so its entries come from the platform's copy (os_space.h). */
-    static uint64_t base_l1[512];
+    static uint64_t base_l1[512], base_l2[512];
     os_kernel_l1_head(base_l1);
+    os_kernel_l2_slot1(base_l2);
     struct app_region_range usable[APP_REGION_SLOTS];
-    unsigned ranges = usable_ranges(base_l1, usable, APP_REGION_SLOTS);
+    unsigned ranges = usable_ranges(base_l1, base_l2, usable, APP_REGION_SLOTS);
+    /* An application with upper memory to use also takes its main stack from it, with a guard block below. */
+    if (!count && !placed && !(manifest && ranges)) return 1;
     uint64_t mmfr0, tcr;
     __asm__ volatile("mrs %0, id_aa64mmfr0_el1\n mrs %1, tcr_el1" : "=r"(mmfr0), "=r"(tcr));
     app_asid_pool_init(&asids, mmfr0, tcr);
     owner_asid = app_asid_alloc(&asids);
     if (!owner_asid || !ranges || count > os_large_capacity ||
-        app_region_ledger_init(&ledger, usable_storage, APP_REGION_SLOTS, os_large_entry_storage, os_large_capacity, usable, ranges)) return 0;
+        app_region_ledger_init(&ledger, usable_storage, APP_REGION_SLOTS, os_large_entry_storage, os_ledger_capacity, usable, ranges)) return 0;
+    for (unsigned i = 0; manifest && i < manifest->region_count; ++i) {
+        const struct ss_region *r = &manifest->regions[i];
+        if (r->address < APP_REGION_FLOOR || r->address >= APP_REGION_BASE) continue;
+        if (app_region_acquire_at(&ledger, owner_asid, r->address, r->bytes,
+                                  APP_REGION_READ | (r->access & SS_ACCESS_WRITE ? APP_REGION_WRITE : 0))) return 0;
+    }
     if (large_admit(&ledger, owner_asid, __start_sunstone_large_regions, count, slots, os_large_capacity)) return 0;
+    /* The main stack: a 2 MiB block that the guard owner holds below it, so that an overflow is an EL0 fault in memory
+     * no space maps. The stack is at the bottom of its own block. Where no extent is free the static stack stays. */
+    if (manifest) {
+        uint64_t base, bytes;
+        if (app_region_acquire(&ledger, APP_REGION_GUARD_OWNER, 2 * APP_REGION_BLOCK, APP_REGION_READ, &base, &bytes) == 0) {
+            (void)app_region_release(&ledger, APP_REGION_GUARD_OWNER, base);
+            if (app_region_acquire_at(&ledger, APP_REGION_GUARD_OWNER, base, APP_REGION_BLOCK, APP_REGION_READ) == 0 &&
+                app_region_acquire_at(&ledger, owner_asid, base + APP_REGION_BLOCK, manifest->stack_bytes,
+                                      APP_REGION_READ | APP_REGION_WRITE) == 0)
+                main_stack = (void *)(uintptr_t)(base + APP_REGION_BLOCK);
+            else if (ledger.entry)
+                for (unsigned i = 0; i < ledger.capacity; ++i)        /* give back what the pair took */
+                    if (ledger.entry[i].owner == APP_REGION_GUARD_OWNER) ledger.entry[i].owner = 0;
+        }
+    }
     arena = (struct app_table_arena){arena_pages, (uintptr_t)arena_pages, APP_SPACE_PAGES, 0};
-    if (app_space_build(&space, &arena, base_l1, &ledger, owner_asid)) {
+    int built = app_space_build_l2(&space, &arena, base_l1, base_l2, &ledger, owner_asid, owner_asid, 0) == 0;
+    /* The heap record, when the manifest has one, becomes the C library's heap; an image whose library cannot
+     * take it refuses the application rather than run with a heap of another size. */
+    for (unsigned i = 0; built && i < count; ++i)
+        if ((slots[i].flags & SS_LARGE_HEAP) && !(runtime_heap_attach && runtime_heap_attach((uintptr_t)slots[i].base, (size_t)slots[i].bytes)))
+            built = 0;
+    if (!built) {
         for (unsigned i = 0; i < count; ++i) if (slots[i].bytes) app_region_release(&ledger, owner_asid, slots[i].base);
         memset(slots, 0, sizeof *slots * count);
         return 0;

@@ -2,6 +2,7 @@
  * USB, capture, thermal and clock service tasks. */
 #include "os.h"
 #include "application.h"
+#include "os_space.h"
 #include "sunstone_notify.h"
 #include "../board/application.h"
 #include "../board/session.h"
@@ -399,7 +400,7 @@ int os_application_prepare(void)
 #endif
     atomic_store_explicit(&prepared,1,memory_order_release);
     main_task=xTaskCreateStaticAffinitySet(main_entry,m->name,m->stack_bytes/sizeof(StackType_t),NULL,m->priority,
-        ss_application.stack,ss_application.task,(UBaseType_t)1<<grant.main_core);
+        os_large_main_stack()?(StackType_t *)os_large_main_stack():ss_application.stack,ss_application.task,(UBaseType_t)1<<grant.main_core);
     if(!main_task)return 0;
     ss_large_attach(main_task);     /* the main task runs in the application's address space when it has regions */
 #ifdef SUNSTONE_SMP_NEWLIB

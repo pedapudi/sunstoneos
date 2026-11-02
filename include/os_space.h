@@ -19,6 +19,13 @@ extern uint8_t os_space_active;
  * slot from 16 up is zero. */
 #define OS_KERNEL_L1_HEAD 16
 void os_kernel_l1_head(uint64_t out[OS_KERNEL_L1_HEAD]);
+/* The 512 level-2 entries of level-1 slot 1 (0x40000000 to 0x80000000), copied the same way, so that a space can own
+ * blocks above the 128 MiB that EL0 reaches in every space (app_space_build_l2). */
+#define OS_KERNEL_L2_ENTRIES 512
+void os_kernel_l2_slot1(uint64_t out[OS_KERNEL_L2_ENTRIES]);
+/* The main task's stack when the OS took it from the application memory ledger with an unmapped guard block below it
+ * (apps/os/large.c), or null when the image keeps its static stack. */
+void *os_large_main_stack(void);
 static inline void os_space_switch_in(const void *tag)
 {
     if (!os_space_active) return;
@@ -26,4 +33,12 @@ static inline void os_space_switch_in(const void *tag)
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(have));
     if (have != want) __asm__ volatile("msr ttbr0_el1, %0" :: "r"(want) : "memory");
 }
+
+/* traceTASK_CREATE: the new task takes the creator's tag, so a task that the application creates runs in the
+ * application's space with no call of its own. The creator is the task running on the creating core, which is
+ * absent (null) while boot code creates tasks before the scheduler starts. A macro, because the task control
+ * block is private to the kernel files that expand it. A task of the OS is created from boot code or from an
+ * OS task with no tag, and inherits none. */
+#define os_space_inherit(creator, created) \
+    do { if ((creator) && !(created)->pxTaskTag) (created)->pxTaskTag = (creator)->pxTaskTag; } while (0)
 #endif

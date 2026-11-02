@@ -30,6 +30,8 @@ static uint64_t level1[512] __attribute__((section(".tables"), aligned(4096)));
 static uint64_t level2[512] __attribute__((section(".tables"), aligned(4096)));
 static uint64_t level1_head[OS_KERNEL_L1_HEAD];
 void os_kernel_l1_head(uint64_t out[OS_KERNEL_L1_HEAD]) { for (unsigned i = 0; i < OS_KERNEL_L1_HEAD; ++i) out[i] = level1_head[i]; }
+static uint64_t level2_copy[OS_KERNEL_L2_ENTRIES];
+void os_kernel_l2_slot1(uint64_t out[OS_KERNEL_L2_ENTRIES]) { for (unsigned i = 0; i < OS_KERNEL_L2_ENTRIES; ++i) out[i] = level2_copy[i]; }
 static uint64_t tick_interval, next_tick;
 static uint32_t cpu_online;
 extern void _start(void);
@@ -180,11 +182,16 @@ void platform_init(void) {
      * that carry an ASID (nG), as the A733 tables map it behind the decode check. */
     for (unsigned i = 2; i < 5; ++i)
         level1[i] = ((uint64_t)i << 30) | (1UL << 54) | (1UL << 53) | (1UL << 11) | (1UL << 10) | (3UL << 8) | (1UL << 2) | 1;
+    /* Level-1 slot 1 above the first 256 MiB, which the virtual board keeps EL0 read-write for its RAM disk and
+     * scenario pages: the same EL1-only blocks up to 0x79000000, where the A733 profile stops mapping DRAM. */
+    for (unsigned i = 128; i < (0x79000000UL - 0x40000000UL) / 0x200000UL; ++i)
+        level2[i] = (0x40000000UL + i * 0x200000UL) | (1UL << 54) | (1UL << 53) | (1UL << 11) | (1UL << 10) | (3UL << 8) | (1UL << 2) | 1;
 #endif
     level2[(0x41c00000UL - 0x40000000UL) >> 21] = 0;
     for (unsigned i = 0; i < OS_KERNEL_L1_HEAD; ++i) level1_head[i] = level1[i];
     /* Code is read-only at both EL0 and EL1; data lies in later blocks. */
     level2[8] = 0x41000000UL | (1UL << 10) | (3UL << 8) | (3UL << 6) | (1UL << 2) | 1;
+    for (unsigned i = 0; i < OS_KERNEL_L2_ENTRIES; ++i) level2_copy[i] = level2[i];
     __asm__ volatile("dsb sy" ::: "memory");
     configASSERT(read32(GICD) & (1U << 6));
     write32(GICD, (1U << 6) | (1U << 4)); wait_clear(GICD, 1U << 31);

@@ -166,6 +166,46 @@ static struct ss_large_region record(unsigned index, uint64_t bytes, const char 
     return r;
 }
 
+/* The heap record (SS_LARGE_HEAP): the last record, read-write, without a source, ready at admission. */
+static void heap_cases(struct app_region_range *all)
+{
+    struct app_region_ledger l;
+    struct large_slot slots[8];
+    struct ss_large_region heap = {.index = 0, .flags = SS_LARGE_HEAP | SS_LARGE_UNFILLED | SS_LARGE_WRITE, .bytes = 8 * MIB};
+    assert(ss_large_records_valid(&heap, 1));
+    assert(linit(&l, 0, 8, all, 1) == 0 && large_admit(&l, 3, &heap, 1, slots, 8) == APP_REGION_OK);
+    assert(slots[0].base == 0x80000000 && slots[0].bytes == 8 * MIB && slots[0].state == SS_LARGE_READY &&
+           slots[0].flags == heap.flags && app_region_owner_of(&l, slots[0].base + 8 * MIB - 1) == 3);
+    /* After a declared region, the heap is the last record; a file region keeps its pending state. */
+    struct ss_large_region both[2] = {record(0, GIB, "/a.bin"), heap};
+    both[1].index = 1;
+    assert(ss_large_records_valid(both, 2) && linit(&l, 0, 8, all, 1) == 0 && large_admit(&l, 4, both, 2, slots, 8) == APP_REGION_OK);
+    assert(slots[0].state == SS_LARGE_PENDING && slots[1].state == SS_LARGE_READY && slots[1].base == 0xc0000000);
+    /* Refusals: each changes nothing. */
+    struct ss_large_region r[2];
+    int refusals = 0;
+#define REFUSE_HEAP(edit) do { memcpy(r, both, sizeof r); edit; assert(!ss_large_records_valid(r, 2)); \
+        assert(linit(&l, 0, 8, all, 1) == 0 && large_admit(&l, 6, r, 2, slots, 8) == APP_REGION_INVALID); ++refusals; } while (0)
+    REFUSE_HEAP(r[1].flags = SS_LARGE_HEAP | SS_LARGE_UNFILLED);   /* read-only */
+    REFUSE_HEAP(r[1].flags |= SS_LARGE_EXTENT);                /* a source kind */
+    REFUSE_HEAP(r[1].flags = SS_LARGE_HEAP | SS_LARGE_WRITE);   /* the heap without UNFILLED */
+    REFUSE_HEAP(r[1].source_bytes = 4096);                    /* a source */
+    REFUSE_HEAP(r[1].sha256[7] = 1);                          /* a digest */
+    REFUSE_HEAP(r[1].path[0] = '/');                          /* a path */
+    REFUSE_HEAP(r[1].first_sector = 5);
+    REFUSE_HEAP(r[1].bytes = 8 * MIB + 4096);                 /* not a multiple of 2 MiB */
+    REFUSE_HEAP(r[0] = heap; r[0].index = 0);                 /* the heap is not the last record */
+    REFUSE_HEAP(r[0] = heap; r[0].index = 0; r[1] = heap; r[1].index = 1);   /* two heaps */
+    assert(refusals == 10 && app_region_free_bytes(&l) == 11 * GIB);
+    /* The heap counts in the total: a heap that does not fit the upper memory is refused. */
+    struct ss_large_region huge = heap;
+    huge.bytes = 12 * GIB;
+    assert(!ss_large_records_valid(&huge, 1));
+    huge.bytes = 6 * GIB;
+    assert(linit(&l, 0, 8, all, 1) == 0 && large_admit(&l, 3, &huge, 1, slots, 8) == APP_REGION_OK);
+    assert(large_admit(&l, 5, &huge, 1, slots, 8) == APP_REGION_NO_SPACE && app_region_free_bytes(&l) == 5 * GIB);
+}
+
 /* Large-region records: validation and all-or-nothing admission through the ledger. */
 static void large_cases(void)
 {
@@ -228,7 +268,7 @@ static void large_cases(void)
     assert(linit(&l, 0, 8, all, 1) == 0);
     REFUSE(r[1].index = 0);                                  /* duplicate index */
     REFUSE(r[1].index = 2);                                  /* index beyond the count */
-    REFUSE(r[0].flags = 4);                                  /* unknown flag */
+    REFUSE(r[0].flags = 8);                                  /* unknown flag */
     REFUSE(r[0].bytes = GIB + 4096);                         /* not a multiple of 2 MiB */
     REFUSE(r[0].bytes = 0);
     REFUSE(r[0].bytes = 12 * GIB);                           /* beyond upper memory */
@@ -245,6 +285,78 @@ static void large_cases(void)
     REFUSE(strcpy(r[1].path, "/x"));                          /* an extent with a path */
     REFUSE(r[1].first_sector = 0);                            /* an extent at the partition table */
     assert(refusals == 16 && app_region_free_bytes(&l) == 11 * GIB);
+    heap_cases(all);
+}
+
+/* Level-1 slot 1 above the 128 MiB that EL0 reaches in every space: a space that owns bytes there gets its own copy of
+ * the kernel's level-2 table. */
+static void slot1_cases(void)
+{
+    build_kernel(0);
+    for (unsigned j = 64; j < 512; ++j) kernel_l2[j] = A733_EL1_DRAM_BLOCK(GIB + (uint64_t)j * 0x200000);   /* mapped after the decode check */
+    struct app_region_range usable[] = {{APP_REGION_FLOOR, 0x31000000}, {APP_REGION_BASE, 11 * GIB}};
+    struct app_region_ledger l;
+    assert(linit(&l, 0, 8, usable, 2) == 0 && app_region_free_bytes(&l) == 11 * GIB + 0x31000000);
+    uint64_t a0, an, b0, bn;
+    /* The first region takes the smallest gap that holds it: the gap in slot 1 (896 MiB) is smaller than slot 2 on. */
+    assert(app_region_acquire(&l, 1, 6 * MIB, APP_REGION_READ | APP_REGION_WRITE, &a0, &an) == 0);
+    assert(a0 == APP_REGION_FLOOR && an == 6 * MIB);
+    assert(app_region_acquire(&l, 2, 4 * MIB, APP_REGION_READ, &b0, &bn) == 0 && b0 == a0 + 6 * MIB);
+    struct app_space sa, sb, sn;
+    arena.used = 0;
+    assert(app_space_build_l2(&sa, &arena, base_l1, kernel_l2, &l, 1, 1, 0) == 0 && sa.tables == 2);
+    assert(app_space_build_l2(&sb, &arena, base_l1, kernel_l2, &l, 2, 2, 0) == 0 && sb.tables == 2);
+    assert(app_space_build_l2(&sn, &arena, base_l1, kernel_l2, &l, 3, 3, 0) == 0 && sn.tables == 1);   /* owns nothing there: no copy */
+    uint64_t ta = app_space_ttbr0(&sa), tb = app_space_ttbr0(&sb), tn = app_space_ttbr0(&sn);
+    /* The owner reads and writes its first and last byte; the blocks around it fault at EL0 with a permission fault. */
+    EXPECT(walk(ta, a0, 0), FAULT_NONE); EXPECT(walk(ta, a0, 1), FAULT_NONE);
+    EXPECT(walk(ta, a0 + 6 * MIB - 1, 1), FAULT_NONE);
+    EXPECT(walk(ta, a0 - 1, 0), FAULT_NONE);                       /* below the floor: the window every space shares */
+    EXPECT(walk(ta, a0 + 6 * MIB, 0), FAULT_PERMISSION);           /* the next owner's block */
+    EXPECT(walk(ta, a0 + 10 * MIB, 0), FAULT_PERMISSION);          /* unowned, kernel-only */
+    /* The second owner has its blocks read-only, and none of the first owner's. */
+    EXPECT(walk(tb, b0, 0), FAULT_NONE); EXPECT(walk(tb, b0, 1), FAULT_PERMISSION);
+    EXPECT(walk(tb, a0, 0), FAULT_PERMISSION); EXPECT(walk(tn, a0, 0), FAULT_PERMISSION); EXPECT(walk(tn, b0, 0), FAULT_PERMISSION);
+    /* EL1 keeps read and write access to the owners' blocks, except to the read-only one. */
+    EXPECT(walk(ta, a0, 3), FAULT_NONE); EXPECT(walk(tn, a0, 3), FAULT_NONE); EXPECT(walk(tn, a0, 2), FAULT_NONE);
+    /* Below the floor every space is byte-identical to the kernel's table, entry by entry. */
+    const uint64_t *copy = arena_pages[1];
+    assert(!memcmp(copy, kernel_l2, 64 * sizeof(uint64_t)));
+    assert(copy[(a0 - GIB) / 0x200000 + 6] == kernel_l2[(a0 - GIB) / 0x200000 + 6]);   /* an unowned block is the kernel's */
+    for (uint64_t va = 0x40000000; va < APP_REGION_FLOOR; va += 0x200000) {
+        struct result k = walk(root_pa, va, 0), r = walk(ta, va, 0);
+        assert(k.fault == r.fault && k.pa == r.pa);
+    }
+    /* Refusals leave the arena as it was: no table for slot 1, a block the kernel leaves unmapped, a bad level-1 entry. */
+    unsigned used = arena.used;
+    assert(app_space_build_l2(&sa, &arena, base_l1, 0, &l, 1, 4, 0) == APP_REGION_INVALID && arena.used == used);
+    kernel_l2[(a0 - GIB) / 0x200000] = 0;
+    assert(app_space_build_l2(&sa, &arena, base_l1, kernel_l2, &l, 1, 4, 0) == APP_REGION_INVALID && arena.used == used);
+    kernel_l2[(a0 - GIB) / 0x200000] = A733_EL1_DRAM_BLOCK(a0);
+    assert(app_space_build(&sa, &arena, base_l1, &l, 1) == APP_REGION_INVALID && arena.used == used);   /* the old entry point has no slot-1 table */
+    /* A region at an address the build chose: the exact extent, refused when it is not free or not usable. */
+    arena.used = 0;
+    assert(linit(&l, 0, 8, usable, 2) == 0);
+    assert(app_region_acquire_at(&l, 1, APP_REGION_FLOOR + 16 * MIB, 5 * MIB, APP_REGION_READ | APP_REGION_WRITE) == 0);
+    assert(app_region_owner_of(&l, APP_REGION_FLOOR + 16 * MIB) == 1 && app_region_owner_of(&l, APP_REGION_FLOOR + 22 * MIB - 1) == 1 &&
+           app_region_owner_of(&l, APP_REGION_FLOOR + 22 * MIB) == 0);                   /* rounded up to 2 MiB */
+    assert(app_region_acquire_at(&l, 2, APP_REGION_FLOOR + 20 * MIB, 2 * MIB, APP_REGION_READ) == APP_REGION_NO_SPACE);   /* overlaps */
+    assert(app_region_acquire_at(&l, 2, APP_REGION_BASE - 2 * MIB, 2 * MIB, APP_REGION_READ) == APP_REGION_NO_SPACE);    /* not usable: past 0x79000000 */
+    assert(app_region_acquire_at(&l, 2, APP_REGION_FLOOR + 1, 2 * MIB, APP_REGION_READ) == APP_REGION_INVALID);
+    assert(app_region_acquire_at(&l, 2, 0x44000000, 2 * MIB, APP_REGION_READ) == APP_REGION_INVALID);                    /* the window */
+    assert(app_region_acquire_at(&l, 2, APP_REGION_FLOOR, 2 * MIB, APP_REGION_WRITE) == APP_REGION_INVALID);
+    uint64_t d0, dn;
+    assert(app_region_acquire(&l, 3, 4 * MIB, APP_REGION_READ, &d0, &dn) == 0 && d0 == APP_REGION_FLOOR);   /* the first fit skips the extent */
+    /* A region that spans slot 1 into slot 2 maps in both. */
+    uint64_t c0, cn;
+    assert(app_region_acquire(&l, 4, 900 * MIB, APP_REGION_READ | APP_REGION_WRITE, &c0, &cn) == 0 && c0 >= a0 + 10 * MIB);
+    arena.used = 0;
+    struct app_space sc;
+    assert(app_space_build_l2(&sc, &arena, base_l1, kernel_l2, &l, 4, 4, 0) == 0);
+    uint64_t tc = app_space_ttbr0(&sc);
+    EXPECT(walk(tc, c0, 1), FAULT_NONE); EXPECT(walk(tc, c0 + cn - 1, 1), FAULT_NONE);
+    EXPECT(walk(tc, c0 + cn, 0), FAULT_PERMISSION);
+    arena.used = 0;
 }
 
 int main(void)
@@ -476,7 +588,7 @@ int main(void)
         struct { uint64_t mmfr, tcr; unsigned limit; } widths[] = {
             {mmfr_8, 0, 255}, {mmfr_8, as_set, 255},       /* an 8-bit ASID never uses the upper byte */
             {mmfr_16, 0, 255},                             /* 16 bits in the hardware, AS clear: the upper byte is ignored */
-            {mmfr_16, as_set, 65535},
+            {mmfr_16, as_set, 65534},                          /* 65535 owns the guard blocks */
             {mmfr_16 | 0x10, as_set, 255},                 /* an ASIDBits value other than 0 or 2 is not 16 bits */
         };
         for (unsigned w = 0; w < sizeof widths / sizeof widths[0]; ++w) {
@@ -495,6 +607,7 @@ int main(void)
         assert((app_space_ttbr0(&wide) >> 48) == 0x1234 && (app_space_ttbr0(&wide) & APP_PTE_ADDR_MASK) == wide.root_physical);
     }
     large_cases();
+    slot1_cases();
     puts("app-region host check passed");
     return 0;
 }

@@ -13,7 +13,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define APP_REGION_BASE UINT64_C(0x80000000)       /* first byte of upper memory */
+#define APP_REGION_BASE UINT64_C(0x80000000)       /* first byte of upper memory: the first level-1 slot with no EL0 mapping */
+#define APP_REGION_FLOOR UINT64_C(0x48000000)      /* lowest byte a usable range may start at: the end of the 128 MiB that EL0 reaches in every space */
 #define APP_REGION_LIMIT UINT64_C(0x340000000)     /* end of the 12 GiB map */
 #define APP_REGION_BLOCK UINT64_C(0x200000)        /* 2 MiB: smallest extent */
 #define APP_REGION_GIB UINT64_C(0x40000000)
@@ -23,8 +24,8 @@
  * APP_SPACE_PAGES pages: the root and one table per slot. The number of regions is bounded by the memory:
  * each takes at least one 2 MiB block. A ledger holds the regions the manifests declare; the caller gives it
  * storage for that many, which the image sizes at build time from the manifests. */
-#define APP_REGION_SLOTS 11u
-#define APP_REGION_MAX_REGIONS ((APP_REGION_LIMIT - APP_REGION_BASE) / APP_REGION_BLOCK)
+#define APP_REGION_SLOTS 12u
+#define APP_REGION_MAX_REGIONS ((APP_REGION_LIMIT - APP_REGION_FLOOR) / APP_REGION_BLOCK)
 #define APP_SPACE_PAGES (1u + APP_REGION_SLOTS)
 
 enum app_region_status {
@@ -37,6 +38,9 @@ enum app_region_status {
 };
 
 enum { APP_REGION_READ = 1, APP_REGION_WRITE = 2 };   /* EL0 access declared */
+
+/* The owner of a guard block: memory that an application's space never maps, kept from every other region. */
+#define APP_REGION_GUARD_OWNER 0xffffu
 
 struct app_region_range { uint64_t base, bytes; };
 
@@ -54,7 +58,7 @@ struct app_region_ledger {
 };
 
 /* Admit the upper-memory ranges that the DRAM decode check passed. Every range
- * is 2 MiB-aligned and inside APP_REGION_BASE..APP_REGION_LIMIT; the list is
+ * is 2 MiB-aligned and inside APP_REGION_FLOOR..APP_REGION_LIMIT; the list is
  * sorted and disjoint. No ranges (the check failed) leaves every later
  * acquire refused with APP_REGION_NO_SPACE. Returns 0 or APP_REGION_INVALID. */
 int app_region_ledger_init(struct app_region_ledger *, struct app_region_range *usable_storage, unsigned usable_capacity,
@@ -66,6 +70,9 @@ int app_region_ledger_init(struct app_region_ledger *, struct app_region_range *
  * smaller regions take the smallest free gap. */
 int app_region_acquire(struct app_region_ledger *, uint16_t owner, uint64_t bytes, unsigned access,
                        uint64_t *base_out, uint64_t *bytes_out);
+/* Reserve exactly [base, base + bytes rounded up to 2 MiB) for owner: a region whose address the build chose. Refused
+ * with APP_REGION_NO_SPACE when the extent is not inside one usable range or overlaps an entry. */
+int app_region_acquire_at(struct app_region_ledger *, uint16_t owner, uint64_t base, uint64_t bytes, unsigned access);
 int app_region_release(struct app_region_ledger *, uint16_t owner, uint64_t base);
 /* Owner (ASID) of the byte at pa, or 0 when no application holds it. A DMA
  * master's grant check asks this before it maps the extent. */
@@ -128,6 +135,13 @@ int app_space_build(struct app_space *, struct app_table_arena *, const uint64_t
 #define APP_SPACE_NO_GIB_BLOCKS 1u
 int app_space_build_view(struct app_space *, struct app_table_arena *, const uint64_t base_l1[512],
                          const struct app_region_ledger *, uint16_t owner, uint16_t asid, unsigned flags);
+/* The same for a ledger that has ranges below APP_REGION_BASE, in level-1 slot 1 above APP_REGION_FLOOR. Slot 1 is a
+ * table shared by every space; a space that owns bytes there gets its own copy of that level-2 table (one more page),
+ * made from base_l2, the kernel's 512 level-2 entries of slot 1: the 64 blocks below the floor keep the kernel's
+ * entries, and each block the owner holds above it becomes readable (and writable) at EL0. Every other block above the
+ * floor must be the kernel's EL1-only block with nG set, or unmapped. A null base_l2 refuses any region in slot 1. */
+int app_space_build_l2(struct app_space *, struct app_table_arena *, const uint64_t base_l1[512], const uint64_t base_l2[512],
+                       const struct app_region_ledger *, uint16_t owner, uint16_t asid, unsigned flags);
 /* The TTBR0_EL1 word that installs the space: table base and ASID in bits 63:48. */
 static inline uint64_t app_space_ttbr0(const struct app_space *s)
 { return s->root_physical | ((uint64_t)s->asid << 48); }

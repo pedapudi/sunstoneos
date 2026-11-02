@@ -219,7 +219,7 @@ class Image:
                  (generated / 'wrap.c', ())] + [(ROOT / s, ()) for s in sources]
         return generated, units, '--wrap=%s_main' % cname
 
-    def build(self, application, services_source=None, define=(), cache=None):
+    def build(self, application, services_source=None, define=(), cache=None, wraps=()):
         """Link the image; returns the ELF path."""
         generated, app_units, wrap = application
         k = self.prepare_kernel()
@@ -236,7 +236,7 @@ class Image:
         units = [(self.services_source if u[0] == ROOT / 'apps/os/services.c' else u[0], u[1]) for u in units]
         objects = self.compile_all(units, generated)
         elf = self.work / 'os.elf'
-        done = run([LLD, '--error-limit=0', '-nostdlib', '-static', '--gc-sections', wrap,
+        done = run([LLD, '--error-limit=0', '-nostdlib', '-static', '--gc-sections', wrap, *['--wrap=' + w for w in wraps],
                     *(['--wrap=vApplicationIRQHandler'] if self.latency else []),
                     '-T', ROOT / 'platform/qemu-os/link.ld', '-Map', self.work / 'os.map',
                     '-o', elf, *objects], self.log)
@@ -364,7 +364,7 @@ def large_manifest_path(path, digest, file, with_digest=True):
                 "large_regions": [{"name": "weights", "bytes": 1 << 30, "source_bytes": len(file), "access": ["read"],
                                    "file": "/sunstone-test/sunstone-region-test.bin", **({"sha256": digest} if with_digest else {})}],
                 "deadlines": {"run_us": 2000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
-                "output_limit": 32}
+                "output_limit": 64}
     Path(path).write_text(json.dumps(manifest, indent=2) + '\n')
     return path
 
@@ -583,10 +583,40 @@ def main():
                                         ROOT / 'apps/storage-write-test/manifest.json')
         return image.build(application)
 
+    def build_storage_write_space():
+        """The storage-write image with the upper memory mapped, so that the application has an address space and its
+        main task a tag; the owner is started by that task's call."""
+        image = Image(out / 'build-storage-write-space', extra_defines=['-DQEMU_OS_UPPER=1', '-DQEMU_OS_SD_OWNER=1'],
+                      extra_sources=['apps/os/sd_owner.c', 'platform/qemu-os/sd_hw.c', 'drivers/storage/a733_storage_bounds.c'])
+        application = image.application('storage-write', ['apps/storage-write-test/main.c', 'drivers/storage/fat32_rw.c',
+                                                           'apps/storage-write-test/sha256_ce.S'],
+                                        ROOT / 'apps/storage-write-test/manifest.json')
+        return image.build(application)
+
     def build_notify():
         """An application that is given the OS's notifications while it waits (docs/notifications.md)."""
         image = Image(out / 'build-notify')
         application = image.application('notify-test', ['checks/qemu-os/notify-main.c'], ROOT / 'checks/qemu-os/notify-manifest.json')
+        return image.build(application)
+
+    def build_heap(name, manifest):
+        """An application whose heap is above the linked limit, so that the ledger serves it (step 1 of
+        docs/designs/application-memory-layout.md). The C library's sbrk is linked in; its allocator is not."""
+        image = Image(out / name, extra_defines=['-DQEMU_OS_UPPER=1'], extra_sources=['runtime/newlib.c'])
+        application = image.application('heap-test', ['checks/qemu-os/heap-main.c'], manifest)
+        return image.build(application)
+
+    def build_heap_early(name, manifest):
+        """The same application, with a call of sbrk before the admission, as a static constructor would make."""
+        image = Image(out / name, extra_defines=['-DQEMU_OS_UPPER=1'],
+                      extra_sources=['runtime/newlib.c', 'checks/qemu-os/heap-early.c'])
+        application = image.application('heap-test', ['checks/qemu-os/heap-main.c'], manifest)
+        return image.build(application, wraps=['os_large_prepare'])
+
+    def build_slot1():
+        """An application with a manifest region in level-1 slot 1 above the EL0 window."""
+        image = Image(out / 'build-slot1', extra_defines=['-DQEMU_OS_UPPER=1'])
+        application = image.application('slot1-test', ['checks/qemu-os/slot1-main.c'], ROOT / 'checks/qemu-os/slot1-manifest.json')
         return image.build(application)
 
     def build_facts():
@@ -621,7 +651,13 @@ def main():
         (out / 'large-6g-manifest.json').write_text(json.dumps(manifest_6g))
         large_6g_elf = pool.submit(build_6g, 'build-large-6g', out / 'large-6g-manifest.json')
         storage_write_elf = pool.submit(build_storage_write)
+        heap_elf = pool.submit(build_heap, 'build-heap', ROOT / 'checks/qemu-os/heap-manifest.json')
+        heap_big_elf = pool.submit(build_heap, 'build-heap-too-big', ROOT / 'checks/qemu-os/heap-too-big-manifest.json')
+        heap_early = pool.submit(build_heap_early, 'build-heap-early', ROOT / 'checks/qemu-os/heap-manifest.json')
+        slot1_elf = pool.submit(build_slot1).result()
+        heap_elf, heap_big_elf, heap_early_elf = heap_elf.result(), heap_big_elf.result(), heap_early.result()
         notify_elf = pool.submit(build_notify).result()
+        storage_write_space_elf = pool.submit(build_storage_write_space).result()
         (out / 'build-reverted-owner').mkdir()
         reverted_owner_elf = pool.submit(build_storage_write, reverted_owner(out / 'build-reverted-owner'))
         large_elf, large_big_elf, large_6g_elf, large_nodigest_elf = large_elf.result(), large_big_elf.result(), large_6g_elf.result(), large_nodigest_elf.result()
@@ -835,7 +871,7 @@ def main():
     c.require(c.finished is not None and c.finished['status'] == '1', 'the application did not finish')
     tag, fold = struct.unpack('<QQ', bytes.fromhex(c.finished['result']))
     c.require(tag == 0x4c4152474d4d, 'no-digest load: result tag %#x, not a loaded region with a differing fold' % tag)
-    # A region with no source is ready at once, above 4 GiB it would not fit the emulator, so the emulator's region is 256 MiB:
+    # A region with no source is ready at once, above 4 GiB it would not fit the emulator, so the emulator's region is 256 MiB: The emulator's level-1 slot 1 starts at 0x50000000, where the ledger places it.
     # the application times its passes, writes and reads back the address pattern, and reports no mismatch.
     c = run_case('large-region-unfilled', large_6g_elf, scenario(usb_ready_ms=usb_delay_ms), None, '4G')
     c.clean()
@@ -843,7 +879,7 @@ def main():
     parts = {int(o): h for o, h in re.findall(r'APP-RESULT offset=(\d+) hex=([0-9a-f]+)', c.output)}
     words = struct.unpack('<64Q', bytes.fromhex(''.join(parts[o] for o in sorted(parts))))
     c.require(words[0] == 0x36474f4e45 and words[1] == 2 and words[2] == 0, 'tag/state/error %#x %d %d' % words[:3])
-    c.require(words[3] == 256 << 20 and words[4] == 0x80000000, 'region %#x at %#x' % (words[3], words[4]))
+    c.require(words[3] == 256 << 20 and words[4] == 0x50000000, 'region %#x at %#x' % (words[3], words[4]))
     c.require(all(t > 0 for t in words[8:8 + 24 + 6]), 'a pass has no time: %s' % (words[8:38],))
     c.require(words[38] == (256 << 20) // 8 and words[39] == 0, 'integrity: %d words, %d mismatches' % (words[38], words[39]))
     # A second EL0 task that runs in no application space reads the region: a permission fault, reported with the region's address.
@@ -875,6 +911,67 @@ def main():
     c = run_case('large-regions-too-big', large_big_elf, scenario(usb_ready_ms=usb_delay_ms), memory='4G')
     c.require(c.main is None and not lines(c.output, 'LARGE-ADMITTED'), 'the application started although the ledger refused its regions')
     c.require(c.failure is not None, 'the refusal left no failure record')
+
+    # A heap above the linked limit is a ledger region (step 1 of docs/designs/application-memory-layout.md). The
+    # memory behind it holds a pattern before the boot; the heap must reach the application zeroed.
+    stale = bytes([0xa5]) * (8 << 20)
+    heap_input = lambda mode: struct.pack('<Q', mode) + bytes(4088)
+    c = run_case('heap-from-ledger', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x50000000, stale)])
+    c.clean()
+    admitted = lines(c.output, 'LARGE-ADMITTED')
+    c.require(len(admitted) == 1 and (int(admitted[0]['base'], 16), int(admitted[0]['bytes'], 16)) == (0x50000000, 8 << 20)
+              and admitted[0]['state'] == '2' and admitted[0]['asid'] == '1',
+              'heap admission differs: %s' % [a['line'] for a in admitted])
+    c.require(c.finished is not None and c.finished['status'] == '1', 'the heap application did not finish')
+    tag, base, size, peak, error = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
+    c.require(tag == 0x48454150204f4b and base == 0x50000000 and size == 8 << 20 and peak == 8 << 20 and error == 12,
+              'heap result tag %#x base %#x bytes %#x peak %#x errno %d' % (tag, base, size, peak, error))
+    # A task that is in no application space creates a task: the child stays out, and its read of the heap is a
+    # permission fault at the first byte.
+    c = run_case('heap-other-space-faults', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(1), '4G', [(0x50000000, stale)])
+    c.failed_with('APPLICATION', 0xe24)
+    c.require(int(c.failure['value'], 16) == 0x50000000 and int(c.failure['site'], 16) == 0x800e4e24,
+              'heap fault address %s, site %s' % (c.failure['value'], c.failure['site']))
+    # The application's own space ends at the heap: the next byte is a kernel block, a permission fault.
+    c = run_case('heap-end-faults', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(2), '4G', [(0x50000000, stale)])
+    c.failed_with('APPLICATION', 0xe24)
+    c.require(int(c.failure['value'], 16) == 0x50800000, 'the byte after the heap faults at %s' % c.failure['value'])
+    # A worker attached to the application's space writes the heap and the main task reads it.
+    c = run_case('heap-worker-shares', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(3), '4G', [(0x50000000, stale)])
+    c.clean()
+    tag, base, size, peak, fold = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
+    expected_fold = 0
+    for i in range(4096):
+        expected_fold ^= (0x9e3779b97f4a7c15 * (i + 1)) & (2 ** 64 - 1)
+    c.require(tag == 0x48454150204f4b and fold == expected_fold and peak == 1, 'worker result %#x fold %#x, expected %#x; writer shares the main task tag: %d' % (tag, fold, expected_fold, peak))
+    # A task of a task of the application creates a task that writes the heap: no call puts any of them in the space.
+    c = run_case('heap-grandchild-shares', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(4), '4G', [(0x50000000, stale)])
+    c.clean()
+    tag, base, size, peak, fold = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
+    c.require(tag == 0x48454150204f4b and fold == expected_fold and peak == 1, 'grandchild result %#x fold %#x, expected %#x; writer shares the main task tag: %d' % (tag, fold, expected_fold, peak))
+    # The linked heap has handed out a byte before the admission, as a static constructor that calls malloc would
+    # make it: the heap of the ledger cannot replace it, so the application does not start.
+    c = run_case('heap-after-early-sbrk', heap_early_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x50000000, stale)])
+    c.require(c.main is None and c.failure is not None, 'the application started although the linked heap was already in use')
+    # A manifest region above the 48 MiB window lies in level-1 slot 1 and is mapped for its application alone.
+    c = run_case('region-in-slot-1', slot1_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G')
+    c.clean()
+    admitted = lines(c.output, 'LARGE-ADMITTED')
+    tag, address, size, fold = struct.unpack('<4Q', bytes.fromhex(c.finished['result']))
+    expected_fold = 0xffffffffffffffff
+    for i in range(0, (64 << 20) // 8, 512):
+        expected_fold ^= (0x9e3779b97f4a7c15 * (i + 1)) & (2 ** 64 - 1)
+    c.require(tag == 0x534c4f5431 and address == 0x51000000 and size == 64 << 20 and fold == expected_fold,
+              'slot 1 region result %#x at %#x, %#x bytes, fold %#x' % (tag, address, size, fold))
+    c = run_case('region-in-slot-1-end-faults', slot1_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(1), '4G')
+    c.failed_with('APPLICATION', 0xe24)
+    c.require(int(c.failure['value'], 16) == 0x55000000, 'the byte after the slot 1 region faults at %s' % c.failure['value'])
+
+    # The main stack comes from upper memory with an unmapped guard block below it: an overflow is an EL0 fault in the guard.
+    c = run_case('main-stack-overflow-hits-guard', slot1_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(2), '4G')
+    c.failed_with('APPLICATION', 0xe24)
+    guard = int(c.failure['value'], 16)
+    c.require(0x50000000 <= guard < 0x50200000, 'the overflow faulted at %#x, not in the guard block 0x50000000..0x50200000' % guard)
 
     # The OS gives the main task its usb-ready and live-state notifications while the main task sleeps in the deadline
     # wait and in ss_host_recv: each ends at its own condition (the deadline; the timeout), not at the OS's notification.
@@ -931,6 +1028,17 @@ def main():
     c.require(c.finished is not None, 'the application did not finish')
     d = decode_result(c)
     c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'enable did not succeed: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
+    # The SD owner is started by the application's own call, from a task that has an address space: the owner is an OS task
+    # and must end up with no application tag, so that it runs in the kernel's space (include/os_space.h, traceTASK_CREATE
+    # gives a new task its creator's tag; apps/os/sd_owner.c clears it). The main task, by contrast, is tagged.
+    c = run_case('storage-write-owner-in-kernel-space', storage_write_space_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, mode4], '4G',
+                 [(RAMDISK_ADDRESS, card_image())])
+    c.clean()
+    d = decode_result(c)
+    c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'enable did not succeed with an address space: status %d' % d['status'])
+    space = lines(c.output, 'TASK-SPACE')
+    c.require(len(space) == 1 and space[0].get('main') == '1' and space[0].get('sdowner') == '0',
+              'the application main task must be tagged and the SD owner untagged: %s' % (space,))
     # A hint on the application's default notification index during the owner's open (a USB-change event, as application.c sends
     # them) must not end the wait: enable succeeds. The owner as the fourth board submission had it (one sleep on that index)
     # returns early with stage 11, which is the control.
