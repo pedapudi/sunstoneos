@@ -310,7 +310,7 @@ then runs mount-time recovery, runs `fsck.fat -n` (exit status 0 required),
 reads the volume with an independent Python FAT32 reader and compares each file
 with the constraints the scenario recorded, and mounts again to confirm that
 nothing is written. Results of the committed run: 1333 cuts (one per sector
-write of the scenario), 2496 random subsets of multi-sector calls, 138 cuts in
+write of the scenario), 2468 random subsets of multi-sector calls, 138 cuts in
 the recovery itself, all clean with synced bytes intact.
 
 The sweep found one defect during development. The recovery's last write
