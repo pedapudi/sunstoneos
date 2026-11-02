@@ -1,6 +1,6 @@
 --- port.c
 +++ port.c
-@@ -260,9 +260,17 @@
+@@ -260,9 +260,18 @@
      /* Flag to signal that the primary core has done all the shared initialisations. */
      PRIVILEGED_DATA volatile uint8_t ucPrimaryCoreInitDoneFlag = 0;
  
@@ -16,12 +16,13 @@
 +    {
 +        uint64_t ullTaskHasFPUContext;
 +        volatile uint64_t ullOwnedLocks;
++        uint8_t ucLSEState; /* 0 unknown, 1 absent, 2 present; own-core writes. */
 +    } __attribute__( ( aligned( 64 ) ) ) PortCoreState_t;
 +    PRIVILEGED_DATA PortCoreState_t xPortCoreStates[ configNUMBER_OF_CORES ];
  
      /* Set to 1 to pend a context switch from an ISR. */
      PRIVILEGED_DATA uint64_t ullPortYieldRequired[ configNUMBER_OF_CORES ] = { pdFALSE };
-@@ -304,7 +312,7 @@
+@@ -304,7 +313,7 @@
              #if ( configNUMBER_OF_CORES == 1 )
                  ullPortTaskHasFPUContext = pdTRUE;
              #else
@@ -30,7 +31,7 @@
              #endif
          #else
              #error "Invalid configUSE_TASK_FPU_SUPPORT setting - must be 1 or 2."
-@@ -505,7 +513,7 @@
+@@ -505,7 +514,7 @@
              #if ( configNUMBER_OF_CORES == 1 )
              ullPortTaskHasFPUContext = pdTRUE;
              #else
@@ -39,7 +40,7 @@
              #endif
          }
          #else /* if ( configUSE_TASK_FPU_SUPPORT == portTASK_NO_FPU_CONTEXT_BY_DEFAULT ) */
-@@ -1228,8 +1236,8 @@
+@@ -1228,8 +1237,8 @@
          /* Start the timer that generates the tick ISR. */
          configSETUP_TICK_INTERRUPT();
          ucPrimaryCoreInitDoneFlag = 1;
@@ -50,7 +51,7 @@
                           "ISB SY                    \n"
                           ::: "memory" );
          /* Hold the primary core here until all the secondary cores are ready, this would be achieved only when
-@@ -1356,11 +1364,13 @@
+@@ -1356,11 +1365,13 @@
       * necessary to turn off interrupts in the CPU itself while the ICCPMR is being
       * updated.
       */
@@ -68,7 +69,7 @@
  
      /* Increment the RTOS tick. */
      if( xTaskIncrementTick() != pdFALSE )
-@@ -1371,12 +1381,12 @@
+@@ -1371,12 +1382,12 @@
              ullPortYieldRequired[ portGET_CORE_ID_FROM_ISR() ] = pdTRUE;
          #endif
      }
@@ -87,7 +88,7 @@
  
      /* Ok to enable interrupts after the interrupt source has been cleared. */
      configCLEAR_TICK_INTERRUPT();
-@@ -1393,7 +1403,7 @@
+@@ -1393,7 +1404,7 @@
          #if  ( configNUMBER_OF_CORES == 1 )
              ullPortTaskHasFPUContext = pdTRUE;
          #else
@@ -96,7 +97,7 @@
          #endif
  
          /* Consider initialising the FPSR here - but probably not necessary in
-@@ -1406,6 +1416,18 @@
+@@ -1406,6 +1417,18 @@
  
  void vPortClearInterruptMask( UBaseType_t uxNewMaskValue )
  {
@@ -115,7 +116,7 @@
      if( uxNewMaskValue == portUNMASK_VALUE )
      {
          /* Unmask all interrupt priorities. */
-@@ -1413,9 +1435,10 @@
+@@ -1413,9 +1436,10 @@
      }
      else
      {
@@ -128,7 +129,7 @@
              : "i" ( portSVC_UNMASK_INTERRUPTS )
              : "memory"
          );
-@@ -1444,6 +1467,26 @@
+@@ -1444,6 +1468,26 @@
  {
      UBaseType_t ullPMRValue;
  
@@ -155,7 +156,7 @@
      /* Use SVC so this can be called safely from EL0 tasks. */
      __asm volatile (
          "svc %1        \n"
-@@ -1474,7 +1517,7 @@
+@@ -1474,7 +1518,7 @@
                           "MSR DAIFCLR, #2        \n"
                           "DSB SY                 \n"
                           "ISB SY                 \n"
@@ -164,7 +165,7 @@
      }
  
      return ullPMRValue;
-@@ -1538,27 +1581,62 @@
+@@ -1538,31 +1582,72 @@
  
  #if ( configNUMBER_OF_CORES > 1 )
  
@@ -183,6 +184,11 @@
 +        volatile uint64_t ullRecursionCount;
 +    } __attribute__( ( aligned( 64 ) ) ) PortLock_t;
 +    PRIVILEGED_DATA PortLock_t xPortLocks[ eLockCount ];
++    _Static_assert( sizeof( PortLock_t ) == 64, "locks occupy separate cache lines" );
++    _Static_assert( configNUMBER_OF_CORES < 65536, "outstanding tickets cannot wrap" );
++    #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
++        #error "ticket owner is the low halfword on little-endian AArch64"
++    #endif
 +
 +/* The ICC_SGI1R_EL1 value that interrupts one core. A platform with another
 + * affinity layout defines its own in FreeRTOSConfig.h. */
@@ -208,6 +214,10 @@
 -            : "r" ( ulRegVal ), "i" ( portSVC_INTERRUPT_CORE )
 -            : "memory", "w1"
 -        );
+-    }
+-
+-/*-----------------------------------------------------------*/
+-
 +        register uint64_t ulRegVal __asm( "x0" ) = portSGI1R_VALUE( ulInterruptID, ucCoreID );
 +        const uint64_t ullTaskRegister = ullPortGetTaskRegister();
 +
@@ -242,32 +252,117 @@
 +        }
 +
 +        __asm volatile ( "svc %1" : "+r" ( ulRegVal ) : "i" ( portSVC_INTERRUPT_CORE ) : "memory" );
-     }
- 
- /*-----------------------------------------------------------*/
-@@ -1570,8 +1648,8 @@
++    }
++
++/*-----------------------------------------------------------*/
++
++    #if SUNSTONE_LOCK_TAS_CONTROL
+     static inline void prvSpinUnlock( uint32_t * ulLock )
+     {
+         /* Conservative unlock: preserve original barriers for broad HW/FVP. */
+@@ -1570,8 +1655,8 @@
              "dmb sy         \n"
              "mov w1, #0     \n"
              "str w1, [%x0]  \n"
--            "sev            \n"
-             "dsb sy         \n"
-+            "sev            \n"
++            "dsb sy         \n"
+             "sev            \n"
+-            "dsb sy         \n"
              "isb sy         \n"
              :
              : "r" ( ulLock )
-@@ -1614,21 +1692,25 @@
+@@ -1614,21 +1699,105 @@
  
  /*-----------------------------------------------------------*/
  
 -    /* Read 64b value shared between cores. */
-+    /* Read and write lock bookkeeping: a lock's recursion count, which only
-+     * the lock's holder accesses, and a core's ownership bits, which only that
-+     * core accesses. A core observes its own accesses in program order. Between
-+     * holders, the DMB SY in prvSpinUnlock orders the releasing core's writes
-+     * before its gate store, and the DMB SY after a successful trylock orders
-+     * the next holder's accesses after its gate load, as the release store and
-+     * acquiring compare-and-swap of a Linux arm64 spinlock do (Arm ARM
-+     * DDI 0487, K11 barrier litmus tests). No DSB is needed. */
++    #else
++
++    /* Called with local scheduler interrupts masked. Only EL1 reads the ID
++     * register. EL0 uses LL/SC until a privileged lock call caches this core's
++     * feature; a different core's feature never selects this core's opcode. */
++    static inline BaseType_t prvCoreHasLSE( uint8_t ucCoreID )
++    {
++        uint8_t ucState = xPortCoreStates[ ucCoreID ].ucLSEState;
++
++        if( ucState == 0U )
++        {
++            const uint64_t ullTaskRegister = ullPortGetTaskRegister();
++
++            if( ( ( ullTaskRegister & portTASK_REGISTER_TCB_MASK ) == 0U ) ||
++                ( ( ullTaskRegister >> portTASK_REGISTER_EL1_BIT ) & 1U ) ||
++                ( ullPortInterruptNestings[ ucCoreID ] != 0U ) )
++            {
++                uint64_t ullFeatures;
++                __asm volatile ( "MRS %0, ID_AA64ISAR0_EL1" : "=r" ( ullFeatures ) );
++                ucState = ( ( ( ullFeatures >> 20U ) & 0xFU ) >= 2U ) ? 2U : 1U;
++                xPortCoreStates[ ucCoreID ].ucLSEState = ucState;
++            }
++        }
++
++        return ucState == 2U;
++    }
++
++    static inline void prvSpinLock( uint32_t * pulLock, uint8_t ucCoreID )
++    {
++        uint32_t ulOld;
++        const uint32_t ulIncrement = 1UL << 16U;
++
++        /* The low halfword is owner, the high halfword is next. Adding to
++         * next cannot carry into owner, including at ticket 65535. */
++        if( prvCoreHasLSE( ucCoreID ) )
++        {
++            __asm volatile ( ".arch_extension lse       \n"
++                             "LDADDA %w2, %w0, [%1]     \n"
++                             : "=&r" ( ulOld ) : "r" ( pulLock ), "r" ( ulIncrement ) : "memory" );
++        }
++        else
++        {
++            uint32_t ulNew, ulFailed;
++            __asm volatile ( "1: LDAXR %w0, [%3]        \n"
++                             "ADD %w1, %w0, %w4         \n"
++                             "STXR %w2, %w1, [%3]       \n"
++                             "CBNZ %w2, 1b              \n"
++                             : "=&r" ( ulOld ), "=&r" ( ulNew ), "=&r" ( ulFailed )
++                             : "r" ( pulLock ), "r" ( ulIncrement ) : "memory" );
++        }
++
++        const uint32_t ulTicket = ulOld >> 16U;
++
++        if( ( uint16_t ) ulOld != ulTicket )
++        {
++            uint32_t ulOwner;
++            /* SEVL primes the first WFE. Each LDAXRH rearms the exclusive
++             * monitor before the next WFE; the owner's STLRH clears that
++             * monitor and generates an event, including a release between
++             * this load and WFE. Spurious events only repeat the owner test. */
++            __asm volatile ( "SEVL                      \n"
++                             "1: WFE                    \n"
++                             "LDAXRH %w0, [%1]          \n"
++                             "CMP %w0, %w2              \n"
++                             "B.NE 1b                   \n"
++                             "CLREX                     \n"
++                             : "=&r" ( ulOwner ) : "r" ( pulLock ), "r" ( ulTicket ) : "memory", "cc" );
++        }
++    }
++
++    static inline void prvSpinUnlock( uint32_t * pulLock )
++    {
++        uint32_t ulOwner;
++        /* A halfword release preserves concurrent next-ticket updates. The
++         * release orders protected data and bookkeeping before handoff. */
++        __asm volatile ( "LDRH %w0, [%1]            \n"
++                         "ADD %w0, %w0, #1          \n"
++                         "STLRH %w0, [%1]           \n"
++                         : "=&r" ( ulOwner ) : "r" ( pulLock ) : "memory" );
++    }
++
++    #endif /* SUNSTONE_LOCK_TAS_CONTROL */
++
++/*-----------------------------------------------------------*/
++
++    /* A lock holder alone accesses its recursion count; a core alone
++     * accesses its ownership bits. Lock acquire/release orders bookkeeping
++     * between holders. Own-core accesses retain program order. */
      static inline uint64_t prvGet64( volatile uint64_t * x )
      {
 -        __asm( "dsb sy" );
@@ -285,7 +380,13 @@
      }
  
  /*-----------------------------------------------------------*/
-@@ -1651,21 +1733,17 @@
+@@ -1646,26 +1815,23 @@
+         /* Lock acquire */
+         if( uxAcquire )
+         {
++            #if SUNSTONE_LOCK_TAS_CONTROL
+             /* Check if spinlock is available.
+              * If spinlock is not available check if the core owns the lock.
               * If the core owns the lock wait increment the lock count by the core.
               * If core does not own the lock wait for the spinlock.
               */
@@ -312,7 +413,7 @@
                  {
                     /* Follow Arm's recommended way of sleeping
                      * sevl is used to prime the wait loop.
-@@ -1679,7 +1757,7 @@
+@@ -1679,7 +1845,7 @@
                          "ldr w2, [%x0]   \n"
                          "cbnz w2, 1b     \n"
                          :
@@ -321,9 +422,22 @@
                          : "memory", "w2"
                      );
                  }
-@@ -1689,27 +1767,27 @@
+@@ -1688,30 +1854,44 @@
+             /* Add barrier to ensure lock is taken before we proceed. */
              __asm__ __volatile__ ( "dmb sy" ::: "memory" );
  
++            #else
++                /* Recursive entry must not reserve a second ticket. */
++                if( prvGet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ) ) & ulLockBit )
++                {
++                    configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) != 255u );
++                    prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), ( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) + 1 ) );
++                    return;
++                }
++
++                prvSpinLock( &( xPortLocks[ eLockNum ].ulGateWord ), ucCoreID );
++            #endif
++
              /* Assert the lock count is 0 when the spinlock is free and is acquired. */
 -            configASSERT( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) == 0 );
 +            configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) == 0 );
@@ -342,25 +456,33 @@
              /* Assert the lock is not free already. */
 -            configASSERT( ( prvGet64( &ullOwnedByCore[ ucCoreID ] ) & ulLockBit ) != 0 );
 -            configASSERT( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) != 0 );
-+            configASSERT( ( prvGet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ) ) & ulLockBit ) != 0 );
-+            configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) != 0 );
- 
+-
 -            /* Reduce ullRecursionCountByLock by 1. */
 -            prvSet64( &ullRecursionCountByLock[ eLockNum ], ( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) - 1 ) );
+-
+-            if( !prvGet64( &ullRecursionCountByLock[ eLockNum ] ) )
++            configASSERT( ( prvGet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ) ) & ulLockBit ) != 0 );
++            configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) != 0 );
++
 +            /* Reduce the recursion count by 1. */
 +            prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), ( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) - 1 ) );
- 
--            if( !prvGet64( &ullRecursionCountByLock[ eLockNum ] ) )
++
 +            if( !prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) )
              {
 -                prvSet64( &ullOwnedByCore[ ucCoreID ], ( prvGet64( &ullOwnedByCore[ ucCoreID ] ) & ~ulLockBit ) );
 -                prvSpinUnlock( &ulGateWord[ eLockNum ] );
+-                /* Add barrier to ensure lock status is reflected before we proceed. */
+-                __asm__ __volatile__ ( "dmb sy" ::: "memory" );
 +                prvSet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ), ( prvGet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ) ) & ~ulLockBit ) );
 +                prvSpinUnlock( &( xPortLocks[ eLockNum ].ulGateWord ) );
-                 /* Add barrier to ensure lock status is reflected before we proceed. */
-                 __asm__ __volatile__ ( "dmb sy" ::: "memory" );
++                #if SUNSTONE_LOCK_TAS_CONTROL
++                    /* Preserve the measured TAS control's original barriers. */
++                    __asm__ __volatile__ ( "dmb sy" ::: "memory" );
++                #endif
              }
-@@ -1720,6 +1798,15 @@
+         }
+     }
+@@ -1720,6 +1900,15 @@
  
      uint8_t ucPortGetCoreID( void )
      {
@@ -376,7 +498,7 @@
          /* Use SVC to obtain the core ID in a way that is safe when called
           * from EL0 tasks. ISRs and EL1 code should use
           * ucPortGetCoreIDFromIsr()/portGET_CORE_ID_FROM_ISR().
-@@ -1740,7 +1827,7 @@
+@@ -1740,7 +1929,7 @@
      uint8_t ucPortGetCoreIDFromIsr ( void ) /* PRIVILEGED_FUNCTION */
      {
          uint64_t ullMpidrEl1;
@@ -385,7 +507,7 @@
  
          return ( uint8_t ) ( ullMpidrEl1 & 0xff );
      }
-@@ -1763,22 +1850,10 @@
+@@ -1763,22 +1952,10 @@
          }
          #endif /* configASSERT_DEFINED */
  

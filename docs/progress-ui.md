@@ -37,7 +37,10 @@ A record starts with a title and a standalone `**Status: implemented.**` or
 `**Status: blocked.**` declaration. Its introductory `**Board-qualified scope:**`
 paragraph states the physical result, or `None.` when no physical result applies.
 A link fragment selects a section with its own scope paragraph and inherits the
-record's status. For example, `status/memory-dma.md#dma` can record no physical
+record's status. An optional `**Software evidence:** host, emulator, source.` line
+in a record or section declares its software evidence classes; without it the
+view infers them from the prose. [The evidence rules](evidence.md) define the
+rest of the record format. For example, `status/memory-dma.md#dma` can record no physical
 DMA result while the same document records DDR initialization.
 
 Implementation, evidence, and qualification are separate fields. An implemented

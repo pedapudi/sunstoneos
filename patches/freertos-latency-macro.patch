@@ -15,7 +15,7 @@
 +            ss_latency_mask_open( portGET_CORE_ID(), latency_start, ( uintptr_t ) __builtin_return_address( 0 ) ); \
 +        } while( 0 )
 +        #define portENABLE_INTERRUPTS() do { \
-+            ss_latency_mask_close( portGET_CORE_ID() ); \
++            ss_latency_mask_close( portGET_CORE_ID(), ( uintptr_t ) __builtin_return_address( 0 ) ); \
 +            portSET_PRIORITY_MASK( portSVC_ENABLE_INTERRUPTS, portUNMASK_VALUE ); \
 +        } while( 0 )
 +    #else

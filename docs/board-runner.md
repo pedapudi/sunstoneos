@@ -70,7 +70,7 @@ Queued entries also hash the host preparation sources, FEL executable, rail
 helper, DRAM builds and training records. Changed inputs cause a refusal before
 launch. Status includes running entries, eligible queued entries and the last
 20 completed entries per board. `ledger.jsonl` appends each queue submission,
-start, result, pause and resume. Entry files and earlier evidence are retained.
+start, result, withdrawal, pause and resume. Entry files and earlier evidence are retained.
 `--queue DIR`, before the subcommand, selects an isolated queue.
 
 ## A run establishes its prerequisites
@@ -158,6 +158,16 @@ Resume changes only the selected port's pause. Only the daemon collects orphan
 results; recovery skips a live runner even after it has written its result.
 An interrupted spawn with no recorded child identity remains paused for
 coordinator inspection. Shutdown waits for existing children.
+
+`$board withdraw ID --reason TEXT` removes one queued entry before it starts;
+the coordinator alone uses it. It takes the queue lock, accepts only an entry in
+the queued state, and records the ordinary `refused-before-launch` result with
+the reason and the withdrawal in `ledger.jsonl` (events `result` and
+`withdrawn`). It refuses an unknown ID, a missing reason, and a running or
+finished entry. It changes no pause and applies no admission rule. The daemon
+skips a withdrawn entry because the entry is no longer queued. The daemon runs
+`tools/board.py` from its checkout, so the command is available after the daemon
+restarts on a checkout that contains it.
 
 ## Retain the electrical and storage checks
 

@@ -1263,6 +1263,17 @@ class Queue:
                 path.rename(archive/f'{time.time_ns()}-{port}.json')
             self.event('resumed',port=port)
 
+    def withdraw(self, identifier, reason):
+        """Refuse one queued entry before launch; running and finished entries are never touched."""
+        require(re.fullmatch(r'[0-9]+-[a-f0-9]{8}',identifier),'Invalid entry ID.')
+        require(bool(reason.strip()),'A nonempty reason is required.')
+        with self.locked() as state:
+            job = next((j for j in state['jobs'] if j['id']==identifier),None)
+            require(job is not None,f'No queue entry {identifier}.')
+            require(job['state']=='queued',f"Entry {identifier} is {job['state']}; only a queued entry can be withdrawn.")
+            self.refused(state,job,'Withdrawn by the coordinator: '+reason.strip())
+            self.event('withdrawn',job=identifier,reason=reason.strip(),port=job['port'])
+
     def recover(self, exclude=()):
         """The daemon collects stopped orphans; live runners retain their claims."""
         exclude = set(exclude)
@@ -1406,6 +1417,9 @@ def main(argv=None):
     serve.add_argument('--once',action='store_true',help='Drain currently runnable entries and exit.')
     resume = commands.add_parser('resume')
     resume.add_argument('port',choices=PORTS)
+    withdraw = commands.add_parser('withdraw',help='Coordinator only: refuse one queued entry before launch.')
+    withdraw.add_argument('entry')
+    withdraw.add_argument('--reason',required=True)
     args = parser.parse_args(argv)
     if args.command=='check':
         return check_image(args)
@@ -1427,6 +1441,9 @@ def main(argv=None):
     elif args.command=='resume':
         queue.resume(args.port)
         print(f'{args.port} resumed')
+    elif args.command=='withdraw':
+        queue.withdraw(args.entry,args.reason)
+        print(f'{args.entry} withdrawn')
     elif args.command=='serve':
         queue.serve(args.once)
     elif args.command=='watch':
