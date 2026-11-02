@@ -57,8 +57,10 @@ instance returns.
 DRAM as described below and records `dram_mode` as `preserved`. A run is a
 qualification run, and requires the flag, when any of these holds:
 
-- Its result is cited as board-qualified scope in a status file or as a passing
-  record in `docs/evidence/`.
+- Its claim includes that the returning lifetime leaves DRAM as it found it,
+  for example a qualification of the returning CPU or accelerator lifetime.
+  Other passing records come from development runs; each record states its
+  `dram_mode`.
 - It exercises the save, restoration, readback or quarantine path itself, such as
   the helper DRAM preservation and the return chain.
 - It stores state in DRAM for a later image on the same boot, or is followed by a
