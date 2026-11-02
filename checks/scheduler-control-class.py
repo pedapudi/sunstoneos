@@ -10,7 +10,7 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
 source = (root / 'runtime/control_irq.c').read_text()
-handler = source[source.index('static void handle('):source.index('void __wrap_vApplicationIRQHandler')]
+handler = source[source.index('static void handle('):source.index('/* The task path:')]
 banned = re.findall(r'\b(?:x[A-Z]\w+|v[A-Z]\w+|ul[A-Z]\w+|pv[A-Z]\w+|portENTER\w+|portDISABLE\w+)\(', handler)
 assert not banned, f'the control handler calls the kernel: {banned}'
 assert not re.search(r'0x[0-9a-fA-F]{2}u?\s*\)?\s*;', source.split('static void arm')[1].split('static void handle')[0]), \
