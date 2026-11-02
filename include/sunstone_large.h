@@ -11,14 +11,15 @@
 #define SS_LARGE_PATH_BYTES 48u
 enum {
     SS_LARGE_WRITE = 1u << 0,    /* the application may write the region at EL0 */
-    SS_LARGE_EXTENT = 1u << 1    /* the source is a raw card extent (first_sector), not a file */
+    SS_LARGE_EXTENT = 1u << 1,   /* the source is a raw card extent (first_sector), not a file */
+    SS_LARGE_HEAP = 1u << 2      /* the application's C and C++ heap: read-write, zero filled, no source, last record */
 };
 struct ss_large_region {
     uint32_t index, flags;
     uint64_t bytes;              /* capacity: a multiple of 2 MiB */
-    uint64_t source_bytes;       /* exact length of the source; at most bytes */
+    uint64_t source_bytes;       /* exact length of the source; at most bytes; zero for the heap */
     uint64_t first_sector;       /* raw extent only */
-    uint8_t sha256[32];          /* digest of the source bytes; never all zero */
+    uint8_t sha256[32];          /* digest of the source bytes; never all zero, except for the heap, where it is zero */
     char path[SS_LARGE_PATH_BYTES];   /* file path from the root, NUL-padded; empty for an extent */
 };
 _Static_assert(sizeof(struct ss_large_region) == 112 && offsetof(struct ss_large_region, bytes) == 8 &&

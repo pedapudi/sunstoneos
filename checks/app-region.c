@@ -166,6 +166,45 @@ static struct ss_large_region record(unsigned index, uint64_t bytes, const char 
     return r;
 }
 
+/* The heap record (SS_LARGE_HEAP): the last record, read-write, without a source, ready at admission. */
+static void heap_cases(struct app_region_range *all)
+{
+    struct app_region_ledger l;
+    struct large_slot slots[8];
+    struct ss_large_region heap = {.index = 0, .flags = SS_LARGE_HEAP | SS_LARGE_WRITE, .bytes = 8 * MIB};
+    assert(ss_large_records_valid(&heap, 1));
+    assert(linit(&l, 0, 8, all, 1) == 0 && large_admit(&l, 3, &heap, 1, slots, 8) == APP_REGION_OK);
+    assert(slots[0].base == 0x80000000 && slots[0].bytes == 8 * MIB && slots[0].state == SS_LARGE_READY &&
+           slots[0].flags == (SS_LARGE_HEAP | SS_LARGE_WRITE) && app_region_owner_of(&l, slots[0].base + 8 * MIB - 1) == 3);
+    /* After a declared region, the heap is the last record; a file region keeps its pending state. */
+    struct ss_large_region both[2] = {record(0, GIB, "/a.bin"), heap};
+    both[1].index = 1;
+    assert(ss_large_records_valid(both, 2) && linit(&l, 0, 8, all, 1) == 0 && large_admit(&l, 4, both, 2, slots, 8) == APP_REGION_OK);
+    assert(slots[0].state == SS_LARGE_PENDING && slots[1].state == SS_LARGE_READY && slots[1].base == 0xc0000000);
+    /* Refusals: each changes nothing. */
+    struct ss_large_region r[2];
+    int refusals = 0;
+#define REFUSE_HEAP(edit) do { memcpy(r, both, sizeof r); edit; assert(!ss_large_records_valid(r, 2)); \
+        assert(linit(&l, 0, 8, all, 1) == 0 && large_admit(&l, 6, r, 2, slots, 8) == APP_REGION_INVALID); ++refusals; } while (0)
+    REFUSE_HEAP(r[1].flags = SS_LARGE_HEAP);                  /* read-only */
+    REFUSE_HEAP(r[1].flags |= SS_LARGE_EXTENT);
+    REFUSE_HEAP(r[1].source_bytes = 4096);                    /* a source */
+    REFUSE_HEAP(r[1].sha256[7] = 1);                          /* a digest */
+    REFUSE_HEAP(r[1].path[0] = '/');                          /* a path */
+    REFUSE_HEAP(r[1].first_sector = 5);
+    REFUSE_HEAP(r[1].bytes = 8 * MIB + 4096);                 /* not a multiple of 2 MiB */
+    REFUSE_HEAP(r[0] = heap; r[0].index = 0);                 /* the heap is not the last record */
+    REFUSE_HEAP(r[0] = heap; r[0].index = 0; r[1] = heap; r[1].index = 1);   /* two heaps */
+    assert(refusals == 9 && app_region_free_bytes(&l) == 11 * GIB);
+    /* The heap counts in the total: a heap that does not fit the upper memory is refused. */
+    struct ss_large_region huge = heap;
+    huge.bytes = 12 * GIB;
+    assert(!ss_large_records_valid(&huge, 1));
+    huge.bytes = 6 * GIB;
+    assert(linit(&l, 0, 8, all, 1) == 0 && large_admit(&l, 3, &huge, 1, slots, 8) == APP_REGION_OK);
+    assert(large_admit(&l, 5, &huge, 1, slots, 8) == APP_REGION_NO_SPACE && app_region_free_bytes(&l) == 5 * GIB);
+}
+
 /* Large-region records: validation and all-or-nothing admission through the ledger. */
 static void large_cases(void)
 {
@@ -217,7 +256,7 @@ static void large_cases(void)
     assert(linit(&l, 0, 8, all, 1) == 0);
     REFUSE(r[1].index = 0);                                  /* duplicate index */
     REFUSE(r[1].index = 2);                                  /* index beyond the count */
-    REFUSE(r[0].flags = 4);                                  /* unknown flag */
+    REFUSE(r[0].flags = 8);                                  /* unknown flag */
     REFUSE(r[0].bytes = GIB + 4096);                         /* not a multiple of 2 MiB */
     REFUSE(r[0].bytes = 0);
     REFUSE(r[0].bytes = 12 * GIB);                           /* beyond upper memory */
@@ -233,6 +272,7 @@ static void large_cases(void)
     REFUSE(strcpy(r[1].path, "/x"));                          /* an extent with a path */
     REFUSE(r[1].first_sector = 0);                            /* an extent at the partition table */
     assert(refusals == 17 && app_region_free_bytes(&l) == 11 * GIB);
+    heap_cases(all);
 }
 
 int main(void)
