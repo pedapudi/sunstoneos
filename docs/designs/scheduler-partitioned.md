@@ -700,6 +700,25 @@ with idle pull the receiver completes on the peer within the same millisecond in
 distributions of the eight-core CPU control stay within the noise of the
 previous control, because a CPU that is not idle never pulls.
 
+### The recorded recognition decides whether the fork is kept
+
+The CPU recognition image (the external mimus application, eight workers, the
+recorded 3.59 s clip) is built twice from one tree, with the fork off and on.
+Each variant runs twice on port 3-3 at the approved CPU points. Both must
+reproduce the recorded result exactly: `feat_crc=ac657a3b`, `lp_crc=a7ade80e`
+and the text `FORMATTED There was silence.`. The application pins one worker
+per core and has no wake-latency instrumentation, so the comparison measures
+compute time per recording and the real-time factor (compute time over audio
+time, 57,440 samples at 16 kHz).
+
+Prediction: the pinned workers rarely wake each other, so the fork changes the
+real-time factor by less than 1% in either direction, and no variant regresses
+by more than 1%. The fork is kept and enabled by default only if the output is
+exact, the real-time factor improves by at least 2%, and nothing regresses by
+more than 1%; otherwise it stays off. No audio or recognition task wake latency
+is compared, because the image has no instrumentation for it that costs nothing
+when disabled.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag
