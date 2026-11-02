@@ -112,13 +112,32 @@ tasks, from `tools/npu-stack-depth.py` (static, from the compiler's stack usage 
 
 ## Graphs from the graph
 
-The runtime takes every fact about a graph from the graph itself: tensor counts, shapes, formats and
-quantization through `nbg_model_tensor`, operation counts and sizes through the loader's layout. The SDK model
-description (`struct ss_npu_model`) is filled from them when the graph is registered. A graph that an
-application loads from a file, for example into a large region by the microSD loader, is registered with its
-bytes and (optionally) the digest the application supplies; it needs no entry in `tools/npu-session-models.json`
-and no rebuild of the operating system. The build-time tool `apps/os/npu-catalogue.py` stays as a convenience
-that links graphs into the image and fills the same description; it is not part of admission.
+The runtime takes every fact about a graph from the graph itself: tensor counts, shapes, formats and quantization through
+`nbg_model_tensor`, operation counts and sizes through the loader's layout. A graph that an application loads from a file
+needs no entry in `tools/npu-session-models.json` and no rebuild of the operating system:
+
+1. The manifest declares the graphs and the bounds of those it loads at run time (`graphs`, `graph_bytes`, `tensor_bytes`);
+   the session record (version 3) carries them. The reservation made at start covers `graphs` minus the linked ones more
+   entries, each model of at most `graph_bytes` with no tensor beyond `tensor_bytes`, so a registered graph cannot fail on
+   memory.
+2. The application calls `ss_npu_register_graph(bytes, size, &index)`; the OS wrapper `os_npu_register` calls
+   `npu_runtime_register`, which admits the bytes like a linked graph (structure, commands, addresses), checks that the
+   regions fit what was reserved, takes the SHA-256 and publishes the entry with release order. `ss_npu_run(index, ...)`
+   then runs it. The OS compares the tensor sizes of a run-time graph with the request, because the application-side
+   description table holds only the linked ones.
+3. The caller keeps the bytes alive and unchanged. LOAD copies them into the staging area and refuses a copy whose digest
+   differs from the one taken at registration, which also catches a change between registration and load.
+
+The build-time tool `apps/os/npu-catalogue.py` stays as a convenience that links graphs into the image and fills the SDK
+description; it is not part of admission. Host evidence: case 29 of `checks/os-npu-service.py` (an unseen graph registered
+after the scheduler started, run, a damaged graph and a third beyond the capacity refused, a changed copy refused at LOAD)
+and the `graph` case of the mailbox check (`apps/npu-sdk/host-check.c`).
+
+**Tensors of a graph.** `NBG_ASSEMBLY_MAX_TENSORS` (8 inputs and 8 outputs) is the loader's own choice. The format does not
+bound them (the header counts are 32-bit fields) and the vendor sources show no limit. It is set by the size of
+`struct nbg_assembly_layout` (24 bytes for each tensor, kept for every graph in the per-graph table) and by the queue
+handle. An image is built for the largest graph its application declares (`-DSUNSTONE_OS_NPU_MAX_TENSORS=N`); a graph beyond it is
+refused at admission.
 
 ## In-flight depth and backpressure
 
