@@ -1,4 +1,5 @@
 #include "a733_mmc_platform.h"
+#include "a733_storage_bounds.h"
 #include "a733_clock_reference.h"
 #include "a733_range.h"
 #include "a733_storage_update.h"
@@ -535,18 +536,32 @@ static enum a733_mmc_platform_result poll_owned(struct a733_mmc_platform *p,stru
     else result=controller(p);
     return finish(p,result);
 }
-static enum a733_mmc_platform_result command(struct a733_mmc_platform *p,unsigned operation,
-    uint64_t first,uint32_t blocks,void *out,size_t bytes,uint64_t deadline,struct a733_storage_update *owner)
+#ifndef SUNXI_MMC_READ_ONLY
+#define A733_BOUNDED_WRITE_TOKEN UINT64_C(0x42574452)
+static int bounded_authorize(void *context,const struct sunxi_mmc_write_identity *identity,
+                             const struct sunxi_mmc_write_request *request)
 {
+    (void)identity;
+    return request->policy_token==A733_BOUNDED_WRITE_TOKEN&&
+        a733_storage_bounds_allows(context,request->first_sector,request->blocks);
+}
+#endif
+static enum a733_mmc_platform_result command(struct a733_mmc_platform *p,unsigned operation,
+    uint64_t first,uint32_t blocks,void *out,size_t bytes,uint64_t deadline,struct a733_storage_update *owner,
+    const struct a733_storage_bounds *bounds)
+{
+#ifdef SUNXI_MMC_READ_ONLY
+    (void)bounds;
+#endif
     if(!p||!p->initialized||p->update!=owner||!out||!outside(p,out,bytes)||!deadline||deadline>p->config.lifetime_deadline_us)return A733_MMC_INVALID;
     if(!enter_api(p))return A733_MMC_BUSY;
     if(p->fault)return finish(p,fail(p));
     if(p->ops.current(p->cookie)!=1||p->stage!=READY||
        (operation==1?p->core.state!=SUNXI_MMC_DONE:p->core.state!=SUNXI_MMC_READY)||
        (p->core.borrowed&&!a733_ranges_disjoint(out,bytes,p->core.borrowed,p->core.borrowed_bytes)))return finish(p,A733_MMC_INVALID);
-    if(operation==0||operation==3) {
+    if(operation==0||operation==3||operation==5) {
         const struct sunxi_mmc_card *c=&p->core.card;
-        if(!blocks||blocks>(operation==0&&p->config.dma?SUNXI_MMC_MAX_DMA_BLOCKS:SUNXI_MMC_MAX_BLOCKS)||
+        if(!blocks||blocks>((operation==0||operation==5)&&p->config.dma?SUNXI_MMC_MAX_DMA_BLOCKS:SUNXI_MMC_MAX_BLOCKS)||
            bytes!=(size_t)blocks*512||
            first>=c->sectors||blocks>c->sectors-first)
             return finish(p,A733_MMC_INVALID);
@@ -577,6 +592,18 @@ static enum a733_mmc_platform_result command(struct a733_mmc_platform *p,unsigne
         if(p->fault||p->core.state==SUNXI_MMC_FAULT)return finish(p,fail(p));
         return finish(p,ok?A733_MMC_PENDING:A733_MMC_INVALID);
     }
+#ifndef SUNXI_MMC_READ_ONLY
+    if(operation==5) {
+        /* A bounded descriptor-DMA write: the authority is the verified bounds object. The register filter of the
+         * native adapter applies the same rule again at the command register. */
+        const struct sunxi_mmc_write_request request={A733_BOUNDED_WRITE_TOKEN,first,blocks,out,bytes,deadline};
+        const struct sunxi_mmc_write_authority authority={(void *)bounds,bounded_authorize};
+        int ok=bounds&&p->config.dma&&sunxi_mmc_write_dma(&p->core,&request,&authority);
+        p->core_call=0;
+        if(p->fault||p->core.state==SUNXI_MMC_FAULT)return finish(p,fail(p));
+        return finish(p,ok?A733_MMC_PENDING:A733_MMC_INVALID);
+    }
+#endif
     if(operation==4) {
         int ok=sunxi_mmc_sd_status(&p->core,out,deadline);
         p->core_call=0;
@@ -591,18 +618,23 @@ static enum a733_mmc_platform_result command(struct a733_mmc_platform *p,unsigne
 }
 enum a733_mmc_platform_result a733_mmc_platform_read(struct a733_mmc_platform *p,
     uint64_t first,uint32_t blocks,uint8_t *buffer,size_t bytes,uint64_t deadline)
-{return command(p,0,first,blocks,buffer,bytes,deadline,NULL);}
+{return command(p,0,first,blocks,buffer,bytes,deadline,NULL,NULL);}
 enum a733_mmc_platform_result a733_mmc_platform_take(struct a733_mmc_platform *p,
     struct sunxi_mmc_result *out,uint64_t deadline)
-{return command(p,1,0,0,out,sizeof(*out),deadline,NULL);}
+{return command(p,1,0,0,out,sizeof(*out),deadline,NULL,NULL);}
 enum a733_mmc_platform_result a733_mmc_platform_card(struct a733_mmc_platform *p,
     struct sunxi_mmc_card *out,uint64_t deadline)
-{return command(p,2,0,0,out,sizeof(*out),deadline,NULL);}
+{return command(p,2,0,0,out,sizeof(*out),deadline,NULL,NULL);}
 
+#ifndef SUNXI_MMC_READ_ONLY
+enum a733_mmc_platform_result a733_mmc_platform_write_dma(struct a733_mmc_platform *p,
+    const struct a733_storage_bounds *bounds,uint64_t first,uint32_t blocks,const uint8_t *source,uint64_t deadline)
+{return command(p,5,first,blocks,(void *)source,(size_t)blocks*512u,deadline,NULL,bounds);}
+#endif
 /* ACMD13: the 64-byte SD Status of the identified card; complete with poll and take as for a read. */
 enum a733_mmc_platform_result a733_mmc_platform_sd_status(struct a733_mmc_platform *p,
     uint8_t *buffer,uint64_t deadline)
-{return command(p,4,0,0,buffer,SUNXI_MMC_SD_STATUS_BYTES,deadline,NULL);}
+{return command(p,4,0,0,buffer,SUNXI_MMC_SD_STATUS_BYTES,deadline,NULL,NULL);}
 
 enum a733_mmc_platform_result a733_mmc_platform_poll(struct a733_mmc_platform *p)
 {return poll_owned(p,NULL);}
@@ -633,7 +665,7 @@ enum a733_mmc_platform_result a733_mmc_platform_update_io(struct a733_mmc_platfo
        (u->state!=A733_STORAGE_READ_WAIT&&u->state!=A733_STORAGE_WRITE_WAIT&&u->state!=A733_STORAGE_VERIFY_WAIT)))return A733_MMC_INVALID;
     if(op==3&&(buffer!=u->request.source||bytes!=u->request.bytes||first!=u->request.first_sector||
        blocks!=u->request.blocks||deadline!=u->request.deadline_us))return A733_MMC_INVALID;
-    return command(p,op,first,blocks,buffer,bytes,deadline,u);
+    return command(p,op,first,blocks,buffer,bytes,deadline,u,NULL);
 }
 void a733_mmc_platform_update_retain(struct a733_mmc_platform *p,struct a733_storage_update *u)
 {if(p&&p->update==u&&enter_api(p))finish(p,fail(p));}
