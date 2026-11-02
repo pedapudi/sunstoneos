@@ -2,11 +2,12 @@
 
 **Status: implemented.**
 
-The default kernel uses global ready lists and FIFO task/ISR locks. The private
-fixed-priority fork assigns every task one owner and supplies owner queues,
-routed wakes, migration acknowledgments and owner deadlines. Live integration
-remains incomplete and disabled. Research and the design are in
-[the partitioned scheduler design](../designs/scheduler-partitioned.md).
+The default kernel uses global ready lists and FIFO task/ISR locks. The opt-in
+fork connects owner queues, routed wakes, migration acknowledgments and owner
+deadlines to the port. Selected static APIs, the original QEMU kernel case and
+the eight-core soak pass. Mixed-affinity stress and native dynamic task APIs
+remain incomplete. The fork stays off by default; see
+[the design](../designs/scheduler-partitioned.md).
 
 **Software evidence:** host, emulator, source.
 
@@ -18,18 +19,18 @@ physical qualification.
 
 ## Open work
 
-1. Complete static-admission cleanup and critical-context control ordering;
-   validate failure/reuse and nested task/ISR critical calls.
-2. Connect the complete private fork and owner port hooks with one consistent
-   static-task/TLS ABI throughout the application kit. Keep the option off by default.
-3. Run concurrent mixed-affinity QEMU races and all-core soak; measure scheduling
-   lock acquisitions and ready work stranded on busy owners. Idle pull waits until D.
-4. Finish the port ordering review and configured full gate before board work;
-   preserve the lock worker's port-lock hunks and probe worker's entry code.
-5. When the coordinator permits queue work, compare the same CPU latency workload
-   and exact external mimus control. No new board run or image is prepared this round.
-6. Take topology wiring and capacity calibration from the topology worker after
-   its carried commits are reviewed; object locks, tickless timing and EDF follow B.
+1. Diagnose the mixed-affinity QEMU timeout from per-core progress, control
+   acknowledgments and wake state; the original eight-core soak alone does not cover it.
+2. Convert ordinary dynamic task creation with allocation/admission cleanup,
+   then link the native network OS and external application with the private ABI.
+3. Collect scheduling lock counts and busy-home/idle-peer frequency in the
+   concurrent case. Idle pull remains absent until series D.
+4. Complete configured validation before queue work: compare the CPU latency
+   workload and exact mimus control. No new board image or OPP approval is pending.
+5. Preserve lock-worker port-lock hunks and probe entry code; take reviewed
+   topology wiring from its owner. The carried-commit audit permits its unused helpers.
+6. After B, finish object locks, tickless deadlines and reservations. Current
+   host evidence and remaining limits are in [the history](../history/status-scheduler-20261101.md).
 
 ## Evidence
 

@@ -36,9 +36,9 @@ changes require a diagnostic, explicit application selection or private fork.
 | `0f08a8bd`: observe actual payload in negative model | No; model only. | Payload observer remains in the extended explorer, including the ungated observation negative control. | Yes. |
 | `0525b3db`: corrected recognition evidence | No; documentation only. | Recognition correction and bounded evidence retained; later source-pin and private-fork status supersede parts of the prose. | Yes as history; retain current evidence limits and application pins. |
 | `f6705937`: publish phase closure before cutoff | No default runtime effect; latency recorder only. | Closure synchronization retained. Later site attribution changes other recorder paths. Phase-close checker unchanged. | Carry the fix; current latency-enabled integration still requires the later recorder repair below. |
-| `25ea7f84`: owner queues and remote activation | No; helper is outside the control scheduler. | Ready FIFO and descriptor foundations retained. Original wake publication and retirement are superseded by head signaling and final-release ordering repairs. | Yes only with the current repairs and disabled live fork; do not replay the original helper as a complete implementation. |
+| `25ea7f84`: owner queues and remote activation | No; helper is outside the control scheduler. | Ready FIFO and descriptor foundations retained. Original wake publication and retirement are superseded by head signaling and final-release ordering repairs. | Yes as an unused private component at topology tip `5d67c638`. Apply the current wake/head and retirement corrections before any live scheduler linkage. |
 | `d888faff`: one-CAS notification and FIFO wait gate | No; private helper only. | Notification implementation and launcher unchanged. Header gains an ordering comment; fixture gains callback cases. | Yes as a private component; this does not prove live FreeRTOS API coverage. |
-| `d3b23ae9`: reduce inbox rescanning | No; owner helper only. | Bounded detached-word scanning retained. Later head publication and all-pending dispatch recheck supersede the original signaling decision. Notification header and fixture unchanged. | Yes with current publication repairs and disabled live fork. |
+| `d3b23ae9`: reduce inbox rescanning | No; owner helper only. | Bounded detached-word scanning retained. Later head publication and all-pending dispatch recheck supersede the original signaling decision. Notification header and fixture unchanged. | Yes as an unused private component at topology tip `5d67c638`; the corrected publication protocol is required before live linkage. |
 | `c90dabbf`: record hybrid-dispatch blocker | No; documentation only. | Realtime design unchanged; status superseded by complete private-fork conversion work. | Yes as history; do not replace current status with its earlier blocker inventory. |
 | `d6a50b42`: baseline and paused state | No; documentation only. | Baseline and qualification limits retained. Resume instructions and unmerged-work inventory superseded by later adapter progress. | Yes as history; do not restore its stale current-status instructions. |
 
@@ -80,10 +80,14 @@ They cannot cover the later attribution merge defect below.
 
 ## Landing restrictions
 
-No one of these 21 commits needs permanent exclusion from the current disabled
-control series. Preserve the later owner wake/retirement repairs and current
-status records when merging. Replaying the earlier owner implementation or
-status snapshots would discard necessary corrections.
+None of these 21 commits needs exclusion from the exact topology branch at
+`5d67c638`. Neither its default-OFF nor topology-ON build selects `owner.c` or
+`notification.c`, and its runtime, platform, application and public headers
+contain no calls to their helpers. Topology-ON selects topology, architectural
+observation and CPU-clock sources only. Standalone host checks exercise the
+owner and notification components. The known publication and retirement fixes
+are required before live scheduler linkage, rather than before this topology
+branch lands. Preserve current status records instead of restoring old snapshots.
 
 **Do not land the complete `12f4cc56` integration unchanged.** Its
 `runtime/latency.c`, in `ss_latency_lock_acquired`, repeats the acquisition
@@ -93,7 +97,11 @@ declaration would still double-count acquisitions and retain phase accounting
 before the contention cutoff. The defect is a later integration change outside
 the 21 audited commits; repair `a35844ab` removes the first duplicate block and restores the incoming
 lock-worker implementation unchanged. The latency-enabled recorder and final
-gate must still pass before landing the complete integration.
+gate must still pass before landing the complete integration. Focused repair
+evidence is `round9/recorder.log`, `round9/latency/result.json` and
+`round9/phase-quantiles.json`: nested recording/freeze, eight-core coverage and
+264 phase/core/metric distributions pass. The linked phase-close checker also
+passes against `round9/central/latency-recorder-model.elf`.
 The default option-OFF build does not compile this recorder into ordinary images.
 
 Keep the partitioned scheduler and topology integration disabled until their

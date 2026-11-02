@@ -390,3 +390,73 @@ validate scheduler timing.
 - Queue submission belongs to the board runner. Existing CPU operating points
   are the scope; any new voltage/clock point or storage write needs coordinator
   approval. No such approval is pending for the preserved work.
+
+## Round 9: private port integration and bounded validation
+
+The branch merges coordinator integration through `3115e4b4` and its descendant
+`685ffbbc`. FIFO lock acquire/release hunks remain the lock worker's code.
+Repair `a35844ab` removes a duplicate recorder block introduced by the merge;
+it restores the incoming recorder implementation rather than changing its timing.
+The [carried-commit audit](scheduler-carried-commits-20261101.md) classifies all
+21 scheduler commits on the topology branch. None needs exclusion from that
+branch's unused helper code; the corrected protocol is required for live linkage.
+
+The static-admission and control corrections run through `fc4503fd`. Failed
+registration unwinds TLS and port resources. Owner control callbacks request
+object-list repair, release their FIFO before taking the compatibility lock,
+and acknowledge only after repair. Public critical sections defer command
+completion until their outer release. Existing execution references protect
+outgoing optional-preemption state across retirement. CPU selection follows
+masking, and current-task identity uses the architectural snapshot after startup.
+
+The opt-in port composition connects the private task/object sources and owner
+modules together. It carries the same private static-task header and feature
+setting into separately compiled application objects. IRQ exit drains owner
+work after outer nesting unwinds; SVC yield marks FIFO rotation after saving
+context. Both paths tag privileged execution, and exception restoration derives
+the task privilege tag from saved state. The feature remains OFF by default.
+
+Evidence below is relative to
+`~/.cache/sunstoneos/build/scheduler-rt-1101/`:
+
+- `round9/adapter-final.log` and `round9/adapter-final/`: the final root's
+  AArch64 ON/OFF compilation and linked sanitizer checks pass. The selected
+  configuration routes 81 APIs; its 163 reachable functions contain no legacy
+  scheduler lists. Cases cover admission exhaustion, invalid affinity, buffer
+  reuse, nested critical commands, preserved mask nesting and owner transitions.
+  Owner checkpoints are scripted; they do not replace concurrent task stacks.
+- `round9/qemu-fixed2/cortex-a76-report.json`: the original two-core workload
+  passes with the fork selected. The new eight-core mixed-affinity workload
+  reaches its 45-second deadline without a success marker or serial progress.
+  It fails qualification. The cause is undiagnosed; task progress, owner
+  acknowledgments and pending wake state are the next inspection points.
+- `round9/qemu-soak/cortex-a76-report.json`: the existing eight-core soak
+  passes its queue ring, mutex exclusion, FP migration and per-core preemption.
+  This narrower success does not resolve the mixed-affinity timeout.
+- `round9/port-tmp/abi3.log`: native and QEMU static-task size, alignment,
+  owner offset and real newlib TLS checks pass, including external C++ storage.
+  A native application object inherits the private header before upstream
+  headers and the fork feature setting. The full native network OS still
+  refuses dynamic task allocation: its ordinary creation APIs need conversion.
+- `round9/port-tmp/gdb-result.log`: the corrected service-entry failure has
+  CPU0 critical/ISR/preemption depths zero and `control_draining` true.
+  The nested IRQ interrupts an EL0 task at control-drain entry. Complete
+  API-interrupt exclusion now covers owner control, activation and deadline
+  maintenance. A faithful saved-mask host fixture covers the previously open interval.
+- `round9/review/report.md`: independent source review accepts the combined
+  API and port corrections at `0ea19c6b`, including `fc4503fd`. Its SHA-256 is
+  `7d67337538936f6ddda210e5dc765d31a14800837f1077fff0ed42df235bf162`.
+  The reviewer runs no executable tests. Execution admission remains blocked
+  by the concurrent timeout and native dynamic-allocation gap.
+
+The runner terminates its whole emulator process group on a host deadline;
+its child-cleanup fixture passes. Each measured QEMU instance uses less than
+100 MiB of peak resident memory. Scheduling-lock counters and stranded-ready
+frequency remain unavailable from the timed-out concurrent workload. The one
+scripted busy-owner/idle-peer observation is not a frequency measurement.
+
+The final control integration gate uses label `scheduler-b-round9-control-full`.
+Its summary under `integration/gate-scheduler-b-round9-control-full/` records
+its outcome separately. Even a passing control gate does not qualify the
+unfinished fork. No board run is submitted, no board image is prepared and no
+new voltage, clock or storage approval is pending during this round.
