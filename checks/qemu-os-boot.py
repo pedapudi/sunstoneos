@@ -364,7 +364,7 @@ def large_manifest_path(path, digest, file):
                 "large_regions": [{"name": "weights", "bytes": 1 << 30, "source_bytes": len(file), "access": ["read"],
                                    "file": "/sunstone-test/sunstone-region-test.bin", "sha256": digest}],
                 "deadlines": {"run_us": 2000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
-                "output_limit": 32}
+                "output_limit": 64}
     Path(path).write_text(json.dumps(manifest, indent=2) + '\n')
     return path
 

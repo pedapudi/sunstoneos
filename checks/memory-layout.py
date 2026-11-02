@@ -170,7 +170,7 @@ def check_placement(record):
         base = {'name': 'placement', 'devices': {'required': [], 'optional': []},
                 'cpu': {'cluster': 'a55', 'workers': 0, 'priority': 2, 'stack_bytes': 4096},
                 'regions': regions, 'deadlines': {'return_reserve_us': 1000000, 'progress_window_us': 1000000},
-                'output_limit': 0}
+                'output_limit': 64}
         with tempfile.NamedTemporaryFile('w', suffix='.json') as handle:
             json.dump(base, handle)
             handle.flush()

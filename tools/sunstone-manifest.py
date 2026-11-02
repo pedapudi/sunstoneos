@@ -52,6 +52,18 @@ OS_HOST_FIRST = 0x80
 OUTPUT_LIMIT = 65536
 
 
+def failure_record_bytes():
+    """The size of struct ss_failure, from the static assertion beside it in include/sunstone_session.h."""
+    text = (Path(__file__).resolve().parents[1] / 'include/sunstone_session.h').read_text()
+    found = re.search(r'sizeof\(struct ss_failure\)\s*==\s*(\d+)', text)
+    if found is None:
+        raise SystemExit('include/sunstone_session.h has no size assertion for struct ss_failure')
+    return int(found.group(1))
+
+
+FAILURE_RECORD_BYTES = failure_record_bytes()
+
+
 def fail(message):
     raise SystemExit('manifest: ' + message)
 
@@ -110,6 +122,9 @@ def load(path):
     m['return_reserve_us'] = integer(d['return_reserve_us'], name + ' return_reserve_us')
     m['progress_window_us'] = integer(d['progress_window_us'], name + ' progress_window_us', 1, 60000000)
     m['output_limit'] = integer(raw.get('output_limit', 0), name + ' output_limit', 0, OUTPUT_LIMIT)
+    require(m['output_limit'] >= FAILURE_RECORD_BYTES,
+            '%s: output_limit %d is smaller than the %d-byte failure record (struct ss_failure in '
+            'include/sunstone_session.h), which the failure return publishes in the output' % (name, m['output_limit'], FAILURE_RECORD_BYTES))
     ops = raw.get('host_ops', {'first': 0, 'count': 0})
     first = m['host_op_first'] = integer(ops['first'], name + ' host_ops.first', 0, OS_HOST_FIRST - 1)
     count = m['host_op_count'] = integer(ops['count'], name + ' host_ops.count', 0, OS_HOST_FIRST)
