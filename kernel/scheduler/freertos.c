@@ -374,6 +374,7 @@ static bool ssKernelAdmitTask(TCB_t *task)
 }
 static void ssKernelControlDrain(void);
 static void ssKernelPullServe(unsigned);
+static uint64_t ssKernelPullTargets(struct ssKernelCPU *, unsigned);
 #ifndef SS_SERVICE_PASSES
 #define SS_SERVICE_PASSES 1u
 #endif
@@ -802,6 +803,15 @@ static void ssKernelSwitch(unsigned c)
     ssKernelPullIdle(c, (((TCB_t *)selected->context)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0);
     __atomic_store_n(&pxCurrentTCBs[c], selected->context, __ATOMIC_RELEASE);
     pxCurrentTCBs[c]->xTaskRunState = (BaseType_t)c;
+#ifndef SS_KERNEL_TEST_NO_IDLE_PULL
+    /* The selecting pass skips the pull, and the pull takes compatibility locks the selector
+     * never takes. A migratable task left waiting behind the task just selected, with an
+     * allowed CPU idle, would otherwise wait for an entry that may never come: ask for one.
+     * The entry serves only an idle target, so it cannot repeat without a move. */
+    if (cpu->run.ready_bitmap && !(((TCB_t *)selected->context)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) &&
+        (ssKernelPullTargets(cpu, c) & atomic_load_explicit(&ssKernelIdleMask, memory_order_acquire)))
+        ssKernelForce(c);
+#endif
 #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
     if (previous_reference) ss_owner_put(previous_reference);
 #endif
@@ -1616,6 +1626,13 @@ static eTaskState ssKernelState(TaskHandle_t handle)
     struct ss_kernel_pin pin;
     if (!ss_kernel_handle_pin(&ssKernelRegistry, handle, &pin)) { portCLEAR_INTERRUPT_MASK(irq); return eDeleted; }
     unsigned state = ssKernelLogicalExecution(&ssKernelTasks[pin.slot]);
+    /* A suspend, resume or delete the owner has not applied yet is already the task's state,
+     * as in upstream FreeRTOS, where the call completes the change. */
+    struct ss_control_state desired;
+    ss_control_snapshot(&ssKernelControl, pin.slot, &desired);
+    if (desired.dead) state = SS_K_DEAD;
+    else if (desired.suspended) state = SS_K_SUSPENDED;
+    else if (state == SS_K_SUSPENDED) state = SS_K_READY;
     static const eTaskState states[] = { eReady, eRunning, eBlocked, eSuspended, eDeleted };
     ss_kernel_handle_put(&pin);
     portCLEAR_INTERRUPT_MASK(irq);

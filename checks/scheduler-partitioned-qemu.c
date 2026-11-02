@@ -344,6 +344,8 @@ static void control(void *unused)
         NULL, 2, local_stack[1], &local_state[1], 2);
     configASSERT(local_receiver && local_sender);
     vTaskCoreAffinitySet(local_receiver, 6);
+    /* The suspended background tasks leave their cores to the idle tasks asynchronously. */
+    for (unsigned wait = 0; wait < 2000 && !__atomic_load_n(&selected_idle[2], __ATOMIC_RELAXED); ++wait) vTaskDelay(1);
     vTaskDelay(4);
     uint64_t busy_start = __atomic_load_n(&busy[1], __ATOMIC_RELAXED);
     xTaskNotifyGive(local_sender);

@@ -454,10 +454,40 @@ static int fixture_cleanup_shield(void)
     puts("linked FreeRTOS cleanup protection: pending deletion retains admission and priority inheritance, emits no retry storm, and completes after executor release");
     return 0;
 }
+/* A control issued before the scheduler starts is applied at the owner's first entry. The
+ * logical state must follow it at once, as upstream FreeRTOS reports it. */
+static int fixture_prestart_state(void)
+{
+    for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
+        TaskHandle_t idle = create(c, 0);
+        xIdleTaskHandles[c] = pxCurrentTCBs[c] = idle;
+        ((TCB_t *)idle)->uxTaskAttributes |= taskATTRIBUTE_IS_IDLE;
+        ((TCB_t *)idle)->uxCoreAffinityMask = (UBaseType_t)1 << c;
+    }
+    TaskHandle_t early = create(configNUMBER_OF_CORES, 5);
+    assert(early && eTaskGetState(early) == eReady);
+    vTaskSuspend(early);
+    assert(eTaskGetState(early) == eSuspended);
+    ssKernelBootstrap();
+    xSchedulerRunning = pdTRUE;
+    assert(eTaskGetState(early) == eSuspended); /* Before any owner has applied the control. */
+    for (unsigned pass = 0; pass < 4; ++pass)
+        for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) enter(c);
+    assert(eTaskGetState(early) == eSuspended);
+    fixture_cpu = 0;
+    vTaskResume(early);
+    assert(eTaskGetState(early) == eReady); /* Resume is visible before the owner applies it. */
+    for (unsigned pass = 0; pass < 4; ++pass)
+        for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) enter(c);
+    assert(eTaskGetState(early) != eSuspended);
+    puts("linked FreeRTOS pre-start controls: suspend and resume are visible in the task state before the owner applies them");
+    return 0;
+}
 int main(int argc, char **argv)
 {
     (void)argv;
     if (argc > 1 && !strcmp(argv[1], "shield")) return fixture_cleanup_shield();
+    if (argc > 1 && !strcmp(argv[1], "prestart")) return fixture_prestart_state();
     if (argc > 1 && !strcmp(argv[1], "dynamic")) return fixture_dynamic();
     if (argc > 1 && !strcmp(argv[1], "retirement")) return fixture_retirement_pin();
     if (argc > 1 && !strcmp(argv[1], "admission")) return fixture_admission();

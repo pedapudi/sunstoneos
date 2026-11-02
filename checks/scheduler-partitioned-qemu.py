@@ -21,6 +21,8 @@ def main():
     parser.add_argument('--qemu', required=True, type=Path)
     parser.add_argument('--cpu', default='cortex-a76')
     parser.add_argument('--nm', default='/usr/bin/llvm-nm-21', type=Path)
+    parser.add_argument('--wall-clock', action='store_true',
+                        help='run the cores on host threads and the host clock; the default is one thread on the instruction counter, which a loaded host cannot perturb')
     parser.add_argument('--case', action='append', choices=['kernel', 'soak', 'concurrent', 'runtime', 'heap'])
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -40,7 +42,8 @@ def main():
         for hook in ('ssKernelOwnerIRQExit', 'ssKernelOwnerYieldTail'):
             assert re.search(r' [Tt] ' + hook + r'$' , symbols, re.M), f'{image}: private fork hook {hook} missing'
         command = [str(args.qemu.resolve()), '-machine',
-            'virt,gic-version=3,secure=off,virtualization=off', '-accel', 'tcg,thread=multi',
+            'virt,gic-version=3,secure=off,virtualization=off',
+            *(['-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off'] if not args.wall_clock else ['-accel', 'tcg,thread=multi']),
             '-cpu', args.cpu, '-smp', str(cores), '-m', '128M', '-nographic', '-monitor', 'none',
             '-semihosting-config', 'enable=on,target=native',
             '-device', f'loader,file={image},cpu-num=0']
@@ -48,7 +51,7 @@ def main():
         process = subprocess.Popen(['/usr/bin/time', '-v', *command], stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, start_new_session=True, env=env)
         try:
-            stdout, stderr = process.communicate(timeout=45)
+            stdout, stderr = process.communicate(timeout=120)
             log = stdout + stderr
             passed = process.returncode == 0 and marker in log and 'FAIL' not in log
         except subprocess.TimeoutExpired:
@@ -56,7 +59,7 @@ def main():
             # so a timed-out emulator cannot remain active after the check.
             os.killpg(process.pid, signal.SIGKILL)
             stdout, stderr = process.communicate()
-            log = stdout + stderr + '\nQEMU timeout after 45 seconds\n'
+            log = stdout + stderr + '\nQEMU timeout after 120 seconds\n'
             passed = False
         elapsed = time.monotonic() - started
         counters = {}
