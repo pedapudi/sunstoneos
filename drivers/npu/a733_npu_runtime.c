@@ -42,7 +42,7 @@ static void set_state(struct npu_runtime_slot *s, unsigned value)
 static int admit(const unsigned char *data, size_t bytes, unsigned char digest[32], struct nbg_assembly_layout *layout)
 {
     struct nbg_model model;
-    storage_digest_bytes(data, bytes, digest);
+    if (digest) storage_digest_bytes(data, bytes, digest);
     /* The command allocation is the graph's own stream rounded to a page (the layout bounds it by the hardware field),
      * so a slot is sized by the largest resident graph and not by the hardware maximum. */
     return nbg_model_open(data, bytes, &model) == NBG_DECODE_OK && nbg_assembly_layout(&model, layout) &&
@@ -73,35 +73,67 @@ static void need(const struct nbg_assembly_layout *l, size_t model_bytes, struct
  * addresses leave one unmapped page after every allocation. */
 struct placement {
     size_t tables, tables_bytes, arena, arena_bytes, bootstrap, staging, bytes;
-    /* Every slot's regions are the same size, so a slot's offset is a base plus a multiple of a stride: command[i] =
-     * command0 + i * (COMMAND + constant), constant[i] = command[i] + COMMAND, read[i] = read0 + i * read, write[i] =
-     * write0 + i * write; likewise for the device addresses, with one unmapped page after every allocation. */
+    /* The three bases; a slot's regions follow its predecessors' (slot_place below). */
     size_t command0, read0, write0;
     uint32_t bootstrap_device, command_device0, read_device0, write_device0;
 };
-static size_t command_offset(const struct placement *p, const struct sizes *z, unsigned i)
-{ return p->command0 + (size_t)i * (z->command + z->constant); }
-static uint32_t command_device(const struct placement *p, const struct sizes *z, unsigned i)
-{ return p->command_device0 + (uint32_t)((uint64_t)i * (z->command + PAGE + z->constant + PAGE)); }
+/* The regions of one slot: the sizes of its own graph when the bounds name one for each slot, else the largest graph's. */
+struct slot_dims { struct sizes size; size_t command_cpu, read_cpu, write_cpu; uint64_t command_dev, read_dev, write_dev; };
+static int slot_size(const struct npu_runtime_model *models, const struct nbg_assembly_layout *plans,
+                     const struct npu_runtime_bounds *bounds, const struct sizes *z, unsigned i, struct sizes *out)
+{
+    if (!bounds || !bounds->slot_model) { *out = *z; return 1; }
+    const unsigned m = bounds->slot_model[i];
+    struct nbg_assembly_layout one;
+    if (!plans && !admit(models[m].data, models[m].bytes, NULL, &one)) return 0;
+    memset(out, 0, sizeof(*out));
+    need(plans ? &plans[m] : &one, models[m].bytes, out);
+    return 1;
+}
+/* Slot i's sizes and its offsets (CPU and device) relative to the three bases, with one unmapped page after every
+ * allocation. With one size for all slots these are i times the stride, as before. */
+static int slot_place(const struct npu_runtime_model *models, const struct nbg_assembly_layout *plans,
+                      const struct npu_runtime_bounds *bounds, const struct sizes *z, unsigned i, struct slot_dims *d)
+{
+    memset(d, 0, sizeof(*d));
+    for (unsigned j = 0; j <= i; ++j) {
+        struct sizes s;
+        if (!slot_size(models, plans, bounds, z, j, &s)) return 0;
+        if (j == i) { d->size = s; break; }
+        d->command_cpu += s.command + s.constant;
+        d->command_dev += s.command + PAGE + s.constant + PAGE;
+        d->read_cpu += s.read; d->read_dev += s.read + PAGE;
+        d->write_cpu += s.write; d->write_dev += s.write + PAGE;
+    }
+    return 1;
+}
 size_t npu_runtime_tables_bytes(unsigned count)
 {
     const size_t per = sizeof(struct npu_runtime_model) + sizeof(struct nbg_assembly_layout) + 32;
     return ((size_t)count * per + 63) & ~(size_t)63;
 }
-static int place(const struct sizes *z, unsigned slots, unsigned count, struct placement *p)
+static int place(const struct npu_runtime_model *models, const struct nbg_assembly_layout *plans,
+                 const struct npu_runtime_bounds *bounds, const struct sizes *z, unsigned slots, unsigned count,
+                 struct placement *p)
 {
     memset(p, 0, sizeof(*p));
     if (!z->command || !z->constant || !z->read || !z->write || !z->staging || z->constant > UINT32_MAX ||
         z->read > UINT32_MAX || z->write > UINT32_MAX) return 0;
+    /* The totals of the three groups, from every slot's own sizes. */
+    uint64_t command_total = 0, command_dev = 0, read_total = 0, read_dev = 0, write_total = 0, write_dev = 0;
+    for (unsigned i = 0; i < slots; ++i) {
+        struct sizes s;
+        if (!slot_size(models, plans, bounds, z, i, &s)) return 0;
+        command_total += s.command + s.constant; command_dev += s.command + PAGE + s.constant + PAGE;
+        read_total += s.read; read_dev += s.read + PAGE;
+        write_total += s.write; write_dev += s.write + PAGE;
+    }
     uint64_t device = NPU_RUNTIME_DEVICE_BASE;
 #define NEXT(field, bytes) do { field = (uint32_t)device; device += (uint64_t)(bytes) + PAGE; } while (0)
     NEXT(p->bootstrap_device, z->command);
-    p->command_device0 = (uint32_t)device;
-    for (unsigned i = 0; i < slots; ++i) { device += z->command + PAGE; device += (uint64_t)z->constant + PAGE; }
-    p->read_device0 = (uint32_t)device;
-    for (unsigned i = 0; i < slots; ++i) device += (uint64_t)z->read + PAGE;
-    p->write_device0 = (uint32_t)device;
-    for (unsigned i = 0; i < slots; ++i) device += (uint64_t)z->write + PAGE;
+    p->command_device0 = (uint32_t)device; device += command_dev;
+    p->read_device0 = (uint32_t)device; device += read_dev;
+    p->write_device0 = (uint32_t)device; device += write_dev;
 #undef NEXT
     if (device > UINT64_C(1) << 32) return 0;
     /* One 16 KiB leaf table per 16 MiB the device range touches. */
@@ -112,11 +144,11 @@ static int place(const struct sizes *z, unsigned slots, unsigned count, struct p
     p->arena = offset; offset += p->arena_bytes;
     p->bootstrap = offset; offset += z->command;
     p->staging = offset; offset += z->staging;
-    p->command0 = offset; offset += (size_t)slots * (z->command + z->constant);
+    p->command0 = offset; offset += command_total;
     offset = whole_groups(offset);
-    p->read0 = offset; offset += (size_t)slots * z->read;
+    p->read0 = offset; offset += read_total;
     offset = whole_groups(offset);
-    p->write0 = offset; offset += (size_t)slots * z->write;
+    p->write0 = offset; offset += write_total;
     p->bytes = whole_groups(offset);
     return 1;
 }
@@ -136,6 +168,10 @@ static int sized(const struct npu_runtime_model *models, unsigned count, unsigne
             !admit(models[m].data, models[m].bytes, digests ? digests[m] : digest, plans ? &plans[m] : &one)) return 0;
         need(plans ? &plans[m] : &one, models[m].bytes, z);
     }
+    if (bounds && bounds->slot_model) {
+        if (bounds->capacity) return 0; /* a graph registered later could go to any slot */
+        for (unsigned i = 0; i < slots; ++i) if (bounds->slot_model[i] >= count) return 0;
+    }
     unsigned capacity = 0;
     if (bounds && bounds->capacity) {
         /* Graphs registered later: a model's regions are at most its bytes (the descriptors, coefficients, dynamic-input
@@ -151,7 +187,7 @@ static int sized(const struct npu_runtime_model *models, unsigned count, unsigne
         if (tensors > z->write) z->write = tensors;
         if (pages(bounds->graph_bytes) > z->staging) z->staging = pages(bounds->graph_bytes);
     }
-    return place(z, slots, count + capacity, p);
+    return place(models, plans, bounds, z, slots, count + capacity, p);
 }
 enum npu_declaration_result npu_runtime_reservation_with(const struct npu_runtime_model *models, unsigned count,
                                                         unsigned slots, size_t pool_bytes, size_t *bytes,
@@ -231,11 +267,13 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
         z.command, p.bootstrap_device, A733_NPU_BUFFER_BOOTSTRAP};
     for (unsigned i = 0; i < v.slots; ++i) {
         struct npu_runtime_slot *s = &rt->slot[i];
-        REGION(s->command, command_offset(&p, &z, i), z.command, command_device(&p, &z, i));
-        REGION(s->constant, command_offset(&p, &z, i) + z.command, z.constant,
-               command_device(&p, &z, i) + z.command + PAGE);
-        REGION(s->read, p.read0 + (size_t)i * z.read, z.read, p.read_device0 + (uint32_t)((uint64_t)i * (z.read + PAGE)));
-        REGION(s->write, p.write0 + (size_t)i * z.write, z.write, p.write_device0 + (uint32_t)((uint64_t)i * (z.write + PAGE)));
+        struct slot_dims d;
+        if (!slot_place(v.models, rt->plans, &v.bounds, &z, i, &d)) return fault(rt);
+        REGION(s->command, p.command0 + d.command_cpu, d.size.command, p.command_device0 + (uint32_t)d.command_dev);
+        REGION(s->constant, p.command0 + d.command_cpu + d.size.command, d.size.constant,
+               p.command_device0 + (uint32_t)d.command_dev + (uint32_t)(d.size.command + PAGE));
+        REGION(s->read, p.read0 + d.read_cpu, d.size.read, p.read_device0 + (uint32_t)d.read_dev);
+        REGION(s->write, p.write0 + d.write_cpu, d.size.write, p.write_device0 + (uint32_t)d.write_dev);
         all[n++] = (struct a733_npu_buffer){s->command.cpu, s->command.physical, s->command.bytes,
             s->command.device, A733_NPU_BUFFER_COMMAND};
         all[n++] = (struct a733_npu_buffer){s->constant.cpu, s->constant.physical, s->constant.bytes,
@@ -507,6 +545,12 @@ static int load_work(struct npu_runtime *rt)
         unsigned char digest[32];
         storage_digest_end(&rt->digest, digest);
         const struct nbg_assembly_layout *plan = &rt->plans[s->model];
+        {   /* The graph must fit this slot's regions (they are sized by one graph when the slots are). */
+            struct sizes fit = {0};
+            need(plan, model->bytes, &fit);
+            if (fit.command > s->command.bytes || fit.constant > s->constant.bytes || fit.read > s->read.bytes ||
+                fit.write > s->write.bytes) { load_end(rt, s, 0); return 1; }
+        }
         targets(s, plan);
         if (memcmp(digest, rt->model_digest[s->model], 32) ||
             nbg_model_open((const void *)rt->staging, model->bytes, &rt->view) != NBG_DECODE_OK ||

@@ -34,7 +34,10 @@ struct npu_runtime_model { const void *data; size_t bytes; };
  * lifetime; LOAD authenticates each copy it makes. */
 /* Graphs loaded after preparation (npu_runtime_register): capacity more catalogue entries, each model at most graph_bytes
  * long with no tensor larger than tensor_bytes. The reservation covers them, so a registered graph cannot fail on memory. */
-struct npu_runtime_bounds { unsigned capacity; size_t graph_bytes, tensor_bytes; };
+/* slot_model: when not NULL, slot i holds catalogue model slot_model[i] for the whole run (a queue image keeps one graph
+ * resident per slot) and its regions are sized from that graph alone; NULL sizes every slot for the largest graph. It
+ * needs capacity 0, because a graph registered later could go to any slot. LOAD refuses a graph that does not fit its slot. */
+struct npu_runtime_bounds { unsigned capacity; size_t graph_bytes, tensor_bytes; const unsigned *slot_model; };
 struct npu_runtime_config {
     const struct npu_runtime_model *models; /* count entries; the caller keeps them alive until prepare returns */
     unsigned count, slots;

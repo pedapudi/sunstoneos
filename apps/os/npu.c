@@ -546,7 +546,15 @@ int os_npu_start(void)
     /* Graphs beyond the linked ones are loaded at run time, within the bounds the session declares. */
     struct npu_runtime_bounds bounds={0};
     if(declared.graph_bytes&&declared.tensor_bytes&&declared.graphs>os_npu_model_count)
-        bounds=(struct npu_runtime_bounds){declared.graphs-os_npu_model_count,declared.graph_bytes,declared.tensor_bytes};
+        bounds=(struct npu_runtime_bounds){declared.graphs-os_npu_model_count,declared.graph_bytes,declared.tensor_bytes,NULL};
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+    /* A queue image keeps graph i resident in slot i: each slot is sized by its own graph, not by the largest. */
+    static unsigned slot_model[NPU_RUNTIME_SLOTS];
+    if(!bounds.capacity&&slots==os_npu_model_count&&slots<=NPU_RUNTIME_SLOTS){
+        for(unsigned i=0;i<slots;++i)slot_model[i]=i;
+        bounds.slot_model=slot_model;
+    }
+#endif
     const enum npu_declaration_result fit=npu_runtime_reservation_with(os_npu_models,os_npu_model_count,slots,OS_NPU_POOL_BYTES,&need,&bounds);
     if(fit!=NPU_DECLARATION_OK){board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),(uint32_t)fit,SUNSTONE_CRUMB_HERE());return 0;}
     if(start!=OS_NPU_POOL_START||end-start!=OS_NPU_POOL_BYTES)return REFUSE();

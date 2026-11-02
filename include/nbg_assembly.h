@@ -1,6 +1,7 @@
 #ifndef SUNSTONE_NBG_ASSEMBLY_H
 #define SUNSTONE_NBG_ASSEMBLY_H
 #include "nbg_model.h"
+#include "a733_npu_mmu.h"
 
 #define NBG_ASSEMBLY_MAX_NN 1024u
 #define NBG_ASSEMBLY_PAGE 4096u
@@ -27,7 +28,7 @@ struct nbg_assembly_plan {
  * pointer word that no patch sets and whose value is below it cannot address a mapped byte. A stream-processor operation
  * that keeps its result in the engine's own scratch (the steps of a softmax) carries a small offset there, up to 118,496
  * in compiled attention layers (docs/hardware/npu-command-formats.md, "Unpatched pointer words"). */
-#define NBG_ASSEMBLY_LOW_RESERVED 0x100000u
+#define NBG_ASSEMBLY_LOW_RESERVED A733_NPU_MMU_LOW_RESERVED
 #ifndef NBG_ASSEMBLY_MAX_TENSORS
 #define NBG_ASSEMBLY_MAX_TENSORS 8u
 #endif

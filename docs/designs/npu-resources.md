@@ -110,6 +110,41 @@ tasks, from `tools/npu-stack-depth.py` (static, from the compiler's stack usage 
 | a LOAD step (`load_work`) | 7776 | 2320 |
 | the service worker with a LOAD step (`runtime_worker`) | 8064 | 2608 |
 
+## The pool
+
+The pool is the DRAM that the NPU runtime reserves for its slots: per slot a command allocation, a read-only region
+(descriptors, coefficients, dynamic input), a read region and a write region, with an unmapped page after each, plus the
+page tables, the bootstrap stream and the staging area. Its size follows from the declaration, not from a constant.
+
+**Per-slot sizing.** When slot i holds one graph for the whole run (a queue image keeps graph i resident in slot i,
+`npu_runtime_bounds.slot_model`), the regions of slot i are sized from that graph alone; otherwise every slot is sized for
+the largest graph, because any graph may be loaded into any slot. Two things follow. A graph whose scratch is large
+(a convolution with a multi-megabyte pool) costs that scratch once, not in every slot. LOAD refuses a graph that does not
+fit the regions of its slot, so the sizing cannot be exceeded by a later request. A graph registered at run time needs the
+uniform layout (any slot may receive it), so `slot_model` and run-time capacity exclude each other. With the eight
+single-operation graphs of the host set the slot regions take 258,048 bytes against 360,448 with one size for all slots
+(`checks/os-npu-graphs.py`, case 30).
+
+**Placement.** `OS_NPU_POOL_BYTES` is a build parameter, `SUNSTONE_OS_NPU_POOL_BYTES`, in blocks of 2 MiB from 8 to 48 MiB;
+`checks/npu-pool-size.py` computes the bytes that a model list and a number of slots need from the real runtime
+(`npu_runtime_reservation_with`), and the image refuses at start if the declaration does not fit its pool. 8 MiB stays at
+`0x47400000..0x47c00000`, the layout of every image so far. A larger pool is placed so that it ends at `0x47000000`, the
+bottom of the monitor interval, and starts at `0x47000000 - bytes`. The rule rests on four bounds:
+
+- The CPU side: the pool must be write-back RAM that EL0 reaches, which is `0x40000000..0x48000000` in the cached profile
+  (the DRAM above `0x48000000` is closed to EL0 and the queue's tensor windows are EL0 buffers). It must not overlap the
+  image RAM (`0x41000000..0x42200000`), the application regions (`0x44000000..0x47000000`, so the application regions of a
+  session must end at the pool start), or the monitor interval `0x47000000..0x47400000`. The largest pool (48 MiB) fills the
+  application window.
+- The NPU side, device addresses: 32 bits, from `NPU_RUNTIME_DEVICE_BASE` (`0x10000000`) with a guard page after every
+  allocation; the total of the three groups and the guards must stay below 4 GiB (`place()` refuses otherwise). The pool
+  size does not change the device layout, which depends on the slot sizes only.
+- The NPU side, physical addresses: the page-table builder maps physical addresses below 2^40 with the tables in one 4 GiB
+  window (`a733_npu_mmu_build`); every address of the pool is below 4 GiB.
+- The session binding: the NPU extent of the session names `pool_start` and `pool_bytes`, and admission refuses a session
+  that differs from the image (`apps/os/admission.c`); the host side of the normal return (`apps/os/cpu-return-host.py`)
+  accepts the legacy extent and a sized one, and backs up and restores the whole extent.
+
 ## Graphs from the graph
 
 The runtime takes every fact about a graph from the graph itself: tensor counts, shapes, formats and quantization through

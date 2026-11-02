@@ -8,7 +8,7 @@ completes jobs without computing them, so outputs are compared on the board, not
 tools/npu-graph-variants.py compiled by tools/npu-graph-compile.sh; --graphs names the directory that holds
 artifacts.json (graph files, input and simulator reference tensors).
 """
-import argparse, hashlib, importlib.util, json, os, subprocess, shutil, sys
+import argparse, hashlib, importlib.util, json, os, re, subprocess, shutil, sys
 from pathlib import Path
 
 import host_rtos
@@ -60,6 +60,19 @@ for label, listing in (('a1', 'models-a1.json'), ('a2', 'models-a2.json'), ('b',
     (work / 'run.log').write_text(done.stdout + done.stderr)
     assert done.returncode == 0, (label, done.stdout[-600:], done.stderr[-800:])
     ran.append((label, len(names)))
+    if label == 'a1':
+        # Case 30: one slot for each of the set's graphs. Sized by its own graph each slot holds less than when every slot is
+        # sized for the largest graph; both layouts are prepared, registered and walked by the check.
+        totals = {}
+        for mode in ('own', 'uniform'):
+            env = {**environment(), **({'UNIFORM': '1'} if mode == 'uniform' else {})}
+            r = subprocess.run([str(exe), '30', str(inputs)], capture_output=True, text=True, env=env, timeout=1800)
+            assert r.returncode == 0, (mode, r.stdout[-600:], r.stderr[-800:])
+            line = [l for l in r.stdout.splitlines() if 'bytes in the slots' in l][-1]
+            totals[mode] = tuple(int(t) for t in re.findall(r'(\d+) bytes', line))
+        assert totals['own'][1] < totals['uniform'][1] and totals['own'][0] <= totals['uniform'][0], totals
+        print('per-slot sizing: %d bytes in the slot regions against %d with one size for all slots (reserved %d against %d)' %
+              (totals['own'][1], totals['uniform'][1], totals['own'][0], totals['uniform'][0]))
     print('set', label, ':', done.stdout.strip().splitlines()[-1])
 # An unseen graph: the relu graph with one coefficient byte changed, so that its digest is in no table, described by an
 # entry of its own in a copy of the model list. The runtime must admit, place, assemble and submit it.

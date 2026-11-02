@@ -4,8 +4,16 @@
 #include "sunstone_app.h"
 /* The immutable linked catalogue (apps/os/npu-catalogue.py). */
 #define OS_NPU_CORE 1u
-#define OS_NPU_POOL_START UINT64_C(0x47400000)
+/* The pool is sized from the application's declaration (cmake SUNSTONE_OS_NPU_POOL_BYTES, docs/designs/npu-resources.md,
+ * "The pool"): 8 MiB at 0x47400000 as always, or a larger multiple of 2 MiB that ends at 0x47000000, the bottom of the
+ * monitor interval, so that it stays inside the write-back RAM that EL0 reaches and below the application regions. */
+#ifndef OS_NPU_POOL_BYTES
 #define OS_NPU_POOL_BYTES UINT64_C(0x800000)
+#endif
+#define OS_NPU_POOL_LEGACY_BYTES UINT64_C(0x800000)
+#define OS_NPU_POOL_START (OS_NPU_POOL_BYTES==OS_NPU_POOL_LEGACY_BYTES?UINT64_C(0x47400000):UINT64_C(0x47000000)-OS_NPU_POOL_BYTES)
+_Static_assert(OS_NPU_POOL_BYTES>=OS_NPU_POOL_LEGACY_BYTES&&OS_NPU_POOL_BYTES<=UINT64_C(0x3000000)&&
+               !(OS_NPU_POOL_BYTES&(UINT64_C(0x200000)-1)),"the NPU pool is 8 to 48 MiB in blocks of 2 MiB");
 #include "npu-session.h"
 extern const struct npu_runtime_model os_npu_models[];
 extern const unsigned os_npu_model_count,os_npu_client_entry;

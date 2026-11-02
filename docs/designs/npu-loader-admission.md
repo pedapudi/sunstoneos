@@ -25,6 +25,24 @@ comes from the page tables (see "Memory containment"). Admission is layered:
    the copy it stages and compares. This detects a corrupted or replaced copy; it is not an admission rule and needs
    no table. An application that wants its graph authenticated supplies its own digest with the graph.
 
+5. **The low device range is never mapped.** A pointer word of a descriptor that no patch sets is admitted when it is below
+   `NBG_ASSEMBLY_LOW_RESERVED` (1 MiB, `A733_NPU_MMU_LOW_RESERVED`). Such words are not addresses of the job's buffers: the
+   stream-processor steps of a softmax over 92 positions hold `0x4220` to `0x1cee0`, multiples of the byte size of one
+   head's scores or of one row. They are not in the SRAM window either: the window starts at `0x400000` (4 MiB) and has
+   the size of the SRAM that the feature database reports (512 KiB on this NPU), so every one of them lies below it. The
+   basis is the page tables and nothing else. (a) `placed()` refuses a buffer whose device address is below the bound;
+   (b) `a733_npu_mmu_build` refuses a region that starts below it, for every page size; (c) the vendor driver reserves the
+   same range: before it assigns any buffer it allocates the device pages from 0 up to the end of the SRAM window and the
+   guard pages after it (`vip2/memory/vip_drv_mmu.c:721-729`, with `vip_sram_address = 0x400000` at `:711` and the size
+   from `vip2/vip_drv_context.c:337`), so on the vendor's own tables nothing below `0x400000` maps either. Host checks:
+   `checks/npu-mmu.c` builds a table for every page size, shows that a region below the bound is refused and that all
+   256 pages of 4 KiB below it fault for a read and a write; `checks/os-npu-service.c` walks the tables the runtime built
+   for the one-slot, the 31-slot and the one-slot-per-graph layouts and finds no entry below the bound, and every region of
+   every slot and the bootstrap buffer lies above it; `checks/nbg-graph-admission.py` shows that a pointer word of `0x4220`
+   is admitted and that one of `0x100000` is refused (with a control that removes the rule). If the engine uses such a
+   word as an address, the access faults in the page tables and the job fails (the MMU exception of the board runs); it
+   cannot reach another client's memory. If it uses it as an offset in its own scratch, no access leaves the engine.
+
 Fields that the loader does not interpret (program words, shader state, some descriptor words) are listed in the
 [command formats](../hardware/npu-command-formats.md) as unknown. They can steer the engine only inside the job's
 mappings.
