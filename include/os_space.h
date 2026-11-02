@@ -19,6 +19,10 @@ extern uint8_t os_space_active;
  * slot from 16 up is zero. */
 #define OS_KERNEL_L1_HEAD 16
 void os_kernel_l1_head(uint64_t out[OS_KERNEL_L1_HEAD]);
+/* The 512 level-2 entries of level-1 slot 1 (0x40000000 to 0x80000000), copied the same way, so that a space can own
+ * blocks above the 128 MiB that EL0 reaches in every space (app_space_build_l2). */
+#define OS_KERNEL_L2_ENTRIES 512
+void os_kernel_l2_slot1(uint64_t out[OS_KERNEL_L2_ENTRIES]);
 static inline void os_space_switch_in(const void *tag)
 {
     if (!os_space_active) return;

@@ -75,8 +75,9 @@ int os_large_prepare(void)
     uint64_t ttbr;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
     /* The table's pages may be unmapped at EL1, so its entries come from the platform's copy (os_space.h). */
-    static uint64_t base_l1[512];
+    static uint64_t base_l1[512], base_l2[512];
     os_kernel_l1_head(base_l1);
+    os_kernel_l2_slot1(base_l2);
     struct app_region_range usable[APP_REGION_SLOTS];
     unsigned ranges = usable_ranges(base_l1, usable, APP_REGION_SLOTS);
     uint64_t mmfr0, tcr;
@@ -87,7 +88,7 @@ int os_large_prepare(void)
         app_region_ledger_init(&ledger, usable_storage, APP_REGION_SLOTS, os_large_entry_storage, os_large_capacity, usable, ranges)) return 0;
     if (large_admit(&ledger, owner_asid, __start_sunstone_large_regions, count, slots, os_large_capacity)) return 0;
     arena = (struct app_table_arena){arena_pages, (uintptr_t)arena_pages, APP_SPACE_PAGES, 0};
-    int built = app_space_build(&space, &arena, base_l1, &ledger, owner_asid) == 0;
+    int built = app_space_build_l2(&space, &arena, base_l1, base_l2, &ledger, owner_asid, owner_asid, 0) == 0;
     /* The heap record, when the manifest has one, becomes the C library's heap; an image whose library cannot
      * take it refuses the application rather than run with a heap of another size. */
     for (unsigned i = 0; built && i < count; ++i)

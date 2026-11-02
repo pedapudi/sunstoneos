@@ -35,6 +35,8 @@ uint64_t a733_cached_el1_table_sum[8] __attribute__((section(".bss.a733_cached_t
  * 16 GiB are copied here, into ordinary memory, once the tables are complete (include/os_space.h). */
 static uint64_t el1_l1_head[16];
 void os_kernel_l1_head(uint64_t out[16]) { for (unsigned i = 0; i < 16; ++i) out[i] = el1_l1_head[i]; }
+static uint64_t el1_l2_copy[512];          /* level-1 slot 1's level-2 table, for the same reason */
+void os_kernel_l2_slot1(uint64_t out[512]) { for (unsigned i = 0; i < 512; ++i) out[i] = el1_l2_copy[i]; }
 extern unsigned char __tables_start[], __tables_end[], __bss_end[], __heap_end[];
 extern unsigned char __device_pool_start[], __device_pool_end[];
 extern unsigned char __uncached_pool_start[], __uncached_pool_end[];
@@ -216,6 +218,7 @@ int a733_cached_memory_prepare(void)
     /* Last table step: each core compares this with its own readback. */
     for (unsigned i = 16; i < 512; ++i) if (a733_cached_el1_l1[i]) return 0;
     for (unsigned i = 0; i < 16; ++i) el1_l1_head[i] = a733_cached_el1_l1[i];
+    for (unsigned i = 0; i < 512; ++i) el1_l2_copy[i] = a733_cached_el1_l2[i];
     uint64_t sum = 0;
     for (unsigned i = 0; i < 512; ++i) sum += a733_cached_el1_l1[i] + a733_cached_el1_l2[i];
     #if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
