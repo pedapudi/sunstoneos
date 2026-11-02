@@ -72,6 +72,41 @@ A result of all eight cores below 9 GB/s would show a limit below the DRAM pins,
 for example the 600 MHz memory-bus clock, and would change the plan for any
 workload that streams more than that rate.
 
+## Predicted rate of matrix products that stream their weights
+
+A matrix product with R activation rows reads each int8 weight byte once and
+uses it for R multiply-accumulates, so with R below about 8 the weight bytes
+stream at close to one byte per useful multiply-accumulate. The packed 8-bit
+weight by 16-bit activation kernel of the speech engine (a four-row, eight-channel
+tile of dot-product instructions) computes four rows per tile whatever R is, so a
+tile with R below 4 does the work of four rows. The engine's own measurement of the
+eight-core kernel is 30.4 giga multiply-accumulates per second on full tiles; the
+engine's worker weights (1024 for an A76 core, about 305 for an A55 core) place one
+A76 core at 8.0 giga multiply-accumulates per second.
+
+The benchmark times one pass over the twelve weight matrices of one encoder layer
+of a 0.6-billion-parameter streaming recognizer (23 MiB, 24.1 million bytes; the
+matrices are listed in the benchmark's source) and over one 0.5 MiB matrix called 64 times
+(weights resident in the L2 and L3 caches). It uses two kernels: the engine's
+linear routine as shipped, which runs on the calling core alone when R is below 16,
+and the same dot-product tile with the output channels split over all eight cores and
+each weight tile reused for all row groups. Predicted time per pass, from tile counts
+of ceil(R/4) four-row groups, the rates above and, for the streaming stack, a floor of
+24.1 MB divided by 8.4 to 12.7 GB/s (2.0 to 2.9 ms):
+
+| R | As shipped, streaming (ms) | Split over eight cores, streaming (ms) | Split, resident (ms) |
+| --- | --- | --- | --- |
+| 1 | 12.0 | 3.2 to 4 | 4.4 |
+| 2 | 12.0 | 3.2 to 4 | 4.4 |
+| 7 | 24.0 | 6.4 to 7 | 8.8 |
+| 14 | 48.0 | 12.7 to 14 | 17.5 |
+| 64 | 51 | 51 to 56 | 70 |
+
+At R = 1 and R = 2 the prediction for the split kernel is set by the padded tiles,
+not by the memory. The rate in multiply-accumulates per second of the streaming pass
+should therefore equal that of the resident pass within about 25 percent; a
+streaming rate further below the resident rate shows a limit from the memory.
+
 ## Result
 
 The board record, the measured table and the comparison with this prediction
