@@ -27,6 +27,7 @@ static int32_t temperature;
 
 int a733_counter_clock_now(void *v,uint64_t *out){(void)v;*out=model_time;return 1;}
 int board_live(void *v){(void)v;return 1;}
+uint32_t board_live_refusal(void){return 0;}
 int os_application_deadline(void){return 1;}
 unsigned os_application_activity_generation(void){return 7;}
 int os_cpu_clock_step(const struct a733_thermal_policy *p){(void)p;++clocks;return 1;}

@@ -192,7 +192,7 @@ struct sunxi_mmc {
     /* UHS-I switch and tuning progress. */
     uint64_t signal_us;
     unsigned sd_sig, tune_delay, tune_repeat, tune_recover;
-    uint8_t s18r, signal_window, tuning, tune_failed, after_clock;
+    uint8_t s18r, signal_window, tuning, tune_failed, after_clock, observe_s18;
     uint8_t tuning_block[64];
 };
 /* Zero storage before its first use. Single task owner; no concurrent ISR or
@@ -203,6 +203,10 @@ struct sunxi_mmc {
  */
 int sunxi_mmc_init(struct sunxi_mmc *, const struct sunxi_mmc_config *);
 int sunxi_mmc_open(struct sunxi_mmc *, uint64_t absolute_deadline_us);
+/* After init and before open, for an SD core that is not in the UHS-I profile: every ACMD41 carries S18R and the card's answer is
+ * kept (card.ocr bit 24 is S18A), but CMD11 is never sent, so the card stays at 3.3 V signalling. A read-only capability
+ * observation. Returns 0 for eMMC, for the UHS-I profile and for a core already opened. */
+int sunxi_mmc_observe_s18(struct sunxi_mmc *);
 /* Entire range and byte/sector command argument are validated before MMIO.
  * Borrowed storage must remain exclusive through DONE or terminal FAULT.
  */

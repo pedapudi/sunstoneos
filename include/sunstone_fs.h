@@ -30,6 +30,7 @@
 
 struct ss_fs_file {
     struct fwr_file file;
+    struct fwr_cursor cursor;    /* the read position: sequential reads do not rescan the directory or the chain */
     char path[SS_FS_PATH_MAX];
     uint64_t position;
     uint8_t *buffer;

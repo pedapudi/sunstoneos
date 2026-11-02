@@ -30,6 +30,7 @@ static struct os_thermal_service {
     unsigned active,retaining,masked,rearm_wait;
     uint64_t next_read;
     uint32_t cpu_critical_millicelsius;
+    uint32_t critical_word;               /* the reading behind a CRITICAL stop, for the failure record (critical_reading) */
 } thermal;
 /* Recognition may run before the thermal task or the first complete sensor
  * set. Keep load reduced until all channels have valid, nonstale readings. */
@@ -206,7 +207,7 @@ static void cancel_from(uint32_t site,const void *here)
 #endif
  atomic_store_explicit(&load_state,A733_THERMAL_CRITICAL,memory_order_release);
  atomic_store_explicit(&thermal.failed,1,memory_order_release);
- board_fail_at(site,thermal.driver.fault_site,here);}
+ board_fail_at(site,thermal.critical_word?thermal.critical_word:thermal.driver.fault_site,here);}
 /* Each cancel() and fault() call site records its own line and address. */
 #define cancel() cancel_from(SUNSTONE_CRUMB_FAIL_SITE(THERMAL),SUNSTONE_CRUMB_HERE())
 static void publish_load(enum a733_thermal_level level)
@@ -250,13 +251,37 @@ static int rearm(void)
     }
     taskEXIT_CRITICAL();return ok;
 }
+/* A stop returns no report, so the failure record (RTC word 0x11c, the "value" of the first board failure) carries the reading that
+ * caused a CRITICAL stop: bit 31 set; bit 30 the channel is critical for lack of a reading (stale), its value then the last one;
+ * bits 26:24 the lowest critical channel (the channel that tripped, else the one the policy last read); bits 23:0 its millicelsius,
+ * clamped to 0..0xffffff. A driver fault still records the driver's fault site, which has bit 31 clear. */
+static uint32_t critical_reading(void)
+{
+    unsigned mask=thermal.policy.critical?thermal.policy.critical:(1u<<thermal.policy.sensor),i=0;
+    while(i<4&&!(mask&(1u<<i)))++i;
+    int32_t c=thermal.policy.millicelsius[i];
+    if(c<0)c=0;
+    if(c>0xffffff)c=0xffffff;
+    return 0x80000000u|((thermal.policy.stale&(1u<<i))?0x40000000u:0)|((uint32_t)i<<24)|(uint32_t)c;
+}
+/* The session left the thermal owner's liveness (owner() false) without a reading or a driver fault behind it. The value word then holds
+ * 0x20000000 | which terms of live() failed: bit 0 board_live, 1 the application deadline, 2 the clock provider failed, 3 the thermal
+ * service failed, 4 the reading deadline passed, 5 the platform register lock is retained; bits 10:8 board_live_refusal() >> 28
+ * (board fatal, service window, session deadline). */
+static uint32_t lost_liveness(void)
+{
+    return 0x20000000u|(board_live(NULL)?0u:1u)|(os_application_deadline()?0u:2u)|
+        (atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)?4u:0u)|
+        (atomic_load_explicit(&thermal.failed,memory_order_acquire)?8u:0u)|(a733_smp_counter()/24<deadline()?0u:16u)|
+        ((atomic_load_explicit(&providers.shared.locks.retained,memory_order_acquire)&1u)?32u:0u)|((board_live_refusal()>>28&7u)<<8);
+}
 static int fault_from(uint32_t site,const void *here)
 {cancel_from(site,here);thermal.retaining=1;(void)mask();return -1;}
 #define fault() fault_from(SUNSTONE_CRUMB_FAIL_SITE(THERMAL),SUNSTONE_CRUMB_HERE())
 /* Owner task only. 1 after a completed bounded step, -1 once failed. */
 static int step(void)
 {
-    if(!owner()&&!thermal.retaining){cancel();thermal.retaining=1;}
+    if(!owner()&&!thermal.retaining){thermal.critical_word=lost_liveness();cancel();thermal.retaining=1;}
     if(thermal.retaining){
         (void)mask();
         if(thermal.retaining==1&&a733_clock_retain(&providers.shared.clocks,&thermal.token)!=A733_CLOCK_BUSY)thermal.retaining=2;
@@ -283,7 +308,7 @@ static int step(void)
         if(!a733_counter_clock_now(&providers.shared.counter,&t))return fault();
         level=a733_thermal_policy_update(&thermal.policy,t,thermal.driver.fault?A733_THERMAL_INVALID:r,&sample);
         record_reading(t,level);
-        if(level==A733_THERMAL_CRITICAL)return fault();
+        if(level==A733_THERMAL_CRITICAL){thermal.critical_word=critical_reading();return fault();}
         /* The final missing channel may arrive without changing policy level,
          * so the transition callback alone cannot release startup throttling. */
         publish_load(level);
@@ -304,7 +329,7 @@ static int step(void)
         if((state&3)==A733_THERMAL_NORMAL&&n>(state>>2)){
             enum a733_thermal_level level=a733_thermal_policy_update(&thermal.policy,n,A733_THERMAL_AGAIN,NULL);
             record_reading(n,level);
-            if(level==A733_THERMAL_CRITICAL)return fault();
+            if(level==A733_THERMAL_CRITICAL){thermal.critical_word=critical_reading();return fault();}
             publish_load(level);
 #ifdef SUNSTONE_A733_OS_NPU
             os_npu_thermal(0,1,0,n);

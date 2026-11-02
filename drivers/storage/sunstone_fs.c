@@ -47,7 +47,7 @@ int ss_open(struct ss_fs *fs, const char *path, int flags)
     uint64_t size = 0;
     int is_dir = 0, exists = fwr_exists(fs->volume, path, &size, &is_dir) == FWR_OK;
     if (is_dir) return -EISDIR;
-    memset(&f->file, 0, sizeof f->file);
+    memset(&f->file, 0, sizeof f->file); memset(&f->cursor, 0, sizeof f->cursor);
     f->position = 0; f->readable = access != SS_O_WRONLY; f->writable = access != SS_O_RDONLY;
     int r;
     if (!f->writable) {
@@ -123,7 +123,7 @@ ssize_t ss_read(struct ss_fs *fs, int fd, void *out, size_t n)
         if (r) return FAIL(r);
     }
     size_t got = 0;
-    int r = fwr_read(fs->volume, f->path, f->position, out, n, &got);
+    int r = fwr_read_cursor(fs->volume, &f->cursor, f->path, f->position, out, n, &got);
     if (r) return FAIL(r);
     f->position += got;
     return (ssize_t)got;

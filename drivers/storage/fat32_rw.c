@@ -296,6 +296,7 @@ static int dir_store(struct fwr_volume *v, uint64_t sector)
 {
     int r = begin_meta(v);
     if (r) return r;
+    ++v->dir_generation;
     r = dev_write(v, sector, 1, v->dir_sector, 0);
     if (r) v->dir_cached = UINT64_MAX; else v->dir_cached = sector;
     return r;
@@ -477,7 +478,8 @@ static int make_short(const char *name, uint8_t sfn[11], uint8_t *nt)
 
 static void make_basis(const char *name, uint8_t sfn[11])
 {
-    const char *dot = strrchr(name, '.');
+    const char *dot = NULL;                                   /* the last dot; no libc call, so the freestanding boards build it */
+    for (const char *q = name; *q; ++q) if (*q == '.') dot = q;
     while (*name == '.' || *name == ' ') ++name;
     if (dot && dot < name) dot = NULL;
     size_t stem_len = dot ? (size_t)(dot - name) : strlen(name);
@@ -1170,31 +1172,60 @@ int fwr_truncate(struct fwr_file *f, uint64_t size)
 
 int fwr_read(struct fwr_volume *v, const char *path, uint64_t offset, void *out, size_t n, size_t *got)
 {
-    uint32_t dir; char leaf[FWR_NAME_MAX + 1];
-    int r = resolve(v, path, &dir, leaf);
-    if (r) return r;
-    struct scan sc = {.name = leaf};
-    if ((r = scan_dir(v, dir, &sc))) return r;
-    if (!sc.found) return FWR_NOT_FOUND;
-    uint64_t size = le32(sc.loc.entry + 28);
-    uint32_t c = entry_cluster(sc.loc.entry);
+    struct fwr_cursor cursor = {0};
+    return fwr_read_cursor(v, &cursor, path, offset, out, n, got);
+}
+
+int fwr_read_cursor(struct fwr_volume *v, struct fwr_cursor *cur, const char *path, uint64_t offset, void *out, size_t n, size_t *got)
+{
+    int r;
+    if (cur->stamp != v->dir_generation + 1) {
+        uint32_t dir; char leaf[FWR_NAME_MAX + 1];
+        if ((r = resolve(v, path, &dir, leaf))) return r;
+        struct scan sc = {.name = leaf};
+        if ((r = scan_dir(v, dir, &sc))) return r;
+        if (!sc.found) return FWR_NOT_FOUND;
+        cur->size = le32(sc.loc.entry + 28);
+        cur->first = cur->cluster = entry_cluster(sc.loc.entry);
+        cur->index = 0;
+        cur->stamp = v->dir_generation + 1;
+        ++v->wear.read_resolves;
+    }
     *got = 0;
-    if (offset >= size) return FWR_OK;
-    if (n > size - offset) n = (size_t)(size - offset);
-    for (uint64_t skip = offset / v->csize; skip; --skip) {
+    if (offset >= cur->size) return FWR_OK;
+    if (n > cur->size - offset) n = (size_t)(cur->size - offset);
+    uint64_t want = offset / v->csize;
+    uint32_t c = cur->cluster;
+    uint64_t at = cur->index;
+    if (want < at) { c = cur->first; at = 0; }
+    for (; at < want; ++at) {
         uint32_t next;
+        ++v->wear.read_chain_steps;
         if ((r = fat_get(v, c, &next))) return r;
         if (next >= EOC_MIN || next < 2 || next == BAD) return FWR_CORRUPT;
         c = next;
     }
+    cur->cluster = c; cur->index = at;       /* a failed read below leaves the cursor at a valid cluster of this file */
     uint8_t *dst = out;
     uint64_t pos = offset;
     while (n) {
         uint32_t in = (uint32_t)(pos % v->csize);
-        size_t chunk = v->csize - in;
-        if (chunk > n) chunk = n;
-        uint64_t sector = cluster_sector(v, c) + in / S;
         uint32_t lead = in % S;
+        /* The run of contiguous clusters from c that this request reaches: one card read for all of them (the device splits it into pieces
+         * as for writes), not one per cluster. An unaligned start or length reads through the cluster buffer, one cluster at a time. */
+        uint64_t avail = v->csize - in;
+        uint32_t last = c;
+        if (!lead && n % S == 0) {
+            while (avail < n) {
+                uint32_t next;
+                ++v->wear.read_chain_steps;
+                if ((r = fat_get(v, last, &next))) return r;
+                if (next != last + 1) break;
+                last = next; avail += v->csize;
+            }
+        }
+        size_t chunk = avail > n ? n : (size_t)avail;
+        uint64_t sector = cluster_sector(v, c) + in / S;
         uint32_t sectors = (lead + (uint32_t)chunk + S - 1) / S;
         if (lead || chunk % S) {
             /* Unaligned edge: read through the cluster buffer. */
@@ -1202,11 +1233,14 @@ int fwr_read(struct fwr_volume *v, const char *path, uint64_t offset, void *out,
             memcpy(dst, v->cfg.cluster_buffer + lead, chunk);
         } else if ((r = dev_read(v, sector, sectors, dst))) return r;
         dst += chunk; pos += chunk; n -= chunk; *got += chunk;
+        /* The cluster that holds the last byte read is the last of the run. */
+        cur->cluster = last; cur->index = (pos - 1) / v->csize;
         if (n && pos % v->csize == 0) {
             uint32_t next;
-            if ((r = fat_get(v, c, &next))) return r;
+            ++v->wear.read_chain_steps;
+            if ((r = fat_get(v, last, &next))) return r;
             if (next >= EOC_MIN || next < 2 || next == BAD) return FWR_CORRUPT;
-            c = next;
+            c = next; at = pos / v->csize;
         }
     }
     return FWR_OK;
@@ -1399,7 +1433,8 @@ static int recover(struct fwr_volume *v)
     }
     if ((r = fat_flush(v))) return r;
     /* Free every cluster no entry claims; make both FAT copies equal; count the free clusters. */
-    uint32_t entries = v->clusters + 2, free_count = 0, lowest = 0, freed = 0;
+    uint32_t entries = v->clusters + 2, free_count = 0, lowest = 0, freed = 0, highest_used = 1;
+    uint32_t old_hint = v->next_hint >= 2 && v->next_hint < entries ? v->next_hint : 0, old_hint_free = 0;
     for (uint32_t first = 0; first * (S / 4) < entries; first += FWR_FAT_WINDOW_SECTORS) {
         if ((r = window_for(v, first))) return r;
         for (uint32_t i = 0; i < v->window_valid_sectors * (S / 4); ++i) {
@@ -1411,7 +1446,8 @@ static int recover(struct fwr_volume *v)
                 if ((r = fat_set(v, c, 0))) return r;
                 val = 0; ++freed;
             }
-            if (!val) { ++free_count; if (!lowest) lowest = c; }
+            if (!val) { ++free_count; if (!lowest) lowest = c; } else highest_used = c;
+            if (c == old_hint) old_hint_free = !val;
         }
         if ((r = fat_flush(v))) return r;
         if (v->fats == 2) {
@@ -1427,7 +1463,11 @@ static int recover(struct fwr_volume *v)
             }
         }
     }
-    v->free_clusters = free_count; v->next_hint = lowest ? lowest : 2;
+    /* The allocation hint: the old one while it still points at free space, else the first cluster after the highest
+     * used one, else the lowest free one. Rebuilding the count by a full scan must not send the next allocation back
+     * to the start of the FAT. */
+    v->free_clusters = free_count;
+    v->next_hint = old_hint_free ? old_hint : highest_used + 1 < entries ? highest_used + 1 : lowest ? lowest : 2;
     if ((r = fsinfo_write(v))) return r;
     v->wear.recoveries++; v->wear.recovered_clusters += freed;
     r = set_flag(v, 1);

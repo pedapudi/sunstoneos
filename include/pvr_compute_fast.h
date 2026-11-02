@@ -6,7 +6,8 @@
 #include "task.h"
 
 #define PVR_COMPUTE_FAST_DEPTH 4u
-#define PVR_COMPUTE_FAST_NOTIFY 1u
+#include "sunstone_notify.h"
+#define PVR_COMPUTE_FAST_NOTIFY SS_NOTIFY_REQUEST_WAIT
 #define PVR_COMPUTE_FAST_STRIDE 512u
 #define PVR_COMPUTE_FAST_PENDING 7
 struct pvr_compute_queue;

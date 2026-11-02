@@ -108,6 +108,26 @@ int main(void)
     begin(u, &h, 2); high_speed_33(u, &h, SUNXI_MMC_UHS_HOST); assert(!u->s18r_seen);
     begin(u, &h, 0); high_speed_33(u, &h, SUNXI_MMC_UHS_HOST);
     begin(u, &h, 3); u->s18a = 0; high_speed_33(u, &h, SUNXI_MMC_UHS_DECLINED); assert(u->s18r_seen);
+    /* Capability observation: ACMD41 carries S18R and the card's S18A is kept, but there is no CMD11 and the card stays at 3.3 V. */
+    for (unsigned s18a = 0; s18a < 2; ++s18a) {
+        struct sunxi_mmc_config c = {{uhs_read, uhs_write, barrier, now_us, admit, retained, uhs_module,
+            uhs_read_fifo, model_write_fifo, NULL, NULL}, u, 0xa733, SUNXI_MMC_SD, 800000, 0x300000,
+            SUNXI_MMC_SD_HIGH_SPEED4, NULL};
+        memset(u, 0, sizeof(*u)); seed(&u->base, &h, SUNXI_MMC_SD, 1);
+        field(u->base.csd, 84, 12, 5 | (1u << 10)); field(u->base.csd, 96, 8, 0x32); u->scr[0] = 2; u->scr[1] = 5;
+        u->caps = 1; u->s18a = s18a; u->sdr104 = 1; u->fatal_delay = 99; u->done_delay = 1000;   /* the model expects S18R in the argument */
+        assert(sunxi_mmc_init(&h, &c) && sunxi_mmc_observe_s18(&h) && sunxi_mmc_open(&h, 100000000));
+        assert(!sunxi_mmc_observe_s18(&h));
+        high_speed_33(u, &h, SUNXI_MMC_UHS_NONE);
+        assert(u->s18r_seen && !u->queries && (!!(h.card.ocr & (1u << 24))) == (int)s18a);
+    }
+    /* UHS-I and the observation do not combine, and the observation is for SD only. */
+    {
+        struct sunxi_mmc_config c = {{uhs_read, uhs_write, barrier, now_us, admit, retained, uhs_module,
+            uhs_read_fifo, model_write_fifo, uhs_signal, NULL}, u, 0xa733, SUNXI_MMC_SD, 800000, 0x300000,
+            SUNXI_MMC_SD_UHS_SDR104, NULL};
+        memset(&h, 0, sizeof(h)); assert(sunxi_mmc_init(&h, &c) && !sunxi_mmc_observe_s18(&h));
+    }
     /* After the card accepts CMD11 every failure is terminal: the specification
      * requires a card power cycle, available here only as board power removal. */
     begin(u, &h, 3); u->cmd11_timeout = 1; faulted(u, &h, SUNXI_MMC_CONTROLLER); assert(!u->sets && !u->bank);

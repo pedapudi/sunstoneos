@@ -54,12 +54,19 @@ int a733_mmc_platform_scopes(const struct a733_mmc_platform_config *c,a733_clock
     if(c->sd_profile)shared|=A733_CLOCK_PERI0;
     *out=shared;return 1;
 }
-static enum a733_mmc_platform_result fail(struct a733_mmc_platform *p)
+static enum a733_mmc_platform_result fail_at(struct a733_mmc_platform *p,unsigned line)
 {
+    if(!p->fault_line)p->fault_line=(uint16_t)line;
     p->fault=1;
     if(p->held){p->ops.retain(p->cookie);p->held=0;}
     if(p->clock.id&&!p->clock_retained) {
+        /* This controller's fault retains this controller's clock token, not the shared registry: the thermal service and every other
+         * owner keep their tokens. The controller's pins, rail and the register lock are retained below as before. */
+#ifdef A733_MMC_LOCAL_CLOCK_RETAIN
+        enum a733_clock_result r=a733_clock_retain_token(p->clocks,&p->clock);   /* opt-in until the coordinator admits it to a board image */
+#else
         enum a733_clock_result r=a733_clock_retain(p->clocks,&p->clock);
+#endif
         if(r!=A733_CLOCK_BUSY)p->clock_retained=1;
     }
     if(p->rail.id&&!p->rail_retained) {
@@ -68,12 +75,15 @@ static enum a733_mmc_platform_result fail(struct a733_mmc_platform *p)
     }
     return A733_MMC_RETAINED;
 }
+#define fail(p) fail_at((p),(unsigned)__LINE__)
 static int timely(struct a733_mmc_platform *p)
 {
     uint64_t now;
     if((p->update&&!UPDATE_ALIVE(p->update))||p->ops.now_us(p->cookie,&now)!=1||
-       !a733_monotonic_advance(now,&p->last_now))return 0;
-    return now<p->deadline&&now<p->config.lifetime_deadline_us;
+       !a733_monotonic_advance(now,&p->last_now)){if(!p->fault_why)p->fault_why=3;return 0;}
+    if(now>=p->deadline){if(!p->fault_why)p->fault_why=1;return 0;}
+    if(now>=p->config.lifetime_deadline_us){if(!p->fault_why)p->fault_why=2;return 0;}
+    return 1;
 }
 static enum a733_mmc_platform_result finish(struct a733_mmc_platform *p,enum a733_mmc_platform_result r)
 {
@@ -89,9 +99,17 @@ static int lock(struct a733_mmc_platform *p)
     p->held=1;return timely(p)?1:-1;
 }
 static int rd(struct a733_mmc_platform *p,uintptr_t a,uint32_t *v)
-{return timely(p)&&p->ops.read(p->cookie,a,v)==1&&timely(p);}
+{
+    if(!timely(p))return 0;
+    if(p->ops.read(p->cookie,a,v)!=1){if(!p->refused)p->refused=a>=p->base&&a<=p->base+0x300?(uint16_t)(((a-p->base)>>2)+1):0xff;return 0;}
+    return timely(p);
+}
 static int wr(struct a733_mmc_platform *p,uintptr_t a,uint32_t v)
-{return timely(p)&&p->ops.write(p->cookie,a,v)==1&&timely(p);}
+{
+    if(!timely(p))return 0;
+    if(p->ops.write(p->cookie,a,v)!=1){if(!p->refused)p->refused=a>=p->base&&a<=p->base+0x300?(uint16_t)(((a-p->base)>>2)+1):0xff;return 0;}
+    return timely(p);
+}
 static int update(struct a733_mmc_platform *p,uintptr_t a,uint32_t mask,uint32_t expected,uint32_t bits)
 {
     uint32_t old,got;
@@ -175,6 +193,14 @@ static int masked(struct a733_mmc_platform *p)
     if(!rd(p,GIC+0x218,&v))return -1;
     return (v&mask)?-1:1; /* Preserve an unexplained inherited pending interrupt. */
 }
+/* The controller's interrupt as the running checks want it: masked, or, once the owner completes by interrupt, enabled with the
+ * distributor settled. */
+static int gic_ok(struct a733_mmc_platform *p)
+{
+    if(!p->irq_mode)return masked(p);
+    uint32_t v;
+    return rd(p,GIC,&v)&&!(v&BIT(31))?1:-1;
+}
 static int live(struct a733_mmc_platform *p)
 {
     enum a733_clock_result c=a733_clock_token_status(p->clocks,&p->clock);
@@ -243,7 +269,14 @@ static int dma_chain(struct a733_mmc_platform *p,uint32_t command)
     uint32_t g,dlba,count;
     if(!rd(p,p->base+SUNXI_SMHC_GCTRL,&g))return 0;
     if(!(g&SUNXI_SMHC_GCTRL_DMA_ENABLE))return 1;
-    if(!p->config.dma||(command&SUNXI_SMHC_CMD_WRITE)||!p->core.borrowed||
+    /* A read-direction command needs a read in progress and a write-direction one the bounded DMA write (sunxi_mmc_write_dma) the core
+     * has authenticated; its source is the borrowed buffer, and the chain is checked the same way. The first board write was refused here. */
+#ifdef SUNXI_MMC_READ_ONLY
+    const int write_in_progress=0;
+#else
+    const int write_in_progress=p->core.dma_write!=0;
+#endif
+    if(!p->config.dma||((command&SUNXI_SMHC_CMD_WRITE)!=0)!=write_in_progress||!p->core.borrowed||
        !rd(p,p->base+SUNXI_SMHC_DLBA,&dlba)||dlba!=(uint32_t)((uintptr_t)p->config.dma>>2)||
        !rd(p,p->base+SUNXI_SMHC_BCNT,&count))return 0;
     return a733_mmc_dma_chain(p->config.dma,p->core.borrowed,p->core.borrowed_bytes,count);
@@ -387,6 +420,7 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
         c->dma?core_dma_sync:NULL},
         p,(uintptr_t)p,c->kind,800000,c->voltage_mask,c->sd_profile,c->dma};
     if(!sunxi_mmc_init(&p->core,&cfg))return 0;
+    if(c->observe_s18&&!sunxi_mmc_observe_s18(&p->core))return 0;
     atomic_init(&p->busy,0);p->initialized=1;return 1;
 }
 static enum a733_mmc_platform_result metadata(struct a733_mmc_platform *p)
@@ -447,7 +481,7 @@ static enum a733_mmc_platform_result metadata(struct a733_mmc_platform *p)
 static int running(struct a733_mmc_platform *p)
 {
     uint32_t module,bus,ndma;
-    if(p->pins->failed||!profile(p)||!voltage(p,0)||masked(p)!=1||
+    if(p->pins->failed||!profile(p)||!voltage(p,0)||gic_ok(p)!=1||
        !rd(p,p->module,&module)||(module&0x87001f1fu)!=p->running_module||
        !rd(p,p->bus,&bus)||(bus&0x10001u)!=0x10001u)return 0;
     return p->config.kind!=SUNXI_MMC_EMMC||p->config.emmc_host!=A733_MMC_EMMC_SDC3||
@@ -687,6 +721,25 @@ static int close_idle(struct a733_mmc_platform *p)
         rd(p,p->base+SUNXI_SMHC_STATUS,&v)&&!(v&SUNXI_SMHC_STATUS_BUSY)&&
         rd(p,p->base+SUNXI_SMHC_RINT,&v)&&!(v&SUNXI_SMHC_MMC_ERRORS);
 }
+int a733_mmc_platform_irq(struct a733_mmc_platform *p,int enable)
+{
+    if(!p||!p->initialized||p->update||p->config.kind!=SUNXI_MMC_SD||p->stage!=READY||p->fault||
+       p->core.state!=SUNXI_MMC_READY||p->core.borrowed||p->ops.current(p->cookie)!=1)return 0;
+    p->irq_mode=enable?1u:0u;return 1;
+}
+/* The core is idle and its last operation finished and was collected: a read that delivered its bytes, or, in a write-capable build, a bounded DMA write
+ * that the card confirmed (CMD13 READY and TRAN after every block it submitted). A write that started and was not confirmed is not a state to close from. */
+static int close_ready(const struct a733_mmc_platform *p)
+{
+    if(p->core.state!=SUNXI_MMC_READY||p->core.borrowed||p->core.result.error!=SUNXI_MMC_OK)return 0;
+    if(!p->core.result.write_started)return p->core.result.received!=0;
+#ifdef SUNXI_MMC_READ_ONLY
+    return 0;
+#else
+    /* The core records the bytes it submitted; the card must have confirmed every block of them, not only some. */
+    return p->core.result.confirmed_blocks!=0&&(uint64_t)p->core.result.confirmed_blocks*SUNXI_MMC_BLOCK_BYTES==p->core.result.submitted;
+#endif
+}
 enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *p,uint64_t deadline)
 {
     if(!p||!p->initialized||p->update||p->config.kind!=SUNXI_MMC_SD||
@@ -694,10 +747,9 @@ enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *
        deadline>p->config.lifetime_deadline_us)return A733_MMC_INVALID;
     if(!enter_api(p))return A733_MMC_BUSY;
     if(p->fault)return finish(p,fail(p));
+    if(p->irq_mode)return finish(p,A733_MMC_INVALID);          /* the owner masks the interrupt and clears irq mode first */
     if(p->ops.current(p->cookie)!=1||p->signal||p->stage<READY||p->stage==CLOSED||
-       p->core.state!=SUNXI_MMC_READY||p->core.borrowed||p->core.result.write_started||
-       p->core.result.error!=SUNXI_MMC_OK||!p->core.result.received||
-       (p->stage>READY&&p->deadline!=deadline))return finish(p,A733_MMC_INVALID);
+       !close_ready(p)||(p->stage>READY&&p->deadline!=deadline))return finish(p,A733_MMC_INVALID);
     if(p->stage==READY){p->deadline=deadline;p->stage=CLOSE_CLOCK;}
     if(!timely(p))return finish(p,fail(p));
     /* Once released, an owner cannot be revalidated or retained. Every

@@ -33,11 +33,29 @@ elseif(SUNSTONE_APPLICATION STREQUAL "large-region-test")
   if(NOT SUNSTONE_A733_DRAM_DECODE_PROBE)
     message(FATAL_ERROR "large-region-test needs -DSUNSTONE_A733_DRAM_DECODE_PROBE=ON")
   endif()
+  # The CPU-return lifetime is the 60 s supervised session: its run deadline must fit it (apps/os/session.c), so that profile runs the
+  # A76 cluster for 50 s; the resident and plain supervised images keep the original manifest.
+  set(large_region_manifest "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest.json")
+  if(SUNSTONE_A733_OS_CPU_RETURN)
+    set(large_region_manifest "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest-return.json")
+  endif()
   add_sunstone_application(large-region
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/main.c"
-    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest.json")
+    MANIFEST "${large_region_manifest}")
   add_sunstone_image(sunstone-a733-os-large-region-test LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION large-region)
+elseif(SUNSTONE_APPLICATION STREQUAL "large-6g")
+  # A 6 GiB region with no source: bandwidth and integrity (probe 0), or one isolation fault (probes 1 to 3).
+  if(NOT SUNSTONE_A733_DRAM_DECODE_PROBE)
+    message(FATAL_ERROR "large-6g needs -DSUNSTONE_A733_DRAM_DECODE_PROBE=ON")
+  endif()
+  set(SUNSTONE_LARGE_6G_PROBE 0 CACHE STRING "large-6g: 0 bandwidth and integrity, 1 below, 2 above, 3 other space")
+  set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/apps/large-6g/main.c" PROPERTIES COMPILE_DEFINITIONS LARGE_6G_PROBE=${SUNSTONE_LARGE_6G_PROBE})
+  add_sunstone_application(large-6g
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/large-6g/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/large-6g/manifest.json")
+  add_sunstone_image(sunstone-a733-os-large-6g LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION large-6g)
 elseif(SUNSTONE_APPLICATION STREQUAL "storage-write-test")
   # Creates the region test file through the FAT32 write service; the image is write-capable, so the runner needs the
   # coordinator's approval record for its bounds (tools/storage_bounds.py).
@@ -46,6 +64,7 @@ elseif(SUNSTONE_APPLICATION STREQUAL "storage-write-test")
   endif()
   add_sunstone_application(storage-write
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/storage-write-test/main.c"
+            "${SUNSTONE_SOURCE_ROOT}/apps/storage-write-test/sha256_ce.S"
             "${SUNSTONE_SOURCE_ROOT}/drivers/storage/fat32_rw.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/storage-write-test/manifest.json")
   add_sunstone_image(sunstone-a733-os-storage-write-test LIFETIME ${os_lifetime}

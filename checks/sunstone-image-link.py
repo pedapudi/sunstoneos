@@ -234,8 +234,9 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_ex
     large_records = [dict(zip(('index', 'flags', 'bytes', 'source_bytes', 'first_sector', 'sha256', 'path'),
                               struct.unpack_from('<IIQQQ32s48s', large, 112 * i))) for i in range(len(large) // 112)]
     for i, record in enumerate(large_records):
-        assert record['index'] == i and not record['flags'] & ~3 and record['bytes'] % 0x200000 == 0 and \
-            0 < record['source_bytes'] <= record['bytes'] and any(record['sha256']), 'large region record %d' % i
+        assert record['index'] == i and not record['flags'] & ~7 and record['bytes'] % 0x200000 == 0 and \
+            ((record['flags'] & 4 and not record['source_bytes'] and not any(record['sha256'])) or
+             (not record['flags'] & 4 and 0 < record['source_bytes'] <= record['bytes'])), 'large region record %d' % i
     initializers = admitted['sunstone_region_initializers']
     assert len(initializers) % 16 == 0 and len(initializers) <= 8 * 16, 'region initializer extent'
     regions = application_manifest(elf)['regions']
@@ -267,6 +268,23 @@ def main():
     try:
         result = check(args.image, args.manifest, args.application)
         assert result['build_id'] == args.build_id.read_text().strip(), 'linked build identity differs from generated identity'
+        if args.lifetime in ('supervised', 'return') and result.get('manifest'):
+            # OS session admission (apps/os/session.c) refuses a manifest whose run deadline plus return reserve exceeds the
+            # supervised session; the EL3 monitor then stops the board before the image runs.
+            header = (Path(__file__).resolve().parents[1] / 'include/a733_board_application.h').read_text()
+            seconds = int(re.search(r'#define A733_BOARD_SUPERVISED_SECONDS (\d+)u', header).group(1))
+            lifetime_us, manifest = seconds * 1000000, result['manifest']
+            assert manifest['return_reserve_us'] < lifetime_us and manifest['run_deadline_us'] <= lifetime_us - manifest['return_reserve_us'], \
+                (f"manifest run_us {manifest['run_deadline_us']} plus return_reserve_us {manifest['return_reserve_us']} exceeds the "
+                 f'{seconds} s supervised session; session admission would refuse it')
+        owner = subprocess.run([args.nm, '--defined-only', str(args.image)], capture_output=True, text=True).stdout
+        if ' ss_storage_enable' in owner:
+            # The SD owner reads the CCU and drives SMHC0. The application's EL0 task creates it on first use, so the scheduler
+            # must be told to create it at EL1: board_application_task_privileged has to reach os_sd_owner_task_privileged.
+            # (The first board run faulted reading 0x02002500 at EL0 in the owner task.)
+            asm = subprocess.run(['llvm-objdump-21', '-d', '--disassemble-symbols=os_application_task_privileged', str(args.image)],
+                                 capture_output=True, text=True).stdout
+            assert 'os_sd_owner_task_privileged' in asm, 'the SD owner task is not created at EL1 (os_application_task_privileged does not reach os_sd_owner_task_privileged)'
         if args.application != 'none':
             result['symbol_boundary'] = application_symbols(Elf(args.image.read_bytes()),
                 args.application_objects, args.application_library, args.runtime_library,

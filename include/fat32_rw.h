@@ -72,6 +72,7 @@ struct fwr_wear {
     uint64_t au_aligned_writes, unaligned_writes;
     uint64_t size_histogram[FWR_HIST];     /* bucket i: writes of 2^(i-1)+1 .. 2^i sectors; 0: one sector */
     uint64_t recoveries, recovered_clusters;
+    uint64_t read_resolves, read_chain_steps;   /* fwr_read: path resolutions and FAT links followed to reach a read position */
 };
 
 struct fwr_file;
@@ -92,6 +93,7 @@ struct fwr_volume {
     struct fwr_file *files;
     struct fwr_wear wear;
     uint32_t volume_flag_fat1;             /* last FAT[1] value written */
+    uint64_t dir_generation;               /* counts directory sector writes; a read cursor older than this re-resolves */
 };
 
 struct fwr_slot { uint64_t sector; uint8_t index; };
@@ -161,6 +163,20 @@ int fwr_preallocate(struct fwr_file *, uint64_t size);
 
 /* Sequential read of a whole file's bytes (verification and small config reads). */
 int fwr_read(struct fwr_volume *, const char *path, uint64_t offset, void *out, size_t n, size_t *got);
+
+/* A read position that makes sequential reads of one open file linear in its size. It caches the file's first cluster and
+ * size (so the path is not resolved and the directory not scanned again) and the cluster that holds the last byte read (so
+ * the chain is walked forward from there, from the start only for a read behind it). Zero-initialise it, use one cursor for
+ * one path, and discard it (or zero it) when switching paths. Any directory write on the volume (a sync, create, unlink,
+ * rename, truncate or replace of any file) makes the cursor re-resolve on its next read, so it never serves a stale size
+ * or chain. */
+struct fwr_cursor {
+    uint64_t stamp;                        /* volume dir_generation + 1 when valid, 0 when not */
+    uint64_t size;
+    uint64_t index;                        /* cluster index within the file of `cluster` */
+    uint32_t first, cluster;
+};
+int fwr_read_cursor(struct fwr_volume *, struct fwr_cursor *, const char *path, uint64_t offset, void *out, size_t n, size_t *got);
 
 const struct fwr_wear *fwr_wear(const struct fwr_volume *);
 /* 1 when a write of count sectors at an absolute sector lies wholly inside the FAT copies, the

@@ -170,6 +170,12 @@ int sunxi_mmc_init(struct sunxi_mmc *h, const struct sunxi_mmc_config *c)
     struct sunxi_mmc fresh = {0};
     fresh.config = *c; fresh.initialized = 1; *h = fresh; return 1;
 }
+int sunxi_mmc_observe_s18(struct sunxi_mmc *h)
+{
+    if (!h || !h->initialized || h->entered || h->state != SUNXI_MMC_COLD || h->config.kind != SUNXI_MMC_SD || h->config.sd_profile == UHS) return 0;
+    h->observe_s18 = 1; return 1;
+}
+
 int sunxi_mmc_open(struct sunxi_mmc *h, uint64_t deadline)
 {
     if (!h || !h->initialized || h->entered || h->state != SUNXI_MMC_COLD ||
@@ -599,8 +605,14 @@ static int command_step(struct sunxi_mmc *h)
         if (dma_command(h) && !dma_start(h)) return 0;
         /* Interrupt mask for a DMA command (board kernel sunxi_mmc_parse_cmd): the error bits, and the one completion bit
          * that ends it, the automatic stop for a command that carries one, else data over. */
-        if (h->irq_taken && dma_command(h) &&
-            !wr(h, 0x30, ERRORS | ((h->command & AUTO) ? ACD : DTC))) return 0;
+        if (h->irq_taken && dma_command(h)) {
+            /* The controller raises its line only with the global interrupt enable (GCTRL bit 4) set, which the board kernel sets once at host
+             * init (sunxi_mmc_init_host); this core keeps it off while idle, so it is set with the mask and cleared with it. Without it the
+             * mask is inert and every wait ends on the recheck timer (the first board reads and writes spent 5 ms per request there). */
+            uint32_t g;
+            if (!rd(h, SUNXI_SMHC_GCTRL, &g) || !wr(h, SUNXI_SMHC_GCTRL, g | SUNXI_SMHC_GCTRL_INT_ENABLE) ||
+                !wr(h, 0x30, ERRORS | ((h->command & AUTO) ? ACD : DTC))) return 0;
+        }
         if (!wr(h, 0x1c, h->argument) || !fence(h)) return 0;
         if(h->command&WRITE)h->result.write_started=1;
         if(!wr(h, 0x18, h->command))return 0;
@@ -695,7 +707,10 @@ static int command_step(struct sunxi_mmc *h)
         if (!rd(h,SUNXI_SMHC_GCTRL,&v) || (v&SUNXI_SMHC_GCTRL_FIFO_RESET)) return 0;
         if (v&(SUNXI_SMHC_GCTRL_DMA_ENABLE|SUNXI_SMHC_GCTRL_DMA_RESET)) { fault(h,SUNXI_MMC_CONTROLLER);return 0; }
         /* The DMA command is over: disarm the interrupt mask the command armed. */
-        if (h->irq_taken && !wr(h, 0x30, 0)) return 0;
+        if (h->irq_taken) {
+            uint32_t g;
+            if (!wr(h, 0x30, 0) || !rd(h, SUNXI_SMHC_GCTRL, &g) || !wr(h, SUNXI_SMHC_GCTRL, g & ~SUNXI_SMHC_GCTRL_INT_ENABLE)) return 0;
+        }
         return interrupts(h)&&dma_finish(h);
     default: fault(h, SUNXI_MMC_CONTROLLER); return 0;
     }
@@ -983,7 +998,7 @@ static void protocol(struct sunxi_mmc *h)
                 fault(h, SUNXI_MMC_IO); return;
             }
             h->card.uhs_caps = (uint8_t)caps; h->s18r = !!(caps & SUNXI_MMC_SIGNAL_1V8);
-        }
+        } else if (h->observe_s18) h->s18r = 1;
         queue(h, P_SD_APP, 55u | RESP | CRC, 0, 0, 0); return;
     case P_SD_APP:
         if (!card_response(h)) return;
@@ -1008,7 +1023,7 @@ static void protocol(struct sunxi_mmc *h)
         h->card.ocr = r; h->card.sector_addressed = !!(r & (1u << 30));
         /* S18A requests CMD11 before CMD2. Like the pinned Linux core, the
          * switch does not also require CCS. */
-        if (UHS_ON && !mmc && h->s18r && (r & S18R)) {
+        if (UHS_ON && !mmc && h->s18r && h->config.sd_profile == UHS && (r & S18R)) {
             h->signal_window = 1;
             queue(h, P_SD_VOLTAGE, 11u | RESP | CRC | VSW, 0, 0, 0); return;
         }
