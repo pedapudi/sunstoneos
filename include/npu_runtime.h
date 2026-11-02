@@ -192,6 +192,9 @@ int npu_runtime_bind(struct npu_runtime *, struct a733_npu_startup *, const Task
  * One OPEN/CLOSE owns this resident set. This keeps network interpretation
  * in the loader while the queue accepts generic prepared command handles. */
 int npu_runtime_preload(struct npu_runtime *, unsigned slot, unsigned model);
+/* The same after the scheduler has started, from the resident client task: the worker loads the graph (see the definition).
+ * 1 loaded, 0 not yet (the NPU start-up is not finished), -1 refused. */
+int npu_runtime_load_resident(struct npu_runtime *, unsigned slot, unsigned model);
 /* Slow, pre-bind device-only edge between two preloaded slots. Tensor shape,
  * representation and allocation size must agree. Reassembles the consumer's
  * resident addresses once; no copy or cache operation is needed between jobs.

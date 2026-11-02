@@ -933,6 +933,34 @@ int npu_runtime_preload(struct npu_runtime *rt, unsigned slot, unsigned model)
     return maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->read.cpu, s->read.bytes) &&
         maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->write.cpu, s->write.bytes);
 }
+/* Load the graph of a slot after the scheduler has started, for a resident client (a queue image keeps one graph in each
+ * slot). The owner marks the slot LOADING like a LOAD request and wakes the service worker, which stages, hashes and
+ * assembles it in its steps, as for any LOAD; the owner waits and then initializes the slot's windows as preload does. A
+ * graph whose copy does not hash to its declared digest leaves the slot EMPTY and returns 0. This keeps the megabytes of
+ * hashing and copying out of the start-up that the secondary cores wait for (one second). */
+int npu_runtime_load_resident(struct npu_runtime *rt, unsigned slot, unsigned model)
+{
+    if (!good(rt) || !rt->bound || !rt->resident || slot >= rt->slots || model >= atomic_load_explicit(&rt->count, memory_order_acquire) ||
+        xTaskGetSchedulerState() != taskSCHEDULER_RUNNING || xTaskGetCurrentTaskHandle() != rt->slot[0].client) return -1;
+    /* The NPU start-up is not finished, or a direct queue owns the runtime: not yet. */
+    if (rt->service.direct || rt->service.direct_request || rt->service.has_deferred ||
+        rt->service.controller.state != A733_NPU_READY) return 0;
+    struct npu_runtime_slot *s = &rt->slot[slot];
+    if (state(s) == NPU_RUNTIME_READY) return s->model == model ? 1 : -1;
+    if (state(s) != NPU_RUNTIME_EMPTY) return -1;
+    s->model = model; set_state(s, NPU_RUNTIME_LOADING);
+    for (unsigned waited = 0; state(s) == NPU_RUNTIME_LOADING && good(rt); ++waited) {
+        if (waited > 20000) return -1;          /* a graph takes about 15 ms; 20 s is a stuck worker */
+        xTaskNotifyGive(rt->service.worker);
+        vTaskDelay(1);
+    }
+    if (state(s) != NPU_RUNTIME_READY || !good(rt)) return -1;
+    /* Workspace and padding initialize once, before any device can use them. */
+    memset((void *)s->read.cpu, 0, s->read.bytes);
+    memset((void *)s->write.cpu, 0, s->write.bytes);
+    return maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->read.cpu, s->read.bytes) &&
+        maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->write.cpu, s->write.bytes) ? 1 : -1;
+}
 int npu_runtime_register(struct npu_runtime *rt, const void *model, size_t bytes, unsigned *index)
 {
     if (!good(rt) || !rt->prepared || !index || !model || !bytes || bytes > NBG_MODEL_MAX_BYTES ||

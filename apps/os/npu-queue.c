@@ -108,6 +108,11 @@ static int open_queue(void *unused,unsigned depth)
     if(depth>os_npu_in_flight())return -1;
     if(opened||os_npu_stopping()||!os_npu_queue_begin())return -1;
     struct npu_runtime *rt=os_npu_queue_runtime();
+    /* Slot i holds graph i of the image catalogue: load them now (the first open), then make the image's own links. */
+    if(rt&&rt->slots<=SS_NPU_QUEUE_MAX_HANDLES&&!edges_prepared){
+        for(unsigned i=0;i<rt->slots;++i){const int r=npu_runtime_load_resident(rt,i,i);if(r<0)return -1;if(!r){os_npu_queue_end();return 0;}}
+        if(!os_npu_queue_prepare_edges(rt))return -1;
+    }
     if(!rt||!edges_prepared||rt->slots>SS_NPU_QUEUE_MAX_HANDLES||
        (cache_stride=aarch64_device_cache_stride())!=64)return -1;
     if(!link_requested(rt))return -1;

@@ -590,9 +590,8 @@ int os_npu_start(void)
     npu.client=xTaskCreateStaticAffinitySet(os_npu_client_task,"os-npu-app",STACK,NULL,3,npu.stacks[1],&npu.tasks[1],2);
     creating=0;
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
-    for(unsigned i=0;i<os_npu_model_count;++i)
-        if(!npu_runtime_preload(&npu.runtime,i,i))return REFUSE();
-    if(!os_npu_queue_prepare_edges(&npu.runtime))return REFUSE();
+    /* The graphs are loaded when the ring opens, after the scheduler has started (npu_runtime_load_resident): hashing and
+     * assembling megabytes would outlast the second that the secondary cores wait for the primary core to finish. */
 #endif
 #ifndef SUNSTONE_A733_OS_NPU_QUEUE
     TaskHandle_t clients[]={npu.client};
