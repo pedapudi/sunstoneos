@@ -239,23 +239,55 @@ the steps. Rename of a directory is not supported.
 
 ## Real time
 
-The writer runs as a low-priority task. The application never waits for the
-card on a real-time path: `ss_write_nowait` copies into the buffer and returns,
-and the writer task calls `ss_fs_service` to flush.
+The writer runs as a low-priority task. The application never waits for the card on a real-time path: `ss_write_nowait`
+copies into the buffer and returns, and the writer task calls `ss_fs_service` to flush.
 
-The service holds no interrupt-masking spans and takes no locks of its own; it
-is owned by one task. The device `yield` hook runs before each write piece,
-at most `max_write_sectors` (256 sectors, 128 KiB, with descriptor DMA) apart.
-The card adapter binds it to a simple read-over-write priority: when a model
-loading read is pending the writer waits for it before submitting the next
-piece, so a read waits at most for one piece already in flight. A flush is
-therefore never longer than one piece on the read side. Interrupt-masked spans
-over 5 microseconds are defects (the scheduler stream's target); the service
-adds none, and the adapter's interrupt path remains the SD core's.
+**One owner, loader first.** The native adapter admits register access only from the task that opened the card, so the
+write-capable OS image runs one SD owner task (`apps/os/sd_owner.c`). It serves two single-slot mailboxes: the loader's
+reads, then the writer's reads and write pieces. A write piece is at most 256 sectors (128 KiB), and the owner looks at the
+loader's mailbox between pieces, so a model-loading read waits for at most the piece in flight. Callers sleep on a task
+notification until the owner finishes; the owner sleeps on one until a request arrives.
 
-The card's own busy time after a write is not bounded by the host; a read that
-arrives while the card programs must wait for the card to return to the
-transfer state.
+**Completion by interrupt and one-shot timer.** No transfer polls the controller in a loop. The core arms the SMHC0 interrupt
+mask for each DMA command as the board kernel does (`sunxi_mmc_exe_cmd`, `sunxi-mmc.c:2754`: the mask is written before the
+argument and command): the error bits plus the automatic-stop-done bit for a CMD25 or CMD18 that carries a stop, else the
+data-over bit (`sunxi_mmc_parse_cmd`, `sunxi-mmc.c:2638`). The handler for GIC SPI 161 (INTID 193, level high, board kernel
+`sun60iw2p1.dtsi`, `sdc0`) follows `sunxi_mmc_irq` (`sunxi-mmc.c:1271`): it reads the masked status, accumulates the bits,
+writes the same bits back to the raw status to acknowledge them, and wakes the waiter. The core ORs the accumulated bits into
+the raw status it reads (`sunxi_mmc_set_irq`), so a bit the handler acknowledged is never lost, and it disarms the mask when the
+command ends. The IDMAC interrupts stay off, as in the board kernel's write path, and IDST remains with the core.
+
+After a poll that did not finish, the core says what to wait for (`sunxi_mmc_wait_hint`): the interrupt, for the command and
+data phase; a one-shot timer, for DAT0 busy and for retry spacing; or nothing, for register conditions of a few microseconds
+(a reset bit clearing). `storage_wait_run` sleeps accordingly on `sunstone_deadline_wait_until`, the one-shot deadline timer,
+bounded by the operation deadline and, for an interrupt wait, by a 5 ms recheck so a lost interrupt cannot hang an operation.
+Every wake is a hint: the next poll reads the controller. DAT0 busy has no interrupt on this controller: the board kernel's
+v5p3x path does not set `sunxi_mmc_hw_wbusy_wait`, so it never enables the busy-clear interrupt and polls card busy in its bottom
+half. The manual lists one (RINTSTS bit 17, `R1B_BUSY_CLR`, and bit 13 `DSE_BC` for the end of busy after the last write block,
+enabled by `THLD.BCIG`), but nothing in the vendor driver exercises it on this chip, so using it is left to a board experiment. The
+busy timer doubles from 100 microseconds to 2 milliseconds, so a busy of several hundred milliseconds costs a few hundred wakes.
+`checks/sunxi-mmc-write-dma.c` runs a 128 KiB write with 4 ms of DMA and 300 ms of busy: 172 polls and 154 sleeps, one of them
+on the interrupt. It also covers an interrupt that arrives before the sleep, one that is lost, and stale and spurious wakes. The
+owner's busy fraction during a flush is a board measurement (`ss_storage_owner_stats`).
+
+**Allocation unit.** `AU_SIZE` applies to the bus modes the image runs: profile 2 is high speed at 3.3 V, which is not a UHS-I
+mode. The unit is read from `UHS_AU_SIZE` instead when the card signals at 1.8 V, the condition for a UHS-I bus speed mode
+(SD Physical Layer 9.10, section 4.10.2.9); the image passes `card.signal_1v8`.
+
+**The bounds blob.** The runner's frozen first input is an INPUT region of the application, mapped read-write at EL0 like all
+kernel data and application regions in this OS (`docs/memory-protection.md`: only the text and read-only data block is
+read-only), so no mapping can keep it unchanged. The image copies it once into private memory, parses the copy, and
+`a733_storage_bounds_allows` re-hashes it on every use and refuses a blob that has changed since parse. This detects a
+change; it does not prevent one made between the hash and the use, which would take a second EL0 task on another core racing
+a microsecond window. A read-only mapping needs page-table support the OS does not have yet.
+
+**One crossing of memory.** The application registers a WORK region as the FAT32 service's flush buffer
+(`ss_storage_region`). A write piece that lies inside it goes to the controller from there, with the cache clean the core
+already performs before the transfer. Only metadata writes (the FAT window, directory sectors) are copied into the image's
+128 KiB bounce buffer.
+
+The service itself holds no interrupt-masking spans and takes no locks; it is owned by one task. Interrupt-masked spans over
+5 microseconds are defects (the scheduler stream's target); the handler masks nothing.
 
 ## Wear reporting
 
