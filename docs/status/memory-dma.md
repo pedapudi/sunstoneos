@@ -57,7 +57,7 @@ DMA0 needs physical channel, controller and data-access authority and transfer t
 Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-memory-dma-20261101.md).
 
 <!-- evidence-table:begin -->
-21 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+22 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -82,4 +82,5 @@ Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `too
 | `1793604009006779744-6a685222` | 2026-11-02 | 3-1 | `2fd76e2a81a0` | returned | passed | run_total 25.627 s, a76_p50_ns_s0 152 ns, a76_p9999_ns_s0 639 ns, a76_max_ns_s0 643 ns, a55_p50_ns_s0 136 ns, a55_p9999_ns_s0 2569 ns, a55_max_ns_s0 9271 ns, ctrl_p50_ns_s0 2302 ns, ctrl_p9999_ns_s0 3069 ns, ctrl_max_ns_s0 3042 ns, ctrl_misses_s0 0, a76_p50_ns_s1 152 ns, a76_p9999_ns_s1 639 ns, a76_max_ns_s1 632 ns, a55_p50_ns_s1 136 ns, a55_p9999_ns_s1 2711 ns, a55_max_ns_s1 8843 ns, ctrl_p50_ns_s1 2302 ns, ctrl_p9999_ns_s1 3069 ns, ctrl_max_ns_s1 3011 ns, ctrl_misses_s1 0, a76_p50_ns_s2 152 ns, a76_p9999_ns_s2 639 ns, a76_max_ns_s2 628 ns, a55_p50_ns_s2 136 ns, a55_p9999_ns_s2 2569 ns, a55_max_ns_s2 9438 ns, ctrl_p50_ns_s2 2302 ns, ctrl_p9999_ns_s2 3069 ns, ctrl_max_ns_s2 3015 ns, ctrl_misses_s2 0 |
 | `1793604009213366498-b525353f` | 2026-11-02 | 3-1 | `861b2416c428` | returned | passed | run_total 25.796 s, a76_p50_ns_s0 416 ns, a76_p9999_ns_s0 1662 ns, a76_max_ns_s0 2005 ns, a55_p50_ns_s0 392 ns, a55_p9999_ns_s0 16553 ns, a55_max_ns_s0 32424 ns, ctrl_p50_ns_s0 7417 ns, ctrl_p9999_ns_s0 10230 ns, ctrl_max_ns_s0 10571 ns, ctrl_misses_s0 0, a76_p50_ns_s1 416 ns, a76_p9999_ns_s1 1598 ns, a76_max_ns_s1 1965 ns, a55_p50_ns_s1 392 ns, a55_p9999_ns_s1 16553 ns, a55_max_ns_s1 29009 ns, ctrl_p50_ns_s1 7417 ns, ctrl_p9999_ns_s1 10230 ns, ctrl_max_ns_s1 10061 ns, ctrl_misses_s1 0, a76_p50_ns_s2 416 ns, a76_p9999_ns_s2 1598 ns, a76_max_ns_s2 1979 ns, a55_p50_ns_s2 392 ns, a55_p9999_ns_s2 16553 ns, a55_max_ns_s2 30056 ns, ctrl_p50_ns_s2 7417 ns, ctrl_p9999_ns_s2 10230 ns, ctrl_max_ns_s2 10083 ns, ctrl_misses_s2 0, stream_gb_per_s 8.78 GB/s |
 | `1793604795633560445-80bc01fb` | 2026-11-02 | 3-1 | `e271e3b62bb8` | result-mismatch | passed | run_total 12 s, scan_ticks 1.33194e+07, signature_ticks 2.33961e+07, address_failed 0, mismatch_count 0 |
+| `1793632829779717086-f7d0d1cf` | 2026-11-02 | 3-1 | `44252e038bb7` | returned | passed | run_total 51.578 s, load_time 30.659 s, load_rate 17.51 MB/s, read_window_40mib 12.79 GB/s, read_region_1gib 12.66 GB/s, round_trip_same_space 4.4 us, round_trip_ttbr0_change 4.36 us |
 <!-- evidence-table:end -->

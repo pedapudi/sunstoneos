@@ -12,10 +12,19 @@ An application declares regions of upper memory, up to the 11 GiB the board maps
 
 The first run of `sunstone-a733-os-large-region-test` in the CPU-return profile (found by the storage agent on a board) took a data abort in `os_large_prepare`: the admission read the boot level-1 table through `TTBR0_EL1`, and the A733 EL1 table leaves the 2 MiB block that holds the tables unmapped. Admission now reads a copy the platform makes (`os_kernel_l1_head`). The QEMU OS platform maps its tables the same way, and the cases that admit a region fault with ESR 0x96000006 if the read returns. No board run of the fix yet.
 
+## Measured on a board, OS image at the CPU-return top points
+
+Entry `1793632829779717086-f7d0d1cf` (3-1, A76, `PERF_BOOT=high`, development DRAM; repeat of `1793632747850074996-92d6900c`, whose expectation was frozen as raw bytes and so reads result-mismatch). The image includes the table-copy fix, the controller interrupt enable from the storage branch and its 50 s manifest.
+
+- **Load:** the 536,870,912-byte file streamed from SD0 into the first half of the 1 GiB region in 30.659 s, 17.5 MB/s (16.7 MiB/s); the digest matched (state READY, error 0). The design predicted 24 to 27 s: missed by 14 percent. Both runs report the same 30,659,000 us.
+- **Task switch:** 20,000 round trips of two notifications between two tasks, 4.40 us per round trip in one space and 4.36 us with a TTBR0 write at each switch. The write adds nothing measurable; the difference is under one counter tick (42 ns) per switch and has the wrong sign.
+- **Read bandwidth, one A76 core:** 12.79 GB/s over a 40 MiB window (eight timed passes), 12.66 GB/s over the whole 1 GiB (three passes), 1.0 percent lower. The `apps/dram-scaling` record `read_one_a76` is 12.69 GB/s.
+- **Not measured:** TLB refill counts (EL0 cannot read the PMU in the OS image).
+
 ## Open work
 
 1. Run the SD0 binding in an OS image on a board. `apps/os/large_sd.c` (`os_large_device`, `os_large_device_close`, `os_large_sd_pins`) uses the OS's shared providers and the read-only SD core, builds into `sunstone-a733-os-large-region-test` and passes the read-only scan, but only the standalone probe has driven the card on a board. QEMU has no SD controller: its RAM disk covers the loader, and four scenarios cover a device that is present and fails (metadata, request start, mid-stream, absent).
-2. Run `sunstone-a733-os-large-region-test` on a board once `/sunstone-test/sunstone-region-test.bin` exists on the card (created by the storage-write path): load time, digest, read bandwidth at the top points against `apps/dram-scaling`, and the task-switch cost.
+2. Done 2026-11-02: see the measured section below.
 3. Measure the added cycles of a TTBR0 write at the task switch on the board; QEMU shows 4 instructions of time per switch and no cycles.
 4. Count TLB refills in the OS image: EL0 cannot read the PMU, so the figure needs a counter grant or an EL1 sampler.
 5. Run the partitioned scheduler's `freertos.c` with the hook on a board; it builds and boots in QEMU.
