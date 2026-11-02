@@ -1,0 +1,37 @@
+--- input
++++ output
+@@ -3,6 +3,7 @@
+ #include "platform.h"
+ #include "a733_cpu_continue.h"
+ #include "cached.h"
++#include "cpu-return.h"
+ #ifdef SUNSTONE_TASK_DEADLINES
+ #include "sunstone_deadline.h"
+ #endif
+@@ -102,6 +103,8 @@
+ }
+ _Noreturn void platform_panic(const char *file,unsigned line)
+ {
++    /* A fault the CPU survives returns to the ROM with its record. */
++    if(os_cpu_return_panic(file,line,__builtin_return_address(0)))for(;;)__asm__ volatile("wfi");
+     (void)file;
+     register uint64_t s __asm__("x0")=4;
+     register uint64_t d __asm__("x1")=line;
+@@ -197,7 +200,16 @@
+ #ifdef SUNSTONE_A733_IRQ_TABLE
+     } else if(interrupt<1020 && a733_irq_table_dispatch((unsigned)interrupt,c)) {
+ #endif
+-    } else if(interrupt<1020)a733_smp_exit_privileged(4,interrupt+0x100);
++    } else if(interrupt<1020) {
++        /* Nothing owns this source. Mask it so it cannot storm, record it as
++         * the first failure and let the interrupted task reach its terminal. */
++        const uintptr_t rd=a733_cached_runtime[c].redistributor;
++        if(interrupt<32)*(volatile uint32_t *)(rd+0x10000+0x180)=1u<<interrupt;
++        else *(volatile uint32_t *)(UINT32_C(0x03400180)+4*(interrupt/32))=1u<<(interrupt%32);
++        __asm__ volatile("dsb sy":::"memory");
++        if(!os_cpu_return_unexpected_interrupt(interrupt,__builtin_return_address(0)))
++            a733_smp_exit_privileged(4,interrupt+0x100);
++    }
+ }
+ 
+ uintptr_t a733_smp_priority_address(void)

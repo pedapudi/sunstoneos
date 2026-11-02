@@ -1,14 +1,15 @@
 --- input
 +++ output
-@@ -2,6 +2,7 @@
+@@ -2,6 +2,8 @@
  #include "a733_device_memory_layout.h"
  #endif
  #include "cached.h"
 +#include "cpu-return-runtime.h"
++#include "cpu-return.h"
  #include "a733_cached_memory.h"
  #include "a733_memory_local.h"
  #if defined(SUNSTONE_A733_FAULT_PAGE)
-@@ -101,6 +102,7 @@
+@@ -101,6 +103,7 @@
  static void local_boot(unsigned c,uint64_t epoch)
  {
      if(c>=8 || native_core()!=c || epoch!=boot_values[0] || !epoch)park();
@@ -16,3 +17,13 @@
      if(c)prepare_core(c);
      uint64_t mpidr;__asm__ volatile("mrs %0,mpidr_el1":"=r"(mpidr));
      struct a733_cpu_continue s={0};
+@@ -174,6 +177,9 @@
+         uint64_t now=a733_smp_counter();
+         if(now<last || now>=startup)a733_cached_smc(3,0x203);
+         last=now;__asm__ volatile("yield");
++        /* A failure before the scheduler: core 0 returns the board to the ROM
++         * and this core joins the terminal. Nothing else ran on it. */
++        if(os_cpu_return_prescheduler_requested())a733_qualification_worker_done(c);
+     }
+     __atomic_store_n(&ucSecondaryCoresReadyFlags[c-1],1,__ATOMIC_RELEASE);
+     __asm__ volatile("dsb sy\n sev\n svc #106":::"memory");

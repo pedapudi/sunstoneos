@@ -1,4 +1,11 @@
-/* Execute the real owner step and report writer with modeled device/task APIs. */
+/* Execute the real owner step and report writer (apps/os/thermal.c) on the real FreeRTOS
+ * kernel under the host shim (checks/host/). The owner is the test task, its critical sections
+ * are the kernel's, and the counter is the shim's A733 counter set by each command. The
+ * sensor device, the GIC, the CPU clock step and the board lifetime are modeled at their
+ * boundary. checks/os-thermal-cadence.py drives it over a pipe: one command per line. */
+#include <stdio.h>
+#include <stdlib.h>
+#include "host_rtos.h"
 #define a733_thermal_read cadence_read
 #define a733_thermal_poll cadence_poll
 #ifndef THERMAL_SOURCE
@@ -12,16 +19,13 @@ struct board_application board;
 struct board_provider providers;
 uint64_t cadence_state[12],cadence_read_times[256];
 uint8_t cadence_report[sizeof(struct os_thermal_report)+THERMAL_RECORDS*sizeof(struct os_thermal_reading)];
-static uint64_t model_time,read_delay;
+static uint64_t read_delay;
+#define model_time host_time_us()
 static unsigned reads,clocks,failures,poll_ready,valid_mask;
 static int rearm_ok;
 static int32_t temperature;
 
-uint64_t a733_smp_counter(void){return model_time*24;}
 int a733_counter_clock_now(void *v,uint64_t *out){(void)v;*out=model_time;return 1;}
-TaskHandle_t xTaskGetCurrentTaskHandle(void){return (TaskHandle_t)(uintptr_t)1;}
-void vTaskEnterCritical(void){}
-void vTaskExitCritical(void){}
 int board_live(void *v){(void)v;return 1;}
 int os_application_deadline(void){return 1;}
 unsigned os_application_activity_generation(void){return 7;}
@@ -38,18 +42,34 @@ enum a733_thermal_result cadence_read(struct a733_thermal *d,uint64_t deadline,s
 {
     (void)d;(void)deadline;
     if(reads<256)cadence_read_times[reads]=model_time;
-    ++reads;model_time+=read_delay;
+    ++reads;host_advance_us(read_delay);
     if(!valid_mask)return A733_THERMAL_AGAIN;
     memset(s,0,sizeof(*s));s->valid=(uint8_t)valid_mask;s->sequence=thermal.policy.sequence+1;s->observed_us=model_time;
     for(unsigned i=0;i<5;++i)s->millicelsius[i]=temperature;
     return A733_THERMAL_SAMPLE;
 }
 
+/* Device paths that the owner step never takes. The linker keeps these references because the
+ * sanitizer's global registration references the owner's operation tables; a call
+ * fails the check. */
+#define NEVER(name) static void never_##name(void){fprintf(stderr,"FAIL %s called\n",#name);abort();}
+NEVER(translate)NEVER(token_status)NEVER(lock)NEVER(native)NEVER(cpu_admit)NEVER(session)
+int aarch64_device_translate(uintptr_t a,int w,struct aarch64_translation *t){(void)a;(void)w;(void)t;never_translate();return 0;}
+enum a733_clock_result a733_clock_token_status(struct a733_clock_leases *c,const struct a733_clock_token *t)
+{(void)c;(void)t;never_token_status();return A733_CLOCK_OK;}
+int a733_platform_lock_enter(struct a733_platform_locks *l,enum a733_platform_lock k,uint64_t d){(void)l;(void)k;(void)d;never_lock();return 0;}
+void a733_platform_lock_leave(struct a733_platform_locks *l,enum a733_platform_lock k){(void)l;(void)k;never_lock();}
+int a733_platform_lock_retain(struct a733_platform_locks *l,enum a733_platform_lock k){(void)l;(void)k;never_lock();return 0;}
+int a733_thermal_native_read(void *c,uintptr_t a,uint32_t *v){(void)c;(void)a;(void)v;never_native();return 0;}
+int a733_thermal_native_write(void *c,uintptr_t a,uint32_t v){(void)c;(void)a;(void)v;never_native();return 0;}
+int os_cpu_admit(void){never_cpu_admit();return 0;}
+const struct os_session *os_session_admitted(void){never_session();return NULL;}
+
 /* Operations: reset, step, begin/end window, delay, temperature, retaining,
  * rearm refusal, inactive startup. All production branches execute normally. */
 int cadence_control(unsigned op,uint64_t at,uint64_t value)
 {
-    int result=1;model_time=at;
+    int result=1;host_reset_time_us(at);
     if(op==0){
         memset(&thermal,0,sizeof(thermal));memset(&readings,0,sizeof(readings));
         memset(&window,0,sizeof(window));memset(&providers,0,sizeof(providers));
@@ -57,7 +77,7 @@ int cadence_control(unsigned op,uint64_t at,uint64_t value)
         memset(cadence_report,0,sizeof(cadence_report));
         thermal_record_origin_us=0;
         reads=clocks=failures=0;read_delay=0;poll_ready=0;rearm_ok=1;temperature=40000;valid_mask=31;
-        thermal.handle=(TaskHandle_t)(uintptr_t)1;thermal.active=1;thermal.masked=1;
+        thermal.handle=xTaskGetCurrentTaskHandle();thermal.active=1;thermal.masked=1;
         thermal.driver.initialized=1;board.session.deadline_us=at+60000000;
         board.session.epoch=11;board.session.generation=12;
         a733_thermal_policy_init(&thermal.policy,at,policy,&thermal);
@@ -92,3 +112,27 @@ int cadence_control(unsigned op,uint64_t at,uint64_t value)
     cadence_state[11]=model_time;
     return result;
 }
+
+/* Commands: "call OP AT VALUE", "report", "times". Each reply is one line. */
+static void commands(void *unused)
+{
+    (void)unused;
+    char line[256];
+    while(fgets(line,sizeof line,stdin)){
+        unsigned op;unsigned long long at,value;
+        if(sscanf(line,"call %u %llu %llu",&op,&at,&value)==3){
+            int r=cadence_control(op,at,value);
+            printf("%u",(unsigned)r);
+            for(unsigned i=0;i<12;++i)printf(" %llu",(unsigned long long)cadence_state[i]);
+            puts("");
+        }else if(!strncmp(line,"report",6)){
+            for(uint64_t i=0;i<cadence_state[6];++i)printf("%02x",cadence_report[i]);
+            puts("");
+        }else if(!strncmp(line,"times",5)){
+            for(uint64_t i=0;i<cadence_state[2]&&i<256;++i)printf("%llu ",(unsigned long long)cadence_read_times[i]);
+            puts("");
+        }else abort();
+        fflush(stdout);
+    }
+}
+int main(void){host_rtos_run(commands,NULL,2,1000000);return 0;}

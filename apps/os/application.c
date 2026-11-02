@@ -63,6 +63,17 @@ const struct ss_grant *ss_grant(void)
 }
 int os_application_finished(void)
 {return atomic_load_explicit(&finished,memory_order_acquire);}
+void os_application_failed(const struct ss_failure *failure,uint64_t epoch,uint64_t generation)
+{
+    struct ss_result *r=(void *)ss_result_record;
+    if(ss_result_capacity<sizeof(*failure))return;
+    r->magic=SS_RESULT_MAGIC;r->version=SS_RESULT_VERSION;r->bytes=sizeof(*r)+ss_result_capacity;
+    r->epoch=epoch;r->generation=generation;
+    memcpy(r+1,failure,sizeof(*failure));r->payload_bytes=sizeof(*failure);
+    atomic_thread_fence(memory_order_release);
+    r->status=SS_RESULT_FAILED;
+    atomic_store_explicit(&finished,1,memory_order_release);
+}
 void os_application_usb_ready(void)
 {atomic_store_explicit(&usb_ready,1,memory_order_release);if(main_task)xTaskNotifyGive(main_task);}
 int ss_live(void)

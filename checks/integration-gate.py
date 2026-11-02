@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import importlib.util
 
 if not __debug__:
     raise SystemExit('checks require assertions')
@@ -24,22 +25,28 @@ class GateTests(unittest.TestCase):
     def setUp(self):
         self.sandbox = Path(tempfile.mkdtemp(prefix='gate-', dir=OUTPUT))
         self.calls = self.sandbox / 'calls.jsonl'
-        self.env = dict(os.environ, GATE_TEST_CALLS=str(self.calls), PYTHONDONTWRITEBYTECODE='1')
+        self.env = dict(os.environ, GATE_TEST_CALLS=str(self.calls), GATE_TEST_TIMES=str(self.sandbox / 'times.jsonl'),
+                        PYTHONDONTWRITEBYTECODE='1')
         self.env.pop('EXAMPLE_DIR', None)
         self.env.pop('SUNSTONE_EXTERNAL_APPLICATIONS', None)
         # These tools only record arguments. No build, emulator or device is used.
         stub = '''#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, sys, time
 program, *args = sys.argv
 name = pathlib.Path(program).name
 with open(os.environ['GATE_TEST_CALLS'], 'a') as f:
     f.write(json.dumps([name, *args]) + '\\n')
+began = time.time()
+if os.environ.get('GATE_TEST_SLEEP') and args and args[0].startswith(('checks/', 'tools/')):
+    time.sleep(float(os.environ['GATE_TEST_SLEEP']))
+    with open(os.environ['GATE_TEST_TIMES'], 'a') as f:
+        f.write(json.dumps([args[0], began, time.time()]) + '\\n')
 if '--target' in args and 'help' in args:
     print('... all\\n... clean\\n... kernel-check\\n... other-image\\n... ignored.o')
 if os.environ.get('GATE_TEST_TOUCH'):
     pathlib.Path(os.environ['GATE_TEST_TOUCH']).write_text('written during a step\\n')
-if os.environ.get('GATE_TEST_FAIL') in args:
-    print('host deadline exceeded')
+if os.environ.get('GATE_TEST_FAIL') in args or any(x in args for x in os.environ.get('GATE_TEST_FAIL_ALL', '').split(',') if x):
+    print(os.environ.get('GATE_TEST_OUTPUT', 'host deadline exceeded'))
     sys.exit(1)
 '''
         for relative in ('bin/cfg.sh', 'venv/bin/python', 'host/usr/lib/llvm-21/bin/cmake'):
@@ -62,7 +69,9 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         selector.write_text('''from types import SimpleNamespace
 import subprocess
 from pathlib import Path
-indexer = SimpleNamespace(generate=lambda: {
+import json, os
+indexer = SimpleNamespace(PROSE_CHECKS=json.loads(os.environ.get('GATE_TEST_PROSE', '{}')),
+                          SERIAL_CHECKS=set(os.environ.get('GATE_TEST_SERIAL', '').split(',')), generate=lambda: {
     'focused.py': {'pure_host': True, 'required_arguments': ['--output']},
     'progress.py': {'pure_host': True, 'required_arguments': []},
     'pre-push-hook.py': {'pure_host': True, 'required_arguments': ['--output']},
@@ -92,7 +101,7 @@ def plan(value=None, changed=None, index=None):
 
     def run_gate(self, *args, label='case', source=None):
         return subprocess.run([sys.executable, str(GATE), str(source or self.source), label, '--cache', str(self.sandbox),
-                               *args], env=self.env, capture_output=True, text=True)
+                               '--min-available-gb', '0', *args], env=self.env, capture_output=True, text=True)
 
     def tree(self, source):
         return source.name + '-' + hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:10]
@@ -588,6 +597,158 @@ exec "$REAL" "$@"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((directory / 'gate-case/summary.txt').is_file())
         self.assertEqual(self.records()[0][2], str(directory / ('gate-central-' + self.tree(self.source))))
+
+
+    def full_catalogue(self):
+        catalogue = self.sandbox / 'build/npu-board/session-artifacts.json'
+        catalogue.parent.mkdir(parents=True, exist_ok=True)
+        catalogue.write_text('{}\n')
+
+    def intervals(self):
+        path = self.sandbox / 'times.jsonl'
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    @staticmethod
+    def overlap(a, b):
+        return a[1] < b[2] and b[1] < a[2]
+
+    def test_full_gate_keeps_going_and_reports_every_failure(self):
+        self.full_catalogue()
+        self.env['GATE_TEST_FAIL_ALL'] = 'checks/pmic-tree.py,checks/check-index.py'
+        result = self.run_gate('--reason', 'Two failures', '--full')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        summary = (self.sandbox / 'build/gate-case/summary.txt').read_text()
+        self.assertIn('mode: keep-going', summary)
+        self.assertIn('FAIL check-pmic-tree', summary)
+        self.assertIn('FAIL check-check-index', summary)
+        self.assertIn('PASS check-power-domains-tree', summary)
+        self.assertIn('PASS indexed-focused', summary)
+        self.assertIn('steps:', summary)
+        self.assertIn('FAIL selected integration checks: check-check-index, check-pmic-tree', summary)
+        self.assertNotIn('PASS selected', summary)
+        self.assertNotIn('Stopped at first failure', summary)
+        self.assertTrue((self.sandbox / 'build/gate-case/timing.txt').is_file())
+
+    def test_fail_fast_stops_at_the_first_failure_in_order(self):
+        self.full_catalogue()
+        self.env['GATE_TEST_FAIL_ALL'] = 'checks/pmic-tree.py,checks/check-index.py'
+        result = self.run_gate('--reason', 'Stop early', '--full', '--fail-fast')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        summary = (self.sandbox / 'build/gate-case/summary.txt').read_text()
+        self.assertIn('mode: fail-fast', summary)
+        self.assertIn('FAIL check-check-index', summary)
+        self.assertIn('Stopped at first failure', summary)
+        self.assertNotIn('check-pmic-tree', summary)
+        self.assertNotIn('indexed-focused', summary)
+
+    def test_targeted_selection_can_keep_going(self):
+        self.env['GATE_TEST_FAIL_ALL'] = 'checks/pmic-tree.py'
+        result = self.run_gate('--check', 'pmic-tree', '--check', 'power-domains-tree', '--keep-going')
+        self.assertEqual(result.returncode, 1)
+        summary = (self.sandbox / 'build/gate-case/summary.txt').read_text()
+        self.assertIn('FAIL check-pmic-tree', summary)
+        self.assertIn('PASS check-power-domains-tree', summary)
+
+    def test_failed_build_skips_only_the_checks_that_need_it(self):
+        self.full_catalogue()
+        self.env['GATE_TEST_FAIL'] = 'kernel-check'
+        result = self.run_gate('--reason', 'Central build fails', '--full')
+        self.assertEqual(result.returncode, 1)
+        summary = (self.sandbox / 'build/gate-case/summary.txt').read_text()
+        self.assertIn('FAIL central-build', summary)
+        self.assertIn('SKIP check-kernel: central-build did not pass', summary)
+        self.assertIn('SKIP check-soak8: central-build did not pass', summary)
+        self.assertIn('PASS check-pmic-tree', summary)
+        self.assertIn('PASS os-headset-build', summary)
+        self.assertFalse(any('tools/check-kernel.py' in call for call in self.records()))
+
+    def test_checks_run_in_parallel_and_qemu_checks_run_alone(self):
+        self.full_catalogue()
+        self.env['GATE_TEST_SLEEP'] = '0.4'
+        result = self.run_gate('--reason', 'Parallel', '--full', '--jobs', '4')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        spans = self.intervals()
+        serial = [s for s in spans if s[0] in ('tools/check-kernel.py', 'tools/check-smp.py')]
+        others = [s for s in spans if s not in serial]
+        self.assertEqual(len(serial), 2)
+        self.assertTrue(any(self.overlap(a, b) for a in others for b in others if a is not b))
+        self.assertFalse(any(self.overlap(a, b) for a in serial for b in spans if a is not b))
+        environment = (self.sandbox / 'build/gate-case/environment.txt').read_text()
+        self.assertIn('PATH=' + str(self.sandbox / 'host/usr/lib/llvm-21/bin'), environment)
+
+    def test_single_worker_never_overlaps_and_index_names_serial_checks(self):
+        self.full_catalogue()
+        self.env['GATE_TEST_SLEEP'] = '0.2'
+        self.env['GATE_TEST_SERIAL'] = 'focused.py'
+        result = self.run_gate('--reason', 'Serial', '--full', '--jobs', '1')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        spans = self.intervals()
+        self.assertFalse(any(self.overlap(a, b) for a in spans for b in spans if a is not b))
+        self.env['GATE_TEST_SERIAL'] = 'focused.py'
+        result = self.run_gate('--reason', 'Serial index', '--full', '--jobs', '4', label='second')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        spans = [s for s in self.intervals()][len(spans):]
+        focused = [s for s in spans if s[0] == 'checks/focused.py']
+        self.assertEqual(len(focused), 1)
+        self.assertFalse(any(self.overlap(focused[0], s) for s in spans if s is not focused[0]))
+
+    def test_memory_guard_starts_no_check_while_memory_is_low(self):
+        self.full_catalogue()
+        result = self.run_gate('--reason', 'Low memory', '--full', '--min-available-gb', '1000000', '--memory-wait', '1')
+        self.assertEqual(result.returncode, 1)
+        summary = (self.sandbox / 'build/gate-case/summary.txt').read_text()
+        self.assertIn('WAIT ', summary)
+        self.assertIn('not started; MemAvailable stayed below 1e+06 GiB', summary)
+        self.assertFalse(any(call[0] == 'python' for call in self.records()))
+
+    def test_prose_checks_warn_unless_documentation_is_strict(self):
+        self.env['GATE_TEST_PROSE'] = json.dumps({'focused.py': True})
+        self.env['GATE_TEST_FAIL'] = 'checks/focused.py'
+        warned = self.run_gate('--changed', 'anything')
+        self.assertEqual(warned.returncode, 0, warned.stdout + warned.stderr)
+        summary = (self.sandbox / 'build/gate-case/summary.txt').read_text()
+        self.assertIn('WARN indexed-focused', summary)
+        self.assertIn('PASS selected', summary)
+        strict = self.run_gate('--changed', 'anything', '--strict-docs', label='strict')
+        self.assertEqual(strict.returncode, 1)
+        self.assertIn('FAIL indexed-focused', (self.sandbox / 'build/gate-strict/summary.txt').read_text())
+
+    def test_partly_prose_check_warns_only_for_its_prose_cases(self):
+        self.env['GATE_TEST_PROSE'] = json.dumps({'focused.py': ['test_records']})
+        self.env['GATE_TEST_FAIL'] = 'checks/focused.py'
+        self.env['GATE_TEST_OUTPUT'] = 'FAIL: test_records (__main__.Check)'
+        self.assertEqual(self.run_gate('--changed', 'anything').returncode, 0)
+        self.env['GATE_TEST_OUTPUT'] = 'FAIL: test_records (__main__.Check)\nERROR: test_parser (__main__.Check)'
+        code = self.run_gate('--changed', 'anything', label='code')
+        self.assertEqual(code.returncode, 1)
+        self.env['GATE_TEST_OUTPUT'] = 'Traceback: import failed'
+        self.assertEqual(self.run_gate('--changed', 'anything', label='crash').returncode, 1)
+
+    def test_prose_failure_does_not_stop_a_fail_fast_gate(self):
+        self.env['GATE_TEST_PROSE'] = json.dumps({'focused.py': True})
+        self.env['GATE_TEST_FAIL'] = 'checks/focused.py'
+        result = self.run_gate('--changed', 'anything', '--fail-fast')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        summary = (self.sandbox / 'build/gate-case/summary.txt').read_text()
+        self.assertIn('WARN indexed-focused', summary)
+        self.assertIn('PASS indexed-progress', summary)
+
+    def test_real_index_runs_host_only_usb_named_checks_in_the_gate(self):
+        spec = importlib.util.spec_from_file_location('real_index', ROOT / 'checks/check-index.py')
+        indexer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(indexer)
+        index = indexer.generate()
+        for name, option in (('board-runner.py', '--out'), ('usb-disconnect.py', '--output'),
+                             ('usb-access-discover.py', '--output')):
+            self.assertTrue(index[name]['pure_host'], name)
+            self.assertFalse(index[name]['usb'], name)
+            self.assertEqual(index[name]['output_option'], option)
+        # Checks outside HOST_ONLY keep their device-access classification.
+        real = [n for n, e in index.items() if e['usb'] and not e['pure_host'] and n not in indexer.HOST_ONLY]
+        self.assertIn('usb-session.py', real)
+        self.assertFalse(set(indexer.HOST_ONLY) & set(real))
+        self.assertEqual(index['docs-links.py']['prose'], True)
+        self.assertTrue(index['pcie-qemu.py']['serial'])
 
 
 if __name__ == '__main__':

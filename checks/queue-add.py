@@ -11,18 +11,18 @@ ROOT = Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--build', type=Path, required=True)
 p.add_argument('--cc', default='clang')
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 a = p.parse_args()
 a.build.mkdir(parents=True, exist_ok=True)
 generated = a.build / 'generated'
 subprocess.run([sys.executable, str(ROOT/'tools/sunstone-manifest.py'), 'emit',
                 '--manifest', str(ROOT/'apps/queue-add/manifest.json'), '--output', str(generated)], check=True)
-(generated/'FreeRTOS.h').write_text('#include <stdint.h>\ntypedef uint64_t TickType_t;\n')
-(generated/'task.h').write_text('TickType_t xTaskGetTickCount(void);\nvoid vTaskDelay(TickType_t);\n')
 fixture = r'''
 #include "queue_add-app.h"
 #include "gpu_queue.h"
 #include <assert.h>
 #include <setjmp.h>
+#include "host_rtos.h"
 #include <stdlib.h>
 #include <string.h>
 static jmp_buf done;
@@ -30,7 +30,6 @@ static jmp_buf done;
 #define QUEUE_ADD_JOBS 1u
 #endif
 static unsigned mode, fail_at, creates, submits, waits, closes, terminal, progress, attempts, delays;
-static uint64_t ticks;
 static uint32_t input[130], output[67];
 int gpu_queue_context_create(const struct gpu_queue_context_config *c, uint32_t ticks,
                             struct gpu_queue_context *ctx, struct gpu_queue_lease_info *info)
@@ -95,8 +94,9 @@ int gpu_queue_close(struct gpu_queue_context ctx, uint32_t ticks)
     assert(submits == QUEUE_ADD_JOBS && waits == QUEUE_ADD_JOBS);
     return mode == 7 ? GPU_QUEUE_FAULT : GPU_QUEUE_OK;
 }
-uint64_t xTaskGetTickCount(void) { return ticks; }
-void vTaskDelay(uint64_t n) { assert(n == 1);ticks += n;++delays; }
+/* The application's own delay calls, counted and checked, then run on the real kernel. */
+void __real_vTaskDelay(TickType_t n);
+void __wrap_vTaskDelay(TickType_t n) { assert(n == 1);++delays;__real_vTaskDelay(n); }
 int ss_live(void) { return mode == 16 && delays == 2 ? -1 : 1; }
 void ss_progress(void) { ++progress; }
 _Noreturn void ss_fail(uint32_t detail) { terminal=detail;longjmp(done,1); }
@@ -108,16 +108,15 @@ _Noreturn void ss_finish(const void *data, size_t bytes)
     for(unsigned i=0;i<8;++i) assert(r[4+i] == (i<QUEUE_ADD_JOBS ? 101+i : 0));
     terminal=0;longjmp(done,1);
 }
-int main(int argc, char **argv)
+static void scenario(void *arg)
 {
-    assert(argc == 3);mode=(unsigned)strtoul(argv[1],0,10);fail_at=(unsigned)strtoul(argv[2],0,10);
+    char **argv = arg;mode=(unsigned)strtoul(argv[1],0,10);fail_at=(unsigned)strtoul(argv[2],0,10);
     assert(fail_at >= 1 && fail_at <= QUEUE_ADD_JOBS);
     struct ss_grant g={.devices=SS_DEVICE_GPU,.region_count=2};
     g.regions[QUEUE_ADD_REGION_INPUT]=(struct ss_span){input,sizeof(input)};
     g.regions[QUEUE_ADD_REGION_OUTPUT]=(struct ss_span){output,260};
     output[65]=0x12345678;output[66]=0x87654321;
     if(mode == 1) g.devices=0;
-    if(mode == 17) ticks=UINT64_MAX-100;
     if(!setjmp(done)) queue_add_main(&g);
     unsigned expected=mode <= 7 ? mode : mode == 10 ? 6 : 5;
     if(mode == 4 || mode == 16 || mode == 17) expected=0x400u | (fail_at << 4) | GPU_QUEUE_PARKED;
@@ -136,10 +135,17 @@ int main(int argc, char **argv)
     assert(progress == submits + delays && attempts == submits + delays);
     assert(delays == (mode == 4 || mode == 17 ? 500 : mode == 16 ? 2 : mode == 15 || mode == 18 ? 3 : 0));
     assert(output[65] == 0x12345678 && output[66] == 0x87654321);
+}
+int main(int argc, char **argv)
+{
+    assert(argc == 3);
+    host_rtos_run(scenario, argv, 2, 10000000);
     return 0;
 }
 '''
 (a.build/'fixture.c').write_text(fixture)
+import host_rtos
+from harness import environment
 flags=['-std=c11','-Wall','-Wextra','-Werror','-I'+str(ROOT/'include'),'-I'+str(generated)]
 cases=[]
 case_names=['success-with-partial-workgroup-and-unsigned-wrap','missing-device','create-refused',
@@ -147,20 +153,34 @@ case_names=['success-with-partial-workgroup-and-unsigned-wrap','missing-device',
             'wrong-completion-sequence','fault-completion','stale-output',
             'submit-busy','submit-refused','submit-fault','submit-timeout',
             'parked-then-ready','parked-session-ended','parked-tick-wrap-deadline','parked-then-refused']
-for jobs,definitions in [(1,[]),(8,['-DQUEUE_ADD_JOBS=8'])]:
-    binary=a.build/('queue-add-'+str(jobs))
-    subprocess.run([a.cc,*flags,*definitions,'-fsanitize=address,undefined','-fno-sanitize-recover=all',
-                    str(a.build/'fixture.c'),str(ROOT/'apps/queue-add/main.c'),'-o',str(binary)],check=True)
+link=['-Wl,--wrap=vTaskDelay']
+def run_case(binary,mode,fail_at):
+    done=subprocess.run([str(binary),str(mode),str(fail_at)],capture_output=True,text=True,
+                        env={**environment(),'ASAN_OPTIONS':'detect_leaks=0'})
+    return done.returncode
+for jobs,definitions in [(1,[]),(8,['QUEUE_ADD_JOBS=8'])]:
+    # Kernel objects are compiled per build directory: the wrap case starts the tick near
+    # the 64-bit limit (configINITIAL_TICK_COUNT), so it has its own.
+    binary=host_rtos.build(a.build/'kernel',[a.build/'fixture.c',ROOT/'apps/queue-add/main.c'],
+                           'queue-add-'+str(jobs),defines=definitions,includes=[generated],link=link)
+    wrap=host_rtos.build(a.build/'kernel-wrap',[a.build/'fixture.c',ROOT/'apps/queue-add/main.c'],
+                         'queue-add-wrap-'+str(jobs),defines=definitions+['configINITIAL_TICK_COUNT=(UINT64_MAX-100)'],
+                         includes=[generated],link=link)
     injected=[(mode,1) for mode in range(19)]
     if jobs == 8:injected += [(mode,8) for mode in (4,5,6,8,9,10,11,12,13,14,15,16,17,18)]
     for mode,fail_at in injected:
-        subprocess.run([str(binary),str(mode),str(fail_at)],check=True,
-                       env={**os.environ,'ASAN_OPTIONS':'detect_leaks=0'})
+        assert run_case(wrap if mode == 17 else binary,mode,fail_at)==0,(jobs,mode,fail_at)
         cases.append({'case':case_names[mode],'jobs':jobs,'injection_job':fail_at if mode >= 4 and mode != 7 else None})
-    subprocess.run([a.cc,*flags,*definitions,'--target=aarch64-none-elf','-ffreestanding','-mgeneral-regs-only',
+    subprocess.run([a.cc,*flags,*['-D'+d for d in definitions],'--target=aarch64-none-elf','-ffreestanding','-mgeneral-regs-only',
+                    '-I'+str(host_rtos.KERNEL/'include'),'-I'+str(host_rtos.KERNEL/'portable/GCC/ARM_AARCH64_SRE'),
                     '-c',str(ROOT/'apps/queue-add/main.c'),'-o',str(a.build/('queue-add-'+str(jobs)+'.o'))],check=True)
+# Negative control: a wait that ignores the session end must fail the parked-session-ended case.
+mutant=host_rtos.mutated(a.build,'apps/queue-add/main.c','ss_live() < 0 || ','0 || ')
+control=host_rtos.build(a.build/'kernel',[a.build/'fixture.c',mutant],'queue-add-control',includes=[generated,ROOT/'apps/queue-add'],
+                        link=link,flags=['-w'])
+assert run_case(control,16,1)!=0,'control passed'
 for jobs in (0,9):
-    refused=subprocess.run([a.cc,*flags,'-DQUEUE_ADD_JOBS='+str(jobs),'-c',str(ROOT/'apps/queue-add/main.c'),
+    refused=subprocess.run([a.cc,*flags,'-I'+str(host_rtos.KERNEL/'include'),'-I'+str(host_rtos.KERNEL/'portable/GCC/ARM_AARCH64_SRE'),'-DQUEUE_ADD_JOBS='+str(jobs),'-c',str(ROOT/'apps/queue-add/main.c'),
                             '-o',str(a.build/'invalid-jobs.o')],capture_output=True,text=True)
     assert refused.returncode and 'one to eight serial jobs' in refused.stderr
     cases.append({'case':'invalid-job-count-refused','jobs':jobs})
