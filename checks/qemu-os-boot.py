@@ -357,7 +357,10 @@ def boot(elf, raw_session, contract, scenario_bytes, inputs, log, timeout=60):
         path = work / (Path(log).stem + '-input-%#x.bin' % address)
         path.write_bytes(data)
         loaders += ['-device', 'loader,file=%s,addr=%#x,force-raw=on' % (path, address)]
-    command = [QEMU, '-machine', 'virt,gic-version=3,secure=off,virtualization=off', '-accel', 'tcg,thread=multi',
+    # Guest time counts instructions, not the wall time of a loaded host: a service window or a
+    # sensor deadline of the board then cannot expire because a vCPU thread was descheduled.
+    command = [QEMU, '-machine', 'virt,gic-version=3,secure=off,virtualization=off',
+               '-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off',
                '-cpu', 'cortex-a76', '-smp', '8', '-m', '512M', '-nographic', '-monitor', 'none',
                '-semihosting-config', 'enable=on,target=native', '-kernel', elf, *loaders]
     start = time.monotonic()
@@ -601,8 +604,17 @@ def main():
     c.require('STOP status=5 detail=2' in c.output, 'the supervisor did not name the stalled transport')
     c.require(1_000_000 <= int(c.failure['t_us']) < 2_500_000, 'the stall was reported at %s us' % c.failure['t_us'])
     c = run_case('resident-service-silent', resident_elf, scenario(fault=4, usb_ready_ms=usb_delay_ms, limit_ms=9000))
-    c.require(c.status == 5 and lines(c.output, 'WATCHDOG-RESET'), 'the watchdog did not reset the board')
-    c.require(4_000_000 <= int(lines(c.output, 'WATCHDOG-RESET')[0]['t_us']) < 4_300_000, 'the reset came at the wrong time')
+    # At the loader's first expiry (4 s) the supervisor, which runs every 20 ms, refuses renewal because the
+    # transport never reported, and the armed watchdog expires at the same instant. Which happens first
+    # depends on the phase between the two, which the deterministic clock fixes for a given image. Both
+    # are the designed stop: the board's reset, or the supervisor's named stop of the silent transport.
+    reset = lines(c.output, 'WATCHDOG-RESET')
+    if reset:
+        c.require(c.status == 5 and 4_000_000 <= int(reset[0]['t_us']) < 4_300_000, 'the reset came at the wrong time')
+    else:
+        c.failed_with('BOARD')
+        c.require('STOP status=5 detail=2' in c.output, 'the supervisor did not name the silent transport')
+        c.require(4_000_000 <= int(c.failure['t_us']) < 4_300_000, 'the stop came at %s us' % c.failure['t_us'])
     c.require(c.main is None, 'the application started with the transport silent')
 
     # 8. A data abort at EL0 (the failure return's admission, apps/os/cpu-return-el0.S): the real
