@@ -89,7 +89,8 @@ def main():
     u.mem_write(board+ba['admitted_session'],bytes(session[:592]));u.mem_write(board+ba['session'],bytes(session[:592]))
     put(board+ba['live_until'],20000000)
     usb0=0x43f00000;put(board+ba['handles']+8,usb0)
-    gicd=0x03400000;put(gicd+0x460,0xd8<<8,4);put(gicd+0x6308,0x100)
+    # Nonsecure view of the Secure priority 0xd8 that the route table writes (GICv3 IHI0069D 4.8.1).
+    gicd=0x03400000;put(gicd+0x460,0xb0<<8,4);put(gicd+0x6308,0x100)
     state={'done':False,'scheduler':1,'tasks':[],'affinity':[],'acquire_callers':[],'frames':{},'pending':None}
     def returned(v=0):u.reg_write(UC_ARM64_REG_X0,v);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
     names=('npu_board_session_valid','vTaskEnterCritical','vTaskExitCritical','aarch64_device_cache',
