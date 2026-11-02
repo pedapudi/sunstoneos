@@ -1,7 +1,9 @@
 /* Production idle state machine; modeled MMIO and counter, no physical NPU. */
 #include "a733_npu_idle.h"
 #include "register_latency.h"
+#include "strict_mmio.h"
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,9 +22,28 @@ struct device {
     uint32_t failed_offset, failed_value;
     unsigned writes, reads, resume_reads, completed_pulses;
     unsigned stuck, bad_clock, bad_shader, bad_idle, slow;
+    uint32_t read_shader;
     struct register_latency effect;
     struct access trace[TRACE_MAX];
+    struct strict_reg regs[3];
 };
+/* The NPU register window at its physical base (docs/hardware/a733-facts.json is not needed: the
+ * offsets are the driver's own, include/a733_npu_idle.h). */
+#define NPU_BASE ((uintptr_t)0x03600000u)
+/* Sources of the modeled behavior, each of docs/reference-backsolve-npu.md "Idle gating":
+ *  CLOCK_CITE: +0x000 clock control: bit 9 reload pulse, bit 0 gate, scaler bits 8:2
+ *    (vipdrv_pm_disable_clock vip_drv_pm.c:142-175, vipdrv_pm_enable_clock :177-210; startup value
+ *    0x70900 written at a733_npu_controller.c:161, the Linux-independent vendor sequence of the reference).
+ *  SHADER_CITE: +0x10c shader scaler, bit 0 pulse, scaler bits 7:1 (vipdrv_pm_set_frequency :66-139;
+ *    startup value 0x015a0880, controller step 17 of the reference).
+ *  STATUS_CITE: +0x004 all-units idle word, tested under the mask 0x7fffffff
+ *    (vipdrv_hw_wait_idle vip_drv_hardware.c:1045-1076, vip_drv_hardware.h:69).
+ * The 1 us delay after the pulse-low write is the vendor's silicon branch (:142-175, :177-210).
+ * The injections below (bad_*, stuck, slow, fail_at) are fault scenarios, not claims about hardware. */
+#define CLOCK_CITE "docs/reference-backsolve-npu.md Idle gating: vip_drv_pm.c:142-175,:177-210; controller startup 0x70900"
+#define SHADER_CITE "docs/reference-backsolve-npu.md Idle gating: vip_drv_pm.c:66-139; controller startup 0x015a0880"
+#define STATUS_CITE "docs/reference-backsolve-npu.md Idle gating: vip_drv_hardware.c:1045-1076, vip_drv_hardware.h:69"
+
 static void apply(struct device *d)
 {
     if (!d->effect.pending) return;
@@ -43,6 +64,50 @@ static void trace(struct device *d,unsigned write,uint32_t offset,uint32_t value
     assert(d->accesses<TRACE_MAX);
     d->trace[d->accesses++]=(struct access){write,offset,value,d->ticks};
 }
+static uint64_t clock_read(struct strict_reg *r)
+{
+    struct device *d=r->context;
+    uint32_t v=d->clock;if(d->bad_clock&&!d->gated&&d->completed_pulses>=2)v^=4;
+    return v;
+}
+static uint64_t shader_read(struct strict_reg *r)
+{
+    struct device *d=r->context;
+    uint32_t v=d->shader;if(d->bad_shader&&d->completed_pulses>=2)v^=2;
+    d->read_shader=v;return v;
+}
+static uint64_t status_read(struct strict_reg *r)
+{
+    struct device *d=r->context;
+    return d->bad_idle?0:d->status;
+}
+static int clock_write(struct strict_reg *r,uint64_t word)
+{
+    struct device *d=r->context;uint32_t value=(uint32_t)word;
+    /* The vendor writes back what it read: every bit but the two controls is the register's own. */
+    assert((value&~UINT32_C(0x201))==(d->clock&~UINT32_C(0x201)));
+    if(value&0x200){assert(!d->pulse);d->pulse=1;d->high_value=value;}
+    else{
+        assert(d->pulse&&value==(d->high_value&~UINT32_C(0x200)));
+        d->pulse=0;++d->completed_pulses;
+        d->low_at=d->ticks;
+        reg_latency_schedule(&d->effect,d->ticks,d->settle,UINT32_MAX,value);
+        d->effect.stuck=d->stuck;
+    }
+    return 0;
+}
+static int shader_write(struct strict_reg *r,uint64_t word)
+{
+    struct device *d=r->context;uint32_t value=(uint32_t)word;
+    assert(!d->gated&&!d->effect.pending);
+    assert(d->ticks-d->low_at>=d->settle);
+    assert((value&~1u)==(d->read_shader&~1u));
+    if(value&1){assert(!d->pulse);d->pulse=1;}
+    else{assert(d->pulse);d->pulse=0;}
+    d->shader=value;return 0;
+}
+/* The status word is read only. */
+static int status_write(struct strict_reg *r,uint64_t word){(void)r;(void)word;return 1;}
 static int read32(void *cookie,uint32_t offset,uint32_t *value)
 {
     struct device *d=cookie;
@@ -52,12 +117,8 @@ static int read32(void *cookie,uint32_t offset,uint32_t *value)
     if(d->gated){assert(offset==0);++d->resume_reads;}
     assert(!d->pulse);
     ++d->reads;
-    switch(offset){
-    case 0:*value=d->clock;if(d->bad_clock&&!d->gated&&d->completed_pulses>=2)*value^=4;break;
-    case 0x10c:*value=d->shader;if(d->bad_shader&&d->completed_pulses>=2)*value^=2;break;
-    case 4:*value=d->bad_idle?0:d->status;break;
-    default:assert(!"unexpected/destructive NPU register read");return 0;
-    }
+    /* Any offset that is not one of the three defined registers is refused by the strict model. */
+    *value=(uint32_t)strict_mmio_read(NPU_BASE+offset,4);
     trace(d,0,offset,*value);
     d->ticks+=d->slow==1?d->frequency/5000:d->slow==2?d->frequency/10000:1;
     return 1;
@@ -68,24 +129,7 @@ static int write32(void *cookie,uint32_t offset,uint32_t value)
     if(!access_ok(d,NPU_IDLE_WRITE,offset,value))return 0;
     apply(d);++d->writes;trace(d,1,offset,value);
     assert(!d->gated||offset==0);
-    if(offset==0){
-        assert((value&~UINT32_C(0x201))==(CLOCK&~UINT32_C(0x201)));
-        if(value&0x200){assert(!d->pulse);d->pulse=1;d->high_value=value;}
-        else{
-            assert(d->pulse&&value==(d->high_value&~UINT32_C(0x200)));
-            d->pulse=0;++d->completed_pulses;
-            d->low_at=d->ticks;
-            reg_latency_schedule(&d->effect,d->ticks,d->settle,UINT32_MAX,value);
-            d->effect.stuck=d->stuck;
-        }
-    }else if(offset==0x10c){
-        assert(!d->gated&&!d->effect.pending);
-        assert(d->ticks-d->low_at>=d->settle);
-        assert((value&~1u)==(SHADER&~1u));
-        if(value&1){assert(!d->pulse);d->pulse=1;}
-        else{assert(d->pulse);d->pulse=0;}
-        d->shader=value;
-    }else assert(!"unexpected NPU register write");
+    strict_mmio_write(NPU_BASE+offset,4,value);
     d->ticks+=d->slow==1?d->frequency/5000:d->slow==2?d->frequency/10000:1;
     return 1;
 }
@@ -104,6 +148,10 @@ static unsigned strict_mode=1;
 static void fresh(struct device *d,uint64_t frequency,unsigned enabled)
 {
     memset(d,0,sizeof(*d));
+    d->regs[0]=(struct strict_reg){NPU_BASE+0x000,4,"clock control",CLOCK_CITE,0,clock_read,clock_write,d,0,0};
+    d->regs[1]=(struct strict_reg){NPU_BASE+0x004,4,"idle word",STATUS_CITE,0,status_read,status_write,d,0,0};
+    d->regs[2]=(struct strict_reg){NPU_BASE+0x10c,4,"shader scaler",SHADER_CITE,0,shader_read,shader_write,d,0,0};
+    strict_mmio_clear();strict_mmio_define(d->regs,3);
     d->frequency=frequency;d->quantum=1;d->settle=(frequency+999999)/1000000;
     d->clock=CLOCK;d->shader=SHADER;d->status=FULL_IDLE;d->health=1;d->ticks=100;
     assert(npu_idle_init(&d->idle,&a733_npu_idle_part,&ops,d,frequency,enabled,strict_mode)==1);
@@ -219,32 +267,59 @@ static void failures(void)
     }
     printf("injected every callback failure: %u suspend, %u resume\n",gate_calls,resume_calls);
 }
+/* Values other than the expected ones are recorded and do not refuse; only a lost ungate
+ * (the gate bit still set after the pulse), an idle word below the vendor's mask before
+ * gating and the strict budget retain the queue. */
 static void readback(void)
 {
+#ifdef NPU_IDLE_VALUE_RECORDING
+    const unsigned dev[]={NPU_IDLE_DEV_RESUME_CLOCK,NPU_IDLE_DEV_RESUME_SHADER,NPU_IDLE_DEV_RESUME_STATUS};
+#endif
     for(unsigned at=0;at<3;++at){
         struct device d;fresh(&d,24000000,1);suspend(&d);
         if(at==0)d.bad_clock=1;
         if(at==1)d.bad_shader=1;
         if(at==2)d.bad_idle=1;
-        assert(npu_idle_resume(&d.idle)!=1);
-        assert(d.idle.failure.site==(at==0?NPU_IDLE_GATE_VALUE:at==1?NPU_IDLE_SHADER_VALUE:NPU_IDLE_FULL_IDLE));
-        retained(&d);
+        assert(npu_idle_resume(&d.idle)==1&&d.idle.phase==NPU_IDLE_ON);
+        assert(d.idle.counters.resumes==1);
+#ifdef NPU_IDLE_VALUE_RECORDING
+        assert(d.idle.counters.value_deviations==1&&d.idle.first_deviation.deviation&dev[at]);
+#endif
     }
-    for(unsigned at=0;at<5;++at){
+    /* A cycle that gates with unexpected register values writes them back, records them and
+     * resumes. */
+    for(unsigned at=0;at<4;++at){
         struct device d;fresh(&d,24000000,1);mature(&d);
         if(at==0)d.clock^=4;
         if(at==1)d.shader^=2;
         if(at==2)d.clock|=0x200;
         if(at==3)d.shader|=1;
-        if(at==4)d.bad_idle=1;
-        assert(npu_idle_gate(&d.idle)!=1&&d.writes==0);retained(&d);
+        assert(npu_idle_gate(&d.idle)==1&&d.writes==2);
+#ifdef NPU_IDLE_VALUE_RECORDING
+        assert(d.idle.observed.deviation&(at%2?NPU_IDLE_DEV_GATE_SHADER:NPU_IDLE_DEV_GATE_CLOCK));
+#endif
+        d.pulse=0;apply(&d);
+        assert(npu_idle_resume(&d.idle)==1);
+#ifdef NPU_IDLE_VALUE_RECORDING
+        assert(d.idle.counters.value_deviations==1);
+        assert(d.idle.first_deviation.deviation&(at%2?NPU_IDLE_DEV_GATE_SHADER:NPU_IDLE_DEV_GATE_CLOCK));
+#endif
     }
-    /* A lost suspend write is observed by resume's safe +0 read. No gated
-     * status read is added merely to prove that suspension took effect. */
+    /* The idle word compares under the vendor's mask: bit 31 is ignored; a unit not idle refuses. */
+    struct device masked;fresh(&masked,24000000,1);mature(&masked);masked.status=FULL_IDLE|UINT32_C(0x80000000);
+    assert(npu_idle_gate(&masked.idle)==1);
+    struct device busy;fresh(&busy,24000000,1);mature(&busy);busy.bad_idle=1;
+    assert(npu_idle_gate(&busy.idle)!=1&&busy.writes==0&&busy.idle.failure.site==NPU_IDLE_FULL_IDLE);retained(&busy);
+    /* A lost suspend write shows at resume as an entry value without the gate bit: recorded,
+     * and the ungate sequence is harmless. */
     struct device lost;fresh(&lost,24000000,1);mature(&lost);lost.stuck=1;
     assert(npu_idle_gate(&lost.idle)==1);
-    assert(npu_idle_resume(&lost.idle)!=1);retained(&lost);
-    /* A lost resume write must be caught through +0 before touching +10c.
+    lost.stuck=0;lost.effect.pending=0;lost.pulse=0; /* only the suspend write was lost */
+    assert(npu_idle_resume(&lost.idle)==1);
+#ifdef NPU_IDLE_VALUE_RECORDING
+    assert(lost.idle.first_deviation.deviation&NPU_IDLE_DEV_RESUME_ENTRY);
+#endif
+    /* A lost resume write leaves the gate bit set: the queue is retained before +10c is read.
      * read32 asserts immediately if production performs a forbidden read. */
     struct device stuck;fresh(&stuck,24000000,1);suspend(&stuck);stuck.stuck=1;
     assert(npu_idle_resume(&stuck.idle)!=1);
@@ -263,6 +338,24 @@ static void budget(void)
     assert(d.idle.counters.resume_over_budget==1&&d.idle.counters.resume_max_ticks>2400);
     assert(d.idle.counters.resumes==1&&!d.gated);
     strict_mode=1;
+}
+/* Bit 31 of the idle word is outside the vendor's mask and does not prevent gating. */
+static void idle_mask(void)
+{
+    struct device d;fresh(&d,24000000,1);mature(&d);d.status=FULL_IDLE|UINT32_C(0x80000000);
+    assert(npu_idle_gate(&d.idle)==1&&d.idle.phase==NPU_IDLE_SUSPENDED);
+    assert(npu_idle_resume(&d.idle)==1);
+}
+static void ignore_refusal(const char *message){(void)message;}
+/* The strict register layer refuses an offset the fixture does not define with a source. */
+static void unmodeled(void)
+{
+    struct device d;fresh(&d,24000000,1);
+    strict_mmio_set_refusal_handler(ignore_refusal);
+    uint32_t v;
+    (void)read32(&d,0x14,&v);(void)write32(&d,0x14,1);(void)write32(&d,0x004,1);
+    assert(strict_mmio_refusals()==3);
+    strict_mmio_set_refusal_handler(NULL);
 }
 static void retention(void)
 {
@@ -285,6 +378,8 @@ int main(int argc,char **argv)
     else if(!strcmp(argv[1],"readback"))readback();
     else if(!strcmp(argv[1],"retention"))retention();
     else if(!strcmp(argv[1],"budget"))budget();
+    else if(!strcmp(argv[1],"idle-mask"))idle_mask();
+    else if(!strcmp(argv[1],"unmodeled"))unmodeled();
     else assert(!"unknown case");
     printf("PASS %s\n",argv[1]);return 0;
 }

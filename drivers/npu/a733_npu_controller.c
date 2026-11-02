@@ -73,7 +73,7 @@ static int verify(struct a733_npu_controller *c, unsigned at, uint32_t expected,
 static int idle(struct a733_npu_controller *c)
 {
     if (!read_reg(c, 4, &c->last_idle)) return 0;
-    return c->last_idle == IDLE_ALL ? 1 : fail(c, A733_NPU_NOT_IDLE);
+    return (c->last_idle & IDLE_ALL) == IDLE_ALL ? 1 : fail(c, A733_NPU_NOT_IDLE);
 }
 static int duration(uint64_t timeout)
 {
@@ -268,7 +268,7 @@ enum a733_npu_state a733_npu_advance(struct a733_npu_controller *c, int sample_e
      * are invalidated. A later event stays pending in +0x010: the interrupt
      * profile samples it between jobs, the next completion's read attributes
      * it, and close refuses it. */
-    if (!read_reg(c, 4, &c->last_idle) || c->last_idle != IDLE_ALL) return c->state;
+    if (!read_reg(c, 4, &c->last_idle) || (c->last_idle & IDLE_ALL) != IDLE_ALL) return c->state;
     c->ops.barrier(c->cookie);
     int finished = c->ops.finish(c->cookie, &c->job, canceled);
     if (finished != 1) {

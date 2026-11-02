@@ -1,6 +1,7 @@
 /* Compiled models loaded into fixed slots at runtime and run concurrently on
  * the one NPU. Design, budgets and failure classes:
  * docs/designs/npu-breadth.md. */
+#include "npu_arch.h"
 #include "npu_runtime.h"
 #include "npu_admitted_models.h"
 #include "a733_range.h"
@@ -145,9 +146,7 @@ static void fill_end(uintptr_t cpu, size_t bytes)
 }
 static int dc_zva_block(void)
 {
-    uint64_t value;
-    __asm__ volatile("mrs %0, dczid_el0" : "=r"(value));
-    return (value & 0x1f) == 4; /* Permitted, 2^4 words = 64 bytes. */
+    return npu_arch_zva_block_is_64(); /* Permitted, 2^4 words = 64 bytes. */
 }
 
 int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config *config)
@@ -338,7 +337,7 @@ static int walk(struct npu_runtime *rt, struct npu_runtime_slot *s, const struct
     case WALK_CLEAN: if (!maintain(rt, AARCH64_CACHE_CLEAN, at, n)) return 0; break;
     case WALK_FLUSH: if (!maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, at, n)) return 0; break;
     case WALK_ZERO:
-        for (size_t i = 0; i < n; i += 64) __asm__ volatile("dc zva, %0" :: "r"(at + i) : "memory");
+        for (size_t i = 0; i < n; i += 64) npu_arch_zero_line(at + i);
         rt->counters.zeroed_bytes += n;
         if (!maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, at, n)) return 0;
         break;
@@ -848,8 +847,7 @@ static enum a733_npu_platform_result platform_step(struct npu_runtime *rt, int s
 {
     if (!rt || !rt->bound || !rt->startup || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING ||
         xTaskGetCurrentTaskHandle() != rt->startup->task) return A733_NPU_PLATFORM_RETAINED;
-    uint64_t level;
-    __asm__ volatile("mrs %0,CurrentEL" : "=r"(level));
+    uint64_t level = npu_arch_current_el();
     if (level != 4) return A733_NPU_PLATFORM_RETAINED;
     if (stop)
         for (unsigned i = 0; i < rt->slots; ++i)

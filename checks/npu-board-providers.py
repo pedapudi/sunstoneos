@@ -27,6 +27,11 @@ from pathlib import Path
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE
 from unicorn.arm64_const import *
 ROOT=Path(__file__).resolve().parents[1]
+import importlib.util
+_spec = importlib.util.spec_from_file_location('hw_facts', ROOT / 'tools/hw_facts.py')
+hw_facts = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(hw_facts)
+# The Non-secure view of a stored priority comes from docs/hardware/a733-facts.json (checks/hw-facts.py).
+GIC = hw_facts.GicModel()
 sys.path.insert(0,str(ROOT/'checks'))
 import harness
 LAYOUTS=('npu_board_application','npu_board_session','a733_board_session','board_provider','board_application',
@@ -90,7 +95,7 @@ def main():
     put(board+ba['live_until'],20000000)
     usb0=0x43f00000;put(board+ba['handles']+8,usb0)
     # Nonsecure view of the Secure priority 0xd8 that the route table writes (GICv3 IHI0069D 4.8.1).
-    gicd=0x03400000;put(gicd+0x460,0xb0<<8,4);put(gicd+0x6308,0x100)
+    gicd=0x03400000;put(gicd+0x460,GIC.ns_read(0xd8)<<8,4);put(gicd+0x6308,0x100)
     state={'done':False,'scheduler':1,'tasks':[],'affinity':[],'acquire_callers':[],'frames':{},'pending':None}
     def returned(v=0):u.reg_write(UC_ARM64_REG_X0,v);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
     names=('npu_board_session_valid','vTaskEnterCritical','vTaskExitCritical','aarch64_device_cache',

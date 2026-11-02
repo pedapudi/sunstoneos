@@ -20,6 +20,11 @@ from unicorn.arm64_const import (UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'checks'))
 import harness
+import importlib.util
+_spec = importlib.util.spec_from_file_location('hw_facts', Path(__file__).resolve().parents[1] / 'tools/hw_facts.py')
+hw_facts = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(hw_facts)
+# The Non-secure view of a stored priority comes from docs/hardware/a733-facts.json (checks/hw-facts.py).
+GIC = hw_facts.GicModel()
 
 LAYOUTS = ('board_application', 'a733_board_session', 'os_application', 'a733_npu_startup', 'board_provider',
            'a733_native_usb', 'a733_counter_clock', 'a733_platform_locks', 'a733_power_domains', 'a733_pmic',
@@ -236,7 +241,7 @@ def run(image, session_path, case='accept'):
     # for the stored 0xd8 of PPI 27). Present that view; a RAM-backed distributor
     # would return the Secure value and hide a comparison of the wrong view.
     stored = s.get(0x03400000 + 0x400 + 97, 1)
-    s.put(0x03400000 + 0x400 + 97, (stored << 1) & 0xff, 1)
+    s.put(0x03400000 + 0x400 + 97, GIC.ns_read(stored), 1)
     # The shared providers as the board's main leaves them before the hooks run
     # (apps/board/main.c): counter, locks and the power-domain provider ready.
     L = e.layouts

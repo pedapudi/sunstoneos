@@ -36,10 +36,25 @@ struct npu_idle_failure {
     unsigned site, phase, step;
     uint32_t offset, value, expected;
 };
+/* Present when gate and resume record unexpected register values instead of refusing. */
+#define NPU_IDLE_VALUE_RECORDING 1
 struct npu_idle_counters {
     uint64_t gates, resumes, controls, writes, gated_ticks, resume_ticks,
-        resume_max_ticks, resume_over_budget, owner_cpu_ticks, owner_wakes;
+        resume_max_ticks, resume_over_budget, owner_cpu_ticks, owner_wakes,
+        value_deviations; /* cycles with a register value other than the one expected */
 };
+/* The register values one gate and resume cycle read. Values that differ from
+ * the expectation are recorded and do not refuse: the vendor reads and writes
+ * whatever it finds. The first cycle with a deviation is kept (deviation 1);
+ * until then the latest cycle is kept. */
+struct npu_idle_observed {
+    uint32_t gate_clock, gate_shader, gate_status;
+    uint32_t resume_entry_clock, resume_clock, resume_shader, resume_clock_after, resume_shader_after,
+        resume_status;
+    uint32_t deviation; /* bit mask of NPU_IDLE_DEV_* */
+};
+enum { NPU_IDLE_DEV_GATE_CLOCK=1, NPU_IDLE_DEV_GATE_SHADER=2, NPU_IDLE_DEV_RESUME_ENTRY=4,
+    NPU_IDLE_DEV_RESUME_CLOCK=8, NPU_IDLE_DEV_RESUME_SHADER=16, NPU_IDLE_DEV_RESUME_STATUS=32 };
 struct npu_idle {
     struct npu_idle_ops ops;
     const struct npu_idle_part *part;
@@ -51,6 +66,7 @@ struct npu_idle {
     unsigned initialized, enabled, strict;
     struct npu_idle_failure failure;
     struct npu_idle_counters counters;
+    struct npu_idle_observed observed, first_deviation;
 };
 /* enabled 0 performs every decision and no register write (the control).
  * strict retains the queue when a resume exceeds the part's budget; otherwise
@@ -64,6 +80,8 @@ int npu_idle_init(struct npu_idle *, const struct npu_idle_part *, const struct 
 void npu_idle_completed(struct npu_idle *, uint64_t now);
 int npu_idle_eligible(const struct npu_idle *, uint64_t now);
 uint64_t npu_idle_deadline_ticks(const struct npu_idle *);
+/* The full-idle proof compares with the part's mask as the vendor does
+ * (vipdrv_hw_wait_idle): bits outside the mask, such as bit 31, are ignored. */
 /* Caller rechecks full queue/ring idle, current generation, STOP, lifetime
  * health and GIC pending/active quiet under that lock immediately before gate.
  * Gate performs no register read after its final suspend write. */

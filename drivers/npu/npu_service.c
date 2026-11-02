@@ -1,3 +1,4 @@
+#include "npu_arch.h"
 #include "npu_service.h"
 #include "sunstone_crumb.h"
 #include <string.h>
@@ -719,7 +720,7 @@ static int idle_hint(struct npu_service *s)
         s->controller.state = A733_NPU_FAULT; s->controller.fault = A733_NPU_IO;
         return 1;
     }
-    if (idle != UINT32_C(0x7fffffff)) return 0;
+    if ((idle & UINT32_C(0x7fffffff)) != UINT32_C(0x7fffffff)) return 0;
     ++s->runtime->idle_hints;
     atomic_fetch_or_explicit(&s->irq_pending, IRQ_EVENT, memory_order_release);
     return 1;
@@ -812,7 +813,7 @@ static void worker(void *argument)
 {
     struct npu_service *s = argument;
     uint64_t level, stack;
-    __asm__ volatile("mrs %0, CurrentEL\n mrs %1, spsel" : "=r"(level), "=r"(stack));
+    level = npu_arch_current_el(); stack = npu_arch_stack_select();
     configASSERT(level == 4);
 #if configNUMBER_OF_CORES > 1
     configASSERT(stack == 0); /* Preemptible EL1 task uses SP_EL0, not an exception stack. */
@@ -970,7 +971,7 @@ enum npu_service_result npu_service_activate(struct npu_service *s)
     if(!s || s!=instance || !s->initialized || !s->activation.bootstrap ||
         xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING ||
         xTaskGetCurrentTaskHandle()!=s->activation.bootstrap)return NPU_SERVICE_DENIED;
-    uint64_t level;__asm__ volatile("mrs %0,CurrentEL" : "=r"(level));
+    uint64_t level=npu_arch_current_el();
     if(level!=4)return NPU_SERVICE_DENIED;
     unsigned expected=SERVICE_WAITING;
     if(!atomic_compare_exchange_strong_explicit(&s->activation_state,&expected,SERVICE_CHECKING,
@@ -1014,7 +1015,7 @@ int npu_service_cancel_diagnostic_enable(struct npu_service *s,
 #endif
 static int restart_caller(struct npu_service *s)
 {
-    uint64_t level;__asm__ volatile("mrs %0,CurrentEL":"=r"(level));
+    uint64_t level=npu_arch_current_el();
     return s && s==instance && s->restart_irq && !s->shared && !s->runtime && level==4 &&
         xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
         xTaskGetCurrentTaskHandle()==s->activation.bootstrap;

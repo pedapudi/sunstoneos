@@ -550,7 +550,7 @@ def inference_report(text,status,deadline,g):
 
 def _idle_pattern():
  words=lambda name,n:r'(?P<'+name+r'>(?:0x[0-9a-f]{16}\n){'+str(n)+r'})'
- text=r'NPU_IDLE=\n'+words('idle_totals',17)
+ text=r'NPU_IDLE=\n'+words('idle_totals',28)
  for window in range(IDLE_WINDOWS):
   text+=(r'NPU_IDLE_WINDOW=\n'+words(f'idle_window_{window}',20)+
    r'NPU_IDLE_WINDOW_OUTPUT_SHA256=\n(?P<idle_window_%d_output>[0-9a-f]{64})\n'%window)
@@ -572,8 +572,9 @@ def idle_report(match,g,frequency,warm_end,deadline,idle):
  policy=idle['policy'];enabled=policy=='gate';owned=policy!='baseline'
  totals=[int(v,16) for v in match['idle_totals'].split()]
  (code,warm_owner_ticks,warm_owner_elapsed,warm_wakes,gates,resumes,writes,gated,resume_max,over_budget,
-  owner_elapsed,owner_wakes,irq_ticks,quiet_retries,margin_windows,margin_after_windows,margin_end)=totals
- require(0<margin_end<=margin_after_windows<=margin_windows<=deadline and code==IDLE_POLICIES.index(policy) and warm_wakes<=owner_wakes and over_budget==0 and
+  owner_elapsed,owner_wakes,irq_ticks,quiet_retries,margin_windows,margin_after_windows,margin_end,
+  value_deviations,deviation_mask,*observed_words)=totals
+ require(0<margin_end<=margin_after_windows<=margin_windows<=deadline and code==IDLE_POLICIES.index(policy) and warm_wakes<=owner_wakes and over_budget<=resumes and value_deviations<=resumes and deviation_mask<64 and
   (owned or not any((warm_owner_ticks,warm_owner_elapsed,warm_wakes,owner_elapsed,owner_wakes,quiet_retries))),
   'Idle policy or warm owner counters differ.')
  reference=bytes.fromhex(g['references'][0]);digest=hashlib.sha256(reference).digest()
@@ -619,12 +620,12 @@ def idle_report(match,g,frequency,warm_end,deadline,idle):
   gap_valid=gap*frequency//1000000>=threshold or idle_max<threshold
   if enabled and gap>IDLE_THRESHOLD_US:
    require(gate_count==resume_count==requests==pending==cycles and write_count==6*cycles and
-    0<gated_ticks<=idle_sum-cycles*threshold and 0<driver_max<=IDLE_RESUME_US and adm_max<=IDLE_RESUME_US,
-    'Idle gating or resume bound differs.')
+    0<gated_ticks<=idle_sum-cycles*threshold and 0<driver_max,
+    'Idle gating or resume count differs.')
   elif enabled and not gap_valid:
    # Some cycles idled past the delay: each of them gated, none of the others did.
    require(gate_count==resume_count==requests==pending<=cycles and write_count==6*gate_count and
-    gated_ticks<=idle_sum and driver_max<=IDLE_RESUME_US and adm_max<=IDLE_RESUME_US,'Idle gating or resume bound differs.')
+    gated_ticks<=idle_sum,'Idle gating or resume count differs.')
   else:
    require((gate_count,resume_count,write_count,gated_ticks,requests,driver_max,pending)==(0,)*7 and
     (owned or not (owner_ticks or group_owner_elapsed)),'Idle interval gated or wrote registers outside the enabled policy.')
@@ -645,9 +646,14 @@ def idle_report(match,g,frequency,warm_end,deadline,idle):
    'functional_success':ok,'output_digest':match[f'idle_{index}_output'],
    'first_mismatch':None if not bad else {'cycle':first,'offset':offset,'byte':value}})
  require((gates,resumes,writes,gated)==(sums['gates'],sums['resumes'],sums['writes'],sums['gated']) and
-  owner_elapsed>=warm_owner_elapsed+sums['owner_elapsed'] and resume_max<=budget and
+  owner_elapsed>=warm_owner_elapsed+sums['owner_elapsed'] and
   (resume_max>0)==(sums['resumes']>0),'Idle totals disagree with the groups.')
+ names=('gate_clock','gate_shader','gate_status','resume_entry_clock','resume_clock','resume_shader','resume_clock_after','resume_shader_after','resume_status')
  return {'policy':policy,'threshold_us':IDLE_THRESHOLD_US,'resume_budget_us':IDLE_RESUME_US,
+  'resume_budget':{'limit_ticks':budget,'max_ticks':resume_max,'resumes_over_limit':over_budget,'within_limit':resume_max<=budget,
+   'scope':'Measured, not enforced in the image: the comparison against the limit is made by idle-compare.py.'},
+  'register_values':{'cycles_with_unexpected_values':value_deviations,'deviation_mask':deviation_mask,
+   'cycle':'first cycle with unexpected values' if deviation_mask else 'latest cycle',**dict(zip(names,observed_words))},
   'warm':{'owner_runtime_ticks':warm_owner_ticks,'owner_elapsed_ticks':warm_owner_elapsed,'owner_wakes':warm_wakes},
   'totals':{'gates':gates,'resumes':resumes,'register_writes':writes,'gated_ticks':gated,'resume_max_ticks':resume_max,
    'resume_over_budget':over_budget,'owner_elapsed_ticks':owner_elapsed,'owner_wakes':owner_wakes,

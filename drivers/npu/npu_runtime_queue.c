@@ -111,7 +111,7 @@ static int complete(void *cookie)
                             events, SUNSTONE_CRUMB_HERE());
         return 0;
     }
-    if (idle != a733_npu_idle_part.full_idle) {
+    if ((idle & a733_npu_idle_part.full_idle) != a733_npu_idle_part.full_idle) {
         sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU) | SUNSTONE_CRUMB_NPU_REGISTER | (1u << 16),
                             idle, SUNSTONE_CRUMB_HERE());
         return 0;
@@ -274,7 +274,7 @@ static int power_idle(struct npu_runtime_queue *q)
 {
     return !q->queue.head &&
         atomic_load_explicit(&q->queue.completed, memory_order_acquire) == q->queue.submitted &&
-        q->last_idle == q->power.part->full_idle;
+        (q->last_idle & q->power.part->full_idle) == q->power.part->full_idle;
 }
 static uint64_t ticks_to_us(struct npu_runtime_queue *q, uint64_t value)
 {
@@ -432,7 +432,7 @@ int npu_runtime_queue_power_start(struct npu_runtime_queue *q,
     if (npu_idle_init(&q->power, config->part, &ops, q, q->frequency, config->enabled, config->strict) != 1) return -1;
     const uint64_t saved = npu_runtime_queue_lock();
     const uint32_t full_idle = config->part->full_idle;
-    if (!power_read(q, config->part->status, &q->last_idle) || q->last_idle != full_idle ||
+    if (!power_read(q, config->part->status, &q->last_idle) || (q->last_idle & full_idle) != full_idle ||
         config->quiet(q->runtime->service.irq_cookie) != 1) {
         npu_idle_retain(&q->power, NPU_IDLE_FULL_IDLE, config->part->status, q->last_idle, full_idle);
         power_failed(q); npu_runtime_queue_unlock(saved); return -1;

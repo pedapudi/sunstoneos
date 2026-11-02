@@ -118,7 +118,8 @@ def render(s):
     totals = [POLICIES.index(s['policy']), w['owner_ticks'], w['owner_elapsed'], w['wakes'],
               sum(x['gates'] for x in g), sum(x['resumes'] for x in g), sum(x['writes'] for x in g), sum(x['gated'] for x in g),
               1680 if gate else 0, 0, w['owner_elapsed'] + sum(x['owner_elapsed'] for x in g) + (500 if s['policy'] != 'baseline' else 0),
-              (w['wakes'] + 40) if s['policy'] != 'baseline' else 0, w['irq'], 0, *w.get('margins', (400000000, 380000000, 200000000))]
+              (w['wakes'] + 40) if s['policy'] != 'baseline' else 0, w['irq'], 0, *w.get('margins', (400000000, 380000000, 200000000)),
+              *w.get('values', (0, 0, 0x70100, 0x15a0880, 0x7fffffff, 0x70101, 0x70100, 0x15a0880, 0x70100, 0x15a0880, 0x7fffffff))]
     text += 'NPU_IDLE=\n' + ''.join(hexword(v) for v in totals)
     for x in s['windows']:
         text += 'NPU_IDLE_WINDOW=\n' + ''.join(hexword(x[k]) for k in WINDOW_FIELDS) + 'NPU_IDLE_WINDOW_OUTPUT_SHA256=\n' + x['output'] + '\n'
@@ -149,7 +150,7 @@ def source_labels():
     return labels, arrays
 
 
-GATING = 'Idle gating or resume bound differs.'
+GATING = 'Idle gating or resume count differs.'
 UNGATED = 'Idle interval gated or wrote registers outside the enabled policy.'
 GEOMETRY = 'Idle gap, duration or task counters differ.'
 IDENTITY = 'Idle group identity or order differs.'
@@ -168,8 +169,6 @@ MUTATIONS = [
     ('a gating cycle without a gate', 'gate', lambda s: s['groups'][1].update(gates=99), GATING),
     ('a gate under the control policy', 'control', lambda s: s['groups'][2].update(gates=1), UNGATED),
     ('a gate at the 9 ms gap', 'gate', lambda s: s['groups'][0].update(gates=1, writes=6), UNGATED),
-    ('a resume above the budget', 'gate', lambda s: s['groups'][1].update(driver_max=101), GATING),
-    ('an admission above the budget', 'gate', lambda s: s['groups'][2].update(adm_max=101, adm99=101), GATING),
     ('gated time above the idle time', 'gate', lambda s: s['groups'][2].update(gated=10 ** 12), GATING),
     ('an idle minimum below its gap', 'gate', lambda s: s['groups'][1].update(idle_min=1), GEOMETRY),
     ('a cold output mismatch not counted', 'gate', lambda s: s['groups'][0].update(output='0' * 64), 'Idle output status disagrees with its digest.'),
@@ -226,6 +225,20 @@ def main():
     slow = copy.deepcopy(gating)
     slow['idle']['groups'][1]['driver_resume_us_max'] = 101
     assert failed(control, slow) == {'Resume from suspended clocks'}
+    # The 100 us budget is a measured value in the report: the decoder accepts a resume or an
+    # admission above it, and only the comparison against the limit fails.
+    for update in (dict(driver_max=101), dict(adm_max=101, adm99=101)):
+        over = scenario('gate')
+        over['groups'][1].update(update)
+        decoded = decode(host, over)
+        assert decoded['idle']['resume_budget']['limit_ticks'] == 2400
+        assert failed(control, decoded) == {'Resume from suspended clocks'}
+    cases.append('accepts a resume above 100 us as a measured value and fails the comparison')
+    odd = scenario('gate')
+    odd['warm']['values'] = (3, 5, 0x270100, 0x15a0880, 0xffffffff, 0x70101, 0x70100, 0x15a0882, 0x70100, 0x15a0880, 0xffffffff)
+    shown = decode(host, odd)['idle']['register_values']
+    assert shown['cycles_with_unexpected_values'] == 3 and shown['gate_status'] == 0xffffffff and shown['deviation_mask'] == 5
+    cases.append('reports the register values of the first cycle with unexpected values')
     few = copy.deepcopy(control)
     for w in few['idle']['windows']:
         w['owner_wakes'] = 3
@@ -263,7 +276,7 @@ def main():
     labels, arrays = source_labels()
     expected = ['NPU_IDLE', 'NPU_IDLE_WINDOW', 'NPU_IDLE_WINDOW_OUTPUT_SHA256', 'NPU_IDLE_GROUP', 'NPU_IDLE_OUTPUT_SHA256']
     assert labels == expected, labels
-    assert arrays == [17, len(WINDOW_FIELDS), len(GROUP_FIELDS)], arrays
+    assert arrays == [28, len(WINDOW_FIELDS), len(GROUP_FIELDS)], arrays
     size = len(render(scenario('gate')).split('NPU_INFERENCE')[0])
     assert size < 16127, f'idle report of {size} bytes exceeds the platform log'
     cases.append(f'producer labels and field counts match the decoder; report of {size} bytes fits the platform log')
