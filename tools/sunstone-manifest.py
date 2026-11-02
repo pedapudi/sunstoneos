@@ -18,6 +18,9 @@ import re
 import struct
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import memory_layout
+
 MAGIC = 0x5453464e4d505041
 VERSION = 1
 MANIFEST_BYTES = 552
@@ -37,7 +40,7 @@ KIND = {'input': 1, 'work': 2, 'output': 3}
 ACCESS = {'read': 1, 'write': 2, 'gpu-read': 4, 'gpu-write': 8}
 # Application regions lie in the EL0 read-write blocks above the OS-owned
 # radio and Bluetooth profile reservation and below the loader limit.
-WINDOW = (0x44000000, 0x47000000)
+WINDOW = tuple(memory_layout.record()['window'])
 PAGE = 0x1000
 BLOCK = 0x200000
 # OS host operations: the fault, NPU, thermal and performance reports keep

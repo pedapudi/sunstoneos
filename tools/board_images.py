@@ -1,6 +1,7 @@
 """Offline image/session preparation for tools/board.py; no device access."""
 import hashlib
 import io
+import sys
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,11 @@ import subprocess
 from typing import NamedTuple
 from elftools.elf.elffile import ELFFile
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import memory_layout
+
 ROOT = Path(__file__).resolve().parents[1]
+RUNNER_DRAM = memory_layout.record()['runner_dram']
 CACHE = Path.home() / '.cache/sunstoneos'
 CONTROL = CACHE/'evidence/wdt-breadcrumbs-1031/control/offline-proof/prepared'
 GPU_TREE = Path.home()/'git/sunstoneos-worktrees/gpu-bisect-1031-crumbs'
@@ -479,7 +484,7 @@ def preservation_regions(plan):
     merged = []
     for address, size in sorted(extents):
         require(type(address) is int and type(size) is int and
-                0x40000000 <= address < address + size <= 0x80000000,
+                RUNNER_DRAM[0] <= address < address + size <= RUNNER_DRAM[1],
                 'Preservation extent is outside admitted DRAM.')
         high = address + size
         if merged and address <= merged[-1][0] + merged[-1][1]:
