@@ -719,6 +719,17 @@ more than 1%; otherwise it stays off. No audio or recognition task wake latency
 is compared, because the image has no instrumentation for it that costs nothing
 when disabled.
 
+Result, port 3-3, two runs per variant, development mode: both variants returned
+the exact result (`feat_crc=ac657a3b`, `lp_crc=a7ade80e`, `FORMATTED There was
+silence.`). Compute time per recording is 348.7 ms (real-time factor 0.0971) with
+the fork off and 366.4 ms (0.1021) with the fork on, repeatable to 0.04% within
+each variant. The fork is 5.1% slower, which is a regression of more than 1%
+against a predicted change of less than 1%. The prediction fails and the rule
+decides: the fork stays off by default. The recognition application is pinned
+and compute-bound, so the extra cost per kernel entry (the stalled masked spans
+measured above) is paid without a placement gain. The fork remains an option
+for workloads with unpinned tasks; the comparison found no workload that needs it.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag
