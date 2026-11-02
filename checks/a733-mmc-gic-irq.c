@@ -75,6 +75,11 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < 2000 && r != A733_MMC_READY && r != A733_MMC_RETAINED; ++i) r = step();
     assert(r == A733_MMC_RETAINED);
     assert(m.platform.stage != 0 && a733_clock_token_status(&m.power.clocks, &m.platform.clock) == A733_CLOCK_FAULT);
+    /* The platform's fault retains its own clock token only: the registry is not failed and another owner (the thermal service's scope) keeps working. */
+    assert(!atomic_load(&m.power.clocks.failed));
+    struct a733_clock_token ths;
+    assert(a733_clock_acquire(&m.power.clocks, 77, 0, A733_CLOCK_THS, 1000000, &ths) == A733_CLOCK_OK);
+    assert(a733_clock_token_status(&m.power.clocks, &ths) == A733_CLOCK_OK);
     printf("case 1: INTID 193 enabled at baseline -> platform RETAINED (stage %u), clock token faulted: the board's open failure\n", m.platform.stage);
     /* 2. Masked first: the polled open and read (the read-only probe's sequence). */
     storage_setup(SUNXI_MMC_SD);

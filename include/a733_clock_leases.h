@@ -114,6 +114,7 @@ struct a733_clock_leases {
     /* The rail ledger's state word, bound by a733_rail_leases_init; a registry
      * fault also sets A733_POWER_CLOCK_FAULT there. */
     struct a733_power_authority *authority;
+    uint64_t retained_slots[A733_CLOCK_CLIENTS / 64]; /* tokens retained one by one (a733_clock_retain_token); not a registry fault */
 };
 /* Private platform object, zero once and initialize before concurrent use.
  * now returns exactly 1, uses monotonic microseconds, and must be bounded and
@@ -280,4 +281,9 @@ enum a733_clock_result a733_clock_token_status(struct a733_clock_leases *,const 
  * BUSY means the caller must retry this metadata operation before relinquishing
  * its existing exclusive ownership. No physical action or implicit reset. */
 enum a733_clock_result a733_clock_retain(struct a733_clock_leases *, const struct a733_clock_token *);
+/* Retain one token: its reservations stay held forever, and release, publication and status of this token report FAULT. The registry
+ * is not faulted: other tokens, the registry's failed flag and the power authority are unaffected, and a later conflicting acquire sees
+ * the held scopes as BUSY. For a device-local fault (one controller's clock, pins and rails); a fault of the provider itself, of a
+ * shared parent clock or of the common register lock still uses a733_clock_retain. INVALID for a token the registry does not hold. */
+enum a733_clock_result a733_clock_retain_token(struct a733_clock_leases *, const struct a733_clock_token *);
 #endif

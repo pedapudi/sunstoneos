@@ -59,7 +59,9 @@ static enum a733_mmc_platform_result fail(struct a733_mmc_platform *p)
     p->fault=1;
     if(p->held){p->ops.retain(p->cookie);p->held=0;}
     if(p->clock.id&&!p->clock_retained) {
-        enum a733_clock_result r=a733_clock_retain(p->clocks,&p->clock);
+        /* This controller's fault retains this controller's clock token, not the shared registry: the thermal service and every other
+         * owner keep their tokens. The controller's pins, rail and the register lock are retained below as before. */
+        enum a733_clock_result r=a733_clock_retain_token(p->clocks,&p->clock);
         if(r!=A733_CLOCK_BUSY)p->clock_retained=1;
     }
     if(p->rail.id&&!p->rail_retained) {
