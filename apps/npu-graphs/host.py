@@ -179,3 +179,51 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# The chain study (apps/npu-graphs/chain.h, NPU_GRAPHS_CHAIN): its result is not the graph receipt.
+CHAIN_MAGIC = 0x5453455248435053
+CHAIN_MAX_GRAPHS, CHAIN_MAX_RECORDS, CHAIN_MAX_STAT_RECORDS, CHAIN_MAX_ROWS = 24, 64, 16, 128
+CHAIN_HEAD = struct.Struct('<8Q3Q3Q')
+CHAIN_BYTES = 30832
+
+
+def chain_decode(raw):
+    """Decode the result of the chain application: times in microseconds, the statistics of every graph against its float
+    reference, and the greedy token of every frame of every record."""
+    require(len(raw) == CHAIN_BYTES, 'The chain result must hold exactly %d bytes.' % CHAIN_BYTES)
+    magic, version, graphs, records, reference_records, rows, start, stop = struct.unpack_from('<8Q', raw, 0)
+    require((magic, version) == (CHAIN_MAGIC, 1), 'The chain result header differs.')
+    before, after = struct.unpack_from('<3Q', raw, 64), struct.unpack_from('<3Q', raw, 88)
+    offset = 112
+    series = {}
+    for name in ('record', 'wait', 'rescale', 'decode'):
+        series[name] = [t / 24 for t in struct.unpack_from('<%dQ' % CHAIN_MAX_RECORDS, raw, offset)[:records]]
+        offset += 8 * CHAIN_MAX_RECORDS
+    stats = []
+    for r in range(reference_records):
+        row = []
+        for g in range(graphs):
+            dot, aa, bb, worst = struct.unpack_from('<4d', raw, offset + 32 * (r * CHAIN_MAX_GRAPHS + g))
+            row.append({'cosine': dot / ((aa * bb) ** 0.5) if aa > 0 and bb > 0 else None, 'max_abs': worst,
+                        'rms_ref': (bb) ** 0.5})
+        stats.append(row)
+    offset += 32 * CHAIN_MAX_STAT_RECORDS * CHAIN_MAX_GRAPHS
+    tokens = [list(struct.unpack_from('<%dH' % rows, raw, offset + 2 * CHAIN_MAX_ROWS * r)) for r in range(records)]
+    return {'graphs': graphs, 'records': records, 'reference_records': reference_records, 'rows': rows,
+            'clock': {'before': clock_of([before[0], before[1], 0, before[0], before[1], 0, 0]),
+                      'after': clock_of([after[0], after[1], 0, after[0], after[1], 0, 0])},
+            'elapsed_us': (stop - start) / 24, 'us': series, 'stats': stats, 'tokens': tokens}
+
+
+def chain_expectation():
+    """Every word of the chain result is measured except the header's magic and version."""
+    words = [{'min': 0, 'max': 4294967295}] * (CHAIN_BYTES // 4)
+    words[0:4] = [CHAIN_MAGIC & 0xffffffff, CHAIN_MAGIC >> 32, 1, 0]
+    return {'schema': 'sunstone-board-expect-u32-v1', 'words': words}
+
+
+def freeze_chain_decoder(destination):
+    source = Path(__file__).read_text()
+    source += '\ndef decode(payload):\n    return chain_decode(payload)\n'
+    Path(destination).write_text(source)
