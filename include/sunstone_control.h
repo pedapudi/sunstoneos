@@ -13,7 +13,8 @@ struct ss_control_stats {
     uint64_t count, consumed, gaps, dropped, missed;
     uint32_t latency_max_ns, latency_p9999_ns, jitter_max_ns, jitter_p9999_ns;
 };
-#define SS_CONTROL_BINS 768u /* one counter tick (41.7 ns) per bin, the last bin takes the rest */
+#define SS_CONTROL_BINS 192u /* four counter ticks (167 ns) per bin, 32 us; the last bin takes the rest */
+#define SS_CONTROL_BIN_TICKS 4u
 /* Paths to run per core: bit 0 the control interrupt handler, bit 1 the woken task. */
 unsigned ulSunstoneControlStartPaths(const unsigned *cores, const unsigned *rate_hz, const unsigned *paths, unsigned n);
 /* The latency (kind 0) or jitter (kind 1) histogram of a path, SS_CONTROL_BINS counts of one tick each. */

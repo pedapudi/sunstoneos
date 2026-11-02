@@ -72,13 +72,13 @@ static void record(struct path *p, uint64_t now, uint64_t deadline, unsigned mis
     const uint32_t latency = late > 0xffffffffu ? 0xffffffffu : (uint32_t)late;
     ++p->count;
     p->missed += missed;
-    ++p->latency_bin[latency < BINS ? latency : BINS - 1u];
+    ++p->latency_bin[latency / SS_CONTROL_BIN_TICKS < BINS ? latency / SS_CONTROL_BIN_TICKS : BINS - 1u];
     if (latency > p->latency_max) p->latency_max = latency;
     if (p->last_entry) {
         const uint64_t expected = p->period * (1u + missed), interval = now - p->last_entry;
         const uint64_t error = interval > expected ? interval - expected : expected - interval;
         const uint32_t jitter = error > 0xffffffffu ? 0xffffffffu : (uint32_t)error;
-        ++p->jitter_bin[jitter < BINS ? jitter : BINS - 1u];
+        ++p->jitter_bin[jitter / SS_CONTROL_BIN_TICKS < BINS ? jitter / SS_CONTROL_BIN_TICKS : BINS - 1u];
         if (jitter > p->jitter_max) p->jitter_max = jitter;
     }
     p->last_entry = now;
@@ -220,7 +220,7 @@ static uint32_t percentile_ns(const uint32_t *bins, uint64_t total, uint32_t max
     if (total < 10000u) return maximum * 1000u / TICKS_PER_US;
     for (unsigned b = 0; b < BINS; ++b) {
         sum += bins[b];
-        if (sum >= need) return b == BINS - 1u ? maximum * 1000u / TICKS_PER_US : (b + 1u) * 1000u / TICKS_PER_US;
+        if (sum >= need) return b == BINS - 1u ? maximum * 1000u / TICKS_PER_US : (b + 1u) * SS_CONTROL_BIN_TICKS * 1000u / TICKS_PER_US;
     }
     return maximum * 1000u / TICKS_PER_US;
 }
