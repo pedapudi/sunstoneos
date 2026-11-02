@@ -37,8 +37,8 @@ mappings.
 | NN (2), NT (8) | yes | as before, plus the second input |
 | ACT (7) | yes | same state and patches as kind 2; the table is read through patch source 5 |
 | SP (6) | yes, directory format | state is `0x08010e5b` and its operand, 1 to 16 pairs of `0x08010e5c` and `0x08010e5d` words, then the 32-byte tail of the other kinds; no other register; one command patch at the operand of `0x08010428`; the `0x0e4c` operand is one of the observed values and its bit 12 equals the presence of a second input; the `0x0e5b` operand (the position in the 256-entry program memory) is at most 255. The program words themselves are not interpreted and not listed: any program is admitted |
-| SH (1) | no | state streams are not documented enough to verify; see the formats document |
-| TP (3), SW (4) | no | not observed |
+| SH (1) | yes, directory format | the shader specification of the formats document: packet grammar (S1), register-set membership (S2a: the MMU, flush, command-fetch and control registers are refused; the flush and synchronization writes are pinned), uniform bank (S4), program length (S5), patches and regions (S6), descriptor extents (S7, S8) and the shader table (S9). The program is copied into the slot's read-only region at a multiple of 256 bytes. Streams longer than 1536 bytes or with more than 32 patches are refused (the examined graphs hold up to 1136 bytes). The program words and the uniform constants are not interpreted |
+| TP (3), SW (4) | no | refused: the board's NPU reports zero tensor-processor engines, the compiler emits neither kind for this target, and a software operation names work for the vendor runtime on a CPU |
 
 ## Memory containment
 

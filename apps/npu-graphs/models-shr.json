@@ -1,0 +1,10 @@
+{
+ "npu_models": [
+  "graph-sh-floor",
+  "graph-sh-sin",
+  "graph-sh-exp",
+  "graph-sh-gather",
+  "graph-sh-resize",
+  "graph-sh-pad"
+ ]
+}

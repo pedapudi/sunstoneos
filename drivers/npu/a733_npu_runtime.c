@@ -387,7 +387,8 @@ static void targets(struct npu_runtime_slot *s, const struct nbg_assembly_layout
 static int same_plan(const struct nbg_assembly_layout *a, const struct nbg_assembly_layout *b)
 {
     if (a->inputs != b->inputs || a->outputs != b->outputs || a->nn_operations != b->nn_operations ||
-        a->command_body_bytes != b->command_body_bytes || a->dynamic != b->dynamic) return 0;
+        a->command_body_bytes != b->command_body_bytes || a->dynamic != b->dynamic ||
+        a->program_offset != b->program_offset || a->program_bytes != b->program_bytes) return 0;
     for (unsigned i = 0; i < nbg_layout_buffers(a); ++i)
         if (memcmp(&a->buffers[i], &b->buffers[i], sizeof(a->buffers[i]))) return 0;
     return 1;
@@ -505,33 +506,41 @@ static int load_work(struct npu_runtime *rt)
             if (s->targets[i].bytes) memset((unsigned char *)s->targets[i].cpu + payload, 0, s->targets[i].bytes - payload);
         }
         if (s->layout.dynamic) {
+            /* The whole allocation: the gap before the program section may hold an earlier graph's bytes. */
             const unsigned d = nbg_layout_dynamic_index(&s->layout);
-            memset((unsigned char *)s->targets[d].cpu + s->layout.buffers[d].payload_bytes, 0,
-                   s->targets[d].bytes - s->layout.buffers[d].payload_bytes);
+            memset((unsigned char *)s->targets[d].cpu, 0, s->targets[d].bytes);
         }
         next_phase(s, LOAD_COEFF);
         return 1;
     }
     case LOAD_COEFF: {
-        /* The coefficients, then the dynamic-input section, copied in order with one cursor. */
-        struct nbg_span coeff = {0}, dyna = {0};
+        /* The coefficients, the dynamic-input section and the program section, copied in order with one cursor. */
+        struct nbg_span coeff = {0}, dyna = {0}, program = {0};
         const uint32_t coeff_bytes = s->layout.buffers[NBG_ALLOC_COEFF].payload_bytes,
-            dyna_bytes = s->layout.dynamic ? s->layout.buffers[nbg_layout_dynamic_index(&s->layout)].payload_bytes : 0;
+            program_bytes = s->layout.program_bytes;
+        struct nbg_span section = {0};
+        const uint32_t dyna_section = nbg_model_section(&rt->view, NBG_DYNA_IO, &section) ? (uint32_t)section.bytes : 0;
         if ((coeff_bytes && (!nbg_model_section(&rt->view, NBG_COEFF, &coeff) || coeff.bytes != coeff_bytes)) ||
-            (dyna_bytes && (!nbg_model_section(&rt->view, NBG_DYNA_IO, &dyna) || dyna.bytes != dyna_bytes))) {
+            (dyna_section && !nbg_model_section(&rt->view, NBG_DYNA_IO, &dyna)) ||
+            (program_bytes && (!nbg_model_section(&rt->view, NBG_PPU_INSTR, &program) || program.bytes != program_bytes))) {
             load_end(rt, s, 0); return 1;
         }
-        const uint32_t total = coeff_bytes + dyna_bytes;
+        const uint32_t total = coeff_bytes + dyna_section + program_bytes;
         size_t n = total - s->offset;
         if (n > NPU_RUNTIME_CACHE_CHUNK) n = NPU_RUNTIME_CACHE_CHUNK;
+        const unsigned d = nbg_layout_dynamic_index(&s->layout);
         if (!n) {
-            /* Neither coefficients nor a dynamic-input section remain to copy. */
+            /* Nothing remains to copy. */
         } else if (s->offset < coeff_bytes) {
             if (n > coeff_bytes - s->offset) n = coeff_bytes - s->offset;
             memcpy((unsigned char *)s->targets[NBG_ALLOC_COEFF].cpu + s->offset, coeff.data + s->offset, n);
+        } else if (s->offset < coeff_bytes + dyna_section) {
+            const uint32_t at = s->offset - coeff_bytes;
+            if (n > dyna_section - at) n = dyna_section - at;
+            memcpy((unsigned char *)s->targets[d].cpu + at, dyna.data + at, n);
         } else {
-            const unsigned d = nbg_layout_dynamic_index(&s->layout);
-            memcpy((unsigned char *)s->targets[d].cpu + (s->offset - coeff_bytes), dyna.data + (s->offset - coeff_bytes), n);
+            const uint32_t at = s->offset - coeff_bytes - dyna_section;
+            memcpy((unsigned char *)s->targets[d].cpu + s->layout.program_offset + at, program.data + at, n);
         }
         rt->counters.copied_bytes += n;
         s->offset += n;

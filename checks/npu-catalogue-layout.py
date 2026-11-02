@@ -29,13 +29,13 @@ native.nbg_layout_abi.argtypes = [c.c_uint]
 native.nbg_layout_abi.restype = c.c_ulong
 # The comparison is made here, from the C values, so that it also judges a tool without its own assertion.
 labels = ['sizeof', 'requirement', 'buffers', 'inputs', 'outputs', 'nn_operations', 'descriptor_patches', 'state_patches',
-          'command_body_bytes', 'dynamic']
+          'command_body_bytes', 'dynamic', 'program_offset', 'program_bytes']
 mirror = tool.Layout
 have = [c.sizeof(mirror), c.sizeof(tool.Requirement)] + [getattr(getattr(mirror, f, None), 'offset', -1) for f in labels[2:]]
 for index, label in enumerate(labels):
     assert have[index] == native.nbg_layout_abi(index), \
         'the Layout mirror differs from struct nbg_assembly_layout in %s: %d against %d' % (label, have[index], native.nbg_layout_abi(index))
-assert mirror.buffers.size // c.sizeof(tool.Requirement) == native.nbg_layout_abi(10), 'different number of buffers'
+assert mirror.buffers.size // c.sizeof(tool.Requirement) == native.nbg_layout_abi(12), 'different number of buffers'
 if hasattr(tool, 'check_abi'):
     tool.check_abi(native)
-print('PASS the catalogue tool mirror matches struct nbg_assembly_layout: size %d, %d buffers' % (have[0], native.nbg_layout_abi(10)))
+print('PASS the catalogue tool mirror matches struct nbg_assembly_layout: size %d, %d buffers' % (have[0], native.nbg_layout_abi(12)))

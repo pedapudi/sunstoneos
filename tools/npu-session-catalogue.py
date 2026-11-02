@@ -49,7 +49,7 @@ class Layout(c.Structure):
     # dynamic-input allocation, then the counts and the dynamic-input flag.
     _fields_ = [('buffers', Requirement * (4 + 2 * MAX_TENSORS + 1))] + [(n, c.c_uint32) for n in (
         'inputs', 'outputs', 'nn_operations', 'descriptor_patches', 'state_patches',
-        'command_body_bytes', 'dynamic')]
+        'command_body_bytes', 'dynamic', 'program_offset', 'program_bytes')]
 
 
 # The values of nbg_layout_abi (drivers/npu/nbg_layout_abi.c) in the order of this table: the C size and offsets that the
@@ -57,6 +57,7 @@ class Layout(c.Structure):
 ABI = (('sizeof', None), ('requirement', None), ('buffers', 'buffers'), ('inputs', 'inputs'), ('outputs', 'outputs'),
        ('nn_operations', 'nn_operations'), ('descriptor_patches', 'descriptor_patches'),
        ('state_patches', 'state_patches'), ('command_body_bytes', 'command_body_bytes'), ('dynamic', 'dynamic'))
+ABI += (('program_offset', 'program_offset'), ('program_bytes', 'program_bytes'))
 
 
 def check_abi(lib, layout=Layout):
@@ -69,7 +70,7 @@ def check_abi(lib, layout=Layout):
             getattr(layout, field).offset
         if have != want:
             raise ValueError(f'the Layout mirror differs from struct nbg_assembly_layout in {label}: {have} against {want}')
-    if layout.buffers.size // c.sizeof(Requirement) != lib.nbg_layout_abi(10):
+    if layout.buffers.size // c.sizeof(Requirement) != lib.nbg_layout_abi(12):
         raise ValueError('the Layout mirror holds a different number of buffers')
 
 
