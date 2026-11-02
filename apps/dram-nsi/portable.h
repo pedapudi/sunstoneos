@@ -8,6 +8,11 @@
  * the CCU words and the two target-agent ports) and stops on any other address. */
 #define DN_NSI_BASE 0x02020000u
 #define DN_TA_PORT(n) (DN_NSI_BASE + 0x200u * (n))
+/* The counters sampled around each window: the initiator ports cpu0 and cpu1 (19, 20) of the sun60iw2 port enum
+ * (the DRAM target-agent ports 32 and 33 counted nothing in the first two runs). */
+#ifndef DN_CTR_PORT
+#define DN_CTR_PORT 19
+#endif
 #ifdef __aarch64__
 static inline uint32_t dn_reg_read(uint32_t a) { uint32_t v = *(volatile uint32_t *)(uintptr_t)a; return v; }
 static inline void dn_reg_write(uint32_t a, uint32_t v) { *(volatile uint32_t *)(uintptr_t)a = v; }
@@ -21,7 +26,8 @@ static inline int dn_known(uint32_t a)
     static const uint32_t words[] = {0x0202446c,0x0202466c,0x02023a14,0x02023c14,0x02023e14,0x02024014,0x02024214,0x0202200c,0x0202220c,
                                      0x02002580,0x02002584,0x02002588};
     for (unsigned i = 0; i < sizeof words / sizeof *words; ++i) if (a == words[i]) return 1;
-    for (unsigned t = 32; t < 34; ++t) {
+    for (unsigned t = 32; t < 34; ++t) { const uint32_t b = DN_TA_PORT(t); if (a == b + 0x10 || a == b + 0x14 || a == b + 0x18 || a == b + 0xc0 || a == b + 0xc8) return 1; }
+    for (unsigned t = 19; t < 21; ++t) {
         const uint32_t b = DN_TA_PORT(t);
         if (a == b + 0x10 || a == b + 0x14 || a == b + 0x18 || (a >= b + 0xc0 && a <= b + 0xe0 && !(a & 3))) return 1;
     }
@@ -30,7 +36,7 @@ static inline int dn_known(uint32_t a)
 static inline uint32_t dn_reg_read(uint32_t a)
 {
     if (!dn_known(a)) { fprintf(stderr, "unmodeled register read %08x\n", a); exit(2); }
-    if ((a >= DN_TA_PORT(32) + 0xcc && a <= DN_TA_PORT(32) + 0xe0) || (a >= DN_TA_PORT(33) + 0xcc && a <= DN_TA_PORT(33) + 0xe0))
+    if ((a >= DN_TA_PORT(19) + 0xcc && a <= DN_TA_PORT(19) + 0xe0) || (a >= DN_TA_PORT(20) + 0xcc && a <= DN_TA_PORT(20) + 0xe0))
         return dn_model[(a & 0x1fffff) / 4] + 1000u;
     return dn_model[(a & 0x1fffff) / 4];
 }

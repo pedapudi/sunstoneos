@@ -57,7 +57,7 @@ static void probe_extra(uint32_t *x)
     x[1] = dn_reg_read(0x02002584u);
     x[2] = dn_reg_read(0x02002588u);
     for (unsigned t = 0; t < 2; ++t) {
-        const uint32_t b = DN_TA_PORT(32 + t);
+        const uint32_t b = DN_TA_PORT(DN_CTR_PORT + t);
         x[3 + 5 * t] = dn_reg_read(b + 0x10);
         x[4 + 5 * t] = dn_reg_read(b + 0x14);
         x[5 + 5 * t] = dn_reg_read(b + 0x18);
@@ -70,7 +70,7 @@ static void counters_start(void)
 {
     unsigned polls = 0;
     for (unsigned t = 0; t < 2; ++t) {
-        const uint32_t b = DN_TA_PORT(32 + t);
+        const uint32_t b = DN_TA_PORT(DN_CTR_PORT + t);
         dn_reg_write(b + 0xc0, 0);
         dn_reg_write(b + 0xc8, 0x7fffffffu);
         dn_reg_write(b + 0xc4, 1);
@@ -89,7 +89,7 @@ static void counters_start(void)
  * [9] latency sum, [10] enable word, [11] write requests. */
 static void counters_diagnostic(uint32_t *d)
 {
-    const uint32_t b = DN_TA_PORT(32);
+    const uint32_t b = DN_TA_PORT(DN_CTR_PORT);
     d[0] = dn_reg_read(b + 0xc4);
     dn_reg_write(b + 0xc0, 0);
     dn_reg_write(b + 0xc8, 0x7fffffffu);
@@ -119,7 +119,7 @@ static void counters_read(void)
 {
     job.ctr.ticks = (uint32_t)counter();
     for (unsigned t = 0; t < 2; ++t) {
-        const uint32_t b = DN_TA_PORT(32 + t);
+        const uint32_t b = DN_TA_PORT(DN_CTR_PORT + t);
         job.ctr.rq_rd[t] = dn_reg_read(b + 0xcc);
         job.ctr.rq_wr[t] = dn_reg_read(b + 0xd0);
         job.ctr.dt_rd[t] = dn_reg_read(b + 0xd4);
@@ -127,7 +127,7 @@ static void counters_read(void)
         job.ctr.la_rd[t] = dn_reg_read(b + 0xdc);
     }
     job.ctr.ticks = (uint32_t)counter() - job.ctr.ticks;      /* cost of the reads */
-    for (unsigned t = 0; t < 2; ++t) dn_reg_write(DN_TA_PORT(32 + t) + 0xc0, 0);
+    for (unsigned t = 0; t < 2; ++t) dn_reg_write(DN_TA_PORT(DN_CTR_PORT + t) + 0xc0, 0);
     dn_dmb();
 }
 void dram_nsi_worker(void *arg)
