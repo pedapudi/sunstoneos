@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 import subprocess
 
-from harness import CLANG, SANITIZE, environment
+import host_rtos
+from harness import CLANG, environment
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -35,11 +36,13 @@ def main():
             assert result.returncode != 0 and expected in result.stderr, result.stderr
         return result.stdout.strip()
 
+    link = ['-Wl,--wrap=ulTaskGenericNotifyTake']
     def build(binary, extra=()):
-        run(binary.name+'-build', [CLANG, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-                                  *SANITIZE, '-DSUNSTONE_USB_HOST_GENERIC=1', '-I'+str(ROOT/'include'),
-                                  '-I'+str(ROOT/'checks'), '-I'+str(ROOT/'apps/board'),
-                                  *extra, *units, '-o', binary])
+        # Build through the shared host shim; the log keeps the same name as before.
+        host_rtos.build(out, ['checks/usb-host-ready-work.c', 'drivers/usb/a733_xhci.c', 'runtime/device_memory_pool.c'],
+                        binary.name, defines=['SUNSTONE_USB_HOST_GENERIC=1', *extra],
+                        includes=[ROOT/'checks', ROOT/'apps/board'], link=link)
+        steps[binary.name+'-build'] = dict(command=['host_rtos.build', binary.name], exit=0, output='')
 
     binary = out/'ready-work'
     build(binary)
@@ -52,7 +55,7 @@ def main():
     original = out/'host-irq-original.c'
     original.write_text(source.replace(condition, 'irq.draining'))
     baseline = out/'original-wait'
-    build(baseline, ['-DSUNSTONE_HOST_IRQ_SOURCE="'+str(original)+'"'])
+    build(baseline, ['SUNSTONE_HOST_IRQ_SOURCE="'+str(original)+'"'])
     run('baseline', [baseline, 'baseline'])
     run('reject-original-wait', [baseline], 'ready software step slept for a tick')
     result = dict(result='PASS', hardware_access=False, steps=steps,
