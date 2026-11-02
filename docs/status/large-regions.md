@@ -17,6 +17,7 @@ An application declares regions of upper memory, up to the 11 GiB the board maps
 5. Run the partitioned scheduler's `freertos.c` with the hook on a board; it builds and boots in QEMU.
 6. Backlog: regions requested at run time. The SDK has no such call, because the ledger and the tables are sized from the manifest at build time. A run-time request would need a ledger whose storage grows while the system runs, an upper-memory allocator that serves the request (the ledger is the allocator only for the regions the manifest declares), page-table pages taken at run time (`APP_SPACE_PAGES` per space is the bound), and a break-before-make update of the application's root with `TLBI ASIDE1IS` on every core.
 7. Backlog: tearing down a space and reusing its ASID. The pool never takes an ASID back; reuse needs the table clear and the `TLBI ASIDE1IS` described in the design.
+8. Backlog: set `TCR_EL1.AS` (bit 36 of both `A733_CPU_COHERENCE_TCR_*` constants) together with the checks and `platform/a733/cpu_continue.c` that pin them, and run the CPU-return images on a board on both clusters. Do it when application teardown or more than 255 applications per session is needed. With AS clear, 255 ASIDs is the width the hardware is configured for, and the pool already widens to 65535 when AS is set and the hardware reports 16 bits.
 
 ## Evidence
 
