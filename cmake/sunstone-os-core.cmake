@@ -246,10 +246,7 @@ if(SUNSTONE_A733_OS_NPU)
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/apps/os/npu-catalogue.py"
     --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --models "${SUNSTONE_OS_NPU_MODELS}" ${os_npu_select}
     --output "${os_build}/npu-models.c" COMMAND_ERROR_IS_FATAL ANY)
-  execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/tools/npu-session-catalogue.py" generate
-    --application "${SUNSTONE_OS_NPU_MODELS}" --output "${os_build}/npu_admitted_models.c"
-    COMMAND_ERROR_IS_FATAL ANY)
-  list(APPEND os_sources "${os_build}/npu-models.c" "${os_build}/npu_admitted_models.c")
+  list(APPEND os_sources "${os_build}/npu-models.c")
   list(APPEND os_added apps/os/npu.c apps/os/npu-client.c apps/os/npu-irq.c
     platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c
     drivers/npu/npu_service.c drivers/npu/npu_queue.c drivers/npu/npu_runtime_queue.c drivers/npu/npu_idle.c drivers/npu/a733_npu_sequence.c
@@ -265,7 +262,7 @@ if(SUNSTONE_A733_OS_NPU)
     "${os_root}/platform/a733/npu_irq.c" "${os_root}/include/a733_npu_irq.h"
     "${os_root}/tools/npu-session-models.json" "${os_root}/tools/npu-session-catalogue.py"
     "${SUNSTONE_OS_NPU_MODELS}" "${os_root}/drivers/npu/nbg_command.h" "${os_build}/npu-models.c"
-    "${os_build}/npu_admitted_models.c" "${SUNSTONE_OS_NPU_CATALOGUE}")
+    "${SUNSTONE_OS_NPU_CATALOGUE}")
 endif()
 set(os_include_dirs)
 if(SUNSTONE_A733_OS_HEADSET)

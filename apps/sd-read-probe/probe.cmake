@@ -5,7 +5,7 @@ function(sunstone_sd_read_probe)
   list(REMOVE_ITEM sources checks/kernel.c)
   add_executable(sunstone-a733-sd-read-probe EXCLUDE_FROM_ALL ${sources}
     apps/sd-read-probe/main.c arch/aarch64/device_memory.c
-    drivers/storage/sunxi_mmc.c drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c
+    drivers/storage/sunxi_mmc.c drivers/storage/fat32_ro.c drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c
     platform/a733/shared_locks.c platform/a733/counter_clock.c
     drivers/clock/a733_clock_leases.c drivers/power/a733_rail_leases.c drivers/power/a733_pmic.c
     drivers/power/a733_pmic_native.c drivers/power/a733_pmic_consumer.c

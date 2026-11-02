@@ -20,6 +20,11 @@ existing board images and is unchanged.
 
 ## A privileged catalogue admits the models
 
+This section describes the finite session driver (`drivers/npu/npu_session.c`) and the board image built on it. The OS
+NPU runtime (`apps/os`, `drivers/npu/a733_npu_runtime.c`) no longer admits a graph by a table: it admits by structure
+and addresses and takes a digest of each model for its own copy check
+([loader admission](designs/npu-loader-admission.md)). The OS build links no `npu_admitted_models` table.
+
 Executable models come only from the reviewed catalogue
 [npu-session-models.json](../tools/npu-session-models.json). Each image links
 one admitted table, the `npu_admitted_models` array of

@@ -1,0 +1,6 @@
+{
+ "npu_models": [
+  "graph-ln176",
+  "graph-ln64"
+ ]
+}

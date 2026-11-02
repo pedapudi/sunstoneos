@@ -15,24 +15,39 @@ checkpoints perform no inference. The watchdog-admitting finite startup,
 one-inference and two-job/two-model runtime images also qualify on 3-3 at
 852 MHz/800 mV, with matching copied outputs, CLOSE, local stop and normal
 ROM return. The resident command queue runs 1,000 matched jobs at 10.25 µs
-p50 and 26,925 jobs/s, and 1,000 fence-chained two-stage jobs, on 3-3. The combined CPU and NPU image runs four NPU jobs through the OS NPU service while eight CPU workers run (overlap mask 15, matching outputs and CPU digests), then CLOSE, local stop and normal return, on 3-3 at 852 MHz/800 mV. The baseline idle benchmark image (no power owner) returns normally with 61,231 matching jobs: five windows of 12,000 jobs at about 26,650 jobs/s, p99 11 µs, maximum 17 µs, and cold jobs after 9, 11 and 100 ms gaps at 10.6 µs p50. The finite idle benchmark qualifies internal clock gating on 3-3 at 852 MHz/800 mV: five rounds of baseline, control and gating pass every limit of the design (throughput, p99, maximum latency, CPU time), every resume of the 11 ms and 100 ms gaps is within 100 µs (largest 25 µs) and the 9 ms gaps never gate.
+p50 and 26,925 jobs/s, and 1,000 fence-chained two-stage jobs, on 3-3. The combined CPU and NPU image runs four NPU jobs through the OS NPU service while eight CPU workers run (overlap mask 15, matching outputs and CPU digests), then CLOSE, local stop and normal return, on 3-3 at 852 MHz/800 mV. The baseline idle benchmark image (no power owner) returns normally with 61,231 matching jobs: five windows of 12,000 jobs at about 26,650 jobs/s, p99 11 µs, maximum 17 µs, and cold jobs after 9, 11 and 100 ms gaps at 10.6 µs p50. Fifteen single-operation test graphs of this repository run through the OS NPU service on 3-1 and every output equals the
+SDK simulator's byte for byte, in two runs (eight and seven jobs, the session limit): `add`, `sub` (stream-processor
+operations with a second input from a graph input), `mul` (neural-network operation, second input from a graph input),
+`relu`, `sig`, `tanh`, `swish` (activation operations), `sm32`, `sm64` (five stream-processor operations each),
+`chainA`, `chainB`, `chainC` (a neural-network and a stream-processor operation; `chainB` and `chainC` take their second
+input from VIP SRAM), `deep` (three neural-network operations with second inputs and an activation, outputs in VIP
+SRAM), `mm` (batched matrix product, four operations, second input from a graph input at slice offsets) and `glu` (two
+transposes and a stream-processor gate with its second input in VIP SRAM). The layer-normalization graphs `ln176` and
+`ln64` (dynamic-input section, placed read-only after the coefficients) also match byte for byte, 17 of 17. The OS runtime admits a graph by structure and addresses; the digest and program catalogues are gone from the OS path (the finite session driver keeps its table). Per-graph time with the LOAD is about 1 ms. An NPU access outside the page tables
+faults and the service recovers (3-1, 852 MHz/800 mV, normal return): five graphs, each with one descriptor pointer aimed
+at an address the tables do not map (an input or an output; a DRAM canary of the image for four, page 0 at `0x180` for
+one), failed one by one with an NPU MMU exception at the aimed address, MMU status 1 (slave not present), the canary
+CRC unchanged after each and the session usable; a relu job after the five equals the simulator. Each recovery takes about
+32 ms, of which 20 ms is the vendor's cancel poll, whose completion bit never appeared; the reset and re-initialization
+that follow restore the NPU. See [the reference](../reference-backsolve-npu.md#npu-mmu-exceptions). The finite idle benchmark qualifies internal clock gating on 3-3 at 852 MHz/800 mV: five rounds of baseline, control and gating pass every limit of the design (throughput, p99, maximum latency, CPU time), every resume of the 11 ms and 100 ms gaps is within 100 µs (largest 25 µs) and the 9 ms gaps never gate.
 
 ## Open work
 
-1. Call the idle power owner from the OS NPU service (`npu_runtime_queue_power_start` is not called by the operating system image), then repeat the idle benchmark there. Measure energy and the break-even idle time: the PMIC provider exposes no DCDC2 current or power readback. Qualify shared SRAM access while the clocks are gated and recovery from a fault while suspended.
-2. Qualify the combined image repeatedly and across both models: the active-cancellation image, and a 20-cycle start, inference, CLOSE and local-stop image.
-3. Qualify the EL0 queue and prepared joined streams: review and finish the saved generic sequence registration and returning diagnostic (`npu-el0-next-1101`), add the public-ring predicate to the power owner, then run the control and the EL0 images.
-4. Add exact per-job deadline interrupts through the scheduler's deadline facility (`work/scheduler-rt-1101`); do not add a device timer.
-5. Measure energy: the PMIC provider exposes no DCDC2 current or power readback, so idle savings and break-even time have no evidence without an external meter.
-6. Qualify repeated start and stop, shared SRAM access while the clocks are gated, and recovery from a fault while suspended.
-7. Run the `restart-*` cases of `checks/npu-irq-route.py` on a restart image; the other cases pass.
+1. Replace the eight-job session quota (`apps/os/admission.c`) and the fixed arrays (`NPU_SERVICE_CLIENTS`, the queue handle, entry and tensor counts, `OS_NPU_POOL_BYTES`) by resources the application declares and the OS admits against the real capacity, with backpressure when the declared in-flight depth is full; then allow tensor linking after the scheduler has started. Shader, tensor-processor and software-operation integration follows the format study.
+2. Call the idle power owner from the OS NPU service (`npu_runtime_queue_power_start` is not called by the operating system image), then repeat the idle benchmark there. Measure energy and the break-even idle time: the PMIC provider exposes no DCDC2 current or power readback. Qualify shared SRAM access while the clocks are gated and recovery from a fault while suspended.
+3. Qualify the combined image repeatedly and across both models: the active-cancellation image, and a 20-cycle start, inference, CLOSE and local-stop image.
+4. Qualify the EL0 queue and prepared joined streams: review and finish the saved generic sequence registration and returning diagnostic (`npu-el0-next-1101`), add the public-ring predicate to the power owner, then run the control and the EL0 images.
+5. Add exact per-job deadline interrupts through the scheduler's deadline facility (`work/scheduler-rt-1101`); do not add a device timer.
+6. Measure energy: the PMIC provider exposes no DCDC2 current or power readback, so idle savings and break-even time have no evidence without an external meter.
+7. Qualify repeated start and stop, shared SRAM access while the clocks are gated, and recovery from a fault while suspended.
+8. Run the `restart-*` cases of `checks/npu-irq-route.py` on a restart image; the other cases pass.
 
 ## Evidence
 
 Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-32 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+40 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -68,4 +83,12 @@ Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added
 | `1793595837683091653-202bf23e` | 2026-11-02 | 3-3 | `4fd7815df3e0` | returned | passed | run_total 23.97 s, jobs 61231, window_jobs_per_s 27004.3 jobs/s, window_latency_p99_ticks 323, window_latency_max_ticks 407, charged_cpu_per_job_ticks 816.311, gates 0, resumes 0, register_writes 0, resume_max_ticks 0, resume_limit_ticks 2400, value_deviation_cycles 0, deviation_mask 0 |
 | `1793595865267017264-80a35307` | 2026-11-02 | 3-3 | `1417c8183b75` | returned | passed | run_total 24.23 s, jobs 61231, window_jobs_per_s 26964.4 jobs/s, window_latency_p99_ticks 257, window_latency_max_ticks 432, charged_cpu_per_job_ticks 816.772, gates 0, resumes 0, register_writes 0, resume_max_ticks 0, resume_limit_ticks 2400, value_deviation_cycles 0, deviation_mask 0 |
 | `1793595893101543391-d845400a` | 2026-11-02 | 3-3 | `b3e4795f525c` | returned | passed | run_total 24.01 s, jobs 61231, window_jobs_per_s 26967 jobs/s, window_latency_p99_ticks 294, window_latency_max_ticks 429, charged_cpu_per_job_ticks 816.553, gates 130, resumes 130, register_writes 780, resume_max_ticks 169, resume_limit_ticks 2400, value_deviation_cycles 0, deviation_mask 0 |
+| `1793599212547775355-868652d5` | 2026-11-02 | 3-1 | `835daa9f532d` | result-mismatch | failed | run_total 23.118 s, graphs_listed 15, graphs_run 1, first_difference_byte 2, observed_byte 60, expected_byte 59, first_graph_us 998.8 |
+| `1793599501583289076-4e5e8892` | 2026-11-02 | 3-1 | `83ef6b2a55fb` | result-mismatch | failed | run_total 22.181 s, graphs 8, graphs_matching 3, max_error_16bit 17 |
+| `1793599785143842348-e58c3f38` | 2026-11-02 | 3-1 | `653e167425fb` | result-mismatch | passed | run_total 21.663 s, graphs 8, graphs_matching 8, differing_bytes 0, graph_us_min 984.3 us, graph_us_max 999.5 us |
+| `1793599845892192862-30dc9323` | 2026-11-02 | 3-1 | `7a00716d1fd9` | returned | passed | run_total 21.941 s, graphs 7, graphs_matching 7, differing_bytes 0, graph_us_min 984.9 us, graph_us_max 999.2 us |
+| `1793600480786110831-4d4877ee` | 2026-11-02 | 3-1 | `bd9603642b7c` | watchdog-reset | failed | run_total 18.745 s |
+| `1793601039576662539-3cfb241d` | 2026-11-02 | 3-1 | `dbc06474fcbc` | watchdog-reset | inconclusive | run_total 18.69 s |
+| `1793601982806302701-49b951b4` | 2026-11-02 | 3-1 | `69a7aa80419f` | returned | passed | run_total 21.817 s |
+| `1793602347321241109-498efad0` | 2026-11-02 | 3-1 | `cfb505b770a8` | returned | passed | run_total 21.199 s |
 <!-- evidence-table:end -->

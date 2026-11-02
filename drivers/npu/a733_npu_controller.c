@@ -45,6 +45,7 @@ static void diagnostic_timeout_note(struct a733_npu_controller *c,uint64_t elaps
 
 #define IDLE_ALL UINT32_C(0x7fffffff)
 #define EVENT_DONE 1u
+#define EVENT_MMU UINT32_C(0x40000000)
 #define IRQ_ENABLE UINT32_C(0xc0000001)
 #define SRAM_BASE UINT32_C(0x400000)
 
@@ -194,6 +195,34 @@ int a733_npu_submit(struct a733_npu_controller *c, const struct a733_npu_command
     return trigger(c);
 }
 
+int a733_npu_recover(struct a733_npu_controller *c, const struct a733_npu_command *boot, uint64_t timeout,
+                     int *cancel_seen)
+{
+    if (cancel_seen) *cancel_seen = 0;
+    if (!c || c->state != A733_NPU_FAULT || c->fault != A733_NPU_MMU || c->bootstrap || !boot) return 0;
+    /* The vendor's first recovery step (vipdrv_hw_cancel, vip_drv_hardware.c:1119-1194): set +0x3a8 bit 3, wait
+     * 100 us, clear it, and poll bit 4 in 100 us steps, at most 200 times. A cancel that does not complete is not
+     * the end of the recovery here: the reset below follows either way, and the caller is told. */
+    uint32_t value;
+    /* The fault state refuses every register access; the recovery leaves it first. A failed access faults again. */
+    c->job.token = 0; c->state = A733_NPU_CLOSED; c->fault = A733_NPU_NO_FAULT; c->mmu_stage = 0;
+    if (!read_reg(c, 0x3a8, &value) || !write_reg(c, 0x3a8, value | 8u)) return 0;
+    c->ops.delay(c->cookie, 100);
+    if (!read_reg(c, 0x3a8, &value) || !write_reg(c, 0x3a8, value & ~8u)) return 0;
+    for (unsigned tries = 0; tries < 200; ++tries) {
+        c->ops.delay(c->cookie, 100);
+        if (!read_reg(c, 0x3a8, &value)) return 0;
+        if (value & 16u) { if (cancel_seen) *cancel_seen = 1; break; }
+    }
+    /* The vendor then re-initializes the core (its reset and initial command). The faulted job is abandoned: the
+     * caller has taken its token, and no output of it is used. A fresh open resets the NPU twice, programs the MMU
+     * again and runs the bootstrap command. */
+    struct a733_npu_ops ops = c->ops;
+    struct a733_npu_mmu_image mmu = c->mmu;
+    void *cookie = c->cookie;
+    return a733_npu_open(c, &ops, cookie, &mmu, boot, timeout);
+}
+
 int a733_npu_cancel(struct a733_npu_controller *c, uint64_t timeout)
 {
     if (!c || (c->state != A733_NPU_RUNNING && c->state != A733_NPU_BOOTING) ||
@@ -212,6 +241,16 @@ int a733_npu_cancel(struct a733_npu_controller *c, uint64_t timeout)
     return 1;
 }
 
+static int mmu_capture(struct a733_npu_controller *c)
+{
+    c->mmu_stage = 2;
+    if (!read_reg(c, 0x384, &c->mmu_status)) return 0;
+    c->mmu_stage = 4;
+    if (!read_reg(c, 0x380, &c->mmu_address)) return 0;
+    c->mmu_stage = 5;
+    return 1;
+}
+
 enum a733_npu_state a733_npu_check_timeout(struct a733_npu_controller *c)
 {
     if(!c)return A733_NPU_FAULT;
@@ -219,7 +258,13 @@ enum a733_npu_state a733_npu_check_timeout(struct a733_npu_controller *c)
     if(canceled || c->state==A733_NPU_BOOTING || c->state==A733_NPU_RUNNING) {
         uint64_t elapsed=c->ops.microseconds(c->cookie)-(canceled?c->cancel_start:c->start);
         if(elapsed >= (canceled?c->cancel_timeout:c->timeout)) {
-            DIAGNOSTIC_TIMEOUT(c,elapsed);fail(c,A733_NPU_TIMEOUT);
+            DIAGNOSTIC_TIMEOUT(c,elapsed);
+#ifdef SUNSTONE_NPU_MMU_CAPTURE_ON_TIMEOUT
+            /* Test images only: keep the MMU registers of a job that stalled, so that the record shows whether the
+             * MMU had reported. The reads can stall too; mmu_stage then shows where. */
+            (void)mmu_capture(c);
+#endif
+            fail(c,A733_NPU_TIMEOUT);
         }
     }
     return c->state;
@@ -251,6 +296,14 @@ enum a733_npu_state a733_npu_advance(struct a733_npu_controller *c, int sample_e
     if (sample_events) {
         if (!read_reg(c, 0x10, &value)) return c->state;
         c->irq_seen |= value;
+    }
+    if (c->irq_seen & EVENT_MMU) {
+        /* The vendor driver checks +0x388 on this event (vip_drv_task_common.c:621) and reads the status and address
+         * registers in its dump (vip_drv_debug.c:355, :406). Record them before the fault. A failed read leaves the
+         * fault an I/O one; a read that never returns is visible in mmu_stage. */
+        c->mmu_stage = 1;
+        if (mmu_capture(c)) fail(c, A733_NPU_MMU);
+        return c->state;
     }
     if (c->irq_seen & ~EVENT_DONE) { fail(c, A733_NPU_IRQ); return c->state; }
     if (c->state == A733_NPU_CANCEL_ASSERTED) {
