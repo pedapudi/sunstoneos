@@ -26,8 +26,9 @@ qualification.
    (core 3) and the end-of-run self-suspension 46 us. Backend stalls are 94 to 98% of their cycles with 23 to 38
    L1D refills each, so the cause is dependent line fetches under saturated DRAM. Fewer lines per entry or
    prefetch would shorten them; neither is implemented.
-2. The fork stays off by default: the recorded recognition is exact but 5.1% slower with it (real-time factor
-   0.1021 against 0.0971). Replacing the compatibility object locks in C is closed with the fork; idle pull is
+2. The fork stays off by default: on the current engine the recorded recognition is exact and 0.4% slower with it
+   (110.3 ms against 109.8 ms; 5.1% slower on the older engine). The owner core takes 65 to 85 more interrupts and
+   loses about 2.2 ms; the cause is not found. Replacing the compatibility object locks in C is closed with the fork; idle pull is
    implemented and returned the CPU control unchanged, with no workload that needs it.
 3. Tickless idle on the global kernel: remove the periodic tick on idle cores (changes the protected
    `patches/freertos-smp-*.patch`).
@@ -39,7 +40,7 @@ qualification.
 Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-16 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+23 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -59,4 +60,11 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793595434552850928-da60cec8` | 2026-11-02 | 3-3 | `9d07d2461f33` | result-mismatch | failed | run_total 70.348 s, compute_time 366490 us, real_time_factor 0.10209, frames 90, samples 57440, yields 342 |
 | `1793596277164206286-d6abcfc2` | 2026-11-02 | 3-3 | `726c83b62df3` | returned | passed | run_total 70.147 s, compute_time 109585 us, real_time_factor 0.03053, call_total 80564 us, dispatch_kernel 5381 us, owner_compute 46358 us, last_finisher_wait 21961 us, completion_path 6862 us, wake_to_run_sum 7375 us, wake_to_run_max_sum 1791 us, worker_compute 223596 us, worker_done_kernel 15012 us, calls 470, placement_errors 0, core_changes 0 |
 | `1793596348014754310-98c4819c` | 2026-11-02 | 3-3 | `9dd9696975c2` | returned | passed | run_total 70.054 s, compute_time 110111 us, real_time_factor 0.03067, call_total 79672 us, dispatch_kernel 5971 us, owner_compute 47199 us, last_finisher_wait 21264 us, completion_path 5237 us, wake_to_run_sum 9625 us, wake_to_run_max_sum 2092 us, worker_compute 224325 us, worker_done_kernel 9491 us, calls 470, placement_errors 0, core_changes 0 |
+| `1793597031558077290-ec888c56` | 2026-11-02 | 3-3 | `bca9feb836ec` | returned | passed | run_total 71.282 s, compute_time 109831 us, real_time_factor 0.03059, call_total 80800 us, dispatch_kernel 5403 us, owner_compute 46418 us, last_finisher_wait 22044 us, completion_path 6934 us, owner_core_sgis 293 |
+| `1793597103749976112-6a36d3ff` | 2026-11-02 | 3-3 | `80ed05ccaefd` | returned | passed | run_total 73.381 s, compute_time 110067 us, real_time_factor 0.03066, call_total 79647 us, dispatch_kernel 5988 us, owner_compute 47232 us, last_finisher_wait 21205 us, completion_path 5220 us, owner_core_sgis 358 |
+| `1793597263633780613-1139f35a` | 2026-11-02 | 3-3 | `45846dc37f34` | returned | passed | run_total 73.225 s, compute_time 110239 us, real_time_factor 0.03071, call_total 79789 us, dispatch_kernel 6033 us, owner_compute 47236 us, last_finisher_wait 21192 us, completion_path 5327 us, owner_core_sgis 359 |
+| `1793597490409282453-8e76d47a` | 2026-11-02 | 3-3 | `bca9feb836ec` | returned | passed | run_total 71.277 s, compute_time 109939 us, real_time_factor 0.03062, call_total 80814 us, dispatch_kernel 5393 us, owner_compute 46361 us, last_finisher_wait 22172 us, completion_path 6887 us, owner_core_sgis 295 |
+| `1793597562539071615-6699c1cf` | 2026-11-02 | 3-3 | `f679a60ee591` | returned | passed | run_total 70.833 s, compute_time 110240 us, real_time_factor 0.03071, call_total 79764 us, dispatch_kernel 6058 us, owner_compute 47282 us, last_finisher_wait 21249 us, completion_path 5173 us, owner_core_sgis 368 |
+| `1793597633935865983-352fe050` | 2026-11-02 | 3-3 | `bca9feb836ec` | returned | passed | run_total 70.552 s, compute_time 109729 us, real_time_factor 0.03057, call_total 80666 us, dispatch_kernel 5377 us, owner_compute 46366 us, last_finisher_wait 21890 us, completion_path 7032 us, owner_core_sgis 296 |
+| `1793597705209176004-1a689849` | 2026-11-02 | 3-3 | `f679a60ee591` | returned | passed | run_total 71.208 s, compute_time 110311 us, real_time_factor 0.03073, call_total 79833 us, dispatch_kernel 6065 us, owner_compute 47262 us, last_finisher_wait 21221 us, completion_path 5284 us, owner_core_sgis 380 |
 <!-- evidence-table:end -->

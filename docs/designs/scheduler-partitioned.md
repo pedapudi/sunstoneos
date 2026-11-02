@@ -788,6 +788,27 @@ synchronization and scheduling time is 12.8% of the recognition, above the 2%
 bound, so the fork can win only by removing part of it or by removing the owner's
 slowdown while seven cores idle.
 
+Interrupt accounting (port 3-3, same input and engine; interrupts taken during
+the recognition, by core; every one is SGI 0 except the core 0 timer): the
+owner core (6) takes 293 to 296 interrupts with the global kernel and 358 to 380
+with the fork, 65 to 85 more. The other pinned cores take the same number with both
+kernels, except core 3 (341 against 546), where the unpinned OS services run.
+The SGI senders of the fork, by call site, show where the owner's extra interrupts
+come from: the workers' completion wakes through `ssKernelPublishReference` (356 of
+the 359, the same wake as the global kernel's) and 52 self-directed continuations
+at the end of `ssKernelService` plus 11 from the yield path. Those 63 account for
+the extra count. A pass that re-runs the service while work remains, before it
+falls back to the continuation SGI, did not reduce the owner's interrupts on the
+board (368 and 380) nor the time (110.24 and 110.31 ms against 109.94 and
+109.73 ms with the global kernel, two runs each), so the continuations are not
+the owner's loss, or they are not avoidable by repeating the pass. The owner-core
+loss of 2.2 ms is therefore unexplained: the next candidates are a slower
+`ssKernelPublishReference` wake that lands during the owner's compute (the same
+interrupt count, a longer service) and the cache effect of the fork's larger
+per-CPU structures on the owner. The pass is not kept (`SS_SERVICE_PASSES` is
+1). Measured with the repeat pair, the fork is 0.4% slower than the global kernel on
+the current engine and does not reach the 2% faster that enabling it would need.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag

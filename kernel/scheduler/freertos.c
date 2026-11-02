@@ -99,9 +99,41 @@ static bool ssKernelInitialized;
 static _Atomic unsigned ssKernelLoad[configNUMBER_OF_CORES];
 static unsigned ssKernelIdleNext;
 
-static void ssKernelSGI(void *context, unsigned cpu)
+#ifdef SUNSTONE_IRQ_COUNT
+/* Measurement: which call sites send SGIs, to which CPU. One table per sending
+ * CPU, written by that CPU only; read after the measured interval. */
+#define SS_SGI_SITES 24u
+static struct { uintptr_t site; unsigned target; unsigned long count; } ssKernelSgiSites[configNUMBER_OF_CORES][SS_SGI_SITES];
+static __attribute__((noinline)) void ssKernelSgiCount(uintptr_t site, unsigned cpu)
+{
+    unsigned self = (unsigned)portGET_CORE_ID();
+    for (unsigned i = 0; i < SS_SGI_SITES; ++i) {
+        if (ssKernelSgiSites[self][i].site == site && ssKernelSgiSites[self][i].target == cpu) {
+            __atomic_store_n(&ssKernelSgiSites[self][i].count, ssKernelSgiSites[self][i].count + 1, __ATOMIC_RELAXED);
+            return;
+        }
+        if (!ssKernelSgiSites[self][i].site) {
+            ssKernelSgiSites[self][i].target = cpu;
+            __atomic_store_n(&ssKernelSgiSites[self][i].count, 1, __ATOMIC_RELAXED);
+            __atomic_store_n(&ssKernelSgiSites[self][i].site, site, __ATOMIC_RELEASE);
+            return;
+        }
+    }
+}
+unsigned long ulSunstoneSgiSite(unsigned sender, unsigned index, unsigned long *site, unsigned *target)
+{
+    if (sender >= configNUMBER_OF_CORES || index >= SS_SGI_SITES) return 0;
+    *site = __atomic_load_n(&ssKernelSgiSites[sender][index].site, __ATOMIC_ACQUIRE);
+    *target = ssKernelSgiSites[sender][index].target;
+    return *site ? __atomic_load_n(&ssKernelSgiSites[sender][index].count, __ATOMIC_RELAXED) : 0;
+}
+#endif
+static __attribute__((noinline)) void ssKernelSGI(void *context, unsigned cpu)
 {
     (void)context;
+#ifdef SUNSTONE_IRQ_COUNT
+    if (xSchedulerRunning) ssKernelSgiCount((uintptr_t)__builtin_return_address(0), cpu);
+#endif
     if (xSchedulerRunning) portYIELD_CORE((BaseType_t)cpu);
 }
 static const struct ss_owner_backend ssKernelBackend = { .sgi = ssKernelSGI };
@@ -157,7 +189,7 @@ static bool ssKernelCanPreempt(void)
 #endif
     return true;
 }
-static void ssKernelForce(unsigned cpu)
+static inline __attribute__((always_inline)) void ssKernelForce(unsigned cpu)
 {
     /* Controls and retirement are urgent regardless of running priority. */
     ss_owner_barrier(&ssKernelBackend);
@@ -342,6 +374,9 @@ static bool ssKernelAdmitTask(TCB_t *task)
 }
 static void ssKernelControlDrain(void);
 static void ssKernelPullServe(unsigned);
+#ifndef SS_SERVICE_PASSES
+#define SS_SERVICE_PASSES 1u
+#endif
 static void ssKernelPullIdle(unsigned, bool);
 static void ssKernelCommandsFinish(bool);
 static void ssKernelWait(unsigned, uint64_t, uint64_t);
@@ -640,13 +675,10 @@ static void ssKernelExpired(void *context, const struct ss_deadline_result *resu
         ssKernelMakeReady(s);
     }
 }
-static void ssKernelService(void)
+/* One maintenance pass. True when work remains: a due deadline, a hint beyond the
+ * batch or one that arrived after the drain, or object repair. */
+static bool ssKernelServiceOnce(unsigned c, struct ssKernelCPU *cpu)
 {
-    /* IRQ return and SVC selection share this owner. Keep API interrupts
-     * masked across control maintenance, activation and deadline updates. */
-    UBaseType_t irq = portSET_INTERRUPT_MASK();
-    unsigned c = ssKernelCPUId();
-    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
     ssKernelControlDrain();
     ss_owner_drain(&cpu->run, ssKernelInspect, NULL);
     if (!cpu->selecting) ssKernelPullServe(c);
@@ -662,9 +694,31 @@ static void ssKernelService(void)
         atomic_store_explicit(&cpu->slice_deadline, UINT64_MAX, memory_order_release);
     }
     uint64_t next;
-    if ((ss_deadline_next(&cpu->deadlines, &next) && next <= ssKernelNow()) ||
-        ss_owner_has_pending(&cpu->run) || cpu->object_repair[0] ||
-        cpu->object_repair[1]) ssKernelForce(c);
+    return (ss_deadline_next(&cpu->deadlines, &next) && next <= ssKernelNow()) ||
+        ss_owner_has_pending(&cpu->run) || cpu->object_repair[0] || cpu->object_repair[1];
+}
+#ifdef SS_KERNEL_TEST_ADMIN_ENTER
+static unsigned long ssKernelContinuations;
+unsigned long ss_kernel_test_continuations(void) { return ssKernelContinuations; }
+#endif
+static void ssKernelService(void)
+{
+    /* IRQ return and SVC selection share this owner. Keep API interrupts
+     * masked across control maintenance, activation and deadline updates. */
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    unsigned c = ssKernelCPUId();
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    /* Work that arrived during the pass is taken by the next pass here. A new
+     * exception entry costs an SGI, the exception and a full service entry, a
+     * long span when the memory system is busy, so it is the last resort. */
+    bool more = ssKernelServiceOnce(c, cpu);
+    for (unsigned pass = 1; more && pass < SS_SERVICE_PASSES; ++pass) more = ssKernelServiceOnce(c, cpu);
+    if (more) {
+#ifdef SS_KERNEL_TEST_ADMIN_ENTER
+        ++ssKernelContinuations;
+#endif
+        ssKernelForce(c);
+    }
     portCLEAR_INTERRUPT_MASK(irq);
 }
 static bool ssKernelDispatch(void *context, unsigned cpu)
@@ -1269,8 +1323,7 @@ static bool ssKernelMutateState(void *opaque, struct ss_control_state *state)
         state->dead = true;
         return true;
     case SS_K_MOVE:
-        if (m->argument >= configNUMBER_OF_CORES || !(state->affinity & (UINT64_C(1) << m->argument)) ||
-            state->move_to_plus_one == m->argument + 1) return false;
+        if (m->argument >= configNUMBER_OF_CORES || !(state->affinity & (UINT64_C(1) << m->argument))) return false;
         state->move_to_plus_one = (unsigned)m->argument + 1;
         return true;
     case SS_K_PREEMPT:
