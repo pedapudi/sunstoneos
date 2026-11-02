@@ -1,8 +1,8 @@
 #ifndef SUNSTONE_NBG_ASSEMBLY_H
 #define SUNSTONE_NBG_ASSEMBLY_H
 #include "nbg_model.h"
+#include "a733_npu_mmu.h"
 
-#define NBG_ASSEMBLY_MAX_NN 1024u
 #define NBG_ASSEMBLY_PAGE 4096u
 enum nbg_allocation_id {
     NBG_ALLOC_NN, NBG_ALLOC_COEFF, NBG_ALLOC_POOL, NBG_ALLOC_COMMAND,
@@ -23,6 +23,11 @@ struct nbg_assembly_plan {
  * struct nbg_assembly_layout (24 bytes a tensor, kept in the per-graph table) and by the queue handle. An image is built
  * for the largest graph its application declares (cmake -DSUNSTONE_OS_NPU_MAX_TENSORS=N); 8 is the default of an image
  * built without a declaration. A graph beyond it is refused by name at admission. */
+/* The low device range [0, NBG_ASSEMBLY_LOW_RESERVED) is reserved: placed() refuses a buffer that starts below it, so a
+ * pointer word that no patch sets and whose value is below it cannot address a mapped byte. A stream-processor operation
+ * that keeps its result in the engine's own scratch (the steps of a softmax) carries a small offset there, up to 118,496
+ * in compiled attention layers (docs/hardware/npu-command-formats.md, "Unpatched pointer words"). */
+#define NBG_ASSEMBLY_LOW_RESERVED A733_NPU_MMU_LOW_RESERVED
 #ifndef NBG_ASSEMBLY_MAX_TENSORS
 #define NBG_ASSEMBLY_MAX_TENSORS 8u
 #endif
@@ -128,7 +133,12 @@ int nbg_assemble_layout(const struct nbg_model *, const struct nbg_assembly_buff
  * else: coefficients, END pairs after the stream, padding and the tensor and
  * pool allocations are the caller's, and a refusal can leave earlier
  * operations written, so the caller discards the whole assembly. */
-struct nbg_assembly_cursor { uint32_t operation, patch, offset; };
+/* Why the last refusal that has a named reason happened, and the number of the operation. NBG_REFUSED_NONE until one has.
+ * NBG_REFUSED_DIMENSION: a shader tensor descriptor has a width or a height of 65,536 or more, which the engine's 16-bit
+ * fields cannot hold. Advisory and unsynchronized: for the message of the caller that was just refused. */
+enum nbg_refusal { NBG_REFUSED_NONE, NBG_REFUSED_DIMENSION };
+uint32_t nbg_assembly_refusal(uint32_t *operation);
+struct nbg_assembly_cursor { uint32_t operation, patch, offset, segment, slot; };
 int nbg_assembly_begin(const struct nbg_model *, const struct nbg_assembly_buffer *, size_t count,
                        struct nbg_assembly_layout *, struct nbg_assembly_cursor *);
 int nbg_assembly_next(const struct nbg_model *, const struct nbg_assembly_buffer *,

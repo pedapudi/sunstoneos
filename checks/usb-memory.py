@@ -87,7 +87,19 @@ def main():
     run('production-link', [ld, '-T', out/'usb.ld', '--entry=a733_cached_memory_prepare',
         '--gc-sections', '--defsym=__os_npu_pool_start=0x47400000',
         '--defsym=__os_npu_pool_end=0x47c00000', *objects, '-o', out/'production.elf'])
+    # A pool sized from the declaration (22 MiB below the monitor interval) links with the same arena and sections, and both
+    # pools lie in the write-back windows that the walks below prove (the application window and the legacy pool).
+    run('production-link-sized', [ld, '-T', out/'usb.ld', '--entry=a733_cached_memory_prepare',
+        '--gc-sections', '--defsym=__os_npu_pool_start=0x45a00000',
+        '--defsym=__os_npu_pool_end=0x47000000', *objects, '-o', out/'production-sized.elf'])
     from elftools.elf.elffile import ELFFile
+    for name in ('production.elf', 'production-sized.elf'):
+        with (out/name).open('rb') as stream:
+            sized_arena = ELFFile(stream).get_section_by_name('.uncached_pool')
+            assert (sized_arena['sh_addr'], sized_arena['sh_size']) == (0x42200000, 0x800000), name
+    wb_windows = ((0x44000000, 0x47000000), (0x47400000, 0x47c00000))
+    for pool in ((0x47400000, 0x47c00000), (0x45a00000, 0x47000000)):
+        assert any(lo <= pool[0] and pool[1] <= hi for lo, hi in wb_windows), pool
     with (out/'production.elf').open('rb') as stream:
         elf=ELFFile(stream)
         arena=elf.get_section_by_name('.uncached_pool')

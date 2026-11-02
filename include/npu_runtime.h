@@ -16,6 +16,9 @@
  * (nbg_assembly.h), not by a table of digests. */
 #define NPU_RUNTIME_SLOTS NPU_SERVICE_CLIENTS
 #define NPU_RUNTIME_DEVICE_BASE 0x10000000u
+/* The command region of a slot sized for graphs registered later (a declaration that names no graph for each slot): one
+ * hardware fetch. A graph whose stream is longer is linked in segments and needs a larger region; it fits only a slot
+ * sized for it. */
 #define NPU_RUNTIME_COMMAND_BYTES 524288u
 #define NPU_RUNTIME_GROUP_BYTES 0x200000u
 /* Bulk work runs in steps sized to fit 80 us at the design's worst-case rates
@@ -27,14 +30,22 @@
 #define NPU_RUNTIME_CACHE_CHUNK 16384u
 #define NPU_RUNTIME_ASSEMBLY_STEP 8u
 
-struct npu_runtime_model { const void *data; size_t bytes; };
+/* sha256, when set, is the digest the model's bytes must have: LOAD hashes the copy it stages and refuses a copy that
+ * differs, so a model with a wrong digest fails at its first LOAD (a preload at start included). Prepare does not hash
+ * such a model. A model that
+ * is not linked into the image (delivered in a runner input region, or loaded from the card into upper memory) is given as
+ * an address, a length and this digest, and the runtime does not care which source it came from. */
+struct npu_runtime_model { const void *data; size_t bytes; const unsigned char *sha256; };
 /* One parent allocation of exactly npu_runtime_requirements bytes, 2 MiB
  * aligned in CPU and physical addresses, write-back cached and mapped at EL1.
  * The catalogue models stay outside it, live and unchanged for the runtime's
  * lifetime; LOAD authenticates each copy it makes. */
 /* Graphs loaded after preparation (npu_runtime_register): capacity more catalogue entries, each model at most graph_bytes
  * long with no tensor larger than tensor_bytes. The reservation covers them, so a registered graph cannot fail on memory. */
-struct npu_runtime_bounds { unsigned capacity; size_t graph_bytes, tensor_bytes; };
+/* slot_model: when not NULL, slot i holds catalogue model slot_model[i] for the whole run (a queue image keeps one graph
+ * resident per slot) and its regions are sized from that graph alone; NULL sizes every slot for the largest graph. It
+ * needs capacity 0, because a graph registered later could go to any slot. LOAD refuses a graph that does not fit its slot. */
+struct npu_runtime_bounds { unsigned capacity; size_t graph_bytes, tensor_bytes; const unsigned *slot_model; };
 struct npu_runtime_config {
     const struct npu_runtime_model *models; /* count entries; the caller keeps them alive until prepare returns */
     unsigned count, slots;
@@ -101,6 +112,7 @@ struct npu_runtime_slot {
     uint64_t pending;
     enum npu_service_operation pending_operation;
     unsigned opened, closed;
+    unsigned resident_load; /* the load was made by the owner (npu_runtime_load_resident): no client waits for a reply */
 };
 struct npu_runtime {
     struct npu_runtime_slot slot[NPU_RUNTIME_SLOTS];
@@ -139,9 +151,8 @@ struct npu_runtime {
 };
 
 /* Size of the parent allocation for slots slots and these catalogue models,
- * or 0 when a model is absent from the build-time catalogue, refused by the
- * decoder or assembler, or needs a command allocation larger than
- * NPU_RUNTIME_COMMAND_BYTES. Every slot gets the largest read-only region,
+ * or 0 when a model is absent from the build-time catalogue or refused by the
+ * decoder or assembler. Every slot gets the largest read-only region,
  * read window and write window of any model, so any slot can load any model.
  * Reads the models; no other effect. */
 /* The memory a declaration of slots reserves for these graphs: 0 with the result NPU_DECLARATION_OK and the size in
@@ -184,6 +195,9 @@ int npu_runtime_bind(struct npu_runtime *, struct a733_npu_startup *, const Task
  * One OPEN/CLOSE owns this resident set. This keeps network interpretation
  * in the loader while the queue accepts generic prepared command handles. */
 int npu_runtime_preload(struct npu_runtime *, unsigned slot, unsigned model);
+/* The same after the scheduler has started, from the resident client task: the worker loads the graph (see the definition).
+ * 1 loaded, 0 not yet (the NPU start-up is not finished), -1 refused. */
+int npu_runtime_load_resident(struct npu_runtime *, unsigned slot, unsigned model);
 /* Slow, pre-bind device-only edge between two preloaded slots. Tensor shape,
  * representation and allocation size must agree. Reassembles the consumer's
  * resident addresses once; no copy or cache operation is needed between jobs.
@@ -192,6 +206,10 @@ int npu_runtime_preload(struct npu_runtime *, unsigned slot, unsigned model);
  * preserves their flush/stall boundary. CPU access waits for the final user. */
 int npu_runtime_link_tensor(struct npu_runtime *, unsigned producer, unsigned output,
                             unsigned consumer, unsigned input);
+/* The same link after the scheduler has started, from the resident client task while every slot is loaded and idle and
+ * before the direct queue is claimed (a queue open links, then claims). It re-assembles the consumer and cleans its caches. */
+int npu_runtime_link_tensor_running(struct npu_runtime *, unsigned producer, unsigned output,
+                                    unsigned consumer, unsigned input);
 int npu_runtime_bind_resident(struct npu_runtime *, struct a733_npu_startup *, TaskHandle_t,
                               UBaseType_t priority, UBaseType_t affinity);
 /* Required, after bind and before scheduling: interrupt completion through

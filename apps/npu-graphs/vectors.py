@@ -11,6 +11,7 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--artifacts', type=Path, required=True)
 p.add_argument('--models', type=Path, required=True)
 p.add_argument('--output', type=Path, required=True)
+p.add_argument('--external', type=Path, help='JSON {name: {input: {address, bytes}, reference: {address, bytes}}}: vectors that a runner input region or the card holds, named by address and length')
 p.add_argument('--runtime-models', type=Path, help='a model list whose graphs the application registers at run time')
 a = p.parse_args()
 spec = importlib.util.spec_from_file_location('graph_catalogue', ROOT / 'apps/os/npu-catalogue.py')
@@ -20,7 +21,16 @@ entries = catalogue.models(a.models)
 artifacts = json.loads(a.artifacts.read_text())
 text = '#include "vectors.h"\n'
 rows = []
+external = json.loads(a.external.read_text()) if a.external else {}
 for number, entry in enumerate(entries):
+    if entry['name'] in external:
+        ex = external[entry['name']]
+        sizes = [sum(t['logical_bytes'] for t in entry[field]) for field in ('inputs', 'outputs')]
+        if (ex['input']['bytes'], ex['reference']['bytes']) != tuple(sizes):
+            raise ValueError(entry['name'] + ': external vector sizes differ from the catalogue tensors')
+        rows.append('{%s,(const uint8_t *)UINT64_C(%d),%du,(const uint8_t *)UINT64_C(%d),%du}' % (
+            json.dumps(entry['name']), ex['input']['address'], ex['input']['bytes'], ex['reference']['address'], ex['reference']['bytes']))
+        continue
     files = catalogue.catalogue_tool().artifact_files(artifacts, entry['name'])
     blobs = {}
     for kind, paths, tensors in (('input', files['inputs'], entry['inputs']), ('reference', files['references'], entry['outputs'])):

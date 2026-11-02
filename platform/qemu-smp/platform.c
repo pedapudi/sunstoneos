@@ -164,7 +164,44 @@ static void storm_arm(void) {
     storm_armed[c] = 1;
 }
 #endif
+#ifdef SS_WAKE
+/* An API-level timer interrupt on cores 1 to 7 whose handler is the check's ss_wake_isr (it wakes a task from the
+ * interrupt). Core 0 keeps the tick. The check owns the period and the stop flag. */
+#define WAKE_IRQ 30U
+extern void ss_wake_isr(unsigned core);
+extern volatile unsigned ss_wake_stop;
+uint64_t ss_wake_period;
+static uint64_t wake_next[8];
+static unsigned wake_armed[8];
+static void wake_arm(void) {
+    unsigned c = core();
+    uintptr_t s = GICR + c * 0x20000 + 0x10000;
+    write32(s + 0x100, 1U << WAKE_IRQ);
+    __asm__ volatile("dsb sy" ::: "memory");
+    wake_next[c] = counter() + ss_wake_period;
+    uint64_t on = 1;
+    __asm__ volatile("msr cntp_cval_el0, %0\n msr cntp_ctl_el0, %1\n isb" :: "r"(wake_next[c]), "r"(on) : "memory");
+    wake_armed[c] = 1;
+}
+#endif
 void vApplicationIRQHandler(uint64_t interrupt) {
+#ifdef SS_WAKE
+    {
+        unsigned c = core();
+        if (c && ss_wake_period) {
+            if (interrupt == WAKE_IRQ && wake_armed[c]) {
+                uint64_t now = counter();
+                wake_next[c] += ss_wake_period;
+                if (wake_next[c] <= now) wake_next[c] = now + ss_wake_period / 2;
+                uint64_t on = ss_wake_stop ? 0 : 1;
+                __asm__ volatile("msr cntp_cval_el0, %0\n msr cntp_ctl_el0, %1\n isb" :: "r"(wake_next[c]), "r"(on) : "memory");
+                if (!ss_wake_stop) ss_wake_isr(c);
+                return;
+            }
+            if (!wake_armed[c]) wake_arm();
+        }
+    }
+#endif
 #ifdef SS_STORM
     {
         unsigned c = core();

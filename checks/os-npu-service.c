@@ -24,6 +24,7 @@
 #include "npu_arch.h"
 #include "a733_npu_native.h"
 #include "a733_npu_memory.h"
+#include "a733_storage_digest.h"
 #include "a733_mapping_check.h"
 #include "../apps/board/application.h"
 #include <assert.h>
@@ -497,6 +498,21 @@ static int walk_tables(uint32_t device, int write)
     if (write && !(leaf & 4)) return 2;
     return 1;
 }
+/* No page-table entry below the reserved low device range maps anything, for any slot: every 4 KiB page of
+ * [0, A733_NPU_MMU_LOW_RESERVED) faults for a read and a write, at its first and its last byte, in the tables the runtime
+ * built. This is the basis of loader rule 5 (docs/designs/npu-loader-admission.md): an unpatched pointer word below the
+ * range cannot reach DRAM through the tables, and every buffer of every slot starts at or above it. */
+static void check_low_range_unmapped(const struct npu_runtime *rt)
+{
+    for (uint32_t at = 0; at < A733_NPU_MMU_LOW_RESERVED; at += 4096) {
+        assert(walk_tables(at, 0) == 0 && walk_tables(at, 1) == 0 && walk_tables(at + 4095, 0) == 0);
+    }
+    for (unsigned i = 0; i < rt->slots; ++i) {
+        assert(rt->slot[i].command.device >= A733_NPU_MMU_LOW_RESERVED && rt->slot[i].constant.device >= A733_NPU_MMU_LOW_RESERVED &&
+               rt->slot[i].read.device >= A733_NPU_MMU_LOW_RESERVED && rt->slot[i].write.device >= A733_NPU_MMU_LOW_RESERVED);
+    }
+    assert(rt->bootstrap.device >= A733_NPU_MMU_LOW_RESERVED);
+}
 /* The slot's constant region holds the descriptors, the coefficients and, for a model with a dynamic-input section,
  * that section after them (a733_npu_runtime.c, targets()). The NPU maps the region read-only: every page reads and
  * every write faults. */
@@ -574,7 +590,7 @@ int main(int argc, char **argv)
         printf("declarations: one slot %zu bytes, four slots %zu bytes; every refusal names its resource\n", one, many);
         return 0;
     }
-    assert(mode == 20 || mode == 21 || mode == 26 || mode == 27 || mode == 28 || mode == 29 || ((mode == 22 || mode == 25) && argc == 3));
+    assert(mode == 20 || mode == 21 || mode == 26 || mode == 27 || mode == 28 || mode == 29 || mode == 30 || mode == 31 || ((mode == 22 || mode == 25) && argc == 3));
     if (argc == 3) input_directory = argv[2];
     if (mode == 21) bootstrap_us = 30000;
     if (mode == 26) { long_run = (unsigned)strtoul(getenv("LONG_JOBS") ? getenv("LONG_JOBS") : "120000", NULL, 0); job_us = 3; }
@@ -597,7 +613,15 @@ int main(int argc, char **argv)
     struct npu_runtime_bounds bounds = {mode == 29 ? 2u : 0u, 16384, 65536};
     if (getenv("NPU_BOUNDS")) sscanf(getenv("NPU_BOUNDS"), "%u,%zu,%zu", &bounds.capacity, &bounds.graph_bytes, &bounds.tensor_bytes);
     if (mode == 29) registered_case = 1;
-    const unsigned slots = mode == 28 ? NPU_RUNTIME_SLOTS : 1; /* case 28: the 31 slots of the command mask */
+    /* Case 28: the 31 slots of the command mask. Case 30: one slot for each catalogue model, each sized by its own graph
+     * (the queue image's layout); environment UNIFORM sizes every slot for the largest graph, to compare the totals. */
+    const unsigned slots = mode == 28 ? NPU_RUNTIME_SLOTS : mode == 30 ? os_npu_model_count : 1;
+    static unsigned slot_model[NPU_RUNTIME_SLOTS];
+    if (mode == 30 && !getenv("UNIFORM")) {
+        assert(slots <= NPU_RUNTIME_SLOTS && !bounds.capacity);
+        for (unsigned i = 0; i < slots; ++i) slot_model[i] = i;
+        bounds.slot_model = slot_model;
+    }
     const size_t need = npu_runtime_requirements_with(os_npu_models, os_npu_model_count, slots, &bounds);
     assert(need && !(need & (NPU_RUNTIME_GROUP_BYTES - 1)));
     /* The runtime registers physical addresses below 2^40, so the pool is placed in the low
@@ -611,29 +635,60 @@ int main(int argc, char **argv)
         .physical = (uintptr_t)pool, .bytes = need, .register_cpu = (uintptr_t)register_page,
         .register_physical = 0x03600000, .fatal = fatal};
     config.models = os_npu_models;
+    if (mode == 31) {
+        /* Models given with the digest they must have (a model delivered from outside the image: a runner input region, or
+         * upper memory loaded from the card). Prepare accepts the right digest and refuses a digest that differs by one bit. */
+        static struct npu_runtime_model given[16];
+        static unsigned char digests[16][32];
+        assert(os_npu_model_count <= 16);
+        for (unsigned i = 0; i < os_npu_model_count; ++i) {
+            storage_digest_bytes(os_npu_models[i].data, os_npu_models[i].bytes, digests[i]);
+            given[i] = (struct npu_runtime_model){os_npu_models[i].data, os_npu_models[i].bytes, digests[i]};
+        }
+        if (getenv("BAD_DIGEST")) {
+            digests[os_npu_model_count - 1][5] ^= 1;
+            config.models = given;
+            assert(npu_runtime_prepare(&npu.runtime, &config));          /* prepare does not hash a model given with a digest */
+            assert(!npu_runtime_preload(&npu.runtime, 0, os_npu_model_count - 1)); /* its first LOAD refuses the copy */
+            puts("PASS a model whose digest differs is refused at its first LOAD");
+            return 0;
+        }
+        config.models = given;
+    }
     assert(npu_runtime_prepare(&npu.runtime, &config));
-    if (mode == 28) {
+    if (mode == 31) {
+        assert(npu_runtime_preload(&npu.runtime, 0, 0));   /* the staged copy hashes to the declared digest */
+        puts("PASS models given with their digests are accepted at prepare and at LOAD"); return 0;
+    }
+    if (mode == 28 || mode == 30) {
+        const unsigned n = npu.runtime.slots;
         /* Thirty-one slots: every slot's regions are registered, distinct, ascending and inside the NPU's 32-bit address
          * space; the per-graph tables lie at the start of the reservation; the page tables hold 1 + 4 * 31 buffers. */
-        assert(NPU_RUNTIME_SLOTS == 31 && npu.runtime.slots == 31 && npu.runtime.native.memory.count == 1 + 4 * 31);
+        assert(NPU_RUNTIME_SLOTS == 31 && npu.runtime.slots == (mode == 28 ? 31 : os_npu_model_count) && npu.runtime.native.memory.count == 1 + 4 * n);
         assert((uintptr_t)npu.runtime.catalogue == (uintptr_t)pool && (uintptr_t)npu.runtime.plans > (uintptr_t)pool &&
                (uintptr_t)npu.runtime.model_digest > (uintptr_t)npu.runtime.plans);
         uint64_t last = 0;
-        for (unsigned i = 0; i < 31; ++i) {
+        for (unsigned i = 0; i < n; ++i) {
             const struct npu_runtime_slot *sl = &npu.runtime.slot[i];
             assert(sl->command.device > last && sl->constant.device > sl->command.device && sl->read.device > sl->constant.device);
             assert(sl->write.device > sl->read.device && (uint64_t)sl->write.device + sl->write.bytes <= UINT64_C(1) << 32);
             last = sl->command.device;
             assert(walk_tables((uint32_t)sl->constant.device, 0) == 1 && walk_tables((uint32_t)sl->write.device, 1) == 1);
         }
+        check_low_range_unmapped(&npu.runtime);
         assert(npu_runtime_reservation(os_npu_models, os_npu_model_count, 32, UINT64_MAX >> 1, &(size_t){0}) == NPU_DECLARATION_SLOTS);
         /* The command allocation is the largest resident graph's stream rounded to a page, not the 512 KiB hardware bound. */
-        for (unsigned i = 0; i < 31; ++i)
+        for (unsigned i = 0; i < n; ++i)
             assert(npu.runtime.slot[i].command.bytes < NPU_RUNTIME_COMMAND_BYTES && !(npu.runtime.slot[i].command.bytes & 4095));
-        printf("31 slots: %zu bytes reserved, %u buffers registered, the tables at the start\n", need,
-               (unsigned)npu.runtime.native.memory.count);
+        size_t regions = 0;
+        for (unsigned i = 0; i < n; ++i)
+            regions += npu.runtime.slot[i].command.bytes + npu.runtime.slot[i].constant.bytes + npu.runtime.slot[i].read.bytes +
+                       npu.runtime.slot[i].write.bytes;
+        printf("%u slots: %zu bytes reserved, %zu bytes in the slots' regions, %u buffers registered, the tables at the start\n",
+               n, need, regions, (unsigned)npu.runtime.native.memory.count);
         return 0;
     }
+    check_low_range_unmapped(&npu.runtime);
     check_constant_region_read_only();
     npu.end = long_run ? UINT64_C(1000000000000) : 60000000;
     npu.bootstrap = xTaskCreateStatic(bootstrap, "os-npu-boot", STACK, NULL, 4, npu.stacks[0], &npu.tasks[0]);

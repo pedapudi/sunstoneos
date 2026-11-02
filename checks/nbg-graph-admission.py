@@ -57,6 +57,21 @@ def admit(library, data):
     return bool(lib.nbg_assembly_layout(model, layout))
 
 
+def admission_reason(graph, edits):
+    """The reason code the loader gives for a mutated graph (nbg_assembly_refusal)."""
+    mutated = graph
+    for section, offset, raw in edits:
+        mutated = mutated.with_bytes(section, offset, raw)
+    lib = c.CDLL(str(graph.native))
+    buf = c.create_string_buffer(mutated.data, len(mutated.data))
+    model, layout = (c.c_ubyte * 4096)(), (c.c_ubyte * 16384)()
+    lib.nbg_model_open.argtypes = [c.c_void_p, c.c_size_t, c.c_void_p]
+    lib.nbg_assembly_layout.argtypes = [c.c_void_p, c.c_void_p]
+    lib.nbg_assembly_refusal.argtypes = [c.c_void_p]
+    assert lib.nbg_model_open(buf, len(mutated.data), model) == 0 and not lib.nbg_assembly_layout(model, layout)
+    return lib.nbg_assembly_refusal(None)
+
+
 class Graph:
     """A graph file with byte edits; `edit` returns a new graph with repaired checksums."""
     def __init__(self, data, native):
@@ -170,6 +185,16 @@ def main():
     case('output overlaps the second input', 'deep',
          [(PATCH, g['deep'].patch_offset(3, 28) + 16, u32(104448)), (PATCH, g['deep'].patch_offset(3, 76) + 16, u32(110080))],
          [('nbg_assembly.c', 'aliased(nn, slot, source, op.kind) ||', '0 ||')])
+    # 4b. A stream-processor operation that keeps its result in the engine's scratch carries an offset in its output
+    # pointer word that no patch sets (the steps of a softmax over 92 positions in compiled attention layers hold 0x4220 to 0x1cee0). The low
+    # device range below NBG_ASSEMBLY_LOW_RESERVED is never given to a buffer (placed()), so such a word cannot reach a mapped
+    # byte: it is admitted, and a word at or above the range is refused.
+    low = g['sm64'].with_bytes(NN, g['sm64'].word_offset(1, 7), u32(0x4220))
+    assert admit(native, low.data), 'an unpatched output pointer inside the reserved low range is refused'
+    print('admitted: an unpatched output pointer word of 0x4220 (inside the reserved low device range)')
+    case('an unpatched output pointer word lies outside the reserved low device range', 'sm64',
+         [(NN, g['sm64'].word_offset(1, 7), u32(0x100000))],
+         [('nbg_assembly.c', 'word(descriptor + (size_word == 20 ? 24 : 28)) < NBG_ASSEMBLY_LOW_RESERVED &&', '1 &&')])
     # 5. Stream-processor programs and unseen graphs. There is no table of reviewed programs or of reviewed graphs: a
     # program the loader has never seen, and so a graph whose digest nobody listed, is admitted, because the engine
     # reaches memory only through the page tables (docs/designs/npu-loader-admission.md). The operand that places the
@@ -231,6 +256,38 @@ def main():
     case('a shader descriptor reaches beyond the tensor it names', SH,
          [(PATCH_SECTION, g[SH].kind0_patch_offset(1, 28) + 16, u32(64))],
          [('nbg_assembly.c', 'if ((uint64_t)p.source_offset + extent > region) return 0;', 'if (0) return 0;'), *RELOCATION_OFF])
+    # 7. A descriptor of a long tensor. The compiler writes width + (height << 16) in 32 bits without masking: the
+    # relative-shift table of an attention layer over T = 184 positions is four rows of 67,528 elements (hw
+    # 0x000507c8, carried), and the index table of T = 276 positions is 76,176 rows of one element (hw 0x29900001,
+    # cut). The engine's shader reads 16-bit fields, so such a tensor is refused (NBG_REFUSED_DIMENSION); the SDK
+    # simulator computes with the 32-bit values and agrees with the compiler, which is why only the loader can refuse it.
+    # The graph is the small gather with its input descriptor and input size replaced by those of the layer.
+    G = 'sh-gather'
+    data_header = 0x0804d800
+    plane_header = 0x0804d804
+
+    def long_tensor(stride, hw, plane, size):
+        return [(INPUT, 4, u32(size)), (STATES, g[G].state_word_offset(1, data_header) + 8, u32(stride)),
+                (STATES, g[G].state_word_offset(1, data_header) + 12, u32(hw)),
+                (STATES, g[G].state_word_offset(1, plane_header) + 4, u32(plane))]
+    DIMENSION_RULE = [('nbg_assembly.c', 'if (height >= 65536 || width >= 65536) { refused(NBG_REFUSED_DIMENSION, number); return 0; }', '')]
+    for label, edits in (('a shader descriptor whose width carries into the height field (T = 184 whole-length attention)',
+                          long_tensor(135056, 0x000507c8, 540224, 540224)),
+                         ('a shader descriptor whose height is cut to 16 bits (T = 276 whole-length attention)',
+                          long_tensor(4, 0x29900001, 304704, 304704))):
+        case(label, G, edits, DIMENSION_RULE)
+        refused_by = admission_reason(graphs[G], edits)
+        assert refused_by == 1, label + ': refused for another reason (%d)' % refused_by
+    # Dimensions below 65,536 are admitted: the widest and tallest tensors of the blocked layers.
+    admitted_case('a shader descriptor of 50,692 elements in one row (276 frames, 92-row blocks)', G,
+                  long_tensor(101384, 0x0001c604, 101384, 101384))
+    WIDTH_RULE = [('nbg_assembly.c', 'if (!height || width > stride) return 0;', 'if (!height) return 0;')]
+    case('a shader descriptor whose width exceeds its row stride', G, long_tensor(128, 0x00040100, 512, 512), WIDTH_RULE)
+    case('a shader descriptor whose channel stride is not a multiple of its row stride', G,
+         long_tensor(128, 0x00200040, 4097, 4097),
+         [('nbg_assembly.c', 'if (!stride || !depth || plane % stride) return 0;', 'if (!stride || !depth) return 0;')])
+    case('a shader descriptor whose height field disagrees with its channel stride', G,
+         long_tensor(128, 0x00300040, 4096, 4096), WIDTH_RULE + DIMENSION_RULE)
     print('PASS %d graphs, %d unseen programs admitted and %d refusal cases' % (len(GRAPHS), len(admitted), len(results)))
 
 

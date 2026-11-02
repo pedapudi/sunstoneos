@@ -8,7 +8,7 @@ completes jobs without computing them, so outputs are compared on the board, not
 tools/npu-graph-variants.py compiled by tools/npu-graph-compile.sh; --graphs names the directory that holds
 artifacts.json (graph files, input and simulator reference tensors).
 """
-import argparse, hashlib, importlib.util, json, os, subprocess, shutil, sys
+import argparse, hashlib, importlib.util, json, os, re, subprocess, shutil, sys
 from pathlib import Path
 
 import host_rtos
@@ -60,6 +60,19 @@ for label, listing in (('a1', 'models-a1.json'), ('a2', 'models-a2.json'), ('b',
     (work / 'run.log').write_text(done.stdout + done.stderr)
     assert done.returncode == 0, (label, done.stdout[-600:], done.stderr[-800:])
     ran.append((label, len(names)))
+    if label == 'a1':
+        # Case 30: one slot for each of the set's graphs. Sized by its own graph each slot holds less than when every slot is
+        # sized for the largest graph; both layouts are prepared, registered and walked by the check.
+        totals = {}
+        for mode in ('own', 'uniform'):
+            env = {**environment(), **({'UNIFORM': '1'} if mode == 'uniform' else {})}
+            r = subprocess.run([str(exe), '30', str(inputs)], capture_output=True, text=True, env=env, timeout=1800)
+            assert r.returncode == 0, (mode, r.stdout[-600:], r.stderr[-800:])
+            line = [l for l in r.stdout.splitlines() if 'bytes in the slots' in l][-1]
+            totals[mode] = tuple(int(t) for t in re.findall(r'(\d+) bytes', line))
+        assert totals['own'][1] < totals['uniform'][1] and totals['own'][0] <= totals['uniform'][0], totals
+        print('per-slot sizing: %d bytes in the slot regions against %d with one size for all slots (reserved %d against %d)' %
+              (totals['own'][1], totals['uniform'][1], totals['own'][0], totals['uniform'][0]))
     print('set', label, ':', done.stdout.strip().splitlines()[-1])
 # An unseen graph: the relu graph with one coefficient byte changed, so that its digest is in no table, described by an
 # entry of its own in a copy of the model list. The runtime must admit, place, assemble and submit it.
@@ -97,17 +110,31 @@ done = subprocess.run([str(exe), '22', str(inputs)], capture_output=True, text=T
 (work / 'run.log').write_text(done.stdout + done.stderr)
 assert done.returncode == 0, ('unseen', done.stdout[-600:], done.stderr[-800:])
 print('unseen graph (digest in no table):', done.stdout.strip().splitlines()[-1])
-# The queue study's receipt (apps/npu-graphs, NPU_GRAPHS_QUEUE): the decoder and the expectation agree on a receipt of seven rows.
+# The queue study's receipt (apps/npu-graphs, NPU_GRAPHS_QUEUE): the decoder and the expectation agree on a receipt of eight rows and one link row.
 import struct
 hostspec = importlib.util.spec_from_file_location('npu_graphs_host', ROOT / 'apps/npu-graphs/host.py')
 graphs_host = importlib.util.module_from_spec(hostspec); hostspec.loader.exec_module(graphs_host)
-depths = [1, 2, 4, 8, 16, 32, 64]
+depths = [1, 2, 4, 8, 16, 32, 64, 128]
 words = [0] * 216
-words[0:9] = [graphs_host.MAGIC, 1, graphs_host.BYTES, 7, 7, 7, 1, 100, 24 * 7000]
+words[0:9] = [graphs_host.MAGIC, 1, graphs_host.BYTES, 9, 9, 9, 1, 100, 24 * 8000]
 for i, k in enumerate(depths):
     words[16 + 8 * i:24 + 8 * i] = [i, k, 1000, 0, 24 * 50000, 3, 0, 24 * 50]
-rows = graphs_host.decode(struct.pack('<216Q', *words), sizes=[(k, 1000) for k in depths], queue=True)
-assert rows['passed'] and [r['k'] for r in rows['queue']] == depths and rows['queue'][0]['jobs_per_s'] == 20000
+words[16 + 64:24 + 64] = [8, 1, 1, 0, 24 * 20, 0, 0, 24 * 20]   # the link row
+rows = graphs_host.decode(struct.pack('<216Q', *words), sizes=[(k, 1000) for k in depths] + [(1, 1)], queue=True)
+assert rows['passed'] and [r.get('k') for r in rows['queue'][:8]] == depths and rows['queue'][0]['jobs_per_s'] == 20000
+assert rows['clock']['before']['little_mhz'] == 0 and rows['clock']['after']['core'] == 0
+assert rows['queue'][8] == {'link': True, 'pair_us': 20.0, 'wrong_output_bytes': 0, 'status': 'match'}
 expected = graphs_host.queue_expectation(depths, 1000)['words']
 assert len(expected) == 2 * 216 and expected[0:2] == [graphs_host.MAGIC & 0xffffffff, graphs_host.MAGIC >> 32]
+# The chain study's result (apps/npu-graphs, NPU_GRAPHS_CHAIN): the decoder reads the statistics, the times and the tokens.
+chain = bytearray(graphs_host.CHAIN_BYTES)
+struct.pack_into('<8Q', chain, 0, graphs_host.CHAIN_MAGIC, 1, 18, 2, 1, 4, 100, 100 + 24 * 50000)
+for k in range(2):
+    struct.pack_into('<Q', chain, 112 + 8 * k, 24 * (1000 + k))                     # record ticks
+struct.pack_into('<5q', chain, 112 + 8 * 4 * graphs_host.CHAIN_MAX_RECORDS, 1 << 40, 1 << 40, 1 << 40, 3 << 8, 8)
+tokens_at = 112 + 8 * 4 * graphs_host.CHAIN_MAX_RECORDS + 40 * graphs_host.CHAIN_MAX_STAT_RECORDS * graphs_host.CHAIN_MAX_GRAPHS
+struct.pack_into('<4H', chain, tokens_at, 5, 5, 1024, 7)
+decoded = graphs_host.chain_decode(bytes(chain))
+assert decoded['us']['record'] == [1000.0, 1001.0] and decoded['stats'][0][0]['cosine'] == 1.0 and decoded['stats'][0][0]['max_abs'] == 3.0
+assert decoded['tokens'][0] == [5, 5, 1024, 7] and len(graphs_host.chain_expectation()['words']) == graphs_host.CHAIN_BYTES // 4
 print('PASS %d graphs through the real OS NPU runtime and service (%s)' % (sum(n for _, n in ran), ', '.join('%s: %d' % r for r in ran)))

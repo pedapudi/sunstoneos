@@ -1,7 +1,7 @@
 # Build the complete private fork as one configuration and source unit.
 include_guard(GLOBAL)
 include("${CMAKE_CURRENT_LIST_DIR}/patch.cmake")
-option(SUNSTONE_PARTITIONED_SCHEDULER "Select the private owner scheduler in SMP images" OFF)
+option(SUNSTONE_PARTITIONED_SCHEDULER "Select the private owner scheduler in SMP images" ON)
 
 function(sunstone_scheduler_partitioned_prepare output smp_tasks)
   get_filename_component(root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/.." ABSOLUTE)

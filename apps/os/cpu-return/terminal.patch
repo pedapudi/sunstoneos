@@ -39,7 +39,7 @@
  .Lclean:
      check_time
      mov x2, #0x40000000
-@@ -248,6 +262,36 @@
+@@ -248,6 +262,52 @@
      add x24, x24, #64
      cmp x24, x25
      b.lo .Lclean
@@ -58,25 +58,41 @@
 +    b .Lclean
 +.Lclean_finished:
 +#ifdef SUNSTONE_A733_OS_NPU
-+    // After every manifest extent, clean the complete owned eight MiB pool.
-+    // x27 is zero only on the second arrival, after the pool loop completes.
++    // After every manifest extent, clean the complete owned pool: the 8 MiB pool of every image so far, or one sized from
++    // the declaration (apps/os/cpu-return-host.py npu_pool_extent_valid): whole 2 MiB blocks, 10 to 48 MiB, ending at the
++    // monitor interval 0x47000000. x27 is zero only on the second arrival, after the pool loop completes.
 +    cbz x27, .Lpool_cleaned
 +    mov x27, #0
 +    address x24, __os_npu_pool_start
 +    address x25, __os_npu_pool_end
 +    mov x2, #0x47400000
 +    cmp x24, x2
-+    b.ne qualification_park
++    b.ne .Lpool_sized
 +    mov x2, #0x47c00000
 +    cmp x25, x2
 +    b.ne qualification_park
++    b .Lclean
++.Lpool_sized:
++    mov x2, #0x47000000
++    cmp x25, x2
++    b.ne qualification_park
++    sub x28, x25, x24
++    tst x28, #0x1fffff
++    b.ne qualification_park
++    mov x2, #0x3000000
++    cmp x28, x2
++    b.hi qualification_park
++    mov x2, #0xa00000
++    cmp x28, x2
++    mov x28, #0
++    b.lo qualification_park
 +    b .Lclean
 +.Lpool_cleaned:
 +#endif
      dsb sy
      add x2, x23, #688
      add x2, x2, x20, lsl #10
-@@ -369,9 +413,40 @@
+@@ -369,9 +425,40 @@
      dsb sy
      str x1, [x2, #40]
      dsb sy

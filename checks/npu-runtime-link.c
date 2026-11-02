@@ -7,15 +7,19 @@
 #include <stdlib.h>
 #include <string.h>
 static unsigned cache_calls;
-BaseType_t xTaskGetSchedulerState(void){return taskSCHEDULER_NOT_STARTED;}
+static BaseType_t scheduler=taskSCHEDULER_NOT_STARTED;
+static int current_task;
+BaseType_t xTaskGetSchedulerState(void){return scheduler;}
+TaskHandle_t xTaskGetCurrentTaskHandle(void){return (TaskHandle_t)&current_task;}
 int aarch64_device_cache(enum aarch64_cache_op op,uintptr_t cpu,size_t bytes)
 {assert(op==AARCH64_CACHE_CLEAN&&cpu&&!(cpu&63)&&bytes&&!(bytes&63));++cache_calls;return 1;}
 static uint32_t fixture_crc_byte(uint32_t crc,uint8_t value)
 {crc^=value;for(unsigned i=0;i<8;++i)crc=(crc>>1)^((0u-(crc&1))&0x82f63b78u);return crc;}
-static uint32_t fixture_crc_word(uint32_t crc,uint64_t value)
+static __attribute__((unused)) uint32_t fixture_crc_word(uint32_t crc,uint64_t value)
 {for(unsigned i=0;i<8;++i){crc=fixture_crc_byte(crc,(uint8_t)value);value>>=8;}return crc;}
 #include SUNSTONE_LINK_ROUTINES
 static struct npu_runtime rt;
+static struct npu_runtime_model fixture_catalogue[2];
 static void *owned[32];static unsigned owned_count;
 static void *allocation(size_t bytes)
 {void *p=aligned_alloc(4096,(bytes+4095)&~(size_t)4095);assert(p&&owned_count<32);memset(p,0,bytes);owned[owned_count++]=p;return p;}
@@ -25,7 +29,7 @@ static uint32_t word(const void *p){uint32_t v;memcpy(&v,p,4);return v;}
 static void prepare(unsigned index,const unsigned char *model,size_t bytes)
 {
     struct npu_runtime_slot *s=&rt.slot[index];struct nbg_model view;
-    assert(admit(model,bytes,&rt.entry[index],&s->layout));
+    unsigned char digest[32];assert(admit(model,bytes,digest,&s->layout));
     rt.catalogue[index]=(struct npu_runtime_model){model,bytes};s->model=index;
     assert(nbg_model_open(model,bytes,&view)==NBG_DECODE_OK);
     unsigned count=NBG_ALLOC_INPUT+s->layout.inputs+s->layout.outputs;
@@ -35,8 +39,9 @@ static void prepare(unsigned index,const unsigned char *model,size_t bytes)
     /* NN and coefficient reservations are contiguous in the real runtime. */
     size_t nn=s->targets[NBG_ALLOC_NN].bytes,coeff=s->targets[NBG_ALLOC_COEFF].bytes;
     void *constant=allocation(nn+coeff);
-    s->targets[NBG_ALLOC_NN].cpu=constant;s->targets[NBG_ALLOC_COEFF].cpu=(unsigned char *)constant+nn;
-    s->targets[NBG_ALLOC_COEFF].device=s->targets[NBG_ALLOC_NN].device+(uint32_t)nn;
+    s->targets[NBG_ALLOC_NN].cpu=constant;
+    if(coeff){s->targets[NBG_ALLOC_COEFF].cpu=(unsigned char *)constant+nn;
+        s->targets[NBG_ALLOC_COEFF].device=s->targets[NBG_ALLOC_NN].device+(uint32_t)nn;}
     s->constant=(struct npu_runtime_region){(uintptr_t)constant,0,nn+coeff,s->targets[NBG_ALLOC_NN].device};
     struct nbg_assembly_cursor cursor;struct nbg_assembly_layout layout;
     assert(nbg_assembly_begin(&view,s->targets,count,&layout,&cursor));
@@ -55,7 +60,7 @@ int main(int argc,char **argv)
     unsigned char *producer=read_model(argv[1],&pn),*consumer=read_model(argv[2],&cn);
     const struct npu_runtime_model models[]={{producer,pn},{consumer,cn}};
     assert(npu_runtime_requirements(models,2,2)==6291456);
-    rt.prepared=1;rt.slots=2;rt.count=2;prepare(0,producer,pn);prepare(1,consumer,cn);
+    rt.prepared=1;rt.slots=2;rt.catalogue=fixture_catalogue;atomic_init(&rt.count,2);rt.capacity=2;prepare(0,producer,pn);prepare(1,consumer,cn);
     struct npu_runtime_slot *p=&rt.slot[0],*s=&rt.slot[1];unsigned pi=p->layout.inputs;
     assert(!memcmp(&p->tensors[pi].tensor,&s->tensors[0].tensor,offsetof(struct nbg_tensor,name)));
     assert(word((unsigned char *)s->targets[NBG_ALLOC_NN].cpu+24)==s->targets[NBG_ALLOC_INPUT].device);
@@ -75,8 +80,18 @@ int main(int argc,char **argv)
     if(which==3)s->targets[NBG_ALLOC_INPUT].bytes+=4096;
     if(which==4)rt.bound=1;
     if(which==5)s->targets[NBG_ALLOC_COMMAND].device=p->targets[NBG_ALLOC_INPUT+pi].device;
-    int linked=npu_runtime_link_tensor(&rt,0,0,1,0);
-    if(which){assert(!linked&&cache_calls==0&&rt.tensor_links==old_links&&!atomic_load(&rt.failed));
+    /* Cases 6 to 9: linking after the scheduler has started, from the resident client task with every slot idle. */
+    static struct npu_service_runtime_state service_state;
+    const int running=which>=6;
+    if(running){
+        rt.bound=1;rt.resident=1;scheduler=taskSCHEDULER_RUNNING;rt.service.runtime=&service_state;
+        rt.slot[0].client=(TaskHandle_t)&current_task;rt.slot[0].opened=1;rt.service.controller.state=A733_NPU_READY;
+    }
+    if(which==7)rt.slot[1].pending=1;                          /* a request is pending on a slot */
+    if(which==8)scheduler=taskSCHEDULER_NOT_STARTED;           /* the scheduler has not started: the running link is not for this time */
+    if(which==9)rt.service.direct_request=(const struct npu_service_direct *)&service_state; /* the direct queue is being claimed */
+    int linked=running?npu_runtime_link_tensor_running(&rt,0,0,1,0):npu_runtime_link_tensor(&rt,0,0,1,0);
+    if(which&&which!=6){assert(!linked&&cache_calls==0&&rt.tensor_links==old_links&&!atomic_load(&rt.failed));
         assert(!memcmp(before,(void *)s->command.cpu,s->command.bytes)&&!memcmp(before+s->command.bytes,(void *)s->constant.cpu,s->constant.bytes));
     }else{
         assert(linked&&cache_calls==2&&rt.tensor_links&&npu_runtime_tables_intact(&rt));

@@ -2,6 +2,10 @@
 #define SUNSTONE_A733_NPU_MMU_H
 #include <stddef.h>
 #include <stdint.h>
+/* Device virtual addresses below this are never mapped: a733_npu_mmu_build refuses a region that starts below it. The vendor
+ * driver reserves the same low range (it allocates device pages from 0 to the end of the SRAM window at 0x400000 before
+ * any buffer, vip2/memory/vip_drv_mmu.c:721-729), and the loader admits pointer words below it that no patch sets. */
+#define A733_NPU_MMU_LOW_RESERVED UINT32_C(0x100000)
 
 #define A733_NPU_MMU_MAX_REGIONS 512u
 #define A733_NPU_MMU_MAX_BYTES (4096u + 256u * 16384u)

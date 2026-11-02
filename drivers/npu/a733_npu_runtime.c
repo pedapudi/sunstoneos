@@ -42,11 +42,12 @@ static void set_state(struct npu_runtime_slot *s, unsigned value)
 static int admit(const unsigned char *data, size_t bytes, unsigned char digest[32], struct nbg_assembly_layout *layout)
 {
     struct nbg_model model;
-    storage_digest_bytes(data, bytes, digest);
-    /* The command allocation is the graph's own stream rounded to a page (the layout bounds it by the hardware field),
-     * so a slot is sized by the largest resident graph and not by the hardware maximum. */
-    return nbg_model_open(data, bytes, &model) == NBG_DECODE_OK && nbg_assembly_layout(&model, layout) &&
-           layout->buffers[NBG_ALLOC_COMMAND].allocation_bytes <= NPU_RUNTIME_COMMAND_BYTES;
+    if (digest) storage_digest_bytes(data, bytes, digest);
+    /* The command allocation is the graph's own stream rounded to a page; a stream longer than one fetch continues
+     * through links (nbg_assembly.c), so nothing bounds it here but the slot: a slot is sized by the largest resident
+     * graph, and a graph registered later that needs a longer command region than its slot holds is refused by the
+     * fit check there (npu_runtime_register, LOAD). */
+    return nbg_model_open(data, bytes, &model) == NBG_DECODE_OK && nbg_assembly_layout(&model, layout);
 }
 struct sizes { size_t command, constant, read, write, staging; };
 static void need(const struct nbg_assembly_layout *l, size_t model_bytes, struct sizes *s)
@@ -73,35 +74,67 @@ static void need(const struct nbg_assembly_layout *l, size_t model_bytes, struct
  * addresses leave one unmapped page after every allocation. */
 struct placement {
     size_t tables, tables_bytes, arena, arena_bytes, bootstrap, staging, bytes;
-    /* Every slot's regions are the same size, so a slot's offset is a base plus a multiple of a stride: command[i] =
-     * command0 + i * (COMMAND + constant), constant[i] = command[i] + COMMAND, read[i] = read0 + i * read, write[i] =
-     * write0 + i * write; likewise for the device addresses, with one unmapped page after every allocation. */
+    /* The three bases; a slot's regions follow its predecessors' (slot_place below). */
     size_t command0, read0, write0;
     uint32_t bootstrap_device, command_device0, read_device0, write_device0;
 };
-static size_t command_offset(const struct placement *p, const struct sizes *z, unsigned i)
-{ return p->command0 + (size_t)i * (z->command + z->constant); }
-static uint32_t command_device(const struct placement *p, const struct sizes *z, unsigned i)
-{ return p->command_device0 + (uint32_t)((uint64_t)i * (z->command + PAGE + z->constant + PAGE)); }
+/* The regions of one slot: the sizes of its own graph when the bounds name one for each slot, else the largest graph's. */
+struct slot_dims { struct sizes size; size_t command_cpu, read_cpu, write_cpu; uint64_t command_dev, read_dev, write_dev; };
+static int slot_size(const struct npu_runtime_model *models, const struct nbg_assembly_layout *plans,
+                     const struct npu_runtime_bounds *bounds, const struct sizes *z, unsigned i, struct sizes *out)
+{
+    if (!bounds || !bounds->slot_model) { *out = *z; return 1; }
+    const unsigned m = bounds->slot_model[i];
+    struct nbg_assembly_layout one;
+    if (!plans && !admit(models[m].data, models[m].bytes, NULL, &one)) return 0;
+    memset(out, 0, sizeof(*out));
+    need(plans ? &plans[m] : &one, models[m].bytes, out);
+    return 1;
+}
+/* Slot i's sizes and its offsets (CPU and device) relative to the three bases, with one unmapped page after every
+ * allocation. With one size for all slots these are i times the stride, as before. */
+static int slot_place(const struct npu_runtime_model *models, const struct nbg_assembly_layout *plans,
+                      const struct npu_runtime_bounds *bounds, const struct sizes *z, unsigned i, struct slot_dims *d)
+{
+    memset(d, 0, sizeof(*d));
+    for (unsigned j = 0; j <= i; ++j) {
+        struct sizes s;
+        if (!slot_size(models, plans, bounds, z, j, &s)) return 0;
+        if (j == i) { d->size = s; break; }
+        d->command_cpu += s.command + s.constant;
+        d->command_dev += s.command + PAGE + s.constant + PAGE;
+        d->read_cpu += s.read; d->read_dev += s.read + PAGE;
+        d->write_cpu += s.write; d->write_dev += s.write + PAGE;
+    }
+    return 1;
+}
 size_t npu_runtime_tables_bytes(unsigned count)
 {
     const size_t per = sizeof(struct npu_runtime_model) + sizeof(struct nbg_assembly_layout) + 32;
     return ((size_t)count * per + 63) & ~(size_t)63;
 }
-static int place(const struct sizes *z, unsigned slots, unsigned count, struct placement *p)
+static int place(const struct npu_runtime_model *models, const struct nbg_assembly_layout *plans,
+                 const struct npu_runtime_bounds *bounds, const struct sizes *z, unsigned slots, unsigned count,
+                 struct placement *p)
 {
     memset(p, 0, sizeof(*p));
     if (!z->command || !z->constant || !z->read || !z->write || !z->staging || z->constant > UINT32_MAX ||
         z->read > UINT32_MAX || z->write > UINT32_MAX) return 0;
+    /* The totals of the three groups, from every slot's own sizes. */
+    uint64_t command_total = 0, command_dev = 0, read_total = 0, read_dev = 0, write_total = 0, write_dev = 0;
+    for (unsigned i = 0; i < slots; ++i) {
+        struct sizes s;
+        if (!slot_size(models, plans, bounds, z, i, &s)) return 0;
+        command_total += s.command + s.constant; command_dev += s.command + PAGE + s.constant + PAGE;
+        read_total += s.read; read_dev += s.read + PAGE;
+        write_total += s.write; write_dev += s.write + PAGE;
+    }
     uint64_t device = NPU_RUNTIME_DEVICE_BASE;
 #define NEXT(field, bytes) do { field = (uint32_t)device; device += (uint64_t)(bytes) + PAGE; } while (0)
     NEXT(p->bootstrap_device, z->command);
-    p->command_device0 = (uint32_t)device;
-    for (unsigned i = 0; i < slots; ++i) { device += z->command + PAGE; device += (uint64_t)z->constant + PAGE; }
-    p->read_device0 = (uint32_t)device;
-    for (unsigned i = 0; i < slots; ++i) device += (uint64_t)z->read + PAGE;
-    p->write_device0 = (uint32_t)device;
-    for (unsigned i = 0; i < slots; ++i) device += (uint64_t)z->write + PAGE;
+    p->command_device0 = (uint32_t)device; device += command_dev;
+    p->read_device0 = (uint32_t)device; device += read_dev;
+    p->write_device0 = (uint32_t)device; device += write_dev;
 #undef NEXT
     if (device > UINT64_C(1) << 32) return 0;
     /* One 16 KiB leaf table per 16 MiB the device range touches. */
@@ -112,11 +145,11 @@ static int place(const struct sizes *z, unsigned slots, unsigned count, struct p
     p->arena = offset; offset += p->arena_bytes;
     p->bootstrap = offset; offset += z->command;
     p->staging = offset; offset += z->staging;
-    p->command0 = offset; offset += (size_t)slots * (z->command + z->constant);
+    p->command0 = offset; offset += command_total;
     offset = whole_groups(offset);
-    p->read0 = offset; offset += (size_t)slots * z->read;
+    p->read0 = offset; offset += read_total;
     offset = whole_groups(offset);
-    p->write0 = offset; offset += (size_t)slots * z->write;
+    p->write0 = offset; offset += write_total;
     p->bytes = whole_groups(offset);
     return 1;
 }
@@ -133,8 +166,18 @@ static int sized(const struct npu_runtime_model *models, unsigned count, unsigne
     for (unsigned m = 0; m < count; ++m) {
         if (!a733_span_incl_nonempty(models[m].data, models[m].bytes) ||
             models[m].bytes > NBG_MODEL_MAX_BYTES ||
-            !admit(models[m].data, models[m].bytes, digests ? digests[m] : digest, plans ? &plans[m] : &one)) return 0;
+            !admit(models[m].data, models[m].bytes, models[m].sha256 ? NULL : (digests ? digests[m] : digest),
+                   plans ? &plans[m] : &one)) return 0;
+        /* A model given with its digest is not hashed here: the declared digest is the reference, and LOAD hashes the copy
+         * it stages and refuses a copy that differs, so the content is checked once, when it is first used, and not in
+         * a sizing pass and again in prepare (hashing megabytes takes seconds before the scheduler, where the secondary
+         * cores wait only a second for the primary core). */
+        if (models[m].sha256 && digests) memcpy(digests[m], models[m].sha256, 32);
         need(plans ? &plans[m] : &one, models[m].bytes, z);
+    }
+    if (bounds && bounds->slot_model) {
+        if (bounds->capacity) return 0; /* a graph registered later could go to any slot */
+        for (unsigned i = 0; i < slots; ++i) if (bounds->slot_model[i] >= count) return 0;
     }
     unsigned capacity = 0;
     if (bounds && bounds->capacity) {
@@ -151,7 +194,7 @@ static int sized(const struct npu_runtime_model *models, unsigned count, unsigne
         if (tensors > z->write) z->write = tensors;
         if (pages(bounds->graph_bytes) > z->staging) z->staging = pages(bounds->graph_bytes);
     }
-    return place(z, slots, count + capacity, p);
+    return place(models, plans, bounds, z, slots, count + capacity, p);
 }
 enum npu_declaration_result npu_runtime_reservation_with(const struct npu_runtime_model *models, unsigned count,
                                                         unsigned slots, size_t pool_bytes, size_t *bytes,
@@ -218,8 +261,8 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     rt->plans = (struct nbg_assembly_layout *)(v.cpu + entries * sizeof(struct npu_runtime_model));
     rt->model_digest = (unsigned char (*)[32])(v.cpu + entries * (sizeof(struct npu_runtime_model) +
                                                                   sizeof(struct nbg_assembly_layout)));
-    if (!sized(v.models, v.count, v.slots, &v.bounds, rt->model_digest, rt->plans, &z, &p) || p.bytes != v.bytes) return fault(rt);
-    for (unsigned m = 0; m < v.count; ++m) rt->catalogue[m] = v.models[m];
+    if (!sized(v.models, v.count, v.slots, &v.bounds, rt->model_digest, rt->plans, &z, &p) || p.bytes > v.bytes) return fault(rt);
+    for (unsigned m = 0; m < v.count; ++m) rt->catalogue[m] = (struct npu_runtime_model){v.models[m].data, v.models[m].bytes, NULL};
     atomic_init(&rt->count, v.count); rt->capacity = v.count + v.bounds.capacity; rt->slots = v.slots;
     rt->command_bytes = z.command; rt->constant_bytes = z.constant; rt->read_bytes = z.read; rt->write_bytes = z.write;
     rt->staging_bytes = z.staging; rt->staging = v.cpu + p.staging;
@@ -231,11 +274,13 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
         z.command, p.bootstrap_device, A733_NPU_BUFFER_BOOTSTRAP};
     for (unsigned i = 0; i < v.slots; ++i) {
         struct npu_runtime_slot *s = &rt->slot[i];
-        REGION(s->command, command_offset(&p, &z, i), z.command, command_device(&p, &z, i));
-        REGION(s->constant, command_offset(&p, &z, i) + z.command, z.constant,
-               command_device(&p, &z, i) + z.command + PAGE);
-        REGION(s->read, p.read0 + (size_t)i * z.read, z.read, p.read_device0 + (uint32_t)((uint64_t)i * (z.read + PAGE)));
-        REGION(s->write, p.write0 + (size_t)i * z.write, z.write, p.write_device0 + (uint32_t)((uint64_t)i * (z.write + PAGE)));
+        struct slot_dims d;
+        if (!slot_place(v.models, rt->plans, &v.bounds, &z, i, &d)) return fault(rt);
+        REGION(s->command, p.command0 + d.command_cpu, d.size.command, p.command_device0 + (uint32_t)d.command_dev);
+        REGION(s->constant, p.command0 + d.command_cpu + d.size.command, d.size.constant,
+               p.command_device0 + (uint32_t)d.command_dev + (uint32_t)(d.size.command + PAGE));
+        REGION(s->read, p.read0 + d.read_cpu, d.size.read, p.read_device0 + (uint32_t)d.read_dev);
+        REGION(s->write, p.write0 + d.write_cpu, d.size.write, p.write_device0 + (uint32_t)d.write_dev);
         all[n++] = (struct a733_npu_buffer){s->command.cpu, s->command.physical, s->command.bytes,
             s->command.device, A733_NPU_BUFFER_COMMAND};
         all[n++] = (struct a733_npu_buffer){s->constant.cpu, s->constant.physical, s->constant.bytes,
@@ -441,6 +486,7 @@ static int same_plan(const struct nbg_assembly_layout *a, const struct nbg_assem
 static void load_end(struct npu_runtime *rt, struct npu_runtime_slot *s, int loaded)
 {
     unsigned index = (unsigned)(s - rt->slot);
+    const unsigned silent = s->resident_load; /* read before the state changes: the owner clears it once the slot is READY */
     if (loaded) {
         s->end_mark = s->stream_bytes;
         ++rt->counters.loads;
@@ -452,7 +498,7 @@ static void load_end(struct npu_runtime *rt, struct npu_runtime_slot *s, int loa
         set_state(s, NPU_RUNTIME_EMPTY);
     }
     rt->loading = NPU_RUNTIME_SLOTS;
-    if (rt->bound)
+    if (rt->bound && !silent)
         npu_service_release(&rt->service, index, loaded ? NPU_SERVICE_OK : NPU_SERVICE_INVALID, A733_NPU_READY);
 }
 /* A failed native adapter treats any further time read as fatal; a retained
@@ -507,6 +553,12 @@ static int load_work(struct npu_runtime *rt)
         unsigned char digest[32];
         storage_digest_end(&rt->digest, digest);
         const struct nbg_assembly_layout *plan = &rt->plans[s->model];
+        {   /* The graph must fit this slot's regions (they are sized by one graph when the slots are). */
+            struct sizes fit = {0};
+            need(plan, model->bytes, &fit);
+            if (fit.command > s->command.bytes || fit.constant > s->constant.bytes || fit.read > s->read.bytes ||
+                fit.write > s->write.bytes) { load_end(rt, s, 0); return 1; }
+        }
         targets(s, plan);
         if (memcmp(digest, rt->model_digest[s->model], 32) ||
             nbg_model_open((const void *)rt->staging, model->bytes, &rt->view) != NBG_DECODE_OK ||
@@ -883,6 +935,35 @@ int npu_runtime_preload(struct npu_runtime *rt, unsigned slot, unsigned model)
     return maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->read.cpu, s->read.bytes) &&
         maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->write.cpu, s->write.bytes);
 }
+/* Load the graph of a slot after the scheduler has started, for a resident client (a queue image keeps one graph in each
+ * slot). The owner marks the slot LOADING like a LOAD request and wakes the service worker, which stages, hashes and
+ * assembles it in its steps, as for any LOAD; the owner waits and then initializes the slot's windows as preload does. A
+ * graph whose copy does not hash to its declared digest leaves the slot EMPTY and returns 0. This keeps the megabytes of
+ * hashing and copying out of the start-up that the secondary cores wait for (one second). */
+int npu_runtime_load_resident(struct npu_runtime *rt, unsigned slot, unsigned model)
+{
+    if (!good(rt) || !rt->bound || !rt->resident || slot >= rt->slots || model >= atomic_load_explicit(&rt->count, memory_order_acquire) ||
+        xTaskGetSchedulerState() != taskSCHEDULER_RUNNING || xTaskGetCurrentTaskHandle() != rt->slot[0].client) return -1;
+    /* The NPU start-up is not finished, or a direct queue owns the runtime: not yet. */
+    if (rt->service.direct || rt->service.direct_request || rt->service.has_deferred ||
+        rt->service.controller.state != A733_NPU_READY) return 0;
+    struct npu_runtime_slot *s = &rt->slot[slot];
+    if (state(s) == NPU_RUNTIME_READY) return s->model == model ? 1 : -1;
+    if (state(s) != NPU_RUNTIME_EMPTY) return -1;
+    s->model = model; s->resident_load = 1; set_state(s, NPU_RUNTIME_LOADING);
+    for (unsigned waited = 0; state(s) == NPU_RUNTIME_LOADING && good(rt); ++waited) {
+        if (waited > 20000) return -1;          /* a graph takes about 15 ms; 20 s is a stuck worker */
+        xTaskNotifyGive(rt->service.worker);
+        vTaskDelay(1);
+    }
+    s->resident_load = 0;
+    if (state(s) != NPU_RUNTIME_READY || !good(rt)) return -1;
+    /* Workspace and padding initialize once, before any device can use them. */
+    memset((void *)s->read.cpu, 0, s->read.bytes);
+    memset((void *)s->write.cpu, 0, s->write.bytes);
+    return maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->read.cpu, s->read.bytes) &&
+        maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->write.cpu, s->write.bytes) ? 1 : -1;
+}
 int npu_runtime_register(struct npu_runtime *rt, const void *model, size_t bytes, unsigned *index)
 {
     if (!good(rt) || !rt->prepared || !index || !model || !bytes || bytes > NBG_MODEL_MAX_BYTES ||
@@ -902,11 +983,9 @@ int npu_runtime_register(struct npu_runtime *rt, const void *model, size_t bytes
     *index = n;
     return 1;
 }
-int npu_runtime_link_tensor(struct npu_runtime *rt, unsigned producer, unsigned output,
-                            unsigned consumer, unsigned input)
+static int link_checked(struct npu_runtime *rt, unsigned producer, unsigned output, unsigned consumer, unsigned input)
 {
-    if (!good(rt) || rt->bound || producer >= rt->slots || consumer >= rt->slots ||
-        producer == consumer || xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
+    if (producer >= rt->slots || consumer >= rt->slots || producer == consumer) return 0;
     struct npu_runtime_slot *p = &rt->slot[producer], *s = &rt->slot[consumer];
     if (state(p) != NPU_RUNTIME_READY || state(s) != NPU_RUNTIME_READY ||
         output >= p->layout.outputs || input >= s->layout.inputs) return 0;
@@ -942,6 +1021,27 @@ int npu_runtime_link_tensor(struct npu_runtime *rt, unsigned producer, unsigned 
     while (!npu_runtime_reference_step(rt, s)) { }
     return maintain(rt, AARCH64_CACHE_CLEAN, s->constant.cpu, s->constant.bytes) &&
         maintain(rt, AARCH64_CACHE_CLEAN, s->command.cpu, s->command.bytes);
+}
+int npu_runtime_link_tensor(struct npu_runtime *rt, unsigned producer, unsigned output,
+                            unsigned consumer, unsigned input)
+{
+    if (!good(rt) || rt->bound || xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
+    return link_checked(rt, producer, output, consumer, input);
+}
+/* Linking after the scheduler has started. The same re-assembly as before the start, allowed only while nothing can use
+ * the slots: the runtime is bound for a resident client, the caller is its client task, the service is open and has no
+ * request, no direct queue owner and no deferred work, the controller is idle, and every slot is loaded and idle. Those are
+ * the conditions npu_runtime_queue_claim needs next, so a queue open links first and claims after. */
+int npu_runtime_link_tensor_running(struct npu_runtime *rt, unsigned producer, unsigned output,
+                                    unsigned consumer, unsigned input)
+{
+    if (!good(rt) || !rt->bound || !rt->resident || !rt->service.runtime || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING ||
+        xTaskGetCurrentTaskHandle() != rt->slot[0].client || !rt->slot[0].opened || rt->slot[0].closed ||
+        rt->slot[0].pending || rt->service.direct || rt->service.direct_request || rt->service.has_deferred ||
+        rt->service.controller.state != A733_NPU_READY) return 0;
+    for (unsigned i = 0; i < rt->slots; ++i)
+        if (rt->slot[i].pending || state(&rt->slot[i]) != NPU_RUNTIME_READY) return 0;
+    return link_checked(rt, producer, output, consumer, input);
 }
 int npu_runtime_bind_irq(struct npu_runtime *rt, const struct npu_service_irq_ops *ops, void *cookie,
                          UBaseType_t route, unsigned idle_hint)
