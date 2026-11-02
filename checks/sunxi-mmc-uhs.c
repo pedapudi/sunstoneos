@@ -130,8 +130,10 @@ int main(void)
            h.card.uhs_outcome == SUNXI_MMC_UHS_SDR104 && h.card.sample_delay == 32);
     read_back(u, &h);
     want_sdr25 = want_reenter = 0;
+    /* A card whose every failing delay leaves the command stuck: the sweep resets the controller each time and gives up after 12 forced resets. */
+    want_reenter = 1; begin(u, &h, 3); want_reenter = 0; u->stuck_always = 1; faulted(u, &h, SUNXI_MMC_TIMEOUT);
     /* A card that fails the sweep the way the board's does: every kind of sampling error, including the FIFO run error. */
-    want_reenter = 1; begin(u, &h, 3); want_reenter = 0; u->tune_kinds = 5; u->s18a = 0; drive(u, &h);
+    want_reenter = 1; begin(u, &h, 3); want_reenter = 0; u->tune_kinds = 6; u->s18a = 0; drive(u, &h);
     assert(h.state == SUNXI_MMC_READY && h.card.uhs_outcome == SUNXI_MMC_UHS_SDR104 && h.card.sample_delay == 32);
     /* Both options are for the UHS-I profile, before open. */
     {

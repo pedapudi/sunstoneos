@@ -23,7 +23,7 @@ struct uhs {
     unsigned width, sdr, sdr104, sdr104_busy, set_refuses, cmd11_timeout, no_dat_low, no_dat_high;
     unsigned pending_done, no_cc, no_vsd, set_fails, bad_caps, fatal_delay, cmd19, cmd11, cmd6_uhs, cmd6_hs;
     unsigned window[2][2], s18r_seen, cmd11_before_cmd2, cid_seen, dat0_masked;
-    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18, tune_kinds;
+    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18, tune_kinds, stuck, stuck_always;
     uint64_t answered, gated, restarted, clock_started, done_delay;
 };
 static unsigned passes(struct uhs *u, unsigned d)
@@ -72,6 +72,7 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
 {
     struct uhs *u = v; struct model *m = &u->base;
     if (off == 4 && (value & (1u << 31))) u->dat0_masked = 1;
+    if (off == 0 && u->stuck && (value & 7)) { u->stuck = 0; m->reg[0x18/4] &= ~(1u << 31); }     /* a controller reset ends a stuck command */
     if (off != 0x18) return write32(m, off, value);
     unsigned cmd = value & 63, arg = m->reg[0x1c/4];
     if (value & (1u << 21)) {
@@ -143,11 +144,12 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
                 /* What a wrong sample point does on the board (the vendor kernel counts every one of these as a failed delay): a data CRC error,
                  * a wrong pattern with a clean CRC, no data, a FIFO run error (bit 11), start and end bit errors (bits 13 and 15). The kinds
                  * 3 and 4 were absent from the first model, and the core treated the FIFO run error as terminal. */
-                unsigned kind = u->tune_kinds ? d % u->tune_kinds : d % 3;
+                unsigned kind = u->stuck_always ? 5 : u->tune_kinds ? d % u->tune_kinds : d % 3;
                 if (kind == 0) m->reg[0x38/4] |= 1u << 7;      /* Data CRC error. */
                 else if (kind == 1) u->data[5] ^= 0x10;         /* Wrong pattern, clean CRC. */
                 else if (kind == 2) { m->reg[0x38/4] = 1u << 9; m->data_command = 0; m->fifo_total = 0; } /* No data. */
                 else if (kind == 3) m->reg[0x38/4] |= 1u << 11; /* FIFO run error. */
+                else if (kind == 5) { m->reg[0x38/4] |= 1u << 9; m->reg[0x18/4] |= 1u << 31; u->stuck = 1; } /* The command never completes: START stays set until the controller is reset. */
                 else m->reg[0x38/4] |= (1u << 13) | (1u << 15); /* Start and end bit errors. */
             }
         }

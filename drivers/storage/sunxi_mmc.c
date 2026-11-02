@@ -856,7 +856,7 @@ static void sd_clock(struct sunxi_mmc *h)
         ++h->sd_ios;return;
     case 2:
         if(uhs){
-            h->tuning=1;h->card.sample_delay=0;
+            h->tuning=1;h->tune_forced=0;h->card.sample_delay=0;
             if(!uhs_registers(h,1)||!fence(h)||!wr(h,0x18,UPDATE))return;
             ++h->sd_ios;return;
         }
@@ -968,7 +968,13 @@ static void sd_signal(struct sunxi_mmc *h)
 }
 /* After a failed CMD19: wait for the command and data state machines, reset
  * the FIFO and state machines, restore and verify the SDR104 registers, then
- * record the delay as failed. */
+ * record the delay as failed. A command that never completes at a bad sample
+ * delay is what the reset is for: after 10 ms the reset is made anyway (as the
+ * vendor driver resets the host after every failed tuning command), at most
+ * TUNE_FORCED_RESETS times in one sweep. The second SDR104 trial on 3-3 stopped
+ * at delay 12 or 13 with a TIMEOUT here, though the first one had recovered from
+ * the same delays. */
+#define TUNE_FORCED_RESETS 12u
 static void tune_recover(struct sunxi_mmc *h)
 {
     uint32_t v;
@@ -980,8 +986,9 @@ static void tune_recover(struct sunxi_mmc *h)
         if(!rd(h,0x18,&v)||!rd(h,0x3c,&h->result.status))return;
         if((v&START)||(h->result.status&BUSY)){
             if(!time_ok(h))return;
-            if(h->last_us-h->signal_us>=10000){fault(h,SUNXI_MMC_TIMEOUT);return;}
-            defer_command(h,100);return;
+            if(h->last_us-h->signal_us>=10000){
+                if(++h->tune_forced>TUNE_FORCED_RESETS){fault(h,SUNXI_MMC_TIMEOUT);return;}
+            }else{defer_command(h,100);return;}
         }
         if(!rd(h,0,&v)||!wr(h,0,v|7u))return;
         ++h->tune_recover;return;

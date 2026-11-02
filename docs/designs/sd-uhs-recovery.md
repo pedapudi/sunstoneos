@@ -422,6 +422,15 @@ Requests are 128 KiB from sector 0 on, so request n starts at n x 128 KiB; 32 re
 - **What this says.** The pattern follows the address (a slow first MiB, a fast 1 to 48 MiB, a slow 48 MiB onwards) and the time is independent of the bus speed: a card behaviour tied to regions of the flash translation or the card's read-ahead, which no address periodicity or fixed count explains. What it cannot separate is the card's cost per
   command (a read-ahead that does not carry across our CMD12 and next CMD18) from its cost per byte of media. The SDR25 64 MiB run was never made, so whether the slow zone is slow at 50 MHz is not known; only the first 4 MiB were read there.
 
+### Request-pattern experiment, first submission (entry `1793650854687556052-db9aee9e`): stopped in the sweep, before any phase
+
+Stop word `0x8a071c06`, site 3, decoded with the identification layout: platform stage 14, source line 552, core error 3 (TIMEOUT), core protocol step 32 (`P_SD_TUNE_RECOVER`), sample delay reached
+12 or 13. The sweep had reached its first failing delays and the recovery after a failed CMD19 waited more than 10 ms for the command or data state machine to finish, then gave up with TIMEOUT.
+The previous trial recovered from the same delays (10 to 15 failed there), so the controller's behaviour at the marginal delays is not repeatable: sometimes the command never completes.
+The recovery was written to wait politely and reset afterwards; the vendor driver resets the host after every failed tuning command. The host model now has a failing delay that leaves the
+command stuck until a controller reset; the old recovery times out on it as the board's did, and the recovery now forces the reset after 10 ms (at most 12 times in a sweep, then TIMEOUT).
+No phase ran and no report exists. The card is at 1.8 V (the lifetime never closed), the bank was at 1.8 V until the watchdog reset, the board returned to FEL.
+
 ### Request-pattern experiment (approved, one run)
 
 One lifetime, re-entry then SDR104 as before (`--uhs-mode 3`), then eight phases over the slow zone and controls (`--phase FIRST:BLOCKS:READS[:quick]`; `quick` skips the per-request CRC and the progress call
