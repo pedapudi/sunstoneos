@@ -7,6 +7,7 @@
 #include <stdlib.h>
 static unsigned fixture_cpu, fixture_sgi[configNUMBER_OF_CORES], fixture_locks;
 static unsigned fixture_cleanup, fixture_task_masks, fixture_isr_masks;
+static UBaseType_t fixture_api_mask[configNUMBER_OF_CORES];
 void ssFixtureCleanup(void *task) { assert(task); ++fixture_cleanup; }
 static unsigned fixture_ready_count[SS_OWNER_SLOTS], fixture_ready_cpu[SS_OWNER_SLOTS];
 static TaskHandle_t fixture_ready_watch;
@@ -19,10 +20,29 @@ void platform_panic(const char *file, unsigned line)
 uint64_t ssFixtureTaskRegister(void) { return (uintptr_t)pxCurrentTCBs[fixture_cpu]; }
 uint8_t ucPortGetCoreID(void) { return (uint8_t)fixture_cpu; }
 uint8_t ucPortGetCoreIDFromIsr(void) { return (uint8_t)fixture_cpu; }
-UBaseType_t uxPortSetInterruptMask(void) { ++fixture_task_masks; return 0; }
-UBaseType_t uxPortSetInterruptMaskFromISR(void) { ++fixture_isr_masks; return 0; }
-void vPortClearInterruptMask(UBaseType_t mask) { (void)mask; }
-void vPortClearInterruptMaskFromISR(UBaseType_t mask) { (void)mask; }
+UBaseType_t uxPortSetInterruptMask(void)
+{
+    ++fixture_task_masks;
+    UBaseType_t previous = fixture_api_mask[fixture_cpu];
+    fixture_api_mask[fixture_cpu] = 1;
+    return previous;
+}
+UBaseType_t uxPortSetInterruptMaskFromISR(void)
+{
+    ++fixture_isr_masks;
+    UBaseType_t previous = fixture_api_mask[fixture_cpu];
+    fixture_api_mask[fixture_cpu] = 1;
+    return previous;
+}
+void vPortClearInterruptMask(UBaseType_t mask)
+{
+    /* Reopening API IRQs here would permit IRQExit to reenter this owner's
+     * partially completed control maintenance, as the real QEMU run did. */
+    assert(mask || !ssKernelCPUs[fixture_cpu].control_draining);
+    fixture_api_mask[fixture_cpu] = mask;
+}
+void vPortClearInterruptMaskFromISR(UBaseType_t mask)
+{ vPortClearInterruptMask(mask); }
 void vPortRecursiveLock(uint8_t cpu, ePortRTOSLock lock, BaseType_t acquire)
 {
     (void)cpu;

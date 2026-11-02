@@ -576,6 +576,9 @@ static void ssKernelExpired(void *context, const struct ss_deadline_result *resu
 }
 static void ssKernelService(void)
 {
+    /* IRQ return and SVC selection share this owner. Keep API interrupts
+     * masked across control maintenance, activation and deadline updates. */
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
     ssKernelControlDrain();
@@ -591,6 +594,7 @@ static void ssKernelService(void)
     uint64_t next;
     if ((ss_deadline_next(&cpu->deadlines, &next) && next <= ssKernelNow()) ||
         ss_owner_has_pending(&cpu->run)) ssKernelForce(c);
+    portCLEAR_INTERRUPT_MASK(irq);
 }
 static bool ssKernelDispatch(void *context, unsigned cpu)
 {
@@ -844,9 +848,12 @@ static bool ssKernelObjectPrepared(struct ssKernelTask *s,
 }
 static void ssKernelControlDrain(void)
 {
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
-    configASSERT(!cpu->critical_depth && !cpu->isr_depth && !cpu->control_draining);
+    configASSERT(!cpu->critical_depth);
+    configASSERT(!cpu->isr_depth);
+    configASSERT(!cpu->control_draining);
     /* Object unlock flushes publications. Keep deferred command consumption
      * outside this whole maintenance interval so its final ack cannot retire
      * a descriptor still referenced by the unlocked repair batch. */
@@ -882,6 +889,7 @@ static void ssKernelControlDrain(void)
     /* Repair completion can now be acknowledged without acquiring I in FIFO. */
     ss_control_drain(&ssKernelControl, c);
     cpu->control_draining = false;
+    portCLEAR_INTERRUPT_MASK(irq);
 }
 static void ssKernelWait(unsigned slot, uint64_t sequence)
 {
