@@ -828,28 +828,28 @@ def main():
     # memory behind it holds a pattern before the boot; the heap must reach the application zeroed.
     stale = bytes([0xa5]) * (8 << 20)
     heap_input = lambda mode: struct.pack('<Q', mode) + bytes(4088)
-    c = run_case('heap-from-ledger', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x80000000, stale)])
+    c = run_case('heap-from-ledger', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x50000000, stale)])
     c.clean()
     admitted = lines(c.output, 'LARGE-ADMITTED')
-    c.require(len(admitted) == 1 and (int(admitted[0]['base'], 16), int(admitted[0]['bytes'], 16)) == (0x80000000, 8 << 20)
+    c.require(len(admitted) == 1 and (int(admitted[0]['base'], 16), int(admitted[0]['bytes'], 16)) == (0x50000000, 8 << 20)
               and admitted[0]['state'] == '2' and admitted[0]['asid'] == '1',
               'heap admission differs: %s' % [a['line'] for a in admitted])
     c.require(c.finished is not None and c.finished['status'] == '1', 'the heap application did not finish')
     tag, base, size, peak, error = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
-    c.require(tag == 0x48454150204f4b and base == 0x80000000 and size == 8 << 20 and peak == 8 << 20 and error == 12,
+    c.require(tag == 0x48454150204f4b and base == 0x50000000 and size == 8 << 20 and peak == 8 << 20 and error == 12,
               'heap result tag %#x base %#x bytes %#x peak %#x errno %d' % (tag, base, size, peak, error))
     # A task that is in no application space creates a task: the child stays out, and its read of the heap is a
     # permission fault at the first byte.
-    c = run_case('heap-other-space-faults', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(1), '4G', [(0x80000000, stale)])
+    c = run_case('heap-other-space-faults', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(1), '4G', [(0x50000000, stale)])
     c.failed_with('APPLICATION', 0xe24)
-    c.require(int(c.failure['value'], 16) == 0x80000000 and int(c.failure['site'], 16) == 0x800d4e24,
+    c.require(int(c.failure['value'], 16) == 0x50000000 and int(c.failure['site'], 16) == 0x800e4e24,
               'heap fault address %s, site %s' % (c.failure['value'], c.failure['site']))
     # The application's own space ends at the heap: the next byte is a kernel block, a permission fault.
-    c = run_case('heap-end-faults', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(2), '4G', [(0x80000000, stale)])
+    c = run_case('heap-end-faults', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(2), '4G', [(0x50000000, stale)])
     c.failed_with('APPLICATION', 0xe24)
-    c.require(int(c.failure['value'], 16) == 0x80800000, 'the byte after the heap faults at %s' % c.failure['value'])
+    c.require(int(c.failure['value'], 16) == 0x50800000, 'the byte after the heap faults at %s' % c.failure['value'])
     # A worker attached to the application's space writes the heap and the main task reads it.
-    c = run_case('heap-worker-shares', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(3), '4G', [(0x80000000, stale)])
+    c = run_case('heap-worker-shares', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(3), '4G', [(0x50000000, stale)])
     c.clean()
     tag, base, size, peak, fold = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
     expected_fold = 0
@@ -857,13 +857,13 @@ def main():
         expected_fold ^= (0x9e3779b97f4a7c15 * (i + 1)) & (2 ** 64 - 1)
     c.require(tag == 0x48454150204f4b and fold == expected_fold and peak == 1, 'worker result %#x fold %#x, expected %#x; writer shares the main task tag: %d' % (tag, fold, expected_fold, peak))
     # A task of a task of the application creates a task that writes the heap: no call puts any of them in the space.
-    c = run_case('heap-grandchild-shares', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(4), '4G', [(0x80000000, stale)])
+    c = run_case('heap-grandchild-shares', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(4), '4G', [(0x50000000, stale)])
     c.clean()
     tag, base, size, peak, fold = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
     c.require(tag == 0x48454150204f4b and fold == expected_fold and peak == 1, 'grandchild result %#x fold %#x, expected %#x; writer shares the main task tag: %d' % (tag, fold, expected_fold, peak))
     # The linked heap has handed out a byte before the admission, as a static constructor that calls malloc would
     # make it: the heap of the ledger cannot replace it, so the application does not start.
-    c = run_case('heap-after-early-sbrk', heap_early_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x80000000, stale)])
+    c = run_case('heap-after-early-sbrk', heap_early_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x50000000, stale)])
     c.require(c.main is None and c.failure is not None, 'the application started although the linked heap was already in use')
     # The OS gives the main task its usb-ready and live-state notifications while the main task sleeps in the deadline
     # wait and in ss_host_recv: each ends at its own condition (the deadline; the timeout), not at the OS's notification.

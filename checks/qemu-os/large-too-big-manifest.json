@@ -37,7 +37,7 @@
     },
     {
       "name": "c",
-      "bytes": 67108864,
+      "bytes": 1073741824,
       "source_bytes": 1048576,
       "file": "/c.bin",
       "sha256": "a0ab21dca50740b257c495faa888058cb757ec5165d27afb0c13cc5bef48eabd"
