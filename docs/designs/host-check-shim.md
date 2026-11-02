@@ -1,7 +1,5 @@
 # Host check shim
 
-# Host check shim
-
 Status: **implemented**. This is host-only test infrastructure. It runs the unmodified FreeRTOS kernel and SunstoneOS compilation units on the build machine with virtual time, and no board is involved, so it qualifies nothing on a board.
 
 ## Purpose
