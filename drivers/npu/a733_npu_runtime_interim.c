@@ -94,7 +94,7 @@ int npu_runtime_check_step(struct npu_runtime *rt, struct npu_runtime_slot *s)
     return s->crc == s->readonly_crc ? 1 : -1;
 }
 
-/* The controller fetches A733_NPU_FETCH_BYTES from the command address at
+/* The controller fetches the whole command allocation (at most A733_NPU_FETCH_BYTES) from the command address at
  * every trigger, so every byte after the stream must still be an END pair. */
 int npu_runtime_stream_intact(struct npu_runtime *rt, struct npu_runtime_slot *s)
 {
@@ -105,12 +105,12 @@ int npu_runtime_stream_intact(struct npu_runtime *rt, struct npu_runtime_slot *s
         crc = npu_runtime_crc32c(crc, (const void *)spans[i].cpu, spans[i].bytes);
         rt->counters.address_bytes += spans[i].bytes;
     }
-    if (crc != s->address_crc || (s->stream_bytes & 7) || s->stream_bytes > A733_NPU_FETCH_BYTES) return 0;
+    if (crc != s->address_crc || (s->stream_bytes & 7) || s->stream_bytes > s->command.bytes) return 0;
     typedef uint64_t __attribute__((may_alias)) pair;
     const pair *tail = (const pair *)s->command.cpu;
     uint64_t differ = 0;
-    for (size_t i = s->stream_bytes / 8; i < A733_NPU_FETCH_BYTES / 8; ++i)
+    for (size_t i = s->stream_bytes / 8; i < s->command.bytes / 8; ++i)
         differ |= tail[i] ^ UINT64_C(0x10000000);
-    rt->counters.tail_bytes += A733_NPU_FETCH_BYTES - s->stream_bytes;
+    rt->counters.tail_bytes += s->command.bytes - s->stream_bytes;
     return !differ;
 }

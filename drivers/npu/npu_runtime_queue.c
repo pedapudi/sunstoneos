@@ -12,7 +12,6 @@
  * value come from the same descriptor. */
 #define NPU_REG_COMMAND_ADDRESS UINT32_C(0x654)
 #define NPU_REG_COMMAND_FETCH UINT32_C(0x3a4)
-#define NPU_COMMAND_FETCH_TRIGGER UINT32_C(0x1ffff)
 #define NPU_REG_EVENTS UINT32_C(0x010)
 static void power_owner(void *);
 static struct npu_runtime_queue *creating_power;
@@ -87,7 +86,7 @@ static int start(void *cookie, const struct a733_npu_command *c, uint64_t timeou
     if (!window(q)) return 0;
     a733_mmio_write32_dsb_sy_after(base + NPU_REG_COMMAND_ADDRESS, c->device);
     if (!window(q)) return 0;
-    a733_mmio_write32_dsb_sy_after(base + NPU_REG_COMMAND_FETCH, NPU_COMMAND_FETCH_TRIGGER);
+    a733_mmio_write32_dsb_sy_after(base + NPU_REG_COMMAND_FETCH, a733_npu_fetch_word(c->readable_bytes));
 #ifdef SUNSTONE_NPU_QUEUE_TIMING
     q->runtime->doorbell_ticks = ticks();
 #endif

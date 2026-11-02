@@ -593,7 +593,9 @@ int main(int argc, char **argv)
     model.regs[0x30 / 4] = 0x1000003b; model.regs[0x28 / 4] = 0x20240101; model.regs[1] = IDLE;
     model.masked = 1;
     session_record.npu.jobs = long_run ? 1 : 64;
-    const struct npu_runtime_bounds bounds = {mode == 29 ? 2u : 0u, 16384, 65536};
+    /* NPU_BOUNDS=capacity,graph_bytes,tensor_bytes reserves for graphs registered later (case 29 sets its own). */
+    struct npu_runtime_bounds bounds = {mode == 29 ? 2u : 0u, 16384, 65536};
+    if (getenv("NPU_BOUNDS")) sscanf(getenv("NPU_BOUNDS"), "%u,%zu,%zu", &bounds.capacity, &bounds.graph_bytes, &bounds.tensor_bytes);
     if (mode == 29) registered_case = 1;
     const unsigned slots = mode == 28 ? NPU_RUNTIME_SLOTS : 1; /* case 28: the 31 slots of the command mask */
     const size_t need = npu_runtime_requirements_with(os_npu_models, os_npu_model_count, slots, &bounds);
@@ -625,6 +627,9 @@ int main(int argc, char **argv)
             assert(walk_tables((uint32_t)sl->constant.device, 0) == 1 && walk_tables((uint32_t)sl->write.device, 1) == 1);
         }
         assert(npu_runtime_reservation(os_npu_models, os_npu_model_count, 32, UINT64_MAX >> 1, &(size_t){0}) == NPU_DECLARATION_SLOTS);
+        /* The command allocation is the largest resident graph's stream rounded to a page, not the 512 KiB hardware bound. */
+        for (unsigned i = 0; i < 31; ++i)
+            assert(npu.runtime.slot[i].command.bytes < NPU_RUNTIME_COMMAND_BYTES && !(npu.runtime.slot[i].command.bytes & 4095));
         printf("31 slots: %zu bytes reserved, %u buffers registered, the tables at the start\n", need,
                (unsigned)npu.runtime.native.memory.count);
         return 0;

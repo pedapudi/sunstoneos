@@ -120,8 +120,11 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p, int
     }
     p->command_body_bytes = (uint32_t)body;
     uint32_t command_bytes = p->command_body_bytes + (uint32_t)sizeof(footer);
-    uint64_t fetch = A733_NPU_FETCH_BYTES;
-    if (fetch < command_bytes) fetch = command_bytes;
+    /* The allocation holds the stream and an END pair after it, rounded to a page; the hardware field's limit,
+     * A733_NPU_FETCH_BYTES, bounds it. */
+    uint64_t fetch = (uint64_t)command_bytes + 64;
+    if (fetch < A733_NPU_MIN_COMMAND_BYTES) fetch = A733_NPU_MIN_COMMAND_BYTES;
+    if (fetch > A733_NPU_FETCH_BYTES) return 0;
     /* A graph of shader operations only has no neural-network record; its slot then holds one unused page. */
     const uint32_t nn_bytes = m->sections[NBG_NN].bytes ? m->sections[NBG_NN].bytes : 192;
     if (!requirement(&p->buffers[NBG_ALLOC_NN], nn_bytes, nn_bytes) ||

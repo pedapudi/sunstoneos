@@ -144,7 +144,41 @@ void platform_tick_ack(void) {
     next_tick += tick_interval;
     __asm__ volatile("msr cntp_cval_el0, %0\n isb" :: "r"(next_tick) : "memory");
 }
+#ifdef SS_STORM
+/* An interrupt above the API mask at a high rate on every core (the control class of the robot design). Its
+ * handler calls no kernel function; the kernel's interrupt exit still runs after it. */
+#define STORM_IRQ 27U
+uint32_t ss_storm_count[8];
+static uint64_t storm_next[8], storm_period;
+static unsigned storm_armed[8];
+static void storm_arm(void) {
+    unsigned c = core();
+    uintptr_t s = GICR + c * 0x20000 + 0x10000;
+    storm_period = frequency() / 30000;
+    *(volatile uint8_t *)(s + 0x400 + STORM_IRQ) = (configMAX_API_CALL_INTERRUPT_PRIORITY - 1) << portPRIORITY_SHIFT;
+    write32(s + 0x100, 1U << STORM_IRQ);
+    __asm__ volatile("dsb sy" ::: "memory");
+    storm_next[c] = counter() + storm_period;
+    uint64_t on = 1;
+    __asm__ volatile("msr cntv_cval_el0, %0\n msr cntv_ctl_el0, %1\n isb" :: "r"(storm_next[c]), "r"(on) : "memory");
+    storm_armed[c] = 1;
+}
+#endif
 void vApplicationIRQHandler(uint64_t interrupt) {
+#ifdef SS_STORM
+    {
+        unsigned c = core();
+        if (interrupt == STORM_IRQ && storm_armed[c]) {
+            uint64_t now = counter();
+            storm_next[c] += storm_period;
+            if (storm_next[c] <= now) storm_next[c] = now + storm_period / 2;
+            __asm__ volatile("msr cntv_cval_el0, %0\n isb" :: "r"(storm_next[c]) : "memory");
+            ++ss_storm_count[c];
+            return;
+        }
+        if (!storm_armed[c]) storm_arm();
+    }
+#endif
     if (interrupt == TIMER_IRQ) FreeRTOS_Tick_Handler();
     else if (interrupt == 0) FreeRTOS_SGI_Handler();
     else if (interrupt < 1020) platform_panic("unexpected interrupt", interrupt);

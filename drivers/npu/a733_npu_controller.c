@@ -83,7 +83,7 @@ static int duration(uint64_t timeout)
 static int command_valid(const struct a733_npu_command *cmd)
 {
     return cmd && cmd->token && cmd->device && !(cmd->device & 63u) &&
-        cmd->readable_bytes >= A733_NPU_FETCH_BYTES &&
+        cmd->readable_bytes >= A733_NPU_MIN_COMMAND_BYTES && !(cmd->readable_bytes & 7) &&
         cmd->readable_bytes <= (UINT64_C(1) << 32) - cmd->device &&
         ((uint64_t)cmd->device + cmd->readable_bytes <= SRAM_BASE || cmd->device >= SRAM_BASE + 0x80000u);
 }
@@ -108,7 +108,7 @@ static int trigger(struct a733_npu_controller *c)
 {
     if (!deadline(c) || !write_reg(c, 0x654, c->job.device)) return 0;
     c->ops.barrier(c->cookie);
-    return write_reg(c, 0x3a4, 0x1ffff);
+    return write_reg(c, 0x3a4, a733_npu_fetch_word(c->job.readable_bytes));
 }
 /* Before the bootstrap trigger only: the programmed configuration, full idle
  * and no pending event. */
