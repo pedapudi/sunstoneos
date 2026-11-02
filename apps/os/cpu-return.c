@@ -153,6 +153,15 @@ static int failure_claim(unsigned context,uint32_t site,uint32_t value,const voi
     if(!epoch&&before_scheduler)epoch=a733_cached_runtime[0].epoch;
     os_application_failed(&record,epoch,board.session.generation);
     atomic_store_explicit(&failing,1,memory_order_release);
+#ifdef SUNSTONE_A733_OS_NPU
+    /* The host validates the NPU stop report of every failure return. Before the
+     * scheduler no NPU task can run, so a service that has not run (a refusal
+     * in os_npu_start, or a failure before it) publishes that nothing was
+     * started. After the scheduler started, the service's own client publishes
+     * the report when it stops; a bootstrap task that has not run yet could still
+     * power the NPU, so no such report is made here. */
+    if(before_scheduler)os_npu_report_unstarted(epoch,board.session.generation);
+#endif
     if(!before_scheduler)return 1;
     atomic_store_explicit(&prefail,1,memory_order_release);
     atomic_store_explicit(&ready,1,memory_order_release);

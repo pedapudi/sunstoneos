@@ -10,6 +10,8 @@ for an image whose link check records the NPU profile.
 classify() keeps the outcomes apart:
 
 - 'pending': the client has not published its report yet;
+- 'never-started': a failure return before the NPU service ran published finished=2:
+  nothing was powered or submitted, and nothing is retained;
 - 'matched': the built-in client compared every output with its linked reference;
 - 'completed': the SDK copied the selected number of outputs and stopped;
   the application supplies numerical evidence separately;
@@ -32,8 +34,11 @@ FIELDS = ('magic', 'version', 'bytes', 'finished', 'epoch', 'generation', 'model
 LAYOUT = '<4I2Q10I'
 
 
-def decode(raw, epoch, generation):
-    """The report's fields; raises ValueError for another layout or session."""
+def decode(raw, epoch, generation, never_started=False):
+    """The report's fields; raises ValueError for another layout or session.
+
+    never_started accepts finished=2, the report of a failure return before the
+    NPU service ran (apps/os/npu.h): stopped=1, retained=0, nothing else set."""
     raw = bytes(raw)
     if len(raw) != REPORT_BYTES:
         raise ValueError('NPU report size differs.')
@@ -44,6 +49,12 @@ def decode(raw, epoch, generation):
         raise ValueError('Not an NPU report.')
     if (r['epoch'], r['generation']) != (epoch, generation):
         raise ValueError('NPU report names another session.')
+    if never_started and r['finished'] == 2:
+        if (r['stopped'], r['retained']) != (1, 0) or any(r[k] for k in FIELDS[6:] if k not in ('retained', 'stopped')) \
+                or any(raw[72:]):
+            raise ValueError('A never-started NPU report carries results or retention.')
+        r['mode'] = 'never-started'
+        return r
     flags = ('finished', 'refused', 'retained', 'stopped')
     if any(r[k] not in (0, 1) for k in flags):
         raise ValueError('Invalid NPU report flag.')
@@ -67,6 +78,8 @@ def classify(report):
     """One outcome per report; numerical mismatch never hides a retention."""
     if not report['finished']:
         return 'pending'
+    if report['finished'] == 2:
+        return 'never-started'
     if report['retained']:
         return 'retained'
     if report['mismatches']:
