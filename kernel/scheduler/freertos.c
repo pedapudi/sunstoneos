@@ -129,6 +129,9 @@ static struct ssKernelTask *ssKernelCurrent(void)
 }
 static bool ssKernelCanPreempt(void)
 {
+    /* Boot-time controls can mark ready work before a task owns SP_EL0.
+     * The first-task restore establishes that stack before ordinary yields. */
+    if (!xSchedulerRunning) return false;
 #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
     TCB_t *task = ssKernelSelf();
     if (task && task->xPreemptionDisable) {
@@ -1275,6 +1278,20 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
     struct ssKernelMutation mutation = { .command = command, .argument = argument, .slot = pin.slot };
     uint64_t sequence = ss_control_publish(&ssKernelControl, pin.slot, ssKernelMutate, &mutation);
     bool changed = mutation.changed;
+    if (!xSchedulerRunning) {
+        /* Boot has no running owner on another CPU and no task stack to save.
+         * The boot CPU initializes every owner's queue until startup. Remove
+         * changed tasks until owner maintenance applies their controls and
+         * makes them ready; a bounded drain can leave other controls pending. */
+        struct ssKernelTask *task = &ssKernelTasks[pin.slot];
+        unsigned owner = atomic_load_explicit(&task->owner, memory_order_relaxed);
+        configASSERT(task->off_cpu);
+        if (changed && task->ready.queued)
+            configASSERT(ss_owner_remove(&ssKernelCPUs[owner].run, &task->ready));
+        ss_kernel_handle_put(&pin);
+        if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
+        return changed;
+    }
     bool self = handle == current;
     unsigned slot = pin.slot;
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
@@ -1402,6 +1419,11 @@ static unsigned ssKernelPriority(TaskHandle_t handle, bool base)
     if (!ss_kernel_handle_pin(&ssKernelRegistry, handle, &pin)) { portCLEAR_INTERRUPT_MASK(irq); return 0; }
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
     unsigned priority = atomic_load_explicit(base ? &s->base : &s->effective, memory_order_acquire);
+    if (!xSchedulerRunning) {
+        struct ss_control_state desired;
+        ss_control_snapshot(&ssKernelControl, pin.slot, &desired);
+        priority = base ? desired.priority : desired.effective_priority;
+    }
     ss_kernel_handle_put(&pin);
     portCLEAR_INTERRUPT_MASK(irq);
     return priority;
@@ -1452,7 +1474,7 @@ static BaseType_t ssKernelResumeAll(void)
     configASSERT(ssKernelCPUs[c].preempt);
     --ssKernelCPUs[c].preempt;
     yield |= ssKernelCPUs[c].reschedule;
-    yield &= ssKernelCPUs[c].preempt == 0;
+    yield &= xSchedulerRunning && ssKernelCPUs[c].preempt == 0;
     portCLEAR_INTERRUPT_MASK(irq);
     if (yield && ssKernelCanPreempt()) portYIELD();
     return yield ? pdTRUE : pdFALSE;

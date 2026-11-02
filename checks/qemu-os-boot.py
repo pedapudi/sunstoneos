@@ -101,8 +101,11 @@ class Image:
     Objects are shared between the images of one run when their source and
     flags are the same."""
 
-    def __init__(self, work, services_source=None, extra_defines=(), extra_sources=(), latency=False, resident=False):
+    def __init__(self, work, services_source=None, extra_defines=(), extra_sources=(), latency=False, resident=False,
+                 partitioned=False):
         self.work = Path(work)
+        # False, True, or the directory holding a replacement kernel/scheduler/freertos.c.
+        self.partitioned = partitioned
         self.extra_sources = list(extra_sources)
         self.latency = latency
         self.services_source = Path(services_source) if services_source else ROOT / 'apps/os/services.c'
@@ -137,15 +140,34 @@ class Image:
         else:
             for name, source in (('port.c', 'port-priv.c'), ('portASM.S', 'portASM-gpu.S'), ('portmacro.h', 'portmacro-base.h')):
                 shutil.copy(k / source, k / name)
-        self.patch(k / 'tasks.c', self.kernel / 'tasks.c', 'freertos-smp-tasks.patch')
+        if not self.partitioned:
+            self.patch(k / 'tasks.c', self.kernel / 'tasks.c', 'freertos-smp-tasks.patch')
+            return k
+        # The private owner scheduler (cmake/scheduler-partitioned.cmake, sunstone_scheduler_partitioned_prepare).
+        self.patch(k / 'tasks-smp.c', self.kernel / 'tasks.c', 'freertos-smp-tasks.patch')
+        include = k / 'include'
+        include.mkdir(exist_ok=True)
+        for header in (self.kernel / 'include').glob('*.h'):
+            shutil.copy(header, include / header.name)
+        self.patch(include / 'FreeRTOS.h', self.kernel / 'include/FreeRTOS.h', 'freertos-partitioned-layout.patch')
+        self.patch(k / 'tasks-layout.c', k / 'tasks-smp.c', 'freertos-partitioned-tasks.patch')
+        self.patch(k / 'tasks.c', k / 'tasks-layout.c', 'freertos-partitioned-api.patch')
+        self.patch(k / 'portASM-owner.S', k / 'portASM.S', 'freertos-partitioned-port-asm.patch')
+        shutil.copy(k / 'portASM-owner.S', k / 'portASM.S')
+        for name in ('queue', 'event_groups', 'stream_buffer', 'timers'):
+            shutil.copy(self.kernel / (name + '.c'), k / (name + '.c'))
+        done = run(['patch', '--fuzz=0', '--reject-file=-', '-d', k, '-p0', '-i',
+                    ROOT / 'patches/freertos-partitioned-objects.patch'], self.log)
+        assert done.returncode == 0, 'patch failed: freertos-partitioned-objects.patch\n' + done.stdout + done.stderr
         return k
 
     def includes(self, generated):
         sources = CACHE / 'sources/radio/stacks'
         tcp = [d for d in sorted(sources.glob('FreeRTOS-Plus-TCP-*')) if d.is_dir()][0]
         rsn = [d for d in sorted(sources.glob('wpa_supplicant-*')) if d.is_dir()][0]
+        first = [*([Path(self.partitioned)] if self.partitioned is not True else []), ROOT / 'kernel/scheduler', self.work / 'freertos/include'] if self.partitioned else []
         return ['-I' + str(p) for p in (
-            generated, ROOT / 'platform/qemu-os', ROOT / 'apps/os', ROOT / 'apps/board',
+            *first, generated, ROOT / 'platform/qemu-os', ROOT / 'apps/os', ROOT / 'apps/board',
             ROOT / 'platform/a733-smp-cached', ROOT / 'include', ROOT / 'runtime/include',
             self.kernel / 'include', self.work / 'freertos', ROOT / 'network/include',
             tcp / 'source/include', tcp / 'source/portable/Compiler/GCC', rsn / 'src', rsn / 'src/utils')] + [
@@ -154,6 +176,8 @@ class Image:
     def compile_all(self, units, generated):
         self.work.mkdir(parents=True, exist_ok=True)
         flags = CFLAGS + self.defines + self.includes(generated)
+        if self.partitioned:
+            flags += ['-DconfigSS_PARTITIONED_SCHEDULER=1', '-march=armv8.1-a+lse']
         objects, jobs = [], []
         for source, extra in units:
             source = Path(source)
@@ -203,7 +227,12 @@ class Image:
                  for s in OS_SOURCES + DRIVER_SOURCES + BOARD_SOURCES + self.extra_sources]
         units += app_units
         units += [(k / 'tasks.c', ()), (k / 'port.c', ('-Dnpu_service_task_privileged=a733_storage_native_task_privileged',)),
-                  (k / 'portASM.S', ()), (self.kernel / 'queue.c', ()), (self.kernel / 'list.c', ())]
+                  (k / 'portASM.S', ()), (k / 'queue.c' if self.partitioned else self.kernel / 'queue.c', ()),
+                  (self.kernel / 'list.c', ())]
+        if self.partitioned:
+            units += [(k / name, ()) for name in ('event_groups.c', 'stream_buffer.c', 'timers.c')]
+            units += [(ROOT / 'kernel/scheduler' / name, ()) for name in
+                      ('owner.c', 'notification.c', 'deadline.c', 'freertos_registry.c', 'freertos_control.c')]
         units = [(self.services_source if u[0] == ROOT / 'apps/os/services.c' else u[0], u[1]) for u in units]
         objects = self.compile_all(units, generated)
         elf = self.work / 'os.elf'
@@ -354,7 +383,7 @@ def lines(output, tag):
 # ---------------------------------------------------------------------------
 # Cases
 
-FAILURES = ('PANIC', 'EXCEPTION', 'TIMEOUT', 'FAILURE-RECORD', 'STOP')
+FAILURES = ('PANIC', 'EXCEPTION', 'TIMEOUT', 'FAILURE-RECORD', 'STOP', 'SP-EL0-VIOLATION')
 
 
 class Case:
@@ -408,6 +437,24 @@ def reverted_services(work):
     return path
 
 
+def unguarded_prestart_scheduler(work):
+    """The directory of a kernel/scheduler/freertos.c from before the owner scheduler refused to
+    yield or wait for an owner while the scheduler is not running (round 10 of the series).
+    The board's first task changes its core affinity before the start; the old file then marks
+    its own core for rescheduling and yields before any task stack is installed in SP_EL0."""
+    source = (ROOT / 'kernel/scheduler/freertos.c').read_text()
+    guard = '    if (!xSchedulerRunning) return false;\n'
+    assert source.count(guard) == 1, 'ssKernelCanPreempt no longer refuses to yield before the start'
+    source = source.replace(guard, '')
+    begin = source.index('    if (!xSchedulerRunning) {\n        /* Boot has no running owner')
+    end = source.index('        return changed;\n    }\n', begin) + len('        return changed;\n    }\n')
+    source = source[:begin] + source[end:]
+    directory = Path(work)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / 'freertos.c').write_text(source)
+    return directory
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
@@ -437,6 +484,20 @@ def main():
                                          ROOT / 'apps/latency/manifest.json')
         return image.build(application)
 
+    def build_partitioned(name, latency=False, scheduler=True):
+        """The same board composition on the private owner scheduler (configSS_PARTITIONED_SCHEDULER)."""
+        if latency:
+            image = Image(out / name, extra_defines=['-DA733_A76_ADMITTED=1', '-DSUNSTONE_LATENCY=1'],
+                          extra_sources=['apps/os/cpu.c', 'drivers/clock/a733_cpu_clock.c', 'runtime/latency.c',
+                                         'runtime/latency_irq.c'], latency=True, partitioned=scheduler)
+            application = image.application('latency', ['apps/latency/native.c', 'apps/latency/workload.c'],
+                                             ROOT / 'apps/latency/manifest.json')
+        else:
+            image = Image(out / name, partitioned=scheduler)
+            application = image.application('hello-compute', ['apps/hello-compute/main.c'],
+                                             ROOT / 'apps/hello-compute/manifest.json')
+        return image.build(application)
+
     def build_el0_abort():
         image = Image(out / 'build-el0-abort')
         application = image.application('el0-abort', ['checks/qemu-os/el0-abort-main.c'],
@@ -449,15 +510,20 @@ def main():
                                          ROOT / 'apps/hello-compute/manifest.json')
         return image.build(application)
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    old_scheduler = unguarded_prestart_scheduler(out / 'prestart-yield-scheduler')
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        partitioned_elf = pool.submit(build_partitioned, 'build-partitioned')
+        partitioned_latency_elf = pool.submit(build_partitioned, 'build-partitioned-latency', True)
+        prestart_elf = pool.submit(build_partitioned, 'build-prestart-yield', False, old_scheduler)
         os_elf = pool.submit(build_hello, 'build-os', args.services_source)
         (out / 'build-reverted').mkdir()
         control_elf = pool.submit(build_hello, 'build-reverted-services', reverted_services(out / 'build-reverted'))
         latency_elf = pool.submit(build_latency)
         resident_elf = pool.submit(build_resident)
         el0_elf = pool.submit(build_el0_abort)
-        os_elf, control_elf, latency_elf, resident_elf, el0_elf = (
-            os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result())
+        os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf = (
+            os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result(),
+            partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result())
     built = time.monotonic() - started
 
     def run_case(name, elf, scenario_bytes, input_bytes=data):
@@ -560,11 +626,35 @@ def main():
     c.require(state and state[0]['state'] == '3', 'the faulting task is not suspended: %s' % state)
     c.require(c.finished is None, 'the application went on past the fault')
 
+    # 9. The private owner scheduler on the same board. The board's first task changes its core
+    # affinity before the scheduler starts, and the cores enter with an SP_EL0 that lies in the
+    # read-only code block (platform/qemu-os/start.S). The vectors check SP_EL0 at every exception
+    # taken from a task, which is where the port saves a context: it must lie in a task stack.
+    c = run_case('partitioned-normal-start', partitioned_elf, scenario(usb_ready_ms=usb_delay_ms))
+    c.clean()
+    c.require(c.main is not None and c.main['name'] == 'hello-compute' and c.main['live'] == '1'
+              and c.main['core'] == '2', 'the application did not reach its main entry with the OS live')
+    c.require(c.finished is not None and c.finished['status'] == '1'
+              and bytes.fromhex(c.finished['result']) == expected, 'the application did not finish with the right result')
+    c = run_case('partitioned-latency-main-entry', partitioned_latency_elf, scenario(linger_us=1, usb_ready_ms=usb_delay_ms), None)
+    c.clean()
+    c.require(c.main is not None and c.main['name'] == 'latency' and c.main['core'] == '6' and c.main['live'] == '1',
+              'latency did not reach its main entry on core 6')
+    # Negative control: the scheduler as it was when the board run failed. The first yield is taken
+    # before any task has installed its stack, on core 0, with SP_EL0 in the code block.
+    c = run_case('partitioned-prestart-yield-reverted', prestart_elf, scenario(usb_ready_ms=usb_delay_ms))
+    c.require(c.status == 6 and lines(c.output, 'SP-EL0-VIOLATION'), 'the old scheduler passed the SP_EL0 check')
+    violation = lines(c.output, 'SP-EL0-VIOLATION')[0]
+    c.require(violation['core'] == '0' and 0x41000000 <= int(violation['SP_EL0'], 16) < 0x41200000,
+              'the violation is not the code-block SP_EL0 on core 0: %s' % violation['line'])
+    c.require(c.main is None, 'the application started after the violation')
+
     elapsed = time.monotonic() - started
     summary = {'passed': True, 'physical_access': False, 'seconds': round(elapsed, 2), 'build_seconds': round(built, 2),
                'qemu_sha256': hashlib.sha256(QEMU.read_bytes()).hexdigest(),
                'images': {p.parent.name: hashlib.sha256(p.read_bytes()).hexdigest()
-                          for p in (os_elf, control_elf, latency_elf, resident_elf, el0_elf)},
+                          for p in (os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf,
+                                    partitioned_latency_elf, prestart_elf)},
                'cases': [{'name': r.name, 'status': r.status, 'wall_seconds': round(r.seconds, 3),
                           'failure': r.failure and r.failure['line'], 'main': r.main and r.main['line'],
                           'finished': r.finished and r.finished['line'][:80]} for r in results]}

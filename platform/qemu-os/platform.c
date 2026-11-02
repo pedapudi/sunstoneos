@@ -99,6 +99,17 @@ _Noreturn void platform_exception(void) {
     qemu_os_puts(" ELR="); qemu_os_hex(elr); qemu_os_puts(" FAR="); qemu_os_hex(far);
     qemu_os_puts("\n"); platform_exit_privileged(4);
 }
+/* A task context save would have used this SP_EL0 (platform/qemu-os/start.S, check_task_sp). */
+_Noreturn void qemu_os_sp_violation(void) {
+    uint64_t sp, elr, spsr;
+    __asm__ volatile("mrs %0, sp_el0" : "=r"(sp));
+    __asm__ volatile("mrs %0, elr_el1" : "=r"(elr));
+    __asm__ volatile("mrs %0, spsr_el1" : "=r"(spsr));
+    qemu_os_puts("SP-EL0-VIOLATION core="); qemu_os_dec(core());
+    qemu_os_puts(" SP_EL0="); qemu_os_hex(sp); qemu_os_puts(" ELR="); qemu_os_hex(elr);
+    qemu_os_puts(" SPSR="); qemu_os_hex(spsr); qemu_os_puts("\n");
+    platform_exit_privileged(6);
+}
 static void local_init(void) {
     uint64_t declared = 24000000;
     __asm__ volatile("msr cntfrq_el0, %0" :: "r"(declared));
