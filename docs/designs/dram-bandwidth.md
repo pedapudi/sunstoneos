@@ -374,7 +374,9 @@ The loss is therefore a property of the memory system under many independent str
 SunstoneOS configuration error that the data identifies. The test of the remaining difference
 needs an interconnect register write and waits for approval (next subsection).
 
-### Plan awaiting approval
+### Plan awaiting approval (superseded)
+
+The coordinator approved items 1 and 2 on 2026-11-02; their results are in "Results of the interconnect study" below.
 
 1. **Read the nine NSI words** (`0x02023a14`, `0x02023c14`, `0x02023e14`, `0x02024014`,
    `0x02024214`, `0x0202446c`, `0x0202466c`, `0x0202200c`, `0x0202220c`) at EL1 in an image built on
@@ -463,3 +465,84 @@ L3D_CACHE_REFILL (0x2a), BUS_ACCESS (0x19), BUS_ACCESS_RD (0x60), STALL_BACKEND 
   memory, but it does not separate the controller's locality loss from an interconnect throughput limit.
 - **Limits:** no source documents controller row hits, so the locality hypothesis is supported only by the address
   dependence shown above and by the absence of waste; it is not proven by a controller counter.
+
+### Results of the interconnect study
+
+Conditions: port 3-1, development DRAM mode, CPU-L 1794 MHz, CPU-B 2002 MHz, DSU 1274 MHz, worker tasks at Non-secure EL1.
+Six runs: the read image, three write images, the performance-counter image and the port-word image. The records are in
+`docs/evidence/memory-dma.jsonl`.
+
+1. **The read succeeded.** Non-secure EL1 reads the NSI without an abort, so the risk named above did not materialize and
+   no watchdog return was needed. The nine words read `0x30a05` and `0x30a05` at `0x0202446c` and `0x0202466c` and zero at
+   the other seven, against boot0's `0x40a05`, `0x40a05`, `0x3f`, `0x7f`, `0xf`, `0xf1`, `0xf1`, `1`, `1`. The prediction
+   holds: the words are not boot0's, and the first two differ from boot0's in one bit field (`0x30a05` against `0x40a05`).
+   `NSI_CLK_REG` reads `0xc3000000` (gate open, reset deasserted), `NSI_BGR_REG` reads `0x10001` and `MBUS_CLK_REG` reads
+   `0x81000000`. NSI ports 32 and 33 read mode 2 and priority and select zero, with their counter enable word set.
+   The words read the same values at the start of every run: a watchdog reset restores them.
+2. **The write sticks and changes nothing.** Written in boot0's order with a `dmb sy` after each store, the nine words read
+   back as boot0's values in all three write runs. The sums of the per-core rates before and after the write agree within
+   the run-to-run spread:
+
+   | Cores reading | Before, GB/s (three runs) | After, GB/s (three runs) |
+   | --- | --- | --- |
+   | One A76 | 14.84, 14.84, 14.84 | 14.82, 14.82, 14.82 |
+   | Two A76 | 13.33, 14.16, 14.11 | 13.99, 14.14 |
+   | Six A55 | 9.02, 9.07 | 9.06, 9.03 |
+   | Eight | 8.24, 8.24, 8.23 | 8.27, 8.26, 8.25 |
+
+   The eight-core total changes by 0.3 percent, under the 3 percent threshold. The page-stride and shared-stream
+   variants also change by under 1 percent. The nine words are therefore not a cause of the falling total, and the
+   effect on mimus recognition time is nil within the threshold; it was not measured.
+3. **No NSI counter observes CPU traffic.** The counters of the target-agent ports 32 and 33 and of the initiator ports 19
+   and 20 read zero after the CPU read 1 MiB with the counters enabled and the clear word at zero, and the period word
+   retained its value. The controller design's statement that the CPU direct channel is uncounted holds.
+4. **Performance counters at EL1** (run with the unmodified words). The refill traffic of every A55 core equals the bytes
+   it consumed (L2D_CACHE_REFILL times 64 bytes over the consumed bytes: 1.00 for one core and for eight cores), and
+   BUS_ACCESS_RD counts four 16-byte beats per line. The prefetchers fetch nothing that is not used, so prefetch waste does
+   not explain the loss. The backend stall fraction of the A55 cores rises from 0.40 with one core to 0.89 with eight,
+   and that of the A76 cores from 0.65 to 0.97. With the number of outstanding refills fixed, the refill rate per A55 core
+   falling from 5.5 to about 1.0 GB/s implies a loaded read latency about five times that of one stream. Page-sized strides
+   raise the refill traffic by 25 percent over the bytes consumed (the prefetchers fetch lines that are not used),
+   which accounts for part of the loss in that variant only.
+5. **Inherited port state.** Every one of the 21 initiator ports reads mode 0, priority 0, input/output select 1, no
+   bandwidth limit (`+0x28` zero) and zero at `+0xc` and `+0x2c`. The CPU, the NPU, the GPU, the camera and the display
+   masters therefore arbitrate with equal priority in this boot path.
+
+### Conclusion on the cause
+
+The write is applied only inside the measuring image. The operating system does not write the words, so its memory path is
+unchanged and the memory qualification and the mimus recognition time were not rerun; both reruns belong to a decision to
+adopt the write, which the bandwidth result does not call for.
+
+The loss is not caused by the nine interconnect words, by prefetch waste, by the clocks or by the benchmark. What remains is
+the memory system's throughput under several independent streams: the stall fraction rises, the loaded latency rises, the
+delivered rate falls from 14.8 to 8.25 GB/s, and the address-distance dependence of the barrier runs points at the DRAM
+controller. No counter in the sources held observes row hits or bank conflicts, so the hypothesis of lost row-buffer
+locality is supported by exclusion and by the address dependence and is not proven. A proof needs either the controller
+register documentation or a trace of the controller's own counters.
+
+### Quality-of-service knobs and CPU latency under DMA load
+
+Robot workloads run the NPU, the camera pipeline and DMA masters beside control code whose worst-case memory latency
+matters. The boot path leaves every initiator port at the same priority (result 5), so a long NPU or camera burst queues
+CPU reads behind it in the controller. The vendor driver (`sunxi-nsi.c`, `sunxi-nsi.h`) exposes these knobs per initiator
+port n at `0x02020000 + 0x200 * n`. Their effect on CPU worst-case latency is predicted from the driver and the common
+meaning of the terms, not measured; the measurement method is below. This section changes none of them beyond boot0's
+values, which the write image applied for the measurements above.
+
+| Knob | Register | Vendor use | Prediction for CPU worst-case latency under DMA load |
+| --- | --- | --- | --- |
+| Priority of a port | `+0x14` bits 3:0, two 2-bit fields, set to p from 0 to 3 | DE 2, IOMMU 3 | Raising the CPU ports (19, 20) above the NPU, camera and DMA ports lets CPU requests win arbitration at the NSI. Bounds the queueing delay behind a competing burst to roughly one request of the other master, per arbitration point, but does not shorten the queue already inside the DRAM controller. |
+| High-priority read class | `+0xc` (bit 16 on this chip) through `nsi_port_sethpr` | boot0 writes 1 at `+0xc` of the ISP and CSI ports | Moves a port's reads to the controller's high-priority queue, if the bit has that meaning. The word is documented only by the function name; test on one port before relying on it. |
+| Absolute bandwidth limit | `+0x28` with `+0x2c` (saturation), enabled through `nsi_port_set_abs_bwlen` | none in the device tree | Caps a streaming master (NPU, ISP, CSI, video) to a bandwidth share, which bounds how much of the controller's queue it can occupy. The most direct way to bound CPU latency against a master whose traffic is known, at the cost of that master's throughput. |
+| Port mode | `+0x10` bits 1:0 | 0 for DE and IOMMU | Meaning not documented; leave at 0. |
+| Input/output select | `+0x18` bit 0 | 1 for DE and IOMMU | Meaning not documented; leave at 1. |
+| Target-agent words | `+0x14` of ports 29 to 33 and `+0x6c` of ports 34 and 35 | boot0 values `0x3f`, `0x7f`, `0xf`, `0xf1`, `0xf1`, `0x40a05`, `0x40a05` | Not documented. They sit on the way to the controller and may carry arbitration at the controller side. The write of boot0's values did not change the CPU-only bandwidth, so the effect, if any, appears only under contention. |
+| DRAM controller queue and page policy | Controller registers set by boot0 | Same as ours | Fixed by boot0's parameter set. |
+
+**Measurement method.** The loaded read latency of a core is its outstanding refills divided by its refill rate, which the
+Arm counters at EL1 give (result 4). Run a fixed CPU read loop on one core while the NPU or a copy engine streams; record
+the maximum and the 99th percentile of the time per refill with the ports as inherited, then with the CPU priorities
+raised, then with a bandwidth limit on the streaming master. This needs a second master in the image and is not part of
+this study. The NPU stage and the camera pipeline define the loads that matter; the scheduler stream owns the timing
+budgets.
