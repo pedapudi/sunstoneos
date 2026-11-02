@@ -32,10 +32,16 @@ __attribute__((weak)) void os_large_report(const struct large_slot *slot, const 
 { (void)slot; (void)space; }
 
 #define OS_LARGE_OWNER 1u
+/* Sized by the image's generated tables from the manifest. */
+extern const unsigned os_large_capacity;
+extern struct large_slot os_large_slot_storage[];
+extern struct app_region_entry os_large_entry_storage[];
 static struct app_region_ledger ledger;
-static uint64_t arena_pages[8][512] __attribute__((aligned(4096)));
+static struct app_region_range usable_storage[APP_REGION_SLOTS];
+/* One space: the root and a level-2 table per upper slot, the most it can need (app_region.h). */
+static uint64_t arena_pages[APP_SPACE_PAGES][512] __attribute__((aligned(4096)));
 static struct app_table_arena arena;
-static struct large_slot slots[SS_LARGE_REGIONS];
+static struct large_slot *const slots = os_large_slot_storage;
 static struct app_space space;
 static unsigned slot_count;
 static int admitted;
@@ -52,14 +58,15 @@ int os_large_prepare(void)
     uint64_t ttbr;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
     const uint64_t *base_l1 = (const uint64_t *)(uintptr_t)(ttbr & APP_PTE_ADDR_MASK);
-    struct app_region_range usable[APP_REGION_USABLE_MAX];
-    unsigned ranges = usable_ranges(base_l1, usable, APP_REGION_USABLE_MAX);
-    if (!ranges || ranges > APP_REGION_USABLE_MAX || app_region_ledger_init(&ledger, usable, ranges)) return 0;
-    if (large_admit(&ledger, OS_LARGE_OWNER, __start_sunstone_large_regions, count, slots)) return 0;
-    arena = (struct app_table_arena){arena_pages, (uintptr_t)arena_pages, 8, 0};
+    struct app_region_range usable[APP_REGION_SLOTS];
+    unsigned ranges = usable_ranges(base_l1, usable, APP_REGION_SLOTS);
+    if (!ranges || count > os_large_capacity ||
+        app_region_ledger_init(&ledger, usable_storage, APP_REGION_SLOTS, os_large_entry_storage, os_large_capacity, usable, ranges)) return 0;
+    if (large_admit(&ledger, OS_LARGE_OWNER, __start_sunstone_large_regions, count, slots, os_large_capacity)) return 0;
+    arena = (struct app_table_arena){arena_pages, (uintptr_t)arena_pages, APP_SPACE_PAGES, 0};
     if (app_space_build(&space, &arena, base_l1, &ledger, OS_LARGE_OWNER)) {
-        for (unsigned i = 0; i < SS_LARGE_REGIONS; ++i) if (slots[i].bytes) app_region_release(&ledger, OS_LARGE_OWNER, slots[i].base);
-        memset(slots, 0, sizeof slots);
+        for (unsigned i = 0; i < count; ++i) if (slots[i].bytes) app_region_release(&ledger, OS_LARGE_OWNER, slots[i].base);
+        memset(slots, 0, sizeof *slots * count);
         return 0;
     }
     slot_count = count;

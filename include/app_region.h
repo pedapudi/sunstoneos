@@ -17,15 +17,21 @@
 #define APP_REGION_LIMIT UINT64_C(0x340000000)     /* end of the 12 GiB map */
 #define APP_REGION_BLOCK UINT64_C(0x200000)        /* 2 MiB: smallest extent */
 #define APP_REGION_GIB UINT64_C(0x40000000)
-#define APP_REGION_MAX 16u                         /* regions in the ledger */
-#define APP_REGION_PER_OWNER 4u
-#define APP_REGION_USABLE_MAX 8u                   /* usable ranges accepted */
+/* Counts. Nothing here is a tuning constant. The upper memory is APP_REGION_SLOTS gigabytes of level-1 slots
+ * (0x80000000 to 0x340000000), which bounds the usable ranges (a range is a run of slots) and the level-2
+ * pages of one space (a slot has one level-2 table however many regions touch it), so a space needs at most
+ * APP_SPACE_PAGES pages: the root and one table per slot. The number of regions is bounded by the memory:
+ * each takes at least one 2 MiB block. A ledger holds the regions the manifests declare; the caller gives it
+ * storage for that many, which the image sizes at build time from the manifests. */
+#define APP_REGION_SLOTS 11u
+#define APP_REGION_MAX_REGIONS ((APP_REGION_LIMIT - APP_REGION_BASE) / APP_REGION_BLOCK)
+#define APP_SPACE_PAGES (1u + APP_REGION_SLOTS)
 
 enum app_region_status {
     APP_REGION_OK = 0,
     APP_REGION_INVALID = -1,     /* malformed argument; nothing changed */
     APP_REGION_NO_SPACE = -2,    /* no free extent of the size; nothing changed */
-    APP_REGION_QUOTA = -3,       /* the owner, or the ledger, holds its maximum */
+    APP_REGION_QUOTA = -3,       /* the ledger has no free entry: its storage holds every declared region */
     APP_REGION_NOT_OWNED = -4,   /* release of a region the owner does not hold */
     APP_REGION_NO_TABLES = -5    /* the table arena cannot hold the space */
 };
@@ -41,16 +47,19 @@ struct app_region_entry {
 };
 
 struct app_region_ledger {
-    struct app_region_range usable[APP_REGION_USABLE_MAX];
-    unsigned usable_count;
-    struct app_region_entry entry[APP_REGION_MAX];
+    struct app_region_range *usable;        /* caller storage for usable_capacity ranges */
+    unsigned usable_count, usable_capacity;
+    struct app_region_entry *entry;         /* caller storage for capacity entries */
+    unsigned capacity;
 };
 
 /* Admit the upper-memory ranges that the DRAM decode check passed. Every range
  * is 2 MiB-aligned and inside APP_REGION_BASE..APP_REGION_LIMIT; the list is
  * sorted and disjoint. No ranges (the check failed) leaves every later
  * acquire refused with APP_REGION_NO_SPACE. Returns 0 or APP_REGION_INVALID. */
-int app_region_ledger_init(struct app_region_ledger *, const struct app_region_range *, unsigned count);
+int app_region_ledger_init(struct app_region_ledger *, struct app_region_range *usable_storage, unsigned usable_capacity,
+                           struct app_region_entry *entry_storage, unsigned entry_capacity,
+                           const struct app_region_range *ranges, unsigned count);
 
 /* Reserve bytes (rounded up to 2 MiB) for owner (ASID 1..255). Regions of
  * 1 GiB or more are placed on a 1 GiB boundary when a free one exists;

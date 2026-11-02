@@ -10,7 +10,10 @@
 #define GIB (UINT64_C(1) << 30)
 #define STREAM_CHUNK (64 * MIB)
 
-static uint64_t arena_pages[16][512] __attribute__((aligned(4096)));
+/* Four spaces (owner, other, 2 MiB view, plus slack for the EL0 windows' level-2 copy): see APP_SPACE_PAGES. */
+static uint64_t arena_pages[3 * APP_SPACE_PAGES + 1][512] __attribute__((aligned(4096)));
+static struct app_region_range usable_storage[APP_REGION_SLOTS];
+static struct app_region_entry entry_storage[4];
 static uint64_t l2_copy[512] __attribute__((aligned(4096)));
 
 static uint64_t counter_ticks(void) { uint64_t v; __asm__ volatile("isb\n mrs %0,cntvct_el0" : "=r"(v)); return v; }
@@ -70,10 +73,10 @@ int region_prepare(struct region_state *st, struct sdp_region *r, uint64_t bytes
     __asm__ volatile("mrs %0,ttbr0_el1\n mrs %1,tcr_el1" : "=r"(ttbr), "=r"(tcr));
     st->base_ttbr = ttbr;
     const uint64_t *base_l1 = (const uint64_t *)(uintptr_t)(ttbr & APP_PTE_ADDR_MASK);
-    st->arena = (struct app_table_arena){arena_pages, (uintptr_t)arena_pages, 16, 0};
+    st->arena = (struct app_table_arena){arena_pages, (uintptr_t)arena_pages, 3 * APP_SPACE_PAGES + 1, 0};
     /* The usable memory is what the boot tables map: 0x80000000 up to 0x3_4000_0000. */
     struct app_region_range usable = {APP_REGION_BASE, APP_REGION_LIMIT - APP_REGION_BASE};
-    r->ledger_status = app_region_ledger_init(&st->ledger, &usable, 1);
+    r->ledger_status = app_region_ledger_init(&st->ledger, usable_storage, APP_REGION_SLOTS, entry_storage, 4, &usable, 1);
     if (r->ledger_status) return r->status = 1;
     r->free_before = app_region_free_bytes(&st->ledger);
     r->ledger_status = app_region_acquire(&st->ledger, REGION_ASID_OWNER, bytes, APP_REGION_READ | APP_REGION_WRITE,

@@ -14,6 +14,17 @@
 
 #define GIB UINT64_C(0x40000000)
 #define MIB UINT64_C(0x100000)
+#define CAP 64
+static struct app_region_range storage_u[4][APP_REGION_SLOTS];
+static struct app_region_entry storage_e[4][CAP];
+/* Ledger number n with the given entry capacity. */
+static int linit(struct app_region_ledger *l, unsigned n, unsigned capacity, const struct app_region_range *r, unsigned count)
+{ return app_region_ledger_init(l, storage_u[n], APP_REGION_SLOTS, storage_e[n], capacity, r, count); }
+/* The entries of ledger n, saved and compared, because the ledger struct holds only pointers. */
+static struct app_region_entry saved_e[CAP];
+static void save(unsigned n) { memcpy(saved_e, storage_e[n], sizeof saved_e); }
+static int unchanged(unsigned n) { return !memcmp(saved_e, storage_e[n], sizeof saved_e); }
+
 enum { FAULT_NONE, FAULT_TRANSLATION, FAULT_PERMISSION, FAULT_ACCESS_FLAG };
 struct result { int fault; uint64_t pa, leaf; unsigned level; uint64_t desc; };
 
@@ -160,44 +171,50 @@ static void large_cases(void)
 {
     struct app_region_range all[] = {{APP_REGION_BASE, APP_REGION_LIMIT - APP_REGION_BASE}};
     struct app_region_ledger l;
-    struct large_slot slots[SS_LARGE_REGIONS];
+    struct large_slot slots[8];
     struct ss_large_region ok[2] = {record(0, GIB, "/sunstone-test/sunstone-region-test.bin"), record(1, 4 * MIB, "")};
     ok[0].source_bytes = 512 * MIB;
     ok[1].flags = SS_LARGE_WRITE | SS_LARGE_EXTENT; ok[1].first_sector = 40960;
     assert(ss_large_records_valid(ok, 2) && ss_large_records_valid(0, 0));
-    assert(app_region_ledger_init(&l, all, 1) == 0);
-    assert(large_admit(&l, 3, ok, 2, slots) == APP_REGION_OK);
+    assert(linit(&l, 0, 8, all, 1) == 0);
+    assert(large_admit(&l, 3, ok, 2, slots, 8) == APP_REGION_OK);
     assert(slots[0].base == 0x80000000 && slots[0].bytes == GIB && slots[0].state == SS_LARGE_PENDING && slots[0].index == 0);
     assert(slots[1].bytes == 4 * MIB && slots[1].flags == (SS_LARGE_WRITE | SS_LARGE_EXTENT) && slots[1].base == 0xc0000000);
     assert(app_region_owner_of(&l, slots[0].base) == 3 && app_region_owner_of(&l, slots[1].base + 4 * MIB - 1) == 3);
     assert(app_region_free_bytes(&l) == 11 * GIB - GIB - 4 * MIB);
-    /* The records may arrive in any order; slots are indexed by the record's index. */
+    /* Records out of index order are refused: the section is in index order by construction. */
     struct ss_large_region swapped[2] = {ok[1], ok[0]};
-    assert(app_region_ledger_init(&l, all, 1) == 0 && large_admit(&l, 4, swapped, 2, slots) == APP_REGION_OK);
-    assert(slots[0].bytes == GIB && slots[1].bytes == 4 * MIB);
+    assert(linit(&l, 0, 8, all, 1) == 0 && large_admit(&l, 4, swapped, 2, slots, 8) == APP_REGION_INVALID);
 
     /* All or nothing: a second region that does not fit releases the first and changes nothing. */
-    struct ss_large_region big[2] = {record(0, 8 * GIB, "/a.bin"), record(1, 8 * GIB, "/b.bin")};
-    assert(app_region_ledger_init(&l, all, 1) == 0);
-    struct app_region_ledger before = l;
-    assert(large_admit(&l, 5, big, 2, slots) == APP_REGION_NO_SPACE);
-    assert(!memcmp(&l, &before, sizeof l) && !slots[0].bytes && !slots[1].bytes);
+    struct ss_large_region big[2] = {record(0, 6 * GIB, "/a.bin"), record(1, 5 * GIB, "/b.bin")};
+    assert(linit(&l, 0, 8, all, 1) == 0);
+    uint64_t taken_base, taken_bytes;
+    assert(app_region_acquire(&l, 9, 2 * GIB, APP_REGION_READ, &taken_base, &taken_bytes) == 0);   /* another owner holds 2 GiB */
+    save(0);
+    assert(large_admit(&l, 5, big, 2, slots, 8) == APP_REGION_NO_SPACE);
+    assert(unchanged(0) && !slots[0].bytes && !slots[1].bytes && app_region_free_bytes(&l) == 9 * GIB);
     struct app_region_range none[1];
     struct app_region_ledger empty;
-    assert(app_region_ledger_init(&empty, none, 0) == 0 && large_admit(&empty, 5, ok, 2, slots) == APP_REGION_NO_SPACE);
-    /* The owner quota is the number of records. */
-    struct ss_large_region four[4] = {record(0, 2 * MIB, "/a"), record(1, 2 * MIB, "/b"), record(2, 2 * MIB, "/c"), record(3, 2 * MIB, "/d")};
-    assert(app_region_ledger_init(&l, all, 1) == 0 && large_admit(&l, 6, four, 4, slots) == APP_REGION_OK);
-    assert(app_region_ledger_init(&l, all, 1) == 0);
-    struct ss_large_region five[5] = {four[0], four[1], four[2], four[3], record(4, 2 * MIB, "/e")};
-    assert(!ss_large_records_valid(five, 5) && large_admit(&l, 6, five, 5, slots) == APP_REGION_INVALID);
+    assert(linit(&empty, 1, 8, none, 0) == 0 && large_admit(&empty, 5, ok, 2, slots, 8) == APP_REGION_NO_SPACE);
+    /* The number of records is the manifest's: five records are valid, and a ledger sized for four refuses the
+     * fifth entry and holds nothing. */
+    struct ss_large_region five[5] = {record(0, 2 * MIB, "/a"), record(1, 2 * MIB, "/b"), record(2, 2 * MIB, "/c"),
+                                      record(3, 2 * MIB, "/d"), record(4, 2 * MIB, "/e")};
+    assert(ss_large_records_valid(five, 5));
+    assert(linit(&l, 0, 5, all, 1) == 0 && large_admit(&l, 6, five, 5, slots, 8) == APP_REGION_OK && slots[4].bytes == 2 * MIB);
+    assert(linit(&l, 0, 4, all, 1) == 0 && large_admit(&l, 6, five, 5, slots, 8) == APP_REGION_QUOTA);
+    assert(app_region_free_bytes(&l) == 11 * GIB && !slots[0].bytes);
+    /* The total must fit the upper memory, not a constant. */
+    struct ss_large_region many[2] = {record(0, 6 * GIB, "/a"), record(1, 6 * GIB, "/b")};
+    assert(!ss_large_records_valid(many, 2));
 
     /* Malformed records are refused whatever the ledger holds. */
     struct ss_large_region r[2];
     int refusals = 0;
 #define REFUSE(edit) do { memcpy(r, ok, sizeof r); edit; assert(!ss_large_records_valid(r, 2)); \
-        assert(large_admit(&l, 6, r, 2, slots) == APP_REGION_INVALID); ++refusals; } while (0)
-    assert(app_region_ledger_init(&l, all, 1) == 0);
+        assert(large_admit(&l, 6, r, 2, slots, 8) == APP_REGION_INVALID); ++refusals; } while (0)
+    assert(linit(&l, 0, 8, all, 1) == 0);
     REFUSE(r[1].index = 0);                                  /* duplicate index */
     REFUSE(r[1].index = 2);                                  /* index beyond the count */
     REFUSE(r[0].flags = 4);                                  /* unknown flag */
@@ -231,21 +248,21 @@ int main(void)
     struct app_region_range bad3[] = {{APP_REGION_LIMIT - 2 * MIB, 4 * MIB}};
     struct app_region_range bad4[] = {{APP_REGION_BASE + 8 * MIB, 4 * MIB}, {APP_REGION_BASE, 2 * MIB}};
     struct app_region_range bad5[] = {{APP_REGION_BASE, 4 * MIB}, {APP_REGION_BASE + 2 * MIB, 4 * MIB}};
-    assert(app_region_ledger_init(&l, bad1, 1) == APP_REGION_INVALID);
-    assert(app_region_ledger_init(&l, bad2, 1) == APP_REGION_INVALID);
-    assert(app_region_ledger_init(&l, bad3, 1) == APP_REGION_INVALID);
-    assert(app_region_ledger_init(&l, bad4, 2) == APP_REGION_INVALID);
-    assert(app_region_ledger_init(&l, bad5, 2) == APP_REGION_INVALID);
+    assert(linit(&l, 2, CAP, bad1, 1) == APP_REGION_INVALID);
+    assert(linit(&l, 2, CAP, bad2, 1) == APP_REGION_INVALID);
+    assert(linit(&l, 2, CAP, bad3, 1) == APP_REGION_INVALID);
+    assert(linit(&l, 2, CAP, bad4, 2) == APP_REGION_INVALID);
+    assert(linit(&l, 2, CAP, bad5, 2) == APP_REGION_INVALID);
     uint64_t b, n;
-    assert(app_region_ledger_init(&l, 0, 0) == 0);            /* decode check failed: nothing usable */
+    assert(linit(&l, 2, CAP, 0, 0) == 0);            /* decode check failed: nothing usable */
     assert(app_region_acquire(&l, 1, 2 * MIB, APP_REGION_READ, &b, &n) == APP_REGION_NO_SPACE);
     assert(app_region_free_bytes(&l) == 0);
 
-    assert(app_region_ledger_init(&l, all, 1) == 0);
+    assert(linit(&l, 2, CAP, all, 1) == 0);
     assert(app_region_free_bytes(&l) == 11 * GIB);
 
     /* Malformed requests change nothing. */
-    struct app_region_ledger before = l;
+    save(2);
     assert(app_region_acquire(&l, 0, 2 * MIB, APP_REGION_READ, &b, &n) == APP_REGION_INVALID);
     assert(app_region_acquire(&l, 1, 0, APP_REGION_READ, &b, &n) == APP_REGION_INVALID);
     assert(app_region_acquire(&l, 1, 2 * MIB, APP_REGION_WRITE, &b, &n) == APP_REGION_INVALID);
@@ -253,7 +270,7 @@ int main(void)
     assert(app_region_acquire(&l, 1, UINT64_MAX, APP_REGION_READ, &b, &n) == APP_REGION_INVALID);
     assert(app_region_acquire(&l, 1, UINT64_MAX - 100, APP_REGION_READ, &b, &n) == APP_REGION_INVALID);
     assert(app_region_acquire(&l, 1, 2 * MIB, APP_REGION_READ, 0, &n) == APP_REGION_INVALID);
-    assert(!memcmp(&l, &before, sizeof l));
+    assert(unchanged(2));
 
     /* A: 3 GiB read-write; B: 1.5 GiB read-only; C: 100 MiB read-write. */
     uint64_t abase, abytes, bbase, bbytes, cbase, cbytes;
@@ -400,10 +417,10 @@ int main(void)
 
     /* Exhaustion: the largest gap is granted whole, the next request is refused, release restores it. */
     uint64_t free_before = app_region_free_bytes(&l), dbase, dbytes;
-    struct app_region_ledger snapshot = l;
+    save(2);
     assert(app_region_acquire(&l, 4, free_before + 2 * MIB, APP_REGION_READ, &dbase, &dbytes) == APP_REGION_NO_SPACE);
     assert(app_region_acquire(&l, 4, 7 * GIB, APP_REGION_READ, &dbase, &dbytes) == APP_REGION_NO_SPACE);
-    assert(!memcmp(&l, &snapshot, sizeof l));
+    assert(unchanged(2));
     assert(app_region_acquire(&l, 4, free_before, APP_REGION_READ | APP_REGION_WRITE, &dbase, &dbytes) == 0);
     assert(dbase == cbase + cbytes && dbytes == free_before && app_region_free_bytes(&l) == 0);
     assert(app_region_acquire(&l, 5, 2 * MIB, APP_REGION_READ, &b, &n) == APP_REGION_NO_SPACE);
@@ -414,20 +431,17 @@ int main(void)
     assert(app_region_acquire(&l, 6, 4 * MIB, APP_REGION_READ, &b, &n) == 0 && b == cbase);
     assert(app_region_owner_of(&l, cbase) == 6 && app_region_owner_of(&l, cbase + 4 * MIB) == 0);
 
-    /* Per-owner quota and ledger capacity. */
+    /* The ledger holds as many regions as its storage: any owner may take them, the next request is refused. */
     struct app_region_ledger q;
-    assert(app_region_ledger_init(&q, all, 1) == 0);
-    for (unsigned i = 0; i < APP_REGION_PER_OWNER; ++i)
-        assert(app_region_acquire(&q, 7, 2 * MIB, APP_REGION_READ, &b, &n) == 0);
+    assert(linit(&q, 3, 9, all, 1) == 0);
+    for (unsigned i = 0; i < 9; ++i)
+        assert(app_region_acquire(&q, (uint8_t)(7 + i % 2), 2 * MIB, APP_REGION_READ, &b, &n) == 0);
     assert(app_region_acquire(&q, 7, 2 * MIB, APP_REGION_READ, &b, &n) == APP_REGION_QUOTA);
-    for (unsigned o = 8; o < 8 + (APP_REGION_MAX / APP_REGION_PER_OWNER) - 1; ++o)
-        for (unsigned i = 0; i < APP_REGION_PER_OWNER; ++i)
-            assert(app_region_acquire(&q, (uint8_t)o, 2 * MIB, APP_REGION_READ, &b, &n) == 0);
-    assert(app_region_acquire(&q, 30, 2 * MIB, APP_REGION_READ, &b, &n) == APP_REGION_QUOTA);
+    assert(linit(&q, 3, APP_REGION_MAX_REGIONS + 1, all, 1) == APP_REGION_INVALID);       /* more than the memory can hold */
 
     /* Fragmentation: two usable ranges; a request larger than either is refused though the sum fits. */
     struct app_region_range split[] = {{APP_REGION_BASE, GIB}, {APP_REGION_BASE + 2 * GIB, GIB}};
-    assert(app_region_ledger_init(&q, split, 2) == 0 && app_region_free_bytes(&q) == 2 * GIB);
+    assert(linit(&q, 3, CAP, split, 2) == 0 && app_region_free_bytes(&q) == 2 * GIB);
     assert(app_region_acquire(&q, 1, GIB + 2 * MIB, APP_REGION_READ, &b, &n) == APP_REGION_NO_SPACE);
     assert(app_region_acquire(&q, 1, GIB, APP_REGION_READ, &b, &n) == 0 && b == APP_REGION_BASE);
     assert(app_region_acquire(&q, 2, GIB, APP_REGION_READ, &b, &n) == 0 && b == APP_REGION_BASE + 2 * GIB);
