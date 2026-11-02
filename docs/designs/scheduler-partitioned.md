@@ -809,6 +809,32 @@ per-CPU structures on the owner. The pass is not kept (`SS_SERVICE_PASSES` is
 1). Measured with the repeat pair, the fork is 0.4% slower than the global kernel on
 the current engine and does not reach the 2% faster that enabling it would need.
 
+### Hardware counters on the owner core separate a slower wake from cache effects
+
+The 2.2 ms the owner core (6) loses on the recorded recognition has two candidate
+causes. Slower wake: the fork's publish-and-wake service (`ssKernelPublishReference`
+for the owner's seven sends, `ssKernelService` at the end of every interrupt) takes
+more cycles than the stock kernel's wake. Cache effects: the fork's larger per-CPU
+structures, the compat-lock lines and the extra interrupts displace the owner's
+working set, so its own compute and the serial code between calls run slower with
+more refills. The same image pair runs with the PMU enabled on every core at EL1
+with EL0 read access (cycles, L1D refills, L2D refills, backend stall cycles; read
+only). The owner reads the counters at the boundaries of four disjoint windows on
+core 6 over the recognition: the sends of a parallel call, the owner's own share,
+the tail (wait for the slowest worker and the completion path), and the serial code
+outside the parallel calls (total less the three). The fork also accumulates the
+counters inside `ssKernelPublishReference` and `ssKernelService` on core 6.
+
+Prediction. If the wake service is slower: the fork's excess cycles are in the
+send and tail windows and in the two kernel regions (at least 1.5 ms of the
+2.2 ms), the owner and serial windows match the stock kernel's within 0.3 ms, and
+refills per window match. If cache effects: the excess is in the owner and serial
+windows (at least 1.5 ms), their L1D and L2D refills are higher in the fork by
+about 10% or more, and the send and tail windows differ by at most 0.5 ms. Interrupts that
+land in the owner window count toward that window, so the kernel regions' cycles
+are subtracted from the owner window before it is compared. A split with no
+region over 1.5 ms points to neither.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag

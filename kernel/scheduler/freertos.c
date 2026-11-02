@@ -99,6 +99,32 @@ static bool ssKernelInitialized;
 static _Atomic unsigned ssKernelLoad[configNUMBER_OF_CORES];
 static unsigned ssKernelIdleNext;
 
+#ifdef SUNSTONE_PMU_ACCOUNT
+/* Measurement: cycles, L1D refills, L2D refills and backend stall cycles spent in the
+ * publish-and-wake paths, per CPU (counters: runtime/irq_count.c). Region 0 is
+ * ssKernelPublishReference, region 1 ssKernelService (called around the exit of every
+ * interrupt on the owner). Written by the CPU itself; 32-bit counter differences. */
+static struct { uint64_t v[4]; unsigned long entries; } ssKernelPmu[configNUMBER_OF_CORES][2];
+static inline void ssPmuRead(uint32_t o[4])
+{
+    uint64_t c, a, b, s;
+    __asm__ volatile("mrs %0, pmccntr_el0\n mrs %1, pmevcntr0_el0\n mrs %2, pmevcntr1_el0\n mrs %3, pmevcntr2_el0"
+                     : "=r"(c), "=r"(a), "=r"(b), "=r"(s) :: "memory");
+    o[0] = (uint32_t)c; o[1] = (uint32_t)a; o[2] = (uint32_t)b; o[3] = (uint32_t)s;
+}
+#define SS_PMU_ENTER uint32_t ss_pmu0[4]; ssPmuRead(ss_pmu0)
+#define SS_PMU_LEAVE(region) do { uint32_t ss_pmu1[4]; ssPmuRead(ss_pmu1); unsigned ss_core = (unsigned)portGET_CORE_ID(); \
+    for (unsigned k = 0; k < 4; ++k) ssKernelPmu[ss_core][region].v[k] += (uint32_t)(ss_pmu1[k] - ss_pmu0[k]); \
+    ++ssKernelPmu[ss_core][region].entries; } while (0)
+unsigned long ulSunstoneKernelPmu(unsigned core, unsigned region, unsigned counter)
+{
+    if (core >= configNUMBER_OF_CORES || region >= 2 || counter > 4) return 0;
+    return counter == 4 ? ssKernelPmu[core][region].entries : (unsigned long)ssKernelPmu[core][region].v[counter];
+}
+#else
+#define SS_PMU_ENTER ((void)0)
+#define SS_PMU_LEAVE(region) ((void)0)
+#endif
 #ifdef SUNSTONE_IRQ_COUNT
 /* Measurement: which call sites send SGIs, to which CPU. One table per sending
  * CPU, written by that CPU only; read after the measured interval. */
@@ -386,6 +412,7 @@ static void ssKernelCommandsDetach(void);
  * is released. No producer writes a foreign owner node or timeout entry. */
 static void ssKernelPublishReference(struct ss_kernel_pin pin)
 {
+    SS_PMU_ENTER;
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
     unsigned priority = atomic_load_explicit(&s->effective, memory_order_acquire);
     struct ss_control_route route;
@@ -400,6 +427,7 @@ static void ssKernelPublishReference(struct ss_kernel_pin pin)
             ss_owner_publish(&ssKernelCPUs[cpu].run, pin.slot, priority);
     }
     ss_kernel_handle_put(&pin);
+    SS_PMU_LEAVE(0);
 }
 static void ssKernelFlush(void)
 {
@@ -709,6 +737,7 @@ static void ssKernelService(void)
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    SS_PMU_ENTER;
     /* Work that arrived during the pass is taken by the next pass here. A new
      * exception entry costs an SGI, the exception and a full service entry, a
      * long span when the memory system is busy, so it is the last resort. */
@@ -720,6 +749,7 @@ static void ssKernelService(void)
 #endif
         ssKernelForce(c);
     }
+    SS_PMU_LEAVE(1);
     portCLEAR_INTERRUPT_MASK(irq);
 }
 static bool ssKernelDispatch(void *context, unsigned cpu)
