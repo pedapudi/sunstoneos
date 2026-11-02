@@ -56,6 +56,8 @@ struct ss_latency_sweep {
     uintptr_t open, close;
     uint64_t count;
     uint32_t core, max_us, bins[SS_LAT_SWEEP_BINS];
+    uint32_t wait_in_max_us, max_wait_us; /* lock wait inside the longest span; longest lock wait in any span */
+    uint64_t long_count, long_span_us, long_wait_us; /* spans above 5 us: count, total length, total lock wait */
 };
 #ifdef SUNSTONE_LATENCY_SWEEP
 unsigned ss_latency_sweep_read(unsigned index, struct ss_latency_sweep *out);

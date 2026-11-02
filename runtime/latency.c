@@ -149,6 +149,7 @@ struct local_state {
     uint64_t ops_start, waits_start;
     uint64_t mask_start, mask_site, lock_start[2], lock_site[2];
     unsigned mask_active, lock_depth[2], frozen;
+    uint64_t span_wait; /* ticks spent waiting for a kernel lock since the mask opened */
 #ifdef SUNSTONE_LATENCY_PMU
     unsigned pmu_state, pmu_span; /* state: 0 not tried, 1 counting, 2 unavailable */
     struct ss_latency_site_pmu pmu_start;
@@ -347,11 +348,11 @@ void ss_latency_record(unsigned core, unsigned region, uint64_t start, uintptr_t
 static const uint16_t sweep_edges[SS_LAT_SWEEP_BINS - 1] = {1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200, 300, 500};
 static struct sweep_entry {
     uintptr_t open, close;
-    uint64_t count, max_ticks;
+    uint64_t count, max_ticks, wait_in_max, max_wait, long_count, long_span, long_wait;
     uint32_t bins[SS_LAT_SWEEP_BINS];
 } sweep[8][SS_LAT_SWEEP_ENTRIES] __attribute__((aligned(64)));
 static unsigned sweep_overflow[8];
-static void sweep_record(unsigned core, uintptr_t open, uintptr_t close, uint64_t ticks)
+static void sweep_record(unsigned core, uintptr_t open, uintptr_t close, uint64_t ticks, uint64_t wait)
 {
     const uint64_t frequency = __atomic_load_n(&ss_latency_frequency, __ATOMIC_RELAXED);
     if (!frequency) return;
@@ -365,7 +366,9 @@ static void sweep_record(unsigned core, uintptr_t open, uintptr_t close, uint64_
         while (bin < SS_LAT_SWEEP_BINS - 1 && micro >= sweep_edges[bin]) ++bin;
         ++e->bins[bin];
         __atomic_store_n(&e->count, e->count + 1, __ATOMIC_RELEASE);
-        if (ticks > e->max_ticks) e->max_ticks = ticks;
+        if (ticks > e->max_ticks) { e->max_ticks = ticks; e->wait_in_max = wait; }
+        if (wait > e->max_wait) e->max_wait = wait;
+        if (micro > 5) { ++e->long_count; e->long_span += ticks; e->long_wait += wait; }
         return;
     }
     ++sweep_overflow[core];
@@ -382,6 +385,12 @@ unsigned ss_latency_sweep_read(unsigned index, struct ss_latency_sweep *out)
     out->open = e->open; out->close = e->close; out->count = count;
     out->max_us = frequency ? (uint32_t)(e->max_ticks * 1000000u / frequency) : 0;
     for (unsigned b = 0; b < SS_LAT_SWEEP_BINS; ++b) out->bins[b] = e->bins[b];
+    const uint64_t scale = frequency ? frequency : 1;
+    out->wait_in_max_us = (uint32_t)(e->wait_in_max * 1000000u / scale);
+    out->max_wait_us = (uint32_t)(e->max_wait * 1000000u / scale);
+    out->long_count = e->long_count;
+    out->long_span_us = e->long_span * 1000000u / scale;
+    out->long_wait_us = e->long_wait * 1000000u / scale;
     return 1;
 }
 unsigned ss_latency_sweep_overflow(unsigned core) { return core < 8 ? sweep_overflow[core] : 0; }
@@ -395,6 +404,7 @@ void ss_latency_mask_open(unsigned core, uint64_t start, uintptr_t site)
         local[core].waits_start = ss_ops_wait[core];
 #endif
         local[core].mask_site = site;
+        local[core].span_wait = 0;
 #ifdef SUNSTONE_LATENCY_PMU
         local[core].pmu_span = local[core].pmu_state == 1;
         if (local[core].pmu_span) local[core].pmu_start = pmu_read();
@@ -414,7 +424,7 @@ void ss_latency_mask_close(unsigned core, uintptr_t site)
         if (enabled(core)) {
 #endif
 #ifdef SUNSTONE_LATENCY_SWEEP
-            if (end >= local[core].mask_start) sweep_record(core, local[core].mask_site, site, end - local[core].mask_start);
+            if (end >= local[core].mask_start) sweep_record(core, local[core].mask_site, site, end - local[core].mask_start, local[core].span_wait);
 #endif
             ss_latency_record_at(core, SS_LAT_MASKED, local[core].mask_start, end, local[core].mask_site);
 #ifdef SUNSTONE_LATENCY_PMU
@@ -445,6 +455,7 @@ void ss_latency_lock_acquired(unsigned core, unsigned lock, uint64_t start, uint
     if (p < SS_LAT_PHASES) ++phase_acquisitions[p][core][lock];
     if (l->lock_depth[lock]++ == 0) {
         ss_latency_record_at(core, SS_LAT_LOCK_WAIT0 + 2 * lock, start, now, site);
+        if (l->mask_active && now > start) l->span_wait += now - start;
         l->lock_start[lock] = now;
         l->lock_site[lock] = site;
     }
