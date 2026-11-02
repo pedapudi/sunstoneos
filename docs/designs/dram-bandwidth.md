@@ -609,3 +609,70 @@ The percentile is the upper edge of its bin.
    streaming case, is below 30 µs, a third of the period.
 6. **Decision rule.** Raising the CPU priority is proposed as the robot default only if it lowers the 99.99th percentile and
    the maximum of the chase under the NPU load by at least 20 percent and raises the NPU job time by at most 10 percent.
+
+### Boot-path adoption: results
+
+1. **Readback.** With the wrapper that runs boot0 routine `0x49050`, the probe-only image reads the nine words as `0x40a05`,
+   `0x40a05`, `0x3f`, `0x7f`, `0xf`, `0xf1`, `0xf1`, `1`, `1` at the start of the run, and the target-agent ports 32 and 33 read
+   `0xf1` at `+0x14`. The prediction holds.
+2. **Memory qualification.** The returning memory probe over the tested map (12,224 MiB from `0x44000000`) reports status pass,
+   stop none, no address failure and no mismatch. Its scan takes 13,319,291 counter ticks (0.555 s) against 13,319,404 in the
+   earlier record, and its signature pass 23,395,519 against 23,395,269 (0.975 s): the difference is 0.001 percent. The prediction
+   holds. The runner recorded `result-mismatch` for this run, as for the earlier one, because the expectation compared the whole
+   output as bytes; the result was verified with `apps/memtest/check.py verify` against the contract.
+
+The default DDR builds that the runner uses (`~/.cache/sunstoneos/build/a733-ddr` and `a733-ddr-restore`) still hold the
+earlier wrapper. Both runs used builds of the new wrapper passed through `--ddr-build` and `--ddr-restore`. The coordinator
+rebuilds the defaults from `tools/prepare-ddr.py` (plain) and the same with `--variant restore --restore-set
+restore-set-v5.json` (restore) when this change is accepted.
+
+### CPU memory latency under device load: results
+
+Two loads ran: none and streaming reads on the other worker cores. Port 3-1, development mode, CPU-L 1794 MHz, CPU-B 2002
+MHz, DSU 1274 MHz, with the adopted interconnect words. Latencies in nanoseconds; the percentile is the bin's upper edge.
+
+| Probe | Load | Setting | Median | 99th | 99.99th | Maximum |
+| --- | --- | --- | --- | --- | --- | --- |
+| Chase, A76 core 7 | none | as found | 152 | 543 | 639 | 643 |
+| Chase, A76 core 7 | none | CPU priority 3 | 152 | 543 | 639 | 632 |
+| Chase, A76 core 7 | none | priority 3 and high-priority reads | 152 | 543 | 639 | 628 |
+| Chase, A76 core 7 | cores | as found | 416 | 1,343 | 1,662 | 2,005 |
+| Chase, A76 core 7 | cores | CPU priority 3 | 416 | 1,279 | 1,598 | 1,965 |
+| Chase, A76 core 7 | cores | priority 3 and high-priority reads | 416 | 1,343 | 1,598 | 1,979 |
+| Chase, A55 core 0 | none | as found, then the two raised settings | 136 | 535 | 2,569; 2,711; 2,569 | 9,271; 8,843; 9,438 |
+| Chase, A55 core 0 | cores | as found, then the two raised settings | 392 | 1,284 | 16,553 (all three) | 32,424; 29,009; 30,056 |
+| Control loop, A76 core 7 | none | all three | 2,302 | 3,069 | 3,069 | 3,042; 3,011; 3,015 |
+| Control loop, A76 core 7 | cores | all three | 7,417 | 9,207 | 10,230 | 10,571; 10,061; 10,083 |
+
+- The A76 chase collects 3.1 million samples under no load and 1.2 million with the cores streaming; the streaming
+  cores read 8.8 to 9.0 GB/s in total, the earlier all-core rate. The control loop (16 dependent loads) takes 2.3 µs idle and
+  7.4 µs with the cores streaming, its worst iteration 10.6 µs, a tenth of the 100 µs period; no deadline is missed in any setting
+  and the largest start delay after a release is 0.1 µs.
+- **Predictions.** Idle A76 median in 110 to 160 ns (152 ns), 99.99th percentile below 1 µs (639 ns), maximum below 5 µs
+  (643 ns), control loop 2 to 3 µs without a miss (2.3 µs), settings agree within 5 percent: all hold. The prediction that the
+  A55 chase is 20 to 60 percent slower than the A76 fails: its median is 136 ns, 10 percent lower. Streaming A76 median in 300
+  to 800 ns (416 ns), settings within 10 percent (all within 4 percent of the median and 5 percent of the 99.99th percentile),
+  no control-loop miss and worst iteration under 30 µs (10.6 µs): all hold.
+- **The A55 tail is not the memory system alone.** The A55 chase has a 99.99th percentile of 2.6 µs and a maximum of 9 µs
+  with no load, against 0.64 µs for the A76 core, and 16.6 µs and 32 µs with the cores streaming. The settings do not change
+  it. The cause is not established; the OS tick and interrupt handlers running on core 0 inside the timed window are a
+  candidate, which this study did not separate.
+- **Raising the CPU port priority has no effect when every competitor is a CPU port.** This is the control that the
+  prediction named. It says nothing about the effect against the NPU, DMA and other masters.
+
+### CPU memory latency under device load: the NPU and DMA conditions are not run
+
+- **NPU.** The `cpu-return` profile that a board run of an OS image uses excludes the NPU service
+  (`apps/os/NORMAL-RETURN.md`). The first NPU image, submitted as `cpu-return`, stopped at the EL3 monitor with status 1 after
+  its region-size failure left the service open. NPU jobs run on the board only as finite NPU images (`--kind npu` with the
+  reviewed 456-byte native NPU session template), which the NPU qualification stream owns. A latency probe needs to run inside
+  such an image.
+- **DMA.** The OS image with the DMA0 service is refused before launch (`Native DMA profile and service extent differ`): it
+  needs a captured DMA session record that none of the runs in hand supplies. The service copies 4 KiB per request, so it
+  would load the memory system with far less than the engine's rate in any case.
+
+Predictions 3 (NPU) and 4 (DMA) stay untested. The decision rule of prediction 6 therefore has no data, and no change of the
+default priorities is proposed. Two ways to the NPU condition: link `apps/dram-qos`'s EL1 probes (the `chase` and `control`
+functions and the priority job, about 150 lines) into a finite NPU image beside its job stream, which the NPU stream owner
+must do because it owns those files; or use the GPU as the second master through the compute queue, with a streaming-read
+kernel, which needs a GPU program that the tree does not hold.
