@@ -502,12 +502,11 @@ A Non-secure view of the GIC differs from the stored one: a priority stored as 0
 
 ### Checks pending re-qualification
 
-The checks below keep their files and run by hand, but the full gate lists them as pending (`REQUALIFICATION` in `checks/check-index.py`) because their models include behaviors that cite neither a measurement nor a reference. They return to the gate when each uncited behavior is replaced by a measured or cited one.
+`a733-xhci-detach` and `a733-xhci-dma` returned to the gate after their three uncited behaviors (port power at start, port reset duration and completion, TR Dequeue Pointer while running) were replaced by xHCI 1.2 behaviors that carry line citations in `checks/a733-xhci-detach.c`; the reset duration is a stimulus and not a claim. The checks below keep their files and run by hand, but the full gate lists them as pending (`REQUALIFICATION` in `checks/check-index.py`) because their models include behaviors that cite neither a measurement nor a reference. They return to the gate when each uncited behavior is replaced by a measured or cited one.
 
 | Check | Uncited behaviors |
 | --- | --- |
 | `a733-pcie-trace`, `pcie-qemu` | ATU, PHY lock, link-up and speed-change latencies; NVMe ready delay and controller model; PCI power-management D3 behavior; link loss after PERST. No PCIe board run exists. |
-| `a733-xhci-detach`, `a733-xhci-dma` | Port Power at start, port reset latency and TR Dequeue Pointer updates while an endpoint runs (three behaviors; the other 21 to 26 each cite the xHCI 1.2 specification). |
 | `io-native-ordering` | TWI status sequence, reset values and the 30 microsecond flag delay; initial WDT0 values; posted-store completion at a DSB. |
 | `memtest-machine` | SCTLR_EL1 reset, translation walk and PAR_EL1 format, DC ZVA, counter step and cache geometry. |
 | `power-write-order` | PMIC bus event latency and the status after START (the model returns 0x18 where a START gives 0x08), USB reset minimums, initial register values. |

@@ -89,13 +89,13 @@ static void test(void *unused)
     assert(board.handles[4]==xTaskGetCurrentTaskHandle());
     uint64_t start=now;
     assert(a733_xhci_next_deadline(&x)==x.deadline);
-    for(unsigned i=0;!portsc&&!x.failed&&i<200;++i){
+    for(unsigned i=0;!portsc_reads&&!x.failed&&i<200;++i){
         enum a733_xhci_result r=a733_xhci_poll(&x);assert(r!=A733_XHCI_INVALID);
         if(stuck&&reset_effect.pending)reset_effect.stuck=1;
         owner_wait();
     }
     if(stuck){assert(x.failed&&memory()==DEVICE_MEMORY_RETAINED);puts("PASS stuck reset retains at deadline");return;}
-    assert(portsc&&now-start>=reset_delay+run_delay);
+    assert(portsc_reads&&(portsc&BIT(9))&&now-start>=reset_delay+run_delay);
     unsigned startup_waits=waits;uint64_t startup_us=now-start;
     /* Existing ring model enumerates the real core before scheduling checks. */
     attach(1);enumerate(1);open_bulk(1);
