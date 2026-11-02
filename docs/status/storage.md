@@ -20,7 +20,7 @@ FAT32 volume read-only (32 KiB clusters, 1,907,436 clusters free, empty root dir
 ## Open work
 
 1. Qualify physical installation, autonomous OS boot, cold controller and supply state, reset retirement and power-loss recovery.
-2. Qualify SDR104 at 150 MHz (implemented and host-modeled). The card keeps 1.8 V signalling until its supply is cycled, and the board's only supply cycle was whole-board power removal. [The recovery design](../designs/sd-uhs-recovery.md) shows from the sources that a card at 1.8 V is re-initialised at 1.8 V with no power cycle, and models every failure state (`checks/sd-uhs-recovery-model.py`). The board documents disagree on whether DC1SW2 (PMIC register `0x11` bit 4) powers the card at all and on whether it also powers the PMIC's I2C pads and USB0, so no DC1SW2 cycle is planned until that is settled. Stage 1, a read-only probe at 3.3 V, found S18A set on the 62.5 GB card (Phison SD64G, U3, V30); the CMD6 support field cannot show SDR104 until the card is at 1.8 V. Next: one lifetime that switches, re-initialises at 1.8 V and returns normally, which needs approval.
+2. Finish qualifying SDR104 at 150 MHz. Done on port 3-3 (Phison SD32G, 2020), read-only: the card at 1.8 V is re-initialised at 1.8 V with no CMD11 and no supply cycle ([the recovery design](../designs/sd-uhs-recovery.md)); the CMD6 support field then shows SDR104; the CMD19 sweep finds a window (delays 16 to 63 on the first run, 17 to 63 on the last, delay 40 chosen); the module clock runs at 300 MHz (card 150 MHz); reads match the SDR25 CRCs; the lifetime closes with the bank back at 3.3 V and returns normally. A 64 MiB read ran at 47.6 MB/s per request (median) and 27.4 MB/s sustained, against 21.4 MB/s at 50 MHz. The sustained figure is lower because the card is slow on some requests, a card behaviour that depends on position and history, not on our request gap (see the design note's request-pattern results). Not done: the same on port 3-1, whose card (Phison SD64G, 2026) has only been seen at 3.3 V and needs approval for a 1.8 V run; a 3.3 V host reading a card at 1.8 V; any write at 1.8 V or 150 MHz (the write service is qualified at 3.3 V only); the OS adopting SDR104 ([adoption design](../designs/sd-uhs-adoption.md)). The board documents still disagree on whether DC1SW2 powers the card, so no supply cycle is planned.
 3. Measure sustained throughput on broader extents and cards, and qualify card replacement, removal and recovery, and voltage timing.
 4. Implement SDR50 and DDR50; add GPT, multiple volumes and clients.
 5. Connect the [FAT32 write service](../designs/storage-write.md) (host-checked with a power-loss sweep) to the card: CMD25 with descriptor DMA, ACMD13 for the allocation unit, a read-over-write arbiter, bounded-write admission in the runner, and the board rate, latency and interruption measurements.
@@ -65,7 +65,7 @@ on the platform source of v12. The same check applies to any other service that 
 Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-storage-20261101.md).
 
 <!-- evidence-table:begin -->
-26 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+27 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -95,4 +95,5 @@ Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/
 | `1793650532228649180-1fb49397` | 2026-11-02 | 3-3 | `aa20988e728c` | result-mismatch | inconclusive | run_total 49.23 s, card_clock 150 MHz, tuning_window 48, chosen_delay 40, per_request_rate_median 47.6 MB/s, sustained_rate 27.4 MB/s, bytes_read 6.71089e+07 B, errors 0 |
 | `1793650854687556052-db9aee9e` | 2026-11-02 | 3-3 | `9f261cc92409` | watchdog-reset | failed | run_total 75.048 s |
 | `1793651292191500240-5493408d` | 2026-11-02 | 3-3 | `31aba5df4dc3` | watchdog-reset | failed | run_total 29.309 s |
+| `1793652351260245353-286b63df` | 2026-11-02 | 3-3 | `851a4859bdd6` | result-mismatch | passed | run_total 43.543 s, run_total 43.543 s, card_clock 150 MHz, tuning_window 47, chosen_delay 40, phase_a_mean 5.27 ms, phase_b_mean 5.42 ms, phase_c_mean 6.73 ms, phase_d_mean 4.82 ms, phase_e_mean 1.93 ms, phase_f_mean 2.44 ms, phase_g_mean 3.21 ms, phase_h_mean 6.66 ms, bytes_read 1.25829e+08 B, sustained_rate_all_phases 20.4 MB/s |
 <!-- evidence-table:end -->

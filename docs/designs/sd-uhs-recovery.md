@@ -574,3 +574,27 @@ decision. The algorithm does not depend on a marker.
 - A733 datasheet `sources/A733-datasheet.txt`: pin domains (2535-2561), Table 5-3 (5870-5880), 5.10.
 - Vendor U-Boot `pmu_axp8191.c` and `.h` (`BUFFER0`, `0x55` power-down register).
 - [The UHS-I design](sd-uhs.md), [the PMIC runtime provider](../pmic-runtime.md), [watchdog recovery](../watchdog.md).
+
+### Request-pattern experiment, result (entry `1793652351260245353-286b63df`, 3-3, image `851a4859`, commit `1907eb70`)
+
+The sweep completed (passing delays 0 to 9 and 17 to 63, window 17 to 63, delay 40, 150 MHz). All 1,472 requests ran, the lifetime closed with the bank back at 3.3 V, and the board returned normally. The entry's `result-mismatch` is the placeholder
+expectation of the probe's input, as in the earlier successful run, not a run failure. Per phase (16 MiB for A to E, 8 MiB for F, G and H; mean request time, requests over 5 ms):
+
+| Phase | Request | Region | Mean | Over 5 ms | Predicted |
+| --- | --- | --- | --- | --- | --- |
+| A | 128 KiB | 48 MiB, normal | 5.27 ms | 68 of 128 | 6 to 10 ms (missed: lower) |
+| B | 128 KiB | same, quick | 5.42 ms | 70 of 128 | within 20 percent of A (met) |
+| C | 128 KiB | same, normal again | 6.73 ms | 93 of 128 | within 20 percent of A (missed: 28 percent more) |
+| D | 64 KiB | same | 4.82 ms (1.83 times A per MiB) | 88 of 256 | 1.5 to 1.8 times (just over) |
+| E | 32 KiB | same | 1.93 ms (1.47 times A per MiB) | 9 of 512 | 2.5 to 3.5 times (missed) |
+| F | 128 KiB | 4 MiB | 2.44 ms, every request | 0 | 2.4 to 2.8 ms (met) |
+| G | 128 KiB | 100 MiB | 3.21 ms | 11 of 128 | slow like A (missed: mostly fast) |
+| H | 128 KiB | 200 MiB, quick | 6.66 ms | 115 of 128 | slow like A (met) |
+
+What it shows. First, our request pattern is not the cause: the slow requests are the same requests in A, B and C (67 of the 68 slow ones in A are slow in B and in C), and quick or normal makes no difference (A against B). Second, a per-command cost is refuted:
+E issues four times as many commands as A over the same 16 MiB, and its extra time over the fast path is about the same in total (0.64 ms per request over 512 requests, 330 ms; A: 2.5 ms over 128 requests, 320 ms), where the per-command hypothesis predicted 2.5 to 3.5 times. Third, the slowness depends on
+the card's position and history together, not on the data: in A the slow requests are numbers 1 to 16 and 71 to 127 of the 48 to 64 MiB region and requests 17 to 70 are fast, yet D reading the first 8 MiB of the same region is slow from its third request to its last, and C's slow start extends to request 42 where A's ended at 16. The region is all zeros (the slow and fast requests have the same CRC).
+Fourth, regions differ: 4 MiB (F) is always fast, 100 MiB (G) mostly fast, 200 MiB (H) and 48 MiB (A to C) mostly slow. A fast request costs 2.75 ms for 128 KiB (47.6 MB/s), 1.81 ms for 64 KiB and 1.29 ms for 32 KiB, so about 0.8 ms per command plus 16 us per KiB.
+
+Not explained: what in the card makes position 56 to 64 MiB slow in A to C but 48 to 56 MiB slow in D, and the changing length of the slow start. The candidates are the card's internal mapping lookups or read-ahead after a jump back (D, and each phase's start, follows a seek), which a descending or interleaved
+order would separate from position. The sustained figure over all eight phases is 20.4 MB/s, so on this card at this position mix SDR104 delivers about what SDR25 did; the 47.6 MB/s per request is reached only on fast regions.
