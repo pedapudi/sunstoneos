@@ -437,6 +437,30 @@ entries that `memory.c` writes for the pool at boot (the model does not execute
 that code) and the NPU itself with a pool in slot 1; both need the board.
 `checks/memory-layout.py` ties the bounds in the build, the header, the terminal and the platform to the record.
 
+### Predicted board run of the NPU pool in the slot 1 area
+
+Hypothesis: an `npu-graphs` image built from the recipe of the passing run `1793599845892192862-30dc9323` (seven
+single-operation graphs, `apps/npu-graphs/models-a2.json`, 852 MHz at 800 mV, kind `npu`), with the pool that
+`tools/npu-pool-plan.py` places (10 MiB at `0x78600000`, the top of the slot 1 area, where that run's pool was 8 MiB
+at `0x47400000`), runs every graph through that pool and returns as that run did. Nothing else differs: the session
+record names the placed pool, the OS holds it in the ledger for the kernel, the platform maps its blocks at EL3, and
+the terminal cleans it.
+
+Condition: one run on port 3-1, no card, development DRAM mode.
+
+- **Expected.** Normal return, the receipt of that run's `expect.json`: seven records each with status `match` and no
+  differing byte, `completed` and `matched` equal to 7, the SDK closed. The per-graph times equal the earlier run's within
+  its spread, because the pool is write-back memory in both places and the maintenance is the same.
+- **A different result and what it means.**
+  - No receipt and no `RETURN_ROM` breadcrumb after the graphs ran: the terminal parked, so the EL3 entries of the pool
+    (`platform/a733-smp-cached/memory.c`) are missing or wrong. The host model does not run that code.
+  - The OS refuses the NPU at its start (the failure record names the NPU site): the ledger did not hold the extent
+    (`os_large_kernel_reserved`), which is a decode-check or capacity failure, and no job ran.
+  - A job faults or the NPU hangs: the NPU's reach of memory above `0x48000000` differs from what its page tables say.
+    The host check shows the tables are right, so this would be a property of the interconnect and would be new.
+  - Every graph `mismatch` with the same differing count: the device read or wrote another copy than the CPU, a cache
+    maintenance or attribute difference of the slot 1 blocks.
+
 ### Predicted board run of the heap
 
 Hypothesis: with the OS image built with the address-test decode check
