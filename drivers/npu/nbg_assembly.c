@@ -465,6 +465,22 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
         aliased(nn, slot, source, op.kind) ||
         command_count != 1 || !nbg_relocate(image->command, image->command_bytes, &command, 1) ||
         (nn_count && !nbg_relocate(image->nn, sizeof(image->nn), nn, nn_count))) return 0;
+#ifdef SUNSTONE_NPU_UNMAPPED_SLOT
+    /* NEGATIVE-TEST IMAGES ONLY (docs/reference-backsolve-npu.md, "NPU MMU exceptions"). Point one descriptor
+     * pointer of the first operation at a device address that the page tables do not map, to show that the NPU's
+     * own access faults. SUNSTONE_NPU_UNMAPPED_SLOT is a pointer_slot value. The address is encoded as the
+     * relocation of that field would encode it. */
+    if (number == 1) {
+        if (slot[SUNSTONE_NPU_UNMAPPED_SLOT] == UINT32_MAX) return 0; /* a test build must never silently skip its fault */
+        const struct nbg_relocation *r = &nn[slot[SUNSTONE_NPU_UNMAPPED_SLOT]];
+        unsigned char *d = image->nn + r->destination_offset;
+        uint32_t value = SUNSTONE_NPU_UNMAPPED_ADDRESS;
+        if (r->encoding == NBG_ADDRESS_SHIFT6 || r->encoding == NBG_ADDRESS_END_SHIFT6)
+            value = (word(d) & UINT32_C(0xfc000000)) | (value >> 6);
+        d[0] = (unsigned char)value; d[1] = (unsigned char)(value >> 8);
+        d[2] = (unsigned char)(value >> 16); d[3] = (unsigned char)(value >> 24);
+    }
+#endif
     *count = op.patch_count;
     return 1;
 }

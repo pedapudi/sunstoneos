@@ -250,6 +250,10 @@ static int call(enum npu_service_operation op,unsigned model,uint64_t timeout)
     if(!npu_runtime_collect(&npu.runtime,0,ticket,&reply,wait))
         return FAIL_REQUEST(op,model,ticket,NULL,1,atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire));
     if(reply.ticket!=ticket)return FAIL_REQUEST(op,model,ticket,&reply,ticket,reply.ticket);
+    if(reply.fault==A733_NPU_MMU)
+        /* MMU exception: the ticket byte of the site is the MMU status code (1 slave not present, 2 page not
+         * present, 3 write violation, 4 out of bound); expected holds it and observed the faulting device address. */
+        return fail_at(__LINE__,op,model,reply.mmu_status,&reply,reply.mmu_status,reply.mmu_address,SUNSTONE_CRUMB_HERE(),NULL);
     if(reply.result!=NPU_SERVICE_OK)return FAIL_REQUEST(op,model,ticket,&reply,NPU_SERVICE_OK,reply.result);
     if(reply.fault!=A733_NPU_NO_FAULT)return FAIL_REQUEST(op,model,ticket,&reply,A733_NPU_NO_FAULT,reply.fault);
     /* The runtime service answers OPEN as soon as the controller bootstrap

@@ -13,7 +13,8 @@ enum a733_npu_state {
 enum a733_npu_fault {
     A733_NPU_NO_FAULT, A733_NPU_IO, A733_NPU_IDENTITY, A733_NPU_NOT_IDLE,
     A733_NPU_REGISTER, A733_NPU_IRQ, A733_NPU_TIMEOUT, A733_NPU_MEMORY,
-    A733_NPU_COUNTER /* A job's cycle-counter read failed at publish or finish. */
+    A733_NPU_COUNTER, /* A job's cycle-counter read failed at publish or finish. */
+    A733_NPU_MMU /* The NPU reported an MMU exception (event bit 30); mmu_status and mmu_address hold the cause. */
 };
 struct a733_npu_command {
     uint32_t device;
@@ -50,6 +51,10 @@ struct a733_npu_controller {
     enum a733_npu_state state;
     enum a733_npu_fault fault;
     uint32_t irq_seen, last_idle, chip_model, chip_revision, chip_product, chip_date;
+    /* After an MMU exception: +0x384 (a 4-bit code per MMU unit: 1 slave not present, 2 page not present, 3 write
+     * violation, 4 out of bound, 5 and 6 security violations) and the faulting device address +0x380
+     * (vip2/vip_drv_debug.c:340-420; event bit 30 is IRQ_VALUE_MMU, vip_drv_hardware.h:86). */
+    uint32_t mmu_status, mmu_address;
     unsigned bootstrap;
 #ifdef SUNSTONE_NPU_ACTIVE_CANCEL
     uint64_t diagnostic_ticket, diagnostic_elapsed;

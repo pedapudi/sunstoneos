@@ -33,6 +33,8 @@ struct npu_service_reply {
     enum a733_npu_state state;
     enum a733_npu_fault fault;
     unsigned owns_session, canceled;
+    /* Valid when fault is A733_NPU_MMU: the controller's MMU status code and faulting device address. */
+    uint32_t mmu_status, mmu_address;
 };
 struct npu_service_message {
     struct npu_service_request request;

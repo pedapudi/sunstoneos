@@ -47,8 +47,8 @@ includes = [ROOT / 'apps/os', generated, ROOT / 'apps/board', ROOT / 'platform/a
             ROOT / 'platform/qemu-smp', NETWORK / 'include', NETWORK / 'portable/Compiler/GCC']
 
 
-def build(name, wrapper=None):
-    defines = DEFINES + (['OS_NPU_SOURCE="%s"' % wrapper] if wrapper else [])
+def build(name, wrapper=None, extra=()):
+    defines = DEFINES + list(extra) + (['OS_NPU_SOURCE="%s"' % wrapper] if wrapper else [])
     sources = [*UNITS, generated / 'npu-models.c', generated / 'npu_admitted_models.c']
     return host_rtos.build(out / name, sources, 'os-npu-service', defines=defines, includes=includes,
                            flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'],
@@ -65,6 +65,15 @@ for case in CASES:
     (out / ('case-%d.log' % case)).write_text(done.stdout + done.stderr)
     assert done.returncode == 0, (case, done.returncode, done.stdout[-400:], done.stderr[-600:])
     print('case', case, ' '.join(done.stdout.split('\n')[:2]))
+# Case 23 (the MMU exception record): a build whose first operation points its input at the unmapped device address
+# 0x20000000 (SUNSTONE_NPU_UNMAPPED_*, drivers/npu/nbg_assembly.c). The register model faults the job when it finds that
+# address in a descriptor; the wrapper must record the MMU status and the address. The ordinary build (the control)
+# never finds one and must complete the job, which cases 20 and 21 above already show.
+hooked = build('unmapped', extra=['SUNSTONE_NPU_UNMAPPED_SLOT=INPUT', 'SUNSTONE_NPU_UNMAPPED_ADDRESS=0x20000000u'])
+done = run(hooked, 23)
+(out / 'case-23.log').write_text(done.stdout + done.stderr)
+assert done.returncode == 0, (23, done.returncode, done.stdout[-400:], done.stderr[-600:])
+print('case 23', done.stdout.strip().splitlines()[-1])
 if not args.no_negative_control:
     # The wrapper before the OPEN fix: the reply to OPEN must be READY.
     old = (ROOT / 'apps/os/npu.c').read_text()
@@ -77,4 +86,4 @@ if not args.no_negative_control:
         done = run(control, case)
         assert done.returncode != 0, ('the wrapper before the OPEN fix passed case', case)
         print('case', case, 'fails on the wrapper before the OPEN fix, as required')
-print('PASS OS NPU wrapper on the real runtime and service: %d cases and a negative control' % len(CASES))
+print('PASS OS NPU wrapper on the real runtime and service: %d cases, the MMU exception record and a negative control' % len(CASES))

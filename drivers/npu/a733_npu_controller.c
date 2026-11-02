@@ -45,6 +45,7 @@ static void diagnostic_timeout_note(struct a733_npu_controller *c,uint64_t elaps
 
 #define IDLE_ALL UINT32_C(0x7fffffff)
 #define EVENT_DONE 1u
+#define EVENT_MMU UINT32_C(0x40000000)
 #define IRQ_ENABLE UINT32_C(0xc0000001)
 #define SRAM_BASE UINT32_C(0x400000)
 
@@ -251,6 +252,12 @@ enum a733_npu_state a733_npu_advance(struct a733_npu_controller *c, int sample_e
     if (sample_events) {
         if (!read_reg(c, 0x10, &value)) return c->state;
         c->irq_seen |= value;
+    }
+    if (c->irq_seen & EVENT_MMU) {
+        /* The vendor driver reads the MMU status and the exception address when this event is set
+         * (vip_drv_debug.c:355, :406). Record them before the fault; a failed read leaves the fault an I/O one. */
+        if (read_reg(c, 0x384, &c->mmu_status) && read_reg(c, 0x380, &c->mmu_address)) fail(c, A733_NPU_MMU);
+        return c->state;
     }
     if (c->irq_seen & ~EVENT_DONE) { fail(c, A733_NPU_IRQ); return c->state; }
     if (c->state == A733_NPU_CANCEL_ASSERTED) {

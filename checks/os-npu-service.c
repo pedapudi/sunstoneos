@@ -86,8 +86,10 @@ int aarch64_device_translate(uintptr_t cpu, int write, struct aarch64_translatio
 static unsigned bootstrap_us = BOOTSTRAP_US, job_us = JOB_US;
 static struct {
     uint32_t regs[0x800 / 4];
-    unsigned masked, latched, running, bootstrap, triggers, delivered;
+    unsigned masked, latched, running, bootstrap, triggers, delivered, mmu_exception;
 } model;
+static uint32_t unmapped_address = 0x20000000u;
+static unsigned unmapped_case; /* case 23: the descriptor points at an unmapped address; the job must fault and be recorded */
 static struct npu_runtime *runtime_of_model;
 static void deliver(void)
 {
@@ -99,7 +101,11 @@ static void deliver(void)
 static void complete_isr(void *unused)
 {
     (void)unused;
-    model.regs[0x10 / 4] |= 1; model.regs[1] = IDLE; model.running = 0;
+    /* An MMU exception raises event bit 30 and no completion (vip_drv_hardware.h:86); +0x384 and +0x380 hold the
+     * MMU status and the faulting address (vip_drv_debug.c:355, :406). */
+    if (model.mmu_exception) { model.regs[0x10 / 4] |= 0x40000000u; model.regs[0x384 / 4] = 2; model.regs[0x380 / 4] = model.mmu_exception; }
+    else model.regs[0x10 / 4] |= 1;
+    model.regs[1] = IDLE; model.running = 0;
     deliver();
 }
 /* Registers that the controller reads or writes (a733_npu_controller.c). A
@@ -107,7 +113,7 @@ static void complete_isr(void *unused)
 static int modeled(unsigned offset, int write)
 {
     static const unsigned readable[] = {0x00, 0x04, 0x10, 0x14, 0x20, 0x24, 0x28, 0x30, 0x3c, 0x90, 0x100, 0x104,
-                                        0x10c, 0x388, 0x3a8, 0x3b4, 0x414, 0x55c, 0x654};
+                                        0x10c, 0x380, 0x384, 0x388, 0x3a8, 0x3b4, 0x414, 0x55c, 0x654};
     static const unsigned writable[] = {0x00, 0x14, 0x3c, 0x90, 0x100, 0x104, 0x10c, 0x388, 0x3a4, 0x3a8, 0x3b4,
                                         0x414, 0x55c, 0x654};
     const unsigned *list = write ? writable : readable;
@@ -136,6 +142,15 @@ static int register_write(void *cookie, unsigned offset, uint32_t value)
         model.bootstrap = model.regs[0x654 / 4] == runtime_of_model->bootstrap.device;
         ++model.triggers;
         model.running = 1; model.regs[1] = 0;
+        /* A descriptor pointer at an unmapped device address (the negative-test build) makes the job fault. */
+        model.mmu_exception = 0;
+        if (!model.bootstrap && unmapped_case) {
+            const struct npu_runtime_region *c = &runtime_of_model->slot[0].constant;
+            for (size_t at = 0; at + 4 <= c->bytes; at += 4) {
+                uint32_t w; memcpy(&w, (const void *)(uintptr_t)(c->cpu + at), 4);
+                if (w == unmapped_address || (!(unmapped_address & 63) && (w & 0x03ffffffu) == unmapped_address >> 6)) { model.mmu_exception = unmapped_address; break; }
+            }
+        }
         host_irq_at(host_time_us() + (model.bootstrap ? bootstrap_us : job_us), complete_isr, NULL);
     }
     return 1;
@@ -240,6 +255,7 @@ static void client_all(void)
             assert(fread(t.data, 1, t.bytes, f) == t.bytes && fgetc(f) == EOF);
             fclose(f);
         }
+        if (unmapped_case) { result_submit = (unsigned)os_npu_submit(1000000); finished = 1; vTaskSuspend(NULL); }
         assert(os_npu_submit(1000000) == 1);
         ++graphs_run;
     }
@@ -270,6 +286,7 @@ static void client(void *unused)
         memcpy(t.data, os_npu_inputs[i].data, t.bytes);
     }
     result_submit = (unsigned)os_npu_submit(1000000);
+    if (unmapped_case) { finished = 1; vTaskSuspend(NULL); }
     state_after_submit = npu.runtime.service.controller.state; time_submit = host_time_us();
     result_close = (unsigned)os_npu_close();
     while (!os_npu_stopped()) (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(25));
@@ -280,6 +297,17 @@ static void verify(void *unused)
 {
     (void)unused;
     for (unsigned waited = 0; !finished && live_value && waited < 5000; ++waited) vTaskDelay(pdMS_TO_TICKS(1));
+    if (unmapped_case) {
+        printf("submit %d failures %u site %#x value %#x controller fault %u status %u address %#x\n", (int)result_submit,
+               board_failures, first_site, first_value, (unsigned)npu.runtime.service.controller.fault,
+               npu.runtime.service.controller.mmu_status, npu.runtime.service.controller.mmu_address);
+        assert(finished && board_failures == 1 && (int)result_submit == -1 && model.mmu_exception == unmapped_address);
+        assert(npu.runtime.service.controller.fault == A733_NPU_MMU);
+        assert(first_value == unmapped_address && ((first_site >> 16) & 255u) == 2u); /* the address and the status code */
+        assert(os_npu_first_failure.ready == 2 && os_npu_first_failure.reply_valid &&
+               os_npu_first_failure.reply.mmu_address == unmapped_address && os_npu_first_failure.reply.mmu_status == 2);
+        return;
+    }
     printf("open %u load %u submit %u close %u finished %u failures %u site %#x value %#x triggers %u\n",
            result_open, result_load, result_submit, result_close, finished, board_failures, first_site,
            first_value, model.triggers);
@@ -333,9 +361,11 @@ int main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3);
     const unsigned mode = (unsigned)strtoul(argv[1], NULL, 10);
-    assert(mode == 20 || mode == 21 || (mode == 22 && argc == 3));
+    assert(mode == 20 || mode == 21 || mode == 23 || ((mode == 22 || mode == 24) && argc == 3));
     if (argc == 3) input_directory = argv[2];
     if (mode == 21) bootstrap_us = 30000;
+    if (mode == 23 || mode == 24) unmapped_case = 1;
+    if (getenv("UNMAPPED_ADDRESS")) unmapped_address = (uint32_t)strtoul(getenv("UNMAPPED_ADDRESS"), NULL, 0);
     runtime_of_model = &npu.runtime;
     model.regs[0x20 / 4] = 0x9000; model.regs[0x24 / 4] = 0x9202;
     model.regs[0x30 / 4] = 0x1000003b; model.regs[0x28 / 4] = 0x20240101; model.regs[1] = IDLE;

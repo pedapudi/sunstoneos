@@ -464,6 +464,7 @@ static void respond(struct npu_service *s, const struct npu_service_message *m,
 {
     struct npu_service_reply reply = {.ticket = m->ticket, .result = result, .canceled = canceled};
     reply.state = s->controller.state; reply.fault = s->controller.fault;
+    reply.mmu_status = s->controller.mmu_status; reply.mmu_address = s->controller.mmu_address;
     reply.owns_session = s->owner == m->client;
     reply.job_ticket = s->job_ticket;
     if (m->request.operation == NPU_SERVICE_REAP && result == NPU_SERVICE_OK)
@@ -583,6 +584,7 @@ static void respond_shared(struct npu_service *s, const struct npu_service_messa
     struct npu_service_reply reply = {.ticket = m->ticket, .result = result, .canceled = canceled};
     reply.state = closed ? A733_NPU_CLOSED : view(s, m->client);
     reply.fault = s->controller.fault;
+    reply.mmu_status = s->controller.mmu_status; reply.mmu_address = s->controller.mmu_address;
     reply.owns_session = member->state != MEMBER_NONE;
     reply.job_ticket = member->job_ticket;
     if (m->request.operation == NPU_SERVICE_REAP && result == NPU_SERVICE_OK)
@@ -638,6 +640,7 @@ static void runtime_reply(struct npu_service *s, unsigned client, enum npu_servi
     struct npu_service_member *member = &s->member[client];
     struct npu_service_reply reply = {.ticket = member->wait.ticket, .result = result,
         .state = state, .fault = s->controller.fault, .owns_session = 1,
+        .mmu_status = s->controller.mmu_status, .mmu_address = s->controller.mmu_address,
         .job_ticket = member->wait.request.operation == NPU_SERVICE_SUBMIT ? member->wait.ticket : 0};
     member->has_wait = 0; member->state = MEMBER_IDLE; member->job_ticket = 0;
     configASSERT(xQueueSend(s->clients[client].replies, &reply, 0) == pdTRUE);

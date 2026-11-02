@@ -759,3 +759,56 @@ What a different result means:
   for the idle mask, `GATE_VALUE` for a gate bit still set, `SETTLE` for the
   wait. The PPI 27 composition refuses only on inherited CNTV or PPI 27 state,
   and the setup assertion expects 0xb0.
+
+### NPU MMU exceptions
+
+This section is the reference for the unmapped-address runs R1 to R5 and for the MMU exception record that the
+controller keeps (`drivers/npu/a733_npu_controller.c`, `a733_npu_advance`).
+
+**Vendor registers.** The vendor driver learns of an MMU exception from the event register and then reads two
+registers (`vip2/vip_drv_hardware.h:85-91`; `vip2/vip_drv_debug.c:340-445`; `vip2/vip_drv_task_common.c:600-640`).
+
+| Register | Meaning |
+| --- | --- |
+| `+0x010` | Event register. Bit 31 `0x80000000` is an AXI error, bit 30 `0x40000000` is an MMU exception, bit 28 `0x10000000` is a cancel, bit 26 `0x04000000` is an error. Bit 0 is completion. SunstoneOS enables `0xc0000001`, so bits 31, 30 and 0 raise the interrupt. |
+| `+0x384` | MMU status, one 4-bit code for each MMU unit: 1 slave not present, 2 page not present, 3 write violation, 4 out of bound, 5 read security violation, 6 write security violation. |
+| `+0x380` | Faulting device address. In the 40-bit virtual address mode the high bits are in `+0x3b8`; SunstoneOS maps below 4 GiB and does not read `+0x3b8`. |
+| `+0x388` | Bit 0 reports the MMU enabled. The controller already requires `0x21` before every start. |
+
+The vendor driver treats an MMU or AXI event as a timeout that needs recovery (`VIP_ERROR_TIMEOUT`) and resets the
+core. No register distinguishes a read from a write for "page not present": the type of the access comes from the
+descriptor field that was changed, not from the status.
+
+**What the controller records.** When an event has bit 30, the controller reads `+0x384` and `+0x380`, keeps them in
+`mmu_status` and `mmu_address`, and enters the fault state `A733_NPU_MMU`. The service copies both values into the
+reply, and the OS wrapper (`apps/os/npu.c`) records the failure with the faulting address as the value and the status
+code in the ticket byte (bits 23:16) of the site word. A NPU failure ends the image at the watchdog, not at the
+failure return, because the owner retains the device (`docs/designs/failure-return.md`, "Device failure").
+
+**The runs.** Each image runs one SunstoneOS test graph through the OS NPU service. A compile-time test option
+(`SUNSTONE_NPU_UNMAPPED_SLOT`, `SUNSTONE_NPU_UNMAPPED_ADDRESS` in `drivers/npu/nbg_assembly.c`) overwrites one
+descriptor pointer of the first operation after relocation, in the encoding of that field, with a device address that
+the page tables do not map. No OS physical address is used. A descriptor that lacks the field is refused at load, so the
+option cannot silently do nothing.
+
+| Run | Graph | Pointer | Device address | Access |
+| --- | --- | --- | --- | --- |
+| R1 | relu | input | `0x20000000` | read |
+| R2 | relu | output | `0x20000000` | write |
+| R3 | add | first input | `0x20000000` | read |
+| R4 | add | output | `0x20000000` | write |
+| R5 | relu | input | `0x180` (page 0) | read |
+
+**Prediction.** Each image starts the single job, the NPU reaches the changed pointer, and event bit 30 is raised with
+no completion. The first-failure record names the NPU request failure (`SUNSTONE_CRUMB_FAIL_NPU`) with status code 2
+(page not present) in the ticket byte and the faulting address as the value: `0x20000000` for R1 to R4 and `0x180`
+for R5 (the descriptor stores this pointer in 64-byte units, so `0x160` cannot be encoded and the nearest
+encodable address in page 0 is used). A read or a write is told apart by which pointer was changed. The outcome is
+`watchdog-reset`, the board returns to FEL without a replug, and the DRAM is lost. A status code 4 or 1 would show a
+different reason for the exception; a normal return, a completion without an exception, or a failure without an MMU
+record means the case failed, because the NPU did not fault on the access. The runs use development DRAM mode, with
+the watchdog armed, at 852 MHz and 800 mV, with no change of rail, clock or storage.
+
+The host check `checks/os-npu-service.py` (case 23) and the per-run host reproduction exercise the hook, the
+controller capture, the reply and the wrapper record on the production sources with a modeled register file; they show
+the plumbing, not the hardware behaviour.
