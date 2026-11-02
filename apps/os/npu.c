@@ -245,23 +245,20 @@ static int call(enum npu_service_operation op,unsigned model,uint64_t timeout)
     const uint64_t ticks=(end-now)*configTICK_RATE_HZ/1000000;
     if(ticks<wait)wait=(TickType_t)ticks;
     if(!wait)return FAIL_REQUEST(op,model,0,NULL,1,ticks);
-    enum npu_service_operation sent=op;
-resend:
-    if(!npu_runtime_send(&npu.runtime,0,sent,model,timeout,wait,&ticket))
-        return FAIL_REQUEST(sent,model,0,NULL,1,atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire));
+    if(!npu_runtime_send(&npu.runtime,0,op,model,timeout,wait,&ticket))
+        return FAIL_REQUEST(op,model,0,NULL,1,atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire));
     if(!npu_runtime_collect(&npu.runtime,0,ticket,&reply,wait))
-        return FAIL_REQUEST(sent,model,ticket,NULL,1,atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire));
-    if(reply.ticket!=ticket)return FAIL_REQUEST(sent,model,ticket,&reply,ticket,reply.ticket);
-    if(reply.result!=NPU_SERVICE_OK)return FAIL_REQUEST(sent,model,ticket,&reply,NPU_SERVICE_OK,reply.result);
-    if(reply.fault!=A733_NPU_NO_FAULT)return FAIL_REQUEST(sent,model,ticket,&reply,A733_NPU_NO_FAULT,reply.fault);
-    /* OPEN replies when the bootstrap starts; the service holds the WAIT reply
-     * until the bootstrap completes, so no polling. */
-    if(op==NPU_SERVICE_OPEN&&sent==NPU_SERVICE_OPEN&&reply.state==A733_NPU_BOOTING){
-        sent=NPU_SERVICE_WAIT;timeout=0;goto resend;
-    }
+        return FAIL_REQUEST(op,model,ticket,NULL,1,atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire));
+    if(reply.ticket!=ticket)return FAIL_REQUEST(op,model,ticket,&reply,ticket,reply.ticket);
+    if(reply.result!=NPU_SERVICE_OK)return FAIL_REQUEST(op,model,ticket,&reply,NPU_SERVICE_OK,reply.result);
+    if(reply.fault!=A733_NPU_NO_FAULT)return FAIL_REQUEST(op,model,ticket,&reply,A733_NPU_NO_FAULT,reply.fault);
+    /* The runtime service answers OPEN as soon as the controller bootstrap
+     * starts (BOOTING) or, when it has already completed, READY. The next
+     * LOAD is held until its own completion, so BOOTING is not final. The
+     * runtime accepts no WAIT (npu_runtime_send), unlike the finite client. */
     const enum a733_npu_state expected=op==NPU_SERVICE_CLOSE?A733_NPU_CLOSED:
         op==NPU_SERVICE_SUBMIT?A733_NPU_DONE:A733_NPU_READY;
-    if(reply.state!=expected)return FAIL_REQUEST(sent,model,ticket,&reply,expected,reply.state);
+    if(reply.state!=expected&&!(op==NPU_SERVICE_OPEN&&reply.state==A733_NPU_BOOTING))return FAIL_REQUEST(op,model,ticket,&reply,expected,reply.state);
     if(!watch(&now,&why))return fail_watch(op,model,ticket,&reply,&why);
     return 1;
 }

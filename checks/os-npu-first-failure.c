@@ -33,9 +33,11 @@ int npu_runtime_send(struct npu_runtime *r,unsigned slot,enum npu_service_operat
                      uint64_t timeout,TickType_t wait,uint64_t *ticket)
 {
     assert(r==&npu.runtime&&!slot&&wait);
-    if(mode>=20)assert(model==0&&((send_calls==0&&op==NPU_SERVICE_OPEN&&timeout==1000000)||
-                                  (send_calls==1&&op==NPU_SERVICE_WAIT&&!timeout)));
-    else assert(op==NPU_SERVICE_LOAD&&model==2&&!timeout);
+    if(mode>=20) {
+        /* The runtime accepts only these operations (npu_runtime_send); WAIT is refused. */
+        static const enum npu_service_operation order[]={NPU_SERVICE_OPEN,NPU_SERVICE_LOAD,NPU_SERVICE_SUBMIT,NPU_SERVICE_CLOSE};
+        assert(send_calls<4&&op==order[send_calls]);
+    } else assert(op==NPU_SERVICE_LOAD&&model==2&&!timeout);
     ++send_calls;if(mode==1)return 0;*ticket=sent_ticket;return 1;
 }
 int npu_runtime_collect(struct npu_runtime *r,unsigned slot,uint64_t ticket,
@@ -52,9 +54,13 @@ int npu_runtime_collect(struct npu_runtime *r,unsigned slot,uint64_t ticket,
     if(mode==7)live_value=0;
     if(mode==8)board_fail_note(0xa234,0xfedcba98,(const void *)(uintptr_t)0x40012340);
     if(mode==9)reply->ticket+=UINT64_C(1)<<40;
-    /* The service answers OPEN when the bootstrap starts and holds the WAIT
-     * reply until the bootstrap completes (mode 21: it is still booting). */
-    if(mode>=20)reply->state=(collect_calls==1||mode==21)?A733_NPU_BOOTING:A733_NPU_READY;
+    /* Reply states of the runtime service: OPEN answers BOOTING while the
+     * controller bootstrap runs (mode 21: RUNNING, which is final), LOAD
+     * READY, SUBMIT DONE, CLOSE CLOSED. */
+    if(mode>=20) {
+        static const enum a733_npu_state states[]={A733_NPU_BOOTING,A733_NPU_READY,A733_NPU_DONE,A733_NPU_CLOSED};
+        reply->state=collect_calls==1&&mode==21?A733_NPU_RUNNING:states[collect_calls-1];
+    }
     return 1;
 }
 BaseType_t xTaskGenericNotify(TaskHandle_t task,UBaseType_t index,uint32_t value,eNotifyAction action,uint32_t *prior)
@@ -98,14 +104,16 @@ int main(int argc,char **argv)
         assert(!send_calls&&!collect_calls);emit_record();return 0;
     }
     if(mode>=20) {
-        const int opened=call(NPU_SERVICE_OPEN,0,1000000);
-        assert(send_calls==2&&collect_calls==2);
+        const int steps[]={call(NPU_SERVICE_OPEN,0,1000000),
+            mode==20?call(NPU_SERVICE_LOAD,0,0):0,mode==20?call(NPU_SERVICE_SUBMIT,0,1000):0,
+            mode==20?call(NPU_SERVICE_CLOSE,0,0):0};
         if(mode==20) {
-            assert(opened==1&&!board_failures&&!atomic_load(&os_npu_first_failure.ready));
+            for(unsigned i=0;i<4;++i)assert(steps[i]==1);
+            assert(send_calls==4&&collect_calls==4&&!board_failures&&!atomic_load(&os_npu_first_failure.ready));
         } else {
-            assert(opened==-1&&board_failures==1&&atomic_load(&os_npu_first_failure.ready)==2);
-            assert(os_npu_first_failure.operation==NPU_SERVICE_WAIT&&
-                   os_npu_first_failure.expected==A733_NPU_READY&&os_npu_first_failure.observed==A733_NPU_BOOTING);
+            assert(steps[0]==-1&&send_calls==1&&collect_calls==1&&board_failures==1);
+            assert(os_npu_first_failure.operation==NPU_SERVICE_OPEN&&os_npu_first_failure.expected==A733_NPU_READY&&
+                   os_npu_first_failure.observed==A733_NPU_RUNNING);
         }
         emit_record();return 0;
     }

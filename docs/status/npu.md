@@ -32,7 +32,7 @@ p50 and 26,925 jobs/s, and 1,000 fence-chained two-stage jobs, on 3-3. The basel
 Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-13 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+14 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -49,4 +49,5 @@ Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added
 | `1793576635217632637-5879361e` | 2026-11-01 | 3-3 | `e574d622a946` | watchdog-reset | failed | run_total 71.723 s |
 | `1793581334418340064-a4b4d83e` | 2026-11-02 | 3-3 | `ea38709362f5` | result-mismatch | failed | run_total 77.417 s |
 | `1793587317962103239-5bbfc48d` | 2026-11-02 | 3-3 | `5669db271593` | returned | passed | run_total 126.154 s, window_jobs_per_s 26653.6 jobs/s, window_latency_p50 10.125 µs, window_latency_p99 11.04 µs, window_latency_max 17.04 µs, charged_cpu_per_job 34.5 µs, cold_job_p50_9ms_gap 10.58 µs, cold_job_p50_100ms_gap 10.58 µs, matching_jobs 61231 jobs, deadline_margin_at_end 12.69 s |
+| `1793592163786755757-7c8b2818` | 2026-11-02 | 3-3 | `c0fb7bbadc21` | watchdog-reset | failed | run_total 26.192 s, first_failure_line 257, open_reply_state 1 |
 <!-- evidence-table:end -->
