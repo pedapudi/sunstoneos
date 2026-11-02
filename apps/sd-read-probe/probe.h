@@ -69,6 +69,7 @@ struct sdp_region {
     uint64_t el1_xor, el0_xor_owner, el1_xor_strided;
     struct sdp_region_case cases[SDP_RT_CASES];
     struct sdp_region_pass pass[SDP_RT_PASSES];
+    uint64_t stop_class, stop_esr, stop_far, stop_elr;   /* the exception that ended an unexpected EL0 call */
 };
 struct sdp_timing { uint32_t command_us, first_byte_us, done_us, clean_us, invalidate_us, polls; };
 

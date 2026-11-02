@@ -11,6 +11,7 @@
 struct region_el0 {                 /* layout used by el0.S */
     uint64_t entry, stack, a0, a1, a2, a3;                 /* in */
     uint64_t esr, far, elr, x0, saved_vbar, saved_daif;    /* out */
+    uint64_t saved_sp, saved_spsel;
 };
 /* Run EL0 code with IRQs masked and the vectors of el0.S; returns the exception class that ended it
  * (0x15, an SVC, is a normal return) and fills the out fields. TTBR0 must already select the space. */

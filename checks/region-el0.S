@@ -1,8 +1,12 @@
 .section .text.boot,"ax"
 .global _start
 _start:
-    ldr x0,=stack_top
+    // Tasks of the FreeRTOS port run on SP_EL0 (SPSel 0) and exceptions use SP_EL1, as on the board.
+    ldr x0,=isr_stack_top
     mov sp,x0
+    ldr x0,=stack_top
+    msr sp_el0,x0
+    msr spsel,#0
     mrs x1,CurrentEL
     mov x2,#0x3c0
     msr daifset,#15
@@ -17,3 +21,5 @@ _start:
 .balign 16
 .space 65536
 stack_top:
+.space 4096
+isr_stack_top:

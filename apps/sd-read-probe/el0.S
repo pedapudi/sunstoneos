@@ -11,6 +11,8 @@
 #define CALL_X0 72
 #define CALL_VBAR 80
 #define CALL_DAIF 88
+#define CALL_SP 96
+#define CALL_SPSEL 104
 
 .section .text.region_el0,"ax"
 .balign 16
@@ -25,6 +27,12 @@ region_el0_call:
     stp x29,x30,[sp,#80]
     mrs x9,daif
     str x9,[x0,#CALL_DAIF]
+    // The caller may run on SP_EL0 (the FreeRTOS port does) while exceptions arrive on SP_EL1, and the
+    // EL0 stack below replaces SP_EL0: keep the caller's stack pointer and selector for the return.
+    mov x9,sp
+    str x9,[x0,#CALL_SP]
+    mrs x9,spsel
+    str x9,[x0,#CALL_SPSEL]
     msr daifset,#15
     mrs x9,vbar_el1
     str x9,[x0,#CALL_VBAR]
@@ -33,6 +41,7 @@ region_el0_call:
     isb
     adrp x10,region_el0_current
     str x0,[x10,:lo12:region_el0_current]
+    msr spsel,#1                  // MSR to SP_EL0 is undefined while SPSel is 0; sp is not used again until the return
     ldr x11,[x0,#CALL_STACK]
     msr sp_el0,x11
     ldr x11,[x0,#CALL_ENTRY]
@@ -70,7 +79,11 @@ region_el0_finish:
     lsr x0,x9,#26
     cbz x14,1f
     mov x0,x14
-1:  ldp x21,x22,[sp,#16]
+1:  ldr x13,[x12,#CALL_SPSEL]
+    msr spsel,x13
+    ldr x13,[x12,#CALL_SP]
+    mov sp,x13
+    ldp x21,x22,[sp,#16]
     ldp x23,x24,[sp,#32]
     ldp x25,x26,[sp,#48]
     ldp x27,x28,[sp,#64]

@@ -64,7 +64,7 @@ void main(void)
     /* Distinct data in the first 64 MiB so the folds mean something. */
     volatile uint64_t *p = (volatile uint64_t *)(uintptr_t)report.base;
     for (uint64_t i = 0; i < (64UL << 20) / 8; ++i) p[i] = i * 0x9e3779b97f4a7c15ull + 0x1234;
-    check(region_exercise(&state, &report, 96UL << 20) == 0, "region_exercise", report.status, 0);
+    check(region_exercise(&state, &report, 96UL << 20) == 0, "region_exercise", report.stop_esr, report.stop_elr);
 
     /* Isolation cases, in the order region_exercise runs them. */
     enum { OK = 0x15, ABORT = 0x24 };

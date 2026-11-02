@@ -184,7 +184,10 @@ int region_exercise(struct region_state *st, struct sdp_region *r, uint64_t pass
                 c.stack = st->stack_window + 0x1f0000;
                 c.a0 = base + off; c.a1 = n;
                 uint64_t e = region_el0_call(&c);
-                if (e != 0x15) { r->status = 10; switch_space(st->base_ttbr); return r->status; }
+                if (e != 0x15) {
+                    r->stop_class = e; r->stop_esr = c.esr; r->stop_far = c.far; r->stop_elr = c.elr;
+                    r->status = 10; switch_space(st->base_ttbr); return r->status;
+                }
                 xorv ^= c.x0;
             }
             t1 = counter_ticks();

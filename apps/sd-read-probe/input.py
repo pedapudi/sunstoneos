@@ -63,8 +63,8 @@ def decode(raw, plan_blocks):
                                    'first_cluster': first, 'attributes': e[72], 'long_name': e[73], 'truncated': e[74]})
         out['fat'] = fat
     region_at = fat_at + 4952
-    if len(raw) >= region_at + 2424:
-        g = raw[region_at:region_at + 2424]
+    if len(raw) >= region_at + 2456:
+        g = raw[region_at:region_at + 2456]
         r = dict(zip(('status', 'ledger_status', 'build_status_owner', 'build_status_other', 'build_status_view',
                       'file_status', 'load_status'), struct.unpack_from('<7i', g, 0)))
         flags, ncases, npasses, pmu = struct.unpack_from('<4I', g, 32)
@@ -86,6 +86,7 @@ def decode(raw, plan_blocks):
             r['cases'].append({'space': ['owner', 'other', 'view'][space], 'op': ['read', 'write', 'control'][op],
                                'address': hex(addr), 'ec': hex(ec), 'esr': hex(esr), 'far': hex(far),
                                'dfsc': hex(esr & 63), 'write_not_read': (esr >> 6) & 1, 'result': hex(res)})
+        r['stop'] = dict(zip(('class', 'esr', 'far', 'elr'), map(hex, struct.unpack_from('<4Q', g, 2424))))
         r['passes'] = []
         for i in range(npasses):
             kind, _, nbytes, ticks, cycles, c0, c1, c2, c3, xv = struct.unpack_from('<2I8Q', g, 984 + 72 * i)
