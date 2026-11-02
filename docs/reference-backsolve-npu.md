@@ -424,3 +424,215 @@ and the register pass refuses an enabled PLL.
    next observation. The principal new hang risk is the routing write
    itself, so the run must stop at a failed readback and retain the board
    for whole-board power removal.
+
+## Interrupt, idle-gating and combined-image paths (re-derived 2026-11-01)
+
+This section re-derives the paths that changed after the cold-boot analysis
+above: the GIC configuration of every interrupt the NPU paths use, the bind
+refusal of the combined image, idle gating, the finite shared-timer
+composition and the OS service start and stop. It made no board access. The
+sources are open ones only: the vendor NPU driver (`vip2/…`), the mainline
+Linux `irq-gic-v3.c` and `irq-gic-common.c` pinned at `e5f0a698` (the latter from the 2026-10-25 evidence copy; the pinned tree holds only `irq-gic-v3.c`), TF-A 2.5
+(`drivers/arm/gic/v3/`), the vendor device tree and the GICv3 architecture
+specification IHI0069D. No firmware blob was disassembled and no blob content
+is quoted. The closed TF-A monitor of the vendor image is therefore not
+described; the open TF-A and Linux drivers define the reference.
+
+### GIC configuration diff
+
+**Vendor sequence for a Nonsecure Group 1 SPI (Linux on TF-A).** TF-A
+`gicv3_distif_init` clears the three group-enable bits, sets ARE_S and ARE_NS,
+applies the SPI defaults, then enables the Secure groups
+(`gicv3_main.c:187-218`); it never configures Nonsecure SPIs individually.
+Linux `gic_dist_init` writes `GICD_CTLR = 0`, waits for RWP, writes
+`IGROUPR = ~0` for every SPI bank, applies `gic_dist_config` (all SPIs level,
+default priority, disabled and inactive) and then enables ARE_NS, G1A and G1
+(`irq-gic-v3.c:972-1020`; `irq-gic-common.c:91-115`). A driver request then
+runs three steps in this order: `gic_set_type` writes `GICD_ICFGR` through
+`gic_configure_irq` (`irq-gic-v3.c:750-780`; `irq-gic-common.c:48-88`),
+`gic_set_affinity` writes `GICD_IROUTER` with the interrupt masked
+(`irq-gic-v3.c:1477-1515`), and `gic_unmask_irq` writes `GICD_ISENABLER`
+(`irq-gic-v3.c:510-513`). Linux never writes the priority of an individual
+SPI and never reads back group, priority or route. The NPU node requests SPI 65,
+level high, INTID 97 (`sun60iw2p1.dtsi:2353`; `vip_drv_device_driver.c:956`,
+after the clocks and resets of the platform probe). The virtual timer PPI is
+`GIC_PPI 11`, INTID 27, level (`sun60iw2p1.dtsi:396-402`); Linux tolerates a
+PPI whose `ICFGR` write does not stick (`irq-gic-v3.c:772-777`).
+
+**Priority views.** With `GICD_CTLR.DS = 0` and `SCR_EL3.FIQ = 1`, a Nonsecure
+write of a Group 1 priority or of `ICC_PMR_EL1` stores `(value >> 1) | 0x80`,
+and a Nonsecure read returns `(stored << 1) & 0xff`
+(`irq-gic-v3.c:92-110`, `:190-218`; IHI0069D 4.8.1). A Secure access, such as the
+EL3 route installer, reads and writes the stored value. Priority 0xd8 written
+at EL3 therefore reads 0xb0 at Nonsecure EL1, and the PMR value 0xb0 written at
+Nonsecure EL1 is stored as 0xd8.
+
+**SunstoneOS sequence.**
+
+| Item | Where | Sequence | Match |
+| --- | --- | --- | --- |
+| INTID 97, OS and board images | `platform/a733-smp-cached/irq_table.c:53-91`; `tools/sunstone-manifest.py:346` | At EL3 with the groups off: IGROUPR bit set, IGRPMODR bit clear, ICFGR level, IPRIORITYR 0xd8 (Secure view), IROUTER core 1; one barrier; read back all; refuse when the source is enabled, pending or active; enable stays with the service | Same set of fields as Linux. The order differs: priority is written (Linux relies on its default) and the group is written (Linux writes it in bulk) |
+| INTID 97, finite image | `apps/npu-interrupt/irq-route.c:60-73` | Same order at EL3, route 0, priority 0xd8 | As above |
+| INTID 97 bind | `platform/a733/npu_irq.c` `bind_refusal` | At Nonsecure EL1, before the scheduler: checks listed below | Linux has no analogue |
+| INTID 97 enable | `npu_irq.c` `rearm` through `gicv3_spi_rearm` | ISENABLER after the device mask is armed | Same last step as Linux |
+| PPI 27, OS image | `platform/a733-smp-cached/continue.c:112-125`; `platform.c:121` | EL3 reads IGROUPR0 (group 1 set) and IGRPMODR0 (clear), clears the ICFGR1 edge bit and reads it back; EL1 then writes priority byte 0xd8 and ISENABLER0 | Group by the base monitor, as for Linux's bulk write; priority written at Nonsecure EL1, stored as 0xec |
+| PPI 27, idle benchmark | `apps/npu-finite/monitor.c:49-79` | EL3: captures priorities, base init, clears ICFGR edge bit, writes Secure priority 0xd8, waits for RWP, reads back | Matches the Secure view |
+| PPI 27, setup check | `apps/npu-finite/deadline.c` | EL1 reads the priority byte and requires the Nonsecure view 0xb0 | Matches the view, fixed in 5dd7cb4b |
+| SGI | `platform/a733-smp-cached/platform.c:191` | The FreeRTOS cross-core yield; no NPU code configures it | Not an NPU path. Its priority is set by the port and is not derived here |
+
+**Answer on the API mask.** The three views agree. The platform builds with
+`SUNSTONE_SECURE_MONITOR`, so `configUNIQUE_INTERRUPT_PRIORITIES` is 16,
+`portPRIORITY_SHIFT` is 4 and `configMAX_API_CALL_INTERRUPT_PRIORITY` is 11
+(`include/FreeRTOSConfig.h:63-66`; FreeRTOS `portmacro.h:183`). The port writes
+`11 << 4 = 0xb0` to `ICC_PMR_EL1` at Nonsecure EL1 (`patches/freertos-smp-c.patch:109`;
+`freertos-smp-asm.patch:176`). The monitor sets `SCR_EL3.FIQ = 1`:
+`scr_el3 = 0x505` at `platform/a733/monitor.c:124-125` and `0x535` at
+`platform/a733-smp-cached/continue.S:98`, and initializes the Secure PMR to 0xff
+so the Nonsecure PMR write takes effect (`continue.S:82-86`). The PMR is thus
+stored as `(0xb0 >> 1) | 0x80 = 0xd8`. The GIC signals an interrupt only when its
+stored priority is numerically below the stored PMR. The stored priority of
+INTID 97 is 0xd8 (route table) and of PPI 27 is 0xd8 (EL3) or 0xec (EL1 write of
+0xd8 at `platform.c:121`). None is below 0xd8, so each is masked whenever the
+kernel raises the PMR to the API mask and sits at or below the mask: the
+handlers may call FreeRTOS `FromISR` functions. The comparison is meaningful
+only in one view. The image-level assertions
+now state it: `apps/os/npu-irq.c` and `apps/npu-board/irq.c` assert
+`((mask << 4) >> 1 | 0x80) <= 0xd8`, the Secure-view comparison.
+
+**One mixed-view comparison remains outside the NPU paths.** The route table
+requires `priority >= A733_IRQ_TABLE_MIN_PRIORITY = 0xb0`
+(`platform/a733-smp-cached/irq_table.h:25`), which compares a Secure-view value
+with the Nonsecure-view mask. A route priority between 0xb0 and 0xd7 passes the
+check but is stored above the stored PMR 0xd8, so its handler preempts API
+critical sections. The generated table holds the USB host route at 0xb0
+(`tools/sunstone-manifest.py:345`) under `SUNSTONE_BOARD_USB2_IRQ`. Whether that
+handler calls `FromISR` functions is not derived here; the minimum should read 0xd8
+for the Secure-view table. This change is left for the owner of the USB route.
+
+### Bind refusal of the combined image
+
+The per-clause failure record (`0xb01`–`0xb09`) did not exist when the refusal
+was recorded, so that run holds only the call site (`apps/os/npu.c:434`) and
+value 0. `bind_refusal` evaluates in this order, with the vendor comparison:
+
+| Clause | Condition that refuses | State at that point | Vendor |
+| --- | --- | --- | --- |
+| 1 | not EL1, already bound or faulted | EL1, fresh state | Not applicable |
+| 2 | scheduler started | `board_application_start` runs before the scheduler (`apps/os/start.c:29-33`) | Not applicable; Linux requests the IRQ in probe |
+| 3 | distributor write pending | no write since the installer's RWP wait (`irq_table.c:90`) | Linux waits RWP after distributor writes (`irq-gic-v3.c:1018`) |
+| 4 | source enabled | common boot cleared every SPI (`platform/a733/monitor.c:96-99`) | Linux disables all SPIs (`irq-gic-common.c:91-115`) |
+| 5 | source pending | the installer refused otherwise (`irq_table.c:58-64`, `:84-88`); the NPU has not started | Satisfied: the vendor requests the IRQ with the device mask at reset |
+| 6 | source active | as for 5 | Satisfied |
+| 7 | ICFGR not level | installer wrote and verified level | Satisfied: level high |
+| 8 | priority byte differs from the expected value | installer wrote Secure 0xd8; Nonsecure read returns 0xb0 | Linux writes 0xa0 in the Nonsecure view and reads nothing back |
+| 9 | IROUTER differs from core 1 | installer wrote core 1 and verified it | Linux writes IROUTER and reads nothing back |
+
+**Prediction.** Clause 8 refused. Before the fix the expected value was
+`NPU_IRQ_PRIORITY = 0xd8`, the Secure-view number, compared with the Nonsecure
+read, which the architecture and the PPI 27 board read (0xb0)
+both fix at 0xb0. Clauses 3 to 7 and 9 read values that
+the EL3 installer verified in the same boot, so they are not predicted to
+refuse. The finite single-core image passed this clause because its default
+expectation 0xb0 is already the Nonsecure view, and the host fixtures for
+the board image used `0xd8 << 8` for the read, which repeated the assumption
+instead of testing it. The expectation is now the Nonsecure view of the
+route priority (`NPU_IRQ_NS_PRIORITY` in `platform/a733/npu_irq.c`), and the
+board provider fixture models the read as `0xb0 << 8`. The next run's record
+discriminates as follows: `0xb08` confirms a remaining view error, `0xb09`
+shows a route readback different from core 1 (`0x100`), and `0xb05` or `0xb06`
+shows a device-originated or inherited interrupt state that the installer did
+not see.
+
+### Idle gating
+
+**Vendor sequence.** Clock suspend runs when the power state leaves the CLOCK
+states for IDLE (`vip_drv_pm.c:455-467`, `:560-575`): first
+`vipdrv_pm_set_frequency(1)` (`:66-139`: save `+0x104`, write `0x00ffffff`, set
+scale 1 in `+0x000` bits 8:2 with a bit-9 pulse, 1 µs, scale the shader through
+`+0x10c`, restore `+0x104`), then `vipdrv_pm_disable_clock` (`:142-175`):
+read `+0x000`, set bit 0 and bit 9, write, clear bit 9, write, 1 µs. Resume
+(`power_clock_state_in`, `:438-452`; `vipdrv_pm_enable_clock`, `:177-210`) reads
+`+0x000`, clears bit 0, sets bit 9, writes, clears bit 9, writes, 1 µs, reads
+`+0x10c`, pulses bit 0 and clears it, then sets the frequency again. The vendor
+reads `+0x004` only in `vipdrv_hw_wait_idle`, with a mask compare against
+`0x7fffffff` (`vip_drv_hardware.c:1045-1076`; `vip_drv_hardware.h:69`), never in
+the suspend or resume path. The only timer is the 10 s power-off timer
+(`vip_lite_config.h:443`); the clock gate follows the transition to idle.
+
+| Divergence | Ours | Can refuse on hardware |
+| --- | --- | --- |
+| Gate hysteresis | 10 ms (`a733_npu_idle.h`) | No. A design choice, not a vendor value |
+| Scale 1 before the gate | Not written; the scaler stays at 0x100 and 0x80 | No |
+| Gate requires `+0x000` bits 0 and 9 clear and scaler field 0x100 | `npu_idle.c` `npu_idle_gate` | Yes. Evidence: startup writes `0x70900` (step 17 above), whose masked field is 0x100; unproven after a completed job |
+| Gate requires `+0x10c` bit 0 clear and field 0x80 | same | Yes. Startup writes `0x015a0880`; unproven after a job |
+| Idle word compared by equality with `0x7fffffff` before the gate and after resume | `npu_idle.c` | Yes. Vendor masks with `0x7fffffff`, so bit 31 is ignored; equality refuses if bit 31 is set. Board evidence: the numerical run completed with the exact value, after jobs only |
+| Resume requires `+0x000` equal to the gated value, and the second read equal to the pre-gate value | `npu_idle_resume` | Yes. The vendor read-modify-writes whatever it reads |
+| Resume requires `+0x10c` equal to the pre-gate value | same | Yes, same reason |
+| Idle word read after resume | same | Yes. Not read by the vendor; expected full idle with no work |
+| Resume budget 100 µs, one-microsecond delay per pulse | `settle` | Yes, in strict mode. The vendor uses 1 µs and has no budget |
+
+No gated-state read other than `+0x000` occurs, as in the vendor. These
+checks are unproven on hardware: the gate, the pulses and the resume have not
+run.
+
+### Finite shared-timer composition
+
+The vendor has no composition; the reference is the Linux timer node, which
+owns INTID 27 as a level interrupt, and the EL3 and EL1 views above. The
+idle-benchmark monitor (`monitor.c:49-79`) requires CNTV disabled and PPI 27
+disabled, not pending and not active at entry, clears the CNTV enable, clears
+the edge bit, writes the Secure priority 0xd8 and requires the read back.
+The following refuse on hardware and depend on inherited state: CNTV enabled
+(`:59-60`), PPI 27 enabled, pending or active (`:61-62`). Both are entry states
+that a prior stage could leave; the project rule is to establish them rather
+than refuse. The smoke entry reached the EL1 priority assertion, so the base
+monitor and the readback at `:74` passed on the board with the Secure view 0xd8.
+The return path restores the saved priority word and compares it
+(`return_gic` in `monitor.c`, idle-bench branch), and the receipt checks at
+SMC 0x733 (`monitor.c:198-228`) form the refusals listed under assumptions.
+
+### OS NPU service start and stop
+
+The vendor has neither phase: the module requests the IRQ after probing the
+clocks and resets, and nothing gates or tears down at runtime. SunstoneOS
+binds INTID 97 in `os_npu_start` (`apps/os/npu.c:364-437`) before the startup
+sequencer has run (the bootstrap task polls it later), so the bind sees the
+installer's state and not the device's. Divergences: the bind reads and
+requires route state the vendor never reads (clauses above); the stop path
+masks, clears the pending bit of INTID 97 and requires enabled, pending and
+active clear (`npu_irq.c` `stop`), which the vendor never does; `restart`
+requires a stopped, masked, fault-free binding and clean GIC state. These
+refuse only on a device-originated interrupt left pending, which CLOSE's full
+idle proof precedes.
+
+### Assumptions that need hardware state
+
+| Assertion or refusal | Value assumed | Evidence |
+| --- | --- | --- |
+| Bind clause 8 value | Nonsecure read 0xb0 | Architecture and the PPI 27 board read; the INTID 97 read itself is unproven until the next run |
+| Bind clause 9 | Nonsecure read of IROUTER returns the stored route | IHI0069D permits it for Nonsecure Group 1; unproven on this GIC |
+| Bind clause 7, ICFGR readable at Nonsecure EL1 | level bits read as written | Same reasoning; unproven |
+| Bind clauses 4 to 6 | Nonsecure read of ISENABLER, ISPENDR, ISACTIVER shows Group 1 state | Standard; unproven for 97 specifically |
+| Distributor `DS = 0` and `SCR_EL3.FIQ = 1` | Priority halving applies | Board read 0xb0 for stored 0xd8 on PPI 27 |
+| PPI 27 ICFGR edge bit clear after the write | Level or writable | The idle-benchmark monitor passed its readback on the board (`:74`) |
+| PPI 27 priority stored 0xec in the OS image | EL1 write is stored shifted | Architecture; no readback in the OS image |
+| CNTV disabled and PPI 27 quiet at entry | Inherited state | Unproven; refusal at `monitor.c:59-62` |
+| Idle word 0x7fffffff, bit 31 clear | Full idle | Numerical board run; not after gate and resume |
+| Scaler fields 0x100 and 0x80 at idle | Startup values persist | Vendor init writes them; unproven after jobs |
+| SMC 0x733 receipt conditions | Status, receipt fields, deadline and `control & 0x1005` | The smoke failure recorded stop 6 for operation 0x733 (`monitor.c:198-228` holds every stop-6 condition). The failing priority assertion at EL1 precedes the return, which would carry a nonzero status without a complete receipt, but the record does not name the condition: unproven |
+
+### Predictions
+
+- **Next combined-image run.** With the Nonsecure-view expectation the bind
+  passes clauses 1 to 9 and `os_npu_irq_bind` returns 1. The first possible
+  later refusal is the service activation, which this derivation does not
+  change. If the bind still refuses, the record value names the clause:
+  `0xb08` would mean the Nonsecure priority read is not the shifted Secure
+  value, in which case the PPI 27 board read does not transfer to SPIs.
+- **Next idle-gating run.** The reference predicts that the gate sequence
+  matches the vendor's writes and delays. The checks added by SunstoneOS
+  are the only way it can refuse: the idle word equality (bit 31), the
+  resume equalities for `+0x000` and `+0x10c`, and the strict 100 µs budget.
+  Any refusal there is a model divergence, not a vendor difference. The PPI 27
+  composition refuses only on inherited CNTV or PPI 27 state, and the setup
+  assertion now expects 0xb0.
