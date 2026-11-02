@@ -180,11 +180,16 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
         }
     }
     if (s->desired.dead && !s->retained) {
-        if (ss_owner_references_retired(s->descriptor) &&
-            (!c->ops.drained || c->ops.drained(c->ops.context, cpu, slot))) {
-            s->drain_mask |= UINT64_C(1) << cpu;
-            retire = s->drain_mask == c->active_mask;
-        } else hint(c, cpu, slot);
+        /* A live lifetime pin can belong to the interrupted delete caller.
+         * Reissuing an SGI here would prevent that caller from returning to
+         * release it. Close/last-put already publishes retirement to every
+         * owner, so only local activation drainage needs another checkpoint. */
+        if (ss_owner_references_retired(s->descriptor)) {
+            if (!c->ops.drained || c->ops.drained(c->ops.context, cpu, slot)) {
+                s->drain_mask |= UINT64_C(1) << cpu;
+                retire = s->drain_mask == c->active_mask;
+            } else hint(c, cpu, slot);
+        }
     } else if (cpu == s->owner && s->retained) {
         void *task = s->descriptor->task; /* retained reference predates close */
         if (s->phase == 2) {

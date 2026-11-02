@@ -208,9 +208,39 @@ static int fixture_admission(void)
     puts("linked FreeRTOS admission: invalid affinity and 128-slot exhaustion unwind TLS/port resources; deletion permits buffer reuse");
     return 0;
 }
+static int fixture_retirement_pin(void)
+{
+    TaskHandle_t task = create(0, 1);
+    assert(task);
+    struct ss_kernel_pin pin;
+    assert(ss_kernel_handle_pin(&ssKernelRegistry, task, &pin));
+    unsigned slot = pin.slot;
+    vTaskDelete(task);
+    assert(ssKernelControl.slot[slot].desired.dead);
+    assert(ss_control_applied(&ssKernelControl, slot, 1));
+    assert(atomic_load(&pin.descriptor->references) == 1);
+    for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
+        fixture_cpu = c;
+        ssKernelControlDrain();
+        assert(!atomic_load(&ssKernelControl.pending[c][slot / 64]));
+    }
+    assert(uxTaskGetNumberOfTasks() == 1);
+    /* The task caller must be allowed to run until its final pin release.
+     * That release, rather than repeated IRQs, restarts owner retirement. */
+    ss_kernel_handle_put(&pin);
+    for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
+        assert(atomic_load(&ssKernelControl.pending[c][slot / 64]));
+        fixture_cpu = c;
+        ssKernelControlDrain();
+    }
+    assert(uxTaskGetNumberOfTasks() == 0);
+    puts("linked FreeRTOS retirement: a retained caller pin emits no repeated owner hints; final release completes retirement");
+    return 0;
+}
 int main(int argc, char **argv)
 {
     (void)argv;
+    if (argc > 1 && !strcmp(argv[1], "retirement")) return fixture_retirement_pin();
     if (argc > 1 && !strcmp(argv[1], "admission")) return fixture_admission();
     if (argc > 1 && !strcmp(argv[1], "slice")) return fixture_slices();
     if (argc > 1) {
