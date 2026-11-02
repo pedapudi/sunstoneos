@@ -137,6 +137,24 @@ int main(int argc,char **argv)
     }
     assert(ss_npu_queue_service_bind(&q,&b,NULL));
     struct ss_npu_queue *pub=NULL;
+    if(argc>1&&atoi(argv[1])==8){
+        /* The ring holds the depth the image was built for, which is what the application declared: one more is refused
+         * and exactly that many is accepted, whatever that number is. */
+        assert(ss_npu_queue_open(SS_NPU_QUEUE_MAX_DEPTH+1,&pub)==-1&&requests==0);
+        assert(ss_npu_queue_open(SS_NPU_QUEUE_MAX_DEPTH,&pub)==0&&requests==1);
+        printf("PASS a ring of %u entries is accepted and one more is refused\n",(unsigned)SS_NPU_QUEUE_MAX_DEPTH);return 0;
+    }
+    if(argc>1&&atoi(argv[1])==9){
+        /* Links chosen at open: copied once into the queue for the backend, refused when malformed, ignored when polling. */
+        const struct ss_npu_queue_edge want[2]={{0,0,1,0},{1,0,0,0}};
+        assert(ss_npu_queue_open_linked(3,want,SS_NPU_QUEUE_MAX_HANDLES*SS_NPU_QUEUE_MAX_TENSORS+1,&pub)==-1&&requests==0);
+        assert(ss_npu_queue_open_linked(3,NULL,1,&pub)==-1&&requests==0);
+        assert(ss_npu_queue_open_linked(3,want,2,&pub)==0&&requests==1);
+        assert(q.requested_links==2&&!memcmp(q.requested,want,sizeof(want)));
+        struct ss_npu_queue_edge other={1,1,0,1};
+        assert(ss_npu_queue_open_linked(3,&other,1,&pub)==0&&requests==1&&q.requested_links==2&&!memcmp(q.requested,want,sizeof(want)));
+        puts("PASS links chosen at open reach the backend once and a malformed table is refused");return 0;
+    }
     assert(ss_npu_queue_open(3,&pub)==0&&requests==1);
     if(admission_failure){
         assert(ss_npu_queue_service_step(&q)==-1&&!starts&&!cache_calls);

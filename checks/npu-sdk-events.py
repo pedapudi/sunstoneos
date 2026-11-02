@@ -76,7 +76,7 @@ def main():
             objects.append(obj)
         run('link-' + name, [args.cc, '-fsanitize=address,undefined', '-Wl,--gc-sections',
                             *objects, *(['-pthread'] if name == 'event' else []), '-o', output / name])
-    cases = [('host', []), ('host', ['failure']), ('host', ['refused']), ('host', ['jobfault']),
+    cases = [('host', []), ('host', ['failure']), ('host', ['refused']), ('host', ['jobfault']), ('host', ['graph']),
              *[('interleave', [str(i)]) for i in range(6)],
              ('event', []), ('sdk', []), ('health', [])]
     for index, (name, arguments) in enumerate(cases):

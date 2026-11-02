@@ -45,10 +45,6 @@ def generate(artifacts, output, model=0, model_list=MODELS, all_models=False, mo
         linked = [catalogue[i] for i in queue_models]
     else:
         linked = catalogue if all_models else [catalogue[model]]
-    # The native runtime has a bounded resident catalogue, independent of this
-    # application's actual entry count.
-    if len(linked) > 16:
-        raise ValueError('OS catalogue exceeds NPU_RUNTIME_MODELS capacity 16')
     text = '#include "npu.h"\n'
     digests, rows = b'', []
     def blob(name, path, expected):

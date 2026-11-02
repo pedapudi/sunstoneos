@@ -27,6 +27,7 @@ int os_npu_tensor(enum nbg_section_id kind,unsigned index,struct npu_runtime_ten
     return 1;
 }
 struct os_npu_fault_info os_npu_last_fault;
+int os_npu_register(const void *model,size_t bytes,unsigned *entry){(void)model;(void)bytes;(void)entry;return 0;}
 int os_npu_submit(uint64_t timeout)
 {assert(timeout==100);++submits;memcpy(tensor_output,tensor_input,4);return 1;}
 int os_npu_close(void){closed=1;return 1;}
@@ -61,7 +62,8 @@ int main(void)
     ready=0;assert(sdk_run(0,input,4,output,4,100)==1&&loads==2&&submits==3);
     assert(sdk_run(os_npu_model_count,input,4,output,4,100)==0&&loads==2&&submits==3);
     assert(sdk_run(0,input,3,output,4,100)==0&&loads==2&&submits==3);
-    struct npu_runtime runtime={.count=1};
+    static struct nbg_assembly_layout plan_storage[1];
+    struct npu_runtime runtime={.count=1,.plans=plan_storage};
     struct nbg_assembly_layout *plan=&runtime.plans[0];
     plan->inputs=1;plan->outputs=1;
     plan->buffers[NBG_ALLOC_INPUT].payload_bytes=4;

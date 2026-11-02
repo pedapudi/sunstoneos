@@ -144,7 +144,78 @@ void platform_tick_ack(void) {
     next_tick += tick_interval;
     __asm__ volatile("msr cntp_cval_el0, %0\n isb" :: "r"(next_tick) : "memory");
 }
+#ifdef SS_STORM
+/* An interrupt above the API mask at a high rate on every core (the control class of the robot design). Its
+ * handler calls no kernel function; the kernel's interrupt exit still runs after it. */
+#define STORM_IRQ 27U
+uint32_t ss_storm_count[8];
+static uint64_t storm_next[8], storm_period;
+static unsigned storm_armed[8];
+static void storm_arm(void) {
+    unsigned c = core();
+    uintptr_t s = GICR + c * 0x20000 + 0x10000;
+    storm_period = frequency() / 30000;
+    *(volatile uint8_t *)(s + 0x400 + STORM_IRQ) = (configMAX_API_CALL_INTERRUPT_PRIORITY - 1) << portPRIORITY_SHIFT;
+    write32(s + 0x100, 1U << STORM_IRQ);
+    __asm__ volatile("dsb sy" ::: "memory");
+    storm_next[c] = counter() + storm_period;
+    uint64_t on = 1;
+    __asm__ volatile("msr cntv_cval_el0, %0\n msr cntv_ctl_el0, %1\n isb" :: "r"(storm_next[c]), "r"(on) : "memory");
+    storm_armed[c] = 1;
+}
+#endif
+#ifdef SS_WAKE
+/* An API-level timer interrupt on cores 1 to 7 whose handler is the check's ss_wake_isr (it wakes a task from the
+ * interrupt). Core 0 keeps the tick. The check owns the period and the stop flag. */
+#define WAKE_IRQ 30U
+extern void ss_wake_isr(unsigned core);
+extern volatile unsigned ss_wake_stop;
+uint64_t ss_wake_period;
+static uint64_t wake_next[8];
+static unsigned wake_armed[8];
+static void wake_arm(void) {
+    unsigned c = core();
+    uintptr_t s = GICR + c * 0x20000 + 0x10000;
+    write32(s + 0x100, 1U << WAKE_IRQ);
+    __asm__ volatile("dsb sy" ::: "memory");
+    wake_next[c] = counter() + ss_wake_period;
+    uint64_t on = 1;
+    __asm__ volatile("msr cntp_cval_el0, %0\n msr cntp_ctl_el0, %1\n isb" :: "r"(wake_next[c]), "r"(on) : "memory");
+    wake_armed[c] = 1;
+}
+#endif
 void vApplicationIRQHandler(uint64_t interrupt) {
+#ifdef SS_WAKE
+    {
+        unsigned c = core();
+        if (c && ss_wake_period) {
+            if (interrupt == WAKE_IRQ && wake_armed[c]) {
+                uint64_t now = counter();
+                wake_next[c] += ss_wake_period;
+                if (wake_next[c] <= now) wake_next[c] = now + ss_wake_period / 2;
+                uint64_t on = ss_wake_stop ? 0 : 1;
+                __asm__ volatile("msr cntp_cval_el0, %0\n msr cntp_ctl_el0, %1\n isb" :: "r"(wake_next[c]), "r"(on) : "memory");
+                if (!ss_wake_stop) ss_wake_isr(c);
+                return;
+            }
+            if (!wake_armed[c]) wake_arm();
+        }
+    }
+#endif
+#ifdef SS_STORM
+    {
+        unsigned c = core();
+        if (interrupt == STORM_IRQ && storm_armed[c]) {
+            uint64_t now = counter();
+            storm_next[c] += storm_period;
+            if (storm_next[c] <= now) storm_next[c] = now + storm_period / 2;
+            __asm__ volatile("msr cntv_cval_el0, %0\n isb" :: "r"(storm_next[c]) : "memory");
+            ++ss_storm_count[c];
+            return;
+        }
+        if (!storm_armed[c]) storm_arm();
+    }
+#endif
     if (interrupt == TIMER_IRQ) FreeRTOS_Tick_Handler();
     else if (interrupt == 0) FreeRTOS_SGI_Handler();
     else if (interrupt < 1020) platform_panic("unexpected interrupt", interrupt);

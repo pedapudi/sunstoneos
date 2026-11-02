@@ -1,6 +1,6 @@
 # NPU resources: declared, admitted and reserved
 
-Status: **the lifetime job quota is removed and declarations are admitted and reserved (items 1 and 2 of the plan); graphs from the graph, backpressure measurements and linking after the scheduler starts are not built.** This document covers how an
+Status: **built and run on the board: the lifetime job quota is removed, declarations are admitted and reserved, graphs load at run time, 31 slots run with a ring of depth 64 and backpressure, and tensors link after the scheduler starts. Results are in [the NPU status](../status/npu.md).** This document covers how an
 application states what it needs from the NPU, how the operating system admits that against what the NPU and
 the memory really offer, and which numbers in the code are limits of the hardware and which are choices of a
 fixed array. It also fixes the end state for graphs: an application loads a graph that it hands over at run
@@ -30,7 +30,7 @@ time, with no build-time list.
 | `SS_NPU_QUEUE_MAX_DEPTH` (64) and `SS_NPU_QUEUE_MAX_TENSORS` (32) | same | Array sizes in the queue (`runtime/npu_app_queue.c`). No hardware limit. The depth is the declared in-flight depth. |
 | `NPU_RUNTIME_MODELS` (16) | `include/npu_runtime.h` | An array of descriptors and plans in the runtime. The models are resident in DRAM; memory bounds them. |
 | `NBG_ASSEMBLY_MAX_TENSORS` (8) and `NBG_ASSEMBLY_MAX_NN` (1024) | `include/nbg_assembly.h` | Array sizes of the loader's plan (stack and static). A graph beyond them is refused today. |
-| Command space per job (524,288 bytes) | `NPU_RUNTIME_COMMAND_BYTES` | A hardware field. The doorbell word carries the size in 8-byte units in 16 bits (`vipdMAX_CMD_SIZE` is 65535 * 8 in `vip2/inc/vip_drv_share.h`), so 524,280 bytes; the buffer is rounded to 512 KiB. |
+| Command space per job (at most 524,280 bytes) | `NPU_RUNTIME_COMMAND_BYTES` (the bound), `A733_NPU_FETCH_BYTES` | The hardware field is the upper bound. The doorbell word carries the fetch size in 8-byte units in 16 bits (`vipdMAX_CMD_SIZE` is 65535 * 8 in `vip2/inc/vip_drv_share.h`), so 524,280 bytes. Each slot's command allocation is the stream of the largest resident graph plus one END pair, rounded to a page (4,096 bytes at least), and the doorbell word is the allocation size in 8-byte units. A reservation that also holds graphs loaded at run time uses the bound, because the stream length of a later graph is not known. With the small test graphs all 31 slots fit the 8 MiB pool. |
 | Pool (8 MiB) | `OS_NPU_POOL_BYTES` | The DRAM range that the board reserves for the NPU. It is a choice of the board layout and can grow with it. |
 | NPU virtual address space | `a733_npu_runtime.c`, `place` | 32 bits. Regions start at `0x10000000` and each is followed by a guard page, so about 3.75 GiB. |
 | Page-table memory | `A733_NPU_MMU_MAX_BYTES` (4096 + 256 * 16384) | One 16 KiB leaf table per 16 MiB of device addresses that a region touches, 256 at most. |
@@ -87,22 +87,92 @@ reservation beyond the pool is refused with the resource's code in the start rec
 declared slots at that moment, the tables are built and the runtime is prepared; nothing is allocated afterwards. A
 queue opened deeper than the declared in-flight depth is refused at open.
 
-**The tables.** The runtime's catalogue (16 graphs), its slots and the service's clients (8), the queue's ring (64
-entries) and edge table (8 handles of 32 tensors) are arrays fixed when the image is built, and a declaration beyond
-them is refused as "image tables". That is the one refusal that is neither the hardware nor memory. Taking the tables
-from the reservation needs the runtime, the service and the EL0 queue to use storage that the reservation provides;
-the plans of the graphs (280 bytes each) must also leave the stacks of the start-up functions first. It is on the
-backlog (`docs/status/npu.md`).
+**The tables.** What bounds each table now:
+
+| Table | Bound | Source |
+| --- | --- | --- |
+| Graphs: catalogue, plans, digests | memory | placed at the start of the reservation (`npu_runtime_tables_bytes`, 336 bytes a graph); a sizing pass keeps one layout on the stack |
+| Slots, clients, members, commands | 31 | a client's command mask has 32 bits and command 0 is the bootstrap (`NPU_SERVICE_CLIENTS`); the arrays are static at that bound, and the regions of a declared slot count come from the reservation |
+| Registered buffers | 125 | the bootstrap and four regions for each of the 31 slots (`A733_NPU_MEMORY_MAX_BUFFERS` is 128); the memory layer builds its tables in place |
+| Queue handles | 31 | one for each slot |
+| Tensors of a handle, edges | 8, 31 * 8 | the loader admits at most 8 inputs and 8 outputs a graph (`NBG_ASSEMBLY_MAX_TENSORS`) |
+| Ring depth | the declared in-flight depth | the image is built with `SS_NPU_QUEUE_MAX_DEPTH` set to the manifest's `in_flight` (`-DSUNSTONE_OS_NPU_QUEUE_DEPTH`); a session that declares more is refused as "image tables" |
+
+The ring is application memory that the producer writes, so it stays in the queue object of the image; the depth is the one
+count that is fixed at build, from the declaration, and not at admission. The peak stack of the start-up and loading
+tasks, from `tools/npu-stack-depth.py` (static, from the compiler's stack usage and the call graph), was:
+
+| Entry | Before | After |
+| --- | --- | --- |
+| `os_npu_start` | 14624 bytes | 4144 |
+| `npu_runtime_prepare` | 10464 | 3856 |
+| `npu_runtime_reservation` | 14096 | 3696 |
+| a LOAD step (`load_work`) | 7776 | 2320 |
+| the service worker with a LOAD step (`runtime_worker`) | 8064 | 2608 |
+
+## The pool
+
+The pool is the DRAM that the NPU runtime reserves for its slots: per slot a command allocation, a read-only region
+(descriptors, coefficients, dynamic input), a read region and a write region, with an unmapped page after each, plus the
+page tables, the bootstrap stream and the staging area. Its size follows from the declaration, not from a constant.
+
+**Per-slot sizing.** When slot i holds one graph for the whole run (a queue image keeps graph i resident in slot i,
+`npu_runtime_bounds.slot_model`), the regions of slot i are sized from that graph alone; otherwise every slot is sized for
+the largest graph, because any graph may be loaded into any slot. Two things follow. A graph whose scratch is large
+(a convolution with a multi-megabyte pool) costs that scratch once, not in every slot. LOAD refuses a graph that does not
+fit the regions of its slot, so the sizing cannot be exceeded by a later request. A graph registered at run time needs the
+uniform layout (any slot may receive it), so `slot_model` and run-time capacity exclude each other. With the eight
+single-operation graphs of the host set the slot regions take 258,048 bytes against 360,448 with one size for all slots
+(`checks/os-npu-graphs.py`, case 30).
+
+**Placement.** `OS_NPU_POOL_BYTES` is a build parameter, `SUNSTONE_OS_NPU_POOL_BYTES`, in blocks of 2 MiB from 8 to 48 MiB;
+`checks/npu-pool-size.py` computes the bytes that a model list and a number of slots need from the real runtime
+(`npu_runtime_reservation_with`), and the image refuses at start if the declaration does not fit its pool. 8 MiB stays at
+`0x47400000..0x47c00000`, the layout of every image so far. A larger pool is placed so that it ends at `0x47000000`, the
+bottom of the monitor interval, and starts at `0x47000000 - bytes`. The rule rests on four bounds:
+
+- The CPU side: the pool must be write-back RAM that EL0 reaches, which is `0x40000000..0x48000000` in the cached profile
+  (the DRAM above `0x48000000` is closed to EL0 and the queue's tensor windows are EL0 buffers). It must not overlap the
+  image RAM (`0x41000000..0x42200000`), the application regions (`0x44000000..0x47000000`, so the application regions of a
+  session must end at the pool start), or the monitor interval `0x47000000..0x47400000`. The largest pool (48 MiB) fills the
+  application window.
+- The NPU side, device addresses: 32 bits, from `NPU_RUNTIME_DEVICE_BASE` (`0x10000000`) with a guard page after every
+  allocation; the total of the three groups and the guards must stay below 4 GiB (`place()` refuses otherwise). The pool
+  size does not change the device layout, which depends on the slot sizes only.
+- The NPU side, physical addresses: the page-table builder maps physical addresses below 2^40 with the tables in one 4 GiB
+  window (`a733_npu_mmu_build`); every address of the pool is below 4 GiB.
+- The session binding: the NPU extent of the session names `pool_start` and `pool_bytes`, and admission refuses a session
+  that differs from the image (`apps/os/admission.c`); the host side of the normal return (`apps/os/cpu-return-host.py`)
+  accepts the legacy extent and a sized one, and backs up and restores the whole extent.
 
 ## Graphs from the graph
 
-The runtime takes every fact about a graph from the graph itself: tensor counts, shapes, formats and
-quantization through `nbg_model_tensor`, operation counts and sizes through the loader's layout. The SDK model
-description (`struct ss_npu_model`) is filled from them when the graph is registered. A graph that an
-application loads from a file, for example into a large region by the microSD loader, is registered with its
-bytes and (optionally) the digest the application supplies; it needs no entry in `tools/npu-session-models.json`
-and no rebuild of the operating system. The build-time tool `apps/os/npu-catalogue.py` stays as a convenience
-that links graphs into the image and fills the same description; it is not part of admission.
+The runtime takes every fact about a graph from the graph itself: tensor counts, shapes, formats and quantization through
+`nbg_model_tensor`, operation counts and sizes through the loader's layout. A graph that an application loads from a file
+needs no entry in `tools/npu-session-models.json` and no rebuild of the operating system:
+
+1. The manifest declares the graphs and the bounds of those it loads at run time (`graphs`, `graph_bytes`, `tensor_bytes`);
+   the session record (version 3) carries them. The reservation made at start covers `graphs` minus the linked ones more
+   entries, each model of at most `graph_bytes` with no tensor beyond `tensor_bytes`, so a registered graph cannot fail on
+   memory.
+2. The application calls `ss_npu_register_graph(bytes, size, &index)`; the OS wrapper `os_npu_register` calls
+   `npu_runtime_register`, which admits the bytes like a linked graph (structure, commands, addresses), checks that the
+   regions fit what was reserved, takes the SHA-256 and publishes the entry with release order. `ss_npu_run(index, ...)`
+   then runs it. The OS compares the tensor sizes of a run-time graph with the request, because the application-side
+   description table holds only the linked ones.
+3. The caller keeps the bytes alive and unchanged. LOAD copies them into the staging area and refuses a copy whose digest
+   differs from the one taken at registration, which also catches a change between registration and load.
+
+The build-time tool `apps/os/npu-catalogue.py` stays as a convenience that links graphs into the image and fills the SDK
+description; it is not part of admission. Host evidence: case 29 of `checks/os-npu-service.py` (an unseen graph registered
+after the scheduler started, run, a damaged graph and a third beyond the capacity refused, a changed copy refused at LOAD)
+and the `graph` case of the mailbox check (`apps/npu-sdk/host-check.c`).
+
+**Tensors of a graph.** `NBG_ASSEMBLY_MAX_TENSORS` (8 inputs and 8 outputs) is the loader's own choice. The format does not
+bound them (the header counts are 32-bit fields) and the vendor sources show no limit. It is set by the size of
+`struct nbg_assembly_layout` (24 bytes for each tensor, kept for every graph in the per-graph table) and by the queue
+handle. An image is built for the largest graph its application declares (`-DSUNSTONE_OS_NPU_MAX_TENSORS=N`); a graph beyond it is
+refused at admission.
 
 ## In-flight depth and backpressure
 

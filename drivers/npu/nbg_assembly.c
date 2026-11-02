@@ -37,10 +37,10 @@ static int requirement(struct nbg_allocation_requirement *r, uint32_t payload,
 /* A stream-processor state is 0x08010e5b and its operand, 1..16 pairs of 0x08010e5c and 0x08010e5d
  * words, then the 32-byte tail of the other kinds (see operation()). */
 #define MAX_STATE_BYTES (8u + 16u * 16u + 32u)
-/* A shader state stream is at most 1536 bytes and has at most 32 patches: the graphs examined hold 472 to 1136 bytes,
- * and the scratch of one operation lives on the loading task's stack. The specification would allow 4096 bytes. */
-#define SHADER_MAX_STATE 1536u
-#define SHADER_MAX_PATCHES 32u
+/* The shader specification refuses a state stream longer than 4096 bytes (loader rule 7; the graphs examined hold 472 to
+ * 1136). The loader keeps no copy of it and no table of its packets: it reads the stream where it lies in the model
+ * and writes the patched copy straight into the command allocation, so a stream costs no stack. */
+#define SHADER_MAX_STATE 4096u
 #define UNIFORM_FIRST 0xd800u
 #define UNIFORM_END 0xd900u
 /* A 16-bit signed tensor in dynamic fixed point: values are the integers scaled by 2^-fixed_position. */
@@ -120,8 +120,11 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p, int
     }
     p->command_body_bytes = (uint32_t)body;
     uint32_t command_bytes = p->command_body_bytes + (uint32_t)sizeof(footer);
-    uint64_t fetch = A733_NPU_FETCH_BYTES;
-    if (fetch < command_bytes) fetch = command_bytes;
+    /* The allocation holds the stream and an END pair after it, rounded to a page; the hardware field's limit,
+     * A733_NPU_FETCH_BYTES, bounds it. */
+    uint64_t fetch = (uint64_t)command_bytes + 64;
+    if (fetch < A733_NPU_MIN_COMMAND_BYTES) fetch = A733_NPU_MIN_COMMAND_BYTES;
+    if (fetch > A733_NPU_FETCH_BYTES) return 0;
     /* A graph of shader operations only has no neural-network record; its slot then holds one unused page. */
     const uint32_t nn_bytes = m->sections[NBG_NN].bytes ? m->sections[NBG_NN].bytes : 192;
     if (!requirement(&p->buffers[NBG_ALLOC_NN], nn_bytes, nn_bytes) ||
@@ -177,7 +180,7 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p, int
 /* Each scratch descriptor is private. A later operation's refusal therefore
  * cannot leave an earlier caller-owned descriptor partially assembled. */
 /* nn_slot: the index of the operation's descriptor in the descriptor section, UINT32_MAX for a shader operation. */
-struct operation_image { unsigned char nn[192], command[SHADER_MAX_STATE]; uint32_t command_bytes, nn_slot; };
+struct operation_image { unsigned char nn[192], command[MAX_STATE_BYTES]; uint32_t command_bytes, nn_slot; };
 
 /* Slots identify the observed pointer fields, not arbitrary patch destinations.
  * Circular sizes and ends are in 64-byte units in both the Mesa NN layout and
@@ -194,9 +197,9 @@ static int ring(const unsigned char *descriptor, struct nbg_relocation *nn,
          * and constants) keeps an unpatched pointer word inside the first page, which the page tables
          * never map: the table builder refuses a region at device address 0 and every region it accepts starts
          * at or above its page size (checks/npu-mmu.c, "page zero"; checks/os-npu-service.c walks the runtime's
-         * own tables), and placed() requires buffers at device addresses of at least 4096. The ring stays disabled. */
+         * own tables), and placed() requires buffers at device addresses of at least NBG_ASSEMBLY_LOW_RESERVED. The ring stays disabled. */
         return slot[end_slot] == UINT32_MAX && !size &&
-            word(descriptor + (size_word == 20 ? 24 : 28)) < 0x1000 &&
+            word(descriptor + (size_word == 20 ? 24 : 28)) < NBG_ASSEMBLY_LOW_RESERVED &&
             (word(descriptor + (size_word + 1) * 4) & 0x03ffffff) == 0x03ffffff;
     }
     if (!size)
@@ -261,14 +264,48 @@ static int shader_register(uint32_t r)
         if (shader_registers[i] == r) return 1;
     return 0;
 }
+/* The packet at word i of a state stream: the register and operand count of a load-state packet, or 0 for anything else. */
+struct shader_packet { uint32_t first, reg, count; };
+/* Find the load-state packet that has an operand at word w; returns 0 when w is not an operand word. */
+static int shader_packet_of(const unsigned char *state, uint32_t n, uint32_t w, struct shader_packet *out)
+{
+    for (uint32_t i = 0; i < n;) {
+        const uint32_t h = word(state + 4 * i);
+        if ((h >> 27) == 1) {
+            const uint32_t cnt = (h >> 16) & 0x7ff;
+            if (w > i && w <= i + cnt) { *out = (struct shader_packet){i + 1, h & 0xffff, cnt}; return 1; }
+            i += 1 + cnt + ((1 + cnt) & 1);
+        } else i += 2;
+    }
+    return 0;
+}
+/* Find the load-state packet whose first register is reg and that has exactly cnt operands. */
+static int shader_packet_at(const unsigned char *state, uint32_t n, uint32_t reg, uint32_t cnt, struct shader_packet *out)
+{
+    for (uint32_t i = 0; i < n;) {
+        const uint32_t h = word(state + 4 * i);
+        if ((h >> 27) == 1) {
+            const uint32_t c = (h >> 16) & 0x7ff;
+            if ((h & 0xffff) == reg && c == cnt) { *out = (struct shader_packet){i + 1, reg, c}; return 1; }
+            i += 1 + c + ((1 + c) & 1);
+        } else i += 2;
+    }
+    return 0;
+}
+/* command_out is the place the patched stream goes (the command allocation), or NULL when only the layout is wanted.
+ * The model is read in place; the only memory this function adds to the stack is a few words. */
 static int shader_operation(const struct nbg_model *m, uint32_t number, uint32_t first,
                             const struct nbg_assembly_buffer *buffers, const struct nbg_assembly_layout *plan,
-                            const struct nbg_operation *op, struct operation_image *image, uint32_t *count)
+                            const struct nbg_operation *op, struct operation_image *image, uint32_t *count,
+                            unsigned char *command_out, size_t command_room)
 {
     struct nbg_span state, program;
     if (!plan->program_bytes || op->state != number || op->first_patch != first || !op->patch_count ||
-        op->patch_count > SHADER_MAX_PATCHES || !nbg_model_table(m, NBG_LOAD_STATES_TABLE, op->state, &state) ||
-        state.bytes < 8 || state.bytes > SHADER_MAX_STATE || (state.bytes & 7)) return 0;
+        !nbg_model_table(m, NBG_LOAD_STATES_TABLE, op->state, &state) ||
+        state.bytes < 8 || state.bytes > SHADER_MAX_STATE || (state.bytes & 7) || (command_out && state.bytes > command_room)) return 0;
+    /* A patch names one operand word of the stream, so there are at most as many patches as operand words. */
+    const uint32_t n = (uint32_t)state.bytes / 4;
+    if (op->patch_count > n) return 0;
     /* S9: the shader table row, its program row and the program inside the program section. */
     const struct nbg_section *sh = &m->sections[NBG_SH];
     if ((uint64_t)op->index * 8 + 8 > sh->bytes) return 0;
@@ -276,30 +313,26 @@ static int shader_operation(const struct nbg_model *m, uint32_t number, uint32_t
     if (word(row + 4) || !nbg_model_table(m, NBG_PPU_INSTR_TABLE, word(row), &program)) return 0;
     const uint64_t start = (uint64_t)(program.data - (m->data + m->sections[NBG_PPU_INSTR].offset));
     if ((start & 255) || !program.bytes || (program.bytes & 15) || start + program.bytes > plan->program_bytes) return 0;
-    /* S1, S2a, S4: the packets. */
-    enum { OPERAND = 1, PAD = 2 };
-    const uint32_t n = (uint32_t)state.bytes / 4;
-    uint8_t kind[SHADER_MAX_STATE / 4] = {0};
-    uint16_t operand_register[SHADER_MAX_STATE / 4];
-    uint16_t packet_first[SHADER_MAX_STATE / 4], packet_count[SHADER_MAX_STATE / 4];
-    uint16_t uniform_first[UNIFORM_END - UNIFORM_FIRST] = {0}, uniform_count[UNIFORM_END - UNIFORM_FIRST] = {0};
-    uint8_t uniform_seen[UNIFORM_END - UNIFORM_FIRST] = {0};
+    /* S1, S2a, S4: the packets. The uniform bank is the register range 0xd800 to 0xd8ff (S4), 256 words, one bit each. */
+    uint8_t uniform_seen[(UNIFORM_END - UNIFORM_FIRST) / 8] = {0};
     uint32_t instructions = 0, last_pc = 0;
     unsigned have_count = 0, have_last = 0, have_program = 0;
     for (uint32_t i = 0; i < n;) {
         const uint32_t h = word(state.data + 4 * i);
         if ((h >> 27) == 1) {
+            /* S1: a load-state packet has 1 to 64 operands. The count field is ten bits wide (1023); 64 is the
+             * specification's bound, which every compiled stream observed keeps. */
             const uint32_t cnt = (h >> 16) & 0x7ff, reg = h & 0xffff;
             if ((h & 0x04000000) || cnt < 1 || cnt > 64 || i + 1 + cnt > n) return 0;
             const int uniform = reg >= UNIFORM_FIRST && reg + cnt <= UNIFORM_END;
             if (uniform) {
+                /* S4: a uniform packet has 1 to 4 operands (the specification's bound), and no word is written twice. */
                 if (cnt > 4) return 0;
                 for (uint32_t k = 0; k < cnt; ++k) {
-                    if (uniform_seen[reg - UNIFORM_FIRST + k]) return 0;
-                    uniform_seen[reg - UNIFORM_FIRST + k] = 1;
+                    const uint32_t bit = reg - UNIFORM_FIRST + k;
+                    if (uniform_seen[bit / 8] & (1u << (bit % 8))) return 0;
+                    uniform_seen[bit / 8] |= (uint8_t)(1u << (bit % 8));
                 }
-                uniform_first[reg - UNIFORM_FIRST] = (uint16_t)(i + 1);
-                uniform_count[reg - UNIFORM_FIRST] = (uint16_t)cnt;
             }
             for (uint32_t k = 0; k < cnt; ++k) {
                 const uint32_t r = reg + k, v = word(state.data + 4 * (i + 1 + k));
@@ -308,11 +341,9 @@ static int shader_operation(const struct nbg_model *m, uint32_t number, uint32_t
                 if (r == 0x0424) { if (have_count) return 0; have_count = 1; instructions = v; }
                 if (r == 0x0425) { if (have_last) return 0; have_last = 1; last_pc = v; }
                 if (r == 0x040a) { if (have_program) return 0; have_program = 1; }
-                kind[i + 1 + k] = OPERAND; operand_register[i + 1 + k] = (uint16_t)r;
-                packet_first[i + 1 + k] = (uint16_t)(i + 1); packet_count[i + 1 + k] = (uint16_t)cnt;
             }
             i += 1 + cnt;
-            if ((1 + cnt) & 1) { if (i >= n) return 0; kind[i++] = PAD; }
+            if ((1 + cnt) & 1) { if (i >= n) return 0; ++i; } /* the pad word, rewritten below */
         } else if (h == 0x48000000) {
             if (i + 1 >= n || word(state.data + 4 * (i + 1)) != 0x701) return 0;
             i += 2;
@@ -321,101 +352,109 @@ static int shader_operation(const struct nbg_model *m, uint32_t number, uint32_t
     /* S5: the instruction count and the program length. */
     if (!have_count || !have_last || !have_program || !instructions || last_pc != instructions - 1 ||
         (uint64_t)instructions * 16 != program.bytes) return 0;
-    /* S6, S7, S8: the patches and their regions. */
-    struct nbg_relocation rel[SHADER_MAX_PATCHES];
-    unsigned rels = 0, program_patch = 0;
-    int program_rel = -1, data_rel = -1;
-    uint8_t patched[SHADER_MAX_STATE / 32] = {0};
+    /* S6, S7, S8: the patches and their regions. Each relocation is computed on a one-word cell and then written into
+     * the patched stream, so the model is never copied. */
+    unsigned program_patch = 0;
+    int program_at = -1, data_at = -1;
     const uint32_t extra = buffers ? buffers[nbg_layout_dynamic_index(plan)].device : 0x1000;
+    unsigned char *const out = command_out;
+    if (out) memcpy(out, state.data, state.bytes);
     for (uint32_t i = 0; i < op->patch_count; ++i) {
         struct nbg_patch p;
         if (!nbg_model_patch(m, op->first_patch + i, &p) || p.kind != 0 || p.name_word || p.high_destination ||
             p.high_mask || p.destination_base || (p.destination & 3) || p.destination / 4 >= n) return 0;
-        const uint32_t w = p.destination / 4, reg = operand_register[w];
-        if (kind[w] != OPERAND || (patched[w / 8] & (1u << (w % 8)))) return 0;
-        patched[w / 8] |= (uint8_t)(1u << (w % 8));
+        for (uint32_t j = 0; j < i; ++j) { /* no word is patched twice */
+            struct nbg_patch q;
+            if (!nbg_model_patch(m, op->first_patch + j, &q) || q.destination == p.destination) return 0;
+        }
+        struct shader_packet packet;
+        if (!shader_packet_of(state.data, n, p.destination / 4, &packet)) return 0;
+        const uint32_t reg = packet.reg + (p.destination / 4 - packet.first);
         struct nbg_relocation r = {0};
-        r.destination_offset = p.destination; r.encoding = NBG_ADDRESS_WORD; r.source_offset = p.source_offset;
+        r.destination_offset = 0; r.encoding = NBG_ADDRESS_WORD; r.source_offset = p.source_offset;
         if (p.source == 0) {
             /* The program patch: the only source-0 patch, on the program address, which the loader writes. */
             if (reg != 0x040a || p.index != -1 || p.source_offset || p.transformed || program_patch) return 0;
-            program_patch = 1;
+            program_patch = 1; program_at = (int)p.destination;
             r.source_device = extra + plan->program_offset + (uint32_t)start; r.source_bytes = program.bytes;
             r.referenced_bytes = program.bytes;
-            program_rel = (int)rels;
-            rel[rels++] = r;
-            continue;
-        }
-        if (reg < UNIFORM_FIRST || reg >= UNIFORM_END) return 0;
-        if (p.transformed && !(p.transformed == 14 && p.source == 6)) return 0;
-        uint64_t region = 0;
-        switch (p.source) {
-        case 1: case 2: {
-            struct nbg_tensor t;
-            const uint32_t count_of = p.source == 1 ? plan->inputs : plan->outputs;
-            if (p.index < 0 || (uint32_t)p.index >= count_of ||
-                !nbg_model_tensor(m, p.source == 1 ? NBG_INPUT : NBG_OUTPUT, (uint32_t)p.index, &t)) return 0;
-            const unsigned id = NBG_ALLOC_INPUT + (uint32_t)p.index + (p.source == 1 ? 0 : plan->inputs);
-            region = t.logical_bytes;
-            r.source_device = buffers ? buffers[id].device : 0x1000; r.source_bytes = plan->buffers[id].minimum_bytes;
-            break;
-        }
-        case 3:
-            if (p.index != -1) return 0;
-            region = m->header.pool_bytes;
-            r.source_device = buffers ? buffers[NBG_ALLOC_POOL].device : 0x1000; r.source_bytes = region;
-            break;
-        case 5: {
-            struct nbg_span row_span;
-            if (p.index < 0 || !nbg_model_table(m, NBG_COEFF_TABLE, (uint32_t)p.index, &row_span)) return 0;
-            const uint64_t offset = (uint64_t)(row_span.data - (m->data + m->sections[NBG_COEFF].offset));
-            const uint64_t base = buffers ? buffers[NBG_ALLOC_COEFF].device : 0x1000;
-            if (base + offset > UINT32_MAX) return 0;
-            region = row_span.bytes;
-            r.source_device = (uint32_t)(base + offset); r.source_bytes = region;
-            break;
-        }
-        case 6: {
-            struct nbg_span row_span;
-            if (!m->sections[NBG_DYNA_IO].bytes || p.index < 0 ||
-                !nbg_model_table(m, NBG_DYNA_IO_TABLE, (uint32_t)p.index, &row_span)) return 0;
-            const uint64_t offset = (uint64_t)(row_span.data - (m->data + m->sections[NBG_DYNA_IO].offset));
-            if ((uint64_t)extra + offset > UINT32_MAX) return 0;
-            region = row_span.bytes;
-            r.source_device = (uint32_t)(extra + offset); r.source_bytes = region;
-            break;
-        }
-        case 8:
-            if (p.index != -1) return 0;
-            region = m->header.vip_sram_bytes;
-            r.source_device = 0x400000; r.source_bytes = region;
-            break;
-        default: return 0;
-        }
-        r.referenced_bytes = 1;
-        /* S7, S8: a patched word that opens a tensor descriptor (two 4-operand uniform packets) names an extent. */
-        if (p.source != 6 && packet_first[w] == w && packet_count[w] == 4 && !((reg - UNIFORM_FIRST) & 3)) {
-            const uint32_t next = reg + 4 - UNIFORM_FIRST;
-            if (next < UNIFORM_END - UNIFORM_FIRST && uniform_count[next] == 4) {
-                const uint32_t stride = word(state.data + 4 * (w + 1)), hw = word(state.data + 4 * (w + 2));
-                const uint32_t plane = word(state.data + 4 * uniform_first[next]),
-                    depth = word(state.data + 4 * (uniform_first[next] + 1u));
+        } else {
+            if (reg < UNIFORM_FIRST || reg >= UNIFORM_END) return 0;
+            if (p.transformed && !(p.transformed == 14 && p.source == 6)) return 0;
+            uint64_t region = 0;
+            switch (p.source) {
+            case 1: case 2: {
+                struct nbg_tensor t;
+                const uint32_t count_of = p.source == 1 ? plan->inputs : plan->outputs;
+                if (p.index < 0 || (uint32_t)p.index >= count_of ||
+                    !nbg_model_tensor(m, p.source == 1 ? NBG_INPUT : NBG_OUTPUT, (uint32_t)p.index, &t)) return 0;
+                const unsigned id = NBG_ALLOC_INPUT + (uint32_t)p.index + (p.source == 1 ? 0 : plan->inputs);
+                region = t.logical_bytes;
+                r.source_device = buffers ? buffers[id].device : 0x1000; r.source_bytes = plan->buffers[id].minimum_bytes;
+                break;
+            }
+            case 3:
+                if (p.index != -1) return 0;
+                region = m->header.pool_bytes;
+                r.source_device = buffers ? buffers[NBG_ALLOC_POOL].device : 0x1000; r.source_bytes = region;
+                break;
+            case 5: {
+                struct nbg_span row_span;
+                if (p.index < 0 || !nbg_model_table(m, NBG_COEFF_TABLE, (uint32_t)p.index, &row_span)) return 0;
+                const uint64_t offset = (uint64_t)(row_span.data - (m->data + m->sections[NBG_COEFF].offset));
+                const uint64_t base = buffers ? buffers[NBG_ALLOC_COEFF].device : 0x1000;
+                if (base + offset > UINT32_MAX) return 0;
+                region = row_span.bytes;
+                r.source_device = (uint32_t)(base + offset); r.source_bytes = region;
+                break;
+            }
+            case 6: {
+                struct nbg_span row_span;
+                if (!m->sections[NBG_DYNA_IO].bytes || p.index < 0 ||
+                    !nbg_model_table(m, NBG_DYNA_IO_TABLE, (uint32_t)p.index, &row_span)) return 0;
+                const uint64_t offset = (uint64_t)(row_span.data - (m->data + m->sections[NBG_DYNA_IO].offset));
+                if ((uint64_t)extra + offset > UINT32_MAX) return 0;
+                region = row_span.bytes;
+                r.source_device = (uint32_t)(extra + offset); r.source_bytes = region;
+                break;
+            }
+            case 8:
+                if (p.index != -1) return 0;
+                region = m->header.vip_sram_bytes;
+                r.source_device = 0x400000; r.source_bytes = region;
+                break;
+            default: return 0;
+            }
+            r.referenced_bytes = 1;
+            /* S7, S8: a patched word that opens a tensor descriptor (two 4-operand uniform packets) names an extent. */
+            struct shader_packet next;
+            if (p.source != 6 && packet.first == p.destination / 4 && packet.count == 4 && !((reg - UNIFORM_FIRST) & 3) &&
+                shader_packet_at(state.data, n, reg + 4, 4, &next)) {
+                const uint32_t stride = word(state.data + 4 * (packet.first + 1)), hw = word(state.data + 4 * (packet.first + 2));
+                const uint32_t plane = word(state.data + 4 * next.first), depth = word(state.data + 4 * (next.first + 1));
                 if ((uint64_t)stride * (hw >> 16) != plane || !depth) return 0;
                 const uint64_t extent = (uint64_t)plane * depth;
                 if ((uint64_t)p.source_offset + extent > region) return 0;
                 r.referenced_bytes = extent ? extent : 1;
             }
+            if (data_at < 0 && (p.source == 1 || p.source == 2)) data_at = (int)p.destination;
         }
-        if (data_rel < 0 && (p.source == 1 || p.source == 2)) data_rel = (int)rels;
-        rel[rels++] = r;
+        unsigned char cell[4] = {0};
+        if (!nbg_relocate(cell, sizeof(cell), &r, 1)) return 0;
+        if (out) memcpy(out + p.destination, cell, 4);
     }
-    (void)program_rel; (void)data_rel; /* used by the fault-test hook only */
-    if (!program_patch || rels != op->patch_count) return 0;
-    memcpy(image->command, state.data, state.bytes);
-    for (uint32_t i = 0; i < n; ++i)
-        if (kind[i] == PAD) put(image->command + 4 * i, 0x18000000);
+    (void)program_at; (void)data_at; /* used by the fault-test hook only */
+    if (!program_patch) return 0;
+    if (out)
+        for (uint32_t i = 0; i < n;) { /* pad words are written as 0x18000000 whatever the graph holds */
+            const uint32_t h = word(state.data + 4 * i);
+            if ((h >> 27) == 1) {
+                const uint32_t cnt = (h >> 16) & 0x7ff;
+                i += 1 + cnt;
+                if ((1 + cnt) & 1) put(out + 4 * i++, 0x18000000);
+            } else i += 2;
+        }
     image->command_bytes = (uint32_t)state.bytes; image->nn_slot = UINT32_MAX;
-    if (!nbg_relocate(image->command, image->command_bytes, rel, rels)) return 0;
 #ifdef SUNSTONE_NPU_FAULT_HOOK
     /* NEGATIVE-TEST IMAGES ONLY (docs/reference-backsolve-npu.md, "NPU MMU exceptions"). Hook slot 100 aims the first
      * tensor descriptor's address word of the first shader operation, and slot 101 its program address (register
@@ -424,19 +463,20 @@ static int shader_operation(const struct nbg_model *m, uint32_t number, uint32_t
     extern uint32_t sunstone_npu_hook_address;
     extern unsigned char sunstone_npu_canary[];
     if (number == 1 && (sunstone_npu_hook_slot == 100 || sunstone_npu_hook_slot == 101)) {
-        const int at = sunstone_npu_hook_slot == 100 ? data_rel : program_rel;
+        const int at = sunstone_npu_hook_slot == 100 ? data_at : program_at;
         if (at < 0) return 0; /* a test build must never silently skip its fault */
-        put(image->command + rel[at].destination_offset, sunstone_npu_hook_address ? sunstone_npu_hook_address :
+        if (out) put(out + at, sunstone_npu_hook_address ? sunstone_npu_hook_address :
             (uint32_t)(uintptr_t)(sunstone_npu_canary + 0x10000));
     }
 #endif
     *count = op->patch_count;
     return 1;
 }
+
 static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
                      const struct nbg_assembly_buffer *buffers,
                      const struct nbg_assembly_layout *plan, struct operation_image *image,
-                     uint32_t *count)
+                     uint32_t *count, unsigned char *command_out, size_t command_room)
 {
     struct nbg_operation op;
     struct nbg_span span;
@@ -446,7 +486,8 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
      * use the same 192-byte descriptor and pointer fields (kind 8 without coefficients); kind 6, a
      * stream-processor step, precedes the same tail with a program (docs/designs/npu-encoder-loader.md). */
     if (!nbg_model_operation(m, number, &op)) return 0;
-    if (op.kind == 1) return directory && shader_operation(m, number, first, buffers, plan, &op, image, count);
+    if (op.kind == 1)
+        return directory && shader_operation(m, number, first, buffers, plan, &op, image, count, command_out, command_room);
     /* The descriptor of an engine operation is numbered among the engine operations: shader operations have none. */
     uint32_t nn_slot = number - 1;
     if (plan->program_bytes)
@@ -651,8 +692,8 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
             a.format != b.format || a.quantization != b.quantization ||
             a.logical_bytes != b.logical_bytes) return 0;
     }
-    if ((slot[WEIGHTS] == UINT32_MAX && word(image->nn + 20) >= 0x1000) ||
-        (slot[INPUT2] == UINT32_MAX && word(image->nn + 136) >= 0x1000)) return 0;
+    if ((slot[WEIGHTS] == UINT32_MAX && word(image->nn + 20) >= NBG_ASSEMBLY_LOW_RESERVED) ||
+        (slot[INPUT2] == UINT32_MAX && word(image->nn + 136) >= NBG_ASSEMBLY_LOW_RESERVED)) return 0;
     if (!ring(image->nn, nn, slot, source, INPUT, INPUT_END, 20) ||
         !ring(image->nn, nn, slot, source, OUTPUT, OUTPUT_END, 18) ||
         aliased(nn, slot, source, op.kind) ||
@@ -691,6 +732,10 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
         }
     }
 #endif
+    if (command_out) {
+        if (image->command_bytes > command_room) return 0;
+        memcpy(command_out, image->command, image->command_bytes);
+    }
     *count = op.patch_count;
     return 1;
 }
@@ -702,7 +747,7 @@ static int inspect(const struct nbg_model *m, const struct nbg_assembly_buffer *
     for (uint32_t i = 1; i <= p->nn_operations; ++i) {
         struct operation_image scratch;
         uint32_t count;
-        if (!operation(m, i, first, b, p, &scratch, &count)) return 0;
+        if (!operation(m, i, first, b, p, &scratch, &count, NULL, 0)) return 0;
         first += count;
     }
     unsigned patch_bytes = m->header.version == NBG_MODEL_DIRECTORY_VERSION ? 28 : 40;
@@ -733,7 +778,7 @@ static inline __attribute__((always_inline)) int placed(const struct nbg_model *
             continue;
         }
         if (b[i].bytes != p->buffers[i].allocation_bytes || !a733_span_excl_nonempty(b[i].cpu, b[i].bytes) ||
-            ((uintptr_t)b[i].cpu & 4095) || !b[i].device || (b[i].device & 4095) ||
+            ((uintptr_t)b[i].cpu & 4095) || b[i].device < NBG_ASSEMBLY_LOW_RESERVED || (b[i].device & 4095) ||
             b[i].bytes > (UINT64_C(1) << 32) - b[i].device ||
             a733_extents_overlap_prechecked(b[i].device, b[i].bytes, 0x400000, 0x80000) ||
             !separate(b[i].cpu, b[i].bytes, out, out_bytes) ||
@@ -779,9 +824,8 @@ int nbg_assemble_layout(const struct nbg_model *m, const struct nbg_assembly_buf
     for (uint32_t i = 1; i <= p.nn_operations; ++i) {
         struct operation_image scratch;
         uint32_t used = 0;
-        (void)operation(m, i, first, b, &p, &scratch, &used);
+        (void)operation(m, i, first, b, &p, &scratch, &used, commands + offset, p.command_body_bytes - offset);
         if (scratch.nn_slot != UINT32_MAX) memcpy((unsigned char *)b[NBG_ALLOC_NN].cpu + scratch.nn_slot * 192, scratch.nn, 192);
-        memcpy(commands + offset, scratch.command, scratch.command_bytes);
         first += used;
         offset += scratch.command_bytes;
     }
@@ -817,10 +861,10 @@ int nbg_assembly_next(const struct nbg_model *m, const struct nbg_assembly_buffe
     for (; operations && cursor->operation <= p->nn_operations; --operations) {
         struct operation_image scratch;
         uint32_t used = 0;
-        if (!operation(m, cursor->operation, cursor->patch, b, p, &scratch, &used) ||
-            cursor->offset + scratch.command_bytes > p->command_body_bytes) return -1;
+        if (cursor->offset > p->command_body_bytes ||
+            !operation(m, cursor->operation, cursor->patch, b, p, &scratch, &used, commands + cursor->offset,
+                       p->command_body_bytes - cursor->offset)) return -1;
         if (scratch.nn_slot != UINT32_MAX) memcpy((unsigned char *)b[NBG_ALLOC_NN].cpu + scratch.nn_slot * 192, scratch.nn, 192);
-        memcpy(commands + cursor->offset, scratch.command, scratch.command_bytes);
         cursor->patch += used; cursor->offset += scratch.command_bytes; ++cursor->operation;
     }
     if (cursor->operation <= p->nn_operations) return 0;

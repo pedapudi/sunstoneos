@@ -74,7 +74,7 @@ int a733_npu_mmu_build(void *arena, size_t capacity, uint64_t physical,
         unsigned shift = (unsigned)r->page_shift;
         if (shift != 12 && shift != 16 && shift != 20 && shift != 24) return 0;
         uint64_t page = UINT64_C(1) << shift;
-        if (!r->bytes || !r->device || r->writable > 1 ||
+        if (!r->bytes || r->device < A733_NPU_MMU_LOW_RESERVED || r->writable > 1 ||
             ((r->physical | r->bytes | r->device) & (page - 1)) ||
             r->physical >= PA_LIMIT || r->bytes > PA_LIMIT - r->physical ||
             r->bytes > VA_LIMIT - r->device ||

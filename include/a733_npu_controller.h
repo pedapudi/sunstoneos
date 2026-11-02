@@ -2,7 +2,16 @@
 #define SUNSTONE_A733_NPU_CONTROLLER_H
 #include "a733_npu_mmu.h"
 
+/* The command fetch size field holds 16 bits of 8-byte units (vipdrv_hw_trigger writes 0x10000 | 65535, vipdMAX_CMD_SIZE >> 3), so
+ * a fetch is at most 524,280 bytes. That is the upper bound, not a size every command allocation needs. */
 #define A733_NPU_FETCH_BYTES 524280u
+#define A733_NPU_MIN_COMMAND_BYTES 4096u
+/* The word written to +0x3a4 for a command of readable bytes: the fetch window is the whole allocation, at most the field. */
+static inline uint32_t a733_npu_fetch_word(size_t readable)
+{
+    size_t window = readable < A733_NPU_FETCH_BYTES ? readable : A733_NPU_FETCH_BYTES;
+    return UINT32_C(0x10000) | (uint32_t)(window >> 3);
+}
 #define A733_NPU_BOOTSTRAP_BYTES 208u
 
 enum a733_npu_state {

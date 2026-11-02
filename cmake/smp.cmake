@@ -81,7 +81,7 @@ if(SUNSTONE_PARTITIONED_SCHEDULER)
   target_include_directories(scheduler-partitioned-qemu PRIVATE
     checks/scheduler-partitioned-qemu-config platform/qemu-smp include runtime/include
     "${FREERTOS_DIR}/include" "${smp_build}")
-  target_compile_definitions(scheduler-partitioned-qemu PRIVATE SUNSTONE_SMP_CORES=8 SS_KERNEL_TEST_ADMIN_ENTER=1)
+  target_compile_definitions(scheduler-partitioned-qemu PRIVATE SUNSTONE_SMP_CORES=8 SS_KERNEL_TEST_ADMIN_ENTER=1 SUNSTONE_OWNER_COUNTERS=1)
   target_compile_options(scheduler-partitioned-qemu PRIVATE ${SUNSTONE_KERNEL_FLAGS})
   target_link_options(scheduler-partitioned-qemu PRIVATE -nostdlib -static -Wl,--gc-sections
     -Wl,--defsym=SUNSTONE_SMP_STACKS=8 -Wl,--wrap=vTaskSwitchContext -Wl,--wrap=vPortRecursiveLock -Wl,--wrap=xTaskGenericNotify
@@ -90,6 +90,54 @@ if(SUNSTONE_PARTITIONED_SCHEDULER)
   set_target_properties(scheduler-partitioned-qemu PROPERTIES SUFFIX ".elf"
     LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld")
   sunstone_scheduler_partitioned_bind(scheduler-partitioned-qemu "${smp_build}")
+endif()
+
+if(SUNSTONE_PARTITIONED_SCHEDULER)
+  # The concurrent workload with an interrupt above the API mask firing on every core (SS_STORM).
+  add_executable(scheduler-partitioned-storm-qemu EXCLUDE_FROM_ALL
+    platform/qemu-smp/start.S platform/qemu-smp/platform.c runtime/memory.c
+    checks/scheduler-partitioned-qemu.c checks/fp-context.S
+    "${smp_build}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
+    "${smp_build}/port.c" "${smp_build}/portASM.S")
+  target_include_directories(scheduler-partitioned-storm-qemu PRIVATE
+    checks/scheduler-partitioned-qemu-config platform/qemu-smp include runtime/include
+    "${FREERTOS_DIR}/include" "${smp_build}")
+  target_compile_definitions(scheduler-partitioned-storm-qemu PRIVATE SUNSTONE_SMP_CORES=8 SS_KERNEL_TEST_ADMIN_ENTER=1 SS_STORM=1 SUNSTONE_OWNER_COUNTERS=1)
+  target_compile_options(scheduler-partitioned-storm-qemu PRIVATE ${SUNSTONE_KERNEL_FLAGS})
+  target_link_options(scheduler-partitioned-storm-qemu PRIVATE -nostdlib -static -Wl,--gc-sections
+    -Wl,--defsym=SUNSTONE_SMP_STACKS=8 -Wl,--wrap=vTaskSwitchContext -Wl,--wrap=vPortRecursiveLock -Wl,--wrap=xTaskGenericNotify
+    "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
+    "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/scheduler-partitioned-storm-qemu.map")
+  set_target_properties(scheduler-partitioned-storm-qemu PROPERTIES SUFFIX ".elf"
+    LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld")
+  sunstone_scheduler_partitioned_bind(scheduler-partitioned-storm-qemu "${smp_build}")
+endif()
+
+if(SUNSTONE_PARTITIONED_SCHEDULER)
+  # Switch requests raised in an interrupt must not be lost to an interrupt above the API mask landing in the
+  # interrupt-exit path (checks/scheduler-yield-qemu.c): the plain build and the build with that interrupt (SS_STORM).
+  foreach(variant yield yield-storm)
+    set(extra SS_WAKE=1)
+    if(variant STREQUAL "yield-storm")
+      list(APPEND extra SS_STORM=1)
+    endif()
+    add_executable(scheduler-${variant}-qemu EXCLUDE_FROM_ALL
+      platform/qemu-smp/start.S platform/qemu-smp/platform.c runtime/memory.c
+      checks/scheduler-yield-qemu.c "${smp_build}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
+      "${smp_build}/port.c" "${smp_build}/portASM.S")
+    target_include_directories(scheduler-${variant}-qemu PRIVATE
+      checks/scheduler-partitioned-qemu-config platform/qemu-smp include runtime/include
+      "${FREERTOS_DIR}/include" "${smp_build}")
+    target_compile_definitions(scheduler-${variant}-qemu PRIVATE SUNSTONE_SMP_CORES=8 SUNSTONE_OWNER_COUNTERS=1 ${extra})
+    target_compile_options(scheduler-${variant}-qemu PRIVATE ${SUNSTONE_KERNEL_FLAGS})
+    target_link_options(scheduler-${variant}-qemu PRIVATE -nostdlib -static -Wl,--gc-sections
+      -Wl,--defsym=SUNSTONE_SMP_STACKS=8
+      "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
+      "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/scheduler-${variant}-qemu.map")
+    set_target_properties(scheduler-${variant}-qemu PROPERTIES SUFFIX ".elf"
+      LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld")
+    sunstone_scheduler_partitioned_bind(scheduler-${variant}-qemu "${smp_build}")
+  endforeach()
 endif()
 
 if(SUNSTONE_PARTITIONED_SCHEDULER)

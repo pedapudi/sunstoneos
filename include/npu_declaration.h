@@ -5,7 +5,7 @@
 /* What an application declares of the NPU (docs/designs/npu-resources.md), as the session record carries it
  * (apps/os/npu-session.h, version 2): four full-width fields. The operating system admits the declaration against the
  * capacity of the image and of the board, and reserves the memory it implies, before the application runs. */
-struct npu_declaration { uint32_t slots, in_flight, graphs, links; };
+struct npu_declaration { uint32_t slots, in_flight, graphs, links, graph_bytes, tensor_bytes; };
 /* What the image itself links: slots in use, graphs and tensor links. A declaration must cover them. */
 struct npu_image_needs { uint32_t slots, graphs, links; };
 /* What the image's tables hold. They are arrays fixed when the image is built, and the only refusal here that is not a

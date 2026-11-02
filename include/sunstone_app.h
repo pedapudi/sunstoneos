@@ -15,6 +15,7 @@
 #include "sunstone_cpu_topology.h"
 #include "sunstone_cpu_observation.h"
 #include "sunstone_large.h"
+#include "sunstone_storage.h"
 #ifdef __cplusplus
 #define SS_STATIC_ASSERT static_assert
 #define SS_NORETURN [[noreturn]]
@@ -319,6 +320,12 @@ int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
  * progress marks and the wait window in milliseconds. It returns 1 once per fault and 0 when there is none. */
 struct ss_npu_fault_info { uint32_t mmu_status, mmu_address, canary_crc, marks, window_ms, reserved; };
 int ss_npu_last_fault(struct ss_npu_fault_info *);
+/* Hand the NPU a compiled graph at run time, for example a file read into a region: no list names it and the OS image is not
+ * rebuilt. Call repeatedly with identical arguments until it completes: 0 pending, 1 registered (*index is the model index
+ * for ss_npu_run), -2 refused (not admissible, beyond the declared graph bounds or the declared graph count), -1
+ * unavailable or retained failure. Keep the graph alive and unchanged: the OS admitted these bytes, and a changed copy
+ * fails LOAD. The session must declare graph_bytes and tensor_bytes (npu section of the manifest). */
+int ss_npu_register_graph(const void *graph,size_t bytes,unsigned *index);
 /* After the final run, repeat until 1 (slot closed), or a negative failure.
  * Successful CLOSE is terminal for this session. */
 int ss_npu_close(void);

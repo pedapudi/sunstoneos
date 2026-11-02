@@ -23,7 +23,7 @@ from elftools.elf.elffile import ELFFile
 MARKER = 'sunxi_mmc_read_only_build'
 MARKER_VALUE = 0x52444f4e
 WRITE_PATTERNS = (r'^sunxi_mmc_write', r'^next_write$', r'^write_admitted$', r'^a733_storage_update_',
-                  r'^sunxi_mmc_erase', r'^storage_update_')
+                  r'^sunxi_mmc_erase', r'^storage_update_', r'^a733_storage_bounds_', r'^a733_mmc_platform_native_bind_bounds$')
 _WRITE = re.compile('|'.join(WRITE_PATTERNS))
 
 

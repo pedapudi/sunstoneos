@@ -9,6 +9,8 @@
 /* Applications may provide one constant edge table in their image. */
 __attribute__((weak)) const struct ss_npu_queue_edges ss_npu_queue_edges={0};
 #define MAX_EDGES (SS_NPU_QUEUE_MAX_HANDLES*SS_NPU_QUEUE_MAX_TENSORS)
+_Static_assert(SS_NPU_QUEUE_MAX_HANDLES>=NPU_RUNTIME_SLOTS&&SS_NPU_QUEUE_MAX_TENSORS>=NBG_ASSEMBLY_MAX_TENSORS,
+    "the queue holds a handle for every slot and every tensor of a graph");
 static struct ss_npu_queue_edge edges[MAX_EDGES];
 static size_t edge_count;
 static unsigned edges_prepared;
@@ -72,6 +74,33 @@ static int mapped(struct npu_runtime_region r)
     return r.cpu&&r.bytes&&!((r.cpu|r.bytes)&63)&&
         a733_mapping_check_stride(aarch64_device_translate_el0,r.cpu,r.physical,r.bytes,4096,&wb);
 }
+/* Tensor links the application chose at open, after the scheduler started (ss_npu_queue_open_linked). The table is copied
+ * once from the queue, which the application can write; every edge is checked against the loaded graphs and against the
+ * edges already made (the image's constant table), at most as many as the session declared, and linked while the runtime
+ * is idle, before the handles are built and the direct queue is claimed. */
+static struct ss_npu_queue_edge requested_copy[MAX_EDGES];
+static int link_requested(struct npu_runtime *rt)
+{
+    const size_t asked=ring.requested_links;
+    if(!asked)return 1;
+    if(asked>os_npu_links()||asked>MAX_EDGES-edge_count)return 0;
+    memcpy(requested_copy,ring.requested,asked*sizeof(*requested_copy));
+    for(size_t i=0;i<asked;++i){
+        const struct ss_npu_queue_edge *e=&requested_copy[i];
+        if(e->producer>=rt->slots||e->consumer>=rt->slots||e->producer==e->consumer||
+           e->output>=rt->slot[e->producer].layout.outputs||e->input>=rt->slot[e->consumer].layout.inputs)return 0;
+        for(size_t j=0;j<edge_count+i;++j){
+            const struct ss_npu_queue_edge *o=j<edge_count?&edges[j]:&requested_copy[j-edge_count];
+            if(o->consumer==e->consumer&&o->input==e->input)return 0;
+        }
+    }
+    for(size_t i=0;i<asked;++i){
+        const struct ss_npu_queue_edge *e=&requested_copy[i];
+        if(!npu_runtime_link_tensor_running(rt,e->producer,e->output,e->consumer,e->input))return 0;
+        edges[edge_count++]=*e;
+    }
+    return 1;
+}
 static int open_queue(void *unused,unsigned depth)
 {
     (void)unused;
@@ -81,6 +110,7 @@ static int open_queue(void *unused,unsigned depth)
     struct npu_runtime *rt=os_npu_queue_runtime();
     if(!rt||!edges_prepared||rt->slots>SS_NPU_QUEUE_MAX_HANDLES||
        (cache_stride=aarch64_device_cache_stride())!=64)return -1;
+    if(!link_requested(rt))return -1;
     for(unsigned i=0;i<rt->slots;++i){
         struct npu_runtime_slot *s=&rt->slot[i];
         struct ss_npu_tensor in[SS_NPU_QUEUE_MAX_TENSORS],out[SS_NPU_QUEUE_MAX_TENSORS];

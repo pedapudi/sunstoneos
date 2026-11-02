@@ -23,7 +23,16 @@
 #include "device_memory_pool.h"
 #include "sunxi_smhc.h"
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
+#ifdef OS_SD_WRITE
+#include "sd_hw.h"
+#include "a733_storage_bounds.h"
+#include "storage_wait.h"
+#include "sunstone_deadline.h"
+/* A write-capable image: the read binding below is the shared setup of both images. sd_owner.c runs the one owner task,
+ * so the two entry points get other names here and sd_owner.c supplies os_large_device() as a proxy for the loader. */
+#endif
 
 #define IDENTIFY_US 5000000u
 #define LIFETIME_US 180000000u
@@ -34,7 +43,13 @@
 extern const struct ss_large_region __start_sunstone_large_regions[] __attribute__((weak));
 extern const struct ss_large_region __stop_sunstone_large_regions[] __attribute__((weak));
 int os_large_sd_declared(void)
-{ return __start_sunstone_large_regions && __stop_sunstone_large_regions > __start_sunstone_large_regions; }
+{
+#ifdef OS_SD_WRITE
+    return 1;                           /* a write-capable image always uses the card */
+#else
+    return __start_sunstone_large_regions && __stop_sunstone_large_regions > __start_sunstone_large_regions;
+#endif
+}
 /* PF0 to PF6 are SD0 and its card detect (apps/sd-read-probe/main.c). */
 int os_large_sd_pins(struct a733_pin_handoff *pins)
 {
@@ -53,6 +68,11 @@ static struct device_memory_lease descriptor_lease;
 static struct os_large_device device;
 static unsigned blocks_in_flight;
 static int opened;
+#ifdef OS_SD_WRITE
+static uint8_t write_buffer[OS_SD_WRITE_BYTES] __attribute__((aligned(4096)));
+static struct a733_storage_bounds bounds;
+static uint8_t *write_region; static size_t write_region_bytes;
+#endif
 
 static uint64_t now_us(void)
 {
@@ -72,6 +92,9 @@ static int mappings(void)
     if (!memory_ok(0x04020000, 0x304, 0, 2)) return 0;
     for (unsigned i = 0; i < sizeof words / sizeof words[0]; ++i) if (!memory_ok(words[i], 1, 0, 2)) return 0;
     return memory_ok((uintptr_t)buffers, sizeof buffers, 0xff, 3) &&
+#ifdef OS_SD_WRITE
+        memory_ok((uintptr_t)write_buffer, sizeof write_buffer, 0xff, 3) &&
+#endif
         memory_ok((uintptr_t)descriptors, SUNXI_MMC_DMA_DESCRIPTORS * sizeof *descriptors, 0x44, 2);
 }
 static int admit(void *cookie, const struct a733_mmc_platform_config *c, const struct a733_clock_token *t)
@@ -82,9 +105,16 @@ static int admit(void *cookie, const struct a733_mmc_platform_config *c, const s
 static int dma_sync(void *cookie, uint8_t *b, size_t n, unsigned phase)
 {
     (void)cookie;
-    uintptr_t start = (uintptr_t)b, base = (uintptr_t)buffers;
-    if ((phase != SUNXI_MMC_DMA_BEFORE && phase != SUNXI_MMC_DMA_AFTER) || start < base || start > base + sizeof buffers ||
-        n > base + sizeof buffers - start) return 0;
+    uintptr_t start = (uintptr_t)b, base = (uintptr_t)buffers, size = sizeof buffers;
+#ifdef OS_SD_WRITE
+    if (start >= (uintptr_t)write_buffer && start <= (uintptr_t)write_buffer + sizeof write_buffer) {
+        base = (uintptr_t)write_buffer; size = sizeof write_buffer;
+    } else if (write_region && start >= (uintptr_t)write_region && start <= (uintptr_t)write_region + write_region_bytes) {
+        base = (uintptr_t)write_region; size = write_region_bytes;
+    }
+#endif
+    if ((phase != SUNXI_MMC_DMA_BEFORE && phase != SUNXI_MMC_DMA_AFTER) || start < base || start > base + size ||
+        n > base + size - start) return 0;
     return aarch64_device_cache(phase == SUNXI_MMC_DMA_BEFORE ? AARCH64_CACHE_CLEAN : AARCH64_CACHE_INVALIDATE, (uintptr_t)b, n) == 1;
 }
 
@@ -131,13 +161,20 @@ static int configure(void)
 }
 
 /* One request at a time into dma, to completion or failure; the loader's metadata reads. */
+#ifdef OS_SD_WRITE
+static enum a733_mmc_platform_result drive_platform(uint64_t deadline);
+#endif
 static int read_blocking(uint64_t sector, uint32_t count, uint8_t *dma)
 {
     enum a733_mmc_platform_result r;
     do { r = a733_mmc_platform_read(&platform, sector, count, dma, count * 512u, now_us() + READ_US); }
     while (r == A733_MMC_BUSY && board_live(NULL));
     if (r != A733_MMC_PENDING) return 0;
+#ifdef OS_SD_WRITE
+    r = drive_platform(now_us() + READ_US);
+#else
     do { r = a733_mmc_platform_poll(&platform); } while ((r == A733_MMC_PENDING || r == A733_MMC_BUSY) && board_live(NULL));
+#endif
     if (r != A733_MMC_COMPLETE) return 0;
     do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
     return r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.received == count * 512u;
@@ -172,7 +209,11 @@ static int sd_poll(void *unused)
 }
 
 /* Runs in the loader task, which becomes the platform's owner task. */
+#ifdef OS_SD_WRITE
+const struct os_large_device *os_sd_open_owner_device(void)
+#else
 const struct os_large_device *os_large_device(void)
+#endif
 {
     if (!os_large_sd_declared() || opened) return 0;
     /* The PMIC service must be up before the SD rail can be leased. */
@@ -216,7 +257,11 @@ const struct os_large_device *os_large_device(void)
 }
 
 /* Restore the clock, the pins and the rail when the last region has loaded. */
+#ifdef OS_SD_WRITE
+void os_sd_close_owner_device(void)
+#else
 void os_large_device_close(void)
+#endif
 {
     if (!opened) return;
     enum a733_mmc_platform_result r;
@@ -228,3 +273,153 @@ void os_large_device_close(void)
     opened = 0;
     if (descriptor_lease.pool) (void)device_memory_release(a733_memory_uncached_init(), descriptor_lease);
 }
+
+#ifdef OS_SD_WRITE
+#define WRITE_US 2000000u
+#define SMHC0 UINT32_C(0x04020000)
+static uint8_t *blob_copy;                       /* sized from the input at enable time, kept for the image's lifetime */
+
+/* --- completion by interrupt ------------------------------------------------------------------------------------------ */
+/* SMHC0 is GIC SPI 161, INTID 193, level high (board kernel sun60iw2p1.dtsi, sdc0). The route is emitted with the image's
+ * routes (tools/sunstone-manifest.py). The handler follows the board kernel's sunxi_mmc_irq (sunxi-mmc.c:1271): read the
+ * masked status, accumulate it, write the same bits back to the raw status to acknowledge, wake the waiter. The core arms
+ * the mask per command, so nothing asserts while the card is idle; IDST stays with the core (the IDMAC interrupts are off). */
+static TaskHandle_t owner_task;
+static _Atomic uint32_t irq_bits;
+static volatile int irq_live;
+void os_sd_irq(void)
+{
+    if (!irq_live) return;
+    uint32_t mista = *(volatile uint32_t *)(uintptr_t)(SMHC0 + 0x34);
+    if (!mista) return;
+    atomic_fetch_or_explicit(&irq_bits, mista, memory_order_release);
+    *(volatile uint32_t *)(uintptr_t)(SMHC0 + 0x38) = mista;
+    BaseType_t woken = pdFALSE;
+    vTaskNotifyGiveFromISR(owner_task, &woken);
+    portYIELD_FROM_ISR(woken);
+}
+static uint32_t irq_taken(void *unused) { (void)unused; return atomic_exchange_explicit(&irq_bits, 0, memory_order_acquire); }
+
+/* The wait loop: poll, then sleep on the interrupt or a one-shot timer, as the core's hint says. */
+struct drive { enum a733_mmc_platform_result r; int (*poll)(void); };
+static int dr_poll(void *c)
+{
+    struct drive *d = c;
+    if (d->poll) return d->poll();
+    d->r = a733_mmc_platform_poll(&platform);
+    return d->r != A733_MMC_PENDING && d->r != A733_MMC_BUSY;
+}
+static enum sunxi_mmc_wait dr_hint(void *c, uint32_t *us) { (void)c; return sunxi_mmc_wait_hint(&platform.core, us); }
+static uint64_t dr_now(void *c) { (void)c; return now_us(); }
+static _Atomic uint64_t sleep_us, sleep_count;
+static void dr_sleep(void *c, uint64_t until)
+{
+    (void)c;
+    uint64_t from = now_us();
+    (void)sunstone_deadline_wait_until(until);
+    atomic_fetch_add(&sleep_us, now_us() - from);
+    atomic_fetch_add(&sleep_count, 1);
+}
+static uint64_t hw_owner_sleep_us(void) { return atomic_load(&sleep_us); }
+static uint64_t hw_owner_wakes(void) { return atomic_load(&sleep_count); }
+static int dr_live(void *c) { (void)c; return board_live(NULL); }
+static enum a733_mmc_platform_result drive_platform(uint64_t deadline)
+{
+    struct drive d = {A733_MMC_PENDING, NULL};
+    const struct storage_wait_ops ops = {&d, dr_poll, dr_hint, dr_now, dr_sleep, dr_live};
+    (void)storage_wait_run(&ops, deadline);
+    return d.r;
+}
+static int async_value;
+static int async_poll(void) { async_value = sd_poll(NULL); return async_value != 0; }
+static int hw_wait_async(void)
+{
+    struct drive d = {A733_MMC_PENDING, async_poll};
+    const struct storage_wait_ops ops = {&d, dr_poll, dr_hint, dr_now, dr_sleep, dr_live};
+    async_value = 0;
+    (void)storage_wait_run(&ops, now_us() + READ_US);
+    return async_value == 1;
+}
+
+static int hw_live(void) { return board_live(NULL); }
+/* ACMD13 in the owner task, as a read: complete with poll and take like any other request. The unit is read from AU_SIZE
+ * when the card is on the 3.3 V bus modes (this image runs profile 2: high speed, 3.3 V, so no UHS-I mode), and from
+ * UHS_AU_SIZE when it signals at 1.8 V, which is the condition for a UHS-I bus speed mode (SD Physical Layer 9.10,
+ * section 4.10.2.9). */
+static int hw_allocation_unit(uint32_t *sectors)
+{
+    static uint8_t status[SUNXI_MMC_SD_STATUS_BYTES] __attribute__((aligned(64)));
+    enum a733_mmc_platform_result r;
+    do { r = a733_mmc_platform_sd_status(&platform, status, now_us() + READ_US); } while (r == A733_MMC_BUSY && board_live(NULL));
+    if (r != A733_MMC_PENDING) return 0;
+    r = drive_platform(now_us() + READ_US);
+    if (r != A733_MMC_COMPLETE) return 0;
+    do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
+    if (r != A733_MMC_READY || result.error != SUNXI_MMC_OK || result.received != SUNXI_MMC_SD_STATUS_BYTES) return 0;
+    *sectors = sunxi_mmc_au_sectors(status, platform.core.card.signal_1v8 != 0);
+    return 1;
+}
+static int bounds_read(void *unused, uint64_t sector, uint8_t *out) { (void)unused; return sd_read(NULL, sector, 1, out); }
+static int hw_enable_writes(const uint8_t *blob, size_t bytes)
+{
+    /* All kernel data is writable at EL0 in this OS, so no mapping protects the blob. The runner's input is copied once into
+     * private memory and parsed there; the bounds object re-hashes the copy on every use (a733_storage_bounds_allows). */
+    if (!blob || !bytes || blob_copy || !card.sector_addressed) return 0;
+    blob_copy = malloc(bytes);                       /* the OS heap; the only refusal is that it has no room */
+    if (!blob_copy) return 0;
+    memcpy(blob_copy, blob, bytes);
+    return a733_storage_bounds_parse(&bounds, blob_copy, bytes) && a733_storage_bounds_verify(&bounds, bounds_read, NULL) &&
+        a733_mmc_platform_native_bind_bounds(&native, &platform, &bounds);
+}
+/* The application's flush buffer: the FAT32 service flushes from here straight into the controller (one crossing of
+ * memory per byte). It must be cacheable DRAM that the controller can reach, 64-byte aligned, and apart from the image's
+ * own buffers. */
+static int hw_set_write_region(uint8_t *base, size_t bytes)
+{
+    uintptr_t a = (uintptr_t)base, e = a + bytes;
+    if (write_region || !base || (a & 63u) || bytes < 4096 || (bytes & 511u) || e < a || a < 0x42200000u || e > 0x48000000u) return 0;
+    uintptr_t own[3][2] = {{(uintptr_t)buffers, sizeof buffers}, {(uintptr_t)write_buffer, sizeof write_buffer},
+                           {(uintptr_t)descriptors, SUNXI_MMC_DMA_DESCRIPTORS * sizeof *descriptors}};
+    for (unsigned i = 0; i < 3; ++i) if (a < own[i][0] + own[i][1] && own[i][0] < e) return 0;
+    if (!memory_ok(a, bytes, 0xff, 3)) return 0;
+    write_region = base; write_region_bytes = bytes;
+    return 1;
+}
+static int in_region(const uint8_t *p, size_t bytes)
+{
+    uintptr_t a = (uintptr_t)p;
+    return write_region && a >= (uintptr_t)write_region && a - (uintptr_t)write_region <= write_region_bytes && bytes <= write_region_bytes - (a - (uintptr_t)write_region);
+}
+static int hw_write_piece(uint64_t sector, uint32_t count, const uint8_t *src)
+{
+    if (!count || count > OS_SD_WRITE_PIECE_SECTORS) return 0;
+    size_t bytes = (size_t)count * 512u;
+    const uint8_t *dma = src;
+    if (!in_region(src, bytes) || ((uintptr_t)src & 63u)) { memcpy(write_buffer, src, bytes); dma = write_buffer; }   /* metadata and small pieces */
+    struct sunxi_mmc_write_authority authority;
+    a733_storage_bounds_authority(&bounds, &authority);
+    enum a733_mmc_platform_result r;
+    do { r = a733_mmc_platform_write_dma(&platform, &authority, A733_BOUNDED_WRITE_TOKEN, sector, count, dma, now_us() + WRITE_US); }
+    while (r == A733_MMC_BUSY && board_live(NULL));
+    if (r != A733_MMC_PENDING) return 0;
+    r = drive_platform(now_us() + WRITE_US);
+    if (r != A733_MMC_COMPLETE) return 0;
+    do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
+    return r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.confirmed_blocks == count;
+}
+void os_sd_close_owner(void);
+static struct os_sd_hw hw;
+const struct os_sd_hw *os_sd_open_owner(void)
+{
+    const struct os_large_device *d = os_sd_open_owner_device();
+    if (!d) return 0;
+    /* The owner task sleeps on the controller interrupt and on one-shot timers (sunstone_deadline), never on the tick. */
+    owner_task = xTaskGetCurrentTaskHandle();
+    if (sunstone_deadline_register() != 1 || !sunxi_mmc_set_irq(&platform.core, irq_taken, NULL)) return 0;
+    irq_live = 1;
+    hw = (struct os_sd_hw){d, card.sectors, card.sector_addressed, hw_allocation_unit, hw_enable_writes, hw_write_piece, hw_live,
+                           hw_set_write_region, hw_wait_async, hw_owner_sleep_us, hw_owner_wakes, os_sd_close_owner};
+    return &hw;
+}
+void os_sd_close_owner(void) { irq_live = 0; os_sd_close_owner_device(); }
+#endif

@@ -346,9 +346,14 @@ int os_npu_open(void)
     if(call(NPU_SERVICE_OPEN,0,1000000)!=1)return -1;
     npu.opened=1;return 1;
 }
+int os_npu_register(const void *model,size_t bytes,unsigned *entry)
+{
+    /* The graph is admitted like a linked one and must fit the bounds declared in the session (npu_runtime_register). */
+    return caller()&&entry&&npu_runtime_register(&npu.runtime,model,bytes,entry);
+}
 int os_npu_load(unsigned entry)
 {
-    if(!caller()||!npu.opened||entry>=os_npu_model_count||os_npu_stopping())return 0;
+    if(!caller()||!npu.opened||entry>=atomic_load_explicit(&npu.runtime.count,memory_order_acquire)||os_npu_stopping())return 0;
 #ifdef SUNSTONE_NPU_CASE_SLOTS
     if(entry<sizeof(case_slots)/sizeof(*case_slots)){sunstone_npu_hook_slot=case_slots[entry];sunstone_npu_hook_address=case_addresses[entry];}
     else sunstone_npu_hook_slot=-1;
@@ -474,18 +479,25 @@ static struct npu_image_needs image_needs(void)
 /* The tables this image holds (fixed when it is built). */
 static struct npu_tables image_tables(void)
 {
-    return (struct npu_tables){NPU_RUNTIME_SLOTS,NPU_RUNTIME_MODELS,SS_NPU_QUEUE_MAX_DEPTH,
+    /* Graphs have no table limit: their tables come from the reservation. */
+    return (struct npu_tables){NPU_RUNTIME_SLOTS,UINT32_MAX,SS_NPU_QUEUE_MAX_DEPTH,
         SS_NPU_QUEUE_MAX_HANDLES*SS_NPU_QUEUE_MAX_TENSORS};
 }
 static struct npu_declaration declaration_of(const struct os_npu_session *n)
 {
-    return (struct npu_declaration){n->slots,n->in_flight,n->graphs,n->links};
+    return (struct npu_declaration){n->slots,n->in_flight,n->graphs,n->links,n->graph_bytes,n->tensor_bytes};
 }
 /* The in-flight depth the session declares: the deepest queue the application may open. */
 unsigned os_npu_in_flight(void)
 {
     const struct os_session *s=os_session();
     return s?s->npu.in_flight:0;
+}
+/* The tensor links the session declares: the most edges the application may choose at run time (ss_npu_queue_open_linked). */
+unsigned os_npu_links(void)
+{
+    const struct os_session *s=os_session();
+    return s?s->npu.links:0;
 }
 /* A refused declaration leaves its reason in the first-failure record, as the value of a record in group NPU. */
 static enum npu_declaration_result refused_declaration(enum npu_declaration_result r)
@@ -524,14 +536,26 @@ int os_npu_start(void)
     uintptr_t start=(uintptr_t)__os_npu_pool_start,end=(uintptr_t)__os_npu_pool_end;
     /* The reservation fits any one catalogue entry; the runtime takes the
      * linked entry's exact requirement from its start. */
-    if(!os_npu_model_count||os_npu_model_count>NPU_RUNTIME_MODELS)return REFUSE();
+    if(!os_npu_model_count)return REFUSE();
     /* The application's declaration sets the slots; the reservation covers them all, so that nothing is allocated on
      * the job path. A declaration that does not fit names the resource in the record's value. */
     if(os_npu_declaration_admitted(g)!=NPU_DECLARATION_OK)return REFUSE();
     const struct npu_declaration declared=declaration_of(g);
     const unsigned slots=declared.slots;
     size_t need=0;
-    const enum npu_declaration_result fit=npu_runtime_reservation(os_npu_models,os_npu_model_count,slots,OS_NPU_POOL_BYTES,&need);
+    /* Graphs beyond the linked ones are loaded at run time, within the bounds the session declares. */
+    struct npu_runtime_bounds bounds={0};
+    if(declared.graph_bytes&&declared.tensor_bytes&&declared.graphs>os_npu_model_count)
+        bounds=(struct npu_runtime_bounds){declared.graphs-os_npu_model_count,declared.graph_bytes,declared.tensor_bytes,NULL};
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+    /* A queue image keeps graph i resident in slot i: each slot is sized by its own graph, not by the largest. */
+    static unsigned slot_model[NPU_RUNTIME_SLOTS];
+    if(!bounds.capacity&&slots==os_npu_model_count&&slots<=NPU_RUNTIME_SLOTS){
+        for(unsigned i=0;i<slots;++i)slot_model[i]=i;
+        bounds.slot_model=slot_model;
+    }
+#endif
+    const enum npu_declaration_result fit=npu_runtime_reservation_with(os_npu_models,os_npu_model_count,slots,OS_NPU_POOL_BYTES,&need,&bounds);
     if(fit!=NPU_DECLARATION_OK){board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),(uint32_t)fit,SUNSTONE_CRUMB_HERE());return 0;}
     if(start!=OS_NPU_POOL_START||end-start!=OS_NPU_POOL_BYTES)return REFUSE();
     if(!need)return REFUSE();
@@ -539,10 +563,9 @@ int os_npu_start(void)
     if(!device_memory_pool_init_typed(&npu.pool,start,start,end-start,DEVICE_MEMORY_CLASS_DMA32,DEVICE_MEMORY_WRITE_BACK))return REFUSE();
     if(!device_memory_acquire(&npu.pool,g->owner,need,&npu.lease,&npu.extent))return REFUSE();
     if(npu.extent.cpu!=start||npu.extent.physical!=start||npu.extent.bytes!=need)return REFUSE();
-    struct npu_runtime_config config={.count=os_npu_model_count,.slots=slots,.cpu=npu.extent.cpu,
+    struct npu_runtime_config config={.models=os_npu_models,.count=os_npu_model_count,.slots=slots,.bounds=bounds,.cpu=npu.extent.cpu,
         .physical=npu.extent.physical,.bytes=npu.extent.bytes,.register_cpu=0x03600000,
         .register_physical=0x03600000,.fatal=fatal};
-    memcpy(config.models,os_npu_models,os_npu_model_count*sizeof(os_npu_models[0]));
     if(!npu_runtime_prepare(&npu.runtime,&config)){device_memory_retain(&npu.pool,npu.lease);return REFUSE();}
     if(!os_npu_sdk_bind(&npu.runtime)){device_memory_retain(&npu.pool,npu.lease);return REFUSE();}
     device_memory_lookup(&npu.pool,npu.lease)->state=DEVICE_MEMORY_DEVICE;

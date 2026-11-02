@@ -116,13 +116,15 @@ def load(path):
     # the session record carries it (npu_word, apps/os/host.py), and the operating system admits it against capacity.
     if 'npu' in raw:
         n = raw['npu']
-        require(set(n) <= {'slots', 'in_flight', 'graphs', 'links'}, name + ': unknown npu keys')
+        require(set(n) <= {'slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes'}, name + ': unknown npu keys')
         require({'slots', 'in_flight', 'graphs'} <= set(n), name + ': npu declares slots, in_flight and graphs')
 
         def count(value, label, low):
             return integer(len(value) if isinstance(value, list) else value, name + ' npu ' + label, low, (1 << 32) - 1)
         m['npu'] = {'slots': count(n['slots'], 'slots', 1), 'in_flight': count(n['in_flight'], 'in_flight', 1),
-                    'graphs': count(n['graphs'], 'graphs', 1), 'links': count(n.get('links', 0), 'links', 0)}
+                    'graphs': count(n['graphs'], 'graphs', 1), 'links': count(n.get('links', 0), 'links', 0),
+                    'graph_bytes': count(n.get('graph_bytes', 0), 'graph_bytes', 0),
+                    'tensor_bytes': count(n.get('tensor_bytes', 0), 'tensor_bytes', 0)}
     audio = raw.get('audio')
     if audio is not None or (required | optional) & CAPTURE:
         require(audio is not None, name + ': a capture device needs an audio format')
@@ -439,9 +441,11 @@ def c_tables(m):
              '#ifdef SUNSTONE_A733_OS_HEADSET', '    {"bluetooth",1000000},{"headset",1000000},', '#endif', '};',
              '#ifdef SUNSTONE_BOARD_USB2_IRQ', 'extern void board_host_irq(void);', '#endif',
              '#ifdef SUNSTONE_A733_HW_FACTS', 'extern void os_hw_facts_irq(void);', '#endif',
+             '#ifdef SUNSTONE_A733_OS_SD_WRITE', 'extern void os_sd_irq(void);', '#endif',
              'const struct a733_irq_route a733_irq_routes[] = {', '    {71,0,0xd8,os_thermal_irq},',
              '#ifdef SUNSTONE_BOARD_USB2_IRQ', '    {187,0,0xd8,board_host_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_NPU', '    {97,OS_NPU_CORE,0xd8,os_npu_irq},', '#endif',
+             '#ifdef SUNSTONE_A733_OS_SD_WRITE', '    {193,0,0xd8,os_sd_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_AUDIO', '    {143,0,0xd8,os_audio_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_DMA', '    {143,0,0xd8,os_dma_irq},', '#endif',
              '#ifdef SUNSTONE_A733_OS_GPU', ('    {95,A733_SMP_APPLICATION_CORE,0xd8,os_gpu_queue_irq},' if m.get('cluster', 0) else '    {95,2,0xd8,os_gpu_queue_irq},'), '#endif',

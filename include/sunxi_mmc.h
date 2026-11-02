@@ -183,6 +183,11 @@ struct sunxi_mmc {
     struct sunxi_mmc_write_authority write_authority;
     uint8_t write_payload[SUNXI_MMC_MAX_BLOCKS * SUNXI_MMC_BLOCK_BYTES];
     unsigned writing;
+    uint8_t dma_write; /* The write in progress is a CMD25 descriptor-DMA write. */
+    uint8_t wait;      /* enum sunxi_mmc_wait of the last poll that did not finish */
+    uint32_t (*irq_taken)(void *);   /* see sunxi_mmc_set_irq */
+    void *irq_context;
+    uint32_t wait_us;
     unsigned sd_ios;
     /* UHS-I switch and tuning progress. */
     uint64_t signal_us;
@@ -217,6 +222,28 @@ int sunxi_mmc_read(struct sunxi_mmc *, uint64_t first_sector, uint32_t blocks,
  * separate concrete storage service may bind an authenticated writer. */
 int sunxi_mmc_write(struct sunxi_mmc *,const struct sunxi_mmc_write_request *,
                     const struct sunxi_mmc_write_authority *);
+/* ACMD13: the 64-byte SD Status into buffer (SD cards only, READY state). Complete with poll and
+ * take like a read; result.received is 64. Present in the read-only build. */
+#define SUNXI_MMC_SD_STATUS_BYTES 64u
+int sunxi_mmc_sd_status(struct sunxi_mmc *, uint8_t *buffer, uint64_t absolute_deadline_us);
+/* The allocation unit in sectors from an SD Status block (0: undefined); uhs_mode selects UHS_AU_SIZE. */
+uint32_t sunxi_mmc_au_sectors(const uint8_t status[SUNXI_MMC_SD_STATUS_BYTES], int uhs_mode);
+/* CMD25 through descriptor DMA, 1 to SUNXI_MMC_MAX_DMA_BLOCKS blocks; the source is borrowed, 64-byte aligned,
+ * below 16 GiB, and stays exclusive and cache-clean until successful take. Write-capable builds only. */
+int sunxi_mmc_write_dma(struct sunxi_mmc *,const struct sunxi_mmc_write_request *,
+                        const struct sunxi_mmc_write_authority *);
+/* Optional interrupt completion for descriptor-DMA transfers; without it the core polls the raw status. The image's SMHC
+ * interrupt handler reads the masked status, acknowledges those raw bits (the board kernel's order, sunxi_mmc_irq: IDST and
+ * MISTA read, then RINTR written back) and accumulates them. taken() returns and clears the accumulated bits. The core ORs
+ * them into the raw status it reads, so a bit the handler acknowledged is never lost, and it arms the interrupt mask for
+ * each DMA command as the board kernel's sunxi_mmc_exe_cmd does. Call once, in the READY state, before the first command. */
+int sunxi_mmc_set_irq(struct sunxi_mmc *, uint32_t (*taken)(void *), void *context);
+/* What a caller that got "not finished" from poll should wait for. NONE: poll again at once (a bounded register
+ * condition of a few microseconds). IRQ: the controller interrupt will fire when the command completes or fails; wake
+ * on it, with the deadline as the bound. TIMER: DAT0 busy or a retry spacing, which no interrupt reports on this
+ * controller (the board kernel polls card busy too); sleep for *delay_us on a one-shot timer. */
+enum sunxi_mmc_wait { SUNXI_MMC_WAIT_NONE, SUNXI_MMC_WAIT_IRQ, SUNXI_MMC_WAIT_TIMER };
+enum sunxi_mmc_wait sunxi_mmc_wait_hint(const struct sunxi_mmc *, uint32_t *delay_us);
 void sunxi_mmc_poll(struct sunxi_mmc *);
 /* DONE returns to READY and returns the complete buffer to its owner. FAULT
  * copies diagnostics but keeps its buffer and all platform leases retained.

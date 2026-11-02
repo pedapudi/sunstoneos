@@ -32,12 +32,18 @@ def main():
         r.check_returncode()
     run('build', [a.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                   '-fsanitize=address,undefined', '-Iinclude', 'checks/npu-app-queue.c', '-o', exe])
+    # The ring depth is the image's: a build for 2000 jobs in flight accepts 2000 and refuses 2001, the default build 64 and 65.
+    run('build-deep', [a.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-DSS_NPU_QUEUE_MAX_DEPTH=2000u',
+                       '-fsanitize=address,undefined', '-Iinclude', 'checks/npu-app-queue.c', '-o', a.output.resolve() / 'npu-app-queue-deep'])
+    run('depth-default', [exe, '8'])
+    run('links-at-open', [exe, '9'])
+    run('depth-2000', [a.output.resolve() / 'npu-app-queue-deep', '8'])
     for label, args in [('normal', []), ('start-failure', ['1']), ('completion-failure', ['2']), ('linked', ['3']),
                         ('undeclared-alias', ['4']), ('bad-edge-index', ['5']),
                         ('duplicate-edge', ['6']), ('partial-alias', ['7'])]:
         run(label, [exe, *args])
     digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
-    record = dict(passed=True, physical_access=False, cases=8,
+    record = dict(passed=True, physical_access=False, cases=10,
                   hardware='modeled; no physical qualification',
                   inputs={p: digest(ROOT / p) for p in CHECK_INPUTS},
                   executable_sha256=digest(exe), compiler_sha256=digest(a.cc.resolve()))

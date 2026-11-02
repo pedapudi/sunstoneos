@@ -1,0 +1,28 @@
+{
+  "name": "npu-graphs",
+  "devices": {
+    "required": [],
+    "optional": []
+  },
+  "cpu": {
+    "cluster": "a55",
+    "workers": 0,
+    "priority": 2,
+    "stack_bytes": 16384
+  },
+  "regions": [],
+  "deadlines": {
+    "run_us": 20000000,
+    "return_reserve_us": 5000000,
+    "progress_window_us": 1000000
+  },
+  "npu": {
+    "slots": 31,
+    "in_flight": 64,
+    "graphs": 31,
+    "links": 1,
+    "graph_bytes": 262144,
+    "tensor_bytes": 262144
+  },
+  "output_limit": 1728
+}

@@ -127,6 +127,18 @@ enum a733_mmc_platform_result a733_mmc_platform_take(struct a733_mmc_platform *,
     struct sunxi_mmc_result *,uint64_t deadline);
 enum a733_mmc_platform_result a733_mmc_platform_card(struct a733_mmc_platform *,
     struct sunxi_mmc_card *,uint64_t deadline);
+#ifndef SUNXI_MMC_READ_ONLY
+/* One CMD25 write of 1 to 256 blocks through descriptor DMA from a 64-byte aligned source outside the platform, which
+ * stays exclusive and cache-clean until take. Each request is put to the authority (for a bounded writer,
+ * a733_storage_bounds_authority: the write is refused unless its whole range lies in one admitted write range), and the
+ * native adapter must have bound the same bounds object or its register filter refuses the command. PENDING, then poll
+ * and take as for a read. Absent from the read-only build. */
+enum a733_mmc_platform_result a733_mmc_platform_write_dma(struct a733_mmc_platform *,
+    const struct sunxi_mmc_write_authority *,uintptr_t token,uint64_t first,uint32_t blocks,const uint8_t *source,
+    uint64_t deadline);
+#endif
+/* ACMD13: the 64-byte SD Status into a buffer outside the platform; PENDING, then poll and take as for a read. */
+enum a733_mmc_platform_result a733_mmc_platform_sd_status(struct a733_mmc_platform *,uint8_t *,uint64_t deadline);
 /* Explicit read-only cancellation/failure retention. The designated current
  * owner may call after expiry; no live-I/O admission or MMIO occurs. Rejects
  * update-bound providers. BUSY means serialization/metadata bookkeeping must

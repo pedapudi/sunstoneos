@@ -57,7 +57,7 @@ enum { P_IDLE, P_SD_IF, P_SD_APP, P_SD_OCR, P_MMC_QUERY, P_MMC_OCR,
        P_SD_SCR_APP, P_SD_SCR, P_SD_WIDTH_APP, P_SD_WIDTH,
        P_SD_SWITCH_CHECK, P_SD_SWITCH_SET, P_SD_CLOCK, P_SD_MODE_STATUS,
        P_SD_VOLTAGE, P_SD_SIGNAL, P_SD_UHS_CHECK, P_SD_UHS_SET, P_SD_TUNE,
-       P_SD_TUNE_RECOVER };
+       P_SD_TUNE_RECOVER, P_SD_STATUS_APP, P_SD_STATUS, P_WRITE_DMA, P_WRITE_DMA_STATUS };
 /* SD physical layer 9.10 section 4.2.4.5 and the pinned Linux
  * tuning_blk_pattern_4bit: the 64-byte four-bit CMD19 tuning block. */
 static const uint8_t tuning_pattern[64] = {
@@ -198,7 +198,7 @@ static void queue(struct sunxi_mmc *h, unsigned protocol, uint32_t cmd, uint32_t
 #endif
     h->protocol = (uint16_t)protocol; h->command = cmd | START;
     h->argument = arg; h->data = data; h->data_bytes = bytes; h->position = 0;
-    h->command_step = 0; h->seen = 0; h->response_seen = 0;
+    h->command_step = 0; h->seen = 0; h->response_seen = 0; h->wait_us = 0;
     for (unsigned i = 0; i < 4; ++i) h->response[i] = 0;
 }
 int sunxi_mmc_read(struct sunxi_mmc *h, uint64_t first, uint32_t blocks,
@@ -228,6 +228,37 @@ int sunxi_mmc_read(struct sunxi_mmc *h, uint64_t first, uint32_t blocks,
     queue(h, P_READ, (blocks == 1 ? 17u : (18u | AUTO)) | RESP | CRC | DATA | WAIT,
           arg, buffer, bytes);
     return 1;
+}
+/* ACMD13 (SD_STATUS): CMD55 with the card's RCA, then CMD13 with a 64-byte data block in the
+ * four-bit width (SD Physical Layer Simplified Specification 9.10, section 4.10.2 and Table 4-44).
+ * A read: the same bounds as sunxi_mmc_read, no card state changes. The result is received == 64. */
+int sunxi_mmc_sd_status(struct sunxi_mmc *h, uint8_t *buffer, uint64_t deadline)
+{
+    if (!h || !h->initialized || h->entered || h->state != SUNXI_MMC_READY || h->config.kind != SUNXI_MMC_SD ||
+        deadline <= h->last_us || !a733_span_excl(buffer, SUNXI_MMC_SD_STATUS_BYTES) ||
+        a733_extents_overlap_prechecked((uintptr_t)h, sizeof(*h), (uintptr_t)buffer, SUNXI_MMC_SD_STATUS_BYTES)) return 0;
+    h->result = (struct sunxi_mmc_result){0}; h->deadline_us = deadline;
+    h->borrowed = buffer; h->borrowed_bytes = SUNXI_MMC_SD_STATUS_BYTES; h->state = SUNXI_MMC_READING;
+    h->dma_read = 0; h->read_tail = 0;
+    h->entered = 1;
+    int timed = time_ok(h);
+    h->entered = 0;
+    if (!timed) return 0;
+    h->read_start_us = h->last_us;
+    queue(h, P_SD_STATUS_APP, 55u | RESP | CRC, (uint32_t)h->card.rca << 16, 0, 0);
+    return 1;
+}
+/* AU_SIZE is bits 431:428 and UHS_AU_SIZE bits 395:392 of the 512-bit status, sent most significant
+ * byte first (Table 4-44); Table 4-47 and Table 4-53 give the sizes: 16 KB doubling to 8 MB, then
+ * 12, 16, 24, 32 and 64 MB. A UHS-I bus mode reports the unit in UHS_AU_SIZE (section 4.10.2.9).
+ * Returns the unit in 512-byte sectors, or 0 when the card does not define one. */
+uint32_t sunxi_mmc_au_sectors(const uint8_t status[SUNXI_MMC_SD_STATUS_BYTES], int uhs_mode)
+{
+    static const uint32_t sectors[16] = {0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 24576, 32768,
+                                         49152, 65536, 131072};
+    unsigned value = uhs_mode ? (status[14] & 15u) : (status[10] >> 4);
+    if (uhs_mode && !value) value = status[10] >> 4;     /* a card that leaves UHS_AU_SIZE undefined uses AU_SIZE */
+    return sectors[value];
 }
 #ifndef SUNXI_MMC_READ_ONLY
 static int same_card(const struct sunxi_mmc_card *a,const struct sunxi_mmc_card *b)
@@ -299,11 +330,50 @@ int sunxi_mmc_write(struct sunxi_mmc *h,const struct sunxi_mmc_write_request *r,
     queue(h,P_WRITE_PRE,13u|RESP|CRC|WAIT,(uint32_t)h->card.rca<<16,0,0);
     return 1;
 }
+/* One CMD25 write of 1 to SUNXI_MMC_MAX_DMA_BLOCKS blocks through the controller's descriptor DMA. The
+ * source is read by the controller, so it must stay exclusive and cache-clean for the whole operation
+ * (the adapter cleans it before the transfer); the core keeps no copy. The authority callback sees the
+ * exact request as for sunxi_mmc_write and every poll re-authenticates it. A transfer is not atomic: a
+ * fault retains the operation. Requires a DMA configuration. */
+int sunxi_mmc_write_dma(struct sunxi_mmc *h,const struct sunxi_mmc_write_request *r,
+                        const struct sunxi_mmc_write_authority *a)
+{
+    if(!h||!h->initialized||h->entered||h->state!=SUNXI_MMC_READY||!h->config.dma||
+       !a733_span_excl(r,sizeof(*r))||!a733_span_excl(a,sizeof(*a))||!a->admit||!r->policy_token||
+       a733_extents_overlap_prechecked((uintptr_t)h,sizeof(*h),(uintptr_t)r,sizeof(*r))||
+       a733_extents_overlap_prechecked((uintptr_t)h,sizeof(*h),(uintptr_t)a,sizeof(*a))||
+       !r->blocks||r->blocks>SUNXI_MMC_MAX_DMA_BLOCKS||r->bytes!=r->blocks*512u||
+       ((uintptr_t)r->source&63u)||(uint64_t)(uintptr_t)r->source>(UINT64_C(1)<<34)-r->bytes||
+       !a733_span_excl(r->source,r->bytes)||
+       a733_extents_overlap_prechecked((uintptr_t)h,sizeof(*h),(uintptr_t)r->source,r->bytes)||
+       a733_extents_overlap_prechecked((uintptr_t)r,sizeof(*r),(uintptr_t)r->source,r->bytes)||
+       a733_extents_overlap_prechecked((uintptr_t)a,sizeof(*a),(uintptr_t)r->source,r->bytes)||
+       !a733_ranges_disjoint(r->source,r->bytes,(const void *)h->config.dma,SUNXI_MMC_DMA_DESCRIPTORS*sizeof(*h->config.dma))||
+       r->deadline_us<=h->last_us||r->first_sector>=h->card.sectors||
+       r->blocks>h->card.sectors-r->first_sector||!writable(h))return 0;
+    uint64_t last=r->first_sector+r->blocks-1;
+    if((h->card.sector_addressed&&last>UINT32_MAX)||
+       (!h->card.sector_addressed&&last>UINT32_MAX/512u))return 0;
+    h->write_request=*r;h->write_authority=*a;
+    h->write_identity=(struct sunxi_mmc_write_identity){(uintptr_t)h,h->config.token,h->config.kind,h->card};
+    h->result=(struct sunxi_mmc_result){0};h->deadline_us=r->deadline_us;
+    h->borrowed=(uint8_t *)r->source;h->borrowed_bytes=r->bytes;
+    h->writing=1;h->dma_write=1;h->dma_read=1;h->state=SUNXI_MMC_WRITING;
+    h->entered=1;
+    int timed=time_ok(h);
+    h->entered=0;
+    if(!timed)return 0;
+    h->read_start_us=h->last_us;
+    queue(h,P_WRITE_PRE,13u|RESP|CRC|WAIT,(uint32_t)h->card.rca<<16,0,0);
+    return 1;
+}
 #endif /* SUNXI_MMC_READ_ONLY */
 static int interrupts(struct sunxi_mmc *h)
 {
     uint32_t v;
     if (!rd(h, 0x38, &v)) return 0;
+    /* Bits the interrupt handler already acknowledged: read after the raw status, so none is lost to either order. */
+    if (h->irq_taken) v |= h->irq_taken(h->irq_context);
     h->result.interrupts = v; h->seen |= v;
     /* Bit 10 reports switch completion while the CMD11 sequence runs. */
     uint32_t errors = v & ERRORS & ~(UHS_ON && h->signal_window ? VSD : 0u);
@@ -400,12 +470,12 @@ static int fifo_step(struct sunxi_mmc *h)
         if (h->config.ops.read_fifo(h->config.context, words, n) != 1) { fault(h, SUNXI_MMC_IO); return 0; }
         for (unsigned i = 0; i < n; ++i)
             for (unsigned b = 0; b < 4; ++b) h->data[h->position++] = (uint8_t)(words[i] >> (8 * b));
-        if (h->protocol == P_READ) h->result.received = h->position;
+        if (h->protocol == P_READ || h->protocol == P_SD_STATUS) h->result.received = h->position;
     }
     return 1;
 }
 static int dma_command(const struct sunxi_mmc *h)
-{ return h->dma_read && h->protocol == P_READ && h->data_bytes; }
+{ return h->dma_read && (h->protocol == P_READ || h->protocol == P_WRITE_DMA) && h->data_bytes; }
 static int since_read(struct sunxi_mmc *h,uint32_t *out)
 {
     if (!time_ok(h)) return 0;
@@ -468,6 +538,14 @@ static int dma_finish(struct sunxi_mmc *h)
     h->result.invalidate_us=t1-t0;
     return 1;
 }
+/* Card or data busy has no interrupt on this controller (the board kernel's v5p3x path never enables the busy-clear
+ * interrupt either and polls card busy in its bottom half), so the caller sleeps on a one-shot timer. The delay doubles
+ * from 100 us to 2 ms, so a busy of hundreds of milliseconds costs a few hundred wakes, not a spin. */
+static void busy_wait(struct sunxi_mmc *h)
+{
+    h->wait = SUNXI_MMC_WAIT_TIMER;
+    h->wait_us = !h->wait_us ? 100u : h->wait_us < 2000u ? h->wait_us * 2u : 2000u;
+}
 static int command_step(struct sunxi_mmc *h)
 {
     uint32_t v;
@@ -476,10 +554,11 @@ static int command_step(struct sunxi_mmc *h)
         if (!rd(h, 0x18, &v)) return 0;
         if (v & START) { fault(h, SUNXI_MMC_CONTROLLER); return 0; }
         if (!rd(h, 0x3c, &h->result.status)) return 0;
-        if (h->result.status & BUSY) return 0;
+        if (h->result.status & BUSY) { busy_wait(h); return 0; }
         if (!interrupts(h)) return 0;
         /* Acknowledge stale command/data flags only; leave card-detect/SDIO. */
         if (!wr(h, 0x38, h->result.interrupts & 0xffffu)) return 0;
+        if (h->irq_taken) (void)h->irq_taken(h->irq_context);
         h->seen = 0;
         /* Programmed I/O routes the FIFO to the CPU (bit 31); a DMA read
          * leaves it to IDMAC and also resets the DMA interface and IDMAC. */
@@ -509,8 +588,19 @@ static int command_step(struct sunxi_mmc *h)
                 if (!rd(h, 0x100, &t) || !wr(h, 0x100, (t & ~0x0fff0004u) | (block << 16) | 1u)) return 0;
             }
         }
+        /* A DMA write sets the write threshold as the board kernel's thld_ctl does for every 512-byte
+         * write (sunxi-mmc-v5p3x.c:647-701; docs/designs/mmc-multiblock-write.md): the block size in
+         * bits 27:16, the write enable (bit 2) set and the read enable (bit 0) clear. */
+        if (h->protocol == P_WRITE_DMA) {
+            uint32_t t;
+            if (!rd(h, 0x100, &t) || !wr(h, 0x100, ((t & ~0x0fff0001u) | (512u << 16) | 4u))) return 0;
+        }
         if ((h->command & AUTO) && !wr(h, 0x58, 0)) return 0;
         if (dma_command(h) && !dma_start(h)) return 0;
+        /* Interrupt mask for a DMA command (board kernel sunxi_mmc_parse_cmd): the error bits, and the one completion bit
+         * that ends it, the automatic stop for a command that carries one, else data over. */
+        if (h->irq_taken && dma_command(h) &&
+            !wr(h, 0x30, ERRORS | ((h->command & AUTO) ? ACD : DTC))) return 0;
         if (!wr(h, 0x1c, h->argument) || !fence(h)) return 0;
         if(h->command&WRITE)h->result.write_started=1;
         if(!wr(h, 0x18, h->command))return 0;
@@ -526,7 +616,7 @@ static int command_step(struct sunxi_mmc *h)
                 if (v && !since_read(h,&h->result.first_byte_us)) return 0;
             }
         }
-        if((h->command&WRITE)&&(h->seen&DTC)&&h->position<h->data_bytes) {
+        if((h->command&WRITE)&&!dma_command(h)&&(h->seen&DTC)&&h->position<h->data_bytes) {
             fault(h,SUNXI_MMC_CONTROLLER);return 0;
         }
         /* CMD11 with the voltage-switch bit completes on the controller's
@@ -552,7 +642,7 @@ static int command_step(struct sunxi_mmc *h)
         if (!dma_command(h) && h->position < h->data_bytes && (!(h->command & WRITE) || h->response_seen) &&
             !fifo_step(h)) return 0;
         v = command_done | (h->data_bytes ? DTC : 0) | ((h->command & AUTO) ? ACD : 0);
-        if ((h->seen & v) != v) return 0;
+        if ((h->seen & v) != v) { if (h->irq_taken && dma_command(h)) h->wait = SUNXI_MMC_WAIT_IRQ; return 0; }
         if (dma_command(h)) {
             /* The done bits first, then the OWN bits (uncached reads). */
             if (!dma_closed(h)) return 0;
@@ -566,7 +656,8 @@ static int command_step(struct sunxi_mmc *h)
          * bit; the switch sequence (sd_signal) follows. */
         if (UHS_ON && h->protocol == P_SD_VOLTAGE) return interrupts(h);
         if (!rd(h, 0x18, &v) || (v & START)) return 0;
-        if (!rd(h, 0x3c, &h->result.status) || (h->result.status & BUSY)) return 0;
+        if (!rd(h, 0x3c, &h->result.status)) return 0;
+        if (h->result.status & BUSY) { busy_wait(h); return 0; }
         if (h->data_bytes && !(h->result.status & FIFO_EMPTY)) { fault(h, SUNXI_MMC_CONTROLLER); return 0; }
         if (!interrupts(h)) return 0;
         if (h->command & AUTO) {
@@ -603,6 +694,8 @@ static int command_step(struct sunxi_mmc *h)
     case 6:
         if (!rd(h,SUNXI_SMHC_GCTRL,&v) || (v&SUNXI_SMHC_GCTRL_FIFO_RESET)) return 0;
         if (v&(SUNXI_SMHC_GCTRL_DMA_ENABLE|SUNXI_SMHC_GCTRL_DMA_RESET)) { fault(h,SUNXI_MMC_CONTROLLER);return 0; }
+        /* The DMA command is over: disarm the interrupt mask the command armed. */
+        if (h->irq_taken && !wr(h, 0x30, 0)) return 0;
         return interrupts(h)&&dma_finish(h);
     default: fault(h, SUNXI_MMC_CONTROLLER); return 0;
     }
@@ -626,6 +719,12 @@ static int ready(struct sunxi_mmc *h) { return ready_except(h, 0); }
 #ifndef SUNXI_MMC_READ_ONLY
 static void next_write(struct sunxi_mmc *h)
 {
+    if(h->dma_write) {
+        uint64_t first=h->write_request.first_sector;
+        queue(h,P_WRITE_DMA,25u|RESP|CRC|DATA|WRITE|AUTO|WAIT,(uint32_t)(h->card.sector_addressed?first:first*512u),
+              h->borrowed,h->borrowed_bytes);
+        return;
+    }
     uint64_t first=h->write_request.first_sector+h->result.confirmed_blocks;
     uint32_t arg=(uint32_t)(h->card.sector_addressed?first:first*512u);
     queue(h,P_WRITE,24u|RESP|CRC|DATA|WRITE|WAIT,arg,
@@ -1021,6 +1120,13 @@ static void protocol(struct sunxi_mmc *h)
         tune_advance(h,1);return;
     case P_SD_MODE_STATUS:
         if(ready(h))h->state=SUNXI_MMC_READY;return;
+    case P_SD_STATUS_APP:
+        if (!card_response(h)) return;
+        if (!(r & (1u << 5))) { fault(h, SUNXI_MMC_CARD); return; }
+        queue(h, P_SD_STATUS, 13u | RESP | CRC | DATA | WAIT, 0, h->borrowed, SUNXI_MMC_SD_STATUS_BYTES); return;
+    case P_SD_STATUS:
+        if (!card_response(h)) return;
+        h->state = SUNXI_MMC_DONE; return;
     case P_READ:
         /* No CMD13 after a read, as the board kernel's block driver; only an
          * open-ended CMD18 that reached the card's last sector confirms the
@@ -1039,6 +1145,20 @@ static void protocol(struct sunxi_mmc *h)
         return;
     case P_WRITE:
         if(card_response(h))ready_status(h,P_WRITE_STATUS);
+        return;
+    case P_WRITE_DMA:
+        /* The data, the automatic CMD12 and the controller teardown are done; the card may still program. */
+        if(card_response(h)){h->result.submitted=h->borrowed_bytes;ready_status(h,P_WRITE_DMA_STATUS);}
+        return;
+    case P_WRITE_DMA_STATUS:
+        if(!card_response(h))return;
+        if((r&0x1f00u)==TRAN_READY) {
+            h->result.confirmed_blocks=h->write_request.blocks;
+            h->state=SUNXI_MMC_DONE;
+        } else if(((r>>9)&15u)==7u||((r&0x1f00u)==0x800u)) {
+            if(!a733_deadline_after(h->last_us,1000,&h->retry_us)){fault(h,SUNXI_MMC_TIME);return;}
+            ready_status(h,P_WRITE_DMA_STATUS);
+        } else fault(h,SUNXI_MMC_CARD);
         return;
     case P_WRITE_STATUS:
         if(!card_response(h))return;
@@ -1067,16 +1187,29 @@ void sunxi_mmc_poll(struct sunxi_mmc *h)
 #ifndef SUNXI_MMC_READ_ONLY
     if(h->writing&&(!write_admitted(h)||!time_ok(h)))goto out;
 #endif
+    h->wait = SUNXI_MMC_WAIT_NONE;
     if (h->state == SUNXI_MMC_READING) ++h->result.polls;
     if (h->setup < 6) setup(h);
     else if(h->protocol==P_SD_CLOCK)sd_clock(h);
-    else if(h->last_us<h->retry_us){}
+    else if(h->last_us<h->retry_us){h->wait=SUNXI_MMC_WAIT_TIMER;h->wait_us=(uint32_t)(h->retry_us-h->last_us>UINT32_MAX?UINT32_MAX:h->retry_us-h->last_us);}
     else if(UHS_ON&&h->protocol==P_SD_SIGNAL)sd_signal(h);
     else if(UHS_ON&&(h->tune_failed||h->protocol==P_SD_TUNE_RECOVER))tune_recover(h);
     else if(command_step(h))protocol(h);
     if (h->state != SUNXI_MMC_FAULT) (void)time_ok(h);
 out:
     h->entered = 0;
+}
+int sunxi_mmc_set_irq(struct sunxi_mmc *h, uint32_t (*taken)(void *), void *context)
+{
+    if (!h || !h->initialized || h->entered || h->state != SUNXI_MMC_READY || !taken || h->irq_taken) return 0;
+    h->irq_taken = taken; h->irq_context = context;
+    return 1;
+}
+enum sunxi_mmc_wait sunxi_mmc_wait_hint(const struct sunxi_mmc *h, uint32_t *delay_us)
+{
+    if (!h || h->wait == SUNXI_MMC_WAIT_NONE || h->state == SUNXI_MMC_DONE || h->state == SUNXI_MMC_FAULT) return SUNXI_MMC_WAIT_NONE;
+    if (delay_us) *delay_us = h->wait == SUNXI_MMC_WAIT_TIMER ? h->wait_us : 0;
+    return (enum sunxi_mmc_wait)h->wait;
 }
 int sunxi_mmc_take(struct sunxi_mmc *h, struct sunxi_mmc_result *out)
 {
@@ -1088,7 +1221,7 @@ int sunxi_mmc_take(struct sunxi_mmc *h, struct sunxi_mmc_result *out)
     *out = h->result;
     if (h->state == SUNXI_MMC_DONE) {
         h->state = SUNXI_MMC_READY; h->borrowed = 0; h->borrowed_bytes = 0; h->data = 0; h->data_bytes = 0;
-        h->writing=0;
+        h->writing=0;h->dma_write=0;
     }
     return 1;
 }

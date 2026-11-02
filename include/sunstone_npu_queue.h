@@ -5,9 +5,18 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+/* The ring holds as many jobs as the application declares in flight (manifest npu.in_flight, docs/designs/npu-resources.md):
+ * an image is built with SS_NPU_QUEUE_MAX_DEPTH set to it (cmake -DSUNSTONE_OS_NPU_QUEUE_DEPTH=N), and a session that
+ * declares more is refused as image tables. 64 is the default of an image built without a declaration. */
+#ifndef SS_NPU_QUEUE_MAX_DEPTH
 #define SS_NPU_QUEUE_MAX_DEPTH 64u
-#define SS_NPU_QUEUE_MAX_HANDLES 8u
-#define SS_NPU_QUEUE_MAX_TENSORS 32u
+#endif
+/* One handle for each of the 31 slots a command mask allows. The tensors of a handle are as many as the loader admits for
+ * a graph (NBG_ASSEMBLY_MAX_TENSORS, include/nbg_assembly.h: the loader's own choice, set at build). */
+#define SS_NPU_QUEUE_MAX_HANDLES 31u
+#ifndef SS_NPU_QUEUE_MAX_TENSORS
+#define SS_NPU_QUEUE_MAX_TENSORS 8u
+#endif
 /* Optional immutable image composition. Prepared-entry and tensor indices
  * are zero based. Every declared output/input pair has identical shape and
  * representation. Connected handles share one buffer lease. The OS copies and admits this table before scheduling. */
@@ -24,6 +33,12 @@ enum ss_npu_tensor_kind { SS_NPU_INPUT, SS_NPU_OUTPUT };
  * (ready), 0 (pending), or -1 (refused/retained). depth is fixed at open.
  * Prepared entries and their DMA allocations are admitted by the image. */
 int ss_npu_queue_open(unsigned depth, struct ss_npu_queue **);
+/* The same open, with tensor links chosen at run time instead of the image's constant table: after the scheduler has
+ * started, the application passes up to its declared npu.links edges (manifest, docs/designs/npu-resources.md). The OS
+ * copies the table once, checks every edge against the loaded graphs (same representation and size, one producer for each
+ * consumer input) and links them before the ring becomes ready. A refused table refuses the open (-1). The table is read
+ * only on the first call; later calls poll. */
+int ss_npu_queue_open_linked(unsigned depth, const struct ss_npu_queue_edge *, size_t count, struct ss_npu_queue **);
 /* Slow lookup of an image-prepared resident entry; handles remain immutable.
  * 1 success, 0 unknown index. No command stream or device address is exposed. */
 int ss_npu_queue_register(struct ss_npu_queue *, unsigned prepared_entry, ss_npu_handle *);
