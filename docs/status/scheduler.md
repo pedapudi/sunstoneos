@@ -22,16 +22,28 @@ qualification.
 
 ## Open work
 
+0a. Robot real-time response is the main requirement (targets in the design: wake latency 10 us, control jitter
+   5% of the period at 1 to 10 kHz, no deadline miss, model within 2% of alone). Not yet measured with a robot-like workload. The measured masked spans (22 to 46 us
+   in the fork under load) already exceed the wake target, so shorten or split them and put the hardest control
+   path above the API interrupt mask.
+0. Known defect, idle pull: a task that waits behind a running task on its owner while an allowed CPU idles
+   can stay unmoved. The eight-core check's stranding phase fails on the wall clock about 1 run in 50 at host
+   load 30, at `scheduler-partitioned-qemu.c:386` (`withholding_completed == i + 1` after 100 ms). Forty-three
+   runs on the instruction counter with different start delays (`--skew 0..41`) all pass, so no deterministic
+   reproduction exists. Idle pull stays off, as the fork does, until it is fixed.
 1. Masked time stays above 25 us on cores 0, 2, 3 and at end-of-run suspension: measured phase spans reach 29 us
    (core 3) and the end-of-run self-suspension 46 us. Backend stalls are 94 to 98% of their cycles with 23 to 38
    L1D refills each, so the cause is dependent line fetches under saturated DRAM. Fewer lines per entry or
    prefetch would shorten them; neither is implemented.
 2. The fork stays off by default: on the current engine the recorded recognition is exact and 0.4% slower with it
    (110.3 ms against 109.8 ms; 5.1% slower on the older engine). The owner core takes 65 to 85 more interrupts and
-   loses about 2.2 ms; the cause is not found. Replacing the compatibility object locks in C is closed with the fork; idle pull is
-   implemented and returned the CPU control unchanged, with no workload that needs it.
-3. Tickless idle on the global kernel: remove the periodic tick on idle cores (changes the protected
-   `patches/freertos-smp-*.patch`).
+   loses about 2.2 ms. Owner-core counters find no single cause above 1.5 ms: the wake path nets 1.8 ms faster,
+   the owner share and sends are 0.9 and 0.7 ms slower with near-equal refills, and the timed serial code
+   (1.4 ms) is outside the windows. The speed stream is closed with the fork off by default.
+   Replacing the compatibility object locks in C is closed with the fork; idle pull is implemented and returned
+   the CPU control unchanged, with no workload that needs it.
+3. Tickless idle on the global kernel, as its own goal judged on power and wake latency: remove the periodic tick
+   on idle cores (work in progress on `work/tickless-idle-1101`; changes the protected `patches/freertos-smp-*.patch`).
 4. Preserve lock-worker port-lock hunks and probe entry code. The prepared image,
    review, commands and remaining limits are in [the history](../history/status-scheduler-20261101.md).
 
@@ -40,7 +52,7 @@ qualification.
 Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-23 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+25 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -67,4 +79,6 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793597562539071615-6699c1cf` | 2026-11-02 | 3-3 | `f679a60ee591` | returned | passed | run_total 70.833 s, compute_time 110240 us, real_time_factor 0.03071, call_total 79764 us, dispatch_kernel 6058 us, owner_compute 47282 us, last_finisher_wait 21249 us, completion_path 5173 us, owner_core_sgis 368 |
 | `1793597633935865983-352fe050` | 2026-11-02 | 3-3 | `bca9feb836ec` | returned | passed | run_total 70.552 s, compute_time 109729 us, real_time_factor 0.03057, call_total 80666 us, dispatch_kernel 5377 us, owner_compute 46366 us, last_finisher_wait 21890 us, completion_path 7032 us, owner_core_sgis 296 |
 | `1793597705209176004-1a689849` | 2026-11-02 | 3-3 | `f679a60ee591` | returned | passed | run_total 71.208 s, compute_time 110311 us, real_time_factor 0.03073, call_total 79833 us, dispatch_kernel 6065 us, owner_compute 47262 us, last_finisher_wait 21221 us, completion_path 5284 us, owner_core_sgis 380 |
+| `1793599717707582059-be657013` | 2026-11-02 | 3-3 | `3ddd2272d06b` | returned | passed | run_total 69.836 s, compute_time 110037 us, real_time_factor 0.03065, core6_total_cycles 3.76359e+08, core6_total_l1d_refills 1.40102e+06, core6_total_l2d_refills 523400, core6_total_stall_backend 1.38231e+08, core6_serial_cycles 2.41434e+08, core6_serial_l1d_refills 684543, core6_serial_l2d_refills 155702, core6_serial_stall_backend 8.80371e+07, core6_send_cycles 1.05677e+07, core6_send_l1d_refills 87466, core6_send_l2d_refills 75370, core6_send_stall_backend 5.11003e+06, core6_owner_cycles 9.2856e+07, core6_owner_l1d_refills 489574, core6_owner_l2d_refills 172442, core6_owner_stall_backend 3.12611e+07, core6_tail_cycles 3.15015e+07, core6_tail_l1d_refills 139441, core6_tail_l2d_refills 119886, core6_tail_stall_backend 1.38231e+07, core6_kernel_publish_entries 0, core6_kernel_publish_cycles 0, core6_kernel_publish_l1d_refills 0, core6_kernel_publish_l2d_refills 0, core6_kernel_publish_stall_backend 0, core6_kernel_service_entries 0, core6_kernel_service_cycles 0, core6_kernel_service_l1d_refills 0, core6_kernel_service_l2d_refills 0, core6_kernel_service_stall_backend 0 |
+| `1793599788007346215-eb5bcd80` | 2026-11-02 | 3-3 | `3955831c4a46` | returned | passed | run_total 70.453 s, compute_time 110478 us, real_time_factor 0.03077, core6_total_cycles 3.77264e+08, core6_total_l1d_refills 1.31643e+06, core6_total_l2d_refills 436890, core6_total_stall_backend 1.40047e+08, core6_serial_cycles 2.49382e+08, core6_serial_l1d_refills 683751, core6_serial_l2d_refills 154823, core6_serial_stall_backend 9.19342e+07, core6_send_cycles 1.21946e+07, core6_send_l1d_refills 62127, core6_send_l2d_refills 51091, core6_send_stall_backend 6.77505e+06, core6_owner_cycles 9.46081e+07, core6_owner_l1d_refills 496821, core6_owner_l2d_refills 176483, core6_owner_stall_backend 3.24708e+07, core6_tail_cycles 2.10798e+07, core6_tail_l1d_refills 73731, core6_tail_l2d_refills 54493, core6_tail_stall_backend 8.86749e+06, core6_kernel_publish_entries 2658, core6_kernel_publish_cycles 2.04888e+06, core6_kernel_publish_l1d_refills 16157, core6_kernel_publish_l2d_refills 13420, core6_kernel_publish_stall_backend 1.22944e+06, core6_kernel_service_entries 1596, core6_kernel_service_cycles 810667, core6_kernel_service_l1d_refills 10580, core6_kernel_service_l2d_refills 6582, core6_kernel_service_stall_backend 313774 |
 <!-- evidence-table:end -->

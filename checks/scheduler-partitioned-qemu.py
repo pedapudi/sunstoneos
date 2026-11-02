@@ -21,6 +21,7 @@ def main():
     parser.add_argument('--qemu', required=True, type=Path)
     parser.add_argument('--cpu', default='cortex-a76')
     parser.add_argument('--nm', default='/usr/bin/llvm-nm-21', type=Path)
+    parser.add_argument('--skew', type=int, default=0, help='delay the primary core by SKEW*61 loop turns at start (changes the interleaving under the instruction counter)')
     parser.add_argument('--wall-clock', action='store_true',
                         help='run the cores on host threads and the host clock; the default is one thread on the instruction counter, which a loaded host cannot perturb')
     parser.add_argument('--case', action='append', choices=['kernel', 'soak', 'concurrent', 'runtime', 'heap'])
@@ -46,7 +47,8 @@ def main():
             *(['-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off'] if not args.wall_clock else ['-accel', 'tcg,thread=multi']),
             '-cpu', args.cpu, '-smp', str(cores), '-m', '128M', '-nographic', '-monitor', 'none',
             '-semihosting-config', 'enable=on,target=native',
-            '-device', f'loader,file={image},cpu-num=0']
+            '-device', f'loader,file={image},cpu-num=0',
+            '-device', f'loader,addr=0x47ff0000,data={args.skew},data-len=4']
         started = time.monotonic()
         process = subprocess.Popen(['/usr/bin/time', '-v', *command], stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, start_new_session=True, env=env)
