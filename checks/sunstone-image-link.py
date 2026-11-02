@@ -123,6 +123,16 @@ def check(image, manifest=None, application=None):
     if application is None:
         application = application_manifest(elf)['name'] if sections and sections[0][5] else 'none'
     names_defined = {symbol['name'] for symbol in defined}
+    if application != 'none' and 'os_cpu_return_watchdog' in names_defined:
+        # The EL3 admission decodes the session with apps/os/session.c, which refuses a manifest whose run deadline
+        # does not end return_reserve_us before the image's lifetime; the contract is then invalid and the image
+        # stops before it runs. The lifetime is the compiled A733_BOARD_SUPERVISED_SECONDS of the watchdog marker.
+        lifetime_us = struct.unpack_from('<5Q', read('os_cpu_return_watchdog'))[4] * 1000000
+        manifest = application_manifest(elf)
+        assert manifest['return_reserve_us'] < lifetime_us and \
+            manifest['run_deadline_us'] <= lifetime_us - manifest['return_reserve_us'], \
+            'manifest run_us %d with return_reserve_us %d does not fit the %d s lifetime of the image' % (
+                manifest['run_deadline_us'], manifest['return_reserve_us'], lifetime_us // 1000000)
     features = {'audio': 'os_audio_stream_open', 'radio': 'os_radio_start', 'headset': 'os_headset_start',
                 'npu': 'os_npu_start', 'gpu_queue': 'os_gpu_queue_start',
                 'cpu_clock': 'os_cpu_clock_step', 'perf_modes': 'os_perf_boot_mode'}
