@@ -1063,6 +1063,16 @@ Proof that no switch request is lost. `scheduler-yield-qemu` wakes a priority 6 
 
 Board. Five soaks of 25 s on the default fork with the control path at 10 kHz on core 4, and the switch-request counters in the image: all returned with exact output and no stop; 1 254 587 periods; latency maximum 3.6 us, 99.99th percentile 3.0 us; jitter maximum 3.4 us, 99.99th percentile 2.8 us (targets: 10 us and 5 us). Core 4 skipped 12 900 to 13 500 exits per soak, 1120 to 1250 of them with a request pending; the five soaks together drained 5 988 935 exits, 66 037 skipped. The board has no served counter, so the board evidence is that no soak stopped, every recognition stayed exact and the recognition time did not grow (110.853 ms against 110.394 ms for the earlier fixed image, within 0.5%).
 
+### The task path's wake tail is the global object lock
+
+The task path misses the 10 us wake target (maximum 23.5 to 31.5 us, 99.99th percentile 19.7 to 24.5 us) while the control path meets it, and 82 to 96% of the masked time in the long spans is waiting for the global task lock or interrupt lock. A task path wake has two parts. The handler starts late by the time its core held the interrupt off (the entry delay), and then the handler, the exit work and the switch take the gap to the task's first instruction. The recorder splits the two for the task path: the handler's start minus the deadline, and the task's start minus the handler's start, with the interrupted context of the largest entry delays.
+
+The second measurement attributes the locks. With `SUNSTONE_OBJECT_TRACE` every acquisition of the task lock and the interrupt lock is recorded by (object, caller) on each core: count, wait, hold and waits over 5 us. A wait over 5 us is also charged to the acquisition that last took that lock before the waiter arrived, giving a table of waiter against holder by object and call site. The object is the queue, event group or stream buffer the kernel call works on; public critical sections have none.
+
+Prediction for the entry/gap split (soaks of the unmodified fork, 25 s, task path alone at 1, 2 and 4 kHz): the entry delay carries the tail. Its maximum is at least 80% of the latency maximum on each core, and the gap stays at or below 8 us at the maximum and 6 us at the 99.99th percentile, so the gap alone meets the 10 us target. The interrupted contexts of the largest entry delays are EL0 code at the return from a supervisor call (the mask close of a kernel call), not interrupt handlers.
+
+Prediction for the lock attribution: the waits over 5 us are on the task lock and the interrupt lock in comparable shares, more than 60% of them are charged to a holder acting on a different object than the waiter, and the rest are the same object (the allocator's recursive mutex and one or two queues). If so, most of the tail is serialization of independent objects, which per-object locks remove; if instead the same object dominates, a per-object lock cannot help and the tail needs shorter holds.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag
