@@ -161,9 +161,9 @@ def run_case(binary,mode,fail_at):
 for jobs,definitions in [(1,[]),(8,['QUEUE_ADD_JOBS=8'])]:
     # Kernel objects are compiled per build directory: the wrap case starts the tick near
     # the 64-bit limit (configINITIAL_TICK_COUNT), so it has its own.
-    binary=host_rtos.build(a.build/('kernel-'+str(jobs)),[a.build/'fixture.c',ROOT/'apps/queue-add/main.c'],
+    binary=host_rtos.build(a.build/'kernel',[a.build/'fixture.c',ROOT/'apps/queue-add/main.c'],
                            'queue-add-'+str(jobs),defines=definitions,includes=[generated],link=link)
-    wrap=host_rtos.build(a.build/('kernel-wrap-'+str(jobs)),[a.build/'fixture.c',ROOT/'apps/queue-add/main.c'],
+    wrap=host_rtos.build(a.build/'kernel-wrap',[a.build/'fixture.c',ROOT/'apps/queue-add/main.c'],
                          'queue-add-wrap-'+str(jobs),defines=definitions+['configINITIAL_TICK_COUNT=(UINT64_MAX-100)'],
                          includes=[generated],link=link)
     injected=[(mode,1) for mode in range(19)]
@@ -176,7 +176,7 @@ for jobs,definitions in [(1,[]),(8,['QUEUE_ADD_JOBS=8'])]:
                     '-c',str(ROOT/'apps/queue-add/main.c'),'-o',str(a.build/('queue-add-'+str(jobs)+'.o'))],check=True)
 # Negative control: a wait that ignores the session end must fail the parked-session-ended case.
 mutant=host_rtos.mutated(a.build,'apps/queue-add/main.c','ss_live() < 0 || ','0 || ')
-control=host_rtos.build(a.build/'kernel-control',[a.build/'fixture.c',mutant],'queue-add-control',includes=[generated,ROOT/'apps/queue-add'],
+control=host_rtos.build(a.build/'kernel',[a.build/'fixture.c',mutant],'queue-add-control',includes=[generated,ROOT/'apps/queue-add'],
                         link=link,flags=['-w'])
 assert run_case(control,16,1)!=0,'control passed'
 for jobs in (0,9):
