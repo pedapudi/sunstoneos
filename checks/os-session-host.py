@@ -45,7 +45,7 @@ def main():
     image = out / 'hello-compute'
     layout = out / 'result-layout.c'
     layout.write_text('#include "sunstone_session.h"\n'
-                      'unsigned char ss_result_record[sizeof(struct ss_result) + 16];\n')
+                      'unsigned char ss_result_record[sizeof(struct ss_result) + 64];\n')
     run(CLANG, '-std=c11', '-O2', '-no-pie', '-Wl,-Ttext-segment=0x41000000', '-I', ROOT / 'include', '-I', gen,
         ROOT / 'checks/sunstone-app-abi.c', ROOT / 'apps/hello-compute/main.c',
         gen / 'hello_compute-manifest.c', layout, '-o', image)
@@ -123,7 +123,7 @@ def main():
     assert (empty_bundle / 'input-0.bin').read_bytes() == b''
     source.write_bytes(b'')
     run(image, source, result)
-    assert struct.unpack('<IIQ', host.decode_result(result.read_bytes(), 0, 0, 16)) == (1, 0, 0)
+    assert struct.unpack('<IIQ', host.decode_result(result.read_bytes(), 0, 0, 64)) == (1, 0, 0)
     source.write_bytes(data)
     run(image, source, result)
     (bundle / 'input-0.bin').write_bytes(b'changed')
@@ -226,7 +226,7 @@ def main():
     refused(lambda: host.input_facts(pinned, [b'wrongdata']), 'pinned manifest')
     cases.append('pinned-input-mismatch')
     for name, offset, value, reason in [('result-status', 40, 0, 'incomplete'),
-                                         ('result-overflow', 48, 17, 'capacity'),
+                                         ('result-overflow', 48, 65, 'capacity'),
                                          ('result-session', 24, 99, 'another session')]:
         altered = bytearray(result.read_bytes())
         struct.pack_into('<Q', altered, offset, value)

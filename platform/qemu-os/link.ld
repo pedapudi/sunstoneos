@@ -41,6 +41,12 @@ SECTIONS {
         __exception_stacks = .;
         . += 8 * 32768;
     } > RAM
+    /* The C library's linked heap (runtime/newlib.c): small, so that a test can take a byte from it. */
+    .heap (NOLOAD) : ALIGN(64) {
+        __heap_start = .;
+        . += 4096;
+        __heap_end = .;
+    } > RAM
     .tables (NOLOAD) : ALIGN(4096) { *(.tables) } > TABLES
     /DISCARD/ : { *(.comment) *(.eh_frame*) *(.note*) }
 }

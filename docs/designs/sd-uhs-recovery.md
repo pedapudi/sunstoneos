@@ -212,6 +212,293 @@ UHS-I, but whether it supports SDR104 rather than SDR50 stays open until a lifet
 
 The decoder (`apps/sd-backup-probe/input.py`) now says so: `bus_speed_support` is meaningful only at 1.8 V.
 
+## The re-entry test: two lifetimes on port 3-3 (approved, read-only, no rail change)
+
+Both lifetimes run the one probe image (`apps/sd-backup-probe`, `--uhs-mode 1` and `--uhs-mode 2`) and write nothing to the card. Each
+reads 32 requests of 128 KiB from sector 0 (4 MiB) at SDR25, 50 MHz, so the two lifetimes' read CRCs compare, and ends with a normal
+CPU-local return. They run back to back; lifetime 2 is sent only when lifetime 1 has returned normally and its report shows the card
+signalling 1.8 V.
+
+What the image does, and what the host models check:
+
+- **Lifetime 1 (`--uhs-mode 1`).** The UHS-I profile: ACMD41 with S18R, CMD11, the bank to 1.8 V, identification at 1.8 V, SDR25 and no
+  SDR104 or tuning (`sunxi_mmc_sdr25_only`), reads, then the close: the card clock off, the selector written back to 3.3 V once and
+  the bank waited to 3.3 V (new platform stage `CLOSE_BANK`), then the module, bus, pins, rail and clock released as before. The card
+  is left at 1.8 V.
+- **Lifetime 2 (`--uhs-mode 2`).** The bank-level entry (`start_1v8`, platform stage `ENTER_1V8`): with the card clock stopped, the
+  selector written to 1.8 V once, the bank waited to 1.8 V and the clock kept stopped 10 ms; then the core opens in re-entry
+  mode (`sunxi_mmc_reenter`): CMD0, CMD8, ACMD41 with S18R, no CMD11 (the card would answer it with nothing), CMD2 onward,
+  SDR25, reads, the same close. This is the 1.8 V branch of the resolution algorithm; its 3.3 V probe is covered by the model, not
+  exercised on the board, because lifetime 1 has told us where the card is.
+- **The selector rule.** The native register filter admits the selector write to 1.8 V once and the write back to 3.3 V once, only
+  after the first, only with the controller's clock enable bits clear, only in the UHS-I profile, and only by the owning task
+  (`checks/a733-mmc-native-filter.c`). It stays read-only in every other profile and for eMMC.
+- **Models.** `checks/sd-return-close.py --lifetimes` runs both lifetimes through the real platform, core and shared providers against a
+  modeled card and controller, and cuts each after every poll (605 cuts): at every cut no command went out with the bank at 1.8 V and the
+  card at 3.3 V, the bank selector, the platform's record and the card's level agree, and at most one write to each level was made. A
+  mutation that skips the restore write, and one that sends CMD11 in re-entry, each fail it. `checks/sunxi-mmc-uhs.py` covers the core
+  options (both card answers to S18R, the SDR104 path after re-entry, the refusals). `checks/sd-uhs-recovery-model.py` now has the close
+  as its last two steps: all 144 sessions (every cut x both unknowns x both reset behaviours) end usable.
+
+Predictions (written before either run; the 3-3 card is the user-reported 32 GB card, whose CID I have not read):
+
+| | Lifetime 1 | Lifetime 2 |
+| --- | --- | --- |
+| Returns normally, restoration words unchanged | yes | yes |
+| Card identified | S18A set, CMD11 answered, at 1.8 V | no CMD11; identified at 1.8 V |
+| S18A (OCR bit 24) in the last ACMD41 | set | set (clear is possible; it would not stop the test) |
+| Bank at identification (`GPIO_POW_VAL` bits 11:10, selector) | 3 (1.8 V), selector 0 | 3, selector 0 |
+| Bank after the close | 2 (3.3 V), selector 1 | 2, selector 1 |
+| Outcome | `limited_to_sdr25`, 50 MHz | `limited_to_sdr25`, 50 MHz, `reentered` |
+| CMD6 group 1 support field at 1.8 V | `0x801f` if the card is SDR104 and DDR50 capable, at least `0x8007` | the same value as lifetime 1 |
+| Read rate per request | about 21 MB/s (what 50 MHz four-bit gives at 3.3 V) | the same |
+| CRCs of the 32 reads | any | equal to lifetime 1's, read by read |
+
+The test fails, and nothing is retried, when:
+
+- lifetime 1 does not return normally (the watchdog resets it, or its report has `reason` other than 0),
+- lifetime 1 returns but the card did not switch (`card_signals_1v8` false, outcome `declined`): lifetime 2 is then not run,
+- lifetime 2 stops at identification (`reason` 3): the card did not answer at 1.8 V, so it refuses CMD0 re-entry, and the SD on this
+  board stays unusable until power is removed.
+
+### Lifetime 1 on 3-3 (entry `1793648082135831049-05f70d50`): everything ran, the close failed
+
+The lifetime did not return. Its fault record decodes, through the probe's stop word, as: reason 11 (the close failed), platform fault 1, platform
+stage 18 (`CLOSE_WAIT`), probe stage 8 (the end of the plan), 32 reads done. So identification, the switch, 32 SDR25 reads and the capture
+all completed, the card was switched (it is taken to be at 1.8 V), the card clock was stopped, the bank was written back to 3.3 V and seen
+to report it (`CLOSE_BANK` finished), and the next stage failed a check. The report was written to RAM and lost, because a lifetime that cannot
+close cannot return.
+
+Cause, found from lifetime 2's stop word (entry `1793649204965774597-d1ed3e86`, below): the native adapter's register filter refused the close's
+last write, the restore of the inherited module setting. Its terminal-close exception named the high-speed profile only; in the UHS-I profile the
+setting had to be one of the three running settings, so `update()` failed in `CLOSE_WAIT` (platform source line 838, stage 18). The platform
+models write registers through their own hook, not the adapter's filter, so no host check applied the rule: the same gap as the first CMD25
+(see "A class of host-coverage gap" in the storage status). The rule is now one pure function (`a733_mmc_platform_native_module_write_allowed`)
+that the adapter and the models both apply: the close restore is admitted for the high-speed and UHS-I profiles only with the module off and the bus
+in reset. `checks/sd-return-close.c` asserts it on every module write of a close, and `checks/a733-mmc-native-filter.c` tests it directly; the
+old rule fails both. A first hypothesis, that the withstand-mode word changes with the supply, also stopped the model in `CLOSE_WAIT`; I added a
+relaxation for it and removed it when the real cause was found, because nothing showed the board does that.
+
+A failed lifetime now carries its site. The stop word published in the fault record's esr is the platform's fault line (10 bits), why (2),
+platform stage (5), S18A, the five speed-mode support bits, whether the card signals 1.8 V, and a fold of the 32 read CRCs; the site byte is the
+probe's reason. `apps/sd-backup-probe/input.py stop --site N --esr W` decodes it. The report keeps the same word and the platform's fault line,
+why, stage and the withstand mode word at identification and after the close. A lifetime that has not closed cannot return its report, by
+design: the SD controller, pins and bank are still held. So the stop word is what a failed close can publish, and it is made to hold the results.
+
+### Lifetime 2 (entry `1793649204965774597-d1ed3e86`): the card re-entered at 1.8 V; the close failed the same way
+
+Stop word `0xd1893f5d`, site 11, decoded with `input.py stop`: the card signals 1.8 V, the last ACMD41 answered **S18A clear**, the CMD6 group 1 support
+field read at 1.8 V is **`0x1f`** (SDR12, SDR25, SDR50, SDR104 and DDR50), the 32 reads completed (CRC fold `0x5d`), and the close stopped at
+platform stage 18, source line 838: the adapter's module restore, as above. So the card accepts CMD0, CMD8 and ACMD41 at 1.8 V from a host that moved the
+bank to 1.8 V first, identifies and reads at SDR25, and it supports SDR104. Lifetime 1 never reported its S18A or support bits, and its stop word
+carried no fault line; lifetime 2's data are the ones that exist.
+
+Prediction for lifetime 2 (written before the run; the card is taken to be at 1.8 V and the bank at 3.3 V after the watchdog reset):
+
+- The platform moves the bank to 1.8 V first (`ENTER_1V8`), the core identifies without CMD11, and CMD0, CMD8, ACMD41 with S18R, CMD2 to CMD7
+  and ACMD6 succeed at 1.8 V and 400 kHz. A refusal of re-entry shows as a stop at identification (probe reason 3).
+- S18A in the last ACMD41 is set, or clear without stopping the test; the card is identified as the same 3-3 card; its CMD6 group 1 field at 1.8 V is
+  at least `0x8007`, probably `0x801f`.
+- 32 reads of 128 KiB at SDR25, 50 MHz, about 21 MB/s, no CRC or timeout.
+- The close writes the selector to 3.3 V, the bank reports 3.3 V, the later close stages pass, and the lifetime returns normally, leaving the card
+  at 1.8 V with the bank at 3.3 V (`GPIO_POW_VAL` bits 11:10 = 2, selector 1). If the close fails again, the stop word says where, and it holds
+  S18A, the support bits and the read CRC fold.
+
+### Lifetime 2 again, after the close fix (entry `1793649661736969334-9742cb48`): returned normally
+
+| Item | Predicted | Measured |
+| --- | --- | --- |
+| Returns normally, restoration words unchanged | yes | yes; `baseline_changed` empty |
+| Bank at identification | value 3 (1.8 V), selector 0 | value 3, selector 0 (`GPIO_POW_VAL` `0x020ffd80`) |
+| Identified at 1.8 V without CMD11 | yes | yes: `reentered`, outcome `limited_to_sdr25`, 50 MHz |
+| S18A in the last ACMD41 | set, or clear without stopping | **clear** |
+| CMD6 group 1 support at 1.8 V | at least `0x8007`, probably `0x801f` | **`0x801f`**: SDR12, SDR25, SDR50, SDR104, DDR50 |
+| 32 reads of 128 KiB | about 21 MB/s, no error | median 21.4 MB/s per request (6.1 ms), 4 MiB in 0.30 s with the first request slower; no error |
+| Bank after the close | value 2, selector 1 | value 2 (`0x020ff980`), selector 1 |
+| Withstand mode (`GPIO_POW_MOD_SEL`) | not predicted | `0x01155550` at identification and after the close |
+| Identification time | | 309 ms |
+
+The card on 3-3 is a Phison `SD32G`, revision 1.2, serial `0000029d`, made December 2020, 61,067,264 sectors. It accepts re-entry at 1.8 V from a host that
+moved the bank to 1.8 V first, answers ACMD41 at 1.8 V with S18A clear (so a session must not wait for it), and supports SDR104 and DDR50. The card is
+still at 1.8 V; the bank is at 3.3 V; the board returned to FEL.
+
+## SDR104 trial on port 3-3 (approved, read only)
+
+One lifetime (`--uhs-mode 3`): the bank to 1.8 V, re-entry without CMD11, CMD6 to SDR104, the module clock to the fastest the platform verifies
+(PERI0_300M / 1 for a 150 MHz card clock, else PERI0_400M / 2 for 100 MHz), the CMD19 sweep of the 64 sample delays, then 512 requests of 128 KiB
+(64 MiB) from sector 0, and the close back to 3.3 V on the bank. The first 32 requests read the same sectors as the SDR25 lifetime, so their CRCs
+compare (the SDR25 CRCs are kept in `sdr25-crc-3-3.txt` next to the build; their fold is `0x5d`). The platform only verifies the PERI0_300M
+gates, it does not enable them, so whether the card runs at 150 or at 100 MHz depends on what the launcher leaves; the report says which
+(`card_clock_hz`, `module_clock_hz`).
+
+Host evidence before the run: the lifetimes model runs this lifetime at 150 MHz, at 100 MHz and with no passing delay (the fallback to SDR25 at
+50 MHz), each with a cut at every poll except every 9th inside the sweep (2,868 cuts in all), and applies the native adapter's real register
+filter to every register write of every lifetime (a shadow adapter in `checks/sd-return-close.c`), which found nothing to refuse; a mutation that
+removes the CMD6 SDR104 argument from the filter fails it. That closes the gap that the close failure exposed for the rest of the SDR104 path.
+
+Prediction (written before the run):
+
+- **Re-entry** as in the SDR25 lifetime; the CMD6 SDR104 check shows function 3 supported and the set selects it.
+- **Tuning:** a passing run of at least 12 consecutive delays among the 64; the chosen delay is the midpoint of the first longest run. I expect a
+  window of 15 to 40 delays at 150 MHz and a wider one at 100 MHz.
+- **Clock:** 150 MHz if the PERI0_300M gates are up, otherwise 100 MHz. I do not know which; the previous lifetimes only used 50 MHz.
+- **Rates.** The raw limit of four lines is 75 MB/s at 150 MHz and 50 MB/s at 100 MHz (the 104 MB/s of the SDR104 mode is for 208 MHz, which this
+  board's clock tree does not offer). With the per-request command cost of about 0.1 ms, the best a request can do is about 70 MB/s at 150 MHz.
+  **Success is** a sustained rate over the 64 MiB of at least 45 MB/s at 150 MHz (twice the 21.7 MB/s of 50 MHz) or at least 30 MB/s at 100 MHz,
+  with no error and the first 32 CRCs equal to the SDR25 CRCs. I expect 55 to 70 MB/s at 150 MHz if the card sustains it; this 2020 card may not.
+- **Failure branches.** No passing run of 12 delays: the core clocks down to 50 MHz, selects SDR25 and goes on (outcome `no_window`), with no power
+  cycle; the reads then run at about 21 MB/s and the lifetime returns normally. A CMD19 or data error that the core cannot recover is a retained
+  fault; the stop word names it, the card stays at 1.8 V and the next lifetime re-enters it. Either way the report is the result and I stop.
+- **Close:** the selector back to 3.3 V, the bank reports it, the module and bus restored, a normal return with no restoration word changed.
+
+### SDR104 trial (entry `1793650091979550389-eb009a18`): stopped in the core during SDR104 selection
+
+The lifetime did not return and its report was lost. Its stop word `0x8a070000`, site 3 (the probe's identification stage), decodes (with the layout in
+force at that image, the fields of a reason-11 word) to platform source line 552, why 0, platform stage 14 (`IDENTIFY`), no S18A, no card. Line 552 in
+`a733_mmc_platform.c` is where the platform sees the core in its FAULT state; because the platform records the line of the first `fail()` and why 0 means no
+deadline, **no platform callback failed first and the platform's own deadline had not passed: the core faulted by itself.** The bank had already moved to 1.8 V
+(stage 14 is after `ENTER_1V8`), the SDR25 re-entry had worked on the same path in the previous lifetimes, so the fault lies in what the trial adds: the CMD6
+SDR104 check and set, the module clock change, the register programming, or the CMD19 sweep. The stop word did not carry the core's error or protocol step.
+
+State left: the card at 1.8 V (possibly with SDR104 selected; CMD0 at 1.8 V ends that), the bank at 1.8 V until the watchdog reset (whether the selector is restored is
+the first thing the next lifetime's baseline will show), the board back in FEL. No retry has been made.
+
+Reading the stop again: platform stage `IDENTIFY` spans everything the core does from CMD0 to the card being ready for reads, which in the UHS-I profile includes CMD6, the
+module clock change and the CMD19 sweep; the probe's report only becomes valid when the platform reports READY. So the stop was not before CMD6; it was somewhere in that whole
+span. What the trial does that the SDR25 re-entry does not is only what follows ACMD6 (`sdr25_only` is read at one place, after ACMD6): CMD6 check and set, the module clock, the
+register programming and the sweep. Every branch before CMD2 depends on the profile and the mode the same way in both: ACMD41 carries S18R (`reenter`), and a ready answer takes the
+re-entry branch before the S18A test, so S18A clear (what 3-3 answered) is not examined at all, and CMD11 is never sent.
+
+**Host reproduction.** The model's failing sample delays produced three kinds of error (data CRC, wrong pattern, no data), all of which the core tolerates. The vendor driver counts
+every sampling error as a failed delay (`SDXC_INTERRUPT_ERROR_BIT`), among them the FIFO run error (bit 11), start-bit and end-bit errors. With a card model whose failing delays
+include a FIFO run error, the core faults in the sweep at the first such delay: state FAULT, error CONTROLLER, protocol step `P_SD_TUNE`, sample delay 3. That is what the platform saw
+(`fault` in the core, no platform callback first, why 0). The core's `TUNE_TOLERATED` mask omitted bit 11; it now includes it (bit 12, hardware locked, stays terminal), and the card
+model's terminal error in the sweep became bit 12. The cause on the board is inferred from that reproduction, not observed: the stop word of the first trial did not carry the core's
+error or step. The rerun's stop word does.
+
+The probe now publishes, for a lifetime that fails before identification, the core's error (4 bits), its protocol step (6) and half the sample delay it had reached (5)
+next to the platform's line, why and stage (`input.py stop --site 3`). The models run the sweep with all five kinds of sampling error.
+
+### SDR104 trial, rerun after the sweep fix (entry `1793650532228649180-1fb49397`): SDR104 at 150 MHz works; the success threshold is met per request and missed sustained
+
+Returned normally; `baseline_changed` empty; the board returned to FEL. Re-entry as before (bank 1.8 V at identification, 3.3 V after the close, selector 0 then 1,
+withstand-mode word unchanged `0x01155550`). Identification including the sweep took 893 ms.
+
+| Item | Predicted | Measured |
+| --- | --- | --- |
+| Module and card clock | 150 MHz if the PERI0_300M gates are up, else 100 MHz | **150 MHz** (module 300 MHz): the gates were up |
+| CMD6 | function 3 supported, selected | selected function 3, outcome `sdr104` |
+| Sweep window | at least 12 consecutive delays, 15 to 40 expected | passing delays 0-9 and 16-63 (58 of 64; map `ffffffffffff03ff`); first longest run 16 to 63, **48 wide**, chosen delay **40**; the gap 10-15 is the only failure |
+| Errors | none | none: 512 requests done, reason 0, no CRC or timeout |
+| Data integrity | first 32 CRCs equal the SDR25 CRCs | **equal** (all 32, including the one non-repeating block) |
+| Per-request rate | | first 32 requests median 2.51 ms = **52.2 MB/s** (SDR25: 6.1 ms, 21.4 MB/s); all 512 median 2.76 ms = **47.6 MB/s**; 25% of the later requests take 5 to 17 ms |
+| Sustained over 64 MiB | at least 45 MB/s at 150 MHz; 55 to 70 expected | **27.4 MB/s** (2.446 s): **below the threshold** |
+| Close | selector to 3.3 V, normal return | bank 3.3 V (value 2, selector 1), normal return |
+
+The sustained figure misses the threshold I wrote, and the prediction of 55 to 70 MB/s was too high for this card. Where the time goes, from the per-request times: the 512
+requests add up to 2.10 s (mean 4.1 ms; median 2.76 ms), and the probe's own gap between requests (take, CRC, submit, one task step each) adds 0.34 s (0.67 ms per request).
+A quarter of the requests take 5 to 17 ms, which is the card (a 2020 Phison SD32G) stalling on its media, not the bus: the requests that run clean complete at 47 to 52 MB/s,
+against a raw limit of 75 MB/s at 150 MHz and the per-request command cost. So the per-request rate meets the 45 MB/s mark and the sustained rate does not; the bus is not the
+limit, the card is. The OS loader overlaps requests, so it would recover the 0.34 s of gaps but not the card's stalls: about 30 MB/s sustained on this card, against 21.7 MB/s at
+50 MHz (14.4 MB/s sustained by the same probe over 4 MiB). A card with better sequential reads would show more. The decision to adopt SDR104 rests on a gain of 1.4 to 2.4 times,
+depending on whether the card's stalls count.
+
+### Where the 5 to 17 ms requests are (from the 512 requests already measured)
+
+Requests are 128 KiB from sector 0 on, so request n starts at n x 128 KiB; 32 requests make one 4 MiB allocation unit. Of the 512, 127 took over 5 ms; their positions:
+
+| Requests | Span | Time per request | Note |
+| --- | --- | --- | --- |
+| 0 to 7 | first 1 MiB | 9.3 to 17.4 ms | cold start: the SDR25 run's first 8 requests on the same sectors took 12.8 to 21.0 ms against 6.1 ms after, **the same extra time (6.7 to 14.9 ms) at 50 and at 150 MHz** |
+| 8 to 384 | 1 MiB to 48 MiB | 2.43 to 2.80 ms, flat, 2.51 ms in the first AU, 2.76 ms after | clean: 47 to 52 MB/s |
+| 385 to 511 | 48 MiB to 64 MiB | 5.0 to 17.4 ms, 5.1, 7.5, 10.0, 12.4 ms recurring | 119 of 127 requests; a few clean ones between |
+
+- **Not periodic.** The stalls are one block of 8 at the start and one zone from request 385 on (119 of its 127 requests slow, in runs of 67, 8, 22, 16, 5 and 1), not spaced by the 512 KiB, 1 MiB, 2 MiB or 4 MiB
+  position (counts by position are flat), not at allocation-unit boundaries (AU 0 stalls in 8 of 32 requests, AUs 1 to 11 in none, AUs 12 to 15 in 28 to 32 of 32), and not after a fixed count of requests or bytes
+  apart from the one change at 48 MiB.
+- **Not the bus.** The extra time of the first eight requests is the same in absolute terms at SDR25 and SDR104, so it is not transfer time.
+- **Quantised.** In the slow zone the times cluster at 2.5 ms plus multiples of about 2.5 ms (5.1, 7.5, 10.0, 12.4), so the card inserts waits in steps, not a smooth transfer.
+- **Not data content.** The slow requests are mostly blocks of zeros (constant CRC `0x7ee8cdcd`: 125 of the 127) and fast requests include 263 of the 265 non-constant blocks, so it is not slow-to-read data versus fast zeros.
+- **What this says.** The pattern follows the address (a slow first MiB, a fast 1 to 48 MiB, a slow 48 MiB onwards) and the time is independent of the bus speed: a card behaviour tied to regions of the flash translation or the card's read-ahead, which no address periodicity or fixed count explains. What it cannot separate is the card's cost per
+  command (a read-ahead that does not carry across our CMD12 and next CMD18) from its cost per byte of media. The SDR25 64 MiB run was never made, so whether the slow zone is slow at 50 MHz is not known; only the first 4 MiB were read there.
+
+### Request-pattern experiment, first submission (entry `1793650854687556052-db9aee9e`): stopped in the sweep, before any phase
+
+Stop word `0x8a071c06`, site 3, decoded with the identification layout: platform stage 14, source line 552, core error 3 (TIMEOUT), core protocol step 32 (`P_SD_TUNE_RECOVER`), sample delay reached
+12 or 13. The sweep had reached its first failing delays and the recovery after a failed CMD19 waited more than 10 ms for the command or data state machine to finish, then gave up with TIMEOUT.
+The previous trial recovered from the same delays (10 to 15 failed there), so the controller's behaviour at the marginal delays is not repeatable: sometimes the command never completes.
+The recovery was written to wait politely and reset afterwards; the vendor driver resets the host after every failed tuning command. The host model now has a failing delay that leaves the
+command stuck until a controller reset; the old recovery times out on it as the board's did, and the recovery now forces the reset after 10 ms (at most 12 times in a sweep, then TIMEOUT).
+No phase ran and no report exists. The card is at 1.8 V (the lifetime never closed), the bank was at 1.8 V until the watchdog reset, the board returned to FEL.
+
+### The sweep against the vendor's tuning loop
+
+Reference: `sunxi_mmc_execute_tuning` in the board kernel (`bsp/drivers/mmc/sunxi-mmc.c:2432-2640`), `sunxi_mmc_clk_gating_reset` (`:227`), `sunxi_mmc_reset_host` (`:640`), the v4p5x
+`__sunxi_mmc_do_oclk_onoff` and `sunxi_mmc_save_spec_reg_v4p5x`. The vendor loop, for each of the 64 delays: reset the host (save the registers, gate the bus clock off and on through the
+CCU, restore the saved registers), update the clock with `oclk_en(1)`, write the sample delay, then issue CMD19 up to 20 times, stopping at the first error or pattern mismatch; the delay
+passes if all 20 matched. After the loop it picks the best delay, resets the host once more, writes it, and resets and updates the clock a last time. It never waits for the command or
+data state machine, never sends CMD12, and does not reset the FIFO separately.
+
+| Step | Vendor | Ours before | Ours now | Kept or changed, and why |
+| --- | --- | --- | --- | --- |
+| Repeats per delay, stop at first failure, pattern compare, window rule (first longest run, 12 or more, midpoint) | 20; yes; yes; yes | the same | the same | kept: identical |
+| Reset before a delay | every delay, passing or failing | only after a failed command | only after a failed command | **kept**: a passing command leaves the controller idle; a reset before each of 64 delays adds 64 register restores, each with its own failure modes, and nothing shows a benefit. The failed-command case is the one that differs in behaviour. |
+| Wait for the command or data state machine before the reset | none | up to 10 ms, then (first fix) a forced reset | none: reset at once | **changed**: this was the timing-dependent difference |
+| Reset mechanism | CCU bus gate and reset toggle plus register save and restore | GCTRL soft, FIFO and DMA reset (`|7`), then rewrite of the SDR104 registers | the same GCTRL reset (the value of the vendor's `sunxi_mmc_reset_host`) and the same rewrite | **kept**: the CCU toggle belongs to the platform (the bus register has its own filter rules) and needs a new platform operation; if a stuck command survives the GCTRL reset the cap below trips and it becomes the next step |
+| Registers restored | GCTRL, CLKCR, TMOUT, WIDTH, FTRGL, FUNS, DBGC, DMAC, DLBA, IMASK; DRV_DL, SAMP_DL, DS_DL, NTSR, EDSD, CSDC | drive phase (`0x140`), NTSR (`0x5c`), sample delay, TMOUT, WIDTH, CLKCR | the same | **kept**: the sweep is PIO with the interrupt masked, so GCTRL, FTRGL, DMAC, DLBA and IMASK do not take part in it; the SDR104 ones do and are rewritten and read back |
+| Clock update after the reset | `oclk_en(1)`: CLKCR clock on, low power on (power-save mode), **DAT0 masked**; update command; wait; clear the interrupt flags; clear the mask | clock on only, update command, no mask | clock on with **DAT0 masked**, update command, clear the flags, clear the mask, read back | **changed**: a card that still holds DAT0 low stalls an update that does not mask it |
+| Low-power clock gating | on (the board's device tree sets `sunxi-power-save-mode`) | off | off | **kept**: the vendor's own comment for this chip says it wants the clock always on to avoid a sample bug, and our delays were derived with it on |
+| Delay change | write `SAMP_DL` after the clock update, clock running | same, without a clock stop | same | kept: identical in effect |
+| Data timeout of CMD19 | the host's default | `TMOUT` 0x040000ff (about 1.7 ms at 150 MHz) | the same | **kept**: it bounds a command that gets no data |
+| CMD12 or abort | none | none | none | identical |
+| FIFO reset | none separate (the bus reset clears it) | within the GCTRL reset | within the GCTRL reset | kept: a superset |
+| Reset after the sweep | reset, write the best delay, update the clock | write the best delay, restore the timeout | the same | **kept**: when the last delay failed the recovery has just reset; when it passed there is nothing to reset |
+| Cap on trouble | none | none | consecutive recoveries that do not complete within 10 ms (reset bits still set, or the update still pending): the reset is repeated and after 12 in a row the sweep stops with TIMEOUT; a completed recovery clears the count | **added** (kept from the first fix, now consecutive) |
+
+Host evidence. The card model has a failing delay that leaves the command stuck and DAT0 low: the old recovery (wait, then reset) timed out as the board did; the new one resets at once,
+completes the masked update and finishes the sweep with the same window; a controller that stays stuck through reset and update makes the sweep stop with TIMEOUT after 12 recoveries;
+removing the mask from the update makes the stuck-DAT0 case fail.
+
+### Request-pattern experiment, second submission (entry `1793651292191500240-5493408d`): stopped in the sweep at delay 16 or 17
+
+Stop word `0x8a073be8`, site 3: core error 7 (CARD), step `P_SD_TUNE`, delay 16 or 17, platform stage `IDENTIFY`. With the recovery matched to the vendor's (reset at once), the sweep got past
+delays 12 and 13, where the previous submission had stopped, and stopped later, on a delay that the first successful trial had passed. The core faults when a command's R1 response carries a card
+status error (`CARD_ERRORS`), at the response of any command with data and again in the `P_SD_TUNE` step. After a transfer aborted by a controller reset the card reports COM_CRC_ERROR once in its next
+response (modelled; inferred, not observed). The board kernel's loop does not look at R1 at all: it judges a delay by the host's command and data errors and the pattern compare. The core now does the same
+in the sweep, and the tolerated sampling errors are the vendor's whole error set (bits 1, 6, 7, 8, 9, 11, 12, 13, 15) plus data starvation (bit 10); only card insert and remove (bit 18, bit 31) stay terminal.
+The card model's failing delays now include a hardware-locked and a starvation error, and a response with COM_CRC_ERROR after an aborted command: with the old core they fault, with the new one the sweep
+completes with the same window.
+
+This is the third stop in the sweep, each on a difference from the vendor loop that the host model did not have. Where the core and the vendor loop can still differ is listed in the table above; the sweep
+has not been audited for any other check that fires on a marginal delay beyond those found.
+
+### Request-pattern experiment (approved, one run)
+
+One lifetime, re-entry then SDR104 as before (`--uhs-mode 3`), then eight phases over the slow zone and controls (`--phase FIRST:BLOCKS:READS[:quick]`; `quick` skips the per-request CRC and the progress call
+except every 32nd request, which brings the gap between requests down from about 0.67 ms to what the platform's take and submit need):
+
+| Phase | Region | Request | Count | Mode | Asks |
+| --- | --- | --- | --- | --- | --- |
+| A | 48 to 64 MiB | 128 KiB | 128 | normal | the zone again |
+| B | the same | 128 KiB | 128 | quick | does the gap matter, or the second pass |
+| C | the same | 128 KiB | 128 | normal | third pass: if slow again, B was the gap; if fast, the card remembers |
+| D | the same | 64 KiB | 256 | normal | request size down |
+| E | the same | 32 KiB | 512 | normal | request size down again |
+| F | 4 to 12 MiB | 128 KiB | 64 | normal | the fast zone as a control |
+| G | 100 to 116 MiB | 128 KiB | 128 | normal | an unseen region |
+| H | 200 to 216 MiB | 128 KiB | 128 | quick | another unseen region, back to back |
+
+Requests of 1 MiB and 4 MiB per CMD18 are not in it: the descriptor ring holds 33 descriptors, so a command reads at most 256 sectors (128 KiB), and the larger sizes need the ring, the buffers and the
+platform's chain check extended; if the result points at the per-command cost they are the next step.
+
+Prediction (written before the run). My best guess is a card behaviour that costs time per command, not per byte, and that our pattern does not cause:
+
+- **A**: slow as before, mean 6 to 10 ms per request, 14 to 20 MB/s. **B and C**: the same as A within 20 percent (no gap or second-pass effect). If B is much faster than A and C slow again, the gap provokes it; if B and C are both fast, the card remembers.
+- **D and E**: the per-command extra time stays about the same, so time per MiB rises: D about 1.5 to 1.8 times A per MiB, E about 2.5 to 3.5 times. If instead the time per MiB equals A's, the cost is per byte of media.
+- **F**: fast, 2.4 to 2.8 ms per 128 KiB, 47 to 54 MB/s. **G and H**: slow like A (the zone beyond 48 MiB is where files lie), with H equal to G.
+- **No error** in any phase; normal close; return normally.
+- **What would change the plan:** a clear difference between A and B or C, or D and E not rising, points at something our pattern does (or a media-bound card). A rise in D and E with B equal to A points at the per-command cost.
+
 ## Board plan
 
 Each stage has one hypothesis. Nothing runs without the coordinator's approval and none writes to the card. Stage 2 below is the

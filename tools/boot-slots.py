@@ -14,13 +14,16 @@ import stat
 import struct
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import memory_layout
+
 SECTOR = 512
 HEADER_SECTORS = {'A': 8192, 'B': 16384}
 BOOT_AREA_SECTORS = 40960
 ALLOCATION_UNIT = 8192  # 4 MiB, a common SD erase/allocation unit.
 SLOT_MAGIC = int.from_bytes(b'AS73SLOT', 'big')
 VERSION, EXTENTS, IMAGE, ASSET = 1, 4, 1, 2
-LOAD_BASE, LOAD_LIMIT = 0x41000000, 0x47000000
+LOAD_BASE, LOAD_LIMIT = memory_layout.record()['boot_slot_load']
 HEADER = struct.Struct('<QIIQQIIQ16x')
 EXTENT = struct.Struct('<QQQII32s')
 ALLOCATION_KIND = 'a733-boot-slot-allocation'

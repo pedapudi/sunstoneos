@@ -65,7 +65,7 @@ on the platform source of v12. The same check applies to any other service that 
 Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-storage-20261101.md).
 
 <!-- evidence-table:begin -->
-19 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+26 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -88,4 +88,11 @@ Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/
 | `1793636300522250962-f6977cff` | 2026-11-02 | 3-1 | `190cbba10653` | result-mismatch | passed | run_total 12.863 s, sectors_captured 109 |
 | `1793636342034468404-7527d869` | 2026-11-02 | 3-1 | `e57491e16932` | returned | passed | run_total 45.779 s, verified_bytes 5.36871e+08 B, mismatches 0, read_rate 20.3 MB/s, wear_bytes 0 B |
 | `1793639891731890732-2700d966` | 2026-11-02 | 3-1 | `01b107634de6` | result-mismatch | passed | run_total 28.085 s, s18a 1, group1_support_bits 32771, au_sectors 8192, max_current 50 mA |
+| `1793648082135831049-05f70d50` | 2026-11-02 | 3-3 | `9bd1f1ba6475` | watchdog-reset | failed | run_total 29.298 s, reads_done 32 |
+| `1793649204965774597-d1ed3e86` | 2026-11-02 | 3-3 | `962eb56c8103` | watchdog-reset | inconclusive | run_total 110.438 s, reads_done 32, s18a 0, group1_support_bits 31 |
+| `1793649661736969334-9742cb48` | 2026-11-02 | 3-3 | `94e4be87f6dd` | result-mismatch | passed | run_total 13.16 s, reads_done 32, per_read_rate_median 21.4 MB/s, identify_time 0.309 s, s18a 0, group1_support_bits 31 |
+| `1793650091979550389-eb009a18` | 2026-11-02 | 3-3 | `003fa9e0e17f` | watchdog-reset | failed | run_total 111.186 s |
+| `1793650532228649180-1fb49397` | 2026-11-02 | 3-3 | `aa20988e728c` | result-mismatch | inconclusive | run_total 49.23 s, card_clock 150 MHz, tuning_window 48, chosen_delay 40, per_request_rate_median 47.6 MB/s, sustained_rate 27.4 MB/s, bytes_read 6.71089e+07 B, errors 0 |
+| `1793650854687556052-db9aee9e` | 2026-11-02 | 3-3 | `9f261cc92409` | watchdog-reset | failed | run_total 75.048 s |
+| `1793651292191500240-5493408d` | 2026-11-02 | 3-3 | `31aba5df4dc3` | watchdog-reset | failed | run_total 29.309 s |
 <!-- evidence-table:end -->

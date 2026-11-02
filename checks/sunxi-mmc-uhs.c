@@ -23,6 +23,7 @@ static int uhs_signal(void *v, uintptr_t token, unsigned operation, unsigned *st
     if (u->bank == 1 && u->bank_polls && !--u->bank_polls) { u->bank = 2; u->restarted = m->now; }
     *state = u->bank == 2; return 1;
 }
+static unsigned want_sdr25, want_reenter;
 static void begin(struct uhs *u, struct sunxi_mmc *h, unsigned caps)
 {
     memset(u, 0, sizeof(*u)); seed(&u->base, h, SUNXI_MMC_SD, 1);
@@ -32,7 +33,10 @@ static void begin(struct uhs *u, struct sunxi_mmc *h, unsigned caps)
     struct sunxi_mmc_config c = {{uhs_read, uhs_write, barrier, now_us, admit, retained, uhs_module,
         uhs_read_fifo, model_write_fifo, uhs_signal, NULL}, u, 0xa733, SUNXI_MMC_SD, 800000, 0x300000,
         SUNXI_MMC_SD_UHS_SDR104, NULL};
-    assert(sunxi_mmc_init(h, &c) && sunxi_mmc_open(h, 100000000));
+    assert(sunxi_mmc_init(h, &c));
+    if (want_sdr25) assert(sunxi_mmc_sdr25_only(h));
+    if (want_reenter) { assert(sunxi_mmc_reenter(h)); u->phase = 3; u->bank = 2; }
+    assert(sunxi_mmc_open(h, 100000000));
 }
 static void drive(struct uhs *u, struct sunxi_mmc *h)
 {
@@ -108,6 +112,42 @@ int main(void)
     begin(u, &h, 2); high_speed_33(u, &h, SUNXI_MMC_UHS_HOST); assert(!u->s18r_seen);
     begin(u, &h, 0); high_speed_33(u, &h, SUNXI_MMC_UHS_HOST);
     begin(u, &h, 3); u->s18a = 0; high_speed_33(u, &h, SUNXI_MMC_UHS_DECLINED); assert(u->s18r_seen);
+    /* SDR25 only at 1.8 V: the switch runs, SDR104 and tuning are never tried, and the CMD6 response of the switch is kept. */
+    want_sdr25 = 1; want_reenter = 0;
+    begin(u, &h, 3); sdr25_18(u, &h, SUNXI_MMC_UHS_LIMITED);
+    assert(u->cmd11 == 1 && u->sets == 1 && !u->cmd6_uhs && !u->cmd19 && !h.card.reentered && (h.card.switch_status[13] & 3) == 3);
+    assert((h.card.switch_status[13] & 8) && (h.card.switch_status[16] & 15) == 1);   /* SDR104 support is visible at 1.8 V; function 1 selected */
+    /* Re-entry at 1.8 V: the bank is already there, the card signals 1.8 V, no CMD11 and no selector write. */
+    for (unsigned s18a = 0; s18a < 2; ++s18a) {
+        want_sdr25 = 1; want_reenter = 1;
+        begin(u, &h, 3); u->s18a = s18a; sdr25_18(u, &h, SUNXI_MMC_UHS_LIMITED);
+        assert(!u->cmd11 && !u->sets && !u->cmd19 && h.card.reentered && h.card.signal_1v8 && u->s18r_seen);
+        assert((h.card.switch_status[13] & 8) && !u->cmd6_uhs);
+    }
+    want_sdr25 = 0; want_reenter = 1;                  /* a re-entry that goes on to SDR104 and tuning */
+    begin(u, &h, 3); drive(u, &h);
+    assert(h.state == SUNXI_MMC_READY && h.card.reentered && !u->cmd11 && !u->sets && h.card.timing == 3 &&
+           h.card.uhs_outcome == SUNXI_MMC_UHS_SDR104 && h.card.sample_delay == 32);
+    read_back(u, &h);
+    want_sdr25 = want_reenter = 0;
+    /* A card whose every failing delay leaves the command stuck and DAT0 low: the immediate reset and the masked clock update clear each one, the sweep
+     * completes with the same window. */
+    want_reenter = 1; begin(u, &h, 3); want_reenter = 0; u->stuck_always = 1; drive(u, &h);
+    assert(h.state == SUNXI_MMC_READY && h.card.uhs_outcome == SUNXI_MMC_UHS_SDR104 && h.card.sample_delay == 32);
+    /* A controller that a reset does not free: the recovery repeats the reset and gives up after 12 consecutive recoveries that did not complete. */
+    want_reenter = 1; begin(u, &h, 3); want_reenter = 0; u->stuck_always = 1; u->unfixable = 1; faulted(u, &h, SUNXI_MMC_TIMEOUT);
+    /* A card that fails the sweep the way the board's does: every kind of sampling error, including the FIFO run error. */
+    want_reenter = 1; begin(u, &h, 3); want_reenter = 0; u->tune_kinds = 8; u->s18a = 0; drive(u, &h);
+    assert(h.state == SUNXI_MMC_READY && h.card.uhs_outcome == SUNXI_MMC_UHS_SDR104 && h.card.sample_delay == 32);
+    /* Both options are for the UHS-I profile, before open. */
+    {
+        struct sunxi_mmc g; struct uhs v;
+        memset(&v, 0, sizeof v); seed(&v.base, &g, SUNXI_MMC_SD, 1);
+        struct sunxi_mmc_config c = {{uhs_read, uhs_write, barrier, now_us, admit, retained, uhs_module,
+            uhs_read_fifo, model_write_fifo, NULL, NULL}, &v, 0xa733, SUNXI_MMC_SD, 800000, 0x300000, SUNXI_MMC_SD_HIGH_SPEED4, NULL};
+        assert(sunxi_mmc_init(&g, &c) && !sunxi_mmc_reenter(&g) && !sunxi_mmc_sdr25_only(&g));
+    }
+    begin(u, &h, 3); assert(!sunxi_mmc_reenter(&h) && !sunxi_mmc_sdr25_only(&h));       /* already open */
     /* Capability observation: ACMD41 carries S18R and the card's S18A is kept, but there is no CMD11 and the card stays at 3.3 V. */
     for (unsigned s18a = 0; s18a < 2; ++s18a) {
         struct sunxi_mmc_config c = {{uhs_read, uhs_write, barrier, now_us, admit, retained, uhs_module,

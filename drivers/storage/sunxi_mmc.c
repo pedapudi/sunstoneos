@@ -37,10 +37,15 @@
 #define TUNE_REPEATS 20u
 #define TUNE_WINDOW 12u
 /* Sampling errors expected at a bad sample delay: response error, response
- * and data CRC, response and data timeout, start and end bit. Others stay
- * terminal during tuning. */
+ * and data CRC, response and data timeout, FIFO run error, start and end bit.
+ * The vendor driver counts each of them, and the hardware-locked bit (12), as a
+ * failed delay (SDXC_INTERRUPT_ERROR_BIT of sunxi-mmc.h); data starvation (bit 10)
+ * is added for the same reason, a sample point that garbles a block can leave
+ * the host starved. The FIFO run error (bit 11) was left out first, and the
+ * first SDR104 trial on the board faulted in the sweep on a delay that raised it.
+ * Others (card insert and remove, bits 30 and 31 and bit 18) stay terminal. */
 #define TUNE_TOLERATED ((1u << 1) | (1u << 6) | (1u << 7) | (1u << 8) | (1u << 9) | \
-                        (1u << 13) | (1u << 15))
+                        (1u << 10) | (1u << 11) | (1u << 12) | (1u << 13) | (1u << 15))
 #define TUNE_TIMEOUT 0x040000ffu /* About 1.7 ms of data timeout at 150 MHz. */
 #define UHS SUNXI_MMC_SD_UHS_SDR104
 /* SUNXI_MMC_NO_UHS builds without the UHS-I profile: every UHS-I path is
@@ -174,6 +179,19 @@ int sunxi_mmc_observe_s18(struct sunxi_mmc *h)
 {
     if (!h || !h->initialized || h->entered || h->state != SUNXI_MMC_COLD || h->config.kind != SUNXI_MMC_SD || h->config.sd_profile == UHS) return 0;
     h->observe_s18 = 1; return 1;
+}
+
+int sunxi_mmc_reenter(struct sunxi_mmc *h)
+{
+    if (!UHS_ON || !h || !h->initialized || h->entered || h->state != SUNXI_MMC_COLD || h->config.kind != SUNXI_MMC_SD ||
+        h->config.sd_profile != UHS || h->observe_s18) return 0;
+    h->reenter = 1; return 1;
+}
+int sunxi_mmc_sdr25_only(struct sunxi_mmc *h)
+{
+    if (!UHS_ON || !h || !h->initialized || h->entered || h->state != SUNXI_MMC_COLD || h->config.kind != SUNXI_MMC_SD ||
+        h->config.sd_profile != UHS) return 0;
+    h->sdr25_only = 1; return 1;
 }
 
 int sunxi_mmc_open(struct sunxi_mmc *h, uint64_t deadline)
@@ -648,7 +666,8 @@ static int command_step(struct sunxi_mmc *h)
             h->response_seen = 1;
             if (h->data_bytes) {
                 h->result.response = h->response[0];
-                if (h->response[0] & CARD_ERRORS) { fault(h, SUNXI_MMC_CARD); return 0; }
+                /* Not during the sweep: its CMD19 status is not judged (see P_SD_TUNE). */
+                if ((h->response[0] & CARD_ERRORS) && !(UHS_ON && h->tuning && h->protocol == P_SD_TUNE)) { fault(h, SUNXI_MMC_CARD); return 0; }
             }
         }
         if (!dma_command(h) && h->position < h->data_bytes && (!(h->command & WRITE) || h->response_seen) &&
@@ -839,7 +858,7 @@ static void sd_clock(struct sunxi_mmc *h)
         ++h->sd_ios;return;
     case 2:
         if(uhs){
-            h->tuning=1;h->card.sample_delay=0;
+            h->tuning=1;h->tune_forced=0;h->card.sample_delay=0;
             if(!uhs_registers(h,1)||!fence(h)||!wr(h,0x18,UPDATE))return;
             ++h->sd_ios;return;
         }
@@ -949,9 +968,13 @@ static void sd_signal(struct sunxi_mmc *h)
     default:fault(h,SUNXI_MMC_CONTROLLER);return;
     }
 }
-/* After a failed CMD19: wait for the command and data state machines, reset
- * the FIFO and state machines, restore and verify the SDR104 registers, then
- * record the delay as failed. */
+/* After a failed CMD19, as the board kernel's tuning loop (sunxi_mmc_execute_tuning) recovers: no wait for the command or the data state machine and no abort,
+ * the controller is reset at once, its registers are restored, and the clock is updated with DAT0 masked (sunxi_mmc_oclk_onoff passes ignore_dat0 and clears
+ * the mask after the update), then the next delay. The reset is the vendor's sunxi_mmc_reset_host write (GCTRL soft reset, FIFO reset and DMA reset together).
+ * Differences kept on purpose, with the reasons, are in docs/designs/sd-uhs-recovery.md ("The sweep against the vendor's tuning loop").
+ * TUNE_FORCED_RESETS caps the consecutive recoveries that did not complete in 10 ms (reset bits still set, or the clock update still pending): the
+ * recovery is then repeated, and after the cap the sweep stops with TIMEOUT. A recovery that completes clears the count. */
+#define TUNE_FORCED_RESETS 12u
 static void tune_recover(struct sunxi_mmc *h)
 {
     uint32_t v;
@@ -960,22 +983,27 @@ static void tune_recover(struct sunxi_mmc *h)
         if(!time_ok(h))return;
         h->protocol=P_SD_TUNE_RECOVER;h->tune_failed=0;h->signal_us=h->last_us;++h->tune_recover;return;
     case 1:
-        if(!rd(h,0x18,&v)||!rd(h,0x3c,&h->result.status))return;
-        if((v&START)||(h->result.status&BUSY)){
+        if(!rd(h,0,&v)||!wr(h,0,v|7u))return;
+        h->signal_us=h->last_us;++h->tune_recover;return;
+    case 2:
+        if(!rd(h,0,&v))return;
+        if(v&7u){
             if(!time_ok(h))return;
-            if(h->last_us-h->signal_us>=10000){fault(h,SUNXI_MMC_TIMEOUT);return;}
+            if(h->last_us-h->signal_us>=10000){if(++h->tune_forced>TUNE_FORCED_RESETS){fault(h,SUNXI_MMC_TIMEOUT);return;}h->tune_recover=1;return;}
             defer_command(h,100);return;
         }
-        if(!rd(h,0,&v)||!wr(h,0,v|7u))return;
-        ++h->tune_recover;return;
-    case 2:
-        if(!rd(h,0,&v)||(v&7u))return;
         if(!(v&START)){fault(h,SUNXI_MMC_CONTROLLER);return;}
-        if(!rd(h,0x38,&v)||!wr(h,0x38,v&0xffffu)||!uhs_registers(h,1)||!fence(h)||!wr(h,0x18,UPDATE))return;
-        ++h->tune_recover;return;
+        if(!rd(h,0x38,&v)||!wr(h,0x38,v&0xffffu)||!uhs_registers(h,1)||!wr(h,4,(1u<<16)|MASK_DAT0)||!fence(h)||!wr(h,0x18,UPDATE))return;
+        h->signal_us=h->last_us;++h->tune_recover;return;
     case 3:
-        if(!rd(h,0x18,&v)||(v&START)||!uhs_registers(h,0))return;
-        h->tune_recover=0;h->protocol=P_SD_TUNE;tune_advance(h,0);return;
+        if(!rd(h,0x18,&v))return;
+        if(v&START){
+            if(!time_ok(h))return;
+            if(h->last_us-h->signal_us>=10000){if(++h->tune_forced>TUNE_FORCED_RESETS){fault(h,SUNXI_MMC_TIMEOUT);return;}h->tune_recover=1;return;}
+            defer_command(h,100);return;
+        }
+        if(!rd(h,0x38,&v)||!wr(h,0x38,v&0xffffu)||!wr(h,4,1u<<16)||!uhs_registers(h,0))return;
+        h->tune_forced=0;h->tune_recover=0;h->protocol=P_SD_TUNE;tune_advance(h,0);return;
     default:fault(h,SUNXI_MMC_CONTROLLER);return;
     }
 }
@@ -997,7 +1025,7 @@ static void protocol(struct sunxi_mmc *h)
                                         SUNXI_MMC_SIGNAL_QUERY, &caps) != 1 || (caps & ~3u)) {
                 fault(h, SUNXI_MMC_IO); return;
             }
-            h->card.uhs_caps = (uint8_t)caps; h->s18r = !!(caps & SUNXI_MMC_SIGNAL_1V8);
+            h->card.uhs_caps = (uint8_t)caps; h->s18r = !!(caps & SUNXI_MMC_SIGNAL_1V8) || h->reenter;
         } else if (h->observe_s18) h->s18r = 1;
         queue(h, P_SD_APP, 55u | RESP | CRC, 0, 0, 0); return;
     case P_SD_APP:
@@ -1021,6 +1049,11 @@ static void protocol(struct sunxi_mmc *h)
                   mmc ? ((r & voltage) | (1u << 30)) : 0, 0, 0); return;
         }
         h->card.ocr = r; h->card.sector_addressed = !!(r & (1u << 30));
+        /* A re-entry skips CMD11: the card already signals 1.8 V and treats CMD11 as an illegal command (specification 4.2.4.4). */
+        if (UHS_ON && !mmc && h->reenter) {
+            h->card.signal_1v8 = 1; h->card.reentered = 1;
+            queue(h, P_CID, 2u | RESP | LONG | CRC, 0, 0, 0); return;
+        }
         /* S18A requests CMD11 before CMD2. Like the pinned Linux core, the
          * switch does not also require CCS. */
         if (UHS_ON && !mmc && h->s18r && h->config.sd_profile == UHS && (r & S18R)) {
@@ -1095,6 +1128,7 @@ static void protocol(struct sunxi_mmc *h)
         if(h->config.sd_profile>=SUNXI_MMC_SD_HIGH_SPEED4){
             if((h->card.scr[0]&15)<1||!(bits(h->card.csd,84,12)&(1u<<10))){fault(h,SUNXI_MMC_UNSUPPORTED);return;}
             /* At 1.8 V, ask for SDR104 (function 3); SDR25 is the fallback. */
+            if(UHS_ON&&h->card.signal_1v8&&h->sdr25_only){h->card.uhs_outcome=SUNXI_MMC_UHS_LIMITED;hs_check(h);return;}
             if(UHS_ON&&h->card.signal_1v8){queue(h,P_SD_UHS_CHECK,6u|RESP|CRC|DATA|WAIT,0x00fffff3,h->card.switch_status,64);return;}
             hs_check(h);return;
         }
@@ -1129,7 +1163,9 @@ static void protocol(struct sunxi_mmc *h)
         h->protocol=P_SD_CLOCK;h->sd_ios=0;return;
     case P_SD_TUNE:
         if(!UHS_ON){fault(h,SUNXI_MMC_CARD);return;}
-        if(!card_response(h))return;
+        /* The R1 status is not judged during the sweep, as the board kernel's loop does (it looks at the host's command and data errors and compares the
+         * block): after a command aborted by a controller reset the card reports COM_CRC_ERROR in its next response, and the third SDR104 trial on 3-3
+         * stopped on that at delay 16 or 17, which the first trial had passed. */
         for(unsigned i=0;i<64;++i)if(h->tuning_block[i]!=tuning_pattern[i]){h->tune_failed=1;return;}
         if(++h->tune_repeat<TUNE_REPEATS){tune_next(h);return;}
         tune_advance(h,1);return;

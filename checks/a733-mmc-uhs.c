@@ -6,7 +6,8 @@
 #define PERI400 ((1u << 11) | (1u << 2) | (1u << 1))
 #define PERI300 ((1u << 11) | (1u << 9) | (1u << 5) | (1u << 4))
 static struct uhs u;
-static unsigned pf_settle, pf_writes, module_writes;
+static unsigned pf_flip, cfg_nowindow;
+static unsigned pf_settle, pf_writes, module_writes, restore_settle, restore_writes, cfg_sdr25, cfg_start18, commands_at_mismatch;
 static uint32_t last_module;
 static void live(struct storage_model *s)
 {
@@ -22,25 +23,46 @@ static int uhs_platform_read(void *v, uintptr_t a, uint32_t *out)
     if (a >= s->platform.base && a <= s->platform.base + 0x300) {
         live(s); u.base.now = s->power.now; return uhs_read(&u, (uint32_t)(a - s->platform.base), out);
     }
-    /* The bank reports 1.8 V a few status reads after the selector write. */
+    /* The bank reports 1.8 V a few status reads after the selector write, and 3.3 V a few after the restore write. */
     if (a == 0x02000048 && u.bank == 1 && pf_settle && !--pf_settle) {
         uint32_t *w = pmic_model_word(&s->power, a); *w = (*w & ~(3u << 10)) | (3u << 10);
         u.bank = 2; u.restarted = s->power.now;
     }
+    /* How the board's bank may answer after the write back to 3.3 V: 0 two reads of 1.8 V then 3.3 V; 1 3.3 V at once; 2 3.3 V once,
+     * then 1.8 V again; 3 3.3 V but the selector reads back as written 1.8 V; 4 3.3 V but the withstand mode changes to manual. */
+    if (a == 0x02000048 && u.bank == 3 && restore_settle) {
+        unsigned scenario = getenv("PF_RESTORE") ? (unsigned)atoi(getenv("PF_RESTORE")) : 0;
+        uint32_t *w = pmic_model_word(&s->power, a);
+        if (scenario == 1 || !--restore_settle) { *w = (*w & ~(3u << 10)) | (2u << 10); u.bank = 0; restore_settle = 0;
+            if (scenario == 4) *pmic_model_word(&s->power, 0x02000040) = (*pmic_model_word(&s->power, 0x02000040) & ~(3u << 10)) | (2u << 10);
+            if (scenario == 3) *pmic_model_word(&s->power, 0x02000070) = 0;
+            if (scenario == 2) pf_flip = 1; }
+    }
+    if (a == 0x02000048 && pf_flip == 2) { uint32_t *w = pmic_model_word(&s->power, a); *w = (*w & ~(3u << 10)) | (3u << 10); }
+    if (a == 0x02000048 && pf_flip == 1) pf_flip = 2;
     *out = *pmic_model_word(&s->power, a); return 1;
 }
 static int uhs_platform_write(void *v, uintptr_t a, uint32_t value)
 {
     struct storage_model *s = v; ++s->accesses; ++s->writes;
     assert(s->power.register_held && s->admitted);
+    if (a == 0x02000070 && value == 1) {
+        /* The close: back to 3.3 V once, after a 1.8 V lifetime, with the card clock off and nothing in flight. */
+        assert(u.bank == 2 && !restore_writes && !(u.base.reg[4/4] & (3u << 16)) && u.phase == 3);
+        ++restore_writes; u.bank = 3; restore_settle = 2; *pmic_model_word(&s->power, a) = 1; return 1;
+    }
     if (a == 0x02000070) {
-        /* One write, 1.8 V, with the card clock stopped after CMD11. */
-        assert(value == 0 && u.phase == 2 && !pf_writes && !u.base.reg[4/4]);
+        /* One write, 1.8 V, with the card clock stopped after CMD11 (or, for a re-entry, before the core opens). */
+        assert(value == 0 && (u.phase == 2 || cfg_start18) && !pf_writes && !u.base.reg[4/4]);
         ++pf_writes; u.bank = 1; *pmic_model_word(&s->power, a) = 0; return 1;
     }
     assert(a733_mmc_platform_native_address_selected(SUNXI_MMC_SD, 0, a, 1));
     if (a >= s->platform.base && a <= s->platform.base + 0x300) {
-        live(s); u.base.now = s->power.now; return uhs_write(&u, (uint32_t)(a - s->platform.base), value);
+        live(s); u.base.now = s->power.now;
+        /* A command with the bank at 1.8 V (selector written) and a card still signalling 3.3 V would drive 3.3 V into the bank. */
+        if (a == s->platform.base + 0x18 && (value & (1u << 31)) && !(value & (1u << 21)) && u.bank >= 1 && u.bank <= 2 && u.phase == 0)
+            ++commands_at_mismatch;
+        return uhs_write(&u, (uint32_t)(a - s->platform.base), value);
     }
     if (a == 0x03400198) { assert(value == 2u); *pmic_model_word(&s->power, 0x03400118) &= ~value; return 1; }
     assert(a == s->platform.module || a == s->platform.bus);
@@ -57,10 +79,11 @@ static int uhs_platform_write(void *v, uintptr_t a, uint32_t value)
 static void begin(unsigned pf_mode, unsigned fast, unsigned caps)
 {
     memset(&m, 0, sizeof(m)); memset(&u, 0, sizeof(u));
-    pf_settle = 3; pf_writes = module_writes = 0; last_module = 0;
+    pf_flip = 0; pf_settle = 3; pf_writes = module_writes = restore_writes = restore_settle = commands_at_mismatch = 0; last_module = 0;
     pmic_model_setup(&m.power); seed(&u.base, &m.platform.core, SUNXI_MMC_SD, 1);
     field(u.base.csd, 84, 12, 5 | (1u << 10)); field(u.base.csd, 96, 8, 0x32); u.scr[0] = 2; u.scr[1] = 5;
-    u.caps = caps; u.s18a = 1; u.sdr104 = 1; u.fatal_delay = 99; u.window[0][0] = 20; u.window[0][1] = 24;
+    u.caps = caps; u.s18a = 1; u.sdr104 = 1; u.tune_kinds = 8; u.fatal_delay = 99; u.window[0][0] = 20; u.window[0][1] = cfg_nowindow ? 0 : 24;
+    if (cfg_start18) u.phase = 3;                      /* the card still signals 1.8 V from the earlier lifetime */
     m.power.pmic[0x11] = 1u << 4; m.power.pmic[0x33] = 13;
     *pmic_model_word(&m.power, 0x02002000) = 0xf8000000u | (99u << 16) | (99u << 8);
     *pmic_model_word(&m.power, 0x02002580) = 1u << 31;
@@ -78,7 +101,8 @@ static void begin(unsigned pf_mode, unsigned fast, unsigned caps)
     *pmic_model_word(&m.power, 0x02000070) = 1;
     struct a733_mmc_platform_config c = {.owner = 42, .handoff = 200, .topology = 201, .kind = SUNXI_MMC_SD,
         .deadline_us = 8000000, .lifetime_deadline_us = 10000000, .voltage_mask = 0x00300000,
-        .sd_profile = SUNXI_MMC_SD_UHS_SDR104, .fabric = {0, 1u << 31, 1u << 31},
+        .sd_profile = SUNXI_MMC_SD_UHS_SDR104, .sdr25_only = (uint8_t)cfg_sdr25, .start_1v8 = (uint8_t)cfg_start18,
+        .fabric = {0, 1u << 31, 1u << 31},
         .fabric_hz = {24000000, 24000000, 24000000}};
     for (unsigned i = 0; i < 7; ++i) { c.desired[i].function = i < 6 ? 2 : 0; c.desired[i].pull = 1; }
     const struct a733_mmc_platform_ops o = {storage_now, storage_current, storage_admit, storage_enter,

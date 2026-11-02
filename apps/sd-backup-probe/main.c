@@ -61,6 +61,8 @@ static StaticTask_t tasks[2];
 static StackType_t stacks[2][4096];
 
 enum { CONSTRUCT, IDENTIFY, CARD, STATUS, READ, POLL, TAKE, CAPTURE, FAT, REGION };
+static uint32_t pf_ready[3];
+static uint64_t stop_word;               /* what a failed lifetime publishes in the fault record, kept in the report too */             /* GPIO_POW_VAL and GPIO_POW_VAL_SET_CTL when the card was identified */
 static uint8_t status_copy[64];
 static uint64_t status_us, status_result;
 static struct {
@@ -88,6 +90,16 @@ static struct {
     uint32_t baseline[16];
 } s;
 static uint32_t elapsed[SDP_MAX_READS], crcs[SDP_MAX_READS];
+static uint32_t plan_total, phase_first[SDP_PHASES + 1], cur_blocks, cur_phase, cur_index;
+static struct sdp_phase_stat pstat[SDP_PHASES];
+static uint64_t bytes_total, phase_started[SDP_PHASES];
+/* The phase and index in it of request n. */
+static void locate(uint32_t n, uint32_t *phase, uint32_t *index)
+{
+    uint32_t p = 0;
+    while (p + 1 < SDP_PHASES && n >= phase_first[p + 1] && phase_first[p + 1] > phase_first[p]) ++p;
+    *phase = p; *index = n - phase_first[p];
+}
 static struct sdp_timing timing[SDP_TIMED];
 static uint8_t sectors[SDP_MAX_CAPTURE][512];
 static struct sdp_fat fat;
@@ -185,8 +197,20 @@ static int setup(void)
     const volatile struct sdp_input *in = &sunstone_probe_input;
     for (size_t i = 0; i < sizeof s.input; ++i) ((uint8_t *)&s.input)[i] = ((const volatile uint8_t *)in)[i];
     const struct sdp_input *c = &s.input;
-    if (c->magic != SDP_INPUT_MAGIC || !c->reads || c->reads > SDP_MAX_READS || !c->blocks ||
-        c->blocks > sizeof(buffer) / 512 || c->capture_count > SDP_MAX_CAPTURE) return 0;
+    if (c->magic != SDP_INPUT_MAGIC || c->capture_count > SDP_MAX_CAPTURE || c->phase_count > SDP_PHASES) return 0;
+    if (!c->phase_count) {
+        if (!c->reads || c->reads > SDP_MAX_READS || !c->blocks || c->blocks > sizeof(buffer) / 512) return 0;
+        s.input.phase_count = 1; s.input.phase[0] = (struct sdp_phase){c->first, c->blocks, c->reads, 0};
+    }
+    plan_total = 0;
+    for (unsigned p = 0; p < s.input.phase_count; ++p) {
+        const struct sdp_phase *ph = &s.input.phase[p];
+        if (!ph->reads || !ph->blocks || ph->blocks > SUNXI_MMC_MAX_DMA_BLOCKS || plan_total + ph->reads > 4096u) return 0;
+        phase_first[p] = plan_total; plan_total += ph->reads;
+    }
+    for (unsigned p = s.input.phase_count; p <= SDP_PHASES; ++p) phase_first[p] = plan_total;
+    if (s.input.phase_count > 1) { plan_end_us = 40000000u; lifetime_us = 50000000u; end_us = 55000000u; }     /* a multi-phase plan of up to 4096 requests */
+    for (unsigned p = 0; p < SDP_PHASES; ++p) pstat[p].min_us = UINT64_MAX;
     volatile const struct sunstone_probe_session *session = (const void *)(uintptr_t)SUNSTONE_PROBE_SESSION_ADDRESS;
     if (c->region_bytes && (c->region_flags & SDP_REGION_LOAD)) { plan_end_us = 70000000u; lifetime_us = 80000000u; end_us = 85000000u; }
     uint64_t generation = session->generation | 1, owner = session->epoch | 1, handoff = session->lease | 1;
@@ -214,6 +238,12 @@ static int setup(void)
         .kind = SUNXI_MMC_SD, .voltage_mask = 0x00300000, .sd_profile = SUNXI_MMC_SD_HIGH_SPEED4, .dma = DESCRIPTORS,
         .observe_s18 = 1};          /* ACMD41 carries S18R and the card's S18A is kept in the OCR; CMD11 is never sent */
     if (!s.config.topology) return 0;
+    if (c->uhs_mode > 3) return 0;
+    if (c->uhs_mode) {              /* a UHS-I lifetime: the profile that moves the bank, SDR25 only, no S18A observation */
+        s.config.sd_profile = SUNXI_MMC_SD_UHS_SDR104; s.config.observe_s18 = 0; s.config.sdr25_only = 1;
+        s.config.start_1v8 = c->uhs_mode >= 2;
+        if (c->uhs_mode == 3) s.config.sdr25_only = 0;       /* SDR104 and the CMD19 sweep; the core falls back to SDR25 without a window */
+    }
     /* Establish entry state, do not require it: the pins carry whatever the boot ROM and the runner left
      * (the provider accepts the passive and the ROM JTAG patterns). The inherited fields are read here,
      * recorded in the report's restoration words, and handed to the provider as the state to replace.
@@ -388,7 +418,9 @@ static int step(void)
         r = a733_mmc_platform_card(&s.platform, &s.card, s.config.deadline_us);
         if (r == A733_MMC_BUSY) return 0;
         if (r != A733_MMC_READY) return stop(4);
-        s.card_valid = 1; s.identified_us = now_us() - s.start; s.stage = STATUS; return 2;
+        s.card_valid = 1; s.identified_us = now_us() - s.start; s.stage = STATUS;
+        pf_ready[0] = *(volatile uint32_t *)0x02000048; pf_ready[1] = *(volatile uint32_t *)0x02000070;
+        pf_ready[2] = *(volatile uint32_t *)0x02000040; return 2;
     case STATUS: {
         /* ACMD13 (CMD55, then CMD13 with a 64-byte block): a read, in the read-only command set. */
         static uint8_t st[SUNXI_MMC_SD_STATUS_BYTES] __attribute__((aligned(64)));
@@ -408,15 +440,19 @@ static int step(void)
         s.stage = READ; return 2;
     }
     case READ: {
-        if (s.done == s.input.reads) { s.stage = CAPTURE; return 2; }
+        if (s.done == plan_total) { s.stage = CAPTURE; return 2; }
         uint64_t now = now_us();
         if (now >= s.start + PLAN_END_US) { s.stage = CAPTURE; return 2; }
-        sunstone_probe_progress();
-        uint64_t first = (uint64_t)s.input.first + (uint64_t)s.done * s.input.blocks;
-        if (first + s.input.blocks > s.card.sectors) return stop(5);
+        locate(s.done, &cur_phase, &cur_index);
+        const struct sdp_phase *ph = &s.input.phase[cur_phase];
+        if (!(ph->flags & SDP_PH_QUICK) || !(cur_index & 31u)) sunstone_probe_progress();
+        cur_blocks = ph->blocks;
+        uint64_t first = (uint64_t)ph->first + (uint64_t)cur_index * ph->blocks;
+        if (first + ph->blocks > s.card.sectors) return stop(5);
         s.started = counter();
         if (!s.done) s.first_start = s.started;
-        r = a733_mmc_platform_read(&s.platform, first, s.input.blocks, buffer, s.input.blocks * 512u, now + READ_US);
+        if (!cur_index) phase_started[cur_phase] = s.started;
+        r = a733_mmc_platform_read(&s.platform, first, ph->blocks, buffer, ph->blocks * 512u, now + READ_US);
         if (r == A733_MMC_BUSY) return 0;
         if (r != A733_MMC_PENDING) return stop(5);
         s.stage = POLL; return 2;
@@ -427,15 +463,21 @@ static int step(void)
             if (r == A733_MMC_COMPLETE) {
                 s.last_done = counter();
                 uint64_t us = (s.last_done - s.started) / 24;
-                elapsed[s.done] = us > UINT32_MAX ? UINT32_MAX : (uint32_t)us; s.stage = TAKE; return 2;
+                if (s.done < SDP_MAX_READS) elapsed[s.done] = us > UINT32_MAX ? UINT32_MAX : (uint32_t)us;
+                struct sdp_phase_stat *ps = &pstat[cur_phase];
+                ps->sum_us += us; if (us < ps->min_us) ps->min_us = us; if (us > ps->max_us) ps->max_us = us;
+                ++ps->n; if (us > 5000) ++ps->over5; if (us > 10000) ++ps->over10;
+                ps->window_ticks = s.last_done - phase_started[cur_phase];
+                s.stage = TAKE; return 2;
             }
             if (r != A733_MMC_PENDING && r != A733_MMC_BUSY) return stop(6);
         }
     case TAKE:
         r = a733_mmc_platform_take(&s.platform, &s.result, s.config.lifetime_deadline_us);
         if (r == A733_MMC_BUSY) return 0;
-        if (r != A733_MMC_READY || s.result.error != SUNXI_MMC_OK || s.result.received != s.input.blocks * 512u) return stop(7);
-        crcs[s.done] = crc32(buffer, s.input.blocks * 512u);
+        if (r != A733_MMC_READY || s.result.error != SUNXI_MMC_OK || s.result.received != cur_blocks * 512u) return stop(7);
+        if (s.done < SDP_MAX_READS) crcs[s.done] = (s.input.phase[cur_phase].flags & SDP_PH_QUICK) ? 0 : crc32(buffer, cur_blocks * 512u);
+        bytes_total += cur_blocks * 512u;
         if (s.done < SDP_TIMED)
             timing[s.done] = (struct sdp_timing){s.result.command_us, s.result.first_byte_us, s.result.done_us,
                 s.result.clean_us, s.result.invalidate_us, s.result.polls};
@@ -480,7 +522,7 @@ static int quiet(void)
 }
 static int close_card(void)
 {
-    if (!s.done || s.done != s.input.reads || !quiet() || atomic_load_explicit(&s.failed, memory_order_acquire)) return 0;
+    if (!s.done || s.done != plan_total || !quiet() || atomic_load_explicit(&s.failed, memory_order_acquire)) return 0;
     enum a733_mmc_platform_result r;
     do {
         if (now_us() >= s.config.lifetime_deadline_us) return 0;
@@ -495,17 +537,17 @@ static void report(int outcome)
 {
     volatile struct sdp_report *o = REPORT;
     memset((void *)o, 0, sizeof *o);
-    o->magic = SDP_REPORT_MAGIC; o->version = 1;
-    o->stage = s.stage; o->reason = outcome ? s.reason : 0; o->done = s.done; o->planned = s.input.reads;
+    o->magic = SDP_REPORT_MAGIC; o->version = 2;
+    o->stage = s.stage; o->reason = outcome ? s.reason : 0; o->done = s.done; o->planned = plan_total;
     o->identified_us = s.identified_us; o->elapsed_us = now_us() - s.start;
-    if (s.done) { o->read_window_ticks = s.last_done - s.first_start; o->bytes = (uint64_t)s.done * s.input.blocks * 512u; }
+    if (s.done) { o->read_window_ticks = s.last_done - s.first_start; o->bytes = bytes_total; }
     const struct sunxi_mmc_card *c = &s.card;
     if (s.card_valid) {
         for (unsigned i = 0; i < 4; ++i) { o->cid[i] = c->cid[i]; o->csd[i] = c->csd[i]; }
         o->ocr = c->ocr; o->rca = c->rca; o->sectors = c->sectors;
         for (unsigned i = 0; i < 8; ++i) o->scr[i / 4] |= (uint64_t)c->scr[i] << (8 * (i % 4));
         uint32_t divisor = (c->module_divisor & 0x7fu) | ((c->module_divisor & SUNXI_MMC_MODULE_300M) ? 0x80u : 0u);
-        o->mode = (uint64_t)SUNXI_MMC_SD_HIGH_SPEED4 | ((uint64_t)c->bus_width << 8) | ((uint64_t)c->timing << 16) |
+        o->mode = (uint64_t)s.config.sd_profile | ((uint64_t)c->bus_width << 8) | ((uint64_t)c->timing << 16) |
             ((uint64_t)divisor << 24);
         o->card_hz = c->card_hz;
     }
@@ -514,13 +556,26 @@ static void report(int outcome)
     for (unsigned i = 0; i < 16; ++i) o->baseline_end[i] = end[i];
     o->clock_off = s.clock_off; o->pmic_parked = atomic_load_explicit(&s.pmic_parked, memory_order_acquire);
     o->capture_done = s.captured;
-    for (unsigned i = 0; i < s.done; ++i) { o->elapsed[i] = elapsed[i]; o->crc[i] = crcs[i]; }
+    for (unsigned i = 0; i < s.done && i < SDP_MAX_READS; ++i) { o->elapsed[i] = elapsed[i]; o->crc[i] = crcs[i]; }
+    for (unsigned p = 0; p < SDP_PHASES; ++p) { o->stat[p] = pstat[p]; if (!pstat[p].n) o->stat[p].min_us = 0; }
     for (unsigned i = 0; i < SDP_TIMED; ++i) o->timing[i] = timing[i];
     memcpy((void *)o->sector, sectors, sizeof sectors);
     memcpy((void *)&o->fat, &fat, sizeof fat);
     memcpy((void *)&o->region, &region, sizeof region);
     memcpy((void *)o->sd_status, status_copy, sizeof status_copy);
     if (s.card_valid) memcpy((void *)o->switch_status, c->switch_status, sizeof o->switch_status);
+    o->uhs[0] = s.input.uhs_mode; o->uhs[1] = s.card_valid ? c->signal_1v8 : 0; o->uhs[2] = s.card_valid ? c->uhs_outcome : 0;
+    o->uhs[3] = s.card_valid ? c->reentered : 0; o->uhs[4] = pf_ready[0]; o->uhs[5] = pf_ready[1];
+    o->uhs[6] = *(volatile uint32_t *)0x02000048; o->uhs[7] = *(volatile uint32_t *)0x02000070;
+    o->uhs[8] = pf_ready[2]; o->uhs[9] = *(volatile uint32_t *)0x02000040;
+    o->uhs[10] = (uint64_t)s.platform.fault_line | (uint64_t)s.platform.fault_why << 16 | (uint64_t)s.platform.stage << 24 |
+        (uint64_t)s.platform.fault << 32;
+    o->uhs[11] = stop_word;
+    if (s.card_valid) {
+        o->uhs[12] = c->tuning_map;
+        o->uhs[13] = (uint64_t)c->sample_delay | (uint64_t)c->tuning_start << 8 | (uint64_t)c->tuning_width << 16 | (uint64_t)c->uhs_outcome << 24;
+        o->uhs[14] = c->card_hz; o->uhs[15] = c->module_hz;
+    }
     o->status_result = status_result; o->status_us = status_us;
     if (status_result) { o->au_sectors = sunxi_mmc_au_sectors(status_copy, 0); o->au_sectors_uhs = sunxi_mmc_au_sectors(status_copy, 1); }
     __asm__ volatile("dsb sy" ::: "memory");
@@ -565,13 +620,27 @@ static void sd_task(void *unused)
     if (r > 0 && !quiet()) { s.reason = 10; r = -1; }
     if (r > 0 && !close_card()) { s.reason = 11; r = -1; }
     s.closed = r > 0;
+    /* The stop word of a lifetime that cannot return: the SD platform's fault line, why, stage, the S18A answer, the bank's speed-mode
+     * support bits, whether the card signals 1.8 V and a fold of the read CRCs, so a failure after the reads still carries its site and
+     * the result (the fault record's esr holds 32 bits; its site byte holds the reason). */
+    {
+        uint32_t crc8 = 0, line = s.platform.fault_line > 1023 ? 1023 : s.platform.fault_line;
+        for (unsigned i = 0; i < s.done && i < SDP_MAX_READS; ++i) crc8 ^= crcs[i] ^ (crcs[i] >> 8) ^ (crcs[i] >> 16) ^ (crcs[i] >> 24);
+        stop_word = (uint64_t)((line << 22) | ((s.platform.fault_why & 3u) << 20) | ((s.platform.stage & 31u) << 15) |
+            ((s.card_valid && (s.card.ocr >> 24 & 1) ? 1u : 0u) << 14) | ((s.card_valid ? (s.card.switch_status[13] & 31u) : 0u) << 9) |
+            ((s.card_valid && s.card.signal_1v8 ? 1u : 0u) << 8) | (crc8 & 255u));
+        /* A lifetime that failed before the card was identified (reason 3) has no results to carry; its stop word names the core's own state instead: the
+         * fault line, why and stage as above, then the core's error (4 bits), its protocol step (6 bits) and half the CMD19 sample delay it had reached (5 bits). */
+        if (s.reason == 3 || !s.card_valid)
+            stop_word = (uint64_t)((line << 22) | ((s.platform.fault_why & 3u) << 20) | ((s.platform.stage & 31u) << 15) |
+                ((s.platform.core.result.error & 15u) << 11) | ((s.platform.core.protocol & 63u) << 5) | ((s.platform.core.tune_delay >> 1) & 31u));
+    }
     report(r > 0 ? 0 : 1);
     /* With the platform constructed and not closed, the lifetime cannot return. The fault record then
      * carries the stop: the line field is the reason, the detail is platform fault, platform stage, task
      * stage and completed reads. */
     if (r <= 0 && s.platform.initialized)
-        platform_panic((const char *)(uintptr_t)(((uint64_t)s.platform.fault << 24) | ((uint64_t)s.platform.stage << 16) |
-                       ((uint64_t)s.stage << 8) | (s.done & 255)), s.reason);
+        platform_panic((const char *)(uintptr_t)stop_word, s.reason);
     platform_exit(r > 0 ? 0 : 1);
 }
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name) { (void)task; platform_panic(name, 0); }

@@ -12,6 +12,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "sd_hw.h"
+#include "os_space.h"
 #include "../board/application.h"
 #include "sunstone_crumb.h"
 #include "fat32_rw.h"
@@ -90,8 +91,14 @@ static void serve(struct request *r)
     finish(r, ok);
 }
 
+/* TTBR0 as the owner's first instruction found it: the QEMU check requires the kernel's table. */
+static volatile uint64_t entry_ttbr0;
+uint64_t os_sd_owner_entry_ttbr(void) { return entry_ttbr0; }
 static void owner_main(void *unused)
 {
+    uint64_t ttbr;
+    __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
+    entry_ttbr0 = ttbr;
     (void)unused;
     hw = os_sd_open_owner();
     atomic_store(&first_us, sunstone_deadline_now_us());
@@ -138,15 +145,17 @@ static int post(_Atomic(struct request *) *slot, struct request *r, int wait)
  * caller is the application's EL0 task, which would otherwise pass its own level on to the task it creates. */
 int os_sd_owner_task_privileged(void (*entry)(void *), void *context) { (void)context; return entry == owner_main; }
 
+/* The owner task, once started: for the QEMU check that it holds no application tag. */
+TaskHandle_t os_sd_owner_task(void) { return owner; }
+
 /* Start the owner task; the caller is told when the card is open (os_large_device) or has failed. */
 static int start(void)
 {
     if (owner) return atomic_load(&ready) == 1;
     ready_waiter = xTaskGetCurrentTaskHandle();
-    owner = xTaskCreateStatic(owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb);
-    /* A task takes the creator's application tag; the owner is an OS service task and keeps its own index 0
-     * (include/sunstone_notify.h). */
-    if (owner) vTaskSetApplicationTaskTag(owner, NULL);
+    /* The caller is the application's task, which would pass its address space on to the task it creates; the owner is
+     * an OS service task and runs in the kernel's table from its first instruction (include/os_space.h). */
+    owner = OS_TASK_CREATE_IN_KERNEL_SPACE(xTaskCreateStatic(owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb));
     if (!owner) { os_sd_diag[0] = 10; return 0; }
     /* The owner gives the notification once the card is open or has failed. A wake is only a hint (any other notification would end a
      * single wait early), so wait on the state, on the caller's own index, until a time bound measured in microseconds. */

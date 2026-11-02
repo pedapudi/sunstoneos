@@ -5,7 +5,7 @@
 
 #define SDP_INPUT_MAGIC UINT64_C(0x3144524450445353)   /* "SSPDRD1" in little-endian bytes */
 #define SDP_REPORT_MAGIC UINT64_C(0x3154505250445353)
-#define SDP_MAX_READS 256u
+#define SDP_MAX_READS 512u
 #define SDP_MAX_CAPTURE 512u
 #define SDP_TIMED 32u            /* reads whose per-phase times are reported */
 
@@ -18,10 +18,19 @@ struct sdp_input {
     uint64_t fat_first, fat_sectors;   /* a FAT32 partition to inspect read-only; fat_sectors zero: none */
     uint64_t region_bytes;             /* a region to take from upper memory; zero: none */
     uint32_t region_flags;             /* SDP_REGION_LOAD: load the named file into it */
-    uint32_t reserved;
+    uint32_t uhs_mode;                 /* 0: high speed at 3.3 V, S18A observed; 1: UHS-I lifetime 1 (switch, SDR25 at 1.8 V, bank back to 3.3 V at close);
+                                          2: UHS-I lifetime 2 (the card still signals 1.8 V: bank to 1.8 V first, identify without CMD11, SDR25);
+                                          3: the same entry, then SDR104 with tuning (SDR25 if no window) */
     char file_name[48];                /* root-directory path of the file to load */
     uint8_t file_sha256[32];           /* its SHA-256 */
+    /* A plan of up to SDP_PHASES sequential phases, run one after the other in one lifetime: phase p reads reads sectors-runs of blocks sectors
+     * from first, request after request. phase_count zero: the single plan above (reads, blocks, first). flags: SDP_PH_QUICK skips the per-request CRC
+     * and the progress call except every 32nd request, so requests follow one another as closely as the platform allows. */
+    uint32_t phase_count, reserved2;
+    struct sdp_phase { uint32_t first, blocks, reads, flags; } phase[8];
 };
+#define SDP_PHASES 8u
+#define SDP_PH_QUICK 1u
 #define SDP_REGION_LOAD 1u
 
 #define SDP_FAT_ENTRIES 64u
@@ -94,7 +103,16 @@ struct sdp_report {
     /* The CMD6 response of the last switch: the support bits of every function group (byte 12 and 13 are group 1, the bus speed
      * modes: bit 0 SDR12, 1 SDR25, 2 SDR50, 3 SDR104, 4 DDR50) and the function the switch selected (byte 16 low nibble). */
     uint8_t switch_status[64];
+    /* UHS-I lifetimes: [0] mode, [1] the card signals 1.8 V, [2] outcome (sunxi_mmc_uhs_outcome), [3] identified by re-entry, [4] GPIO_POW_VAL and
+     * [5] GPIO_POW_VAL_SET_CTL when the card was identified, [6] and [7] the same after the close, [8] and [9] GPIO_POW_MOD_SEL then and after,
+     * [10] the platform's fault: source line | why << 16 | stage << 24 | fault << 32, [11] the stop word the probe published on a failed lifetime,
+     * [12] the tuning map (bit d set: sample delay d passed), [13] chosen sample delay | window start << 8 | window width << 16 | outcome << 24,
+     * [14] card clock, Hz, [15] module clock, Hz. */
+    uint64_t uhs[16];
+    /* Per phase: the sum, least and greatest request time in microseconds and the window from the first submission to the last completion in ticks of
+     * the 24 MHz counter, the requests, those over 5 ms and those over 10 ms. */
+    struct sdp_phase_stat { uint64_t sum_us, min_us, max_us, window_ticks; uint32_t n, over5, over10, reserved; } stat[8];
 };
-_Static_assert(sizeof(struct sdp_input) == 160 - 6 * 4 + 4 * SDP_MAX_CAPTURE, "input wire size");
+_Static_assert(sizeof(struct sdp_input) == 2320, "input wire size");
 
 #endif

@@ -6,5 +6,5 @@
     {"name": "input", "kind": "input", "access": ["read"], "bytes": 1048576}
   ],
   "deadlines": {"run_us": 2000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
-  "output_limit": 16
+  "output_limit": 64
 }

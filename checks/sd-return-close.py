@@ -15,6 +15,7 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--failures-only', action='store_true', help='only idle, update-stall, gate and partial-release failures')
     p.add_argument('--admission', action='store_true', help='only close refusal boundaries')
+    p.add_argument('--lifetimes', action='store_true', help='the UHS-I lifetimes of the SD recovery design, with a cut at every poll')
     a = p.parse_args(); e = a.output.resolve(); e.mkdir(parents=True, exist_ok=False)
     raw = (ROOT / 'checks/sunxi-mmc.c').read_text()
     (e / 'mmc-card-model.h').write_text(raw[raw.index('struct model {'):raw.index('static int barrier(void *ctx)')])
@@ -28,10 +29,10 @@ def main():
                'drivers/storage/a733_mmc_platform.c', 'drivers/storage/sunxi_mmc.c',
                'drivers/clock/a733_clock_leases.c', 'drivers/power/a733_rail_leases.c',
                'drivers/power/a733_pmic.c', 'drivers/gpu/a733_gpu_resources.c',
-               'drivers/pinctrl/a733_pins.c', 'drivers/pinctrl/a733_pin_tables.c', 'checks/sd-return-close.c']
+               'drivers/pinctrl/a733_pins.c', 'drivers/pinctrl/a733_pin_tables.c', 'drivers/storage/a733_mmc_platform_native.c', 'drivers/storage/a733_storage_bounds.c', 'checks/sd-return-close.c']
     flags = [shutil.which('clang-21'), '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
              '-Wno-unused-function', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
-             '-fno-omit-frame-pointer', '-Iinclude', '-Ichecks', '-I'+str(e)]
+             '-fno-omit-frame-pointer', '-DA733_MMC_NATIVE_HOST_TEST', '-Iinclude', '-Ichecks/host', '-I'+str(Path.home()/'.cache/sunstoneos/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2/include'), '-Ichecks', '-I'+str(e)]
     commands = []
 
     def run(command, name):
@@ -54,7 +55,16 @@ def main():
         inputs.append(dict(path=str(source), sha256=sha, snapshot=str(dest.relative_to(e))))
     (e / 'inputs.json').write_text(json.dumps(inputs, indent=2)+'\n')
     run(flags+sources+['-o', str(e / 'close')], 'build')
-    print(run([str(e / 'close')]+(['--admission'] if a.admission else ['--failures-only'] if a.failures_only else []), 'run'), end='')
+    if a.lifetimes:
+        # the bank's answer after the write back to 3.3 V: as modeled, and at once
+        import os
+        for scenario in ('0', '1'):
+            os.environ['PF_RESTORE'] = scenario
+            print(f'PF restore scenario {scenario}: ', end='')
+            print(run([str(e / 'close'), '--lifetimes'], 'run-' + scenario), end='')
+        os.environ.pop('PF_RESTORE')
+    else:
+        print(run([str(e / 'close')]+(['--admission'] if a.admission else ['--failures-only'] if a.failures_only else []), 'run'), end='')
     assert all(hashlib.sha256(Path(r['path']).read_bytes()).hexdigest()==r['sha256'] for r in inputs)
     (e / 'result.json').write_text(json.dumps(dict(result='pass', physical=False,
         scope='actual provider close under ASan/UBSan; existing card/PMIC model, no protocol suite replay'), indent=2)+'\n')

@@ -1,0 +1,30 @@
+{
+  "name": "heap-test",
+  "devices": {
+    "required": [],
+    "optional": []
+  },
+  "cpu": {
+    "cluster": "a55",
+    "workers": 1,
+    "priority": 2,
+    "stack_bytes": 8192,
+    "heap_bytes": 6291456
+  },
+  "regions": [
+    {
+      "name": "input",
+      "kind": "input",
+      "access": [
+        "read"
+      ],
+      "bytes": 4096
+    }
+  ],
+  "deadlines": {
+    "run_us": 2000000,
+    "return_reserve_us": 5000000,
+    "progress_window_us": 1000000
+  },
+  "output_limit": 64
+}

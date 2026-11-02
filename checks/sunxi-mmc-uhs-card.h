@@ -23,7 +23,7 @@ struct uhs {
     unsigned width, sdr, sdr104, sdr104_busy, set_refuses, cmd11_timeout, no_dat_low, no_dat_high;
     unsigned pending_done, no_cc, no_vsd, set_fails, bad_caps, fatal_delay, cmd19, cmd11, cmd6_uhs, cmd6_hs;
     unsigned window[2][2], s18r_seen, cmd11_before_cmd2, cid_seen, dat0_masked;
-    unsigned restart_reads, restart_stuck, restart_gap;
+    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18, tune_kinds, stuck, stuck_always, dat0_busy, unfixable, card_err_next;
     uint64_t answered, gated, restarted, clock_started, done_delay;
 };
 static unsigned passes(struct uhs *u, unsigned d)
@@ -72,6 +72,7 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
 {
     struct uhs *u = v; struct model *m = &u->base;
     if (off == 4 && (value & (1u << 31))) u->dat0_masked = 1;
+    if (off == 0 && u->stuck && (value & 7) && !u->unfixable) { u->stuck = 0; u->card_err_next = 1; m->reg[0x18/4] &= ~(1u << 31); }     /* a controller reset ends a stuck command */
     if (off != 0x18) return write32(m, off, value);
     unsigned cmd = value & 63, arg = m->reg[0x1c/4];
     if (value & (1u << 21)) {
@@ -92,6 +93,11 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
             m->reg[0x18/4] = 0; return 1;
         }
         assert(u->phase == 0 || u->phase == 3);
+        /* A card that still holds DAT0 low after a failed read: a clock update waits for DAT0 unless the clock control masks it (the vendor masks DAT0 in every
+         * clock update for this reason). The wait ends when the update is made with the mask set. */
+        if (u->dat0_busy && !(m->reg[4/4] & (1u << 31))) { m->reg[0x18/4] = value; return 1; }
+        u->dat0_busy = 0;
+        if (u->unfixable && u->stuck) { m->reg[0x18/4] = value; return 1; }       /* a controller that stays stuck through reset and update */
         return write32(m, off, value);
     }
     assert(!(value & VSW) || cmd == 11);
@@ -116,6 +122,8 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
     if (cmd == 2) { u->cid_seen = 1; if (u->cmd11) u->cmd11_before_cmd2 = 1; assert(u->phase == 0 || u->phase == 3); }
     if (m->selected && (cmd == 55 || cmd == 51 || cmd == 6 || cmd == 19)) {
         reply(m, cmd, value, arg);
+        /* A transfer aborted by a controller reset leaves the card reporting COM_CRC_ERROR (bit 23) in the next response, once. */
+        if (cmd == 19 && u->card_err_next) { m->reg[0x20/4] |= 1u << 23; u->card_err_next = 0; }
         if (cmd == 55) { assert(arg == 0x12340000); m->app = 1; m->reg[0x20/4] |= 1u << 5; }
         else if (cmd == 51) {
             assert(m->app && !arg && m->reg[0x10/4] == 8); m->app = 0; m->data_command = value; m->fifo_total = 8;
@@ -123,7 +131,7 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
         else if (cmd == 6) {
             assert(!m->app && u->width == 4 && m->reg[0xc/4] == 1 && m->reg[0x10/4] == 64);
             m->data_command = value; m->fifo_total = 64; memset(u->sw, 0, 64);
-            u->sw[13] = 3 | (u->sdr104 ? 8 : 0); u->sw[29] = u->sdr104_busy ? 8 : 0;
+            u->sw[13] = 3 | (u->sdr104 && u->phase == 3 ? 8 : 0);   /* functions 2 to 4 are reported only at 1.8 V (specification Table 4-11 text) */ u->sw[29] = u->sdr104_busy ? 8 : 0;
             if ((arg & 0xf) == 3) {
                 assert(u->phase == 3 && (arg == 0x00fffff3 || arg == 0x80fffff3)); ++u->cmd6_uhs;
                 u->sw[16] = u->sdr104 && !u->sdr104_busy ? 3 : 0xf;
@@ -138,11 +146,20 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
             assert(!(m->reg[0x5c/4] & (1u << 31)) && (m->reg[0x100/4] & 0x1fff0001u) == ((64u << 16) | 1u));
             assert(m->reg[8/4] == 0x040000ffu);
             ++u->cmd19; m->data_command = value; m->fifo_total = 64; memcpy(u->data, pattern, 64);
-            if (d == u->fatal_delay) m->reg[0x38/4] |= 1u << 11;
+            if (d == u->fatal_delay) m->reg[0x38/4] |= 1u << 18;   /* terminal in a sweep, unlike a sampling error (the vendor driver does not look at it either) */
             else if (!passes(u, d)) {
-                if (d % 3 == 0) m->reg[0x38/4] |= 1u << 7;      /* Data CRC error. */
-                else if (d % 3 == 1) u->data[5] ^= 0x10;         /* Wrong pattern, clean CRC. */
-                else { m->reg[0x38/4] = 1u << 9; m->data_command = 0; m->fifo_total = 0; } /* No data. */
+                /* What a wrong sample point does on the board (the vendor kernel counts every one of these as a failed delay): a data CRC error,
+                 * a wrong pattern with a clean CRC, no data, a FIFO run error (bit 11), start and end bit errors (bits 13 and 15). The kinds
+                 * 3 and 4 were absent from the first model, and the core treated the FIFO run error as terminal. */
+                unsigned kind = u->stuck_always ? 5 : u->tune_kinds ? d % u->tune_kinds : d % 3;
+                if (kind == 0) m->reg[0x38/4] |= 1u << 7;      /* Data CRC error. */
+                else if (kind == 1) u->data[5] ^= 0x10;         /* Wrong pattern, clean CRC. */
+                else if (kind == 2) { m->reg[0x38/4] = 1u << 9; m->data_command = 0; m->fifo_total = 0; } /* No data. */
+                else if (kind == 3) m->reg[0x38/4] |= 1u << 11; /* FIFO run error. */
+                else if (kind == 6) m->reg[0x38/4] |= 1u << 12; /* Hardware locked. */
+                else if (kind == 7) m->reg[0x38/4] |= 1u << 10; /* Data starvation. */
+                else if (kind == 5) { m->reg[0x38/4] |= 1u << 9; m->reg[0x18/4] |= 1u << 31; u->stuck = 1; u->dat0_busy = 1; } /* The command never completes: START stays set until the controller is reset. */
+                else m->reg[0x38/4] |= (1u << 13) | (1u << 15); /* Start and end bit errors. */
             }
         }
         return 1;

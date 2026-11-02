@@ -22,6 +22,7 @@ def module(name, path):
 
 
 manifest_tool = module('ss_host_manifest', ROOT / 'tools/sunstone-manifest.py')
+memory_layout = module('ss_host_memory_layout', ROOT / 'tools/memory_layout.py')
 session_lifetime = module('ss_host_session_lifetime', ROOT / 'tools/session_lifetime.py')
 PREFIX_BYTES, MAX_BYTES = 592, 4096
 SESSION_MAGIC, SESSION_VERSION = 0x324e4f4953534553, 1
@@ -127,8 +128,8 @@ def bind_npu_pool(image, services):
     if pool is None or NPU not in services:
         return services
     start, end = pool
-    require(0x40000000 <= start < end <= 0x48000000 and not (start | end) & 0x1fffff,
-            'The NPU pool must be whole 2 MiB blocks inside the write-back RAM that EL0 reaches.')
+    require(memory_layout.npu_pool_valid(start, end) and not (start | end) & 0x1fffff,
+            'The NPU pool must be whole 2 MiB blocks: the legacy pool, one ending at 0x47000000, or one in the slot 1 area.')
     services = dict(services)
     npu = bytearray(services[NPU])
     struct.pack_into('<QQ', npu, NPU_POOL_OFFSET, start, end - start)
@@ -387,11 +388,15 @@ def usb_pool_geometry(elf):
     return None
 
 
-def backup_regions(image, uploads=()):
-    """Union uploaded spans with the manifest WORK and OUTPUT regions."""
+def backup_regions(image, uploads=(), scratch=False):
+    """Union uploaded spans with the manifest WORK and OUTPUT regions that the runner preserves.
+
+    A region the manifest marks scratch is left out; scratch=True keeps it, for the ranges that the CPU-return
+    terminal cleans, which does not depend on what the runner saves."""
     info = image_manifest(image)
     spans = [(r['address'], r['address'] + r['bytes']) for r in
-             regions(info['manifest'], (manifest_tool.KIND['work'], manifest_tool.KIND['output']))]
+             regions(info['manifest'], (manifest_tool.KIND['work'], manifest_tool.KIND['output']))
+             if scratch or not r['access'] & manifest_tool.ACCESS['scratch']]
     spans.extend((r['address'], r['address'] + r['bytes']) for r in uploads if r['bytes'])
     pool = usb_pool_geometry(info['elf'])
     if pool:

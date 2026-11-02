@@ -27,6 +27,10 @@
 #include "../../apps/os/os.h"
 #include "../../apps/os/application.h"
 #include "../../apps/os/cpu-return-el0.h"
+TaskHandle_t os_application_main_task(void);
+uint64_t os_sd_owner_entry_ttbr(void) __attribute__((weak));
+extern uint64_t os_space_kernel_ttbr;
+TaskHandle_t os_sd_owner_task(void) __attribute__((weak));   /* only an image with the SD owner has one */
 
 /* Identity of the image. The session names it and the OS refuses a session
  * that does not (os_session_admitted). */
@@ -213,6 +217,18 @@ static void monitor(void *unused)
             put(&l, "THROTTLE-CLEARED t_us="); put_dec(&l, t); flush(&l);
         }
         if (os_application_finished() && (cleared || t > s->limit_us) && t >= s->hold_us) {
+            {   /* The address space of the application's tasks and of the OS task that its call started: the main task
+                 * is tagged when the application has a space, the SD owner (created by the application's call, through
+                 * the creator's tag) is not. */
+                struct line s = {.used = 0};
+                TaskHandle_t owner = os_sd_owner_task ? os_sd_owner_task() : 0;
+                put(&s, "TASK-SPACE main="); put_dec(&s, xTaskGetApplicationTaskTag(os_application_main_task()) != 0);
+                if (owner) {
+                    put(&s, " sdowner="); put_dec(&s, xTaskGetApplicationTaskTag(owner) != 0);
+                    put(&s, " sdentry="); put_dec(&s, os_sd_owner_entry_ttbr() != os_space_kernel_ttbr);   /* 1: it began in a space */
+                }
+                flush(&s);
+            }
             put(&l, "APP-FINISHED t_us="); put_dec(&l, t);
             const struct ss_result *r = (const void *)ss_result_record;
             put(&l, " status="); put_dec(&l, r->status);
@@ -291,6 +307,7 @@ void kernel_main(void)
 
 #ifdef QEMU_OS_UPPER
 #include "app_large.h"
+#ifndef QEMU_OS_SD_OWNER             /* an image with the SD owner has the owner's device, not this RAM disk */
 /* The virtual board's block device: a 40 MiB RAM disk that the check loads at 0x48000000 (a bare FAT32 volume). */
 #define LARGE_DISK ((const uint8_t *)(uintptr_t)0x48000000)
 #define LARGE_DISK_SECTORS 81920u
@@ -326,6 +343,7 @@ const struct os_large_device *os_large_device(void)
                                                   0, LARGE_DISK_SECTORS, large_buffers};
     return &device;
 }
+#endif
 void os_large_report(const struct large_slot *slot, const struct app_space *space)
 {
     struct line l = {.used = 0};

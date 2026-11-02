@@ -13,22 +13,46 @@ import struct
 INPUT_MAGIC = 0x3144524450445353
 REPORT_MAGIC = 0x3154505250445353
 MAX_CAPTURE = 512
-INPUT_BYTES = 2184
+INPUT_BYTES = 2320
 # Byte offsets in struct sdp_report (apps/sd-backup-probe/probe.h); checks/sd-backup-probe.py compares them with the compiler's.
 OFFSET = dict(magic=0, stage=16, reason=24, done=32, planned=40, identified_us=48, elapsed_us=56, cid=80, csd=112, ocr=144,
               rca=152, sectors=160, scr=168, mode=184, card_hz=192, baseline_start=200, baseline_end=328, clock_off=456,
-              pmic_parked=464, capture_done=472, sector=3296, sd_status=272848, status_result=272912, au_sectors=272920,
-              au_sectors_uhs=272928, status_us=272936, switch_status=272944)
-REPORT_BYTES = 273008
+              pmic_parked=464, capture_done=472, elapsed=480, crc=2528, sector=5344, sd_status=274896, status_result=274960, au_sectors=274968,
+              au_sectors_uhs=274976, status_us=274984, switch_status=274992, uhs=275056, stat=275184)
+REPORT_BYTES = 275568
 
 
-def pack_input(sectors):
+def pack_input(sectors, uhs_mode=0, reads=1, blocks=8, phases=()):
     if not 1 <= len(sectors) <= MAX_CAPTURE or sectors != sorted(set(sectors)):
         raise SystemExit('give 1 to 512 distinct sectors')
-    raw = struct.pack('<Q4I', INPUT_MAGIC, 1, 8, 0, len(sectors)) + struct.pack(f'<{MAX_CAPTURE}I', *(sectors + [0] * (MAX_CAPTURE - len(sectors))))
-    raw += struct.pack('<2Q', 0, 0) + struct.pack('<QII48s32s', 0, 0, 0, b'', bytes(32))
-    assert len(raw) == INPUT_BYTES
+    raw = struct.pack('<Q4I', INPUT_MAGIC, reads, blocks, 0, len(sectors)) + struct.pack(f'<{MAX_CAPTURE}I', *(sectors + [0] * (MAX_CAPTURE - len(sectors))))
+    raw += struct.pack('<2Q', 0, 0) + struct.pack('<QII48s32s', 0, 0, uhs_mode, b'', bytes(32))
+    phases = list(phases)[:8]
+    raw += struct.pack('<2I', len(phases), 0) + b''.join(struct.pack('<4I', *p) for p in phases) + bytes(16 * (8 - len(phases)))
+    assert len(raw) == INPUT_BYTES, len(raw)
     return raw
+
+
+def stop_fields_identification(w):
+    """The stop word of a lifetime that failed before the card was identified (probe reason 3): fault line 10 bits, why 2, platform stage 5, the core's
+    error 4 (sunxi_mmc_error: 1 io, 2 time, 3 timeout, 4 admission, 5 variant, 6 controller, 7 card, 8 unsupported, 9 signal), its protocol step 6 (the
+    P_* enum of drivers/storage/sunxi_mmc.c), and the CMD19 sample delay reached divided by two, 5."""
+    return dict(fault_line=w >> 22 & 1023, why=w >> 20 & 3, platform_stage=w >> 15 & 31, core_error=w >> 11 & 15, core_protocol=w >> 5 & 63,
+                tune_delay_half=w & 31)
+
+
+def stop_fields(w):
+    """The stop word of a failed lifetime (esr of the fault record): fault line 10 bits, why 2, platform stage 5, S18A 1, support bits 5,
+    card at 1.8 V 1, fold of the read CRCs 8."""
+    return dict(fault_line=w >> 22 & 1023, why=w >> 20 & 3, platform_stage=w >> 15 & 31, s18a=w >> 14 & 1, group1_support_bits=hex(w >> 9 & 31),
+                card_at_1v8=w >> 8 & 1, crc_fold=hex(w & 255))
+
+
+UHS_OUTCOMES = ('none', 'sdr104', 'host', 'declined', 'no_sdr104', 'no_window', 'limited_to_sdr25')
+
+
+def bank_level(pow_val):
+    return {2: 3300, 3: 1800}.get((pow_val >> 10) & 3)
 
 
 SPEED_MODES = ('SDR12', 'SDR25', 'SDR50', 'SDR104', 'DDR50')
@@ -62,8 +86,27 @@ def decode(raw, requested):
                clock_off=q('clock_off')[0], pmic_parked=q('pmic_parked')[0], captured=captured,
                status_result=q('status_result')[0], au_sectors=q('au_sectors')[0], au_sectors_uhs=q('au_sectors_uhs')[0],
                status_us=q('status_us')[0], sd_status=raw[OFFSET['sd_status']:OFFSET['sd_status'] + 64].hex(),
-               switch_status=raw[OFFSET['switch_status']:OFFSET['switch_status'] + 64].hex())
+               switch_status=raw[OFFSET['switch_status']:OFFSET['switch_status'] + 64].hex(), uhs=list(q('uhs', 16)))
     out.update(capabilities(out['ocr'], out['cid'], bytes.fromhex(out['switch_status'])))
+    u = out['uhs']
+    out['uhs_report'] = dict(mode=u[0], card_signals_1v8=bool(u[1]), outcome=UHS_OUTCOMES[u[2]] if u[2] < len(UHS_OUTCOMES) else u[2],
+                             reentered=bool(u[3]), bank_at_ready=dict(pow_val=hex(u[4]), pf_bank_mv=bank_level(u[4]), selector=hex(u[5])),
+                             bank_after_close=dict(pow_val=hex(u[6]), pf_bank_mv=bank_level(u[6]), selector=hex(u[7])),
+                             withstand_mode=dict(at_ready=hex(u[8]), after_close=hex(u[9])),
+                             platform_fault=dict(line=u[10] & 0xffff, why=(u[10] >> 16) & 0xff, stage=(u[10] >> 24) & 0xff, fault=(u[10] >> 32) & 0xff),
+                             stop_word=hex(u[11]), stop_word_fields=stop_fields(u[11]),
+                             tuning=dict(map=f'{u[12]:016x}', passing_delays=[d for d in range(64) if u[12] >> d & 1], chosen_delay=u[13] & 255,
+                                         window_start=u[13] >> 8 & 255, window_width=u[13] >> 16 & 255, outcome_code=u[13] >> 24 & 255),
+                             card_clock_hz=u[14], module_clock_hz=u[15])
+    st = [struct.unpack_from('<4Q4I', raw, OFFSET['stat'] + 48 * p) for p in range(8)]
+    out['phases'] = [dict(phase=p, requests=x[4], mean_ms=round(x[0] / x[4] / 1000, 3), min_ms=round(x[1] / 1000, 3), max_ms=round(x[2] / 1000, 3),
+                          over_5ms=x[5], over_10ms=x[6], window_s=round(x[3] / 24e6, 4), sum_s=round(x[0] / 1e6, 4)) for p, x in enumerate(st) if x[4]]
+    n = min(out['done'], 512)
+    el = struct.unpack_from(f'<{n}I', raw, OFFSET['elapsed']); crc = struct.unpack_from(f'<{n}I', raw, OFFSET['crc'])
+    win, nbytes = struct.unpack_from('<2Q', raw, 64)
+    out['sustained'] = dict(bytes=nbytes, seconds=round(win / 24e6, 4), MBps=round(nbytes / (win / 24e6) / 1e6, 2) if win else 0)
+    out['reads'] = dict(done=n, crc=[hex(c) for c in crc[:32]], per_request_us=dict(first=el[0], median=sorted(el)[n // 2], min=min(el), max=max(el)) if n else None,
+                        per_request_MBps_median=round(131072 / sorted(el)[n // 2], 2) if n else 0)
     if captured != len(requested):
         raise SystemExit(f'captured {captured} of {len(requested)} sectors; stage {out["stage"]} reason {out["reason"]}')
     records = b''.join(struct.pack('<Q', s) + raw[OFFSET['sector'] + 512 * i:OFFSET['sector'] + 512 * (i + 1)] for i, s in enumerate(requested))
@@ -76,15 +119,25 @@ def main():
     i = sub.add_parser('input')
     i.add_argument('--output', type=Path, required=True)
     i.add_argument('--ranges', nargs='+', required=True, help='FIRST:COUNT pairs, for example 0:1 32768:2')
+    i.add_argument('--uhs-mode', type=int, default=0, choices=(0, 1, 2, 3), help='0 high speed with S18A observed, 1 UHS-I lifetime 1, 2 UHS-I lifetime 2, 3 re-entry then SDR104 with tuning')
+    i.add_argument('--reads', type=int, default=1)
+    i.add_argument('--phase', action='append', default=[], metavar='FIRST_SECTOR:BLOCKS:READS[:quick]', help='one phase of a multi-phase plan (up to 8), run in order in one lifetime')
+    i.add_argument('--blocks', type=int, default=8)
     d = sub.add_parser('decode')
     d.add_argument('--report', type=Path, required=True)
     d.add_argument('--ranges', nargs='+', required=True)
     d.add_argument('--backup', type=Path, required=True, help='the backup file to write')
+    k = sub.add_parser('stop', help='decode the fault record of a lifetime that stopped (site byte and esr word)')
+    k.add_argument('--site', type=lambda x: int(x, 0), required=True, help='the fault word low byte: the probe reason')
+    k.add_argument('--esr', type=lambda x: int(x, 0), required=True)
     a = p.parse_args()
+    if a.cmd == 'stop':
+        print(json.dumps(dict(reason=a.site, **(stop_fields_identification(a.esr) if a.site == 3 else stop_fields(a.esr))), indent=1)); return
     sectors = sorted({s for r in a.ranges for s in range(int(r.split(':')[0]), int(r.split(':')[0]) + int(r.split(':')[1]))})
     if a.cmd == 'input':
         with a.output.open('xb') as f:
-            f.write(pack_input(sectors))
+            ph = [tuple(int(x) for x in p.replace(':quick', ':1').split(':')) + ((0,) if p.count(':') == 2 else ()) for p in a.phase]
+            f.write(pack_input(sectors, a.uhs_mode, a.reads, a.blocks, ph))
         print(a.output, len(sectors), 'sectors')
     else:
         out, records = decode(a.report.read_bytes(), sectors)

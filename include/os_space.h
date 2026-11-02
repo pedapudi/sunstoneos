@@ -19,11 +19,41 @@ extern uint8_t os_space_active;
  * slot from 16 up is zero. */
 #define OS_KERNEL_L1_HEAD 16
 void os_kernel_l1_head(uint64_t out[OS_KERNEL_L1_HEAD]);
+/* The 512 level-2 entries of level-1 slot 1 (0x40000000 to 0x80000000), copied the same way, so that a space can own
+ * blocks above the 128 MiB that EL0 reaches in every space (app_space_build_l2). */
+#define OS_KERNEL_L2_ENTRIES 512
+void os_kernel_l2_slot1(uint64_t out[OS_KERNEL_L2_ENTRIES]);
+/* The main task's stack when the OS took it from the application memory ledger with an unmapped guard block below it
+ * (apps/os/large.c), or null when the image keeps its static stack. */
+void *os_large_main_stack(void);
 static inline void os_space_switch_in(const void *tag)
 {
     if (!os_space_active) return;
-    uint64_t want = tag ? *(const uint64_t *)tag : os_space_kernel_ttbr, have;
+    /* Bit 0 of a tag is the creating mark (OS_TASK_CREATE_IN_KERNEL_SPACE), never part of the address. */
+    uint64_t want = tag ? *(const uint64_t *)((uintptr_t)tag & ~(uintptr_t)1) : os_space_kernel_ttbr, have;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(have));
     if (have != want) __asm__ volatile("msr ttbr0_el1, %0" :: "r"(want) : "memory");
 }
+
+/* traceTASK_CREATE: the new task takes the creator's tag, so a task that the application creates runs in the
+ * application's space with no call of its own. The creator is the task running on the creating core, which is
+ * absent (null) while boot code creates tasks before the scheduler starts. A macro, because the task control
+ * block is private to the kernel files that expand it. A task of the OS is created from boot code or from an
+ * OS task with no tag, and inherits none. */
+#define os_space_inherit(creator, created) \
+    do { if ((creator) && !(created)->pxTaskTag && !((uintptr_t)(creator)->pxTaskTag & 1u)) \
+             (created)->pxTaskTag = (creator)->pxTaskTag; } while (0)
+
+/* Create a task of the OS from a task of an application (an SDK call that starts a service task). The creating task's
+ * own tag carries bit 0 for the duration of the creation, so the hook above gives the new task no tag at all: it runs in
+ * the kernel's table from its first instruction, whichever core takes it, with no window in which it holds the
+ * application's. The tag is an aligned pointer to the space record, so bit 0 is free; the switch hook masks it. A
+ * creator with no tag is an OS task already and is left alone. The mark is on the creating task only, so there is no
+ * table and no limit on how many tasks create at once. expr is evaluated once; its value is the macro's. */
+#define OS_TASK_CREATE_IN_KERNEL_SPACE(expr) ({ \
+    TaskHookFunction_t os_tag_ = xTaskGetApplicationTaskTag(NULL); \
+    if (os_tag_) vTaskSetApplicationTaskTag(NULL, (TaskHookFunction_t)((uintptr_t)os_tag_ | 1u)); \
+    __typeof__(expr) os_created_ = (expr); \
+    if (os_tag_) vTaskSetApplicationTaskTag(NULL, os_tag_); \
+    os_created_; })
 #endif
