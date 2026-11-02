@@ -11,6 +11,9 @@ __attribute__((used)) const uint64_t os_cpu_return_entry_profile[4]={
     UINT64_C(0x31544e4552505543),1,4,8
 };
 uint32_t os_cpu_return_entry_refusal;
+/* The time at which the lease registry was first seen busy in this run of consecutive passes; zero when it was not. */
+uint64_t os_cpu_return_entry_busy_since;
+#define OS_BUSY_LIMIT_US 100000u
 static int refuse(uint32_t line,uint32_t detail)
 {os_cpu_return_entry_refusal=detail<<12|(line&0xfff);return -1;}
 #define REFUSE(detail) refuse(__LINE__,(uint32_t)(detail))
@@ -24,7 +27,14 @@ int os_cpu_return_entry_guard(const struct a733_cpu_clock *c,
     /* The clock lease registry is a try-lock: another core inside it at this moment (the NPU start-up takes its clocks
      * there) says busy, which is a pass to try again, not a refusal. */
     const int thermal=os_cpu_return_thermal_ready();
-    if(thermal==2&&p->initialized)return 0;
+    if(thermal==2&&p->initialized){
+        /* Bounded: a registry that stays busy for 100 ms is a fault, and the session deadline ends the guard in any case
+         * (the thermal task stops being the owner once the board is no longer live). */
+        if(!os_cpu_return_entry_busy_since)os_cpu_return_entry_busy_since=now?now:1;
+        if(now-os_cpu_return_entry_busy_since<=OS_BUSY_LIMIT_US)return 0;
+        return REFUSE(0x7ff);
+    }
+    os_cpu_return_entry_busy_since=0;
     if(!p->initialized||thermal!=1)return REFUSE(p->initialized|os_cpu_return_thermal_state()<<1);
     if(c->failed||c->inherited!=3)return REFUSE(c->inherited);
     /* The PMIC inspection's DCDC5/DCDC3 readings, in 10 mV units to 1540 mV. */

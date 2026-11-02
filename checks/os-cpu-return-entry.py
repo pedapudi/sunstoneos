@@ -51,6 +51,7 @@ def main():
     c=layout.layouts['a733_cpu_clock'];policy=layout.layouts['a733_thermal_policy']
     cases=[('success',lambda m:None,1),('thermal-not-ready',lambda m:setattr(m,'thermal_ready',0),-1),
         ('thermal-lease-registry-busy',lambda m:setattr(m,'thermal_ready',2),0),
+        ('thermal-lease-registry-busy-too-long',lambda m:(setattr(m,'thermal_ready',2),m.put64(m.layout.address('os_cpu_return_entry_busy_since'),1)),-1),
         ('missing-sensor',lambda m:m.put32(m.p+policy['published_seen'],15),0),
         ('stale-sensor',lambda m:m.put64(m.p+policy['seen_us']+32,99),-1),
         ('future-sensor',lambda m:m.put64(m.p+policy['seen_us'],1000200),-1),
