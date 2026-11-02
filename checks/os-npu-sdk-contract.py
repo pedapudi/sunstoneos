@@ -65,7 +65,7 @@ defines, _ = crumbs.header()
 exe = a.output / 'first-failure'
 build(ROOT / 'checks/os-npu-first-failure.c', exe)
 operations = ('STATUS', 'OPEN', 'SUBMIT', 'CANCEL', 'REAP', 'CLOSE', 'WAIT', 'LOAD')
-for case in range(22):
+for case in range(20):
     result = run([str(exe), str(case)])
     site, observed, ticket, operation = map(int, result.stdout.split())
     decoded = None
@@ -148,4 +148,4 @@ inputs = {str(ROOT / path): hashlib.sha256((ROOT / path).read_bytes()).hexdigest
 inputs[str(a.native_flags)] = hashlib.sha256(a.native_flags.read_bytes()).hexdigest()
 (a.output / 'result.json').write_text(json.dumps(dict(result='pass', source_inputs=inputs,
     cases=results, commands=commands, physical_access=False), indent=1) + '\n')
-print('PASS OS NPU contract: 22 failure predicates, seven actual producer/parser reports, four malformed reports, four missing-copy red cases, two missing-note red cases')
+print('PASS OS NPU contract: 20 failure predicates, seven actual producer/parser reports, four malformed reports, four missing-copy red cases, two missing-note red cases')

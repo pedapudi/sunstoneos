@@ -6,8 +6,10 @@
  * The fixed-mapping change deletes this file (docs/designs/npu-breadth.md). */
 #include "npu_runtime.h"
 
-/* CRC32C with the Armv8 CRC instructions. No final inversion: values are
- * compared only with references computed by this function. */
+/* CRC32C. No final inversion: values are compared only with references
+ * computed by this function. The board uses the Armv8 CRC instructions; the
+ * host check shim computes the same function with a table. */
+#ifdef __aarch64__
 __attribute__((target("crc")))
 uint32_t npu_runtime_crc32c(uint32_t crc, const void *data, size_t bytes)
 {
@@ -18,6 +20,21 @@ uint32_t npu_runtime_crc32c(uint32_t crc, const void *data, size_t bytes)
     while (bytes--) crc = __builtin_arm_crc32cb(crc, *p++);
     return crc;
 }
+#else
+uint32_t npu_runtime_crc32c(uint32_t crc, const void *data, size_t bytes)
+{
+    static uint32_t table[256];
+    if (!table[1])
+        for (uint32_t i = 0; i < 256; ++i) {
+            uint32_t v = i;
+            for (unsigned k = 0; k < 8; ++k) v = (v >> 1) ^ ((0u - (v & 1)) & 0x82f63b78u);
+            table[i] = v;
+        }
+    const unsigned char *p = data;
+    while (bytes--) crc = (crc >> 8) ^ table[(crc ^ *p++) & 255];
+    return crc;
+}
+#endif
 
 int npu_runtime_tables_intact(struct npu_runtime *rt)
 {
