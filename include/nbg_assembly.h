@@ -26,7 +26,7 @@ struct nbg_assembly_plan {
 /* The low device range [0, NBG_ASSEMBLY_LOW_RESERVED) is reserved: placed() refuses a buffer that starts below it, so a
  * pointer word that no patch sets and whose value is below it cannot address a mapped byte. A stream-processor operation
  * that keeps its result in the engine's own scratch (the steps of a softmax) carries a small offset there, up to 118,496
- * in the compiled encoder layers (docs/hardware/npu-command-formats.md, "Unpatched pointer words"). */
+ * in compiled attention layers (docs/hardware/npu-command-formats.md, "Unpatched pointer words"). */
 #define NBG_ASSEMBLY_LOW_RESERVED 0x100000u
 #ifndef NBG_ASSEMBLY_MAX_TENSORS
 #define NBG_ASSEMBLY_MAX_TENSORS 8u

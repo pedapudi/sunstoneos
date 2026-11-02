@@ -171,7 +171,7 @@ def main():
          [(PATCH, g['deep'].patch_offset(3, 28) + 16, u32(104448)), (PATCH, g['deep'].patch_offset(3, 76) + 16, u32(110080))],
          [('nbg_assembly.c', 'aliased(nn, slot, source, op.kind) ||', '0 ||')])
     # 4b. A stream-processor operation that keeps its result in the engine's scratch carries an offset in its output
-    # pointer word that no patch sets (the steps of a softmax in the compiled encoder layers hold 0x4220 to 0x1cee0). The low
+    # pointer word that no patch sets (the steps of a softmax over 92 positions in compiled attention layers hold 0x4220 to 0x1cee0). The low
     # device range below NBG_ASSEMBLY_LOW_RESERVED is never given to a buffer (placed()), so such a word cannot reach a mapped
     # byte: it is admitted, and a word at or above the range is refused.
     low = g['sm64'].with_bytes(NN, g['sm64'].word_offset(1, 7), u32(0x4220))

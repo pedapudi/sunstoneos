@@ -75,8 +75,8 @@ All words are pairs of a register header and an operand.
 
 A pointer word that no patch sets (the output address of a stream-processor operation that keeps its result in the engine's
 own scratch, the first-input address of an operation without an input) holds a small offset and not an address of a
-buffer. The twelve graphs examined first held values below `0x1000` (words 6, 7, 20, 34). The compiled encoder layers
-(conformer layers at 92 frames, ACUITY 6.30.22, target `VIP9000NANODI_PLUS_PID0X1000003B`) hold larger ones: the softmax
+buffer. The twelve graphs examined first held values below `0x1000` (words 6, 7, 20, 34). Compiled attention layers
+(four heads over 92 positions, ACUITY 6.30.22, target `VIP9000NANODI_PLUS_PID0X1000003B`) hold larger ones: the softmax
 chain of each layer has eight stream-processor operations with the first input and its ring patched and the output
 pointer unpatched, and word 7 steps by `0x4220` (16,928 bytes, 92 * 92 * 2) from `0` to `0x1cee0`; the operations with
 only a state patch step by `0xb8` (184 bytes, 92 * 2), up to `0x508`. Their word 8 is `0x42201000` and `0xb81000`, that is the
