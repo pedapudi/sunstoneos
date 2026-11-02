@@ -92,8 +92,7 @@ def main():
         def locked(self):
             try: yield self
             finally:
-                if self.record.get('dram_dirty') and not self.record.get('dram_restored'):
-                    self.quarantine('unresolved DRAM')
+                self.settle_dram_ownership()
         def quarantine(self, reason):
             self.quarantined = True; self.record['quarantined'] = True
         def journal(self):pass
@@ -252,7 +251,9 @@ def main():
                                   'failure-return' if variant in ('failure-return','failure-return-npu-unstarted') else
                                   'watchdog-reset' if variant=='watchdog' else
                                   'host-error' if variant in ('late-fault','failure-return-unlinked') else 'result-mismatch'),(variant,result)
-        assert result['quarantined']==(not good),(variant,result)
+        # A watchdog reset returns a fresh ROM instance with DRAM lost: nothing to restore, nothing to quarantine.
+        assert result['quarantined']==(not good and variant!='watchdog'),(variant,result)
+        if variant=='watchdog':assert result['dram_lost'] and result['rom_returned'] and result['dram_released_by_reset']
         owner=owners[0]
         if not good:
             assert 'restore-rails' not in owner.events

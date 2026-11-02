@@ -122,7 +122,7 @@ and retained RTC breadcrumbs are classified before any DRAM result read.
 | `returned` | Matching return breadcrumbs, valid retirement report and matching output. This does not qualify the device's complete functionality. |
 | `failure-return` | The image linked the [failure return](designs/failure-return.md) and returned normally after its first failure. Retirement is valid (an NPU image may publish the never-started stop report, `finished` 2, which is accepted only here) and DRAM is restored; the breadcrumbs and the returned `ss_failure` record describe the failure. The result is failed (exit status 1) and `first_failure` holds the record. The port is not quarantined and not paused. |
 | `result-mismatch` | Uploaded bytes, the native report or the returned output differ from the required values. A failure return whose record differs from `--expect` is also reported here, after DRAM restoration. |
-| `watchdog-reset` | A new permitted FEL instance returned with WDT0 still enabled. Breadcrumbs identify the last stage and any first fault. DRAM is lost. |
+| `watchdog-reset` | A new permitted FEL instance returned with WDT0 still enabled. Breadcrumbs identify the last stage and any first fault. DRAM is lost. The runner disarms WDT0 on the fresh instance and releases it: the result records `dram_released_by_reset`, the instance is not quarantined, and the port is not paused. |
 | `no-return` | No accessible new FEL instance appeared within the watchdog window and margin. Recovery is unresolved. |
 | `refused-before-launch` | Image, session, helper or prerequisite validation stopped the submitted image before launch. Earlier setup helpers may have run. |
 | `host-error` | Host code, transport or evidence handling failed. Inspect the first failure and quarantine fields. |
@@ -137,6 +137,19 @@ board that misses its recovery deadline. A failed transfer ends commands to that
 instance. If WDT0 may be armed, the runner retains the port lock and observes
 host metadata through its recovery window. A verified fresh instance can be
 disarmed and released. There is no automatic repeat of the submitted image.
+
+A watchdog reset loses DRAM, and every run initializes DRAM from the training
+record before launch, so DRAM saved before a reset has no later use. After a
+reset the runner therefore releases a fresh instance that has `dram_lost` and
+`rom_returned` recorded and a read-back disarmed WDT0, even when the run had
+unrestored DRAM backups (`dram_dirty`, `npu_dirty`). The following state
+survives a reset and is not trusted across runs: PMIC rails and CPU supplies
+(a run normalizes them), the NPU power domain, the RTC breadcrumb words (the
+next arm clears them) and the host-side DDR training record (validated before
+use). A later NPU image reads the gated PPU and fabric state read-only and is
+refused when the domain is not coherently on. Unresolved DRAM ownership still
+quarantines a normal return on the same instance whose restoration or
+retirement failed, and every no-return, transport failure or unresolved return.
 
 The daemon pauses a port after:
 
@@ -168,6 +181,18 @@ finished entry. It changes no pause and applies no admission rule. The daemon
 skips a withdrawn entry because the entry is no longer queued. The daemon runs
 `tools/board.py` from its checkout, so the command is available after the daemon
 restarts on a checkout that contains it.
+
+`$board release PORT --reason TEXT` clears a quarantine that an earlier runner
+version recorded for a fresh post-reset instance; the coordinator alone uses it.
+It reads sysfs metadata and the device node identity and never opens the USB
+device. It accepts only the instance currently enumerated on PORT, only when the
+quarantine reason is the unresolved-DRAM-ownership reason, and only when the
+finished run that ended on that instance has outcome `watchdog-reset`,
+`rom_returned` and `dram_lost` true, and no cleanup failure. It moves the
+quarantine record to `~/.cache/sunstoneos/trash/recovery-required-released/`,
+records the reason and run in `ledger.jsonl` (event `released`), and refuses a
+no-return, transport failure, unresolved return or another instance. It does not
+change a pause; `$board resume PORT` does.
 
 ## Retain the electrical and storage checks
 
