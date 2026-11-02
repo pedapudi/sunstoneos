@@ -23,7 +23,7 @@ void npu_graphs_init(void) {}
 
 #ifdef NPU_GRAPHS_QUEUE
 /* Backpressure depth: one resident graph is submitted again and again through the EL0 ring while the application keeps at
- * most k jobs in flight, for k = 1, 2, 4 ... up to the ring. The submit call answers 0 when the ring is full; each such
+ * most k jobs in flight, for k = 1, 2, 4 ... up to twice the ring. The submit call answers 0 when the ring is full; each such
  * answer is counted. Record i holds k (input_bytes), the jobs (output_bytes), the counter ticks for all of them
  * (first_difference), the submit refusals (observed) and a check of the output at the end (status). */
 #define QUEUE_JOBS 1000u
@@ -54,7 +54,8 @@ static _Noreturn void npu_graphs_queue_main(void)
     static struct ss_npu_fence fences[SS_NPU_QUEUE_MAX_DEPTH];
     unsigned records = 0;
     receipt.start = ss_counter_ticks();
-    for (unsigned k = 1; k <= SS_NPU_QUEUE_MAX_DEPTH; k *= 2, ++records) {
+    /* The last k is twice the ring: the ring, not k, then limits the jobs in flight and refuses the rest. */
+    for (unsigned k = 1; k <= 2 * SS_NPU_QUEUE_MAX_DEPTH; k *= 2, ++records) {
         struct npu_graph_record *r = &receipt.graph[records];
         r->index = records; r->input_bytes = k; r->output_bytes = QUEUE_JOBS; r->status = NPU_GRAPH_NOT_RUN;
         unsigned submitted = 0, completed = 0, refused = 0;
