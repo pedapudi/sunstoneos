@@ -477,7 +477,8 @@ static int make_short(const char *name, uint8_t sfn[11], uint8_t *nt)
 
 static void make_basis(const char *name, uint8_t sfn[11])
 {
-    const char *dot = strrchr(name, '.');
+    const char *dot = NULL;                                   /* the last dot; no libc call, so the freestanding boards build it */
+    for (const char *q = name; *q; ++q) if (*q == '.') dot = q;
     while (*name == '.' || *name == ' ') ++name;
     if (dot && dot < name) dot = NULL;
     size_t stem_len = dot ? (size_t)(dot - name) : strlen(name);

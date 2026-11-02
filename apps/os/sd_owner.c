@@ -20,7 +20,7 @@
 
 #define OWNER_STACK_WORDS 2048u
 #define OWNER_PRIORITY (tskIDLE_PRIORITY + 2)
-#define READY_TIMEOUT_TICKS 8000u
+#define READY_TIMEOUT_US 10000000u
 #define WAIT_INDEX 1u              /* notification index a caller sleeps on; index 0 is the owner's */
 
 enum kind { K_READ, K_ASYNC_READ, K_WRITE, K_ENABLE, K_UNIT, K_REGION, K_CLOSE };
@@ -80,7 +80,7 @@ static void owner_main(void *unused)
     hw = os_sd_open_owner();
     atomic_store(&first_us, sunstone_deadline_now_us());
     atomic_store(&ready, hw ? 1 : -1);
-    if (ready_waiter) xTaskNotifyGive(ready_waiter);
+    if (ready_waiter) xTaskNotifyGiveIndexed(ready_waiter, WAIT_INDEX);
     if (!hw) vTaskSuspend(NULL);
     for (;;) {
         uint64_t slept_from = sunstone_deadline_now_us();
@@ -123,9 +123,16 @@ static int start(void)
     ready_waiter = xTaskGetCurrentTaskHandle();
     owner = xTaskCreateStatic(owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb);
     if (!owner) { os_sd_diag[0] = 10; return 0; }
-    if (atomic_load(&ready) == 0) (void)ulTaskNotifyTake(pdTRUE, READY_TIMEOUT_TICKS);   /* the owner gives it once the card is open or has failed */
+    /* The owner gives the notification once the card is open or has failed. A wake is only a hint (any other notification would end a
+     * single wait early), so wait on the state, on the caller's own index, until a time bound measured in microseconds. */
+    uint64_t t0 = sunstone_deadline_now_us(), ticks0 = xTaskGetTickCount();
+    while (atomic_load(&ready) == 0 && sunstone_deadline_now_us() - t0 < READY_TIMEOUT_US)
+        (void)ulTaskNotifyTakeIndexed(WAIT_INDEX, pdTRUE, pdMS_TO_TICKS(50));
     ready_waiter = NULL;
-    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) os_sd_diag[0] = 11;      /* no answer from the owner in time */
+    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) {                         /* no answer from the owner in time */
+        os_sd_diag[0] = 11; os_sd_diag[1] = sunstone_deadline_now_us() - t0;
+        os_sd_diag[2] = (uint64_t)atomic_load(&ready) & 0xffffffffu; os_sd_diag[3] = xTaskGetTickCount() - ticks0;
+    }
     return atomic_load(&ready) == 1;
 }
 

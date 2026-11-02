@@ -310,8 +310,8 @@ def session_for(elf, input_bytes):
     info = host.image_manifest(elf)
     identity = elf_bytes(elf, 'a733_smp_build_id', 32)
     services = {host.THERMAL: thermal_service(host.PREFIX_BYTES + host.SERVICE_BYTES[host.THERMAL])}
-    raw = host.session_bytes(board_prefix(identity), services, info['manifest'], info['sha256'], 0,
-                             host.BIND_SID, [input_bytes] if input_bytes is not None else [])
+    given = input_bytes if isinstance(input_bytes, list) else [input_bytes] if input_bytes is not None else []
+    raw = host.session_bytes(board_prefix(identity), services, info['manifest'], info['sha256'], 0, host.BIND_SID, given)
     epoch, generation, lease = struct.unpack_from('<3Q', raw, 24)
     # The supervised launch contract (apps/board/prepare.py request_bytes): the loader
     # stamps the times and the magic when it launches.
@@ -550,6 +550,15 @@ def main():
         application = image.application('large-test', ['checks/qemu-os/large-main.c'], manifest)
         return image.build(application)
 
+    def build_storage_write():
+        """The storage-write application on the write-capable owner (apps/os/sd_owner.c) over the board's RAM-disk card."""
+        image = Image(out / 'build-storage-write', extra_sources=['apps/os/sd_owner.c', 'platform/qemu-os/sd_hw.c',
+                                                                   'drivers/storage/a733_storage_bounds.c'])
+        application = image.application('storage-write', ['apps/storage-write-test/main.c', 'drivers/storage/fat32_rw.c',
+                                                           'apps/storage-write-test/sha256_ce.S'],
+                                        ROOT / 'apps/storage-write-test/manifest.json')
+        return image.build(application)
+
     def build_facts():
         image = Image(out / 'build-hw-facts', extra_defines=['-DSUNSTONE_A733_HW_FACTS=1'],
                       extra_sources=['platform/a733/hw_facts.c'])
@@ -576,7 +585,9 @@ def main():
         facts_elf = pool.submit(build_facts)
         large_elf = pool.submit(build_large, 'build-large', large_manifest_path(out / 'large-manifest.json', LARGE_DIGEST, LARGE_FILE))
         large_big_elf = pool.submit(build_large, 'build-large-too-big', ROOT / 'checks/qemu-os/large-too-big-manifest.json')
+        storage_write_elf = pool.submit(build_storage_write)
         large_elf, large_big_elf = large_elf.result(), large_big_elf.result()
+        storage_write_elf = storage_write_elf.result()
         os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
             os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result(),
             partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result(), facts_elf.result())
@@ -584,7 +595,8 @@ def main():
 
     def run_case(name, elf, scenario_bytes, input_bytes=data, memory='512M', extra_inputs=()):
         raw, contract, info = session_for(elf, input_bytes)
-        inputs = [(info['manifest']['regions'][0]['address'], input_bytes)] if input_bytes is not None else []
+        given = input_bytes if isinstance(input_bytes, list) else [input_bytes] if input_bytes is not None else []
+        inputs = [(info['manifest']['regions'][i]['address'], b) for i, b in enumerate(given)]
         inputs += list(extra_inputs)
         output, status, seconds = boot(elf, raw, contract, scenario_bytes, inputs, out / (name + '.log'), memory=memory)
         case = Case(name, output, status, seconds, out / (name + '.log'))
@@ -798,6 +810,43 @@ def main():
     c = run_case('large-regions-too-big', large_big_elf, scenario(usb_ready_ms=usb_delay_ms), memory='4G')
     c.require(c.main is None and not lines(c.output, 'LARGE-ADMITTED'), 'the application started although the ledger refused its regions')
     c.require(c.failure is not None, 'the refusal left no failure record')
+
+    # 12. The storage-write application through ss_storage_enable on the write-capable owner (apps/os/sd_owner.c), over a RAM-disk
+    # card that holds the real card's 395 backup sectors at their sector numbers and the runner's bounds blob. The software path
+    # (owner start, mailbox, blob copy, parse, verify against the backup hash) must succeed; the native register binding is the one
+    # step this board cannot model (platform/qemu-os/sd_hw.c), so the case stops at it and says so. A corrupted backup sector must
+    # be refused at the verify stage, which also shows that the diagnostic names it.
+    backup_dir = CACHE / 'sd-backup'
+    backup = (backup_dir / 'backup-395-sectors.bin').read_bytes()
+    blob = (backup_dir / 'bounds-input.bin').read_bytes()
+    storage_host = load('storage_write_host', ROOT / 'apps/storage-write-test/host.py')
+
+    def card_image(corrupt=None):
+        disk = bytearray(65536 * 512)
+        for at in range(0, len(backup), 520):
+            sector = struct.unpack_from('<Q', backup, at)[0]
+            disk[sector * 512:(sector + 1) * 512] = backup[at + 8:at + 520]
+        if corrupt is not None:
+            disk[corrupt * 512 + 100] ^= 1
+        return bytes(disk)
+
+    def decode_result(c):
+        chunks = sorted((int(l['offset']), l['hex']) for l in lines(c.output, 'APP-RESULT'))
+        c.require(chunks and [o for o, _ in chunks] == list(range(0, 512, 96)), 'the 512-byte result was not printed whole')
+        return storage_host.decode(bytes.fromhex(''.join(h for _, h in chunks)))
+    mode4 = storage_host.mode_input(4)
+    c = run_case('storage-write-enable', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, mode4], '512M',
+                 [(RAMDISK_ADDRESS, card_image())])
+    c.clean()
+    c.require(c.finished is not None, 'the application did not finish')
+    d = decode_result(c)
+    c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'enable did not succeed: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
+    c = run_case('storage-write-enable-backup-changed', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, mode4], '512M',
+                 [(RAMDISK_ADDRESS, card_image(corrupt=32770))])
+    c.clean()
+    d = decode_result(c)
+    c.require(d['status'] == 1 and d['diag0'] == 23 and d['diag3'] == 395,
+              'a changed backup sector was not refused at the verify stage: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
 
     elapsed = time.monotonic() - started
     summary = {'large_region_switch_cost': switch_cost, 'passed': True, 'physical_access': False, 'seconds': round(elapsed, 2), 'build_seconds': round(built, 2),

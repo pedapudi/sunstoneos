@@ -6,6 +6,7 @@
  * selects a mode (a little-endian u32, then a u64):
  *   0  create the file, sync, close, unmount and report (no read-back); a time guard (GUARD_US) stops the write, syncs and
  *      closes, and reports E_TIMEOUT with the bytes written;
+ *   4  open the card, enable the writes and report (the QEMU boot check; no mount, no write);
  *   3  read the whole file back against the stream and report (a separate run; the file must be FILE_BYTES long);
  *   1  interruption test, lifetime 1: write with a sync every 8 MiB, and after `cut_bytes` stop reporting progress so the
  *      watchdog resets the board in the middle of a flush cycle;
@@ -212,10 +213,18 @@ void storage_write_main(const struct ss_grant *grant)
     r.mode = mode_id;
     r.app_core = grant->main_core; r.guard_us = GUARD_US;
     {
-        struct ss_cpu_observation o = {0};
-        r.observed = (uint64_t)ss_cpu_observations(grant->main_core, &o);
-        r.isar0 = o.isar0;
-        use_ce = r.observed && ((o.isar0 >> 12) & 15) != 0;
+        /* The boot snapshot of ID_AA64ISAR0_EL1 (EL0 cannot read it): the application's core if it was observed, else the first observed
+         * Cortex-A76 core (part 0xd0b), which has the same implementation. `observed` holds a bit per observed core and, from bit 32,
+         * each core's SHA2 field; `isar0` the register that decided. */
+        struct ss_cpu_observation o = {0}, pick = {0};
+        int have = 0;
+        for (unsigned c = 0; c < 8; ++c) {
+            if (!ss_cpu_observations(c, &o)) continue;
+            r.observed |= UINT64_C(1) << c | ((o.isar0 >> 12) & 15) << (32 + 4 * c);
+            if (c == grant->main_core || (!have && ((o.midr >> 4) & 0xfff) == 0xd0b)) { pick = o; have = (c == grant->main_core) ? 2 : 1; }
+        }
+        r.isar0 = pick.isar0;
+        use_ce = have && ((pick.isar0 >> 12) & 15) != 0;
         r.sha_ce = use_ce;
     }
     r.cpu_hz = cpu_cycles_per_second(&r.cpu_calibration_ticks);
@@ -225,6 +234,7 @@ void storage_write_main(const struct ss_grant *grant)
     if (!ss_storage_region(flush->base, flush->bytes)) { r.status = E_REGION; (void)ss_storage_diagnostic(r.diag); finish_report(); }
     if (!ss_storage_device(&device)) { r.status = E_DEVICE; (void)ss_storage_diagnostic(r.diag); finish_report(); }
     r.au_sectors = device.au_sectors;
+    if (mode_id == 4) { collect(); finish_report(); }                   /* open and enable only (the QEMU boot check) */
     uint64_t base, sectors;
     if (!mbr_partition(&base, &sectors)) { r.status = E_MBR; finish_report(); }
     uint64_t t_start = ss_counter_ticks();
