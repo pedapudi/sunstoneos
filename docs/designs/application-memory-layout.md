@@ -444,6 +444,25 @@ fold of the worker's write equal to the main task's read of it over the 1 GiB he
 that the OS's wake-ups used to end now lasts until the worker's own give, so the change holds on the board. The mode's
 other results (modes 0 to 2) were recorded earlier.
 
+### Predicted board run of the preserving runner (step 4)
+
+Hypothesis: a preserving run (`--preserve-dram`, development off) of `slot1-test` mode 0 with the manifest
+`apps/slot1-test/manifest-preserve.json` (a 16 MiB WORK region at `0x48000000`, an 8 MiB OUTPUT region at `0x4a000000`
+and an 8 MiB scratch WORK region at `0x4b000000`, all in the slot 1 area above the old 48 MiB window) backs up the image
+RAM, the 16 MiB and the 8 MiB regions and not the scratch region, prints its estimate, completes inside the budget the
+submission names, and restores every saved byte.
+
+- **Expected.** The runner prints a preservation line of about 42 MiB and an estimate of about 160 s, under the budget of
+  240 s; the backup inventory in the run's record lists extents inside `0x41000000..0x42200000`, `0x48000000..0x49000000`
+  and `0x4a000000..0x4a800000` and none at `0x4b000000`; the session returns normally with the 32-byte result `{SLOT1
+  tag, 0x48000000, 16 MiB, fold}` of `~/.cache/sunstoneos/memlim-handoff-1102/expected-slot1-preserve.bin`; the record says
+  `dram_restored` true and the restoration's readback hashes equal the backup's.
+- **A different result and what it means.** A refusal before launch naming the estimate and the budget would mean the
+  estimate is above the budget (the rate or the extents differ from the record). Preservation extents that include
+  `0x4b000000` mean the scratch bit did not reach the backup list. A restore hash that differs from the backup is a defect of the
+  runner's transfer above `0x48000000`; the old range (below `0x80000000`) already contained those addresses, so this run
+  tests the new bookkeeping, the scratch attribute and the estimate, not a new reach.
+
 ### Predicted board run of the NPU pool in the slot 1 area
 
 Hypothesis: an `npu-graphs` image built from the recipe of the passing run `1793599845892192862-30dc9323` (seven
