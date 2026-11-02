@@ -57,7 +57,7 @@ enum { P_IDLE, P_SD_IF, P_SD_APP, P_SD_OCR, P_MMC_QUERY, P_MMC_OCR,
        P_SD_SCR_APP, P_SD_SCR, P_SD_WIDTH_APP, P_SD_WIDTH,
        P_SD_SWITCH_CHECK, P_SD_SWITCH_SET, P_SD_CLOCK, P_SD_MODE_STATUS,
        P_SD_VOLTAGE, P_SD_SIGNAL, P_SD_UHS_CHECK, P_SD_UHS_SET, P_SD_TUNE,
-       P_SD_TUNE_RECOVER, P_SD_STATUS_APP, P_SD_STATUS };
+       P_SD_TUNE_RECOVER, P_SD_STATUS_APP, P_SD_STATUS, P_WRITE_DMA, P_WRITE_DMA_STATUS };
 /* SD physical layer 9.10 section 4.2.4.5 and the pinned Linux
  * tuning_blk_pattern_4bit: the 64-byte four-bit CMD19 tuning block. */
 static const uint8_t tuning_pattern[64] = {
@@ -330,6 +330,43 @@ int sunxi_mmc_write(struct sunxi_mmc *h,const struct sunxi_mmc_write_request *r,
     queue(h,P_WRITE_PRE,13u|RESP|CRC|WAIT,(uint32_t)h->card.rca<<16,0,0);
     return 1;
 }
+/* One CMD25 write of 1 to SUNXI_MMC_MAX_DMA_BLOCKS blocks through the controller's descriptor DMA. The
+ * source is read by the controller, so it must stay exclusive and cache-clean for the whole operation
+ * (the adapter cleans it before the transfer); the core keeps no copy. The authority callback sees the
+ * exact request as for sunxi_mmc_write and every poll re-authenticates it. A transfer is not atomic: a
+ * fault retains the operation. Requires a DMA configuration. */
+int sunxi_mmc_write_dma(struct sunxi_mmc *h,const struct sunxi_mmc_write_request *r,
+                        const struct sunxi_mmc_write_authority *a)
+{
+    if(!h||!h->initialized||h->entered||h->state!=SUNXI_MMC_READY||!h->config.dma||
+       !a733_span_excl(r,sizeof(*r))||!a733_span_excl(a,sizeof(*a))||!a->admit||!r->policy_token||
+       a733_extents_overlap_prechecked((uintptr_t)h,sizeof(*h),(uintptr_t)r,sizeof(*r))||
+       a733_extents_overlap_prechecked((uintptr_t)h,sizeof(*h),(uintptr_t)a,sizeof(*a))||
+       !r->blocks||r->blocks>SUNXI_MMC_MAX_DMA_BLOCKS||r->bytes!=r->blocks*512u||
+       ((uintptr_t)r->source&63u)||(uint64_t)(uintptr_t)r->source>(UINT64_C(1)<<34)-r->bytes||
+       !a733_span_excl(r->source,r->bytes)||
+       a733_extents_overlap_prechecked((uintptr_t)h,sizeof(*h),(uintptr_t)r->source,r->bytes)||
+       a733_extents_overlap_prechecked((uintptr_t)r,sizeof(*r),(uintptr_t)r->source,r->bytes)||
+       a733_extents_overlap_prechecked((uintptr_t)a,sizeof(*a),(uintptr_t)r->source,r->bytes)||
+       !a733_ranges_disjoint(r->source,r->bytes,(const void *)h->config.dma,SUNXI_MMC_DMA_DESCRIPTORS*sizeof(*h->config.dma))||
+       r->deadline_us<=h->last_us||r->first_sector>=h->card.sectors||
+       r->blocks>h->card.sectors-r->first_sector||!writable(h))return 0;
+    uint64_t last=r->first_sector+r->blocks-1;
+    if((h->card.sector_addressed&&last>UINT32_MAX)||
+       (!h->card.sector_addressed&&last>UINT32_MAX/512u))return 0;
+    h->write_request=*r;h->write_authority=*a;
+    h->write_identity=(struct sunxi_mmc_write_identity){(uintptr_t)h,h->config.token,h->config.kind,h->card};
+    h->result=(struct sunxi_mmc_result){0};h->deadline_us=r->deadline_us;
+    h->borrowed=(uint8_t *)r->source;h->borrowed_bytes=r->bytes;
+    h->writing=1;h->dma_write=1;h->dma_read=1;h->state=SUNXI_MMC_WRITING;
+    h->entered=1;
+    int timed=time_ok(h);
+    h->entered=0;
+    if(!timed)return 0;
+    h->read_start_us=h->last_us;
+    queue(h,P_WRITE_PRE,13u|RESP|CRC|WAIT,(uint32_t)h->card.rca<<16,0,0);
+    return 1;
+}
 #endif /* SUNXI_MMC_READ_ONLY */
 static int interrupts(struct sunxi_mmc *h)
 {
@@ -436,7 +473,7 @@ static int fifo_step(struct sunxi_mmc *h)
     return 1;
 }
 static int dma_command(const struct sunxi_mmc *h)
-{ return h->dma_read && h->protocol == P_READ && h->data_bytes; }
+{ return h->dma_read && (h->protocol == P_READ || h->protocol == P_WRITE_DMA) && h->data_bytes; }
 static int since_read(struct sunxi_mmc *h,uint32_t *out)
 {
     if (!time_ok(h)) return 0;
@@ -540,6 +577,13 @@ static int command_step(struct sunxi_mmc *h)
                 if (!rd(h, 0x100, &t) || !wr(h, 0x100, (t & ~0x0fff0004u) | (block << 16) | 1u)) return 0;
             }
         }
+        /* A DMA write sets the write threshold as the board kernel's thld_ctl does for every 512-byte
+         * write (sunxi-mmc-v5p3x.c:647-701; docs/designs/mmc-multiblock-write.md): the block size in
+         * bits 27:16, the write enable (bit 2) set and the read enable (bit 0) clear. */
+        if (h->protocol == P_WRITE_DMA) {
+            uint32_t t;
+            if (!rd(h, 0x100, &t) || !wr(h, 0x100, ((t & ~0x0fff0001u) | (512u << 16) | 4u))) return 0;
+        }
         if ((h->command & AUTO) && !wr(h, 0x58, 0)) return 0;
         if (dma_command(h) && !dma_start(h)) return 0;
         if (!wr(h, 0x1c, h->argument) || !fence(h)) return 0;
@@ -557,7 +601,7 @@ static int command_step(struct sunxi_mmc *h)
                 if (v && !since_read(h,&h->result.first_byte_us)) return 0;
             }
         }
-        if((h->command&WRITE)&&(h->seen&DTC)&&h->position<h->data_bytes) {
+        if((h->command&WRITE)&&!dma_command(h)&&(h->seen&DTC)&&h->position<h->data_bytes) {
             fault(h,SUNXI_MMC_CONTROLLER);return 0;
         }
         /* CMD11 with the voltage-switch bit completes on the controller's
@@ -657,6 +701,12 @@ static int ready(struct sunxi_mmc *h) { return ready_except(h, 0); }
 #ifndef SUNXI_MMC_READ_ONLY
 static void next_write(struct sunxi_mmc *h)
 {
+    if(h->dma_write) {
+        uint64_t first=h->write_request.first_sector;
+        queue(h,P_WRITE_DMA,25u|RESP|CRC|DATA|WRITE|AUTO|WAIT,(uint32_t)(h->card.sector_addressed?first:first*512u),
+              h->borrowed,h->borrowed_bytes);
+        return;
+    }
     uint64_t first=h->write_request.first_sector+h->result.confirmed_blocks;
     uint32_t arg=(uint32_t)(h->card.sector_addressed?first:first*512u);
     queue(h,P_WRITE,24u|RESP|CRC|DATA|WRITE|WAIT,arg,
@@ -1078,6 +1128,20 @@ static void protocol(struct sunxi_mmc *h)
     case P_WRITE:
         if(card_response(h))ready_status(h,P_WRITE_STATUS);
         return;
+    case P_WRITE_DMA:
+        /* The data, the automatic CMD12 and the controller teardown are done; the card may still program. */
+        if(card_response(h)){h->result.submitted=h->borrowed_bytes;ready_status(h,P_WRITE_DMA_STATUS);}
+        return;
+    case P_WRITE_DMA_STATUS:
+        if(!card_response(h))return;
+        if((r&0x1f00u)==TRAN_READY) {
+            h->result.confirmed_blocks=h->write_request.blocks;
+            h->state=SUNXI_MMC_DONE;
+        } else if(((r>>9)&15u)==7u||((r&0x1f00u)==0x800u)) {
+            if(!a733_deadline_after(h->last_us,1000,&h->retry_us)){fault(h,SUNXI_MMC_TIME);return;}
+            ready_status(h,P_WRITE_DMA_STATUS);
+        } else fault(h,SUNXI_MMC_CARD);
+        return;
     case P_WRITE_STATUS:
         if(!card_response(h))return;
         if((r&0x1f00u)==TRAN_READY) {
@@ -1126,7 +1190,7 @@ int sunxi_mmc_take(struct sunxi_mmc *h, struct sunxi_mmc_result *out)
     *out = h->result;
     if (h->state == SUNXI_MMC_DONE) {
         h->state = SUNXI_MMC_READY; h->borrowed = 0; h->borrowed_bytes = 0; h->data = 0; h->data_bytes = 0;
-        h->writing=0;
+        h->writing=0;h->dma_write=0;
     }
     return 1;
 }

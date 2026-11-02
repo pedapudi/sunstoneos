@@ -1,7 +1,11 @@
 # Multiple-block writes with descriptor DMA in the SD core
 
-Status: the vendor-sequence comparison is complete; the core change and its host model are not implemented. The read
-side of the same core, and the ACMD13 SD Status read, are implemented and host-checked (`checks/sunxi-mmc.py`).
+Status: the vendor-sequence comparison is complete. The core implements `sunxi_mmc_write_dma` (CMD25 with the
+automatic CMD12, descriptor DMA, the vendor write threshold, DAT0 busy and a CMD13 confirmation), and
+`checks/sunxi-mmc-write-dma.c` drives it against a strict controller model (`checks/sunxi-mmc-write.py` runs it).
+Not implemented: the native register filter for CMD25 and the write threshold, which needs a bounded-write
+authority object bound to the platform; the platform wrapper; and any board run. The read side and the ACMD13
+SD Status read are implemented and host-checked (`checks/sunxi-mmc.py`).
 
 The reference is the board kernel `bsp/drivers/mmc/sunxi-mmc.c` and `sunxi-mmc-v5p3x.c` at
 `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f` (cached under `sources/sd-uhs/board-kernel-2ac08e8c…/`), the pinned Linux
@@ -35,7 +39,14 @@ the reset and teardown steps) and the CMD24 PIO write with its CMD13 confirmatio
 | CMD25 in the write-capable build only | `queue()` and the native command filter | the read-only command set is unchanged; ACMD13 needs nothing added (CMD13 and CMD55 are in it) |
 | Write threshold | `0x100` | Derived from `sunxi_mmc_thld_ctl_for_sdmmc_v5p3x` (`sunxi-mmc-v5p3x.c:647-701`): the transmit trigger level is 248 words (`SUNXI_DMA_TL_SDMMC_V5P3X`, line 52), so `tdtl` is 992 bytes. A 512-byte write satisfies `blksz <= 0xfff && blksz <= tdtl` at every timing, so the vendor sets `THLD[27:16] = 512` and the write threshold enable (bit 2), then clears the read threshold enable (bit 0) because the request is not a read. The core must do the same for every write profile, not only SDR104 (it writes `THLD` today only for SDR104 reads, and the native filter allows that write only in the UHS profile) |
 
-## Host checks required before any board run
+## Host checks (core level; all pass in `checks/sunxi-mmc-write.py`)
+
+The model accepts only the registers the sequence uses, checks the command word, block size and count, A12A, argument,
+the threshold word, FTRGL, the descriptor chain and the cache phases, consumes the descriptors one per poll, and
+raises the interrupts and DAT0 busy on a schedule. Mutations of the threshold enable, the automatic stop, the first
+descriptor flag, the programming wait and the PIO-only data check each fail the check.
+
+## Checks still required before any board run
 
 - The strict controller model refuses any register access the sequence does not use, models the IDMAC consuming
   descriptors in order, `OWN` clearing, the data-end and automatic-stop interrupts, and DAT0 busy that outlasts the data.
