@@ -19,6 +19,13 @@ _start:
     b.hs .Lpark
     msr tpidr_el1, x1
     msr spsel, #1
+    // The stages before the kernel leave SP_EL0 at a stack of their own. On
+    // the board the first launch found 0x41039f60, an address in the
+    // read-only code block. Every core takes that kind of value here: a task
+    // frame saved before the first task restore faults instead of landing in
+    // writable RAM that happens to be valid.
+    adr x2, _start + 0x100
+    msr sp_el0, x2
     ldr x0, =__exception_stacks
     add x1, x1, #1
     add x0, x0, x1, lsl #15
@@ -48,6 +55,28 @@ _start:
     bl platform_secondary
     b .Lpark
 
+// A task is running when the exception is taken from a t-mode (EL1t or EL0t,
+// SPSR.M[0] clear), and the port's context save then pushes the frame onto
+// SP_EL0. That register must lie in a writable stack, which is RAM below the
+// exception stacks. A value left from the boot stages, such as an address in
+// the code block, would make the save fault on the board. A violation ends
+// the run with its own record. This is the board's check, not the kernel's.
+.macro check_task_sp
+    stp x0, x1, [sp, #-16]!
+    mrs x0, spsr_el1
+    tbnz x0, #0, 1f
+    mrs x0, sp_el0
+    tst x0, #15
+    b.ne .Lsp_violation
+    ldr x1, =__ram_start
+    cmp x0, x1
+    b.lo .Lsp_violation
+    ldr x1, =__exception_stacks
+    cmp x0, x1
+    b.hs .Lsp_violation
+1:  ldp x0, x1, [sp], #16
+.endm
+
 .section .text.vectors, "ax"
 .balign 2048
 .global _freertos_vector_table
@@ -58,7 +87,7 @@ _freertos_vector_table:
 .endm
 .rept 3
     slot synchronous_exception
-    slot FreeRTOS_IRQ_Handler
+    slot irq_entry
     slot platform_exception
     slot platform_exception
 .endr
@@ -67,7 +96,13 @@ _freertos_vector_table:
 .endr
 
 .section .text, "ax"
+irq_entry:
+    check_task_sp
+    b FreeRTOS_IRQ_Handler
+.Lsp_violation:
+    bl qemu_os_sp_violation
 synchronous_exception:
+    check_task_sp
     stp x0, x1, [sp, #-16]!
     mrs x0, esr_el1
     lsr x0, x0, #26
@@ -133,4 +168,6 @@ synchronous_exception:
     b platform_exit_privileged
 .Lexception:
     ldp x0, x1, [sp], #16
+    // An exception from an EL0 task that the failure return admits does not return here.
+    bl os_cpu_return_el0_try
     b platform_exception

@@ -26,6 +26,7 @@
 #include "../../apps/board/application.h"
 #include "../../apps/os/os.h"
 #include "../../apps/os/application.h"
+#include "../../apps/os/cpu-return-el0.h"
 
 /* Identity of the image. The session names it and the OS refuses a session
  * that does not (os_session_admitted). */
@@ -102,6 +103,14 @@ void qemu_os_crumb_fail(uint64_t site, uint64_t value, uint64_t caller)
     atomic_store(&failed_at, now_us() + 1);
 }
 int qemu_os_failed(void) { return atomic_load(&failed); }
+/* The returning lifetime is not linked here, so no claim follows. The vector under test is
+ * apps/os/cpu-return-el0.S: this function records what the OS image's function records
+ * (apps/os/cpu-return.c) and suspends the task, which runs on the stack the vector gave it. */
+_Noreturn void os_cpu_return_el0_fault(uint64_t esr, uint64_t far, uint64_t elr)
+{
+    sunstone_crumb_fail(os_cpu_return_el0_site(esr), os_cpu_return_el0_value(esr, far), (const void *)(uintptr_t)elr);
+    for (;;) vTaskSuspend(NULL);
+}
 
 /* ---- Platform functions the OS image takes from the cached platform ----- */
 int a733_smp_device_preparation_admitted(void)
@@ -190,7 +199,11 @@ static void monitor(void *unused)
         vTaskDelay(1);
         const uint64_t t = now_us();
         const uint64_t failure = atomic_load(&failed_at);
-        if (failure && t >= failure + FAILURE_GRACE_US) platform_exit(3);
+        if (failure && t >= failure + FAILURE_GRACE_US) {
+            put(&l, "APP-TASK-STATE state="); put_dec(&l, (uint64_t)eTaskGetState((TaskHandle_t)ss_application.task));
+            flush(&l);
+            platform_exit(3);
+        }
         if (qemu_os_watchdog_expired()) {
             put(&l, "WATCHDOG-RESET t_us="); put_dec(&l, t); flush(&l);
             platform_exit(5);

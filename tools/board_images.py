@@ -156,7 +156,8 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
         require(facts.get('execution_profile') != finite.POWER,
                 'Unsupported physical NPU OFF profile; use local stop/restart.')
         return dict(facts, symbols=names, generic=False, entry_guard=False,
-                    descriptor=descriptor, finite_npu=True)
+                    descriptor=descriptor, finite_npu=True,
+                    failure_return='npu_failure_return_profile' in names)
     marker = host.watchdog_marker(image) if names else descriptor.get('watchdog')
     require(marker is not None, 'Image does not admit the host-armed watchdog; rebuild with RTC breadcrumbs.')
     require(set(marker) == {'mode', 'session_seconds'} and all(type(v) is int for v in marker.values()) and
@@ -458,6 +459,11 @@ def prepare(args, info, live, out, *, dma_binding=None):
     return plan
 
 
+def preserving(args):
+    """True when the run saves and restores DRAM. A caller without the option keeps the safe behavior."""
+    return bool(getattr(args, 'preserve_dram', True))
+
+
 def preservation_regions(plan):
     """Union the linked image/monitor, manifest, input and device DRAM extents."""
     geo = plan['geometry']
@@ -539,11 +545,12 @@ def capture(owner, plan, args):
         if plan['geometry'].get('stopped_capture'):
             finite.stopped.capture(owner.tx, finite.base, plan, out, owner.record, owner.journal, decoded)
         # Validated retirement permits restoration even after numerical mismatch.
-        backup = plan['dram_backup']
-        require(sha(backup) == plan['dram_backup_sha256'], 'Saved NPU DRAM changed.')
-        owner.upload(finite.DRAM[0], backup)
-        owner.record['dram_restored'] = True
-        owner.journal()
+        if preserving(args):
+            backup = plan['dram_backup']
+            require(sha(backup) == plan['dram_backup_sha256'], 'Saved NPU DRAM changed.')
+            owner.upload(finite.DRAM[0], backup)
+            owner.record['dram_restored'] = True
+            owner.journal()
         return {'valid': decoded['status'] == 0, 'payload': decoded['log'].encode(), 'report': decoded}
     if plan['format']=='native-probe':
         probe=load('capture_native_probe',ROOT/'tools/board_probe.py')
@@ -590,7 +597,8 @@ def capture(owner, plan, args):
     require(owner.record.get('normal_return') and not owner.record.get('dram_lost'),
             'DRAM restoration requires a verified normal return.')
     if hasattr(records, 'mandatory_return'):
-        decoded = records.mandatory_return(copied, geo, plan['epoch'], plan['generation'])
+        decoded = records.mandatory_return(copied, geo, plan['epoch'], plan['generation'],
+                                           failure_return=bool(owner.record.get('failure_return')))
     else:
         require('npu_pool' not in geo and 'npu_stop' not in geo, 'NPU retirement parser is missing.')
         decoded = records.decode_return_report(copied['return-report'], plan['epoch'])
@@ -601,7 +609,9 @@ def capture(owner, plan, args):
         if 'npu_stop' in decoded:
             decoded['npu_capture_sha256'] = hashlib.sha256(copied['npu-stop']).hexdigest()
             try:
-                decoded['npu_report'] = records.npu_capture.decode(copied['npu-stop'], plan['epoch'], plan['generation'])
+                decoded['npu_report'] = records.npu_capture.decode(
+                    copied['npu-stop'], plan['epoch'], decoded['npu_stop'].get('generation', plan['generation']),
+                    never_started=decoded['npu_stop']['finished'] == 2)
                 valid = not (decoded['npu_report']['mismatches'] or decoded['npu_report']['refused'])
                 decoded['npu_capture_status'] = 'decoded'
             except (ValueError, KeyError, struct.error) as error:
@@ -667,9 +677,10 @@ def capture(owner, plan, args):
     finally:
         require(plan['preserve_regions'] == preservation_regions(plan),
                 'Preservation plan changed after launch.')
-        restore_dram(owner, plan['dram_backups'], plan['preserve_regions'])
-        owner.record.update(dram_restored=True, dram_dirty=False)
-        owner.journal()
+        if preserving(args):
+            restore_dram(owner, plan['dram_backups'], plan['preserve_regions'])
+            owner.record.update(dram_restored=True, dram_dirty=False)
+            owner.journal()
 
 
 

@@ -49,6 +49,32 @@ Other console lines mark the stages: `BOOT`, `APP-MAIN` (the first instruction
 of the application's main, with the OS's `ss_live()` and `ss_throttled()`
 values), `THROTTLE-CLEARED` and `APP-FINISHED` with the result.
 
+## Inherited stack register and the context-save check
+
+Each core enters the kernel with an SP_EL0 that lies in the read-only code
+block, as the first A733 launch of the owner scheduler found (0x41039f60). The
+port saves a task context on SP_EL0, so any save taken before the first task
+restore faults on this board as it does on the A733. The vectors in `start.S`
+also check, at every synchronous exception or interrupt taken from a task
+(EL1t or EL0t), that SP_EL0 is 16-byte aligned and lies in writable RAM below
+the exception stacks. A violation prints `SP-EL0-VIOLATION` and ends the run
+with status 6.
+
+The check builds the same board with the owner scheduler
+(`configSS_PARTITIONED_SCHEDULER`) for the hello and latency applications. The
+board application changes the core affinity of its first task before the
+scheduler starts. A negative control builds the scheduler without the refusal to
+yield while the scheduler is not running and must end with the violation on core
+0.
+
+## Guest time
+
+The board runs under QEMU's instruction counter (`-icount shift=0,sleep=off`, one thread), so guest time
+advances with executed instructions, and idle time is skipped. A loaded host cannot stretch a service window or
+a sensor deadline. With guest time on the host's wall clock, the resident cases failed at host load above about 60.
+At the loader's first expiry the supervisor's stop and the watchdog expiry coincide; the silent-transport case
+accepts either as the designed stop.
+
 ## Limits
 
 The model checks protocol and sequencing, not electrical behavior or timing

@@ -1,0 +1,26 @@
+--- FreeRTOS.h
++++ FreeRTOS.h
+@@ -56,6 +56,13 @@
+ 
+ /* Application specific configuration options. */
+ #include "FreeRTOSConfig.h"
++
++#ifndef configSS_PARTITIONED_SCHEDULER
++    #define configSS_PARTITIONED_SCHEDULER 0
++#endif
++#if ( configSS_PARTITIONED_SCHEDULER != 0 ) && ( configSS_PARTITIONED_SCHEDULER != 1 )
++    #error configSS_PARTITIONED_SCHEDULER must be 0 or 1
++#endif
+ 
+ #if !defined( configUSE_16_BIT_TICKS ) && !defined( configTICK_TYPE_WIDTH_IN_BITS )
+     #error Missing definition:  One of configUSE_16_BIT_TICKS and configTICK_TYPE_WIDTH_IN_BITS must be defined in FreeRTOSConfig.h.  See the Configuration section of the FreeRTOS API documentation for details.
+@@ -3182,6 +3189,9 @@
+     #if ( configUSE_CORE_AFFINITY == 1 ) && ( configNUMBER_OF_CORES > 1 )
+         UBaseType_t uxDummy26;
+     #endif
++    #if ( configSS_PARTITIONED_SCHEDULER == 1 )
++        UBaseType_t uxDummyOwnerSlot;
++    #endif
+     StaticListItem_t xDummy3[ 2 ];
+     UBaseType_t uxDummy5;
+     void * pxDummy6;

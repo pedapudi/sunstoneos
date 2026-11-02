@@ -31,6 +31,19 @@ void os_npu_report_copy(uint8_t out[OS_NPU_REPORT_BYTES])
     if(atomic_load_explicit(&published.finished,memory_order_acquire)){memcpy(out,&published,OS_NPU_REPORT_BYTES);return;}
     struct os_npu_report pending={0};header(&pending);memcpy(out,&pending,OS_NPU_REPORT_BYTES);
 }
+/* A failure return before the service ran publishes the report that says so
+ * (OS_NPU_REPORT_NOT_STARTED), once and only when the service itself reports
+ * that it never ran. A client report that exists is never replaced. */
+void os_npu_report_unstarted(uint64_t epoch,uint64_t generation)
+{
+    if(!os_npu_never_ran()||atomic_load_explicit(&published.finished,memory_order_acquire))return;
+    struct os_npu_report r={0};
+    r.magic=OS_NPU_REPORT_MAGIC;r.version=1;r.bytes=OS_NPU_REPORT_BYTES;r.epoch=epoch;r.generation=generation;
+    r.stopped=1;
+    memcpy((uint8_t *)&published+16,(const uint8_t *)&r+16,OS_NPU_REPORT_BYTES-16);
+    memcpy(&published,&r,12);
+    atomic_store_explicit(&published.finished,OS_NPU_REPORT_NOT_STARTED,memory_order_release);
+}
 int os_npu_complete(void)
 {
     return atomic_load_explicit(&published.finished,memory_order_acquire)&&

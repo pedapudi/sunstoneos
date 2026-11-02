@@ -34,6 +34,7 @@ POST_RAIL_HELPER = CACHE/'evidence/sol-cpu-normal-return-1028/rails-800/probe.bi
 POST_RAIL_HELPER_SHA256 = 'f48a6be72b336c8990a124fd608bba5fddb5c8617ec62eac5642b2d50fb27c75'
 # Linked __heap_end from ELF SHA-256 ae00ce1d4a1f82b77ab1e016dc1a08f795e56c9c6f4c92d166f6434d75590098.
 POST_RAIL_HELPER_DRAM = (0x41000000, 0x47300)
+DRAM_UNRESOLVED = 'DRAM ownership remains unresolved.'
 OUTCOMES = ('returned', 'failure-return', 'result-mismatch', 'watchdog-reset', 'no-return', 'refused-before-launch', 'host-error')
 crumbs = images.load('board_crumbs', ROOT/'tools/a733-crumbs.py')
 import board_state as state
@@ -85,6 +86,61 @@ class Mismatch(ValueError):
 
 class UnresolvedReturn(ValueError):
     pass
+
+
+def heading_anchors(text):
+    """GitHub heading anchors of a Markdown text: ATX headings outside fences, duplicates numbered."""
+    anchors, seen, fence = [], {}, None
+    for line in text.splitlines():
+        marker = re.match(r' {0,3}(`{3,}|~{3,})', line)
+        if marker:
+            if fence is None:
+                fence = marker.group(1)[0]
+            elif marker.group(1)[0] == fence:
+                fence = None
+            continue
+        heading = None if fence else re.fullmatch(r' {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*', line)
+        if not heading:
+            continue
+        label = re.sub(r'<[^>]+>', '', re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', heading.group(1)))
+        slug = re.sub(r'[^\w\- ]', '', label.lower()).replace(' ', '-')
+        count = seen.get(slug, 0)
+        seen[slug] = count + 1
+        anchors.append(slug if count == 0 else f'{slug}-{count}')
+    return anchors
+
+
+def check_reference(args):
+    """Validate the --reference of a submission; return the record kept in the entry and the result."""
+    value = getattr(args, 'reference', None)
+    require(bool(value), 'A submission requires --reference PATH#ANCHOR naming the docs heading that derives the vendor sequence and the diff against it; '
+                         '--reference none needs --approved-by coordinator and --reference-reason.')
+    if value == 'none':
+        reason = (getattr(args, 'reference_reason', None) or '').strip()
+        require(getattr(args, 'approved_by', None) == 'coordinator' and bool(reason),
+                '--reference none requires --approved-by coordinator and a nonempty --reference-reason.')
+        return {'none': True, 'approved_by': 'coordinator', 'reason': reason}
+    path, separator, anchor = value.partition('#')
+    anchor = anchor.lstrip('#')
+    require(bool(separator and path and anchor), '--reference must read PATH#ANCHOR.')
+    tree = (getattr(args, 'host_tree', None) or ROOT).resolve()
+    target = (Path(path) if Path(path).is_absolute() else tree/path).resolve()
+    require(target.is_relative_to(tree/'docs'), f'Reference {path} is not under docs/ in the host tree.')
+    require(target.is_file(), f'Reference file {path} does not exist.')
+    relative = target.relative_to(tree).as_posix()
+    tracked = subprocess.run(['git', '-C', str(tree), 'ls-files', '--error-unmatch', '--', relative],
+                             capture_output=True, text=True)
+    require(tracked.returncode == 0, f'Reference file {relative} is not tracked in the host tree.')
+    anchors = heading_anchors(target.read_text(errors='replace'))
+    require(anchor in anchors, f'Reference anchor #{anchor} matches no heading in {relative}.')
+    return {'path': relative, 'anchor': anchor, 'sha256': images.sha(target)}
+
+
+def reference_text(record):
+    """The one-line form kept in evidence records."""
+    if not record:
+        return None
+    return f"none: {record['reason']}" if record.get('none') else f"{record['path']}#{record['anchor']}"
 
 
 class Live:
@@ -147,8 +203,18 @@ class Live:
                 self.quarantine(str(error))
                 raise
             finally:
-                if (self.record.get('npu_dirty') or self.record.get('dram_dirty')) and not self.record.get('dram_restored'):
-                    self.quarantine('DRAM ownership remains unresolved.')
+                self.settle_dram_ownership()
+
+    def settle_dram_ownership(self):
+        if not ((self.record.get('npu_dirty') or self.record.get('dram_dirty')) and not self.record.get('dram_restored')):
+            return
+        if self.record.get('rom_returned') and self.record.get('dram_lost') and not self.armed and not self.failed:
+            # A watchdog reset loses DRAM and returns a fresh ROM instance whose
+            # disarm was read back; no saved DRAM can be restored or trusted.
+            self.record['dram_released_by_reset'] = True
+            self.journal()
+        else:
+            self.quarantine(DRAM_UNRESOLVED)
 
     def adopt(self, node):
         self.access.require_session(node)
@@ -461,7 +527,8 @@ class Live:
         post = phase == 'restore-rails'
         if post:
             require(self.record.get('normal_return') and self.record.get('native_retirement_validated') and
-                    self.record.get('dram_restored') and not self.record.get('dram_lost'),
+                    (self.record.get('dram_restored') or self.record.get('dram_unsaved')) and
+                    not self.record.get('dram_lost'),
                     'Post-ROM rail helper requires validated native retirement and restored DRAM.')
         helper = POST_RAIL_HELPER if post else self.args.rail_helper
         expected = POST_RAIL_HELPER_SHA256 if post else state.RAIL_HELPER_SHA256
@@ -475,10 +542,17 @@ class Live:
                 'Rail helper requires the enabled raw 26 MHz oscillator.')
         require(len(data) <= reservation[1], 'Rail helper exceeds its linked reservation.')
         regions = [reservation, (0x42000000, 16384)]
-        backups = images.backup_dram(self, regions, phase)
-        self.record.update(dram_dirty=True, dram_restored=False)
-        self.record.setdefault('rail_dram_backups', {})[phase] = backups
-        self.journal()
+        # The pre-launch helper writes into the load region the image is about to
+        # use, so its bytes are restored in every mode. The post-ROM helper runs
+        # after the image is retired and nothing later reads that DRAM, so a
+        # development run saves and restores nothing there.
+        save = not post or images.preserving(self.args)
+        backups = []
+        if save:
+            backups = images.backup_dram(self, regions, phase)
+            self.record.update(dram_dirty=True, dram_restored=False)
+            self.record.setdefault('rail_dram_backups', {})[phase] = backups
+            self.journal()
         self.upload(0x41000000, images.write(evidence/'rail-helper.bin',data))
         self.upload(0x42000000, images.write(evidence/'rail-blank.bin', bytes(16384)))
         # This exact legacy helper returns via RMR but does not disarm WDT0.
@@ -509,9 +583,10 @@ class Live:
         self.record['rails'] = images.post_rail_result(values, log) if post else images.rail_result(values, log)
         run['image_sha256'] = expected
         run['rails'] = self.record['rails']
-        images.restore_dram(self, backups, regions)
-        self.record.update(dram_restored=True, dram_dirty=False)
-        run['dram_restored'] = True
+        if save:
+            images.restore_dram(self, backups, regions)
+            self.record.update(dram_restored=True, dram_dirty=False)
+            run['dram_restored'] = True
         self.journal()
 
     def live_state(self, finite_npu=False):
@@ -561,21 +636,27 @@ class Live:
         return plan
 
     def launch(self, plan):
+        preserve = images.preserving(self.args)
+        if not preserve and plan.get('format') in ('generic', 'npu'):
+            # The pre-launch rail helper restored its own bytes; nothing else is saved or restored.
+            self.record.update(dram_unsaved=True, dram_restored=False)
         if plan.get('format') == 'generic':
             images.validate_uploads(plan)
-            plan['dram_backups'] = images.backup_dram(self, plan['preserve_regions'])
-            self.record['dram_backups'] = plan['dram_backups']
-            self.record.update(dram_restored=False, dram_dirty=True)
-            self.journal()
+            if preserve:
+                plan['dram_backups'] = images.backup_dram(self, plan['preserve_regions'])
+                self.record['dram_backups'] = plan['dram_backups']
+                self.record.update(dram_restored=False, dram_dirty=True)
+                self.journal()
         if plan.get('format') == 'npu':
             plan['finite'].require_entry_state(self.tx)
-            backup = self.evidence/'npu-DRAM-before.bin'
-            self.read(*plan['finite'].DRAM, backup)
-            self.record['dram_restored'] = False
-            self.record['npu_dirty'] = True
-            plan.update(dram_backup=backup, dram_backup_sha256=images.sha(backup))
-            self.record['dram_backup_sha256'] = plan['dram_backup_sha256']
-            self.journal()
+            if preserve:
+                backup = self.evidence/'npu-DRAM-before.bin'
+                self.read(*plan['finite'].DRAM, backup)
+                self.record['dram_restored'] = False
+                self.record['npu_dirty'] = True
+                plan.update(dram_backup=backup, dram_backup_sha256=images.sha(backup))
+                self.record['dram_backup_sha256'] = plan['dram_backup_sha256']
+                self.journal()
         for address, source in plan['uploads']:
             self.upload(address, source)
         if plan.get('format') == 'npu':
@@ -613,8 +694,13 @@ class Live:
         try:
             return images.capture(self, plan, self.args)
         except BaseException as error:
-            if plan.get('format') in ('npu', 'generic') and not self.record.get('dram_restored'):
-                self.quarantine('Native retirement or DRAM restoration unverified: '+str(error))
+            if plan.get('format') in ('npu', 'generic'):
+                if images.preserving(self.args):
+                    if not self.record.get('dram_restored'):
+                        self.quarantine('Native retirement or DRAM restoration unverified: '+str(error))
+                elif plan.get('format') == 'npu' or not self.record.get('native_retirement_validated'):
+                    # A development run promised no DRAM; only unproven retirement matters.
+                    self.quarantine('Native retirement unverified: '+str(error))
             if isinstance(error, ValueError):
                 raise Mismatch(str(error)) from error
             raise
@@ -739,6 +825,18 @@ def verify_references(inventory):
             'Queued host code or helper inputs changed; resubmit the frozen image.')
 
 
+def run_reference(args):
+    """The reference a queued run carries; the submission already validated it."""
+    value = getattr(args, 'reference', None)
+    if not value:
+        return None
+    if value == 'none':
+        return {'none': True, 'approved_by': getattr(args, 'approved_by', None),
+                'reason': getattr(args, 'reference_reason', None)}
+    path, _, anchor = value.partition('#')
+    return {'path': path, 'anchor': anchor}
+
+
 def run_image(args, backend=Live):
     started = time.monotonic()
     evidence = args.evidence or CACHE/'board-queue/runs'/f'{time.time_ns()}-{args.port}-{uuid.uuid4().hex[:8]}'
@@ -748,6 +846,8 @@ def run_image(args, backend=Live):
               'evidence_path': str(evidence.resolve()), 'result_path': str((evidence/'result.json').resolve()),
               'quarantined': False, 'launch_attempted': False, 'time': time.time(),
               'git_revision': subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'], capture_output=True,text=True).stdout.strip()}
+    result['dram_mode'] = 'preserved' if images.preserving(args) else 'development'
+    result['reference'] = run_reference(args)
     owner = None
     stage = 'preflight'
     def timed(name, action):
@@ -827,7 +927,8 @@ def run_image(args, backend=Live):
                     result['output_sha256'] = hashlib.sha256(payload).hexdigest()
                     if info['entry_guard'] and getattr(args, 'restore_rails', False):
                         if plan.get('format') == 'generic':
-                            require(result.get('native_retirement_validated') and result.get('dram_restored'),
+                            require(result.get('native_retirement_validated') and
+                                    (result.get('dram_restored') or result.get('dram_unsaved')),
                                     'Rail restoration requires native retirement and restored DRAM.')
                         after = timed('restore-state', owner.live_state)
                         save(evidence/'state-after.json', after)
@@ -849,7 +950,9 @@ def run_image(args, backend=Live):
                             detail=result['breadcrumbs'].get('summary', 'Failure return'),
                             record=captured['report'].get('failure'))
                         result['outcome'] = 'failure-return'
-                        if expected and not matches_expectation(expected, payload):
+                        # A finite NPU failure return carries its record in the platform log, so
+                        # a success expectation cannot match it.
+                        if expected and plan.get('format') != 'npu' and not matches_expectation(expected, payload):
                             raise Mismatch('Failure record differs from expectation.')
                         if owner.journal_error is not None:
                             raise owner.journal_error
@@ -1014,6 +1117,7 @@ def development(argv=None):
     parser.add_argument('--force', action='store_true')
     parser.add_argument('--normalize-rails', action=argparse.BooleanOptionalAction)
     parser.add_argument('--restore-rails', action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--preserve-dram', action='store_true')
     parser.add_argument('--rail-helper', type=Path, default=state.RAIL_HELPER)
     parser.add_argument('--fel', type=Path, default=state.FEL)
     args = parser.parse_args(argv)
@@ -1043,6 +1147,8 @@ def development(argv=None):
         command += ['--expect-result', json.dumps(args.expect_result)]
     if args.restore_rails and args.kind not in ('npu', 'usb-class'):
         command += ['--restore-rails']
+    if args.preserve_dram:
+        command += ['--preserve-dram']
     if args.decoder:
         command += ['--decoder', str(args.decoder)]
     command += ['--decode-application']
@@ -1102,7 +1208,8 @@ class Queue:
         result = {'schema': 'sunstone-board-result-v1', 'outcome': 'refused-before-launch',
                   'image_sha256': job['image_sha256'], 'port': job['port'], 'kind': job['kind'],
                   'first_failure': {'site': 'queue', 'detail': detail}, 'quarantined': False,
-                  'launch_attempted': False, 'durations': {}, 'evidence_path': job['directory']}
+                  'launch_attempted': False, 'durations': {}, 'evidence_path': job['directory'],
+                  'reference': job.get('reference')}
         save(job['result_path'], result)
         job.update(state='done', result=result, completed=time.time())
         self.event('result', job=job['id'], result_path=job['result_path'], result=result)
@@ -1110,6 +1217,7 @@ class Queue:
     def submit(self, args):
         require(re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', args.worker), 'Invalid worker name.')
         require(bool(args.hypothesis.strip()), 'A nonempty hypothesis is required.')
+        reference = check_reference(args)
         identifier = f'{time.time_ns()}-{uuid.uuid4().hex[:8]}'
         directory = self.root/'entries'/identifier
         directory.mkdir(parents=True, exist_ok=False)
@@ -1129,8 +1237,10 @@ class Queue:
                                   args.host_tree, manifest=manifest)
             application_inputs(args, info, directory)
         # Freeze all caller-controlled launch inputs before queue visibility.
-        options = {}
-        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','decode_application','objcopy'):
+        options = {'reference': 'none' if reference.get('none') else f"{reference['path']}#{reference['anchor']}"}
+        if reference.get('none'):
+            options['reference_reason'] = reference['reason']
+        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','decode_application','objcopy'):
             value = getattr(args,name)
             options[name] = str(value.resolve()) if isinstance(value,Path) else value
         for name in ('records', 'decoder', 'manifest'):
@@ -1191,7 +1301,7 @@ class Queue:
         frozen = {str(p.relative_to(directory)): images.sha(p) for p in directory.rglob('*') if p.is_file()}
         job = {'id': identifier, 'submitted': time.time(), 'image': str(image),
                'image_sha256': hashlib.sha256(data).hexdigest(), 'port': args.port, 'kind': args.kind,
-               'worker': args.worker, 'hypothesis': args.hypothesis.strip(), 'state': 'queued',
+               'worker': args.worker, 'hypothesis': args.hypothesis.strip(), 'state': 'queued', 'reference': reference,
                'directory': str(directory), 'result_path': str(directory/'run/result.json'), 'options': options, 'frozen': frozen}
         with self.locked() as state:
             history = state['jobs']
@@ -1262,6 +1372,39 @@ class Queue:
                 archive.mkdir(exist_ok=True)
                 path.rename(archive/f'{time.time_ns()}-{port}.json')
             self.event('resumed',port=port)
+
+    def release(self, port, reason, access=None):
+        """Coordinator only: clear the DRAM-ownership quarantine of a fresh instance after a watchdog reset.
+
+        Uses sysfs metadata and the device node's inode identity; the device is never opened."""
+        require(port in PORTS,'Invalid port.')
+        require(bool(reason.strip()),'A nonempty reason is required.')
+        access = access or images.load('board_access', ROOT/'tools/usb-access.py')
+        node = access.discover(port)
+        observed = access.identity(node)
+        require(access.target(node).name==port,'The enumerated instance is not on the requested port.')
+        base = access.RECOVERY_REQUIRED
+        paths = ([base] if base.exists() else []) + sorted(base.parent.glob(base.stem+'-*.json'))
+        found = [(p,json.loads(p.read_text())) for p in paths]
+        found = [(p,r) for p,r in found if r['identity']==observed]
+        require(found,f'The instance enumerated on {port} has no quarantine record.')
+        require(all(r['reason']==DRAM_UNRESOLVED for _,r in found),
+                'Only an unresolved-DRAM-ownership quarantine can be released; other reasons need a replug.')
+        with self.locked() as state:
+            jobs = [j for j in state['jobs'] if j['state']=='done' and j.get('assigned_port')==port]
+        run = next((j for j in reversed(jobs) if (j['result'].get('instances') or [{}])[-1].get('identity')==observed),None)
+        require(run is not None,'No finished run on this port ended on the quarantined instance.')
+        result = run['result']
+        require(result.get('outcome')=='watchdog-reset' and result.get('rom_returned') is True and result.get('dram_lost') is True,
+                'The run did not end in a watchdog reset with a verified ROM return; a replug is required.')
+        require(not any(result.get(key) for key in ('cleanup_failure','usb_vbus_cleanup_failure','transport_recovered')),
+                'The run recorded a cleanup or transport failure; a replug is required.')
+        trash = CACHE/'trash/recovery-required-released'
+        trash.mkdir(parents=True,exist_ok=True)
+        for path,_ in found:
+            shutil.move(str(path),str(trash/f'{time.time_ns()}-{path.name}'))
+        self.event('released',port=port,job=run['id'],identity=observed,reason=reason.strip())
+        return run['id']
 
     def withdraw(self, identifier, reason):
         """Refuse one queued entry before launch; running and finished entries are never touched."""
@@ -1371,9 +1514,14 @@ def run_options(parser, submit=False):
     parser.add_argument('--manifest', type=Path, help='Exact finite NPU build manifest.')
     parser.add_argument('--objcopy', type=Path, default=Path('/usr/bin/llvm-objcopy-21'))
     parser.add_argument('--approved-by', choices=('coordinator',))
+    parser.add_argument('--reference', help='PATH#ANCHOR of the tracked docs heading that derives the subsystem vendor sequence and the diff against it; '
+                        '"none" needs --approved-by coordinator and --reference-reason.')
+    parser.add_argument('--reference-reason', help='Why a coordinator exempts this run from a reference.')
     parser.add_argument('--storage-write', action='store_true')
     parser.add_argument('--descriptor', type=Path, help='Hash-bound image metadata; defaults to IMAGE.board.json.')
     parser.add_argument('--restore-rails', action='store_true', help='Restore guarded CPU rails after a validated normal return.')
+    parser.add_argument('--preserve-dram', action='store_true',
+                        help='Qualification run: save the image DRAM before launch and restore it after retirement. Development runs skip both.')
     parser.add_argument('--decoder', type=Path, help='Application payload decoder with optional expected(inputs).')
     parser.add_argument('--decoder-origin', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--decode-application', action='store_true', help='Use the application decoder and its default inputs when available.')
@@ -1420,6 +1568,9 @@ def main(argv=None):
     withdraw = commands.add_parser('withdraw',help='Coordinator only: refuse one queued entry before launch.')
     withdraw.add_argument('entry')
     withdraw.add_argument('--reason',required=True)
+    release = commands.add_parser('release',help='Coordinator only: clear the quarantine of a fresh instance after a watchdog reset.')
+    release.add_argument('port',choices=PORTS)
+    release.add_argument('--reason',required=True)
     args = parser.parse_args(argv)
     if args.command=='check':
         return check_image(args)
@@ -1441,6 +1592,8 @@ def main(argv=None):
     elif args.command=='resume':
         queue.resume(args.port)
         print(f'{args.port} resumed')
+    elif args.command=='release':
+        print(f"{args.port} released (run {queue.release(args.port,args.reason)}); resume the port if it is paused")
     elif args.command=='withdraw':
         queue.withdraw(args.entry,args.reason)
         print(f'{args.entry} withdrawn')

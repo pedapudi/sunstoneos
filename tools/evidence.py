@@ -24,7 +24,7 @@ DEFAULT_QUEUE = Path('~/.cache/sunstoneos/board-queue').expanduser()
 ENTRY = re.compile(r'\b\d{19}-[0-9a-f]{8}\b')
 BEGIN, END = '<!-- evidence-table:begin -->', '<!-- evidence-table:end -->'
 FIELD_ORDER = ('id', 'subsystem', 'date', 'entry_id', 'port', 'image_sha256', 'git_revision',
-               'hypothesis', 'outcome', 'verdict', 'measurements', 'conditions', 'evidence', 'note')
+               'hypothesis', 'reference', 'outcome', 'verdict', 'measurements', 'conditions', 'evidence', 'note')
 
 
 def load_schema():
@@ -152,6 +152,12 @@ def queue_record(queue, entry_id, subsystem):
     result = json.loads(result_path.read_text()) if result_path.exists() else {}
     stamp = result.get('time') or entry.get('submitted')
     outcome = result.get('outcome', 'not-run')
+    reference = entry.get('reference')
+    if isinstance(reference, dict):
+        reference = f"none: {reference['reason']}" if reference.get('none') else f"{reference['path']}#{reference['anchor']}"
+    conditions = {'kind': entry.get('kind')} if entry.get('kind') else {}
+    if result.get('dram_mode'):
+        conditions['dram_mode'] = result['dram_mode']
     measurements = []
     total = (result.get('durations') or {}).get('total')
     if isinstance(total, (int, float)):
@@ -162,8 +168,9 @@ def queue_record(queue, entry_id, subsystem):
             'image_sha256': result.get('image_sha256') or entry.get('image_sha256'),
             'git_revision': result.get('git_revision'),
             'hypothesis': entry.get('hypothesis') or '', 'outcome': outcome,
+            **({'reference': reference} if reference else {}),
             'verdict': default_verdict(outcome, result), 'measurements': measurements,
-            'conditions': {'kind': entry.get('kind')} if entry.get('kind') else {},
+            'conditions': conditions,
             'evidence': [str(directory / 'run').replace(str(Path.home()), '~')], 'note': ''}
 
 
@@ -301,8 +308,6 @@ def cmd_table(args):
 # ---------------------------------------------------------------------------
 # Migration of a prose status file.
 
-OPEN_WORDS = re.compile(r'\b(remains?|remaining|open|missing|blocked|unqualified|not yet|pending|unrun|'
-                        r'incomplete|unproven|not established)\b', re.I)
 
 
 def paragraphs(text):
@@ -400,15 +405,19 @@ def cmd_migrate(args):
     scope = re.search(r'^\*\*Board-qualified scope:\*\* [^\n]+(?:\n(?!\n|#|\*\*)[^\n]+)*', intro, re.M)
     summary = paragraphs(intro.split(status.group(0), 1)[1] if status else '')
     summary = [flat(item) for item in summary[:1] if not item.startswith('**Board') and len(item.splitlines()) <= 6]
-    sentences = re.split(r'(?<=[.!?])\s+', flat(re.sub(r'^#.*$|^\s*[-|].*$', '', text, flags=re.M)))
-    open_work = [item for item in sentences
-                 if OPEN_WORDS.search(item) and not ENTRY.search(item) and not item.startswith('**')
-                 and len(item) < 260][:12]
+    # Open work is never inferred: copy an existing section or leave a placeholder.
+    section = re.search(r'^## (?:Open work|Next (?:steps|actions)|Remaining work)[^\n]*\n(.*?)(?=^## |\Z)',
+                        text, re.M | re.S | re.I)
+    if section and section.group(1).strip():
+        open_work = section.group(1).strip().splitlines()
+    else:
+        open_work = ['1. Open work has not been written; see the historical log.']
+        print(f'warning: {source.name} has no open-work section; wrote a placeholder to replace by hand')
     out = [f'# {title}', '', status.group(0) if status else '**Status: implemented.**', '',
            *([summary[0], ''] if summary else []),
            scope.group(0) if scope else '**Board-qualified scope:** None.', '',
            '## Open work', '']
-    out += [f'{number}. {item}' for number, item in enumerate(open_work, 1)] or ['None recorded.']
+    out += open_work
     out += ['', '## Evidence', '',
             f'Board results with a queue entry are records in `docs/evidence/{stem}.jsonl`, added with `tools/evidence.py add`. '
             f'Results cited by path, and earlier prose evidence, are in [the historical log](../history/{history.name}).', '',

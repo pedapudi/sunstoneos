@@ -26,6 +26,11 @@ _Noreturn void platform_panic(const char *file, unsigned line);
 #endif
 
 #define configUSE_PREEMPTION 1
+/* CMake selects the private header, task/object sources and port hooks as a
+ * unit. Direct consumers retain the control scheduler unless explicitly set. */
+#ifndef configSS_PARTITIONED_SCHEDULER
+#define configSS_PARTITIONED_SCHEDULER 0
+#endif
 #if defined(SUNSTONE_LATENCY) && !defined(__ASSEMBLER__)
 #include "sunstone_latency.h"
 #define tracePOST_MOVED_TASK_TO_READY_STATE(task) ss_latency_task_ready(task)

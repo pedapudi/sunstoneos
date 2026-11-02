@@ -31,8 +31,20 @@ char fixture_log[16384];size_t fixture_log_bytes;
 static void verify(int condition)
 {if(!condition)platform_panic("fixture assertion",99);}
 uint64_t a733_smp_counter(void){fixture_client_cpu+=10;return fixture_now+=10;}
+#if SUNSTONE_NPU_IDLE_BENCH
+static int fixture_idle_task,fixture_power_task;
+static uint64_t fixture_idle_cpu,fixture_power_cpu;
+TaskHandle_t xTaskGetIdleTaskHandle(void){return (TaskHandle_t)&fixture_idle_task;}
+uint64_t ulTaskGetRunTimeCounter(const TaskHandle_t task)
+{
+    if(task==(TaskHandle_t)&fixture_idle_task)return fixture_idle_cpu;
+    if(task==(TaskHandle_t)&fixture_power_task)return fixture_power_cpu;
+    verify(!task||task==fixture_runtime.service.worker);return task?fixture_worker_cpu:fixture_client_cpu;
+}
+#else
 uint64_t ulTaskGetRunTimeCounter(const TaskHandle_t task)
 {verify(!task||task==fixture_runtime.service.worker);return task?fixture_worker_cpu:fixture_client_cpu;}
+#endif
 unsigned a733_npu_application_ready(void){return 1;}
 struct npu_runtime *a733_npu_application_runtime(void){return &fixture_runtime;}
 void platform_puts(const char *p)
@@ -112,11 +124,27 @@ int npu_queue_submit(struct npu_queue *q,struct npu_queue_job *job,struct npu_qu
     fixture_runtime.doorbell_ticks=fixture_case==11?fixture_now-100:fixture_now;
     ++q->submitted;job->held=1;fixture_job=job;*out=(struct npu_queue_fence){q,q->submitted};return 1;
 }
+#if SUNSTONE_NPU_IDLE_BENCH
+static uint64_t fixture_last_wake;
+static void fixture_power_tick(struct npu_runtime_queue *q)
+{
+    if(!q->power.initialized)return;
+    q->power.idle_since=fixture_now;
+    if(!fixture_last_wake)fixture_last_wake=fixture_now;
+    while(fixture_now-fixture_last_wake>=240000){fixture_last_wake+=240000;++q->power.counters.owner_wakes;fixture_power_cpu+=50;q->power.counters.owner_cpu_ticks+=60;}
+}
+#else
+#define fixture_power_tick(q) ((void)(q))
+#endif
 int npu_runtime_queue_wait(struct npu_runtime_queue *q,struct npu_queue_fence fence)
 {
     verify(!fixture_locks&&q==active_queue&&fence.value==q->queue.submitted&&fixture_job->held);++fixture_waits;
-    if(atomic_load(&q->queue.completed)==q->queue.submitted)return 1;
+    if(atomic_load(&q->queue.completed)==q->queue.submitted){fixture_power_tick(q);return 1;}
+#if SUNSTONE_NPU_IDLE_BENCH
+    fixture_now+=700; /* about 10 us of device time plus completion handling */
+#else
     fixture_now+=5000;
+#endif
     if((fixture_case==4&&current_job==3)||(fixture_case==6&&current_job==1000)||(fixture_case==13&&current_job==1998)||(fixture_case==14&&current_job==3499))return -1;
     q->irq_cpu_ticks+=7;
     memcpy(fixture_output,reference,4);
@@ -128,14 +156,66 @@ int npu_runtime_queue_wait(struct npu_runtime_queue *q,struct npu_queue_fence fe
     if(fixture_case==15&&current_job==1998)fixture_dependent_output[0]=0;
     if(fixture_case==16&&current_job==3499)fixture_dependent_output[0]=0;
 #endif
-    atomic_store(&q->queue.completed,q->queue.submitted);return 1;
+    atomic_store(&q->queue.completed,q->queue.submitted);fixture_power_tick(q);return 1;
 }
 int npu_queue_release(struct npu_queue *q,struct npu_queue_job *job)
 {verify(fixture_locks&&q==&active_queue->queue&&job->held&&(current_job>=1000||fixture_caches%3==0));job->held=0;++fixture_releases;return 1;}
+#if SUNSTONE_NPU_IDLE_BENCH
+/* The power owner is modeled by its counters: policy 1 gates before any job
+ * that follows more than the idle delay and resumes it on admission. */
+int sunstone_deadline_register(void){return 1;}
+uint64_t sunstone_deadline_now_us(void){return fixture_now/24;}
+int sunstone_deadline_wait_until(uint64_t until)
+{
+    verify(!fixture_locks);
+    if(until*24>fixture_now){fixture_idle_cpu+=until*24-fixture_now;fixture_now=until*24;}
+    return SUNSTONE_DEADLINE_EXPIRED;
+}
+static unsigned fixture_resume_requested;
+int npu_runtime_queue_power_start(struct npu_runtime_queue *q,const struct npu_runtime_queue_power_config *config)
+{
+    verify(q==&direct&&config->part&&config->quiet&&config->priority&&SUNSTONE_NPU_IDLE_GATE<2);
+    q->power.initialized=1;q->power.part=config->part;q->power.enabled=config->enabled;q->power.strict=config->strict;
+    q->power.phase=NPU_IDLE_ON;q->power.idle_since=fixture_now;q->power_task=(TaskHandle_t)&fixture_power_task;
+    return 1;
+}
+int npu_runtime_queue_submit(struct npu_runtime_queue *q,struct npu_queue_job *job,struct npu_queue_command *command,
+    struct npu_queue_fence after,uint64_t timeout,struct npu_queue_fence *out)
+{
+    verify(!fixture_locks&&q==active_queue);
+    if(q->power.initialized&&q->power.enabled&&q->power.phase==NPU_IDLE_SUSPENDED){
+        if(!fixture_resume_requested){fixture_resume_requested=1;++q->power_stats.resume_requests;}
+        return 0;
+    }
+    if(q->power.initialized&&q->power.enabled&&fixture_now-q->power.idle_since>=240000){
+        /* The owner gated at the idle delay; the first job after it sees a suspended device. */
+        q->power.phase=NPU_IDLE_SUSPENDED;q->power.gated_since=q->power.idle_since+240000;
+        ++q->power.counters.gates;q->power.counters.writes+=2;
+        fixture_resume_requested=1;++q->power_stats.resume_requests;return 0;
+    }
+    fixture_locks=1;int result=npu_queue_submit(&q->queue,job,command,after,timeout,out);fixture_locks=0;return result;
+}
+int npu_runtime_queue_wait_ready(struct npu_runtime_queue *q)
+{
+    verify(!fixture_locks&&q==active_queue);
+    if(q->power.phase==NPU_IDLE_SUSPENDED){
+        q->power.counters.gated_ticks+=fixture_now-q->power.gated_since;
+        fixture_now+=24*70;++q->power.counters.resumes;q->power.counters.writes+=4;
+        q->power.counters.resume_ticks+=1680;if(q->power.counters.resume_max_ticks<1680)q->power.counters.resume_max_ticks=1680;
+        q->power_stats.last_request_to_ready_us=70;if(q->power_stats.max_request_to_ready_us<70)q->power_stats.max_request_to_ready_us=70;
+        q->power.phase=NPU_IDLE_ON;q->power.idle_since=fixture_now;fixture_resume_requested=0;
+    }
+    return 1;
+}
+#endif
 int npu_runtime_queue_return(struct npu_runtime_queue *q)
 {
     verify(!fixture_locks&&q==active_queue&&!fixture_job->held);
+#if SUNSTONE_NPU_IDLE_BENCH
+    if(q==&direct){verify(fixture_releases==1000+5*12000+230);atomic_store(&q->power_stopped,1);}
+#else
     if(q==&direct)verify(fixture_releases==1000);
+#endif
 #if SUNSTONE_NPU_DEPENDENT_CHAIN
     else verify(fixture_releases==(q==&dependent_queue[0]?1000+2*SUNSTONE_NPU_CHAIN_REPEATS:1000+3*SUNSTONE_NPU_CHAIN_REPEATS));
 #else

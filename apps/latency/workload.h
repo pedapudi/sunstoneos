@@ -33,13 +33,22 @@ struct latency_result {
     struct latency_wake_sample wakes[LATENCY_CORES][LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES];
     struct ss_latency_site sites[SS_LAT_PHASES + 1][LATENCY_CORES][SS_LAT_SITE_KINDS][SS_LAT_SITE_SLOTS]
         __attribute__((aligned(64)));
+#ifdef SUNSTONE_LATENCY_PMU
+    /* Counts inside the kind-0 sites above, same phase, core and slot. */
+    struct ss_latency_site_pmu site_pmu[SS_LAT_PHASES + 1][LATENCY_CORES][SS_LAT_SITE_SLOTS];
+#endif
 };
 _Static_assert(offsetof(struct latency_result, core) == 320 &&
     offsetof(struct latency_result, phases) == 5440 &&
     offsetof(struct latency_result, acquisitions) == 20224 &&
     offsetof(struct latency_result, wakes) == 20848 &&
     offsetof(struct latency_result, sites) == 57728 &&
-    sizeof(struct latency_result) == 63872, "latency binary report layout");
+#ifdef SUNSTONE_LATENCY_PMU
+    sizeof(struct latency_result) == 63872 + 1536,
+#else
+    sizeof(struct latency_result) == 63872,
+#endif
+    "latency binary report layout");
 
 /* Prepare before scheduling. Run from a controller allowed on one core; all
  * workload tasks use fixed affinity and independently allocated static stacks. */

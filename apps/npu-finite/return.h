@@ -16,6 +16,15 @@
 #define NPU_FINITE_RECEIPT_MAGIC UINT64_C(0x4e50555245543031)
 #define NPU_FINITE_COMPLETE(status) ((status)?2u:1u)
 #endif
+#ifdef SUNSTONE_NPU_FAILURE_RETURN
+#if !defined(SUNSTONE_NPU_STARTUP_ONLY) || defined(SUNSTONE_NPU_FINITE_THERMAL) || defined(SUNSTONE_NPU_ENTRY_CHECKPOINT)
+#error "The failure return needs the plain startup-only return profile"
+#endif
+/* Status 2 is a failure return of a quiesced NPU; statuses 0 and 1 are results. */
+#define NPU_FINITE_MAX_RETURN_STATUS 2u
+#else
+#define NPU_FINITE_MAX_RETURN_STATUS 1u
+#endif
 /* Profile-specific receipt. This is not replacement physical admission.
  * EL1 cleans its complete fixed interval before the EL3 monitor consumes it. */
 struct npu_finite_receipt {

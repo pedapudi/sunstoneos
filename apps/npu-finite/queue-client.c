@@ -31,6 +31,15 @@ _Static_assert(configGENERATE_RUN_TIME_STATS==1&&sizeof(configRUN_TIME_COUNTER_T
 #ifndef SUNSTONE_NPU_DEPENDENT_CHAIN
 #define SUNSTONE_NPU_DEPENDENT_CHAIN 0
 #endif
+#ifndef SUNSTONE_NPU_IDLE_BENCH
+#define SUNSTONE_NPU_IDLE_BENCH 0
+#endif
+#if SUNSTONE_NPU_IDLE_BENCH && (!SUNSTONE_NPU_LATENCY_QUEUE || SUNSTONE_NPU_LATENCY_SEQUENCE || SUNSTONE_NPU_DEPENDENT_CHAIN)
+#error "Idle benchmark requires only the resident queue latency profile"
+#endif
+#if SUNSTONE_NPU_IDLE_BENCH
+#include "sunstone_deadline.h"
+#endif
 #define JOBS 1000u
 __attribute__((used,retain)) const uint64_t npu_startup_return_profile[4]={
     NPU_STARTUP_RECEIPT_MAGIC,1,NPU_STARTUP_JOBS,1+NPU_STARTUP_JOBS};
@@ -153,10 +162,21 @@ static unsigned check_output(struct storage_digest *digest)
     if(at!=w->reference_bytes||!storage_digest_add(digest,hash,sizeof hash))retained(39);
     ++checked;bad+=differs;return differs;
 }
+#if SUNSTONE_NPU_IDLE_BENCH
+#include "idle-client.h"
+#endif
+static void progress_wait(void)
+{
+#if SUNSTONE_NPU_IDLE_BENCH
+    if(sunstone_deadline_wait_until(sunstone_deadline_now_us()+1000)==SUNSTONE_DEADLINE_ERROR)retained(80);
+#else
+    vTaskDelay(1);
+#endif
+}
 static void return_queue(struct npu_runtime_queue *q)
 {
     int returned;
-    do {returned=npu_runtime_queue_return(q);if(returned<0||!live())retained(46);if(!returned)vTaskDelay(1);}while(!returned);
+    do {returned=npu_runtime_queue_return(q);if(returned<0||!live())retained(46);if(!returned)progress_wait();}while(!returned);
 }
 #if SUNSTONE_NPU_LATENCY_SEQUENCE
 static void run_sequence(void)
@@ -213,6 +233,9 @@ int npu_startup_return_ready(void)
 #if SUNSTONE_NPU_DEPENDENT_CHAIN
         dependent_ready()&&
 #endif
+#if SUNSTONE_NPU_IDLE_BENCH
+        idle_ready()&&
+#endif
         atomic_load_explicit(&rt->slot[0].state,memory_order_acquire)==NPU_RUNTIME_CLOSED&&
         rt->slot[0].opened&&rt->slot[0].closed&&!rt->slot[0].pending&&
         rt->service.controller.state==A733_NPU_CLOSED&&!rt->service.controller.fault&&
@@ -228,8 +251,15 @@ static void report(const unsigned char output_digest[32])
     for(unsigned i=1;i<JOBS;++i){uint32_t value=ordered[i];unsigned j=i;while(j&&ordered[j-1]>value){ordered[j]=ordered[j-1];--j;}ordered[j]=value;}
     const uint64_t values[]={frequency,SUNSTONE_NPU_LATENCY_QUEUE,JOBS,1,runtime->counters.jobs,checked,bad,
         start,end,ordered[499],ordered[989],ordered[999],sum,submit_ticks,acquire_ticks,
-        first_bad_job,first_bad_offset,first_bad_byte,direct.queue.submitted,
-        atomic_load_explicit(&direct.queue.completed,memory_order_acquire),direct.irq_cpu_ticks,client_cpu_ticks,worker_cpu_ticks};
+        first_bad_job,first_bad_offset,first_bad_byte,
+        SUNSTONE_NPU_IDLE_BENCH?JOBS:direct.queue.submitted,
+        SUNSTONE_NPU_IDLE_BENCH?JOBS:atomic_load_explicit(&direct.queue.completed,memory_order_acquire),
+#if SUNSTONE_NPU_IDLE_BENCH
+        idle_warm_irq_ticks,
+#else
+        direct.irq_cpu_ticks,
+#endif
+        client_cpu_ticks,worker_cpu_ticks};
     platform_puts("NPU_LATENCY=\n");
     for(unsigned i=0;i<sizeof values/sizeof values[0];++i){platform_hex(values[i]);platform_puts("\n");}
     memcpy(ordered,doorbells,sizeof ordered);
@@ -241,6 +271,9 @@ static void report(const unsigned char output_digest[32])
     unsigned char hash[32];storage_digest_bytes(durations,sizeof durations,hash);
     platform_puts("NPU_DURATION_SHA256=\n");hex_bytes(hash,sizeof hash);
     platform_puts("NPU_OUTPUT_SHA256=\n");hex_bytes(output_digest,32);
+#if SUNSTONE_NPU_IDLE_BENCH
+    idle_report();
+#endif
 #if SUNSTONE_NPU_DEPENDENT_CHAIN
     dependent_report();
 #endif
@@ -255,8 +288,12 @@ static void report(const unsigned char output_digest[32])
 }
 static void npu_latency_client(void *unused)
 {
-    (void)unused;sunstone_crumb(NPU_CRUMB_WAIT_STARTUP,0);platform_puts("NPU_STAGE=WAIT_STARTUP\n");
-    while(!a733_npu_application_ready()){if(!live())retained(9);vTaskDelay(1);}
+    (void)unused;
+#if SUNSTONE_NPU_IDLE_BENCH
+    if(sunstone_deadline_register()!=1)retained(80);
+#endif
+    sunstone_crumb(NPU_CRUMB_WAIT_STARTUP,0);platform_puts("NPU_STAGE=WAIT_STARTUP\n");
+    while(!a733_npu_application_ready()){if(!live())retained(9);progress_wait();}
     runtime=a733_npu_application_runtime();if(!runtime)retained(10);
     const struct npu_finite_network *w=&npu_finite_networks[0];
     if(!w->reference_bytes||w->reference_bytes>sizeof copied)retained(14);
@@ -269,19 +306,33 @@ static void npu_latency_client(void *unused)
         windows();if(npu_runtime_queue_claim(&direct,runtime)!=1)retained(41);
         int registered=npu_queue_register(&direct.queue,&command,&runtime->commands[1]);
         if(registered!=1)retained(42);
+#if SUNSTONE_NPU_IDLE_BENCH
+        idle_start();
+#endif
     }
     struct storage_digest digest;storage_digest_init(&digest);unsigned mismatch=0;
     if(!runtime->service.worker)retained(59);
     platform_puts("NPU_STAGE=LATENCY\n");start=a733_smp_counter();
     const uint64_t client_before=ulTaskGetRunTimeCounter(NULL),worker_before=ulTaskGetRunTimeCounter(runtime->service.worker);
+#if SUNSTONE_NPU_IDLE_BENCH
+    const uint64_t power_before=owner_runtime(),power_elapsed_before=direct.power.counters.owner_cpu_ticks;
+#endif
     for(unsigned job=0;job<JOBS;++job) {
         current_job=job;if(!live())retained(24);sunstone_crumb(NPU_CRUMB_SUBMIT,job);
         const uint64_t before=a733_smp_counter();uint64_t entered=before;
         if(SUNSTONE_NPU_LATENCY_QUEUE) {
             prepare();struct npu_queue_fence fence;
-            uint64_t t=a733_smp_counter();entered=t;uint64_t lock=npu_runtime_queue_lock();
+            uint64_t t=a733_smp_counter();entered=t;
+#if SUNSTONE_NPU_IDLE_BENCH
+            /* Admission and submission share one lock span; a pending device is a failure here. */
+            int submitted=npu_runtime_queue_submit(&direct,&record,&command,(struct npu_queue_fence){0},1000000,&fence);
+            uint64_t lock;
+#else
+            uint64_t lock=npu_runtime_queue_lock();
             int submitted=npu_queue_submit(&direct.queue,&record,&command,(struct npu_queue_fence){0},1000000,&fence);
-            npu_runtime_queue_unlock(lock);submit_ticks+=a733_smp_counter()-t;
+            npu_runtime_queue_unlock(lock);
+#endif
+            submit_ticks+=a733_smp_counter()-t;
             if(submitted!=1)retained(43);
             if(npu_runtime_queue_wait(&direct,fence)!=1)retained(44);
             t=a733_smp_counter();acquire();lock=npu_runtime_queue_lock();
@@ -301,6 +352,14 @@ static void npu_latency_client(void *unused)
     end=a733_smp_counter();
     if(client_after<client_before||worker_after<worker_before)retained(60);
     client_cpu_ticks=client_after-client_before;worker_cpu_ticks=worker_after-worker_before;
+#if SUNSTONE_NPU_IDLE_BENCH
+    idle_warm_owner_ticks=owner_runtime()-power_before;
+    idle_warm_owner_elapsed=direct.power.counters.owner_cpu_ticks-power_elapsed_before;
+    idle_warm_wakes=direct.power.counters.owner_wakes;idle_warm_irq_ticks=direct.irq_cpu_ticks;
+    if(direct.power.counters.gates||direct.power.counters.resumes||direct.power.counters.writes)retained(81);
+    mismatch|=run_idle_windows();
+    mismatch|=run_idle_cycles();
+#endif
     unsigned char hash[32];storage_digest_end(&digest,hash);
     if(SUNSTONE_NPU_LATENCY_QUEUE) {
         return_queue(&direct);
@@ -316,7 +375,7 @@ static void npu_latency_client(void *unused)
     a733_npu_application_result.jobs=NPU_STARTUP_JOBS;a733_npu_application_result.job=runtime->counters.jobs;
     sunstone_crumb(NPU_CRUMB_CLOSE,0);platform_puts("NPU_STAGE=CLOSE\n");if(npu_job_close()!=1)retained(17);
     sunstone_crumb(NPU_CRUMB_LOCAL_STOP,0);platform_puts("NPU_STAGE=WAIT_LOCAL_STOP\n");
-    while(!a733_npu_application_stopped()){if(!live())retained(18);vTaskDelay(1);}
+    while(!a733_npu_application_stopped()){if(!live())retained(18);progress_wait();}
     if(!a733_npu_application_quiesce())retained(20);
     a733_npu_application_result.end=a733_smp_counter();completed=NPU_STARTUP_READY;
     if(!npu_startup_return_ready())retained(21);

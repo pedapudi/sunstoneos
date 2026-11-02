@@ -11,9 +11,10 @@ Each board result is one line of machine-readable JSON, and each status file is 
 | `id`, `entry_id`, `port` | The queue entry ID, which doubles as the record ID, and the board port. |
 | `image_sha256`, `git_revision` | The image hash and the revision that built it, copied from `result.json`. |
 | `hypothesis` | What the run tests, copied from the entry. |
+| `reference` | The `docs/` heading (`PATH#ANCHOR`) that holds the vendor sequence and the diff the run tests, copied from the entry; `none: REASON` for a coordinator exemption. Absent for entries queued before the flag. |
 | `outcome`, `verdict` | The runner outcome from `result.json`, and whether the hypothesis held: `passed`, `failed` or `inconclusive`. |
 | `measurements` | Named numbers with units, for example `{"name": "rtt_p50", "value": 104.458, "unit": "µs"}`. Names are lowercase snake case. |
-| `conditions` | Clocks, voltages, inputs and other settings, as named strings. |
+| `conditions` | Clocks, voltages, inputs and other settings, as named strings. `tools/evidence.py add` fills `kind` and `dram_mode` from the entry and the result. |
 | `evidence` | Paths to the run directory and other artifacts. |
 | `note` | Optional. One or two sentences for a fact that no field holds. |
 

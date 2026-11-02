@@ -32,7 +32,7 @@ def passed(name):
     print('PASS',name)
 
 
-def arguments(root, *extra, submit=False):
+def arguments(root, *extra, submit=False, development=False):
     parser = argparse.ArgumentParser()
     board.run_options(parser,submit)
     parser.add_argument('--evidence',type=Path)
@@ -44,8 +44,9 @@ def arguments(root, *extra, submit=False):
         image.write_bytes(b'MODEL ONLY - never launch')
     values = [str(image),'--port','3-1','--evidence',str(root/'run')]
     if submit:
-        values += ['--kind','probe','--expect','complete']
-    return parser.parse_args(values+list(extra))
+        values += ['--kind','probe','--expect','complete','--reference','docs/board-runner.md#submit-a-frozen-image-and-hypothesis']
+    # Existing cases exercise the qualification behavior; development cases opt in.
+    return parser.parse_args(values+([] if development else ['--preserve-dram'])+list(extra))
 
 
 class Model:
@@ -168,7 +169,7 @@ class Model:
         return types.SimpleNamespace(returncode=0,stdout='\n'.join(out),stderr='')
 
 
-def lifecycle(root,variant,restore=False):
+def lifecycle(root,variant,restore=False,dirty=None):
     root.mkdir()
     args=arguments(root)
     args.restore_rails=restore
@@ -194,6 +195,7 @@ def lifecycle(root,variant,restore=False):
             if variant=='restore-clock':words['0x8871000']=0
             return {'words':words}
         def prepare(self,info):
+            if dirty:self.record[dirty]=True
             return {'epoch':1,'generation':2,'watchdog':{'mode':0xb1,'session_seconds':1},
                     'uploads':[(0x41000000,args.image)],'launch':['exe','0x52000']}
         def capture(self,plan):
@@ -282,6 +284,201 @@ def transport_cases(out):
     else:raise AssertionError('transport error accepted')
     assert model.quarantined and len(model.calls)==0
     passed('transport-error-quarantines-unknown-instance')
+
+
+def development_dram_cases(out):
+    """A development run transfers no DRAM; --preserve-dram keeps the save, restore and DRAM quarantine."""
+    normal={'session':True,'last':{'stage':board.crumbs.RETURN_ROM,'value':0}}
+    for preserve in (False,True):
+        root=out/('dram-mode-'+('preserve' if preserve else 'development'));root.mkdir()
+        args=arguments(root,development=not preserve)
+        assert images.preserving(args)==preserve
+        model=Model('normal')
+        owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
+        owner.node,owner.identity=Path('/MODEL/003/009'),[1]
+        owner.tx=lambda *values:'';owner.wait=lambda *values:None;owner.arm=lambda *values,**keywords:None
+        owner.returned=lambda:(0,0,{});owner.usb_source_off=lambda *values,**keywords:None
+        plan={'format':'generic','uploads':[],'preserve_regions':[(0x41000000,4096)],'epoch':1,
+              'watchdog':{'mode':0xb1,'session_seconds':1},'launch':['exe','0x52000']}
+        saved=[{'address':0x41000000,'bytes':4096,'file':'x','sha256':'0'}]
+        with patch.object(images,'validate_uploads'),patch.object(images,'backup_dram',return_value=saved) as backup,\
+             patch.object(board.crumbs,'decode',return_value=normal):
+            assert owner.launch(plan)=='returned'
+        assert backup.called==preserve and ('dram_backups' in owner.record)==preserve
+        assert bool(owner.record.get('dram_dirty'))==preserve and bool(owner.record.get('dram_unsaved'))==(not preserve)
+        # A failure after validated retirement: development keeps the instance, preserve quarantines it.
+        for validated in (True,False):
+            owner.quarantined=False;owner.record['quarantined']=False
+            owner.record['native_retirement_validated']=validated
+            with patch.object(images,'capture',side_effect=ValueError('modeled decode failure')),\
+                 patch.object(owner.access,'quarantine_instance') as quarantine:
+                try:owner.capture(plan)
+                except board.Mismatch:pass
+                else:raise AssertionError('capture failure accepted')
+            expected=True if preserve else not validated
+            assert bool(quarantine.called)==expected,(preserve,validated)
+            if quarantine.called:
+                reason=quarantine.call_args.args[1]
+                assert ('DRAM restoration' in reason)==preserve and 'retirement' in reason
+        # Settling ownership: only a run that saved DRAM can leave it unresolved.
+        owner.quarantined=False;owner.record.pop('quarantined',None)
+        with patch.object(owner.access,'quarantine_instance') as quarantine:
+            owner.settle_dram_ownership()
+        assert bool(quarantine.called)==preserve
+        passed('dram-mode-'+('preserve-keeps-save-restore-and-quarantine' if preserve else 'development-skips-transfers-and-never-quarantines-for-dram'))
+    # The mode is recorded in the result and travels through the queue as a frozen option.
+    root=out/'dram-mode-queue';root.mkdir()
+    for flag in (False,True):
+        queue=board.Queue(root/('q-'+str(flag)));args=arguments(root,submit=True,development=not flag)
+        job=queue.submit(args)
+        assert job['options']['preserve_dram']==flag
+    passed('dram-mode-frozen-in-queue-entry')
+
+
+def reference_cases(out):
+    """A submission cites a tracked docs heading before anything is queued; only the coordinator exempts one."""
+    tree = out/'reference-tree';(tree/'docs').mkdir(parents=True)
+    (tree/'docs/known.md').write_text('# Vendor sequence\n\n```\n# not a heading\n```\n\n## Step `one`, with: punctuation?\n## Repeat\n## Repeat\n')
+    (tree/'docs/untracked.md').write_text('# Untracked\n')
+    (tree/'outside.md').write_text('# Outside\n')
+    for command in (['init','-q'],['add','docs/known.md','outside.md'],
+                    ['-c','user.name=t','-c','user.email=t@example.invalid','commit','-q','-m','fixture']):
+        subprocess.run(['git','-C',str(tree),*command],check=True,capture_output=True)
+    assert board.heading_anchors((tree/'docs/known.md').read_text())==[
+        'vendor-sequence','step-one-with-punctuation','repeat','repeat-1']
+    def attempt(name,*extra,reference=True):
+        root=out/('reference-'+name);root.mkdir()
+        args=arguments(root,submit=True,development=True)
+        args.host_tree=tree
+        args.reference=None
+        queue=board.Queue(root/'queue')
+        before=list((queue.root/'entries').glob('*')) if (queue.root/'entries').exists() else []
+        for key,value in zip(extra[::2],extra[1::2]):setattr(args,key,value)
+        try:job=queue.submit(args)
+        except ValueError as error:
+            entries=list((queue.root/'entries').glob('*')) if (queue.root/'entries').exists() else []
+            assert entries==before and not (queue.root/'state.json').exists(),(name,entries)
+            return str(error)
+        return job
+    for name,reference,message in (
+            ('missing',None,'requires --reference PATH#ANCHOR'),
+            ('no-anchor','docs/known.md','must read PATH#ANCHOR'),
+            ('absent-file','docs/absent.md#vendor-sequence','does not exist'),
+            ('outside-docs','outside.md#outside','not under docs/'),
+            ('untracked','docs/untracked.md#untracked','not tracked'),
+            ('unknown-anchor','docs/known.md#vendor','matches no heading'),
+            ('fenced-heading','docs/known.md#not-a-heading','matches no heading')):
+        error=attempt(name,'reference',reference)
+        assert isinstance(error,str) and message in error,(name,error)
+        passed('reference-refused-before-queue-'+name)
+    job=attempt('valid','reference','docs/known.md#repeat-1')
+    assert job['reference']['path']=='docs/known.md' and job['reference']['anchor']=='repeat-1'
+    assert job['options']['reference']=='docs/known.md#repeat-1' and len(job['reference']['sha256'])==64
+    assert json.loads((Path(job['directory'])/'entry.json').read_text())['reference']==job['reference']
+    # The same entry reaches the runner as a flag and lands in the result.
+    parsed=argparse.ArgumentParser();board.run_options(parsed)
+    run=parsed.parse_args([job['image'],'--port','3-1','--reference',job['options']['reference']])
+    assert board.run_reference(run)=={'path':'docs/known.md','anchor':'repeat-1'}
+    passed('reference-stored-in-entry-and-passed-to-the-run')
+    absolute=attempt('absolute','reference',str(tree/'docs/known.md')+'#step-one-with-punctuation')
+    assert absolute['reference']['path']=='docs/known.md'
+    passed('reference-accepts-absolute-path-and-github-anchor-rules')
+    for name,fields,message in (
+            ('none-alone',('reference','none'),'requires --approved-by coordinator'),
+            ('none-no-reason',('reference','none','approved_by','coordinator'),'nonempty --reference-reason'),
+            ('none-blank-reason',('reference','none','approved_by','coordinator','reference_reason','  '),'nonempty --reference-reason'),
+            ('none-reason-only',('reference','none','reference_reason','reads hardware facts'),'requires --approved-by coordinator')):
+        error=attempt(name,*fields)
+        assert isinstance(error,str) and message in error,(name,error)
+        passed('reference-'+name+'-refused')
+    exempt=attempt('exempt','reference','none','approved_by','coordinator','reference_reason','reads hardware facts')
+    assert exempt['reference']=={'none':True,'approved_by':'coordinator','reason':'reads hardware facts'}
+    assert exempt['options']['reference']=='none' and exempt['options']['reference_reason']=='reads hardware facts'
+    run=parsed.parse_args([exempt['image'],'--port','3-1','--reference','none','--approved-by','coordinator',
+                           '--reference-reason','reads hardware facts'])
+    assert board.run_reference(run)['reason']=='reads hardware facts'
+    passed('reference-none-accepted-only-with-coordinator-and-reason')
+    # A queue-level refusal keeps the reference in its result; evidence records copy it.
+    queue=board.Queue(out/'reference-valid'/'queue')
+    with queue.locked() as state:
+        entry=next(j for j in state['jobs'] if j['id']==job['id'])
+        queue.refused(state,entry,'modeled refusal')
+    assert entry['result']['reference']==job['reference']
+    evidence=images.load('runner_evidence',ROOT/'tools/evidence.py')
+    record=evidence.queue_record(queue.root,job['id'],'cpu')
+    assert record['reference']=='docs/known.md#repeat-1'
+    problems=[];evidence.check_value(record,evidence.load_schema(),'record',problems);assert not problems,problems
+    record=evidence.queue_record(board.Queue(out/"reference-exempt"/"queue").root,exempt['id'],'cpu')
+    assert record['reference']=='none: reads hardware facts'
+    problems=[];evidence.check_value(record,evidence.load_schema(),'record',problems);assert not problems,problems
+    passed('reference-copied-into-evidence-record-and-schema')
+
+
+def reset_release_cases(out):
+    """A verified fresh instance after a watchdog reset is released; every other unresolved state stays quarantined."""
+    for dirty in ('dram_dirty','npu_dirty'):
+        for variant,quarantined in (('watchdog',False),('no-return',True),('missing-return',True),('fel-after-return',True)):
+            result,model,owner=lifecycle(out/f'reset-{dirty}-{variant}',variant,dirty=dirty)
+            assert bool(model.quarantined)==quarantined and result['quarantined']==quarantined,(dirty,variant,result)
+            if variant=='watchdog':
+                assert result['outcome']=='watchdog-reset' and result['dram_lost'] and result['rom_returned']
+                assert result['dram_released_by_reset'] and owner.identity!=[1,1,3,4,5]
+            q=board.Queue(out/f'reset-queue-{dirty}-{variant}');args=arguments(out/f'reset-{dirty}-{variant}',submit=True)
+            job=q.submit(args);assert q.claim('3-1')
+            q.complete(job['id'],result)
+            assert bool(q.status()['boards']['3-1']['pause'])==quarantined,(dirty,variant)
+            passed(f'reset-{dirty}-{variant}-'+('quarantined' if quarantined else 'released-and-unpaused'))
+    # A transport failure before any return leaves the instance unknown.
+    root=out/'reset-transport';root.mkdir();args=arguments(root);model=Model('normal')
+    owner=board.Live(args,root,{'dram_dirty':True,'dram_lost':True},access=model,
+                     process=lambda *a,**k:types.SimpleNamespace(returncode=1,stdout='',stderr='failed'),now=model.now,sleep=model.sleep)
+    try:
+        with owner.locked():owner.tx('version')
+    except board.TransportFailure:pass
+    assert model.quarantined
+    passed('reset-transport-failure-quarantines-even-with-dram-lost')
+
+    class Access:
+        def __init__(self,root,identity):
+            self.RECOVERY_REQUIRED=root/'recovery-required.json';self.current=identity
+        def discover(self,port):return Path('/MODEL/003/009')
+        def identity(self,node):return self.current
+        def target(self,node):return Path('/MODEL/3-1')
+    def finish(root,**fields):
+        root.mkdir()
+        q=board.Queue(root/'state');args=arguments(root,submit=True)
+        job=q.submit(args);assert q.claim('3-1')
+        result={'first_failure':None,'instances':[{'identity':[7,1,1,0,0]},{'identity':[7,2,1,0,0]}],
+                'outcome':'watchdog-reset','rom_returned':True,'dram_lost':True,'quarantined':True,**fields}
+        q.complete(job['id'],result)
+        return q
+    def attempt(name,reason=board.DRAM_UNRESOLVED,current=(7,2,1,0,0),**fields):
+        root=out/('release-'+name);q=finish(root,**fields);access=Access(root,list(current))
+        record=access.RECOVERY_REQUIRED.with_name('recovery-required-3-1-7-2-1-0-0.json')
+        record.write_text(json.dumps({'identity':[7,2,1,0,0],'reason':reason}))
+        with patch.object(board,'CACHE',root/'cache'):
+            try:released=q.release('3-1','fresh instance after watchdog reset',access)
+            except ValueError as error:return record,q,str(error),root
+        return record,q,None,root
+    record,q,error,root=attempt('accepted')
+    assert error is None and not record.exists()
+    assert len(list((root/'cache/trash/recovery-required-released').glob('*recovery-required-3-1-7-2-1-0-0.json')))==1
+    events=[json.loads(l) for l in (q.root/'ledger.jsonl').read_text().splitlines()]
+    assert [e['reason'] for e in events if e['event']=='released']==['fresh instance after watchdog reset']
+    passed('release-accepts-fresh-instance-after-watchdog-reset')
+    for name,kwargs in (('no-return',dict(outcome='no-return',rom_returned=False,dram_lost=False)),
+                        ('transport-failure',dict(reason='FEL transaction failed: boom')),
+                        ('unresolved-return',dict(outcome='host-error',dram_lost=False)),
+                        ('cleanup-failure',dict(cleanup_failure='vbus')),
+                        ('other-instance',dict(current=(7,3,1,0,0)))):
+        record,q,error,root=attempt(name,**kwargs)
+        assert error and record.exists(),(name,error)
+        assert not (root/'cache/trash').exists()
+        passed('release-refuses-'+name)
+    try:board.Queue(out/'release-accepted/state').release('3-1','  ',Access(out,[7,2,1,0,0]))
+    except ValueError:pass
+    else:raise AssertionError('empty reason accepted')
+    passed('release-requires-reason')
 
 
 def decoded_expectation_cases(out):
@@ -1011,6 +1208,8 @@ def main():
     if 'queue' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):withdraw_cases(args.out)
+        with patch.object(board,'port_idle',return_value=True):reset_release_cases(args.out)
+    if 'transport' in groups:development_dram_cases(args.out);reference_cases(args.out)
     if 'queue-integrity' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_integrity_cases(args.out)
     if 'policy' in groups:policy_cases(args.out)

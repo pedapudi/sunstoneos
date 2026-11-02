@@ -33,21 +33,26 @@ def main():
             if s['st_value']:
                 symbols.setdefault(s.name,set()).add(int(s['st_value']))
                 if unit=='npu_irq.c':locals[s.name]=int(s['st_value'])
-        offsets=set();layouts={}
+        offsets=set();controller_offsets=set();layouts={}
         for cu in elf.get_dwarf_info().iter_CUs():
             for die in cu.iter_DIEs():
                 if die.tag=='DW_TAG_structure_type' and die.attributes.get('DW_AT_name') and die.attributes['DW_AT_name'].value==b'a733_npu_controller':
                     for child in die.iter_children():
                         if child.tag=='DW_TAG_member' and child.attributes['DW_AT_name'].value==b'state':
                             offsets.add(child.attributes['DW_AT_data_member_location'].value)
+                if die.tag=='DW_TAG_structure_type' and die.attributes.get('DW_AT_name') and die.attributes['DW_AT_name'].value==b'npu_service' and 'DW_AT_byte_size' in die.attributes:
+                    for child in die.iter_children():
+                        if child.tag=='DW_TAG_member' and child.attributes['DW_AT_name'].value==b'controller':
+                            controller_offsets.add(child.attributes['DW_AT_data_member_location'].value)
                 if die.tag=='DW_TAG_structure_type':
                     members={child.attributes['DW_AT_name'].value.decode():child.attributes['DW_AT_data_member_location'].value for child in die.iter_children() if child.tag=='DW_TAG_member' and 'DW_AT_data_member_location' in child.attributes and 'DW_AT_name' in child.attributes}
                     name=die.attributes.get('DW_AT_name')
                     if name and name.value in (b'npu_finite_receipt',b'a733_smp_contract'):layouts[name.value.decode()]=members
                     if 'npu_irq' in members and 'spi_enabled' in members:layouts['saved']=members
                     if set(members)=={'service','masked','stopped','fault'}:layouts['binding']=members
-        assert len(offsets)==1,offsets
-        state_offset=offsets.pop()
+        assert len(offsets)==1 and len(controller_offsets)==1,(offsets,controller_offsets)
+        # The service embeds the controller after its direct-queue handoff words.
+        state_offset=offsets.pop()+controller_offsets.pop()
     def addr(name):
         values=symbols.get(name,set());assert len(values)==1,(name,values)
         return next(iter(values))
@@ -62,12 +67,12 @@ def main():
     for n in ['mask','rearm','stop','binding']:assert n in locals,n
     a.output.mkdir(parents=True,exist_ok=True)
     for case in a.case or [c for c in CASES if not c.startswith('restart')]:
-        cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
+        cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM);failures=[]
         # The CCU and SYSCTRL pages read zero: the NPU resets held, its module
         # gate closed and the shared SRAM routed to the NPU, which the monitor
         # routes back to the CPU before its return (apps/npu-finite/monitor.c).
         for base,size in [(D,0x10000),(0x03460000,0x20000),(0x07050000,0x10000),(0x41000000,0x1200000),(0x50000000,0x1000000),
-                          (0x02000000,0x1000000),(0x03000000,0x1000)]:cpu.mem_map(base,size)
+                          (0x02000000,0x1000000),(0x03000000,0x1000),(0x07090000,0x1000)]:cpu.mem_map(base,size)
         for base,data in parts:
             assert 0x41000000<=base and base+len(data)<=0x42200000
             if data:cpu.mem_write(base,data)
@@ -88,12 +93,16 @@ def main():
         def code(uc,address,size,unused):
             nonlocal clock,panic,terminal
             ins=int.from_bytes(uc.mem_read(address,4),'little')
+            if ins in (0xd40b81a1,0xd40b81c1):
+                # A breadcrumb or a first-failure record: the EL1 vector would return from it.
+                if ins==0xd40b81c1:failures.append((uc.reg_read(UC_ARM64_REG_X0),uc.reg_read(UC_ARM64_REG_X1)))
+                uc.reg_write(UC_ARM64_REG_PC,address+4);return
             if case.startswith('monitor-'):
                 if address in (syms['a733_smp_stop'],syms['npu_finite_rom_return']):
                     terminal='retained' if address==syms['a733_smp_stop'] else 'returned';uc.emu_stop();return
                 kind=ins&0xffffffe0
                 if kind in (0xd51fe220,0xd51be220,0xd51be320):uc.reg_write(UC_ARM64_REG_PC,address+4);return
-                if kind in (0xd53e5200,0xd5381000):
+                if kind in (0xd53e5200,0xd5381000,0xd53e4020,0xd53e4000,0xd53e6000):  # ESR, SCTLR, ELR, SPSR, FAR
                     uc.reg_write(UC_ARM64_REG_X0+(ins&31),(0x17<<26) if kind==0xd53e5200 else 0);uc.reg_write(UC_ARM64_REG_PC,address+4);return
             if ins&0xffffffe0==0xd5384240:  # Unicorn runs at EL1; model the selected entry's EL.
                 uc.reg_write(UC_ARM64_REG_X0+(ins&31),current_el*4);uc.reg_write(UC_ARM64_REG_PC,address+4);return
@@ -138,7 +147,7 @@ def main():
             for name,value in [('epoch',7),('generation',8),('lease',9),('diagnostic_deadline',100000)]:put(syms['admission']+layouts['a733_smp_contract'][name],value)
             start,end=syms['__npu_clean_start'],syms['__device_pool_end']
             # Receipt fields are those published by unchanged return.c after quiescence.
-            for name,value in [('magic',0x4e50555245543031),('epoch',7),('generation',8),('lease',9),('complete',1),('clean_start',start),('clean_end',end),('clean_lines',(end-start)//64),('deadline',100000)]:put(syms['npu_finite_receipt']+layouts['npu_finite_receipt'][name],value)
+            for name,value in [('magic',0x4e50555354415231),('epoch',7),('generation',8),('lease',9),('complete',1),('clean_start',start),('clean_end',end),('clean_lines',(end-start)//64),('deadline',100000)]:put(syms['npu_finite_receipt']+layouts['npu_finite_receipt'][name],value)
             if case=='monitor-pending':regs[D+0x20c]=2
             before=len(writes);cpu.reg_write(UC_ARM64_REG_X2,1)
             call('sd_single_core_exception',0x733,0,el=3)
@@ -180,6 +189,8 @@ def main():
             regs.update({D+0x8c:0,D+0xc18:0,D+0x460:0xb000,D+0x6308:0})
             if case=='bind-priority':regs[D+0x460]=0
             assert call('npu_application_irq_bind',SERVICE)==(0 if case=='bind-priority' else 1)
+            # A refused bind records the clause that refused it: 8 is the priority.
+            assert (failures and failures[-1][1]==0xb08) if case=='bind-priority' else not failures,failures
             if case!='bind-priority':
                 cookie=locals['binding']
                 if case.startswith('restart'):

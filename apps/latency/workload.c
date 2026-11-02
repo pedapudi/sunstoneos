@@ -217,6 +217,9 @@ void latency_workload_run(struct latency_result *out)
     ss_latency_snapshot(out->core);
     ss_latency_phase_snapshot(out->phases);
     ss_latency_sites_snapshot(out->sites);
+#ifdef SUNSTONE_LATENCY_PMU
+    ss_latency_site_pmu_snapshot(out->site_pmu);
+#endif
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         ss_latency_lock_counts(c, out->acquisitions[c]);
     for (unsigned p = 0; p < SS_LAT_PHASES; ++p)

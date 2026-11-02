@@ -10,6 +10,10 @@ Supplied as inputs, as in os-cpu-return.py: the completion of the service stop
 paths (thermal, PMIC), the task notifications that wake the terminal tasks and
 the scheduler state words. No FreeRTOS task switch happens in this model.
 
+The model enters the vectors directly with the exception state a core would
+hold (ESR_EL1, FAR_EL1, ELR_EL1, SPSR_EL1, ICC_PMR_EL1); it does not generate
+the exception, the translation faults or the MMU permissions.
+
 Kernel entry points that this model stubs: xTaskGetSchedulerState, xTaskGenericNotify
 and vTaskSuspend.
 
@@ -27,6 +31,21 @@ The context cases:
   panic, panic-masked, unexpected-interrupt
                Software-detected faults: a core that can still schedule
                returns; masked or in a critical section it keeps the watchdog.
+  el0-data-abort, el0-undefined, el0-instruction-abort, el0-secondary
+               A synchronous exception from an application task at EL0 on a core
+               that can still schedule enters the EL1 vector (lower-EL slot),
+               which abandons the faulting context, claims a reserved stack and
+               returns to EL0 in os_cpu_return_el0_fault. That runs the
+               ss_fail claim (record group application, detail 0xe00 plus the
+               ESR class, value the faulting address, caller ELR), suspends the
+               task, and the supervisor and terminals return to the ROM.
+  el1-exception, el0-masked, el0-pmr, el0-other-class, el0-device-first,
+  el0-no-stack
+               Negative controls that must keep the watchdog ending: an
+               exception from EL1; an EL0 exception with interrupts or the
+               priority mask closed; an EL0 exception of an unlisted class; one
+               after a device failure closed admission; one past the last
+               reserved stack.
 --baseline-elf runs the startup and running failures on an image without the
 failure return (today's code); they must end at the watchdog, so this check
 fails there for the cases that expect a ROM return.
@@ -77,10 +96,21 @@ class Failure(terminal.Model):
         self.suspended = set()
         self.panics = []
         self.scheduler_state = 1   # taskSCHEDULER_NOT_STARTED; the kernel's own state words are not modeled
+        self.el0_watch = False
+        self.el0_entry = names.get('os_cpu_return_el0_fault')
+        self.el0_seen = None
         self.stubs = {names[n]: n for n in ('xTaskGenericNotify', 'vTaskSuspend', 'xTaskGetSchedulerState') if n in names}
 
     def code(self, uc, a, size, unused):
         stub = self.stubs.get(a)
+        if self.el0_watch and a == self.el0_entry:
+            # The vector returned to EL0 in the failure function: capture what it was given.
+            self.el0_watch = False
+            self.el0_seen = dict(core=self.core, args=[self.gpr('x%d' % i) for i in range(3)], sp_el0=self.get('sp_el0'),
+                                 spsr=self.get('spsr_el1'), tpidr=self.get('tpidr_el1'))
+            self.stop = 'el0'
+            uc.emu_stop()
+            return
         if stub == 'xTaskGenericNotify':
             self.notified.append((self.core, self.gpr('x0')))
             uc.reg_write(prior.fault.REGS[0], 1)
@@ -223,10 +253,26 @@ def returned_to_rom(scenario):
     assert rtc['last'] >> 16 == 0x0503 and rtc['last'] & 0xffff == 0, hex(rtc['last'])
 
 
-def case_startup(elf):
+def never_ran_npu(s):
+    """An NPU image whose service never ran: undo the terminal fixture's finished, active and stopped service state."""
+    m = s.model
+    npu = s.local('npu')
+    layout = Layouts(s.elf, {'os_npu_application', 'npu_runtime', 'npu_service'})
+    nf = layout.layouts['os_npu_application']
+    service = npu + nf['runtime'] + layout.layouts['npu_runtime']['service']
+    for address in (npu + nf['stopped'], npu + nf['active'], service + layout.layouts['npu_service']['irq_stopped'],
+                    service + layout.layouts['npu_service']['runtime_parked']):
+        m.put32(address, 0)
+    report = s.local('os_npu_published_report')
+    m.uc.mem_write(report, bytes(104))
+
+
+def case_startup(elf, npu_never_ran=False):
     s = Scenario(elf)
     m = s.model
     s.scheduler(False)
+    if npu_never_ran:
+        never_ran_npu(s)
     for name in ('probe_arrived', 'probe_finished'):
         for c in range(8):
             m.put32(s.local(name) + 4 * c, 1)
@@ -299,6 +345,107 @@ def drive_supervisor(s, rounds=8):
     return outcome
 
 
+VECTOR_LOWER_A64_SYNC = 8   # slot in the EL1 vector table: lower EL using AArch64, synchronous
+VECTOR_CURRENT_SPX_SYNC = 4
+
+
+def esr_value(klass, iss=0):
+    return klass << 26 | 1 << 25 | iss
+
+
+def raise_exception(s, core, slot, klass, iss=0, far=0, elr=0x41234560, spsr=0, pmr=0xff):
+    """Enter the EL1 vector for a synchronous exception, with the state a core holds on entry.
+
+    Runs until the vector returns to EL0 in the failure function (outcome 'el0'), or ends at
+    another outcome (a park in the EL3 stop, a return)."""
+    m = s.model
+    m.core = core
+    m.set('esr_el1', esr_value(klass, iss))
+    m.set('far_el1', far)
+    m.set('elr_el1', elr)
+    m.set('spsr_el1', spsr)
+    m.set('icc_pmr_el1', pmr)
+    m.reg[core]['daif'] = 0x3c0   # the exception masks DAIF
+    m.el0_watch = True
+    m.el0_seen = None
+    s.start(core, s.image.symbols['a733_cached_el1_vectors'] + slot * 128)
+    m.uc.context_restore(s.contexts[core])
+    m.uc.reg_write(prior.fault.REGS[16], 0x1234567890abcdef)   # the faulting task's x16, kept in TPIDR_EL1
+    s.contexts[core] = m.uc.context_save()
+    return s.run_one(core)
+
+
+def finish_el0_fault(s, core):
+    """Continue the failure function at EL0 on the stack that the vector gave the task."""
+    m = s.model
+    m.el0_watch = False
+    m.uc.context_restore(s.contexts[core])
+    m.uc.reg_write(UC_ARM64_REG_SP, m.el0_seen['sp_el0'])
+    s.contexts[core] = m.uc.context_save()
+    return s.run_one(core)
+
+
+def check_el0_entry(s, core, klass, iss, far, elr):
+    seen = s.model.el0_seen
+    stacks = s.local('os_cpu_return_el0_stacks')
+    assert seen and seen['core'] == core, seen
+    assert seen['args'] == [esr_value(klass, iss), far, elr], [hex(a) for a in seen['args']]
+    assert seen['spsr'] == 0, 'the task returns to EL0t with interrupts open'
+    assert seen['tpidr'] == core, 'TPIDR_EL1 holds the core index again'
+    assert stacks < seen['sp_el0'] <= stacks + 8 * 2048 and (seen['sp_el0'] - stacks) % 2048 == 0, hex(seen['sp_el0'])
+    return (seen['sp_el0'] - stacks) // 2048 - 1
+
+
+def case_el0_return(elf, name, core, klass, iss, far, elr, expect_value, pmr=0xff):
+    """An EL0 exception ends the run at the ROM, with the application record."""
+    s = Scenario(elf)
+    s.scheduler(True)
+    m = s.model
+    assert raise_exception(s, core, VECTOR_LOWER_A64_SYNC, klass, iss, far, elr, pmr=pmr) == 'el0'
+    slot = check_el0_entry(s, core, klass, iss, far, elr)
+    assert slot == 0 and s.flag('os_cpu_return_el0_slots') == 1
+    assert finish_el0_fault(s, core) == 'park' and core in m.suspended, 'the faulting task suspends itself'
+    assert s.flag('closing') == s.flag('failing') == 1 and not s.flag('ready') and not s.flag('prefail')
+    assert s.fatal() == 0, 'admission stays open for the stop paths'
+    site = RETURN | (iss & 0x7fff) << 16 | APPLICATION << 12 | 0xe00 | klass
+    record, payload = s.record()
+    assert record['context'] == 'fault' and record['site'] == site and record['value'] == expect_value and \
+        record['caller'] == elr and record['core'] == core, record
+    rtc = s.rtc()
+    assert rtc['esr'] == site and rtc['elr'] == elr and rtc['far'] == expect_value, {k: hex(v) for k, v in rtc.items()}
+    failure = board_failure(s)
+    assert failure['group'] == 'application' and failure['site'] == 0xe00 | klass, failure
+    assert drive_supervisor(s) == 'park' and s.flag('ready') == 1
+    assert sorted(c for c, _ in m.notified) == [0] * 8, m.notified
+    outcome = s.terminals()
+    assert outcome == 'rom', outcome
+    returned_to_rom(s)
+    assert s.record()[0] == record and not m.postclean
+    return s, dict(name=name, outcome=outcome, record=record, breadcrumb=failure, instructions=m.count)
+
+
+def case_el0_stop(elf, name, slot=VECTOR_LOWER_A64_SYNC, core=6, klass=0x24, iss=0x46, spsr=0, pmr=0xff,
+                  preset_fatal=False, used_slots=0):
+    """An exception that must keep the watchdog ending: the core reaches the EL3 stop, no claim."""
+    s = Scenario(elf)
+    s.scheduler(True)
+    m = s.model
+    if preset_fatal:
+        m.put32(s.board + s.layouts['board_application']['fatal'], 1)
+    if used_slots:
+        m.put32(s.local('os_cpu_return_el0_slots'), used_slots)
+    outcome = raise_exception(s, core, slot, klass, iss, 0x7a000000, 0x41234560, spsr, pmr)
+    if preset_fatal:
+        # The vector accepts the fault; the claim is refused, admission stays closed, and the supervisor stops.
+        assert outcome == 'el0' and finish_el0_fault(s, core) == 'park'
+        assert s.fatal() == 1 and not s.flag('closing') and not s.flag('failing')
+    else:
+        assert watchdog_ending(s, core, outcome), outcome
+        assert not s.flag('closing') and not s.flag('failing') and m.el0_seen is None
+        assert s.flag('os_cpu_return_el0_slots') == used_slots
+    return s, dict(name=name, outcome='watchdog')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('elf', type=Path)
@@ -313,6 +460,29 @@ def main():
     assert 'os_cpu_return_failure' in board_images.symbols(args.elf)
     if args.baseline_elf:
         assert 'os_cpu_return_failure' not in board_images.symbols(args.baseline_elf)
+
+    # An NPU image that fails before its service ran publishes the never-started report.
+    if 'os_npu_published_report' in symbols(args.elf):
+        s, outcome = case_startup(args.elf, npu_never_ran=True)
+        assert outcome == 'rom', outcome
+        returned_to_rom(s)
+        raw = bytes(s.model.uc.mem_read(s.local('os_npu_published_report'), 104))
+        words = struct.unpack_from('<4I2Q10I', raw)
+        # magic, version, bytes, finished=2 (never started), the failure record's epoch and generation,
+        # then stopped=1 and nothing else.
+        assert words[:4] == (0x5255504e, 1, 104, 2) and words[4] == prior.EPOCH and words[5] == 7, words
+        assert words[6:] == (0, 0, 0, 0, 0, 0, 1, 0, 0, 0) and not any(raw[72:]), words
+        rows.append(dict(name='startup-npu-never-ran', outcome=outcome, report=list(words)))
+        # A service that already ran (the fixture's finished report) is never replaced.
+        s, outcome = case_startup(args.elf)
+        assert outcome == 'rom' and s.model.u32(s.local('os_npu_published_report') + 12) == 1
+        rows.append(dict(name='startup-npu-ran', outcome=outcome))
+
+        save(args.out / 'results.json', {'physical_access': False, 'cases': rows,
+             'image_sha256': hashlib.sha256(args.elf.read_bytes()).hexdigest(),
+             'model_boundary': 'An NPU image without an application manifest holds no result record, so only the NPU report is checked.'})
+        print('PASS linked OS failure return (NPU report):', len(rows), 'cases')
+        return
 
     # Before the scheduler: ROM return, record, all eight cores in the terminal.
     s, outcome = case_startup(args.elf)
@@ -426,6 +596,44 @@ def main():
     assert failure['group'] == 'board' and failure['site'] == 0x800 | 300 and failure['value'] == hex(300), failure
     rows.append(dict(name='unexpected-interrupt', outcome=outcome))
 
+    # Exceptions from an application task at EL0: the task is abandoned, the board returns.
+    ELR = 0x41070040
+    for name, core, klass, iss, far, value in (
+            ('el0-data-abort', 6, 0x24, 0x46, 0x7a000000, 0x7a000000),      # store to an unmapped address
+            ('el0-instruction-abort', 6, 0x20, 0x06, 0x7a000100, 0x7a000100),
+            ('el0-undefined', 2, 0x00, 0x00, 0xdead0000, 0),                # FAR is unknown for this class
+            ('el0-alignment', 3, 0x24, 0x61, 0x41f00003, 0x41f00003),       # data abort, alignment fault status
+            ('el0-pc-alignment', 5, 0x22, 0, 0x41070042, 0x41070042),
+            ('el0-sp-alignment', 1, 0x26, 0, 0, 0),
+            ('el0-secondary', 7, 0x24, 0x46, 0x7a000008, 0x7a000008)):
+        # The controller reads the unmasked priority mask back as 0xf8 when it has five priority bits.
+        s, row = case_el0_return(args.elf, name, core, klass, iss, far, ELR, value, pmr=0xf8 if core == 6 else 0xff)
+        rows.append(row)
+        if name == 'el0-data-abort':
+            (args.out / 'el0-data-abort-failure-record.bin').write_bytes(s.record()[1])
+    # A second EL0 fault on another core: its own stack, the first record kept.
+    s, row = case_el0_return(args.elf, 'el0-first', 6, 0x24, 0x46, 0x7a000000, ELR, 0x7a000000)
+    first = s.record()[1]
+    assert raise_exception(s, 4, VECTOR_LOWER_A64_SYNC, 0x00, 0, 0, 0x41070100) == 'el0'
+    assert check_el0_entry(s, 4, 0x00, 0, 0, 0x41070100) == 1, 'a second stack'
+    assert finish_el0_fault(s, 4) == 'park' and 4 in s.model.suspended and s.fatal() == 0 and s.record()[1] == first
+    rows.append(dict(name='el0-second-fault', outcome='first-record-kept'))
+
+    # Negative controls: the watchdog ending is kept.
+    for name, kwargs in (
+            ('el1-exception', dict(slot=VECTOR_CURRENT_SPX_SYNC, spsr=5, klass=0x25)),    # data abort taken from EL1h
+            ('el1-svc-class-fault', dict(slot=VECTOR_CURRENT_SPX_SYNC, spsr=5, klass=0x21)),
+            ('el0-masked', dict(spsr=0x80)),                  # interrupts masked in the faulting task
+            ('el0-pmr', dict(pmr=0x98)),                      # in a kernel critical section (API mask)
+            ('el0-aarch32', dict(spsr=0x10)),
+            ('el0-other-class', dict(klass=0x07)),            # an FP/SIMD access trap
+            ('el0-no-stack', dict(used_slots=8))):
+        s, row = case_el0_stop(args.elf, name, **kwargs)
+        rows.append(row)
+    # A device failure closed admission first: the exception still ends the task, the claim is refused.
+    s, row = case_el0_stop(args.elf, 'el0-device-first', preset_fatal=True)
+    rows.append(row)
+
     if args.baseline_elf:
         # Today's code: the same failures close admission and start no return.
         base, outcome = case_startup(args.baseline_elf)
@@ -434,6 +642,11 @@ def main():
         base, outcome, site = case_running_claim(args.baseline_elf)
         assert base.fatal() == 1 and not base.flag('closing')
         rows.append(dict(name='baseline-running', outcome='admission closed; no return requested'))
+        # Without the failure return an EL0 exception takes the EL3 stop.
+        base = Scenario(args.baseline_elf)
+        base.scheduler(True)
+        assert watchdog_ending(base, 6, raise_exception(base, 6, VECTOR_LOWER_A64_SYNC, 0x24, 0x46, 0x7a000000))
+        rows.append(dict(name='baseline-el0-exception', outcome='watchdog'))
     save(args.out / 'results.json', {'physical_access': False, 'cases': rows,
          'image_sha256': hashlib.sha256(args.elf.read_bytes()).hexdigest(),
          'baseline_sha256': hashlib.sha256(args.baseline_elf.read_bytes()).hexdigest() if args.baseline_elf else None,

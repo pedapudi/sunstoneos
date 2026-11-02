@@ -1,0 +1,622 @@
+{
+  "retrieved": "2026-11-01",
+  "purpose": "Scheduler literature and source audit; downloaded bytes remain outside tracked source",
+  "sources": [
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/v6.12/kernel/sched/core.c",
+      "revision": "v6.12",
+      "sha256": "4b9bdb7831e1d2b747a9bcbf3e1c7bef187dd1c0555e6cc959fd2118046345bd",
+      "sections": "ttwu_queue, sched_ttwu_pending, try_to_wake_up",
+      "license": "Source-specific notices; reference only, no copied implementation",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/v6.12/kernel/sched/rt.c",
+      "revision": "v6.12",
+      "sha256": "7ce06c71ee32631462e305b2055db6add0d31bc278a50f0ab05fa77ed2d1fcb1",
+      "sections": "push_rt_tasks, pull_rt_task, irq_work",
+      "license": "Source-specific notices; reference only, no copied implementation",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/v6.12/kernel/locking/qspinlock.c",
+      "revision": "v6.12",
+      "sha256": "3a3a0d1bacc726a95a033cb737f5cd756be4919d7b70648611d56661da948684",
+      "sections": "queued_spin_lock_slowpath",
+      "license": "Source-specific notices; reference only, no copied implementation",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/v6.12/include/linux/llist.h",
+      "revision": "v6.12",
+      "sha256": "e14ce69af0824e5e9ee970eba64871aa1e93209373d79b9b49ccb8128bf2d7a5",
+      "sections": "llist_add, llist_del_all",
+      "license": "Source-specific notices; reference only, no copied implementation",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://www.kernel.org/doc/html/latest/scheduler/sched-deadline.html",
+      "revision": "retrieved 2026-11-01",
+      "sha256": "6fac706eab51acc625cde6fd754d3b12e3dba75cb17c81cc0ef91ebb9d3a1649",
+      "sections": "algorithm and bandwidth management",
+      "license": "Source-specific notices; reference only, no copied implementation",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://docs.kernel.org/6.12/scheduler/sched-eevdf.html",
+      "revision": "v6.12",
+      "sha256": "4e3deb48ee0202eb087999c53cf6a9ed03b45e89ae4e85387eaa9f5ef0e61e90",
+      "sections": "EEVDF scheduling",
+      "license": "Source-specific notices; reference only, no copied implementation",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://www.autosar.org/fileadmin/standards/R24-11/CP/AUTOSAR_CP_SWS_OS.pdf",
+      "revision": "R24-11",
+      "sha256": "6ec1915808e8819c6552bcc69fe935d8664f7bf0b8f9eb55810377e79ff8ae44",
+      "sections": "multicore OS, spinlocks and scheduling",
+      "license": "Source-specific notices; reference only, no copied implementation",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://docs.rtems.org/docs/main/c-user/config/scheduler-clustered.html",
+      "revision": "main retrieved 2026-11-01",
+      "sha256": "13c6d0453197431d0b7869254aa8ccb62eae8342545c8c2baa8c5d9d228c4c4b",
+      "sections": "clustered scheduler configuration",
+      "license": "Source-specific notices; reference only, no copied implementation",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://docs.rtems.org/docs/main/c-user/key_concepts.html",
+      "revision": "main retrieved 2026-11-01",
+      "sha256": "bd2d5bb2923816fbee2d89a6998fd353421b9b3d0babb9079c7b50071a35f584",
+      "sections": "MrsP and OMIP",
+      "license": "Source-specific notices; reference only, no copied implementation",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://arxiv.org/pdf/1909.09600",
+      "revision": "paper publication",
+      "sha256": "ba1075f11960e28acab23023ec89a3af1bc7bda7c89f7f678844a65422788f8d",
+      "sections": "Sections 3\u20137 and 9",
+      "license": "Copyright authors/publisher; reference only",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://people.mpi-sws.org/~bbb/papers/pdf/rtss10b.pdf",
+      "revision": "paper publication",
+      "sha256": "8d0e54574a90dd48a85d2e899667328640cdf764dcc898f610f731e7bc330f14",
+      "sections": "Sections 1, 4\u20136",
+      "license": "Copyright authors/publisher; reference only",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://people.mpi-sws.org/~bbb/papers/pdf/daes12.pdf",
+      "revision": "paper publication",
+      "sha256": "c0d19951bde0640a43b0c12f0298212b2d284c419bbb520fcbc1dd31eb7e3239",
+      "sections": "Sections 2\u20135",
+      "license": "Copyright authors/publisher; reference only",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://www.cs.unc.edu/~anderson/diss/bbbdiss.pdf",
+      "revision": "2011 PhD dissertation",
+      "sha256": "4121c972da7dccb597bdfb95af96c5d3b2634de37137744afb8a0d80d52e16e7",
+      "sections": "Chapters 2\u20136",
+      "license": "Author dissertation; reference only",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://storage.googleapis.com/gweb-research2023-media/pubtools/6413.pdf",
+      "revision": "SOSP 2021 published paper",
+      "sha256": "c37d636045a45e2216e7047ba1fb9ffa4ed88fe54b09ee0ccc33435cacd35c91",
+      "sections": "See linked research paragraph",
+      "license": "ACM publication copyright; research reference only",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://research.google/pubs/pub50833/",
+      "revision": "retrieved 2026-11-01",
+      "sha256": "b5467f9a349dd7a36cd18795b633b9d1471a256064e32a14c8e576792c943c41",
+      "sections": "See linked research paragraph",
+      "license": "Google publication metadata; research reference only",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/google/ghost-kernel/edd5f9490d82df24c16f90a62f7be05c6c389867/kernel/sched/ghost.c",
+      "revision": "edd5f9490d82df24c16f90a62f7be05c6c389867",
+      "sha256": "29abc0255ceabfe7b1ff86f733c8bf17f7f44c9b3b2e2f36fb83d2b9479244a2",
+      "sections": "See linked research paragraph",
+      "license": "GPL-2.0; explicit file notice",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/google/ghost-kernel/edd5f9490d82df24c16f90a62f7be05c6c389867/include/uapi/linux/ghost.h",
+      "revision": "edd5f9490d82df24c16f90a62f7be05c6c389867",
+      "sha256": "f98faa57e3d760a83d069de1e5ea18012eb3c2800557bfa4bf3a7163b93e11f9",
+      "sections": "See linked research paragraph",
+      "license": "GPL-2.0; explicit file notice",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/google/ghost-userspace/9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f/LICENSE",
+      "revision": "9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f",
+      "sha256": "8e058907f9565856ed2febb8d10ec5adaf9a02ca8fb912b22d2e09df64d0c64e",
+      "sections": "See linked research paragraph",
+      "license": "BSD-3-Clause; third_party/bpf retains file-specific notices",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/google/ghost-userspace/9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f/lib/enclave.cc",
+      "revision": "9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f",
+      "sha256": "4d70645f1026862190aff56b4748807df2e30a302edc1f07670f3350948c4aca",
+      "sections": "See linked research paragraph",
+      "license": "BSD-3-Clause; third_party/bpf retains file-specific notices",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/google/ghost-userspace/9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f/lib/enclave.h",
+      "revision": "9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f",
+      "sha256": "97c51ad2a0a28522c4a23f00ec4f4751cf277726174c4c3f71d318fcc7dcdbd7",
+      "sections": "See linked research paragraph",
+      "license": "BSD-3-Clause; third_party/bpf retains file-specific notices",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/google/ghost-userspace/9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f/lib/ghost.cc",
+      "revision": "9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f",
+      "sha256": "f8e5997314d635d2a167cc706966051503e4cab8f42cbd7a309ae25c22ea2f1f",
+      "sections": "See linked research paragraph",
+      "license": "BSD-3-Clause; third_party/bpf retains file-specific notices",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/google/ghost-userspace/9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f/lib/ghost.h",
+      "revision": "9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f",
+      "sha256": "561ddc6fde95ee964fd77d74fb9ef309d3707bab36753d8072e88651f57d77a0",
+      "sections": "See linked research paragraph",
+      "license": "BSD-3-Clause; third_party/bpf retains file-specific notices",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/google/ghost-userspace/9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f/schedulers/shinjuku/shinjuku_scheduler.cc",
+      "revision": "9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f",
+      "sha256": "a9ceccdb76ebe013a57407c23e1aab1b85920032a9ff4b96d81c2dce111d24f9",
+      "sections": "See linked research paragraph",
+      "license": "BSD-3-Clause; third_party/bpf retains file-specific notices",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/google/ghost-userspace/9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f/schedulers/shinjuku/shinjuku_scheduler.h",
+      "revision": "9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f",
+      "sha256": "86f6b2b6a48e592f3dfa9c5a551b995c735600778297a2f49fb07a41892ed9f5",
+      "sections": "See linked research paragraph",
+      "license": "BSD-3-Clause; third_party/bpf retains file-specific notices",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/google/ghost-userspace/9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f/third_party/bpf/edf.bpf.c",
+      "revision": "9ca0a1fb6ed88f0c4b0b40a5a35502938efa567f",
+      "sha256": "1ff012610f7277d0eefcec42a564568aac90d0dbd9bb685efe52a1bc88a3ff90",
+      "sections": "See linked research paragraph",
+      "license": "GPL-2.0; explicit file notice",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://madsys.cs.tsinghua.edu.cn/publication/skyloft-a-general-high-efficient-scheduling-framework-in-user-space/SOSP24-Jia.pdf",
+      "revision": "published paper (download 2026-11-01)",
+      "sha256": "0662f5066d1750dff27ff7e846f74fc4c7023dc4b46e17490e073cf0ab4b4dcd",
+      "sections": "3.2-3.3; 5.4 Tables 6-7; experimental setup",
+      "license": "Copyright authors/publisher; research reference, no code reuse grant inferred",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://multics69.github.io/pages/pubs/shfllock-kashyap-sosp19.pdf",
+      "revision": "published paper (download 2026-11-01)",
+      "sha256": "ebeb3db623c4adce865015c203a99db36ee0a593256eb0c4f6326708e1fafd3d",
+      "sections": "3-4; 6.1-6.3",
+      "license": "Copyright authors/publisher; research reference, no code reuse grant inferred",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://arxiv.org/pdf/1810.05600",
+      "revision": "arXiv:1810.05600v2, 2019-03-01",
+      "sha256": "da32586dc8a5b763e5b2f4dfba1d9ea6afa838d876c64491363aa8f7f29653d0",
+      "sections": "4-7",
+      "license": "Copyright authors/publisher; research reference, no code reuse grant inferred",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://homepages.inf.ed.ac.uk/mic/PPLS/mellor-crummey.pdf",
+      "revision": "ACM TOCS 9(1), February 1991, pp.21-65",
+      "sha256": "925f75f501af585112479ae03dde023f72389554d41e43196b5df7f6cf17a263",
+      "sections": "2.2, 2.4, 4.1-4.2",
+      "license": "Copyright authors/publisher; research reference, no code reuse grant inferred",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://cs.stanford.edu/~jhumphri/documents/shinjuku.pdf",
+      "revision": "published paper (download 2026-11-01)",
+      "sha256": "b6196642b99a21e6f1d988a24d8c5916266483437d49fc2bcac07f5f2dc26683",
+      "sections": "3.1-3.4; Tables 1-2; 4.1",
+      "license": "Copyright authors/publisher; research reference; see PDF notice",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://pdos.csail.mit.edu/papers/caladan:osdi20.pdf",
+      "revision": "published paper (download 2026-11-01)",
+      "sha256": "5db4e5f2548cf125ae13a26158523b7bbc0878bf0e5918a317f607171cea6e5d",
+      "sections": "5.2-5.3; Table 1; 7.3 Figure 8",
+      "license": "Copyright authors/publisher; research reference; see PDF notice",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://dslab.epfl.ch/pubs/concord.pdf",
+      "revision": "published paper (download 2026-11-01)",
+      "sha256": "ef7cd4050a25fe72d9dd43e5c97f0694a6c7bf0c32addbc70ddae4048b89165e",
+      "sections": "3-4; 5.4 Table 1; 6 UINTR comparison",
+      "license": "Copyright authors/publisher; research reference; see PDF notice",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://pdos.csail.mit.edu/papers/shenango:nsdi19.pdf",
+      "revision": "NSDI 2019 author-hosted paper",
+      "sha256": "6e6a97e0a17a6f33133d1d5a6ba032b69e692fa9cf89a9143b5a3825e8c9e0e8",
+      "sections": "3-5; 7.3 Table 2",
+      "license": "Copyright authors/publisher; research reference",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://arxiv.org/pdf/2111.15240v2",
+      "revision": "arXiv:2111.15240v2, 2022-07-09",
+      "sha256": "24c7d4ff485a3e4c9ec735ee9faf326e91e18d44cbfd3350465d6fc4ede671e8",
+      "sections": "3-4",
+      "license": "Copyright authors; see arXiv distribution license; no code license inferred",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "primary source inspected"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/Documentation/scheduler/sched-capacity.rst",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "9e06a6f295e1988dd4ed8fecf468c392a4d74c9d664d151e98eaf25a9306b3bc",
+      "sections": "\u00a7\u00a71 CPU capacity,2 task utilization,3 requirements,4 topology,5 class behavior",
+      "license": "GPL-2.0-only; individual SPDX where present",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/Documentation/scheduler/sched-energy.rst",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "b24c581b8221e20a6d575198e70cb94a67c2015489609c12582a59433114c6fc",
+      "sections": "performance domains; wakeup placement; overutilization; dependencies",
+      "license": "GPL-2.0-only; individual SPDX where present",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/Documentation/scheduler/sched-util-clamp.rst",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "d8342019833892f5eeaad1cb4fb20bbf9a3452c803ba0ba56c0fad201f70aa89",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "GPL-2.0",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/Documentation/scheduler/schedutil.rst",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "287b87a306f64dfe36dbff698a43e150e2b94b75015fac224d94d13929c68422",
+      "sections": "PELT; frequency/CPU invariance; UCLAMP",
+      "license": "GPL-2.0-only; individual SPDX where present",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/Documentation/power/energy-model.rst",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "65fcdde5b43b4b1c9c4c9ed7818f688eb1c929b49b7a14e5ebf6a96254655785",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "GPL-2.0",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/Documentation/devicetree/bindings/cpu/cpu-capacity.txt",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "86b48f0161d145ced8d626ef0a33051d3d17cc7425eef7d34ee3efcefefb225b",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "GPL-2.0-only; individual SPDX where present",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/Documentation/scheduler/sched-ext.rst",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "265df75bab6347b40e469d80efe471b5d2a0292844226367045d572bc65fc5b5",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "GPL-2.0-only; individual SPDX where present",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/Documentation/timers/no_hz.rst",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "2f6b342b9b258342cc2bf90b79f5ec07ab1c5fb8888a455e48041b310710a0b4",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "GPL-2.0-only; individual SPDX where present",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/Documentation/core-api/real-time/theory.rst",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "ae4f60b181034dfbd1afaba68ae1ab7346c1da3c6023710599318163b79d3d0e",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "GPL-2.0",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/Documentation/scheduler/sched-preemption.rst",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "b077547e000eeb0f6283cfce4123d4f92ff2fdea4f4cb0ebc35880ac3087c59f",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "GPL-2.0",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/kernel/sched/pelt.c",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "93551699027e57c2aa5de1c0b1c395b17b498752417b16403260ad2bb28cc632",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "GPL-2.0",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/arch/x86/kernel/itmt.c",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "9971f0ee2c8bc572d3efaa9de76de21f9da3f44400803278a877af1edf793eaa",
+      "sections": "file introduction; sched_set_itmt_support; sched_core_priority",
+      "license": "GPL-2.0-only",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/kernel/Kconfig.preempt",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "b118be16e766cdf7cc9e6176a6fd95f2b41c32007e9667d2691f774d261bd455",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "GPL-2.0-only",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/kernel/sched/ext/ext.c",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "15c0c3fe6cbc273a2dfd876eee430a3f4716c7144e087a686e3ac5708e810c62",
+      "sections": "__scx_allow_proxy_exec; scx_block_proxy_donor; scx_proxy_donor_start; SCX_OPS_ENQ_BLOCKED",
+      "license": "GPL-2.0",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/kernel/sched/core.c",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "669b90bd534edf7cc02429bce973df27fe45bf466f2f054642f605dc475b54b5",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "GPL-2.0-only",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://android.googlesource.com/kernel/common/+/d7311986f7fc1b7e5df44c4556e190ee24733370/kernel/sched/walt.c?format=TEXT",
+      "revision": "d7311986f7fc1b7e5df44c4556e190ee24733370",
+      "sha256": "db46c708e267d2e2548f5163caa76ece5a13950f58fb284c622093364c289437",
+      "sections": "walt_ravg_window; scale_exec_time; walt_update_task_ravg; walt_fixup_busy_time",
+      "license": "GPL-2.0",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary",
+      "cache_encoding": "Gitiles base64 transport; decode before source inspection; sha256 identifies transport bytes"
+    },
+    {
+      "url": "https://developer.apple.com/news/?id=vk3m204o",
+      "revision": "2020-11-12; retrieval 2026-11-01",
+      "sha256": "2319a3d716810a3984d16b89d9024df8b8ddff7453885d496e336cefcfea83f8",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "Apple site terms",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://developer.apple.com/documentation/apple-silicon/tuning-your-code-s-performance-for-apple-silicon",
+      "revision": "retrieval 2026-11-01",
+      "sha256": "1d795261d575ea9798f8e867137ef93b91c37af9d3ff28c3406d53a13c5697a9",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "Apple site terms",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://www.intel.com/content/www/us/en/support/articles/000097053.html",
+      "revision": "2023-11-20",
+      "sha256": "5a8be36c89f01e18b908cdfa0603b9aa97f200966db4707d541e1e14f52df2fa",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "Intel site terms",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://people.ece.ubc.ca/sasha/papers/JPDC-2011.pdf",
+      "revision": "JPDC 2011 doi:10.1016/j.jpdc.2010.08.020",
+      "sha256": "7869176fa87d31c0c08ca5fd6424b14de16431b239cc0219a3c9e3248084492f",
+      "sections": "Introduction pp114\u2013116: HASS-S,HASS-D,scope",
+      "license": "Elsevier; author personal copy",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://lwn.net/Articles/1082717/",
+      "revision": "2026-07-16",
+      "sha256": "a4cd1a63f7f97ce4b3c36453648e8ead2e8a09efcc31bf78a38ca45f9a4c3d45",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "CC-BY-SA-4.0",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "secondary"
+    },
+    {
+      "url": "https://lwn.net/ml/all/20260716132229.61603-1-arighi@nvidia.com/",
+      "revision": "20260716132229.61603-1-arighi@nvidia.com",
+      "sha256": "17a8e4c559193349bf5bf17a8c21fc856e204807d9b259d02c0cb5d15d209c06",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "mail author copyright; patch GPL context",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://lwn.net/ml/all/20260709225041.1695495-1-tj@kernel.org/",
+      "revision": "20260709225041.1695495-1-tj@kernel.org",
+      "sha256": "fd22045c99f09ca1c4bf36066ca26d16475ade704bebe8a2a14b313c33122397",
+      "sections": "whole document; specific symbols in research fragments",
+      "license": "mail author copyright; patch GPL context",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/Makefile",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "e3e257f9c7b3c790da8bdb918de2edf97604a297e277b2a47d9aa2eae22a6397",
+      "sections": "whole file; named symbols in fragments",
+      "license": "GPL-2.0",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/init/Kconfig",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "5f386833525f568d860deaffd9bb663c91e5e4ae4538c69bba561969922a076c",
+      "sections": "SCHED_PROXY_EXEC",
+      "license": "GPL-2.0-only",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/kernel/sched/ext/sub.c",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "335326e3e5e3d0e122309f8c1da7acb88b6d30d1ab708bec93d235aadd2d3a99",
+      "sections": "scx_bpf_sub_grant and cap delegation",
+      "license": "GPL-2.0",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/Documentation/arch/x86/intel-hfi.rst",
+      "revision": "46fec1c3029b552ec63b2d01af9d43a386f043ea",
+      "sha256": "262607e3094cbbe0eac62eb1fbda6fe2ea0d352891607c5c61f00e2ace703363",
+      "sections": "whole file; named symbols in fragments",
+      "license": "GPL-2.0",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "local:docs/designs/cpu-top-opp.md",
+      "revision": "0f2e3f16c3c5e4cf51081ce68c512e2190fef45c",
+      "sha256": "a89ab51208857899106f64b9544931299275c15389a75564f4f2b64bd5620514",
+      "sections": "topology, rate ownership, readback",
+      "license": "repository terms",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "local:include/a733_cpu_clock.h",
+      "revision": "0f2e3f16c3c5e4cf51081ce68c512e2190fef45c",
+      "sha256": "96f4b48da190461eac8264e23589435873a168c3dd78f3ad23835144bd596dc0",
+      "sections": "topology, rate ownership, readback",
+      "license": "repository terms",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "local:apps/os/cpu.c",
+      "revision": "0f2e3f16c3c5e4cf51081ce68c512e2190fef45c",
+      "sha256": "079cbd7d5357c5e768a6aa31e93f9b4901951c538d0551ee7663af0d368cef22",
+      "sections": "topology, rate ownership, readback",
+      "license": "repository terms",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "local:work/cpu-perf-os-1031:docs/performance-modes.md",
+      "revision": "2cb455daecb9c11cb1289c162172538a22e477bd",
+      "sha256": "ffc8b24b58349cb34ef4adc1e187bd959e81f7f54ae324a5051eee37b41a0ffa",
+      "sections": "whole document",
+      "license": "repository terms",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "local:work/cpu-perf-os-1031:docs/designs/resident-performance.md",
+      "revision": "2cb455daecb9c11cb1289c162172538a22e477bd",
+      "sha256": "c2cc9c8112d495abd91eab41b2e6c3035d0d936021888cfefc8574269d6b26df",
+      "sections": "whole document",
+      "license": "repository terms",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    },
+    {
+      "url": "https://people.ece.ubc.ca/sasha/papers/eurosys163-saez.pdf",
+      "revision": "EuroSys 2010 author copy",
+      "sha256": "a98b5f9ad85cb50f57f964e86cd3599ee8aab84ff3641c1653b6feb5ac016b72",
+      "sections": "abstract; design; speedup-factor estimation",
+      "license": "ACM; author copy, see paper notice",
+      "execution": "Reference only; no imported runtime dependency",
+      "verification": "verified-primary"
+    }
+  ],
+  "unavailable": [
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/46fec1c3029b552ec63b2d01af9d43a386f043ea/kernel/sched/ext.c",
+      "error": "HTTP Error 404: Not Found"
+    }
+  ],
+  "accuracy_review": {
+    "date": "2026-11-01",
+    "result": "pass; no blocking source-accuracy findings",
+    "report_sha256": "276c3fd3c4d60fe5beb5425c2064adda7c555421513f44777d03788220461f2a",
+    "scope": "Independent check of primary-source measurements, code scope, assumptions and source hashes"
+  }
+}

@@ -25,20 +25,59 @@ to 0.5 s. The runner classified the result `watchdog-reset`.
 | `platform_panic` and `configASSERT` on a core that can still schedule | Level 1 fault word with status 4 and the line | Failure return, record as group `board` |
 | `platform_panic` on core 0 during board startup, before the scheduler | Same, line numbers 1 to 12 | Failure return, all eight cores |
 | Unexpected interrupt after the scheduler started | Level 1 fault word, detail interrupt number plus 0x100 | Failure return; the source is masked first |
-| Device failure: PMIC, thermal, NPU, GPU, CPU clock, `board_fail` called by a driver | Level 0xb record | Watchdog: the owner retains its resources, and only a reset releases them |
+| Synchronous exception from an application task at EL0 (data abort, instruction abort, undefined instruction, PC or SP alignment fault) on a core open to the scheduler | Level 0xb record: group application, detail 0xe00 plus the ESR class, value the faulting address, caller ELR | Failure return; the faulting task is suspended, see [EL0 exceptions](#exceptions-from-an-application-task-at-el0) |
+| Device failure: PMIC, thermal, NPU, GPU, CPU clock, DMA, `board_fail` called by a driver | Level 0xb record | Watchdog: the owner retains its resources, and only a reset releases them; see [the audit](#device-owner-audit) |
 | A check inside the return sequence itself (`cpu-return.c` `fail`, `bounded`) | Level 0xb record | Watchdog |
 | Session deadline or return cutoff | Level 0xb record | Watchdog |
 | `platform_panic` with interrupts or priorities masked, in a critical section or in an interrupt; stack overflow hook | Level 1 fault word | Watchdog: a terminal task cannot take the core |
 | EL1 synchronous exception, SError, EL3 exception (vectors `a733_cached_cold_fault`, `a733_cached_el3_fault`) | Fault page and level 1 or 3 fault words | Watchdog |
-| Secondary-core fault | Same; the faulting secondary parks and core 0 stops | Watchdog |
+| EL0 synchronous exception of another class, or from a task in a critical section or with interrupts masked, or after the last reserved stack | Fault page and level 1 fault words | Watchdog |
+| Secondary-core fault at EL1 or EL3 | Same; the faulting secondary parks and core 0 stops | Watchdog |
 | EL3 startup refusals (`a733_smp_stop` in `boot.c`, `a733_cached_smc` before the image runs) | Fault words | Watchdog |
 
-Exception-vector faults keep the watchdog. At such a fault the faulting
-context's stack pointer and caches are unknown, and the vectors run before any
-task exists to take over the core. A safe return needs a per-vector decision
-whether the stack is usable, and one physical run per exception class to
-confirm it. The CPU can make progress after a fault from an application at EL0,
-but no recovery has been built for it; the entry stays on the watchdog path.
+Exception-vector faults taken at EL1 or EL3 keep the watchdog. At such a fault
+the faulting context's stack pointer and caches are unknown, and the vectors
+run before any task exists to take over the core. An SError keeps the watchdog
+because it is asynchronous and may report a lost write.
+
+## Exceptions from an application task at EL0
+
+The EL1 vector for a synchronous exception that is not a supervisor call
+calls `os_cpu_return_el0_try` ([cpu-return-el0.S](../../apps/os/cpu-return-el0.S))
+before it takes the stop. The routine admits the exception only if all of these
+hold:
+
+- `SPSR_EL1` names AArch64 EL0 with the I flag clear, so the task ran with
+  interrupts open;
+- `ICC_PMR_EL1` is at least 0xf0, above every API priority mask, so the task
+  was not in a kernel critical section (the unmasked value 0xff reads back as
+  0xf8 or 0xf0 when the controller implements fewer priority bits);
+- the ESR class is 0x00 (undefined instruction), 0x20 (instruction abort),
+  0x22 (PC alignment), 0x24 (data abort, including an alignment fault) or 0x26
+  (SP alignment);
+- one of eight reserved stacks of 2048 bytes is free.
+
+The kernel stack is not used. The routine abandons the faulting context, whose
+stack pointer and registers may be corrupt: it claims a stack with an exclusive
+pair, sets `SP_EL0` to its top, loads `ESR_EL1`, `FAR_EL1` and `ELR_EL1` into
+`x0` to `x2`, and returns to EL0 in `os_cpu_return_el0_fault`
+([cpu-return.c](../../apps/os/cpu-return.c)). That function runs in the task,
+as `ss_fail` does. It records group application with the detail 0xe00 plus the
+ESR class and `ESR_EL1` bits 14:0 (for an abort, the write flag and the status
+code) in site bits 30:16, the faulting address as the value (zero for classes
+where `FAR_EL1` is undefined) and `ELR_EL1` as the caller. It then makes the
+same claim as `ss_fail`, with the record context `fault`, and suspends the
+task. The task never runs application code again.
+
+The supervisor takes it from there as for any failure after the scheduler
+started, so the fault may occur on any core, including a worker core. The
+kernel's stack overflow check compares the task's stack pointer with the task's
+own stack; `vApplicationStackOverflowHook` ignores a task that runs on a
+reserved stack.
+
+If the claim is refused, because a device failure closed admission or the
+return window has passed, the function closes admission through `board_fail`
+and the failure keeps its watchdog ending.
 
 ## The failure return
 
@@ -82,6 +121,50 @@ group `board` and the line (or the interrupt number plus 0x800) as the site.
 `platform_panic` claims only where a task can still run on the core:
 interrupts and priority mask open. An unexpected interrupt is masked at the
 interrupt controller before the claim, so that it cannot repeat.
+
+## Device owner audit
+
+Each `board_fail` caller in a device owner, and whether the owner could stop
+through its normal stop path after the failure. The stop sequence needs the
+owner's stop path to complete with no retained resource: `os_cpu_return_pmic`
+refuses a held, retained or failed PMIC slot, the thermal stop refuses after
+`cancel()`, and `os_npu_retirement_check` and `os_gpu_return_ready` refuse a
+failed service. None of the callers qualifies, so every device failure keeps the
+watchdog ending.
+
+| Owner and caller | State after the failure | Stop path | Ending |
+| --- | --- | --- | --- |
+| PMIC task, `apps/board/main.c` `pmic` (authority or ledger fault) | Task parks with the slot ownership held; `pmic.failed` | `os_cpu_return_pmic` refuses (0x739) | Watchdog |
+| Thermal owner, driver fault, lost owner, interrupt re-arm or mask failure (`apps/os/thermal.c` `fault`, `cancel`) | `thermal.failed` and `retaining` set; the clock token is retained | The stop requires `live()`, which `thermal.failed` clears | Watchdog |
+| Thermal owner, critical temperature (`fault` after `A733_THERMAL_CRITICAL`) | The converter is healthy, but the owner takes the same state as above | `a733_thermal_stop` could stop it; the owner refuses. The watchdog ending is kept on purpose: the 0.5 s stop shortens the time at the critical temperature, and the return sequence can take 3 s | Watchdog |
+| CPU clock owner refusal (`apps/os/cpu.c` `refused`, reached through the thermal owner's `fault`) | A retained or invalid driver state holds the clock, rail or request; a refusal at the start phase holds nothing but still fails the thermal owner | The clock return step refuses a retained or invalid driver (`REFUSED`) | Watchdog |
+| DMA, `apps/os/dma.c` `fatal` through `platform_panic` | The pool service is retained | `os_cpu_return_panic` claims the return, `os_dma_return_ready` never becomes true, and the 3 s bound ends at the watchdog | Watchdog after 3 s |
+| NPU, `apps/os/npu.c` `fail_at`, `apps/os/npu-client.c` `retained` | `npu.failed`; every NPU resource stays held | `os_npu_retirement_check` refuses | Watchdog |
+| GPU, `apps/os/gpu.c` interrupt service failure and `gpu.failed` paths | The compute service is marked failed | `os_gpu_return_ready` and the GPU stop refuse | Watchdog |
+| Supervisor, `apps/board/main.c` `supervise` | Admission was already closed or the deadline passed; this is a consequence, not a cause | Not applicable | Watchdog |
+
+A device failure that the owner could stop after cleaning up needs the owner to
+report a stoppable failure state to the claim, so that `os_cpu_return_failure`
+can accept a device group. No owner provides one.
+
+## NPU stop report when the service never ran
+
+The runner requires the NPU stop report of an NPU image before it restores
+DRAM. A failure before the scheduler, such as a refusal in `os_npu_start`,
+leaves no NPU task and no report. `os_npu_never_ran` in
+[npu.c](../../apps/os/npu.c) is true while the bootstrap task has not started
+and no activation has happened, so nothing was powered, clocked or submitted.
+In that state the claim publishes the report with `finished` 2
+(`OS_NPU_REPORT_NOT_STARTED` in [npu.h](../../apps/os/npu.h)), `stopped` 1,
+`retained` 0, every other field zero, and the epoch and generation of the
+failure record. The claim does this only before the scheduler started: after
+that, the bootstrap task may still run, and the client publishes the report
+when it stops.
+
+The host accepts `finished` 2 only for a failure return whose CPU return
+report is valid, and only with the failure record's generation (zero when the
+failure preceded the sealed session). A missing, stale, retained or
+other-generation report is refused and the port is quarantined as before.
 
 ## The record
 
@@ -127,14 +210,36 @@ and the scheduler state words, and stubs three kernel entry points. It checks:
   end at the EL3 stop, which is the watchdog path.
 - `platform_panic` returns on a core that can schedule and keeps the watchdog
   when masked; an unexpected interrupt is masked and returns.
-- with `--baseline-elf`, the same startup failure on an image without the
+- exceptions from EL0 (a data abort on core 6, an instruction abort, an
+  undefined instruction, PC and SP alignment faults, a store on a secondary
+  core) enter the real vector with the exception state, return to EL0 on a
+  reserved stack with the arguments, record the failure, return from the
+  supervisor and the terminals to the ROM, and a second fault on another core
+  takes a second stack and keeps the first record;
+- negative controls keep the watchdog ending: an exception from EL1, an EL0
+  exception with interrupts masked, with the priority mask raised to the API
+  level, from AArch32, of an unlisted class, after the last stack, and after a
+  device failure closed admission;
+- for an NPU image, a startup failure with a service that never ran publishes
+  the never-started report, and a report of a service that ran is kept;
+- with `--baseline-elf`, an EL0 exception ends at the watchdog, and the same startup failure on an image without the
   failure return does not reach the ROM.
+
+`checks/qemu-os-boot.py` adds a case on the virtual board, where the MMU
+raises a real translation fault: the application's store to an unmapped address
+reaches the same vector source, the task continues on a reserved stack, the
+board records group application with detail 0xe24, the faulting address and
+instruction, and the task is suspended while the other cores run. The returning
+lifetime is not linked on that board, so its `os_cpu_return_el0_fault` records
+and suspends without the claim.
 
 `checks/board-return-preservation.py` adds three runner cases: a failure return
 (outcome `failure-return`, DRAM and rails restored, not quarantined), the same
 with a differing expectation (`result-mismatch`, still restored), and a failure
 record returned by an image that does not link the failure return (host error,
-quarantined, as before).
+quarantined, as before). Five NPU cases cover the never-started report: valid
+with a failure return (restored, not quarantined), and refused for a normal
+return, a stale epoch, a missing report, `retained` 1 and another generation.
 
 The model does not execute FreeRTOS task switching, the service stop paths
 themselves, or physical clocks and power. The physical evidence is the single

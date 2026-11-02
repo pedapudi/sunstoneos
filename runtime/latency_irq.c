@@ -3,6 +3,9 @@
 extern void __real_vApplicationIRQHandler(uint64_t interrupt);
 void __wrap_vApplicationIRQHandler(uint64_t interrupt)
 {
+#ifdef SUNSTONE_LATENCY_PMU
+    ss_latency_pmu_enable(); /* once per core, at EL1, before the span it first measures */
+#endif
     if (interrupt == 30) {
         uint64_t core, due;
         const uint64_t now = ss_latency_now();

@@ -27,6 +27,7 @@ static struct os_npu_application {
     uint64_t initial_deadline,end;
     unsigned attempted,started,opened,jobs;
 } npu;
+static atomic_uint bootstrap_ran; /* The bootstrap task has run: the service may have powered or submitted. */
 static unsigned creating; /* Only while os_npu_start creates its two tasks. */
 extern unsigned char __os_npu_pool_start[],__os_npu_pool_end[];
 static int clock_now(uint64_t *now)
@@ -174,6 +175,12 @@ static int retirement_fault(void)
     }
     return 0;
 }
+/* The service never ran: its bootstrap task did not start and no activation
+ * happened, so nothing was powered, clocked or submitted and nothing is
+ * retained. Startup that refuses before the scheduler is this case; its
+ * allocations are DRAM state that the host restores. */
+int os_npu_never_ran(void)
+{return !atomic_load_explicit(&bootstrap_ran,memory_order_acquire)&&!atomic_load_explicit(&npu.active,memory_order_acquire);}
 int os_npu_retirement_check(void)
 {return !retirement_fault()&&os_npu_complete();}
 #ifdef SUNSTONE_A733_OS_PERF
@@ -294,6 +301,7 @@ int os_npu_close(void)
 static void bootstrap(void *unused)
 {
     (void)unused;unsigned begun=0;
+    atomic_store_explicit(&bootstrap_ran,1,memory_order_release);
     for(;;) {
         uint64_t now;struct watch_failure why;
         if(!watch(&now,&why)){(void)fail_watch(NPU_SERVICE_STATUS,UINT32_MAX,0,NULL,&why);goto failed;}

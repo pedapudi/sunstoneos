@@ -36,6 +36,7 @@ if(SUNSTONE_A733_OS_NPU_OBSERVE AND
 endif()
 option(SUNSTONE_GPU_FAST_TIMING "Capture optional GPU IRQ-entry counter timestamps" OFF)
 option(SUNSTONE_A733_OS_CORE "Build the OS core without an application" OFF)
+option(SUNSTONE_A733_CPU_TOPOLOGY "Expose read-only topology and per-core architectural observations" OFF)
 option(SUNSTONE_A733_OS_HELLO "Build the hello-compute OS image" OFF)
 if(NOT SUNSTONE_A733_OS AND NOT SUNSTONE_A733_OS_CORE AND NOT SUNSTONE_A733_OS_HELLO)
   return()
@@ -184,6 +185,7 @@ apply_build_patch("${os_build}/boot.c" "${os_boot_base}" "${os_root}/apps/os/boo
 # Retained per-core fault records and their previous-boot report
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
+  runtime/cpu_topology_app.c
   apps/os/usb-service.c apps/os/application.c apps/os/session.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/deadline.c runtime/deadline-a733.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
@@ -249,7 +251,7 @@ if(SUNSTONE_A733_OS_NPU)
   list(APPEND os_sources "${os_build}/npu-models.c" "${os_build}/npu_admitted_models.c")
   list(APPEND os_added apps/os/npu.c apps/os/npu-client.c apps/os/npu-irq.c
     platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c
-    drivers/npu/npu_service.c drivers/npu/npu_queue.c drivers/npu/npu_runtime_queue.c drivers/npu/a733_npu_sequence.c
+    drivers/npu/npu_service.c drivers/npu/npu_queue.c drivers/npu/npu_runtime_queue.c drivers/npu/npu_idle.c drivers/npu/a733_npu_sequence.c
     drivers/npu/a733_npu_controller.c drivers/npu/a733_npu_memory.c
     drivers/npu/a733_npu_mmu.c drivers/npu/nbg_model.c drivers/npu/nbg_assembly.c drivers/npu/nbg_checksum.c
     drivers/npu/nbg_relocation.c drivers/npu/a733_npu_startup.c drivers/npu/a733_npu_platform.c
@@ -383,6 +385,13 @@ if(SUNSTONE_A733_OS_USB_JPEG)
     drivers/video/a733_video_jpeg.c drivers/video/a733_video_jpeg_run.c
     drivers/video/a733_video_platform.c drivers/video/a733_video_unit.c drivers/iommu/a733_iommu.c)
 endif()
+if(SUNSTONE_A733_CPU_TOPOLOGY)
+  list(APPEND os_added kernel/scheduler/topology.c platform/a733/cpu_topology.c
+    platform/a733/cpu_observation.c drivers/board/orangepi_zero3w.c
+    drivers/clock/a733_cpu_clock.c)
+  # Topology references the clock owner's read-only OPP tables even when the
+  # clock service is disabled. Section GC drops its unused transition code.
+endif()
 list(TRANSFORM os_added PREPEND "${os_root}/")
 if(SUNSTONE_LATENCY)
   list(APPEND os_sources "${os_root}/runtime/latency.c" "${os_root}/runtime/latency_irq.c")
@@ -485,6 +494,9 @@ if(SUNSTONE_A733_OS_GPU)
     PROPERTIES COMPILE_OPTIONS "-iquote${os_root}/platform/a733")
 endif()
 target_include_directories(sunstone-a733-os-core BEFORE PRIVATE "${os_root}/apps/os" "${os_build}")
+if(SUNSTONE_A733_CPU_TOPOLOGY)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_CPU_TOPOLOGY=1)
+endif()
 if(os_include_dirs)
   target_include_directories(sunstone-a733-os-core PRIVATE ${os_include_dirs})
 endif()
@@ -523,6 +535,9 @@ set_property(TARGET sunstone-a733-os-core PROPERTY LINK_OPTIONS "${os_link}")
 target_link_options(sunstone-a733-os-core PRIVATE "-Wl,-Map,${os_build}/image.map")
 if(SUNSTONE_LATENCY)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_LATENCY=1)
+  if(SUNSTONE_LATENCY_PMU)
+    target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_LATENCY_PMU=1)
+  endif()
   target_link_options(sunstone-a733-os-core PRIVATE -Wl,--wrap=vApplicationIRQHandler)
   sunstone_enable_latency_port(sunstone-a733-os-core)
   get_target_property(os_sources sunstone-a733-os-core SOURCES)

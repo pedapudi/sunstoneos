@@ -44,6 +44,8 @@ int os_npu_task_privileged(void (*)(void *),void *);
 struct a733_pin_handoff;
 int os_npu_pins(struct a733_pin_handoff *);
 int os_npu_start(void);
+int os_npu_never_ran(void);
+void os_npu_report_unstarted(uint64_t epoch,uint64_t generation);
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
 struct npu_runtime *os_npu_queue_runtime(void);
 int os_npu_queue_begin(void);
@@ -81,6 +83,13 @@ void os_npu_thermal(int allow,int stop,uint64_t until,uint64_t now);
  * USB0 sends no further frame, so that report is readable only from RAM.
  * refused=1 means a thermal stop, including one for stale thermal data,
  * ended the work before the selected number of jobs. */
+/* finished is 1 for a report that the client filled and 2 for the report of a
+ * failure return before the service ran (os_npu_never_ran): nothing was
+ * powered or submitted, so stopped=1, retained=0 and every other field except
+ * the header and session identities is zero. The failure return publishes it
+ * with the failure record's epoch and generation. A host accepts finished=2
+ * only together with a failure return (apps/os/cpu-return-host.py). */
+#define OS_NPU_REPORT_NOT_STARTED 2u
 #define OS_NPU_REPORT_OP 6u
 #define OS_NPU_REPORT_MAGIC UINT32_C(0x5255504e) /* "NPUR" */
 #define OS_NPU_REPORT_BYTES 104u

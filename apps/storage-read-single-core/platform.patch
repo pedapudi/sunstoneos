@@ -15,7 +15,7 @@
  void platform_puts(const char *text)
  {
 @@ -99,6 +104,7 @@
- 
+ #endif
  void platform_init(void)
  {
 +#ifndef SUNSTONE_CACHED_SINGLE_CORE

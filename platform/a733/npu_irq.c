@@ -8,6 +8,7 @@
 #include "npu_service.h"
 #include "gicv3_spi.h"
 #include "a733_mmio.h"
+#include "sunstone_crumb.h"
 
 #ifndef NPU_IRQ_CORE
 #define NPU_IRQ_CORE 0u
@@ -17,6 +18,17 @@
 #endif
 #ifndef NPU_IRQ_HANDLER
 #define NPU_IRQ_HANDLER npu_application_irq
+#endif
+#ifndef NPU_IRQ_QUIET_QUERY
+#define NPU_IRQ_QUIET_QUERY npu_application_irq_quiet
+#endif
+/* The priority that a Nonsecure read of GICD_IPRIORITYR returns for the
+ * source. The EL3 route table writes NPU_IRQ_PRIORITY in the Secure view; the
+ * GIC presents it to Nonsecure EL1 as (value<<1)&0xff (GICv3 IHI0069D 4.8.1;
+ * Linux irq-gic-v3.c:92-110), so an image that routes 0xd8 reads back 0xb0. A
+ * single-core image names the Nonsecure value directly. */
+#ifndef NPU_IRQ_NS_PRIORITY
+#define NPU_IRQ_NS_PRIORITY NPU_IRQ_PRIORITY
 #endif
 #define GICD UINT32_C(0x03400000)
 #define BIT (UINT32_C(1)<<1)
@@ -58,6 +70,12 @@ static int mask(void *cookie)
     if(cookie!=&binding || !on_core())return -1;
     taskENTER_CRITICAL();int result=mask_locked();taskEXIT_CRITICAL();
     return result;
+}
+int NPU_IRQ_QUIET_QUERY(void *cookie)
+{
+    if(cookie!=&binding || !on_core() || !binding.service || binding.fault || binding.stopped)return -1;
+    if(read32(0)&(1u<<31))return 0;
+    return ((read32(0x20c)|read32(0x30c))&BIT) ? 0 : 1;
 }
 static int rearm(void *cookie)
 {
@@ -106,17 +124,32 @@ int npu_application_irq_restart(void *cookie)
  * IGROUPR is RAZ/WI in Nonsecure state with DS=0. The EL3 installer owns that
  * validation; the priority and route readbacks here require access to the
  * already-configured Nonsecure interrupt. */
-static int bind_ready(void)
+/* Zero when the state is ready; otherwise the number of the first failed
+ * clause, recorded as the failure value so a refused bind names its cause:
+ * 1 not EL1 or already bound or faulted, 2 scheduler started, 3 distributor
+ * write pending, 4 source enabled, 5 source pending (a level event from a
+ * device left running), 6 source active, 7 not level-sensitive, 8 wrong
+ * priority, 9 wrong route. */
+static unsigned bind_refusal(void)
 {
     uint64_t el;
     __asm__ volatile("mrs %0,CurrentEL" : "=r"(el));
-    return el==4 && !binding.service && !binding.fault &&
-       xTaskGetSchedulerState()==taskSCHEDULER_NOT_STARTED &&
-       !(read32(0)&(1u<<31)) &&
-       !((read32(0x10c)|read32(0x20c)|read32(0x30c))&BIT) &&
-       !(read32(0xc18)&(3u<<2)) &&
-       (read32(0x460)&0xff00u)==NPU_IRQ_PRIORITY<<8 &&
-       *(volatile uint64_t *)(uintptr_t)(GICD+0x6308)==(uint64_t)NPU_IRQ_CORE<<8;
+    if(el!=4 || binding.service || binding.fault)return 1;
+    if(xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 2;
+    if(read32(0)&(1u<<31))return 3;
+    if(read32(0x10c)&BIT)return 4;
+    if(read32(0x20c)&BIT)return 5;
+    if(read32(0x30c)&BIT)return 6;
+    if(read32(0xc18)&(3u<<2))return 7;
+    if((read32(0x460)&0xff00u)!=NPU_IRQ_NS_PRIORITY<<8)return 8;
+    if(*(volatile uint64_t *)(uintptr_t)(GICD+0x6308)!=(uint64_t)NPU_IRQ_CORE<<8)return 9;
+    return 0;
+}
+static int bind_ready(void)
+{
+    const unsigned reason=bind_refusal();
+    if(reason)sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU),0xb00u|reason,0);
+    return !reason;
 }
 static const struct npu_service_irq_ops ops={mask,rearm,stop};
 #ifndef NPU_IRQ_EXTERNAL_BIND
