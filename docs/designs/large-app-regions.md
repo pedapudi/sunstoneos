@@ -286,6 +286,39 @@ one core keeps up with this rate. If hashing ran after each read instead,
 the rate would fall to about 17 MB/s. SDR104 (profile 3) is predicted at 50
 to 60 MB/s and is not qualified.
 
+## Predicted upper-memory decode result
+
+Condition: the memory qualification image maps 12,224 MiB from `0x4400_0000`
+and runs its window scan, data-line test, address-line test and page
+signature over every 2 MiB block of that map, in development DRAM mode on
+port 3-1, with a work budget of 18 seconds
+([memory-qualification.md](../memory-qualification.md)). The page signature
+stores each page's address, combined with a seed, in the first line of the
+page and then reads every page back, so an alias of any two pages in the
+whole map, including every 1 GiB slot of upper memory, is a failure.
+
+Evidence for the prediction:
+
+- DRAM training on both boards reports 12,288 MiB and passes two 4 KiB page
+  comparisons ([memory and DMA status](../status/memory-dma.md)). That shows
+  the training sees the capacity; it does not show linear decode at every
+  address.
+- [memory-map-12g.md](memory-map-12g.md) maps the range as 1 GiB blocks and
+  lists the image's address test as the evidence that linear decode needs.
+- The measured cost estimates for the scan and signature are 1.5 s for the
+  signature and a similar time for the scan
+  ([memory-qualification.md](../memory-qualification.md), time budget).
+
+Prediction: the run returns normally with application status 0, the window
+scan finds no beacon value, the page signature finds no page that holds another
+page's signature, and the scan and signature complete within 5 seconds. A pass
+shows linear decode over `0x4400_0000`–`0x3_4000_0000` for this boot. It does
+not show that no boot stage left a bus master writing there; the launch
+evidence prerequisite in [memory-map-12g.md](memory-map-12g.md) stays. A
+failure appears as a recorded alias (an address decode fault), as a bus error
+that resets the board through the watchdog (a firewall-protected range), or as
+a run that exhausts its budget.
+
 ## Host checks
 
 `checks/app-region.py` compiles the ledger and the table builder with the
