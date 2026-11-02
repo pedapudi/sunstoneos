@@ -57,7 +57,7 @@ DMA0 needs physical channel, controller and data-access authority and transfer t
 Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-memory-dma-20261101.md).
 
 <!-- evidence-table:begin -->
-22 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+23 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -83,4 +83,5 @@ Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `too
 | `1793604009213366498-b525353f` | 2026-11-02 | 3-1 | `861b2416c428` | returned | passed | run_total 25.796 s, a76_p50_ns_s0 416 ns, a76_p9999_ns_s0 1662 ns, a76_max_ns_s0 2005 ns, a55_p50_ns_s0 392 ns, a55_p9999_ns_s0 16553 ns, a55_max_ns_s0 32424 ns, ctrl_p50_ns_s0 7417 ns, ctrl_p9999_ns_s0 10230 ns, ctrl_max_ns_s0 10571 ns, ctrl_misses_s0 0, a76_p50_ns_s1 416 ns, a76_p9999_ns_s1 1598 ns, a76_max_ns_s1 1965 ns, a55_p50_ns_s1 392 ns, a55_p9999_ns_s1 16553 ns, a55_max_ns_s1 29009 ns, ctrl_p50_ns_s1 7417 ns, ctrl_p9999_ns_s1 10230 ns, ctrl_max_ns_s1 10061 ns, ctrl_misses_s1 0, a76_p50_ns_s2 416 ns, a76_p9999_ns_s2 1598 ns, a76_max_ns_s2 1979 ns, a55_p50_ns_s2 392 ns, a55_p9999_ns_s2 16553 ns, a55_max_ns_s2 30056 ns, ctrl_p50_ns_s2 7417 ns, ctrl_p9999_ns_s2 10230 ns, ctrl_max_ns_s2 10083 ns, ctrl_misses_s2 0, stream_gb_per_s 8.78 GB/s |
 | `1793604795633560445-80bc01fb` | 2026-11-02 | 3-1 | `e271e3b62bb8` | result-mismatch | passed | run_total 12 s, scan_ticks 1.33194e+07, signature_ticks 2.33961e+07, address_failed 0, mismatch_count 0 |
 | `1793632829779717086-f7d0d1cf` | 2026-11-02 | 3-1 | `44252e038bb7` | returned | passed | run_total 51.578 s, load_time 30.659 s, load_rate 17.51 MB/s, read_window_40mib 12.79 GB/s, read_region_1gib 12.66 GB/s, round_trip_same_space 4.4 us, round_trip_ttbr0_change 4.36 us |
+| `1793633314510847134-f446c660` | 2026-11-02 | 3-1 | `20c1435da4b2` | returned | passed | run_total 91.581 s, load_time 24.386 s, load_rate 22.02 MB/s, load_read_phase 23.253 s, load_copy_phase 0.154 s, load_digest_phase 0.979 s, read_window_40mib 12.79 GB/s, read_region_1gib 12.66 GB/s, round_trip_same_space 4.42 us, round_trip_ttbr0_change 4.37 us |
 <!-- evidence-table:end -->
