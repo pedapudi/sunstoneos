@@ -117,9 +117,7 @@ int nbg_assemble_layout(const struct nbg_model *, const struct nbg_assembly_buff
  * else: coefficients, END pairs after the stream, padding and the tensor and
  * pool allocations are the caller's, and a refusal can leave earlier
  * operations written, so the caller discards the whole assembly. */
-/* program: the number of stream-processor instructions of the operations done so far (their positions in the
- * 256-entry program memory are checked against it). */
-struct nbg_assembly_cursor { uint32_t operation, patch, offset, program; };
+struct nbg_assembly_cursor { uint32_t operation, patch, offset; };
 int nbg_assembly_begin(const struct nbg_model *, const struct nbg_assembly_buffer *, size_t count,
                        struct nbg_assembly_layout *, struct nbg_assembly_cursor *);
 int nbg_assembly_next(const struct nbg_model *, const struct nbg_assembly_buffer *,

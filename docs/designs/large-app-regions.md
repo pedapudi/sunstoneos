@@ -319,6 +319,56 @@ failure appears as a recorded alias (an address decode fault), as a bus error
 that resets the board through the watchdog (a firewall-protected range), or as
 a run that exhausts its budget.
 
+## Predicted region test on the board
+
+Condition: the read-only SD probe takes a 1 GiB read-write region from the ledger (first fit at a
+1 GiB boundary, `0x8000_0000`), builds three address spaces (the owner, a second application with no
+region, and a view of the owner's region with 2 MiB blocks only), runs EL0 routines in them on the boot
+Cortex-A55, and counts TLB events with the PMU. The routines are position-independent code in a read-only
+executable window; faults return to the EL1 caller through its own vectors. Port 3-1, development DRAM mode.
+
+Isolation prediction (from the translation rules in this design and the QEMU fixture `checks/region-el0.py`):
+
+- The owner reads and writes its first word, a middle word and its last word at EL0 and reads a 4 MiB strided
+  fold that equals the EL1 fold of the same bytes. Each ends in an SVC (exception class 0x15).
+- The owner's access to the first byte after the region and to the byte before it faults with exception class
+  0x24 and a level 1 permission fault (fault status 0x0d), because the kernel entries there allow EL1 only.
+- The second application's read and write of the region fault the same way; its write sets the write bit of the
+  syndrome; its access to its own stack window succeeds.
+- The 2 MiB-block view faults on the byte after the region with a level 2 permission fault (0x0e).
+
+Read-bandwidth prediction. The control pass reads a 40 MiB window of the region ten times (two warm-up
+passes) with the 128-byte vector loads of `apps/dram-bandwidth/kernel.c`. One Cortex-A55 core reads 5.36 GB/s
+in that application at CPU-L 1794 MHz on a 40 MiB buffer (the
+[memory-dma evidence](../evidence/memory-dma.jsonl), `read_one_a55`). This probe leaves the CPU at the clock
+that the runner and the ROM left, so the pass records cycles; the prediction is 4.0 to 5.5 GB/s, a rate
+bounded by the single core's outstanding requests and the DRAM latency, not by the clock. A pass over 1 GiB
+with the 1 GiB block reads within 5 percent of the control. The view with 2 MiB blocks reads within 8 percent.
+
+TLB prediction. A level-1 block entry covers the whole gigabyte, so the L1D TLB refill count of the 1 GiB pass
+is below 100 (the entry, the routine's stack and code windows, and the kernel's entries). The 2 MiB view needs
+one entry per block: 512 for the pass, so 512 to 700 refills, which is about 0.5 to 0.7 refills per MiB, and none
+of them are 4 KiB-page misses. A DTLB walk count of the same order follows when the core counts that event.
+
+Loader prediction (the file on the card). Streaming `sunstone-region-test.bin` (512 MiB) through two 128 KiB
+buffers reads at the measured 21.9 MB/s per request; copy and SHA-256 overlap the next request and the chain
+lookups run between requests, so the load takes 24 to 27 seconds (19 to 22 MB/s) and the SHA-256 equals
+`a0ab21dca50740b257c495faa888058cb757ec5165d27afb0c13cc5bef48eabd`. Without the file the probe reports it absent,
+skips the load and returns normally in under 2 seconds.
+
+## Predicted FAT32 volume inspection
+
+Condition: the read-only SD probe mounts the card's only partition (FAT32, first sector
+32768, 122,105,856 sectors, from the layout read) with the read-only FAT32 reader, counts the
+free clusters by reading the whole FAT, and lists the root directory, in profile 2 on port 3-1.
+
+Prediction: the mount succeeds with 512-byte sectors and a power-of-two cluster size (a
+partition of 58 GiB formatted by a PC has 32 KiB clusters, so about 1.9 million clusters and
+a FAT of about 15,000 sectors); the free-cluster count is within the volume and agrees with
+the FSInfo hint when the PC left the hint current; the root directory lists no more than 64
+entries, each with a size below 4 GiB; the FAT scan and listing finish within one second of
+identification at the measured 21.9 MB/s; and no restoration word changes.
+
 ## Host checks
 
 `checks/app-region.py` compiles the ledger and the table builder with the

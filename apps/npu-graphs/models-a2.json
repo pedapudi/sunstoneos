@@ -1,0 +1,11 @@
+{
+ "npu_models": [
+  "graph-sm64",
+  "graph-chainA",
+  "graph-chainB",
+  "graph-chainC",
+  "graph-deep",
+  "graph-mm",
+  "graph-glu"
+ ]
+}

@@ -59,7 +59,10 @@ struct ss_latency_sweep {
     uint32_t wait_in_max_us, max_wait_us; /* lock wait inside the longest span; longest lock wait in any span */
     uint64_t long_count, long_span_us, long_wait_us; /* spans above 5 us: count, total length, total lock wait */
 };
+/* reject: not an EL1 task, mask closed, interrupts disabled, core holds the lock, queue shallow, other */
+struct ss_latency_prewait { uint64_t count, timed_out, max_us, total_us, reject[6]; uint32_t core; };
 #ifdef SUNSTONE_LATENCY_SWEEP
+unsigned ss_latency_prewait_read(unsigned core, struct ss_latency_prewait *out);
 unsigned ss_latency_sweep_read(unsigned index, struct ss_latency_sweep *out);
 unsigned ss_latency_sweep_overflow(unsigned core);
 #endif

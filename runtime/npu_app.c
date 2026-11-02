@@ -16,6 +16,9 @@ static struct {
     size_t input_bytes,output_bytes;
     uint64_t timeout;
     int result;
+    struct ss_npu_fault_info fault;
+    int fault_valid;
+    void (*describe_fault)(struct ss_npu_fault_info *);
 } box;
 static void notify_owner(void)
 {if(box.notify)box.notify(box.event_context);}
@@ -58,6 +61,11 @@ int ss_npu_model_find(const char *name,unsigned *index)
     for(unsigned i=0;i<count;++i)if(!strcmp(name,box.backend.models[i].name)){*index=i;return 1;}
     return 0;
 }
+int ss_npu_service_bind_fault(void (*describe)(struct ss_npu_fault_info *))
+{
+    if(!describe||box.describe_fault||atomic_load(&box.state)!=UNBOUND)return 0;
+    box.describe_fault=describe;return 1;
+}
 int ss_npu_service_bind_event(void (*notify)(void *),void *context)
 {
     if(!notify||box.notify||atomic_load(&box.state)!=UNBOUND)return 0;
@@ -88,6 +96,12 @@ int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
     if(state!=DONE)return 0;
     int result=box.result;return transition(DONE,IDLE)?result:-1;
 }
+int ss_npu_last_fault(struct ss_npu_fault_info *out)
+{
+    unsigned state=atomic_load_explicit(&box.state,memory_order_acquire);
+    if(!out||state!=IDLE||!box.fault_valid)return 0;
+    *out=box.fault;box.fault_valid=0;return 1;
+}
 int ss_npu_close(void)
 {
     unsigned state=atomic_load_explicit(&box.state,memory_order_acquire);
@@ -111,7 +125,8 @@ int ss_npu_service_step(void)
         box.output,box.output_bytes,box.timeout):box.backend.close();
     if(result<0){ss_npu_service_fail();return -1;}
     /* Public completion distinguishes a rejected operation from pending. */
-    box.result=result==1?1:-2;
+    box.result=result==1?1:result==2?-3:-2;
+    if(result==2){memset(&box.fault,0,sizeof(box.fault));if(box.describe_fault)box.describe_fault(&box.fault);box.fault_valid=1;}
     unsigned expected=state;
     if(!atomic_compare_exchange_strong_explicit(&box.state,&expected,DONE,memory_order_release,memory_order_relaxed))return -1;
     return 1;

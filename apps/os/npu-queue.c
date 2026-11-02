@@ -74,7 +74,9 @@ static int mapped(struct npu_runtime_region r)
 }
 static int open_queue(void *unused,unsigned depth)
 {
-    (void)unused;(void)depth;
+    (void)unused;
+    /* The ring was admitted at the declared depth; a deeper one is refused, never silently shortened. */
+    if(depth>os_npu_in_flight())return -1;
     if(opened||os_npu_stopping()||!os_npu_queue_begin())return -1;
     struct npu_runtime *rt=os_npu_queue_runtime();
     if(!rt||!edges_prepared||rt->slots>SS_NPU_QUEUE_MAX_HANDLES||
@@ -99,7 +101,7 @@ static int open_queue(void *unused,unsigned depth)
     __asm__ volatile("mrs %0,sctlr_el1":"=r"(original_sctlr));
     uint64_t enabled=original_sctlr|(UINT64_C(1)<<26);
     __asm__ volatile("msr sctlr_el1,%0\n isb"::"r"(enabled):"memory");
-    ring.job_limit=os_session()->npu.jobs;
+    ring.job_limit=UINT64_MAX; /* no lifetime count of jobs; the 64-bit sequence is the only bound */
     opened=1;return 1;
 }
 static int close_queue(void *unused)
@@ -113,9 +115,9 @@ static int close_queue(void *unused)
 }
 static int start(void *unused,unsigned handle,uint64_t sequence,uint64_t after,uint64_t timeout)
 {
-    (void)unused;
+    (void)unused;(void)sequence;
     const struct os_session *s=os_session();
-    if(!opened||closed||os_npu_stopping()||!s||sequence>s->npu.jobs||handle>ring.handles||!handle)return -1;
+    if(!opened||closed||os_npu_stopping()||!s||handle>ring.handles||!handle)return -1;
     struct npu_queue_fence dependency={0};
     if(after)dependency=(struct npu_queue_fence){&direct.queue,after};
     /* The handle lease keeps every DMA buffer pinned across record release. */

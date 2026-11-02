@@ -256,6 +256,21 @@ int main(void)
         }
     assert(!memcmp(&sa.root[0], &base_l1[0], 16) && !memcmp(&sb.root[0], &base_l1[0], 16));
 
+    /* A view of A's region with 2 MiB blocks only: the same bytes, 1536 leaves for 3 GiB, one level-2
+     * page per slot. Another ASID, so its TLB entries never meet A's. */
+    struct app_space sa2;
+    assert(app_space_build_view(&sa2, &arena, base_l1, &l, 1, 4, APP_SPACE_NO_GIB_BLOCKS) == 0 && sa2.tables == 4);
+    uint64_t ta2 = app_space_ttbr0(&sa2);
+    assert((ta2 >> 48) == 4 && count_leaves(ta2, abase, abytes, 2 * MIB) == 1536 && count_leaves(ta2, abase, abytes, GIB) == 0);
+    for (unsigned i = 0; i < 5; ++i) {
+        struct result r = walk(ta2, probes[i], 1); EXPECT(r, FAULT_NONE); assert(r.pa == probes[i] && r.leaf == 2 * MIB);
+    }
+    EXPECT(walk(ta2, abase + abytes, 0), FAULT_PERMISSION);
+    EXPECT(walk(ta2, bbase, 0), FAULT_PERMISSION);
+    assert(app_space_build_view(&sa2, &arena, base_l1, &l, 1, 4, 2) == APP_REGION_INVALID);
+    assert(app_space_build_view(&sa2, &arena, base_l1, &l, 0, 4, 0) == APP_REGION_INVALID);
+    arena.used -= 4;   /* the view pages are scratch; later cases count arena pages from the five spaces */
+
     /* Ownership queries for DMA grants. */
     assert(app_region_owner_of(&l, abase) == 1 && app_region_owner_of(&l, abase + abytes - 1) == 1);
     assert(app_region_owner_of(&l, abase + abytes) == 2 && app_region_owner_of(&l, bbase) == 2);

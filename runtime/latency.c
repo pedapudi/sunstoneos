@@ -394,6 +394,30 @@ unsigned ss_latency_sweep_read(unsigned index, struct ss_latency_sweep *out)
     return 1;
 }
 unsigned ss_latency_sweep_overflow(unsigned core) { return core < 8 ? sweep_overflow[core] : 0; }
+/* Unmasked waits for the task lock that precede a kernel entry (runtime/lock_prewait.c). */
+static struct { uint64_t count, max, total, timed_out, reject[6]; } prewait[8] __attribute__((aligned(64)));
+void ss_latency_prewait_record(unsigned core, uint64_t ticks, unsigned timed_out)
+{
+    if (core >= 8) return;
+    ++prewait[core].count;
+    prewait[core].total += ticks;
+    if (ticks > prewait[core].max) prewait[core].max = ticks;
+    prewait[core].timed_out += timed_out;
+}
+void ss_latency_prewait_reject(unsigned core, unsigned reason)
+{
+    if (core < 8 && reason < 6) ++prewait[core].reject[reason];
+}
+unsigned ss_latency_prewait_read(unsigned core, struct ss_latency_prewait *out)
+{
+    const uint64_t frequency = __atomic_load_n(&ss_latency_frequency, __ATOMIC_RELAXED);
+    if (core >= 8 || !frequency) return 0;
+    for (unsigned i = 0; i < 6; ++i) out->reject[i] = prewait[core].reject[i];
+    out->core = core; out->count = prewait[core].count; out->timed_out = prewait[core].timed_out;
+    out->max_us = prewait[core].max * 1000000u / frequency;
+    out->total_us = prewait[core].total * 1000000u / frequency;
+    return 1;
+}
 #endif
 void ss_latency_mask_open(unsigned core, uint64_t start, uintptr_t site)
 {

@@ -39,7 +39,7 @@ DMA0 needs physical channel, controller and data-access authority and transfer t
 Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-memory-dma-20261101.md).
 
 <!-- evidence-table:begin -->
-19 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+20 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -56,6 +56,7 @@ Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `too
 | `1793601793681778248-4e7e5868` | 2026-11-02 | 3-1 | `20c13110294c` | returned | passed | run_total 19.83 s, port2_priority 0, port6_priority 0, port18_priority 0, port19_priority 0, port20_priority 0 |
 | `1793603309777289754-ca40363d` | 2026-11-02 | 3-1 | `20c13110294c` | returned | passed | run_total 18.468 s, word_202446c 264709, word_202466c 264709, word_2023a14 63, word_2023c14 127, word_2023e14 15, word_2024014 241, word_2024214 241, word_202200c 1, word_202220c 1 |
 | `1793603320437612290-e5eca66b` | 2026-11-02 | 3-1 | `e271e3b62bb8` | result-mismatch | passed | run_total 11.996 s, scan_ticks 1.33193e+07, signature_ticks 2.33955e+07, address_failed 0, mismatch_count 0 |
+| `1793603354809199340-a4ed0f70` | 2026-11-02 | 3-1 | `1b2b6e8734ca` | returned | failed | run_total 15.295 s, region_bytes 1.07374e+09 B, read_control_40mib 1.87 GB/s, read_gib_blocks 1.87 GB/s, read_mib2_blocks 1.87 GB/s, cpu_clock 494 MHz, l1d_tlb_refill_gib_blocks 262314, l2d_tlb_refill_gib_blocks 3, l2d_tlb_refill_mib2_blocks 513, dtlb_walk_gib_blocks 2, dtlb_walk_mib2_blocks 512, el0_cases_faulted 7, el0_cases_succeeded 6 |
 | `1793603526511445173-2ba7f3fb` | 2026-11-02 | 3-1 | `6a8c39e68d53` | result-mismatch | failed | run_total 19.267 s |
 | `1793603526749137798-e9bb5100` | 2026-11-02 | 3-1 | `2a26fb331814` | result-mismatch | failed | run_total 18.815 s |
 | `1793603527003752888-c6eca39d` | 2026-11-02 | 3-1 | `acd030a1b5a6` | watchdog-reset | failed | run_total 18.828 s |

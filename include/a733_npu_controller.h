@@ -13,7 +13,8 @@ enum a733_npu_state {
 enum a733_npu_fault {
     A733_NPU_NO_FAULT, A733_NPU_IO, A733_NPU_IDENTITY, A733_NPU_NOT_IDLE,
     A733_NPU_REGISTER, A733_NPU_IRQ, A733_NPU_TIMEOUT, A733_NPU_MEMORY,
-    A733_NPU_COUNTER /* A job's cycle-counter read failed at publish or finish. */
+    A733_NPU_COUNTER, /* A job's cycle-counter read failed at publish or finish. */
+    A733_NPU_MMU /* The NPU reported an MMU exception (event bit 30); mmu_status and mmu_address hold the cause. */
 };
 struct a733_npu_command {
     uint32_t device;
@@ -50,6 +51,13 @@ struct a733_npu_controller {
     enum a733_npu_state state;
     enum a733_npu_fault fault;
     uint32_t irq_seen, last_idle, chip_model, chip_revision, chip_product, chip_date;
+    /* After an MMU exception: +0x384 (a 4-bit code per MMU unit: 1 slave not present, 2 page not present, 3 write
+     * violation, 4 out of bound, 5 and 6 security violations) and the faulting device address +0x380
+     * (vip2/vip_drv_debug.c:340-420; event bit 30 is IRQ_VALUE_MMU, vip_drv_hardware.h:86). */
+    uint32_t mmu_status, mmu_address;
+    /* How far the MMU capture got, for a capture that stalls: 1 event seen, 2 reading +0x384, 4 reading +0x380,
+     * 5 both read. Another core may read it; volatile. */
+    volatile uint32_t mmu_stage;
     unsigned bootstrap;
 #ifdef SUNSTONE_NPU_ACTIVE_CANCEL
     uint64_t diagnostic_ticket, diagnostic_elapsed;
@@ -82,6 +90,11 @@ enum a733_npu_state a733_npu_poll(struct a733_npu_controller *);
 enum a733_npu_state a733_npu_advance(struct a733_npu_controller *, int sample_events);
 /* Deadline-only progress while interrupt masking is deferred; no MMIO/cache. */
 enum a733_npu_state a733_npu_check_timeout(struct a733_npu_controller *);
+/* Vendor recovery after an NPU MMU exception (fault A733_NPU_MMU, a job started): the cancel handshake of
+ * vipdrv_hw_cancel, then the reset and initial command of a fresh open. Returns 1 with the controller in the booting
+ * state, 0 with the controller faulted. cancel_seen reports whether the handshake completion bit appeared. */
+int a733_npu_recover(struct a733_npu_controller *, const struct a733_npu_command *boot, uint64_t timeout,
+                     int *cancel_seen);
 int a733_npu_cancel(struct a733_npu_controller *, uint64_t stop_timeout);
 int a733_npu_reap(struct a733_npu_controller *, void **token, int *canceled);
 int a733_npu_close(struct a733_npu_controller *);

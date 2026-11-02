@@ -3,7 +3,6 @@
  * docs/designs/npu-breadth.md. */
 #include "npu_arch.h"
 #include "npu_runtime.h"
-#include "npu_admitted_models.h"
 #include "a733_range.h"
 #include <string.h>
 
@@ -36,25 +35,16 @@ static unsigned state(const struct npu_runtime_slot *s)
 static void set_state(struct npu_runtime_slot *s, unsigned value)
 { atomic_store_explicit(&s->state, value, memory_order_release); }
 
-/* Catalogue identity and the plan derived from the model image. */
-static int admit(const unsigned char *data, size_t bytes, unsigned *entry, struct nbg_assembly_layout *layout)
+/* The plan derived from the model image. The graph is admitted by what it is, not by a table: the container and its
+ * checksums are verified, every operation is checked by the assembler, and every address it patches is confined to the
+ * job's buffers (docs/designs/npu-loader-admission.md). The SHA-256 taken here is the reference for LOAD, which
+ * hashes the copy it stages and compares: it detects a corrupted or replaced copy, and it needs no table. */
+static int admit(const unsigned char *data, size_t bytes, unsigned char digest[32], struct nbg_assembly_layout *layout)
 {
-    unsigned char digest[32];
     struct nbg_model model;
     storage_digest_bytes(data, bytes, digest);
-    unsigned e = 0;
-    while (e < npu_admitted_model_count && (npu_admitted_models[e].model_bytes != bytes ||
-                                            memcmp(npu_admitted_models[e].digest, digest, 32))) ++e;
-    if (e == npu_admitted_model_count || nbg_model_open(data, bytes, &model) != NBG_DECODE_OK ||
-        !nbg_assembly_layout(&model, layout)) return 0;
-    const struct npu_admitted_model *c = &npu_admitted_models[e];
-    if (layout->inputs != c->inputs || layout->outputs != c->outputs ||
-        layout->nn_operations != c->nn_operations || layout->descriptor_patches != c->descriptor_patches ||
-        layout->state_patches != c->state_patches || layout->command_body_bytes != c->command_body_bytes ||
+    if (nbg_model_open(data, bytes, &model) != NBG_DECODE_OK || !nbg_assembly_layout(&model, layout) ||
         layout->buffers[NBG_ALLOC_COMMAND].allocation_bytes != NPU_RUNTIME_COMMAND_BYTES) return 0;
-    for (uint32_t i = 0; i < c->inputs + c->outputs; ++i)
-        if (layout->buffers[NBG_ALLOC_INPUT + i].payload_bytes != c->tensor_bytes[i]) return 0;
-    *entry = e;
     return 1;
 }
 struct sizes { size_t constant, read, write, staging; };
@@ -120,25 +110,39 @@ static int place(const struct sizes *z, unsigned slots, struct placement *p)
     return 1;
 }
 static int sized(const struct npu_runtime_model *models, unsigned count, unsigned slots,
-                 unsigned *entries, struct nbg_assembly_layout *plans, struct sizes *z, struct placement *p)
+                 unsigned char (*digests)[32], struct nbg_assembly_layout *plans, struct sizes *z, struct placement *p)
 {
     memset(z, 0, sizeof(*z));
     if (!models || !count || count > NPU_RUNTIME_MODELS || !slots || slots > NPU_RUNTIME_SLOTS) return 0;
     for (unsigned m = 0; m < count; ++m) {
         if (!a733_span_incl_nonempty(models[m].data, models[m].bytes) ||
             models[m].bytes > NBG_MODEL_MAX_BYTES ||
-            !admit(models[m].data, models[m].bytes, &entries[m], &plans[m])) return 0;
+            !admit(models[m].data, models[m].bytes, digests[m], &plans[m])) return 0;
         need(&plans[m], models[m].bytes, z);
     }
     return place(z, slots, p);
 }
-size_t npu_runtime_requirements(const struct npu_runtime_model *models, unsigned count, unsigned slots)
+enum npu_declaration_result npu_runtime_reservation(const struct npu_runtime_model *models, unsigned count,
+                                                   unsigned slots, size_t pool_bytes, size_t *bytes)
 {
-    unsigned entries[NPU_RUNTIME_MODELS];
+    unsigned char digests[NPU_RUNTIME_MODELS][32];
     struct nbg_assembly_layout plans[NPU_RUNTIME_MODELS];
     struct sizes z;
     struct placement p;
-    return sized(models, count, slots, entries, plans, &z, &p) ? p.bytes : 0;
+    if (!sized(models, count, slots, digests, plans, &z, &p)) {
+        /* One slot tells a graph that is not admissible from a declaration that no longer fits the address space. */
+        return sized(models, count, 1, digests, plans, &z, &p) ? NPU_DECLARATION_DEVICE_SPACE : NPU_DECLARATION_MODEL;
+    }
+    *bytes = p.bytes;
+    return p.bytes > pool_bytes ? NPU_DECLARATION_MEMORY : NPU_DECLARATION_OK;
+}
+size_t npu_runtime_requirements(const struct npu_runtime_model *models, unsigned count, unsigned slots)
+{
+    unsigned char digests[NPU_RUNTIME_MODELS][32];
+    struct nbg_assembly_layout plans[NPU_RUNTIME_MODELS];
+    struct sizes z;
+    struct placement p;
+    return sized(models, count, slots, digests, plans, &z, &p) ? p.bytes : 0;
 }
 
 static void fill_end(uintptr_t cpu, size_t bytes)
@@ -173,7 +177,7 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     atomic_init(&rt->failed, 0);
     struct sizes z;
     struct placement p;
-    if (!sized(v.models, v.count, v.slots, rt->entry, rt->plans, &z, &p) || p.bytes != v.bytes) return fault(rt);
+    if (!sized(v.models, v.count, v.slots, rt->model_digest, rt->plans, &z, &p) || p.bytes != v.bytes) return fault(rt);
     for (unsigned m = 0; m < v.count; ++m) rt->catalogue[m] = v.models[m];
     rt->count = v.count; rt->slots = v.slots;
     rt->constant_bytes = z.constant; rt->read_bytes = z.read; rt->write_bytes = z.write;
@@ -358,8 +362,10 @@ static void targets(struct npu_runtime_slot *s, const struct nbg_assembly_layout
     memset(s->targets, 0, sizeof(s->targets));
     uint32_t nn = l->buffers[NBG_ALLOC_NN].allocation_bytes;
     s->targets[NBG_ALLOC_NN] = (struct nbg_assembly_buffer){(void *)s->constant.cpu, nn, s->constant.device};
-    s->targets[NBG_ALLOC_COEFF] = (struct nbg_assembly_buffer){(void *)(s->constant.cpu + nn),
-        l->buffers[NBG_ALLOC_COEFF].allocation_bytes, s->constant.device + nn};
+    /* A graph without coefficients has an empty slot, which the assembler requires to be NULL, 0, 0. */
+    if (l->buffers[NBG_ALLOC_COEFF].allocation_bytes)
+        s->targets[NBG_ALLOC_COEFF] = (struct nbg_assembly_buffer){(void *)(s->constant.cpu + nn),
+            l->buffers[NBG_ALLOC_COEFF].allocation_bytes, s->constant.device + nn};
     if (l->dynamic) {
         const uint32_t at = nn + l->buffers[NBG_ALLOC_COEFF].allocation_bytes;
         s->targets[nbg_layout_dynamic_index(l)] = (struct nbg_assembly_buffer){(void *)(s->constant.cpu + at),
@@ -459,7 +465,7 @@ static int load_work(struct npu_runtime *rt)
         storage_digest_end(&rt->digest, digest);
         const struct nbg_assembly_layout *plan = &rt->plans[s->model];
         targets(s, plan);
-        if (memcmp(digest, npu_admitted_models[rt->entry[s->model]].digest, 32) ||
+        if (memcmp(digest, rt->model_digest[s->model], 32) ||
             nbg_model_open((const void *)rt->staging, model->bytes, &rt->view) != NBG_DECODE_OK ||
             !nbg_assembly_begin(&rt->view, s->targets, nbg_layout_buffers(plan),
                                 &s->layout, &rt->cursor) || !same_plan(&s->layout, plan)) {
@@ -518,7 +524,9 @@ static int load_work(struct npu_runtime *rt)
         const uint32_t total = coeff_bytes + dyna_bytes;
         size_t n = total - s->offset;
         if (n > NPU_RUNTIME_CACHE_CHUNK) n = NPU_RUNTIME_CACHE_CHUNK;
-        if (s->offset < coeff_bytes) {
+        if (!n) {
+            /* Neither coefficients nor a dynamic-input section remain to copy. */
+        } else if (s->offset < coeff_bytes) {
             if (n > coeff_bytes - s->offset) n = coeff_bytes - s->offset;
             memcpy((unsigned char *)s->targets[NBG_ALLOC_COEFF].cpu + s->offset, coeff.data + s->offset, n);
         } else {
@@ -619,7 +627,10 @@ static int check_step(struct npu_runtime *rt)
         return 1;
     }
     set_state(s, NPU_RUNTIME_READY);
-    npu_service_release(&rt->service, index, NPU_SERVICE_OK, A733_NPU_DONE);
+    const unsigned job_fault = s->faulted;
+    s->faulted = 0;
+    npu_service_release(&rt->service, index, job_fault ? NPU_SERVICE_JOB_FAULT : NPU_SERVICE_OK,
+                        job_fault ? A733_NPU_FAULT : A733_NPU_DONE);
     return 1;
 }
 
@@ -718,9 +729,12 @@ static int request(void *cookie, unsigned client, const struct npu_service_reque
 static void finished(void *cookie, unsigned client, int faulted)
 {
     struct npu_runtime *rt = cookie;
-    if (faulted || client >= rt->slots || state(&rt->slot[client]) != NPU_RUNTIME_RUNNING) {
+    /* faulted 2: the job failed with an NPU MMU exception and the service recovers the NPU. The slot goes through the
+     * same check of its read-only region as after a finished job, and its output is not used. */
+    if ((faulted && faulted != 2) || client >= rt->slots || state(&rt->slot[client]) != NPU_RUNTIME_RUNNING) {
         fault(rt); return;
     }
+    if (faulted == 2) { ++rt->counters.faulted_jobs; rt->slot[client].faulted = 1; }
     rt->slot[client].finished = ++rt->finishes;
     set_state(&rt->slot[client], NPU_RUNTIME_FINISHED);
 }
@@ -945,7 +959,8 @@ int npu_runtime_collect(struct npu_runtime *rt, unsigned slot, uint64_t ticket,
     struct npu_service_reply reply;
     if (!npu_service_collect(&rt->service, ticket, &reply, wait)) return 0;
     s->pending = 0;
-    if (reply.result == NPU_SERVICE_FAULT || reply.fault != A733_NPU_NO_FAULT) fault(rt);
+    if (reply.result == NPU_SERVICE_JOB_FAULT && reply.fault == A733_NPU_MMU) { /* the job only */ }
+    else if (reply.result == NPU_SERVICE_FAULT || reply.fault != A733_NPU_NO_FAULT) fault(rt);
     else if (s->pending_operation == NPU_SERVICE_CLOSE && reply.result == NPU_SERVICE_OK) s->closed = 1;
     *out = reply;
     return 1;

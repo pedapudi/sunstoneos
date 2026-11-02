@@ -7,7 +7,7 @@ from pathlib import Path
 R=Path(__file__).resolve().parents[1]
 s=importlib.util.spec_from_file_location('nm',R/'checks/nbg-model.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
 LIB=None
-KIND={1:'SH',2:'NN',6:'SP',7:'ACT',8:'NT',65535:'INIT'}
+KIND={1:'SH',2:'NN',3:'TP',4:'SW',6:'SP',7:'ACT',8:'NT',65535:'INIT'}
 def census(path):
     nb=Path(path).read_bytes()
     n=m.Native(Path(LIB),nb)

@@ -30,6 +30,10 @@ int os_npu_open(void);
 int os_npu_load(unsigned entry);
 int os_npu_tensor(enum nbg_section_id,unsigned index,struct npu_runtime_tensor *);
 int os_npu_submit(uint64_t timeout_us);
+/* os_npu_submit returns 2 when the job failed with an NPU MMU exception and the NPU was recovered: the session is
+ * usable, the outputs are not valid, and this record describes the fault (zero fields where a build lacks them). */
+struct os_npu_fault_info { uint32_t mmu_status, mmu_address, canary_crc, marks, window_ms, reserved; };
+extern struct os_npu_fault_info os_npu_last_fault;
 int os_npu_close(void);
 int os_npu_stopping(void);
 unsigned os_npu_stopped(void);
@@ -44,6 +48,11 @@ int os_npu_task_privileged(void (*)(void *),void *);
 struct a733_pin_handoff;
 int os_npu_pins(struct a733_pin_handoff *);
 int os_npu_start(void);
+/* The session's NPU declaration (npu-session.h, declared) checked against what this image links: slots, graphs and
+ * tensor links. NPU_DECLARATION_OK admits it; the memory it reserves is checked at start. */
+enum npu_declaration_result os_npu_declaration_admitted(uint32_t declared);
+/* The in-flight depth the session declares (the deepest queue when it declares nothing): the deepest queue the application may open. */
+unsigned os_npu_in_flight(void);
 int os_npu_never_ran(void);
 void os_npu_report_unstarted(uint64_t epoch,uint64_t generation);
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
