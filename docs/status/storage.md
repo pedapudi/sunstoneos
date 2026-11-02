@@ -9,7 +9,9 @@ Native SD identification, bounded reads, backup-first updates, slot loading and 
 3.3 V complete. One 4 KiB DMA read and one sentinel-prefilled 64 KiB read match
 same-card PIO references and restore controller, clocks, pins and saved RAM
 before normal ROM return. The sixteen-descriptor 64 KiB transfer takes
-3,332 microseconds; it does not measure sustained throughput. A read-only probe
+3,332 microseconds; it does not measure sustained throughput.
+The SD Status read (ACMD13) returns the card's allocation unit, 4 MiB (`AU_SIZE` 9, 8,192 sectors), in 519 microseconds, and the
+read-only backup probe returned 457 listed sectors with the restoration words unchanged. A read-only probe
 on port 3-1 read 160 sequential 128 KiB requests at 21.9 MB/s per request in the
 same profile; it ran at boot clocks (CPU 494 MHz), so the figure is not a top-point
 performance figure and the OS image re-measures it. The same probe mounted the card's
@@ -63,7 +65,7 @@ on the platform source of v12. The same check applies to any other service that 
 Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-storage-20261101.md).
 
 <!-- evidence-table:begin -->
-17 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+18 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -71,6 +73,7 @@ Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/
 | `1793601985766378587-f5397f2b` | 2026-11-02 | 3-1 | `10fc60a38e63` | watchdog-reset | failed | run_total 30.184 s, reads_done 0 |
 | `1793602100319385552-a0551753` | 2026-11-02 | 3-1 | `90c035539d6b` | returned | passed | run_total 12.159 s, sustained_rate 19.7 MB/s, per_read_rate_median 21.92 MB/s, per_read_rate_min 21.21 MB/s, per_read_rate_max 21.95 MB/s, bytes_read 2.09715e+07 B, reads 160, identify_time 0.299 s, card_capacity 6.2535e+10 B |
 | `1793602559946667231-3a060254` | 2026-11-02 | 3-1 | `2c3d87a420e7` | returned | passed | run_total 11.55 s, free_clusters 1.90744e+06, clusters 1.90744e+06, cluster_size 32768 B, fat_sectors 14912, root_entries 0, run_time 0.728 s |
+| `1793612289390889939-c86b87e7` | 2026-11-02 | 3-1 | `190cbba10653` | returned | passed | run_total 13.107 s, allocation_unit 8192, sd_status_read 519 us, identify_time 0.298816 s, backup_sectors 457, card_sectors 1.22139e+08 |
 | `1793623788842205312-60954030` | 2026-11-02 | 3-1 | `dbcd215abfcf` | watchdog-reset | inconclusive | run_total 117.595 s, bytes_written 3.85876e+08 B, guard 40 s |
 | `1793624020209550742-922a29db` | 2026-11-02 | 3-1 | `190cbba10653` | result-mismatch | passed | run_total 51.094 s, file_size 3.85876e+08 B, chain_clusters 11776, sectors_changed 189 |
 | `1793625959251868124-3ed648e5` | 2026-11-02 | 3-1 | `5f83dbc1f8da` | watchdog-reset | inconclusive | run_total 70.944 s, run_limit 52 s, read_calls 5888 |
