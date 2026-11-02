@@ -23,9 +23,9 @@ int ss_large_records_valid(const struct ss_large_region *r, unsigned count)
     uint64_t total = 0;
     for (unsigned i = 0; i < count; ++i) {
         if (r[i].index != i || (r[i].flags & ~(unsigned)(SS_LARGE_WRITE | SS_LARGE_EXTENT | SS_LARGE_HEAP))) return 0;
-        if (!r[i].bytes || r[i].bytes % APP_REGION_BLOCK || r[i].bytes > APP_REGION_LIMIT - APP_REGION_BASE) return 0;
+        if (!r[i].bytes || r[i].bytes % APP_REGION_BLOCK || r[i].bytes > APP_REGION_LIMIT - APP_REGION_FLOOR) return 0;
         total += r[i].bytes;
-        if (total > APP_REGION_LIMIT - APP_REGION_BASE) return 0;
+        if (total > APP_REGION_LIMIT - APP_REGION_FLOOR) return 0;
         int zero = 1;
         for (unsigned k = 0; k < 32; ++k) if (r[i].sha256[k]) zero = 0;
         int n = path_ok(r[i].path);

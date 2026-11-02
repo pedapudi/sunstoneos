@@ -275,6 +275,64 @@ static void large_cases(void)
     heap_cases(all);
 }
 
+/* Level-1 slot 1 above the 128 MiB that EL0 reaches in every space: a space that owns bytes there gets its own copy of
+ * the kernel's level-2 table. */
+static void slot1_cases(void)
+{
+    build_kernel(0);
+    for (unsigned j = 64; j < 512; ++j) kernel_l2[j] = A733_EL1_DRAM_BLOCK(GIB + (uint64_t)j * 0x200000);   /* mapped after the decode check */
+    struct app_region_range usable[] = {{APP_REGION_FLOOR, 0x38000000}, {APP_REGION_BASE, 11 * GIB}};
+    struct app_region_ledger l;
+    assert(linit(&l, 0, 8, usable, 2) == 0 && app_region_free_bytes(&l) == 11 * GIB + 0x38000000);
+    uint64_t a0, an, b0, bn;
+    /* The first region takes the smallest gap that holds it: the gap in slot 1 (896 MiB) is smaller than slot 2 on. */
+    assert(app_region_acquire(&l, 1, 6 * MIB, APP_REGION_READ | APP_REGION_WRITE, &a0, &an) == 0);
+    assert(a0 == APP_REGION_FLOOR && an == 6 * MIB);
+    assert(app_region_acquire(&l, 2, 4 * MIB, APP_REGION_READ, &b0, &bn) == 0 && b0 == a0 + 6 * MIB);
+    struct app_space sa, sb, sn;
+    arena.used = 0;
+    assert(app_space_build_l2(&sa, &arena, base_l1, kernel_l2, &l, 1, 1, 0) == 0 && sa.tables == 2);
+    assert(app_space_build_l2(&sb, &arena, base_l1, kernel_l2, &l, 2, 2, 0) == 0 && sb.tables == 2);
+    assert(app_space_build_l2(&sn, &arena, base_l1, kernel_l2, &l, 3, 3, 0) == 0 && sn.tables == 1);   /* owns nothing there: no copy */
+    uint64_t ta = app_space_ttbr0(&sa), tb = app_space_ttbr0(&sb), tn = app_space_ttbr0(&sn);
+    /* The owner reads and writes its first and last byte; the blocks around it fault at EL0 with a permission fault. */
+    EXPECT(walk(ta, a0, 0), FAULT_NONE); EXPECT(walk(ta, a0, 1), FAULT_NONE);
+    EXPECT(walk(ta, a0 + 6 * MIB - 1, 1), FAULT_NONE);
+    EXPECT(walk(ta, a0 - 1, 0), FAULT_NONE);                       /* below the floor: the window every space shares */
+    EXPECT(walk(ta, a0 + 6 * MIB, 0), FAULT_PERMISSION);           /* the next owner's block */
+    EXPECT(walk(ta, a0 + 10 * MIB, 0), FAULT_PERMISSION);          /* unowned, kernel-only */
+    /* The second owner has its blocks read-only, and none of the first owner's. */
+    EXPECT(walk(tb, b0, 0), FAULT_NONE); EXPECT(walk(tb, b0, 1), FAULT_PERMISSION);
+    EXPECT(walk(tb, a0, 0), FAULT_PERMISSION); EXPECT(walk(tn, a0, 0), FAULT_PERMISSION); EXPECT(walk(tn, b0, 0), FAULT_PERMISSION);
+    /* EL1 keeps read and write access to the owners' blocks, except to the read-only one. */
+    EXPECT(walk(ta, a0, 3), FAULT_NONE); EXPECT(walk(tn, a0, 3), FAULT_NONE); EXPECT(walk(tn, a0, 2), FAULT_NONE);
+    /* Below the floor every space is byte-identical to the kernel's table, entry by entry. */
+    const uint64_t *copy = arena_pages[1];
+    assert(!memcmp(copy, kernel_l2, 64 * sizeof(uint64_t)));
+    assert(copy[(a0 - GIB) / 0x200000 + 6] == kernel_l2[(a0 - GIB) / 0x200000 + 6]);   /* an unowned block is the kernel's */
+    for (uint64_t va = 0x40000000; va < APP_REGION_FLOOR; va += 0x200000) {
+        struct result k = walk(root_pa, va, 0), r = walk(ta, va, 0);
+        assert(k.fault == r.fault && k.pa == r.pa);
+    }
+    /* Refusals leave the arena as it was: no table for slot 1, a block the kernel leaves unmapped, a bad level-1 entry. */
+    unsigned used = arena.used;
+    assert(app_space_build_l2(&sa, &arena, base_l1, 0, &l, 1, 4, 0) == APP_REGION_INVALID && arena.used == used);
+    kernel_l2[(a0 - GIB) / 0x200000] = 0;
+    assert(app_space_build_l2(&sa, &arena, base_l1, kernel_l2, &l, 1, 4, 0) == APP_REGION_INVALID && arena.used == used);
+    kernel_l2[(a0 - GIB) / 0x200000] = A733_EL1_DRAM_BLOCK(a0);
+    assert(app_space_build(&sa, &arena, base_l1, &l, 1) == APP_REGION_INVALID && arena.used == used);   /* the old entry point has no slot-1 table */
+    /* A region that spans slot 1 into slot 2 maps in both. */
+    uint64_t c0, cn;
+    assert(app_region_acquire(&l, 4, 900 * MIB, APP_REGION_READ | APP_REGION_WRITE, &c0, &cn) == 0 && c0 >= a0 + 10 * MIB);
+    arena.used = 0;
+    struct app_space sc;
+    assert(app_space_build_l2(&sc, &arena, base_l1, kernel_l2, &l, 4, 4, 0) == 0);
+    uint64_t tc = app_space_ttbr0(&sc);
+    EXPECT(walk(tc, c0, 1), FAULT_NONE); EXPECT(walk(tc, c0 + cn - 1, 1), FAULT_NONE);
+    EXPECT(walk(tc, c0 + cn, 0), FAULT_PERMISSION);
+    arena.used = 0;
+}
+
 int main(void)
 {
     build_kernel(0);
@@ -523,6 +581,7 @@ int main(void)
         assert((app_space_ttbr0(&wide) >> 48) == 0x1234 && (app_space_ttbr0(&wide) & APP_PTE_ADDR_MASK) == wide.root_physical);
     }
     large_cases();
+    slot1_cases();
     puts("app-region host check passed");
     return 0;
 }
