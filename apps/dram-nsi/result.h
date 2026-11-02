@@ -36,6 +36,8 @@ struct dn_variant { uint32_t mask, mode, stagger; };
 /* Registers read once, in this order: CCU NSI clock, NSI bus gate and reset, MBUS clock, and for each of
  * the target-agent ports 32 and 33 the words +0x10, +0x14, +0x18, +0xc0, +0xc8. */
 #define DN_EXTRA 13u
+#define DN_PORTS 21u
+#define DN_PORT_WORDS 6u
 struct dn_core_sample { uint32_t chunks; uint32_t ticks; };
 /* Arm performance counters of one core over the last timed window, read at EL1: the cycle counter and six
  * events, in this order: L2D_CACHE_REFILL (0x17), L3D_CACHE_REFILL (0x2a), BUS_ACCESS (0x19),
@@ -53,6 +55,7 @@ struct dn_probe {
     uint32_t words_written[DN_WORDS];       /* read back after the write; zero when the image does not write */
     uint32_t extra[DN_EXTRA];
     uint32_t write_enabled, reserved[2];
+    uint32_t ports[DN_PORTS][DN_PORT_WORDS]; /* initiator ports 0 to 20: words +0xc, +0x10, +0x14, +0x18, +0x28, +0x2c */
 };
 struct dn_result {
     char magic[8];

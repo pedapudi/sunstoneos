@@ -23,6 +23,7 @@ static inline int dn_known(uint32_t a)
                                      0x02002580,0x02002584,0x02002588};
     for (unsigned i = 0; i < sizeof words / sizeof *words; ++i) if (a == words[i]) return 1;
     for (unsigned t = 32; t < 34; ++t) { const uint32_t b = DN_TA_PORT(t); if (a == b + 0x10 || a == b + 0x14 || a == b + 0x18 || a == b + 0xc0 || a == b + 0xc8) return 1; }
+    if (a >= DN_NSI_BASE && a < DN_TA_PORT(21)) { const uint32_t o = (a - DN_NSI_BASE) % 0x200; if (o == 0xc || o == 0x10 || o == 0x14 || o == 0x18 || o == 0x28 || o == 0x2c) return 1; }
     for (unsigned t = 19; t < 21; ++t) {
         const uint32_t b = DN_TA_PORT(t);
         if (a == b + 0x10 || a == b + 0x14 || a == b + 0x18 || (a >= b + 0xc0 && a <= b + 0xe0 && !(a & 3))) return 1;

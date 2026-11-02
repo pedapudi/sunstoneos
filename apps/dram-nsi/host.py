@@ -25,7 +25,8 @@ HEAD = struct.Struct('<8sQQ4I5i5i')
 FILL = struct.Struct('<' + 'Q' * CORES)
 CONFIG = struct.Struct('<4I' + 'II' * (REPS * CORES) + 'I' * (7 * CORES) + 'Q' * CORES)
 WORDS, EXTRA, PHASES = 9, 13, 2
-PROBE = struct.Struct('<' + 'I' * (2 * WORDS + EXTRA + 3))
+PORTS, PORT_WORDS = 21, 6
+PROBE = struct.Struct('<' + 'I' * (2 * WORDS + EXTRA + 3 + PORTS * PORT_WORDS))
 WORD_ADDRESSES = (0x0202446c, 0x0202466c, 0x02023a14, 0x02023c14, 0x02023e14, 0x02024014, 0x02024214, 0x0202200c, 0x0202220c)
 WORD_VALUES = (0x40a05, 0x40a05, 0x3f, 0x7f, 0xf, 0xf1, 0xf1, 1, 1)
 VARIANTS = [(m, 0, 0) for m in (0x01, 0x03, 0x0f, 0x3f, 0x40, 0xc0, 0xcf, 0xff)]
@@ -156,7 +157,8 @@ def decode(payload):
     offset += PROBE.size
     probe = dict(words_before=dict(zip(map(hex, WORD_ADDRESSES), pv[:WORDS])),
                  words_written=dict(zip(map(hex, WORD_ADDRESSES), pv[WORDS:2 * WORDS])),
-                 extra=pv[2 * WORDS:2 * WORDS + EXTRA], write_enabled=pv[2 * WORDS + EXTRA])
+                 extra=pv[2 * WORDS:2 * WORDS + EXTRA], write_enabled=pv[2 * WORDS + EXTRA],
+                 ports=[[hex(x) for x in pv[2 * WORDS + EXTRA + 3 + PORT_WORDS * p:2 * WORDS + EXTRA + 3 + PORT_WORDS * (p + 1)]] for p in range(PORTS)])
     if probe['write_enabled'] and tuple(pv[WORDS:2 * WORDS]) != WORD_VALUES:
         probe['write_mismatch'] = True
     phases = []

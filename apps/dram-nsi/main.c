@@ -50,6 +50,12 @@ static void probe_write(void)
         dn_dmb();
     }
 }
+static void probe_ports(uint32_t (*ports)[DN_PORT_WORDS])
+{
+    static const uint16_t offsets[DN_PORT_WORDS] = { 0x0c, 0x10, 0x14, 0x18, 0x28, 0x2c };
+    for (unsigned p = 0; p < DN_PORTS; ++p)
+        for (unsigned w = 0; w < DN_PORT_WORDS; ++w) ports[p][w] = dn_reg_read(DN_TA_PORT(p) + offsets[w]);
+}
 static void probe_extra(uint32_t *x)
 {
     x[0] = dn_reg_read(0x02002580u);
@@ -112,6 +118,7 @@ void dram_nsi_worker(void *arg)
         if (job.fill == 2) {                /* probe job: one core touches the interconnect */
             probe_read(job.probe.words_before);
             probe_extra(job.probe.extra);
+            probe_ports(job.probe.ports);
             if (job.write) {
                 probe_write();
                 probe_read(job.probe.words_written);
