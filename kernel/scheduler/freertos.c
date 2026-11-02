@@ -846,7 +846,9 @@ static void ssKernelControlDrain(void)
 {
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
-    configASSERT(!cpu->critical_depth && !cpu->isr_depth && !cpu->control_draining);
+    configASSERT(!cpu->critical_depth);
+    configASSERT(!cpu->isr_depth);
+    configASSERT(!cpu->control_draining);
     /* Object unlock flushes publications. Keep deferred command consumption
      * outside this whole maintenance interval so its final ack cannot retire
      * a descriptor still referenced by the unlocked repair batch. */
