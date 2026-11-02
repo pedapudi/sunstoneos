@@ -26,8 +26,8 @@ static struct os_thermal_service {
     struct gicv3_spi irq;
     struct a733_thermal_policy policy;
     StaticTask_t task;StackType_t stack[2048];TaskHandle_t handle;
-    atomic_uint failed,pending,masked;
-    unsigned active,retaining,rearm_wait;
+    atomic_uint failed,pending;
+    unsigned active,retaining,masked,rearm_wait;
     uint64_t next_read;
     uint32_t cpu_critical_millicelsius;
 } thermal;
@@ -230,11 +230,6 @@ static int mask(void)
 }
 static int rearm(void)
 {
-    /* An armed interrupt needs no work. If an IRQ masks it after this
-     * snapshot, pending processing handles it on the next owner pass, just
-     * as when the IRQ arrives after the protected path returns. Actual GIC
-     * rearm still serializes with that IRQ and rechecks pending below. */
-    if(!atomic_load_explicit(&thermal.masked,memory_order_acquire))return 1;
     int ok=1;taskENTER_CRITICAL();
     if(live()&&!atomic_load_explicit(&thermal.pending,memory_order_acquire)&&thermal.masked){
         int r=gicv3_spi_rearm(&thermal.irq);
@@ -323,7 +318,7 @@ static int construct(const struct os_session *s)
 {
     if(!board_live(NULL)||board.session.deadline_us<=10000||!mappings())return 0;
     thermal.cpu_critical_millicelsius=s->cpu_critical_millicelsius;
-    thermal.irq=(struct gicv3_spi){0x03400000,A733_THERMAL_INTID};atomic_init(&thermal.masked,1);
+    thermal.irq=(struct gicv3_spi){0x03400000,A733_THERMAL_INTID};thermal.masked=1;
     atomic_init(&thermal.failed,0);atomic_init(&thermal.pending,0);
     thermal.config=(struct a733_thermal_config){.owner=s->thermal_owner,.handoff=s->thermal_authority,
         .startup_deadline_us=deadline(),.apb1=s->apb1,.apb1_hz=s->apb1_hz,

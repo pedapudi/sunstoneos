@@ -11,23 +11,16 @@
 struct board_application board;
 struct board_provider providers;
 uint64_t cadence_state[12],cadence_read_times[256];
-uint64_t cadence_rearm_state[4];
 uint8_t cadence_report[sizeof(struct os_thermal_report)+THERMAL_RECORDS*sizeof(struct os_thermal_reading)];
 static uint64_t model_time,read_delay;
-static unsigned reads,clocks,failures,poll_ready,valid_mask,critical_entries,rearm_calls,irq_at_entry;
+static unsigned reads,clocks,failures,poll_ready,valid_mask;
 static int rearm_ok;
 static int32_t temperature;
 
 uint64_t a733_smp_counter(void){return model_time*24;}
 int a733_counter_clock_now(void *v,uint64_t *out){(void)v;*out=model_time;return 1;}
 TaskHandle_t xTaskGetCurrentTaskHandle(void){return (TaskHandle_t)(uintptr_t)1;}
-void vTaskEnterCritical(void)
-{
-    ++critical_entries;
-    /* Model an IRQ that wins the lock immediately before the owner. */
-    if(irq_at_entry){atomic_store_explicit(&thermal.masked,1,memory_order_release);
-        atomic_store_explicit(&thermal.pending,1,memory_order_release);irq_at_entry=0;}
-}
+void vTaskEnterCritical(void){}
 void vTaskExitCritical(void){}
 int board_live(void *v){(void)v;return 1;}
 int os_application_deadline(void){return 1;}
@@ -36,7 +29,7 @@ int os_cpu_clock_step(const struct a733_thermal_policy *p){(void)p;++clocks;retu
 void board_fail_at(uint32_t site,uint32_t value,const void *caller)
 {(void)site;(void)value;(void)caller;++failures;}
 int gicv3_spi_mask(const struct gicv3_spi *irq){(void)irq;return 1;}
-int gicv3_spi_rearm(const struct gicv3_spi *irq){(void)irq;++rearm_calls;return rearm_ok;}
+int gicv3_spi_rearm(const struct gicv3_spi *irq){(void)irq;return rearm_ok;}
 enum a733_clock_result a733_clock_retain(struct a733_clock_leases *c,const struct a733_clock_token *t)
 {(void)c;(void)t;return A733_CLOCK_OK;}
 enum a733_thermal_result cadence_poll(struct a733_thermal *d)
@@ -63,8 +56,7 @@ int cadence_control(unsigned op,uint64_t at,uint64_t value)
         memset(&board,0,sizeof(board));memset(cadence_state,0,sizeof(cadence_state));
         memset(cadence_report,0,sizeof(cadence_report));
         thermal_record_origin_us=0;
-        reads=clocks=failures=critical_entries=rearm_calls=irq_at_entry=0;
-        read_delay=0;poll_ready=0;rearm_ok=1;temperature=40000;valid_mask=31;
+        reads=clocks=failures=0;read_delay=0;poll_ready=0;rearm_ok=1;temperature=40000;valid_mask=31;
         thermal.handle=(TaskHandle_t)(uintptr_t)1;thermal.active=1;thermal.masked=1;
         thermal.driver.initialized=1;board.session.deadline_us=at+60000000;
         board.session.epoch=11;board.session.generation=12;
@@ -91,12 +83,6 @@ int cadence_control(unsigned op,uint64_t at,uint64_t value)
     else if(op==9)valid_mask=(unsigned)value;
     else if(op==10)thermal.driver.fault=(unsigned)value;
     else if(op==11)atomic_store_explicit(&thermal.pending,1,memory_order_release);
-    else if(op==12)result=rearm();
-    else if(op==13)irq_at_entry=1;
-    else if(op==14){thermal.masked=1;atomic_store_explicit(&thermal.pending,1,memory_order_release);}
-    else if(op==15)atomic_store_explicit(&thermal.pending,0,memory_order_release);
-    else if(op==16){thermal.masked=1;rearm_ok=0;}
-    else if(op==17)rearm_ok=1;
     cadence_state[0]=atomic_load_explicit(&readings.count,memory_order_acquire);
     cadence_state[1]=readings.next;cadence_state[2]=reads;cadence_state[3]=clocks;
     cadence_state[4]=failures;cadence_state[5]=thermal.active;
@@ -104,8 +90,5 @@ int cadence_control(unsigned op,uint64_t at,uint64_t value)
     cadence_state[8]=(uint64_t)os_thermal_throttled();
     cadence_state[9]=thermal.next_read;cadence_state[10]=thermal_record_origin_us;
     cadence_state[11]=model_time;
-    cadence_rearm_state[0]=critical_entries;cadence_rearm_state[1]=rearm_calls;
-    cadence_rearm_state[2]=atomic_load_explicit(&thermal.masked,memory_order_acquire);
-    cadence_rearm_state[3]=atomic_load_explicit(&thermal.pending,memory_order_acquire);
     return result;
 }

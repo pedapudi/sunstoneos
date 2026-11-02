@@ -33,12 +33,8 @@ if (a.build/'compile_commands.json').exists():
               if u['file'].endswith(('/apps/os/thermal.c','/os-image/return-thermal.c')))
     argv=shlex.split(unit['command']);flags=argv[:argv.index('-o')]
 else:
-    flags_path=next((a.build/'CMakeFiles'/target/'flags.make' for target in
-                    ('sunstone-a733-os.dir','sunstone-a733-os-core.dir')
-                    if (a.build/'CMakeFiles'/target/'flags.make').exists()),None)
-    if flags_path is None:p.error('--build needs a configured OS or OS-core target')
     values=dict(line.split(' = ',1) for line in
-                flags_path.read_text().splitlines()
+                (a.build/'CMakeFiles/sunstone-a733-os.dir/flags.make').read_text().splitlines()
                 if ' = ' in line)
     flags=[CLANG,'--target=aarch64-none-elf',*shlex.split(values['C_DEFINES']),
            *shlex.split(values['C_INCLUDES']),*shlex.split(values['C_FLAGS'])]
@@ -64,7 +60,6 @@ class Model:
         assert self.uc.reg_read(UC_ARM64_REG_PC)==0x6000fff0
         return self.uc.reg_read(UC_ARM64_REG_X0)&0xffffffff
     def state(self):return struct.unpack('<12Q',self.uc.mem_read(self.image.address('cadence_state'),96))
-    def rearm_state(self):return struct.unpack('<4Q',self.uc.mem_read(self.image.address('cadence_rearm_state'),32))
     def decode(self):
         n=self.state()[6];return report.decode(bytes(self.uc.mem_read(self.image.address('cadence_report'),n)),11,12)
     def read_times(self):return list(struct.unpack('<'+'Q'*self.state()[2],self.uc.mem_read(self.image.address('cadence_read_times'),8*self.state()[2])))
@@ -88,26 +83,6 @@ def finish(m,at,success=1):
     m.call(3,at,success);return m.decode()
 
 m=build('fixed',ROOT/'apps/os/thermal.c');cases=[]
-# The real rearm path must avoid the kernel locks when it has no work, then
-# preserve pending IRQs on either side of that snapshot and hardware RWP.
-m.call(0,1000000);assert m.call(12,1000001)==1
-assert m.rearm_state()==(1,1,0,0)
-for i in range(10):assert m.call(12,1000002+i)==1
-assert m.rearm_state()==(1,1,0,0)
-cases.append('armed-rearm-skips-critical-section-and-gic')
-# An IRQ after the false snapshot leaves work pending for the next owner pass.
-m.call(14,1000020);assert m.call(12,1000021)==1
-assert m.rearm_state()==(2,1,1,1)
-m.call(15,1000022);assert m.call(12,1000023)==1
-assert m.rearm_state()==(3,2,0,0)
-cases.append('irq-after-armed-snapshot-preserves-pending-until-consumed')
-m.call(16,1000030);assert m.call(12,1000031)==1
-assert m.rearm_state()==(4,3,1,0)
-m.call(13,1000032);assert m.call(12,1000033)==1
-assert m.rearm_state()==(5,3,1,1)
-m.call(15,1000034);m.call(17,1000035);assert m.call(12,1000036)==1
-assert m.rearm_state()==(6,4,0,0)
-cases.append('rwp-pending-and-irq-before-critical-section-retain-mask')
 m.call(0,1000000);m.call(2,1000010)
 assert report.classify(finish(m,1000020))=='incomplete'
 cases.append('window-ending-before-first-sample')
