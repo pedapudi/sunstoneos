@@ -57,3 +57,5 @@ __attribute__((weak)) unsigned long ulSunstoneKernelPmu(unsigned core, unsigned 
 { (void)core; (void)region; (void)counter; return 0; }
 __attribute__((weak)) unsigned long ulSunstoneSgiSite(unsigned sender, unsigned index, unsigned long *site, unsigned *target)
 { (void)sender; (void)index; *site = 0; *target = 0; return 0; }
+__attribute__((weak)) unsigned long ulSunstoneIdleWaiting(unsigned core) { (void)core; return 0; }
+__attribute__((weak)) unsigned long ulSunstoneIdlePulls(void) { return 0; }

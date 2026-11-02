@@ -12,7 +12,11 @@ static uint64_t limits[SS_LAT_METRICS], pending[SS_LAT_METRICS];
 static uint64_t gpu_receipt[2];
 static unsigned gpu_active;
 static unsigned current_core(void);
+#ifdef SUNSTONE_LATENCY_SWEEP
+#define HIST_BINS 17U /* the sweep table carries the tail; the image has no room for the full histograms */
+#else
 #define HIST_BINS 1025U
+#endif
 struct histogram {
     uint64_t bins[HIST_BINS];
     uint64_t count, maximum, start, site;
@@ -336,6 +340,52 @@ void ss_latency_record_at(unsigned core, unsigned region, uint64_t start,
 void ss_latency_record(unsigned core, unsigned region, uint64_t start, uintptr_t site)
 { ss_latency_record_at(core, region, start, ss_latency_now(), site); }
 
+#ifdef SUNSTONE_LATENCY_SWEEP
+/* Every distinct (open site, close site) pair of a masked span, per core, with its count,
+ * maximum and a histogram, so that the sweep lists each pair above a threshold with a tail
+ * percentile. The table of a core is written by that core only. Microsecond bin edges. */
+static const uint16_t sweep_edges[SS_LAT_SWEEP_BINS - 1] = {1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200, 300, 500};
+static struct sweep_entry {
+    uintptr_t open, close;
+    uint64_t count, max_ticks;
+    uint32_t bins[SS_LAT_SWEEP_BINS];
+} sweep[8][SS_LAT_SWEEP_ENTRIES] __attribute__((aligned(64)));
+static unsigned sweep_overflow[8];
+static void sweep_record(unsigned core, uintptr_t open, uintptr_t close, uint64_t ticks)
+{
+    const uint64_t frequency = __atomic_load_n(&ss_latency_frequency, __ATOMIC_RELAXED);
+    if (!frequency) return;
+    unsigned slot = (unsigned)(((open >> 2) * 40503u) ^ ((close >> 2) * 2654435761u)) % SS_LAT_SWEEP_ENTRIES;
+    for (unsigned probe = 0; probe < SS_LAT_SWEEP_ENTRIES; ++probe, slot = (slot + 1) % SS_LAT_SWEEP_ENTRIES) {
+        struct sweep_entry *e = &sweep[core][slot];
+        if (!e->count) { e->open = open; e->close = close; }
+        else if (e->open != open || e->close != close) continue;
+        const uint64_t micro = ticks * 1000000u / frequency;
+        unsigned bin = 0;
+        while (bin < SS_LAT_SWEEP_BINS - 1 && micro >= sweep_edges[bin]) ++bin;
+        ++e->bins[bin];
+        __atomic_store_n(&e->count, e->count + 1, __ATOMIC_RELEASE);
+        if (ticks > e->max_ticks) e->max_ticks = ticks;
+        return;
+    }
+    ++sweep_overflow[core];
+}
+/* Merge the cores' entries of one pair into `out`; index i enumerates (core, slot). */
+unsigned ss_latency_sweep_read(unsigned index, struct ss_latency_sweep *out)
+{
+    if (index >= 8 * SS_LAT_SWEEP_ENTRIES) return 0;
+    const struct sweep_entry *e = &sweep[index / SS_LAT_SWEEP_ENTRIES][index % SS_LAT_SWEEP_ENTRIES];
+    const uint64_t count = __atomic_load_n(&e->count, __ATOMIC_ACQUIRE);
+    if (!count) return 0;
+    const uint64_t frequency = __atomic_load_n(&ss_latency_frequency, __ATOMIC_RELAXED);
+    out->core = index / SS_LAT_SWEEP_ENTRIES;
+    out->open = e->open; out->close = e->close; out->count = count;
+    out->max_us = frequency ? (uint32_t)(e->max_ticks * 1000000u / frequency) : 0;
+    for (unsigned b = 0; b < SS_LAT_SWEEP_BINS; ++b) out->bins[b] = e->bins[b];
+    return 1;
+}
+unsigned ss_latency_sweep_overflow(unsigned core) { return core < 8 ? sweep_overflow[core] : 0; }
+#endif
 void ss_latency_mask_open(unsigned core, uint64_t start, uintptr_t site)
 {
     if (enabled(core) && !local[core].mask_active) {
@@ -362,6 +412,9 @@ void ss_latency_mask_close(unsigned core, uintptr_t site)
 #else
         const uint64_t end = ss_latency_now();
         if (enabled(core)) {
+#endif
+#ifdef SUNSTONE_LATENCY_SWEEP
+            if (end >= local[core].mask_start) sweep_record(core, local[core].mask_site, site, end - local[core].mask_start);
 #endif
             ss_latency_record_at(core, SS_LAT_MASKED, local[core].mask_start, end, local[core].mask_site);
 #ifdef SUNSTONE_LATENCY_PMU
