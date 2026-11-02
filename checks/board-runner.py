@@ -168,7 +168,7 @@ class Model:
         return types.SimpleNamespace(returncode=0,stdout='\n'.join(out),stderr='')
 
 
-def lifecycle(root,variant,restore=False):
+def lifecycle(root,variant,restore=False,dirty=None):
     root.mkdir()
     args=arguments(root)
     args.restore_rails=restore
@@ -194,6 +194,7 @@ def lifecycle(root,variant,restore=False):
             if variant=='restore-clock':words['0x8871000']=0
             return {'words':words}
         def prepare(self,info):
+            if dirty:self.record[dirty]=True
             return {'epoch':1,'generation':2,'watchdog':{'mode':0xb1,'session_seconds':1},
                     'uploads':[(0x41000000,args.image)],'launch':['exe','0x52000']}
         def capture(self,plan):
@@ -282,6 +283,73 @@ def transport_cases(out):
     else:raise AssertionError('transport error accepted')
     assert model.quarantined and len(model.calls)==0
     passed('transport-error-quarantines-unknown-instance')
+
+
+def reset_release_cases(out):
+    """A verified fresh instance after a watchdog reset is released; every other unresolved state stays quarantined."""
+    for dirty in ('dram_dirty','npu_dirty'):
+        for variant,quarantined in (('watchdog',False),('no-return',True),('missing-return',True),('fel-after-return',True)):
+            result,model,owner=lifecycle(out/f'reset-{dirty}-{variant}',variant,dirty=dirty)
+            assert bool(model.quarantined)==quarantined and result['quarantined']==quarantined,(dirty,variant,result)
+            if variant=='watchdog':
+                assert result['outcome']=='watchdog-reset' and result['dram_lost'] and result['rom_returned']
+                assert result['dram_released_by_reset'] and owner.identity!=[1,1,3,4,5]
+            q=board.Queue(out/f'reset-queue-{dirty}-{variant}');args=arguments(out/f'reset-{dirty}-{variant}',submit=True)
+            job=q.submit(args);assert q.claim('3-1')
+            q.complete(job['id'],result)
+            assert bool(q.status()['boards']['3-1']['pause'])==quarantined,(dirty,variant)
+            passed(f'reset-{dirty}-{variant}-'+('quarantined' if quarantined else 'released-and-unpaused'))
+    # A transport failure before any return leaves the instance unknown.
+    root=out/'reset-transport';root.mkdir();args=arguments(root);model=Model('normal')
+    owner=board.Live(args,root,{'dram_dirty':True,'dram_lost':True},access=model,
+                     process=lambda *a,**k:types.SimpleNamespace(returncode=1,stdout='',stderr='failed'),now=model.now,sleep=model.sleep)
+    try:
+        with owner.locked():owner.tx('version')
+    except board.TransportFailure:pass
+    assert model.quarantined
+    passed('reset-transport-failure-quarantines-even-with-dram-lost')
+
+    class Access:
+        def __init__(self,root,identity):
+            self.RECOVERY_REQUIRED=root/'recovery-required.json';self.current=identity
+        def discover(self,port):return Path('/MODEL/003/009')
+        def identity(self,node):return self.current
+        def target(self,node):return Path('/MODEL/3-1')
+    def finish(root,**fields):
+        root.mkdir()
+        q=board.Queue(root/'state');args=arguments(root,submit=True)
+        job=q.submit(args);assert q.claim('3-1')
+        result={'first_failure':None,'instances':[{'identity':[7,1,1,0,0]},{'identity':[7,2,1,0,0]}],
+                'outcome':'watchdog-reset','rom_returned':True,'dram_lost':True,'quarantined':True,**fields}
+        q.complete(job['id'],result)
+        return q
+    def attempt(name,reason=board.DRAM_UNRESOLVED,current=(7,2,1,0,0),**fields):
+        root=out/('release-'+name);q=finish(root,**fields);access=Access(root,list(current))
+        record=access.RECOVERY_REQUIRED.with_name('recovery-required-3-1-7-2-1-0-0.json')
+        record.write_text(json.dumps({'identity':[7,2,1,0,0],'reason':reason}))
+        with patch.object(board,'CACHE',root/'cache'):
+            try:released=q.release('3-1','fresh instance after watchdog reset',access)
+            except ValueError as error:return record,q,str(error),root
+        return record,q,None,root
+    record,q,error,root=attempt('accepted')
+    assert error is None and not record.exists()
+    assert len(list((root/'cache/trash/recovery-required-released').glob('*recovery-required-3-1-7-2-1-0-0.json')))==1
+    events=[json.loads(l) for l in (q.root/'ledger.jsonl').read_text().splitlines()]
+    assert [e['reason'] for e in events if e['event']=='released']==['fresh instance after watchdog reset']
+    passed('release-accepts-fresh-instance-after-watchdog-reset')
+    for name,kwargs in (('no-return',dict(outcome='no-return',rom_returned=False,dram_lost=False)),
+                        ('transport-failure',dict(reason='FEL transaction failed: boom')),
+                        ('unresolved-return',dict(outcome='host-error',dram_lost=False)),
+                        ('cleanup-failure',dict(cleanup_failure='vbus')),
+                        ('other-instance',dict(current=(7,3,1,0,0)))):
+        record,q,error,root=attempt(name,**kwargs)
+        assert error and record.exists(),(name,error)
+        assert not (root/'cache/trash').exists()
+        passed('release-refuses-'+name)
+    try:board.Queue(out/'release-accepted/state').release('3-1','  ',Access(out,[7,2,1,0,0]))
+    except ValueError:pass
+    else:raise AssertionError('empty reason accepted')
+    passed('release-requires-reason')
 
 
 def decoded_expectation_cases(out):
@@ -1011,6 +1079,7 @@ def main():
     if 'queue' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):withdraw_cases(args.out)
+        with patch.object(board,'port_idle',return_value=True):reset_release_cases(args.out)
     if 'queue-integrity' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_integrity_cases(args.out)
     if 'policy' in groups:policy_cases(args.out)
