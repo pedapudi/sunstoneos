@@ -33,6 +33,9 @@ int os_application_gpu_share_bind(struct pvr_compute_queue *);
 int os_application_deadline(void);
 unsigned os_application_activity_generation(void);
 int os_application_finished(void);
+/* Publish the failure record as the session result (status SS_RESULT_FAILED)
+ * and mark the application finished. The caller holds the failure return. */
+void os_application_failed(const struct ss_failure *,uint64_t epoch,uint64_t generation);
 void os_application_usb_ready(void);
 void os_application_host_observed(int);
 int os_application_export_live(void);

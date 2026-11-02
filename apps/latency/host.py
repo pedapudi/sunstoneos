@@ -1,8 +1,11 @@
 """Decode the native CPU latency report without accessing a device."""
 import struct
 
-RESULT_BYTES = 57728
+RESULT_BYTES = 63872
 PHASES = ('initialization', 'idle', 'busy')
+SITE_KINDS = ('irq_masked', 'task_lock_hold')
+SITE_METRICS = ('irq_masked', 'lock1_hold')
+SITE_SLOTS = 3
 QUANTILES = 'nearest-rank logarithmic histogram upper endpoints; sixteen bins per power of two; exact maximum'
 MAGIC = 0x53534C4154454E31
 METRICS = ('timer_irq', 'irq_masked', 'lock0_wait', 'lock0_hold', 'lock1_wait',
@@ -122,10 +125,40 @@ def decode(payload, dma=False):
             if (distribution['p50_upper_ticks'], distribution['p99_upper_ticks'], distribution['max_ticks']) != (
                     histogram_upper(durations[(n + 1) // 2 - 1]), histogram_upper(durations[n - n // 100 - 1]), durations[-1]):
                 raise ValueError('raw wake quantiles differ from distribution')
+        sites = {}
+        for p, phase_name in enumerate((*PHASES, 'aggregate')):
+            kinds = {}
+            for kind, (kind_name, metric_name) in enumerate(zip(SITE_KINDS, SITE_METRICS)):
+                entries = []
+                previous = (1 << 64) - 1
+                empty = False
+                for slot in range(SITE_SLOTS):
+                    values = struct.unpack_from('<4Q', payload,
+                        57728 + (((p * 8 + core) * 2 + kind) * SITE_SLOTS + slot) * 32)
+                    ticks, start, enter_site, exit_site = values
+                    if not ticks:
+                        if any(values):
+                            raise ValueError('inactive attribution slot has context')
+                        empty = True
+                        continue
+                    if empty or ticks > previous:
+                        raise ValueError('attribution slots are not packed in descending order')
+                    if not enter_site or not exit_site:
+                        raise ValueError('active attribution slot lacks enter or exit site')
+                    if ticks > samples[metric_name]['max_ticks']:
+                        raise ValueError('attribution duration exceeds aggregate metric maximum')
+                    if p < len(PHASES):
+                        begin, end = bounds[p]
+                        if not begin <= start < end or ticks > end - start:
+                            raise ValueError('attribution interval crosses a phase boundary')
+                    previous = ticks
+                    entries.append(dict(zip(('ticks', 'start', 'enter_site', 'exit_site'), values)))
+                kinds[kind_name] = entries
+            sites[phase_name] = kinds
         cores.append({'core': core, 'sweeps': sweeps, 'bytes_read': read,
                       'bytes_written': written, 'digest': digest, 'metrics': samples, 'phases': phases,
                       'lock_acquisitions_including_recursive': dict(zip(('isr', 'task'), acquisitions)),
                       'phase_lock_acquisitions': dict(zip(PHASES, phase_acquisitions)),
-                      'wake_site': site, 'raw_wakes': raw})
-    return {'quantile_method': QUANTILES, 'phase_attribution': 'wholly contained intervals; gaps and crossings excluded', 'model': False, 'frequency': frequency, 'elapsed_ticks': elapsed,
+                      'wake_site': site, 'raw_wakes': raw, 'sites': sites})
+    return {'quantile_method': QUANTILES, 'phase_attribution': 'named phases contain whole intervals; aggregate metrics and sites include gaps and crossings', 'model': False, 'frequency': frequency, 'elapsed_ticks': elapsed,
             'phase_bounds': dict(zip(PHASES, bounds)), 'core_mask': mask, 'timer_irq_core_mask': irq_mask, 'dma_jobs': dma_jobs, 'cores': cores}

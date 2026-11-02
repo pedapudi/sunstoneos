@@ -137,6 +137,49 @@ struct local_state {
     unsigned mask_active, lock_depth[2], frozen;
 } __attribute__((aligned(64)));
 static struct local_state local[8];
+struct site_table {
+    struct ss_latency_site sample[SS_LAT_SITE_SLOTS];
+    unsigned minimum;
+} __attribute__((aligned(64)));
+static struct site_table sites[SS_LAT_PHASES + 1][8][SS_LAT_SITE_KINDS];
+
+static void site_insert(struct site_table *table, struct ss_latency_site sample)
+{
+    if (sample.ticks <= table->sample[table->minimum].ticks) return;
+    table->sample[table->minimum] = sample;
+    /* Fixed three-entry scan only when a new duration enters the table. */
+    for (unsigned i = 0; i < SS_LAT_SITE_SLOTS; ++i)
+        if (table->sample[i].ticks < table->sample[table->minimum].ticks)
+            table->minimum = i;
+}
+static void site_record(unsigned core, unsigned kind, uint64_t start,
+                        uint64_t end, uintptr_t enter_site, uintptr_t exit_site)
+{
+    if (end <= start || !enter_site || !exit_site) return;
+    struct ss_latency_site sample = {end - start, start, enter_site, exit_site};
+    site_insert(&sites[SS_LAT_PHASES][core][kind], sample);
+    unsigned phase = interval_phase(start, end - start);
+    if (phase < SS_LAT_PHASES) site_insert(&sites[phase][core][kind], sample);
+}
+void ss_latency_sites_snapshot(struct ss_latency_site out[SS_LAT_PHASES + 1][8][SS_LAT_SITE_KINDS][SS_LAT_SITE_SLOTS])
+{
+    for (unsigned p = 0; p <= SS_LAT_PHASES; ++p)
+        for (unsigned c = 0; c < 8; ++c)
+            for (unsigned k = 0; k < SS_LAT_SITE_KINDS; ++k) {
+                for (unsigned i = 0; i < SS_LAT_SITE_SLOTS; ++i)
+                    out[p][c][k][i] = sites[p][c][k].sample[i];
+                /* Bounded insertion sort runs only on the frozen snapshot. */
+                for (unsigned i = 1; i < SS_LAT_SITE_SLOTS; ++i) {
+                    struct ss_latency_site sample = out[p][c][k][i];
+                    unsigned j = i;
+                    while (j && out[p][c][k][j - 1].ticks < sample.ticks) {
+                        out[p][c][k][j] = out[p][c][k][j - 1];
+                        --j;
+                    }
+                    out[p][c][k][j] = sample;
+                }
+            }
+}
 static int enabled(unsigned core)
 {
     return core < 8 && __atomic_load_n(&ss_latency_frequency, __ATOMIC_ACQUIRE) &&
@@ -193,10 +236,14 @@ void ss_latency_mask_open(unsigned core, uint64_t start, uintptr_t site)
         local[core].mask_active = 1;
     }
 }
-void ss_latency_mask_close(unsigned core)
+void ss_latency_mask_close(unsigned core, uintptr_t site)
 {
     if (core < 8 && local[core].mask_active) {
-        ss_latency_record(core, SS_LAT_MASKED, local[core].mask_start, local[core].mask_site);
+        const uint64_t end = ss_latency_now();
+        if (enabled(core)) {
+            ss_latency_record_at(core, SS_LAT_MASKED, local[core].mask_start, end, local[core].mask_site);
+            site_record(core, 0, local[core].mask_start, end, local[core].mask_site, site);
+        }
         local[core].mask_active = 0;
     }
 }
@@ -207,20 +254,28 @@ void ss_latency_lock_acquired(unsigned core, unsigned lock, uint64_t start, uint
     unsigned p = interval_phase(start, 0);
     if (p < SS_LAT_PHASES) ++phase_acquisitions[p][core][lock];
     struct local_state *l = &local[core];
+    /* Ownership already belongs to this core. Do not charge subsequent
+     * acquisition counters or phase lookup to contention wait. */
+    const uint64_t now = l->lock_depth[lock] ? 0 : ss_latency_now();
+    ++acquisitions[core][lock];
+    unsigned p = interval_phase(start, 0);
+    if (p < SS_LAT_PHASES) ++phase_acquisitions[p][core][lock];
     if (l->lock_depth[lock]++ == 0) {
-        const uint64_t now = ss_latency_now();
         ss_latency_record_at(core, SS_LAT_LOCK_WAIT0 + 2 * lock, start, now, site);
         l->lock_start[lock] = now;
         l->lock_site[lock] = site;
     }
 }
-void ss_latency_lock_releasing(unsigned core, unsigned lock)
+void ss_latency_lock_releasing(unsigned core, unsigned lock, uintptr_t site)
 {
     if (core >= 8 || lock >= 2 || !local[core].lock_depth[lock]) return;
     struct local_state *l = &local[core];
-    if (--l->lock_depth[lock] == 0)
-        ss_latency_record(core, SS_LAT_LOCK_HOLD0 + 2 * lock,
-                          l->lock_start[lock], l->lock_site[lock]);
+    if (--l->lock_depth[lock] == 0 && enabled(core)) {
+        const uint64_t end = ss_latency_now();
+        ss_latency_record_at(core, SS_LAT_LOCK_HOLD0 + 2 * lock,
+                             l->lock_start[lock], end, l->lock_site[lock]);
+        if (lock == 1) site_record(core, 1, l->lock_start[lock], end, l->lock_site[lock], site);
+    }
 }
 static unsigned current_core(void)
 {

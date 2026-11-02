@@ -93,6 +93,12 @@ void latency_main(const struct ss_grant *grant)
         ss_progress(); vTaskDelay(1);
     }
     if (!at_top()) ss_fail(0xb03);
+#ifdef SUNSTONE_LATENCY_FORCE_FAILURE
+    /* Failure-return control: fail once the scheduler runs and the CPU clocks
+     * are at their top points, before any workload task exists. The board must
+     * lower CPU-B, stop every core and return to the ROM with this record. */
+    ss_fail_value(0xb7f, 0x4641494c);
+#endif
     ss_activity_begin();
     latency_workload_run(&result);
     if (!at_top()) ss_fail(0xb03);

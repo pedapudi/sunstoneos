@@ -1,9 +1,18 @@
 --- portmacro.h
 +++ portmacro.h
-@@ -142,10 +142,38 @@
+@@ -142,10 +142,47 @@
      extern void vInterruptCore( uint32_t ulInterruptID, uint8_t ucCoreID );
  #endif /* if !defined(__ASSEMBLER__) */
  
++/* The old TAS lock is an attribution control for recorder builds only.
++ * Select it with -DSUNSTONE_LOCK_TAS_CONTROL=1 in CMAKE_C_FLAGS. */
++#ifndef SUNSTONE_LOCK_TAS_CONTROL
++    #define SUNSTONE_LOCK_TAS_CONTROL 0
++#endif
++#if SUNSTONE_LOCK_TAS_CONTROL && !defined( SUNSTONE_LATENCY )
++    #error "SUNSTONE_LOCK_TAS_CONTROL requires SUNSTONE_LATENCY"
++#endif
++
 +#if ( configNUMBER_OF_CORES == 1 )
  /* Use SVC so this is safe from EL0. EL1 sites in the port use direct MSR. */
 -#define portDISABLE_INTERRUPTS() __asm volatile ( "SVC %0" : : "i" ( portSVC_DISABLE_INTERRUPTS ) : "memory" )

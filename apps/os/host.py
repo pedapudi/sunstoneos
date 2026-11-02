@@ -35,6 +35,11 @@ SERVICE_MAGIC = {THERMAL: 0x415337334f534131, AUDIO: 0x415337334f415531,
                  NPU: 0x415337334f4e5031, CPU_GRANT: 0x4153373343505531,
                  DMA: 0x41533733444d4131}
 RESULT_MAGIC, RESULT_VERSION, RESULT_FINISHED = 0x31544c5553455241, 1, 1
+RESULT_FAILED = 2
+# include/sunstone_session.h struct ss_failure
+FAILURE = struct.Struct('<Q4IQ2IQ')
+FAILURE_MAGIC, FAILURE_VERSION = 0x3130454c49414653, 1
+FAILURE_CONTEXTS = {1: 'running', 2: 'startup', 3: 'fault'}
 RESULT = struct.Struct('<7Q')
 FRAME_MAGIC, RESULT_OP = 0x424d494d, 0x80
 FRAME = struct.Struct('<8I2Q16s')
@@ -208,6 +213,26 @@ def decode_result(raw, epoch, generation, output_limit=None):
             'Application result capacity differs from manifest.')
     require(used <= len(raw) - RESULT.size, 'Application result payload exceeds capacity.')
     return raw[RESULT.size:RESULT.size + used]
+
+
+def decode_failure(raw, epoch, generation, output_limit=None):
+    """The record of a failure return: result status FAILED and an ss_failure payload.
+
+    The generation is zero when the failure preceded the sealed session.
+    Returns the decoded fields and the payload bytes."""
+    raw = bytes(raw)
+    require(len(raw) >= RESULT.size, 'Truncated failure result.')
+    magic, version, capacity, actual, actual_generation, status, used = RESULT.unpack_from(raw)
+    require((magic, version, capacity, actual, status) == (RESULT_MAGIC, RESULT_VERSION, len(raw), epoch, RESULT_FAILED) and
+            actual_generation in (generation, 0), 'Failure result is absent or belongs to another session.')
+    require(output_limit is None or len(raw) == RESULT.size + output_limit, 'Failure result capacity differs from manifest.')
+    require(used == FAILURE.size and used <= len(raw) - RESULT.size, 'Failure record has the wrong length.')
+    payload = raw[RESULT.size:RESULT.size + used]
+    magic, version, context, site, value, caller, core, reserved, counter = FAILURE.unpack(payload)
+    require((magic, version, reserved) == (FAILURE_MAGIC, FAILURE_VERSION, 0) and context in FAILURE_CONTEXTS and core < 8,
+            'Failure record is malformed.')
+    return {'context': FAILURE_CONTEXTS[context], 'site': site, 'value': value, 'caller': caller, 'core': core,
+            'counter': counter, 'generation_bound': actual_generation != 0}, payload
 
 
 def read_result(exchange, image, epoch, generation):

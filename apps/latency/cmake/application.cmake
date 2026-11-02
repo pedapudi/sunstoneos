@@ -14,3 +14,7 @@ target_compile_options(${latency_name} PRIVATE "$<$<COMPILE_LANGUAGE:C>:-mgenera
 if(latency_name STREQUAL "latency-dma")
   target_compile_definitions(${latency_name} PRIVATE SUNSTONE_LATENCY_DMA=1)
 endif()
+option(SUNSTONE_LATENCY_FORCE_FAILURE "Fail deliberately after the CPU clocks reach their top points" OFF)
+if(SUNSTONE_LATENCY_FORCE_FAILURE)
+  target_compile_definitions(${latency_name} PRIVATE SUNSTONE_LATENCY_FORCE_FAILURE=1)
+endif()

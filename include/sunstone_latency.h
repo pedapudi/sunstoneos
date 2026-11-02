@@ -27,6 +27,14 @@ struct ss_latency_metric {
 struct ss_latency_core {
     struct ss_latency_metric metric[SS_LAT_METRICS];
 } __attribute__((aligned(64)));
+#define SS_LAT_SITE_KINDS 2U
+#define SS_LAT_SITE_SLOTS 3U
+/* Longest nonzero masked sections (kind 0) and task-lock holds (kind 1).
+ * Sites are return addresses at entry and exit. Tables cover each phase and
+ * an aggregate at index SS_LAT_PHASES, including gaps and crossing intervals. */
+struct ss_latency_site {
+    uint64_t ticks, start, enter_site, exit_site;
+};
 
 #ifdef SUNSTONE_LATENCY
 static inline uint64_t ss_latency_now(void)
@@ -44,6 +52,8 @@ void ss_latency_init(uint64_t frequency);
 uint64_t ss_latency_counter_frequency(void);
 void ss_latency_freeze(unsigned core);
 void ss_latency_snapshot(struct ss_latency_core out[8]);
+/* Snapshot only after every writer has frozen; packed in descending duration. */
+void ss_latency_sites_snapshot(struct ss_latency_site out[SS_LAT_PHASES + 1][8][SS_LAT_SITE_KINDS][SS_LAT_SITE_SLOTS]);
 /* Single coordinator; each named phase opens once. Only intervals wholly inside
  * a phase enter its distribution. Crossing intervals and gaps retain their
  * aggregate record. Bounds use a common counter across all cores. */
@@ -59,10 +69,10 @@ void ss_latency_record(unsigned core, unsigned region, uint64_t start, uintptr_t
 void ss_latency_record_at(unsigned core, unsigned region, uint64_t start,
                           uint64_t end, uintptr_t site);
 void ss_latency_mask_open(unsigned core, uint64_t start, uintptr_t site);
-void ss_latency_mask_close(unsigned core);
+void ss_latency_mask_close(unsigned core, uintptr_t site);
 void ss_latency_lock_acquired(unsigned core, unsigned lock, uint64_t start,
                                uintptr_t site);
-void ss_latency_lock_releasing(unsigned core, unsigned lock);
+void ss_latency_lock_releasing(unsigned core, unsigned lock, uintptr_t site);
 /* One outstanding masked interrupt source per metric. Coalesced IRQs retain
  * the earliest timestamp until the worker completes its observation pass. */
 void ss_latency_event_begin(unsigned region);

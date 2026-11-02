@@ -12,7 +12,7 @@ BUDGET_US = (50, 25, 25, 25, 25, 25, 100, 250, 250, 1000, 1000)
 
 def expectation(dma=False):
     # workload.h pins the aggregate, phase and acquisition offsets.
-    words = [0] * (57728 // 4)
+    words = [0] * (63872 // 4)
 
     def u64(offset, low, high=0):
         words[offset // 4:offset // 4 + 2] = [low, high]
@@ -36,7 +36,7 @@ def expectation(dma=False):
             u64(base, count)
             u64(base + 8, {'min': 0, 'max': budget * 24})
             u64(base + 16, RANGE, RANGE)
-            u64(base + 24, RANGE)
+            u64(base + 24, RANGE, RANGE)
             # First-over-budget context stays zero for an accepted run.
     for phase in range(3):
         for core in range(8):
@@ -56,7 +56,7 @@ def expectation(dma=False):
                     u64(base + offset, {'min': 0, 'max': budget * 26})
                 u64(base + 24, {'min': 0, 'max': budget * 24})
                 u64(base + 32, RANGE, RANGE)
-                u64(base + 40, RANGE)
+                u64(base + 40, RANGE, RANGE)
     for core in range(8):
         for lock in range(2):
             u64(20224 + core * 16 + lock * 8, {'min': 1, 'max': 0xffffffff})
@@ -69,13 +69,16 @@ def expectation(dma=False):
     # Initialization starts at counter zero by definition.
     u64(20736, 0)
     for core in range(8):
-        u64(20784 + core * 8, RANGE)
+        u64(20784 + core * 8, RANGE, RANGE)
         for index in range(192):
             base = 20848 + (core * 192 + index) * 24
             u64(base, RANGE, RANGE)
             u64(base + 8, RANGE, RANGE)
             words[(base + 16) // 4] = 6 if index < 64 else 7
             words[(base + 20) // 4] = 1 if index < 64 else 2
+    # Attribution durations, timestamps and both instruction addresses vary by run.
+    for offset in range(57728, 63872, 8):
+        u64(offset, RANGE, RANGE)
     return {'schema': 'sunstone-board-expect-u32-v1', 'words': words}
 
 

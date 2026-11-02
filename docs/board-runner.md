@@ -70,7 +70,7 @@ Queued entries also hash the host preparation sources, FEL executable, rail
 helper, DRAM builds and training records. Changed inputs cause a refusal before
 launch. Status includes running entries, eligible queued entries and the last
 20 completed entries per board. `ledger.jsonl` appends each queue submission,
-start, result, pause and resume. Entry files and earlier evidence are retained.
+start, result, withdrawal, pause and resume. Entry files and earlier evidence are retained.
 `--queue DIR`, before the subcommand, selects an isolated queue.
 
 ## A run establishes its prerequisites
@@ -120,7 +120,8 @@ and retained RTC breadcrumbs are classified before any DRAM result read.
 | Outcome | Meaning |
 | --- | --- |
 | `returned` | Matching return breadcrumbs, valid retirement report and matching output. This does not qualify the device's complete functionality. |
-| `result-mismatch` | Uploaded bytes, the native report or the returned output differ from the required values. |
+| `failure-return` | The image linked the [failure return](designs/failure-return.md) and returned normally after its first failure. Retirement is valid and DRAM is restored; the breadcrumbs and the returned `ss_failure` record describe the failure. The result is failed (exit status 1) and `first_failure` holds the record. The port is not quarantined and not paused. |
+| `result-mismatch` | Uploaded bytes, the native report or the returned output differ from the required values. A failure return whose record differs from `--expect` is also reported here, after DRAM restoration. |
 | `watchdog-reset` | A new permitted FEL instance returned with WDT0 still enabled. Breadcrumbs identify the last stage and any first fault. DRAM is lost. |
 | `no-return` | No accessible new FEL instance appeared within the watchdog window and margin. Recovery is unresolved. |
 | `refused-before-launch` | Image, session, helper or prerequisite validation stopped the submitted image before launch. Earlier setup helpers may have run. |
@@ -157,6 +158,16 @@ Resume changes only the selected port's pause. Only the daemon collects orphan
 results; recovery skips a live runner even after it has written its result.
 An interrupted spawn with no recorded child identity remains paused for
 coordinator inspection. Shutdown waits for existing children.
+
+`$board withdraw ID --reason TEXT` removes one queued entry before it starts;
+the coordinator alone uses it. It takes the queue lock, accepts only an entry in
+the queued state, and records the ordinary `refused-before-launch` result with
+the reason and the withdrawal in `ledger.jsonl` (events `result` and
+`withdrawn`). It refuses an unknown ID, a missing reason, and a running or
+finished entry. It changes no pause and applies no admission rule. The daemon
+skips a withdrawn entry because the entry is no longer queued. The daemon runs
+`tools/board.py` from its checkout, so the command is available after the daemon
+restarts on a checkout that contains it.
 
 ## Retain the electrical and storage checks
 

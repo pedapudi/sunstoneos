@@ -54,6 +54,31 @@ static void controller(void *argument)
                 number(" overflow_bin_count=", d->overflow_bin_count);
                 platform_puts("\n");
             }
+        for (unsigned p = 0; p <= SS_LAT_PHASES; ++p)
+            for (unsigned k = 0; k < SS_LAT_SITE_KINDS; ++k) {
+                uint64_t previous = UINT64_MAX;
+                for (unsigned i = 0; i < SS_LAT_SITE_SLOTS; ++i) {
+                    const struct ss_latency_site *s = &result.sites[p][c][k][i];
+                    configASSERT(s->ticks <= previous);
+                    previous = s->ticks;
+                    if (!s->ticks) {
+                        configASSERT(!s->start && !s->enter_site && !s->exit_site);
+                        continue;
+                    }
+                    configASSERT(s->enter_site && s->exit_site);
+                    unsigned metric = k == 0 ? SS_LAT_MASKED : SS_LAT_LOCK_HOLD1;
+                    configASSERT(s->ticks <= result.core[c].metric[metric].maximum);
+                    if (p < SS_LAT_PHASES) {
+                        configASSERT(result.phase_bounds[p][0] <= s->start);
+                        configASSERT(s->start < result.phase_bounds[p][1]);
+                        configASSERT(s->ticks <= result.phase_bounds[p][1] - s->start);
+                    }
+                    number("site_phase=", p); number(" kind=", k); number(" slot=", i);
+                    number(" ticks=", s->ticks); number(" start=", s->start);
+                    number(" enter_site=", s->enter_site); number(" exit_site=", s->exit_site);
+                    platform_puts("\n");
+                }
+            }
         for (unsigned m = 0; m < SS_LAT_METRICS; ++m) {
             const struct ss_latency_metric *sample = &result.core[c].metric[m];
             platform_puts(metric_names[m]);

@@ -216,6 +216,7 @@ void latency_workload_run(struct latency_result *out)
      * hooks. No mutable metric is read while a writer can still change it. */
     ss_latency_snapshot(out->core);
     ss_latency_phase_snapshot(out->phases);
+    ss_latency_sites_snapshot(out->sites);
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         ss_latency_lock_counts(c, out->acquisitions[c]);
     for (unsigned p = 0; p < SS_LAT_PHASES; ++p)

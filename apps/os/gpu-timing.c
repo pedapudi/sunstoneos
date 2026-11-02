@@ -17,7 +17,15 @@ static struct timing_row *active;
 static int in_ccb_submit;
 static int receive_blocked;
 static uint64_t receive_block_tick;
+/* The architectural counter and barriers; a host build (checks/host) reads the shim's clock. */
+#if defined(__aarch64__)
+#define TIMING_BARRIER(kind) __asm__ volatile("dmb " kind:::"memory")
 static uint64_t ticks(void) { uint64_t t; __asm__ volatile("isb; mrs %0, cntpct_el0":"=r"(t)::"memory"); return t; }
+#else
+#define TIMING_BARRIER(kind) __asm__ volatile("":::"memory")
+uint64_t a733_smp_counter(void);
+static uint64_t ticks(void) { return a733_smp_counter(); }
+#endif
 static int worker(void) { return queue && xTaskGetCurrentTaskHandle()==queue->service->worker; }
 static struct timing_row *find(unsigned client, unsigned sequence)
 { for (unsigned i=count;i;--i) if(rows[i-1].public.client==client && rows[i-1].public.sequence==sequence)return &rows[i-1]; return NULL; }
@@ -46,12 +54,12 @@ void gpu_queue_timing_state_sample(unsigned index)
     if(!r->public.timestamp_injected || !queue->firmware[5].storage.cpu || queue->firmware[5].storage.bytes<24)return;
     const volatile uint64_t *slots=(const volatile uint64_t *)((const unsigned char *)queue->firmware[5].storage.cpu+8);
     state.firmware_pre_raw=slots[0];
-    __asm__ volatile("dmb oshld":::"memory");
+    TIMING_BARRIER("oshld");
     if(middle && (!state.firmware_pre_raw || slots[1]))return;
     state.cpu_before=ticks();
     if(!a733_gpu_backend_timing_state(&state))return;
     state.cpu_after=ticks();
-    __asm__ volatile("dmb oshld":::"memory");
+    TIMING_BARRIER("oshld");
     state.firmware_post_raw=slots[1];
     if(middle && state.firmware_post_raw)return;
     if(middle) {
@@ -77,7 +85,7 @@ void gpu_queue_timing_crumb(uint32_t stage,uint32_t sequence)
         }
         if(r->public.timestamp_injected) {
             volatile uint64_t *p=(volatile uint64_t *)((unsigned char *)queue->firmware[5].storage.cpu+8);
-            __asm__ volatile("dmb oshld":::"memory");
+            TIMING_BARRIER("oshld");
             r->public.firmware_pre_raw=p[0];r->public.firmware_post_raw=p[1];
         }
         active=NULL;
@@ -117,7 +125,7 @@ int __wrap_pvr_cccb_begin(struct pvr_cccb *s,const struct pvr_cccb_command *cmd,
         if(n==2 && cmd[0].type==(PVR_CCB_MAGIC|PVR_CCCB_TASK|205u) && cmd[0].bytes==96 &&
            cmd[1].type==(PVR_CCB_MAGIC|213u) && cmd[1].bytes==8 && queue->firmware[5].storage.bytes>=32) {
             volatile uint64_t *slots=(volatile uint64_t *)((unsigned char *)queue->firmware[5].storage.cpu+8);
-            slots[0]=0;slots[1]=0;__asm__ volatile("dmb oshst":::"memory");
+            slots[0]=0;slots[1]=0;TIMING_BARRIER("oshst");
             active->pre.address=queue->firmware_address[5]+8;active->post.address=queue->firmware_address[5]+16;
             struct pvr_cccb_command expanded[4]={
                 {PVR_CCB_MAGIC|PVR_CCCB_TASK|209u,8,0,0,&active->pre},cmd[0],
