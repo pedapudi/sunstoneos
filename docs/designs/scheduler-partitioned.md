@@ -892,6 +892,20 @@ entry cost instead. A span whose cycles are mostly stalled while `BUS_ACCESS` st
 points to waiting on another core, such as a LSE atomic on a line in another
 core's cache.
 
+Result of the capture on port 3-3 (all five events are implemented on all eight
+cores): in the busy phase `STALL_BACKEND` is 94 to 98% of the cycles of every
+service, notification and critical-section span except core 3's critical section
+(59 to 68%), `MEM_ACCESS` is 441 to 619, `BUS_ACCESS` 320 to 960 beats and L1D
+refills 23 to 38. The prediction that backend stalls dominate holds. The capture does
+not separate the two causes that fit it: a service entry with two DSB SY and 35 L1D
+refills stalls about 33,000 cycles, which is 0.5 µs per refill if the refills
+serialize behind a saturated DRAM, and the barrier drain the prediction names would
+need about 8 µs per DSB. The refill reading fits better. The spans are limited by
+dependent line fetches while eight cores stream 1 MiB sweeps. They shorten only
+with fewer distinct lines per entry or with overlapped fetches (prefetch), which
+this stream has not implemented; the measured maxima are 12 to 29 µs in the
+measured phases and 18 to 46 µs for the end-of-run task suspension.
+
 Linked-kernel tests replace budget rows with instruction counts before board
 submission. Board samples add cycles/counter duration, p50, p99 and maximum.
 PMU instrumentation is optional and compiles out completely when disabled.
