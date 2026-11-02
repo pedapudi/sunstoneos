@@ -27,6 +27,12 @@ extern struct { uint64_t epoch, startup_deadline, diagnostic_deadline, redistrib
 #define BINS SS_CONTROL_BINS
 #define TICKS_PER_US 24u
 
+/* The largest control-path latencies of a core with the state of the interrupted code: where it was (ELR_EL1,
+ * SPSR_EL1 — the exception level and DAIF bits it held), its mask (ICC_PMR_EL1), the running priority (ICC_RPR_EL1),
+ * the task register and the core's critical nesting. The handler reads them only for a new top-4 entry. */
+#define WORST 4u
+struct worst { uint32_t latency, pmr; uint64_t elr, spsr, rpr, task, nesting, when; };
+extern volatile uint64_t ullCriticalNestings[];
 struct path {
     uint64_t period, deadline, last_entry;
     uint64_t count, missed;
@@ -37,6 +43,7 @@ static struct core_state {
     volatile uint32_t requested, armed, stop;
     uint32_t rate_hz, paths;
     struct path control, task;   /* the interrupt handler's samples; the woken task's samples */
+    struct worst worst[WORST];
     struct ss_ring ring;
     uint64_t consumed, gaps;
     uint32_t expected;
@@ -119,6 +126,19 @@ static void handle(struct core_state *s)
     const unsigned missed = advance(&s->control, now, &served);
     program(s->control.deadline, 1); /* clears the level-sensitive interrupt */
     record(&s->control, now, served, missed);
+    {
+        const uint64_t late = now - served;
+        unsigned low = 0;
+        for (unsigned i = 1; i < WORST; ++i) if (s->worst[i].latency < s->worst[low].latency) low = i;
+        if (late > s->worst[low].latency) {
+            struct worst *w = &s->worst[low];
+            uint64_t pmr, rpr;
+            __asm__ volatile("mrs %0, icc_pmr_el1\n mrs %1, icc_rpr_el1\n mrs %2, elr_el1\n mrs %3, spsr_el1\n mrs %4, tpidrro_el0"
+                             : "=r"(pmr), "=r"(rpr), "=r"(w->elr), "=r"(w->spsr), "=r"(w->task));
+            w->latency = late > 0xffffffffu ? 0xffffffffu : (uint32_t)late;
+            w->pmr = (uint32_t)pmr; w->rpr = rpr; w->nesting = ullCriticalNestings[this_core()]; w->when = now;
+        }
+    }
     (void)ss_ring_put(&s->ring, (struct ss_ring_sample){ s->control.seq++, (uint32_t)(now - served), now });
 }
 
@@ -244,3 +264,20 @@ const uint32_t *ulSunstoneControlHistogram(unsigned core, unsigned path, unsigne
     const struct path *p = path ? &state[core].task : &state[core].control;
     return kind ? p->jitter_bin : p->latency_bin;
 }
+/* Rank r (0 largest) of the worst control-path latencies of a core; fields in the order of struct ss_control_worst. */
+unsigned ulSunstoneControlWorst(unsigned core, unsigned rank, struct ss_control_worst *out)
+{
+    if (core < FIRST_CORE || core >= FIRST_CORE + CORES - 1u || rank >= WORST || !state[core].rate_hz) return 0;
+    const struct worst *copy[WORST];
+    for (unsigned i = 0; i < WORST; ++i) copy[i] = &state[core].worst[i];
+    for (unsigned i = 0; i < WORST; ++i)
+        for (unsigned j = i + 1; j < WORST; ++j)
+            if (copy[j]->latency > copy[i]->latency) { const struct worst *t = copy[i]; copy[i] = copy[j]; copy[j] = t; }
+    const struct worst *w = copy[rank];
+    if (!w->latency) return 0;
+    out->latency_ns = w->latency * 1000u / TICKS_PER_US; out->pmr = w->pmr; out->elr = w->elr; out->spsr = w->spsr;
+    out->rpr = w->rpr; out->task = w->task; out->nesting = w->nesting; out->when_us = w->when / TICKS_PER_US;
+    return 1;
+}
+/* Present only in a fork image built with SUNSTONE_OWNER_COUNTERS; the weak copy keeps other images linking. */
+__attribute__((weak)) uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which) { (void)cpu; (void)which; return 0; }

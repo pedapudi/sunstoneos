@@ -880,11 +880,27 @@ void ssKernelOwnerYield(void)
     /* SVC saves the frame and calls OwnerYieldTail exactly once. */
     portYIELD();
 }
+#ifdef SUNSTONE_OWNER_COUNTERS
+/* Owner-work drains by CPU (measurement): from the outermost interrupt exit, skipped by the mask guard there, and
+ * from the tick. Each CPU writes its own line. */
+static struct { uint64_t exit_work, exit_skipped, tick_work, service_run; uint64_t pad[4]; } ssOwnerCounters[8] __attribute__((aligned(64)));
+uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which)
+{
+    if (cpu >= 8 || which > 3) return 0;
+    const uint64_t *row = &ssOwnerCounters[cpu].exit_work;
+    return row[which];
+}
+#define SS_OWNER_COUNT(field) (++ssOwnerCounters[ssKernelCPUId()].field)
+#else
+#define SS_OWNER_COUNT(field) ((void)0)
+#endif
 static BaseType_t ssKernelOwnerIRQExitWork(void)
 {
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
-    if (!cpu->preempt && !ss_control_checkpoint(&ssKernelControl, ssKernelCPUId()))
+    if (!cpu->preempt && !ss_control_checkpoint(&ssKernelControl, ssKernelCPUId())) {
+        SS_OWNER_COUNT(service_run);
         ssKernelService();
+    }
     return cpu->reschedule && !cpu->preempt ? pdTRUE : pdFALSE;
 }
 /* The outermost interrupt exit (portASM.S) drains owner work. An interrupt taken while the interrupted code had the
@@ -896,7 +912,8 @@ BaseType_t ssKernelOwnerIRQExit(void)
 {
     uint64_t pmr;
     __asm__ volatile("mrs %0, icc_pmr_el1" : "=r"(pmr));
-    if (pmr <= portMAX_API_PRIORITY_MASK) return pdFALSE;
+    if (pmr <= portMAX_API_PRIORITY_MASK) { SS_OWNER_COUNT(exit_skipped); return pdFALSE; }
+    SS_OWNER_COUNT(exit_work);
     return ssKernelOwnerIRQExitWork();
 }
 static BaseType_t ssKernelTick(void)
@@ -913,6 +930,7 @@ static BaseType_t ssKernelTick(void)
         else if (atomic_load_explicit(&ssKernelCPUs[c].slice_deadline, memory_order_acquire) <= now)
             ssKernelForce(c);
     }
+    SS_OWNER_COUNT(tick_work);
     return ssKernelOwnerIRQExitWork();
 }
 static void ssKernelEventBlock(List_t *list, TickType_t value, TickType_t ticks,

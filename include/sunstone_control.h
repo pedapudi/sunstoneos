@@ -22,5 +22,10 @@ const uint32_t *ulSunstoneControlHistogram(unsigned core, unsigned path, unsigne
 /* Start `rate_hz[i]` on `cores[i]` (not core 0). Returns the number started. Call once, from a task. */
 unsigned ulSunstoneControlStart(const unsigned *cores, const unsigned *rate_hz, unsigned n);
 void vSunstoneControlStop(void);
+struct ss_control_worst { uint32_t latency_ns, pmr; uint64_t elr, spsr, rpr, task, nesting, when_us; };
+/* The rank-th largest control-path latency of a core with the interrupted context (see runtime/control_irq.c). */
+unsigned ulSunstoneControlWorst(unsigned core, unsigned rank, struct ss_control_worst *out);
+/* Owner-work drains of a CPU: which 0 from interrupt exit, 1 skipped at exit by the mask guard, 2 from the tick, 3 service passes run. */
+uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which);
 unsigned ulSunstoneControlStatsRead(unsigned core, unsigned path, struct ss_control_stats *out);
 #endif
