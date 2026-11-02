@@ -292,7 +292,7 @@ def board_prefix(identity, epoch=0x1101, generation=0x2202, lease=0x3303):
     return raw
 
 
-def thermal_service(total):
+def thermal_service(total, cpu_critical=0):
     """The thermal owner's record (struct os_session after the board prefix)."""
     h = lambda n: hashlib.sha256(n.encode()).digest()
     record = struct.pack('<5Q', OS_SERVICE_MAGIC, 1, total, 0x7e40a1, 0x7e40a2)
@@ -300,18 +300,18 @@ def thermal_service(total):
     record += struct.pack('<2I4B', 0, 24000000, 0, 31, 31, 0)
     for hot, hysteresis, critical in ((1500, 1600, 1400),) * 5:
         record += struct.pack('<3H', hot, hysteresis, critical)
-    record += bytes(2) + struct.pack('<I', 0)
+    record += bytes(2) + struct.pack('<I', cpu_critical)       # cpu_critical_millicelsius; zero keeps the 110 C default
     assert len(record) == host.SERVICE_BYTES[host.THERMAL], len(record)
     return record
 
 
-def session_for(elf, input_bytes):
+def session_for(elf, input_bytes, cpu_critical=0):
     """The complete sealed session of the image's application and its launch contract."""
     info = host.image_manifest(elf)
     identity = elf_bytes(elf, 'a733_smp_build_id', 32)
-    services = {host.THERMAL: thermal_service(host.PREFIX_BYTES + host.SERVICE_BYTES[host.THERMAL])}
-    raw = host.session_bytes(board_prefix(identity), services, info['manifest'], info['sha256'], 0,
-                             host.BIND_SID, [input_bytes] if input_bytes is not None else [])
+    services = {host.THERMAL: thermal_service(host.PREFIX_BYTES + host.SERVICE_BYTES[host.THERMAL], cpu_critical)}
+    given = input_bytes if isinstance(input_bytes, list) else [input_bytes] if input_bytes is not None else []
+    raw = host.session_bytes(board_prefix(identity), services, info['manifest'], info['sha256'], 0, host.BIND_SID, given)
     epoch, generation, lease = struct.unpack_from('<3Q', raw, 24)
     # The supervised launch contract (apps/board/prepare.py request_bytes): the loader
     # stamps the times and the magic when it launches.
@@ -477,6 +477,23 @@ def reverted_services(work):
     return path
 
 
+def reverted_owner(work):
+    """apps/os/sd_owner.c as the fourth board submission had it: start() sleeps once on the caller's default notification index,
+    so any hint on that index ends the wait before the owner has opened the card."""
+    source = (ROOT / 'apps/os/sd_owner.c').read_text()
+    begin = source.index('    /* The owner gives the notification once the card is open or has failed.')
+    end = source.index('    ready_waiter = NULL;')
+    old = ('    if (atomic_load(&ready) == 0) (void)ulTaskNotifyTake(pdTRUE, 8000u);\n')
+    source = source[:begin] + old + source[end:]
+    marker = '    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) {'
+    stop = source.index('    return atomic_load(&ready) == 1;\n}', source.index(marker))
+    source = source[:source.index(marker)] + '    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) os_sd_diag[0] = 11;\n' + source[stop:]
+    source = source.replace('xTaskNotifyGiveIndexed(ready_waiter, WAIT_INDEX)', 'xTaskNotifyGive(ready_waiter)')
+    path = Path(work) / 'sd_owner_reverted.c'
+    path.write_text(source)
+    return path
+
+
 def unguarded_prestart_scheduler(work):
     """The directory of a kernel/scheduler/freertos.c from before the owner scheduler refused to
     yield or wait for an owner while the scheduler is not running (round 10 of the series).
@@ -550,6 +567,16 @@ def main():
         application = image.application('large-test', ['checks/qemu-os/large-main.c'], manifest)
         return image.build(application)
 
+    def build_storage_write(owner_source=None):
+        """The storage-write application on the write-capable owner (apps/os/sd_owner.c) over the board's RAM-disk card."""
+        image = Image(out / ('build-storage-write' + ('-reverted' if owner_source else '')),
+                      extra_sources=[str(owner_source or 'apps/os/sd_owner.c'), 'platform/qemu-os/sd_hw.c',
+                                                                   'drivers/storage/a733_storage_bounds.c'])
+        application = image.application('storage-write', ['apps/storage-write-test/main.c', 'drivers/storage/fat32_rw.c',
+                                                           'apps/storage-write-test/sha256_ce.S'],
+                                        ROOT / 'apps/storage-write-test/manifest.json')
+        return image.build(application)
+
     def build_facts():
         image = Image(out / 'build-hw-facts', extra_defines=['-DSUNSTONE_A733_HW_FACTS=1'],
                       extra_sources=['platform/a733/hw_facts.c'])
@@ -576,15 +603,21 @@ def main():
         facts_elf = pool.submit(build_facts)
         large_elf = pool.submit(build_large, 'build-large', large_manifest_path(out / 'large-manifest.json', LARGE_DIGEST, LARGE_FILE))
         large_big_elf = pool.submit(build_large, 'build-large-too-big', ROOT / 'checks/qemu-os/large-too-big-manifest.json')
+        storage_write_elf = pool.submit(build_storage_write)
+        (out / 'build-reverted-owner').mkdir()
+        reverted_owner_elf = pool.submit(build_storage_write, reverted_owner(out / 'build-reverted-owner'))
         large_elf, large_big_elf = large_elf.result(), large_big_elf.result()
+        storage_write_elf = storage_write_elf.result()
+        reverted_owner_elf = reverted_owner_elf.result()
         os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
             os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result(),
             partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result(), facts_elf.result())
     built = time.monotonic() - started
 
-    def run_case(name, elf, scenario_bytes, input_bytes=data, memory='512M', extra_inputs=()):
-        raw, contract, info = session_for(elf, input_bytes)
-        inputs = [(info['manifest']['regions'][0]['address'], input_bytes)] if input_bytes is not None else []
+    def run_case(name, elf, scenario_bytes, input_bytes=data, memory='512M', extra_inputs=(), cpu_critical=0):
+        raw, contract, info = session_for(elf, input_bytes, cpu_critical)
+        given = input_bytes if isinstance(input_bytes, list) else [input_bytes] if input_bytes is not None else []
+        inputs = [(info['manifest']['regions'][i]['address'], b) for i, b in enumerate(given)]
         inputs += list(extra_inputs)
         output, status, seconds = boot(elf, raw, contract, scenario_bytes, inputs, out / (name + '.log'), memory=memory)
         case = Case(name, output, status, seconds, out / (name + '.log'))
@@ -627,6 +660,14 @@ def main():
     c = run_case('sensor-lost', os_elf, scenario(first_ms=(2, 2, None, 2, 2), usb_ready_ms=usb_delay_ms, limit_ms=9000))
     c.failed_with('THERMAL')
     c.require(5_000_000 <= int(c.failure['t_us']) < 6_500_000, 'the lost sensor was reported at %s us' % c.failure['t_us'])
+
+    # 4b. A sensor that reads above the critical limit: the stop record carries the reading that caused it (a stop returns no
+    # report; the runner reads this record after the reset). Channel 3 at 62 C against a session limit of 60 C (the board model's sensors top out near 65 C).
+    c = run_case('sensor-critical-reading', os_elf, scenario(temperature_c=(52, 60, 48, 62, 50), usb_ready_ms=usb_delay_ms, limit_ms=9000), cpu_critical=60000)
+    c.failed_with('THERMAL')
+    word = int(c.failure['value'], 16)
+    c.require(word >> 31 == 1 and not word >> 30 & 1 and (word >> 24 & 7) == 3 and 61_000 <= (word & 0xffffff) <= 63_000,
+              'the stop record holds %#x, not channel 3 near 62000 mC' % word)
 
     # 5. An OS service that fails to start ends the session with a named record, not a hang.
     for fault, group in ((1, 'THERMAL'), (2, 'THERMAL'), (3, 'PMIC')):
@@ -798,6 +839,81 @@ def main():
     c = run_case('large-regions-too-big', large_big_elf, scenario(usb_ready_ms=usb_delay_ms), memory='4G')
     c.require(c.main is None and not lines(c.output, 'LARGE-ADMITTED'), 'the application started although the ledger refused its regions')
     c.require(c.failure is not None, 'the refusal left no failure record')
+
+    # 12. The storage-write application through ss_storage_enable on the write-capable owner (apps/os/sd_owner.c), over a RAM-disk
+    # card that holds the real card's 395 backup sectors at their sector numbers and the runner's bounds blob. The software path
+    # (owner start, mailbox, blob copy, parse, verify against the backup hash) must succeed; the native register binding is the one
+    # step this board cannot model (platform/qemu-os/sd_hw.c), so the case stops at it and says so. A corrupted backup sector must
+    # be refused at the verify stage, which also shows that the diagnostic names it.
+    backup_dir = CACHE / 'sd-backup'
+    backup = (backup_dir / 'backup-395-sectors.bin').read_bytes()
+    blob = (backup_dir / 'bounds-input.bin').read_bytes()
+    storage_host = load('storage_write_host', ROOT / 'apps/storage-write-test/host.py')
+
+    def card_image(corrupt=None):
+        disk = bytearray(65536 * 512)
+        for at in range(0, len(backup), 520):
+            sector = struct.unpack_from('<Q', backup, at)[0]
+            disk[sector * 512:(sector + 1) * 512] = backup[at + 8:at + 520]
+        if corrupt is not None:
+            disk[corrupt * 512 + 100] ^= 1
+        return bytes(disk)
+
+    def decode_result(c):
+        chunks = sorted((int(l['offset']), l['hex']) for l in lines(c.output, 'APP-RESULT'))
+        c.require(chunks and [o for o, _ in chunks] == list(range(0, 512, 96)), 'the 512-byte result was not printed whole')
+        return storage_host.decode(bytes.fromhex(''.join(h for _, h in chunks)))
+    mode4 = storage_host.mode_input(4)
+    c = run_case('storage-write-enable', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, mode4], '512M',
+                 [(RAMDISK_ADDRESS, card_image())])
+    c.clean()
+    c.require(c.finished is not None, 'the application did not finish')
+    d = decode_result(c)
+    c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'enable did not succeed: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
+    # A hint on the application's default notification index during the owner's open (a USB-change event, as application.c sends
+    # them) must not end the wait: enable succeeds. The owner as the fourth board submission had it (one sleep on that index)
+    # returns early with stage 11, which is the control.
+    stray = scenario(usb_ready_ms=usb_delay_ms, fault=10)
+    c = run_case('storage-write-enable-stray-notification', storage_write_elf, stray, [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
+    c.clean()
+    d = decode_result(c)
+    c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'a stray notification ended the owner wait: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
+    c = run_case('storage-write-enable-stray-reverted', reverted_owner_elf, stray, [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
+    c.clean()
+    d = decode_result(c)
+    c.require(d['status'] == 1 and d['diag0'] == 11, 'the earlier owner wait survived the stray notification: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
+    # A retained platform register lock (what a failed controller transaction leaves): the thermal service cannot read its sensors
+    # and, after the five seconds without a reading, ends the session as CRITICAL for lack of a reading, with the stale marker and
+    # the channel in the record (nothing in the SD path is at fault in this record).
+    c = run_case('storage-write-lock-retained', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms, fault=11, limit_ms=14000),
+                 [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
+    c.failed_with('THERMAL')
+    word = int(c.failure['value'], 16)
+    c.require(word >> 31 == 1 and word >> 30 & 1, 'the stop record %#x does not mark a channel lost for lack of a reading' % word)
+    # A failed clock provider ends the thermal owner's liveness: the record names the term (bit 2) and not a reading.
+    c = run_case('storage-write-clocks-failed', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms, fault=12, limit_ms=8000),
+                 [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
+    c.failed_with('THERMAL')
+    word = int(c.failure['value'], 16)
+    c.require(word >> 29 == 1 and word >> 2 & 1, 'the stop record %#x does not name the failed clock provider' % word)
+    # A failed open leaves its stage as the first failure record, so a later thermal or watchdog stop cannot hide it.
+    c = run_case('storage-write-open-fails', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms, fault=13), [blob, mode4], '512M',
+                 [(RAMDISK_ADDRESS, card_image())])
+    c.require(c.failure is not None and c.failure['group'] == 'APPLICATION', 'a failed SD open left no application failure record')
+    word = int(c.failure['value'], 16)
+    c.require(word & 0xff == 7 and (word >> 8 & 0xffff) == 0x0903, 'the record %#x does not carry stage 7 and its detail' % word)
+    # The read-back modes open the card for reading and verify no bounds: a card whose backup sectors have changed (every session changes them) opens.
+    c = run_case('storage-write-open-read-backup-changed', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, storage_host.mode_input(6)], '512M',
+                 [(RAMDISK_ADDRESS, card_image(corrupt=32770))])
+    c.clean()
+    d = decode_result(c)
+    c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'the read-only open did not succeed on a card with changed backup sectors: status %d' % d['status'])
+    c = run_case('storage-write-enable-backup-changed', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, mode4], '512M',
+                 [(RAMDISK_ADDRESS, card_image(corrupt=32770))])
+    c.clean()
+    d = decode_result(c)
+    c.require(d['status'] == 1 and d['diag0'] == 23 and d['diag3'] == 395,
+              'a changed backup sector was not refused at the verify stage: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
 
     elapsed = time.monotonic() - started
     summary = {'large_region_switch_cost': switch_cost, 'passed': True, 'physical_access': False, 'seconds': round(elapsed, 2), 'build_seconds': round(built, 2),

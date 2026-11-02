@@ -12,6 +12,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "sd_hw.h"
+#include "../board/application.h"
+#include "sunstone_crumb.h"
 #include "fat32_rw.h"
 #include "sunstone_deadline.h"
 #include "sunstone_storage.h"
@@ -20,7 +22,7 @@
 
 #define OWNER_STACK_WORDS 2048u
 #define OWNER_PRIORITY (tskIDLE_PRIORITY + 2)
-#define READY_TIMEOUT_TICKS 8000u
+#define READY_TIMEOUT_US 10000000u
 #define WAIT_INDEX 1u              /* notification index a caller sleeps on; index 0 is the owner's */
 
 enum kind { K_READ, K_ASYNC_READ, K_WRITE, K_ENABLE, K_UNIT, K_REGION, K_CLOSE };
@@ -43,7 +45,9 @@ static const struct os_sd_hw *hw;
 static atomic_int ready, closed;           /* 0 starting, 1 open, -1 failed */
 static uint32_t unit_sectors;
 static _Atomic uint64_t idle_us, wake_count, first_us;
+static _Atomic uint32_t owner_core_mask, caller_core_mask;
 static struct os_large_device proxy;
+extern uint64_t os_sd_diag[4];
 
 static void finish(struct request *r, int ok)
 {
@@ -52,6 +56,15 @@ static void finish(struct request *r, int ok)
     if (waiter) xTaskNotifyGiveIndexed(waiter, WAIT_INDEX);
 }
 
+/* The note for a refused request or a failed open (the first-failure record's value): bits 7:0 the stage, 23:8 its detail (the low 16 bits:
+ * result | platform stage << 8), 26:24 INTID 193 before the owner masked it (enabled, pending, active), 30:28 after the mask settled. */
+static uint32_t diag_word(void)
+{
+    if (os_sd_diag[0] >= 30)                         /* a refused request: stage in 5:0, then the 26 bits of large_sd.c PLATX */
+        return (uint32_t)(os_sd_diag[0] & 0x3f) | (uint32_t)(os_sd_diag[1] & 0x3ffffff) << 6;
+    return (uint32_t)(os_sd_diag[0] & 0xff) | (uint32_t)(os_sd_diag[1] & 0xffff) << 8 | (uint32_t)(os_sd_diag[2] & 7) << 24 |
+           (uint32_t)(os_sd_diag[3] & 7) << 28;
+}
 static void serve(struct request *r)
 {
     const struct os_large_device *d = hw->device;
@@ -68,6 +81,10 @@ static void serve(struct request *r)
     case K_REGION: ok = hw->set_write_region(r->buffer, r->bytes); break;
     case K_CLOSE: hw->close(); atomic_store(&closed, 1); ok = 1; break;
     }
+    /* A refused request leaves its stage as a note, except the enable refusals (stages 20 to 24: preconditions, parse, verify mismatch, binding), which are results the
+     * application reports. The first failure record names the SD0 binding when it came first, and a thermal or
+     * watchdog stop that follows the controller's retention cannot hide it. */
+    if (!ok && !(os_sd_diag[0] >= 20 && os_sd_diag[0] <= 24)) board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(APPLICATION), diag_word(), SUNSTONE_CRUMB_HERE());
     /* A failed async read reports -1 from poll; the proxy's poll reads the stored result. */
     finish(r, ok);
 }
@@ -78,13 +95,20 @@ static void owner_main(void *unused)
     hw = os_sd_open_owner();
     atomic_store(&first_us, sunstone_deadline_now_us());
     atomic_store(&ready, hw ? 1 : -1);
-    if (ready_waiter) xTaskNotifyGive(ready_waiter);
-    if (!hw) vTaskSuspend(NULL);
+    if (ready_waiter) xTaskNotifyGiveIndexed(ready_waiter, WAIT_INDEX);
+    if (!hw) {
+        /* A failed open leaves the controller's state uncertain and the platform register lock retained, which the thermal service
+         * then reports as its own failure. Note the open's stage first so that the record names the SD0 binding (the diagnostic
+         * word: stage in bits 7:0, its detail above). */
+        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(APPLICATION), diag_word(), SUNSTONE_CRUMB_HERE());
+        vTaskSuspend(NULL);
+    }
     for (;;) {
         uint64_t slept_from = sunstone_deadline_now_us();
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         atomic_fetch_add(&idle_us, sunstone_deadline_now_us() - slept_from);
         atomic_fetch_add(&wake_count, 1);
+        atomic_fetch_or(&owner_core_mask, 1u << portGET_CORE_ID());
         for (;;) {
             struct request *r = atomic_exchange(&loader_slot, NULL);        /* reads first */
             if (r) { serve(r); continue; }
@@ -98,6 +122,7 @@ static void owner_main(void *unused)
 static int post(_Atomic(struct request *) *slot, struct request *r, int wait)
 {
     if (atomic_load(&closed)) return 0;                                 /* the card is closed: no request is served */
+    atomic_fetch_or(&caller_core_mask, 1u << portGET_CORE_ID());
     atomic_init(&r->done, 0);
     r->waiter = wait ? xTaskGetCurrentTaskHandle() : NULL;
     struct request *none = NULL;
@@ -108,15 +133,27 @@ static int post(_Atomic(struct request *) *slot, struct request *r, int wait)
     return atomic_load(&r->done) == 1;
 }
 
+/* The owner reads the CCU and drives SMHC0, so the scheduler creates it at EL1 (board_application_task_privileged). The first
+ * caller is the application's EL0 task, which would otherwise pass its own level on to the task it creates. */
+int os_sd_owner_task_privileged(void (*entry)(void *), void *context) { (void)context; return entry == owner_main; }
+
 /* Start the owner task; the caller is told when the card is open (os_large_device) or has failed. */
 static int start(void)
 {
     if (owner) return atomic_load(&ready) == 1;
     ready_waiter = xTaskGetCurrentTaskHandle();
     owner = xTaskCreateStatic(owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb);
-    if (!owner) return 0;
-    if (atomic_load(&ready) == 0) (void)ulTaskNotifyTake(pdTRUE, READY_TIMEOUT_TICKS);   /* the owner gives it once the card is open or has failed */
+    if (!owner) { os_sd_diag[0] = 10; return 0; }
+    /* The owner gives the notification once the card is open or has failed. A wake is only a hint (any other notification would end a
+     * single wait early), so wait on the state, on the caller's own index, until a time bound measured in microseconds. */
+    uint64_t t0 = sunstone_deadline_now_us(), ticks0 = xTaskGetTickCount();
+    while (atomic_load(&ready) == 0 && sunstone_deadline_now_us() - t0 < READY_TIMEOUT_US)
+        (void)ulTaskNotifyTakeIndexed(WAIT_INDEX, pdTRUE, pdMS_TO_TICKS(50));
     ready_waiter = NULL;
+    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) {                         /* no answer from the owner in time */
+        os_sd_diag[0] = 11; os_sd_diag[1] = sunstone_deadline_now_us() - t0;
+        os_sd_diag[2] = (uint64_t)atomic_load(&ready) & 0xffffffffu; os_sd_diag[3] = xTaskGetTickCount() - ticks0;
+    }
     return atomic_load(&ready) == 1;
 }
 
@@ -181,6 +218,14 @@ static int writes_enable(const uint8_t *blob, size_t bytes)
     unit_sectors = writer_request.value;
     return 1;
 }
+static int reads_open(void)
+{
+    if (!start()) return 0;
+    writer_request = (struct request){.kind = K_UNIT};
+    if (!post(&writer_slot, &writer_request, 1)) return 0;
+    unit_sectors = writer_request.value;
+    return 1;
+}
 /* Register the application's flush buffer so the FAT32 service flushes from it straight into the controller. */
 static int write_region(uint8_t *base, size_t bytes)
 {
@@ -199,6 +244,7 @@ static int writer_device(struct fwr_device *d)
 
 /* --- the application kit (include/sunstone_storage.h) ------------------------------------------------------------------- */
 int ss_storage_enable(const void *bounds, size_t bytes) { return writes_enable(bounds, bytes); }
+int ss_storage_open_read(void) { return reads_open(); }
 int ss_storage_region(void *base, size_t bytes) { return write_region(base, bytes); }
 int ss_storage_device(struct fwr_device *d) { return writer_device(d); }
 int ss_storage_close(void)
@@ -207,11 +253,20 @@ int ss_storage_close(void)
     writer_request = (struct request){.kind = K_CLOSE};
     return post(&writer_slot, &writer_request, 1);
 }
+int ss_storage_diagnostic(uint64_t out[4])
+{
+    if (!out) return 0;
+    for (unsigned i = 0; i < 4; ++i) out[i] = os_sd_diag[i];
+    return 1;
+}
 int ss_storage_owner_stats(struct ss_storage_owner_stats *out)
 {
     if (!out || !hw) return 0;
     uint64_t now = sunstone_deadline_now_us();
     uint64_t slept = atomic_load(&idle_us) + hw->owner_sleep_us();
-    *out = (struct ss_storage_owner_stats){now - first_us, slept, atomic_load(&wake_count) + hw->owner_wakes()};
+    *out = (struct ss_storage_owner_stats){now - first_us, slept, atomic_load(&wake_count) + hw->owner_wakes(),
+                                                     0, atomic_load(&owner_core_mask), atomic_load(&caller_core_mask)};
+    hw->irq_counts(out->irq_entries, &out->irq_stray, &out->irq_recheck);
+    for (unsigned c = 0; c < 8; ++c) if (out->irq_entries[c]) out->irq_cores |= 1u << c;
     return 1;
 }

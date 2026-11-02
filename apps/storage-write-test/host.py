@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Host side of storage-write-test: the second input (the mode) and the decoder of its 512-byte result.
 
-Modes: 0 creates the 512 MiB region test file and reads it back; 1 is the interruption test, first lifetime (the application
+Modes: 0 creates the 512 MiB region test file (no read-back; a 40 s guard stops the write, closes cleanly and reports status 11);
+3 reads the whole file back against the stream; 1 is the interruption test, first lifetime (the application
 stops reporting progress after `cut_bytes` so the watchdog resets the board mid-flush); 2 is its second lifetime (mount,
 recover, read back what the volume holds)."""
 import struct
@@ -11,6 +12,7 @@ FIELDS = ('tag mode status detail file_bytes written_bytes au_sectors cpu_hz cpu
           'wear_bytes wear_data_bytes wear_metadata_bytes wear_writes wear_aligned wear_unaligned wear_syncs wear_flushes '
           'owner_elapsed_us owner_asleep_us owner_wakes mismatches first_mismatch volume_size recoveries recovered_clusters').split()
 HIST = 16
+TAIL = ('app_core irq_cores owner_cores caller_cores sha_ce diag0 diag1 diag2 diag3 isar0 observed').split()
 TAG = 0x5357544553544f4b
 COUNTER_HZ = 24_000_000
 
@@ -22,15 +24,34 @@ def mode_input(mode=0, cut_bytes=0):
 def decode(payload):
     if len(payload) != 512:
         raise ValueError(f'storage-write result is {len(payload)} bytes, not 512.')
-    values = struct.unpack('<%dQ' % (len(FIELDS) + HIST), payload[:8 * (len(FIELDS) + HIST)])
+    values = struct.unpack_from('<%dQ' % len(FIELDS), payload, 0)
     out = dict(zip(FIELDS, values))
-    out['histogram'] = list(values[len(FIELDS):])
+    offset = 8 * len(FIELDS)
+    out['histogram'] = list(struct.unpack_from('<%dI' % HIST, payload, offset))
+    offset += 4 * HIST
+    out.update(zip(TAIL, struct.unpack_from('<%dQ' % len(TAIL), payload, offset)))
+    offset += 8 * len(TAIL)
+    out['irq_entries'] = list(struct.unpack_from('<8I', payload, offset))
     if out['tag'] != TAG:
         raise ValueError('storage-write result has the wrong tag.')
+    out['irq_stray'] = out['irq_cores'] >> 32
+    out['irq_cores'] &= 0xffffffff
+    out['owner_recheck_wakes'] = out['owner_wakes'] >> 32
+    out['owner_wakes'] &= 0xffffffff
     sec = lambda ticks: ticks / COUNTER_HZ
     out['cpu_mhz'] = out['cpu_hz'] / 1e6
+    appended = out['written_bytes'] - (out['volume_size'] if out['mode'] == 5 else 0)
+    out['session_bytes'] = appended
     if out['flush_ticks']:
-        out['flush_rate_mb_s'] = out['written_bytes'] / sec(out['flush_ticks']) / 1e6
+        out['flush_rate_mb_s'] = appended / sec(out['flush_ticks']) / 1e6
+    if out['total_ticks']:
+        out['session_rate_mb_s'] = appended / sec(out['total_ticks']) / 1e6
+    if out['mode'] in (2, 3):                      # a read-back: flush_ticks is the time inside fwr_read, generate_ticks the stream, close_ticks the compare
+        out['read_phase_seconds'] = {'fwr_read': sec(out['flush_ticks']), 'stream': sec(out['generate_ticks']), 'compare': sec(out['close_ticks']),
+                                     'total': sec(out['read_ticks'])}
+        if out['flush_ticks']:
+            out['read_rate_mb_s'] = out['written_bytes'] / sec(out['flush_ticks']) / 1e6
+    out['phase_seconds'] = {k: sec(out[k + '_ticks']) for k in ('create', 'generate', 'flush', 'close', 'total')}
     out['flush_latency_ms'] = {k: sec(out['flush_' + k]) * 1e3 for k in ('p50', 'p99', 'max')}
     if out['owner_elapsed_us']:
         out['owner_busy_fraction'] = 1 - out['owner_asleep_us'] / out['owner_elapsed_us']
@@ -43,3 +64,38 @@ def failures(decoded):
 
 def inputs():
     return [mode_input(0)]
+
+
+def word_names():
+    """The name of each little-endian 32-bit word of the 512-byte result, for building an expectation (low and high halves of the 64-bit fields)."""
+    names = []
+    for n in FIELDS:
+        names += [n, n + '.high']
+    names += ['histogram%d' % i for i in range(HIST)]
+    for n in TAIL:
+        names += [n, n + '.high']
+    names += ['irq_entries%d' % i for i in range(8)]
+    return names + ['reserved'] * (128 - len(names))
+
+
+def expectation(mode, **fixed):
+    """A sunstone-board-expect-u32-v1 document for a run of `mode`: the tag, the mode, status 0 to 12, the file size, the clock window, no mismatches, the
+    application core, the SHA-256 path (0 to 2) and the reserved words zero; every other word unconstrained. `fixed` maps a word name to an exact value."""
+    words = [{'min': 0, 'max': 4294967295}] * 128
+    names = word_names()
+    def put(name, value):
+        words[names.index(name)] = value
+    put('tag', TAG & 0xffffffff); put('tag.high', TAG >> 32)
+    put('mode', mode); put('mode.high', 0)
+    put('status', {'min': 0, 'max': 12}); put('status.high', 0)
+    put('file_bytes', 536870912); put('file_bytes.high', 0)
+    put('cpu_hz', {'min': 1500000000, 'max': 2200000000}); put('cpu_hz.high', 0)
+    put('counter_hz', 24000000); put('counter_hz.high', 0)
+    put('mismatches', 0); put('mismatches.high', 0); put('first_mismatch', 0); put('first_mismatch.high', 0)
+    put('app_core', {'min': 0, 'max': 7}); put('sha_ce', {'min': 0, 'max': 2})
+    for i, n in enumerate(names):
+        if n == 'reserved':
+            words[i] = 0
+    for k, v in fixed.items():
+        put(k, v)
+    return {'schema': 'sunstone-board-expect-u32-v1', 'words': words}
