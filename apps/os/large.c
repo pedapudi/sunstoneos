@@ -53,6 +53,16 @@ static unsigned slot_count;
 static int admitted;
 
 static void install_space(uint64_t kernel_ttbr);
+/* The eight-core images walk their tables without the data caches (TCR_EL1 IRGN0 = ORGN0 = 0,
+ * include/a733_cpu_coherence.h), so a descriptor the CPU wrote stays invisible to the walker until its line reaches
+ * memory. Clean and invalidate every line of the built tables before any task uses the space; a space built long
+ * before its first use would have been evicted by then, and one built just before it is not. */
+static void clean_tables(const void *base, size_t bytes)
+{
+    for (uintptr_t a = (uintptr_t)base & ~(uintptr_t)63; a < (uintptr_t)base + bytes; a += 64)
+        __asm__ volatile("dc civac, %0" :: "r"(a) : "memory");
+    __asm__ volatile("dsb sy" ::: "memory");
+}
 unsigned os_large_count(void) { return slot_count; }
 const struct large_slot *os_large_slot(unsigned index) { return index < slot_count ? &slots[index] : 0; }
 const struct app_space *os_large_space(void) { return admitted ? &space : 0; }
@@ -88,6 +98,7 @@ int os_large_prepare(void)
         memset(slots, 0, sizeof *slots * count);
         return 0;
     }
+    clean_tables(arena_pages, sizeof arena_pages);
     slot_count = count;
     admitted = 1;
     install_space((uint64_t)ttbr);
