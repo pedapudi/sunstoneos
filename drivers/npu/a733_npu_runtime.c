@@ -69,13 +69,23 @@ static void need(const struct nbg_assembly_layout *l, size_t model_bytes, struct
  * the write windows. Each group starts and ends on a 2 MiB boundary. Device
  * addresses leave one unmapped page after every allocation. */
 struct placement {
-    size_t arena, arena_bytes, bootstrap, staging, bytes;
-    size_t command[NPU_RUNTIME_SLOTS], constant[NPU_RUNTIME_SLOTS];
-    size_t read[NPU_RUNTIME_SLOTS], write[NPU_RUNTIME_SLOTS];
-    uint32_t bootstrap_device, command_device[NPU_RUNTIME_SLOTS], constant_device[NPU_RUNTIME_SLOTS];
-    uint32_t read_device[NPU_RUNTIME_SLOTS], write_device[NPU_RUNTIME_SLOTS];
+    size_t tables, tables_bytes, arena, arena_bytes, bootstrap, staging, bytes;
+    /* Every slot's regions are the same size, so a slot's offset is a base plus a multiple of a stride: command[i] =
+     * command0 + i * (COMMAND + constant), constant[i] = command[i] + COMMAND, read[i] = read0 + i * read, write[i] =
+     * write0 + i * write; likewise for the device addresses, with one unmapped page after every allocation. */
+    size_t command0, read0, write0;
+    uint32_t bootstrap_device, command_device0, read_device0, write_device0;
 };
-static int place(const struct sizes *z, unsigned slots, struct placement *p)
+static size_t command_offset(const struct placement *p, const struct sizes *z, unsigned i)
+{ return p->command0 + (size_t)i * (NPU_RUNTIME_COMMAND_BYTES + z->constant); }
+static uint32_t command_device(const struct placement *p, const struct sizes *z, unsigned i)
+{ return p->command_device0 + (uint32_t)((uint64_t)i * (NPU_RUNTIME_COMMAND_BYTES + PAGE + z->constant + PAGE)); }
+size_t npu_runtime_tables_bytes(unsigned count)
+{
+    const size_t per = sizeof(struct npu_runtime_model) + sizeof(struct nbg_assembly_layout) + 32;
+    return ((size_t)count * per + 63) & ~(size_t)63;
+}
+static int place(const struct sizes *z, unsigned slots, unsigned count, struct placement *p)
 {
     memset(p, 0, sizeof(*p));
     if (!z->constant || !z->read || !z->write || !z->staging || z->constant > UINT32_MAX ||
@@ -83,67 +93,88 @@ static int place(const struct sizes *z, unsigned slots, struct placement *p)
     uint64_t device = NPU_RUNTIME_DEVICE_BASE;
 #define NEXT(field, bytes) do { field = (uint32_t)device; device += (uint64_t)(bytes) + PAGE; } while (0)
     NEXT(p->bootstrap_device, NPU_RUNTIME_COMMAND_BYTES);
-    for (unsigned i = 0; i < slots; ++i) {
-        NEXT(p->command_device[i], NPU_RUNTIME_COMMAND_BYTES);
-        NEXT(p->constant_device[i], z->constant);
-    }
-    for (unsigned i = 0; i < slots; ++i) NEXT(p->read_device[i], z->read);
-    for (unsigned i = 0; i < slots; ++i) NEXT(p->write_device[i], z->write);
+    p->command_device0 = (uint32_t)device;
+    for (unsigned i = 0; i < slots; ++i) { device += NPU_RUNTIME_COMMAND_BYTES + PAGE; device += (uint64_t)z->constant + PAGE; }
+    p->read_device0 = (uint32_t)device;
+    for (unsigned i = 0; i < slots; ++i) device += (uint64_t)z->read + PAGE;
+    p->write_device0 = (uint32_t)device;
+    for (unsigned i = 0; i < slots; ++i) device += (uint64_t)z->write + PAGE;
 #undef NEXT
     if (device > UINT64_C(1) << 32) return 0;
     /* One 16 KiB leaf table per 16 MiB the device range touches. */
     uint64_t roots = ((device - PAGE - 1) >> 24) - (NPU_RUNTIME_DEVICE_BASE >> 24) + 1;
     p->arena_bytes = PAGE + roots * 16384u;
     size_t offset = 0;
+    p->tables = offset; p->tables_bytes = npu_runtime_tables_bytes(count); offset += pages(p->tables_bytes);
     p->arena = offset; offset += p->arena_bytes;
     p->bootstrap = offset; offset += NPU_RUNTIME_COMMAND_BYTES;
     p->staging = offset; offset += z->staging;
-    for (unsigned i = 0; i < slots; ++i) {
-        p->command[i] = offset; offset += NPU_RUNTIME_COMMAND_BYTES;
-        p->constant[i] = offset; offset += z->constant;
-    }
+    p->command0 = offset; offset += (size_t)slots * (NPU_RUNTIME_COMMAND_BYTES + z->constant);
     offset = whole_groups(offset);
-    for (unsigned i = 0; i < slots; ++i) { p->read[i] = offset; offset += z->read; }
+    p->read0 = offset; offset += (size_t)slots * z->read;
     offset = whole_groups(offset);
-    for (unsigned i = 0; i < slots; ++i) { p->write[i] = offset; offset += z->write; }
+    p->write0 = offset; offset += (size_t)slots * z->write;
     p->bytes = whole_groups(offset);
     return 1;
 }
+/* digests and plans are written when the caller keeps them (prepare); a sizing pass passes NULL and keeps nothing, so a
+ * start-up task's stack holds one layout and one digest, whatever the number of graphs. */
 static int sized(const struct npu_runtime_model *models, unsigned count, unsigned slots,
-                 unsigned char (*digests)[32], struct nbg_assembly_layout *plans, struct sizes *z, struct placement *p)
+                 const struct npu_runtime_bounds *bounds, unsigned char (*digests)[32],
+                 struct nbg_assembly_layout *plans, struct sizes *z, struct placement *p)
 {
     memset(z, 0, sizeof(*z));
-    if (!models || !count || count > NPU_RUNTIME_MODELS || !slots || slots > NPU_RUNTIME_SLOTS) return 0;
+    if (!models || !count || !slots || slots > NPU_RUNTIME_SLOTS) return 0;
+    struct nbg_assembly_layout one;
+    unsigned char digest[32];
     for (unsigned m = 0; m < count; ++m) {
         if (!a733_span_incl_nonempty(models[m].data, models[m].bytes) ||
             models[m].bytes > NBG_MODEL_MAX_BYTES ||
-            !admit(models[m].data, models[m].bytes, digests[m], &plans[m])) return 0;
-        need(&plans[m], models[m].bytes, z);
+            !admit(models[m].data, models[m].bytes, digests ? digests[m] : digest, plans ? &plans[m] : &one)) return 0;
+        need(plans ? &plans[m] : &one, models[m].bytes, z);
     }
-    return place(z, slots, p);
+    unsigned capacity = 0;
+    if (bounds && bounds->capacity) {
+        /* Graphs registered later: a model's regions are at most its bytes (the descriptors, coefficients, dynamic-input
+         * and program sections are parts of it; each allocation is rounded to a page, up to five of them) and the
+         * tensors are at most tensor_bytes. */
+        capacity = bounds->capacity;
+        if (!bounds->graph_bytes || !bounds->tensor_bytes || bounds->graph_bytes > NBG_MODEL_MAX_BYTES ||
+            bounds->tensor_bytes > UINT32_MAX || capacity > UINT32_MAX - count) return 0;
+        const size_t model = pages(bounds->graph_bytes) + 5 * PAGE, tensors = pages(bounds->tensor_bytes) + 64;
+        if (model > z->constant) z->constant = model;
+        if (tensors > z->read) z->read = tensors;
+        if (tensors > z->write) z->write = tensors;
+        if (pages(bounds->graph_bytes) > z->staging) z->staging = pages(bounds->graph_bytes);
+    }
+    return place(z, slots, count + capacity, p);
 }
-enum npu_declaration_result npu_runtime_reservation(const struct npu_runtime_model *models, unsigned count,
-                                                   unsigned slots, size_t pool_bytes, size_t *bytes)
+enum npu_declaration_result npu_runtime_reservation_with(const struct npu_runtime_model *models, unsigned count,
+                                                        unsigned slots, size_t pool_bytes, size_t *bytes,
+                                                        const struct npu_runtime_bounds *bounds)
 {
-    unsigned char digests[NPU_RUNTIME_MODELS][32];
-    struct nbg_assembly_layout plans[NPU_RUNTIME_MODELS];
     struct sizes z;
     struct placement p;
-    if (!sized(models, count, slots, digests, plans, &z, &p)) {
+    if (!slots || slots > NPU_RUNTIME_SLOTS) return NPU_DECLARATION_SLOTS;
+    if (!sized(models, count, slots, bounds, NULL, NULL, &z, &p)) {
         /* One slot tells a graph that is not admissible from a declaration that no longer fits the address space. */
-        return sized(models, count, 1, digests, plans, &z, &p) ? NPU_DECLARATION_DEVICE_SPACE : NPU_DECLARATION_MODEL;
+        return sized(models, count, 1, bounds, NULL, NULL, &z, &p) ? NPU_DECLARATION_DEVICE_SPACE : NPU_DECLARATION_MODEL;
     }
     *bytes = p.bytes;
     return p.bytes > pool_bytes ? NPU_DECLARATION_MEMORY : NPU_DECLARATION_OK;
 }
-size_t npu_runtime_requirements(const struct npu_runtime_model *models, unsigned count, unsigned slots)
+enum npu_declaration_result npu_runtime_reservation(const struct npu_runtime_model *models, unsigned count,
+                                                   unsigned slots, size_t pool_bytes, size_t *bytes)
+{ return npu_runtime_reservation_with(models, count, slots, pool_bytes, bytes, NULL); }
+size_t npu_runtime_requirements_with(const struct npu_runtime_model *models, unsigned count, unsigned slots,
+                                     const struct npu_runtime_bounds *bounds)
 {
-    unsigned char digests[NPU_RUNTIME_MODELS][32];
-    struct nbg_assembly_layout plans[NPU_RUNTIME_MODELS];
     struct sizes z;
     struct placement p;
-    return sized(models, count, slots, digests, plans, &z, &p) ? p.bytes : 0;
+    return sized(models, count, slots, bounds, NULL, NULL, &z, &p) ? p.bytes : 0;
 }
+size_t npu_runtime_requirements(const struct npu_runtime_model *models, unsigned count, unsigned slots)
+{ return npu_runtime_requirements_with(models, count, slots, NULL); }
 
 static void fill_end(uintptr_t cpu, size_t bytes)
 {
@@ -160,7 +191,7 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     if (!rt || !config || rt->prepared || atomic_load(&rt->failed) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
     const struct npu_runtime_config v = *config;
-    if (!v.count || v.count > NPU_RUNTIME_MODELS || !v.slots || v.slots > NPU_RUNTIME_SLOTS ||
+    if (!v.count || !v.models || !v.slots || v.slots > NPU_RUNTIME_SLOTS ||
         v.register_physical != 0x03600000 || !v.fatal ||
         !a733_span_incl_nonempty((const void *)v.cpu, v.bytes) ||
         ((v.cpu | v.physical | v.bytes) & (NPU_RUNTIME_GROUP_BYTES - 1)) ||
@@ -177,23 +208,30 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     atomic_init(&rt->failed, 0);
     struct sizes z;
     struct placement p;
-    if (!sized(v.models, v.count, v.slots, rt->model_digest, rt->plans, &z, &p) || p.bytes != v.bytes) return fault(rt);
+    /* The per-graph tables lie at the start of the reservation, before anything depends on the graphs. */
+    const size_t entries = (size_t)v.count + v.bounds.capacity;
+    rt->catalogue = (struct npu_runtime_model *)v.cpu;
+    rt->plans = (struct nbg_assembly_layout *)(v.cpu + entries * sizeof(struct npu_runtime_model));
+    rt->model_digest = (unsigned char (*)[32])(v.cpu + entries * (sizeof(struct npu_runtime_model) +
+                                                                  sizeof(struct nbg_assembly_layout)));
+    if (!sized(v.models, v.count, v.slots, &v.bounds, rt->model_digest, rt->plans, &z, &p) || p.bytes != v.bytes) return fault(rt);
     for (unsigned m = 0; m < v.count; ++m) rt->catalogue[m] = v.models[m];
-    rt->count = v.count; rt->slots = v.slots;
+    atomic_init(&rt->count, v.count); rt->capacity = v.count + v.bounds.capacity; rt->slots = v.slots;
     rt->constant_bytes = z.constant; rt->read_bytes = z.read; rt->write_bytes = z.write;
     rt->staging_bytes = z.staging; rt->staging = v.cpu + p.staging;
     rt->parent_cpu = v.cpu; rt->parent_bytes = v.bytes;
-    struct a733_npu_buffer all[1 + 4 * NPU_RUNTIME_SLOTS];
+    struct a733_npu_buffer *const all = rt->buffers;
     unsigned n = 0;
 #define REGION(r, offset, size, dev) ((r) = (struct npu_runtime_region){v.cpu + (offset), v.physical + (offset), (size), (dev)})
     rt->bootstrap = all[n++] = (struct a733_npu_buffer){v.cpu + p.bootstrap, v.physical + p.bootstrap,
         NPU_RUNTIME_COMMAND_BYTES, p.bootstrap_device, A733_NPU_BUFFER_BOOTSTRAP};
     for (unsigned i = 0; i < v.slots; ++i) {
         struct npu_runtime_slot *s = &rt->slot[i];
-        REGION(s->command, p.command[i], NPU_RUNTIME_COMMAND_BYTES, p.command_device[i]);
-        REGION(s->constant, p.constant[i], z.constant, p.constant_device[i]);
-        REGION(s->read, p.read[i], z.read, p.read_device[i]);
-        REGION(s->write, p.write[i], z.write, p.write_device[i]);
+        REGION(s->command, command_offset(&p, &z, i), NPU_RUNTIME_COMMAND_BYTES, command_device(&p, &z, i));
+        REGION(s->constant, command_offset(&p, &z, i) + NPU_RUNTIME_COMMAND_BYTES, z.constant,
+               command_device(&p, &z, i) + NPU_RUNTIME_COMMAND_BYTES + PAGE);
+        REGION(s->read, p.read0 + (size_t)i * z.read, z.read, p.read_device0 + (uint32_t)((uint64_t)i * (z.read + PAGE)));
+        REGION(s->write, p.write0 + (size_t)i * z.write, z.write, p.write_device0 + (uint32_t)((uint64_t)i * (z.write + PAGE)));
         all[n++] = (struct a733_npu_buffer){s->command.cpu, s->command.physical, s->command.bytes,
             s->command.device, A733_NPU_BUFFER_COMMAND};
         all[n++] = (struct a733_npu_buffer){s->constant.cpu, s->constant.physical, s->constant.bytes,
@@ -810,7 +848,7 @@ static int bind(struct npu_runtime *rt, struct a733_npu_startup *startup, const 
         rt->slot[i].client = clients[i];
         if ((!resident || !i) &&
             !npu_service_bind(&rt->service, i, clients[i], resident ?
-                (UINT32_C(1) << (rt->slots + 1)) - 2 : UINT32_C(1) << (i + 1))) return fault(rt);
+                (uint32_t)(((uint64_t)1 << (rt->slots + 1)) - 2) : UINT32_C(1) << (i + 1))) return fault(rt);
     }
     rt->resident = resident; rt->bound = 1;
     return 1;
@@ -840,6 +878,25 @@ int npu_runtime_preload(struct npu_runtime *rt, unsigned slot, unsigned model)
     memset((void *)s->write.cpu, 0, s->write.bytes);
     return maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->read.cpu, s->read.bytes) &&
         maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->write.cpu, s->write.bytes);
+}
+int npu_runtime_register(struct npu_runtime *rt, const void *model, size_t bytes, unsigned *index)
+{
+    if (!good(rt) || !rt->prepared || !index || !model || !bytes || bytes > NBG_MODEL_MAX_BYTES ||
+        !a733_span_incl_nonempty(model, bytes) || private_overlap(rt, (uintptr_t)model, bytes)) return 0;
+    const unsigned n = atomic_load_explicit(&rt->count, memory_order_acquire);
+    if (n >= rt->capacity || pages(bytes) > rt->staging_bytes) return 0;
+    struct nbg_assembly_layout plan;
+    unsigned char digest[32];
+    struct sizes z = {0};
+    if (!admit(model, bytes, digest, &plan)) return 0;
+    need(&plan, bytes, &z);
+    if (z.constant > rt->constant_bytes || z.read > rt->read_bytes || z.write > rt->write_bytes) return 0;
+    rt->catalogue[n] = (struct npu_runtime_model){model, bytes};
+    rt->plans[n] = plan;
+    memcpy(rt->model_digest[n], digest, 32);
+    atomic_store_explicit(&rt->count, n + 1, memory_order_release);
+    *index = n;
+    return 1;
 }
 int npu_runtime_link_tensor(struct npu_runtime *rt, unsigned producer, unsigned output,
                             unsigned consumer, unsigned input)

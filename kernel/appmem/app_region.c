@@ -62,7 +62,7 @@ uint64_t app_region_free_bytes(const struct app_region_ledger *l)
     return sum;
 }
 
-int app_region_acquire(struct app_region_ledger *l, uint8_t owner, uint64_t bytes, unsigned access,
+int app_region_acquire(struct app_region_ledger *l, uint16_t owner, uint64_t bytes, unsigned access,
                        uint64_t *base_out, uint64_t *bytes_out)
 {
     if (!l || !owner || !bytes || !base_out || !bytes_out ||
@@ -93,7 +93,7 @@ int app_region_acquire(struct app_region_ledger *l, uint8_t owner, uint64_t byte
     return APP_REGION_OK;
 }
 
-int app_region_release(struct app_region_ledger *l, uint8_t owner, uint64_t base)
+int app_region_release(struct app_region_ledger *l, uint16_t owner, uint64_t base)
 {
     if (!l || !owner) return APP_REGION_INVALID;
     for (unsigned i = 0; i < l->capacity; ++i)
@@ -104,13 +104,19 @@ int app_region_release(struct app_region_ledger *l, uint8_t owner, uint64_t base
     return APP_REGION_NOT_OWNED;
 }
 
-uint8_t app_asid_alloc(struct app_asid_pool *pool)
+void app_asid_pool_init(struct app_asid_pool *pool, uint64_t id_aa64mmfr0_el1, uint64_t tcr_el1)
 {
-    if (!pool || pool->next >= 255) return 0;
-    return (uint8_t)++pool->next;
+    pool->next = 0;
+    pool->limit = APP_ID_AA64MMFR0_ASIDBITS(id_aa64mmfr0_el1) == 2 && APP_TCR_AS(tcr_el1) ? 65535u : 255u;
 }
 
-uint8_t app_region_owner_of(const struct app_region_ledger *l, uint64_t pa)
+uint16_t app_asid_alloc(struct app_asid_pool *pool)
+{
+    if (!pool || !pool->limit || pool->next >= pool->limit) return 0;
+    return (uint16_t)++pool->next;
+}
+
+uint16_t app_region_owner_of(const struct app_region_ledger *l, uint64_t pa)
 {
     for (unsigned i = 0; i < l->capacity; ++i)
         if (l->entry[i].owner && pa >= l->entry[i].base && pa - l->entry[i].base < l->entry[i].bytes)
@@ -125,7 +131,7 @@ uint8_t app_region_owner_of(const struct app_region_ledger *l, uint64_t pa)
 static uint64_t ap_bits(unsigned access) { return access & APP_REGION_WRITE ? APP_PTE_AP_EL0_RW : APP_PTE_AP_RO; }
 
 /* Entries of the owner's region that overlaps [lo, hi): access, or 0. */
-static unsigned covered(const struct app_region_ledger *l, uint8_t owner, uint64_t lo, uint64_t hi,
+static unsigned covered(const struct app_region_ledger *l, uint16_t owner, uint64_t lo, uint64_t hi,
                         int *whole)
 {
     unsigned access = 0;
@@ -140,11 +146,11 @@ static unsigned covered(const struct app_region_ledger *l, uint8_t owner, uint64
 }
 
 int app_space_build(struct app_space *s, struct app_table_arena *a, const uint64_t base_l1[512],
-                    const struct app_region_ledger *l, uint8_t asid)
+                    const struct app_region_ledger *l, uint16_t asid)
 { return app_space_build_view(s, a, base_l1, l, asid, asid, 0); }
 
 int app_space_build_view(struct app_space *s, struct app_table_arena *a, const uint64_t base_l1[512],
-                         const struct app_region_ledger *l, uint8_t owner, uint8_t asid, unsigned flags)
+                         const struct app_region_ledger *l, uint16_t owner, uint16_t asid, unsigned flags)
 {
     if (!s || !a || !base_l1 || !l || !asid || !owner || !a->page || (flags & ~APP_SPACE_NO_GIB_BLOCKS)) return APP_REGION_INVALID;
     /* Each upper-memory slot is either unmapped (the board maps less than 12 GiB) or the kernel's EL1-only

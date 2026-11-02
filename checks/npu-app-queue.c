@@ -137,6 +137,13 @@ int main(int argc,char **argv)
     }
     assert(ss_npu_queue_service_bind(&q,&b,NULL));
     struct ss_npu_queue *pub=NULL;
+    if(argc>1&&atoi(argv[1])==8){
+        /* The ring holds the depth the image was built for, which is what the application declared: one more is refused
+         * and exactly that many is accepted, whatever that number is. */
+        assert(ss_npu_queue_open(SS_NPU_QUEUE_MAX_DEPTH+1,&pub)==-1&&requests==0);
+        assert(ss_npu_queue_open(SS_NPU_QUEUE_MAX_DEPTH,&pub)==0&&requests==1);
+        printf("PASS a ring of %u entries is accepted and one more is refused\n",(unsigned)SS_NPU_QUEUE_MAX_DEPTH);return 0;
+    }
     assert(ss_npu_queue_open(3,&pub)==0&&requests==1);
     if(admission_failure){
         assert(ss_npu_queue_service_step(&q)==-1&&!starts&&!cache_calls);

@@ -53,8 +53,9 @@ def build(name, wrapper=None):
                            link=['-Wl,--gc-sections'])
 
 
-def run(exe, case):
-    return subprocess.run([str(exe), str(case)], capture_output=True, text=True, env=environment(), timeout=900)
+def run(exe, case, extra=None):
+    return subprocess.run([str(exe), str(case)], capture_output=True, text=True, env={**environment(), **(extra or {})},
+                          timeout=900)
 
 
 exe = build('fixed')
@@ -68,6 +69,19 @@ done = run(exe, 27)
 (out / 'case-27.log').write_text(done.stdout + done.stderr)
 assert done.returncode == 0, (27, done.returncode, done.stdout[-400:], done.stderr[-600:])
 print('case 27', done.stdout.strip().splitlines()[-1])
+# Case 28: thirty-one slots.
+done = run(exe, 28)
+(out / 'case-28.log').write_text(done.stdout + done.stderr)
+assert done.returncode == 0, (28, done.returncode, done.stdout[-400:], done.stderr[-600:])
+print('case 28', done.stdout.strip().splitlines()[-1])
+# Case 29: a graph that no list names, handed over after the scheduler started (the relu graph of the test set, which the
+# catalogue of this image does not link): registered within the declared bounds, loaded and run; refused when damaged, too
+# large or beyond the declared capacity; and a LOAD refused when the application changes the bytes it handed over.
+variants = CACHE / 'build/npu-graph-variants/relu'
+done = run(exe, 29, {'REG_MODEL': str(variants / 'export_nbg_unify/network_binary.nb'), 'REG_INPUT': str(variants / 'input0.bin')})
+(out / 'case-29.log').write_text(done.stdout + done.stderr)
+assert done.returncode == 0, (29, done.returncode, done.stdout[-400:], done.stderr[-600:])
+print('case 29', done.stdout.strip().splitlines()[-1])
 # Case 26: far more jobs than the former quota, in a session whose job field is 1. A session never fails because it has
 # run a number of jobs.
 done = run(exe, 26)

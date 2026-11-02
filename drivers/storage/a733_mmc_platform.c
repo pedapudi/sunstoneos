@@ -554,6 +554,7 @@ static enum a733_mmc_platform_result command(struct a733_mmc_platform *p,unsigne
         if((c->sector_addressed&&last>UINT32_MAX)||(!c->sector_addressed&&last>UINT32_MAX/512u))
             return finish(p,A733_MMC_INVALID);
     }
+    if(operation==4&&bytes!=SUNXI_MMC_SD_STATUS_BYTES)return finish(p,A733_MMC_INVALID);
     p->deadline=deadline;
     int r=live(p);if(r<0)return finish(p,fail(p));if(!r)return finish(p,A733_MMC_BUSY);
     r=presence(p);if(r<0)return finish(p,fail(p));if(!r)return finish(p,A733_MMC_BUSY);
@@ -576,6 +577,12 @@ static enum a733_mmc_platform_result command(struct a733_mmc_platform *p,unsigne
         if(p->fault||p->core.state==SUNXI_MMC_FAULT)return finish(p,fail(p));
         return finish(p,ok?A733_MMC_PENDING:A733_MMC_INVALID);
     }
+    if(operation==4) {
+        int ok=sunxi_mmc_sd_status(&p->core,out,deadline);
+        p->core_call=0;
+        if(p->fault||p->core.state==SUNXI_MMC_FAULT)return finish(p,fail(p));
+        return finish(p,ok?A733_MMC_PENDING:A733_MMC_INVALID);
+    }
     p->core_call=0;
     /* Successful take is the final metadata operation: no fallible callback
      * observes time or hardware after releasing the borrowed buffer. */
@@ -591,6 +598,11 @@ enum a733_mmc_platform_result a733_mmc_platform_take(struct a733_mmc_platform *p
 enum a733_mmc_platform_result a733_mmc_platform_card(struct a733_mmc_platform *p,
     struct sunxi_mmc_card *out,uint64_t deadline)
 {return command(p,2,0,0,out,sizeof(*out),deadline,NULL);}
+
+/* ACMD13: the 64-byte SD Status of the identified card; complete with poll and take as for a read. */
+enum a733_mmc_platform_result a733_mmc_platform_sd_status(struct a733_mmc_platform *p,
+    uint8_t *buffer,uint64_t deadline)
+{return command(p,4,0,0,buffer,SUNXI_MMC_SD_STATUS_BYTES,deadline,NULL);}
 
 enum a733_mmc_platform_result a733_mmc_platform_poll(struct a733_mmc_platform *p)
 {return poll_owned(p,NULL);}

@@ -87,22 +87,57 @@ reservation beyond the pool is refused with the resource's code in the start rec
 declared slots at that moment, the tables are built and the runtime is prepared; nothing is allocated afterwards. A
 queue opened deeper than the declared in-flight depth is refused at open.
 
-**The tables.** The runtime's catalogue (16 graphs), its slots and the service's clients (8), the queue's ring (64
-entries) and edge table (8 handles of 32 tensors) are arrays fixed when the image is built, and a declaration beyond
-them is refused as "image tables". That is the one refusal that is neither the hardware nor memory. Taking the tables
-from the reservation needs the runtime, the service and the EL0 queue to use storage that the reservation provides;
-the plans of the graphs (280 bytes each) must also leave the stacks of the start-up functions first. It is on the
-backlog (`docs/status/npu.md`).
+**The tables.** What bounds each table now:
+
+| Table | Bound | Source |
+| --- | --- | --- |
+| Graphs: catalogue, plans, digests | memory | placed at the start of the reservation (`npu_runtime_tables_bytes`, 336 bytes a graph); a sizing pass keeps one layout on the stack |
+| Slots, clients, members, commands | 31 | a client's command mask has 32 bits and command 0 is the bootstrap (`NPU_SERVICE_CLIENTS`); the arrays are static at that bound, and the regions of a declared slot count come from the reservation |
+| Registered buffers | 125 | the bootstrap and four regions for each of the 31 slots (`A733_NPU_MEMORY_MAX_BUFFERS` is 128); the memory layer builds its tables in place |
+| Queue handles | 31 | one for each slot |
+| Tensors of a handle, edges | 8, 31 * 8 | the loader admits at most 8 inputs and 8 outputs a graph (`NBG_ASSEMBLY_MAX_TENSORS`) |
+| Ring depth | the declared in-flight depth | the image is built with `SS_NPU_QUEUE_MAX_DEPTH` set to the manifest's `in_flight` (`-DSUNSTONE_OS_NPU_QUEUE_DEPTH`); a session that declares more is refused as "image tables" |
+
+The ring is application memory that the producer writes, so it stays in the queue object of the image; the depth is the one
+count that is fixed at build, from the declaration, and not at admission. The peak stack of the start-up and loading
+tasks, from `tools/npu-stack-depth.py` (static, from the compiler's stack usage and the call graph), was:
+
+| Entry | Before | After |
+| --- | --- | --- |
+| `os_npu_start` | 14624 bytes | 4144 |
+| `npu_runtime_prepare` | 10464 | 3856 |
+| `npu_runtime_reservation` | 14096 | 3696 |
+| a LOAD step (`load_work`) | 7776 | 2320 |
+| the service worker with a LOAD step (`runtime_worker`) | 8064 | 2608 |
 
 ## Graphs from the graph
 
-The runtime takes every fact about a graph from the graph itself: tensor counts, shapes, formats and
-quantization through `nbg_model_tensor`, operation counts and sizes through the loader's layout. The SDK model
-description (`struct ss_npu_model`) is filled from them when the graph is registered. A graph that an
-application loads from a file, for example into a large region by the microSD loader, is registered with its
-bytes and (optionally) the digest the application supplies; it needs no entry in `tools/npu-session-models.json`
-and no rebuild of the operating system. The build-time tool `apps/os/npu-catalogue.py` stays as a convenience
-that links graphs into the image and fills the same description; it is not part of admission.
+The runtime takes every fact about a graph from the graph itself: tensor counts, shapes, formats and quantization through
+`nbg_model_tensor`, operation counts and sizes through the loader's layout. A graph that an application loads from a file
+needs no entry in `tools/npu-session-models.json` and no rebuild of the operating system:
+
+1. The manifest declares the graphs and the bounds of those it loads at run time (`graphs`, `graph_bytes`, `tensor_bytes`);
+   the session record (version 3) carries them. The reservation made at start covers `graphs` minus the linked ones more
+   entries, each model of at most `graph_bytes` with no tensor beyond `tensor_bytes`, so a registered graph cannot fail on
+   memory.
+2. The application calls `ss_npu_register_graph(bytes, size, &index)`; the OS wrapper `os_npu_register` calls
+   `npu_runtime_register`, which admits the bytes like a linked graph (structure, commands, addresses), checks that the
+   regions fit what was reserved, takes the SHA-256 and publishes the entry with release order. `ss_npu_run(index, ...)`
+   then runs it. The OS compares the tensor sizes of a run-time graph with the request, because the application-side
+   description table holds only the linked ones.
+3. The caller keeps the bytes alive and unchanged. LOAD copies them into the staging area and refuses a copy whose digest
+   differs from the one taken at registration, which also catches a change between registration and load.
+
+The build-time tool `apps/os/npu-catalogue.py` stays as a convenience that links graphs into the image and fills the SDK
+description; it is not part of admission. Host evidence: case 29 of `checks/os-npu-service.py` (an unseen graph registered
+after the scheduler started, run, a damaged graph and a third beyond the capacity refused, a changed copy refused at LOAD)
+and the `graph` case of the mailbox check (`apps/npu-sdk/host-check.c`).
+
+**Tensors of a graph.** `NBG_ASSEMBLY_MAX_TENSORS` (8 inputs and 8 outputs) is the loader's own choice. The format does not
+bound them (the header counts are 32-bit fields) and the vendor sources show no limit. It is set by the size of
+`struct nbg_assembly_layout` (24 bytes for each tensor, kept for every graph in the per-graph table) and by the queue
+handle. An image is built for the largest graph its application declares (`-DSUNSTONE_OS_NPU_MAX_TENSORS=N`); a graph beyond it is
+refused at admission.
 
 ## In-flight depth and backpressure
 

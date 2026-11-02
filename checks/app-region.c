@@ -458,10 +458,30 @@ int main(void)
     EXPECT(walk(app_space_ttbr0(&se), abase, 0), FAULT_PERMISSION);
     EXPECT(walk(app_space_ttbr0(&se), abase, 2), FAULT_NONE);
     assert(app_space_build(&se, &arena, base_l1, &l, 0) == APP_REGION_INVALID);
-    /* ASIDs are handed out once each, 1 to 255, and never reused. */
-    struct app_asid_pool pool = {0};
-    for (unsigned i = 1; i <= 255; ++i) assert(app_asid_alloc(&pool) == i);
-    assert(app_asid_alloc(&pool) == 0 && app_asid_alloc(&pool) == 0 && app_asid_alloc(0) == 0);
+    /* ASIDs: the width is the hardware's. 8 bits unless ASIDBits reads 16 and TCR_EL1.AS is set; each number once. */
+    {
+        const uint64_t mmfr_8 = 0x0000000000000000ull, mmfr_16 = 0x0000000000000020ull, as_set = 1ull << 36;
+        struct { uint64_t mmfr, tcr; unsigned limit; } widths[] = {
+            {mmfr_8, 0, 255}, {mmfr_8, as_set, 255},       /* an 8-bit ASID never uses the upper byte */
+            {mmfr_16, 0, 255},                             /* 16 bits in the hardware, AS clear: the upper byte is ignored */
+            {mmfr_16, as_set, 65535},
+            {mmfr_16 | 0x10, as_set, 255},                 /* an ASIDBits value other than 0 or 2 is not 16 bits */
+        };
+        for (unsigned w = 0; w < sizeof widths / sizeof widths[0]; ++w) {
+            struct app_asid_pool pool;
+            app_asid_pool_init(&pool, widths[w].mmfr, widths[w].tcr);
+            assert(pool.limit == widths[w].limit);
+            for (unsigned i = 1; i <= widths[w].limit; ++i) assert(app_asid_alloc(&pool) == i);
+            assert(app_asid_alloc(&pool) == 0 && app_asid_alloc(&pool) == 0);
+        }
+        assert(app_asid_alloc(0) == 0);
+        /* A 16-bit ASID travels in TTBR0 bits 63:48, and its TLB entries stay apart from the 8-bit ones. */
+        struct app_space wide;
+        struct app_table_arena wide_arena = {arena_pages, arena_pa, 16, 0};
+        assert(app_space_build(&wide, &wide_arena, base_l1, &l, 1) == 0);
+        wide.asid = 0x1234;
+        assert((app_space_ttbr0(&wide) >> 48) == 0x1234 && (app_space_ttbr0(&wide) & APP_PTE_ADDR_MASK) == wide.root_physical);
+    }
     large_cases();
     puts("app-region host check passed");
     return 0;

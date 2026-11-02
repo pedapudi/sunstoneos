@@ -1178,9 +1178,10 @@ void kernel_main(void)
     struct npu_runtime_config config = {.count = FIXTURES, .slots = SLOTS, .cpu = PARENT_BASE,
         .physical = PARENT_BASE, .register_cpu = REGISTER_CPU, .register_physical = 0x03600000,
         .fatal = fatal};
+    static struct npu_runtime_model model_table[FIXTURES];
     for (unsigned m = 0; m < FIXTURES; ++m)
-        config.models[m] = (struct npu_runtime_model){m == CONV8 ? writable_conv8 : fixtures[m].model,
-                                                       fixtures[m].bytes};
+        model_table[m] = (struct npu_runtime_model){m == CONV8 ? writable_conv8 : fixtures[m].model, fixtures[m].bytes};
+    config.models = model_table;
     size_t bytes = npu_runtime_requirements(config.models, FIXTURES, SLOTS);
     configASSERT(bytes && bytes <= PARENT_LIMIT && !(bytes & (NPU_RUNTIME_GROUP_BYTES - 1)));
     configASSERT(!npu_runtime_requirements(config.models, FIXTURES, 0) &&

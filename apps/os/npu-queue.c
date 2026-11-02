@@ -9,6 +9,8 @@
 /* Applications may provide one constant edge table in their image. */
 __attribute__((weak)) const struct ss_npu_queue_edges ss_npu_queue_edges={0};
 #define MAX_EDGES (SS_NPU_QUEUE_MAX_HANDLES*SS_NPU_QUEUE_MAX_TENSORS)
+_Static_assert(SS_NPU_QUEUE_MAX_HANDLES>=NPU_RUNTIME_SLOTS&&SS_NPU_QUEUE_MAX_TENSORS>=NBG_ASSEMBLY_MAX_TENSORS,
+    "the queue holds a handle for every slot and every tensor of a graph");
 static struct ss_npu_queue_edge edges[MAX_EDGES];
 static size_t edge_count;
 static unsigned edges_prepared;

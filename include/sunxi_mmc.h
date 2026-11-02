@@ -217,6 +217,12 @@ int sunxi_mmc_read(struct sunxi_mmc *, uint64_t first_sector, uint32_t blocks,
  * separate concrete storage service may bind an authenticated writer. */
 int sunxi_mmc_write(struct sunxi_mmc *,const struct sunxi_mmc_write_request *,
                     const struct sunxi_mmc_write_authority *);
+/* ACMD13: the 64-byte SD Status into buffer (SD cards only, READY state). Complete with poll and
+ * take like a read; result.received is 64. Present in the read-only build. */
+#define SUNXI_MMC_SD_STATUS_BYTES 64u
+int sunxi_mmc_sd_status(struct sunxi_mmc *, uint8_t *buffer, uint64_t absolute_deadline_us);
+/* The allocation unit in sectors from an SD Status block (0: undefined); uhs_mode selects UHS_AU_SIZE. */
+uint32_t sunxi_mmc_au_sectors(const uint8_t status[SUNXI_MMC_SD_STATUS_BYTES], int uhs_mode);
 void sunxi_mmc_poll(struct sunxi_mmc *);
 /* DONE returns to READY and returns the complete buffer to its owner. FAULT
  * copies diagnostics but keeps its buffer and all platform leases retained.

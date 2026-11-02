@@ -3,7 +3,8 @@
 #include "a733_npu_controller.h"
 #include "aarch64_device_memory.h"
 
-#define A733_NPU_MEMORY_MAX_BUFFERS 64u
+/* The bootstrap stream and four regions for each of the 31 slots the command mask allows (npu_declaration.h). */
+#define A733_NPU_MEMORY_MAX_BUFFERS 128u
 
 /* READ buffers may change between jobs and are cleaned at every publication.
  * CONSTANT buffers are device-read data, such as weights and descriptors,
@@ -47,6 +48,7 @@ struct a733_npu_memory {
     unsigned booted;
     uint8_t groups[A733_NPU_MEMORY_MAX_BUFFERS]; /* Parallel to buffers; 0 is shared. */
     size_t active_index;
+    struct a733_npu_region scratch_regions[A733_NPU_MEMORY_MAX_BUFFERS]; /* init's table for the page-table builder */
 };
 
 /* Privileged, serialized memory policy; no allocation or MMIO. Zero once.
@@ -56,7 +58,7 @@ struct a733_npu_memory {
  * cache must complete to the point of coherency with a supported stride and
  * barriers. All callbacks must be bounded; native callbacks remain separate.
  *
- * init copies and sorts at most 64 buffers, checks CPU mappings, and builds
+ * init copies and sorts at most 128 buffers, checks CPU mappings, and builds
  * private 4 KiB NPU page tables. Exactly one bootstrap allocation is required.
  * CPU/PA/device bases and lengths of buffers must be 4 KiB aligned. All CPU,
  * physical, and device ranges are disjoint; SRAM VA 0x400000..0x47ffff is

@@ -10,7 +10,7 @@
  * stream and session group; the controller runs their jobs one at a time in
  * round-robin order. Models must match the image's admitted table
  * (npu_admitted_models.h); a caller hash cannot add one. */
-#define NPU_SESSION_MODELS NPU_SERVICE_CLIENTS
+#define NPU_SESSION_MODELS 8u /* the finite session driver's own table, independent of the service's clients */
 #define NPU_SESSION_DEVICE_BASE 0x10000000u
 #define NPU_SESSION_BOOTSTRAP_BYTES 524288u
 

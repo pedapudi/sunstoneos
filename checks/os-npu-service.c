@@ -96,6 +96,8 @@ static unsigned char sunstone_npu_canary[1];
 static int sunstone_npu_hook_slot = -1;
 static uint32_t sunstone_npu_hook_address;
 #endif
+static unsigned registered_case; /* case 29: graphs handed over after the scheduler started */
+static unsigned registered_ok, registered_refused, registered_job, registered_changed_result;
 static unsigned long_run; /* case 26: many jobs through a session whose job field is 1 */
 static unsigned long_jobs_done;
 static unsigned fault_case; /* case 25: descriptors aimed at unmapped addresses; each such job must fail alone and the NPU recover */
@@ -338,6 +340,37 @@ static void client(void *unused)
         finished = 1;
         vTaskSuspend(NULL);
     }
+    if (registered_case) {
+        /* Graphs the build has never seen. The reservation was made for 2 more graphs of at most 16 KiB with tensors of at
+         * most 64 KiB. */
+        static unsigned char graph[16384];
+        FILE *f = fopen(getenv("REG_MODEL"), "rb");
+        assert(f);
+        const size_t n = fread(graph, 1, sizeof graph, f);
+        assert(n > 0 && n < sizeof graph);
+        fclose(f);
+        unsigned entry = 99;
+        static unsigned char damaged[16384];
+        memcpy(damaged, graph, n); damaged[n / 2] ^= 0xff;
+        assert(os_npu_register(damaged, n, &entry) == 0);                       /* not admissible */
+        assert(os_npu_register(graph, n, &entry) == 1 && entry == os_npu_model_count);
+        const unsigned first = entry;
+        assert(os_npu_register(graph, n, &entry) == 1 && entry == first + 1);
+        assert(os_npu_register(graph, n, &entry) == 0);                         /* beyond the declared capacity */
+        registered_ok = 2; registered_refused = 2;
+        assert(os_npu_load(first) == 1);
+        struct npu_runtime_tensor t;
+        f = fopen(getenv("REG_INPUT"), "rb");
+        assert(f && os_npu_tensor(NBG_INPUT, 0, &t) == 1 && fread(t.data, 1, t.bytes, f) == t.bytes);
+        fclose(f);
+        registered_job = (unsigned)os_npu_submit(1000000);
+        /* The application changes the bytes it handed over: LOAD refuses the copy, which no longer matches. */
+        graph[n / 3] ^= 1;
+        registered_changed_result = (unsigned)os_npu_load(first + 1);
+        result_load = result_submit = 1;
+        finished = 1;
+        vTaskSuspend(NULL);
+    }
     if (long_run) {
         /* A session never fails because it has run a number of jobs: the session record says 1, and the job count is
          * far beyond the former limit of eight. */
@@ -416,6 +449,14 @@ static void verify(void *unused)
         fflush(stdout);
         return;
     }
+    if (registered_case) {
+        printf("registered: %u graphs registered, %u refusals, job %u, load after the bytes changed %d, failures %u\n", registered_ok,
+               registered_refused, registered_job, (int)registered_changed_result, board_failures);
+        fflush(stdout);
+        assert(registered_ok == 2 && registered_refused == 2 && registered_job == 1 && (int)registered_changed_result == -1 &&
+               board_failures == 1);
+        return;
+    }
     if (long_run) {
         printf("long run: %u of %u jobs, close %u, failures %u, triggers %u\n", long_jobs_done, long_run, result_close, board_failures, model.triggers);
         assert(finished && !board_failures && long_jobs_done == long_run && result_close == 1 && model.triggers == 1 + long_run);
@@ -490,6 +531,13 @@ int main(int argc, char **argv)
         struct npu_runtime_model damaged = {copy, os_npu_models[0].bytes};
         assert(npu_runtime_reservation(&damaged, 1, 1, 8u << 20, &scratch) == NPU_DECLARATION_MODEL);
         free(copy);
+        /* Graphs have no count limit: forty copies of the graph (more than the former sixteen) fit, and their tables
+         * (336 bytes each) are the only difference in the reservation. */
+        struct npu_runtime_model forty[40];
+        for (unsigned i = 0; i < 40; ++i) forty[i] = os_npu_models[0];
+        size_t with_forty = 0;
+        assert(npu_runtime_reservation(forty, 40, 1, 64u << 20, &with_forty) == NPU_DECLARATION_OK && with_forty >= one);
+        assert(npu_runtime_tables_bytes(40) == 40 * 336 + 0 || npu_runtime_tables_bytes(40) >= 40 * 336);
         /* The declaration against the image and its tables. The image links one graph and no queue. */
         struct os_npu_session n = {0};
         assert(os_npu_declaration_admitted(&n) == NPU_DECLARATION_MISSING); /* no default: nothing declared is refused */
@@ -502,7 +550,8 @@ int main(int argc, char **argv)
         bad.slots = 2; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_SLOTS); /* one client task */
         bad = n; bad.in_flight = 0; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_DEPTH);
         bad = n; bad.graphs = 0; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_GRAPHS);
-        bad = n; bad.graphs = 17; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_TABLES);
+        bad = n; bad.graphs = 17; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_OK); /* graphs have no table limit */
+        bad = n; bad.graphs = 100000; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_OK);
         const struct npu_declaration good = {1, 1, 1, 0};
         const struct npu_tables small = {8, 16, 64, 256}, large = {31, 100000, 1000000, 100000};
         const struct npu_image_needs none = {1, 1, 0}, two_graphs = {1, 2, 0}, queued = {3, 1, 2};
@@ -525,7 +574,7 @@ int main(int argc, char **argv)
         printf("declarations: one slot %zu bytes, four slots %zu bytes; every refusal names its resource\n", one, many);
         return 0;
     }
-    assert(mode == 20 || mode == 21 || mode == 26 || mode == 27 || ((mode == 22 || mode == 25) && argc == 3));
+    assert(mode == 20 || mode == 21 || mode == 26 || mode == 27 || mode == 28 || mode == 29 || ((mode == 22 || mode == 25) && argc == 3));
     if (argc == 3) input_directory = argv[2];
     if (mode == 21) bootstrap_us = 30000;
     if (mode == 26) { long_run = (unsigned)strtoul(getenv("LONG_JOBS") ? getenv("LONG_JOBS") : "120000", NULL, 0); job_us = 3; }
@@ -544,8 +593,10 @@ int main(int argc, char **argv)
     model.regs[0x30 / 4] = 0x1000003b; model.regs[0x28 / 4] = 0x20240101; model.regs[1] = IDLE;
     model.masked = 1;
     session_record.npu.jobs = long_run ? 1 : 64;
-    const unsigned slots = 1;
-    const size_t need = npu_runtime_requirements(os_npu_models, os_npu_model_count, slots);
+    const struct npu_runtime_bounds bounds = {mode == 29 ? 2u : 0u, 16384, 65536};
+    if (mode == 29) registered_case = 1;
+    const unsigned slots = mode == 28 ? NPU_RUNTIME_SLOTS : 1; /* case 28: the 31 slots of the command mask */
+    const size_t need = npu_runtime_requirements_with(os_npu_models, os_npu_model_count, slots, &bounds);
     assert(need && !(need & (NPU_RUNTIME_GROUP_BYTES - 1)));
     /* The runtime registers physical addresses below 2^40, so the pool is placed in the low
      * 2 GiB of the host address space and aligned to the allocation group. */
@@ -554,11 +605,30 @@ int main(int argc, char **argv)
     assert(raw != MAP_FAILED);
     void *pool = (void *)(((uintptr_t)raw + NPU_RUNTIME_GROUP_BYTES - 1) & ~(uintptr_t)(NPU_RUNTIME_GROUP_BYTES - 1));
     static _Alignas(4096) uint8_t register_page[4096];
-    struct npu_runtime_config config = {.count = os_npu_model_count, .slots = slots, .cpu = (uintptr_t)pool,
+    struct npu_runtime_config config = {.count = os_npu_model_count, .slots = slots, .bounds = bounds, .cpu = (uintptr_t)pool,
         .physical = (uintptr_t)pool, .bytes = need, .register_cpu = (uintptr_t)register_page,
         .register_physical = 0x03600000, .fatal = fatal};
-    memcpy(config.models, os_npu_models, os_npu_model_count * sizeof(os_npu_models[0]));
+    config.models = os_npu_models;
     assert(npu_runtime_prepare(&npu.runtime, &config));
+    if (mode == 28) {
+        /* Thirty-one slots: every slot's regions are registered, distinct, ascending and inside the NPU's 32-bit address
+         * space; the per-graph tables lie at the start of the reservation; the page tables hold 1 + 4 * 31 buffers. */
+        assert(NPU_RUNTIME_SLOTS == 31 && npu.runtime.slots == 31 && npu.runtime.native.memory.count == 1 + 4 * 31);
+        assert((uintptr_t)npu.runtime.catalogue == (uintptr_t)pool && (uintptr_t)npu.runtime.plans > (uintptr_t)pool &&
+               (uintptr_t)npu.runtime.model_digest > (uintptr_t)npu.runtime.plans);
+        uint64_t last = 0;
+        for (unsigned i = 0; i < 31; ++i) {
+            const struct npu_runtime_slot *sl = &npu.runtime.slot[i];
+            assert(sl->command.device > last && sl->constant.device > sl->command.device && sl->read.device > sl->constant.device);
+            assert(sl->write.device > sl->read.device && (uint64_t)sl->write.device + sl->write.bytes <= UINT64_C(1) << 32);
+            last = sl->command.device;
+            assert(walk_tables((uint32_t)sl->constant.device, 0) == 1 && walk_tables((uint32_t)sl->write.device, 1) == 1);
+        }
+        assert(npu_runtime_reservation(os_npu_models, os_npu_model_count, 32, UINT64_MAX >> 1, &(size_t){0}) == NPU_DECLARATION_SLOTS);
+        printf("31 slots: %zu bytes reserved, %u buffers registered, the tables at the start\n", need,
+               (unsigned)npu.runtime.native.memory.count);
+        return 0;
+    }
     check_constant_region_read_only();
     npu.end = long_run ? UINT64_C(1000000000000) : 60000000;
     npu.bootstrap = xTaskCreateStatic(bootstrap, "os-npu-boot", STACK, NULL, 4, npu.stacks[0], &npu.tasks[0]);

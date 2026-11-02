@@ -212,7 +212,7 @@ def main():
          [('nbg_assembly.c', 'word(state.data + 4 * (i + 1)) != 0x701) return 0;', '0) return 0;')])
     case('a shader stream writes a uniform word twice', SH,
          [(STATES, g[SH].state_word_offset(1, 0x0804d804), u32(0x0804d800))],
-         [('nbg_assembly.c', 'if (uniform_seen[reg - UNIFORM_FIRST + k]) return 0;', 'if (0) return 0;')])
+         [('nbg_assembly.c', 'if (uniform_seen[bit / 8] & (1u << (bit % 8))) return 0;', 'if (0) return 0;')])
     case('a shader program length differs from its instruction count', SH,
          [(STATES, g[SH].state_word_offset(1, 0x08010424) + 4, u32(5))],
          [('nbg_assembly.c', '(uint64_t)instructions * 16 != program.bytes) return 0;', '0) return 0;'),

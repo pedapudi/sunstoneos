@@ -17,6 +17,9 @@ struct ss_npu_backend {
 int ss_npu_service_bind(const struct ss_npu_backend *);
 /* Optional, before bind. run returns 2 when the job failed with an NPU MMU exception and the NPU was recovered; the
  * callback then fills the description that ss_npu_last_fault gives the application. */
+/* Optional, before bind: the callback adds a graph that the application hands over at run time; 1 with its model index, 0 when
+ * the OS refuses it, negative for a retained failure. */
+int ss_npu_service_bind_register(int (*)(const void *, size_t, unsigned *));
 int ss_npu_service_bind_fault(void (*)(struct ss_npu_fault_info *));
 /* Optional owner wakeup, registered once before bind and application startup.
  * Called in the publishing task after a request or failure becomes visible.

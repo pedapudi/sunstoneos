@@ -11,7 +11,7 @@ struct large_slot {
 /* Take every region of the application's records from the ledger, all or nothing. out has out_capacity
  * (at least count) entries and is indexed by the record's index. Returns an app_region_status; on failure
  * nothing is held. */
-int large_admit(struct app_region_ledger *, uint8_t owner, const struct ss_large_region *records, unsigned count,
+int large_admit(struct app_region_ledger *, uint16_t owner, const struct ss_large_region *records, unsigned count,
                 struct large_slot *out, unsigned out_capacity);
 
 /* The block device the loader reads, supplied by the board; the default is none (the regions then fail

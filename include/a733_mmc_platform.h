@@ -127,6 +127,8 @@ enum a733_mmc_platform_result a733_mmc_platform_take(struct a733_mmc_platform *,
     struct sunxi_mmc_result *,uint64_t deadline);
 enum a733_mmc_platform_result a733_mmc_platform_card(struct a733_mmc_platform *,
     struct sunxi_mmc_card *,uint64_t deadline);
+/* ACMD13: the 64-byte SD Status into a buffer outside the platform; PENDING, then poll and take as for a read. */
+enum a733_mmc_platform_result a733_mmc_platform_sd_status(struct a733_mmc_platform *,uint8_t *,uint64_t deadline);
 /* Explicit read-only cancellation/failure retention. The designated current
  * owner may call after expiry; no live-I/O admission or MMIO occurs. Rejects
  * update-bound providers. BUSY means serialization/metadata bookkeeping must

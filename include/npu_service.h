@@ -6,7 +6,9 @@
 #include "a733_npu_controller.h"
 #include <stdatomic.h>
 
-#define NPU_SERVICE_CLIENTS 8u
+/* One client per slot. A client's command mask has 32 bits and command 0 is the bootstrap, so a service holds at most 31
+ * clients: the one fixed count here that comes from the interface and not from memory (docs/designs/npu-resources.md). */
+#define NPU_SERVICE_CLIENTS 31u
 #define NPU_SERVICE_COMMANDS 32u
 #define NPU_SERVICE_STACK_WORDS 4096u
 
