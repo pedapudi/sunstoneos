@@ -57,7 +57,7 @@ DMA0 needs physical channel, controller and data-access authority and transfer t
 Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-memory-dma-20261101.md).
 
 <!-- evidence-table:begin -->
-23 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+27 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -84,4 +84,8 @@ Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `too
 | `1793604795633560445-80bc01fb` | 2026-11-02 | 3-1 | `e271e3b62bb8` | result-mismatch | passed | run_total 12 s, scan_ticks 1.33194e+07, signature_ticks 2.33961e+07, address_failed 0, mismatch_count 0 |
 | `1793632829779717086-f7d0d1cf` | 2026-11-02 | 3-1 | `44252e038bb7` | returned | passed | run_total 51.578 s, load_time 30.659 s, load_rate 17.51 MB/s, read_window_40mib 12.79 GB/s, read_region_1gib 12.66 GB/s, round_trip_same_space 4.4 us, round_trip_ttbr0_change 4.36 us |
 | `1793633314510847134-f446c660` | 2026-11-02 | 3-1 | `20c1435da4b2` | returned | passed | run_total 91.581 s, load_time 24.386 s, load_rate 22.02 MB/s, load_read_phase 23.253 s, load_copy_phase 0.154 s, load_digest_phase 0.979 s, read_window_40mib 12.79 GB/s, read_region_1gib 12.66 GB/s, round_trip_same_space 4.42 us, round_trip_ttbr0_change 4.37 us |
+| `1793637177478128324-7b885910` | 2026-11-02 | 3-1 | `676526231d56` | returned | passed | run_total 44.26 s, region_base 0 x80000000, read_window_40mib 12.78 GB/s, read_region_6gib 12.66 GB/s, write_window_40mib 12.51 GB/s, write_region_6gib 12.16 GB/s, copy_window_40mib 5.84 GB/s, copy_region_3gib_to_3gib 5.84 GB/s, integrity_words 8.05306e+08, integrity_mismatches 0, integrity_write_time 2.414 s, integrity_read_time 2.682 s |
+| `1793638861895715015-a7176fec` | 2026-11-02 | 3-1 | `1e45c08facb9` | result-mismatch | passed | run_total 63.521 s, fault_status 0 x06, fault_address 0 x7fffffff |
+| `1793638933466934204-4dc4152d` | 2026-11-02 | 3-1 | `5f7f9f84fd74` | result-mismatch | passed | run_total 50.985 s, fault_status 0 x0d, fault_address 0 x200000000 |
+| `1793638990638144080-9a9aad2d` | 2026-11-02 | 3-1 | `42a609c0698d` | result-mismatch | passed | run_total 18.73 s, fault_status 0 x0d, fault_address 0 x80000000 |
 <!-- evidence-table:end -->

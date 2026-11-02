@@ -234,7 +234,8 @@ static void large_cases(void)
     REFUSE(r[0].bytes = 12 * GIB);                           /* beyond upper memory */
     REFUSE(r[0].source_bytes = GIB + 1);
     REFUSE(r[0].source_bytes = 0);
-    REFUSE(memset(r[0].sha256, 0, 32));
+    /* A zero digest is valid: the region loads without a check. */
+    { struct ss_large_region nodigest = ok[0]; memset(nodigest.sha256, 0, 32); assert(ss_large_records_valid(&nodigest, 1)); }
     REFUSE(strcpy(r[0].path, "relative.bin"));
     REFUSE(strcpy(r[0].path, "/bad name.bin"));
     REFUSE(strcpy(r[0].path, ""));
@@ -243,7 +244,7 @@ static void large_cases(void)
     REFUSE(r[0].first_sector = 7);                            /* a file with a sector */
     REFUSE(strcpy(r[1].path, "/x"));                          /* an extent with a path */
     REFUSE(r[1].first_sector = 0);                            /* an extent at the partition table */
-    assert(refusals == 17 && app_region_free_bytes(&l) == 11 * GIB);
+    assert(refusals == 16 && app_region_free_bytes(&l) == 11 * GIB);
 }
 
 int main(void)

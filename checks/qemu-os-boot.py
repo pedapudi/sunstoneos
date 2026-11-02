@@ -356,13 +356,13 @@ for _word in struct.iter_unpack('<Q', LARGE_FILE):
 RAMDISK_ADDRESS = 0x48000000
 
 
-def large_manifest_path(path, digest, file):
+def large_manifest_path(path, digest, file, with_digest=True):
     """manifest.json of the large-region test application: one 1 GiB region loaded from a 4 MiB file."""
     manifest = {"name": "large-test", "devices": {"required": [], "optional": []},
                 "cpu": {"cluster": "a55", "workers": 1, "priority": 2, "stack_bytes": 8192},
                 "regions": [{"name": "input", "kind": "input", "access": ["read"], "bytes": 4096}],
                 "large_regions": [{"name": "weights", "bytes": 1 << 30, "source_bytes": len(file), "access": ["read"],
-                                   "file": "/sunstone-test/sunstone-region-test.bin", "sha256": digest}],
+                                   "file": "/sunstone-test/sunstone-region-test.bin", **({"sha256": digest} if with_digest else {})}],
                 "deadlines": {"run_us": 2000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
                 "output_limit": 32}
     Path(path).write_text(json.dumps(manifest, indent=2) + '\n')
@@ -608,6 +608,7 @@ def main():
         el0_elf = pool.submit(build_el0_abort)
         facts_elf = pool.submit(build_facts)
         large_elf = pool.submit(build_large, 'build-large', large_manifest_path(out / 'large-manifest.json', LARGE_DIGEST, LARGE_FILE))
+        large_nodigest_elf = pool.submit(build_large, 'build-large-nodigest', large_manifest_path(out / 'large-nodigest-manifest.json', LARGE_DIGEST, LARGE_FILE, False))
         large_big_elf = pool.submit(build_large, 'build-large-too-big', ROOT / 'checks/qemu-os/large-too-big-manifest.json')
         manifest_6g = json.loads((ROOT / 'apps/large-6g/manifest.json').read_text())
         manifest_6g['large_regions'][0]['bytes'] = 256 << 20
@@ -616,7 +617,7 @@ def main():
         storage_write_elf = pool.submit(build_storage_write)
         (out / 'build-reverted-owner').mkdir()
         reverted_owner_elf = pool.submit(build_storage_write, reverted_owner(out / 'build-reverted-owner'))
-        large_elf, large_big_elf, large_6g_elf = large_elf.result(), large_big_elf.result(), large_6g_elf.result()
+        large_elf, large_big_elf, large_6g_elf, large_nodigest_elf = large_elf.result(), large_big_elf.result(), large_6g_elf.result(), large_nodigest_elf.result()
         storage_write_elf = storage_write_elf.result()
         reverted_owner_elf = reverted_owner_elf.result()
         os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
@@ -820,6 +821,13 @@ def main():
     c.clean()
     tag, error = struct.unpack('<QQ', bytes.fromhex(c.finished['result']))
     c.require(tag == 0x4c415247464c and error == 0xfffffff5, 'digest mismatch: result %#x %#x' % (tag, error))
+    # A region declared without a digest is not hashed: the corrupted file loads, the loader reports READY, and the
+    # application (which compares the fold itself) sees the corruption.
+    c = run_case('large-region-no-digest', large_nodigest_elf, scenario(usb_ready_ms=usb_delay_ms), mode0, '4G', [(RAMDISK_ADDRESS, corrupt)])
+    c.clean()
+    c.require(c.finished is not None and c.finished['status'] == '1', 'the application did not finish')
+    tag, fold = struct.unpack('<QQ', bytes.fromhex(c.finished['result']))
+    c.require(tag == 0x4c4152474d4d, 'no-digest load: result tag %#x, not a loaded region with a differing fold' % tag)
     # A region with no source is ready at once, above 4 GiB it would not fit the emulator, so the emulator's region is 256 MiB:
     # the application times its passes, writes and reads back the address pattern, and reports no mismatch.
     c = run_case('large-region-unfilled', large_6g_elf, scenario(usb_ready_ms=usb_delay_ms), None, '4G')

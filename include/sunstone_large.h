@@ -20,7 +20,7 @@ struct ss_large_region {
     uint64_t bytes;              /* capacity: a multiple of 2 MiB */
     uint64_t source_bytes;       /* exact length of the source; at most bytes */
     uint64_t first_sector;       /* raw extent only */
-    uint8_t sha256[32];          /* digest of the source bytes; never all zero */
+    uint8_t sha256[32];          /* digest of the source bytes; all zero: the loader does not hash and READY follows the last byte */
     char path[SS_LARGE_PATH_BYTES];   /* file path from the root, NUL-padded; empty for an extent */
 };
 _Static_assert(sizeof(struct ss_large_region) == 112 && offsetof(struct ss_large_region, bytes) == 8 &&

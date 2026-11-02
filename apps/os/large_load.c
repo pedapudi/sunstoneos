@@ -24,6 +24,7 @@ static uint64_t counter_hz(void) { uint64_t v; __asm__ volatile("mrs %0, cntfrq_
 static uint64_t ticks_us(uint64_t ticks) { uint64_t hz = counter_hz(); return hz ? ticks / hz * 1000000u + ticks % hz * 1000000u / hz : 0; }
 static uint64_t now_us(void) { return ticks_us(counter_ticks()); }
 static uint64_t copy_ticks, digest_ticks;
+static int hashing;                 /* the current region declares a digest */
 
 static int sink_consume(void *unused, const uint8_t *data, uint64_t bytes, uint64_t offset)
 {
@@ -36,7 +37,7 @@ static int sink_consume(void *unused, const uint8_t *data, uint64_t bytes, uint6
     for (uint64_t i = 0; i < bytes / 8; ++i) dst[i] = src[i];
     for (uint64_t i = bytes & ~7ull; i < bytes; ++i) ((uint8_t *)dst)[i] = data[i];
     uint64_t t1 = counter_ticks();
-    storage_digest_add(&digest, data, bytes);
+    if (hashing) storage_digest_add(&digest, data, bytes);
     uint64_t t2 = counter_ticks();
     copy_ticks += t1 - t0; digest_ticks += t2 - t1;
     loaded_offset += bytes;
@@ -99,6 +100,8 @@ static void load(unsigned index, const struct os_large_device *d, int mounted)
     __atomic_store_n(&s->state, SS_LARGE_LOADING, __ATOMIC_RELEASE);
     current = index; loaded_offset = 0;
     storage_digest_init(&digest);
+    hashing = 0;
+    for (unsigned k = 0; k < 32; ++k) if (r->sha256[k]) hashing = 1;
     struct fat32_sink sink = {NULL, sink_consume};
     int status;
     if (r->flags & SS_LARGE_EXTENT) status = stream_extent(d, r->first_sector, r->source_bytes, &sink);
@@ -111,7 +114,7 @@ static void load(unsigned index, const struct os_large_device *d, int mounted)
             status = fat32_stream(&volume, &file, &d->async, d->buffers, d->buffers + OS_LARGE_BUFFER_BYTES, 256, &sink);
     }
     uint8_t sum[32];
-    if (status == FAT32_OK) {
+    if (status == FAT32_OK && hashing) {
         storage_digest_end(&digest, sum);
         if (memcmp(sum, r->sha256, 32)) status = FAT32_INVALID - 1;     /* digest mismatch */
     }

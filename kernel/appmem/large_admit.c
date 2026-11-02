@@ -34,7 +34,7 @@ int ss_large_records_valid(const struct ss_large_region *r, unsigned count)
             if ((r[i].flags & SS_LARGE_EXTENT) || r[i].source_bytes || r[i].first_sector || !zero || n) return 0;
             continue;
         }
-        if (!r[i].source_bytes || r[i].source_bytes > r[i].bytes || zero) return 0;
+        if (!r[i].source_bytes || r[i].source_bytes > r[i].bytes) return 0;   /* a zero digest: no check */
         if (r[i].flags & SS_LARGE_EXTENT) {
             if (n || !r[i].first_sector) return 0;                 /* sector 0 holds the partition table */
         } else if (!n || r[i].path[0] != '/' || r[i].first_sector) return 0;

@@ -204,9 +204,9 @@ def load_large(name, items):
                             'first_sector': 0, 'sha256': '0' * 64, 'path': ''})
             continue
         source = integer(r['source_bytes'], where + ' source_bytes', 1, size)
-        digest = r.get('sha256', '')
-        require(re.fullmatch(r'[0-9a-f]{64}', digest) is not None and digest != '0' * 64,
-                where + ': a 64-digit lowercase SHA-256 other than zero is required')
+        digest = r.get('sha256', '0' * 64)      # absent: the loader does not hash this region
+        require(re.fullmatch(r'[0-9a-f]{64}', digest) is not None,
+                where + ': sha256 is 64 lowercase hex digits, or absent for no check')
         file, sector = r.get('file'), r.get('first_sector')
         require((file is None) != (sector is None), where + ': name a file or a first_sector, not both')
         flags = 1 if 'write' in access else 0
@@ -235,7 +235,7 @@ def unpack_large(raw):
     for base in range(0, len(raw), LARGE.size):
         index, flags, size, source, sector, digest, path = LARGE.unpack_from(raw, base)
         require(index == base // LARGE.size and not flags & ~7 and size and size % BLOCK == 0 and
-                ((flags & 4 and not source and not any(digest)) or (not flags & 4 and 0 < source <= size and any(digest))),
+                ((flags & 4 and not source and not any(digest)) or (not flags & 4 and 0 < source <= size)),
                 'large record at %d is malformed' % base)
         text = path.rstrip(b'\0')
         require(b'\0' not in text and len(path) - len(text) >= 1, 'large record at %d: path has no terminator' % base)

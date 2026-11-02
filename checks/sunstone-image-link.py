@@ -236,7 +236,7 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_ex
     for i, record in enumerate(large_records):
         assert record['index'] == i and not record['flags'] & ~7 and record['bytes'] % 0x200000 == 0 and \
             ((record['flags'] & 4 and not record['source_bytes'] and not any(record['sha256'])) or
-             (not record['flags'] & 4 and 0 < record['source_bytes'] <= record['bytes'] and any(record['sha256']))), 'large region record %d' % i
+             (not record['flags'] & 4 and 0 < record['source_bytes'] <= record['bytes'])), 'large region record %d' % i
     initializers = admitted['sunstone_region_initializers']
     assert len(initializers) % 16 == 0 and len(initializers) <= 8 * 16, 'region initializer extent'
     regions = application_manifest(elf)['regions']

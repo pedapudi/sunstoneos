@@ -32,6 +32,30 @@ Read from the code (`apps/os/large_load.c`, `apps/os/large_sd.c`, `drivers/stora
 - **The copy.** There is no bounce buffer: the DMA fills one of the two 128 KiB buffers and the loader copies it once into the region (8 bytes at a time through the cached kernel mapping), then hashes the same buffer. The copy should be a small part of a piece (estimate, not measured: 128 KiB through a cached mapping).
 - **Per-phase times.** The loader now records the time spent in the copy and in the digest (`ss_large_status` `copy_us`, `digest_us`; the test application returns them). The reading time is the load time minus those two. The first image had no phase records; the 1.46 ms per piece was a difference with the storage agent's mode 3. The run after the changes measured the phases (below).
 
+## A 6 GiB region on a board
+
+Entry `1793637177478128324-7b885910` (3-1, A76, `PERF_BOOT=high`, development DRAM). The application `apps/large-6g` declares one 6 GiB read-write region with no source (`SS_LARGE_UNFILLED`: ready at once, contents as the memory held them). The OS placed it at `0x80000000`; it ends at `0x200000000`, above 4 GiB, and is six 1 GiB blocks. One A76 core, 64-byte vector accesses, 24 MHz counter; nothing is checked or hashed inside a timed pass.
+
+| Pass | 40 MiB window (eight passes) | Whole 6 GiB (two passes) |
+|---|---|---|
+| Read | 12.78 GB/s | 12.66 GB/s |
+| Write | 12.51 GB/s | 12.16 GB/s |
+| Copy (3 GiB onto 3 GiB, source bytes) | 5.84 GB/s | 5.84 GB/s |
+
+The `apps/dram-scaling` figure `read_one_a76` is 12.69 GB/s. A copy moves twice its source bytes through the memory. Integrity, untimed: the 64-bit hash of each word's address written over all 6 GiB and read back, 805,306,368 words, 0 mismatches (2.41 s to write, 2.68 s to read back).
+
+Isolation, one fault per image because an EL0 fault ends the application with a failure record (the application first reads the region's first and last words, so the fault is the probe's own):
+
+- The byte below the region (`0x7fffffff`), owner's space: level 2 translation fault (entry `1793638861895715015-a7176fec`).
+- The byte above it (`0x200000000`), owner's space: level 1 permission fault, the next gigabyte being the kernel's EL1-only block (`1793638933466934204-4dc4152d`).
+- The first byte of the region from a task in no application space, which sees what a second application sees: level 1 permission fault (`1793638990638144080-9a9aad2d`).
+
+The first three attempts at the bandwidth run took a level 1 translation fault at the first access: the application's tables were written with cached stores and the eight-core images walk tables without the data caches. The clean of `feb6ac47` fixed it.
+
+## What bounds the load
+
+The 512 MiB file loads in 24.386 s, 22.0 MB/s. The loader's phases are timed with the 24 MHz counter: copy 0.154 s (3.5 GB/s) and SHA-256 0.979 s (548 MB/s with the extension instructions). They overlap the card's transfer of the next piece, so what remains is the card: 23.25 s is the load minus those two, and the whole load is within 12 percent of the 25 MB/s raw ceiling of the 4-bit 50 MHz high-speed bus mode (`SUNXI_MMC_SD_HIGH_SPEED4`, `apps/os/large_sd.c`). Copying by DMA straight into the region would save at most the 0.15 s; hashing in parallel would save at most about 1 s. Neither is worth doing before the bus mode changes. The gain is a faster mode (SDR104), which is a storage task. A region declared without a `sha256` is not hashed.
+
 ## Open work
 
 1. Run the SD0 binding in an OS image on a board. `apps/os/large_sd.c` (`os_large_device`, `os_large_device_close`, `os_large_sd_pins`) uses the OS's shared providers and the read-only SD core, builds into `sunstone-a733-os-large-region-test` and passes the read-only scan, but only the standalone probe has driven the card on a board. QEMU has no SD controller: its RAM disk covers the loader, and four scenarios cover a device that is present and fails (metadata, request start, mid-stream, absent).
