@@ -453,6 +453,20 @@ The write ranges are FSInfo `[32769, 1]`, both FATs, `[62656, 128]` and the data
 4,096 data pieces of 256 sectors and 14 metadata writes. The boot sector, its backup, the backup FSInfo and every other FAT sector
 are never written. The data start follows the allocation unit, so the plan is regenerated if a different card is used.
 
+### Each write session needs a fresh capture, blob and record
+
+The blob's backup hash covers the card's state before the session, and the writer's enable re-reads those sectors and refuses to bind when the
+hash differs. A session changes the very sectors the backup holds (FSInfo, the FAT starts, the root and directory clusters), so the blob of
+one session does not verify the card the next session finds. The v14 mode 2 run showed it: all 395 sectors were read and the hash differed. For every
+session that writes (modes 0, 1 and 5):
+
+1. read the backup ranges again with the read-only backup probe, so the capture is the card as it is now;
+2. encode a new blob from the same ranges and the new capture's hash (`tools/storage_bounds.py` `encode_input`);
+3. the coordinator checks the blob against the capture and writes a new approval record for the blob and the image, retiring the old one.
+
+The first backup (`backup-395-sectors.bin`, the card before any write) stays as the restore point and is never replaced. The read-back modes (2, 3 and 6) open the
+card for reading (`ss_storage_open_read`), verify no bounds and bind none, so the controller refuses every write command, and they run on a card whose backup has changed.
+
 ## Remaining work
 
 1. SD core: CMD25 with descriptor DMA, CMD12 or CMD23 handling and ACMD13, with a
