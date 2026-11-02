@@ -55,7 +55,8 @@ int main(int argc,char **argv)
     assert(info.input_bytes==inputs&&info.output_bytes==outputs);
     assert(ss_npu_model_info(expected,&info)==-1);
     assert(!ss_npu_model_find(NULL,&selected)&&!ss_npu_model_find("shufflenet-v2-published",NULL));
-    static unsigned char input[SS_NPU_MAX_TENSOR_BYTES],output[SS_NPU_MAX_TENSOR_BYTES];
+    static unsigned char input[1024*1024],output[1024*1024];
+    assert(inputs<=sizeof(input)&&outputs<=sizeof(output));
     assert(ss_npu_run(expected,input,inputs,output,outputs,100)==-2);
     assert(ss_npu_run(selected,input,inputs-1,output,outputs,100)==-2);
     assert(ss_npu_run(selected,input,inputs,output,outputs+1,100)==-2);

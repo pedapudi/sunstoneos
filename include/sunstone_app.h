@@ -330,7 +330,9 @@ int ss_npu_model_find(const char *name,unsigned *index);
  * A failed service permanently retains the request and buffers until session
  * teardown. Request publication wakes the owner through an EL0-safe RTOS
  * notification; completion is acquired through the mailbox atomics. */
-#define SS_NPU_MAX_TENSOR_BYTES (1024u * 1024u)
+/* Upper bound of one request: the NPU address space of 32 bits less the 0x10000000 base where a slot's regions start
+ * (drivers/npu/a733_npu_runtime.c, place). The session's declared tensor_bytes bounds each graph more tightly at admission. */
+#define SS_NPU_MAX_TENSOR_BYTES 0xf0000000u
 int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
                void *output,size_t output_bytes,uint64_t timeout_us);
 /* ss_npu_run returns -3 when this job failed with an NPU MMU exception and the NPU was reset: the output is not

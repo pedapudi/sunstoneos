@@ -78,8 +78,8 @@ def generate(artifacts, output, model=0, model_list=MODELS, all_models=False, mo
             data = blob(f'model_{i}', files['model'], entry['model'])
             rows.append(f'{{model_{i},sizeof(model_{i}),0}}')
         sizes = [sum(t['logical_bytes'] for t in entry[field]) for field in ('inputs', 'outputs')]
-        if not all(0 < n <= 1024 * 1024 for n in sizes):
-            raise ValueError('Model tensors exceed SS_NPU_MAX_TENSOR_BYTES capacity')
+        if not all(0 < n <= 0xf0000000 for n in sizes):
+            raise ValueError('Model tensors exceed the NPU address space (SS_NPU_MAX_TENSOR_BYTES)')
         metadata.append('{' + json.dumps(name, ensure_ascii=True) +
                         f",{len(entry['inputs'])}u,{len(entry['outputs'])}u,{sizes[0]}u,{sizes[1]}u" + '}')
     text += 'const struct npu_runtime_model os_npu_models[]={' + ','.join(rows) + '};\n'
