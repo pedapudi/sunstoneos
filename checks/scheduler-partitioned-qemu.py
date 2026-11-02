@@ -21,7 +21,7 @@ def main():
     parser.add_argument('--qemu', required=True, type=Path)
     parser.add_argument('--cpu', default='cortex-a76')
     parser.add_argument('--nm', default='/usr/bin/llvm-nm-21', type=Path)
-    parser.add_argument('--case', action='append', choices=['kernel', 'soak', 'concurrent', 'runtime'])
+    parser.add_argument('--case', action='append', choices=['kernel', 'soak', 'concurrent', 'runtime', 'heap'])
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, TMPDIR=str(args.output.resolve()))
@@ -30,6 +30,7 @@ def main():
         'soak': ('smp8-soak-model', 8, 'PASS SMP8 soak: 64-lap'),
         'concurrent': ('scheduler-partitioned-qemu', 8, 'PASS partitioned concurrent:'),
         'runtime': ('smp-runtime-model', 2, 'PASS SMP runtime:'),
+        'heap': ('scheduler-partitioned-heap-qemu', 2, 'PASS partitioned heap lifecycle:'),
     }
     reports = []
     for case in args.case or ['kernel', 'concurrent', 'soak']:

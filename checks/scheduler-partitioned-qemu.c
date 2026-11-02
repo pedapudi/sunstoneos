@@ -4,6 +4,83 @@
 #include "platform.h"
 #include <stdint.h>
 
+#ifdef SS_QEMU_DYNAMIC_LIFECYCLE
+_Static_assert(configSS_PARTITIONED_SCHEDULER == 1, "private admission");
+_Static_assert(configSUPPORT_DYNAMIC_ALLOCATION == 1, "real heap lifecycle");
+static StaticTask_t lifecycle_control_state, reusable_state;
+static StackType_t lifecycle_control_stack[4096], reusable_stack[1024];
+static TaskHandle_t lifecycle_controller;
+static unsigned heap_children, self_children, static_children;
+static void lifecycle_child(void *argument)
+{
+    unsigned self_delete = (uintptr_t)argument;
+    configASSERT(portGET_CORE_ID() == 1);
+    xTaskNotifyGive(lifecycle_controller);
+    if (self_delete) vTaskDelete(NULL);
+    else (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    platform_panic("deleted child resumed", 0);
+}
+static void wait_child(void)
+{
+    configASSERT(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000)) == 1);
+}
+static void lifecycle_control(void *unused)
+{
+    (void)unused;
+    void *warm = pvPortMalloc(1);
+    configASSERT(warm);
+    vPortFree(warm);
+    size_t baseline = xPortGetFreeHeapSize();
+    for (unsigned round = 0; round < 8; ++round) {
+        TaskHandle_t task = NULL;
+        configASSERT(xTaskCreateAffinitySet(lifecycle_child, "heap-child", 1024,
+            NULL, 3, 2, &task) == pdPASS && task);
+        wait_child();
+        vTaskDelete(task);
+        configASSERT(xPortGetFreeHeapSize() == baseline);
+        ++heap_children;
+        for (unsigned reuse = 0; reuse < 2; ++reuse) {
+            task = xTaskCreateStaticAffinitySet(lifecycle_child, "static-reuse", 1024,
+                NULL, 3, reusable_stack, &reusable_state, 2);
+            configASSERT(task);
+            wait_child();
+            vTaskDelete(task);
+            ++static_children;
+        }
+        configASSERT(xTaskCreateAffinitySet(lifecycle_child, "self-delete", 1024,
+            (void *)(uintptr_t)1, 3, 2, &task) == pdPASS && task);
+        wait_child();
+        TickType_t start = xTaskGetTickCount();
+        while (xPortGetFreeHeapSize() != baseline && xTaskGetTickCount() - start < pdMS_TO_TICKS(1000))
+            vTaskDelay(1);
+        configASSERT(xPortGetFreeHeapSize() == baseline);
+        ++self_children;
+    }
+    TaskHandle_t failed = (TaskHandle_t)(uintptr_t)1;
+    configASSERT(xTaskCreateAffinitySet(lifecycle_child, "allocation-fail",
+        configTOTAL_HEAP_SIZE, NULL, 3, 2, &failed) == errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY);
+    configASSERT(failed == NULL && xPortGetFreeHeapSize() == baseline);
+    platform_puts("heap lifecycle nonself-deletes="); platform_hex(heap_children);
+    platform_puts(" static-reuses="); platform_hex(static_children);
+    platform_puts(" self-deletes="); platform_hex(self_children);
+    platform_puts(" restored-free-bytes="); platform_hex(baseline);
+    platform_puts("\nPASS partitioned heap lifecycle: dynamic admission, upstream heap4 free, immediate static reuse, self-delete idle cleanup and allocation failure\n");
+    platform_exit(0);
+}
+void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
+{
+    (void)task; platform_panic(name, 0);
+}
+void kernel_main(void)
+{
+    platform_init();
+    lifecycle_controller = xTaskCreateStaticAffinitySet(lifecycle_control, "heap-control", 4096,
+        NULL, 5, lifecycle_control_stack, &lifecycle_control_state, 1);
+    configASSERT(lifecycle_controller);
+    vTaskStartScheduler();
+    platform_panic("scheduler returned", 0);
+}
+#else
 _Static_assert(configSS_PARTITIONED_SCHEDULER == 1, "exercise the private fork");
 _Static_assert(configNUMBER_OF_CORES == 8, "exercise every owner");
 #define ROUNDS 64U
@@ -318,3 +395,5 @@ void kernel_main(void)
     vTaskStartScheduler();
     platform_panic("scheduler returned", 0);
 }
+
+#endif
