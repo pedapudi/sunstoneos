@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 
 
@@ -41,13 +42,18 @@ def main():
             '-cpu', args.cpu, '-smp', str(cores), '-m', '128M', '-nographic', '-monitor', 'none',
             '-semihosting-config', 'enable=on,target=native',
             '-device', f'loader,file={image},cpu-num=0']
+        process = subprocess.Popen(['/usr/bin/time', '-v', *command], stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, start_new_session=True, env=env)
         try:
-            result = subprocess.run(['/usr/bin/time', '-v', *command], capture_output=True,
-                                    text=True, timeout=45, env=env)
-            log = result.stdout + result.stderr
-            passed = result.returncode == 0 and marker in log and 'FAIL' not in log
-        except subprocess.TimeoutExpired as error:
-            log = (error.stdout or b'').decode() + (error.stderr or b'').decode() + '\nQEMU timeout after 45 seconds\n'
+            stdout, stderr = process.communicate(timeout=45)
+            log = stdout + stderr
+            passed = process.returncode == 0 and marker in log and 'FAIL' not in log
+        except subprocess.TimeoutExpired:
+            # The timer has a child QEMU process. Stop this run's whole group
+            # so a timed-out emulator cannot remain active after the check.
+            os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+            log = stdout + stderr + '\nQEMU timeout after 45 seconds\n'
             passed = False
         path = args.output / (args.cpu + '-' + case + '.log')
         path.write_text(log)
