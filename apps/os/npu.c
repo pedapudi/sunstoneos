@@ -9,6 +9,7 @@
 #include "sunstone_crumb.h"
 #include "boot.h"
 #include "sunstone_npu_service.h"
+#include "sunstone_npu_queue.h"
 #include <string.h>
 #define ALLOW UINT64_C(1)
 #define ACCEPTED UINT64_C(2)
@@ -459,6 +460,42 @@ int os_npu_pins(struct a733_pin_handoff *pins){return pins&&os_session_admitted(
 /* Each start refusal records its own source line (group NPU, value 0). */
 static int refused(uint32_t site,const void *here){board_fail_note(site,0,here);return 0;}
 #define REFUSE() refused(SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
+/* What the image uses of the NPU: one slot for the synchronous wrapper, one for each graph under the queue. */
+static struct npu_image_needs image_needs(void)
+{
+    return (struct npu_image_needs){
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+        os_npu_model_count,os_npu_model_count,ss_npu_queue_edges.count
+#else
+        1,os_npu_model_count,0
+#endif
+    };
+}
+/* A session record that declares nothing (declared 0) gets the declaration its image needs and the deepest queue: what
+ * the operating system admitted before declarations existed. An application that declares gets what it declares,
+ * if it fits. */
+static struct npu_declaration declaration_of(uint32_t declared)
+{
+    if(declared)return npu_declaration_unpack(declared);
+    const struct npu_image_needs n=image_needs();
+    return (struct npu_declaration){n.slots,SS_NPU_QUEUE_MAX_DEPTH,n.graphs,n.links};
+}
+unsigned os_npu_in_flight(void)
+{
+    const struct os_session *s=os_session();
+    return s?declaration_of(s->npu.declared).in_flight:0;
+}
+enum npu_declaration_result os_npu_declaration_admitted(uint32_t declared)
+{
+    const struct npu_declaration d=declaration_of(declared);
+    const struct npu_image_needs n=image_needs();
+    const enum npu_declaration_result r=npu_declaration_check(&d,&n);
+#ifndef SUNSTONE_A733_OS_NPU_QUEUE
+    /* The synchronous wrapper has one client task, so exactly one slot. */
+    if(r==NPU_DECLARATION_OK&&d.slots!=1)return NPU_DECLARATION_SLOTS;
+#endif
+    return r;
+}
 int os_npu_start(void)
 {
     extern int os_npu_sdk_bind(const struct npu_runtime *);
@@ -478,15 +515,16 @@ int os_npu_start(void)
     /* The reservation fits any one catalogue entry; the runtime takes the
      * linked entry's exact requirement from its start. */
     if(!os_npu_model_count||os_npu_model_count>NPU_RUNTIME_MODELS)return REFUSE();
-    const unsigned slots=
-#ifdef SUNSTONE_A733_OS_NPU_QUEUE
-        os_npu_model_count;
-#else
-        1;
-#endif
-    const size_t need=npu_runtime_requirements(os_npu_models,os_npu_model_count,slots);
+    /* The application's declaration sets the slots; the reservation covers them all, so that nothing is allocated on
+     * the job path. A declaration that does not fit names the resource in the record's value. */
+    if(os_npu_declaration_admitted(g->declared)!=NPU_DECLARATION_OK)return REFUSE();
+    const struct npu_declaration declared=declaration_of(g->declared);
+    const unsigned slots=declared.slots;
+    size_t need=0;
+    const enum npu_declaration_result fit=npu_runtime_reservation(os_npu_models,os_npu_model_count,slots,OS_NPU_POOL_BYTES,&need);
+    if(fit!=NPU_DECLARATION_OK){board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(NPU),(uint32_t)fit,SUNSTONE_CRUMB_HERE());return 0;}
     if(start!=OS_NPU_POOL_START||end-start!=OS_NPU_POOL_BYTES)return REFUSE();
-    if(!need||need>OS_NPU_POOL_BYTES)return REFUSE();
+    if(!need)return REFUSE();
     if(!a733_mapping_check_stride(aarch64_device_translate,start,start,end-start,0x200000,&wb))return REFUSE();
     if(!device_memory_pool_init_typed(&npu.pool,start,start,end-start,DEVICE_MEMORY_CLASS_DMA32,DEVICE_MEMORY_WRITE_BACK))return REFUSE();
     if(!device_memory_acquire(&npu.pool,g->owner,need,&npu.lease,&npu.extent))return REFUSE();

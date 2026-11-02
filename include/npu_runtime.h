@@ -4,6 +4,7 @@
 #include "a733_npu_startup.h"
 #include "npu_service.h"
 #include "a733_storage_digest.h"
+#include "npu_declaration.h"
 #include "nbg_assembly.h"
 
 /* Compiled models loaded into fixed slots at runtime and run concurrently on
@@ -136,6 +137,11 @@ struct npu_runtime {
  * NPU_RUNTIME_COMMAND_BYTES. Every slot gets the largest read-only region,
  * read window and write window of any model, so any slot can load any model.
  * Reads the models; no other effect. */
+/* The memory a declaration of slots reserves for these graphs: 0 with the result NPU_DECLARATION_OK and the size in
+ * *bytes, or the resource that does not fit (a graph that is not admissible, the NPU's 32-bit address space, the
+ * pool). Hashes each model, so it is a start-up call. */
+enum npu_declaration_result npu_runtime_reservation(const struct npu_runtime_model *models, unsigned count, unsigned slots, size_t pool_bytes,
+                            size_t *bytes);
 size_t npu_runtime_requirements(const struct npu_runtime_model *, unsigned count, unsigned slots);
 
 /* EL1, before scheduling, zero storage once. Authenticates and plans every

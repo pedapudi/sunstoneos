@@ -74,7 +74,9 @@ static int mapped(struct npu_runtime_region r)
 }
 static int open_queue(void *unused,unsigned depth)
 {
-    (void)unused;(void)depth;
+    (void)unused;
+    /* The ring was admitted at the declared depth; a deeper one is refused, never silently shortened. */
+    if(depth>os_npu_in_flight())return -1;
     if(opened||os_npu_stopping()||!os_npu_queue_begin())return -1;
     struct npu_runtime *rt=os_npu_queue_runtime();
     if(!rt||!edges_prepared||rt->slots>SS_NPU_QUEUE_MAX_HANDLES||
@@ -113,7 +115,7 @@ static int close_queue(void *unused)
 }
 static int start(void *unused,unsigned handle,uint64_t sequence,uint64_t after,uint64_t timeout)
 {
-    (void)unused;
+    (void)unused;(void)sequence;
     const struct os_session *s=os_session();
     if(!opened||closed||os_npu_stopping()||!s||handle>ring.handles||!handle)return -1;
     struct npu_queue_fence dependency={0};

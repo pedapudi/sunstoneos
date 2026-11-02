@@ -71,6 +71,17 @@ def regions(manifest, kinds):
     return [dict(r) for r in (manifest or {}).get('regions', []) if r['kind'] in kinds]
 
 
+NPU_DECLARED_OFFSET = 60  # struct os_npu_session, declared
+
+
+def with_npu_declaration(extent, word):
+    """The NPU service extent with the application's declaration (tools/sunstone-manifest.py, npu_word) in place."""
+    require(len(extent) == SERVICE_BYTES[NPU], 'NPU extent size differs.')
+    data = bytearray(extent)
+    struct.pack_into('<I', data, NPU_DECLARED_OFFSET, word)
+    return bytes(data)
+
+
 def input_facts(manifest, inputs):
     declared = regions(manifest, (manifest_tool.KIND['input'],))
     require(len(inputs) == len(declared), 'Input count differs from manifest.')

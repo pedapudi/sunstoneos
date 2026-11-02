@@ -122,6 +122,20 @@ static int sized(const struct npu_runtime_model *models, unsigned count, unsigne
     }
     return place(z, slots, p);
 }
+enum npu_declaration_result npu_runtime_reservation(const struct npu_runtime_model *models, unsigned count,
+                                                   unsigned slots, size_t pool_bytes, size_t *bytes)
+{
+    unsigned char digests[NPU_RUNTIME_MODELS][32];
+    struct nbg_assembly_layout plans[NPU_RUNTIME_MODELS];
+    struct sizes z;
+    struct placement p;
+    if (!sized(models, count, slots, digests, plans, &z, &p)) {
+        /* One slot tells a graph that is not admissible from a declaration that no longer fits the address space. */
+        return sized(models, count, 1, digests, plans, &z, &p) ? NPU_DECLARATION_DEVICE_SPACE : NPU_DECLARATION_MODEL;
+    }
+    *bytes = p.bytes;
+    return p.bytes > pool_bytes ? NPU_DECLARATION_MEMORY : NPU_DECLARATION_OK;
+}
 size_t npu_runtime_requirements(const struct npu_runtime_model *models, unsigned count, unsigned slots)
 {
     unsigned char digests[NPU_RUNTIME_MODELS][32];
