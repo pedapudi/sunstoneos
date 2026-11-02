@@ -1318,6 +1318,9 @@ static struct ss_owner_task *ssKernelPullCandidate(struct ssKernelCPU *cpu, unsi
     }
     return NULL;
 }
+/* Moves started by idle pull since the start; diagnostics read it. */
+static _Atomic unsigned long ssKernelIdlePulls;
+unsigned long ss_kernel_idle_pulls(void) { return atomic_load_explicit(&ssKernelIdlePulls, memory_order_relaxed); }
 static void ssKernelPullServe(unsigned c)
 {
 #ifdef SS_KERNEL_TEST_NO_IDLE_PULL
@@ -1348,7 +1351,10 @@ static void ssKernelPullServe(unsigned c)
         (void)ss_control_publish(&ssKernelControl, pin.slot, ssKernelMutate, &move);
         ss_kernel_handle_put(&pin);
         /* Start the transfer while the task is still queued here. */
-        if (move.changed) ssKernelControlDrain();
+        if (move.changed) {
+            atomic_fetch_add_explicit(&ssKernelIdlePulls, 1, memory_order_relaxed);
+            ssKernelControlDrain();
+        }
         if (cpu->run.ready_bitmap == 0) break;
     }
 }

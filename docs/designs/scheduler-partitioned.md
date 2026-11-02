@@ -730,6 +730,33 @@ and compute-bound, so the extra cost per kernel entry (the stalled masked spans
 measured above) is paid without a placement gain. The fork remains an option
 for workloads with unpinned tasks; the comparison found no workload that needs it.
 
+### Where the fork loses time on the recorded recognition
+
+The recognition engine (mimus `bcaf39ff5`, eight workers) splits each linear call
+over seven pinned worker tasks. The owner sends one job through a one-slot queue
+to each worker, runs its own share, then receives one completion per worker.
+Every worker and the owner have an affinity of one CPU, so idle pull never moves
+them, and a migration is a failure (the worker asserts its core). The same image,
+built with `SUNSTONE_MIMUS_PARALLEL_TRACE`, accounts each parallel call in
+counter ticks: the owner's time in the seven sends (dispatch kernel time), the
+owner's own share (compute), the wait for the slowest worker beyond the owner's
+share (last-finisher wait), the time from the slowest worker's finish to the
+owner's return (completion path), and per worker the time from the end of its
+send to the start of its job (wake to run), its compute and its completion send.
+
+Prediction: the stock kernel's work per call is one lock-protected wake per send
+and per completion. The fork replaces each with the routed path: a publication
+into the owner's incoming words, an SGI, and the owner's service entry before
+the worker runs; and the owner's receives go through the same path. Each routed
+hop runs a masked kernel entry that costs 12 to 30 µs when the memory system is
+saturated, which is the measured cost of the masked spans above. The fork
+therefore loses time in the dispatch kernel time (seven sends) and in wake to run
+and the completion path, and not in compute; its worker compute equals the stock
+kernel's within 1%. The difference in those three parts, summed over the
+recognition, accounts for the 17.7 ms. If the stock kernel's total of
+synchronization and scheduling is under 2% of recognition time, the fork cannot
+beat it by 2% on this workload.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag
