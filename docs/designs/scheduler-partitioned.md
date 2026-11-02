@@ -757,6 +757,58 @@ recognition, accounts for the 17.7 ms. If the stock kernel's total of
 synchronization and scheduling is under 2% of recognition time, the fork cannot
 beat it by 2% on this workload.
 
+Result (port 3-3, one run per kernel, engine `bcaf39ff5` from the mimus branch
+`scheduler-parity-1101`, accounting compiled in, output exact): compute time per
+recording is 109.6 ms with the global kernel and 110.1 ms with the fork, so the
+fork is 0.5% slower on the current engine, not the 5% of the older engine. The
+prediction is refuted in its mechanism. In microseconds over the 470 parallel
+calls, global kernel against fork:
+
+| Part | Global kernel | Fork |
+| --- | --- | --- |
+| Parallel calls, total | 80,564 | 79,672 |
+| Dispatch kernel time (seven sends) | 5,381 | 5,971 |
+| Owner's own share | 46,358 | 47,199 |
+| Wait for the slowest worker | 21,961 | 21,264 |
+| Completion path | 6,862 | 5,237 |
+| Wake to run, sum over 2,658 worker calls | 7,375 | 9,625 |
+| Wake to run, slowest worker per call, summed | 1,791 | 2,092 |
+| Worker compute, sum | 223,596 | 224,325 |
+| Outside the parallel calls (total less parallel calls) | 29,021 | 30,439 |
+
+The fork's routed wake and completion path costs no more than the stock kernel's:
+dispatch, completion and the slowest worker's wake to run sum to 14.0 ms (12.8% of the
+recognition) with the global kernel and 13.3 ms with the fork. Parallel calls are
+0.9 ms shorter with the fork. The difference comes from the serial part
+outside the parallel calls, which is 1.4 ms (4.9%) longer with the fork, and from
+the owner's own share, 0.8 ms longer, both of which run on the owner's core with
+the other cores idle. No worker moved: placement errors and core changes are zero,
+and idle pull cannot move a task whose affinity is one CPU. The stock kernel's
+synchronization and scheduling time is 12.8% of the recognition, above the 2%
+bound, so the fork can win only by removing part of it or by removing the owner's
+slowdown while seven cores idle.
+
+Interrupt accounting (port 3-3, same input and engine; interrupts taken during
+the recognition, by core; every one is SGI 0 except the core 0 timer): the
+owner core (6) takes 293 to 296 interrupts with the global kernel and 358 to 380
+with the fork, 65 to 85 more. The other pinned cores take the same number with both
+kernels, except core 3 (341 against 546), where the unpinned OS services run.
+The SGI senders of the fork, by call site, show where the owner's extra interrupts
+come from: the workers' completion wakes through `ssKernelPublishReference` (356 of
+the 359, the same wake as the global kernel's) and 52 self-directed continuations
+at the end of `ssKernelService` plus 11 from the yield path. Those 63 account for
+the extra count. A pass that re-runs the service while work remains, before it
+falls back to the continuation SGI, did not reduce the owner's interrupts on the
+board (368 and 380) nor the time (110.24 and 110.31 ms against 109.94 and
+109.73 ms with the global kernel, two runs each), so the continuations are not
+the owner's loss, or they are not avoidable by repeating the pass. The owner-core
+loss of 2.2 ms is therefore unexplained: the next candidates are a slower
+`ssKernelPublishReference` wake that lands during the owner's compute (the same
+interrupt count, a longer service) and the cache effect of the fork's larger
+per-CPU structures on the owner. The pass is not kept (`SS_SERVICE_PASSES` is
+1). Measured with the repeat pair, the fork is 0.4% slower than the global kernel on
+the current engine and does not reach the 2% faster that enabling it would need.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag
