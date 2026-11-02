@@ -12,12 +12,12 @@ _Static_assert(sizeof(struct a733_clock_token)==48 && _Alignof(struct a733_clock
 #define OFFSET(type,field,value) _Static_assert(offsetof(struct type,field)==value,"private ABI offset: " #field)
 OFFSET(a733_clock_token,id,0); OFFSET(a733_clock_token,owner,8);
 OFFSET(a733_clock_token,shared,16); OFFSET(a733_clock_token,exclusive,32);
-_Static_assert(sizeof(struct a733_clock_leases)==6208 && _Alignof(struct a733_clock_leases)==16,"private registry ABI");
+_Static_assert(sizeof(struct a733_clock_leases)==6224 && _Alignof(struct a733_clock_leases)==16,"private registry ABI");
 OFFSET(a733_clock_leases,busy,0); OFFSET(a733_clock_leases,next_id,8);
 OFFSET(a733_clock_leases,last_now,16); OFFSET(a733_clock_leases,slots,32);
 OFFSET(a733_clock_leases,now,6176); OFFSET(a733_clock_leases,context,6184);
 OFFSET(a733_clock_leases,initialized,6192); OFFSET(a733_clock_leases,failed,6196);
-OFFSET(a733_clock_leases,authority,6200);
+OFFSET(a733_clock_leases,authority,6200); OFFSET(a733_clock_leases,retained_slots,6208);
 #undef OFFSET
 _Static_assert((A733_CLOCK_CLIENTS&(A733_CLOCK_CLIENTS-1))==0,"slot index is a mask of the identifier");
 
@@ -69,6 +69,8 @@ static int equal(const struct a733_clock_token *a,const struct a733_clock_token 
 {return a->id==b->id && a->owner==b->owner && a->shared==b->shared && a->exclusive==b->exclusive;}
 /* An identifier names its slot, (id - 1) mod 128, so lookup compares one slot. */
 static unsigned home(uint64_t id){return (unsigned)((id-1)&(A733_CLOCK_CLIENTS-1));}
+static int is_retained(const struct a733_clock_leases *m,unsigned slot)
+{return slot<A733_CLOCK_CLIENTS && (m->retained_slots[slot/64]>>(slot%64) & 1);}
 static unsigned find(struct a733_clock_leases *m,const struct a733_clock_token *t)
 {
     if(!t->id || !t->owner)return A733_CLOCK_CLIENTS;
@@ -128,6 +130,7 @@ enum a733_clock_result a733_clock_release(struct a733_clock_leases *m,
     enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
     unsigned slot=find(m,token);
     if(slot==A733_CLOCK_CLIENTS)return leave(m,A733_CLOCK_INVALID);
+    if(is_retained(m,slot))return leave(m,A733_CLOCK_FAULT);
     r=clock_check(m,deadline);if(r!=A733_CLOCK_OK)return leave(m,r);
     m->slots[slot]=(struct a733_clock_token){0};return leave(m,A733_CLOCK_OK);
 }
@@ -141,6 +144,7 @@ enum a733_clock_result a733_clock_publish_audio(struct a733_clock_leases *m,
     unsigned slot=find(m,token);
     if(slot==A733_CLOCK_CLIENTS || token->exclusive!=A733_CLOCK_AUDIO_CHANGE ||
         token->shared!=(A733_CLOCK_REF|A733_CLOCK_OSC))return leave(m,A733_CLOCK_INVALID);
+    if(is_retained(m,slot))return leave(m,A733_CLOCK_FAULT);
     const uint64_t id=next_identifier(m,slot);
     if(!id)return leave(m,A733_CLOCK_EXHAUSTED);
     r=clock_check(m,deadline);if(r!=A733_CLOCK_OK)return leave(m,r);
@@ -160,6 +164,7 @@ enum a733_clock_result a733_clock_publish_stable(struct a733_clock_leases *m,
     enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
     unsigned slot=find(m,&old);
     if(slot==A733_CLOCK_CLIENTS || (old.exclusive&stable)!=stable)return leave(m,A733_CLOCK_INVALID);
+    if(is_retained(m,slot))return leave(m,A733_CLOCK_FAULT);
     const uint64_t id=next_identifier(m,slot);
     if(!id)return leave(m,A733_CLOCK_EXHAUSTED);
     r=clock_check(m,deadline);if(r!=A733_CLOCK_OK)return leave(m,r);
@@ -177,11 +182,22 @@ enum a733_clock_result a733_clock_retain(struct a733_clock_leases *m,const struc
     return leave(m,fail(m));
 }
 
+enum a733_clock_result a733_clock_retain_token(struct a733_clock_leases *m,const struct a733_clock_token *token)
+{
+    if(!a733_ranges_disjoint(m,sizeof(*m),token,sizeof(*token)))return A733_CLOCK_INVALID;
+    enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
+    unsigned slot=find(m,token);
+    if(slot==A733_CLOCK_CLIENTS)return leave(m,A733_CLOCK_INVALID);
+    m->retained_slots[slot/64]|=UINT64_C(1)<<(slot%64);
+    return leave(m,A733_CLOCK_OK);
+}
+
 /* Status writes nothing, so a token stored inside the registry cannot change
  * its result; only a NULL token is refused. */
 enum a733_clock_result a733_clock_token_status(struct a733_clock_leases *m,const struct a733_clock_token *token)
 {
     if(!token)return A733_CLOCK_INVALID;
     enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
-    return leave(m,find(m,token)==A733_CLOCK_CLIENTS ? A733_CLOCK_INVALID : A733_CLOCK_OK);
+    unsigned slot=find(m,token);
+    return leave(m,slot==A733_CLOCK_CLIENTS ? A733_CLOCK_INVALID : is_retained(m,slot) ? A733_CLOCK_FAULT : A733_CLOCK_OK);
 }

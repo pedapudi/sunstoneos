@@ -107,6 +107,11 @@ struct a733_mmc_platform {
     uint32_t initial_module, initial_bus, voltage_mode, running_module;
     unsigned initialized, stage, fault, held, clock_retained, rail_retained;
     unsigned rail_index, core_call;
+    /* Where the first fault arose, for the owner's report: the source line of fail(), why timely() refused (1 the operation's deadline,
+     * 2 the lifetime deadline, 3 the clock or the update liveness), and the first register access the adapter refused (SMHC offset / 4 + 1,
+     * 0xff for another address; 0 none). Zero until a fault. */
+    uint16_t fault_line, fault_why, refused;
+    unsigned irq_mode;               /* the owner has unmasked the controller's GIC interrupt (a733_mmc_platform_irq) */
     unsigned signal; /* PF bank: 0 at 3.3 V, 1 selector written, 2 reports 1.8 V. */
 };
 /* Zero once. All managers, adapter storage and physical authority have platform
@@ -150,6 +155,12 @@ enum a733_mmc_platform_result a733_mmc_platform_retain(struct a733_mmc_platform 
  * not advance close. CLOSED means module/bus/reset and pins restored and SD
  * leases released. Any uncertainty retains remaining ownership forever. */
 enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *,uint64_t deadline);
+/* Interrupt completion. The platform masks the controller's GIC interrupt (INTID 161 + 32) at open and requires it to stay masked,
+ * quiet and inactive for every other operation; a caller that completes transfers by interrupt first has the platform accept the
+ * interrupt as enabled: call with 1 while READY and idle, then unmask the interrupt; mask it and wait for the distributor to
+ * report it masked, then call with 0 before close or any clock or signal change. Only the enable state is relaxed: a pending or
+ * active interrupt stays the owner's to explain. No register access. 1 on success. */
+int a733_mmc_platform_irq(struct a733_mmc_platform *,int enable);
 /* Private service composition. A copied pointer cannot establish ownership:
  * the service authenticates its self, exact platform and complete grant. */
 int a733_mmc_platform_storage(struct a733_mmc_platform *,const void *,size_t);

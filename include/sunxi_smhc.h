@@ -75,6 +75,7 @@
  * IDMAC needs it clear. */
 #define SUNXI_SMHC_GCTRL_FIFO_RESET (1u << 1)
 #define SUNXI_SMHC_GCTRL_DMA_RESET (1u << 2)
+#define SUNXI_SMHC_GCTRL_INT_ENABLE (1u << 4)    /* global interrupt enable: without it IMASK never raises the line (V:148, set in sunxi_mmc_init_host V:730) */
 #define SUNXI_SMHC_GCTRL_DMA_ENABLE (1u << 5)
 #define SUNXI_SMHC_GCTRL_CPU_FIFO (1u << 31)
 #define SUNXI_SMHC_DMAC_RESET (1u << 0)
