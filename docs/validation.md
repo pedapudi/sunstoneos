@@ -480,3 +480,7 @@ Every measurement batch needs a concrete question, relevant input identities,
 and a declared sample count or stopping rule. Reuse valid baseline and candidate
 results. Repeat only when changed inputs or unresolved variance require new
 evidence; commits, handoffs, and documentation changes do not justify reruns.
+
+## Host validation measurement, 2026-11-01
+
+Between 2026-10-25 and 2026-11-01, 48 board runs failed because of an image defect, and no host check fully covered the failing behavior before the run. In 22 cases a check existed but missed the failing condition, and in 24 no check existed. Most of the checks that existed modeled hardware or a service with the same assumption as the code under test. Three defects, all in build, link or configure steps, were caught by host checks before any board run. The full gate runs 117 check steps (about 413 check-seconds): 46 test our own logic, 23 link real code on both sides, 23 guard board runs, 5 model hardware with citations, 9 model hardware or services without citations, and 11 are other. The [class table and per-check times](history/validation-measurement-20261101.md) and the [per-run failure table](history/validation-failures-20261101.md) hold the detail.
