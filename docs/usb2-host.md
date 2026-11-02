@@ -899,10 +899,12 @@ unqualified.
 
 ## Two USB2 hub tiers share the three device records
 
-A session that sets `hub_tiers` to 2 in `struct a733_usb2_native` admits one
-USB2 high-speed hub on a port of the root-port hub. The second hub's device
+A session that sets `hub_tiers` to N in `struct a733_usb2_native`, at most
+`A733_XHCI_HUB_TIERS` (5, the USB 2.0 limit of five hubs in series and the
+five port nibbles of an xHCI route string), admits USB2 high-speed hubs nested
+down to tier N-1 below the root-port hub. Each nested hub's device
 descriptor must declare the single-TT or multi-TT high-speed protocol, and every
-other hub rule above applies to it unchanged. A hub below the second tier, a
+other hub rule above applies to it unchanged. A hub below tier N-1, a
 full-speed hub and a SuperSpeed hub below another hub close the session. Both
 hubs and one leaf use the three xHCI device records, so the second tier serves
 one leaf.

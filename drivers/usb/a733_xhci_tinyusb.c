@@ -608,9 +608,9 @@ static int control_response(const struct a733_xhci_notice *e)
     if(s[0]!=0x80||s[1]!=6||bytes<2||p[1]!=s[3])return 0;
     if(s[3]==1){
         unsigned speed=device->speed,is_hub=p[4]==9;
-        /* A second hub tier is a USB2 high-speed hub on a port of the root-port
-         * hub, admitted only when the session selects two tiers. */
-        unsigned nested=n->control_device&&n->hub_tiers>=2&&speed==3&&device->tier==1&&(p[6]==1||p[6]==2);
+        /* A nested hub is a USB2 high-speed hub below another high-speed hub,
+         * admitted while its tier stays within the session's hub_tiers. */
+        unsigned nested=n->control_device&&device->tier>=1&&device->tier<n->hub_tiers&&speed==3&&(p[6]==1||p[6]==2);
         if(!n->control_device&&n->platform.config.topology_mode&&
            is_hub!=(n->platform.config.topology_mode==2))return 0;
         if(speed==4&&(p[2]||p[3]!=3||p[7]!=9))return 0;

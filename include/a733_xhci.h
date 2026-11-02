@@ -10,7 +10,9 @@
 #define A733_XHCI_TRANSFER_BYTES 4096u
 #define A733_XHCI_RING_TRBS 16u
 #define A733_XHCI_EVENT_TRBS 32u
-#define A733_XHCI_HUB_TIERS 2u /* Hub tiers below the root port. */
+/* Hub tiers below the root port: USB 2.0 section 4.1.1 allows five hubs in
+ * series, and the xHCI route string (section 6.2.2) holds five port nibbles. */
+#define A733_XHCI_HUB_TIERS 5u
 #define A733_XHCI_ISOCH_TDS 8u
 #define A733_XHCI_DMA_BUFFERS 1u /* Legacy bounce page per endpoint. */
 #if SUNSTONE_USB_HOST_GENERIC
@@ -63,7 +65,7 @@ struct a733_xhci_endpoint {
     unsigned dma_active,dma_offset,dma_shared;
     unsigned kind,direction,length,aborted,transfer_type,interval,burst; /* pending:0 idle,1 queued,2 on ring,3 reset recovery,4 dequeue recovery,5 halted by transaction error,6 isochronous TDs on ring,7 awaiting bulk clear,8 stop idle bulk,9 configure idle bulk. */
 };
-/* One root device and up to five hub descendants retain own EP0, contexts and
+/* One root device and its hub descendants retain own EP0, contexts and
  * data rings; command/event rings remain controller-owned. A child of a
  * USB2 hub at tier 1 sits at tier 2; parent is the parent hub's slot and
  * route the xHCI route string (one port nibble per tier). */

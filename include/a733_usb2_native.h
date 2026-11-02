@@ -115,8 +115,9 @@ struct a733_usb2_native {
     struct a733_usb2_hub hubs[A733_USB2_HUBS];
     struct a733_usb2_audio audio;
     struct a733_usb2_descriptor descriptors[A733_XHCI_DEVICES];
-    /* Admission options set before the first poll. hub_tiers 2 admits a USB2
-     * high-speed hub below the root-port hub; bus_powered_hubs admits USB2 hubs
+    /* Admission options set before the first poll. hub_tiers N (at most
+     * A733_XHCI_HUB_TIERS) admits USB2 high-speed hubs nested down to tier N-1
+     * below the root-port hub; bus_powered_hubs admits USB2 hubs
      * without local power within the upstream current budget; audio_capture
      * admits one USB Audio Class 1 capture device in images built with the
      * TinyUSB audio class. */

@@ -993,9 +993,9 @@ int a733_xhci_mark_hub(struct a733_xhci *x,unsigned address)
     struct a733_xhci_device *d=device_address(x,address);
     if(!owner(x)||x->failed||!d||(d->speed!=3&&d->speed!=4)||d->hub_ports||d->tier>=A733_XHCI_HUB_TIERS)return 0;
     if(d!=&x->devices[0]){
-        /* A second tier is a USB2 high-speed hub below a high-speed hub. */
+        /* A nested hub is a USB2 high-speed hub below a high-speed hub. */
         const struct a733_xhci_device *parent=slot_record(x,d->parent);
-        if(d->speed!=3||d->tier!=1||!parent||parent->speed!=3)return 0;
+        if(d->speed!=3||d->tier<1||!parent||parent->speed!=3)return 0;
     }
     d->hub=1;return 1;
 }
