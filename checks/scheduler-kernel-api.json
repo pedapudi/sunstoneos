@@ -12,7 +12,7 @@
     "freertos-partitioned-objects.patch"
   ],
   "enablement_blockers": [
-    "The private checker selects 81 routed public functions and none pending. Remaining optional APIs are rejected by compile-time guards; enabling those configurations requires their conversion.",
+    "The private checker selects 83 routed public functions and none pending. Remaining optional APIs are rejected by compile-time guards; enabling those configurations requires their conversion.",
     "Complete port IRQ-exit and voluntary-yield wiring. Linked transitions cover trace, runtime, errno, synthetic TLS and task-switch hooks; concurrent saved-frame execution remains untested.",
     "Run concurrent eight-core QEMU task/object/timer/deletion/migration stress after complete API conversion; no board admission before review."
   ],
@@ -569,7 +569,8 @@
       "definition_helpers": [
         "ssKernelCPUId",
         "ssKernelForce",
-        "ssKernelService"
+        "ssKernelService",
+        "ssKernelCanPreempt"
       ]
     },
     {
@@ -584,15 +585,21 @@
     },
     {
       "name": "xTaskCreate",
-      "state": "pending",
-      "validation": "none",
-      "configuration": "compile-time rejected in the private owner fork"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskCreate( pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, pxCreatedTask );",
+      "definition_helpers": [
+        "ssKernelAdmitTask"
+      ]
     },
     {
       "name": "xTaskCreateAffinitySet",
-      "state": "pending",
-      "validation": "none",
-      "configuration": "compile-time rejected in the private owner fork"
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskCreateAffinitySet( pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, uxCoreAffinityMask, pxCreatedTask );",
+      "definition_helpers": [
+        "ssKernelAdmitTask"
+      ]
     },
     {
       "name": "xTaskCreateRestricted",
@@ -624,7 +631,8 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_xTaskCreateStatic( pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer );",
       "definition_helpers": [
-        "ssKernelAdmitTask"
+        "ssKernelAdmitTask",
+        "ssKernelStaticAvailable"
       ]
     },
     {
@@ -633,7 +641,8 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_xTaskCreateStaticAffinitySet( pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer, uxCoreAffinityMask );",
       "definition_helpers": [
-        "ssKernelAdmitTask"
+        "ssKernelAdmitTask",
+        "ssKernelStaticAvailable"
       ]
     },
     {
@@ -652,7 +661,8 @@
       "definition_route": "traceENTER_xTaskGenericNotify( xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue );",
       "definition_helpers": [
         "ssKernelCPUId",
-        "ssKernelNotify"
+        "ssKernelNotify",
+        "ssKernelCanPreempt"
       ]
     },
     {

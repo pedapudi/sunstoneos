@@ -180,11 +180,16 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
         }
     }
     if (s->desired.dead && !s->retained) {
-        if (ss_owner_references_retired(s->descriptor) &&
-            (!c->ops.drained || c->ops.drained(c->ops.context, cpu, slot))) {
-            s->drain_mask |= UINT64_C(1) << cpu;
-            retire = s->drain_mask == c->active_mask;
-        } else hint(c, cpu, slot);
+        /* A live lifetime pin can belong to the interrupted delete caller.
+         * Reissuing an SGI here would prevent that caller from returning to
+         * release it. Close/last-put already publishes retirement to every
+         * owner, so only local activation drainage needs another checkpoint. */
+        if (ss_owner_references_retired(s->descriptor)) {
+            if (!c->ops.drained || c->ops.drained(c->ops.context, cpu, slot)) {
+                s->drain_mask |= UINT64_C(1) << cpu;
+                retire = s->drain_mask == c->active_mask;
+            } else hint(c, cpu, slot);
+        }
     } else if (cpu == s->owner && s->retained) {
         void *task = s->descriptor->task; /* retained reference predates close */
         if (s->phase == 2) {
@@ -197,7 +202,8 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
         if (s->desired.dead) {
             (void)route_close(s);
             if (!c->ops.apply(c->ops.context, slot, task, &s->desired)) {
-                hint(c, cpu, slot); unlock(c, s); return;
+                if (!c->ops.deferred || !c->ops.deferred(c->ops.context, slot)) hint(c, cpu, slot);
+                unlock(c, s); return;
             }
             atomic_store_explicit(&s->applied, s->desired.sequence, memory_order_release);
             s->phase = 0; s->retained = false; put = true;
@@ -223,7 +229,7 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
                     s->desired.offcpu_sequence = 0;
                     atomic_store_explicit(&s->applied, s->desired.sequence, memory_order_release);
                 }
-                else hint(c, cpu, slot);
+                else if (!c->ops.deferred || !c->ops.deferred(c->ops.context, slot)) hint(c, cpu, slot);
                 if (s->phase == 3) {
                     /* The acknowledgment follows old-epoch closure, reader
                      * retirement and a fresh owner drain. New-route publishers

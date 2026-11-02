@@ -39,6 +39,7 @@ def main():
     # Select every converted optional branch, including timer-service waits.
     (build / 'FreeRTOSConfig.h').write_text(
         '#include "' + str(ROOT / 'platform/qemu-smp/FreeRTOSConfig.h') + '"\n'
+        '#undef configSUPPORT_DYNAMIC_ALLOCATION\n#define configSUPPORT_DYNAMIC_ALLOCATION 1\n'
         '#define INCLUDE_xTaskDelayUntil 1\n#define INCLUDE_eTaskGetState 1\n'
         '#define INCLUDE_uxTaskPriorityGet 1\n#define INCLUDE_vTaskPrioritySet 1\n'
         '#define INCLUDE_xTaskAbortDelay 1\n#define INCLUDE_xTaskResumeFromISR 1\n'
@@ -92,6 +93,7 @@ def main():
          '-i', ROOT / 'patches/freertos-partitioned-objects.patch'])
     common = [args.cc, '-std=c11', '-O1', '-g', '-ffunction-sections', '-fdata-sections',
               '-DconfigSS_PARTITIONED_SCHEDULER=1', '-DSUNSTONE_SMP_CORES=8',
+              '-DSS_KERNEL_TEST_ADMIN_ENTER',
               '-I' + str(build / 'include'), '-I' + str(build),
               '-I' + str(ROOT / 'platform/qemu-smp'), '-I' + str(ROOT / 'include'),
               '-I' + str(ROOT / 'kernel/scheduler'), '-I' + str(args.freertos / 'include')]
@@ -115,7 +117,7 @@ def main():
                              'configSS_PARTITIONED_SCHEDULER=0') for flag in common]
     run([*disabled, '--target=aarch64-none-elf', '-march=armv8.1-a+lse', '-ffreestanding',
          '-Werror', '-isystem', args.sysroot / 'include', '-c', patched, '-o', build / 'tasks-api-off.o'])
-    for feature in ('configSUPPORT_DYNAMIC_ALLOCATION', 'configUSE_TICKLESS_IDLE',
+    for feature in ('configUSE_TICKLESS_IDLE',
                     'configUSE_STATS_FORMATTING_FUNCTIONS'):
         config = build / ('reject-' + feature)
         config.mkdir(exist_ok=True)
@@ -145,6 +147,9 @@ def main():
     print(run([binary, 'startup']), end='')
     print(run([binary, 'slice']), end='')
     print(run([binary, 'admission']), end='')
+    print(run([binary, 'retirement']), end='')
+    print(run([binary, 'dynamic']), end='')
+    print(run([binary, 'shield']), end='')
     unsupported = subprocess.run([binary, 'end'], text=True, capture_output=True, env=env)
     assert unsupported.returncode and 'scheduler stop unsupported' in unsupported.stderr
     race = build / 'control-reuse'

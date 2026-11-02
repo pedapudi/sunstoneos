@@ -8,7 +8,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 
 
-CHECK_INPUTS = ['cmake/scheduler-partitioned.cmake', 'cmake/a733-smp-cached.cmake', 'cmake/a733-board.cmake', 'cmake/a733-storage-maintenance.cmake', 'include/FreeRTOSConfig.h', 'platform/qemu-smp/freertos_tasks_c_additions.h', 'platform/a733-smp-cached/freertos_tasks_c_additions.h', 'patches/freertos-partitioned-layout.patch', 'patches/freertos-partitioned-tasks.patch', 'patches/freertos-partitioned-api.patch', 'kernel/scheduler']
+CHECK_INPUTS = ['apps/board/FreeRTOSConfig.h', 'platform/a733-storage-maintenance/FreeRTOSConfig.h', 'network/include/FreeRTOSConfig.h', 'cmake/scheduler-partitioned.cmake', 'cmake/a733-smp-cached.cmake', 'cmake/a733-board.cmake', 'cmake/a733-storage-maintenance.cmake', 'include/FreeRTOSConfig.h', 'platform/qemu-smp/freertos_tasks_c_additions.h', 'platform/a733-smp-cached/freertos_tasks_c_additions.h', 'patches/freertos-partitioned-layout.patch', 'patches/freertos-partitioned-tasks.patch', 'patches/freertos-partitioned-api.patch', 'kernel/scheduler']
 
 
 def main():
@@ -65,7 +65,13 @@ def main():
                     str(translation)], check=True, env=env)
     subprocess.run([str(args.cc), '-std=c++23', '-I' + str(native), *flags,
                     str(application)], check=True, env=env)
-    print('PASS native board/network task layout with dynamic selector; dynamic task execution remains gated')
+    dynamic = native / 'dynamic.c'
+    dynamic.write_text('#include "' + str(private / 'tasks.c') + '"\n'
+        '_Static_assert(configSUPPORT_DYNAMIC_ALLOCATION == 1, "native dynamic APIs selected");\n'
+        '_Static_assert(configSS_PARTITIONED_SCHEDULER == 1, "private dynamic admission selected");\n')
+    subprocess.run([str(args.cc), '-std=c11', '-I' + str(native), *flags,
+                    str(dynamic)], check=True, env=env)
+    print('PASS native board/network task layout and complete dynamic task API translation')
     print('PASS partitioned ABI: native and QEMU TCB size/alignment, owner slot, real newlib TLS and external C++ storage')
 
 

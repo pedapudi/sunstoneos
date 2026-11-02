@@ -62,9 +62,59 @@ static void capacity_and_tombstones(void)
     assert(ss_kernel_handle_register(&registry, (void *)UINTPTR_MAX, NULL, NULL) == SS_KERNEL_NO_SLOT);
 }
 
+static _Atomic bool stale_entered, stale_release;
+static unsigned stale_slot;
+static uint64_t stale_incarnation;
+static void stale_barrier(void *unused)
+{
+    (void)unused;
+    atomic_store_explicit(&stale_entered, true, memory_order_release);
+    while (!atomic_load_explicit(&stale_release, memory_order_acquire)) sched_yield();
+}
+static void *stale_reader(void *unused)
+{
+    (void)unused;
+    const struct ss_owner_backend backend = { .barrier = stale_barrier };
+    assert(!ss_owner_pin(&registry.descriptor[stale_slot], stale_incarnation, &backend));
+    return NULL;
+}
+static void recycled_address_before_slot_retirement(void)
+{
+    ss_kernel_registry_init(&registry, NULL);
+    unsigned old = ss_kernel_handle_register(&registry, &task, NULL, NULL);
+    uint64_t incarnation = atomic_load(&registry.descriptor[old].incarnation);
+    assert(ss_kernel_handle_close(&registry, old));
+    assert(!ss_kernel_handle_unmap(&registry, old, false));
+    assert(ss_kernel_handle_unmap(&registry, old, true));
+    assert(registry.registered[old] && !registry.mapped[old]);
+    stale_slot = old;
+    stale_incarnation = incarnation;
+    pthread_t stale;
+    assert(!pthread_create(&stale, NULL, stale_reader, NULL));
+    while (!atomic_load_explicit(&stale_entered, memory_order_acquire)) sched_yield();
+    /* A cached old descriptor pin is paused before it rejects admission.
+     * The allocator has recycled its raw address into another live slot. */
+    unsigned next = ss_kernel_handle_register(&registry, &task, NULL, NULL);
+    assert(next < SS_OWNER_SLOTS && next != old);
+    struct ss_kernel_pin live;
+    assert(ss_kernel_handle_pin(&registry, &task, &live) && live.slot == next);
+    assert(!ss_kernel_handle_retire(&registry, old, true));
+    atomic_store_explicit(&stale_release, true, memory_order_release);
+    assert(!pthread_join(stale, NULL));
+    assert(ss_kernel_handle_retire(&registry, old, true));
+    assert(atomic_load(&registry.descriptor[old].incarnation) == incarnation);
+    struct ss_kernel_pin still_live;
+    assert(ss_kernel_handle_pin(&registry, &task, &still_live) && still_live.slot == next);
+    ss_kernel_handle_put(&still_live);
+    ss_kernel_handle_put(&live);
+    assert(ss_kernel_handle_close(&registry, next));
+    assert(ss_kernel_handle_retire(&registry, next, true));
+    puts("scheduler kernel registry: recycled address maps a new slot while old cleanup and a rejected stale pin finish; late retirement preserves the new key");
+}
 int main(void)
 {
     capacity_and_tombstones();
+    recycled_address_before_slot_retirement();
     ss_kernel_registry_init(&registry, NULL);
     task = (struct task_storage){ 1, ~UINT64_C(1) };
     unsigned slot = ss_kernel_handle_register(&registry, &task, NULL, NULL);
