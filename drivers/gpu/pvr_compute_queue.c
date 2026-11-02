@@ -14,6 +14,7 @@
 #include <string.h>
 
 #define PAGE 4096u
+#define PREFIX_BYTES ((A733_GPU_QUEUE_JOB_PAGES + GPU_QUEUE_PROGRAM_PAGES) * PAGE)
 #define LINE 64u
 #define RING_BYTES 1024u
 /* The image linker admits application code into this immutable section. */
@@ -169,11 +170,11 @@ int pvr_compute_queue_create(struct pvr_compute_queue *q,const struct gpu_queue_
         !p.local_size[2] || local>32 || local*p.local_size[2]!=32 ||
         !a733_span_excl_nonempty(p.code,p.code_bytes) || begin>=end || code<begin || code>=end ||
         p.code_bytes>end-code ||
-        !a733_ranges_disjoint_nonempty(p.code,p.code_bytes,(void *)q->owner->payload_extent.cpu,3*PAGE)) return 0;
+        !a733_ranges_disjoint_nonempty(p.code,p.code_bytes,(void *)q->owner->payload_extent.cpu,PREFIX_BYTES)) return 0;
     if (!a733_gpu_queue_create(q->owner,c)) return 0;
     unsigned char *page=(unsigned char *)q->owner->payload_extent.cpu;
-    memset(page,0,3*PAGE);
-    memcpy(page+PAGE,p.code,p.code_bytes);
+    memset(page,0,PREFIX_BYTES);
+    memcpy(page+A733_GPU_QUEUE_JOB_PAGES*PAGE,p.code,p.code_bytes);
     q->task_word=(A733_GPU_QUEUE_PROGRAM_GPU-UINT64_C(0xe000000000))|((uint64_t)((p.temps+3)/4)<<35);
     q->coefficients=p.coefficients; q->common_words=common_words; q->job_us=c->job_us;
     const uint32_t zero[3]={0,0,0};
@@ -208,8 +209,8 @@ int pvr_compute_queue_prepare(struct pvr_compute_queue *q,uint64_t deadline)
     if (!q->create_done) q->owed=1;
     *(volatile uint32_t *)q->firmware[TIMELINE].storage.cpu=q->timeline_serial;
     a733_mmio_dsb_sy();
-    /* Three payload pages contain the job page and the immutable USC code. */
-    if (!aarch64_device_cache(AARCH64_CACHE_CLEAN,q->owner->payload_extent.cpu,3*PAGE)) {
+    /* The job pages and the program pages hold the job slots and the immutable USC code. */
+    if (!aarch64_device_cache(AARCH64_CACHE_CLEAN,q->owner->payload_extent.cpu,PREFIX_BYTES)) {
         q->error=GPU_QUEUE_MAINTENANCE; return 0;
     }
     q->publish_index=q->publish_page=0; q->phase=PVR_COMPUTE_QUEUE_PUBLISHING;

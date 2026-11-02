@@ -262,7 +262,7 @@ static void fast_cases(unsigned c)
         if (c==62) {
             configASSERT(compute->job_gpu==A733_GPU_QUEUE_JOB_GPU+64 &&
                 compute->job_cpu==(unsigned char *)compute->firmware[5].storage.cpu+64 &&
-                64+PVR_COMPUTE_FAST_DEPTH*PVR_COMPUTE_FAST_STRIDE<=4096);
+                A733_GPU_QUEUE_JOB_BYTES<=A733_GPU_QUEUE_JOB_PAGES*4096u);
             const unsigned char *root=(const unsigned char *)session.table_extent.cpu;
             uint64_t directory=(word(root+(A733_GPU_QUEUE_JOB_GPU>>30)*4,4)&~UINT64_C(15))<<8;
             const unsigned char *dir=root+(directory-session.table_extent.physical);

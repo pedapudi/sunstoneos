@@ -669,7 +669,7 @@ static void shared_mapping_flags(void)
                 configASSERT(m->flags==expected);++found;++leases;
             }
             configASSERT(found==1);
-        }else if(m->address==A733_GPU_QUEUE_JOB_GPU){
+        }else if(m->address>=A733_GPU_QUEUE_JOB_GPU && m->address<A733_GPU_QUEUE_JOB_GPU+A733_GPU_QUEUE_JOB_PAGES*4096u){
             configASSERT(m->flags==(PVR_GPU_VM_READ_ONLY|PVR_GPU_VM_SLC_BYPASS));++job;
         }else if(m->address>=A733_GPU_QUEUE_PROGRAM_GPU && m->address<A733_GPU_QUEUE_PROGRAM_GPU+8192){
             configASSERT(m->flags==PVR_GPU_VM_READ_ONLY);++programs;
@@ -685,7 +685,7 @@ static void shared_mapping_flags(void)
             configASSERT(found==1);
         }
     }
-    configASSERT(leases==compute->lease_count && job==1 && programs && state);
+    configASSERT(leases==compute->lease_count && job==A733_GPU_QUEUE_JOB_PAGES && programs && state);
     metric("shared-mapping-leases",leases);metric("shared-mapping-state-pages",state);
 }
 /* No accepted CREATE has run here. These calls execute the worker's actual

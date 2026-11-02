@@ -32,16 +32,17 @@ image tables that carry it.
 | --- | --- | --- |
 | Job time | `job_us` (required) | The declaration itself. Context creation refuses a larger `job_us`; the hang bound, the reply window and the ring-staging bound derive from it |
 | Caller tasks | `clients` | Build capacity `GPU_QUEUE_CLIENTS` |
-| Jobs retained | `depth` | Build capacity `GPU_QUEUE_DEPTH`; the job slots share the 4 KiB job page, so `depth` times `PVR_COMPUTE_FAST_STRIDE` is at most 4,096 |
+| Jobs retained | `depth` | Build capacity `GPU_QUEUE_DEPTH`. The job slots are contiguous in as many payload pages as they need (`A733_GPU_QUEUE_JOB_PAGES`), at most 32: the job pages map at `0xda001e0000` in the PDS heap's first 2 MiB region, which the firmware's context-switch programs also use, and 32 pages reach the end of that region (depth 255 at the default slot size) |
 | Leases per context | `leases` | Build capacity `GPU_QUEUE_LEASES`, at most 65,535 (a 16-bit field of the binding record) |
 | Bindings per job | `bindings` | Build capacity `GPU_QUEUE_BINDINGS`, at most 65,535 (a 16-bit field of the job record) |
 | Argument bytes per job | `argument_bytes` | Build capacity `GPU_QUEUE_ARGUMENT_BYTES`; the slot grows to hold them |
+| Translation-table pages | (derived) | Build capacity `GPU_QUEUE_TABLE_PAGES`. The tool counts the root, a directory and a leaf table for each of the three heaps, then one leaf table per 2 MiB and the 1 GiB directory pages of each GPU-accessible region, and the generated tables fail the build when the count exceeds the capacity |
 | Program bytes | `program_bytes` | The two 4 KiB program pages of the payload less one cache line (`GPU_QUEUE_PROGRAM_BYTES`); this is the payload layout |
 
 The build capacities are CMake cache variables, `SUNSTONE_GPU_QUEUE_CLIENTS`,
-`_DEPTH`, `_LEASES`, `_BINDINGS` and `_ARGUMENT_BYTES`, passed as compile
+`_DEPTH`, `_LEASES`, `_BINDINGS`, `_ARGUMENT_BYTES` and `_TABLE_PAGES`, passed as compile
 definitions to the OS and every application. An empty value keeps the header
-default (2, 4, 4, 4 and 64, the smallest values the in-tree applications
+default (2, 4, 4, 4, 64 and 32, the smallest values the in-tree applications
 declare). A declaration above the capacity fails the image build through a
 static assertion in the generated tables, naming the variable to raise. The job
 record is `32 + 16 * bindings + argument_bytes` bytes, 160 at the defaults.
@@ -50,6 +51,14 @@ One context and one program remain: the firmware compute context, the memory
 context and the program pages are single objects of the queue, and nothing in
 the code counts them. A second context needs its own firmware objects and
 payload pages and is not a capacity change.
+
+The payload holds the job pages, the two program pages and 18 pages of fixed
+program images (the ten regions of `pvr_compute_program_bytes`, whose sizes the
+firmware programs fix; `a733_gpu_queue_prepare` checks the sum). Only the job
+pages depend on the declaration, so `A733_GPU_QUEUE_PAYLOAD_PAGES` is
+`A733_GPU_QUEUE_JOB_PAGES + 2 + 18`, 21 at the defaults. The uncached variant
+keeps its job slots in the firmware extent, which grows by the same number of
+pages less one.
 
 ## The application interface
 

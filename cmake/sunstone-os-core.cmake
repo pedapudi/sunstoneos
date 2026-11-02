@@ -465,7 +465,7 @@ if(SUNSTONE_A733_OS_GPU)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_GPU_LINEAR=1)
   # Capacities of the GPU compute queue (include/gpu_queue.h). Empty keeps the header default; an
   # application's manifest declaration above the capacity fails the image build.
-  foreach(name CLIENTS DEPTH LEASES BINDINGS ARGUMENT_BYTES)
+  foreach(name CLIENTS DEPTH LEASES BINDINGS ARGUMENT_BYTES TABLE_PAGES)
     set(SUNSTONE_GPU_QUEUE_${name} "" CACHE STRING "GPU compute queue capacity: ${name}")
     if(NOT SUNSTONE_GPU_QUEUE_${name} STREQUAL "")
       target_compile_definitions(sunstone-a733-os-core PRIVATE GPU_QUEUE_${name}=${SUNSTONE_GPU_QUEUE_${name}}u)

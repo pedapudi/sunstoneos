@@ -5,9 +5,28 @@
 #include "pvr_compute_programs.h"
 #include "sunstone_app.h"
 
-#define A733_GPU_QUEUE_PAYLOAD_PAGES 21u
+/* The payload is the job slots, then the program pages, then the context-switch
+ * and shared program images.
+ * - Job pages: the retained job slots plus the first cache line of the uncached
+ *   variant, in whole pages. They map at A733_GPU_QUEUE_JOB_GPU, whose 2 MiB
+ *   region also holds the firmware's context-switch programs (PDS programs
+ *   from 0xb0000, USC programs at 0x10000 and 0x60000); the pages after
+ *   JOB_GPU + 0x1e0000 reach the region's end at 32, so a deeper queue would
+ *   need a second leaf table and a placement that avoids the heap's firmware
+ *   objects.
+ * - Program pages: GPU_QUEUE_PROGRAM_PAGES, the application's USC code.
+ * - Program images: the ten fixed regions of pvr_compute_program_bytes, 18
+ *   pages in total (a733_gpu_queue_prepare verifies the sum). */
+#define A733_GPU_QUEUE_JOB_BYTES (64u + PVR_COMPUTE_FAST_DEPTH * PVR_COMPUTE_FAST_STRIDE)
+#define A733_GPU_QUEUE_JOB_PAGES ((A733_GPU_QUEUE_JOB_BYTES + 4095u) / 4096u)
+#define A733_GPU_QUEUE_JOB_PAGES_MAX 32u
+GPU_QUEUE_STATIC_ASSERT(A733_GPU_QUEUE_JOB_PAGES <= A733_GPU_QUEUE_JOB_PAGES_MAX,
+    "the job slots exceed the 2 MiB region they share with the context-switch programs: lower the depth, bindings or argument bytes");
+#define A733_GPU_QUEUE_PROGRAM_IMAGE_PAGES 18u
+#define A733_GPU_QUEUE_PAYLOAD_PAGES \
+    (A733_GPU_QUEUE_JOB_PAGES + GPU_QUEUE_PROGRAM_PAGES + A733_GPU_QUEUE_PROGRAM_IMAGE_PAGES)
 #define A733_GPU_QUEUE_MAPS (GPU_QUEUE_LEASES + A733_GPU_QUEUE_PAYLOAD_PAGES)
-#define A733_GPU_QUEUE_TABLE_PAGES 32u
+#define A733_GPU_QUEUE_TABLE_PAGES GPU_QUEUE_TABLE_PAGES
 #define A733_GPU_QUEUE_JOB_GPU (UINT64_C(0xda00000000) + 0x1e0000u)
 #define A733_GPU_QUEUE_PROGRAM_GPU (UINT64_C(0xe000000000) + 0x100000u)
 /* Retained static storage, initialized once before scheduling. Context

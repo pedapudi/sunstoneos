@@ -50,6 +50,15 @@ extern "C" {
 #ifndef GPU_QUEUE_ARGUMENT_BYTES
 #define GPU_QUEUE_ARGUMENT_BYTES 64u /* argument bytes per job */
 #endif
+/* Pages the context's GPU translation tables may use: the root, the directory
+ * pages and one leaf table for each 2 MiB the session maps (pvr_gpu_vm_require,
+ * drivers/gpu/pvr_gpu_vm.c). The leases dominate: the build needs about one
+ * page for each 2 MiB of leased GPU region plus the 1 GiB directory pages, and
+ * tools/sunstone-manifest.py reports that need in the generated tables, which
+ * fail the build when it exceeds this capacity. */
+#ifndef GPU_QUEUE_TABLE_PAGES
+#define GPU_QUEUE_TABLE_PAGES 32u
+#endif
 /* USC code: the two 4 KiB program pages of the payload, less one cache line.
  * This is the payload layout (platform/a733/gpu_queue.c: PROGRAM_GPU maps two
  * pages), not a free parameter. */

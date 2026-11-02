@@ -664,7 +664,23 @@ def c_tables(m):
             if gpu[key]:
                 lines.append('_Static_assert(%du <= GPU_QUEUE_%s, "%s declares gpu %s above the build capacity '
                              '(SUNSTONE_GPU_QUEUE_%s)");' % (gpu[key], macro, m['name'], key, macro))
+        lines.append('_Static_assert(%du <= GPU_QUEUE_TABLE_PAGES, "%s maps GPU regions that need more translation-table pages '
+                     'than the build capacity (SUNSTONE_GPU_QUEUE_TABLE_PAGES)");' % (gpu_table_pages(m), m['name']))
     return '\n'.join(lines)
+
+
+GPU_TABLE_FIXED_PAGES = 7   # the root, a directory and a leaf table for each of the PDS, USC and general heaps
+
+
+def gpu_table_pages(m):
+    """Most GPU translation-table pages the queue's mappings can need (pvr_gpu_vm_require): one leaf table for each 2 MiB
+    of a GPU-accessible region and, for each, the 1 GiB directory pages it spans plus one for a boundary."""
+    pages = GPU_TABLE_FIXED_PAGES
+    for r in m.get('regions', []):
+        if r['access'] & (ACCESS['gpu-read'] | ACCESS['gpu-write']):
+            size = -(-r['bytes'] // BLOCK) * BLOCK
+            pages += size // BLOCK + (size >> 30) + 2
+    return pages
 
 
 def main():

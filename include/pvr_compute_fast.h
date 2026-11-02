@@ -10,11 +10,10 @@
 #define PVR_COMPUTE_FAST_NOTIFY SS_NOTIFY_REQUEST_WAIT
 /* One job slot: the 320-byte PDS and CDM prefix (PVR_COMPUTE_QUEUE_ARGUMENTS), the
  * binding addresses and the arguments, in whole cache lines and at least 512
- * bytes. All slots lie in the one 4 KiB job page of the payload. */
+ * bytes. The slots are contiguous in the job pages of the payload
+ * (A733_GPU_QUEUE_JOB_PAGES). */
 #define PVR_COMPUTE_FAST_SLOT_BYTES (320u + 8u * (GPU_QUEUE_BINDINGS - 1u) + GPU_QUEUE_ARGUMENT_BYTES)
 #define PVR_COMPUTE_FAST_STRIDE (PVR_COMPUTE_FAST_SLOT_BYTES <= 512u ? 512u : (PVR_COMPUTE_FAST_SLOT_BYTES + 63u) / 64u * 64u)
-GPU_QUEUE_STATIC_ASSERT(PVR_COMPUTE_FAST_DEPTH * PVR_COMPUTE_FAST_STRIDE <= 4096u,
-    "the job slots fit the 4 KiB job page: lower the depth, bindings or argument bytes");
 #define PVR_COMPUTE_FAST_PENDING 7
 struct pvr_compute_queue;
 struct pvr_compute_fast_entry {

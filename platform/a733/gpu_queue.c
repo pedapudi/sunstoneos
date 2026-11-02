@@ -14,7 +14,7 @@ static const uint32_t context_bytes[PVR_COMPUTE_QUEUE_OBJECTS] = {232, 4, 32, 10
 /* Firmware PDS and USC heap bases, programmed by the firmware's system
  * initialization, and the general heap of the pinned native profile. */
 static const uint64_t heap_base[3] = {UINT64_C(0xda00000000), UINT64_C(0xe000000000), UINT64_C(0x8000000000)};
-/* The job page and the program pages share the first 2 MiB region of their
+/* The job pages and the program pages share the first 2 MiB region of their
  * heaps with the context-switch programs (PDS programs from 0xb0000, the USC
  * programs at 0x10000 and 0x60000), so they need no leaf table of their own;
  * each 2 MiB region the session maps costs one table page. */
@@ -68,10 +68,13 @@ struct pvr_compute_queue *a733_gpu_queue_prepare(struct a733_gpu_queue *s, struc
         !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)service, sizeof(*service)) ||
         !g->prepared || g->memory.phase != A733_GPU_MEMORY_OFFLINE || g->config.compute ||
         g->config.compute_queue || g->config.graphics || g->config.free_lists.count || service->initialized) return NULL;
+    size_t images = 0;
+    for (unsigned i = 0; i < PVR_PROGRAM_REGIONS; ++i) images += rounded(pvr_compute_program_bytes[i]);
+    if (images != A733_GPU_QUEUE_PROGRAM_IMAGE_PAGES * PAGE) return failed(s, g);
     if (!acquire(g->wb_pool, owner, A733_GPU_QUEUE_PAYLOAD_PAGES * PAGE, &s->payload_lease, &s->payload_extent))
         return failed(s, g);
     s->stage = ACQUIRED;
-    if (!acquire(g->nc_pool, owner, PVR_COMPUTE_QUEUE_OBJECTS * PAGE, &s->firmware_lease, &s->firmware_extent))
+    if (!acquire(g->nc_pool, owner, (PVR_COMPUTE_QUEUE_OBJECTS + A733_GPU_QUEUE_JOB_PAGES - 1u) * PAGE, &s->firmware_lease, &s->firmware_extent))
         return failed(s, g);
     s->firmware = g; s->owner = owner; s->region_count = count;
     s->regions = regions;
@@ -113,8 +116,9 @@ int a733_gpu_queue_create(struct a733_gpu_queue *s, const struct gpu_queue_conte
     q->priority=c->priority;
     q->payload_cache=c->payload_cache;
     if (q->payload_cache==GPU_QUEUE_PAYLOAD_UNCACHED) {
-        /* The first NC cache line belongs only to the firmware timeline.
-         * Four retained 512-byte job slots fit after it in the same page. */
+        /* The first NC cache line belongs only to the firmware timeline. The
+         * retained job slots follow it and continue into the extra uncached
+         * pages that the firmware extent holds after the timeline page. */
         q->job_cpu=(unsigned char *)q->firmware[5].storage.cpu+64;
         q->job_gpu=JOB_GPU+64;
     }
@@ -165,13 +169,18 @@ int a733_gpu_queue_create(struct a733_gpu_queue *s, const struct gpu_queue_conte
     for (unsigned i=0; i<5; ++i)
         p->excluded[i]=(struct pvr_compute_program_span){q->firmware[i].storage.cpu,context_bytes[i],q->firmware_address[i]};
     unsigned char *payload=(unsigned char *)s->payload_extent.cpu;
-    p->excluded[5]=(struct pvr_compute_program_span){q->payload_cache?q->firmware[5].storage.cpu:payload,PAGE,JOB_GPU};
-    p->excluded[6]=(struct pvr_compute_program_span){payload+PAGE,2*PAGE,PROGRAM_GPU};
-    for (unsigned i=0; i<3; ++i)
-        s->maps[count++]=(struct pvr_gpu_mapping){i ? PROGRAM_GPU+(i-1)*PAGE : JOB_GPU,
-            !i && q->payload_cache?q->firmware[5].pages[0]:s->payload_extent.physical+i*PAGE,PAGE,12,
-            PVR_GPU_VM_READ_ONLY | (i ? 0 : PVR_GPU_VM_SLC_BYPASS)};
-    size_t off=3*PAGE;
+    p->excluded[5]=(struct pvr_compute_program_span){q->payload_cache?q->firmware[5].storage.cpu:payload,
+        A733_GPU_QUEUE_JOB_PAGES*PAGE,JOB_GPU};
+    p->excluded[6]=(struct pvr_compute_program_span){payload+A733_GPU_QUEUE_JOB_PAGES*PAGE,
+        GPU_QUEUE_PROGRAM_PAGES*PAGE,PROGRAM_GPU};
+    for (unsigned i=0; i<A733_GPU_QUEUE_JOB_PAGES; ++i)
+        s->maps[count++]=(struct pvr_gpu_mapping){JOB_GPU+i*PAGE,
+            q->payload_cache?s->firmware_extent.physical+(5u+i)*PAGE:s->payload_extent.physical+i*PAGE,PAGE,12,
+            PVR_GPU_VM_READ_ONLY | PVR_GPU_VM_SLC_BYPASS};
+    for (unsigned i=0; i<GPU_QUEUE_PROGRAM_PAGES; ++i)
+        s->maps[count++]=(struct pvr_gpu_mapping){PROGRAM_GPU+i*PAGE,
+            s->payload_extent.physical+(A733_GPU_QUEUE_JOB_PAGES+i)*PAGE,PAGE,12,PVR_GPU_VM_READ_ONLY};
+    size_t off=(A733_GPU_QUEUE_JOB_PAGES+GPU_QUEUE_PROGRAM_PAGES)*PAGE;
     for (unsigned i=0; i<PVR_PROGRAM_REGIONS; ++i) {
         size_t n=pvr_compute_program_bytes[i];
         if (off+rounded(n)>s->payload_extent.bytes) return 0;
