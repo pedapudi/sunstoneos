@@ -30,6 +30,10 @@ FAT32 volume read-only (32 KiB clusters, 1,907,436 clusters free, empty root dir
 
 Any physical card write needs its full host backup and the approved target-bound path in [goal section 4](../goal.md).
 
+## Throughput figures measured with the controller interrupt disabled are superseded
+
+Until the fix that sets `GCTRL` bit 4 with the interrupt mask (the board kernel's global interrupt enable, `sunxi_mmc_init_host`), the SD0 interrupt never reached the owner and every wait for a transfer ended on the 5 ms recheck timer. The earlier write throughput (368 MiB in at most 40 s, about 9.2 MiB/s, which included stream generation), the read rate of the mode 2 runs (6.1 MB/s over 232 MiB, 5.4 ms per request) and any per-request latency from the runs before the fix are therefore not the card's or the driver's rates. They are superseded by the runs of the image with the interrupt enabled; the result then carries `irq_entries` per core and `owner_recheck_wakes`, which should be about one per request and about zero. The 21.9 MB/s read figure of the standalone probe was measured by polling and is unaffected.
+
 ## A class of host-coverage gap
 
 The platform's admission of the bounded write had no host coverage until `checks/a733-mmc-platform-write.py`. The strict CMD25 model
