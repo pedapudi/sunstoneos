@@ -488,6 +488,14 @@ submission names, and restores every saved byte.
   runner's transfer above `0x48000000`; the old range (below `0x80000000`) already contained those addresses, so this run
   tests the new bookkeeping, the scratch attribute and the estimate, not a new reach.
 
+**Result: the preserving run (port 3-1, entry `1793652142808675717-ffd657dd`, bringup `69d0b3b9`).** As predicted: the
+runner backed up 44,040,192 bytes (42 MiB: the image RAM, the 16 MiB region at `0x48000000` and the 8 MiB region at
+`0x4a000000`) in 11 chunks with none at `0x4b000000`, so the scratch region was left out; it printed the estimate of 160.1 s
+against the budget of 240 s; the session returned normally (`RETURN_ROM`), its 32-byte output equals
+`expected-slot1-preserve.bin`, and the record says `dram_mode` preserved and `dram_restored` true. This shows the scratch
+attribute, the estimate, the budget and the backup and restore of regions in slot 1 on a board. It does not show the reach
+above 2 GiB, which step 6b is for.
+
 ### Predicted board run of the NPU pool in the slot 1 area
 
 Hypothesis: an `npu-graphs` image built from the recipe of the passing run `1793599845892192862-30dc9323` (seven
