@@ -36,9 +36,10 @@ DMA0 needs physical channel, controller and data-access authority and transfer t
 Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-memory-dma-20261101.md).
 
 <!-- evidence-table:begin -->
-1 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+2 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
 | `1793597424798692951-6741863a` | 2026-11-02 | 3-1 | `4e4f51b1ed5f` | returned | failed | run_total 19.252 s, read_one_a55 5.36 GB/s, read_one_a76 12.69 GB/s, read_two_a76 11.37 GB/s, read_six_a55 9.03 GB/s, read_eight 8.44 GB/s |
+| `1793600664425885881-a871e54d` | 2026-11-02 | 3-1 | `e271e3b62bb8` | result-mismatch | passed | run_total 12.065 s, scan_pages 6.25869e+06, signature_pages 3.12934e+06, scan_time 0.555 s, signature_time 0.975 s, address_failed 0, mismatches 0 |
 <!-- evidence-table:end -->

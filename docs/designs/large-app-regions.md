@@ -1,9 +1,10 @@
 # Design: large application regions in upper memory
 
 Status: the region ledger and the application page-table builder are
-**implemented** and checked on the host (`checks/app-region.py`). The loader,
-the context-switch hook, the table-builder change and the SDK calls are
-**design**. No part is qualified on the board. Readers are assumed to know
+**implemented** and checked on the host (`checks/app-region.py`). The
+non-global kernel entries and the address-test decode check are implemented
+and host-checked, and the decode result is board-recorded. The loader, the
+context-switch hook and the SDK calls are **design**. No part is qualified on the board. Readers are assumed to know
 AArch64 stage-1 translation (Arm ARM DDI 0487, D8), the FreeRTOS SMP port and
 [memory-architecture.md](memory-architecture.md).
 
@@ -86,8 +87,7 @@ The reverse order creates two matching entries, a TLB conflict
 (Arm ARM D8, "TLB conflict abort"). The host check shows both outcomes with a
 TLB model, and `app_space_build()` refuses a kernel table whose
 upper-memory entries are global or are not the expected blocks. The cached
-table builder emits global entries today; its change to `nG` is listed under
-the changes outside this design's files. With `nG` set no TLB maintenance is
+table builder sets `nG` through `A733_EL1_DRAM_BLOCK`. With `nG` set no TLB maintenance is
 needed at a context switch.
 
 **Context switch.** The scheduler adapter already calls
@@ -354,16 +354,16 @@ execute-never bits). The model aborts on a descriptor bit it does not model
 
 ## Prerequisites and changes outside this design's files
 
-1. **Upper memory must be mapped.** `a733_dram_decode_check()` returns 0 in
-   every image, so no image maps upper memory. The board run needs a
-   definition that passes on evidence: a controller and firewall source (the
-   memory-controller worker's findings) or an address-uniqueness test that
-   writes and reads a token in every 1 GiB slot and at 2 MiB steps before the
-   tables are built. Until then the ledger has no usable ranges.
-2. **`nG` on upper-memory entries.** `platform/a733-smp-cached/memory.c` and
-   `A733_EL1_DRAM_BLOCK` set `nG` for the entries of slots 2 to 12, with ASID 0
-   in the kernel's TTBR0. The golden comparison in
-   `checks/device-memory-capacity.py` changes with them.
+1. **Upper memory must be mapped.** The memory qualification image's run on
+   port 3-1 passed the window scan and the page signature over
+   `0x4400_0000`–`0x3_4000_0000` (decode result above). The address-test
+   definition of `a733_dram_decode_check()` is built by the CMake option
+   `SUNSTONE_A733_DRAM_DECODE_PROBE`; without it no image maps upper memory,
+   and the ledger has no usable ranges.
+2. **`nG` on upper-memory entries.** `A733_EL1_DRAM_BLOCK` sets `nG` for the
+   entries of slots 2 to 12, with ASID 0 in the kernel's TTBR0, and the golden
+   comparison writes the fields out so that its native-publication case fails
+   without the bit.
 3. **The TTBR0 hook.** The image defines `portTASK_SWITCH_HOOK` and tags the
    tasks of each application with its space.
 4. **Second application for the isolation test.** The OS admits one primary
