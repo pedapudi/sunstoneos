@@ -57,7 +57,7 @@ enum { P_IDLE, P_SD_IF, P_SD_APP, P_SD_OCR, P_MMC_QUERY, P_MMC_OCR,
        P_SD_SCR_APP, P_SD_SCR, P_SD_WIDTH_APP, P_SD_WIDTH,
        P_SD_SWITCH_CHECK, P_SD_SWITCH_SET, P_SD_CLOCK, P_SD_MODE_STATUS,
        P_SD_VOLTAGE, P_SD_SIGNAL, P_SD_UHS_CHECK, P_SD_UHS_SET, P_SD_TUNE,
-       P_SD_TUNE_RECOVER };
+       P_SD_TUNE_RECOVER, P_SD_STATUS_APP, P_SD_STATUS };
 /* SD physical layer 9.10 section 4.2.4.5 and the pinned Linux
  * tuning_blk_pattern_4bit: the 64-byte four-bit CMD19 tuning block. */
 static const uint8_t tuning_pattern[64] = {
@@ -228,6 +228,37 @@ int sunxi_mmc_read(struct sunxi_mmc *h, uint64_t first, uint32_t blocks,
     queue(h, P_READ, (blocks == 1 ? 17u : (18u | AUTO)) | RESP | CRC | DATA | WAIT,
           arg, buffer, bytes);
     return 1;
+}
+/* ACMD13 (SD_STATUS): CMD55 with the card's RCA, then CMD13 with a 64-byte data block in the
+ * four-bit width (SD Physical Layer Simplified Specification 9.10, section 4.10.2 and Table 4-44).
+ * A read: the same bounds as sunxi_mmc_read, no card state changes. The result is received == 64. */
+int sunxi_mmc_sd_status(struct sunxi_mmc *h, uint8_t *buffer, uint64_t deadline)
+{
+    if (!h || !h->initialized || h->entered || h->state != SUNXI_MMC_READY || h->config.kind != SUNXI_MMC_SD ||
+        deadline <= h->last_us || !a733_span_excl(buffer, SUNXI_MMC_SD_STATUS_BYTES) ||
+        a733_extents_overlap_prechecked((uintptr_t)h, sizeof(*h), (uintptr_t)buffer, SUNXI_MMC_SD_STATUS_BYTES)) return 0;
+    h->result = (struct sunxi_mmc_result){0}; h->deadline_us = deadline;
+    h->borrowed = buffer; h->borrowed_bytes = SUNXI_MMC_SD_STATUS_BYTES; h->state = SUNXI_MMC_READING;
+    h->dma_read = 0; h->read_tail = 0;
+    h->entered = 1;
+    int timed = time_ok(h);
+    h->entered = 0;
+    if (!timed) return 0;
+    h->read_start_us = h->last_us;
+    queue(h, P_SD_STATUS_APP, 55u | RESP | CRC, (uint32_t)h->card.rca << 16, 0, 0);
+    return 1;
+}
+/* AU_SIZE is bits 431:428 and UHS_AU_SIZE bits 395:392 of the 512-bit status, sent most significant
+ * byte first (Table 4-44); Table 4-47 and Table 4-53 give the sizes: 16 KB doubling to 8 MB, then
+ * 12, 16, 24, 32 and 64 MB. A UHS-I bus mode reports the unit in UHS_AU_SIZE (section 4.10.2.9).
+ * Returns the unit in 512-byte sectors, or 0 when the card does not define one. */
+uint32_t sunxi_mmc_au_sectors(const uint8_t status[SUNXI_MMC_SD_STATUS_BYTES], int uhs_mode)
+{
+    static const uint32_t sectors[16] = {0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 24576, 32768,
+                                         49152, 65536, 131072};
+    unsigned value = uhs_mode ? (status[14] & 15u) : (status[10] >> 4);
+    if (uhs_mode && !value) value = status[10] >> 4;     /* a card that leaves UHS_AU_SIZE undefined uses AU_SIZE */
+    return sectors[value];
 }
 #ifndef SUNXI_MMC_READ_ONLY
 static int same_card(const struct sunxi_mmc_card *a,const struct sunxi_mmc_card *b)
@@ -400,7 +431,7 @@ static int fifo_step(struct sunxi_mmc *h)
         if (h->config.ops.read_fifo(h->config.context, words, n) != 1) { fault(h, SUNXI_MMC_IO); return 0; }
         for (unsigned i = 0; i < n; ++i)
             for (unsigned b = 0; b < 4; ++b) h->data[h->position++] = (uint8_t)(words[i] >> (8 * b));
-        if (h->protocol == P_READ) h->result.received = h->position;
+        if (h->protocol == P_READ || h->protocol == P_SD_STATUS) h->result.received = h->position;
     }
     return 1;
 }
@@ -1021,6 +1052,13 @@ static void protocol(struct sunxi_mmc *h)
         tune_advance(h,1);return;
     case P_SD_MODE_STATUS:
         if(ready(h))h->state=SUNXI_MMC_READY;return;
+    case P_SD_STATUS_APP:
+        if (!card_response(h)) return;
+        if (!(r & (1u << 5))) { fault(h, SUNXI_MMC_CARD); return; }
+        queue(h, P_SD_STATUS, 13u | RESP | CRC | DATA | WAIT, 0, h->borrowed, SUNXI_MMC_SD_STATUS_BYTES); return;
+    case P_SD_STATUS:
+        if (!card_response(h)) return;
+        h->state = SUNXI_MMC_DONE; return;
     case P_READ:
         /* No CMD13 after a read, as the board kernel's block driver; only an
          * open-ended CMD18 that reached the card's last sector confirms the

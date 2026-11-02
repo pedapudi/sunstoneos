@@ -12,7 +12,9 @@
 struct model {
     struct sunxi_mmc *host;
     uint32_t reg[0x304 / 4], csd[4], cid[4];
-    uint8_t ext[512];
+    uint8_t ext[512], sd_status[64];
+    unsigned acmd13;
+    int bad_acmd;
     uint64_t now;
     unsigned kind, sector, state, app, ocr_calls, selected, cmd16, reads;
     unsigned calls, commands[64], args[64], command_count, fifo_total, fifo_pos;
@@ -105,7 +107,7 @@ static int read32(void *ctx, uint32_t off, uint32_t *out)
         *out = 0;
         for (unsigned b = 0; b < 4; ++b) {
             unsigned p = m->fifo_pos++;
-            uint8_t v = (m->data_command & 63u) == 8 ? m->ext[p] : (uint8_t)(p * 37u + 11u);
+            uint8_t v = (m->data_command & 63u) == 8 ? m->ext[p] : (m->data_command & 63u) == 13 ? m->sd_status[p] : (uint8_t)(p * 37u + 11u);
             *out |= (uint32_t)v << (b * 8);
         }
         return 1;
@@ -145,7 +147,8 @@ static void command(struct model *m, uint32_t cmd)
         }
         break;
     case 55:
-        assert(m->kind == SUNXI_MMC_SD && !arg && !m->state);
+        if (m->selected) assert(m->kind == SUNXI_MMC_SD && arg == 0x12340000u);   /* ACMD with the card's RCA */
+        else assert(m->kind == SUNXI_MMC_SD && !arg && !m->state);
         m->app = 1; m->reg[0x20/4] |= 1u << 5; break;
     case 41:
         assert(m->kind == SUNXI_MMC_SD && m->app && arg == 0x40300000u);
@@ -176,7 +179,15 @@ static void command(struct model *m, uint32_t cmd)
     case 7:
         assert(m->state == 3); m->state = 4; m->selected = 1; break;
     case 13:
-        assert(m->selected); m->reg[0x20/4] = m->reads && m->bad_status ? 0x800 : 0x900;
+        assert(m->selected);
+        if (cmd & (1u << 9)) {
+            /* ACMD13: SD Status, one 64-byte block after CMD55, zero argument. */
+            assert(m->kind == SUNXI_MMC_SD && m->app && !arg && m->reg[0x10/4] == 64 && m->reg[0x14/4] == 64);
+            assert(cmd & (1u << 13)); /* wait for previous data */
+            m->app = 0; ++m->acmd13; m->data_command = cmd; m->fifo_total = 64;
+        } else assert(!m->app);
+        m->reg[0x20/4] = m->reads && m->bad_status ? 0x800 : 0x900;
+        if ((cmd & (1u << 9)) && m->bad_acmd) m->reg[0x20/4] = 1u << 25;     /* a card error bit in the ACMD13 response */
         if (m->reads && m->oor_status) m->reg[0x20/4] |= 1u << 31;
         break;
     case 16:
@@ -415,6 +426,41 @@ int main(int argc, char **argv)
                 assert(sunxi_mmc_take(&h,&result));
             } else terminal(&m, SUNXI_MMC_CARD, buffer);
         }
+    }
+    /* ACMD13: the allocation unit comes from the SD Status the card returns (Table 4-44, 4-47). */
+    {
+        struct { unsigned au_nibble, uhs_nibble; uint32_t au, uhs; } cases[] = {
+            {9, 0, 8192, 8192}, {1, 0, 32, 32}, {0, 0, 0, 0}, {0xf, 0, 131072, 131072}, {0xb, 0, 24576, 24576},
+            {4, 6, 256, 1024}, {9, 9, 8192, 8192}, {0xe, 3, 65536, 128}};
+        for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
+            identified(&m, &h, SUNXI_MMC_SD, 1);
+            memset(m.sd_status, 0xa5, 64);
+            m.sd_status[10] = (uint8_t)(cases[i].au_nibble << 4 | 5);     /* bits 431:428, then ERASE_SIZE bits */
+            m.sd_status[14] = (uint8_t)(0xa0 | cases[i].uhs_nibble);      /* bits 395:392 */
+            uint8_t status[64] __attribute__((aligned(64)));
+            memset(status, 0, sizeof status);
+            unsigned before = m.command_count;
+            assert(sunxi_mmc_sd_status(&h, status, m.now + 100000));
+            assert(h.state == SUNXI_MMC_READING && !sunxi_mmc_sd_status(&h, status, m.now + 100000));
+            run(&m);
+            assert(h.state == SUNXI_MMC_DONE && sunxi_mmc_take(&h, &result) && result.error == SUNXI_MMC_OK);
+            assert(result.received == 64 && m.acmd13 == 1 && m.command_count == before + 2);
+            assert(m.commands[before] == 55 && m.commands[before + 1] == 13 && m.args[before] == 0x12340000u);
+            assert(!memcmp(status, m.sd_status, 64));
+            assert(sunxi_mmc_au_sectors(status, 0) == cases[i].au);
+            assert(sunxi_mmc_au_sectors(status, 1) == (cases[i].uhs ? cases[i].uhs : cases[i].au));
+        }
+        /* A card that reports an error, or no APP_CMD bit, faults; eMMC and a busy core refuse the call. */
+        identified(&m, &h, SUNXI_MMC_SD, 1);
+        uint8_t status[64] __attribute__((aligned(64)));
+        m.bad_acmd = 1;
+        assert(sunxi_mmc_sd_status(&h, status, m.now + 100000)); run(&m);
+        assert(h.state == SUNXI_MMC_FAULT && h.result.error == SUNXI_MMC_CARD);
+        m.bad_acmd = 0;
+        identified(&m, &h, SUNXI_MMC_EMMC, 1);
+        assert(!sunxi_mmc_sd_status(&h, status, m.now + 100000));
+        identified(&m, &h, SUNXI_MMC_SD, 1);
+        assert(!sunxi_mmc_sd_status(&h, status, 0) && !sunxi_mmc_sd_status(&h, NULL, m.now + 100000));
     }
     /* Maximum SDXC capacity keeps a 64-bit count and accepts its final LBA. */
     init(&m, &h, SUNXI_MMC_SD, 1); field(m.csd, 48, 22, 0x3fffff); run(&m);
