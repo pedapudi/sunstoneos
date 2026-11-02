@@ -115,6 +115,14 @@ Items the coordinator or the work added after the finish line was fixed; they ar
    return; it is not an NPU result and was not submitted again.
 6. The mimus encoder on the NPU, on the mimus branch, after this plan.
 
+## Larger catalogues and a sized pool
+
+Eighteen compiled graphs (15.3 MB) run resident through the EL0 queue on the board (port 3-3, 852 MHz and 800 mV, Cortex-A55
+at 1794 MHz): the pool of 22 MiB, placed below the monitor interval, holds one slot for each graph, sized from the graph; the
+models come from a runner input region and the runtime checks their digests when it loads them. One pass over the 18 jobs takes
+22.75 ms, every output equals the simulator's byte for byte. The loader admits unpatched pointer words below 1 MiB (rule 5 of
+the loader specification). See [the resources design](../designs/npu-resources.md), "The pool" and "Models from outside the image".
+
 ## Open work
 
 1. Done: declared resources, run-time graph loading, shader integration, backpressure depth and tensor linking after the scheduler starts (see "What the NPU runs now"). What remains of this item is the backlog below.

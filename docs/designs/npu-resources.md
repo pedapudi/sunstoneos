@@ -203,6 +203,27 @@ grants, with a bounded wait for the lower priorities. This is the next step afte
 4. Backpressure measurements and the default depth.
 5. Linking after the scheduler has started, from declared links.
 
+## Models from outside the image
+
+An image does not have to link its models. A model is given to the runtime by an address, a length and a SHA-256
+(`struct npu_runtime_model`, `npu-catalogue.py --external`, cmake `SUNSTONE_OS_NPU_EXTERNAL_MODELS`); the memory at the address
+was filled by something else. The runtime does not care by what. Two sources are supported or planned: a runner input
+region in the application window (`tools/npu-external-pack.py` packs models and the vectors of a test application into two
+regions and writes the maps; the manifest pins the digests of the regions), and a large region that the large-memory loader
+reads from the card into upper memory and checks (not yet used for a model). The digest is checked when LOAD stages the copy,
+once: prepare does not hash a model that carries its digest, because hashing megabytes before the scheduler would outlast
+the one second that the secondary cores wait for the primary core (`platform/a733-smp-cached/continue.c`, exit status 3,
+detail `0x203`). For the same reason the start-up admits each graph once (a graph's layout takes tens of milliseconds on a
+Cortex-A55 at the boot clock: the sizing pass and the per-slot sizing were folded into prepare, and the lease is the whole
+pool), and a queue image loads its resident graphs when the ring opens, after the scheduler has started
+(`npu_runtime_load_resident`: the service worker stages and assembles them, the owner waits). Measured: 18 graphs of 0.85 to
+1.1 MB, 15.3 MB in all, start in the one second and are loaded in well under the six seconds that the application waits for
+the ring.
+
+Two operating-system faults showed up with a longer start and are fixed: the CPU clock owner's entry guard read a busy clock
+lease registry (a try-lock) as a refusal and ended the session; it now tries again. The terminal sequence of the normal return
+parked unless the NPU pool was exactly 8 MiB at `0x47400000`; it accepts a sized pool.
+
 ## Backlog
 
 - **The pool and the EL0 tensor windows are limited to the 128 MiB below `0x48000000`.** That is the write-back RAM that
