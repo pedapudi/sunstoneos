@@ -369,7 +369,7 @@ void os_npu_queue_end(void){complete();}
 int os_npu_submit(uint64_t timeout)
 {
     const struct os_session *s=os_session();
-    if(!caller()||!npu.opened||!timeout||timeout>1000000||!s||npu.jobs>=s->npu.jobs||!claim())return 0;
+    if(!caller()||!npu.opened||!timeout||timeout>1000000||!s||!claim())return 0;
     int result=call(NPU_SERVICE_SUBMIT,0,timeout);
     complete();
 #ifdef SUNSTONE_NPU_FAULT_HOOK

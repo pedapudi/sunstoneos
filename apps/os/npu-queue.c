@@ -99,7 +99,7 @@ static int open_queue(void *unused,unsigned depth)
     __asm__ volatile("mrs %0,sctlr_el1":"=r"(original_sctlr));
     uint64_t enabled=original_sctlr|(UINT64_C(1)<<26);
     __asm__ volatile("msr sctlr_el1,%0\n isb"::"r"(enabled):"memory");
-    ring.job_limit=os_session()->npu.jobs;
+    ring.job_limit=UINT64_MAX; /* no lifetime count of jobs; the 64-bit sequence is the only bound */
     opened=1;return 1;
 }
 static int close_queue(void *unused)
@@ -115,7 +115,7 @@ static int start(void *unused,unsigned handle,uint64_t sequence,uint64_t after,u
 {
     (void)unused;
     const struct os_session *s=os_session();
-    if(!opened||closed||os_npu_stopping()||!s||sequence>s->npu.jobs||handle>ring.handles||!handle)return -1;
+    if(!opened||closed||os_npu_stopping()||!s||handle>ring.handles||!handle)return -1;
     struct npu_queue_fence dependency={0};
     if(after)dependency=(struct npu_queue_fence){&direct.queue,after};
     /* The handle lease keeps every DMA buffer pinned across record release. */
