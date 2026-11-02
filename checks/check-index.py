@@ -90,8 +90,6 @@ PENDING = 'pending re-qualification against board measurements: '
 REQUALIFICATION = {
     'a733-pcie-trace.py': PENDING + 'PCIe controller, PHY, link-training and NVMe latencies and responses are uncited',
     'pcie-qemu.py': PENDING + 'the PCIe, PHY, endpoint and NVMe models it runs are uncited',
-    'a733-xhci-detach.py': PENDING + 'xHCI port power at start, port reset latency and TR Dequeue Pointer updates while running are uncited',
-    'a733-xhci-dma.py': PENDING + 'the xHCI model shared with a733-xhci-detach has three uncited behaviors',
     'io-native-ordering.py': PENDING + 'TWI status sequence, reset values and delays and posted-store completion are uncited',
     'memtest-machine.py': PENDING + 'SCTLR_EL1 reset, translation walk, DC ZVA and counter step are uncited',
     'power-write-order.py': PENDING + 'the PMIC bus event latency and status after START, USB reset minimums and initial register values are uncited',

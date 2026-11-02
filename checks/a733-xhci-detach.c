@@ -1,7 +1,25 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* xHCI core detach, slot disable and reattach against a modeled controller.
  * The model reads the core's command and transfer rings, as the composed USB2
- * check does. No TinyUSB, board or USB device is involved. */
+ * check does. No TinyUSB, board or USB device is involved.
+ *
+ * Controller behaviors of the model and their sources (xHCI 1.2, ~/.cache/sunstoneos/sources/usb-host/xhci-1.2.txt;
+ * line numbers refer to that text). Anything else the model does is the harness: it is stimulus, not a claim.
+ *  - A port is powered after a hardware reset: PP default 1, PLS RxDetect, CCS clear (lines 20405 and 4005).
+ *  - PP is writable; software cannot change the state of the port unless PP is 1; the port is stable within 20 ms
+ *    of a 0 to 1 transition of PP and, with PPC 1, software waits 20 ms before changing the port state; a port
+ *    with PP 0 reports no attach (lines 20254-20256 and 20405-20412). The model refuses a reset request earlier.
+ *  - After an attach to a USB2 port PED and PR are 0 and PLS is Polling (7); writing PR starts the bus reset; PR
+ *    remains set until reset signaling completes; completion sets PRC and PED, clears PR, sets PLS to U0 (0), gives the
+ *    port speed and generates a Port Status Change Event (lines 4069-4081, 20328-20334). The duration of reset
+ *    signaling is not stated by the xHCI specification; the harness picks it (RESET_US) as a stimulus.
+ *  - PED and PR written together are undefined (note 82, line 20337); the model refuses the write.
+ *  - PED is never written to 1; change bits are RW1C (lines 20290-20300 and 20262).
+ *  - After a disconnect the port is Disconnected: CCS and PED clear, PLS RxDetect (lines 4060-4066).
+ *  - The TR Dequeue Pointer of the output endpoint context holds the dequeue pointer only while the endpoint is
+ *    Halted or Stopped and is undefined otherwise (line 22745). The model stores a poison value while the endpoint
+ *    runs and the real pointer when it halts or stops, so a core that reads it while running fails.
+ *  - A doorbell ring moves a Stopped endpoint to Running (xHCI 1.2 section 4.6.9). */
 #include "a733_xhci.h"
 #include <assert.h>
 #include <stdio.h>
@@ -18,11 +36,14 @@ static struct a733_xhci x;
 #else
 #define x SUNSTONE_XHCI_FIXTURE_CORE
 #endif
-static uint32_t reg[0x8000/4],portsc;
+static uint32_t reg[0x8000/4],portsc=BIT(9)|(5u<<5); /* Disconnected and powered. */
 static uint64_t now=1000,last_command,last_transfer[A733_XHCI_DEVICES][A733_XHCI_ENDPOINTS];
 static unsigned lost,events,event_cycle=1,slots,addresses,doorbells,hold,pattern,model_speed=3,irq_model;
 static struct {unsigned kind,slot,dci;} commands[64];static unsigned command_count;
 static struct a733_xhci_notice notices[64];static unsigned notice_count;
+static uint64_t power_stable_at,reset_done;static unsigned portsc_reads;
+#define RESET_US 10000u /* Stimulus: the xHCI specification gives no duration. */
+#define UNDEFINED_DEQUEUE UINT64_C(0xbad0bad0bad0bad0)
 static const char *mode;
 static int is(const char *m){return !strcmp(mode,m);}
 static uint32_t get32(const void *v){const uint8_t *p=v;return p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
@@ -34,20 +55,37 @@ static int zero(const void *p,size_t n){const uint8_t *b=p;for(size_t i=0;i<n;++
 static int cn(void *c,uint64_t *v){(void)c;*v=now;return 1;}
 static int current(void *c){(void)c;return 1;}
 static int live(void *c,uint64_t g,uint64_t d){(void)c;(void)d;return g==7&&!lost?1:-1;}
-static int rd(void *c,uint32_t off,uint32_t *v){(void)c;assert(off<0x8000&&!(off&3));*v=off==0x440?portsc:reg[off/4];return 1;}
+static void set_state(uint8_t *ep,unsigned state);
+static int rd(void *c,uint32_t off,uint32_t *v){(void)c;assert(off<0x8000&&!(off&3));if(off==0x440)++portsc_reads;*v=off==0x440?portsc:reg[off/4];return 1;}
 static int wr(void *c,uint32_t off,uint32_t v)
 {
     (void)c;assert(off<0x8000&&!(off&3));
     if(irq_model&&off==0x44){reg[off/4]&=~v;return 1;}
     if(irq_model&&off==0x1020){reg[off/4]=(v&2)|((reg[off/4]&1)&~(v&1));return 1;}
     if(off==0x440){
-        /* PORTSC: change bits are RW1C, PED is never written, PR enables HS. */
-        assert(!(v&2));portsc&=~(v&UINT32_C(0xfe0000));portsc=(portsc&~BIT(9))|(v&BIT(9));
-        if(v&BIT(4)){assert((portsc&1)&&!(portsc&2));portsc|=2|BIT(21)|(model_speed<<10);}
+        /* PORTSC (xHCI 1.2 5.4.8): change bits are RW1C, PED is never written, PP is writable, PR starts a reset. */
+        assert(!(v&2));
+        portsc&=~(v&UINT32_C(0xfe0000));
+        if((v&BIT(9))&&!(portsc&BIT(9)))power_stable_at=now+20000;
+        portsc=(portsc&~BIT(9))|(v&BIT(9));
+        if(!(portsc&BIT(9)))portsc&=~BIT(4);
+        if(v&BIT(4)){
+            /* The state of the port changes only while it is powered and stable. */
+            assert((portsc&BIT(9))&&now>=power_stable_at&&(portsc&1)&&!(portsc&2)&&!(portsc&BIT(4)));
+            portsc|=BIT(4);reset_done=now+RESET_US;
+        }
         return 1;
     }
     if(off==0x2000)return 1;
-    if(off>0x2000&&off<=0x2000+4*A733_XHCI_DEVICES){++doorbells;return 1;}
+    if(off>0x2000&&off<=0x2000+4*A733_XHCI_DEVICES){
+        ++doorbells;
+        unsigned slot=(off-0x2000)/4,target=v&255;
+        if(slot&&(slots&BIT(slot))&&target>=1&&target<32){
+            uint8_t *ep=cpu(get64(x.dcbaa+8*slot))+64*target;
+            if((get32(ep)&7)==3){set_state(ep,1);put64(ep+8,UNDEFINED_DEQUEUE);} /* Stopped to Running. */
+        }
+        return 1;
+    }
     reg[off/4]=v;
     if(off==0x40){if(v&2){reg[0x40/4]=0;reg[0x44/4]=1;}else if(v&1)reg[0x44/4]=0;}
     return 1;
@@ -82,11 +120,11 @@ static void command_step(void)
     else if(kind==11){
         uint8_t *out=context(slot);assert(get32(d->input+4)==3);
         memcpy(out,d->input+64,64);memcpy(out+64,d->input+128,64);
-        unsigned bsr=!!(t->control&BIT(9));put32(out+12,((bsr?1u:2u)<<27)|(bsr?0:++addresses));set_state(out+64,1);
+        unsigned bsr=!!(t->control&BIT(9));put32(out+12,((bsr?1u:2u)<<27)|(bsr?0:++addresses));set_state(out+64,1);put64(out+64+8,UNDEFINED_DEQUEUE);
     }else if(kind==12){
         uint8_t *out=context(slot);uint32_t add=get32(d->input+4),address=get32(out+12)&255;
         memcpy(out,d->input+64,64);put32(out+12,(3u<<27)|address);
-        for(unsigned i=2;i<32;++i)if(add&BIT(i)){memcpy(out+64*i,d->input+64*(i+1),64);set_state(out+64*i,1);}
+        for(unsigned i=2;i<32;++i)if(add&BIT(i)){memcpy(out+64*i,d->input+64*(i+1),64);set_state(out+64*i,1);put64(out+64*i+8,UNDEFINED_DEQUEUE);}
     }else if(kind==14){
         uint8_t *ep=context(slot)+64*dci;if((get32(ep)&7)!=2)code=19;else set_state(ep,3);
     }else if(kind==16){
@@ -125,11 +163,17 @@ static void transfer_step(void)
             uint8_t *destination=cpu((uint64_t)trb->parameter_lo|((uint64_t)trb->parameter_hi<<32));
             for(unsigned k=0;k<e->length;++k)destination[k]=(uint8_t)(pattern+k);
         }
-        put64(context(d->slot)+64*e->number+8,(e->ring_pa+16*e->index)|e->cycle);
         event(32,e->pending_trb,1,0,e->number,d->slot);return;
     }
 }
-static enum a733_xhci_result step(void){now+=100;command_step();transfer_step();return a733_xhci_poll(&x);}
+static void reset_step(void)
+{
+    if(!(portsc&BIT(4))||now<reset_done)return;
+    portsc&=~(BIT(4)|UINT32_C(0x1e0)); /* PR clear, PLS U0 */
+    portsc|=2|BIT(21)|(model_speed<<10);
+    event(34,UINT64_C(1)<<24,1,0,0,0);
+}
+static enum a733_xhci_result step(void){now+=100;reset_step();command_step();transfer_step();return a733_xhci_poll(&x);}
 #define UNTIL(c) do{for(unsigned n_=0;!(c);++n_){enum a733_xhci_result r_=step();\
     if(r_==A733_XHCI_RETAINED||r_==A733_XHCI_INVALID||n_>4000){fprintf(stderr,"line %d: result %d\n",__LINE__,r_);abort();}}}while(0)
 static struct a733_xhci_device *device(unsigned address)
@@ -160,7 +204,8 @@ static void enumerate(unsigned address)
 }
 static void attach(unsigned count)
 {
-    portsc|=1|BIT(17);event(34,UINT64_C(1)<<24,1,0,0,0);
+    assert((portsc&BIT(9))&&now>=power_stable_at); /* An unpowered port reports no attach. */
+    portsc=(portsc&~UINT32_C(0x1e0))|1|BIT(17)|(7u<<5);event(34,UINT64_C(1)<<24,1,0,0,0);
     unsigned base=notice_count;UNTIL(notice_count>base);
     assert(notice_count==base+1&&notices[base].kind==A733_XHCI_ATTACH);
     unsigned attaches=0;for(unsigned i=0;i<notice_count;++i)attaches+=notices[i].kind==A733_XHCI_ATTACH;assert(attaches==count);
@@ -177,7 +222,7 @@ static void bulk_read(unsigned address,unsigned value)
     unsigned base=notice_count;assert(a733_xhci_transfer(&x,address,0x81,buffer,512,now+1000000));expect(base,address,0x81,512);
     for(unsigned k=0;k<512;++k)assert(buffer[k]==(uint8_t)(value+k));
 }
-static void unplug(unsigned csc){portsc&=~(1u|2u|(15u<<10));if(csc)portsc|=BIT(17);event(34,UINT64_C(1)<<24,1,0,0,0);}
+static void unplug(unsigned csc){portsc=(portsc&~(1u|2u|BIT(4)|(15u<<10)|UINT32_C(0x1e0)))|(5u<<5);if(csc)portsc|=BIT(17);event(34,UINT64_C(1)<<24,1,0,0,0);}
 static enum device_memory_state memory(void)
 {struct device_memory_extent e;enum device_memory_state s;assert(device_memory_describe(&pool,lease,&e,&s));return s;}
 static unsigned count(unsigned kind,unsigned dci,unsigned from)
@@ -200,12 +245,15 @@ static void cleared(unsigned j,unsigned slot)
 int main(int argc,char **argv)
 {
     mode=argc>1?argv[1]:"direct";struct device_memory_extent extent;
+    if(is("power-off"))portsc=5u<<5; /* Software had powered the port off; the core must power it. */
     assert(device_memory_pool_init(&pool,(uintptr_t)dma,PHYS,sizeof(dma))&&device_memory_acquire(&pool,99,sizeof(dma),&lease,&extent));
     reg[0]=0x01100040;reg[1]=(1u<<24)|(1u<<8)|3;reg[4]=(0x20u<<16)|1|4|8;reg[5]=0x2000;reg[6]=0x1000;
     reg[0x80/4]=0x02000002;reg[0x84/4]=0x20425355;reg[0x88/4]=0x101;reg[0x44/4]=1;reg[0x48/4]=1;
     const struct a733_xhci_ops ops={cn,current,live,rd,wr,wr64,barrier,outside,notice};
     assert(a733_xhci_init(&x,&ops,&pool,&pool,lease,7,now+10000000,now+100000000));
-    UNTIL(portsc&BIT(9)); /* Port power is the last startup phase. */
+    UNTIL(portsc_reads&&(portsc&BIT(9))); /* The core reads the port, and powers it when it is off, as its last startup phase. */
+    step();
+    while(now<power_stable_at)step(); /* Power is stable within 20 ms of the write. */
     if(!strncmp(mode,"hub",3)||!strncmp(mode,"address-",8)||is("tier-order")){
         attach(1);enumerate(3);
         assert(a733_xhci_mark_hub(&x,3)&&a733_xhci_hub_configure(&x,3,4,0,0)&&a733_xhci_open_interrupt(&x,3,0x81,1,12,now+1000000));

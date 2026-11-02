@@ -13,7 +13,7 @@ static void init_dma(const char *which)
     const struct a733_xhci_ops ops={cn,current,live,rd,wr,wr64,barrier,outside,notice};
     assert(a733_xhci_init(&x,&ops,&pool,&pool,lease,7,now+10000000,now+100000000));
     if(!strcmp(which,"full-speed"))model_speed=1;
-    UNTIL(portsc&BIT(9));attach(1);enumerate(1);
+    UNTIL(portsc_reads&&(portsc&BIT(9)));step();attach(1);enumerate(1);
 }
 static void bulk_dma(const char *which)
 {
