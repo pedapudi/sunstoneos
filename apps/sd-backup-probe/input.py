@@ -36,9 +36,12 @@ def pack_input(sectors, uhs_mode=0, reads=1, blocks=8, phases=()):
 def stop_fields_identification(w):
     """The stop word of a lifetime that failed before the card was identified (probe reason 3): fault line 10 bits, why 2, platform stage 5, the core's
     error 4 (sunxi_mmc_error: 1 io, 2 time, 3 timeout, 4 admission, 5 variant, 6 controller, 7 card, 8 unsupported, 9 signal), its protocol step 6 (the
-    P_* enum of drivers/storage/sunxi_mmc.c), and the CMD19 sample delay reached divided by two, 5."""
+    P_* enum of drivers/storage/sunxi_mmc.c), and then 5 bits: the CMD19 sample delay reached divided by two when the core was tuning, otherwise the last raw interrupt word as flags (bit 0 response
+    timeout, 1 response CRC error, 2 response error, 3 command done, 4 any other error)."""
+    low = w & 31
     return dict(fault_line=w >> 22 & 1023, why=w >> 20 & 3, platform_stage=w >> 15 & 31, core_error=w >> 11 & 15, core_protocol=w >> 5 & 63,
-                tune_delay_half=w & 31)
+                tune_delay_half=low, raw_flags=dict(response_timeout=low & 1, response_crc_error=low >> 1 & 1, response_error=low >> 2 & 1, command_done=low >> 3 & 1,
+                                                    other_error=low >> 4 & 1))
 
 
 def stop_fields(w):

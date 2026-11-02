@@ -124,3 +124,17 @@ Nothing about writes at 1.8 V has been run. What is known and what is needed:
 3. The measurement of step 2 (mode 0 on 3-3), then the same set of runs on 3-1, which has never been at 1.8 V.
 4. The write-path qualification above.
 5. The runner: approval of the 150 MHz point and of CMD11 for OS images, and the image classification for UHS-I.
+
+## Prediction for the measurement of a 3.3 V host in front of a card at 1.8 V (written before the run)
+
+Run: the read-only probe in mode 0 on 3-3 (`--uhs-mode 0`, 32 reads of 128 KiB from sector 0), image built from `work/sd-adopt-1102` at this commit. The card is at 1.8 V from the earlier lifetimes (it has not lost power) and the bank is at 3.3 V (the
+last close restored it), the state the boot ROM meets on every reset. The probe sends CMD0, CMD8 and ACMD41 with S18R and never CMD11. A silent card is a stop at identification and the lifetime ends in a watchdog reset, as the stops of the sweep
+trials did; the board returns to FEL by itself. The run does not change the card's state. It is also the first board run of the 400 kHz setup with the vendor's data drive phase (90 degrees, bit 17 clear; the core drove 180 before).
+
+| Outcome | Expected | What it decides |
+| --- | --- | --- |
+| The card is silent at CMD8 | most likely (about two in three): a card whose signalling is 1.8 V puts 1.8 V high levels on CMD, below a 3.3 V host's input threshold (0.625 of 3.3 V = 2.06 V) | stop word reason 3, core protocol 1 (CMD8), core error 6 (controller), flags: response timeout set and command done clear. Rule: silence at 3.3 V means 1.8 V or absent, so re-enter at 1.8 V (no S18A-clear case exists) |
+| CMD8 answers, ACMD41 answers with S18A clear | about one in four | identification completes at 3.3 V high speed, 32 reads at about 21 MB/s, OCR bit 24 clear, normal return. Rule: S18A clear at 3.3 V cannot tell a non-UHS card from a card at 1.8 V, so the 1.8 V probe of this note is needed |
+| Garbled answers (CRC errors, partial) | unlikely (about one in ten) | stop at identification with response CRC error; treated like silence |
+
+Not predicted to happen: S18A set from a card at 1.8 V; any change of the card's state; a lifetime that cannot return.

@@ -62,6 +62,13 @@ static StackType_t stacks[2][4096];
 
 enum { CONSTRUCT, IDENTIFY, CARD, STATUS, READ, POLL, TAKE, CAPTURE, FAT, REGION };
 static uint32_t pf_ready[3];
+/* The last raw interrupt word of a core that stopped before tuning, as 5 flags: response timeout (bit 8), response CRC error (6), response error (1),
+ * command done (2), any other error bit. A silent card shows as the timeout without command done. */
+static uint32_t raw_flags(uint32_t ir)
+{
+    return ((ir >> 8) & 1u) | (((ir >> 6) & 1u) << 1) | (((ir >> 1) & 1u) << 2) | (((ir >> 2) & 1u) << 3) |
+           (((ir & SUNXI_SMHC_MMC_ERRORS & ~((1u << 8) | (1u << 6) | (1u << 1))) ? 1u : 0u) << 4);
+}
 static uint64_t stop_word;               /* what a failed lifetime publishes in the fault record, kept in the report too */             /* GPIO_POW_VAL and GPIO_POW_VAL_SET_CTL when the card was identified */
 static uint8_t status_copy[64];
 static uint64_t status_us, status_result;
@@ -633,7 +640,8 @@ static void sd_task(void *unused)
          * fault line, why and stage as above, then the core's error (4 bits), its protocol step (6 bits) and half the CMD19 sample delay it had reached (5 bits). */
         if (s.reason == 3 || !s.card_valid)
             stop_word = (uint64_t)((line << 22) | ((s.platform.fault_why & 3u) << 20) | ((s.platform.stage & 31u) << 15) |
-                ((s.platform.core.result.error & 15u) << 11) | ((s.platform.core.protocol & 63u) << 5) | ((s.platform.core.tune_delay >> 1) & 31u));
+                ((s.platform.core.result.error & 15u) << 11) | ((s.platform.core.protocol & 63u) << 5) |
+                (s.platform.core.tuning ? ((s.platform.core.tune_delay >> 1) & 31u) : raw_flags(s.platform.core.result.interrupts)));
     }
     report(r > 0 ? 0 : 1);
     /* With the platform constructed and not closed, the lifetime cannot return. The fault record then
