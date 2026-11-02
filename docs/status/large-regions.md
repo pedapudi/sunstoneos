@@ -14,7 +14,7 @@ The first run of `sunstone-a733-os-large-region-test` in the CPU-return profile 
 
 ## Measured on a board, OS image at the CPU-return top points
 
-Entry `1793632829779717086-f7d0d1cf` (3-1, A76, `PERF_BOOT=high`, development DRAM; repeat of `1793632747850074996-92d6900c`, whose expectation was frozen as raw bytes and so reads result-mismatch). The image includes the table-copy fix, the controller interrupt enable from the storage branch and its 50 s manifest.
+Entry `1793632829779717086-f7d0d1cf` (3-1, A76, `PERF_BOOT=high`, development DRAM; a repeat of a first run whose expectation was frozen as raw bytes, so that run reads result-mismatch). The image includes the table-copy fix, the controller interrupt enable from the storage branch and its 50 s manifest.
 
 - **Load:** the 536,870,912-byte file streamed from SD0 into the first half of the 1 GiB region in 30.659 s, 17.5 MB/s (16.7 MiB/s); the digest matched (state READY, error 0). The design predicted 24 to 27 s: missed by 14 percent. Both runs report the same 30,659,000 us.
 - **Task switch:** 20,000 round trips of two notifications between two tasks, 4.40 us per round trip in one space and 4.36 us with a TTBR0 write at each switch. The write adds nothing measurable; the difference is under one counter tick (42 ns) per switch and has the wrong sign.
