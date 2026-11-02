@@ -37,6 +37,7 @@ def validate_admission(admission,raw,build,layout,image_hash,cache=None,*,execut
 
 def validate_reports(monitor,platform,receipt,prepared):
     value=_original_reports(monitor,platform,receipt,prepared)
+    if value.get('failure_return'):return value
     restart=prepared.get('execution_profile') in (finite.RESTART,finite.POWER)
     client=finite.startup_client(prepared)
     count=4 if restart else client[3] if client else 3

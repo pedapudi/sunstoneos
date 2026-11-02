@@ -224,6 +224,9 @@ def image_profile(data,manifest):
   if latency['mode']=='queue':
    require(all(name in symbols for name in ('npu_runtime_queue_claim','npu_runtime_queue_wait','npu_runtime_queue_return','npu_queue_submit','npu_queue_release')),
     'Missing native resident queue implementation.')
+ if 'npu_failure_return_profile' in names:
+  require(runtime and startup and read('npu_failure_return_profile')==FAILURE_MARKER,'Failure return marker or profile differs.')
+  geometry['failure_return']=True
  if manifest['execution_profile']==SWITCH:geometry['model_switch']=True
  if manifest['execution_profile']==SDK:geometry['sdk']=True
  if manifest['execution_profile']==INFERENCE:geometry['single_inference']=True
@@ -391,12 +394,24 @@ def job_counters(text):
  return {'frequency':frequency,'jobs':jobs}
 
 
+FAILURE_REASONS={1:'status above the allowed return status',2:'return state not ready',3:'status above one',4:'NPU not quiescent',
+ 5:'receipt completion word differs',6:'past the diagnostic deadline',7:'cache stride differs',9:'the client requested a failure return'}
+FAILURE_MARKER=struct.pack('<3Q',0x4e5055464c523031,1,2)
+
+def failure_report(text,deadline):
+ """A failure return of a quiesced NPU: status 2, the receipt matched, and the platform log ends with the reason."""
+ match=re.fullmatch(r'(?s)(.*\n)?NPU_FAILURE=0x([0-9a-f]{16})\n',text)
+ require(match is not None and int(match[2],16) in FAILURE_REASONS,'Missing or unknown failure return record.')
+ reason=int(match[2],16)
+ return {'normal_return':True,'failure_return':True,'functional_success':False,'controlled_negative':False,'status':2,
+  'diagnostic_deadline':deadline,'failure':{'reason':reason,'predicate':FAILURE_REASONS[reason]},'log':text}
+
 def validate_reports(monitor,platform,receipt,p):
  thermal=p.get('execution_profile')==THERMAL;startup=startup_client(p)
  require(len(monitor)==128 and len(platform)==16384 and len(receipt)==(112 if thermal else 88),'Incomplete returned reports.')
  m=struct.unpack('<16Q',monitor);h=struct.unpack_from('<16Q',platform);r=struct.unpack('<14Q' if thermal else '<11Q',receipt);g=p['geometry']
  magic=0x415337334e505231
- require(m[0]==magic and (m[1],m[2])==(p['epoch'],p['generation']) and m[3]==5 and m[4] in ((0,1,2) if thermal else (0,1)) and m[5]==(0x4e50554e if p.get('execution_profile') in (CHECKPOINT,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT) else startup[1] if startup else 0) and m[7]==1,'No matched normal monitor completion.')
+ require(m[0]==magic and (m[1],m[2])==(p['epoch'],p['generation']) and m[3]==5 and m[4] in ((0,1,2) if thermal or g.get('failure_return') else (0,1)) and m[5]==(0x4e50554e if p.get('execution_profile') in (CHECKPOINT,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT) else startup[1] if startup else 0) and m[7]==1,'No matched normal monitor completion.')
  status=m[4];deadline=r[9];armed=deadline-480000000
  checkpoint=p.get('execution_profile') in (CHECKPOINT,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT)
  require(p.get('execution_profile',PROFILE) in PROFILES and bool(g.get('checkpoint'))==checkpoint and bool(g.get('thermal'))==thermal,'Report profile differs.')
@@ -418,6 +433,8 @@ def validate_reports(monitor,platform,receipt,p):
   else:require(text==prefix,'Checkpoint log or status differs.')
   require(status==0,'Checkpoint log or status differs.')
   return {'normal_return':True,'checkpoint':('PROVIDERS_CONSTRUCTED' if p.get('execution_profile')==PROVIDER_CHECKPOINT else 'ENTRY_MEMORY_READY'),'functional_success':False,'controlled_negative':False,'jobs':0,'status':0,'diagnostic_deadline':deadline,'log':text,**mbus}
+ if status==2 and g.get('failure_return'):
+  return failure_report(text,deadline)
  if g.get('latency'):
   result=latency_report(text,status,deadline,g)
   require(m[6]<=result['timing']['start_ticks']<result['timing']['end_ticks']<=h[9],

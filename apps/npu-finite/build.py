@@ -38,6 +38,7 @@ p.add_argument('--idle',choices=('none','off','gate'),help='queue latency only: 
 p.add_argument('--dependent-chain',action='store_true',help='queue latency only: append two queued models and their fused stream with an aliased output/input tensor')
 p.add_argument('--chain-repeats',type=int,default=1,help='dependent chain: repeat each resident path 1..1000 times, checking both outputs after each final fence')
 p.add_argument('--sequence',type=int,default=0,help='queue latency only: append one resident sequence repeating the same command 2..64 times')
+p.add_argument('--failure-return',action='store_true',help='a failure of a quiesced NPU returns to the boot ROM with a failure record (status 2) instead of ending at the watchdog; implied by --idle')
 p.add_argument('--sdk',action='store_true',help='two models through the public application NPU mailbox API')
 p.add_argument('--artifacts',type=Path,default=Path.home()/'.cache/sunstoneos/build/npu-board/session-artifacts.json',
  help='--runtime: catalogue artifact paths by model name; the baseline fixture supplies its own model')
@@ -49,6 +50,8 @@ if a.active_cancel:
  if a.latency or a.runtime or a.model_switch or a.sdk or a.sustained or a.restart or a.power_cycle or a.shufflenet or a.thermal or a.rate_492 or a.entry_checkpoint or a.entry_irq_checkpoint or a.entry_provider_checkpoint:
   p.error('Active cancellation requires the baseline single-core interrupt profile')
  a.startup_only=True;a.interrupt=True;a.rate_852=True
+if a.idle:a.failure_return=True
+if a.failure_return and not (a.latency or a.runtime or a.startup_only):p.error('The failure return needs a startup-only or runtime profile')
 if a.idle and (a.latency!='queue' or a.sequence or a.dependent_chain):p.error('Idle benchmark requires --latency queue and excludes sequences and dependent chains')
 if a.dependent_chain and (a.latency!='queue' or a.sequence):p.error('Dependent chain requires --latency queue and excludes --sequence')
 if not 1<=a.chain_repeats<=1000 or a.chain_repeats!=1 and not a.dependent_chain:p.error('Chain repetitions require --dependent-chain and 1..1000 repetitions')
@@ -134,6 +137,7 @@ def compile_like(suffix,source,name):
  if a.sdk:c += ['-DSUNSTONE_NPU_SDK_RETURN=1']
  if a.sustained:c += ['-DSUNSTONE_NPU_SUSTAINED=1']
  if a.latency:c += ['-DSUNSTONE_NPU_LATENCY=1','-DSUNSTONE_NPU_QUEUE_TIMING=1',f'-DSUNSTONE_NPU_LATENCY_QUEUE={int(a.latency=="queue")}',f'-DSUNSTONE_NPU_LATENCY_SEQUENCE={a.sequence}',f'-DSUNSTONE_NPU_DEPENDENT_CHAIN={int(a.dependent_chain)}',f'-DSUNSTONE_NPU_CHAIN_REPEATS={a.chain_repeats}']
+ if a.failure_return:c += ['-DSUNSTONE_NPU_FAILURE_RETURN=1']
  if a.idle:c += [f'-DSUNSTONE_NPU_IDLE_GATE={ {"off":0,"gate":1,"none":2}[a.idle] }']
  if a.entry_provider_checkpoint:c += ['-DSUNSTONE_NPU_ENTRY_PROVIDER_CHECKPOINT=1','-DSUNSTONE_NPU_INTERRUPT=1']
  if a.entry_irq_checkpoint:

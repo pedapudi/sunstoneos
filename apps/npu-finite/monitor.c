@@ -201,7 +201,7 @@ _Noreturn void npu_finite_exception(uint64_t operation,uint64_t status,uint64_t 
 #endif
 #endif
 #ifdef SUNSTONE_NPU_STARTUP_ONLY
-    if(status>NPU_STARTUP_MAX_STATUS)a733_smp_stop(6,operation);
+    if(status>NPU_FINITE_MAX_RETURN_STATUS)a733_smp_stop(6,operation);
 #endif
     if(kind!=1 || (esr>>26)!=0x17 || operation!=0x733 || status>
 #ifdef SUNSTONE_NPU_FINITE_THERMAL
@@ -209,7 +209,7 @@ _Noreturn void npu_finite_exception(uint64_t operation,uint64_t status,uint64_t 
        r->thermal_reason>3 || r->jobs>2 || (status==1 && !r->jobs) || (status==0 && r->jobs!=2) ||
        (status==2 && (!r->thermal_reason || r->jobs==2)) ||
 #else
-       1 ||
+       NPU_FINITE_MAX_RETURN_STATUS ||
 #endif
        (control&0x1005) ||
        now>=deadline || r->magic!=NPU_FINITE_RECEIPT_MAGIC || r->epoch!=admission.epoch ||
