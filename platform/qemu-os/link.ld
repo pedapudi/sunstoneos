@@ -6,6 +6,7 @@ ENTRY(_start)
 MEMORY {
     CODE (rx) : ORIGIN = 0x41000000, LENGTH = 2M
     RAM (rw) : ORIGIN = 0x41200000, LENGTH = 10M
+    TABLES (rw) : ORIGIN = 0x41c00000, LENGTH = 2M
 }
 SECTIONS {
     .text : { KEEP(*(.text.boot)) KEEP(*(.text.vectors)) *(.text*) } > CODE
@@ -27,6 +28,9 @@ SECTIONS {
     } > CODE
     __ram_start = ORIGIN(RAM);
     .data : { *(.data*) } > RAM
+    /* Weak references to absent functions load their address from here; without a place the linker puts the
+     * orphan after the table block, which EL1 cannot read. */
+    .got : { *(.got*) } > RAM
     .bss (NOLOAD) : ALIGN(64) {
         __bss_start = .;
         *(.bss*) *(COMMON)
@@ -43,5 +47,6 @@ SECTIONS {
         . += 4096;
         __heap_end = .;
     } > RAM
+    .tables (NOLOAD) : ALIGN(4096) { *(.tables) } > TABLES
     /DISCARD/ : { *(.comment) *(.eh_frame*) *(.note*) }
 }

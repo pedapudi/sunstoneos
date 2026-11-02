@@ -13,6 +13,12 @@
 #include <stdint.h>
 extern uint64_t os_space_kernel_ttbr;      /* the table every core installed at boot (ASID 0) */
 extern uint8_t os_space_active;
+/* The kernel's level-1 entries for the first 16 GiB of address space (slots 0 to 15), which the platform
+ * copies out of its table. The table's own pages need not be readable at EL1: the A733 profile leaves the
+ * 2 MiB block that holds them unmapped there, so reading them through TTBR0 is a translation fault. Every
+ * slot from 16 up is zero. */
+#define OS_KERNEL_L1_HEAD 16
+void os_kernel_l1_head(uint64_t out[OS_KERNEL_L1_HEAD]);
 static inline void os_space_switch_in(const void *tag)
 {
     if (!os_space_active) return;
