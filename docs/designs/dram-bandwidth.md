@@ -107,6 +107,23 @@ not by the memory. The rate in multiply-accumulates per second of the streaming 
 should therefore equal that of the resident pass within about 25 percent; a
 streaming rate further below the resident rate shows a limit from the memory.
 
+## Predicted dispatch cost and in-cache rate of the split kernel
+
+The pass times of the split kernel at one and two rows lie close to the time that
+the streamed bytes need at the read rate of all eight cores (24.1 MB at 8.4 GB/s is
+2.9 ms), which suggests a memory limit. Two other costs hide inside those times:
+each call dispatches seven worker tasks, and the padded tiles take compute time. The
+in-cache control separates them. It dispatches once and has each worker repeat its
+own 64 KiB share of a 512 x 1024 matrix 64 times, so the share stays in the first-level
+and second-level caches of the core. The padded-tile rate of the eight cores at 64
+rows is the best case, 74.5 giga multiply-accumulates per second (measured with
+the split kernel on this board in an earlier run); a pass of 64 repeats of the 0.52
+million-weight matrix then takes 64 x 0.524 M x 4 padded rows / 74.5 G = 1.8 ms at one or
+two rows, 3.6 ms at seven rows, 7.2 ms at fourteen rows and 28.8 ms at 64 rows,
+plus under 0.1 ms for the one dispatch. The streaming pass of twelve calls then
+holds 1.3 ms of tile compute and about 0.6 ms of dispatch at one row, so a measured
+streaming time near 3.1 ms leaves about 1.2 ms for the memory.
+
 ## Result
 
 The board record, the measured table and the comparison with this prediction
