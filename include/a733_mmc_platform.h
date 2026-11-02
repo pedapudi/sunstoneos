@@ -37,6 +37,7 @@ struct a733_mmc_platform_config {
      * use IDMAC, up to SUNXI_MMC_MAX_DMA_BLOCKS. An exclusive SD HIGH_SPEED4
      * update service may bind; its writes remain authorized one-sector PIO. */
     volatile struct sunxi_mmc_dma_descriptor *dma;
+    uint8_t observe_s18;       /* SD high speed only: ACMD41 carries S18R and its S18A is recorded; no CMD11 (sunxi_mmc.h) */
 };
 /* Fixed ROM JTAG route, not permission to take over a debugger. The caller's
  * physical authority must exclude debug clients before this exact handoff.

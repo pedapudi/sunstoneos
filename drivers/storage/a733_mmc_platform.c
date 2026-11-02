@@ -420,6 +420,7 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
         c->dma?core_dma_sync:NULL},
         p,(uintptr_t)p,c->kind,800000,c->voltage_mask,c->sd_profile,c->dma};
     if(!sunxi_mmc_init(&p->core,&cfg))return 0;
+    if(c->observe_s18&&!sunxi_mmc_observe_s18(&p->core))return 0;
     atomic_init(&p->busy,0);p->initialized=1;return 1;
 }
 static enum a733_mmc_platform_result metadata(struct a733_mmc_platform *p)
