@@ -480,3 +480,61 @@ Every measurement batch needs a concrete question, relevant input identities,
 and a declared sample count or stopping rule. Reuse valid baseline and candidate
 results. Repeat only when changed inputs or unresolved variance require new
 evidence; commits, handoffs, and documentation changes do not justify reruns.
+
+## Host validation rules
+
+A host check is worth its cost when it tests our own logic, reaches a path that the board cannot reach on demand (faults, races, refusals, recovery), guards a board run, or links the real code on both sides of an interface. A hand-written model of hardware, firmware or a vendor service is worth its cost only where it is anchored to a measurement or a reference.
+
+1. A behavioral model of hardware, firmware or a vendor service models only behaviors that cite a board measurement (a queue entry or a fact of `docs/hardware/a733-facts.json`) or a reference source (Linux, TF-A, a vendor driver, an Arm or Allwinner specification section). The citation sits beside the modeled behavior.
+2. Where both sides of an interface are our code, the check links the real code instead of a stand-in.
+3. A mock refuses any operation or register access that it does not model. Use the strict register model and the host link described below, and the GIC model of `tools/hw_facts.py` for interrupt priorities.
+4. Every bug fix adds a case that fails on the pre-fix code, and the commit message names the case.
+5. The board is ground truth. When a board run fails where a host check passed, the model behind that check is wrong. The fix corrects the model and adds a case built from the board record, in the same change as the code fix.
+6. A modeled behavior that the board can read back has a conformance case against a recorded board reading, as `checks/hw-facts.py` does for the GIC model. Where neither a measurement nor a reference exists, the check does not model the behavior; a board run tests it.
+
+A strict model refuses accesses it does not cover, and a citation makes a modeling error traceable, but neither makes a modeled behavior correct. Only agreement with board readings does.
+
+A Non-secure view of the GIC differs from the stored one: a priority stored as 0xd8 reads 0xb0 at Non-secure EL1. Compare priorities only through `include/a733_gic_priority.h` or `GicModel`; QEMU runs with one security state and cannot show a view error.
+
+### Strict register model and host link
+
+`checks/host/strict_mmio.h` defines a register table in which each register names its source and its write hook. The model refuses an offset that is not defined, an access of another width, a value that the write hook does not define, and a definition without a source. `checks/host_link.py` builds a driver module from its unchanged source with `checks/host/mmio/a733_mmio.h` ahead of `include/a733_mmio.h`, so the accessors reach the strict model and nothing else is replaced; it verifies that the host header defines every accessor of the real header. `checks/watchdog-ownership.py` is the first use: the real `drivers/watchdog/a733_watchdog.c` against `checks/watchdog.c`, which cites the register map, the write key and the reload word and refuses the rest.
+
+### Checks pending re-qualification
+
+The checks below keep their files and run by hand, but the full gate lists them as pending (`REQUALIFICATION` in `checks/check-index.py`) because their models include behaviors that cite neither a measurement nor a reference. They return to the gate when each uncited behavior is replaced by a measured or cited one.
+
+| Check | Uncited behaviors |
+| --- | --- |
+| `a733-pcie-trace`, `pcie-qemu` | ATU, PHY lock, link-up and speed-change latencies; NVMe ready delay and controller model; PCI power-management D3 behavior; link loss after PERST. No PCIe board run exists. |
+| `a733-xhci-detach`, `a733-xhci-dma` | Port Power at start, port reset latency and TR Dequeue Pointer updates while an endpoint runs (three behaviors; the other 21 to 26 each cite the xHCI 1.2 specification). |
+| `io-native-ordering` | TWI status sequence, reset values and the 30 microsecond flag delay; initial WDT0 values; posted-store completion at a DSB. |
+| `memtest-machine` | SCTLR_EL1 reset, translation walk and PAR_EL1 format, DC ZVA, counter step and cache geometry. |
+| `power-write-order` | PMIC bus event latency and the status after START (the model returns 0x18 where a START gives 0x08), USB reset minimums, initial register values. |
+| `provider-clock-reference` | Bit-level healthy values of the USB2, radio, CE and TWI clock and pin fixtures. |
+
+The protection for rails and clocks is coordinator approval and the runner, not a model of guessed behavior.
+
+### Uncited layers in checks that stay in the gate
+
+These checks link real code but rely on an uncited model of a device, card, register layer or service. They get citations, or the real counterpart, when their owner next changes them.
+
+| Check | Uncited layer |
+| --- | --- |
+| `rtc-alarm-ownership` | RTC alarm and callback register model |
+| `sd-return-close`, `storage-read-retain`, `a733-mmc-adaptive-voltage` | MMC card model and PMIC register words |
+| `usb-generic-host` | USB peripheral traffic, except the pinned RPLIDAR facts |
+| `usb-host-ready-work` | xHCI controller timing and events |
+| `os-gpu-thermal` | GPU service replies and thermal input |
+| `os-thermal-cadence` | delayed sensor reads, clock completion and interrupt controller |
+| `qemu-os-boot` | thermal sensors, PMIC, clock providers, USB transport and NPU and GPU services of the virtual board |
+| `reset-latency` | WDT0 model |
+| `board-probe-abort` | GPIO and crumb register behavior |
+| `dma-adopted-return` | DMA and CCU register offsets and busy behavior |
+| `gpu-texture-frame` | device progress and ring model |
+| `jpeg-advance` | completion delay values |
+| `npu-queue`, `npu-board-capture`, `npu-idle` (class e, stays) | NPU device model, USB device stub, idle gating registers |
+
+### Measurement of 2026-11-01
+
+No behavior model has a confirmed catch. All three confirmed catches were build, link or configure failures. The [measurement](history/validation-measurement-20261101.md) lists the 117 checks of the full gate by class and time; the [failure table](history/validation-failures-20261101.md) lists the 66 board runs that did not pass since 2026-10-25, of which 48 were image defects and none had a host check that fully covered the failing behavior.

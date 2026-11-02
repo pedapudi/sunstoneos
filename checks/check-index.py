@@ -83,6 +83,20 @@ NOT_PURE = {
     'h264-input-host.py': 'the default run needs --image, --inputs, --native and --launcher',
     'sae-openssl.py': 'the default run needs --openssl, --upstream and --evidence; --verify-source needs a pinned source tree',
 }
+# Checks whose hardware or vendor-service model has behaviors that cite neither a board measurement nor a
+# reference source (docs/validation.md, "Host validation rules"). They keep their files and stay runnable by
+# hand, but the gate lists them as pending until the uncited behaviors are replaced by measured ones.
+PENDING = 'pending re-qualification against board measurements: '
+REQUALIFICATION = {
+    'a733-pcie-trace.py': PENDING + 'PCIe controller, PHY, link-training and NVMe latencies and responses are uncited',
+    'pcie-qemu.py': PENDING + 'the PCIe, PHY, endpoint and NVMe models it runs are uncited',
+    'a733-xhci-detach.py': PENDING + 'xHCI port power at start, port reset latency and TR Dequeue Pointer updates while running are uncited',
+    'a733-xhci-dma.py': PENDING + 'the xHCI model shared with a733-xhci-detach has three uncited behaviors',
+    'io-native-ordering.py': PENDING + 'TWI status sequence, reset values and delays and posted-store completion are uncited',
+    'memtest-machine.py': PENDING + 'SCTLR_EL1 reset, translation walk, DC ZVA and counter step are uncited',
+    'power-write-order.py': PENDING + 'the PMIC bus event latency and status after START, USB reset minimums and initial register values are uncited',
+    'provider-clock-reference.py': PENDING + 'bit-level healthy values of the USB2, radio, CE and TWI clock and pin fixtures are uncited',
+}
 # The hook fixtures run only for their actual process inputs. References inside
 # harness helpers do not add fixture inputs; this matches pre-push.fixture_selection.
 COMPLETE_INPUTS = {'pre-push-hook.py': ('tools/git-hooks/pre-push', 'checks/harness.py')}
@@ -183,11 +197,11 @@ def entry(path, documents):
     uses_argv = 'sys.argv[' in text
     is_library = library(tree, text)
     pure = (not is_library and not usb and not uses_argv and not set(areas) - NEUTRAL_AREAS
-            and set(required) <= {HOST_ONLY.get(path.name, '--output')} and path.name not in NOT_PURE)
+            and set(required) <= {HOST_ONLY.get(path.name, '--output')} and path.name not in NOT_PURE and path.name not in REQUALIFICATION)
     option = HOST_ONLY.get(path.name, '--output')
     return {'summary': doc.splitlines()[0] if doc else '', 'docs': documents(path.name),
             'required_arguments': required + (['sys.argv'] if uses_argv else []), 'cache_areas': areas,
-            'usb': usb, 'library': is_library, 'pure_host': pure, 'input_reason': NOT_PURE.get(path.name),
+            'usb': usb, 'library': is_library, 'pure_host': pure, 'input_reason': NOT_PURE.get(path.name) or REQUALIFICATION.get(path.name),
             'output_option': option if option in required else None,
             'prose': PROSE_CHECKS.get(path.name), 'serial': path.name in SERIAL_CHECKS}
 
@@ -323,7 +337,7 @@ def main():
                           capture_output=True).returncode == 0:
             problems.append(f'{RETIRED_INDEX}: tracked; the index is generated on demand, so remove it with git rm --cached')
         problems += [f'{name}: listed in HOST_ONLY, PROSE_CHECKS or SERIAL_CHECKS but absent from checks/'
-                     for name in sorted({*HOST_ONLY, *PROSE_CHECKS, *SERIAL_CHECKS} - set(index))]
+                     for name in sorted({*HOST_ONLY, *PROSE_CHECKS, *SERIAL_CHECKS, *REQUALIFICATION} - set(index))]
         problems += [f'{name}: listed in HOST_ONLY but not classified pure-host' for name in sorted(HOST_ONLY)
                      if name in index and not index[name]['pure_host']]
         for problem in problems:

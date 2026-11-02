@@ -37,7 +37,7 @@ class Model(cached.Machine):
             r=self.regs[c];r.update(currentel=4,spsel=1,daif=0x3c0,
                 sctlr_el1=0x30d51805,scr_el3=0x531,tpidr_el1=c,
                 vbar_el1=self.symbols['a733_cached_el1_vectors'],
-                icc_pmr_el1=0xf0,icc_igrpen1_el1=1,icc_ctlr_el1=0,
+                icc_pmr_el1=cached.GIC.facts.value('gic.cpuif.icc_pmr_el1.inherited',0),icc_igrpen1_el1=1,icc_ctlr_el1=0,
                 sp_el1=self.symbols['a733_cpu_el1_stacks']+(c+1)*32768)
             u.reg_write(UC_ARM64_REG_SP,r['sp_el1'])
             u.reg_write(UC_ARM64_REG_PC,self.symbols['a733_cached_el1'])
@@ -72,7 +72,7 @@ class Model(cached.Machine):
         if self.mode=='phase-deadline' and self.q(self.symbols['phase_deadline']) and not self.injected:
             self.clock=self.q(self.symbols['phase_deadline']);self.injected=True
         deliver=(r['currentel']<=4 and not r['daif']&128 and r['icc_igrpen1_el1']&1 and
-                 r['icc_pmr_el1']>0xe0 and self.pending[c] and self.irq_active[c] is None)
+                 r['icc_pmr_el1']>cached.GIC.ns_read(0xf0) and self.pending[c] and self.irq_active[c] is None)
         if a not in self.decoded:self.decoded[a]=next(self.decoder.disasm(bytes(u.mem_read(a,4)),a))
         ins=self.decoded[a];parts=ins.op_str.split(', ')
         if not deliver and ins.mnemonic=='wfi':
@@ -88,7 +88,7 @@ class Model(cached.Machine):
             value=self.reg(c,parts[1])
             if parts[0]=='cntp_ctl_el0' and not value&1:self.pending[c].discard(30)
             if parts[0]=='icc_pmr_el1':
-                r['icc_pmr_el1']=value&0xf0;u.reg_write(UC_ARM64_REG_PC,a+4);return
+                r['icc_pmr_el1']=cached.GIC.ns_read(cached.GIC.ns_write(value));u.reg_write(UC_ARM64_REG_PC,a+4);return
         super().instruction(u,a,size,c)
 
     def run(self):

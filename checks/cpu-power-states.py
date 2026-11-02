@@ -124,7 +124,7 @@ class IdleMachine(cached.Machine):
                 if self.waiting[c]:
                     continue
                 if m['currentel'] <= 4 and not m['daif'] & 0x80 and m['icc_igrpen1_el1'] & 1 and \
-                   m['icc_pmr_el1'] > 0xe0 and self.pending[c] and self.irq_active[c] is None:
+                   m['icc_pmr_el1'] > cached.GIC.ns_read(0xf0) and self.pending[c] and self.irq_active[c] is None:
                     self.exception(c, 1, u.reg_read(UC_ARM64_REG_PC), irq=True)
                 try:
                     u.emu_start(u.reg_read(UC_ARM64_REG_PC), 0x42200000, count=(211, 347, 509, 673, 887)[(quantum+c) % 5])

@@ -29,7 +29,7 @@ class Timer(cached.Machine):
         self.executed=0;self.irq_begin=None;self.arm_begin=None;self.arm_return=None;self.arm_instructions=None;self.after_disable=[]
         r=self.regs[core];u=self.cpus[core]
         r.update(currentel=4,spsel=1,daif=0x3c0,tpidr_el1=core,
-            vbar_el1=self.symbols['a733_cached_el1_vectors'],icc_pmr_el1=0xf0,
+            vbar_el1=self.symbols['a733_cached_el1_vectors'],icc_pmr_el1=cached.GIC.facts.value('gic.cpuif.icc_pmr_el1.inherited',0),
             icc_igrpen1_el1=1,sp_el1=0x41f80000,scr_el3=0x531)
         u.reg_write(UC_ARM64_REG_SP,r['sp_el1'])
         for offset in (0x10200,0x1041e):self.mmio[self.rdist[core]+offset]=0
@@ -72,10 +72,10 @@ class Timer(cached.Machine):
         if a==SENTINEL:
             if self.expected is None:
                 self.expected=self.snapshot();self.events.append(('restored-task',r['daif']))
-            if not (self.pending[c] and r['icc_pmr_el1']>0xe0 and not r['daif']&128):
+            if not (self.pending[c] and r['icc_pmr_el1']>cached.GIC.ns_read(0xf0) and not r['daif']&128):
                 self.stop='task';u.emu_stop();return
         deliver=(r['currentel']<=4 and not r['daif']&128 and r['icc_igrpen1_el1']&1 and
-                 r['icc_pmr_el1']>0xe0 and self.pending[c] and self.irq_active[c] is None)
+                 r['icc_pmr_el1']>cached.GIC.ns_read(0xf0) and self.pending[c] and self.irq_active[c] is None)
         if not deliver:self.executed+=1
         if a==self.symbols['a733_qualification_timer_arm']:self.arm_begin=self.executed-1
         if a==self.arm_return:self.arm_instructions=self.executed-1-self.arm_begin
@@ -94,8 +94,7 @@ class Timer(cached.Machine):
                 assert r['daif']&128
                 if self.expire_on_enable:self.clock=r['cntp_cval_el0']
         if ins.mnemonic=='msr' and args[0]=='icc_pmr_el1':
-            if self.secure_pmr>=128:r['icc_pmr_el1']=self.reg(c,args[1])&0xf0
-            else:r['icc_pmr_el1']=0
+            r['icc_pmr_el1']=cached.GIC.pmr_ns_read(cached.GIC.pmr_ns_write(self.secure_pmr,self.reg(c,args[1])))
             u.reg_write(UC_ARM64_REG_PC,a+4);return
         if ins.mnemonic=='msr' and args[0]=='icc_eoir1_el1':
             assert not r['cntp_ctl_el0']&1
