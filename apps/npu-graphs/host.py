@@ -7,8 +7,14 @@ import struct
 
 MAGIC = 0x5048415247554e50
 BYTES = 1728
-STATUS = ('match', 'mismatch', 'refused', 'failed', 'timeout', 'not run')
+STATUS = ('match', 'mismatch', 'refused', 'failed', 'timeout', 'not run', 'fault')
 HEADER = 16
+MARKS = ('captured', 'progress done', 'settle', 'finished', 'reply posted', 'cancel done', 'reinit', 'ready',
+         'client waits', 'client woke', 'client read', 'recover failed')
+
+
+def marks_named(value):
+    return [name for bit, name in enumerate(MARKS) if value >> bit & 1]
 
 
 def require(condition, message):
@@ -16,7 +22,7 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def decode(raw, names=None, sizes=None):
+def decode(raw, names=None, sizes=None, faults=()):
     """Decode the receipt. names and sizes (input and output bytes per graph) bind the listing the image was built from."""
     require(len(raw) == BYTES, 'The receipt must hold exactly 1728 bytes.')
     words = struct.unpack('<216Q', raw)
@@ -34,35 +40,53 @@ def decode(raw, names=None, sizes=None):
             require((input_bytes, output_bytes) == tuple(sizes[i]), 'Graph %d sizes differ from the listing.' % i)
         row['differing_bytes'] = struct.unpack_from('<I', raw, 1152 + 4 * i)[0]
         row['max_error_16bit'] = struct.unpack_from('<I', raw, 1216 + 4 * i)[0]
+        if row['status'] == 'fault':
+            # The fault record: the address, the MMU status, the canary CRC, the service's marks and the wait window.
+            row['fault'] = {'mmu_address': first, 'mmu_status': observed, 'canary_crc': expected,
+                            'marks': row['differing_bytes'], 'marks_named': marks_named(row['differing_bytes']),
+                            'window_ms': row['max_error_16bit']}
         graphs.append(row)
     result = {'count': count, 'completed': completed, 'matched': matched, 'sdk_closed': closed,
               'elapsed_us': (stop - start) / 24, 'graphs': graphs}
     require(completed <= count and matched <= completed, 'The receipt counts disagree.')
-    result['passed'] = (matched == count and completed == count and closed == 1 and
-                        all(g['status'] == 'match' for g in graphs))
+    result['passed'] = (matched == count - len(faults) and completed == matched and closed == 1 and
+                        all(g['status'] == ('fault' if g['index'] in faults else 'match') for g in graphs))
     return result
 
 
 ANY = {'min': 0, 'max': 4294967295}
+# CRC-32 of the canary pattern (apps/os/npu.c): word i is i * 0x9e3779b1 xor 0xc0ffee11, 1 MiB.
+CANARY_CRC = 0x4696ca8e
 
 
-def expectation(sizes):
-    """The queue expectation as u32 words: every word exact, except the times (start, stop, per-graph ticks)."""
-    words64 = [MAGIC, 1, BYTES, len(sizes), len(sizes), len(sizes), 1, None, None] + [0] * 7
+def expectation(sizes, faults=None):
+    """The queue expectation as u32 words: every word exact, except the times (start, stop, per-graph ticks).
+
+    faults maps the index of a graph that must fail with an NPU MMU exception to its expected faulting address: that
+    record holds status 6, the address, any MMU status, the CRC-32 of the unchanged canary and any marks and window."""
+    faults = faults or {}
+    good = len(sizes) - len(faults)
+    words64 = [MAGIC, 1, BYTES, len(sizes), good, good, 1, None, None] + [0] * 7
     for i, (inputs, outputs) in enumerate(sizes):
-        words64 += [i, inputs, outputs, 0, 0, 0, 0, None]
+        if i in faults:
+            words64 += [i, inputs, outputs, 6, faults[i], None, CANARY_CRC, None]
+        else:
+            words64 += [i, inputs, outputs, 0, 0, 0, 0, None]
     words64 += [0] * (BYTES // 8 - len(words64))
     words = []
     for value in words64:
         words += [ANY, ANY] if value is None else [value & 0xffffffff, value >> 32]
+    for i in faults:  # the marks and the window are measured, not predicted
+        words[1152 // 4 + i] = ANY
+        words[1216 // 4 + i] = ANY
     return {'schema': 'sunstone-board-expect-u32-v1', 'words': words}
 
 
-def freeze_decoder(destination, names, sizes):
+def freeze_decoder(destination, names, sizes, faults=()):
     """Bind a standalone decode(payload) to the model list and tensor sizes the image was built from."""
     source = Path(__file__).read_text()
-    source += '\nNAMES = %r\nSIZES = %r\n_bound_decode = decode\n' % (names, sizes)
-    source += 'def decode(payload):\n    return _bound_decode(payload, NAMES, SIZES)\n'
+    source += '\nNAMES = %r\nSIZES = %r\nFAULTS = %r\n_bound_decode = decode\n' % (names, sizes, tuple(faults))
+    source += 'def decode(payload):\n    return _bound_decode(payload, NAMES, SIZES, FAULTS)\n'
     Path(destination).write_text(source)
 
 

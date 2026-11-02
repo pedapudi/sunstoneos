@@ -623,7 +623,10 @@ static int check_step(struct npu_runtime *rt)
         return 1;
     }
     set_state(s, NPU_RUNTIME_READY);
-    npu_service_release(&rt->service, index, NPU_SERVICE_OK, A733_NPU_DONE);
+    const unsigned job_fault = s->faulted;
+    s->faulted = 0;
+    npu_service_release(&rt->service, index, job_fault ? NPU_SERVICE_JOB_FAULT : NPU_SERVICE_OK,
+                        job_fault ? A733_NPU_FAULT : A733_NPU_DONE);
     return 1;
 }
 
@@ -722,9 +725,12 @@ static int request(void *cookie, unsigned client, const struct npu_service_reque
 static void finished(void *cookie, unsigned client, int faulted)
 {
     struct npu_runtime *rt = cookie;
-    if (faulted || client >= rt->slots || state(&rt->slot[client]) != NPU_RUNTIME_RUNNING) {
+    /* faulted 2: the job failed with an NPU MMU exception and the service recovers the NPU. The slot goes through the
+     * same check of its read-only region as after a finished job, and its output is not used. */
+    if ((faulted && faulted != 2) || client >= rt->slots || state(&rt->slot[client]) != NPU_RUNTIME_RUNNING) {
         fault(rt); return;
     }
+    if (faulted == 2) { ++rt->counters.faulted_jobs; rt->slot[client].faulted = 1; }
     rt->slot[client].finished = ++rt->finishes;
     set_state(&rt->slot[client], NPU_RUNTIME_FINISHED);
 }
@@ -949,7 +955,8 @@ int npu_runtime_collect(struct npu_runtime *rt, unsigned slot, uint64_t ticket,
     struct npu_service_reply reply;
     if (!npu_service_collect(&rt->service, ticket, &reply, wait)) return 0;
     s->pending = 0;
-    if (reply.result == NPU_SERVICE_FAULT || reply.fault != A733_NPU_NO_FAULT) fault(rt);
+    if (reply.result == NPU_SERVICE_JOB_FAULT && reply.fault == A733_NPU_MMU) { /* the job only */ }
+    else if (reply.result == NPU_SERVICE_FAULT || reply.fault != A733_NPU_NO_FAULT) fault(rt);
     else if (s->pending_operation == NPU_SERVICE_CLOSE && reply.result == NPU_SERVICE_OK) s->closed = 1;
     *out = reply;
     return 1;

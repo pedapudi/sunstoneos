@@ -74,6 +74,7 @@ struct npu_runtime_counters {
     /* NPU register accesses through the backend; on the board each one also
      * makes one AT translation in the native adapter's mapping check. */
     uint64_t register_reads, register_writes;
+    uint64_t faulted_jobs; /* jobs that failed with an NPU MMU exception and were recovered from */
 };
 
 /* Private storage, public only so the platform can reserve it without a heap.
@@ -90,6 +91,7 @@ struct npu_runtime_slot {
     struct npu_runtime_tensor tensors[2 * NBG_ASSEMBLY_MAX_TENSORS];
     uint32_t stream_bytes, end_mark, address_crc, readonly_crc, crc;
     uint64_t timeout_us, finished;
+    unsigned faulted; /* the job failed with an NPU MMU exception: its reply is a job fault */
     /* Client-written fields stay on their own cache lines. */
     _Alignas(64) TaskHandle_t client;
     uint64_t pending;

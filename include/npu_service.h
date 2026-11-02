@@ -18,7 +18,26 @@ enum npu_service_operation {
 };
 enum npu_service_result {
     NPU_SERVICE_OK, NPU_SERVICE_INVALID, NPU_SERVICE_DENIED,
-    NPU_SERVICE_BUSY, NPU_SERVICE_FAULT
+    NPU_SERVICE_BUSY, NPU_SERVICE_FAULT,
+    /* Runtime mode only: the job failed with an NPU MMU exception, the service has reset the NPU (or is doing so)
+     * and the session stays usable. The reply carries fault A733_NPU_MMU and the status and address. */
+    NPU_SERVICE_JOB_FAULT
+};
+/* Progress marks of one fault, kept for the failure record (docs/reference-backsolve-npu.md, "NPU MMU exceptions").
+ * The service worker sets the first group, the client the second. Cleared when a SUBMIT is sent. */
+enum npu_service_mark {
+    NPU_MARK_CAPTURED = 1u << 0,     /* the MMU status and address were read */
+    NPU_MARK_PROGRESS_DONE = 1u << 1,/* the interrupt progress pass returned after the fault */
+    NPU_MARK_SETTLE = 1u << 2,       /* the runtime settle step took the fault */
+    NPU_MARK_FINISHED = 1u << 3,     /* the runtime finished hook returned */
+    NPU_MARK_REPLY_POSTED = 1u << 4, /* the reply was sent to the client queue */
+    NPU_MARK_CANCEL_DONE = 1u << 5,  /* the cancel handshake saw its completion bit */
+    NPU_MARK_REINIT = 1u << 6,       /* reset and the initial command were started */
+    NPU_MARK_READY = 1u << 7,        /* the initial command completed: the NPU is ready again */
+    NPU_MARK_COLLECT = 1u << 8,      /* the client entered its wait for the reply */
+    NPU_MARK_WOKE = 1u << 9,         /* the client received the reply */
+    NPU_MARK_READ = 1u << 10,        /* the client read the fault out of the reply */
+    NPU_MARK_RECOVER_FAILED = 1u << 11
 };
 struct npu_service_request {
     enum npu_service_operation operation;
@@ -107,6 +126,10 @@ struct npu_service_runtime_state {
     void *context;
     void (*loop)(struct npu_service *);
     unsigned failed, idle_hints;
+    volatile uint32_t marks;   /* npu_service_mark bits of the last fault */
+    unsigned recoveries;       /* MMU exceptions recovered from */
+    uint64_t open_timeout_us;  /* the bootstrap timeout of OPEN, reused by recovery */
+    uint32_t fault_status, fault_address; /* the MMU capture of the job whose reply is held */
 };
 struct npu_service_direct {
     void (*irq)(void *, BaseType_t *);

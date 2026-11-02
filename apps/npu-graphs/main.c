@@ -65,6 +65,16 @@ void npu_graphs_main(const struct ss_grant *grant)
                 if (r->status == NPU_GRAPH_MATCH) ++receipt.matched;
                 break;
             }
+            if (ran == -3) {
+                /* An NPU MMU exception failed this job; the NPU was reset and the session goes on. */
+                struct ss_npu_fault_info f;
+                r->status = NPU_GRAPH_FAULT; r->ticks = ss_counter_ticks() - t0;
+                if (ss_npu_last_fault(&f) == 1) {
+                    r->first_difference = f.mmu_address; r->observed = f.mmu_status; r->expected = f.canary_crc;
+                    receipt.differing_bytes[i] = f.marks; receipt.max_error[i] = f.window_ms;
+                }
+                break;
+            }
             if (ran == -2) { r->status = NPU_GRAPH_REFUSED; break; }
             if (ran < 0) { r->status = NPU_GRAPH_FAILED; failed = 1; break; }
             if ((ss_counter_ticks() - t0) / 24 > GRAPH_TIMEOUT_US) { r->status = NPU_GRAPH_TIMEOUT; failed = 1; break; }

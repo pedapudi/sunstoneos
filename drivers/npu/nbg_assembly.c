@@ -465,26 +465,26 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
         aliased(nn, slot, source, op.kind) ||
         command_count != 1 || !nbg_relocate(image->command, image->command_bytes, &command, 1) ||
         (nn_count && !nbg_relocate(image->nn, sizeof(image->nn), nn, nn_count))) return 0;
-#ifdef SUNSTONE_NPU_UNMAPPED_SLOT
+#ifdef SUNSTONE_NPU_FAULT_HOOK
     /* NEGATIVE-TEST IMAGES ONLY (docs/reference-backsolve-npu.md, "NPU MMU exceptions"). Point one descriptor
      * pointer of the first operation at an address that the NPU page tables do not map, to show that the NPU's own
-     * access faults. SUNSTONE_NPU_UNMAPPED_SLOT is a pointer_slot value. The address is
-     * SUNSTONE_NPU_UNMAPPED_ADDRESS, or else a position 64 KiB into the test image's canary buffer
-     * (apps/os/npu.c), a DRAM region that the tables do not map. A pointer with an end field keeps its extent:
+     * access faults. The image sets the pointer slot (sunstone_npu_hook_slot: 1 first input, 2 output, 5 second
+     * input; negative for none) and the address before each LOAD (apps/os/npu.c). Address 0 means 64 KiB into the
+     * image's canary buffer, a DRAM region that the tables do not map. A pointer with an end field keeps its extent:
      * the end moves by the same distance. The new values are encoded as the relocation of the field would. */
-#ifndef SUNSTONE_NPU_UNMAPPED_ADDRESS
+    extern int sunstone_npu_hook_slot;
+    extern uint32_t sunstone_npu_hook_address;
     extern unsigned char sunstone_npu_canary[];
-#define SUNSTONE_NPU_UNMAPPED_ADDRESS ((uint32_t)(uintptr_t)(sunstone_npu_canary + 0x10000))
-#endif
-    if (number == 1) {
-        const unsigned field = SUNSTONE_NPU_UNMAPPED_SLOT;
-        if (slot[field] == UINT32_MAX) return 0; /* a test build must never silently skip its fault */
+    if (number == 1 && sunstone_npu_hook_slot >= 0) {
+        const unsigned field = (unsigned)sunstone_npu_hook_slot;
+        if (field >= POINTER_COUNT || slot[field] == UINT32_MAX) return 0; /* a test build must never silently skip its fault */
         const unsigned end_field = field == INPUT ? INPUT_END : field == OUTPUT ? OUTPUT_END :
             field == INPUT2 ? INPUT2_END : POINTER_COUNT;
         const struct nbg_relocation *r = &nn[slot[field]];
         unsigned char *d = image->nn + r->destination_offset;
         const int shifted = r->encoding == NBG_ADDRESS_SHIFT6 || r->encoding == NBG_ADDRESS_END_SHIFT6;
-        const uint32_t before = word(d), target = SUNSTONE_NPU_UNMAPPED_ADDRESS;
+        const uint32_t before = word(d), target = sunstone_npu_hook_address ? sunstone_npu_hook_address :
+            (uint32_t)(uintptr_t)(sunstone_npu_canary + 0x10000);
         uint32_t value = shifted ? (before & UINT32_C(0xfc000000)) | (target >> 6) : target;
         d[0] = (unsigned char)value; d[1] = (unsigned char)(value >> 8);
         d[2] = (unsigned char)(value >> 16); d[3] = (unsigned char)(value >> 24);

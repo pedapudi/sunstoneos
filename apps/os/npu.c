@@ -26,6 +26,7 @@ static struct os_npu_application {
     atomic_uint active,closed,stopped,failed;
     uint64_t initial_deadline,end;
     unsigned attempted,started,opened,jobs;
+    uint32_t window_ms; /* the reply wait window of the last call */
 } npu;
 static atomic_uint bootstrap_ran; /* The bootstrap task has run: the service may have powered or submitted. */
 static unsigned creating; /* Only while os_npu_start creates its two tasks. */
@@ -33,7 +34,8 @@ extern unsigned char __os_npu_pool_start[],__os_npu_pool_end[];
 static int clock_now(uint64_t *now)
 {return a733_counter_clock_now(&providers.shared.counter,now);}
 struct os_npu_failure os_npu_first_failure;
-#ifdef SUNSTONE_NPU_UNMAPPED_SLOT
+struct os_npu_fault_info os_npu_last_fault;
+#ifdef SUNSTONE_NPU_FAULT_HOOK
 /* NEGATIVE-TEST IMAGES ONLY ("NPU MMU exceptions" in docs/reference-backsolve-npu.md). A DRAM buffer that this image
  * owns, that the NPU page tables do not map, and that holds a known pattern. The test hook in nbg_assembly.c aims one
  * descriptor pointer 64 KiB into it, so an NPU access that bypasses the MMU reads the pattern or changes the buffer.
@@ -61,6 +63,15 @@ static uint32_t canary_crc(void)
     return crc32_of(sunstone_npu_canary,CANARY_BYTES);
 }
 #define RECORD_WHERE() ((const void *)(uintptr_t)canary_crc())
+/* The test case of the next LOAD (read by the assembler, drivers/npu/nbg_assembly.c): a descriptor pointer slot
+ * (1 first input, 2 output; negative for none) and a device address (0: 64 KiB into the canary). An image that lists
+ * its cases fixes one for each catalogue entry; the host checks set the pair themselves. */
+int sunstone_npu_hook_slot=-1;
+uint32_t sunstone_npu_hook_address;
+#ifdef SUNSTONE_NPU_CASE_SLOTS
+static const int case_slots[]={SUNSTONE_NPU_CASE_SLOTS};
+static const uint32_t case_addresses[]={SUNSTONE_NPU_CASE_ADDRESSES};
+#endif
 #else
 #define RECORD_WHERE() SUNSTONE_CRUMB_HERE()
 #endif
@@ -272,7 +283,7 @@ static int call(enum npu_service_operation op,unsigned model,uint64_t timeout)
     uint64_t end=npu.end,word=atomic_load_explicit(&npu.gate,memory_order_acquire);
     if((word&STOP)&&(word>>3)<end)end=word>>3;
     if(end<=now)return FAIL_REQUEST(op,model,0,NULL,end,now);
-    #ifdef SUNSTONE_NPU_UNMAPPED_SLOT
+    #ifdef SUNSTONE_NPU_FAULT_HOOK
     TickType_t wait=pdMS_TO_TICKS(8000); /* a test image waits for the controller's own verdict on a stalled job */
 #else
     TickType_t wait=pdMS_TO_TICKS(2000);
@@ -280,25 +291,38 @@ static int call(enum npu_service_operation op,unsigned model,uint64_t timeout)
     const uint64_t ticks=(end-now)*configTICK_RATE_HZ/1000000;
     if(ticks<wait)wait=(TickType_t)ticks;
     if(!wait)return FAIL_REQUEST(op,model,0,NULL,1,ticks);
+    npu.window_ms=(uint32_t)((uint64_t)wait*1000u/configTICK_RATE_HZ);
+    if(op==NPU_SERVICE_SUBMIT&&npu.runtime.service.runtime)npu.runtime.service.runtime->marks=0;
     if(!npu_runtime_send(&npu.runtime,0,op,model,timeout,wait,&ticket))
         return FAIL_REQUEST(op,model,0,NULL,1,atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire));
+    if(npu.runtime.service.runtime)npu.runtime.service.runtime->marks|=NPU_MARK_COLLECT;
     if(!npu_runtime_collect(&npu.runtime,0,ticket,&reply,wait)) {
-#ifdef SUNSTONE_NPU_UNMAPPED_SLOT
-        /* No reply in time. If the controller completed its MMU capture, the ticket byte is the MMU status (low byte)
-         * and the value the faulting address. Otherwise the ticket byte holds the capture stage (low nibble) and fault
-         * code (high nibble) and the value the event bits it saw. These fields are read from another core, for this image only. */
+#ifdef SUNSTONE_NPU_FAULT_HOOK
+        /* No reply in time. The record keeps the progress marks (high half of the value, the worker's steps from the
+         * MMU capture to the reply and the client's wait) and the wait window in ms (low half, capped), the capture
+         * stage (low nibble of the ticket byte) and the controller fault code (high nibble). The controller fields are
+         * read from another core, for this image only. */
         const struct a733_npu_controller *c=&npu.runtime.service.controller;
-        if(c->mmu_stage==5&&c->fault==A733_NPU_MMU) /* captured, but the reply did not arrive: the capture itself */
-            return fail_at(__LINE__,op,model,c->mmu_status&255u,NULL,1,c->mmu_address,RECORD_WHERE(),NULL);
-        return fail_at(__LINE__,op,model,(c->mmu_stage&15u)|((unsigned)c->fault&15u)<<4,NULL,1,c->irq_seen,RECORD_WHERE(),NULL);
+        const uint32_t marks=npu.runtime.service.runtime?npu.runtime.service.runtime->marks:0;
+        return fail_at(__LINE__,op,model,(c->mmu_stage&15u)|((unsigned)c->fault&15u)<<4,NULL,1,
+                       (uint64_t)(marks&0xffffu)<<16|(npu.window_ms>0xffffu?0xffffu:npu.window_ms),RECORD_WHERE(),NULL);
 #endif
         return FAIL_REQUEST(op,model,ticket,NULL,1,atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire));
     }
+    if(npu.runtime.service.runtime)npu.runtime.service.runtime->marks|=NPU_MARK_WOKE;
     if(reply.ticket!=ticket)return FAIL_REQUEST(op,model,ticket,&reply,ticket,reply.ticket);
-    if(reply.fault==A733_NPU_MMU||(reply.fault==A733_NPU_TIMEOUT&&(reply.mmu_status||reply.mmu_address)))
-        /* MMU exception: the ticket byte of the site is the MMU status code (1 slave not present, 2 page not
-         * present, 3 write violation, 4 out of bound); expected holds it and observed the faulting device address. */
-        return fail_at(__LINE__,op,model,reply.mmu_status,&reply,reply.mmu_status,reply.mmu_address,RECORD_WHERE(),NULL);
+    if(reply.result==NPU_SERVICE_JOB_FAULT&&reply.fault==A733_NPU_MMU&&op==NPU_SERVICE_SUBMIT) {
+        /* An NPU MMU exception failed this job; the service recovers the NPU and the session goes on. The fault is
+         * published for the application (os_npu_last_fault) and the call returns 2. */
+        if(npu.runtime.service.runtime)npu.runtime.service.runtime->marks|=NPU_MARK_READ;
+        os_npu_last_fault.mmu_status=reply.mmu_status;os_npu_last_fault.mmu_address=reply.mmu_address;
+        os_npu_last_fault.marks=npu.runtime.service.runtime?npu.runtime.service.runtime->marks:0;
+        os_npu_last_fault.window_ms=npu.window_ms;
+#ifdef SUNSTONE_NPU_FAULT_HOOK
+        os_npu_last_fault.canary_crc=canary_crc();
+#endif
+        return 2;
+    }
     if(reply.result!=NPU_SERVICE_OK)return FAIL_REQUEST(op,model,ticket,&reply,NPU_SERVICE_OK,reply.result);
     if(reply.fault!=A733_NPU_NO_FAULT)return FAIL_REQUEST(op,model,ticket,&reply,A733_NPU_NO_FAULT,reply.fault);
     /* The runtime service answers OPEN as soon as the controller bootstrap
@@ -315,7 +339,7 @@ int os_npu_open(void)
 {
     if(!caller()||npu.opened)return 0;
     if(!atomic_load_explicit(&npu.active,memory_order_acquire))return 0;
-#ifdef SUNSTONE_NPU_UNMAPPED_SLOT
+#ifdef SUNSTONE_NPU_FAULT_HOOK
     canary_prepare();
 #endif
     if(call(NPU_SERVICE_OPEN,0,1000000)!=1)return -1;
@@ -324,6 +348,10 @@ int os_npu_open(void)
 int os_npu_load(unsigned entry)
 {
     if(!caller()||!npu.opened||entry>=os_npu_model_count||os_npu_stopping())return 0;
+#ifdef SUNSTONE_NPU_CASE_SLOTS
+    if(entry<sizeof(case_slots)/sizeof(*case_slots)){sunstone_npu_hook_slot=case_slots[entry];sunstone_npu_hook_address=case_addresses[entry];}
+    else sunstone_npu_hook_slot=-1;
+#endif
     return call(NPU_SERVICE_LOAD,entry,0);
 }
 int os_npu_tensor(enum nbg_section_id section,unsigned index,struct npu_runtime_tensor *tensor)
@@ -344,11 +372,11 @@ int os_npu_submit(uint64_t timeout)
     if(!caller()||!npu.opened||!timeout||timeout>1000000||!s||npu.jobs>=s->npu.jobs||!claim())return 0;
     int result=call(NPU_SERVICE_SUBMIT,0,timeout);
     complete();
-#ifdef SUNSTONE_NPU_UNMAPPED_SLOT
+#ifdef SUNSTONE_NPU_FAULT_HOOK
     /* The job completed although a descriptor pointer is unmapped: the access did not fault. The record (ticket byte
      * 0xee) carries the canary CRC as the value and the CRC of the first output tensor as the caller word; the tests
      * of the host and the board compare both with the pattern and with the reference output. */
-    if(result==1){
+    if(result==1&&sunstone_npu_hook_slot>=0){
         struct npu_runtime_tensor t;uint32_t out=0;
         if(os_npu_tensor(NBG_OUTPUT,0,&t)==1)out=crc32_of(t.data,t.bytes);
         return fail_at(__LINE__,NPU_SERVICE_SUBMIT,0,0xee,NULL,0,canary_crc(),(const void *)(uintptr_t)out,NULL);

@@ -264,6 +264,8 @@ SERVICE_INLINE int irq_progress(struct npu_service *s)
         }
     }
 #endif
+    if(before==A733_NPU_BOOTING && s->controller.state==A733_NPU_READY && s->runtime && s->runtime->recoveries &&
+       (s->runtime->marks&NPU_MARK_REINIT))s->runtime->marks|=NPU_MARK_READY;
     if((before==A733_NPU_BOOTING && s->controller.state==A733_NPU_READY) ||
        (before==A733_NPU_RUNNING && s->controller.state==A733_NPU_DONE)) {
 #ifdef SUNSTONE_NPU_ACTIVE_CANCEL
@@ -343,6 +345,7 @@ static enum npu_service_result execute(struct npu_service *s,
         c->diagnostic_ticket=m->ticket;
         if(!diagnostic_begin_irq(s))return NPU_SERVICE_FAULT;
 #endif
+        if (s->runtime) s->runtime->open_timeout_us = r->timeout_us;
         if (a733_npu_open(c, &s->ops, s->cookie, &s->image, &s->commands[0], r->timeout_us))
             return NPU_SERVICE_OK;
         if (c->state == A733_NPU_FAULT) return NPU_SERVICE_FAULT;
@@ -517,6 +520,7 @@ SERVICE_INLINE enum npu_service_result execute_shared(struct npu_service *s,
                 return c->state == A733_NPU_FAULT ? NPU_SERVICE_FAULT : SERVICE_DEFERRED;
             /* The opener owns the bootstrap, including a retained failure. */
             member->state = MEMBER_IDLE; ++s->members;
+            if (s->runtime) s->runtime->open_timeout_us = r->timeout_us;
             if (!a733_npu_open(c, &s->ops, s->cookie, &s->image, &s->commands[0], r->timeout_us)) {
                 if (c->state == A733_NPU_FAULT) return NPU_SERVICE_FAULT;
                 member->state = MEMBER_NONE; --s->members;
@@ -638,12 +642,15 @@ static void runtime_reply(struct npu_service *s, unsigned client, enum npu_servi
                           enum a733_npu_state state)
 {
     struct npu_service_member *member = &s->member[client];
+    const int job_fault = result == NPU_SERVICE_JOB_FAULT && s->runtime;
     struct npu_service_reply reply = {.ticket = member->wait.ticket, .result = result,
-        .state = state, .fault = s->controller.fault, .owns_session = 1,
-        .mmu_status = s->controller.mmu_status, .mmu_address = s->controller.mmu_address,
+        .state = state, .fault = job_fault ? A733_NPU_MMU : s->controller.fault, .owns_session = 1,
+        .mmu_status = job_fault ? s->runtime->fault_status : s->controller.mmu_status,
+        .mmu_address = job_fault ? s->runtime->fault_address : s->controller.mmu_address,
         .job_ticket = member->wait.request.operation == NPU_SERVICE_SUBMIT ? member->wait.ticket : 0};
     member->has_wait = 0; member->state = MEMBER_IDLE; member->job_ticket = 0;
     configASSERT(xQueueSend(s->clients[client].replies, &reply, 0) == pdTRUE);
+    if (s->runtime) s->runtime->marks |= NPU_MARK_REPLY_POSTED;
 }
 static enum npu_service_result execute_runtime(struct npu_service *s,
     const struct npu_service_message *m, unsigned *closed)
@@ -703,6 +710,30 @@ static void runtime_settle(struct npu_service *s)
             s->running = NPU_SERVICE_CLIENTS; s->member[client].state = MEMBER_QUEUED;
             rt->hooks.finished(rt->context, client, 0);
         }
+    }
+    if (c->state == A733_NPU_FAULT && c->fault == A733_NPU_MMU && !rt->failed && !c->bootstrap &&
+        s->running < NPU_SERVICE_CLIENTS && s->member[s->running].has_wait) {
+        /* An NPU MMU exception during a job: fail that job only, then recover as the vendor driver does
+         * (vip2/task/vip_drv_task_common.c:463-535). The slot is released first, so that its read-only region is
+         * checked like that of a finished job; the reply carries the status and the address; then the NPU is
+         * cancelled and re-initialized and the session goes on. */
+        const unsigned client = s->running;
+        rt->marks |= NPU_MARK_CAPTURED | NPU_MARK_SETTLE;
+        rt->hooks.finished(rt->context, client, 2);
+        rt->marks |= NPU_MARK_FINISHED;
+        s->running = NPU_SERVICE_CLIENTS; s->member[client].state = MEMBER_QUEUED;
+        /* The SUBMIT reply stays held, as for a finished job, until the runtime has checked the slot's read-only
+         * region; it carries what the controller captured, which the recovery below clears. */
+        rt->fault_status = c->mmu_status; rt->fault_address = c->mmu_address;
+        int cancel_seen = 0;
+        if (a733_npu_recover(c, &s->commands[0], rt->open_timeout_us, &cancel_seen)) {
+            rt->marks |= NPU_MARK_REINIT | (cancel_seen ? NPU_MARK_CANCEL_DONE : 0u);
+            ++rt->recoveries;
+        } else {
+            rt->marks |= NPU_MARK_RECOVER_FAILED;
+            rt->failed = 1;
+        }
+        return;
     }
     if (c->state != A733_NPU_FAULT || rt->failed) return;
     rt->failed = 1;
@@ -781,6 +812,7 @@ static void runtime_worker(struct npu_service *s)
         if(s->observe&&s->controller.state==A733_NPU_RUNNING)s->observe(s->observe_cookie,s,0);
 #endif
         int progressed = runtime_progress(s, timed_out);
+        if (s->controller.state == A733_NPU_FAULT) s->runtime->marks |= NPU_MARK_PROGRESS_DONE;
         runtime_settle(s);
         if (timed_out && idle_hint(s)) { timed_out = 0; continue; }
         timed_out = 0;

@@ -90,6 +90,11 @@ enum a733_npu_state a733_npu_poll(struct a733_npu_controller *);
 enum a733_npu_state a733_npu_advance(struct a733_npu_controller *, int sample_events);
 /* Deadline-only progress while interrupt masking is deferred; no MMIO/cache. */
 enum a733_npu_state a733_npu_check_timeout(struct a733_npu_controller *);
+/* Vendor recovery after an NPU MMU exception (fault A733_NPU_MMU, a job started): the cancel handshake of
+ * vipdrv_hw_cancel, then the reset and initial command of a fresh open. Returns 1 with the controller in the booting
+ * state, 0 with the controller faulted. cancel_seen reports whether the handshake completion bit appeared. */
+int a733_npu_recover(struct a733_npu_controller *, const struct a733_npu_command *boot, uint64_t timeout,
+                     int *cancel_seen);
 int a733_npu_cancel(struct a733_npu_controller *, uint64_t stop_timeout);
 int a733_npu_reap(struct a733_npu_controller *, void **token, int *canceled);
 int a733_npu_close(struct a733_npu_controller *);

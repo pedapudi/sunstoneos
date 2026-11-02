@@ -195,6 +195,34 @@ int a733_npu_submit(struct a733_npu_controller *c, const struct a733_npu_command
     return trigger(c);
 }
 
+int a733_npu_recover(struct a733_npu_controller *c, const struct a733_npu_command *boot, uint64_t timeout,
+                     int *cancel_seen)
+{
+    if (cancel_seen) *cancel_seen = 0;
+    if (!c || c->state != A733_NPU_FAULT || c->fault != A733_NPU_MMU || c->bootstrap || !boot) return 0;
+    /* The vendor's first recovery step (vipdrv_hw_cancel, vip_drv_hardware.c:1119-1194): set +0x3a8 bit 3, wait
+     * 100 us, clear it, and poll bit 4 in 100 us steps, at most 200 times. A cancel that does not complete is not
+     * the end of the recovery here: the reset below follows either way, and the caller is told. */
+    uint32_t value;
+    /* The fault state refuses every register access; the recovery leaves it first. A failed access faults again. */
+    c->job.token = 0; c->state = A733_NPU_CLOSED; c->fault = A733_NPU_NO_FAULT; c->mmu_stage = 0;
+    if (!read_reg(c, 0x3a8, &value) || !write_reg(c, 0x3a8, value | 8u)) return 0;
+    c->ops.delay(c->cookie, 100);
+    if (!read_reg(c, 0x3a8, &value) || !write_reg(c, 0x3a8, value & ~8u)) return 0;
+    for (unsigned tries = 0; tries < 200; ++tries) {
+        c->ops.delay(c->cookie, 100);
+        if (!read_reg(c, 0x3a8, &value)) return 0;
+        if (value & 16u) { if (cancel_seen) *cancel_seen = 1; break; }
+    }
+    /* The vendor then re-initializes the core (its reset and initial command). The faulted job is abandoned: the
+     * caller has taken its token, and no output of it is used. A fresh open resets the NPU twice, programs the MMU
+     * again and runs the bootstrap command. */
+    struct a733_npu_ops ops = c->ops;
+    struct a733_npu_mmu_image mmu = c->mmu;
+    void *cookie = c->cookie;
+    return a733_npu_open(c, &ops, cookie, &mmu, boot, timeout);
+}
+
 int a733_npu_cancel(struct a733_npu_controller *c, uint64_t timeout)
 {
     if (!c || (c->state != A733_NPU_RUNNING && c->state != A733_NPU_BOOTING) ||

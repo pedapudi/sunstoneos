@@ -1,0 +1,10 @@
+{
+ "npu_models": [
+  "graph-sig",
+  "graph-tanh",
+  "graph-add",
+  "graph-sub",
+  "graph-swish",
+  "graph-relu"
+ ]
+}

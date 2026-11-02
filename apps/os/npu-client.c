@@ -82,7 +82,7 @@ static int sdk_run(unsigned model,const void *input,size_t input_bytes,
             (uint32_t)offset,SUNSTONE_CRUMB_HERE());
         return -1;
     }
-    r=os_npu_submit(timeout);if(r!=1)return r;
+    r=os_npu_submit(timeout);if(r!=1)return r; /* 2: the job failed with an MMU exception and the NPU was recovered */
     offset=0;
     for(unsigned i=0;os_npu_tensor(NBG_OUTPUT,i,&t);++i) {
         memcpy((uint8_t *)output+offset,t.data,t.bytes);offset+=t.bytes;
@@ -94,6 +94,12 @@ static int sdk_run(unsigned model,const void *input,size_t input_bytes,
     }
     ++sdk_jobs;sdk_output_bytes=(uint32_t)output_bytes;
     return 1;
+}
+static void sdk_fault(struct ss_npu_fault_info *out)
+{
+    out->mmu_status=os_npu_last_fault.mmu_status;out->mmu_address=os_npu_last_fault.mmu_address;
+    out->canary_crc=os_npu_last_fault.canary_crc;out->marks=os_npu_last_fault.marks;
+    out->window_ms=os_npu_last_fault.window_ms;
 }
 static unsigned sdk_closed;
 static int sdk_close(void)
@@ -111,7 +117,7 @@ int os_npu_sdk_bind(const struct npu_runtime *runtime)
         if(inputs!=m->input_bytes||outputs!=m->output_bytes)return 0;
     }
     const struct ss_npu_backend backend={sdk_run,sdk_close,os_npu_model_info,os_npu_model_count};
-    return ss_npu_service_bind(&backend);
+    return ss_npu_service_bind_fault(sdk_fault)&&ss_npu_service_bind(&backend);
 }
 void os_npu_client_task(void *unused)
 {
