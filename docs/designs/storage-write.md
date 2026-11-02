@@ -276,10 +276,10 @@ mode. The unit is read from `UHS_AU_SIZE` instead when the card signals at 1.8 V
 
 **The bounds blob.** The runner's frozen first input is an INPUT region of the application, mapped read-write at EL0 like all
 kernel data and application regions in this OS (`docs/memory-protection.md`: only the text and read-only data block is
-read-only), so no mapping can keep it unchanged. The image copies it once into private memory, parses the copy, and
+read-only), so no mapping can keep it unchanged. The image copies it once into memory taken from the OS heap at enable time (sized from the input's length; the only refusal is that the heap has no room), parses the copy, and
 `a733_storage_bounds_allows` re-hashes it on every use and refuses a blob that has changed since parse. This detects a
 change; it does not prevent one made between the hash and the use, which would take a second EL0 task on another core racing
-a microsecond window. A read-only mapping needs page-table support the OS does not have yet.
+a microsecond window. A read-only mapping needs page-table support the OS does not have yet; the wider gap, kernel and driver data reachable from EL0, is a backlog item in `docs/memory-protection.md`.
 
 **One crossing of memory.** The application registers a WORK region as the FAT32 service's flush buffer
 (`ss_storage_region`). A write piece that lies inside it goes to the controller from there, with the cache clean the core

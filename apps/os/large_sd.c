@@ -23,6 +23,7 @@
 #include "device_memory_pool.h"
 #include "sunxi_smhc.h"
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 #ifdef OS_SD_WRITE
 #include "sd_hw.h"
@@ -275,9 +276,8 @@ void os_large_device_close(void)
 
 #ifdef OS_SD_WRITE
 #define WRITE_US 2000000u
-#define BLOB_COPY_BYTES 65536u
 #define SMHC0 UINT32_C(0x04020000)
-static uint8_t blob_copy[BLOB_COPY_BYTES];
+static uint8_t *blob_copy;                       /* sized from the input at enable time, kept for the image's lifetime */
 
 /* --- completion by interrupt ------------------------------------------------------------------------------------------ */
 /* SMHC0 is GIC SPI 161, INTID 193, level high (board kernel sun60iw2p1.dtsi, sdc0). The route is emitted with the image's
@@ -364,7 +364,9 @@ static int hw_enable_writes(const uint8_t *blob, size_t bytes)
 {
     /* All kernel data is writable at EL0 in this OS, so no mapping protects the blob. The runner's input is copied once into
      * private memory and parsed there; the bounds object re-hashes the copy on every use (a733_storage_bounds_allows). */
-    if (!blob || bytes > BLOB_COPY_BYTES || !card.sector_addressed) return 0;
+    if (!blob || !bytes || blob_copy || !card.sector_addressed) return 0;
+    blob_copy = malloc(bytes);                       /* the OS heap; the only refusal is that it has no room */
+    if (!blob_copy) return 0;
     memcpy(blob_copy, blob, bytes);
     return a733_storage_bounds_parse(&bounds, blob_copy, bytes) && a733_storage_bounds_verify(&bounds, bounds_read, NULL) &&
         a733_mmc_platform_native_bind_bounds(&native, &platform, &bounds);

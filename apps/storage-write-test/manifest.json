@@ -1,7 +1,7 @@
 {
   "name": "storage-write",
   "devices": {"required": [], "optional": []},
-  "cpu": {"cluster": "a55", "workers": 0, "priority": 2, "stack_bytes": 65536},
+  "cpu": {"cluster": "a55", "workers": 0, "priority": 2, "stack_bytes": 65536, "heap_bytes": 262144},
   "regions": [
     {"name": "bounds", "kind": "input", "access": ["read"], "bytes": 65536},
     {"name": "mode", "kind": "input", "access": ["read"], "bytes": 4096},
