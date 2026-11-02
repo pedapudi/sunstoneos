@@ -1021,6 +1021,14 @@ The sweep images ran the recognition in 136.4 ms on the stock kernel and 127.2 m
 
 Prediction. The plain pair of the current tree takes about 110 ms on both kernels, the fork within 1% of stock, because the recorder alone explains the 26 ms that stock lost: its timestamp reads and table update lengthen every span by roughly 0.3 to 1 us and the stock kernel has about twice the long spans of the fork. The unmasked wait changes the plain times by under 1%. If the plain pair already shows the fork faster than stock by several percent, the current tree changed and the earlier verdict needs its own rerun.
 
+### The long runs behind the kernel verdict
+
+The first robot table rests on 200 to 2000 periods per core, so its maximum is not a worst case, and the fork's lead on the task path is the very difference the verdict would use. This round repeats the recognition for 25 seconds inside one boot (`SUNSTONE_MIMUS_SOAK_SECONDS`; the board session is 60 seconds), once quiet and repeatedly with the engine kept, then once with the normal output, so the control interrupts run under the same load for the whole soak. Five boots per kernel pool at least 10^5 periods at 1 kHz (125 000), 2 kHz and 4 kHz for the task path alone on cores 1 to 3, and 1.25 million at 10 kHz for the control path alone on core 4. The program prints each histogram's nonzero bins, so the p99.99 comes from the pooled counts, not from a per-run value. The image is the plain mimus image plus the interrupts; a plain soak image without them and a soak image with both paths on five cores give the model cost.
+
+Verdict rule. The control path must meet the targets on both kernels. Then the kernel whose task path meets the targets at the higher rate wins; then model time.
+
+Prediction. The task path's tail grows with the sample count: its pooled maximum is 40 to 70 us on both kernels, its p99.99 20 to 40 us, so neither kernel meets the 10 us wake target at 4 kHz and, with a convoy of seven 3.5 us holds behind it, neither meets it at 1 kHz at the 99.99th percentile. The fork's task path is lower than stock at 1 and 2 kHz by 20 to 40% at the p99.99 and equal at 4 kHz, because fewer cores queue behind one lock when the rate is low. The control path at 10 kHz keeps its maximum under 6 us on both kernels over 1.25 million periods. Model cost per handler is proportional to its rate: about 0.09% of recognition time per kHz of interrupts on stock and 0.06% on the fork, about 0.4 to 0.9 us of core time per interrupt, so a robot with a 10 kHz control loop and a 1 kHz fusion interrupt on a core pays about 1% of that core's model throughput.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag

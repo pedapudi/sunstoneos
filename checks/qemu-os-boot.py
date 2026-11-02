@@ -72,7 +72,7 @@ CFLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mge
           '-ffunction-sections', '-fdata-sections', '-O2', '-g', '-Wall', '-Wextra', '-include', 'stdint.h']
 
 # OS and board sources that run unmodified.
-OS_SOURCES = ['apps/os/application.c', 'apps/os/large.c', 'kernel/appmem/app_region.c', 'kernel/appmem/large_admit.c', 'apps/os/services.c', 'apps/os/session.c', 'apps/os/start.c',
+OS_SOURCES = ['apps/os/application.c', 'apps/os/large.c', 'apps/os/large_load.c', 'drivers/storage/fat32_ro.c', 'kernel/appmem/app_region.c', 'kernel/appmem/large_admit.c', 'apps/os/services.c', 'apps/os/session.c', 'apps/os/start.c',
               'apps/os/thermal.c', 'apps/os/admission.c', 'apps/board/main.c', 'apps/board/session.c',
               'runtime/deadline.c', 'runtime/deadline-a733.c', 'platform/a733-smp-cached/irq_table.c']
 # Driver cores and their adapters, unmodified. The adapters reach registers
@@ -345,6 +345,42 @@ def adler32(data):
     return b << 16 | a
 
 
+# Large regions: the file the loader reads is the first 4 MiB of the region test stream, on a RAM disk.
+region_stream = load('region_test_file', ROOT / 'tools/region_test_file.py')
+fat_writer = load('fat32_ro_check', ROOT / 'checks/fat32-ro.py')
+LARGE_FILE = b''.join(region_stream.stream(4 << 20))[:4 << 20]
+LARGE_DIGEST = hashlib.sha256(LARGE_FILE).hexdigest()
+LARGE_FOLD = 0
+for _word in struct.iter_unpack('<Q', LARGE_FILE):
+    LARGE_FOLD ^= _word[0]
+RAMDISK_ADDRESS = 0x48000000
+
+
+def large_manifest_path(path, digest, file):
+    """manifest.json of the large-region test application: one 1 GiB region loaded from a 4 MiB file."""
+    manifest = {"name": "large-test", "devices": {"required": [], "optional": []},
+                "cpu": {"cluster": "a55", "workers": 1, "priority": 2, "stack_bytes": 8192},
+                "regions": [{"name": "input", "kind": "input", "access": ["read"], "bytes": 4096}],
+                "large_regions": [{"name": "weights", "bytes": 1 << 30, "source_bytes": len(file), "access": ["read"],
+                                   "file": "/sunstone-test/sunstone-region-test.bin", "sha256": digest}],
+                "deadlines": {"run_us": 2000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
+                "output_limit": 32}
+    Path(path).write_text(json.dumps(manifest, indent=2) + '\n')
+    return path
+
+
+def ramdisk(work, tag, tree):
+    """A 40 MiB FAT32 volume with the tree, written by the independent writer of checks/fat32-ro.py."""
+    part = Path(work) / (tag + '.disk')
+    run(['truncate', '-s', str(81920 * 512), part])
+    done = run(['/usr/sbin/mkfs.fat', '-F', '32', '-s', '1', '-n', 'SUNSTONE', '-i', '5a733004', part])
+    assert done.returncode == 0, done.stderr
+    image = bytearray(part.read_bytes())
+    volume = fat_writer.Fat32(image, 0)
+    volume.populate(tree, {})
+    return bytes(image)
+
+
 def boot(elf, raw_session, contract, scenario_bytes, inputs, log, timeout=60, memory='512M'):
     """One QEMU run. Returns the console text, the exit status and the wall seconds."""
     work = Path(elf).parent
@@ -538,7 +574,7 @@ def main():
         resident_elf = pool.submit(build_resident)
         el0_elf = pool.submit(build_el0_abort)
         facts_elf = pool.submit(build_facts)
-        large_elf = pool.submit(build_large, 'build-large', ROOT / 'checks/qemu-os/large-manifest.json')
+        large_elf = pool.submit(build_large, 'build-large', large_manifest_path(out / 'large-manifest.json', LARGE_DIGEST, LARGE_FILE))
         large_big_elf = pool.submit(build_large, 'build-large-too-big', ROOT / 'checks/qemu-os/large-too-big-manifest.json')
         large_elf, large_big_elf = large_elf.result(), large_big_elf.result()
         os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
@@ -546,9 +582,10 @@ def main():
             partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result(), facts_elf.result())
     built = time.monotonic() - started
 
-    def run_case(name, elf, scenario_bytes, input_bytes=data, memory='512M'):
+    def run_case(name, elf, scenario_bytes, input_bytes=data, memory='512M', extra_inputs=()):
         raw, contract, info = session_for(elf, input_bytes)
         inputs = [(info['manifest']['regions'][0]['address'], input_bytes)] if input_bytes is not None else []
+        inputs += list(extra_inputs)
         output, status, seconds = boot(elf, raw, contract, scenario_bytes, inputs, out / (name + '.log'), memory=memory)
         case = Case(name, output, status, seconds, out / (name + '.log'))
         results.append(case)
@@ -702,28 +739,68 @@ def main():
     c.require(by[('mmio.0x07064000', 0)]['status'] == 'unmeasured', 'the PPU word was read although its gate is closed')
     c.require(hw_facts.matches(table, hw_facts.expectation()), 'the returned table does not satisfy the board expectation')
 
-    # 11. Large regions: the OS takes them from the ledger before the scheduler starts. Two records (a 1 GiB file and a
-    # 64 MiB raw extent) are placed at 0x80000000 and 0xc0000000, the owner's space has one root page, and the
-    # application starts and finishes. Records that ask for more than the board's 3 GiB of upper memory stop the
-    # start before any task runs, with the application preparation named.
-    c = run_case('large-regions-admitted', large_elf, scenario(usb_ready_ms=usb_delay_ms), memory='4G')
+    # 11. Large regions. The OS takes them from the ledger before the scheduler starts and a loader task fills them from
+    # a RAM disk through the FAT32 reader and two buffers. The application waits for the region, reads it at EL0 in its
+    # own address space and reports.
+    good = ramdisk(out, 'disk-good', {'sunstone-test': {'sunstone-region-test.bin': LARGE_FILE}})
+    wrong = bytearray(LARGE_FILE)
+    wrong[1 << 20] ^= 1
+    corrupt = ramdisk(out, 'disk-corrupt', {'sunstone-test': {'sunstone-region-test.bin': bytes(wrong)}})
+    empty = ramdisk(out, 'disk-empty', {'unrelated.txt': b'no test file here\n'})
+    mode0 = struct.pack('<QQ', 0, LARGE_FOLD) + bytes(4080)
+    mode1 = struct.pack('<QQ', 1, LARGE_FOLD) + bytes(4080)
+    c = run_case('large-region-loaded', large_elf, scenario(usb_ready_ms=usb_delay_ms), mode0, '4G',
+                 [(RAMDISK_ADDRESS, good)])
     c.clean()
     admitted = lines(c.output, 'LARGE-ADMITTED')
-    c.require(len(admitted) == 2, 'expected two admitted regions, saw %d' % len(admitted))
-    c.require((int(admitted[0]['base'], 16), int(admitted[0]['bytes'], 16), admitted[0]['flags']) == (0x80000000, 1 << 30, '0'),
-              'the file region differs: %s' % admitted[0]['line'])
-    c.require((int(admitted[1]['base'], 16), int(admitted[1]['bytes'], 16), admitted[1]['flags']) == (0xc0000000, 64 << 20, '3'),
-              'the extent region differs: %s' % admitted[1]['line'])
-    c.require(all(a['state'] == '0' and a['asid'] == '1' for a in admitted) and admitted[0]['tables'] == '2',
-              'state, ASID or table pages differ: %s' % [a['line'] for a in admitted])
-    c.require(c.main is not None and c.main['name'] == 'large-test' and c.finished is not None and c.finished['status'] == '1',
-              'the application did not run to its finish')
+    c.require(len(admitted) == 1 and (int(admitted[0]['base'], 16), int(admitted[0]['bytes'], 16)) == (0x80000000, 1 << 30)
+              and admitted[0]['state'] == '0' and admitted[0]['asid'] == '1',
+              'admission differs: %s' % [a['line'] for a in admitted])
+    c.require(c.finished is not None and c.finished['status'] == '1', 'the application did not finish')
+    tag, fold = struct.unpack('<QQ', bytes.fromhex(c.finished['result']))
+    c.require(tag == 0x4c4152474f4b and fold == LARGE_FOLD, 'result %#x %#x: the region did not read back as the file' % (tag, fold))
+    # The file is absent: the loader reports it, the application sees a failed region and returns normally.
+    c = run_case('large-region-file-absent', large_elf, scenario(usb_ready_ms=usb_delay_ms), mode0, '4G', [(RAMDISK_ADDRESS, empty)])
+    c.clean()
+    tag, error = struct.unpack('<QQ', bytes.fromhex(c.finished['result']))
+    c.require(c.finished['status'] == '1' and tag == 0x4c415247464c and error == 0xfffffffa, 'absent file: result %#x %#x' % (tag, error))
+    # The file differs from the declared digest in one bit: the region never becomes ready.
+    c = run_case('large-region-digest-mismatch', large_elf, scenario(usb_ready_ms=usb_delay_ms), mode0, '4G', [(RAMDISK_ADDRESS, corrupt)])
+    c.clean()
+    tag, error = struct.unpack('<QQ', bytes.fromhex(c.finished['result']))
+    c.require(tag == 0x4c415247464c and error == 0xfffffff5, 'digest mismatch: result %#x %#x' % (tag, error))
+    # A second EL0 task that runs in no application space reads the region: a permission fault, reported with the region's address.
+    c = run_case('large-region-other-space-faults', large_elf, scenario(usb_ready_ms=usb_delay_ms), mode1, '4G', [(RAMDISK_ADDRESS, good)])
+    c.failed_with('APPLICATION', 0xe24)
+    c.require(int(c.failure['value'], 16) == 0x80000000, 'the fault address is %s' % c.failure['value'])
+    c.require(int(c.failure['site'], 16) == 0x800d4e24, 'the record holds the site %s: not a level 1 permission fault on a read' % c.failure['site'])
+    # The provider is present but the device fails: at the metadata, at the start of a request, in the middle of the
+    # stream, or there is no device. The loader fails the region with its status; the application is told and returns.
+    # The file is larger than five requests (4 MiB = 32 requests of 128 KiB), so the mid-stream failure falls inside it.
+    for fault, name, status in ((6, 'mount', 0xfffffffe), (7, 'submit', 0xffffffff), (8, 'midway', 0xffffffff), (9, 'absent', 0xffffffff)):
+        c = run_case('large-device-%s' % name, large_elf, scenario(fault=fault, usb_ready_ms=usb_delay_ms), mode0, '4G',
+                     [(RAMDISK_ADDRESS, good)])
+        c.clean()
+        tag, error = struct.unpack('<QQ', bytes.fromhex(c.finished['result']))
+        c.require(c.finished['status'] == '1' and tag == 0x4c415247464c and error == status,
+                  'device fault %s: result %#x %#x, expected status %#x' % (name, tag, error, status))
+
+    # The task switch: a round trip between two tasks on one core, with and without a TTBR0 write at each switch.
+    mode2 = struct.pack('<QQ', 2, LARGE_FOLD) + bytes(4080)
+    c = run_case('large-region-switch-cost', large_elf, scenario(usb_ready_ms=usb_delay_ms), mode2, '4G', [(RAMDISK_ADDRESS, good)])
+    c.clean()
+    tag, same, different, rounds = struct.unpack('<4Q', bytes.fromhex(c.finished['result']))
+    c.require(tag == 0x4c4152474245 and rounds == 20000, 'switch benchmark result %#x' % tag)
+    switch_cost = {'rounds': rounds, 'same_space_ticks': same, 'different_space_ticks': different,
+                   'note': 'QEMU instruction time (-icount shift=0), not hardware cycles'}
+
+    # Regions that exceed the board's upper memory stop the start before any task runs.
     c = run_case('large-regions-too-big', large_big_elf, scenario(usb_ready_ms=usb_delay_ms), memory='4G')
     c.require(c.main is None and not lines(c.output, 'LARGE-ADMITTED'), 'the application started although the ledger refused its regions')
     c.require(c.failure is not None, 'the refusal left no failure record')
 
     elapsed = time.monotonic() - started
-    summary = {'passed': True, 'physical_access': False, 'seconds': round(elapsed, 2), 'build_seconds': round(built, 2),
+    summary = {'large_region_switch_cost': switch_cost, 'passed': True, 'physical_access': False, 'seconds': round(elapsed, 2), 'build_seconds': round(built, 2),
                'qemu_sha256': hashlib.sha256(QEMU.read_bytes()).hexdigest(),
                'images': {p.parent.name: hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in (os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf,

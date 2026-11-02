@@ -27,6 +27,17 @@ elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
   add_sunstone_image(sunstone-a733-os-hello LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION hello-compute)
+elseif(SUNSTONE_APPLICATION STREQUAL "large-region-test")
+  # The 1 GiB region needs the upper memory mapped, which the table builder does only after the address-test
+  # decode check (cmake/a733-smp-cached.cmake).
+  if(NOT SUNSTONE_A733_DRAM_DECODE_PROBE)
+    message(FATAL_ERROR "large-region-test needs -DSUNSTONE_A733_DRAM_DECODE_PROBE=ON")
+  endif()
+  add_sunstone_application(large-region
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest.json")
+  add_sunstone_image(sunstone-a733-os-large-region-test LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION large-region)
 elseif(SUNSTONE_APPLICATION STREQUAL "latency-cost")
   include("${SUNSTONE_SOURCE_ROOT}/apps/latency-cost/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-latency-cost LIFETIME ${os_lifetime}

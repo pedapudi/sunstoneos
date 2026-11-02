@@ -355,6 +355,7 @@ int os_application_prepare(void)
     main_task=xTaskCreateStaticAffinitySet(main_entry,m->name,m->stack_bytes/sizeof(StackType_t),NULL,m->priority,
         ss_application.stack,ss_application.task,(UBaseType_t)1<<grant.main_core);
     if(!main_task)return 0;
+    ss_large_attach(main_task);     /* the main task runs in the application's address space when it has regions */
 #ifdef SUNSTONE_SMP_NEWLIB
     void runtime_smp_init(void);runtime_smp_init();
 #endif
