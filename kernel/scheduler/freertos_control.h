@@ -69,8 +69,10 @@ struct ss_control_route {
 enum ss_control_gate_phase { SS_GATE_OPEN, SS_GATE_ACQUIRING, SS_GATE_HELD, SS_GATE_RELEASING };
 struct ss_control {
     struct ss_control_slot slot[SS_OWNER_SLOTS];
-    _Atomic uint64_t pending[SS_CONTROL_CPUS][2];
-    unsigned cursor[SS_CONTROL_CPUS];
+    /* Remote publishers set the pending words; the owner alone moves its
+     * cursor. One cache line each, so no owner shares a line with another. */
+    struct { _Alignas(64) _Atomic uint64_t word[2]; } pending[SS_CONTROL_CPUS];
+    struct { _Alignas(64) unsigned value; } cursor[SS_CONTROL_CPUS];
     const struct ss_owner_backend *backend;
     struct ss_control_ops ops;
     uint64_t active_mask;

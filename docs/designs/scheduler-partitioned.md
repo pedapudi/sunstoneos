@@ -127,6 +127,16 @@ Each cache-line-aligned `ss_sched_cpu` contains:
 - A fixed-capacity deadline heap, its next compare, a slice deadline and local
   accounting timestamps.
 
+The structure is laid out in cache lines by writer. Owner-only state (ready
+lists, current task, detached batches, cursors) shares no line with state that
+other CPUs write (the incoming wake words, the dispatch status, the control
+mailbox words, and the slice and next-deadline snapshots that CPU0's tick reads).
+Each CPU's control mailbox and cursor have a line of their own, and per-task
+records start on a line boundary. Compile-time assertions enforce the grouping.
+A masked scheduler entry then misses only on lines that its own work needs; the
+A733 runs with caches cold after a 1 MiB sweep, where each avoidable miss adds
+roughly the cost of a DRAM access to a span that the 25 µs bound limits.
+
 Only that CPU's task/IRQ scheduler entry changes its ready lists, current task
 or deadline heap. Local API interrupts are masked while changing those fields.
 No remote CPU writes a list link. Running tasks are absent from the ready FIFO.
@@ -814,6 +824,13 @@ and `k ≤ 16` activations per entry are fixed configuration limits.
 | Timeout | At most seven heap levels per expired entry plus object detach | Measure simultaneous expiry and expired-batch continuation |
 | Migration | Two owner commands, off-CPU and adoption acknowledgments, cache refill | Slow-path counter interval and PMU events; no constant context-switch claim |
 | Context switch | Existing complete integer/SIMD/privilege frame plus local selection | Count both FPU-active and inactive cases; measure entry-to-first-instruction on each CPU type |
+
+`checks/scheduler-masked-spans.py` runs the CPU latency workload under the owner
+scheduler on eight emulated cores and reports every interrupt-masked span as the
+number of scheduler atomic stores and read-modify-writes, and of atomic loads,
+that its core executed. A span that waits for another core is excluded. It
+bounds both counts. The counts do not convert to time: on the A733 the cost of a
+span is dominated by cache misses that the emulator does not have.
 
 Linked-kernel tests replace budget rows with instruction counts before board
 submission. Board samples add cycles/counter duration, p50, p99 and maximum.
