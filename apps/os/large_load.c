@@ -121,6 +121,7 @@ static void loader(void *unused)
         }
     }
     for (unsigned i = 0; i < os_large_count(); ++i) {
+        if (os_large_record(i)->flags & SS_LARGE_HEAP) continue;          /* ready at admission */
         if (!d) { os_large_finish(i, SS_LARGE_FAILED, (uint32_t)FAT32_IO); continue; }
         load(i, d, mounted);
     }
@@ -135,7 +136,9 @@ __attribute__((weak)) int os_large_sd_pins(struct a733_pin_handoff *pins) { (voi
 int os_large_pins(struct a733_pin_handoff *pins) { return os_large_sd_pins(pins); }
 int os_large_start(void)
 {
-    if (!os_large_count()) return 1;
+    unsigned loadable = 0;
+    for (unsigned i = 0; i < os_large_count(); ++i) loadable += !(os_large_record(i)->flags & SS_LARGE_HEAP);
+    if (!loadable) return 1;                                              /* a heap alone needs no card */
     return xTaskCreateStaticAffinitySet(loader, "large-load", sizeof task_stack / sizeof task_stack[0], NULL, PRIORITY,
                                         task_stack, &task_state, (UBaseType_t)1 << 0) != NULL;
 }

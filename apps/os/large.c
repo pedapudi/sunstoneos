@@ -27,6 +27,9 @@ static unsigned usable_ranges(const uint64_t *base_l1, struct app_region_range *
     }
     return count;
 }
+/* The allocator hook of the C library (runtime/newlib.c); absent in an image without one. */
+extern int runtime_heap_attach(uintptr_t base, size_t bytes) __attribute__((weak));
+
 /* The board's report of an admitted region, for consoles that show it; the default is silent. */
 __attribute__((weak)) void os_large_report(const struct large_slot *slot, const struct app_space *space)
 { (void)slot; (void)space; }
@@ -71,7 +74,13 @@ int os_large_prepare(void)
         app_region_ledger_init(&ledger, usable_storage, APP_REGION_SLOTS, os_large_entry_storage, os_large_capacity, usable, ranges)) return 0;
     if (large_admit(&ledger, owner_asid, __start_sunstone_large_regions, count, slots, os_large_capacity)) return 0;
     arena = (struct app_table_arena){arena_pages, (uintptr_t)arena_pages, APP_SPACE_PAGES, 0};
-    if (app_space_build(&space, &arena, base_l1, &ledger, owner_asid)) {
+    int built = app_space_build(&space, &arena, base_l1, &ledger, owner_asid) == 0;
+    /* The heap record, when the manifest has one, becomes the C library's heap; an image whose library cannot
+     * take it refuses the application rather than run with a heap of another size. */
+    for (unsigned i = 0; built && i < count; ++i)
+        if ((slots[i].flags & SS_LARGE_HEAP) && !(runtime_heap_attach && runtime_heap_attach((uintptr_t)slots[i].base, (size_t)slots[i].bytes)))
+            built = 0;
+    if (!built) {
         for (unsigned i = 0; i < count; ++i) if (slots[i].bytes) app_region_release(&ledger, owner_asid, slots[i].base);
         memset(slots, 0, sizeof *slots * count);
         return 0;
