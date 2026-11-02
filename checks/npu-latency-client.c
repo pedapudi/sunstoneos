@@ -199,11 +199,11 @@ int npu_runtime_queue_wait_ready(struct npu_runtime_queue *q)
 {
     verify(!fixture_locks&&q==active_queue);
     if(q->power.phase==NPU_IDLE_SUSPENDED){
-        fixture_now+=24*70;++q->power.counters.resumes;q->power.counters.writes+=4;
         q->power.counters.gated_ticks+=fixture_now-q->power.gated_since;
+        fixture_now+=24*70;++q->power.counters.resumes;q->power.counters.writes+=4;
         q->power.counters.resume_ticks+=1680;if(q->power.counters.resume_max_ticks<1680)q->power.counters.resume_max_ticks=1680;
         q->power_stats.last_request_to_ready_us=70;if(q->power_stats.max_request_to_ready_us<70)q->power_stats.max_request_to_ready_us=70;
-        q->power.phase=NPU_IDLE_ON;fixture_resume_requested=0;
+        q->power.phase=NPU_IDLE_ON;q->power.idle_since=fixture_now;fixture_resume_requested=0;
     }
     return 1;
 }
