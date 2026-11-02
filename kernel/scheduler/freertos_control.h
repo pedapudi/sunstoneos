@@ -12,6 +12,9 @@
  * references exist. Each CPU has one owner consumer and one gate caller.
  * Progress requires bounded non-preemptive metadata service, owner IRQ/checkpoint
  * response, saved-frame eviction, and eventual publisher reference release.
+ * A descriptor still referenced after delete acknowledgment must publish
+ * ss_control_retirement on its final put; the kernel registry installs that
+ * callback. Owners do not poll references with self-renewing interrupts.
  * Host checks exercise this mechanism; linked FreeRTOS adapters, IRQ return,
  * weak-memory modeling and physical timing require separate qualification. */
 struct ss_control_state {

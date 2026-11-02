@@ -31,7 +31,7 @@ void ss_kernel_registry_init_retirement(struct ss_kernel_registry *r,
     for (unsigned i = 0; i < SS_OWNER_SLOTS; ++i) {
         struct ss_owner_retirement retirement = { notify, context, i, coordinator };
         ss_owner_descriptor_init_closed(&r->descriptor[i], 0, &retirement);
-        r->registered[i] = false;
+        r->registered[i] = r->mapped[i] = false;
     }
     for (unsigned i = 0; i < SS_KERNEL_HANDLE_BUCKETS; ++i) {
         atomic_init(&r->bucket[i].slot, SS_KERNEL_NO_SLOT);
@@ -71,7 +71,7 @@ unsigned ss_kernel_handle_register(struct ss_kernel_registry *r, void *task,
         if (ss_owner_reopen(&r->descriptor[slot], task, incarnation, true)) break;
     }
     if (slot == SS_OWNER_SLOTS) return SS_KERNEL_NO_SLOT;
-    r->registered[slot] = true;
+    r->registered[slot] = r->mapped[slot] = true;
     atomic_store_explicit(&r->bucket[first_free].slot, slot, memory_order_relaxed);
     atomic_store_explicit(&r->bucket[first_free].handle, handle, memory_order_release);
     return slot;
@@ -120,7 +120,7 @@ bool ss_kernel_handle_close(struct ss_kernel_registry *r, unsigned slot)
     return true;
 }
 
-bool ss_kernel_handle_retire(struct ss_kernel_registry *r, unsigned slot,
+bool ss_kernel_handle_unmap(struct ss_kernel_registry *r, unsigned slot,
                              bool owners_drained)
 {
     if (slot >= SS_OWNER_SLOTS || !r->registered[slot] || !owners_drained)
@@ -128,6 +128,7 @@ bool ss_kernel_handle_retire(struct ss_kernel_registry *r, unsigned slot,
     struct ss_owner_descriptor *d = &r->descriptor[slot];
     if (atomic_load_explicit(&d->admission, memory_order_acquire) ||
         !ss_owner_references_retired(d)) return false;
+    if (!r->mapped[slot]) return true;
     uintptr_t handle = (uintptr_t)d->task;
     unsigned hash = handle_hash(handle);
     for (unsigned n = 0; n < SS_KERNEL_HANDLE_BUCKETS; ++n) {
@@ -138,8 +139,16 @@ bool ss_kernel_handle_retire(struct ss_kernel_registry *r, unsigned slot,
         if (atomic_load_explicit(&r->bucket[b].slot, memory_order_relaxed) != slot)
             return false;
         atomic_store_explicit(&r->bucket[b].handle, TOMBSTONE, memory_order_release);
-        r->registered[slot] = false;
+        r->mapped[slot] = false;
         return true;
     }
     return false;
+}
+
+bool ss_kernel_handle_retire(struct ss_kernel_registry *r, unsigned slot,
+                             bool owners_drained)
+{
+    if (!ss_kernel_handle_unmap(r, slot, owners_drained)) return false;
+    r->registered[slot] = false;
+    return true;
 }

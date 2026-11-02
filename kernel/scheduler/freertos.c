@@ -982,7 +982,8 @@ static bool ssKernelApply(void *context, unsigned slot, void *task,
     configASSERT(atomic_load_explicit(&s->owner, memory_order_acquire) == c);
     struct ss_control_state guarded;
     bool deferred = atomic_load_explicit(&s->cleanup_shield, memory_order_acquire) &&
-        (state->dead || state->suspended || state->offcpu_sequence > s->offcpu_ack);
+        (state->dead || state->suspended || state->offcpu_sequence > s->offcpu_ack ||
+         state->abort_generation != s->abort_generation);
     if (deferred) {
         /* Resource destruction may block or migrate. Keep its caller alive
          * and pin-admissible, but still apply donation/base-priority repair. */
@@ -990,6 +991,7 @@ static bool ssKernelApply(void *context, unsigned slot, void *task,
         guarded = *state;
         guarded.dead = guarded.suspended = false;
         guarded.offcpu_sequence = s->offcpu_ack;
+        guarded.abort_generation = s->abort_generation;
         state = &guarded;
     }
     if (state->dead) configASSERT(ss_kernel_handle_close(&ssKernelRegistry, slot));
@@ -1130,7 +1132,8 @@ static void ssKernelRetired(void *context, unsigned slot, uint64_t incarnation)
     struct ssKernelTask *s = &ssKernelTasks[slot];
     if (atomic_load_explicit(&ssKernelRegistry.descriptor[slot].incarnation,
                               memory_order_acquire) == incarnation &&
-        ssKernelRegistry.registered[slot] && !s->cleanup_queued) {
+        ssKernelRegistry.registered[slot] && !s->cleanup_queued &&
+        ss_kernel_handle_unmap(&ssKernelRegistry, slot, true)) {
         s->cleanup_queued = true;
         atomic_fetch_or_explicit(&ssKernelCleanupPending[slot / 64],
             UINT64_C(1) << (slot % 64), memory_order_release);
