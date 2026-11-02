@@ -26,6 +26,7 @@ struct ss_cpu_cache {
     uint32_t line_bytes;
     uint16_t level, type;
     uint16_t clock_id, rail_id, opp_table_id; /* SS_ID_NONE when absent. */
+    uint16_t reserved;                        /* zero; names the trailing padding */
 };
 /* OPP IDs refer to the platform clock owner's tables. Energy remains unknown
  * until a record supplies measured power and its provenance. */
@@ -36,6 +37,7 @@ struct ss_cpu_energy_point {
 struct ss_cpu_domain {
     uint64_t cpus;
     uint16_t clock_id, rail_id, opp_table_id;
+    uint16_t reserved;                        /* zero; names the padding before the pointer */
     const struct ss_cpu_energy_point *energy;
     size_t energy_count;
 };
@@ -43,7 +45,7 @@ struct ss_cpu_policy {
     uint64_t admitted, reserved, service, application, irq;
 };
 struct ss_cpu_topology {
-    uint32_t version;
+    uint32_t version, reserved;               /* reserved is zero; names the padding */
     uint64_t calibration_epoch, operating_epoch;
     const char *calibration_source, *capacity_workload, *energy_source;
     /* Pure lookup in the referenced clock owner table. Returns zero for an
