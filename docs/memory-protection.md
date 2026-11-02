@@ -166,3 +166,15 @@ are deleted, the golden entry changes with it.
   the tables after preparation, which needs a mapping generation counter.
 - `SCTLR_EL1.WXN` is not set. The golden comparison already refuses any
   writable executable entry.
+
+## Backlog: kernel and driver data are reachable from EL0
+
+Kernel data, driver state, the device pools of the local layout and the application regions all lie in read-write data
+blocks that EL0 can use (see the table above), and the SD0 controller registers are protected only by the native adapter's
+software filter, which an EL0 task can bypass by writing the registers itself where a mapping exists. Today an EL0
+application can therefore reach the runner-admitted bounds object of the storage-write service, the private copy of its
+blob, the DMA descriptors and the flush buffer, and any driver structure. The bounded-write design does not depend on this
+protection: it copies the blob once and re-hashes it on every use, which detects a change but cannot prevent one made in the
+microseconds between the check and the use (docs/designs/storage-write.md). Closing the gap is wider than the storage work:
+kernel and driver data, stacks of privileged tasks and controller state must be mapped EL1-only, with the shared exceptions
+(the `ss_*` call tables, application regions) mapped explicitly, so that no EL0 application can reach another owner's state.

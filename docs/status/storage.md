@@ -22,8 +22,10 @@ FAT32 volume read-only (32 KiB clusters, 1,907,436 clusters free, empty root dir
 3. Measure sustained throughput on broader extents and cards, and qualify card replacement, removal and recovery, and voltage timing.
 4. Implement SDR50 and DDR50; add GPT, multiple volumes and clients.
 5. Connect the [FAT32 write service](../designs/storage-write.md) (host-checked with a power-loss sweep) to the card: CMD25 with descriptor DMA, ACMD13 for the allocation unit, a read-over-write arbiter, bounded-write admission in the runner, and the board rate, latency and interruption measurements.
-6. Images that link the SD core without `SUNXI_MMC_READ_ONLY` (the earlier driver probes) are write-capable to the runner and need a rebuild with that definition, or a coordinator approval record, before they run again.
-7. Resolve packer licensing and exact source equivalence.
+6. Map kernel and driver data EL1-only (backlog, wider than storage): an EL0 application can reach the bounds object of the write service, the private copy of its blob and the controller state; the service detects a changed blob by re-hashing it on every use ([memory protection](../memory-protection.md#backlog-kernel-and-driver-data-are-reachable-from-el0)).
+7. After the first write has run, try the busy-clear interrupt (`THLD.BCIG`, `RINTSTS` bits 17 and 13) in place of the DAT0 busy timer, and compare the flush-latency distribution and the owner task's CPU time.
+8. Images that link the SD core without `SUNXI_MMC_READ_ONLY` (the earlier driver probes) are write-capable to the runner and need a rebuild with that definition, or a coordinator approval record, before they run again.
+9. Resolve packer licensing and exact source equivalence.
 
 Any physical card write needs its full host backup and the approved target-bound path in [goal section 4](../goal.md).
 

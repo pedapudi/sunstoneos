@@ -304,14 +304,32 @@ The first user-space open runs `do_init()` (`vip2/vip_drv_interface.c:81-250`):
   `vip_drv_device_platform.c:654-686`, reads only the device tree).
 
 ## Command allocation sized by the graph
-The vendor driver writes `+0x3a4 = 0x1ffff` at every trigger (the maximum fetch count, `vipdMAX_CMD_SIZE` >> 3 with the
-valid bit), because its command buffers are that large. SunstoneOS maps only the registered command allocation for the
-NPU, with an unmapped page after it, so the front end must not fetch beyond it. Each slot's allocation is therefore the
-graph's stream and one END pair rounded to a page, and the word written is `0x10000 | (allocation >> 3)`, which is
-`0x1ffff` only for an allocation of 524,280 bytes or more. The bytes after the stream are END pairs, as before. The
-earlier board runs qualified the word `0x1ffff` with a window of 524,288 bytes; the word for smaller windows is first
-exercised by the queue image described next, and a job that completes with the reference output and no MMU exception is
-the evidence that the front end stops at the END pair and does not need the full count.
+What the sources say the low 16 bits of the doorbell word `+0x3a4` mean. Paths are inside `vip2/` of the pinned vendor
+kernel (`linux-orangepi` `2ac08e8c…`).
+- The vendor writes `+0x3a4` in one place, `vipdrv_hw_trigger` (`vip_drv_hardware.c:886-890`): the start address to
+  `+0x654`, a memory barrier, then `0x00010000 | (vipdMAX_CMD_SIZE >> 3)`. A search of the whole tree finds no other write
+  to `+0x3a4` and no read of it, so the vendor never writes a smaller count.
+- `vipdMAX_CMD_SIZE` is `65535 * 8`, with the comment "the max value of command buffer size. PLEASE DON'T INCREASE THIS
+  VALUE" (`inc/vip_drv_share.h:133-137`). The shift by 3 makes the field a count of 8-byte units, and 65535 is the largest
+  value 16 bits hold. Bit 16 is set in every write; the sources do not name it.
+- The command stream encodes the same count in its LINK command, opcode 8 in bits 31:27 and `vipdMAX_CMD_SIZE >> 3` in the
+  low bits (`cmd_link`, `vip_drv_hardware.c:521-529`; the wait-link, `:592`). The count is therefore the size of the
+  next command fetch in 8-byte units, written the same way by the driver and by the stream.
+- The sources do not say whether the front end fetches exactly that many bytes, stops at the END pair, or only treats the
+  count as an upper bound. The register specification is closed (see the list of closed references above), and the
+  vendor always writes the maximum, so no source shows that a smaller count works or that the front end never reads
+  beyond a short buffer. SunstoneOS documents that assumed a full prefetch span (`docs/npu-memory.md`,
+  `docs/npu-reserved.md`) recorded a safe rule, not a measurement.
+
+The reading used here is a fetch size in 8-byte units that the front end does not exceed. It is a hypothesis with no
+vendor basis for values other than the maximum, so the first board run that writes a smaller word confirms or refutes it.
+SunstoneOS maps only the registered command allocation, with an unmapped page after it. Each slot's allocation is the
+graph's stream and one END pair rounded to a page, and the word written is `0x10000 | (allocation >> 3)`, which equals
+the vendor `0x1ffff` only for an allocation of 524,280 bytes or more. A job that completes with the reference output and
+no MMU exception is the evidence for the hypothesis. A fault, a hang or a wrong output traceable to the word is the
+evidence against it, and the response is not to adjust the value but to return to the vendor `0x1ffff`: keep each slot's
+physical allocation at the graph's size and map the remainder of the 512 KiB window in NPU virtual space to one shared
+read-only page of END words.
 
 ## EL0 queue backpressure on the board
 Image: the OS with `SUNSTONE_A733_OS_NPU_QUEUE`, one reviewed graph (`graph-add`) resident in 31 slots under 31 names

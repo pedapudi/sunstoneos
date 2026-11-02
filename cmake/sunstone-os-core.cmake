@@ -1,6 +1,7 @@
 # OS implementation and device owners, independent of application sources.
 include("${CMAKE_CURRENT_LIST_DIR}/latency-instrumentation.cmake")
 option(SUNSTONE_A733_OS "Build the integrated OS image" OFF)
+option(SUNSTONE_A733_OS_SD_WRITE "OS image whose SD0 owner task writes the card under runner-admitted bounds (write-capable: the runner needs a coordinator approval record)" OFF)
 option(SUNSTONE_A733_OS_RESIDENT "Integrated OS with the resident lifetime" OFF)
 option(SUNSTONE_A733_OS_USB_CLASSES "OS input, serial and camera host services" OFF)
 option(SUNSTONE_A733_OS_USB_JPEG "OS camera MJPEG hardware decoder" OFF)
@@ -206,6 +207,10 @@ set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/servic
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
   apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
   drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c platform/a733/fault.S platform/a733/fault.c)
+if(SUNSTONE_A733_OS_SD_WRITE)
+  # One SD0 owner task serves the loader's reads and the FAT32 write service (apps/os/sd_owner.c); the SD core is built with its write path.
+  list(APPEND os_added apps/os/sd_owner.c drivers/storage/a733_storage_bounds.c drivers/storage/a733_storage_update.c drivers/storage/storage_wait.c)
+endif()
 set(os_patches "${os_root}/apps/os/boot.patch")
 if(SUNSTONE_A733_OS_USB_CLASSES)
   apply_build_patch("${os_build}/link-usb.ld" "${storage_build}/link.ld"
@@ -574,8 +579,15 @@ endif()
 set_property(TARGET sunstone-a733-os-core PROPERTY LINK_OPTIONS "${os_link}")
 target_link_options(sunstone-a733-os-core PRIVATE "-Wl,-Map,${os_build}/image.map")
 # The loader's SD0 binding is read-only: the core has no write path (checks/sd-read-only.py scans the image).
-set_source_files_properties("${os_root}/drivers/storage/sunxi_mmc.c" "${os_root}/drivers/storage/a733_mmc_platform.c"
-  "${os_root}/drivers/storage/a733_mmc_platform_native.c" PROPERTIES COMPILE_DEFINITIONS SUNXI_MMC_READ_ONLY=1)
+if(SUNSTONE_A733_OS_SD_WRITE)
+  # The write-capable build: the SD core keeps its write path, and the loader's binding and the owner task know it.
+  set_source_files_properties("${os_root}/apps/os/large_sd.c" "${os_root}/apps/os/sd_owner.c" PROPERTIES COMPILE_DEFINITIONS OS_SD_WRITE=1)
+  # The bounded writer's rule in the native register filter exists only where the bounds object is linked.
+  set_source_files_properties("${os_root}/drivers/storage/a733_mmc_platform_native.c" PROPERTIES COMPILE_DEFINITIONS A733_MMC_BOUNDED_WRITER=1)
+else()
+  set_source_files_properties("${os_root}/drivers/storage/sunxi_mmc.c" "${os_root}/drivers/storage/a733_mmc_platform.c"
+    "${os_root}/drivers/storage/a733_mmc_platform_native.c" PROPERTIES COMPILE_DEFINITIONS SUNXI_MMC_READ_ONLY=1)
+endif()
 if(SUNSTONE_CONTROL_IRQ)
   if(SUNSTONE_LATENCY OR SUNSTONE_IRQ_COUNT)
     message(FATAL_ERROR "The control interrupts, the latency recorder and the interrupt counter each wrap vApplicationIRQHandler")
@@ -614,6 +626,9 @@ if(SUNSTONE_LATENCY)
   get_target_property(os_sources sunstone-a733-os-core SOURCES)
   get_target_property(latency_port_inputs sunstone-a733-os-core SUNSTONE_LATENCY_PORT_INPUTS)
   list(APPEND os_external_inputs ${latency_port_inputs})
+endif()
+if(SUNSTONE_A733_OS_SD_WRITE)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_SD_WRITE=1)
 endif()
 if(SUNSTONE_A733_OS_DMA)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_DMA=1)
