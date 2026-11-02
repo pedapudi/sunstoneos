@@ -7,7 +7,7 @@ migration and task-context resource cleanup. Static and dynamic task APIs pass
 configured host checks, including mixed-affinity stress and eight-core soak.
 Selection takes no global task, ISR or administration lock in those tests.
 The default remains the global FIFO-lock control; a CPU comparison image is
-prepared for the coordinator. See [the design](../designs/scheduler-partitioned.md).
+prepared for the coordinator after its first board run exposed a start-up fault. See [the design](../designs/scheduler-partitioned.md).
 
 **Software evidence:** host, emulator, source.
 
@@ -19,8 +19,10 @@ physical qualification.
 
 ## Open work
 
-1. Run the prepared CPU control through the coordinator's queue; compare per-core
+1. Run the corrected CPU control through the coordinator's queue; compare per-core
    wake and lock distributions with the same-board baseline, then record the result.
+   The first run ended in a watchdog reset from a yield before the scheduler started;
+   the virtual OS board now reproduces and checks that case.
 2. Qualify the fork with the exact mimus reference and board soak before enabling
    it by default. Current passing evidence is host-only.
 3. Add idle pull in series D: controlled tests still strand ready work on a busy
