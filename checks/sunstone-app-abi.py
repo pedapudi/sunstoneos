@@ -233,6 +233,17 @@ assert json.loads((a.build / 'radio' / 'manifest.json').read_text())[0]['devices
 refused(lambda v: v['cpu'].update(privilege='el1'), 'unknown cpu keys')
 refused(lambda v: v.update(output_limit=tool.OUTPUT_LIMIT + 1), 'output_limit')
 assert tool.OUTPUT_LIMIT + tool.RESULT_HEADER_BYTES == 0xf00000
+# A supervised session ends within 60 s; a resident image has no such bound.
+refused(lambda v: v['deadlines'].update(progress_window_us=tool.SUPERVISED_SESSION_US + 1), 'progress_window_us')
+_long = json.loads(HELLO.read_text())
+_long['deadlines']['progress_window_us'] = 3600 * 10**6
+(a.build / 'resident-window.json').write_text(json.dumps(_long))
+assert tool.load(a.build / 'resident-window.json', resident=True)['progress_window_us'] == 3600 * 10**6
+try:
+    tool.load(a.build / 'resident-window.json')
+    raise AssertionError('a supervised window above 60 s was accepted')
+except SystemExit:
+    pass
 refused(lambda v: v['regions'].append({'name': 'scratch', 'kind': 'work', 'access': ['read', 'write'], 'bytes': 100}),
         'capacity is a multiple of 4 KiB')
 # GPU leases cover whole 2 MiB CPU blocks, including bytes beyond an input's

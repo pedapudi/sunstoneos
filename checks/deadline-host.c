@@ -120,7 +120,7 @@ static void runtime_cases(void *unused)
  * none. The board's USB0 window is shortened for the model. */
 #include "os-services.h"
 #define OS_RENEW_US 1000000u
-struct os_service { const char *name; uint32_t window_us; };
+struct os_service { const char *name; uint64_t window_us; };
 const struct os_service os_services[OS_SERVICES]={
     {"pmic",1000000},{"usb0",100},{"typec",1000000},{"power",1000000},
     {"usb2",1000000},{"application",1000000},OS_SERVICE_TABLE};

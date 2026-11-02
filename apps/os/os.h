@@ -276,7 +276,7 @@ int os_capture(unsigned g,const uint8_t **wav,size_t *bytes);
 /* Resident services after the board's own (apps/board/application.h): the linked application reports as the first of them,
  * then the services of OS_SUPERVISED_ROWS (apps/os/os-services.h), whose ids OS_SERVICE_* are defined there. The
  * supervisor requires progress only from the services the session grants (apps/os/services.c). */
-struct os_service { const char *name; uint32_t window_us; };
+struct os_service { const char *name; uint64_t window_us; };
 extern const struct os_service os_services[OS_SERVICES];
 void board_service_progress(unsigned);
 /* Bind this service once to its owning task and fixed deadline slot. A fresh

@@ -97,6 +97,7 @@ OS_HOST_FIRST = 0x80
 # result_geometry check and platform/a733/link.ld), so a record never exceeds
 # that window. The ss_finish payload is the manifest's declared output_limit;
 # the linker and the host check refuse an image whose record does not fit.
+SUPERVISED_SESSION_US = 60000000
 IMAGE_RAM_BYTES = 0x41f00000 - 0x41000000
 RESULT_HEADER_BYTES = 56
 OUTPUT_LIMIT = IMAGE_RAM_BYTES - RESULT_HEADER_BYTES
@@ -139,7 +140,7 @@ def integer(value, where, low=0, high=(1 << 64) - 1):
     return value
 
 
-def load(path):
+def load(path, resident=False):
     """manifest.json -> normalized dict with integer fields."""
     raw = json.loads(Path(path).read_text())
     known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'deadlines', 'output_limit', 'host_ops', 'npu'}
@@ -176,7 +177,11 @@ def load(path):
     d = raw['deadlines']
     m['run_deadline_us'] = integer(d.get('run_us', 0), name + ' run_us')
     m['return_reserve_us'] = integer(d['return_reserve_us'], name + ' return_reserve_us')
-    m['progress_window_us'] = integer(d['progress_window_us'], name + ' progress_window_us', 1, 60000000)
+    # A supervised session ends before SUPERVISED_SESSION_US (the board admission refuses a
+    # session of 60 s or more), so a longer window supervises nothing. A resident image has no
+    # session deadline; its window is bounded only by the 64-bit service table field.
+    m['progress_window_us'] = integer(d['progress_window_us'], name + ' progress_window_us', 1,
+                                      (1 << 64) - 1 if resident else SUPERVISED_SESSION_US)
     m['output_limit'] = integer(raw.get('output_limit', 0), name + ' output_limit', 0, OUTPUT_LIMIT)
     require(m['output_limit'] >= FAILURE_RECORD_BYTES,
             '%s: output_limit %d is smaller than the %d-byte failure record (struct ss_failure in '
@@ -563,7 +568,7 @@ def c_tables(m):
              '};', 'const unsigned os_application_count=sizeof(os_applications)/sizeof(os_applications[0]);',
              '__attribute__((used,retain)) const struct os_service os_services[OS_SERVICES] = {',
              '    {"board-pmic",1000000},{"board-usb0",1000000},{"board-typec",1000000},',
-             '    {"board-power",1000000},{"board-usb2",1000000},{"%s",%du},' % (m['name'],m['progress_window_us']),
+             '    {"board-power",1000000},{"board-usb2",1000000},{"%s",UINT64_C(%d)},' % (m['name'],m['progress_window_us']),
              '    OS_SERVICE_TABLE', '};',
              '#ifdef SUNSTONE_BOARD_USB2_IRQ', 'extern void board_host_irq(void);', '#endif',
              '#ifdef SUNSTONE_A733_HW_FACTS', 'extern void os_hw_facts_irq(void);', '#endif',
@@ -605,6 +610,7 @@ def main():
     e = sub.add_parser('emit')
     e.add_argument('--manifest', type=Path)
     e.add_argument('--no-application', action='store_true')
+    e.add_argument('--resident', action='store_true', help='resident image (SUNSTONE_BOARD_RESIDENT): no supervised-session bound on progress_window_us')
     e.add_argument('--output', type=Path, required=True)
     d = sub.add_parser('decode')
     d.add_argument('section', type=Path)
@@ -626,7 +632,7 @@ def main():
         (a.output/'manifest.bin').write_bytes(b'')
         (a.output/'manifest.json').write_text('[]\n')
         return
-    m = assign(load(a.manifest))
+    m = assign(load(a.manifest, a.resident))
     a.output.mkdir(parents=True, exist_ok=True)
     c = cname(m['name'])
     (a.output / (c + '-manifest.c')).write_text(c_source(m))

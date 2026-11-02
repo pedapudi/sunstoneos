@@ -162,7 +162,7 @@ def check(image, manifest=None, application=None):
     assert len(service_data) % 16 == 0 and len(service_data) >= 7 * 16, 'supervision table geometry'
     services = []
     for offset in range(0, len(service_data), 16):
-        name, window = struct.unpack_from('<QI', service_data, offset)
+        name, window = struct.unpack_from('<QQ', service_data, offset)
         assert window, 'zero supervision progress window'
         services.append({'name': elf.cstring(name), 'window_us': window})
     result['services'] = services
