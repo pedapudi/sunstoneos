@@ -20,7 +20,7 @@ FAT32 volume read-only (32 KiB clusters, 1,907,436 clusters free, empty root dir
 ## Open work
 
 1. Qualify physical installation, autonomous OS boot, cold controller and supply state, reset retirement and power-loss recovery.
-2. Qualify SDR104 at 150 MHz (implemented and host-modeled). The card keeps 1.8 V signalling until its supply is cycled, and the board's only supply cycle was whole-board power removal. [The recovery design](../designs/sd-uhs-recovery.md) shows from the sources that a card at 1.8 V is re-initialised at 1.8 V with no power cycle, models every failure state (`checks/sd-uhs-recovery-model.py`), and names DC1SW2 (PMIC register `0x11` bit 4, shared with `VCC-IO`, the USB2 PHY and the header) as a software supply cycle for the card. A four-stage board plan is written; no run is approved.
+2. Qualify SDR104 at 150 MHz (implemented and host-modeled). The card keeps 1.8 V signalling until its supply is cycled, and the board's only supply cycle was whole-board power removal. [The recovery design](../designs/sd-uhs-recovery.md) shows from the sources that a card at 1.8 V is re-initialised at 1.8 V with no power cycle, and models every failure state (`checks/sd-uhs-recovery-model.py`). The board documents disagree on whether DC1SW2 (PMIC register `0x11` bit 4) powers the card at all and on whether it also powers the PMIC's I2C pads and USB0, so no DC1SW2 cycle is planned until that is settled. Stage 1, a read-only probe at 3.3 V, found S18A set on the 62.5 GB card (Phison SD64G, U3, V30); the CMD6 support field cannot show SDR104 until the card is at 1.8 V. Next: one lifetime that switches, re-initialises at 1.8 V and returns normally, which needs approval.
 3. Measure sustained throughput on broader extents and cards, and qualify card replacement, removal and recovery, and voltage timing.
 4. Implement SDR50 and DDR50; add GPT, multiple volumes and clients.
 5. Connect the [FAT32 write service](../designs/storage-write.md) (host-checked with a power-loss sweep) to the card: CMD25 with descriptor DMA, ACMD13 for the allocation unit, a read-over-write arbiter, bounded-write admission in the runner, and the board rate, latency and interruption measurements.
@@ -65,7 +65,7 @@ on the platform source of v12. The same check applies to any other service that 
 Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-storage-20261101.md).
 
 <!-- evidence-table:begin -->
-18 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+19 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -87,4 +87,5 @@ Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/
 | `1793636210564944400-a065537e` | 2026-11-02 | 3-1 | `e57491e16932` | returned | passed | run_total 62.612 s, recoveries 1, recovered_clusters 0, volume_size 4.1943e+07 B, mismatches 0, wear_bytes 1536 B |
 | `1793636300522250962-f6977cff` | 2026-11-02 | 3-1 | `190cbba10653` | result-mismatch | passed | run_total 12.863 s, sectors_captured 109 |
 | `1793636342034468404-7527d869` | 2026-11-02 | 3-1 | `e57491e16932` | returned | passed | run_total 45.779 s, verified_bytes 5.36871e+08 B, mismatches 0, read_rate 20.3 MB/s, wear_bytes 0 B |
+| `1793639891731890732-2700d966` | 2026-11-02 | 3-1 | `01b107634de6` | result-mismatch | passed | run_total 28.085 s, s18a 1, group1_support_bits 32771, au_sectors 8192, max_current 50 mA |
 <!-- evidence-table:end -->

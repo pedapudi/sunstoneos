@@ -36,7 +36,7 @@ SPEED_MODES = ('SDR12', 'SDR25', 'SDR50', 'SDR104', 'DDR50')
 
 def capabilities(ocr, cid_hex, switch):
     """What the 3.3 V observation shows. S18A is OCR bit 24 of the ACMD41 response that carried S18R (no CMD11 was sent). The bus speed
-    support bits are the CMD6 response's group 1 field (bytes 12 and 13, big-endian). The CID is manufacturer id (8 bits), OEM id
+    support bits are the CMD6 response's group 1 field (bytes 12 and 13, big-endian). At 3.3 V signalling the card reports only functions 0 and 1 (specification Table 4-11 text), so SDR50, SDR104 and DDR50 appear only in a response read at 1.8 V. The CID is manufacturer id (8 bits), OEM id
     (16), product name (40), revision, serial, manufacturing date."""
     cid = bytes.fromhex(cid_hex)
     support = (switch[12] << 8) | switch[13]
