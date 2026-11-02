@@ -15,6 +15,8 @@ def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path)
     result=importlib.util.module_from_spec(spec);spec.loader.exec_module(result);return result
 TCR=module('a733_tcr',ROOT/'tools/a733_tcr.py').SINGLE_CORE
+# The Non-secure view of the priority mask comes from docs/hardware/a733-facts.json.
+GIC=module('hw_facts',ROOT/'tools/hw_facts.py').GicModel()
 class Machine:
     def __init__(self,image,session,variant='nominal'):
         self.e=image;self.cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
@@ -24,7 +26,7 @@ class Machine:
         for address,data in image.parts:self.cpu.mem_write(address,data)
         self.raw=bytes(session);self.variant=variant;self.finished=False;self.parked=False
         self.publications=[];self.writes=[];self.time=24000000
-        self.sysregs={'icc_iar0_el1':29,'icc_pmr_el1':0xf0,'cntfrq_el0':24000000,'esr_el3':0,'elr_el3':0,'far_el3':0,'sctlr_el1':0x30d00800,'mair_el1':0,'tcr_el1':0,'ttbr0_el1':0,'par_el1':0}
+        self.sysregs={'icc_iar0_el1':29,'icc_pmr_el1':GIC.facts.value('gic.cpuif.icc_pmr_el1.inherited',0),'cntfrq_el0':24000000,'esr_el3':0,'elr_el3':0,'far_el3':0,'sctlr_el1':0x30d00800,'mair_el1':0,'tcr_el1':0,'ttbr0_el1':0,'par_el1':0}
         self.cpu.reg_write(UC_ARM64_REG_PSTATE,0x3cd)
         self.cpu.mem_write(0x41f00000,self.raw)
         self.write(0x03400000,0x37);self.write(0x03400004,7)
@@ -78,7 +80,7 @@ class Machine:
             cpu.reg_write(UC_ARM64_REG_PC,a+4);return
         if write:
             key=write[1].lower();value=0 if write[2].lower()=='zr' else cpu.reg_read(UC_ARM64_REG_X0+int(write[2]))
-            self.sysregs[key]=value&0xf0 if key=='icc_pmr_el1' else value
+            self.sysregs[key]=GIC.ns_read(GIC.ns_write(value)) if key=='icc_pmr_el1' else value
             cpu.reg_write(UC_ARM64_REG_PC,a+4);return
         translation=TRANSLATION.match(text)
         if translation:
@@ -92,7 +94,7 @@ class Machine:
             cpu.reg_write(UC_ARM64_REG_PC,a+4);return
         if instruction&0xffffffe0==0xd5384600:
             # Physical secure GIC priority mask exposes sixteen NS priorities.
-            cpu.reg_write(UC_ARM64_REG_X0+(instruction&31),0xf0)
+            cpu.reg_write(UC_ARM64_REG_X0+(instruction&31),GIC.pmr_ns_read(GIC.mask))
             cpu.reg_write(UC_ARM64_REG_PC,a+4);return
         if a==self.e.address('a733_cpu_coherence_publish'):
             self.publications.append((cpu.reg_read(UC_ARM64_REG_X0),cpu.reg_read(UC_ARM64_REG_X1)))

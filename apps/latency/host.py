@@ -2,7 +2,7 @@
 import struct
 
 RESULT_BYTES = 63872
-PMU_BYTES = 1536  # optional tail: counts inside the kind-0 sites (SUNSTONE_LATENCY_PMU)
+PMU_BYTES = 1216  # optional tail (padded to the 64-byte report alignment): event masks, then counts inside the kind-0 sites (SUNSTONE_LATENCY_PMU)
 PHASES = ('initialization', 'idle', 'busy')
 SITE_KINDS = ('irq_masked', 'task_lock_hold')
 SITE_METRICS = ('irq_masked', 'lock1_hold')
@@ -156,9 +156,11 @@ def decode(payload, dma=False):
                             raise ValueError('attribution interval crosses a phase boundary')
                     previous = ticks
                     entries.append(dict(zip(('ticks', 'start', 'enter_site', 'exit_site'), values)))
-                    if kind == 0 and pmu_tail:
-                        counts = struct.unpack_from('<4I', pmu_tail, ((p * 8 + core) * SITE_SLOTS + slot) * 16)
-                        entries[-1]['pmu'] = dict(zip(('instructions', 'cycles', 'l1d_refills', 'l2d_refills'), counts))
+                    if kind == 0 and pmu_tail and p in (2, 3):
+                        row = 0 if p == 2 else 1
+                        counts = struct.unpack_from('<6I', pmu_tail, 32 + ((row * 8 + core) * SITE_SLOTS + slot) * 24)
+                        entries[-1]['pmu'] = dict(zip(('instructions', 'cycles', 'stall_backend', 'mem_access',
+                                                       'bus_access', 'l1d_refills'), counts))
                 kinds[kind_name] = entries
             sites[phase_name] = kinds
         cores.append({'core': core, 'sweeps': sweeps, 'bytes_read': read,

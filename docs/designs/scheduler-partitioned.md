@@ -834,12 +834,77 @@ span is dominated by cache misses that the emulator does not have.
 
 The CPU control with `SUNSTONE_LATENCY_PMU` records, for each core's three
 longest masked spans per phase, the instructions retired, cycles, L1D refills and
-L2D refills inside the span. Prediction: after the cache-line grouping, every
+L2D refills inside the span. First prediction, which the capture contradicted (see the next subsection): after the cache-line grouping, every
 span in the measured phases retires at most 1,500 instructions (the sum of the
 rows above for the longest entry), and a span longer than 15 µs at these
 instruction counts shows at least 100 L1D refills, that is, its time is miss
 time. A long span with few refills contradicts the prediction and points to a
 wait. The counters are read only; no event interrupt, clock or voltage changes.
+
+### Masked-span cycles are barrier and exception cycles, not memory-access cycles
+
+The first PMU capture contradicted the miss-time prediction: spans of 17 to 30 µs
+retired 770 to 2,100 instructions with 20 to 60 L1D refills, at 25 to 50 cycles
+per instruction. `checks/scheduler-masked-stalls.py` executes the model images
+under the QEMU GDB stub, steps one core through a span from the entry of the mask
+call to the entry of the unmask call, and classifies every executed instruction.
+The Normal memory of the scheduler, the control tables and the recorder is
+write-back cacheable (`0x41000000` to `0x48000000`), the monitor interval
+(`0x42000000` to `0x42200000`) holds no scheduler or recorder data, and the
+count of loads and stores to Device or non-cacheable addresses is zero in every
+span traced. The recorder reads `CNTVCT_EL0` with an ISB eight times in the
+longest span, and its buffers are cacheable. Per span:
+
+| Span (instructions) | DSB (SY) | ISB | SVC and ERET | SGI writes | LSE atomics | Exclusives |
+| --- | --- | --- | --- | --- | --- | --- |
+| End-of-run self-suspend, `ssKernelCommand` (2,574) | 17 (8) | 19 | 11 | 4 | 15 | 2 |
+| Task critical section, `vTaskEnterCritical` (889) | 4 (4) | 4 | 4 | 0 | 0 | 4 |
+| Service entry, `ssKernelService` (577) | 2 (2) | 4 | 0 | 0 | 1 | 0 |
+| Notification give, `ssKernelNotify` (667) | 4 (3) | 5 | 0 | 0 | 10 | 0 |
+
+Prediction: at most 17 barrier, SGI and exception instructions per span account
+for 25,000 to 78,000 cycles, so each costs thousands of cycles. A DSB SY or DMB
+cannot complete before every earlier store has reached the point of
+coherence, and the load tasks keep the core's write buffer and the write-streaming
+bus path full with their 1 MiB sweeps; the same instructions cost about a sixth
+as much in the idle phase (about 3 µs for the same service entry, a sixth of the loaded span). The cycles are
+therefore backend stall cycles with the core waiting on its own outstanding
+traffic. Counting these events inside each of the longest spans confirms or
+refutes it:
+
+| Event | Number | Prediction for a span over 15 µs |
+| --- | --- | --- |
+| `STALL_BACKEND` | 0x24 | At least 70% of the span's cycles |
+| `BUS_ACCESS` | 0x19 | Many beats, in proportion to the sweep traffic that the barriers wait for, and not to the span's instructions |
+| `MEM_ACCESS` | 0x13 | At most 700 (about one per memory instruction) |
+| `L1D_CACHE_REFILL` | 0x03 | At most 60, as in the first capture |
+| `INST_RETIRED` | 0x08 | Unchanged from the first capture |
+
+All five are architectural PMUv3 events. The Cortex-A55 TRM lists 0x03, 0x13, 0x19
+and 0x24 (the cores report them in `PMCEID0_EL0` and `PMCEID1_EL0`; the measured
+A55 values `0x7fffffff` and `0x01f0ae7f` set all four). No TRM for the Cortex-A76
+is in the source cache. The capture therefore stores each core's implemented-event
+mask and counts only the events that mask lists. Neither core documents a
+barrier-specific event (the Armv8.2 `DSB_SPEC`, `DMB_SPEC` and `ISB_SPEC`, 0x7C to 0x7E,
+are absent from the A55 table), so the prediction is tested by exclusion. A long
+span with low `STALL_BACKEND` contradicts it and points to the SGI and exception
+entry cost instead. A span whose cycles are mostly stalled while `BUS_ACCESS` stays low
+points to waiting on another core, such as a LSE atomic on a line in another
+core's cache.
+
+Result of the capture on port 3-3 (all five events are implemented on all eight
+cores): in the busy phase `STALL_BACKEND` is 94 to 98% of the cycles of every
+service, notification and critical-section span except core 3's critical section
+(59 to 68%), `MEM_ACCESS` is 441 to 619, `BUS_ACCESS` 320 to 960 beats and L1D
+refills 23 to 38. The prediction that backend stalls dominate holds. The capture does
+not separate the two causes that fit it: a service entry with two DSB SY and 35 L1D
+refills stalls about 33,000 cycles, which is 0.5 µs per refill if the refills
+serialize behind a saturated DRAM, and the barrier drain the prediction names would
+need about 8 µs per DSB. The refill reading fits better. The spans are limited by
+dependent line fetches while eight cores stream 1 MiB sweeps. They shorten only
+with fewer distinct lines per entry or with overlapped fetches (prefetch), which
+this stream has not implemented; the measured maxima are 12 to 29 µs in the
+measured phases and 18 to 46 µs for the end-of-run task suspension.
 
 Linked-kernel tests replace budget rows with instruction counts before board
 submission. Board samples add cycles/counter duration, p50, p99 and maximum.

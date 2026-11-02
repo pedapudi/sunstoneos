@@ -19,7 +19,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--pmu', action='store_true',
-                        help='the report carries the PMU tail of SUNSTONE_LATENCY_PMU (1536 more bytes, no constraint)')
+                        help='the report carries the PMU tail of SUNSTONE_LATENCY_PMU (1216 more bytes, no constraint)')
     parser.add_argument('--timing-open', action='store_true',
                         help='accept any timing maximum, overrun context and quantile: a measurement run, not a qualification')
     args = parser.parse_args()
@@ -57,8 +57,8 @@ def main():
                     base = 5440 + (phase * 8 + core) * 616 + metric * 56
                     for delta in (8, 16, 24): words[(base + delta) // 4:(base + delta) // 4 + 2] = [anyword, anyword]
     if args.pmu:
-        expected['words'] += [{'min': 0, 'max': 0xffffffff}] * (1536 // 4)
-    assert len(expected['words']) * 4 == 63872 + (1536 if args.pmu else 0)
+        expected['words'] += [{'min': 0, 'max': 0xffffffff}] * (1216 // 4)
+    assert len(expected['words']) * 4 == 63872 + (1216 if args.pmu else 0)
     path = args.output / 'expect.json'
     path.write_text(json.dumps(expected, indent=2) + '\n')
 
