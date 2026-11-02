@@ -89,7 +89,7 @@ time ([session_lifetime.py](../tools/session_lifetime.py)):
 
     lifetime = max(60 s, ceil(1 s startup + 2 s setup + run_us + return_reserve_us))
 
-The 1 s is `A733_BOARD_STARTUP_SECONDS`. The 2 s is an allowance (four times the worst arm-to-return time measured in the 2026-11-02 runs, 0.73 s; see `tools/session_setup_time.py`) for service
+The 1 s is `A733_BOARD_STARTUP_SECONDS`. The 2 s is an allowance (with the 1 s startup bound, 2.5 times the worst time outside the application measured in the 2026-11-02 runs, 1.20 s; see `tools/session_setup_time.py`) for service
 start, application admission and input digests before `main`; an application
 that needs longer declares a longer `run_us`. The 60 s floor is the lifetime
 of an application that needs less, so its services and the runner's failure

@@ -34,13 +34,17 @@ US = 1_000_000
 STARTUP_SECONDS = 1
 # Time from the end of EL3 startup to the application's main(): OS service start, application admission and the input
 # digests. Measured with tools/session_setup_time.py on the 2026-11-02 runs in the board queue's evidence
-# (~/.cache/sunstoneos/board-queue/entries/*/run/{return-report.bin,breadcrumbs.json}, images built from c10eb74e and
-# bbb2d08a): the arm-to-ROM-return time bounds startup plus setup from above for an application that does little work.
-# Those applications returned within 0.09 s (hw-facts), 0.11 s (heap-test), 0.23 s (queue-add, queue-gemm), 0.53 s at the
-# most (latency), and mimus, which hashes its multi-MiB inputs and recognizes, returned within 0.73 s in its fastest of
-# 176 runs. The worst measured figure is therefore 0.73 s for startup, setup, the application's work and the return
-# together. The allowance below, with the 1 s EL3 startup bound, is 3 s: four times that figure. A run longer than the
-# allowance is clipped by the session bound (grant->finish_by_us), never extended.
+# (~/.cache/sunstoneos/board-queue/entries/*/run/{return-report.bin,breadcrumbs.json,output.bin}, images built from c10eb74e
+# and bbb2d08a). The arm-to-ROM-return time of all 301 returned runs has maximum 41.59 s and 99th percentile 27.53 s, but
+# that is the applications' own work: a 512 MiB file write (storage-write, 41.59 s), a 512 MiB load from the card inside main
+# (large-region, 25 to 31 s), a recognition of the input audio (mimus, up to 25.8 s, median 1.6 s), NPU graph runs
+# (npu-graphs, up to 19.6 s against declared runs of 8 to 40 s), a 6 GiB read (large-6g, 8.6 s) and a 1 GiB heap fill
+# (heap-test, 0.96 s when it completes, 0.11 s when it fails early). Declared run times cannot be subtracted: the
+# applications return when their work ends, before the deadline. Storage-write reports its own elapsed time from inside main,
+# so the time outside the application can be separated for it: arm-to-return minus that time is 1.03 to 1.20 s in the six
+# runs that report it (startup, setup and the return together). The allowance is that worst case with a margin of 2.5:
+# the 1 s EL3 startup bound plus the 2 s below is 3 s. A run longer than the allowance is clipped by the session bound
+# (grant->finish_by_us), never extended.
 SETUP_SECONDS = 2
 # The lifetime of an image whose manifest needs less. It leaves the services' own start and the
 # runner's failure recovery as they were; it is a floor, not a limit.
