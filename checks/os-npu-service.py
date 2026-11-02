@@ -76,10 +76,10 @@ assert done.returncode == 0, (28, done.returncode, done.stdout[-400:], done.stde
 print('case 28', done.stdout.strip().splitlines()[-1])
 # Case 31: models given with their digests (not linked bytes): accepted with the right digest, refused with a wrong one.
 done = run(exe, 31)
-assert done.returncode == 0 and 'accepted at prepare' in done.stdout, (31, done.returncode, done.stdout[-400:], done.stderr[-600:])
+assert done.returncode == 0 and 'accepted at prepare and at LOAD' in done.stdout, (31, done.returncode, done.stdout[-400:], done.stderr[-600:])
 bad = run(exe, 31, {'BAD_DIGEST': '1'})
-assert bad.returncode == 0 and 'refused at prepare' in bad.stdout, (31, bad.returncode, bad.stdout[-400:], bad.stderr[-600:])
-print('case 31 models given with a digest: accepted when it matches, refused when one bit differs')
+assert bad.returncode == 0 and 'refused at its first LOAD' in bad.stdout, (31, bad.returncode, bad.stdout[-400:], bad.stderr[-600:])
+print('case 31 models given with a digest: accepted at LOAD when it matches, refused at the first LOAD when one bit differs')
 # Case 29: a graph that no list names, handed over after the scheduler started (the relu graph of the test set, which the
 # catalogue of this image does not link): registered within the declared bounds, loaded and run; refused when damaged, too
 # large or beyond the declared capacity; and a LOAD refused when the application changes the bytes it handed over.

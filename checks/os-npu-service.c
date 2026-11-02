@@ -648,14 +648,18 @@ int main(int argc, char **argv)
         if (getenv("BAD_DIGEST")) {
             digests[os_npu_model_count - 1][5] ^= 1;
             config.models = given;
-            assert(!npu_runtime_prepare(&npu.runtime, &config));
-            puts("PASS a model whose digest differs is refused at prepare");
+            assert(npu_runtime_prepare(&npu.runtime, &config));          /* prepare does not hash a model given with a digest */
+            assert(!npu_runtime_preload(&npu.runtime, 0, os_npu_model_count - 1)); /* its first LOAD refuses the copy */
+            puts("PASS a model whose digest differs is refused at its first LOAD");
             return 0;
         }
         config.models = given;
     }
     assert(npu_runtime_prepare(&npu.runtime, &config));
-    if (mode == 31) { puts("PASS models given with their digests are accepted at prepare"); return 0; }
+    if (mode == 31) {
+        assert(npu_runtime_preload(&npu.runtime, 0, 0));   /* the staged copy hashes to the declared digest */
+        puts("PASS models given with their digests are accepted at prepare and at LOAD"); return 0;
+    }
     if (mode == 28 || mode == 30) {
         const unsigned n = npu.runtime.slots;
         /* Thirty-one slots: every slot's regions are registered, distinct, ascending and inside the NPU's 32-bit address

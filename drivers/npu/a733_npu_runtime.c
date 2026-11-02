@@ -165,8 +165,13 @@ static int sized(const struct npu_runtime_model *models, unsigned count, unsigne
     for (unsigned m = 0; m < count; ++m) {
         if (!a733_span_incl_nonempty(models[m].data, models[m].bytes) ||
             models[m].bytes > NBG_MODEL_MAX_BYTES ||
-            !admit(models[m].data, models[m].bytes, digests ? digests[m] : digest, plans ? &plans[m] : &one)) return 0;
-        if (models[m].sha256 && memcmp(digests ? digests[m] : digest, models[m].sha256, 32)) return 0;
+            !admit(models[m].data, models[m].bytes, models[m].sha256 ? NULL : (digests ? digests[m] : digest),
+                   plans ? &plans[m] : &one)) return 0;
+        /* A model given with its digest is not hashed here: the declared digest is the reference, and LOAD hashes the copy
+         * it stages and refuses a copy that differs, so the content is checked once, when it is first used, and not in
+         * a sizing pass and again in prepare (hashing megabytes takes seconds before the scheduler, where the secondary
+         * cores wait only a second for the primary core). */
+        if (models[m].sha256 && digests) memcpy(digests[m], models[m].sha256, 32);
         need(plans ? &plans[m] : &one, models[m].bytes, z);
     }
     if (bounds && bounds->slot_model) {
