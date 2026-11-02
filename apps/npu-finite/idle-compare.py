@@ -94,8 +94,8 @@ def compare(baselines, controls, gatings):
     groups = [[run['idle']['groups'][i] for run in gatings] for i in range(3)]
     resume = max((max(g['driver_resume_us_max'], g['admission_us']['max']) for gs in groups for g in gs if g['gates']), default=0)
     cold_rows = [row('Resume from suspended clocks', None, resume, '<= 100', None, 'us', 0 < resume <= 100),
-                 row('Gating during the 9 ms gap', 0, sum(g['gates'] for g in groups[0]), '0', None, 'gates',
-                     all(g['gates'] == 0 and g['gap_us'] == 9000 for g in groups[0])),
+                 row('Gating during the 9 ms gap (gap held below 10 ms)', 0, sum(g['gates'] for g in groups[0]), '0', None, 'gates',
+                     all(g['gates'] == 0 and g['gap_us'] == 9000 and g['gap_valid'] for g in groups[0])),
                  row('Gating after the 11 ms and 100 ms gaps', None, [sum(g['gates'] for g in gs) for gs in groups[1:]], 'every cycle', None, 'gates',
                      all(g['gates'] == g['cycles'] for gs in groups[1:] for g in gs))]
     med = lambda runs, i, field: statistics.median(r['idle']['groups'][i]['cold_job_us'][field] for r in runs)

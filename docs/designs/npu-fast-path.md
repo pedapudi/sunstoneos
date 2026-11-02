@@ -385,8 +385,9 @@ longer than the measured break-even duration.
 Three images share every source and differ only in policy: a baseline that
 creates no power owner, the control (owner without register writes) and the
 gating image, all at 852 MHz and 800 mV. Each runs five windows of 12,000
-back-to-back jobs (about 450 ms, about 45 owner wakes each) and then 100 cold
-jobs after each of 9, 11 and 100 ms idle gaps; the 9 ms case must never gate.
+back-to-back jobs (about 450 ms, about 45 owner wakes each) and then 100, 100 and
+30 cold jobs after the 9, 11 and 100 ms idle gaps, so the run (about 8 s) stays far
+inside the 20 s diagnostic deadline; the 9 ms case must never gate.
 Comparisons use the median over the five windows of a boot and then the median
 over boots, and the spread across boots is reported. A busy window never lets
 the gating image gate, so gating against the control in the windows measures

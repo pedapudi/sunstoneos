@@ -25,10 +25,10 @@ CHECK_INPUTS = ['apps/npu-finite/host.py', 'apps/npu-finite/idle-compare.py', 'a
                 'apps/npu-finite/queue-client.c', 'apps/npu-finite/build.py', 'apps/npu-interrupt/host.py']
 FREQUENCY = 24000000
 GAPS = (9000, 11000, 100000)
-CYCLES = 100
+CYCLES = (100, 100, 30)
 WINDOWS = 5
 WINDOW_JOBS = 12000
-JOBS = 61301
+JOBS = 61231
 DEADLINE = 3000000000
 REFERENCES = [bytes(range(64)), bytes(range(64, 128))]
 POLICIES = ('control', 'gate', 'baseline')
@@ -49,7 +49,7 @@ def hexbytes(data):
     return ''.join(data[at:at + 64].hex() + '\n' for at in range(0, len(data), 64))
 
 
-def digest(jobs):
+def digest(jobs):  # sha256 over the per-job output hash, repeated
     return hashlib.sha256(hashlib.sha256(REFERENCES[0]).digest() * jobs).hexdigest()
 
 
@@ -74,22 +74,22 @@ def scenario(policy, throughput=1.0, cpu=1.0, latency=1.0, jitter=0):
                         'first_byte': 2 ** 64 - 1, 'output': digest(WINDOW_JOBS)})
         at += length + 1000
     groups = []
-    for gap in GAPS:
+    for gap, cycles in zip(GAPS, CYCLES):
         gating = gate and gap > 10000
-        idle_ticks = [gap * 24 + 700 + i for i in range(CYCLES)]
-        admission = [70 if gating else 0 for i in range(CYCLES)]
-        cold = sorted(int(420 + i % 7 + (admission[i] * 24 if gating else 0)) for i in range(CYCLES))
+        idle_ticks = [gap * 24 + 700 + i for i in range(cycles)]
+        admission = [70 if gating else 0 for i in range(cycles)]
+        cold = sorted(int(420 + i % 7 + (admission[i] * 24 if gating else 0)) for i in range(cycles))
         length = sum(idle_ticks) + sum(cold) + 20000
-        groups.append({'gap': gap, 'cycles': CYCLES, 'checked': CYCLES, 'bad': 0, 'start': at, 'end': at + length,
-                       'gates': CYCLES if gating else 0, 'resumes': CYCLES if gating else 0, 'writes': 6 * CYCLES if gating else 0,
-                       'gated': sum(idle_ticks) - CYCLES * 240000 - 5000 if gating else 0, 'requests': CYCLES if gating else 0,
+        groups.append({'gap': gap, 'cycles': cycles, 'checked': cycles, 'bad': 0, 'start': at, 'end': at + length,
+                       'gates': cycles if gating else 0, 'resumes': cycles if gating else 0, 'writes': 6 * cycles if gating else 0,
+                       'gated': sum(idle_ticks) - cycles * 240000 - 5000 if gating else 0, 'requests': cycles if gating else 0,
                        'driver_max': 70 if gating else 0, 'owner_ticks': (3000 if gating else 800) if owned else 0,
                        'owner_elapsed': (4000 if gating else 900) if owned else 0, 'client': 20000, 'worker': 9000,
                        'idle_task': length // 2, 'irq': 7000, 'idle_min': min(idle_ticks), 'idle_max': max(idle_ticks),
                        'idle_sum': sum(idle_ticks), 'first': 2 ** 64 - 1, 'first_offset': 2 ** 64 - 1, 'first_byte': 2 ** 64 - 1,
-                       'pending': CYCLES if gating else 0, 'cold50': cold[49], 'cold99': cold[98], 'cold_max': cold[99],
-                       'cold_sum': sum(cold), 'adm50': admission[49], 'adm99': admission[98], 'adm_max': max(admission),
-                       'output': digest(CYCLES)})
+                       'pending': cycles if gating else 0, 'cold50': cold[(cycles * 50 + 99) // 100 - 1], 'cold99': cold[(cycles * 99 + 99) // 100 - 1], 'cold_max': cold[-1],
+                       'cold_sum': sum(cold), 'adm50': admission[0], 'adm99': admission[0], 'adm_max': max(admission),
+                       'output': digest(cycles)})
         at += length + 1000
     return {'policy': policy, 'warm': warm, 'windows': windows, 'groups': groups, 'output': digest(1000)}
 
@@ -118,7 +118,7 @@ def render(s):
     totals = [POLICIES.index(s['policy']), w['owner_ticks'], w['owner_elapsed'], w['wakes'],
               sum(x['gates'] for x in g), sum(x['resumes'] for x in g), sum(x['writes'] for x in g), sum(x['gated'] for x in g),
               1680 if gate else 0, 0, w['owner_elapsed'] + sum(x['owner_elapsed'] for x in g) + (500 if s['policy'] != 'baseline' else 0),
-              (w['wakes'] + 40) if s['policy'] != 'baseline' else 0, w['irq'], 0]
+              (w['wakes'] + 40) if s['policy'] != 'baseline' else 0, w['irq'], 0, *w.get('margins', (400000000, 380000000, 200000000))]
     text += 'NPU_IDLE=\n' + ''.join(hexword(v) for v in totals)
     for x in s['windows']:
         text += 'NPU_IDLE_WINDOW=\n' + ''.join(hexword(x[k]) for k in WINDOW_FIELDS) + 'NPU_IDLE_WINDOW_OUTPUT_SHA256=\n' + x['output'] + '\n'
@@ -131,7 +131,7 @@ def geometry(policy):
     return {'runtime': True, 'references': [r.hex() for r in REFERENCES],
             'latency': {'mode': 'queue', 'measured_jobs': 1000, 'warmup_jobs': 1, 'model': 0, 'sequence_repeats': 0,
                         'doorbell_timing': True,
-                        'idle': {'policy': policy, 'cycles': 100, 'gaps_us': list(GAPS), 'threshold_us': 10000,
+                        'idle': {'policy': policy, 'cycles': list(CYCLES), 'gaps_us': list(GAPS), 'threshold_us': 10000,
                                  'resume_budget_us': 100, 'windows': WINDOWS, 'window_jobs': WINDOW_JOBS}}}
 
 
@@ -171,13 +171,13 @@ MUTATIONS = [
     ('a resume above the budget', 'gate', lambda s: s['groups'][1].update(driver_max=101), GATING),
     ('an admission above the budget', 'gate', lambda s: s['groups'][2].update(adm_max=101, adm99=101), GATING),
     ('gated time above the idle time', 'gate', lambda s: s['groups'][2].update(gated=10 ** 12), GATING),
-    ('the 9 ms gap reaching the threshold', 'gate', lambda s: s['groups'][0].update(idle_max=240001, idle_sum=s['groups'][0]['idle_sum'] + 1), 'Idle gap below the threshold reached it.'),
     ('an idle minimum below its gap', 'gate', lambda s: s['groups'][1].update(idle_min=1), GEOMETRY),
     ('a cold output mismatch not counted', 'gate', lambda s: s['groups'][0].update(output='0' * 64), 'Idle output status disagrees with its digest.'),
     ('a group that starts before the previous ends', 'gate', lambda s: s['groups'][1].update(start=s['groups'][0]['start']), IDENTITY),
     ('a cold quantile order', 'gate', lambda s: s['groups'][1].update(cold50=s['groups'][1]['cold99'] + 1), GEOMETRY),
     ('owner time beyond the group', 'gate', lambda s: s['groups'][2].update(owner_ticks=10 ** 12), GEOMETRY),
     ('a short cycle count', 'gate', lambda s: s['groups'][0].update(cycles=99), IDENTITY),
+    ('exhausted deadline margin', 'gate', lambda s: s['warm'].update(margins=(400000000, 380000000, 0)), 'Idle policy or warm owner counters differ.'),
     ('a window output mismatch not counted', 'control', lambda s: s['windows'][2].update(output='0' * 64), 'Idle window output status disagrees with its digest.'),
     ('a window p99 above its maximum', 'control', lambda s: s['windows'][1].update(p99=400), WINDOW),
     ('window task time beyond its length', 'control', lambda s: s['windows'][3].update(idle_task=10 ** 9), WINDOW),
@@ -199,7 +199,7 @@ def main():
 
     baseline, control, gating = (decode(host, scenario(p)) for p in ('baseline', 'control', 'gate'))
     assert [r['idle']['policy'] for r in (baseline, control, gating)] == ['baseline', 'control', 'gate']
-    assert [g['gates'] for g in gating['idle']['groups']] == [0, 100, 100]
+    assert [g['gates'] for g in gating['idle']['groups']] == [0, 100, 30]
     assert gating['idle']['groups'][1]['admission_us']['max'] == 70
     assert baseline['idle']['totals']['owner_wakes'] == 0 and len(gating['idle']['windows']) == WINDOWS
     cases.append('decodes the baseline, control and gating policies')
@@ -222,7 +222,7 @@ def main():
     assert failed(decode(host, scenario('control', cpu=1.5)), gating) >= {'control vs baseline: charged CPU time per job'}
     wrong = copy.deepcopy(gating)
     wrong['idle']['groups'][0]['gates'] = 1
-    assert 'Gating during the 9 ms gap' in failed(control, wrong)
+    assert 'Gating during the 9 ms gap (gap held below 10 ms)' in failed(control, wrong)
     slow = copy.deepcopy(gating)
     slow['idle']['groups'][1]['driver_resume_us_max'] = 101
     assert failed(control, slow) == {'Resume from suspended clocks'}
@@ -249,13 +249,21 @@ def main():
         mutate(s)
         refused(lambda: decode(host, s), reason, ValueError)
         cases.append('refuses ' + label)
+    # A late timer wake that lets the 9 ms gap reach the threshold is a flawed measurement: decoded, flagged, and failed.
+    late = scenario('gate')
+    late['groups'][0].update(idle_max=240500, idle_sum=late['groups'][0]['idle_sum'] + 500, gates=3, resumes=3, requests=3,
+                             pending=3, writes=18, gated=1000)
+    flawed = decode(host, late)
+    assert not flawed['idle']['groups'][0]['gap_valid'] and all(g['gap_valid'] for g in gating['idle']['groups'])
+    assert 'Gating during the 9 ms gap (gap held below 10 ms)' in failed(control, flawed)
+    cases.append('reports a late timer wake on the 9 ms gap as an invalid gap')
     refused(lambda: host.latency_report(render(scenario('gate')), 0, DEADLINE, geometry('control')), 'Idle policy or warm owner counters differ.', ValueError)
     cases.append('refuses a report whose policy differs from the image marker')
 
     labels, arrays = source_labels()
     expected = ['NPU_IDLE', 'NPU_IDLE_WINDOW', 'NPU_IDLE_WINDOW_OUTPUT_SHA256', 'NPU_IDLE_GROUP', 'NPU_IDLE_OUTPUT_SHA256']
     assert labels == expected, labels
-    assert arrays == [14, len(WINDOW_FIELDS), len(GROUP_FIELDS)], arrays
+    assert arrays == [17, len(WINDOW_FIELDS), len(GROUP_FIELDS)], arrays
     size = len(render(scenario('gate')).split('NPU_INFERENCE')[0])
     assert size < 16127, f'idle report of {size} bytes exceeds the platform log'
     cases.append(f'producer labels and field counts match the decoder; report of {size} bytes fits the platform log')

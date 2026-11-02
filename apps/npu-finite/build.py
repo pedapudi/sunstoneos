@@ -165,7 +165,12 @@ if a.idle:
  anchor='void vApplicationFPUSafeIRQHandler(uint64_t interrupt)\n{'
  assert text.count(anchor)==1
  text=text.replace(anchor,anchor+'\n    if(interrupt==27){sunstone_deadline_irq();return;}')
-platform.write_text(text.replace('_Noreturn void platform_exit(','_Noreturn void npu_finite_legacy_exit('))
+text=text.replace('_Noreturn void platform_exit(','_Noreturn void npu_finite_legacy_exit(')
+# A panic records its line and file before it ends, so a refused return names its origin.
+anchor='_Noreturn void platform_panic(const char *file, unsigned line)\n{\n'
+assert text.count(anchor)==1
+text='#include "sunstone_crumb.h"\n'+text.replace(anchor,anchor+'    sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU),line,file);\n')
+platform.write_text(text)
 platform_obj=compile_like('/npu-single-core/platform.c',platform,'platform')
 ret=compile_like('/apps/npu-convolution/native.c',root/'apps/npu-finite/return.c','return')
 # An explicit rate recompiles only the application's native unit with its selection.
@@ -290,7 +295,7 @@ if a.runtime:identity.update(profile='npu-runtime-return-v1',**runtime_identity)
 if a.model_switch:identity.update(profile='npu-model-switch-return-v1')
 if a.sdk:identity.update(profile='npu-sdk-return-v1')
 if a.sustained:identity.update(sustained={'jobs':200,'models':2,'order':'job-index-modulo-model-count'})
-if a.latency:identity.update(profile='npu-latency-return-v1',latency={'mode':a.latency,'measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':a.sequence,'doorbell_timing':True,**({'idle':{'policy':{'none':'baseline','off':'control','gate':'gate'}[a.idle],'cycles':100,'gaps_us':[9000,11000,100000],'threshold_us':10000,'resume_budget_us':100,'windows':5,'window_jobs':12000}} if a.idle else {}),**({'dependent_chain':True,**({'chain_repeats':a.chain_repeats} if a.chain_repeats!=1 else {})} if a.dependent_chain else {})})
+if a.latency:identity.update(profile='npu-latency-return-v1',latency={'mode':a.latency,'measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':a.sequence,'doorbell_timing':True,**({'idle':{'policy':{'none':'baseline','off':'control','gate':'gate'}[a.idle],'cycles':[100,100,30],'gaps_us':[9000,11000,100000],'threshold_us':10000,'resume_budget_us':100,'windows':5,'window_jobs':12000}} if a.idle else {}),**({'dependent_chain':True,**({'chain_repeats':a.chain_repeats} if a.chain_repeats!=1 else {})} if a.dependent_chain else {})})
 if a.power_cycle:identity.update(profile='npu-power-cycle-return-v1')
 if a.thermal:
  identity['profile']='npu-finite-thermal-return-v1'

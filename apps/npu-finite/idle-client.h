@@ -3,7 +3,8 @@
  * policy 1 gates the clocks after 10 ms of idle time, and policy 2 creates no
  * owner at all (the baseline). After the legacy 1000-job loop, five windows
  * of 12000 back-to-back jobs give repeated throughput, latency and CPU
- * samples; then 100 cold jobs follow each idle gap. */
+ * samples; then cold jobs follow each idle gap (100, 100 and 30 jobs, so the
+ * whole run stays well inside the 20 s diagnostic deadline). */
 #include "a733_npu_idle.h"
 #include "task.h"
 #ifndef SUNSTONE_NPU_IDLE_GATE
@@ -12,15 +13,18 @@
 #if SUNSTONE_NPU_IDLE_GATE<0 || SUNSTONE_NPU_IDLE_GATE>2
 #error "Idle policy must be zero, one or two"
 #endif
-#define IDLE_CYCLES 100u
+#define IDLE_CYCLES 100u /* capacity of one group */
 #define WINDOWS 5u
 #define WINDOW_JOBS 12000u
 #define HISTOGRAM 4096u
-__attribute__((used,retain)) const uint64_t npu_idle_return_profile[11]={
-    UINT64_C(0x4e505549444c3032),2,SUNSTONE_NPU_IDLE_GATE,IDLE_CYCLES,9000,11000,100000,10000,100,WINDOWS,WINDOW_JOBS};
+__attribute__((used,retain)) const uint64_t npu_idle_return_profile[13]={
+    UINT64_C(0x4e505549444c3033),3,SUNSTONE_NPU_IDLE_GATE,100,100,30,9000,11000,100000,10000,100,WINDOWS,WINDOW_JOBS};
 static unsigned idle_policy(void)
 {return (unsigned)*(volatile const uint64_t *)&npu_idle_return_profile[2];}
 static const uint64_t idle_gaps[3]={9000,11000,100000};
+static const unsigned idle_cycles[3]={100,100,30};
+/* Time left before the diagnostic deadline at the start and end of the windows and at the end of the run. */
+static uint64_t idle_margin[3];
 static uint64_t idle_warm_owner_ticks,idle_warm_owner_elapsed,idle_warm_wakes,idle_warm_irq_ticks;
 struct output_tally {uint64_t checked,bad,first_bad,first_offset,first_byte;};
 static struct window_result {
@@ -52,7 +56,7 @@ static unsigned idle_ready(void)
 {
     unsigned done=1;
     for(unsigned i=0;i<WINDOWS;++i)done&=windows_result[i].output.checked==WINDOW_JOBS;
-    for(unsigned i=0;i<3;++i)done&=idle_results[i].output.checked==IDLE_CYCLES;
+    for(unsigned i=0;i<3;++i)done&=idle_results[i].output.checked==idle_cycles[i];
     if(idle_policy()==2)return done;
     return done&&direct.power.phase==NPU_IDLE_ON&&atomic_load_explicit(&direct.power_stopped,memory_order_acquire)==1;
 }
@@ -90,9 +94,14 @@ static void sort32(uint32_t *a,unsigned n)
 }
 /* Rank-based quantile of n sorted samples: element ceil(n*percent/100). */
 static uint64_t rank(unsigned n,unsigned percent){return ((uint64_t)n*percent+99)/100;}
+static uint64_t margin_ticks(void)
+{
+    const uint64_t now=a733_smp_counter();
+    return now<a733_observe_identity.deadline?a733_observe_identity.deadline-now:0;
+}
 static unsigned run_idle_windows(void)
 {
-    unsigned bad_output=0;
+    unsigned bad_output=0;idle_margin[0]=margin_ticks();
     for(unsigned w=0;w<WINDOWS;++w) {
         struct window_result *r=&windows_result[w];struct storage_digest digest;storage_digest_init(&digest);
         tally_start(&r->output);memset(histogram,0,sizeof histogram);
@@ -132,6 +141,7 @@ static unsigned run_idle_windows(void)
         }
         storage_digest_end(&digest,r->digest);
     }
+    idle_margin[1]=margin_ticks();
     return bad_output;
 }
 static unsigned run_idle_cycles(void)
@@ -145,8 +155,8 @@ static unsigned run_idle_cycles(void)
         r->start=a733_smp_counter();
         const uint64_t client_before=ulTaskGetRunTimeCounter(NULL),worker_before=ulTaskGetRunTimeCounter(runtime->service.worker),
             owner_before=owner_runtime(),idle_before=ulTaskGetRunTimeCounter(xTaskGetIdleTaskHandle());
-        for(unsigned cycle=0;cycle<IDLE_CYCLES;++cycle) {
-            current_job=JOBS+WINDOWS*WINDOW_JOBS+group*IDLE_CYCLES+cycle;sunstone_crumb(NPU_CRUMB_SUBMIT,(unsigned)current_job);
+        for(unsigned cycle=0;cycle<idle_cycles[group];++cycle) {
+            current_job=JOBS+WINDOWS*WINDOW_JOBS+(group?100u:0u)+(group>1?100u:0u)+cycle;sunstone_crumb(NPU_CRUMB_SUBMIT,(unsigned)current_job);
             uint64_t lock=npu_runtime_queue_lock();
             const uint64_t full_idle=direct.power.initialized?direct.power.idle_since:a733_smp_counter(),
                 gates=direct.power.counters.gates,resumes=direct.power.counters.resumes;
@@ -162,12 +172,14 @@ static unsigned run_idle_cycles(void)
             struct npu_queue_fence fence;
             submit_job(&fence,&pending);
             const uint64_t ready=a733_smp_counter(),ready_us=(ready-request+23)/24,idle_ticks=request-full_idle;
-            const unsigned expected=idle_policy()==1&&group>0;
+            /* Gating is expected exactly when the device was idle for the delay; a late timer wake
+             * on the 9 ms gap is a flawed measurement that the decoder reports, not a failure here. */
+            const unsigned expected=idle_policy()==1&&idle_ticks>=10000*24;
             lock=npu_runtime_queue_lock();
             if(pending!=expected||(direct.power.initialized&&direct.power.phase!=NPU_IDLE_ON)||
                direct.power.counters.gates-gates!=expected||direct.power.counters.resumes-resumes!=expected||
                ready<request||ready_us>UINT16_MAX||
-               idle_ticks<idle_gaps[group]*24||(!group&&idle_ticks>=10000*24))retained(86);
+               idle_ticks<idle_gaps[group]*24)retained(86);
             npu_runtime_queue_unlock(lock);r->pending+=pending;
             r->admission_us[cycle]=(uint16_t)ready_us;
             if(idle_ticks<r->idle_min)r->idle_min=idle_ticks;if(idle_ticks>r->idle_max)r->idle_max=idle_ticks;r->idle_sum+=idle_ticks;
@@ -191,11 +203,13 @@ static unsigned run_idle_cycles(void)
         r->owner_elapsed=direct.power.counters.owner_cpu_ticks-prior.owner_cpu_ticks;
         r->requests=direct.power_stats.resume_requests-requests;r->irq_ticks=direct.irq_cpu_ticks-irq_before;
         uint32_t cold[IDLE_CYCLES];uint32_t fast[IDLE_CYCLES];
-        for(unsigned i=0;i<IDLE_CYCLES;++i){cold[i]=r->durations[i];fast[i]=r->admission_us[i];r->cold_sum+=cold[i];}
-        sort32(cold,IDLE_CYCLES);sort32(fast,IDLE_CYCLES);
-        r->cold_p50=cold[rank(IDLE_CYCLES,50)-1];r->cold_p99=cold[rank(IDLE_CYCLES,99)-1];r->cold_max=cold[IDLE_CYCLES-1];
-        r->adm_p50=fast[rank(IDLE_CYCLES,50)-1];r->adm_p99=fast[rank(IDLE_CYCLES,99)-1];r->adm_max=fast[IDLE_CYCLES-1];
+        const unsigned count=idle_cycles[group];
+        for(unsigned i=0;i<count;++i){cold[i]=r->durations[i];fast[i]=r->admission_us[i];r->cold_sum+=cold[i];}
+        sort32(cold,count);sort32(fast,count);
+        r->cold_p50=cold[rank(count,50)-1];r->cold_p99=cold[rank(count,99)-1];r->cold_max=cold[count-1];
+        r->adm_p50=fast[rank(count,50)-1];r->adm_p99=fast[rank(count,99)-1];r->adm_max=fast[count-1];
     }
+    idle_margin[2]=margin_ticks();
     return bad_output;
 }
 static void idle_report(void)
@@ -203,7 +217,8 @@ static void idle_report(void)
     const struct npu_idle_counters *c=&direct.power.counters;
     const uint64_t values[]={idle_policy(),idle_warm_owner_ticks,idle_warm_owner_elapsed,idle_warm_wakes,
         c->gates,c->resumes,c->writes,c->gated_ticks,c->resume_max_ticks,c->resume_over_budget,
-        c->owner_cpu_ticks,c->owner_wakes,direct.irq_cpu_ticks,direct.power_stats.quiet_retries};
+        c->owner_cpu_ticks,c->owner_wakes,direct.irq_cpu_ticks,direct.power_stats.quiet_retries,
+        idle_margin[0],idle_margin[1],idle_margin[2]};
     platform_puts("NPU_IDLE=\n");
     for(unsigned i=0;i<sizeof values/sizeof values[0];++i){platform_hex(values[i]);platform_puts("\n");}
     for(unsigned w=0;w<WINDOWS;++w) {
@@ -217,7 +232,7 @@ static void idle_report(void)
     }
     for(unsigned group=0;group<3;++group) {
         const struct idle_result *r=&idle_results[group];
-        const uint64_t stats[]={idle_gaps[group],IDLE_CYCLES,r->output.checked,r->output.bad,r->start,r->end,r->gates,r->resumes,
+        const uint64_t stats[]={idle_gaps[group],idle_cycles[group],r->output.checked,r->output.bad,r->start,r->end,r->gates,r->resumes,
             r->writes,r->gated_ticks,r->requests,r->driver_max,r->owner_ticks,r->owner_elapsed,r->client_ticks,r->worker_ticks,
             r->idle_task,r->irq_ticks,r->idle_min,r->idle_max,r->idle_sum,r->output.first_bad,r->output.first_offset,
             r->output.first_byte,r->pending,r->cold_p50,r->cold_p99,r->cold_max,r->cold_sum,r->adm_p50,r->adm_p99,r->adm_max};

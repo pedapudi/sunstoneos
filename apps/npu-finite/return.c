@@ -5,6 +5,24 @@
 #include "boot.h"
 #include "result.h"
 #include "cached.h"
+#include "sunstone_crumb.h"
+/* A refused return records why before it ends at the monitor, so the first
+ * failure is visible in the run's breadcrumb words. Reasons 0xe01..0xe08 name
+ * the failed predicate of the first check; 0xf01..0xf04 name a later refusal. */
+#define REFUSE(code) do{sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU),0xf00u|(code),__builtin_return_address(0));npu_finite_smc(4);}while(0)
+#if defined(SUNSTONE_NPU_STARTUP_ONLY) && !defined(SUNSTONE_NPU_FINITE_THERMAL) && !defined(SUNSTONE_NPU_ENTRY_CHECKPOINT)
+static __attribute__((noinline)) _Noreturn void refuse_first(unsigned status,uint64_t now)
+{
+    const unsigned reason=status>NPU_STARTUP_MAX_STATUS?1:!npu_startup_return_ready()?2:status>1?3:
+        !a733_npu_application_quiescent()?4:
+        atomic_load_explicit(&a733_npu_application_result.complete,memory_order_acquire)!=NPU_FINITE_COMPLETE(status)?5:
+        now>=a733_observe_identity.deadline?6:aarch64_device_cache_stride()!=64?7:8;
+    sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU),0xe00u|reason,__builtin_return_address(0));
+    npu_finite_smc(4);
+}
+#else
+#define refuse_first(status,now) REFUSE(0)
+#endif
 #ifdef SUNSTONE_NPU_FINITE_THERMAL
 const uint64_t npu_finite_thermal_profile[4]={NPU_FINITE_RECEIPT_MAGIC,1,160,2};
 #endif
@@ -35,11 +53,11 @@ _Noreturn void platform_exit(unsigned status)
        !a733_npu_application_quiescent() ||
        atomic_load_explicit(&a733_npu_application_result.complete,memory_order_acquire)!=NPU_FINITE_COMPLETE(status) ||
 #endif
-       now>=a733_observe_identity.deadline || aarch64_device_cache_stride()!=64)npu_finite_smc(4);
+       now>=a733_observe_identity.deadline || aarch64_device_cache_stride()!=64)refuse_first(status,now);
     __asm__ volatile("msr daifset,#15\n msr cntp_ctl_el0,xzr\n msr cntv_ctl_el0,xzr\n isb":::"memory");
     uintptr_t start=(uintptr_t)__npu_clean_start,end=(uintptr_t)__device_pool_end;
     if(start!=UINT64_C(0x41200000) || end<=start || end>UINT64_C(0x41f00000) ||
-       ((start|end)&4095))npu_finite_smc(4);
+       ((start|end)&4095))REFUSE(1);
     /* Both mappings and exclusion were established by the unchanged boot and
      * reservation consumers. The interval includes retained metadata, all
      * task/provider state, active stacks, command buffers and NPU tables. */
@@ -58,13 +76,13 @@ _Noreturn void platform_exit(unsigned status)
 #else
            npu_finite_receipt.deadline
 #endif
-        )npu_finite_smc(4);
+        )REFUSE(2);
         __asm__ volatile("dc cvac,%0"::"r"(at):"memory");
     }
     __asm__ volatile("dsb sy":::"memory");
-    if(a733_smp_counter()>=a733_observe_identity.deadline)npu_finite_smc(4);
+    if(a733_smp_counter()>=a733_observe_identity.deadline)REFUSE(3);
 #ifdef SUNSTONE_NPU_FINITE_THERMAL
-    if(a733_smp_counter()>=npu_finite_receipt.thermal_deadline)npu_finite_smc(4);
+    if(a733_smp_counter()>=npu_finite_receipt.thermal_deadline)REFUSE(4);
 #endif
     npu_finite_smc(status);
 }

@@ -85,24 +85,24 @@ def sustained_extension(startup_marker,names,read):
   require('npu_finite_reference_2' not in names,'Sustained plan requires exactly two networks.')
  return sustained
 
-IDLE_PROFILE=(0x4e505549444c3032,2);IDLE_GAPS=(9000,11000,100000);IDLE_CYCLES=100
+IDLE_PROFILE=(0x4e505549444c3033,3);IDLE_GAPS=(9000,11000,100000);IDLE_CYCLES=(100,100,30)
 IDLE_THRESHOLD_US=10000;IDLE_RESUME_US=100;IDLE_WINDOWS=5;IDLE_WINDOW_JOBS=12000
-IDLE_JOBS=1+1000+IDLE_WINDOWS*IDLE_WINDOW_JOBS+len(IDLE_GAPS)*IDLE_CYCLES
+IDLE_JOBS=1+1000+IDLE_WINDOWS*IDLE_WINDOW_JOBS+sum(IDLE_CYCLES)
 IDLE_POLICIES=('control','gate','baseline')
 IDLE_HISTOGRAM=4096
 
 def idle_extension(startup_marker,names,read):
  """The immutable idle benchmark marker and the symbols its policy needs."""
  if 'npu_idle_return_profile' not in names:return None
- words=struct.unpack('<11Q',read('npu_idle_return_profile'))
+ words=struct.unpack('<13Q',read('npu_idle_return_profile'))
  owner=('npu_runtime_queue_power_start','npu_idle_gate','npu_idle_resume')
  require(startup_marker[2:]==(IDLE_JOBS,IDLE_JOBS+1) and words[:2]==IDLE_PROFILE and words[2] in (0,1,2) and
-  words[3:]==(IDLE_CYCLES,*IDLE_GAPS,IDLE_THRESHOLD_US,IDLE_RESUME_US,IDLE_WINDOWS,IDLE_WINDOW_JOBS) and
+  words[3:]==(*IDLE_CYCLES,*IDLE_GAPS,IDLE_THRESHOLD_US,IDLE_RESUME_US,IDLE_WINDOWS,IDLE_WINDOW_JOBS) and
   'npu_dependent_return_profile' not in names and
   all(n in names for n in ('sunstone_deadline_wait_until','sunstone_deadline_irq','npu_finite_deadline_setup')) and
   (words[2]==2 or all(n in names for n in owner)),
   'Idle benchmark marker, power owner or shared timer composition differs.')
- return {'policy':IDLE_POLICIES[words[2]],'cycles':IDLE_CYCLES,'gaps_us':list(IDLE_GAPS),'threshold_us':IDLE_THRESHOLD_US,
+ return {'policy':IDLE_POLICIES[words[2]],'cycles':list(IDLE_CYCLES),'gaps_us':list(IDLE_GAPS),'threshold_us':IDLE_THRESHOLD_US,
   'resume_budget_us':IDLE_RESUME_US,'windows':IDLE_WINDOWS,'window_jobs':IDLE_WINDOW_JOBS}
 
 def latency_extension(startup_marker,names,read):
@@ -533,7 +533,7 @@ def inference_report(text,status,deadline,g):
 
 def _idle_pattern():
  words=lambda name,n:r'(?P<'+name+r'>(?:0x[0-9a-f]{16}\n){'+str(n)+r'})'
- text=r'NPU_IDLE=\n'+words('idle_totals',14)
+ text=r'NPU_IDLE=\n'+words('idle_totals',17)
  for window in range(IDLE_WINDOWS):
   text+=(r'NPU_IDLE_WINDOW=\n'+words(f'idle_window_{window}',20)+
    r'NPU_IDLE_WINDOW_OUTPUT_SHA256=\n(?P<idle_window_%d_output>[0-9a-f]{64})\n'%window)
@@ -555,8 +555,8 @@ def idle_report(match,g,frequency,warm_end,deadline,idle):
  policy=idle['policy'];enabled=policy=='gate';owned=policy!='baseline'
  totals=[int(v,16) for v in match['idle_totals'].split()]
  (code,warm_owner_ticks,warm_owner_elapsed,warm_wakes,gates,resumes,writes,gated,resume_max,over_budget,
-  owner_elapsed,owner_wakes,irq_ticks,quiet_retries)=totals
- require(code==IDLE_POLICIES.index(policy) and warm_wakes<=owner_wakes and over_budget==0 and
+  owner_elapsed,owner_wakes,irq_ticks,quiet_retries,margin_windows,margin_after_windows,margin_end)=totals
+ require(0<margin_end<=margin_after_windows<=margin_windows<=deadline and code==IDLE_POLICIES.index(policy) and warm_wakes<=owner_wakes and over_budget==0 and
   (owned or not any((warm_owner_ticks,warm_owner_elapsed,warm_wakes,owner_elapsed,owner_wakes,quiet_retries))),
   'Idle policy or warm owner counters differ.')
  reference=bytes.fromhex(g['references'][0]);digest=hashlib.sha256(reference).digest()
@@ -592,27 +592,32 @@ def idle_report(match,g,frequency,warm_end,deadline,idle):
    group_owner_elapsed,client_ticks,worker_ticks,idle_task,group_irq,idle_min,idle_max,idle_sum,first,offset,value,
    pending,cold50,cold99,cold_max,cold_sum,adm50,adm99,adm_max)=(int(v,16) for v in match[f'idle_{index}'].split())
   length=end-start
-  require(got_gap==gap and cycles==checked==IDLE_CYCLES and bad<=cycles and previous<=start<end<deadline,
+  require(got_gap==gap and cycles==checked==IDLE_CYCLES[index] and bad<=cycles and previous<=start<end<deadline,
    'Idle group identity or order differs.')
   require(0<cold50<=cold99<=cold_max<=frequency and cold_max<=cold_sum<=cycles*cold_max and
    adm50<=adm99<=adm_max<=65535 and gap*frequency//1000000<=idle_min<=idle_max and idle_min*cycles<=idle_sum<=idle_max*cycles and
    idle_sum<=length and client_ticks+worker_ticks+owner_ticks+idle_task<=length+tolerance and group_irq<=length and
    group_owner_elapsed<=length,'Idle gap, duration or task counters differ.')
-  if gap*frequency//1000000<threshold:require(idle_max<threshold,'Idle gap below the threshold reached it.')
+  # A gap below the threshold that reached it (a late timer wake) is a flawed measurement, reported as invalid.
+  gap_valid=gap*frequency//1000000>=threshold or idle_max<threshold
   if enabled and gap>IDLE_THRESHOLD_US:
    require(gate_count==resume_count==requests==pending==cycles and write_count==6*cycles and
     0<gated_ticks<=idle_sum-cycles*threshold and 0<driver_max<=IDLE_RESUME_US and adm_max<=IDLE_RESUME_US,
     'Idle gating or resume bound differs.')
+  elif enabled and not gap_valid:
+   # Some cycles idled past the delay: each of them gated, none of the others did.
+   require(gate_count==resume_count==requests==pending<=cycles and write_count==6*gate_count and
+    gated_ticks<=idle_sum and driver_max<=IDLE_RESUME_US and adm_max<=IDLE_RESUME_US,'Idle gating or resume bound differs.')
   else:
    require((gate_count,resume_count,write_count,gated_ticks,requests,driver_max,pending)==(0,)*7 and
     (owned or not (owner_ticks or group_owner_elapsed)),'Idle interval gated or wrote registers outside the enabled policy.')
-  ok=match[f'idle_{index}_output']==hashlib.sha256(digest*IDLE_CYCLES).hexdigest()
+  ok=match[f'idle_{index}_output']==hashlib.sha256(digest*cycles).hexdigest()
   require(ok==(bad==0),'Idle output status disagrees with its digest.')
   if bad:require(first<cycles and offset<len(reference) and value<256 and value!=reference[offset],'Idle first mismatch detail differs.')
   else:require((first,offset,value)==(sentinel,)*3,'Unexpected idle mismatch detail.')
   for name,v in (('gates',gate_count),('resumes',resume_count),('writes',write_count),('gated',gated_ticks),('owner_elapsed',group_owner_elapsed)):sums[name]+=v
   matched=matched and ok;previous=end
-  groups.append({'gap_us':gap,'cycles':cycles,'gates':gate_count,'resumes':resume_count,'register_writes':write_count,
+  groups.append({'gap_us':gap,'cycles':cycles,'gap_valid':gap_valid,'gates':gate_count,'resumes':resume_count,'register_writes':write_count,
    'gated_ticks':gated_ticks,'resume_requests':requests,'pending_admissions':pending,
    'idle_ticks':{'min':idle_min,'max':idle_max,'sum':idle_sum},'driver_resume_us_max':driver_max,
    'admission_us':{'p50':adm50,'p99':adm99,'max':adm_max},
@@ -630,6 +635,7 @@ def idle_report(match,g,frequency,warm_end,deadline,idle):
   'totals':{'gates':gates,'resumes':resumes,'register_writes':writes,'gated_ticks':gated,'resume_max_ticks':resume_max,
    'resume_over_budget':over_budget,'owner_elapsed_ticks':owner_elapsed,'owner_wakes':owner_wakes,
    'irq_driver_elapsed_ticks':irq_ticks,'quiet_retries':quiet_retries},
+  'deadline_margin_ticks':{'before_windows':margin_windows,'after_windows':margin_after_windows,'end':margin_end},
   'windows':windows,'groups':groups,'functional_success':matched,
   'scope':'Each window is 12000 back-to-back jobs with exact one-tick quantiles. Charged CPU time is client, runtime worker and power-owner scheduler runtime; non-idle time is the window length minus the idle task runtime. Cold jobs follow 9, 11 and 100 ms gaps and cover input preparation through record release, including power admission and resume.'}
 
@@ -647,7 +653,7 @@ def latency_report(text,status,deadline,g):
  chain_repeats=geometry.get('chain_repeats',1) if geometry else 1
  require(type(chain_repeats) is int and 1<=chain_repeats<=1000 and (dependent or chain_repeats==1),'Dependent chain repetition geometry differs.')
  idle=geometry.get('idle') if geometry else None
- require(idle is None or idle in ({'policy':policy,'cycles':IDLE_CYCLES,'gaps_us':list(IDLE_GAPS),'threshold_us':IDLE_THRESHOLD_US,'resume_budget_us':IDLE_RESUME_US,'windows':IDLE_WINDOWS,'window_jobs':IDLE_WINDOW_JOBS} for policy in IDLE_POLICIES),
+ require(idle is None or idle in ({'policy':policy,'cycles':list(IDLE_CYCLES),'gaps_us':list(IDLE_GAPS),'threshold_us':IDLE_THRESHOLD_US,'resume_budget_us':IDLE_RESUME_US,'windows':IDLE_WINDOWS,'window_jobs':IDLE_WINDOW_JOBS} for policy in IDLE_POLICIES),
   'Idle benchmark geometry differs.')
  extra_jobs=3*dependent*chain_repeats+bool(repeats)+(IDLE_JOBS-1001)*bool(idle)
  require(g.get('runtime') and len(g['references'])==2 and geometry and

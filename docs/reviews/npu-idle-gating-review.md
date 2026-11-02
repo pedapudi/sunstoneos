@@ -108,8 +108,8 @@ Directories are under `~/.cache/sunstoneos/build/npu-fastpath-1101/review-eviden
 
 The baseline, control and gating images are built from
 `apps/npu-finite/build.py --latency queue --idle none|off|gate`. Each runs 1
-warmup job, 1,000 legacy jobs, five windows of 12,000 jobs and 100 cold jobs after
-each of 9, 11 and 100 ms idle gaps (61,301 jobs). The baseline runs first, then the
+warmup job, 1,000 legacy jobs, five windows of 12,000 jobs and cold jobs after each of
+9, 11 and 100 ms idle gaps (100, 100 and 30 jobs; 61,231 jobs in all). The baseline runs first, then the
 control, and the gating image runs only if both return normally with matching
 outputs. `apps/npu-finite/idle-compare.py` applies the limits and prints the
 tables. The first runs after the boards are replugged confirm the startup fix and
