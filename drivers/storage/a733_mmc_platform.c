@@ -727,7 +727,7 @@ int a733_mmc_platform_irq(struct a733_mmc_platform *p,int enable)
     p->irq_mode=enable?1u:0u;return 1;
 }
 /* The core is idle and its last operation finished and was collected: a read that delivered its bytes, or, in a write-capable build, a bounded DMA write
- * that the card confirmed (CMD13 READY and TRAN after every block). A write that started and was not confirmed is not a state to close from. */
+ * that the card confirmed (CMD13 READY and TRAN after every block it submitted). A write that started and was not confirmed is not a state to close from. */
 static int close_ready(const struct a733_mmc_platform *p)
 {
     if(p->core.state!=SUNXI_MMC_READY||p->core.borrowed||p->core.result.error!=SUNXI_MMC_OK)return 0;
@@ -735,7 +735,8 @@ static int close_ready(const struct a733_mmc_platform *p)
 #ifdef SUNXI_MMC_READ_ONLY
     return 0;
 #else
-    return p->core.result.confirmed_blocks!=0;
+    /* The core records the bytes it submitted; the card must have confirmed every block of them, not only some. */
+    return p->core.result.confirmed_blocks!=0&&(uint64_t)p->core.result.confirmed_blocks*SUNXI_MMC_BLOCK_BYTES==p->core.result.submitted;
 #endif
 }
 enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *p,uint64_t deadline)

@@ -75,6 +75,7 @@ int main(void)
     assert(!close_ready(&p));                                                  /* nothing finished */
     p.core.result.received = 512; assert(close_ready(&p));                     /* a read */
     p.core.result.received = 0; p.core.result.write_started = 1; assert(!close_ready(&p));          /* a write that was not confirmed */
+    p.core.result.confirmed_blocks = 3; p.core.result.submitted = 256 * 512u; assert(!close_ready(&p));   /* a write confirmed in part */
     p.core.result.confirmed_blocks = 256; assert(close_ready(&p));             /* a write the card confirmed */
     p.core.result.error = SUNXI_MMC_TIMEOUT; assert(!close_ready(&p));
     p.core.result.error = SUNXI_MMC_OK; p.core.borrowed = source; assert(!close_ready(&p));
