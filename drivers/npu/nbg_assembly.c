@@ -86,12 +86,12 @@ static void write_link(unsigned char *commands, size_t allocation, uint32_t devi
 #define UNIFORM_FIRST 0xd800u
 #define UNIFORM_END 0xd900u
 /* A 16-bit signed tensor in dynamic fixed point: values are the integers scaled by 2^-fixed_position. The position is
- * host-side metadata of the tensor record (the engine's descriptors carry their own scales and shifts), and a tensor whose
- * values are large has a negative position: a position of -2 means a step of 4 (a convolution module's output in a
- * proof graph compiled for a layer with large activations). The loader bounds it to the shifts a 16-bit code allows. */
+ * host-side metadata of the tensor record: the engine's descriptors carry their own scales and shifts, and nothing in the loader
+ * or the runtime computes with it (only the application's dequantization does), so no value is refused. A tensor of large
+ * values has a negative position (-2 is a step of 4). */
 static int dynamic_fixed_point(const struct nbg_tensor *t)
 {
-    return t->quantization == 1 && t->format == 5 && t->fixed_position >= -16 && t->fixed_position <= 31;
+    return t->quantization == 1 && t->format == 5;
 }
 /* A 16-bit floating-point tensor without quantization (the compiler keeps some graph inputs in this form). */
 static int half_float(const struct nbg_tensor *t)
