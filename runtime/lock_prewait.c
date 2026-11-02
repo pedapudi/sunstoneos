@@ -43,6 +43,8 @@ static inline uint32_t pw_arm(const volatile uint32_t *word)
 #define TCB_MASK UINT64_C(0xffffffffffff)
 
 extern uint32_t xPortLocks[][16];
+/* One 64-byte line per core: the second word is the set of locks the core holds. */
+extern volatile uint64_t xPortCoreStates[][8];
 #ifdef SUNSTONE_LATENCY_SWEEP
 extern void ss_latency_prewait_record(unsigned core, uint64_t ticks, unsigned timed_out);
 #endif
@@ -56,6 +58,9 @@ void ss_lock_prewait(void)
     /* The mask reads back in the Non-secure view (a733_gic_priority.h), so test it as the port does: open is any
      * value above the API mask, not the 0xff that was written. */
     if (pmr <= portMAX_API_PRIORITY_MASK || (daif & 0x80u)) return;
+    /* A task that suspended the scheduler holds the task lock with the mask open. Waiting for the
+     * queue behind its own hold to shrink would wait for itself. */
+    if (xPortCoreStates[(task >> CORE_SHIFT) & 0xffu][1] & (UINT64_C(1) << TASK_LOCK)) return;
     const volatile uint32_t *word = &xPortLocks[TASK_LOCK][0];
     uint32_t value = *word;
     if (ss_prewait_depth(value) <= SUNSTONE_PREWAIT_DEPTH) return;
