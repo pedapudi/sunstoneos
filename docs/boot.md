@@ -55,13 +55,13 @@ The reusable check is [boot0-monitor-handoff.py](../checks/boot0-monitor-handoff
 its result is `microsd-boot-package-20261020/boot0-monitor-handoff.json`
 under the evidence directory.
 
-The pinned board packer produces a sole-monitor TOC1 package from synthetic
-bytes. Its output matches the assessed item geometry, padding and additive
-checksum. This establishes host container generation only. The
+The repository packer, `tools/toc_package.py`, produces a sole-monitor TOC1
+package from synthetic bytes, byte for byte as the vendor packer does. Its output
+matches the assessed item geometry, padding and additive checksum. This
+establishes host container generation only. The
 [ordinary-file packager guide](microsd-boot-package.md) documents the implemented
-wrapper, input constraints and preservation checks. The packer runs
-on the development host; its source equivalence and individual redistribution
-terms remain unresolved. Evidence is in
+wrapper, input constraints and preservation checks. The packer runs on the
+development host. Evidence for the vendor executable's output is in
 `microsd-boot-package-20261020/actual-packer/`.
 
 The [cold-entry recorder](cold-entry.md) now supplies a SunstoneOS monitor payload.

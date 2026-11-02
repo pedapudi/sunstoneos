@@ -35,7 +35,7 @@ def rejected(action):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--boot0', type=Path, required=True)
-    parser.add_argument('--packer', type=Path, required=True)
+    parser.add_argument('--packer', type=Path, help='Pinned vendor executable; also requires an identical package')
     parser.add_argument('--output', type=Path, required=True, help='New ordinary evidence directory')
     args = parser.parse_args()
     args.output.mkdir(mode=0o700, exist_ok=False)
@@ -51,7 +51,7 @@ def main():
     prepared = lambda name: output.with_name(output.name + '.' + name)
     command = [sys.executable, str(ROOT / 'tools/prepare-microsd-boot.py'),
                '--input', str(source), '--boot0', str(args.boot0),
-               '--packer', str(args.packer), '--output', str(output)]
+               '--output', str(output)] + (['--packer', str(args.packer)] if args.packer else [])
     result = subprocess.run(command, capture_output=True, text=True, check=True)
     (args.output / 'wrapper.stdout').write_text(result.stdout)
     (args.output / 'wrapper.stderr').write_text(result.stderr)
@@ -66,6 +66,8 @@ def main():
     assert fixture.read_bytes() == original
     manifest = json.loads(prepared('manifest.json').read_text())
     assert not any(manifest['qualification'].values())
+    assert manifest['packer']['name'] == 'tools/toc_package.py' and bool(manifest['packer']['vendor_cross_check']) == bool(args.packer)
+    assert 'packer' not in manifest['dependencies'] and 'provenance_limit' not in manifest
     assert manifest['card_writes'] == [
         {'name': 'boot0', 'offset': host.BOOT0_OFFSET, 'bytes': len(boot0), 'sha256': host.digest(boot0)},
         {'name': 'monitor-package', 'offset': host.PACKAGE_OFFSET, 'bytes': len(package),
@@ -140,7 +142,7 @@ def main():
     cases.append('symlink-existing-file-directory-and-concurrent-file-preservation')
     (args.output / 'result.json').write_text(json.dumps({
         'passed': True, 'scope': 'Host container generation/validation and ordinary-file preservation only',
-        'synthetic_nonbootable': True, 'packer_invocations': 1,
+        'synthetic_nonbootable': True, 'vendor_cross_check': bool(args.packer),
         'cpu_execution': False, 'physical_access': False, 'command': command,
         'image_sha256': host.digest(image), 'package_sha256': host.digest(package),
         'input_sha256': host.digest(original), 'cases': cases}, indent=2) + '\n')

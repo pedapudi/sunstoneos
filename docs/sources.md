@@ -55,9 +55,11 @@ files, `include`, `portable/MemMang` and the `ARM_AARCH64_SRE` and `ARM_CR82`
 ports; for TinyUSB, everything under `src`. The fetch tool and the central CMake
 configuration refuse a tree whose listed files differ. Regenerate these lists
 from the new archive when changing either pin.
-The `board-dragonsecboot` entry pins the boot-package packer that
-`tools/prepare-microsd-boot.py` requires; the tool still carries its own copy of
-the same digest.
+The `board-dragonsecboot` entry pins the vendor boot-package packer as an
+optional cross-check. `tools/prepare-microsd-boot.py` packs with the repository's
+`tools/toc_package.py` and runs this executable only when given `--packer`; the
+tool carries its own copy of the digest. [The packaging guide](microsd-boot-package.md)
+describes the comparison.
 The [board wiring record](board-wiring.md) identifies the relevant schematic
 sheets and manual pages. Documented wiring remains separate from physical
 population and functional qualification of the attached board.
