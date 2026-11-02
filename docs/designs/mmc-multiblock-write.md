@@ -33,7 +33,7 @@ the reset and teardown steps) and the CMD24 PIO write with its CMD13 confirmatio
 | Wait for DAT0 and CMD13 after the data | `sunxi_mmc.c` | reuses `P_WRITE_STATUS` polling of the present CMD24 flow |
 | No 4 KiB snapshot for DMA writes | `sunxi_mmc_write` | the immutable snapshot cannot hold 128 KiB; the DMA write takes an exclusive, cache-clean source for the whole operation and the same authority callback |
 | CMD25 in the write-capable build only | `queue()` and the native command filter | the read-only command set is unchanged; ACMD13 needs nothing added (CMD13 and CMD55 are in it) |
-| Write threshold | `0x100` | the core clears bit 2 (write threshold enable) for SDR104 reads; whether a write sets it and with what size is derived from the vendor `thld_ctl` before the change, not assumed here |
+| Write threshold | `0x100` | Derived from `sunxi_mmc_thld_ctl_for_sdmmc_v5p3x` (`sunxi-mmc-v5p3x.c:647-701`): the transmit trigger level is 248 words (`SUNXI_DMA_TL_SDMMC_V5P3X`, line 52), so `tdtl` is 992 bytes. A 512-byte write satisfies `blksz <= 0xfff && blksz <= tdtl` at every timing, so the vendor sets `THLD[27:16] = 512` and the write threshold enable (bit 2), then clears the read threshold enable (bit 0) because the request is not a read. The core must do the same for every write profile, not only SDR104 (it writes `THLD` today only for SDR104 reads, and the native filter allows that write only in the UHS profile) |
 
 ## Host checks required before any board run
 
