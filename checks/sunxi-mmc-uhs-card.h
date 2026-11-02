@@ -23,7 +23,11 @@ struct uhs {
     unsigned width, sdr, sdr104, sdr104_busy, set_refuses, cmd11_timeout, no_dat_low, no_dat_high;
     unsigned pending_done, no_cc, no_vsd, set_fails, bad_caps, fatal_delay, cmd19, cmd11, cmd6_uhs, cmd6_hs;
     unsigned window[2][2], s18r_seen, cmd11_before_cmd2, cid_seen, dat0_masked;
-    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18, tune_kinds, stuck, stuck_always, dat0_busy, unfixable, card_err_next;
+    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18, tune_kinds, stuck, stuck_always, dat0_busy, unfixable, card_err_next, hang_always;
+    /* Fuzz injection (see fuzz in sunxi-mmc-uhs.c): one fault, armed by the driver before attempt inj_nth of delay inj_delay, of kind inj_mode with
+     * the bit mask inj_bits. Write-side kinds (interrupt bits, R1 bits, no completion, stuck command) apply to the next CMD19; read-side kinds
+     * (one read of the controller control register; the status register until the controller is reset). */
+    unsigned inj_on, inj_mode, inj_bits, inj_delay, inj_nth, inj_fired, inj_armed, sweep_ready;
     uint64_t answered, gated, restarted, clock_started, done_delay;
 };
 static unsigned passes(struct uhs *u, unsigned d)
@@ -53,6 +57,8 @@ static int uhs_read(void *v, uint32_t off, uint32_t *out)
         return 1;
     }
     int r = read32(m, off, out);
+    if (u->inj_armed && u->inj_mode == 4 && off == 0 && !(*out & 7u)) { *out ^= u->inj_bits; u->inj_armed = 0; }   /* the first read of the control register after its resets are done */
+    if (u->inj_armed && u->inj_mode == 5 && off == 0x3c) *out ^= u->inj_bits;
     if (off == 0x3c) {
         unsigned low = u->phase == 1 || u->phase == 2 || u->phase == 4;
         if (!low || (u->phase == 1 && u->no_dat_low)) *out |= SUNXI_SMHC_STATUS_DAT3;
@@ -72,9 +78,11 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
 {
     struct uhs *u = v; struct model *m = &u->base;
     if (off == 4 && (value & (1u << 31))) u->dat0_masked = 1;
+    if (off == 0 && (value & 1) && u->inj_mode >= 4) u->inj_armed = 0;   /* a soft reset ends a read-side fault */
     if (off == 0 && u->stuck && (value & 7) && !u->unfixable) { u->stuck = 0; u->card_err_next = 1; m->reg[0x18/4] &= ~(1u << 31); }     /* a controller reset ends a stuck command */
     if (off != 0x18) return write32(m, off, value);
     unsigned cmd = value & 63, arg = m->reg[0x1c/4];
+    if ((value & (1u << 21)) && u->sdr == 3) u->sweep_ready = 1;
     if (value & (1u << 21)) {
         if (value & VSW) {
             assert(u->phase == 1 || u->phase == 2);
@@ -151,15 +159,23 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
                 /* What a wrong sample point does on the board (the vendor kernel counts every one of these as a failed delay): a data CRC error,
                  * a wrong pattern with a clean CRC, no data, a FIFO run error (bit 11), start and end bit errors (bits 13 and 15). The kinds
                  * 3 and 4 were absent from the first model, and the core treated the FIFO run error as terminal. */
-                unsigned kind = u->stuck_always ? 5 : u->tune_kinds ? d % u->tune_kinds : d % 3;
+                unsigned kind = u->hang_always ? 9 : u->stuck_always ? 5 : u->tune_kinds ? d % u->tune_kinds : d % 3;
                 if (kind == 0) m->reg[0x38/4] |= 1u << 7;      /* Data CRC error. */
                 else if (kind == 1) u->data[5] ^= 0x10;         /* Wrong pattern, clean CRC. */
                 else if (kind == 2) { m->reg[0x38/4] = 1u << 9; m->data_command = 0; m->fifo_total = 0; } /* No data. */
                 else if (kind == 3) m->reg[0x38/4] |= 1u << 11; /* FIFO run error. */
                 else if (kind == 6) m->reg[0x38/4] |= 1u << 12; /* Hardware locked. */
                 else if (kind == 7) m->reg[0x38/4] |= 1u << 10; /* Data starvation. */
+                else if (kind == 9) { m->reg[0x38/4] = 0; m->reg[0x18/4] = 0; m->data_command = 0; m->fifo_total = 0; } /* No completion and no error. */
                 else if (kind == 5) { m->reg[0x38/4] |= 1u << 9; m->reg[0x18/4] |= 1u << 31; u->stuck = 1; u->dat0_busy = 1; } /* The command never completes: START stays set until the controller is reset. */
                 else m->reg[0x38/4] |= (1u << 13) | (1u << 15); /* Start and end bit errors. */
+            }
+            if (u->inj_armed && u->inj_mode < 4) {
+                u->inj_armed = 0;
+                if (u->inj_mode == 0) m->reg[0x38/4] |= u->inj_bits;
+                else if (u->inj_mode == 1) m->reg[0x20/4] |= u->inj_bits;
+                else if (u->inj_mode == 2) { m->reg[0x38/4] = 0; m->reg[0x18/4] = 0; m->data_command = 0; m->fifo_total = 0; }   /* never completes, START clear */
+                else { m->reg[0x38/4] |= 1u << 9; m->reg[0x18/4] |= 1u << 31; u->stuck = 1; u->dat0_busy = 1; }                  /* never completes, START set */
             }
         }
         return 1;

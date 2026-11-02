@@ -472,6 +472,49 @@ completes with the same window.
 This is the third stop in the sweep, each on a difference from the vendor loop that the host model did not have. Where the core and the vendor loop can still differ is listed in the table above; the sweep
 has not been audited for any other check that fires on a marginal delay beyond those found.
 
+### Audit of the tuning path against the vendor loop, and one rule for a failed attempt
+
+The first three submissions of the experiment each stopped in the sweep, on a different check that fired on a marginal delay. Each fix added a tolerated bit or an exemption, and each time the host model lacked the board's failure kind.
+The coordinator's rule is a full diff against the reference before a board run, so this section lists every path of `sunxi_mmc.c` that can end the sweep between its start (`sd_clock` step 2, which sets `tuning`) and the window decision
+(`tune_advance`), and what the vendor does in the same situation. Vendor references are in the board kernel's `bsp/drivers/mmc/sunxi-mmc.c`.
+
+**What the vendor does.** `sunxi_mmc_execute_tuning` (`:2415-2640`) runs each delay's CMD19 through `mmc_wait_for_req` up to 20 times (`:2561-2570`) and judges the delay by `cmd.error || data.error || memcmp(pattern)`. Nothing else:
+it does not read the R1 status, check the FIFO or the controller state, or verify a register. `cmd.error` and `data.error` are set by `sunxi_mmc_finalize_request` (`:1060-1100`) when any bit of `SDXC_INTERRUPT_ERROR_BIT` (`sunxi-mmc.h:215-218`: bits 1, 6, 7, 8, 9, 11, 12, 13, 15)
+is in the interrupt sum, and by the transfer watchdog (`sunxi_timerout_handle`, `:270-310`, `SUNXI_TRANS_TIMEOUT` 5 s, `:87`) for a request that neither completes nor errors. The loop has no other exit: a failed delay is recorded as failed (`:2572-2576`), and the loop goes on to the next.
+
+**The rule.** While a CMD19 is in flight, any failure the attempt can produce fails that delay and never ends the sweep. It is one function, `fault()` in `sunxi_mmc.c`: while `tune_attempt` is set (set when the CMD19 is queued, cleared when the `P_SD_TUNE` step judges it),
+a `CONTROLLER` or `CARD` error becomes `tune_failed`, which starts the recovery that resets the controller and moves to the next delay. The previous list of tolerated interrupt bits (`TUNE_TOLERATED`) is gone. One more thing ends an attempt without an error bit:
+an attempt with no completion and no error within 10 ms (`TUNE_ATTEMPT_US`, the vendor's watchdog scaled to this driver) fails its delay too. The R1 status of the CMD19 is still not judged, as in the vendor loop (see the third stop above).
+
+**What stays terminal, and why.** Each goes through `fatal()`, the old `fault()`.
+
+| Path (function, check) | Vendor | Ours | Why |
+| --- | --- | --- | --- |
+| `rd`, `wr`, `fence`, FIFO read: a callback fails | not applicable (MMIO cannot fail) | terminal `IO` | the platform adapter refused the access (a filter or lease failure), not a sampling effect |
+| `time_ok`: clock backwards, operation deadline | none | terminal `TIME`, `TIMEOUT` | the caller's own limits |
+| `poll`: ownership lost (`retained`) | none | terminal `ADMISSION` | the bank and clock are no longer ours |
+| `interrupts`: card remove (bit 31) or the controller's bit 18 | removal handled by the card-detect path | terminal `CONTROLLER` | the card is gone; nothing to tune |
+| Attempts that hang, `TUNE_HUNG_CAP` (12) in a row | the 5 s watchdog, no cap | terminal `TIMEOUT` after 12 consecutive hung attempts | a card or controller that never answers; a completed attempt, passing or failing, clears the count |
+| `tune_recover`: the reset bits stay set or the clock update stays pending | none (the reset is a clock gate toggle) | the reset repeats; after `TUNE_FORCED_RESETS` (12) consecutive incomplete recoveries, terminal `TIMEOUT` | kept from the second submission |
+| `tune_recover`: GCTRL lost its CPU-FIFO bit after the reset, or the restored registers read back wrong | none (the vendor restores without reading back) | terminal `CONTROLLER` | these are the recovery's own checks, not the attempt's; a controller that cannot be restored cannot sample |
+| `set_delay`: the delay register reads back wrong | none | terminal `CONTROLLER` | same |
+
+Paths that are now attempt failures (all through `fault()`): the command or data start bit still set at issue (`command_step` step 0), the control register's FIFO or DMA state not as the PIO command needs (step 1), every error bit in the interrupt register
+(`interrupts`, in steps 0, 2 and 3), the FIFO not empty after the block (step 3), and the R1 card-error faults of `command_step` and `card_response` (the R1 check at the data command is skipped in a sweep, as above). The DMA status faults and the
+IDMAC steps 4 to 6 do not run for CMD19, which is PIO. A busy or start bit that never clears has no error, and the attempt timer ends it.
+
+**Host fuzz.** `checks/sunxi-mmc-uhs.c` (function `fuzz`) injects one fault per sweep with the model's `inj_*` fields, armed before attempt 0 of each delay and before attempt 19 of four delays inside the window: every interrupt bit,
+every R1 status bit, every bit of the status register (kept until a reset), every bit of the control register (one read, after the resets are done; bits 0 to 2 are excluded because flipping a reset-in-progress bit only makes software proceed early),
+all bits at once, a command that never completes with the start bit clear and with it set. A run passes when the sweep ends READY with a window or the no-window fallback. The removal bits (18 and 31) must fault.
+
+| Core | Runs | Failures | Interrupt bits | R1 bits | Hang | Stuck command | Control register | Status register |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| before (`e6dfa2a6`) | 8868 | 737 | 0 | 0 | 88 | 0 | 136 | 513 |
+| after | 8868 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+The interrupt and R1 cases passed before because the third submission's fixes already covered them; what the audit found are the paths that were not covered: a sweep that hangs with no error bit (the sweep never ended), a status or control register that is not
+as expected (a terminal fault, or a wait that never ended), none of which the model had.
+
 ### Request-pattern experiment (approved, one run)
 
 One lifetime, re-entry then SDR104 as before (`--uhs-mode 3`), then eight phases over the slow zone and controls (`--phase FIRST:BLOCKS:READS[:quick]`; `quick` skips the per-request CRC and the progress call
