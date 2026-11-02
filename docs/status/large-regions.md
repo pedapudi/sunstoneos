@@ -25,7 +25,7 @@ Entry `1793632829779717086-f7d0d1cf` (3-1, A76, `PERF_BOOT=high`, development DR
 
 1. Run the SD0 binding in an OS image on a board. `apps/os/large_sd.c` (`os_large_device`, `os_large_device_close`, `os_large_sd_pins`) uses the OS's shared providers and the read-only SD core, builds into `sunstone-a733-os-large-region-test` and passes the read-only scan, but only the standalone probe has driven the card on a board. QEMU has no SD controller: its RAM disk covers the loader, and four scenarios cover a device that is present and fails (metadata, request start, mid-stream, absent).
 2. Done 2026-11-02: see the measured section below.
-3. Measure the added cycles of a TTBR0 write at the task switch on the board; QEMU shows 4 instructions of time per switch and no cycles.
+3. Done: the TTBR0 write at the task switch adds no measurable time (see the measured section).
 4. Count TLB refills in the OS image: EL0 cannot read the PMU, so the figure needs a counter grant or an EL1 sampler.
 5. Run the partitioned scheduler's `freertos.c` with the hook on a board; it builds and boots in QEMU.
 6. Backlog: regions requested at run time. The SDK has no such call, because the ledger and the tables are sized from the manifest at build time. A run-time request would need a ledger whose storage grows while the system runs, an upper-memory allocator that serves the request (the ledger is the allocator only for the regions the manifest declares), page-table pages taken at run time (`APP_SPACE_PAGES` per space is the bound), and a break-before-make update of the application's root with `TLBI ASIDE1IS` on every core.
