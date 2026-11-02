@@ -14,6 +14,13 @@
 #define configIDLE_AFFINITY 1
 #include "../../include/a733_smp_placement.h"
 #define configTASK_DEFAULT_CORE_AFFINITY A733_SMP_A55_MASK
+/* The task-switch hook of the per-application address spaces (include/os_space.h). The tag of a task is a
+ * pointer to the TTBR0 value of its space. */
+#define configUSE_APPLICATION_TASK_TAG 1
+#ifndef __ASSEMBLER__
+#include "../../include/os_space.h"
+#define traceTASK_SWITCHED_IN() os_space_switch_in((const void *)pxCurrentTCBs[portGET_CORE_ID()]->pxTaskTag)
+#endif
 #define configCORES_SHARE_TYPE(a, b) \
     ((((A733_SMP_A55_MASK >> (a)) ^ (A733_SMP_A55_MASK >> (b))) & 1u) == 0u)
 #define configINTERRUPT_CONTROLLER_BASE_ADDRESS 0x080b0000UL

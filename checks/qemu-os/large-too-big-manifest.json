@@ -6,9 +6,9 @@
   },
   "cpu": {
     "cluster": "a55",
-    "workers": 0,
+    "workers": 1,
     "priority": 2,
-    "stack_bytes": 4096
+    "stack_bytes": 8192
   },
   "regions": [
     {
@@ -22,7 +22,7 @@
   ],
   "large_regions": [
     {
-      "name": "a",
+      "name": "weights",
       "bytes": 1610612736,
       "source_bytes": 1048576,
       "file": "/a.bin",
