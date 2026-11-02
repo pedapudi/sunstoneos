@@ -185,6 +185,9 @@ static size_t scratch_bytes;
 static void verify(uint64_t bytes)
 {
     uint64_t t0 = ss_counter_ticks();
+    /* The phases of a read-back, for the result: flush_ticks is the time inside fwr_read, generate_ticks the stream, close_ticks the compare;
+     * flushes counts the reads and written_bytes the bytes compared. A guard (GUARD_US since the start of the verify) stops it with E_TIMEOUT
+     * and the offset in detail, so a slow read still returns what it measured. */
     size_t step = CHUNK;
     uint8_t *rd = check, *gen = chunk;
     if (scratch && scratch_bytes >= 2 * CHUNK) {
@@ -194,12 +197,21 @@ static void verify(uint64_t bytes)
     }
     for (uint64_t off = 0; off < bytes; off += step) {
         size_t n = bytes - off < step ? (size_t)(bytes - off) : step, got = 0;
-        if (fwr_read(&volume, PATH, off, rd, n, &got) || got != n) { r.status = E_READ; r.detail = off; break; }
+        uint64_t a0 = ss_counter_ticks();
+        int rc = fwr_read(&volume, PATH, off, rd, n, &got);
+        uint64_t a1 = ss_counter_ticks();
+        r.flush_ticks += a1 - a0; ++r.flushes;
+        if (rc || got != n) { r.status = E_READ; r.detail = off; break; }
         ss_progress();
         stream_fill(gen, off, n);
+        uint64_t a2 = ss_counter_ticks();
+        r.generate_ticks += a2 - a1;
         if (memcmp(rd, gen, n))
             for (size_t i = 0; i < n; ++i) if (rd[i] != gen[i]) { if (!r.mismatches++) r.first_mismatch = off + i; }
+        r.close_ticks += ss_counter_ticks() - a2;
+        r.written_bytes = off + n;
         ss_progress();
+        if ((ss_counter_ticks() - t0) * 1000000u / COUNTER_HZ >= GUARD_US && off + n < bytes) { r.status = E_TIMEOUT; r.detail = off + n; break; }
     }
     r.read_ticks = ss_counter_ticks() - t0;
 }

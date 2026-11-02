@@ -42,6 +42,11 @@ def decode(payload):
         out['flush_rate_mb_s'] = appended / sec(out['flush_ticks']) / 1e6
     if out['total_ticks']:
         out['session_rate_mb_s'] = appended / sec(out['total_ticks']) / 1e6
+    if out['mode'] in (2, 3):                      # a read-back: flush_ticks is the time inside fwr_read, generate_ticks the stream, close_ticks the compare
+        out['read_phase_seconds'] = {'fwr_read': sec(out['flush_ticks']), 'stream': sec(out['generate_ticks']), 'compare': sec(out['close_ticks']),
+                                     'total': sec(out['read_ticks'])}
+        if out['flush_ticks']:
+            out['read_rate_mb_s'] = out['written_bytes'] / sec(out['flush_ticks']) / 1e6
     out['phase_seconds'] = {k: sec(out[k + '_ticks']) for k in ('create', 'generate', 'flush', 'close', 'total')}
     out['flush_latency_ms'] = {k: sec(out['flush_' + k]) * 1e3 for k in ('p50', 'p99', 'max')}
     if out['owner_elapsed_us']:
