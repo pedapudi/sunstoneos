@@ -20,13 +20,12 @@ p50 and 26,925 jobs/s, and 1,000 fence-chained two-stage jobs, on 3-3. The basel
 ## Open work
 
 1. Run the control and gating idle images and five rounds of baseline, control and gating on port 3-3, then compare them with `apps/npu-finite/idle-compare.py` against the limits in [the design](../designs/npu-fast-path.md): throughput 98%, p99 105%, maximum 110%, charged CPU time 105%, every resume within 100 µs, no gating in 9 ms gaps. These runs wait for the comparison of the NPU paths with the vendor driver, TF-A and Linux GIC code.
-2. Record why the first two baseline smoke runs ended at the watchdog: the shared timer setup asserted the Secured priority view. The fixed image returned normally; the host check `checks/npu-deadline-setup.py` reproduces the failure.
-3. Establish a cold NPU at service start and make the interrupt bind of the combined OS image pass; the bind records the clause that refuses it. The NPU qualification branch owns this.
-4. Qualify the EL0 queue and prepared joined streams: review and finish the saved generic sequence registration and returning diagnostic (`npu-el0-next-1101`), add the public-ring predicate to the power owner, then run the control and the EL0 images.
-5. Add exact per-job deadline interrupts through the scheduler's deadline facility (`work/scheduler-rt-1101`); do not add a device timer.
-6. Measure energy: the PMIC provider exposes no DCDC2 current or power readback, so idle savings and break-even time have no evidence without an external meter.
-7. Qualify repeated start and stop, shared SRAM access while the clocks are gated, and recovery from a fault while suspended.
-8. Run the `restart-*` cases of `checks/npu-irq-route.py` on a restart image; the other cases pass.
+2. Find which interrupt bind condition refuses the combined OS image at `os_npu_irq_bind`; the bind records the refusing condition (values 0xb01 to 0xb09) and the reference comparison of the NPU paths predicts it. A powered NPU at entry does not explain the refusal: every NPU image is admitted with the domain on. The NPU qualification branch owns the rerun.
+3. Qualify the EL0 queue and prepared joined streams: review and finish the saved generic sequence registration and returning diagnostic (`npu-el0-next-1101`), add the public-ring predicate to the power owner, then run the control and the EL0 images.
+4. Add exact per-job deadline interrupts through the scheduler's deadline facility (`work/scheduler-rt-1101`); do not add a device timer.
+5. Measure energy: the PMIC provider exposes no DCDC2 current or power readback, so idle savings and break-even time have no evidence without an external meter.
+6. Qualify repeated start and stop, shared SRAM access while the clocks are gated, and recovery from a fault while suspended.
+7. Run the `restart-*` cases of `checks/npu-irq-route.py` on a restart image; the other cases pass.
 
 ## Evidence
 
