@@ -60,6 +60,8 @@ static void finish(struct request *r, int ok)
  * result | platform stage << 8), 26:24 INTID 193 before the owner masked it (enabled, pending, active), 30:28 after the mask settled. */
 static uint32_t diag_word(void)
 {
+    if (os_sd_diag[0] >= 30)                         /* a refused request: stage in 5:0, then the 26 bits of large_sd.c PLATX */
+        return (uint32_t)(os_sd_diag[0] & 0x3f) | (uint32_t)(os_sd_diag[1] & 0x3ffffff) << 6;
     return (uint32_t)(os_sd_diag[0] & 0xff) | (uint32_t)(os_sd_diag[1] & 0xffff) << 8 | (uint32_t)(os_sd_diag[2] & 7) << 24 |
            (uint32_t)(os_sd_diag[3] & 7) << 28;
 }

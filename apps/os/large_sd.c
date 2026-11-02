@@ -133,6 +133,10 @@ static inline int diag_set(uint64_t stage, uint64_t detail)
 #define DIAG(stage, detail) diag_set((stage), (uint64_t)(detail))
 /* A platform result with where the platform stood: result | stage << 8 | fault << 16. */
 #define PLAT(r) ((uint64_t)(r) | (uint64_t)platform.stage << 8 | (uint64_t)platform.fault << 16)
+/* For a refused request (stages 30 to 36): result in bits 2:0, the reason timely() refused in 5:3, the source line of the platform's fault in
+ * 16:6, the first refused register (SMHC offset / 4 + 1, 0xff elsewhere, 0 none) in 24:17, and the fault flag in 25. */
+#define PLATX(r) ((uint64_t)(r) & 7u | (uint64_t)(platform.fault_why & 7u) << 3 | (uint64_t)(platform.fault_line & 0x7ffu) << 6 | \
+                  (uint64_t)(platform.refused & 0xffu) << 17 | (uint64_t)(platform.fault ? 1u : 0u) << 25)
 #define DIAGP(stage, detail) ((void)DIAG(stage, detail), (const struct os_large_device *)0)
 /* The three CCU words that the provider checks, and the rates they imply (apps/sd-read-probe/main.c). */
 static int fabric(void)
@@ -186,16 +190,16 @@ static int read_blocking(uint64_t sector, uint32_t count, uint8_t *dma)
     enum a733_mmc_platform_result r;
     do { r = a733_mmc_platform_read(&platform, sector, count, dma, count * 512u, now_us() + READ_US); }
     while (r == A733_MMC_BUSY && board_live(NULL));
-    if (r != A733_MMC_PENDING) return DIAG(30, PLAT(r));
+    if (r != A733_MMC_PENDING) return DIAG(30, PLATX(r));
 #ifdef OS_SD_WRITE
     r = drive_platform(now_us() + READ_US);
 #else
     do { r = a733_mmc_platform_poll(&platform); } while ((r == A733_MMC_PENDING || r == A733_MMC_BUSY) && board_live(NULL));
 #endif
-    if (r != A733_MMC_COMPLETE) return DIAG(31, PLAT(r));
+    if (r != A733_MMC_COMPLETE) return DIAG(31, PLATX(r));
     do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
     if (r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.received == count * 512u) return 1;
-    return DIAG(32, PLAT(r) | (uint64_t)result.error << 24);
+    return DIAG(32, PLATX(r));
 }
 static int sd_read(void *unused, uint64_t sector, uint32_t count, uint8_t *out)
 {
@@ -414,9 +418,9 @@ static int hw_allocation_unit(uint32_t *sectors)
     do { r = a733_mmc_platform_sd_status(&platform, status, now_us() + READ_US); } while (r == A733_MMC_BUSY && board_live(NULL));
     if (r != A733_MMC_PENDING) return 0;
     r = drive_platform(now_us() + READ_US);
-    if (r != A733_MMC_COMPLETE) return DIAG(35, PLAT(r));
+    if (r != A733_MMC_COMPLETE) return DIAG(35, PLATX(r));
     do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
-    if (r != A733_MMC_READY || result.error != SUNXI_MMC_OK || result.received != SUNXI_MMC_SD_STATUS_BYTES) return DIAG(36, PLAT(r) | (uint64_t)result.error << 24);
+    if (r != A733_MMC_READY || result.error != SUNXI_MMC_OK || result.received != SUNXI_MMC_SD_STATUS_BYTES) return DIAG(36, PLATX(r));
     *sectors = sunxi_mmc_au_sectors(status, platform.core.card.signal_1v8 != 0);
     return 1;
 }
@@ -472,9 +476,9 @@ static int hw_write_piece(uint64_t sector, uint32_t count, const uint8_t *src)
     enum a733_mmc_platform_result r;
     do { r = a733_mmc_platform_write_dma(&platform, &authority, A733_BOUNDED_WRITE_TOKEN, sector, count, dma, now_us() + WRITE_US); }
     while (r == A733_MMC_BUSY && board_live(NULL));
-    if (r != A733_MMC_PENDING) return DIAG(33, PLAT(r));
+    if (r != A733_MMC_PENDING) return DIAG(33, PLATX(r));
     r = drive_platform(now_us() + WRITE_US);
-    if (r != A733_MMC_COMPLETE) return DIAG(34, PLAT(r));
+    if (r != A733_MMC_COMPLETE) return DIAG(34, PLATX(r));
     do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
     return r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.confirmed_blocks == count;
 }

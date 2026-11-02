@@ -54,14 +54,19 @@ int a733_mmc_platform_scopes(const struct a733_mmc_platform_config *c,a733_clock
     if(c->sd_profile)shared|=A733_CLOCK_PERI0;
     *out=shared;return 1;
 }
-static enum a733_mmc_platform_result fail(struct a733_mmc_platform *p)
+static enum a733_mmc_platform_result fail_at(struct a733_mmc_platform *p,unsigned line)
 {
+    if(!p->fault_line)p->fault_line=(uint16_t)line;
     p->fault=1;
     if(p->held){p->ops.retain(p->cookie);p->held=0;}
     if(p->clock.id&&!p->clock_retained) {
         /* This controller's fault retains this controller's clock token, not the shared registry: the thermal service and every other
          * owner keep their tokens. The controller's pins, rail and the register lock are retained below as before. */
-        enum a733_clock_result r=a733_clock_retain_token(p->clocks,&p->clock);
+#ifdef A733_MMC_LOCAL_CLOCK_RETAIN
+        enum a733_clock_result r=a733_clock_retain_token(p->clocks,&p->clock);   /* opt-in until the coordinator admits it to a board image */
+#else
+        enum a733_clock_result r=a733_clock_retain(p->clocks,&p->clock);
+#endif
         if(r!=A733_CLOCK_BUSY)p->clock_retained=1;
     }
     if(p->rail.id&&!p->rail_retained) {
@@ -70,12 +75,15 @@ static enum a733_mmc_platform_result fail(struct a733_mmc_platform *p)
     }
     return A733_MMC_RETAINED;
 }
+#define fail(p) fail_at((p),(unsigned)__LINE__)
 static int timely(struct a733_mmc_platform *p)
 {
     uint64_t now;
     if((p->update&&!UPDATE_ALIVE(p->update))||p->ops.now_us(p->cookie,&now)!=1||
-       !a733_monotonic_advance(now,&p->last_now))return 0;
-    return now<p->deadline&&now<p->config.lifetime_deadline_us;
+       !a733_monotonic_advance(now,&p->last_now)){if(!p->fault_why)p->fault_why=3;return 0;}
+    if(now>=p->deadline){if(!p->fault_why)p->fault_why=1;return 0;}
+    if(now>=p->config.lifetime_deadline_us){if(!p->fault_why)p->fault_why=2;return 0;}
+    return 1;
 }
 static enum a733_mmc_platform_result finish(struct a733_mmc_platform *p,enum a733_mmc_platform_result r)
 {
@@ -91,9 +99,17 @@ static int lock(struct a733_mmc_platform *p)
     p->held=1;return timely(p)?1:-1;
 }
 static int rd(struct a733_mmc_platform *p,uintptr_t a,uint32_t *v)
-{return timely(p)&&p->ops.read(p->cookie,a,v)==1&&timely(p);}
+{
+    if(!timely(p))return 0;
+    if(p->ops.read(p->cookie,a,v)!=1){if(!p->refused)p->refused=a>=p->base&&a<=p->base+0x300?(uint16_t)(((a-p->base)>>2)+1):0xff;return 0;}
+    return timely(p);
+}
 static int wr(struct a733_mmc_platform *p,uintptr_t a,uint32_t v)
-{return timely(p)&&p->ops.write(p->cookie,a,v)==1&&timely(p);}
+{
+    if(!timely(p))return 0;
+    if(p->ops.write(p->cookie,a,v)!=1){if(!p->refused)p->refused=a>=p->base&&a<=p->base+0x300?(uint16_t)(((a-p->base)>>2)+1):0xff;return 0;}
+    return timely(p);
+}
 static int update(struct a733_mmc_platform *p,uintptr_t a,uint32_t mask,uint32_t expected,uint32_t bits)
 {
     uint32_t old,got;

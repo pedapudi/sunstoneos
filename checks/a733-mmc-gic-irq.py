@@ -23,7 +23,7 @@ sources = ['drivers/storage/a733_storage_update.c', 'drivers/storage/storage_dig
            'drivers/pinctrl/a733_pins.c', 'drivers/pinctrl/a733_pin_tables.c', 'checks/a733-mmc-gic-irq.c']
 binary = a.evidence / 'gic-irq'
 build = [cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
-         '-Iinclude', '-Ichecks', '-I' + str(a.evidence), *sources, '-o', binary]
+         '-DA733_MMC_LOCAL_CLOCK_RETAIN=1', '-Iinclude', '-Ichecks', '-I' + str(a.evidence), *sources, '-o', binary]
 done = subprocess.run([str(c) for c in build], cwd=root, capture_output=True, text=True)
 if done.returncode:
     sys.exit(done.stderr)

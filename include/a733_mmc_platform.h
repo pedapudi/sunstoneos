@@ -107,6 +107,10 @@ struct a733_mmc_platform {
     uint32_t initial_module, initial_bus, voltage_mode, running_module;
     unsigned initialized, stage, fault, held, clock_retained, rail_retained;
     unsigned rail_index, core_call;
+    /* Where the first fault arose, for the owner's report: the source line of fail(), why timely() refused (1 the operation's deadline,
+     * 2 the lifetime deadline, 3 the clock or the update liveness), and the first register access the adapter refused (SMHC offset / 4 + 1,
+     * 0xff for another address; 0 none). Zero until a fault. */
+    uint16_t fault_line, fault_why, refused;
     unsigned irq_mode;               /* the owner has unmasked the controller's GIC interrupt (a733_mmc_platform_irq) */
     unsigned signal; /* PF bank: 0 at 3.3 V, 1 selector written, 2 reports 1.8 V. */
 };
