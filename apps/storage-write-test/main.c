@@ -118,9 +118,11 @@ struct result {
     uint64_t wear_bytes, wear_data_bytes, wear_metadata_bytes, wear_writes, wear_aligned, wear_unaligned, wear_syncs, wear_flushes;
     uint64_t owner_elapsed_us, owner_asleep_us, owner_wakes;
     uint64_t mismatches, first_mismatch, volume_size, recoveries, recovered_clusters;
-    uint64_t histogram[FWR_HIST];
-    uint64_t app_core, irq_cores, owner_cores, caller_cores, sha_ce, irq_counts;   /* irq_cores: mask | stray entries << 32; irq_counts: per-core handler entries, a byte each, saturating */
+    uint32_t histogram[FWR_HIST];
+    uint64_t app_core, irq_cores, owner_cores, caller_cores, sha_ce;   /* irq_cores: mask | stray entries << 32 */
     uint64_t diag[4], isar0, observed;               /* where an open or enable stopped (ss_storage_diagnostic); the core's ISAR0 */
+    uint32_t irq_entries[8];                         /* handler entries of INTID 193 per core */
+    uint64_t reserved[512 / 8 - 36 - FWR_HIST / 2 - 5 - 6 - 4];
 };
 _Static_assert(sizeof(struct result) == 512, "result is the manifest's output_limit");
 static struct result r;
@@ -222,12 +224,12 @@ static void collect(void)
     r.wear_bytes = w->bytes_written; r.wear_data_bytes = w->data_bytes; r.wear_metadata_bytes = w->metadata_bytes; r.wear_writes = w->writes;
     r.wear_aligned = w->au_aligned_writes; r.wear_unaligned = w->unaligned_writes; r.wear_syncs = w->syncs; r.wear_flushes = w->flushes;
     r.recoveries = w->recoveries; r.recovered_clusters = w->recovered_clusters;
-    for (unsigned i = 0; i < FWR_HIST; ++i) r.histogram[i] = w->size_histogram[i];
+    for (unsigned i = 0; i < FWR_HIST; ++i) r.histogram[i] = (uint32_t)(w->size_histogram[i] > UINT32_MAX ? UINT32_MAX : w->size_histogram[i]);
     struct ss_storage_owner_stats s;
     if (ss_storage_owner_stats(&s)) {
         r.owner_elapsed_us = s.elapsed_us; r.owner_asleep_us = s.asleep_us; r.owner_wakes = s.wakes | (uint64_t)s.irq_recheck << 32;   /* high half: interrupt waits that ended on the recheck timer */
         r.irq_cores = s.irq_cores | (uint64_t)s.irq_stray << 32; r.owner_cores = s.owner_cores; r.caller_cores = s.caller_cores;
-        for (unsigned c = 0; c < 8; ++c) r.irq_counts |= (uint64_t)(s.irq_entries[c] > 255 ? 255 : s.irq_entries[c]) << (8 * c);
+        for (unsigned c = 0; c < 8; ++c) r.irq_entries[c] = s.irq_entries[c];
     }
 }
 

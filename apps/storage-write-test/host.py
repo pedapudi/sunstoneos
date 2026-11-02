@@ -12,7 +12,7 @@ FIELDS = ('tag mode status detail file_bytes written_bytes au_sectors cpu_hz cpu
           'wear_bytes wear_data_bytes wear_metadata_bytes wear_writes wear_aligned wear_unaligned wear_syncs wear_flushes '
           'owner_elapsed_us owner_asleep_us owner_wakes mismatches first_mismatch volume_size recoveries recovered_clusters').split()
 HIST = 16
-TAIL = ('app_core irq_cores owner_cores caller_cores sha_ce irq_counts diag0 diag1 diag2 diag3 isar0 observed').split()
+TAIL = ('app_core irq_cores owner_cores caller_cores sha_ce diag0 diag1 diag2 diag3 isar0 observed').split()
 TAG = 0x5357544553544f4b
 COUNTER_HZ = 24_000_000
 
@@ -24,18 +24,20 @@ def mode_input(mode=0, cut_bytes=0):
 def decode(payload):
     if len(payload) != 512:
         raise ValueError(f'storage-write result is {len(payload)} bytes, not 512.')
-    n = len(FIELDS) + HIST + len(TAIL)
-    values = struct.unpack('<%dQ' % n, payload[:8 * n])
+    values = struct.unpack_from('<%dQ' % len(FIELDS), payload, 0)
     out = dict(zip(FIELDS, values))
-    out['histogram'] = list(values[len(FIELDS):len(FIELDS) + HIST])
-    out.update(zip(TAIL, values[len(FIELDS) + HIST:]))
+    offset = 8 * len(FIELDS)
+    out['histogram'] = list(struct.unpack_from('<%dI' % HIST, payload, offset))
+    offset += 4 * HIST
+    out.update(zip(TAIL, struct.unpack_from('<%dQ' % len(TAIL), payload, offset)))
+    offset += 8 * len(TAIL)
+    out['irq_entries'] = list(struct.unpack_from('<8I', payload, offset))
     if out['tag'] != TAG:
         raise ValueError('storage-write result has the wrong tag.')
     out['irq_stray'] = out['irq_cores'] >> 32
     out['irq_cores'] &= 0xffffffff
     out['owner_recheck_wakes'] = out['owner_wakes'] >> 32
     out['owner_wakes'] &= 0xffffffff
-    out['irq_entries'] = [out['irq_counts'] >> (8 * c) & 255 for c in range(8)]
     sec = lambda ticks: ticks / COUNTER_HZ
     out['cpu_mhz'] = out['cpu_hz'] / 1e6
     appended = out['written_bytes'] - (out['volume_size'] if out['mode'] == 5 else 0)
@@ -62,3 +64,38 @@ def failures(decoded):
 
 def inputs():
     return [mode_input(0)]
+
+
+def word_names():
+    """The name of each little-endian 32-bit word of the 512-byte result, for building an expectation (low and high halves of the 64-bit fields)."""
+    names = []
+    for n in FIELDS:
+        names += [n, n + '.high']
+    names += ['histogram%d' % i for i in range(HIST)]
+    for n in TAIL:
+        names += [n, n + '.high']
+    names += ['irq_entries%d' % i for i in range(8)]
+    return names + ['reserved'] * (128 - len(names))
+
+
+def expectation(mode, **fixed):
+    """A sunstone-board-expect-u32-v1 document for a run of `mode`: the tag, the mode, status 0 to 12, the file size, the clock window, no mismatches, the
+    application core, the SHA-256 path (0 to 2) and the reserved words zero; every other word unconstrained. `fixed` maps a word name to an exact value."""
+    words = [{'min': 0, 'max': 4294967295}] * 128
+    names = word_names()
+    def put(name, value):
+        words[names.index(name)] = value
+    put('tag', TAG & 0xffffffff); put('tag.high', TAG >> 32)
+    put('mode', mode); put('mode.high', 0)
+    put('status', {'min': 0, 'max': 12}); put('status.high', 0)
+    put('file_bytes', 536870912); put('file_bytes.high', 0)
+    put('cpu_hz', {'min': 1500000000, 'max': 2200000000}); put('cpu_hz.high', 0)
+    put('counter_hz', 24000000); put('counter_hz.high', 0)
+    put('mismatches', 0); put('mismatches.high', 0); put('first_mismatch', 0); put('first_mismatch.high', 0)
+    put('app_core', {'min': 0, 'max': 7}); put('sha_ce', {'min': 0, 'max': 2})
+    for i, n in enumerate(names):
+        if n == 'reserved':
+            words[i] = 0
+    for k, v in fixed.items():
+        put(k, v)
+    return {'schema': 'sunstone-board-expect-u32-v1', 'words': words}

@@ -31,6 +31,8 @@ struct model {
     unsigned busy_polls, prg_polls, crc_error, card_error_cmd, card_error_stop, idst_error, never_done, hang_busy;
     unsigned revoke_after, authority_calls, cache_before, cache_after, sync_order_bad;
     unsigned thld_initial;
+    unsigned rechecks;                    /* interrupt waits that ended on the recheck timer, not the interrupt */
+    uint32_t recheck_us;                  /* the request's interrupt recheck: 0 selects the default (20 ms) */
     unsigned commands[16], command_count;
     /* interrupt mode: events fire by model time, the line is MISTA = RINT & IMASK, the handler acknowledges in the vendor order */
     unsigned timed, irq_mode, drop_irq, spurious, isr_runs, sleeps, polls, spins, notified, early_isr;
@@ -281,9 +283,10 @@ static void media_untouched_outside(unsigned blocks)
 /* The wait loop of the image (drivers/storage/storage_wait.c) against the interrupt model. */
 static unsigned hints_irq, hints_timer;
 static int w_poll(void *c) { (void)c; ++m.polls; sunxi_mmc_poll(&h); if (m.early_isr && irq_line()) isr(); return h.state != SUNXI_MMC_WRITING; }
+static enum sunxi_mmc_wait last_kind;
 static enum sunxi_mmc_wait w_hint(void *c, uint32_t *us)
 {
-    (void)c; enum sunxi_mmc_wait k = sunxi_mmc_wait_hint(&h, us);
+    (void)c; enum sunxi_mmc_wait k = last_kind = sunxi_mmc_wait_hint(&h, us);
     if (k == SUNXI_MMC_WAIT_IRQ) ++hints_irq; else if (k == SUNXI_MMC_WAIT_TIMER) ++hints_timer; else ++m.spins;
     return k;
 }
@@ -297,6 +300,7 @@ static void w_sleep(void *c, uint64_t until)
     if (m.timed && m.next_desc < m.descs && m.t_done < target) target = m.t_done;
     if (target > m.now) m.now = target;
     timed_progress();
+    if (!irq_line() && last_kind == SUNXI_MMC_WAIT_IRQ && !m.drop_irq) ++m.rechecks;                       /* the timer ended an interrupt wait */
     if (irq_line()) {
         if (m.drop_irq) { m.drop_irq = 0; if (m.now < until) m.now = until; }          /* the interrupt is lost: only the recheck finds it */
         else { isr(); m.notified = 0; }
@@ -310,7 +314,7 @@ static void irq_case(const char *name, unsigned blocks, uint64_t dma_us, uint64_
     hints_irq = hints_timer = 0;
     if (stale) { m.notified = 1; isr(); isr(); }                                       /* stale and spurious wakes before the start */
     assert(start(blocks));
-    const struct storage_wait_ops ops = {NULL, w_poll, w_hint, w_now, w_sleep, w_live};
+    const struct storage_wait_ops ops = {NULL, w_poll, w_hint, w_now, w_sleep, w_live, m.recheck_us};
     uint64_t begin = m.now;
     int r = storage_wait_run(&ops, m.now + 5000000);
     if (h.state != SUNXI_MMC_DONE || r != 1) { fprintf(stderr, "%s: state %d result %d error %d now %llu deadline %llu polls %u sleeps %u isr %u step %u\n", name, h.state, r, h.result.error, (unsigned long long)m.now, (unsigned long long)h.deadline_us, m.polls, m.sleeps, m.isr_runs, h.command_step); exit(1); }
@@ -322,6 +326,8 @@ static void irq_case(const char *name, unsigned blocks, uint64_t dma_us, uint64_
            (unsigned long long)(m.now - begin), m.polls, m.sleeps, hints_irq, hints_timer, m.spins, m.isr_runs);
     assert(m.sleeps <= expected_max && m.polls <= 2 * expected_max + 200 && hints_irq >= 1 && hints_timer >= (busy_us ? 1u : 0u));
     assert(m.isr_runs >= (drop ? 0u : 1u));
+    printf("    interrupt waits ended by the recheck timer: %u\n", m.rechecks);
+    if (!drop && !early && !stale) assert(!m.rechecks);                        /* a normal completion comes before the safety net */
     { struct sunxi_mmc_result result; assert(sunxi_mmc_take(&h, &result) && result.error == SUNXI_MMC_OK); }
 }
 
@@ -398,6 +404,7 @@ int main(void)
     /* Interrupt completion: command done and data over never poll; the busy waits on a one-shot timer. */
     printf("interrupt-driven completion (model time, 1 us per clock read):\n");
     irq_case("normal 128 KiB", 256, 4000, 300000, 0, 0, 0);
+    irq_case("board 128 KiB piece", 256, 6200, 8000, 0, 0, 0);                       /* 6.2 ms of transfer, as the board measured: the recheck must not fire first */
     irq_case("early interrupt", 64, 2000, 50000, 0, 1, 0);
     irq_case("lost interrupt", 64, 2000, 50000, 1, 0, 0);
     irq_case("stale+spurious wakes", 8, 500, 5000, 0, 0, 1);

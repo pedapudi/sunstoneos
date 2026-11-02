@@ -182,8 +182,9 @@ static int configure(void)
 
 /* One request at a time into dma, to completion or failure; the loader's metadata reads. */
 #ifdef OS_SD_WRITE
-static enum a733_mmc_platform_result drive_platform(uint64_t deadline);
+static enum a733_mmc_platform_result drive_platform(uint64_t deadline, uint32_t recheck_us);
 static int sd_irq_mask_settled(void);
+static uint32_t recheck_for(uint32_t blocks, int write);
 #endif
 static int read_blocking(uint64_t sector, uint32_t count, uint8_t *dma)
 {
@@ -192,7 +193,7 @@ static int read_blocking(uint64_t sector, uint32_t count, uint8_t *dma)
     while (r == A733_MMC_BUSY && board_live(NULL));
     if (r != A733_MMC_PENDING) return DIAG(30, PLATX(r));
 #ifdef OS_SD_WRITE
-    r = drive_platform(now_us() + READ_US);
+    r = drive_platform(now_us() + READ_US, recheck_for(count, 0));
 #else
     do { r = a733_mmc_platform_poll(&platform); } while ((r == A733_MMC_PENDING || r == A733_MMC_BUSY) && board_live(NULL));
 #endif
@@ -369,6 +370,14 @@ static int dr_poll(void *c)
     d->r = a733_mmc_platform_poll(&platform);
     return d->r != A733_MMC_PENDING && d->r != A733_MMC_BUSY;
 }
+/* How long an interrupt wait may sleep before it re-polls: twice the expected completion, with a 20 ms floor (storage_wait.h). The expected completion is the
+ * data at a conservative 10 MB/s (the bus measured 21.7 MB/s for reads and 14.7 MB/s for writes), plus for a write the card's busy allowance of 250 ms
+ * (SD Physical Layer 4.6.2.2). A recheck that fires is a miss and is counted. */
+static uint32_t recheck_for(uint32_t blocks, int write)
+{
+    uint64_t us = (uint64_t)blocks * 512u * 1000000u / 10000000u + (write ? 250000u : 0u);
+    return (uint32_t)(2 * us);
+}
 static volatile enum sunxi_mmc_wait last_hint;
 static _Atomic uint64_t recheck_count;
 static enum sunxi_mmc_wait dr_hint(void *c, uint32_t *us) { (void)c; return last_hint = sunxi_mmc_wait_hint(&platform.core, us); }
@@ -392,10 +401,10 @@ static void hw_irq_counts(uint32_t entries[8], uint32_t *stray, uint32_t *rechec
     *stray = atomic_load(&irq_stray_count);
 }
 static int dr_live(void *c) { (void)c; return board_live(NULL); }
-static enum a733_mmc_platform_result drive_platform(uint64_t deadline)
+static enum a733_mmc_platform_result drive_platform(uint64_t deadline, uint32_t recheck_us)
 {
     struct drive d = {A733_MMC_PENDING, NULL};
-    const struct storage_wait_ops ops = {&d, dr_poll, dr_hint, dr_now, dr_sleep, dr_live};
+    const struct storage_wait_ops ops = {&d, dr_poll, dr_hint, dr_now, dr_sleep, dr_live, recheck_us};
     (void)storage_wait_run(&ops, deadline);
     return d.r;
 }
@@ -404,7 +413,7 @@ static int async_poll(void) { async_value = sd_poll(NULL); return async_value !=
 static int hw_wait_async(void)
 {
     struct drive d = {A733_MMC_PENDING, async_poll};
-    const struct storage_wait_ops ops = {&d, dr_poll, dr_hint, dr_now, dr_sleep, dr_live};
+    const struct storage_wait_ops ops = {&d, dr_poll, dr_hint, dr_now, dr_sleep, dr_live, recheck_for(blocks_in_flight, 0)};
     async_value = 0;
     (void)storage_wait_run(&ops, now_us() + READ_US);
     return async_value == 1;
@@ -421,7 +430,7 @@ static int hw_allocation_unit(uint32_t *sectors)
     enum a733_mmc_platform_result r;
     do { r = a733_mmc_platform_sd_status(&platform, status, now_us() + READ_US); } while (r == A733_MMC_BUSY && board_live(NULL));
     if (r != A733_MMC_PENDING) return 0;
-    r = drive_platform(now_us() + READ_US);
+    r = drive_platform(now_us() + READ_US, recheck_for(1, 0));
     if (r != A733_MMC_COMPLETE) return DIAG(35, PLATX(r));
     do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
     if (r != A733_MMC_READY || result.error != SUNXI_MMC_OK || result.received != SUNXI_MMC_SD_STATUS_BYTES) return DIAG(36, PLATX(r));
@@ -481,7 +490,7 @@ static int hw_write_piece(uint64_t sector, uint32_t count, const uint8_t *src)
     do { r = a733_mmc_platform_write_dma(&platform, &authority, A733_BOUNDED_WRITE_TOKEN, sector, count, dma, now_us() + WRITE_US); }
     while (r == A733_MMC_BUSY && board_live(NULL));
     if (r != A733_MMC_PENDING) return DIAG(33, PLATX(r));
-    r = drive_platform(now_us() + WRITE_US);
+    r = drive_platform(now_us() + WRITE_US, recheck_for(count, 1));
     if (r != A733_MMC_COMPLETE) return DIAG(34, PLATX(r));
     do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
     return r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.confirmed_blocks == count;
