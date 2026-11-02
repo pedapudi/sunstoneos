@@ -44,6 +44,9 @@ struct ssKernelTask {
     bool indefinite, unordered, off_cpu;
     bool suspended, dead;
     uint64_t resume_generation, abort_generation, offcpu_ack;
+    uint64_t object_sequence, object_requested;
+    unsigned object_priority, object_requested_priority;
+    bool object_detach;
 };
 struct ssKernelCPU {
     struct ss_owner run;
@@ -51,9 +54,12 @@ struct ssKernelCPU {
     unsigned preempt, object_depth, critical_depth, suspend_depth, isr_depth;
     UBaseType_t object_mask;
     _Atomic uint64_t slice_deadline;
-    bool yield_tail, reschedule, irq_drained;
+    bool yield_tail, reschedule, irq_drained, command_finishing;
+    bool command_no_wait[SS_OWNER_SLOTS];
     uint64_t publication[2];
-    uint64_t repair[2];
+    uint64_t repair[2], object_repair[2];
+    uint64_t command_pending[2], command_sequence[SS_OWNER_SLOTS];
+    struct ss_kernel_pin command_reference[SS_OWNER_SLOTS];
     struct ss_kernel_pin reference[SS_OWNER_SLOTS];
 };
 static struct ssKernelTask ssKernelTasks[SS_OWNER_SLOTS];
@@ -238,6 +244,20 @@ static void ssKernelBootstrap(void)
     }
 }
 
+/* Static construction already initialized TLS and the port stack. Failed
+ * registry admission must unwind those resources without retiring a slot. */
+static bool ssKernelAdmitTask(TCB_t *task)
+{
+    if (ssKernelAddTask(task)) return true;
+    portCLEAN_UP_TCB(task);
+#if ( configUSE_C_RUNTIME_TLS_SUPPORT == 1 )
+    configDEINIT_TLS_BLOCK(task->xTLSBlock);
+#endif
+    return false;
+}
+static void ssKernelControlDrain(void);
+static void ssKernelCommandsFinish(void);
+static void ssKernelWait(unsigned, uint64_t);
 /* Object publications retain waiter references until the outer metadata lock
  * is released. No producer writes a foreign owner node or timeout entry. */
 static void ssKernelPublishReference(struct ss_kernel_pin pin)
@@ -261,6 +281,7 @@ static void ssKernelFlush(void)
 {
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
     if (cpu->object_depth || cpu->isr_depth) return;
+    ssKernelCommandsFinish();
     for (unsigned w = 0; w < 2; ++w) {
         uint64_t bits = cpu->publication[w];
         cpu->publication[w] = 0;
@@ -320,6 +341,7 @@ void ssKernelObjectExit(void)
         portRELEASE_TASK_LOCK((BaseType_t)c);
         ssKernelFlush();
         --cpu->preempt;
+        ssKernelCommandsFinish();
     }
     UBaseType_t irq = cpu->object_mask;
     bool yield = !cpu->preempt && cpu->reschedule;
@@ -372,6 +394,7 @@ BaseType_t ssKernelObjectResume(void)
         ssKernelFlush();
         configASSERT(cpu->preempt);
         --cpu->preempt;
+        ssKernelCommandsFinish();
     }
     bool yield = !cpu->preempt && cpu->reschedule;
     portCLEAR_INTERRUPT_MASK(irq);
@@ -529,7 +552,7 @@ static void ssKernelService(void)
 {
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
-    ss_control_drain(&ssKernelControl, c);
+    ssKernelControlDrain();
     ss_owner_drain(&cpu->run, ssKernelInspect, NULL);
     ss_deadline_expire(&cpu->deadlines, ssKernelNow(), SS_DEADLINE_BATCH,
                        ssKernelExpired, NULL);
@@ -629,10 +652,17 @@ static void ssKernelSwitch(unsigned c)
         ssKernelForce(c);
     }
 }
+void ssKernelOwnerYieldTail(void)
+{
+    struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
+    struct ssKernelTask *s = ssKernelCurrent();
+    unsigned state = atomic_load_explicit(&s->execution, memory_order_acquire);
+    if (state == SS_K_RUNNING || state == SS_K_READY) cpu->yield_tail = true;
+    cpu->reschedule = true;
+}
 void ssKernelOwnerYield(void)
 {
-    ssKernelCPUs[ssKernelCPUId()].yield_tail = true;
-    ssKernelCPUs[ssKernelCPUId()].reschedule = true;
+    ssKernelOwnerYieldTail();
     portYIELD();
 }
 BaseType_t ssKernelOwnerIRQExit(void)
@@ -756,16 +786,67 @@ static uint32_t ssKernelNotifyWait(UBaseType_t index, uint32_t clear_entry,
     return result.value;
 }
 
-static void ssKernelDetachEvent(struct ssKernelTask *s)
+/* Owner callbacks run under the per-task control FIFO. They request object
+ * maintenance here; its ISR lock is acquired only after that FIFO is released.
+ * The retained control reference protects the TCB through repair and ack. */
+static bool ssKernelObjectPrepared(struct ssKernelTask *s,
+                                    const struct ss_control_state *state,
+                                    unsigned priority)
 {
-    if (s->wait_kind != SS_K_EVENT) return;
-    UBaseType_t irq = ssKernelObjectEnterFromISR();
-    TCB_t *t = s->ready.context;
-    if (listLIST_ITEM_CONTAINER(&t->xEventListItem)) {
-        listREMOVE_ITEM(&t->xEventListItem);
-        ss_kernel_handle_put(&s->event_reference);
+    if (s->object_sequence == state->sequence + 1 && s->object_priority == priority)
+        return true;
+    s->object_requested = state->sequence + 1;
+    s->object_requested_priority = priority;
+    s->object_detach = state->dead || state->suspended ||
+        state->offcpu_sequence > s->offcpu_ack || state->abort_generation != s->abort_generation;
+    ssKernelCPUs[ssKernelCPUId()].object_repair[s->ready.slot / 64] |=
+        UINT64_C(1) << (s->ready.slot % 64);
+    return false;
+}
+static void ssKernelControlDrain(void)
+{
+    unsigned c = ssKernelCPUId();
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    configASSERT(!cpu->critical_depth && !cpu->isr_depth);
+    ss_control_drain(&ssKernelControl, c);
+    for (unsigned w = 0; w < 2; ++w) {
+        uint64_t bits = cpu->object_repair[w];
+        cpu->object_repair[w] = 0;
+        while (bits) {
+            unsigned b = (unsigned)__builtin_ctzll(bits);
+            bits &= bits - 1;
+            unsigned slot = w * 64 + b;
+            struct ssKernelTask *s = &ssKernelTasks[slot];
+            TCB_t *t = s->ready.context;
+            UBaseType_t irq = ssKernelObjectEnterFromISR();
+            List_t *list = listLIST_ITEM_CONTAINER(&t->xEventListItem);
+            if (s->object_detach && s->wait_kind == SS_K_EVENT) {
+                if (list) {
+                    listREMOVE_ITEM(&t->xEventListItem);
+                    ss_kernel_handle_put(&s->event_reference);
+                }
+            } else if (!s->unordered && !(listGET_LIST_ITEM_VALUE(&t->xEventListItem) & taskEVENT_LIST_ITEM_VALUE_IN_USE)) {
+                if (list) listREMOVE_ITEM(&t->xEventListItem);
+                listSET_LIST_ITEM_VALUE(&t->xEventListItem, configMAX_PRIORITIES - s->object_requested_priority);
+                if (list) vListInsert(list, &t->xEventListItem);
+            }
+            s->object_sequence = s->object_requested;
+            s->object_priority = s->object_requested_priority;
+            ssKernelObjectExitFromISR(irq);
+            ss_control_repair(&ssKernelControl, slot);
+        }
     }
-    ssKernelObjectExitFromISR(irq);
+    /* Repair completion can now be acknowledged without acquiring I in FIFO. */
+    ss_control_drain(&ssKernelControl, c);
+}
+static void ssKernelWait(unsigned slot, uint64_t sequence)
+{
+    while (!ss_control_applied(&ssKernelControl, slot, sequence)) {
+        /* The outer critical exit can still mask API IRQs. Service this owner
+         * directly so a full bounded batch cannot strand its own command. */
+        ssKernelControlDrain();
+        if (!ss_control_applied(&ssKernelControl, slot, sequence)) ss_owner_wait(ssKernelControl.backend);
+    }
 }
 static bool ssKernelApply(void *context, unsigned slot, void *task,
                            const struct ss_control_state *state)
@@ -776,10 +857,13 @@ static bool ssKernelApply(void *context, unsigned slot, void *task,
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
     configASSERT(atomic_load_explicit(&s->owner, memory_order_acquire) == c);
+    unsigned priority = state->priority;
+    unsigned donation = atomic_load_explicit(&s->donation, memory_order_acquire);
+    if (donation > priority) priority = donation;
+    if (!ssKernelObjectPrepared(s, state, priority)) return false;
     if (state->dead || state->offcpu_sequence > s->offcpu_ack || state->suspended) {
         if (s->ready.queued) configASSERT(ss_owner_remove(&cpu->run, &s->ready));
         ssKernelCancel(s);
-        ssKernelDetachEvent(s);
         s->suspended = state->suspended;
         s->dead = state->dead;
         atomic_store_explicit(&s->execution, state->dead ? SS_K_DEAD : SS_K_SUSPENDED,
@@ -787,24 +871,12 @@ static bool ssKernelApply(void *context, unsigned slot, void *task,
         if (!s->off_cpu) { cpu->reschedule = true; return false; }
         s->offcpu_ack = state->offcpu_sequence;
     }
-    unsigned priority = state->priority;
-    unsigned donation = atomic_load_explicit(&s->donation, memory_order_acquire);
-    if (donation > priority) priority = donation;
     if (s->ready.priority != priority) {
         bool queued = s->ready.queued;
         if (queued) configASSERT(ss_owner_remove(&cpu->run, &s->ready));
         s->ready.priority = priority;
         t->uxPriority = priority;
         if (queued) configASSERT(ss_owner_enqueue(&cpu->run, &s->ready, false));
-        /* Event order repair is object metadata, not an owner queue write. */
-        UBaseType_t irq = ssKernelObjectEnterFromISR();
-        List_t *list = listLIST_ITEM_CONTAINER(&t->xEventListItem);
-        if (!s->unordered && !(listGET_LIST_ITEM_VALUE(&t->xEventListItem) & taskEVENT_LIST_ITEM_VALUE_IN_USE)) {
-            if (list) listREMOVE_ITEM(&t->xEventListItem);
-            listSET_LIST_ITEM_VALUE(&t->xEventListItem, configMAX_PRIORITIES - priority);
-            if (list) vListInsert(list, &t->xEventListItem);
-        }
-        ssKernelObjectExitFromISR(irq);
         atomic_store_explicit(&s->effective, priority, memory_order_release);
         cpu->reschedule = true;
     }
@@ -822,7 +894,6 @@ static bool ssKernelApply(void *context, unsigned slot, void *task,
     if (state->abort_generation != s->abort_generation) {
         s->abort_generation = state->abort_generation;
         if (atomic_load_explicit(&s->execution, memory_order_acquire) == SS_K_BLOCKED) {
-            ssKernelDetachEvent(s);
             bool trace_ready = atomic_load_explicit(&s->outcome, memory_order_acquire) == SS_K_WAITING;
             if (s->wait_kind == SS_K_NOTIFICATION) {
                 struct ss_notification_guard guard;
@@ -989,6 +1060,19 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
     bool changed = mutation.changed;
     bool self = handle == current;
     unsigned slot = pin.slot;
+    struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
+    if (cpu->object_depth || cpu->isr_depth) {
+        /* Logical desired state is committed now. Owner consumption and task
+         * acknowledgments wait until the caller releases compatibility I. */
+        if (cpu->command_reference[slot].descriptor) ss_kernel_handle_put(&pin);
+        else cpu->command_reference[slot] = pin;
+        cpu->command_pending[slot / 64] |= UINT64_C(1) << (slot % 64);
+        cpu->command_sequence[slot] = sequence;
+        cpu->command_no_wait[slot] = from_isr || self;
+        if (self && changed) cpu->reschedule = true;
+        portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
+        return changed;
+    }
     if (command == SS_K_DELETE && self) {
         ss_kernel_handle_put(&pin);
         portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
@@ -997,7 +1081,7 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
         return changed;
     }
     if (atomic_load_explicit(&ssKernelTasks[slot].owner, memory_order_acquire) == ssKernelCPUId()) {
-        ss_control_drain(&ssKernelControl, ssKernelCPUId());
+        ssKernelControlDrain();
         ssKernelSliceRefresh(ssKernelCPUId(), false);
     }
     if (!from_isr && changed && self && command == SS_K_SUSPEND) {
@@ -1012,11 +1096,31 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
     if (!from_isr && changed) {
         if (self && command == SS_K_AFFINITY) portYIELD();
         /* Pin prevents slot reuse while observing the acknowledgment sequence. */
-        ss_control_wait(&ssKernelControl, slot, sequence);
+        ssKernelWait(slot, sequence);
     }
     ss_kernel_handle_put(&pin);
     if (!from_isr && ssKernelCPUs[ssKernelCPUId()].reschedule) portYIELD();
     return changed;
+}
+static void ssKernelCommandsFinish(void)
+{
+    struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
+    if (cpu->command_finishing || cpu->preempt) return;
+    cpu->command_finishing = true;
+    for (unsigned w = 0; w < 2; ++w) while (cpu->command_pending[w]) {
+        unsigned b = (unsigned)__builtin_ctzll(cpu->command_pending[w]);
+        unsigned slot = w * 64 + b;
+        cpu->command_pending[w] &= ~(UINT64_C(1) << b);
+        struct ss_kernel_pin pin = cpu->command_reference[slot];
+        if (!pin.descriptor) continue;
+        cpu->command_reference[slot] = (struct ss_kernel_pin){0};
+        uint64_t sequence = cpu->command_sequence[slot];
+        bool no_wait = cpu->command_no_wait[slot];
+        ssKernelControlDrain();
+        if (!no_wait) ssKernelWait(slot, sequence);
+        ss_kernel_handle_put(&pin);
+    }
+    cpu->command_finishing = false;
 }
 static unsigned ssKernelPriority(TaskHandle_t handle, bool base)
 {

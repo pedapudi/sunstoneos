@@ -11,6 +11,7 @@ void ssKernelObjectSuspend(void);
 BaseType_t ssKernelObjectResume(void);
 BaseType_t ssKernelOwnerIRQExit(void);
 void ssKernelOwnerYield(void);
+void ssKernelOwnerYieldTail(void);
 #ifdef SS_FREERTOS_OBJECT_TRANSLATION
 /* Series B retains object metadata exclusion without stopping other owners.
  * Application critical/suspend APIs keep their separate global contract. */

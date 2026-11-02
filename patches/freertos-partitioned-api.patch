@@ -22,7 +22,7 @@
 +TCB_t *task = prvCreateStaticTask(pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer, &handle);
 +if (!task) { TaskHandle_t ss_trace_result = (NULL); traceRETURN_xTaskCreateStatic(ss_trace_result); return ss_trace_result; }
 +task->uxCoreAffinityMask = configTASK_DEFAULT_CORE_AFFINITY;
-+{ TaskHandle_t ss_trace_result = (ssKernelAddTask(task) ? handle : NULL); traceRETURN_xTaskCreateStatic(ss_trace_result); return ss_trace_result; }
++{ TaskHandle_t ss_trace_result = (ssKernelAdmitTask(task) ? handle : NULL); traceRETURN_xTaskCreateStatic(ss_trace_result); return ss_trace_result; }
 +#else
 +
          TaskHandle_t xReturn = NULL;
@@ -49,7 +49,7 @@
 +TCB_t *task = prvCreateStaticTask(pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer, &handle);
 +if (!task) { TaskHandle_t ss_trace_result = (NULL); traceRETURN_xTaskCreateStaticAffinitySet(ss_trace_result); return ss_trace_result; }
 +task->uxCoreAffinityMask = uxCoreAffinityMask;
-+{ TaskHandle_t ss_trace_result = (ssKernelAddTask(task) ? handle : NULL); traceRETURN_xTaskCreateStaticAffinitySet(ss_trace_result); return ss_trace_result; }
++{ TaskHandle_t ss_trace_result = (ssKernelAdmitTask(task) ? handle : NULL); traceRETURN_xTaskCreateStaticAffinitySet(ss_trace_result); return ss_trace_result; }
 +#else
 +
              TaskHandle_t xReturn = NULL;

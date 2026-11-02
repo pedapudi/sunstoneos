@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 static unsigned fixture_cpu, fixture_sgi[configNUMBER_OF_CORES], fixture_locks;
+static unsigned fixture_cleanup;
+void ssFixtureCleanup(void *task) { assert(task); ++fixture_cleanup; }
 static unsigned fixture_ready_count[SS_OWNER_SLOTS], fixture_ready_cpu[SS_OWNER_SLOTS];
 static TaskHandle_t fixture_ready_watch;
 static unsigned fixture_ready_baseline;
@@ -22,7 +24,16 @@ UBaseType_t uxPortSetInterruptMaskFromISR(void) { return 0; }
 void vPortClearInterruptMask(UBaseType_t mask) { (void)mask; }
 void vPortClearInterruptMaskFromISR(UBaseType_t mask) { (void)mask; }
 void vPortRecursiveLock(uint8_t cpu, ePortRTOSLock lock, BaseType_t acquire)
-{ (void)cpu; (void)lock; if (acquire) ++fixture_locks; }
+{
+    (void)cpu;
+    if (acquire) {
+        ++fixture_locks;
+        if (lock == eIsrLock)
+            for (unsigned slot = 0; slot < SS_OWNER_SLOTS; ++slot)
+                assert(atomic_load(&ssKernelControl.slot[slot].tickets) ==
+                       atomic_load(&ssKernelControl.slot[slot].serving));
+    }
+}
 void vInterruptCore(uint32_t interrupt, uint8_t cpu)
 {
     if (fixture_ready_watch && cpu == 0) {
@@ -71,9 +82,91 @@ static void invariant(void)
     }
 }
 #include "scheduler-kernel-objects.c"
+static void fixture_command_progress(void *opaque)
+{
+    (void)opaque;
+    unsigned caller = fixture_cpu;
+    for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) enter(c);
+    fixture_cpu = caller;
+}
+static void fixture_critical_commands(TaskHandle_t task)
+{
+    struct ss_owner_backend progress = ssKernelBackend;
+    progress.wait = fixture_command_progress;
+    ssKernelControl.backend = &progress;
+    fixture_cpu = 0;
+    unsigned priority = uxTaskPriorityGet(task);
+    uint64_t sequence = atomic_load(&ssKernelControl.slot[((TCB_t *)task)->uxOwnerSlot].applied);
+    vTaskEnterCritical();
+    vTaskEnterCritical();
+    vTaskPrioritySet(task, priority + 1);
+    vTaskSuspend(task);
+    vTaskResume(task);
+    assert(atomic_load(&ssKernelControl.slot[((TCB_t *)task)->uxOwnerSlot].applied) == sequence);
+    vTaskExitCritical();
+    assert(ssKernelCPUs[0].command_pending[0] || ssKernelCPUs[0].command_pending[1]);
+    vTaskExitCritical();
+    assert(!ssKernelCPUs[0].command_pending[0] && !ssKernelCPUs[0].command_pending[1]);
+    assert(uxTaskPriorityGet(task) == priority + 1);
+    UBaseType_t irq = vTaskEnterCriticalFromISR();
+    vTaskPrioritySet(task, priority);
+    vTaskExitCriticalFromISR(irq);
+    for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) enter(c);
+    assert(uxTaskPriorityGet(task) == priority);
+    ssKernelControl.backend = &ssKernelBackend;
+    fixture_cpu = 0;
+    puts("linked FreeRTOS critical commands: nested task/ISR publication defers owner repair and acknowledgment until compatibility unlock; no FIFO acquires ISR lock");
+}
+static int fixture_admission(void)
+{
+    static StaticTask_t tcbs[SS_OWNER_SLOTS + 1];
+    static StackType_t buffers[SS_OWNER_SLOTS + 1][configMINIMAL_STACK_SIZE];
+    unsigned deleted = fixture_tls_deleted, cleaned = fixture_cleanup;
+    assert(!xTaskCreateStaticAffinitySet(fixture_entry, "invalid", configMINIMAL_STACK_SIZE,
+        NULL, 1, buffers[SS_OWNER_SLOTS], &tcbs[SS_OWNER_SLOTS], 0));
+    assert(fixture_tls_deleted == deleted + 1 && fixture_cleanup == cleaned + 1);
+    for (unsigned n = 0; n < SS_OWNER_SLOTS; ++n) {
+        TaskHandle_t task = xTaskCreateStatic(fixture_entry, "full", configMINIMAL_STACK_SIZE,
+            NULL, n < configNUMBER_OF_CORES ? 0 : 1, buffers[n], &tcbs[n]);
+        assert(task);
+        if (n < configNUMBER_OF_CORES) {
+            xIdleTaskHandles[n] = task;
+            pxCurrentTCBs[n] = task;
+            ((TCB_t *)task)->uxTaskAttributes |= taskATTRIBUTE_IS_IDLE;
+            ((TCB_t *)task)->uxCoreAffinityMask = (UBaseType_t)1 << n;
+        }
+    }
+    assert(uxTaskGetNumberOfTasks() == SS_OWNER_SLOTS);
+    assert(!xTaskCreateStatic(fixture_entry, "full", configMINIMAL_STACK_SIZE,
+        NULL, 1, buffers[SS_OWNER_SLOTS], &tcbs[SS_OWNER_SLOTS]));
+    assert(!xTaskCreateStaticAffinitySet(fixture_entry, "full", configMINIMAL_STACK_SIZE,
+        NULL, 1, buffers[SS_OWNER_SLOTS], &tcbs[SS_OWNER_SLOTS], 1));
+    assert(fixture_tls_deleted == deleted + 3 && fixture_cleanup == cleaned + 3);
+    ssKernelBootstrap();
+    xSchedulerRunning = pdTRUE;
+    for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) enter(c);
+    struct ss_owner_backend progress = ssKernelBackend;
+    progress.wait = fixture_control_progress;
+    ssKernelControl.backend = &progress;
+    fixture_progress_task = &tcbs[SS_OWNER_SLOTS - 1];
+    fixture_cpu = 0;
+    vTaskDelete(fixture_progress_task);
+    for (unsigned pass = 0; pass < 8; ++pass)
+        for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) enter(c);
+    assert(uxTaskGetNumberOfTasks() == SS_OWNER_SLOTS - 1);
+    assert(fixture_tls_deleted == deleted + 4 && fixture_cleanup == cleaned + 4);
+    fixture_cpu = 0;
+    assert(xTaskCreateStaticAffinitySet(fixture_entry, "reuse", configMINIMAL_STACK_SIZE,
+        NULL, 1, buffers[SS_OWNER_SLOTS], &tcbs[SS_OWNER_SLOTS], 1));
+    assert(uxTaskGetNumberOfTasks() == SS_OWNER_SLOTS);
+    invariant();
+    puts("linked FreeRTOS admission: invalid affinity and 128-slot exhaustion unwind TLS/port resources; deletion permits buffer reuse");
+    return 0;
+}
 int main(int argc, char **argv)
 {
     (void)argv;
+    if (argc > 1 && !strcmp(argv[1], "admission")) return fixture_admission();
     if (argc > 1 && !strcmp(argv[1], "slice")) return fixture_slices();
     if (argc > 1) {
         int result = fixture_startup();
@@ -211,6 +304,7 @@ int main(int argc, char **argv)
     fixture_inheritance(task, second);
     fixture_diagnostics();
     fixture_critical();
+    fixture_critical_commands(second);
     fixture_migration(task);
     fixture_migration_wake(task);
     fixture_delete_reuse(task, second);

@@ -13,3 +13,7 @@ void ssFixtureYield(void);
 #define portMEMORY_BARRIER() atomic_thread_fence(memory_order_seq_cst)
 uint64_t ssFixtureTaskRegister(void);
 #define ullPortGetTaskRegister() ssFixtureTaskRegister()
+
+#undef portCLEAN_UP_TCB
+void ssFixtureCleanup(void *);
+#define portCLEAN_UP_TCB(task) ssFixtureCleanup(task)

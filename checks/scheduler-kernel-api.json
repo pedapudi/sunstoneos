@@ -624,7 +624,7 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_xTaskCreateStatic( pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer );",
       "definition_helpers": [
-        "ssKernelAddTask"
+        "ssKernelAdmitTask"
       ]
     },
     {
@@ -633,7 +633,7 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_xTaskCreateStaticAffinitySet( pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer, uxCoreAffinityMask );",
       "definition_helpers": [
-        "ssKernelAddTask"
+        "ssKernelAdmitTask"
       ]
     },
     {
