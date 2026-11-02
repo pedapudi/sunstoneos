@@ -54,7 +54,7 @@ struct ssKernelCPU {
     unsigned preempt, object_depth, critical_depth, suspend_depth, isr_depth;
     UBaseType_t object_mask;
     _Atomic uint64_t slice_deadline;
-    bool yield_tail, reschedule, irq_drained, command_finishing;
+    bool yield_tail, reschedule, irq_drained, command_finishing, control_draining;
     bool command_no_wait[SS_OWNER_SLOTS];
     uint64_t publication[2];
     uint64_t repair[2], object_repair[2];
@@ -807,7 +807,11 @@ static void ssKernelControlDrain(void)
 {
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
-    configASSERT(!cpu->critical_depth && !cpu->isr_depth);
+    configASSERT(!cpu->critical_depth && !cpu->isr_depth && !cpu->control_draining);
+    /* Object unlock flushes publications. Keep deferred command consumption
+     * outside this whole maintenance interval so its final ack cannot retire
+     * a descriptor still referenced by the unlocked repair batch. */
+    cpu->control_draining = true;
     ss_control_drain(&ssKernelControl, c);
     for (unsigned w = 0; w < 2; ++w) {
         uint64_t bits = cpu->object_repair[w];
@@ -838,6 +842,7 @@ static void ssKernelControlDrain(void)
     }
     /* Repair completion can now be acknowledged without acquiring I in FIFO. */
     ss_control_drain(&ssKernelControl, c);
+    cpu->control_draining = false;
 }
 static void ssKernelWait(unsigned slot, uint64_t sequence)
 {
@@ -1105,7 +1110,7 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
 static void ssKernelCommandsFinish(void)
 {
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
-    if (cpu->command_finishing || cpu->preempt) return;
+    if (cpu->command_finishing || cpu->control_draining || cpu->preempt) return;
     cpu->command_finishing = true;
     for (unsigned w = 0; w < 2; ++w) while (cpu->command_pending[w]) {
         unsigned b = (unsigned)__builtin_ctzll(cpu->command_pending[w]);

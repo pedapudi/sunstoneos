@@ -108,6 +108,22 @@ static void fixture_critical_commands(TaskHandle_t task)
     vTaskExitCritical();
     assert(!ssKernelCPUs[0].command_pending[0] && !ssKernelCPUs[0].command_pending[1]);
     assert(uxTaskPriorityGet(task) == priority + 1);
+    /* Leave a deferred self-command for this owner's ordinary service to
+     * encounter. Repair's ObjectExitFromISR must not recursively consume it. */
+    unsigned owner = atomic_load(&record(task)->owner);
+    fixture_cpu = owner;
+    ++ssKernelCPUs[owner].preempt;
+    vTaskEnterCritical();
+    vTaskPrioritySet(task, priority + 2);
+    vTaskExitCritical();
+    assert(ssKernelCPUs[owner].preempt == 1);
+    --ssKernelCPUs[owner].preempt;
+    assert(ssKernelCPUs[owner].command_pending[0] || ssKernelCPUs[owner].command_pending[1]);
+    ssKernelControlDrain();
+    assert(ssKernelCPUs[owner].command_pending[0] || ssKernelCPUs[owner].command_pending[1]);
+    ssKernelCommandsFinish();
+    assert(!ssKernelCPUs[owner].command_pending[0] && !ssKernelCPUs[owner].command_pending[1]);
+    fixture_cpu = 0;
     UBaseType_t irq = vTaskEnterCriticalFromISR();
     vTaskPrioritySet(task, priority);
     vTaskExitCriticalFromISR(irq);
