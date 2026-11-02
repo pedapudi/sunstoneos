@@ -87,12 +87,28 @@ reservation beyond the pool is refused with the resource's code in the start rec
 declared slots at that moment, the tables are built and the runtime is prepared; nothing is allocated afterwards. A
 queue opened deeper than the declared in-flight depth is refused at open.
 
-**The tables.** The runtime's catalogue (16 graphs), its slots and the service's clients (8), the queue's ring (64
-entries) and edge table (8 handles of 32 tensors) are arrays fixed when the image is built, and a declaration beyond
-them is refused as "image tables". That is the one refusal that is neither the hardware nor memory. Taking the tables
-from the reservation needs the runtime, the service and the EL0 queue to use storage that the reservation provides;
-the plans of the graphs (280 bytes each) must also leave the stacks of the start-up functions first. It is on the
-backlog (`docs/status/npu.md`).
+**The tables.** What bounds each table now:
+
+| Table | Bound | Source |
+| --- | --- | --- |
+| Graphs: catalogue, plans, digests | memory | placed at the start of the reservation (`npu_runtime_tables_bytes`, 336 bytes a graph); a sizing pass keeps one layout on the stack |
+| Slots, clients, members, commands | 31 | a client's command mask has 32 bits and command 0 is the bootstrap (`NPU_SERVICE_CLIENTS`); the arrays are static at that bound, and the regions of a declared slot count come from the reservation |
+| Registered buffers | 125 | the bootstrap and four regions for each of the 31 slots (`A733_NPU_MEMORY_MAX_BUFFERS` is 128); the memory layer builds its tables in place |
+| Queue handles | 31 | one for each slot |
+| Tensors of a handle, edges | 8, 31 * 8 | the loader admits at most 8 inputs and 8 outputs a graph (`NBG_ASSEMBLY_MAX_TENSORS`) |
+| Ring depth | the declared in-flight depth | the image is built with `SS_NPU_QUEUE_MAX_DEPTH` set to the manifest's `in_flight` (`-DSUNSTONE_OS_NPU_QUEUE_DEPTH`); a session that declares more is refused as "image tables" |
+
+The ring is application memory that the producer writes, so it stays in the queue object of the image; the depth is the one
+count that is fixed at build, from the declaration, and not at admission. The peak stack of the start-up and loading
+tasks, from `tools/npu-stack-depth.py` (static, from the compiler's stack usage and the call graph), was:
+
+| Entry | Before | After |
+| --- | --- | --- |
+| `os_npu_start` | 14624 bytes | 4144 |
+| `npu_runtime_prepare` | 10464 | 3856 |
+| `npu_runtime_reservation` | 14096 | 3696 |
+| a LOAD step (`load_work`) | 7776 | 2320 |
+| the service worker with a LOAD step (`runtime_worker`) | 8064 | 2608 |
 
 ## Graphs from the graph
 
