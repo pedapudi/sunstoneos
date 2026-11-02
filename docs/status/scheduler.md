@@ -22,6 +22,7 @@ qualification.
 
 ## Open work
 
+0d. Panic in one fork long run (entry `1793608348858278119-8f8e4282`), explained and fixed in the source, board confirmation pending: the patched interrupt exit ran owner work inside the kernel's masked sections after a control interrupt above the API mask; see [the design](../designs/scheduler-partitioned.md#the-owner-exit-work-must-not-run-after-an-interrupt-above-the-api-mask). Reproduced in QEMU (4 of 4 before, 18 of 18 passing after). The fork stays ineligible as the default until the fixed image has run on the board without a stop.
 0c. Known limits of the unmasked task-lock wait (`runtime/lock_prewait.c`): (1) an EL0 task cannot read the interrupt mask, so it infers an open mask from a zero critical nesting count and the absence of the task lock; a bare `portSET_INTERRUPT_MASK` outside a critical section, which does not take the task lock, can therefore wait with the mask raised, for at most the 100 us limit; (2) the 100 us limit is checked only when an event wakes the core, so a wait behind a long holder can last as long as the holder (914 us once, on the fork, core 3); the wait is unmasked either way.
 0b. Step 2 of the measure-first plan: fix the spans in the sweep table longest first on both kernels, each with a
    before and after span and a model-time check against 2%; then the above-mask control path, the robot workload and
