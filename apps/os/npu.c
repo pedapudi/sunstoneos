@@ -6,6 +6,7 @@
 #include "a733_mapping_check.h"
 #include "aarch64_device_memory.h"
 #include "device_memory_pool.h"
+#include "app_large.h"
 #include "sunstone_crumb.h"
 #include "boot.h"
 #include "sunstone_npu_service.h"
@@ -560,6 +561,11 @@ int os_npu_start(void)
      * one second at most: a layout takes tens of milliseconds on a Cortex-A55 at the boot clock. */
     need=OS_NPU_POOL_BYTES;
     if(start!=OS_NPU_POOL_START||end-start!=OS_NPU_POOL_BYTES)return REFUSE();
+#ifdef OS_NPU_POOL_BASE
+    /* A pool in the slot 1 area is used only while the ledger holds it for the kernel: no application region, heap or
+     * stack overlaps it and no application space maps it. */
+    if(!os_large_kernel_reserved(start,end-start))return REFUSE();
+#endif
     if(!a733_mapping_check_stride(aarch64_device_translate,start,start,end-start,0x200000,&wb))return REFUSE();
     if(!device_memory_pool_init_typed(&npu.pool,start,start,end-start,DEVICE_MEMORY_CLASS_DMA32,DEVICE_MEMORY_WRITE_BACK))return REFUSE();
     if(!device_memory_acquire(&npu.pool,g->owner,need,&npu.lease,&npu.extent))return REFUSE();

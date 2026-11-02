@@ -28,6 +28,8 @@
 #include "../../apps/os/application.h"
 #include "../../apps/os/cpu-return-el0.h"
 TaskHandle_t os_application_main_task(void);
+uint64_t os_sd_owner_entry_ttbr(void) __attribute__((weak));
+extern uint64_t os_space_kernel_ttbr;
 TaskHandle_t os_sd_owner_task(void) __attribute__((weak));   /* only an image with the SD owner has one */
 
 /* Identity of the image. The session names it and the OS refuses a session
@@ -221,7 +223,10 @@ static void monitor(void *unused)
                 struct line s = {.used = 0};
                 TaskHandle_t owner = os_sd_owner_task ? os_sd_owner_task() : 0;
                 put(&s, "TASK-SPACE main="); put_dec(&s, xTaskGetApplicationTaskTag(os_application_main_task()) != 0);
-                if (owner) { put(&s, " sdowner="); put_dec(&s, xTaskGetApplicationTaskTag(owner) != 0); }
+                if (owner) {
+                    put(&s, " sdowner="); put_dec(&s, xTaskGetApplicationTaskTag(owner) != 0);
+                    put(&s, " sdentry="); put_dec(&s, os_sd_owner_entry_ttbr() != os_space_kernel_ttbr);   /* 1: it began in a space */
+                }
                 flush(&s);
             }
             put(&l, "APP-FINISHED t_us="); put_dec(&l, t);

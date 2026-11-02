@@ -22,6 +22,9 @@ parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.R
 parser.add_argument('--artifacts', type=Path, required=True)
 parser.add_argument('--models', type=Path, required=True)
 parser.add_argument('--uniform', action='store_true')
+parser.add_argument('--slots', type=int, help='slot count (default: one for each model)')
+parser.add_argument('--bounds', help='CAPACITY,GRAPH_BYTES,TENSOR_BYTES: graphs registered later, as the manifest declares them')
+parser.add_argument('--json', action='store_true', help='print the result as one JSON object')
 parser.add_argument('--output', type=Path, required=True)
 args = parser.parse_args()
 out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
@@ -41,11 +44,15 @@ includes = [ROOT / 'apps/os', generated, ROOT / 'apps/board', ROOT / 'platform/a
 exe = host_rtos.build(out / 'exe', [*UNITS, generated / 'npu-models.c'], 'npu-pool-size', defines=DEFINES, includes=includes,
                       flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'], link=['-Wl,--gc-sections'])
 inputs = out / 'inputs'; inputs.mkdir()
-env = {**environment(), **({'UNIFORM': '1'} if args.uniform else {})}
+env = {**environment(), **({'UNIFORM': '1'} if args.uniform else {}), **({'NPU_SLOTS': str(args.slots)} if args.slots else {}), **({'NPU_SIZE_ONLY': '1'} if args.json else {}),
+       **({'NPU_BOUNDS': args.bounds} if args.bounds else {})}
 done = subprocess.run([str(exe), '30', str(inputs)], capture_output=True, text=True, env=env, timeout=1800)
 (out / 'run.log').write_text(done.stdout + done.stderr)
 if done.returncode:
     sys.exit('the runtime refused the layout: ' + (done.stdout + done.stderr)[-400:])
 line = [l for l in done.stdout.splitlines() if 'bytes reserved' in l][-1]
 slots, reserved, regions = (int(x) for x in re.match(r'(\d+) slots: (\d+) bytes reserved, (\d+) bytes', line).groups())
-print('%d slots, %d bytes in the slot regions, pool %d bytes (%.1f MiB)' % (slots, regions, reserved, reserved / 1048576))
+if args.json:
+    print(json.dumps({'slots': slots, 'regions': regions, 'pool_bytes': reserved}))
+else:
+    print('%d slots, %d bytes in the slot regions, pool %d bytes (%.1f MiB)' % (slots, regions, reserved, reserved / 1048576))

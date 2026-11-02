@@ -57,10 +57,7 @@ NPU_POOL_TOP, NPU_POOL_MIN, NPU_POOL_MAX, NPU_POOL_BLOCK = (LAYOUT['npu_pool'][k
 
 def npu_pool_extent_valid(low, high):
     """True for the legacy extent and for a sized one."""
-    if (low, high) == NPU_POOL_LEGACY:
-        return True
-    size = high - low
-    return high == NPU_POOL_TOP and NPU_POOL_MIN <= size <= NPU_POOL_MAX and size % NPU_POOL_BLOCK == 0
+    return memory_layout.npu_pool_valid(low, high)
 
 def linked_symbols(image):
     """Defined global symbols of the image: name -> (address, bytes)."""

@@ -29,7 +29,8 @@ void *os_large_main_stack(void);
 static inline void os_space_switch_in(const void *tag)
 {
     if (!os_space_active) return;
-    uint64_t want = tag ? *(const uint64_t *)tag : os_space_kernel_ttbr, have;
+    /* Bit 0 of a tag is the creating mark (OS_TASK_CREATE_IN_KERNEL_SPACE), never part of the address. */
+    uint64_t want = tag ? *(const uint64_t *)((uintptr_t)tag & ~(uintptr_t)1) : os_space_kernel_ttbr, have;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(have));
     if (have != want) __asm__ volatile("msr ttbr0_el1, %0" :: "r"(want) : "memory");
 }
@@ -40,5 +41,19 @@ static inline void os_space_switch_in(const void *tag)
  * block is private to the kernel files that expand it. A task of the OS is created from boot code or from an
  * OS task with no tag, and inherits none. */
 #define os_space_inherit(creator, created) \
-    do { if ((creator) && !(created)->pxTaskTag) (created)->pxTaskTag = (creator)->pxTaskTag; } while (0)
+    do { if ((creator) && !(created)->pxTaskTag && !((uintptr_t)(creator)->pxTaskTag & 1u)) \
+             (created)->pxTaskTag = (creator)->pxTaskTag; } while (0)
+
+/* Create a task of the OS from a task of an application (an SDK call that starts a service task). The creating task's
+ * own tag carries bit 0 for the duration of the creation, so the hook above gives the new task no tag at all: it runs in
+ * the kernel's table from its first instruction, whichever core takes it, with no window in which it holds the
+ * application's. The tag is an aligned pointer to the space record, so bit 0 is free; the switch hook masks it. A
+ * creator with no tag is an OS task already and is left alone. The mark is on the creating task only, so there is no
+ * table and no limit on how many tasks create at once. expr is evaluated once; its value is the macro's. */
+#define OS_TASK_CREATE_IN_KERNEL_SPACE(expr) ({ \
+    TaskHookFunction_t os_tag_ = xTaskGetApplicationTaskTag(NULL); \
+    if (os_tag_) vTaskSetApplicationTaskTag(NULL, (TaskHookFunction_t)((uintptr_t)os_tag_ | 1u)); \
+    __typeof__(expr) os_created_ = (expr); \
+    if (os_tag_) vTaskSetApplicationTaskTag(NULL, os_tag_); \
+    os_created_; })
 #endif

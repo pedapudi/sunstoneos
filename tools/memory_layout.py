@@ -62,9 +62,16 @@ def record():
         'npu_pool': {
             'legacy': (0x47400000, 0x47c00000),
             'top': 0x47000000, 'min': 0xa00000, 'max': 0x3000000, 'block': BLOCK,
+            # A pool the build places in the slot 1 area, whole blocks up to `ledger_max` bytes, below 4 GiB
+            # (device memory class DMA32), reserved in the ledger at admission (docs/designs/application-memory-layout.md).
+            'ledger': (0x48000000, 0x79000000), 'ledger_max': 768 * MIB,
         },
-        # The part of DRAM that the board runner backs up, restores and uploads into.
-        'runner_dram': (0x40000000, 0x80000000),
+        # The part of DRAM that the board runner backs up, restores and uploads into: all that FEL addresses, since its
+        # read and write commands carry 32-bit addresses (docs/designs/application-memory-layout.md).
+        'runner_dram': (0x40000000, 0x100000000),
+        # What a preserving run costs: the FEL rate in bytes per second, measured in docs/board-runner.md. Each
+        # preserved byte is read before the run and written after it.
+        'fel_bytes_per_second': 550000,
         # The extent of a boot slot's runtime and asset segments.
         'boot_slot_load': (0x41000000, 0x47000000),
         # The C library's heap. The image links heap_base bytes for the OS and the manifest's heap_bytes when they
@@ -78,6 +85,24 @@ def record():
 def extent(pair):
     """The (address, bytes) form of a (low, high) pair, the form the runner uses."""
     return (pair[0], pair[1] - pair[0])
+
+
+def npu_pool_valid(low, high):
+    """True for an NPU pool extent that an image may link: the legacy pool, one sized from the declaration that ends at
+    the bottom of the monitor interval, or one placed in the slot 1 area."""
+    pool = record()['npu_pool']
+    size = high - low
+    if (low, high) == tuple(pool['legacy']):
+        return True
+    if high == pool['top']:
+        return pool['min'] <= size <= pool['max'] and size % pool['block'] == 0
+    return (pool['ledger'][0] <= low < high <= pool['ledger'][1] and low % pool['block'] == 0 and
+            size % pool['block'] == 0 and pool['min'] <= size <= pool['ledger_max'])
+
+
+def preserve_seconds(preserved_bytes):
+    """The estimated transfer time of a preserving run that backs up and restores that many bytes."""
+    return 2.0 * preserved_bytes / record()['fel_bytes_per_second']
 
 
 def hexed(value):

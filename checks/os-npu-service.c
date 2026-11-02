@@ -615,7 +615,8 @@ int main(int argc, char **argv)
     if (mode == 29) registered_case = 1;
     /* Case 28: the 31 slots of the command mask. Case 30: one slot for each catalogue model, each sized by its own graph
      * (the queue image's layout); environment UNIFORM sizes every slot for the largest graph, to compare the totals. */
-    const unsigned slots = mode == 28 ? NPU_RUNTIME_SLOTS : mode == 30 ? os_npu_model_count : 1;
+    /* NPU_SLOTS sets the slot count of case 30, as an application's declaration does (tools/npu-pool-plan.py). */
+    const unsigned slots = mode == 28 ? NPU_RUNTIME_SLOTS : mode == 30 ? (getenv("NPU_SLOTS") ? (unsigned)atoi(getenv("NPU_SLOTS")) : os_npu_model_count) : 1;
     static unsigned slot_model[NPU_RUNTIME_SLOTS];
     if (mode == 30 && !getenv("UNIFORM")) {
         assert(slots <= NPU_RUNTIME_SLOTS && !bounds.capacity);
@@ -624,6 +625,10 @@ int main(int argc, char **argv)
     }
     const size_t need = npu_runtime_requirements_with(os_npu_models, os_npu_model_count, slots, &bounds);
     assert(need && !(need & (NPU_RUNTIME_GROUP_BYTES - 1)));
+    if (mode == 30 && getenv("NPU_SIZE_ONLY")) {         /* the reservation alone, for tools/npu-pool-plan.py */
+        printf("%u slots: %zu bytes reserved, 0 bytes in the slots' regions\n", slots, need);
+        return 0;
+    }
     /* The runtime registers physical addresses below 2^40, so the pool is placed in the low
      * 2 GiB of the host address space and aligned to the allocation group. */
     uint8_t *raw = mmap(NULL, need + NPU_RUNTIME_GROUP_BYTES, PROT_READ | PROT_WRITE,
@@ -664,7 +669,7 @@ int main(int argc, char **argv)
         const unsigned n = npu.runtime.slots;
         /* Thirty-one slots: every slot's regions are registered, distinct, ascending and inside the NPU's 32-bit address
          * space; the per-graph tables lie at the start of the reservation; the page tables hold 1 + 4 * 31 buffers. */
-        assert(NPU_RUNTIME_SLOTS == 31 && npu.runtime.slots == (mode == 28 ? 31 : os_npu_model_count) && npu.runtime.native.memory.count == 1 + 4 * n);
+        assert(NPU_RUNTIME_SLOTS == 31 && npu.runtime.slots == (mode == 28 ? 31 : slots) && npu.runtime.native.memory.count == 1 + 4 * n);
         assert((uintptr_t)npu.runtime.catalogue == (uintptr_t)pool && (uintptr_t)npu.runtime.plans > (uintptr_t)pool &&
                (uintptr_t)npu.runtime.model_digest > (uintptr_t)npu.runtime.plans);
         uint64_t last = 0;

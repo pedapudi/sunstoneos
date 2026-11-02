@@ -521,9 +521,11 @@ def preservation_regions(plan):
         extents.append((geo['npu_pool']['address'], geo['npu_pool']['bytes']))
     merged = []
     for address, size in sorted(extents):
-        require(type(address) is int and type(size) is int and
+        require(type(address) is int and type(size) is int and size > 0 and
                 RUNNER_DRAM[0] <= address < address + size <= RUNNER_DRAM[1],
-                'Preservation extent is outside admitted DRAM.')
+                'Preservation extent %#x..%#x is outside the DRAM the runner can address (%#x..%#x, the reach of a '
+                '32-bit FEL address); a region there is marked scratch in the manifest or is not preserved.' % (
+                    address, address + size, RUNNER_DRAM[0], RUNNER_DRAM[1]))
         high = address + size
         if merged and address <= merged[-1][0] + merged[-1][1]:
             low, count = merged[-1]
@@ -531,6 +533,24 @@ def preservation_regions(plan):
         else:
             merged.append((address, size))
     return merged
+
+
+def preserve_estimate(plan):
+    """(bytes, seconds): what backing up and restoring the plan's preservation regions transfers, and its time."""
+    total = sum(size for _, size in plan['preserve_regions'])
+    return total, memory_layout.preserve_seconds(total)
+
+
+def require_budget(plan, budget_seconds):
+    """Refuse a preserving plan whose estimated transfer exceeds the budget the submission names."""
+    total, seconds = preserve_estimate(plan)
+    if budget_seconds is not None:
+        require(seconds <= budget_seconds,
+                'The preserving plan moves %d MiB and takes about %.0f s (%d MiB read and written at %d kB/s); '
+                'the submission allows %.0f s. Mark the regions that need no preservation scratch or raise the budget.' % (
+                    total >> 20, seconds, total >> 20, memory_layout.record()['fel_bytes_per_second'] // 1000,
+                    budget_seconds))
+    return total, seconds
 
 
 def validate_uploads(plan):
