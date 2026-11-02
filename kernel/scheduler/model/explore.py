@@ -163,6 +163,65 @@ def migration_ack(ack_after_publishers=True):
 
 
 @dataclass(frozen=True)
+class RouteEpoch:
+    epoch: int = 0
+    phase: int = 0
+    closed: tuple = (False, True)
+    readers: tuple = (0, 0)
+    publisher: int = 0
+    snapshot: int = -1
+    was_closed: bool = False
+    accepted: bool = False
+    hint_epoch: int = -1
+    retired: frozenset = frozenset()
+
+
+def route_epoch(validate=True):
+    """One lifetime-pinned publisher overlaps two owner migrations and bank reuse.
+
+    This is a sequentially consistent admission/acknowledgment abstraction;
+    release-reopen/acquire-registration ordering needs native source review.
+    """
+    def successors(s):
+        def out(name, **kw): return name, replace(s, **kw)
+        def bank(values, index, value):
+            return tuple(value if i == index else old for i, old in enumerate(values))
+        if s.publisher == 0:
+            yield out('publisher snapshots route word', publisher=1, snapshot=s.epoch)
+        elif s.publisher == 1:
+            b = s.snapshot & 1
+            yield out('publisher registers in sampled bank', publisher=2,
+                      was_closed=s.closed[b], readers=bank(s.readers, b, s.readers[b]+1))
+        elif s.publisher == 2:
+            accepted = not s.was_closed and (not validate or s.snapshot == s.epoch)
+            yield out('publisher validates one admission attempt', accepted=accepted,
+                      publisher=3 if accepted else 4)
+        elif s.publisher == 3:
+            yield out('accepted publisher sends old/current owner hint',
+                      publisher=4, hint_epoch=s.snapshot)
+        elif s.publisher == 4:
+            b = s.snapshot & 1
+            yield out('publisher releases route participant', publisher=5,
+                      readers=bank(s.readers, b, s.readers[b]-1))
+        if s.hint_epoch != -1:
+            yield out('owner drains and forwards epoch hint', hint_epoch=-1)
+        if s.phase == 0 and s.epoch < 2:
+            yield out('source atomically closes current bank', phase=1,
+                      closed=bank(s.closed, s.epoch & 1, True))
+        elif s.phase == 1:
+            next_epoch = s.epoch + 1
+            yield out('destination adopts and release-reopens bank preserving count',
+                      phase=2, epoch=next_epoch,
+                      closed=bank(s.closed, next_epoch & 1, False))
+        elif s.phase == 2:
+            old = s.epoch - 1
+            if not s.readers[old & 1] and s.hint_epoch != old:
+                yield out('fresh old-owner drain acknowledges closed epoch',
+                          phase=0, retired=s.retired | {old})
+    return RouteEpoch(), successors, lambda s: s.hint_epoch not in s.retired
+
+
+@dataclass(frozen=True)
 class Notify:
     word: tuple = (0, 'WAITING', False, 0)
     pc: tuple = (0, 0)

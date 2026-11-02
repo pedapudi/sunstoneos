@@ -61,6 +61,8 @@ def main():
     run('negative/last-put-DMB', model.last_put_close(put_barrier=False), True)
     run('migration/publisher-drain-ack', model.migration_ack())
     run('negative/early-old-owner-ack', model.migration_ack(ack_after_publishers=False), True)
+    run('migration/routing-epoch-admission', model.route_epoch())
+    run('negative/route-epoch-validation', model.route_epoch(validate=False), True)
     for name, values, negative in (
         ('wake',(True,True,True),False),
         ('negative/producer-DMB',(False,True,True),True),

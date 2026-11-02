@@ -34,6 +34,10 @@ bool ss_control_route_pin(struct ss_control *c, unsigned slot,
     *out = (struct ss_control_route){0};
     struct ss_control_slot *s = &c->slot[slot];
     uint64_t word = atomic_load_explicit(&s->route_word, memory_order_acquire);
+#ifdef SS_CONTROL_ROUTE_TEST
+    extern void ss_control_route_test_sample(uint64_t);
+    ss_control_route_test_sample(word);
+#endif
     uint64_t epoch = word >> ROUTE_SHIFT;
     uint64_t previous = atomic_fetch_add_explicit(&s->route_readers[epoch & 1],
                                                  1, memory_order_acq_rel);

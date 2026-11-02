@@ -136,3 +136,18 @@ its final drain. The negative lets the old owner remember an empty inbox while
 that publisher still holds its reference. The destination can then end the
 epoch with an unprocessed old-route hint. New route acquisition and weak-memory
 ordering remain outside this small acknowledgment model.
+
+`route_epoch` adds actual routing admission to that acknowledgment boundary.
+One lifetime-pinned publisher can pause before registering in its sampled bank.
+Two migrations close old banks, adopt destinations and reuse a bank without
+resetting its participant count. A publisher gets one validation attempt;
+rejection never publishes an old-route hint. The invariant forbids an accepted
+hint for an already-retired epoch. Removing epoch validation admits a delayed
+epoch-zero publisher after that bank reopens for epoch two. This finite model
+uses sequentially consistent steps and does not prove AArch64 memory ordering.
+
+The executable `checks/scheduler-route.py` checks the same stale-snapshot race
+in actual control code, plus delayed admitted publication and deletion before
+adoption. Its negative compiles an external copy with the validation clause
+removed. The unchanged fixture must then detect stale route admission after
+two transfers. The production object contains no pause hook or LL/SC loop.
