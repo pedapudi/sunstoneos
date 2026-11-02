@@ -1,0 +1,10 @@
+{
+  "name": "dram-qos",
+  "devices": {"required": [], "optional": []},
+  "cpu": {"cluster": "a76", "workers": 7, "priority": 2, "stack_bytes": 16384},
+  "regions": [
+    {"name": "buffer", "kind": "work", "access": ["read", "write"], "bytes": "0x3000000"}
+  ],
+  "deadlines": {"run_us": 30000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
+  "output_limit": 16384
+}
