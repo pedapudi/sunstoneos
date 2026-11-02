@@ -196,3 +196,7 @@ Classes: (a) own logic; (b) linked real code on both sides; (c) safety before a 
 | f | 0.1 | OTHER | usb-host-irq-reference | Source-text check of pinned Linux xHCI IRQ ack order, device tree route and xHCI spec phrases. |
 
 The classification of the checks in the NPU and scheduler streams is listed above and not edited here; the coordinator forwards their changes.
+
+## Outcome of the class (e) review
+
+The coordinator reviewed the class (e) list on 2026-11-01. Citations were searched for the eight checks outside the NPU stream; none could cite every modeled behavior, so `a733-pcie-trace`, `pcie-qemu`, `a733-xhci-detach`, `a733-xhci-dma`, `io-native-ordering`, `memtest-machine`, `power-write-order` and `provider-clock-reference` are pending re-qualification and no longer run in the full gate. `npu-idle` stays in the gate until the NPU stream changes idle gating. [The rules and the pending table](../validation.md#checks-pending-re-qualification) hold the uncited behaviors.
