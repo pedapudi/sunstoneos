@@ -41,6 +41,7 @@ struct fat32 {
     uint32_t sectors_per_cluster, reserved, fats, fat_sectors, root_cluster, clusters;
     uint32_t fsinfo_free, fsinfo_next;      /* 0xffffffff: not recorded */
     uint32_t volume_id;
+    uint64_t fsinfo_sector;                 /* absolute sector of a valid FSInfo, 0 when none */
     uint64_t fat_cached;                    /* absolute FAT sector in fat_cache, or UINT64_MAX */
     uint64_t dir_cached;
     uint8_t fat_cache[512], dir_cache[512];

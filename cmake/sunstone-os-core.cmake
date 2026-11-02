@@ -187,7 +187,7 @@ apply_build_patch("${os_build}/boot.c" "${os_boot_base}" "${os_root}/apps/os/boo
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
   runtime/cpu_topology_app.c
-  apps/os/usb-service.c apps/os/application.c apps/os/session.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
+  apps/os/usb-service.c apps/os/large.c kernel/appmem/app_region.c kernel/appmem/large_admit.c apps/os/application.c apps/os/session.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/deadline.c runtime/deadline-a733.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
   apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
@@ -408,6 +408,10 @@ set(SUNSTONE_PREWAIT_US 100 CACHE STRING "Longest unmasked wait for the task loc
 if(SUNSTONE_LOCK_PREWAIT)
   list(APPEND os_sources "${os_root}/runtime/lock_prewait.c")
 endif()
+option(SUNSTONE_CONTROL_IRQ "Hard real-time control interrupts above the kernel API mask (measurement)" OFF)
+if(SUNSTONE_CONTROL_IRQ)
+  list(APPEND os_sources "${os_root}/runtime/control_irq.c")
+endif()
 option(SUNSTONE_IRQ_COUNT "Count interrupts per core and interrupt ID (measurement)" OFF)
 if(SUNSTONE_IRQ_COUNT)
   list(APPEND os_sources "${os_root}/runtime/irq_count.c")
@@ -555,6 +559,13 @@ if(SUNSTONE_A733_OS_NPU)
 endif()
 set_property(TARGET sunstone-a733-os-core PROPERTY LINK_OPTIONS "${os_link}")
 target_link_options(sunstone-a733-os-core PRIVATE "-Wl,-Map,${os_build}/image.map")
+if(SUNSTONE_CONTROL_IRQ)
+  if(SUNSTONE_LATENCY OR SUNSTONE_IRQ_COUNT)
+    message(FATAL_ERROR "The control interrupts, the latency recorder and the interrupt counter each wrap vApplicationIRQHandler")
+  endif()
+  target_link_options(sunstone-a733-os-core PRIVATE -Wl,--wrap=vApplicationIRQHandler)
+  set_source_files_properties("${os_root}/runtime/control_irq.c" PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
+endif()
 if(SUNSTONE_LOCK_PREWAIT)
   target_link_options(sunstone-a733-os-core PRIVATE -Wl,--wrap=uxPortSetInterruptMask -Wl,--wrap=vTaskEnterCritical -Wl,--wrap=vTaskSuspendAll)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_PREWAIT_DEPTH=${SUNSTONE_PREWAIT_DEPTH}u SUNSTONE_PREWAIT_US=${SUNSTONE_PREWAIT_US}u)

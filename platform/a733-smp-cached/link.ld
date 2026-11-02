@@ -20,6 +20,11 @@ SECTIONS {
         KEEP(*(sunstone_region_initializers))
         __stop_sunstone_region_initializers = .;
     } > CODE
+    sunstone_large_regions : ALIGN(8) {
+        __start_sunstone_large_regions = .;
+        KEEP(*(sunstone_large_regions))
+        __stop_sunstone_large_regions = .;
+    } > CODE
     sunstone_manifest : ALIGN(8) {
         __start_sunstone_manifest = .;
         KEEP(*(sunstone_manifest))

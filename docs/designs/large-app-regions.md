@@ -331,11 +331,14 @@ Isolation prediction (from the translation rules in this design and the QEMU fix
 
 - The owner reads and writes its first word, a middle word and its last word at EL0 and reads a 4 MiB strided
   fold that equals the EL1 fold of the same bytes. Each ends in an SVC (exception class 0x15).
-- The owner's access to the first byte after the region and to the byte before it faults with exception class
-  0x24 and a level 1 permission fault (fault status 0x0d), because the kernel entries there allow EL1 only.
+- The owner's access to the first byte after the region faults with exception class 0x24 and a level 1
+  permission fault (fault status 0x0d), because the next gigabyte is a kernel block that allows EL1 only. The
+  byte before the region lies in a 2 MiB kernel block and faults with a level 2 permission fault (0x0e).
 - The second application's read and write of the region fault the same way; its write sets the write bit of the
   syndrome; its access to its own stack window succeeds.
-- The 2 MiB-block view faults on the byte after the region with a level 2 permission fault (0x0e).
+- The 2 MiB-block view faults on the byte after the region exactly as the owner does, with a level 1 permission
+  fault (0x0d): the region ends on a gigabyte boundary, so the next byte is in a whole-gigabyte kernel block. A
+  region that ends inside a gigabyte faults there at level 2 (0x0e).
 
 Read-bandwidth prediction. The control pass reads a 40 MiB window of the region ten times (two warm-up
 passes) with the 128-byte vector loads of `apps/dram-bandwidth/kernel.c`. One Cortex-A55 core reads 5.36 GB/s
@@ -350,11 +353,23 @@ is below 100 (the entry, the routine's stack and code windows, and the kernel's 
 one entry per block: 512 for the pass, so 512 to 700 refills, which is about 0.5 to 0.7 refills per MiB, and none
 of them are 4 KiB-page misses. A DTLB walk count of the same order follows when the core counts that event.
 
-Loader prediction (the file on the card). Streaming `sunstone-region-test.bin` (512 MiB) through two 128 KiB
+Loader prediction (the file on the card). Streaming `/sunstone-test/sunstone-region-test.bin` (512 MiB) through two 128 KiB
 buffers reads at the measured 21.9 MB/s per request; copy and SHA-256 overlap the next request and the chain
 lookups run between requests, so the load takes 24 to 27 seconds (19 to 22 MB/s) and the SHA-256 equals
 `a0ab21dca50740b257c495faa888058cb757ec5165d27afb0c13cc5bef48eabd`. Without the file the probe reports it absent,
 skips the load and returns normally in under 2 seconds.
+
+## Measured on the board with the file absent
+
+The probe ran on port 3-1 at its boot clocks (the core ran at 494 MHz, from cycles over time), so it reports
+functional results and per-cycle figures; performance figures belong to the OS image at the approved top points.
+The isolation cases behaved as predicted above, with the level of each fault as corrected there. A 1 GiB pass
+read 3.79 bytes per cycle in every mapping (the 40 MiB control, 1 GiB blocks, 2 MiB blocks): the block size did
+not change the read rate. The L2 TLB refill count was 3 per pass with 1 GiB blocks and 513 with 2 MiB blocks, and
+the DTLB walk count 2 and 512. The L1D TLB refill count was 262,314 per pass (one per 4 KiB page) in every
+mapping, so only the L2 refill and walk events show the block size. The card read rate of 21.9 MB/s per 128 KiB
+request, reported earlier, is also a boot-clock figure; the OS image re-measures it, where the 0.65 ms of
+overhead per request may shrink.
 
 ## Predicted FAT32 volume inspection
 
@@ -401,6 +416,20 @@ execute-never bits). The model aborts on a descriptor bit it does not model
   invalidation when every upper entry is non-global, and shows both failures
   with global kernel entries;
 - a mutation that gives read-only regions write permission fails the check.
+
+## Status of the OS integration
+
+- **Admission (implemented, host- and QEMU-checked).** `tools/sunstone-manifest.py` takes `large_regions` in
+  `manifest.json` (a file or a raw extent, a size that is a multiple of 2 MiB, the source length and its SHA-256)
+  and emits the section `sunstone_large_regions` beside the manifest. `apps/os/large.c` runs in
+  `os_application_prepare()`, before any task exists: it derives the usable upper memory from the installed kernel
+  table (each level-1 slot that holds the EL1-only non-global block, which the table builder writes only when the
+  decode check passed), takes every record from the ledger all or nothing, and builds the application's space. A
+  refusal stops the start. `checks/qemu-os-boot.py` boots an application that declares a 1 GiB file region and a
+  64 MiB extent region on a 4 GiB virtual board: both are placed (`0x8000_0000`, `0xc000_0000`), the application
+  runs, and an application whose regions exceed the upper memory never starts.
+- **Not yet implemented:** the task-switch hook that selects the space, the `ss_large_*` calls, the loader task and
+  the 1 GiB test application with its bandwidth measurement at the approved top points.
 
 ## Prerequisites and changes outside this design's files
 

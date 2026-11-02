@@ -485,25 +485,38 @@ int main(int argc, char **argv)
         struct npu_runtime_model damaged = {copy, os_npu_models[0].bytes};
         assert(npu_runtime_reservation(&damaged, 1, 1, 8u << 20, &scratch) == NPU_DECLARATION_MODEL);
         free(copy);
-        /* The declaration against the image and the arrays. */
+        /* The declaration against the image and its tables. The image links one graph and no queue. */
+        struct os_npu_session n = {0};
+        assert(os_npu_declaration_admitted(&n) == NPU_DECLARATION_MISSING); /* no default: nothing declared is refused */
+        n.slots = 1; n.in_flight = 1; n.graphs = 1;
+        assert(os_npu_declaration_admitted(&n) == NPU_DECLARATION_OK);
+        n.in_flight = 100000; /* full width: far beyond one byte, admitted when the tables hold it (the queue's does not) */
+        assert(os_npu_declaration_admitted(&n) == NPU_DECLARATION_TABLES);
+        n.in_flight = 1;
+        struct os_npu_session bad = n;
+        bad.slots = 2; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_SLOTS); /* one client task */
+        bad = n; bad.in_flight = 0; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_DEPTH);
+        bad = n; bad.graphs = 0; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_GRAPHS);
+        bad = n; bad.graphs = 17; assert(os_npu_declaration_admitted(&bad) == NPU_DECLARATION_TABLES);
         const struct npu_declaration good = {1, 1, 1, 0};
-        assert(os_npu_declaration_admitted(npu_declaration_pack(&good)) == NPU_DECLARATION_OK);
-        assert(os_npu_declaration_admitted(0) == NPU_DECLARATION_OK); /* nothing declared: the image's own needs */
-        struct npu_declaration bad = good;
-        bad.slots = 2; assert(os_npu_declaration_admitted(npu_declaration_pack(&bad)) == NPU_DECLARATION_SLOTS); /* one client task */
-        bad = good; bad.in_flight = 0; assert(os_npu_declaration_admitted(npu_declaration_pack(&bad)) == NPU_DECLARATION_DEPTH);
-        bad = good; bad.in_flight = 65; assert(os_npu_declaration_admitted(npu_declaration_pack(&bad)) == NPU_DECLARATION_DEPTH);
-        bad = good; bad.graphs = 0; assert(os_npu_declaration_admitted(npu_declaration_pack(&bad)) == NPU_DECLARATION_GRAPHS);
-        bad = good; bad.graphs = 17; assert(os_npu_declaration_admitted(npu_declaration_pack(&bad)) == NPU_DECLARATION_GRAPHS);
-        const struct npu_image_needs two_graphs = {1, 2, 0};
-        assert(npu_declaration_check(&good, &two_graphs) == NPU_DECLARATION_IMAGE_GRAPHS);
-        const struct npu_image_needs queued = {3, 1, 2};
-        assert(npu_declaration_check(&good, &queued) == NPU_DECLARATION_IMAGE_SLOTS);
+        const struct npu_tables small = {8, 16, 64, 256}, large = {31, 100000, 1000000, 100000};
+        const struct npu_image_needs none = {1, 1, 0}, two_graphs = {1, 2, 0}, queued = {3, 1, 2};
+        assert(npu_declaration_check(&good, &none, &small) == NPU_DECLARATION_OK);
+        assert(npu_declaration_check(&good, &two_graphs, &small) == NPU_DECLARATION_IMAGE_GRAPHS);
+        assert(npu_declaration_check(&good, &queued, &small) == NPU_DECLARATION_IMAGE_SLOTS);
         const struct npu_declaration slots3 = {3, 4, 1, 0};
-        assert(npu_declaration_check(&slots3, &queued) == NPU_DECLARATION_IMAGE_LINKS);
+        assert(npu_declaration_check(&slots3, &queued, &small) == NPU_DECLARATION_IMAGE_LINKS);
         const struct npu_declaration full = {3, 64, 1, 2};
-        assert(npu_declaration_check(&full, &queued) == NPU_DECLARATION_OK);
-        assert(npu_declaration_unpack(npu_declaration_pack(&full)).in_flight == 64);
+        assert(npu_declaration_check(&full, &queued, &small) == NPU_DECLARATION_OK);
+        /* The only fixed refusal that is not memory is the command mask: 31 slots. Everything else is the tables. */
+        const struct npu_declaration slots31 = {31, 1, 1, 0}, slots32 = {32, 1, 1, 0};
+        assert(npu_declaration_check(&slots31, &none, &large) == NPU_DECLARATION_OK);
+        assert(npu_declaration_check(&slots32, &none, &large) == NPU_DECLARATION_SLOTS);
+        /* Fields are full width: 300 graphs, a depth of 100000 and 5000 links are admitted by tables that hold them, and
+         * refused by the image's tables with their own name. */
+        const struct npu_declaration wide = {8, 100000, 300, 5000};
+        assert(npu_declaration_check(&wide, &none, &large) == NPU_DECLARATION_OK);
+        assert(npu_declaration_check(&wide, &none, &small) == NPU_DECLARATION_TABLES);
         printf("declarations: one slot %zu bytes, four slots %zu bytes; every refusal names its resource\n", one, many);
         return 0;
     }

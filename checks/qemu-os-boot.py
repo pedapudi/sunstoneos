@@ -72,7 +72,7 @@ CFLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mge
           '-ffunction-sections', '-fdata-sections', '-O2', '-g', '-Wall', '-Wextra', '-include', 'stdint.h']
 
 # OS and board sources that run unmodified.
-OS_SOURCES = ['apps/os/application.c', 'apps/os/services.c', 'apps/os/session.c', 'apps/os/start.c',
+OS_SOURCES = ['apps/os/application.c', 'apps/os/large.c', 'kernel/appmem/app_region.c', 'kernel/appmem/large_admit.c', 'apps/os/services.c', 'apps/os/session.c', 'apps/os/start.c',
               'apps/os/thermal.c', 'apps/os/admission.c', 'apps/board/main.c', 'apps/board/session.c',
               'runtime/deadline.c', 'runtime/deadline-a733.c', 'platform/a733-smp-cached/irq_table.c']
 # Driver cores and their adapters, unmodified. The adapters reach registers
@@ -345,7 +345,7 @@ def adler32(data):
     return b << 16 | a
 
 
-def boot(elf, raw_session, contract, scenario_bytes, inputs, log, timeout=60):
+def boot(elf, raw_session, contract, scenario_bytes, inputs, log, timeout=60, memory='512M'):
     """One QEMU run. Returns the console text, the exit status and the wall seconds."""
     work = Path(elf).parent
     files = {'session.bin': raw_session, 'contract.bin': contract, 'scenario.bin': scenario_bytes}
@@ -362,7 +362,7 @@ def boot(elf, raw_session, contract, scenario_bytes, inputs, log, timeout=60):
     # sensor deadline of the board then cannot expire because a vCPU thread was descheduled.
     command = [QEMU, '-machine', 'virt,gic-version=3,secure=off,virtualization=off',
                '-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off',
-               '-cpu', 'cortex-a76', '-smp', '8', '-m', '512M', '-nographic', '-monitor', 'none',
+               '-cpu', 'cortex-a76', '-smp', '8', '-m', memory, '-nographic', '-monitor', 'none',
                '-semihosting-config', 'enable=on,target=native', '-kernel', elf, *loaders]
     start = time.monotonic()
     try:
@@ -508,6 +508,12 @@ def main():
                                          ROOT / 'checks/qemu-os/el0-abort-manifest.json')
         return image.build(application)
 
+    def build_large(name, manifest):
+        """An application that declares large regions, on the board with 4 GiB of RAM and the upper map."""
+        image = Image(out / name, extra_defines=['-DQEMU_OS_UPPER=1'])
+        application = image.application('large-test', ['checks/qemu-os/large-main.c'], manifest)
+        return image.build(application)
+
     def build_facts():
         image = Image(out / 'build-hw-facts', extra_defines=['-DSUNSTONE_A733_HW_FACTS=1'],
                       extra_sources=['platform/a733/hw_facts.c'])
@@ -532,15 +538,18 @@ def main():
         resident_elf = pool.submit(build_resident)
         el0_elf = pool.submit(build_el0_abort)
         facts_elf = pool.submit(build_facts)
+        large_elf = pool.submit(build_large, 'build-large', ROOT / 'checks/qemu-os/large-manifest.json')
+        large_big_elf = pool.submit(build_large, 'build-large-too-big', ROOT / 'checks/qemu-os/large-too-big-manifest.json')
+        large_elf, large_big_elf = large_elf.result(), large_big_elf.result()
         os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
             os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result(),
             partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result(), facts_elf.result())
     built = time.monotonic() - started
 
-    def run_case(name, elf, scenario_bytes, input_bytes=data):
+    def run_case(name, elf, scenario_bytes, input_bytes=data, memory='512M'):
         raw, contract, info = session_for(elf, input_bytes)
         inputs = [(info['manifest']['regions'][0]['address'], input_bytes)] if input_bytes is not None else []
-        output, status, seconds = boot(elf, raw, contract, scenario_bytes, inputs, out / (name + '.log'))
+        output, status, seconds = boot(elf, raw, contract, scenario_bytes, inputs, out / (name + '.log'), memory=memory)
         case = Case(name, output, status, seconds, out / (name + '.log'))
         results.append(case)
         return case
@@ -692,6 +701,26 @@ def main():
     c.require(by[('gic.dist.spi97.route_requested', 0)]['value'] == 0x100d8, 'the probe image routes INTID 97 at 0xd8 on core 0')
     c.require(by[('mmio.0x07064000', 0)]['status'] == 'unmeasured', 'the PPU word was read although its gate is closed')
     c.require(hw_facts.matches(table, hw_facts.expectation()), 'the returned table does not satisfy the board expectation')
+
+    # 11. Large regions: the OS takes them from the ledger before the scheduler starts. Two records (a 1 GiB file and a
+    # 64 MiB raw extent) are placed at 0x80000000 and 0xc0000000, the owner's space has one root page, and the
+    # application starts and finishes. Records that ask for more than the board's 3 GiB of upper memory stop the
+    # start before any task runs, with the application preparation named.
+    c = run_case('large-regions-admitted', large_elf, scenario(usb_ready_ms=usb_delay_ms), memory='4G')
+    c.clean()
+    admitted = lines(c.output, 'LARGE-ADMITTED')
+    c.require(len(admitted) == 2, 'expected two admitted regions, saw %d' % len(admitted))
+    c.require((int(admitted[0]['base'], 16), int(admitted[0]['bytes'], 16), admitted[0]['flags']) == (0x80000000, 1 << 30, '0'),
+              'the file region differs: %s' % admitted[0]['line'])
+    c.require((int(admitted[1]['base'], 16), int(admitted[1]['bytes'], 16), admitted[1]['flags']) == (0xc0000000, 64 << 20, '3'),
+              'the extent region differs: %s' % admitted[1]['line'])
+    c.require(all(a['state'] == '0' and a['asid'] == '1' for a in admitted) and admitted[0]['tables'] == '2',
+              'state, ASID or table pages differ: %s' % [a['line'] for a in admitted])
+    c.require(c.main is not None and c.main['name'] == 'large-test' and c.finished is not None and c.finished['status'] == '1',
+              'the application did not run to its finish')
+    c = run_case('large-regions-too-big', large_big_elf, scenario(usb_ready_ms=usb_delay_ms), memory='4G')
+    c.require(c.main is None and not lines(c.output, 'LARGE-ADMITTED'), 'the application started although the ledger refused its regions')
+    c.require(c.failure is not None, 'the refusal left no failure record')
 
     elapsed = time.monotonic() - started
     summary = {'passed': True, 'physical_access': False, 'seconds': round(elapsed, 2), 'build_seconds': round(built, 2),

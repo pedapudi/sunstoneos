@@ -182,11 +182,12 @@ int os_application_export_live(void)
     return fresh.provider==attachment.provider&&fresh.owner==attachment.owner&&fresh.generation==attachment.generation&&
         fresh.polarity==attachment.polarity?1:-1;
 }
-/* The interconnect study (apps/dram-nsi) reads and writes the NSI registers from its worker tasks, which
- * therefore run at EL1. The symbol is weak so that no other image links the application. */
+/* The interconnect studies (apps/dram-nsi and apps/dram-qos) access the NSI registers and the Arm counters from
+ * their worker tasks, which therefore run at EL1. The symbol is weak so that no other image links the application. */
 extern void dram_nsi_worker(void *) __attribute__((weak));
+extern void dram_qos_worker(void *) __attribute__((weak));
 int os_application_task_privileged(void (*entry)(void *),void *context)
-{(void)context;return dram_nsi_worker&&entry==dram_nsi_worker;}
+{(void)context;return (dram_nsi_worker&&entry==dram_nsi_worker)||(dram_qos_worker&&entry==dram_qos_worker);}
 int os_application_pins(struct a733_pin_handoff *pins)
 {
     const struct ss_manifest *m=ss_application.manifest;
@@ -286,6 +287,7 @@ int os_application_deadline(void)
     uint64_t limit=atomic_load_explicit(&finish_by,memory_order_acquire);
     return !limit||os_application_finished()||a733_smp_counter()/24<limit;
 }
+int os_large_prepare(void);
 int os_application_prepare(void)
 {
     const struct os_session *s=os_session_admitted();const struct ss_manifest *m=ss_application.manifest;
@@ -331,6 +333,8 @@ int os_application_prepare(void)
         if(grant.capture_frames>m->audio.max_frames)return 0;
     }
 #endif
+    /* Large regions come from the ledger before any task exists; a refusal stops the application. */
+    if(!os_large_prepare())return 0;
 #ifndef SUNSTONE_BOARD_RESIDENT
     /* board.session holds the contract-derived absolute deadline. The
      * sealed session returned by os_session_admitted retains zero times. */

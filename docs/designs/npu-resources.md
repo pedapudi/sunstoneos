@@ -63,21 +63,23 @@ graph, plus the page tables for the device range these use (`npu_runtime_require
 
 ## Admission and reservation
 
-**Where the declaration lives.** The manifest JSON carries the `npu` section (`tools/sunstone-manifest.py` validates
-it; a list of graphs or links counts as its length). The session record carries it as four bytes in the NPU extent,
-`declared` of `struct os_npu_session`: slots, in-flight depth, graphs, links (`npu_declaration_pack`,
-`include/npu_declaration.h`). The offline session producer writes it with `with_npu_declaration` in
-`apps/os/host.py` from `npu_word` of the manifest. The extent keeps its size.
+**Where the declaration lives.** The manifest JSON carries the `npu` section; `slots`, `in_flight` and `graphs` are
+required and `links` defaults to 0 (`tools/sunstone-manifest.py`; a list counts as its length). The session record
+carries it in the NPU extent, which is version 2 and 288 bytes: `slots`, `in_flight`, `graphs` and `links`, four
+full-width 32-bit fields after the evidence digests (`apps/os/npu-session.h`). Version 1 records are not admitted.
+`apps/os/host.py` reads the manifest (`npu_declaration`) and upgrades a template (`upgrade_services`): the NPU record
+becomes version 2 with the declaration and the thermal record's size field follows.
 
-**What is checked, and where.** At session admission (`apps/os/admission.c`, through `os_npu_declaration_admitted`)
-the cheap checks run, in this order, and the first failure names the resource:
+**What is checked, and where.** At session admission (`apps/os/admission.c`, through `os_npu_declaration_admitted`) the
+cheap checks run, and the first failure names the resource and is left in the first-failure record as the value of a
+record in group NPU:
 
-1. slots: at least 1 and at most `NPU_RUNTIME_SLOTS`; for an image without a queue exactly 1, since it has one client
-   task;
-2. in-flight depth: at least 1 and at most `SS_NPU_QUEUE_MAX_DEPTH`;
-3. graphs: at least 1 and at most `NPU_RUNTIME_MODELS`;
-4. links: at most the queue's edge table;
-5. the declaration against what the image links: at least the slots it uses, at least its graphs, at least its links.
+1. a record that declares nothing is refused as missing; there is no default;
+2. slots: at least 1 and at most 31, the width of a client's command mask (command 0 is the bootstrap); an image
+   without a queue has one client task and so exactly 1;
+3. in-flight depth and graphs: at least 1;
+4. the declaration against what the image links: at least the slots it uses, at least its graphs, at least its links;
+5. the declaration against the tables the image holds (see below).
 
 At start (`os_npu_start`) the memory is computed from the declaration and the linked graphs
 (`npu_runtime_reservation`): a graph that is not admissible, a device address space that the regions overflow, or a
@@ -85,14 +87,12 @@ reservation beyond the pool is refused with the resource's code in the start rec
 declared slots at that moment, the tables are built and the runtime is prepared; nothing is allocated afterwards. A
 queue opened deeper than the declared in-flight depth is refused at open.
 
-**Transition.** A session record that declares nothing (`declared` 0) is given the declaration its image needs and the
-deepest queue, which is what the operating system admitted before declarations existed. This keeps existing session
-templates working. An application that declares gets what it declares, and a declaration that is lower than the image
-needs is refused. Making the declaration mandatory is a one-line change once every template carries one.
-
-**What is still a compile-time array.** The checks above refuse beyond the arrays (8 slots, 16 graphs, depth 64);
-they do not yet size them from the declaration. That needs the runtime and the queue to take storage from the
-reservation, and is the remaining part of principle 3.
+**The tables.** The runtime's catalogue (16 graphs), its slots and the service's clients (8), the queue's ring (64
+entries) and edge table (8 handles of 32 tensors) are arrays fixed when the image is built, and a declaration beyond
+them is refused as "image tables". That is the one refusal that is neither the hardware nor memory. Taking the tables
+from the reservation needs the runtime, the service and the EL0 queue to use storage that the reservation provides;
+the plans of the graphs (280 bytes each) must also leave the stacks of the start-up functions first. It is on the
+backlog (`docs/status/npu.md`).
 
 ## Graphs from the graph
 
@@ -123,9 +123,9 @@ grants, with a bounded wait for the lower priorities. This is the next step afte
 1. **Done:** remove the lifetime quota in the three places above. Host case 26 of `checks/os-npu-service.py`: a session whose `jobs` field
    is 1 runs 120,000 jobs through the real wrapper, runtime and service without failing, and the same wrapper with the
    quota restored fails the case. The admission bound of 8 is removed with it (`apps/os/admission.c`).
-2. **Done:** the declarations in the manifest and the session record; admission and reservation; host case 27 of
-   `checks/os-npu-service.py` for the refusal at each capacity that the current arrays reach (slots, depth, graphs,
-   image needs, a damaged graph, the pool) and for the default declaration. The device address space and page-table
+2. **Done:** the declarations in the manifest and the session record (version 2, full width, mandatory); admission and reservation; host case 27 of
+   `checks/os-npu-service.py` for the refusal at each capacity that the current arrays reach (a missing declaration, slots, depth, graphs, the
+   image's needs and tables, a damaged graph, the pool), and for fields beyond 255 admitted by tables that hold them. The device address space and page-table
    limits cannot be reached with eight slots and graphs of at most `NBG_MODEL_MAX_BYTES` (256 MiB, so at most about 2 GiB of constant regions plus the tensors); their codes are in place
    for when the arrays grow.
 3. Register a graph at run time and fill the model description from it; host cases with a graph that no list
