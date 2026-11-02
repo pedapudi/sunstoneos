@@ -52,6 +52,14 @@ below; their board evidence does not qualify the new idle policy.
    ms gaps. Cold-job latency is reported separately. The PMIC provider exposes no
    DCDC2 current or power readback, so there is no energy evidence unless an
    external meter is added.
+   The first board run of the baseline image on port 3-3 ended at the monitor's
+   refused-return stop (`0x6733`, return SMC `0x733` with status 4) and a
+   watchdog reset; its cause is unresolved. A refused return and a panic now
+   record a crumb naming the failed predicate or the source line, and a refused
+   interrupt bind records the failed clause, so the next failure names itself.
+   The finite images cannot yet use the failure return of the OS image: their
+   refusal ends at the watchdog. No further run is made until the boards are
+   replugged and the run is approved.
 2. **Qualify EL0 and prepared joined streams.** Review and finish the saved
    generic sequence-registration API and returning OS diagnostic, and the public
    ring predicate that tells the power owner a published successor exists (add
