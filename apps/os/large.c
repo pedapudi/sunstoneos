@@ -62,6 +62,8 @@ static struct large_slot *const slots = os_large_slot_storage;
 static struct app_space space;
 static unsigned slot_count;
 static int admitted;
+static void *main_stack;
+void *os_large_main_stack(void) { return main_stack; }
 
 static void install_space(uint64_t kernel_ttbr);
 /* The eight-core images walk their tables without the data caches (TCR_EL1 IRGN0 = ORGN0 = 0,
@@ -86,7 +88,6 @@ int os_large_prepare(void)
     unsigned placed = 0;
     for (unsigned i = 0; manifest && i < manifest->region_count; ++i)
         placed += manifest->regions[i].address >= APP_REGION_FLOOR && manifest->regions[i].address < APP_REGION_BASE;
-    if (!count && !placed) return 1;
     if (admitted) return 0;
     uint64_t ttbr;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
@@ -96,6 +97,8 @@ int os_large_prepare(void)
     os_kernel_l2_slot1(base_l2);
     struct app_region_range usable[APP_REGION_SLOTS];
     unsigned ranges = usable_ranges(base_l1, base_l2, usable, APP_REGION_SLOTS);
+    /* An application with upper memory to use also takes its main stack from it, with a guard block below. */
+    if (!count && !placed && !(manifest && ranges)) return 1;
     uint64_t mmfr0, tcr;
     __asm__ volatile("mrs %0, id_aa64mmfr0_el1\n mrs %1, tcr_el1" : "=r"(mmfr0), "=r"(tcr));
     app_asid_pool_init(&asids, mmfr0, tcr);
@@ -109,6 +112,21 @@ int os_large_prepare(void)
                                   APP_REGION_READ | (r->access & SS_ACCESS_WRITE ? APP_REGION_WRITE : 0))) return 0;
     }
     if (large_admit(&ledger, owner_asid, __start_sunstone_large_regions, count, slots, os_large_capacity)) return 0;
+    /* The main stack: a 2 MiB block that the guard owner holds below it, so that an overflow is an EL0 fault in memory
+     * no space maps. The stack is at the bottom of its own block. Where no extent is free the static stack stays. */
+    if (manifest) {
+        uint64_t base, bytes;
+        if (app_region_acquire(&ledger, APP_REGION_GUARD_OWNER, 2 * APP_REGION_BLOCK, APP_REGION_READ, &base, &bytes) == 0) {
+            (void)app_region_release(&ledger, APP_REGION_GUARD_OWNER, base);
+            if (app_region_acquire_at(&ledger, APP_REGION_GUARD_OWNER, base, APP_REGION_BLOCK, APP_REGION_READ) == 0 &&
+                app_region_acquire_at(&ledger, owner_asid, base + APP_REGION_BLOCK, manifest->stack_bytes,
+                                      APP_REGION_READ | APP_REGION_WRITE) == 0)
+                main_stack = (void *)(uintptr_t)(base + APP_REGION_BLOCK);
+            else if (ledger.entry)
+                for (unsigned i = 0; i < ledger.capacity; ++i)        /* give back what the pair took */
+                    if (ledger.entry[i].owner == APP_REGION_GUARD_OWNER) ledger.entry[i].owner = 0;
+        }
+    }
     arena = (struct app_table_arena){arena_pages, (uintptr_t)arena_pages, APP_SPACE_PAGES, 0};
     int built = app_space_build_l2(&space, &arena, base_l1, base_l2, &ledger, owner_asid, owner_asid, 0) == 0;
     /* The heap record, when the manifest has one, becomes the C library's heap; an image whose library cannot

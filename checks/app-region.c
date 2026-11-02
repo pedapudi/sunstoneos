@@ -575,7 +575,7 @@ int main(void)
         struct { uint64_t mmfr, tcr; unsigned limit; } widths[] = {
             {mmfr_8, 0, 255}, {mmfr_8, as_set, 255},       /* an 8-bit ASID never uses the upper byte */
             {mmfr_16, 0, 255},                             /* 16 bits in the hardware, AS clear: the upper byte is ignored */
-            {mmfr_16, as_set, 65535},
+            {mmfr_16, as_set, 65534},                          /* 65535 owns the guard blocks */
             {mmfr_16 | 0x10, as_set, 255},                 /* an ASIDBits value other than 0 or 2 is not 16 bits */
         };
         for (unsigned w = 0; w < sizeof widths / sizeof widths[0]; ++w) {

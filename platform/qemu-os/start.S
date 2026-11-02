@@ -68,10 +68,18 @@ _start:
     mrs x0, sp_el0
     tst x0, #15
     b.ne .Lsp_violation
+    // A task stack lies in image RAM or in the upper memory that the OS maps for its application (0x48000000 to
+    // 0x79000000), where the main stack comes from the ledger with a guard block below it.
     ldr x1, =__ram_start
     cmp x0, x1
     b.lo .Lsp_violation
     ldr x1, =__exception_stacks
+    cmp x0, x1
+    b.lo 1f
+    movz x1, #0x4800, lsl #16
+    cmp x0, x1
+    b.lo .Lsp_violation
+    movz x1, #0x7900, lsl #16
     cmp x0, x1
     b.hs .Lsp_violation
 1:  ldp x0, x1, [sp], #16

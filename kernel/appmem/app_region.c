@@ -126,7 +126,7 @@ int app_region_release(struct app_region_ledger *l, uint16_t owner, uint64_t bas
 void app_asid_pool_init(struct app_asid_pool *pool, uint64_t id_aa64mmfr0_el1, uint64_t tcr_el1)
 {
     pool->next = 0;
-    pool->limit = APP_ID_AA64MMFR0_ASIDBITS(id_aa64mmfr0_el1) == 2 && APP_TCR_AS(tcr_el1) ? 65535u : 255u;
+    pool->limit = APP_ID_AA64MMFR0_ASIDBITS(id_aa64mmfr0_el1) == 2 && APP_TCR_AS(tcr_el1) ? 65534u : 255u;   /* 65535 owns the guard blocks */
 }
 
 uint16_t app_asid_alloc(struct app_asid_pool *pool)

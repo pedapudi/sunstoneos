@@ -39,6 +39,9 @@ enum app_region_status {
 
 enum { APP_REGION_READ = 1, APP_REGION_WRITE = 2 };   /* EL0 access declared */
 
+/* The owner of a guard block: memory that an application's space never maps, kept from every other region. */
+#define APP_REGION_GUARD_OWNER 0xffffu
+
 struct app_region_range { uint64_t base, bytes; };
 
 struct app_region_entry {

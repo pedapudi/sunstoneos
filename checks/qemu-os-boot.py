@@ -894,6 +894,12 @@ def main():
     c.failed_with('APPLICATION', 0xe24)
     c.require(int(c.failure['value'], 16) == 0x55000000, 'the byte after the slot 1 region faults at %s' % c.failure['value'])
 
+    # The main stack comes from upper memory with an unmapped guard block below it: an overflow is an EL0 fault in the guard.
+    c = run_case('main-stack-overflow-hits-guard', slot1_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(2), '4G')
+    c.failed_with('APPLICATION', 0xe24)
+    guard = int(c.failure['value'], 16)
+    c.require(0x50000000 <= guard < 0x50200000, 'the overflow faulted at %#x, not in the guard block 0x50000000..0x50200000' % guard)
+
     # A heap that the ledger cannot hold stops the start before any task runs.
     c = run_case('heap-too-big', heap_big_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G')
     c.require(c.main is None and not lines(c.output, 'LARGE-ADMITTED'), 'the application started although the ledger refused its heap')
