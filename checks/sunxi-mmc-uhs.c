@@ -130,6 +130,9 @@ int main(void)
            h.card.uhs_outcome == SUNXI_MMC_UHS_SDR104 && h.card.sample_delay == 32);
     read_back(u, &h);
     want_sdr25 = want_reenter = 0;
+    /* A card that fails the sweep the way the board's does: every kind of sampling error, including the FIFO run error. */
+    want_reenter = 1; begin(u, &h, 3); want_reenter = 0; u->tune_kinds = 5; u->s18a = 0; drive(u, &h);
+    assert(h.state == SUNXI_MMC_READY && h.card.uhs_outcome == SUNXI_MMC_UHS_SDR104 && h.card.sample_delay == 32);
     /* Both options are for the UHS-I profile, before open. */
     {
         struct sunxi_mmc g; struct uhs v;

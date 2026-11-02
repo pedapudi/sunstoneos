@@ -37,10 +37,14 @@
 #define TUNE_REPEATS 20u
 #define TUNE_WINDOW 12u
 /* Sampling errors expected at a bad sample delay: response error, response
- * and data CRC, response and data timeout, start and end bit. Others stay
+ * and data CRC, response and data timeout, FIFO run error, start and end bit.
+ * The vendor driver counts each of them as a failed delay (SDXC_INTERRUPT_ERROR_BIT
+ * of sunxi-mmc.h without the hardware-locked bit, bit 12, which is a software
+ * misuse). The FIFO run error (bit 11) was left out first, and the first SDR104
+ * trial on the board faulted in the sweep on a delay that raised it. Others stay
  * terminal during tuning. */
 #define TUNE_TOLERATED ((1u << 1) | (1u << 6) | (1u << 7) | (1u << 8) | (1u << 9) | \
-                        (1u << 13) | (1u << 15))
+                        (1u << 11) | (1u << 13) | (1u << 15))
 #define TUNE_TIMEOUT 0x040000ffu /* About 1.7 ms of data timeout at 150 MHz. */
 #define UHS SUNXI_MMC_SD_UHS_SDR104
 /* SUNXI_MMC_NO_UHS builds without the UHS-I profile: every UHS-I path is

@@ -363,9 +363,21 @@ SDR104 check and set, the module clock change, the register programming, or the 
 State left: the card at 1.8 V (possibly with SDR104 selected; CMD0 at 1.8 V ends that), the bank at 1.8 V until the watchdog reset (whether the selector is restored is
 the first thing the next lifetime's baseline will show), the board back in FEL. No retry has been made.
 
+Reading the stop again: platform stage `IDENTIFY` spans everything the core does from CMD0 to the card being ready for reads, which in the UHS-I profile includes CMD6, the
+module clock change and the CMD19 sweep; the probe's report only becomes valid when the platform reports READY. So the stop was not before CMD6; it was somewhere in that whole
+span. What the trial does that the SDR25 re-entry does not is only what follows ACMD6 (`sdr25_only` is read at one place, after ACMD6): CMD6 check and set, the module clock, the
+register programming and the sweep. Every branch before CMD2 depends on the profile and the mode the same way in both: ACMD41 carries S18R (`reenter`), and a ready answer takes the
+re-entry branch before the S18A test, so S18A clear (what 3-3 answered) is not examined at all, and CMD11 is never sent.
+
+**Host reproduction.** The model's failing sample delays produced three kinds of error (data CRC, wrong pattern, no data), all of which the core tolerates. The vendor driver counts
+every sampling error as a failed delay (`SDXC_INTERRUPT_ERROR_BIT`), among them the FIFO run error (bit 11), start-bit and end-bit errors. With a card model whose failing delays
+include a FIFO run error, the core faults in the sweep at the first such delay: state FAULT, error CONTROLLER, protocol step `P_SD_TUNE`, sample delay 3. That is what the platform saw
+(`fault` in the core, no platform callback first, why 0). The core's `TUNE_TOLERATED` mask omitted bit 11; it now includes it (bit 12, hardware locked, stays terminal), and the card
+model's terminal error in the sweep became bit 12. The cause on the board is inferred from that reproduction, not observed: the stop word of the first trial did not carry the core's
+error or step. The rerun's stop word does.
+
 The probe now publishes, for a lifetime that fails before identification, the core's error (4 bits), its protocol step (6) and half the sample delay it had reached (5)
-next to the platform's line, why and stage (`input.py stop --site 3`). The host models cover this path (SDR104 at 150 and 100 MHz and the no-window fallback pass, with the real
-adapter filter on every write) and do not reproduce a fault, so the cause is something the board does that the models do not.
+next to the platform's line, why and stage (`input.py stop --site 3`). The models run the sweep with all five kinds of sampling error.
 
 ## Board plan
 

@@ -23,7 +23,7 @@ struct uhs {
     unsigned width, sdr, sdr104, sdr104_busy, set_refuses, cmd11_timeout, no_dat_low, no_dat_high;
     unsigned pending_done, no_cc, no_vsd, set_fails, bad_caps, fatal_delay, cmd19, cmd11, cmd6_uhs, cmd6_hs;
     unsigned window[2][2], s18r_seen, cmd11_before_cmd2, cid_seen, dat0_masked;
-    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18;
+    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18, tune_kinds;
     uint64_t answered, gated, restarted, clock_started, done_delay;
 };
 static unsigned passes(struct uhs *u, unsigned d)
@@ -138,11 +138,17 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
             assert(!(m->reg[0x5c/4] & (1u << 31)) && (m->reg[0x100/4] & 0x1fff0001u) == ((64u << 16) | 1u));
             assert(m->reg[8/4] == 0x040000ffu);
             ++u->cmd19; m->data_command = value; m->fifo_total = 64; memcpy(u->data, pattern, 64);
-            if (d == u->fatal_delay) m->reg[0x38/4] |= 1u << 11;
+            if (d == u->fatal_delay) m->reg[0x38/4] |= 1u << 12;   /* hardware locked: terminal, unlike a sampling error */
             else if (!passes(u, d)) {
-                if (d % 3 == 0) m->reg[0x38/4] |= 1u << 7;      /* Data CRC error. */
-                else if (d % 3 == 1) u->data[5] ^= 0x10;         /* Wrong pattern, clean CRC. */
-                else { m->reg[0x38/4] = 1u << 9; m->data_command = 0; m->fifo_total = 0; } /* No data. */
+                /* What a wrong sample point does on the board (the vendor kernel counts every one of these as a failed delay): a data CRC error,
+                 * a wrong pattern with a clean CRC, no data, a FIFO run error (bit 11), start and end bit errors (bits 13 and 15). The kinds
+                 * 3 and 4 were absent from the first model, and the core treated the FIFO run error as terminal. */
+                unsigned kind = u->tune_kinds ? d % u->tune_kinds : d % 3;
+                if (kind == 0) m->reg[0x38/4] |= 1u << 7;      /* Data CRC error. */
+                else if (kind == 1) u->data[5] ^= 0x10;         /* Wrong pattern, clean CRC. */
+                else if (kind == 2) { m->reg[0x38/4] = 1u << 9; m->data_command = 0; m->fifo_total = 0; } /* No data. */
+                else if (kind == 3) m->reg[0x38/4] |= 1u << 11; /* FIFO run error. */
+                else m->reg[0x38/4] |= (1u << 13) | (1u << 15); /* Start and end bit errors. */
             }
         }
         return 1;
