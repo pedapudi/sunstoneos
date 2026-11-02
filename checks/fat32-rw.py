@@ -208,6 +208,24 @@ def recover(binary, img, cut_log=None, cut=None):
     return r.stdout
 
 
+def check_hint(pre, post, out):
+    """After a recovery that rebuilt the free count, the FSInfo next-free hint is the old hint while that cluster is
+    free, else the first cluster after the highest used one, never the start of the FAT because that is where a
+    full scan finds the lowest hole."""
+    if 'recoveries=1' not in out:
+        return
+    old = struct.unpack_from('<I', Volume(pre, BASE).read(BASE + u16(Volume(pre, BASE).read(BASE, 1), 48), 1), 492)[0]
+    v = Volume(post, BASE)
+    info = v.read(BASE + u16(v.read(BASE, 1), 48), 1)
+    free, hint = struct.unpack_from('<II', info, 488)
+    entries = (PART_SECTORS - (v.data - BASE)) // v.spc + 2
+    fat = [u32(v.fat[0], 4 * c) & 0x0fffffff for c in range(entries)]
+    used = [c for c in range(2, entries) if fat[c]]
+    expect = old if 2 <= old < entries and fat[old] == 0 else (max(used) + 1 if used and max(used) + 1 < entries else None)
+    assert expect is None or hint == expect, f'recovery set the hint to {hint}, expected {expect} (old {old})'
+    assert hint >= 2 and (hint >= entries or fat[hint] == 0), f'the hint {hint} is not a free cluster'
+
+
 def worker(args):
     binary, base_img, log, marks, work, lo, hi, double_every, seed = args
     work = Path(work) / f'w{lo}'
@@ -227,7 +245,7 @@ def worker(args):
         shutil.copyfile(prefix, cut)
         pre = work / 'pre.img'
         shutil.copyfile(cut, pre)
-        recover(binary, cut)
+        check_hint(pre, cut, recover(binary, cut))
         verify(cut, groups, k, refs, work, f'cut after {k} sector writes')
         again = recover(binary, cut)
         assert 'sector_writes=0 ' in again, f'second mount wrote: {again}'

@@ -469,6 +469,67 @@ static int cmd_guard(const char *img, uint64_t base, uint64_t sectors, uint32_t 
     return fails != 0;
 }
 
+/* Sequential small reads: the work (path resolutions and chain links followed) must be linear in the file size with a cursor,
+ * and a cursor must never serve a stale size or chain after the file changes. Prints the figures; the Python side asserts. */
+static int cmd_cursor(const char *img, uint64_t base, uint64_t sectors, uint32_t au, uint64_t size)
+{
+    image_fd = open(img, O_RDWR); assert(image_fd >= 0);
+    dev_sectors = (uint64_t)lseek(image_fd, 0, SEEK_END) / 512; part_base = base;
+    model_regions();
+    struct fwr_config cfg = make_config(base, sectors, au, 256);
+    static struct fwr_volume v;
+    assert(!fwr_mount(&v, &cfg));
+    struct fwr_file f;
+    CHECK(fwr_open(&v, &f, "/c.bin", FWR_O_CREATE, size, fbuf1, sizeof fbuf1));
+    CHECK(write_all(&f, 5, 0, size, 4096));
+    CHECK(fwr_close(&f));
+    uint8_t got[1000], want[1000];
+    unsigned bad = 0;
+    /* 1: the whole-call API, one resolution and one walk from the start per call. */
+    uint64_t r0 = v.wear.read_resolves, s0 = v.wear.read_chain_steps;
+    struct fwr_cursor none;
+    for (uint64_t o = 0; o < size; o += sizeof got) {
+        size_t n = size - o < sizeof got ? (size_t)(size - o) : sizeof got, g;
+        memset(&none, 0, sizeof none);
+        if (fwr_read_cursor(&v, &none, "/c.bin", o, got, n, &g) || g != n) { ++bad; break; }
+        stream_fill(want, 5, o, n); if (memcmp(got, want, n)) ++bad;
+    }
+    uint64_t legacy_steps = v.wear.read_chain_steps - s0, legacy_resolves = v.wear.read_resolves - r0;
+    /* 2: one cursor. */
+    r0 = v.wear.read_resolves; s0 = v.wear.read_chain_steps;
+    struct fwr_cursor cur = {0};
+    for (uint64_t o = 0; o < size; o += sizeof got) {
+        size_t n = size - o < sizeof got ? (size_t)(size - o) : sizeof got, g;
+        if (fwr_read_cursor(&v, &cur, "/c.bin", o, got, n, &g) || g != n) { ++bad; break; }
+        stream_fill(want, 5, o, n); if (memcmp(got, want, n)) ++bad;
+    }
+    uint64_t cursor_steps = v.wear.read_chain_steps - s0, cursor_resolves = v.wear.read_resolves - r0;
+    /* 3: a read behind the cursor, and past the end. */
+    size_t g;
+    if (fwr_read_cursor(&v, &cur, "/c.bin", 3, got, 100, &g) || g != 100) ++bad;
+    stream_fill(want, 5, 3, 100); if (memcmp(got, want, 100)) ++bad;
+    if (fwr_read_cursor(&v, &cur, "/c.bin", size, got, 10, &g) || g != 0) ++bad;
+    /* 4: the file changes under the cursor: append and sync (new size), then replace with other bytes. */
+    CHECK(fwr_open(&v, &f, "/c.bin", FWR_O_APPEND, 0, fbuf1, sizeof fbuf1));
+    CHECK(write_all(&f, 5, size, 3000, 1000));
+    CHECK(fwr_close(&f));
+    if (fwr_read_cursor(&v, &cur, "/c.bin", size, got, 1000, &g) || g != 1000) ++bad;
+    stream_fill(want, 5, size, 1000); if (memcmp(got, want, 1000)) ++bad;
+    CHECK(fwr_open(&v, &f, "/c.bin", FWR_O_REPLACE, 0, fbuf1, sizeof fbuf1));
+    CHECK(write_all(&f, 9, 0, 5000, 1000));
+    CHECK(fwr_close(&f));
+    if (fwr_read_cursor(&v, &cur, "/c.bin", 4000, got, 1000, &g) || g != 1000) ++bad;
+    stream_fill(want, 9, 4000, 1000); if (memcmp(got, want, 1000)) ++bad;
+    if (fwr_read_cursor(&v, &cur, "/c.bin", 5000, got, 10, &g) || g != 0) ++bad;
+    CHECK(fwr_unlink(&v, "/c.bin"));
+    if (fwr_read_cursor(&v, &cur, "/c.bin", 0, got, 10, &g) != FWR_NOT_FOUND) ++bad;
+    CHECK(fwr_unmount(&v));
+    printf("cursor size=%llu pieces=%llu legacy_resolves=%llu legacy_steps=%llu cursor_resolves=%llu cursor_steps=%llu bad=%u\n",
+           (unsigned long long)size, (unsigned long long)((size + sizeof got - 1) / sizeof got), (unsigned long long)legacy_resolves,
+           (unsigned long long)legacy_steps, (unsigned long long)cursor_resolves, (unsigned long long)cursor_steps, bad);
+    return bad != 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 11 && !strcmp(argv[1], "scenario"))
@@ -479,6 +540,8 @@ int main(int argc, char **argv)
                            argc > 6 ? argv[6] : NULL, argc > 7 ? strtoull(argv[7], 0, 0) : UINT64_MAX);
     if (argc >= 6 && !strcmp(argv[1], "accounting"))
         return cmd_accounting(argv[2], strtoull(argv[3], 0, 0), strtoull(argv[4], 0, 0), (uint32_t)strtoul(argv[5], 0, 0));
+    if (argc >= 7 && !strcmp(argv[1], "cursor"))
+        return cmd_cursor(argv[2], strtoull(argv[3], 0, 0), strtoull(argv[4], 0, 0), (uint32_t)strtoul(argv[5], 0, 0), strtoull(argv[6], 0, 0));
     if (argc >= 6 && !strcmp(argv[1], "posix"))
         return cmd_posix(argv[2], strtoull(argv[3], 0, 0), strtoull(argv[4], 0, 0), (uint32_t)strtoul(argv[5], 0, 0));
     if (argc >= 7 && !strcmp(argv[1], "plan"))
