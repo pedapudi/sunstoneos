@@ -461,6 +461,14 @@ All four steps are implemented in the OS image and checked on the host and in QE
   points to the same level-2 table, so the code, data, stacks and devices that EL1 runs on between the `MSR` and the
   `ERET` are the same global (nG = 0) entries in every table, while the upper-memory slots carry nG = 1 and an ASID
   and are touched by EL1 only in the loader and drivers, never in the scheduler.
+- **Reading the boot root.** Admission copies the boot root from the platform (`os_kernel_l1_head`, `include/os_space.h`)
+  and never loads from the table's pages. The A733 tables sit in the monitor's 2 MiB block at 0x42000000-0x421fffff,
+  which the EL1 table leaves unmapped (`platform/a733-smp-cached/memory.c`: "Secure monitor and tables remain
+  inaccessible at EL1"). The hardware walks them, but a load through `TTBR0_EL1` faults (level-2 translation fault,
+  ESR 0x96000006, seen on a board in the CPU-return profile at `os_large_prepare`). The A733 platform copies slots 0 to
+  15 into ordinary memory when the tables are complete and refuses to finish if any slot from 16 is nonzero. The
+  QEMU OS platform places its tables alone in an unmapped 2 MiB block at 0x41c00000 the same way, so every QEMU case
+  that admits a region fails with the same ESR if admission loads from the table.
 - **Loader** (`apps/os/large_load.c`): one EL1 task reads each region's FAT32 file (or raw extent) in 128 KiB
   requests through two buffers, copies into the region through the kernel table, hashes, and sets READY only when
   the digest matches; the application's waiters are woken by task notification. A missing file, a failing device

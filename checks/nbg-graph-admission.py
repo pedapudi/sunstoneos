@@ -288,6 +288,10 @@ def main():
          [('nbg_assembly.c', 'if (!stride || !depth || plane % stride) return 0;', 'if (!stride || !depth) return 0;')])
     case('a shader descriptor whose height field disagrees with its channel stride', G,
          long_tensor(128, 0x00300040, 4096, 4096), WIDTH_RULE + DIMENSION_RULE)
+    # 8. The fixed position of a dynamic-fixed-point tensor is host-side metadata that nothing in the loader computes with; a
+    # tensor of large values has a negative one (-2 is a step of 4). No value is refused.
+    for position in (-2, -16, -100, 31, 100, -2 ** 31):
+        admitted_case('a dynamic fixed point tensor with position %d' % position, 'relu', [(INPUT, 40, struct.pack('<i', position))])
     print('PASS %d graphs, %d unseen programs admitted and %d refusal cases' % (len(GRAPHS), len(admitted), len(results)))
 
 

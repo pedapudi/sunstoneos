@@ -7,6 +7,7 @@ struct large_slot {
     uint64_t base, bytes;
     uint32_t index, flags, state, error;
     uint64_t loaded, total, started_us, finished_us;
+    uint64_t copy_us, digest_us;      /* time the loader spent copying into the region and hashing; the rest of the load is the card */
 };
 /* Take every region of the application's records from the ledger, all or nothing. out has out_capacity
  * (at least count) entries and is indexed by the record's index. Returns an app_region_status; on failure

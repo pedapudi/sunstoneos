@@ -99,7 +99,10 @@ const struct os_sd_hw *os_sd_open_owner(void)
      * index (a USB attachment change, the USB-ready event, a deadline hint) may arrive meanwhile and must not end the wait. */
     if (qemu_os_scenario()->fault == QEMU_OS_FAULT_STRAY_NOTIFY) {
         vTaskDelay(pdMS_TO_TICKS(10));
-        os_application_usb_changed();
+        /* The OS gives index 0 to the application only inside its own waits (docs/notifications.md), so the hint comes
+         * from another source of notifications to the application task, as a device hint or a task of the application. */
+        extern TaskHandle_t os_application_main_task(void);
+        xTaskNotifyGive(os_application_main_task());
         vTaskDelay(pdMS_TO_TICKS(40));
     } else {
         vTaskDelay(pdMS_TO_TICKS(50));
