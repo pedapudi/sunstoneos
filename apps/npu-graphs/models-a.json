@@ -1,0 +1,19 @@
+{
+ "npu_models": [
+  "graph-add",
+  "graph-sub",
+  "graph-mul",
+  "graph-relu",
+  "graph-sig",
+  "graph-tanh",
+  "graph-swish",
+  "graph-sm32",
+  "graph-sm64",
+  "graph-chainA",
+  "graph-chainB",
+  "graph-chainC",
+  "graph-deep",
+  "graph-mm",
+  "graph-glu"
+ ]
+}

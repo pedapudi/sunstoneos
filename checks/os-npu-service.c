@@ -214,6 +214,36 @@ const struct os_session *os_session(void) { return &session_record; }
 static unsigned result_open, result_load, result_submit, result_close, finished;
 static unsigned state_after_open, state_after_load, state_after_submit;
 static uint64_t time_open, time_load, time_submit;
+/* Cases 22 and 23: every graph of a catalogue goes through LOAD and SUBMIT of the real runtime and service in turn. The
+ * driver writes each graph's input tensors as files NN-K.bin (graph NN, tensor K) in argv[2]. The register file
+ * completes a job without computing it, so this shows that the runtime admits, places, assembles and runs every graph,
+ * and not what it computes. */
+static const char *input_directory;
+static unsigned graphs_run;
+static void client_all(void)
+{
+    for (unsigned entry = 0; entry < os_npu_model_count; ++entry) {
+        const int loaded = os_npu_load(entry);
+        if (loaded != 1) {
+            fprintf(stderr, "LOAD of graph %u returned %d; load phase %u; first failure site %#x value %#x operation %u observed %llu\n", entry, loaded,
+                    (unsigned)npu.runtime.slot[0].phase,
+                    first_site, first_value, (unsigned)os_npu_first_failure.operation, (unsigned long long)os_npu_first_failure.observed);
+            abort();
+        }
+        const struct ss_npu_model *info = &os_npu_model_info[entry];
+        for (unsigned i = 0; i < info->inputs; ++i) {
+            struct npu_runtime_tensor t;
+            char path[512];
+            snprintf(path, sizeof path, "%s/%02u-%u.bin", input_directory, entry, i);
+            FILE *f = fopen(path, "rb");
+            assert(f && os_npu_tensor(NBG_INPUT, i, &t) == 1);
+            assert(fread(t.data, 1, t.bytes, f) == t.bytes && fgetc(f) == EOF);
+            fclose(f);
+        }
+        assert(os_npu_submit(1000000) == 1);
+        ++graphs_run;
+    }
+}
 static void client(void *unused)
 {
     (void)unused;
@@ -224,6 +254,14 @@ static void client(void *unused)
         (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(25));
     }
     result_open = 1; state_after_open = npu.runtime.service.controller.state; time_open = host_time_us();
+    if (input_directory) {
+        client_all();
+        result_load = result_submit = 1;
+        result_close = (unsigned)os_npu_close();
+        while (!os_npu_stopped()) (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(25));
+        finished = 1;
+        vTaskSuspend(NULL);
+    }
     result_load = (unsigned)os_npu_load(0);
     state_after_load = npu.runtime.service.controller.state; time_load = host_time_us();
     for (unsigned i = 0; i < os_npu_input_count; ++i) {
@@ -247,6 +285,11 @@ static void verify(void *unused)
            first_value, model.triggers);
     assert(finished && live_value && !board_failures && !atomic_load(&os_npu_first_failure.ready));
     assert(result_open == 1 && result_load == 1 && result_submit == 1 && result_close == 1);
+    if (input_directory) {
+        printf("%u graphs loaded and run through the real runtime\n", graphs_run);
+        assert(graphs_run == os_npu_model_count && model.triggers == 1 + graphs_run);
+        return;
+    }
     assert(model.triggers == 2 && npu_service_irq_completions(&npu.runtime.service) == 2);
     /* OPEN is answered while the bootstrap runs; the job starts only after it completes. */
     printf("controller state after open %u load %u submit %u; times us: open %llu load %llu submit %llu\n",
@@ -288,15 +331,16 @@ static void check_constant_region_read_only(void)
 
 int main(int argc, char **argv)
 {
-    assert(argc == 2);
+    assert(argc == 2 || argc == 3);
     const unsigned mode = (unsigned)strtoul(argv[1], NULL, 10);
-    assert(mode == 20 || mode == 21);
+    assert(mode == 20 || mode == 21 || (mode == 22 && argc == 3));
+    if (argc == 3) input_directory = argv[2];
     if (mode == 21) bootstrap_us = 30000;
     runtime_of_model = &npu.runtime;
     model.regs[0x20 / 4] = 0x9000; model.regs[0x24 / 4] = 0x9202;
     model.regs[0x30 / 4] = 0x1000003b; model.regs[0x28 / 4] = 0x20240101; model.regs[1] = IDLE;
     model.masked = 1;
-    session_record.npu.jobs = 1;
+    session_record.npu.jobs = 64;
     const unsigned slots = 1;
     const size_t need = npu_runtime_requirements(os_npu_models, os_npu_model_count, slots);
     assert(need && !(need & (NPU_RUNTIME_GROUP_BYTES - 1)));

@@ -481,6 +481,1143 @@
    "state_patches": 1,
    "command_body_bytes": 80,
    "compiler": "apps/npu-finite/dependent-fixture.py, dependent-pipeline.sh; pinned ACUITY asymmetric_affine uint8; input quantization copied from conv12 output"
+  },
+  {
+   "name": "graph-add",
+   "model": {
+    "bytes": 1784,
+    "sha256": "e2c2ac4121fead4a4e39b6d1130243173a6b3717dfcfe7c18cbbb8ce4de86d8d"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "341c682884d62d224c033e03f9204b0b216dda42141d559ce1aa4ff5fa544508"
+     }
+    },
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[1]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "2679500edcea56cd41ebf155ffefaa67bcc2824a95147bfdfcaa2930cd636408"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 12,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "008415e550def2349b3e2c3a213ee56c06dad77ebb459fe6ab0a4474d71b78b9"
+     }
+    }
+   ],
+   "vip_sram_bytes": 101376,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 3,
+   "state_patches": 1,
+   "command_body_bytes": 184,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-sub",
+   "model": {
+    "bytes": 1784,
+    "sha256": "b343b198ec45c789ad27882e8b72c4986012e373a11a593a535006dd9385c640"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "341c682884d62d224c033e03f9204b0b216dda42141d559ce1aa4ff5fa544508"
+     }
+    },
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[1]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "2679500edcea56cd41ebf155ffefaa67bcc2824a95147bfdfcaa2930cd636408"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 12,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "6b6bd8f92ec7fe60369b3ecd29e59fae3bfe9431186c70a3949b0b25575a5292"
+     }
+    }
+   ],
+   "vip_sram_bytes": 101376,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 3,
+   "state_patches": 1,
+   "command_body_bytes": 184,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-mul",
+   "model": {
+    "bytes": 1680,
+    "sha256": "df82472252d790f165cdbedb9668c3034894cf3e7686850897403748fec5d62f"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "ed0bf40ebd96da3bc7a6872517985d4a079c0a790ed70c46836dd9036686f6e9"
+     }
+    },
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[1]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 12,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "d6c9565bd7222c9386f7cdbaa3ee2acf6d9b4cbf00ac2d4de2101a8976b4015a"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 12,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "39349644add87f7925ad2c3ec3ba7abfb971c1db79da3346906841b66db50a9c"
+     }
+    }
+   ],
+   "vip_sram_bytes": 98816,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 3,
+   "state_patches": 1,
+   "command_body_bytes": 80,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-relu",
+   "model": {
+    "bytes": 5832,
+    "sha256": "86e807d2c2b0888d9580324605be28c450be0f8a37ca9b659041d56dbdae2beb"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "ed0bf40ebd96da3bc7a6872517985d4a079c0a790ed70c46836dd9036686f6e9"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "0d252191ca36e091042de8c8b4665cd6b8c83f8cbe2ee89c5384539ca144cc2c"
+     }
+    }
+   ],
+   "vip_sram_bytes": 98304,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 3,
+   "state_patches": 1,
+   "command_body_bytes": 80,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-sig",
+   "model": {
+    "bytes": 5832,
+    "sha256": "d708d0460bc0d71027a36ac151330e6ffcb6bb3a02b899b043eba0a78f7558d8"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "341c682884d62d224c033e03f9204b0b216dda42141d559ce1aa4ff5fa544508"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 15,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "0269ec560589ebc91e37094797092c1627c1151a622d2d13533c6b8f2ef02a0c"
+     }
+    }
+   ],
+   "vip_sram_bytes": 98304,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 3,
+   "state_patches": 1,
+   "command_body_bytes": 80,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-tanh",
+   "model": {
+    "bytes": 5832,
+    "sha256": "1d3375e24d4112cf8d199ef8adbf9dfce870e0c3eb9f85f4f3d7196309ee8e6f"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "341c682884d62d224c033e03f9204b0b216dda42141d559ce1aa4ff5fa544508"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "15e93752d977e8f63fdb09e23815e0bba054016460803574336dd342a82350ca"
+     }
+    }
+   ],
+   "vip_sram_bytes": 98304,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 3,
+   "state_patches": 1,
+   "command_body_bytes": 80,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-swish",
+   "model": {
+    "bytes": 5832,
+    "sha256": "e82d901ed539f0baf97834bb7aebd6b9be0b486bdef8e9a4a0f4378a61a005e1"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "ed0bf40ebd96da3bc7a6872517985d4a079c0a790ed70c46836dd9036686f6e9"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "84e733a8260b0d7399aadb4f9225c8a704a881177e0561f682ef120a9a70fa60"
+     }
+    }
+   ],
+   "vip_sram_bytes": 98304,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 3,
+   "state_patches": 1,
+   "command_body_bytes": 80,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-ln176",
+   "model": {
+    "bytes": 10192,
+    "sha256": "39d95590038fa238e3ba393c48094ee5113ba9bf03b69feb032b0be468533646"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "20a2c7f0e6bf90751024420c60c12994c7635ab32605f14d38ec4c1f83d299f3"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "dc1112f15842bfbcf77228e6dcd88d280eee96062a08cbfa76cfe0c0d66182f5"
+     }
+    }
+   ],
+   "vip_sram_bytes": 120832,
+   "pool_bytes": 0,
+   "nn_operations": 7,
+   "descriptor_patches": 18,
+   "state_patches": 7,
+   "command_body_bytes": 920,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-ln64",
+   "model": {
+    "bytes": 8416,
+    "sha256": "4e6e2ec4b1711a6eeac0e35d4b5232860fc75db2600d975a8a6d7c315be6c6f1"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      64,
+      16
+     ],
+     "logical_bytes": 2048,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2048,
+      "sha256": "cf4adfd94f20316e810fb8e772cc88efd7acd2d92a7d30fecafa0fceb82f1868"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      64,
+      16
+     ],
+     "logical_bytes": 2048,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2048,
+      "sha256": "f0cffeeffcd69d3b4abada982e20bef5573afb6852e42eed7e37e869f0ea2906"
+     }
+    }
+   ],
+   "vip_sram_bytes": 106496,
+   "pool_bytes": 0,
+   "nn_operations": 5,
+   "descriptor_patches": 13,
+   "state_patches": 5,
+   "command_body_bytes": 680,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-sm64",
+   "model": {
+    "bytes": 11744,
+    "sha256": "48875d560c80c31b5de71bf445abec02bbd62eec1e9a5e67b73a174dcd5f813c"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      64,
+      16
+     ],
+     "logical_bytes": 2048,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2048,
+      "sha256": "b2c688ec0d26cbec97305edebac58a439fd8436120b9fce517c2454a8cd11d84"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      64,
+      16
+     ],
+     "logical_bytes": 2048,
+     "name": "uid_1_sub_uid_1_out_0",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2048,
+      "sha256": "22c2bd8c7f9373e60dd427605db6fb540ad43e96d5c1a250c837625469edadd1"
+     }
+    }
+   ],
+   "vip_sram_bytes": 103168,
+   "pool_bytes": 0,
+   "nn_operations": 5,
+   "descriptor_patches": 9,
+   "state_patches": 5,
+   "command_body_bytes": 616,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-sm32",
+   "model": {
+    "bytes": 11744,
+    "sha256": "be2c7252de014e6a678ed5b397082106932706c07bf4835b99992efc4121693e"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      32,
+      16
+     ],
+     "logical_bytes": 1024,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 1024,
+      "sha256": "77a874723ad423cf924ec31d09d0356115bd30fb02decdaa2b6c61e82531350c"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      32,
+      16
+     ],
+     "logical_bytes": 1024,
+     "name": "uid_1_sub_uid_1_out_0",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 1024,
+      "sha256": "f304f551e55bea2b96ea21c3613c33b9d479365d91fd2931149c8052489eb40c"
+     }
+    }
+   ],
+   "vip_sram_bytes": 101120,
+   "pool_bytes": 0,
+   "nn_operations": 5,
+   "descriptor_patches": 9,
+   "state_patches": 5,
+   "command_body_bytes": 616,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-chainA",
+   "model": {
+    "bytes": 2404,
+    "sha256": "615452aa680a8c5f08faf634379b25d54d97dcfe7e6db9302875e156207e9534"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "ed0bf40ebd96da3bc7a6872517985d4a079c0a790ed70c46836dd9036686f6e9"
+     }
+    },
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[1]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 12,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "d6c9565bd7222c9386f7cdbaa3ee2acf6d9b4cbf00ac2d4de2101a8976b4015a"
+     }
+    },
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[2]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "2ff65426b7b1128e8ba38732182fc4ce4f9b40fb617db2bfcb795b897440a31d"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 12,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "24b258091065cd6cd04bbb037441cf27deb6990f27c5e3c700510a9ce56762cf"
+     }
+    }
+   ],
+   "vip_sram_bytes": 104448,
+   "pool_bytes": 0,
+   "nn_operations": 2,
+   "descriptor_patches": 8,
+   "state_patches": 2,
+   "command_body_bytes": 216,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-chainB",
+   "model": {
+    "bytes": 2404,
+    "sha256": "0a538c64d447172e64baabb4d0c639576e42ad7b6b5e3fd4b00f2e12ac2a437b"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "ed0bf40ebd96da3bc7a6872517985d4a079c0a790ed70c46836dd9036686f6e9"
+     }
+    },
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[1]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 12,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "d6c9565bd7222c9386f7cdbaa3ee2acf6d9b4cbf00ac2d4de2101a8976b4015a"
+     }
+    },
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[2]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "2ff65426b7b1128e8ba38732182fc4ce4f9b40fb617db2bfcb795b897440a31d"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 12,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "24b258091065cd6cd04bbb037441cf27deb6990f27c5e3c700510a9ce56762cf"
+     }
+    }
+   ],
+   "vip_sram_bytes": 104448,
+   "pool_bytes": 0,
+   "nn_operations": 2,
+   "descriptor_patches": 8,
+   "state_patches": 2,
+   "command_body_bytes": 216,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-chainC",
+   "model": {
+    "bytes": 2404,
+    "sha256": "2de0a83b824b1ce1a74c52b057bc7c29fc21d70e16436f2f599b2acabd113868"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "341c682884d62d224c033e03f9204b0b216dda42141d559ce1aa4ff5fa544508"
+     }
+    },
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[1]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "2679500edcea56cd41ebf155ffefaa67bcc2824a95147bfdfcaa2930cd636408"
+     }
+    },
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[2]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "31842e7ec708a1b1b9dcd76e429c13992af69a957f1d8bf4a6335cac1746a45c"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 11,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "19035f035d9ab5a8a6de304a8aeeb34b425a2142af6b3848cc8612c34bcad276"
+     }
+    }
+   ],
+   "vip_sram_bytes": 104448,
+   "pool_bytes": 0,
+   "nn_operations": 2,
+   "descriptor_patches": 8,
+   "state_patches": 2,
+   "command_body_bytes": 216,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-mm",
+   "model": {
+    "bytes": 2784,
+    "sha256": "09647ac2889475207618918726f9f236f64a2023d3ca0b6ce7bf2c34734db2ad"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      44,
+      16,
+      4
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "ed0bf40ebd96da3bc7a6872517985d4a079c0a790ed70c46836dd9036686f6e9"
+     }
+    },
+    {
+     "dimensions": [
+      16,
+      44,
+      4
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[1]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 12,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "d6c9565bd7222c9386f7cdbaa3ee2acf6d9b4cbf00ac2d4de2101a8976b4015a"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      16,
+      16,
+      4
+     ],
+     "logical_bytes": 2048,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 10,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2048,
+      "sha256": "0f9dd594b34c32c6e74779fc4bdcc31baa5ae1e4564f0c61f1715fe84664c134"
+     }
+    }
+   ],
+   "vip_sram_bytes": 101120,
+   "pool_bytes": 0,
+   "nn_operations": 4,
+   "descriptor_patches": 12,
+   "state_patches": 4,
+   "command_body_bytes": 152,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-glu",
+   "model": {
+    "bytes": 2680,
+    "sha256": "7c7a3c47a77dcee844fbbef1cf4499b7d57d632707fea0049f6c5ce425e48ff0"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "ed0bf40ebd96da3bc7a6872517985d4a079c0a790ed70c46836dd9036686f6e9"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      88,
+      16
+     ],
+     "logical_bytes": 2816,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2816,
+      "sha256": "2610ac186dad6e658a4cc28eab08eec1af0ee5ce471a6eb388363208dd50fc8b"
+     }
+    }
+   ],
+   "vip_sram_bytes": 112128,
+   "pool_bytes": 0,
+   "nn_operations": 3,
+   "descriptor_patches": 11,
+   "state_patches": 3,
+   "command_body_bytes": 296,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-deep",
+   "model": {
+    "bytes": 7568,
+    "sha256": "f187c9dca7c7d463fe9408b8f9825f024e6c47c675acfe382dfdf5a88d404c34"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "ed0bf40ebd96da3bc7a6872517985d4a079c0a790ed70c46836dd9036686f6e9"
+     }
+    },
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[1]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 12,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "d6c9565bd7222c9386f7cdbaa3ee2acf6d9b4cbf00ac2d4de2101a8976b4015a"
+     }
+    },
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "input/output[2]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "31842e7ec708a1b1b9dcd76e429c13992af69a957f1d8bf4a6335cac1746a45c"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      176,
+      16
+     ],
+     "logical_bytes": 5632,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 10,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 5632,
+      "sha256": "90b85dfef22105eb676f6dcff8f91be53e9ef3c5760a6124869b7273e45add8a"
+     }
+    }
+   ],
+   "vip_sram_bytes": 110080,
+   "pool_bytes": 0,
+   "nn_operations": 4,
+   "descriptor_patches": 18,
+   "state_patches": 4,
+   "command_body_bytes": 152,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
   }
  ]
 }

@@ -358,8 +358,10 @@ static void targets(struct npu_runtime_slot *s, const struct nbg_assembly_layout
     memset(s->targets, 0, sizeof(s->targets));
     uint32_t nn = l->buffers[NBG_ALLOC_NN].allocation_bytes;
     s->targets[NBG_ALLOC_NN] = (struct nbg_assembly_buffer){(void *)s->constant.cpu, nn, s->constant.device};
-    s->targets[NBG_ALLOC_COEFF] = (struct nbg_assembly_buffer){(void *)(s->constant.cpu + nn),
-        l->buffers[NBG_ALLOC_COEFF].allocation_bytes, s->constant.device + nn};
+    /* A graph without coefficients has an empty slot, which the assembler requires to be NULL, 0, 0. */
+    if (l->buffers[NBG_ALLOC_COEFF].allocation_bytes)
+        s->targets[NBG_ALLOC_COEFF] = (struct nbg_assembly_buffer){(void *)(s->constant.cpu + nn),
+            l->buffers[NBG_ALLOC_COEFF].allocation_bytes, s->constant.device + nn};
     if (l->dynamic) {
         const uint32_t at = nn + l->buffers[NBG_ALLOC_COEFF].allocation_bytes;
         s->targets[nbg_layout_dynamic_index(l)] = (struct nbg_assembly_buffer){(void *)(s->constant.cpu + at),
@@ -518,7 +520,9 @@ static int load_work(struct npu_runtime *rt)
         const uint32_t total = coeff_bytes + dyna_bytes;
         size_t n = total - s->offset;
         if (n > NPU_RUNTIME_CACHE_CHUNK) n = NPU_RUNTIME_CACHE_CHUNK;
-        if (s->offset < coeff_bytes) {
+        if (!n) {
+            /* Neither coefficients nor a dynamic-input section remain to copy. */
+        } else if (s->offset < coeff_bytes) {
             if (n > coeff_bytes - s->offset) n = coeff_bytes - s->offset;
             memcpy((unsigned char *)s->targets[NBG_ALLOC_COEFF].cpu + s->offset, coeff.data + s->offset, n);
         } else {
