@@ -49,7 +49,7 @@ static void idle_start(void)
     if(idle_policy()==2)return;
     /* The benchmark images retain on any resume over 100 us; production queues count it. */
     const struct npu_runtime_queue_power_config config={
-        .part=&a733_npu_idle_part,.enabled=idle_policy(),.strict=1,.priority=3,.quiet=npu_finite_runtime_irq_quiet};
+        .part=&a733_npu_idle_part,.enabled=idle_policy(),.strict=0,.priority=3,.quiet=npu_finite_runtime_irq_quiet};
     if(npu_runtime_queue_power_start(&direct,&config)!=1||!direct.power_task)retained(82);
 }
 static unsigned idle_ready(void)
@@ -215,10 +215,14 @@ static unsigned run_idle_cycles(void)
 static void idle_report(void)
 {
     const struct npu_idle_counters *c=&direct.power.counters;
+    /* The first cycle whose register values differed from the expected ones, else the latest cycle. */
+    const struct npu_idle_observed *o=direct.power.first_deviation.deviation?&direct.power.first_deviation:&direct.power.observed;
     const uint64_t values[]={idle_policy(),idle_warm_owner_ticks,idle_warm_owner_elapsed,idle_warm_wakes,
         c->gates,c->resumes,c->writes,c->gated_ticks,c->resume_max_ticks,c->resume_over_budget,
         c->owner_cpu_ticks,c->owner_wakes,direct.irq_cpu_ticks,direct.power_stats.quiet_retries,
-        idle_margin[0],idle_margin[1],idle_margin[2]};
+        idle_margin[0],idle_margin[1],idle_margin[2],
+        c->value_deviations,o->deviation,o->gate_clock,o->gate_shader,o->gate_status,o->resume_entry_clock,
+        o->resume_clock,o->resume_shader,o->resume_clock_after,o->resume_shader_after,o->resume_status};
     platform_puts("NPU_IDLE=\n");
     for(unsigned i=0;i<sizeof values/sizeof values[0];++i){platform_hex(values[i]);platform_puts("\n");}
     for(unsigned w=0;w<WINDOWS;++w) {

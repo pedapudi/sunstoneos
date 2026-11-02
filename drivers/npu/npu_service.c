@@ -720,7 +720,7 @@ static int idle_hint(struct npu_service *s)
         s->controller.state = A733_NPU_FAULT; s->controller.fault = A733_NPU_IO;
         return 1;
     }
-    if (idle != UINT32_C(0x7fffffff)) return 0;
+    if ((idle & UINT32_C(0x7fffffff)) != UINT32_C(0x7fffffff)) return 0;
     ++s->runtime->idle_hints;
     atomic_fetch_or_explicit(&s->irq_pending, IRQ_EVENT, memory_order_release);
     return 1;

@@ -329,21 +329,34 @@ the full-scale fields established at OPEN.
 | --- | --- |
 | Suspend | Read `+0x000`; preserve unrelated fields and scaler bits 8:2. Set bit 0, write with bit 9 high, then write with bit 9 low. Wait at least 1 µs. |
 | Resume | Read `+0x000`; preserve unrelated fields and scaler bits 8:2. Clear bit 0, write with bit 9 high, then write with bit 9 low. Wait at least 1 µs. Read `+0x10c`, preserve scaler bits 7:1, then pulse bit 0 high and low. |
-| Publish readiness | Verify gate/load bits, both full-scale fields, unchanged top-point clock configuration, full idle and no unretired completion. Publish IDLE_ON only after these checks pass. |
+| Publish readiness | Read `+0x000`, `+0x10c` and the idle word, record them, and publish IDLE_ON. Only a gate bit still set in `+0x000` after the ungate pulse refuses. |
 
 Dependent writes complete with DSB in the native adapter. The vendor helpers
-do not verify gated readback or bound failures. The readback policy is fixed as
+do not verify gated readback or bound failures, and neither does this driver.
+Register values are read and written back as the vendor does, and values other
+than the ones established at OPEN are recorded, not refused. The policy is as
 follows. The implementation performs no register read after the final suspend
 write. While the clocks are suspended the only permitted read is `+0x000` at
-resume entry, where it must equal the stored gate value with bit 0 set. After
-the ungate pulse and the 1 µs settle, `+0x000` must equal the stored gate value.
-The owner then reads `+0x10c` and requires the value stored before suspension,
-pulses bit 0 high and low, and rechecks `+0x000`, `+0x10c` and full idle. All
+resume entry. The value read there is recorded and its gate and pulse bits are
+cleared for the ungate writes, so a lost suspend write is harmless. After
+the ungate pulse and the 1 µs settle, `+0x000` is read again: a gate bit that is
+still set means the clocks are off and the queue is retained, since the next job
+could not complete. Every other bit is recorded. The owner then reads `+0x10c`,
+pulses bit 0 high and low on the value it read, and records `+0x000`, `+0x10c`
+and the idle word again. The idle word is compared as the vendor does
+(`vipdrv_hw_wait_idle`): under the mask `0x7fffffff`, so that bit 31 is ignored.
+The gate requires the idle word under that mask, and a unit that is not idle
+refuses it. A report carries the register values of the first cycle that
+differed from the expected values, or of the latest cycle when none differed,
+and the number of such cycles. All
 other offsets are refused by the adapter, and the host fixtures fail any read of
 an unlisted or destructive register and any read other than `+0x000` while
-suspended. The full-idle proof from before suspension is preserved in the stored
-state and rechecked after resume. A readback failure retains ownership; it cannot
+suspended. A readback failure of an operation retains ownership; it cannot
 justify another power operation.
+
+The resume budget of 100 µs is a limit that the benchmark images measure and
+report. The images do not retain the queue when a resume exceeds it. The
+comparison script applies the limit to the measured maximum.
 
 The expected gate-only resume cost is the mandated 1 µs settle plus MMIO,
 barriers, verification and owner scheduling. That expression is a source-based

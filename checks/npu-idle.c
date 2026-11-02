@@ -20,6 +20,7 @@ struct device {
     uint32_t failed_offset, failed_value;
     unsigned writes, reads, resume_reads, completed_pulses;
     unsigned stuck, bad_clock, bad_shader, bad_idle, slow;
+    uint32_t read_shader;
     struct register_latency effect;
     struct access trace[TRACE_MAX];
 };
@@ -54,7 +55,7 @@ static int read32(void *cookie,uint32_t offset,uint32_t *value)
     ++d->reads;
     switch(offset){
     case 0:*value=d->clock;if(d->bad_clock&&!d->gated&&d->completed_pulses>=2)*value^=4;break;
-    case 0x10c:*value=d->shader;if(d->bad_shader&&d->completed_pulses>=2)*value^=2;break;
+    case 0x10c:*value=d->shader;if(d->bad_shader&&d->completed_pulses>=2)*value^=2;d->read_shader=*value;break;
     case 4:*value=d->bad_idle?0:d->status;break;
     default:assert(!"unexpected/destructive NPU register read");return 0;
     }
@@ -69,7 +70,8 @@ static int write32(void *cookie,uint32_t offset,uint32_t value)
     apply(d);++d->writes;trace(d,1,offset,value);
     assert(!d->gated||offset==0);
     if(offset==0){
-        assert((value&~UINT32_C(0x201))==(CLOCK&~UINT32_C(0x201)));
+        /* The vendor writes back what it read: every bit but the two controls is the register's own. */
+        assert((value&~UINT32_C(0x201))==(d->clock&~UINT32_C(0x201)));
         if(value&0x200){assert(!d->pulse);d->pulse=1;d->high_value=value;}
         else{
             assert(d->pulse&&value==(d->high_value&~UINT32_C(0x200)));
@@ -81,7 +83,7 @@ static int write32(void *cookie,uint32_t offset,uint32_t value)
     }else if(offset==0x10c){
         assert(!d->gated&&!d->effect.pending);
         assert(d->ticks-d->low_at>=d->settle);
-        assert((value&~1u)==(SHADER&~1u));
+        assert((value&~1u)==(d->read_shader&~1u));
         if(value&1){assert(!d->pulse);d->pulse=1;}
         else{assert(d->pulse);d->pulse=0;}
         d->shader=value;
@@ -219,32 +221,59 @@ static void failures(void)
     }
     printf("injected every callback failure: %u suspend, %u resume\n",gate_calls,resume_calls);
 }
+/* Values other than the expected ones are recorded and do not refuse; only a lost ungate
+ * (the gate bit still set after the pulse), an idle word below the vendor's mask before
+ * gating and the strict budget retain the queue. */
 static void readback(void)
 {
+#ifdef NPU_IDLE_VALUE_RECORDING
+    const unsigned dev[]={NPU_IDLE_DEV_RESUME_CLOCK,NPU_IDLE_DEV_RESUME_SHADER,NPU_IDLE_DEV_RESUME_STATUS};
+#endif
     for(unsigned at=0;at<3;++at){
         struct device d;fresh(&d,24000000,1);suspend(&d);
         if(at==0)d.bad_clock=1;
         if(at==1)d.bad_shader=1;
         if(at==2)d.bad_idle=1;
-        assert(npu_idle_resume(&d.idle)!=1);
-        assert(d.idle.failure.site==(at==0?NPU_IDLE_GATE_VALUE:at==1?NPU_IDLE_SHADER_VALUE:NPU_IDLE_FULL_IDLE));
-        retained(&d);
+        assert(npu_idle_resume(&d.idle)==1&&d.idle.phase==NPU_IDLE_ON);
+        assert(d.idle.counters.resumes==1);
+#ifdef NPU_IDLE_VALUE_RECORDING
+        assert(d.idle.counters.value_deviations==1&&d.idle.first_deviation.deviation&dev[at]);
+#endif
     }
-    for(unsigned at=0;at<5;++at){
+    /* A cycle that gates with unexpected register values writes them back, records them and
+     * resumes. */
+    for(unsigned at=0;at<4;++at){
         struct device d;fresh(&d,24000000,1);mature(&d);
         if(at==0)d.clock^=4;
         if(at==1)d.shader^=2;
         if(at==2)d.clock|=0x200;
         if(at==3)d.shader|=1;
-        if(at==4)d.bad_idle=1;
-        assert(npu_idle_gate(&d.idle)!=1&&d.writes==0);retained(&d);
+        assert(npu_idle_gate(&d.idle)==1&&d.writes==2);
+#ifdef NPU_IDLE_VALUE_RECORDING
+        assert(d.idle.observed.deviation&(at%2?NPU_IDLE_DEV_GATE_SHADER:NPU_IDLE_DEV_GATE_CLOCK));
+#endif
+        d.pulse=0;apply(&d);
+        assert(npu_idle_resume(&d.idle)==1);
+#ifdef NPU_IDLE_VALUE_RECORDING
+        assert(d.idle.counters.value_deviations==1);
+        assert(d.idle.first_deviation.deviation&(at%2?NPU_IDLE_DEV_GATE_SHADER:NPU_IDLE_DEV_GATE_CLOCK));
+#endif
     }
-    /* A lost suspend write is observed by resume's safe +0 read. No gated
-     * status read is added merely to prove that suspension took effect. */
+    /* The idle word compares under the vendor's mask: bit 31 is ignored; a unit not idle refuses. */
+    struct device masked;fresh(&masked,24000000,1);mature(&masked);masked.status=FULL_IDLE|UINT32_C(0x80000000);
+    assert(npu_idle_gate(&masked.idle)==1);
+    struct device busy;fresh(&busy,24000000,1);mature(&busy);busy.bad_idle=1;
+    assert(npu_idle_gate(&busy.idle)!=1&&busy.writes==0&&busy.idle.failure.site==NPU_IDLE_FULL_IDLE);retained(&busy);
+    /* A lost suspend write shows at resume as an entry value without the gate bit: recorded,
+     * and the ungate sequence is harmless. */
     struct device lost;fresh(&lost,24000000,1);mature(&lost);lost.stuck=1;
     assert(npu_idle_gate(&lost.idle)==1);
-    assert(npu_idle_resume(&lost.idle)!=1);retained(&lost);
-    /* A lost resume write must be caught through +0 before touching +10c.
+    lost.stuck=0;lost.effect.pending=0;lost.pulse=0; /* only the suspend write was lost */
+    assert(npu_idle_resume(&lost.idle)==1);
+#ifdef NPU_IDLE_VALUE_RECORDING
+    assert(lost.idle.first_deviation.deviation&NPU_IDLE_DEV_RESUME_ENTRY);
+#endif
+    /* A lost resume write leaves the gate bit set: the queue is retained before +10c is read.
      * read32 asserts immediately if production performs a forbidden read. */
     struct device stuck;fresh(&stuck,24000000,1);suspend(&stuck);stuck.stuck=1;
     assert(npu_idle_resume(&stuck.idle)!=1);
@@ -263,6 +292,13 @@ static void budget(void)
     assert(d.idle.counters.resume_over_budget==1&&d.idle.counters.resume_max_ticks>2400);
     assert(d.idle.counters.resumes==1&&!d.gated);
     strict_mode=1;
+}
+/* Bit 31 of the idle word is outside the vendor's mask and does not prevent gating. */
+static void idle_mask(void)
+{
+    struct device d;fresh(&d,24000000,1);mature(&d);d.status=FULL_IDLE|UINT32_C(0x80000000);
+    assert(npu_idle_gate(&d.idle)==1&&d.idle.phase==NPU_IDLE_SUSPENDED);
+    assert(npu_idle_resume(&d.idle)==1);
 }
 static void retention(void)
 {
@@ -285,6 +321,7 @@ int main(int argc,char **argv)
     else if(!strcmp(argv[1],"readback"))readback();
     else if(!strcmp(argv[1],"retention"))retention();
     else if(!strcmp(argv[1],"budget"))budget();
+    else if(!strcmp(argv[1],"idle-mask"))idle_mask();
     else assert(!"unknown case");
     printf("PASS %s\n",argv[1]);return 0;
 }

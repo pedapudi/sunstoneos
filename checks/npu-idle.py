@@ -16,7 +16,7 @@ CHECK_INPUTS = ['include/npu_idle.h', 'include/a733_npu_idle.h', 'drivers/npu/np
                 'checks/npu-idle.c', 'checks/register_latency.h',
                 'checks/npu-idle.py', 'checks/harness.py']
 CASES = ('nominal', 'threshold', 'cancellation', 'admission',
-         'delayed-effects', 'partial-failure', 'readback', 'retention', 'budget')
+         'delayed-effects', 'partial-failure', 'readback', 'retention', 'budget', 'idle-mask')
 
 
 def main():

@@ -571,9 +571,16 @@ the suspend or resume path. The only timer is the 10 s power-off timer
 | Idle word read after resume | same | Yes. Not read by the vendor; expected full idle with no work |
 | Resume budget 100 µs, one-microsecond delay per pulse | `settle` | Yes, in strict mode. The vendor uses 1 µs and has no budget |
 
-No gated-state read other than `+0x000` occurs, as in the vendor. These
-checks are unproven on hardware: the gate, the pulses and the resume have not
-run.
+No gated-state read other than `+0x000` occurs, as in the vendor. The
+divergences that can refuse on hardware are changed as follows. The idle word
+is compared under the mask `0x7fffffff`. The scaler fields, the pulse and gate
+bits before the gate, and the resume readbacks of `+0x000`, `+0x10c` and the
+idle word are recorded and do not refuse; the resume writes back the value that
+it read with the gate and pulse bits cleared. A gate bit still set after the
+ungate pulse refuses, because the clocks would stay off. The 100 µs budget is a
+measured value with its limit in the benchmark images. The gate, the pulses and
+the resume have not run on hardware; the first run of the control and gating
+images tests them.
 
 ### Finite shared-timer composition
 
@@ -691,10 +698,25 @@ A normal return with the receipt of `expect.json` ends the run.
   change. If the bind still refuses, the record value names the clause:
   `0xb08` would mean the Nonsecure priority read is not the shifted Secure
   value, in which case the PPI 27 board read does not transfer to SPIs.
-- **Next idle-gating run.** The reference predicts that the gate sequence
-  matches the vendor's writes and delays. The checks added by SunstoneOS
-  are the only way it can refuse: the idle word equality (bit 31), the
-  resume equalities for `+0x000` and `+0x10c`, and the strict 100 µs budget.
-  Any refusal there is a model divergence, not a vendor difference. The PPI 27
-  composition refuses only on inherited CNTV or PPI 27 state, and the setup
-  assertion now expects 0xb0.
+- **Next idle-gating run** (control, then gating, on port 3-3 at 852 MHz and
+  800 mV; no rail, PCK4, PLL or voltage change). The gate and resume follow the
+  vendor's writes and delays (this section, "Idle gating"). The control makes
+  every decision of the gating image and writes no register. The checks added
+  by SunstoneOS that could refuse are reduced to: the idle word under the mask
+  `0x7fffffff` before the gate (a unit not idle), a gate bit still set in
+  `+0x000` after the ungate pulse, a settle wait beyond its 1 ms bound, and a
+  failed register access or lifetime check. Every other readback is recorded
+  and does not refuse, and the 100 µs budget is a measured value. Prediction:
+  the gating image returns normally with output matching in every window and
+  cold group; 30 cycles after the 100 ms gap and 100 after the 11 ms gap gate
+  and resume, none after the 9 ms gap; `register_values.deviation_mask` is 0
+  (the values of `+0x000` and `+0x10c` equal those written at startup, and the
+  idle word has bit 31 clear or ignored); the largest resume is near the 1 µs
+  settle plus register latency, below 100 µs. A nonzero deviation mask names
+  which value differed (`1` and `2` before the gate, `4`, `8`, `16`, `32` at
+  resume entry, clock, shader and idle word) and carries the words. A resume
+  above 100 µs is shown by `resume_budget.within_limit` false and fails only the
+  comparison. A retained failure shows `NPU_FAILURE` with the site: `FULL_IDLE`
+  for the idle mask, `GATE_VALUE` for a gate bit still set, `SETTLE` for the
+  wait. The PPI 27 composition refuses only on inherited CNTV or PPI 27 state,
+  and the setup assertion expects 0xb0.
