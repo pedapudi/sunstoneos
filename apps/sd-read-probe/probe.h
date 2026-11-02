@@ -15,8 +15,24 @@ struct sdp_input {
     uint64_t magic;
     uint32_t reads, blocks, first, capture_count;
     uint32_t capture[SDP_MAX_CAPTURE];
+    uint64_t fat_first, fat_sectors;   /* a FAT32 partition to inspect read-only; fat_sectors zero: none */
 };
 
+#define SDP_FAT_ENTRIES 64u
+struct sdp_fat_entry {
+    char name[64];                  /* truncated to 63 characters */
+    uint32_t size, first_cluster;
+    uint8_t attributes, long_name, truncated, reserved;
+};
+/* The volume and its root directory, read through the read-only FAT32 reader. */
+struct sdp_fat {
+    int32_t mount_status, free_status, list_status;
+    uint32_t sectors_per_cluster, reserved_sectors, fats, fat_sectors, root_cluster, clusters;
+    uint32_t volume_id, hint_free, hint_next, counted_free;
+    uint64_t data_start, partition_first, partition_sectors;
+    uint32_t entry_count, entries_seen;
+    struct sdp_fat_entry entry[SDP_FAT_ENTRIES];
+};
 struct sdp_timing { uint32_t command_us, first_byte_us, done_us, clean_us, invalidate_us, polls; };
 
 struct sdp_report {
@@ -32,7 +48,8 @@ struct sdp_report {
     uint32_t elapsed[SDP_MAX_READS], crc[SDP_MAX_READS];
     struct sdp_timing timing[SDP_TIMED];
     uint8_t sector[SDP_MAX_CAPTURE][512];
+    struct sdp_fat fat;
 };
-_Static_assert(sizeof(struct sdp_input) == 48, "input wire size");
-_Static_assert(sizeof(struct sdp_report) <= 12288, "report fits its payload");
+_Static_assert(sizeof(struct sdp_input) == 64, "input wire size");
+_Static_assert(sizeof(struct sdp_report) <= 16000, "report fits its payload");
 #endif
