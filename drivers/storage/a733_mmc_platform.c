@@ -18,8 +18,8 @@
 /* Core steps sharing one admitted poll while a transfer advances. */
 #define CORE_STEPS 8u
 enum { CLOCK,RAIL,RAIL_WAIT,ADMIT,SUPPLIES,BASELINE,GIC_WAIT,PINS,PRESENCE,
-       ENABLE,RESET_WAIT,RESET_RELEASE,OPEN,IDENTIFY,READY,
-       CLOSE_CLOCK,CLOSE_WAIT,CLOSE_PINS,CLOSE_RAIL,CLOSE_LEASE,CLOSED };
+       ENABLE,RESET_WAIT,RESET_RELEASE,ENTER_1V8,OPEN,IDENTIFY,READY,
+       CLOSE_CLOCK,CLOSE_BANK,CLOSE_WAIT,CLOSE_PINS,CLOSE_RAIL,CLOSE_LEASE,CLOSED };
 static const unsigned emmc_pins[]={0,1,5,6,8,9,10,11,13,14,15,16};
 static const enum a733_rail supply[]={A733_RAIL_DCDC1,A733_RAIL_DC1SW2,A733_RAIL_CLDO5};
 static const uint32_t fabric_off[]={0x500,0x580,0x588};
@@ -174,7 +174,8 @@ static int voltage(struct a733_mmc_platform *p,unsigned initial)
         /* Manual 18.14.6.2-3: PF value 2 is 3.3 V and 3 is 1.8 V; selector bit
          * 0 chooses 3.3 V. Only the UHS-I switch clears it, once. */
         if(mode>2||!rd(p,PIO+0x70,&select))return 0;
-        if(!p->signal?(value!=2||!(select&1)):((select&1)||value<2||(p->signal==2&&value!=3)))return 0;
+        if(p->signal==3){if(!(select&1)||value<2)return 0;}          /* the restore is written: 1.8 V until the bank reports 3.3 V */
+        else if(!p->signal?(value!=2||!(select&1)):((select&1)||value<2||(p->signal==2&&value!=3)))return 0;
     } else if(mode!=3||value!=0)return 0; /* PC status uses a different encoding. */
     if(initial)p->voltage_mode=mode;
     return mode==p->voltage_mode;
@@ -421,6 +422,8 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
         p,(uintptr_t)p,c->kind,800000,c->voltage_mask,c->sd_profile,c->dma};
     if(!sunxi_mmc_init(&p->core,&cfg))return 0;
     if(c->observe_s18&&!sunxi_mmc_observe_s18(&p->core))return 0;
+    if(c->sdr25_only&&!sunxi_mmc_sdr25_only(&p->core))return 0;
+    if(c->start_1v8&&!sunxi_mmc_reenter(&p->core))return 0;
     atomic_init(&p->busy,0);p->initialized=1;return 1;
 }
 static enum a733_mmc_platform_result metadata(struct a733_mmc_platform *p)
@@ -510,7 +513,21 @@ static enum a733_mmc_platform_result registers(struct a733_mmc_platform *p)
         if(ok&&p->last_now-p->reset_since>10)p->stage=RESET_RELEASE;
     } else if(p->stage==RESET_RELEASE) {
         ok=masked(p)==1&&update(p,p->bus,0x10001,1,0x10001);
-        if(ok)p->stage=OPEN;
+        if(ok)p->stage=p->config.start_1v8?ENTER_1V8:OPEN;
+    } else if(p->stage==ENTER_1V8) {
+        /* The card already signals 1.8 V: write the selector once with the card clock stopped, wait for the bank to report 1.8 V
+         * (as the core's own switch does, within 10 ms), then keep the clock stopped 10 ms before the core opens. */
+        uint32_t ctrl,value;
+        if(!p->signal) {
+            ok=p->config.sd_profile==SUNXI_MMC_SD_UHS_SDR104&&p->voltage_mode==1&&p->snapshots[2].programmed_uv==1800000u&&
+               rd(p,p->base+4,&ctrl)&&!ctrl&&masked(p)==1&&update(p,PIO+0x70,1,1,0);
+            if(ok){p->signal=1;p->signal_since=p->last_now;}
+        } else if(p->signal==1) {
+            ok=rd(p,PIO+0x48,&value);
+            if(ok&&((value>>10)&3)==3){p->signal=2;p->signal_since=p->last_now;}
+            else if(ok&&p->last_now-p->signal_since>=10000)ok=0;
+        } else if(p->last_now-p->signal_since>=10000)p->stage=OPEN;
+        if(ok&&!voltage(p,0))ok=0;
     } else ok=0;
     return ok&&timely(p)?A733_MMC_PENDING:fail(p);
 }
@@ -743,12 +760,13 @@ static int close_ready(const struct a733_mmc_platform *p)
 enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *p,uint64_t deadline)
 {
     if(!p||!p->initialized||p->update||p->config.kind!=SUNXI_MMC_SD||
-       p->config.sd_profile!=SUNXI_MMC_SD_HIGH_SPEED4||!deadline||
+       (p->config.sd_profile!=SUNXI_MMC_SD_HIGH_SPEED4&&p->config.sd_profile!=SUNXI_MMC_SD_UHS_SDR104)||!deadline||
        deadline>p->config.lifetime_deadline_us)return A733_MMC_INVALID;
     if(!enter_api(p))return A733_MMC_BUSY;
     if(p->fault)return finish(p,fail(p));
     if(p->irq_mode)return finish(p,A733_MMC_INVALID);          /* the owner masks the interrupt and clears irq mode first */
-    if(p->ops.current(p->cookie)!=1||p->signal||p->stage<READY||p->stage==CLOSED||
+    /* A UHS-I lifetime closes with the bank put back at 3.3 V (stage CLOSE_WAIT, after the card clock is off); the card stays at 1.8 V. */
+    if(p->ops.current(p->cookie)!=1||p->signal==1||p->stage<READY||p->stage==CLOSED||
        !close_ready(p)||(p->stage>READY&&p->deadline!=deadline))return finish(p,A733_MMC_INVALID);
     if(p->stage==READY){p->deadline=deadline;p->stage=CLOSE_CLOCK;}
     if(!timely(p))return finish(p,fail(p));
@@ -781,7 +799,25 @@ enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *
             if(!close_idle(p)||!rd(p,p->base+SUNXI_SMHC_CLKCR,&v)||
                !wr(p,p->base+SUNXI_SMHC_CLKCR,(v&~(BIT(16)|BIT(17)))|BIT(31))||
                !wr(p,p->base+SUNXI_SMHC_CMD,SUNXI_SMHC_UPDATE))return finish(p,fail(p));
-            p->stage=CLOSE_WAIT;
+            p->stage=p->signal?CLOSE_BANK:CLOSE_WAIT;
+        }else if(p->stage==CLOSE_BANK){
+            /* The card clock is off (the update has finished) and nothing is in flight. A UHS-I lifetime writes the selector
+             * back to 3.3 V once, then waits for the bank to report it, within 10 ms, one poll at a time. The card stays at
+             * 1.8 V. The module and bus are released only after that. */
+            if(!rd(p,p->base+SUNXI_SMHC_CMD,&v))return finish(p,fail(p));
+            if(v&SUNXI_SMHC_CMD_START)return finish(p,A733_MMC_PENDING);
+            if(p->signal==2){
+                if(!close_idle(p)||!update(p,PIO+0x70,1,0,1))return finish(p,fail(p));
+                p->signal=3;p->signal_since=p->last_now;
+            }else if(p->signal==3){
+                if(!rd(p,PIO+0x48,&v))return finish(p,fail(p));
+                v=(v>>10)&3;
+                if(v==2)p->signal=0;
+                else if(v!=3||p->last_now-p->signal_since>=10000)return finish(p,fail(p));
+            }
+            if(p->signal&&!voltage(p,0))return finish(p,fail(p));
+            if(!p->signal)p->stage=CLOSE_WAIT;
+            return finish(p,timely(p)?A733_MMC_PENDING:fail(p));
         }else{
             if(!rd(p,p->base+SUNXI_SMHC_CMD,&v))return finish(p,fail(p));
             if(v&SUNXI_SMHC_CMD_START)return finish(p,A733_MMC_PENDING);

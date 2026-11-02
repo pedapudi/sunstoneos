@@ -176,6 +176,19 @@ int sunxi_mmc_observe_s18(struct sunxi_mmc *h)
     h->observe_s18 = 1; return 1;
 }
 
+int sunxi_mmc_reenter(struct sunxi_mmc *h)
+{
+    if (!UHS_ON || !h || !h->initialized || h->entered || h->state != SUNXI_MMC_COLD || h->config.kind != SUNXI_MMC_SD ||
+        h->config.sd_profile != UHS || h->observe_s18) return 0;
+    h->reenter = 1; return 1;
+}
+int sunxi_mmc_sdr25_only(struct sunxi_mmc *h)
+{
+    if (!UHS_ON || !h || !h->initialized || h->entered || h->state != SUNXI_MMC_COLD || h->config.kind != SUNXI_MMC_SD ||
+        h->config.sd_profile != UHS) return 0;
+    h->sdr25_only = 1; return 1;
+}
+
 int sunxi_mmc_open(struct sunxi_mmc *h, uint64_t deadline)
 {
     if (!h || !h->initialized || h->entered || h->state != SUNXI_MMC_COLD ||
@@ -997,7 +1010,7 @@ static void protocol(struct sunxi_mmc *h)
                                         SUNXI_MMC_SIGNAL_QUERY, &caps) != 1 || (caps & ~3u)) {
                 fault(h, SUNXI_MMC_IO); return;
             }
-            h->card.uhs_caps = (uint8_t)caps; h->s18r = !!(caps & SUNXI_MMC_SIGNAL_1V8);
+            h->card.uhs_caps = (uint8_t)caps; h->s18r = !!(caps & SUNXI_MMC_SIGNAL_1V8) || h->reenter;
         } else if (h->observe_s18) h->s18r = 1;
         queue(h, P_SD_APP, 55u | RESP | CRC, 0, 0, 0); return;
     case P_SD_APP:
@@ -1021,6 +1034,11 @@ static void protocol(struct sunxi_mmc *h)
                   mmc ? ((r & voltage) | (1u << 30)) : 0, 0, 0); return;
         }
         h->card.ocr = r; h->card.sector_addressed = !!(r & (1u << 30));
+        /* A re-entry skips CMD11: the card already signals 1.8 V and treats CMD11 as an illegal command (specification 4.2.4.4). */
+        if (UHS_ON && !mmc && h->reenter) {
+            h->card.signal_1v8 = 1; h->card.reentered = 1;
+            queue(h, P_CID, 2u | RESP | LONG | CRC, 0, 0, 0); return;
+        }
         /* S18A requests CMD11 before CMD2. Like the pinned Linux core, the
          * switch does not also require CCS. */
         if (UHS_ON && !mmc && h->s18r && h->config.sd_profile == UHS && (r & S18R)) {
@@ -1095,6 +1113,7 @@ static void protocol(struct sunxi_mmc *h)
         if(h->config.sd_profile>=SUNXI_MMC_SD_HIGH_SPEED4){
             if((h->card.scr[0]&15)<1||!(bits(h->card.csd,84,12)&(1u<<10))){fault(h,SUNXI_MMC_UNSUPPORTED);return;}
             /* At 1.8 V, ask for SDR104 (function 3); SDR25 is the fallback. */
+            if(UHS_ON&&h->card.signal_1v8&&h->sdr25_only){h->card.uhs_outcome=SUNXI_MMC_UHS_LIMITED;hs_check(h);return;}
             if(UHS_ON&&h->card.signal_1v8){queue(h,P_SD_UHS_CHECK,6u|RESP|CRC|DATA|WAIT,0x00fffff3,h->card.switch_status,64);return;}
             hs_check(h);return;
         }

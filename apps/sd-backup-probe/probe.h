@@ -18,7 +18,8 @@ struct sdp_input {
     uint64_t fat_first, fat_sectors;   /* a FAT32 partition to inspect read-only; fat_sectors zero: none */
     uint64_t region_bytes;             /* a region to take from upper memory; zero: none */
     uint32_t region_flags;             /* SDP_REGION_LOAD: load the named file into it */
-    uint32_t reserved;
+    uint32_t uhs_mode;                 /* 0: high speed at 3.3 V, S18A observed; 1: UHS-I lifetime 1 (switch, SDR25 at 1.8 V, bank back to 3.3 V at close);
+                                          2: UHS-I lifetime 2 (the card still signals 1.8 V: bank to 1.8 V first, identify without CMD11, SDR25) */
     char file_name[48];                /* root-directory path of the file to load */
     uint8_t file_sha256[32];           /* its SHA-256 */
 };
@@ -94,6 +95,10 @@ struct sdp_report {
     /* The CMD6 response of the last switch: the support bits of every function group (byte 12 and 13 are group 1, the bus speed
      * modes: bit 0 SDR12, 1 SDR25, 2 SDR50, 3 SDR104, 4 DDR50) and the function the switch selected (byte 16 low nibble). */
     uint8_t switch_status[64];
+    /* UHS-I lifetimes: [0] mode, [1] the card signals 1.8 V, [2] outcome (sunxi_mmc_uhs_outcome), [3] identified by re-entry, [4] GPIO_POW_VAL and
+     * [5] GPIO_POW_VAL_SET_CTL when the card was identified, [6] and [7] the same after the close, [8] and [9] GPIO_POW_MOD_SEL then and after,
+     * [10] the platform's fault: source line | why << 16 | stage << 24 | fault << 32, [11] the stop word the probe published on a failed lifetime. */
+    uint64_t uhs[12];
 };
 _Static_assert(sizeof(struct sdp_input) == 160 - 6 * 4 + 4 * SDP_MAX_CAPTURE, "input wire size");
 

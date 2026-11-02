@@ -23,7 +23,7 @@ struct uhs {
     unsigned width, sdr, sdr104, sdr104_busy, set_refuses, cmd11_timeout, no_dat_low, no_dat_high;
     unsigned pending_done, no_cc, no_vsd, set_fails, bad_caps, fatal_delay, cmd19, cmd11, cmd6_uhs, cmd6_hs;
     unsigned window[2][2], s18r_seen, cmd11_before_cmd2, cid_seen, dat0_masked;
-    unsigned restart_reads, restart_stuck, restart_gap;
+    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18;
     uint64_t answered, gated, restarted, clock_started, done_delay;
 };
 static unsigned passes(struct uhs *u, unsigned d)
@@ -123,7 +123,7 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
         else if (cmd == 6) {
             assert(!m->app && u->width == 4 && m->reg[0xc/4] == 1 && m->reg[0x10/4] == 64);
             m->data_command = value; m->fifo_total = 64; memset(u->sw, 0, 64);
-            u->sw[13] = 3 | (u->sdr104 ? 8 : 0); u->sw[29] = u->sdr104_busy ? 8 : 0;
+            u->sw[13] = 3 | (u->sdr104 && u->phase == 3 ? 8 : 0);   /* functions 2 to 4 are reported only at 1.8 V (specification Table 4-11 text) */ u->sw[29] = u->sdr104_busy ? 8 : 0;
             if ((arg & 0xf) == 3) {
                 assert(u->phase == 3 && (arg == 0x00fffff3 || arg == 0x80fffff3)); ++u->cmd6_uhs;
                 u->sw[16] = u->sdr104 && !u->sdr104_busy ? 3 : 0xf;

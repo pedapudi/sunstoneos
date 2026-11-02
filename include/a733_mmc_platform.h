@@ -38,6 +38,10 @@ struct a733_mmc_platform_config {
      * update service may bind; its writes remain authorized one-sector PIO. */
     volatile struct sunxi_mmc_dma_descriptor *dma;
     uint8_t observe_s18;       /* SD high speed only: ACMD41 carries S18R and its S18A is recorded; no CMD11 (sunxi_mmc.h) */
+    /* UHS-I profile only (design: docs/designs/sd-uhs-recovery.md). sdr25_only: run SDR25 at 1.8 V and never try SDR104 or tuning.
+     * start_1v8: the card still signals 1.8 V from an earlier lifetime; the platform moves the bank to 1.8 V before the core opens
+     * (stage ENTER_1V8, with the card clock stopped) and the core identifies without CMD11 (sunxi_mmc_reenter). */
+    uint8_t sdr25_only, start_1v8;
 };
 /* Fixed ROM JTAG route, not permission to take over a debugger. The caller's
  * physical authority must exclude debug clients before this exact handoff.
@@ -113,7 +117,8 @@ struct a733_mmc_platform {
      * 0xff for another address; 0 none). Zero until a fault. */
     uint16_t fault_line, fault_why, refused;
     unsigned irq_mode;               /* the owner has unmasked the controller's GIC interrupt (a733_mmc_platform_irq) */
-    unsigned signal; /* PF bank: 0 at 3.3 V, 1 selector written, 2 reports 1.8 V. */
+    unsigned signal; /* PF bank: 0 at 3.3 V, 1 selector written, 2 reports 1.8 V, 3 restore written at close (reads 1.8 V or 3.3 V). */
+    uint64_t signal_since;           /* when the selector was last written or the bank last reported its new level */
 };
 /* Zero once. All managers, adapter storage and physical authority have platform
  * lifetime. Shared PMIC worker advances independently; the consumer never owns
