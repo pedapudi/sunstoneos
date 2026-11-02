@@ -39,8 +39,6 @@ generated = out / 'generated'; generated.mkdir()
 subprocess.run([python, str(ROOT / 'apps/os/npu-catalogue.py'), '--artifacts', str(ARTIFACTS),
                 '--models', str(ROOT / 'apps/os/npu-models.json'), '--model', '0', '--model-name',
                 'shufflenet-v2-published', '--output', str(generated / 'npu-models.c')], check=True)
-subprocess.run([python, str(ROOT / 'tools/npu-session-catalogue.py'), 'generate', '--application',
-                str(ROOT / 'apps/os/npu-models.json'), '--output', str(generated / 'npu_admitted_models.c')], check=True)
 NETWORK = CACHE / 'sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source'
 includes = [ROOT / 'apps/os', generated, ROOT / 'apps/board', ROOT / 'platform/a733-storage-update',
             ROOT / 'platform/a733-smp-cached', ROOT / 'drivers/usb', ROOT / 'network/include',
@@ -49,7 +47,7 @@ includes = [ROOT / 'apps/os', generated, ROOT / 'apps/board', ROOT / 'platform/a
 
 def build(name, wrapper=None):
     defines = DEFINES + (['OS_NPU_SOURCE="%s"' % wrapper] if wrapper else [])
-    sources = [*UNITS, generated / 'npu-models.c', generated / 'npu_admitted_models.c']
+    sources = [*UNITS, generated / 'npu-models.c']
     return host_rtos.build(out / name, sources, 'os-npu-service', defines=defines, includes=includes,
                            flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'],
                            link=['-Wl,--gc-sections'])

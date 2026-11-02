@@ -674,6 +674,45 @@ decoded `board_failure` of the result, as in the entry 7c8b2818 record).
 
 A normal return with the receipt of `expect.json` ends the run.
 
+### Test graphs through the OS NPU service
+
+SunstoneOS holds 17 single-operation graphs, built by the pinned compiler from the model descriptions of
+`tools/npu-graph-variants.py` and catalogued in `tools/npu-session-models.json` (names `graph-*`). The OS session grants at most eight
+jobs (`apps/os/admission.c`), so run A1 sends eight graphs through the OS NPU service one after another, run A2
+sends seven and run B sends the last two. The application
+(`apps/npu-graphs`) loads each graph, submits one job with the graph's input and compares the output with the SDK
+simulator's, byte for byte. Operating point 852 MHz at 800 mV; no other change.
+
+| Graphs | Operations | Paths first used on a board |
+| --- | --- | --- |
+| add, sub | one stream-processor operation | stream-processor program; second input from a graph input |
+| mul | one neural-network operation | second input from a graph input |
+| relu, sig, tanh, swish | one activation operation | activation table through patch source 5 |
+| sm32, sm64 | five stream-processor operations | stream-processor programs without a second input |
+| chainA, chainB, chainC | a neural-network and a stream-processor operation | second input in VIP SRAM (chainB, chainC) |
+| deep | three neural-network operations and an activation | second input and output in VIP SRAM |
+| mm | four neural-network operations | batched product; second input from a graph input at slice offsets |
+| glu | two transposes and one stream-processor operation | second input in VIP SRAM |
+| ln176, ln64 (run B) | five to seven stream-processor operations | dynamic-input section, placed read-only after the coefficients |
+
+**Prediction.** Every device path the graphs use is one that the host checks run on the production code with a modeled
+register file (`checks/os-npu-graphs.py`), and the loader admits each graph; the device has so far run kinds 2 and 8
+only. The prediction for each run is a normal return and a receipt with one record per graph, each with status
+`match` and no differing byte, `completed` and `matched` equal to the graph count and the SDK closed. The per-graph time (`us`) is the whole `ss_npu_run`
+including the LOAD of the model.
+What a different result means:
+
+- A record with status `mismatch` names the first differing byte: the NPU ran the graph and computed another value.
+  A first byte of the second half of a ring (offset half the output) points at the second-input ring; a whole-output
+  difference points at the operation's own semantics. This reflects an unmapped field of the command format
+  (`docs/hardware/npu-command-formats.md`), not a loader defect.
+- Status `refused` (the SDK refused the request) or `failed` (the service retains a fault) names the first graph that
+  could not run; later graphs read `not run`. The failure record of the board (`NPU_FAILURE`, or the breadcrumb site
+  of `apps/os/npu.c`) names the request that failed.
+- A watchdog return without a receipt means the NPU hung on a command. The cause is then derived from the records
+  (the last stage, the `0x0e5b` position of the failing program) before any further run; the failing graph is
+  identified by the order of the list.
+
 ### Assumptions that need hardware state
 
 | Assertion or refusal | Value assumed | Evidence |
@@ -720,3 +759,135 @@ A normal return with the receipt of `expect.json` ends the run.
   for the idle mask, `GATE_VALUE` for a gate bit still set, `SETTLE` for the
   wait. The PPI 27 composition refuses only on inherited CNTV or PPI 27 state,
   and the setup assertion expects 0xb0.
+
+### NPU MMU exceptions
+
+This section is the reference for the unmapped-address runs R1 to R5 and for the MMU exception record that the
+controller keeps (`drivers/npu/a733_npu_controller.c`, `a733_npu_advance`).
+
+**Vendor registers.** The vendor driver learns of an MMU exception from the event register and then reads two
+registers (`vip2/vip_drv_hardware.h:85-91`; `vip2/vip_drv_debug.c:340-445`; `vip2/vip_drv_task_common.c:600-640`).
+
+| Register | Meaning |
+| --- | --- |
+| `+0x010` | Event register. Bit 31 `0x80000000` is an AXI error, bit 30 `0x40000000` is an MMU exception, bit 28 `0x10000000` is a cancel, bit 26 `0x04000000` is an error. Bit 0 is completion. SunstoneOS enables `0xc0000001`, so bits 31, 30 and 0 raise the interrupt. |
+| `+0x384` | MMU status, one 4-bit code for each MMU unit: 1 slave not present, 2 page not present, 3 write violation, 4 out of bound, 5 read security violation, 6 write security violation. |
+| `+0x380` | Faulting device address. In the 40-bit virtual address mode the high bits are in `+0x3b8`; SunstoneOS maps below 4 GiB and does not read `+0x3b8`. |
+| `+0x388` | Bit 0 reports the MMU enabled. The controller already requires `0x21` before every start. |
+
+The vendor driver treats an MMU or AXI event as a timeout that needs recovery (`VIP_ERROR_TIMEOUT`) and resets the
+core. No register distinguishes a read from a write for "page not present": the type of the access comes from the
+descriptor field that was changed, not from the status.
+
+**The vendor handling, compared with this controller.**
+
+| Step | Vendor driver | This controller |
+| --- | --- | --- |
+| Interrupt enable | Writes `0xffffffff` to `+0x014` (`vip_drv_hardware.c:509`). | Writes `0xc0000001` (bits 31, 30 and 0). Bit 30 is enabled, so an MMU exception does raise the interrupt. Bits 26 to 29 (error, flag, bypass, cancel) are not enabled. |
+| Interrupt handler | Reads `+0x010` once, keeps the value, wakes the waiter (`os/linux/vip_drv_device_driver.c:382-391`). | The handler masks the source and notifies the service worker, which reads `+0x010` while the source is masked. |
+| MMU event | Reads only `+0x388` (bit 0, MMU enabled) and reports a timeout that needs recovery (`task/vip_drv_task_common.c:621-631`). The status and address registers are read only by the debug dump, which runs after a hang (`vip_drv_debug.c:336-420`, `:693`). | Read `+0x384` and `+0x380` in `a733_npu_advance`. This is the one read on the event path that the vendor does not make there. |
+| Recovery | Cancels the hardware through `+0x3a8` and submits the initial command again, or powers the core off and on, resets and initialises it (`task/vip_drv_task_common.c:463-535`). | Fault state; the owner retains the device and the image ends at the watchdog. Fault recovery is a separate stage. |
+
+The enable mask therefore does not explain a silent stall, and run R1 (entry `1793601039576662539-3cfb241d`) showed it
+was not one: the failure record had event bit 30 (`0x40000000`), capture stage 5 (both registers read) and the
+controller fault code 9, with the canary CRC unchanged. The controller had captured the exception and entered its
+fault state; the reply to the waiting application did not arrive. The reasons the code allows are these.
+
+- One worker task (`runtime_worker`, `drivers/npu/npu_service.c`) services the interrupt, checks the timeout and sends
+  every reply. A step of it that waits on hardware stops all three. The steps after the capture are the interrupt
+  controller's mask call (`irq_mask`, which answers "not yet" and is retried), the runtime's finished hook, and the
+  reply queue send. The host check `checks/os-npu-fault.py` blocks each in turn (and each register read of the
+  capture and of the cancel handshake) and shows what the failure record then says.
+- The reply was sent only by `runtime_settle` after the fault, and for a fault the runtime treated the whole runtime as
+  failed and answered every waiter with the generic fault, which `npu_runtime_collect` turns into a retained failure.
+  Whether the reply or the wait was lost on the board is not shown by R1: the record could not say. The failure record
+  of the next image therefore carries a mark for each step from the capture to the wrapper's read of the reply.
+- The wrapper's wait window: `call()` waits `min(2000 ms, (end - now))` for the reply, where `end` is the session
+  end (`npu.end`, the board session deadline minus 10 ms and at most 60 s after the start) or, once thermal STOP is
+  set, the STOP deadline. STOP is set by `os_npu_close`, by a failure, by the bootstrap when the first deadline
+  (start plus 1 s) has passed, and by `watch()` when the thermal gate has not been refreshed for 4 s beyond its
+  deadline; a STOP deadline is `capped(now)`, that is at most 5 s after the call that set it. So the window can be
+  clipped only after STOP, to between 0 and 5 s, never below the time a job needs; before STOP it is the full
+  2 s (8 s in the test images). The record carries the window actually used in milliseconds.
+
+**Recovery in the service, following the vendor.** The vendor driver does not stop on an MMU or AXI event: it reports a
+timeout that needs recovery, and `vipdrv_task_recover` (`task/vip_drv_task_common.c:463-535`) cancels the hardware
+(`vipdrv_hw_cancel`, `vip_drv_hardware.c:1119-1194`: set `+0x3a8` bit 3, wait 100 us, clear it, poll bit 4 in 100 us
+steps up to 200 times) and submits the initial command again; a core without the cancel feature is powered off and on,
+reset (`vipdrv_hw_reset`) and initialised (`vipdrv_hw_init`). Only the job that was running fails. This repository's
+service does the same for an MMU exception during a SUBMIT in runtime mode (`runtime_settle`, `a733_npu_recover`):
+
+1. the job's slot is released through the runtime's finished hook (mode 2), so that the read-only region it used is
+   checked like that of a finished job, and its reply is held until that check ends;
+2. the controller runs the cancel handshake as above (a cancel that does not complete is recorded and does not stop the
+   recovery), then reset and re-initialization as a fresh open does (two reset passes, the MMU page directory again,
+   the interrupt enable, the initial command), which is the second vendor branch without the power cycle;
+3. the reply to the application carries result `NPU_SERVICE_JOB_FAULT`, fault `A733_NPU_MMU`, the MMU status and the
+   address; the wrapper returns 2 from `os_npu_submit`, the SDK returns -3 from `ss_npu_run` and describes the fault
+   with `ss_npu_last_fault`, and the session stays usable.
+
+The faulted job's output is not valid and is not used. A controller fault of any other kind, or a recovery that
+fails, still retains the controller and the image ends at the watchdog.
+
+**The cancel handshake against the vendor's.** The register sequence is the same step by step: read `+0x3a8`, write it
+with bit 3 set (`vip_drv_hardware.c:1136-1147`), wait 100 us, read it again, write it with bit 3 cleared
+(`:1161-1172`), then wait 100 us and read `+0x3a8` up to 200 times for bit 4, the completion bit (`:1174-1183`); this
+repository's `a733_npu_recover` does exactly that, and its job cancel (`a733_npu_cancel`, `a733_npu_advance`) tests the
+same bit 4 with the same pulse. The trigger, the bit and the poll count therefore match. On the board the bit never
+appeared in 200 polls after an MMU exception (five faults, 3-1). That is recorded as the behaviour of this NPU after an
+MMU exception, not as a wrong trigger; the bounded 20 ms wait stays, the reset follows either way, and the mark
+"cancel completion seen" tells whether a later run differs.
+
+**Reply-path marks.** The failure record of a missing reply and the fault record of the application carry marks, one bit
+for each step: captured (0), progress pass returned (1), settle step took the fault (2), finished hook returned (3),
+reply posted to the client queue (4), cancel completion seen (5), reset and initial command started (6), NPU ready again
+(7), client waits (8), client woke with the reply (9), client read the fault (10), recovery failed (11).
+
+**What the controller records.** When an event has bit 30, the controller reads `+0x384` and `+0x380`, keeps them in
+`mmu_status` and `mmu_address`, and enters the fault state `A733_NPU_MMU`; the service then recovers as above and copies
+both values into the reply. A recovery that cannot proceed ends at the watchdog, and only the first-failure record
+survives it, so the test images carry the CRC-32 of the canary buffer in its caller word; its ticket byte is the capture
+stage (low nibble) and fault code (high nibble), its value the marks (high half) and the wait window in ms (low half).
+
+**The runs.** Each image runs one SunstoneOS test graph through the OS NPU service. A compile-time test option
+(`SUNSTONE_NPU_UNMAPPED_SLOT`, `drivers/npu/nbg_assembly.c`) overwrites one descriptor pointer of the first operation
+after relocation, in the encoding of that field, and moves the end field of a ring by the same distance so that the
+stated extent is kept. A descriptor that lacks the field is refused at load, so the option cannot silently do nothing.
+
+The target is a canary: a 1 MiB buffer in the image's own DRAM that the NPU page tables do not map (the tables map
+only the NPU pool, whose device addresses equal its physical addresses). The buffer holds the word pattern
+`i * 0x9e3779b1 xor 0xc0ffee11` (CRC-32 `0x4696ca8e`) and the pointer is aimed 64 KiB into it, so that a bypassing
+access of the descriptor's stated extent, read or write, stays inside it. The device address is therefore a valid DRAM
+physical address, not an address of OS memory. The image cleans the buffer from the cache after filling it.
+
+One image runs six graphs in turn, with the recovery between them. A graph can be loaded once in a catalogue, so the five
+cases use five graphs; the descriptor layout is the same for the activation graphs and the stream-processor graphs
+that the cases cover.
+
+| Job | Graph | Pointer | Target | Access |
+| --- | --- | --- | --- | --- |
+| 0 | sig | input | canary + 64 KiB | read |
+| 1 | tanh | output | canary + 64 KiB | write |
+| 2 | add | first input | canary + 64 KiB | read |
+| 3 | sub | output | canary + 64 KiB | write |
+| 4 | swish | input | `0x180` (page 0) | read |
+| 5 | relu | none | none | good job |
+
+**Prediction.** If the page tables confine the NPU and the recovery works, the image returns normally. The receipt
+holds six records: jobs 0 to 4 with status "fault", the faulting address (the canary position `canary + 0x10000` for
+jobs 0 to 3, `0x180` for job 4), a nonzero MMU status in which the unit that faulted shows code 2 (page not present),
+the unchanged canary CRC `0x4696ca8e`, the marks (at least captured, progress, settle, finished, reply posted, client
+waits, client woke, client read) and the window (8000 ms); job 5 has status "match", its output equal to the
+simulator's. Completed and matched are 1, and the SDK closes.
+
+If an access bypasses the MMU, the wrapper records the completion as a failure (ticket byte `0xee`, the canary CRC as the
+value, the CRC of the output tensor as the caller word); a write changes the canary CRC. If the image ends at the
+watchdog instead, the first-failure record names the step: ticket byte low nibble 2 or 4 is a blocked read of the
+status or address register, 0 a blocked event read, and the marks show how far the worker got (a record whose marks stop
+at "finished" is a recovery that did not complete). Do not rerun before deriving the cause from those marks. The run
+uses development DRAM mode, with the watchdog armed, at 852 MHz and 800 mV, with no change of rail, clock or storage.
+
+`checks/os-npu-fault.py` runs the same six graphs through the production wrapper, runtime and service with a modeled
+register file that raises the exception, answers the cancel handshake, and optionally answers the interrupt mask late,
+never completes the cancel, or blocks one read. It shows the recovery in three scenarios and the record of each of five
+blocking sites, and two controls that let the access through. It shows the plumbing, not the hardware behaviour.

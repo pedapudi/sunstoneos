@@ -13,7 +13,7 @@ that user-space code builds and never interprets them, so the facts here come fr
 | **Confirmed** | A mutation of the field in a copy of a graph, with the checksums repaired by `tools/npu-nbg-mutate.py` and the copy run in the SDK simulator, changed the output as the stated meaning predicts |
 | **Named** | The compiler's own patch table names the field as an address (destination offset, source region and index) |
 | **Inferred** | Differential compilation (one change per variant, `tools/npu-graph-variants.py`) changed the field consistently with the stated meaning; no mutation has confirmed it |
-| **Unknown** | Seen in graphs; meaning not established. The loader admits it only through the reviewed whole-graph digest |
+| **Unknown** | Seen in graphs; meaning not established. The loader admits it without interpreting it; the page tables confine what it can reach |
 
 Variants are compiled by the pinned compiler offline, from model descriptions that this repository holds
 (`tools/npu-graph-variants.py`). The compiled graphs are not committed.

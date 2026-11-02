@@ -31,7 +31,7 @@ nm = mutate.nm
 def build(work, name, replacements=()):
     """Compile the assembler (and decoder) into a shared library, optionally with exact text replacements."""
     sources = {}
-    for unit in ('nbg_model.c', 'nbg_checksum.c', 'nbg_relocation.c', 'nbg_assembly.c', '../storage/storage_digest.c'):
+    for unit in ('nbg_model.c', 'nbg_checksum.c', 'nbg_relocation.c', 'nbg_assembly.c'):
         text = (ROOT / 'drivers/npu' / unit).read_text()
         for unit_name, old, new in replacements:
             if unit_name == unit:
@@ -147,13 +147,26 @@ def main():
     case('output overlaps the second input', 'deep',
          [(PATCH, g['deep'].patch_offset(3, 28) + 16, u32(104448)), (PATCH, g['deep'].patch_offset(3, 76) + 16, u32(110080))],
          [('nbg_assembly.c', 'aliased(nn, slot, source, op.kind) ||', '0 ||')])
-    # 5. Stream-processor programs: only reviewed bodies, at their position in the program memory.
-    program_check = ('nbg_assembly.c', '|| !sp_program_reviewed(span.data, pairs)) return 0;', ') return 0;')
-    case('one word of a stream-processor program changed', 'ln176', [(STATES, g['ln176'].state_offset(2) + 12, u32(0x12345678))],
-         [program_check])
-    case('a program placed at another position of the program memory', 'ln176', [(STATES, g['ln176'].state_offset(2) + 4, u32(6))],
-         [('nbg_assembly.c', 'if (word(span.data + 4) != (*program & 255)', 'if (0')])
-    print('PASS %d admission cases and %d refusal cases' % (len(GRAPHS), len(results)))
+    # 5. Stream-processor programs and unseen graphs. There is no table of reviewed programs or of reviewed graphs: a
+    # program the loader has never seen, and so a graph whose digest nobody listed, is admitted, because the engine
+    # reaches memory only through the page tables (docs/designs/npu-loader-admission.md). The operand that places the
+    # program in the 256-entry program memory must fit it.
+    admitted = []
+
+    def admitted_case(label, graph, edits):
+        mutated = graphs[graph]
+        for section, offset, raw in edits:
+            mutated = mutated.with_bytes(section, offset, raw)
+        assert mutated.data != graphs[graph].data and admit(native, mutated.data), label + ': the loader refused it'
+        admitted.append(label)
+        print('admitted:', label)
+    admitted_case('a stream-processor program word never seen before', 'ln176',
+                  [(STATES, g['ln176'].state_offset(2) + 12, u32(0x12345678))])
+    admitted_case('a program placed at another position of the program memory', 'ln176',
+                  [(STATES, g['ln176'].state_offset(2) + 4, u32(6))])
+    case('a program placed beyond the program memory', 'ln176', [(STATES, g['ln176'].state_offset(2) + 4, u32(256))],
+         [('nbg_assembly.c', 'if (word(span.data + 4) > 255) return 0;', '')])
+    print('PASS %d graphs, %d unseen programs admitted and %d refusal cases' % (len(GRAPHS), len(admitted), len(results)))
 
 
 if __name__ == '__main__':

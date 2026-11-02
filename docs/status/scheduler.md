@@ -87,12 +87,48 @@ Partitioned fork, 4 pairs above 5 microseconds:
 
 Findings. Every pair on both kernels exceeds the 10 microsecond wake target and the 5 microsecond defect line, and the longest are 31 microseconds (stock) and 33 microseconds (fork). The earlier 95 to 206 microsecond stock spans did not recur under the mimus load; they came from the eight-core soak and are not in this table, so the soak needs its own sweep before those spans are called fixed. The stock kernel's longest span is the scheduler-state critical section, spread over every core, and the queue send and receive paths; the fork's are the object enter and exit pair and the critical section that ends in the object exit. A span is not a function: the same function appears as open and close sites on several rows, so a fix must change the memory touched inside the masked region, not one function.
 
+### Lock wait inside each span
+
+Second pair of runs on the same image and load (queue entries `1793601953161313034-b1ecfb62` stock and `1793602023862614320-8f9bd37f` fork, output exact). The recorder now adds the time spent acquiring a kernel lock after the mask rose. Columns: the longest span, the lock wait inside that span, the longest lock wait in any span, the number of spans above 5 us, and lock wait as a share of the total length of the spans above 5 us.
+
+Stock kernel:
+
+| max us | wait in longest us | max wait us | spans>5us | wait share of spans>5us | open | close |
+|---|---|---|---|---|---|---|
+| 30 | 27 | 27 | 1362 | 82% | vTaskYieldWithinAPI+0x10 | FreeRTOS_Yield+0x1fc |
+| 30 | 28 | 29 | 3410 | 89% | xTaskGetSchedulerState+0x1c | xTaskGetSchedulerState+0x34 |
+| 29 | 28 | 28 | 1221 | 89% | xQueueReceive+0x44 | xQueueReceive+0xcc |
+| 29 | 28 | 28 | 1015 | 92% | vTaskSuspendAll+0x20 | xQueueReceive+0xd0 |
+| 29 | 28 | 28 | 978 | 93% | xQueueReceive+0x44 | xQueueReceive+0xa0 |
+| 29 | 27 | 27 | 44 | 92% | board_service_progress+0x3c | _ZN12_GLOBAL__N_110yield_hookEv+0xc |
+| 27 | 26 | 26 | 1450 | 88% | xQueueGenericSend+0x60 | xQueueGenericSend+0x160 |
+| 25 | 24 | 24 | 25 | 92% | vTaskSuspendAll+0x20 | vTaskDelay+0x18 |
+| 24 | 23 | 23 | 227 | 89% | xQueueReceive+0x1ac | xQueueReceive+0xa0 |
+| 24 | 22 | 22 | 31 | 87% | os_thermal_task+0x544 | os_thermal_task+0x60c |
+| 17 | 15 | 15 | 20 | 84% | vTaskDelay+0x4c | FreeRTOS_Yield+0x1fc |
+| 17 | 15 | 15 | 34 | 88% | board_service_progress+0x3c | _ZN12_GLOBAL__N_18dispatchEmPFvPvmmiES0_b+0x1f0 |
+| 16 | 15 | 15 | 1 | 94% | xQueueReceive+0x1ac | xQueueReceive+0x1ac |
+| 13 | 11 | 11 | 3 | 83% | xQueueGetMutexHolder+0x18 | xQueueGetMutexHolder+0x30 |
+| 11 | 10 | 10 | 99 | 87% | board_service_progress+0x3c | _ZN12_GLOBAL__N_18dispatchEmPFvPvmmiES0_b+0x1f8 |
+| 8 | 7 | 7 | 2 | 87% | board_service_progress+0x3c | _ZN12_GLOBAL__N_18dispatchEmPFvPvmmiES0_b+0x64 |
+| 7 | 6 | 6 | 1 | 86% | xQueueSemaphoreTake+0x3c | xQueueSemaphoreTake+0x7c |
+
+Partitioned fork:
+
+| max us | wait in longest us | max wait us | spans>5us | wait share of spans>5us | open | close |
+|---|---|---|---|---|---|---|
+| 34 | 33 | 33 | 1225 | 96% | ssKernelObjectSuspend+0x10 | xQueueReceive+0xd0 |
+| 34 | 32 | 32 | 3714 | 88% | ssKernelObjectEnter+0x14 | ssKernelObjectExit+0xd8 |
+| 34 | 32 | 32 | 237 | 85% | vTaskEnterCritical+0x20 | ssKernelObjectExit+0xd8 |
+
+Result. The hypothesis holds on both kernels: lock wait is 82 to 96% of every span above 5 us, and in the longest span of each pair all but 1 to 3 us is wait. The held part is 1 to 3 us for the longest spans. The prediction's exception was wrong: the core 6 service and dispatch pairs wait for the lock as much as the rest (87 to 92%). The memory-work account of the earlier rounds explains the length of the holder's own span, which each waiter then adds to its wait, so shortening held work still shortens waits, but the first fix is to stop waiting with the mask raised. The fix goes into the lock acquisition in the port's task lock and interrupt lock, which sits in the protected `patches/freertos-smp-*.patch` and the fork's object enter; the protected diff goes to the coordinator.
+
 ## Evidence
 
 Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-27 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+29 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -123,4 +159,6 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793599788007346215-eb5bcd80` | 2026-11-02 | 3-3 | `3955831c4a46` | returned | passed | run_total 70.453 s, compute_time 110478 us, real_time_factor 0.03077, core6_total_cycles 3.77264e+08, core6_total_l1d_refills 1.31643e+06, core6_total_l2d_refills 436890, core6_total_stall_backend 1.40047e+08, core6_serial_cycles 2.49382e+08, core6_serial_l1d_refills 683751, core6_serial_l2d_refills 154823, core6_serial_stall_backend 9.19342e+07, core6_send_cycles 1.21946e+07, core6_send_l1d_refills 62127, core6_send_l2d_refills 51091, core6_send_stall_backend 6.77505e+06, core6_owner_cycles 9.46081e+07, core6_owner_l1d_refills 496821, core6_owner_l2d_refills 176483, core6_owner_stall_backend 3.24708e+07, core6_tail_cycles 2.10798e+07, core6_tail_l1d_refills 73731, core6_tail_l2d_refills 54493, core6_tail_stall_backend 8.86749e+06, core6_kernel_publish_entries 2658, core6_kernel_publish_cycles 2.04888e+06, core6_kernel_publish_l1d_refills 16157, core6_kernel_publish_l2d_refills 13420, core6_kernel_publish_stall_backend 1.22944e+06, core6_kernel_service_entries 1596, core6_kernel_service_cycles 810667, core6_kernel_service_l1d_refills 10580, core6_kernel_service_l2d_refills 6582, core6_kernel_service_stall_backend 313774 |
 | `1793601405518603317-ea30c713` | 2026-11-02 | 3-3 | `898461eb02bb` | returned | passed | run_total 70.242 s, masked_span_max 31 us |
 | `1793601476379926752-0c3dd3cd` | 2026-11-02 | 3-3 | `6e3aa0c5f181` | returned | passed | run_total 70.029 s, masked_span_max 33 us |
+| `1793601953161313034-b1ecfb62` | 2026-11-02 | 3-3 | `81829cfe943b` | returned | passed | run_total 70.104 s, masked_span_max 30 us, lock_wait_share_of_long_spans 82 -96% |
+| `1793602023862614320-8f9bd37f` | 2026-11-02 | 3-3 | `06a4747c4deb` | returned | passed | run_total 70.245 s, masked_span_max 34 us, lock_wait_share_of_long_spans 82 -96% |
 <!-- evidence-table:end -->

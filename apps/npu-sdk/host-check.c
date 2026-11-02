@@ -3,12 +3,14 @@
 #include <assert.h>
 #include <string.h>
 static unsigned calls,closed;
-static int fail,refuse;
+static int fail,refuse,jobfault;
+static void describe(struct ss_npu_fault_info *f){f->mmu_status=2;f->mmu_address=0x20000000;f->canary_crc=7;f->marks=0x71f;f->window_ms=8000;}
 static int run(unsigned model,const void *in,size_t ni,void *out,size_t no,uint64_t timeout)
 {
     ++calls;assert(model==1&&ni==4&&no==4&&timeout==100);
     if(fail)return -1;
     if(refuse)return 0;
+    if(jobfault&&calls==1)return 2;
     memcpy(out,in,4);return 1;
 }
 static int close_backend(void){++closed;return 1;}
@@ -18,15 +20,28 @@ int main(int argc,char **argv)
     assert(ss_npu_run(1,in,4,out,4,100)==-1);
     const struct ss_npu_model models[]={{"unused",1,1,1,1},{"copy",1,1,4,4}};
     const struct ss_npu_backend backend={run,close_backend,models,2};
+    assert(ss_npu_service_bind_fault(describe)&&!ss_npu_service_bind_fault(describe));
     assert(ss_npu_service_bind(&backend));assert(!ss_npu_service_bind(&backend));
     assert(ss_npu_run(1,in,4,out,4,100)==0);
     assert(ss_npu_close()==-1);assert(ss_npu_run(2,in,4,out,4,100)==-1);
-    assert(calls==0&&out[0]==0);fail=argc>1&&argv[1][0]!='r';refuse=argc>1&&argv[1][0]=='r';
+    assert(calls==0&&out[0]==0);jobfault=argc>1&&argv[1][0]=='j';fail=argc>1&&argv[1][0]!='r'&&!jobfault;refuse=argc>1&&argv[1][0]=='r';
     if(fail) {
         assert(ss_npu_service_step()==-1);
         assert(ss_npu_run(1,in,4,out,4,100)==-1);
         assert(ss_npu_close()==-1&&ss_npu_service_step()==-1);
         assert(calls==1&&!closed&&!out[0]);return 0;
+    }
+    if(jobfault) {
+        /* An NPU MMU exception failed the job: -3, a description once, and the session goes on. */
+        struct ss_npu_fault_info f;
+        assert(ss_npu_service_step()==1&&calls==1);
+        assert(ss_npu_run(1,in,4,out,4,100)==-3&&!out[0]);
+        assert(ss_npu_last_fault(&f)==1&&f.mmu_status==2&&f.mmu_address==0x20000000&&f.canary_crc==7&&f.marks==0x71f&&f.window_ms==8000);
+        assert(ss_npu_last_fault(&f)==0);
+        assert(ss_npu_run(1,in,4,out,4,100)==0&&ss_npu_service_step()==1&&calls==2);
+        assert(ss_npu_run(1,in,4,out,4,100)==1&&!memcmp(in,out,4));
+        assert(ss_npu_close()==0&&ss_npu_service_step()==1&&ss_npu_close()==1);
+        return 0;
     }
     assert(ss_npu_service_step()==1&&calls==1);
     assert(ss_npu_service_step()==0&&calls==1);
