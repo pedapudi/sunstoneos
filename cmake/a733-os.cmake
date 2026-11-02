@@ -70,6 +70,13 @@ elseif(SUNSTONE_APPLICATION STREQUAL "dram-bandwidth")
   include("${SUNSTONE_SOURCE_ROOT}/apps/dram-bandwidth/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-dram-bandwidth LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION dram-bandwidth)
+elseif(SUNSTONE_APPLICATION STREQUAL "dram-scaling")
+  if(NOT SUNSTONE_A733_OS_CPU_CLOCK OR NOT A733_A76_ADMITTED)
+    message(FATAL_ERROR "The DRAM scaling measurement requires SUNSTONE_A733_OS_CPU_CLOCK=ON and A733_A76_ADMITTED=ON")
+  endif()
+  include("${SUNSTONE_SOURCE_ROOT}/apps/dram-scaling/cmake/application.cmake")
+  add_sunstone_image(sunstone-a733-os-dram-scaling LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION dram-scaling)
 elseif(SUNSTONE_APPLICATION STREQUAL "hw-facts")
   if(NOT SUNSTONE_A733_HW_FACTS OR NOT SUNSTONE_A733_CPU_TOPOLOGY)
     message(FATAL_ERROR "The hardware facts image requires SUNSTONE_A733_HW_FACTS=ON and SUNSTONE_A733_CPU_TOPOLOGY=ON")
