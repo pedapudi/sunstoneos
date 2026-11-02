@@ -48,7 +48,7 @@ The pinned upstream kernel is
 `97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2`. Reproducible patches remain the
 fork boundary; downloaded upstream source stays in the cache. New owned code
 lives under `kernel/scheduler/`. `configSS_PARTITIONED_SCHEDULER` selects the
-fork while qualification retains a buildable current-kernel control.
+fork, and `SUNSTONE_PARTITIONED_SCHEDULER` is ON by default (the long runs on the board put the fork ahead on the task path and equal on model time; see the scheduler status). `-DSUNSTONE_PARTITIONED_SCHEDULER=OFF` builds the current-kernel control.
 
 | Existing source | Required change | Preserved contract |
 | --- | --- | --- |

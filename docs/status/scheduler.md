@@ -2,11 +2,11 @@
 
 **Status: implemented.**
 
-The opt-in fixed-priority fork uses owner queues, routed wakes, acknowledged
+The fixed-priority fork uses owner queues, routed wakes, acknowledged
 migration and task-context resource cleanup. Static and dynamic task APIs pass
 configured host checks, including mixed-affinity stress and eight-core soak.
 Selection takes no global task, ISR or administration lock in those tests.
-The default remains the global FIFO-lock control. The CPU control with the fork
+The fork is the default kernel in SMP images; `-DSUNSTONE_PARTITIONED_SCHEDULER=OFF` builds the global FIFO-lock control. The CPU control with the fork
 on ran on the board after a pre-start yield was removed. See [the design](../designs/scheduler-partitioned.md). Hardware values these paths assert (GIC priority views, interrupt routes, CPU identity) are in [the A733 hardware facts](../hardware/a733-facts.md).
 
 **Software evidence:** host, emulator, source.
@@ -17,12 +17,13 @@ One recorded CPU recognition preserves the exact reference CRCs and text.
 The partitioned fork runs the eight-core CPU control to a normal ROM return with
 exact coverage and wake counts and lower wake tails than the global kernel, but
 its masked-time budget fails. On the recorded recognition it is exact and 5.1% slower than the global
-kernel, so it stays off by default. Heterogeneous placement and tickless timing have no physical
+kernel on the older engine; on the current engine the two are within 0.5%, and the long runs make it the default (below). Heterogeneous placement and tickless timing have no physical
 qualification.
 
 ## Open work
 
-0d. Panic in one fork long run (entry `1793608348858278119-8f8e4282`), explained and fixed; seven clean board runs on the fixed image (see the long runs below): the patched interrupt exit ran owner work inside the kernel's masked sections after a control interrupt above the API mask; see [the design](../designs/scheduler-partitioned.md#the-owner-exit-work-must-not-run-after-an-interrupt-above-the-api-mask). Reproduced in QEMU (4 of 4 before, 18 of 18 passing after). The fork stays ineligible as the default until the fixed image has run on the board without a stop.
+0d. Panic in one fork long run (entry `1793608348858278119-8f8e4282`): explained, fixed and confirmed on the board. Cause: the patched interrupt exit ran owner work inside the kernel's masked sections after a control interrupt above the API mask; see [the design](../designs/scheduler-partitioned.md#the-owner-exit-work-must-not-run-after-an-interrupt-above-the-api-mask). A QEMU case reproduces it (4 of 4 failing before the fix, 18 of 18 passing after). Board runs on the fixed image, all returned with exact output and no stop: five soaks (`1793612412507235041-e4633398`, `1793612556768525405-1c62fd5e`, `1793612765449252497-9a99b817`, `1793612995483833917-501eefc5`, `1793613102942277574-dfc0978e`), two soaks with the list integrity bytes (`1793613285642527139-50993bfe`, `1793613482426622002-7cef3e33`; a third, `1793613226184327517-be4330b8`, was a host error when the board's USB node vanished), four soaks after the exit change (`1793615594715919660-cd3ee23f`, `1793615747063569155-173a0d54`, `1793615873648308943-3eabd2f7`, `1793616048963593965-e8fc961d`; a fifth, `1793616227806453788-839592bb`, was a host error of the same kind) and five soaks with the switch-request counters (`1793616388485243353-0fb2da02`, `1793616500737293739-0207eacf`, `1793616666248085091-827a73a9`, `1793616794846609508-07db9f51`, `1793616907929869657-01e648b2`). Sixteen clean 25 s soaks on the fixed image, none with a stop; earlier fork images had one panic in 14.
+0e. The partitioned fork is the default kernel in SMP images (`SUNSTONE_PARTITIONED_SCHEDULER` ON); `-DSUNSTONE_PARTITIONED_SCHEDULER=OFF` builds the stock control. Idle pull is ON in the default fork: only the linked test fixtures turn it off (`SS_KERNEL_TEST_NO_IDLE_PULL`), and every fork number in this document was measured with it on. See item 0 for its defect.
 0c. Known limits of the unmasked task-lock wait (`runtime/lock_prewait.c`): (1) an EL0 task cannot read the interrupt mask, so it infers an open mask from a zero critical nesting count and the absence of the task lock; a bare `portSET_INTERRUPT_MASK` outside a critical section, which does not take the task lock, can therefore wait with the mask raised, for at most the 100 us limit; (2) the 100 us limit is checked only when an event wakes the core, so a wait behind a long holder can last as long as the holder (914 us once, on the fork, core 3); the wait is unmasked either way.
 0b. Step 2 of the measure-first plan: fix the spans in the sweep table longest first on both kernels, each with a
    before and after span and a model-time check against 2%; then the above-mask control path, the robot workload and
@@ -31,11 +32,7 @@ qualification.
    5% of the period at 1 to 10 kHz, no deadline miss, model within 2% of alone). Not yet measured with a robot-like workload. The measured masked spans (22 to 46 us
    in the fork under load) already exceed the wake target, so shorten or split them and put the hardest control
    path above the API interrupt mask.
-0. Known defect, idle pull: a task that waits behind a running task on its owner while an allowed CPU idles
-   can stay unmoved. The eight-core check's stranding phase fails on the wall clock about 1 run in 50 at host
-   load 30, at `scheduler-partitioned-qemu.c:386` (`withholding_completed == i + 1` after 100 ms). Forty-three
-   runs on the instruction counter with different start delays (`--skew 0..41`) all pass, so no deterministic
-   reproduction exists. Idle pull stays off, as the fork does, until it is fixed.
+0. Known defect, idle pull (performance, not correctness). Idle pull is on in the default fork. A pull can be missed: a ready migratable task waits behind a running task on its own core while an allowed core idles. Nothing worse is known: a missed pull leaves the task in its owner's queue, where it runs when that core's running task blocks, yields or is rotated by the tick, or when a later pull attempt succeeds (an attempt follows every owner service pass, every interrupt exit and every wake); it cannot lose or duplicate a task, because a move is the acknowledged transfer that set-affinity uses, which the mixed-affinity stress and eight-core soak exercise; it cannot move a pinned task or break an affinity mask, because a candidate is taken only when its mask holds the idle target; it cannot invert priority, because only waiting tasks are candidates and a task that would preempt the running one runs locally. Observed frequency: the eight-core check's stranding phase fails on the wall clock about 1 run in 50 at host load 30, at `scheduler-partitioned-qemu.c:386` (`withholding_completed == i + 1` after 100 ms), and in none of 43 runs on the instruction counter with different start delays (`--skew 0..41`), so there is no deterministic reproduction. On the board the counters of three recognition soaks show 3939, 6266 and 6722 pulls per 25 s and 2496 to 7600 idle entries with work waiting (`1793617020998598953-a6ecdfc1`, `1793617131735748473-bef01b84`, `1793617277487733781-666ca5a4`); a missed pull is not observable there, and the recognition time with idle pull on (110.9 to 111.0 ms with the counters in the image) matches the fixed fork without them. Cost of a miss is unmeasured: one task waits up to a tick slice for a core that is idle. Idle pull on against off on the board is in the backlog.
 1. Masked time stays above 25 us on cores 0, 2, 3 and at end-of-run suspension: measured phase spans reach 29 us
    (core 3) and the end-of-run self-suspension 46 us. Backend stalls are 94 to 98% of their cycles with 23 to 38
    L1D refills each, so the cause is dependent line fetches under saturated DRAM. Fewer lines per entry or
@@ -216,7 +213,7 @@ Per-object locking and shorter lock holds (the task-lock convoy: 82 to 96% of ma
 Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-70 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+73 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -290,4 +287,7 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793616666248085091-827a73a9` | 2026-11-02 | 3-3 | `591ef3007a46` | returned | passed | run_total 126.483 s, control_latency_max 3.62 us, control_jitter_max 3.38 us, recognition_mean 110.757 ms |
 | `1793616794846609508-07db9f51` | 2026-11-02 | 3-3 | `591ef3007a46` | returned | passed | run_total 109.47 s, control_latency_max 3.58 us, control_jitter_max 3.33 us, recognition_mean 110.898 ms |
 | `1793616907929869657-01e648b2` | 2026-11-02 | 3-3 | `591ef3007a46` | returned | passed | run_total 95.776 s, control_latency_max 3.38 us, control_jitter_max 3.08 us, recognition_mean 110.965 ms |
+| `1793617020998598953-a6ecdfc1` | 2026-11-02 | 3-3 | `8164782bdec2` | returned | passed | run_total 109.557 s, idle_pulls 6722, idle_entries_with_work_waiting 4632, recognition_mean 111.033 ms |
+| `1793617131735748473-bef01b84` | 2026-11-02 | 3-3 | `8164782bdec2` | returned | passed | run_total 140.514 s, idle_pulls 3939, idle_entries_with_work_waiting 2496, recognition_mean 110.943 ms |
+| `1793617277487733781-666ca5a4` | 2026-11-02 | 3-3 | `8164782bdec2` | returned | passed | run_total 141.26 s, idle_pulls 6266, idle_entries_with_work_waiting 7600, recognition_mean 111.031 ms |
 <!-- evidence-table:end -->
