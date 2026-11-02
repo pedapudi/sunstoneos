@@ -205,6 +205,9 @@ static void control(void *unused)
         }
     }
     control_phase = 5;
+    /* Give the primary idle task a cleanup window after the mixed workload.
+     * CPU1 retains its continuously runnable home background task. */
+    vTaskSuspend(backgrounds[0]);
     for (unsigned id = 2; id < 8; ++id) vTaskSuspend(backgrounds[id]);
     local_receiver = xTaskCreateStaticAffinitySet(local_receive, "local-receiver", 2048,
         NULL, 4, local_stack[0], &local_state[0], 2);
