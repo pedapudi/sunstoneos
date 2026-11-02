@@ -63,6 +63,8 @@ def main():
         '_Static_assert(offsetof(TCB_t, xTLSBlock) == offsetof(StaticTask_t, xDummy17), "native network TLS offset");\n')
     subprocess.run([str(args.cc), '-std=c11', '-I' + str(native), *flags,
                     str(translation)], check=True, env=env)
+    subprocess.run([str(args.cc), '-std=c++23', '-I' + str(native), *flags,
+                    str(application)], check=True, env=env)
     print('PASS native board/network task layout with dynamic selector; dynamic task execution remains gated')
     print('PASS partitioned ABI: native and QEMU TCB size/alignment, owner slot, real newlib TLS and external C++ storage')
 
