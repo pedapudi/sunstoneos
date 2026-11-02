@@ -305,16 +305,15 @@ static int runtime_prepare(const struct npu_runtime_model *models,unsigned count
 {
     static const struct a733_mapping_rule wb={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
     const uintptr_t start=(uintptr_t)__npu_runtime_parent_start,end=(uintptr_t)__npu_runtime_parent_end;
-    if(!models || !count || count>NPU_RUNTIME_MODELS || (start|end)&(NPU_RUNTIME_GROUP_BYTES-1) || end<=start)return 0;
+    if(!models || !count || (start|end)&(NPU_RUNTIME_GROUP_BYTES-1) || end<=start)return 0;
     for(unsigned m=0;m<count;++m)if(!image(models[m].data,models[m].bytes,0))return 0;
     const unsigned resident=a733_npu_runtime_resident_slots();
     const unsigned slots=resident?resident:1;
     const size_t need=npu_runtime_requirements(models,count,slots);
     if(!need || need>end-start ||
        !a733_mapping_check_stride(aarch64_device_translate,start,start,need,NPU_RUNTIME_GROUP_BYTES,&wb))return 0;
-    struct npu_runtime_config config={.count=count,.slots=slots,.cpu=start,.physical=start,.bytes=need,
+    struct npu_runtime_config config={.models=models,.count=count,.slots=slots,.cpu=start,.physical=start,.bytes=need,
         .register_cpu=0x03600000,.register_physical=0x03600000,.fatal=runtime_fatal};
-    memcpy(config.models,models,count*sizeof(*models));
     return npu_runtime_prepare(&app.runtime,&config)&&
         (!resident||a733_npu_runtime_resident_prepare(&app.runtime));
 }

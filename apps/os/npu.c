@@ -474,7 +474,8 @@ static struct npu_image_needs image_needs(void)
 /* The tables this image holds (fixed when it is built). */
 static struct npu_tables image_tables(void)
 {
-    return (struct npu_tables){NPU_RUNTIME_SLOTS,NPU_RUNTIME_MODELS,SS_NPU_QUEUE_MAX_DEPTH,
+    /* Graphs have no table limit: their tables come from the reservation. */
+    return (struct npu_tables){NPU_RUNTIME_SLOTS,UINT32_MAX,SS_NPU_QUEUE_MAX_DEPTH,
         SS_NPU_QUEUE_MAX_HANDLES*SS_NPU_QUEUE_MAX_TENSORS};
 }
 static struct npu_declaration declaration_of(const struct os_npu_session *n)
@@ -524,7 +525,7 @@ int os_npu_start(void)
     uintptr_t start=(uintptr_t)__os_npu_pool_start,end=(uintptr_t)__os_npu_pool_end;
     /* The reservation fits any one catalogue entry; the runtime takes the
      * linked entry's exact requirement from its start. */
-    if(!os_npu_model_count||os_npu_model_count>NPU_RUNTIME_MODELS)return REFUSE();
+    if(!os_npu_model_count)return REFUSE();
     /* The application's declaration sets the slots; the reservation covers them all, so that nothing is allocated on
      * the job path. A declaration that does not fit names the resource in the record's value. */
     if(os_npu_declaration_admitted(g)!=NPU_DECLARATION_OK)return REFUSE();
@@ -539,10 +540,9 @@ int os_npu_start(void)
     if(!device_memory_pool_init_typed(&npu.pool,start,start,end-start,DEVICE_MEMORY_CLASS_DMA32,DEVICE_MEMORY_WRITE_BACK))return REFUSE();
     if(!device_memory_acquire(&npu.pool,g->owner,need,&npu.lease,&npu.extent))return REFUSE();
     if(npu.extent.cpu!=start||npu.extent.physical!=start||npu.extent.bytes!=need)return REFUSE();
-    struct npu_runtime_config config={.count=os_npu_model_count,.slots=slots,.cpu=npu.extent.cpu,
+    struct npu_runtime_config config={.models=os_npu_models,.count=os_npu_model_count,.slots=slots,.cpu=npu.extent.cpu,
         .physical=npu.extent.physical,.bytes=npu.extent.bytes,.register_cpu=0x03600000,
         .register_physical=0x03600000,.fatal=fatal};
-    memcpy(config.models,os_npu_models,os_npu_model_count*sizeof(os_npu_models[0]));
     if(!npu_runtime_prepare(&npu.runtime,&config)){device_memory_retain(&npu.pool,npu.lease);return REFUSE();}
     if(!os_npu_sdk_bind(&npu.runtime)){device_memory_retain(&npu.pool,npu.lease);return REFUSE();}
     device_memory_lookup(&npu.pool,npu.lease)->state=DEVICE_MEMORY_DEVICE;

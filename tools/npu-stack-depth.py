@@ -31,6 +31,7 @@ def main():
     ap.add_argument('--flags', type=Path, required=True)
     ap.add_argument('--output', type=Path, required=True)
     ap.add_argument('--entry', action='append')
+    ap.add_argument('--root', type=Path, default=ROOT, help='the source tree to measure (default: this one)')
     a = ap.parse_args()
     text = a.flags.read_text()
     get = lambda k: re.search(r'^C_%s = (.*)$' % k, text, re.M).group(1)
@@ -38,7 +39,7 @@ def main():
     edges, usage = {}, {}
     for unit in UNITS:
         obj = a.output / (Path(unit).name + '.o')
-        cmd = 'clang --target=aarch64-none-elf %s %s %s -fstack-usage -ffunction-sections -c %s -o %s' % (get('DEFINES'), get('INCLUDES'), get('FLAGS'), ROOT / unit, obj)
+        cmd = 'clang --target=aarch64-none-elf %s %s %s -fstack-usage -ffunction-sections -c %s -o %s' % (get('DEFINES'), get('INCLUDES'), get('FLAGS'), a.root / unit, obj)
         env = dict(os.environ, PATH=str(Path.home() / '.cache/sunstoneos/host/usr/lib/llvm-21/bin') + ':' + os.environ['PATH'])
         subprocess.run(cmd, shell=True, check=True, env=env)
         for line in (a.output / (Path(unit).name + '.su')).read_text().splitlines():

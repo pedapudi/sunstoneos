@@ -61,7 +61,8 @@ int main(void)
     ready=0;assert(sdk_run(0,input,4,output,4,100)==1&&loads==2&&submits==3);
     assert(sdk_run(os_npu_model_count,input,4,output,4,100)==0&&loads==2&&submits==3);
     assert(sdk_run(0,input,3,output,4,100)==0&&loads==2&&submits==3);
-    struct npu_runtime runtime={.count=1};
+    static struct nbg_assembly_layout plan_storage[1];
+    struct npu_runtime runtime={.count=1,.plans=plan_storage};
     struct nbg_assembly_layout *plan=&runtime.plans[0];
     plan->inputs=1;plan->outputs=1;
     plan->buffers[NBG_ALLOC_INPUT].payload_bytes=4;

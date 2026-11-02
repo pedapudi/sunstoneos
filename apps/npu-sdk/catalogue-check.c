@@ -23,6 +23,9 @@ int main(int argc,char **argv)
     const unsigned expected=(unsigned)strtoul(argv[1],NULL,10);
     const unsigned fault=(unsigned)strtoul(argv[2],NULL,10);
     static struct npu_runtime runtime;
+    static struct nbg_assembly_layout plans[64];
+    assert(os_npu_model_count<=64);
+    runtime.plans=plans;
     runtime.count=os_npu_model_count;
     for(unsigned i=0;i<runtime.count;++i) {
         struct nbg_model model;

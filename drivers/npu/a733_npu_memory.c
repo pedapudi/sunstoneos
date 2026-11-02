@@ -1,3 +1,4 @@
+#include <string.h>
 #include "a733_npu_memory.h"
 #include "a733_range.h"
 #include "a733_mapping_check.h"
@@ -62,10 +63,13 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
         a733_extents_intersect((uintptr_t)arena, capacity, (uintptr_t)buffers, input_bytes) ||
         a733_extents_intersect((uintptr_t)arena, capacity, (uintptr_t)ops, sizeof(*ops))) return 0;
 
-    struct a733_npu_memory next = {0};
-    struct a733_npu_region regions[A733_NPU_MEMORY_MAX_BUFFERS];
-    next.count = count; next.arena = (uintptr_t)arena; next.capacity = capacity;
-    next.image.physical = physical; next.ops = *ops; next.cookie = cookie;
+    /* Built in place: the memory object is static and zero until this call succeeds, and a refusal leaves it zero
+     * again. No copy of it and no table of regions is kept on the stack (the tables hold up to 125 buffers). */
+    struct a733_npu_memory *const next_ = m;
+    struct a733_npu_region *const regions = m->scratch_regions;
+    memset(m, 0, sizeof(*m));
+    next_->count = count; next_->arena = (uintptr_t)arena; next_->capacity = capacity;
+    next_->image.physical = physical; next_->ops = *ops; next_->cookie = cookie;
     unsigned bootstraps = 0;
     for (size_t i = 0; i < count; ++i) {
         const struct a733_npu_buffer *b = &buffers[i];
@@ -89,20 +93,19 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
         }
         /* Insertion sort keeps canonical table validation linear in pages. */
         size_t at = i;
-        while (at && next.buffers[at - 1].device > b->device) {
-            next.buffers[at] = next.buffers[at - 1]; --at;
+        while (at && next_->buffers[at - 1].device > b->device) {
+            next_->buffers[at] = next_->buffers[at - 1]; --at;
         }
-        next.buffers[at] = *b;
+        next_->buffers[at] = *b;
     }
-    if (bootstraps != 1 || !live_mappings(&next, 1)) return 0;
+    if (bootstraps != 1 || !live_mappings(next_, 1)) return 0;
     for (size_t i = 0; i < count; ++i) {
-        const struct a733_npu_buffer *b = &next.buffers[i];
+        const struct a733_npu_buffer *b = &next_->buffers[i];
         regions[i] = (struct a733_npu_region){b->physical, b->bytes, b->device,
             A733_NPU_PAGE_4K, device_writes(b)};
     }
-    if (!a733_npu_mmu_build(arena, capacity, physical, regions, count, &next.image)) return 0;
-    next.state = A733_NPU_MEMORY_IDLE;
-    *m = next;
+    if (!a733_npu_mmu_build(arena, capacity, physical, regions, count, &next_->image)) return 0;
+    next_->state = A733_NPU_MEMORY_IDLE;
     return 1;
 }
 
