@@ -8,6 +8,7 @@
 tools/board.py
 tools/board_images.py
 tools/board_probe.py
+tools/sd_read_only_scan.py
 tools/board_state.py
 tools/board_usb_power.py
 # Direct USB access and USB power switching.
