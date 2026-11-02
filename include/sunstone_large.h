@@ -11,7 +11,9 @@
 #define SS_LARGE_PATH_BYTES 48u
 enum {
     SS_LARGE_WRITE = 1u << 0,    /* the application may write the region at EL0 */
-    SS_LARGE_EXTENT = 1u << 1    /* the source is a raw card extent (first_sector), not a file */
+    SS_LARGE_EXTENT = 1u << 1,   /* the source is a raw card extent (first_sector), not a file */
+    SS_LARGE_UNFILLED = 1u << 2  /* no source: the region is READY at once and its contents are whatever the memory held;
+                                  * source_bytes, first_sector, the digest and the path are all zero */
 };
 struct ss_large_region {
     uint32_t index, flags;

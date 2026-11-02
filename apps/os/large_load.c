@@ -120,6 +120,14 @@ static void load(unsigned index, const struct os_large_device *d, int mounted)
     os_large_finish(index, status == FAT32_OK ? SS_LARGE_READY : SS_LARGE_FAILED, (uint32_t)status);
 }
 
+/* No source: ready at once, contents as the memory held them. */
+static void unfilled(unsigned index)
+{
+    struct large_slot *s = os_large_slot_mutable(index);
+    s->started_us = s->finished_us = now_us();
+    os_large_finish(index, SS_LARGE_READY, 0);
+}
+
 static void loader(void *unused)
 {
     (void)unused;
@@ -127,7 +135,10 @@ static void loader(void *unused)
     uint64_t isar0;
     __asm__ volatile("mrs %0, id_aa64isar0_el1" : "=r"(isar0));
     (void)storage_digest_use_extensions(((isar0 >> 12) & 15u) != 0);
-    const struct os_large_device *d = os_large_device();
+    /* A region with no source needs no card: when every region is like that the device is never opened. */
+    unsigned needing = 0;
+    for (unsigned i = 0; i < os_large_count(); ++i) if (!(os_large_record(i)->flags & SS_LARGE_UNFILLED)) ++needing;
+    const struct os_large_device *d = needing ? os_large_device() : 0;
     int mounted = 0;
     if (d) {
         uint64_t first, sectors;
@@ -137,10 +148,11 @@ static void loader(void *unused)
         }
     }
     for (unsigned i = 0; i < os_large_count(); ++i) {
+        if (os_large_record(i)->flags & SS_LARGE_UNFILLED) { unfilled(i); continue; }
         if (!d) { os_large_finish(i, SS_LARGE_FAILED, (uint32_t)FAT32_IO); continue; }
         load(i, d, mounted);
     }
-    os_large_device_close();
+    if (needing) os_large_device_close();
     vTaskDelete(NULL);
 }
 

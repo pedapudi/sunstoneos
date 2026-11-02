@@ -22,16 +22,19 @@ int ss_large_records_valid(const struct ss_large_region *r, unsigned count)
     if (count > APP_REGION_MAX_REGIONS || (count && !r)) return 0;
     uint64_t total = 0;
     for (unsigned i = 0; i < count; ++i) {
-        if (r[i].index != i || (r[i].flags & ~(unsigned)(SS_LARGE_WRITE | SS_LARGE_EXTENT))) return 0;
+        if (r[i].index != i || (r[i].flags & ~(unsigned)(SS_LARGE_WRITE | SS_LARGE_EXTENT | SS_LARGE_UNFILLED))) return 0;
         if (!r[i].bytes || r[i].bytes % APP_REGION_BLOCK || r[i].bytes > APP_REGION_LIMIT - APP_REGION_BASE) return 0;
         total += r[i].bytes;
         if (total > APP_REGION_LIMIT - APP_REGION_BASE) return 0;
-        if (!r[i].source_bytes || r[i].source_bytes > r[i].bytes) return 0;
         int zero = 1;
         for (unsigned k = 0; k < 32; ++k) if (r[i].sha256[k]) zero = 0;
-        if (zero) return 0;
         int n = path_ok(r[i].path);
         if (n < 0) return 0;
+        if (r[i].flags & SS_LARGE_UNFILLED) {                      /* nothing to load: no source of any kind */
+            if ((r[i].flags & SS_LARGE_EXTENT) || r[i].source_bytes || r[i].first_sector || !zero || n) return 0;
+            continue;
+        }
+        if (!r[i].source_bytes || r[i].source_bytes > r[i].bytes || zero) return 0;
         if (r[i].flags & SS_LARGE_EXTENT) {
             if (n || !r[i].first_sector) return 0;                 /* sector 0 holds the partition table */
         } else if (!n || r[i].path[0] != '/' || r[i].first_sector) return 0;
