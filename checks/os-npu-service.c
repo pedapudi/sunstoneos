@@ -151,7 +151,8 @@ static int register_write(void *cookie, unsigned offset, uint32_t value)
                 if (w == unmapped_address || (!(unmapped_address & 63) && (w & 0x03ffffffu) == unmapped_address >> 6)) { model.mmu_exception = unmapped_address; break; }
             }
         }
-        host_irq_at(host_time_us() + (model.bootstrap ? bootstrap_us : job_us), complete_isr, NULL);
+        /* UNMAPPED_HANG: the faulting job never raises an event (an NPU that stalls on the unmapped access). */
+        if (!(model.mmu_exception && getenv("UNMAPPED_HANG"))) host_irq_at(host_time_us() + (model.bootstrap ? bootstrap_us : job_us), complete_isr, NULL);
     }
     return 1;
 }
@@ -301,6 +302,7 @@ static void verify(void *unused)
         printf("submit %d failures %u site %#x value %#x controller fault %u status %u address %#x\n", (int)result_submit,
                board_failures, first_site, first_value, (unsigned)npu.runtime.service.controller.fault,
                npu.runtime.service.controller.mmu_status, npu.runtime.service.controller.mmu_address);
+        fflush(stdout);
         assert(finished && board_failures == 1 && (int)result_submit == -1 && model.mmu_exception == unmapped_address);
         assert(npu.runtime.service.controller.fault == A733_NPU_MMU);
         assert(first_value == unmapped_address && ((first_site >> 16) & 255u) == 2u); /* the address and the status code */

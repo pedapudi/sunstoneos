@@ -244,6 +244,11 @@ enum a733_npu_state a733_npu_advance(struct a733_npu_controller *c, int sample_e
     uint64_t elapsed = sampled - (canceled ? c->cancel_start : c->start);
     if (elapsed >= (canceled ? c->cancel_timeout : c->timeout)) {
         DIAGNOSTIC_TIMEOUT(c,elapsed);
+        /* Keep what the vendor reads on an exception (event, +0x384, +0x380) for the failure record, so that a job
+         * that stalled without a completion shows whether the MMU had reported. A failed read leaves the field 0. */
+        uint32_t seen = 0;
+        if (read_reg(c, 0x10, &seen)) c->irq_seen |= seen;
+        (void)(read_reg(c, 0x384, &c->mmu_status) && read_reg(c, 0x380, &c->mmu_address));
         fail(c, A733_NPU_TIMEOUT); return c->state;
     }
     /* The configuration is checked at open and at close

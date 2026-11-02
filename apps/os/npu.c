@@ -241,7 +241,11 @@ static int call(enum npu_service_operation op,unsigned model,uint64_t timeout)
     uint64_t end=npu.end,word=atomic_load_explicit(&npu.gate,memory_order_acquire);
     if((word&STOP)&&(word>>3)<end)end=word>>3;
     if(end<=now)return FAIL_REQUEST(op,model,0,NULL,end,now);
+    #ifdef SUNSTONE_NPU_UNMAPPED_SLOT
+    TickType_t wait=pdMS_TO_TICKS(8000); /* a test image waits for the controller's own verdict on a stalled job */
+#else
     TickType_t wait=pdMS_TO_TICKS(2000);
+#endif
     const uint64_t ticks=(end-now)*configTICK_RATE_HZ/1000000;
     if(ticks<wait)wait=(TickType_t)ticks;
     if(!wait)return FAIL_REQUEST(op,model,0,NULL,1,ticks);
@@ -250,7 +254,7 @@ static int call(enum npu_service_operation op,unsigned model,uint64_t timeout)
     if(!npu_runtime_collect(&npu.runtime,0,ticket,&reply,wait))
         return FAIL_REQUEST(op,model,ticket,NULL,1,atomic_load_explicit(&npu.runtime.slot[0].state,memory_order_acquire));
     if(reply.ticket!=ticket)return FAIL_REQUEST(op,model,ticket,&reply,ticket,reply.ticket);
-    if(reply.fault==A733_NPU_MMU)
+    if(reply.fault==A733_NPU_MMU||(reply.fault==A733_NPU_TIMEOUT&&(reply.mmu_status||reply.mmu_address)))
         /* MMU exception: the ticket byte of the site is the MMU status code (1 slave not present, 2 page not
          * present, 3 write violation, 4 out of bound); expected holds it and observed the faulting device address. */
         return fail_at(__LINE__,op,model,reply.mmu_status,&reply,reply.mmu_status,reply.mmu_address,SUNSTONE_CRUMB_HERE(),NULL);
