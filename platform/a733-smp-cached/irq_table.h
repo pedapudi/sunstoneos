@@ -19,12 +19,14 @@ struct a733_irq_route {
 #endif
 extern A733_IRQ_TABLE_CONST struct a733_irq_route a733_irq_routes[];
 extern A733_IRQ_TABLE_CONST unsigned a733_irq_route_count;
-/* Handlers call FreeRTOS FromISR functions, so their GIC priority byte must
- * not be numerically below the port's API ceiling: 11 << 4 in the secure-
- * monitor configuration, the value the existing USB host route (0xd8) meets. */
-#define A733_IRQ_TABLE_MIN_PRIORITY 0xb0u
+/* Handlers call FreeRTOS FromISR functions, so their stored (Secure-view)
+ * GIC priority must not be numerically below the stored value of the port's
+ * API mask. The port writes the mask 11 << 4 = 0xb0 at Non-secure EL1, which
+ * the GIC stores as 0xd8 (docs/hardware/a733-facts.md, "Priority views"). */
+#include "a733_gic_priority.h"
+#define A733_IRQ_TABLE_MIN_PRIORITY 0xd8u
 #ifdef portMAX_API_PRIORITY_MASK
-_Static_assert(A733_IRQ_TABLE_MIN_PRIORITY>=portMAX_API_PRIORITY_MASK,"IRQ table API ceiling");
+_Static_assert(A733_IRQ_TABLE_MIN_PRIORITY>=A733_GIC_STORED_API_FLOOR(portMAX_API_PRIORITY_MASK),"IRQ table API ceiling");
 #endif
 /* Every INTID is a distinct SPI (32..1019), every core is below eight, every
  * handler is set and every priority meets A733_IRQ_TABLE_MIN_PRIORITY. */

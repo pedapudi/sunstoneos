@@ -63,6 +63,15 @@ elseif(SUNSTONE_APPLICATION MATCHES "^(cpu-capacity|cpu-split)$")
   include("${SUNSTONE_SOURCE_ROOT}/apps/scheduler-capacity/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-${SUNSTONE_APPLICATION} LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION ${SUNSTONE_APPLICATION})
+elseif(SUNSTONE_APPLICATION STREQUAL "hw-facts")
+  if(NOT SUNSTONE_A733_HW_FACTS OR NOT SUNSTONE_A733_CPU_TOPOLOGY)
+    message(FATAL_ERROR "The hardware facts image requires SUNSTONE_A733_HW_FACTS=ON and SUNSTONE_A733_CPU_TOPOLOGY=ON")
+  endif()
+  add_sunstone_application(hw-facts
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/hw-facts/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/hw-facts/manifest.json")
+  add_sunstone_image(sunstone-a733-os-hw-facts LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION hw-facts)
 elseif(SUNSTONE_APPLICATION MATCHES "^queue-(add|gemm)$")
   add_sunstone_application(${SUNSTONE_APPLICATION}
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/${SUNSTONE_APPLICATION}/main.c"

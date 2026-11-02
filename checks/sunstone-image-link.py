@@ -107,7 +107,7 @@ def check(image, manifest=None, application=None):
     assert len(raw) == count * ROUTE_BYTES and count <= 64, 'interrupt route geometry'
     for offset in range(0, len(raw), ROUTE_BYTES):
         intid, core, priority, handler = struct.unpack_from('<HBB4xQ', raw, offset)
-        assert 32 <= intid < 1020 and core < 8 and priority >= 0xb0 and handler in functions, 'invalid interrupt route'
+        assert 32 <= intid < 1020 and core < 8 and priority >= 0xd8 and handler in functions, 'invalid interrupt route'
         routes.append({'intid': intid, 'core': core, 'priority': priority})
     assert len({r['intid'] for r in routes}) == len(routes), 'duplicate interrupt routes'
     starts = []

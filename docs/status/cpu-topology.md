@@ -2,6 +2,8 @@
 
 **Status: implemented.**
 
+Core identity, cache geometry and counter frequency are in [the A733 hardware facts](../hardware/a733-facts.md).
+
 **Board-qualified scope:** Port 3-1 supplies architectural identity, cache geometry,
 LSE instruction support and seven fixed-work integer/NEON samples on every core.
 The applied points are CPU-L 1794 MHz at 1000 mV, CPU-B 2002 MHz at 1050 mV

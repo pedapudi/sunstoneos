@@ -8,6 +8,10 @@ ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('coherence_check',ROOT/'checks/secondary-coherence-probe.py')
 coherent=importlib.util.module_from_spec(spec);spec.loader.exec_module(coherent)
 cached=coherent.cached;local=cached.local;digest=cached.digest;SHARED=coherent.SHARED
+spec=importlib.util.spec_from_file_location('hw_facts',ROOT/'tools/hw_facts.py')
+hw_facts=importlib.util.module_from_spec(spec);spec.loader.exec_module(hw_facts)
+# The ICC_PMR_EL1 read-back comes from docs/hardware/a733-facts.json.
+GIC=hw_facts.GicModel()
 
 class Interrupts(coherent.Coherent):
     def execute(self):
@@ -56,15 +60,15 @@ class Interrupts(coherent.Coherent):
         ins=self.decoded[address];op,args=ins.mnemonic,ins.op_str.split(', ')
         if core and op=='mrs' and args[1]=='icc_pmr_el1':
             mask=self.secure_pmr[core]
-            value=mask if m['currentel']==12 else (mask<<1)&255 if mask&128 else 0
+            value=mask if m['currentel']==12 else GIC.pmr_ns_read(mask)
             self.put(core,args[0],value);u.reg_write(UC_ARM64_REG_PC,address+4);return
         if core and op=='msr' and args[0]=='icc_pmr_el1':
             value=self.reg(core,args[1])
-            if m['currentel']==12:self.secure_pmr[core]=value&0xf8
+            if m['currentel']==12:self.secure_pmr[core]=GIC.secure_write(value)
             else:
                 assert m['currentel']==4 and m['scr_el3']&4
-                if self.secure_pmr[core]&128:self.secure_pmr[core]=((value>>1)|128)&0xf8
-            m['icc_pmr_el1']=(self.secure_pmr[core]<<1)&255 if self.secure_pmr[core]&128 else 0
+                self.secure_pmr[core]=GIC.pmr_ns_write(self.secure_pmr[core],value)
+            m['icc_pmr_el1']=GIC.pmr_ns_read(self.secure_pmr[core])
             u.reg_write(UC_ARM64_REG_PC,address+4);return
         if core and address==self.survey_hooks['identity_interrupt_groups_disabled']:
             assert m['daif']&0x80 and not m['cntp_ctl_el0']&3 and not m['icc_igrpen1_el1']

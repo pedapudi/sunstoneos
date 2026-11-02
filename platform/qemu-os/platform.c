@@ -12,6 +12,10 @@
 #include "sunstone_deadline.h"
 #include "irq_table.h"
 #include "qemu_os.h"
+#ifdef SUNSTONE_A733_HW_FACTS
+#include "a733_hw_facts.h"
+#include "a733_mmio.h"
+#endif
 
 #define UART 0x09000000UL
 #define GICD 0x08000000UL
@@ -144,7 +148,20 @@ static void local_init(void) {
     __asm__ volatile("msr ICC_PMR_EL1, %0" :: "r"(value));
     value = 1;
     __asm__ volatile("msr ICC_IGRPEN1_EL1, %0\n isb" :: "r"(value) : "memory");
+#ifdef SUNSTONE_A733_HW_FACTS
+    hwf_capture(core());
+#endif
 }
+#ifdef SUNSTONE_A733_HW_FACTS
+/* The hardware facts probe on the virtual board (platform/a733/hw_facts.c): QEMU's GICv3, whose values are not
+ * the A733's. The header names the platform so that a table read here never becomes a hardware fact. */
+static uintptr_t facts_redistributor(unsigned c) { return GICR + c * 0x20000; }
+static uint32_t facts_read32(uintptr_t address) { return a733_mmio_read32(address); }
+const struct hwf_platform hwf_platform = {
+    .platform = HWF_PLATFORM_QEMU_OS, .distributor = GICD, .redistributor = facts_redistributor, .read32 = facts_read32,
+    .api_mask = portMAX_API_PRIORITY_MASK, .ppi30_priority = portLOWEST_USABLE_INTERRUPT_PRIORITY << portPRIORITY_SHIFT,
+};
+#endif
 void platform_init(void) {
     /* Below 1 GiB: Device-nGnRnE, which is where the A733 peripherals sit. */
     level1[0] = (1UL << 54) | (1UL << 53) | (1UL << 10) | (1UL << 6) | 1;

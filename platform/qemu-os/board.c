@@ -224,6 +224,16 @@ static void monitor(void *unused)
                 l.text[l.used++] = "0123456789abcdef"[b & 15];
             }
             flush(&l);
+            /* A payload too long for the line above is repeated whole, 96 bytes to a line. */
+            for (uint64_t at = 0; r->payload_bytes > 100 && at < r->payload_bytes; at += 96) {
+                put(&l, "APP-RESULT offset="); put_dec(&l, at); put(&l, " hex=");
+                for (uint64_t i = at; i < r->payload_bytes && i < at + 96; ++i) {
+                    const uint8_t b = ((const uint8_t *)(r + 1))[i];
+                    l.text[l.used++] = "0123456789abcdef"[b >> 4];
+                    l.text[l.used++] = "0123456789abcdef"[b & 15];
+                }
+                flush(&l);
+            }
             platform_exit(0);
         }
         if (atomic_load(&entered) && s->entry_linger_us && t >= atomic_load(&entered_at) + s->entry_linger_us) {

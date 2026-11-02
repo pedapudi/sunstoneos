@@ -39,6 +39,11 @@ from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import *
 ROOT=Path(__file__).resolve().parents[1]
+import importlib.util
+spec=importlib.util.spec_from_file_location('hw_facts',ROOT/'tools/hw_facts.py')
+hw_facts=importlib.util.module_from_spec(spec);spec.loader.exec_module(hw_facts)
+# The Non-secure view of a Secure priority comes from docs/hardware/a733-facts.json.
+GIC=hw_facts.GicModel()
 GPR=[UC_ARM64_REG_X0+i for i in range(29)]+[UC_ARM64_REG_X29,UC_ARM64_REG_LR]
 MASK=(1<<64)-1
 COUNTED=('vTaskEnterCritical','vTaskExitCritical','xTaskGetCurrentTaskHandle','ucPortGetCoreID',
@@ -315,7 +320,7 @@ class Machine:
         # scheduling quantum. A periodic task can otherwise alias every quantum
         # with a masked SVC and spuriously starve an already pending interrupt.
         if m['currentel']<=4 and not m['daif']&0x80 and m['icc_igrpen1_el1']&1 and \
-           m['icc_pmr_el1']>0xe0 and self.pending[c] and self.irq_active[c] is None:
+           m['icc_pmr_el1']>GIC.ns_read(0xf0) and self.pending[c] and self.irq_active[c] is None:
             self.exception(c,1,a,irq=True);return
         if a not in self.decoded:self.decoded[a]=next(self.decoder.disasm(bytes(u.mem_read(a,4)),a))
         ins=self.decoded[a];op=ins.mnemonic;args=ins.op_str.split(', ')
@@ -328,8 +333,8 @@ class Machine:
             # The PMU cycle counter advances one per instruction of its core.
             elif name=='pmccntr_el0':v=self.core_steps[c]
             elif name=='s3_0_c15_c3_3':v=self.clusteractlr
-            # Secure priority0xf0 is exposed as0xe0 through the NS CPU interface.
-            elif name=='icc_rpr_el1':v=0xe0 if self.irq_active[c] is not None else 0xff
+            # Secure priority 0xf0 through the NS CPU interface: the view the facts table states.
+            elif name=='icc_rpr_el1':v=GIC.ns_read(0xf0) if self.irq_active[c] is not None else GIC.rpr_idle()
             elif name=='icc_iar1_el1':
                 choices=self.pending[c]
                 v=min(choices) if choices else 1023
@@ -522,7 +527,7 @@ class Machine:
                 m=self.regs[c]
                 if not c:self.timer_level(c)
                 if m['currentel']<=4 and not m['daif']&0x80 and m['icc_igrpen1_el1']&1 and \
-                   m['icc_pmr_el1']>0xe0 and self.pending[c] and self.irq_active[c] is None:
+                   m['icc_pmr_el1']>GIC.ns_read(0xf0) and self.pending[c] and self.irq_active[c] is None:
                     self.exception(c,1,u.reg_read(UC_ARM64_REG_PC),irq=True)
                 try:u.emu_start(u.reg_read(UC_ARM64_REG_PC),0x42200000,count=(211,347,509,673,887)[(quantum+c)%5])
                 except Exception as ex:

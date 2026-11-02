@@ -7,7 +7,7 @@ migration and task-context resource cleanup. Static and dynamic task APIs pass
 configured host checks, including mixed-affinity stress and eight-core soak.
 Selection takes no global task, ISR or administration lock in those tests.
 The default remains the global FIFO-lock control. The CPU control with the fork
-on ran on the board after a pre-start yield was removed. See [the design](../designs/scheduler-partitioned.md).
+on ran on the board after a pre-start yield was removed. See [the design](../designs/scheduler-partitioned.md). Hardware values these paths assert (GIC priority views, interrupt routes, CPU identity) are in [the A733 hardware facts](../hardware/a733-facts.md).
 
 **Software evidence:** host, emulator, source.
 
