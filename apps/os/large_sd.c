@@ -24,6 +24,12 @@
 #include "sunxi_smhc.h"
 #include <stdatomic.h>
 #include <string.h>
+#ifdef OS_SD_WRITE
+#include "sd_hw.h"
+#include "a733_storage_bounds.h"
+/* A write-capable image: the read binding below is the shared setup of both images. sd_owner.c runs the one owner task,
+ * so the two entry points get other names here and sd_owner.c supplies os_large_device() as a proxy for the loader. */
+#endif
 
 #define IDENTIFY_US 5000000u
 #define LIFETIME_US 180000000u
@@ -34,7 +40,13 @@
 extern const struct ss_large_region __start_sunstone_large_regions[] __attribute__((weak));
 extern const struct ss_large_region __stop_sunstone_large_regions[] __attribute__((weak));
 int os_large_sd_declared(void)
-{ return __start_sunstone_large_regions && __stop_sunstone_large_regions > __start_sunstone_large_regions; }
+{
+#ifdef OS_SD_WRITE
+    return 1;                           /* a write-capable image always uses the card */
+#else
+    return __start_sunstone_large_regions && __stop_sunstone_large_regions > __start_sunstone_large_regions;
+#endif
+}
 /* PF0 to PF6 are SD0 and its card detect (apps/sd-read-probe/main.c). */
 int os_large_sd_pins(struct a733_pin_handoff *pins)
 {
@@ -53,6 +65,10 @@ static struct device_memory_lease descriptor_lease;
 static struct os_large_device device;
 static unsigned blocks_in_flight;
 static int opened;
+#ifdef OS_SD_WRITE
+static uint8_t write_buffer[OS_SD_WRITE_BYTES] __attribute__((aligned(4096)));
+static struct a733_storage_bounds bounds;
+#endif
 
 static uint64_t now_us(void)
 {
@@ -72,6 +88,9 @@ static int mappings(void)
     if (!memory_ok(0x04020000, 0x304, 0, 2)) return 0;
     for (unsigned i = 0; i < sizeof words / sizeof words[0]; ++i) if (!memory_ok(words[i], 1, 0, 2)) return 0;
     return memory_ok((uintptr_t)buffers, sizeof buffers, 0xff, 3) &&
+#ifdef OS_SD_WRITE
+        memory_ok((uintptr_t)write_buffer, sizeof write_buffer, 0xff, 3) &&
+#endif
         memory_ok((uintptr_t)descriptors, SUNXI_MMC_DMA_DESCRIPTORS * sizeof *descriptors, 0x44, 2);
 }
 static int admit(void *cookie, const struct a733_mmc_platform_config *c, const struct a733_clock_token *t)
@@ -82,9 +101,14 @@ static int admit(void *cookie, const struct a733_mmc_platform_config *c, const s
 static int dma_sync(void *cookie, uint8_t *b, size_t n, unsigned phase)
 {
     (void)cookie;
-    uintptr_t start = (uintptr_t)b, base = (uintptr_t)buffers;
-    if ((phase != SUNXI_MMC_DMA_BEFORE && phase != SUNXI_MMC_DMA_AFTER) || start < base || start > base + sizeof buffers ||
-        n > base + sizeof buffers - start) return 0;
+    uintptr_t start = (uintptr_t)b, base = (uintptr_t)buffers, size = sizeof buffers;
+#ifdef OS_SD_WRITE
+    if (start >= (uintptr_t)write_buffer && start <= (uintptr_t)write_buffer + sizeof write_buffer) {
+        base = (uintptr_t)write_buffer; size = sizeof write_buffer;
+    }
+#endif
+    if ((phase != SUNXI_MMC_DMA_BEFORE && phase != SUNXI_MMC_DMA_AFTER) || start < base || start > base + size ||
+        n > base + size - start) return 0;
     return aarch64_device_cache(phase == SUNXI_MMC_DMA_BEFORE ? AARCH64_CACHE_CLEAN : AARCH64_CACHE_INVALIDATE, (uintptr_t)b, n) == 1;
 }
 
@@ -172,7 +196,11 @@ static int sd_poll(void *unused)
 }
 
 /* Runs in the loader task, which becomes the platform's owner task. */
+#ifdef OS_SD_WRITE
+const struct os_large_device *os_sd_open_owner_device(void)
+#else
 const struct os_large_device *os_large_device(void)
+#endif
 {
     if (!os_large_sd_declared() || opened) return 0;
     /* The PMIC service must be up before the SD rail can be leased. */
@@ -216,7 +244,11 @@ const struct os_large_device *os_large_device(void)
 }
 
 /* Restore the clock, the pins and the rail when the last region has loaded. */
+#ifdef OS_SD_WRITE
+void os_sd_close_owner_device(void)
+#else
 void os_large_device_close(void)
+#endif
 {
     if (!opened) return;
     enum a733_mmc_platform_result r;
@@ -228,3 +260,52 @@ void os_large_device_close(void)
     opened = 0;
     if (descriptor_lease.pool) (void)device_memory_release(a733_memory_uncached_init(), descriptor_lease);
 }
+
+#ifdef OS_SD_WRITE
+#define WRITE_US 500000u
+static int hw_live(void) { return board_live(NULL); }
+/* ACMD13 in the owner task, as a read: complete with poll and take like any other request. */
+static int hw_allocation_unit(uint32_t *sectors)
+{
+    static uint8_t status[SUNXI_MMC_SD_STATUS_BYTES] __attribute__((aligned(64)));
+    enum a733_mmc_platform_result r;
+    do { r = a733_mmc_platform_sd_status(&platform, status, now_us() + READ_US); } while (r == A733_MMC_BUSY && board_live(NULL));
+    if (r != A733_MMC_PENDING) return 0;
+    do { r = a733_mmc_platform_poll(&platform); } while ((r == A733_MMC_PENDING || r == A733_MMC_BUSY) && board_live(NULL));
+    if (r != A733_MMC_COMPLETE) return 0;
+    do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
+    if (r != A733_MMC_READY || result.error != SUNXI_MMC_OK || result.received != SUNXI_MMC_SD_STATUS_BYTES) return 0;
+    *sectors = sunxi_mmc_au_sectors(status, 0);
+    return 1;
+}
+static int bounds_read(void *unused, uint64_t sector, uint8_t *out) { (void)unused; return sd_read(NULL, sector, 1, out); }
+static int hw_enable_writes(const uint8_t *blob, size_t bytes)
+{
+    /* The blob is the runner's frozen first input; the bounds object walks it in place, so it must stay unchanged. */
+    return card.sector_addressed && a733_storage_bounds_parse(&bounds, blob, bytes) &&
+        a733_storage_bounds_verify(&bounds, bounds_read, NULL) &&
+        a733_mmc_platform_native_bind_bounds(&native, &platform, &bounds);
+}
+static int hw_write_piece(uint64_t sector, uint32_t count, const uint8_t *src)
+{
+    if (!count || count > OS_SD_WRITE_PIECE_SECTORS) return 0;
+    memcpy(write_buffer, src, (size_t)count * 512u);
+    enum a733_mmc_platform_result r;
+    do { r = a733_mmc_platform_write_dma(&platform, &bounds, sector, count, write_buffer, now_us() + WRITE_US); }
+    while (r == A733_MMC_BUSY && board_live(NULL));
+    if (r != A733_MMC_PENDING) return 0;
+    do { r = a733_mmc_platform_poll(&platform); } while ((r == A733_MMC_PENDING || r == A733_MMC_BUSY) && board_live(NULL));
+    if (r != A733_MMC_COMPLETE) return 0;
+    do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
+    return r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.confirmed_blocks == count;
+}
+static struct os_sd_hw hw;
+const struct os_sd_hw *os_sd_open_owner(void)
+{
+    const struct os_large_device *d = os_sd_open_owner_device();
+    if (!d) return 0;
+    hw = (struct os_sd_hw){d, card.sectors, card.sector_addressed, hw_allocation_unit, hw_enable_writes, hw_write_piece, hw_live};
+    return &hw;
+}
+void os_sd_close_owner(void) { os_sd_close_owner_device(); }
+#endif
