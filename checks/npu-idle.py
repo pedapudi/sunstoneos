@@ -9,14 +9,16 @@ import hashlib
 from pathlib import Path
 import subprocess
 
+import host_link
 from harness import CLANG, SANITIZE, environment, save
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['include/npu_idle.h', 'include/a733_npu_idle.h', 'drivers/npu/npu_idle.c',
                 'checks/npu-idle.c', 'checks/register_latency.h',
-                'checks/npu-idle.py', 'checks/harness.py']
+                'checks/npu-idle.py', 'checks/harness.py', 'checks/host_link.py', 'checks/host/strict_mmio.c',
+                'checks/host/strict_mmio.h']
 CASES = ('nominal', 'threshold', 'cancellation', 'admission',
-         'delayed-effects', 'partial-failure', 'readback', 'retention', 'budget', 'idle-mask')
+         'delayed-effects', 'partial-failure', 'readback', 'retention', 'budget', 'idle-mask', 'unmodeled')
 
 
 def main():
@@ -35,13 +37,16 @@ def main():
         return {name: hashlib.sha256(((ROOT if name.startswith('checks/') else
                 args.source_root) / name).read_bytes()).hexdigest() for name in CHECK_INPUTS}
     inputs = fingerprints()
-    command = [str(CLANG), '-std=c11', '-O2', '-g', '-Wall', '-Wextra', '-Werror',
-               *SANITIZE, '-I' + str(args.source_root / 'include'),
-               '-I' + str(ROOT / 'checks'), str(ROOT / 'checks/npu-idle.c'),
-               str(args.source_root / 'drivers/npu/npu_idle.c'), '-o', str(executable)]
-    build = subprocess.run(command, env=env, capture_output=True, text=True)
-    (args.output / 'build.log').write_text(build.stdout + build.stderr)
-    assert build.returncode == 0, build.stdout + build.stderr
+    # The register layer is the strict model of checks/host/strict_mmio.c: it refuses any offset
+    # the fixture does not define with a cited source (checks/host_link.py).
+    command = ['host_link.build', 'checks/npu-idle.c', 'drivers/npu/npu_idle.c']
+    try:
+        executable = host_link.build(args.output.resolve(), 'npu-idle', 'checks/npu-idle.c',
+            [str(args.source_root / 'drivers/npu/npu_idle.c')],
+            includes=[args.source_root / 'include', ROOT / 'checks'])
+        (args.output / 'build.log').write_text('built through checks/host_link.py\n')
+    except subprocess.CalledProcessError as error:
+        raise AssertionError('build failed: ' + str(error))
     results = []
     for case in args.case or CASES:
         run = subprocess.run([str(executable), case], env=env, capture_output=True, text=True)

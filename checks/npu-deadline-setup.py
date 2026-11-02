@@ -17,12 +17,17 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_LR
 
 ROOT = Path(__file__).resolve().parents[1]
+import importlib.util
+_spec = importlib.util.spec_from_file_location('hw_facts', ROOT / 'tools/hw_facts.py')
+hw_facts = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(hw_facts)
+# The Non-secure view of a stored priority comes from docs/hardware/a733-facts.json (checks/hw-facts.py).
+GIC = hw_facts.GicModel()
 CHECK_INPUTS = ['apps/npu-finite/deadline.c', 'apps/npu-finite/deadline.h', 'checks/npu-deadline-setup.c', 'apps/npu-finite/monitor.c']
 RDIST, SGI = 0x03460000, 0x03470000
 
 
 def secure_to_nonsecure(priority):
-    return ((priority << 1) | 0x80) & 0xff
+    return GIC.ns_read(priority)
 
 
 def main():
@@ -98,7 +103,7 @@ def main():
     end, line = run(secure_to_nonsecure(0xd8))
     assert end == 'done', f'setup refused the Nonsecure view {secure_to_nonsecure(0xd8):#x} of Secure priority 0xd8: panic at deadline.c:{line}'
     cases.append('accepts the Nonsecure view (0xb0) of Secure priority 0xd8')
-    for label, kwargs in (('a Secure-looking 0xd8', {'priority_view': 0xd8}), ('priority 0', {'priority_view': 0}), ('a pending write', {'priority_view': 0xb0, 'rwp': True})):
+    for label, kwargs in (('a Secure-looking stored value', {'priority_view': 0xd8}), ('priority 0', {'priority_view': 0}), ('a pending write', {'priority_view': secure_to_nonsecure(0xd8), 'rwp': True})):
         end, line = run(**kwargs)
         assert end == 'panic', f'setup accepted {label}'
         cases.append('refuses ' + label)
