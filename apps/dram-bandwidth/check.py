@@ -73,3 +73,20 @@ except ValueError:
 rejected = rejected or code != 0
 assert rejected, 'the earlier protocol survived early wake-ups'
 print('task protocol passes with and without early wake-ups; the earlier protocol fails with them')
+
+# Admission refuses a manifest whose run deadline and return reserve exceed the supervised
+# session lifetime (apps/os/session.c); an image with such a manifest stops at the EL3 monitor.
+import json
+import re
+def lifetime_us(root):
+    text = (root / 'include/a733_board_application.h').read_text()
+    return int(re.search(r'#define A733_BOARD_SUPERVISED_SECONDS (\d+)u', text).group(1)) * 1000000
+def admitted(manifest, root):
+    d = json.loads(manifest.read_text())['deadlines']
+    return d['return_reserve_us'] < lifetime_us(root) and d.get('run_us', 0) <= lifetime_us(root) - d['return_reserve_us']
+root = here.parents[1]
+assert admitted(here / 'manifest.json', root)
+too_long = a.build / 'manifest-too-long.json'
+too_long.write_text(json.dumps({'deadlines': {'run_us': 90000000, 'return_reserve_us': 5000000}}))
+assert not admitted(too_long, root)
+print('manifest deadlines fit the supervised session lifetime; a 90 s run with a 5 s reserve is refused')
