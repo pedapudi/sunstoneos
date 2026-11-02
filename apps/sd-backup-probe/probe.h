@@ -5,7 +5,7 @@
 
 #define SDP_INPUT_MAGIC UINT64_C(0x3144524450445353)   /* "SSPDRD1" in little-endian bytes */
 #define SDP_REPORT_MAGIC UINT64_C(0x3154505250445353)
-#define SDP_MAX_READS 256u
+#define SDP_MAX_READS 512u
 #define SDP_MAX_CAPTURE 512u
 #define SDP_TIMED 32u            /* reads whose per-phase times are reported */
 
@@ -19,7 +19,8 @@ struct sdp_input {
     uint64_t region_bytes;             /* a region to take from upper memory; zero: none */
     uint32_t region_flags;             /* SDP_REGION_LOAD: load the named file into it */
     uint32_t uhs_mode;                 /* 0: high speed at 3.3 V, S18A observed; 1: UHS-I lifetime 1 (switch, SDR25 at 1.8 V, bank back to 3.3 V at close);
-                                          2: UHS-I lifetime 2 (the card still signals 1.8 V: bank to 1.8 V first, identify without CMD11, SDR25) */
+                                          2: UHS-I lifetime 2 (the card still signals 1.8 V: bank to 1.8 V first, identify without CMD11, SDR25);
+                                          3: the same entry, then SDR104 with tuning (SDR25 if no window) */
     char file_name[48];                /* root-directory path of the file to load */
     uint8_t file_sha256[32];           /* its SHA-256 */
 };
@@ -97,8 +98,10 @@ struct sdp_report {
     uint8_t switch_status[64];
     /* UHS-I lifetimes: [0] mode, [1] the card signals 1.8 V, [2] outcome (sunxi_mmc_uhs_outcome), [3] identified by re-entry, [4] GPIO_POW_VAL and
      * [5] GPIO_POW_VAL_SET_CTL when the card was identified, [6] and [7] the same after the close, [8] and [9] GPIO_POW_MOD_SEL then and after,
-     * [10] the platform's fault: source line | why << 16 | stage << 24 | fault << 32, [11] the stop word the probe published on a failed lifetime. */
-    uint64_t uhs[12];
+     * [10] the platform's fault: source line | why << 16 | stage << 24 | fault << 32, [11] the stop word the probe published on a failed lifetime,
+     * [12] the tuning map (bit d set: sample delay d passed), [13] chosen sample delay | window start << 8 | window width << 16 | outcome << 24,
+     * [14] card clock, Hz, [15] module clock, Hz. */
+    uint64_t uhs[16];
 };
 _Static_assert(sizeof(struct sdp_input) == 160 - 6 * 4 + 4 * SDP_MAX_CAPTURE, "input wire size");
 

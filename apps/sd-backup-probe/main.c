@@ -216,10 +216,11 @@ static int setup(void)
         .kind = SUNXI_MMC_SD, .voltage_mask = 0x00300000, .sd_profile = SUNXI_MMC_SD_HIGH_SPEED4, .dma = DESCRIPTORS,
         .observe_s18 = 1};          /* ACMD41 carries S18R and the card's S18A is kept in the OCR; CMD11 is never sent */
     if (!s.config.topology) return 0;
-    if (c->uhs_mode > 2) return 0;
+    if (c->uhs_mode > 3) return 0;
     if (c->uhs_mode) {              /* a UHS-I lifetime: the profile that moves the bank, SDR25 only, no S18A observation */
         s.config.sd_profile = SUNXI_MMC_SD_UHS_SDR104; s.config.observe_s18 = 0; s.config.sdr25_only = 1;
-        s.config.start_1v8 = c->uhs_mode == 2;
+        s.config.start_1v8 = c->uhs_mode >= 2;
+        if (c->uhs_mode == 3) s.config.sdr25_only = 0;       /* SDR104 and the CMD19 sweep; the core falls back to SDR25 without a window */
     }
     /* Establish entry state, do not require it: the pins carry whatever the boot ROM and the runner left
      * (the provider accepts the passive and the ROM JTAG patterns). The inherited fields are read here,
@@ -537,6 +538,11 @@ static void report(int outcome)
     o->uhs[10] = (uint64_t)s.platform.fault_line | (uint64_t)s.platform.fault_why << 16 | (uint64_t)s.platform.stage << 24 |
         (uint64_t)s.platform.fault << 32;
     o->uhs[11] = stop_word;
+    if (s.card_valid) {
+        o->uhs[12] = c->tuning_map;
+        o->uhs[13] = (uint64_t)c->sample_delay | (uint64_t)c->tuning_start << 8 | (uint64_t)c->tuning_width << 16 | (uint64_t)c->uhs_outcome << 24;
+        o->uhs[14] = c->card_hz; o->uhs[15] = c->module_hz;
+    }
     o->status_result = status_result; o->status_us = status_us;
     if (status_result) { o->au_sectors = sunxi_mmc_au_sectors(status_copy, 0); o->au_sectors_uhs = sunxi_mmc_au_sectors(status_copy, 1); }
     __asm__ volatile("dsb sy" ::: "memory");

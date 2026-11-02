@@ -322,6 +322,35 @@ The card on 3-3 is a Phison `SD32G`, revision 1.2, serial `0000029d`, made Decem
 moved the bank to 1.8 V first, answers ACMD41 at 1.8 V with S18A clear (so a session must not wait for it), and supports SDR104 and DDR50. The card is
 still at 1.8 V; the bank is at 3.3 V; the board returned to FEL.
 
+## SDR104 trial on port 3-3 (approved, read only)
+
+One lifetime (`--uhs-mode 3`): the bank to 1.8 V, re-entry without CMD11, CMD6 to SDR104, the module clock to the fastest the platform verifies
+(PERI0_300M / 1 for a 150 MHz card clock, else PERI0_400M / 2 for 100 MHz), the CMD19 sweep of the 64 sample delays, then 512 requests of 128 KiB
+(64 MiB) from sector 0, and the close back to 3.3 V on the bank. The first 32 requests read the same sectors as the SDR25 lifetime, so their CRCs
+compare (the SDR25 CRCs are kept in `sdr25-crc-3-3.txt` next to the build; their fold is `0x5d`). The platform only verifies the PERI0_300M
+gates, it does not enable them, so whether the card runs at 150 or at 100 MHz depends on what the launcher leaves; the report says which
+(`card_clock_hz`, `module_clock_hz`).
+
+Host evidence before the run: the lifetimes model runs this lifetime at 150 MHz, at 100 MHz and with no passing delay (the fallback to SDR25 at
+50 MHz), each with a cut at every poll except every 9th inside the sweep (2,868 cuts in all), and applies the native adapter's real register
+filter to every register write of every lifetime (a shadow adapter in `checks/sd-return-close.c`), which found nothing to refuse; a mutation that
+removes the CMD6 SDR104 argument from the filter fails it. That closes the gap that the close failure exposed for the rest of the SDR104 path.
+
+Prediction (written before the run):
+
+- **Re-entry** as in the SDR25 lifetime; the CMD6 SDR104 check shows function 3 supported and the set selects it.
+- **Tuning:** a passing run of at least 12 consecutive delays among the 64; the chosen delay is the midpoint of the first longest run. I expect a
+  window of 15 to 40 delays at 150 MHz and a wider one at 100 MHz.
+- **Clock:** 150 MHz if the PERI0_300M gates are up, otherwise 100 MHz. I do not know which; the previous lifetimes only used 50 MHz.
+- **Rates.** The raw limit of four lines is 75 MB/s at 150 MHz and 50 MB/s at 100 MHz (the 104 MB/s of the SDR104 mode is for 208 MHz, which this
+  board's clock tree does not offer). With the per-request command cost of about 0.1 ms, the best a request can do is about 70 MB/s at 150 MHz.
+  **Success is** a sustained rate over the 64 MiB of at least 45 MB/s at 150 MHz (twice the 21.7 MB/s of 50 MHz) or at least 30 MB/s at 100 MHz,
+  with no error and the first 32 CRCs equal to the SDR25 CRCs. I expect 55 to 70 MB/s at 150 MHz if the card sustains it; this 2020 card may not.
+- **Failure branches.** No passing run of 12 delays: the core clocks down to 50 MHz, selects SDR25 and goes on (outcome `no_window`), with no power
+  cycle; the reads then run at about 21 MB/s and the lifetime returns normally. A CMD19 or data error that the core cannot recover is a retained
+  fault; the stop word names it, the card stays at 1.8 V and the next lifetime re-enters it. Either way the report is the result and I stop.
+- **Close:** the selector back to 3.3 V, the bank reports it, the module and bus restored, a normal return with no restoration word changed.
+
 ## Board plan
 
 Each stage has one hypothesis. Nothing runs without the coordinator's approval and none writes to the card. Stage 2 below is the
