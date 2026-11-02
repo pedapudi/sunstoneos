@@ -407,32 +407,31 @@ things from the driver, none of which exists today.
   arbiter is a flag the reader sets and the writer polls between pieces by waiting on
   the read-completion notification; no tick-based polling is involved.
 
-## Bounded first write on the 62.5 GB card (design)
+## Bounded first write on the 62.5 GB card
 
-The card holds one FAT32 partition at sector 32,768 with 122,105,856 sectors,
-64 sectors per cluster, 64 reserved sectors, two FATs of 14,912 sectors, FSInfo
-at partition sector 1 and root cluster 2. The host run `fat32-rw plan` creates
-`/sunstone-test/sunstone-region-test.bin` (536,870,912 bytes) on a `mkfs.fat`
-volume of this geometry, with a 4 MiB allocation unit, and records every write:
+The card holds one FAT32 partition at sector 32,768 (MBR type 0x0C) with 122,105,856 sectors, 64 sectors per cluster, 64
+reserved sectors, two FATs of 14,912 sectors, FSInfo at partition sector 1, backup boot sector at 6 and root cluster 2; the
+volume is labelled "64 GB DRIVE" and was clean and empty beyond its root cluster when read. The read-only backup probe
+(`apps/sd-backup-probe`) read the SD Status register on the board: `AU_SIZE` is 9, so the allocation unit is 4 MiB, 8,192
+sectors, and `UHS_AU_SIZE` reads the same. It returned 457 listed sectors (the MBR, the boot area, both FATs through index 159,
+and the root cluster) with the restoration words unchanged; the dump is under `~/.cache/sunstoneos/sd-backup/`.
 
-| Set | Absolute sectors | Count |
-| --- | --- | --- |
-| Root directory, cluster 2: entry `sunstone-test` | 62,656 | 1 (the cluster, 62,656 to 62,719, is the allowed set) |
-| Directory `sunstone-test`, cluster 3 | 62,720 to 62,783 | 64 (zero fill and the two dot entries, then sector 62,720 again for the file entry) |
-| Data, clusters 47 to 16,430 (first cluster on an AU boundary) | 65,536 to 1,114,111 | 1,048,576 |
-| FAT copy 1, indexes 0 to 128 | 32,832 to 32,960 | 129 (sector 32,832 is written four times: dirty flag, the directory cluster entry, the chain run, clean flag) |
-| FAT copy 2, indexes 0 to 128 | 47,744 to 47,872 | 129 |
-| FSInfo | 32,769 | 1 |
+The host run `fat32-rw plan` creates `/sunstone-test/sunstone-region-test.bin` (536,870,912 bytes) on a `mkfs.fat` volume of this
+geometry with this allocation unit and records every write. The plan for the real card:
 
-The service writes 267 metadata sectors and 1,048,576 data sectors in 4,110 write
-calls: 4,096 data pieces of 256 sectors and 14 metadata writes. The boot sector,
-its backup (32,774), the backup FSInfo (32,775) and every other FAT sector
-are never written. The data start depends on the allocation unit; the plan is
-regenerated for the unit the card reports before the board run. The metadata
-backup is the boot sector, backup boot sector, both FSInfo sectors, both FAT
-ranges and clusters 2 and 3: 390 sectors. The region test-file design
-(`region-test-file-write.md`) lists the same card with the file at cluster 3; with the
-service the directory takes cluster 3 and the file follows on an AU boundary.
+| Set | Absolute sectors | Count | Backed up |
+| --- | --- | --- | --- |
+| MBR | 0 | 1 (read only; it gives the partition) | yes |
+| Boot area: boot sector, FSInfo, backup boot sector, backup FSInfo | 32,768 to 32,775 | 8 (only FSInfo, 32,769, is written) | yes |
+| FAT copy 1, indexes 0 to 128 | 32,832 to 32,960 | 129 | yes |
+| FAT copy 2, indexes 0 to 128 | 47,744 to 47,872 | 129 | yes |
+| Root cluster 2 and directory cluster 3 (`sunstone-test`) | 62,656 to 62,783 | 128 | yes |
+| Data, clusters 47 to 16,430 (first cluster on an allocation unit boundary) | 65,536 to 1,114,111 | 1,048,576 | no: the approval record lists it as data |
+
+The write ranges are FSInfo `[32769, 1]`, both FATs, `[62656, 128]` and the data. The backup is 395 sectors in five ranges
+(`[0,1] [32768,8] [32832,129] [47744,129] [62656,128]`). The service writes 267 metadata sectors and the data in 4,110 calls:
+4,096 data pieces of 256 sectors and 14 metadata writes. The boot sector, its backup, the backup FSInfo and every other FAT sector
+are never written. The data start follows the allocation unit, so the plan is regenerated if a different card is used.
 
 ## Remaining work
 
