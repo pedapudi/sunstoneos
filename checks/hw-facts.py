@@ -97,7 +97,7 @@ def test_decoder():
     assert by[('gic.cpuif.icc_ctlr_el1.pribits', 3)]['value'] == 5
     assert by[('gic.cpuif.icc_pmr_el1.readback_after_write_ff', 2)]['written'] == 0xff
     assert by[('gic.cpuif.icc_pmr_el1.readback_after_write_api_mask', 2)]['value'] == 0x98
-    assert by[('gic.redist.intid27.priority', 4)]['value'] == 0xd8 and by[('gic.redist.intid26.priority', 4)]['value'] == 0xa0
+    assert by[('gic.redist.intid27.priority', 4)]['value'] == hw.ns_view(0x6c) and by[('gic.redist.intid26.priority', 4)]['value'] == hw.ns_view(0x50)
     assert by[('gic.dist.spi97.priority', 0)]['value'] == 0x58 and by[('gic.dist.spi97.priority', 0)]['status'] == 'measured'
     # GICD_CTLR 0x12 read at Non-secure EL1 with DS clear: EnableGrp1A and ARE_NS, and no field of the Secure layout.
     assert by[('gic.dist.gicd_ctlr', 0)]['value'] == 0x12
@@ -192,11 +192,18 @@ def test_document():
     assert catalogued <= names, sorted(catalogued - names)[:5]
     seen = set()
     for item in document['facts']:
-        assert item['status'] in ('measured', 'observed', 'unmeasured', 'raz-in-view'), item
+        assert item['status'] in ('measured', 'observed', 'unmeasured', 'raz-in-view', 'from-source', 'derived'), item
         key = (item['name'], item['core'])
         assert key not in seen, key
         seen.add(key)
         assert set(item['view']) == {'el', 'security', 'interface'} and item['source'], item
+        if item['status'] == 'derived':
+            assert item['value'] == hw.ns_view(next(e['value'] for e in document['facts'] if e['name'] == item['derived_from']))
+            continue
+        if item['status'] == 'from-source':
+            assert isinstance(item['value'], int) and re.fullmatch(r'[\w./-]+\.\w+:\d+(-\d+)?.*', item['source_ref']), item
+            assert (ROOT / item['source_ref'].split(':')[0]).is_file(), item['source_ref']
+            continue
         if item['status'] in ('unmeasured', 'raz-in-view'):
             assert item['value'] is None
             assert item['status'] == 'unmeasured' or item['note'], item
@@ -212,7 +219,7 @@ def test_document():
     assert facts.value('gic.cpuif.icc_pmr_el1.readback_after_write_ff', 3) == 0xf0
     assert facts.value('gic.cpuif.icc_ctlr_el1.pribits', 0) == 4
     assert facts.value('gic.redist.intid27.priority_after_write', 0) == 0xd0
-    assert facts.value('gic.dist.spi97.priority', 0) == 0xb0
+    assert facts.value('gic.dist.spi97.priority', 0) == hw.ns_view(facts.value('config.spi97.stored_priority'))
     assert facts.value('cpu.cntfrq_el0', 5) == 24000000
     assert facts.entry('gic.cpuif.icc_igrpen0_el1.read_traps_to_el3', 4)['queue_entry'] == '1793590176547518274-e819ce89'
     assert facts.value('runner.mmio.0x07064000') == 8 and facts.value('runner.rail.dcdc3_uv') == 800000
@@ -221,7 +228,7 @@ def test_document():
         raise AssertionError('an unknown fact answered')
     except hw.MissingFact:
         pass
-    assert facts.assume('gic.dist.nonexistent', 0xd8, 'test') == 0xd8 and 'gic.dist.nonexistent' in facts.assumed
+    assert facts.assume('gic.dist.nonexistent', 7, 'test') == 7 and 'gic.dist.nonexistent' in facts.assumed
 
 
 def variant(readback):
@@ -242,8 +249,8 @@ def test_models():
     # 0xd8 to the priority byte of PPI 27 reads back 0xd0.
     assert gic.pmr_ns_read(gic.pmr_ns_write(0xf8, 0xff)) == facts.value('gic.cpuif.icc_pmr_el1.readback_after_write_ff', 0)
     assert gic.pmr_ns_write(0x00, 0xff) == 0x00 and gic.pmr_ns_read(0x00) == 0
-    assert gic.ns_read(gic.ns_write(0xd8)) == facts.value('gic.redist.intid27.priority_after_write', 0)
-    assert gic.ns_read(0xd8) == facts.value('gic.dist.spi97.priority', 0), 'Secure 0xd8 of the NPU route reads 0xb0'
+    assert gic.ns_read(gic.ns_write(facts.value('config.intid27.stored_priority_written_ns'))) == facts.value('gic.redist.intid27.priority_after_write', 0)
+    assert gic.ns_read(facts.value('config.spi97.stored_priority')) == facts.value('gic.dist.spi97.priority', 0), 'the stored route priority of INTID 97 as Non-secure EL1 reads it'
     # A table that reads 0xf8 selects the unshifted view; one that fits neither is a contradiction.
     plain = hw.GicModel(variant(0xf8))
     assert not plain.shifted and plain.pmr_ns_read(plain.pmr_ns_write(0xf8, 0xff)) == 0xf8
@@ -316,6 +323,67 @@ def test_instructions(image):
     return sorted(used)
 
 
+# Priority comparisons against a literal. A priority is compared with a literal only through the helper
+# (include/a733_gic_priority.h, tools/hw_facts.py ns_view and stored_from_ns). These reviewed files still do, each with
+# the number of comparisons: the stream that owns the file changes it, or the image reads the GIC in its own monitor's view.
+LITERAL_COMPARISONS = {
+    'apps/board/host_irq.c': (2, 'USB stream: the route stores 0xb0, whose Non-secure view is 0x60, and the ceiling check compares in the stored view'),
+    'apps/npu-finite/deadline.c': (1, 'NPU stream: expects the Non-secure view 0xb0 of the stored 0xd8'),
+    'apps/spi/irq.c': (2, 'single-core SPI image: compares with 0xb0 in its own monitor view'),
+    'drivers/pwm/a733_pwm.c': (1, 'single-core PWM image: compares with 0xd8 in its own monitor view'),
+    'checks/a733-irq-table.c': (1, 'model of the route installer: stored priority'),
+    'checks/gpu-single-core.py': (1, 'single-core GPU image model'), 'checks/hdmi-audio-boot.py': (1, 'single-core image model'),
+    'checks/pwm-single-core.py': (1, 'single-core PWM image model'), 'checks/thermal-single-core.py': (1, 'single-core thermal image model'),
+    'checks/sunstone-image-link.py': (1, 'route floor 0xb0 compared with the stored priority; the API floor in the stored view is 0xd8'),
+}
+PRIORITY_LITERAL = re.compile(r'(?:==|!=|<=|>=|(?<![<])<(?![<])|(?<![>])>(?![>]))\s*(?:UINT32_C\()?0x(?:b0|d8)(?:0{6})?u?\b|'
+                              r'\b0x(?:b0|d8)(?:0{6})?u?\)?\s*(?:==|!=|<=|>=)')
+PRIORITY_CONTEXT = re.compile(r'prio|>>\s*24|0x4[0-9a-f]{2}\\b|SGI|GIC|configMAX_API|read32|mmio_read|\.read\(|\[.priority.\]', re.I)
+
+
+def literal_comparisons(text):
+    return [n for n, line in enumerate(text.splitlines(), 1)
+            if PRIORITY_LITERAL.search(line.split('//')[0]) and PRIORITY_CONTEXT.search(line.split('//')[0])]
+
+
+def test_helper():
+    """The C macros and the Python functions are one rule, and the facts file obeys it."""
+    import subprocess, tempfile
+    source = ('#include <stdio.h>\n#include "a733_gic_priority.h"\nint main(void){for(unsigned i=0;i<256;++i)'
+              'printf("%u %u %u\\n",i,A733_GIC_NS_VIEW(i),A733_GIC_STORED_FROM_NS(i));return 0;}\n')
+    work = Path(tempfile.mkdtemp(dir=variant.directory))
+    (work / 'p.c').write_text(source)
+    subprocess.run(['cc', '-I', str(ROOT / 'include'), str(work / 'p.c'), '-o', str(work / 'p')], check=True)
+    rows = [tuple(map(int, line.split())) for line in subprocess.run([str(work / 'p')], capture_output=True, text=True, check=True).stdout.splitlines()]
+    assert len(rows) == 256 and all(ns == hw.ns_view(i) and st == hw.stored_from_ns(i) for i, ns, st in rows)
+    facts = hw.Facts()
+    for intid in (71, 95, 97, 143):
+        stored = facts.value('config.spi%d.stored_priority' % intid)
+        assert facts.value('gic.dist.spi%d.priority' % intid, 0) == hw.ns_view(stored) == facts.value('config.spi%d.ns_view_priority' % intid)
+    ppi = facts.value('config.intid27.stored_priority_written_ns')
+    assert facts.value('gic.redist.intid27.priority_after_write', 0) == hw.ns_view(hw.stored_from_ns(ppi))
+    api = facts.value('gic.cpuif.icc_pmr_el1.readback_after_write_api_mask', 0)
+    assert hw.stored_from_ns(api) == facts.value('config.spi97.stored_priority'), 'the FreeRTOS API mask and the INTID 97 route priority meet'
+
+
+def test_priority_literals():
+    import subprocess
+    assert literal_comparisons('if((read32(0x4b8)>>24)!=0xb0)return 0;') and literal_comparisons("assert by['priority'] == 0xd8")
+    assert not literal_comparisons('x = A733_GIC_NS_VIEW(0xd8) << 8;') and not literal_comparisons('put(g+0x460,0xb0<<8,4);')
+    tracked = subprocess.run(['git', '-C', str(ROOT), 'ls-files'], capture_output=True, text=True, check=True).stdout.split()
+    found = {}
+    for name in tracked:
+        if not name.endswith(('.c', '.h', '.py', '.S')) or name.startswith(('docs/', 'include/a733_gic_priority.h', 'tools/hw_facts.py', 'checks/hw-facts.py')):
+            continue
+        hits = literal_comparisons((ROOT / name).read_text(errors='replace'))
+        if hits:
+            found[name] = len(hits)
+    unexpected = {n: c for n, c in found.items() if n not in LITERAL_COMPARISONS or LITERAL_COMPARISONS[n][0] != c}
+    gone = [n for n in LITERAL_COMPARISONS if n not in found]
+    assert not unexpected, 'priority compared with a literal outside the helper: %s' % unexpected
+    assert not gone, 'remove from LITERAL_COMPARISONS: %s' % gone
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
@@ -329,6 +397,8 @@ def main():
     test_document()
     test_models()
     test_no_hardcoded_values()
+    test_helper()
+    test_priority_literals()
     registers = test_instructions(None)
     if args.image:
         test_instructions(args.image)

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef SUNSTONE_A733_HW_FACTS_H
 #define SUNSTONE_A733_HW_FACTS_H
-/* The hardware facts table (docs/hardware/a733-facts.md).
+/* The hardware facts table (docs/hardware/a733-facts-probe.md).
  *
  * A fixed binary layout that the facts probe fills at EL1 on every core before the scheduler starts
  * and that the facts application returns as its result. tools/hw_facts.py describes the same layout
@@ -62,6 +62,6 @@ extern const struct hwf_platform hwf_platform;
     offsetof(struct hwf_table, shared), offsetof(struct hwf_table, core), sizeof(((struct hwf_table *)0)->core[0]), 0, {0}}}
 extern struct hwf_table hwf_table;
 /* EL1 on core `core`, before the scheduler. Reads registers only; the writes it makes
- * are listed in docs/hardware/a733-facts.md. */
+ * are listed in docs/hardware/a733-facts-probe.md. */
 void hwf_capture(unsigned core);
 #endif

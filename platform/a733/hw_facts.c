@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* Capture of the hardware facts table (include/a733_hw_facts.h, docs/hardware/a733-facts.md).
+/* Capture of the hardware facts table (include/a733_hw_facts.h, docs/hardware/a733-facts-probe.md).
  *
  * Every core runs hwf_capture at EL1 before the scheduler starts and records
  * its own registers. Core 0 also records the distributor, the shared peripheral interrupts and the

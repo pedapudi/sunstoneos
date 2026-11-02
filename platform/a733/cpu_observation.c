@@ -68,7 +68,7 @@ void ss_cpu_observe_boot(unsigned core)
     if(core<SS_CPU_MAX&&ss_cpu_observation_capture(core,&ops,NULL,&snapshots[core]))
         atomic_store_explicit(&valid[core],1,memory_order_release);
 #ifdef SUNSTONE_A733_HW_FACTS
-    /* The hardware facts probe (docs/hardware/a733-facts.md): the same EL1 point, before any task. */
+    /* The hardware facts probe (docs/hardware/a733-facts-probe.md): the same EL1 point, before any task. */
     {extern void hwf_capture(unsigned);hwf_capture(core);}
 #endif
 #else

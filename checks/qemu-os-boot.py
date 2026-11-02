@@ -669,7 +669,7 @@ def main():
               'the violation is not the code-block SP_EL0 on core 0: %s' % violation['line'])
     c.require(c.main is None, 'the application started after the violation')
 
-    # 10. The hardware facts probe (docs/hardware/a733-facts.md): every core records its registers at EL1 before
+    # 10. The hardware facts probe (docs/hardware/a733-facts-probe.md): every core records its registers at EL1 before
     # the scheduler, the application returns the table, and the host decoder reads it. QEMU's GICv3 is not the
     # A733's, so the table names the virtual board and can never be merged into the hardware facts.
     c = run_case('hw-facts', facts_elf, scenario(usb_ready_ms=usb_delay_ms), None)
@@ -687,7 +687,7 @@ def main():
                   for k in range(8)), 'a core did not report the Cortex-A76 and the declared 24 MHz counter')
     c.require(len({by[('cpu.mpidr_el1', k)]['value'] for k in range(8)}) == 8, 'the cores do not report eight different MPIDR values')
     c.require(by[('gic.dist.gicd_ctlr.ds1_ds', 0)]['value'] == 1 and by[('gic.dist.gicd_ctlr.ds1_are', 0)]['value'] == 1, 'GICD_CTLR does not have DS and ARE_S set as the virtual board')
-    c.require(by[('gic.redist.intid27.priority_after_write', 0)]['value'] == 0xd8 and by[('gic.redist.intid27.priority_after_write', 0)]['written'] == 0xd8,
+    c.require(by[('gic.redist.intid27.priority_after_write', 0)]['value'] == by[('gic.redist.intid27.priority_after_write', 0)]['written'],
               'the PPI 27 write test did not read back what it wrote')
     c.require(by[('gic.dist.spi97.route_requested', 0)]['value'] == 0x100d8, 'the probe image routes INTID 97 at 0xd8 on core 0')
     c.require(by[('mmio.0x07064000', 0)]['status'] == 'unmeasured', 'the PPU word was read although its gate is closed')

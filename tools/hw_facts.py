@@ -441,11 +441,109 @@ TRAP_ENTRY = '1793590176547518274-e819ce89'
 SEEDS.append(dict(name='gic.cpuif.icc_igrpen0_el1.read_traps_to_el3', source='ICC_IGRPEN0_EL1 (mrs at Non-secure EL1)',
                   view=view('cpuif'), core=4, status='measured', value=1, queue_entry=TRAP_ENTRY,
                   note='measured: the first EL3 exception was ESR 0x623c32b9 (EC 0x18, a trapped system register access) at the mrs of '
-                       'ICC_IGRPEN0_EL1, ELR 0x4107c1c0, on core 4, and the monitor stopped. INFERRED from this trap, not measured '
-                       '(SCR_EL3 is not readable at EL1): SCR_EL3.FIQ is 1. With FIQ set the GIC architecture gives EL3 the Group 0 '
-                       'interface, so Non-secure EL1 accesses to ICC_IGRPEN0_EL1, ICC_BPR0_EL1, ICC_AP0Rn_EL1, ICC_IAR0_EL1, '
-                       'ICC_EOIR0_EL1 and ICC_HPPIR0_EL1 trap to EL3 (IHI0069, the ICC_IGRPEN0_EL1 and ICC_BPR0_EL1 register descriptions; '
-                       'Linux irq-gic-v3.c gic_has_group0). The monitor entry code that writes 0x535 to SCR_EL3 agrees but is not a measurement'))
+                       'ICC_IGRPEN0_EL1, ELR 0x4107c1c0, on core 4, and the monitor stopped. With SCR_EL3.FIQ set (FROM SOURCE: the monitor writes 0x535, platform/a733-smp-cached/continue.S:98-99, fact monitor.scr_el3.fiq) the '
+                       'GIC architecture gives EL3 the Group 0 interface, so Non-secure EL1 accesses to ICC_IGRPEN0_EL1, ICC_BPR0_EL1, ICC_AP0Rn_EL1, '
+                       'ICC_IAR0_EL1, ICC_EOIR0_EL1 and ICC_HPPIR0_EL1 trap to EL3 (IHI0069, the ICC_IGRPEN0_EL1 and ICC_BPR0_EL1 register descriptions; '
+                       'Linux irq-gic-v3.c gic_has_group0).'))
+
+
+# ---------------------------------------------------------------------------
+# What our own source sets. The monitor, the route installer and the platform code configure the security state, the
+# group, the trigger, the priority and the route of every interrupt the OS uses, so these values need no inference.
+
+FROM_SOURCE = 'from-source'
+ROUTES = (  # INTID, core, stored (Secure) priority, route-table file and line, images
+    (71, 0, 0xd8, 'tools/sunstone-manifest.py:345', 'every OS image'),
+    (187, 0, 0xb0, 'tools/sunstone-manifest.py:346', 'images with SUNSTONE_BOARD_USB2_IRQ'),
+    (97, 1, 0xd8, 'tools/sunstone-manifest.py:347', 'NPU images (OS_NPU_CORE is 1, apps/os/npu.h:6)'),
+    (143, 0, 0xd8, 'tools/sunstone-manifest.py:348-349', 'audio and DMA images'),
+    (95, 0, 0xd8, 'tools/sunstone-manifest.py:350', 'GPU images (core 2 or the application core)'),
+    (149, 0, 0xd8, 'apps/isp0/irq.h:26', 'ISP0 image'), (153, 0, 0xd8, 'apps/isp0/irq.h:26', 'ISP0 image'),
+    (161, 0, 0xd8, 'apps/isp0/irq.h:26', 'ISP0 image'),
+)
+LOCAL_VISIBLE = tuple(range(16)) + (27, 30)  # SGIs and the two timer PPIs that source assigns to Non-secure Group 1
+SOURCE_SCALARS = (
+    ('monitor.scr_el3', 0x535, 'platform/a733-smp-cached/continue.S:98-99', 'SCR_EL3 the cached monitor writes before entering Non-secure EL1: NS, FIQ, HCE and RW set, with the RES1 bits 4 and 5 (platform/a733/monitor.c:124-125 writes 0x505 without them)'),
+    ('monitor.scr_el3.ns', 1, 'platform/a733-smp-cached/continue.S:98-99', 'EL1 runs in the Non-secure state'),
+    ('monitor.scr_el3.fiq', 1, 'platform/a733-smp-cached/continue.S:98-99', 'Group 0 interrupts go to EL3 as FIQ, so Non-secure EL1 accesses to the Group 0 CPU interface registers trap to EL3 (consistent with queue entry 1793590176547518274-e819ce89)'),
+    ('monitor.gicd_ctlr.ds', 0, 'platform/a733-smp-cached/boot.c:95', 'the boot stops if DS is set: the GIC keeps two security states'),
+    ('monitor.gicd_ctlr.are_s_are_ns', 3, 'platform/a733-smp-cached/boot.c:103', 'affinity routing enabled for both states'),
+    ('monitor.gicd_ctlr.enable_grp0_grp1ns', 3, 'platform/a733-smp-cached/boot.c:104', 'Group 0 and Non-secure Group 1 enabled'),
+)
+
+
+def ns_view(stored):
+    """The Non-secure view of a stored (Secure) priority with two security states and five priority bits."""
+    return (stored << 1) & 0xff
+
+
+def stored_from_ns(ns):
+    """The stored priority that a Non-secure write of `ns` produces (IHI0069 4.8.1)."""
+    return ((ns >> 1) | 0x80) & 0xf8
+
+
+def source_facts():
+    out = []
+    for name, value, ref, text in SOURCE_SCALARS:
+        out.append(dict(name=name, source='source: ' + ref, view=dict(el=3, security='secure', interface='monitor code'), core=None,
+                        status=FROM_SOURCE, value=value, source_ref=ref, note=text))
+    for intid in LOCAL_VISIBLE:
+        for field, value, ref in (('group', 1, 'platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)'),
+                                  ('group_modifier', 0, 'platform/a733/cpu_continue.c:116')):
+            out.append(dict(name='config.intid%d.%s' % (intid, field), source='GICR_IGROUPR0/IGRPMODR0 bit %d as EL3 sets it' % intid,
+                            view=dict(el=3, security='secure', interface='gic-redistributor-sgi-frame'), core='all', status=FROM_SOURCE,
+                            value=value, source_ref=ref, note='Non-secure Group 1' if field == 'group' else 'Group 1 modifier clear'))
+    for intid, field, value, ref in ((0, 'stored_priority', 0xf0, 'platform/a733/cpu_continue.c:120'),
+                                     (27, 'trigger_level', 1, 'platform/a733-smp-cached/continue.c:122-124'),
+                                     (30, 'trigger_level', 1, 'platform/a733/cpu_continue.c:118'),
+                                     (30, 'stored_priority_written_ns', 0xe0, 'platform/a733-smp-cached/platform.c:116 (portLOWEST_USABLE_INTERRUPT_PRIORITY << 4, written at Non-secure EL1)'),
+                                     (27, 'stored_priority_written_ns', 0xd8, 'platform/a733-smp-cached/platform.c:121 (written at Non-secure EL1 under SUNSTONE_TASK_DEADLINES)')):
+        out.append(dict(name='config.intid%d.%s' % (intid, field), source='source: ' + ref, view=dict(el=3 if 'written_ns' not in field else 1,
+                        security='secure' if 'written_ns' not in field else SECURITY, interface='gic-redistributor-sgi-frame'),
+                        core='all', status=FROM_SOURCE, value=value, source_ref=ref,
+                        note='the value the code writes; a Non-secure write of v stores ((v >> 1) | 0x80) & 0xf8' if 'written_ns' in field else
+                             'the value the code sets'))
+    for intid, core, stored, ref, images in ROUTES:
+        base = 'config.spi%d.' % intid
+        for field, value, where in (('group', 1, 'platform/a733-smp-cached/irq_table.c:70'), ('group_modifier', 0, 'platform/a733-smp-cached/irq_table.c:71'),
+                                    ('trigger_level', 1, 'platform/a733-smp-cached/irq_table.c:72'),
+                                    ('stored_priority', stored, ref + ' applied at platform/a733-smp-cached/irq_table.c:73-74'),
+                                    ('route_core', core, ref + ' applied at platform/a733-smp-cached/irq_table.c:76'),
+                                    ('ns_view_priority', ns_view(stored), 'derived: ns_view(stored_priority), IHI0069 4.8.1')):
+            item = dict(name=base + field, source='source: ' + where, view=dict(el=3, security='secure', interface='gic-distributor'),
+                        core=None, status=FROM_SOURCE, value=value, source_ref=where, note='route of %s' % images)
+            if field == 'ns_view_priority':
+                item.update(status='derived', derived_from=base + 'stored_priority', source='derived: the Non-secure view of the stored priority',
+                            view=view('dist'), note='IHI0069 4.8.1: (stored << 1) & 0xff; INTID 97 measured 0xb0 for stored 0xd8; route of %s' % images)
+                del item['source_ref']
+            out.append(item)
+    return out
+
+
+def annotate(document):
+    """Add the source facts and resolve the raz-in-view entries that our source configures."""
+    document['facts'] = [e for e in document['facts'] if e['status'] not in (FROM_SOURCE, 'derived')] + source_facts()
+    routed = {r[0]: r for r in ROUTES}
+    # The hw-facts image routes 71, 95, 97 and 143 itself (tools/sunstone-manifest.py SUNSTONE_A733_HW_FACTS).
+    image_routes = {71, 95, 97, 143}
+    for item in document['facts']:
+        if item['status'] != RAZ:
+            continue
+        parts = item['name'].split('.')
+        if parts[:2] == ['gic', 'dist'] and parts[2].startswith('spi') and parts[3] in ('group1', 'group_modifier'):
+            intid = int(parts[2][3:])
+            if intid in image_routes:
+                value = 1 if parts[3] == 'group1' else 0
+                where = 'platform/a733-smp-cached/irq_table.c:%d' % (70 if value else 71)
+                item.update(status=FROM_SOURCE, value=value, source_ref=where,
+                            note='RAZ/WI at Non-secure EL1 (read_value 0); this image\'s route table sets %s' % ('Non-secure Group 1' if value else 'the group modifier clear'))
+        elif parts[:2] == ['gic', 'redist'] and parts[2].startswith('intid') and parts[3] == 'priority':
+            intid = int(parts[2][5:])
+            if intid in LOCAL_VISIBLE:
+                item.update(status='measured', value=item['read_value'], source_ref='platform/a733/cpu_continue.c:115',
+                            note='visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 '
+                                 '(cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view')
+    return document
 
 
 def seeded_document():
@@ -457,7 +555,7 @@ def seeded_document():
         document['facts'].append(seed)
     order = {e['name']: i for i, e in enumerate(blank_facts())}
     document['facts'].sort(key=lambda e: (order.get(e['name'], len(order)), e['name']))
-    return document
+    return annotate(document)
 
 def blank_facts():
     """Every fact name once, unmeasured; per-core facts use core "all"."""
@@ -476,8 +574,8 @@ def empty_document():
     return {'schema': SCHEMA, 'security_state_note': 'the image runs at EL1 in the Non-secure state that the cached monitor enters '
             '(SCR_EL3.NS set at entry); SCR_EL3 is not readable at EL1, so the state is stated, not read back',
             'decoding': {'a733-board': 'GIC registers decoded in the ns-ds0 layout: Non-secure access with two security states (GICD_CTLR.DS clear). '
-                         'DS is not visible to Non-secure software; that it is clear is INFERRED from the shifted ICC_PMR_EL1 view and from '
-                         'SCR_EL3.FIQ being set (itself inferred from the ICC_IGRPEN0_EL1 trap). A field the view cannot see is recorded as '
+                         'DS is not visible to Non-secure software; that it is clear is FROM SOURCE (monitor.gicd_ctlr.ds: platform/a733-smp-cached/boot.c:95 '
+                         'stops the boot when DS is set) and agrees with the shifted ICC_PMR_EL1 view. A field the view cannot see is recorded as '
                          'raz-in-view, not as measured 0.'},
             'facts': blank_facts()}
 
@@ -508,7 +606,7 @@ def merge(document, header, facts, queue_entry, image_sha256, port=None):
     for rest in names.values():
         ordered.extend(rest)
     document['facts'] = ordered
-    return document
+    return annotate(document)
 
 
 # ---------------------------------------------------------------------------
@@ -531,7 +629,7 @@ class Facts:
         self.assumed = {}
         self._index = {}
         for item in self.document['facts']:
-            if item['status'] in ('measured', 'observed'):
+            if item['status'] in ('measured', 'observed', FROM_SOURCE, 'derived'):
                 self._index.setdefault(item['name'], {})[item['core']] = item
 
     def entry(self, name, core=None):

@@ -38,7 +38,7 @@ option(SUNSTONE_GPU_FAST_TIMING "Capture optional GPU IRQ-entry counter timestam
 option(SUNSTONE_A733_OS_CORE "Build the OS core without an application" OFF)
 option(SUNSTONE_A733_CPU_TOPOLOGY "Expose read-only topology and per-core architectural observations" OFF)
 option(SUNSTONE_A733_OS_HELLO "Build the hello-compute OS image" OFF)
-option(SUNSTONE_A733_HW_FACTS "Record the hardware facts table on every core before the scheduler (docs/hardware/a733-facts.md)" OFF)
+option(SUNSTONE_A733_HW_FACTS "Record the hardware facts table on every core before the scheduler (docs/hardware/a733-facts-probe.md)" OFF)
 if(NOT SUNSTONE_A733_OS AND NOT SUNSTONE_A733_OS_CORE AND NOT SUNSTONE_A733_OS_HELLO)
   return()
 endif()

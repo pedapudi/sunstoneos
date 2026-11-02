@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* The hardware facts application (docs/hardware/a733-facts.md): returns the table that every core filled at
+/* The hardware facts application (docs/hardware/a733-facts-probe.md): returns the table that every core filled at
  * EL1 before the scheduler started. It uses no device and writes no register. */
 #include "hw_facts-app.h"
 #include "a733_hw_facts.h"

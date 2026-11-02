@@ -190,6 +190,6 @@ performance requirements remain in the hardware matrix and handoff.
 
 ## Hardware facts
 
-The [A733 hardware facts](hardware/a733-facts.md) record what the hardware presents (GIC views, CPU
+The [A733 hardware facts](hardware/a733-facts.md) (and [the probe](hardware/a733-facts-probe.md)) record what the hardware presents (GIC views, CPU
 identity, NPU admission words) with the view, core and source register of each value. The `hw-facts`
 application measures them in one board run, and host models and checks read the file.

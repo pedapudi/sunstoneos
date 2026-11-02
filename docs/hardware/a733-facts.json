@@ -2,7 +2,7 @@
  "schema": "sunstone-a733-facts-v1",
  "security_state_note": "the image runs at EL1 in the Non-secure state that the cached monitor enters (SCR_EL3.NS set at entry); SCR_EL3 is not readable at EL1, so the state is stated, not read back",
  "decoding": {
-  "a733-board": "GIC registers decoded in the ns-ds0 layout: Non-secure access with two security states (GICD_CTLR.DS clear). DS is not visible to Non-secure software; that it is clear is INFERRED from the shifted ICC_PMR_EL1 view and from SCR_EL3.FIQ being set (itself inferred from the ICC_IGRPEN0_EL1 trap). A field the view cannot see is recorded as raz-in-view, not as measured 0."
+  "a733-board": "GIC registers decoded in the ns-ds0 layout: Non-secure access with two security states (GICD_CTLR.DS clear). DS is not visible to Non-secure software; that it is clear is FROM SOURCE (monitor.gicd_ctlr.ds: platform/a733-smp-cached/boot.c:95 stops the boot when DS is set) and agrees with the shifted ICC_PMR_EL1 view. A field the view cannot see is recorded as raz-in-view, not as measured 0."
  },
  "facts": [
   {
@@ -1667,13 +1667,14 @@
     "interface": "gic-distributor"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "from-source",
+   "value": 1,
    "read_value": 0,
-   "note": "GICD_IGROUPR, GICD_IGRPMODR, GICR_IGROUPR0 and GICR_IGRPMODR0 are RAZ/WI at Non-secure EL1 when GICD_CTLR.DS is clear (IHI0069; platform/a733/npu_irq.c), so the value 0 carries no information",
+   "note": "RAZ/WI at Non-secure EL1 (read_value 0); this image's route table sets Non-secure Group 1",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733-smp-cached/irq_table.c:70"
   },
   {
    "name": "gic.dist.spi71.group_modifier",
@@ -1684,13 +1685,14 @@
     "interface": "gic-distributor"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "from-source",
+   "value": 0,
    "read_value": 0,
-   "note": "GICD_IGROUPR, GICD_IGRPMODR, GICR_IGROUPR0 and GICR_IGRPMODR0 are RAZ/WI at Non-secure EL1 when GICD_CTLR.DS is clear (IHI0069; platform/a733/npu_irq.c), so the value 0 carries no information",
+   "note": "RAZ/WI at Non-secure EL1 (read_value 0); this image's route table sets the group modifier clear",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733-smp-cached/irq_table.c:71"
   },
   {
    "name": "gic.dist.spi71.enabled",
@@ -2111,13 +2113,14 @@
     "interface": "gic-distributor"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "from-source",
+   "value": 1,
    "read_value": 0,
-   "note": "GICD_IGROUPR, GICD_IGRPMODR, GICR_IGROUPR0 and GICR_IGRPMODR0 are RAZ/WI at Non-secure EL1 when GICD_CTLR.DS is clear (IHI0069; platform/a733/npu_irq.c), so the value 0 carries no information",
+   "note": "RAZ/WI at Non-secure EL1 (read_value 0); this image's route table sets Non-secure Group 1",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733-smp-cached/irq_table.c:70"
   },
   {
    "name": "gic.dist.spi95.group_modifier",
@@ -2128,13 +2131,14 @@
     "interface": "gic-distributor"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "from-source",
+   "value": 0,
    "read_value": 0,
-   "note": "GICD_IGROUPR, GICD_IGRPMODR, GICR_IGROUPR0 and GICR_IGRPMODR0 are RAZ/WI at Non-secure EL1 when GICD_CTLR.DS is clear (IHI0069; platform/a733/npu_irq.c), so the value 0 carries no information",
+   "note": "RAZ/WI at Non-secure EL1 (read_value 0); this image's route table sets the group modifier clear",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733-smp-cached/irq_table.c:71"
   },
   {
    "name": "gic.dist.spi95.enabled",
@@ -2251,13 +2255,14 @@
     "interface": "gic-distributor"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "from-source",
+   "value": 1,
    "read_value": 0,
-   "note": "GICD_IGROUPR, GICD_IGRPMODR, GICR_IGROUPR0 and GICR_IGRPMODR0 are RAZ/WI at Non-secure EL1 when GICD_CTLR.DS is clear (IHI0069; platform/a733/npu_irq.c), so the value 0 carries no information",
+   "note": "RAZ/WI at Non-secure EL1 (read_value 0); this image's route table sets Non-secure Group 1",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733-smp-cached/irq_table.c:70"
   },
   {
    "name": "gic.dist.spi97.group_modifier",
@@ -2268,13 +2273,14 @@
     "interface": "gic-distributor"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "from-source",
+   "value": 0,
    "read_value": 0,
-   "note": "GICD_IGROUPR, GICD_IGRPMODR, GICR_IGROUPR0 and GICR_IGRPMODR0 are RAZ/WI at Non-secure EL1 when GICD_CTLR.DS is clear (IHI0069; platform/a733/npu_irq.c), so the value 0 carries no information",
+   "note": "RAZ/WI at Non-secure EL1 (read_value 0); this image's route table sets the group modifier clear",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733-smp-cached/irq_table.c:71"
   },
   {
    "name": "gic.dist.spi97.enabled",
@@ -2391,13 +2397,14 @@
     "interface": "gic-distributor"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "from-source",
+   "value": 1,
    "read_value": 0,
-   "note": "GICD_IGROUPR, GICD_IGRPMODR, GICR_IGROUPR0 and GICR_IGRPMODR0 are RAZ/WI at Non-secure EL1 when GICD_CTLR.DS is clear (IHI0069; platform/a733/npu_irq.c), so the value 0 carries no information",
+   "note": "RAZ/WI at Non-secure EL1 (read_value 0); this image's route table sets Non-secure Group 1",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733-smp-cached/irq_table.c:70"
   },
   {
    "name": "gic.dist.spi143.group_modifier",
@@ -2408,13 +2415,14 @@
     "interface": "gic-distributor"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "from-source",
+   "value": 0,
    "read_value": 0,
-   "note": "GICD_IGROUPR, GICD_IGRPMODR, GICR_IGROUPR0 and GICR_IGRPMODR0 are RAZ/WI at Non-secure EL1 when GICD_CTLR.DS is clear (IHI0069; platform/a733/npu_irq.c), so the value 0 carries no information",
+   "note": "RAZ/WI at Non-secure EL1 (read_value 0); this image's route table sets the group modifier clear",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733-smp-cached/irq_table.c:71"
   },
   {
    "name": "gic.dist.spi143.enabled",
@@ -16327,13 +16335,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid1.priority",
@@ -16344,13 +16353,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid1.priority",
@@ -16361,13 +16371,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid1.priority",
@@ -16378,13 +16389,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid1.priority",
@@ -16395,13 +16407,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid1.priority",
@@ -16412,13 +16425,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid1.priority",
@@ -16429,13 +16443,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid1.priority",
@@ -16446,13 +16461,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid2.priority",
@@ -16463,13 +16479,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid2.priority",
@@ -16480,13 +16497,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid2.priority",
@@ -16497,13 +16515,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid2.priority",
@@ -16514,13 +16533,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid2.priority",
@@ -16531,13 +16551,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid2.priority",
@@ -16548,13 +16569,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid2.priority",
@@ -16565,13 +16587,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid2.priority",
@@ -16582,13 +16605,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid3.priority",
@@ -16599,13 +16623,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid3.priority",
@@ -16616,13 +16641,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid3.priority",
@@ -16633,13 +16659,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid3.priority",
@@ -16650,13 +16677,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid3.priority",
@@ -16667,13 +16695,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid3.priority",
@@ -16684,13 +16713,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid3.priority",
@@ -16701,13 +16731,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid3.priority",
@@ -16718,13 +16749,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid4.priority",
@@ -16735,13 +16767,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid4.priority",
@@ -16752,13 +16785,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid4.priority",
@@ -16769,13 +16803,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid4.priority",
@@ -16786,13 +16821,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid4.priority",
@@ -16803,13 +16839,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid4.priority",
@@ -16820,13 +16857,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid4.priority",
@@ -16837,13 +16875,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid4.priority",
@@ -16854,13 +16893,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid5.priority",
@@ -16871,13 +16911,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid5.priority",
@@ -16888,13 +16929,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid5.priority",
@@ -16905,13 +16947,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid5.priority",
@@ -16922,13 +16965,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid5.priority",
@@ -16939,13 +16983,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid5.priority",
@@ -16956,13 +17001,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid5.priority",
@@ -16973,13 +17019,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid5.priority",
@@ -16990,13 +17037,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid6.priority",
@@ -17007,13 +17055,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid6.priority",
@@ -17024,13 +17073,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid6.priority",
@@ -17041,13 +17091,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid6.priority",
@@ -17058,13 +17109,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid6.priority",
@@ -17075,13 +17127,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid6.priority",
@@ -17092,13 +17145,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid6.priority",
@@ -17109,13 +17163,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid6.priority",
@@ -17126,13 +17181,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid7.priority",
@@ -17143,13 +17199,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid7.priority",
@@ -17160,13 +17217,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid7.priority",
@@ -17177,13 +17235,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid7.priority",
@@ -17194,13 +17253,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid7.priority",
@@ -17211,13 +17271,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid7.priority",
@@ -17228,13 +17289,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid7.priority",
@@ -17245,13 +17307,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid7.priority",
@@ -17262,13 +17325,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid8.priority",
@@ -17279,13 +17343,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid8.priority",
@@ -17296,13 +17361,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid8.priority",
@@ -17313,13 +17379,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid8.priority",
@@ -17330,13 +17397,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid8.priority",
@@ -17347,13 +17415,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid8.priority",
@@ -17364,13 +17433,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid8.priority",
@@ -17381,13 +17451,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid8.priority",
@@ -17398,13 +17469,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid9.priority",
@@ -17415,13 +17487,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid9.priority",
@@ -17432,13 +17505,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid9.priority",
@@ -17449,13 +17523,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid9.priority",
@@ -17466,13 +17541,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid9.priority",
@@ -17483,13 +17559,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid9.priority",
@@ -17500,13 +17577,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid9.priority",
@@ -17517,13 +17595,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid9.priority",
@@ -17534,13 +17613,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid10.priority",
@@ -17551,13 +17631,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid10.priority",
@@ -17568,13 +17649,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid10.priority",
@@ -17585,13 +17667,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid10.priority",
@@ -17602,13 +17685,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid10.priority",
@@ -17619,13 +17703,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid10.priority",
@@ -17636,13 +17721,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid10.priority",
@@ -17653,13 +17739,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid10.priority",
@@ -17670,13 +17757,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid11.priority",
@@ -17687,13 +17775,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid11.priority",
@@ -17704,13 +17793,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid11.priority",
@@ -17721,13 +17811,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid11.priority",
@@ -17738,13 +17829,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid11.priority",
@@ -17755,13 +17847,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid11.priority",
@@ -17772,13 +17865,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid11.priority",
@@ -17789,13 +17883,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid11.priority",
@@ -17806,13 +17901,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid12.priority",
@@ -17823,13 +17919,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid12.priority",
@@ -17840,13 +17937,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid12.priority",
@@ -17857,13 +17955,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid12.priority",
@@ -17874,13 +17973,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid12.priority",
@@ -17891,13 +17991,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid12.priority",
@@ -17908,13 +18009,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid12.priority",
@@ -17925,13 +18027,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid12.priority",
@@ -17942,13 +18045,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid13.priority",
@@ -17959,13 +18063,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid13.priority",
@@ -17976,13 +18081,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid13.priority",
@@ -17993,13 +18099,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid13.priority",
@@ -18010,13 +18117,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid13.priority",
@@ -18027,13 +18135,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid13.priority",
@@ -18044,13 +18153,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid13.priority",
@@ -18061,13 +18171,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid13.priority",
@@ -18078,13 +18189,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid14.priority",
@@ -18095,13 +18207,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid14.priority",
@@ -18112,13 +18225,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid14.priority",
@@ -18129,13 +18243,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid14.priority",
@@ -18146,13 +18261,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid14.priority",
@@ -18163,13 +18279,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid14.priority",
@@ -18180,13 +18297,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid14.priority",
@@ -18197,13 +18315,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid14.priority",
@@ -18214,13 +18333,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid15.priority",
@@ -18231,13 +18351,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid15.priority",
@@ -18248,13 +18369,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid15.priority",
@@ -18265,13 +18387,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid15.priority",
@@ -18282,13 +18405,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid15.priority",
@@ -18299,13 +18423,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid15.priority",
@@ -18316,13 +18441,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid15.priority",
@@ -18333,13 +18459,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid15.priority",
@@ -18350,13 +18477,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid16.priority",
@@ -19863,13 +19991,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid27.priority",
@@ -19880,13 +20009,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid27.priority",
@@ -19897,13 +20027,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid27.priority",
@@ -19914,13 +20045,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid27.priority",
@@ -19931,13 +20063,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid27.priority",
@@ -19948,13 +20081,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid27.priority",
@@ -19965,13 +20099,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid27.priority",
@@ -19982,13 +20117,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid28.priority",
@@ -20271,13 +20407,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 0,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid30.priority",
@@ -20288,13 +20425,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 1,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid30.priority",
@@ -20305,13 +20443,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 2,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid30.priority",
@@ -20322,13 +20461,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 3,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid30.priority",
@@ -20339,13 +20479,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 4,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid30.priority",
@@ -20356,13 +20497,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 5,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid30.priority",
@@ -20373,13 +20515,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 6,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid30.priority",
@@ -20390,13 +20533,14 @@
     "interface": "gic-redistributor-sgi-frame"
    },
    "core": 7,
-   "status": "raz-in-view",
-   "value": null,
+   "status": "measured",
+   "value": 0,
    "read_value": 0,
-   "note": "reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero field; the view cannot tell the two apart",
+   "note": "visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 (cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view",
    "queue_entry": "1793590887901610846-fc9d445f",
    "image_sha256": "33c230ec6b59394acb0ef73282b5ce1d745150eb40de41248746e5b2e19d2928",
-   "port": "3-1"
+   "port": "3-1",
+   "source_ref": "platform/a733/cpu_continue.c:115"
   },
   {
    "name": "gic.redist.intid31.priority",
@@ -20546,7 +20690,7 @@
    "status": "measured",
    "value": 1,
    "queue_entry": "1793590176547518274-e819ce89",
-   "note": "measured: the first EL3 exception was ESR 0x623c32b9 (EC 0x18, a trapped system register access) at the mrs of ICC_IGRPEN0_EL1, ELR 0x4107c1c0, on core 4, and the monitor stopped. INFERRED from this trap, not measured (SCR_EL3 is not readable at EL1): SCR_EL3.FIQ is 1. With FIQ set the GIC architecture gives EL3 the Group 0 interface, so Non-secure EL1 accesses to ICC_IGRPEN0_EL1, ICC_BPR0_EL1, ICC_AP0Rn_EL1, ICC_IAR0_EL1, ICC_EOIR0_EL1 and ICC_HPPIR0_EL1 trap to EL3 (IHI0069, the ICC_IGRPEN0_EL1 and ICC_BPR0_EL1 register descriptions; Linux irq-gic-v3.c gic_has_group0). The monitor entry code that writes 0x535 to SCR_EL3 agrees but is not a measurement"
+   "note": "measured: the first EL3 exception was ESR 0x623c32b9 (EC 0x18, a trapped system register access) at the mrs of ICC_IGRPEN0_EL1, ELR 0x4107c1c0, on core 4, and the monitor stopped. With SCR_EL3.FIQ set (FROM SOURCE: the monitor writes 0x535, platform/a733-smp-cached/continue.S:98-99, fact monitor.scr_el3.fiq) the GIC architecture gives EL3 the Group 0 interface, so Non-secure EL1 accesses to ICC_IGRPEN0_EL1, ICC_BPR0_EL1, ICC_AP0Rn_EL1, ICC_IAR0_EL1, ICC_EOIR0_EL1 and ICC_HPPIR0_EL1 trap to EL3 (IHI0069, the ICC_IGRPEN0_EL1 and ICC_BPR0_EL1 register descriptions; Linux irq-gic-v3.c gic_has_group0)."
   },
   {
    "name": "runner.mmio.0x020025c0",
@@ -20673,6 +20817,1336 @@
    "value": 26000000,
    "queue_entry": "1793587317962103239-5bbfc48d",
    "note": "the rail helper reads the PMIC and the SID before an image with the CPU entry guard"
+  },
+  {
+   "name": "monitor.scr_el3",
+   "source": "source: platform/a733-smp-cached/continue.S:98-99",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "monitor code"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1333,
+   "source_ref": "platform/a733-smp-cached/continue.S:98-99",
+   "note": "SCR_EL3 the cached monitor writes before entering Non-secure EL1: NS, FIQ, HCE and RW set, with the RES1 bits 4 and 5 (platform/a733/monitor.c:124-125 writes 0x505 without them)"
+  },
+  {
+   "name": "monitor.scr_el3.ns",
+   "source": "source: platform/a733-smp-cached/continue.S:98-99",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "monitor code"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/continue.S:98-99",
+   "note": "EL1 runs in the Non-secure state"
+  },
+  {
+   "name": "monitor.scr_el3.fiq",
+   "source": "source: platform/a733-smp-cached/continue.S:98-99",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "monitor code"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/continue.S:98-99",
+   "note": "Group 0 interrupts go to EL3 as FIQ, so Non-secure EL1 accesses to the Group 0 CPU interface registers trap to EL3 (consistent with queue entry 1793590176547518274-e819ce89)"
+  },
+  {
+   "name": "monitor.gicd_ctlr.ds",
+   "source": "source: platform/a733-smp-cached/boot.c:95",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "monitor code"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733-smp-cached/boot.c:95",
+   "note": "the boot stops if DS is set: the GIC keeps two security states"
+  },
+  {
+   "name": "monitor.gicd_ctlr.are_s_are_ns",
+   "source": "source: platform/a733-smp-cached/boot.c:103",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "monitor code"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 3,
+   "source_ref": "platform/a733-smp-cached/boot.c:103",
+   "note": "affinity routing enabled for both states"
+  },
+  {
+   "name": "monitor.gicd_ctlr.enable_grp0_grp1ns",
+   "source": "source: platform/a733-smp-cached/boot.c:104",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "monitor code"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 3,
+   "source_ref": "platform/a733-smp-cached/boot.c:104",
+   "note": "Group 0 and Non-secure Group 1 enabled"
+  },
+  {
+   "name": "config.intid0.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 0 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid0.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 0 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid1.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 1 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid1.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 1 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid2.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 2 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid2.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 2 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid3.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 3 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid3.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 3 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid4.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 4 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid4.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 4 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid5.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 5 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid5.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 5 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid6.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 6 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid6.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 6 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid7.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 7 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid7.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 7 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid8.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 8 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid8.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 8 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid9.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 9 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid9.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 9 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid10.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 10 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid10.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 10 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid11.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 11 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid11.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 11 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid12.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 12 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid12.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 12 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid13.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 13 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid13.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 13 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid14.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 14 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid14.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 14 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid15.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 15 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid15.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 15 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid27.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 27 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid27.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 27 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid30.group",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 30 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "note": "Non-secure Group 1"
+  },
+  {
+   "name": "config.intid30.group_modifier",
+   "source": "GICR_IGROUPR0/IGRPMODR0 bit 30 as EL3 sets it",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733/cpu_continue.c:116",
+   "note": "Group 1 modifier clear"
+  },
+  {
+   "name": "config.intid0.stored_priority",
+   "source": "source: platform/a733/cpu_continue.c:120",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 240,
+   "source_ref": "platform/a733/cpu_continue.c:120",
+   "note": "the value the code sets"
+  },
+  {
+   "name": "config.intid27.trigger_level",
+   "source": "source: platform/a733-smp-cached/continue.c:122-124",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/continue.c:122-124",
+   "note": "the value the code sets"
+  },
+  {
+   "name": "config.intid30.trigger_level",
+   "source": "source: platform/a733/cpu_continue.c:118",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733/cpu_continue.c:118",
+   "note": "the value the code sets"
+  },
+  {
+   "name": "config.intid30.stored_priority_written_ns",
+   "source": "source: platform/a733-smp-cached/platform.c:116 (portLOWEST_USABLE_INTERRUPT_PRIORITY << 4, written at Non-secure EL1)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 224,
+   "source_ref": "platform/a733-smp-cached/platform.c:116 (portLOWEST_USABLE_INTERRUPT_PRIORITY << 4, written at Non-secure EL1)",
+   "note": "the value the code writes; a Non-secure write of v stores ((v >> 1) | 0x80) & 0xf8"
+  },
+  {
+   "name": "config.intid27.stored_priority_written_ns",
+   "source": "source: platform/a733-smp-cached/platform.c:121 (written at Non-secure EL1 under SUNSTONE_TASK_DEADLINES)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 216,
+   "source_ref": "platform/a733-smp-cached/platform.c:121 (written at Non-secure EL1 under SUNSTONE_TASK_DEADLINES)",
+   "note": "the value the code writes; a Non-secure write of v stores ((v >> 1) | 0x80) & 0xf8"
+  },
+  {
+   "name": "config.spi71.group",
+   "source": "source: platform/a733-smp-cached/irq_table.c:70",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:70",
+   "note": "route of every OS image"
+  },
+  {
+   "name": "config.spi71.group_modifier",
+   "source": "source: platform/a733-smp-cached/irq_table.c:71",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:71",
+   "note": "route of every OS image"
+  },
+  {
+   "name": "config.spi71.trigger_level",
+   "source": "source: platform/a733-smp-cached/irq_table.c:72",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:72",
+   "note": "route of every OS image"
+  },
+  {
+   "name": "config.spi71.stored_priority",
+   "source": "source: tools/sunstone-manifest.py:345 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 216,
+   "source_ref": "tools/sunstone-manifest.py:345 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "note": "route of every OS image"
+  },
+  {
+   "name": "config.spi71.route_core",
+   "source": "source: tools/sunstone-manifest.py:345 applied at platform/a733-smp-cached/irq_table.c:76",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "tools/sunstone-manifest.py:345 applied at platform/a733-smp-cached/irq_table.c:76",
+   "note": "route of every OS image"
+  },
+  {
+   "name": "config.spi71.ns_view_priority",
+   "source": "derived: the Non-secure view of the stored priority",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "derived",
+   "value": 176,
+   "note": "IHI0069 4.8.1: (stored << 1) & 0xff; INTID 97 measured 0xb0 for stored 0xd8; route of every OS image",
+   "derived_from": "config.spi71.stored_priority"
+  },
+  {
+   "name": "config.spi187.group",
+   "source": "source: platform/a733-smp-cached/irq_table.c:70",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:70",
+   "note": "route of images with SUNSTONE_BOARD_USB2_IRQ"
+  },
+  {
+   "name": "config.spi187.group_modifier",
+   "source": "source: platform/a733-smp-cached/irq_table.c:71",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:71",
+   "note": "route of images with SUNSTONE_BOARD_USB2_IRQ"
+  },
+  {
+   "name": "config.spi187.trigger_level",
+   "source": "source: platform/a733-smp-cached/irq_table.c:72",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:72",
+   "note": "route of images with SUNSTONE_BOARD_USB2_IRQ"
+  },
+  {
+   "name": "config.spi187.stored_priority",
+   "source": "source: tools/sunstone-manifest.py:346 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 176,
+   "source_ref": "tools/sunstone-manifest.py:346 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "note": "route of images with SUNSTONE_BOARD_USB2_IRQ"
+  },
+  {
+   "name": "config.spi187.route_core",
+   "source": "source: tools/sunstone-manifest.py:346 applied at platform/a733-smp-cached/irq_table.c:76",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "tools/sunstone-manifest.py:346 applied at platform/a733-smp-cached/irq_table.c:76",
+   "note": "route of images with SUNSTONE_BOARD_USB2_IRQ"
+  },
+  {
+   "name": "config.spi187.ns_view_priority",
+   "source": "derived: the Non-secure view of the stored priority",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "derived",
+   "value": 96,
+   "note": "IHI0069 4.8.1: (stored << 1) & 0xff; INTID 97 measured 0xb0 for stored 0xd8; route of images with SUNSTONE_BOARD_USB2_IRQ",
+   "derived_from": "config.spi187.stored_priority"
+  },
+  {
+   "name": "config.spi97.group",
+   "source": "source: platform/a733-smp-cached/irq_table.c:70",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:70",
+   "note": "route of NPU images (OS_NPU_CORE is 1, apps/os/npu.h:6)"
+  },
+  {
+   "name": "config.spi97.group_modifier",
+   "source": "source: platform/a733-smp-cached/irq_table.c:71",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:71",
+   "note": "route of NPU images (OS_NPU_CORE is 1, apps/os/npu.h:6)"
+  },
+  {
+   "name": "config.spi97.trigger_level",
+   "source": "source: platform/a733-smp-cached/irq_table.c:72",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:72",
+   "note": "route of NPU images (OS_NPU_CORE is 1, apps/os/npu.h:6)"
+  },
+  {
+   "name": "config.spi97.stored_priority",
+   "source": "source: tools/sunstone-manifest.py:347 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 216,
+   "source_ref": "tools/sunstone-manifest.py:347 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "note": "route of NPU images (OS_NPU_CORE is 1, apps/os/npu.h:6)"
+  },
+  {
+   "name": "config.spi97.route_core",
+   "source": "source: tools/sunstone-manifest.py:347 applied at platform/a733-smp-cached/irq_table.c:76",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "tools/sunstone-manifest.py:347 applied at platform/a733-smp-cached/irq_table.c:76",
+   "note": "route of NPU images (OS_NPU_CORE is 1, apps/os/npu.h:6)"
+  },
+  {
+   "name": "config.spi97.ns_view_priority",
+   "source": "derived: the Non-secure view of the stored priority",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "derived",
+   "value": 176,
+   "note": "IHI0069 4.8.1: (stored << 1) & 0xff; INTID 97 measured 0xb0 for stored 0xd8; route of NPU images (OS_NPU_CORE is 1, apps/os/npu.h:6)",
+   "derived_from": "config.spi97.stored_priority"
+  },
+  {
+   "name": "config.spi143.group",
+   "source": "source: platform/a733-smp-cached/irq_table.c:70",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:70",
+   "note": "route of audio and DMA images"
+  },
+  {
+   "name": "config.spi143.group_modifier",
+   "source": "source: platform/a733-smp-cached/irq_table.c:71",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:71",
+   "note": "route of audio and DMA images"
+  },
+  {
+   "name": "config.spi143.trigger_level",
+   "source": "source: platform/a733-smp-cached/irq_table.c:72",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:72",
+   "note": "route of audio and DMA images"
+  },
+  {
+   "name": "config.spi143.stored_priority",
+   "source": "source: tools/sunstone-manifest.py:348-349 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 216,
+   "source_ref": "tools/sunstone-manifest.py:348-349 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "note": "route of audio and DMA images"
+  },
+  {
+   "name": "config.spi143.route_core",
+   "source": "source: tools/sunstone-manifest.py:348-349 applied at platform/a733-smp-cached/irq_table.c:76",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "tools/sunstone-manifest.py:348-349 applied at platform/a733-smp-cached/irq_table.c:76",
+   "note": "route of audio and DMA images"
+  },
+  {
+   "name": "config.spi143.ns_view_priority",
+   "source": "derived: the Non-secure view of the stored priority",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "derived",
+   "value": 176,
+   "note": "IHI0069 4.8.1: (stored << 1) & 0xff; INTID 97 measured 0xb0 for stored 0xd8; route of audio and DMA images",
+   "derived_from": "config.spi143.stored_priority"
+  },
+  {
+   "name": "config.spi95.group",
+   "source": "source: platform/a733-smp-cached/irq_table.c:70",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:70",
+   "note": "route of GPU images (core 2 or the application core)"
+  },
+  {
+   "name": "config.spi95.group_modifier",
+   "source": "source: platform/a733-smp-cached/irq_table.c:71",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:71",
+   "note": "route of GPU images (core 2 or the application core)"
+  },
+  {
+   "name": "config.spi95.trigger_level",
+   "source": "source: platform/a733-smp-cached/irq_table.c:72",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:72",
+   "note": "route of GPU images (core 2 or the application core)"
+  },
+  {
+   "name": "config.spi95.stored_priority",
+   "source": "source: tools/sunstone-manifest.py:350 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 216,
+   "source_ref": "tools/sunstone-manifest.py:350 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "note": "route of GPU images (core 2 or the application core)"
+  },
+  {
+   "name": "config.spi95.route_core",
+   "source": "source: tools/sunstone-manifest.py:350 applied at platform/a733-smp-cached/irq_table.c:76",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "tools/sunstone-manifest.py:350 applied at platform/a733-smp-cached/irq_table.c:76",
+   "note": "route of GPU images (core 2 or the application core)"
+  },
+  {
+   "name": "config.spi95.ns_view_priority",
+   "source": "derived: the Non-secure view of the stored priority",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "derived",
+   "value": 176,
+   "note": "IHI0069 4.8.1: (stored << 1) & 0xff; INTID 97 measured 0xb0 for stored 0xd8; route of GPU images (core 2 or the application core)",
+   "derived_from": "config.spi95.stored_priority"
+  },
+  {
+   "name": "config.spi149.group",
+   "source": "source: platform/a733-smp-cached/irq_table.c:70",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:70",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi149.group_modifier",
+   "source": "source: platform/a733-smp-cached/irq_table.c:71",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:71",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi149.trigger_level",
+   "source": "source: platform/a733-smp-cached/irq_table.c:72",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:72",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi149.stored_priority",
+   "source": "source: apps/isp0/irq.h:26 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 216,
+   "source_ref": "apps/isp0/irq.h:26 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi149.route_core",
+   "source": "source: apps/isp0/irq.h:26 applied at platform/a733-smp-cached/irq_table.c:76",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "apps/isp0/irq.h:26 applied at platform/a733-smp-cached/irq_table.c:76",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi149.ns_view_priority",
+   "source": "derived: the Non-secure view of the stored priority",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "derived",
+   "value": 176,
+   "note": "IHI0069 4.8.1: (stored << 1) & 0xff; INTID 97 measured 0xb0 for stored 0xd8; route of ISP0 image",
+   "derived_from": "config.spi149.stored_priority"
+  },
+  {
+   "name": "config.spi153.group",
+   "source": "source: platform/a733-smp-cached/irq_table.c:70",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:70",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi153.group_modifier",
+   "source": "source: platform/a733-smp-cached/irq_table.c:71",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:71",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi153.trigger_level",
+   "source": "source: platform/a733-smp-cached/irq_table.c:72",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:72",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi153.stored_priority",
+   "source": "source: apps/isp0/irq.h:26 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 216,
+   "source_ref": "apps/isp0/irq.h:26 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi153.route_core",
+   "source": "source: apps/isp0/irq.h:26 applied at platform/a733-smp-cached/irq_table.c:76",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "apps/isp0/irq.h:26 applied at platform/a733-smp-cached/irq_table.c:76",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi153.ns_view_priority",
+   "source": "derived: the Non-secure view of the stored priority",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "derived",
+   "value": 176,
+   "note": "IHI0069 4.8.1: (stored << 1) & 0xff; INTID 97 measured 0xb0 for stored 0xd8; route of ISP0 image",
+   "derived_from": "config.spi153.stored_priority"
+  },
+  {
+   "name": "config.spi161.group",
+   "source": "source: platform/a733-smp-cached/irq_table.c:70",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:70",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi161.group_modifier",
+   "source": "source: platform/a733-smp-cached/irq_table.c:71",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:71",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi161.trigger_level",
+   "source": "source: platform/a733-smp-cached/irq_table.c:72",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 1,
+   "source_ref": "platform/a733-smp-cached/irq_table.c:72",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi161.stored_priority",
+   "source": "source: apps/isp0/irq.h:26 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 216,
+   "source_ref": "apps/isp0/irq.h:26 applied at platform/a733-smp-cached/irq_table.c:73-74",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi161.route_core",
+   "source": "source: apps/isp0/irq.h:26 applied at platform/a733-smp-cached/irq_table.c:76",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "from-source",
+   "value": 0,
+   "source_ref": "apps/isp0/irq.h:26 applied at platform/a733-smp-cached/irq_table.c:76",
+   "note": "route of ISP0 image"
+  },
+  {
+   "name": "config.spi161.ns_view_priority",
+   "source": "derived: the Non-secure view of the stored priority",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "gic-distributor"
+   },
+   "core": null,
+   "status": "derived",
+   "value": 176,
+   "note": "IHI0069 4.8.1: (stored << 1) & 0xff; INTID 97 measured 0xb0 for stored 0xd8; route of ISP0 image",
+   "derived_from": "config.spi161.stored_priority"
   }
  ]
 }
