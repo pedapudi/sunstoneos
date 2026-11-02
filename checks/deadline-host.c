@@ -26,6 +26,7 @@ static void hint(void *task)
 static int pending_hint(void){return (int)ulTaskNotifyTake(pdTRUE,0);}
 
 /* The second owner of the simultaneous-owner case. */
+static volatile unsigned woke_order[2],woke_count;
 static volatile int owner2_result=99, owner2_registered, owner2_leftover=99;
 static void owner2(void *unused)
 {
@@ -33,6 +34,7 @@ static void owner2(void *unused)
     ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
     owner2_registered=sunstone_deadline_register();
     owner2_result=sunstone_deadline_wait_until(160);
+    woke_order[woke_count++]=2;
     owner2_leftover=(int)ulTaskNotifyTake(pdTRUE,0);
     vTaskSuspend(NULL);
 }
@@ -51,7 +53,7 @@ static void runtime_cases(void *unused)
     /* Exact expiry: the compare timer wakes the owner at its deadline. */
     assert(sunstone_deadline_wait_until(120)==SUNSTONE_DEADLINE_EXPIRED);
     assert(host_time_us()==120&&timer_fires==1);
-    t2=host_task_create("owner2",owner2,NULL,1);
+    t2=host_task_create("owner2",owner2,NULL,2);
     assert(sunstone_deadline_owner_record(t1,&record)&&record.sequence==1&&record.woken_us==120&&!record.armed&&!record.failed&&!host_timer_compare_us());
     /* Another task's progress report cannot clear this owner's state. */
     sunstone_deadline_owner_progress(t2);
@@ -70,7 +72,10 @@ static void runtime_cases(void *unused)
     xTaskNotifyGive(t2);
     {uint64_t before=timer_fires;
      assert(sunstone_deadline_wait_until(160)==SUNSTONE_DEADLINE_EXPIRED);
+     woke_order[woke_count++]=1;
      vTaskDelay(1);
+     /* Equal priorities run in wake order: the earlier slot is woken first. */
+     assert(woke_count==2&&woke_order[0]==1&&woke_order[1]==2);
      assert(owner2_registered&&owner2_result==SUNSTONE_DEADLINE_EXPIRED&&owner2_leftover==0);
      assert(timer_fires-before==2&&host_max_gives_per_isr()==1&&!pending_hint()&&!host_timer_compare_us());}
     host_deadline_defer_kicks(0);
