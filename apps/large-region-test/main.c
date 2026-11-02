@@ -65,7 +65,8 @@ struct large_region_test_result {
     uint64_t control_ticks[CONTROL_PASSES], control_bytes;
     uint64_t full_ticks[FULL_PASSES], full_bytes;
     uint64_t fold_control, fold_full;
-    uint64_t reserved[512 / 8 - 8 - CONTROL_PASSES - 1 - FULL_PASSES - 1 - 2];
+    uint64_t copy_us, digest_us;          /* of load_us: the loader's copy into the region and its SHA-256 */
+    uint64_t reserved[512 / 8 - 8 - CONTROL_PASSES - 1 - FULL_PASSES - 1 - 2 - 2];
 };
 _Static_assert(sizeof(struct large_region_test_result) == 512, "result is the manifest's output_limit");
 
@@ -78,6 +79,7 @@ void large_region_main(const struct ss_grant *grant)
     struct ss_large_status status;
     ss_large_status(LARGE_REGION_LARGE_WEIGHTS, &status);
     r.state = status.state; r.error = status.error; r.file_bytes = status.total; r.load_us = status.elapsed_us;
+    r.copy_us = status.copy_us; r.digest_us = status.digest_us;
     if (ready != 1) {
         r.tag = TAG_NOT_READY;
         ss_finish(&r, sizeof r);

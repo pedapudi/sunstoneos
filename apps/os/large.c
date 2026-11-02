@@ -3,6 +3,7 @@
  * "sunstone_large_regions"; the usable upper memory comes from the board: the ranges that the DRAM
  * decode check passed. */
 #include "app_large.h"
+#include "os_space.h"
 #include "app_region.h"
 #include <stdint.h>
 #include <string.h>
@@ -70,7 +71,9 @@ int os_large_prepare(void)
     if (admitted) return 0;
     uint64_t ttbr;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
-    const uint64_t *base_l1 = (const uint64_t *)(uintptr_t)(ttbr & APP_PTE_ADDR_MASK);
+    /* The table's pages may be unmapped at EL1, so its entries come from the platform's copy (os_space.h). */
+    static uint64_t base_l1[512];
+    os_kernel_l1_head(base_l1);
     struct app_region_range usable[APP_REGION_SLOTS];
     unsigned ranges = usable_ranges(base_l1, usable, APP_REGION_SLOTS);
     uint64_t mmfr0, tcr;
@@ -110,6 +113,7 @@ static uint64_t owner_ttbr;          /* the application's tag points here */
 extern const unsigned os_large_waiter_capacity;
 extern TaskHandle_t os_large_waiter_task[];
 extern unsigned os_large_waiter_region[];
+#define WAITER_GAVE 0x80000000u       /* in os_large_waiter_region: the loader gave this waiter a notification */
 
 struct large_slot *os_large_slot_mutable(unsigned index) { return index < slot_count ? &slots[index] : 0; }
 const struct ss_large_region *os_large_record(unsigned index)
@@ -147,6 +151,7 @@ int ss_large_status(unsigned index, struct ss_large_status *out)
     out->total = slots[index].total;
     uint64_t end = slots[index].finished_us ? slots[index].finished_us : 0;
     out->elapsed_us = end ? end - slots[index].started_us : 0;
+    out->copy_us = slots[index].copy_us; out->digest_us = slots[index].digest_us;
     return 0;
 }
 
@@ -155,8 +160,13 @@ void os_large_finish(unsigned index, unsigned state, uint32_t error)
     if (index >= slot_count) return;
     slots[index].error = error;
     __atomic_store_n(&slots[index].state, state, __ATOMIC_RELEASE);
+    taskENTER_CRITICAL();           /* a waiter leaves its entry in the same critical section */
     for (unsigned i = 0; i < os_large_waiter_capacity; ++i)
-        if (os_large_waiter_task[i] && os_large_waiter_region[i] == index) xTaskNotifyGive(os_large_waiter_task[i]);
+        if (os_large_waiter_task[i] && (os_large_waiter_region[i] & ~WAITER_GAVE) == index) {
+            os_large_waiter_region[i] |= WAITER_GAVE;
+            xTaskNotifyGive(os_large_waiter_task[i]);
+        }
+    taskEXIT_CRITICAL();
 }
 
 int ss_large_wait(unsigned index, uint64_t timeout_us)
@@ -181,6 +191,8 @@ int ss_large_wait(unsigned index, uint64_t timeout_us)
     }
     taskENTER_CRITICAL();
     os_large_waiter_task[entry] = 0;
+    /* A notification the loader gave after the wait returned would end the application's next wait on index 0. */
+    if (os_large_waiter_region[entry] & WAITER_GAVE) (void)ulTaskNotifyTake(pdTRUE, 0);
     taskEXIT_CRITICAL();
     return result;
 }

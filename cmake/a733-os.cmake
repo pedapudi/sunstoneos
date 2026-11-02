@@ -44,6 +44,18 @@ elseif(SUNSTONE_APPLICATION STREQUAL "large-region-test")
     MANIFEST "${large_region_manifest}")
   add_sunstone_image(sunstone-a733-os-large-region-test LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION large-region)
+elseif(SUNSTONE_APPLICATION STREQUAL "large-6g")
+  # A 6 GiB region with no source: bandwidth and integrity (probe 0), or one isolation fault (probes 1 to 3).
+  if(NOT SUNSTONE_A733_DRAM_DECODE_PROBE)
+    message(FATAL_ERROR "large-6g needs -DSUNSTONE_A733_DRAM_DECODE_PROBE=ON")
+  endif()
+  set(SUNSTONE_LARGE_6G_PROBE 0 CACHE STRING "large-6g: 0 bandwidth and integrity, 1 below, 2 above, 3 other space")
+  set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/apps/large-6g/main.c" PROPERTIES COMPILE_DEFINITIONS LARGE_6G_PROBE=${SUNSTONE_LARGE_6G_PROBE})
+  add_sunstone_application(large-6g
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/large-6g/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/large-6g/manifest.json")
+  add_sunstone_image(sunstone-a733-os-large-6g LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION large-6g)
 elseif(SUNSTONE_APPLICATION STREQUAL "storage-write-test")
   # Creates the region test file through the FAT32 write service; the image is write-capable, so the runner needs the
   # coordinator's approval record for its bounds (tools/storage_bounds.py).

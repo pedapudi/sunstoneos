@@ -84,7 +84,7 @@ DRIVER_SOURCES = ['drivers/thermal/a733_thermal.c', 'drivers/thermal/a733_therma
                   'drivers/power/a733_power_domains_native.c', 'drivers/pinctrl/a733_pins.c',
                   'drivers/pinctrl/a733_pin_tables.c', 'drivers/pinctrl/a733_pins_native.c',
                   'drivers/gpu/a733_gpu_resources.c', 'drivers/i2c/a733_i2c.c', 'drivers/usb/a733_usb_platform.c',
-                  'drivers/storage/storage_digest.c', 'platform/a733/shared_locks.c', 'platform/a733/native_usb.c',
+                  'drivers/storage/storage_digest.c', 'drivers/storage/storage_digest_ce.S', 'platform/a733/shared_locks.c', 'platform/a733/native_usb.c',
                   'platform/a733/counter_clock.c', 'arch/aarch64/device_memory.c', 'runtime/memory.c',
                   'runtime/memmove.c', 'runtime/gpu_call.S']
 # Units that include the A733 platform's boot.h.
@@ -356,13 +356,13 @@ for _word in struct.iter_unpack('<Q', LARGE_FILE):
 RAMDISK_ADDRESS = 0x48000000
 
 
-def large_manifest_path(path, digest, file):
+def large_manifest_path(path, digest, file, with_digest=True):
     """manifest.json of the large-region test application: one 1 GiB region loaded from a 4 MiB file."""
     manifest = {"name": "large-test", "devices": {"required": [], "optional": []},
                 "cpu": {"cluster": "a55", "workers": 1, "priority": 2, "stack_bytes": 8192},
                 "regions": [{"name": "input", "kind": "input", "access": ["read"], "bytes": 4096}],
                 "large_regions": [{"name": "weights", "bytes": 1 << 30, "source_bytes": len(file), "access": ["read"],
-                                   "file": "/sunstone-test/sunstone-region-test.bin", "sha256": digest}],
+                                   "file": "/sunstone-test/sunstone-region-test.bin", **({"sha256": digest} if with_digest else {})}],
                 "deadlines": {"run_us": 2000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
                 "output_limit": 32}
     Path(path).write_text(json.dumps(manifest, indent=2) + '\n')
@@ -567,6 +567,12 @@ def main():
         application = image.application('large-test', ['checks/qemu-os/large-main.c'], manifest)
         return image.build(application)
 
+    def build_6g(name, manifest):
+        """The 6 GiB test application (apps/large-6g) with a region of the emulator's size."""
+        image = Image(out / name, extra_defines=['-DQEMU_OS_UPPER=1'])
+        application = image.application('large-6g', ['apps/large-6g/main.c'], manifest)
+        return image.build(application)
+
     def build_storage_write(owner_source=None):
         """The storage-write application on the write-capable owner (apps/os/sd_owner.c) over the board's RAM-disk card."""
         image = Image(out / ('build-storage-write' + ('-reverted' if owner_source else '')),
@@ -575,6 +581,12 @@ def main():
         application = image.application('storage-write', ['apps/storage-write-test/main.c', 'drivers/storage/fat32_rw.c',
                                                            'apps/storage-write-test/sha256_ce.S'],
                                         ROOT / 'apps/storage-write-test/manifest.json')
+        return image.build(application)
+
+    def build_notify():
+        """An application that is given the OS's notifications while it waits (docs/notifications.md)."""
+        image = Image(out / 'build-notify')
+        application = image.application('notify-test', ['checks/qemu-os/notify-main.c'], ROOT / 'checks/qemu-os/notify-manifest.json')
         return image.build(application)
 
     def build_facts():
@@ -602,11 +614,17 @@ def main():
         el0_elf = pool.submit(build_el0_abort)
         facts_elf = pool.submit(build_facts)
         large_elf = pool.submit(build_large, 'build-large', large_manifest_path(out / 'large-manifest.json', LARGE_DIGEST, LARGE_FILE))
+        large_nodigest_elf = pool.submit(build_large, 'build-large-nodigest', large_manifest_path(out / 'large-nodigest-manifest.json', LARGE_DIGEST, LARGE_FILE, False))
         large_big_elf = pool.submit(build_large, 'build-large-too-big', ROOT / 'checks/qemu-os/large-too-big-manifest.json')
+        manifest_6g = json.loads((ROOT / 'apps/large-6g/manifest.json').read_text())
+        manifest_6g['large_regions'][0]['bytes'] = 256 << 20
+        (out / 'large-6g-manifest.json').write_text(json.dumps(manifest_6g))
+        large_6g_elf = pool.submit(build_6g, 'build-large-6g', out / 'large-6g-manifest.json')
         storage_write_elf = pool.submit(build_storage_write)
+        notify_elf = pool.submit(build_notify).result()
         (out / 'build-reverted-owner').mkdir()
         reverted_owner_elf = pool.submit(build_storage_write, reverted_owner(out / 'build-reverted-owner'))
-        large_elf, large_big_elf = large_elf.result(), large_big_elf.result()
+        large_elf, large_big_elf, large_6g_elf, large_nodigest_elf = large_elf.result(), large_big_elf.result(), large_6g_elf.result(), large_nodigest_elf.result()
         storage_write_elf = storage_write_elf.result()
         reverted_owner_elf = reverted_owner_elf.result()
         os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
@@ -810,6 +828,24 @@ def main():
     c.clean()
     tag, error = struct.unpack('<QQ', bytes.fromhex(c.finished['result']))
     c.require(tag == 0x4c415247464c and error == 0xfffffff5, 'digest mismatch: result %#x %#x' % (tag, error))
+    # A region declared without a digest is not hashed: the corrupted file loads, the loader reports READY, and the
+    # application (which compares the fold itself) sees the corruption.
+    c = run_case('large-region-no-digest', large_nodigest_elf, scenario(usb_ready_ms=usb_delay_ms), mode0, '4G', [(RAMDISK_ADDRESS, corrupt)])
+    c.clean()
+    c.require(c.finished is not None and c.finished['status'] == '1', 'the application did not finish')
+    tag, fold = struct.unpack('<QQ', bytes.fromhex(c.finished['result']))
+    c.require(tag == 0x4c4152474d4d, 'no-digest load: result tag %#x, not a loaded region with a differing fold' % tag)
+    # A region with no source is ready at once, above 4 GiB it would not fit the emulator, so the emulator's region is 256 MiB:
+    # the application times its passes, writes and reads back the address pattern, and reports no mismatch.
+    c = run_case('large-region-unfilled', large_6g_elf, scenario(usb_ready_ms=usb_delay_ms), None, '4G')
+    c.clean()
+    c.require(c.finished is not None and c.finished['status'] == '1', 'the application did not finish')
+    parts = {int(o): h for o, h in re.findall(r'APP-RESULT offset=(\d+) hex=([0-9a-f]+)', c.output)}
+    words = struct.unpack('<64Q', bytes.fromhex(''.join(parts[o] for o in sorted(parts))))
+    c.require(words[0] == 0x36474f4e45 and words[1] == 2 and words[2] == 0, 'tag/state/error %#x %d %d' % words[:3])
+    c.require(words[3] == 256 << 20 and words[4] == 0x80000000, 'region %#x at %#x' % (words[3], words[4]))
+    c.require(all(t > 0 for t in words[8:8 + 24 + 6]), 'a pass has no time: %s' % (words[8:38],))
+    c.require(words[38] == (256 << 20) // 8 and words[39] == 0, 'integrity: %d words, %d mismatches' % (words[38], words[39]))
     # A second EL0 task that runs in no application space reads the region: a permission fault, reported with the region's address.
     c = run_case('large-region-other-space-faults', large_elf, scenario(usb_ready_ms=usb_delay_ms), mode1, '4G', [(RAMDISK_ADDRESS, good)])
     c.failed_with('APPLICATION', 0xe24)
@@ -839,6 +875,14 @@ def main():
     c = run_case('large-regions-too-big', large_big_elf, scenario(usb_ready_ms=usb_delay_ms), memory='4G')
     c.require(c.main is None and not lines(c.output, 'LARGE-ADMITTED'), 'the application started although the ledger refused its regions')
     c.require(c.failure is not None, 'the refusal left no failure record')
+
+    # The OS gives the main task its usb-ready and live-state notifications while the main task sleeps in the deadline
+    # wait and in ss_host_recv: each ends at its own condition (the deadline; the timeout), not at the OS's notification.
+    c = run_case('os-notifications-do-not-end-waits', notify_elf, scenario(usb_ready_ms=usb_delay_ms), bytes(4096))
+    c.clean()
+    tag, wait, e1, recv, e2 = struct.unpack('<5q', bytes.fromhex(c.finished['result']))
+    c.require(wait == 1 and e1 >= 30000, 'the deadline wait ended with status %d after %d us, expected expiry after 30000 us' % (wait, e1))
+    c.require(recv == 0 and e2 >= 30000, 'ss_host_recv returned %d after %d us, expected the timeout (0) after 30000 us' % (recv, e2))
 
     # 12. The storage-write application through ss_storage_enable on the write-capable owner (apps/os/sd_owner.c), over a RAM-disk
     # card that holds the real card's 395 backup sectors at their sector numbers and the runner's bounds blob. The software path

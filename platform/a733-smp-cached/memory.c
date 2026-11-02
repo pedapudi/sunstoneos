@@ -1,4 +1,5 @@
 #include "a733_cached_memory.h"
+#include "../../include/os_space.h"
 #include "a733_cpu_coherence.h"
 #include "a733_cpu_start.h"
 #include "a733_device_memory_layout.h"
@@ -30,6 +31,10 @@ uint64_t a733_cached_usb_el1_l3[A733_USB_MEMORY_ALIAS_TABLES][512] TABLE;
 /* Word 0 holds the EL1 table sum; the rest keeps the line to itself. Code
  * names it last so that it follows the table pages (checks/cpu-table-walks.py). */
 uint64_t a733_cached_el1_table_sum[8] __attribute__((section(".bss.a733_cached_tables"),aligned(64)));
+/* EL1 cannot read the table pages (the block that holds them is unmapped there), so the entries of the first
+ * 16 GiB are copied here, into ordinary memory, once the tables are complete (include/os_space.h). */
+static uint64_t el1_l1_head[16];
+void os_kernel_l1_head(uint64_t out[16]) { for (unsigned i = 0; i < 16; ++i) out[i] = el1_l1_head[i]; }
 extern unsigned char __tables_start[], __tables_end[], __bss_end[], __heap_end[];
 extern unsigned char __device_pool_start[], __device_pool_end[];
 extern unsigned char __uncached_pool_start[], __uncached_pool_end[];
@@ -209,6 +214,8 @@ int a733_cached_memory_prepare(void)
     }
 #endif
     /* Last table step: each core compares this with its own readback. */
+    for (unsigned i = 16; i < 512; ++i) if (a733_cached_el1_l1[i]) return 0;
+    for (unsigned i = 0; i < 16; ++i) el1_l1_head[i] = a733_cached_el1_l1[i];
     uint64_t sum = 0;
     for (unsigned i = 0; i < 512; ++i) sum += a733_cached_el1_l1[i] + a733_cached_el1_l2[i];
     #if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC

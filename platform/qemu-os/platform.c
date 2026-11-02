@@ -12,6 +12,7 @@
 #include "sunstone_deadline.h"
 #include "irq_table.h"
 #include "qemu_os.h"
+#include "os_space.h"
 #ifdef SUNSTONE_A733_HW_FACTS
 #include "a733_hw_facts.h"
 #include "a733_mmio.h"
@@ -22,8 +23,13 @@
 #define GICR 0x080a0000UL
 #define TIMER_IRQ 30U
 #define DEADLINE_IRQ 27U
-static uint64_t level1[512] __attribute__((aligned(4096)));
-static uint64_t level2[512] __attribute__((aligned(4096)));
+/* The tables sit alone in the 2 MiB block at 0x41c00000, which the level-2 table leaves unmapped, as the A733
+ * profile does for its table block (platform/a733-smp-cached/memory.c): the hardware walks them, but a load from
+ * EL1 is a translation fault. Code that needs an entry reads the copy below (include/os_space.h). */
+static uint64_t level1[512] __attribute__((section(".tables"), aligned(4096)));
+static uint64_t level2[512] __attribute__((section(".tables"), aligned(4096)));
+static uint64_t level1_head[OS_KERNEL_L1_HEAD];
+void os_kernel_l1_head(uint64_t out[OS_KERNEL_L1_HEAD]) { for (unsigned i = 0; i < OS_KERNEL_L1_HEAD; ++i) out[i] = level1_head[i]; }
 static uint64_t tick_interval, next_tick;
 static uint32_t cpu_online;
 extern void _start(void);
@@ -175,6 +181,8 @@ void platform_init(void) {
     for (unsigned i = 2; i < 5; ++i)
         level1[i] = ((uint64_t)i << 30) | (1UL << 54) | (1UL << 53) | (1UL << 11) | (1UL << 10) | (3UL << 8) | (1UL << 2) | 1;
 #endif
+    level2[(0x41c00000UL - 0x40000000UL) >> 21] = 0;
+    for (unsigned i = 0; i < OS_KERNEL_L1_HEAD; ++i) level1_head[i] = level1[i];
     /* Code is read-only at both EL0 and EL1; data lies in later blocks. */
     level2[8] = 0x41000000UL | (1UL << 10) | (3UL << 8) | (3UL << 6) | (1UL << 2) | 1;
     __asm__ volatile("dsb sy" ::: "memory");
