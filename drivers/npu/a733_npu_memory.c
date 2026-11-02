@@ -1,4 +1,3 @@
-#include <string.h>
 #include "a733_npu_memory.h"
 #include "a733_range.h"
 #include "a733_mapping_check.h"
@@ -67,7 +66,7 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
      * again. No copy of it and no table of regions is kept on the stack (the tables hold up to 125 buffers). */
     struct a733_npu_memory *const next_ = m;
     struct a733_npu_region *const regions = m->scratch_regions;
-    memset(m, 0, sizeof(*m));
+    for (volatile unsigned char *zero = (volatile unsigned char *)m, *end = zero + sizeof(*m); zero != end; ++zero) *zero = 0;
     next_->count = count; next_->arena = (uintptr_t)arena; next_->capacity = capacity;
     next_->image.physical = physical; next_->ops = *ops; next_->cookie = cookie;
     unsigned bootstraps = 0;
