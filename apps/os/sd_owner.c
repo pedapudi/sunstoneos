@@ -23,7 +23,8 @@
 #define OWNER_STACK_WORDS 2048u
 #define OWNER_PRIORITY (tskIDLE_PRIORITY + 2)
 #define READY_TIMEOUT_US 10000000u
-#define WAIT_INDEX 1u              /* notification index a caller sleeps on; index 0 is the owner's */
+#include "sunstone_notify.h"
+#define WAIT_INDEX SS_NOTIFY_REQUEST_WAIT   /* notification index a caller sleeps on; index 0 is the owner's */
 
 enum kind { K_READ, K_ASYNC_READ, K_WRITE, K_ENABLE, K_UNIT, K_REGION, K_CLOSE };
 struct request {

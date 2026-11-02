@@ -577,6 +577,12 @@ def main():
                                         ROOT / 'apps/storage-write-test/manifest.json')
         return image.build(application)
 
+    def build_notify():
+        """An application that is given the OS's notifications while it waits (docs/notifications.md)."""
+        image = Image(out / 'build-notify')
+        application = image.application('notify-test', ['checks/qemu-os/notify-main.c'], ROOT / 'checks/qemu-os/notify-manifest.json')
+        return image.build(application)
+
     def build_facts():
         image = Image(out / 'build-hw-facts', extra_defines=['-DSUNSTONE_A733_HW_FACTS=1'],
                       extra_sources=['platform/a733/hw_facts.c'])
@@ -604,6 +610,7 @@ def main():
         large_elf = pool.submit(build_large, 'build-large', large_manifest_path(out / 'large-manifest.json', LARGE_DIGEST, LARGE_FILE))
         large_big_elf = pool.submit(build_large, 'build-large-too-big', ROOT / 'checks/qemu-os/large-too-big-manifest.json')
         storage_write_elf = pool.submit(build_storage_write)
+        notify_elf = pool.submit(build_notify).result()
         (out / 'build-reverted-owner').mkdir()
         reverted_owner_elf = pool.submit(build_storage_write, reverted_owner(out / 'build-reverted-owner'))
         large_elf, large_big_elf = large_elf.result(), large_big_elf.result()
@@ -839,6 +846,14 @@ def main():
     c = run_case('large-regions-too-big', large_big_elf, scenario(usb_ready_ms=usb_delay_ms), memory='4G')
     c.require(c.main is None and not lines(c.output, 'LARGE-ADMITTED'), 'the application started although the ledger refused its regions')
     c.require(c.failure is not None, 'the refusal left no failure record')
+
+    # The OS gives the main task its usb-ready and live-state notifications while the main task sleeps in the deadline
+    # wait and in ss_host_recv: each ends at its own condition (the deadline; the timeout), not at the OS's notification.
+    c = run_case('os-notifications-do-not-end-waits', notify_elf, scenario(usb_ready_ms=usb_delay_ms), bytes(4096))
+    c.clean()
+    tag, wait, e1, recv, e2 = struct.unpack('<5q', bytes.fromhex(c.finished['result']))
+    c.require(wait == 1 and e1 >= 30000, 'the deadline wait ended with status %d after %d us, expected expiry after 30000 us' % (wait, e1))
+    c.require(recv == 0 and e2 >= 30000, 'ss_host_recv returned %d after %d us, expected the timeout (0) after 30000 us' % (recv, e2))
 
     # 12. The storage-write application through ss_storage_enable on the write-capable owner (apps/os/sd_owner.c), over a RAM-disk
     # card that holds the real card's 395 backup sectors at their sector numbers and the runner's bounds blob. The software path
