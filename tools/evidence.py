@@ -301,8 +301,6 @@ def cmd_table(args):
 # ---------------------------------------------------------------------------
 # Migration of a prose status file.
 
-OPEN_WORDS = re.compile(r'\b(remains?|remaining|open|missing|blocked|unqualified|not yet|pending|unrun|'
-                        r'incomplete|unproven|not established)\b', re.I)
 
 
 def paragraphs(text):
@@ -400,15 +398,19 @@ def cmd_migrate(args):
     scope = re.search(r'^\*\*Board-qualified scope:\*\* [^\n]+(?:\n(?!\n|#|\*\*)[^\n]+)*', intro, re.M)
     summary = paragraphs(intro.split(status.group(0), 1)[1] if status else '')
     summary = [flat(item) for item in summary[:1] if not item.startswith('**Board') and len(item.splitlines()) <= 6]
-    sentences = re.split(r'(?<=[.!?])\s+', flat(re.sub(r'^#.*$|^\s*[-|].*$', '', text, flags=re.M)))
-    open_work = [item for item in sentences
-                 if OPEN_WORDS.search(item) and not ENTRY.search(item) and not item.startswith('**')
-                 and len(item) < 260][:12]
+    # Open work is never inferred: copy an existing section or leave a placeholder.
+    section = re.search(r'^## (?:Open work|Next (?:steps|actions)|Remaining work)[^\n]*\n(.*?)(?=^## |\Z)',
+                        text, re.M | re.S | re.I)
+    if section and section.group(1).strip():
+        open_work = section.group(1).strip().splitlines()
+    else:
+        open_work = ['1. Open work has not been written; see the historical log.']
+        print(f'warning: {source.name} has no open-work section; wrote a placeholder to replace by hand')
     out = [f'# {title}', '', status.group(0) if status else '**Status: implemented.**', '',
            *([summary[0], ''] if summary else []),
            scope.group(0) if scope else '**Board-qualified scope:** None.', '',
            '## Open work', '']
-    out += [f'{number}. {item}' for number, item in enumerate(open_work, 1)] or ['None recorded.']
+    out += open_work
     out += ['', '## Evidence', '',
             f'Board results with a queue entry are records in `docs/evidence/{stem}.jsonl`, added with `tools/evidence.py add`. '
             f'Results cited by path, and earlier prose evidence, are in [the historical log](../history/{history.name}).', '',
