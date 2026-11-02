@@ -304,6 +304,24 @@ Prediction for lifetime 2 (written before the run; the card is taken to be at 1.
   at 1.8 V with the bank at 3.3 V (`GPIO_POW_VAL` bits 11:10 = 2, selector 1). If the close fails again, the stop word says where, and it holds
   S18A, the support bits and the read CRC fold.
 
+### Lifetime 2 again, after the close fix (entry `1793649661736969334-9742cb48`): returned normally
+
+| Item | Predicted | Measured |
+| --- | --- | --- |
+| Returns normally, restoration words unchanged | yes | yes; `baseline_changed` empty |
+| Bank at identification | value 3 (1.8 V), selector 0 | value 3, selector 0 (`GPIO_POW_VAL` `0x020ffd80`) |
+| Identified at 1.8 V without CMD11 | yes | yes: `reentered`, outcome `limited_to_sdr25`, 50 MHz |
+| S18A in the last ACMD41 | set, or clear without stopping | **clear** |
+| CMD6 group 1 support at 1.8 V | at least `0x8007`, probably `0x801f` | **`0x801f`**: SDR12, SDR25, SDR50, SDR104, DDR50 |
+| 32 reads of 128 KiB | about 21 MB/s, no error | median 21.4 MB/s per request (6.1 ms), 4 MiB in 0.30 s with the first request slower; no error |
+| Bank after the close | value 2, selector 1 | value 2 (`0x020ff980`), selector 1 |
+| Withstand mode (`GPIO_POW_MOD_SEL`) | not predicted | `0x01155550` at identification and after the close |
+| Identification time | | 309 ms |
+
+The card on 3-3 is a Phison `SD32G`, revision 1.2, serial `0000029d`, made December 2020, 61,067,264 sectors. It accepts re-entry at 1.8 V from a host that
+moved the bank to 1.8 V first, answers ACMD41 at 1.8 V with S18A clear (so a session must not wait for it), and supports SDR104 and DDR50. The card is
+still at 1.8 V; the bank is at 3.3 V; the board returned to FEL.
+
 ## Board plan
 
 Each stage has one hypothesis. Nothing runs without the coordinator's approval and none writes to the card. Stage 2 below is the
