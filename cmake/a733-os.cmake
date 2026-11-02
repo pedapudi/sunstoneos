@@ -53,6 +53,17 @@ elseif(SUNSTONE_APPLICATION STREQUAL "heap-test")
     HEAP_TEST_NOTIFY_WAIT=${SUNSTONE_HEAP_TEST_NOTIFY_WAIT})
   add_sunstone_image(sunstone-a733-os-heap-test LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION heap-test)
+elseif(SUNSTONE_APPLICATION STREQUAL "slot1-test")
+  if(NOT SUNSTONE_A733_DRAM_DECODE_PROBE)
+    message(FATAL_ERROR "slot1-test needs -DSUNSTONE_A733_DRAM_DECODE_PROBE=ON")
+  endif()
+  set(SUNSTONE_SLOT1_TEST_MODE "0" CACHE STRING "0: use the region; 1: use it, then read the byte after it; 2: overflow the main stack")
+  add_sunstone_application(slot1-test
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/slot1-test/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/slot1-test/manifest.json")
+  target_compile_definitions(slot1-test PRIVATE SLOT1_TEST_MODE=${SUNSTONE_SLOT1_TEST_MODE})
+  add_sunstone_image(sunstone-a733-os-slot1-test LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION slot1-test)
 elseif(SUNSTONE_APPLICATION STREQUAL "storage-write-test")
   # Creates the region test file through the FAT32 write service; the image is write-capable, so the runner needs the
   # coordinator's approval record for its bounds (tools/storage_bounds.py).
