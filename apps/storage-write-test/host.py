@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Host side of storage-write-test: the second input (the mode) and the decoder of its 512-byte result.
 
-Modes: 0 creates the 512 MiB region test file and reads it back; 1 is the interruption test, first lifetime (the application
+Modes: 0 creates the 512 MiB region test file (no read-back; a 40 s guard stops the write, closes cleanly and reports status 11);
+3 reads the whole file back against the stream; 1 is the interruption test, first lifetime (the application
 stops reporting progress after `cut_bytes` so the watchdog resets the board mid-flush); 2 is its second lifetime (mount,
 recover, read back what the volume holds)."""
 import struct
@@ -11,6 +12,7 @@ FIELDS = ('tag mode status detail file_bytes written_bytes au_sectors cpu_hz cpu
           'wear_bytes wear_data_bytes wear_metadata_bytes wear_writes wear_aligned wear_unaligned wear_syncs wear_flushes '
           'owner_elapsed_us owner_asleep_us owner_wakes mismatches first_mismatch volume_size recoveries recovered_clusters').split()
 HIST = 16
+TAIL = 'app_core irq_cores owner_cores caller_cores sha_ce guard_us'.split()
 TAG = 0x5357544553544f4b
 COUNTER_HZ = 24_000_000
 
@@ -22,9 +24,11 @@ def mode_input(mode=0, cut_bytes=0):
 def decode(payload):
     if len(payload) != 512:
         raise ValueError(f'storage-write result is {len(payload)} bytes, not 512.')
-    values = struct.unpack('<%dQ' % (len(FIELDS) + HIST), payload[:8 * (len(FIELDS) + HIST)])
+    n = len(FIELDS) + HIST + len(TAIL)
+    values = struct.unpack('<%dQ' % n, payload[:8 * n])
     out = dict(zip(FIELDS, values))
-    out['histogram'] = list(values[len(FIELDS):])
+    out['histogram'] = list(values[len(FIELDS):len(FIELDS) + HIST])
+    out.update(zip(TAIL, values[len(FIELDS) + HIST:]))
     if out['tag'] != TAG:
         raise ValueError('storage-write result has the wrong tag.')
     sec = lambda ticks: ticks / COUNTER_HZ

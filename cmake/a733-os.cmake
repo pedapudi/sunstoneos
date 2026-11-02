@@ -46,6 +46,7 @@ elseif(SUNSTONE_APPLICATION STREQUAL "storage-write-test")
   endif()
   add_sunstone_application(storage-write
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/storage-write-test/main.c"
+            "${SUNSTONE_SOURCE_ROOT}/apps/storage-write-test/sha256_ce.S"
             "${SUNSTONE_SOURCE_ROOT}/drivers/storage/fat32_rw.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/storage-write-test/manifest.json")
   add_sunstone_image(sunstone-a733-os-storage-write-test LIFETIME ${os_lifetime}

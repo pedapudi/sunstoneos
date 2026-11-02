@@ -20,6 +20,8 @@ int ss_storage_device(struct fwr_device *);
 int ss_storage_close(void);
 /* CPU time of the SD owner task: wall time since the first call, time spent asleep (waiting for the interrupt, a timer or
  * a request), and the number of wakes. Busy time is the difference; preemption by other tasks counts as busy. */
-struct ss_storage_owner_stats { uint64_t elapsed_us, asleep_us, wakes; };
+/* irq_cores, owner_cores and caller_cores are bit masks of the cores that took the SD0 interrupt, ran the owner task, and
+ * posted requests to it. */
+struct ss_storage_owner_stats { uint64_t elapsed_us, asleep_us, wakes; uint32_t irq_cores, owner_cores, caller_cores; };
 int ss_storage_owner_stats(struct ss_storage_owner_stats *);
 #endif

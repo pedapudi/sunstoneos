@@ -287,11 +287,13 @@ static uint8_t *blob_copy;                       /* sized from the input at enab
 static TaskHandle_t owner_task;
 static _Atomic uint32_t irq_bits;
 static volatile int irq_live;
+static _Atomic uint32_t irq_core_mask;
 void os_sd_irq(void)
 {
     if (!irq_live) return;
     uint32_t mista = *(volatile uint32_t *)(uintptr_t)(SMHC0 + 0x34);
     if (!mista) return;
+    atomic_fetch_or_explicit(&irq_core_mask, 1u << portGET_CORE_ID(), memory_order_relaxed);
     atomic_fetch_or_explicit(&irq_bits, mista, memory_order_release);
     *(volatile uint32_t *)(uintptr_t)(SMHC0 + 0x38) = mista;
     BaseType_t woken = pdFALSE;
@@ -322,6 +324,7 @@ static void dr_sleep(void *c, uint64_t until)
 }
 static uint64_t hw_owner_sleep_us(void) { return atomic_load(&sleep_us); }
 static uint64_t hw_owner_wakes(void) { return atomic_load(&sleep_count); }
+static uint32_t hw_irq_cores(void) { return atomic_load(&irq_core_mask); }
 static int dr_live(void *c) { (void)c; return board_live(NULL); }
 static enum a733_mmc_platform_result drive_platform(uint64_t deadline)
 {
@@ -418,7 +421,7 @@ const struct os_sd_hw *os_sd_open_owner(void)
     if (sunstone_deadline_register() != 1 || !sunxi_mmc_set_irq(&platform.core, irq_taken, NULL)) return 0;
     irq_live = 1;
     hw = (struct os_sd_hw){d, card.sectors, card.sector_addressed, hw_allocation_unit, hw_enable_writes, hw_write_piece, hw_live,
-                           hw_set_write_region, hw_wait_async, hw_owner_sleep_us, hw_owner_wakes, os_sd_close_owner};
+                           hw_set_write_region, hw_wait_async, hw_owner_sleep_us, hw_owner_wakes, hw_irq_cores, os_sd_close_owner};
     return &hw;
 }
 void os_sd_close_owner(void) { irq_live = 0; os_sd_close_owner_device(); }

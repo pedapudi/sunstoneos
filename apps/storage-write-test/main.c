@@ -4,7 +4,9 @@
  * It runs only in an image built with SUNSTONE_A733_OS_SD_WRITE, on the runner's bounded-write admission: the first input is the
  * admitted bounds blob (tools/storage_bounds.py), which the OS verifies against the card before any write. The second input
  * selects a mode (a little-endian u32, then a u64):
- *   0  create the file, sync, close, unmount, then read it back against the stream and report;
+ *   0  create the file, sync, close, unmount and report (no read-back); a time guard (GUARD_US) stops the write, syncs and
+ *      closes, and reports E_TIMEOUT with the bytes written;
+ *   3  read the whole file back against the stream and report (a separate run; the file must be FILE_BYTES long);
  *   1  interruption test, lifetime 1: write with a sync every 8 MiB, and after `cut_bytes` stop reporting progress so the
  *      watchdog resets the board in the middle of a flush cycle;
  *   2  interruption test, lifetime 2: mount (recovery runs), read back what the volume holds against the stream, report.
@@ -21,6 +23,12 @@
 #define SYNC_EVERY (8 * MIB)
 #define MAX_FLUSHES 4096u
 #define TAG UINT64_C(0x5357544553544f4b)          /* "SWTESTOK" */
+#define GUARD_US UINT64_C(40000000)               /* the write stops after this long and closes cleanly */
+#define COUNTER_HZ UINT64_C(24000000)
+
+/* One SHA-256 compression of a 64-byte block from the standard initial state (sha256_ce.S; ARMv8 Cryptographic Extension). */
+void sha256_block_ce(const uint8_t block[64], uint8_t digest[32]);
+static int use_ce;                                /* ID_AA64ISAR0_EL1.SHA2 != 0 on the core that generates the stream */
 
 /* --- the stream: block i is SHA-256("sunstone-region-test-v1" || i as 8 bytes little endian), 32 bytes -------------- */
 static const uint32_t K[64] = {
@@ -35,6 +43,14 @@ static const char PREFIX[] = "sunstone-region-test-v1";      /* 23 bytes */
 
 static void stream_block(uint64_t index, uint8_t out[32])
 {
+    if (use_ce) {
+        uint8_t blk[64] = {0};
+        memcpy(blk, PREFIX, 23);
+        for (unsigned i = 0; i < 8; ++i) blk[23 + i] = (uint8_t)(index >> (8 * i));
+        blk[31] = 0x80; blk[63] = 248;
+        sha256_block_ce(blk, out);
+        return;
+    }
     uint32_t w[64], a, b, c, d, e, f, g, h;
     uint8_t m[64] = {0};
     memcpy(m, PREFIX, 23);
@@ -90,7 +106,8 @@ struct result {
     uint64_t owner_elapsed_us, owner_asleep_us, owner_wakes;
     uint64_t mismatches, first_mismatch, volume_size, recoveries, recovered_clusters;
     uint64_t histogram[FWR_HIST];
-    uint64_t reserved[512 / 8 - 36 - FWR_HIST];
+    uint64_t app_core, irq_cores, owner_cores, caller_cores, sha_ce, guard_us;
+    uint64_t reserved[512 / 8 - 42 - FWR_HIST];
 };
 _Static_assert(sizeof(struct result) == 512, "result is the manifest's output_limit");
 static struct result r;
@@ -101,7 +118,7 @@ static void finish_report(void)
     if (card_open) { (void)ss_storage_close(); card_open = 0; }
     ss_finish(&r, sizeof r);
 }
-enum { OK = 0, E_BOUNDS = 1, E_REGION = 2, E_DEVICE = 3, E_MBR = 4, E_MOUNT = 5, E_DIR = 6, E_OPEN = 7, E_WRITE = 8, E_CLOSE = 9, E_READ = 10 };
+enum { OK = 0, E_BOUNDS = 1, E_REGION = 2, E_DEVICE = 3, E_MBR = 4, E_MOUNT = 5, E_DIR = 6, E_OPEN = 7, E_WRITE = 8, E_CLOSE = 9, E_READ = 10, E_TIMEOUT = 11, E_SIZE = 12 };
 
 static uint32_t flush_ticks[MAX_FLUSHES];
 static void sort32(uint32_t *v, unsigned n)
@@ -167,7 +184,10 @@ static void collect(void)
     r.recoveries = w->recoveries; r.recovered_clusters = w->recovered_clusters;
     for (unsigned i = 0; i < FWR_HIST; ++i) r.histogram[i] = w->size_histogram[i];
     struct ss_storage_owner_stats s;
-    if (ss_storage_owner_stats(&s)) { r.owner_elapsed_us = s.elapsed_us; r.owner_asleep_us = s.asleep_us; r.owner_wakes = s.wakes; }
+    if (ss_storage_owner_stats(&s)) {
+        r.owner_elapsed_us = s.elapsed_us; r.owner_asleep_us = s.asleep_us; r.owner_wakes = s.wakes;
+        r.irq_cores = s.irq_cores; r.owner_cores = s.owner_cores; r.caller_cores = s.caller_cores;
+    }
 }
 
 void storage_write_main(const struct ss_grant *grant)
@@ -181,6 +201,12 @@ void storage_write_main(const struct ss_grant *grant)
     uint64_t cut_bytes = 0;
     for (unsigned i = 0; i < 8; ++i) cut_bytes |= (uint64_t)m[8 + i] << (8 * i);
     r.mode = mode_id;
+    r.app_core = grant->main_core; r.guard_us = GUARD_US;
+    {
+        struct ss_cpu_observation o;
+        use_ce = ss_cpu_observations(grant->main_core, &o) && ((o.isar0 >> 12) & 15) != 0;
+        r.sha_ce = use_ce;
+    }
     r.cpu_hz = cpu_cycles_per_second(&r.cpu_calibration_ticks);
     ss_progress();
     card_open = 1;                                             /* enabling opens the card in the owner task, even if it then refuses */
@@ -193,9 +219,12 @@ void storage_write_main(const struct ss_grant *grant)
     uint64_t t_start = ss_counter_ticks();
     int rc = mount(base, sectors);
     if (rc) { r.status = E_MOUNT; r.detail = (uint64_t)-rc; finish_report(); }
-    if (mode_id == 2) {                                              /* the interruption test, second lifetime */
+    if (mode_id == 2 || mode_id == 3) {                              /* read back: the interruption test (2) or the finished file (3) */
         uint64_t size = 0; int dir = 0;
-        if (fwr_exists(&volume, PATH, &size, &dir) == FWR_OK) { r.volume_size = size; verify(size); }
+        if (fwr_exists(&volume, PATH, &size, &dir) == FWR_OK) {
+            r.volume_size = size;
+            if (mode_id == 3 && size != FILE_BYTES) r.status = E_SIZE; else verify(size);
+        }
         else r.status = E_OPEN;
         collect(); r.total_ticks = ss_counter_ticks() - t_start;
         (void)fwr_unmount(&volume);
@@ -209,6 +238,7 @@ void storage_write_main(const struct ss_grant *grant)
     r.create_ticks = ss_counter_ticks() - t0;
     unsigned flushes = 0;
     uint64_t synced = 0;
+    int timed_out = 0;
     for (uint64_t off = 0; off < FILE_BYTES; off += CHUNK) {
         uint64_t g0 = ss_counter_ticks();
         stream_fill(chunk, off, CHUNK);
@@ -241,6 +271,7 @@ void storage_write_main(const struct ss_grant *grant)
             for (;;) { __asm__ volatile("nop"); }
         }
         ss_progress();
+        if (mode_id == 0 && (ss_counter_ticks() - t_start) * 1000000u / COUNTER_HZ >= GUARD_US && off + CHUNK < FILE_BYTES) { timed_out = 1; break; }
     }
     uint64_t c0 = ss_counter_ticks();
     rc = fwr_close(&file);
@@ -248,12 +279,10 @@ void storage_write_main(const struct ss_grant *grant)
     r.close_ticks = ss_counter_ticks() - c0;
     if (rc) { r.status = E_CLOSE; r.detail = (uint64_t)-rc; collect(); finish_report(); }
     r.total_ticks = ss_counter_ticks() - t_start;
+    if (timed_out) { r.status = E_TIMEOUT; r.detail = r.written_bytes; }
     unsigned n = flushes < MAX_FLUSHES ? flushes : MAX_FLUSHES;
     r.flushes = flushes;
     if (n) { sort32(flush_ticks, n); r.flush_p50 = flush_ticks[n / 2]; r.flush_p99 = flush_ticks[(n * 99) / 100 < n ? (n * 99) / 100 : n - 1]; r.flush_max = flush_ticks[n - 1]; }
     collect();
-    /* Read the file back against the stream (mount again: the unmount above left the volume clean). */
-    rc = mount(base, sectors);
-    if (!rc) { verify(FILE_BYTES); (void)fwr_unmount(&volume); } else { r.status = E_MOUNT; r.detail = (uint64_t)-rc; }
-    finish_report();
+    finish_report();                                                /* mode 3 reads the file back in a run of its own */
 }

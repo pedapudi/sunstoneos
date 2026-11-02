@@ -30,6 +30,7 @@ struct os_sd_hw {
     /* Time the owner has spent asleep in the interrupt and timer waits of a transfer, and how many times it woke there. */
     uint64_t (*owner_sleep_us)(void);
     uint64_t (*owner_wakes)(void);
+    uint32_t (*irq_cores)(void);               /* bit mask of the cores that took the SD0 interrupt */
     /* Restore the clock, the pins and the rail leases; the card is not used afterwards. */
     void (*close)(void);
 };

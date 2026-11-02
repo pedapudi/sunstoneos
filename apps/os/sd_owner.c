@@ -43,6 +43,7 @@ static const struct os_sd_hw *hw;
 static atomic_int ready, closed;           /* 0 starting, 1 open, -1 failed */
 static uint32_t unit_sectors;
 static _Atomic uint64_t idle_us, wake_count, first_us;
+static _Atomic uint32_t owner_core_mask, caller_core_mask;
 static struct os_large_device proxy;
 
 static void finish(struct request *r, int ok)
@@ -85,6 +86,7 @@ static void owner_main(void *unused)
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         atomic_fetch_add(&idle_us, sunstone_deadline_now_us() - slept_from);
         atomic_fetch_add(&wake_count, 1);
+        atomic_fetch_or(&owner_core_mask, 1u << portGET_CORE_ID());
         for (;;) {
             struct request *r = atomic_exchange(&loader_slot, NULL);        /* reads first */
             if (r) { serve(r); continue; }
@@ -98,6 +100,7 @@ static void owner_main(void *unused)
 static int post(_Atomic(struct request *) *slot, struct request *r, int wait)
 {
     if (atomic_load(&closed)) return 0;                                 /* the card is closed: no request is served */
+    atomic_fetch_or(&caller_core_mask, 1u << portGET_CORE_ID());
     atomic_init(&r->done, 0);
     r->waiter = wait ? xTaskGetCurrentTaskHandle() : NULL;
     struct request *none = NULL;
@@ -212,6 +215,7 @@ int ss_storage_owner_stats(struct ss_storage_owner_stats *out)
     if (!out || !hw) return 0;
     uint64_t now = sunstone_deadline_now_us();
     uint64_t slept = atomic_load(&idle_us) + hw->owner_sleep_us();
-    *out = (struct ss_storage_owner_stats){now - first_us, slept, atomic_load(&wake_count) + hw->owner_wakes()};
+    *out = (struct ss_storage_owner_stats){now - first_us, slept, atomic_load(&wake_count) + hw->owner_wakes(),
+                                                     hw->irq_cores(), atomic_load(&owner_core_mask), atomic_load(&caller_core_mask)};
     return 1;
 }
