@@ -256,6 +256,15 @@ scheduler therefore asks `board_application_task_privileged`, which reaches `os_
 (`checks/sunstone-image-link.py`) disassembles the hook in every image that links `ss_storage_enable` and refuses one that does not reach
 the owner's predicate. The second board submission faulted on the owner's first CCU read (0x02002500) at EL0 for this reason.
 
+**One device's clock fault must not fail the shared provider (open defect).** A faulted SD0 binding takes the thermal service down with it. The
+call path is `a733_mmc_platform.c fail()` (lines 57 to 64), which calls `a733_clock_retain` on the SD0 token; `a733_clock_leases.c` then latches
+`fail(m)`, which sets the registry-wide `failed` flag and the power authority's CLOCK_FAULT bit, so that `enter()` returns FAULT to every later caller
+of any token. The thermal service reads that flag in `live()` and in every register access (`apps/os/thermal.c`), so it ends the session within a second
+or two, before the owner can report the SD fault. The platform's own retention of the register lock has the same reach (the thermal service enters the
+same lock). A single device's token fault should retain that token and its pins and rails and nothing else; whether that holds for the registry
+is a change to shared OS code that the coordinator decides. Until then the owner leaves its stage as the first-failure note, so the record names the
+SD0 binding when it came first.
+
 **Why an open or an enable stopped.** `ss_storage_diagnostic` returns the stage and a detail (`apps/os/large_sd.c` lists the stages); the
 application copies it into its result, so a refused enable can be read without another instrumented image.
 
