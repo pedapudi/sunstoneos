@@ -134,6 +134,7 @@ def main():
     run([*common, '-fsanitize=address,undefined', '-Wl,--gc-sections', translation, *sources, '-o', binary])
     print(run([binary]), end='')
     print(run([binary, 'startup']), end='')
+    print(run([binary, 'slice']), end='')
     unsupported = subprocess.run([binary, 'end'], text=True, capture_output=True, env=env)
     assert unsupported.returncode and 'scheduler stop unsupported' in unsupported.stderr
     race = build / 'control-reuse'
