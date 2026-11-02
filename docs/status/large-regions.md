@@ -21,6 +21,16 @@ Entry `1793632829779717086-f7d0d1cf` (3-1, A76, `PERF_BOOT=high`, development DR
 - **Read bandwidth, one A76 core:** 12.79 GB/s over a 40 MiB window (eight timed passes), 12.66 GB/s over the whole 1 GiB (three passes), 1.0 percent lower. The `apps/dram-scaling` record `read_one_a76` is 12.69 GB/s.
 - **Not measured:** TLB refill counts (EL0 cannot read the PMU in the OS image).
 
+## Load time: why 30.7 s against 24.7 s, and the changes
+
+Read from the code (`apps/os/large_load.c`, `apps/os/large_sd.c`, `drivers/storage/fat32_ro.c`, `drivers/storage/sunxi_mmc.c`), before any new run:
+
+- **The clock.** `elapsed_us` was a difference of FreeRTOS tick counts times 1000, so it had a 1 ms step; two loads agreeing to the microsecond meant the same number of ticks, not the same microsecond. It now reads the 24 MHz counter.
+- **The pipeline.** `fat32_stream` calls `submit` for the next 128 KiB and then hashes the current piece, so it looks overlapped. It was not: `a733_mmc_platform_read` only accepts the request, and the controller steps that write CMD18 run in the polls that follow. The loader hashes before it polls, so each piece cost the read plus the copy and the digest in sequence. `sd_submit` now steps the controller until the command is issued (`command_step` 2), so the transfer runs while the loader works.
+- **The digest.** `storage_digest_add` was plain C, on the loader's pinned core (core 0, an A55). The 6.0 s difference over 4,096 pieces is 1.46 ms per piece, which is 90 MB/s for the copy and the C SHA-256 together, about 20 cycles per byte at that core's clock: the serialized, plain-C figure. The loader runs at EL1, so it reads its own `ID_AA64ISAR0_EL1` and does not depend on the missing CPU observations (`docs/status/cpu-topology.md`, backlog item 7). It now uses the SHA-256 instructions (`drivers/storage/storage_digest_ce.S`) when SHA2 is present, and the C path otherwise. QEMU's A76 has the instructions: the loaded and digest-mismatch cases run the new path, and a wrong round constant fails them.
+- **The copy.** There is no bounce buffer: the DMA fills one of the two 128 KiB buffers and the loader copies it once into the region (8 bytes at a time through the cached kernel mapping), then hashes the same buffer. The copy is about 0.05 ms per piece.
+- **Per-phase times.** The loader now records the time spent in the copy and in the digest (`ss_large_status` `copy_us`, `digest_us`; the test application returns them). The reading time is the load time minus those two. The first run before this change has no phase records; the 1.46 ms per piece above is a difference with the storage agent's mode 3, not a measurement.
+
 ## Open work
 
 1. Run the SD0 binding in an OS image on a board. `apps/os/large_sd.c` (`os_large_device`, `os_large_device_close`, `os_large_sd_pins`) uses the OS's shared providers and the read-only SD core, builds into `sunstone-a733-os-large-region-test` and passes the read-only scan, but only the standalone probe has driven the card on a board. QEMU has no SD controller: its RAM disk covers the loader, and four scenarios cover a device that is present and fails (metadata, request start, mid-stream, absent).

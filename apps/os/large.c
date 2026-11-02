@@ -139,6 +139,7 @@ int ss_large_status(unsigned index, struct ss_large_status *out)
     out->total = slots[index].total;
     uint64_t end = slots[index].finished_us ? slots[index].finished_us : 0;
     out->elapsed_us = end ? end - slots[index].started_us : 0;
+    out->copy_us = slots[index].copy_us; out->digest_us = slots[index].digest_us;
     return 0;
 }
 

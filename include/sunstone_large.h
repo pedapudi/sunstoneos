@@ -29,6 +29,7 @@ enum { SS_LARGE_PENDING = 0, SS_LARGE_LOADING = 1, SS_LARGE_READY = 2, SS_LARGE_
 struct ss_large_status {
     uint32_t state, error;       /* error: 0 or a loader status (negative values are stored as unsigned) */
     uint64_t loaded, total, elapsed_us;
+    uint64_t copy_us, digest_us; /* of elapsed_us, the loader's copy into the region and its SHA-256; the rest is reading */
 };
 
 /* Validate the records of one application: record i has index i, sizes that are 2 MiB multiples whose total

@@ -17,7 +17,13 @@ static struct fat32 volume;
 static struct storage_digest digest;
 static uint64_t loaded_offset;
 static unsigned current;
-static uint64_t now_us(void) { return (uint64_t)xTaskGetTickCount() * 1000u; }
+/* Microseconds from the architectural counter (24 MHz on the board), which the loader's EL1 can read. The FreeRTOS tick
+ * has a 1 ms step and produced loads that agreed to the microsecond. */
+static uint64_t counter_ticks(void) { uint64_t v; __asm__ volatile("isb\n mrs %0, cntvct_el0" : "=r"(v) :: "memory"); return v; }
+static uint64_t counter_hz(void) { uint64_t v; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(v)); return v; }
+static uint64_t ticks_us(uint64_t ticks) { uint64_t hz = counter_hz(); return hz ? ticks / hz * 1000000u + ticks % hz * 1000000u / hz : 0; }
+static uint64_t now_us(void) { return ticks_us(counter_ticks()); }
+static uint64_t copy_ticks, digest_ticks;
 
 static int sink_consume(void *unused, const uint8_t *data, uint64_t bytes, uint64_t offset)
 {
@@ -26,9 +32,13 @@ static int sink_consume(void *unused, const uint8_t *data, uint64_t bytes, uint6
     if (offset != loaded_offset || offset + bytes > s->bytes) return 0;
     uint64_t *dst = (uint64_t *)(uintptr_t)(s->base + offset);
     const uint64_t *src = (const uint64_t *)(const void *)data;
+    uint64_t t0 = counter_ticks();
     for (uint64_t i = 0; i < bytes / 8; ++i) dst[i] = src[i];
     for (uint64_t i = bytes & ~7ull; i < bytes; ++i) ((uint8_t *)dst)[i] = data[i];
+    uint64_t t1 = counter_ticks();
     storage_digest_add(&digest, data, bytes);
+    uint64_t t2 = counter_ticks();
+    copy_ticks += t1 - t0; digest_ticks += t2 - t1;
     loaded_offset += bytes;
     __atomic_store_n(&s->loaded, loaded_offset, __ATOMIC_RELAXED);
     return 1;
@@ -83,6 +93,7 @@ static void load(unsigned index, const struct os_large_device *d, int mounted)
 {
     struct large_slot *s = os_large_slot_mutable(index);
     const struct ss_large_region *r = os_large_record(index);
+    copy_ticks = digest_ticks = 0;
     s->started_us = now_us();
     s->total = r->source_bytes;
     __atomic_store_n(&s->state, SS_LARGE_LOADING, __ATOMIC_RELEASE);
@@ -105,12 +116,17 @@ static void load(unsigned index, const struct os_large_device *d, int mounted)
         if (memcmp(sum, r->sha256, 32)) status = FAT32_INVALID - 1;     /* digest mismatch */
     }
     s->finished_us = now_us();
+    s->copy_us = ticks_us(copy_ticks); s->digest_us = ticks_us(digest_ticks);
     os_large_finish(index, status == FAT32_OK ? SS_LARGE_READY : SS_LARGE_FAILED, (uint32_t)status);
 }
 
 static void loader(void *unused)
 {
     (void)unused;
+    /* The loader runs on one core for good, so that core's own ID_AA64ISAR0_EL1 decides: SHA2 is bits 15:12. */
+    uint64_t isar0;
+    __asm__ volatile("mrs %0, id_aa64isar0_el1" : "=r"(isar0));
+    (void)storage_digest_use_extensions(((isar0 >> 12) & 15u) != 0);
     const struct os_large_device *d = os_large_device();
     int mounted = 0;
     if (d) {
