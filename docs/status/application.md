@@ -15,7 +15,7 @@ repeatability. [CPU status](cpu.md) identifies the result and failed controls.
 
 ## Open work
 
-1. Run the forced EL0 data abort and an NPU image that fails before its service starts on the board; the EL0 return has host and virtual-board evidence only.
+1. Run an NPU image that fails before its NPU service starts, to confirm on the board that the never-started stop report keeps the port usable.
 2. Run the checks that need external inputs (H.264 capture, SAE); the full gate lists nine remaining checks.
 3. Qualify physical queue execution, recovery and application GPU recognition.
 4. Qualify simultaneous CPU, GPU and NPU operation; the optional builds have host evidence only.
@@ -27,9 +27,10 @@ repeatability. [CPU status](cpu.md) identifies the result and failed controls.
 Board results are records in `docs/evidence/application.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-application-20261101.md).
 
 <!-- evidence-table:begin -->
-1 records in `docs/evidence/application.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+2 records in `docs/evidence/application.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
 | `1793579984604886693-7d81d397` | 2026-11-02 | 3-1 | `5bd520a766cf` | failure-return | passed | run_total 170.794 s, secondaries_off 7, rail_return 2.09 s |
+| `1793582514152160909-ecc5988b` | 2026-11-02 | 3-1 | `1c4c195b3dce` | failure-return | passed | run_total 171.159 s, secondaries_off 7 |
 <!-- evidence-table:end -->
