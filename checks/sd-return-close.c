@@ -135,6 +135,11 @@ int main(int argc,char **argv)
     setup_read();assert(close_step()==A733_MMC_PENDING);assert(close_step()==A733_MMC_PENDING);
     assert(close_step()==A733_MMC_PENDING&&!m.platform.pin.id&&m.platform.rail.id);
     m.power.now=9000000;assert(close_step()==A733_MMC_RETAINED&&m.platform.rail.id&&m.platform.clock.id);retained();
+    /* A pin release that fails: the pins' live fields no longer match the lease (the mux changed behind the owner). The close retains every
+     * remaining resource: pins, rail and clock stay held, and the close does not go on to release the rail. */
+    setup_read();assert(close_step()==A733_MMC_PENDING);assert(close_step()==A733_MMC_PENDING);
+    *pmic_model_word(&m.power,0x02000300)|=1u;
+    assert(close_step()==A733_MMC_RETAINED&&m.platform.pin.id&&m.platform.rail.id&&m.platform.clock.id);retained();
     puts(argc==2?"PASS SD close: idle, update-stall, gate and partial-release failures":
          "PASS SD close: collected read, restoration, deadline identity, duplicate and retained failures");
     return 0;

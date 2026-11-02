@@ -12,6 +12,13 @@ Two card behaviours are not in the simplified specification (its sections 4.2.4.
 unmeasured, so every case runs for both values:
   K1  a host at 3.3 V reads a card that signals at 1.8 V (the card's high level is within the host's input range);
   K2  a card that already signals at 1.8 V answers ACMD41 with S18R set with S18A set.
+Session count: every cut point of the lifetime (the 15 steps from CMD0 to the reads, then the close's two steps) x K1 x K2 x whether the
+reset restores the bank to 3.3 V, 18 x 8 = 144 sessions. An earlier version had a fourth dimension, whether the image put the bank back
+at 3.3 V before it ended, and counted 16 x 16 = 256; that dimension only ever differed at the last cut point, so 120 of the 256 were
+repeats of another, and the 136 distinct cases are all among the 144 now: the two states it distinguished (a session that ends with
+the bank still at 1.8 V, and one that ends with it restored) are the cuts after `reads` and after the close's last step, and the new
+cut between the close's two steps (clock off, bank not yet restored) is new.
+
 A card that does not honour CMD0 at 1.8 V ("stuck" below) is the one the algorithm cannot recover; the model shows that the
 card supply cycle (DC1SW2) does, when the supply is held off long enough to discharge, and when it is not, the card is
 unchanged and the next hold is longer.
