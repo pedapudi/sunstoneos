@@ -23,9 +23,9 @@ SHARED_CHUNKS = 2048
 CLOCK = 256
 HEAD = struct.Struct('<8sQQ4I5i5i')
 FILL = struct.Struct('<' + 'Q' * CORES)
-CONFIG = struct.Struct('<4I' + 'II' * (REPS * CORES) + 'I' * (REPS * 12) + 'Q' * CORES)
+CONFIG = struct.Struct('<4I' + 'II' * (REPS * CORES) + 'I' * (7 * CORES) + 'Q' * CORES)
 WORDS, EXTRA, PHASES = 9, 13, 2
-PROBE = struct.Struct('<' + 'I' * (2 * WORDS + EXTRA + 3 + 12))
+PROBE = struct.Struct('<' + 'I' * (2 * WORDS + EXTRA + 3))
 WORD_ADDRESSES = (0x0202446c, 0x0202466c, 0x02023a14, 0x02023c14, 0x02023e14, 0x02024014, 0x02024214, 0x0202200c, 0x0202220c)
 WORD_VALUES = (0x40a05, 0x40a05, 0x3f, 0x7f, 0xf, 0xf1, 0xf1, 1, 1)
 VARIANTS = [(m, 0, 0) for m in (0x01, 0x03, 0x0f, 0x3f, 0x40, 0xc0, 0xcf, 0xff)]
@@ -61,6 +61,17 @@ def buffer_words():
     return index * np.uint64(0x9e3779b97f4a7c15) + np.uint64(0x1234567)
 
 
+def pmu_summary(pmu, cores, last, cb, hz, window):
+    """Per core counters of the last window and the ratios used in the study. The L2 refill count times 64
+    bytes is compared with the bytes the core consumed in that window."""
+    out = {}
+    for k in cores:
+        cycles, l2r, l3r, bus, busrd, stall, mem = pmu[7 * k:7 * k + 7]
+        out[k] = dict(cycles=cycles, l2d_refill=l2r, l3d_refill=l3r, bus_access=bus, bus_access_rd=busrd,
+                      stall_backend=stall, mem_access=mem, stall_fraction=stall / cycles if cycles else 0.0)
+    return out
+
+
 def decode_phase(payload, base_offset, words, readiness, window, hz):
     import numpy as np
     if readiness & 16:
@@ -73,8 +84,8 @@ def decode_phase(payload, base_offset, words, readiness, window, hz):
             raise ValueError(f'configuration {c} differs from the variant table')
         cores = [k for k in range(CORES) if mask >> k & 1]
         samples = values[4:4 + 2 * REPS * CORES]
-        digests = values[4 + 2 * REPS * CORES + 12 * REPS:]
-        counters = values[4 + 2 * REPS * CORES:4 + 2 * REPS * CORES + 12 * REPS]
+        digests = values[4 + 2 * REPS * CORES + 7 * CORES:]
+        pmu = values[4 + 2 * REPS * CORES:4 + 2 * REPS * CORES + 7 * CORES]
         if any(digests[k] for k in range(CORES) if k not in cores):
             raise ValueError(f'configuration {c} carries a digest for a core outside its set')
         cb = chunk_bytes(mode)
@@ -109,22 +120,14 @@ def decode_phase(payload, base_offset, words, readiness, window, hz):
                     want = int(np.bitwise_xor.reduce(chunk_digest[visits == 1], initial=np.uint64(0)))
                     if digests[k] != want:
                         raise ValueError(f'configuration {c} core {k} digest differs from the data written')
-            cv = counters[12 * rep:12 * rep + 12]
-            cv = cv[:1] + cv[2:] + cv[1:2]         # ticks, then the ten counters, then the clear polls
-            ta = dict(read_requests=cv[1] + cv[2], write_requests=cv[3] + cv[4], read_units=cv[5] + cv[6],
-                      write_units=cv[7] + cv[8], read_latency_sum=cv[9] + cv[10], read_cost_ticks=cv[0], clear_polls=cv[11])
-            ta['mean_read_latency'] = ta['read_latency_sum'] / ta['read_requests'] if ta['read_requests'] else 0.0
-            ta['read_bytes_16'] = ta['read_units'] * 16
-            ta['consumed_bytes'] = bytes_all
-            reps_out.append(dict(ta=ta, per_core_gb_per_s=per_core, sum_gb_per_s=sum(per_core.values()),
+            reps_out.append(dict(per_core_gb_per_s=per_core, sum_gb_per_s=sum(per_core.values()),
                                  last_finish_gb_per_s=bytes_all / (max(ticks_all) / hz) / 1e9))
         configs.append(dict(mask=mask, cores=len(cores), mode=mode, mode_name=MODE_NAMES[mode], stagger=stagger,
                             sum_gb_per_s=statistics.median(r['sum_gb_per_s'] for r in reps_out),
                             last_finish_gb_per_s=statistics.median(r['last_finish_gb_per_s'] for r in reps_out),
                             per_core_median_gb_per_s={k: statistics.median(r['per_core_gb_per_s'][k] for r in reps_out)
                                                       for k in cores},
-                            ta_read_to_consumed=statistics.median(r['ta']['read_bytes_16'] / r['ta']['consumed_bytes'] for r in reps_out),
-                            ta_mean_read_latency=statistics.median(r['ta']['mean_read_latency'] for r in reps_out),
+                            pmu=pmu_summary(pmu, cores, reps_out[-1], cb, hz, window),
                             reps=reps_out))
     return configs
 
@@ -153,12 +156,14 @@ def decode(payload):
     offset += PROBE.size
     probe = dict(words_before=dict(zip(map(hex, WORD_ADDRESSES), pv[:WORDS])),
                  words_written=dict(zip(map(hex, WORD_ADDRESSES), pv[WORDS:2 * WORDS])),
-                 extra=pv[2 * WORDS:2 * WORDS + EXTRA], write_enabled=pv[2 * WORDS + EXTRA],
-                 diag=[hex(x) for x in pv[2 * WORDS + EXTRA + 3:]])
+                 extra=pv[2 * WORDS:2 * WORDS + EXTRA], write_enabled=pv[2 * WORDS + EXTRA])
     if probe['write_enabled'] and tuple(pv[WORDS:2 * WORDS]) != WORD_VALUES:
         probe['write_mismatch'] = True
     phases = []
     for phase in range(PHASES):
+        if phase == 1 and readiness & 32:
+            phases.append([])
+            continue
         phases.append(decode_phase(payload, offset + phase * CONFIGS * CONFIG.size, words, readiness, window, hz))
     clock_pattern = r'CLOCK cpu_l_mhz=(\d+) cpu_b_mhz=(\d+) cpu_l_mv=(\d+) cpu_b_mv=(\d+) transitions=(\d+) dsu_mhz=(\d+) .*'
     for line in clocks:

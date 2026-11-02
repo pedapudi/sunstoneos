@@ -3,9 +3,8 @@
  * (docs/designs/dram-bandwidth.md, "Interconnect words"). The eight worker tasks run at EL1 (the
  * OS grants that to dram_nsi_worker only). A probe job on core 6 reads the nine NSI words that boot0
  * writes after DRAM initialization; an image built with DN_WRITE then writes boot0's values in
- * boot0's order and reads them back. Around every read window the last core to arrive clears and
- * enables the counters of the DRAM target-agent ports 32 and 33 and the last core to finish reads
- * them. A phase runs the variants of result.h once with the words as found and, with DN_WRITE, once
+ * boot0's order and reads them back. Each core reads its Arm performance counters around every read
+ * window (the result keeps the last timed window). A phase runs the variants of result.h once with the words as found and, with DN_WRITE, once
  * after the write. */
 #include "dram_nsi-app.h"
 #include "FreeRTOS.h"
@@ -24,9 +23,9 @@ static TaskHandle_t workers[DN_CORES], controller;
 static uint64_t *buffer;
 /* Job description, written by the controller before it notifies the workers. */
 static struct {
-    uint32_t mask, cores, mode, stagger, fill, stop, counters, write, error;
+    uint32_t mask, cores, mode, stagger, fill, stop, pmu_on, write, error;
     atomic_uint generation, arrived, go, finished, ended, barrier_count, barrier_gate;
-    struct dn_counters ctr;
+    struct dn_pmu pmu[DN_CORES];
     struct dn_probe probe;
     uint64_t gate, deadline;
     uint64_t ticks[DN_CORES], chunks[DN_CORES], digest[DN_CORES];
@@ -57,7 +56,7 @@ static void probe_extra(uint32_t *x)
     x[1] = dn_reg_read(0x02002584u);
     x[2] = dn_reg_read(0x02002588u);
     for (unsigned t = 0; t < 2; ++t) {
-        const uint32_t b = DN_TA_PORT(DN_CTR_PORT + t);
+        const uint32_t b = DN_TA_PORT(32 + t);
         x[3 + 5 * t] = dn_reg_read(b + 0x10);
         x[4 + 5 * t] = dn_reg_read(b + 0x14);
         x[5 + 5 * t] = dn_reg_read(b + 0x18);
@@ -65,70 +64,37 @@ static void probe_extra(uint32_t *x)
         x[7 + 5 * t] = dn_reg_read(b + 0xc8);
     }
 }
-/* Counter sequence of __nsi_pmu_timer_store_v2: period, enable off, clear, enable on. */
-static void counters_start(void)
+/* Arm performance counters at EL1 (MDCR_EL2.HPMN covers the six event counters, docs/cpu-pmu.md). */
+static void pmu_configure(void)
 {
-    unsigned polls = 0;
-    for (unsigned t = 0; t < 2; ++t) {
-        const uint32_t b = DN_TA_PORT(DN_CTR_PORT + t);
-        dn_reg_write(b + 0xc0, 0);
-        dn_reg_write(b + 0xc8, 0x7fffffffu);
-        dn_reg_write(b + 0xc4, 1);
-        /* Whether the clear bit clears itself is unproven: wait for it, then clear it by hand. */
-        while (dn_reg_read(b + 0xc4) & 1u && polls < 1000u) ++polls;
-        if (dn_reg_read(b + 0xc4) & 1u) dn_reg_write(b + 0xc4, 0);
-        dn_reg_write(b + 0xc0, 1);
-    }
-    job.ctr.clear_polls = polls;
-    dn_dmb();
+    static const uint8_t events[6] = DN_PMU_EVENTS;
+#ifdef __aarch64__
+    for (unsigned i = 0; i < 6; ++i)
+        __asm__ volatile("msr pmselr_el0,%0\n isb\n msr pmxevtyper_el0,%1\n isb" :: "r"((uint64_t)i), "r"((uint64_t)events[i]) : "memory");
+    __asm__ volatile("msr pmcntenset_el0,%0\n isb" :: "r"(UINT64_C(0x8000003f)) : "memory");
+#else
+    (void)events;
+#endif
 }
-/* Diagnostic of the counter sequence on port 32, run once by the probe job before the windows: each step is
- * followed by a read of the clear word, and 1 MiB of buffer is read between the readings so that the target
- * agent sees traffic. diag: [0] clear word at entry, [1] after the clear write, [2] after enable, [3] read
- * requests, [4] read data, [5] period word, [6] clear word after writing zero, [7] read requests, [8] read data,
- * [9] latency sum, [10] enable word, [11] write requests. */
-static void counters_diagnostic(uint32_t *d)
+static inline void pmu_reset(void)
 {
-    const uint32_t b = DN_TA_PORT(DN_CTR_PORT);
-    d[0] = dn_reg_read(b + 0xc4);
-    dn_reg_write(b + 0xc0, 0);
-    dn_reg_write(b + 0xc8, 0x7fffffffu);
-    dn_reg_write(b + 0xc4, 1);
-    dn_dmb();
-    d[1] = dn_reg_read(b + 0xc4);
-    dn_reg_write(b + 0xc0, 1);
-    dn_dmb();
-    (void)dn_read(buffer, 1u << 20);
-    d[2] = dn_reg_read(b + 0xc4);
-    d[3] = dn_reg_read(b + 0xcc);
-    d[4] = dn_reg_read(b + 0xd4);
-    d[5] = dn_reg_read(b + 0xc8);
-    dn_reg_write(b + 0xc4, 0);
-    dn_dmb();
-    (void)dn_read(buffer + (1u << 20) / 8, 1u << 20);
-    d[6] = dn_reg_read(b + 0xc4);
-    d[7] = dn_reg_read(b + 0xcc);
-    d[8] = dn_reg_read(b + 0xd4);
-    d[9] = dn_reg_read(b + 0xdc);
-    d[10] = dn_reg_read(b + 0xc0);
-    d[11] = dn_reg_read(b + 0xd0);
-    dn_reg_write(b + 0xc0, 0);
-    dn_dmb();
+#ifdef __aarch64__
+    __asm__ volatile("msr pmcr_el0,%0\n isb" :: "r"(UINT64_C(7)) : "memory");        /* E, P, C */
+#endif
 }
-static void counters_read(void)
+static inline void pmu_read(struct dn_pmu *p)
 {
-    job.ctr.ticks = (uint32_t)counter();
-    for (unsigned t = 0; t < 2; ++t) {
-        const uint32_t b = DN_TA_PORT(DN_CTR_PORT + t);
-        job.ctr.rq_rd[t] = dn_reg_read(b + 0xcc);
-        job.ctr.rq_wr[t] = dn_reg_read(b + 0xd0);
-        job.ctr.dt_rd[t] = dn_reg_read(b + 0xd4);
-        job.ctr.dt_wr[t] = dn_reg_read(b + 0xd8);
-        job.ctr.la_rd[t] = dn_reg_read(b + 0xdc);
+#ifdef __aarch64__
+    uint64_t v;
+    __asm__ volatile("isb\n mrs %0,pmccntr_el0" : "=r"(v) :: "memory");
+    p->cycles = (uint32_t)v;
+    for (unsigned i = 0; i < 6; ++i) {
+        __asm__ volatile("msr pmselr_el0,%1\n isb\n mrs %0,pmxevcntr_el0" : "=r"(v) : "r"((uint64_t)i) : "memory");
+        p->event[i] = (uint32_t)v;
     }
-    job.ctr.ticks = (uint32_t)counter() - job.ctr.ticks;      /* cost of the reads */
-    for (unsigned t = 0; t < 2; ++t) dn_reg_write(DN_TA_PORT(DN_CTR_PORT + t) + 0xc0, 0);
-    dn_dmb();
+#else
+    *p = (struct dn_pmu){ 1, {2, 3, 4, 5, 6, 7} };
+#endif
 }
 void dram_nsi_worker(void *arg)
 {
@@ -146,7 +112,6 @@ void dram_nsi_worker(void *arg)
         if (job.fill == 2) {                /* probe job: one core touches the interconnect */
             probe_read(job.probe.words_before);
             probe_extra(job.probe.extra);
-            if (!job.write) counters_diagnostic(job.probe.diag);
             if (job.write) {
                 probe_write();
                 probe_read(job.probe.words_written);
@@ -159,13 +124,13 @@ void dram_nsi_worker(void *arg)
         uint64_t *slot = buffer + (size_t)core * (DN_SLOT_BYTES / 8);
         /* Barrier: the last core to arrive stamps the common gate and opens it. */
         if (atomic_fetch_add_explicit(&job.arrived, 1, memory_order_acq_rel) + 1 == job.cores) {
-            if (job.counters) counters_start();
             job.gate = counter();
             job.deadline = job.gate + DN_WINDOW_TICKS;
             atomic_store_explicit(&job.go, 1, memory_order_release);
         }
         while (!atomic_load_explicit(&job.go, memory_order_acquire)) dn_relax();
         uint64_t digest = 0, chunks = 0, end;
+        if (job.pmu_on && !job.fill) { pmu_configure(); pmu_reset(); }
         if (job.fill) {
             const uint64_t base = (uint64_t)core * (DN_SLOT_BYTES / 8);
             for (size_t i = 0; i < DN_SLOT_BYTES / 8; ++i) {
@@ -215,12 +180,11 @@ void dram_nsi_worker(void *arg)
             chunks = j;
         }
     finished:
+        if (job.pmu_on && !job.fill) pmu_read(&job.pmu[core]);
         job.ticks[core] = end - job.gate;
         job.chunks[core] = chunks;
         job.digest[core] = digest;
-        /* The last core to end reads the counters while the others are idle. */
-        if (atomic_fetch_add_explicit(&job.ended, 1, memory_order_acq_rel) + 1 == job.cores && job.counters)
-            counters_read();
+        atomic_fetch_add_explicit(&job.ended, 1, memory_order_acq_rel);
         atomic_fetch_add_explicit(&job.finished, 1, memory_order_acq_rel);
         xTaskNotifyGive(controller);
     }
@@ -236,14 +200,14 @@ void dram_nsi_init(void)
     }
 }
 /* Runs one job on the cores of `mask`. */
-static void run(uint32_t mask, unsigned fill, unsigned mode, unsigned stagger, unsigned counters)
+static void run(uint32_t mask, unsigned fill, unsigned mode, unsigned stagger, unsigned pmu)
 {
     job.mask = mask;
     job.cores = (uint32_t)__builtin_popcount(mask);
     job.mode = mode;
     job.stagger = stagger;
     job.fill = fill;
-    job.counters = counters;
+    job.pmu_on = pmu;
     atomic_store(&job.ended, 0);
     atomic_store(&job.arrived, 0);
     atomic_store(&job.go, 0);
@@ -303,6 +267,7 @@ void dram_nsi_main(const struct ss_grant *g)
     const unsigned phases = DN_PHASES;
 #else
     const unsigned phases = 1;
+    result.readiness |= 32u;               /* one phase: no write */
 #endif
     for (unsigned phase = 0; phase < phases; ++phase) {
         if (phase == 1) {
@@ -327,7 +292,7 @@ void dram_nsi_main(const struct ss_grant *g)
                     config->sample[window - DN_WARM][core].ticks = (uint32_t)job.ticks[core];
                     config->digest[core] = job.digest[core];
                 }
-                config->counters[window - DN_WARM] = job.ctr;
+                if (window == DN_WARM + DN_REPS - 1) for (unsigned core = 0; core < DN_CORES; ++core) config->pmu[core] = job.pmu[core];
             }
         }
     }

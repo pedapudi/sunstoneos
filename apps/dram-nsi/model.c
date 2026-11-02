@@ -36,11 +36,6 @@ int main(void)
             config->stagger = variants[c].stagger;
             const uint32_t bytes = dn_chunk_bytes(config->mode);
             for (unsigned rep = 0; rep < DN_REPS; ++rep) {
-                config->counters[rep].ticks = 300;
-                for (unsigned t = 0; t < 2; ++t) {
-                    config->counters[rep].rq_rd[t] = 1000 + c; config->counters[rep].dt_rd[t] = 4000 + c;
-                    config->counters[rep].la_rd[t] = 90000 + c;
-                }
                 for (unsigned core = 0; core < DN_CORES; ++core) {
                     if (!(config->mask >> core & 1u)) continue;
                     const uint32_t chunks = 3000 + 7 * c + 13 * core + 5 * rep;
@@ -60,6 +55,7 @@ int main(void)
                             digest ^= dn_read(region + (size_t)dn_chunk_index(config->mode, j) * (bytes / 8), bytes);
                     }
                     config->digest[core] = digest;
+                    config->pmu[core] = (struct dn_pmu){ 1000, {1, 2, 3, 4, 5, 6} };
                 }
             }
         }

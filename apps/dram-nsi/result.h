@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* Result layout of the DRAM interconnect study (docs/designs/dram-bandwidth.md, "Interconnect words").
  * The worker tasks run at EL1: they read the nine NSI words that boot0 writes after DRAM
- * initialization, optionally write boot0's values, and sample the two DRAM target-agent counters
- * (NSI ports 32 and 33) around every read window. */
+ * initialization, optionally write boot0's values, and read the Arm performance counters around the
+ * last timed window of every variant. */
 #ifndef DRAM_NSI_RESULT_H
 #define DRAM_NSI_RESULT_H
 #include <stddef.h>
@@ -37,12 +37,15 @@ struct dn_variant { uint32_t mask, mode, stagger; };
  * the target-agent ports 32 and 33 the words +0x10, +0x14, +0x18, +0xc0, +0xc8. */
 #define DN_EXTRA 13u
 struct dn_core_sample { uint32_t chunks; uint32_t ticks; };
-/* Counters of one window for the target-agent ports 32 and 33. */
-struct dn_counters { uint32_t ticks, clear_polls; uint32_t rq_rd[2], rq_wr[2], dt_rd[2], dt_wr[2], la_rd[2]; };
+/* Arm performance counters of one core over the last timed window, read at EL1: the cycle counter and six
+ * events, in this order: L2D_CACHE_REFILL (0x17), L3D_CACHE_REFILL (0x2a), BUS_ACCESS (0x19),
+ * BUS_ACCESS_RD (0x60), STALL_BACKEND (0x24), MEM_ACCESS (0x13). */
+#define DN_PMU_EVENTS { 0x17, 0x2a, 0x19, 0x60, 0x24, 0x13 }
+struct dn_pmu { uint32_t cycles, event[6]; };
 struct dn_config {
     uint32_t mask, mode, stagger, reserved;
     struct dn_core_sample sample[DN_REPS][DN_CORES];
-    struct dn_counters counters[DN_REPS];
+    struct dn_pmu pmu[DN_CORES];
     uint64_t digest[DN_CORES];
 };
 struct dn_probe {
@@ -50,7 +53,6 @@ struct dn_probe {
     uint32_t words_written[DN_WORDS];       /* read back after the write; zero when the image does not write */
     uint32_t extra[DN_EXTRA];
     uint32_t write_enabled, reserved[2];
-    uint32_t diag[12];                      /* counter start diagnostic of NSI port 32, see main.c */
 };
 struct dn_result {
     char magic[8];

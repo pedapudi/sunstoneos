@@ -418,7 +418,11 @@ show that the worker was not privileged.
 
 ### Counters
 
-The vendor driver reads the total DRAM traffic from the counters of the target-agent ports 32 and 33
+The first two write runs sampled the target-agent ports 32 and 33 and the third the initiator ports 19 and 20
+(`cpu0`, `cpu1` in the sun60iw2 port enum). All read zero after 1 MiB of traffic with the clear word at zero and the
+period retained, so no NSI counter observes CPU traffic, as the controller design states for the direct channel.
+The fourth run therefore reads the Arm performance counters at EL1 (the change of `MDCR_EL2.HPMN` has landed in both
+continuation paths). The vendor driver reads the total DRAM traffic from the counters of the target-agent ports 32 and 33
 (`sunxi-nsi-bw.c`, `MBUS_PMU_TAG`): read and write request counts (`+0xcc`, `+0xd0`), data counts (`+0xd4`,
 `+0xd8`) and the read latency sum (`+0xdc`), enabled through `+0xc0` and cleared through `+0xc4`. These are the
 only DRAM-side counters in the sources held. No source documents row hits, row misses or bank conflicts of the
@@ -443,3 +447,19 @@ checks the assumption.
 3. **Write image.** If the nine words affect CPU traffic, the eight-core total changes by more than 3 percent
    after the write. If it stays within 3 percent, the words are not a cause. A readback that differs from
    boot0's values shows a write that the NSI does not accept from Non-secure EL1.
+
+### Performance counters, prediction written before the run
+
+Each core reads the cycle counter and six events over the last timed window of each variant: L2D_CACHE_REFILL (0x17),
+L3D_CACHE_REFILL (0x2a), BUS_ACCESS (0x19), BUS_ACCESS_RD (0x60), STALL_BACKEND (0x24) and MEM_ACCESS (0x13).
+
+- **No prefetch waste:** L2D_CACHE_REFILL times 64 bytes is within 10 percent of the bytes the core consumed in every
+  set, including eight cores. A ratio above 1.1 at eight cores and near 1 for one core would mean that the prefetchers
+  fetch lines that are evicted unused, which reduces the useful rate without a locality loss.
+- **Loaded latency:** by Little's law the refill latency per core is the number of outstanding refills divided by the
+  refill rate. The refill rate per A55 core falls from 5.5 GB/s (one core) to about 1.0 GB/s (eight cores), so a
+  fixed number of outstanding refills implies a latency about five times larger. The stall fraction (STALL_BACKEND per
+  cycle) of an A55 core rises from its one-core value towards 1 as cores are added. This shows that the cores wait on
+  memory, but it does not separate the controller's locality loss from an interconnect throughput limit.
+- **Limits:** no source documents controller row hits, so the locality hypothesis is supported only by the address
+  dependence shown above and by the absence of waste; it is not proven by a controller counter.

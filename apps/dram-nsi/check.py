@@ -68,6 +68,13 @@ for env in ({}, {'SHIM_SPURIOUS': '1'}):
     assert decoded['probe']['words_written'] == dict(zip(map(hex, host.WORD_ADDRESSES), host.WORD_VALUES))
     assert list(decoded['probe']['words_before'].values()) == [0] * 9      # the model starts at zero and phase 0 does not write
 print('write image: phase 0 reads the words as found, the probe job writes boot0 values in order and reads them back; digests match the decoder')
+exe = protocol('DN_STUDY=1', 'nsi-protocol-study')
+done = subprocess.run([str(exe)], capture_output=True, timeout=300)
+assert done.returncode == 0, done.stderr
+decoded = host.decode(done.stdout)
+assert len(decoded['phases'][0]) == host.CONFIGS and decoded['phases'][1] == [] and decoded['probe']['write_enabled'] == 0
+assert all(c['pmu'] for c in decoded['phases'][0])
+print('study image: one phase, no write, performance counters decoded')
 exe = protocol('DN_PROBE_ONLY=1', 'nsi-protocol-read')
 done = subprocess.run([str(exe)], capture_output=True, timeout=60)
 assert done.returncode == 0, done.stderr

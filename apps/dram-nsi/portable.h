@@ -8,11 +8,7 @@
  * the CCU words and the two target-agent ports) and stops on any other address. */
 #define DN_NSI_BASE 0x02020000u
 #define DN_TA_PORT(n) (DN_NSI_BASE + 0x200u * (n))
-/* The counters sampled around each window: the initiator ports cpu0 and cpu1 (19, 20) of the sun60iw2 port enum
- * (the DRAM target-agent ports 32 and 33 counted nothing in the first two runs). */
-#ifndef DN_CTR_PORT
-#define DN_CTR_PORT 19
-#endif
+
 #ifdef __aarch64__
 static inline uint32_t dn_reg_read(uint32_t a) { uint32_t v = *(volatile uint32_t *)(uintptr_t)a; return v; }
 static inline void dn_reg_write(uint32_t a, uint32_t v) { *(volatile uint32_t *)(uintptr_t)a = v; }
