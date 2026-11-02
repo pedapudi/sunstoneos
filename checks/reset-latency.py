@@ -26,7 +26,7 @@ DEFINES = ['SUNSTONE_BOARD_SUPERVISED=1', 'SUNSTONE_BOARD_USB2_DUAL=1', 'SUNSTON
 
 def build_and_run(services, output, name, fault_page, step, compiler):
     defines = DEFINES + [f'SERVICES_SOURCE="{services}"'] + (['SUNSTONE_A733_FAULT_PAGE=1'] if fault_page else [])
-    binary = host_rtos.build(output, ['checks/reset-latency.c', 'runtime/deadline.c'], name, defines=defines,
+    binary = host_rtos.build(output, ['checks/reset-latency.c', 'runtime/deadline.c'], name, defines=defines, deadline=True,
                              includes=[ROOT / 'checks/usb-diagnostic-protocol/include',
                                        ROOT / 'platform/a733-smp-cached', ROOT / 'apps/os', ROOT / 'apps/board'])
     out = subprocess.run([str(binary), str(step)], check=True, capture_output=True, text=True,

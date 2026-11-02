@@ -27,6 +27,15 @@
  * task stays blocked for more than max_idle_us of virtual time with no timer,
  * idle callback or interrupt source left to make progress fails the fixture. */
 void host_rtos_run(void (*test)(void *), void *argument, unsigned priority, uint64_t max_idle_us);
+/* The same in two steps: prepare creates the test task and returns its handle, so a
+ * fixture can register it as an owner before the scheduler starts; start runs it. */
+TaskHandle_t host_rtos_prepare(void (*test)(void *), void *argument, unsigned priority, uint64_t max_idle_us);
+void host_rtos_start(void);
+/* A task that runs calls on behalf of the test, so code that identifies its caller
+ * by task sees a different task. host_call() runs fn in that task and returns when it
+ * is done; the server and caller exchange only through queues, never notifications. */
+TaskHandle_t host_server_create(const char *name, unsigned priority);
+void host_call(TaskHandle_t server, void (*fn)(void *), void *argument);
 /* Creates a task on static storage; the host supplies the stack. */
 TaskHandle_t host_task_create(const char *name, void (*entry)(void *), void *argument, unsigned priority);
 
@@ -77,6 +86,7 @@ uint64_t host_switches(void);
 /* Compare timer: sunstone_deadline_program() sets it. It fires `handler` as an
  * interrupt when virtual time reaches the programmed microsecond. */
 void host_timer_handler(void (*handler)(void));
+void host_timer_program(uint64_t us);
 uint64_t host_timer_compare_us(void);
 /* When nonzero, sunstone_deadline_kick() does not rearm at once; the fixture
  * delivers it with host_deadline_deliver_kick(), as a cross-core SGI arrives. */

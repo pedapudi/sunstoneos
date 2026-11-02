@@ -96,7 +96,7 @@ def main():
             defines=['SERVICES_SOURCE="%s"'%host_rtos.mutated(args.output,source,old,new,name+'.c')]
         else:
             sources[1]=host_rtos.mutated(args.output,source,old,new,name+'.c')
-        mutant=host_rtos.build(args.output,sources,'control-'+name,includes=[ROOT/'apps/os'],defines=defines,flags=['-w'])
+        mutant=host_rtos.build(args.output,sources,'control-'+name,includes=[ROOT/'apps/os'],defines=defines,flags=['-w'],deadline=True)
         done=subprocess.run([str(mutant),scenario],capture_output=True,text=True,env=environment())
         assert done.returncode!=0,('control passed',name)
         controls[name]=scenario

@@ -20,7 +20,7 @@ FLAGS = ['-std=gnu11', '-g', '-O1', '-Wall', '-Wextra', '-Werror', '-Wno-missing
          '-Wno-sign-compare', *SANITIZE]
 
 
-def build(output, sources, name, defines=(), includes=(), flags=(), shim=True):
+def build(output, sources, name, defines=(), includes=(), flags=(), shim=True, link=(), deadline=None):
     """Compile sources and the shim into output/name; return the executable path.
 
     Each source is a path under the repository root or an absolute path. Include
@@ -33,12 +33,17 @@ def build(output, sources, name, defines=(), includes=(), flags=(), shim=True):
                *('-I' + str(i) for i in includes), '-I' + str(ROOT / 'include'),
                *('-D' + d for d in defines)]
     units = [str(KERNEL / k) for k in KERNEL_SOURCES] + [str(HOST / 'host_rtos.c')] if shim else []
+    if deadline is None:
+        deadline = any(str(x).endswith('runtime/deadline.c') for x in sources)
+    if shim and deadline:
+        units.append(str(HOST / 'host_deadline.c'))
     # The kernel is third-party code: its own warnings are not the fixture's.
     objects = []
     for unit in units:
         obj = output / (Path(unit).name + '.o')
         if not obj.exists():
-            subprocess.run([*command, '-Wno-error', '-w', '-c', unit, '-o', str(obj)], check=True, env=environment())
+            quiet = ['-Wno-error', '-w'] if unit.startswith(str(KERNEL)) else []
+            subprocess.run([*command, *quiet, '-c', unit, '-o', str(obj)], check=True, env=environment())
         objects.append(str(obj))
     for source in sources:
         path = Path(source)
@@ -46,7 +51,7 @@ def build(output, sources, name, defines=(), includes=(), flags=(), shim=True):
         obj = output / (hashlib.sha1(str(path).encode()).hexdigest()[:8] + '-' + path.name + '.o')
         subprocess.run([*command, '-c', str(path), '-o', str(obj)], check=True, env=environment())
         objects.append(str(obj))
-    subprocess.run([str(CLANG), *SANITIZE, *objects, '-o', str(target)], check=True, env=environment())
+    subprocess.run([str(CLANG), *SANITIZE, *link, *objects, '-o', str(target)], check=True, env=environment())
     return target
 
 

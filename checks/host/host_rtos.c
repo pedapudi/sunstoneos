@@ -5,7 +5,7 @@
 #include <string.h>
 #include <ucontext.h>
 #include "host_rtos.h"
-#include "sunstone_deadline.h"
+#include "queue.h"
 
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer)
@@ -48,7 +48,6 @@ static void (*test_entry)(void *);
 static void *test_argument;
 static void (*timer_handler)(void);
 static uint64_t compare_us;
-static unsigned defer_kicks, kick_pending;
 static uint64_t timer_hold_us;
 #define COMPARE_DUE() (compare_us && (compare_us > timer_hold_us ? compare_us : timer_hold_us) <= now_us)
 #define COMPARE_AT() (compare_us > timer_hold_us ? compare_us : timer_hold_us)
@@ -272,25 +271,11 @@ void host_advance_us(uint64_t us)
     deliver();
 }
 
-/* ---- compare timer and deadline backend --------------------------------- */
-uint64_t sunstone_deadline_now_us(void) { return now_us; }
-void sunstone_deadline_program(uint64_t us) { compare_us = us; }
+/* ---- compare timer ------------------------------------------------------ */
+void host_timer_program(uint64_t us) { compare_us = us; }
 void host_timer_handler(void (*handler)(void)) { timer_handler = handler; }
 void host_timer_hold_until(uint64_t us) { timer_hold_us = us; }
 uint64_t host_timer_compare_us(void) { return compare_us; }
-void host_deadline_defer_kicks(unsigned defer) { defer_kicks = defer; }
-unsigned host_deadline_kick_pending(void) { return kick_pending; }
-void sunstone_deadline_kick(void)
-{
-    if (defer_kicks) { kick_pending = 1; return; }
-    sunstone_deadline_rearm();
-}
-void host_deadline_deliver_kick(void)
-{
-    if (!kick_pending) fail("no deferred kick to deliver");
-    kick_pending = 0;
-    sunstone_deadline_rearm();
-}
 
 /* ---- script task -------------------------------------------------------- */
 static struct { uint64_t at; void (*fn)(void *); void *argument; unsigned used; uint64_t order; } script[HOST_EVENTS];
@@ -372,14 +357,18 @@ static void test_task(void *unused)
     finished = 1;
     transfer(current, &main_context);
 }
-void host_rtos_run(void (*test)(void *), void *argument, unsigned priority, uint64_t max_idle_us)
+TaskHandle_t host_rtos_prepare(void (*test)(void *), void *argument, unsigned priority, uint64_t max_idle_us)
 {
-    if (running || finished) fail("one scheduler session per process");
+    if (running || finished || test_entry) fail("one scheduler session per process");
     test_entry = test;
     test_argument = argument;
     idle_limit_us = max_idle_us;
     script_task = host_task_create("script", script_main, NULL, configMAX_PRIORITIES - 1);
-    host_task_create("test", test_task, NULL, priority);
+    return host_task_create("test", test_task, NULL, priority);
+}
+void host_rtos_start(void)
+{
+    if (running || finished || !test_entry) fail("host_rtos_start without host_rtos_prepare");
     vTaskStartScheduler();
     if (!finished) fail("scheduler returned before the test finished");
     (void)stuck;
@@ -389,4 +378,50 @@ void host_rtos_run(void (*test)(void *), void *argument, unsigned priority, uint
         free(c->stack);
         free(c);
     }
+}
+void host_rtos_run(void (*test)(void *), void *argument, unsigned priority, uint64_t max_idle_us)
+{
+    host_rtos_prepare(test, argument, priority, max_idle_us);
+    host_rtos_start();
+}
+
+/* ---- tasks that run calls for the test -------------------------------- */
+struct host_server {
+    QueueHandle_t requests, replies;
+    StaticQueue_t request_state, reply_state;
+    struct host_call { void (*fn)(void *); void *argument; } request_storage[1];
+    uint8_t reply_storage[1];
+    TaskHandle_t task;
+};
+static struct host_server servers[16];
+static unsigned server_count;
+static void server_main(void *argument)
+{
+    struct host_server *s = argument;
+    for (;;) {
+        struct host_call call;
+        uint8_t done = 1;
+        if (xQueueReceive(s->requests, &call, portMAX_DELAY) != pdTRUE) fail("server queue");
+        call.fn(call.argument);
+        if (xQueueSend(s->replies, &done, portMAX_DELAY) != pdTRUE) fail("server reply");
+    }
+}
+TaskHandle_t host_server_create(const char *name, unsigned priority)
+{
+    if (server_count == 16) fail("too many server tasks");
+    struct host_server *s = &servers[server_count++];
+    s->requests = xQueueCreateStatic(1, sizeof(struct host_call), (uint8_t *)s->request_storage, &s->request_state);
+    s->replies = xQueueCreateStatic(1, 1, s->reply_storage, &s->reply_state);
+    s->task = host_task_create(name, server_main, s, priority);
+    return s->task;
+}
+void host_call(TaskHandle_t server, void (*fn)(void *), void *argument)
+{
+    struct host_server *s = NULL;
+    for (unsigned i = 0; i < server_count; ++i) if (servers[i].task == server) s = &servers[i];
+    if (!s) fail("host_call on a task that is not a server");
+    struct host_call call = { fn, argument };
+    uint8_t done;
+    if (xQueueSend(s->requests, &call, portMAX_DELAY) != pdTRUE) fail("host_call send");
+    if (xQueueReceive(s->replies, &done, portMAX_DELAY) != pdTRUE) fail("host_call reply");
 }
