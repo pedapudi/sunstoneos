@@ -5,6 +5,7 @@
  * clear, no hierarchical table attributes). The model refuses any descriptor
  * bit it does not model. */
 #include "app_region.h"
+#include "a733_device_memory_layout.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -119,9 +120,12 @@ static void build_kernel(int upper_global)
         else d = 0;                                                           /* monitor, tables: invalid */
         kernel_l2[i] = d;
     }
-    for (unsigned slot = 2; slot < 13; ++slot)
+    for (unsigned slot = 2; slot < 13; ++slot) {
         base_l1[slot] = (GIB * slot) | 1 | APP_PTE_ATTR_WB | APP_PTE_SH_INNER | APP_PTE_AF |
                         APP_PTE_PXN | APP_PTE_UXN | (upper_global ? 0 : APP_PTE_NG);
+        /* The kernel builder's descriptor is the one the space builder expects. */
+        if (!upper_global) assert(base_l1[slot] == A733_EL1_DRAM_BLOCK(GIB * slot));
+    }
 }
 
 static void expect(struct result r, int fault, const char *what)

@@ -106,7 +106,10 @@ static void golden_tables(void)
     uint64_t mapped=0,valid=0;
     for(unsigned i=2;i<512;++i) {
         uint64_t pa=(uint64_t)i<<30;
-        CHECK(a733_cached_el1_l1[i]==(decode_passes() && pa<A733_DRAM_MAP_END?A733_EL1_DRAM_BLOCK(pa):0));
+        /* Written out field by field, not through the macro: write-back, inner shareable, access flag,
+         * non-global (bit 11, so the entry carries the kernel's ASID), UXN, PXN, EL1-only. */
+        CHECK(a733_cached_el1_l1[i]==(decode_passes() && pa<A733_DRAM_MAP_END?
+              (pa|BIT(54)|BIT(53)|BIT(11)|BIT(10)|(UINT64_C(3)<<8)|BIT(2)|1):0));
         CHECK(!a733_cached_el3_l1[i]);
         if(a733_cached_el1_l1[i]){mapped+=1024;++valid;}
     }
