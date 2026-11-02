@@ -18,7 +18,7 @@ FAT32 volume read-only (32 KiB clusters, 1,907,436 clusters free, empty root dir
 ## Open work
 
 1. Qualify physical installation, autonomous OS boot, cold controller and supply state, reset retirement and power-loss recovery.
-2. Qualify SDR104 at 150 MHz (implemented and host-modeled): the lifetime needs whole-board power removal after success or a post-CMD11 failure, so it is blocked without physical recovery.
+2. Qualify SDR104 at 150 MHz (implemented and host-modeled). The card keeps 1.8 V signalling until its supply is cycled, and the board's only supply cycle was whole-board power removal. [The recovery design](../designs/sd-uhs-recovery.md) shows from the sources that a card at 1.8 V is re-initialised at 1.8 V with no power cycle, models every failure state (`checks/sd-uhs-recovery-model.py`), and names DC1SW2 (PMIC register `0x11` bit 4, shared with `VCC-IO`, the USB2 PHY and the header) as a software supply cycle for the card. A four-stage board plan is written; no run is approved.
 3. Measure sustained throughput on broader extents and cards, and qualify card replacement, removal and recovery, and voltage timing.
 4. Implement SDR50 and DDR50; add GPT, multiple volumes and clients.
 5. Connect the [FAT32 write service](../designs/storage-write.md) (host-checked with a power-loss sweep) to the card: CMD25 with descriptor DMA, ACMD13 for the allocation unit, a read-over-write arbiter, bounded-write admission in the runner, and the board rate, latency and interruption measurements.
