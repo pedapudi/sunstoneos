@@ -123,6 +123,27 @@ Partitioned fork:
 
 Result. The hypothesis holds on both kernels: lock wait is 82 to 96% of every span above 5 us, and in the longest span of each pair all but 1 to 3 us is wait. The held part is 1 to 3 us for the longest spans. The prediction's exception was wrong: the core 6 service and dispatch pairs wait for the lock as much as the rest (87 to 92%). The memory-work account of the earlier rounds explains the length of the holder's own span, which each waiter then adds to its wait, so shortening held work still shortens waits, but the first fix is to stop waiting with the mask raised. The fix goes into the lock acquisition in the port's task lock and interrupt lock, which sits in the protected `patches/freertos-smp-*.patch` and the fork's object enter; the protected diff goes to the coordinator.
 
+### Unmasked wait for the task lock
+
+`runtime/lock_prewait.c` (`SUNSTONE_LOCK_PREWAIT`, design: [waiting for the task lock with the mask open](../designs/scheduler-partitioned.md#waiting-for-the-task-lock-with-the-mask-open)) makes kernel entry points wait, mask open, until at most one core holds or waits for the task lock, then mask and queue as before. It needs no change to a protected patch. Same image and load as the sweep above; queue entries `1793603800991531488-e4485ccd` (stock) and `1793603872067351594-076593c9` (fork), output exact.
+
+Three board attempts preceded it. The first never waited because the open mask reads back as 0xf0, not the 0xff written. The second waited for under 1% of entries because nearly all kernel callers are EL0 tasks, which cannot read the mask. A third image deadlocked on the stock kernel (watchdog reset): a task that had suspended the scheduler held the task lock with the mask open and waited for its own hold, which the guard now skips.
+
+| | stock before | stock after | fork before | fork after |
+| --- | --- | --- | --- | --- |
+| Spans above 5 us | 9923 | 5206 | 5176 | 3291 |
+| Lock wait inside those spans, all cores | 99.7 ms | 48.8 ms | 57.4 ms | 25.6 ms |
+| Longest span | 30 us | 30 us | 35 us | 30 us |
+| Longest masked lock wait per core 0 to 7 (us) | 22 21 22 28 28 29 29 12 | 26 27 25 27 28 29 29 11 | 25 15 27 26 33 32 32 6 | 15 18 12 19 20 19 19 7 |
+| Longest unmasked wait (us) | 0 | 82 | 0 | 914 on core 3, 77 on core 0, at most 19 elsewhere |
+| Recognition time (ms) | 136.388 | 136.574 (+0.14%) | 127.188 | 128.427 (+0.97%) |
+
+The wait is no more than 100 us: it ended by the limit 0 times on the fork and 4 times on the stock kernel. The 914 us on the fork is one wait that slept in `WFE` while another core held the lock through a long section; it waited unmasked and no later than the holder, but the limit is checked only when an event wakes the core, so it is not enforced there.
+
+Result. The wait halves the time spent in long masked spans on both kernels and keeps the recognition within 2% of the image without it, but it does not reach the 1 to 3 us goal: the longest spans and the longest masked waits are unchanged on the stock kernel and 13 to 14 us lower on the fork. Cores that see the lock nearly free queue together, so a burst of eight still queues seven holds. A waiter cannot take a ticket with the mask open: an interrupt that switches tasks would leave the new task queued behind a ticket held by a descheduled one.
+
+Convoy. The lock is the task lock (`xPortLocks[1]`), the same one every kernel call takes. Lock wait in the long spans by caller before and after (ms, all cores): stock `xTaskGetSchedulerState` 33.5 to 14.3, `xQueueReceive` 26.4 to 10.9, `xQueueGenericSend` 14.2 to 5.4, `vTaskYieldWithinAPI` 12.4 to 10.2, `vTaskSuspendAll` 10.9 to 6.5. Fork `ssKernelObjectEnter` 42.2 to 18.2, `ssKernelObjectSuspend` 13.2 to 6.0, `vTaskEnterCritical` 2.0 to 1.4. On the fork the contended object is the global task lock taken by every object enter and suspend, not a per-owner object. The next fixes are shorter holds (each hold is about 3.5 us of dependent DRAM refills) or less sharing: per-queue or per-owner locking in place of the task lock, and an abortable queue lock so a waiter can take its place in line with the mask open.
+
 ## Evidence
 
 Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
