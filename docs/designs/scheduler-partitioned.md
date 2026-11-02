@@ -835,6 +835,39 @@ land in the owner window count toward that window, so the kernel regions' cycles
 are subtracted from the owner window before it is compared. A split with no
 region over 1.5 ms points to neither.
 
+Result (port 3-3, one run per kernel, exact output; cycles of core 6, fork minus
+global kernel, 2.002 GHz):
+
+| Window | Global kernel (M cycles) | Fork (M cycles) | Difference | L1D refills | L2D refills |
+| --- | --- | --- | --- | --- | --- |
+| Owner's own share | 92.86 | 94.61 | +0.87 ms | +1.5% | +2.3% |
+| Sends | 10.57 | 12.19 | +0.81 ms | -29% | -32% |
+| Tail (slowest worker, completion path) | 31.50 | 21.08 | -5.20 ms | -47% | -55% |
+| Everything else between bind and report | 241.43 | 249.38 | +3.97 ms | -0.1% | -0.6% |
+
+The first three windows are the parallel calls and agree with the time accounting
+(owner share +0.90 ms, sends +0.72 ms). The tail window counts cycles only while the
+core runs: it waits in WFI, which stops the cycle counter, so its time difference is the
+-2.6 ms of the time accounting. The last row is not the serial code of the timed
+recognition: the window runs from the bind to the report and includes about 90 ms of
+untimed work (the warm and verified passes), so it cannot hold the 1.4 ms by which the
+timed serial code is longer.
+
+Inside the fork, `ssKernelPublishReference` took 2.05 M cycles in 2,658 entries (771
+cycles each) and `ssKernelService` 0.81 M cycles in 1,596 entries (508 each), 1.4 ms
+together.
+
+Neither candidate meets its prediction. The wake service is not slower: sends cost 0.8
+ms more, the tail 2.6 ms less (time), a net 1.8 ms faster, and no wake window exceeds the
+stock kernel's by 1.5 ms. Cache effects do not reach 1.5 ms: the owner window, where
+they would show, is 0.87 ms longer with 1.5% and 2.3% more refills, not 10%, and its backend
+stalls are 34% of its cycles in both kernels. The 1.4 ms by which the timed serial code
+is longer is not covered by these windows. No single cause accounts for 1.5 ms of the
+loss, so the stream stops with the fork off by default. The fork's faster completion path
+(-2.6 ms) and its slower sends, owner share and serial code (+0.7, +0.9 and +1.4 ms)
+cancel to the measured +0.4%. A counter window around the timed serial code, which the
+engine would have to place inside its timed region, is the next step if the work resumes.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag
