@@ -43,10 +43,11 @@ static int admit(const unsigned char *data, size_t bytes, unsigned char digest[3
 {
     struct nbg_model model;
     if (digest) storage_digest_bytes(data, bytes, digest);
-    /* The command allocation is the graph's own stream rounded to a page (the layout bounds it by the hardware field),
-     * so a slot is sized by the largest resident graph and not by the hardware maximum. */
-    return nbg_model_open(data, bytes, &model) == NBG_DECODE_OK && nbg_assembly_layout(&model, layout) &&
-           layout->buffers[NBG_ALLOC_COMMAND].allocation_bytes <= NPU_RUNTIME_COMMAND_BYTES;
+    /* The command allocation is the graph's own stream rounded to a page; a stream longer than one fetch continues
+     * through links (nbg_assembly.c), so nothing bounds it here but the slot: a slot is sized by the largest resident
+     * graph, and a graph registered later that needs a longer command region than its slot holds is refused by the
+     * fit check there (npu_runtime_register, LOAD). */
+    return nbg_model_open(data, bytes, &model) == NBG_DECODE_OK && nbg_assembly_layout(&model, layout);
 }
 struct sizes { size_t command, constant, read, write, staging; };
 static void need(const struct nbg_assembly_layout *l, size_t model_bytes, struct sizes *s)

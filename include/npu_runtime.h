@@ -16,6 +16,9 @@
  * (nbg_assembly.h), not by a table of digests. */
 #define NPU_RUNTIME_SLOTS NPU_SERVICE_CLIENTS
 #define NPU_RUNTIME_DEVICE_BASE 0x10000000u
+/* The command region of a slot sized for graphs registered later (a declaration that names no graph for each slot): one
+ * hardware fetch. A graph whose stream is longer is linked in segments and needs a larger region; it fits only a slot
+ * sized for it. */
 #define NPU_RUNTIME_COMMAND_BYTES 524288u
 #define NPU_RUNTIME_GROUP_BYTES 0x200000u
 /* Bulk work runs in steps sized to fit 80 us at the design's worst-case rates
@@ -148,9 +151,8 @@ struct npu_runtime {
 };
 
 /* Size of the parent allocation for slots slots and these catalogue models,
- * or 0 when a model is absent from the build-time catalogue, refused by the
- * decoder or assembler, or needs a command allocation larger than
- * NPU_RUNTIME_COMMAND_BYTES. Every slot gets the largest read-only region,
+ * or 0 when a model is absent from the build-time catalogue or refused by the
+ * decoder or assembler. Every slot gets the largest read-only region,
  * read window and write window of any model, so any slot can load any model.
  * Reads the models; no other effect. */
 /* The memory a declaration of slots reserves for these graphs: 0 with the result NPU_DECLARATION_OK and the size in

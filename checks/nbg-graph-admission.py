@@ -241,6 +241,29 @@ def main():
     case('a shader descriptor reaches beyond the tensor it names', SH,
          [(PATCH_SECTION, g[SH].kind0_patch_offset(1, 28) + 16, u32(64))],
          [('nbg_assembly.c', 'if ((uint64_t)p.source_offset + extent > region) return 0;', 'if (0) return 0;'), *RELOCATION_OFF])
+    # 7. A descriptor of a long tensor. The compiler writes width + (height << 16) in 32 bits without masking: the
+    # relative-shift table of an attention layer over T = 184 positions is four rows of 67,528 elements (hw
+    # 0x000507c8, carried), and the index table of T = 276 positions is 76,176 rows of one element (hw 0x29900001,
+    # cut). The graph is the small gather with its input descriptor and input size replaced by those of the layer.
+    G = 'sh-gather'
+    data_header = 0x0804d800
+    plane_header = 0x0804d804
+
+    def long_tensor(stride, hw, plane, size):
+        return [(INPUT, 4, u32(size)), (STATES, g[G].state_word_offset(1, data_header) + 8, u32(stride)),
+                (STATES, g[G].state_word_offset(1, data_header) + 12, u32(hw)),
+                (STATES, g[G].state_word_offset(1, plane_header) + 4, u32(plane))]
+    admitted_case('a shader descriptor whose width carries into the height field (T = 184)', G,
+                  long_tensor(135056, 0x000507c8, 540224, 540224))
+    admitted_case('a shader descriptor whose height is cut to 16 bits (T = 276)', G,
+                  long_tensor(4, 0x29900001, 304704, 304704))
+    WIDTH_RULE = [('nbg_assembly.c', 'if (!height || width > stride) return 0;', 'if (!height) return 0;')]
+    case('a shader descriptor whose width exceeds its row stride', G, long_tensor(135056, 0x000907c8, 540224, 540224), WIDTH_RULE)
+    case('a shader descriptor whose channel stride is not a multiple of its row stride', G,
+         long_tensor(135056, 0x000507c8, 540225, 540225),
+         [('nbg_assembly.c', 'if (!stride || !depth || plane % stride) return 0;', 'if (!stride || !depth) return 0;')])
+    case('a shader descriptor whose height field disagrees with its channel stride', G,
+         long_tensor(128, 0x00300040, 4096, 4096), WIDTH_RULE)
     print('PASS %d graphs, %d unseen programs admitted and %d refusal cases' % (len(GRAPHS), len(admitted), len(results)))
 
 

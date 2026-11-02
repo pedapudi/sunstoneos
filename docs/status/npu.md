@@ -123,6 +123,30 @@ models come from a runner input region and the runtime checks their digests when
 22.75 ms, every output equals the simulator's byte for byte. The loader admits unpatched pointer words below 1 MiB (rule 5 of
 the loader specification). See [the resources design](../designs/npu-resources.md), "The pool" and "Models from outside the image".
 
+## Long attention layers (2026-11-02)
+
+The loader admits compiled conformer layers of 184 to 512 frames, which it refused before: the descriptor of the relative-shift
+gather (S7: width carried into the height field, height cut at 32 bits), a matrix product whose second input lies in the pool,
+the operation count (no fixed limit) and the shader stream length (no fixed limit); a command stream longer than one fetch is cut
+into segments joined by LINK commands (`docs/hardware/npu-command-formats.md`, "Long tensors" and "Command segments"). The
+layers are the proof graphs of the mimus encoder study (176 channels, one layer, own quantization), run through the OS NPU
+service in queue mode on port 3-3 at 852 MHz and 800 mV, one slot, 100 jobs at queue depth 1, 2 and 4.
+
+| Frames | Operations | Stream (bytes) | Layer (MB) | Pool of the slot (MB) | Compiler estimate (ms) | Board job (ms) | Output against the simulator |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 184 | 450 | 33,856 | 1.09 | 1.07 | 6.5 | 5.81 | 10,484 of 32,384 elements differ, at most 132 steps, rows 0 to 105 only |
+| 276 | 643 | 42,464 | 1.34 | 2.22 | 11.5 | 35.6 | 15,786 of 48,576 elements differ by more than 8 steps, at most 305 |
+| 368 | 1,167 | 78,184 | 1.81 | 3.77 | 23 | 63.3 | 10,814 of 64,768 elements differ by more than 8 steps, at most 438 |
+
+The 184-frame layer's output is not the same in two runs: the unsplit stream (entry `e48806ba`), the same stream in three
+segments (entry `a693df6c`) and a single job after loading (entry `d254a3f2`) each differ from the simulator in rows 0 to 105
+only (10,484, 10,452 and 5,629 elements; at most 132, 98 and 30 steps of 1/128) and differ from one another in 10,000 to 12,000
+elements, while rows 106 to 183 equal the simulator in every run. Against the float result of the same graph the board output
+and the simulator output are equally far (RMS 1.116 and 1.116, the quantization of the proof graph; the two differ by 0.026
+RMS). The segmented stream ran 300 jobs without a fault and its late rows, computed by commands after both links, are exact,
+so the front end follows the links. The cause of the run-to-run differences is not known; the 92-frame layers, which have no
+pool traffic, were byte-exact in every run.
+
 ## Open work
 
 1. Done: declared resources, run-time graph loading, shader integration, backpressure depth and tensor linking after the scheduler starts (see "What the NPU runs now"). What remains of this item is the backlog below.
