@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 static unsigned fixture_cpu, fixture_sgi[configNUMBER_OF_CORES], fixture_locks;
-static unsigned fixture_cleanup;
+static unsigned fixture_cleanup, fixture_task_masks, fixture_isr_masks;
 void ssFixtureCleanup(void *task) { assert(task); ++fixture_cleanup; }
 static unsigned fixture_ready_count[SS_OWNER_SLOTS], fixture_ready_cpu[SS_OWNER_SLOTS];
 static TaskHandle_t fixture_ready_watch;
@@ -19,8 +19,8 @@ void platform_panic(const char *file, unsigned line)
 uint64_t ssFixtureTaskRegister(void) { return (uintptr_t)pxCurrentTCBs[fixture_cpu]; }
 uint8_t ucPortGetCoreID(void) { return (uint8_t)fixture_cpu; }
 uint8_t ucPortGetCoreIDFromIsr(void) { return (uint8_t)fixture_cpu; }
-UBaseType_t uxPortSetInterruptMask(void) { return 0; }
-UBaseType_t uxPortSetInterruptMaskFromISR(void) { return 0; }
+UBaseType_t uxPortSetInterruptMask(void) { ++fixture_task_masks; return 0; }
+UBaseType_t uxPortSetInterruptMaskFromISR(void) { ++fixture_isr_masks; return 0; }
 void vPortClearInterruptMask(UBaseType_t mask) { (void)mask; }
 void vPortClearInterruptMaskFromISR(UBaseType_t mask) { (void)mask; }
 void vPortRecursiveLock(uint8_t cpu, ePortRTOSLock lock, BaseType_t acquire)
@@ -96,6 +96,7 @@ static void fixture_critical_commands(TaskHandle_t task)
     ssKernelControl.backend = &progress;
     fixture_cpu = 0;
     unsigned priority = uxTaskPriorityGet(task);
+    unsigned isr_masks = fixture_isr_masks;
     uint64_t sequence = atomic_load(&ssKernelControl.slot[((TCB_t *)task)->uxOwnerSlot].applied);
     vTaskEnterCritical();
     vTaskEnterCritical();
@@ -108,6 +109,7 @@ static void fixture_critical_commands(TaskHandle_t task)
     vTaskExitCritical();
     assert(!ssKernelCPUs[0].command_pending[0] && !ssKernelCPUs[0].command_pending[1]);
     assert(uxTaskPriorityGet(task) == priority + 1);
+    assert(fixture_isr_masks == isr_masks);
     /* Leave a deferred self-command for this owner's ordinary service to
      * encounter. Repair's ObjectExitFromISR must not recursively consume it. */
     unsigned owner = atomic_load(&record(task)->owner);
@@ -124,8 +126,15 @@ static void fixture_critical_commands(TaskHandle_t task)
     ssKernelCommandsFinish();
     assert(!ssKernelCPUs[owner].command_pending[0] && !ssKernelCPUs[owner].command_pending[1]);
     fixture_cpu = 0;
-    UBaseType_t irq = vTaskEnterCriticalFromISR();
     vTaskPrioritySet(task, priority);
+    vTaskSuspend(task);
+    UBaseType_t irq = vTaskEnterCriticalFromISR();
+    isr_masks = fixture_isr_masks;
+    assert(!xTaskResumeFromISR(task)); /* Outer exclusion defers the yield. */
+    struct ss_control_state desired;
+    ss_control_snapshot(&ssKernelControl, ((TCB_t *)task)->uxOwnerSlot, &desired);
+    assert(!desired.suspended);
+    assert(fixture_isr_masks == isr_masks + 1);
     vTaskExitCriticalFromISR(irq);
     for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) enter(c);
     assert(uxTaskPriorityGet(task) == priority);

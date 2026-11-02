@@ -544,7 +544,7 @@
 +#endif
 +portDISABLE_INTERRUPTS();
 +#if ( configUSE_C_RUNTIME_TLS_SUPPORT == 1 )
-+configSET_TLS_BLOCK(pxCurrentTCBs[ssKernelCPUId()]->xTLSBlock);
++configSET_TLS_BLOCK(ssKernelSelf()->xTLSBlock);
 +#endif
 +atomic_store_explicit(&ssKernelTime, configINITIAL_TICK_COUNT, memory_order_release);
 +xSchedulerRunning = pdTRUE;
@@ -1322,8 +1322,8 @@
 +BaseType_t overflow = (sizeof(TickType_t) == sizeof(uint64_t) ? 0 : (BaseType_t)(now >> ((sizeof(TickType_t) * 8) % 64)));
 +BaseType_t result;
 +#if ( INCLUDE_xTaskAbortDelay == 1 )
-+if (pxCurrentTCBs[ssKernelCPUId()]->ucDelayAborted) {
-+    pxCurrentTCBs[ssKernelCPUId()]->ucDelayAborted = pdFALSE;
++if (ssKernelSelf()->ucDelayAborted) {
++    ssKernelSelf()->ucDelayAborted = pdFALSE;
 +    result = pdTRUE;
 +} else
 +#endif
@@ -1360,7 +1360,7 @@
  {
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +traceENTER_vTaskMissedYield();
-+ssKernelCPUs[ssKernelCPUId()].reschedule = true;
++ssKernelMissedYield();
 +traceRETURN_vTaskMissedYield();
 +#else
 +
@@ -1692,7 +1692,7 @@
          {
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +traceENTER_xTaskGetCurrentTaskHandle();
-+{ TaskHandle_t ss_trace_result = (pxCurrentTCBs[ssKernelCPUId()]); traceRETURN_xTaskGetCurrentTaskHandle(ss_trace_result); return ss_trace_result; }
++{ TaskHandle_t ss_trace_result = (ssKernelSelf()); traceRETURN_xTaskGetCurrentTaskHandle(ss_trace_result); return ss_trace_result; }
 +#else
 +
              TaskHandle_t xReturn;
@@ -1737,7 +1737,7 @@
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +traceENTER_xTaskGetSchedulerState();
 +if (!xSchedulerRunning) { BaseType_t ss_trace_result = (taskSCHEDULER_NOT_STARTED); traceRETURN_xTaskGetSchedulerState(ss_trace_result); return ss_trace_result; }
-+{ BaseType_t ss_trace_result = (ssKernelCPUs[ssKernelCPUId()].preempt ? taskSCHEDULER_SUSPENDED : taskSCHEDULER_RUNNING); traceRETURN_xTaskGetSchedulerState(ss_trace_result); return ss_trace_result; }
++{ BaseType_t ss_trace_result = (ssKernelSchedulerState()); traceRETURN_xTaskGetSchedulerState(ss_trace_result); return ss_trace_result; }
 +#else
 +
          BaseType_t xReturn;
@@ -1965,7 +1965,7 @@
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +traceENTER_uxTaskResetEventItemValue();
 +UBaseType_t irq = ssKernelObjectEnterFromISR();
-+TCB_t *t = pxCurrentTCBs[ssKernelCPUId()];
++TCB_t *t = ssKernelSelf();
 +TickType_t result = listGET_LIST_ITEM_VALUE(&t->xEventListItem);
 +listSET_LIST_ITEM_VALUE(&t->xEventListItem, configMAX_PRIORITIES - atomic_load_explicit(&ssKernelCurrent()->effective, memory_order_acquire));
 +ssKernelCurrent()->unordered = false;
@@ -2063,7 +2063,7 @@
      {
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +traceENTER_xTaskGenericNotify( xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue );
-+BaseType_t result = ssKernelNotify(xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue, NULL);
++BaseType_t result = ssKernelNotify(xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue, NULL, false);
 +if (ssKernelCPUs[ssKernelCPUId()].reschedule) portYIELD();
 +{ BaseType_t ss_trace_result = (result); traceRETURN_xTaskGenericNotify(ss_trace_result); return ss_trace_result; }
 +#else
@@ -2088,7 +2088,7 @@
      {
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +traceENTER_xTaskGenericNotifyFromISR( xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue, pxHigherPriorityTaskWoken );
-+{ BaseType_t ss_trace_result = (ssKernelNotify(xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue, pxHigherPriorityTaskWoken)); traceRETURN_xTaskGenericNotifyFromISR(ss_trace_result); return ss_trace_result; }
++{ BaseType_t ss_trace_result = (ssKernelNotify(xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue, pxHigherPriorityTaskWoken, true)); traceRETURN_xTaskGenericNotifyFromISR(ss_trace_result); return ss_trace_result; }
 +#else
 +
          TCB_t * pxTCB;
@@ -2111,7 +2111,7 @@
      {
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +traceENTER_vTaskGenericNotifyGiveFromISR( xTaskToNotify, uxIndexToNotify, pxHigherPriorityTaskWoken );
-+(void)ssKernelNotify(xTaskToNotify, uxIndexToNotify, 0, eIncrement, NULL, pxHigherPriorityTaskWoken);
++(void)ssKernelNotify(xTaskToNotify, uxIndexToNotify, 0, eIncrement, NULL, pxHigherPriorityTaskWoken, true);
 +traceRETURN_vTaskGenericNotifyGiveFromISR();
 +#else
 +

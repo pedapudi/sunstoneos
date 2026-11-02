@@ -219,10 +219,10 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_uxTaskResetEventItemValue();",
       "definition_helpers": [
-        "ssKernelCPUId",
         "ssKernelCurrent",
         "ssKernelObjectEnterFromISR",
-        "ssKernelObjectExitFromISR"
+        "ssKernelObjectExitFromISR",
+        "ssKernelSelf"
       ]
     },
     {
@@ -360,7 +360,7 @@
       "validation": "aarch64-compile",
       "definition_route": "traceENTER_vTaskMissedYield();",
       "definition_helpers": [
-        "ssKernelCPUId"
+        "ssKernelMissedYield"
       ]
     },
     {
@@ -500,7 +500,7 @@
       "definition_route": "traceENTER_vTaskStartScheduler();",
       "definition_helpers": [
         "ssKernelBootstrap",
-        "ssKernelCPUId"
+        "ssKernelSelf"
       ]
     },
     {
@@ -578,8 +578,8 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_xTaskCheckForTimeOut( pxTimeOut, pxTicksToWait );",
       "definition_helpers": [
-        "ssKernelCPUId",
-        "ssKernelNow"
+        "ssKernelNow",
+        "ssKernelSelf"
       ]
     },
     {
@@ -710,7 +710,7 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_xTaskGetCurrentTaskHandle();",
       "definition_helpers": [
-        "ssKernelCPUId"
+        "ssKernelSelf"
       ]
     },
     {
@@ -759,7 +759,7 @@
       "validation": "linked-transition",
       "definition_route": "traceENTER_xTaskGetSchedulerState();",
       "definition_helpers": [
-        "ssKernelCPUId"
+        "ssKernelSchedulerState"
       ]
     },
     {
