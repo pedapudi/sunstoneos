@@ -65,7 +65,7 @@ def main():
              '-fno-unwind-tables', '-fno-asynchronous-unwind-tables',
              '-ffunction-sections', '-fdata-sections', '-O2', '-g', '-Wall', '-Wextra', '-Werror',
              '-DINCLUDE_xTaskGetCurrentTaskHandle=1', '-DINCLUDE_xTaskGetSchedulerState=1',
-             '-DconfigTASK_NOTIFICATION_ARRAY_ENTRIES=2']
+             '-DconfigTASK_NOTIFICATION_ARRAY_ENTRIES=3']
     for directory in [root / 'platform/qemu-smp', root / 'include', root / 'runtime/include',
                       a.freertos / 'include', a.output]:
         flags += ['-I', str(directory)]

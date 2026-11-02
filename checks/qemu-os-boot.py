@@ -883,6 +883,23 @@ def main():
     tag, wait, e1, recv, e2 = struct.unpack('<5q', bytes.fromhex(c.finished['result']))
     c.require(wait == 1 and e1 >= 30000, 'the deadline wait ended with status %d after %d us, expected expiry after 30000 us' % (wait, e1))
     c.require(recv == 0 and e2 >= 30000, 'ss_host_recv returned %d after %d us, expected the timeout (0) after 30000 us' % (recv, e2))
+    # Index 0 belongs to the application: its own give during an OS wait, and during a deadline wait, is still there afterwards.
+    c = run_case('application-give-survives-os-wait', notify_elf, scenario(usb_ready_ms=usb_delay_ms), struct.pack('<Q', 1) + bytes(4088))
+    c.clean()
+    tag, recv, e, take = struct.unpack('<4q', bytes.fromhex(c.finished['result']))
+    c.require(recv == 0 and e >= 30000 and take == 1,
+              'ss_host_recv returned %d after %d us and the application find %d notifications at index 0; expected the timeout and its own give' % (recv, e, take))
+    c = run_case('application-give-does-not-end-deadline-wait', notify_elf, scenario(usb_ready_ms=usb_delay_ms), struct.pack('<Q', 2) + bytes(4088))
+    c.clean()
+    tag, wait, e, take = struct.unpack('<4q', bytes.fromhex(c.finished['result']))
+    c.require(wait == 1 and e >= 30000 and take == 1,
+              'the deadline wait ended with status %d after %d us, take %d; expected expiry after 30000 us and the give still pending' % (wait, e, take))
+    # A device hint ends the deadline wait early; nothing of it may end the application's next wait on index 0.
+    c = run_case('deadline-hint-leaves-index-0-alone', notify_elf, scenario(usb_ready_ms=usb_delay_ms), struct.pack('<Q', 3) + bytes(4088))
+    c.clean()
+    tag, wait, e, take, e3 = struct.unpack('<5q', bytes.fromhex(c.finished['result']))
+    c.require(wait == 0 and e < 20000, 'the hint did not end the deadline wait early: status %d after %d us' % (wait, e))
+    c.require(take == 0 and e3 >= 38000, 'the next wait on index 0 ended after %d us with %d notifications; expected the 40 ms timeout' % (e3, take))
 
     # 12. The storage-write application through ss_storage_enable on the write-capable owner (apps/os/sd_owner.c), over a RAM-disk
     # card that holds the real card's 395 backup sectors at their sector numbers and the runner's bounds blob. The software path
