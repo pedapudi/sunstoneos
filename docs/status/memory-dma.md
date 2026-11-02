@@ -10,7 +10,9 @@ Native mappings, privileged reservation pools, cache maintenance, DMA0 services 
 boards report 12,288 MiB and pass two 4 KiB page comparisons. SID-selected
 restoration on 3-1 passes twice with 879 PHY writes and quick checks of 34.116
 and 34.117 ms. CPU-L/DSU boot clocks restore. EL3 entry restores MBUS to 600 MHz
-on both boards while preserving the checked pattern.
+on both boards while preserving the checked pattern. Sustained DRAM reads over a
+40 MiB region run in one development-mode record on 3-1 (see
+[DRAM bandwidth](../designs/dram-bandwidth.md)).
 
 ## Open work
 
@@ -34,5 +36,9 @@ DMA0 needs physical channel, controller and data-access authority and transfer t
 Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-memory-dma-20261101.md).
 
 <!-- evidence-table:begin -->
-No board result is recorded in `docs/evidence/memory-dma.jsonl`.
+1 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+
+| Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
+| --- | --- | --- | --- | --- | --- | --- |
+| `1793597424798692951-6741863a` | 2026-11-02 | 3-1 | `4e4f51b1ed5f` | returned | failed | run_total 19.252 s, read_one_a55 5.36 GB/s, read_one_a76 12.69 GB/s, read_two_a76 11.37 GB/s, read_six_a55 9.03 GB/s, read_eight 8.44 GB/s |
 <!-- evidence-table:end -->

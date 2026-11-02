@@ -100,7 +100,7 @@ static unsigned in_switch[8], worker_round[8], mover_round[2], mover_mask[2], vi
 /* These symbols also identify the stopped workload in a QEMU GDB snapshot. */
 static volatile unsigned control_round, control_phase;
 static unsigned isolated_local, selected_idle[8];
-static unsigned withholding, blocker_release, withhold_cores;
+static unsigned withholding, blocker_release, withhold_cores, blocker_parked;
 static uint64_t withholding_completed, withholding_observations, withholding_ticks;
 static uint64_t local_phase_locks, local_wakes, local_completed, local_ticks, peer_idle_samples;
 void ss_kernel_test_admin_enter(unsigned cpu)
@@ -251,7 +251,9 @@ static void withhold_home(void *unused)
 {
     (void)unused;
     for (;;) {
+        __atomic_store_n(&blocker_parked, 1, __ATOMIC_RELEASE);
         configASSERT(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
+        __atomic_store_n(&blocker_parked, 0, __ATOMIC_RELEASE);
         configASSERT(portGET_CORE_ID() == 1);
         xTaskNotifyGive(controller);
         while (!__atomic_load_n(&blocker_release, __ATOMIC_ACQUIRE))
@@ -365,12 +367,17 @@ static void control(void *unused)
     configASSERT(home_blocker);
     __atomic_store_n(&withholding, 1, __ATOMIC_RELEASE);
     for (unsigned i = 0; i < WITHHOLD_ROUNDS; ++i) {
+        /* The previous round's blocker must have left its spin before the release flag is reused. */
+        for (unsigned wait = 0; wait < 1000 && !__atomic_load_n(&blocker_parked, __ATOMIC_ACQUIRE) && i; ++wait)
+            vTaskDelay(1);
         __atomic_store_n(&blocker_release, 0, __ATOMIC_RELEASE);
         xTaskNotifyGive(home_blocker);
         configASSERT(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000)) == 1);
         TickType_t start = xTaskGetTickCount();
         xTaskNotifyGive(local_receiver);
-        vTaskDelay(1);
+        /* Give the pull a few milliseconds; without it the receiver never runs before the release. */
+        for (unsigned wait = 0; wait < 100 && __atomic_load_n(&withholding_completed, __ATOMIC_ACQUIRE) != i + 1; ++wait)
+            vTaskDelay(1);
         /* The receiver waits behind its higher-priority home blocker while an allowed
          * peer idles: idle pull must have moved it, and it has run on that peer. */
         if (eTaskGetState(local_receiver) == eReady && __atomic_load_n(&selected_idle[2], __ATOMIC_RELAXED))
@@ -415,6 +422,8 @@ static void control(void *unused)
     for (unsigned id = 0; id < 8; ++id)
         configASSERT(__atomic_load_n(&scheduling_locks[id], __ATOMIC_RELAXED) == 0);
     control_phase = 7;
+    extern unsigned long ss_kernel_test_continuations(void);
+    platform_puts("service-continuations="); platform_hex(ss_kernel_test_continuations()); platform_puts("\n");
     platform_puts("PASS partitioned concurrent: 8 owners, pinned and multiple-affinity priorities, notification/block/timeout, FP migration, pending delete, zero isolated local-wake/switch global locks\n");
     platform_exit(0);
 }
