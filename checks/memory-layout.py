@@ -193,6 +193,39 @@ def check_placement(record):
         fail('a region at %s was accepted' % bad)
 
 
+def check_pools(record, images):
+    """Memory that a device pool owns is never in the ledger's usable ranges.
+
+    The ledger's usable ranges are the 2 MiB blocks of level-1 slot 1 above the EL0 window and the level-1 slots from
+    0x80000000 that the kernel table maps as the plain EL1-only block (apps/os/large.c). The images that link their
+    device pools into upper memory (platform/a733-smp-cached/link-devices.ld: DEVICE_WB and DEVICE_NC) map those
+    pools with their own attributes, and the table builder leaves the slot 1 range out of its list for them."""
+    area = record['slot1_area']
+    text = (ROOT / 'platform/a733-smp-cached/link-devices.ld').read_text()
+    pools = {m[0]: (number(m[1]), number(m[1]) + number(m[2]) * MIB)
+             for m in re.findall(r'(DEVICE_\w+) \(rw\) : ORIGIN = (0x[0-9a-f]+), LENGTH = (\d+)M', text)}
+    require(set(pools) == {'DEVICE_WB', 'DEVICE_NC'}, 'link-devices.ld pools are not DEVICE_WB and DEVICE_NC')
+    overlapping = [name for name, (low, high) in pools.items() if low < area[1] and area[0] < high]
+    require(overlapping, 'the slot 1 area does not contain the extended device pools, so this check has nothing to guard')
+    memory = (ROOT / 'platform/a733-smp-cached/memory.c').read_text()
+    table = memory[memory.index('static const struct a733_dram_range dram_map[]'):]
+    table = table[:table.index('};')]
+    guarded = re.search(r'#if !defined\(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY\)\s*\{UINT64_C\(0x48000000\)', table)
+    require(guarded, 'memory.c maps the slot 1 range above the EL0 window for an image with extended device pools')
+    for path in images:
+        elf = load_elf(path)
+        symbols = {s.name: s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
+        for start, end in (('__device_pool_start', '__device_pool_end'), ('__uncached_pool_start', '__uncached_pool_end')):
+            if start in symbols and symbols[start] != symbols[end]:
+                require(symbols[end] <= area[0] or symbols[start] >= area[1],
+                        '%s: the %s [%#x, %#x) lies in the slot 1 area' % (path, start, symbols[start], symbols[end]))
+
+
+def load_elf(path):
+    from elftools.elf.elffile import ELFFile
+    return ELFFile(open(path, 'rb'))
+
+
 def check_image(path, record):
     from elftools.elf.elffile import ELFFile
     elf = ELFFile(open(path, 'rb'))
@@ -232,6 +265,7 @@ def main():
     check_sources(record)
     check_consumers(record)
     check_placement(record)
+    check_pools(record, args.image)
     for image in args.image:
         check_image(image, record)
     if args.output:
