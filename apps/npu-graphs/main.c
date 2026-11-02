@@ -309,16 +309,15 @@ static void rescale(const int16_t *from, int16_t *to, size_t elements, int fl_fr
         }
     }
 }
-static void chain_stat(struct npu_chain_stat *s, const int16_t *out, const float *ref, size_t elements, int fl)
+static void chain_stat(struct npu_chain_stat *s, const int16_t *out, const int32_t *ref, size_t elements, int fl_out, int fl_ref)
 {
-    double scale = 1.0;
-    for (int i = 0; i < (fl < 0 ? -fl : fl); ++i) scale = fl > 0 ? scale * 0.5 : scale * 2.0;
-    double dot = 0, aa = 0, bb = 0, worst = 0;
+    int64_t dot = 0, aa = 0, bb = 0, worst = 0;
+    const int shift = fl_ref - fl_out;
     for (size_t i = 0; i < elements; ++i) {
-        const double a = out[i] * scale, b = ref[i], d = a > b ? a - b : b - a;
-        dot += a * b; aa += a * a; bb += b * b; if (d > worst) worst = d;
+        const int64_t a = shift >= 0 ? (int64_t)out[i] << shift : (int64_t)out[i] >> -shift, b = ref[i], d = a > b ? a - b : b - a;
+        dot += (a * b) >> 16; aa += (a * a) >> 16; bb += (b * b) >> 16; if (d > worst) worst = d;
     }
-    s->dot = dot; s->aa = aa; s->bb = bb; s->max_abs = worst;
+    s->dot = dot; s->aa = aa; s->bb = bb; s->max_abs = worst; s->fl = fl_ref;
 }
 static _Noreturn void npu_graphs_chain_main(const struct ss_grant *grant)
 {
@@ -381,8 +380,8 @@ static _Noreturn void npu_graphs_chain_main(const struct ss_grant *grant)
             if (stats) {
                 const uint64_t t2 = ss_counter_ticks();
                 chain_stat(&chain_result.stat[r][g], out[g].data,
-                           (const float *)(base + h->reference_offset + (uint64_t)r * h->reference_stride + h->graph[g].reference_offset),
-                           out[g].bytes / 2, h->graph[g].fl_out);
+                           (const int32_t *)(base + h->reference_offset + (uint64_t)r * h->reference_stride + h->graph[g].reference_offset),
+                           out[g].bytes / 2, h->graph[g].fl_out, h->graph[g].reference_fl);
                 stat_ticks += ss_counter_ticks() - t2;
             }
             if (g + 1 < n) {

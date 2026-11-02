@@ -12,9 +12,9 @@ struct npu_chain_graph {
     int32_t fl_in, fl_out;          /* fractional bits of the first input and of the first output (dynamic fixed point, 16 bits) */
     uint32_t in_bytes, out_bytes;   /* of the first input and the first output tensor */
     uint32_t extra_bytes;           /* of the second input (a constant), 0 for none */
-    uint32_t reserved;
+    int32_t reference_fl;           /* fractional bits of the reference, int32 codes (no floating point in the application) */
     uint64_t extra_offset;          /* the constant's bytes */
-    uint64_t reference_offset;      /* float32 reference of the first output, in the block of a reference record */
+    uint64_t reference_offset;      /* int32 reference of the first output, in the block of a reference record */
 };
 struct npu_chain_header {
     uint64_t magic;
@@ -27,7 +27,9 @@ struct npu_chain_header {
 };
 /* What the application returns (ss_finish). Times are counter ticks (24 MHz). */
 #define NPU_CHAIN_RESULT_MAGIC UINT64_C(0x5453455248435053)
-struct npu_chain_stat { double dot, aa, bb, max_abs; };   /* of one graph's output against its float reference */
+/* Of one graph's output against its reference, in the reference's fixed point (reference_fl): the sums of products shifted
+ * right by 16 (the shift cancels in the cosine) and the largest absolute difference in units of 2^-reference_fl. */
+struct npu_chain_stat { int64_t dot, aa, bb, max_abs, fl; };
 #define NPU_CHAIN_MAX_RECORDS 64u
 #define NPU_CHAIN_MAX_STAT_RECORDS 16u
 #define NPU_CHAIN_MAX_ROWS 128u

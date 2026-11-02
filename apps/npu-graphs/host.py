@@ -185,7 +185,7 @@ if __name__ == '__main__':
 CHAIN_MAGIC = 0x5453455248435053
 CHAIN_MAX_GRAPHS, CHAIN_MAX_RECORDS, CHAIN_MAX_STAT_RECORDS, CHAIN_MAX_ROWS = 24, 64, 16, 128
 CHAIN_HEAD = struct.Struct('<8Q3Q3Q')
-CHAIN_BYTES = 30832
+CHAIN_BYTES = 33904
 
 
 def chain_decode(raw):
@@ -204,11 +204,11 @@ def chain_decode(raw):
     for r in range(reference_records):
         row = []
         for g in range(graphs):
-            dot, aa, bb, worst = struct.unpack_from('<4d', raw, offset + 32 * (r * CHAIN_MAX_GRAPHS + g))
-            row.append({'cosine': dot / ((aa * bb) ** 0.5) if aa > 0 and bb > 0 else None, 'max_abs': worst,
-                        'rms_ref': (bb) ** 0.5})
+            dot, aa, bb, worst, fl = struct.unpack_from('<5q', raw, offset + 40 * (r * CHAIN_MAX_GRAPHS + g))
+            row.append({'cosine': dot / ((aa * bb) ** 0.5) if aa > 0 and bb > 0 else None, 'max_abs': worst / 2.0 ** fl,
+                        'rms_ref': ((bb * 65536.0 / (1 << 0)) ** 0.5) / 2.0 ** fl})
         stats.append(row)
-    offset += 32 * CHAIN_MAX_STAT_RECORDS * CHAIN_MAX_GRAPHS
+    offset += 40 * CHAIN_MAX_STAT_RECORDS * CHAIN_MAX_GRAPHS
     tokens = [list(struct.unpack_from('<%dH' % rows, raw, offset + 2 * CHAIN_MAX_ROWS * r)) for r in range(records)]
     return {'graphs': graphs, 'records': records, 'reference_records': reference_records, 'rows': rows,
             'clock': {'before': clock_of([before[0], before[1], 0, before[0], before[1], 0, 0]),
