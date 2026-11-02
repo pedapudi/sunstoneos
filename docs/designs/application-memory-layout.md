@@ -361,6 +361,25 @@ OS core code differs in every image (the admission, the loader loop and
 `_sbrk` changed), so those images are not byte-identical; their generated
 tables are.
 
+**Runner preservation (step 4).** The runner's DRAM range in the record is now
+the FEL reach, `0x40000000` to `0x100000000`, instead of the first 2 GiB, and a
+preserving run of an application with a WORK or OUTPUT region above
+`0x80000000` is accepted. An extent that reaches or passes 4 GiB is refused, and
+the refusal names the extent and the reach. A manifest region of kind work or
+output takes the access name `scratch` (bit 4 of the region's access word, which
+no OS code reads): `apps/os/host.py` leaves it out of the backup list, while the
+CPU-return terminal still cleans it, because the terminal does not depend on what
+the runner saves. An input cannot be scratch, since the runner uploads it.
+`tools/board_images.py` estimates the transfer of a preserving plan as two passes
+of the preserved bytes at the recorded FEL rate (550 kB/s), the runner prints the
+estimate before the backup, and `tools/board.py submit --preserve-budget-s N`
+refuses a plan whose estimate exceeds N seconds. `checks/runner-preservation.py`
+covers the reach, the scratch attribute, the estimate and the budget; six
+mutations (the old ceiling, no scratch filter, no budget test, one pass in the
+estimate, scratch allowed on an input, no upper bound) each fail it. The board
+run listed for this step (an 8 MiB OUTPUT and a 16 MiB WORK at `0x88000000`,
+restored bytes equal to the backup) is not yet done.
+
 ### Predicted board run of the heap
 
 Hypothesis: with the OS image built with the address-test decode check

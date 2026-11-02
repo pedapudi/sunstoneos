@@ -386,11 +386,15 @@ def usb_pool_geometry(elf):
     return None
 
 
-def backup_regions(image, uploads=()):
-    """Union uploaded spans with the manifest WORK and OUTPUT regions."""
+def backup_regions(image, uploads=(), scratch=False):
+    """Union uploaded spans with the manifest WORK and OUTPUT regions that the runner preserves.
+
+    A region the manifest marks scratch is left out; scratch=True keeps it, for the ranges that the CPU-return
+    terminal cleans, which does not depend on what the runner saves."""
     info = image_manifest(image)
     spans = [(r['address'], r['address'] + r['bytes']) for r in
-             regions(info['manifest'], (manifest_tool.KIND['work'], manifest_tool.KIND['output']))]
+             regions(info['manifest'], (manifest_tool.KIND['work'], manifest_tool.KIND['output']))
+             if scratch or not r['access'] & manifest_tool.ACCESS['scratch']]
     spans.extend((r['address'], r['address'] + r['bytes']) for r in uploads if r['bytes'])
     pool = usb_pool_geometry(info['elf'])
     if pool:

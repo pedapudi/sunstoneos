@@ -48,7 +48,8 @@ TODAY = {
     'npu_pool.min': 0xa00000,
     'npu_pool.max': 0x3000000,
     'npu_pool.block': 0x200000,
-    'runner_dram': (0x40000000, 0x80000000),
+    'runner_dram': (0x40000000, 0x100000000),
+    'fel_bytes_per_second': 550000,
     'boot_slot_load': (0x41000000, 0x47000000),
 }
 

@@ -31,7 +31,7 @@ def cleaned_regions(path):
     """The application ranges that the success terminal cleans after image RAM."""
     if records.image_manifest(path)['manifest'] is None:
         return [(0x46000000, 0x47000000)]
-    return [(r['address'], r['address'] + r['bytes']) for r in records.backup_regions(path)]
+    return [(r['address'], r['address'] + r['bytes']) for r in records.backup_regions(path, scratch=True)]
 
 
 class Model(prior.Model):

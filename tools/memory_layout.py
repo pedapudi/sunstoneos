@@ -63,8 +63,12 @@ def record():
             'legacy': (0x47400000, 0x47c00000),
             'top': 0x47000000, 'min': 0xa00000, 'max': 0x3000000, 'block': BLOCK,
         },
-        # The part of DRAM that the board runner backs up, restores and uploads into.
-        'runner_dram': (0x40000000, 0x80000000),
+        # The part of DRAM that the board runner backs up, restores and uploads into: all that FEL addresses, since its
+        # read and write commands carry 32-bit addresses (docs/designs/application-memory-layout.md).
+        'runner_dram': (0x40000000, 0x100000000),
+        # What a preserving run costs: the FEL rate in bytes per second, measured in docs/board-runner.md. Each
+        # preserved byte is read before the run and written after it.
+        'fel_bytes_per_second': 550000,
         # The extent of a boot slot's runtime and asset segments.
         'boot_slot_load': (0x41000000, 0x47000000),
         # The C library's heap. The image links heap_base bytes for the OS and the manifest's heap_bytes when they
@@ -78,6 +82,11 @@ def record():
 def extent(pair):
     """The (address, bytes) form of a (low, high) pair, the form the runner uses."""
     return (pair[0], pair[1] - pair[0])
+
+
+def preserve_seconds(preserved_bytes):
+    """The estimated transfer time of a preserving run that backs up and restores that many bytes."""
+    return 2.0 * preserved_bytes / record()['fel_bytes_per_second']
 
 
 def hexed(value):

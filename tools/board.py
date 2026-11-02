@@ -643,6 +643,9 @@ class Live:
         if plan.get('format') == 'generic':
             images.validate_uploads(plan)
             if preserve:
+                total, seconds = images.require_budget(plan, getattr(self.args, 'preserve_budget_s', None))
+                self.record.update(preserve_bytes=total, preserve_estimate_s=round(seconds, 1))
+                print('preservation: %d MiB backed up and restored, estimated %.0f s' % (total >> 20, seconds), flush=True)
                 plan['dram_backups'] = images.backup_dram(self, plan['preserve_regions'])
                 self.record['dram_backups'] = plan['dram_backups']
                 self.record.update(dram_restored=False, dram_dirty=True)
@@ -1120,6 +1123,7 @@ def development(argv=None):
     parser.add_argument('--normalize-rails', action=argparse.BooleanOptionalAction)
     parser.add_argument('--restore-rails', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--preserve-dram', action='store_true')
+    parser.add_argument('--preserve-budget-s', type=float)
     parser.add_argument('--rail-helper', type=Path, default=state.RAIL_HELPER)
     parser.add_argument('--fel', type=Path, default=state.FEL)
     args = parser.parse_args(argv)
@@ -1151,6 +1155,8 @@ def development(argv=None):
         command += ['--restore-rails']
     if args.preserve_dram:
         command += ['--preserve-dram']
+    if getattr(args, 'preserve_budget_s', None) is not None:
+        command += ['--preserve-budget-s', repr(args.preserve_budget_s)]
     if args.decoder:
         command += ['--decoder', str(args.decoder)]
     command += ['--decode-application']
@@ -1242,7 +1248,7 @@ class Queue:
         options = {'reference': 'none' if reference.get('none') else f"{reference['path']}#{reference['anchor']}"}
         if reference.get('none'):
             options['reference_reason'] = reference['reason']
-        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','decode_application','objcopy'):
+        for name in ('kind','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy'):
             value = getattr(args,name)
             options[name] = str(value.resolve()) if isinstance(value,Path) else value
         for name in ('records', 'decoder', 'manifest'):
@@ -1524,6 +1530,8 @@ def run_options(parser, submit=False):
     parser.add_argument('--restore-rails', action='store_true', help='Restore guarded CPU rails after a validated normal return.')
     parser.add_argument('--preserve-dram', action='store_true',
                         help='Qualification run: save the image DRAM before launch and restore it after retirement. Development runs skip both.')
+    parser.add_argument('--preserve-budget-s', type=float,
+                        help='Longest estimated backup and restore time, in seconds, that a --preserve-dram run accepts; the plan is refused above it.')
     parser.add_argument('--decoder', type=Path, help='Application payload decoder with optional expected(inputs).')
     parser.add_argument('--decoder-origin', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--decode-application', action='store_true', help='Use the application decoder and its default inputs when available.')

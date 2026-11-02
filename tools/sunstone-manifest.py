@@ -37,7 +37,7 @@ DEVICES = {'usb-storage': 1 << 0, 'usb-keyboard': 1 << 1, 'audio-i2s': 1 << 2,
 CAPTURE = DEVICES['audio-i2s'] | DEVICES['audio-headset']
 CLUSTER = {'a55': 0, 'a76': 1}
 KIND = {'input': 1, 'work': 2, 'output': 3}
-ACCESS = {'read': 1, 'write': 2, 'gpu-read': 4, 'gpu-write': 8}
+ACCESS = {'read': 1, 'write': 2, 'gpu-read': 4, 'gpu-write': 8, 'scratch': 16}
 # Application regions lie in the EL0 read-write blocks above the OS-owned
 # radio and Bluetooth profile reservation and below the loader limit.
 WINDOW = tuple(memory_layout.record()['window'])
@@ -181,6 +181,8 @@ def load(path):
         else:
             require(size % PAGE == 0, where + ': capacity is a multiple of 4 KiB')
             require(access & ACCESS['read'], where + ': the CPU reads work and output regions')
+        require(kind != KIND['input'] or not access & ACCESS['scratch'],
+                where + ': scratch excludes a region from the runner\'s backup, and an input is uploaded, not backed up')
         if kind == KIND['output']:
             require(access & ACCESS['write'], where + ': the CPU writes an output region')
         address = r.get('address')
