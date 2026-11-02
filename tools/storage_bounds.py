@@ -10,8 +10,9 @@ Read-only images and images without an SD core pass unchanged. A write-capable i
 - an approval record written by the coordinator names the exact encoded bounds (see approval_path);
   workers never write the approvals directory, and a command-line flag is not an approval;
 - the hash-bound image descriptor holds `storage_bounds` equal to the record's ranges and backup hash;
-- every range lies inside the partition: at or after sector 32,768 (the MBR's partition start) and
-  below that start plus BPB_TotSec32 of the boot sector in the backup the record names;
+- every range lies inside the partition, from the card's own tables in the backup the record names: at or
+  after the start of the MBR's FAT32 entry (type 0x0B or 0x0C) and below that start plus BPB_TotSec32 of the
+  boot sector at the start; the backup must therefore hold sector 0 and that boot sector;
 - the first input of the run is the encoding of those bounds (encode_input), checked again after the
   runner has frozen its inputs (verify_delivered).
 The record limits what one run writes. The image re-reads the backed-up sectors before its first
@@ -29,7 +30,6 @@ import re
 import struct
 
 MAGIC = b'SSBW0001'
-PARTITION_FLOOR = 32768            # first sector of the card's FAT32 partition (the MBR entry)
 ROOT = Path(__file__).resolve().parents[1]
 APPROVALS = Path(os.environ.get('SUNSTONE_STORAGE_APPROVALS') or Path.home() / '.cache/sunstoneos/coordinator-1031/approvals')
 ANY_IMAGE = 'any-image-from-tree'
@@ -144,22 +144,30 @@ def parse_backup(path, expected_sha256):
     return sectors
 
 
-def partition_end(backup_sectors):
-    """Partition start plus BPB_TotSec32, from the boot sector in the backup."""
-    boot = backup_sectors.get(PARTITION_FLOOR)
+def partition_bounds(backup_sectors):
+    """(first sector, end sector) of the FAT32 partition: the start from the MBR's single FAT32 entry
+    (type 0x0B or 0x0C) in sector 0, the size from BPB_TotSec32 of the boot sector at that start."""
+    mbr = backup_sectors.get(0)
+    require(mbr is not None and mbr[510:512] == b'\x55\xaa', 'The backup lacks a valid sector 0 (MBR).')
+    entries = [mbr[446 + 16 * i:462 + 16 * i] for i in range(4)]
+    fat32 = [e for e in entries if e[4] in (0x0b, 0x0c)]
+    require(len(fat32) == 1, 'The MBR must hold exactly one FAT32 partition entry.')
+    start = struct.unpack_from('<I', fat32[0], 8)[0]
+    require(start > 0, 'The FAT32 partition starts at sector 0.')
+    boot = backup_sectors.get(start)
     require(boot is not None and boot[510:512] == b'\x55\xaa', 'The backup lacks the partition boot sector.')
     total = struct.unpack_from('<I', boot, 32)[0]
     require(total > 0, 'The boot sector reports no sectors.')
-    return PARTITION_FLOOR + total
+    return start, start + total
 
 
-def validate(ranges, backup_sha256, end):
+def validate(ranges, backup_sha256, start, end):
     require(isinstance(ranges, list) and ranges, 'The approval needs at least one range.')
-    previous_end = PARTITION_FLOOR
+    previous_end = start
     for item in ranges:
         require(isinstance(item, list) and len(item) == 2 and all(type(v) is int for v in item), 'A range is [first sector, sector count].')
         first, count = item
-        require(count > 0 and first >= previous_end, 'Ranges must be sorted, disjoint, nonempty and at or after the partition start.')
+        require(count > 0 and first >= previous_end, 'Ranges must be sorted, disjoint, nonempty and inside the partition.')
         previous_end = first + count
         require(previous_end <= end, 'A range extends past the end of the partition.')
     require(isinstance(backup_sha256, str) and re.fullmatch(r'[0-9a-f]{64}', backup_sha256), 'The backup hash must be 64 lowercase hexadecimal digits.')
@@ -184,8 +192,8 @@ def admit(descriptor, args, image_sha256, approvals=None):
             'The approval record differs from storage_bounds.')
     require(record.get('port') == args.port, 'The approval record is for another port.')
     require(record.get('image') in (ANY_IMAGE, image_sha256), 'The approval record does not name this image.')
-    end = partition_end(parse_backup(record.get('backup', ''), bounds['backup_sha256']))
-    validate(bounds['ranges'], bounds['backup_sha256'], end)
+    start, end = partition_bounds(parse_backup(record.get('backup', ''), bounds['backup_sha256']))
+    validate(bounds['ranges'], bounds['backup_sha256'], start, end)
     args.storage_admission = hashlib.sha256(blob).hexdigest()
     return blob
 

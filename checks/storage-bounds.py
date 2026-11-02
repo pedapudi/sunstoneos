@@ -72,12 +72,24 @@ def main():
     # The read-only image must still pass the repository's own scan.
     assert not bounds._scan_module().scan(readonly.read_bytes()), 'read-only stand-in fails the write-path scan'
 
-    # A card backup: sector records, the boot sector first, in a partition of 1,000,000 sectors.
-    boot = bytearray(512)
-    struct.pack_into('<I', boot, 32, 1_000_000)
-    boot[510:512] = b'\x55\xaa'
-    backup = out / 'backup.bin'
-    backup.write_bytes(struct.pack('<Q', 32768) + bytes(boot) + struct.pack('<Q', 32769) + bytes(512))
+    # A card backup: sector records, the MBR and the partition boot sector first. This card's partition starts at
+    # 32,768 and holds 1,000,000 sectors; the check expects exactly those values, derived from the tables.
+    def card_backup(path, start=32768, total=1_000_000, ptype=0x0c, extra_entry=None):
+        mbr = bytearray(512)
+        mbr[446 + 4] = ptype
+        struct.pack_into('<II', mbr, 446 + 8, start, total)
+        if extra_entry:
+            mbr[462 + 4] = extra_entry
+            struct.pack_into('<II', mbr, 462 + 8, start + total, 100)
+        mbr[510:512] = b'\x55\xaa'
+        boot = bytearray(512)
+        struct.pack_into('<I', boot, 32, total)
+        boot[510:512] = b'\x55\xaa'
+        path.write_bytes(struct.pack('<Q', 0) + bytes(mbr) + struct.pack('<Q', start) + bytes(boot) +
+                         struct.pack('<Q', start + 1) + bytes(512))
+        return path
+    backup = card_backup(out / 'backup.bin')
+    assert bounds.partition_bounds(bounds.parse_backup(backup, hashlib.sha256(backup.read_bytes()).hexdigest())) == (32768, 32768 + 1_000_000)
     digest = hashlib.sha256(backup.read_bytes()).hexdigest()
     end = 32768 + 1_000_000
     ranges = [[32768, 1], [62720, 64], [65536, 900000]]          # far beyond the earlier 1 GiB cap
@@ -139,11 +151,41 @@ def main():
     # The backup the record names must match its hash and carry the boot sector.
     missing = out / 'no-boot.bin'
     missing.write_bytes(struct.pack('<Q', 32769) + bytes(512))
+    # Replacement cards: another start and size move both limits; one without sector 0 or with two FAT32 entries is refused.
+    moved = card_backup(out / 'moved.bin', start=8192, total=500_000)
+    mv = hashlib.sha256(moved.read_bytes()).hexdigest()
+    mranges = [[8192, 1], [9000, 100], [507_000, 1]]
+    mb = _write(out / 'mb.bin', bounds.encode_input([tuple(r) for r in mranges], mv))
+    record(rs=mranges, h=mv, bk=moved)
+    submit(named, {'storage_bounds': {'ranges': mranges, 'backup_sha256': mv}}, inputs=(mb,))
+    for label, rs in {'below the moved start': [[8191, 1]], 'past the moved end': [[508_191, 2]],
+                      'the old constant start is not special': [[32768, 1_000_000]]}.items():
+        d2 = {'storage_bounds': {'ranges': rs, 'backup_sha256': mv}}
+        bb = _write(out / 'bb.bin', bounds.encode_input([tuple(r) for r in rs], mv))
+        record(rs=rs, h=mv, bk=moved)
+        no(lambda: submit(named, d2, inputs=(bb,)), '')
+    nombr = out / 'nombr.bin'
+    nombr.write_bytes(struct.pack('<Q', 32768) + backup.read_bytes()[8 + 512 + 8:8 + 512 + 8 + 512])
+    two = card_backup(out / 'two.bin', extra_entry=0x0b)
+    notfat = card_backup(out / 'notfat.bin', ptype=0x83)
+    for label, bk, text in (('no MBR', nombr, 'sector 0'), ('two FAT32 entries', two, 'exactly one'), ('no FAT32 entry', notfat, 'exactly one')):
+        h2 = hashlib.sha256(bk.read_bytes()).hexdigest()
+        d3 = {'storage_bounds': {'ranges': [[40000, 1]], 'backup_sha256': h2}}
+        b3x = _write(out / 'b3x.bin', bounds.encode_input([(40000, 1)], h2))
+        record(rs=[[40000, 1]], h=h2, bk=bk)
+        no(lambda: submit(named, d3, inputs=(b3x,)), text)
     mh = hashlib.sha256(missing.read_bytes()).hexdigest()
     dm = {'storage_bounds': {'ranges': ranges, 'backup_sha256': mh}}
     bm = _write(out / 'bm.bin', bounds.encode_input([tuple(r) for r in ranges], mh))
     record(h=mh, bk=missing)
-    no(lambda: submit(named, dm, inputs=(bm,)), 'boot sector')
+    no(lambda: submit(named, dm, inputs=(bm,)), 'sector 0')
+    mbr_only = out / 'mbr-only.bin'
+    mbr_only.write_bytes(backup.read_bytes()[:520])
+    oh = hashlib.sha256(mbr_only.read_bytes()).hexdigest()
+    do = {'storage_bounds': {'ranges': ranges, 'backup_sha256': oh}}
+    bo = _write(out / 'bo.bin', bounds.encode_input([tuple(r) for r in ranges], oh))
+    record(h=oh, bk=mbr_only)
+    no(lambda: submit(named, do, inputs=(bo,)), 'boot sector')
     record(h=mh, bk=backup)
     no(lambda: submit(named, dm, inputs=(bm,)), 'differs from the approved hash')
     for h in ('', 'ab', digest.upper(), digest[:-1]):
