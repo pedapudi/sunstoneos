@@ -81,7 +81,7 @@ if(SUNSTONE_PARTITIONED_SCHEDULER)
   target_include_directories(scheduler-partitioned-qemu PRIVATE
     checks/scheduler-partitioned-qemu-config platform/qemu-smp include runtime/include
     "${FREERTOS_DIR}/include" "${smp_build}")
-  target_compile_definitions(scheduler-partitioned-qemu PRIVATE SUNSTONE_SMP_CORES=8)
+  target_compile_definitions(scheduler-partitioned-qemu PRIVATE SUNSTONE_SMP_CORES=8 SS_KERNEL_TEST_ADMIN_ENTER=1)
   target_compile_options(scheduler-partitioned-qemu PRIVATE ${SUNSTONE_KERNEL_FLAGS})
   target_link_options(scheduler-partitioned-qemu PRIVATE -nostdlib -static -Wl,--gc-sections
     -Wl,--defsym=SUNSTONE_SMP_STACKS=8 -Wl,--wrap=vTaskSwitchContext -Wl,--wrap=vPortRecursiveLock -Wl,--wrap=xTaskGenericNotify

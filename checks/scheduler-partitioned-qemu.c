@@ -18,12 +18,23 @@ static StaticQueue_t reply_state, timeout_state;
 static uint8_t reply_storage[32 * sizeof(uint32_t)], timeout_storage[sizeof(uint32_t)];
 static QueueHandle_t replies, empty;
 static uint64_t busy[8], switches[8], idle_selected[8], scheduling_locks[8];
+static uint64_t admin_locks[8], switch_admin_locks[8];
 static unsigned in_switch[8], worker_round[8], mover_round[2], mover_mask[2], victim_runs;
 /* These symbols also identify the stopped workload in a QEMU GDB snapshot. */
 static unsigned control_round, control_phase, isolated_local, selected_idle[8];
 static unsigned withholding, blocker_release;
 static uint64_t withholding_completed, withholding_observations, withholding_ticks;
 static uint64_t local_phase_locks, local_wakes, local_completed, local_ticks, peer_idle_samples;
+void ss_kernel_test_admin_enter(unsigned cpu)
+{
+    __atomic_fetch_add(&admin_locks[cpu], 1, __ATOMIC_RELAXED);
+    if (in_switch[cpu]) {
+        __atomic_fetch_add(&switch_admin_locks[cpu], 1, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&scheduling_locks[cpu], 1, __ATOMIC_RELAXED);
+    }
+    if (cpu == 1 && __atomic_load_n(&isolated_local, __ATOMIC_RELAXED))
+        __atomic_fetch_add(&local_phase_locks, 1, __ATOMIC_RELAXED);
+}
 extern BaseType_t __real_xTaskGenericNotify(TaskHandle_t, UBaseType_t, uint32_t, eNotifyAction, uint32_t *);
 BaseType_t __wrap_xTaskGenericNotify(TaskHandle_t task, UBaseType_t index, uint32_t value,
                                     eNotifyAction action, uint32_t *previous)
@@ -259,8 +270,13 @@ static void control(void *unused)
         platform_puts(" idle-selections="); platform_hex(idle_selected[id]);
         platform_puts(" busy-progress="); platform_hex(busy[id]);
         platform_puts(" switch-path-global-locks="); platform_hex(scheduling_locks[id]);
+        platform_puts(" admin-acquisitions="); platform_hex(admin_locks[id]);
+        platform_puts(" switch-admin-acquisitions="); platform_hex(switch_admin_locks[id]);
         platform_puts("\n");
     }
+    uint64_t observed_admin = 0;
+    for (unsigned id = 0; id < 8; ++id) observed_admin += admin_locks[id];
+    configASSERT(observed_admin > 0);
     for (unsigned id = 0; id < 2; ++id) configASSERT(mover_round[id] == ROUNDS);
     configASSERT(local_phase_locks == 0);
     for (unsigned id = 0; id < 8; ++id)

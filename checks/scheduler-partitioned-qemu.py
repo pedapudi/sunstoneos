@@ -61,8 +61,8 @@ def main():
         counters = {}
         if case == 'concurrent':
             owners = []
-            for row in re.finditer(r'owner cpu=(0x[0-9a-f]+) switches=(0x[0-9a-f]+) idle-selections=(0x[0-9a-f]+) busy-progress=(0x[0-9a-f]+) switch-path-global-locks=(0x[0-9a-f]+)', log):
-                owners.append(dict(zip(('cpu', 'switches', 'idle_selections', 'busy_progress', 'switch_path_global_locks'),
+            for row in re.finditer(r'owner cpu=(0x[0-9a-f]+) switches=(0x[0-9a-f]+) idle-selections=(0x[0-9a-f]+) busy-progress=(0x[0-9a-f]+) switch-path-global-locks=(0x[0-9a-f]+) admin-acquisitions=(0x[0-9a-f]+) switch-admin-acquisitions=(0x[0-9a-f]+)', log):
+                owners.append(dict(zip(('cpu', 'switches', 'idle_selections', 'busy_progress', 'switch_path_global_locks', 'admin_acquisitions', 'switch_admin_acquisitions'),
                     (int(value, 16) for value in row.groups()))))
             local = re.search(r'local-wake attempts=(0x[0-9a-f]+) completions=(0x[0-9a-f]+) ticks=(0x[0-9a-f]+) tick-hz=(0x[0-9a-f]+) busy-home-progress=(0x[0-9a-f]+) idle-peer-samples=(0x[0-9a-f]+) all-global-locks=(0x[0-9a-f]+)', log)
             withheld = re.search(r'withheld-ready opportunities=(0x[0-9a-f]+) stranded-observations=(0x[0-9a-f]+) home-completions=(0x[0-9a-f]+) elapsed-ticks=(0x[0-9a-f]+) home-mask=(0x[0-9a-f]+) blocker-priority=(0x[0-9a-f]+) receiver-priority=(0x[0-9a-f]+)', log)
