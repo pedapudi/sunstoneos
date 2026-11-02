@@ -10,7 +10,9 @@ Native mappings, privileged reservation pools, cache maintenance, DMA0 services 
 boards report 12,288 MiB and pass two 4 KiB page comparisons. SID-selected
 restoration on 3-1 passes twice with 879 PHY writes and quick checks of 34.116
 and 34.117 ms. CPU-L/DSU boot clocks restore. EL3 entry restores MBUS to 600 MHz
-on both boards while preserving the checked pattern.
+on both boards while preserving the checked pattern. Sustained DRAM reads over a
+40 MiB region run in one development-mode record on 3-1 (see
+[DRAM bandwidth](../designs/dram-bandwidth.md)).
 
 ## Open work
 

@@ -126,6 +126,59 @@ streaming time near 3.1 ms leaves about 1.2 ms for the memory.
 
 ## Result
 
-The board record, the measured table and the comparison with this prediction
-are in `docs/evidence/memory-dma.jsonl` and the status file
-`docs/status/memory-dma.md`.
+Conditions: port 3-1, development DRAM mode, CPU-L at 1794 MHz and 1000 mV, CPU-B at
+2002 MHz and 1050 mV, the shared-cache clock at 1274 MHz, DDR temperature 40 to
+45 degrees Celsius, no thermal throttle at the start or the end of either run. The records
+are in `docs/evidence/memory-dma.jsonl` and `docs/evidence/mimus-cpu.jsonl`.
+
+Sustained read bandwidth (median of eight passes; the range of the eight passes is
+within 5 percent except for two A76 cores, 10.6 to 12.3 GB/s):
+
+| Core set | Predicted GB/s | Measured GB/s | Share of 16.32 GB/s |
+| --- | --- | --- | --- |
+| One A55 core | 5 (3 to 6.5) | 5.36 | 33 percent |
+| One A76 core | 9 (6 to 12) | 12.69 | 78 percent |
+| Two A76 cores | 12 (9 to 13.5) | 11.37 | 70 percent |
+| Six A55 cores | 12 (9 to 13.5) | 9.03 | 55 percent |
+| All eight cores | 12 (9.5 to 13.5) | 8.44 | 52 percent |
+
+One A76 core streams faster than the prediction, and every larger set streams
+slower than the prediction: the aggregate rate falls as more cores read, to 8.4 GB/s
+for all eight. A single stream reaches 78 percent of the pin rate, so the
+interface can deliver at least 12.7 GB/s; concurrent streams from many cores lose
+efficiency below that, as is usual when independent sequential streams compete for
+banks and rows. A reader that needs the most bandwidth from DRAM should use the two
+A76 cores, or one, and not all eight cores.
+
+Weight-streaming matrix products, one encoder layer (twelve matrices, 24.1 MB of int8
+weights), median of eight passes, in milliseconds:
+
+| Rows R | Engine routine as shipped | Split over eight cores | Split, weights resident in cache |
+| --- | --- | --- | --- |
+| 1 | 3.72 | 3.07 | 1.57 |
+| 2 | 3.93 | 3.09 | 1.59 |
+| 7 | 7.99 | 3.45 | 3.16 |
+| 14 | 15.38 | 5.33 | 6.50 |
+| 64 | 28.17 | 20.73 | 27.97 |
+
+The resident column repeats a 0.5 MiB matrix 64 times, which is 33.5 million
+weights per pass against 24.1 million for the streaming pass; it is therefore 39
+percent more work than the streaming pass, and it is a compute floor for the streaming
+pass at R = 1, 2 and 7 only after scaling by 0.72. At R = 64 the resident figure is
+slower than the streaming one because its eight workers share only 64 units of 16
+channels. The measured rates differ from the prediction
+in two ways. The engine routine as shipped runs below 16 rows on one A76 core and does
+about 26 giga multiply-accumulates per second of padded tile work, three times the 8
+assumed from the engine's worker weights; its single-core times are 3.7 and 3.9 ms at
+one and two rows, not 12. The eight-core figure of 30.4 giga multiply-accumulates
+per second quoted for the speech engine is the average of its whole linear stage,
+including row quantization and dispatch; the split routine reaches 74 to 85 giga
+multiply-accumulates per second of padded tile work.
+
+The split routine at one and two rows takes 3.07 ms. Its tile compute is 1.1 ms
+(the resident time scaled to the weight count) and its twelve dispatches cost 0.65 ms
+(54 microseconds per call, from the difference between 64 separate calls and one
+dispatch with 64 repeats). The remaining 1.3 ms is the memory limit: 24.1 MB in
+about 2.4 ms of effective streaming is 10 GB/s, between the all-eight rate and
+the single-A76 rate. At seven rows the pass is still within 10 percent of that
+limit; from fourteen rows it is compute-bound.

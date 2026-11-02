@@ -23,7 +23,7 @@ Writable constructor and GOT metadata stay in image RAM; the storage linker patc
 Board results are records in `docs/evidence/mimus-cpu.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-mimus-cpu-20261101.md).
 
 <!-- evidence-table:begin -->
-4 records in `docs/evidence/mimus-cpu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+6 records in `docs/evidence/mimus-cpu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -31,4 +31,6 @@ Board results are records in `docs/evidence/mimus-cpu.jsonl`; add one with `tool
 | `1793563703824318733-0c21b2b6` | 2026-11-01 | 3-1 | `522874a27101` | returned | passed | run_total 71.388 s |
 | `1793567533946545503-823190b1` | 2026-11-01 | 3-1 | `80b3056a23b7` | returned | passed | run_total 72.698 s |
 | `1793570213701678324-a3d8ee82` | 2026-11-01 | 3-1 | `f287ae9eb1a5` | returned | passed | run_total 73.812 s, long_clip_time 990.664 ms, real_time_factor 0.033199 x |
+| `1793597755723905157-bfbf69e0` | 2026-11-02 | 3-1 | `630613d5027f` | returned | failed | run_total 21.924 s, stream_engine_r1 3.721 ms, stream_engine_r2 3.928 ms, stream_engine_r7 7.986 ms, stream_engine_r14 15.381 ms, stream_engine_r64 28.167 ms, stream_split_r1 3.069 ms, stream_split_r2 3.088 ms, stream_split_r7 3.453 ms, stream_split_r14 5.329 ms, stream_split_r64 20.73 ms, packed_bytes 2.48026e+07 B, output_mismatches 0 words |
+| `1793597859719548490-5567c545` | 2026-11-02 | 3-1 | `e3f09bb226fb` | returned | passed | run_total 21.701 s, resident_split_r1 1.566 ms, resident_split_r2 1.591 ms, resident_split_r7 3.161 ms, resident_split_r14 6.5 ms, resident_split_r64 27.97 ms, resident_engine_r1 4.906 ms, stream_split_r1 3.063 ms, stream_split_r7 3.453 ms, stream_split_r14 5.331 ms, output_mismatches 0 words |
 <!-- evidence-table:end -->
