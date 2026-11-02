@@ -354,6 +354,24 @@ OS core code differs in every image (the admission, the loader loop and
 `_sbrk` changed), so those images are not byte-identical; their generated
 tables are.
 
+### Predicted board run of the heap
+
+Hypothesis: with the OS image built with the address-test decode check
+(`sunstone-a733-os-heap-test`, four modes), upper memory at `0x8000_0000` is
+mapped, the ledger grants the application a 1 GiB heap there, and its EL0 tasks
+reach exactly that region through its own tables.
+
+Condition: a CPU-return run on one board in development DRAM mode (no
+preservation claim: the runner does not back up the heap), the image's default
+CPU grant, no card.
+
+- **Mode 0 (use the heap).** Returns normally. The result equals the file written by `apps/heap-test/host.py expected 0`: heap base `0x8000_0000`, size `0x4000_0000`, a 512 MiB block inside the region that read as zero in every word, a pattern that read back equal over all 64 Mi words, a failed request for the whole region, and a block that was freed and taken again. The decode check passing is a precondition; if it fails the image refuses the application before any task runs.
+- **Mode 1 (a task in no application space reads the first heap byte).** The session ends with an application failure record whose fault is a level 1 permission fault on a read at `0x8000_0000`.
+- **Mode 2 (the application reads the first byte after the region).** The session ends with a permission fault at `0xc000_0000`, a kernel-only 1 GiB block.
+- **Mode 3 (an attached worker writes, the main task reads).** Returns normally with the result of `apps/heap-test/host.py expected 3`.
+
+What the run does not show: the rate at which `_sbrk` zeroes memory (the result holds no time) and the cost of the task-switch hook with the heap's space. Both belong to the OS image at the approved top operating points and are measured by the large-region test and the dram-bandwidth application.
+
 ## Risks and open questions
 
 - **Decode check coverage.** The check proves linear decode, not that the memory firewall passes Non-secure accesses or that no other master writes. Upper memory above `0x4800_0000` has the board-recorded result for the address test only; a bus error there resets the board through the watchdog. Step 1's board run is also the first OS-image run of it.
