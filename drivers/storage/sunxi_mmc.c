@@ -460,7 +460,7 @@ static void setup(struct sunxi_mmc *h)
             !rd(h, 0x104, &v) || !wr(h, 0x104, v & ~1u) ||
             !rd(h, 0x10c, &v) || !wr(h, 0x10c, v & ~START) ||
             !rd(h, 0x54, &v) || !wr(h, 0x54, (v & ~15u) | 3u) ||
-            !rd(h, 0x140, &v) || !wr(h, 0x140, (v & ~(3u << 16)) | (3u << 16)) ||
+            !rd(h, 0x140, &v) || !wr(h, 0x140, (v & ~(3u << 16)) | (1u << 16)) ||
             !wr(h, 0x144, 0x80) || !wr(h, 0xc, 0) || !wr(h, 8, UINT32_MAX) ||
             !fence(h) || !wr(h, 0x18, UPDATE)) return;
         ++h->setup; return;
@@ -814,10 +814,10 @@ static void tune_next(struct sunxi_mmc *h)
 static int uhs_registers(struct sunxi_mmc *h,unsigned write)
 {
     uint32_t v,delay=0x80u|h->card.sample_delay;
-    if(write)return rd(h,0x140,&v)&&wr(h,0x140,v|(3u<<16))&&rd(h,0x5c,&v)&&wr(h,0x5c,v&~(START|0x331u))&&
+    if(write)return rd(h,0x140,&v)&&wr(h,0x140,(v&~(3u<<16))|(1u<<16))&&rd(h,0x5c,&v)&&wr(h,0x5c,v&~(START|0x331u))&&
         wr(h,0x144,delay)&&wr(h,8,h->tuning?TUNE_TIMEOUT:UINT32_MAX)&&wr(h,0xc,1)&&wr(h,4,1u<<16);
     if(!rd(h,0x140,&v))return 0;
-    if(((v>>16)&3)!=3)goto bad;
+    if(((v>>16)&3)!=1)goto bad;
     if(!rd(h,0x5c,&v))return 0;
     if(v&(START|0x331u))goto bad;
     if(!rd(h,0x144,&v))return 0;

@@ -300,7 +300,7 @@ static void identified(struct model *m, struct sunxi_mmc *h, unsigned kind, unsi
     assert(m->cmd16 == !sector && h->card.sector_addressed == sector);
     assert(m->reg[0x5c/4] == 0x01710000 && m->reg[0x10c/4] == 0x1234);
     assert(m->reg[0x54/4] == 0x12345673 && m->reg[0x104/4] == 6);
-    assert(m->reg[0x140/4] == 0xa5a70000 && m->reg[0x144/4] == 0x80);
+    assert(m->reg[0x140/4] == 0xa5a50000 && m->reg[0x144/4] == 0x80);   /* the vendor 400 kHz row: command drive 180 (bit 16), data drive 90 (bit 17 clear) */
     assert(m->reg[0x80/4] == 0 && m->reg[0x8c/4] == 0 && m->reg[0xc/4] == 0);
     assert(m->reset_pending_reads&&m->update_pending_reads);
 }

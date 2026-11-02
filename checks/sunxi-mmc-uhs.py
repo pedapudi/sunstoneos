@@ -155,6 +155,22 @@ raw = (ROOT / 'checks/sunxi-mmc.c').read_text()
 (a.output / 'mmc-card-model.h').write_text(raw[raw.index('struct model {'):raw.index('static int barrier(void *ctx)')])
 platform = (ROOT / 'checks/a733-mmc-platform.c').read_text()
 (a.output / 'mmc-platform-fixture.h').write_text(platform[:platform.index('int main(')])
+# Drive and sample phases of the board kernel per clock range (sunxi-mmc-v5p3x.c mmc_clk_dly defaults), which the board's sdc0 node does not override.
+import re
+vendor = (a.sources / 'sd-uhs/board-kernel-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/mmc/sunxi-mmc-v5p3x.c').read_text()
+assert hashlib.sha256(vendor.encode()).hexdigest() == '348a6893ae256b2df712813e998ab2b6a13341dd8c57f6fcfb31656fe735d94c'
+assert hashlib.sha256((a.sources / 'board-kernel/sun60i-a733-orangepi-zero3w.dts').read_bytes()).hexdigest() == '31145367f604fd756f2c6a67447e5134e4be0ad5fae87672cfaa9b7c6d055a39'
+rows = {}
+for name in ('400k', '26M', '52M', '104M', '208M'):
+    fields = {f: int(re.search(r'mmc_clk_dly\[mmc_clk_%s\]\.%s\s*=\s*(\d+)' % (name, f), vendor).group(1)) for f in ('cmd_drv_ph', 'dat_drv_ph', 'sam_ph_dat', 'sam_ph_cmd')}
+    rows[name] = fields
+assert 'sunxi-dly' not in re.search(r'&sdc0 \{.*?\n\};?\n', (a.sources / 'board-kernel/sun60i-a733-orangepi-zero3w.dts').read_text(), re.S).group(0)
+assert rows == {'400k': dict(cmd_drv_ph=1, dat_drv_ph=0, sam_ph_dat=0, sam_ph_cmd=0), '26M': dict(cmd_drv_ph=1, dat_drv_ph=0, sam_ph_dat=0, sam_ph_cmd=0),
+                '52M': dict(cmd_drv_ph=1, dat_drv_ph=1, sam_ph_dat=1, sam_ph_cmd=1), '104M': dict(cmd_drv_ph=1, dat_drv_ph=0, sam_ph_dat=0, sam_ph_cmd=0),
+                '208M': dict(cmd_drv_ph=1, dat_drv_ph=0, sam_ph_dat=0, sam_ph_cmd=0)}, rows
+(a.output / 'vendor-phases.h').write_text('/* generated from the pinned board kernel by checks/sunxi-mmc-uhs.py */\n'
+    'static const struct { unsigned cmd, dat, sam_dat, sam_cmd; } vendor_phase[] = {\n' + ''.join(
+        '    {%d, %d, %d, %d}, /* %s */\n' % (r['cmd_drv_ph'], r['dat_drv_ph'], r['sam_ph_dat'], r['sam_ph_cmd'], n) for n, r in rows.items()) + '};\n')
 reference = a.read_reference.read_bytes()
 assert hashlib.sha256(reference).hexdigest() == '846797588f8bd2470d885027b13078762f4a966826fc71be822c0346e6bf44af'
 (a.output / 'mmc-reference.h').write_bytes(reference); inputs[str(a.read_reference)] = hashlib.sha256(reference).hexdigest()

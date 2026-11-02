@@ -43,6 +43,19 @@ Steps:
    at 1.8 V), CMD2 onward (the core's re-entry mode). No CMD11. Silence here, with the bank returned to 3.3 V, is the one terminal outcome: card absent or hung, needing power removal.
 5. **Speed.** At 1.8 V the CMD6 group 1 support field is meaningful: select SDR104 when `0x8` is set and the tuning sweep finds a window of at least 12 delays, otherwise SDR25 at 50 MHz.
 
+**What the cards answered, from the recorded entries (`docs/evidence/storage.jsonl`).**
+
+| Card | Host side | Recorded answer | Entry |
+| --- | --- | --- | --- |
+| 3-1, Phison SD64G, never switched | 3.3 V bank, CMD0, CMD8, ACMD41 with S18R | R7 answered; **S18A set** (OCR `0xc1ff8000`); CMD6 group 1 support `0x8003` (functions 0 and 1; functions 2 to 4 read as 0 at 3.3 V) | `1793639891731890732-2700d966` |
+| 3-3, Phison SD32G, at 3.3 V (before its first switch) | 3.3 V bank | identified and switched to 1.8 V; S18A was set (the switch followed) but the entry did not keep the OCR | `1793648082135831049-05f70d50` (lifetime 1) |
+| 3-3, card at 1.8 V | **1.8 V bank**, CMD0, CMD8, ACMD41 with S18R, no CMD11 | R7 and ACMD41 answered; **S18A clear**; CMD6 group 1 support `0x801f` (SDR12 to SDR104 and DDR50) | `1793649204965774597-d1ed3e86`, `1793649661736969334-9742cb48`, `1793650532228649180-1fb49397` and the experiment `1793652351260245353-286b63df` |
+| 3-3, card at 1.8 V | **3.3 V bank** | **not recorded**: no run has put a 3.3 V host in front of a card at 1.8 V | none |
+
+So the one case the rule needs, a card at 1.8 V seen from a 3.3 V host, has never been measured, and the recorded answers cannot choose between "silent" and "S18A clear". What the records do support: a card that answers at 3.3 V with S18A set is at 3.3 V
+(3-1, and 3-3 before its first switch); S18A clear has only been seen from a card at 1.8 V with the bank at 1.8 V. The rule below is therefore the simplest one that is correct under either outcome of the missing measurement, and one read-only run of the
+existing mode 0 on 3-3 (card at 1.8 V, bank at 3.3 V, CMD0, CMD8, ACMD41 with S18R, no CMD11) records the missing row; its result simplifies the rule if the card is silent or never answers S18A clear.
+
 **The measurement that settles step 2.** Whether a 3.3 V host reads a 1.8 V card is unmeasured. One read-only run on 3-3 with the card at 1.8 V and the bank at 3.3 V (the existing mode 0: CMD0,
 CMD8, ACMD41 with S18R, no CMD11) answers it: an answer, with its S18A value, or a stop at identification. If the card is silent at 3.3 V (K1 false), step 2 needs no discriminator: silence means 1.8 V
 or absent, and the OS goes straight to step 4. If it answers with S18A clear, the discriminator above applies. The run is safe (it only reads and never sends CMD11); it is not yet submitted.
@@ -82,11 +95,24 @@ Nothing about writes at 1.8 V has been run. What is known and what is needed:
 - **Known (code).** The core programs the read threshold for SDR104 reads (`THLD` block size and bit 0) and the write threshold for CMD25 (`THLD` block size and bit 2) per command, so the two do not
   conflict. The native adapter admits a `THLD` write in the UHS-I profile, and CMD25 only for a verified bounds object in a writer build (`A733_MMC_BOUNDED_WRITER`); the two have not been combined in one
   host model. The write path's DAT0 busy timer and programming-status check do not depend on the bus speed.
-- **Not known.** The data and CRC-status sampling at SDR104 for writes: the tuning picks the sample delay for card-to-host data, and the host-to-card phase for writes (`DRV_DL`) and the CRC token sample point
-  at 150 MHz are not modelled by any check. The vendor kernel supports writes at SDR104, so the registers exist; their values are not derived here.
-- **Policy until qualified.** Writes run at SDR25 (50 MHz) on a card at 1.8 V, or at 3.3 V high speed on a card that was never switched. An SDR104 session that wants to write first changes the card's
-  mode to SDR25 with CMD6 (function 1) and the module clock to 50 MHz, with no change of signalling level; the core has no runtime mode change today, so this needs a new step in its state machine
-  (clock stop, CMD6 check and set, module clock change, restart) and the strict CMD25 model run at 1.8 V and 50 MHz.
+- **Derived: the drive and sample phases of every mode.** The board kernel sets them per clock range in `sunxi_mmc_set_clk_dly` (`bsp/drivers/mmc/sunxi-mmc-v5p3x.c:161-290`) from the defaults of
+  `sunxi_mmc_clk_dly_v5p3x` (`:820-882`), which a device-tree node can override with `sunxi-dly-<range>`. The board's `&sdc0` node (`sun60i-a733-orangepi-zero3w.dts`, `sdc0`) sets none, so the defaults apply.
+  The command drive phase is bit 16 and the data drive phase bit 17 of `0x140` (`:82-83`), set for 180 degrees and clear for 90; the sample phases are bits 5:4 (command) and 9:8 (data) of `0x5c` (`:116-117`).
+  The sample-delay and delay-chain registers (`SAMP_DL`, `DS_DL`) are not written by the vendor's per-range code (the lines are commented out, `:260-270`); the tuning writes `SAMP_DL` through `sunxi_mmc_set_samp_dl_raw`.
+
+  | Range (clock) | Our modes | Command drive | Data drive | Data sample | Command sample |
+  | --- | --- | --- | --- | --- | --- |
+  | 400 kHz | identification | 180 | 90 | 0 | 0 |
+  | up to 26 MHz | default speed, SDR12 | 180 | 90 | 0 | 0 |
+  | up to 52 MHz | high speed, SDR25 | 180 | 180 | 1 | 1 |
+  | up to 104 MHz | SDR50 | 180 | 90 | 0 | 0 (tuned delay) |
+  | up to 208 MHz | SDR104 | 180 | 90 | 0 | 0 (tuned delay) |
+
+  The same registers serve reads and writes: there is no separate write-side phase. For a write the data drive phase is what matters (the host-to-card data), and the CRC status the card returns is sampled with the same sample
+  setting as read data, so the tuned delay applies to it. **A difference found by this derivation:** the SDR104 setting in the core up to `e6dfa2a6` drove data at 180 degrees (`3 << 16`), and so did the 400 kHz setup;
+  the vendor drives data at 90 for 400 kHz, 26 MHz, 104 MHz and 208 MHz, and at 180 only for the 52 MHz range. Reads do not depend on the data drive phase, which is why the SDR104 reads worked, but a write does.
+  The core now writes the vendor's values (`uhs_registers`, the cold setup) and `checks/sunxi-mmc-uhs.py` pins the table above by parsing the pinned vendor source and node, and `checks/sunxi-mmc-uhs.c` compares every mode's register
+  values with it, so a change to either fails the check. Nothing is unresolved in the sources for the write at 150 MHz; the vendor's tuning of the write path (`execute_tuning` covers read data only) is the same.
 - **Qualification path.** (1) Extend `checks/sunxi-mmc-write-dma.c` to a 1.8 V card at SDR25 and then SDR104 with the sample-delay and drive-phase registers modeled from the vendor driver; (2) read the
   vendor `sunxi-mmc-v5p3x.c` for the write-side timing registers at SDR104 and record the register sequence the way `docs/designs/mmc-multiblock-write.md` does for 3.3 V; (3) a board write session at
   SDR25 on 1.8 V under the per-session backup procedure; (4) only then SDR104 writes, in the same way. Every board write session keeps the existing blob, backup and approval-record rules.
