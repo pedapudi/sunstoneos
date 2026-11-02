@@ -118,19 +118,23 @@ static void complete(unsigned client,unsigned sequence,unsigned result)
 static void peer_entry(const struct ss_grant *g){(void)g;}
 static void admission(void)
 {
-    struct ss_manifest owner={.magic=SS_MANIFEST_MAGIC,.version=1,.bytes=sizeof(owner),
-        .name="owner",.devices_required=SS_DEVICE_GPU,.priority=2,.stack_bytes=4096,.region_count=1,
-        .regions={{.address=0x44000000,.bytes=4096,.kind=SS_REGION_WORK,.access=SS_ACCESS_READ|SS_ACCESS_GPU_READ}}};
-    struct ss_manifest peer=owner;memcpy(peer.name,"peer\0",5);
+    SS_MANIFEST_STORAGE(1) owner_storage={.manifest={.magic=SS_MANIFEST_MAGIC,.version=SS_MANIFEST_VERSION,
+        .bytes=SS_MANIFEST_HEAD_BYTES+sizeof(struct ss_region),
+        .name="owner",.devices_required=SS_DEVICE_GPU,.priority=2,.stack_bytes=4096,.region_count=1}};
+    struct ss_manifest *owner_ptr=&owner_storage.manifest,*owner=owner_ptr;(void)owner;
+    owner_ptr->regions[0]=(struct ss_region){.address=0x44000000,.bytes=4096,.kind=SS_REGION_WORK,.access=SS_ACCESS_READ|SS_ACCESS_GPU_READ};
+    SS_MANIFEST_STORAGE(1) peer_storage=owner_storage;
+    struct ss_manifest *peer=&peer_storage.manifest;memcpy(peer->name,"peer\0",5);
     struct gpu_queue_program program={0};
-    struct ss_gpu_share share={&owner,&peer,peer_entry,&program,1,0};
-    struct ss_grant grant={.devices=SS_DEVICE_GPU,.main_core=2,.worker_cores=8,.region_count=1},out;
-    assert(os_gpu_share_admit(&share,&owner,&grant,&out));assert(out.main_core==3&&out.worker_cores==0&&out.devices==SS_DEVICE_GPU);
-    for(unsigned i=0;i<12;++i){struct ss_gpu_share a=share;struct ss_manifest m=peer;struct ss_grant g=grant;a.manifest=&m;
+    struct ss_gpu_share share={owner,peer,peer_entry,&program,1,0};
+    static struct ss_span spans[1]={{(void *)0x44000000,4096}};
+    struct ss_grant grant={.devices=SS_DEVICE_GPU,.main_core=2,.worker_cores=8,.region_count=1,.regions=spans},out;
+    assert(os_gpu_share_admit(&share,owner,&grant,&out));assert(out.main_core==3&&out.worker_cores==0&&out.devices==SS_DEVICE_GPU);
+    for(unsigned i=0;i<12;++i){struct ss_gpu_share a=share;SS_MANIFEST_STORAGE(1) m_storage=peer_storage;struct ss_manifest *m_ptr=&m_storage.manifest;struct ss_grant g=grant;a.manifest=m_ptr;
         switch(i){case 0:g.worker_cores=0;break;case 1:g.worker_cores=1u<<31;break;case 2:g.worker_cores=1u<<2;break;
-        case 3:m.devices_optional=SS_DEVICE_USB_STORAGE;break;case 4:m.regions[0].access|=SS_ACCESS_WRITE;break;
-        case 5:a.shared_regions=0;break;case 6:m.stack_bytes=16392;break;case 7:m.workers=1;break;case 8:m.stack_bytes=8;break;case 9:m.stack_bytes=24;break;case 10:m.name[0]='A';break;case 11:m.name[6]='a';break;}
-        assert(!os_gpu_share_admit(&a,&owner,&g,&out));
+        case 3:m_ptr->devices_optional=SS_DEVICE_USB_STORAGE;break;case 4:m_ptr->regions[0].access|=SS_ACCESS_WRITE;break;
+        case 5:a.shared_regions=0;break;case 6:m_ptr->stack_bytes=16392;break;case 7:m_ptr->workers=1;break;case 8:m_ptr->stack_bytes=8;break;case 9:m_ptr->stack_bytes=24;break;case 10:m_ptr->name[0]='A';break;case 11:m_ptr->name[6]='a';break;}
+        assert(!os_gpu_share_admit(&a,owner,&g,&out));
     }
 }
 #endif

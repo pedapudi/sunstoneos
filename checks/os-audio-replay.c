@@ -6,8 +6,10 @@
 #include <stdlib.h>
 #endif
 volatile unsigned audio_replay_result;
-static struct ss_manifest manifest;
+static SS_MANIFEST_STORAGE(1) manifest_storage;
+#define manifest (manifest_storage.manifest)
 const struct ss_application ss_application={.manifest=&manifest};
+static struct ss_span spans[1];
 static struct ss_grant grant;
 static uint64_t counter;
 static int active=1,granted=1;
@@ -36,13 +38,13 @@ int os_audio_stream_release(void){check(0,95);return -1;}
 int os_audio_stream_stop(void){check(0,96);return -1;}
 static void reset(unsigned frames,unsigned channels,unsigned bits,unsigned header)
 {
-    memset(&replay,0,sizeof(replay));memset(&grant,0,sizeof(grant));memset(&manifest,0,sizeof(manifest));
+    memset(&replay,0,sizeof(replay));memset(&grant,0,sizeof(grant));memset(&manifest_storage,0,sizeof(manifest_storage));grant.regions=spans;
     for(size_t i=0;i<sizeof(input);++i)input[i]=(uint8_t)(i*17+7);
     memset(ss_capture_buffer,0xa5,sizeof(ss_capture_buffer));
     manifest.audio=(struct ss_audio_format){16000,channels,bits,1,1024};
     manifest.region_count=grant.region_count=1;
     manifest.regions[0]=(struct ss_region){.kind=SS_REGION_INPUT,.access=SS_ACCESS_READ,.bytes=sizeof(input)};
-    grant.regions[0]=(struct ss_span){input,header+(size_t)frames*channels*(bits/8)};
+    spans[0]=(struct ss_span){input,header+(size_t)frames*channels*(bits/8)};
     counter=0;active=granted=1;
 }
 static void payload(uint32_t sequence,unsigned first,unsigned frames,unsigned header)
@@ -80,10 +82,10 @@ void audio_replay_run(unsigned selected)
         check(!ss_capture_replay_open(0,0,1025,0)&&!ss_capture_replay_open(0,0,1024,0),52);
         check(!ss_capture_replay_open(0,UINT64_MAX,128,0)&&!ss_capture_replay_open(0,1,128,0),53);
         grant.devices=SS_DEVICE_AUDIO_I2S;check(!ss_capture_replay_open(0,44,128,0),54);grant.devices=0;
-        grant.regions[0].base=ss_capture_buffer;check(!ss_capture_replay_open(0,44,128,0),55);
-        grant.regions[0].base=(void *)(UINTPTR_MAX-3);check(!ss_capture_replay_open(0,44,128,0),56);
-        grant.regions[0].base=NULL;check(!ss_capture_replay_open(0,44,128,0),57);
-        grant.regions[0].base=input;manifest.regions[0].kind=SS_REGION_WORK;check(!ss_capture_replay_open(0,44,128,0),58);
+        spans[0].base=ss_capture_buffer;check(!ss_capture_replay_open(0,44,128,0),55);
+        spans[0].base=(void *)(UINTPTR_MAX-3);check(!ss_capture_replay_open(0,44,128,0),56);
+        spans[0].base=NULL;check(!ss_capture_replay_open(0,44,128,0),57);
+        spans[0].base=input;manifest.regions[0].kind=SS_REGION_WORK;check(!ss_capture_replay_open(0,44,128,0),58);
         manifest.regions[0].kind=SS_REGION_INPUT;manifest.regions[0].access=0;check(!ss_capture_replay_open(0,44,128,0),59);
         manifest.regions[0].access=SS_ACCESS_READ;granted=0;check(!ss_capture_replay_open(0,44,128,0),60);granted=1;
         active=0;check(!ss_capture_replay_open(0,44,128,0),61);active=1;

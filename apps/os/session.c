@@ -66,8 +66,9 @@ int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,un
     extern const uint8_t __start_sunstone_manifest[],__stop_sunstone_manifest[];
     size_t manifest_bytes=(uintptr_t)__stop_sunstone_manifest-(uintptr_t)__start_sunstone_manifest;
     if(ss_application.manifest){
-        if(manifest_bytes!=sizeof(*m)||m!=(const void *)__start_sunstone_manifest||m->magic!=SS_MANIFEST_MAGIC||
-           m->version!=SS_MANIFEST_VERSION||m->bytes!=sizeof(*m)||m->region_count>SS_REGIONS)REFUSE(A733_DECODE_MANIFEST);
+        if(manifest_bytes<SS_MANIFEST_HEAD_BYTES||m!=(const void *)__start_sunstone_manifest||m->magic!=SS_MANIFEST_MAGIC||
+           m->version!=SS_MANIFEST_VERSION||manifest_bytes!=m->bytes||
+           m->bytes!=SS_MANIFEST_HEAD_BYTES+(size_t)m->region_count*sizeof(m->regions[0]))REFUSE(A733_DECODE_MANIFEST);
     }else if(manifest_bytes)REFUSE(A733_DECODE_MANIFEST);
     uint8_t hash[32];storage_digest_bytes(__start_sunstone_manifest,manifest_bytes,hash);
     if(memcmp(hash,h->manifests_sha256,32)||(h->devices&m->devices_required)!=m->devices_required||

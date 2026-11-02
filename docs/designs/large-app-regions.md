@@ -185,7 +185,8 @@ than 4 GiB (exFAT) loads in 128 KiB steps. Its argument checks mirror
 
 An application declares large regions in an optional section,
 `sunstone_large_regions`, aligned to 8 bytes, beside the manifest. The manifest
-layout of 552 bytes does not change.
+head does not change; `sunstone_region_initializers` set the
+precedent for an optional section.
 
 | Field | Bytes | Meaning |
 | --- | --- | --- |

@@ -47,7 +47,7 @@ unsupported.
 
 Each application has a `manifest.json`. At configure time,
 `tools/sunstone-manifest.py` validates it, assigns addresses to regions that
-do not pin one, and generates a C file that places a 552-byte
+do not pin one, and generates two files: a C file that places a
 `struct ss_manifest` in the section `sunstone_manifest`, and `<name>-app.h`
 with the prototypes of the application's functions and its region indices.
 CMake reads the JSON form before anything is compiled; the section is the
@@ -59,7 +59,7 @@ authority for a linked image.
 | `devices_required`, `devices_optional` | Device bitmaps: USB storage, USB keyboard, I2S capture, headset capture, GPU, USB mouse, USB serial, USB camera. The session grants every required device and any subset of the optional ones, with at most one capture device. USB0, the host channel and thermal supervision are always present. The radio station and the NPU client are OS services that the image selects. |
 | `cluster`, `workers` | Preferred cluster of the main task and the number of worker tasks. The main task gets the first core of the cluster's pair: core 6 for the A76 pair, or core 2 for the A55 pair when the A76 cores are not admitted. The first worker gets the second core of that pair, and further workers the remaining cores in ascending order. |
 | `priority`, `stack_bytes`, `heap_bytes` | FreeRTOS priority and stack of the main task, which runs at EL0, and the bytes the application adds to the image's C and C++ heap. A heap above 4 MiB is a region of upper memory, zero filled as the allocator takes it ([application-memory-layout.md](application-memory-layout.md)). |
-| `regions[8]` | Physical ranges with kind, access and digest. INPUT regions are uploaded by the host and must not be written by the trusted application; `bytes` is the maximum content length, or the exact length when the manifest pins a SHA-256. WORK regions are private working memory; OUTPUT regions are written by the application and read by the host after the run. Access bits are CPU read, CPU write, GPU read, GPU write and scratch (work or output that the board runner does not back up or restore). A WORK region with GPU write and without CPU write is a GPU output region that the CPU only reads. Unpinned regions are placed on 2 MiB boundaries in the application window `0x44000000`-`0x47000000`. An optional `sunstone_region_initializers` section names a zero prefix that EL3 clears and publishes in a GPU-written WORK region. |
+| `regions[region_count]` | Physical ranges, as many as the application declares, up to 255 (`region_count` is one byte of the head), with kind, access and digest. INPUT regions are uploaded by the host and must not be written by the trusted application; `bytes` is the maximum content length, or the exact length when the manifest pins a SHA-256. WORK regions are private working memory; OUTPUT regions are written by the application and read by the host after the run. Access bits are CPU read, CPU write, GPU read, GPU write and scratch (work or output that the board runner does not back up or restore). A WORK region with GPU write and without CPU write is a GPU output region that the CPU only reads. Unpinned regions are placed on 2 MiB boundaries in the application window `0x44000000`-`0x47000000`. An optional `sunstone_region_initializers` section names a zero prefix that EL3 clears and publishes in a GPU-written WORK region. |
 | `audio` | Rate, channels, sample bits, and the minimum and maximum frames of one capture, when a capture device is listed. |
 | `run_deadline_us` | Longest time from the start of `<name>_main` to `ss_finish`. Zero means the session deadline less the return reserve bounds the run. |
 | `return_reserve_us` | Time between the latest permitted `ss_finish` and the session deadline, which the return path uses. |
@@ -70,6 +70,17 @@ authority for a linked image.
 The OS image derives its session lifetime from `run_deadline_us` and
 `return_reserve_us` ([os-image.md](../os-image.md#the-session-lifetime-follows-the-manifest)).
 No manifest can exceed it.
+
+**Version.** `SS_MANIFEST_VERSION` is 2. Version 1 held a fixed table of eight
+regions in a 552-byte record. Version 2 keeps the 104-byte head
+(`SS_MANIFEST_HEAD_BYTES`) and follows it with `region_count` 56-byte region
+entries, so `bytes` is 104 plus 56 times `region_count`. Section readers walk
+the manifests by `bytes`. In `struct ss_grant`, `regions` is a pointer to
+`region_count` spans, which the generated image tables size from the manifest
+(`ss_grant_spans`); an application indexes it as before. The two ABI changes
+make an application built for version 1 fail admission rather than misread
+the table.
+
 
 The generator refuses a manifest that breaks these rules. Examples are an INPUT with write access, overlapping regions or a region outside the window; a
 host range that meets an OS operation. It also refuses a required capture device listed

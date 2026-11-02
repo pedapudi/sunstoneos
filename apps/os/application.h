@@ -15,6 +15,8 @@ struct ss_application {
 extern const struct ss_application ss_application;
 extern uint8_t ss_result_record[];
 extern const size_t ss_result_capacity;
+/* Generated: one span per manifest region, the table behind ss_grant()->regions. */
+extern struct ss_span ss_grant_spans[];
 struct a733_pin_handoff;
 struct os_application {
     const char *name;

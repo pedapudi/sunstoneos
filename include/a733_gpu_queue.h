@@ -25,7 +25,7 @@ struct a733_gpu_queue {
     uint64_t payload_pages[A733_GPU_QUEUE_PAYLOAD_PAGES];
     uint64_t firmware_pages[PVR_COMPUTE_QUEUE_OBJECTS];
     uint64_t table_pages[A733_GPU_QUEUE_TABLE_PAGES];
-    struct ss_region regions[SS_REGIONS];
+    const struct ss_region *regions; /* the application's manifest table; it outlives the queue */
     uint32_t region_count, owner, stage;
 };
 struct pvr_compute_queue *a733_gpu_queue_prepare(struct a733_gpu_queue *, struct a733_gpu_reserved *,

@@ -18,17 +18,23 @@
 #include "sunstone_storage.h"
 #ifdef __cplusplus
 #define SS_STATIC_ASSERT static_assert
+#define SS_ALIGNAS alignas
 #define SS_NORETURN [[noreturn]]
 extern "C" {
 #else
 #define SS_STATIC_ASSERT _Static_assert
+#define SS_ALIGNAS _Alignas
 #define SS_NORETURN _Noreturn
 #endif
 
 #define SS_MANIFEST_MAGIC UINT64_C(0x5453464e4d505041) /* "APPMNFST" */
-#define SS_MANIFEST_VERSION 1u
+#define SS_MANIFEST_VERSION 2u
 #define SS_NAME_BYTES 16u
-#define SS_REGIONS 8u
+/* Bytes of an application manifest before its region table. The table holds
+ * region_count entries, as many as the application declares; the section
+ * bytes of one manifest are SS_MANIFEST_HEAD_BYTES plus region_count times
+ * sizeof(struct ss_region). */
+#define SS_MANIFEST_HEAD_BYTES 104u
 
 /* Devices an application uses. USB0, the host channel, and the thermal
  * service are always present and have no bit. The NPU client is an OS service
@@ -100,7 +106,7 @@ struct ss_audio_format {
 enum { SS_CLOCK_GRANTS = 1, SS_CLOCK_PERF = 2 };
 struct ss_manifest {
     uint64_t magic;
-    uint32_t version, bytes;          /* bytes == sizeof(struct ss_manifest) */
+    uint32_t version, bytes;          /* bytes == SS_MANIFEST_HEAD_BYTES + region_count * sizeof(struct ss_region) */
     char name[SS_NAME_BYTES];         /* NUL-padded [a-z0-9-] */
     uint32_t devices_required;        /* SS_DEVICE_* the session must grant */
     uint32_t devices_optional;        /* SS_DEVICE_* the session may also grant */
@@ -120,8 +126,13 @@ struct ss_manifest {
     uint8_t region_count;
     uint8_t clock_use;                /* SS_CLOCK_*: what the application may ask of the CPU clock service */
     struct ss_audio_format audio;
-    struct ss_region regions[SS_REGIONS];
+    struct ss_region regions[];       /* region_count entries, in manifest order */
 };
+/* Storage for a manifest of n regions, for generated sources, hand-written
+ * manifests and tests: the union supplies the bytes that the flexible
+ * array needs. Access it as .manifest. */
+#define SS_MANIFEST_STORAGE(n) union { struct ss_manifest manifest; \
+    SS_ALIGNAS(8) unsigned char bytes[SS_MANIFEST_HEAD_BYTES + (n) * 56u]; }
 
 SS_STATIC_ASSERT(sizeof(struct ss_region) == 56 && offsetof(struct ss_region, kind) == 16 &&
     offsetof(struct ss_region, sha256) == 24, "ss_region layout");
@@ -133,7 +144,7 @@ SS_STATIC_ASSERT(offsetof(struct ss_manifest, name) == 16 && offsetof(struct ss_
     offsetof(struct ss_manifest, return_reserve_us) == 64 && offsetof(struct ss_manifest, progress_window_us) == 72 &&
     offsetof(struct ss_manifest, output_limit) == 80 && offsetof(struct ss_manifest, host_op_first) == 84 &&
     offsetof(struct ss_manifest, region_count) == 86 && offsetof(struct ss_manifest, audio) == 88 &&
-    offsetof(struct ss_manifest, regions) == 104 && sizeof(struct ss_manifest) == 552, "ss_manifest layout");
+    offsetof(struct ss_manifest, regions) == SS_MANIFEST_HEAD_BYTES && sizeof(struct ss_manifest) == SS_MANIFEST_HEAD_BYTES, "ss_manifest layout");
 
 /* What the admitted session granted the application. Immutable once the
  * main task starts. */
@@ -146,7 +157,7 @@ struct ss_grant {
     uint32_t main_core;
     uint32_t worker_cores;          /* one bit per granted worker core */
     uint32_t region_count;
-    struct ss_span regions[SS_REGIONS]; /* manifest order */
+    const struct ss_span *regions;  /* region_count spans in manifest order; the image sizes the table from the manifest */
     uint32_t capture_frames;        /* I2S: exact frames; headset: profile-derived maximum; 0 without capture */
     uint32_t reserved;
     uint64_t finish_by_us;          /* counter microseconds; 0 when resident */

@@ -32,12 +32,12 @@ __attribute__((noinline)) int os_application_initialize_regions(uint64_t deadlin
     const uintptr_t end=(uintptr_t)__stop_sunstone_region_initializers;
     if(end<begin || (begin&7) || (end-begin)%sizeof(struct ss_region_initializer))return 0;
     const size_t count=(end-begin)/sizeof(struct ss_region_initializer);
-    if(count>SS_REGIONS || (count&&(!m || m->region_count>SS_REGIONS)))return 0;
+    if(count&&(!m || count>m->region_count))return 0;   /* at most one record per region */
     const struct ss_region_initializer *initializers=(const void *)begin;
-    unsigned seen=0;
     for(size_t i=0;i<count;++i){
         const struct ss_region_initializer *init=&initializers[i];
-        if(init->reserved || init->region>=m->region_count || (seen&(1u<<init->region)))return 0;
+        if(init->reserved || init->region>=m->region_count)return 0;
+        for(size_t k=0;k<i;++k)if(initializers[k].region==init->region)return 0;   /* one record per region */
         const struct ss_region *r=&m->regions[init->region];
         const uint64_t bytes=init->zero_prefix_bytes;
         if(r->kind!=SS_REGION_WORK || !(r->access&SS_ACCESS_READ) ||
@@ -45,7 +45,6 @@ __attribute__((noinline)) int os_application_initialize_regions(uint64_t deadlin
            !bytes || (bytes&7) || bytes>r->bytes || (r->address&7) ||
            r->address<UINT64_C(0x44000000) || r->address>=UINT64_C(0x47000000) ||
            r->bytes>UINT64_C(0x47000000)-r->address)return 0;
-        seen|=1u<<init->region;
     }
     for(size_t i=0;i<count;++i){
         const struct ss_region_initializer *init=&initializers[i];

@@ -28,14 +28,16 @@ memory_layout = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(memory_layout)
 
 MAGIC = 0x5453464e4d505041
-VERSION = 1
-MANIFEST_BYTES = 552
-REGIONS = 8
+VERSION = 2
 HEAD = struct.Struct('<QII16sIIBBBBIQQQQIBBBB')
 AUDIO = struct.Struct('<IHHII')
 REGION = struct.Struct('<QQII32s')
 assert HEAD.size == 88 and AUDIO.size == 16 and REGION.size == 56
-assert HEAD.size + AUDIO.size + REGIONS * REGION.size == MANIFEST_BYTES
+# Version 2: the manifest is this head followed by region_count region entries, so
+# its section bytes are MANIFEST_HEAD_BYTES + region_count * REGION.size. Version 1
+# held a fixed table of eight entries (552 bytes).
+MANIFEST_HEAD_BYTES = HEAD.size + AUDIO.size
+assert MANIFEST_HEAD_BYTES == 104
 
 SOURCE = Path(__file__).resolve().parents[1]
 
@@ -227,7 +229,8 @@ def load(path, resident=False):
     else:
         m['audio'] = {'rate_hz': 0, 'channels': 0, 'bits': 0, 'min_frames': 0, 'max_frames': 0}
     regions, names = [], []
-    require(len(raw.get('regions', [])) <= REGIONS, name + ': at most %d regions' % REGIONS)
+    # region_count is one byte of the manifest head, so a manifest declares at most 255 regions.
+    require(len(raw.get('regions', [])) <= 255, name + ': at most 255 regions (the one-byte region_count)')
     for i, r in enumerate(raw.get('regions', [])):
         where = '%s region %d' % (name, i)
         require(re.fullmatch(r'[a-z][a-z0-9_]{0,23}', r.get('name', '')) is not None and r['name'] not in names,
@@ -418,7 +421,7 @@ def assign(m):
 
 
 def pack(m):
-    out = HEAD.pack(MAGIC, VERSION, MANIFEST_BYTES, m['name'].encode(), m['devices_required'],
+    out = HEAD.pack(MAGIC, VERSION, MANIFEST_HEAD_BYTES + REGION.size * len(m['regions']), m['name'].encode(), m['devices_required'],
                     m['devices_optional'], m['cluster'], m['workers'], m['priority'], 0,
                     m['stack_bytes'], m['heap_bytes'], m['run_deadline_us'], m['return_reserve_us'],
                     m['progress_window_us'], m['output_limit'], m['host_op_first'],
@@ -427,22 +430,22 @@ def pack(m):
     out += AUDIO.pack(a['rate_hz'], a['channels'], a['bits'], a['min_frames'], a['max_frames'])
     for r in m['regions']:
         out += REGION.pack(r['address'], r['bytes'], r['kind'], r['access'], bytes.fromhex(r['sha256']))
-    out += bytes(REGION.size * (REGIONS - len(m['regions'])))
-    assert len(out) == MANIFEST_BYTES
+    assert len(out) == MANIFEST_HEAD_BYTES + REGION.size * len(m['regions'])
     return out
 
 
 def unpack(raw):
     """Section bytes -> list of manifests; refuses anything pack() cannot produce."""
-    require(len(raw) % MANIFEST_BYTES == 0 and raw, 'section size %d is not a manifest multiple' % len(raw))
-    result = []
-    for base in range(0, len(raw), MANIFEST_BYTES):
-        b = raw[base:base + MANIFEST_BYTES]
+    require(raw, 'empty manifest section')
+    result, base = [], 0
+    while base < len(raw):
+        require(len(raw) - base >= MANIFEST_HEAD_BYTES, 'manifest at %d: truncated head' % base)
         (magic, version, size, name, required, optional, cluster, workers, priority, reserved0, stack, heap,
-         run, reserve, window, output, first, count, regions, reserved1) = HEAD.unpack_from(b)
-        require((magic, version, size) == (MAGIC, VERSION, MANIFEST_BYTES) and not reserved0 and reserved1 <= 3 and
-                (reserved1 & 2 == 0 or reserved1 & 1) and regions <= REGIONS, 'manifest at %d: header differs' % base)
-        rate, channels, bits_, low, high = AUDIO.unpack_from(b, HEAD.size)
+         run, reserve, window, output, first, count, regions, reserved1) = HEAD.unpack_from(raw, base)
+        require((magic, version) == (MAGIC, VERSION) and not reserved0 and reserved1 <= 3 and (reserved1 & 2 == 0 or reserved1 & 1) and
+                size == MANIFEST_HEAD_BYTES + REGION.size * regions and base + size <= len(raw),
+                'manifest at %d: header differs' % base)
+        rate, channels, bits_, low, high = AUDIO.unpack_from(raw, base + HEAD.size)
         m = {'name': name.rstrip(b'\0').decode(), 'devices_required': required, 'devices_optional': optional,
              'cluster': cluster, 'workers': workers, 'priority': priority,
              'stack_bytes': stack, 'heap_bytes': heap, 'run_deadline_us': run, 'return_reserve_us': reserve,
@@ -450,14 +453,12 @@ def unpack(raw):
              'host_op_first': first, 'host_op_count': count, 'clock_use': reserved1,
              'audio': {'rate_hz': rate, 'channels': channels, 'bits': bits_, 'min_frames': low, 'max_frames': high},
              'regions': []}
-        for i in range(REGIONS):
-            address, length, kind, access, digest = REGION.unpack_from(b, HEAD.size + AUDIO.size + i * REGION.size)
-            if i < regions:
-                m['regions'].append({'address': address, 'bytes': length, 'kind': kind, 'access': access,
-                                     'sha256': digest.hex()})
-            else:
-                require(not (address or length or kind or access or any(digest)), 'manifest at %d: unused region set' % base)
+        for i in range(regions):
+            address, length, kind, access, digest = REGION.unpack_from(raw, base + MANIFEST_HEAD_BYTES + i * REGION.size)
+            m['regions'].append({'address': address, 'bytes': length, 'kind': kind, 'access': access,
+                                 'sha256': digest.hex()})
         result.append(m)
+        base += size
     return result
 
 
@@ -476,7 +477,8 @@ def c_source(m):
              '#include "%s-app.h"' % c,
              '__attribute__((used, retain, section("sunstone_manifest"), aligned(8)))',
              'const struct ss_manifest %s_manifest = {' % c,
-             '    .magic = SS_MANIFEST_MAGIC, .version = SS_MANIFEST_VERSION, .bytes = sizeof(struct ss_manifest),',
+             '    .magic = SS_MANIFEST_MAGIC, .version = SS_MANIFEST_VERSION,',
+             '    .bytes = SS_MANIFEST_HEAD_BYTES + %du * sizeof(struct ss_region),' % len(m['regions']),
              '    .name = "%s",' % m['name'],
              '    .devices_required = %#xu, .devices_optional = %#xu,' % (m['devices_required'], m['devices_optional']),
              '    .cluster = %d, .workers = %d, .priority = %d, .stack_bytes = %du,' % (
@@ -489,12 +491,16 @@ def c_source(m):
                  m['host_op_first'], m['host_op_count'], len(m['regions']), m['clock_use']),
              '    .audio = {%du, %du, %du, %du, %du},' % (
                  a['rate_hz'], a['channels'], a['bits'], a['min_frames'], a['max_frames']),
-             '    .regions = {']
+             ]
+    if m['regions']:
+        lines.append('    .regions = {')
     for r in m['regions']:
         digest = ','.join('0x' + r['sha256'][i:i + 2] for i in range(0, 64, 2))
         lines.append('        {UINT64_C(%#x), UINT64_C(%#x), %d, %#xu, {%s}},' % (
             r['address'], r['bytes'], r['kind'], r['access'], digest))
-    lines += ['    },', '};', '']
+    if m['regions']:
+        lines.append('    },')
+    lines += ['};', '']
     if m['large_regions']:
         lines += ['__attribute__((used, retain, section("sunstone_large_regions"), aligned(8)))',
                   'const struct ss_large_region %s_large_regions[] = {' % c]
@@ -545,6 +551,8 @@ def c_tables(m):
              'const struct ss_application ss_application = {&%s_manifest,%s_init,%s_main,app_stack,&app_task};' % (c,c,c),
              '__attribute__((used,retain,aligned(8))) uint8_t ss_result_record[%d];' % (56+m['output_limit']),
              'const size_t ss_result_capacity = %du;' % m['output_limit'],
+             '/* The grant\'s span table: one entry per region the manifest declares. */',
+             'struct ss_span ss_grant_spans[%d];' % max(1, len(m.get('regions', []))),
              '#include "app_large.h"',
              '/* Storage for the large regions this manifest declares: the count is the manifest\'s, not a constant. */',
              'const unsigned os_large_capacity = %du;' % len(m.get('large_regions', [])),

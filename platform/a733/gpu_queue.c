@@ -60,7 +60,7 @@ static int admit_programs(void *ctx, const struct pvr_compute_program_config *p)
 struct pvr_compute_queue *a733_gpu_queue_prepare(struct a733_gpu_queue *s, struct a733_gpu_reserved *g,
     struct pvr_gpu_service *service, uint32_t owner, const struct ss_region *regions, uint32_t count)
 {
-    if (!s || !g || !service || !owner || s->stage || !regions || !count || count > SS_REGIONS ||
+    if (!s || !g || !service || !owner || s->stage || !regions || !count ||
         (uintptr_t)s % _Alignof(struct a733_gpu_queue) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
         !private_image((uintptr_t)s, sizeof(*s)) || !private_image((uintptr_t)service, sizeof(*service)) ||
@@ -74,7 +74,7 @@ struct pvr_compute_queue *a733_gpu_queue_prepare(struct a733_gpu_queue *s, struc
     if (!acquire(g->nc_pool, owner, PVR_COMPUTE_QUEUE_OBJECTS * PAGE, &s->firmware_lease, &s->firmware_extent))
         return failed(s, g);
     s->firmware = g; s->owner = owner; s->region_count = count;
-    memcpy(s->regions, regions, count * sizeof(*regions));
+    s->regions = regions;
     struct pvr_compute_queue *q = &s->component;
     q->owner = s;
     q->job_cpu = (unsigned char *)s->payload_extent.cpu;

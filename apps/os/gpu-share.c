@@ -11,7 +11,7 @@ int os_gpu_share_admit(const struct ss_gpu_share *share,const struct ss_manifest
         !(grant->devices&SS_DEVICE_GPU)) return 0;
     const struct ss_manifest *m=share->manifest;
     if (m==owner || m->magic!=SS_MANIFEST_MAGIC || m->version!=SS_MANIFEST_VERSION ||
-        m->bytes!=sizeof(*m) || m->devices_required!=SS_DEVICE_GPU || m->devices_optional ||
+        m->bytes!=SS_MANIFEST_HEAD_BYTES+m->region_count*sizeof(m->regions[0]) || m->devices_required!=SS_DEVICE_GPU || m->devices_optional ||
         m->workers || m->heap_bytes || m->reserved0 || m->clock_use ||
         m->stack_bytes<1024u || m->stack_bytes>OS_GPU_PEER_STACK_BYTES ||
         m->stack_bytes%16u || !m->priority || m->priority>owner->priority ||
@@ -19,7 +19,8 @@ int os_gpu_share_admit(const struct ss_gpu_share *share,const struct ss_manifest
         m->output_limit || m->audio.rate_hz || m->audio.channels || m->audio.bits ||
         m->audio.min_frames || m->audio.max_frames || m->run_deadline_us ||
         m->return_reserve_us || m->progress_window_us ||
-        !m->region_count || m->region_count!=owner->region_count || m->region_count>SS_REGIONS ||
+        !m->region_count || m->region_count!=owner->region_count ||
+        m->region_count>32u ||   /* shared_regions is a 32-bit mask */
         grant->region_count!=owner->region_count || !m->name[0] ||
         !memchr(m->name,0,sizeof(m->name)) || !memcmp(m->name,owner->name,sizeof(m->name))) return 0;
     unsigned ended=0;

@@ -61,8 +61,10 @@ int main(int argc, char **argv)
     fclose(f);
     if (!data) return 2;
     if (n > capacity) return 5;
+    static struct ss_span spans[1];
+    spans[0] = (struct ss_span){data, n};
     grant.region_count = 1;
-    grant.regions[0] = (struct ss_span){data, n};
+    grant.regions = spans;
     hello_compute_main(&grant);
     return 6;
 }

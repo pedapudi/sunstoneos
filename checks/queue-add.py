@@ -113,9 +113,10 @@ static void scenario(void *arg)
 {
     char **argv = arg;mode=(unsigned)strtoul(argv[1],0,10);fail_at=(unsigned)strtoul(argv[2],0,10);
     assert(fail_at >= 1 && fail_at <= QUEUE_ADD_JOBS);
-    struct ss_grant g={.devices=SS_DEVICE_GPU,.region_count=2};
-    g.regions[QUEUE_ADD_REGION_INPUT]=(struct ss_span){input,sizeof(input)};
-    g.regions[QUEUE_ADD_REGION_OUTPUT]=(struct ss_span){output,260};
+    struct ss_span spans[2];
+    struct ss_grant g={.devices=SS_DEVICE_GPU,.region_count=2,.regions=spans};
+    spans[QUEUE_ADD_REGION_INPUT]=(struct ss_span){input,sizeof(input)};
+    spans[QUEUE_ADD_REGION_OUTPUT]=(struct ss_span){output,260};
     output[65]=0x12345678;output[66]=0x87654321;
     if(mode == 1) g.devices=0;
     if(!setjmp(done)) queue_add_main(&g);

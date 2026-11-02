@@ -377,8 +377,9 @@ int os_application_prepare(void)
     }
     if(!os_worker_cores(grant.main_core,m->workers,&grant.worker_cores))return 0;
     unsigned count=0,input=0;const struct ss_input_fact *facts=os_session_inputs(&count);
-    for(unsigned i=0;i<m->region_count;++i){grant.regions[i].base=(void *)(uintptr_t)m->regions[i].address;
-        grant.regions[i].bytes=m->regions[i].kind==SS_REGION_INPUT?facts[input++].bytes:m->regions[i].bytes;}
+    grant.regions=ss_grant_spans;
+    for(unsigned i=0;i<m->region_count;++i){ss_grant_spans[i].base=(void *)(uintptr_t)m->regions[i].address;
+        ss_grant_spans[i].bytes=m->regions[i].kind==SS_REGION_INPUT?facts[input++].bytes:m->regions[i].bytes;}
     if(grant.devices&SS_DEVICE_AUDIO_I2S)grant.capture_frames=s->audio.capture_samples;
     if(grant.devices&SS_DEVICE_AUDIO_HEADSET){
         if(!os_headset_capture_frames||!os_headset_capture_frames(&grant.capture_frames))return 0;

@@ -24,7 +24,7 @@ int ss_capture_replay_open(uint32_t region,uint64_t offset,uint32_t frames,uint3
     const struct ss_manifest *m=ss_application.manifest;
     if(!g||!m||ss_live()!=1||replay.opened||paced>1||
        (g->devices&(SS_DEVICE_AUDIO_I2S|SS_DEVICE_AUDIO_HEADSET))||
-       region>=g->region_count||region>=m->region_count||region>=SS_REGIONS||
+       region>=g->region_count||region>=m->region_count||
        m->regions[region].kind!=SS_REGION_INPUT||!(m->regions[region].access&SS_ACCESS_READ)||
        !m->audio.rate_hz||!m->audio.channels||m->audio.channels>2||
        (m->audio.bits!=16&&m->audio.bits!=24&&m->audio.bits!=32)||

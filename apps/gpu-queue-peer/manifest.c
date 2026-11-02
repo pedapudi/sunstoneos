@@ -4,7 +4,7 @@
  * compares every byte of these region records with the owner before startup. */
 __attribute__((used,retain,section("sunstone_gpu_peer_manifest"),aligned(8)))
 const struct ss_manifest gpu_queue_peer_manifest = {
-    .magic=SS_MANIFEST_MAGIC,.version=SS_MANIFEST_VERSION,.bytes=sizeof(struct ss_manifest),
+    .magic=SS_MANIFEST_MAGIC,.version=SS_MANIFEST_VERSION,.bytes=SS_MANIFEST_HEAD_BYTES+2u*sizeof(struct ss_region),
     .name="gpu-queue-peer",.devices_required=SS_DEVICE_GPU,.cluster=SS_CLUSTER_A55,
     .priority=2,.stack_bytes=4096,.region_count=2,
     .regions={

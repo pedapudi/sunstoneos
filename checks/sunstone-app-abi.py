@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Check the application ABI without an external application checkout.
 
-Compile hello-compute and a synthetic manifest covering all region slots,
-device bits and access bits for the host and AArch64. Compare each 552-byte
+Compile hello-compute and a synthetic manifest of twelve regions, more than the
+fixed table of manifest version 1 held, with every
+device bit and access bit, for the host and AArch64. Compare each
 section with the generator's packing, run hello-compute at input boundaries,
 and check malformed-manifest refusals. Repeat --manifest to include external
 application manifests in the same compiler-layout checks.
@@ -56,6 +57,9 @@ RICH = {
         {'name': 'variable_input', 'kind': 'input', 'access': ['read'], 'bytes': 31},
         {'name': 'fixed_scratch', 'kind': 'work', 'access': ['read', 'write'],
          'address': '0x46e00000', 'bytes': 8192},
+    ] + [
+        # More regions than the version 1 table held (eight), to show that the table follows the declaration.
+        {'name': 'extra_%d' % i, 'kind': 'work', 'access': ['read', 'write'], 'bytes': 4096} for i in range(4)
     ],
     'large_regions': [
         {'name': 'weights', 'bytes': 1 << 30, 'source_bytes': 536870912, 'access': ['read'],
@@ -91,7 +95,7 @@ for name, path in applications:
 hello = json.loads((generated['hello_compute'] / 'manifest.json').read_text())[0]
 rich = json.loads((generated['abi_fixture'] / 'manifest.json').read_text())[0]
 assert (rich['devices_required'], rich['devices_optional'], rich['cluster'], rich['workers'], rich['priority']) == (1, 30, 1, 7, 7)
-assert len(rich['regions']) == 8 and rich['regions'][3]['access'] == 15
+assert len(rich['regions']) == 12 and rich['regions'][3]['access'] == 15
 large = rich['large_regions']
 assert [r['index'] for r in large] == [0, 1] and large[0]['flags'] == 0 and large[1]['flags'] == 3
 assert large[0]['path'] == '/sunstone-test/sunstone-region-test.bin' and large[1]['first_sector'] == 1 << 33
@@ -120,7 +124,7 @@ for target, compiler, flags in [('host', a.cc, []),
     for name, gen in generated.items():
         include = ['-I', ROOT / 'include', '-I', gen]
         packed = (gen / 'manifest.bin').read_bytes()
-        assert len(packed) == tool.MANIFEST_BYTES
+        assert len(packed) == tool.MANIFEST_HEAD_BYTES + 56 * len(json.loads((gen / 'manifest.json').read_text())[0]['regions'])
         obj = out / (name + '-manifest.o')
         run(compiler, *warn, *flags, *include, '-O2', '-c', gen / (name + '-manifest.c'), '-o', obj)
         section = out / (name + '-manifest.bin')
@@ -278,7 +282,7 @@ for name,gpu_address,neighbour_address,expected in (
     assert manifest['regions'][0]['address']==expected
     assert tool.span(manifest['regions'][0])==(expected,expected+tool.BLOCK)
     placement_paths.append(name)
-result = {'passed': True, 'manifest_bytes': tool.MANIFEST_BYTES,
+result = {'passed': True, 'manifest_head_bytes': tool.MANIFEST_HEAD_BYTES,
           'hello_sha256': hashlib.sha256((generated['hello_compute'] / 'manifest.bin').read_bytes()).hexdigest(),
           'generic_sha256': hashlib.sha256((generated['abi_fixture'] / 'manifest.bin').read_bytes()).hexdigest()}
 result['gpu_rounded_span_cases']={'refusals':6,'accepted':placement_paths}

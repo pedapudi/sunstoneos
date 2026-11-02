@@ -65,7 +65,8 @@ int xTaskNotifyGive(TaskHandle_t t)
     return 1;
 }
 void vTaskDelay(TickType_t ticks) { struct timespec s = {0, (long)ticks * 1000000}; nanosleep(&s, 0); }
-static struct ss_grant grant;
+static struct ss_span grant_spans[1];
+static struct ss_grant grant = {.regions = grant_spans};
 const struct ss_grant *ss_grant(void) { return &grant; }
 int ss_live(void) { return 1; }
 void ss_progress(void) {}
@@ -92,9 +93,9 @@ int main(void)
     grant.main_core = 6;
     grant.worker_cores = 0xbf;
     grant.region_count = 1;
-    grant.regions[0].base = aligned_alloc(64, BW_BUFFER_BYTES);
-    grant.regions[0].bytes = BW_BUFFER_BYTES;
-    memset(grant.regions[0].base, 0xa5, BW_BUFFER_BYTES);
+    grant_spans[0].base = aligned_alloc(64, BW_BUFFER_BYTES);
+    grant_spans[0].bytes = BW_BUFFER_BYTES;
+    memset(grant_spans[0].base, 0xa5, BW_BUFFER_BYTES);
     dram_bandwidth_init();
     dram_bandwidth_main(&grant);
     return 3;
