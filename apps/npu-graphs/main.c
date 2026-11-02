@@ -82,8 +82,49 @@ static __attribute__((unused)) _Noreturn void npu_graphs_queue_main(void)
     if (offset != v->input_bytes) queue_fault(5, (uint32_t)offset);
     static struct ss_npu_fence fences[SS_NPU_QUEUE_MAX_DEPTH];
     unsigned records = 0;
+#ifdef NPU_GRAPHS_QUEUE_REPEAT
+    int acquired_now;
+#endif
     clock_words(&receipt.reserved[0], &receipt.reserved[1], &receipt.reserved[2]);   /* before the sweep */
     receipt.start = ss_counter_ticks();
+#ifdef NPU_GRAPHS_QUEUE_REPEAT
+    /* Determinism study: NPU_GRAPHS_QUEUE_REPEAT single jobs, one at a time, with the first output tensor copied after each.
+     * Record i holds the job number (input_bytes), the output bytes (output_bytes), the bytes that differ from the first job's
+     * output (first_difference), from the reference (observed) and from the job before (expected). */
+    {
+        static uint8_t snap[NPU_GRAPHS_QUEUE_REPEAT][NPU_GRAPHS_QUEUE_SNAP];
+        for (unsigned job = 0; job < NPU_GRAPHS_QUEUE_REPEAT; ++job, ++records) {
+            struct npu_graph_record *r = &receipt.graph[records];
+            struct ss_npu_fence fence;
+            const uint64_t t0 = ss_counter_ticks();
+            int r1;
+            while ((r1 = ss_npu_queue_submit(q, h, (struct ss_npu_fence){0}, QUEUE_TIMEOUT_US, &fence)) == 0) { ss_progress(); vTaskDelay(1); }
+            if (r1 < 0) queue_fault(6, job);
+            while ((r1 = ss_npu_queue_status(q, fence)) == 0) { if (ss_live() < 0) queue_fault(9, job); }
+            if (r1 < 0) queue_fault(8, job);
+            r->ticks = ss_counter_ticks() - t0;
+            if (ss_npu_queue_release(q, fence) != 1) queue_fault(7, job);
+            begin = ss_counter_ticks();
+            while ((acquired_now = ss_npu_queue_acquire_handle(q, h)) != 1) {
+                if (acquired_now < 0 || (ss_counter_ticks() - begin) / 24 > 2000000) queue_fault(10, (uint32_t)acquired_now);
+                ss_progress(); vTaskDelay(1);
+            }
+            struct ss_npu_tensor t;
+            if (!ss_npu_queue_tensor(q, h, SS_NPU_OUTPUT, 0, &t) || t.bytes > NPU_GRAPHS_QUEUE_SNAP) queue_fault(12, job);
+            memcpy(snap[job], t.data, t.bytes);
+            uint64_t first = 0, ref = 0, prev = 0;
+            for (size_t b = 0; b < t.bytes; ++b) {
+                first += snap[job][b] != snap[0][b];
+                ref += b < v->reference_bytes && snap[job][b] != v->reference[b];
+                prev += job && snap[job][b] != snap[job - 1][b];
+            }
+            r->index = job; r->input_bytes = job; r->output_bytes = t.bytes; r->status = NPU_GRAPH_MATCH;
+            r->first_difference = first; r->observed = ref; r->expected = prev;
+            ++receipt.completed;
+        }
+    }
+    if (0)
+#endif
     /* The last k is twice the ring: the ring, not k, then limits the jobs in flight and refuses the rest. */
     for (unsigned k = 1; k <= QUEUE_KMAX; k *= 2, ++records) {
         struct npu_graph_record *r = &receipt.graph[records];
