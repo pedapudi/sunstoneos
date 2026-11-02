@@ -219,7 +219,18 @@ static int sd_submit(void *unused, uint64_t sector, uint32_t count, uint8_t *dma
     do { r = a733_mmc_platform_read(&platform, sector, count, dma, count * 512u, now_us() + READ_US); }
     while (r == A733_MMC_BUSY && board_live(NULL));
     blocks_in_flight = count;
-    return r == A733_MMC_PENDING;
+    if (r != A733_MMC_PENDING) return 0;
+#ifndef OS_SD_WRITE
+    /* The request is accepted but the command is issued by the polls that follow, and the loader hashes the previous piece
+     * before it polls: without these steps the card would sit idle for that whole time. Step the controller until the
+     * command is issued (command_step 2 is the wait for it to finish), so that the data moves while the caller works. A
+     * step that fails or completes is seen again by sd_poll. */
+    for (unsigned steps = 0; steps < 64 && platform.core.command_step < 2; ++steps) {
+        r = a733_mmc_platform_poll(&platform);
+        if (r != A733_MMC_PENDING && r != A733_MMC_BUSY) break;
+    }
+#endif
+    return 1;
 }
 static int sd_poll(void *unused)
 {

@@ -182,6 +182,17 @@ static void large_cases(void)
     assert(slots[1].bytes == 4 * MIB && slots[1].flags == (SS_LARGE_WRITE | SS_LARGE_EXTENT) && slots[1].base == 0xc0000000);
     assert(app_region_owner_of(&l, slots[0].base) == 3 && app_region_owner_of(&l, slots[1].base + 4 * MIB - 1) == 3);
     assert(app_region_free_bytes(&l) == 11 * GIB - GIB - 4 * MIB);
+    /* A region with no source is valid with every source field zero, and refused with any of them set. */
+    struct ss_large_region unfilled[1] = {{.index = 0, .flags = SS_LARGE_WRITE | SS_LARGE_UNFILLED, .bytes = 6 * GIB}};
+    assert(ss_large_records_valid(unfilled, 1));
+    assert(linit(&l, 0, 8, all, 1) == 0 && large_admit(&l, 6, unfilled, 1, slots, 8) == APP_REGION_OK);
+    assert(slots[0].base == 0x80000000 && slots[0].bytes == 6 * GIB && slots[0].base + slots[0].bytes > UINT64_C(0x100000000));
+    struct ss_large_region bad = unfilled[0];
+    bad.source_bytes = MIB; assert(!ss_large_records_valid(&bad, 1));
+    bad = unfilled[0]; bad.sha256[3] = 1; assert(!ss_large_records_valid(&bad, 1));
+    bad = unfilled[0]; strcpy(bad.path, "/a"); assert(!ss_large_records_valid(&bad, 1));
+    bad = unfilled[0]; bad.flags |= SS_LARGE_EXTENT; assert(!ss_large_records_valid(&bad, 1));
+    bad = unfilled[0]; bad.first_sector = 5; assert(!ss_large_records_valid(&bad, 1));
     /* Records out of index order are refused: the section is in index order by construction. */
     struct ss_large_region swapped[2] = {ok[1], ok[0]};
     assert(linit(&l, 0, 8, all, 1) == 0 && large_admit(&l, 4, swapped, 2, slots, 8) == APP_REGION_INVALID);
@@ -223,7 +234,8 @@ static void large_cases(void)
     REFUSE(r[0].bytes = 12 * GIB);                           /* beyond upper memory */
     REFUSE(r[0].source_bytes = GIB + 1);
     REFUSE(r[0].source_bytes = 0);
-    REFUSE(memset(r[0].sha256, 0, 32));
+    /* A zero digest is valid: the region loads without a check. */
+    { struct ss_large_region nodigest = ok[0]; memset(nodigest.sha256, 0, 32); assert(ss_large_records_valid(&nodigest, 1)); }
     REFUSE(strcpy(r[0].path, "relative.bin"));
     REFUSE(strcpy(r[0].path, "/bad name.bin"));
     REFUSE(strcpy(r[0].path, ""));
@@ -232,7 +244,7 @@ static void large_cases(void)
     REFUSE(r[0].first_sector = 7);                            /* a file with a sector */
     REFUSE(strcpy(r[1].path, "/x"));                          /* an extent with a path */
     REFUSE(r[1].first_sector = 0);                            /* an extent at the partition table */
-    assert(refusals == 17 && app_region_free_bytes(&l) == 11 * GIB);
+    assert(refusals == 16 && app_region_free_bytes(&l) == 11 * GIB);
 }
 
 int main(void)
