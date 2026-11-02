@@ -29,6 +29,11 @@ void host_trace_give(void);
 #define configUSE_TASK_NOTIFICATIONS 1
 #define configTASK_NOTIFICATION_ARRAY_ENTRIES 2
 #define configCHECK_FOR_STACK_OVERFLOW 0
+#ifdef SUNSTONE_GPU_TIMING
+/* As include/FreeRTOSConfig.h: the diagnostic notes a worker block on a queue receive. */
+void gpu_queue_timing_block_receive(void *queue);
+#define traceBLOCKING_ON_QUEUE_RECEIVE(queue) gpu_queue_timing_block_receive((void *)(queue))
+#endif
 #define traceTASK_NOTIFY_GIVE_FROM_ISR(index) host_trace_give()
 #define configASSERT(condition) do { if (!(condition)) host_assert_failed(__FILE__, __LINE__); } while (0)
 #define INCLUDE_vTaskDelay 1
