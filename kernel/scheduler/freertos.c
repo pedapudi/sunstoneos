@@ -88,9 +88,31 @@ static TaskHandle_t ssKernelCurrentSnapshot(unsigned cpu)
 }
 static uint64_t ssKernelNow(void)
 { return atomic_load_explicit(&ssKernelTime, memory_order_acquire); }
+static TCB_t *ssKernelSelf(void)
+{
+    /* Boot has no migration and has not installed the task register yet. */
+    if (!xSchedulerRunning) return pxCurrentTCBs[ssKernelCPUId()];
+    /* One architectural snapshot binds task identity across migration. */
+    return (TCB_t *)(uintptr_t)(ullPortGetTaskRegister() & portTASK_REGISTER_TCB_MASK);
+}
+static BaseType_t ssKernelSchedulerState(void)
+{
+    if (!xSchedulerRunning) return taskSCHEDULER_NOT_STARTED;
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    BaseType_t state = ssKernelCPUs[ssKernelCPUId()].preempt ?
+        taskSCHEDULER_SUSPENDED : taskSCHEDULER_RUNNING;
+    portCLEAR_INTERRUPT_MASK(irq);
+    return state;
+}
+static void ssKernelMissedYield(void)
+{
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    ssKernelCPUs[ssKernelCPUId()].reschedule = true;
+    portCLEAR_INTERRUPT_MASK(irq);
+}
 static struct ssKernelTask *ssKernelCurrent(void)
 {
-    TCB_t *t = pxCurrentTCBs[ssKernelCPUId()];
+    TCB_t *t = ssKernelSelf();
     configASSERT(t && t->uxOwnerSlot < SS_OWNER_SLOTS);
     return &ssKernelTasks[t->uxOwnerSlot];
 }
@@ -220,15 +242,17 @@ static bool ssKernelAddTask(TCB_t *t)
             ssKernelPublishReference(pin);
         }
     }
-    portCLEAR_INTERRUPT_MASK(irq);
+    bool yield = false;
     if (slot < SS_OWNER_SLOTS && xSchedulerRunning) {
         struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
         if (owner == ssKernelCPUId() && t->uxPriority > pxCurrentTCBs[owner]->uxPriority) {
             cpu->reschedule = true;
-            portYIELD();
+            yield = !cpu->preempt;
         }
         if (owner == ssKernelCPUId()) ssKernelSliceRefresh(owner, false);
     }
+    portCLEAR_INTERRUPT_MASK(irq);
+    if (yield) portYIELD();
     return slot < SS_OWNER_SLOTS;
 }
 static void ssKernelBootstrap(void)
@@ -315,9 +339,9 @@ static void ssKernelDefer(struct ss_kernel_pin pin)
 }
 void ssKernelObjectEnter(void)
 {
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
-    UBaseType_t irq = portSET_INTERRUPT_MASK();
     if (!cpu->object_depth) {
         ++cpu->preempt;
         portGET_TASK_LOCK((BaseType_t)c);
@@ -350,8 +374,10 @@ void ssKernelObjectExit(void)
 }
 UBaseType_t ssKernelObjectEnterFromISR(void)
 {
+    /* Also used for metadata repair from task APIs. The port's execution tag
+     * selects direct privileged masking in IRQ/SVC and SVC masking at EL0. */
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
-    UBaseType_t irq = portSET_INTERRUPT_MASK_FROM_ISR();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
     if (!cpu->isr_depth++) portGET_ISR_LOCK((BaseType_t)c);
     return irq;
@@ -365,15 +391,15 @@ void ssKernelObjectExitFromISR(UBaseType_t irq)
         portRELEASE_ISR_LOCK((BaseType_t)c);
         ssKernelFlush();
     }
-    portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
+    portCLEAR_INTERRUPT_MASK(irq);
 }
 void ssKernelObjectSuspend(void)
 {
     /* Queue retry bookkeeping retains T with local preemption disabled. API
      * IRQs remain enabled outside its separate inner I-protected sections. */
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
-    UBaseType_t irq = portSET_INTERRUPT_MASK();
     if (!cpu->object_depth) {
         ++cpu->preempt;
         portGET_TASK_LOCK((BaseType_t)c);
@@ -384,9 +410,9 @@ void ssKernelObjectSuspend(void)
 }
 BaseType_t ssKernelObjectResume(void)
 {
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
-    UBaseType_t irq = portSET_INTERRUPT_MASK();
     configASSERT(cpu->suspend_depth && cpu->object_depth && !cpu->critical_depth);
     --cpu->suspend_depth;
     if (!--cpu->object_depth) {
@@ -584,6 +610,14 @@ static void ssKernelSwitch(unsigned c)
         return;
     }
     struct ss_owner_task *previous = cpu->run.current;
+#if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
+    struct ss_owner_descriptor *previous_reference = previous ?
+        &ssKernelRegistry.descriptor[previous->slot] : NULL;
+    /* Current-owner exclusion proves this task cannot retire yet, including
+     * after close. Retain that existing execution lifetime through service. */
+    if (previous_reference)
+        atomic_fetch_add_explicit(&previous_reference->references, 1, memory_order_relaxed);
+#endif
     if (previous) {
         traceTASK_SWITCHED_OUT();
 #if ( configGENERATE_RUN_TIME_STATS == 1 )
@@ -636,6 +670,9 @@ static void ssKernelSwitch(unsigned c)
     s->off_cpu = false;
     __atomic_store_n(&pxCurrentTCBs[c], selected->context, __ATOMIC_RELEASE);
     pxCurrentTCBs[c]->xTaskRunState = (BaseType_t)c;
+#if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
+    if (previous_reference) ss_owner_put(previous_reference);
+#endif
     ssKernelSliceRefresh(c, true);
     traceTASK_SWITCHED_IN();
     portTASK_SWITCH_HOOK(pxCurrentTCBs[c]);
@@ -654,11 +691,13 @@ static void ssKernelSwitch(unsigned c)
 }
 void ssKernelOwnerYieldTail(void)
 {
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
     struct ssKernelTask *s = ssKernelCurrent();
     unsigned state = atomic_load_explicit(&s->execution, memory_order_acquire);
     if (state == SS_K_RUNNING || state == SS_K_READY) cpu->yield_tail = true;
     cpu->reschedule = true;
+    portCLEAR_INTERRUPT_MASK(irq);
 }
 void ssKernelOwnerYield(void)
 {
@@ -725,7 +764,7 @@ static BaseType_t ssKernelEventWake(ListItem_t *item, TickType_t value, bool uno
 }
 static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
                                  uint32_t value, eNotifyAction action,
-                                 uint32_t *previous, BaseType_t *woken)
+                                 uint32_t *previous, BaseType_t *woken, bool from_isr)
 {
     configASSERT(index < configTASK_NOTIFICATION_ARRAY_ENTRIES);
     static const enum ss_notification_action actions[] = {
@@ -733,10 +772,10 @@ static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
         SS_NOTIFY_OVERWRITE, SS_NOTIFY_NO_OVERWRITE
     };
     configASSERT((unsigned)action < sizeof(actions) / sizeof(actions[0]));
-    UBaseType_t irq = portSET_INTERRUPT_MASK_FROM_ISR();
+    UBaseType_t irq = from_isr ? portSET_INTERRUPT_MASK_FROM_ISR() : portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
     if (!ss_kernel_handle_pin(&ssKernelRegistry, task, &pin)) {
-        portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
+        if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
         return pdFAIL;
     }
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
@@ -751,7 +790,7 @@ static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
         ssKernelPublishReference(pin);
         if (woken && ssKernelCPUs[ssKernelCPUId()].reschedule) *woken = pdTRUE;
     } else ss_kernel_handle_put(&pin);
-    portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
+    if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
     return result.accepted ? pdPASS : pdFAIL;
 }
 static uint32_t ssKernelNotifyWait(UBaseType_t index, uint32_t clear_entry,
@@ -847,10 +886,14 @@ static void ssKernelControlDrain(void)
 static void ssKernelWait(unsigned slot, uint64_t sequence)
 {
     while (!ss_control_applied(&ssKernelControl, slot, sequence)) {
-        /* The outer critical exit can still mask API IRQs. Service this owner
-         * directly so a full bounded batch cannot strand its own command. */
+        /* Re-enter this CPU's owner with API IRQs excluded, including after a
+         * migrated task resumes its wait on a different CPU. Restore the
+         * caller's mask before waiting for another owner's progress. */
+        UBaseType_t irq = portSET_INTERRUPT_MASK();
         ssKernelControlDrain();
-        if (!ss_control_applied(&ssKernelControl, slot, sequence)) ss_owner_wait(ssKernelControl.backend);
+        bool applied = ss_control_applied(&ssKernelControl, slot, sequence);
+        portCLEAR_INTERRUPT_MASK(irq);
+        if (!applied) ss_owner_wait(ssKernelControl.backend);
     }
 }
 static bool ssKernelApply(void *context, unsigned slot, void *task,
@@ -1052,12 +1095,12 @@ static bool ssKernelMutate(void *opaque, struct ss_control_state *state)
 static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
                              uint64_t argument, bool from_isr)
 {
-    TCB_t *current = pxCurrentTCBs[ssKernelCPUId()];
+    TCB_t *current = ssKernelSelf();
     if (!handle) handle = current;
-    UBaseType_t irq = portSET_INTERRUPT_MASK_FROM_ISR();
+    UBaseType_t irq = from_isr ? portSET_INTERRUPT_MASK_FROM_ISR() : portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
     if (!ss_kernel_handle_pin(&ssKernelRegistry, handle, &pin)) {
-        portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
+        if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
         return false;
     }
     struct ssKernelMutation mutation = { .command = command, .argument = argument, .slot = pin.slot };
@@ -1075,12 +1118,12 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
         cpu->command_sequence[slot] = sequence;
         cpu->command_no_wait[slot] = from_isr || self;
         if (self && changed) cpu->reschedule = true;
-        portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
+        if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
         return changed;
     }
     if (command == SS_K_DELETE && self) {
         ss_kernel_handle_put(&pin);
-        portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
+        if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
         portYIELD();
         configASSERT(false); /* Deleted tasks cannot regain execution. */
         return changed;
@@ -1093,11 +1136,11 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
         /* No reference is kept on a stack that can remain suspended forever.
          * Returning here requires that this same task was resumed alive. */
         ss_kernel_handle_put(&pin);
-        portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
+        if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
         portYIELD();
         return changed;
     }
-    portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
+    if (from_isr) portCLEAR_INTERRUPT_MASK_FROM_ISR(irq); else portCLEAR_INTERRUPT_MASK(irq);
     if (!from_isr && changed) {
         if (self && command == SS_K_AFFINITY) portYIELD();
         /* Pin prevents slot reuse while observing the acknowledgment sequence. */
@@ -1129,7 +1172,7 @@ static void ssKernelCommandsFinish(void)
 }
 static unsigned ssKernelPriority(TaskHandle_t handle, bool base)
 {
-    if (!handle) handle = pxCurrentTCBs[ssKernelCPUId()];
+    if (!handle) handle = ssKernelSelf();
     struct ss_kernel_pin pin;
     if (!ss_kernel_handle_pin(&ssKernelRegistry, handle, &pin)) return 0;
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
@@ -1139,7 +1182,7 @@ static unsigned ssKernelPriority(TaskHandle_t handle, bool base)
 }
 static bool ssKernelPin(TaskHandle_t handle, struct ss_kernel_pin *pin)
 {
-    if (!handle) handle = pxCurrentTCBs[ssKernelCPUId()];
+    if (!handle) handle = ssKernelSelf();
     return ss_kernel_handle_pin(&ssKernelRegistry, handle, pin);
 }
 static unsigned ssKernelLogicalExecution(struct ssKernelTask *s)
@@ -1160,8 +1203,8 @@ static eTaskState ssKernelState(TaskHandle_t handle)
 static void ssKernelSuspendAll(void)
 {
     ssKernelInitialize();
-    unsigned c = ssKernelCPUId();
     UBaseType_t irq = portSET_INTERRUPT_MASK();
+    unsigned c = ssKernelCPUId();
     ++ssKernelCPUs[c].preempt;
     uintptr_t holder = (uintptr_t)pxCurrentTCBs[c];
     uint64_t incarnation = xSchedulerRunning ? atomic_load_explicit(
@@ -1171,11 +1214,11 @@ static void ssKernelSuspendAll(void)
 }
 static BaseType_t ssKernelResumeAll(void)
 {
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
     uintptr_t holder = (uintptr_t)pxCurrentTCBs[c];
     uint64_t incarnation = xSchedulerRunning ? atomic_load_explicit(
         &ssKernelRegistry.descriptor[ssKernelCurrent()->ready.slot].incarnation, memory_order_acquire) : 0;
-    UBaseType_t irq = portSET_INTERRUPT_MASK();
     bool yield = ss_control_resume_all(&ssKernelControl, c, holder, incarnation,
                                       xSchedulerRunning != pdFALSE);
     configASSERT(ssKernelCPUs[c].preempt);
@@ -1190,7 +1233,7 @@ static uint32_t ssKernelNotifyClear(TaskHandle_t handle, UBaseType_t index,
                                     uint32_t bits, bool clear_state)
 {
     configASSERT(index < configTASK_NOTIFICATION_ARRAY_ENTRIES);
-    if (!handle) handle = pxCurrentTCBs[ssKernelCPUId()];
+    if (!handle) handle = ssKernelSelf();
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ss_kernel_pin pin;
     if (!ss_kernel_handle_pin(&ssKernelRegistry, handle, &pin)) {
@@ -1246,7 +1289,7 @@ static BaseType_t ssKernelDisinherit(TaskHandle_t holder, bool timeout, unsigned
     unsigned count = atomic_load_explicit(&s->mutexes, memory_order_relaxed);
     configASSERT(count);
     if (!timeout) {
-        configASSERT(holder == pxCurrentTCBs[ssKernelCPUId()]);
+        configASSERT(holder == ssKernelSelf());
         atomic_store_explicit(&s->mutexes, --count, memory_order_release);
     }
     bool change = (!timeout && !count) || (timeout && count == 1);
@@ -1338,7 +1381,10 @@ static UBaseType_t ssKernelForEach(TaskStatusCallbackFunction_t callback, void *
 
 static bool ssKernelIdleShouldYield(void)
 {
-    return ssKernelCPUs[ssKernelCPUId()].run.ready[tskIDLE_PRIORITY].head != NULL;
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    bool ready = ssKernelCPUs[ssKernelCPUId()].run.ready[tskIDLE_PRIORITY].head != NULL;
+    portCLEAR_INTERRUPT_MASK(irq);
+    return ready;
 }
 
 #if ( configGENERATE_RUN_TIME_STATS == 1 )
