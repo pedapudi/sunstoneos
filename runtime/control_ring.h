@@ -6,7 +6,7 @@
 #define SS_CONTROL_RING_H
 #include <stdint.h>
 
-#define SS_RING_SIZE 256u
+#define SS_RING_SIZE 128u
 struct ss_ring_sample { uint32_t seq, latency_ticks; uint64_t entry_ticks; };
 struct ss_ring {
     struct ss_ring_sample slot[SS_RING_SIZE];

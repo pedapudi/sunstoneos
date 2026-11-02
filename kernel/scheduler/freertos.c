@@ -880,12 +880,41 @@ void ssKernelOwnerYield(void)
     /* SVC saves the frame and calls OwnerYieldTail exactly once. */
     portYIELD();
 }
-BaseType_t ssKernelOwnerIRQExit(void)
+#ifdef SUNSTONE_OWNER_COUNTERS
+/* Owner-work drains by CPU (measurement): from the outermost interrupt exit, skipped by the mask guard there, and
+ * from the tick. Each CPU writes its own line. */
+static struct { uint64_t exit_work, exit_skipped, tick_work, service_run; uint64_t pad[4]; } ssOwnerCounters[8] __attribute__((aligned(64)));
+uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which)
+{
+    if (cpu >= 8 || which > 3) return 0;
+    const uint64_t *row = &ssOwnerCounters[cpu].exit_work;
+    return row[which];
+}
+#define SS_OWNER_COUNT(field) (++ssOwnerCounters[ssKernelCPUId()].field)
+#else
+#define SS_OWNER_COUNT(field) ((void)0)
+#endif
+static BaseType_t ssKernelOwnerIRQExitWork(void)
 {
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
-    if (!cpu->preempt && !ss_control_checkpoint(&ssKernelControl, ssKernelCPUId()))
+    if (!cpu->preempt && !ss_control_checkpoint(&ssKernelControl, ssKernelCPUId())) {
+        SS_OWNER_COUNT(service_run);
         ssKernelService();
+    }
     return cpu->reschedule && !cpu->preempt ? pdTRUE : pdFALSE;
+}
+/* The outermost interrupt exit (portASM.S) drains owner work. An interrupt taken while the interrupted code had the
+ * API mask raised can only be one above that mask: the kernel's maintenance, object and control sections are all
+ * masked at the API priority, so the exit work would re-enter them (the control drain asserts on this). Such an
+ * interrupt leaves the work for the next ordinary interrupt exit or the tick. ICC_PMR_EL1 here is still the
+ * interrupted code's value, because the exit path has not changed it. */
+BaseType_t ssKernelOwnerIRQExit(void)
+{
+    uint64_t pmr;
+    __asm__ volatile("mrs %0, icc_pmr_el1" : "=r"(pmr));
+    if (pmr <= portMAX_API_PRIORITY_MASK) { SS_OWNER_COUNT(exit_skipped); return pdFALSE; }
+    SS_OWNER_COUNT(exit_work);
+    return ssKernelOwnerIRQExitWork();
 }
 static BaseType_t ssKernelTick(void)
 {
@@ -901,7 +930,8 @@ static BaseType_t ssKernelTick(void)
         else if (atomic_load_explicit(&ssKernelCPUs[c].slice_deadline, memory_order_acquire) <= now)
             ssKernelForce(c);
     }
-    return ssKernelOwnerIRQExit();
+    SS_OWNER_COUNT(tick_work);
+    return ssKernelOwnerIRQExitWork();
 }
 static void ssKernelEventBlock(List_t *list, TickType_t value, TickType_t ticks,
                                bool unordered, bool indefinite)

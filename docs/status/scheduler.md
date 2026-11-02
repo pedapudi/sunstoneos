@@ -22,6 +22,7 @@ qualification.
 
 ## Open work
 
+0d. Panic in one fork long run (entry `1793608348858278119-8f8e4282`), explained and fixed in the source, board confirmation pending: the patched interrupt exit ran owner work inside the kernel's masked sections after a control interrupt above the API mask; see [the design](../designs/scheduler-partitioned.md#the-owner-exit-work-must-not-run-after-an-interrupt-above-the-api-mask). Reproduced in QEMU (4 of 4 before, 18 of 18 passing after). The fork stays ineligible as the default until the fixed image has run on the board without a stop.
 0c. Known limits of the unmasked task-lock wait (`runtime/lock_prewait.c`): (1) an EL0 task cannot read the interrupt mask, so it infers an open mask from a zero critical nesting count and the absence of the task lock; a bare `portSET_INTERRUPT_MASK` outside a critical section, which does not take the task lock, can therefore wait with the mask raised, for at most the 100 us limit; (2) the 100 us limit is checked only when an event wakes the core, so a wait behind a long holder can last as long as the holder (914 us once, on the fork, core 3); the wait is unmasked either way.
 0b. Step 2 of the measure-first plan: fix the spans in the sweep table longest first on both kernels, each with a
    before and after span and a model-time check against 2%; then the above-mask control path, the robot workload and
@@ -172,7 +173,7 @@ Mimus. The instrumented sweep images showed the fork 6.8% faster (127.2 against 
 Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-35 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+36 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -211,4 +212,5 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793605129875013399-cf0da02e` | 2026-11-02 | 3-3 | `5863e0cde9bb` | returned | passed | run_total 86.704 s, control_latency_max_4khz 3 us |
 | `1793605217849580518-3247bc18` | 2026-11-02 | 3-3 | `1f8c64639e22` | returned | passed | run_total 106.288 s, recognition_time 109.629 ms |
 | `1793605330258102733-1624632e` | 2026-11-02 | 3-3 | `e6995c5f33fc` | returned | passed | run_total 79.197 s, recognition_time 110.178 ms |
+| `1793608348858278119-8f8e4282` | 2026-11-02 | 3-3 | `0e7b99d86e01` | watchdog-reset | failed | run_total 94.975 s, panic_line 1846 |
 <!-- evidence-table:end -->

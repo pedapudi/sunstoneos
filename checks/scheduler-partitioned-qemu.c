@@ -425,6 +425,26 @@ static void control(void *unused)
         configASSERT(__atomic_load_n(&scheduling_locks[id], __ATOMIC_RELAXED) == 0);
     control_phase = 7;
     extern unsigned long ss_kernel_test_continuations(void);
+#ifdef SUNSTONE_OWNER_COUNTERS
+    {
+        extern uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which);
+        uint64_t exit_work = 0, skipped = 0, tick_work = 0;
+        for (unsigned id = 0; id < 8; ++id) {
+            exit_work += ulSunstoneOwnerCounters(id, 0); skipped += ulSunstoneOwnerCounters(id, 1); tick_work += ulSunstoneOwnerCounters(id, 2);
+            platform_puts("owner-work cpu="); platform_hex(id); platform_puts(" exit="); platform_hex(ulSunstoneOwnerCounters(id, 0));
+            platform_puts(" skipped="); platform_hex(ulSunstoneOwnerCounters(id, 1)); platform_puts(" tick="); platform_hex(ulSunstoneOwnerCounters(id, 2));
+            platform_puts(" service="); platform_hex(ulSunstoneOwnerCounters(id, 3)); platform_puts("\n");
+        }
+        /* Interrupt exits run owner work. In the plain concurrent case none is skipped; in the storm case the
+         * control interrupts skip theirs and the ordinary exits keep running. */
+        configASSERT(exit_work > 0 && tick_work > 0);
+#ifndef SS_STORM
+        configASSERT(skipped == 0);
+#else
+        configASSERT(skipped > 0);
+#endif
+    }
+#endif
     platform_puts("service-continuations="); platform_hex(ss_kernel_test_continuations()); platform_puts("\n");
     platform_puts("PASS partitioned concurrent: 8 owners, pinned and multiple-affinity priorities, notification/block/timeout, FP migration, pending delete, zero isolated local-wake/switch global locks\n");
     platform_exit(0);

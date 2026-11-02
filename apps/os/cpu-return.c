@@ -202,8 +202,10 @@ int os_cpu_return_panic(const char *file,unsigned line,const void *caller)
 {
     const uint32_t site=SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|(line&0xfffu);
     if(atomic_load_explicit(&failing,memory_order_acquire)||atomic_load_explicit(&closing,memory_order_acquire))return 0;
-    if(xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED&&!core_can_schedule())return 0;
+    /* Note the file and the caller before the masked-context exit below, so a panic with the mask raised, which
+     * ends with the watchdog, still leaves the source file and return address in the breadcrumbs. */
     board_fail_note(site,(uint32_t)(uintptr_t)file,caller);
+    if(xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED&&!core_can_schedule())return 0;
     return failure_claim(SS_FAILURE_FAULT,site,(uint32_t)(uintptr_t)file,caller);
 }
 /* An interrupt nothing owns, taken by a running core. The caller masked the
