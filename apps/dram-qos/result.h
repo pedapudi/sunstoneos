@@ -9,7 +9,7 @@
 #define DQ_CORES 8u
 #define DQ_CHASE_BYTES (16u << 20)          /* pointer-chase buffer: 262144 nodes of 64 bytes */
 #define DQ_NODES (DQ_CHASE_BYTES / 64u)
-#define DQ_SLOT_BYTES (5u << 20)            /* streamer slot, one per core, after the chase buffer */
+#define DQ_SLOT_BYTES (4u << 20)            /* streamer slot, one per core, after the chase buffer */
 #define DQ_BUFFER_BYTES (DQ_CHASE_BYTES + DQ_CORES * DQ_SLOT_BYTES)
 #define DQ_CONTROL_HZ 10000u
 #define DQ_CONTROL_LOADS 16u                /* dependent loads per control iteration */
