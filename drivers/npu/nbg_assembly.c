@@ -4,6 +4,7 @@
 #include "a733_npu_controller.h"
 #include "nbg_command.h"
 #include "a733_range.h"
+#include "a733_storage_digest.h"
 #include <string.h>
 
 static const uint32_t state[] = {
@@ -34,53 +35,6 @@ static int requirement(struct nbg_allocation_requirement *r, uint32_t payload,
                                             (uint32_t)allocation};
     return 1;
 }
-/* SHA-256 of the program bodies (the exact-artifact catalogue below). Compact, byte-at-a-time, no allocation. */
-struct sha256 { uint32_t h[8]; uint64_t bytes; unsigned char block[64]; };
-static const uint32_t sha_k[64] = {
-    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,
-    0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,
-    0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,
-    0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
-#define ROR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
-static void sha_block(struct sha256 *c)
-{
-    uint32_t w[64], v[8];
-    for (unsigned i = 0; i < 16; ++i)
-        w[i] = (uint32_t)c->block[4*i] << 24 | (uint32_t)c->block[4*i+1] << 16 | (uint32_t)c->block[4*i+2] << 8 | c->block[4*i+3];
-    for (unsigned i = 16; i < 64; ++i) {
-        uint32_t a = ROR(w[i-15], 7) ^ ROR(w[i-15], 18) ^ (w[i-15] >> 3), b = ROR(w[i-2], 17) ^ ROR(w[i-2], 19) ^ (w[i-2] >> 10);
-        w[i] = w[i-16] + a + w[i-7] + b;
-    }
-    for (unsigned i = 0; i < 8; ++i) v[i] = c->h[i];
-    for (unsigned i = 0; i < 64; ++i) {
-        uint32_t s1 = ROR(v[4], 6) ^ ROR(v[4], 11) ^ ROR(v[4], 25), ch = (v[4] & v[5]) ^ (~v[4] & v[6]);
-        uint32_t t1 = v[7] + s1 + ch + sha_k[i] + w[i];
-        uint32_t s0 = ROR(v[0], 2) ^ ROR(v[0], 13) ^ ROR(v[0], 22), mj = (v[0] & v[1]) ^ (v[0] & v[2]) ^ (v[1] & v[2]);
-        v[7] = v[6]; v[6] = v[5]; v[5] = v[4]; v[4] = v[3] + t1; v[3] = v[2]; v[2] = v[1]; v[1] = v[0]; v[0] = t1 + s0 + mj;
-    }
-    for (unsigned i = 0; i < 8; ++i) c->h[i] += v[i];
-}
-static void sha_byte(struct sha256 *c, unsigned char b)
-{
-    c->block[c->bytes++ & 63] = b;
-    if (!(c->bytes & 63)) sha_block(c);
-}
-static void sha_word(struct sha256 *c, uint32_t v) { for (unsigned i = 0; i < 4; ++i) sha_byte(c, (unsigned char)(v >> (8 * i))); }
-static void sha_finish(struct sha256 *c, unsigned char out[32])
-{
-    const uint64_t bits = c->bytes * 8;
-    sha_byte(c, 0x80);
-    while ((c->bytes & 63) != 56) sha_byte(c, 0);
-    for (int i = 7; i >= 0; --i) sha_byte(c, (unsigned char)(bits >> (8 * i)));
-    for (unsigned i = 0; i < 32; ++i) out[i] = (unsigned char)(c->h[i / 4] >> (24 - 8 * (i % 4)));
-}
-static void sha_init(struct sha256 *c)
-{
-    static const uint32_t iv[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
-    memcpy(c->h, iv, sizeof(iv)); c->bytes = 0;
-}
 /* The stream-processor programs the loader has reviewed, by SHA-256 of the program body: the pair count and every
  * 0x08010e5c and 0x08010e5d operand, as little-endian words. The operand of 0x08010e5b is not part of the body: it
  * is the position in the 256-entry program memory and is checked separately. The meaning of a program is not
@@ -93,17 +47,22 @@ static const unsigned char sp_programs[][32] = {
 #include NBG_SP_PROGRAMS_EXTRA
 #endif
 };
+static void sp_word(struct storage_digest *c, uint32_t v)
+{
+    unsigned char b[4] = {(unsigned char)v, (unsigned char)(v >> 8), (unsigned char)(v >> 16), (unsigned char)(v >> 24)};
+    (void)storage_digest_add(c, b, 4);
+}
 static int sp_program_reviewed(const unsigned char *state, uint32_t pairs)
 {
-    struct sha256 c;
+    struct storage_digest c;
     unsigned char digest[32];
-    sha_init(&c);
-    sha_word(&c, pairs);
+    storage_digest_init(&c);
+    sp_word(&c, pairs);
     for (uint32_t i = 0; i < pairs; ++i) {
-        sha_word(&c, word(state + 8 + i * 16 + 4));
-        sha_word(&c, word(state + 8 + i * 16 + 12));
+        sp_word(&c, word(state + 8 + i * 16 + 4));
+        sp_word(&c, word(state + 8 + i * 16 + 12));
     }
-    sha_finish(&c, digest);
+    storage_digest_end(&c, digest);
     for (unsigned i = 0; i < sizeof(sp_programs) / sizeof(sp_programs[0]); ++i)
         if (!memcmp(sp_programs[i], digest, 32)) return 1;
     return 0;

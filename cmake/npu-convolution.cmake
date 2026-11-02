@@ -27,6 +27,7 @@ if(NPU_CONVOLUTION_FIXTURES)
     drivers/npu/a733_npu_platform_native.c
     drivers/npu/a733_npu_memory.c drivers/npu/a733_npu_mmu.c
     drivers/npu/nbg_model.c drivers/npu/nbg_assembly.c drivers/npu/nbg_checksum.c drivers/npu/nbg_relocation.c
+    drivers/storage/storage_digest.c
     "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
     "${CMAKE_CURRENT_BINARY_DIR}/npu-convolution-port.c" "${smp_build}/portASM.S")
   target_include_directories(npu-convolution-model PRIVATE platform/qemu-smp include runtime/include

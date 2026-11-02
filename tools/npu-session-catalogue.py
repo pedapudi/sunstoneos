@@ -15,7 +15,7 @@ that image only.
 
 Build the host library with:
   clang-21 -std=c11 -O2 -shared -fPIC -Iinclude drivers/npu/nbg_assembly.c \
-    drivers/npu/nbg_model.c drivers/npu/nbg_relocation.c drivers/npu/nbg_checksum.c -o native.so
+    drivers/npu/nbg_model.c drivers/npu/nbg_relocation.c drivers/npu/nbg_checksum.c drivers/storage/storage_digest.c -o native.so
 """
 import argparse
 import ctypes as c

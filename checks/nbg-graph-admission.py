@@ -31,13 +31,13 @@ nm = mutate.nm
 def build(work, name, replacements=()):
     """Compile the assembler (and decoder) into a shared library, optionally with exact text replacements."""
     sources = {}
-    for unit in ('nbg_model.c', 'nbg_checksum.c', 'nbg_relocation.c', 'nbg_assembly.c'):
+    for unit in ('nbg_model.c', 'nbg_checksum.c', 'nbg_relocation.c', 'nbg_assembly.c', '../storage/storage_digest.c'):
         text = (ROOT / 'drivers/npu' / unit).read_text()
         for unit_name, old, new in replacements:
             if unit_name == unit:
                 assert text.count(old) == 1, (unit, old)
                 text = text.replace(old, new)
-        path = work / (name + '-' + unit)
+        path = work / (name + '-' + Path(unit).name)
         path.write_text(text)
         sources[unit] = path
     lib = work / (name + '.so')
