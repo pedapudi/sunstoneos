@@ -22,7 +22,7 @@ qualification.
 
 ## Open work
 
-0d. Panic in one fork long run (entry `1793608348858278119-8f8e4282`), explained and fixed in the source, board confirmation pending: the patched interrupt exit ran owner work inside the kernel's masked sections after a control interrupt above the API mask; see [the design](../designs/scheduler-partitioned.md#the-owner-exit-work-must-not-run-after-an-interrupt-above-the-api-mask). Reproduced in QEMU (4 of 4 before, 18 of 18 passing after). The fork stays ineligible as the default until the fixed image has run on the board without a stop.
+0d. Panic in one fork long run (entry `1793608348858278119-8f8e4282`), explained and fixed; seven clean board runs on the fixed image (see the long runs below): the patched interrupt exit ran owner work inside the kernel's masked sections after a control interrupt above the API mask; see [the design](../designs/scheduler-partitioned.md#the-owner-exit-work-must-not-run-after-an-interrupt-above-the-api-mask). Reproduced in QEMU (4 of 4 before, 18 of 18 passing after). The fork stays ineligible as the default until the fixed image has run on the board without a stop.
 0c. Known limits of the unmasked task-lock wait (`runtime/lock_prewait.c`): (1) an EL0 task cannot read the interrupt mask, so it infers an open mask from a zero critical nesting count and the absence of the task lock; a bare `portSET_INTERRUPT_MASK` outside a critical section, which does not take the task lock, can therefore wait with the mask raised, for at most the 100 us limit; (2) the 100 us limit is checked only when an event wakes the core, so a wait behind a long holder can last as long as the holder (914 us once, on the fork, core 3); the wait is unmasked either way.
 0b. Step 2 of the measure-first plan: fix the spans in the sweep table longest first on both kernels, each with a
    before and after span and a model-time check against 2%; then the above-mask control path, the robot workload and
@@ -168,12 +168,55 @@ Result. The control path meets the 10 us wake target and the 5% jitter bound at 
 
 Mimus. The instrumented sweep images showed the fork 6.8% faster (127.2 against 136.4 ms); the plain images show the fork 0.50% slower (110.178 against 109.629 ms), as in the speed stream. The span recorder explains the difference: it adds 26 ms to the stock recognition and 17 ms to the fork's. The control interrupts add 4.7 ms (4.4%) to stock and 3.2 ms (2.9%) to the fork while five handlers run at up to 10 kHz.
 
+## Long runs, verdict inputs
+
+Five boots per kernel on port 3-3, each a 25 s soak of the recognition (225 to 226 recognitions) with the interrupts running throughout: the task path alone at 1, 2 and 4 kHz on cores 1 to 3 and the control path alone at 10 kHz on core 4. Stock is `sw-off` images of the second long set; the fork is the fixed image (the interrupt-exit guard of [the design](../designs/scheduler-partitioned.md#the-owner-exit-work-must-not-run-after-an-interrupt-above-the-api-mask)); runs on the earlier fork image are not pooled. Every run returned with exact output and no sample dropped, no sequence gap and no missed period. Pooled from the printed histograms (0.167 us bins; the p99.99 is a bin's upper edge); maxima in microseconds. One run on a fixed fork image with the list integrity bytes was a host error (the USB node of the board vanished), not a scheduler failure; the other two ran clean (`1793613285642527139-50993bfe`, `1793613482426622002-7cef3e33`).
+
+| Kernel | Path | Rate | Runs | Periods | Latency max | Latency p99.99 | Jitter max | Jitter p99.99 | Jitter bound (5%) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| stock | task | 1 kHz | 5 | 125 951 | 40.8 | 26.7 | 37.8 | 24.7 | 50 |
+| fork | task | 1 kHz | 5 | 125 550 | 23.5 | 22.0 | 18.5 | 16.8 | 50 |
+| stock | task | 2 kHz | 5 | 251 723 | 41.8 | 25.8 | 38.4 | 23.7 | 25 |
+| fork | task | 2 kHz | 5 | 251 855 | 25.3 | 19.7 | 20.9 | 16.8 | 25 |
+| stock | task | 4 kHz | 5 | 503 452 | 38.4 | 24.3 | 34.2 | 22.8 | 12.5 |
+| fork | task | 4 kHz | 5 | 503 711 | 31.5 | 24.5 | 28.3 | 21.8 | 12.5 |
+| stock | control | 10 kHz | 5 | 1 259 472 | 15.1 | 9.3 | 14.8 | 10.0 | 5 |
+| fork | control | 10 kHz | 5 | 1 254 602 | 12.8 | 6.2 | 12.5 | 7.2 | 5 |
+
+The pooled counts exceed 100 000 periods per task-path rate and 1.25 million at 10 kHz, so the 3 MiB heap dropped no sample (the heap peak in the output stays near 107 KB). The control path was measured at 10 kHz only in the long runs; at 1 to 8 kHz the short runs above (200 to 2000 periods) show 0.5 to 6.1 us.
+
+Recognition time over the soak: stock 110.853 ms, fork 110.394 ms (0.4% faster); the plain soak images without interrupts: stock 109.975 ms, fork 110.023 ms. The control and task interrupts of the long set (17 kHz in all) therefore cost 0.80% on stock and 0.34% on the fork, which is 0.047 and 0.020 percent of recognition time per kHz of interrupts. The both-paths image (25 kHz of each, five cores) costs +4.55% on stock (114.979 ms) and +2.73% on the fork (113.024 ms, run on the earlier fork image): 0.091 and 0.055 percent per kHz, or about 0.9 and 0.5 us of recognition time per interrupt. A robot budgets 0.05 to 0.1 percent of model throughput per kHz of interrupt rate, spread over the cores that take them.
+
+Targets. The wake latency of 10 us is met by neither task path on either kernel (p99.99 20 to 27 us). The jitter bound is met on the task path at 1 kHz by both and at 2 kHz by the fork alone (maximum 20.9 us against 25), and at 4 kHz by neither (21.8 against 12.5 us at p99.99). The control path meets the wake target at the 99.99th percentile on both (6.2 and 9.3 us) and misses it at the maximum on both (12.8 and 15.1 us over 1.25 million periods); at 10 kHz neither meets the 5 us jitter bound, the fork's p99.99 is 7.2 us and stock's 10.0 us.
+
+### The panic, after the fix
+
+The fixed fork image ran five clean soaks and two clean soaks with `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES` on (stack pattern checks were on). Earlier fork images ran 14 soaks with one panic. Seven clean board runs after a fix that a QEMU case reproduces deterministically (4 of 4 failing before, 18 of 18 passing after) is evidence, not proof; the fork's board hours with control interrupts stay a watched item.
+
+Owner-work counters on the board (fixed fork, two runs): drains from interrupt exit are 77 600 to 140 200 on cores 1, 2, 3, 5, 6 and 7, 119 700 on core 0 with 25 300 from the tick, and 317 700 on core 4, where 11 800 to 12 300 exits (about 4%) were skipped by the guard. Cores without a control interrupt skip none, so the guard leaves the owner work running after ordinary interrupts. The same holds in QEMU (232 to 444 drains per CPU from interrupt exit, none skipped, without the control interrupt).
+
+### Why the stock control path has a 15 us tail
+
+The recorder keeps the four largest latencies of the control core with the interrupted context (`ICC_PMR_EL1` open at 0xf0, running priority 0x40 in every case, critical nesting zero). Three stock runs, core 4: the largest, 15.8 us at 66.425 s, was taken at `vTaskDelay+0x80`, the instruction after the yield supervisor call (`svc #0x69`), with the task at EL0; 13.7, 12.8 and 12.6 us were taken at the same address, and 14.3, 13.6, 12.3 and 12.0 us in the second run likewise. The third run's four largest (13.7, 13.4, 12.4, 11.9 us) were taken at `prvPassiveIdleTask+0x14`, the instruction after `wfi`. So the tail is not a kernel span, which the control interrupt ignores: it is the time `DAIF.I` stayed set while the stock yield handler ran its context switch under the task and ISR locks (the convoy of the earlier sweep), and, on a core that was idle, the wake-up from `wfi`. The fork shows no such instance: its four largest per run are 3.5 to 5.1 us, all inside the user-mode compute kernel. The recorder cannot show what the supervisor handler waited for, so the lock wait inside the yield handler is inferred from the address and from the sweep, not observed.
+
+### Verdict by the rule
+
+1. Control path on both kernels: neither meets the maximum (12.8 and 15.1 us) nor the 10 kHz jitter bound; both meet the 99.99th-percentile wake target. Equal on this rule.
+2. Task path: the fork meets the jitter bound at 2 kHz and stock at 1 kHz only; neither meets the 10 us wake target. The fork is ahead.
+3. Model time: within 0.5% in both directions (fork 0.4% faster over the soak, 0.04% slower plain).
+
+The rule chooses the fork. It is not the default yet; making it so changes every SMP image, and waits for the coordinator.
+
+### Backlog
+
+Per-object locking and shorter lock holds (the task-lock convoy: 82 to 96% of masked time in the sweep), the soak sweep that includes the earlier 95 to 206 us stock spans, the abortable queue lock, the idle-pull lost pull (idle pull stays off), a yield handler that does not hold `DAIF.I` through the context switch on the stock kernel, the tickless comparison, and the 10^6-period runs at 1 to 4 kHz for the control path.
+
 ## Evidence
 
 Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-36 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+61 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -213,4 +256,29 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793605217849580518-3247bc18` | 2026-11-02 | 3-3 | `1f8c64639e22` | returned | passed | run_total 106.288 s, recognition_time 109.629 ms |
 | `1793605330258102733-1624632e` | 2026-11-02 | 3-3 | `e6995c5f33fc` | returned | passed | run_total 79.197 s, recognition_time 110.178 ms |
 | `1793608348858278119-8f8e4282` | 2026-11-02 | 3-3 | `0e7b99d86e01` | watchdog-reset | failed | run_total 94.975 s, panic_line 1846 |
+| `1793609473031303913-0abdcc80` | 2026-11-02 | 3-3 | `06d8e9cdee14` | returned | passed | run_total 102.579 s, recognition_mean 110.785 ms, soak_iterations 225 |
+| `1793609576370956216-79c0b681` | 2026-11-02 | 3-3 | `826dadd7a24f` | returned | passed | run_total 147.398 s, recognition_mean 110.44 ms, soak_iterations 226 |
+| `1793609727856926898-b80b05a5` | 2026-11-02 | 3-3 | `06d8e9cdee14` | returned | passed | run_total 147.204 s, recognition_mean 110.847 ms, soak_iterations 225 |
+| `1793609880597303136-c36b66f2` | 2026-11-02 | 3-3 | `826dadd7a24f` | returned | passed | run_total 139.33 s, recognition_mean 110.355 ms, soak_iterations 226 |
+| `1793610025109272345-3c2e8775` | 2026-11-02 | 3-3 | `06d8e9cdee14` | returned | passed | run_total 95.343 s, recognition_mean 110.868 ms, soak_iterations 225 |
+| `1793610121291518039-7045ddd1` | 2026-11-02 | 3-3 | `826dadd7a24f` | returned | passed | run_total 95.789 s, recognition_mean 110.363 ms, soak_iterations 226 |
+| `1793610217673724777-5096d30a` | 2026-11-02 | 3-3 | `06d8e9cdee14` | returned | passed | run_total 113.393 s, recognition_mean 110.921 ms, soak_iterations 225 |
+| `1793610331962921349-cc0e3767` | 2026-11-02 | 3-3 | `826dadd7a24f` | returned | passed | run_total 135.508 s, recognition_mean 110.607 ms, soak_iterations 225 |
+| `1793610472504325386-8b909439` | 2026-11-02 | 3-3 | `06d8e9cdee14` | returned | passed | run_total 155.065 s, recognition_mean 110.844 ms, soak_iterations 225 |
+| `1793610631997622531-eedace9e` | 2026-11-02 | 3-3 | `826dadd7a24f` | returned | passed | run_total 146.918 s, recognition_mean 110.633 ms, soak_iterations 225 |
+| `1793610783324757258-43d1d45f` | 2026-11-02 | 3-3 | `bec3e8fd186b` | returned | passed | run_total 99.579 s, recognition_mean 109.975 ms, soak_iterations 227 |
+| `1793610884370946758-d311b355` | 2026-11-02 | 3-3 | `75faeecc303b` | returned | passed | run_total 147.71 s, recognition_mean 110.023 ms, soak_iterations 227 |
+| `1793612065441570109-89e82b22` | 2026-11-02 | 3-3 | `742f57551e83` | returned | passed | run_total 104.262 s, recognition_mean 113.024 ms, soak_iterations 220 |
+| `1793612127118715138-3a0a58c0` | 2026-11-02 | 3-3 | `03ec2eef2c9b` | returned | passed | run_total 95.475 s, recognition_mean 110.435 ms, soak_iterations 226 |
+| `1793612267894668436-a0370422` | 2026-11-02 | 3-3 | `c62eea8ee8bc` | returned | passed | run_total 95.58 s, recognition_mean 110.878 ms, soak_iterations 225 |
+| `1793612364141383439-45ae7861` | 2026-11-02 | 3-3 | `c62eea8ee8bc` | returned | passed | run_total 95.47 s, recognition_mean 110.889 ms, soak_iterations 225 |
+| `1793612412507235041-e4633398` | 2026-11-02 | 3-3 | `da6d553b7bd7` | returned | passed | run_total 95.599 s, recognition_mean 110.431 ms, soak_iterations 226 |
+| `1793612460432955799-63c98c79` | 2026-11-02 | 3-3 | `c62eea8ee8bc` | returned | passed | run_total 95.373 s, recognition_mean 110.875 ms, soak_iterations 225 |
+| `1793612556768525405-1c62fd5e` | 2026-11-02 | 3-3 | `da6d553b7bd7` | returned | passed | run_total 111.46 s, recognition_mean 110.375 ms, soak_iterations 226 |
+| `1793612653214000062-11b41595` | 2026-11-02 | 3-3 | `03ec2eef2c9b` | returned | passed | run_total 121.246 s, recognition_mean 110.439 ms, soak_iterations 226 |
+| `1793612765449252497-9a99b817` | 2026-11-02 | 3-3 | `da6d553b7bd7` | returned | passed | run_total 102.966 s, recognition_mean 110.375 ms, soak_iterations 226 |
+| `1793612995483833917-501eefc5` | 2026-11-02 | 3-3 | `da6d553b7bd7` | returned | passed | run_total 106.384 s, recognition_mean 110.382 ms, soak_iterations 226 |
+| `1793613102942277574-dfc0978e` | 2026-11-02 | 3-3 | `da6d553b7bd7` | returned | passed | run_total 118.47 s, recognition_mean 110.408 ms, soak_iterations 226 |
+| `1793613285642527139-50993bfe` | 2026-11-02 | 3-3 | `54471f8407d6` | returned | passed | run_total 192.824 s, recognition_mean 110.765 ms, soak_iterations 225 |
+| `1793613482426622002-7cef3e33` | 2026-11-02 | 3-3 | `54471f8407d6` | returned | passed | run_total 183.378 s, recognition_mean 110.65 ms, soak_iterations 225 |
 <!-- evidence-table:end -->
