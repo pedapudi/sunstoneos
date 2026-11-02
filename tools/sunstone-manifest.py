@@ -117,10 +117,12 @@ def load(path):
     if 'npu' in raw:
         n = raw['npu']
         require(set(n) <= {'slots', 'in_flight', 'graphs', 'links'}, name + ': unknown npu keys')
+        require({'slots', 'in_flight', 'graphs'} <= set(n), name + ': npu declares slots, in_flight and graphs')
+
         def count(value, label, low):
-            return integer(len(value) if isinstance(value, list) else value, name + ' npu ' + label, low, 255)
-        m['npu'] = {'slots': count(n.get('slots', 1), 'slots', 1), 'in_flight': count(n.get('in_flight', 1), 'in_flight', 1),
-                    'graphs': count(n.get('graphs', 1), 'graphs', 1), 'links': count(n.get('links', 0), 'links', 0)}
+            return integer(len(value) if isinstance(value, list) else value, name + ' npu ' + label, low, (1 << 32) - 1)
+        m['npu'] = {'slots': count(n['slots'], 'slots', 1), 'in_flight': count(n['in_flight'], 'in_flight', 1),
+                    'graphs': count(n['graphs'], 'graphs', 1), 'links': count(n.get('links', 0), 'links', 0)}
     audio = raw.get('audio')
     if audio is not None or (required | optional) & CAPTURE:
         require(audio is not None, name + ': a capture device needs an audio format')
@@ -208,12 +210,6 @@ def assign(m):
                 r['address'] = -(-max(clash) // BLOCK) * BLOCK
             place(i, r)
     return m
-
-
-def npu_word(m):
-    """The four bytes of the session record's NPU declaration (include/npu_declaration.h), 0 when none is declared."""
-    n = m.get('npu')
-    return 0 if n is None else n['slots'] | n['in_flight'] << 8 | n['graphs'] << 16 | n['links'] << 24
 
 
 def pack(m):
