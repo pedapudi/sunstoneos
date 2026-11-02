@@ -58,8 +58,15 @@ NPU_WORDS = (0x070101ac, 0x020025c0, 0x020025e0, 0x07064000, 0x07064008)
 NPU_GATES = {0x070101ac: 1, 0x020025c0: 1 << 6, 0x020025e0: 1 << 18}
 
 
-def f(name, lo, hi, text=''):
-    return (name, lo, hi, text)
+NS0, DS1 = 'ns-ds0', 'ds1'
+# The layout in which each platform's GIC registers are decoded. The A733 has two security states (GICD_CTLR.DS clear):
+# inferred from the shifted ICC_PMR_EL1 view and from the trap of ICC_IGRPEN0_EL1, not read, because DS is not visible
+# to Non-secure software. The virtual board's GIC has DS set.
+LAYOUT = {1: NS0, 2: DS1}
+
+
+def f(name, lo, hi, text='', views=None):
+    return (name, lo, hi, text, views)
 
 
 MIDR = [f('implementer', 24, 31), f('variant', 20, 23), f('architecture', 16, 19), f('partnum', 4, 15), f('revision', 0, 3)]
@@ -73,8 +80,12 @@ MMFR0 = [f('parange', 0, 3), f('asidbits', 4, 7), f('tgran4', 28, 31), f('tgran6
 MMFR2 = [f('ccidx', 20, 23), f('varange', 16, 19)]
 ICC_CTLR = [f('cbpr', 0, 0), f('eoimode', 1, 1), f('pmhe', 6, 6), f('pribits', 8, 10), f('idbits', 11, 13),
             f('seis', 14, 14), f('a3v', 15, 15), f('rss', 18, 18), f('extrange', 19, 19)]
-GICD_CTLR = [f('enable_grp0', 0, 0), f('enable_grp1ns', 1, 1), f('enable_grp1s', 2, 2), f('are_s', 4, 4),
-             f('are_ns', 5, 5), f('ds', 6, 6), f('e1nwf', 7, 7), f('rwp', 31, 31)]
+# GICD_CTLR as Non-secure software reads it with DS clear (IHI0069, GICD_CTLR, "Non-secure access when GICD_CTLR.DS == 0"):
+# bit 0 EnableGrp1, bit 1 EnableGrp1A, bit 4 ARE_NS, bit 31 RWP, the rest RES0. DS, ARE_S, EnableGrp0 and EnableGrp1S are
+# not visible. With DS set the register is the single-state layout.
+GICD_CTLR = [f('enable_grp1', 0, 0, views=NS0), f('enable_grp1a', 1, 1, views=NS0), f('are_ns', 4, 4, views=NS0), f('rwp', 31, 31, views=NS0),
+             f('ds1_enable_grp0', 0, 0, views=DS1), f('ds1_enable_grp1', 1, 1, views=DS1), f('ds1_are', 4, 4, views=DS1),
+             f('ds1_ds', 6, 6, views=DS1), f('ds1_e1nwf', 7, 7, views=DS1), f('ds1_rwp', 31, 31, views=DS1)]
 GICD_TYPER = [f('itlinesnumber', 0, 4), f('cpunumber', 5, 7), f('espi', 8, 8), f('securityextn', 10, 10),
               f('mbis', 16, 16), f('lpis', 17, 17), f('dvis', 18, 18), f('idbits', 19, 23), f('a3v', 24, 24)]
 GICR_TYPER = [f('plpis', 0, 0), f('vlpis', 1, 1), f('last', 4, 4), f('processor_number', 8, 23), f('affinity', 32, 63)]
@@ -160,11 +171,17 @@ def build():
         specs.append(key)
         facts[key] = descriptions
 
-    def raw_and_fields(name, source, view_name, scope, width, fields):
+    def raw_and_fields(name, source, view_name, scope, width, fields, rule=None):
         out = [dict(name=name, source=source, view=view(view_name), scope=scope, width=width, lo=0, hi=width - 1)]
-        for field_name, lo, hi, _ in fields:
+        for field_name, lo, hi, _, views in fields:
             out.append(dict(name=f'{name}.{field_name}', source=source, view=view(view_name), scope=scope,
-                            width=hi - lo + 1, lo=lo, hi=hi))
+                            width=hi - lo + 1, lo=lo, hi=hi, views=views))
+        if name == 'cpu.midr_el1' or name == 'cpu.mpidr_el1':
+            for item in out:
+                item['note'] = 'the value EL1 reads: VPIDR_EL2 or VMPIDR_EL2, which the monitor sets from the hardware register'
+        if rule:
+            for item in out:
+                item['rule'] = rule
         return out
 
     for ident, name, source, view_name, width, fields in CORE_REGS:
@@ -180,13 +197,15 @@ def build():
     for ident, name, source, aux in PMR_WRITES:
         add(core, 'core', (ident, aux), raw_and_fields(name, source, 'cpuif', 'core', 64, []))
     for ident, name, source, width, fields in REDIST:
-        add(core, 'core', (ident, 0), raw_and_fields(name, source, 'redist', 'core', width, fields))
+        rule = ('always-raz' if name.endswith(('igroupr0', 'igrpmodr0')) else
+                'zero-raz' if '.sgi_ppi.' in name or name.endswith('gicr_waker') else None)
+        add(core, 'core', (ident, 0), raw_and_fields(name, source, 'redist', 'core', width, fields, rule))
     for word in range(PRIORITY_WORDS):
         descriptions = []
         for byte in range(4):
             intid = word * 4 + byte
             descriptions.append(dict(name=f'gic.redist.intid{intid}.priority', source=f'GICR_IPRIORITYR{word} byte {byte}',
-                                     view=view('redist'), scope='core', width=8, lo=byte * 8, hi=byte * 8 + 7))
+                                     view=view('redist'), scope='core', width=8, lo=byte * 8, hi=byte * 8 + 7, rule='zero-raz'))
         add(core, 'core', (0x004a, word), descriptions)
     assert len(core) <= CORE_SLOTS, len(core)
 
@@ -194,8 +213,8 @@ def build():
         add(shared, 'shared', (ident, 0), raw_and_fields(name, source, 'dist', 'shared', width, fields))
     for intid in SPIS:
         descriptions = []
-        for field_name, lo, hi, _ in SPI_STATE:
-            descriptions.append(dict(name=f'gic.dist.spi{intid}.{field_name}',
+        for field_name, lo, hi, _, _views in SPI_STATE:
+            descriptions.append(dict(rule='always-raz' if field_name in ('group1', 'group_modifier') else 'spi', intid=intid, name=f'gic.dist.spi{intid}.{field_name}',
                                      source={'priority': f'GICD_IPRIORITYR{intid // 4} byte {intid % 4}',
                                              'group1': f'GICD_IGROUPR{intid // 32} bit {intid % 32}',
                                              'group_modifier': f'GICD_IGRPMODR{intid // 32} bit {intid % 32}',
@@ -206,14 +225,14 @@ def build():
                                      view=view('dist'), scope='shared', width=hi - lo + 1, lo=lo, hi=hi))
         add(shared, 'shared', (ID_SPI_STATE, intid), descriptions)
         add(shared, 'shared', (ID_SPI_ROUTER, intid), [dict(name=f'gic.dist.spi{intid}.irouter', source=f'GICD_IROUTER{intid}',
-                                                            view=view('dist'), scope='shared', width=64, lo=0, hi=63)])
+                                                            view=view('dist'), scope='shared', width=64, lo=0, hi=63, rule='spi', intid=intid)])
         add(shared, 'shared', (ID_SPI_REQUEST, intid), [
             dict(name=f'gic.dist.spi{intid}.route_requested', source='image route table (a733_irq_routes)',
-                 view=view('dist'), scope='shared', width=32, lo=0, hi=31, note='bit 16 routed, bits 15:8 core, bits 7:0 secure priority')])
+                 view=view('dist'), scope='shared', width=32, lo=0, hi=31, note='bit 16 routed, bits 15:8 core, bits 7:0 secure priority; image data, not a register')])
     for ppi in PPI_WRITES:
         add(shared, 'shared', (ID_PPI_WRITE, ppi), [
             dict(name=f'gic.redist.intid{ppi}.priority_after_write', source=f'GICR_IPRIORITYR{ppi // 4} byte {ppi % 4} (read back after write)',
-                 view=view('redist'), scope='shared', width=8, lo=0, hi=7)])
+                 view=view('redist'), scope='shared', width=8, lo=0, hi=7, rule='zero-raz')])
     for address in NPU_WORDS:
         add(shared, 'shared', (ID_NPU_WORD, address), [
             dict(name=f'mmio.{address:#010x}', source=f'MMIO word {address:#010x}', view=view('mmio'), scope='shared', width=32, lo=0, hi=31)])
@@ -254,9 +273,41 @@ def parse_header(blob):
     return dict(platform=PLATFORMS[platform], platform_id=platform, done_mask=done)
 
 
+RAZ = 'raz-in-view'
+RAZ_NOTES = {
+    'always-raz': 'GICD_IGROUPR, GICD_IGRPMODR, GICR_IGROUPR0 and GICR_IGRPMODR0 are RAZ/WI at Non-secure EL1 when GICD_CTLR.DS is clear '
+                  '(IHI0069; platform/a733/npu_irq.c), so the value 0 carries no information',
+    'zero-raz': 'reads 0: the interrupt may be Secure, for which a Non-secure read is RAZ/WI (IHI0069 4.8.1), or Non-secure with a zero '
+                'field; the view cannot tell the two apart',
+    'spi': 'every field of this interrupt reads 0 in the Non-secure view, which is also what a Secure interrupt reads (RAZ/WI); no field '
+           'shows that the view can see it',
+}
+
+
+def apply_view_visibility(items):
+    """Fields that read 0 because the Non-secure view cannot see them are not measurements.
+
+    An SPI whose priority, enable, pending, active, configuration and route all read 0 is indistinguishable from a
+    Secure interrupt; one with any nonzero field is visible, and its fields are measured."""
+    visible = {}
+    for item in items:
+        if item.get('_rule') == 'spi':
+            visible.setdefault(item['_intid'], False)
+            if item['value']:
+                visible[item['_intid']] = True
+    for item in items:
+        rule = item.get('_rule')
+        if not rule or item['status'] != 'measured':
+            continue
+        hidden = rule == 'always-raz' or (rule == 'spi' and not visible[item['_intid']]) or (rule == 'zero-raz' and item['value'] == 0)
+        if hidden:
+            item.update(read_value=item['value'], value=None, status=RAZ, note=RAZ_NOTES[rule])
+
+
 def decode(blob):
     """Facts of a returned table: a list of dicts with name, source, view, core, status, value."""
     header = parse_header(blob)
+    layout = LAYOUT[header['platform_id']]
     if header['done_mask'] != (1 << CORES) - 1:
         raise ValueError('cores %#x finished, not all eight' % header['done_mask'])
     out, seen = [], set()
@@ -271,19 +322,31 @@ def decode(blob):
                 if state == 'missing':
                     raise ValueError('%s slot %d of core %d was never written' % (scope, index, core))
                 for description in FACTS[key]:
+                    if description.get('views') not in (None, layout):
+                        continue
                     item = {k: description[k] for k in ('name', 'source', 'view')}
                     item['core'] = core
+                    if description.get('note'):
+                        item['note'] = description['note']
                     if state == 'skipped':
                         item.update(status='unmeasured', value=None, note='the probe skipped this read because its precondition was not met')
                     else:
                         width = description['width']
                         item.update(status='measured', value=(value >> description['lo']) & ((1 << width) - 1))
+                        if description.get('rule'):
+                            item['_rule'] = description['rule']
+                            item['_intid'] = description.get('intid')
                     if ident in (0x0038, 0x0039, ID_PPI_WRITE):
                         item['written'] = aux
                     if flags & FLAG_ANOMALY:
                         item['note'] = 'the entry value did not read back after the restoring write'
                     out.append(item)
                     seen.add((item['name'], core))
+    if layout == NS0:
+        apply_view_visibility(out)
+    for item in out:
+        item.pop('_rule', None)
+        item.pop('_intid', None)
     assert len(seen) == len(out)
     return header, out
 
@@ -378,11 +441,11 @@ TRAP_ENTRY = '1793590176547518274-e819ce89'
 SEEDS.append(dict(name='gic.cpuif.icc_igrpen0_el1.read_traps_to_el3', source='ICC_IGRPEN0_EL1 (mrs at Non-secure EL1)',
                   view=view('cpuif'), core=4, status='measured', value=1, queue_entry=TRAP_ENTRY,
                   note='measured: the first EL3 exception was ESR 0x623c32b9 (EC 0x18, a trapped system register access) at the mrs of '
-                       'ICC_IGRPEN0_EL1, ELR 0x4107c1c0, on core 4, and the monitor stopped. Inferred, not measured: the monitor runs with '
-                       'SCR_EL3.FIQ set (its entry code writes 0x535), and with FIQ set the GIC architecture routes Group 0 interrupts to EL3, '
-                       'so Non-secure EL1 accesses to the Group 0 CPU interface registers (ICC_IGRPEN0_EL1, ICC_BPR0_EL1, ICC_AP0Rn_EL1, '
-                       'ICC_IAR0_EL1, ICC_EOIR0_EL1, ICC_HPPIR0_EL1) trap to EL3 (IHI0069, the ICC_IGRPEN0_EL1 and ICC_BPR0_EL1 register '
-                       'descriptions; Linux irq-gic-v3.c gic_has_group0 skips Group 0 registers when SCR_EL3.FIQ shifts the PMR)'))
+                       'ICC_IGRPEN0_EL1, ELR 0x4107c1c0, on core 4, and the monitor stopped. INFERRED from this trap, not measured '
+                       '(SCR_EL3 is not readable at EL1): SCR_EL3.FIQ is 1. With FIQ set the GIC architecture gives EL3 the Group 0 '
+                       'interface, so Non-secure EL1 accesses to ICC_IGRPEN0_EL1, ICC_BPR0_EL1, ICC_AP0Rn_EL1, ICC_IAR0_EL1, '
+                       'ICC_EOIR0_EL1 and ICC_HPPIR0_EL1 trap to EL3 (IHI0069, the ICC_IGRPEN0_EL1 and ICC_BPR0_EL1 register descriptions; '
+                       'Linux irq-gic-v3.c gic_has_group0). The monitor entry code that writes 0x535 to SCR_EL3 agrees but is not a measurement'))
 
 
 def seeded_document():
@@ -402,6 +465,8 @@ def blank_facts():
     for scope, specs in (('shared', SHARED_SPECS), ('core', CORE_SPECS)):
         for key in specs:
             for description in FACTS[key]:
+                if description.get('views') not in (None, NS0):
+                    continue
                 facts.append(dict(name=description['name'], source=description['source'], view=description['view'],
                                   core=None if scope == 'shared' else 'all', status='unmeasured', value=None))
     return facts
@@ -410,6 +475,10 @@ def blank_facts():
 def empty_document():
     return {'schema': SCHEMA, 'security_state_note': 'the image runs at EL1 in the Non-secure state that the cached monitor enters '
             '(SCR_EL3.NS set at entry); SCR_EL3 is not readable at EL1, so the state is stated, not read back',
+            'decoding': {'a733-board': 'GIC registers decoded in the ns-ds0 layout: Non-secure access with two security states (GICD_CTLR.DS clear). '
+                         'DS is not visible to Non-secure software; that it is clear is INFERRED from the shifted ICC_PMR_EL1 view and from '
+                         'SCR_EL3.FIQ being set (itself inferred from the ICC_IGRPEN0_EL1 trap). A field the view cannot see is recorded as '
+                         'raz-in-view, not as measured 0.'},
             'facts': blank_facts()}
 
 

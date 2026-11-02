@@ -686,7 +686,7 @@ def main():
     c.require(all(by[('cpu.midr_el1.partnum', k)]['value'] == 0xd0b and by[('cpu.cntfrq_el0', k)]['value'] == 24000000
                   for k in range(8)), 'a core did not report the Cortex-A76 and the declared 24 MHz counter')
     c.require(len({by[('cpu.mpidr_el1', k)]['value'] for k in range(8)}) == 8, 'the cores do not report eight different MPIDR values')
-    c.require(by[('gic.dist.gicd_ctlr.ds', 0)]['value'] == 1 and by[('gic.dist.gicd_ctlr.are_s', 0)]['value'] == 1, 'GICD_CTLR does not have DS and ARE_S set as the virtual board')
+    c.require(by[('gic.dist.gicd_ctlr.ds1_ds', 0)]['value'] == 1 and by[('gic.dist.gicd_ctlr.ds1_are', 0)]['value'] == 1, 'GICD_CTLR does not have DS and ARE_S set as the virtual board')
     c.require(by[('gic.redist.intid27.priority_after_write', 0)]['value'] == 0xd8 and by[('gic.redist.intid27.priority_after_write', 0)]['written'] == 0xd8,
               'the PPI 27 write test did not read back what it wrote')
     c.require(by[('gic.dist.spi97.route_requested', 0)]['value'] == 0x100d8, 'the probe image routes INTID 97 at 0xd8 on core 0')

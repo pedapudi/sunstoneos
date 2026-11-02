@@ -77,7 +77,8 @@ def synthetic():
         values[('core', core, (0x0038, 0))] = (0xf8, 0xff, hw.FLAG_VALID)
         values[('core', core, (0x0039, 1))] = (0x98, 0x98, hw.FLAG_VALID)
         values[('core', core, (0x004a, 6))] = 0xd8 << 24 | 0xa0 << 16
-    values[('shared', 0, (0x0100, 0))] = 0x11
+    values[('shared', 0, (0x0100, 0))] = 0x12
+    values[('core', 0, (0x004a, 0))] = 0xe0
     values[('shared', 0, (0x0110, 97))] = 0x58 | 1 << 8 | 1 << 10
     values[('shared', 0, (0x0111, 97))] = 2 << 8
     values[('shared', 0, (0x0112, 97))] = 1 << 16 | 0xd8
@@ -97,8 +98,31 @@ def test_decoder():
     assert by[('gic.cpuif.icc_pmr_el1.readback_after_write_ff', 2)]['written'] == 0xff
     assert by[('gic.cpuif.icc_pmr_el1.readback_after_write_api_mask', 2)]['value'] == 0x98
     assert by[('gic.redist.intid27.priority', 4)]['value'] == 0xd8 and by[('gic.redist.intid26.priority', 4)]['value'] == 0xa0
-    assert by[('gic.dist.spi97.priority', 0)]['value'] == 0x58 and by[('gic.dist.spi97.group1', 0)]['value'] == 1
-    assert by[('gic.dist.spi97.enabled', 0)]['value'] == 1 and by[('gic.dist.spi97.irouter', 0)]['value'] == 2 << 8
+    assert by[('gic.dist.spi97.priority', 0)]['value'] == 0x58 and by[('gic.dist.spi97.priority', 0)]['status'] == 'measured'
+    # GICD_CTLR 0x12 read at Non-secure EL1 with DS clear: EnableGrp1A and ARE_NS, and no field of the Secure layout.
+    assert by[('gic.dist.gicd_ctlr', 0)]['value'] == 0x12
+    assert by[('gic.dist.gicd_ctlr.are_ns', 0)]['value'] == 1 and by[('gic.dist.gicd_ctlr.enable_grp1a', 0)]['value'] == 1
+    assert by[('gic.dist.gicd_ctlr.enable_grp1', 0)]['value'] == 0 and by[('gic.dist.gicd_ctlr.rwp', 0)]['value'] == 0
+    assert not any(n.startswith('gic.dist.gicd_ctlr.') and n.split('.')[-1] in ('ds', 'are_s', 'enable_grp0', 'enable_grp1s', 'enable_grp1ns') or '.ds1_' in n
+                   for n, _ in by), 'a field the Non-secure view does not show'
+    # Fields the view cannot see are not measurements: IGROUPR and IGRPMODR always, and an interrupt whose every field
+    # reads zero, such as a Secure SPI, SGI 1 or the zero words of the SGI and PPI frame.
+    for name in ('gic.dist.spi97.group1', 'gic.dist.spi97.group_modifier', 'gic.redist.sgi_ppi.igroupr0', 'gic.redist.sgi_ppi.igrpmodr0'):
+        assert by[(name, 0)]['status'] == 'raz-in-view' and by[(name, 0)]['value'] is None and by[(name, 0)]['note'], name
+    for field in ('priority', 'enabled', 'pending', 'active', 'config', 'irouter', 'group1'):
+        item = by[('gic.dist.spi71.' + field, 0)]
+        assert item['status'] == 'raz-in-view' and item['value'] is None and item['read_value'] == 0, field
+    assert by[('gic.redist.intid0.priority', 0)]['status'] == 'measured' and by[('gic.redist.intid0.priority', 0)]['value'] == 0xe0
+    assert by[('gic.redist.intid1.priority', 0)]['status'] == 'raz-in-view'
+    assert by[('gic.redist.sgi_ppi.isenabler0', 0)]['status'] == 'raz-in-view'
+    assert by[('gic.dist.spi97.enabled', 0)]['status'] == 'measured' and by[('gic.dist.spi97.irouter', 0)]['value'] == 2 << 8
+    # The virtual board's GIC has DS set: the single-state layout, and every field is visible.
+    q_header, q_facts = hw.decode(hw.encode(platform=hw.PLATFORM_QEMU_OS, values={('shared', 0, (0x0100, 0)): 0x50}))
+    q = {(f['name'], f['core']): f for f in q_facts}
+    assert q[('gic.dist.gicd_ctlr.ds1_ds', 0)]['value'] == 1 and q[('gic.dist.gicd_ctlr.ds1_are', 0)]['value'] == 1
+    assert ('gic.dist.gicd_ctlr.are_ns', 0) not in q and q[('gic.dist.spi71.priority', 0)]['status'] == 'measured'
+    # MIDR and MPIDR are what EL1 reads, which the monitor sets from the hardware registers.
+    assert 'VPIDR_EL2' in by[('cpu.midr_el1', 0)]['note']
     assert by[('gic.dist.spi97.route_requested', 0)]['value'] == 0x100d8
     assert by[('mmio.0x070101ac', 0)]['value'] == 1
     ppu = by[('mmio.0x07064000', 0)]
@@ -164,17 +188,18 @@ def test_document():
     document = hw.load_document()
     assert document['schema'] == hw.SCHEMA
     names = {e['name'] for e in document['facts']}
-    catalogued = {d['name'] for k in hw.CORE_SPECS + hw.SHARED_SPECS for d in hw.FACTS[k]}
+    catalogued = {d['name'] for k in hw.CORE_SPECS + hw.SHARED_SPECS for d in hw.FACTS[k] if d.get('views') in (None, hw.NS0)}
     assert catalogued <= names, sorted(catalogued - names)[:5]
     seen = set()
     for item in document['facts']:
-        assert item['status'] in ('measured', 'observed', 'unmeasured'), item
+        assert item['status'] in ('measured', 'observed', 'unmeasured', 'raz-in-view'), item
         key = (item['name'], item['core'])
         assert key not in seen, key
         seen.add(key)
         assert set(item['view']) == {'el', 'security', 'interface'} and item['source'], item
-        if item['status'] == 'unmeasured':
+        if item['status'] in ('unmeasured', 'raz-in-view'):
             assert item['value'] is None
+            assert item['status'] == 'unmeasured' or item['note'], item
         else:
             assert isinstance(item['value'], int) and 'queue_entry' in item, item
             if item['queue_entry'] is None:

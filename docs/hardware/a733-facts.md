@@ -17,11 +17,21 @@ A fact is one decoded field of one register. Its entry in the JSON file has thes
 | `source` | The register, with the byte or bit when the fact is a field of a larger register. |
 | `view` | `el`, `security` and `interface`. The probe runs at EL1 in the Non-secure state that the cached monitor enters (`SCR_EL3.NS` set at entry). `SCR_EL3` is not readable at EL1, so the state is stated, not read back. |
 | `core` | The core that read the value, `0` for shared facts that core 0 reads once, `all` for an unmeasured per-core fact, `null` for a fact without a core. |
-| `status` | `measured` (read by the probe on the board), `observed` (seen on a board before the probe), or `unmeasured`. |
+| `status` | `measured` (read by the probe, and the view can see the field), `observed` (seen on a board before the probe), `raz-in-view` (the field reads 0 because the view cannot see it, so the 0 is not a measurement; `read_value` keeps the 0 and `note` gives the reason), or `unmeasured`. |
 | `value`, `written` | The value, and for the write tests the value that was written. |
 | `queue_entry`, `image_sha256`, `port` | The board run that produced the value. |
 
-The GIC has two security states, so the Non-secure value of a priority byte or of `ICC_PMR_EL1` differs from
+Each register is decoded by the layout of the view it was read in. The A733 probe reads the GIC at Non-secure EL1
+with two security states (`GICD_CTLR.DS` clear). `DS` is not visible to Non-secure software; that it is clear is
+inferred from the shifted `ICC_PMR_EL1` view and from `SCR_EL3.FIQ` being set, which is itself inferred from the
+`ICC_IGRPEN0_EL1` trap and never measured. In that view `GICD_CTLR` shows only EnableGrp1 (bit 0), EnableGrp1A
+(bit 1), ARE_NS (bit 4) and RWP (bit 31); `DS`, `ARE_S`, EnableGrp0 and EnableGrp1S are not shown (IHI0069,
+`GICD_CTLR`, "Non-secure access when GICD_CTLR.DS == 0"). `GICD_IGROUPR`, `GICD_IGRPMODR`, `GICR_IGROUPR0` and
+`GICR_IGRPMODR0` are RAZ/WI, and every field of a Secure interrupt reads 0. The decoder therefore marks those
+fields `raz-in-view`; an SPI is treated as visible only when one of its priority, enable, pending, active,
+configuration or route fields reads nonzero, and a priority byte, a state word of the SGI and PPI frame or
+`GICR_WAKER` that reads 0 is `raz-in-view` too. `MIDR_EL1` and `MPIDR_EL1` are what EL1 reads: `VPIDR_EL2` and
+`VMPIDR_EL2`, which the monitor sets from the hardware registers. The GIC has two security states, so the Non-secure value of a priority byte or of `ICC_PMR_EL1` differs from
 the Secure value that EL3 wrote (Linux `irq-gic-v3.c` lines 95-115; IHI0069 section 4.8.1). Every GIC fact
 therefore names its view. Facts read on the virtual board (`checks/qemu-os-boot.py`) carry the platform
 `qemu-os-board` in the table header and the decoder refuses to merge them.
@@ -76,7 +86,7 @@ Registers the probe never accesses, because a Non-secure EL1 access traps to the
 interface registers `ICC_IGRPEN0_EL1`, `ICC_BPR0_EL1` and `ICC_AP0Rn_EL1`. Queue entry
 `1793590176547518274-e819ce89` measured the read of `ICC_IGRPEN0_EL1` trapping to EL3 (ESR class 0x18, the
 monitor stopped); the fact `gic.cpuif.icc_igrpen0_el1.read_traps_to_el3` records it. The inference is that the
-monitor sets `SCR_EL3.FIQ` (its entry code writes 0x535), which gives EL3 the Group 0 interface. `PMCR_EL0` is
+monitor sets `SCR_EL3.FIQ`, which gives EL3 the Group 0 interface. `PMCR_EL0` is
 not read either: no image reads it at EL1 on a board. `checks/hw-facts.py` disassembles the capture code and
 refuses any system register outside an allowed list of registers that board images already read at EL1 or that
 lie in the ID space.
@@ -130,8 +140,8 @@ the table. Every core reported; the values below hold on all eight cores unless 
 | `ICC_PMR_EL1` after writing the API mask 0xb0 | 0xb0 |
 | `ICC_RPR_EL1` with no interrupt active | 0xff |
 | PPI 27 priority byte: on entry, and after the image's write of 0xd8 | 0x00, and 0xd0 (the write takes effect; the Non-secure value is `((0xd8 >> 1) \| 0x80) & 0xf8`, shifted left) |
-| INTID 97 priority, Non-secure read (Secure route priority 0xd8) | 0xb0 |
-| `GICD_CTLR` | 0x12: ARE_S set, DS clear |
+| INTID 97 priority, Non-secure view of the stored Secure route priority 0xd8 | 0xb0 |
+| `GICD_CTLR`, Non-secure view | 0x12: EnableGrp1A set and ARE_NS set; no other visible field set |
 | `CNTFRQ_EL0` | 24000000 on every core |
 | `MIDR_EL1` | Cortex-A55 `0x412fd050` on cores 0 to 5 and Cortex-A76 `0x414fd0b1` on cores 6 and 7, as the file records per core |
 | NPU PPU words `0x07064000`, `0x07064008` | 8, read at EL1 after the three gates were open |
@@ -144,7 +154,7 @@ earlier value came from another state of the interface (for example with tasks r
 yet cover. Merging the board table replaced that observation, as the merge replaces observed entries.
 
 `ICC_IGRPEN0_EL1` read at Non-secure EL1 traps to EL3 is recorded as a measured fact from entry
-`1793590176547518274-e819ce89`, with the `SCR_EL3.FIQ` explanation marked as inferred.
+`1793590176547518274-e819ce89`. That `SCR_EL3.FIQ` is 1 is inferred from the trap, with that reason, and is never a measured fact.
 
 Seeds that remain `observed` are the runner's own readings (`runner.mmio.*` for the five NPU admission words
 and `runner.rail.*`: DCDC3 and DCDC5 800 mV, DCXO 26 MHz, CPU voltage bin 4) from entry
