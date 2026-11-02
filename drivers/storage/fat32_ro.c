@@ -53,6 +53,7 @@ int fat32_mount(struct fat32 *f, const struct fat32_device *d, uint64_t base, ui
         if (!rd(f, base + info, 1, s)) return FAT32_IO;
         if (le32(s) == 0x41615252 && le32(s + 484) == 0x61417272 && le32(s + 508) == 0xaa550000) {
             uint32_t free = le32(s + 488), next = le32(s + 492);
+            f->fsinfo_sector = base + info;
             if (free <= clusters) f->fsinfo_free = free;
             if (next >= 2 && next < clusters + 2) f->fsinfo_next = next;
         }
