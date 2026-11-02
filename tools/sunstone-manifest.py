@@ -177,14 +177,13 @@ def load(path):
 
 LARGE = struct.Struct('<IIQQQ32s48s')
 assert LARGE.size == 112
-LARGE_MAX = 4
-LARGE_GIB = 11 << 30
+LARGE_GIB = 11 << 30      # the upper memory; the only bound on the number and total size of large regions
 LARGE_PATH = re.compile(r'/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*')
 
 
 def load_large(name, items):
     """The large_regions of manifest.json: regions of upper memory loaded from the card (sunstone_large.h)."""
-    require(isinstance(items, list) and len(items) <= LARGE_MAX, name + ': at most %d large regions' % LARGE_MAX)
+    require(isinstance(items, list) and len(items) <= LARGE_GIB // BLOCK, name + ': more large regions than 2 MiB blocks in upper memory')
     records, names = [], []
     for i, r in enumerate(items):
         where = '%s large region %d' % (name, i)
@@ -214,6 +213,7 @@ def load_large(name, items):
             file = ''
         records.append({'index': i, 'flags': flags, 'bytes': size, 'source_bytes': source, 'first_sector': sector,
                         'sha256': digest, 'path': file})
+    require(sum(r['bytes'] for r in records) <= LARGE_GIB, name + ': large regions together exceed the 11 GiB of upper memory')
     return records, names
 
 
@@ -379,6 +379,7 @@ def c_header(m):
         lines.append('#define %s_REGION_%s %du' % (c.upper(), n.upper(), i))
     for i, n in enumerate(m['large_names']):
         lines.append('#define %s_LARGE_%s %du' % (c.upper(), n.upper(), i))
+    lines.append('#define %s_LARGE_COUNT %du' % (c.upper(), len(m['large_names'])))
     lines += ['#ifdef __cplusplus', '}', '#endif', '#endif', '']
     return '\n'.join(lines)
 
@@ -398,10 +399,23 @@ def c_tables(m):
              'const struct ss_application ss_application = {&%s_manifest,%s_init,%s_main,app_stack,&app_task};' % (c,c,c),
              '__attribute__((used,retain,aligned(8))) uint8_t ss_result_record[%d];' % (56+m['output_limit']),
              'const size_t ss_result_capacity = %du;' % m['output_limit'],
+             '#include "app_large.h"',
+             '/* Storage for the large regions this manifest declares: the count is the manifest\'s, not a constant. */',
+             'const unsigned os_large_capacity = %du;' % len(m.get('large_regions', [])),
+             'struct large_slot os_large_slot_storage[%d];' % max(1, len(m.get('large_regions', []))),
+             'struct app_region_entry os_large_entry_storage[%d];' % max(1, len(m.get('large_regions', []))),
+             '/* A task waits on one region at a time: one entry per task of the application. */',
+             'const unsigned os_large_waiter_capacity = %du;' % (m.get('workers', 0) + 1),
+             'TaskHandle_t os_large_waiter_task[%d];' % (m.get('workers', 0) + 1),
+             'unsigned os_large_waiter_region[%d];' % (m.get('workers', 0) + 1),
+             'int os_large_task_privileged(void (*)(void *),void *);',
+             'int os_large_pins(struct a733_pin_handoff *);',
+             'int os_large_start(void);',
              '__attribute__((aligned(4))) uint8_t ss_capture_buffer[%d];' % (64 + max(8192, -(-(m['audio']['max_frames']*m['audio']['channels']*(m['audio']['bits']//8))//4096)*4096) if m['audio']['max_frames'] else 64),
              'const size_t ss_capture_capacity = sizeof(ss_capture_buffer)-SS_CAPTURE_HEADROOM;',
              '__attribute__((used,retain)) const struct os_application os_applications[] = {',
              '    {"thermal",os_thermal_task_privileged,os_thermal_pins,os_thermal_start},',
+             '    {"large",os_large_task_privileged,os_large_pins,os_large_start},',
              '#ifdef SUNSTONE_A733_OS_NPU',
              '    {"npu",os_npu_task_privileged,os_npu_pins,os_npu_start},', '#endif',
              '#ifdef SUNSTONE_A733_OS_AUDIO',

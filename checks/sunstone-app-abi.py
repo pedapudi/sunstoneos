@@ -206,7 +206,7 @@ large_refused(lambda v: v[0].pop('file'), 'not both')
 large_refused(lambda v: v[1].update(first_sector=0), 'first_sector')
 large_refused(lambda v: v[1].update(access=['write']), 'access is [read]')
 large_refused(lambda v: v[1].update(name='weights'), 'distinct name')
-large_refused(lambda v: v.extend([dict(v[0], name='c%d' % i) for i in range(3)]), 'at most 4 large regions')
+large_refused(lambda v: v.extend([dict(v[0], name='c%d' % i, bytes=4 << 30, source_bytes=1 << 20) for i in range(3)]), 'together exceed the 11 GiB')
 large_refused(lambda v: v[0].update(unknown=1), 'unknown keys')
 large_refused(lambda v: v[0].update(bytes=12 << 30), 'outside')
 

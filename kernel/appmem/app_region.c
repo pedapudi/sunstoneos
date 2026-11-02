@@ -7,9 +7,12 @@
 
 static int aligned(uint64_t v, uint64_t a) { return (v & (a - 1)) == 0; }
 
-int app_region_ledger_init(struct app_region_ledger *l, const struct app_region_range *r, unsigned count)
+int app_region_ledger_init(struct app_region_ledger *l, struct app_region_range *usable_storage, unsigned usable_capacity,
+                           struct app_region_entry *entry_storage, unsigned entry_capacity,
+                           const struct app_region_range *r, unsigned count)
 {
-    if (!l || count > APP_REGION_USABLE_MAX || (count && !r)) return APP_REGION_INVALID;
+    if (!l || !usable_storage || (entry_capacity && !entry_storage) || count > usable_capacity || (count && !r) ||
+        entry_capacity > APP_REGION_MAX_REGIONS) return APP_REGION_INVALID;
     uint64_t previous_end = APP_REGION_BASE;
     for (unsigned i = 0; i < count; ++i) {
         if (!r[i].bytes || !aligned(r[i].base, APP_REGION_BLOCK) || !aligned(r[i].bytes, APP_REGION_BLOCK) ||
@@ -18,41 +21,44 @@ int app_region_ledger_init(struct app_region_ledger *l, const struct app_region_
         previous_end = r[i].base + r[i].bytes;
     }
     memset(l, 0, sizeof *l);
+    l->usable = usable_storage; l->usable_capacity = usable_capacity;
+    l->entry = entry_storage; l->capacity = entry_capacity;
+    if (entry_capacity) memset(entry_storage, 0, sizeof *entry_storage * entry_capacity);
     for (unsigned i = 0; i < count; ++i) l->usable[i] = r[i];
     l->usable_count = count;
     return APP_REGION_OK;
 }
 
-/* Free gaps: usable ranges minus entries. Entries lie inside one usable range
- * each, so a sweep over the sorted entries inside each range finds them. */
+/* The free gaps in address order: usable ranges minus entries, which each lie inside one usable range. The
+ * iterator keeps the usable range and the cursor, so no array of gaps is needed. */
 struct gap { uint64_t base, end; };
+struct gap_walk { unsigned range; uint64_t cursor; int started; };
 
-static unsigned gaps(const struct app_region_ledger *l, struct gap out[APP_REGION_USABLE_MAX + APP_REGION_MAX])
+static int gap_next(const struct app_region_ledger *l, struct gap_walk *w, struct gap *out)
 {
-    unsigned n = 0;
-    for (unsigned u = 0; u < l->usable_count; ++u) {
-        uint64_t cursor = l->usable[u].base, end = l->usable[u].base + l->usable[u].bytes;
-        for (;;) {
-            const struct app_region_entry *next = 0;
-            for (unsigned i = 0; i < APP_REGION_MAX; ++i) {
-                const struct app_region_entry *e = &l->entry[i];
-                if (e->owner && e->base >= cursor && e->base < end && (!next || e->base < next->base)) next = e;
-            }
-            uint64_t stop = next ? next->base : end;
-            if (stop > cursor) out[n++] = (struct gap){cursor, stop};
-            if (!next) break;
-            cursor = next->base + next->bytes;
+    for (;;) {
+        if (w->range >= l->usable_count) return 0;
+        uint64_t end = l->usable[w->range].base + l->usable[w->range].bytes;
+        if (!w->started) { w->cursor = l->usable[w->range].base; w->started = 1; }
+        const struct app_region_entry *next = 0;
+        for (unsigned i = 0; i < l->capacity; ++i) {
+            const struct app_region_entry *e = &l->entry[i];
+            if (e->owner && e->base >= w->cursor && e->base < end && (!next || e->base < next->base)) next = e;
         }
+        uint64_t stop = next ? next->base : end;
+        struct gap g = {w->cursor, stop};
+        if (next) w->cursor = next->base + next->bytes;
+        else { ++w->range; w->started = 0; }
+        if (g.end > g.base) { *out = g; return 1; }
     }
-    return n;
 }
 
 uint64_t app_region_free_bytes(const struct app_region_ledger *l)
 {
-    struct gap g[APP_REGION_USABLE_MAX + APP_REGION_MAX];
-    unsigned n = gaps(l, g);
+    struct gap_walk w = {0, 0, 0};
+    struct gap g;
     uint64_t sum = 0;
-    for (unsigned i = 0; i < n; ++i) sum += g[i].end - g[i].base;
+    while (gap_next(l, &w, &g)) sum += g.end - g.base;
     return sum;
 }
 
@@ -63,25 +69,23 @@ int app_region_acquire(struct app_region_ledger *l, uint8_t owner, uint64_t byte
         (access != APP_REGION_READ && access != (APP_REGION_READ | APP_REGION_WRITE)) ||
         bytes > APP_REGION_LIMIT - APP_REGION_BASE) return APP_REGION_INVALID;
     bytes = (bytes + APP_REGION_BLOCK - 1) & ~(APP_REGION_BLOCK - 1);
-    unsigned held = 0, slot = APP_REGION_MAX;
-    for (unsigned i = 0; i < APP_REGION_MAX; ++i) {
-        if (l->entry[i].owner == owner) ++held;
-        if (!l->entry[i].owner && slot == APP_REGION_MAX) slot = i;
-    }
-    if (held >= APP_REGION_PER_OWNER || slot == APP_REGION_MAX) return APP_REGION_QUOTA;
-    struct gap g[APP_REGION_USABLE_MAX + APP_REGION_MAX];
-    unsigned n = gaps(l, g);
+    unsigned slot = l->capacity;
+    for (unsigned i = 0; i < l->capacity; ++i) if (!l->entry[i].owner) { slot = i; break; }
+    if (slot == l->capacity) return APP_REGION_QUOTA;
     uint64_t best_base = 0, best_gap = UINT64_MAX;
     int found = 0;
+    struct gap_walk w = {0, 0, 0};
+    struct gap g;
     if (bytes >= APP_REGION_GIB) {                 /* a 1 GiB boundary keeps whole slots as one block */
-        for (unsigned i = 0; i < n && !found; ++i) {
-            uint64_t start = (g[i].base + APP_REGION_GIB - 1) & ~(APP_REGION_GIB - 1);
-            if (start < g[i].end && g[i].end - start >= bytes) { best_base = start; found = 1; }
+        while (!found && gap_next(l, &w, &g)) {
+            uint64_t start = (g.base + APP_REGION_GIB - 1) & ~(APP_REGION_GIB - 1);
+            if (start < g.end && g.end - start >= bytes) { best_base = start; found = 1; }
         }
     }
-    for (unsigned i = 0; i < n && !found; ++i) {   /* smallest gap that holds the size */
-        uint64_t size = g[i].end - g[i].base;
-        if (size >= bytes && size < best_gap) { best_gap = size; best_base = g[i].base; }
+    w = (struct gap_walk){0, 0, 0};
+    while (!found && gap_next(l, &w, &g)) {        /* smallest gap that holds the size */
+        uint64_t size = g.end - g.base;
+        if (size >= bytes && size < best_gap) { best_gap = size; best_base = g.base; }
     }
     if (!found && best_gap == UINT64_MAX) return APP_REGION_NO_SPACE;
     l->entry[slot] = (struct app_region_entry){best_base, bytes, owner, (uint8_t)access};
@@ -92,7 +96,7 @@ int app_region_acquire(struct app_region_ledger *l, uint8_t owner, uint64_t byte
 int app_region_release(struct app_region_ledger *l, uint8_t owner, uint64_t base)
 {
     if (!l || !owner) return APP_REGION_INVALID;
-    for (unsigned i = 0; i < APP_REGION_MAX; ++i)
+    for (unsigned i = 0; i < l->capacity; ++i)
         if (l->entry[i].owner == owner && l->entry[i].base == base) {
             memset(&l->entry[i], 0, sizeof l->entry[i]);
             return APP_REGION_OK;
@@ -102,7 +106,7 @@ int app_region_release(struct app_region_ledger *l, uint8_t owner, uint64_t base
 
 uint8_t app_region_owner_of(const struct app_region_ledger *l, uint64_t pa)
 {
-    for (unsigned i = 0; i < APP_REGION_MAX; ++i)
+    for (unsigned i = 0; i < l->capacity; ++i)
         if (l->entry[i].owner && pa >= l->entry[i].base && pa - l->entry[i].base < l->entry[i].bytes)
             return l->entry[i].owner;
     return 0;
@@ -120,7 +124,7 @@ static unsigned covered(const struct app_region_ledger *l, uint8_t owner, uint64
 {
     unsigned access = 0;
     *whole = 0;
-    for (unsigned i = 0; i < APP_REGION_MAX; ++i) {
+    for (unsigned i = 0; i < l->capacity; ++i) {
         const struct app_region_entry *e = &l->entry[i];
         if (e->owner != owner || e->base >= hi || e->base + e->bytes <= lo) continue;
         access = e->access;

@@ -419,17 +419,46 @@ execute-never bits). The model aborts on a descriptor bit it does not model
 
 ## Status of the OS integration
 
-- **Admission (implemented, host- and QEMU-checked).** `tools/sunstone-manifest.py` takes `large_regions` in
-  `manifest.json` (a file or a raw extent, a size that is a multiple of 2 MiB, the source length and its SHA-256)
-  and emits the section `sunstone_large_regions` beside the manifest. `apps/os/large.c` runs in
-  `os_application_prepare()`, before any task exists: it derives the usable upper memory from the installed kernel
-  table (each level-1 slot that holds the EL1-only non-global block, which the table builder writes only when the
-  decode check passed), takes every record from the ledger all or nothing, and builds the application's space. A
-  refusal stops the start. `checks/qemu-os-boot.py` boots an application that declares a 1 GiB file region and a
-  64 MiB extent region on a 4 GiB virtual board: both are placed (`0x8000_0000`, `0xc000_0000`), the application
-  runs, and an application whose regions exceed the upper memory never starts.
-- **Not yet implemented:** the task-switch hook that selects the space, the `ss_large_*` calls, the loader task and
-  the 1 GiB test application with its bandwidth measurement at the approved top points.
+All four steps are implemented in the OS image and checked on the host and in QEMU; none has run on a board.
+[The status page](../status/large-regions.md) lists what is open.
+
+- **Counts.** No tuning constant bounds a count. The usable upper memory is 11 level-1 slots, which bounds the
+  usable ranges and the pages of a space (`APP_SPACE_PAGES` = the root and one level-2 table per slot = 12). The
+  number of regions is bounded by the memory (each takes a 2 MiB block) and their total by 11 GiB. The ledger
+  takes caller storage for as many regions as the manifest declares; the generated tables size it, the loaded
+  slots and the waiter list (one entry per task of the application, which is its workers plus the main task).
+- **Admission** (`apps/os/large.c`) runs in `os_application_prepare()`. The usable memory is read from the
+  installed kernel table, so an image whose decode check failed has none and the application does not start.
+- **Task switch.** `traceTASK_SWITCHED_IN()`, defined in the OS `FreeRTOSConfig.h` files only, calls
+  `os_space_switch_in()` (`include/os_space.h`). A task carries its space's TTBR0 value in its application tag
+  (the OS tags the main task; `ss_large_attach` tags a worker). The hook reads the core's TTBR0, compares it with
+  the task's and writes it when they differ. It issues no barrier and no TLB invalidate: the kernel's mappings
+  are the same in every space, every upper-memory entry carries an ASID, and the exception return that resumes
+  the task is a context synchronization event. Neither kernel needs a change: the default `tasks.c` and the
+  partitioned `freertos.c` both expand the macro with names they already have (`pxCurrentTCBs`,
+  `portGET_CORE_ID`, the task tag), and both build and boot in the QEMU check.
+- **Cost of the hook.** Compiled, the hook is 6 instructions while no space is installed, about 20 when a space is
+  installed and the table does not change, and one more (the `MSR`) when it changes. QEMU's instruction time
+  (`-icount shift=0`) for 20,000 notification round trips between two tasks of one core is 289.16 ticks per
+  round trip in one space and 289.34 with a TTBR0 write at each switch: 0.18 ticks (7.5 ns) per round trip, 3.8 ns per
+  switch, four instructions' time. This is not hardware time. The OS test application runs the same benchmark, so
+  the figure on the board is one run away.
+- **SDK.** `ss_large_wait`, `ss_large_base`, `ss_large_status` and `ss_large_attach` are implemented;
+  `ss_large_request` refuses, because the tables and the ledger are sized from the manifest.
+- **Loader** (`apps/os/large_load.c`): one EL1 task reads each region's FAT32 file (or raw extent) in 128 KiB
+  requests through two buffers, copies into the region through the kernel table, hashes, and sets READY only when
+  the digest matches; the application's waiters are woken by task notification. A missing file, a failing device
+  and a digest mismatch set FAILED with the loader's status, and the application returns normally.
+- **Device.** The board supplies `os_large_device()`. The QEMU board supplies a RAM disk. The A733 images supply
+  none yet, so the OS test application reports "failed to load" there until the SD0 provider of the OS image is
+  bound.
+- **Checks.** `checks/qemu-os-boot.py` cases: loaded (the region reads back at EL0 as the file), file absent
+  (reported, normal return), one flipped bit (digest mismatch, normal return), a task outside the space faults at the
+  region base with a level 1 permission fault, switch cost, and regions beyond the board's memory (no start).
+- **Test application** `apps/large-region-test` (`SUNSTONE_APPLICATION=large-region-test`, needs
+  `-DSUNSTONE_A733_DRAM_DECODE_PROBE=ON`): a 1 GiB region loaded from `/sunstone-test/sunstone-region-test.bin`, the
+  switch benchmark, and read passes with the vector loads of `apps/dram-bandwidth/kernel.c` (a 40 MiB window ten times and
+  the full gigabyte three times), timed with the 24 MHz counter. Without the file it reports why and returns.
 
 ## Prerequisites and changes outside this design's files
 

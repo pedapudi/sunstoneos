@@ -17,6 +17,15 @@
  * the A55 cluster; only explicit placements reach the Cortex-A76 cores. */
 #define configTASK_DEFAULT_CORE_AFFINITY A733_SMP_A55_MASK
 #endif
+/* The task-switch hook of the per-application address spaces (include/os_space.h). The tag of a task is a
+ * pointer to the TTBR0 value of its space. */
+#ifdef SUNSTONE_A733_OS
+#define configUSE_APPLICATION_TASK_TAG 1
+#ifndef __ASSEMBLER__
+#include "../../include/os_space.h"
+#define traceTASK_SWITCHED_IN() os_space_switch_in((const void *)pxCurrentTCBs[portGET_CORE_ID()]->pxTaskTag)
+#endif
+#endif
 /* Cores 0-5 are Cortex-A55 and cores 6-7 Cortex-A76. A woken task's tie
  * between idle cores keeps the waking core only within its own type. */
 #define configCORES_SHARE_TYPE(a, b) \
