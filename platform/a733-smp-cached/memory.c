@@ -56,6 +56,10 @@ __attribute__((weak)) int a733_dram_decode_check(const struct a733_dram_range *r
     return 0;
 }
 
+#ifdef SUNSTONE_A733_OS
+/* A copy of the kernel's level-1 table for EL1 to read; written once by a733_cached_memory_prepare(). */
+uint64_t a733_os_kernel_l1[512] __attribute__((aligned(4096)));
+#endif
 int a733_cached_memory_prepare(void)
 {
     uint64_t el, sctlr3, sctlr1, daif, mpidr; unsigned core;
@@ -207,6 +211,12 @@ int a733_cached_memory_prepare(void)
         a733_cached_el1_l2[i]=(uintptr_t)a733_cached_usb_el1_l3[table]|3;
         a733_cached_el3_l2[i]=0;
     }
+#endif
+#ifdef SUNSTONE_A733_OS
+    /* The kernel's level-1 table is inaccessible at EL1 (the monitor interval is invalid in its tables), but the
+     * per-application address spaces start from a copy of it (apps/os/large.c). This copy lies in cached writable
+     * RAM, and the publication of that RAM that follows this function makes it visible to every core. */
+    for (unsigned i = 0; i < 512; ++i) a733_os_kernel_l1[i] = a733_cached_el1_l1[i];
 #endif
     /* Last table step: each core compares this with its own readback. */
     uint64_t sum = 0;
