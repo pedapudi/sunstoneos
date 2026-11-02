@@ -23,11 +23,19 @@ int ss_live(void){return 1;}
 /* Model the OS: throttled until the clock grant completes 30 ms after start,
  * as the initial THROTTLE state holds until every sensor has been read. */
 static int ready_now(void){return (ns()-began)>30000000;}
-int ss_throttled(void){return !ready_now()||(!strcmp(scenario,"throttle-after-ready")&&(ns()-began)>120000000);}
+static atomic_uint started;
+int ss_throttled(void){return !ready_now()||(!strcmp(scenario,"throttle-after-ready")&&(ns()-began)>120000000)||(!strcmp(scenario,"throttle")&&atomic_load(&started));}
+
+void ss_thermal_status(struct ss_thermal_status *s)
+{
+    memset(s,0,sizeof(*s));s->seen=31;s->sequence=7;s->start_us=1000;s->now_us=5000000;
+    s->millicelsius[0]=41000;s->millicelsius[1]=42000;s->millicelsius[2]=-3000;s->millicelsius[3]=44000;s->millicelsius[4]=45000;
+    if(!strcmp(scenario,"throttle")){s->cause=2;s->deadline_us=4999000;}else s->deadline_us=5001000;
+}
 void ss_progress(void){}
 int ss_clock_ready(void){return ready_now();}
 int ss_clock_info(char *line,size_t n){return snprintf(line,n,"CLOCK cpu_l_mhz=1794 cpu_b_mhz=2002 cpu_l_mv=1000 cpu_b_mv=1050 transitions=3 dsu_mhz=1274 sid=00000000 bin=4 core=6 pattern=0 parked_max_us=1\n");}
-void ss_activity_begin(void){}
+void ss_activity_begin(void){atomic_store(&started,1);}
 void ss_activity_end(int success){if(!success)abort();}
 _Noreturn void ss_fail_value(uint32_t detail,uint32_t value){fprintf(stderr,"FIRST_FAULT detail=%08x value=%08x\n",detail,value);fflush(stderr);_Exit(2);}
 _Noreturn void ss_fail(uint32_t detail){ss_fail_value(detail,detail);}
@@ -97,7 +105,7 @@ int ss_npu_run(unsigned model,const void *input,size_t input_bytes,void *output,
     unsigned clear=0;if(atomic_compare_exchange_strong(&request,&clear,1))xTaskNotifyGive(&service_task);
     return 0;
 }
-int ss_npu_close(void){if(atomic_load(&request))abort();return 1;}
+int ss_npu_close(void){return atomic_load(&request)==1?0:1;}
 extern void cpu_npu_load_init(void),cpu_npu_load_main(const struct ss_grant *);
 extern int os_npu_diagnostic_bind(struct npu_runtime *);
 int main(int argc,char **argv)

@@ -24,6 +24,11 @@ spec = importlib.util.spec_from_file_location('barrier', ROOT/'checks/all-core-p
 barrier = importlib.util.module_from_spec(spec); spec.loader.exec_module(barrier)
 digest = barrier.digest
 
+spec = importlib.util.spec_from_file_location('hw_facts', ROOT/'tools/hw_facts.py')
+hw_facts = importlib.util.module_from_spec(spec); spec.loader.exec_module(hw_facts)
+# The GIC priority views and the ICC_PMR_EL1 read-back come from docs/hardware/a733-facts.json.
+GIC = hw_facts.GicModel()
+
 
 REPORT = 0x42018100
 # Refusal case: injected GIC words, then the expected code, address, value read and core.
@@ -47,7 +52,7 @@ class FirstTask(barrier.AllCore):
         # too; otherwise saving then restoring them invents a hardware mismatch.
         for r in self.rdist:
             for address in range(r+0x10400, r+0x10420, 4):
-                self.mmio[address] = self.mmio.get(address, 0) & 0xf8f8f8f8
+                self.mmio[address] = self.mmio.get(address, 0) & (GIC.mask * 0x01010101)
                 self.original_mmio[address] = self.mmio[address]
         self.secure_pmr = [0]*8
         self.entries = {}
@@ -90,10 +95,10 @@ class FirstTask(barrier.AllCore):
                     if access == UC_MEM_WRITE:
                         if not self.nonsecure(core) or group1:
                             v = (value >> (8*byte)) & 255
-                            raw = (((v >> 1) | 128) if self.nonsecure(core) else v) & 0xf8
+                            raw = GIC.ns_write(v) if self.nonsecure(core) else GIC.secure_write(v)
                             self.mmio[word] = (original & ~(255 << shift)) | (raw << shift)
                     else:
-                        v = ((raw << 1) & 255 if group1 else 0) if self.nonsecure(core) else raw
+                        v = (GIC.priority_ns_read(a-r-0x10400, raw) if group1 else 0) if self.nonsecure(core) else raw
                         result |= v << (8*byte)
                 if access != UC_MEM_WRITE:
                     u.mem_write(address, result.to_bytes(size, 'little'))
@@ -167,16 +172,15 @@ class FirstTask(barrier.AllCore):
             value = self.reg(core, args[1])
             ns = self.nonsecure(core) and bool(r['scr_el3'] & 4)
             if ns:
-                if self.secure_pmr[core] & 128:
-                    self.secure_pmr[core] = ((value >> 1) | 128) & 0xf8
+                self.secure_pmr[core] = GIC.pmr_ns_write(self.secure_pmr[core], value)
             else:
-                self.secure_pmr[core] = value & 0xf8
-            r['icc_pmr_el1'] = (self.secure_pmr[core] << 1) & 255 if self.secure_pmr[core] & 128 else 0
+                self.secure_pmr[core] = GIC.secure_write(value)
+            r['icc_pmr_el1'] = GIC.pmr_ns_read(self.secure_pmr[core])
             u.reg_write(UC_ARM64_REG_PC, address+4); return
         if op == 'mrs' and args[1] == 'icc_pmr_el1':
             mask = self.secure_pmr[core]
             ns = self.nonsecure(core) and bool(r['scr_el3'] & 4)
-            self.put(core, args[0], ((mask << 1) & 255 if mask & 128 else 0) if ns else mask)
+            self.put(core, args[0], GIC.pmr_ns_read(mask) if ns else mask)
             u.reg_write(UC_ARM64_REG_PC, address+4); return
         if op == 'msr' and args[0] in ('icc_ctlr_el1', 'icc_bpr1_el1'):
             assert r['currentel'] == 4 and self.reg(core, args[1]) == 0

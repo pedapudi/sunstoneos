@@ -291,6 +291,29 @@ def case_startup(elf, npu_never_ran=False):
     return s, outcome
 
 
+def case_startup_refusal(elf, group, line, value, caller):
+    """A start hook refuses: board_fail_note names it, then main panics (line 11)
+    on core 0 before the scheduler. The panic must claim the failure return."""
+    s = Scenario(elf)
+    m = s.model
+    s.scheduler(False)
+    for name in ('probe_arrived', 'probe_finished'):
+        for c in range(8):
+            m.put32(s.local(name) + 4 * c, 1)
+    m.put32(s.local('probe_release'), 1)
+    m.put32(s.local('probe_count'), 256)
+    site = group << 12 | line
+    s.start(0, s.image.symbols['board_fail_note'], (site, value, caller))
+    assert s.run_one(0) == 'return', 'the refusal note returns to board main'
+    file = s.local('ss_result_capacity')   # any readable address names the file
+    s.start(0, s.image.symbols['platform_panic'], (file, 11))
+    for c in range(1, 8):
+        s.start(c, s.image.symbols['a733_cached_el1'],
+                (c, prior.EPOCH, prior.DEADLINE, prior.DEADLINE, 0x03460000 + c * 0x20000))
+    outcome = m.execute(s.contexts, budget=4000000)
+    return s, outcome
+
+
 def case_running_claim(elf, site=None, group=APPLICATION, value=0x4641, preset_fatal=False):
     s = Scenario(elf)
     s.scheduler(True)
@@ -430,6 +453,7 @@ def main():
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=False)
+    args.elf_symbols = {n: next(iter(v - {0})) for n, v in Layouts(args.elf, layout_names=()).symbols.items() if n in ('os_npu_start', 'os_application_prepare')}
     rows = []
 
     # The runner admits a failure return only for an image that links it.
@@ -476,6 +500,22 @@ def main():
     rows.append(dict(name='startup', outcome=outcome, record=record, breadcrumb=failure, instructions=s.model.count))
     (args.out / 'startup-return-report.bin').write_bytes(bytes(s.model.uc.mem_read(s.model.report, 8880)))
     (args.out / 'startup-failure-record.bin').write_bytes(payload)
+
+    # A refusing start hook: the note, then the board main panic, before the scheduler.
+    npu_start = args.elf_symbols['os_npu_start']
+    for name, group, line, value, caller in (
+            ('startup-refusal-prepare', 1, 37, 0xffff, args.elf_symbols['os_application_prepare']),
+            ('startup-refusal-npu', 10, 434, 0, npu_start)):
+        s, outcome = case_startup_refusal(args.elf, group, line, value, caller)
+        assert outcome == 'rom', (name, outcome)
+        returned_to_rom(s)
+        assert s.flag('closing') == s.flag('failing') == s.flag('prefail') == s.flag('ready') == 1, name
+        assert s.fatal() == 0, 'no watchdog path'
+        assert not s.model.postclean, s.model.postclean[:4]
+        assert all(s.model.u64(s.model.report + 688 + c * 1024 + 24) == prior.EPOCH for c in range(8)), 'every core restored'
+        record, payload = s.record()
+        assert record['core'] == 0 and record['context'] in ('startup', 'fault'), record
+        rows.append(dict(name=name, outcome=outcome, record=record, breadcrumb=board_failure(s)))
 
     # After the scheduler: the claim, then the supervisor's stop sequence, then the terminals.
     s, outcome, site = case_running_claim(args.elf)

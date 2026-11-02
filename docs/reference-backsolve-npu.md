@@ -605,6 +605,68 @@ requires a stopped, masked, fault-free binding and clean GIC state. These
 refuse only on a device-originated interrupt left pending, which CLOSE's full
 idle proof precedes.
 
+### Service reply protocol and the combined-image run
+
+The service replies to a request with a result, the controller fault and a
+state. Clients treat a state as final only when it is the one they wait for.
+Two modes exist.
+
+- **Exclusive mode** (the finite, convolution and earlier runtime images).
+  OPEN replies as soon as the controller bootstrap starts, with state
+  BOOTING (`drivers/npu/npu_service.c:323-345`). WAIT holds its reply while the
+  controller is active and answers once it is READY, or with a fault
+  (`npu_service.c:356-357`, `:476-480`). The clients that follow this are
+  `apps/npu-finite/startup.c:174-175`, `apps/npu-convolution/main.c:93-94` and
+  `apps/npu-runtime/main.c:39-41`: they send WAIT after a BOOTING reply.
+- **Runtime mode** (the OS service and `apps/npu-board`). OPEN, STATUS and CLOSE
+  go through the shared member logic (`npu_service.c:509-529`, `:651-657`).
+  The reply state is the member view (`:482-490`, `:583`): BOOTING while the
+  controller bootstrap runs, READY afterwards. The runtime accepts no WAIT:
+  `npu_runtime_send` refuses every operation except OPEN, STATUS, CLOSE, LOAD
+  and SUBMIT (`drivers/npu/a733_npu_runtime.c:893-908`). LOAD and SUBMIT are
+  accepted at once and their reply is held until the work completes: LOAD
+  with state READY (`a733_npu_runtime.c:401`), SUBMIT with state DONE
+  (`:599`). A SUBMIT starts only while the controller is READY (`:642-649`),
+  so it waits for the bootstrap. `apps/npu-board/client.c:84-86` takes the
+  OPEN reply as it comes and issues LOAD next.
+
+The first combined-image run that passed the bind (queue entry 7c8b2818)
+refused the OPEN reply because `call` in `apps/os/npu.c` required READY. The
+reply state was BOOTING (1). WAIT is not an option in runtime mode, so the
+wrapper now accepts BOOTING or READY for OPEN and nothing else
+(`apps/os/npu.c:255-261`). The other replies the wrapper requires match the
+service: LOAD READY, SUBMIT DONE, CLOSE CLOSED, each with result OK and no
+fault. `checks/os-npu-first-failure.c` cases 20 and 21 run the four
+operations through the linked wrapper with those reply states and refuse an
+OPEN reply of RUNNING.
+
+**Prediction for the next combined-image run.** The bind passes as before and
+the sequence continues in this order. Each stage names the record that
+identifies a refusal. A refusal carries the group `npu`, the site
+`apps/os/npu.c` line, the request operation and the observed word (the
+decoded `board_failure` of the result, as in the entry 7c8b2818 record).
+
+1. OPEN returns BOOTING or READY. A refusal shows request operation OPEN with
+   observed state other than 1 or 2 (line 261), or a result or fault value
+   (lines 253-254).
+2. LOAD of model 0 returns READY. A refusal shows request operation LOAD
+   and the observed word is the state, result or fault.
+3. The first job: SUBMIT returns DONE after the bootstrap and the job complete.
+   A refusal shows request operation SUBMIT. A fault value 6
+   (`A733_NPU_TIMEOUT`) with the 1 s job timeout, or a ticket or collect
+   refusal at lines 251-252, means the NPU interrupt did not complete the
+   job. Four such jobs run while the eight CPU workers run.
+4. The overlap with the CPU workers is not a service reply. A different
+   output is reported in the receipt (outputs match, overlap mask 15, eight
+   CPU digests); the failure record's stage names a CPU-side refusal.
+5. CLOSE returns CLOSED. A refusal shows request operation CLOSE with state
+   BUSY (result 3) if the controller is not READY, or observed state other
+   than CLOSED. The bootstrap task then stops the platform; a retained stop is
+   recorded as operation CLOSE with the expected value `A733_NPU_PLATFORM_READY`
+   (line 342), and the local stop and normal return follow.
+
+A normal return with the receipt of `expect.json` ends the run.
+
 ### Assumptions that need hardware state
 
 | Assertion or refusal | Value assumed | Evidence |

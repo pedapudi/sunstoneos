@@ -22,6 +22,11 @@ def module(name, path):
 
 
 parent = module('primary_cache_parent_check', ROOT/'checks/primary-publication-probe.py')
+
+spec = importlib.util.spec_from_file_location('hw_facts', ROOT/'tools/hw_facts.py')
+hw_facts = importlib.util.module_from_spec(spec); spec.loader.exec_module(hw_facts)
+# The GIC priority views and the ICC_PMR_EL1 read-back come from docs/hardware/a733-facts.json.
+GIC = hw_facts.GicModel()
 probe = module('primary_cache_prepare', ROOT/'tools/prepare-primary-cache-probe.py')
 
 
@@ -182,15 +187,15 @@ class Probe(parent.Probe):
             if op == 'mrs' and args[1] == 'cntp_ctl_el0' and not m['cntp_ctl_el0'] & 1:
                 self.put(core, args[0], m['cntp_ctl_el0'] | 4); u.reg_write(UC_ARM64_REG_PC, address+4); return
             if op == 'mrs' and args[1] == 'icc_pmr_el1':
-                value = self.secure_pmr if m['currentel'] == 12 else (self.secure_pmr << 1) & 255 if self.secure_pmr & 128 else 0
+                value = self.secure_pmr if m['currentel'] == 12 else GIC.pmr_ns_read(self.secure_pmr)
                 self.put(core, args[0], value); u.reg_write(UC_ARM64_REG_PC, address+4); return
             if op == 'msr' and args[0] == 'icc_pmr_el1':
                 value = self.reg(core, args[1])
                 if m['currentel'] == 12:
-                    self.secure_pmr = 0 if self.fault == 'secure-mask-refusal' else value & 0xf8
-                elif self.secure_pmr & 128:
-                    self.secure_pmr = ((value >> 1) | 128) & 0xf8
-                m['icc_pmr_el1'] = (self.secure_pmr << 1) & 255 if self.secure_pmr & 128 else 0
+                    self.secure_pmr = 0 if self.fault == 'secure-mask-refusal' else GIC.secure_write(value)
+                else:
+                    self.secure_pmr = GIC.pmr_ns_write(self.secure_pmr, value)
+                m['icc_pmr_el1'] = GIC.pmr_ns_read(self.secure_pmr)
                 u.reg_write(UC_ARM64_REG_PC, address+4); return
             if op == 'msr' and args[0] == 'icc_sgi1r_el1' and self.fault == 'unexpected-irq':
                 self.pending[0].add(17)

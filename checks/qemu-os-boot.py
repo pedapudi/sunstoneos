@@ -248,6 +248,7 @@ class Image:
 # What the stage-2 loader seals: the session, the launch contract and the scenario
 
 host = load('os_host_records', ROOT / 'apps/os/host.py')
+hw_facts = load('hw_facts', ROOT / 'tools/hw_facts.py')
 SESSION_ADDRESS, CONTRACT_ADDRESS, SCENARIO_ADDRESS = 0x41f00000, 0x41e01000, 0x41e00000
 BOARD_SESSION_MAGIC, OS_SERVICE_MAGIC = 0x4153373342535332, 0x415337334f534131
 PL_PULL, PL_DRIVE = 1, 2  # platform/qemu-os/qemu_os.h
@@ -507,6 +508,12 @@ def main():
                                          ROOT / 'checks/qemu-os/el0-abort-manifest.json')
         return image.build(application)
 
+    def build_facts():
+        image = Image(out / 'build-hw-facts', extra_defines=['-DSUNSTONE_A733_HW_FACTS=1'],
+                      extra_sources=['platform/a733/hw_facts.c'])
+        application = image.application('hw-facts', ['apps/hw-facts/main.c'], ROOT / 'apps/hw-facts/manifest.json')
+        return image.build(application)
+
     def build_resident():
         image = Image(out / 'build-resident', services_source=args.services_source, resident=True)
         application = image.application('hello-compute', ['apps/hello-compute/main.c'],
@@ -524,9 +531,10 @@ def main():
         latency_elf = pool.submit(build_latency)
         resident_elf = pool.submit(build_resident)
         el0_elf = pool.submit(build_el0_abort)
-        os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf = (
+        facts_elf = pool.submit(build_facts)
+        os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
             os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result(),
-            partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result())
+            partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result(), facts_elf.result())
     built = time.monotonic() - started
 
     def run_case(name, elf, scenario_bytes, input_bytes=data):
@@ -661,12 +669,36 @@ def main():
               'the violation is not the code-block SP_EL0 on core 0: %s' % violation['line'])
     c.require(c.main is None, 'the application started after the violation')
 
+    # 10. The hardware facts probe (docs/hardware/a733-facts-probe.md): every core records its registers at EL1 before
+    # the scheduler, the application returns the table, and the host decoder reads it. QEMU's GICv3 is not the
+    # A733's, so the table names the virtual board and can never be merged into the hardware facts.
+    c = run_case('hw-facts', facts_elf, scenario(usb_ready_ms=usb_delay_ms), None)
+    c.clean()
+    c.require(c.finished is not None and c.finished['payload_bytes'] == str(hw_facts.TABLE_BYTES),
+              'the application did not return the facts table')
+    chunks = sorted((int(l['offset']), l['hex']) for l in lines(c.output, 'APP-RESULT'))
+    c.require([o for o, _ in chunks] == list(range(0, hw_facts.TABLE_BYTES, 96)), 'the facts table was printed in pieces that do not join')
+    table = bytes.fromhex(''.join(h for _, h in chunks))
+    (out / 'hw-facts-table.bin').write_bytes(table)
+    header, facts = hw_facts.decode(table)
+    c.require(header['platform'] == 'qemu-os-board', 'the table names %s' % header['platform'])
+    by = {(f['name'], f['core']): f for f in facts}
+    c.require(all(by[('cpu.midr_el1.partnum', k)]['value'] == 0xd0b and by[('cpu.cntfrq_el0', k)]['value'] == 24000000
+                  for k in range(8)), 'a core did not report the Cortex-A76 and the declared 24 MHz counter')
+    c.require(len({by[('cpu.mpidr_el1', k)]['value'] for k in range(8)}) == 8, 'the cores do not report eight different MPIDR values')
+    c.require(by[('gic.dist.gicd_ctlr.ds1_ds', 0)]['value'] == 1 and by[('gic.dist.gicd_ctlr.ds1_are', 0)]['value'] == 1, 'GICD_CTLR does not have DS and ARE_S set as the virtual board')
+    c.require(by[('gic.redist.intid27.priority_after_write', 0)]['value'] == by[('gic.redist.intid27.priority_after_write', 0)]['written'],
+              'the PPI 27 write test did not read back what it wrote')
+    c.require(by[('gic.dist.spi97.route_requested', 0)]['value'] == 0x100d8, 'the probe image routes INTID 97 at 0xd8 on core 0')
+    c.require(by[('mmio.0x07064000', 0)]['status'] == 'unmeasured', 'the PPU word was read although its gate is closed')
+    c.require(hw_facts.matches(table, hw_facts.expectation()), 'the returned table does not satisfy the board expectation')
+
     elapsed = time.monotonic() - started
     summary = {'passed': True, 'physical_access': False, 'seconds': round(elapsed, 2), 'build_seconds': round(built, 2),
                'qemu_sha256': hashlib.sha256(QEMU.read_bytes()).hexdigest(),
                'images': {p.parent.name: hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in (os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf,
-                                    partitioned_latency_elf, prestart_elf)},
+                                    partitioned_latency_elf, prestart_elf, facts_elf)},
                'cases': [{'name': r.name, 'status': r.status, 'wall_seconds': round(r.seconds, 3),
                           'failure': r.failure and r.failure['line'], 'main': r.main and r.main['line'],
                           'finished': r.finished and r.finished['line'][:80]} for r in results]}

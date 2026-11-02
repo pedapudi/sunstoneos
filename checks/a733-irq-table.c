@@ -41,7 +41,7 @@ static void reset_gic(void)
 }
 static void table(unsigned n)
 {
-    const struct a733_irq_route base[3]={{187,0,0xd8,usb_host},{82,1,0xc0,dma0},{105,6,0xb0,thermal}};
+    const struct a733_irq_route base[3]={{187,0,0xd8,usb_host},{82,1,0xe0,dma0},{105,6,0xd8,thermal}};
     memcpy(a733_irq_routes,base,sizeof(base));a733_irq_route_count=n;
 }
 int main(void)
@@ -81,7 +81,7 @@ int main(void)
         case 3: gicd_write(4,4);break;                       /* 160 lines: 187 is absent */
         case 4: deadline=1;break;
         case 5: a733_irq_routes[1].intid=187;break;
-        case 6: a733_irq_routes[0].priority=0xa0;break;
+        case 6: a733_irq_routes[0].priority=0xd0;break;
         case 7: a733_irq_routes[2].core=8;break;
         case 8: a733_irq_routes[1].intid=1;break;
         }

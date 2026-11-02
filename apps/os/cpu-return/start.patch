@@ -8,12 +8,12 @@
  #include "../board/application.h"
  #include "../board/session.h"
  #include "application.h"
-@@ -30,7 +31,7 @@
- {
-     if(!os_application_prepare())return 0;
-     for(unsigned i=0;i<os_application_count;++i)if(os_applications[i].start()!=1)return 0;
--    return 1;
-+    return os_cpu_return_start();
+@@ -37,6 +38,8 @@
+     for(unsigned i=0;i<os_application_count;++i)
+         if(os_applications[i].start()!=1){
+             board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD),i,(const void *)os_applications[i].start);return 0;}
++    if(!os_cpu_return_start()){
++        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD),0xfffe,(const void *)os_cpu_return_start);return 0;}
+     return 1;
  }
  const struct os_session *os_session_admitted(void)
- {

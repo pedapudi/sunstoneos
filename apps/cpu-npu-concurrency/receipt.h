@@ -19,7 +19,21 @@ struct cpu_npu_receipt {
     struct cpu_npu_cpu cpu[8];
     struct cpu_npu_job job[4];
 };
+/* A failed check returns this record in place of the receipt, with the same
+ * magic, version and size positions. Thermal fields come from
+ * ss_thermal_status at the instant of the first fault. */
+#define CPU_NPU_FAIL_MAGIC UINT64_C(0x314c494146555043)
+struct cpu_npu_failure {
+    uint64_t magic,version,bytes,stage,core,job,observed,expected,cell;
+    uint64_t now_ticks,start_ticks,workload_ticks,mode,completed,ack_mask,sdk_closed;
+    uint64_t chunks[8];
+    uint64_t thermal_cause,thermal_level,thermal_seen,thermal_passive,thermal_stale,thermal_sequence;
+    uint64_t thermal_now_us,thermal_deadline_us,thermal_start_us;
+    int64_t millicelsius[5];
+    uint8_t reserved[CPU_NPU_BYTES-38*8];
+};
 _Static_assert(sizeof(struct cpu_npu_cpu)==64,"CPU receipt");
 _Static_assert(sizeof(struct cpu_npu_job)==272,"job receipt");
 _Static_assert(sizeof(struct cpu_npu_receipt)==CPU_NPU_BYTES,"payload receipt");
+_Static_assert(sizeof(struct cpu_npu_failure)==CPU_NPU_BYTES,"failure record");
 #endif

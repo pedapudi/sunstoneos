@@ -52,15 +52,21 @@ if not a.disabled_only:
       run([str(executable),'actual',str(payload)])
       result=host.decode(payload.read_bytes(),mode=mode,model_index=0 if mode else None,reference=b'\0\xff' if mode else None)
       results.append(dict(case=label,passed=True,receipt=result))
-      failed=run([str(executable),'throttle-after-ready',str(a.out/(label+'-throttle.bin'))],2)
-      assert 'FIRST_FAULT detail=0000099' in failed.stderr,failed.stderr
-      results.append(dict(case=label+'-throttle-after-ready-refused',passed=True,retained=failed.stderr.strip()))
+      run([str(executable),'throttle-after-ready',str(a.out/(label+'-throttle.bin'))])
+      record=host.decode_failure((a.out/(label+'-throttle.bin')).read_bytes())
+      assert record['stage']==0x99 and record['ack_mask']==255,record
+      results.append(dict(case=label+'-throttle-after-ready-returns-record',passed=True,failure=record))
       if mode:
-          for fault in ['early-complete','changed-ticket','changed-token','frozen-cpu1','wrong-core']:
-              failed=run([str(executable),fault,str(a.out/(fault+'.bin'))],2)
-              assert 'FIRST_FAULT' in failed.stderr
-              if fault=='wrong-core':assert 'detail=000009a3 value=00000002' in failed.stderr
-              results.append(dict(case=fault,passed=True,retained=failed.stderr.strip()))
+          for fault in ['early-complete','changed-ticket','changed-token','frozen-cpu1','wrong-core','throttle']:
+              run([str(executable),fault,str(a.out/(fault+'.bin'))])
+              record=host.decode_failure((a.out/(fault+'.bin')).read_bytes())
+              assert record['ack_mask']==255 and record['sdk_closed']==(0 if fault=='wrong-core' else 1),(fault,record)
+              if fault=='wrong-core':assert (record['stage'],record['core'],record['observed'])==(0x9a,3,2),record
+              if fault=='throttle':assert record['stage']==0x99 and record['thermal']['causes']==['publication is stale'] and record['thermal']['millicelsius'][2]==-3000 and record['thermal']['freshness_margin_us']==-1000,record
+              try:host.decode((a.out/(fault+'.bin')).read_bytes(),mode=1,model_index=0,reference=b'\0\xff')
+              except ValueError as error:assert str(error).startswith('Check failed: ')
+              else:raise AssertionError('failure record accepted as a receipt')
+              results.append(dict(case=fault,passed=True,failure=record))
           valid=bytearray(payload.read_bytes())
           mutations=[('wrong-id',0x80,99),('wrong-digest',0x90,1),('zero-work',0x88,0),
               ('missing-ack',0x80+56,0),('poisoned-output',0x280+264,0xa5a5),
@@ -86,9 +92,10 @@ if not a.disabled_only:
      source=directory/'main.c';source.write_text((APP/'main.c').read_text())
      (directory/'gemm.h').write_text(change((APP/'gemm.h').read_text()))
      executable=build(label+'-producer',0,source)
-     failed=run([str(executable),'actual',str(a.out/(label+'.bin'))],2)
-     assert 'detail=000' in failed.stderr and '82' in failed.stderr
-     results.append(dict(case=label+'-native-cell-check',passed=True,retained=failed.stderr.strip()))
+     run([str(executable),'actual',str(a.out/(label+'.bin'))])
+     record=host.decode_failure((a.out/(label+'.bin')).read_bytes())
+     assert record['stage']==0x82 and record['sdk_closed']==0,record
+     results.append(dict(case=label+'-native-cell-check',passed=True,failure=record))
 save(a.out/'results.json',dict(physical_access=False,model_boundary=__doc__,cases=results,commands=commands,
  sources={name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in CHECK_INPUTS}))
 print('PASS',len(results),'CPU/NPU producer, observer and receipt cases')

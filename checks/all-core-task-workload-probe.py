@@ -74,7 +74,7 @@ class Workload(first.FirstTask):
             elif not timer_asserted:
                 self.pending[core].discard(30)
         if (r['currentel'] <= 4 and not r['daif'] & 0x80 and
-                r['icc_igrpen1_el1'] & 1 and r['icc_pmr_el1'] > 0xe0 and
+                r['icc_igrpen1_el1'] & 1 and r['icc_pmr_el1'] > first.GIC.ns_read(0xf0) and
                 self.pending[core] and self.irq_active[core] is None):
             self.exception(core, 1, address, irq=True)
             return
@@ -128,7 +128,7 @@ class Workload(first.FirstTask):
                 assert irq in (0, 30) and self.irq_active[core] is None
                 address_priority = self.rdist[core]+0x10400+irq
                 priority = (self.mmio[address_priority & ~3] >> (8*(address_priority & 3))) & 255
-                assert (priority << 1) & 255 == 0xe0
+                assert first.GIC.ns_read(priority) == first.GIC.ns_read(0xf0)
                 assert self.mmio[self.rdist[core]+0x10100] & (1 << irq)
                 self.pending[core].remove(irq); self.irq_active[core] = irq
                 self.delivered[core].append(irq)
