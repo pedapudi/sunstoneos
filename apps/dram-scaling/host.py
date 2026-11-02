@@ -19,6 +19,7 @@ from pathlib import Path
 MAGIC = b'SSDRAMSC'
 CORES, SLOT_BYTES, REGION_BYTES, STAGGER_WRAP = 8, 5 << 20, 3 << 20, 1 << 20
 WINDOW_TICKS, WARM, REPS = 288000, 1, 3
+SHARED_CHUNKS = 2048
 CLOCK = 256
 HEAD = struct.Struct('<8sQQ4I5i5i')
 FILL = struct.Struct('<' + 'Q' * CORES)
@@ -29,9 +30,12 @@ for stagger in (4096, 65536, 262144):
 for mode in (1, 2, 3):
     VARIANTS += [(m, mode, 0) for m in (0x01, 0x40, 0x3f, 0xc0, 0xff)]
 VARIANTS += [(m, 4, 0) for m in (0x01, 0x03, 0x0f, 0x3f, 0x40, 0xc0, 0xcf, 0xff)]
+VARIANTS += [(m, 5, 0) for m in (0x01, 0x03, 0x0f, 0x3f, 0x40, 0xc0, 0xcf, 0xff)]
+VARIANTS += [(m, 6, 0) for m in (0x0f, 0x3f, 0xc0, 0xff)]
 CONFIGS = len(VARIANTS)
 RESULT_BYTES = HEAD.size + FILL.size + 2 * CLOCK + CONFIGS * CONFIG.size
-MODE_NAMES = ('sequential 64 KiB chunks', 'sequential 4 KiB chunks', 'two streams', 'page strides', 'sequential, software prefetch')
+MODE_NAMES = ('sequential 64 KiB chunks', 'sequential 4 KiB chunks', 'two streams', 'page strides', 'sequential, software prefetch',
+              'one shared stream, barrier per round', 'own regions, barrier per round')
 
 
 def inputs():
@@ -39,7 +43,7 @@ def inputs():
 
 
 def chunk_bytes(mode):
-    return 65536 if mode in (0, 4) else 4096
+    return 65536 if mode in (0, 4) else 16384 if mode >= 5 else 4096
 
 
 def chunk_index(mode, j):
@@ -50,7 +54,7 @@ def chunk_index(mode, j):
         return ((j >> 1) % (n // 2)) + (j & 1) * (n // 2)
     if mode == 3:
         return (j * 7) % n
-    return j % n
+    return j % n   # modes 0, 1, 4 and 6; mode 5 is shared and handled by the caller
 
 
 def buffer_words():
@@ -106,7 +110,15 @@ def decode(payload):
                 per_core[k] = chunks * cb / (ticks / hz) / 1e9
                 ticks_all.append(ticks)
                 bytes_all += chunks * cb
-                if rep == REPS - 1:
+                if rep == REPS - 1 and mode == 5:
+                    rank = cores.index(k)
+                    chunk_digest = np.bitwise_xor.reduce(words[:SHARED_CHUNKS * cb // 8].reshape(SHARED_CHUNKS, cb // 8), axis=1)
+                    steps = (np.arange(chunks, dtype=np.int64) * len(cores) + rank) % SHARED_CHUNKS
+                    visits = np.bincount(steps, minlength=SHARED_CHUNKS) & 1
+                    want = int(np.bitwise_xor.reduce(chunk_digest[visits == 1], initial=np.uint64(0)))
+                    if digests[k] != want:
+                        raise ValueError(f'configuration {c} core {k} digest differs from the data written')
+                elif rep == REPS - 1:
                     start = k * (SLOT_BYTES // 8) + ((k * stagger) % STAGGER_WRAP) // 8
                     region = words[start:start + REGION_BYTES // 8].reshape(n, cb // 8)
                     chunk_digest = np.bitwise_xor.reduce(region, axis=1)

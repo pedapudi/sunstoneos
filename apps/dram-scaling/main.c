@@ -23,8 +23,8 @@ static TaskHandle_t workers[DS_CORES], controller;
 static uint64_t *buffer;
 /* Job description, written by the controller before it notifies the workers. */
 static struct {
-    uint32_t mask, cores, mode, stagger, fill;
-    atomic_uint generation, arrived, go, finished;
+    uint32_t mask, cores, mode, stagger, fill, stop;
+    atomic_uint generation, arrived, go, finished, barrier_count, barrier_gate;
     uint64_t gate, deadline;
     uint64_t ticks[DS_CORES], chunks[DS_CORES], digest[DS_CORES];
 } job;
@@ -67,6 +67,31 @@ static void worker(void *arg)
             const uint32_t per_check = 65536u / bytes;      /* a deadline check about every 64 KiB */
             const uint64_t deadline = job.deadline;
             uint32_t j = 0;
+            if (mode >= 5) {
+                /* Rounds: each core reads one 16 KiB chunk, then all wait for each other. The last
+                 * core to arrive decides, before it opens the barrier, whether the window is over. */
+                const unsigned rank = (unsigned)__builtin_popcount(job.mask & ((1u << core) - 1u));
+                unsigned gate = 0;
+                for (;;) {
+                    const uint64_t *p = mode == 5
+                        ? buffer + (size_t)(((uint64_t)j * job.cores + rank) % DS_SHARED_CHUNKS) * (bytes / 8)
+                        : region + (size_t)ds_chunk_index(mode, j) * (bytes / 8);
+                    digest ^= ds_read(p, bytes);
+                    ++j;
+                    if (atomic_fetch_add_explicit(&job.barrier_count, 1, memory_order_acq_rel) + 1 == job.cores) {
+                        job.stop = counter() >= deadline;
+                        atomic_store_explicit(&job.barrier_count, 0, memory_order_relaxed);
+                        atomic_store_explicit(&job.barrier_gate, gate + 1, memory_order_release);
+                    } else {
+                        while (atomic_load_explicit(&job.barrier_gate, memory_order_acquire) == gate) ds_relax();
+                    }
+                    ++gate;
+                    if (job.stop) break;
+                }
+                end = counter();
+                chunks = j;
+                goto finished;
+            }
             do {
                 for (uint32_t k = 0; k < per_check; ++k, ++j)
                     digest ^= (mode == 4 ? ds_read_pf : ds_read)(region + (size_t)ds_chunk_index(mode, j) * (bytes / 8), bytes);
@@ -74,6 +99,7 @@ static void worker(void *arg)
             } while (end < deadline);
             chunks = j;
         }
+    finished:
         job.ticks[core] = end - job.gate;
         job.chunks[core] = chunks;
         job.digest[core] = digest;
@@ -102,6 +128,9 @@ static void run(uint32_t mask, unsigned fill, unsigned mode, unsigned stagger)
     atomic_store(&job.arrived, 0);
     atomic_store(&job.go, 0);
     atomic_store(&job.finished, 0);
+    atomic_store(&job.barrier_count, 0);
+    atomic_store(&job.barrier_gate, 0);
+    job.stop = 0;
     atomic_fetch_add_explicit(&job.generation, 1, memory_order_release);
     for (unsigned core = 0; core < DS_CORES; ++core)
         if (mask >> core & 1u) xTaskNotifyGive(workers[core]);

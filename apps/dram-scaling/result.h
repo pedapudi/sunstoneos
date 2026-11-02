@@ -18,10 +18,17 @@
  * 0: sequential, 64 KiB chunks.   1: sequential, 4 KiB chunks (control for the chunk size).
  * 2: two sequential streams half a region apart, alternating 4 KiB chunks.
  * 3: 4 KiB chunks in the order (7 * j) modulo the chunk count: page-granular strides.
- * 4: as 0, with a software prefetch into the L2 cache 2 KiB ahead of the loads. */
-#define DS_MODES 5u
+ * 4: as 0, with a software prefetch into the L2 cache 2 KiB ahead of the loads.
+ * 5: one shared stream: in round r the core of rank k (its position in the core set, n cores) reads
+ *    the 16 KiB chunk (r * n + k) modulo 2048 of the buffer, and all cores wait for each other at a
+ *    barrier after every round, so the cores read neighbouring addresses at the same time.
+ * 6: as 5 with each core reading its own region, 16 KiB per round: the barrier cost without the
+ *    shared addresses. */
+#define DS_MODES 7u
 #define DS_CHUNK_BYTES_0 (64u << 10)
 #define DS_CHUNK_BYTES_N (4u << 10)
+#define DS_CHUNK_BYTES_S (16u << 10)
+#define DS_SHARED_CHUNKS 2048u
 /* Core sets: 0x01 one A55, 0x03 two, 0x0f four, 0x3f six A55; 0x40 one A76, 0xc0 two A76;
  * 0xff all eight; 0xcf four A55 and both A76. */
 struct ds_variant { uint32_t mask, mode, stagger; };
@@ -33,8 +40,10 @@ struct ds_variant { uint32_t mask, mode, stagger; };
     {0x01,1,0},{0x40,1,0},{0x3f,1,0},{0xc0,1,0},{0xff,1,0}, \
     {0x01,2,0},{0x40,2,0},{0x3f,2,0},{0xc0,2,0},{0xff,2,0}, \
     {0x01,3,0},{0x40,3,0},{0x3f,3,0},{0xc0,3,0},{0xff,3,0}, \
-    {0x01,4,0},{0x03,4,0},{0x0f,4,0},{0x3f,4,0},{0x40,4,0},{0xc0,4,0},{0xcf,4,0},{0xff,4,0} }
-#define DS_CONFIGS 40u
+    {0x01,4,0},{0x03,4,0},{0x0f,4,0},{0x3f,4,0},{0x40,4,0},{0xc0,4,0},{0xcf,4,0},{0xff,4,0}, \
+    {0x01,5,0},{0x03,5,0},{0x0f,5,0},{0x3f,5,0},{0x40,5,0},{0xc0,5,0},{0xcf,5,0},{0xff,5,0}, \
+    {0x0f,6,0},{0x3f,6,0},{0xc0,6,0},{0xff,6,0} }
+#define DS_CONFIGS 52u
 struct ds_core_sample { uint32_t chunks; uint32_t ticks; };   /* chunks read; ticks from the common gate to the core's last chunk */
 struct ds_config {
     uint32_t mask, mode, stagger, reserved;
@@ -57,7 +66,7 @@ uint64_t ds_read_pf(const uint64_t *p, size_t bytes);
 /* The word at index i of the whole buffer. */
 static inline uint64_t ds_word(uint64_t i) { return i * UINT64_C(0x9e3779b97f4a7c15) + UINT64_C(0x1234567); }
 /* Chunk geometry and visit order shared by the image, the host model and the decoder. */
-static inline uint32_t ds_chunk_bytes(uint32_t mode) { return (mode == 0 || mode == 4) ? DS_CHUNK_BYTES_0 : DS_CHUNK_BYTES_N; }
+static inline uint32_t ds_chunk_bytes(uint32_t mode) { return (mode == 0 || mode == 4) ? DS_CHUNK_BYTES_0 : mode >= 5 ? DS_CHUNK_BYTES_S : DS_CHUNK_BYTES_N; }
 static inline uint32_t ds_chunk_count(uint32_t mode) { return DS_REGION_BYTES / ds_chunk_bytes(mode); }
 static inline uint32_t ds_chunk_index(uint32_t mode, uint32_t j)
 {

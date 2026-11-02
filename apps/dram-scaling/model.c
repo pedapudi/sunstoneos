@@ -43,9 +43,17 @@ int main(void)
                 config->sample[rep][core].chunks = chunks;
                 config->sample[rep][core].ticks = DS_WINDOW_TICKS + 100 * core + rep;
                 if (rep != DS_REPS - 1) continue;
+                uint64_t digest = 0;
+                if (config->mode == 5) {
+                    const unsigned n = (unsigned)__builtin_popcount(config->mask);
+                    const unsigned rank = (unsigned)__builtin_popcount(config->mask & ((1u << core) - 1u));
+                    for (uint32_t j = 0; j < chunks; ++j)
+                        digest ^= ds_read(buffer + (size_t)(((uint64_t)j * n + rank) % DS_SHARED_CHUNKS) * (bytes / 8), bytes);
+                    config->digest[core] = digest;
+                    continue;
+                }
                 const uint64_t *region = buffer + (size_t)core * (DS_SLOT_BYTES / 8)
                                          + ds_region_offset(core, config->stagger) / 8;
-                uint64_t digest = 0;
                 for (uint32_t j = 0; j < chunks; ++j)
                     digest ^= (config->mode == 4 ? ds_read_pf : ds_read)(region + (size_t)ds_chunk_index(config->mode, j) * (bytes / 8), bytes);
                 config->digest[core] = digest;
