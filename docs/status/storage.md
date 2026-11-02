@@ -65,7 +65,7 @@ on the platform source of v12. The same check applies to any other service that 
 Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-storage-20261101.md).
 
 <!-- evidence-table:begin -->
-23 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+24 records in `docs/evidence/storage.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -92,4 +92,5 @@ Board results are records in `docs/evidence/storage.jsonl`; add one with `tools/
 | `1793649204965774597-d1ed3e86` | 2026-11-02 | 3-3 | `962eb56c8103` | watchdog-reset | inconclusive | run_total 110.438 s, reads_done 32, s18a 0, group1_support_bits 31 |
 | `1793649661736969334-9742cb48` | 2026-11-02 | 3-3 | `94e4be87f6dd` | result-mismatch | passed | run_total 13.16 s, reads_done 32, per_read_rate_median 21.4 MB/s, identify_time 0.309 s, s18a 0, group1_support_bits 31 |
 | `1793650091979550389-eb009a18` | 2026-11-02 | 3-3 | `003fa9e0e17f` | watchdog-reset | failed | run_total 111.186 s |
+| `1793650532228649180-1fb49397` | 2026-11-02 | 3-3 | `aa20988e728c` | result-mismatch | inconclusive | run_total 49.23 s, card_clock 150 MHz, tuning_window 48, chosen_delay 40, per_request_rate_median 47.6 MB/s, sustained_rate 27.4 MB/s, bytes_read 6.71089e+07 B, errors 0 |
 <!-- evidence-table:end -->

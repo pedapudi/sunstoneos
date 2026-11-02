@@ -379,6 +379,30 @@ error or step. The rerun's stop word does.
 The probe now publishes, for a lifetime that fails before identification, the core's error (4 bits), its protocol step (6) and half the sample delay it had reached (5)
 next to the platform's line, why and stage (`input.py stop --site 3`). The models run the sweep with all five kinds of sampling error.
 
+### SDR104 trial, rerun after the sweep fix (entry `1793650532228649180-1fb49397`): SDR104 at 150 MHz works; the success threshold is met per request and missed sustained
+
+Returned normally; `baseline_changed` empty; the board returned to FEL. Re-entry as before (bank 1.8 V at identification, 3.3 V after the close, selector 0 then 1,
+withstand-mode word unchanged `0x01155550`). Identification including the sweep took 893 ms.
+
+| Item | Predicted | Measured |
+| --- | --- | --- |
+| Module and card clock | 150 MHz if the PERI0_300M gates are up, else 100 MHz | **150 MHz** (module 300 MHz): the gates were up |
+| CMD6 | function 3 supported, selected | selected function 3, outcome `sdr104` |
+| Sweep window | at least 12 consecutive delays, 15 to 40 expected | passing delays 0-9 and 16-63 (58 of 64; map `ffffffffffff03ff`); first longest run 16 to 63, **48 wide**, chosen delay **40**; the gap 10-15 is the only failure |
+| Errors | none | none: 512 requests done, reason 0, no CRC or timeout |
+| Data integrity | first 32 CRCs equal the SDR25 CRCs | **equal** (all 32, including the one non-repeating block) |
+| Per-request rate | | first 32 requests median 2.51 ms = **52.2 MB/s** (SDR25: 6.1 ms, 21.4 MB/s); all 512 median 2.76 ms = **47.6 MB/s**; 25% of the later requests take 5 to 17 ms |
+| Sustained over 64 MiB | at least 45 MB/s at 150 MHz; 55 to 70 expected | **27.4 MB/s** (2.446 s): **below the threshold** |
+| Close | selector to 3.3 V, normal return | bank 3.3 V (value 2, selector 1), normal return |
+
+The sustained figure misses the threshold I wrote, and the prediction of 55 to 70 MB/s was too high for this card. Where the time goes, from the per-request times: the 512
+requests add up to 2.10 s (mean 4.1 ms; median 2.76 ms), and the probe's own gap between requests (take, CRC, submit, one task step each) adds 0.34 s (0.67 ms per request).
+A quarter of the requests take 5 to 17 ms, which is the card (a 2020 Phison SD32G) stalling on its media, not the bus: the requests that run clean complete at 47 to 52 MB/s,
+against a raw limit of 75 MB/s at 150 MHz and the per-request command cost. So the per-request rate meets the 45 MB/s mark and the sustained rate does not; the bus is not the
+limit, the card is. The OS loader overlaps requests, so it would recover the 0.34 s of gaps but not the card's stalls: about 30 MB/s sustained on this card, against 21.7 MB/s at
+50 MHz (14.4 MB/s sustained by the same probe over 4 MiB). A card with better sequential reads would show more. The decision to adopt SDR104 rests on a gain of 1.4 to 2.4 times,
+depending on whether the card's stalls count.
+
 ## Board plan
 
 Each stage has one hypothesis. Nothing runs without the coordinator's approval and none writes to the card. Stage 2 below is the
