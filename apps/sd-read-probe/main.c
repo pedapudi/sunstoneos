@@ -194,8 +194,18 @@ static int setup(void)
         .deadline_us = s.start + IDENTIFY_US, .lifetime_deadline_us = s.start + LIFETIME_US,
         .kind = SUNXI_MMC_SD, .voltage_mask = 0x00300000, .sd_profile = SUNXI_MMC_SD_HIGH_SPEED4, .dma = DESCRIPTORS};
     if (!s.config.topology) return 0;
-    /* Pin state expected at entry is all zero (the ROM leaves PF unconfigured); SD0 and
-     * its card detect take function 2, pull-up, drive 1; PF6 stays an input. */
+    /* Establish entry state, do not require it: the pins carry whatever the boot ROM and the runner left
+     * (the provider accepts the passive and the ROM JTAG patterns). The inherited fields are read here,
+     * recorded in the report's restoration words, and handed to the provider as the state to replace.
+     * SD0 and its card detect then take function 2, pull-up, drive 1; PF6 stays an input. */
+    for (unsigned i = 0; i < 7; ++i) {
+        struct a733_pin_fields f;
+        if (!a733_pin_fields_banked(A733_PIN_F, i, &f)) return 0;
+        s.config.expected[i] = (struct a733_pin_config){
+            (uint8_t)((*(volatile uint32_t *)f.mux_address >> f.mux_shift) & 15u),
+            (uint8_t)((*(volatile uint32_t *)f.pull_address >> f.pull_shift) & 3u),
+            (uint8_t)((*(volatile uint32_t *)f.drive_address >> f.drive_shift) & 15u)};
+    }
     for (unsigned i = 0; i < 6; ++i) s.config.desired[i] = (struct a733_pin_config){2, 1, 1};
     s.config.desired[6] = (struct a733_pin_config){0, 1, 1};
     if (!fabric(&s.config)) return 0;
