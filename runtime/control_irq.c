@@ -24,7 +24,7 @@ extern struct { uint64_t epoch, startup_deadline, diagnostic_deadline, redistrib
 #define TASK_INTID 30u  /* EL1 physical timer: the task path (core 0 keeps it for the scheduler tick) */
 #define FIRST_CORE 1u
 #define CORES 6u        /* control cores 1 to 5; index by core */
-#define BINS 768u       /* one counter tick (41.7 ns at 24 MHz) per bin, 32 us; the last bin takes the rest */
+#define BINS SS_CONTROL_BINS
 #define TICKS_PER_US 24u
 
 struct path {
@@ -35,7 +35,7 @@ struct path {
 };
 static struct core_state {
     volatile uint32_t requested, armed, stop;
-    uint32_t rate_hz;
+    uint32_t rate_hz, paths;
     struct path control, task;   /* the interrupt handler's samples; the woken task's samples */
     struct ss_ring ring;
     uint64_t consumed, gaps;
@@ -89,14 +89,14 @@ static void arm(struct core_state *s)
     const uintptr_t sgi = (uintptr_t)a733_cached_runtime[this_core()].redistributor + 0x10000u;
     *(volatile uint8_t *)(sgi + 0x400u + INTID) = A733_GIC_NS_WRITE_FOR_STORED(A733_GIC_CONTROL_STORED);
     *(volatile uint8_t *)(sgi + 0x400u + TASK_INTID) = A733_GIC_NS_WRITE_FOR_STORED(A733_GIC_TASK_PATH_STORED);
-    *(volatile uint32_t *)(sgi + 0x100u) = (1u << INTID) | (1u << TASK_INTID);
+    *(volatile uint32_t *)(sgi + 0x100u) = ((s->paths & 1u) ? 1u << INTID : 0u) | ((s->paths & 2u) ? 1u << TASK_INTID : 0u);
     __asm__ volatile("dsb sy" ::: "memory");
     const uint64_t now = counter();
     s->control.deadline = now + s->control.period;
     s->task.deadline = now + s->task.period + s->task.period / 2u; /* half a period after the control handler */
     s->control.last_entry = s->task.last_entry = 0;
-    program(s->control.deadline, 1);
-    program_task(s->task.deadline, 1);
+    if (s->paths & 1u) program(s->control.deadline, 1);
+    if (s->paths & 2u) program_task(s->task.deadline, 1);
     s->armed = 1;
 }
 
@@ -185,6 +185,11 @@ static void consumer(void *unused)
 
 unsigned ulSunstoneControlStart(const unsigned *cores, const unsigned *rate_hz, unsigned n)
 {
+    static const unsigned both[CORES] = {3, 3, 3, 3, 3, 3};
+    return ulSunstoneControlStartPaths(cores, rate_hz, both, n);
+}
+unsigned ulSunstoneControlStartPaths(const unsigned *cores, const unsigned *rate_hz, const unsigned *paths, unsigned n)
+{
     unsigned started = 0;
     if (!running) {
         running = 1;
@@ -194,8 +199,9 @@ unsigned ulSunstoneControlStart(const unsigned *cores, const unsigned *rate_hz, 
         const unsigned c = cores[i];
         if (c < FIRST_CORE || c >= FIRST_CORE + CORES - 1u || !rate_hz[i] || state[c].requested) continue;
         state[c].rate_hz = rate_hz[i];
+        state[c].paths = paths[i] & 3u;
         state[c].control.period = state[c].task.period = 24000000u / rate_hz[i];
-        state[c].task_handle = xTaskCreateStaticAffinitySet(task_path, "control-task", 512, &state[c], 5, path_stack[c], &path_task[c], 1u << c);
+        if (state[c].paths & 2u) state[c].task_handle = xTaskCreateStaticAffinitySet(task_path, "control-task", 512, &state[c], 5, path_stack[c], &path_task[c], 1u << c);
         __atomic_store_n(&state[c].requested, 1u, __ATOMIC_RELEASE);
         ++started;
     }
@@ -220,7 +226,7 @@ static uint32_t percentile_ns(const uint32_t *bins, uint64_t total, uint32_t max
 }
 unsigned ulSunstoneControlStatsRead(unsigned core, unsigned path, struct ss_control_stats *out)
 {
-    if (core < FIRST_CORE || core >= FIRST_CORE + CORES - 1u || !state[core].rate_hz || path > 1u) return 0;
+    if (core < FIRST_CORE || core >= FIRST_CORE + CORES - 1u || !state[core].rate_hz || path > 1u || !(state[core].paths & (1u << path))) return 0;
     const struct core_state *s = &state[core];
     const struct path *p = path ? &s->task : &s->control;
     out->path = path; out->core = core; out->rate_hz = s->rate_hz; out->count = p->count;
@@ -231,4 +237,10 @@ unsigned ulSunstoneControlStatsRead(unsigned core, unsigned path, struct ss_cont
     out->latency_p9999_ns = percentile_ns(p->latency_bin, p->count, p->latency_max);
     out->jitter_p9999_ns = percentile_ns(p->jitter_bin, p->count > 1 ? p->count - 1 : 0, p->jitter_max);
     return 1;
+}
+const uint32_t *ulSunstoneControlHistogram(unsigned core, unsigned path, unsigned kind)
+{
+    if (core < FIRST_CORE || core >= FIRST_CORE + CORES - 1u || path > 1u || kind > 1u) return 0;
+    const struct path *p = path ? &state[core].task : &state[core].control;
+    return kind ? p->jitter_bin : p->latency_bin;
 }
