@@ -309,8 +309,8 @@ For every cut point, a power cut leaves the first k logged sectors. The check
 then runs mount-time recovery, runs `fsck.fat -n` (exit status 0 required),
 reads the volume with an independent Python FAT32 reader and compares each file
 with the constraints the scenario recorded, and mounts again to confirm that
-nothing is written. Results of the committed run: 1333 cuts (one per sector
-write of the scenario), 2468 random subsets of multi-sector calls, 138 cuts in
+nothing is written. Results of the committed run: 1339 cuts (one per sector
+write of the scenario), 2482 random subsets of multi-sector calls, 133 cuts in
 the recovery itself, all clean with synced bytes intact.
 
 The sweep found one defect during development. The recovery's last write
@@ -327,16 +327,70 @@ newlib system calls with a descriptor limit, would-block writes that touch
 nothing, truncate-replace visibility, rename over an existing file, `ftruncate`
 and `posix_fallocate`.
 
+## Card adapter and driver contract (design)
+
+The adapter fills `struct fwr_device` from the SD core. The service needs three
+things from the driver, none of which exists today.
+
+- **Multi-block write.** CMD25 (`WRITE_MULTIPLE_BLOCK`) with the data moved by the
+  controller's internal DMA descriptor chain, up to the single-write limit the
+  device reports (256 sectors with the present descriptor count). A transfer ends
+  with CMD12 (`STOP_TRANSMISSION`) or with a block count set by CMD23, and the
+  driver then waits for the card to leave the programming state, by the DAT0 busy
+  line and CMD13, before the next command. The present core issues only CMD24 per
+  sector with a CMD13 after each; section 4.3.4 of the SD specification asks for
+  multiple-block writes for speed. The write-side register filter that refuses
+  CMD25 today needs the new command added with a reference diff against the board
+  kernel's write sequence and a host model that refuses any register access the
+  sequence does not use.
+- **Allocation unit.** ACMD13 (CMD55, then CMD13 with a 64-byte data block) returns
+  SD Status. The adapter takes `AU_SIZE` (bits 431:428) and, in a UHS-I mode,
+  `UHS_AU_SIZE` (section 4.10.2.9), converts it to sectors with Table 4-47 and
+  passes it as `au_sectors`; `Not Defined` selects the 128-sector default.
+- **Priority.** A pending read runs before the next write piece: the adapter's
+  `yield` waits for the read queue to drain. The card core has one owner, so the
+  arbiter is a flag the reader sets and the writer polls between pieces by waiting on
+  the read-completion notification; no tick-based polling is involved.
+
+## Bounded first write on the 62.5 GB card (design)
+
+The card holds one FAT32 partition at sector 32,768 with 122,105,856 sectors,
+64 sectors per cluster, 64 reserved sectors, two FATs of 14,912 sectors, FSInfo
+at partition sector 1 and root cluster 2. The host run `fat32-rw plan` creates
+`/sunstone-test/sunstone-region-test.bin` (536,870,912 bytes) on a `mkfs.fat`
+volume of this geometry, with a 4 MiB allocation unit, and records every write:
+
+| Set | Absolute sectors | Count |
+| --- | --- | --- |
+| Root directory, cluster 2: entry `sunstone-test` | 62,656 | 1 (the cluster, 62,656 to 62,719, is the allowed set) |
+| Directory `sunstone-test`, cluster 3 | 62,720 to 62,783 | 64 (zero fill and the two dot entries, then sector 62,720 again for the file entry) |
+| Data, clusters 47 to 16,430 (first cluster on an AU boundary) | 65,536 to 1,114,111 | 1,048,576 |
+| FAT copy 1, indexes 0 to 128 | 32,832 to 32,960 | 129 (sector 32,832 is written four times: dirty flag, the directory cluster entry, the chain run, clean flag) |
+| FAT copy 2, indexes 0 to 128 | 47,744 to 47,872 | 129 |
+| FSInfo | 32,769 | 1 |
+
+The service writes 267 metadata sectors and 1,048,576 data sectors in 4,110 write
+calls: 4,096 data pieces of 256 sectors and 14 metadata writes. The boot sector,
+its backup (32,774), the backup FSInfo (32,775) and every other FAT sector
+are never written. The data start depends on the allocation unit; the plan is
+regenerated for the unit the card reports before the board run. The metadata
+backup is the boot sector, backup boot sector, both FSInfo sectors, both FAT
+ranges and clusters 2 and 3: 390 sectors. The region test-file design
+(`region-test-file-write.md`) lists the same card with the file at cluster 3; with the
+service the directory takes cluster 3 and the file follows on an AU boundary.
+
 ## Remaining work
 
-1. SD core: CMD25 with descriptor DMA, CMD12 stop handling, ACMD13 read of the
-   SD Status (and `UHS_AU_SIZE` in UHS modes), and an adapter that fills
-   `struct fwr_device`. The core refuses every command outside its allow-list
-   today, including CMD25.
-2. A read-over-write arbiter at the adapter.
-3. Runner admission of bounded writes: allowed sector ranges and the hash of
-   the metadata backup, checked before the first write.
+1. SD core: CMD25 with descriptor DMA, CMD12 or CMD23 handling and ACMD13, with a
+   host model and a vendor-sequence comparison.
+2. The read-over-write arbiter in the adapter and its latency measurement.
+3. Runner admission of bounded writes: a probe marker for a bounded-write image,
+   admitted only with `--storage-write` and `--approved-by coordinator`, whose input
+   carries the allowed sector ranges and the SHA-256 of the metadata backup; the
+   write lifetime reads the backed-up sectors again and refuses to write when the
+   hash differs. This changes `tools/board.py` and `tools/board_images.py`, which
+   the coordinator reviews.
 4. An OS application at the top operating points that measures sustained rate,
    flush latency and the interruption test, with the measured CPU clock in every
-   evidence record, and the first bounded write of the large-region test file.
-5. Board measurement of the sector-tearing assumption above.
+   evidence record, and then writes the large-region test file.
+5. Board measurement of the sector-tearing assumption under [Limits](#limits).

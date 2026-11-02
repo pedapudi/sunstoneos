@@ -25,7 +25,7 @@ static uint64_t dev_sectors, region_fat1, region_fat2, region_fsinfo, region_dat
 static unsigned yields, writes_without_yield;
 static uint32_t call_id;
 static int expect_yield;
-static uint64_t call_log[1 << 16][2]; static unsigned calls;
+static uint64_t call_log[1 << 17][2]; static unsigned calls;
 static int log_calls;
 
 /* The model parses the boot sector itself and refuses any write outside the FAT copies, the
@@ -61,7 +61,7 @@ static int dev_write(void *c, uint64_t s, uint32_t n, const uint8_t *buf)
     if (expect_yield && !yields) ++writes_without_yield;
     yields = 0; ++call_id;
     if (s + n > dev_sectors) { fprintf(stderr, "write outside device\n"); exit(3); }
-    if (log_calls && calls < (1u << 16)) { call_log[calls][0] = s; call_log[calls][1] = n; ++calls; }
+    if (log_calls && calls < (1u << 17)) { call_log[calls][0] = s; call_log[calls][1] = n; ++calls; }
     for (uint32_t i = 0; i < n; ++i) {
         if (!allowed(s + i)) { fprintf(stderr, "model refused write to sector %llu\n", (unsigned long long)(s + i)); exit(4); }
         if (sector_writes >= cut_at) { cut_hit = 1; return 0; }
@@ -387,6 +387,47 @@ static int cmd_posix(const char *img, uint64_t base, uint64_t sectors, uint32_t 
     return fails != 0;
 }
 
+static uint8_t big_buffer[16u << 20] __attribute__((aligned(64)));
+
+/* Create /sunstone-test/<name> of `size` bytes on a volume and print the sector ranges written. */
+static int cmd_plan(const char *img, uint64_t base, uint64_t sectors, uint32_t au, uint64_t size)
+{
+    image_fd = open(img, O_RDWR); assert(image_fd >= 0);
+    dev_sectors = (uint64_t)lseek(image_fd, 0, SEEK_END) / 512; part_base = base;
+    model_regions();
+    struct fwr_config cfg = make_config(base, sectors, au, 256);
+    static struct fwr_volume v;
+    assert(!fwr_mount(&v, &cfg));
+    log_calls = 1; expect_yield = 1;
+    assert(!fwr_mkdir(&v, "/sunstone-test"));
+    struct fwr_file f;
+    assert(!fwr_open(&v, &f, "/sunstone-test/sunstone-region-test.bin", FWR_O_CREATE, size, big_buffer, sizeof big_buffer));
+    static uint8_t chunk[1 << 20];
+    for (uint64_t o = 0; o < size; o += sizeof chunk) {
+        size_t n = size - o < sizeof chunk ? (size_t)(size - o) : sizeof chunk;
+        stream_fill(chunk, 99, o, n);
+        size_t put = 0;
+        while (put < n) { size_t k = fwr_write(&f, chunk + put, n - put); put += k; if (put < n) assert(fwr_service(&f, 0) >= 0); }
+        assert(fwr_service(&f, 0) >= 0);
+    }
+    assert(!fwr_close(&f));
+    assert(!fwr_unmount(&v));
+    /* Merge the logged calls into ranges. */
+    unsigned n = calls;
+    printf("calls=%u sector_writes=%llu writes_without_yield=%u\n", n, (unsigned long long)sector_writes, writes_without_yield);
+    uint64_t lo = call_log[0][0], hi = lo + call_log[0][1];
+    for (unsigned i = 1; i <= n; ++i) {
+        if (i < n && call_log[i][0] == hi) { hi += call_log[i][1]; continue; }
+        printf("range %llu %llu %llu\n", (unsigned long long)lo, (unsigned long long)(hi - 1), (unsigned long long)(hi - lo));
+        if (i < n) { lo = call_log[i][0]; hi = lo + call_log[i][1]; }
+    }
+    const struct fwr_wear *w = &v.wear;
+    printf("wear bytes=%llu data=%llu metadata=%llu writes=%llu aligned=%llu unaligned=%llu\n", (unsigned long long)w->bytes_written,
+           (unsigned long long)w->data_bytes, (unsigned long long)w->metadata_bytes, (unsigned long long)w->writes,
+           (unsigned long long)w->au_aligned_writes, (unsigned long long)w->unaligned_writes);
+    return 0;
+}
+
 static int cmd_guard(const char *img, uint64_t base, uint64_t sectors, uint32_t au)
 {
     image_fd = open(img, O_RDWR); assert(image_fd >= 0);
@@ -440,6 +481,8 @@ int main(int argc, char **argv)
         return cmd_accounting(argv[2], strtoull(argv[3], 0, 0), strtoull(argv[4], 0, 0), (uint32_t)strtoul(argv[5], 0, 0));
     if (argc >= 6 && !strcmp(argv[1], "posix"))
         return cmd_posix(argv[2], strtoull(argv[3], 0, 0), strtoull(argv[4], 0, 0), (uint32_t)strtoul(argv[5], 0, 0));
+    if (argc >= 7 && !strcmp(argv[1], "plan"))
+        return cmd_plan(argv[2], strtoull(argv[3], 0, 0), strtoull(argv[4], 0, 0), (uint32_t)strtoul(argv[5], 0, 0), strtoull(argv[6], 0, 0));
     if (argc >= 6 && !strcmp(argv[1], "guard"))
         return cmd_guard(argv[2], strtoull(argv[3], 0, 0), strtoull(argv[4], 0, 0), (uint32_t)strtoul(argv[5], 0, 0));
     fputs("usage: see the file header\n", stderr);

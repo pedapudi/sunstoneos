@@ -54,8 +54,11 @@ static int dev_write(struct fwr_volume *v, uint64_t sector, uint32_t count, cons
     const struct fwr_device *d = &v->cfg.device;
     if (!guard(v, sector, count)) return FWR_REFUSED;
     while (count) {
-        uint32_t n = count < v->max_write ? count : v->max_write;
-        /* A split piece ends on an allocation unit boundary when it can. */
+        /* Pieces start and end on multiples of the card's write limit, so the card sees aligned
+         * pieces whatever the first sector is; with a limit of one unit or more they also end on
+         * allocation unit boundaries. */
+        uint32_t n = v->max_write - (uint32_t)(sector % v->max_write);
+        if (n > count) n = count;
         if (n < count && v->max_write >= v->au) {
             uint64_t end = sector + n;
             uint64_t cut = end - end % v->au;
@@ -67,7 +70,8 @@ static int dev_write(struct fwr_volume *v, uint64_t sector, uint32_t count, cons
         w->writes++; w->bytes_written += (uint64_t)n * S;
         if (is_data) w->data_bytes += (uint64_t)n * S; else w->metadata_bytes += (uint64_t)n * S;
         w->size_histogram[bucket(n)]++;
-        if (sector % v->au == 0 && n % v->au == 0) w->au_aligned_writes++; else w->unaligned_writes++;
+        uint32_t g = v->au < v->max_write ? v->au : v->max_write;
+        if (sector % g == 0 && (sector + n) % g == 0) w->au_aligned_writes++; else w->unaligned_writes++;
         sector += n; count -= n; data += (size_t)n * S;
     }
     return FWR_OK;
@@ -540,7 +544,9 @@ static int is_reserved(const struct fwr_volume *v, uint32_t c)
     return 0;
 }
 
-static int find_free_run(struct fwr_volume *v, uint32_t want, struct fwr_run *out)
+/* A run for `want` clusters. With align set, the run starts at a cluster whose first sector is a
+ * multiple of the allocation unit when the volume has such a run; otherwise any run. */
+static int find_free_run_once(struct fwr_volume *v, uint32_t want, int align, struct fwr_run *out)
 {
     uint32_t hint = v->next_hint >= 2 && v->next_hint < v->clusters + 2 ? v->next_hint : 2;
     uint32_t run_start = 0, run_len = 0, best_start = 0, best_len = 0;
@@ -549,7 +555,7 @@ static int find_free_run(struct fwr_volume *v, uint32_t want, struct fwr_run *ou
         if (c == 2) run_len = 0;
         int r = fat_get(v, c, &val);
         if (r) return r;
-        if (val == 0 && !is_reserved(v, c)) {
+        if (val == 0 && !is_reserved(v, c) && (run_len || !align || cluster_sector(v, c) % v->au == 0)) {
             if (!run_len) run_start = c;
             if (++run_len > best_len) { best_len = run_len; best_start = run_start; }
             if (run_len >= want) break;
@@ -560,10 +566,20 @@ static int find_free_run(struct fwr_volume *v, uint32_t want, struct fwr_run *ou
     return FWR_OK;
 }
 
+static int find_free_run(struct fwr_volume *v, uint32_t want, int align, struct fwr_run *out)
+{
+    if (align && (uint64_t)want * v->csize >= (uint64_t)v->au * S) {
+        int r = find_free_run_once(v, want, 1, out);
+        if (r == FWR_OK && out->length == want) return r;
+        if (r != FWR_OK && r != FWR_FULL) return r;
+    }
+    return find_free_run_once(v, want, 0, out);
+}
+
 static int alloc_one(struct fwr_volume *v, uint32_t *c)
 {
     struct fwr_run r;
-    int rc = find_free_run(v, 1, &r);
+    int rc = find_free_run(v, 1, 0, &r);
     if (!rc) *c = r.start;
     return rc;
 }
@@ -586,7 +602,7 @@ static int reserve(struct fwr_file *f, uint32_t count, uint32_t *got_out)
             if (l) r = (struct fwr_run){last + 1, l};
         }
         if (!r.length) {
-            int rc = find_free_run(v, count - got, &r);
+            int rc = find_free_run(v, count - got, 1, &r);
             if (rc == FWR_FULL) break;
             if (rc) return rc;
         }
