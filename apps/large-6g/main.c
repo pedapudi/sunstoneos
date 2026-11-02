@@ -150,7 +150,9 @@ void large_6g_main(const struct ss_grant *grant)
     size_t bytes = 0;
     uint64_t *base = ready == 1 ? ss_large_base(LARGE_6G_LARGE_BIG, &bytes) : 0;
     r.region_bytes = bytes; r.region_base = (uint64_t)(uintptr_t)base;
-    if (!base || bytes != 6 * GIB) { r.tag = TAG_NOT_READY; ss_finish(&r, sizeof r); }
+    /* 6 GiB on the board; a smaller region is accepted so that the emulator can run the same code (the passes need
+     * the 40 MiB window and its copy target inside the region). */
+    if (!base || bytes < 256 * MIB) { r.tag = TAG_NOT_READY; ss_finish(&r, sizeof r); }
 #if LARGE_6G_PROBE
     /* The region itself is reachable, so what follows is the probe's own fault. */
     sink ^= base[0] ^ base[bytes / 8 - 1];

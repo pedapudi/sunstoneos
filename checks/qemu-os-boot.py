@@ -550,6 +550,12 @@ def main():
         application = image.application('large-test', ['checks/qemu-os/large-main.c'], manifest)
         return image.build(application)
 
+    def build_6g(name, manifest):
+        """The 6 GiB test application (apps/large-6g) with a region of the emulator's size."""
+        image = Image(out / name, extra_defines=['-DQEMU_OS_UPPER=1'])
+        application = image.application('large-6g', ['apps/large-6g/main.c'], manifest)
+        return image.build(application)
+
     def build_facts():
         image = Image(out / 'build-hw-facts', extra_defines=['-DSUNSTONE_A733_HW_FACTS=1'],
                       extra_sources=['platform/a733/hw_facts.c'])
@@ -576,7 +582,11 @@ def main():
         facts_elf = pool.submit(build_facts)
         large_elf = pool.submit(build_large, 'build-large', large_manifest_path(out / 'large-manifest.json', LARGE_DIGEST, LARGE_FILE))
         large_big_elf = pool.submit(build_large, 'build-large-too-big', ROOT / 'checks/qemu-os/large-too-big-manifest.json')
-        large_elf, large_big_elf = large_elf.result(), large_big_elf.result()
+        manifest_6g = json.loads((ROOT / 'apps/large-6g/manifest.json').read_text())
+        manifest_6g['large_regions'][0]['bytes'] = 256 << 20
+        (out / 'large-6g-manifest.json').write_text(json.dumps(manifest_6g))
+        large_6g_elf = pool.submit(build_6g, 'build-large-6g', out / 'large-6g-manifest.json')
+        large_elf, large_big_elf, large_6g_elf = large_elf.result(), large_big_elf.result(), large_6g_elf.result()
         os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
             os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result(),
             partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result(), facts_elf.result())
@@ -769,6 +779,17 @@ def main():
     c.clean()
     tag, error = struct.unpack('<QQ', bytes.fromhex(c.finished['result']))
     c.require(tag == 0x4c415247464c and error == 0xfffffff5, 'digest mismatch: result %#x %#x' % (tag, error))
+    # A region with no source is ready at once, above 4 GiB it would not fit the emulator, so the emulator's region is 256 MiB:
+    # the application times its passes, writes and reads back the address pattern, and reports no mismatch.
+    c = run_case('large-region-unfilled', large_6g_elf, scenario(usb_ready_ms=usb_delay_ms), None, '4G')
+    c.clean()
+    c.require(c.finished is not None and c.finished['status'] == '1', 'the application did not finish')
+    parts = {int(o): h for o, h in re.findall(r'APP-RESULT offset=(\d+) hex=([0-9a-f]+)', c.output)}
+    words = struct.unpack('<64Q', bytes.fromhex(''.join(parts[o] for o in sorted(parts))))
+    c.require(words[0] == 0x36474f4e45 and words[1] == 2 and words[2] == 0, 'tag/state/error %#x %d %d' % words[:3])
+    c.require(words[3] == 256 << 20 and words[4] == 0x80000000, 'region %#x at %#x' % (words[3], words[4]))
+    c.require(all(t > 0 for t in words[8:8 + 24 + 6]), 'a pass has no time: %s' % (words[8:38],))
+    c.require(words[38] == (256 << 20) // 8 and words[39] == 0, 'integrity: %d words, %d mismatches' % (words[38], words[39]))
     # A second EL0 task that runs in no application space reads the region: a permission fault, reported with the region's address.
     c = run_case('large-region-other-space-faults', large_elf, scenario(usb_ready_ms=usb_delay_ms), mode1, '4G', [(RAMDISK_ADDRESS, good)])
     c.failed_with('APPLICATION', 0xe24)
