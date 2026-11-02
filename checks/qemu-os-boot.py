@@ -564,6 +564,12 @@ def main():
         application = image.application('heap-test', ['checks/qemu-os/heap-main.c'], manifest)
         return image.build(application, wraps=['os_large_prepare'])
 
+    def build_notify():
+        """An application that is given the OS's notifications while it waits (docs/notifications.md)."""
+        image = Image(out / 'build-notify')
+        application = image.application('notify-test', ['checks/qemu-os/notify-main.c'], ROOT / 'checks/qemu-os/notify-manifest.json')
+        return image.build(application)
+
     def build_facts():
         image = Image(out / 'build-hw-facts', extra_defines=['-DSUNSTONE_A733_HW_FACTS=1'],
                       extra_sources=['platform/a733/hw_facts.c'])
@@ -594,6 +600,7 @@ def main():
         heap_big_elf = pool.submit(build_heap, 'build-heap-too-big', ROOT / 'checks/qemu-os/heap-too-big-manifest.json')
         large_elf, large_big_elf = large_elf.result(), large_big_elf.result()
         heap_early = pool.submit(build_heap_early, 'build-heap-early', ROOT / 'checks/qemu-os/heap-manifest.json')
+        notify_elf = pool.submit(build_notify).result()
         heap_elf, heap_big_elf, heap_early_elf = heap_elf.result(), heap_big_elf.result(), heap_early.result()
         os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
             os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result(),
@@ -858,6 +865,14 @@ def main():
     # make it: the heap of the ledger cannot replace it, so the application does not start.
     c = run_case('heap-after-early-sbrk', heap_early_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x80000000, stale)])
     c.require(c.main is None and c.failure is not None, 'the application started although the linked heap was already in use')
+    # The OS gives the main task its usb-ready and live-state notifications while the main task sleeps in the deadline
+    # wait and in ss_host_recv: each ends at its own condition (the deadline; the timeout), not at the OS's notification.
+    c = run_case('os-notifications-do-not-end-waits', notify_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0))
+    c.clean()
+    tag, wait, e1, recv, e2 = struct.unpack('<5q', bytes.fromhex(c.finished['result']))
+    c.require(wait == 1 and e1 >= 30000, 'the deadline wait ended with status %d after %d us, expected expiry after 30000 us' % (wait, e1))
+    c.require(recv == 0 and e2 >= 30000, 'ss_host_recv returned %d after %d us, expected the timeout (0) after 30000 us' % (recv, e2))
+
     # A heap that the ledger cannot hold stops the start before any task runs.
     c = run_case('heap-too-big', heap_big_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G')
     c.require(c.main is None and not lines(c.output, 'LARGE-ADMITTED'), 'the application started although the ledger refused its heap')

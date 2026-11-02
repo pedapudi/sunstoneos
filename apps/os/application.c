@@ -74,8 +74,39 @@ void os_application_failed(const struct ss_failure *failure,uint64_t epoch,uint6
     r->status=SS_RESULT_FAILED;
     atomic_store_explicit(&finished,1,memory_order_release);
 }
+/* The OS's wake-ups of an application task (docs/notifications.md): a notification at the task's own index 0
+ * reaches it only while it sleeps in an OS wait that registered here, so that no application wait on index 0, such
+ * as the deadline wait, ends because of an OS event. Sized by the generated tables: one entry per application task. */
+extern const unsigned os_wake_capacity;
+extern TaskHandle_t os_wake_task[];
+extern unsigned os_wake_gave[];
+static void os_wake(TaskHandle_t task)
+{
+    if(!task)return;
+    taskENTER_CRITICAL();
+    for(unsigned i=0;i<os_wake_capacity;++i)if(os_wake_task[i]==task){os_wake_gave[i]=1;xTaskNotifyGive(task);}
+    taskEXIT_CRITICAL();
+}
+static unsigned os_wait_begin(TaskHandle_t task)
+{
+    unsigned slot=os_wake_capacity;
+    taskENTER_CRITICAL();
+    for(unsigned i=0;i<os_wake_capacity&&slot==os_wake_capacity;++i)if(!os_wake_task[i]){os_wake_task[i]=task;os_wake_gave[i]=0;slot=i;}
+    taskEXIT_CRITICAL();
+    return slot;
+}
+static void os_wait_end(unsigned slot)
+{
+    if(slot>=os_wake_capacity)return;
+    taskENTER_CRITICAL();
+    os_wake_task[slot]=NULL;
+    /* What the OS gave after the wait returned would end the application's next wait on index 0. */
+    if(os_wake_gave[slot])(void)ulTaskNotifyTake(pdTRUE,0);
+    os_wake_gave[slot]=0;
+    taskEXIT_CRITICAL();
+}
 void os_application_usb_ready(void)
-{atomic_store_explicit(&usb_ready,1,memory_order_release);if(main_task)xTaskNotifyGive(main_task);}
+{atomic_store_explicit(&usb_ready,1,memory_order_release);os_wake(main_task);}
 int ss_live(void)
 {
     if(!board_live(NULL)||os_application_finished()||atomic_load_explicit(&board.result,memory_order_acquire)==2)return -1;
@@ -89,7 +120,7 @@ uint64_t ss_counter_ticks(void)
     uint64_t now;__asm__ volatile("isb\n mrs %0,cntpct_el0":"=r"(now)::"memory");return now;
 }
 void os_application_usb_changed(void)
-{if(main_task)xTaskNotifyGive(main_task);}
+{os_wake(main_task);}
 static int application_wait_until(uint64_t until)
 {
     if(xTaskGetCurrentTaskHandle()==main_task){
@@ -99,7 +130,10 @@ static int application_wait_until(uint64_t until)
         if(health>limit)health=limit;
         if(!board_service_blocked_until(OS_SERVICE_APPLICATION,health))return SUNSTONE_DEADLINE_ERROR;
     }
-    return sunstone_deadline_wait_until(until);
+    const unsigned slot=os_wait_begin(xTaskGetCurrentTaskHandle());
+    const int result=sunstone_deadline_wait_until(until);
+    os_wait_end(slot);
+    return result;
 }
 void ss_usb_wait(uint32_t wait_us)
 {
@@ -157,18 +191,18 @@ void os_application_host_observed(int ready)
     if(!ready)return;
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
     if(!(grant.devices&SS_DEVICE_USB_STORAGE)){
-        atomic_store_explicit(&board.result,3,memory_order_release);if(main_task)xTaskNotifyGive(main_task);return;
+        atomic_store_explicit(&board.result,3,memory_order_release);os_wake(main_task);return;
     }
 #endif
     enum a733_usb2_device_kind expected=(grant.devices&SS_DEVICE_USB_KEYBOARD)?A733_USB2_DEVICE_DUAL:A733_USB2_DEVICE_MSC;
     if(a733_usb2_device_kind(&board.host)!=expected){board_fail(NULL);return;}
     int live=board.host.core.ops.live?board.host.core.ops.live(board.host.core.context,
         board.host.core.generation,board.host.platform.config.lifetime_deadline):-1;
-    if(live<0){atomic_store_explicit(&observed_until,0,memory_order_release);if(main_task)xTaskNotifyGive(main_task);return;}
+    if(live<0){atomic_store_explicit(&observed_until,0,memory_order_release);os_wake(main_task);return;}
     if(!live)return;
     attachment=board.host.platform.attachment;
     atomic_store_explicit(&observed_until,attachment.observed_us+A733_TYPEC_FRESH_US,memory_order_release);
-    if(main_task)xTaskNotifyGive(main_task);
+    os_wake(main_task);
 
 }
 int os_application_export_live(void)
@@ -433,7 +467,7 @@ int os_host_offer(const struct ss_host_request *request)
        atomic_load_explicit(&mailbox.state,memory_order_seq_cst))return 0;
     mailbox.request=*request;atomic_store_explicit(&mailbox.state,1,memory_order_seq_cst);
     TaskHandle_t waiter=atomic_load_explicit(&mailbox.waiter,memory_order_seq_cst);
-    if(waiter)xTaskNotifyGive(waiter);return 1;
+    os_wake(waiter);return 1;
 }
 int ss_host_recv(struct ss_host_request *request,uint32_t wait_us)
 {
@@ -441,8 +475,10 @@ int ss_host_recv(struct ss_host_request *request,uint32_t wait_us)
     /* Publish waiter before checking the request to avoid a lost wake-up. */
     atomic_store_explicit(&mailbox.waiter,xTaskGetCurrentTaskHandle(),memory_order_seq_cst);
     unsigned state=atomic_load_explicit(&mailbox.state,memory_order_seq_cst);
-    if(state==0&&wait_us){
-        if(application_wait_until(a733_smp_counter()/24+wait_us)==SUNSTONE_DEADLINE_ERROR)return -1;
+    /* Sleep until a request arrives, the session ends or wait_us has passed; a wake-up for another reason, such as
+     * a USB event the OS reports, does not end the call. */
+    for(uint64_t until=a733_smp_counter()/24+wait_us;state==0&&wait_us&&a733_smp_counter()/24<until&&board_live(NULL);){
+        if(application_wait_until(until)==SUNSTONE_DEADLINE_ERROR)return -1;
         state=atomic_load_explicit(&mailbox.state,memory_order_seq_cst);
     }
     if(!board_live(NULL))return -1;

@@ -12,7 +12,7 @@
  *           application's space, and the main task reads what the grandchild wrote.
  *   mode 2: read the byte after the region from the application's own space: it must fault.
  *   mode 3: a worker task of the application writes the heap that the main task reads; no call attaches it. The
- *           main task waits on a flag the worker sets: a task notification to the main task can come from the OS. */
+ *           main task waits on a flag the worker sets. */
 #include "heap_test-app.h"
 #include "FreeRTOS.h"
 #include "task.h"

@@ -95,9 +95,7 @@ void heap_test_main(const struct ss_grant *grant)
     main_handle = xTaskGetCurrentTaskHandle();
     (void)xTaskCreateStaticAffinitySet(worker, "worker", 512, NULL, 3, worker_stack, &worker_state,
                                        (UBaseType_t)(grant->worker_cores & -grant->worker_cores));
-    /* Wait on the worker's own flag. A notification to the main task is not the worker's: the OS notifies the main
-     * task when the session's live state changes (os_application_host_observed), so a wait on the task notification
-     * can end before the worker has run. */
+    /* Wait on the flag the worker sets. */
     for (unsigned waited = 0; !worker_flag && waited < 2000; ++waited) vTaskDelay(1);
     r.notify_count = worker_flag;
     const uint64_t main_tag = (uintptr_t)xTaskGetApplicationTaskTag(NULL);
