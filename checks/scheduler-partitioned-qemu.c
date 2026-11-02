@@ -266,16 +266,16 @@ static void control(void *unused)
         configASSERT(__atomic_load_n(&busy[id], __ATOMIC_RELAXED) > 0);
         configASSERT(__atomic_load_n(&switches[id], __ATOMIC_RELAXED) > 0);
         platform_puts("owner cpu="); platform_hex(id);
-        platform_puts(" switches="); platform_hex(switches[id]);
-        platform_puts(" idle-selections="); platform_hex(idle_selected[id]);
-        platform_puts(" busy-progress="); platform_hex(busy[id]);
-        platform_puts(" switch-path-global-locks="); platform_hex(scheduling_locks[id]);
-        platform_puts(" admin-acquisitions="); platform_hex(admin_locks[id]);
-        platform_puts(" switch-admin-acquisitions="); platform_hex(switch_admin_locks[id]);
+        platform_puts(" switches="); platform_hex(__atomic_load_n(&switches[id], __ATOMIC_RELAXED));
+        platform_puts(" idle-selections="); platform_hex(__atomic_load_n(&idle_selected[id], __ATOMIC_RELAXED));
+        platform_puts(" busy-progress="); platform_hex(__atomic_load_n(&busy[id], __ATOMIC_RELAXED));
+        platform_puts(" switch-path-global-locks="); platform_hex(__atomic_load_n(&scheduling_locks[id], __ATOMIC_RELAXED));
+        platform_puts(" admin-acquisitions="); platform_hex(__atomic_load_n(&admin_locks[id], __ATOMIC_RELAXED));
+        platform_puts(" switch-admin-acquisitions="); platform_hex(__atomic_load_n(&switch_admin_locks[id], __ATOMIC_RELAXED));
         platform_puts("\n");
     }
     uint64_t observed_admin = 0;
-    for (unsigned id = 0; id < 8; ++id) observed_admin += admin_locks[id];
+    for (unsigned id = 0; id < 8; ++id) observed_admin += __atomic_load_n(&admin_locks[id], __ATOMIC_RELAXED);
     configASSERT(observed_admin > 0);
     for (unsigned id = 0; id < 2; ++id) configASSERT(mover_round[id] == ROUNDS);
     configASSERT(local_phase_locks == 0);
