@@ -118,23 +118,39 @@ Merging replaces the unmeasured and observed entries of the facts the table cove
 each, and refuses a table whose header names the virtual board. Record the run with
 `tools/evidence.py add ENTRY_ID --subsystem hardware-facts ...` afterwards.
 
-## Observed before the probe
+## Measured on the board
 
-| Fact | Value | Source |
-| --- | --- | --- |
-| `gic.redist.intid27.priority`, Non-secure read of the shared timer's priority byte after the image wrote 0xd8 | 0xb0 | Queue entry `1793587317962103239-5bbfc48d` accepted this value in the finite NPU deadline setup. Whether the write took effect is open. |
-| `gic.cpuif.icc_pmr_el1.readback_after_write_ff` | 0xf8 | Commit `55a35b4d` describes the read-back. The queue entry that showed it is not recorded. |
-| `runner.mmio.*` for the five NPU admission words | `0x070101ac` 0x1, `0x020025c0` 0x110103ff, `0x020025e0` 0xf1055803, `0x07064000` 0x8, `0x07064008` 0x8 | The `npu_on_admission` record of the same entry. |
-| `runner.rail.*`: DCDC3 and DCDC5 800 mV, DCXO 26 MHz, CPU voltage bin 4 | as listed | The `rails` record of the same entry. |
+Queue entry `1793590887901610846-fc9d445f` (port 3-1, image SHA-256 `33c230ec...2928`, development mode) returned
+the table. Every core reported; the values below hold on all eight cores unless stated.
 
-The open NPU interrupt bind condition is `bind_refusal` in `platform/a733/npu_irq.c`; the probe records every
-register it reads (clauses 3 to 9) for INTID 97 in the state a routed image leaves at EL1.
+| Fact | Value |
+| --- | --- |
+| `ICC_CTLR_EL1.PRIbits`, `IDbits` | 4 (five priority bits), 0 (16-bit INTIDs) |
+| `ICC_PMR_EL1` on entry, and after writing 0xff | 0xf0, and 0xf0 (the Non-secure view is the Secure value shifted left by one bit) |
+| `ICC_PMR_EL1` after writing the API mask 0xb0 | 0xb0 |
+| `ICC_RPR_EL1` with no interrupt active | 0xff |
+| PPI 27 priority byte: on entry, and after the image's write of 0xd8 | 0x00, and 0xd0 (the write takes effect; the Non-secure value is `((0xd8 >> 1) \| 0x80) & 0xf8`, shifted left) |
+| INTID 97 priority, Non-secure read (Secure route priority 0xd8) | 0xb0 |
+| `GICD_CTLR` | 0x12: ARE_S set, DS clear |
+| `CNTFRQ_EL0` | 24000000 on every core |
+| `MIDR_EL1` | Cortex-A55 `0x412fd050` on cores 0 to 5 and Cortex-A76 `0x414fd0b1` on cores 6 and 7, as the file records per core |
+| NPU PPU words `0x07064000`, `0x07064008` | 8, read at EL1 after the three gates were open |
 
-Two observations do not fit one model. The read-back of `ICC_PMR_EL1` is not shifted (an unmasked write reads
-back 0xf8 with five priority bits), yet the Non-secure priority of PPI 27 reads 0xb0 after the image wrote
-0xd8. The host model takes the PMR view from the table, and takes the priority read-back of an interrupt with
-an observed value from the table. The probe's PPI write tests and the Non-secure priority reads of every
-SGI and PPI decide between a write that is ignored and a different view.
+The shifted view reproduces both numbers that failed board runs: the Secure value 0xd8 reads 0xb0 at INTID 97
+(the bind comparison) and 0xd0 at PPI 27 after the image writes 0xd8 (the earlier assertion of 0xd8 and the
+earlier acceptance of 0xb0 both differ from 0xd0). The `0xf8` read-back that an earlier board run showed after
+an unmasked write is not reproduced here: this probe reads 0xf0 after the same write at the same level, so that
+earlier value came from another state of the interface (for example with tasks running) that the table does not
+yet cover. Merging the board table replaced that observation, as the merge replaces observed entries.
+
+`ICC_IGRPEN0_EL1` read at Non-secure EL1 traps to EL3 is recorded as a measured fact from entry
+`1793590176547518274-e819ce89`, with the `SCR_EL3.FIQ` explanation marked as inferred.
+
+Seeds that remain `observed` are the runner's own readings (`runner.mmio.*` for the five NPU admission words
+and `runner.rail.*`: DCDC3 and DCDC5 800 mV, DCXO 26 MHz, CPU voltage bin 4) from entry
+`1793587317962103239-5bbfc48d`. The open NPU interrupt bind condition is `bind_refusal` in
+`platform/a733/npu_irq.c`; the table holds every register that function reads for INTID 97 in the state a
+routed image leaves at EL1 (all clear and level-sensitive, priority 0xb0), the state in which the clauses of that function hold for this image's route (core 0, secure priority 0xd8).
 
 ## Inventory of asserted and refused hardware values
 
@@ -145,7 +161,7 @@ measurement.
 | --- | --- | --- | --- | --- |
 | 1 | PPI 27 priority byte 0xd8 written, Non-secure read-back | `platform/a733-smp-cached/platform.c` (a733_smp_primary_el1), `apps/npu-finite/deadline.c` | `platform/qemu-os/platform.c` local_init, `checks/npu-deadline-setup.py`, GIC models | `gic.redist.intid27.priority[_after_write]` |
 | 2 | PPI 30 priority byte | `platform/a733-smp-cached/platform.c` | `platform/qemu-os/platform.c` | `gic.redist.intid30.priority[_after_write]` |
-| 3 | `ICC_PMR_EL1` unmasked read-back (0xf0 asserted, 0xf8 seen) | `platform/a733/platform.c` configASSERT, `apps/os/cpu-return.c` core_can_schedule, `apps/os/cpu-return-el0.S` | `GicModel` in `tools/hw_facts.py`; the five Unicorn models | `gic.cpuif.icc_pmr_el1.readback_after_write_ff` |
+| 3 | `ICC_PMR_EL1` unmasked read-back (0xf0 measured; an earlier run showed 0xf8) | `platform/a733/platform.c` configASSERT, `apps/os/cpu-return.c` core_can_schedule, `apps/os/cpu-return-el0.S` | `GicModel` in `tools/hw_facts.py`; the five Unicorn models | `gic.cpuif.icc_pmr_el1.readback_after_write_ff` |
 | 4 | `ICC_PMR_EL1` read-back of the API mask | `patches/freertos-smp-c.patch` (xPortStartScheduler) | same | `...readback_after_write_api_mask` |
 | 5 | Secure PMR bit 7 after EL3 writes 0xff | `platform/a733-smp-cached/continue.S` | `secure_pmr` in the Unicorn models | `gic.cpuif.icc_pmr_el1.inherited` |
 | 6 | `ICC_CTLR_EL1` PRIbits 5 (only `ICC_AP0R0` and `ICC_AP1R0` exist), IDbits | `platform/a733-smp-cached/continue.S` comments and active priority clears | `checks/a733-smp-cached.py` | `gic.cpuif.icc_ctlr_el1.pribits`, `.idbits` |
@@ -185,7 +201,7 @@ Done in this round:
 
 - `tools/hw_facts.py` provides `Facts` and `GicModel`. `GicModel` takes the number of implemented priority
   bits from `ICC_CTLR_EL1.PRIbits`, selects the shifted or unshifted Non-secure view that reproduces the
-  recorded `ICC_PMR_EL1` read-back, fails with `ContradictsTable` when neither does, and returns an observed
+  measured `ICC_PMR_EL1` read-back, fails with `ContradictsTable` when neither does, and returns an observed
   Non-secure priority for an interrupt that has one.
 - `checks/a733-smp-cached.py`, `checks/a733-supervised-scheduler.py`, `checks/all-core-first-task-probe.py`,
   `checks/all-core-task-workload-probe.py`, `checks/primary-cache-probe.py` and

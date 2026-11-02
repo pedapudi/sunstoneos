@@ -140,6 +140,7 @@ def test_decoder():
     assert merged[('gic.redist.intid27.priority', 0)]['status'] == 'measured'
     assert merged[('gic.redist.intid27.priority', 0)]['queue_entry'] == 'queue-entry-x'
     assert ('gic.cpuif.icc_pmr_el1.readback_after_write_ff', 'all') not in merged
+    assert merged[('gic.cpuif.icc_igrpen0_el1.read_traps_to_el3', 4)]['status'] == 'measured'
     assert merged[('runner.mmio.0x070101ac', None)]['status'] == 'observed'
     return blob
 
@@ -180,42 +181,47 @@ def test_document():
                 assert item['note'], 'an observation without a queue entry says why'
         assert item['core'] in (None, 'all') or item['core'] in range(hw.CORES), item
     facts = hw.Facts()
-    assert facts.value('gic.redist.intid27.priority', 0) == 0xb0
-    assert facts.entry('gic.redist.intid27.priority', 0)['queue_entry'] == '1793587317962103239-5bbfc48d'
-    assert facts.value('gic.cpuif.icc_pmr_el1.readback_after_write_ff', 3) == 0xf8
+    # The board run of queue entry 1793590887901610846-fc9d445f (port 3-1).
+    run = '1793590887901610846-fc9d445f'
+    assert facts.entry('gic.cpuif.icc_pmr_el1.readback_after_write_ff', 3)['queue_entry'] == run
+    assert facts.value('gic.cpuif.icc_pmr_el1.readback_after_write_ff', 3) == 0xf0
+    assert facts.value('gic.cpuif.icc_ctlr_el1.pribits', 0) == 4
+    assert facts.value('gic.redist.intid27.priority_after_write', 0) == 0xd0
+    assert facts.value('gic.dist.spi97.priority', 0) == 0xb0
+    assert facts.value('cpu.cntfrq_el0', 5) == 24000000
+    assert facts.entry('gic.cpuif.icc_igrpen0_el1.read_traps_to_el3', 4)['queue_entry'] == '1793590176547518274-e819ce89'
     assert facts.value('runner.mmio.0x07064000') == 8 and facts.value('runner.rail.dcdc3_uv') == 800000
-    assert not facts.has('gic.dist.spi97.priority')
     try:
-        facts.value('gic.dist.spi97.priority')
-        raise AssertionError('an unmeasured fact answered')
+        facts.value('gic.dist.nonexistent')
+        raise AssertionError('an unknown fact answered')
     except hw.MissingFact:
         pass
-    assert facts.assume('gic.dist.spi97.priority', 0xd8, 'test') == 0xd8 and 'gic.dist.spi97.priority' in facts.assumed
+    assert facts.assume('gic.dist.nonexistent', 0xd8, 'test') == 0xd8 and 'gic.dist.nonexistent' in facts.assumed
 
 
-def variant(readback, observed_priority=None):
+def variant(readback):
     document = hw.load_document()
     for item in document['facts']:
         if item['name'] == 'gic.cpuif.icc_pmr_el1.readback_after_write_ff':
             item['value'] = readback
-        if item['name'] == 'gic.redist.intid27.priority' and observed_priority is not None:
-            item['value'] = observed_priority
-    path = variant.directory / ('facts-%x-%s.json' % (readback, observed_priority))
+    path = variant.directory / ('facts-%x.json' % readback)
     path.write_text(json.dumps(document))
     return hw.Facts(path)
 
 
 def test_models():
     gic = hw.GicModel()
-    assert gic.mask == 0xf8 and not gic.shifted
-    # The model reproduces the observation: an unmasked write reads back 0xf8, whatever the Secure mask was.
-    assert gic.pmr_ns_read(gic.pmr_ns_write(0xf8, 0xff)) == hw.Facts().value('gic.cpuif.icc_pmr_el1.readback_after_write_ff')
+    facts = hw.Facts()
+    assert gic.mask == 0xf8 and gic.shifted and not facts.assumed.get('gic.cpuif.icc_pmr_el1.readback_after_write_ff')
+    # The model reproduces the measurements: an unmasked write reads back 0xf0, and the image's write of
+    # 0xd8 to the priority byte of PPI 27 reads back 0xd0.
+    assert gic.pmr_ns_read(gic.pmr_ns_write(0xf8, 0xff)) == facts.value('gic.cpuif.icc_pmr_el1.readback_after_write_ff', 0)
     assert gic.pmr_ns_write(0x00, 0xff) == 0x00 and gic.pmr_ns_read(0x00) == 0
-    assert gic.priority_ns_read(27, gic.ns_write(0xd8)) == 0xb0, 'the observed Non-secure view of PPI 27'
-    assert gic.priority_ns_read(30, gic.ns_write(0xe0)) == 0xe0
-    # A table that reads 0xf0 selects the shifted view; one that fits neither is a contradiction.
-    shifted = hw.GicModel(variant(0xf0))
-    assert shifted.shifted and shifted.ns_read(shifted.ns_write(0xe0)) == 0xe0 and shifted.pmr_ns_read(shifted.pmr_ns_write(0xf8, 0xff)) == 0xf0
+    assert gic.ns_read(gic.ns_write(0xd8)) == facts.value('gic.redist.intid27.priority_after_write', 0)
+    assert gic.ns_read(0xd8) == facts.value('gic.dist.spi97.priority', 0), 'Secure 0xd8 of the NPU route reads 0xb0'
+    # A table that reads 0xf8 selects the unshifted view; one that fits neither is a contradiction.
+    plain = hw.GicModel(variant(0xf8))
+    assert not plain.shifted and plain.pmr_ns_read(plain.pmr_ns_write(0xf8, 0xff)) == 0xf8
     try:
         hw.GicModel(variant(0xc4))
         raise AssertionError('a contradicting table was accepted')
