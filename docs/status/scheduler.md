@@ -39,7 +39,7 @@ qualification.
 Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-14 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+16 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -57,4 +57,6 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793595243567121086-cf21e7ef` | 2026-11-02 | 3-3 | `9d07d2461f33` | result-mismatch | failed | run_total 71.04 s, compute_time 366355 us, real_time_factor 0.10205, frames 90, samples 57440, yields 342 |
 | `1793595339857900481-2081a626` | 2026-11-02 | 3-3 | `8130d5f6f184` | result-mismatch | passed | run_total 70.103 s, compute_time 348752 us, real_time_factor 0.09715, frames 90, samples 57440, yields 331 |
 | `1793595434552850928-da60cec8` | 2026-11-02 | 3-3 | `9d07d2461f33` | result-mismatch | failed | run_total 70.348 s, compute_time 366490 us, real_time_factor 0.10209, frames 90, samples 57440, yields 342 |
+| `1793596277164206286-d6abcfc2` | 2026-11-02 | 3-3 | `726c83b62df3` | returned | passed | run_total 70.147 s, compute_time 109585 us, real_time_factor 0.03053, call_total 80564 us, dispatch_kernel 5381 us, owner_compute 46358 us, last_finisher_wait 21961 us, completion_path 6862 us, wake_to_run_sum 7375 us, wake_to_run_max_sum 1791 us, worker_compute 223596 us, worker_done_kernel 15012 us, calls 470, placement_errors 0, core_changes 0 |
+| `1793596348014754310-98c4819c` | 2026-11-02 | 3-3 | `9dd9696975c2` | returned | passed | run_total 70.054 s, compute_time 110111 us, real_time_factor 0.03067, call_total 79672 us, dispatch_kernel 5971 us, owner_compute 47199 us, last_finisher_wait 21264 us, completion_path 5237 us, wake_to_run_sum 9625 us, wake_to_run_max_sum 2092 us, worker_compute 224325 us, worker_done_kernel 9491 us, calls 470, placement_errors 0, core_changes 0 |
 <!-- evidence-table:end -->
