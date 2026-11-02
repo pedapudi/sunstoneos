@@ -31,7 +31,9 @@ static unsigned usable_ranges(const uint64_t *base_l1, struct app_region_range *
 __attribute__((weak)) void os_large_report(const struct large_slot *slot, const struct app_space *space)
 { (void)slot; (void)space; }
 
-#define OS_LARGE_OWNER 1u
+/* The application's ASID, taken once from the pool and never given back (include/app_region.h). */
+static struct app_asid_pool asids;
+static uint8_t owner_asid;
 /* Sized by the image's generated tables from the manifest. */
 extern const unsigned os_large_capacity;
 extern struct large_slot os_large_slot_storage[];
@@ -61,12 +63,13 @@ int os_large_prepare(void)
     const uint64_t *base_l1 = (const uint64_t *)(uintptr_t)(ttbr & APP_PTE_ADDR_MASK);
     struct app_region_range usable[APP_REGION_SLOTS];
     unsigned ranges = usable_ranges(base_l1, usable, APP_REGION_SLOTS);
-    if (!ranges || count > os_large_capacity ||
+    owner_asid = app_asid_alloc(&asids);
+    if (!owner_asid || !ranges || count > os_large_capacity ||
         app_region_ledger_init(&ledger, usable_storage, APP_REGION_SLOTS, os_large_entry_storage, os_large_capacity, usable, ranges)) return 0;
-    if (large_admit(&ledger, OS_LARGE_OWNER, __start_sunstone_large_regions, count, slots, os_large_capacity)) return 0;
+    if (large_admit(&ledger, owner_asid, __start_sunstone_large_regions, count, slots, os_large_capacity)) return 0;
     arena = (struct app_table_arena){arena_pages, (uintptr_t)arena_pages, APP_SPACE_PAGES, 0};
-    if (app_space_build(&space, &arena, base_l1, &ledger, OS_LARGE_OWNER)) {
-        for (unsigned i = 0; i < count; ++i) if (slots[i].bytes) app_region_release(&ledger, OS_LARGE_OWNER, slots[i].base);
+    if (app_space_build(&space, &arena, base_l1, &ledger, owner_asid)) {
+        for (unsigned i = 0; i < count; ++i) if (slots[i].bytes) app_region_release(&ledger, owner_asid, slots[i].base);
         memset(slots, 0, sizeof *slots * count);
         return 0;
     }
@@ -167,8 +170,3 @@ int ss_large_wait(unsigned index, uint64_t timeout_us)
     taskEXIT_CRITICAL();
     return result;
 }
-
-/* Regions are declared in the manifest: the ledger and the tables are sized from it at build time, so a
- * request after start has no storage to take. */
-int ss_large_request(const struct ss_large_region *record)
-{ (void)record; return APP_REGION_INVALID; }

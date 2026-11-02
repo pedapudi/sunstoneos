@@ -187,7 +187,7 @@ apply_build_patch("${os_build}/boot.c" "${os_boot_base}" "${os_root}/apps/os/boo
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
   runtime/cpu_topology_app.c
-  apps/os/usb-service.c apps/os/large.c apps/os/large_load.c drivers/storage/fat32_ro.c drivers/storage/storage_digest.c kernel/appmem/app_region.c kernel/appmem/large_admit.c apps/os/application.c apps/os/session.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
+  apps/os/usb-service.c apps/os/large.c apps/os/large_load.c apps/os/large_sd.c drivers/storage/sunxi_mmc.c drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c drivers/storage/fat32_ro.c drivers/storage/storage_digest.c kernel/appmem/app_region.c kernel/appmem/large_admit.c apps/os/application.c apps/os/session.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/deadline.c runtime/deadline-a733.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
   apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
@@ -559,6 +559,9 @@ if(SUNSTONE_A733_OS_NPU)
 endif()
 set_property(TARGET sunstone-a733-os-core PROPERTY LINK_OPTIONS "${os_link}")
 target_link_options(sunstone-a733-os-core PRIVATE "-Wl,-Map,${os_build}/image.map")
+# The loader's SD0 binding is read-only: the core has no write path (checks/sd-read-only.py scans the image).
+set_source_files_properties("${os_root}/drivers/storage/sunxi_mmc.c" "${os_root}/drivers/storage/a733_mmc_platform.c"
+  "${os_root}/drivers/storage/a733_mmc_platform_native.c" PROPERTIES COMPILE_DEFINITIONS SUNXI_MMC_READ_ONLY=1)
 if(SUNSTONE_CONTROL_IRQ)
   if(SUNSTONE_LATENCY OR SUNSTONE_IRQ_COUNT)
     message(FATAL_ERROR "The control interrupts, the latency recorder and the interrupt counter each wrap vApplicationIRQHandler")
