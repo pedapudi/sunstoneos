@@ -238,9 +238,8 @@ int ss_large_status(unsigned index, struct ss_large_status *out);
  * Returns 1 ready, -1 failed, 0 timeout. Woken by task notification. */
 int ss_large_wait(unsigned index, uint64_t timeout_us);
 
-/* Request a region after start with the same record. Returns 0 on success
- * or a negative app_region_status; the call returns after the load begins. */
-int ss_large_request(const struct ss_large_region *record);
+/* Put a task of the application, such as a worker it created, in the application's address space. */
+void ss_large_attach(void *task);
 ```
 
 At admission the OS acquires every declared region before the main task
@@ -443,18 +442,34 @@ All four steps are implemented in the OS image and checked on the host and in QE
   round trip in one space and 289.34 with a TTBR0 write at each switch: 0.18 ticks (7.5 ns) per round trip, 3.8 ns per
   switch, four instructions' time. This is not hardware time. The OS test application runs the same benchmark, so
   the figure on the board is one run away.
-- **SDK.** `ss_large_wait`, `ss_large_base`, `ss_large_status` and `ss_large_attach` are implemented;
-  `ss_large_request` refuses, because the tables and the ledger are sized from the manifest.
+- **SDK.** `ss_large_wait`, `ss_large_base`, `ss_large_status` and `ss_large_attach`. There is no call to take a
+  region after start: the ledger and the tables are sized from the manifest at build time, so run-time requests
+  are backlog (see the status page for what they need).
+- **ASIDs.** An ASID comes from `app_asid_alloc()` (`kernel/appmem/app_region.c`), which hands out 1 to 255 once each
+  and never takes one back. Today the OS has one application and nothing tears a space down, so there is no reuse
+  path; the pool refuses (returns 0) when it is exhausted. A teardown that wanted to reuse an ASID would first clear
+  the space's tables and execute `DSB ISH; TLBI ASIDE1IS, (asid << 48); DSB ISH`; without that the old space's
+  translations would stay live in the TLBs under the number.
+- **Kernel mappings.** Every per-application root is a copy of the boot root: slot 0 (MMIO) is copied and slot 1
+  points to the same level-2 table, so the code, data, stacks and devices that EL1 runs on between the `MSR` and the
+  `ERET` are the same global (nG = 0) entries in every table, while the upper-memory slots carry nG = 1 and an ASID
+  and are touched by EL1 only in the loader and drivers, never in the scheduler.
 - **Loader** (`apps/os/large_load.c`): one EL1 task reads each region's FAT32 file (or raw extent) in 128 KiB
   requests through two buffers, copies into the region through the kernel table, hashes, and sets READY only when
   the digest matches; the application's waiters are woken by task notification. A missing file, a failing device
   and a digest mismatch set FAILED with the loader's status, and the application returns normally.
-- **Device.** The board supplies `os_large_device()`. The QEMU board supplies a RAM disk. The A733 images supply
-  none yet, so the OS test application reports "failed to load" there until the SD0 provider of the OS image is
-  bound.
+- **Device.** The board supplies `os_large_device()`, which runs in the loader task. On the A733 it is
+  `apps/os/large_sd.c`: the OS's shared providers (`providers.shared`: counter, locks, clock leases, pins, rails and
+  the PMIC that the board-pmic task serves), the read-only SD core (`SUNXI_MMC_READ_ONLY`, so no write or erase command
+  is reachable; `checks/sd-read-only.py --elf` passes on the image) and the descriptor DMA of `a733_mmc_platform`
+  with its 33 descriptors in a lease of the uncached pool. `os_large_sd_pins()` authorizes PF0 to PF6 at boot when the
+  image declares regions. The loader task owns the platform, identifies the card in profile 2, and
+  `os_large_device_close()` restores the clock, the pins and the rail lease after the last region. A failure at any step
+  retains the platform and returns no device. The QEMU board supplies a RAM disk and four device faults.
 - **Checks.** `checks/qemu-os-boot.py` cases: loaded (the region reads back at EL0 as the file), file absent
   (reported, normal return), one flipped bit (digest mismatch, normal return), a task outside the space faults at the
-  region base with a level 1 permission fault, switch cost, and regions beyond the board's memory (no start).
+  region base with a level 1 permission fault, a device that is present and fails (metadata, request start, mid-stream,
+  absent), switch cost, and regions beyond the board's memory (no start).
 - **Test application** `apps/large-region-test` (`SUNSTONE_APPLICATION=large-region-test`, needs
   `-DSUNSTONE_A733_DRAM_DECODE_PROBE=ON`): a 1 GiB region loaded from `/sunstone-test/sunstone-region-test.bin`, the
   switch benchmark, and read passes with the vector loads of `apps/dram-bandwidth/kernel.c` (a 40 MiB window ten times and

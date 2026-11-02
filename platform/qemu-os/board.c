@@ -300,15 +300,28 @@ static int large_read(void *unused, uint64_t sector, uint32_t count, uint8_t *bu
 {
     (void)unused;
     if (!count || sector + count > LARGE_DISK_SECTORS) return 0;
+    if (qemu_os_scenario()->fault == QEMU_OS_FAULT_DISK_MOUNT && sector < 64) return 0;
     memcpy(buffer, LARGE_DISK + sector * 512u, (size_t)count * 512u);
     return 1;
 }
+static unsigned large_requests;
 static int large_submit(void *unused, uint64_t sector, uint32_t count, uint8_t *buffer)
-{ large_polls = 0; return large_read(unused, sector, count, buffer); }
+{
+    large_polls = 0;
+    ++large_requests;
+    if (qemu_os_scenario()->fault == QEMU_OS_FAULT_DISK_SUBMIT) return 0;
+    return large_read(unused, sector, count, buffer);
+}
 /* The request completes on the second poll: the loader's busy path runs. */
-static int large_poll(void *unused) { (void)unused; return ++large_polls >= 2; }
+static int large_poll(void *unused)
+{
+    (void)unused;
+    if (qemu_os_scenario()->fault == QEMU_OS_FAULT_DISK_MIDWAY && large_requests == 5) return -1;
+    return ++large_polls >= 2;
+}
 const struct os_large_device *os_large_device(void)
 {
+    if (qemu_os_scenario()->fault == QEMU_OS_FAULT_DISK_ABSENT) return 0;
     static const struct os_large_device device = {{0, large_read, LARGE_DISK_SECTORS}, {0, large_submit, large_poll},
                                                   0, LARGE_DISK_SECTORS, large_buffers};
     return &device;

@@ -72,6 +72,14 @@ int app_region_release(struct app_region_ledger *, uint8_t owner, uint64_t base)
 uint8_t app_region_owner_of(const struct app_region_ledger *, uint64_t pa);
 uint64_t app_region_free_bytes(const struct app_region_ledger *);
 
+/* ASIDs. TCR_EL1.AS is 0, so an ASID is 8 bits and 0 is the kernel's. The pool hands each of 1..255 out once and
+ * never takes one back: nothing tears a space down today (an application runs until the session ends and the board
+ * resets), so no ASID is ever reused. A teardown that returned an ASID to the pool would have to clear the space's
+ * tables and execute `DSB ISH; TLBI ASIDE1IS, <asid << 48>; DSB ISH` on every core's behalf before the number
+ * could name another space; until that exists, exhaustion is the refusal (app_asid_alloc returns 0). */
+struct app_asid_pool { unsigned next; };
+uint8_t app_asid_alloc(struct app_asid_pool *);
+
 /* Stage-1 descriptor words. */
 #define APP_PTE_VALID UINT64_C(1)
 #define APP_PTE_TABLE UINT64_C(3)

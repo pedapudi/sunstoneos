@@ -458,6 +458,10 @@ int main(void)
     EXPECT(walk(app_space_ttbr0(&se), abase, 0), FAULT_PERMISSION);
     EXPECT(walk(app_space_ttbr0(&se), abase, 2), FAULT_NONE);
     assert(app_space_build(&se, &arena, base_l1, &l, 0) == APP_REGION_INVALID);
+    /* ASIDs are handed out once each, 1 to 255, and never reused. */
+    struct app_asid_pool pool = {0};
+    for (unsigned i = 1; i <= 255; ++i) assert(app_asid_alloc(&pool) == i);
+    assert(app_asid_alloc(&pool) == 0 && app_asid_alloc(&pool) == 0 && app_asid_alloc(0) == 0);
     large_cases();
     puts("app-region host check passed");
     return 0;

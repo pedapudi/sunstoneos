@@ -774,6 +774,17 @@ def main():
     c.failed_with('APPLICATION', 0xe24)
     c.require(int(c.failure['value'], 16) == 0x80000000, 'the fault address is %s' % c.failure['value'])
     c.require(int(c.failure['site'], 16) == 0x800d4e24, 'the record holds the site %s: not a level 1 permission fault on a read' % c.failure['site'])
+    # The provider is present but the device fails: at the metadata, at the start of a request, in the middle of the
+    # stream, or there is no device. The loader fails the region with its status; the application is told and returns.
+    # The file is larger than five requests (4 MiB = 32 requests of 128 KiB), so the mid-stream failure falls inside it.
+    for fault, name, status in ((6, 'mount', 0xfffffffe), (7, 'submit', 0xffffffff), (8, 'midway', 0xffffffff), (9, 'absent', 0xffffffff)):
+        c = run_case('large-device-%s' % name, large_elf, scenario(fault=fault, usb_ready_ms=usb_delay_ms), mode0, '4G',
+                     [(RAMDISK_ADDRESS, good)])
+        c.clean()
+        tag, error = struct.unpack('<QQ', bytes.fromhex(c.finished['result']))
+        c.require(c.finished['status'] == '1' and tag == 0x4c415247464c and error == status,
+                  'device fault %s: result %#x %#x, expected status %#x' % (name, tag, error, status))
+
     # The task switch: a round trip between two tasks on one core, with and without a TTBR0 write at each switch.
     mode2 = struct.pack('<QQ', 2, LARGE_FOLD) + bytes(4080)
     c = run_case('large-region-switch-cost', large_elf, scenario(usb_ready_ms=usb_delay_ms), mode2, '4G', [(RAMDISK_ADDRESS, good)])

@@ -139,4 +139,32 @@ assert jobs[0]['result'] == -1 and ticket(s) == 0xee and s['value'] == s['patter
 jobs, s = run('bypass-write', UNMAPPED_BYPASS='1', UNMAPPED_BYPASS_WRITE='1')
 assert jobs[0]['result'] == -1 and ticket(s) == 0xee and s['value'] != s['pattern'], (jobs, s)
 print('   bypass controls : the completion is recorded, and a bypassing write changes the canary CRC')
+# Shader operations: the first graph has the address word of its first tensor descriptor aimed at the canary (a data
+# descriptor, S7), the second its program address (source 0); then four graphs run untouched. The register file finds the
+# address in the command stream and raises the same exception.
+shader_models = ROOT / 'apps/npu-graphs/models-shr.json'
+shader_out = out / 'shader'; shader_out.mkdir()
+(shader_out / 'artifacts.json').write_text(json.dumps(artifacts))
+(shader_out / 'generated').mkdir()
+subprocess.run([sys.executable, str(ROOT / 'apps/os/npu-catalogue.py'), '--artifacts', str(shader_out / 'artifacts.json'),
+                '--models', str(shader_models), '--model', '0', '--all', '--output', str(shader_out / 'generated/npu-models.c')], check=True)
+(shader_out / 'inputs').mkdir()
+for number, name in enumerate(json.loads(shader_models.read_text())['npu_models']):
+    for k, path in enumerate(artifacts[name]['inputs']):
+        shutil.copy(path, shader_out / 'inputs' / ('%02d-%d.bin' % (number, k)))
+shader_exe = host_rtos.build(shader_out / 'exe', [*UNITS, shader_out / 'generated/npu-models.c'], 'os-npu-fault-shader',
+                             defines=[d for d in DEFINES if not d.startswith('SUNSTONE_NPU_CASE')] +
+                             ['SUNSTONE_NPU_CASE_SLOTS=100,101,-1,-1,-1,-1', 'SUNSTONE_NPU_CASE_ADDRESSES=0,0,0,0,0,0'],
+                             includes=[ROOT / 'apps/os', shader_out / 'generated', *includes[2:]],
+                             flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections', '-fno-pie'],
+                             link=['-Wl,--gc-sections', '-no-pie'])
+done = subprocess.run([str(shader_exe), '25', str(shader_out / 'inputs')], capture_output=True, text=True,
+                      env=environment(), timeout=1800)
+(out / 'shader.log').write_text(done.stdout + done.stderr)
+assert done.returncode == 0, ('shader', done.stdout[-600:], done.stderr[-800:])
+results = [int(l.split()[3]) for l in done.stdout.splitlines() if l.startswith('job ')]
+summary = [l for l in done.stdout.splitlines() if l.startswith('summary')][0].split()
+assert results == [2, 2, 1, 1, 1, 1] and 'recoveries' in summary and summary[summary.index('recoveries') + 1] == '2' and \
+    summary[summary.index('failures') + 1] == '0', (results, summary)
+print('   shader operations : a data descriptor and a program address aimed at the canary fail alone, the NPU recovers, four graphs run')
 print('PASS NPU MMU exception recovery on the real runtime and service: 3 recovery scenarios, 5 blocking sites, 2 controls')

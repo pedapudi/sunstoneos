@@ -1618,6 +1618,338 @@
    "state_patches": 4,
    "command_body_bytes": 152,
    "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), 16-bit dynamic fixed point; model description in tools/npu-graph-variants.py"
+  },
+  {
+   "name": "graph-sh-exp",
+   "model": {
+    "bytes": 2856,
+    "sha256": "0401c720f099fc699479e31e363e0e4a11acb579623677481125ea81001364ba"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      64,
+      16
+     ],
+     "logical_bytes": 2048,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2048,
+      "sha256": "fdae5e46b0d0cc4013f9ae2aef9f3765c2f7ccf48fb05b002632221f980f6f3b"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      64,
+      16
+     ],
+     "logical_bytes": 2048,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2048,
+      "sha256": "275cd8982b3646f3429ba48037b19c171ee200738d75cb2d6685059d9fd7bb91"
+     }
+    }
+   ],
+   "vip_sram_bytes": 98304,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 2,
+   "state_patches": 1,
+   "command_body_bytes": 816,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), shader operations; compiled by the shader study (work/npu-shader-1101), simulated with the SDK simulator; model description in tools/npu-shader-variants.py"
+  },
+  {
+   "name": "graph-sh-gather",
+   "model": {
+    "bytes": 2600,
+    "sha256": "cc91730d00afbd2fad9ff9134c8b0122ae5106ee5a94ca94d3fabb2c2da258d8"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      64,
+      32
+     ],
+     "logical_bytes": 4096,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 4096,
+      "sha256": "7f8baf6af4973d1d5ea91a9a323419a290782b0ef38c339adf55c6475496ea9e"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      64,
+      4
+     ],
+     "logical_bytes": 512,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 512,
+      "sha256": "7a847c0d00eb011a8495be2152c55aa9fb02b35facac189c9b0fae40de4f15a9"
+     }
+    }
+   ],
+   "vip_sram_bytes": 98304,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 3,
+   "state_patches": 1,
+   "command_body_bytes": 560,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), shader operations; compiled by the shader study (work/npu-shader-1101), simulated with the SDK simulator; model description in tools/npu-shader-variants.py"
+  },
+  {
+   "name": "graph-sh-resize",
+   "model": {
+    "bytes": 2304,
+    "sha256": "863b8a3dd2d5c172ec65b9f51d74cdded34d53a6b5daff39eb8d58e1a3db3024"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      8,
+      8,
+      4,
+      1
+     ],
+     "logical_bytes": 512,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 512,
+      "sha256": "b49344ad95d976d04ee44eab6d26a2bf304616eaa90e3bcd1ee50ace5f014d21"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      16,
+      16,
+      4,
+      1
+     ],
+     "logical_bytes": 2048,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2048,
+      "sha256": "628cffaa3daea275a422bc0096a92054203ee3dfe97f840c9151ae4972f48aa1"
+     }
+    }
+   ],
+   "vip_sram_bytes": 98304,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 2,
+   "state_patches": 1,
+   "command_body_bytes": 520,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), shader operations; compiled by the shader study (work/npu-shader-1101), simulated with the SDK simulator; model description in tools/npu-shader-variants.py"
+  },
+  {
+   "name": "graph-sh-pad",
+   "model": {
+    "bytes": 2056,
+    "sha256": "24efd09500b5db35440a9b0b2428c867134103292081976884005c6e05e9b99b"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      8,
+      8,
+      4,
+      1
+     ],
+     "logical_bytes": 512,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 512,
+      "sha256": "b796d69cbe8aeaa8725a4cc6e6918559a7b4209bd0a414ac93cd2e80a1d27ebe"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      10,
+      10,
+      4,
+      1
+     ],
+     "logical_bytes": 800,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 1,
+     "scale_bits": 0,
+     "fixed_position": 13,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 800,
+      "sha256": "165750b6de2e5a0c7457e144ee546d45b2cb4cefafdfcec9bfcec7f3a466b5f6"
+     }
+    }
+   ],
+   "vip_sram_bytes": 101376,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 3,
+   "state_patches": 1,
+   "command_body_bytes": 80,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), shader operations; compiled by the shader study (work/npu-shader-1101), simulated with the SDK simulator; model description in tools/npu-shader-variants.py"
+  },
+  {
+   "name": "graph-sh-floor",
+   "model": {
+    "bytes": 2592,
+    "sha256": "a884d257200deb1c8bdcd7b2bf490e5174e522f88591b3ca4da31ebcc3ee7e43"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      64,
+      16
+     ],
+     "logical_bytes": 2048,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2048,
+      "sha256": "fdae5e46b0d0cc4013f9ae2aef9f3765c2f7ccf48fb05b002632221f980f6f3b"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      64,
+      16
+     ],
+     "logical_bytes": 2048,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2048,
+      "sha256": "36c585f80576422c32266e27b72007dc2badc515d405786fd7dff5e7ce5c48a9"
+     }
+    }
+   ],
+   "vip_sram_bytes": 98304,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 2,
+   "state_patches": 1,
+   "command_body_bytes": 808,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), shader operations; compiled by the shader study (work/npu-shader-1101), simulated with the SDK simulator; model description in tools/npu-shader-variants.py"
+  },
+  {
+   "name": "graph-sh-sin",
+   "model": {
+    "bytes": 2856,
+    "sha256": "0780b0cffead0337f63780619f211000dee9ae3a24a3cbc9c059f6418056935d"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      64,
+      16
+     ],
+     "logical_bytes": 2048,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2048,
+      "sha256": "fdae5e46b0d0cc4013f9ae2aef9f3765c2f7ccf48fb05b002632221f980f6f3b"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      64,
+      16
+     ],
+     "logical_bytes": 2048,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 1,
+     "quantization": 0,
+     "scale_bits": 0,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2048,
+      "sha256": "087866f4578e418761c161cb108a418c391296628eb84f309d7187abad635ac2"
+     }
+    }
+   ],
+   "vip_sram_bytes": 98304,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 2,
+   "state_patches": 1,
+   "command_body_bytes": 816,
+   "compiler": "ACUITY 6.30.22 with Vivante IDE 5.11.0 (pinned image), shader operations; compiled by the shader study (work/npu-shader-1101), simulated with the SDK simulator; model description in tools/npu-shader-variants.py"
   }
  ]
 }

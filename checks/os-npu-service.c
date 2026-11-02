@@ -171,13 +171,18 @@ static int register_write(void *cookie, unsigned offset, uint32_t value)
         if (!model.bootstrap && fault_case && sunstone_npu_hook_slot >= 0) {
             const uint32_t target = sunstone_npu_hook_address ? sunstone_npu_hook_address :
                 (uint32_t)(uintptr_t)(sunstone_npu_canary + 0x10000);
-            const struct npu_runtime_region *c = &runtime_of_model->slot[0].constant;
-            for (size_t at = 0; at + 4 <= c->bytes; at += 4) {
-                uint32_t w; memcpy(&w, (const void *)(uintptr_t)(c->cpu + at), 4);
-                if (w == target || (!(target & 63) && (w & 0x03ffffffu) == target >> 6)) {
-                    if (getenv("UNMAPPED_BYPASS")) { if (getenv("UNMAPPED_BYPASS_WRITE")) sunstone_npu_canary[0x10000 + 8] ^= 0xff; }
-                    else model.mmu_exception = target;
-                    break;
+            /* The descriptors and the data they point to live in the slot's constant region; a shader operation's
+             * addresses are words of its state stream in the command region. */
+            const struct npu_runtime_region *regions[2] = {&runtime_of_model->slot[0].constant, &runtime_of_model->slot[0].command};
+            for (unsigned region = 0; region < 2 && !model.mmu_exception; ++region) {
+                const struct npu_runtime_region *c = regions[region];
+                for (size_t at = 0; at + 4 <= c->bytes; at += 4) {
+                    uint32_t w; memcpy(&w, (const void *)(uintptr_t)(c->cpu + at), 4);
+                    if (w == target || (!(target & 63) && region == 0 && (w & 0x03ffffffu) == target >> 6)) {
+                        if (getenv("UNMAPPED_BYPASS")) { if (getenv("UNMAPPED_BYPASS_WRITE")) sunstone_npu_canary[0x10000 + 8] ^= 0xff; }
+                        else model.mmu_exception = target;
+                        break;
+                    }
                 }
             }
         }
