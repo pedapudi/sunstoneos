@@ -413,7 +413,7 @@ Requests are 128 KiB from sector 0 on, so request n starts at n x 128 KiB; 32 re
 | 8 to 384 | 1 MiB to 48 MiB | 2.43 to 2.80 ms, flat, 2.51 ms in the first AU, 2.76 ms after | clean: 47 to 52 MB/s |
 | 385 to 511 | 48 MiB to 64 MiB | 5.0 to 17.4 ms, 5.1, 7.5, 10.0, 12.4 ms recurring | 119 of 127 requests; a few clean ones between |
 
-- **Not periodic.** The stalls are one block at the start and one block of 127 requests (115 consecutive from request 385 with a few gaps), not spaced by the 512 KiB, 1 MiB, 2 MiB or 4 MiB
+- **Not periodic.** The stalls are one block of 8 at the start and one zone from request 385 on (119 of its 127 requests slow, in runs of 67, 8, 22, 16, 5 and 1), not spaced by the 512 KiB, 1 MiB, 2 MiB or 4 MiB
   position (counts by position are flat), not at allocation-unit boundaries (AU 0 stalls in 8 of 32 requests, AUs 1 to 11 in none, AUs 12 to 15 in 28 to 32 of 32), and not after a fixed count of requests or bytes
   apart from the one change at 48 MiB.
 - **Not the bus.** The extra time of the first eight requests is the same in absolute terms at SDR25 and SDR104, so it is not transfer time.
