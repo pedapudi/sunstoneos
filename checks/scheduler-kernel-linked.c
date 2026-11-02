@@ -410,9 +410,54 @@ static int fixture_dynamic(void)
     puts("linked FreeRTOS dynamic creation: allocation failures, invalid affinity, admission exhaustion, slot reuse and deletion balance stack/TCB allocations and TLS/port cleanup");
     return 0;
 }
+static int fixture_cleanup_shield(void)
+{
+    for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
+        TaskHandle_t idle = create(c, 0);
+        xIdleTaskHandles[c] = pxCurrentTCBs[c] = idle;
+        ((TCB_t *)idle)->uxTaskAttributes |= taskATTRIBUTE_IS_IDLE;
+    }
+    TaskHandle_t executor = create(configNUMBER_OF_CORES, 5);
+    TaskHandle_t donor = create(configNUMBER_OF_CORES + 1, 7);
+    ssKernelBootstrap();
+    xSchedulerRunning = pdTRUE;
+    for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) enter(c);
+    struct ssKernelTask *task = record(executor);
+    assert(atomic_load(&task->owner) == 0 && atomic_load(&record(donor)->owner) == 1);
+    fixture_cpu = 0;
+    UBaseType_t irq = portSET_INTERRUPT_MASK();
+    /* Model the protected executor interval after claiming one destructor. */
+    atomic_store(&task->cleanup_shield, 1);
+    struct ssKernelMutation deletion = { .command = SS_K_DELETE, .slot = ((TCB_t *)executor)->uxOwnerSlot };
+    uint64_t sequence = ss_control_publish(&ssKernelControl, deletion.slot, ssKernelMutate, &deletion);
+    ssKernelControlDrain();
+    assert(task->cleanup_control_deferred && !task->dead);
+    assert(atomic_load(&ssKernelRegistry.descriptor[deletion.slot].admission));
+    assert(!ss_control_applied(&ssKernelControl, deletion.slot, sequence));
+    unsigned interrupts = fixture_sgi[0];
+    for (unsigned pass = 0; pass < 8; ++pass) ssKernelControlDrain();
+    assert(fixture_sgi[0] == interrupts); /* No self-renewing retry storm. */
+    portCLEAR_INTERRUPT_MASK(irq);
+    fixture_cpu = 1;
+    assert(ssKernelInherit(executor)); /* Pin-admissible despite pending delete. */
+    fixture_cpu = 0;
+    ssKernelControlDrain();
+    assert(atomic_load(&task->effective) == 7 && !task->dead);
+    ssKernelCleanupRelease(task);
+    assert(!atomic_load(&task->cleanup_shield));
+    assert(atomic_load(&ssKernelControl.pending[0][deletion.slot / 64]) &
+           (UINT64_C(1) << (deletion.slot % 64)));
+    for (unsigned pass = 0; pass < 3; ++pass)
+        for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) enter(c);
+    assert(atomic_load(&ssKernelCleanupCompleted[deletion.slot]) >= 1);
+    assert(!ssKernelRegistry.registered[deletion.slot]);
+    puts("linked FreeRTOS cleanup protection: pending deletion retains admission and priority inheritance, emits no retry storm, and completes after executor release");
+    return 0;
+}
 int main(int argc, char **argv)
 {
     (void)argv;
+    if (argc > 1 && !strcmp(argv[1], "shield")) return fixture_cleanup_shield();
     if (argc > 1 && !strcmp(argv[1], "dynamic")) return fixture_dynamic();
     if (argc > 1 && !strcmp(argv[1], "retirement")) return fixture_retirement_pin();
     if (argc > 1 && !strcmp(argv[1], "admission")) return fixture_admission();
