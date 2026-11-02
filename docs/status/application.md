@@ -108,3 +108,16 @@ against the 0.05-times-audio-duration target; 0.01 times is a bounded stretch.
 Loading and live end-of-speech latency are separate measurements. CPU fallback
 does not satisfy GPU/NPU coverage. Use [the image guide](../os-image.md) for
 build commands and [application evidence](../mimus-evidence.md) for exact inputs.
+
+## Failure return
+
+The returning CPU image ends an application failure, a panic on a core that can
+schedule, an unexpected interrupt, and a failure before the scheduler starts at
+the boot ROM with the first-failure record, not at a watchdog reset. Device
+failures, exception-vector faults and an unfinished return keep the watchdog
+ending. [The design](../designs/failure-return.md) lists every failure path and
+its ending. Host evidence: `checks/os-failure-return.py` executes the linked
+image in each context, and `checks/board-return-preservation.py` covers the
+runner outcome. No physical failure return has run; the first needs the runner
+change on the queue daemon's tree.
+
