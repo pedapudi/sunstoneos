@@ -15,12 +15,12 @@ checkpoints perform no inference. The watchdog-admitting finite startup,
 one-inference and two-job/two-model runtime images also qualify on 3-3 at
 852 MHz/800 mV, with matching copied outputs, CLOSE, local stop and normal
 ROM return. The resident command queue runs 1,000 matched jobs at 10.25 µs
-p50 and 26,925 jobs/s, and 1,000 fence-chained two-stage jobs, on 3-3.
+p50 and 26,925 jobs/s, and 1,000 fence-chained two-stage jobs, on 3-3. The baseline idle benchmark image (no power owner) returns normally with 61,231 matching jobs: five windows of 12,000 jobs at about 26,650 jobs/s, p99 11 µs, maximum 17 µs, and cold jobs after 9, 11 and 100 ms gaps at 10.6 µs p50.
 
 ## Open work
 
-1. Run the idle benchmark on port 3-3: the baseline smoke image (it links the failure return), then five rounds of baseline, control and gating images. Compare them with `apps/npu-finite/idle-compare.py` against the limits in [the design](../designs/npu-fast-path.md): throughput 98%, p99 105%, maximum 110%, charged CPU time 105%, every resume within 100 µs, no gating in 9 ms gaps.
-2. Explain the first baseline smoke failure (a refused return that ended at the watchdog, outcome `watchdog-reset`); the refusal and panic crumbs now name the cause.
+1. Run the control and gating idle images and five rounds of baseline, control and gating on port 3-3, then compare them with `apps/npu-finite/idle-compare.py` against the limits in [the design](../designs/npu-fast-path.md): throughput 98%, p99 105%, maximum 110%, charged CPU time 105%, every resume within 100 µs, no gating in 9 ms gaps. These runs wait for the comparison of the NPU paths with the vendor driver, TF-A and Linux GIC code.
+2. Record why the first two baseline smoke runs ended at the watchdog: the shared timer setup asserted the Secured priority view. The fixed image returned normally; the host check `checks/npu-deadline-setup.py` reproduces the failure.
 3. Establish a cold NPU at service start and make the interrupt bind of the combined OS image pass; the bind records the clause that refuses it. The NPU qualification branch owns this.
 4. Qualify the EL0 queue and prepared joined streams: review and finish the saved generic sequence registration and returning diagnostic (`npu-el0-next-1101`), add the public-ring predicate to the power owner, then run the control and the EL0 images.
 5. Add exact per-job deadline interrupts through the scheduler's deadline facility (`work/scheduler-rt-1101`); do not add a device timer.
@@ -33,7 +33,7 @@ p50 and 26,925 jobs/s, and 1,000 fence-chained two-stage jobs, on 3-3.
 Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-7 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+8 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -44,4 +44,5 @@ Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added
 | `1793563838443635411-92c1fdae` | 2026-11-01 | 3-3 | `862114046425` | returned | passed | run_total 111.246 s |
 | `1793564135238449408-5dbdd6ad` | 2026-11-01 | 3-3 | `2a6411ba3fcc` | returned | passed | run_total 112.541 s |
 | `1793565141195481474-2e135a8c` | 2026-11-01 | 3-3 | `ae8dc27e6c16` | returned | passed | run_total 111.135 s |
+| `1793587317962103239-5bbfc48d` | 2026-11-02 | 3-3 | `5669db271593` | returned | passed | run_total 126.154 s, window_jobs_per_s 26653.6 jobs/s, window_latency_p50 10.125 µs, window_latency_p99 11.04 µs, window_latency_max 17.04 µs, charged_cpu_per_job 34.5 µs, cold_job_p50_9ms_gap 10.58 µs, cold_job_p50_100ms_gap 10.58 µs, matching_jobs 61231 jobs, deadline_margin_at_end 12.69 s |
 <!-- evidence-table:end -->
