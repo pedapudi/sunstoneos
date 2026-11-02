@@ -26,7 +26,7 @@ p50 and 26,925 jobs/s, and 1,000 fence-chained two-stage jobs, on 3-3.
 5. Add exact per-job deadline interrupts through the scheduler's deadline facility (`work/scheduler-rt-1101`); do not add a device timer.
 6. Measure energy: the PMIC provider exposes no DCDC2 current or power readback, so idle savings and break-even time have no evidence without an external meter.
 7. Qualify repeated start and stop, shared SRAM access while the clocks are gated, and recovery from a fault while suspended.
-8. Repair the `monitor-*` and `restart-*` cases of `checks/npu-irq-route.py`; the others pass.
+8. Run the `restart-*` cases of `checks/npu-irq-route.py` on a restart image; the other cases pass.
 
 ## Evidence
 
