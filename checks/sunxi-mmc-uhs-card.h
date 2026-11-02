@@ -23,7 +23,7 @@ struct uhs {
     unsigned width, sdr, sdr104, sdr104_busy, set_refuses, cmd11_timeout, no_dat_low, no_dat_high;
     unsigned pending_done, no_cc, no_vsd, set_fails, bad_caps, fatal_delay, cmd19, cmd11, cmd6_uhs, cmd6_hs;
     unsigned window[2][2], s18r_seen, cmd11_before_cmd2, cid_seen, dat0_masked;
-    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18, tune_kinds, stuck, stuck_always;
+    unsigned restart_reads, restart_stuck, restart_gap, cmd0_at_18, tune_kinds, stuck, stuck_always, dat0_busy, unfixable;
     uint64_t answered, gated, restarted, clock_started, done_delay;
 };
 static unsigned passes(struct uhs *u, unsigned d)
@@ -72,7 +72,7 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
 {
     struct uhs *u = v; struct model *m = &u->base;
     if (off == 4 && (value & (1u << 31))) u->dat0_masked = 1;
-    if (off == 0 && u->stuck && (value & 7)) { u->stuck = 0; m->reg[0x18/4] &= ~(1u << 31); }     /* a controller reset ends a stuck command */
+    if (off == 0 && u->stuck && (value & 7) && !u->unfixable) { u->stuck = 0; m->reg[0x18/4] &= ~(1u << 31); }     /* a controller reset ends a stuck command */
     if (off != 0x18) return write32(m, off, value);
     unsigned cmd = value & 63, arg = m->reg[0x1c/4];
     if (value & (1u << 21)) {
@@ -93,6 +93,11 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
             m->reg[0x18/4] = 0; return 1;
         }
         assert(u->phase == 0 || u->phase == 3);
+        /* A card that still holds DAT0 low after a failed read: a clock update waits for DAT0 unless the clock control masks it (the vendor masks DAT0 in every
+         * clock update for this reason). The wait ends when the update is made with the mask set. */
+        if (u->dat0_busy && !(m->reg[4/4] & (1u << 31))) { m->reg[0x18/4] = value; return 1; }
+        u->dat0_busy = 0;
+        if (u->unfixable && u->stuck) { m->reg[0x18/4] = value; return 1; }       /* a controller that stays stuck through reset and update */
         return write32(m, off, value);
     }
     assert(!(value & VSW) || cmd == 11);
@@ -149,7 +154,7 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
                 else if (kind == 1) u->data[5] ^= 0x10;         /* Wrong pattern, clean CRC. */
                 else if (kind == 2) { m->reg[0x38/4] = 1u << 9; m->data_command = 0; m->fifo_total = 0; } /* No data. */
                 else if (kind == 3) m->reg[0x38/4] |= 1u << 11; /* FIFO run error. */
-                else if (kind == 5) { m->reg[0x38/4] |= 1u << 9; m->reg[0x18/4] |= 1u << 31; u->stuck = 1; } /* The command never completes: START stays set until the controller is reset. */
+                else if (kind == 5) { m->reg[0x38/4] |= 1u << 9; m->reg[0x18/4] |= 1u << 31; u->stuck = 1; u->dat0_busy = 1; } /* The command never completes: START stays set until the controller is reset. */
                 else m->reg[0x38/4] |= (1u << 13) | (1u << 15); /* Start and end bit errors. */
             }
         }

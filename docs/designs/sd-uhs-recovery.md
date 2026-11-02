@@ -431,6 +431,34 @@ The recovery was written to wait politely and reset afterwards; the vendor drive
 command stuck until a controller reset; the old recovery times out on it as the board's did, and the recovery now forces the reset after 10 ms (at most 12 times in a sweep, then TIMEOUT).
 No phase ran and no report exists. The card is at 1.8 V (the lifetime never closed), the bank was at 1.8 V until the watchdog reset, the board returned to FEL.
 
+### The sweep against the vendor's tuning loop
+
+Reference: `sunxi_mmc_execute_tuning` in the board kernel (`bsp/drivers/mmc/sunxi-mmc.c:2432-2640`), `sunxi_mmc_clk_gating_reset` (`:227`), `sunxi_mmc_reset_host` (`:640`), the v4p5x
+`__sunxi_mmc_do_oclk_onoff` and `sunxi_mmc_save_spec_reg_v4p5x`. The vendor loop, for each of the 64 delays: reset the host (save the registers, gate the bus clock off and on through the
+CCU, restore the saved registers), update the clock with `oclk_en(1)`, write the sample delay, then issue CMD19 up to 20 times, stopping at the first error or pattern mismatch; the delay
+passes if all 20 matched. After the loop it picks the best delay, resets the host once more, writes it, and resets and updates the clock a last time. It never waits for the command or
+data state machine, never sends CMD12, and does not reset the FIFO separately.
+
+| Step | Vendor | Ours before | Ours now | Kept or changed, and why |
+| --- | --- | --- | --- | --- |
+| Repeats per delay, stop at first failure, pattern compare, window rule (first longest run, 12 or more, midpoint) | 20; yes; yes; yes | the same | the same | kept: identical |
+| Reset before a delay | every delay, passing or failing | only after a failed command | only after a failed command | **kept**: a passing command leaves the controller idle; a reset before each of 64 delays adds 64 register restores, each with its own failure modes, and nothing shows a benefit. The failed-command case is the one that differs in behaviour. |
+| Wait for the command or data state machine before the reset | none | up to 10 ms, then (first fix) a forced reset | none: reset at once | **changed**: this was the timing-dependent difference |
+| Reset mechanism | CCU bus gate and reset toggle plus register save and restore | GCTRL soft, FIFO and DMA reset (`|7`), then rewrite of the SDR104 registers | the same GCTRL reset (the value of the vendor's `sunxi_mmc_reset_host`) and the same rewrite | **kept**: the CCU toggle belongs to the platform (the bus register has its own filter rules) and needs a new platform operation; if a stuck command survives the GCTRL reset the cap below trips and it becomes the next step |
+| Registers restored | GCTRL, CLKCR, TMOUT, WIDTH, FTRGL, FUNS, DBGC, DMAC, DLBA, IMASK; DRV_DL, SAMP_DL, DS_DL, NTSR, EDSD, CSDC | drive phase (`0x140`), NTSR (`0x5c`), sample delay, TMOUT, WIDTH, CLKCR | the same | **kept**: the sweep is PIO with the interrupt masked, so GCTRL, FTRGL, DMAC, DLBA and IMASK do not take part in it; the SDR104 ones do and are rewritten and read back |
+| Clock update after the reset | `oclk_en(1)`: CLKCR clock on, low power on (power-save mode), **DAT0 masked**; update command; wait; clear the interrupt flags; clear the mask | clock on only, update command, no mask | clock on with **DAT0 masked**, update command, clear the flags, clear the mask, read back | **changed**: a card that still holds DAT0 low stalls an update that does not mask it |
+| Low-power clock gating | on (the board's device tree sets `sunxi-power-save-mode`) | off | off | **kept**: the vendor's own comment for this chip says it wants the clock always on to avoid a sample bug, and our delays were derived with it on |
+| Delay change | write `SAMP_DL` after the clock update, clock running | same, without a clock stop | same | kept: identical in effect |
+| Data timeout of CMD19 | the host's default | `TMOUT` 0x040000ff (about 1.7 ms at 150 MHz) | the same | **kept**: it bounds a command that gets no data |
+| CMD12 or abort | none | none | none | identical |
+| FIFO reset | none separate (the bus reset clears it) | within the GCTRL reset | within the GCTRL reset | kept: a superset |
+| Reset after the sweep | reset, write the best delay, update the clock | write the best delay, restore the timeout | the same | **kept**: when the last delay failed the recovery has just reset; when it passed there is nothing to reset |
+| Cap on trouble | none | none | consecutive recoveries that do not complete within 10 ms (reset bits still set, or the update still pending): the reset is repeated and after 12 in a row the sweep stops with TIMEOUT; a completed recovery clears the count | **added** (kept from the first fix, now consecutive) |
+
+Host evidence. The card model has a failing delay that leaves the command stuck and DAT0 low: the old recovery (wait, then reset) timed out as the board did; the new one resets at once,
+completes the masked update and finishes the sweep with the same window; a controller that stays stuck through reset and update makes the sweep stop with TIMEOUT after 12 recoveries;
+removing the mask from the update makes the stuck-DAT0 case fail.
+
 ### Request-pattern experiment (approved, one run)
 
 One lifetime, re-entry then SDR104 as before (`--uhs-mode 3`), then eight phases over the slow zone and controls (`--phase FIRST:BLOCKS:READS[:quick]`; `quick` skips the per-request CRC and the progress call

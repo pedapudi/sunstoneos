@@ -966,14 +966,12 @@ static void sd_signal(struct sunxi_mmc *h)
     default:fault(h,SUNXI_MMC_CONTROLLER);return;
     }
 }
-/* After a failed CMD19: wait for the command and data state machines, reset
- * the FIFO and state machines, restore and verify the SDR104 registers, then
- * record the delay as failed. A command that never completes at a bad sample
- * delay is what the reset is for: after 10 ms the reset is made anyway (as the
- * vendor driver resets the host after every failed tuning command), at most
- * TUNE_FORCED_RESETS times in one sweep. The second SDR104 trial on 3-3 stopped
- * at delay 12 or 13 with a TIMEOUT here, though the first one had recovered from
- * the same delays. */
+/* After a failed CMD19, as the board kernel's tuning loop (sunxi_mmc_execute_tuning) recovers: no wait for the command or the data state machine and no abort,
+ * the controller is reset at once, its registers are restored, and the clock is updated with DAT0 masked (sunxi_mmc_oclk_onoff passes ignore_dat0 and clears
+ * the mask after the update), then the next delay. The reset is the vendor's sunxi_mmc_reset_host write (GCTRL soft reset, FIFO reset and DMA reset together).
+ * Differences kept on purpose, with the reasons, are in docs/designs/sd-uhs-recovery.md ("The sweep against the vendor's tuning loop").
+ * TUNE_FORCED_RESETS caps the consecutive recoveries that did not complete in 10 ms (reset bits still set, or the clock update still pending): the
+ * recovery is then repeated, and after the cap the sweep stops with TIMEOUT. A recovery that completes clears the count. */
 #define TUNE_FORCED_RESETS 12u
 static void tune_recover(struct sunxi_mmc *h)
 {
@@ -983,23 +981,27 @@ static void tune_recover(struct sunxi_mmc *h)
         if(!time_ok(h))return;
         h->protocol=P_SD_TUNE_RECOVER;h->tune_failed=0;h->signal_us=h->last_us;++h->tune_recover;return;
     case 1:
-        if(!rd(h,0x18,&v)||!rd(h,0x3c,&h->result.status))return;
-        if((v&START)||(h->result.status&BUSY)){
-            if(!time_ok(h))return;
-            if(h->last_us-h->signal_us>=10000){
-                if(++h->tune_forced>TUNE_FORCED_RESETS){fault(h,SUNXI_MMC_TIMEOUT);return;}
-            }else{defer_command(h,100);return;}
-        }
         if(!rd(h,0,&v)||!wr(h,0,v|7u))return;
-        ++h->tune_recover;return;
+        h->signal_us=h->last_us;++h->tune_recover;return;
     case 2:
-        if(!rd(h,0,&v)||(v&7u))return;
+        if(!rd(h,0,&v))return;
+        if(v&7u){
+            if(!time_ok(h))return;
+            if(h->last_us-h->signal_us>=10000){if(++h->tune_forced>TUNE_FORCED_RESETS){fault(h,SUNXI_MMC_TIMEOUT);return;}h->tune_recover=1;return;}
+            defer_command(h,100);return;
+        }
         if(!(v&START)){fault(h,SUNXI_MMC_CONTROLLER);return;}
-        if(!rd(h,0x38,&v)||!wr(h,0x38,v&0xffffu)||!uhs_registers(h,1)||!fence(h)||!wr(h,0x18,UPDATE))return;
-        ++h->tune_recover;return;
+        if(!rd(h,0x38,&v)||!wr(h,0x38,v&0xffffu)||!uhs_registers(h,1)||!wr(h,4,(1u<<16)|MASK_DAT0)||!fence(h)||!wr(h,0x18,UPDATE))return;
+        h->signal_us=h->last_us;++h->tune_recover;return;
     case 3:
-        if(!rd(h,0x18,&v)||(v&START)||!uhs_registers(h,0))return;
-        h->tune_recover=0;h->protocol=P_SD_TUNE;tune_advance(h,0);return;
+        if(!rd(h,0x18,&v))return;
+        if(v&START){
+            if(!time_ok(h))return;
+            if(h->last_us-h->signal_us>=10000){if(++h->tune_forced>TUNE_FORCED_RESETS){fault(h,SUNXI_MMC_TIMEOUT);return;}h->tune_recover=1;return;}
+            defer_command(h,100);return;
+        }
+        if(!rd(h,0x38,&v)||!wr(h,0x38,v&0xffffu)||!wr(h,4,1u<<16)||!uhs_registers(h,0))return;
+        h->tune_forced=0;h->tune_recover=0;h->protocol=P_SD_TUNE;tune_advance(h,0);return;
     default:fault(h,SUNXI_MMC_CONTROLLER);return;
     }
 }
