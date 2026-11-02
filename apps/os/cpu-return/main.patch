@@ -7,7 +7,22 @@
  #ifdef SUNSTONE_BOARD_USB2_IRQ
  #include "host_irq.h"
  #endif
-@@ -47,6 +48,7 @@
+@@ -60,7 +61,13 @@
+     __builtin_return_address(0));fail_close();}
+ /* Every failure still passes through board_fail, after its own record. */
+ __attribute__((noinline)) void board_fail_at(uint32_t site,uint32_t value,const void *caller)
+-{board_fail_note(site,value,caller);board_fail(NULL);}
++{
++    board_fail_note(site,value,caller);
++    /* An application failure takes the failure return; it leaves admission
++     * open for the stop paths. Device failures close admission as before. */
++    if(os_cpu_return_failure(site,value,caller))return;
++    board_fail(NULL);
++}
+ /* This hook is used by the existing cached EL1/EL3 fatal paths. It only closes
+  * atomic admission; those paths record their own fault, and EL3 cannot use
+  * the breadcrumb SVC. The independent watchdog owns recovery from stopped CPUs. */
+@@ -75,6 +82,7 @@
  static void pmic(void *unused)
  {
      (void)unused;for(;;){
@@ -15,7 +30,7 @@
          if(!board_live(NULL))park();
          const uint32_t ticks=a733_power_service_step(&providers.domains);
          const int ready=a733_power_service_ready(&providers.domains);
-@@ -180,6 +182,7 @@
+@@ -213,6 +221,7 @@
  static void supervise(void *unused)
  {
      (void)unused;for(;;){

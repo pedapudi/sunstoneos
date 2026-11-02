@@ -13,6 +13,19 @@ textual coverage is advisory. Component checks outside this gate run directly.
 The full gate conditions hook fixtures on --affected or --changed scope. Its
 default combines HEAD^..HEAD (all tracked files at a root commit) with staged,
 unstaged and nonignored untracked changes in the checkout.
+
+The full gate keeps going: it runs every selected step, records every failure
+in summary.txt and exits nonzero if any step failed. A step whose build failed
+is recorded as SKIP and counts as a failure. --fail-fast stops at the first
+failure and runs the steps one at a time in their fixed order; the targeted
+selections (--target, --variant, --check, --affected, --changed) keep that
+behavior unless --keep-going is given. Builds run one at a time and finish
+before the checks that need them. Checks run in parallel (--jobs workers, no
+new check while MemAvailable is below --min-available-gb); checks that run
+QEMU or time a result run one at a time after the parallel group. Every check
+runs with the environment recorded in environment.txt. Documentation-link and
+status-record checks report WARN lines and do not fail the gate unless
+--strict-docs is given.
 """
 import argparse
 import fcntl
@@ -26,6 +39,9 @@ import re
 import shlex
 import subprocess
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 # The NPU catalogue map of the npu variant, relative to the --cache directory.
 NPU_CATALOGUE = 'build/npu-board/session-artifacts.json'
@@ -82,6 +98,25 @@ def external_applications(source, paths):
                 raise ValueError('duplicate application check: ' + check)
         applications[name] = dict(record, root=path)
     return applications
+
+
+def output_option(entry):
+    """The option that names a check's new output directory, or None."""
+    declared = entry.get('output_option')
+    if declared:
+        return declared
+    return '--output' if '--output' in entry.get('required_arguments', ()) or entry.get('output') is True else None
+
+
+def available_gib():
+    """MemAvailable in GiB, or None when the system does not report it."""
+    try:
+        for line in Path('/proc/meminfo').read_text().splitlines():
+            if line.startswith('MemAvailable:'):
+                return int(line.split()[1]) / 1048576
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
 
 
 def compatibility_variables(source):
@@ -145,12 +180,27 @@ def main(argv=None):
     parser.add_argument('--application', type=Path, action='append', default=[],
                         help='external checkout with sunstoneos/gate.json; repeat to add applications')
     parser.add_argument('--trials', type=int, default=1, help='predeclared soak8 trials, not failure retries (default: 1)')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--fail-fast', action='store_true',
+                      help='stop at the first failure and run steps one at a time (the default for targeted selections)')
+    mode.add_argument('--keep-going', action='store_true',
+                      help='run every selected step and report every failure (the default for --full)')
+    parser.add_argument('--jobs', type=int, default=8, help='parallel checks when keeping going (default: 8)')
+    parser.add_argument('--min-available-gb', type=float, default=32,
+                        help='start no new check while MemAvailable is below this many GiB (default: 32)')
+    parser.add_argument('--memory-wait', type=int, default=3600,
+                        help='seconds a check waits for MemAvailable to recover before it fails unstarted (default: 3600)')
+    parser.add_argument('--check-timeout', type=int, default=3600, help='seconds allowed to each check (default: 3600)')
+    parser.add_argument('--strict-docs', action='store_true',
+                        help='fail, instead of warn, when a documentation-link or status-record check fails')
     parser.add_argument('--allow-dirty', action='store_true', help='compatibility option; local changes are always recorded')
     args = parser.parse_args(argv)
     if not args.full and not (args.target or args.variant or args.check or args.affected or args.changed):
         parser.error('select --target, --variant or --check; --full is only for justified broad validation')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', args.label):
         parser.error('label must be a single filename beginning with a letter or digit')
+    if args.jobs < 1 or args.min_available_gb < 0 or args.check_timeout < 1:
+        parser.error('--jobs and --check-timeout must be positive and --min-available-gb cannot be negative')
     if args.trials < 1 or (args.trials != 1 and not args.full and 'soak8' not in args.check):
         parser.error('--trials must be positive and applies only to soak8')
     if any(not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.+-]*', t) or t in
@@ -169,7 +219,7 @@ def main(argv=None):
             spec.loader.exec_module(selector)
             if args.full:
                 index = selector.indexer.generate()
-                indexed = [{'check': name, 'output': '--output' in entry['required_arguments']}
+                indexed = [{'check': name, 'output': bool(output_option(entry)), 'output_option': output_option(entry)}
                            for name, entry in sorted(index.items()) if entry['pure_host']]
                 pending = [{'check': name, 'needs': selector.needs(entry)}
                            for name, entry in sorted(index.items()) if not entry['pure_host'] and not entry['library']]
@@ -201,6 +251,19 @@ def main(argv=None):
                 variants = list(dict.fromkeys([*variants, affected_plan['baseline']]))
         except (OSError, ValueError, subprocess.CalledProcessError) as error:
             parser.error('cannot select indexed checks: ' + str(error))
+    # Prose-only and timing-sensitive checks come from the check index.
+    prose, serial = {}, set()
+    try:
+        if args.full or args.affected or args.changed:
+            module = selector.indexer
+        else:
+            spec = importlib.util.spec_from_file_location('affected', source / 'checks/affected.py')
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module = module.indexer
+        prose, serial = dict(getattr(module, 'PROSE_CHECKS', {})), set(getattr(module, 'SERIAL_CHECKS', ()))
+    except Exception:
+        pass
     if any('npu' in v for v in variants) and not (cache / NPU_CATALOGUE).is_file():
         parser.error('the npu variant needs the NPU catalogue map ' + str(cache / NPU_CATALOGUE))
     selectors = compatibility_variables(source)
@@ -243,32 +306,73 @@ def main(argv=None):
     # One build tree per resolved checkout: the name keeps it recognizable and
     # the path hash separates checkouts that share a name.
     tree = re.sub(r'[^A-Za-z0-9_.-]', '_', source.name) + '-' + hashlib.sha256(str(source).encode()).hexdigest()[:10]
-    cfg, build = cache / 'bin/cfg.sh', build_root / ('gate-central-' + tree)
+    cfg, build_dir = cache / 'bin/cfg.sh', build_root / ('gate-central-' + tree)
     application_builds = {name: build_root / ('gate-' + name + '-' + tree) for name in configured}
     python = cache / 'venv/bin/python'
     qemu = cache / 'host/usr/bin/qemu-system-aarch64'
     evidence = output / 'evidence'
 
-    def note(message):
-        print(message, flush=True)
-        with (output / 'summary.txt').open('a') as stream:
-            stream.write(message + '\n')
+    fail_fast = args.fail_fast or not (args.full or args.keep_going)
+    jobs = 1 if fail_fast else args.jobs
+    # Every check, build and configure step runs with this environment; it is
+    # recorded in environment.txt. Only the configure steps use cfg.sh.
+    results, timings = {}, []
+    guard = threading.Lock()
 
-    def run(name, command):
+    class Stop(Exception):
+        """Fail-fast mode ends the gate at the first failed step."""
+
+    def note(message):
+        with guard:
+            print(message, flush=True)
+            with (output / 'summary.txt').open('a') as stream:
+                stream.write(message + '\n')
+
+    def prose_only(script, log):
+        """Whether a failed check failed only on documentation prose."""
+        if args.strict_docs or script not in prose:
+            return False
+        allowed = prose[script]
+        if allowed is True:
+            return True
+        failed = set(re.findall(r'^(?:FAIL|ERROR): (\w+)', log, re.M))
+        return bool(failed) and failed <= set(allowed)
+
+    def run(name, command, script=None, timeout=None):
+        """Run one step; the result is recorded as PASS, WARN or FAIL."""
         command = [str(value) for value in command]
-        with (output / 'commands.txt').open('a') as stream:
-            stream.write(name + ': ' + shlex.join(command) + '\n')
+        with guard:
+            with (output / 'commands.txt').open('a') as stream:
+                stream.write(name + ': ' + shlex.join(command) + '\n')
+        started, detail = time.monotonic(), ''
         with (output / (name + '.log')).open('w') as log:
             try:
-                result = subprocess.run(command, cwd=source, env=env, stdout=log, stderr=subprocess.STDOUT)
+                result = subprocess.run(command, cwd=source, env=env, stdin=subprocess.DEVNULL, stdout=log,
+                                        stderr=subprocess.STDOUT, timeout=timeout)
                 ok = result.returncode == 0
+            except subprocess.TimeoutExpired:
+                log.write('\nGate deadline of %d seconds expired.\n' % timeout)
+                ok, detail = False, ' (deadline of %d seconds expired)' % timeout
             except OSError as error:
                 log.write(str(error) + '\n')
                 ok = False
-        note(('PASS ' if ok else 'FAIL ') + name)
-        if not ok:
+        elapsed = time.monotonic() - started
+        verdict = 'PASS' if ok else 'FAIL'
+        if not ok and prose_only(script, (output / (name + '.log')).read_text(errors='replace')):
+            verdict = 'WARN'
+            detail = ' (documentation or status-record prose; see ' + name + '.log)'
+        results[name] = verdict
+        with guard:
+            timings.append((name, elapsed))
+        note(verdict + ' ' + name + detail)
+        if verdict == 'FAIL' and fail_fast:
             note('Stopped at first failure; diagnose it before running only the affected steps with a new label.')
-        return ok
+            raise Stop
+        return verdict != 'FAIL'
+
+    def skip(name, reason):
+        results[name] = 'SKIP'
+        note('SKIP ' + name + ': ' + reason)
 
     note('reason: ' + args.reason)
     note('source: ' + str(source))
@@ -335,76 +439,163 @@ def main(argv=None):
         discovered = re.findall(r'^\.\.\. ([A-Za-z0-9_][A-Za-z0-9_.+-]*)\s*$',
                                 (output / (name + '-targets.log')).read_text(), re.M)
         if not discovered:
+            results[name + '-targets'] = 'FAIL'
             note('FAIL ' + name + '-targets: unsupported target listing; select targets explicitly')
+            if fail_fast:
+                raise Stop
             return None
         return [t for t in discovered if t not in excluded and not t.endswith(('.o', '.i', '.s', '.obj'))]
-    core_targets = []
-    core_options = ['-DSUNSTONE_EXTERNAL_APPLICATIONS=', *['-D' + key + '=' for key in selectors]]
-    if targets or args.full:
-        # Override any external selections supplied by the host configuration.
-        if not run('central-configure', [cfg, source, build, '-DSUNSTONE_APPLICATION=', *core_options]):
-            return 1
-        if args.full:
-            core_targets = discover('central', build)
-            if core_targets is None:
-                return 1
-            targets = list(dict.fromkeys(targets + core_targets))
-        # One invocation lets CMake reuse shared dependencies across selected targets.
-        if not run('central-build', ['cmake', '--build', build, '--target', *targets, '-j', '12']):
-            return 1
-    for variant in variants:
-        directory = build_root / ('gate-os-' + variant + '-' + tree)
-        options = [value.replace('{cache}', str(cache)) for value in VARIANTS[variant]]
-        if not run('os-' + variant + '-configure', [cfg, source, directory,
+
+    def run_steps():
+        started = time.monotonic()
+        core_targets, targets_to_build = [], list(targets)
+        core_options = ['-DSUNSTONE_EXTERNAL_APPLICATIONS=', *['-D' + key + '=' for key in selectors]]
+        if targets_to_build or args.full:
+            # Override any external selections supplied by the host configuration.
+            if run('central-configure', [cfg, source, build_dir, '-DSUNSTONE_APPLICATION=', *core_options]):
+                if args.full:
+                    discovered = discover('central', build_dir)
+                    if discovered is None:
+                        skip('central-build', 'central target discovery failed')
+                        targets_to_build = None
+                    else:
+                        core_targets = discovered
+                        targets_to_build = list(dict.fromkeys(targets_to_build + core_targets))
+                if targets_to_build:
+                    # One invocation lets CMake reuse shared dependencies across selected targets.
+                    run('central-build', ['cmake', '--build', build_dir, '--target', *targets_to_build, '-j', '12'])
+            else:
+                skip('central-build', 'central-configure did not pass')
+        for variant in variants:
+            directory = build_root / ('gate-os-' + variant + '-' + tree)
+            options = [value.replace('{cache}', str(cache)) for value in VARIANTS[variant]]
+            if run('os-' + variant + '-configure', [cfg, source, directory,
                    *core_options, '-DSUNSTONE_APPLICATION=', '-DSUNSTONE_A733_OS=ON', *options]):
-            return 1
-        if not run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', '12']):
-            return 1
-    for name in (configured if args.full else applications):
-        directory, selected = application_builds[name], applications.get(name, [])
-        selected = list(dict.fromkeys(['sunstone-a733-os', *selected]))
-        if not run(name + '-configure', [cfg, source, directory, *core_options,
-                   '-DSUNSTONE_EXTERNAL_APPLICATIONS=' + str(configured[name]['root']),
-                   '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=' + name]):
-            return 1
-        if args.full:
-            discovered = discover(name, directory)
-            if discovered is None:
-                return 1
-            # The application build repeats the core targets; build only its own.
-            selected = list(dict.fromkeys(selected + [t for t in discovered if t not in core_targets]))
-        if selected and not run(name + '-build', ['cmake', '--build', directory, '--target', *selected, '-j', '12']):
-            return 1
-    commands = {
-        'kernel': ['tools/check-kernel.py', build / 'kernel-check.elf', '--qemu', qemu, '--evidence', evidence / 'kernel'],
-        'soak8': ['tools/check-smp.py', build / 'smp8-soak-model.elf', '--case', 'soak8', '--trials', str(args.trials), '--qemu', qemu, '--evidence', evidence / 'soak8'],
-        'shared-helpers': ['checks/shared-helpers.py', '--output', evidence / 'shared-helpers'],
-        'progress': ['checks/progress.py', '--output', evidence / 'progress'],
-        'check-index': ['checks/check-index.py', '--verify'],
-        'pmic-tree': ['checks/pmic-tree.py'],
-        'power-domains-tree': ['checks/power-domains-tree.py'],
-    }
-    for check, name in application_checks.items():
-        places = {'build': application_builds[name], 'cache': cache, 'qemu': qemu, 'evidence': evidence,
-                  'application': configured[name]['root']}
-        commands[check] = [value.format(**places) for value in configured[name]['checks'][check][1]]
-    for check in checks:
-        if not run('check-' + check, [python, *commands[check]]):
-            return 1
-    for check in indexed:
-        command = [python, 'checks/' + check['check']]
-        if check['output']:
-            command += ['--output', evidence / 'indexed' / Path(check['check']).stem]
-        if not run('indexed-' + Path(check['check']).stem, command):
-            return 1
+                run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', '12'])
+            else:
+                skip('os-' + variant + '-build', 'os-' + variant + '-configure did not pass')
+        for name in (configured if args.full else applications):
+            directory, selected = application_builds[name], applications.get(name, [])
+            selected = list(dict.fromkeys(['sunstone-a733-os', *selected]))
+            if not run(name + '-configure', [cfg, source, directory, *core_options,
+                       '-DSUNSTONE_EXTERNAL_APPLICATIONS=' + str(configured[name]['root']),
+                       '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=' + name]):
+                skip(name + '-build', name + '-configure did not pass')
+                continue
+            if args.full:
+                discovered = discover(name, directory)
+                if discovered is None:
+                    skip(name + '-build', name + ' target discovery failed')
+                    continue
+                # The application build repeats the core targets; build only its own.
+                selected = list(dict.fromkeys(selected + [t for t in discovered if t not in core_targets]))
+            if selected:
+                run(name + '-build', ['cmake', '--build', directory, '--target', *selected, '-j', '12'])
+        commands = {
+            'kernel': ['tools/check-kernel.py', build_dir / 'kernel-check.elf', '--qemu', qemu, '--evidence', evidence / 'kernel'],
+            'soak8': ['tools/check-smp.py', build_dir / 'smp8-soak-model.elf', '--case', 'soak8', '--trials', str(args.trials), '--qemu', qemu, '--evidence', evidence / 'soak8'],
+            'shared-helpers': ['checks/shared-helpers.py', '--output', evidence / 'shared-helpers'],
+            'progress': ['checks/progress.py', '--output', evidence / 'progress'],
+            'check-index': ['checks/check-index.py', '--verify'],
+            'pmic-tree': ['checks/pmic-tree.py'],
+            'power-domains-tree': ['checks/power-domains-tree.py'],
+        }
+        for check, name in application_checks.items():
+            places = {'build': application_builds[name], 'cache': cache, 'qemu': qemu, 'evidence': evidence,
+                      'application': configured[name]['root']}
+            commands[check] = [value.format(**places) for value in configured[name]['checks'][check][1]]
+        # Each task names the build steps it needs. QEMU checks run one at a time.
+        tasks = []
+        for check in checks:
+            command = commands[check]
+            needs = ['central-build'] if check in DEPENDENCIES else (
+                [application_checks[check] + '-build'] if check in application_checks else [])
+            script = Path(command[0]).name if Path(command[0]).parent == Path('checks') else None
+            tasks.append({'name': 'check-' + check, 'command': [python, *command], 'script': script, 'needs': needs,
+                          'serial': check in DEPENDENCIES or check in application_checks or script in serial})
+        for check in indexed:
+            command = [python, 'checks/' + check['check']]
+            option = output_option(check)
+            if option:
+                command += [option, evidence / 'indexed' / Path(check['check']).stem]
+            tasks.append({'name': 'indexed-' + Path(check['check']).stem, 'command': command, 'script': check['check'],
+                          'needs': [], 'serial': check['check'] in serial})
+
+        def start(task):
+            missing = [need for need in task['needs'] if results.get(need) != 'PASS']
+            if missing:
+                skip(task['name'], ', '.join(missing) + ' did not pass')
+            else:
+                run(task['name'], task['command'], task['script'], args.check_timeout)
+
+        def wait_for_memory(name):
+            deadline, announced = time.monotonic() + args.memory_wait, False
+            while True:
+                free = available_gib()
+                if free is None or free >= args.min_available_gb:
+                    return True
+                if not announced:
+                    note('WAIT %s: MemAvailable %.1f GiB is below %g GiB' % (name, free, args.min_available_gb))
+                    announced = True
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(min(5, max(0.05, deadline - time.monotonic())))
+
+        def run_group(batch, workers):
+            slots = threading.BoundedSemaphore(workers)
+
+            def work(task):
+                try:
+                    start(task)
+                except Exception as error:
+                    results[task['name']] = 'FAIL'
+                    note('FAIL ' + task['name'] + ': ' + type(error).__name__ + ': ' + str(error))
+                finally:
+                    slots.release()
+            with ThreadPoolExecutor(workers) as pool:
+                for task in batch:
+                    slots.acquire()
+                    if wait_for_memory(task['name']):
+                        pool.submit(work, task)
+                    else:
+                        slots.release()
+                        results[task['name']] = 'FAIL'
+                        note('FAIL %s: not started; MemAvailable stayed below %g GiB for %d seconds'
+                             % (task['name'], args.min_available_gb, args.memory_wait))
+        if fail_fast:
+            for task in tasks:
+                start(task)
+        else:
+            run_group([t for t in tasks if not t['serial']], jobs)
+            run_group([t for t in tasks if t['serial']], 1)
+        return time.monotonic() - started
+
+    (output / 'environment.txt').write_text(
+        ''.join(key + '=' + env[key] + '\n' for key in ('PATH', 'SUNSTONEOS_DIR', 'PYTHONDONTWRITEBYTECODE')) +
+        'cwd=' + str(source) + '\nstdin=/dev/null\nconfigure steps run ' + str(cfg) + '; checks do not source it\n')
+    note('mode: ' + ('fail-fast' if fail_fast else 'keep-going, %d parallel checks, memory guard %g GiB'
+                     % (jobs, args.min_available_gb)) + (', strict documentation checks' if args.strict_docs else ''))
+    try:
+        elapsed = run_steps()
+    except Stop:
+        return 1
+    failed = sorted(name for name, verdict in results.items() if verdict == 'FAIL')
+    skipped = sorted(name for name, verdict in results.items() if verdict == 'SKIP')
+    warned = sorted(name for name, verdict in results.items() if verdict == 'WARN')
+    note('steps: %d passed, %d warned, %d failed, %d skipped; %.0f s' % (
+        sum(v == 'PASS' for v in results.values()), len(warned), len(failed), len(skipped), elapsed))
+    (output / 'timing.txt').write_text(''.join('%8.1f %s\n' % (seconds, name) for name, seconds in
+                                              sorted(timings, key=lambda item: -item[1])))
     if not unchanged('during the selected steps'):
+        return 1
+    if failed or skipped:
+        note('FAIL selected integration checks: ' + ', '.join(failed + skipped))
         return 1
     if affected_plan is not None and pending:
         note('INCOMPLETE affected coverage: selected checks still need the inputs listed above')
         return 2
     note('PASS selected integration checks; unselected behavior is not revalidated')
     return 0
-
 
 if __name__ == '__main__':
     sys.exit(main())

@@ -3,9 +3,17 @@
 #include <stddef.h>
 #include <stdint.h>
 #define OS_CPU_RETURN_RESERVE_US UINT64_C(5000000)
+/* Longest a failure return may take before the failure ends at the watchdog. */
+#define OS_FAILURE_RETURN_US UINT64_C(3000000)
 uint64_t a733_smp_counter(void);
 uint64_t os_cpu_return_cutoff(void);
 int os_cpu_return_requested(void);
+/* Failure return (docs/designs/failure-return.md). */
+int os_cpu_return_failing(void);
+int os_cpu_return_prescheduler_requested(void);
+int os_cpu_return_failure(uint32_t site,uint32_t value,const void *caller);
+int os_cpu_return_unexpected_interrupt(unsigned interrupt,const void *caller);
+int os_cpu_return_panic(const char *file,unsigned line,const void *caller);
 int os_cpu_return_clock_done(void);
 int os_cpu_return_start(void);
 int os_cpu_return_task_privileged(void (*)(void *),void *);

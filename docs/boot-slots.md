@@ -408,7 +408,7 @@ and resumed update, an interrupted install that refuses a new plan and then
 resumes, refusal of a changed image before any write, rollback and its
 refusal, plan refusals and the header rules. The plan refusals include a
 foreign header with an extent in the standby region and the 64-bit limits.
-[os-image-stage2.py](../checks/os-image-stage2.py) runs the same monitor and
+The retired `checks/os-image-stage2.py` ran the same monitor and
 cold SD admission with the three entry prerequisites modeled as granted
 unless a case refuses one, and with WDT0, the redirect words, the RTC FEL flag
 and CCU word `0x24` modeled. Its slot holds an image, the OS session and an
@@ -441,12 +441,10 @@ cmake -S boot/a733/stage2 -B BUILD -DCMAKE_TOOLCHAIN_FILE=$PWD/cmake/aarch64-cla
 cmake --build BUILD --target a733-stage2
 python checks/standalone-boot-loader.py --build BUILD --boot0 boot0_sdcard_orangepizero3w.fex --output NEW
 python checks/standalone-boot-slots.py --output NEW
-python checks/os-image-stage2.py --build BUILD --boot0 boot0_sdcard_orangepizero3w.fex \
-  --model RESIDENT_MODEL --output NEW
 ```
 
-`RESIDENT_MODEL` is `checks/os-image-model.c` built for the resident lifetime,
-as its header comment shows.
+The stage-2 entry check and the resident model that it used moved to the external
+port with the application fixtures, so no command for them remains here.
 
 The loader uses the Python environment with Unicorn, Capstone and pyelftools.
 The cold-entry recorder built by `tools/prepare-cold-entry.py` is unchanged;

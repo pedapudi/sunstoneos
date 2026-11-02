@@ -1,70 +1,74 @@
 #!/usr/bin/env python3
-"""Check the actual AArch64 native GPU thermal caller with modeled service replies."""
+"""Check the actual native GPU thermal caller (apps/os/gpu.c) on the real FreeRTOS kernel.
+
+The caller runs as a task under the host shim (checks/host/): delays, ticks and time are the
+kernel's and the shim's, and the wrong-client cases call from a second task. The GPU service
+replies, the board lifetime and the thermal throttle input are modeled. Each case runs in its
+own process.
+"""
 import argparse
 import hashlib
 import json
 from pathlib import Path
-import shlex
-from harness import Image, LLD, Steps, skip_crumbs
-from elftools.elf.elffile import ELFFile
-from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR
-from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0
+import subprocess
+
+import host_rtos
+from harness import environment
 
 ROOT = Path(__file__).resolve().parents[1]
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--build', type=Path, required=True, help='Accepted OS build with compile_commands.json')
-parser.add_argument('--output', type=Path, required=True)
-parser.add_argument('--lld', type=Path, default=LLD)
-parser.add_argument('--cases', type=int, nargs='+', choices=range(16), default=list(range(16)))
-args = parser.parse_args()
-out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
-steps = Steps(out, 'commands.json')
-unit = next(v for v in json.loads((args.build / 'compile_commands.json').read_text())
-            if v['file'].endswith(('/apps/os/thermal.c', '/os-image/return-thermal.c')))
-original = shlex.split(unit['command'])
-old_root = str(Path(next(v[2:] for v in original if v.startswith('-I') and v.endswith('/apps/os'))).parents[1])
-flags = [v.replace(old_root, str(ROOT)) for v in original[:original.index('-o')]]
-flags += ['-DSUNSTONE_A733_OS_GPU=1', '-DSUNSTONE_A733_FAULT_PAGE=1']
-flags=[('-I'+str(ROOT/'apps/board')) if v.startswith('-I') and not Path(v[2:]).is_dir()
-       and Path(v[2:]).parent.name=='apps' and Path(v[2:]).name.endswith('-board') else v for v in flags]
-for flag in flags:
-    if flag.startswith('-I'): assert Path(flag[2:]).is_dir(), flag
-(out / 'compile-inputs.json').write_text(json.dumps(dict(unit=unit, flags=flags), indent=2) + '\n')
-flags=[v for v in flags if not v.startswith('-DSUNSTONE_A733_OS_GPU_LINEAR=')]
-objects = []
-for i, source in enumerate(('checks/os-gpu-thermal.c', 'runtime/memory.c', 'runtime/memmove.c')):
-    obj = out / f'unit-{i}.o'; objects.append(obj)
-    steps.command(f'compile-{i}', [*flags, '-c', ROOT / source, '-o', obj])
-elf = out / 'os-gpu-thermal.elf'
-steps.command('link', [args.lld, '-Ttext=0x41000000', '--entry=os_gpu_thermal_check', '--gc-sections',
-                       *objects, '-o', elf])
-image = Image(elf); identity = hashlib.sha256(elf.read_bytes()).hexdigest()
-cases = ['repeated-park-reopen', 'throttle-during-reopen', 'critical-during-reopen',
+NETWORK = Path.home() / '.cache/sunstoneos/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source'
+DEFINES = ['A733_A76_ADMITTED=1', 'SUNSTONE_A733_FAULT_PAGE=1', 'SUNSTONE_A733_OS=1', 'SUNSTONE_A733_OS_GPU=1',
+           'SUNSTONE_BOARD_APPLICATION=1', 'SUNSTONE_BOARD_SUPERVISED=1', 'SUNSTONE_BOARD_USB2_DUAL=1',
+           'SUNSTONE_A733_OS_CPU_CLOCK=1']
+INCLUDES = [ROOT / 'apps/os', ROOT / 'apps/board', ROOT / 'platform/a733-smp-cached', ROOT / 'drivers/usb',
+            ROOT / 'network/include', NETWORK / 'include', NETWORK / 'portable/Compiler/GCC']
+CASES = ['repeated-park-reopen', 'throttle-during-reopen', 'critical-during-reopen',
          'close-observation-deadline', 'wrong-client', 'expired-lifetime', 'stale-open-epoch',
          'terminal-retire', 'retire-close-busy', 'retire-deadline', 'retire-critical',
          'retire-wrong-client', 'retire-pending-ticket', 'retire-stale-stopped-epoch',
          'close-shared-status-budget', 'owed-job-prevents-thermal-close']
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--build', type=Path, help='accepted for compatibility; the host build needs no OS build')
+parser.add_argument('--output', type=Path, required=True)
+parser.add_argument('--lld', type=Path, help='accepted for compatibility')
+parser.add_argument('--cases', type=int, nargs='+', choices=range(16), default=list(range(16)))
+args = parser.parse_args()
+out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
+
+
+def build(name, source):
+    return host_rtos.build(out / name, ['checks/os-gpu-thermal.c'], 'os-gpu-thermal', defines=DEFINES,
+                           includes=INCLUDES, flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'],
+                           link=['-Wl,--gc-sections', '-Wl,--wrap=vTaskDelay'])
+
+
+def run(exe, mode):
+    return subprocess.run([str(exe), str(mode)], capture_output=True, text=True, env=environment())
+
+
+exe = build('fixed', ROOT / 'apps/os/gpu.c')
+identity = hashlib.sha256(exe.read_bytes()).hexdigest()
 results = {}
-for mode, name in enumerate(cases):
+for mode, name in enumerate(CASES):
     if mode not in args.cases: continue
-    uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM); pages = set()
-    with elf.open('rb') as stream:
-        for segment in ELFFile(stream).iter_segments():
-            if segment['p_type'] != 'PT_LOAD': continue
-            address, size = int(segment['p_vaddr']), int(segment['p_memsz'])
-            for page in range(address & ~4095, (address + size + 4095) & ~4095, 4096):
-                if page not in pages: uc.mem_map(page, 4096); pages.add(page)
-            uc.mem_write(address, segment.data())
-    skip_crumbs(uc, image)
-    uc.mem_map(0x80000000, 0x10000); uc.reg_write(UC_ARM64_REG_SP, 0x8000f000)
-    uc.reg_write(UC_ARM64_REG_X0, mode)
-    uc.hook_add(UC_HOOK_INTR, lambda machine, interrupt, unused: machine.emu_stop())
-    uc.emu_start(image.address('os_gpu_thermal_check'), 0, count=1000000)
-    status = int.from_bytes(uc.mem_read(image.address('os_check_result'), 4), 'little')
-    (out / (name + '.json')).write_text(json.dumps(dict(status=status, image_sha256=identity,
+    done = run(exe, mode)
+    (out / (name + '.json')).write_text(json.dumps(dict(status=done.returncode, image_sha256=identity,
         physical_access=False)) + '\n')
-    assert status == 1, (name, status)
+    assert done.returncode == 0, (name, done.returncode, done.stderr[-400:])
     results[name] = True
-(out / 'results.json').write_text(json.dumps(dict(cases=results, elf_sha256=identity,
-    scope='Actual native thermal caller; service, board clock/lifetime and RTOS modeled.'), indent=2) + '\n')
+# Negative control: a thermal park that does not wait for the client's completions closes the
+# GPU under an owed job; the owed-job case must fail.
+controls = {}
+if 15 in args.cases:
+    mutant = host_rtos.mutated(out, 'apps/os/gpu.c', 'while (!pvr_compute_queue_clients_idle(gpu.component)) {',
+                               'while (0) {', 'gpu-close-ignores-clients.c')
+    exe_mutant = host_rtos.build(out / 'control', ['checks/os-gpu-thermal.c'], 'os-gpu-thermal',
+        defines=DEFINES + ['GPU_SOURCE="%s"' % mutant], includes=INCLUDES,
+        flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'],
+        link=['-Wl,--gc-sections', '-Wl,--wrap=vTaskDelay'])
+    assert run(exe_mutant, 15).returncode != 0, 'control passed: close ignores owed jobs'
+    controls['close-ignores-clients'] = 'fails'
+(out / 'results.json').write_text(json.dumps(dict(cases=results, negative_controls=controls, elf_sha256=identity,
+    scope='Actual native thermal caller on the real kernel; service, board lifetime and throttle input modeled.'),
+    indent=2) + '\n')
 print(f'PASS: {len(results)} native GPU thermal lifecycle cases; no physical access.')

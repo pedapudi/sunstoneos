@@ -193,6 +193,7 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
                 'Probe entry/report reservations differ.')
     return {'symbols': names, 'watchdog': marker, 'generic': generic,
             'entry_guard': 'os_cpu_return_entry_profile' in names, 'descriptor': descriptor,
+            'failure_return': 'os_cpu_return_failure' in names,
             'report_geometry': geometry, 'dma': dma,
             'usb_class': 'os_usb_service_dispatch' in names}
 
@@ -616,9 +617,20 @@ def capture(owner, plan, args):
         decoded['output_capture_sha256'] = hashlib.sha256(copied['output-record']).hexdigest()
         try:
             info = records.host.image_manifest(args.image)
-            payload = records.host.decode_result(copied['output-record'], plan['epoch'], plan['generation'],
-                                                  info['manifest']['output_limit'])
-            decoded['output_capture_status'] = 'decoded'
+            if owner.record.get('failure_return'):
+                # The image returned after its first failure. The record is
+                # the failure result, never an application result.
+                valid = False
+                try:
+                    decoded['failure'], payload = records.host.decode_failure(
+                        copied['output-record'], plan['epoch'], plan['generation'], info['manifest']['output_limit'])
+                    decoded['output_capture_status'] = 'failure'
+                except (ValueError, KeyError, struct.error) as error:
+                    decoded.update(output_capture_status='failure-record-absent', output_error=str(error))
+            else:
+                payload = records.host.decode_result(copied['output-record'], plan['epoch'], plan['generation'],
+                                                      info['manifest']['output_limit'])
+                decoded['output_capture_status'] = 'decoded'
         except (ValueError, KeyError, struct.error) as error:
             valid = False
             decoded.update(output_capture_status='malformed', output_error=str(error))

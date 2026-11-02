@@ -1,8 +1,17 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Actual board waiter and xHCI core; explicit counter and deferred hardware. */
+/* Actual board waiter and xHCI core on the real FreeRTOS kernel under the host shim
+ * (checks/host/); deferred hardware effects follow the fixture's device clock, which
+ * advances with the shim's virtual time. */
 #define SUNSTONE_BOARD_APPLICATION_PRIVATE_H
 #include "a733_usb2_native.h"
 #include "gicv3_spi.h"
+#ifndef configMAX_API_CALL_INTERRUPT_PRIORITY
+#define configMAX_API_CALL_INTERRUPT_PRIORITY 11
+#endif
+#ifndef portPRIORITY_SHIFT
+#define portPRIORITY_SHIFT 4
+#endif
+#include "host_rtos.h"
 #include "register_latency.h"
 #include <sys/mman.h>
 #include <stdatomic.h>
@@ -14,33 +23,23 @@ static struct {void *handles[8];struct a733_usb2_native host;} board;
 #define main detach_fixture_main
 #include "a733-xhci-detach.c"
 #undef main
-typedef unsigned UBaseType_t;
-typedef int BaseType_t;
-#define pdFALSE 0
-#define pdTRUE 1
-#define taskSCHEDULER_NOT_STARTED 0
-#define configMAX_API_CALL_INTERRUPT_PRIORITY 11
-#define portPRIORITY_SHIFT 4
-static unsigned critical,waits,ready_steps,ready_waits,baseline,busy;
+static unsigned waits,ready_steps,ready_waits,baseline,busy,stuck;
 static uint64_t reset_delay=3000,run_delay=2000;
 static struct register_latency reset_effect,run_effect;
 static int board_live(void *v){(void)v;return 1;}
-static int xTaskGetSchedulerState(void){return 0;}
-static void enter(void){assert(!critical);critical=1;}
-static void leave(void){assert(critical);critical=0;}
-#define taskENTER_CRITICAL() enter()
-#define taskEXIT_CRITICAL() leave()
-#define taskENTER_CRITICAL_FROM_ISR() (enter(),0)
-#define taskEXIT_CRITICAL_FROM_ISR(saved) do{(void)(saved);leave();}while(0)
-#define portYIELD_FROM_ISR(woken) ((void)(woken))
-static void vTaskNotifyGiveFromISR(void *task,BaseType_t *woken)
-{assert(critical&&task==board.handles[4]);*woken=1;}
-static unsigned ulTaskNotifyTake(unsigned clear,unsigned ticks)
-{assert(!critical&&clear==1&&ticks==1);++waits;now+=1000;return 0;}
+/* Time passes for the kernel and for the device model together. */
+static void elapse(uint64_t us){host_advance_us(us);now+=us;}
+/* The owner's only blocking wait is one tick, taken outside a critical section. */
+uint32_t __real_ulTaskGenericNotifyTake(UBaseType_t index,BaseType_t clear,TickType_t ticks);
+uint32_t __wrap_ulTaskGenericNotifyTake(UBaseType_t index,BaseType_t clear,TickType_t ticks)
+{
+    if(ticks&&xTaskGetCurrentTaskHandle()==board.handles[4]){assert(!host_critical_depth()&&clear==pdTRUE&&ticks==1);++waits;}
+    return __real_ulTaskGenericNotifyTake(index,clear,ticks);
+}
 int gicv3_spi_mask(const struct gicv3_spi *s)
-{assert(critical&&s->intid==187);return 1;}
+{assert((host_critical_depth()||host_in_isr())&&s->intid==187);return 1;}
 int gicv3_spi_rearm(const struct gicv3_spi *s)
-{assert(critical&&s->intid==187);return 1;}
+{assert((host_critical_depth()||host_in_isr())&&s->intid==187);return 1;}
 #ifndef SUNSTONE_HOST_IRQ_SOURCE
 #define SUNSTONE_HOST_IRQ_SOURCE "../apps/board/host_irq.c"
 #endif
@@ -66,7 +65,8 @@ static int delayed_live(void *c,uint64_t generation,uint64_t deadline)
 static void owner_wait(void)
 {
     unsigned ready=a733_xhci_work_pending(&x),before=waits;
-    board_host_irq_wait();++now;
+    uint64_t waited=host_time_us();
+    board_host_irq_wait();now+=host_time_us()-waited;elapse(1);
     if(ready){++ready_steps;ready_waits+=waits-before;}
     if(!baseline&&ready)assert(waits==before&&"ready software step slept for a tick");
 }
@@ -83,19 +83,18 @@ static void initialize(void)
     assert(a733_xhci_init(&x,&ops,&pool,&pool,lease,7,now+100000,now+100000000));
     board.host.core_started=1;
 }
-int main(int argc,char **argv)
+static void test(void *unused)
 {
-    baseline=argc>1&&!strcmp(argv[1],"baseline");
-    unsigned stuck=argc>1&&!strcmp(argv[1],"stuck");
-    if(argc>1&&!strcmp(argv[1],"long-delay")){reset_delay=7000;run_delay=5000;}
-    initialize();uint64_t start=now;
+    (void)unused;
+    assert(board.handles[4]==xTaskGetCurrentTaskHandle());
+    uint64_t start=now;
     assert(a733_xhci_next_deadline(&x)==x.deadline);
     for(unsigned i=0;!portsc&&!x.failed&&i<200;++i){
         enum a733_xhci_result r=a733_xhci_poll(&x);assert(r!=A733_XHCI_INVALID);
         if(stuck&&reset_effect.pending)reset_effect.stuck=1;
         owner_wait();
     }
-    if(stuck){assert(x.failed&&memory()==DEVICE_MEMORY_RETAINED);puts("PASS stuck reset retains at deadline");return 0;}
+    if(stuck){assert(x.failed&&memory()==DEVICE_MEMORY_RETAINED);puts("PASS stuck reset retains at deadline");return;}
     assert(portsc&&now-start>=reset_delay+run_delay);
     unsigned startup_waits=waits;uint64_t startup_us=now-start;
     /* Existing ring model enumerates the real core before scheduling checks. */
@@ -129,7 +128,18 @@ int main(int argc,char **argv)
     busy=1;irq.burst=0;unsigned before=waits;
     for(unsigned i=0;i<32;++i){assert(a733_xhci_poll(&x)==A733_XHCI_BUSY);board_host_irq_wait();}
     assert(waits==before+(baseline?32:1));
-    now+=100000;assert(a733_xhci_poll(&x)==A733_XHCI_RETAINED&&memory()==DEVICE_MEMORY_RETAINED);
+    elapse(100000);assert(a733_xhci_poll(&x)==A733_XHCI_RETAINED&&memory()==DEVICE_MEMORY_RETAINED);
     assert(!a733_xhci_work_pending(&x));
     puts("PASS delayed reset/run/command/TD, idle enqueue, bounded BUSY and deadline retention");
+}
+int main(int argc,char **argv)
+{
+    baseline=argc>1&&!strcmp(argv[1],"baseline");
+    stuck=argc>1&&!strcmp(argv[1],"stuck");
+    if(argc>1&&!strcmp(argv[1],"long-delay")){reset_delay=7000;run_delay=5000;}
+    initialize();
+    host_set_time_us(now);
+    board.handles[4]=host_rtos_prepare(test,NULL,2,1000000);
+    host_rtos_start();
+    return 0;
 }

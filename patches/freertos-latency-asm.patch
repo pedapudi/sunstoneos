@@ -1,6 +1,6 @@
 --- portASM.S
 +++ portASM.S
-@@ -526,6 +526,19 @@
+@@ -526,6 +526,20 @@
     MOV X1, # portMAX_API_PRIORITY_MASK
  
  4:
@@ -12,6 +12,7 @@
 +   STP X0, X1, [ SP, #-16 ]!
 +   STP X2, X3, [ SP, #-16 ]!
 +   MRS X0, TPIDR_EL1
++   ADR X1, 9f
 +   BL ss_latency_mask_close
 +   LDP X2, X3, [ SP ], #16
 +   LDP X0, X1, [ SP ], #16

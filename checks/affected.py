@@ -75,7 +75,8 @@ def plan(value=None, changed=None, index=None):
         entry = index.get(name)
         required = needs(entry)
         checks.append({'check': name, 'status': 'pending' if required else 'runnable', 'needs': required,
-                       'output': bool(entry and '--output' in entry['required_arguments'])})
+                       'output': bool(entry and entry.get('output_option')),
+                       'output_option': entry.get('output_option') if entry else None})
     return {'range': value, 'revisions': revisions, 'changed': changed, 'baseline': BASELINE,
             'checks': checks, 'coverage': 'declared and inferred repository inputs'}
 

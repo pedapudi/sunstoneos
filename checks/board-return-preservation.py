@@ -32,6 +32,10 @@ def main():
     if args.npu_parser_tree:
         records.npu_capture=images.load('preservation_real_npu_parser',args.npu_parser_tree/'apps/os/npu-report.py')
     cpu = records.cpu
+    FAILURES = ('failure-return','failure-return-mismatch','failure-return-unlinked')
+    FAILURE_SITE, FAILURE_CALLER = 0x80004b7f, 0x41070123
+    # include/sunstone_session.h struct ss_failure: running context, core 6.
+    FAILURE_RECORD = records.host.FAILURE.pack(records.host.FAILURE_MAGIC,1,1,FAILURE_SITE,0x4641,FAILURE_CALLER,6,0,123456)
     epoch, generation = struct.unpack_from('<2Q',args.sdk_report.read_bytes(),16) if args.sdk_report else (1,2)
     report = bytearray(cpu.REPORT_BYTES)
     struct.pack_into('<8Q', report, 0, cpu.MAGIC, 3, len(report), epoch, 1000, 4, 0, 0)
@@ -125,7 +129,11 @@ def main():
                 if a<=address and address+len(data)<=a+len(values):
                     values[address-a:address-a+len(data)]=data; return
             raise AssertionError(('upload outside fixture',hex(address)))
-        def prepare(self,info):return make_plan()
+        def prepare(self,info):
+            plan=make_plan(self.variant)
+            # The image inspection marks images that link the failure return.
+            plan['failure_return']=self.variant in ('failure-return','failure-return-mismatch')
+            return plan
         def arm(self,mode,**kwargs):self.armed=True
         def tx(self,*values):
             if values==tuple(part for address in (board.usb_power.CFG,board.usb_power.DAT,board.usb_power.PULL)
@@ -147,8 +155,11 @@ def main():
             assert values==('exe','0x52000')
             for a,data in self.memory:data[:]=bytes([99])*len(data)
             self.put(geo['report_address'],report)
-            self.put(geo['output_address'], b'bad' if self.variant=='output-malformed' else
-                     struct.pack('<7Q',0x31544c5553455241,1,64,epoch,generation,1,8)+b'complete')
+            if self.variant in FAILURES:
+                self.put(geo['output_address'],struct.pack('<7Q',0x31544c5553455241,1,104,epoch,generation,2,48)+FAILURE_RECORD)
+            else:
+                self.put(geo['output_address'], b'bad' if self.variant=='output-malformed' else
+                         struct.pack('<7Q',0x31544c5553455241,1,64,epoch,generation,1,8)+b'complete')
             if has_npu:
                 native_stop=bytearray(sdk_stop if self.variant=='npu-sdk' else stop)
                 if self.variant=='npu-mismatch':
@@ -171,10 +182,13 @@ def main():
             if self.helper_running:
                 self.helper_running=False;return 0xb1,0,words
             if self.variant=='late-fault':words['fault']=0xfa030000
+            if self.variant in FAILURES:
+                # The first failure, as the breadcrumb SVC records it (level 0xb, EL0), then a normal return.
+                words.update(fault=0xfa6b0000|(6<<20),esr=FAILURE_SITE,elr=FAILURE_CALLER,far=0x4641)
             return (1 if self.variant=='watchdog' else 0),0,words
 
-    def make_plan():
-        plan={'format':'generic','geometry':geo,'return_host':records,'image_ram':(0x41000000,0x50000),
+    def make_plan(variant='normal'):
+        plan={'format':'generic','geometry':dict(geo,output_bytes=104) if variant in FAILURES else geo,'return_host':records,'image_ram':(0x41000000,0x50000),
               'input_regions':[{'address':0x46000000,'bytes':4096}], 'uploads':[(0x41000000,source)],
               'launch':['exe','0x52000'],'watchdog':{'mode':0xb1,'session_seconds':1},
               'epoch':epoch,'generation':generation}
@@ -183,13 +197,19 @@ def main():
 
     source=args.out/'model.bin';source.write_bytes(b'MODEL ONLY')
     variants=['normal','output-malformed','thermal-malformed','retirement-invalid','backup-corrupt',
-              'range-omitted','restore-readback','watchdog','late-fault','decoder-bound']
+              'range-omitted','restore-readback','watchdog','late-fault','decoder-bound',
+              'failure-return','failure-return-mismatch','failure-return-unlinked']
     if has_npu:variants.extend(('npu-sdk','npu-late-fault','npu-mismatch','npu-refused','npu-telemetry-malformed'))
     for variant in variants:
         evidence=args.out/variant
         parser=argparse.ArgumentParser();board.run_options(parser)
         options=parser.parse_args([str(source),'--port','3-1','--restore-rails'])
         options.evidence=evidence
+        if variant in FAILURES:
+            # An exact expectation of the failure record; the mismatch case expects a different one.
+            expected=args.out/(variant+'.expect');expected.write_bytes(
+                FAILURE_RECORD if variant!='failure-return-mismatch' else FAILURE_RECORD[:-8]+bytes(8))
+            options.expect=str(expected)
         if variant=='decoder-bound':
             options.decoder=args.out/'bound-decoder.py'
             options.decoder.write_text('BINDING = '+repr({'image_sha256':images.sha(source),'private_mode':99})+
@@ -204,20 +224,22 @@ def main():
         real_load=images.load
         def selected_load(name,path):
             if name=='runner_application_manifest':
-                return types.SimpleNamespace(image_manifest=lambda image: {'manifest':{'name':'model','output_limit':8}})
+                return types.SimpleNamespace(image_manifest=lambda image: {'manifest':{'name':'model','output_limit':48 if variant in FAILURES else 8}})
             return real_load(name,path)
         with patch.object(images,'inspect',return_value=info),patch.object(images,'policy'),\
              (contextlib.nullcontext() if variant=='decoder-bound' else patch.object(board,'application_inputs')),\
              patch.object(images,'load',side_effect=selected_load),patch.object(records,'thermal_capture',thermal),\
-             patch.object(records.host,'image_manifest',return_value={'manifest':{'output_limit':8}}),\
+             patch.object(records.host,'image_manifest',return_value={'manifest':{'output_limit':48 if variant in FAILURES else 8}}),\
              contextlib.redirect_stdout(io.StringIO()):
             result=board.run_image(options,backend)
-        good=variant in ('normal','output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed','npu-sdk','decoder-bound')
+        good=variant in ('normal','output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed','npu-sdk','decoder-bound',
+                         'failure-return','failure-return-mismatch')
         assert result.get('dram_restored',False)==good,(variant,result)
         assert bool(result.get('rails_restored'))==good,(variant,result)
         assert result['outcome']==('returned' if variant in ('normal','npu-sdk','decoder-bound') else
+                                  'failure-return' if variant=='failure-return' else
                                   'watchdog-reset' if variant=='watchdog' else
-                                  'host-error' if variant=='late-fault' else 'result-mismatch'),(variant,result)
+                                  'host-error' if variant in ('late-fault','failure-return-unlinked') else 'result-mismatch'),(variant,result)
         assert result['quarantined']==(not good),(variant,result)
         owner=owners[0]
         if not good:
@@ -233,6 +255,15 @@ def main():
             assert all(bytes(data)==owner.saved[a] for a,data in owner.memory)
             assert (evidence/'output-record.bin').exists() and (evidence/'return-report.bin').exists()
             if has_npu:assert (evidence/'npu-stop.bin').stat().st_size==104
+            if variant=='failure-return':
+                # A failed result that carries the record; the port is neither quarantined nor paused.
+                failure=result['first_failure']
+                assert failure['group']=='application' and failure['native_site']==0xb7f and failure['value']==hex(0x4641),failure
+                assert failure['record']['context']=='running' and failure['record']['core']==6,failure
+                assert result['rails_restored'] and 'restore-rails' in owner.events and result['dram_restored']
+                assert result['return_report']['failure']==failure['record']
+            if variant=='failure-return-mismatch':
+                assert result['first_failure']['detail']=='Failure record differs from expectation.',result
             if variant=='decoder-bound':
                 assert result['decoded']=={'bytes':8}
                 assert result['rail_runs']['restore-rails']['image_sha256']==board.POST_RAIL_HELPER_SHA256

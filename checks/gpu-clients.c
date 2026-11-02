@@ -1,23 +1,31 @@
-/* Actual application queue calls with modeled scheduler and worker effects. */
+/* Actual application queue calls (drivers/gpu/gpu_queue.c) on the real FreeRTOS kernel
+ * under the host shim (checks/host/). Tasks, completion queues, ticks and timeouts are the
+ * kernel's. The GPU service and its worker are modeled at their boundary: the service
+ * replies to requests and the worker's effects complete jobs and clear recovery. */
 #include "pvr_compute_queue.h"
 #include "pvr_gpu_service.h"
 #include "gpu-share.h"
 #include "aarch64_device_memory.h"
 #include "pvr_compute_fast.h"
+#include "host_rtos.h"
+#include "queue.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-struct host_queue { unsigned count; struct gpu_queue_record record; } owner_records,peer_records,requests;
 static struct pvr_compute_queue q;
 static struct pvr_gpu_service service;
-static TaskHandle_t current=(void *)1;
-static unsigned scheduler,ticks,phase=PVR_GPU_SERVICE_READY,operation,delay_reply,recover_at;
+static QueueHandle_t requests_queue;
+static StaticQueue_t requests_state,owner_state;
+static uint8_t requests_storage[sizeof(struct pvr_gpu_service_request)],owner_storage[sizeof(struct gpu_queue_record)];
+static TaskHandle_t owner_task,peer_task,stranger_task,worker_task;
+static unsigned phase=PVR_GPU_SERVICE_READY,operation,delay_reply;
 static uint64_t ticket_counter;
-static unsigned peer_queue_creates;
 /* The modeled service leaves job_irq_ack unset, so the queued client path
- * must never reach the caller-submission fast path or EL0 translation. */
-uint32_t ulTaskNotifyTakeIndexed(UBaseType_t index,BaseType_t clear,TickType_t wait)
-{(void)index;(void)clear;(void)wait;assert(!"queued path took a task notification");return 0;}
+ * must never reach the caller-submission fast path or EL0 translation, nor take its
+ * fast-path notification index. */
+uint32_t __real_ulTaskGenericNotifyTake(UBaseType_t index,BaseType_t clear,TickType_t wait);
+uint32_t __wrap_ulTaskGenericNotifyTake(UBaseType_t index,BaseType_t clear,TickType_t wait)
+{assert(index!=PVR_COMPUTE_FAST_NOTIFY&&"queued path took the fast-path notification");return __real_ulTaskGenericNotifyTake(index,clear,wait);}
 int aarch64_device_translate_el0(uintptr_t address,int write,struct aarch64_translation *out)
 {(void)address;(void)write;(void)out;assert(!"queued path translated an EL0 address");return -1;}
 int pvr_compute_fast_submit(struct pvr_compute_queue *queue,unsigned slot,const struct gpu_queue_job *job,uint32_t *serial)
@@ -25,28 +33,6 @@ int pvr_compute_fast_submit(struct pvr_compute_queue *queue,unsigned slot,const 
 int pvr_compute_fast_collect(struct pvr_compute_queue *queue,unsigned slot,uint32_t serial,uint32_t sequence,
     struct gpu_queue_record *out)
 {(void)queue;(void)slot;(void)serial;(void)sequence;(void)out;assert(!"queued path collected a fast fence");return -1;}
-QueueHandle_t xQueueCreateStatic(unsigned length,unsigned bytes,uint8_t *storage,StaticQueue_t *state)
-{
-    assert(length==1 && bytes==sizeof(struct gpu_queue_record));
-    assert(storage==q.peer.completion_storage && state==&q.peer.completion_state);
-    ++peer_queue_creates;return &peer_records;
-}
-int xTaskGetSchedulerState(void){return scheduler;}
-TaskHandle_t xTaskGetCurrentTaskHandle(void){return current;}
-TickType_t xTaskGetTickCount(void){return ticks;}
-void vTaskDelay(TickType_t n)
-{
-    ticks+=n;
-    if (recover_at && ticks>=recover_at) {atomic_store(&q.recovering,0);phase=PVR_GPU_SERVICE_READY;}
-}
-BaseType_t xQueueSend(QueueHandle_t queue,const void *item,TickType_t wait)
-{(void)queue;(void)item;(void)wait;return pdTRUE;}
-BaseType_t xQueueReceive(QueueHandle_t queue,void *out,TickType_t wait)
-{
-    struct host_queue *h=queue;
-    if (!h->count) {ticks+=wait;return pdFALSE;}
-    memcpy(out,&h->record,sizeof(h->record));h->count=0;return pdTRUE;
-}
 int pvr_gpu_service_bind(struct pvr_gpu_service *s,unsigned slot,TaskHandle_t task)
 {
     if (!task || s->clients[slot].task || task==s->worker) return 0;
@@ -62,7 +48,7 @@ int pvr_gpu_service_collect(struct pvr_gpu_service *s,uint64_t ticket,
     struct pvr_gpu_service_reply *out,TickType_t wait)
 {
     (void)s;(void)ticket;
-    if (delay_reply) {ticks+=wait;--delay_reply;return 0;}
+    if (delay_reply) {vTaskDelay(wait);--delay_reply;return 0;}
     if(operation==PVR_GPU_SERVICE_CLOSE) {
         phase=PVR_GPU_SERVICE_STOPPED;
         atomic_store(&q.slot_state,PVR_COMPUTE_QUEUE_CLOSED);
@@ -87,27 +73,46 @@ int pvr_compute_queue_clients_idle(struct pvr_compute_queue *p)
     for(unsigned i=0;i<2;++i){struct pvr_compute_queue_client_view v;
         if(!pvr_compute_queue_client_view(p,i,&v))continue;
         unsigned state=atomic_load(v.slot_state);
-        if((state!=PVR_COMPUTE_QUEUE_IDLE&&state!=PVR_COMPUTE_QUEUE_CLOSED)||atomic_load(v.client_owed)||((struct host_queue *)v.completions)->count)return 0;
+        if((state!=PVR_COMPUTE_QUEUE_IDLE&&state!=PVR_COMPUTE_QUEUE_CLOSED)||atomic_load(v.client_owed)||uxQueueMessagesWaiting(v.completions))return 0;
     }
     return 1;
 }
+
+#ifndef GPU_CLIENT_BASELINE
+/* Calls made as the peer and as a task that is registered for nothing. */
+static struct gpu_queue_context peer_ctx,owner_ctx;
+static struct gpu_queue_lease_info lease_info[GPU_QUEUE_LEASES];
+static struct gpu_queue_job job;
+static struct gpu_queue_record record;
+static int rc;
+static void peer_join(void *unused){(void)unused;rc=gpu_queue_context_join(&peer_ctx,lease_info);}
+static void stranger_join(void *unused){(void)unused;struct gpu_queue_context c;rc=gpu_queue_context_join(&c,lease_info);}
+static void peer_close(void *unused){(void)unused;rc=gpu_queue_close(peer_ctx,10);}
+static void peer_submit_owner(void *unused){(void)unused;rc=gpu_queue_submit(owner_ctx,&job);}
+static void peer_submit_stale(void *unused){(void)unused;rc=gpu_queue_submit((struct gpu_queue_context){8,1},&job);}
+static void peer_submit(void *unused){(void)unused;rc=gpu_queue_submit(peer_ctx,&job);}
+static void peer_wait(void *unused){(void)unused;rc=gpu_queue_wait(peer_ctx,&record,0);}
+static void recovery_done(void *unused){(void)unused;atomic_store(&q.recovering,0);phase=PVR_GPU_SERVICE_READY;}
+#endif
 static void initialize(void)
 {
     q.service=&service;q.generation=7;q.create_done=1;q.lease_count=1;
     q.lease[0]=(struct gpu_queue_lease_info){.address=0x44000000,.bytes=4096};
-    q.completions=&owner_records;
+    q.completions=xQueueCreateStatic(1,sizeof(struct gpu_queue_record),owner_storage,&owner_state);
+    requests_queue=xQueueCreateStatic(1,sizeof(struct pvr_gpu_service_request),requests_storage,&requests_state);
     q.slot_state=PVR_COMPUTE_QUEUE_IDLE;q.peer.slot_state=PVR_COMPUTE_QUEUE_IDLE;
-    service.clients[0].task=(void *)1;service.worker=(void *)4;service.requests=&requests;
-    scheduler=taskSCHEDULER_NOT_STARTED;
+    service.clients[0].task=owner_task;service.worker=worker_task;service.requests=requests_queue;
+    assert(xTaskGetSchedulerState()==taskSCHEDULER_NOT_STARTED);
     assert(pvr_compute_queue_client_bind(&q));
 }
 #ifndef GPU_CLIENT_BASELINE
+/* The worker's effect: it publishes the completion record, then returns the slot. */
 static void complete(unsigned client,unsigned sequence,unsigned result)
 {
     struct pvr_compute_queue_client_view v;assert(pvr_compute_queue_client_view(&q,client,&v));
-    struct host_queue *h=v.completions;
-    assert(atomic_load(v.client_owed)&&!h->count);
-    h->record=(struct gpu_queue_record){.sequence=sequence,.result=result};h->count=1;
+    struct gpu_queue_record r={.sequence=sequence,.result=result};
+    assert(atomic_load(v.client_owed)&&!uxQueueMessagesWaiting(v.completions));
+    assert(xQueueSend(v.completions,&r,0)==pdTRUE);
     atomic_store(v.sequence,sequence);atomic_store(v.slot_state,PVR_COMPUTE_QUEUE_IDLE);
 }
 static void peer_entry(const struct ss_grant *g){(void)g;}
@@ -129,39 +134,32 @@ static void admission(void)
     }
 }
 #endif
-int main(void)
+
+static void test(void *unused)
 {
-    initialize();
+    (void)unused;
+    assert(xTaskGetSchedulerState()==taskSCHEDULER_RUNNING);
 #ifdef GPU_CLIENT_BASELINE
-    scheduler=taskSCHEDULER_RUNNING;
     assert(gpu_queue_close((struct gpu_queue_context){.generation=7},10)==GPU_QUEUE_OK);
     assert(!atomic_load(&q.final_close));
     puts("PASS reversible close regression");
 #else
-    assert(!pvr_compute_queue_client_register(&q,(void *)1));
-    assert(pvr_compute_queue_client_register(&q,(void *)2));
-    assert(peer_queue_creates==1 && q.peer.completions==&peer_records);
-    assert(!pvr_compute_queue_client_register(&q,(void *)3));
-    scheduler=taskSCHEDULER_RUNNING;
-    struct gpu_queue_context owner={7,0},peer;
-    struct gpu_queue_lease_info info[GPU_QUEUE_LEASES];
-    current=(void *)3;assert(gpu_queue_context_join(&peer,info)==GPU_QUEUE_REFUSED);
-    current=(void *)2;assert(gpu_queue_context_join(&peer,info)==GPU_QUEUE_OK&&peer.client==1);
-    assert(gpu_queue_close(peer,10)==GPU_QUEUE_REFUSED);
-    struct gpu_queue_job job={.sequence=1,.bindings=1,.groups={1,1,1}};
-    assert(gpu_queue_submit(owner,&job)==GPU_QUEUE_REFUSED);
-    assert(gpu_queue_submit((struct gpu_queue_context){8,1},&job)==GPU_QUEUE_REFUSED);
-    assert(gpu_queue_submit(peer,&job)==GPU_QUEUE_OK);
-    current=(void *)1;assert(gpu_queue_submit(peer,&job)==GPU_QUEUE_REFUSED);
+    struct gpu_queue_context owner=owner_ctx=(struct gpu_queue_context){7,0};
+    host_call(stranger_task,stranger_join,NULL);assert(rc==GPU_QUEUE_REFUSED);
+    host_call(peer_task,peer_join,NULL);assert(rc==GPU_QUEUE_OK&&peer_ctx.client==1);
+    host_call(peer_task,peer_close,NULL);assert(rc==GPU_QUEUE_REFUSED);
+    job=(struct gpu_queue_job){.sequence=1,.bindings=1,.groups={1,1,1}};
+    host_call(peer_task,peer_submit_owner,NULL);assert(rc==GPU_QUEUE_REFUSED);
+    host_call(peer_task,peer_submit_stale,NULL);assert(rc==GPU_QUEUE_REFUSED);
+    host_call(peer_task,peer_submit,NULL);assert(rc==GPU_QUEUE_OK);
+    assert(gpu_queue_submit(peer_ctx,&job)==GPU_QUEUE_REFUSED); /* The owner may not use the peer context. */
     assert(gpu_queue_submit(owner,&job)==GPU_QUEUE_OK);
     assert(q.slot.sequence==1&&q.peer.slot.sequence==1);
     complete(0,1,GPU_QUEUE_OK);
-    struct gpu_queue_record record;
     assert(gpu_queue_wait(owner,&record,0)==GPU_QUEUE_OK&&record.sequence==1);
     assert(gpu_queue_close(owner,10)==GPU_QUEUE_BUSY);
     complete(1,1,GPU_QUEUE_OK);
-    current=(void *)2;assert(gpu_queue_wait(peer,&record,0)==GPU_QUEUE_OK&&record.sequence==1);
-    current=(void *)1;
+    host_call(peer_task,peer_wait,NULL);assert(rc==GPU_QUEUE_OK&&record.sequence==1);
     job.sequence=2;
     for(unsigned cycle=0;cycle<10;++cycle){
         assert(gpu_queue_close(owner,10)==GPU_QUEUE_OK&&!atomic_load(&q.final_close));
@@ -169,7 +167,8 @@ int main(void)
         assert(gpu_queue_open(owner,10)==GPU_QUEUE_OK);
     }
     job.sequence=2;assert(gpu_queue_submit(owner,&job)==GPU_QUEUE_OK);
-    complete(0,2,GPU_QUEUE_FAULT);q.recovering=1;recover_at=ticks+3;
+    complete(0,2,GPU_QUEUE_FAULT);q.recovering=1;
+    host_run_at(host_time_us()+3000,recovery_done,NULL);
     assert(gpu_queue_recover(owner,1)==GPU_QUEUE_TIMEOUT);
     assert(atomic_load(&q.client_owed));
     assert(gpu_queue_recover(owner,10)==GPU_QUEUE_OK);
@@ -185,5 +184,23 @@ int main(void)
     admission();
     puts("PASS GPU clients: ten close/open cycles, task ownership, independent pending jobs, retained recovery record, timeout tickets, permanent isolation loss and explicit two-application admission");
 #endif
+}
+int main(void)
+{
+    owner_task=host_rtos_prepare(test,NULL,2,1000000);
+    peer_task=host_server_create("peer",2);
+    stranger_task=host_server_create("stranger",2);
+    worker_task=host_server_create("worker",2);
+    initialize();
+#ifndef GPU_CLIENT_BASELINE
+    /* Registration happens before the scheduler starts. The owner cannot register as the
+     * peer, one peer registers, and a second is refused; the peer queue is the
+     * module's own. */
+    assert(!pvr_compute_queue_client_register(&q,owner_task));
+    assert(pvr_compute_queue_client_register(&q,peer_task));
+    assert(q.peer.completions&&uxQueueGetQueueLength(q.peer.completions)==1);
+    assert(!pvr_compute_queue_client_register(&q,stranger_task));
+#endif
+    host_rtos_start();
     return 0;
 }
