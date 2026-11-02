@@ -10,15 +10,15 @@
  * docs/status/cpu-topology.md records hashes, spread and workload limits.
  * Effective capacity and energy stay unknown without runtime/power evidence. */
 #define PRIVATE_CACHE(i,l1,l2) \
-    {UINT64_C(1)<<(i),(l1),64,1,SS_CACHE_INSTRUCTION,SS_ID_NONE,SS_ID_NONE,SS_ID_NONE}, \
-    {UINT64_C(1)<<(i),(l1),64,1,SS_CACHE_DATA,SS_ID_NONE,SS_ID_NONE,SS_ID_NONE}, \
-    {UINT64_C(1)<<(i),(l2),64,2,SS_CACHE_UNIFIED,SS_ID_NONE,SS_ID_NONE,SS_ID_NONE}
+    {UINT64_C(1)<<(i),(l1),64,1,SS_CACHE_INSTRUCTION,SS_ID_NONE,SS_ID_NONE,SS_ID_NONE,0}, \
+    {UINT64_C(1)<<(i),(l1),64,1,SS_CACHE_DATA,SS_ID_NONE,SS_ID_NONE,SS_ID_NONE,0}, \
+    {UINT64_C(1)<<(i),(l2),64,2,SS_CACHE_UNIFIED,SS_ID_NONE,SS_ID_NONE,SS_ID_NONE,0}
 static const struct ss_cpu_cache caches[]={
     PRIVATE_CACHE(0,32768,131072),PRIVATE_CACHE(1,32768,131072),
     PRIVATE_CACHE(2,32768,131072),PRIVATE_CACHE(3,32768,131072),
     PRIVATE_CACHE(4,32768,131072),PRIVATE_CACHE(5,32768,131072),
     PRIVATE_CACHE(6,65536,262144),PRIVATE_CACHE(7,65536,262144),
-    {0xff,1048576,64,3,SS_CACHE_UNIFIED,A733_CPU_DSU,A733_RAIL_DCDC5,A733_CPU_DSU}
+    {0xff,1048576,64,3,SS_CACHE_UNIFIED,A733_CPU_DSU,A733_RAIL_DCDC5,A733_CPU_DSU,0}
 };
 #define CPU(i,part,domain) { .affinity=(uint64_t)(i)<<8,.siblings=UINT64_C(1)<<(i), \
     .midr=(part),.logical_id=(i),.physical_core=(i),.cluster=0, \

@@ -24,7 +24,7 @@ static struct ss_cpu_topology fixture(unsigned n,unsigned groups,int smt)
             .flags=3,.l1i=SS_ID_NONE,.l1d=SS_ID_NONE,.l2=SS_ID_NONE,.l3=0};
         domains[d].cpus|=UINT64_C(1)<<i;
     }
-    caches[0]=(struct ss_cpu_cache){policy.admitted,1048576,64,3,SS_CACHE_UNIFIED,SS_ID_NONE,SS_ID_NONE,SS_ID_NONE};
+    caches[0]=(struct ss_cpu_cache){policy.admitted,1048576,64,3,SS_CACHE_UNIFIED,SS_ID_NONE,SS_ID_NONE,SS_ID_NONE,0};
     return (struct ss_cpu_topology){.version=1,.calibration_epoch=1,.operating_epoch=2,
         .calibration_source="synthetic fixture",.capacity_workload="fixed test weights",
         .cpus=cpus,.domains=domains,.caches=caches,.cpu_count=n,.domain_count=groups,
