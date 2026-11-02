@@ -29,8 +29,8 @@ time, with no build-time list.
 | `SS_NPU_QUEUE_MAX_HANDLES` (8) | `include/sunstone_npu_queue.h` | One handle per slot, so the slot count. |
 | `SS_NPU_QUEUE_MAX_DEPTH` (64) and `SS_NPU_QUEUE_MAX_TENSORS` (32) | same | Array sizes in the queue (`runtime/npu_app_queue.c`). No hardware limit. The depth is the declared in-flight depth. |
 | `NPU_RUNTIME_MODELS` (16) | `include/npu_runtime.h` | An array of descriptors and plans in the runtime. The models are resident in DRAM; memory bounds them. |
-| `NBG_ASSEMBLY_MAX_TENSORS` (8) and `NBG_ASSEMBLY_MAX_NN` (1024) | `include/nbg_assembly.h` | Array sizes of the loader's plan (stack and static). A graph beyond them is refused today. |
-| Command space per job (at most 524,280 bytes) | `NPU_RUNTIME_COMMAND_BYTES` (the bound), `A733_NPU_FETCH_BYTES` | The hardware field is the upper bound. The doorbell word carries the fetch size in 8-byte units in 16 bits (`vipdMAX_CMD_SIZE` is 65535 * 8 in `vip2/inc/vip_drv_share.h`), so 524,280 bytes. Each slot's command allocation is the stream of the largest resident graph plus one END pair, rounded to a page (4,096 bytes at least), and the doorbell word is the allocation size in 8-byte units. A reservation that also holds graphs loaded at run time uses the bound, because the stream length of a later graph is not known. With the small test graphs all 31 slots fit the 8 MiB pool. |
+| `NBG_ASSEMBLY_MAX_TENSORS` (8) | `include/nbg_assembly.h` | Array size of the loader's plan (stack and static). A graph beyond it is refused. The former limit of 1,024 operations (`NBG_ASSEMBLY_MAX_NN`) is removed: no array was sized by it, and the operation count is bounded by the model container (at most 256 MiB) and, through the command stream, by the slot's memory. |
+| Command space per job (one fetch is at most 524,280 bytes; a stream may be longer) | `NPU_RUNTIME_COMMAND_BYTES` (the default for graphs loaded later), `A733_NPU_FETCH_BYTES` | The hardware field bounds one fetch. The doorbell word carries the fetch size in 8-byte units in 16 bits (`vipdMAX_CMD_SIZE` is 65535 * 8 in `vip2/inc/vip_drv_share.h`), so 524,280 bytes. A longer stream is cut between operations into segments joined by the vendor's LINK command (`docs/hardware/npu-command-formats.md`, "Command segments"), so the stream length is bounded only by the slot. Each slot's command allocation is the stream of the largest resident graph (with its links) plus one END pair, rounded to a page (4,096 bytes at least), and the doorbell word is the allocation size in 8-byte units, at most one fetch. A reservation that also holds graphs loaded at run time uses 524,288 bytes for each command allocation, because the stream length of a later graph is not known; a later graph with a longer stream is refused by the fit check. With the small test graphs all 31 slots fit the 8 MiB pool. |
 | Pool (8 MiB) | `OS_NPU_POOL_BYTES` | The DRAM range that the board reserves for the NPU. It is a choice of the board layout and can grow with it. |
 | NPU virtual address space | `a733_npu_runtime.c`, `place` | 32 bits. Regions start at `0x10000000` and each is followed by a guard page, so about 3.75 GiB. |
 | Page-table memory | `A733_NPU_MMU_MAX_BYTES` (4096 + 256 * 16384) | One 16 KiB leaf table per 16 MiB of device addresses that a region touches, 256 at most. |
@@ -202,3 +202,46 @@ grants, with a bounded wait for the lower priorities. This is the next step afte
    names, loaded after the scheduler has started.
 4. Backpressure measurements and the default depth.
 5. Linking after the scheduler has started, from declared links.
+
+## Models from outside the image
+
+An image does not have to link its models. A model is given to the runtime by an address, a length and a SHA-256
+(`struct npu_runtime_model`, `npu-catalogue.py --external`, cmake `SUNSTONE_OS_NPU_EXTERNAL_MODELS`); the memory at the address
+was filled by something else. The runtime does not care by what. Two sources are supported or planned: a runner input
+region in the application window (`tools/npu-external-pack.py` packs models and the vectors of a test application into two
+regions and writes the maps; the manifest pins the digests of the regions), and a large region that the large-memory loader
+reads from the card into upper memory and checks (not yet used for a model). The digest is checked when LOAD stages the copy,
+once: prepare does not hash a model that carries its digest, because hashing megabytes before the scheduler would outlast
+the one second that the secondary cores wait for the primary core (`platform/a733-smp-cached/continue.c`, exit status 3,
+detail `0x203`). For the same reason the start-up admits each graph once (a graph's layout takes tens of milliseconds on a
+Cortex-A55 at the boot clock: the sizing pass and the per-slot sizing were folded into prepare, and the lease is the whole
+pool), and a queue image loads its resident graphs when the ring opens, after the scheduler has started
+(`npu_runtime_load_resident`: the service worker stages and assembles them, the owner waits). Measured: 18 graphs of 0.85 to
+1.1 MB, 15.3 MB in all, start in the one second and are loaded in well under the six seconds that the application waits for
+the ring.
+
+Two operating-system faults showed up with a longer start and are fixed: the CPU clock owner's entry guard read a busy clock
+lease registry (a try-lock) as a refusal and ended the session; it now tries again. The terminal sequence of the normal return
+parked unless the NPU pool was exactly 8 MiB at `0x47400000`; it accepts a sized pool.
+
+## Backlog
+
+- **The pool and the EL0 tensor windows are limited to the 128 MiB below `0x48000000`.** That is the write-back RAM that
+  EL0 reaches in the cached profile; the DRAM above it is mapped for EL1 only. The pool therefore ends at `0x47000000` or
+  `0x47c00000` and cannot exceed 48 MiB. Moving the pool and the tensor windows to upper memory, mapped through the
+  per-application tables of the large-region work, would bound the pool by the installed DRAM instead. Not started.
+
+## Chains of graphs
+
+A network compiled as several graphs runs as a chain: graph g takes the output of graph g - 1 as its first input. Each graph
+has its own fixed-point position for its input and output (16-bit dynamic fixed point), so the application rescales between
+two graphs: code o at position f_out becomes code round(o * 2^(f_in - f_out)) at position f_in, clamped to 16 bits. The
+rescale runs on the CPU (a shift for each element); a graph that did it would cost a job. The application of the chain
+study (`apps/npu-graphs`, `NPU_GRAPHS_CHAIN`; the format of its data region is `chain.h`) registers a handle for every
+graph, writes the first graph's input, submits graph after graph, reads each output once the job and its cache
+maintenance are done, rescales it into the next input, and takes one greedy token for each frame of the last output. For the
+first records it also compares every graph's output with a reference. It measures, for each record, the whole chain, the
+jobs with their handshakes, the rescales and the decode. Measured for 18 graphs of 92 frames (16 attention layers between a
+convolutional subsampling and a linear head), on the Cortex-A55 core at 1794 MHz with the NPU at 852 MHz: 24.63 ms for a
+chain, of which 23.19 ms for the 18 jobs one after another with the SDK handshake (the batch of 18 jobs without the
+handshake takes 22.75 ms), 1.10 ms for the 17 rescales and 0.32 ms for the decode.

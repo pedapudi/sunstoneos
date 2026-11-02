@@ -43,10 +43,11 @@ static int admit(const unsigned char *data, size_t bytes, unsigned char digest[3
 {
     struct nbg_model model;
     if (digest) storage_digest_bytes(data, bytes, digest);
-    /* The command allocation is the graph's own stream rounded to a page (the layout bounds it by the hardware field),
-     * so a slot is sized by the largest resident graph and not by the hardware maximum. */
-    return nbg_model_open(data, bytes, &model) == NBG_DECODE_OK && nbg_assembly_layout(&model, layout) &&
-           layout->buffers[NBG_ALLOC_COMMAND].allocation_bytes <= NPU_RUNTIME_COMMAND_BYTES;
+    /* The command allocation is the graph's own stream rounded to a page; a stream longer than one fetch continues
+     * through links (nbg_assembly.c), so nothing bounds it here but the slot: a slot is sized by the largest resident
+     * graph, and a graph registered later that needs a longer command region than its slot holds is refused by the
+     * fit check there (npu_runtime_register, LOAD). */
+    return nbg_model_open(data, bytes, &model) == NBG_DECODE_OK && nbg_assembly_layout(&model, layout);
 }
 struct sizes { size_t command, constant, read, write, staging; };
 static void need(const struct nbg_assembly_layout *l, size_t model_bytes, struct sizes *s)
@@ -165,7 +166,13 @@ static int sized(const struct npu_runtime_model *models, unsigned count, unsigne
     for (unsigned m = 0; m < count; ++m) {
         if (!a733_span_incl_nonempty(models[m].data, models[m].bytes) ||
             models[m].bytes > NBG_MODEL_MAX_BYTES ||
-            !admit(models[m].data, models[m].bytes, digests ? digests[m] : digest, plans ? &plans[m] : &one)) return 0;
+            !admit(models[m].data, models[m].bytes, models[m].sha256 ? NULL : (digests ? digests[m] : digest),
+                   plans ? &plans[m] : &one)) return 0;
+        /* A model given with its digest is not hashed here: the declared digest is the reference, and LOAD hashes the copy
+         * it stages and refuses a copy that differs, so the content is checked once, when it is first used, and not in
+         * a sizing pass and again in prepare (hashing megabytes takes seconds before the scheduler, where the secondary
+         * cores wait only a second for the primary core). */
+        if (models[m].sha256 && digests) memcpy(digests[m], models[m].sha256, 32);
         need(plans ? &plans[m] : &one, models[m].bytes, z);
     }
     if (bounds && bounds->slot_model) {
@@ -254,8 +261,8 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     rt->plans = (struct nbg_assembly_layout *)(v.cpu + entries * sizeof(struct npu_runtime_model));
     rt->model_digest = (unsigned char (*)[32])(v.cpu + entries * (sizeof(struct npu_runtime_model) +
                                                                   sizeof(struct nbg_assembly_layout)));
-    if (!sized(v.models, v.count, v.slots, &v.bounds, rt->model_digest, rt->plans, &z, &p) || p.bytes != v.bytes) return fault(rt);
-    for (unsigned m = 0; m < v.count; ++m) rt->catalogue[m] = v.models[m];
+    if (!sized(v.models, v.count, v.slots, &v.bounds, rt->model_digest, rt->plans, &z, &p) || p.bytes > v.bytes) return fault(rt);
+    for (unsigned m = 0; m < v.count; ++m) rt->catalogue[m] = (struct npu_runtime_model){v.models[m].data, v.models[m].bytes, NULL};
     atomic_init(&rt->count, v.count); rt->capacity = v.count + v.bounds.capacity; rt->slots = v.slots;
     rt->command_bytes = z.command; rt->constant_bytes = z.constant; rt->read_bytes = z.read; rt->write_bytes = z.write;
     rt->staging_bytes = z.staging; rt->staging = v.cpu + p.staging;
@@ -479,6 +486,7 @@ static int same_plan(const struct nbg_assembly_layout *a, const struct nbg_assem
 static void load_end(struct npu_runtime *rt, struct npu_runtime_slot *s, int loaded)
 {
     unsigned index = (unsigned)(s - rt->slot);
+    const unsigned silent = s->resident_load; /* read before the state changes: the owner clears it once the slot is READY */
     if (loaded) {
         s->end_mark = s->stream_bytes;
         ++rt->counters.loads;
@@ -490,7 +498,7 @@ static void load_end(struct npu_runtime *rt, struct npu_runtime_slot *s, int loa
         set_state(s, NPU_RUNTIME_EMPTY);
     }
     rt->loading = NPU_RUNTIME_SLOTS;
-    if (rt->bound)
+    if (rt->bound && !silent)
         npu_service_release(&rt->service, index, loaded ? NPU_SERVICE_OK : NPU_SERVICE_INVALID, A733_NPU_READY);
 }
 /* A failed native adapter treats any further time read as fatal; a retained
@@ -926,6 +934,35 @@ int npu_runtime_preload(struct npu_runtime *rt, unsigned slot, unsigned model)
     memset((void *)s->write.cpu, 0, s->write.bytes);
     return maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->read.cpu, s->read.bytes) &&
         maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->write.cpu, s->write.bytes);
+}
+/* Load the graph of a slot after the scheduler has started, for a resident client (a queue image keeps one graph in each
+ * slot). The owner marks the slot LOADING like a LOAD request and wakes the service worker, which stages, hashes and
+ * assembles it in its steps, as for any LOAD; the owner waits and then initializes the slot's windows as preload does. A
+ * graph whose copy does not hash to its declared digest leaves the slot EMPTY and returns 0. This keeps the megabytes of
+ * hashing and copying out of the start-up that the secondary cores wait for (one second). */
+int npu_runtime_load_resident(struct npu_runtime *rt, unsigned slot, unsigned model)
+{
+    if (!good(rt) || !rt->bound || !rt->resident || slot >= rt->slots || model >= atomic_load_explicit(&rt->count, memory_order_acquire) ||
+        xTaskGetSchedulerState() != taskSCHEDULER_RUNNING || xTaskGetCurrentTaskHandle() != rt->slot[0].client) return -1;
+    /* The NPU start-up is not finished, or a direct queue owns the runtime: not yet. */
+    if (rt->service.direct || rt->service.direct_request || rt->service.has_deferred ||
+        rt->service.controller.state != A733_NPU_READY) return 0;
+    struct npu_runtime_slot *s = &rt->slot[slot];
+    if (state(s) == NPU_RUNTIME_READY) return s->model == model ? 1 : -1;
+    if (state(s) != NPU_RUNTIME_EMPTY) return -1;
+    s->model = model; s->resident_load = 1; set_state(s, NPU_RUNTIME_LOADING);
+    for (unsigned waited = 0; state(s) == NPU_RUNTIME_LOADING && good(rt); ++waited) {
+        if (waited > 20000) return -1;          /* a graph takes about 15 ms; 20 s is a stuck worker */
+        xTaskNotifyGive(rt->service.worker);
+        vTaskDelay(1);
+    }
+    s->resident_load = 0;
+    if (state(s) != NPU_RUNTIME_READY || !good(rt)) return -1;
+    /* Workspace and padding initialize once, before any device can use them. */
+    memset((void *)s->read.cpu, 0, s->read.bytes);
+    memset((void *)s->write.cpu, 0, s->write.bytes);
+    return maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->read.cpu, s->read.bytes) &&
+        maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->write.cpu, s->write.bytes) ? 1 : -1;
 }
 int npu_runtime_register(struct npu_runtime *rt, const void *model, size_t bytes, unsigned *index)
 {

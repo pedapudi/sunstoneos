@@ -107,7 +107,8 @@ An operation with a second input has patches at descriptor word 34 and, when the
 35, and `0x0e4c` bit 12 set. Observed sources of the second input: a graph input (patch source 1; an
 element-wise multiplication compiles to a neural-network operation, an addition or subtraction to a
 stream-processor operation, a batched matrix product to neural-network operations that take both operands from
-graph inputs), VIP SRAM (source 8), and the dynamic-input section (source 6, stream-processor operations).
+graph inputs), VIP SRAM (source 8), the dynamic-input section (source 6, stream-processor operations) and a range of the
+memory pool (source 3; the attention products of a layer of 184 frames or more, once the scores no longer fit VIP SRAM).
 
 Rules that hold in all 441 operations of five layer graphs and the single-operation graphs, and that the loader
 verifies (class **Inferred**; they only refuse):
@@ -115,7 +116,7 @@ verifies (class **Inferred**; they only refuse):
 | Case | Word 33 | Word 35 (low 26 bits) | Pointer words |
 | --- | --- | --- | --- |
 | No second input | 0 | not examined | word 34 below `0x100000` (see "Unpatched pointer words") |
-| Second input from a graph input or the dynamic-input section | 1, or 0 for a batched matrix product | `0x03ffffff` (disabled) | word 34 patched |
+| Second input from a graph input, the dynamic-input section or the pool | 1, or 0 for a batched matrix product | `0x03ffffff` (disabled) | word 34 patched |
 | Second input in VIP SRAM | ring size in 32-byte units (**confirmed**, below) | the ring limit, patched as an end address | word 34 patched; the start lies in [limit - size, limit) |
 
 **Ring unit, confirmed by mutation.** In a graph whose second operand is a result in VIP SRAM (an addition of a graph input and
@@ -197,7 +198,7 @@ The state stream (load-state table, 472 to 1136 bytes) is a sequence of packets.
 | S4 | The uniform bank is the register range `0xd800` to `0xd8ff`. Packets of 1 to 4 operands; no word is written twice | Highest word written: `0xd883` |
 | S5 | `0x0424` is the instruction count, `0x0425` the count minus one, and 16 times the count equals the length of the program table entry | 66 of 66 |
 | S6 | The patch list holds exactly one source-0 patch, on the `0x040a` operand with index -1, source offset 0 and transformed field 0; every other patch is a kind-0 patch on an operand word of a uniform packet; no word is patched twice | 66 of 66 |
-| S7 | A patched word that opens a 4-operand uniform packet at a register that is a multiple of 4 from `0xd800`, followed by a 4-operand packet at the next register, starts a tensor descriptor (below): channel stride = row stride x height, depth not zero | 160 of 160 descriptors |
+| S7 | A patched word that opens a 4-operand uniform packet at a register that is a multiple of 4 from `0xd800`, followed by a 4-operand packet at the next register, starts a tensor descriptor (below): channel stride = row stride x height, with height = channel stride / row stride a whole number, depth not zero, and word 2 equal to height x 65,536 plus the width, for a width in elements that does not exceed the row stride in bytes. **A width or a height of 65,536 or more is refused** (reason `NBG_REFUSED_DIMENSION`): the engine's shader reads 16-bit fields (next paragraph) | 623 of 652 descriptors of 337 graphs satisfy the former rule `word 2 >> 16 = height`; the 18 that need the carry are the whole-length attention layers of 184 frames and more, which are now refused; the other 11 are listed below |
 | S8 | Offset plus the descriptor extent (channel stride x depth) is at most the size of the region the patch names | 160 of 160 |
 | S9 | The shader table entry exists, names a program row, the parameter row is 0, and the program lies inside the program section | 66 of 66 |
 
@@ -242,7 +243,7 @@ with the program.
 | --- | --- | --- | --- |
 | 0 | Address (patched) | Confirmed | A plain 32-bit byte address; moving the patch offset by 64 bytes moves reads and writes by 32 half-precision elements (every source, below) |
 | 1 | Row stride in bytes = row elements x element bytes | Confirmed | Doubling it makes row y read from byte 32 y (resize, exact) |
-| 2 | Height << 16 or width | Confirmed | Rows or columns past the bound read as the last row or column (clamped). A 16 x 64 flat tensor has height 1 and width 1024, or height 2 and width 32768 when the width does not fit |
+| 2 | Height << 16 plus width, modulo 2^32 | Confirmed (short tensors); long tensors by the layer graphs of the encoder, below | Rows or columns past the bound read as the last row or column (clamped). A 16 x 64 flat tensor has height 1 and width 1024, or height 2 and width 32768 when the width does not fit. The compiler adds the width to the height shifted by 16 without masking: a width of 65,536 or more carries into the height, and a height of 65,536 or more is cut at 32 bits |
 | 3 | Element format | Inferred | Bit 12 is set exactly when height is greater than 1 (160 of 160); the low byte is `0x71` for half precision (121), `0xf1` (14), `0x41` (3), `0xc1` (1), `0xb2` for 32-bit integer indices (23), `0x32` for single precision (2), `0x72` (1); the high half is `0x4440` or `0x3210` for integers |
 | 4 | Channel stride in bytes = row stride x height | Confirmed | Halving it makes channel c read from byte 64 c (resize, exact); the output descriptor behaves the same |
 | 5 | Depth (channels) | Unknown | Doubling or halving it changes nothing: the work description fixes the channel count |
@@ -285,6 +286,66 @@ the next operation. The first shader operation of a graph carries the prologue; 
 neural-network and transpose operations that surround a shader keep their own rules. Class: Inferred from the vendor
 concatenation rule and from the existing assembly of the relative-shift model (`nbg_sh_nt.c`); no board run qualifies it.
 
+**Long tensors (S7): the hardware cannot run a dimension of 65,536 or more.** The relative-shift gather of an attention layer reads
+the position-score table, `rows` x (2T - 1) 16-bit elements per head, as one flat tensor, and its constant index table holds
+`rows` x T 32-bit indices, where `rows` is T for whole-length attention or the number of query rows in a block. The compiler
+writes word 2 as width + (height << 16) in 32 bits without masking:
+
+| Graph | Descriptor | Row stride | Word 2 | Width x height | Low and high 16 bits of word 2 |
+| --- | --- | --- | --- | --- | --- |
+| 184 frames, whole length | scores | 135,056 | `0x000507c8` | 67,528 x 4 | width 1,992, height 5 |
+| 276 frames, whole length | scores | 304,152 | `0x0006520c` | 152,076 x 4 | width 21,004, height 6 |
+| 276 frames, whole length | indices | 4 | `0x29900001` | 1 x 76,176 | width 1, height 10,640 |
+
+The board separates the graphs by this dimension (one layer, 300 jobs or three consecutive jobs, one slot). The mechanism, that the
+shader reads the 16-bit fields, is the inference that fits this table; no board run has varied the field alone:
+
+| Graph | Widest flat dimension | Board output |
+| --- | --- | --- |
+| 92 frames, whole length | 16,836 | byte-exact with the simulator |
+| 184 frames, 92-row blocks | 33,764 | byte-exact |
+| 276 frames, 92-row blocks | 50,692 (index rows 25,392) | byte-exact |
+| 184 frames, whole length | 67,528 | different in every run |
+| 368 frames, 92-row blocks | 67,620 | different in every run |
+| 460 and 512 frames, 92-row blocks | 84,548 and 94,116 | different in every run |
+| 276 frames, whole length | 152,076 (index rows 76,176) | wrong by up to 305 steps |
+
+The SDK simulator computes with the 32-bit values and returned the compiler's intended result for every one of these graphs, so
+agreement with the simulator does not cover this limit. The loader therefore refuses a descriptor whose width or height, taken
+from the strides, is 65,536 or more; a layer must be compiled with every flat shader dimension below that (for the
+relative shift, query blocks of at most 65,535 / (2T - 1) rows: 64 rows up to 512 frames). The 11 descriptors of the corpus that
+satisfy neither the old nor the new rule are mutated shader experiments (`rn_a`: the height halved or doubled, the stride
+doubled) and two compiled graphs (an einsum and a scatter) whose channel stride is not the product of the row stride and the
+height field; the loader refuses them, as before.
+
+### Command segments
+
+The doorbell word `+0x3a4` carries the fetch size in 16 bits of 8-byte units, so one fetch is at most 524,280 bytes
+(`vipdMAX_CMD_SIZE`). The vendor's stream carries a LINK command for a longer buffer: `cmd_link` (`vip2/vip_drv_hardware.c`) writes
+`(8 << 27) | (vipdMAX_CMD_SIZE >> 3)` and then the target address, and the vendor's linker library `libNBGlinker.so` names the
+operation in its messages ("fail to insert LINK command for big command buffer, split command size=0x%x, max support size=0x%x",
+`nbglk_insert_link`, `split_node`). The vendor driver itself uses the same command to join the MMU-flush states to a command
+buffer and to loop the wait-link table. The command is two words: opcode 8 in bits 31:27 with the size of the next fetch in
+8-byte units in the low bits, then the device address of the next segment. The NBG file holds one load-state stream per
+operation and no link; the compiler never splits a graph, the linker does, when it places the buffer.
+
+The loader does the same. `nbg_assembly.c` places the operation streams in order; when the next stream and a link would pass
+`NBG_SEGMENT_BYTES` (524,280) from the start of the current segment, it writes a LINK at the end of the segment (aligned to 8 bytes
+because every stream is), starts the next segment on a 64-byte boundary of the same command allocation, fills the bytes between with
+END words, and gives the LINK the address of the segment and a fetch size of the rest of the allocation (at most 524,280). The
+footer starts a segment of its own when it does not fit. The first fetch is the whole allocation up to one fetch, as before. The
+segments are inside the allocation, which the page tables map read-only, so a link names no address the stream could not already
+fetch. An operation stream longer than a segment (524,208 bytes) is refused. The layer graphs of the encoder do not need a link:
+the stream of one layer is 33,856 bytes at T = 184, 42,464 at 276, 78,184 at 368, 239,128 at 460 and 501,208 at 512 (the
+loader checks the link on the board with a build whose segment limit is 16,384 bytes; see the status document), so only a graph of
+two layers at T = 512, or of three at T = 460, would join segments in production.
+
+Host evidence: `checks/nbg-command-link.py` builds the assembler with segment limits of 192 to 1,100 bytes, assembles eight
+compiled graphs in the one-call and the stepwise way, follows the links as the front end does, and requires the executed states
+to equal the unsplit stream's, every segment to be within the limit, every link to name an aligned address inside the allocation
+with the fetch size above, and the two ways to write the same bytes. Two controls (a link to the wrong address, a fetch size past
+the allocation) are caught.
+
 ### Loader specification (shader operations)
 
 1. Admit kind 1 only for graphs whose digest is in the reviewed catalogue, as for the other kinds.
@@ -302,7 +363,8 @@ concatenation rule and from the existing assembly of the relative-shift model (`
    source 6 require only that the offset lies inside the table row.
 6. Write the pad word `0x18000000` into every pad position.
 7. Copy the stream into the command buffer at an 8-byte aligned position. The state length is at most 1136 bytes in the
-   graphs examined; refuse a stream longer than 4096 bytes.
+   graphs examined and has no fixed limit: a stream is refused only when it cannot share a command segment with its link
+   (see "Command segments" below), which is a stream of more than 524,208 bytes.
 8. Do not edit, reorder or drop registers other than pad words and patched words. Do not interpret the program.
 9. Keep the programs and the uniform constants inside the digest of rule 1. The 31 program digests of the graphs examined
    can seed a program catalogue as for kind 6.

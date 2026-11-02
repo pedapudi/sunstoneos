@@ -42,7 +42,7 @@ CHECK_INPUTS = ['apps/cpu-npu-concurrency/main.c', 'apps/cpu-npu-concurrency/gem
  'checks/os-cpu-return.py', 'apps/os/thermal.c', 'apps/os/thermal-report.py',
  'apps/os/cpu-return-thermal.py', 'tools/board.py', 'tools/board_images.py']
 MAIN, CLIENT, BOOTSTRAP, WORKER = 0x5000, 0x3000, 0x4000, 0x9000
-POOL, POOL_BYTES = 0x47400000, 0x800000
+POOL, POOL_BYTES = 0x47400000, 0x800000  # replaced by the image's own pool symbols in main()
 
 
 def module(name, path):
@@ -556,6 +556,13 @@ def main():
     parser.add_argument('--cc', default='/usr/bin/cc')
     parser.add_argument('--payload', type=Path, help='Reuse an unchanged successful actual producer payload.')
     args = parser.parse_args();args.out.mkdir(parents=True, exist_ok=False)
+    # The pool is the one the image links: the legacy 8 MiB or a pool sized from the declaration (host rule of the normal
+    # return, apps/os/cpu-return-host.py npu_pool_extent_valid).
+    global POOL, POOL_BYTES
+    host_rule = module('chain_pool_rule', ROOT/'apps/os/cpu-return-host.py')
+    symbols = host_rule.linked_symbols(args.elf)
+    POOL, POOL_BYTES = symbols['__os_npu_pool_start'][0], symbols['__os_npu_pool_end'][0] - symbols['__os_npu_pool_start'][0]
+    assert host_rule.npu_pool_extent_valid(POOL, POOL+POOL_BYTES), 'unsupported NPU pool extent'
     payload = args.payload.read_bytes() if args.payload else producer(args)
     names = {'board_application', 'a733_board_session', 'board_provider', 'a733_native_usb',
         'a733_pmic', 'a733_pmic_slot', 'a733_platform_locks', 'os_thermal_service',
@@ -576,7 +583,7 @@ def main():
     assert not returns.postclean
     assert all(returns.u64(returns.local['arrived']+core*8)==epoch for core in range(8))
     for ranges in returns.ranges:
-        assert sum((hi-lo)//64 for lo, hi in ranges if POOL <= lo < POOL+POOL_BYTES) == 131072
+        assert sum((hi-lo)//64 for lo, hi in ranges if POOL <= lo < POOL+POOL_BYTES) == POOL_BYTES//64
     record = layout.address('ss_result_record')
     envelope = bytes(returns.uc.mem_read(record, 56+len(payload)))
     stop = bytes(returns.uc.mem_read(native.report, 104))
@@ -600,7 +607,7 @@ def main():
     save(args.out/'result.json', dict(passed=True, physical_access=False, model_boundary=__doc__,
         image_sha256=hashlib.sha256(args.elf.read_bytes()).hexdigest(), binding=binding,
         epoch=epoch, generation=generation, sdk_operations=native.ops, sdk_jobs=native.submits,
-        local_stop_calls=native.stop_calls, pool_lines_per_core=131072, runner_cleanup=cleanup,
+        local_stop_calls=native.stop_calls, pool_lines_per_core=POOL_BYTES//64, runner_cleanup=cleanup,
         stages=['actual-host-GEMM-receipt','actual-public-SDK-mailbox-and-copy',
                 'actual-CLOSE','actual-worker-park','actual-bootstrap-local-stop',
                 'actual-immutable-report','actual-ss_finish','actual-owner-retirement',

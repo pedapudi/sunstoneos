@@ -115,6 +115,40 @@ Items the coordinator or the work added after the finish line was fixed; they ar
    return; it is not an NPU result and was not submitted again.
 6. The mimus encoder on the NPU, on the mimus branch, after this plan.
 
+## Larger catalogues and a sized pool
+
+Eighteen compiled graphs (15.3 MB) run resident through the EL0 queue on the board (port 3-3, 852 MHz and 800 mV, Cortex-A55
+at 1794 MHz): the pool of 22 MiB, placed below the monitor interval, holds one slot for each graph, sized from the graph; the
+models come from a runner input region and the runtime checks their digests when it loads them. One pass over the 18 jobs takes
+22.75 ms, every output equals the simulator's byte for byte. The loader admits unpatched pointer words below 1 MiB (rule 5 of
+the loader specification). See [the resources design](../designs/npu-resources.md), "The pool" and "Models from outside the image".
+
+## Long attention layers (2026-11-02)
+
+The loader admits compiled conformer layers of 184 to 512 frames, which it refused before, with these limits lifted: the second
+input of a matrix product may lie in the pool, the operation count and the shader stream length have no fixed limit, and a
+command stream longer than one fetch is cut into segments joined by LINK commands (`docs/hardware/npu-command-formats.md`,
+"Command segments"). It refuses a shader tensor descriptor whose width or height is 65,536 or more (`NBG_REFUSED_DIMENSION`), because the
+engine's shape fields are 16 bits wide; see "Long tensors" there. The layers are the proof graphs of the mimus encoder study
+(176 channels, one layer, own quantization), run through the OS NPU service in queue mode on port 3-3 at 852 MHz and 800 mV, one
+slot, 100 jobs at queue depth 1, 2 and 4.
+
+| Frames | Attention | Widest flat dimension | Operations | Board job (ms) | Output |
+| --- | --- | --- | --- | --- | --- |
+| 92 | whole | 16,836 | 153 | 1.26 | byte-exact |
+| 184 | 92-row blocks | 33,764 | 320 | 4.83 | byte-exact after 300 jobs |
+| 276 | 92-row blocks | 50,692 | 502 | 8.00 | byte-exact after 300 jobs |
+| 184 | whole | 67,528 | 450 | 5.81 | different in every run (refused now) |
+| 276 | whole | 152,076 | 643 | 35.6 | wrong by up to 305 steps (refused now) |
+| 368 | 92-row blocks | 67,620 | 598 | 14.77 | different in every run (refused now) |
+| 460, 512 | 92-row blocks | 84,548, 94,116 | 5,482, 3,719 | 47.8, 45.3 | different in every run (refused now) |
+
+Identical jobs of the failing graphs return different bytes (four consecutive jobs of the 184-frame whole-length layer differ from
+one another in about 9,000 of 64,768 bytes, and the first job after load is already wrong), the differences are confined to
+the early rows and are not tied to pages or cache lines, and the 16 KiB segmented stream of that layer behaves like the unsplit
+one (300 jobs without a fault; rows computed after both links equal the simulator). The segmented run shows that the front end follows the
+links.
+
 ## Open work
 
 1. Done: declared resources, run-time graph loading, shader integration, backpressure depth and tensor linking after the scheduler starts (see "What the NPU runs now"). What remains of this item is the backlog below.

@@ -15,6 +15,7 @@ option(SUNSTONE_A733_OS_NPU_OBSERVE "Opt-in serialized NPU diagnostic sampling" 
 option(SUNSTONE_A733_OS_NPU_QUEUE "EL0 resident NPU submission ring on the routed core" OFF)
 set(SUNSTONE_OS_NPU_QUEUE_MODELS "" CACHE STRING "Comma-separated resident model indices, client model first")
 set(SUNSTONE_OS_NPU_POOL_BYTES "8388608" CACHE STRING "Bytes of the NPU pool: 8 MiB at 0x47400000, or 10 to 48 MiB in blocks of 2 MiB ending at 0x47000000 (size it from the declaration with checks/npu-pool-size.py)")
+set(SUNSTONE_OS_NPU_EXTERNAL_MODELS "" CACHE FILEPATH "JSON {name: {address, bytes, sha256}} of models given by address, length and digest instead of linked bytes (runner input region or card)")
 set(SUNSTONE_OS_NPU_QUEUE_DEPTH "" CACHE STRING "Ring depth of the NPU queue: the application's declared in-flight jobs (empty: 64)")
 set(SUNSTONE_OS_NPU_MAX_TENSORS "" CACHE STRING "Most inputs, and most outputs, of one NPU graph that the loader admits (empty: 8)")
 if(NOT SUNSTONE_OS_NPU_MAX_TENSORS STREQUAL "")
@@ -262,6 +263,9 @@ if(SUNSTONE_A733_OS_NPU)
   endif()
   if(SUNSTONE_A733_OS_NPU_QUEUE AND SUNSTONE_OS_NPU_QUEUE_MODELS)
     list(APPEND os_npu_select --queue-models "${SUNSTONE_OS_NPU_QUEUE_MODELS}")
+  endif()
+  if(NOT SUNSTONE_OS_NPU_EXTERNAL_MODELS STREQUAL "")
+    list(APPEND os_npu_select --external "${SUNSTONE_OS_NPU_EXTERNAL_MODELS}")
   endif()
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/apps/os/npu-catalogue.py"
     --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --models "${SUNSTONE_OS_NPU_MODELS}" ${os_npu_select}

@@ -24,6 +24,7 @@
 #include "npu_arch.h"
 #include "a733_npu_native.h"
 #include "a733_npu_memory.h"
+#include "a733_storage_digest.h"
 #include "a733_mapping_check.h"
 #include "../apps/board/application.h"
 #include <assert.h>
@@ -589,7 +590,7 @@ int main(int argc, char **argv)
         printf("declarations: one slot %zu bytes, four slots %zu bytes; every refusal names its resource\n", one, many);
         return 0;
     }
-    assert(mode == 20 || mode == 21 || mode == 26 || mode == 27 || mode == 28 || mode == 29 || mode == 30 || ((mode == 22 || mode == 25) && argc == 3));
+    assert(mode == 20 || mode == 21 || mode == 26 || mode == 27 || mode == 28 || mode == 29 || mode == 30 || mode == 31 || ((mode == 22 || mode == 25) && argc == 3));
     if (argc == 3) input_directory = argv[2];
     if (mode == 21) bootstrap_us = 30000;
     if (mode == 26) { long_run = (unsigned)strtoul(getenv("LONG_JOBS") ? getenv("LONG_JOBS") : "120000", NULL, 0); job_us = 3; }
@@ -634,7 +635,31 @@ int main(int argc, char **argv)
         .physical = (uintptr_t)pool, .bytes = need, .register_cpu = (uintptr_t)register_page,
         .register_physical = 0x03600000, .fatal = fatal};
     config.models = os_npu_models;
+    if (mode == 31) {
+        /* Models given with the digest they must have (a model delivered from outside the image: a runner input region, or
+         * upper memory loaded from the card). Prepare accepts the right digest and refuses a digest that differs by one bit. */
+        static struct npu_runtime_model given[16];
+        static unsigned char digests[16][32];
+        assert(os_npu_model_count <= 16);
+        for (unsigned i = 0; i < os_npu_model_count; ++i) {
+            storage_digest_bytes(os_npu_models[i].data, os_npu_models[i].bytes, digests[i]);
+            given[i] = (struct npu_runtime_model){os_npu_models[i].data, os_npu_models[i].bytes, digests[i]};
+        }
+        if (getenv("BAD_DIGEST")) {
+            digests[os_npu_model_count - 1][5] ^= 1;
+            config.models = given;
+            assert(npu_runtime_prepare(&npu.runtime, &config));          /* prepare does not hash a model given with a digest */
+            assert(!npu_runtime_preload(&npu.runtime, 0, os_npu_model_count - 1)); /* its first LOAD refuses the copy */
+            puts("PASS a model whose digest differs is refused at its first LOAD");
+            return 0;
+        }
+        config.models = given;
+    }
     assert(npu_runtime_prepare(&npu.runtime, &config));
+    if (mode == 31) {
+        assert(npu_runtime_preload(&npu.runtime, 0, 0));   /* the staged copy hashes to the declared digest */
+        puts("PASS models given with their digests are accepted at prepare and at LOAD"); return 0;
+    }
     if (mode == 28 || mode == 30) {
         const unsigned n = npu.runtime.slots;
         /* Thirty-one slots: every slot's regions are registered, distinct, ascending and inside the NPU's 32-bit address

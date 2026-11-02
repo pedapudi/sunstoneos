@@ -24,7 +24,7 @@ def models(model_list=MODELS):
     """The OS application's catalogue entries, in model-list order."""
     return catalogue_tool().application_models([model_list])
 
-def generate(artifacts, output, model=0, model_list=MODELS, all_models=False, model_name=None, queue_models=None):
+def generate(artifacts, output, model=0, model_list=MODELS, all_models=False, model_name=None, queue_models=None, external=None):
     # Keep the resident queue producer's positional list compatible.
     if isinstance(model_list, (list, tuple)):
         queue_models, model_list = model_list, MODELS
@@ -60,10 +60,23 @@ def generate(artifacts, output, model=0, model_list=MODELS, all_models=False, mo
         name = entry['name']
         if not name or len(name.encode('utf-8')) >= 64 or '\0' in name:
             raise ValueError('Model name exceeds SS_NPU_MODEL_NAME_BYTES capacity')
-        files = catalogue_tool().artifact_files(paths, name)
-        data = blob(f'model_{i}', files['model'], entry['model'])
-        rows.append(f'{{model_{i},sizeof(model_{i})}}')
-        digests += hashlib.sha256(data).digest()
+        if external and name in external:
+            # A model that is not linked: its bytes are at an address of RAM that something else filled (a runner input region,
+            # or a large region loaded from the card), and the runtime checks at prepare that they have this length and digest.
+            # The catalogue code does not care which source it is. The reviewed identity in the catalogue must be the same.
+            ex = external[name]
+            if ex['bytes'] != entry['model']['bytes'] or ex['sha256'] != entry['model']['sha256']:
+                raise ValueError(f'{name}: external model differs from its reviewed identity')
+            if not isinstance(ex['address'], int) or ex['address'] % 64:
+                raise ValueError(f'{name}: external address must be a 64-byte aligned number')
+            text += f'static const unsigned char model_{i}_sha256[32]={{' + ','.join(map(str, bytes.fromhex(ex['sha256']))) + '};\n'
+            rows.append(f'{{(const void *)UINT64_C({ex["address"]}),{ex["bytes"]},model_{i}_sha256}}')
+            digests += bytes.fromhex(ex['sha256'])
+        else:
+            files = catalogue_tool().artifact_files(paths, name)
+            data = blob(f'model_{i}', files['model'], entry['model'])
+            rows.append(f'{{model_{i},sizeof(model_{i}),0}}')
+            digests += hashlib.sha256(data).digest()
         sizes = [sum(t['logical_bytes'] for t in entry[field]) for field in ('inputs', 'outputs')]
         if not all(0 < n <= 1024 * 1024 for n in sizes):
             raise ValueError('Model tensors exceed SS_NPU_MAX_TENSOR_BYTES capacity')
@@ -98,10 +111,12 @@ if __name__ == '__main__':
     p.add_argument('--models', default=str(MODELS), help='application model-list JSON or legacy comma-separated queue indices')
     p.add_argument('--queue-models', help='comma-separated resident entries, client first')
     p.add_argument('--all', action='store_true', help='link all listed models')
+    p.add_argument('--external', help='JSON {name: {address, bytes, sha256}}: models given by address, length and digest instead of linked bytes')
     a = p.parse_args()
     queue = None if a.queue_models is None else [int(i) for i in a.queue_models.split(',')]
     model_list = Path(a.models)
     if not model_list.is_file() and all(i.strip().isdigit() for i in a.models.split(',')):
         if queue is not None:p.error('Specify queue indices once')
         queue = [int(i) for i in a.models.split(',')]; model_list = MODELS
-    generate(a.artifacts, a.output, a.model, model_list, a.all, a.model_name, queue)
+    external = json.loads(Path(a.external).read_text()) if a.external else None
+    generate(a.artifacts, a.output, a.model, model_list, a.all, a.model_name, queue, external)
