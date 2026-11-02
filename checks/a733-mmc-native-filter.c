@@ -95,6 +95,21 @@ static int command(uint32_t word, uint32_t arg, uint32_t blksz, uint32_t bcnt)
 int main(void)
 {
     make_blob();
+    /* The PF selector: UHS-I profile only; 1.8 V (value 0) then, after that write and with the card clock off, 3.3 V (value 1). */
+    fresh(SUNXI_MMC_SD, SUNXI_MMC_SD_UHS_SDR104, 0);
+    assert(!n.operations.write(&n, 0x02000070, 1) && !n.operations.write(&n, 0x02000070, 2));          /* no restore before the switch */
+    assert(n.operations.write(&n, 0x02000070, 0) && !n.operations.write(&n, 0x02000070, 0));           /* 1.8 V once */
+    a733_native_host_store(cur_base + SUNXI_SMHC_CLKCR, 1u << 16);
+    assert(!n.operations.write(&n, 0x02000070, 1));                                                    /* the card clock is running */
+    a733_native_host_store(cur_base + SUNXI_SMHC_CLKCR, 0);
+    task_ok = 0; assert(!n.operations.write(&n, 0x02000070, 1)); task_ok = 1;                          /* not the owning task */
+    assert(n.operations.write(&n, 0x02000070, 1) && !n.operations.write(&n, 0x02000070, 1));           /* 3.3 V once */
+    for (unsigned profile = SUNXI_MMC_SD_LEGACY; profile < SUNXI_MMC_SD_UHS_SDR104; ++profile) {
+        fresh(SUNXI_MMC_SD, (enum sunxi_mmc_sd_profile)profile, 0);
+        assert(!n.operations.write(&n, 0x02000070, 0) && !n.operations.write(&n, 0x02000070, 1));      /* other profiles never write it */
+    }
+    fresh(SUNXI_MMC_EMMC, SUNXI_MMC_SD_LEGACY, 0);
+    assert(!n.operations.write(&n, 0x02000070, 0) && !n.operations.write(&n, 0x02000070, 1));
 #if !defined(SUNXI_MMC_READ_ONLY) && defined(A733_MMC_BOUNDED_WRITER)
     /* Write-capable build. */
     fresh(SUNXI_MMC_SD, SUNXI_MMC_SD_HIGH_SPEED4, 1);

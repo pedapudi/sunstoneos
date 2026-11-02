@@ -18,17 +18,24 @@ INPUT_BYTES = 2184
 OFFSET = dict(magic=0, stage=16, reason=24, done=32, planned=40, identified_us=48, elapsed_us=56, cid=80, csd=112, ocr=144,
               rca=152, sectors=160, scr=168, mode=184, card_hz=192, baseline_start=200, baseline_end=328, clock_off=456,
               pmic_parked=464, capture_done=472, sector=3296, sd_status=272848, status_result=272912, au_sectors=272920,
-              au_sectors_uhs=272928, status_us=272936, switch_status=272944)
-REPORT_BYTES = 273008
+              au_sectors_uhs=272928, status_us=272936, switch_status=272944, uhs=273008)
+REPORT_BYTES = 273072
 
 
-def pack_input(sectors):
+def pack_input(sectors, uhs_mode=0, reads=1, blocks=8):
     if not 1 <= len(sectors) <= MAX_CAPTURE or sectors != sorted(set(sectors)):
         raise SystemExit('give 1 to 512 distinct sectors')
-    raw = struct.pack('<Q4I', INPUT_MAGIC, 1, 8, 0, len(sectors)) + struct.pack(f'<{MAX_CAPTURE}I', *(sectors + [0] * (MAX_CAPTURE - len(sectors))))
-    raw += struct.pack('<2Q', 0, 0) + struct.pack('<QII48s32s', 0, 0, 0, b'', bytes(32))
+    raw = struct.pack('<Q4I', INPUT_MAGIC, reads, blocks, 0, len(sectors)) + struct.pack(f'<{MAX_CAPTURE}I', *(sectors + [0] * (MAX_CAPTURE - len(sectors))))
+    raw += struct.pack('<2Q', 0, 0) + struct.pack('<QII48s32s', 0, 0, uhs_mode, b'', bytes(32))
     assert len(raw) == INPUT_BYTES
     return raw
+
+
+UHS_OUTCOMES = ('none', 'sdr104', 'host', 'declined', 'no_sdr104', 'no_window', 'limited_to_sdr25')
+
+
+def bank_level(pow_val):
+    return {2: 3300, 3: 1800}.get((pow_val >> 10) & 3)
 
 
 SPEED_MODES = ('SDR12', 'SDR25', 'SDR50', 'SDR104', 'DDR50')
@@ -62,8 +69,12 @@ def decode(raw, requested):
                clock_off=q('clock_off')[0], pmic_parked=q('pmic_parked')[0], captured=captured,
                status_result=q('status_result')[0], au_sectors=q('au_sectors')[0], au_sectors_uhs=q('au_sectors_uhs')[0],
                status_us=q('status_us')[0], sd_status=raw[OFFSET['sd_status']:OFFSET['sd_status'] + 64].hex(),
-               switch_status=raw[OFFSET['switch_status']:OFFSET['switch_status'] + 64].hex())
+               switch_status=raw[OFFSET['switch_status']:OFFSET['switch_status'] + 64].hex(), uhs=list(q('uhs', 8)))
     out.update(capabilities(out['ocr'], out['cid'], bytes.fromhex(out['switch_status'])))
+    u = out['uhs']
+    out['uhs_report'] = dict(mode=u[0], card_signals_1v8=bool(u[1]), outcome=UHS_OUTCOMES[u[2]] if u[2] < len(UHS_OUTCOMES) else u[2],
+                             reentered=bool(u[3]), bank_at_ready=dict(pow_val=hex(u[4]), pf_bank_mv=bank_level(u[4]), selector=hex(u[5])),
+                             bank_after_close=dict(pow_val=hex(u[6]), pf_bank_mv=bank_level(u[6]), selector=hex(u[7])))
     if captured != len(requested):
         raise SystemExit(f'captured {captured} of {len(requested)} sectors; stage {out["stage"]} reason {out["reason"]}')
     records = b''.join(struct.pack('<Q', s) + raw[OFFSET['sector'] + 512 * i:OFFSET['sector'] + 512 * (i + 1)] for i, s in enumerate(requested))
@@ -76,6 +87,9 @@ def main():
     i = sub.add_parser('input')
     i.add_argument('--output', type=Path, required=True)
     i.add_argument('--ranges', nargs='+', required=True, help='FIRST:COUNT pairs, for example 0:1 32768:2')
+    i.add_argument('--uhs-mode', type=int, default=0, choices=(0, 1, 2), help='0 high speed with S18A observed, 1 UHS-I lifetime 1, 2 UHS-I lifetime 2')
+    i.add_argument('--reads', type=int, default=1)
+    i.add_argument('--blocks', type=int, default=8)
     d = sub.add_parser('decode')
     d.add_argument('--report', type=Path, required=True)
     d.add_argument('--ranges', nargs='+', required=True)
@@ -84,7 +98,7 @@ def main():
     sectors = sorted({s for r in a.ranges for s in range(int(r.split(':')[0]), int(r.split(':')[0]) + int(r.split(':')[1]))})
     if a.cmd == 'input':
         with a.output.open('xb') as f:
-            f.write(pack_input(sectors))
+            f.write(pack_input(sectors, a.uhs_mode, a.reads, a.blocks))
         print(a.output, len(sectors), 'sectors')
     else:
         out, records = decode(a.report.read_bytes(), sectors)

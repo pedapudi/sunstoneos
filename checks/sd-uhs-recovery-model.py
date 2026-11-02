@@ -141,6 +141,9 @@ def switch_steps():
         ('CMD6 SDR104', lambda h: (h.cmd('CMD6'), setattr(h.card, 'timing', 'sdr104'))),
         ('CMD19 sweep', lambda h: h.cmd('CMD19')),
         ('reads', lambda h: h.cmd('CMD17')),
+        # the close (platform close stage CLOSE_BANK): the card clock off, then the bank back at 3.3 V; the card stays at 1.8 V
+        ('close: clock off', lambda h: h.gate(10)),
+        ('close: bank to 3.3 V', lambda h: h.set_bank(V33)),
     ]
     return steps
 
@@ -257,7 +260,8 @@ def run():
     steps = switch_steps()
     cases = unresolved_stuck = 0
     outcomes = {}
-    for k1, k2, bank_resets, end_bank_restored in itertools.product((True, False), (True, False), (True, False), (True, False)):
+    for k1, k2, bank_resets in itertools.product((True, False), (True, False), (True, False)):
+        end_bank_restored = False                       # the close is now part of the steps
         for cut in range(len(steps) + 1):
             card = Card()
             h = Host(card, k1, k2)
@@ -306,7 +310,7 @@ def run():
         assert card.sig == V33 and card.state == 'idle'
         h = Host(card, k1, k2)
         assert resolve(h) == 'C' and card.sig == V18       # a fresh 3.3 V card takes the normal switch
-    print(f'PASS sd-uhs recovery model: {cases} sessions cut at every step of the switch lifetime x K1 x K2 x reset behaviour x end bank, '
+    print(f'PASS sd-uhs recovery model: {cases} sessions cut at every step of the switch lifetime x K1 x K2 x reset behaviour (the close, with the bank back at 3.3 V, is the last two steps), '
           f'outcomes {outcomes}, no command with the bank at 1.8 V and the card at 3.3 V; {unresolved_stuck} stuck-card cases are '
           f'unresolved by software and cleared by the supply cycle once the hold exceeds the discharge time')
     return 0

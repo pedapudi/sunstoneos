@@ -212,6 +212,55 @@ UHS-I, but whether it supports SDR104 rather than SDR50 stays open until a lifet
 
 The decoder (`apps/sd-backup-probe/input.py`) now says so: `bus_speed_support` is meaningful only at 1.8 V.
 
+## The re-entry test: two lifetimes on port 3-3 (approved, read-only, no rail change)
+
+Both lifetimes run the one probe image (`apps/sd-backup-probe`, `--uhs-mode 1` and `--uhs-mode 2`) and write nothing to the card. Each
+reads 32 requests of 128 KiB from sector 0 (4 MiB) at SDR25, 50 MHz, so the two lifetimes' read CRCs compare, and ends with a normal
+CPU-local return. They run back to back; lifetime 2 is sent only when lifetime 1 has returned normally and its report shows the card
+signalling 1.8 V.
+
+What the image does, and what the host models check:
+
+- **Lifetime 1 (`--uhs-mode 1`).** The UHS-I profile: ACMD41 with S18R, CMD11, the bank to 1.8 V, identification at 1.8 V, SDR25 and no
+  SDR104 or tuning (`sunxi_mmc_sdr25_only`), reads, then the close: the card clock off, the selector written back to 3.3 V once and
+  the bank waited to 3.3 V (new platform stage `CLOSE_BANK`), then the module, bus, pins, rail and clock released as before. The card
+  is left at 1.8 V.
+- **Lifetime 2 (`--uhs-mode 2`).** The bank-level entry (`start_1v8`, platform stage `ENTER_1V8`): with the card clock stopped, the
+  selector written to 1.8 V once, the bank waited to 1.8 V and the clock kept stopped 10 ms; then the core opens in re-entry
+  mode (`sunxi_mmc_reenter`): CMD0, CMD8, ACMD41 with S18R, no CMD11 (the card would answer it with nothing), CMD2 onward,
+  SDR25, reads, the same close. This is the 1.8 V branch of the resolution algorithm; its 3.3 V probe is covered by the model, not
+  exercised on the board, because lifetime 1 has told us where the card is.
+- **The selector rule.** The native register filter admits the selector write to 1.8 V once and the write back to 3.3 V once, only
+  after the first, only with the controller's clock enable bits clear, only in the UHS-I profile, and only by the owning task
+  (`checks/a733-mmc-native-filter.c`). It stays read-only in every other profile and for eMMC.
+- **Models.** `checks/sd-return-close.py --lifetimes` runs both lifetimes through the real platform, core and shared providers against a
+  modeled card and controller, and cuts each after every poll (605 cuts): at every cut no command went out with the bank at 1.8 V and the
+  card at 3.3 V, the bank selector, the platform's record and the card's level agree, and at most one write to each level was made. A
+  mutation that skips the restore write, and one that sends CMD11 in re-entry, each fail it. `checks/sunxi-mmc-uhs.py` covers the core
+  options (both card answers to S18R, the SDR104 path after re-entry, the refusals). `checks/sd-uhs-recovery-model.py` now has the close
+  as its last two steps: all 144 sessions (every cut x both unknowns x both reset behaviours) end usable.
+
+Predictions (written before either run; the 3-3 card is the user-reported 32 GB card, whose CID I have not read):
+
+| | Lifetime 1 | Lifetime 2 |
+| --- | --- | --- |
+| Returns normally, restoration words unchanged | yes | yes |
+| Card identified | S18A set, CMD11 answered, at 1.8 V | no CMD11; identified at 1.8 V |
+| S18A (OCR bit 24) in the last ACMD41 | set | set (clear is possible; it would not stop the test) |
+| Bank at identification (`GPIO_POW_VAL` bits 11:10, selector) | 3 (1.8 V), selector 0 | 3, selector 0 |
+| Bank after the close | 2 (3.3 V), selector 1 | 2, selector 1 |
+| Outcome | `limited_to_sdr25`, 50 MHz | `limited_to_sdr25`, 50 MHz, `reentered` |
+| CMD6 group 1 support field at 1.8 V | `0x801f` if the card is SDR104 and DDR50 capable, at least `0x8007` | the same value as lifetime 1 |
+| Read rate per request | about 21 MB/s (what 50 MHz four-bit gives at 3.3 V) | the same |
+| CRCs of the 32 reads | any | equal to lifetime 1's, read by read |
+
+The test fails, and nothing is retried, when:
+
+- lifetime 1 does not return normally (the watchdog resets it, or its report has `reason` other than 0),
+- lifetime 1 returns but the card did not switch (`card_signals_1v8` false, outcome `declined`): lifetime 2 is then not run,
+- lifetime 2 stops at identification (`reason` 3): the card did not answer at 1.8 V, so it refuses CMD0 re-entry, and the SD on this
+  board stays unusable until power is removed.
+
 ## Board plan
 
 Each stage has one hypothesis. Nothing runs without the coordinator's approval and none writes to the card. Stage 2 below is the

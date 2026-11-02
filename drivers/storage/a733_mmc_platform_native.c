@@ -119,13 +119,15 @@ static int write_fifo(void *cookie,uintptr_t a,const uint32_t *v,unsigned count)
        !a733_mmc_platform_native_fifo_allowed(n->kind,n->emmc_host,n->update,a,count))return 0;
     return store(a,v,count);
 }
-/* The UHS-I profile's single PF selector write: 1.8 V, never back to 3.3 V.
- * The default aperture filter keeps the selector read-only. */
+/* The UHS-I profile's PF selector writes: 1.8 V once, and, after this binding stored that write, 3.3 V once at close with the
+ * card clock off (the controller's CLKCR enable bits clear). The default aperture filter keeps the selector read-only. */
 static int pf_select(struct a733_mmc_platform_native *n,uint32_t v)
 {
-    if(n->kind!=SUNXI_MMC_SD||n->sd_profile!=SUNXI_MMC_SD_UHS_SDR104||v||!current(n)||!n->holding||
+    if(n->kind!=SUNXI_MMC_SD||n->sd_profile!=SUNXI_MMC_SD_UHS_SDR104||v>1||!current(n)||!n->holding||
        (atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1u))return 0;
-    return store(0x02000070,&v,1);
+    if(v==0){if(n->bank_1v8)return 0;n->bank_1v8=1;return store(0x02000070,&v,1);}
+    if(!n->bank_1v8||(MMIO_LOAD((uintptr_t)A733_MMC_BASE(a733_mmc_slot(n->kind,n->emmc_host))+SUNXI_SMHC_CLKCR)&(3u<<16)))return 0;
+    n->bank_1v8=0;return store(0x02000070,&v,1);
 }
 static int write32(void *cookie,uintptr_t a,uint32_t v)
 {
