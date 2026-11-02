@@ -26,6 +26,7 @@ int os_npu_tensor(enum nbg_section_id kind,unsigned index,struct npu_runtime_ten
     *t=(struct npu_runtime_tensor){.data=kind==NBG_INPUT?tensor_input:tensor_output,.bytes=4};
     return 1;
 }
+struct os_npu_fault_info os_npu_last_fault;
 int os_npu_submit(uint64_t timeout)
 {assert(timeout==100);++submits;memcpy(tensor_output,tensor_input,4);return 1;}
 int os_npu_close(void){closed=1;return 1;}

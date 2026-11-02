@@ -10,14 +10,15 @@ Native mappings, privileged reservation pools, cache maintenance, DMA0 services 
 boards report 12,288 MiB and pass two 4 KiB page comparisons. SID-selected
 restoration on 3-1 passes twice with 879 PHY writes and quick checks of 34.116
 and 34.117 ms. CPU-L/DSU boot clocks restore. EL3 entry restores MBUS to 600 MHz
-on both boards while preserving the checked pattern. Sustained DRAM reads on 3-1 in
+on both boards while preserving the checked pattern. Non-secure EL1 reads and writes the nine boot0 NSI words on 3-1 and the write
+changes the CPU read rate by 0.3 percent. Sustained DRAM reads on 3-1 in
 development mode reach 14.8 GB/s for one A76 core and fall to 8.25 GB/s for all
 eight cores, as the number of independent streams grows (see
 [DRAM bandwidth](../designs/dram-bandwidth.md#board-measurements-of-the-scaling-study)).
 
 ## Open work
 
-1. Read and then write boot0's nine NSI interconnect words in an image and repeat the DRAM scaling study ([plan](../designs/dram-bandwidth.md#plan-awaiting-approval)); the write needs coordinator approval.
+1. Decide whether the boot path writes boot0's nine NSI words (they change no CPU-only bandwidth) and set the CPU initiator priorities for robot loads ([QoS knobs](../designs/dram-bandwidth.md#quality-of-service-knobs-and-cpu-latency-under-dma-load)); a persistent write changes the memory path and needs the memory qualification rerun.
 2. Qualify full-capacity memory and device visibility, and physical range ownership with external-pool mapping.
 3. Cover restore temperature, lower DRAM points, card deployment and decoding of the boot0 memory configuration.
 4. Establish physical static secondary-OFF ownership for the [native probe contract](../board-probe-contract.md).
@@ -38,7 +39,7 @@ DMA0 needs physical channel, controller and data-access authority and transfer t
 Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-memory-dma-20261101.md).
 
 <!-- evidence-table:begin -->
-6 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+12 records in `docs/evidence/memory-dma.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -47,5 +48,11 @@ Board results are records in `docs/evidence/memory-dma.jsonl`; add one with `too
 | `1793600534434449836-8f1652a3` | 2026-11-02 | 3-1 | `1a8e6ff37cc0` | returned | failed | run_total 20.572 s, sum_one_a55 5.46 GB/s, sum_two_a55 10.02 GB/s, sum_four_a55 10.76 GB/s, sum_six_a55 9.07 GB/s, sum_one_a76 14.81 GB/s, sum_two_a76 14.15 GB/s, sum_four_a55_two_a76 9.34 GB/s, sum_eight 8.27 GB/s, sum_one_a55_swprefetch 4.19 GB/s, sum_two_a55_swprefetch 6.62 GB/s, sum_four_a55_swprefetch 9.53 GB/s, sum_six_a55_swprefetch 8.36 GB/s, sum_one_a76_swprefetch 13.8 GB/s, sum_two_a76_swprefetch 13.75 GB/s, sum_four_a55_two_a76_swprefetch 8.93 GB/s, sum_eight_swprefetch 7.94 GB/s |
 | `1793600624723356256-fb710c2d` | 2026-11-02 | 3-1 | `5c6bbac1b12b` | returned | failed | run_total 21.112 s, sum_one_a55 5.49 GB/s, sum_two_a55 10.01 GB/s, sum_four_a55 10.82 GB/s, sum_six_a55 9.07 GB/s, sum_one_a76 14.86 GB/s, sum_two_a76 14.08 GB/s, sum_four_a55_two_a76 9.36 GB/s, sum_eight 8.25 GB/s, sum_one_a55_mode5 5.17 GB/s, sum_two_a55_mode5 4.8 GB/s, sum_four_a55_mode5 7.32 GB/s, sum_six_a55_mode5 7.22 GB/s, sum_one_a76_mode5 12.45 GB/s, sum_two_a76_mode5 11.75 GB/s, sum_four_a55_two_a76_mode5 8.38 GB/s, sum_eight_mode5 7.45 GB/s, sum_four_a55_mode6 6.88 GB/s, sum_six_a55_mode6 5.93 GB/s, sum_two_a76_mode6 11.3 GB/s, sum_eight_mode6 5.84 GB/s |
 | `1793600664425885881-a871e54d` | 2026-11-02 | 3-1 | `e271e3b62bb8` | result-mismatch | passed | run_total 12.065 s, scan_pages 6.25869e+06, signature_pages 3.12934e+06, scan_time 0.555 s, signature_time 0.975 s, address_failed 0, mismatches 0 |
+| `1793601413670925677-13bb2fa0` | 2026-11-02 | 3-1 | `aa92cd354db2` | returned | passed | run_total 18.779 s, word_202446c 199173, word_202466c 199173, word_2023a14 0, word_2023c14 0, word_2023e14 0, word_2024014 0, word_2024214 0, word_202200c 0, word_202220c 0 |
+| `1793601453701366920-e6b42159` | 2026-11-02 | 3-1 | `cb5f5507a6f2` | result-mismatch | failed | run_total 19.957 s, sum_one_a55_before 5.47 GB/s, sum_two_a55_before 9.88 GB/s, sum_four_a55_before 10.82 GB/s, sum_six_a55_before 9.02 GB/s, sum_one_a76_before 14.84 GB/s, sum_two_a76_before 13.33 GB/s, sum_four_a55_two_a76_before 9.36 GB/s, sum_eight_before 8.24 GB/s, sum_one_a55_after 5.46 GB/s, sum_two_a55_after 9.9 GB/s, sum_four_a55_after 10.75 GB/s, sum_six_a55_after 9.06 GB/s, sum_one_a76_after 14.82 GB/s, sum_two_a76_after 13.99 GB/s, sum_four_a55_two_a76_after 9.4 GB/s, sum_eight_after 8.27 GB/s |
+| `1793601532141189570-bb534f24` | 2026-11-02 | 3-1 | `3dcc955f1e96` | returned | failed | run_total 20.106 s, sum_one_a55_before 5.49 GB/s, sum_two_a55_before 9.98 GB/s, sum_four_a55_before 10.95 GB/s, sum_six_a55_before 9.07 GB/s, sum_one_a76_before 14.84 GB/s, sum_two_a76_before 14.16 GB/s, sum_four_a55_two_a76_before 9.39 GB/s, sum_eight_before 8.24 GB/s, sum_one_a55_after 5.5 GB/s, sum_two_a55_after 9.96 GB/s, sum_four_a55_after 10.85 GB/s, sum_six_a55_after 9.03 GB/s, sum_one_a76_after 14.82 GB/s, sum_two_a76_after 14.14 GB/s, sum_four_a55_two_a76_after 9.36 GB/s, sum_eight_after 8.26 GB/s |
+| `1793601581524930927-ca5ca9c7` | 2026-11-02 | 3-1 | `ccab62e48743` | returned | failed | run_total 20.118 s, sum_one_a55_before 5.5 GB/s, sum_two_a55_before 9.95 GB/s, sum_four_a55_before 10.84 GB/s, sum_six_a55_before 9.07 GB/s, sum_one_a76_before 14.84 GB/s, sum_two_a76_before 14.11 GB/s, sum_four_a55_two_a76_before 9.37 GB/s, sum_eight_before 8.23 GB/s, sum_one_a55_after 5.51 GB/s, sum_one_a76_after 14.82 GB/s, sum_eight_after 8.25 GB/s |
+| `1793601713672636837-caad23bd` | 2026-11-02 | 3-1 | `9b1160dc1361` | returned | passed | run_total 19.352 s, sum_one_a55 5.5 GB/s, sum_two_a55 9.89 GB/s, sum_four_a55 10.68 GB/s, sum_six_a55 8.97 GB/s, sum_one_a76 14.83 GB/s, sum_two_a76 14.18 GB/s, sum_four_a55_two_a76 9.35 GB/s, sum_eight 8.26 GB/s, a55_l2_refill_to_consumed_eight 1.006, a55_stall_fraction_eight 0.897, a55_l2_refill_to_consumed_one_a55 1.002, a55_stall_fraction_one_a55 0.398 |
+| `1793601793681778248-4e7e5868` | 2026-11-02 | 3-1 | `20c13110294c` | returned | passed | run_total 19.83 s, port2_priority 0, port6_priority 0, port18_priority 0, port19_priority 0, port20_priority 0 |
 | `1793603354809199340-a4ed0f70` | 2026-11-02 | 3-1 | `1b2b6e8734ca` | returned | failed | run_total 15.295 s, region_bytes 1.07374e+09 B, read_control_40mib 1.87 GB/s, read_gib_blocks 1.87 GB/s, read_mib2_blocks 1.87 GB/s, cpu_clock 494 MHz, l1d_tlb_refill_gib_blocks 262314, l2d_tlb_refill_gib_blocks 3, l2d_tlb_refill_mib2_blocks 513, dtlb_walk_gib_blocks 2, dtlb_walk_mib2_blocks 512, el0_cases_faulted 7, el0_cases_succeeded 6 |
 <!-- evidence-table:end -->

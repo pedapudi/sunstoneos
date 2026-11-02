@@ -246,10 +246,7 @@ if(SUNSTONE_A733_OS_NPU)
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/apps/os/npu-catalogue.py"
     --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --models "${SUNSTONE_OS_NPU_MODELS}" ${os_npu_select}
     --output "${os_build}/npu-models.c" COMMAND_ERROR_IS_FATAL ANY)
-  execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/tools/npu-session-catalogue.py" generate
-    --application "${SUNSTONE_OS_NPU_MODELS}" --output "${os_build}/npu_admitted_models.c"
-    COMMAND_ERROR_IS_FATAL ANY)
-  list(APPEND os_sources "${os_build}/npu-models.c" "${os_build}/npu_admitted_models.c")
+  list(APPEND os_sources "${os_build}/npu-models.c")
   list(APPEND os_added apps/os/npu.c apps/os/npu-client.c apps/os/npu-irq.c
     platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c
     drivers/npu/npu_service.c drivers/npu/npu_queue.c drivers/npu/npu_runtime_queue.c drivers/npu/npu_idle.c drivers/npu/a733_npu_sequence.c
@@ -265,7 +262,7 @@ if(SUNSTONE_A733_OS_NPU)
     "${os_root}/platform/a733/npu_irq.c" "${os_root}/include/a733_npu_irq.h"
     "${os_root}/tools/npu-session-models.json" "${os_root}/tools/npu-session-catalogue.py"
     "${SUNSTONE_OS_NPU_MODELS}" "${os_root}/drivers/npu/nbg_command.h" "${os_build}/npu-models.c"
-    "${os_build}/npu_admitted_models.c" "${SUNSTONE_OS_NPU_CATALOGUE}")
+    "${SUNSTONE_OS_NPU_CATALOGUE}")
 endif()
 set(os_include_dirs)
 if(SUNSTONE_A733_OS_HEADSET)
@@ -404,6 +401,12 @@ option(SUNSTONE_PMU_ACCOUNT "Enable per-core PMU counters with EL0 read access f
 option(SUNSTONE_BG_LOAD "Add the unpinned background load of the scheduler comparison (measurement)" OFF)
 if(SUNSTONE_BG_LOAD)
   list(APPEND os_sources "${os_root}/runtime/bg_load.c")
+endif()
+option(SUNSTONE_LOCK_PREWAIT "Wait for the kernel task lock with the interrupt mask open before masking and queueing" OFF)
+set(SUNSTONE_PREWAIT_DEPTH 1 CACHE STRING "Cores allowed to hold or wait for the task lock before an unmasked waiter masks")
+set(SUNSTONE_PREWAIT_US 100 CACHE STRING "Longest unmasked wait for the task lock, in microseconds")
+if(SUNSTONE_LOCK_PREWAIT)
+  list(APPEND os_sources "${os_root}/runtime/lock_prewait.c")
 endif()
 option(SUNSTONE_IRQ_COUNT "Count interrupts per core and interrupt ID (measurement)" OFF)
 if(SUNSTONE_IRQ_COUNT)
@@ -552,6 +555,11 @@ if(SUNSTONE_A733_OS_NPU)
 endif()
 set_property(TARGET sunstone-a733-os-core PROPERTY LINK_OPTIONS "${os_link}")
 target_link_options(sunstone-a733-os-core PRIVATE "-Wl,-Map,${os_build}/image.map")
+if(SUNSTONE_LOCK_PREWAIT)
+  target_link_options(sunstone-a733-os-core PRIVATE -Wl,--wrap=uxPortSetInterruptMask -Wl,--wrap=vTaskEnterCritical -Wl,--wrap=vTaskSuspendAll)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_PREWAIT_DEPTH=${SUNSTONE_PREWAIT_DEPTH}u SUNSTONE_PREWAIT_US=${SUNSTONE_PREWAIT_US}u)
+  set_source_files_properties("${os_root}/runtime/lock_prewait.c" PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
+endif()
 if(SUNSTONE_IRQ_COUNT)
   if(SUNSTONE_LATENCY)
     message(FATAL_ERROR "The interrupt counter and the latency recorder both wrap vApplicationIRQHandler")
