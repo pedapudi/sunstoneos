@@ -409,6 +409,7 @@ static int shader_operation(const struct nbg_model *m, uint32_t number, uint32_t
         if (data_rel < 0 && (p.source == 1 || p.source == 2)) data_rel = (int)rels;
         rel[rels++] = r;
     }
+    (void)program_rel; (void)data_rel; /* used by the fault-test hook only */
     if (!program_patch || rels != op->patch_count) return 0;
     memcpy(image->command, state.data, state.bytes);
     for (uint32_t i = 0; i < n; ++i)
