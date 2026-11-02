@@ -546,3 +546,23 @@ the maximum and the 99th percentile of the time per refill with the ports as inh
 raised, then with a bandwidth limit on the streaming master. This needs a second master in the image and is not part of
 this study. The NPU stage and the camera pipeline define the loads that matter; the scheduler stream owns the timing
 budgets.
+
+## Boot-path adoption of boot0's interconnect step
+
+The coordinator decided to match the vendor where no measurement argues against it. boot0's `main` calls routine `0x49050`
+after `init_DRAM`; it stores the nine NSI words in order with a `dmb sy` before each store (routine `0x48f38`). The
+RAM-only wrapper `boot/a733/ddr-entry.S` stood in for `main` and skipped it. The wrapper now calls `0x49051` (the Thumb entry
+of `0x49050`) after `init_DRAM` and, in the restore variant, after the restore helper at `0x92008`. The case
+`checks/ddr-nsi-words.py` executes the routine from the pinned boot0 under Unicorn and requires the nine stores in boot0's order with a
+barrier before each, the values and addresses that the study wrote, and the call order in both wrapper variants. It fails on the
+wrapper before this change. The microSD boot path runs boot0 itself and already includes the step.
+
+### Adoption predictions, written before the runs
+
+1. **Readback.** With the new wrapper, the probe-only interconnect image reads the nine words as boot0's values at the start of
+   the run (`0x40a05`, `0x40a05`, `0x3f`, `0x7f`, `0xf`, `0xf1`, `0xf1`, `1`, `1`) and not the inherited `0x30a05` and zeros, and
+   returns normally.
+2. **Memory qualification.** The returning memory probe over the 12,224 MiB tested map from `0x44000000` (data, address and
+   signature passes, `apps/memtest`) returns status 0 with no address failure, no signature mismatch and no beacon, and its scan
+   and signature times stay within 5 percent of the earlier record, because the words did not change CPU-only reads and the DRAM
+   decode does not depend on them.
