@@ -19,6 +19,115 @@ one-inference and two-job/two-model runtime images also qualify on 3-3 at
 ROM return. The resident command queue runs 1,000 matched jobs at 10.25 µs
 p50 and 26,925 jobs/s, and 1,000 fence-chained two-stage jobs, on 3-3.
 
+## Continuation priorities and saved work
+
+The continuation branch is `work/npu-fastpath-1101`. Its internal-clock owner,
+portable transition checks, native owner cases, shared-timer wiring and idle
+benchmark are integrated and host-tested. They have no physical gating result.
+The qualified resident and dependent-buffer paths remain the scope described
+below; their board evidence does not qualify the new idle policy.
+
+1. **Gating image: board comparison.** The three independent code reviews
+   approved with required changes, which are made. The A733 gating protocol is a
+   part descriptor (`include/a733_npu_idle.h`) that the state machine reads. The
+   owner treats a busy interrupt controller as "not now" and rearms, charges no
+   wake to completions, and measures the quiet state again after a resume.
+   `npu_runtime_queue_submit()` admits and submits in one lock span. The native
+   owner cases (`checks/npu-queue-handoff.py`) cover start refusals, gating and
+   resume on admission, the control policy, stale alarms, a busy and an invalid
+   interrupt controller, partial failure between suspend writes, suspended close
+   with and without a resume failure, cancellation by STOP, an interrupt while
+   suspended and after resume, admit-and-submit in one lock span and over-budget
+   resumes, with five relink-based regression mutations. Three benchmark images
+   (`build.py --latency queue --idle none|off|gate`: baseline without an owner,
+   control, gating) each run five windows of 12,000 jobs and cold jobs after each
+   of 9, 11 and 100 ms gaps (100, 100 and 30 jobs). Their report decoder and the three-way limit
+   comparison (`apps/npu-finite/idle-compare.py`) are checked by
+   `checks/npu-idle-report.py` with synthetic reports; the producer itself runs
+   only on the board. Run the baseline, the control and then the gating image on
+   port 3-3 after the boards are replugged. Require, on medians of the five
+   windows, that the control stays within 98% throughput, 105% p99, 110% maximum
+   and 105% charged CPU time of the baseline, and the gating image within the
+   same limits of the control, with every resume within 100 µs and no gating in 9
+   ms gaps. Cold-job latency is reported separately. The PMIC provider exposes no
+   DCDC2 current or power readback, so there is no energy evidence unless an
+   external meter is added.
+   The first board run of the baseline image on port 3-3 ended at the monitor's
+   refused-return stop (`0x6733`, return SMC `0x733` with status 4) and a
+   watchdog reset; its cause is unresolved. A refused return and a panic now
+   record a crumb naming the failed predicate or the source line, and a refused
+   interrupt bind records the failed clause, so the next failure names itself.
+   The benchmark images link a failure return (`build.py --failure-return`,
+   implied by `--idle`): a refused or failed return of a quiesced NPU ends at
+   the monitor with status 2, a receipt and a last log line `NPU_FAILURE=<reason>`,
+   and the runner reports `failure-return` with DRAM restored. A failure with
+   the NPU still running keeps the watchdog ending. The host evidence is
+   `checks/npu-failure-return.py` (the production return writer, the report
+   validator, a stale and a missing receipt, and the runner capture and
+   admission); the monitor and the runner's outcome mapping are not executed.
+   No further run is made until the boards are replugged and the run is
+   approved.
+2. **Qualify EL0 and prepared joined streams.** Review and finish the saved
+   generic sequence-registration API and returning OS diagnostic, and the public
+   ring predicate that tells the power owner a published successor exists (add
+   it with a kick when the ring drains or a bounded alarm while it is false). Build
+   and verify the RAM backup, drain and interrupt restoration before physical
+   use. Run the returning OS control first, then the actual EL0 queue and joined
+   stream through the board queue. Physical EL0 execution remains unqualified.
+3. **Add exact per-job deadline interrupts through the scheduler facility.**
+   The landed `sunstone_deadline_wait_until()` facility supports task waits.
+   It does not provide asynchronous device-alarm arm/cancel operations from
+   submission and completion. Coordinate that extension with
+   `work/scheduler-rt-1101`, then connect queue deadlines and test stale alarms
+   and completion races. Do not create an independent device timer. This item
+   is open.
+
+The EL0 joined registration and diagnostic remain a separate incomplete
+implementation, preserved without integration:
+
+| Work | Branch and commit | Missing work |
+| --- | --- | --- |
+| EL0 joined registration and diagnostic | `npu-el0-next-1101`, `088d3144` | Review, complete native builds, power bridge validation and physical control/EL0 runs |
+
+Its worktree is `el0-next/` under `~/.cache/sunstoneos/build/npu-fastpath-1101/`.
+The commit requires selective integration: its prerequisite idle commits already
+exist on the continuation branch with different hashes. Preserved EL0 host
+artifacts are in `el0-next-evidence/` and `el0-ring-evidence/` under the same
+build directory. The full baseline builds and integration gate must be refreshed
+after the EL0 changes are integrated.
+
+**Built images awaiting physical execution:** no new internal-gating or physical
+EL0 diagnostic image is built or submitted. Build-only OS artifacts remain
+unrun. Their README paths, relative to the task build directory, are:
+
+- `final-gates/gate-os-sup-npu-fastpath-1101-d2e4321fdb/os-image/README.md`
+- `final-gates/gate-os-res-npu-fastpath-1101-d2e4321fdb/os-image/README.md`
+- `final-gates/gate-os-resaud-npu-fastpath-1101-d2e4321fdb/os-image/README.md`
+- `final-gates/gate-os-npu-npu-fastpath-1101-d2e4321fdb/os-image/README.md`
+- `final-gates/gate-os-npu-queue-npu-fastpath-1101-d2e4321fdb/os-image/README.md`
+
+These build artifacts are not frozen queue submissions. Build board diagnostics
+only when the remaining review and host prerequisites permit immediate queuing.
+
+**Approvals and register policy:** the coordinator approves implementation and
+conditional measurement of internal VIPLite clock gating only. PCK4, DCDC2,
+PLL, voltage and top-point CCU clocks retain their existing ownership and state.
+Any additional CPU/DSU or rail transition required by a returning OS image needs
+the coordinator's applicable session grant. While suspended, permit only the
+vendor resume-entry read at NPU offset `+0x000`. After ungating, wait the vendor's
+1 µs settling interval and verify the gate clears before reading `+0x10c`.
+Ordinary idle/event reads are prohibited while suspended. Partial transition
+failure retains ownership and its first fault inputs.
+
+**Shared files:** coordinate lifecycle changes with the NPU diagnosis worker in
+`drivers/npu/npu_runtime_queue.c`, `drivers/npu/npu_service.c`,
+`include/npu_runtime_queue.h` and `platform/a733/npu_irq.c`. Coordinate SDK
+consumers through `include/sunstone_npu_queue.h`, `runtime/npu_app_queue.c` and
+`apps/os/npu-queue.c`; the API remains generic. The scheduler worker owns the
+shared deadline facility in `include/sunstone_deadline.h` and `runtime/deadline*`.
+The idle benchmark composes the committed finite `deadline.c`, `monitor.c` and
+`runtime-irq.c` wiring with `queue-client.c`, `idle-client.h` and `startup.h`.
+
 ## Resident command submission
 
 **Implemented; matched small-model timing has physical evidence.** The generic
@@ -63,12 +172,17 @@ and diagnostic producer/parser/receipt agreement. The final selected gate is
 and diagnostic byte-equivalence evidence is `timing-layout-check/` under the
 same task build directory. Disabled timing counters occupy no production storage.
 
-Automatic internal-clock gating is a proposal only. PCK4, shared SRAM, DCDC2,
-PLL and top-point clock leases remain owned in that proposal. A transition run
-needs coordinator approval and an identified power meter. Current jobs keep the
-NPU powered at 852 MHz/800 mV. Exact per-job deadline interrupts remain open;
-the independent session watchdog bounds a lost IRQ. Repeated lifecycle and
-thermal/fault recovery also remain unqualified.
+Automatic internal-clock gating has an opt-in implementation and portable host
+evidence; its native owner integration and board qualification remain open.
+Current qualified jobs keep the NPU powered at 852 MHz/800 mV. There is no
+physical energy evidence: inspected cached PMIC references expose no documented
+DCDC2 current/power channel or conversion, and no host-readable meter is
+identified. Voltage-selector readback is not an energy measurement. The source
+audit is `pmic-energy/audit.json` under the task build directory. The coordinator
+permits the conditional gating comparison without energy evidence. Exact
+per-job deadline interrupts remain open; the independent session watchdog
+bounds a lost IRQ. Repeated lifecycle and thermal/fault recovery also remain
+unqualified.
 
 Evidence paths are relative to `~/.cache/sunstoneos/evidence/`:
 

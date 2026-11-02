@@ -7,10 +7,12 @@ static unsigned creating_worker;
 enum { SERVICE_WAITING, SERVICE_CHECKING, SERVICE_ACTIVE, SERVICE_RETAINED,
        SERVICE_PARKED, SERVICE_PREPARING, SERVICE_RESUMING };
 static void worker(void *);
+extern BaseType_t npu_runtime_queue_task_privileged(TaskFunction_t, void *) __attribute__((weak));
 
 BaseType_t npu_service_task_privileged(TaskFunction_t entry, void *argument)
 {
-    return creating_worker && entry == worker && argument == instance ? pdTRUE : pdFALSE;
+    if (creating_worker && entry == worker && argument == instance) return pdTRUE;
+    return npu_runtime_queue_task_privileged ? npu_runtime_queue_task_privileged(entry, argument) : pdFALSE;
 }
 static int duration(uint64_t us) { return us && us <= INT64_MAX; }
 static int active(enum a733_npu_state state)

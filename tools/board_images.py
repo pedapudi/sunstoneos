@@ -156,7 +156,8 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
         require(facts.get('execution_profile') != finite.POWER,
                 'Unsupported physical NPU OFF profile; use local stop/restart.')
         return dict(facts, symbols=names, generic=False, entry_guard=False,
-                    descriptor=descriptor, finite_npu=True)
+                    descriptor=descriptor, finite_npu=True,
+                    failure_return='npu_failure_return_profile' in names)
     marker = host.watchdog_marker(image) if names else descriptor.get('watchdog')
     require(marker is not None, 'Image does not admit the host-armed watchdog; rebuild with RTC breadcrumbs.')
     require(set(marker) == {'mode', 'session_seconds'} and all(type(v) is int for v in marker.values()) and
