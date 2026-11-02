@@ -522,7 +522,7 @@ static int shader_operation(const struct nbg_model *m, uint32_t number, uint32_t
 static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
                      const struct nbg_assembly_buffer *buffers,
                      const struct nbg_assembly_layout *plan, struct operation_image *image,
-                     uint32_t *count, unsigned char *command_out, size_t command_room)
+                     uint32_t *count, unsigned char *command_out, size_t command_room, uint32_t nn_slot)
 {
     struct nbg_operation op;
     struct nbg_span span;
@@ -534,14 +534,9 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
     if (!nbg_model_operation(m, number, &op)) return 0;
     if (op.kind == 1)
         return directory && shader_operation(m, number, first, buffers, plan, &op, image, count, command_out, command_room);
-    /* The descriptor of an engine operation is numbered among the engine operations: shader operations have none. */
-    uint32_t nn_slot = number - 1;
-    if (plan->program_bytes)
-        for (uint32_t j = 1; j < number; ++j) {
-            struct nbg_operation before;
-            if (!nbg_model_operation(m, j, &before)) return 0;
-            if (before.kind == 1) --nn_slot;
-        }
+    /* The descriptor of an engine operation is numbered among the engine operations: shader operations have none. The
+     * caller counts the engine operations before this one (a count by scanning the operations before it made a graph of
+     * n operations cost n squared steps: seconds for the 8,000 operations of a layer of 512 frames). */
     image->nn_slot = nn_slot;
     const int engine = op.kind == 2 || (directory && (op.kind == 8 || op.kind == 7 || op.kind == 6));
     if (!engine ||
@@ -790,12 +785,13 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
 static int inspect(const struct nbg_model *m, const struct nbg_assembly_buffer *b,
                    struct nbg_assembly_layout *p)
 {
-    uint32_t first = 1;
+    uint32_t first = 1, slot = 0;
     for (uint32_t i = 1; i <= p->nn_operations; ++i) {
         struct operation_image scratch;
         uint32_t count;
-        if (!operation(m, i, first, b, p, &scratch, &count, NULL, 0)) return 0;
+        if (!operation(m, i, first, b, p, &scratch, &count, NULL, 0, slot)) return 0;
         first += count;
+        if (scratch.nn_slot != UINT32_MAX) ++slot;
     }
     unsigned patch_bytes = m->header.version == NBG_MODEL_DIRECTORY_VERSION ? 28 : 40;
     if (first != m->sections[NBG_PATCH].bytes / patch_bytes) return 0;
@@ -867,7 +863,7 @@ int nbg_assemble_layout(const struct nbg_model *m, const struct nbg_assembly_buf
     unsigned char *commands = b[NBG_ALLOC_COMMAND].cpu;
     for (size_t i = 0; i < b[NBG_ALLOC_COMMAND].bytes; i += 8) put(commands + i, 0x10000000);
     words(commands, prefix, sizeof(prefix) / 4);
-    uint32_t first = 1, offset = (uint32_t)sizeof(prefix);
+    uint32_t first = 1, offset = (uint32_t)sizeof(prefix), slot = 0;
     uint64_t segment = 0;
     for (uint32_t i = 1; i <= p.nn_operations; ++i) {
         struct operation_image scratch;
@@ -877,8 +873,8 @@ int nbg_assemble_layout(const struct nbg_model *m, const struct nbg_assembly_buf
         const uint32_t at = (uint32_t)segment_place(offset, &segment, state_span.bytes);
         if (at != offset) write_link(commands, b[NBG_ALLOC_COMMAND].bytes, b[NBG_ALLOC_COMMAND].device, offset, at);
         offset = at;
-        (void)operation(m, i, first, b, &p, &scratch, &used, commands + offset, p.command_body_bytes - offset);
-        if (scratch.nn_slot != UINT32_MAX) memcpy((unsigned char *)b[NBG_ALLOC_NN].cpu + scratch.nn_slot * 192, scratch.nn, 192);
+        (void)operation(m, i, first, b, &p, &scratch, &used, commands + offset, p.command_body_bytes - offset, slot);
+        if (scratch.nn_slot != UINT32_MAX) { memcpy((unsigned char *)b[NBG_ALLOC_NN].cpu + scratch.nn_slot * 192, scratch.nn, 192); ++slot; }
         first += used;
         offset += scratch.command_bytes;
     }
@@ -904,7 +900,7 @@ int nbg_assembly_begin(const struct nbg_model *m, const struct nbg_assembly_buff
         !profile(m, &p, 0) || count != buffer_count(&p) || !placed(m, b, count, &p, out, sizeof(*out)) ||
         !placed(m, b, count, &p, cursor, sizeof(*cursor))) return 0;
     *out = p;
-    *cursor = (struct nbg_assembly_cursor){1, 1, (uint32_t)sizeof(prefix), 0};
+    *cursor = (struct nbg_assembly_cursor){1, 1, (uint32_t)sizeof(prefix), 0, 0};
     return 1;
 }
 
@@ -928,8 +924,8 @@ int nbg_assembly_next(const struct nbg_model *m, const struct nbg_assembly_buffe
         if (at != cursor->offset)
             write_link(commands, b[NBG_ALLOC_COMMAND].bytes, b[NBG_ALLOC_COMMAND].device, cursor->offset, (uint32_t)at);
         if (!operation(m, cursor->operation, cursor->patch, b, p, &scratch, &used, commands + at,
-                       p->command_body_bytes - at)) return -1;
-        if (scratch.nn_slot != UINT32_MAX) memcpy((unsigned char *)b[NBG_ALLOC_NN].cpu + scratch.nn_slot * 192, scratch.nn, 192);
+                       p->command_body_bytes - at, cursor->slot)) return -1;
+        if (scratch.nn_slot != UINT32_MAX) { memcpy((unsigned char *)b[NBG_ALLOC_NN].cpu + scratch.nn_slot * 192, scratch.nn, 192); ++cursor->slot; }
         cursor->patch += used; cursor->offset = (uint32_t)at + scratch.command_bytes; cursor->segment = (uint32_t)segment;
         ++cursor->operation;
     }
