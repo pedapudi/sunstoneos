@@ -485,6 +485,7 @@ static int same_plan(const struct nbg_assembly_layout *a, const struct nbg_assem
 static void load_end(struct npu_runtime *rt, struct npu_runtime_slot *s, int loaded)
 {
     unsigned index = (unsigned)(s - rt->slot);
+    const unsigned silent = s->resident_load; /* read before the state changes: the owner clears it once the slot is READY */
     if (loaded) {
         s->end_mark = s->stream_bytes;
         ++rt->counters.loads;
@@ -496,7 +497,7 @@ static void load_end(struct npu_runtime *rt, struct npu_runtime_slot *s, int loa
         set_state(s, NPU_RUNTIME_EMPTY);
     }
     rt->loading = NPU_RUNTIME_SLOTS;
-    if (rt->bound)
+    if (rt->bound && !silent)
         npu_service_release(&rt->service, index, loaded ? NPU_SERVICE_OK : NPU_SERVICE_INVALID, A733_NPU_READY);
 }
 /* A failed native adapter treats any further time read as fatal; a retained
@@ -948,12 +949,13 @@ int npu_runtime_load_resident(struct npu_runtime *rt, unsigned slot, unsigned mo
     struct npu_runtime_slot *s = &rt->slot[slot];
     if (state(s) == NPU_RUNTIME_READY) return s->model == model ? 1 : -1;
     if (state(s) != NPU_RUNTIME_EMPTY) return -1;
-    s->model = model; set_state(s, NPU_RUNTIME_LOADING);
+    s->model = model; s->resident_load = 1; set_state(s, NPU_RUNTIME_LOADING);
     for (unsigned waited = 0; state(s) == NPU_RUNTIME_LOADING && good(rt); ++waited) {
         if (waited > 20000) return -1;          /* a graph takes about 15 ms; 20 s is a stuck worker */
         xTaskNotifyGive(rt->service.worker);
         vTaskDelay(1);
     }
+    s->resident_load = 0;
     if (state(s) != NPU_RUNTIME_READY || !good(rt)) return -1;
     /* Workspace and padding initialize once, before any device can use them. */
     memset((void *)s->read.cpu, 0, s->read.bytes);

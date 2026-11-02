@@ -109,6 +109,7 @@ struct npu_runtime_slot {
     uint64_t pending;
     enum npu_service_operation pending_operation;
     unsigned opened, closed;
+    unsigned resident_load; /* the load was made by the owner (npu_runtime_load_resident): no client waits for a reply */
 };
 struct npu_runtime {
     struct npu_runtime_slot slot[NPU_RUNTIME_SLOTS];
