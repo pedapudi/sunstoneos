@@ -96,6 +96,22 @@ hold exceeds the discharge time, as expected. Replacing the 1.8 V probe or probi
 The existing admission refuses a bank that does not read 3.3 V before any card command. The path needs a narrowly scoped
 exception: the 1.8 V bank is admitted only for the probe in step 3 and the continuation after it.
 
+## Stage 1 prediction (written before the run)
+
+The probe (`apps/sd-backup-probe`, now with `observe_s18`) runs the identification in profile 2 as before, with S18R in every
+ACMD41 and no CMD11, and reports the CMD6 response of the high-speed switch. One run on port 3-1, no card write, the card stays at
+3.3 V. Predicted from the card's earlier identification (CID `2750485344363447606832ea2f01a61d`, OCR `0xc0ff8000`, SCR `0x83848502`,
+Class 10, U3, V30, A1, 4 MiB allocation unit):
+
+- **S18A set:** OCR `0xc1ff8000` (bit 24 added). A U3 card must be UHS-I capable.
+- **Group 1 support bits:** `0x001f`, that is SDR12, SDR25, SDR50, SDR104 and DDR50. SDR104 is the bit that matters; DDR50 is the
+  least certain. The function selected by the switch is 1 (high speed).
+- **Identity:** manufacturer id `0x27` (Phison), OEM `PH`, product `SD64G`, revision 6.0, serial `6832ea2f`, made June 2026.
+- **Allocation unit:** 8,192 sectors (4 MiB), and no restoration word changed.
+
+What would refute it: S18A clear (the card then has nothing to gain from the switch), SDR104 absent, or any change in the
+reported identity.
+
 ## Board plan
 
 Each stage has one hypothesis, every failure branch ends in a state the next stage's algorithm resolves, and nothing runs

@@ -91,6 +91,9 @@ struct sdp_report {
     /* ACMD13 (the SD Status register) and the allocation unit decoded from it, both ways. */
     uint8_t sd_status[64];
     uint64_t status_result, au_sectors, au_sectors_uhs, status_us;
+    /* The CMD6 response of the last switch: the support bits of every function group (byte 12 and 13 are group 1, the bus speed
+     * modes: bit 0 SDR12, 1 SDR25, 2 SDR50, 3 SDR104, 4 DDR50) and the function the switch selected (byte 16 low nibble). */
+    uint8_t switch_status[64];
 };
 _Static_assert(sizeof(struct sdp_input) == 160 - 6 * 4 + 4 * SDP_MAX_CAPTURE, "input wire size");
 

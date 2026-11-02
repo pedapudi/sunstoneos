@@ -211,7 +211,8 @@ static int setup(void)
         .startup_deadline = s.end, .pins = {{2, 1, 1}, {2, 1, 1}}};
     s.config = (struct a733_mmc_platform_config){.owner = owner, .handoff = handoff, .topology = generation ^ owner,
         .deadline_us = s.start + IDENTIFY_US, .lifetime_deadline_us = s.start + LIFETIME_US,
-        .kind = SUNXI_MMC_SD, .voltage_mask = 0x00300000, .sd_profile = SUNXI_MMC_SD_HIGH_SPEED4, .dma = DESCRIPTORS};
+        .kind = SUNXI_MMC_SD, .voltage_mask = 0x00300000, .sd_profile = SUNXI_MMC_SD_HIGH_SPEED4, .dma = DESCRIPTORS,
+        .observe_s18 = 1};          /* ACMD41 carries S18R and the card's S18A is kept in the OCR; CMD11 is never sent */
     if (!s.config.topology) return 0;
     /* Establish entry state, do not require it: the pins carry whatever the boot ROM and the runner left
      * (the provider accepts the passive and the ROM JTAG patterns). The inherited fields are read here,
@@ -519,6 +520,7 @@ static void report(int outcome)
     memcpy((void *)&o->fat, &fat, sizeof fat);
     memcpy((void *)&o->region, &region, sizeof region);
     memcpy((void *)o->sd_status, status_copy, sizeof status_copy);
+    if (s.card_valid) memcpy((void *)o->switch_status, c->switch_status, sizeof o->switch_status);
     o->status_result = status_result; o->status_us = status_us;
     if (status_result) { o->au_sectors = sunxi_mmc_au_sectors(status_copy, 0); o->au_sectors_uhs = sunxi_mmc_au_sectors(status_copy, 1); }
     __asm__ volatile("dsb sy" ::: "memory");

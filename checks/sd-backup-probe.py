@@ -23,7 +23,7 @@ def main():
     a.output.mkdir(parents=True, exist_ok=False)
     names = ['stage', 'reason', 'done', 'planned', 'identified_us', 'elapsed_us', 'cid', 'csd', 'ocr', 'rca', 'sectors', 'scr', 'mode',
              'card_hz', 'baseline_start', 'baseline_end', 'clock_off', 'pmic_parked', 'capture_done', 'sector', 'sd_status',
-             'status_result', 'au_sectors', 'au_sectors_uhs', 'status_us']
+             'status_result', 'au_sectors', 'au_sectors_uhs', 'status_us', 'switch_status']
     source = ('#include <stddef.h>\n#include <stdio.h>\n#include "probe.h"\nint main(void){\n' +
               ''.join(f'printf("{n} %zu\\n", offsetof(struct sdp_report, {n}));\n' for n in names) +
               'printf("report %zu\\ninput %zu\\n", sizeof(struct sdp_report), sizeof(struct sdp_input));return 0;}\n')

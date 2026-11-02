@@ -18,8 +18,8 @@ INPUT_BYTES = 2184
 OFFSET = dict(magic=0, stage=16, reason=24, done=32, planned=40, identified_us=48, elapsed_us=56, cid=80, csd=112, ocr=144,
               rca=152, sectors=160, scr=168, mode=184, card_hz=192, baseline_start=200, baseline_end=328, clock_off=456,
               pmic_parked=464, capture_done=472, sector=3296, sd_status=272848, status_result=272912, au_sectors=272920,
-              au_sectors_uhs=272928, status_us=272936)
-REPORT_BYTES = 272944
+              au_sectors_uhs=272928, status_us=272936, switch_status=272944)
+REPORT_BYTES = 273008
 
 
 def pack_input(sectors):
@@ -29,6 +29,23 @@ def pack_input(sectors):
     raw += struct.pack('<2Q', 0, 0) + struct.pack('<QII48s32s', 0, 0, 0, b'', bytes(32))
     assert len(raw) == INPUT_BYTES
     return raw
+
+
+SPEED_MODES = ('SDR12', 'SDR25', 'SDR50', 'SDR104', 'DDR50')
+
+
+def capabilities(ocr, cid_hex, switch):
+    """What the 3.3 V observation shows. S18A is OCR bit 24 of the ACMD41 response that carried S18R (no CMD11 was sent). The bus speed
+    support bits are the CMD6 response's group 1 field (bytes 12 and 13, big-endian). The CID is manufacturer id (8 bits), OEM id
+    (16), product name (40), revision, serial, manufacturing date."""
+    cid = bytes.fromhex(cid_hex)
+    support = (switch[12] << 8) | switch[13]
+    return dict(s18a=bool(ocr & (1 << 24)), ccs=bool(ocr & (1 << 30)),
+                bus_speed_support=[m for i, m in enumerate(SPEED_MODES) if support & (1 << i)], bus_speed_support_bits=support,
+                selected_function=switch[16] & 15, max_current_support=(switch[0] << 8) | switch[1],
+                manufacturer_id=cid[0], oem_id=cid[1:3].decode('ascii', 'replace'), product_name=cid[3:8].decode('ascii', 'replace'),
+                product_revision=f'{cid[8] >> 4}.{cid[8] & 15}', serial=cid[9:13].hex(),
+                manufacturing_date=f'20{(((cid[13] & 15) << 4) | (cid[14] >> 4)):02d}-{cid[14] & 15:02d}')
 
 
 def decode(raw, requested):
@@ -44,7 +61,9 @@ def decode(raw, requested):
                baseline_changed=[i for i, (a, b) in enumerate(zip(q('baseline_start', 16), q('baseline_end', 16))) if a != b],
                clock_off=q('clock_off')[0], pmic_parked=q('pmic_parked')[0], captured=captured,
                status_result=q('status_result')[0], au_sectors=q('au_sectors')[0], au_sectors_uhs=q('au_sectors_uhs')[0],
-               status_us=q('status_us')[0], sd_status=raw[OFFSET['sd_status']:OFFSET['sd_status'] + 64].hex())
+               status_us=q('status_us')[0], sd_status=raw[OFFSET['sd_status']:OFFSET['sd_status'] + 64].hex(),
+               switch_status=raw[OFFSET['switch_status']:OFFSET['switch_status'] + 64].hex())
+    out.update(capabilities(out['ocr'], out['cid'], bytes.fromhex(out['switch_status'])))
     if captured != len(requested):
         raise SystemExit(f'captured {captured} of {len(requested)} sectors; stage {out["stage"]} reason {out["reason"]}')
     records = b''.join(struct.pack('<Q', s) + raw[OFFSET['sector'] + 512 * i:OFFSET['sector'] + 512 * (i + 1)] for i, s in enumerate(requested))
