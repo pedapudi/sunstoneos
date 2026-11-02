@@ -6,6 +6,13 @@ if(NOT TARGET sunstone-a733-os-core)
   return()
 endif()
 include("${CMAKE_CURRENT_LIST_DIR}/sunstone-image.cmake")
+# A diagnostic build: the application's main stack stays in the image instead of coming from the ledger with a guard
+# block (apps/os/large.c). The ledger stack is the default and the production configuration.
+option(SUNSTONE_OS_STATIC_MAIN_STACK "Diagnostic: keep the main stack in the image" OFF)
+if(SUNSTONE_OS_STATIC_MAIN_STACK)
+  set_property(SOURCE "${SUNSTONE_SOURCE_ROOT}/apps/os/large.c" TARGET_DIRECTORY sunstone-a733-os-core
+    APPEND PROPERTY COMPILE_DEFINITIONS SUNSTONE_OS_STATIC_MAIN_STACK=1)
+endif()
 set(os_lifetime supervised)
 if(SUNSTONE_A733_OS_RESIDENT)
   set(os_lifetime resident)

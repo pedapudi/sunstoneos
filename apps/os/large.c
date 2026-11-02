@@ -114,6 +114,7 @@ int os_large_prepare(void)
     if (large_admit(&ledger, owner_asid, __start_sunstone_large_regions, count, slots, os_large_capacity)) return 0;
     /* The main stack: a 2 MiB block that the guard owner holds below it, so that an overflow is an EL0 fault in memory
      * no space maps. The stack is at the bottom of its own block. Where no extent is free the static stack stays. */
+#ifndef SUNSTONE_OS_STATIC_MAIN_STACK      /* the diagnostic build of cmake/a733-os.cmake keeps the image's stack */
     if (manifest) {
         uint64_t base, bytes;
         if (app_region_acquire(&ledger, APP_REGION_GUARD_OWNER, 2 * APP_REGION_BLOCK, APP_REGION_READ, &base, &bytes) == 0) {
@@ -127,6 +128,7 @@ int os_large_prepare(void)
                     if (ledger.entry[i].owner == APP_REGION_GUARD_OWNER) ledger.entry[i].owner = 0;
         }
     }
+#endif
     arena = (struct app_table_arena){arena_pages, (uintptr_t)arena_pages, APP_SPACE_PAGES, 0};
     int built = app_space_build_l2(&space, &arena, base_l1, base_l2, &ledger, owner_asid, owner_asid, 0) == 0;
     /* The heap record, when the manifest has one, becomes the C library's heap; an image whose library cannot
