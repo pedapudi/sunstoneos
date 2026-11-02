@@ -125,8 +125,8 @@ remain unmeasured. No tickless power improvement is claimed.
 Entry `1793561595474856811-579a99b6` returns normally with feature CRC
 `ac657a3b`, log-probability CRC `a7ade80e`, raw text `there was silence` and
 formatted text `There was silence.`. Marks and capitalization match the host
-reference. The external CPU application manifest correction, mimus commit
-`8308b79aa`, still needs integration by its maintainer or the coordinator.
+reference. The reference uses external CPU application manifest correction `8308b79aa`.
+Current application pins are maintained in `apps/mimus/source.json`.
 
 The queue records `returned` after an audited offline repair of the legacy
 JSON expectation wrapper. The original expectation, mismatch and frozen inputs
@@ -188,13 +188,23 @@ CPU0's periodic tick remains; remote due deadlines request their owner.
 Control and registry modules provide fixed storage and lifetime references.
 These are partial implementation results, not complete public API coverage.
 
-The [API inventory](../../checks/scheduler-kernel-api.json) lists all 94 public
-task entry points: 34 route to the private adapter and 60 remain pending.
-It distinguishes compile-only paths from behavior-tested paths. The private
-patch changes 35 bodies including a creation helper. The live CMake source
-chain does not apply that API patch. Port IRQ-exit/yield hooks, object retry
-protection, priority inheritance and remaining API conversions block enablement.
-Commits `79ed0c90` and `35d35753` preserve this work coherently.
+The [API inventory](../../checks/scheduler-kernel-api.json) lists 94 public
+task entry points: 82 have private routes, including all 81 selected by the
+validation configuration. Definition checks verify the intended helper at each
+function definition. The Clang audit follows calls and address-taken callbacks;
+154 reachable functions have no legacy ready/delayed/suspended-list access.
+Twelve optional APIs remain compile-time rejected: dynamic allocation, MPU,
+tickless operation and formatted statistics. These guards prevent a configured
+API from silently entering the legacy selector. The live CMake chain still
+uses the control kernel; no production fork is enabled.
+
+Private object-source patches route queue, semaphore, event, stream and timer
+retry paths through compatibility object protection. Public task critical
+sections serialize callers through the retained task/ISR locks and disable
+local preemption; ISR critical sections use the ISR lock. Other owners continue
+dispatching. Global scheduler suspension uses the separate acknowledged gate.
+The unsupported port scheduler-end operation asserts directly rather than
+running legacy idle-task deletion.
 
 Series B intentionally keeps a ready task on its busy home core even if another
 core is idle. Idle pull belongs to series D. Concurrent linked-kernel stress
@@ -220,71 +230,103 @@ barrier. A separate negative omits the empty-head SGI and strands nonurgent
 hints without an owner interrupt. The migration negative reproduces an early
 old-owner acknowledgment followed by a delayed old-route publication.
 
-The exhaustive suite passes 50 cases, including sixteen expected negative
-controls; peak resident memory is 199,636 KiB. Owner, notification, registry
-and deadline sanitizer/native checks pass. The private adapter compiles for
-AArch64 with the converted optional branches selected. Its linked sanitizer
-fixture passes 10,000 remote wakes around block-frame eviction, local/event
-waits, remote timeout delivery and zero compatibility-lock acquisitions in the
-measured local scheduling loops. It links real FreeRTOS task/list code but
-advances owner checkpoints explicitly. It does not run concurrent task stacks,
-so it cannot establish the required eight-core QEMU or board behavior.
-Evidence resides in `series-b/` beneath the task cache.
+The exhaustive suite passes 52 cases, including seventeen expected negative
+controls; peak resident memory is 200,364 KiB. The actual routing fixture pauses
+a publisher across two transfers. Removing epoch validation from a generated
+copy makes that same fixture reject stale admission. The positive sanitizer
+fixture also covers an admitted delayed publisher, fresh inbox drain, continued
+new-route publication and deletion before adoption. Its native object contains
+neither LL/SC loops nor the test pause hook.
 
-### Migration routing remains the first correctness blocker
+The private adapter compiles for AArch64 in both modes, with all four object
+sources selected. Linked sanitizer cases pass 10,000 remote notification races,
+public startup/reset, static creation/reuse, migration, object waits and timer
+commands, nested critical sections, runtime statistics, preemption modes,
+TLS/errno and trace hooks. Measured local scheduling loops acquire zero
+compatibility locks. These fixtures advance owner checkpoints explicitly;
+they do not execute concurrent task stacks.
 
-The independent ordering review approves the wake helpers within their scope
-and verifies the specific control-slot reuse correction in `35d35753`.
-Control FIFO counters persist across incarnation changes; registration uses
-that FIFO, and retirement callbacks carry an incarnation checked under
-administration. The threaded duplicate-consumer/reuse fixture passes.
+CPU0 reads owner-published slice deadlines and sends only due slice requests.
+Six secondary-core FIFO rotations pass without timeout deadlines. Single-task,
+idle and preemption-disabled owners receive no slice SGIs in those cases.
+The first local equal-priority wake arms a slice without another scheduling IRQ.
+The fixtures record one scripted observation of ready work on a busy home core
+beside an idle core. A concurrent imbalance frequency remains unmeasured.
 
-The review withholds whole-adapter approval. Control code can remember an old
-owner's empty inbox while an old-route publisher still holds a reference.
-A later reference-count snapshot does not close routing admission or require
-a fresh drain acknowledgment. Migration must serialize old-epoch publisher
-admission against transfer, close that epoch, wait for its publishers, then
-obtain a fresh old-owner drain acknowledgment. Unconditional forwarding alone
-does not establish the retirement or reuse contract. The model demonstrates
-the early-ack race; the actual routing-epoch fix remains open.
+Ready trace hooks run in the completing caller before wake publication/SGI;
+public entry/return hooks preserve single evaluation. Cross-core current-task
+queries use atomic snapshots. An independent owner entry can occur between
+logical completion and the producer hook. Concurrent QEMU must validate origin
+attribution and sample completeness before latency-image submission.
+Evidence resides in `series-b-round2/` beneath the task cache.
 
-The review is `series-b/ordering-review/review.md`, SHA-256
-`3122dc34a51870affd3a1bdde168c2773dddd70e9781aa4461e74bed9a9dc00d`.
-The same review must examine the completed migration and port integration
-before a board run.
+### Routing epochs delimit migration publishers and fresh acknowledgments
 
-The supervised production OS baseline builds with the fork disabled; its log
-is `series-b-baseline.log`. The current two-core legacy QEMU check passes 256
-queue exchanges, affinity, floating-point context, mutex exclusion and
-preemption; evidence is `series-b/control-qemu/`. The check index verifies
-843 checks. The full integration gate, mixed-affinity
-concurrent QEMU stress, all-core fork soak and physical comparisons remain due.
-No new board entry or after measurement exists for series B. The loaded wake
-p50/p99/maximum baseline is 69.292/159.958/159.167 microseconds on core six;
+Each task has a packed owner/epoch word and two publisher-count banks, with a
+closed flag in the same atomic word as each count. A caller holds its lifetime
+pin, samples the route, registers once, executes a DMB and validates the word.
+An accepted token covers hint publication and SGI completion. Rejection uses
+one bounded activation broadcast to all owners, with no retry or shared lock.
+The lifetime pin covers that broadcast. Owner inspection and adoption validate
+the actual wait outcome; a hint never authorizes activation by itself.
+
+Migration closes the old bank before detaching the task. TRANSFERRING prevents
+either source nor destination from enqueueing it early. The destination restores
+local deadline/state ownership and publishes the new route after adoption.
+The source acknowledges only after its closed bank reaches zero and its live
+and detached hints drain. New-route publishers and unrelated lifetime pins do
+not postpone that acknowledgment. Reopening a bank preserves transient rejected
+readers, preventing lost decrements and stale two-bank admission.
+
+The independent ordering review approves the control module and private glue
+through `2820f2f5`, including broadcast fallback, retirement, atomic current-task
+snapshots and slice-deadline publication. It also approves the permanent FIFO
+and incarnation-checked retirement callback correction. The review does not
+approve live port wiring, concurrent stacks or physical timing.
+It is `series-b-round2/review/review.md`, SHA-256
+`9ffc9af95a82236b5f21210a16ddb1ad01a3dbc473556771c41537f67d0390ad`.
+
+The full control-kernel integration gate passes at revision `0d0d831c`, including
+the supervised/resident variants, legacy eight-core soak, indexed host checks
+and check index. Evidence is `integration/gate-scheduler-b-round2/`.
+This validates the disabled control, not concurrent execution of the fork.
+Subsequent slicing/trace changes affect only the private fork and pass its
+focused checker. The source includes `bringup` through `a96c8c1a`, including
+the runtime-deadline repair for application waits; future images must retain it.
+
+No series-B board entry or after measurement exists. The port 3-3 baseline
+loaded wake p50/p99/maximum is 69.292/159.958/159.167 microseconds on core six;
 maximum task-lock wait is 139.333 microseconds. Per-core baseline values remain
 in `partitioned/control-quantiles-summary.json`.
+The lock worker's matched port 3-1 references are test-and-set entry
+`1793575947324491365-4f50a160` and tickets entry
+`1793576137408460593-a3232b16`. Their queue results both record `returned`,
+normal return and ROM return. They are another chip from the port 3-3 baseline
+and are not partitioned-kernel results. The lock worker owns their per-core
+timing analysis and instrumentation.
 
 ## Finish series B before enabling the fork
 
-1. Fix routing-epoch admission and the fresh old-owner migration acknowledgment.
-   Extend the actual control fixture with delayed old publishers and a second
-   transfer; keep incarnation and pending-hint retirement separate.
-2. Complete the 60 pending task APIs and priority-inheritance paths. Pin before
-   every TCB read, route state changes to the owner, and exclude legacy
-   ready/delayed/suspended list manipulation under the enabled option.
-3. Convert queue, semaphore, mutex, event, stream and timer retry paths to
-   compatibility object protection. That lock never permits a remote owner-list
-   edit. Preserve the FIFO port lock worker's acquire/release implementation.
-4. Connect the complete generated fork and owner IRQ-exit/voluntary-yield port
-   hooks. Preserve frame/TLS/trace/runtime accounting and CPU0-only global time.
-   Run mixed pinned/multi-core-affinity tasks at competing priorities, timeout
-   races, deletion with pending hints and migration under real eight-core QEMU.
-   Record local scheduling lock counts and idle-core/home-core imbalance.
-5. Complete the independent ordering review and full integration gate. Merge
-   coordinator-landed lock/topology/probe changes through `bringup`. Submit the
-   unchanged latency workload at the existing CPU operating points and compare
-   every core against its baseline; then run exact mimus recognition. Never
-   retry an image that fails to return without a concrete correction.
+1. Connect the generated task/object fork and owner IRQ-exit/voluntary-yield
+   port hooks. Preserve the lock worker's acquire/release hunks and the current
+   task/FPU/critical/TLS ABI, including native EL0 service calls. Propagate the
+   fork configuration and private static-task header through the application kit.
+   Link without legacy dispatch paths and verify the real newlib layout.
+2. Complete functional edge cases before concurrent admission: clean up TLS
+   when static-task registration fails at capacity, and verify public control
+   requests against the no-object-lock/IRQ-enabled acknowledgment precondition.
+   Then run mixed pinned/multi-core-affinity tasks under real eight-core QEMU,
+   including competing priorities, wake/block/timeout, pending deletion, repeated
+   migration and slicing. Record scheduling lock counts, ready-origin fidelity
+   and busy-owner/idle-core frequency. Idle pull stays D.
+3. Complete the port integration portion of the ordering review, repeat affected
+   checks and the full gate for the completed fork, and keep the control build
+   available. Merge coordinator-landed lock/topology/probe changes from
+   `bringup`, retaining the startup-wait fix.
+4. Submit the unchanged latency workload at existing CPU operating points on
+   port 3-3, respecting shared queue ownership. Compare per-core wake and lock
+   distributions against the pinned same-board control, then run exact mimus.
+   Do not repeat an image that fails to return without a concrete correction.
 
 ### Recovery commits and remaining review scope
 
@@ -292,9 +334,11 @@ The registry/layout commits `5db91643`, `e0136632`, deadline commit `a45da836`
 and control commit `2bf3e230` are integrated as private-fork foundations.
 `a45da836` copies `390b8880`; they are one implementation. Retirement hook
 `e83b200b` is integrated as `f109a9af`, with the last-release ordering repair
-in `8eacaa3e`. The API conversion and exact pending list live in `79ed0c90`.
-The reviewed reuse correction is `35d35753`. Host compilation and isolated
-checks do not approve the incomplete live adapter.
+in `8eacaa3e`. The current API conversion and selected configuration are recorded in
+`checks/scheduler-kernel-api.json`. Routing-epoch closure is `53549546`, its
+executable/model races are `652cb8e5`, and private API/trace coverage reaches
+`2820f2f5`. The reviewed reuse correction is `35d35753`. Host compilation and
+isolated checks do not approve live port integration.
 
 The earlier adapter recovery `00293293` and superseded measurement prototype
 `7598e945` remain recovery points. Do not reapply their source over the current

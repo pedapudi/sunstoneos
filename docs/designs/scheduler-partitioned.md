@@ -569,6 +569,29 @@ forwarding until all old-epoch publisher references, live/detached hints and
 control records retire and both owners acknowledge. Migration epochs and task
 incarnations cannot wrap while any corresponding reference exists.
 
+The private control implementation uses a packed owner/epoch word and two
+atomic participant banks. Each bank combines closure and a count in one word.
+A lifetime-pinned publisher samples the route, registers with one acquire-release
+RMW, executes a DMB and validates the sampled word. It makes one attempt;
+rejection broadcasts an epoch-neutral activation hint to all admitted owners.
+The lifetime pin remains held through every hint and SGI. Publication commits
+the object outcome before route admission, so destination adoption can observe
+completion even when an admitted old publisher has not sent its hint yet.
+
+The source closes its old bank before detachment. TRANSFERRING prevents an early
+hint from reinserting the task on either queue. Destination adoption restores
+owner-local state before release-publishing the next route. Reopening the
+alternate bank preserves counts from rejected transient registrations. Its
+release orders the intervening route before a stale reader's acquiring RMW;
+validation therefore rejects a snapshot spanning two owner transfers.
+
+After the closed bank reaches zero, the source checks its live/detached hints
+and acknowledges that epoch. It requests a fresh local checkpoint after draining
+any remaining batch. A last closed participant posts an event instead of leaving
+the destination polling for reference retirement. New-route publishers do not
+hold the old epoch open. The existing lifetime/incarnation protocol separately
+protects deletion and static TCB reuse.
+
 Only the destination owns timeouts after adoption; before adoption the old
 owner holds timeout decisions in the transfer record. An already-expired
 deadline is checked against the object condition on adoption. Transfer preserves
@@ -758,7 +781,7 @@ and `k ≤ 16` activations per entry are fixed configuration limits.
 | Ready enqueue/remove | Fixed list-link and bitmap operations | At most 64 retired instructions each, excluding instrumentation and context save |
 | Pick/yield | One CLZ, one FIFO remove; yield adds one append | At most 96 instructions for local pick/yield body |
 | Untimed local notification-give | Native atomic value/pending operations, ready append and priority test | At most 160 instructions before optional switch |
-| Remote wake | Two native publication RMWs, DMB, status load, conditional SGI | Count the linked producer, including registry pin/release; no cycle claim before measurement |
+| Remote wake | Lifetime and routing pins, two hint/head publication RMWs, status/SGI handshake and reference releases | Count the complete linked producer; helper-only instruction counts exclude these pins and callbacks |
 | Incoming scan | One head exchange, at most 256 slot-word loads, nonzero-word exchanges and sixteen hint validations | Count the linked path; tune the bounded batch to meet 25 µs without delaying urgent tasks |
 | Timed block/wake | Object protocol plus at most seven heap levels | Count comparisons, loads/stores and object waits separately; no invented cycle conversion |
 | Timeout | At most seven heap levels per expired entry plus object detach | Measure simultaneous expiry and expired-batch continuation |
