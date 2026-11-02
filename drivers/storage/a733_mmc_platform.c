@@ -726,6 +726,18 @@ int a733_mmc_platform_irq(struct a733_mmc_platform *p,int enable)
        p->core.state!=SUNXI_MMC_READY||p->core.borrowed||p->ops.current(p->cookie)!=1)return 0;
     p->irq_mode=enable?1u:0u;return 1;
 }
+/* The core is idle and its last operation finished and was collected: a read that delivered its bytes, or, in a write-capable build, a bounded DMA write
+ * that the card confirmed (CMD13 READY and TRAN after every block). A write that started and was not confirmed is not a state to close from. */
+static int close_ready(const struct a733_mmc_platform *p)
+{
+    if(p->core.state!=SUNXI_MMC_READY||p->core.borrowed||p->core.result.error!=SUNXI_MMC_OK)return 0;
+    if(!p->core.result.write_started)return p->core.result.received!=0;
+#ifdef SUNXI_MMC_READ_ONLY
+    return 0;
+#else
+    return p->core.result.confirmed_blocks!=0;
+#endif
+}
 enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *p,uint64_t deadline)
 {
     if(!p||!p->initialized||p->update||p->config.kind!=SUNXI_MMC_SD||
@@ -735,9 +747,7 @@ enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *
     if(p->fault)return finish(p,fail(p));
     if(p->irq_mode)return finish(p,A733_MMC_INVALID);          /* the owner masks the interrupt and clears irq mode first */
     if(p->ops.current(p->cookie)!=1||p->signal||p->stage<READY||p->stage==CLOSED||
-       p->core.state!=SUNXI_MMC_READY||p->core.borrowed||p->core.result.write_started||
-       p->core.result.error!=SUNXI_MMC_OK||!p->core.result.received||
-       (p->stage>READY&&p->deadline!=deadline))return finish(p,A733_MMC_INVALID);
+       !close_ready(p)||(p->stage>READY&&p->deadline!=deadline))return finish(p,A733_MMC_INVALID);
     if(p->stage==READY){p->deadline=deadline;p->stage=CLOSE_CLOCK;}
     if(!timely(p))return finish(p,fail(p));
     /* Once released, an owner cannot be revalidated or retained. Every

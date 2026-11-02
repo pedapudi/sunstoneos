@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run checks/a733-mmc-dma-chain.c (the platform's descriptor-chain admission for the bounded DMA write)."""
+"""Run checks/a733-mmc-dma-chain.c (the platform descriptor-chain admission for the bounded DMA write, and the states it closes from)."""
 import argparse
 from pathlib import Path
 import shutil

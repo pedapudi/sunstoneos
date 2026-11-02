@@ -70,6 +70,15 @@ int main(void)
     /* DMA not enabled in GCTRL: programmed I/O, nothing to walk. */
     gctrl = 0;
     assert(dma_chain(&p, cmd25) == 1 && dma_chain(&p, cmd18) == 1);
+    /* Close from a finished operation: a collected read, or a bounded write the card confirmed; not an unconfirmed write, a borrowed buffer or an error. */
+    memset((void *)&p.core.result, 0, sizeof p.core.result); p.core.borrowed = NULL; p.core.state = SUNXI_MMC_READY;
+    assert(!close_ready(&p));                                                  /* nothing finished */
+    p.core.result.received = 512; assert(close_ready(&p));                     /* a read */
+    p.core.result.received = 0; p.core.result.write_started = 1; assert(!close_ready(&p));          /* a write that was not confirmed */
+    p.core.result.confirmed_blocks = 256; assert(close_ready(&p));             /* a write the card confirmed */
+    p.core.result.error = SUNXI_MMC_TIMEOUT; assert(!close_ready(&p));
+    p.core.result.error = SUNXI_MMC_OK; p.core.borrowed = source; assert(!close_ready(&p));
+    p.core.borrowed = NULL; p.core.state = SUNXI_MMC_WRITING; assert(!close_ready(&p));
     puts("PASS: platform chain admission accepts the bounded DMA write only while the core has one in progress");
     return 0;
 }
