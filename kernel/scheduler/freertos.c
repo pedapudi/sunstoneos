@@ -99,6 +99,32 @@ static bool ssKernelInitialized;
 static _Atomic unsigned ssKernelLoad[configNUMBER_OF_CORES];
 static unsigned ssKernelIdleNext;
 
+#ifdef SUNSTONE_PMU_ACCOUNT
+/* Measurement: cycles, L1D refills, L2D refills and backend stall cycles spent in the
+ * publish-and-wake paths, per CPU (counters: runtime/irq_count.c). Region 0 is
+ * ssKernelPublishReference, region 1 ssKernelService (called around the exit of every
+ * interrupt on the owner). Written by the CPU itself; 32-bit counter differences. */
+static struct { uint64_t v[4]; unsigned long entries; } ssKernelPmu[configNUMBER_OF_CORES][2];
+static inline void ssPmuRead(uint32_t o[4])
+{
+    uint64_t c, a, b, s;
+    __asm__ volatile("mrs %0, pmccntr_el0\n mrs %1, pmevcntr0_el0\n mrs %2, pmevcntr1_el0\n mrs %3, pmevcntr2_el0"
+                     : "=r"(c), "=r"(a), "=r"(b), "=r"(s) :: "memory");
+    o[0] = (uint32_t)c; o[1] = (uint32_t)a; o[2] = (uint32_t)b; o[3] = (uint32_t)s;
+}
+#define SS_PMU_ENTER uint32_t ss_pmu0[4]; ssPmuRead(ss_pmu0)
+#define SS_PMU_LEAVE(region) do { uint32_t ss_pmu1[4]; ssPmuRead(ss_pmu1); unsigned ss_core = (unsigned)portGET_CORE_ID(); \
+    for (unsigned k = 0; k < 4; ++k) ssKernelPmu[ss_core][region].v[k] += (uint32_t)(ss_pmu1[k] - ss_pmu0[k]); \
+    ++ssKernelPmu[ss_core][region].entries; } while (0)
+unsigned long ulSunstoneKernelPmu(unsigned core, unsigned region, unsigned counter)
+{
+    if (core >= configNUMBER_OF_CORES || region >= 2 || counter > 4) return 0;
+    return counter == 4 ? ssKernelPmu[core][region].entries : (unsigned long)ssKernelPmu[core][region].v[counter];
+}
+#else
+#define SS_PMU_ENTER ((void)0)
+#define SS_PMU_LEAVE(region) ((void)0)
+#endif
 #ifdef SUNSTONE_IRQ_COUNT
 /* Measurement: which call sites send SGIs, to which CPU. One table per sending
  * CPU, written by that CPU only; read after the measured interval. */
@@ -374,6 +400,7 @@ static bool ssKernelAdmitTask(TCB_t *task)
 }
 static void ssKernelControlDrain(void);
 static void ssKernelPullServe(unsigned);
+static uint64_t ssKernelPullTargets(struct ssKernelCPU *, unsigned);
 #ifndef SS_SERVICE_PASSES
 #define SS_SERVICE_PASSES 1u
 #endif
@@ -385,6 +412,7 @@ static void ssKernelCommandsDetach(void);
  * is released. No producer writes a foreign owner node or timeout entry. */
 static void ssKernelPublishReference(struct ss_kernel_pin pin)
 {
+    SS_PMU_ENTER;
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
     unsigned priority = atomic_load_explicit(&s->effective, memory_order_acquire);
     struct ss_control_route route;
@@ -399,6 +427,7 @@ static void ssKernelPublishReference(struct ss_kernel_pin pin)
             ss_owner_publish(&ssKernelCPUs[cpu].run, pin.slot, priority);
     }
     ss_kernel_handle_put(&pin);
+    SS_PMU_LEAVE(0);
 }
 static void ssKernelFlush(void)
 {
@@ -708,6 +737,7 @@ static void ssKernelService(void)
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    SS_PMU_ENTER;
     /* Work that arrived during the pass is taken by the next pass here. A new
      * exception entry costs an SGI, the exception and a full service entry, a
      * long span when the memory system is busy, so it is the last resort. */
@@ -719,6 +749,7 @@ static void ssKernelService(void)
 #endif
         ssKernelForce(c);
     }
+    SS_PMU_LEAVE(1);
     portCLEAR_INTERRUPT_MASK(irq);
 }
 static bool ssKernelDispatch(void *context, unsigned cpu)
@@ -802,6 +833,15 @@ static void ssKernelSwitch(unsigned c)
     ssKernelPullIdle(c, (((TCB_t *)selected->context)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0);
     __atomic_store_n(&pxCurrentTCBs[c], selected->context, __ATOMIC_RELEASE);
     pxCurrentTCBs[c]->xTaskRunState = (BaseType_t)c;
+#ifndef SS_KERNEL_TEST_NO_IDLE_PULL
+    /* The selecting pass skips the pull, and the pull takes compatibility locks the selector
+     * never takes. A migratable task left waiting behind the task just selected, with an
+     * allowed CPU idle, would otherwise wait for an entry that may never come: ask for one.
+     * The entry serves only an idle target, so it cannot repeat without a move. */
+    if (cpu->run.ready_bitmap && !(((TCB_t *)selected->context)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) &&
+        (ssKernelPullTargets(cpu, c) & atomic_load_explicit(&ssKernelIdleMask, memory_order_acquire)))
+        ssKernelForce(c);
+#endif
 #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
     if (previous_reference) ss_owner_put(previous_reference);
 #endif
@@ -1371,8 +1411,12 @@ static struct ss_owner_task *ssKernelPullCandidate(struct ssKernelCPU *cpu, unsi
     }
     return NULL;
 }
-/* Moves started by idle pull since the start; diagnostics read it. */
+/* Moves started by idle pull since the start, and the times a CPU entered idle while an owner
+ * held a ready task that CPU could run; diagnostics read them. */
 static _Atomic unsigned long ssKernelIdlePulls;
+static unsigned long ssKernelIdleWaiting[configNUMBER_OF_CORES];
+unsigned long ulSunstoneIdleWaiting(unsigned core) { return core < configNUMBER_OF_CORES ? ssKernelIdleWaiting[core] : 0; }
+unsigned long ulSunstoneIdlePulls(void) { return atomic_load_explicit(&ssKernelIdlePulls, memory_order_relaxed); }
 unsigned long ss_kernel_idle_pulls(void) { return atomic_load_explicit(&ssKernelIdlePulls, memory_order_relaxed); }
 static void ssKernelPullServe(unsigned c)
 {
@@ -1426,6 +1470,7 @@ static void ssKernelPullIdle(unsigned c, bool idle)
     if (!marked) atomic_fetch_or_explicit(&ssKernelIdleMask, bit, memory_order_acq_rel);
     for (unsigned v = 0; v < configNUMBER_OF_CORES; ++v) {
         if (v == c || !(atomic_load_explicit(&ssKernelCPUs[v].pull_targets, memory_order_acquire) & bit)) continue;
+        ++ssKernelIdleWaiting[c];
         atomic_fetch_or_explicit(&ssKernelCPUs[v].pull_requests, bit, memory_order_acq_rel);
         ssKernelForce(v);
     }
@@ -1616,6 +1661,13 @@ static eTaskState ssKernelState(TaskHandle_t handle)
     struct ss_kernel_pin pin;
     if (!ss_kernel_handle_pin(&ssKernelRegistry, handle, &pin)) { portCLEAR_INTERRUPT_MASK(irq); return eDeleted; }
     unsigned state = ssKernelLogicalExecution(&ssKernelTasks[pin.slot]);
+    /* A suspend, resume or delete the owner has not applied yet is already the task's state,
+     * as in upstream FreeRTOS, where the call completes the change. */
+    struct ss_control_state desired;
+    ss_control_snapshot(&ssKernelControl, pin.slot, &desired);
+    if (desired.dead) state = SS_K_DEAD;
+    else if (desired.suspended) state = SS_K_SUSPENDED;
+    else if (state == SS_K_SUSPENDED) state = SS_K_READY;
     static const eTaskState states[] = { eReady, eRunning, eBlocked, eSuspended, eDeleted };
     ss_kernel_handle_put(&pin);
     portCLEAR_INTERRUPT_MASK(irq);

@@ -344,6 +344,8 @@ static void control(void *unused)
         NULL, 2, local_stack[1], &local_state[1], 2);
     configASSERT(local_receiver && local_sender);
     vTaskCoreAffinitySet(local_receiver, 6);
+    /* The suspended background tasks leave their cores to the idle tasks asynchronously. */
+    for (unsigned wait = 0; wait < 2000 && !__atomic_load_n(&selected_idle[2], __ATOMIC_RELAXED); ++wait) vTaskDelay(1);
     vTaskDelay(4);
     uint64_t busy_start = __atomic_load_n(&busy[1], __ATOMIC_RELAXED);
     xTaskNotifyGive(local_sender);
@@ -434,6 +436,10 @@ void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 void kernel_main(void)
 {
     platform_init();
+    /* The check can delay the primary core by a loaded count of loop turns before it creates any
+     * task. Different delays shift every later interleaving on the deterministic clock; zero
+     * (the default) is no delay. checks/scheduler-partitioned-qemu.py --skew loads the word. */
+    for (volatile uint32_t turns = *(volatile uint32_t *)0x47ff0000UL * 61u; turns; --turns) {}
     replies = xQueueCreateStatic(32, sizeof(uint32_t), reply_storage, &reply_state);
     empty = xQueueCreateStatic(1, sizeof(uint32_t), timeout_storage, &timeout_state);
     configASSERT(replies && empty);

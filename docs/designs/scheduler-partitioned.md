@@ -809,6 +809,192 @@ per-CPU structures on the owner. The pass is not kept (`SS_SERVICE_PASSES` is
 1). Measured with the repeat pair, the fork is 0.4% slower than the global kernel on
 the current engine and does not reach the 2% faster that enabling it would need.
 
+### Hardware counters on the owner core separate a slower wake from cache effects
+
+The 2.2 ms the owner core (6) loses on the recorded recognition has two candidate
+causes. Slower wake: the fork's publish-and-wake service (`ssKernelPublishReference`
+for the owner's seven sends, `ssKernelService` at the end of every interrupt) takes
+more cycles than the stock kernel's wake. Cache effects: the fork's larger per-CPU
+structures, the compat-lock lines and the extra interrupts displace the owner's
+working set, so its own compute and the serial code between calls run slower with
+more refills. The same image pair runs with the PMU enabled on every core at EL1
+with EL0 read access (cycles, L1D refills, L2D refills, backend stall cycles; read
+only). The owner reads the counters at the boundaries of four disjoint windows on
+core 6 over the recognition: the sends of a parallel call, the owner's own share,
+the tail (wait for the slowest worker and the completion path), and the serial code
+outside the parallel calls (total less the three). The fork also accumulates the
+counters inside `ssKernelPublishReference` and `ssKernelService` on core 6.
+
+Prediction. If the wake service is slower: the fork's excess cycles are in the
+send and tail windows and in the two kernel regions (at least 1.5 ms of the
+2.2 ms), the owner and serial windows match the stock kernel's within 0.3 ms, and
+refills per window match. If cache effects: the excess is in the owner and serial
+windows (at least 1.5 ms), their L1D and L2D refills are higher in the fork by
+about 10% or more, and the send and tail windows differ by at most 0.5 ms. Interrupts that
+land in the owner window count toward that window, so the kernel regions' cycles
+are subtracted from the owner window before it is compared. A split with no
+region over 1.5 ms points to neither.
+
+Result (port 3-3, one run per kernel, exact output; cycles of core 6, fork minus
+global kernel, 2.002 GHz):
+
+| Window | Global kernel (M cycles) | Fork (M cycles) | Difference | L1D refills | L2D refills |
+| --- | --- | --- | --- | --- | --- |
+| Owner's own share | 92.86 | 94.61 | +0.87 ms | +1.5% | +2.3% |
+| Sends | 10.57 | 12.19 | +0.81 ms | -29% | -32% |
+| Tail (slowest worker, completion path) | 31.50 | 21.08 | -5.20 ms | -47% | -55% |
+| Everything else between bind and report | 241.43 | 249.38 | +3.97 ms | -0.1% | -0.6% |
+
+The first three windows are the parallel calls and agree with the time accounting
+(owner share +0.90 ms, sends +0.72 ms). The tail window counts cycles only while the
+core runs: it waits in WFI, which stops the cycle counter, so its time difference is the
+-2.6 ms of the time accounting. The last row is not the serial code of the timed
+recognition: the window runs from the bind to the report and includes about 90 ms of
+untimed work (the warm and verified passes), so it cannot hold the 1.4 ms by which the
+timed serial code is longer.
+
+Inside the fork, `ssKernelPublishReference` took 2.05 M cycles in 2,658 entries (771
+cycles each) and `ssKernelService` 0.81 M cycles in 1,596 entries (508 each), 1.4 ms
+together.
+
+Neither candidate meets its prediction. The wake service is not slower: sends cost 0.8
+ms more, the tail 2.6 ms less (time), a net 1.8 ms faster, and no wake window exceeds the
+stock kernel's by 1.5 ms. Cache effects do not reach 1.5 ms: the owner window, where
+they would show, is 0.87 ms longer with 1.5% and 2.3% more refills, not 10%, and its backend
+stalls are 34% of its cycles in both kernels. The 1.4 ms by which the timed serial code
+is longer is not covered by these windows. No single cause accounts for 1.5 ms of the
+loss, so the stream stops with the fork off by default. The fork's faster completion path
+(-2.6 ms) and its slower sends, owner share and serial code (+0.7, +0.9 and +1.4 ms)
+cancel to the measured +0.4%. A counter window around the timed serial code, which the
+engine would have to place inside its timed region, is the next step if the work resumes.
+
+## Robot control sets the requirement: bounded worst-case response
+
+SunstoneOS on this board will run quadruped and biped robots with several cameras
+and lidar. The main scheduler requirement is real-time response; throughput is
+second. The proposed targets, which the product owner can revise: worst-case wake
+latency of the highest-priority task at most 20 µs; jitter of a 1 kHz control period
+at most 50 µs; no deadline miss under full load. Measurements report the maximum
+and the 99.99th percentile, never means.
+
+### What bounds a task's response
+
+A task woken by an interrupt runs after four delays: the interrupt waits while the
+core has API-level interrupts masked (the longest masked span on that core), the
+interrupt entry and the wake path run, the scheduler selects the task, and the
+context switch completes. The first term is the largest and cannot be below the
+longest masked span of any kernel path that runs on that core. The measured
+spans on port 3-3, in microseconds, with the memory system saturated by eight
+cores streaming (the CPU control and the recognition):
+
+| Kernel | Longest masked span | Loaded wake, maximum | Task-lock wait, maximum |
+| --- | --- | --- | --- |
+| Global kernel, ticket locks off | 264 | 160 | 150 |
+| Global kernel, ticket locks | 266 | 126 | 98 |
+| Partitioned fork | 21.8 to 32.1 in the measured phases, 46.6 at the end of the run | 127 | 12 |
+
+With the memory system idle the same spans are 2.5 to 5.5 µs. Backend stalls on
+dependent DRAM refills are 94 to 98% of the cycles of the longest spans (about 35
+refills at 0.5 µs each), so the span is set by memory latency under load, not by
+instructions.
+
+### Prediction
+
+Neither kernel meets 20 µs while the recognition or any other bandwidth-heavy task
+runs: the dominant source of worst-case latency is the interrupt-masked span, held
+open by DRAM latency, and the fork's best case is its 22 to 32 µs measured spans plus
+the 17 to 20 µs service entry, so about 50 to 80 µs. The fork's tail is two to three
+times shorter than the global kernel's, because it has no global lock to queue behind
+and its spans do not add; the global kernel's worst case is the sum of the holders
+ahead on the ticket lock, up to about 150 µs. Without bandwidth-heavy neighbours both
+meet 20 µs, as their idle spans are 2.5 to 5.5 µs.
+
+Two levers follow, in order. First, shorten and split the spans: move work out of
+the masked section when the section waits on refills (publication of wakes, the
+control drain of the caller, slice refresh), and keep object critical sections to
+the list edit. Second, take the hardest path out from under the mask. The kernel masks
+by raising the priority mask to the API level, so an interrupt of higher priority than
+that level is never delayed by a kernel span. A control loop that runs in such an
+interrupt, with no kernel call, has a response independent of the scheduler; the
+tasks around it use the kernel. This is the usual structure of a robot controller and
+the way to reach 20 µs next to a streaming recognition.
+
+Idle pull applies to best-effort tasks only: it must never move a task whose affinity
+is one CPU, and the real-time task set stays pinned. The test workload is a pinned
+1 kHz control task of the highest priority, a sensor-fusion task woken by
+interrupts at a few hundred hertz, camera-like and lidar-like interrupt producers,
+and the recognition and an unpinned best-effort load below them, measured on port
+3-1 over at least 10^6 control periods per kernel. Tickless deadlines matter for a
+periodic wake that does not come from the tick: a control task driven by the
+tick has a 1 ms quantum and a precise-deadline wake does not.
+
+### Revised targets and verdict rule
+
+The control loop runs faster than 1 kHz and the robot runs a model beside it. The
+targets are: worst-case wake latency of the highest-priority task at most 10 µs;
+jitter of the control period at most 5% of the period (12.5 µs at 4 kHz, 5 µs at
+10 kHz); no deadline miss under the full load. The primary rate is 4 kHz and the stretch
+rate 10 kHz. The control task is swept over 1, 2, 4, 8 and 10 kHz, and the sweep
+curve (jitter 99.99th percentile and maximum against rate) is recorded for both
+kernels, with the tick and without it. The model workload runs in the same test:
+recognition time per input on the CPU workers, and NPU jobs per second where the
+image carries an NPU stream, each also alone. A kernel is chosen if it meets the
+real-time targets at its highest rate and keeps the model within 2% of its run alone;
+among kernels that do, the higher control rate wins, then the higher model throughput.
+Any masked-span change that slows the model is weighed against the 2% bound. The
+model's synchronization cost on the global kernel is 14.0 ms of 109.6 ms (dispatch
+5.4, completion 6.9, slowest wake 1.8; the fork 13.3 ms), all of it in the kernel
+paths a real-time change could lengthen.
+
+With a 5 µs jitter bound at 10 kHz and a 10 µs wake bound, any masked or
+preemption-disabled section over 5 µs is a defect. The sweep of such sections found in
+recorded runs (the longest three per core and phase, so partial; length, core and
+the call sites that open and close the span):
+
+| Kernel | Length (µs) | Site |
+| --- | --- | --- |
+| Global kernel, ticket locks | 266.3 | `prvAddNewTaskToReadyList` to `vPortRestoreTaskContext` (start-up, core 0) |
+| | 101.3, 95.3 | `ulTaskGenericNotifyTake` to the yield; `vTaskSuspendAll` to `ulTaskGenericNotifyTake` |
+| | 31.0, 26.1, 19.3 | `os_thermal_task`; `ulTaskGenericNotifyTake`; `xQueueGetMutexHolder` |
+| Global kernel, test-and-set locks | 264.8, 206.2, 191.4, 142.3, 127.7, 115.3, 107.8 | start-up; `vTaskSuspendAll`; notify take; `xTaskGenericNotify`; `vTaskDelay`; `os_thermal_task` |
+| Partitioned fork | 46.6, 41.2 | `ssKernelCommand` (end-of-run suspension; command publication with the owner's drain) |
+| | 31.8, 34.2 | `vTaskEnterCritical` to `ssKernelObjectExit` (queue operation of an OS service) |
+| | 22.6, 21.8 | `ssKernelService` (service entry at interrupt exit) |
+| | 21.6, 20.8 | `ssKernelNotify` |
+| | 15.8, 18.9 | `ssKernelObjectEnter` to `ssKernelObjectExit` |
+| | 5.3 to 5.9 | `ssKernelNotifyWait` |
+
+Every entry exceeds the 5 µs bound, on both kernels. A complete sweep needs a recorder
+that keeps every distinct (open, close) pair above 5 µs rather than the longest three,
+run on the image that carries the OS services and drivers; that recorder is the first
+tool to build. The fixes go in order of length. The fork's spans fall into three kinds:
+command publication that drains its own queue under the mask (`ssKernelCommand`),
+object critical sections that hold the list edit and the wake publication together
+(`vTaskEnterCritical` to `ssKernelObjectExit`, `ssKernelObjectEnter`), and the service
+entry. Each reduces to moving the work that waits on refills (the drain, the wake
+publication, the slice refresh) out of the masked section, or splitting it into
+bounded steps that unmask between them.
+
+### The span sweep lists every masked pair before any span is fixed
+
+Earlier rounds measured the three longest spans per kernel. Fixing spans one at a time from that list risks leaving a longer span unmeasured, so the sweep records all of them first.
+
+The recorder keeps one entry per distinct pair of call sites, the call that raised the interrupt priority mask and the call that restored it, on each core. An entry holds the span count, the longest span and a 22-bin histogram with edges from 1 to 500 microseconds. The 99.99th percentile is the upper edge of the bin that holds that rank, and the longest span when fewer than 10^4 spans were seen. Writes are per core, so the recorder adds no shared line to the measured path. The table has 64 entries per core and counts overflow separately, so a full table is visible in the report. The image build shrinks the recorder's full histograms to 17 bins because the sweep image has no free space for them; the sweep table replaces them.
+
+The image is the mimus OS image with the OS services and drivers linked, run under the mimus load (eight workers, three recorded inputs), once with the stock kernel and once with the partitioned fork. Pairs whose longest span exceeds 5 microseconds are listed with their symbols from the image.
+
+Prediction. Pairs that touch the scheduler lists or a ticket lock are held open by dependent DRAM refills, so their length follows the number of distinct cache lines touched rather than instructions. On the stock kernel the longest pairs are the suspend-all spans and the notify-take spans, which walk shared lists under the task lock, at 95 to 206 microseconds as measured before. On the fork they are the kernel command, the critical section that ends in an object exit, and the service pass, at 22 to 47 microseconds. The sweep may add pairs that the earlier three-site capture could not see; any such pair above 5 microseconds is a defect under the 10 microsecond wake target and joins the fix list in length order.
+
+### Lock wait or held work: each span is split before it is fixed
+
+A span that does almost no work, such as the scheduler-state query on the stock kernel (31 us) or the object enter and exit pair on the fork (33 us), is probably held open by waiting for a contended kernel lock with the interrupt mask already raised, not by memory work under the lock. The two causes have different fixes. If the wait dominates, the lock is taken with the mask lowered: spin unmasked, raise the mask, try the lock, and lower the mask and retry on failure. If the held work dominates, the memory touched under the lock is reduced or moved outside the masked region.
+
+The recorder therefore adds the time each core spent acquiring a kernel lock (the task lock and the interrupt lock) between the mask opening and the mask closing to the pair's entry. Per pair it keeps the lock wait inside the longest span, the longest lock wait in any span, and, for spans above 5 us, their count, total length and total lock wait, so the wait share of the long spans is a ratio of two sums.
+
+Prediction. For the pairs listed above 25 us on both kernels, lock wait is at least 70% of the long-span time, because 8 cores take the same task lock and a holder's own span is itself 10 to 30 us. Pairs on core 6 that run the mimus dispatch (`board_service_progress` to `dispatch` and the yield hook) are the exception: they hold the lock rather than wait for it, and their wait share is under 30%. If both hold, the fix for the wait-dominated pairs is the unmasked spin on both kernels, and the held pairs go to the memory fixes. If the wait share is under 30% everywhere, the earlier DRAM-latency account stands and the fix is the memory work.
+
+Dependency. How long a span stays open when several cores read memory depends on how DRAM bandwidth falls as more cores read, which the DRAM-scaling study in [DRAM bandwidth](dram-bandwidth.md) is investigating. This design does not change that study's files; its result sets how much of a held span can be removed by reducing lines touched, and a change in the interconnect settings would change the held-span lengths measured here.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag

@@ -150,6 +150,7 @@ def main():
     print(run([binary, 'retirement']), end='')
     print(run([binary, 'dynamic']), end='')
     print(run([binary, 'shield']), end='')
+    print(run([binary, 'prestart']), end='')
     unsupported = subprocess.run([binary, 'end'], text=True, capture_output=True, env=env)
     assert unsupported.returncode and 'scheduler stop unsupported' in unsupported.stderr
     race = build / 'control-reuse'
