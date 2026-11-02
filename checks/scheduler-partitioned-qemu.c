@@ -126,8 +126,14 @@ BaseType_t __wrap_xTaskGenericNotify(TaskHandle_t task, UBaseType_t index, uint3
 extern uint64_t check_fp_context(uint64_t pattern);
 extern void __real_vTaskSwitchContext(BaseType_t cpu);
 extern void __real_vPortRecursiveLock(uint8_t cpu, ePortRTOSLock lock, BaseType_t acquire);
+extern TaskHandle_t volatile pxCurrentTCBs[];
+extern char __bss_start[], __bss_end[];
 void __wrap_vTaskSwitchContext(BaseType_t cpu)
 {
+    /* Every context save has just stored the outgoing task's SP_EL0 in the first word of its
+     * control block. It must lie in a task stack, which here is static data, and be aligned. */
+    uintptr_t saved = *(uintptr_t *)pxCurrentTCBs[cpu];
+    configASSERT(saved >= (uintptr_t)__bss_start && saved < (uintptr_t)__bss_end && !(saved & 15));
     in_switch[cpu] = 1;
     __real_vTaskSwitchContext(cpu);
     in_switch[cpu] = 0;
@@ -250,9 +256,50 @@ static void withhold_home(void *unused)
             __asm__ volatile("yield");
     }
 }
+/* Controls applied before the scheduler starts, as the board application does
+ * after xTaskCreateStatic (apps/board/main.c, vTaskCoreAffinitySet). No task
+ * stack is installed yet and the owners of other cores have not run. Upstream
+ * stores the new settings and takes no scheduling action while
+ * xSchedulerRunning is false (tasks.c, vTaskCoreAffinitySet, vTaskPrioritySet,
+ * vTaskSuspend and vTaskDelete). The settings must take effect at the start. */
+#define BOOT_TASKS 5U
+static StaticTask_t boot_state[BOOT_TASKS];
+static StackType_t boot_stack[BOOT_TASKS][1024];
+static TaskHandle_t boot_tasks[BOOT_TASKS];
+static unsigned boot_core[BOOT_TASKS] = {99, 99, 99, 99, 99}, boot_runs[BOOT_TASKS];
+static void boot_task(void *argument)
+{
+    unsigned id = (uintptr_t)argument;
+    __atomic_store_n(&boot_core[id], portGET_CORE_ID(), __ATOMIC_RELEASE);
+    __atomic_fetch_add(&boot_runs[id], 1, __ATOMIC_RELAXED);
+    for (;;) vTaskSuspend(NULL);
+}
+static void boot_controls_verify(void)
+{
+    /* Task 0: created for any core, moved to core 6 and raised before the start. */
+    for (unsigned wait = 0; wait < 200 && __atomic_load_n(&boot_runs[0], __ATOMIC_ACQUIRE) == 0; ++wait) vTaskDelay(1);
+    configASSERT(boot_runs[0] == 1 && boot_core[0] == 6);
+    configASSERT(vTaskCoreAffinityGet(boot_tasks[0]) == (1U << 6) && uxTaskPriorityGet(boot_tasks[0]) == 4);
+    /* Task 1: suspended before the start, so it has not run, and a later resume starts it on core 5. */
+    configASSERT(boot_runs[1] == 0 && eTaskGetState(boot_tasks[1]) == eSuspended);
+    vTaskResume(boot_tasks[1]);
+    for (unsigned wait = 0; wait < 200 && __atomic_load_n(&boot_runs[1], __ATOMIC_ACQUIRE) == 0; ++wait) vTaskDelay(1);
+    configASSERT(boot_runs[1] == 1 && boot_core[1] == 5);
+    /* Task 2: suspended, then resumed, before the start; it runs once on core 7. */
+    for (unsigned wait = 0; wait < 200 && __atomic_load_n(&boot_runs[2], __ATOMIC_ACQUIRE) == 0; ++wait) vTaskDelay(1);
+    configASSERT(boot_runs[2] == 1 && boot_core[2] == 7);
+    /* Task 4: moved to the boot core above the idle task, as the board's first task is. The
+     * boot core owns it, so no acknowledgment can be awaited and no yield may be taken. */
+    for (unsigned wait = 0; wait < 200 && __atomic_load_n(&boot_runs[4], __ATOMIC_ACQUIRE) == 0; ++wait) vTaskDelay(1);
+    configASSERT(boot_runs[4] == 1 && boot_core[4] == 0);
+    /* Task 3: deleted before the start; it never runs. */
+    vTaskDelay(4);
+    configASSERT(boot_runs[3] == 0);
+}
 static void control(void *unused)
 {
     (void)unused;
+    boot_controls_verify();
     for (unsigned round = 0; round < ROUNDS; ++round) {
         control_round = round;
         control_phase = 1;
@@ -392,6 +439,22 @@ void kernel_main(void)
     }
     controller = xTaskCreateStaticAffinitySet(control, "control", 4096, NULL, 5, control_stack, &control_state, 1);
     configASSERT(controller);
+    for (unsigned id = 0; id < BOOT_TASKS; ++id) {
+        boot_tasks[id] = xTaskCreateStaticAffinitySet(boot_task, "boot-control", 1024, (void *)(uintptr_t)id,
+            2, boot_stack[id], &boot_state[id], 255);
+        configASSERT(boot_tasks[id]);
+    }
+    vTaskCoreAffinitySet(boot_tasks[0], 1U << 6);
+    vTaskPrioritySet(boot_tasks[0], 4);
+    configASSERT(uxTaskPriorityGet(boot_tasks[0]) == 4 && vTaskCoreAffinityGet(boot_tasks[0]) == (1U << 6));
+    vTaskCoreAffinitySet(boot_tasks[1], 1U << 5);
+    vTaskSuspend(boot_tasks[1]);
+    vTaskCoreAffinitySet(boot_tasks[2], 1U << 7);
+    vTaskSuspend(boot_tasks[2]);
+    vTaskResume(boot_tasks[2]);
+    vTaskDelete(boot_tasks[3]);
+    vTaskCoreAffinitySet(boot_tasks[4], 1U << 0);
+    vTaskPrioritySet(boot_tasks[4], 4);
     vTaskStartScheduler();
     platform_panic("scheduler returned", 0);
 }

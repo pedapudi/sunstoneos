@@ -20,6 +20,7 @@ SECTIONS {
         KEEP(*(sunstone_region_initializers))
         __stop_sunstone_region_initializers = .;
     } > CODE
+    __ram_start = ORIGIN(RAM);
     .data : { *(.data*) } > RAM
     .bss (NOLOAD) : ALIGN(64) {
         __bss_start = .;
