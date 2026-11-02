@@ -1011,6 +1011,12 @@ Every kernel span is masked at the API priority, so an interrupt above that prio
 
 Prediction. Under the full mimus load, with the longest kernel spans at 30 us, the handler's latency does not follow them. What remains is the interrupt entry path (context save, acknowledge), the longest interval with `DAIF.I` set (the port's short mask windows and any lower-priority handler that runs with interrupts masked, such as the tick handler on core 0, which this class avoids by using cores 1 to 5), and a stalled barrier under DRAM contention. Per rate and core: maximum latency under 10 us, 99.99th percentile under 5 us (equal to the maximum when a run has fewer than 10^4 interrupts, as these short runs do), jitter no larger than the latency range, no dropped sample and no gap, no missed period. Against the targets this meets the 5% jitter bound at 1 and 2 kHz (50 and 25 us) and 4 kHz (12.5 us); at 8 and 10 kHz (6.25 and 5 us) the maximum is the open question. The recognition runs for about 0.4 s, so one run holds 400 to 4000 interrupts per core; the 10^6-period runs belong to the robot workload.
 
+### Why the instrumented fork beat stock when the plain fork did not
+
+The sweep images ran the recognition in 136.4 ms on the stock kernel and 127.2 ms on the fork, a fork 6.8% faster; the plain images of the speed stream measured the fork 0.4% slower (110.3 against 109.8 ms). Two explanations: the span recorder adds work inside every masked span, and a stock kernel with a longer convoy pays more for it; or the current tree differs from the earlier images. A plain pair of the current tree (no recorder, no counters), and a plain pair with the unmasked wait, separate them.
+
+Prediction. The plain pair of the current tree takes about 110 ms on both kernels, the fork within 1% of stock, because the recorder alone explains the 26 ms that stock lost: its timestamp reads and table update lengthen every span by roughly 0.3 to 1 us and the stock kernel has about twice the long spans of the fork. The unmasked wait changes the plain times by under 1%. If the plain pair already shows the fork faster than stock by several percent, the current tree changed and the earlier verdict needs its own rerun.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag
