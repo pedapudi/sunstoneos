@@ -93,7 +93,8 @@ static enum a733_dma_control_status validate_transfer(
 {
     if (!t || !t->segments || !t->mappings || !t->count ||
         t->count > A733_DMA_MAX_SEGMENTS || !t->mapping_count ||
-        t->mapping_count > A733_DMA_MAX_MAPPINGS ||
+        t->mapping_count > SIZE_MAX / sizeof(*t->mappings) ||
+        t->count > SIZE_MAX / sizeof(*t->segments) ||
         (uintptr_t)t > UINTPTR_MAX - sizeof(*t) ||
         (uintptr_t)t->segments % _Alignof(struct a733_dma_segment) ||
         (uintptr_t)t->mappings % _Alignof(struct a733_dma_mapping) ||

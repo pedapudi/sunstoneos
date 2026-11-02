@@ -5,9 +5,14 @@
 #include <stdint.h>
 
 #define A733_DMA_DESCRIPTOR_BYTES 64u
-#define A733_DMA_MAX_SEGMENTS 64u
-/* Software policy pending physical length qualification; not a silicon limit. */
-#define A733_DMA_MAX_SEGMENT_BYTES (1024u * 1024u)
+/* The byte-counter field of a descriptor is 25 bits wide (A733 User Manual
+ * V1.00, section 13.1.4.2: "The maximum value is (2^25-1) bytes"). */
+#define A733_DMA_MAX_SEGMENT_BYTES ((1u << 25) - 1u)
+/* Descriptors are linked by a 32-bit bus address below 0xfffff800, the end of
+ * chain marker, and each occupies 64 bytes, so a chain holds at most
+ * 0xfffff800 / 64 descriptors. The caller's descriptor capacity bounds it
+ * further. */
+#define A733_DMA_MAX_SEGMENTS (0xfffff800u / A733_DMA_DESCRIPTOR_BYTES)
 
 struct a733_dma_endpoint {
     uint64_t address;       /* DMA bus address, never an inferred CPU pointer. */

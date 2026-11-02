@@ -405,7 +405,7 @@ it.
    the request.
 5. **Batch MMIO and DMA.** A register sequence runs under one lock acquisition
    and one deadline check per step. DMA transfers use the largest segment the
-   controller and the policy allow (1 MiB today, `A733_DMA_MAX_SEGMENT_BYTES`
+   controller allows (2^25-1 bytes, `A733_DMA_MAX_SEGMENT_BYTES`
    in [include/a733_dma.h](../include/a733_dma.h)) and raise one interrupt per
    transfer, or one per period for cyclic audio.
 6. **Per-core data on separate cache lines.** State that several cores write

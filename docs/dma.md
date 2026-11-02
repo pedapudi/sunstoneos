@@ -186,9 +186,11 @@ the service integrating a peripheral must validate its actual request ID and
 port address. The encoder accepts memory-to-memory, memory-to-FIFO, and
 FIFO-to-memory segments. It rejects FIFO-to-FIFO segments.
 
-The current software policy permits 1–64 segments, each containing 1 byte
-through 1 MiB. These bounds limit validation and descriptor allocation; they
-are not measured silicon limits. Lengths must be multiples of both endpoint
+A segment holds 1 byte through 2^25-1 bytes, the width of the descriptor's
+byte-counter field (User Manual V1.00, section 13.1.4.2). A chain holds as many
+segments as the caller's descriptor capacity allows, at most 0xfffff800 / 64,
+because each 64-byte descriptor links to the next by a 32-bit address below the
+end-of-chain marker. Lengths must be multiples of both endpoint
 widths. Each address must align to its endpoint's width.
 The complete addressed range must end at or below `A733_DMA0_DATA_LIMIT` (2^35).
 For a fixed port, that range is one bus access wide.
