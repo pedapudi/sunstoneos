@@ -351,6 +351,22 @@ Prediction (written before the run):
   fault; the stop word names it, the card stays at 1.8 V and the next lifetime re-enters it. Either way the report is the result and I stop.
 - **Close:** the selector back to 3.3 V, the bank reports it, the module and bus restored, a normal return with no restoration word changed.
 
+### SDR104 trial (entry `1793650091979550389-eb009a18`): stopped in the core during SDR104 selection
+
+The lifetime did not return and its report was lost. Its stop word `0x8a070000`, site 3 (the probe's identification stage), decodes (with the layout in
+force at that image, the fields of a reason-11 word) to platform source line 552, why 0, platform stage 14 (`IDENTIFY`), no S18A, no card. Line 552 in
+`a733_mmc_platform.c` is where the platform sees the core in its FAULT state; because the platform records the line of the first `fail()` and why 0 means no
+deadline, **no platform callback failed first and the platform's own deadline had not passed: the core faulted by itself.** The bank had already moved to 1.8 V
+(stage 14 is after `ENTER_1V8`), the SDR25 re-entry had worked on the same path in the previous lifetimes, so the fault lies in what the trial adds: the CMD6
+SDR104 check and set, the module clock change, the register programming, or the CMD19 sweep. The stop word did not carry the core's error or protocol step.
+
+State left: the card at 1.8 V (possibly with SDR104 selected; CMD0 at 1.8 V ends that), the bank at 1.8 V until the watchdog reset (whether the selector is restored is
+the first thing the next lifetime's baseline will show), the board back in FEL. No retry has been made.
+
+The probe now publishes, for a lifetime that fails before identification, the core's error (4 bits), its protocol step (6) and half the sample delay it had reached (5)
+next to the platform's line, why and stage (`input.py stop --site 3`). The host models cover this path (SDR104 at 150 and 100 MHz and the no-window fallback pass, with the real
+adapter filter on every write) and do not reproduce a fault, so the cause is something the board does that the models do not.
+
 ## Board plan
 
 Each stage has one hypothesis. Nothing runs without the coordinator's approval and none writes to the card. Stage 2 below is the

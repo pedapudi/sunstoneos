@@ -596,6 +596,11 @@ static void sd_task(void *unused)
         stop_word = (uint64_t)((line << 22) | ((s.platform.fault_why & 3u) << 20) | ((s.platform.stage & 31u) << 15) |
             ((s.card_valid && (s.card.ocr >> 24 & 1) ? 1u : 0u) << 14) | ((s.card_valid ? (s.card.switch_status[13] & 31u) : 0u) << 9) |
             ((s.card_valid && s.card.signal_1v8 ? 1u : 0u) << 8) | (crc8 & 255u));
+        /* A lifetime that failed before the card was identified (reason 3) has no results to carry; its stop word names the core's own state instead: the
+         * fault line, why and stage as above, then the core's error (4 bits), its protocol step (6 bits) and half the CMD19 sample delay it had reached (5 bits). */
+        if (s.reason == 3 || !s.card_valid)
+            stop_word = (uint64_t)((line << 22) | ((s.platform.fault_why & 3u) << 20) | ((s.platform.stage & 31u) << 15) |
+                ((s.platform.core.result.error & 15u) << 11) | ((s.platform.core.protocol & 63u) << 5) | ((s.platform.core.tune_delay >> 1) & 31u));
     }
     report(r > 0 ? 0 : 1);
     /* With the platform constructed and not closed, the lifetime cannot return. The fault record then
