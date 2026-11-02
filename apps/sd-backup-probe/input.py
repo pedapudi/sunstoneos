@@ -48,7 +48,7 @@ def stop_fields(w):
                 card_at_1v8=w >> 8 & 1, crc_fold=hex(w & 255))
 
 
-UHS_OUTCOMES = ('none', 'sdr104', 'host', 'declined', 'no_sdr104', 'no_window', 'limited_to_sdr25')
+UHS_OUTCOMES = ('none', 'sdr104', 'host', 'declined', 'no_sdr104', 'no_window', 'limited_to_sdr25', 'sdr50')
 
 
 def bank_level(pow_val):

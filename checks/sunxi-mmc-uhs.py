@@ -181,6 +181,28 @@ for name, command in steps:
         sizes = subprocess.run(['/usr/lib/llvm-21/bin/llvm-size', str(a.output / 'sunxi_mmc.o'), str(a.output / 'sunxi_mmc-no-uhs.o')],
                                capture_output=True, text=True, check=True).stdout
         (a.output / 'sizes.txt').write_text(sizes)
+# Mutations of the mode ladder: each switches one step-down or selection off, and the core check must then fail.
+mutations = [
+    ('no-sdr50-fallback', 'if(from==3&&(h->card.group1_support&4))to=2;', 'if(0)to=2;'),
+    ('no-step-down-at-all', 'h->card.sample_delay=0;h->protocol=P_SD_CLOCK;h->sd_ios=0;\n}', 'fault(h,SUNXI_MMC_CARD);return;\n}'),
+    ('ceiling-ignored', 'return h->ceil1 ? (unsigned)h->ceil1 - 1u : 3u;', 'return 3u;'),
+    ('sdr50-never-selected', 'if(ceiling_of(h)>=2&&(h->card.switch_status[13]&4)&&!(h->card.switch_status[29]&4)){\n            h->uhs_func=2;', 'if(0){\n            h->uhs_func=2;'),
+    ('no-default-speed', '(!hs_ok||ceiling_of(h)==0)){', '0){'),
+]
+source = (ROOT / 'drivers/storage/sunxi_mmc.c').read_text()
+killed = []
+for name, old_text, new_text in mutations:
+    assert source.count(old_text) == 1, (name, source.count(old_text))
+    directory = a.output / ('mutant-' + name); directory.mkdir()
+    (directory / 'sunxi_mmc.c').write_text(source.replace(old_text, new_text))
+    build = subprocess.run([a.cc, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Wno-unused-function', '-Wno-unused-parameter', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                            '-Iinclude', '-Ichecks', '-I' + str(a.output), str(directory / 'sunxi_mmc.c'), 'checks/sunxi-mmc-uhs.c', '-o', str(directory / 'core')],
+                           cwd=ROOT, capture_output=True, text=True)
+    assert build.returncode == 0, (name, build.stderr)
+    run = subprocess.run([str(directory / 'core')], capture_output=True, text=True)
+    assert run.returncode != 0, 'mutation survived: ' + name
+    killed.append(name)
+print('mode-ladder mutations killed: ' + ', '.join(killed))
 nm = subprocess.run(['/usr/lib/llvm-21/bin/llvm-nm', str(a.output / 'sunxi_mmc-no-uhs.o')], capture_output=True, text=True, check=True).stdout
 assert not any(name in nm.split() for name in ('sd_signal', 'tune_recover', 'tune_advance', 'uhs_registers', 'tuning_pattern', 'set_delay'))
 frames = {}
@@ -192,7 +214,7 @@ for relative in ['include/sunxi_mmc.h', 'include/sunxi_smhc.h', 'include/a733_mm
                  'checks/sunxi-mmc.c', 'checks/a733-mmc-platform.c', *sources]:
     inputs[relative] = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
 (a.output / 'result.json').write_text(json.dumps(dict(
-    passed=True, physical_access=False, inputs=inputs, stack_frames=frames,
+    passed=True, physical_access=False, mutations_killed=killed, inputs=inputs, stack_frames=frames,
     scope='Reference facts from pinned sources; MMC core and actual storage platform with modeled card, MMIO and '
           'time under ASan/UBSan; AArch64 compilation. No native image, board, USB or card access.'), indent=2) + '\n')
 print('PASS UHS-I references, core and platform models; frames: sunxi_mmc_poll %d, command_step %d bytes'

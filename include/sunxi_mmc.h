@@ -28,7 +28,13 @@ enum sunxi_mmc_sd_profile { SUNXI_MMC_SD_LEGACY=0, SUNXI_MMC_SD_DEFAULT4=1,
 enum sunxi_mmc_uhs_outcome { SUNXI_MMC_UHS_NONE, SUNXI_MMC_UHS_SDR104,
     SUNXI_MMC_UHS_HOST, SUNXI_MMC_UHS_DECLINED, SUNXI_MMC_UHS_NO_SDR104,
     SUNXI_MMC_UHS_NO_WINDOW,
-    SUNXI_MMC_UHS_LIMITED };   /* SDR25 at 1.8 V by request: SDR104 was never tried (sunxi_mmc_sdr25_only) */
+    SUNXI_MMC_UHS_LIMITED,     /* A ceiling below SDR104 (sunxi_mmc_set_ceiling, sunxi_mmc_sdr25_only): the faster modes were never tried */
+    SUNXI_MMC_UHS_SDR50 };     /* SDR50 at 100 MHz with a tuning window: the card lacks SDR104 or its sweep found no window */
+/* Why the mode changed from the one in force (card.mode_log). */
+enum sunxi_mmc_mode_reason { SUNXI_MMC_MODE_NONE, SUNXI_MMC_MODE_NO_WINDOW, SUNXI_MMC_MODE_CARD_LACKS, SUNXI_MMC_MODE_CEILING,
+    SUNXI_MMC_MODE_ERRORS, SUNXI_MMC_MODE_RETUNE_FAILED };
+struct sunxi_mmc_mode_event { uint8_t from, to, reason, signal_1v8; };   /* from and to are card.timing values */
+#define SUNXI_MMC_MODE_LOG 6u
 /* sd_signal operations and QUERY capability bits. */
 #define SUNXI_MMC_SIGNAL_QUERY 0u
 #define SUNXI_MMC_SIGNAL_SET 1u
@@ -125,6 +131,10 @@ struct sunxi_mmc_card {
      * the CMD6 access mode: 0 default, 1 high speed or SDR25, 3 SDR104. */
     uint8_t signal_1v8, uhs_outcome, uhs_caps, sample_delay, tuning_start, tuning_width;
     uint8_t reentered; /* identified at 1.8 V with no CMD11 (sunxi_mmc_reenter) */
+    /* The bus speed mode steps taken after the first selection, each with its reason (timing 0 default or SDR12, 1 high speed or SDR25, 2 SDR50,
+     * 3 SDR104); mode_steps counts all, the first SUNXI_MMC_MODE_LOG are kept. The ceiling in force is the highest timing still allowed. */
+    uint8_t mode_steps, ceiling, group1_support;   /* ceiling: the highest timing still allowed, copied from the core at READY */
+    struct sunxi_mmc_mode_event mode_log[SUNXI_MMC_MODE_LOG];
     uint64_t tuning_map; /* Bit d set: every CMD19 at sample delay d matched. */
 };
 struct sunxi_mmc_result {
@@ -194,7 +204,7 @@ struct sunxi_mmc {
     /* UHS-I switch and tuning progress. */
     uint64_t signal_us, attempt_us;
     unsigned sd_sig, tune_delay, tune_repeat, tune_recover, tune_forced, tune_hung;
-    uint8_t s18r, signal_window, tuning, tune_failed, tune_attempt, after_clock, observe_s18, reenter, sdr25_only;
+    uint8_t s18r, signal_window, tuning, tune_failed, tune_attempt, after_clock, observe_s18, reenter, sdr25_only, uhs_func, ceil1;
     uint8_t tuning_block[64];
 };
 /* Zero storage before its first use. Single task owner; no concurrent ISR or
@@ -216,6 +226,9 @@ int sunxi_mmc_reenter(struct sunxi_mmc *);
 /* After init and before open, UHS-I profile only: after identification at 1.8 V run SDR25 at 50 MHz and never try SDR104 or tuning
  * (card.uhs_outcome is SUNXI_MMC_UHS_LIMITED). The CMD6 response of the switch still reports every function group's support bits. */
 int sunxi_mmc_sdr25_only(struct sunxi_mmc *);
+/* After init and before open, UHS-I profile: the highest bus speed mode identification may select (a card.timing value: 3 SDR104, 2 SDR50,
+ * 1 SDR25 or high speed, 0 SDR12 or default speed). The default is 3. A card at 3.3 V is limited to 1 whatever the ceiling. */
+int sunxi_mmc_set_ceiling(struct sunxi_mmc *, unsigned timing);
 /* Entire range and byte/sector command argument are validated before MMIO.
  * Borrowed storage must remain exclusive through DONE or terminal FAULT.
  */

@@ -37,13 +37,13 @@ static inline int a733_mmc_dma_chain(volatile const struct sunxi_mmc_dma_descrip
     volatile const struct sunxi_mmc_dma_descriptor *spare=&area[n];
     return !spare->config&&!spare->size&&!spare->buffer&&!spare->next;
 }
-/* Profiles 1-2 use PERI0_400M/4..32. UHS-I also uses 400M/2 or 300M/1. */
+/* Profiles 1-2 use PERI0_400M/4..32. UHS-I also uses 400M/2 or 300M/1 (SDR104 at 150 MHz, SDR50 at 100 MHz), and 400M/4..32 for SDR25, SDR12 and default speed. */
 static inline int a733_mmc_module_setting(enum sunxi_mmc_sd_profile profile,
                                         unsigned divisor,uint32_t *out)
 {
     unsigned m=divisor&0xffu,source=(divisor&SUNXI_MMC_MODULE_300M)?2u:1u;
     int ok=!(divisor&~(0xffu|SUNXI_MMC_MODULE_300M))&&(profile==SUNXI_MMC_SD_UHS_SDR104?
-        ((source==2&&m==1)||(source==1&&(m==2||m==4))):(source==1&&m>=4&&m<=32));
+        ((source==2&&m==1)||(source==1&&(m==2||(m>=4&&m<=32)))):(source==1&&m>=4&&m<=32));
     if(ok)*out=UINT32_C(0x80000000)|((uint32_t)source<<24)|(m-1);
     return ok;
 }
