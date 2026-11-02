@@ -8,6 +8,7 @@
  *      closes, and reports E_TIMEOUT with the bytes written;
  *   5  continue the file to FILE_BYTES: the existing file must be a whole number of CHUNKs and at most FILE_BYTES, and its first CHUNK must be the
  *      stream's; the stream then appends from that offset under the same guard, with the per-phase timings (volume_size is the size found);
+ *   6  open the card for reading and report (the QEMU boot check of the read-only open);
  *   4  open the card, enable the writes and report (the QEMU boot check; no mount, no write);
  *   3  read the whole file back against the stream and report (a separate run; the file must be FILE_BYTES long);
  *   1  interruption test, lifetime 1: write with a sync every 8 MiB, and after `cut_bytes` stop reporting progress so the
@@ -242,11 +243,13 @@ void storage_write_main(const struct ss_grant *grant)
     ss_progress();
     ss_activity_begin(); activity = 1;                          /* the thermal report covers the card work */
     card_open = 1;                                             /* enabling opens the card in the owner task, even if it then refuses */
-    if (!ss_storage_enable(bounds->base, bounds->bytes)) { r.status = E_BOUNDS; (void)ss_storage_diagnostic(r.diag); finish_report(); }
+    /* The read-back modes (2, 3, 6) open the card for reading and verify no bounds: the backup sectors the blob hashes change with every session. */
+    const int read_only = mode_id == 2 || mode_id == 3 || mode_id == 6;
+    if (!(read_only ? ss_storage_open_read() : ss_storage_enable(bounds->base, bounds->bytes))) { r.status = E_BOUNDS; (void)ss_storage_diagnostic(r.diag); finish_report(); }
     if (!ss_storage_region(flush->base, flush->bytes)) { r.status = E_REGION; (void)ss_storage_diagnostic(r.diag); finish_report(); }
     if (!ss_storage_device(&device)) { r.status = E_DEVICE; (void)ss_storage_diagnostic(r.diag); finish_report(); }
     r.au_sectors = device.au_sectors;
-    if (mode_id == 4) { collect(); finish_report(); }                   /* open and enable only (the QEMU boot check) */
+    if (mode_id == 4 || mode_id == 6) { collect(); finish_report(); }   /* open (4: and enable the writes) only: the QEMU boot checks */
     uint64_t base, sectors;
     if (!mbr_partition(&base, &sectors)) { r.status = E_MBR; finish_report(); }
     uint64_t t_start = ss_counter_ticks();

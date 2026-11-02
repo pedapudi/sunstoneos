@@ -218,6 +218,14 @@ static int writes_enable(const uint8_t *blob, size_t bytes)
     unit_sectors = writer_request.value;
     return 1;
 }
+static int reads_open(void)
+{
+    if (!start()) return 0;
+    writer_request = (struct request){.kind = K_UNIT};
+    if (!post(&writer_slot, &writer_request, 1)) return 0;
+    unit_sectors = writer_request.value;
+    return 1;
+}
 /* Register the application's flush buffer so the FAT32 service flushes from it straight into the controller. */
 static int write_region(uint8_t *base, size_t bytes)
 {
@@ -236,6 +244,7 @@ static int writer_device(struct fwr_device *d)
 
 /* --- the application kit (include/sunstone_storage.h) ------------------------------------------------------------------- */
 int ss_storage_enable(const void *bounds, size_t bytes) { return writes_enable(bounds, bytes); }
+int ss_storage_open_read(void) { return reads_open(); }
 int ss_storage_region(void *base, size_t bytes) { return write_region(base, bytes); }
 int ss_storage_device(struct fwr_device *d) { return writer_device(d); }
 int ss_storage_close(void)

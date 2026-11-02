@@ -902,6 +902,12 @@ def main():
     c.require(c.failure is not None and c.failure['group'] == 'APPLICATION', 'a failed SD open left no application failure record')
     word = int(c.failure['value'], 16)
     c.require(word & 0xff == 7 and (word >> 8 & 0xffff) == 0x0903, 'the record %#x does not carry stage 7 and its detail' % word)
+    # The read-back modes open the card for reading and verify no bounds: a card whose backup sectors have changed (every session changes them) opens.
+    c = run_case('storage-write-open-read-backup-changed', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, storage_host.mode_input(6)], '512M',
+                 [(RAMDISK_ADDRESS, card_image(corrupt=32770))])
+    c.clean()
+    d = decode_result(c)
+    c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'the read-only open did not succeed on a card with changed backup sectors: status %d' % d['status'])
     c = run_case('storage-write-enable-backup-changed', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, mode4], '512M',
                  [(RAMDISK_ADDRESS, card_image(corrupt=32770))])
     c.clean()

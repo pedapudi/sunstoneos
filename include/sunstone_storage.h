@@ -10,6 +10,10 @@ struct fwr_device;
 /* Verify the runner-delivered bounds (the application's first input, its blob and length) against the card and open the
  * writes: 1 on success. Nothing can be written before this succeeds, and only inside the bounds. */
 int ss_storage_enable(const void *bounds, size_t bytes);
+/* Open the card for reading only: the owner opens it and reads the allocation unit, and no bounds are verified or bound, so the controller
+ * refuses every write command. For the read-back modes, which must run on a card whose backup sectors have changed since the blob was made.
+ * 1 on success; ss_storage_region and ss_storage_device follow as for ss_storage_enable. */
+int ss_storage_open_read(void);
 /* Register the flush buffer (64-byte aligned, in a WORK region, a multiple of 512 bytes); the FAT32 service then writes from
  * it with no copy. Once, before ss_storage_device. */
 int ss_storage_region(void *base, size_t bytes);
