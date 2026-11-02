@@ -23,6 +23,11 @@ struct nbg_assembly_plan {
  * struct nbg_assembly_layout (24 bytes a tensor, kept in the per-graph table) and by the queue handle. An image is built
  * for the largest graph its application declares (cmake -DSUNSTONE_OS_NPU_MAX_TENSORS=N); 8 is the default of an image
  * built without a declaration. A graph beyond it is refused by name at admission. */
+/* The low device range [0, NBG_ASSEMBLY_LOW_RESERVED) is reserved: placed() refuses a buffer that starts below it, so a
+ * pointer word that no patch sets and whose value is below it cannot address a mapped byte. A stream-processor operation
+ * that keeps its result in the engine's own scratch (the steps of a softmax) carries a small offset there, up to 118,496
+ * in the compiled encoder layers (docs/hardware/npu-command-formats.md, "Unpatched pointer words"). */
+#define NBG_ASSEMBLY_LOW_RESERVED 0x100000u
 #ifndef NBG_ASSEMBLY_MAX_TENSORS
 #define NBG_ASSEMBLY_MAX_TENSORS 8u
 #endif

@@ -71,6 +71,25 @@ All words are pairs of a register header and an operand.
 | 0, 4, 8, 13, 14, 20, 22, 23, 28, 31, 32, 33 and the rest of the nonzero words | all | Unknown | Constants or values that depend on shape and placement without a stated rule |
 | Remaining words | all | Unknown | Zero in every graph examined |
 
+### Unpatched pointer words
+
+A pointer word that no patch sets (the output address of a stream-processor operation that keeps its result in the engine's
+own scratch, the first-input address of an operation without an input) holds a small offset and not an address of a
+buffer. The twelve graphs examined first held values below `0x1000` (words 6, 7, 20, 34). The compiled encoder layers
+(conformer layers at 92 frames, ACUITY 6.30.22, target `VIP9000NANODI_PLUS_PID0X1000003B`) hold larger ones: the softmax
+chain of each layer has eight stream-processor operations with the first input and its ring patched and the output
+pointer unpatched, and word 7 steps by `0x4220` (16,928 bytes, 92 * 92 * 2) from `0` to `0x1cee0`; the operations with
+only a state patch step by `0xb8` (184 bytes, 92 * 2), up to `0x508`. Their word 8 is `0x42201000` and `0xb81000`, that is the
+same step in the upper half. The simulator runs these graphs and returns the reference output, so the engine uses these
+words as offsets in its own scratch; no source states this, and the offsets could also be addresses that the page tables
+would have to map.
+
+The loader therefore bounds them by the page tables and not by the first page. `NBG_ASSEMBLY_LOW_RESERVED` (`0x100000`,
+1 MiB) is the start of the lowest device address that a buffer can have (`placed()` refuses any buffer below it), and an
+unpatched pointer word is admitted when it is below that bound. If the engine did use such a word as an address, the
+access would fault in the page tables (the MMU exception of the board runs in `docs/reference-backsolve-npu.md`) and the
+job would fail, not read or write memory outside the job's buffers.
+
 ### Record counts at this revision
 
 | Record | Confirmed | Named | Inferred | Unknown |
@@ -95,7 +114,7 @@ verifies (class **Inferred**; they only refuse):
 
 | Case | Word 33 | Word 35 (low 26 bits) | Pointer words |
 | --- | --- | --- | --- |
-| No second input | 0 | not examined | word 34 below `0x1000` |
+| No second input | 0 | not examined | word 34 below `0x100000` (see "Unpatched pointer words") |
 | Second input from a graph input or the dynamic-input section | 1, or 0 for a batched matrix product | `0x03ffffff` (disabled) | word 34 patched |
 | Second input in VIP SRAM | ring size in 32-byte units (**confirmed**, below) | the ring limit, patched as an end address | word 34 patched; the start lies in [limit - size, limit) |
 
