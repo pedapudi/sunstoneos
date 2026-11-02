@@ -34,6 +34,8 @@ extern struct { uint64_t epoch, startup_deadline, diagnostic_deadline, redistrib
 struct worst { uint32_t latency, pmr; uint64_t elr, spsr, rpr, task, nesting, when; };
 extern volatile uint64_t ullCriticalNestings[];
 struct path {
+    uint64_t wfi_count, wfi_late_max, wfi_over5; /* control path only: interrupts that ended a wfi */
+    uint32_t wfi_bin[SS_CONTROL_BINS];
     uint64_t period, deadline, last_entry;
     uint64_t count, missed;
     uint32_t seq, latency_max, jitter_max;
@@ -126,6 +128,18 @@ static void handle(struct core_state *s)
     const unsigned missed = advance(&s->control, now, &served);
     program(s->control.deadline, 1); /* clears the level-sensitive interrupt */
     record(&s->control, now, served, missed);
+    {
+        /* An interrupt that ended a wfi returns to the instruction after it (0xd503207f is WFI). */
+        uint64_t elr;
+        __asm__ volatile("mrs %0, elr_el1" : "=r"(elr));
+        if (*(const volatile uint32_t *)(uintptr_t)(elr - 4u) == 0xd503207fu) {
+            const uint64_t late = now - served;
+            ++s->control.wfi_count;
+            if (late > s->control.wfi_late_max) s->control.wfi_late_max = late;
+            if (late > 120) ++s->control.wfi_over5;
+            ++s->control.wfi_bin[late / SS_CONTROL_BIN_TICKS < BINS ? late / SS_CONTROL_BIN_TICKS : BINS - 1u];
+        }
+    }
     {
         const uint64_t late = now - served;
         unsigned low = 0;
@@ -281,3 +295,14 @@ unsigned ulSunstoneControlWorst(unsigned core, unsigned rank, struct ss_control_
 }
 /* Present only in a fork image built with SUNSTONE_OWNER_COUNTERS; the weak copy keeps other images linking. */
 __attribute__((weak)) uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which) { (void)cpu; (void)which; return 0; }
+/* Interrupts of a control core that ended a wfi: count, longest and count over 5 us, and the histogram. */
+unsigned ulSunstoneControlWfi(unsigned core, uint64_t *count, uint64_t *max_ticks, uint64_t *over5, const uint32_t **bins)
+{
+    if (core < FIRST_CORE || core >= FIRST_CORE + CORES - 1u || !state[core].rate_hz || !(state[core].paths & 1u)) return 0;
+    *count = state[core].control.wfi_count; *max_ticks = state[core].control.wfi_late_max; *over5 = state[core].control.wfi_over5;
+    *bins = state[core].control.wfi_bin;
+    return 1;
+}
+/* Idle pull diagnostics of the partitioned scheduler; the weak copies keep the stock kernel linking. */
+__attribute__((weak)) unsigned long ulSunstoneIdleWaiting(unsigned core) { (void)core; return 0; }
+__attribute__((weak)) unsigned long ulSunstoneIdlePulls(void) { return 0; }

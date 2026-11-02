@@ -24,7 +24,7 @@ def main():
     parser.add_argument('--skew', type=int, default=0, help='delay the primary core by SKEW*61 loop turns at start (changes the interleaving under the instruction counter)')
     parser.add_argument('--wall-clock', action='store_true',
                         help='run the cores on host threads and the host clock; the default is one thread on the instruction counter, which a loaded host cannot perturb')
-    parser.add_argument('--case', action='append', choices=['kernel', 'soak', 'concurrent', 'runtime', 'heap', 'storm'])
+    parser.add_argument('--case', action='append', choices=['kernel', 'soak', 'concurrent', 'runtime', 'heap', 'storm', 'yield', 'yield-storm'])
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, TMPDIR=str(args.output.resolve()))
@@ -35,6 +35,8 @@ def main():
         'runtime': ('smp-runtime-model', 2, 'PASS SMP runtime:'),
         'heap': ('scheduler-partitioned-heap-qemu', 2, 'PASS partitioned heap lifecycle:'),
         'storm': ('scheduler-partitioned-storm-qemu', 8, 'PASS partitioned concurrent:'),
+        'yield': ('scheduler-yield-qemu', 8, 'PASS yield:'),
+        'yield-storm': ('scheduler-yield-storm-qemu', 8, 'PASS yield:'),
     }
     reports = []
     for case in args.case or ['kernel', 'concurrent', 'soak']:

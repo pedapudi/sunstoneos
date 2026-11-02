@@ -861,8 +861,44 @@ static void ssKernelSwitch(unsigned c)
         ssKernelForce(c);
     }
 }
+#ifdef SUNSTONE_OWNER_COUNTERS
+/* Owner-work drains by CPU (measurement): from the outermost interrupt exit, skipped by the mask guard there, and
+ * from the tick. Each CPU writes its own line. */
+static struct { uint64_t exit_work, exit_skipped, tick_work, service_run, exit_max, yield_max, exit_over5, yield_over5, exit_raised, skip_pending, pad[6]; } ssOwnerCounters[8] __attribute__((aligned(64)));
+extern uint64_t ullPortYieldRequired[];
+uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which)
+{
+    if (cpu >= 8 || which > 9) return 0;
+    const uint64_t *row = &ssOwnerCounters[cpu].exit_work;
+    return row[which];
+}
+#define SS_OWNER_COUNT(field) (++ssOwnerCounters[ssKernelCPUId()].field)
+/* A skipped exit that leaves a switch request pending: the outer exit must find it still set. */
+#define SS_OWNER_PENDING() do { if (ullPortYieldRequired[ssKernelCPUId()]) SS_OWNER_COUNT(skip_pending); } while (0)
+static inline uint64_t ssOwnerClock(void)
+{
+    uint64_t t;
+    __asm__ volatile("isb\n mrs %0, cntvct_el0" : "=r"(t) :: "memory");
+    return t;
+}
+/* Time with PSTATE.I set spent in C, in counter ticks of 41.7 ns: the longest and the count over 5 us. */
+static inline void ssOwnerSpan(uint64_t begin, bool yield)
+{
+    const uint64_t length = ssOwnerClock() - begin;
+    typeof(ssOwnerCounters[0]) *row = &ssOwnerCounters[ssKernelCPUId()];
+    uint64_t *max = yield ? &row->yield_max : &row->exit_max, *over = yield ? &row->yield_over5 : &row->exit_over5;
+    if (length > *max) *max = length;
+    if (length > 120) ++*over;
+}
+#else
+#define SS_OWNER_COUNT(field) ((void)0)
+#define SS_OWNER_PENDING() ((void)0)
+#define ssOwnerClock() 0
+#define ssOwnerSpan(begin, yield) ((void)(begin))
+#endif
 void ssKernelOwnerYieldTail(void)
 {
+    const uint64_t span_begin = ssOwnerClock();
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
     /* The port calls this at SVC entry with the outgoing frame saved, before
@@ -874,26 +910,13 @@ void ssKernelOwnerYieldTail(void)
     if (state == SS_K_RUNNING || state == SS_K_READY) cpu->yield_tail = true;
     cpu->reschedule = true;
     portCLEAR_INTERRUPT_MASK(irq);
+    ssOwnerSpan(span_begin, true);
 }
 void ssKernelOwnerYield(void)
 {
     /* SVC saves the frame and calls OwnerYieldTail exactly once. */
     portYIELD();
 }
-#ifdef SUNSTONE_OWNER_COUNTERS
-/* Owner-work drains by CPU (measurement): from the outermost interrupt exit, skipped by the mask guard there, and
- * from the tick. Each CPU writes its own line. */
-static struct { uint64_t exit_work, exit_skipped, tick_work, service_run; uint64_t pad[4]; } ssOwnerCounters[8] __attribute__((aligned(64)));
-uint64_t ulSunstoneOwnerCounters(unsigned cpu, unsigned which)
-{
-    if (cpu >= 8 || which > 3) return 0;
-    const uint64_t *row = &ssOwnerCounters[cpu].exit_work;
-    return row[which];
-}
-#define SS_OWNER_COUNT(field) (++ssOwnerCounters[ssKernelCPUId()].field)
-#else
-#define SS_OWNER_COUNT(field) ((void)0)
-#endif
 static BaseType_t ssKernelOwnerIRQExitWork(void)
 {
     struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
@@ -912,9 +935,21 @@ BaseType_t ssKernelOwnerIRQExit(void)
 {
     uint64_t pmr;
     __asm__ volatile("mrs %0, icc_pmr_el1" : "=r"(pmr));
-    if (pmr <= portMAX_API_PRIORITY_MASK) { SS_OWNER_COUNT(exit_skipped); return pdFALSE; }
+    if (pmr <= portMAX_API_PRIORITY_MASK) { SS_OWNER_COUNT(exit_skipped); SS_OWNER_PENDING(); return 2; } /* tells the exit path not to switch tasks */
     SS_OWNER_COUNT(exit_work);
-    return ssKernelOwnerIRQExitWork();
+    const uint64_t begin = ssOwnerClock();
+    /* The exit path calls this with PSTATE.I set, and the owner work takes several microseconds. Run it as an ISR
+     * critical section does: raise ICC_PMR_EL1 to the API mask and clear PSTATE.I, so that only interrupts above the
+     * API mask (the control class) can run in it. Their exit leaves the work alone (the PMR test above), and the
+     * nesting count is zero here, as for any outermost exit. Set PSTATE.I again for the exit path that follows. */
+    const UBaseType_t previous = portSET_INTERRUPT_MASK_FROM_ISR();
+    const BaseType_t result = ssKernelOwnerIRQExitWork();
+    /* Set PSTATE.I before restoring the mask: portCLEAR_INTERRUPT_MASK_FROM_ISR clears it after the write, and an
+     * ordinary interrupt taken then would be a second outermost exit inside this one. */
+    __asm__ volatile("msr daifset, #2\n dsb sy\n isb\n msr icc_pmr_el1, %0\n dsb sy\n isb" :: "r"((uint64_t)previous) : "memory");
+    ssOwnerSpan(begin, false);
+    if (result == pdTRUE) SS_OWNER_COUNT(exit_raised);
+    return result;
 }
 static BaseType_t ssKernelTick(void)
 {
