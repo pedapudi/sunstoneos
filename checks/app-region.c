@@ -281,9 +281,9 @@ static void slot1_cases(void)
 {
     build_kernel(0);
     for (unsigned j = 64; j < 512; ++j) kernel_l2[j] = A733_EL1_DRAM_BLOCK(GIB + (uint64_t)j * 0x200000);   /* mapped after the decode check */
-    struct app_region_range usable[] = {{APP_REGION_FLOOR, 0x38000000}, {APP_REGION_BASE, 11 * GIB}};
+    struct app_region_range usable[] = {{APP_REGION_FLOOR, 0x31000000}, {APP_REGION_BASE, 11 * GIB}};
     struct app_region_ledger l;
-    assert(linit(&l, 0, 8, usable, 2) == 0 && app_region_free_bytes(&l) == 11 * GIB + 0x38000000);
+    assert(linit(&l, 0, 8, usable, 2) == 0 && app_region_free_bytes(&l) == 11 * GIB + 0x31000000);
     uint64_t a0, an, b0, bn;
     /* The first region takes the smallest gap that holds it: the gap in slot 1 (896 MiB) is smaller than slot 2 on. */
     assert(app_region_acquire(&l, 1, 6 * MIB, APP_REGION_READ | APP_REGION_WRITE, &a0, &an) == 0);
@@ -321,6 +321,19 @@ static void slot1_cases(void)
     assert(app_space_build_l2(&sa, &arena, base_l1, kernel_l2, &l, 1, 4, 0) == APP_REGION_INVALID && arena.used == used);
     kernel_l2[(a0 - GIB) / 0x200000] = A733_EL1_DRAM_BLOCK(a0);
     assert(app_space_build(&sa, &arena, base_l1, &l, 1) == APP_REGION_INVALID && arena.used == used);   /* the old entry point has no slot-1 table */
+    /* A region at an address the build chose: the exact extent, refused when it is not free or not usable. */
+    arena.used = 0;
+    assert(linit(&l, 0, 8, usable, 2) == 0);
+    assert(app_region_acquire_at(&l, 1, APP_REGION_FLOOR + 16 * MIB, 5 * MIB, APP_REGION_READ | APP_REGION_WRITE) == 0);
+    assert(app_region_owner_of(&l, APP_REGION_FLOOR + 16 * MIB) == 1 && app_region_owner_of(&l, APP_REGION_FLOOR + 22 * MIB - 1) == 1 &&
+           app_region_owner_of(&l, APP_REGION_FLOOR + 22 * MIB) == 0);                   /* rounded up to 2 MiB */
+    assert(app_region_acquire_at(&l, 2, APP_REGION_FLOOR + 20 * MIB, 2 * MIB, APP_REGION_READ) == APP_REGION_NO_SPACE);   /* overlaps */
+    assert(app_region_acquire_at(&l, 2, APP_REGION_BASE - 2 * MIB, 2 * MIB, APP_REGION_READ) == APP_REGION_NO_SPACE);    /* not usable: past 0x79000000 */
+    assert(app_region_acquire_at(&l, 2, APP_REGION_FLOOR + 1, 2 * MIB, APP_REGION_READ) == APP_REGION_INVALID);
+    assert(app_region_acquire_at(&l, 2, 0x44000000, 2 * MIB, APP_REGION_READ) == APP_REGION_INVALID);                    /* the window */
+    assert(app_region_acquire_at(&l, 2, APP_REGION_FLOOR, 2 * MIB, APP_REGION_WRITE) == APP_REGION_INVALID);
+    uint64_t d0, dn;
+    assert(app_region_acquire(&l, 3, 4 * MIB, APP_REGION_READ, &d0, &dn) == 0 && d0 == APP_REGION_FLOOR);   /* the first fit skips the extent */
     /* A region that spans slot 1 into slot 2 maps in both. */
     uint64_t c0, cn;
     assert(app_region_acquire(&l, 4, 900 * MIB, APP_REGION_READ | APP_REGION_WRITE, &c0, &cn) == 0 && c0 >= a0 + 10 * MIB);

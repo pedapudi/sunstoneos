@@ -3,6 +3,8 @@
  * "sunstone_large_regions"; the usable upper memory comes from the board: the ranges that the DRAM
  * decode check passed. */
 #include "app_large.h"
+#include "application.h"
+#include "sunstone_app.h"
 #include "os_space.h"
 #include "app_region.h"
 #include <stdint.h>
@@ -49,6 +51,7 @@ static uint16_t owner_asid;
 /* Sized by the image's generated tables from the manifest. */
 extern const unsigned os_large_capacity;
 extern struct large_slot os_large_slot_storage[];
+extern const unsigned os_ledger_capacity;
 extern struct app_region_entry os_large_entry_storage[];
 static struct app_region_ledger ledger;
 static struct app_region_range usable_storage[APP_REGION_SLOTS];
@@ -78,7 +81,12 @@ const struct app_space *os_large_space(void) { return admitted ? &space : 0; }
 int os_large_prepare(void)
 {
     unsigned count = __start_sunstone_large_regions ? (unsigned)(__stop_sunstone_large_regions - __start_sunstone_large_regions) : 0;
-    if (!count) return 1;
+    /* The manifest's own regions that the build placed in the slot 1 area belong to this application's space. */
+    const struct ss_manifest *manifest = ss_application.manifest;
+    unsigned placed = 0;
+    for (unsigned i = 0; manifest && i < manifest->region_count; ++i)
+        placed += manifest->regions[i].address >= APP_REGION_FLOOR && manifest->regions[i].address < APP_REGION_BASE;
+    if (!count && !placed) return 1;
     if (admitted) return 0;
     uint64_t ttbr;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
@@ -93,7 +101,13 @@ int os_large_prepare(void)
     app_asid_pool_init(&asids, mmfr0, tcr);
     owner_asid = app_asid_alloc(&asids);
     if (!owner_asid || !ranges || count > os_large_capacity ||
-        app_region_ledger_init(&ledger, usable_storage, APP_REGION_SLOTS, os_large_entry_storage, os_large_capacity, usable, ranges)) return 0;
+        app_region_ledger_init(&ledger, usable_storage, APP_REGION_SLOTS, os_large_entry_storage, os_ledger_capacity, usable, ranges)) return 0;
+    for (unsigned i = 0; manifest && i < manifest->region_count; ++i) {
+        const struct ss_region *r = &manifest->regions[i];
+        if (r->address < APP_REGION_FLOOR || r->address >= APP_REGION_BASE) continue;
+        if (app_region_acquire_at(&ledger, owner_asid, r->address, r->bytes,
+                                  APP_REGION_READ | (r->access & SS_ACCESS_WRITE ? APP_REGION_WRITE : 0))) return 0;
+    }
     if (large_admit(&ledger, owner_asid, __start_sunstone_large_regions, count, slots, os_large_capacity)) return 0;
     arena = (struct app_table_arena){arena_pages, (uintptr_t)arena_pages, APP_SPACE_PAGES, 0};
     int built = app_space_build_l2(&space, &arena, base_l1, base_l2, &ledger, owner_asid, owner_asid, 0) == 0;

@@ -570,6 +570,12 @@ def main():
         application = image.application('notify-test', ['checks/qemu-os/notify-main.c'], ROOT / 'checks/qemu-os/notify-manifest.json')
         return image.build(application)
 
+    def build_slot1():
+        """An application with a manifest region in level-1 slot 1 above the EL0 window."""
+        image = Image(out / 'build-slot1', extra_defines=['-DQEMU_OS_UPPER=1'])
+        application = image.application('slot1-test', ['checks/qemu-os/slot1-main.c'], ROOT / 'checks/qemu-os/slot1-manifest.json')
+        return image.build(application)
+
     def build_facts():
         image = Image(out / 'build-hw-facts', extra_defines=['-DSUNSTONE_A733_HW_FACTS=1'],
                       extra_sources=['platform/a733/hw_facts.c'])
@@ -601,6 +607,7 @@ def main():
         large_elf, large_big_elf = large_elf.result(), large_big_elf.result()
         heap_early = pool.submit(build_heap_early, 'build-heap-early', ROOT / 'checks/qemu-os/heap-manifest.json')
         notify_elf = pool.submit(build_notify).result()
+        slot1_elf = pool.submit(build_slot1).result()
         heap_elf, heap_big_elf, heap_early_elf = heap_elf.result(), heap_big_elf.result(), heap_early.result()
         os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
             os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result(),
@@ -872,6 +879,20 @@ def main():
     tag, wait, e1, recv, e2 = struct.unpack('<5q', bytes.fromhex(c.finished['result']))
     c.require(wait == 1 and e1 >= 30000, 'the deadline wait ended with status %d after %d us, expected expiry after 30000 us' % (wait, e1))
     c.require(recv == 0 and e2 >= 30000, 'ss_host_recv returned %d after %d us, expected the timeout (0) after 30000 us' % (recv, e2))
+
+    # A manifest region above the 48 MiB window lies in level-1 slot 1 and is mapped for its application alone.
+    c = run_case('region-in-slot-1', slot1_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G')
+    c.clean()
+    admitted = lines(c.output, 'LARGE-ADMITTED')
+    tag, address, size, fold = struct.unpack('<4Q', bytes.fromhex(c.finished['result']))
+    expected_fold = 0xffffffffffffffff
+    for i in range(0, (64 << 20) // 8, 512):
+        expected_fold ^= (0x9e3779b97f4a7c15 * (i + 1)) & (2 ** 64 - 1)
+    c.require(tag == 0x534c4f5431 and address == 0x51000000 and size == 64 << 20 and fold == expected_fold,
+              'slot 1 region result %#x at %#x, %#x bytes, fold %#x' % (tag, address, size, fold))
+    c = run_case('region-in-slot-1-end-faults', slot1_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(1), '4G')
+    c.failed_with('APPLICATION', 0xe24)
+    c.require(int(c.failure['value'], 16) == 0x55000000, 'the byte after the slot 1 region faults at %s' % c.failure['value'])
 
     # A heap that the ledger cannot hold stops the start before any task runs.
     c = run_case('heap-too-big', heap_big_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G')

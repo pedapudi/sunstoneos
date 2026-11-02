@@ -67,6 +67,9 @@ int app_region_ledger_init(struct app_region_ledger *, struct app_region_range *
  * smaller regions take the smallest free gap. */
 int app_region_acquire(struct app_region_ledger *, uint16_t owner, uint64_t bytes, unsigned access,
                        uint64_t *base_out, uint64_t *bytes_out);
+/* Reserve exactly [base, base + bytes rounded up to 2 MiB) for owner: a region whose address the build chose. Refused
+ * with APP_REGION_NO_SPACE when the extent is not inside one usable range or overlaps an entry. */
+int app_region_acquire_at(struct app_region_ledger *, uint16_t owner, uint64_t base, uint64_t bytes, unsigned access);
 int app_region_release(struct app_region_ledger *, uint16_t owner, uint64_t base);
 /* Owner (ASID) of the byte at pa, or 0 when no application holds it. A DMA
  * master's grant check asks this before it maps the extent. */

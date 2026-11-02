@@ -93,6 +93,25 @@ int app_region_acquire(struct app_region_ledger *l, uint16_t owner, uint64_t byt
     return APP_REGION_OK;
 }
 
+int app_region_acquire_at(struct app_region_ledger *l, uint16_t owner, uint64_t base, uint64_t bytes, unsigned access)
+{
+    if (!l || !owner || !bytes || !aligned(base, APP_REGION_BLOCK) || bytes > APP_REGION_LIMIT ||
+        (access != APP_REGION_READ && access != (APP_REGION_READ | APP_REGION_WRITE))) return APP_REGION_INVALID;
+    bytes = (bytes + APP_REGION_BLOCK - 1) & ~(APP_REGION_BLOCK - 1);
+    if (base < APP_REGION_FLOOR || base > APP_REGION_LIMIT || bytes > APP_REGION_LIMIT - base) return APP_REGION_INVALID;
+    unsigned slot = l->capacity;
+    for (unsigned i = 0; i < l->capacity; ++i) if (!l->entry[i].owner) { slot = i; break; }
+    if (slot == l->capacity) return APP_REGION_QUOTA;
+    struct gap_walk w = {0, 0, 0};
+    struct gap g;
+    while (gap_next(l, &w, &g))
+        if (g.base <= base && base + bytes <= g.end) {
+            l->entry[slot] = (struct app_region_entry){base, bytes, owner, (uint8_t)access};
+            return APP_REGION_OK;
+        }
+    return APP_REGION_NO_SPACE;
+}
+
 int app_region_release(struct app_region_ledger *l, uint16_t owner, uint64_t base)
 {
     if (!l || !owner) return APP_REGION_INVALID;

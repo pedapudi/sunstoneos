@@ -41,6 +41,8 @@ ACCESS = {'read': 1, 'write': 2, 'gpu-read': 4, 'gpu-write': 8}
 # Application regions lie in the EL0 read-write blocks above the OS-owned
 # radio and Bluetooth profile reservation and below the loader limit.
 WINDOW = tuple(memory_layout.record()['window'])
+SLOT1 = tuple(memory_layout.record()['slot1_area'])
+AREAS = (WINDOW, SLOT1)
 PAGE = 0x1000
 BLOCK = 0x200000
 # OS host operations: the fault, NPU, thermal and performance reports keep
@@ -153,7 +155,7 @@ def load(path):
         for a in r.get('access', []):
             require(a in ACCESS, where + ': unknown access %r' % a)
             access |= ACCESS[a]
-        size = integer(r['bytes'], where + ' bytes', 1, WINDOW[1] - WINDOW[0])
+        size = integer(r['bytes'], where + ' bytes', 1, SLOT1[1] - SLOT1[0])
         digest = r.get('sha256')
         if digest is not None:
             require(kind == KIND['input'] and re.fullmatch(r'[0-9a-f]{64}', digest) is not None,
@@ -264,7 +266,7 @@ def unpack_large(raw):
 
 def span(r):
     # GPU leases and CPU output permissions reserve complete 2 MiB blocks.
-    alignment = BLOCK if r['access'] & (ACCESS['gpu-read'] | ACCESS['gpu-write']) else PAGE
+    alignment = BLOCK if r['access'] & (ACCESS['gpu-read'] | ACCESS['gpu-write']) or r['address'] >= SLOT1[0] else PAGE
     return r['address'], r['address'] + -(-r['bytes'] // alignment) * alignment
 
 
@@ -279,7 +281,9 @@ def assign(m):
     def place(i, r):
         where = '%s region %s' % (m['name'], m['region_names'][i])
         low, high = span(r)
-        require(WINDOW[0] <= low < high <= WINDOW[1], '%s: [%#x, %#x) outside the application window' % (where, low, high))
+        require(any(a <= low and high <= b for a, b in AREAS),
+                '%s: [%#x, %#x) outside the application window and the slot 1 area' % (where, low, high))
+        require(low < SLOT1[0] or low % BLOCK == 0, '%s: a region in the slot 1 area starts on a 2 MiB boundary' % where)
         for other, (a, b) in taken:
             require(high <= a or b <= low, '%s overlaps region %s' % (where, other))
         taken.append((m['region_names'][i], (low, high)))
@@ -292,6 +296,9 @@ def assign(m):
             r['address'] = WINDOW[0]
             while True:
                 low, high = span(r)
+                if high > WINDOW[1] and low < SLOT1[0]:          # the window is full: continue in the slot 1 area
+                    r['address'] = SLOT1[0]
+                    continue
                 clash = [b for _, (a, b) in taken if not (high <= a or b <= low)]
                 if not clash:
                     break
@@ -429,7 +436,9 @@ def c_tables(m):
              '/* Storage for the large regions this manifest declares: the count is the manifest\'s, not a constant. */',
              'const unsigned os_large_capacity = %du;' % len(m.get('large_regions', [])),
              'struct large_slot os_large_slot_storage[%d];' % max(1, len(m.get('large_regions', []))),
-             'struct app_region_entry os_large_entry_storage[%d];' % max(1, len(m.get('large_regions', []))),
+             '/* The ledger also holds the manifest regions that lie in the slot 1 area. */',
+             'const unsigned os_ledger_capacity = %du;' % (len(m.get('large_regions', [])) + len(m.get('regions', []))),
+             'struct app_region_entry os_large_entry_storage[%d];' % max(1, len(m.get('large_regions', [])) + len(m.get('regions', []))),
              '/* A task waits on one region at a time: one entry per task of the application. */',
              'const unsigned os_large_waiter_capacity = %du;' % (m.get('workers', 0) + 1),
              'TaskHandle_t os_large_waiter_task[%d];' % (m.get('workers', 0) + 1),

@@ -161,6 +161,38 @@ def check_shape(record):
             'runner range lies outside FEL reach (a 32-bit address)')
 
 
+def check_placement(record):
+    """The manifest tool places regions in the window, then in the slot 1 area, and refuses the rest."""
+    import json, tempfile
+    manifest = load_module('layout_placement', ROOT / 'tools/sunstone-manifest.py')
+
+    def placed(regions):
+        base = {'name': 'placement', 'devices': {'required': [], 'optional': []},
+                'cpu': {'cluster': 'a55', 'workers': 0, 'priority': 2, 'stack_bytes': 4096},
+                'regions': regions, 'deadlines': {'return_reserve_us': 1000000, 'progress_window_us': 1000000},
+                'output_limit': 0}
+        with tempfile.NamedTemporaryFile('w', suffix='.json') as handle:
+            json.dump(base, handle)
+            handle.flush()
+            m = manifest.load(handle.name)
+        manifest.assign(m)
+        return [r['address'] for r in m['regions']]
+
+    window, area = record['window'], record['slot1_area']
+    work = lambda name, mib, **extra: dict(name=name, kind='work', access=['read', 'write'], bytes=mib << 20, **extra)
+    require(placed([work('a', 1)]) == [window[0]], 'a small region is not at the window start')
+    require(placed([work('a', 40), work('b', 20)]) == [window[0], area[0]],
+            'a region that does not fit the rest of the window is not at the slot 1 area start')
+    require(placed([work('a', 64)]) == [area[0]], 'a region larger than the window is not at the slot 1 area start')
+    require(placed([work('a', 64, address=area[0] + (16 << 20))]) == [area[0] + (16 << 20)], 'a pinned slot 1 region moved')
+    for bad in (dict(address=window[1] - (2 << 20)), dict(address=area[0] + 4096), dict(address=area[1] - (2 << 20))):
+        try:
+            placed([work('a', 64, **bad)])
+        except SystemExit:
+            continue
+        fail('a region at %s was accepted' % bad)
+
+
 def check_image(path, record):
     from elftools.elf.elffile import ELFFile
     elf = ELFFile(open(path, 'rb'))
@@ -199,6 +231,7 @@ def main():
     check_shape(record)
     check_sources(record)
     check_consumers(record)
+    check_placement(record)
     for image in args.image:
         check_image(image, record)
     if args.output:

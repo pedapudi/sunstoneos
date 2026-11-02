@@ -55,6 +55,10 @@ def record():
         },
         # Input, work and output regions of a manifest, GPU buffers and the NPU pool.
         'window': (0x44000000, 0x47000000),
+        # A region that does not fit the window goes in level-1 slot 1 above the EL0 window, in 2 MiB blocks, below
+        # the first byte of the A733 profile that the kernel table leaves unmapped; the OS maps it for its
+        # application alone (docs/designs/application-memory-layout.md).
+        'slot1_area': (0x48000000, 0x79000000),
         'npu_pool': {
             'legacy': (0x47400000, 0x47c00000),
             'top': 0x47000000, 'min': 0xa00000, 'max': 0x3000000, 'block': BLOCK,
