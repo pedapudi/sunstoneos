@@ -29,6 +29,8 @@ _spec.loader.exec_module(memory_layout)
 
 MAGIC = 0x5453464e4d505041
 VERSION = 2
+# Version 1: a fixed record of eight regions (head plus 8 region entries). Readers still accept it.
+V1_REGIONS = 8
 HEAD = struct.Struct('<QII16sIIBBBBIQQQQIBBBB')
 AUDIO = struct.Struct('<IHHII')
 REGION = struct.Struct('<QQII32s')
@@ -145,11 +147,15 @@ def integer(value, where, low=0, high=(1 << 64) - 1):
 def load(path, resident=False):
     """manifest.json -> normalized dict with integer fields."""
     raw = json.loads(Path(path).read_text())
-    known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'deadlines', 'output_limit', 'host_ops', 'npu', 'gpu'}
+    known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'deadlines', 'output_limit', 'host_ops', 'npu', 'gpu', 'abi'}
     require(set(raw) <= known, '%s: unknown keys %s' % (path, sorted(set(raw) - known)))
     name = raw['name']
     require(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9-]{0,14}', name) is not None,
             '%s: name must be 1-15 characters [a-z0-9-] starting with a letter' % path)
+    abi = raw.get('abi', VERSION)
+    require(abi in (1, VERSION), '%s: abi is 1 or %d' % (path, VERSION))
+    require(abi == VERSION or len(raw.get('regions', [])) <= V1_REGIONS,
+            '%s: abi 1 holds at most %d regions' % (path, V1_REGIONS))
     devices = raw.get('devices', {})
     required = bits(devices.get('required', []), name)
     optional = bits(devices.get('optional', []), name)
@@ -267,6 +273,8 @@ def load(path, resident=False):
         regions.append({'address': address, 'bytes': size, 'kind': kind, 'access': access,
                         'sha256': digest or '0' * 64})
     m['regions'] = regions
+    if abi != VERSION:
+        m['abi'] = abi      # recorded only for a version 1 record; absent means the current version
     m['region_names'] = names
     # The input region that holds the application's compiled NPU graphs, behind an index (tools/npu-external-pack.py): the
     # session record names it by its place in this list plus one, and admission copies the graphs out of it.
@@ -445,7 +453,9 @@ def assign(m):
 
 
 def pack(m):
-    out = HEAD.pack(MAGIC, VERSION, MANIFEST_HEAD_BYTES + REGION.size * len(m['regions']), m['name'].encode(), m['devices_required'],
+    version = m.get('abi', VERSION)
+    slots = V1_REGIONS if version == 1 else len(m['regions'])
+    out = HEAD.pack(MAGIC, version, MANIFEST_HEAD_BYTES + REGION.size * slots, m['name'].encode(), m['devices_required'],
                     m['devices_optional'], m['cluster'], m['workers'], m['priority'], 0,
                     m['stack_bytes'], m['heap_bytes'], m['run_deadline_us'], m['return_reserve_us'],
                     m['progress_window_us'], m['output_limit'], m['host_op_first'],
@@ -454,7 +464,8 @@ def pack(m):
     out += AUDIO.pack(a['rate_hz'], a['channels'], a['bits'], a['min_frames'], a['max_frames'])
     for r in m['regions']:
         out += REGION.pack(r['address'], r['bytes'], r['kind'], r['access'], bytes.fromhex(r['sha256']))
-    assert len(out) == MANIFEST_HEAD_BYTES + REGION.size * len(m['regions'])
+    out += bytes(REGION.size * (slots - len(m['regions'])))   # version 1 pads the table to eight entries
+    assert len(out) == MANIFEST_HEAD_BYTES + REGION.size * slots
     return out
 
 
@@ -466,8 +477,10 @@ def unpack(raw):
         require(len(raw) - base >= MANIFEST_HEAD_BYTES, 'manifest at %d: truncated head' % base)
         (magic, version, size, name, required, optional, cluster, workers, priority, reserved0, stack, heap,
          run, reserve, window, output, first, count, regions, reserved1) = HEAD.unpack_from(raw, base)
-        require((magic, version) == (MAGIC, VERSION) and not reserved0 and reserved1 <= 3 and (reserved1 & 2 == 0 or reserved1 & 1) and
-                size == MANIFEST_HEAD_BYTES + REGION.size * regions and base + size <= len(raw),
+        slots = V1_REGIONS if version == 1 else regions
+        require(magic == MAGIC and version in (1, VERSION) and not reserved0 and reserved1 <= 3 and (reserved1 & 2 == 0 or reserved1 & 1) and
+                (version == VERSION or regions <= V1_REGIONS) and
+                size == MANIFEST_HEAD_BYTES + REGION.size * slots and base + size <= len(raw),
                 'manifest at %d: header differs' % base)
         rate, channels, bits_, low, high = AUDIO.unpack_from(raw, base + HEAD.size)
         m = {'name': name.rstrip(b'\0').decode(), 'devices_required': required, 'devices_optional': optional,
@@ -477,10 +490,14 @@ def unpack(raw):
              'host_op_first': first, 'host_op_count': count, 'clock_use': reserved1,
              'audio': {'rate_hz': rate, 'channels': channels, 'bits': bits_, 'min_frames': low, 'max_frames': high},
              'regions': []}
+        if version == 1:
+            m['abi'] = 1
         for i in range(regions):
             address, length, kind, access, digest = REGION.unpack_from(raw, base + MANIFEST_HEAD_BYTES + i * REGION.size)
             m['regions'].append({'address': address, 'bytes': length, 'kind': kind, 'access': access,
                                  'sha256': digest.hex()})
+        require(all(not any(raw[base + MANIFEST_HEAD_BYTES + i * REGION.size:][:REGION.size]) for i in range(regions, slots)),
+                'manifest at %d: version 1 padding entries are not zero' % base)
         result.append(m)
         base += size
     return result
@@ -501,8 +518,8 @@ def c_source(m):
              '#include "%s-app.h"' % c,
              '__attribute__((used, retain, section("sunstone_manifest"), aligned(8)))',
              'const struct ss_manifest %s_manifest = {' % c,
-             '    .magic = SS_MANIFEST_MAGIC, .version = SS_MANIFEST_VERSION,',
-             '    .bytes = SS_MANIFEST_HEAD_BYTES + %du * sizeof(struct ss_region),' % len(m['regions']),
+             '    .magic = SS_MANIFEST_MAGIC, .version = %s,' % ('SS_MANIFEST_VERSION_1' if m.get('abi') == 1 else 'SS_MANIFEST_VERSION'),
+             '    .bytes = SS_MANIFEST_HEAD_BYTES + %du * sizeof(struct ss_region),' % (V1_REGIONS if m.get('abi') == 1 else len(m['regions'])),
              '    .name = "%s",' % m['name'],
              '    .devices_required = %#xu, .devices_optional = %#xu,' % (m['devices_required'], m['devices_optional']),
              '    .cluster = %d, .workers = %d, .priority = %d, .stack_bytes = %du,' % (
@@ -516,13 +533,15 @@ def c_source(m):
              '    .audio = {%du, %du, %du, %du, %du},' % (
                  a['rate_hz'], a['channels'], a['bits'], a['min_frames'], a['max_frames']),
              ]
-    if m['regions']:
+    if m['regions'] or m.get('abi') == 1:
         lines.append('    .regions = {')
     for r in m['regions']:
         digest = ','.join('0x' + r['sha256'][i:i + 2] for i in range(0, 64, 2))
         lines.append('        {UINT64_C(%#x), UINT64_C(%#x), %d, %#xu, {%s}},' % (
             r['address'], r['bytes'], r['kind'], r['access'], digest))
-    if m['regions']:
+    for _ in range(V1_REGIONS - len(m['regions']) if m.get('abi') == 1 else 0):
+        lines.append('        {0, 0, 0, 0u, {0}},')      # version 1 pads the table to eight entries
+    if m['regions'] or m.get('abi') == 1:
         lines.append('    },')
     lines += ['};', '']
     if m['large_regions']:

@@ -29,6 +29,11 @@ extern "C" {
 
 #define SS_MANIFEST_MAGIC UINT64_C(0x5453464e4d505041) /* "APPMNFST" */
 #define SS_MANIFEST_VERSION 2u
+/* Version 1 is a fixed record of SS_MANIFEST_V1_REGIONS region entries
+ * (SS_MANIFEST_V1_BYTES). The OS still admits it; the region entries start at
+ * the same offset, and region_count says how many are in use. */
+#define SS_MANIFEST_VERSION_1 1u
+#define SS_MANIFEST_V1_REGIONS 8u
 #define SS_NAME_BYTES 16u
 /* Bytes of an application manifest before its region table. The table holds
  * region_count entries, as many as the application declares; the section
@@ -131,8 +136,19 @@ struct ss_manifest {
 /* Storage for a manifest of n regions, for generated sources, hand-written
  * manifests and tests: the union supplies the bytes that the flexible
  * array needs. Access it as .manifest. */
+#define SS_MANIFEST_V1_BYTES (SS_MANIFEST_HEAD_BYTES + SS_MANIFEST_V1_REGIONS * 56u)
 #define SS_MANIFEST_STORAGE(n) union { struct ss_manifest manifest; \
     SS_ALIGNAS(8) unsigned char bytes[SS_MANIFEST_HEAD_BYTES + (n) * 56u]; }
+
+/* Nonzero when the version and size of a manifest in the section agree: version 2
+ * is the head plus region_count entries, version 1 the fixed eight-entry record. */
+static inline int ss_manifest_size_valid(const struct ss_manifest *m)
+{
+    if (m->version == SS_MANIFEST_VERSION)
+        return m->bytes == SS_MANIFEST_HEAD_BYTES + (size_t)m->region_count * sizeof(struct ss_region);
+    return m->version == SS_MANIFEST_VERSION_1 && m->bytes == SS_MANIFEST_V1_BYTES &&
+           m->region_count <= SS_MANIFEST_V1_REGIONS;
+}
 
 SS_STATIC_ASSERT(sizeof(struct ss_region) == 56 && offsetof(struct ss_region, kind) == 16 &&
     offsetof(struct ss_region, sha256) == 24, "ss_region layout");

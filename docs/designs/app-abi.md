@@ -79,9 +79,39 @@ regions in a 552-byte record. Version 2 keeps the 104-byte head
 entries, so `bytes` is 104 plus 56 times `region_count`. Section readers walk
 the manifests by `bytes`. In `struct ss_grant`, `regions` is a pointer to
 `region_count` spans, which the generated image tables size from the manifest
-(`ss_grant_spans`); an application indexes it as before. The two ABI changes
-make an application built for version 1 fail admission rather than misread
-the table.
+(`ss_grant_spans`); an application indexes it as before. The OS still
+admits a version 1 record: `ss_manifest_size_valid` (include/sunstone_app.h)
+accepts version 1 with `bytes` equal to `SS_MANIFEST_V1_BYTES` (552) and a
+`region_count` of at most `SS_MANIFEST_V1_REGIONS` (8), and version 2 with the
+size above. The region entries start at the same offset in both, so the same
+code reads them. `tools/sunstone-manifest.py` decodes both and records
+`"abi": 1` for a version 1 record.
+
+**Migration.** An application is compiled with the image against the SDK
+header, so the grant change needs a rebuild and no other source change for
+applications that index `grant->regions[i]` or read `regions` from a manifest.
+A manifest that `tools/sunstone-manifest.py` generates (mimus, for example)
+follows the declaration with no edit.
+
+- To keep version 1, add `"abi": 1` to `manifest.json`. The tool then emits
+  the 552-byte record with `SS_MANIFEST_VERSION_1`, pads the table with zero
+  entries, and refuses more than eight regions. The record is accepted as
+  before. This is for an application that cannot yet change its region count.
+- To move to version 2, drop `"abi"`. The record shrinks to the 104-byte head
+  plus the declared regions, and the declaration may hold up to 255 regions.
+- A hand-written manifest sets `.version = SS_MANIFEST_VERSION` and
+  `.bytes = SS_MANIFEST_HEAD_BYTES + n * sizeof(struct ss_region)`, or keeps
+  version 1 with `SS_MANIFEST_VERSION_1`, `SS_MANIFEST_V1_BYTES` and an
+  eight-entry table. Use `SS_MANIFEST_STORAGE(n)` for a stored copy.
+- `struct ss_grant.regions` is a pointer in both. Code that assigns
+  `grant.regions[i]` in a host test points `grant.regions` at its own span
+  table first. A prebuilt object compiled against the old `ss_grant`, where
+  `regions` was an inline array of eight spans, does not link into a
+  version 2 image unchanged and must be rebuilt.
+
+`checks/sunstone-app-abi.py` builds a version 1 manifest from
+`"abi": 1`, compares the compiled section with the tool's bytes, decodes it,
+and runs the OS size test on it and on malformed variants.
 
 
 The generator refuses a manifest that breaks these rules. Examples are an INPUT with write access, overlapping regions or a region outside the window; a

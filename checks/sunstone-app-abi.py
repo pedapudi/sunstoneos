@@ -84,7 +84,10 @@ def run(*argv, **kw):
 
 # 1. Emit each application as its own image.
 generated = {}
-applications = [('hello_compute', HELLO), ('abi_fixture', RICH_PATH)]
+# A version 1 manifest: the hello-compute declaration with "abi": 1 (a fixed record of eight region entries).
+V1_PATH = a.build / 'v1-manifest.json'
+V1_PATH.write_text(json.dumps(dict(json.loads(HELLO.read_text()), name='abi-v1', abi=1), indent=2) + '\n')
+applications = [('hello_compute', HELLO), ('abi_fixture', RICH_PATH), ('abi_v1', V1_PATH)]
 for path in a.manifest:
     name = json.loads(path.read_text())['name'].replace('-', '_')
     assert name not in {n for n, _ in applications}, 'duplicate application name: ' + name
@@ -125,7 +128,9 @@ for target, compiler, flags in [('host', a.cc, []),
     for name, gen in generated.items():
         include = ['-I', ROOT / 'include', '-I', gen]
         packed = (gen / 'manifest.bin').read_bytes()
-        assert len(packed) == tool.MANIFEST_HEAD_BYTES + 56 * len(json.loads((gen / 'manifest.json').read_text())[0]['regions'])
+        described_one = json.loads((gen / 'manifest.json').read_text())[0]
+        slots = tool.V1_REGIONS if described_one.get('abi') == 1 else len(described_one['regions'])
+        assert len(packed) == tool.MANIFEST_HEAD_BYTES + 56 * slots
         obj = out / (name + '-manifest.o')
         run(compiler, *warn, *flags, *include, '-O2', '-c', gen / (name + '-manifest.c'), '-o', obj)
         section = out / (name + '-manifest.bin')
@@ -151,6 +156,45 @@ for target, compiler, flags in [('host', a.cc, []),
         linked = out / 'linked.bin'
         run(a.objcopy, '-O', 'binary', '--only-section=sunstone_manifest', model, linked)
         assert linked.read_bytes() == (generated['hello_compute'] / 'manifest.bin').read_bytes(), 'linked section differs'
+
+# 2b. Version 1 stays readable. The record is the old fixed 552 bytes with version 1; the tool decodes it with
+# its region count, and the OS size test (ss_manifest_size_valid, used by apps/os/session.c and gpu-share.c)
+# accepts it and refuses a version 2 size under version 1, a ninth region and a nonzero padding entry.
+v1_packed = (generated['abi_v1'] / 'manifest.bin').read_bytes()
+assert len(v1_packed) == 552 and struct.unpack_from('<QII', v1_packed)[1:] == (1, 552)
+v1_decoded = json.loads(run(*TOOL, 'decode', generated['abi_v1'] / 'manifest.bin').stdout)[0]
+assert v1_decoded['abi'] == 1 and v1_decoded['regions'] == hello['regions'] and 'abi' not in hello
+for bad, why in [(v1_packed[:8] + struct.pack('<II', 1, 104 + 56) + v1_packed[16:104 + 56], 'short version 1 record'),
+                 (v1_packed[:86] + bytes([9]) + v1_packed[87:], 'nine regions'),
+                 (v1_packed[:-1] + b'\x01', 'nonzero padding')]:
+    try:
+        tool.unpack(bad)
+    except SystemExit:
+        continue
+    raise AssertionError('tool accepted a bad version 1 record: ' + why)
+v1_test = a.build / 'v1-reader.c'
+v1_test.write_text('''#include "abi_v1-app.h"
+#include <string.h>
+int main(void)
+{
+    struct ss_manifest copy;
+    memcpy(&copy, &abi_v1_manifest, sizeof(copy));
+    if (abi_v1_manifest.version != SS_MANIFEST_VERSION_1 || abi_v1_manifest.bytes != SS_MANIFEST_V1_BYTES ||
+        !ss_manifest_size_valid(&abi_v1_manifest) || abi_v1_manifest.region_count != 1 ||
+        abi_v1_manifest.regions[0].kind != SS_REGION_INPUT) return 1;
+    copy.region_count = 9;
+    if (ss_manifest_size_valid(&copy)) return 2;
+    copy.region_count = 1; copy.version = SS_MANIFEST_VERSION;
+    if (ss_manifest_size_valid(&copy)) return 3;
+    copy.bytes = SS_MANIFEST_HEAD_BYTES + 56u;
+    if (!ss_manifest_size_valid(&copy)) return 4;
+    return 0;
+}
+''')
+reader = a.build / 'v1-reader'
+run(a.cc, '-std=c11', '-Wall', '-Wextra', '-Werror', '-I', ROOT / 'include', '-I', generated['abi_v1'],
+    v1_test, a.build / 'host' / 'abi_v1-manifest.o', '-o', reader)
+assert subprocess.run([str(reader)]).returncode == 0, 'OS size test refused the version 1 manifest'
 
 # 3. Run hello-compute on inputs at block and region boundaries.
 def stream(n):
@@ -289,5 +333,5 @@ result = {'passed': True, 'manifest_head_bytes': tool.MANIFEST_HEAD_BYTES,
           'generic_sha256': hashlib.sha256((generated['abi_fixture'] / 'manifest.bin').read_bytes()).hexdigest()}
 result['gpu_rounded_span_cases']={'refusals':6,'accepted':placement_paths}
 result['external_sha256'] = {name: hashlib.sha256((generated[name] / 'manifest.bin').read_bytes()).hexdigest()
-                             for name, _ in applications[2:]}
+                             for name, _ in applications[3:]}
 print(json.dumps(result))
