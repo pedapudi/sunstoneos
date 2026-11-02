@@ -5,9 +5,16 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+/* The ring holds as many jobs as the application declares in flight (manifest npu.in_flight, docs/designs/npu-resources.md):
+ * an image is built with SS_NPU_QUEUE_MAX_DEPTH set to it (cmake -DSUNSTONE_OS_NPU_QUEUE_DEPTH=N), and a session that
+ * declares more is refused as image tables. 64 is the default of an image built without a declaration. */
+#ifndef SS_NPU_QUEUE_MAX_DEPTH
 #define SS_NPU_QUEUE_MAX_DEPTH 64u
-#define SS_NPU_QUEUE_MAX_HANDLES 8u
-#define SS_NPU_QUEUE_MAX_TENSORS 32u
+#endif
+/* One handle for each of the 31 slots a command mask allows; one graph has at most 8 inputs and 8 outputs (the loader's
+ * NBG_ASSEMBLY_MAX_TENSORS). */
+#define SS_NPU_QUEUE_MAX_HANDLES 31u
+#define SS_NPU_QUEUE_MAX_TENSORS 8u
 /* Optional immutable image composition. Prepared-entry and tensor indices
  * are zero based. Every declared output/input pair has identical shape and
  * representation. Connected handles share one buffer lease. The OS copies and admits this table before scheduling. */
