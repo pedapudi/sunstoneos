@@ -11,7 +11,11 @@ struct sunstone_uvc_mode;
 typedef void (*a733_usb2_input_emit)(void *,const struct sunstone_hid_event *);
 struct a733_platform_locks;
 #define A733_USB2_HID_REPORT_BYTES 64u
+#if SUNSTONE_USB_HOST_GENERIC
+#define A733_USB2_HUBS A733_XHCI_DEVICES /* Any device record can be a hub. */
+#else
 #define A733_USB2_HUBS 2u /* Hub states: the root-port hub and one hub below it. */
+#endif
 #define A733_USB2_AUDIO_ALTERNATES 4u
 #define A733_USB2_AUDIO_BLOCK_BYTES 1024u
 enum a733_usb2_device_kind { A733_USB2_DEVICE_NONE,A733_USB2_DEVICE_MSC,A733_USB2_DEVICE_HID,A733_USB2_DEVICE_HUB,

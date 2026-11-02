@@ -9,9 +9,16 @@
 #define CFG_TUSB_RHPORT0_MODE (OPT_MODE_HOST | OPT_MODE_HIGH_SPEED)
 #define CFG_TUH_ENABLED 1
 #define CFG_TUD_ENABLED 0
+#if SUNSTONE_USB_HOST_GENERIC
+#include "a733_xhci.h"
+/* One TinyUSB device and hub state per xHCI device record. */
+#define CFG_TUH_DEVICE_MAX A733_XHCI_DEVICES
+#define CFG_TUH_HUB A733_XHCI_DEVICES
+#else
 #define CFG_TUH_DEVICE_MAX 6
 /* Two hub tiers: the root-port hub and one USB2 hub below it. */
 #define CFG_TUH_HUB 2
+#endif
 #define CFG_TUH_MSC 1
 #ifndef SUNSTONE_USB_HOST_GENERIC
 #define SUNSTONE_USB_HOST_GENERIC 0

@@ -285,7 +285,7 @@ int main(int argc,char **argv)
             assert(a733_xhci_detach(&x,1)==1);UNTIL(!x.devices[1].port_ready);
             assert(a733_xhci_bind_child(&x,2,3,3,now+1000000)&&x.devices[1].route==0x32&&x.devices[1].tier==2);
             UNTIL(x.devices[1].port_ready==3);enumerate(4);
-            assert(!a733_xhci_mark_hub(&x,4)); /* No third tier. */
+            assert(a733_xhci_mark_hub(&x,4)); /* The core admits hubs to tier A733_XHCI_HUB_TIERS-1; the session bounds it. */
             assert((get32(context(x.devices[1].slot))&0xfffff)==0x32);
             unsigned leaf=x.devices[1].slot,hub=x.devices[2].slot,from=command_count;
             assert(a733_xhci_detach(&x,2)==1&&x.devices[1].detach&&a733_xhci_detach(&x,4)==1);

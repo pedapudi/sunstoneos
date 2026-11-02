@@ -9,10 +9,18 @@ service timing and sustained camera capture remain unqualified.
 The generic class profile selects `SUNSTONE_USB_HOST_GENERIC=1` consistently
 for the core and its header consumers. Its native constructor reserves a fixed
 5 MiB parent before concurrent device operation. The boot pool must accommodate this parent and every other consumer.
-The core supports six device records, subject to the controller's slot limit,
-with EP0 and three data endpoints per record. Context pages, endpoint rings,
-legacy copy buffers, 1,024 shared 4 KiB data pages and eight scratch pages occupy
-4,489,216 bytes. Every page remains at its original address. The parent stays
+The core supports as many device records as the 5 MiB parent holds, subject to
+the controller's slot limit, with EP0 and three data endpoints per record. A
+record takes 40 KiB: two context pages, and one ring page and one copy-buffer
+page per endpoint. The controller pages (16 KiB) and eight scratch pages come
+first, then five records fill the space before the 4 MiB shared data pool and
+nineteen follow it, 24 records in all (`A733_XHCI_DEVICES_FIT`). Build with
+`-DSUNSTONE_USB_HOST_DEVICES=N` for fewer records, or
+`-DSUNSTONE_USB_HOST_ENDPOINTS=N` (2 to 31, the endpoint contexts of an xHCI
+device context) for more endpoints per record; a static assertion refuses a
+geometry that exceeds the parent. More than 24 records, up to the 127 addresses
+of a USB bus, needs a larger USB arena (`A733_USB_MEMORY_PARENT_BYTES`), which
+the memory layout owns. Every page remains at its original address. The parent stays
 DEVICE-owned during operation and is never returned to the allocator.
 
 ## Bulk and interrupt transfers retain completed pages
@@ -92,7 +100,7 @@ behavior sanitizers. Its model follows submitted command and transfer rings,
 updates output contexts and writes the physical destinations named by TRBs.
 It checks direct serial echo, shared-pool exhaustion, stale tokens, generation
 loss, bulk and isochronous releases after Disable Slot, full-speed bulk,
-interrupt OUT, control STALL recovery, six occupied device slots and an owner
+interrupt OUT, control STALL recovery, all occupied device slots and an owner
 interrupt service that leaves completions queued until its explicit drain.
 
 The isochronous case retains 700 short packets totaling 716,800 bytes while

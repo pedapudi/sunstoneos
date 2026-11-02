@@ -13,17 +13,52 @@
 /* Hub tiers below the root port: USB 2.0 section 4.1.1 allows five hubs in
  * series, and the xHCI route string (section 6.2.2) holds five port nibbles. */
 #define A733_XHCI_HUB_TIERS 5u
-#define A733_XHCI_ISOCH_TDS 8u
+/* One isochronous TD is one TRB; the ring keeps half its slots for TDs and
+ * the rest for the link TRB and the controller's dequeue lag. */
+#define A733_XHCI_ISOCH_TDS (A733_XHCI_RING_TRBS/2u)
 #define A733_XHCI_DMA_BUFFERS 1u /* Legacy bounce page per endpoint. */
 #if SUNSTONE_USB_HOST_GENERIC
-#define A733_XHCI_MEMORY_BYTES 5242880u
-#define A733_XHCI_ENDPOINTS 4u
-#define A733_XHCI_DEVICES 6u
+#include "a733_usb_memory.h"
+/* Build parameters of the generic host. Every device record owns one context
+ * pair (two 4 KiB pages: a 64-byte input context holds 33 contexts and a
+ * device context 32, so 2112 and 2048 bytes), and per endpoint one ring page
+ * and one bounce page. Device records fill the parent lease the platform
+ * grants (A733_USB_MEMORY_PARENT_BYTES) around the controller pages, the
+ * scratchpad pages and the public data pool, so the lease is the bound.
+ * Build with -DSUNSTONE_USB_HOST_DEVICES=N to take fewer records; N is also
+ * limited by the controller's MaxSlots, which init reads from hardware, and by
+ * the 127 addresses of a USB bus. SUNSTONE_USB_HOST_ENDPOINTS counts EP0 and
+ * is at most 31, the endpoint contexts of an xHCI device context (6.2.2). */
+#ifndef SUNSTONE_USB_HOST_ENDPOINTS
+#define SUNSTONE_USB_HOST_ENDPOINTS 4u
+#endif
+#define A733_XHCI_ENDPOINTS SUNSTONE_USB_HOST_ENDPOINTS
+#define A733_XHCI_PAGE 4096u
+#define A733_XHCI_CONTEXT_PAGES 2u
+#define A733_XHCI_DEVICE_BYTES (A733_XHCI_PAGE*(A733_XHCI_CONTEXT_PAGES+A733_XHCI_ENDPOINTS*(1u+A733_XHCI_DMA_BUFFERS)))
+#define A733_XHCI_CONTROL_BYTES 16384u /* DCBAA, command ring, event ring, ERST and scratchpad array. */
+#define A733_XHCI_SCRATCH_PAGES 8u
+#define A733_XHCI_SCRATCH_BASE A733_XHCI_CONTROL_BYTES
+#define A733_XHCI_DEVICE_BASE (A733_XHCI_SCRATCH_BASE+A733_XHCI_SCRATCH_PAGES*A733_XHCI_PAGE)
+#define A733_XHCI_MEMORY_BYTES A733_USB_MEMORY_PARENT_BYTES
+#define A733_XHCI_DATA_OFFSET A733_USB_MEMORY_DATA_OFFSET
+#define A733_XHCI_DATA_BYTES A733_USB_MEMORY_DATA_BYTES
+/* Records before the data pool, then records after it. */
+#define A733_XHCI_HEAD_DEVICES ((A733_XHCI_DATA_OFFSET-A733_XHCI_DEVICE_BASE)/A733_XHCI_DEVICE_BYTES)
+#define A733_XHCI_TAIL_BASE (A733_XHCI_DATA_OFFSET+A733_XHCI_DATA_BYTES)
+#define A733_XHCI_TAIL_DEVICES ((A733_XHCI_MEMORY_BYTES-A733_XHCI_TAIL_BASE)/A733_XHCI_DEVICE_BYTES)
+#define A733_XHCI_DEVICES_FIT (A733_XHCI_HEAD_DEVICES+A733_XHCI_TAIL_DEVICES)
+#ifndef SUNSTONE_USB_HOST_DEVICES
+#define SUNSTONE_USB_HOST_DEVICES A733_XHCI_DEVICES_FIT
+#endif
+#define A733_XHCI_DEVICES SUNSTONE_USB_HOST_DEVICES
+_Static_assert(A733_XHCI_ENDPOINTS>=2u&&A733_XHCI_ENDPOINTS<=31u,"endpoint contexts of a device");
+_Static_assert(A733_XHCI_DEVICES>=1u&&A733_XHCI_DEVICES<=A733_XHCI_DEVICES_FIT&&A733_XHCI_DEVICES<=127u,
+    "device records fit the parent lease and the USB address space");
+_Static_assert(A733_XHCI_DEVICE_BASE<=A733_XHCI_DATA_OFFSET&&A733_XHCI_TAIL_BASE<=A733_XHCI_MEMORY_BYTES,"control pages precede the data pool");
 #define A733_XHCI_DMA_ENDPOINTS (A733_XHCI_DEVICES*A733_XHCI_ENDPOINTS)
 #define A733_XHCI_ISOCH_PACKET 4096u /* Page stride; service payload <=3072. */
-#define A733_XHCI_ISOCH_BUFFERS 1024u
-#define A733_XHCI_DATA_OFFSET 262144u
-#define A733_XHCI_DATA_BYTES (A733_XHCI_ISOCH_BUFFERS*A733_XHCI_ISOCH_PACKET)
+#define A733_XHCI_ISOCH_BUFFERS (A733_XHCI_DATA_BYTES/A733_XHCI_ISOCH_PACKET)
 #else
 #define A733_XHCI_MEMORY_BYTES 131072u
 #define A733_XHCI_ENDPOINTS 3u

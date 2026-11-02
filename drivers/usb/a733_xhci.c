@@ -9,14 +9,33 @@
 #define BIT(n) (UINT32_C(1)<<(n))
 #define TYPE(n) ((uint32_t)(n)<<10)
 #define IOC BIT(5)
+#if SUNSTONE_USB_HOST_GENERIC
+#define ISOCH_BASE A733_XHCI_DATA_OFFSET
+#define SCRATCH_BASE A733_XHCI_SCRATCH_BASE
+/* Device j's block: input and device context pages, then one ring page and
+ * the bounce pages of each endpoint. The first A733_XHCI_HEAD_DEVICES blocks
+ * precede the public data pool and the rest follow it. */
+static uint32_t block_offset(unsigned j)
+{
+    return j<A733_XHCI_HEAD_DEVICES?A733_XHCI_DEVICE_BASE+j*A733_XHCI_DEVICE_BYTES:
+        A733_XHCI_TAIL_BASE+(j-A733_XHCI_HEAD_DEVICES)*A733_XHCI_DEVICE_BYTES;
+}
+static uint32_t input_offset(unsigned j){return block_offset(j);}
+static uint32_t device_offset(unsigned j){return block_offset(j)+4096;}
+static uint32_t ring_offset(unsigned j,unsigned i){return block_offset(j)+8192+4096*i;}
+static uint32_t bounce_offset(unsigned j,unsigned i)
+{return block_offset(j)+8192+4096*A733_XHCI_ENDPOINTS+4096*A733_XHCI_DMA_BUFFERS*i;}
+#define DEVICE_ENDPOINTS A733_XHCI_ENDPOINTS
+#else
 #define RING_BASE (16384u+A733_XHCI_DEVICES*8192u)
 #define BOUNCE_BASE (RING_BASE+A733_XHCI_DMA_ENDPOINTS*4096u)
 #define ISOCH_BASE (BOUNCE_BASE+A733_XHCI_DMA_ENDPOINTS*A733_XHCI_DMA_BUFFERS*4096u)
-#if SUNSTONE_USB_HOST_GENERIC
-#define SCRATCH_BASE (ISOCH_BASE+A733_XHCI_ISOCH_BUFFERS*A733_XHCI_ISOCH_PACKET)
-_Static_assert(ISOCH_BASE==A733_XHCI_DATA_OFFSET,"public DMA mapping offset");
-#else
 #define SCRATCH_BASE 98304u
+static uint32_t input_offset(unsigned j){return 16384+8192*j;}
+static uint32_t device_offset(unsigned j){return 20480+8192*j;}
+static uint32_t ring_offset(unsigned j,unsigned i){return RING_BASE+4096*(j*2+i);}
+static uint32_t bounce_offset(unsigned j,unsigned i){return BOUNCE_BASE+4096*A733_XHCI_DMA_BUFFERS*(j*2+i);}
+#define DEVICE_ENDPOINTS 2u
 #endif
 /* Shared NC pages: bulk reserved/completed/queued, ISO queued/borrowed. */
 enum { DMA_FREE,DMA_RESERVED,DMA_COMPLETE,DMA_QUEUED,DMA_ISO_QUEUED,DMA_ISO_BORROWED };
@@ -145,12 +164,12 @@ static struct a733_xhci_endpoint *endpoint(struct a733_xhci_device *d,unsigned a
 static void pages(struct a733_xhci *x,unsigned j)
 {
     uint8_t *p=(void *)x->extent.cpu;uint64_t base=x->extent.physical;struct a733_xhci_device *d=&x->devices[j];
-    d->input=p+16384+8192*j;d->input_pa=base+16384+8192*j;
-    d->device=p+20480+8192*j;d->device_pa=base+20480+8192*j;
-    for(unsigned i=0;i<(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_ENDPOINTS:2u);++i){
-        unsigned n=j*(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_ENDPOINTS:2u)+i;struct a733_xhci_endpoint *e=&d->endpoints[i];
-        e->ring=(void *)(p+RING_BASE+4096*n);e->ring_pa=base+RING_BASE+4096*n;
-        e->bounce=p+BOUNCE_BASE+4096*A733_XHCI_DMA_BUFFERS*n;e->bounce_pa=base+BOUNCE_BASE+4096*A733_XHCI_DMA_BUFFERS*n;e->cycle=1;
+    d->input=p+input_offset(j);d->input_pa=base+input_offset(j);
+    d->device=p+device_offset(j);d->device_pa=base+device_offset(j);
+    for(unsigned i=0;i<DEVICE_ENDPOINTS;++i){
+        struct a733_xhci_endpoint *e=&d->endpoints[i];
+        e->ring=(void *)(p+ring_offset(j,i));e->ring_pa=base+ring_offset(j,i);
+        e->bounce=p+bounce_offset(j,i);e->bounce_pa=base+bounce_offset(j,i);e->cycle=1;
     }
 }
 static int layout(struct a733_xhci *x)
@@ -166,7 +185,7 @@ static int layout(struct a733_xhci *x)
     if(x->scratchpads){put64(x->dcbaa,base+12352);for(unsigned i=0;i<x->scratchpads;++i)put64(x->scratch+8*i,base+SCRATCH_BASE+4096*i);}
     x->command_cycle=x->event_cycle=1;
     /* Fixed pages avoid cached aliases and keep every DMA pointer stable. */
-    _Static_assert(SCRATCH_BASE+8*4096<=A733_XHCI_MEMORY_BYTES,"retained parent extent");
+    _Static_assert(SCRATCH_BASE+8*4096<=(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_DATA_OFFSET:A733_XHCI_MEMORY_BYTES),"retained parent extent");
     _Static_assert(A733_XHCI_RING_TRBS*sizeof(struct a733_xhci_trb)<=4096,"ring extent");
     _Static_assert(A733_XHCI_TRANSFER_BYTES<=4096,"bounce extent");
     for(unsigned j=0;j<A733_XHCI_DEVICES;++j)pages(x,j);
@@ -192,15 +211,16 @@ static int reclaim(struct a733_xhci *x,unsigned j)
         memset(x->isoch.state,0,sizeof(x->isoch.state));
     }
     if(d->slot)put64(x->dcbaa+8*d->slot,0);
-    memset(p+16384+8192*j,0,8192);
-    for(unsigned i=0;i<(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_ENDPOINTS:2u);++i){
-        unsigned n=j*(SUNSTONE_USB_HOST_GENERIC?A733_XHCI_ENDPOINTS:2u)+i;
-        memset(p+RING_BASE+4096*n,0,4096);
-        memset(p+BOUNCE_BASE+4096*A733_XHCI_DMA_BUFFERS*n,0,4096*A733_XHCI_DMA_BUFFERS);
+    memset(p+input_offset(j),0,8192);
+    for(unsigned i=0;i<DEVICE_ENDPOINTS;++i){
+        memset(p+ring_offset(j,i),0,4096);
+        memset(p+bounce_offset(j,i),0,4096*A733_XHCI_DMA_BUFFERS);
     }
-    if(!SUNSTONE_USB_HOST_GENERIC&&x->extra_endpoint_owner==j+1){
+#if !SUNSTONE_USB_HOST_GENERIC
+    if(x->extra_endpoint_owner==j+1){
         memset(p+RING_BASE+6*4096,0,4096);memset(p+BOUNCE_BASE+6*4096,0,4096);x->extra_endpoint_owner=0;
     }
+#endif
     memset(d,0,sizeof(*d));pages(x,j);
     if(x->default_device==j)x->default_device=0;
     return barrier(x);
@@ -1047,13 +1067,15 @@ int a733_xhci_open(struct a733_xhci *x,unsigned address,unsigned ep,unsigned typ
     if(e)return e->packet==packet&&e->transfer_type==type&&!e->aborted;
     for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(!d->endpoints[i].opened) {
         e=&d->endpoints[i];
-        if(!SUNSTONE_USB_HOST_GENERIC&&i==2){
+#if !SUNSTONE_USB_HOST_GENERIC
+        if(i==2){
             if(x->extra_endpoint_owner)return 0;
             x->extra_endpoint_owner=(unsigned)(d-x->devices)+1;
             uint8_t *p=(void *)x->extent.cpu;uint64_t base=x->extent.physical;
             e->ring=(void *)(p+RING_BASE+6*4096);e->ring_pa=base+RING_BASE+6*4096;
             e->bounce=p+BOUNCE_BASE+6*4096;e->bounce_pa=base+BOUNCE_BASE+6*4096;e->cycle=1;
         }
+#endif
         e->opened=1;e->transfer_type=type;e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=!!(ep&128);e->deadline=deadline;return 1;
     }
     return 0;

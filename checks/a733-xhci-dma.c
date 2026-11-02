@@ -140,7 +140,8 @@ static void six_records(void)
     assert(a733_xhci_mark_hub(&x,1)&&a733_xhci_hub_configure(&x,1,7,0,0)&&
            a733_xhci_open_interrupt(&x,1,0x81,1,12,now+1000000));
     UNTIL(x.devices[0].hub_configured);
-    for(unsigned j=1;j<A733_XHCI_DEVICES;++j){
+    /* A hub has at most seven ports in this core, so one hub binds seven children. */
+    for(unsigned j=1;j<A733_XHCI_DEVICES&&j<8;++j){
         assert(a733_xhci_bind_child(&x,1,j,3,now+1000000));
         UNTIL(x.devices[j].port_ready==3);enumerate(j+1);open_bulk(j+1);bulk_read(j+1,0x20+j);
         for(unsigned k=0;k<j;++k)for(unsigned e=0;e<A733_XHCI_ENDPOINTS;++e){
@@ -148,8 +149,21 @@ static void six_records(void)
             assert(x.devices[j].endpoints[e].bounce!=x.devices[k].endpoints[e].bounce);
         }
     }
-    assert(!a733_xhci_bind_child(&x,1,6,3,now+1000000));
-    puts("PASS six enabled slots with root hub, five children and distinct concurrent bulk endpoint pages");
+    assert(!a733_xhci_bind_child(&x,1,8,3,now+1000000));
+    /* Every record's pages are distinct, aligned and inside the parent lease. */
+    for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
+        const struct a733_xhci_device *d=&x.devices[j];
+        assert(d->input>=(uint8_t *)x.extent.cpu&&d->device+4096<=(uint8_t *)x.extent.cpu+A733_XHCI_MEMORY_BYTES&&d->device==d->input+4096);
+        for(unsigned e=0;e<A733_XHCI_ENDPOINTS;++e){
+            const struct a733_xhci_endpoint *p=&d->endpoints[e];
+            assert(!((uintptr_t)p->ring&4095)&&p->bounce+4096<=(uint8_t *)x.extent.cpu+A733_XHCI_MEMORY_BYTES);
+            assert((uint8_t *)p->ring+4096<=(uint8_t *)x.extent.cpu+A733_XHCI_MEMORY_BYTES);
+        }
+        for(unsigned k=0;k<j;++k)assert(x.devices[k].input!=d->input&&x.devices[k].endpoints[0].ring!=d->endpoints[0].ring);
+        if(SUNSTONE_USB_HOST_GENERIC)assert(d->input+8192<=(uint8_t *)x.extent.cpu+A733_XHCI_DATA_OFFSET||
+            d->input>=(uint8_t *)x.extent.cpu+A733_XHCI_DATA_OFFSET+A733_XHCI_DATA_BYTES);
+    }
+    puts("PASS every enabled slot record has distinct pages; one hub binds seven children with distinct concurrent bulk endpoint pages");
 }
 static void legacy_iso(void)
 {
