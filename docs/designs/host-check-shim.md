@@ -97,7 +97,7 @@ Coverage notes:
 - `usb-keyboard-client` drops its `--thread-sanitizer` option because ThreadSanitizer cannot run the kernel's context switches. Nothing in the repository used it.
 - `os-gpu-thermal` changes one expectation: when the model reports the queue busy, `apps/os/gpu.c` retries the close every tick, so the case asserts more than one close where it asserted exactly one. The earlier check did not link on this tree, so the old assertion was never confirmed against the current code. This needs review by the GPU owner.
 - `apps/os/gpu-timing.c` gains a host seam: on a target other than AArch64 the counter read and barriers use the shim's clock and compiler barriers. The AArch64 instructions are unchanged.
-- `a733-gpu-isolation.py` and `gpu-application.py` patched the source text of `a733-gpu-backend-emulate.py` and executed it. The pattern they replaced no longer existed, so they could not run. The emulator now has `--isolation-only` and `--application-only`, and the two scripts select them. Both still need the emulator ELF argument and were not run here.
+- `a733-gpu-isolation.py` and `gpu-application.py` patched the source text of `a733-gpu-backend-emulate.py` and executed it. The pattern they replaced no longer existed, so they could not run. They also required an emulator ELF that no repository step builds, so the gate failed them when it selected them. They are retired (below). The emulator keeps the entries as `--isolation-only` (`checks/a733-gpu-isolation.c`) and `--application-only` (`checks/gpu-application.c`) for a run with a hand-built ELF.
 
 ## Retired checks
 
@@ -105,6 +105,7 @@ Coverage notes:
 |---|---|
 | `sunstone-app-runtime.py`, `.c` | Did not compile (it built `apps/os/application.c`, which has AArch64 inline assembly, for the host); no gate or index entry referenced it, so it protected nothing |
 | `os-image-stage2.py` | Compiles `checks/os-image-model.c`, which moved to mimus in `797103c2`; it cannot run |
+| `a733-gpu-isolation.py`, `gpu-application.py` | Patched the emulator's source text with a pattern that no longer exists, and needed an ELF that nothing in the repository builds; the emulator now selects their entry points by flag |
 | `os-npu-resident.py` | Loads `checks/os-npu.py`, which moved to mimus in `797103c2`; it cannot run |
 
 No check was retired for asserting constants only. Candidate checks that read source text and assert patterns (for example `pmic-tree.py`, which refuses voltage writes from unlisted sources) enforce a policy that the code does not state about itself, and `storage-read-returning-host.py` exercises a tool. They stay.
