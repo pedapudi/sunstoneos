@@ -30,7 +30,7 @@ every address that the graph patches resolves into a buffer the job owns. Admiss
 | INIT (65535) | yes | exact bytes of the initial state, as before |
 | NN (2), NT (8) | yes | as before, plus the second input |
 | ACT (7) | yes | same state and patches as kind 2; the table is read through patch source 5 |
-| SP (6) | yes, directory format | state is `0x08010e5b` and its operand, 1 to 16 pairs of `0x08010e5c` and `0x08010e5d` words, then the 32-byte tail of the other kinds; no other register; one command patch at the operand of `0x08010428`; the `0x0e4c` operand is one of the observed values and its bit 12 equals the presence of a second input |
+| SP (6) | yes, directory format | state is `0x08010e5b` and its operand, 1 to 16 pairs of `0x08010e5c` and `0x08010e5d` words, then the 32-byte tail of the other kinds; no other register; one command patch at the operand of `0x08010428`; the `0x0e4c` operand is one of the observed values and its bit 12 equals the presence of a second input; the `0x0e5b` operand equals the running instruction count modulo 256; **the program body must be in the catalogue of reviewed programs** (SHA-256 per body, `drivers/npu/nbg_sp_programs.inc`, extended by an application with `NBG_SP_PROGRAMS_EXTRA`). Any other program is refused until the program words are mapped and the MMU negative test has shown containment |
 | SH (1) | no | state streams are not documented enough to verify; see the formats document |
 | TP (3), SW (4) | no | not observed |
 

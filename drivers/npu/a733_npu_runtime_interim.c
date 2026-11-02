@@ -47,7 +47,7 @@ int npu_runtime_tables_intact(struct npu_runtime *rt)
  * covers (NN descriptors, then the command stream), then the descriptor
  * padding and the coefficient allocation that only H adds. */
 #define ADDRESS_SPANS 2u
-#define READONLY_SPANS 4u
+#define READONLY_SPANS 5u
 static void readonly_spans(const struct npu_runtime_slot *s, struct npu_runtime_span spans[READONLY_SPANS])
 {
     const struct nbg_assembly_buffer *nn = &s->targets[NBG_ALLOC_NN], *coeff = &s->targets[NBG_ALLOC_COEFF];
@@ -56,6 +56,10 @@ static void readonly_spans(const struct npu_runtime_slot *s, struct npu_runtime_
     spans[1] = (struct npu_runtime_span){s->command.cpu, s->stream_bytes};
     spans[2] = (struct npu_runtime_span){(uintptr_t)nn->cpu + descriptors, nn->bytes - descriptors};
     spans[3] = (struct npu_runtime_span){(uintptr_t)coeff->cpu, coeff->bytes};
+    /* The dynamic-input allocation, in the same read-only region (empty when the model has none). */
+    const unsigned d = nbg_layout_dynamic_index(&s->layout);
+    spans[4] = s->layout.dynamic ? (struct npu_runtime_span){(uintptr_t)s->targets[d].cpu, s->targets[d].bytes}
+                                 : (struct npu_runtime_span){0, 0};
 }
 /* One chunk of the CRC over the read-only spans, continuing the slot's
  * cursor; at the end of the address-bearing spans the running value is the

@@ -38,14 +38,16 @@ static int admit(const unsigned char *data, size_t bytes, unsigned *entry, struc
     return 1;
 }
 static uint32_t buffer_count(const struct nbg_assembly_layout *l)
-{ return NBG_ALLOC_INPUT + l->inputs + l->outputs; }
+{ return nbg_layout_buffers(l); }
 static enum a733_npu_buffer_role role(const struct nbg_assembly_layout *l, unsigned i)
 {
     switch (i) {
     case NBG_ALLOC_NN: case NBG_ALLOC_COEFF: return A733_NPU_BUFFER_CONSTANT;
     case NBG_ALLOC_POOL: return A733_NPU_BUFFER_WRITE;
     case NBG_ALLOC_COMMAND: return A733_NPU_BUFFER_COMMAND;
-    default: return i < NBG_ALLOC_INPUT + l->inputs ? A733_NPU_BUFFER_READ : A733_NPU_BUFFER_WRITE;
+    default:
+        if (l->dynamic && i == nbg_layout_dynamic_index(l)) return A733_NPU_BUFFER_CONSTANT; /* read-only like the weights */
+        return i < NBG_ALLOC_INPUT + l->inputs ? A733_NPU_BUFFER_READ : A733_NPU_BUFFER_WRITE;
     }
 }
 /* The placement shared by sizing and preparation. Offsets are relative to

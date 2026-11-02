@@ -46,7 +46,7 @@ All words are pairs of a register header and an operand.
 | `0x08010e5a`, `0x00451440` | all | Unknown | Constant in every graph |
 | `0x08010428`, operand | all | Named | Address of the operation's descriptor (device address of the neural-network allocation plus 192 times the index), low six bits kept |
 | `0x08010429`, operand | all | Unknown | Zero in every graph |
-| `0x08010e5b`, operand | 6 | Inferred | Instruction index at which the operation's program is placed: the sum of the pair counts of the preceding stream-processor operations (0, 5, 13, 17, 22, 27, 32 for programs of 5, 8, 4, 5, 5, 5 pairs) |
+| `0x08010e5b`, operand | 6 | Inferred | Position of the operation's program in a 256-entry program memory: the number of instructions of the preceding stream-processor operations modulo 256 (2903 of 2903 operations of twelve graphs, including programs that wrap past 255). The loader verifies it |
 | `0x08010e5c` operand, `0x08010e5d` operand, repeated | 6 | Inferred structure; contents Unknown | One 64-bit instruction of the stream-processor program per pair, low word then high word. Zeroing every operand makes the simulator abort, so the program is consumed. The effect of one bit is known for none (the bit that differs between an addition and a subtraction program has no effect in the simulator) |
 
 ### Descriptor
@@ -96,7 +96,14 @@ verifies (class **Inferred**; they only refuse):
 | --- | --- | --- | --- |
 | No second input | 0 | not examined | word 34 below `0x1000` |
 | Second input from a graph input or the dynamic-input section | 1, or 0 for a batched matrix product | `0x03ffffff` (disabled) | word 34 patched |
-| Second input in VIP SRAM | ring size in 32-byte units | the ring limit, patched as an end address | word 34 patched; the start lies in [limit - size, limit) |
+| Second input in VIP SRAM | ring size in 32-byte units (**confirmed**, below) | the ring limit, patched as an end address | word 34 patched; the start lies in [limit - size, limit) |
+
+**Ring unit, confirmed by mutation.** In a graph whose second operand is a result in VIP SRAM (an addition of a graph input and
+the product of two others, 16 rows of 176 elements), word 33 was set to 88 and the ring limit moved to 2816 bytes after the
+start, half the tensor. The simulator output was unchanged in the first half and, in the second half, equal to the
+prediction that the read wraps to `limit - 88 x 32`, the start, and so reads the first half again (largest difference to
+the prediction 0.002, the error of the unmutated graph; the unwrapped values differ by 6.9). With 64-byte units the
+wrap would have gone to another place. So the unit is 32 bytes, and the limit is the wrap point.
 
 Words 32 and 33 describe the second input as words 16 and 17 describe the first (for graph inputs the upper half
 of the byte-count word never exceeds the tensor's size in bytes, in 58 of 58 operations). An operation reads its

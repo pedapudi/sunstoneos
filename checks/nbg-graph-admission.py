@@ -83,6 +83,12 @@ class Graph:
                 return 28 * i
         raise KeyError(destination)
 
+    def state_offset(self, op):
+        """Byte offset in the load-states section of the load-state stream of an operation."""
+        span = nm.Span()
+        assert self.native_obj.lib.nbg_model_table(c.byref(self.native_obj.view), 26, self.native_obj.operations()[op][3], c.byref(span)) == 1
+        return span.data - self.native_obj.view.data - self.section(20).offset
+
     def word_offset(self, op, word):
         return self.native_obj.operations()[op][1] * 192 + word * 4
 
@@ -121,7 +127,7 @@ def main():
         results.append(entry)
         print('refused:', label, '(without its rule: admitted)' if control else '(refused by the relocation bound)')
     g = graphs
-    NN, PATCH, INPUT = 6, 9, 0
+    NN, PATCH, INPUT, STATES = 6, 9, 0, 20
     # 1. A second input outside the mapping.
     case('second input names a graph input that does not exist', 'add', [(PATCH, g['add'].patch_offset(1, 136) + 12, u32(7))], None)
     case('second input ring lies beyond VIP SRAM', 'chainB', [(PATCH, g['chainB'].patch_offset(2, 136) + 16, u32(98304 + 0x100000)),
@@ -141,6 +147,12 @@ def main():
     case('output overlaps the second input', 'deep',
          [(PATCH, g['deep'].patch_offset(3, 28) + 16, u32(104448)), (PATCH, g['deep'].patch_offset(3, 76) + 16, u32(110080))],
          [('nbg_assembly.c', 'aliased(nn, slot, source, op.kind) ||', '0 ||')])
+    # 5. Stream-processor programs: only reviewed bodies, at their position in the program memory.
+    program_check = ('nbg_assembly.c', '|| !sp_program_reviewed(span.data, pairs)) return 0;', ') return 0;')
+    case('one word of a stream-processor program changed', 'ln176', [(STATES, g['ln176'].state_offset(2) + 12, u32(0x12345678))],
+         [program_check])
+    case('a program placed at another position of the program memory', 'ln176', [(STATES, g['ln176'].state_offset(2) + 4, u32(6))],
+         [('nbg_assembly.c', 'if (word(span.data + 4) != (*program & 255)', 'if (0')])
     print('PASS %d admission cases and %d refusal cases' % (len(GRAPHS), len(results)))
 
 
