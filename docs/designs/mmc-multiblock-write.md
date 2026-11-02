@@ -15,7 +15,7 @@ The reference is the board kernel `bsp/drivers/mmc/sunxi-mmc.c` and `sunxi-mmc-v
 | Host, CMD25 without CMD23 | The command word carries `SDXC_WRITE` (bit 10), `SDXC_DATA_EXPECT`, `SDXC_WAIT_PRE_OVER` (bit 13) and `SDXC_SEND_AUTO_STOP` (bit 12) with the automatic-stop-complete interrupt; with CMD23 the data-over interrupt replaces it | `sunxi-mmc.c:2638-2700` (`sunxi_mmc_parse_cmd`) |
 | Descriptors | The chain is the same for both directions: `CH \| OWN \| DIC` per descriptor, `FD` on the first, `LD` on the last with `DIC` cleared, each next pointer at the following descriptor, a write barrier before the DMA starts | `sunxi-mmc.c:746-822` |
 | DMA start | FIFO, DMA interface and IDMAC reset; `DMA_ENABLE` set in `GCTRL`; the receive interrupt enabled only for reads (`IDIE` stays 0 for a write); `DMAC = FIX_BURST \| IDMA_ON` | `sunxi-mmc.c:924-955` |
-| Completion | The error bits fail the request; otherwise the response is read, and for a write the host checks card busy (DAT0) and, while busy, holds the request until the card releases DAT0 | `sunxi-mmc.c:1045-1190`, `sunxi-mmc.c:1458-1520` |
+| Completion | The error bits fail the request; otherwise the response is read, and for a write the host checks card busy (DAT0) and, while busy, holds the request until the card releases DAT0 | `sunxi-mmc.c:1045-1190` (`sunxi_mmc_finalize_request`, which sets `mrq_busy` when `card_busy` reports DAT0 low), `sunxi-mmc.c:1548-1584` (the bottom half that completes the request when the busy ends) |
 | Teardown | `IDST` cleared, `IDIE` 0, IDMAC soft reset, `GCTRL` DMA reset, DMA disable, FIFO reset, then wait for the IDMAC to go idle | `sunxi-mmc.c:1170-1180` |
 | Hardware busy wait | `sunxi_mmc_hw_wbusy_wait` is set by neither `sunxi-mmc.c` nor `sunxi-mmc-v5p3x.c`, so the A733 path uses the generic busy check on DAT0, not the `BUSY_CLEAR` interrupt | grep of both files |
 | Card state after the write | The block layer polls CMD13 until `READY_FOR_DATA` with the card out of the programming state | `block.c:2003-2035` (`mmc_blk_card_busy`) |
@@ -33,7 +33,7 @@ the reset and teardown steps) and the CMD24 PIO write with its CMD13 confirmatio
 | Wait for DAT0 and CMD13 after the data | `sunxi_mmc.c` | reuses `P_WRITE_STATUS` polling of the present CMD24 flow |
 | No 4 KiB snapshot for DMA writes | `sunxi_mmc_write` | the immutable snapshot cannot hold 128 KiB; the DMA write takes an exclusive, cache-clean source for the whole operation and the same authority callback |
 | CMD25 in the write-capable build only | `queue()` and the native command filter | the read-only command set is unchanged; ACMD13 needs nothing added (CMD13 and CMD55 are in it) |
-| Write threshold | `0x100` | the SDR104 write threshold bit (2) was cleared for reads; a write must set it per `thld_ctl` |
+| Write threshold | `0x100` | the core clears bit 2 (write threshold enable) for SDR104 reads; whether a write sets it and with what size is derived from the vendor `thld_ctl` before the change, not assumed here |
 
 ## Host checks required before any board run
 
