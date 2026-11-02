@@ -677,8 +677,9 @@ A normal return with the receipt of `expect.json` ends the run.
 ### Test graphs through the OS NPU service
 
 SunstoneOS holds 17 single-operation graphs, built by the pinned compiler from the model descriptions of
-`tools/npu-graph-variants.py` and catalogued in `tools/npu-session-models.json` (names `graph-*`). Run A sends the
-first 15 through the OS NPU service one after another; run B sends the last two. The application
+`tools/npu-graph-variants.py` and catalogued in `tools/npu-session-models.json` (names `graph-*`). The OS session grants at most eight
+jobs (`apps/os/admission.c`), so run A1 sends eight graphs through the OS NPU service one after another, run A2
+sends seven and run B sends the last two. The application
 (`apps/npu-graphs`) loads each graph, submits one job with the graph's input and compares the output with the SDK
 simulator's, byte for byte. Operating point 852 MHz at 800 mV; no other change.
 
@@ -696,8 +697,8 @@ simulator's, byte for byte. Operating point 852 MHz at 800 mV; no other change.
 
 **Prediction.** Every device path the graphs use is one that the host checks run on the production code with a modeled
 register file (`checks/os-npu-graphs.py`), and the loader admits each graph; the device has so far run kinds 2 and 8
-only. The prediction for run A is a normal return and a receipt with 15 records, each with status `match`,
-`completed` and `matched` equal to 15 and the SDK closed. The per-graph time (`us`) is the whole `ss_npu_run`
+only. The prediction for each run is a normal return and a receipt with one record per graph, each with status
+`match` and no differing byte, `completed` and `matched` equal to the graph count and the SDK closed. The per-graph time (`us`) is the whole `ss_npu_run`
 including the LOAD of the model.
 What a different result means:
 

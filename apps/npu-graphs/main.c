@@ -50,10 +50,17 @@ void npu_graphs_main(const struct ss_grant *grant)
                 r->status = NPU_GRAPH_MATCH;
                 for (size_t b = 0; b < v->reference_bytes; ++b)
                     if (output[b] != v->reference[b]) {
-                        r->status = NPU_GRAPH_MISMATCH; r->first_difference = b;
-                        r->observed = output[b]; r->expected = v->reference[b];
-                        break;
+                        if (r->status == NPU_GRAPH_MATCH) {
+                            r->status = NPU_GRAPH_MISMATCH; r->first_difference = b;
+                            r->observed = output[b]; r->expected = v->reference[b];
+                        }
+                        ++receipt.differing_bytes[i];
                     }
+                for (size_t b = 0; b + 1 < v->reference_bytes; b += 2) {
+                    const int a = (int16_t)(output[b] | output[b + 1] << 8), e = (int16_t)(v->reference[b] | v->reference[b + 1] << 8);
+                    const uint32_t d = (uint32_t)(a > e ? a - e : e - a);
+                    if (d > receipt.max_error[i]) receipt.max_error[i] = d;
+                }
                 ++receipt.completed;
                 if (r->status == NPU_GRAPH_MATCH) ++receipt.matched;
                 break;

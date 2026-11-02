@@ -16,7 +16,7 @@ from harness import environment
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / '.cache/sunstoneos'
-CHECK_INPUTS = ('apps/os/npu.c', 'apps/os/npu-catalogue.py', 'apps/npu-graphs/models-a.json', 'apps/npu-graphs/models-b.json',
+CHECK_INPUTS = ('apps/os/npu.c', 'apps/os/npu-catalogue.py', 'apps/npu-graphs/models-a1.json', 'apps/npu-graphs/models-a2.json', 'apps/npu-graphs/models-b.json',
                 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_sp_programs.inc',
                 'checks/os-npu-service.c', 'checks/os-npu-graphs.py', 'tools/npu-session-models.json')
 sys.path.insert(0, str(ROOT / 'checks'))
@@ -34,7 +34,7 @@ UNITS = ('checks/os-npu-service.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/n
 DEFINES = ['A733_A76_ADMITTED=1', 'SUNSTONE_A733_OS=1', 'SUNSTONE_A733_OS_NPU=1', 'SUNSTONE_A733_OS_NPU_OBSERVE=1',
            'SUNSTONE_BOARD_APPLICATION=1', 'SUNSTONE_BOARD_SUPERVISED=1', 'SUNSTONE_A733_OS_CPU_CLOCK=1']
 ran = []
-for label, listing in (('a', 'models-a.json'), ('b', 'models-b.json')):
+for label, listing in (('a1', 'models-a1.json'), ('a2', 'models-a2.json'), ('b', 'models-b.json')):
     work = out / label
     work.mkdir()
     generated = work / 'generated'; generated.mkdir()

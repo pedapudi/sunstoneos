@@ -32,7 +32,7 @@ p50 and 26,925 jobs/s, and 1,000 fence-chained two-stage jobs, on 3-3. The combi
 Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-npu-20261101.md).
 
 <!-- evidence-table:begin -->
-32 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+33 records in `docs/evidence/npu.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -68,4 +68,5 @@ Board results with a queue entry are records in `docs/evidence/npu.jsonl`, added
 | `1793595837683091653-202bf23e` | 2026-11-02 | 3-3 | `4fd7815df3e0` | returned | passed | run_total 23.97 s, jobs 61231, window_jobs_per_s 27004.3 jobs/s, window_latency_p99_ticks 323, window_latency_max_ticks 407, charged_cpu_per_job_ticks 816.311, gates 0, resumes 0, register_writes 0, resume_max_ticks 0, resume_limit_ticks 2400, value_deviation_cycles 0, deviation_mask 0 |
 | `1793595865267017264-80a35307` | 2026-11-02 | 3-3 | `1417c8183b75` | returned | passed | run_total 24.23 s, jobs 61231, window_jobs_per_s 26964.4 jobs/s, window_latency_p99_ticks 257, window_latency_max_ticks 432, charged_cpu_per_job_ticks 816.772, gates 0, resumes 0, register_writes 0, resume_max_ticks 0, resume_limit_ticks 2400, value_deviation_cycles 0, deviation_mask 0 |
 | `1793595893101543391-d845400a` | 2026-11-02 | 3-3 | `b3e4795f525c` | returned | passed | run_total 24.01 s, jobs 61231, window_jobs_per_s 26967 jobs/s, window_latency_p99_ticks 294, window_latency_max_ticks 429, charged_cpu_per_job_ticks 816.553, gates 130, resumes 130, register_writes 780, resume_max_ticks 169, resume_limit_ticks 2400, value_deviation_cycles 0, deviation_mask 0 |
+| `1793599212547775355-868652d5` | 2026-11-02 | 3-1 | `835daa9f532d` | result-mismatch | failed | run_total 23.118 s, graphs_listed 15, graphs_run 1, first_difference_byte 2, observed_byte 60, expected_byte 59, first_graph_us 998.8 |
 <!-- evidence-table:end -->

@@ -15,7 +15,9 @@ struct npu_graph_record {
 struct npu_graph_receipt {
     uint64_t magic, version, bytes, count, completed, matched, sdk_closed, start, stop, reserved[7];
     struct npu_graph_record graph[NPU_GRAPHS_MAX];
-    uint8_t padding[NPU_GRAPHS_BYTES - 16 * 8 - NPU_GRAPHS_MAX * 64];
+    /* Over the whole output: the number of differing bytes and the largest difference of 16-bit signed elements. */
+    uint32_t differing_bytes[NPU_GRAPHS_MAX], max_error[NPU_GRAPHS_MAX];
+    uint8_t padding[NPU_GRAPHS_BYTES - 16 * 8 - NPU_GRAPHS_MAX * 64 - 2 * 4 * NPU_GRAPHS_MAX];
 };
 _Static_assert(sizeof(struct npu_graph_record) == 64, "graph record");
 _Static_assert(sizeof(struct npu_graph_receipt) == NPU_GRAPHS_BYTES, "graph receipt");

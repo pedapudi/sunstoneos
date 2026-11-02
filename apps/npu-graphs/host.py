@@ -32,6 +32,8 @@ def decode(raw, names=None, sizes=None):
                'us': ticks / 24}
         if sizes:
             require((input_bytes, output_bytes) == tuple(sizes[i]), 'Graph %d sizes differ from the listing.' % i)
+        row['differing_bytes'] = struct.unpack_from('<I', raw, 1152 + 4 * i)[0]
+        row['max_error_16bit'] = struct.unpack_from('<I', raw, 1216 + 4 * i)[0]
         graphs.append(row)
     result = {'count': count, 'completed': completed, 'matched': matched, 'sdk_closed': closed,
               'elapsed_us': (stop - start) / 24, 'graphs': graphs}
