@@ -731,10 +731,9 @@ def offline(out,hello):
     assert not (root/'hello/assets').exists()
     assert (root/'hello/launch.bin').stat().st_size<=0xc00
     passed('real-hello-typed-session-inputs-and-armed-launcher')
-    args.kind='gpu-return';args.image=board.CACHE/'build/gpu-bisect-1031/crumbs/ladder-wdt4/2-firmware/sunstone-a733-os.elf'
-    plan=images.prepare(args,images.inspect(args.image,args.kind),{'words':words},root/'gpu')
-    assert plan['format']=='legacy' and plan['watchdog']==images.inspect(args.image,args.kind)['watchdog'] and 'gpu' in plan['geometry']
-    passed('real-gpu-ladder-session-and-armed-launcher')
+    # The legacy GPU ladder case is retired: it prepared an image built outside this tree and needed that build's host
+    # tree (the removed gpu-bisect-1031-crumbs worktree), so it failed wherever the tree was absent. The generic GPU
+    # return path is covered by the gpu-capture group, which takes real generic GPU ELFs with --gpu-image.
 
 
 

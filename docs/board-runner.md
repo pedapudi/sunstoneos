@@ -156,8 +156,8 @@ and names the term the board's stop would name:
 
     EL3 admission would stop the board with a733_smp_stop(1, 0x168): session_decode (run_deadline);
     manifest run_us 300000000 plus return_reserve_us 5000000 exceeds the 60 s session lifetime of this image by
-    245000000 us; the decoder needs a lifetime of at least 305 s, and the build derives 310 s with the 1 s startup
-    and 4 s setup allowance
+    245000000 us; the decoder needs a lifetime of at least 305 s, and the build derives 308 s with the 1 s startup
+    and 2 s setup allowance
 
 `submit` builds the session from the frozen inputs with the captured board
 words (`board_images.offline_words`) in place of a live read. The result, or the

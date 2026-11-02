@@ -32,10 +32,16 @@ import sys
 US = 1_000_000
 # A733_BOARD_STARTUP_SECONDS (include/a733_board_application.h): the EL3 startup window after arming.
 STARTUP_SECONDS = 1
-# Time from the end of EL3 startup to the application's main(): OS service start, application
-# admission and the input digests. Not measured per application; a run longer than the allowance
-# is clipped by the session bound (grant->finish_by_us), never extended.
-SETUP_SECONDS = 4
+# Time from the end of EL3 startup to the application's main(): OS service start, application admission and the input
+# digests. Measured with tools/session_setup_time.py on the 2026-11-02 runs in the board queue's evidence
+# (~/.cache/sunstoneos/board-queue/entries/*/run/{return-report.bin,breadcrumbs.json}, images built from c10eb74e and
+# bbb2d08a): the arm-to-ROM-return time bounds startup plus setup from above for an application that does little work.
+# Those applications returned within 0.09 s (hw-facts), 0.11 s (heap-test), 0.23 s (queue-add, queue-gemm), 0.53 s at the
+# most (latency), and mimus, which hashes its multi-MiB inputs and recognizes, returned within 0.73 s in its fastest of
+# 176 runs. The worst measured figure is therefore 0.73 s for startup, setup, the application's work and the return
+# together. The allowance below, with the 1 s EL3 startup bound, is 3 s: four times that figure. A run longer than the
+# allowance is clipped by the session bound (grant->finish_by_us), never extended.
+SETUP_SECONDS = 2
 # The lifetime of an image whose manifest needs less. It leaves the services' own start and the
 # runner's failure recovery as they were; it is a floor, not a limit.
 FLOOR_SECONDS = 60

@@ -204,6 +204,8 @@ def submit(board, admission, image, refused_image, located, cache, work, cases):
         with queue.locked() as state:
             after = len(state['jobs'])
         assert before == after, 'a refused submission was queued'
+        leftover = [d for d in (queue.root / 'entries').iterdir() if not (d / 'entry.json').exists()]
+        assert not leftover, f'a refused submission left a half-built entry directory: {leftover}'
         cases.append('submit refuses the changed manifest')
     finally:
         board.images.policy = keep

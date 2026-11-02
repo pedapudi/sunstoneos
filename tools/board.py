@@ -1375,7 +1375,14 @@ class Queue:
                     shutil.copy2(template/'dma-authority.json', destination/'dma-authority.json')
             options['template'] = str(directory/'template')
         # The image's own admission, on the exact session and contract, before the board could be touched.
-        preflight = preflight_submission(args, source, directory)
+        try:
+            preflight = preflight_submission(args, source, directory)
+        except images.AdmissionRefusal:
+            # Nothing was queued: move the half-built entry directory out of the queue (never delete it).
+            trash = CACHE/'trash'/f'refused-submit-{identifier}'
+            trash.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(directory), str(trash))
+            raise
         if preflight.get('unavailable'):
             print('pre-flight not run: %s' % preflight['unavailable'], file=sys.stderr)
         exp = expectation(args.expect)

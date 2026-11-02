@@ -67,7 +67,7 @@ def rule(lt):
         else:
             raise AssertionError(term)
     # A five-minute test declares run_us and gets a session that holds it.
-    assert lt.derive({'deadlines': {'run_us': 300_000_000, 'return_reserve_us': 5_000_000}}) == 310
+    assert lt.derive({'deadlines': {'run_us': 300_000_000, 'return_reserve_us': 5_000_000}}) == 308
     return cases + 6
 
 
@@ -88,7 +88,7 @@ def manifests(lt):
         if run_us + reserve_us > 60_000_000:
             over.append((path.relative_to(ROOT).as_posix(), seconds))
     assert seen >= 15, f'only {seen} manifests found'
-    assert any(name == 'apps/large-region-test/manifest-return.json' and seconds == 130 for name, seconds in over), over
+    assert any(name == 'apps/large-region-test/manifest-return.json' and seconds == 128 for name, seconds in over), over
     return seen, over
 
 

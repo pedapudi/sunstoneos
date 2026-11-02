@@ -55,8 +55,28 @@ unsigned a733_smp_contract_refusal(const struct a733_smp_contract *c,uint64_t no
         return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_WATCHDOG_FIELDS);
     return 0;
 }
+/* What the last admission check decided, for the stop that follows it (a733_smp_refusal_detail, used by boot.c). The
+ * monitor section is EL3 memory. */
+static struct {uint64_t magic,generation;unsigned state,why;} refusal __attribute__((section(".bss.a733_smp_monitor")));
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
-{return !a733_smp_contract_refusal(c,now);}
+{
+    unsigned why=a733_smp_contract_refusal(c,now);
+    refusal.state=why?2:1;refusal.why=why;
+    if(c){refusal.magic=c->magic;refusal.generation=c->generation;}
+    return !why;
+}
+/* The unnamed admission stop (1, 1) names the refused term, a boot state that kept the check from running, or a staged
+ * contract that changed after the check passed. Any other stop keeps its detail. */
+uint64_t a733_smp_refusal_detail(unsigned status,uint64_t detail)
+{
+    if(status!=1||detail!=1)return detail;
+    if(refusal.state==2)return refusal.why;
+    if(refusal.state==0)return A733_REFUSAL(A733_REFUSAL_BOOT_STATE,0);
+    const volatile struct a733_smp_contract *source=(const void *)A733_SMP_CONTRACT_ADDRESS;
+    if(source->magic!=refusal.magic||source->generation!=refusal.generation)
+        return A733_REFUSAL(A733_REFUSAL_STALE_RESULT,A733_STALE_SOURCE);
+    return A733_REFUSAL(A733_REFUSAL_STALE_RESULT,A733_STALE_RESULT);
+}
 int a733_smp_power_address(unsigned core,uintptr_t address,int write)
 {
     if(core<1 || core>=8)return 0;

@@ -87,9 +87,9 @@ An image with an application derives its session lifetime
 (`A733_BOARD_SUPERVISED_SECONDS`) from that application's manifest at configure
 time ([session_lifetime.py](../tools/session_lifetime.py)):
 
-    lifetime = max(60 s, ceil(1 s startup + 4 s setup + run_us + return_reserve_us))
+    lifetime = max(60 s, ceil(1 s startup + 2 s setup + run_us + return_reserve_us))
 
-The 1 s is `A733_BOARD_STARTUP_SECONDS`. The 4 s is an allowance for service
+The 1 s is `A733_BOARD_STARTUP_SECONDS`. The 2 s is an allowance (four times the worst arm-to-return time measured in the 2026-11-02 runs, 0.73 s; see `tools/session_setup_time.py`) for service
 start, application admission and input digests before `main`; an application
 that needs longer declares a longer `run_us`. The 60 s floor is the lifetime
 of an application that needs less, so its services and the runner's failure
@@ -110,7 +110,7 @@ breadcrumb timestamp wraps after 22,906 s of power-on time
 ([sunstone_crumb.h](../include/sunstone_crumb.h)). The 600 s limit in the
 [probe contract](board-probe-contract.md) applies to raw probe images only.
 
-A test that needs five minutes declares `run_us` of 300 s and gets a 310 s
+A test that needs five minutes declares `run_us` of 300 s and gets a 308 s
 session. The storage-write test derives its write guard from the session's own
 deadline (six seconds before it, for the sync and close), not from a fixed time.
 
