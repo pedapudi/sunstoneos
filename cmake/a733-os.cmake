@@ -33,8 +33,8 @@ elseif(SUNSTONE_APPLICATION STREQUAL "large-region-test")
   if(NOT SUNSTONE_A733_DRAM_DECODE_PROBE)
     message(FATAL_ERROR "large-region-test needs -DSUNSTONE_A733_DRAM_DECODE_PROBE=ON")
   endif()
-  # The CPU-return lifetime is the 60 s supervised session: its run deadline must fit it (apps/os/session.c), so that profile runs the
-  # A76 cluster for 50 s; the resident and plain supervised images keep the original manifest.
+  # The CPU-return profile runs the A76 cluster; the resident and plain supervised images keep the original manifest.
+  # The session lifetime follows the manifest's run deadline (tools/session_lifetime.py).
   set(large_region_manifest "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest.json")
   if(SUNSTONE_A733_OS_CPU_RETURN)
     set(large_region_manifest "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest-return.json")

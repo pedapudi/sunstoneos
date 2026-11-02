@@ -57,7 +57,7 @@ _Noreturn void platform_panic(const char *file, unsigned line);
 #define configUSE_COUNTING_SEMAPHORES 1
 #define configUSE_TIMERS 0
 #define configUSE_TASK_NOTIFICATIONS 1
-#define configTASK_NOTIFICATION_ARRAY_ENTRIES 2
+#define configTASK_NOTIFICATION_ARRAY_ENTRIES 3
 #define configCHECK_FOR_STACK_OVERFLOW 2
 #define configUSE_TASK_FPU_SUPPORT 2
 #ifdef SUNSTONE_SECURE_MONITOR

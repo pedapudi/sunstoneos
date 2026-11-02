@@ -100,6 +100,25 @@ function(add_sunstone_image target)
       emit --no-application --output "${directory}" COMMAND_ERROR_IS_FATAL ANY)
     set(manifest_source)
   endif()
+  # The session lifetime comes from the application's manifest (tools/session_lifetime.py): startup, setup, run_us and
+  # return_reserve_us. An image with no application keeps the header's default. The resident lifetime has no deadline.
+  if(IMAGE_APPLICATION AND NOT IMAGE_LIFETIME STREQUAL "resident")
+    get_target_property(manifest_json ${IMAGE_APPLICATION} SUNSTONE_MANIFEST)
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${SUNSTONE_SOURCE_ROOT}/tools/session_lifetime.py"
+      --manifest "${manifest_json}" OUTPUT_VARIABLE session_seconds OUTPUT_STRIP_TRAILING_WHITESPACE
+      RESULT_VARIABLE session_status)
+    if(NOT session_status EQUAL 0)
+      message(FATAL_ERROR "The manifest of ${IMAGE_APPLICATION} needs a session longer than the longest one")
+    endif()
+    # The core's own sources (session.c, thermal.c, cpu-return.c) and the application and device objects built from the
+    # settings must agree on it.
+    target_compile_definitions(sunstone-a733-os-core PRIVATE A733_BOARD_SUPERVISED_SECONDS=${session_seconds}u)
+    target_compile_definitions(sunstone-os-settings INTERFACE A733_BOARD_SUPERVISED_SECONDS=${session_seconds}u)
+    message(STATUS "${target}: session lifetime ${session_seconds} s from the manifest")
+    set(image_session_seconds ${session_seconds})
+  else()
+    set(image_session_seconds 60)
+  endif()
   if(target STREQUAL "sunstone-a733-os")
     set(output "${CMAKE_CURRENT_BINARY_DIR}/os-image")
   else()
@@ -216,7 +235,7 @@ function(add_sunstone_image target)
     COMMAND "${Python3_EXECUTABLE}" "${SUNSTONE_SOURCE_ROOT}/checks/sunstone-image-link.py"
       --image "$<TARGET_FILE:${target}>" --manifest "${directory}/manifest.bin"
       --application "${name}" --build-id "${output}/build-id.txt"
-      --lifetime "${IMAGE_LIFETIME}" --output "${output}/link-check.json"
+      --lifetime "${IMAGE_LIFETIME}" --session-seconds "${image_session_seconds}" --output "${output}/link-check.json"
       --nm "${CMAKE_NM}" ${symbol_arguments}
     COMMAND "${Python3_EXECUTABLE}" "${SUNSTONE_SOURCE_ROOT}/tools/board_readme.py"
       --manifest "${output}/link-check.json" --image "$<TARGET_FILE:${target}>"

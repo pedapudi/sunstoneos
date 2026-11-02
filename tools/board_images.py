@@ -71,6 +71,43 @@ def validate_npu_on(words):
             'NPU PCK4 policy/status must both be ON (8); OFF or uncertain state is refused.')
 
 
+SESSION = load('runner_session_lifetime', ROOT/'tools/session_lifetime.py')
+
+
+class AdmissionRefusal(ValueError):
+    """The image's own EL3 admission code refuses the session; raised before any device access."""
+
+
+def offline_words():
+    """Captured board words that stand in for a live read when a submission is checked without the board.
+
+    The session's thermal fields derive from them (apb1 and its rate); admission validates their consistency, not their
+    liveness. Returns None when the capture is not on this machine."""
+    path = CACHE/'evidence/sol-resume-20261031/port-3-3/cpu-thermal-state/session.json'
+    if not path.is_file():
+        return None
+    words = {}
+    for transaction in json.loads(path.read_text())['transactions']:
+        command = transaction['command']
+        addresses = [int(command[i+1], 16) for i, item in enumerate(command) if item == 'readl']
+        words.update({hex(a): int(v, 16) for a, v in zip(addresses, transaction['stdout'].split())})
+    return words
+
+
+def preflight_admission(image, session, contract, seconds):
+    """Run the image's own EL3 admission (tools/host_admission.py) on the session and contract about to be sent.
+
+    A refusal raises AdmissionRefusal naming the failing term. When the host admission cannot be built for this image,
+    the result says so and nothing is decided."""
+    admission = load('runner_host_admission', ROOT/'tools/host_admission.py')
+    try:
+        return admission.preflight(image, session, contract, seconds)
+    except admission.AdmissionRefused as error:
+        raise AdmissionRefusal('Host admission refuses this session before any board access: %s' % error)
+    except admission.Unavailable as error:
+        return {'admitted': None, 'unavailable': str(error)}
+
+
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -167,7 +204,7 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
     require(marker is not None, 'Image does not admit the host-armed watchdog; rebuild with RTC breadcrumbs.')
     require(set(marker) == {'mode', 'session_seconds'} and all(type(v) is int for v in marker.values()) and
             marker['mode'] & 0xff0f == 1 and 1 <= marker['mode'] >> 4 <= 11 and
-            1 <= marker['session_seconds'] <= 600, 'Invalid watchdog marker.')
+            1 <= marker['session_seconds'] <= SESSION.MAX_SECONDS, 'Invalid watchdog marker.')
     generic = 'ss_result_record' in names
     dma = 'os_dma_profile' in names
     if dma:
@@ -445,6 +482,7 @@ def prepare(args, info, live, out, *, dma_binding=None):
     request = struct.pack('<Q', 0x415337334f534c31) + request[8:]
     contract = bytearray(contract)
     struct.pack_into('<Q', contract, 184, len(session))
+    host_admission = preflight_admission(args.image, session, bytes(contract), info['watchdog']['session_seconds'])
     uploads = []
     for i, part in enumerate(parts):
         if part['data']:
@@ -458,7 +496,7 @@ def prepare(args, info, live, out, *, dma_binding=None):
                 (0x52d00, write(out/'report-zero.bin', bytes(128))), (0x52000, out/'launch.bin')]
     returning = load('prepare_return_geometry', tree/'apps/os/cpu-return-host.py')
     plan = dict(meta, epoch=epoch, generation=generation, uploads=uploads, launch=['exe', '0x52000'],
-                watchdog=info['watchdog'], format='generic', geometry=info['report_geometry'],
+                host_admission=host_admission, watchdog=info['watchdog'], format='generic', geometry=info['report_geometry'],
                 return_host=returning, input_regions=meta['uploads'], image_ram=returning.IMAGE_RAM)
     plan['preserve_regions'] = preservation_regions(plan)
     validate_uploads(plan)

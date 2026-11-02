@@ -2,6 +2,7 @@
  * validator runs unchanged on the board prefix; this unit adds the OS
  * magic numbers, the extension and a digest over the complete session. */
 #include "os.h"
+#include "a733_admission_refusal.h"
 #define a733_smp_contract_valid os_board_contract_unused
 #include "../board/admission.c"
 #undef a733_smp_contract_valid
@@ -101,16 +102,46 @@ int os_session_valid(const struct os_session *s)
 #endif
     return 1;
 }
-int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
+/* Zero when the contract and the session at A733_BOARD_SESSION_ADDRESS are admitted; otherwise the named refusal of
+ * include/a733_admission_refusal.h. The terms are checked in the order the stop detail lists them: contract
+ * identity, the session decode (which includes the manifest's fit in the lifetime), the session digest, then the
+ * board prefix against the contract (build ID, timing, fields). */
+unsigned a733_smp_contract_refusal(const struct a733_smp_contract *c,uint64_t now)
 {
     const void *raw=(const void *)A733_BOARD_SESSION_ADDRESS;
     struct os_session decoded;const struct os_session *s=&decoded;
-    if(!c||c->magic!=A733_SMP_CONTRACT_MAGIC||c->reserved[0]!=A733_BOARD_SESSION_ADDRESS||
-       !os_session_decode(raw,c->reserved[1],&decoded))return 0;
+    if(!c)return A733_REFUSAL(A733_REFUSAL_CONTRACT_FIELD,0);
+    if(c->magic!=A733_SMP_CONTRACT_MAGIC)return A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_MAGIC);
+    if(c->reserved[0]!=A733_BOARD_SESSION_ADDRESS)return A733_REFUSAL(A733_REFUSAL_SESSION_BIND,A733_BIND_CONTRACT);
+    unsigned why=0;
+    if(!os_session_decode_why(raw,c->reserved[1],&decoded,&why))return A733_REFUSAL(A733_REFUSAL_SESSION_DECODE,why);
     uint8_t hash[32];storage_digest_bytes(raw,c->reserved[1],hash);
-    if(memcmp(hash,&c->reserved[2],32))return 0;
+    if(memcmp(hash,&c->reserved[2],32))return A733_REFUSAL(A733_REFUSAL_SESSION_BIND,A733_BIND_DIGEST);
     /* The board check binds every remaining field against the board prefix. */
     struct a733_smp_contract base=*c;base.magic=A733_BOARD_CONTRACT_MAGIC;base.reserved[1]=sizeof(s->board);
     storage_digest_bytes(&s->board,sizeof(s->board),(void *)&base.reserved[2]);
-    return a733_board_contract_valid(&base,&s->board,a733_smp_build_id,now);
+    return a733_board_contract_refusal(&base,&s->board,a733_smp_build_id,now);
+}
+/* What the last admission check decided, for the stop that follows it (a733_smp_refusal_detail). The monitor
+ * section is EL3 memory: only the EL3 admission and its stop touch it. */
+static struct {uint64_t magic,generation;unsigned state,why;} refusal __attribute__((section(".bss.a733_smp_monitor")));
+int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
+{
+    unsigned why=a733_smp_contract_refusal(c,now);
+    refusal.state=why?2:1;refusal.why=why;
+    if(c){refusal.magic=c->magic;refusal.generation=c->generation;}
+    return !why;
+}
+/* The stop of a refused admission is a733_smp_stop(1,1). Name it: the refused term of the contract check, a
+ * boot state that kept the check from running, or a staged contract that changed or a result that already
+ * exists after the check passed. Any other stop keeps its own detail. */
+uint64_t a733_smp_refusal_detail(unsigned status,uint64_t detail)
+{
+    if(status!=1||detail!=1)return detail;
+    if(refusal.state==2)return refusal.why;
+    if(refusal.state==0)return A733_REFUSAL(A733_REFUSAL_BOOT_STATE,0);
+    const volatile struct a733_smp_contract *source=(const void *)A733_SMP_CONTRACT_ADDRESS;
+    if(source->magic!=refusal.magic||source->generation!=refusal.generation)
+        return A733_REFUSAL(A733_REFUSAL_STALE_RESULT,A733_STALE_SOURCE);
+    return A733_REFUSAL(A733_REFUSAL_STALE_RESULT,A733_STALE_RESULT);
 }

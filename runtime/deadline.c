@@ -11,7 +11,11 @@ struct deadline_slot {
     atomic_uint_fast64_t deadline;
     uint64_t sequence,last_deadline,woken_us;
     unsigned failed;
+    unsigned index;                  /* the notification index of the wait in progress */
 };
+/* The notification index that the calling task's deadline wait uses. The default is index 0, the task's own; the OS
+ * returns SS_NOTIFY_DEADLINE for a task of an application, whose index 0 is the application's (include/sunstone_notify.h). */
+__attribute__((weak)) unsigned sunstone_deadline_notify_index(void){return 0;}
 static struct deadline_slot slots[DEADLINE_SLOTS];
 static atomic_uint rearm_requested;
 static struct deadline_slot *find(TaskHandle_t owner)
@@ -63,6 +67,8 @@ int sunstone_deadline_wait_until(uint64_t until)
         s->failed=1;taskEXIT_CRITICAL();return SUNSTONE_DEADLINE_ERROR;
     }
     ++s->sequence;s->last_deadline=until;s->woken_us=0;
+    const unsigned index=sunstone_deadline_notify_index();
+    s->index=index;
     uint64_t now=sunstone_deadline_now_us();
     if(now>=until){
         /* A matured hold still creates an observation certificate. There is
@@ -75,7 +81,7 @@ int sunstone_deadline_wait_until(uint64_t until)
      * compare, but this pending SGI then observes the newly published slot. */
     sunstone_deadline_kick();
     taskEXIT_CRITICAL();
-    (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+    (void)ulTaskNotifyTakeIndexed(index,pdTRUE,portMAX_DELAY);
     taskENTER_CRITICAL();
     int expired=sunstone_deadline_now_us()>=until;
     atomic_store_explicit(&s->deadline,0,memory_order_release);
@@ -83,7 +89,7 @@ int sunstone_deadline_wait_until(uint64_t until)
     /* The ISR notifies while holding this same recursive kernel lock. Thus
      * cancellation cannot leave a late timer hint for the next operation.
      * Device hints consumed here are safe only under the public recheck rule. */
-    (void)ulTaskNotifyTake(pdTRUE,0);
+    (void)ulTaskNotifyTakeIndexed(index,pdTRUE,0);
     taskEXIT_CRITICAL();
     return expired?SUNSTONE_DEADLINE_EXPIRED:SUNSTONE_DEADLINE_NOTIFIED;
 }
@@ -102,7 +108,7 @@ void sunstone_deadline_irq(void)
         if(d&&d<=now){
             due->woken_us=now;
             atomic_store_explicit(&due->deadline,0,memory_order_release);
-            vTaskNotifyGiveFromISR(atomic_load_explicit(&due->owner,memory_order_relaxed),&woken);
+            vTaskNotifyGiveIndexedFromISR(atomic_load_explicit(&due->owner,memory_order_relaxed),due->index,&woken);
         }
         taskEXIT_CRITICAL_FROM_ISR(mask);
     }

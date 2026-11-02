@@ -87,6 +87,29 @@ static __attribute__((unused)) _Noreturn void npu_graphs_queue_main(void)
 #endif
     clock_words(&receipt.reserved[0], &receipt.reserved[1], &receipt.reserved[2]);   /* before the sweep */
     receipt.start = ss_counter_ticks();
+#ifdef NPU_GRAPHS_QUEUE_LAT
+    /* Latency of single jobs: NPU_GRAPHS_QUEUE_LAT jobs (at most 100), each submitted after the one before completed and was
+     * released, the counter ticks from submit to the observed completion kept in the receipt's padding as 32-bit words (word 0:
+     * the count). The host takes the percentiles. */
+    {
+        _Static_assert(NPU_GRAPHS_QUEUE_LAT <= 100, "the receipt's padding holds 100 ticks");
+        uint32_t ticks[NPU_GRAPHS_QUEUE_LAT];
+        for (unsigned job = 0; job < NPU_GRAPHS_QUEUE_LAT; ++job) {
+            struct ss_npu_fence fence;
+            const uint64_t t0 = ss_counter_ticks();
+            int r1;
+            while ((r1 = ss_npu_queue_submit(q, h, (struct ss_npu_fence){0}, QUEUE_TIMEOUT_US, &fence)) == 0) { ss_progress(); vTaskDelay(1); }
+            if (r1 < 0) queue_fault(6, job);
+            while ((r1 = ss_npu_queue_status(q, fence)) == 0) { if (ss_live() < 0) queue_fault(9, job); }
+            if (r1 < 0) queue_fault(8, job);
+            ticks[job] = (uint32_t)(ss_counter_ticks() - t0);
+            if (ss_npu_queue_release(q, fence) != 1) queue_fault(7, job);
+        }
+        const uint32_t count = NPU_GRAPHS_QUEUE_LAT;
+        memcpy(receipt.padding, &count, 4);
+        memcpy(receipt.padding + 4, ticks, sizeof(ticks));
+    }
+#endif
 #ifdef NPU_GRAPHS_QUEUE_REPEAT
     /* Determinism study: NPU_GRAPHS_QUEUE_REPEAT single jobs, one at a time, with the first output tensor copied after each.
      * Record i holds the job number (input_bytes), the output bytes (output_bytes), the bytes that differ from the first job's

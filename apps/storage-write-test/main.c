@@ -4,7 +4,7 @@
  * It runs only in an image built with SUNSTONE_A733_OS_SD_WRITE, on the runner's bounded-write admission: the first input is the
  * admitted bounds blob (tools/storage_bounds.py), which the OS verifies against the card before any write. The second input
  * selects a mode (a little-endian u32, then a u64):
- *   0  create the file, sync, close, unmount and report (no read-back); a time guard (GUARD_US) stops the write, syncs and
+ *   0  create the file, sync, close, unmount and report (no read-back); a time guard (guard_expired: CLOSE_RESERVE_US before the session's deadline) stops the write, syncs and
  *      closes, and reports E_TIMEOUT with the bytes written;
  *   5  continue the file to FILE_BYTES: the existing file must be a whole number of CHUNKs and at most FILE_BYTES, and its first CHUNK must be the
  *      stream's; the stream then appends from that offset under the same guard, with the per-phase timings (volume_size is the size found);
@@ -41,10 +41,22 @@
 #endif
 #define MAX_FLUSHES 4096u
 #define TAG UINT64_C(0x5357544553544f4b)          /* "SWTESTOK" */
-#ifndef GUARD_US
-#define GUARD_US UINT64_C(40000000)               /* the write stops after this long and closes cleanly */
-#endif
 #define COUNTER_HZ UINT64_C(24000000)
+/* The long modes stop with time left to sync, close, unmount and report: CLOSE_RESERVE_US before the session's own deadline
+ * (grant->finish_by_us, which the OS derives from the manifest's run deadline and the session lifetime). The guard is therefore a
+ * function of the declared lifetime; no figure here is fitted to it. A build may set GUARD_US to stop that long after the phase began
+ * instead (the host guard checks, which scale the file and the guard down). */
+#ifndef CLOSE_RESERVE_US
+#define CLOSE_RESERVE_US UINT64_C(6000000)
+#endif
+#ifdef GUARD_US
+static int guard_expired(uint64_t since_ticks) { return (ss_counter_ticks() - since_ticks) * 1000000u / COUNTER_HZ >= GUARD_US; }
+static void guard_set(const struct ss_grant *grant) { (void)grant; }
+#else
+static uint64_t guard_at_us;                      /* absolute counter time to stop by; 0: the session has no deadline */
+static int guard_expired(uint64_t since_ticks) { (void)since_ticks; return guard_at_us && ss_counter_ticks() * 1000000u / COUNTER_HZ >= guard_at_us; }
+static void guard_set(const struct ss_grant *grant) { guard_at_us = grant->finish_by_us > CLOSE_RESERVE_US ? grant->finish_by_us - CLOSE_RESERVE_US : 0; }
+#endif
 
 /* One SHA-256 compression of a 64-byte block from the standard initial state (sha256_ce.S; ARMv8 Cryptographic Extension). */
 void sha256_block_ce(const uint8_t block[64], uint8_t digest[32]);
@@ -195,12 +207,12 @@ static uint8_t *scratch;                          /* the flush WORK region, free
 static size_t scratch_bytes;
 /* Compare the file with the stream from the start for `bytes`; counts mismatching bytes. Each fwr_read resolves the path, scans the directory and
  * walks the cluster chain from the start, so the read is made in large steps (half the work region, at most 4 MiB): at 64 KiB the first full read
- * of 368 MiB did not finish in the application's 52 s. */
+ * of 368 MiB did not finish in the application's run deadline then. */
 static void verify(const char *path, uint64_t bytes)
 {
     uint64_t t0 = ss_counter_ticks();
     /* The phases of a read-back, for the result: flush_ticks is the time inside fwr_read, generate_ticks the stream, close_ticks the compare;
-     * flushes counts the reads and written_bytes the bytes compared. A guard (GUARD_US since the start of the verify) stops it with E_TIMEOUT
+     * flushes counts the reads and written_bytes the bytes compared. A guard (guard_expired, since the start of the verify) stops it with E_TIMEOUT
      * and the offset in detail, so a slow read still returns what it measured. */
     size_t step = CHUNK;
     uint8_t *rd = check, *gen = chunk;
@@ -225,7 +237,7 @@ static void verify(const char *path, uint64_t bytes)
         r.close_ticks += ss_counter_ticks() - a2;
         r.written_bytes = off + n;
         ss_progress();
-        if ((ss_counter_ticks() - t0) * 1000000u / COUNTER_HZ >= GUARD_US && off + n < bytes) { r.status = E_TIMEOUT; r.detail = off + n; break; }
+        if (guard_expired(t0) && off + n < bytes) { r.status = E_TIMEOUT; r.detail = off + n; break; }
     }
     r.read_ticks = ss_counter_ticks() - t0;
 }
@@ -290,6 +302,7 @@ void storage_write_main(const struct ss_grant *grant)
     if (mode_id == 4 || mode_id == 6) { collect(); finish_report(); }   /* open (4: and enable the writes) only: the QEMU boot checks */
     uint64_t base, sectors;
     if (!mbr_partition(&base, &sectors)) { r.status = E_MBR; finish_report(); }
+    guard_set(grant);
     uint64_t t_start = ss_counter_ticks();
     int rc = mount(base, sectors);
     if (rc) { r.status = E_MOUNT; r.detail = (uint64_t)-rc; finish_report(); }
@@ -392,7 +405,7 @@ void storage_write_main(const struct ss_grant *grant)
         if (fl > 0) { r.flush_ticks += dt; if (flushes < MAX_FLUSHES) flush_ticks[flushes] = (uint32_t)dt; ++flushes; }
         r.written_bytes = off + CHUNK;
         ss_progress();
-        if ((mode_id == 0 || mode_id == 5) && (ss_counter_ticks() - t_start) * 1000000u / COUNTER_HZ >= GUARD_US && off + CHUNK < FILE_BYTES) { timed_out = 1; break; }
+        if ((mode_id == 0 || mode_id == 5) && guard_expired(t_start) && off + CHUNK < FILE_BYTES) { timed_out = 1; break; }
     }
     uint64_t c0 = ss_counter_ticks();
     rc = fwr_close(&file);

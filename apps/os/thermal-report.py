@@ -6,10 +6,19 @@ Only CPU-clock OS images answer it. Version 2 rows use a 125 ms schedule from th
 thermal owner, in physical order CPUB, DDR, NPU, CPUL, GPU. The report survives
 later recognitions; a critical board failure can prevent its USB delivery.
 """
+import importlib.util
+from pathlib import Path
 import struct
 
+_spec = importlib.util.spec_from_file_location('thermal_session_lifetime', Path(__file__).resolve().parents[2] / 'tools/session_lifetime.py')
+lifetime = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(lifetime)
+
 OP, MAGIC = 7, 0x5448524d
-LEGACY_HEADER_BYTES, HEADER_BYTES, ROW_BYTES, MAX_ROWS = 72, 80, 56, 602
+LEGACY_HEADER_BYTES, HEADER_BYTES, ROW_BYTES = 72, 80, lifetime.THERMAL_ROW_BYTES
+# The reading buffer holds the rows of the image's own lifetime (apps/os/thermal.c, THERMAL_RECORDS);
+# MAX_ROWS is the host's bound for the longest session.
+MAX_ROWS = lifetime.thermal_rows(lifetime.MAX_SECONDS)
 MAX_BYTES = HEADER_BYTES + ROW_BYTES * MAX_ROWS
 PERIOD_US = 125000
 # configTICK_RATE_HZ=1000: one wakeup tick and one read/publication tick.

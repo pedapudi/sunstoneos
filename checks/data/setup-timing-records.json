@@ -1,0 +1,197 @@
+{
+ "normal_rail_return_seconds_median": 2.11,
+ "refused_on_host_load": {
+  "dram_dirty": true,
+  "dram_lost": true,
+  "dram_mode": "development",
+  "dram_restored": false,
+  "durations": {
+   "dram": 16.28105,
+   "identity": 2.221999,
+   "rails": 24.199103,
+   "reset": 12.049969,
+   "total": 59.650092,
+   "usb-source-off": 0.719963
+  },
+  "entry": "1793638219249052649-1574707e",
+  "first_failure": {
+   "detail": "Rail helper possible watchdog reset; no DRAM result read; rails were not normalized.",
+   "site": "rails"
+  },
+  "fresh_fel": true,
+  "instances": [
+   {
+    "identity": [
+     7,
+     8347,
+     1097041,
+     0,
+     0
+    ],
+    "node": "/dev/bus/usb/003/082"
+   },
+   {
+    "identity": [
+     7,
+     8351,
+     1097042,
+     0,
+     0
+    ],
+    "node": "/dev/bus/usb/003/083"
+   },
+   {
+    "identity": [
+     7,
+     8351,
+     1097042,
+     0,
+     0
+    ],
+    "node": "/dev/bus/usb/003/083"
+   },
+   {
+    "identity": [
+     7,
+     8355,
+     1097043,
+     0,
+     0
+    ],
+    "node": "/dev/bus/usb/003/084"
+   }
+  ],
+  "launch_attempted": false,
+  "outcome": "refused-before-launch",
+  "quarantined": true,
+  "rail_return": {
+   "cutoff_seconds": 14,
+   "mode_after_disarm": 0,
+   "mode_before_disarm": 177,
+   "seconds": 16.782126039004652,
+   "source_hz": 34666.666666666664,
+   "watchdog_configuration": 257
+  },
+  "setup_watchdog_reset": true,
+  "stage": "rails"
+ },
+ "source": "~/.cache/sunstoneos/board-queue/entries/*/run/result.json, 2026-11-02 (images built from c10eb74e)",
+ "watchdog_reset": {
+  "dram_dirty": false,
+  "dram_lost": true,
+  "dram_mode": "development",
+  "dram_restored": false,
+  "durations": {
+   "dram": 18.619871,
+   "identity": 7.03706,
+   "launch": 79.648872,
+   "prepare": 1.24927,
+   "rails": 26.026948,
+   "reset": 10.407192,
+   "total": 147.415017,
+   "usb-source-off": 2.626089
+  },
+  "entry": "1793621961404973775",
+  "first_failure": {
+   "aux": 25088,
+   "caller": "0x4106f658",
+   "caller_kind": "statement",
+   "caller_source": "os_cpu_clock_step build/build/os-image/return-cpu.c:257:103",
+   "cluster": 0,
+   "core": 0,
+   "detail": "last stage EL3_STOP (0x0111) value 0xf736 on core 0; first board failure on core 0 at EL1: cpu_clock source line 0x101, value 0x1018, caller 0x4106f658 (os_cpu_clock_step build/build/os-image/return-cpu.c:257:103)",
+   "exception_level": "EL1",
+   "group": "cpu_clock",
+   "guard_detail": "0x1",
+   "guard_line": 24,
+   "level": 11,
+   "native_site": 257,
+   "phase": 2,
+   "site": "cpu_clock:257:0x4106f658",
+   "site_kind": "source line",
+   "status": "0x1018",
+   "status_bits": 32,
+   "value": "0x1018"
+  },
+  "fresh_fel": true,
+  "instances": [
+   {
+    "identity": [
+     7,
+     7339,
+     1097024,
+     0,
+     0
+    ],
+    "node": "/dev/bus/usb/003/065"
+   },
+   {
+    "identity": [
+     7,
+     7343,
+     1097025,
+     0,
+     0
+    ],
+    "node": "/dev/bus/usb/003/066"
+   },
+   {
+    "identity": [
+     7,
+     7343,
+     1097025,
+     0,
+     0
+    ],
+    "node": "/dev/bus/usb/003/066"
+   },
+   {
+    "identity": [
+     7,
+     7347,
+     1097026,
+     0,
+     0
+    ],
+    "node": "/dev/bus/usb/003/067"
+   },
+   {
+    "identity": [
+     7,
+     7351,
+     1097028,
+     0,
+     0
+    ],
+    "node": "/dev/bus/usb/003/069"
+   }
+  ],
+  "launch_attempted": true,
+  "outcome": "watchdog-reset",
+  "quarantined": false,
+  "rail_return": {
+   "cutoff_seconds": 14,
+   "mode_after_disarm": 0,
+   "mode_before_disarm": 177,
+   "seconds": 11.430704013007926,
+   "source_hz": 34666.666666666664,
+   "watchdog_configuration": 257
+  },
+  "rom_returned": true,
+  "setup_watchdog_reset": null,
+  "stage": "launch",
+  "watchdog_return": {
+   "after": 0,
+   "before": 1,
+   "words": {
+    "elr": 1090975320,
+    "esr": 1644187905,
+    "far": 4120,
+    "fault": 4195025920,
+    "last": 17954614,
+    "tag": 1544369957,
+    "time": 3030997
+   }
+  }
+ }
+}
