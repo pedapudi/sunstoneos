@@ -461,6 +461,37 @@ Condition: one run on port 3-1, no card, development DRAM mode.
   - Every graph `mismatch` with the same differing count: the device read or wrote another copy than the CPU, a cache
     maintenance or attribute difference of the slot 1 blocks.
 
+### Predicted board run of the NPU pool below 0x48000000 with the upper memory mapped
+
+The first run of the pool in the slot 1 area (entry `1793652334060640370-11f14671`, the image built from commit `8c4508c3` with the
+pool at `0x78600000`) ended at the watchdog. The only failure it recorded is the supervisor's cutoff test in
+`os_cpu_return_supervise` (`apps/os/cpu-return.c`, detail `0x73c`): the application had not asked for the return by the session
+deadline minus the 5 s return reserve, about 55 s after launch. No NPU, board or application failure came first, and the board
+live test never failed, so no service's progress window expired. The passing run that this one repeated took 5 s. That run was built without the DRAM decode check, so the new image differs in two ways, not one: the pool
+address, and the check, which maps the upper memory at EL1, gives the application an address space and takes its main stack from
+the ledger. The prediction of the first run named only the pool.
+
+Hypothesis: the pool address is the cause. A pool at `0x78600000` leaves the NPU service waiting for a job that does not complete,
+or for a stop that does not finish, while the same image with the pool below `0x48000000` completes. The control is the same
+source tree and recipe with one change, `SUNSTONE_OS_NPU_POOL_BASE` empty: a 10 MiB pool ending at `0x47000000`, which is
+`0x46600000..0x47000000`. The decode check, the application space, the main stack in the ledger and the A76 main core stay as in the
+failed image. A build of the failed recipe from the same tree reproduces the failed image byte for byte, so the control differs
+from it in the pool symbols and the code they select (the ledger reservation, the start test of the reservation, the EL3 pool
+entries and the terminal's clean of a sized pool).
+
+Condition: one run on port 3-1, no card, development DRAM mode, 852 MHz at 800 mV as before.
+
+- **Hypothesis true.** Normal return with the receipt of `expect.json`: seven records with status `match` and no differing byte,
+  `completed` and `matched` equal to 7, the SDK closed, `RETURN_ROM` as the last breadcrumb, about 10 s of launch.
+- **Hypothesis false.** The same watchdog end: last stage `EL3_STOP`, first failure `0x73c`, about 55 s of launch. The cause is then
+  in the composition of the decode check with the NPU service (the application space and TTBR0 switching, the ledger main stack, or an
+  application space on core 6 beside the NPU service on core 1), and the next image must name what the application waits for.
+
+Host evidence before this run. The image's own start code (`checks/os-npu-start.py`, with the kernel tables seeded as the decode check
+leaves them) accepts the session of the failed run and starts the NPU service with the pool at `0x78600000`. An application with no
+regions, a main stack in the ledger and an application space starts and finishes on core 6 and on core 2 in the emulated board.
+No host model contains the NPU's reach of memory, so neither can show a pool-address failure.
+
 ### Predicted board run of the heap
 
 Hypothesis: with the OS image built with the address-test decode check
