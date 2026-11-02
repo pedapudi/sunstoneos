@@ -14,7 +14,7 @@ The first run of `sunstone-a733-os-large-region-test` in the CPU-return profile 
 
 ## Measured on a board, OS image at the CPU-return top points
 
-Entry `1793632829779717086-f7d0d1cf` (3-1, A76, `PERF_BOOT=high`, development DRAM; repeat of `1793632747850074996-92d6900c`, whose expectation was frozen as raw bytes and so reads result-mismatch). The image includes the table-copy fix, the controller interrupt enable from the storage branch and its 50 s manifest.
+Entry `1793632829779717086-f7d0d1cf` (3-1, A76, `PERF_BOOT=high`, development DRAM; a repeat of a first run whose expectation was frozen as raw bytes, so that run reads result-mismatch). The image includes the table-copy fix, the controller interrupt enable from the storage branch and its 50 s manifest.
 
 - **Load, first image:** 30.659 s, 17.5 MB/s, digest matched. The design predicted 24 to 27 s. Both first runs reported 30,659,000 us because the loader timed from the 1 ms FreeRTOS tick.
 - **Load, after the loader changes** (entry `1793633314510847134-f446c660`): 24.386 s, 22.0 MB/s, digest matched, as the storage agent's mode 3 read the same file (21.7 MB/s). Of it, 23.253 s is reading, 0.154 s copying and 0.979 s hashing with the SHA-256 instructions (548 MB/s), timed with the 24 MHz counter.
