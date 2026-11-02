@@ -22,6 +22,14 @@
 #ifndef NPU_IRQ_QUIET_QUERY
 #define NPU_IRQ_QUIET_QUERY npu_application_irq_quiet
 #endif
+/* The priority that a Nonsecure read of GICD_IPRIORITYR returns for the
+ * source. The EL3 route table writes NPU_IRQ_PRIORITY in the Secure view; the
+ * GIC presents it to Nonsecure EL1 as (value<<1)&0xff (GICv3 IHI0069D 4.8.1;
+ * Linux irq-gic-v3.c:92-110), so an image that routes 0xd8 reads back 0xb0. A
+ * single-core image names the Nonsecure value directly. */
+#ifndef NPU_IRQ_NS_PRIORITY
+#define NPU_IRQ_NS_PRIORITY NPU_IRQ_PRIORITY
+#endif
 #define GICD UINT32_C(0x03400000)
 #define BIT (UINT32_C(1)<<1)
 static const struct gicv3_spi source={GICD,97};
@@ -133,7 +141,7 @@ static unsigned bind_refusal(void)
     if(read32(0x20c)&BIT)return 5;
     if(read32(0x30c)&BIT)return 6;
     if(read32(0xc18)&(3u<<2))return 7;
-    if((read32(0x460)&0xff00u)!=NPU_IRQ_PRIORITY<<8)return 8;
+    if((read32(0x460)&0xff00u)!=NPU_IRQ_NS_PRIORITY<<8)return 8;
     if(*(volatile uint64_t *)(uintptr_t)(GICD+0x6308)!=(uint64_t)NPU_IRQ_CORE<<8)return 9;
     return 0;
 }
