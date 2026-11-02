@@ -76,6 +76,10 @@ static void ssKernelSGI(void *context, unsigned cpu)
 }
 static const struct ss_owner_backend ssKernelBackend = { .sgi = ssKernelSGI };
 static unsigned ssKernelCPUId(void) { return (unsigned)portGET_CORE_ID(); }
+static TaskHandle_t ssKernelCurrentSnapshot(unsigned cpu)
+{
+    return __atomic_load_n(&pxCurrentTCBs[cpu], __ATOMIC_ACQUIRE);
+}
 static uint64_t ssKernelNow(void)
 { return atomic_load_explicit(&ssKernelTime, memory_order_acquire); }
 static struct ssKernelTask *ssKernelCurrent(void)
@@ -198,6 +202,7 @@ static bool ssKernelAddTask(TCB_t *t)
 #endif
         portSETUP_TCB(t);
         traceTASK_CREATE(t);
+        tracePOST_MOVED_TASK_TO_READY_STATE(t);
     }
     ssKernelAdminExit(admin);
     if (slot < SS_OWNER_SLOTS) {
@@ -486,8 +491,16 @@ static void ssKernelExpired(void *context, const struct ss_deadline_result *resu
         struct ss_notification_guard guard;
         ss_notification_gate_begin(&s->notification[s->notify_index], &ssKernelBackend, &guard);
         bool won = ss_notification_wait_observe(&guard, &s->notify_wait, s->generation);
+        if (!won) {
+            /* Timeout closes WAITING while holding the notification gate. A
+             * later producer may update the value, but cannot claim another
+             * scheduler completion for this same expired wait. */
+            guard.payload &= ~SS_NOTIFICATION_STATE;
+            s->notify_wait.blocked = false;
+        }
         atomic_store_explicit(&s->outcome, won ? SS_K_EVENT_READY : SS_K_TIMED_OUT,
                                memory_order_release);
+        if (!won) tracePOST_MOVED_TASK_TO_READY_STATE(s->ready.context);
         ssKernelMakeReady(s);
         ss_notification_gate_end(&guard);
     } else if (s->wait_kind == SS_K_EVENT) {
@@ -495,6 +508,7 @@ static void ssKernelExpired(void *context, const struct ss_deadline_result *resu
         unsigned expected = SS_K_WAITING;
         if (atomic_compare_exchange_strong_explicit(&s->outcome, &expected, SS_K_TIMED_OUT,
                                                     memory_order_acq_rel, memory_order_acquire)) {
+            tracePOST_MOVED_TASK_TO_READY_STATE(s->ready.context);
             TCB_t *t = s->ready.context;
             if (listLIST_ITEM_CONTAINER(&t->xEventListItem)) {
                 listREMOVE_ITEM(&t->xEventListItem);
@@ -507,6 +521,7 @@ static void ssKernelExpired(void *context, const struct ss_deadline_result *resu
         ssKernelMakeReady(s);
     } else {
         atomic_store_explicit(&s->outcome, SS_K_TIMED_OUT, memory_order_release);
+        tracePOST_MOVED_TASK_TO_READY_STATE(s->ready.context);
         ssKernelMakeReady(s);
     }
 }
@@ -596,7 +611,7 @@ static void ssKernelSwitch(unsigned c)
     configASSERT(atomic_load_explicit(&s->owner, memory_order_acquire) == c);
     atomic_store_explicit(&s->execution, SS_K_RUNNING, memory_order_release);
     s->off_cpu = false;
-    pxCurrentTCBs[c] = selected->context;
+    __atomic_store_n(&pxCurrentTCBs[c], selected->context, __ATOMIC_RELEASE);
     pxCurrentTCBs[c]->xTaskRunState = (BaseType_t)c;
     ssKernelSliceRefresh(c, true);
     traceTASK_SWITCHED_IN();
@@ -668,6 +683,7 @@ static BaseType_t ssKernelEventWake(ListItem_t *item, TickType_t value, bool uno
                                                       memory_order_acq_rel, memory_order_acquire);
     listREMOVE_ITEM(item);
     if (unordered) listSET_LIST_ITEM_VALUE(item, value | taskEVENT_LIST_ITEM_VALUE_IN_USE);
+    if (won) tracePOST_MOVED_TASK_TO_READY_STATE(t);
     struct ss_kernel_pin pin = s->event_reference;
     s->event_reference = (struct ss_kernel_pin){0};
     unsigned owner = atomic_load_explicit(&s->owner, memory_order_acquire);
@@ -698,6 +714,10 @@ static BaseType_t ssKernelNotify(TaskHandle_t task, UBaseType_t index,
                                              actions[action], value, &ssKernelBackend);
     if (previous) *previous = result.previous;
     if (result.completed_wait) {
+        /* The notification payload transition uniquely won this wait. Record
+         * the ready origin on the caller before route admission, SGI or owner
+         * consumption, so remote activation time remains in the measurement. */
+        tracePOST_MOVED_TASK_TO_READY_STATE(pin.descriptor->task);
         ssKernelPublishReference(pin);
         if (woken && ssKernelCPUs[ssKernelCPUId()].reschedule) *woken = pdTRUE;
     } else ss_kernel_handle_put(&pin);
@@ -803,7 +823,23 @@ static bool ssKernelApply(void *context, unsigned slot, void *task,
         s->abort_generation = state->abort_generation;
         if (atomic_load_explicit(&s->execution, memory_order_acquire) == SS_K_BLOCKED) {
             ssKernelDetachEvent(s);
-            atomic_store_explicit(&s->outcome, SS_K_ABORTED, memory_order_release);
+            bool trace_ready = atomic_load_explicit(&s->outcome, memory_order_acquire) == SS_K_WAITING;
+            if (s->wait_kind == SS_K_NOTIFICATION) {
+                struct ss_notification_guard guard;
+                ss_notification_gate_begin(&s->notification[s->notify_index], &ssKernelBackend, &guard);
+                bool notified = ss_notification_wait_observe(&guard, &s->notify_wait, s->generation);
+                trace_ready = trace_ready && !notified;
+                if (!notified) {
+                    guard.payload &= ~SS_NOTIFICATION_STATE;
+                    s->notify_wait.blocked = false;
+                }
+                atomic_store_explicit(&s->outcome, SS_K_ABORTED, memory_order_release);
+                if (trace_ready) tracePOST_MOVED_TASK_TO_READY_STATE(t);
+                ss_notification_gate_end(&guard);
+            } else {
+                atomic_store_explicit(&s->outcome, SS_K_ABORTED, memory_order_release);
+                if (trace_ready) tracePOST_MOVED_TASK_TO_READY_STATE(t);
+            }
 #if INCLUDE_xTaskAbortDelay == 1
             t->ucDelayAborted = pdTRUE;
 #endif
@@ -913,6 +949,7 @@ static bool ssKernelMutateState(void *opaque, struct ss_control_state *state)
         if (!state->suspended) return false;
         state->suspended = false;
         ++state->resume_generation;
+        tracePOST_MOVED_TASK_TO_READY_STATE(ssKernelTasks[m->slot].ready.context);
         return true;
     case SS_K_ABORT:
         if (atomic_load_explicit(&ssKernelTasks[m->slot].execution, memory_order_acquire) != SS_K_BLOCKED)
