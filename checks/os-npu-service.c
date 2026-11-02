@@ -625,6 +625,10 @@ int main(int argc, char **argv)
     }
     const size_t need = npu_runtime_requirements_with(os_npu_models, os_npu_model_count, slots, &bounds);
     assert(need && !(need & (NPU_RUNTIME_GROUP_BYTES - 1)));
+    if (mode == 30 && getenv("NPU_SIZE_ONLY")) {         /* the reservation alone, for tools/npu-pool-plan.py */
+        printf("%u slots: %zu bytes reserved, 0 bytes in the slots' regions\n", slots, need);
+        return 0;
+    }
     /* The runtime registers physical addresses below 2^40, so the pool is placed in the low
      * 2 GiB of the host address space and aligned to the allocation group. */
     uint8_t *raw = mmap(NULL, need + NPU_RUNTIME_GROUP_BYTES, PROT_READ | PROT_WRITE,

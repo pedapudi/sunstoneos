@@ -44,7 +44,7 @@ includes = [ROOT / 'apps/os', generated, ROOT / 'apps/board', ROOT / 'platform/a
 exe = host_rtos.build(out / 'exe', [*UNITS, generated / 'npu-models.c'], 'npu-pool-size', defines=DEFINES, includes=includes,
                       flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'], link=['-Wl,--gc-sections'])
 inputs = out / 'inputs'; inputs.mkdir()
-env = {**environment(), **({'UNIFORM': '1'} if args.uniform else {}), **({'NPU_SLOTS': str(args.slots)} if args.slots else {}),
+env = {**environment(), **({'UNIFORM': '1'} if args.uniform else {}), **({'NPU_SLOTS': str(args.slots)} if args.slots else {}), **({'NPU_SIZE_ONLY': '1'} if args.json else {}),
        **({'NPU_BOUNDS': args.bounds} if args.bounds else {})}
 done = subprocess.run([str(exe), '30', str(inputs)], capture_output=True, text=True, env=env, timeout=1800)
 (out / 'run.log').write_text(done.stdout + done.stderr)
