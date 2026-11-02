@@ -149,7 +149,7 @@ Convoy. The lock is the task lock (`xPortLocks[1]`), the same one every kernel c
 Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-29 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+31 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -182,4 +182,6 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793601476379926752-0c3dd3cd` | 2026-11-02 | 3-3 | `6e3aa0c5f181` | returned | passed | run_total 70.029 s, masked_span_max 33 us |
 | `1793601953161313034-b1ecfb62` | 2026-11-02 | 3-3 | `81829cfe943b` | returned | passed | run_total 70.104 s, masked_span_max 30 us, lock_wait_share_of_long_spans 82 -96% |
 | `1793602023862614320-8f9bd37f` | 2026-11-02 | 3-3 | `06a4747c4deb` | returned | passed | run_total 70.245 s, masked_span_max 34 us, lock_wait_share_of_long_spans 82 -96% |
+| `1793603800991531488-e4485ccd` | 2026-11-02 | 3-3 | `09bbd24cff47` | returned | passed | run_total 69.982 s, masked_span_max 30 us |
+| `1793603872067351594-076593c9` | 2026-11-02 | 3-3 | `6340760b1c30` | returned | passed | run_total 69.989 s, masked_span_max 30 us |
 <!-- evidence-table:end -->
