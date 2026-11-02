@@ -131,7 +131,19 @@ function(add_sunstone_image target)
     set(heap 0)
   endif()
   endif()
-  math(EXPR heap "${heap} + 1048576")
+  # A heap above the linked limit is a region of the application memory ledger (tools/memory_layout.py): the image
+  # then links only the OS's share, and the manifest tool adds the heap as a large region.
+  foreach(key heap_base heap_link_max)
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${SUNSTONE_SOURCE_ROOT}/tools/memory_layout.py" --get ${key}
+      OUTPUT_VARIABLE ${key} OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+  endforeach()
+  if(heap GREATER heap_link_max)
+    if(NOT SUNSTONE_A733_DRAM_DECODE_PROBE)
+      message(FATAL_ERROR "A heap of ${heap} bytes comes from upper memory, which needs -DSUNSTONE_A733_DRAM_DECODE_PROBE=ON")
+    endif()
+    set(heap 0)
+  endif()
+  math(EXPR heap "${heap} + ${heap_base}")
   target_link_options(${target} PRIVATE ${options} -Wl,--wrap=_impure_ptr
     "-Wl,--defsym=__runtime_heap_size=${heap}" "-Wl,-Map,${output}/image.map")
   get_target_property(link_script sunstone-a733-os-core SUNSTONE_LINK_SCRIPT)

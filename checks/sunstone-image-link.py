@@ -234,6 +234,12 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_ex
     large_records = [dict(zip(('index', 'flags', 'bytes', 'source_bytes', 'first_sector', 'sha256', 'path'),
                               struct.unpack_from('<IIQQQ32s48s', large, 112 * i))) for i in range(len(large) // 112)]
     for i, record in enumerate(large_records):
+        if record['flags'] & 4:
+            # The heap (SS_LARGE_HEAP): the last record, read-write, with no source.
+            assert record['index'] == i == len(large_records) - 1 and record['flags'] == 5 and record['bytes'] % 0x200000 == 0 and \
+                record['bytes'] and not record['source_bytes'] and not record['first_sector'] and not any(record['sha256']) and \
+                not record['path'].strip(b'\0'), 'large region heap record %d' % i
+            continue
         assert record['index'] == i and not record['flags'] & ~3 and record['bytes'] % 0x200000 == 0 and \
             0 < record['source_bytes'] <= record['bytes'] and any(record['sha256']), 'large region record %d' % i
     initializers = admitted['sunstone_region_initializers']

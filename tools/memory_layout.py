@@ -16,6 +16,7 @@ The record reproduces the layout of the images built today. Later steps of the
 design compute it from the linked section sizes and the manifest.
 
     memory_layout.py          print the record as JSON
+    memory_layout.py --get K  print the integer record[K], for the build
 """
 import json
 import sys
@@ -62,6 +63,11 @@ def record():
         'runner_dram': (0x40000000, 0x80000000),
         # The extent of a boot slot's runtime and asset segments.
         'boot_slot_load': (0x41000000, 0x47000000),
+        # The C library's heap. The image links heap_base bytes for the OS and the manifest's heap_bytes when they
+        # are at most heap_link_max (the largest heap any image links today); a larger heap is a region of the
+        # application memory ledger instead (docs/designs/application-memory-layout.md, step 1).
+        'heap_base': MIB,
+        'heap_link_max': 4 * MIB,
     }
 
 
@@ -79,6 +85,9 @@ def hexed(value):
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == '--get':
+        sys.stdout.write('%d\n' % record()[sys.argv[2]])
+        return
     json.dump(hexed(record()), sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write('\n')
 

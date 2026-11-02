@@ -101,7 +101,7 @@ def load(path):
          'workers': integer(cpu.get('workers', 0), name + ' workers', 0, 7),
          'priority': integer(cpu['priority'], name + ' priority', 1, 30),
          'stack_bytes': integer(cpu['stack_bytes'], name + ' stack_bytes', 1024, 1 << 20),
-         'heap_bytes': integer(cpu.get('heap_bytes', 0), name + ' heap_bytes', 0, 64 << 20)}
+         'heap_bytes': integer(cpu.get('heap_bytes', 0), name + ' heap_bytes', 0, LARGE_GIB)}
     require(m['stack_bytes'] % 16 == 0 and m['heap_bytes'] % 16 == 0, name + ': stack and heap are 16-byte multiples')
     d = raw['deadlines']
     m['run_deadline_us'] = integer(d.get('run_us', 0), name + ' run_us')
@@ -177,6 +177,7 @@ def load(path):
     m['regions'] = regions
     m['region_names'] = names
     m['large_regions'], m['large_names'] = load_large(name, raw.get('large_regions', []))
+    add_heap_region(name, m)
     return m
 
 
@@ -222,6 +223,24 @@ def load_large(name, items):
     return records, names
 
 
+LARGE_HEAP = 4          # SS_LARGE_HEAP in include/sunstone_large.h
+
+
+def add_heap_region(name, m):
+    """A heap above the linked limit is a region of the ledger: the last large record, read-write, with no source.
+
+    The image links only the OS's share of the heap then (cmake/sunstone-image.cmake), so the region holds the
+    manifest's heap_bytes on top of that share, rounded up to 2 MiB."""
+    layout = memory_layout.record()
+    if m['heap_bytes'] <= layout['heap_link_max']:
+        return
+    size = -(-(m['heap_bytes'] + layout['heap_base']) // BLOCK) * BLOCK
+    m['large_regions'].append({'index': len(m['large_regions']), 'flags': LARGE_HEAP | 1, 'bytes': size, 'source_bytes': 0,
+                               'first_sector': 0, 'sha256': '0' * 64, 'path': ''})
+    require(sum(r['bytes'] for r in m['large_regions']) <= LARGE_GIB,
+            name + ': large regions and heap together exceed the 11 GiB of upper memory')
+
+
 def pack_large(m):
     return b''.join(LARGE.pack(r['index'], r['flags'], r['bytes'], r['source_bytes'], r['first_sector'],
                                bytes.fromhex(r['sha256']), r['path'].encode()) for r in m['large_regions'])
@@ -232,7 +251,9 @@ def unpack_large(raw):
     out = []
     for base in range(0, len(raw), LARGE.size):
         index, flags, size, source, sector, digest, path = LARGE.unpack_from(raw, base)
-        require(index == base // LARGE.size and not flags & ~3 and size and size % BLOCK == 0 and 0 < source <= size and any(digest),
+        heap = flags == LARGE_HEAP | 1
+        require(index == base // LARGE.size and not flags & ~7 and size and size % BLOCK == 0 and
+                (heap and not source and not sector and not any(digest) or 0 < source <= size and any(digest) and not flags & LARGE_HEAP),
                 'large record at %d is malformed' % base)
         text = path.rstrip(b'\0')
         require(b'\0' not in text and len(path) - len(text) >= 1, 'large record at %d: path has no terminator' % base)
