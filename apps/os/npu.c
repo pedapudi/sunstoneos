@@ -353,23 +353,28 @@ int os_npu_task_privileged(void (*entry)(void *),void *context)
 {return (creating&&!context&&(entry==bootstrap||entry==os_npu_client_task))||
     npu_service_task_privileged(entry,context)==pdTRUE;}
 int os_npu_pins(struct a733_pin_handoff *pins){return pins&&os_session_admitted();}
+/* Each start refusal records its own source line (group NPU, value 0). */
+static int refused(uint32_t site,const void *here){board_fail_note(site,0,here);return 0;}
+#define REFUSE() refused(SUNSTONE_CRUMB_FAIL_SITE(NPU),SUNSTONE_CRUMB_HERE())
 int os_npu_start(void)
 {
     extern int os_npu_sdk_bind(const struct npu_runtime *);
     extern int os_npu_diagnostic_bind(struct npu_runtime *) __attribute__((weak));
-    if(!ss_npu_service_bind_event(sdk_notify,NULL))return 0;
+    if(!ss_npu_service_bind_event(sdk_notify,NULL))return REFUSE();
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
-    if(!os_npu_queue_sdk_bind())return 0;
+    if(!os_npu_queue_sdk_bind())return REFUSE();
 #endif
     const struct os_session *s=os_session_admitted();
-    if(!s||npu.attempted||board.session.deadline_us<=10000)return 0;
+    if(!s)return REFUSE();
+    if(npu.attempted)return REFUSE();
+    if(board.session.deadline_us<=10000)return REFUSE();
     npu.attempted=1;
     const struct os_npu_session *g=&s->npu;
     static const struct a733_mapping_rule wb={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
     uintptr_t start=(uintptr_t)__os_npu_pool_start,end=(uintptr_t)__os_npu_pool_end;
     /* The reservation fits any one catalogue entry; the runtime takes the
      * linked entry's exact requirement from its start. */
-    if(!os_npu_model_count||os_npu_model_count>NPU_RUNTIME_MODELS)return 0;
+    if(!os_npu_model_count||os_npu_model_count>NPU_RUNTIME_MODELS)return REFUSE();
     const unsigned slots=
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
         os_npu_model_count;
@@ -377,32 +382,34 @@ int os_npu_start(void)
         1;
 #endif
     const size_t need=npu_runtime_requirements(os_npu_models,os_npu_model_count,slots);
-    if(start!=OS_NPU_POOL_START||end-start!=OS_NPU_POOL_BYTES||!need||need>OS_NPU_POOL_BYTES||
-       !a733_mapping_check_stride(aarch64_device_translate,start,start,end-start,0x200000,&wb)||
-       !device_memory_pool_init_typed(&npu.pool,start,start,end-start,DEVICE_MEMORY_CLASS_DMA32,DEVICE_MEMORY_WRITE_BACK)||
-       !device_memory_acquire(&npu.pool,g->owner,need,&npu.lease,&npu.extent)||
-       npu.extent.cpu!=start||npu.extent.physical!=start||npu.extent.bytes!=need)return 0;
+    if(start!=OS_NPU_POOL_START||end-start!=OS_NPU_POOL_BYTES)return REFUSE();
+    if(!need||need>OS_NPU_POOL_BYTES)return REFUSE();
+    if(!a733_mapping_check_stride(aarch64_device_translate,start,start,end-start,0x200000,&wb))return REFUSE();
+    if(!device_memory_pool_init_typed(&npu.pool,start,start,end-start,DEVICE_MEMORY_CLASS_DMA32,DEVICE_MEMORY_WRITE_BACK))return REFUSE();
+    if(!device_memory_acquire(&npu.pool,g->owner,need,&npu.lease,&npu.extent))return REFUSE();
+    if(npu.extent.cpu!=start||npu.extent.physical!=start||npu.extent.bytes!=need)return REFUSE();
     struct npu_runtime_config config={.count=os_npu_model_count,.slots=slots,.cpu=npu.extent.cpu,
         .physical=npu.extent.physical,.bytes=npu.extent.bytes,.register_cpu=0x03600000,
         .register_physical=0x03600000,.fatal=fatal};
     memcpy(config.models,os_npu_models,os_npu_model_count*sizeof(os_npu_models[0]));
-    if(!npu_runtime_prepare(&npu.runtime,&config)||!os_npu_sdk_bind(&npu.runtime)){device_memory_retain(&npu.pool,npu.lease);return 0;}
+    if(!npu_runtime_prepare(&npu.runtime,&config)){device_memory_retain(&npu.pool,npu.lease);return REFUSE();}
+    if(!os_npu_sdk_bind(&npu.runtime)){device_memory_retain(&npu.pool,npu.lease);return REFUSE();}
     device_memory_lookup(&npu.pool,npu.lease)->state=DEVICE_MEMORY_DEVICE;
     const struct a733_board_session *b=&s->board;
     npu.end=board.session.deadline_us-10000;
 #ifdef SUNSTONE_BOARD_RESIDENT
     uint64_t begun;
-    if(!clock_now(&begun)||begun>UINT64_MAX-OS_NPU_WORK_US)return 0;
+    if(!clock_now(&begun)||begun>UINT64_MAX-OS_NPU_WORK_US)return REFUSE();
     if(npu.end>begun+OS_NPU_WORK_US)npu.end=begun+OS_NPU_WORK_US;
 #endif
     const struct a733_npu_startup_config startup={{{b->fabric[0],b->fabric[1],b->fabric[2]},
         {b->fabric_hz[0],b->fabric_hz[1],b->fabric_hz[2]}},g->owner,npu.end,g->pck_client};
     const struct a733_npu_startup_providers p={&providers.shared.counter,&providers.shared.clocks,
         &providers.shared.locks,&providers.shared.gpu,&providers.shared.rails,&providers.domains};
-    if(!a733_npu_startup_init(&npu.startup,&startup,&p,NULL,NULL))return 0;
+    if(!a733_npu_startup_init(&npu.startup,&startup,&p,NULL,NULL))return REFUSE();
 #if defined(SUNSTONE_A733_OS_PERF) && OS_PERF_BOOT_MODE==2
     /* The low boot mode: the NPU starts at its 492 MHz point. */
-    if(!a733_npu_startup_rate(&npu.startup,492))return 0;
+    if(!a733_npu_startup_rate(&npu.startup,492))return REFUSE();
 #endif
     creating=1;
     npu.bootstrap=xTaskCreateStaticAffinitySet(bootstrap,"os-npu-boot",STACK,NULL,4,npu.stacks[0],&npu.tasks[0],2);
@@ -410,22 +417,24 @@ int os_npu_start(void)
     creating=0;
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
     for(unsigned i=0;i<os_npu_model_count;++i)
-        if(!npu_runtime_preload(&npu.runtime,i,i))return 0;
-    if(!os_npu_queue_prepare_edges(&npu.runtime))return 0;
+        if(!npu_runtime_preload(&npu.runtime,i,i))return REFUSE();
+    if(!os_npu_queue_prepare_edges(&npu.runtime))return REFUSE();
 #endif
 #ifndef SUNSTONE_A733_OS_NPU_QUEUE
     TaskHandle_t clients[]={npu.client};
 #endif
     uint64_t now;
-    if(!npu.bootstrap||!npu.client||!a733_npu_startup_bind_task(&npu.startup,npu.bootstrap)||
+    if(!npu.bootstrap||!npu.client)return REFUSE();
+    if(!a733_npu_startup_bind_task(&npu.startup,npu.bootstrap))return REFUSE();
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
-       !npu_runtime_bind_resident(&npu.runtime,&npu.startup,npu.client,4,2)||
+    if(!npu_runtime_bind_resident(&npu.runtime,&npu.startup,npu.client,4,2))return REFUSE();
 #else
-       !npu_runtime_bind(&npu.runtime,&npu.startup,clients,4,2)||
+    if(!npu_runtime_bind(&npu.runtime,&npu.startup,clients,4,2))return REFUSE();
 #endif
-       !os_npu_irq_bind(&npu.runtime)||
-       (os_npu_diagnostic_bind&&!os_npu_diagnostic_bind(&npu.runtime))||
-       npu.end>(UINT64_MAX>>3)-5000000||!clock_now(&now)||now>=npu.end)return 0;
+    if(!os_npu_irq_bind(&npu.runtime))return REFUSE();
+    if(os_npu_diagnostic_bind&&!os_npu_diagnostic_bind(&npu.runtime))return REFUSE();
+    if(npu.end>(UINT64_MAX>>3)-5000000||!clock_now(&now))return REFUSE();
+    if(now>=npu.end)return REFUSE();
     npu.initial_deadline=now+1000000;
     atomic_init(&npu.gate,npu.initial_deadline<<3);npu.started=1;return 1;
 }

@@ -9,6 +9,7 @@
 #include "application.h"
 #include "boot.h"
 #include "a733_smp_placement.h"
+#include "sunstone_crumb.h"
 #include <string.h>
 #ifdef OS_RECOGNITION_CORE
 /* The GPU build's recognition core comes from cmake/a733-os.cmake. */
@@ -26,10 +27,16 @@ int board_application_pins(struct a733_pin_handoff *pins)
     for(unsigned i=0;i<os_application_count;++i)if(os_applications[i].pins(pins)!=1)return 0;
     return 1;
 }
+/* A refusal records its hook before main.c panics: the value is the hook's
+ * list index (0xffff for the application preparation) and the caller is the
+ * hook's own address, which the first-failure decoder resolves to its name. */
 int board_application_start(void)
 {
-    if(!os_application_prepare())return 0;
-    for(unsigned i=0;i<os_application_count;++i)if(os_applications[i].start()!=1)return 0;
+    if(!os_application_prepare()){
+        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD),0xffff,(const void *)os_application_prepare);return 0;}
+    for(unsigned i=0;i<os_application_count;++i)
+        if(os_applications[i].start()!=1){
+            board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD),i,(const void *)os_applications[i].start);return 0;}
     return 1;
 }
 const struct os_session *os_session_admitted(void)
