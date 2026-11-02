@@ -12,6 +12,11 @@ ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('cached_scheduler',ROOT/'checks/a733-smp-cached.py')
 model=importlib.util.module_from_spec(spec);spec.loader.exec_module(model)
 
+spec=importlib.util.spec_from_file_location('hw_facts',ROOT/'tools/hw_facts.py')
+hw_facts=importlib.util.module_from_spec(spec);spec.loader.exec_module(hw_facts)
+# The GIC priority views and the ICC_PMR_EL1 read-back come from docs/hardware/a733-facts.json.
+GIC=hw_facts.GicModel()
+
 
 class Scheduler(model.Machine):
     def __init__(self,image,refuse_secure_mask=False):
@@ -44,7 +49,7 @@ class Scheduler(model.Machine):
     def priority(self,core,interrupt):
         address=self.rdist[core]+0x10400+interrupt
         raw=(self.mmio.get(address&~3,0)>>(8*(address&3)))&255
-        return (raw<<1)&255
+        return GIC.ns_read(raw)
 
     def memory(self,u,access,address,size,value,core):
         write=access==UC_MEM_WRITE
@@ -59,10 +64,10 @@ class Scheduler(model.Machine):
                     if write:
                         v=(value>>(8*byte))&255
                         if not nonsecure or group1:
-                            raw=(((v>>1)|128) if nonsecure else v)&0xf8
+                            raw=GIC.ns_write(v) if nonsecure else GIC.secure_write(v)
                             self.mmio[word]=(original&~(255<<shift))|(raw<<shift)
                         if nonsecure and v==255:self.priority_probed=True
-                    else:result|=(((raw<<1)&255 if group1 else 0) if nonsecure else raw)<<(8*byte)
+                    else:result|=((GIC.priority_ns_read(irq,raw) if group1 else 0) if nonsecure else raw)<<(8*byte)
                 if not write:u.mem_write(address,result.to_bytes(size,'little'))
                 return
         if write and address in (r+0x10080 for r in self.rdist):value&=0xfff0ffff
@@ -91,27 +96,27 @@ class Scheduler(model.Machine):
             value=self.reg(core,args[1]);ns=self.nonsecure(core) and bool(r['scr_el3']&4)
             if ns:
                 # IHI0069G4.8.1: Secure mask below0x80 makes NS writes ignored.
-                if self.secure_pmr[core]&128:self.secure_pmr[core]=((value>>1)|128)&0xf8
+                self.secure_pmr[core]=GIC.pmr_ns_write(self.secure_pmr[core],value)
             elif not self.refuse_secure_mask:
-                self.secure_pmr[core]=value&0xf8
+                self.secure_pmr[core]=GIC.secure_write(value)
                 if value==255:self.secure_mask_initialized.add(core)
-            r['icc_pmr_el1']=(self.secure_pmr[core]<<1)&255 if self.secure_pmr[core]&128 else 0
+            r['icc_pmr_el1']=GIC.pmr_ns_read(self.secure_pmr[core])
             u.reg_write(UC_ARM64_REG_PC,address+4);return
         if op=='mrs' and args[1]=='icc_pmr_el1':
             mask=self.secure_pmr[core]
             ns=self.nonsecure(core) and bool(r['scr_el3']&4)
-            value=((mask<<1)&255 if mask&128 else 0) if ns else mask
+            value=GIC.pmr_ns_read(mask) if ns else mask
             self.put(core,args[0],value);u.reg_write(UC_ARM64_REG_PC,address+4);return
         if op=='mrs' and args[1]=='icc_rpr_el1':
-            irq=self.irq_active[core];value=255 if irq is None else self.priority(core,irq)
+            irq=self.irq_active[core];value=GIC.rpr_idle() if irq is None else self.priority(core,irq)
             self.put(core,args[0],value);u.reg_write(UC_ARM64_REG_PC,address+4);return
         if op=='mrs' and args[1]=='icc_iar1_el1' and self.pending[core]:
             # This image uses only equally prioritized SGI0 and timerPPI30.
             for irq in self.pending[core]:
-                assert irq in (0,30) and self.priority(core,irq)==0xe0
+                assert irq in (0,30) and self.priority(core,irq)==GIC.ns_read(0xf0)
                 assert self.mmio[self.rdist[core]+0x10100]&(1<<irq)
                 assert self.mmio[self.rdist[core]+0x10080]&(1<<irq)
-            assert r['icc_pmr_el1']>0xe0
+            assert r['icc_pmr_el1']>GIC.ns_read(0xf0)
         return super().instruction(u,address,size,core)
 
     def execute(self):

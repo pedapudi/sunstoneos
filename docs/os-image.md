@@ -187,3 +187,9 @@ with [the compute queue](designs/gpu-compute-queue.md) remains separate work.
 
 No new board qualification is claimed. Board recovery, accessories and
 performance requirements remain in the hardware matrix and handoff.
+
+## Hardware facts
+
+The [A733 hardware facts](hardware/a733-facts.md) record what the hardware presents (GIC views, CPU
+identity, NPU admission words) with the view, core and source register of each value. The `hw-facts`
+application measures them in one board run, and host models and checks read the file.
