@@ -369,21 +369,25 @@ static int dr_poll(void *c)
     d->r = a733_mmc_platform_poll(&platform);
     return d->r != A733_MMC_PENDING && d->r != A733_MMC_BUSY;
 }
-static enum sunxi_mmc_wait dr_hint(void *c, uint32_t *us) { (void)c; return sunxi_mmc_wait_hint(&platform.core, us); }
+static volatile enum sunxi_mmc_wait last_hint;
+static _Atomic uint64_t recheck_count;
+static enum sunxi_mmc_wait dr_hint(void *c, uint32_t *us) { (void)c; return last_hint = sunxi_mmc_wait_hint(&platform.core, us); }
 static uint64_t dr_now(void *c) { (void)c; return now_us(); }
 static _Atomic uint64_t sleep_us, sleep_count;
 static void dr_sleep(void *c, uint64_t until)
 {
     (void)c;
     uint64_t from = now_us();
-    (void)sunstone_deadline_wait_until(until);
+    int woke = sunstone_deadline_wait_until(until);
+    if (last_hint == SUNXI_MMC_WAIT_IRQ && woke != SUNSTONE_DEADLINE_NOTIFIED) atomic_fetch_add(&recheck_count, 1);   /* the timer ended an interrupt wait */
     atomic_fetch_add(&sleep_us, now_us() - from);
     atomic_fetch_add(&sleep_count, 1);
 }
 static uint64_t hw_owner_sleep_us(void) { return atomic_load(&sleep_us); }
 static uint64_t hw_owner_wakes(void) { return atomic_load(&sleep_count); }
-static void hw_irq_counts(uint32_t entries[8], uint32_t *stray)
+static void hw_irq_counts(uint32_t entries[8], uint32_t *stray, uint32_t *recheck)
 {
+    *recheck = (uint32_t)atomic_load(&recheck_count);
     for (unsigned c = 0; c < 8; ++c) entries[c] = atomic_load(&irq_entry_count[c]);
     *stray = atomic_load(&irq_stray_count);
 }

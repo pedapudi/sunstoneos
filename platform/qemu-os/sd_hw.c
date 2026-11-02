@@ -88,7 +88,7 @@ static int set_write_region(uint8_t *base, size_t bytes)
 static int wait_async(void) { return 1; }
 static uint64_t owner_sleep_us(void) { return 0; }
 static uint64_t owner_wakes(void) { return 0; }
-static void irq_counts(uint32_t entries[8], uint32_t *stray) { for (unsigned c = 0; c < 8; ++c) entries[c] = 0; *stray = 0; }
+static void irq_counts(uint32_t entries[8], uint32_t *stray, uint32_t *recheck) { for (unsigned c = 0; c < 8; ++c) entries[c] = 0; *stray = 0; *recheck = 0; }
 void os_sd_close_owner(void) {}
 
 static struct os_large_device device;

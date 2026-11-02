@@ -54,6 +54,10 @@ static int dev_read(void *c, uint64_t s, uint32_t n, uint8_t *buf)
         return 1;
     }
     if (s + n > dev_sectors) { fprintf(stderr, "read outside device\n"); exit(3); }
+    if (getenv("READ_LOG")) {                                    /* every read call: first sector and count, for the command-count check */
+        FILE *log = fopen(getenv("READ_LOG"), "a");
+        if (log) { fprintf(log, "%llu %u\n", (unsigned long long)s, n); fclose(log); }
+    }
     return pread(image_fd, buf, (size_t)n * 512, (off_t)s * 512) == (ssize_t)n * 512;
 }
 static int allowed(uint64_t s)
@@ -83,7 +87,7 @@ int ss_storage_device(struct fwr_device *d)
 }
 
 static uint8_t bounds_blob[64], mode_blob[4096] __attribute__((aligned(64)));
-static uint8_t flush_buffer[1 << 20] __attribute__((aligned(64)));
+static uint8_t flush_buffer[16 << 20] __attribute__((aligned(64)));
 
 int main(int argc, char **argv)
 {

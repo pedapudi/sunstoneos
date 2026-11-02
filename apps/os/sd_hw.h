@@ -30,7 +30,9 @@ struct os_sd_hw {
     /* Time the owner has spent asleep in the interrupt and timer waits of a transfer, and how many times it woke there. */
     uint64_t (*owner_sleep_us)(void);
     uint64_t (*owner_wakes)(void);
-    void (*irq_counts)(uint32_t entries[8], uint32_t *stray);   /* handler entries per core, and those taken while the owner was not ready */
+    /* Handler entries per core, those taken while the owner was not ready, and the waits for the interrupt that ended on the recheck timer
+     * instead (an anomaly: the interrupt did not wake the owner). */
+    void (*irq_counts)(uint32_t entries[8], uint32_t *stray, uint32_t *recheck);
     /* Restore the clock, the pins and the rail leases; the card is not used afterwards. */
     void (*close)(void);
 };

@@ -225,7 +225,7 @@ static void collect(void)
     for (unsigned i = 0; i < FWR_HIST; ++i) r.histogram[i] = w->size_histogram[i];
     struct ss_storage_owner_stats s;
     if (ss_storage_owner_stats(&s)) {
-        r.owner_elapsed_us = s.elapsed_us; r.owner_asleep_us = s.asleep_us; r.owner_wakes = s.wakes;
+        r.owner_elapsed_us = s.elapsed_us; r.owner_asleep_us = s.asleep_us; r.owner_wakes = s.wakes | (uint64_t)s.irq_recheck << 32;   /* high half: interrupt waits that ended on the recheck timer */
         r.irq_cores = s.irq_cores | (uint64_t)s.irq_stray << 32; r.owner_cores = s.owner_cores; r.caller_cores = s.caller_cores;
         for (unsigned c = 0; c < 8; ++c) r.irq_counts |= (uint64_t)(s.irq_entries[c] > 255 ? 255 : s.irq_entries[c]) << (8 * c);
     }

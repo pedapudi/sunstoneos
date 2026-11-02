@@ -1192,10 +1192,21 @@ int fwr_read(struct fwr_volume *v, const char *path, uint64_t offset, void *out,
     uint64_t pos = offset;
     while (n) {
         uint32_t in = (uint32_t)(pos % v->csize);
-        size_t chunk = v->csize - in;
-        if (chunk > n) chunk = n;
-        uint64_t sector = cluster_sector(v, c) + in / S;
         uint32_t lead = in % S;
+        /* The run of contiguous clusters from c that this request reaches: one card read for all of them (the device splits it into pieces
+         * as for writes), not one per cluster. An unaligned start or length reads through the cluster buffer, one cluster at a time. */
+        uint64_t avail = v->csize - in;
+        uint32_t last = c;
+        if (!lead && n % S == 0) {
+            while (avail < n) {
+                uint32_t next;
+                if ((r = fat_get(v, last, &next))) return r;
+                if (next != last + 1) break;
+                last = next; avail += v->csize;
+            }
+        }
+        size_t chunk = avail > n ? n : (size_t)avail;
+        uint64_t sector = cluster_sector(v, c) + in / S;
         uint32_t sectors = (lead + (uint32_t)chunk + S - 1) / S;
         if (lead || chunk % S) {
             /* Unaligned edge: read through the cluster buffer. */
@@ -1205,7 +1216,7 @@ int fwr_read(struct fwr_volume *v, const char *path, uint64_t offset, void *out,
         dst += chunk; pos += chunk; n -= chunk; *got += chunk;
         if (n && pos % v->csize == 0) {
             uint32_t next;
-            if ((r = fat_get(v, c, &next))) return r;
+            if ((r = fat_get(v, last, &next))) return r;
             if (next >= EOC_MIN || next < 2 || next == BAD) return FWR_CORRUPT;
             c = next;
         }

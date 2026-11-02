@@ -87,7 +87,7 @@ static void timed_progress(void)
     m.reg[SUNXI_SMHC_RINT / 4] |= SUNXI_SMHC_INT_DATA_DONE | SUNXI_SMHC_INT_AUTO_STOP_DONE;
     m.busy_until = m.now + m.busy_us;
 }
-static uint32_t irq_line(void) { return m.reg[SUNXI_SMHC_RINT / 4] & m.reg[SUNXI_SMHC_IMASK / 4]; }
+static uint32_t irq_line(void) { return (m.reg[0] & SUNXI_SMHC_GCTRL_INT_ENABLE) ? m.reg[SUNXI_SMHC_RINT / 4] & m.reg[SUNXI_SMHC_IMASK / 4] : 0; }   /* GCTRL bit 4 gates the line */
 /* The handler, in the board kernel's order (sunxi_mmc_irq): read the masked status, accumulate, write the raw bits back. */
 static void isr(void)
 {

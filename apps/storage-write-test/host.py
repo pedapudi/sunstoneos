@@ -33,6 +33,8 @@ def decode(payload):
         raise ValueError('storage-write result has the wrong tag.')
     out['irq_stray'] = out['irq_cores'] >> 32
     out['irq_cores'] &= 0xffffffff
+    out['owner_recheck_wakes'] = out['owner_wakes'] >> 32
+    out['owner_wakes'] &= 0xffffffff
     out['irq_entries'] = [out['irq_counts'] >> (8 * c) & 255 for c in range(8)]
     sec = lambda ticks: ticks / COUNTER_HZ
     out['cpu_mhz'] = out['cpu_hz'] / 1e6
