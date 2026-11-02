@@ -324,6 +324,31 @@ operating points, not from probe images.
 4. **Runner and backup/restore from the record**, with the `preserve` attribute and the time estimate.
 5. **NPU pool and GPU buffers from the ledger**, using the hardware bounds table.
 6. **Application image area**: renamed application sections, `layout.ld`, boot-table text mapping at EL1 and EL0, stage-2 loader extents.
+6b. **Manifest regions anywhere the ledger has room** (part of step 6, because both change the EL3 tables and the
+    normal-return terminal). Today the manifest tool places a WORK, OUTPUT or INPUT region only in the 48 MiB window or in
+    the slot 1 area (`AREAS` in `tools/sunstone-manifest.py`, `0x48000000..0x79000000`); that is a fixed limit and it
+    leaves the runner's reach above 2 GiB unproven. The change, in order:
+    1. *Planner.* `assign` continues first-fit into the upper memory (`0x80000000` up to the installed memory) when the window
+       and the slot 1 area are full, and accepts a pinned address there; every address stays 2 MiB aligned from the floor
+       up. The large records and the heap are not placed at build time: at admission they take the ledger's remaining gaps,
+       so one ledger serves the manifest regions (held first, by address), the NPU pool, the large records and the heap. A
+       host check places regions across all three areas and shows that none overlaps, that the large records and the heap
+       find room around them, and that a manifest that needs more than the installed memory is refused with the sizes.
+    2. *Identity and admission.* `apps/os/identity.c` and `apps/os/large.c` stop assuming that a placed region lies below
+       `0x80000000` (`APP_REGION_BASE`): the held-by-address loop takes every region from the floor up. `checks/app-region.c`
+       gains regions in slots 2 and above, mapped as 1 GiB blocks where a slot is one region's and as 2 MiB blocks where it is shared.
+    3. *EL3 tables and the terminal.* The terminal cleans every WORK and OUTPUT region through the EL3 tables and parks on
+       a block that the tables do not map as normal write-back memory. The EL3 level-2 table covers `0x40000000..0x80000000`
+       only, so a region at `0x88000000` would index past it. The platform gives the EL3 level-1 table a 1 GiB block entry
+       for each gigabyte that holds such a region and only where the decode check passed (the same condition as the
+       EL1 entries), the terminal reads the level-1 entry for an address at or above `0x80000000` and applies the same
+       test as for a level-2 block, and `checks/os-cpu-return.py` gains cases for a region in slot 2, a region whose gigabyte
+       has no entry (parks) and one whose entry has the wrong attributes (parks).
+    4. *Runner.* A preserving run keeps its 4 GiB reach: a region at or above `0x100000000` is refused by name, so the
+       reach is a property of FEL and not of the planner. `checks/runner-preservation.py` covers a placed region at `0x88000000`.
+    5. *Board.* One preserving run of `slot1-test` with an 8 MiB OUTPUT and a 16 MiB WORK pinned at `0x88000000`: the restored
+       bytes hash equal to the backup. This is the run the table of checks lists for step 4 and could not make before.
+
 7. **Run-time requests**: SDK call, ledger pages, table-page extents and the release protocol.
 
 Steps 3 to 5 each depend on step 2, and step 6 on step 3. Step 7 depends on
