@@ -408,6 +408,17 @@ accepts a pool in the slot 1 area (block aligned, 10 to 768 MiB). Nothing about
 the table builder, the loader, the graph formats or the buffers' layout inside
 the pool changes, and an image without the option is unchanged.
 
+Size and place are not choices. `tools/npu-pool-plan.py` takes the slot count
+and the bounds for graphs registered later from the manifest's npu section (as
+`apps/os/npu.c` does at admission), runs the production runtime's own reservation
+for the linked models (`checks/npu-pool-size.py`, which builds the runtime for the
+host), rounds up to whole 2 MiB blocks (at least 10 MiB), and places the pool at
+the top of the slot 1 area, refusing a layout in which a region the manifest tool
+placed there would overlap it. It prints the two cmake arguments. For the default
+`npu-graphs` manifest and the `models-a1.json` list it gives 10 MiB at
+`0x78600000`. `checks/npu-pool-plan.py` covers the rules with a stand-in for the
+measurement and fails under five mutations of the tool.
+
 Evidence: `checks/npu-pool-isolation.py` builds the tables with the production
 memory layer at the legacy pool, a declared-size pool, two pools in slot 1 and
 one above 4 GiB, walks them with an independent walker over the whole 32-bit
