@@ -7,6 +7,6 @@
     {"name": "mode", "kind": "input", "access": ["read"], "bytes": 4096},
     {"name": "flush", "kind": "work", "access": ["read", "write"], "bytes": 16777216}
   ],
-  "deadlines": {"run_us": 52000000, "return_reserve_us": 5000000, "progress_window_us": 2000000},
+  "deadlines": {"run_us": 55000000, "return_reserve_us": 5000000, "progress_window_us": 2000000},
   "output_limit": 512
 }

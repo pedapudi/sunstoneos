@@ -177,15 +177,28 @@ static int mount(uint64_t base, uint64_t sectors)
     return fwr_mount(&volume, &c);
 }
 
-/* Compare the file with the stream from `from` for `bytes`; counts mismatching bytes. */
+static uint8_t *scratch;                          /* the flush WORK region, free in the read modes */
+static size_t scratch_bytes;
+/* Compare the file with the stream from the start for `bytes`; counts mismatching bytes. Each fwr_read resolves the path, scans the directory and
+ * walks the cluster chain from the start, so the read is made in large steps (half the work region, at most 4 MiB): at 64 KiB the first full read
+ * of 368 MiB did not finish in the application's 52 s. */
 static void verify(uint64_t bytes)
 {
     uint64_t t0 = ss_counter_ticks();
-    for (uint64_t off = 0; off < bytes; off += CHUNK) {
-        size_t n = bytes - off < CHUNK ? (size_t)(bytes - off) : CHUNK, got = 0;
-        if (fwr_read(&volume, PATH, off, check, n, &got) || got != n) { r.status = E_READ; r.detail = off; break; }
-        stream_fill(chunk, off, n);
-        for (size_t i = 0; i < n; ++i) if (check[i] != chunk[i]) { if (!r.mismatches++) r.first_mismatch = off + i; }
+    size_t step = CHUNK;
+    uint8_t *rd = check, *gen = chunk;
+    if (scratch && scratch_bytes >= 2 * CHUNK) {
+        step = (scratch_bytes / 2) & ~(size_t)(CHUNK - 1);
+        if (step > 4 * MIB) step = (size_t)(4 * MIB);
+        rd = scratch; gen = scratch + step;
+    }
+    for (uint64_t off = 0; off < bytes; off += step) {
+        size_t n = bytes - off < step ? (size_t)(bytes - off) : step, got = 0;
+        if (fwr_read(&volume, PATH, off, rd, n, &got) || got != n) { r.status = E_READ; r.detail = off; break; }
+        ss_progress();
+        stream_fill(gen, off, n);
+        if (memcmp(rd, gen, n))
+            for (size_t i = 0; i < n; ++i) if (rd[i] != gen[i]) { if (!r.mismatches++) r.first_mismatch = off + i; }
         ss_progress();
     }
     r.read_ticks = ss_counter_ticks() - t0;
@@ -246,6 +259,7 @@ void storage_write_main(const struct ss_grant *grant)
     /* The read-back modes (2, 3, 6) open the card for reading and verify no bounds: the backup sectors the blob hashes change with every session. */
     const int read_only = mode_id == 2 || mode_id == 3 || mode_id == 6;
     if (!(read_only ? ss_storage_open_read() : ss_storage_enable(bounds->base, bounds->bytes))) { r.status = E_BOUNDS; (void)ss_storage_diagnostic(r.diag); finish_report(); }
+    scratch = flush->base; scratch_bytes = flush->bytes;
     if (!ss_storage_region(flush->base, flush->bytes)) { r.status = E_REGION; (void)ss_storage_diagnostic(r.diag); finish_report(); }
     if (!ss_storage_device(&device)) { r.status = E_DEVICE; (void)ss_storage_diagnostic(r.diag); finish_report(); }
     r.au_sectors = device.au_sectors;
