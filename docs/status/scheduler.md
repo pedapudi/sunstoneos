@@ -21,9 +21,10 @@ timing have no physical qualification.
 
 ## Open work
 
-1. Bound the interrupt-masked time of the owner scheduler: the CPU control returns with exact coverage
-   and wake counts, but the 25 us budget fails on cores 0, 2 and 3 (`ssKernelCommand` control publication
-   and `vTaskEnterCritical`). Reproduce each maximum on the host, shorten it, then rerun the control.
+1. Bound the interrupt-masked time of the owner scheduler to 25 us. The CPU control fails it on cores 0, 2 and 3
+   (`ssKernelCommand`, `ssKernelService`, `vTaskEnterCritical`). The host spans execute at most 17 atomic writes
+   and 67 loads, so the board time is cache-miss time. Run the corrected image, then capture instructions and
+   L1D/L2D refills per masked span with the PMU to find the lines that still miss.
 2. Qualify the fork with the exact mimus reference and board soak before enabling
    it by default. Current passing evidence is host-only.
 3. Add idle pull in series D: controlled tests still strand ready work on a busy

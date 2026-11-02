@@ -88,9 +88,9 @@ def main():
             deadline = 128-i if mode == 0 else i if mode == 1 else 5
             assert sample('ss_deadline_insert', heap, entry, entry, i, deadline) == 1
         for i in range(128):
-            assert sample('ss_deadline_snapshot', heap+1040, result) in (1, 2)
+            assert sample('ss_deadline_snapshot', heap+1088, result) in (1, 2)
             assert sample('ss_deadline_pop_expired', heap, 2**64-1, result) == 1
-        assert sample('ss_deadline_snapshot', heap+1040, result) == 1
+        assert sample('ss_deadline_snapshot', heap+1088, result) == 1
     # Cancellation walks each possible root/middle/leaf position in dense heaps.
     for position in range(128):
         call('ss_deadline_init', heap)
