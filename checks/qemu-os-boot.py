@@ -896,6 +896,12 @@ def main():
     c.failed_with('THERMAL')
     word = int(c.failure['value'], 16)
     c.require(word >> 29 == 1 and word >> 2 & 1, 'the stop record %#x does not name the failed clock provider' % word)
+    # A failed open leaves its stage as the first failure record, so a later thermal or watchdog stop cannot hide it.
+    c = run_case('storage-write-open-fails', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms, fault=13), [blob, mode4], '512M',
+                 [(RAMDISK_ADDRESS, card_image())])
+    c.require(c.failure is not None and c.failure['group'] == 'APPLICATION', 'a failed SD open left no application failure record')
+    word = int(c.failure['value'], 16)
+    c.require(word & 0xff == 7 and (word >> 8 & 0xffff) == 0x0903, 'the record %#x does not carry stage 7 and its detail' % word)
     c = run_case('storage-write-enable-backup-changed', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, mode4], '512M',
                  [(RAMDISK_ADDRESS, card_image(corrupt=32770))])
     c.clean()

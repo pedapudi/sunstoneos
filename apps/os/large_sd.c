@@ -120,11 +120,19 @@ static int dma_sync(void *cookie, uint8_t *b, size_t n, unsigned phase)
 }
 
 /* Where an open or an enable stopped, for the application's report (ss_storage_diagnostic): [0] the stage, [1] a detail, [2] the first
- * failed bounds read (sector + 1), [3] the bounds reads made. Stages: 1 declared or already open, 2 PMIC service, 3 descriptor memory,
+ * failed bounds read (sector + 1), [3] the bounds reads made. For an open that stopped, [2] is INTID 193's state before the owner masked it
+ * (bit 0 enabled, 1 pending, 2 active; stray handler entries << 8) and [3] its state after the mask settled. Stages: 1 declared or already open, 2 PMIC service, 3 descriptor memory,
  * 4 configure, 5 native binding, 6 platform init, 7 identification (detail: result), 8 card query (result), 9 interrupt and timer
- * registration or irq arming (detail 1 platform, 2 or 3 GIC rearm), 10 owner task creation (sd_owner.c), 11 owner wait (sd_owner.c), 12 GIC mask before the baseline, 20 enable preconditions, 21 blob copy, 22 blob parse, 23 bounds verify (detail: object state), 24 write binding. */
+ * registration or irq arming (detail 1 platform, 2 or 3 GIC rearm), 10 owner task creation (sd_owner.c), 11 owner wait (sd_owner.c), 12 GIC mask before the baseline, 30 to 36 a refused read, write or status request (detail: result | platform stage << 8 | platform fault << 16 | core error << 24), 20 enable preconditions, 21 blob copy, 22 blob parse, 23 bounds verify (detail: object state), 24 write binding. */
 uint64_t os_sd_diag[4];
-#define DIAG(stage, detail) (os_sd_diag[0] = (stage), os_sd_diag[1] = (uint64_t)(detail), 0)
+static inline int diag_set(uint64_t stage, uint64_t detail)
+{
+    if (!os_sd_diag[0]) { os_sd_diag[0] = stage; os_sd_diag[1] = detail; }     /* the first stop is the one that matters */
+    return 0;
+}
+#define DIAG(stage, detail) diag_set((stage), (uint64_t)(detail))
+/* A platform result with where the platform stood: result | stage << 8 | fault << 16. */
+#define PLAT(r) ((uint64_t)(r) | (uint64_t)platform.stage << 8 | (uint64_t)platform.fault << 16)
 #define DIAGP(stage, detail) ((void)DIAG(stage, detail), (const struct os_large_device *)0)
 /* The three CCU words that the provider checks, and the rates they imply (apps/sd-read-probe/main.c). */
 static int fabric(void)
@@ -178,15 +186,16 @@ static int read_blocking(uint64_t sector, uint32_t count, uint8_t *dma)
     enum a733_mmc_platform_result r;
     do { r = a733_mmc_platform_read(&platform, sector, count, dma, count * 512u, now_us() + READ_US); }
     while (r == A733_MMC_BUSY && board_live(NULL));
-    if (r != A733_MMC_PENDING) return 0;
+    if (r != A733_MMC_PENDING) return DIAG(30, PLAT(r));
 #ifdef OS_SD_WRITE
     r = drive_platform(now_us() + READ_US);
 #else
     do { r = a733_mmc_platform_poll(&platform); } while ((r == A733_MMC_PENDING || r == A733_MMC_BUSY) && board_live(NULL));
 #endif
-    if (r != A733_MMC_COMPLETE) return 0;
+    if (r != A733_MMC_COMPLETE) return DIAG(31, PLAT(r));
     do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
-    return r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.received == count * 512u;
+    if (r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.received == count * 512u) return 1;
+    return DIAG(32, PLAT(r) | (uint64_t)result.error << 24);
 }
 static int sd_read(void *unused, uint64_t sector, uint32_t count, uint8_t *out)
 {
@@ -256,14 +265,14 @@ const struct os_large_device *os_large_device(void)
         if (r == A733_MMC_READY) break;
         if ((r != A733_MMC_PENDING && r != A733_MMC_BUSY) || !board_live(NULL) || now_us() >= config.deadline_us) {
             (void)a733_mmc_platform_retain(&platform);
-            return DIAGP(7, r);
+            return DIAGP(7, PLAT(r));
         }
         vTaskDelay(1);
     }
     enum a733_mmc_platform_result r;
     do { r = a733_mmc_platform_card(&platform, &card, config.deadline_us); if (r == A733_MMC_BUSY) vTaskDelay(1); }
     while (r == A733_MMC_BUSY && board_live(NULL));
-    if (r != A733_MMC_READY || !card.sectors) { (void)a733_mmc_platform_retain(&platform); return DIAGP(8, r); }
+    if (r != A733_MMC_READY || !card.sectors) { (void)a733_mmc_platform_retain(&platform); return DIAGP(8, PLAT(r)); }
     device = (struct os_large_device){{NULL, sd_read, card.sectors}, {NULL, sd_submit, sd_poll}, 0, 0, buffers};
     return &device;
 }
@@ -320,12 +329,27 @@ void os_sd_irq(void)
     portYIELD_FROM_ISR(woken);
 }
 /* Mask INTID 193 in the distributor and wait, bounded, until it reports masked. */
+/* INTID 193 as the distributor holds it: bit 0 enabled, bit 1 pending, bit 2 active (words 6 of GICD_ISENABLER, ISPENDR, ISACTIVER). */
+static uint32_t sd_irq_state(void)
+{
+    const uintptr_t gicd = 0x03400000u;
+    uint32_t e = *(volatile uint32_t *)(gicd + 0x118), p = *(volatile uint32_t *)(gicd + 0x218), a = *(volatile uint32_t *)(gicd + 0x318);
+    return (e >> 1 & 1u) | (p >> 1 & 1u) << 1 | (a >> 1 & 1u) << 2;
+}
 static int sd_irq_mask_settled(void)
 {
+    if (!os_sd_diag[0]) os_sd_diag[2] = sd_irq_state() | (uint64_t)atomic_load_explicit(&irq_stray_count, memory_order_relaxed) << 8;     /* before the mask */
     if (!gicv3_spi_mask(&sd_gic)) return 0;
     for (unsigned tries = 0; tries < 100; ++tries) {
         int r = gicv3_spi_masked(&sd_gic);
-        if (r) return r > 0;
+        if (r) {
+            /* A level interrupt that fired while the source was unserved leaves its pending bit set; the platform wants none it cannot
+             * explain. With the source masked the owner may clear a stale one (GICD_ICPENDR, word 6); a line still asserted stays pending
+             * and the platform's baseline then refuses, which the note shows. */
+            if (r > 0 && (sd_irq_state() & 2u)) *(volatile uint32_t *)(0x03400000u + 0x298) = 2u;
+            if (!os_sd_diag[0]) os_sd_diag[3] = sd_irq_state();                                 /* after the mask has settled */
+            return r > 0;
+        }
         vTaskDelay(1);
     }
     return 0;
@@ -390,9 +414,9 @@ static int hw_allocation_unit(uint32_t *sectors)
     do { r = a733_mmc_platform_sd_status(&platform, status, now_us() + READ_US); } while (r == A733_MMC_BUSY && board_live(NULL));
     if (r != A733_MMC_PENDING) return 0;
     r = drive_platform(now_us() + READ_US);
-    if (r != A733_MMC_COMPLETE) return 0;
+    if (r != A733_MMC_COMPLETE) return DIAG(35, PLAT(r));
     do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
-    if (r != A733_MMC_READY || result.error != SUNXI_MMC_OK || result.received != SUNXI_MMC_SD_STATUS_BYTES) return 0;
+    if (r != A733_MMC_READY || result.error != SUNXI_MMC_OK || result.received != SUNXI_MMC_SD_STATUS_BYTES) return DIAG(36, PLAT(r) | (uint64_t)result.error << 24);
     *sectors = sunxi_mmc_au_sectors(status, platform.core.card.signal_1v8 != 0);
     return 1;
 }
@@ -448,9 +472,9 @@ static int hw_write_piece(uint64_t sector, uint32_t count, const uint8_t *src)
     enum a733_mmc_platform_result r;
     do { r = a733_mmc_platform_write_dma(&platform, &authority, A733_BOUNDED_WRITE_TOKEN, sector, count, dma, now_us() + WRITE_US); }
     while (r == A733_MMC_BUSY && board_live(NULL));
-    if (r != A733_MMC_PENDING) return 0;
+    if (r != A733_MMC_PENDING) return DIAG(33, PLAT(r));
     r = drive_platform(now_us() + WRITE_US);
-    if (r != A733_MMC_COMPLETE) return 0;
+    if (r != A733_MMC_COMPLETE) return DIAG(34, PLAT(r));
     do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
     return r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.confirmed_blocks == count;
 }

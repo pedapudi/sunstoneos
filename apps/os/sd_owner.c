@@ -56,6 +56,13 @@ static void finish(struct request *r, int ok)
     if (waiter) xTaskNotifyGiveIndexed(waiter, WAIT_INDEX);
 }
 
+/* The note for a refused request or a failed open (the first-failure record's value): bits 7:0 the stage, 23:8 its detail (the low 16 bits:
+ * result | platform stage << 8), 26:24 INTID 193 before the owner masked it (enabled, pending, active), 30:28 after the mask settled. */
+static uint32_t diag_word(void)
+{
+    return (uint32_t)(os_sd_diag[0] & 0xff) | (uint32_t)(os_sd_diag[1] & 0xffff) << 8 | (uint32_t)(os_sd_diag[2] & 7) << 24 |
+           (uint32_t)(os_sd_diag[3] & 7) << 28;
+}
 static void serve(struct request *r)
 {
     const struct os_large_device *d = hw->device;
@@ -72,6 +79,10 @@ static void serve(struct request *r)
     case K_REGION: ok = hw->set_write_region(r->buffer, r->bytes); break;
     case K_CLOSE: hw->close(); atomic_store(&closed, 1); ok = 1; break;
     }
+    /* A refused request leaves its stage as a note, except the enable refusals (stages 20 to 24: preconditions, parse, verify mismatch, binding), which are results the
+     * application reports. The first failure record names the SD0 binding when it came first, and a thermal or
+     * watchdog stop that follows the controller's retention cannot hide it. */
+    if (!ok && !(os_sd_diag[0] >= 20 && os_sd_diag[0] <= 24)) board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(APPLICATION), diag_word(), SUNSTONE_CRUMB_HERE());
     /* A failed async read reports -1 from poll; the proxy's poll reads the stored result. */
     finish(r, ok);
 }
@@ -87,7 +98,7 @@ static void owner_main(void *unused)
         /* A failed open leaves the controller's state uncertain and the platform register lock retained, which the thermal service
          * then reports as its own failure. Note the open's stage first so that the record names the SD0 binding (the diagnostic
          * word: stage in bits 7:0, its detail above). */
-        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(APPLICATION), (uint32_t)os_sd_diag[0] | (uint32_t)os_sd_diag[1] << 8, SUNSTONE_CRUMB_HERE());
+        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(APPLICATION), diag_word(), SUNSTONE_CRUMB_HERE());
         vTaskSuspend(NULL);
     }
     for (;;) {

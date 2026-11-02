@@ -104,6 +104,7 @@ const struct os_sd_hw *os_sd_open_owner(void)
     } else {
         vTaskDelay(pdMS_TO_TICKS(50));
     }
+    if (qemu_os_scenario()->fault == QEMU_OS_FAULT_OPEN_FAILS) { (void)DIAG(7, 0x0903); return NULL; }
     device = (struct os_large_device){{0, ram_read, CARD_SECTORS}, {0, ram_submit, ram_poll}, 0, 0, buffers};
     hw = (struct os_sd_hw){&device, CARD_SECTORS, 1, allocation_unit, enable_writes, write_piece, live, set_write_region, wait_async,
                            owner_sleep_us, owner_wakes, irq_counts, os_sd_close_owner};
