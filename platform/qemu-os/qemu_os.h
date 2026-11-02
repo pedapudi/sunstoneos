@@ -29,7 +29,9 @@ enum qemu_os_fault {
     QEMU_OS_FAULT_NONE,
     QEMU_OS_FAULT_THERMAL_CALIBRATION, /* the efuse calibration words are erased */
     QEMU_OS_FAULT_THERMAL_CLOCK,       /* the sensor clock gate is closed */
-    QEMU_OS_FAULT_PMIC_BUS             /* the PMIC bus's data line is held low */
+    QEMU_OS_FAULT_PMIC_BUS,            /* the PMIC bus's data line is held low */
+    QEMU_OS_FAULT_USB_SILENT,          /* the USB transport task starts and reports nothing */
+    QEMU_OS_FAULT_USB_STALL            /* the USB transport reports ready, then stops reporting */
 };
 /* The scenario is data, written by the check. Times are microseconds of
  * guest time after the board's start. */
@@ -51,10 +53,16 @@ struct qemu_os_scenario {
     uint64_t limit_us;
     /* Bit 0: log every S_TWI0 register access to the console; bit 1: every register access. */
     uint64_t trace;
-    uint64_t reserved[5];
+    /* A normal finish does not end the run before this guest time. */
+    uint64_t hold_us;
+    uint64_t reserved[4];
 };
 const struct qemu_os_scenario *qemu_os_scenario(void);
 void qemu_os_registers_init(void);
+/* The watchdog that the stage-2 loader arms for the resident lifetime: a four-second
+ * interval, restarted by a write of 0x14af to its control register. */
+void qemu_os_watchdog_arm(void);
+int qemu_os_watchdog_expired(void);
 uint64_t qemu_os_mmio_read(uintptr_t address, unsigned bytes);
 void qemu_os_mmio_write(uintptr_t address, unsigned bytes, uint64_t value);
 /* Called by the wrapper that the image puts around the application's main. */

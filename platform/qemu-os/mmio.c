@@ -187,6 +187,24 @@ static int twi_write(uintptr_t a, uint32_t v)
     return 1;
 }
 
+/* ---- Watchdog WDT0 ------------------------------------------------------ */
+/* Armed by the loader for the resident lifetime in its four-second mode with
+ * reset output; the control register restarts it. Nothing here resets: the
+ * board's monitor ends the run when the interval has passed. */
+static struct { unsigned armed; uint64_t expires_us; } wdt;
+void qemu_os_watchdog_arm(void)
+{
+    seed(0x02050014, 0x41); seed(0x02050010, 1); seed(0x02050018, 2);
+    wdt.expires_us = now_us() + 4000000; wdt.armed = 1;
+}
+int qemu_os_watchdog_expired(void) { return wdt.armed && now_us() >= wdt.expires_us; }
+static int wdt_write(uintptr_t a, uint32_t v)
+{
+    if (a != 0x0205000c) return 0;
+    if (v == 0x14af) wdt.expires_us = now_us() + 4000000;
+    return 1;
+}
+
 /* ---- Access ------------------------------------------------------------- */
 static int device_read(uintptr_t a, uint32_t *v)
 {
@@ -198,7 +216,7 @@ static int device_write(uintptr_t a, uint32_t v)
 {
     if (a >= THS && a < THS + 0x100) return ths_write(a, v);
     if (a >= TWI && a < TWI + 0x400) return twi_write(a, v);
-    return 0;
+    return wdt_write(a, v);
 }
 static void trace_all(const char *what, uintptr_t a, uint32_t v)
 {

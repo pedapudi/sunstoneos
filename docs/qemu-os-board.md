@@ -18,7 +18,8 @@ the board description supplies them behind the interfaces the OS already uses:
 | PMIC and its bus | `mmio.c` models the S_TWI0 controller (START, address, byte and STOP events that finish after the documented bit times, with the controller's status codes) and the AXP register file that the power provider reads and writes. The provider driver is the A733 one |
 | Power domains, clock and rail leases, pins | The A733 cores with their adapters; the adapters read inherited register state that the board seeds as boot0 leaves it |
 | Sealed session and launch contract | The stage-2 loader's part is `kernel_main` in `board.c`. It stamps the contract's times, admits it with the OS's own admission and seals the session with `apps/board/session.c`. The check builds the session with `apps/os/host.py` and loads it at the address the loader uses |
-| USB device transport | `board_usb0_task` in `board.c` reports a fixed state, enumerated and ready, a scenario-set time after its task starts, and carries no requests |
+| USB device transport | `board_usb0_task` in `board.c` reports a fixed state, enumerated and ready, a scenario-set time after its task starts, and carries no requests. A scenario fault makes it stall or stay silent |
+| Watchdog WDT0 (resident lifetime) | `mmio.c` holds the interval that the loader arms; a write of `0x14af` to the control register restarts it. The board's monitor ends the run with status 5 when the interval passes |
 | Shared peripheral interrupt controller | `gicv3_spi_*` in `board.c` hold an enable flag; the thermal interrupt never fires |
 | NPU, GPU, Type-C, USB host, radio | Not linked or absent; `absent.c` names any call that reaches them. The session selects workload 2, which starts none of their tasks |
 
@@ -41,7 +42,9 @@ entry in `mmio.c`, with no change to the OS.
 The OS reports its first board failure through the breadcrumb supervisor
 calls of the returning images (`include/sunstone_crumb.h`). The board's vector
 code prints that record as `FAILURE-RECORD group=... detail=...` and ends the
-run, which stands for the watchdog reset that follows a failure on the board.
+run 60 ms later, which stands for the watchdog reset that follows a failure on
+the board. A supervising task that stops the session in that time adds its
+stop line (`STOP status=... detail=...`).
 Other console lines mark the stages: `BOOT`, `APP-MAIN` (the first instruction
 of the application's main, with the OS's `ss_live()` and `ss_throttled()`
 values), `THROTTLE-CLEARED` and `APP-FINISHED` with the result.
@@ -49,6 +52,6 @@ values), `THROTTLE-CLEARED` and `APP-FINISHED` with the result.
 ## Limits
 
 The model checks protocol and sequencing, not electrical behavior or timing
-on silicon. The OS CPU clock owner, the resident supervisor and watchdog, the
-returning lifetime, newlib and the C++ runtime are not linked. The board
-description does not model unlisted registers: they behave as memory.
+on silicon. The OS CPU clock owner, the returning lifetime, newlib and the C++
+runtime are not linked. The board description does not model unlisted
+registers: they behave as memory.

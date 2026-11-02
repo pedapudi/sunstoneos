@@ -3,10 +3,10 @@
 **Status: implemented.**
 
 The SunstoneOS image starts on a virtual eight-core board in QEMU and runs
-through startup to the first application task. `checks/qemu-os-boot.py` builds
-and boots it in under ten seconds without a board. The resident lifetime, the
-OS CPU clock owner, the NPU and GPU services, the USB host and the radio are
-not modeled.
+through startup to the first application task, in the supervised and the
+resident lifetime. `checks/qemu-os-boot.py` builds and boots it in about eight
+seconds without a board. The OS CPU clock owner, the NPU and GPU services, the
+USB host and the radio are not modeled.
 
 **Board-qualified scope:** None. No board was used. The evidence is host-only:
 the virtual board shares the OS, board application and driver sources with the
@@ -31,6 +31,9 @@ SMP patches in `patches/`. The board description
 | Sensor lost | One sensor never answers | After five seconds the thermal owner ends the session with a thermal failure record |
 | Service start fault | Erased calibration, closed sensor clock, or a held PMIC bus line | A failure record names the thermal or PMIC owner within one second |
 | Latency CPU control | A76 composition with the latency instrumentation | The application reaches its main entry on core 6 with the OS live |
+| Resident start | Resident lifetime, four-second watchdog armed by the loader | The supervisor renews the watchdog; the session runs past the first expiry and the application finishes |
+| Resident service stall | The USB transport stops reporting 100 ms after it was ready | The supervisor stops renewing and stops with status 5, naming the transport as the first stale service |
+| Resident service silent | The USB transport never reports | The watchdog resets the board at its first expiry and the application never starts |
 
 The negative control runs the whole check against the file from the commit
 before the fix (`git show 15914f7c^:apps/os/services.c`, passed as

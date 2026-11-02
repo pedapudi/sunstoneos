@@ -100,12 +100,19 @@ class Image:
     Objects are shared between the images of one run when their source and
     flags are the same."""
 
-    def __init__(self, work, services_source=None, extra_defines=(), extra_sources=(), latency=False):
+    def __init__(self, work, services_source=None, extra_defines=(), extra_sources=(), latency=False, resident=False):
         self.work = Path(work)
         self.extra_sources = list(extra_sources)
         self.latency = latency
         self.services_source = Path(services_source) if services_source else ROOT / 'apps/os/services.c'
         self.defines = DEFINES + list(extra_defines)
+        if resident:
+            # The resident lifetime: its own contract and result magic numbers, the supervisor
+            # that renews WDT0 while every service reports (cmake/a733-os.cmake).
+            self.defines = [d for d in self.defines if 'MAGIC' not in d] + [
+                '-DA733_SMP_CONTRACT_MAGIC=0x415337334f524331ULL', '-DA733_SMP_RESULT_MAGIC=0x415337334f525231ULL',
+                '-DSUNSTONE_BOARD_RESIDENT=1']
+            self.extra_sources += ['apps/os/watchdog.c', 'platform/a733/maintenance_watchdog.c']
         self.kernel = freertos_dir()
         self.log = self.work / 'build.log'
 
@@ -283,16 +290,16 @@ def session_for(elf, input_bytes):
     return raw, contract + bytes(4096 - len(contract)), info
 
 
-SCENARIO = struct.Struct('<3Q2I5Q5i5iQQQQ5Q')
+SCENARIO = struct.Struct('<3Q2I5Q5i5iQQQQQ4Q')
 
 
 def scenario(fault=0, first_ms=(2, 2, 2, 2, 2), temperature_c=(52, 60, 48, 55, 50), slope_mc=(0,) * 5,
-             period_us=25000, usb_ready_ms=30, linger_us=0, limit_ms=8000, trace=0):
+             period_us=25000, usb_ready_ms=30, linger_us=0, limit_ms=8000, trace=0, hold_ms=0):
     """The board's behavior in one run; see platform/qemu-os/qemu_os.h."""
     first = [INFINITY if t is None else t * 1000 for t in first_ms]
     raw = SCENARIO.pack(0x514f535343454e31, 1, SCENARIO.size, fault, period_us, *first,
                         *[int(t * 1000) for t in temperature_c], *slope_mc,
-                        usb_ready_ms * 1000, linger_us, limit_ms * 1000, trace, *([0] * 5))
+                        usb_ready_ms * 1000, linger_us, limit_ms * 1000, trace, hold_ms * 1000, *([0] * 4))
     return raw
 
 
@@ -429,12 +436,20 @@ def main():
                                          ROOT / 'apps/latency/manifest.json')
         return image.build(application)
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    def build_resident():
+        image = Image(out / 'build-resident', services_source=args.services_source, resident=True)
+        application = image.application('hello-compute', ['apps/hello-compute/main.c'],
+                                         ROOT / 'apps/hello-compute/manifest.json')
+        return image.build(application)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
         os_elf = pool.submit(build_hello, 'build-os', args.services_source)
         (out / 'build-reverted').mkdir()
         control_elf = pool.submit(build_hello, 'build-reverted-services', reverted_services(out / 'build-reverted'))
         latency_elf = pool.submit(build_latency)
-        os_elf, control_elf, latency_elf = os_elf.result(), control_elf.result(), latency_elf.result()
+        resident_elf = pool.submit(build_resident)
+        os_elf, control_elf, latency_elf, resident_elf = (os_elf.result(), control_elf.result(),
+                                                          latency_elf.result(), resident_elf.result())
     built = time.monotonic() - started
 
     def run_case(name, elf, scenario_bytes, input_bytes=data):
@@ -466,12 +481,13 @@ def main():
     c.failed_with('APPLICATION', 0x757)
 
     # 3. Sensors not yet read when the application starts: the OS holds the throttle, the
-    # application starts and finishes, and the throttle clears when the last sensor answers.
-    c = run_case('sensors-not-yet-read', os_elf, scenario(first_ms=(2, 2, 2, 900, 900), usb_ready_ms=usb_delay_ms))
+    # application starts and finishes, and the throttle clears when the last sensor answers
+    # (after the one-second freshness window, so the unread sensors also read as stale).
+    c = run_case('sensors-not-yet-read', os_elf, scenario(first_ms=(2, 2, 2, 1500, 1500), usb_ready_ms=usb_delay_ms))
     c.clean()
-    c.require(c.main is not None and c.main['throttled'] == '1' and int(c.main['t_us']) < 900000,
+    c.require(c.main is not None and c.main['throttled'] == '1' and int(c.main['t_us']) < 1_500_000,
               'the application did not start while sensors were unread')
-    c.require(c.cleared is not None and int(c.cleared['t_us']) >= 900000,
+    c.require(c.cleared is not None and int(c.cleared['t_us']) >= 1_500_000,
               'the throttle cleared before the last sensor was read')
     c.require(c.finished is not None and c.finished['status'] == '1', 'the application did not finish')
 
@@ -498,11 +514,28 @@ def main():
     c.failed_with('APPLICATION', 0xb03)
     c.require(c.main is not None and c.main['name'] == 'latency', 'latency did not reach its main entry')
 
+    # 7. The resident lifetime: a supervisor renews the four-second watchdog while every
+    # service reports. A healthy session outlives the first expiry; a transport that stalls
+    # after it was ready is named by the supervisor; a transport that never reports is
+    # reset by the watchdog at the first expiry.
+    c = run_case('resident-normal-start', resident_elf, scenario(usb_ready_ms=usb_delay_ms, hold_ms=5000))
+    c.clean()
+    c.require(c.finished is not None and bytes.fromhex(c.finished['result']) == expected
+              and int(c.finished['t_us']) >= 5_000_000, 'the resident session did not outlive the first watchdog expiry')
+    c = run_case('resident-service-stall', resident_elf, scenario(fault=5, usb_ready_ms=usb_delay_ms, hold_ms=4000))
+    c.failed_with('BOARD')
+    c.require('STOP status=5 detail=2' in c.output, 'the supervisor did not name the stalled transport')
+    c.require(1_000_000 <= int(c.failure['t_us']) < 2_500_000, 'the stall was reported at %s us' % c.failure['t_us'])
+    c = run_case('resident-service-silent', resident_elf, scenario(fault=4, usb_ready_ms=usb_delay_ms, limit_ms=9000))
+    c.require(c.status == 5 and lines(c.output, 'WATCHDOG-RESET'), 'the watchdog did not reset the board')
+    c.require(4_000_000 <= int(lines(c.output, 'WATCHDOG-RESET')[0]['t_us']) < 4_300_000, 'the reset came at the wrong time')
+    c.require(c.main is None, 'the application started with the transport silent')
+
     elapsed = time.monotonic() - started
     summary = {'passed': True, 'physical_access': False, 'seconds': round(elapsed, 2), 'build_seconds': round(built, 2),
                'qemu_sha256': hashlib.sha256(QEMU.read_bytes()).hexdigest(),
                'images': {p.parent.name: hashlib.sha256(p.read_bytes()).hexdigest()
-                          for p in (os_elf, control_elf, latency_elf)},
+                          for p in (os_elf, control_elf, latency_elf, resident_elf)},
                'cases': [{'name': r.name, 'status': r.status, 'wall_seconds': round(r.seconds, 3),
                           'failure': r.failure and r.failure['line'], 'main': r.main and r.main['line'],
                           'finished': r.finished and r.finished['line'][:80]} for r in results]}

@@ -79,6 +79,8 @@ static unsigned core_id(void) { return (unsigned)portGET_CORE_ID(); }
  * which is that reset. Printed from the supervisor call, so one core at a time
  * and with the lock the other cores use. */
 static atomic_uint failed;
+static atomic_uint_fast64_t failed_at;
+#define FAILURE_GRACE_US 60000u
 static const char *const groups[] = {"NONE", "BOARD", "THERMAL", "CPU_RETURN", "APPLICATION", "CPU_CLOCK",
     "PMIC", "GPU", "CPU_RETAINED", "CPU_PLL", "NPU"};
 void qemu_os_crumb(uint64_t stage, uint64_t value) { (void)stage; (void)value; }
@@ -95,7 +97,9 @@ void qemu_os_crumb_fail(uint64_t site, uint64_t value, uint64_t caller)
     put(&l, " core="); put_dec(&l, core_id());
     put(&l, " t_us="); put_dec(&l, now_us());
     flush(&l);
-    platform_exit_privileged(3);
+    /* The board goes on until its watchdog resets it; the monitor ends the run
+     * after a short interval, which lets a supervising task add its stop detail. */
+    atomic_store(&failed_at, now_us() + 1);
 }
 int qemu_os_failed(void) { return atomic_load(&failed); }
 
@@ -144,11 +148,15 @@ void board_usb0_task(void *unused)
     (void)unused;
     const uint64_t ready = now_us() + qemu_os_scenario()->usb_ready_us;
     while (now_us() < ready) vTaskDelay(1);
+    /* A transport that hangs after it starts: it never tells the OS it is ready and never reports. */
+    if (qemu_os_scenario()->fault == QEMU_OS_FAULT_USB_SILENT) for (;;) vTaskSuspend(NULL);
     os_application_usb_ready();
+    const uint64_t stall = now_us() + 100000;
     for (;;) {
 #ifdef SUNSTONE_BOARD_RESIDENT
         board_service_progress(BOARD_SERVICE_USB0);
 #endif
+        if (qemu_os_scenario()->fault == QEMU_OS_FAULT_USB_STALL && now_us() >= stall) for (;;) vTaskSuspend(NULL);
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
@@ -181,11 +189,17 @@ static void monitor(void *unused)
     for (;;) {
         vTaskDelay(1);
         const uint64_t t = now_us();
+        const uint64_t failure = atomic_load(&failed_at);
+        if (failure && t >= failure + FAILURE_GRACE_US) platform_exit(3);
+        if (qemu_os_watchdog_expired()) {
+            put(&l, "WATCHDOG-RESET t_us="); put_dec(&l, t); flush(&l);
+            platform_exit(5);
+        }
         if (!cleared && !ss_throttled()) {
             cleared = 1;
             put(&l, "THROTTLE-CLEARED t_us="); put_dec(&l, t); flush(&l);
         }
-        if (os_application_finished() && (cleared || t > s->limit_us)) {
+        if (os_application_finished() && (cleared || t > s->limit_us) && t >= s->hold_us) {
             put(&l, "APP-FINISHED t_us="); put_dec(&l, t);
             const struct ss_result *r = (const void *)ss_result_record;
             put(&l, " status="); put_dec(&l, r->status);
@@ -227,8 +241,16 @@ void kernel_main(void)
     const uint64_t start = a733_smp_counter();
     c.armed_at = start;
     c.startup_deadline = start + A733_BOARD_STARTUP_SECONDS * A733_SMP_COUNTER_HZ;
+#ifdef SUNSTONE_BOARD_RESIDENT
+    /* The resident loader arms the four-second watchdog; no diagnostic deadline, no FEL return. */
+    c.diagnostic_deadline = A733_SMP_NO_DEADLINE;
+    c.expires_at = start + 4 * A733_SMP_COUNTER_HZ;
+    c.watchdog_mode = 0x41; c.watchdog_configuration = 1; c.watchdog_output = 2;
+    qemu_os_watchdog_arm();
+#else
     c.diagnostic_deadline = start + A733_BOARD_SUPERVISED_SECONDS * A733_SMP_COUNTER_HZ;
     c.expires_at = c.diagnostic_deadline;
+#endif
     c.magic = A733_SMP_CONTRACT_MAGIC;
     if (!a733_smp_contract_valid(&c, a733_smp_counter())) platform_panic("launch contract refused", 1);
     if (!board_session_prepare(&c)) platform_panic("session seal refused", 2);
