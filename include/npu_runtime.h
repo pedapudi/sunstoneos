@@ -27,7 +27,10 @@
 #define NPU_RUNTIME_CACHE_CHUNK 16384u
 #define NPU_RUNTIME_ASSEMBLY_STEP 8u
 
-struct npu_runtime_model { const void *data; size_t bytes; };
+/* sha256, when set, is the digest the model's bytes must have: prepare refuses a model whose content differs. A model that
+ * is not linked into the image (delivered in a runner input region, or loaded from the card into upper memory) is given as
+ * an address, a length and this digest, and the runtime does not care which source it came from. */
+struct npu_runtime_model { const void *data; size_t bytes; const unsigned char *sha256; };
 /* One parent allocation of exactly npu_runtime_requirements bytes, 2 MiB
  * aligned in CPU and physical addresses, write-back cached and mapped at EL1.
  * The catalogue models stay outside it, live and unchanged for the runtime's

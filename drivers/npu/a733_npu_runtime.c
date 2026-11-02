@@ -166,6 +166,7 @@ static int sized(const struct npu_runtime_model *models, unsigned count, unsigne
         if (!a733_span_incl_nonempty(models[m].data, models[m].bytes) ||
             models[m].bytes > NBG_MODEL_MAX_BYTES ||
             !admit(models[m].data, models[m].bytes, digests ? digests[m] : digest, plans ? &plans[m] : &one)) return 0;
+        if (models[m].sha256 && memcmp(digests ? digests[m] : digest, models[m].sha256, 32)) return 0;
         need(plans ? &plans[m] : &one, models[m].bytes, z);
     }
     if (bounds && bounds->slot_model) {
@@ -255,7 +256,7 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     rt->model_digest = (unsigned char (*)[32])(v.cpu + entries * (sizeof(struct npu_runtime_model) +
                                                                   sizeof(struct nbg_assembly_layout)));
     if (!sized(v.models, v.count, v.slots, &v.bounds, rt->model_digest, rt->plans, &z, &p) || p.bytes != v.bytes) return fault(rt);
-    for (unsigned m = 0; m < v.count; ++m) rt->catalogue[m] = v.models[m];
+    for (unsigned m = 0; m < v.count; ++m) rt->catalogue[m] = (struct npu_runtime_model){v.models[m].data, v.models[m].bytes, NULL};
     atomic_init(&rt->count, v.count); rt->capacity = v.count + v.bounds.capacity; rt->slots = v.slots;
     rt->command_bytes = z.command; rt->constant_bytes = z.constant; rt->read_bytes = z.read; rt->write_bytes = z.write;
     rt->staging_bytes = z.staging; rt->staging = v.cpu + p.staging;

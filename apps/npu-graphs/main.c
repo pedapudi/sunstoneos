@@ -47,7 +47,7 @@ static void clock_words(uint64_t *a, uint64_t *b, uint64_t *c)
         for (unsigned i = 0; i < 7; ++i) { const char *at = strstr(line, keys[i]); if (at) v[i] = strtoul(at + strlen(keys[i]), NULL, 10); }
     *a = v[0] | v[1] << 16 | v[6] << 32 | v[4] << 40; *b = v[2] | v[3] << 16 | v[5] << 32; *c = 1;
 }
-static _Noreturn void npu_graphs_queue_main(void)
+static __attribute__((unused)) _Noreturn void npu_graphs_queue_main(void)
 {
     const struct npu_graph_vector *v = &npu_graph_vectors[0];
     struct ss_npu_queue *q = NULL;
@@ -183,6 +183,105 @@ static _Noreturn void npu_graphs_queue_main(void)
 }
 #endif
 
+#ifdef NPU_GRAPHS_SEQUENCE
+/* One chunk through a sequence of resident graphs: every graph of the model list is resident in its own slot, and each round
+ * submits one job for each of them in list order (they are independent jobs with their own inputs), as the layers of a
+ * network follow one another. Rounds repeat; the time of every round is taken, and at the end every graph's output is
+ * compared with the simulator's. Receipt: record 0 holds the graphs per round (input_bytes), the rounds (output_bytes), the
+ * ticks of all rounds (first_difference), the submit refusals (observed), the longest round (expected) and the shortest
+ * (ticks); record 1 holds the bit mask of the graphs whose output matched (input_bytes), the graph count (output_bytes)
+ * and the sum of wrong bytes (first_difference); differing_bytes[i] and then max_error[i] hold the wrong bytes of graph i. */
+#ifndef SEQUENCE_ROUNDS
+#define SEQUENCE_ROUNDS 20u
+#endif
+static _Noreturn void npu_graphs_sequence_main(void)
+{
+    const unsigned n = npu_graph_count;
+    if (n == 0 || n > SS_NPU_QUEUE_MAX_HANDLES || n > SS_NPU_QUEUE_MAX_DEPTH || n > 32) queue_fault(0, n);
+    struct ss_npu_queue *q = NULL;
+    uint64_t begin = ss_counter_ticks();
+    int opened;
+    while ((opened = ss_npu_queue_open(SS_NPU_QUEUE_MAX_DEPTH, &q)) != 1) {
+        if (opened < 0 || (ss_counter_ticks() - begin) / 24 > 6000000) queue_fault(1, (uint32_t)opened);
+        ss_progress(); vTaskDelay(1);
+    }
+    ss_npu_handle h[32];
+    for (unsigned g = 0; g < n; ++g) {
+        const struct npu_graph_vector *v = &npu_graph_vectors[g];
+        if (!ss_npu_queue_register(q, g, &h[g])) queue_fault(2, g);
+        size_t offset = 0;
+        for (unsigned i = 0;; ++i) {
+            struct ss_npu_tensor t;
+            if (!ss_npu_queue_tensor(q, h[g], SS_NPU_INPUT, i, &t)) break;
+            if (offset + t.bytes > v->input_bytes) queue_fault(3, g);
+            memcpy(t.data, v->input + offset, t.bytes);
+            if (!ss_npu_queue_dirty(q, h[g], SS_NPU_INPUT, i, 0, t.bytes)) queue_fault(4, g);
+            offset += t.bytes;
+        }
+        if (offset != v->input_bytes) queue_fault(5, g);
+    }
+    static struct ss_npu_fence fences[32];
+    clock_words(&receipt.reserved[0], &receipt.reserved[1], &receipt.reserved[2]);
+    receipt.start = ss_counter_ticks();
+    uint64_t total = 0, longest = 0, shortest = UINT64_MAX, refused = 0;
+    for (unsigned round = 0; round < SEQUENCE_ROUNDS; ++round) {
+        const uint64_t t0 = ss_counter_ticks();
+        for (unsigned g = 0; g < n; ++g) {
+            int r1;
+            while ((r1 = ss_npu_queue_submit(q, h[g], (struct ss_npu_fence){0}, QUEUE_TIMEOUT_US, &fences[g])) == 0) { ++refused; ss_progress(); }
+            if (r1 < 0) queue_fault(6, g);
+        }
+        unsigned spins = 0;
+        int done;
+        while ((done = ss_npu_queue_status(q, fences[n - 1])) != 1) {
+            if (done < 0) queue_fault(8, round);
+            if ((++spins & 0x3ff) == 0) { ss_progress(); if (ss_live() < 0) queue_fault(9, round); }
+        }
+        const uint64_t dt = ss_counter_ticks() - t0;
+        total += dt; if (dt > longest) longest = dt; if (dt < shortest) shortest = dt;
+        for (unsigned g = 0; g < n; ++g) if (ss_npu_queue_release(q, fences[g]) != 1) queue_fault(7, g);
+    }
+    clock_words(&receipt.reserved[3], &receipt.reserved[4], &receipt.reserved[5]);
+    uint32_t wrong[32] = {0};
+    uint64_t mask = 0, wrong_total = 0;
+    for (unsigned g = 0; g < n; ++g) {
+        const struct npu_graph_vector *v = &npu_graph_vectors[g];
+        begin = ss_counter_ticks();
+        int acquired;
+        while ((acquired = ss_npu_queue_acquire_handle(q, h[g])) != 1) {
+            if (acquired < 0 || (ss_counter_ticks() - begin) / 24 > 2000000) queue_fault(10, g);
+            ss_progress(); vTaskDelay(1);
+        }
+        size_t offset = 0;
+        for (unsigned i = 0;; ++i) {
+            struct ss_npu_tensor t;
+            if (!ss_npu_queue_tensor(q, h[g], SS_NPU_OUTPUT, i, &t)) break;
+            for (size_t b = 0; b < t.bytes && offset + b < v->reference_bytes; ++b) wrong[g] += ((const uint8_t *)t.data)[b] != v->reference[offset + b];
+            offset += t.bytes;
+        }
+        if (offset != v->reference_bytes) wrong[g] += 1u << 20;
+        if (!wrong[g]) mask |= UINT64_C(1) << g;
+        wrong_total += wrong[g];
+    }
+    begin = ss_counter_ticks();
+    int closed;
+    while ((closed = ss_npu_queue_close(q)) != 1) {
+        if (closed < 0 || (ss_counter_ticks() - begin) / 24 > 2000000) queue_fault(11, (uint32_t)closed);
+        ss_progress(); vTaskDelay(1);
+    }
+    struct npu_graph_record *r0 = &receipt.graph[0], *r1 = &receipt.graph[1];
+    const int ok = mask == ((UINT64_C(1) << n) - 1);
+    *r0 = (struct npu_graph_record){0, n, SEQUENCE_ROUNDS, ok ? NPU_GRAPH_MATCH : NPU_GRAPH_MISMATCH, total, refused, longest, shortest};
+    *r1 = (struct npu_graph_record){1, mask, n, ok ? NPU_GRAPH_MATCH : NPU_GRAPH_MISMATCH, wrong_total, 0, 0, total / SEQUENCE_ROUNDS};
+    for (unsigned g = 0; g < n && g < 16; ++g) receipt.differing_bytes[g] = wrong[g];
+    for (unsigned g = 16; g < n; ++g) receipt.max_error[g - 16] = wrong[g];
+    receipt.count = 2; receipt.completed = 2; receipt.matched = ok ? 2 : 0; receipt.sdk_closed = 1;
+    receipt.stop = ss_counter_ticks();
+    receipt.magic = NPU_GRAPHS_MAGIC; receipt.version = 1; receipt.bytes = sizeof(receipt);
+    ss_finish(&receipt, sizeof(receipt));
+}
+#endif
+
 void npu_graphs_main(const struct ss_grant *grant)
 {
     uint64_t begin = ss_counter_ticks();
@@ -194,7 +293,11 @@ void npu_graphs_main(const struct ss_grant *grant)
 #ifdef NPU_GRAPHS_QUEUE
     /* One graph is aliased under many names, one resident slot each, so the list is longer than the receipt. */
     if (npu_graph_count == 0) fault(STAGE_CATALOGUE, 0, npu_graph_count);
+#ifdef NPU_GRAPHS_SEQUENCE
+    npu_graphs_sequence_main();
+#else
     npu_graphs_queue_main();
+#endif
 #endif
     if (npu_graph_count == 0 || npu_graph_count > NPU_GRAPHS_MAX) fault(STAGE_CATALOGUE, 0, npu_graph_count);
     const unsigned total = npu_graph_count + npu_graph_runtime_count;

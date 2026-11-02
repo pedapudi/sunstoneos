@@ -12,6 +12,10 @@ set(npu_graph_runtime_option)
 if(NOT SUNSTONE_NPU_GRAPHS_RUNTIME_MODELS STREQUAL "")
   set(npu_graph_runtime_option --runtime-models "${SUNSTONE_NPU_GRAPHS_RUNTIME_MODELS}")
 endif()
+set(SUNSTONE_NPU_GRAPHS_EXTERNAL_VECTORS "" CACHE FILEPATH "Vectors held by a runner input region or the card, named by address and length (tools/npu-external-pack.py)")
+if(NOT SUNSTONE_NPU_GRAPHS_EXTERNAL_VECTORS STREQUAL "")
+  list(APPEND npu_graph_runtime_option --external "${SUNSTONE_NPU_GRAPHS_EXTERNAL_VECTORS}")
+endif()
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/../vectors.py"
   --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --models "${SUNSTONE_OS_NPU_MODELS}" --output "${npu_graph_vectors}"
   ${npu_graph_runtime_option}
@@ -29,7 +33,9 @@ if(SUNSTONE_NPU_GRAPHS_QUEUE)
   if(NOT SUNSTONE_A733_OS_NPU_QUEUE)
     message(FATAL_ERROR "SUNSTONE_NPU_GRAPHS_QUEUE requires SUNSTONE_A733_OS_NPU_QUEUE")
   endif()
-  set(npu_graph_manifest "${CMAKE_CURRENT_LIST_DIR}/../manifest-queue.json")
+  if(SUNSTONE_NPU_GRAPHS_MANIFEST STREQUAL "")
+    set(npu_graph_manifest "${CMAKE_CURRENT_LIST_DIR}/../manifest-queue.json")
+  endif()
 endif()
 add_sunstone_application(npu-graphs
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../main.c" "${npu_graph_vectors}"
