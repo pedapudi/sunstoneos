@@ -1411,8 +1411,12 @@ static struct ss_owner_task *ssKernelPullCandidate(struct ssKernelCPU *cpu, unsi
     }
     return NULL;
 }
-/* Moves started by idle pull since the start; diagnostics read it. */
+/* Moves started by idle pull since the start, and the times a CPU entered idle while an owner
+ * held a ready task that CPU could run; diagnostics read them. */
 static _Atomic unsigned long ssKernelIdlePulls;
+static unsigned long ssKernelIdleWaiting[configNUMBER_OF_CORES];
+unsigned long ulSunstoneIdleWaiting(unsigned core) { return core < configNUMBER_OF_CORES ? ssKernelIdleWaiting[core] : 0; }
+unsigned long ulSunstoneIdlePulls(void) { return atomic_load_explicit(&ssKernelIdlePulls, memory_order_relaxed); }
 unsigned long ss_kernel_idle_pulls(void) { return atomic_load_explicit(&ssKernelIdlePulls, memory_order_relaxed); }
 static void ssKernelPullServe(unsigned c)
 {
@@ -1466,6 +1470,7 @@ static void ssKernelPullIdle(unsigned c, bool idle)
     if (!marked) atomic_fetch_or_explicit(&ssKernelIdleMask, bit, memory_order_acq_rel);
     for (unsigned v = 0; v < configNUMBER_OF_CORES; ++v) {
         if (v == c || !(atomic_load_explicit(&ssKernelCPUs[v].pull_targets, memory_order_acquire) & bit)) continue;
+        ++ssKernelIdleWaiting[c];
         atomic_fetch_or_explicit(&ssKernelCPUs[v].pull_requests, bit, memory_order_acq_rel);
         ssKernelForce(v);
     }

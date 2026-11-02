@@ -868,6 +868,66 @@ loss, so the stream stops with the fork off by default. The fork's faster comple
 cancel to the measured +0.4%. A counter window around the timed serial code, which the
 engine would have to place inside its timed region, is the next step if the work resumes.
 
+## Robot control sets the requirement: bounded worst-case response
+
+SunstoneOS on this board will run quadruped and biped robots with several cameras
+and lidar. The main scheduler requirement is real-time response; throughput is
+second. The proposed targets, which the product owner can revise: worst-case wake
+latency of the highest-priority task at most 20 µs; jitter of a 1 kHz control period
+at most 50 µs; no deadline miss under full load. Measurements report the maximum
+and the 99.99th percentile, never means.
+
+### What bounds a task's response
+
+A task woken by an interrupt runs after four delays: the interrupt waits while the
+core has API-level interrupts masked (the longest masked span on that core), the
+interrupt entry and the wake path run, the scheduler selects the task, and the
+context switch completes. The first term is the largest and cannot be below the
+longest masked span of any kernel path that runs on that core. The measured
+spans on port 3-3, in microseconds, with the memory system saturated by eight
+cores streaming (the CPU control and the recognition):
+
+| Kernel | Longest masked span | Loaded wake, maximum | Task-lock wait, maximum |
+| --- | --- | --- | --- |
+| Global kernel, ticket locks off | 264 | 160 | 150 |
+| Global kernel, ticket locks | 266 | 126 | 98 |
+| Partitioned fork | 21.8 to 32.1 in the measured phases, 46.6 at the end of the run | 127 | 12 |
+
+With the memory system idle the same spans are 2.5 to 5.5 µs. Backend stalls on
+dependent DRAM refills are 94 to 98% of the cycles of the longest spans (about 35
+refills at 0.5 µs each), so the span is set by memory latency under load, not by
+instructions.
+
+### Prediction
+
+Neither kernel meets 20 µs while the recognition or any other bandwidth-heavy task
+runs: the dominant source of worst-case latency is the interrupt-masked span, held
+open by DRAM latency, and the fork's best case is its 22 to 32 µs measured spans plus
+the 17 to 20 µs service entry, so about 50 to 80 µs. The fork's tail is two to three
+times shorter than the global kernel's, because it has no global lock to queue behind
+and its spans do not add; the global kernel's worst case is the sum of the holders
+ahead on the ticket lock, up to about 150 µs. Without bandwidth-heavy neighbours both
+meet 20 µs, as their idle spans are 2.5 to 5.5 µs.
+
+Two levers follow, in order. First, shorten and split the spans: move work out of
+the masked section when the section waits on refills (publication of wakes, the
+control drain of the caller, slice refresh), and keep object critical sections to
+the list edit. Second, take the hardest path out from under the mask. The kernel masks
+by raising the priority mask to the API level, so an interrupt of higher priority than
+that level is never delayed by a kernel span. A control loop that runs in such an
+interrupt, with no kernel call, has a response independent of the scheduler; the
+tasks around it use the kernel. This is the usual structure of a robot controller and
+the way to reach 20 µs next to a streaming recognition.
+
+Idle pull applies to best-effort tasks only: it must never move a task whose affinity
+is one CPU, and the real-time task set stays pinned. The test workload is a pinned
+1 kHz control task of the highest priority, a sensor-fusion task woken by
+interrupts at a few hundred hertz, camera-like and lidar-like interrupt producers,
+and the recognition and an unpinned best-effort load below them, measured on port
+3-1 over at least 10^6 control periods per kernel. Tickless deadlines matter for a
+periodic wake that does not come from the tick: a control task driven by the
+tick has a 1 ms quantum and a precise-deadline wake does not.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag

@@ -22,6 +22,10 @@ qualification.
 
 ## Open work
 
+0a. Robot real-time response is the main requirement (targets in the design: wake latency 20 us, 1 kHz jitter
+   50 us, no deadline miss). Not yet measured with a robot-like workload. The measured masked spans (22 to 46 us
+   in the fork under load) already exceed the wake target, so shorten or split them and put the hardest control
+   path above the API interrupt mask.
 0. Known defect, idle pull: a task that waits behind a running task on its owner while an allowed CPU idles
    can stay unmoved. The eight-core check's stranding phase fails on the wall clock about 1 run in 50 at host
    load 30, at `scheduler-partitioned-qemu.c:386` (`withholding_completed == i + 1` after 100 ms). Forty-three
