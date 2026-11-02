@@ -21,7 +21,8 @@ static uint64_t busy[8], switches[8], idle_selected[8], scheduling_locks[8];
 static uint64_t admin_locks[8], switch_admin_locks[8];
 static unsigned in_switch[8], worker_round[8], mover_round[2], mover_mask[2], victim_runs;
 /* These symbols also identify the stopped workload in a QEMU GDB snapshot. */
-static unsigned control_round, control_phase, isolated_local, selected_idle[8];
+static volatile unsigned control_round, control_phase;
+static unsigned isolated_local, selected_idle[8];
 static unsigned withholding, blocker_release;
 static uint64_t withholding_completed, withholding_observations, withholding_ticks;
 static uint64_t local_phase_locks, local_wakes, local_completed, local_ticks, peer_idle_samples;
