@@ -928,6 +928,53 @@ and the recognition and an unpinned best-effort load below them, measured on por
 periodic wake that does not come from the tick: a control task driven by the
 tick has a 1 ms quantum and a precise-deadline wake does not.
 
+### Revised targets and verdict rule
+
+The control loop runs faster than 1 kHz and the robot runs a model beside it. The
+targets are: worst-case wake latency of the highest-priority task at most 10 µs;
+jitter of the control period at most 5% of the period (12.5 µs at 4 kHz, 5 µs at
+10 kHz); no deadline miss under the full load. The primary rate is 4 kHz and the stretch
+rate 10 kHz. The control task is swept over 1, 2, 4, 8 and 10 kHz, and the sweep
+curve (jitter 99.99th percentile and maximum against rate) is recorded for both
+kernels, with the tick and without it. The model workload runs in the same test:
+recognition time per input on the CPU workers, and NPU jobs per second where the
+image carries an NPU stream, each also alone. A kernel is chosen if it meets the
+real-time targets at its highest rate and keeps the model within 2% of its run alone;
+among kernels that do, the higher control rate wins, then the higher model throughput.
+Any masked-span change that slows the model is weighed against the 2% bound. The
+model's synchronization cost on the global kernel is 14.0 ms of 109.6 ms (dispatch
+5.4, completion 6.9, slowest wake 1.8; the fork 13.3 ms), all of it in the kernel
+paths a real-time change could lengthen.
+
+With a 5 µs jitter bound at 10 kHz and a 10 µs wake bound, any masked or
+preemption-disabled section over 5 µs is a defect. The sweep of such sections found in
+recorded runs (the longest three per core and phase, so partial; length, core and
+the call sites that open and close the span):
+
+| Kernel | Length (µs) | Site |
+| --- | --- | --- |
+| Global kernel, ticket locks | 266.3 | `prvAddNewTaskToReadyList` to `vPortRestoreTaskContext` (start-up, core 0) |
+| | 101.3, 95.3 | `ulTaskGenericNotifyTake` to the yield; `vTaskSuspendAll` to `ulTaskGenericNotifyTake` |
+| | 31.0, 26.1, 19.3 | `os_thermal_task`; `ulTaskGenericNotifyTake`; `xQueueGetMutexHolder` |
+| Global kernel, test-and-set locks | 264.8, 206.2, 191.4, 142.3, 127.7, 115.3, 107.8 | start-up; `vTaskSuspendAll`; notify take; `xTaskGenericNotify`; `vTaskDelay`; `os_thermal_task` |
+| Partitioned fork | 46.6, 41.2 | `ssKernelCommand` (end-of-run suspension; command publication with the owner's drain) |
+| | 31.8, 34.2 | `vTaskEnterCritical` to `ssKernelObjectExit` (queue operation of an OS service) |
+| | 22.6, 21.8 | `ssKernelService` (service entry at interrupt exit) |
+| | 21.6, 20.8 | `ssKernelNotify` |
+| | 15.8, 18.9 | `ssKernelObjectEnter` to `ssKernelObjectExit` |
+| | 5.3 to 5.9 | `ssKernelNotifyWait` |
+
+Every entry exceeds the 5 µs bound, on both kernels. A complete sweep needs a recorder
+that keeps every distinct (open, close) pair above 5 µs rather than the longest three,
+run on the image that carries the OS services and drivers; that recorder is the first
+tool to build. The fixes go in order of length. The fork's spans fall into three kinds:
+command publication that drains its own queue under the mask (`ssKernelCommand`),
+object critical sections that hold the list edit and the wake publication together
+(`vTaskEnterCritical` to `ssKernelObjectExit`, `ssKernelObjectEnter`), and the service
+entry. Each reduces to moving the work that waits on refills (the drain, the wake
+publication, the slice refresh) out of the masked section, or splitting it into
+bounded steps that unmask between them.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag

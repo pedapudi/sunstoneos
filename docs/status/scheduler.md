@@ -22,8 +22,8 @@ qualification.
 
 ## Open work
 
-0a. Robot real-time response is the main requirement (targets in the design: wake latency 20 us, 1 kHz jitter
-   50 us, no deadline miss). Not yet measured with a robot-like workload. The measured masked spans (22 to 46 us
+0a. Robot real-time response is the main requirement (targets in the design: wake latency 10 us, control jitter
+   5% of the period at 1 to 10 kHz, no deadline miss, model within 2% of alone). Not yet measured with a robot-like workload. The measured masked spans (22 to 46 us
    in the fork under load) already exceed the wake target, so shorten or split them and put the hardest control
    path above the API interrupt mask.
 0. Known defect, idle pull: a task that waits behind a running task on its owner while an allowed CPU idles
