@@ -8,6 +8,10 @@ An application declares regions of upper memory, up to the 11 GiB the board maps
 
 **Board-qualified scope:** A read-only probe image (boot clocks, CPU 494 MHz) took a 1 GiB region, ran EL0 routines in three address spaces and showed the isolation, the 2 MiB and 1 GiB block walk counts and one read rate that does not depend on the block size; it read the card at 21.9 MB/s per 128 KiB request and mounted its FAT32 volume. No OS image has run on a board with a large region, and no performance figure at the approved top operating points exists.
 
+## Heap from the ledger
+
+A manifest heap above 4 MiB is the application's last large region (`SS_LARGE_HEAP`): the C library's heap, zero filled by `_sbrk`, with no card file. Host evidence: `checks/app-region.c` (records, admission, refusals) and the host layout check. Emulator evidence: `checks/qemu-os-boot.py` cases `heap-from-ledger`, `heap-other-space-faults`, `heap-end-faults`, `heap-worker-shares` and `heap-too-big`. The board image is `sunstone-a733-os-heap-test` (`apps/heap-test`); it has not run on a board. Design: [application memory layout](../designs/application-memory-layout.md).
+
 ## Open work
 
 1. Run the SD0 binding in an OS image on a board. `apps/os/large_sd.c` (`os_large_device`, `os_large_device_close`, `os_large_sd_pins`) uses the OS's shared providers and the read-only SD core, builds into `sunstone-a733-os-large-region-test` and passes the read-only scan, but only the standalone probe has driven the card on a board. QEMU has no SD controller: its RAM disk covers the loader, and four scenarios cover a device that is present and fails (metadata, request start, mid-stream, absent).

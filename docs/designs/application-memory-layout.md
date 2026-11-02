@@ -1,6 +1,8 @@
 # Design: application memory sized from the build and the manifest
 
-Status: **design**. Nothing in this note is implemented or board-qualified.
+Status: **design**, with two steps of the migration implemented and host and
+emulator checked: the layout record (step 2) and the heap from the ledger
+(step 1). No part is board-qualified. See "Implemented so far" below.
 Readers are assumed to know AArch64 stage-1 translation (Arm ARM DDI 0487,
 D8), the FreeRTOS SMP port, [memory-architecture.md](memory-architecture.md)
 and [large-app-regions.md](large-app-regions.md).
@@ -33,7 +35,7 @@ manifest format.
 
 | Question | Decision |
 | --- | --- |
-| What sets an address | One planner, `tools/memory-layout.py`, reads the link sizes and the manifest and writes a layout record. The linker script, the boot-table builder, the manifest tool, the runner and the stage-2 loader read the record. No other file holds an address constant for application memory. |
+| What sets an address | One planner, `tools/memory_layout.py`, reads the link sizes and the manifest and writes a layout record. The linker script, the boot-table builder, the manifest tool, the runner and the stage-2 loader read the record. No other file holds an address constant for application memory. |
 | What stays fixed | Addresses that the boot ROM, the monitor or the card format name: boot0 and launcher, the entry at `0x41000000`, the session at `0x41f00000`, the monitor interval `0x42000000..0x42200000`, the uncached block at `0x41c00000` and the device pools. They belong to the OS and do not grow with an application. |
 | Where the application lives | In an application area that starts above the OS core and above the image's device zone, and that the planner extends upward as far as the memory goes. |
 | How the application is mapped | By its own page tables at EL0, as [large-app-regions.md](large-app-regions.md) already designs for upper memory, extended to the part of the first 4 GiB that lies above `0x48000000`. |
@@ -300,7 +302,7 @@ host, then in QEMU, then once on the board.
 
 | Change | Host check | QEMU | One board run |
 | --- | --- | --- | --- |
-| Planner and layout record | New `checks/memory-layout.py`: record equals the current constants for every current manifest and image; section sizes equal between the two links; every placement obeys the hardware bounds; overlaps and out-of-memory placements are refused | `checks/qemu-os-boot.py` boots the image linked with the record | None. The linked image is byte-identical in its load segments, which the check shows by hash |
+| Planner and layout record | New `checks/memory-layout.py`: record equals the current constants for every current manifest and image; section sizes equal between the two links; every placement obeys the hardware bounds; overlaps and out-of-memory placements are refused | `checks/qemu-os-boot.py` boots the image linked with the record | None. The linked images are byte-identical, which the check shows by hash |
 | Heap and stacks from the ledger | `checks/app-region.py` gains heap-sized and stack-sized acquisitions; newlib `sbrk` against a runtime base and limit; guard block faults | Boot with a 1 GiB heap, touch every 2 MiB, free and reallocate, fault below a stack | Large-region OS image with a 1 GiB heap: a pattern written and read back over every 2 MiB, and the first board run of the per-application tables (open items 1, 3 and 5 of the large-regions status) |
 | Manifest regions anywhere, window lifted | `checks/sunstone-app-abi.py` with regions above `0x4800_0000` and at address 0; the manifest tool, `identity.c` and `host.py` read the record | An EL0 task reads and writes each region and faults one byte outside it | A run with an INPUT of 256 MiB at `0x5000_0000` uploaded by FEL, EL0 checksum equals the host's, and a neighbouring byte faults |
 | Slot 1 per-application page | `checks/app-region.py` model walks slot 1; blocks below `0x4800_0000` are byte-identical to the kernel's; the `device-memory-capacity` golden still matches the kernel table | `checks/region-el0.py` in two spaces | Covered by the run above |
@@ -315,7 +317,7 @@ operating points, not from probe images.
 
 ## Migration in small landable steps
 
-1. **Heap from the ledger.** The heap becomes an application region obtained at admission when `heap_bytes` exceeds what is linked, the manifest's cap becomes the ledger's free space, and `runtime/newlib.c` reads the heap base and limit from a pointer. This has the most application impact for the least risk: heap size is the limit that today fails at link time, the change reuses the large-region ledger and tables that already pass host and QEMU checks, and an image that asks for no heap above the linked size behaves as before. The step also supplies the first board run of the per-application tables.
+1. **Heap from the ledger.** The heap becomes an application region obtained at admission when `heap_bytes` exceeds what is linked, the manifest's cap becomes the ledger's free space, and `runtime/newlib.c` takes the heap base and limit from the region. This has the most application impact for the least risk: heap size is the limit that today fails at link time, the change reuses the large-region ledger and tables that already pass host and QEMU checks, and an image that asks for no heap above the linked size behaves as before. The step also supplies the first board run of the per-application tables.
 2. **Planner and layout record**, producing today's constants. Host only, with no image change.
 3. **Manifest regions placed by the planner, and the 48 MiB window lifted**, with the slot 1 per-application page and the ledger's lowest slot at 1. Stack pool with guard blocks in the same step.
 4. **Runner and backup/restore from the record**, with the `preserve` attribute and the time estimate.
@@ -325,6 +327,32 @@ operating points, not from probe images.
 
 Steps 3 to 5 each depend on step 2, and step 6 on step 3. Step 7 depends on
 step 1 and on the tables of step 3.
+
+## Implemented so far
+
+**Layout record (step 2).** `tools/memory_layout.py` holds the addresses and
+bounds of the images built today. The manifest tool, the CPU-return host,
+`tools/board_images.py` and `tools/boot-slots.py` import them from it, and
+`checks/memory-layout.py` compares the record with the numbers of the earlier
+images, the linker scripts, `apps/os/identity.c`, `platform/a733/platform.c`
+and the importing tools, and with `--image` places a linked image against it.
+The linked hello, hello (CPU return) and large-region images are byte-identical
+before and after, including the generated manifest tables.
+
+**Heap from the ledger (step 1).** A manifest whose `heap_bytes` exceeds
+`heap_link_max` in the record (4 MiB, the largest heap any image links today)
+gets its heap from the ledger:
+
+- The manifest tool appends one more large record, the last, with the flag `SS_LARGE_HEAP`: read-write, no source, no digest, a size of `heap_bytes` plus the OS's 1 MiB share rounded up to 2 MiB. The manifest cap on `heap_bytes` is the 11 GiB of upper memory.
+- The image links only the OS's 1 MiB share of the heap, and the build refuses such a manifest unless the image maps upper memory (`-DSUNSTONE_A733_DRAM_DECODE_PROBE=ON`).
+- At admission the ledger takes the region, the loader skips it (a heap alone opens no card and authorizes no card pins), and `runtime_heap_attach()` makes it the C library's heap before the C library initializes. Attachment fails, and with it the admission, when the linked heap has already handed out a byte.
+- `_sbrk` zeroes each range it hands out of an attached heap, so memory that an earlier run left in DRAM never reaches the application. The cost is one pass over the memory the application takes, and none for memory it never takes.
+- Tasks that the application creates and that use the heap call `ss_large_attach`, as for any large region.
+
+A manifest with `heap_bytes` of 4 MiB or less links its heap as before. The
+OS core code differs in every image (the admission, the loader loop and
+`_sbrk` changed), so those images are not byte-identical; their generated
+tables are.
 
 ## Risks and open questions
 
