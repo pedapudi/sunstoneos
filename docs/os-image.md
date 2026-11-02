@@ -81,6 +81,39 @@ the input. `--check-only` prepares the bundle and compares the board's
 read-only clock, GPADC and SID state with the image's entry checks without a
 launch.
 
+## The session lifetime follows the manifest
+
+An image with an application derives its session lifetime
+(`A733_BOARD_SUPERVISED_SECONDS`) from that application's manifest at configure
+time ([session_lifetime.py](../tools/session_lifetime.py)):
+
+    lifetime = max(60 s, ceil(1 s startup + 4 s setup + run_us + return_reserve_us))
+
+The 1 s is `A733_BOARD_STARTUP_SECONDS`. The 4 s is an allowance for service
+start, application admission and input digests before `main`; an application
+that needs longer declares a longer `run_us`. The 60 s floor is the lifetime
+of an application that needs less, so its services and the runner's failure
+recovery keep their earlier timing. An image with no application keeps the
+header's 60 s. The OS session decoder refuses a manifest whose `run_us` ends later
+than the lifetime minus `return_reserve_us`; the derivation makes that
+impossible, and the image link check
+([sunstone-image-link.py](../checks/sunstone-image-link.py)) refuses an image
+whose watchdog marker, manifest and compiled lifetime disagree.
+
+The longest session is 3600 s (`MAX_SECONDS`). No hardware limit sits below it:
+the counter and the contract's deadline fields are 64 bits wide, the OS supervisor
+restarts the 16 s watchdog interval, and the DRAM backup, the restore and the RTC
+breadcrumbs do not depend on elapsed time. What grows with the lifetime is the
+thermal reading buffer (56 bytes every 100 ms, sized from the lifetime in
+`apps/os/thermal.c`: 2.0 MB at 3600 s) and the time the runner holds a board. The
+breadcrumb timestamp wraps after 22,906 s of power-on time
+([sunstone_crumb.h](../include/sunstone_crumb.h)). The 600 s limit in the
+[probe contract](board-probe-contract.md) applies to raw probe images only.
+
+A test that needs five minutes declares `run_us` of 300 s and gets a 310 s
+session. The storage-write test derives its write guard from the session's own
+deadline (six seconds before it, for the sync and close), not from a fixed time.
+
 ## Admission, startup and memory
 
 The linked `sunstone_manifest` section is the application's authority.

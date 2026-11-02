@@ -3,6 +3,7 @@
 #include "application.h"
 #include "../board/session.h"
 #include "a733_storage_digest.h"
+#include "a733_admission_refusal.h"
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
 #include "a733_usb_memory.h"
 #endif
@@ -49,48 +50,51 @@ static int usb_memory_extent_valid(const void *raw)
         m->bytes==A733_USB_MEMORY_BYTES&&m->alias==A733_USB_MEMORY_ALIAS_BASE);
 }
 #endif
-int os_session_decode(const void *raw,size_t bytes,struct os_session *out)
+/* The named refusal: *why is the A733_DECODE_* sub-term of the rule that refused the session (include/a733_admission_refusal.h). */
+#define REFUSE(sub) do{if(why)*why=(sub);return 0;}while(0)
+int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,unsigned *why)
 {
-    if(!raw||!out||bytes<SS_SESSION_PREFIX_BYTES+sizeof(struct ss_session_header)||bytes>SS_SESSION_MAX_BYTES)return 0;
+    if(why)*why=0;
+    if(!raw||!out||bytes<SS_SESSION_PREFIX_BYTES+sizeof(struct ss_session_header)||bytes>SS_SESSION_MAX_BYTES)REFUSE(A733_DECODE_FRAMING);
     const uint8_t *p=raw;const struct ss_session_header *h=(const void *)(p+SS_SESSION_PREFIX_BYTES);
     if(h->magic!=SS_SESSION_MAGIC||h->version!=SS_SESSION_VERSION||h->bytes!=bytes||
-       h->flags&~SS_SESSION_BIND_SID||h->devices&~SS_DEVICE_ALL)return 0;
+       h->flags&~SS_SESSION_BIND_SID||h->devices&~SS_DEVICE_ALL)REFUSE(A733_DECODE_FRAMING);
     const struct ss_manifest empty={0};
     const struct ss_manifest *m=ss_application.manifest?ss_application.manifest:&empty;
     extern const uint8_t __start_sunstone_manifest[],__stop_sunstone_manifest[];
     size_t manifest_bytes=(uintptr_t)__stop_sunstone_manifest-(uintptr_t)__start_sunstone_manifest;
     if(ss_application.manifest){
         if(manifest_bytes!=sizeof(*m)||m!=(const void *)__start_sunstone_manifest||m->magic!=SS_MANIFEST_MAGIC||
-           m->version!=SS_MANIFEST_VERSION||m->bytes!=sizeof(*m)||m->region_count>SS_REGIONS)return 0;
-    }else if(manifest_bytes)return 0;
+           m->version!=SS_MANIFEST_VERSION||m->bytes!=sizeof(*m)||m->region_count>SS_REGIONS)REFUSE(A733_DECODE_MANIFEST);
+    }else if(manifest_bytes)REFUSE(A733_DECODE_MANIFEST);
     uint8_t hash[32];storage_digest_bytes(__start_sunstone_manifest,manifest_bytes,hash);
     if(memcmp(hash,h->manifests_sha256,32)||(h->devices&m->devices_required)!=m->devices_required||
-       h->devices&~(m->devices_required|m->devices_optional))return 0;
+       h->devices&~(m->devices_required|m->devices_optional))REFUSE(A733_DECODE_MANIFEST);
 #ifdef SUNSTONE_A733_OS_USB_CLASSES
-    if(!usb_memory_extent_valid(raw))return 0;
+    if(!usb_memory_extent_valid(raw))REFUSE(A733_DECODE_EXTENT);
 #else
-    if(os_session_extent(raw,SS_EXTENT_USB_MEMORY,NULL))return 0;
+    if(os_session_extent(raw,SS_EXTENT_USB_MEMORY,NULL))REFUSE(A733_DECODE_EXTENT);
 #endif
     uint32_t capture=h->devices&(SS_DEVICE_AUDIO_I2S|SS_DEVICE_AUDIO_HEADSET);
-    if(capture&&(capture&(capture-1)))return 0;
+    if(capture&&(capture&(capture-1)))REFUSE(A733_DECODE_DEVICES);
 #ifndef SUNSTONE_A733_OS_USB_CLASSES
-    if(h->devices&(SS_DEVICE_USB_MOUSE|SS_DEVICE_USB_SERIAL|SS_DEVICE_USB_CAMERA))return 0;
-    if((h->devices&SS_DEVICE_USB_KEYBOARD)&&!(h->devices&SS_DEVICE_USB_STORAGE))return 0;
+    if(h->devices&(SS_DEVICE_USB_MOUSE|SS_DEVICE_USB_SERIAL|SS_DEVICE_USB_CAMERA))REFUSE(A733_DECODE_DEVICES);
+    if((h->devices&SS_DEVICE_USB_KEYBOARD)&&!(h->devices&SS_DEVICE_USB_STORAGE))REFUSE(A733_DECODE_DEVICES);
 #endif
     if(!(h->devices&SS_DEVICE_USB_STORAGE)){
-        if(capture||!(h->flags&SS_SESSION_BIND_SID))return 0;
+        if(capture||!(h->flags&SS_SESSION_BIND_SID))REFUSE(A733_DECODE_DEVICES);
 #ifdef SUNSTONE_A733_OS_RADIO
-        return 0;
+        REFUSE(A733_DECODE_DEVICES);
 #endif
     }
 #ifndef SUNSTONE_A733_OS_AUDIO
-    if(h->devices&SS_DEVICE_AUDIO_I2S)return 0;
+    if(h->devices&SS_DEVICE_AUDIO_I2S)REFUSE(A733_DECODE_DEVICES);
 #endif
 #ifndef SUNSTONE_A733_OS_HEADSET
-    if(h->devices&SS_DEVICE_AUDIO_HEADSET)return 0;
+    if(h->devices&SS_DEVICE_AUDIO_HEADSET)REFUSE(A733_DECODE_DEVICES);
 #endif
 #ifndef SUNSTONE_A733_OS_GPU
-    if(h->devices&SS_DEVICE_GPU)return 0;
+    if(h->devices&SS_DEVICE_GPU)REFUSE(A733_DECODE_DEVICES);
 #endif
     memset(out,0,sizeof(*out));memcpy(&out->board,raw,sizeof(out->board));
     /* The prefix retains the board startup's existing task-selection value.
@@ -102,30 +106,30 @@ int os_session_decode(const void *raw,size_t bytes,struct os_session *out)
 #ifdef SUNSTONE_A733_OS_RADIO
     workload=1;
 #endif
-    if(out->board.workload!=workload)return 0;
-    if(!extent_copy(raw,SS_EXTENT_THERMAL,&out->magic,A733_OS_SESSION_BYTES-SS_SESSION_PREFIX_BYTES))return 0;
+    if(out->board.workload!=workload)REFUSE(A733_DECODE_WORKLOAD);
+    if(!extent_copy(raw,SS_EXTENT_THERMAL,&out->magic,A733_OS_SESSION_BYTES-SS_SESSION_PREFIX_BYTES))REFUSE(A733_DECODE_EXTENT);
     /* On the wire this service record's bytes still names its original
      * complete record, so the existing service validator sees its layout. */
-    if(out->bytes!=sizeof(*out))return 0;
+    if(out->bytes!=sizeof(*out))REFUSE(A733_DECODE_EXTENT);
 #ifdef SUNSTONE_A733_OS_AUDIO
-    if(!extent_copy(raw,SS_EXTENT_AUDIO,&out->audio,sizeof(out->audio)))return 0;
-    if(capture&&(out->audio.capture_samples<m->audio.min_frames||out->audio.capture_samples>m->audio.max_frames))return 0;
+    if(!extent_copy(raw,SS_EXTENT_AUDIO,&out->audio,sizeof(out->audio)))REFUSE(A733_DECODE_EXTENT);
+    if(capture&&(out->audio.capture_samples<m->audio.min_frames||out->audio.capture_samples>m->audio.max_frames))REFUSE(A733_DECODE_AUDIO_FRAMES);
 #else
-    if(os_session_extent(raw,SS_EXTENT_AUDIO,NULL))return 0;
+    if(os_session_extent(raw,SS_EXTENT_AUDIO,NULL))REFUSE(A733_DECODE_EXTENT);
 #endif
 #ifdef SUNSTONE_A733_OS_NPU
-    if(!extent_copy(raw,SS_EXTENT_NPU,&out->npu,sizeof(out->npu)))return 0;
+    if(!extent_copy(raw,SS_EXTENT_NPU,&out->npu,sizeof(out->npu)))REFUSE(A733_DECODE_EXTENT);
 #else
-    if(os_session_extent(raw,SS_EXTENT_NPU,NULL))return 0;
+    if(os_session_extent(raw,SS_EXTENT_NPU,NULL))REFUSE(A733_DECODE_EXTENT);
 #endif
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
-    if(!extent_copy(raw,SS_EXTENT_CPU_GRANT,&out->cpu_clock,sizeof(out->cpu_clock)))return 0;
+    if(!extent_copy(raw,SS_EXTENT_CPU_GRANT,&out->cpu_clock,sizeof(out->cpu_clock)))REFUSE(A733_DECODE_EXTENT);
     if(out->cpu_clock.clusters)out->cpu_clock.epoch=out->board.epoch;
 #else
-    if(os_session_extent(raw,SS_EXTENT_CPU_GRANT,NULL))return 0;
+    if(os_session_extent(raw,SS_EXTENT_CPU_GRANT,NULL))REFUSE(A733_DECODE_EXTENT);
 #endif
 #ifdef SUNSTONE_A733_OS_DMA
-    if(!extent_copy(raw,SS_EXTENT_DMA,&out->dma,sizeof(out->dma)))return 0;
+    if(!extent_copy(raw,SS_EXTENT_DMA,&out->dma,sizeof(out->dma)))REFUSE(A733_DECODE_EXTENT);
 #endif
 #ifdef SUNSTONE_A733_OS_USB_JPEG
     size_t jpeg_bytes=0;const struct a733_jpeg_session *jpeg=os_session_extent(raw,SS_EXTENT_JPEG,&jpeg_bytes);
@@ -134,36 +138,39 @@ int os_session_decode(const void *raw,size_t bytes,struct os_session *out)
        !jpeg->owner||!jpeg->authority||jpeg->pck_client>=16||jpeg->pck_client==out->board.pck_client||
        jpeg->module!=A733_VIDEO_VENDOR_MODULE||jpeg->module_hz!=A733_VIDEO_VENDOR_HZ||
        jpeg->supply_uv!=800000||jpeg->supply_rail!=A733_RAIL_DCDC2||
-       jpeg->iommu_gates[0]!=0x10007||jpeg->iommu_gates[1]!=0x10007)return 0;
+       jpeg->iommu_gates[0]!=0x10007||jpeg->iommu_gates[1]!=0x10007)REFUSE(A733_DECODE_EXTENT);
     const uint64_t owners[]={out->board.pmic_owner,out->board.usb0_owner,out->board.typec_owner,
         out->board.usb2_owner,out->thermal_owner,out->board.latch_owner,out->board.latch_m_owner};
-    for(unsigned i=0;i<sizeof(owners)/sizeof(owners[0]);++i)if(jpeg->owner==owners[i])return 0;
+    for(unsigned i=0;i<sizeof(owners)/sizeof(owners[0]);++i)if(jpeg->owner==owners[i])REFUSE(A733_DECODE_EXTENT);
     const uint8_t *facts[]={jpeg->initial,jpeg->memory,jpeg->electrical,jpeg->supervision};
-    for(unsigned i=0;i<4;++i){uint8_t present=0;for(unsigned j=0;j<32;++j)present|=facts[i][j];if(!present)return 0;}
-    for(unsigned j=0;j<32;++j)if(jpeg->fixture[j]||jpeg->reference[j])return 0;
+    for(unsigned i=0;i<4;++i){uint8_t present=0;for(unsigned j=0;j<32;++j)present|=facts[i][j];if(!present)REFUSE(A733_DECODE_EXTENT);}
+    for(unsigned j=0;j<32;++j)if(jpeg->fixture[j]||jpeg->reference[j])REFUSE(A733_DECODE_EXTENT);
 #else
-    if(os_session_extent(raw,SS_EXTENT_JPEG,NULL))return 0;
+    if(os_session_extent(raw,SS_EXTENT_JPEG,NULL))REFUSE(A733_DECODE_EXTENT);
 #endif
     /* Scan INPUTS even for an application without inputs, validating the
      * complete extent framing and duplicate-type rule. */
     size_t input_bytes=0;const struct ss_input_fact *inputs=os_session_extent(raw,SS_EXTENT_INPUTS,&input_bytes);
     unsigned n=0;for(unsigned i=0;i<m->region_count;++i)if(m->regions[i].kind==SS_REGION_INPUT)++n;
-    if(input_bytes!=n*sizeof(*inputs)||(n&&!inputs))return 0;
+    if(input_bytes!=n*sizeof(*inputs)||(n&&!inputs))REFUSE(A733_DECODE_INPUT);
     n=0;for(unsigned i=0;i<m->region_count;++i)if(m->regions[i].kind==SS_REGION_INPUT){
         const struct ss_region *r=&m->regions[i];const struct ss_input_fact *f=&inputs[n++];
         uint8_t pinned=0;for(unsigned j=0;j<32;++j)pinned|=r->sha256[j];
-        if(f->bytes>r->bytes||(pinned&&(f->bytes!=r->bytes||memcmp(f->sha256,r->sha256,32))))return 0;
+        if(f->bytes>r->bytes||(pinned&&(f->bytes!=r->bytes||memcmp(f->sha256,r->sha256,32))))REFUSE(A733_DECODE_INPUT);
     }
 #ifndef SUNSTONE_BOARD_RESIDENT
     /* The immutable supervised board prefix has zero time fields. Contract
      * admission binds the run to armed_at plus this configured lifetime;
      * main.c derives the absolute runtime deadline only after admission. */
     const uint64_t lifetime_us=(uint64_t)A733_BOARD_SUPERVISED_SECONDS*1000000;
-    if(m->return_reserve_us>=lifetime_us||
-       m->run_deadline_us>lifetime_us-m->return_reserve_us)return 0;
+    if(m->return_reserve_us>=lifetime_us)REFUSE(A733_DECODE_RETURN_RESERVE);
+    if(m->run_deadline_us>lifetime_us-m->return_reserve_us)REFUSE(A733_DECODE_RUN_DEADLINE);
 #endif
-    return os_session_valid(out);
+    if(!os_session_valid(out))REFUSE(A733_DECODE_SERVICE);
+    return 1;
 }
+int os_session_decode(const void *raw,size_t bytes,struct os_session *out)
+{return os_session_decode_why(raw,bytes,out,NULL);}
 const struct os_session *os_session(void)
 {
     static struct os_session decoded;static int ready;

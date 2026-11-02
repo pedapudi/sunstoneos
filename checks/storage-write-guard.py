@@ -2,7 +2,7 @@
 """Check the time guard of apps/storage-write-test (the path that protects the card when the write rate is lower than expected).
 
 checks/storage-write-guard.c compiles the application's main.c unchanged except for a 24 MiB file and a 50 ms guard (the board
-runs 512 MiB and 40 s), over a file-backed card whose every write call sleeps. Cases, each on a fresh mkfs.fat image:
+runs 512 MiB and derives its guard from the session deadline), over a file-backed card whose every write call sleeps. Cases, each on a fresh mkfs.fat image:
   slow       the guard fires: status 11, fewer bytes than the file, the file closed at the length written, `fsck.fat -n` clean,
              the file equal to the first `written_bytes` of the tools/region_test_file.py stream, a clean-flagged volume;
   fast       no delay and no guard: status 0, the whole file, fsck clean, the whole stream;
@@ -110,6 +110,28 @@ def main():
     assert data is not None and len(data) <= d['written_bytes'], (len(data), d['written_bytes'])
     assert len(data) > 0 and data == stream(len(data)), 'file differs from the stream prefix'
     synced = len(data)
+
+    # derived: with no GUARD_US the guard is CLOSE_RESERVE_US before the session's own deadline (grant->finish_by_us); a deadline
+    # 10 ms after the start and a 1 ms close reserve stop the write about 9 ms in, and no deadline means no guard
+    derived = out / 'guard-derived'
+    r = subprocess.run([c for c in cc[:-1] if not c.startswith('-DGUARD_US')] + ['-DCLOSE_RESERVE_US=1000', '-o', str(derived)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    derived_img = out / 'derived.img'; make_image(derived_img)
+    r = subprocess.run([str(derived), str(derived_img), str(BASE), str(PART), '0', str(out / 'derived.result'), '1500'],
+                       capture_output=True, text=True, env={**harness.environment(), 'FINISH_AFTER_US': '10000'})
+    assert r.returncode == 0, f'model exited {r.returncode}: {r.stdout}{r.stderr}'
+    d8 = host.decode((out / 'derived.result').read_bytes())
+    assert d8['status'] == 11 and 0 < d8['written_bytes'] < FILE and d8['detail'] == d8['written_bytes'], d8
+    fsck_clean(derived_img)
+    data8, clean8 = volume_state(derived_img)
+    assert clean8 and data8 == stream(len(data8)) and len(data8) <= d8['written_bytes'], 'derived-guard file differs from the stream prefix'
+    open_img = out / 'derived-open.img'; make_image(open_img)
+    r = subprocess.run([str(derived), str(open_img), str(BASE), str(PART), '0', str(out / 'derived-open.result'), '0'],
+                       capture_output=True, text=True, env=harness.environment())
+    assert r.returncode == 0, r.stderr
+    d9 = host.decode((out / 'derived-open.result').read_bytes())
+    assert d9['status'] == 0 and d9['written_bytes'] == FILE, d9          # no session deadline: no guard
 
     # fast: no delay, no guard
     fast_img = out / 'fast.img'; make_image(fast_img)

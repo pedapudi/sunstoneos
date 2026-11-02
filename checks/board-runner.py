@@ -727,6 +727,7 @@ def offline(out,hello):
     raw=(root/'hello/session.bin').read_bytes();decoded=records.session_decode(raw)
     assert decoded['devices']==0 and decoded['flags']==records.BIND_SID
     assert records.INPUTS in decoded['extents'] and plan['format']=='generic'
+    assert plan['host_admission'].get('admitted') is True, plan['host_admission']      # the image's own EL3 admission ran on these bytes
     assert not (root/'hello/assets').exists()
     assert (root/'hello/launch.bin').stat().st_size<=0xc00
     passed('real-hello-typed-session-inputs-and-armed-launcher')

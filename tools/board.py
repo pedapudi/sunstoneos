@@ -1050,10 +1050,43 @@ def check_image(args):
     report = {'admitted': True, 'physical_access': False, 'image_sha256': images.sha(args.image),
               'watchdog': plan['watchdog'],
               'uploads': [{'address': a, 'file': str(p), 'sha256': images.sha(p)} for a, p in plan['uploads']]}
-    report.update({k: plan[k] for k in ('epoch', 'generation', 'lease', 'marker') if k in plan})
+    report.update({k: plan[k] for k in ('epoch', 'generation', 'lease', 'marker', 'host_admission') if k in plan})
     save(evidence/'admission.json', report)
     print(json.dumps(report, indent=2))
     return 0
+
+
+def preflight_submission(args, source, directory):
+    """Run the image's own EL3 admission on the session the runner will send, before the submission is queued.
+
+    Builds the session as the runner does (from the frozen inputs and template, with captured board words in place of
+    a live read) and runs the admission code compiled with the image's definitions (tools/host_admission.py). A refusal
+    names the failing term and refuses the submission; a gap in what can be checked without the board is reported and
+    leaves the submission to the runner's own checks."""
+    descriptor = args.descriptor or Path(str(source)+'.board.json')
+    try:
+        info = images.inspect(source, args.kind, json.loads(descriptor.read_text()) if descriptor.exists() else None,
+                              args.host_tree)
+    except (ValueError, OSError, KeyError) as error:
+        return {'admitted': None, 'unavailable': 'image not inspectable: %s' % error}
+    if not info.get('generic') or info.get('finite_npu') or info.get('native_probe'):
+        return {'admitted': None, 'unavailable': 'not a typed-session OS image'}
+    words = images.offline_words()
+    if words is None:
+        return {'admitted': None, 'unavailable': 'no captured board words on this machine'}
+    frozen = argparse.Namespace(**vars(args))
+    frozen.image = source
+    frozen.input = [directory/f'input-{i}.bin' for i, _ in enumerate(args.input)]
+    frozen.template = directory/'template' if (directory/'template').is_dir() else args.template
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='preflight-', dir=CACHE) as scratch:
+        try:
+            plan = images.prepare(frozen, info, {'words': words}, Path(scratch)/'bundle', dma_binding=None)
+        except images.AdmissionRefusal:
+            raise
+        except (ValueError, OSError, KeyError) as error:
+            return {'admitted': None, 'unavailable': 'session not built offline: %s' % error}
+    return plan.get('host_admission') or {'admitted': None, 'unavailable': 'no host admission in the plan'}
 
 
 def application_inputs(args, info, evidence):
@@ -1291,6 +1324,10 @@ class Queue:
                 if (template/'dma-authority.json').is_file():
                     shutil.copy2(template/'dma-authority.json', destination/'dma-authority.json')
             options['template'] = str(directory/'template')
+        # The image's own admission, on the exact session and contract, before the board could be touched.
+        preflight = preflight_submission(args, source, directory)
+        if preflight.get('unavailable'):
+            print('pre-flight not run: %s' % preflight['unavailable'], file=sys.stderr)
         exp = expectation(args.expect)
         if exp:
             target = directory/'expect.json'
@@ -1304,7 +1341,8 @@ class Queue:
         job = {'id': identifier, 'submitted': time.time(), 'image': str(image),
                'image_sha256': hashlib.sha256(data).hexdigest(), 'port': args.port, 'kind': args.kind,
                'worker': args.worker, 'hypothesis': args.hypothesis.strip(), 'state': 'queued', 'reference': reference,
-               'directory': str(directory), 'result_path': str(directory/'run/result.json'), 'options': options, 'frozen': frozen}
+               'directory': str(directory), 'result_path': str(directory/'run/result.json'), 'options': options, 'frozen': frozen,
+               'preflight': preflight}
         with self.locked() as state:
             history = state['jobs']
             repeated = next((j for j in history if j['worker'] == job['worker'] and
