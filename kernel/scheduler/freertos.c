@@ -62,9 +62,14 @@ struct ssKernelCPU {
     uint64_t command_pending[2], command_sequence[SS_OWNER_SLOTS];
     struct ss_kernel_pin command_reference[SS_OWNER_SLOTS];
     struct ss_kernel_pin reference[SS_OWNER_SLOTS];
-    /* CPU0's tick samples this deadline of every owner. */
+    /* CPU0's tick samples this deadline of every owner; idle peers read the pull set. */
     _Alignas(SS_CACHE_LINE) _Atomic uint64_t slice_deadline;
+    /* Idle pull. pull_targets: CPUs that a ready migratable task here may move to.
+     * pull_requests: idle CPUs that asked this owner for work. */
+    _Atomic uint64_t pull_targets, pull_requests;
 };
+/* Bit c is set while CPU c runs only its idle task. */
+static _Atomic uint64_t ssKernelIdleMask;
 _Static_assert(sizeof(struct ssKernelCPU) % SS_CACHE_LINE == 0 && _Alignof(struct ssKernelCPU) == SS_CACHE_LINE,
                "owners do not share cache lines");
 _Static_assert(offsetof(struct ss_owner, incoming) % SS_CACHE_LINE == 0 &&
@@ -336,6 +341,8 @@ static bool ssKernelAdmitTask(TCB_t *task)
     return false;
 }
 static void ssKernelControlDrain(void);
+static void ssKernelPullServe(unsigned);
+static void ssKernelPullIdle(unsigned, bool);
 static void ssKernelCommandsFinish(bool);
 static void ssKernelWait(unsigned, uint64_t, uint64_t);
 static void ssKernelCommandsDetach(void);
@@ -642,6 +649,7 @@ static void ssKernelService(void)
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
     ssKernelControlDrain();
     ss_owner_drain(&cpu->run, ssKernelInspect, NULL);
+    if (!cpu->selecting) ssKernelPullServe(c);
     /* Event timeout completion edits object metadata. Exception entry does
      * that maintenance before selection; newly due work gets another entry. */
     if (!cpu->selecting)
@@ -737,6 +745,7 @@ static void ssKernelSwitch(unsigned c)
     configASSERT(atomic_load_explicit(&s->owner, memory_order_acquire) == c);
     atomic_store_explicit(&s->execution, SS_K_RUNNING, memory_order_release);
     s->off_cpu = false;
+    ssKernelPullIdle(c, (((TCB_t *)selected->context)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0);
     __atomic_store_n(&pxCurrentTCBs[c], selected->context, __ATOMIC_RELEASE);
     pxCurrentTCBs[c]->xTaskRunState = (BaseType_t)c;
 #if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
@@ -1223,7 +1232,7 @@ static void ssKernelWaitCleanup(unsigned slot, uint64_t incarnation)
 }
 
 enum ssKernelCommand { SS_K_PRIORITY, SS_K_AFFINITY, SS_K_SUSPEND, SS_K_RESUME,
-                       SS_K_ABORT, SS_K_DELETE, SS_K_PREEMPT };
+                       SS_K_ABORT, SS_K_DELETE, SS_K_PREEMPT, SS_K_MOVE };
 struct ssKernelMutation { enum ssKernelCommand command; uint64_t argument; unsigned slot; bool changed; };
 static bool ssKernelMutateState(void *opaque, struct ss_control_state *state)
 {
@@ -1259,6 +1268,11 @@ static bool ssKernelMutateState(void *opaque, struct ss_control_state *state)
     case SS_K_DELETE:
         state->dead = true;
         return true;
+    case SS_K_MOVE:
+        if (m->argument >= configNUMBER_OF_CORES || !(state->affinity & (UINT64_C(1) << m->argument)) ||
+            state->move_to_plus_one == m->argument + 1) return false;
+        state->move_to_plus_one = (unsigned)m->argument + 1;
+        return true;
     case SS_K_PREEMPT:
         if (state->preemption_disabled == (m->argument != 0)) return false;
         state->preemption_disabled = m->argument != 0;
@@ -1271,6 +1285,91 @@ static bool ssKernelMutate(void *opaque, struct ss_control_state *state)
     struct ssKernelMutation *m = opaque;
     m->changed = ssKernelMutateState(opaque, state);
     return m->changed;
+}
+/* Idle pull (docs/designs/scheduler-partitioned.md, series D). Each owner publishes the CPUs
+ * that its queued migratable tasks may move to. An owner serves the idle ones among them, and
+ * an idle CPU that sees a victim with such a task asks for it with one coalesced bit and one
+ * SGI. The owner moves the task through the acknowledged transfer; no CPU edits a foreign
+ * queue. The scan is bounded to eight entries per priority. */
+static uint64_t ssKernelPullTargets(struct ssKernelCPU *cpu, unsigned c)
+{
+    uint64_t targets = 0;
+    uint32_t bitmap = cpu->run.ready_bitmap;
+    while (bitmap) {
+        const unsigned p = (unsigned)__builtin_ctz(bitmap);
+        bitmap &= bitmap - 1;
+        unsigned seen = 0;
+        for (struct ss_owner_task *t = cpu->run.ready[p].head; t && seen < 8; t = t->next, ++seen)
+            targets |= (uint64_t)((TCB_t *)t->context)->uxCoreAffinityMask;
+    }
+    return targets & ((UINT64_C(1) << configNUMBER_OF_CORES) - 1) & ~(UINT64_C(1) << c);
+}
+static struct ss_owner_task *ssKernelPullCandidate(struct ssKernelCPU *cpu, unsigned target)
+{
+    /* A task that would preempt the running one runs here at once; pull only waiting ones. */
+    const unsigned running = cpu->run.current ? cpu->run.current->priority : 0;
+    uint32_t bitmap = cpu->run.ready_bitmap & (running >= 31 ? ~UINT32_C(0) : ((UINT32_C(2) << running) - 1));
+    while (bitmap) {
+        const unsigned p = 31u - (unsigned)__builtin_clz(bitmap);
+        bitmap &= ~(UINT32_C(1) << p);
+        unsigned seen = 0;
+        for (struct ss_owner_task *t = cpu->run.ready[p].head; t && seen < 8; t = t->next, ++seen)
+            if (((uint64_t)((TCB_t *)t->context)->uxCoreAffinityMask >> target) & 1u) return t;
+    }
+    return NULL;
+}
+static void ssKernelPullServe(unsigned c)
+{
+#ifdef SS_KERNEL_TEST_NO_IDLE_PULL
+    (void)c; /* linked fixtures of ownership transitions check placement-independent behavior */
+    return;
+#endif
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    /* Only a core running a task can leave work waiting; a core entering idle selects at once. */
+    /* A running task that is suspending, blocking or deleted leaves this core to the waiting one. */
+    const struct ss_owner_task *current = cpu->run.current;
+    const bool keeps_core = current && !ssKernelTasks[current->slot].suspended && !ssKernelTasks[current->slot].dead &&
+        atomic_load_explicit(&ssKernelTasks[current->slot].execution, memory_order_acquire) == SS_K_RUNNING;
+    const uint64_t targets = cpu->run.ready_bitmap && keeps_core ? ssKernelPullTargets(cpu, c) : 0;
+    if (atomic_load_explicit(&cpu->pull_targets, memory_order_relaxed) != targets)
+        atomic_store_explicit(&cpu->pull_targets, targets, memory_order_release);
+    uint64_t requests = 0;
+    if (atomic_load_explicit(&cpu->pull_requests, memory_order_relaxed))
+        requests = atomic_exchange_explicit(&cpu->pull_requests, 0, memory_order_acq_rel);
+    uint64_t serve = (requests | atomic_load_explicit(&ssKernelIdleMask, memory_order_acquire)) & targets;
+    while (serve) {
+        const unsigned target = (unsigned)__builtin_ctzll(serve);
+        serve &= serve - 1;
+        struct ss_owner_task *candidate = ssKernelPullCandidate(cpu, target);
+        if (!candidate) continue;
+        struct ss_kernel_pin pin;
+        if (!ss_kernel_handle_pin(&ssKernelRegistry, candidate->context, &pin)) continue;
+        struct ssKernelMutation move = { .command = SS_K_MOVE, .argument = target, .slot = pin.slot };
+        (void)ss_control_publish(&ssKernelControl, pin.slot, ssKernelMutate, &move);
+        ss_kernel_handle_put(&pin);
+        /* Start the transfer while the task is still queued here. */
+        if (move.changed) ssKernelControlDrain();
+        if (cpu->run.ready_bitmap == 0) break;
+    }
+}
+static void ssKernelPullIdle(unsigned c, bool idle)
+{
+#ifdef SS_KERNEL_TEST_NO_IDLE_PULL
+    (void)c; (void)idle;
+    return;
+#endif
+    const uint64_t bit = UINT64_C(1) << c;
+    const bool marked = (atomic_load_explicit(&ssKernelIdleMask, memory_order_relaxed) & bit) != 0;
+    if (!idle) {
+        if (marked) atomic_fetch_and_explicit(&ssKernelIdleMask, ~bit, memory_order_acq_rel);
+        return;
+    }
+    if (!marked) atomic_fetch_or_explicit(&ssKernelIdleMask, bit, memory_order_acq_rel);
+    for (unsigned v = 0; v < configNUMBER_OF_CORES; ++v) {
+        if (v == c || !(atomic_load_explicit(&ssKernelCPUs[v].pull_targets, memory_order_acquire) & bit)) continue;
+        atomic_fetch_or_explicit(&ssKernelCPUs[v].pull_requests, bit, memory_order_acq_rel);
+        ssKernelForce(v);
+    }
 }
 static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
                              uint64_t argument, bool from_isr)

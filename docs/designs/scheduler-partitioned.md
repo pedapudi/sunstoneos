@@ -675,6 +675,31 @@ CPU, publishes the new consumer and unmasks. Device-specific owners perform
 this slow path through existing IRQ APIs. Scheduler placement cannot reroute a
 live device autonomously.
 
+### Idle pull moves a waiting task to an idle eligible CPU
+
+The fork implements the pull of the previous section for tasks that wait behind
+a running task of equal or higher priority. Each owner publishes the set of
+CPUs that its queued tasks may run on (`pull_targets`, the union of their
+affinity masks, computed from at most eight entries per priority) and a global
+bitmap marks the CPUs that run only their idle task. At the end of a service
+entry an owner that keeps running its current task takes every target that is
+idle or has asked (`pull_requests`), picks the highest-priority waiting task
+that may run there and publishes a move control for it. The ordinary
+acknowledged transfer then detaches the queued task here and the target adopts
+it; no CPU edits a foreign queue. A CPU that selects its idle task sets its idle
+bit and asks, with one coalesced bit and one SGI, each owner whose targets
+include it. A task that would preempt the running one is not pulled, and neither
+is one while its core's current task is blocking, suspending or deleted.
+Placement moves with the task: its owner becomes the target, and an affinity
+change moves it back.
+
+Prediction, from the previous stranding measurement (16 of 16 forced rounds
+left a ready receiver waiting 1 ms on a busy home while the eligible peer idled):
+with idle pull the receiver completes on the peer within the same millisecond in
+16 of 16 rounds and no round strands, and the pinned-latency and loaded-wake
+distributions of the eight-core CPU control stay within the noise of the
+previous control, because a CPU that is not idle never pulls.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag

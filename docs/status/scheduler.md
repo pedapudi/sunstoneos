@@ -27,8 +27,7 @@ timing have no physical qualification.
    prefetch would shorten them; neither is implemented.
 2. Qualify the fork with the exact mimus reference and board soak before enabling
    it by default. Current passing evidence is host-only.
-3. Add idle pull in series D: controlled tests still strand ready work on a busy
-   home while an eligible peer idles. Topology tables are available for placement.
+3. Idle pull is implemented; the CPU control on the board has not run it yet.
 4. Replace compatibility object locks in C, then finish tickless deadlines and
    reservations. The periodic CPU0 tick remains during B.
 5. Preserve lock-worker port-lock hunks and probe entry code. The prepared image,
