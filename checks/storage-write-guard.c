@@ -23,7 +23,12 @@ uint64_t ss_counter_ticks(void)
     return ((uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec) / 1000u * 24u;      /* 24 MHz */
 }
 int ss_clock_ready(void) { return 1; }
-void ss_progress(void) {}
+static uint64_t finish_by_us;             /* the session's own deadline in the counter's microseconds; 0 none */
+static int cut_enabled;
+static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000u + (uint64_t)t.tv_nsec / 1000u; }
+static void maybe_cut(void) { if (cut_enabled && finish_by_us && now_us() >= finish_by_us) _exit(77); }       /* the OS ends the session at its deadline */
+void ss_progress(void) { maybe_cut(); }
+void ss_usb_wait(uint32_t us) { struct timespec d = {0, (long)us * 1000}; nanosleep(&d, NULL); maybe_cut(); }
 void ss_activity_begin(void) {}
 void ss_activity_end(int success) { (void)success; }
 void sha256_block_ce(const uint8_t b[64], uint8_t d[32]) { (void)b; (void)d; abort(); }          /* the CE path is verified in QEMU */
@@ -75,6 +80,11 @@ static int dev_write(void *c, uint64_t s, uint32_t n, const uint8_t *buf)
         FILE *log = fopen(getenv("WRITE_LOG"), "a");
         if (log) { fprintf(log, "%llu %u\n", (unsigned long long)s, n); fclose(log); }
     }
+    if (cut_enabled && finish_by_us && now_us() >= finish_by_us) {      /* cut in the middle of a write: the first half of its sectors reach the card */
+        uint32_t half = (n + 1) / 2;
+        (void)pwrite(image_fd, buf, (size_t)half * 512, (off_t)s * 512);
+        _exit(77);
+    }
     struct timespec d = {(time_t)(delay_us / 1000000u), (long)(delay_us % 1000000u) * 1000};
     nanosleep(&d, NULL);                                     /* the slow card */
     return pwrite(image_fd, buf, (size_t)n * 512, (off_t)s * 512) == (ssize_t)n * 512;
@@ -106,6 +116,7 @@ int main(int argc, char **argv)
     region_fsinfo = info ? part_base + info : UINT64_MAX;
     region_data = part_base + reserved + (uint64_t)fats * fsz; region_end = part_base + part_sectors;
     struct ss_grant g = {0};
+    if (getenv("FINISH_AFTER_US")) { finish_by_us = now_us() + strtoull(getenv("FINISH_AFTER_US"), 0, 0); cut_enabled = getenv("CUT") != NULL; g.finish_by_us = finish_by_us; }
     g.regions[STORAGE_WRITE_REGION_BOUNDS] = (struct ss_span){bounds_blob, sizeof bounds_blob};
     g.regions[STORAGE_WRITE_REGION_MODE] = (struct ss_span){mode_blob, sizeof mode_blob};
     g.regions[STORAGE_WRITE_REGION_FLUSH] = (struct ss_span){flush_buffer, sizeof flush_buffer};

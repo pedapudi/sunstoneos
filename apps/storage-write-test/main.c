@@ -11,9 +11,12 @@
  *   6  open the card for reading and report (the QEMU boot check of the read-only open);
  *   4  open the card, enable the writes and report (the QEMU boot check; no mount, no write);
  *   3  read the whole file back against the stream and report (a separate run; the file must be FILE_BYTES long);
- *   1  interruption test, lifetime 1: write with a sync every 8 MiB, and after `cut_bytes` stop reporting progress so the
- *      watchdog resets the board in the middle of a flush cycle;
- *   2  interruption test, lifetime 2: mount (recovery runs), read back what the volume holds against the stream, report.
+ *   1  interruption, lifetime 1: wait until CUT_WINDOW_US before the session's own deadline (grant->finish_by_us), then create the NEW file
+ *      INT_PATH and write the stream into it (a sync every 8 MiB, at most INT_CAP bytes) until the OS ends the session at that deadline, in the
+ *      middle of a flush. It never touches PATH. No result is returned: the session is cut;
+ *   8  interruption, lifetime 2: mount with recovery (the writer is enabled), report what recovery did, read the interrupted file back against the
+ *      stream up to the size the volume holds, and report the size of PATH (written_bytes), which must be unchanged;
+ *   2  read back the file at PATH against the stream and report (read-only open).
  * The result (512 bytes) carries the write rate, the flush latency percentiles, the wear counters, the owner task's busy
  * time, and the measured CPU clock. Rates are figures only for an image at the approved top operating points. */
 #include "storage_write-app.h"
@@ -25,8 +28,17 @@
 #define FILE_BYTES (512 * MIB)
 #endif
 #define PATH "/sunstone-test/sunstone-region-test.bin"
+#define INT_PATH "/sunstone-test/interrupt-test.bin"      /* the interruption test writes only here */
+#ifndef INT_CAP
+#define INT_CAP (64 * MIB)
+#endif
+#ifndef CUT_WINDOW_US
+#define CUT_WINDOW_US UINT64_C(4000000)
+#endif
 #define CHUNK 65536u
+#ifndef SYNC_EVERY
 #define SYNC_EVERY (8 * MIB)
+#endif
 #define MAX_FLUSHES 4096u
 #define TAG UINT64_C(0x5357544553544f4b)          /* "SWTESTOK" */
 #ifndef GUARD_US
@@ -184,7 +196,7 @@ static size_t scratch_bytes;
 /* Compare the file with the stream from the start for `bytes`; counts mismatching bytes. Each fwr_read resolves the path, scans the directory and
  * walks the cluster chain from the start, so the read is made in large steps (half the work region, at most 4 MiB): at 64 KiB the first full read
  * of 368 MiB did not finish in the application's 52 s. */
-static void verify(uint64_t bytes)
+static void verify(const char *path, uint64_t bytes)
 {
     uint64_t t0 = ss_counter_ticks();
     /* The phases of a read-back, for the result: flush_ticks is the time inside fwr_read, generate_ticks the stream, close_ticks the compare;
@@ -200,7 +212,7 @@ static void verify(uint64_t bytes)
     for (uint64_t off = 0; off < bytes; off += step) {
         size_t n = bytes - off < step ? (size_t)(bytes - off) : step, got = 0;
         uint64_t a0 = ss_counter_ticks();
-        int rc = fwr_read(&volume, PATH, off, rd, n, &got);
+        int rc = fwr_read(&volume, path, off, rd, n, &got);
         uint64_t a1 = ss_counter_ticks();
         r.flush_ticks += a1 - a0; ++r.flushes;
         if (rc || got != n) { r.status = E_READ; r.detail = off; break; }
@@ -241,8 +253,6 @@ void storage_write_main(const struct ss_grant *grant)
     while (!ss_clock_ready()) { ss_progress(); }
     const uint8_t *m = mode->base;
     uint32_t mode_id = m[0] | m[1] << 8 | m[2] << 16 | (uint32_t)m[3] << 24;
-    uint64_t cut_bytes = 0;
-    for (unsigned i = 0; i < 8; ++i) cut_bytes |= (uint64_t)m[8 + i] << (8 * i);
     r.mode = mode_id;
     r.app_core = grant->main_core;
     {
@@ -271,7 +281,7 @@ void storage_write_main(const struct ss_grant *grant)
     ss_activity_begin(); activity = 1;                          /* the thermal report covers the card work */
     card_open = 1;                                             /* enabling opens the card in the owner task, even if it then refuses */
     /* The read-back modes (2, 3, 6) open the card for reading and verify no bounds: the backup sectors the blob hashes change with every session. */
-    const int read_only = mode_id == 2 || mode_id == 3 || mode_id == 6;
+    const int read_only = mode_id == 2 || mode_id == 3 || mode_id == 6;                 /* 1 and 8 write: the writer is enabled */
     if (!(read_only ? ss_storage_open_read() : ss_storage_enable(bounds->base, bounds->bytes))) { r.status = E_BOUNDS; (void)ss_storage_diagnostic(r.diag); finish_report(); }
     scratch = flush->base; scratch_bytes = flush->bytes;
     if (!ss_storage_region(flush->base, flush->bytes)) { r.status = E_REGION; (void)ss_storage_diagnostic(r.diag); finish_report(); }
@@ -283,19 +293,53 @@ void storage_write_main(const struct ss_grant *grant)
     uint64_t t_start = ss_counter_ticks();
     int rc = mount(base, sectors);
     if (rc) { r.status = E_MOUNT; r.detail = (uint64_t)-rc; finish_report(); }
-    if (mode_id == 2 || mode_id == 3) {                              /* read back: the interruption test (2) or the finished file (3) */
+    if (mode_id == 2 || mode_id == 3) {                              /* read back the finished file: any size (2) or exactly FILE_BYTES (3) */
         uint64_t size = 0; int dir = 0;
         if (fwr_exists(&volume, PATH, &size, &dir) == FWR_OK) {
             r.volume_size = size;
-            if (mode_id == 3 && size != FILE_BYTES) r.status = E_SIZE; else verify(size);
+            if (mode_id == 3 && size != FILE_BYTES) r.status = E_SIZE; else verify(PATH, size);
         }
         else r.status = E_OPEN;
         collect(); r.total_ticks = ss_counter_ticks() - t_start;
         (void)fwr_unmount(&volume);
         finish_report();
     }
+    if (mode_id == 8) {                                               /* the recovery lifetime of the interruption test */
+        uint64_t size = 0, region = 0; int dir = 0;
+        if (fwr_exists(&volume, INT_PATH, &size, &dir) == FWR_OK && !dir) {
+            r.volume_size = size;
+            if (size) verify(INT_PATH, size);
+        } else r.detail = 1;                                           /* no entry: nothing was synced before the cut */
+        if (fwr_exists(&volume, PATH, &region, &dir) == FWR_OK) r.written_bytes = region; else r.status = E_OPEN;
+        collect(); r.total_ticks = ss_counter_ticks() - t_start;
+        rc = fwr_unmount(&volume);
+        if (rc && !r.status) { r.status = E_CLOSE; r.detail = (uint64_t)-rc; }
+        finish_report();
+    }
+    if (mode_id == 1) {                                               /* the cut lifetime: the session's own deadline ends it mid-flush */
+        uint64_t finish_by = grant->finish_by_us;
+        uint64_t cut_at = finish_by - CUT_WINDOW_US;
+        if (!finish_by || finish_by < CUT_WINDOW_US || ss_counter_ticks() * 1000000u / COUNTER_HZ >= cut_at) { r.status = E_SIZE; finish_report(); }
+        while (ss_counter_ticks() * 1000000u / COUNTER_HZ < cut_at) { ss_progress(); ss_usb_wait(2000); }
+        rc = fwr_open(&volume, &file, INT_PATH, FWR_O_CREATE, INT_CAP, flush->base, flush->bytes);   /* CREATE only: it never replaces a file */
+        if (rc) { r.status = E_OPEN; r.detail = (uint64_t)-rc; finish_report(); }
+        uint64_t put_total = 0, last_sync = 0;
+        for (uint64_t off = 0; off < INT_CAP; off += CHUNK) {
+            stream_fill(chunk, off, CHUNK);
+            size_t put = 0;
+            while (put < CHUNK) {
+                put += fwr_write(&file, chunk + put, CHUNK - put);
+                if (fwr_service(&file, 0) < 0) { r.status = E_WRITE; finish_report(); }
+                ss_progress();
+            }
+            put_total = off + CHUNK;
+            if (put_total - last_sync >= SYNC_EVERY) { if (fwr_sync(&file)) { r.status = E_WRITE; finish_report(); } last_sync = put_total; }
+            ss_progress();
+        }
+        for (;;) { ss_progress(); ss_usb_wait(2000); }                  /* the cap came first: wait for the deadline */
+    }
     uint64_t start_off = 0;
-    unsigned open_mode = mode_id == 1 ? (FWR_O_CREATE | FWR_O_APPEND) : FWR_O_CREATE;
+    unsigned open_mode = FWR_O_CREATE;
     if (mode_id == 5) {                                              /* continue the file */
         uint64_t size = 0; int dir = 0;
         if (fwr_exists(&volume, PATH, &size, &dir) != FWR_OK || dir) r.status = E_OPEN;
@@ -324,7 +368,6 @@ void storage_write_main(const struct ss_grant *grant)
     if (rc) { r.status = E_OPEN; r.detail = (uint64_t)-rc; finish_report(); }
     r.create_ticks = ss_counter_ticks() - t0;
     unsigned flushes = 0;
-    uint64_t synced = 0;
     int timed_out = 0;
     for (uint64_t off = start_off; off < FILE_BYTES; off += CHUNK) {
         uint64_t g0 = ss_counter_ticks();
@@ -348,15 +391,6 @@ void storage_write_main(const struct ss_grant *grant)
         if (fl < 0) { r.status = E_WRITE; r.detail = (uint64_t)-fl; r.written_bytes = off + CHUNK; collect(); finish_report(); }
         if (fl > 0) { r.flush_ticks += dt; if (flushes < MAX_FLUSHES) flush_ticks[flushes] = (uint32_t)dt; ++flushes; }
         r.written_bytes = off + CHUNK;
-        if (mode_id == 1 && r.written_bytes - synced >= SYNC_EVERY) {
-            if (fwr_sync(&file)) { r.status = E_WRITE; r.detail = 0xffff; finish_report(); }
-            synced = r.written_bytes;
-        }
-        if (mode_id == 1 && r.written_bytes >= cut_bytes) {
-            /* Stop reporting progress in the middle of a flush cycle: the watchdog resets the board. Nothing after this
-             * line runs in this lifetime. */
-            for (;;) { __asm__ volatile("nop"); }
-        }
         ss_progress();
         if ((mode_id == 0 || mode_id == 5) && (ss_counter_ticks() - t_start) * 1000000u / COUNTER_HZ >= GUARD_US && off + CHUNK < FILE_BYTES) { timed_out = 1; break; }
     }
