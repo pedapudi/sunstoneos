@@ -269,7 +269,14 @@ static int dma_chain(struct a733_mmc_platform *p,uint32_t command)
     uint32_t g,dlba,count;
     if(!rd(p,p->base+SUNXI_SMHC_GCTRL,&g))return 0;
     if(!(g&SUNXI_SMHC_GCTRL_DMA_ENABLE))return 1;
-    if(!p->config.dma||(command&SUNXI_SMHC_CMD_WRITE)||!p->core.borrowed||
+    /* A read-direction command needs a read in progress and a write-direction one the bounded DMA write (sunxi_mmc_write_dma) the core
+     * has authenticated; its source is the borrowed buffer, and the chain is checked the same way. The first board write was refused here. */
+#ifdef SUNXI_MMC_READ_ONLY
+    const int write_in_progress=0;
+#else
+    const int write_in_progress=p->core.dma_write!=0;
+#endif
+    if(!p->config.dma||((command&SUNXI_SMHC_CMD_WRITE)!=0)!=write_in_progress||!p->core.borrowed||
        !rd(p,p->base+SUNXI_SMHC_DLBA,&dlba)||dlba!=(uint32_t)((uintptr_t)p->config.dma>>2)||
        !rd(p,p->base+SUNXI_SMHC_BCNT,&count))return 0;
     return a733_mmc_dma_chain(p->config.dma,p->core.borrowed,p->core.borrowed_bytes,count);
