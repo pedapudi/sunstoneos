@@ -14,6 +14,13 @@ SESSION=0x42004000
 RECEIPT=0x42000080
 FIELDS=('magic','version','bytes','watchdog_mode','seconds','session_address','session_bytes',
         'result_address','result_bytes','payload_address','payload_bytes','input_address','input_bytes','flags')
+RETURNABLE=1
+STORAGE_READ_ONLY=4
+# Symbols of the card write path (docs/designs/large-app-regions.md, checks/sd-read-only.py).
+# An image that declares STORAGE_READ_ONLY defines none of them and defines the marker of
+# a core built with SUNXI_MMC_READ_ONLY, whose command funnel refuses CMD24, CMD25 and CMD38.
+SD_WRITE_SYMBOLS=('sunxi_mmc_write','a733_storage_update_authorize','a733_storage_update_write')
+SD_READ_ONLY_MARKER='sunxi_mmc_read_only_build'
 RESULT_FIELDS=('magic','version','bytes','epoch','generation','lease','status','payload_bytes','payload_hash',
                'cleanup','retired','start_ticks','end_ticks','failure_site','watchdog_mode','complete')
 
@@ -32,8 +39,9 @@ def inspect(image, usb_pool=None):
     """Admit image RAM, with the shared linked-arena validator for native USB only."""
     data=Path(image).read_bytes();elf=ELFFile(io.BytesIO(data))
     require(elf['e_machine']=='EM_AARCH64' and elf['e_entry']==0x41000000,'Probe entry must be AArch64 0x41000000.')
-    table=elf.get_section_by_name('.symtab');symbols={}
+    table=elf.get_section_by_name('.symtab');symbols={};defined=set()
     for symbol in table.iter_symbols() if table else ():
+        if symbol['st_shndx']!='SHN_UNDEF':defined.add(symbol.name)
         if symbol.name.startswith('sunstone_probe_') and symbol['st_shndx']!='SHN_UNDEF':
             require(symbol.name not in symbols,'Ambiguous probe symbol.');symbols[symbol.name]=symbol
     marker=symbols.get('sunstone_probe_marker')
@@ -44,7 +52,11 @@ def inspect(image, usb_pool=None):
     require(any(p['p_type']=='PT_LOAD' and p['p_vaddr']<=marker['st_value'] and marker['st_value']+112<=p['p_vaddr']+p['p_filesz'] for p in elf.iter_segments()),'Probe marker has no file-backed load coverage.')
     m=dict(zip(FIELDS,struct.unpack('<14Q',section.data()[offset:offset+112])))
     require((m['magic'],m['version'],m['bytes'])==(MAGIC,1,112),'Unsupported native probe ABI.')
-    require(m['flags']==1,'Probe requires power removal or lacks normal-return capability.')
+    require(m['flags'] in (RETURNABLE,RETURNABLE|STORAGE_READ_ONLY),'Probe requires power removal or lacks normal-return capability.')
+    if m['flags']&STORAGE_READ_ONLY:
+        require(SD_READ_ONLY_MARKER in defined,'Read-only storage probe lacks the read-only SD core marker.')
+        linked=[n for n in SD_WRITE_SYMBOLS if n in defined]
+        require(not linked,'Read-only storage probe links the card write path: '+', '.join(linked))
     require(m['watchdog_mode']==0xb1 and 1<=m['seconds']<=600 and
             (m['session_address'],m['session_bytes'],m['result_address'],m['result_bytes'])==
             (SESSION,128,RECEIPT,128),'Probe watchdog or session/receipt geometry differs.')
@@ -89,7 +101,8 @@ def inspect(image, usb_pool=None):
         object_at('sunstone_probe_input',m['input_address'],m['input_bytes'])
         require(not (p<m['input_address']+m['input_bytes'] and m['input_address']<p+n),'Probe input overlaps output.')
     else:require(m['input_address']==0,'Empty probe input must have address zero.')
-    return {'marker':m,'uploads':uploads,'watchdog':{'mode':m['watchdog_mode'],'session_seconds':m['seconds']}}
+    return {'marker':m,'uploads':uploads,'watchdog':{'mode':m['watchdog_mode'],'session_seconds':m['seconds']},
+            'storage_read_only':bool(m['flags']&STORAGE_READ_ONLY)}
 
 
 def prepare(image,info,inputs,out):
