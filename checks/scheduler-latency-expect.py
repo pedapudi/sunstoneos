@@ -8,6 +8,9 @@ from pathlib import Path
 import runpy
 import struct
 
+if not __debug__:
+    raise SystemExit('checks require assertions')
+
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['apps/latency/expect.py', 'apps/latency/workload.h', 'tools/board.py']
 
