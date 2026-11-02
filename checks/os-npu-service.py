@@ -21,7 +21,7 @@ CHECK_INPUTS = ('apps/os/npu.c', 'apps/os/npu.h', 'apps/os/npu-catalogue.py', 'a
                 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/a733_npu_runtime_interim.c',
                 'drivers/npu/npu_service.c', 'drivers/npu/a733_npu_controller.c', 'include/npu_arch.h',
                 'checks/os-npu-service.c', 'tools/npu-session-catalogue.py')
-UNITS = ('checks/os-npu-service.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/a733_npu_runtime_interim.c',
+UNITS = ('checks/os-npu-service.c', 'drivers/npu/npu_declaration.c', 'drivers/npu/a733_npu_runtime.c', 'drivers/npu/a733_npu_runtime_interim.c',
          'drivers/npu/npu_service.c', 'drivers/npu/a733_npu_controller.c', 'drivers/npu/a733_npu_memory.c',
          'drivers/npu/a733_npu_mmu.c', 'drivers/npu/nbg_model.c', 'drivers/npu/nbg_assembly.c',
          'drivers/npu/nbg_checksum.c', 'drivers/npu/nbg_relocation.c', 'drivers/storage/storage_digest.c')
@@ -63,6 +63,11 @@ for case in CASES:
     (out / ('case-%d.log' % case)).write_text(done.stdout + done.stderr)
     assert done.returncode == 0, (case, done.returncode, done.stdout[-400:], done.stderr[-600:])
     print('case', case, ' '.join(done.stdout.split('\n')[:2]))
+# Case 27: declarations and reservations.
+done = run(exe, 27)
+(out / 'case-27.log').write_text(done.stdout + done.stderr)
+assert done.returncode == 0, (27, done.returncode, done.stdout[-400:], done.stderr[-600:])
+print('case 27', done.stdout.strip().splitlines()[-1])
 # Case 26: far more jobs than the former quota, in a session whose job field is 1. A session never fails because it has
 # run a number of jobs.
 done = run(exe, 26)

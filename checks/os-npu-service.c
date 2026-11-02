@@ -469,7 +469,45 @@ int main(int argc, char **argv)
 {
     assert(argc == 2 || argc == 3);
     const unsigned mode = (unsigned)strtoul(argv[1], NULL, 10);
-    assert(mode == 20 || mode == 21 || mode == 26 || ((mode == 22 || mode == 25) && argc == 3));
+    if (mode == 27) {
+        /* Case 27: declarations and reservations (docs/designs/npu-resources.md). The image links one graph and no
+         * queue, so it needs one slot, one graph and no links. */
+        size_t one = 0, many = 0, scratch = 0;
+        assert(npu_runtime_reservation(os_npu_models, os_npu_model_count, 1, 8u << 20, &one) == NPU_DECLARATION_OK && one);
+        assert(npu_runtime_reservation(os_npu_models, os_npu_model_count, 4, 64u << 20, &many) == NPU_DECLARATION_OK && many > one);
+        /* The reservation is the exact requirement and grows with the slots. */
+        assert(one == npu_runtime_requirements(os_npu_models, os_npu_model_count, 1));
+        assert(npu_runtime_reservation(os_npu_models, os_npu_model_count, 1, one - 1, &scratch) == NPU_DECLARATION_MEMORY);
+        assert(npu_runtime_reservation(os_npu_models, os_npu_model_count, 1, one, &scratch) == NPU_DECLARATION_OK);
+        unsigned char *copy = malloc(os_npu_models[0].bytes);
+        memcpy(copy, os_npu_models[0].data, os_npu_models[0].bytes);
+        copy[os_npu_models[0].bytes / 2] ^= 0xff; /* a damaged graph is not admissible */
+        struct npu_runtime_model damaged = {copy, os_npu_models[0].bytes};
+        assert(npu_runtime_reservation(&damaged, 1, 1, 8u << 20, &scratch) == NPU_DECLARATION_MODEL);
+        free(copy);
+        /* The declaration against the image and the arrays. */
+        const struct npu_declaration good = {1, 1, 1, 0};
+        assert(os_npu_declaration_admitted(npu_declaration_pack(&good)) == NPU_DECLARATION_OK);
+        assert(os_npu_declaration_admitted(0) == NPU_DECLARATION_OK); /* nothing declared: the image's own needs */
+        struct npu_declaration bad = good;
+        bad.slots = 2; assert(os_npu_declaration_admitted(npu_declaration_pack(&bad)) == NPU_DECLARATION_SLOTS); /* one client task */
+        bad = good; bad.in_flight = 0; assert(os_npu_declaration_admitted(npu_declaration_pack(&bad)) == NPU_DECLARATION_DEPTH);
+        bad = good; bad.in_flight = 65; assert(os_npu_declaration_admitted(npu_declaration_pack(&bad)) == NPU_DECLARATION_DEPTH);
+        bad = good; bad.graphs = 0; assert(os_npu_declaration_admitted(npu_declaration_pack(&bad)) == NPU_DECLARATION_GRAPHS);
+        bad = good; bad.graphs = 17; assert(os_npu_declaration_admitted(npu_declaration_pack(&bad)) == NPU_DECLARATION_GRAPHS);
+        const struct npu_image_needs two_graphs = {1, 2, 0};
+        assert(npu_declaration_check(&good, &two_graphs) == NPU_DECLARATION_IMAGE_GRAPHS);
+        const struct npu_image_needs queued = {3, 1, 2};
+        assert(npu_declaration_check(&good, &queued) == NPU_DECLARATION_IMAGE_SLOTS);
+        const struct npu_declaration slots3 = {3, 4, 1, 0};
+        assert(npu_declaration_check(&slots3, &queued) == NPU_DECLARATION_IMAGE_LINKS);
+        const struct npu_declaration full = {3, 64, 1, 2};
+        assert(npu_declaration_check(&full, &queued) == NPU_DECLARATION_OK);
+        assert(npu_declaration_unpack(npu_declaration_pack(&full)).in_flight == 64);
+        printf("declarations: one slot %zu bytes, four slots %zu bytes; every refusal names its resource\n", one, many);
+        return 0;
+    }
+    assert(mode == 20 || mode == 21 || mode == 26 || mode == 27 || ((mode == 22 || mode == 25) && argc == 3));
     if (argc == 3) input_directory = argv[2];
     if (mode == 21) bootstrap_us = 30000;
     if (mode == 26) { long_run = (unsigned)strtoul(getenv("LONG_JOBS") ? getenv("LONG_JOBS") : "120000", NULL, 0); job_us = 3; }

@@ -75,7 +75,7 @@ def integer(value, where, low=0, high=(1 << 64) - 1):
 def load(path):
     """manifest.json -> normalized dict with integer fields."""
     raw = json.loads(Path(path).read_text())
-    known = {'name', 'devices', 'cpu', 'regions', 'audio', 'deadlines', 'output_limit', 'host_ops'}
+    known = {'name', 'devices', 'cpu', 'regions', 'audio', 'deadlines', 'output_limit', 'host_ops', 'npu'}
     require(set(raw) <= known, '%s: unknown keys %s' % (path, sorted(set(raw) - known)))
     name = raw['name']
     require(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9-]{0,14}', name) is not None,
@@ -112,6 +112,15 @@ def load(path):
     require(not count or first + count <= OS_REPORTS[0] or OS_REPORTS[1] <= first,
             name + ': host operations overlap the OS reports 0x05..0x08')
     require(count or not first, name + ': an empty host range starts at 0')
+    # What the application declares of the NPU (docs/designs/npu-resources.md). It is not part of the packed binary:
+    # the session record carries it (npu_word, apps/os/host.py), and the operating system admits it against capacity.
+    if 'npu' in raw:
+        n = raw['npu']
+        require(set(n) <= {'slots', 'in_flight', 'graphs', 'links'}, name + ': unknown npu keys')
+        def count(value, label, low):
+            return integer(len(value) if isinstance(value, list) else value, name + ' npu ' + label, low, 255)
+        m['npu'] = {'slots': count(n.get('slots', 1), 'slots', 1), 'in_flight': count(n.get('in_flight', 1), 'in_flight', 1),
+                    'graphs': count(n.get('graphs', 1), 'graphs', 1), 'links': count(n.get('links', 0), 'links', 0)}
     audio = raw.get('audio')
     if audio is not None or (required | optional) & CAPTURE:
         require(audio is not None, name + ': a capture device needs an audio format')
@@ -199,6 +208,12 @@ def assign(m):
                 r['address'] = -(-max(clash) // BLOCK) * BLOCK
             place(i, r)
     return m
+
+
+def npu_word(m):
+    """The four bytes of the session record's NPU declaration (include/npu_declaration.h), 0 when none is declared."""
+    n = m.get('npu')
+    return 0 if n is None else n['slots'] | n['in_flight'] << 8 | n['graphs'] << 16 | n['links'] << 24
 
 
 def pack(m):
