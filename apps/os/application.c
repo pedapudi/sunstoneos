@@ -52,6 +52,8 @@ static atomic_uint prepared,finished,usb_ready,activity_generation;
 static atomic_uint_fast64_t observed_until;
 static struct a733_typec_token attachment;
 static TaskHandle_t main_task;
+/* The main task, for the virtual board's tests that give it a notification the OS would not (platform/qemu-os). */
+TaskHandle_t os_application_main_task(void){return main_task;}
 static atomic_uint_fast64_t finish_by;
 const struct ss_grant *ss_grant(void)
 {
