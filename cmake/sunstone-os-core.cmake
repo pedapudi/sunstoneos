@@ -191,10 +191,6 @@ else()
   set(os_result_magic 0x415337334f535231ULL)
 endif()
 apply_build_patch("${os_build}/boot.c" "${os_boot_base}" "${os_root}/apps/os/boot.patch")
-if(SUNSTONE_A733_OS_SD_WRITE)
-  # One SD0 owner task serves the loader's reads and the FAT32 write service (apps/os/sd_owner.c); the SD core is built with its write path.
-  list(APPEND os_added apps/os/sd_owner.c drivers/storage/a733_storage_bounds.c drivers/storage/fat32_rw.c drivers/storage/sunstone_fs.c)
-endif()
 # Retained per-core fault records and their previous-boot report
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
@@ -204,6 +200,10 @@ set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/servic
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
   apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
   drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c platform/a733/fault.S platform/a733/fault.c)
+if(SUNSTONE_A733_OS_SD_WRITE)
+  # One SD0 owner task serves the loader's reads and the FAT32 write service (apps/os/sd_owner.c); the SD core is built with its write path.
+  list(APPEND os_added apps/os/sd_owner.c drivers/storage/a733_storage_bounds.c drivers/storage/a733_storage_update.c drivers/storage/fat32_rw.c drivers/storage/sunstone_fs.c)
+endif()
 set(os_patches "${os_root}/apps/os/boot.patch")
 if(SUNSTONE_A733_OS_USB_CLASSES)
   apply_build_patch("${os_build}/link-usb.ld" "${storage_build}/link.ld"
