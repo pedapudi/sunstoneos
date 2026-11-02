@@ -2,6 +2,7 @@
 import struct
 
 RESULT_BYTES = 63872
+PMU_BYTES = 1536  # optional tail: counts inside the kind-0 sites (SUNSTONE_LATENCY_PMU)
 PHASES = ('initialization', 'idle', 'busy')
 SITE_KINDS = ('irq_masked', 'task_lock_hold')
 SITE_METRICS = ('irq_masked', 'lock1_hold')
@@ -23,8 +24,10 @@ def inputs():
 
 
 def decode(payload, dma=False):
-    if len(payload) != RESULT_BYTES:
+    pmu_tail = payload[RESULT_BYTES:] if len(payload) == RESULT_BYTES + PMU_BYTES else b''
+    if len(payload) not in (RESULT_BYTES, RESULT_BYTES + PMU_BYTES):
         raise ValueError(f'latency result must contain {RESULT_BYTES} bytes')
+    payload = payload[:RESULT_BYTES]
     magic, frequency, elapsed, mask, model, dma_jobs, irq_mask = struct.unpack_from('<3Q4I', payload)
     if magic != MAGIC or mask != 0xff or model or irq_mask != 1 or \
             (dma_jobs < 2 if dma else dma_jobs != 0):
@@ -153,6 +156,9 @@ def decode(payload, dma=False):
                             raise ValueError('attribution interval crosses a phase boundary')
                     previous = ticks
                     entries.append(dict(zip(('ticks', 'start', 'enter_site', 'exit_site'), values)))
+                    if kind == 0 and pmu_tail:
+                        counts = struct.unpack_from('<4I', pmu_tail, ((p * 8 + core) * SITE_SLOTS + slot) * 16)
+                        entries[-1]['pmu'] = dict(zip(('instructions', 'cycles', 'l1d_refills', 'l2d_refills'), counts))
                 kinds[kind_name] = entries
             sites[phase_name] = kinds
         cores.append({'core': core, 'sweeps': sweeps, 'bytes_read': read,

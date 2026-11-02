@@ -10,6 +10,9 @@ add_sunstone_application(${latency_name}
   MANIFEST "${latency_manifest}"
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/..")
 target_compile_definitions(${latency_name} PRIVATE SUNSTONE_LATENCY=1)
+if(SUNSTONE_LATENCY_PMU)
+  target_compile_definitions(${latency_name} PRIVATE SUNSTONE_LATENCY_PMU=1)
+endif()
 target_compile_options(${latency_name} PRIVATE "$<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>")
 if(latency_name STREQUAL "latency-dma")
   target_compile_definitions(${latency_name} PRIVATE SUNSTONE_LATENCY_DMA=1)

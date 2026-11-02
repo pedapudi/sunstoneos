@@ -30,18 +30,22 @@ struct ss_owner_task {
     bool queued;
 };
 struct ss_owner_fifo { struct ss_owner_task *head, *tail; };
+/* Cache-line groups. Another core writes the second group on every wake; the
+ * first and third groups belong to the owner alone, so a remote publication
+ * never invalidates the lines the owner selects from. */
+#define SS_CACHE_LINE 64u
 struct ss_owner {
-    struct ss_owner_fifo ready[SS_OWNER_PRIORITIES];
+    _Alignas(SS_CACHE_LINE) struct ss_owner_fifo ready[SS_OWNER_PRIORITIES];
     struct ss_owner_task *current;
     uint32_t ready_bitmap;
-    _Alignas(8) _Atomic uint64_t incoming[SS_OWNER_PRIORITIES][2];
+    _Alignas(SS_CACHE_LINE) _Atomic uint64_t incoming[SS_OWNER_PRIORITIES][2];
     /* Logical wake-list head: sixteen bucket bits. Slot bits precede their
      * head publication; owner detach may harmlessly consume a slot early. */
     _Atomic uint64_t incoming_words;
-    uint64_t detached[SS_OWNER_PRIORITIES][2];
-    unsigned cursor[SS_OWNER_PRIORITIES];
     _Atomic uint64_t dispatch;
     _Atomic uint64_t sgi_pending;
+    _Alignas(SS_CACHE_LINE) uint64_t detached[SS_OWNER_PRIORITIES][2];
+    unsigned cursor[SS_OWNER_PRIORITIES];
     uint64_t sequence;
     unsigned cpu;
     const struct ss_owner_backend *backend;

@@ -19,7 +19,7 @@ static void unlock(struct ss_control *c, struct ss_control_slot *s)
 }
 static void hint(struct ss_control *c, unsigned cpu, unsigned slot)
 {
-    atomic_fetch_or_explicit(&c->pending[cpu][slot / 64], UINT64_C(1) << (slot % 64), memory_order_release);
+    atomic_fetch_or_explicit(&c->pending[cpu].word[slot / 64], UINT64_C(1) << (slot % 64), memory_order_release);
     ss_owner_barrier(c->backend);
     if (c->backend && c->backend->sgi) c->backend->sgi(c->backend->context, cpu);
 }
@@ -249,14 +249,27 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
 }
 unsigned ss_control_drain(struct ss_control *c, unsigned cpu)
 {
-    unsigned count = 0, start = c->cursor[cpu];
-    for (unsigned offset = 0; offset < SS_OWNER_SLOTS && count < SS_OWNER_BATCH; ++offset) {
-        unsigned slot = (start + offset) % SS_OWNER_SLOTS;
-        uint64_t bit = UINT64_C(1) << (slot % 64);
-        if (!(atomic_load_explicit(&c->pending[cpu][slot / 64], memory_order_acquire) & bit)) continue;
-        if (atomic_fetch_and_explicit(&c->pending[cpu][slot / 64], ~bit, memory_order_acquire) & bit) {
-            consume(c, cpu, slot); ++count;
-            c->cursor[cpu] = (slot + 1) % SS_OWNER_SLOTS;
+    /* Visit the pending hints in slot order from the cursor, once each. The
+     * pending words are read once per word, not once per slot, so an empty
+     * drain touches two words instead of every slot index. */
+    _Static_assert(SS_OWNER_SLOTS == 128, "two pending words");
+    unsigned count = 0, start = c->cursor[cpu].value;
+    for (unsigned pass = 0; pass < 2 && count < SS_OWNER_BATCH; ++pass) {
+        unsigned first = pass ? 0 : start, last = pass ? start : SS_OWNER_SLOTS;
+        for (unsigned w = first / 64; w <= (last ? (last - 1) / 64 : 0) && last > first && count < SS_OWNER_BATCH; ++w) {
+            unsigned lo = w * 64 > first ? 0 : first - w * 64;
+            unsigned hi = (w + 1) * 64 < last ? 64 : last - w * 64;
+            uint64_t range = (hi == 64 ? ~UINT64_C(0) : (UINT64_C(1) << hi) - 1) & ~((UINT64_C(1) << lo) - 1);
+            uint64_t bits = atomic_load_explicit(&c->pending[cpu].word[w], memory_order_acquire) & range;
+            while (bits && count < SS_OWNER_BATCH) {
+                unsigned b = (unsigned)__builtin_ctzll(bits), slot = w * 64 + b;
+                uint64_t bit = UINT64_C(1) << b;
+                bits &= bits - 1;
+                if (atomic_fetch_and_explicit(&c->pending[cpu].word[w], ~bit, memory_order_acquire) & bit) {
+                    consume(c, cpu, slot); ++count;
+                    c->cursor[cpu].value = (slot + 1) % SS_OWNER_SLOTS;
+                }
+            }
         }
     }
     return count;

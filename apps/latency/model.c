@@ -3,6 +3,12 @@
 #include "platform.h"
 #include "workload.h"
 
+#ifdef SUNSTONE_LATENCY_CPU_ONLY
+/* The CPU control has no DMA client; these hooks stand for the board image's absence of one. */
+void latency_dma_model_tick(void) {}
+void latency_dma_model_start(void) {}
+unsigned latency_dma_model_stop(void) { return 0; }
+#endif
 static struct latency_result result;
 static StaticTask_t controller_state;
 static StackType_t controller_stack[2048];
@@ -73,6 +79,14 @@ static void controller(void *argument)
                         configASSERT(s->start < result.phase_bounds[p][1]);
                         configASSERT(s->ticks <= result.phase_bounds[p][1] - s->start);
                     }
+#ifdef SUNSTONE_LATENCY_PMU
+                    if (k == 0) {
+                        const struct ss_latency_site_pmu *q = &result.site_pmu[p][c][i];
+                        number("site_pmu instructions=", q->instructions); number(" cycles=", q->cycles);
+                        number(" l1d_refills=", q->l1d_refills); number(" l2d_refills=", q->l2d_refills);
+                        platform_puts("\n");
+                    }
+#endif
                     number("site_phase=", p); number(" kind=", k); number(" slot=", i);
                     number(" ticks=", s->ticks); number(" start=", s->start);
                     number(" enter_site=", s->enter_site); number(" exit_site=", s->exit_site);
@@ -93,7 +107,9 @@ static void controller(void *argument)
         }
     }
     configASSERT(result.core[0].metric[SS_LAT_IRQ].count);
+#ifndef SUNSTONE_LATENCY_CPU_ONLY
     configASSERT(result.core[0].metric[SS_LAT_DMA].count);
+#endif
     platform_puts("PASS latency model: 64 idle and 128 loaded wake samples on each of eight cores; sequential 1 MiB/core traffic and real DMA service with modeled completion\n");
     platform_exit(0);
 }
@@ -106,7 +122,9 @@ void kernel_main(void)
     __asm__ volatile("mrs %0,cntfrq_el0" : "=r"(frequency));
     ss_latency_init(frequency);
     latency_workload_init();
+#ifndef SUNSTONE_LATENCY_CPU_ONLY
     latency_dma_model_init();
+#endif
     configASSERT(xTaskCreateStaticAffinitySet(controller, "latency-control", 2048, NULL, 5,
         controller_stack, &controller_state, 1));
     vTaskStartScheduler();

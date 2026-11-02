@@ -67,6 +67,14 @@ scheduler starts. A negative control builds the scheduler without the refusal to
 yield while the scheduler is not running and must end with the violation on core
 0.
 
+## Guest time
+
+The board runs under QEMU's instruction counter (`-icount shift=0,sleep=off`, one thread), so guest time
+advances with executed instructions, and idle time is skipped. A loaded host cannot stretch a service window or
+a sensor deadline. With guest time on the host's wall clock, the resident cases failed at host load above about 60.
+At the loader's first expiry the supervisor's stop and the watchdog expiry coincide; the silent-transport case
+accepts either as the designed stop.
+
 ## Limits
 
 The model checks protocol and sequencing, not electrical behavior or timing
