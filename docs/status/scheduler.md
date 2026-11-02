@@ -22,6 +22,11 @@ qualification.
 
 ## Open work
 
+0. Known defect, idle pull: a task that waits behind a running task on its owner while an allowed CPU idles
+   can stay unmoved. The eight-core check's stranding phase fails on the wall clock about 1 run in 50 at host
+   load 30, at `scheduler-partitioned-qemu.c:386` (`withholding_completed == i + 1` after 100 ms). Forty-three
+   runs on the instruction counter with different start delays (`--skew 0..41`) all pass, so no deterministic
+   reproduction exists. Idle pull stays off, as the fork does, until it is fixed.
 1. Masked time stays above 25 us on cores 0, 2, 3 and at end-of-run suspension: measured phase spans reach 29 us
    (core 3) and the end-of-run self-suspension 46 us. Backend stalls are 94 to 98% of their cycles with 23 to 38
    L1D refills each, so the cause is dependent line fetches under saturated DRAM. Fewer lines per entry or
