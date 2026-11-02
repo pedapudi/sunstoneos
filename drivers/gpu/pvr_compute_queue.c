@@ -152,7 +152,8 @@ int pvr_compute_queue_bind(struct pvr_compute_queue *q,struct pvr_gpu_service *g
 int pvr_compute_queue_create(struct pvr_compute_queue *q,const struct gpu_queue_context_config *c)
 {
     if (!q || !c || q->phase!=PVR_COMPUTE_QUEUE_BOUND || q->service->phase!=PVR_GPU_SERVICE_COLD ||
-        !c->program || !c->job_us || c->job_us>GPU_QUEUE_MAX_JOB_US) return 0;
+        !c->program || !c->job_us ||
+        (q->service->config.job_us_limit && c->job_us>q->service->config.job_us_limit)) return 0;
 #ifdef SUNSTONE_A733_OS_GPU_RECOVERY_TEST
     if (c->job_us!=200000) return 0;
 #endif
@@ -326,9 +327,10 @@ static int take(struct pvr_compute_queue *q)
         atomic_store(v.slot_state,PVR_COMPUTE_QUEUE_IDLE);
         return post(q,q->job.sequence,GPU_QUEUE_REFUSED,GPU_QUEUE_DEADLINE,0);
     }
-    /* Ring staging has its own finite transport bound. A short kernel hang
-     * bound starts only once the kernel-queue KICK has been accepted. */
-    if (!a733_deadline_after(now,GPU_QUEUE_MAX_JOB_US,&q->deadline)) return fault(q,GPU_QUEUE_SERVICE);
+    /* Ring staging has its own finite transport bound, the declared job bound.
+     * A short kernel hang bound starts only once the kernel-queue KICK has
+     * been accepted. */
+    if (!a733_deadline_after(now,q->job_us,&q->deadline)) return fault(q,GPU_QUEUE_SERVICE);
     q->timeline_previous=q->timeline_serial;
     put32(q->update+4,++q->timeline_serial);
     const struct pvr_cccb_command commands[2]={

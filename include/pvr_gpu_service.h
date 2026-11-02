@@ -147,6 +147,9 @@ struct pvr_gpu_service_config {
      * no allocation, translation walk or FreeRTOS task query. Supplied only
      * when native job rings and register mappings have passed admission. */
     int (*job_irq_ack)(void *);
+    /* The application's declared job bound in microseconds (the manifest's gpu
+     * job_us): context creation refuses a larger job_us. Zero: no limit. */
+    uint64_t job_us_limit;
     /* Same monotonic clock, without mutating the service's sampled clock. */
     int (*job_now)(void *,uint64_t *);
     /* Optional once-admitted MTS doorbell for job-only raw KCCB publication.

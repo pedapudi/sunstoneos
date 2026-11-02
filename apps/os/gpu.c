@@ -92,6 +92,7 @@ static int service_init(unsigned core)
 {
     /* The returning lifetime parks the firmware before the ROM return. */
     if(os_returning())gpu.firmware.config.park=return_park;
+    gpu.firmware.config.job_us_limit=&os_gpu_job_us?os_gpu_job_us:0;
     return pvr_gpu_service_init(&gpu.service,&gpu.firmware.config,OS_GPU_PRIORITY,(UBaseType_t)1<<core);
 }
 static int start_refused(unsigned reason)

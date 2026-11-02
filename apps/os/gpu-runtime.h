@@ -3,8 +3,10 @@
 #include "a733_gpu_platform_native.h"
 #define OS_GPU_PRIORITY 4u
 #define OS_GPU_OPEN_US UINT64_C(1000000)
-#define OS_GPU_MAX_JOB_US UINT64_C(1000000)
-#define OS_GPU_REPLY_US (2 * OS_GPU_MAX_JOB_US)
+/* The application's declared job bound (manifest "gpu" job_us), generated into
+ * the image tables by tools/sunstone-manifest.py; zero for an image whose
+ * application declares no GPU use. */
+extern const uint64_t os_gpu_job_us __attribute__((weak)); /* absent in host checks that link no image tables */
 #define OS_GPU_WAIT_TICKS 10u
 int os_gpu_queue_quiesce(void);
 #ifdef SUNSTONE_A733_OS_GPU_BISECT
