@@ -1,6 +1,6 @@
 # NPU resources: declared, admitted and reserved
 
-Status: **design; the lifetime job quota is removed, the rest is not built.** This document covers how an
+Status: **the lifetime job quota is removed and declarations are admitted and reserved (items 1 and 2 of the plan); graphs from the graph, backpressure measurements and linking after the scheduler starts are not built.** This document covers how an
 application states what it needs from the NPU, how the operating system admits that against what the NPU and
 the memory really offer, and which numbers in the code are limits of the hardware and which are choices of a
 fixed array. It also fixes the end state for graphs: an application loads a graph that it hands over at run
@@ -63,13 +63,36 @@ graph, plus the page tables for the device range these use (`npu_runtime_require
 
 ## Admission and reservation
 
-The operating system adds the declaration to the session record that it already seals for each application. At
-admission it checks, in this order, against the real capacity: the slot count against the memory and the
-command-mask bound; the sum of the computed regions against the pool and against the device address space and
-page-table limits; the links against the tensor shapes; and the in-flight depth against the queue's array.
-A declaration that does not fit is refused with a reason that names the resource. An admitted declaration is
-reserved: the pool is carved at admission, the tables are built, the queue is allocated at its declared depth.
-The job path then allocates nothing.
+**Where the declaration lives.** The manifest JSON carries the `npu` section (`tools/sunstone-manifest.py` validates
+it; a list of graphs or links counts as its length). The session record carries it as four bytes in the NPU extent,
+`declared` of `struct os_npu_session`: slots, in-flight depth, graphs, links (`npu_declaration_pack`,
+`include/npu_declaration.h`). The offline session producer writes it with `with_npu_declaration` in
+`apps/os/host.py` from `npu_word` of the manifest. The extent keeps its size.
+
+**What is checked, and where.** At session admission (`apps/os/admission.c`, through `os_npu_declaration_admitted`)
+the cheap checks run, in this order, and the first failure names the resource:
+
+1. slots: at least 1 and at most `NPU_RUNTIME_SLOTS`; for an image without a queue exactly 1, since it has one client
+   task;
+2. in-flight depth: at least 1 and at most `SS_NPU_QUEUE_MAX_DEPTH`;
+3. graphs: at least 1 and at most `NPU_RUNTIME_MODELS`;
+4. links: at most the queue's edge table;
+5. the declaration against what the image links: at least the slots it uses, at least its graphs, at least its links.
+
+At start (`os_npu_start`) the memory is computed from the declaration and the linked graphs
+(`npu_runtime_reservation`): a graph that is not admissible, a device address space that the regions overflow, or a
+reservation beyond the pool is refused with the resource's code in the start record. The pool is carved for the
+declared slots at that moment, the tables are built and the runtime is prepared; nothing is allocated afterwards. A
+queue opened deeper than the declared in-flight depth is refused at open.
+
+**Transition.** A session record that declares nothing (`declared` 0) is given the declaration its image needs and the
+deepest queue, which is what the operating system admitted before declarations existed. This keeps existing session
+templates working. An application that declares gets what it declares, and a declaration that is lower than the image
+needs is refused. Making the declaration mandatory is a one-line change once every template carries one.
+
+**What is still a compile-time array.** The checks above refuse beyond the arrays (8 slots, 16 graphs, depth 64);
+they do not yet size them from the declaration. That needs the runtime and the queue to take storage from the
+reservation, and is the remaining part of principle 3.
 
 ## Graphs from the graph
 
@@ -100,8 +123,11 @@ grants, with a bounded wait for the lower priorities. This is the next step afte
 1. **Done:** remove the lifetime quota in the three places above. Host case 26 of `checks/os-npu-service.py`: a session whose `jobs` field
    is 1 runs 120,000 jobs through the real wrapper, runtime and service without failing, and the same wrapper with the
    quota restored fails the case. The admission bound of 8 is removed with it (`apps/os/admission.c`).
-2. Add the declarations to the manifest and the session record; admission and reservation; host cases for
-   refusal at each capacity (slots, pool, page tables, depth) and for the default declaration.
+2. **Done:** the declarations in the manifest and the session record; admission and reservation; host case 27 of
+   `checks/os-npu-service.py` for the refusal at each capacity that the current arrays reach (slots, depth, graphs,
+   image needs, a damaged graph, the pool) and for the default declaration. The device address space and page-table
+   limits cannot be reached with eight slots and graphs of at most `NBG_MODEL_MAX_BYTES` (256 MiB, so at most about 2 GiB of constant regions plus the tensors); their codes are in place
+   for when the arrays grow.
 3. Register a graph at run time and fill the model description from it; host cases with a graph that no list
    names, loaded after the scheduler has started.
 4. Backpressure measurements and the default depth.
