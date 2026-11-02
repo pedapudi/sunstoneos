@@ -16,23 +16,21 @@ import json
 import subprocess
 from pathlib import Path
 
+import host_rtos
+from harness import environment
+
 ROOT = Path(__file__).resolve().parents[1]
 HZ = 24000000
-FLAGS = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
-         '-fno-sanitize-recover=all', '-DSUNSTONE_BOARD_SUPERVISED=1', '-DSUNSTONE_BOARD_USB2_DUAL=1',
-         '-DSUNSTONE_BOARD_RESIDENT=1']
+DEFINES = ['SUNSTONE_BOARD_SUPERVISED=1', 'SUNSTONE_BOARD_USB2_DUAL=1', 'SUNSTONE_BOARD_RESIDENT=1']
 
 
 def build_and_run(services, output, name, fault_page, step, compiler):
-    binary = output / name
-    flags = FLAGS + ['-I' + str(ROOT / 'checks/usb-diagnostic-protocol/include'),
-                     f'-DSERVICES_SOURCE="{services}"', '-I' + str(ROOT / 'include'),
-                     '-I' + str(ROOT / 'platform/a733-smp-cached'), '-I' + str(ROOT / 'apps/os'),
-                     '-I' + str(ROOT / 'apps/board')]
-    if fault_page:
-        flags.append('-DSUNSTONE_A733_FAULT_PAGE=1')
-    subprocess.run([compiler, *flags, str(ROOT / 'checks/reset-latency.c'), '-o', str(binary)], check=True)
-    out = subprocess.run([str(binary), str(step)], check=True, capture_output=True, text=True).stdout
+    defines = DEFINES + [f'SERVICES_SOURCE="{services}"'] + (['SUNSTONE_A733_FAULT_PAGE=1'] if fault_page else [])
+    binary = host_rtos.build(output, ['checks/reset-latency.c', 'runtime/deadline.c'], name, defines=defines,
+                             includes=[ROOT / 'checks/usb-diagnostic-protocol/include',
+                                       ROOT / 'platform/a733-smp-cached', ROOT / 'apps/os', ROOT / 'apps/board'])
+    out = subprocess.run([str(binary), str(step)], check=True, capture_output=True, text=True,
+                         env=environment()).stdout
     return [json.loads(line) for line in out.splitlines()]
 
 
@@ -48,18 +46,7 @@ def summarize(rows):
                 max_latency_s=max(latency) / HZ if latency else None)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--baseline-services', type=Path)
-    parser.add_argument('--capture', type=Path, help='result.json of checks/fault-capture.py')
-    parser.add_argument('--phase-step-ms', type=int, default=1)
-    parser.add_argument('--compiler', default='clang')
-    args = parser.parse_args()
-    args.output.mkdir(parents=True, exist_ok=True)
-    services = ROOT / 'apps/os/services.c'
-    rows = build_and_run(services, args.output, 'reset-latency', True, args.phase_step_ms, args.compiler)
-    changed = summarize(rows)
+def verify(rows):
     parks = [r for r in rows if r['case'] == 'park']
     for r in parks:
         assert r['expired'], ('no reboot', r)
@@ -77,6 +64,30 @@ def main():
     for case in ('stall', 'silent'):
         details = [r['detail'] for r in rows if r['case'] == case]
         assert details == list(range(1, len(details) + 1)), (case, details)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--baseline-services', type=Path)
+    parser.add_argument('--capture', type=Path, help='result.json of checks/fault-capture.py')
+    parser.add_argument('--phase-step-ms', type=int, default=1)
+    parser.add_argument('--compiler', default='clang')
+    args = parser.parse_args()
+    args.output.mkdir(parents=True, exist_ok=True)
+    services = ROOT / 'apps/os/services.c'
+    rows = build_and_run(services, args.output, 'reset-latency', True, args.phase_step_ms, args.compiler)
+    changed = summarize(rows)
+    verify(rows)
+    # Negative control: services.c without the pending-park word must fail the same checks.
+    mutant = host_rtos.mutated(args.output, 'apps/os/services.c',
+                               'if(__atomic_load_n(&a733_fault_pending,__ATOMIC_RELAXED))return 0;', '(void)0;', 'services-no-pending.c')
+    try:
+        verify(build_and_run(mutant, args.output, 'reset-latency-control', True, 100, args.compiler))
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError('control passed: services.c without the pending-park word')
     result = dict(passed=True, physical_access=False, changed=changed,
                   services=sum(r['case'] == 'stall' for r in rows), phase_step_ms=args.phase_step_ms,
                   services_sha256=hashlib.sha256(services.read_bytes()).hexdigest(),

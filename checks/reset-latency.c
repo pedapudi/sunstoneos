@@ -1,6 +1,7 @@
-/* Host model of the resident reboot path: apps/os/services.c with a modeled
- * counter and WDT0, a supervising task every 20 ms and one park of each core
- * at every phase of the renewal second. checks/reset-latency.py builds it
+/* Host model of the resident reboot path: apps/os/services.c and runtime/deadline.c on
+ * the real FreeRTOS kernel under the host shim (checks/host/), with a modeled WDT0, a
+ * supervising task every 20 ms and one park of each core at every phase of the
+ * renewal second. The counter is the shim's A733 counter, advanced 1 ms per step. checks/reset-latency.py builds it
  * twice, with the changed services.c and SUNSTONE_A733_FAULT_PAGE and with
  * the baseline services.c without it.
  *
@@ -18,8 +19,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "host_rtos.h"
 static uint64_t ticks;
-uint64_t a733_smp_counter(void){return ticks;}
 #define HZ UINT64_C(24000000)
 static uint64_t expires,reloads,last_reload;
 int os_watchdog_reload(void *supervisor)
@@ -34,14 +35,7 @@ uint64_t a733_fault_pending;
 /* No service in this model registers for precise deadlines, so every service
  * keeps the periodic-progress path; checks/deadline-host.c covers the
  * registered-owner path. */
-#include "FreeRTOS.h"
-#include "task.h"
 #include "sunstone_deadline.h"
-static int model_task;
-TaskHandle_t xTaskGetCurrentTaskHandle(void){return &model_task;}
-int sunstone_deadline_register(void){return 0;}
-int sunstone_deadline_owner_record(void *owner,struct sunstone_deadline_record *record){(void)owner;(void)record;return 0;}
-void sunstone_deadline_owner_progress(void *owner){(void)owner;}
 #include SERVICES_SOURCE
 #ifdef SUNSTONE_OS_APPLICATION_H
 /* Keep every service selected: the modeled application is present and live,
@@ -54,7 +48,8 @@ const struct os_session *os_session_admitted(void)
     static const struct os_session session={.board={.workload=4}};
     return &session;
 }
-uint64_t board_runtime_deadline_us(void){return UINT64_MAX/24;}
+/* The runtime deadline is the board's own, beyond the longest case here. */
+uint64_t board_runtime_deadline_us(void){return UINT64_C(3600)*1000000;}
 const struct os_service os_services[OS_SERVICES]={
     {"board-pmic",1000000},{"board-usb0",1000000},{"board-typec",1000000},
     {"board-power",1000000},{"board-usb2",1000000},
@@ -73,7 +68,8 @@ static struct outcome run(int park_core,uint64_t park_at,int stalled,uint64_t st
     int stopped=0;
     ticks=0;expires=4*HZ;reloads=0;last_reload=0;
     for(uint64_t ms=0;ticks<end;++ms){
-        ticks=ms*(HZ/1000);
+        if(ms)host_advance_us(1000);
+        ticks=host_counter();
         if(ticks>=expires){o.expired=ticks;break;}
         int parked=park_core>=0&&ticks>=park_at;
 #ifdef SUNSTONE_A733_FAULT_PAGE
@@ -101,23 +97,33 @@ static void report(const char *name,int core,uint64_t at,struct outcome o)
         (unsigned long long)o.detail,(unsigned long long)o.reloads);
     fflush(stdout);
 }
-/* Each run in its own process: services.c keeps its records in statics. */
+/* Each run in its own process: services.c keeps its records in statics, and one
+ * scheduler session runs per process. */
+struct job{const char *name;int core;uint64_t at;int stalled;uint64_t stall_at,end;};
+static void job_task(void *argument)
+{
+    const struct job *j=argument;
+    int core=j->core,stalled=j->stalled;uint64_t at=j->at,stall_at=j->stall_at;
+    struct outcome o=run(core,at,stalled,stall_at,j->end);
+#ifdef SUNSTONE_A733_FAULT_PAGE
+    if(!stall_at&&stalled>=0){
+        /* The watchdog fires at the loader's first expiry, before the
+         * supervisor's pass there; that pass would refuse and name the
+         * silent service. */
+        expires=UINT64_MAX;assert(host_counter()==4*HZ);ticks=host_counter();
+        assert(board_resident_renew(&ticks,4*HZ)==0);
+        o.detail=board_resident_stop_detail();
+    }
+#endif
+    report(j->name,core,at,o);
+}
 static void fork_run(const char *name,int core,uint64_t at,int stalled,uint64_t stall_at,uint64_t end)
 {
     pid_t child=fork();
     if(!child){
-        struct outcome o=run(core,at,stalled,stall_at,end);
-#ifdef SUNSTONE_A733_FAULT_PAGE
-        if(!stall_at&&stalled>=0){
-            /* The watchdog fires at the loader's first expiry, before the
-             * supervisor's pass there; that pass would refuse and name the
-             * silent service. */
-            expires=UINT64_MAX;ticks=4*HZ;
-            assert(board_resident_renew(&ticks,4*HZ)==0);
-            o.detail=board_resident_stop_detail();
-        }
-#endif
-        report(name,core,at,o);_exit(0);
+        struct job j={name,core,at,stalled,stall_at,end};
+        host_rtos_run(job_task,&j,2,UINT64_MAX/2);
+        _exit(0);
     }
     int status;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&!WEXITSTATUS(status));
 }

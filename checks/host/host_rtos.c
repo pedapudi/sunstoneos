@@ -175,7 +175,7 @@ unsigned host_in_isr(void) { return in_isr; }
 
 /* ---- interrupts --------------------------------------------------------- */
 static struct { uint64_t at; void (*handler)(void *); void *argument; unsigned used; } events[HOST_EVENTS];
-static unsigned gives, max_gives;
+static unsigned gives, max_gives, events_pending;
 static uint64_t total_gives;
 void host_trace_give(void) { ++gives; ++total_gives; }
 uint64_t host_gives_total(void) { return total_gives; }
@@ -183,7 +183,7 @@ uint64_t host_max_gives_per_isr(void) { return max_gives; }
 void host_irq_at(uint64_t us, void (*handler)(void *), void *argument)
 {
     for (unsigned i = 0; i < HOST_EVENTS; ++i)
-        if (!events[i].used) { events[i].at = us; events[i].handler = handler; events[i].argument = argument; events[i].used = 1; return; }
+        if (!events[i].used) { events[i].at = us; events[i].handler = handler; events[i].argument = argument; events[i].used = 1; ++events_pending; return; }
     fail("too many scheduled interrupts");
 }
 static void finish_isr(void)
@@ -231,12 +231,12 @@ static void deliver(void)
 {
     while (running && !in_isr && !critical && !mask_level) {
         unsigned best = HOST_EVENTS;
-        for (unsigned i = 0; i < HOST_EVENTS; ++i)
+        for (unsigned i = 0; events_pending && i < HOST_EVENTS; ++i)
             if (events[i].used && events[i].at <= now_us && (best == HOST_EVENTS || events[i].at < events[best].at)) best = i;
         if (tick_debt) run_isr(tick_isr, NULL);
         else if (best != HOST_EVENTS) {
             void (*h)(void *) = events[best].handler; void *a = events[best].argument;
-            events[best].used = 0;
+            events[best].used = 0; --events_pending;
             run_isr(h, a);
         } else if (COMPARE_DUE()) run_isr(timer_isr, NULL);
         else break;
@@ -263,7 +263,7 @@ void host_advance_us(uint64_t us)
         uint64_t step = target;
         if (next_tick_us < step) step = next_tick_us;
         if (compare_us && COMPARE_AT() > now_us && COMPARE_AT() < step) step = COMPARE_AT();
-        for (unsigned i = 0; i < HOST_EVENTS; ++i)
+        for (unsigned i = 0; events_pending && i < HOST_EVENTS; ++i)
             if (events[i].used && events[i].at > now_us && events[i].at < step) step = events[i].at;
         now_us = step;
         if (now_us >= next_tick_us) { ++tick_debt; next_tick_us += 1000u; }
