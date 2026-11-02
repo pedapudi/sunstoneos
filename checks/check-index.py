@@ -15,6 +15,10 @@ build output, and no required argument other than a new output directory.
                                          also run the selected pure-host checks, one new
                                          output directory per check under DIR
 
+A few checks match the device-access scan by text but open no device; HOST_ONLY lists
+them. PROSE_CHECKS marks checks whose failure may be documentation prose alone, and
+SERIAL_CHECKS marks pure-host checks that the gate runs one at a time.
+
 Coverage is textual: a check covers a path when the check, or a checks/ file
 it names (followed transitively), names that path or one of its parent
 directories, or when the path is reached through #include from a named source.
@@ -45,8 +49,24 @@ import harness
 ROOT = Path(__file__).resolve().parents[1]
 # The index was once a tracked file at this path; --verify refuses its return.
 RETIRED_INDEX = 'checks/index.json'
-# Required options the runner may satisfy with a new, empty directory.
-OUTPUT_OPTIONS = {'--output'}
+# Checks that the device-access scan matches by text but that open no device. Each
+# runs against fixtures; the value is the option that names its new output directory.
+HOST_ONLY = {
+    'board-runner.py': '--out',           # fake FEL and board under the output directory
+    'usb-disconnect.py': '--output',      # sysfs metadata fixtures; no device is opened
+    'usb-access-discover.py': '--output', # fixture sysfs tree; no device is opened
+}
+# Checks whose failure can reflect documentation prose alone. The gate reports
+# them as WARN unless --strict-docs is given. True covers the whole check; a tuple
+# names the test cases that read repository documents, so that a failure in any
+# other case still fails the gate.
+PROSE_CHECKS = {
+    'docs-links.py': True,
+    'progress.py': ('test_inventory_and_evidence', 'test_cache_and_changed_format'),
+}
+# Pure-host checks that run QEMU or time a result. The gate runs them one at a time,
+# after the parallel group, so that other checks do not distort their deadlines.
+SERIAL_CHECKS = frozenset({'cpu-pmu-smp.py', 'smp-port-cost.py', 'pcie-qemu.py', 'npu-runtime-bounds.py'})
 # Top-level ~/.cache/sunstoneos area named by a path literal or by a CACHE/cache variable.
 CACHE_AREA = re.compile(r"""(?:\.cache/sunstoneos['"]?\s*/\s*['"]?|\b(?i:cache)\s*/\s*['"])([a-z][a-z0-9-]*)""")
 SIBLING = re.compile(r"""with_name\(\s*['"]([\w.-]+\.py)['"]|['"]checks/([\w.-]+\.py)['"]""")
@@ -66,6 +86,15 @@ NOT_PURE = {
 # The hook fixtures run only for their actual process inputs. References inside
 # harness helpers do not add fixture inputs; this matches pre-push.fixture_selection.
 COMPLETE_INPUTS = {'pre-push-hook.py': ('tools/git-hooks/pre-push', 'checks/harness.py')}
+
+
+def run_environment():
+    """The environment of the integration gate: the cached LLVM toolchain leads PATH."""
+    environment = harness.environment()
+    cache = Path(os.environ.get('SUNSTONE_CACHE', Path.home() / '.cache/sunstoneos'))
+    environment['PATH'] = str(cache / 'host/usr/lib/llvm-21/bin') + os.pathsep + environment.get('PATH', '')
+    environment['SUNSTONEOS_DIR'] = str(ROOT)
+    return environment
 
 
 def checks():
@@ -148,14 +177,19 @@ def entry(path, documents):
     tree = ast.parse(text)
     doc = ast.get_docstring(tree) or ''
     required, areas, usb = scan(path)
+    if path.name in HOST_ONLY:
+        areas, usb = set(), False
     areas = sorted(areas)
     uses_argv = 'sys.argv[' in text
     is_library = library(tree, text)
     pure = (not is_library and not usb and not uses_argv and not set(areas) - NEUTRAL_AREAS
-            and set(required) <= OUTPUT_OPTIONS and path.name not in NOT_PURE)
+            and set(required) <= {HOST_ONLY.get(path.name, '--output')} and path.name not in NOT_PURE)
+    option = HOST_ONLY.get(path.name, '--output')
     return {'summary': doc.splitlines()[0] if doc else '', 'docs': documents(path.name),
             'required_arguments': required + (['sys.argv'] if uses_argv else []), 'cache_areas': areas,
-            'usb': usb, 'library': is_library, 'pure_host': pure, 'input_reason': NOT_PURE.get(path.name)}
+            'usb': usb, 'library': is_library, 'pure_host': pure, 'input_reason': NOT_PURE.get(path.name),
+            'output_option': option if option in required else None,
+            'prose': PROSE_CHECKS.get(path.name), 'serial': path.name in SERIAL_CHECKS}
 
 
 def generate():
@@ -288,6 +322,10 @@ def main():
         if subprocess.run(['git', 'ls-files', '--error-unmatch', RETIRED_INDEX], cwd=ROOT,
                           capture_output=True).returncode == 0:
             problems.append(f'{RETIRED_INDEX}: tracked; the index is generated on demand, so remove it with git rm --cached')
+        problems += [f'{name}: listed in HOST_ONLY, PROSE_CHECKS or SERIAL_CHECKS but absent from checks/'
+                     for name in sorted({*HOST_ONLY, *PROSE_CHECKS, *SERIAL_CHECKS} - set(index))]
+        problems += [f'{name}: listed in HOST_ONLY but not classified pure-host' for name in sorted(HOST_ONLY)
+                     if name in index and not index[name]['pure_host']]
         for problem in problems:
             print(problem)
         if problems:
@@ -312,10 +350,10 @@ def main():
     results = {}
     for name in runnable:
         command = [sys.executable, str(ROOT / 'checks' / name)]
-        if '--output' in index[name]['required_arguments']:
-            command += ['--output', str(out / Path(name).stem)]
+        if index[name]['output_option']:
+            command += [index[name]['output_option'], str(out / Path(name).stem)]
         try:
-            result = subprocess.run(command, cwd=ROOT, capture_output=True, env=harness.environment(), timeout=args.timeout)
+            result = subprocess.run(command, cwd=ROOT, capture_output=True, env=run_environment(), timeout=args.timeout)
             output, code = result.stdout + result.stderr, result.returncode
         except subprocess.TimeoutExpired as error:
             output, code = (error.stdout or b'') + (error.stderr or b'') + b'\nDeclared check deadline expired.\n', 124

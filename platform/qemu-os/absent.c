@@ -1,0 +1,54 @@
+/* Services and hardware that the virtual OS board does not have, so the
+ * image links without them.
+ *
+ * The session's workload (2, which has no USB host and no radio) selects the
+ * tasks that exist: the board starts no Type-C, power, USB host, radio or
+ * network task, so none of these functions runs. An entry that does run
+ * panics with its name, which turns a workload mismatch into a named stop.
+ * The NPU and GPU services are not linked: their images select them with
+ * build options that the virtual board does not set. */
+#include "FreeRTOS.h"
+#include "task.h"
+#include "platform.h"
+#include "../../apps/board/application.h"
+#include "a733_usb_platform_native.h"
+#include "a733_memory_uncached.h"
+
+#define ABSENT(name) platform_panic("absent service: " name, 0)
+int a733_typec_begin(struct a733_typec *t, uint64_t deadline) { (void)t; (void)deadline; ABSENT("typec begin"); }
+int a733_typec_poll(struct a733_typec *t) { (void)t; ABSENT("typec poll"); }
+void a733_typec_revoke(struct a733_typec *t) { (void)t; }
+int a733_typec_snapshot(struct a733_typec *t, struct a733_typec_token *k, uint64_t deadline)
+{ (void)t; (void)k; (void)deadline; ABSENT("typec snapshot"); }
+int a733_typec_native_init(struct a733_typec_native *n, const struct a733_typec_native_config *c)
+{ (void)n; (void)c; ABSENT("typec init"); }
+int a733_typec_native_power_poll(struct a733_typec_native *n) { (void)n; ABSENT("typec power poll"); }
+int a733_usb2_native_init(struct a733_usb2_native *n, const struct a733_usb2_platform_config *c,
+    struct a733_platform_locks *l, void *t, struct device_memory_pool *p,
+    struct a733_clock_leases *k, struct a733_rail_leases *r, struct a733_pmic *m,
+    struct a733_gpu_resource_manager *g, struct a733_typec *y,
+    int (*admit)(void *, const struct a733_usb2_platform_config *), void *context)
+{ (void)n; (void)c; (void)l; (void)t; (void)p; (void)k; (void)r; (void)m; (void)g; (void)y; (void)admit; (void)context;
+  ABSENT("usb2 init"); }
+enum a733_usb2_device_kind a733_usb2_device_kind(struct a733_usb2_native *n) { (void)n; ABSENT("usb2 device kind"); }
+void board_host_task(void *unused) { (void)unused; ABSENT("usb host task"); }
+struct device_memory_pool *a733_memory_uncached_init(void) { return 0; }
+int a733_usb_platform_native_read(void *c, uintptr_t a, uint32_t *v) { (void)c; (void)a; (void)v; return 0; }
+int a733_usb_platform_native_write(void *c, uintptr_t a, uint32_t v) { (void)c; (void)a; (void)v; return 0; }
+
+/* No radio: workload 2 starts neither the radio owner nor the network client. */
+const struct board_radio_chip_id *board_radio_chip_id(void) { return 0; }
+int board_radio_startup(struct board_radio *r, struct a733_native_usb *u, struct board_radio_ce_provider *c,
+    const void *p, size_t size, const struct board_radio_profile *f, const uint8_t d[32],
+    const struct board_radio_chip_id *i, TaskHandle_t owner, TaskHandle_t client, atomic_uint *w)
+{ (void)r; (void)u; (void)c; (void)p; (void)size; (void)f; (void)d; (void)i; (void)owner; (void)client; (void)w;
+  ABSENT("radio startup"); }
+enum board_radio_result board_radio_poll(struct board_radio *r) { (void)r; ABSENT("radio poll"); }
+enum board_radio_result board_radio_external_failure(struct board_radio *r) { (void)r; ABSENT("radio failure"); }
+int board_radio_client_poll(struct board_radio *r) { (void)r; ABSENT("radio client"); }
+int board_radio_client_result(const struct board_radio *r, unsigned *bytes) { (void)r; (void)bytes; ABSENT("radio result"); }
+int board_radio_watchdog(struct board_radio *r, uint64_t *progress, uint64_t *deadline)
+{ (void)r; (void)progress; (void)deadline; ABSENT("radio watchdog"); }
+int board_radio_profile_runtime(struct board_radio_profile *o, const struct board_radio_profile *i,
+    const struct a733_board_session *s, uint8_t d[32])
+{ (void)o; (void)i; (void)s; (void)d; ABSENT("radio profile"); }

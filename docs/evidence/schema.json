@@ -1,0 +1,34 @@
+{
+  "$comment": "Schema of one line in docs/evidence/SUBSYSTEM.jsonl. tools/evidence.py validates this subset of JSON Schema.",
+  "type": "object",
+  "required": ["id", "subsystem", "hypothesis", "outcome", "verdict", "measurements", "conditions", "evidence"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1, "$comment": "The queue entry ID, or a short lowercase slug for a result that has no queue entry."},
+    "subsystem": {"type": "string", "pattern": "[a-z][a-z0-9-]*", "$comment": "The stem of the status file that cites the record."},
+    "date": {"type": ["string", "null"], "pattern": "\\d{4}-\\d{2}-\\d{2}"},
+    "entry_id": {"type": ["string", "null"], "pattern": "\\d{19}-[0-9a-f]{8}"},
+    "port": {"type": ["string", "null"], "pattern": "\\d+-\\d+"},
+    "image_sha256": {"type": ["string", "null"], "pattern": "[0-9a-f]{64}"},
+    "git_revision": {"type": ["string", "null"], "pattern": "[0-9a-f]{40}"},
+    "hypothesis": {"type": "string"},
+    "outcome": {"type": "string", "enum": ["returned", "watchdog-reset", "result-mismatch", "refused-before-launch", "host-error", "no-return", "not-run"], "$comment": "The runner outcome, copied from result.json."},
+    "verdict": {"type": "string", "enum": ["passed", "failed", "inconclusive"], "$comment": "Whether the hypothesis held."},
+    "measurements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "value", "unit"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string", "pattern": "[a-z][a-z0-9_]*"},
+          "value": {"type": "number"},
+          "unit": {"type": "string"}
+        }
+      }
+    },
+    "conditions": {"type": "object", "additionalProperties": {"type": "string"}, "$comment": "Clocks, voltages, inputs and other settings, as named strings."},
+    "evidence": {"type": "array", "items": {"type": "string", "minLength": 1}, "$comment": "Paths to the run directory and other artifacts."},
+    "note": {"type": "string"}
+  }
+}

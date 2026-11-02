@@ -8,6 +8,7 @@
 #include "a733_usb_platform.h"
 #include "platform.h"
 #include "sunstone_crumb.h"
+#include "cached.h"
 #include <string.h>
 #ifdef SUNSTONE_A733_OS_NPU
 #include "npu.h"
@@ -19,6 +20,12 @@ __attribute__((used,retain)) const uint64_t os_cpu_return_watchdog[5]={
     UINT64_C(0x31544457534f5243),2,SUNSTONE_CRUMB_WATCHDOG_MODE,SUNSTONE_CRUMB_RTC,A733_BOARD_SUPERVISED_SECONDS
 };
 static atomic_uint closing,thermal_done,pmic_stop,pmic_done,ready;
+/* Failure return (docs/designs/failure-return.md). failing: a failure claimed
+ * the return, so the same stop sequence runs as for success and the first
+ * failure leaves with it. prefail: that failure came before the scheduler
+ * started, when no service task has run and nothing needs stopping. */
+static atomic_uint failing,prefail;
+static atomic_uint_fast64_t failing_since_us;
 static StaticTask_t terminal_state[8];
 static StackType_t terminal_stack[8][1024];
 static TaskHandle_t terminal_handle[8];
@@ -60,6 +67,8 @@ int os_cpu_return_devices_ready(void)
 int os_cpu_return_ready(void)
 {
     if(!atomic_load_explicit(&ready,memory_order_acquire))return 0;
+    /* Before the scheduler no service task has run, so no device was opened. */
+    if(atomic_load_explicit(&prefail,memory_order_acquire))return 1;
 #ifdef SUNSTONE_A733_OS_NPU
     if(!os_npu_complete())return 0;
 #endif
@@ -97,7 +106,86 @@ void os_cpu_return_begin(const uint8_t *text,size_t bytes)
     const struct ss_result *result=(const void *)ss_result_record;
     if(result->magic!=SS_RESULT_MAGIC||result->status!=SS_RESULT_FINISHED||result->payload_bytes!=bytes)fail(0x738);
     sunstone_crumb(SUNSTONE_CRUMB_OUTPUT,(uint32_t)bytes);
-    atomic_store_explicit(&closing,1,memory_order_release);
+    unsigned none=0;
+    if(!atomic_compare_exchange_strong_explicit(&closing,&none,1,memory_order_acq_rel,memory_order_acquire))fail(0x738);
+}
+int os_cpu_return_failing(void){return atomic_load_explicit(&failing,memory_order_acquire);}
+int os_cpu_return_prescheduler_requested(void){return atomic_load_explicit(&prefail,memory_order_acquire);}
+/* Interrupts and priorities open on this core: the scheduler can still run a
+ * task here, and a pinned terminal can take the core. */
+static int core_can_schedule(void)
+{
+    uint64_t daif,mask;
+    __asm__ volatile("mrs %0,daif\n mrs %1,icc_pmr_el1":"=r"(daif),"=r"(mask)::"memory");
+    return !(daif&0x80)&&mask==portUNMASK_VALUE;
+}
+extern volatile uint8_t ucPrimaryCoreInitDoneFlag;
+/* Claim the return for the first failure. The caller has recorded the
+ * breadcrumb. Returns 1 when the board returns to the ROM (after the
+ * scheduler) or when a claimed return is already running, and does not return
+ * to a caller before the scheduler. Returns 0 when the failure keeps its
+ * watchdog ending. Device failures never claim a return: their owners retain
+ * resources that only the watchdog reset releases. */
+static int failure_claim(unsigned context,uint32_t site,uint32_t value,const void *caller)
+{
+    if(atomic_load_explicit(&failing,memory_order_acquire))return 1;
+    /* A retained device failure already closed admission: only the watchdog ends it. */
+    if(atomic_load_explicit(&board.fatal,memory_order_acquire))return 0;
+    unsigned none=0;
+    const int before_scheduler=xTaskGetSchedulerState()==taskSCHEDULER_NOT_STARTED;
+    if(before_scheduler){
+        /* Core 0 before it releases the other cores: all of them wait in the
+         * start sequence and take the terminal without a task. */
+        if(portGET_CORE_ID()||ucPrimaryCoreInitDoneFlag||a733_smp_counter()>=completion_cutoff())return 0;
+    }else{
+        if(a733_smp_counter()>=completion_cutoff())return 0;
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+        if(!os_gpu_return_ready())return 0;
+#endif
+    }
+    if(!atomic_compare_exchange_strong_explicit(&closing,&none,1,memory_order_acq_rel,memory_order_acquire))return 0;
+    struct ss_failure record={SS_FAILURE_MAGIC,SS_FAILURE_VERSION,before_scheduler?SS_FAILURE_STARTUP:context,
+        site,value,(uint64_t)(uintptr_t)caller,(uint32_t)portGET_CORE_ID(),0,a733_smp_counter()};
+    atomic_store_explicit(&failing_since_us,a733_smp_counter()/24,memory_order_release);
+    /* An application task calls this at EL0: only EL1 code, which runs before
+     * the scheduler, may read the monitor's epoch. */
+    uint64_t epoch=board.session.epoch;
+    if(!epoch&&before_scheduler)epoch=a733_cached_runtime[0].epoch;
+    os_application_failed(&record,epoch,board.session.generation);
+    atomic_store_explicit(&failing,1,memory_order_release);
+    if(!before_scheduler)return 1;
+    atomic_store_explicit(&prefail,1,memory_order_release);
+    atomic_store_explicit(&ready,1,memory_order_release);
+    sunstone_crumb(SUNSTONE_CRUMB_CLOSE,0);
+    a733_qualification_worker_done(0);
+}
+/* An application failure (ss_fail) takes the failure return in any phase. */
+int os_cpu_return_failure(uint32_t site,uint32_t value,const void *caller)
+{
+    if(((site>>12)&15u)!=SUNSTONE_CRUMB_FAIL_APPLICATION)return 0;
+    return failure_claim(SS_FAILURE_RUNNING,site,value,caller);
+}
+/* platform_panic and the unexpected-interrupt path: a software-detected
+ * fault on a core that can still run. A fault with interrupts or priorities
+ * masked, in a critical section or in an interrupt, cannot be handed to a
+ * terminal task, and keeps its watchdog ending. */
+int os_cpu_return_panic(const char *file,unsigned line,const void *caller)
+{
+    const uint32_t site=SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|(line&0xfffu);
+    if(atomic_load_explicit(&failing,memory_order_acquire)||atomic_load_explicit(&closing,memory_order_acquire))return 0;
+    if(xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED&&!core_can_schedule())return 0;
+    board_fail_note(site,(uint32_t)(uintptr_t)file,caller);
+    return failure_claim(SS_FAILURE_FAULT,site,(uint32_t)(uintptr_t)file,caller);
+}
+/* An interrupt nothing owns, taken by a running core. The caller masked the
+ * source. The interrupted task reaches its terminal after this handler. */
+int os_cpu_return_unexpected_interrupt(unsigned interrupt,const void *caller)
+{
+    const uint32_t site=SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|(0x800u|(interrupt&0x7ffu));
+    if(xTaskGetSchedulerState()==taskSCHEDULER_NOT_STARTED||
+       atomic_load_explicit(&failing,memory_order_acquire)||atomic_load_explicit(&closing,memory_order_acquire))return 0;
+    board_fail_note(site,interrupt,caller);
+    return failure_claim(SS_FAILURE_FAULT,site,interrupt,caller);
 }
 void os_cpu_return_thermal_done(void)
 {sunstone_crumb(SUNSTONE_CRUMB_THERMAL_DONE,0);atomic_store_explicit(&thermal_done,1,memory_order_release);}
@@ -123,6 +211,10 @@ void os_cpu_return_supervise(void)
     /* Live and before the deadline: restart WDT0. fail() never returns, and a
      * stalled supervisor stops the restarts, so WDT0 resets one interval later. */
     sunstone_watchdog_restart();
+    /* A failure return that the services cannot finish in time ends at the
+     * watchdog, as the failure did before this return existed. */
+    if(os_cpu_return_failing()&&a733_smp_counter()/24-atomic_load_explicit(&failing_since_us,memory_order_acquire)>=
+       OS_FAILURE_RETURN_US)fail(0x742);
     if(!os_cpu_return_requested()){
         uint64_t cutoff=os_cpu_return_cutoff();
 #ifdef SUNSTONE_A733_OS_GPU_LINEAR

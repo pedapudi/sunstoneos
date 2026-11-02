@@ -397,6 +397,46 @@ def policy_cases(out):
     passed('unreviewed-operating-point-requires-coordinator')
 
 
+def withdraw_cases(out):
+    root=out/'withdraw';root.mkdir();queue=board.Queue(root/'state')
+    args=arguments(root,submit=True)
+    jobs=[]
+    for n in range(3):
+        args.hypothesis=f'withdraw input {n}'
+        args.image.write_bytes(f'MODEL withdraw {n}'.encode())
+        jobs.append(queue.submit(args))
+    running=queue.claim('3-1');assert running['id']==jobs[0]['id']
+    def cli(*extra):
+        err=io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(err):
+            try:
+                return board.main(['--queue',str(queue.root),'withdraw',*extra]),err.getvalue()
+            except ValueError as error:
+                return 2,str(error)
+    # Only a queued entry can be withdrawn, and the reason is required.
+    code,message=cli(running['id'],'--reason','not allowed');assert code==2 and 'only a queued entry' in message
+    code,message=cli(jobs[1]['id'],'--reason','   ');assert code==2 and 'reason' in message
+    code,message=cli('not-an-id','--reason','x');assert code==2 and 'Invalid entry ID' in message
+    code,message=cli('1-deadbeef','--reason','x');assert code==2 and 'No queue entry' in message
+    with queue.locked() as state:
+        states={j['id']:j['state'] for j in state['jobs']}
+    assert states=={jobs[0]['id']:'running',jobs[1]['id']:'queued',jobs[2]['id']:'queued'}
+    code,message=cli(jobs[1]['id'],'--reason','superseded by a newer image');assert code==0
+    result=json.loads(Path(jobs[1]['result_path']).read_text())
+    assert result['outcome']=='refused-before-launch' and result['launch_attempted'] is False
+    assert 'superseded by a newer image' in result['first_failure']['detail']
+    # The daemon skips the withdrawn entry, a second withdrawal is refused, and no pause results.
+    queue.complete(running['id'],{'outcome':'returned','first_failure':None})
+    third=queue.claim('3-1');assert third['id']==jobs[2]['id']
+    code,message=cli(jobs[1]['id'],'--reason','again');assert code==2 and 'is done' in message
+    assert queue.status()['boards']['3-1']['pause'] is None
+    ledger=[json.loads(line) for line in (queue.root/'ledger.jsonl').read_text().splitlines()]
+    withdrawn=[e for e in ledger if e['event']=='withdrawn']
+    assert len(withdrawn)==1 and withdrawn[0]['job']==jobs[1]['id'] and withdrawn[0]['reason']=='superseded by a newer image'
+    assert any(e['event']=='result' and e['job']==jobs[1]['id'] for e in ledger)
+    passed('withdraw-refuses-only-a-queued-entry-with-reason-and-ledger')
+
+
 def daemon_cases(out):
     root=out/'daemon';root.mkdir()
     args=arguments(root,submit=True)
@@ -970,6 +1010,7 @@ def main():
     if 'decoded-expectation' in groups:decoded_expectation_cases(args.out)
     if 'queue' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
+        with patch.object(board,'port_idle',return_value=True):withdraw_cases(args.out)
     if 'queue-integrity' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_integrity_cases(args.out)
     if 'policy' in groups:policy_cases(args.out)

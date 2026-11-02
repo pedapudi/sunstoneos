@@ -1011,8 +1011,8 @@ without the microphone, the radio and the headset:
   authority or profile digest.
 
 The command is in the file's header comment.
-[os-image-stage2.py](../checks/os-image-stage2.py) runs the stage-2 entry path
-and passes its contract to this model (see [boot slots](boot-slots.md#checks)).
+The retired `checks/os-image-stage2.py` ran the stage-2 entry path
+and passed its contract to this model (see [boot slots](boot-slots.md#checks)).
 
 [os-image-radio.py](../checks/os-image-radio.py) compiles `apps/os/radio.c`
 and, in a resident build, `apps/os/radio_profile.c` with the radio build's own

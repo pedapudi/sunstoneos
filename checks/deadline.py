@@ -13,6 +13,7 @@ from pathlib import Path
 import shlex
 import struct
 import subprocess
+import host_rtos
 from harness import CLANG, SANITIZE, environment, save
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -73,12 +74,33 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--port-build',type=Path)
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=False)
-    exe=args.output/'deadline-host'
-    subprocess.run([str(CLANG),'-std=c11','-Wall','-Wextra','-Werror',*SANITIZE,
-                    '-I'+str(ROOT/'checks/deadline-host'),'-I'+str(ROOT/'include'),
-                    str(ROOT/'checks/deadline-host.c'),'-o',str(exe)],check=True,env=environment())
-    host=subprocess.check_output([str(exe)],text=True,env=environment())
-    result={'passed':True,'host':host,'limits':'Deterministic owner/notification model; actual service supervisor and common deadline C.'}
+    exe=host_rtos.build(args.output,['checks/deadline-host.c','runtime/deadline.c'],'deadline-host',
+                        includes=[ROOT/'apps/os'])
+    host=''
+    for scenario in ('runtime','services'):
+        done=subprocess.run([str(exe),scenario],capture_output=True,text=True,env=environment())
+        assert done.returncode==0,(scenario,done.stdout,done.stderr)
+        host+=done.stdout
+    # Negative controls: each reintroduced bug must fail the scenario that guards it.
+    controls={}
+    for name,scenario,source,old,new in (
+        ('sealed-deadline-bound','services','apps/os/services.c','deadline>board_runtime_deadline_us()',
+         'deadline>session->board.deadline_us'),
+        ('no-notified-wake-time','runtime','runtime/deadline.c','if(!s->woken_us)s->woken_us=sunstone_deadline_now_us();',
+         '(void)0;'),
+        ('wake-every-due-owner','runtime','runtime/deadline.c','if(d&&d<=now&&(!first||d<first)){first=d;due=&slots[i];}',
+         'if(d&&d<=now){first=d;due=&slots[i];}')):
+        sources=['checks/deadline-host.c','runtime/deadline.c']
+        defines=[]
+        if source.startswith('apps/'):
+            defines=['SERVICES_SOURCE="%s"'%host_rtos.mutated(args.output,source,old,new,name+'.c')]
+        else:
+            sources[1]=host_rtos.mutated(args.output,source,old,new,name+'.c')
+        mutant=host_rtos.build(args.output,sources,'control-'+name,includes=[ROOT/'apps/os'],defines=defines,flags=['-w'],deadline=True)
+        done=subprocess.run([str(mutant),scenario],capture_output=True,text=True,env=environment())
+        assert done.returncode!=0,('control passed',name)
+        controls[name]=scenario
+    result={'passed':True,'host':host,'negative_controls':controls,'limits':'Actual service supervisor and common deadline C on the real FreeRTOS kernel under the host shim (scripted time and interrupts).'}
     if args.port_build:result['selected_port']=native(args.port_build,args.output)
     save(args.output/'result.json',result);print(host,end='')
 

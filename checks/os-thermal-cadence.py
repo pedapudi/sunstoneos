@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Run the actual thermal owner step with delayed reads and cached-policy snapshots.
 
-Device reads, task identity, clock completion and GIC calls are modeled. The
-owner branch, policy, record writer, window publication and host classification
+The owner runs as a task of the real FreeRTOS kernel under the host shim, with the
+shim's A733 counter and the kernel's critical sections. Device reads, clock
+completion and GIC calls are modeled. The owner branch, policy, record writer, window publication and host classification
 are actual code. No device is opened and no host coverage limit is changed.
 """
 import argparse
@@ -10,69 +11,55 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
-import shlex
-import struct
 import subprocess
+import sys
 
-from harness import CLANG, Image, LLD
-from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM
-from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_PC
+import host_rtos
+from harness import environment
 
 ROOT=Path(__file__).resolve().parents[1]
-CHECK_INPUTS=['apps/os/thermal.c','apps/os/thermal-report.py','drivers/thermal/a733_thermal.c',
-              'checks/os-thermal-cadence.c','checks/os-thermal-cadence.py',
-              'apps/os/thermal-report.h','include/FreeRTOSConfig.h']
 p=argparse.ArgumentParser(description=__doc__)
-p.add_argument('--build',type=Path,required=True,help='configured OS build')
+p.add_argument('--build',type=Path,help='accepted for compatibility; the host build needs no OS build')
 p.add_argument('--output',type=Path,required=True)
+p.add_argument('--thermal-source',type=Path,default=ROOT/'apps/os/thermal.c',help='thermal owner source under test')
+p.add_argument('--no-control',action='store_true')
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
 spec=importlib.util.spec_from_file_location('thermal_report',ROOT/'apps/os/thermal-report.py')
 report=importlib.util.module_from_spec(spec);spec.loader.exec_module(report)
-if (a.build/'compile_commands.json').exists():
-    unit=next(u for u in json.loads((a.build/'compile_commands.json').read_text())
-              if u['file'].endswith(('/apps/os/thermal.c','/os-image/return-thermal.c')))
-    argv=shlex.split(unit['command']);flags=argv[:argv.index('-o')]
-else:
-    values=dict(line.split(' = ',1) for line in
-                (a.build/'CMakeFiles/sunstone-a733-os.dir/flags.make').read_text().splitlines()
-                if ' = ' in line)
-    flags=[CLANG,'--target=aarch64-none-elf',*shlex.split(values['C_DEFINES']),
-           *shlex.split(values['C_INCLUDES']),*shlex.split(values['C_FLAGS'])]
-flags += ['-DSUNSTONE_A733_OS_CPU_CLOCK=1','-I'+str(ROOT/'apps/os')]
-commands=[]
-def run(cmd):
-    cmd=list(map(str,cmd));commands.append(cmd)
-    r=subprocess.run(cmd,capture_output=True,text=True)
-    (a.output/'commands.json').write_text(json.dumps(commands,indent=2)+'\n')
-    assert r.returncode==0,r.stdout+r.stderr
+NETWORK=Path.home()/'.cache/sunstoneos/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source'
+DEFINES=['A733_A76_ADMITTED=1','SUNSTONE_A733_FAULT_PAGE=1','SUNSTONE_A733_OS=1','SUNSTONE_BOARD_APPLICATION=1',
+         'SUNSTONE_BOARD_SUPERVISED=1','SUNSTONE_BOARD_USB2_DUAL=1','SUNSTONE_A733_OS_CPU_CLOCK=1']
+INCLUDES=[ROOT/'apps/os',ROOT/'apps/board',ROOT/'platform/a733-smp-cached',ROOT/'drivers/usb',ROOT/'network/include',
+          NETWORK/'include',NETWORK/'portable/Compiler/GCC']
 
 class Model:
+    """The fixture process, driven one command per line."""
     def __init__(self,path):
-        self.image=Image(path,layout_names=set());self.uc=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
-        self.uc.mem_map(0x200000,0x10000)
-        self.uc.mem_map(0x41000000,0x1200000);self.uc.mem_map(0x60000000,0x10000)
-        for address,data in self.image.parts:self.uc.mem_write(address,data)
+        self.proc=subprocess.Popen([str(path)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True,
+                                   env=environment())
+        self.last=[0]*12
+    def ask(self,line):
+        self.proc.stdin.write(line+'\n');self.proc.stdin.flush()
+        reply=self.proc.stdout.readline();assert reply,'fixture exited'
+        return reply.split()
     def call(self,op,at,value=0):
-        for reg,v in ((UC_ARM64_REG_X0,op),(UC_ARM64_REG_X1,at),(UC_ARM64_REG_X2,value),
-                      (UC_ARM64_REG_SP,0x6000f000),(UC_ARM64_REG_LR,0x6000fff0)):
-            self.uc.reg_write(reg,v)
-        self.uc.emu_start(self.image.address('cadence_control'),0x6000fff0,count=200000)
-        assert self.uc.reg_read(UC_ARM64_REG_PC)==0x6000fff0
-        return self.uc.reg_read(UC_ARM64_REG_X0)&0xffffffff
-    def state(self):return struct.unpack('<12Q',self.uc.mem_read(self.image.address('cadence_state'),96))
+        fields=self.ask(f'call {op} {at} {value}')
+        self.last=[int(v) for v in fields[1:]]
+        return int(fields[0])&0xffffffff
+    def state(self):return tuple(self.last)
     def decode(self):
-        n=self.state()[6];return report.decode(bytes(self.uc.mem_read(self.image.address('cadence_report'),n)),11,12)
-    def read_times(self):return list(struct.unpack('<'+'Q'*self.state()[2],self.uc.mem_read(self.image.address('cadence_read_times'),8*self.state()[2])))
+        n=self.last[6];data=bytes.fromhex(self.ask('report')[0]) if n else b''
+        return report.decode(data,11,12)
+    def read_times(self):return [int(v) for v in self.ask('times')]
+    def close(self):
+        self.proc.stdin.close();assert self.proc.wait()==0
 
 def build(name,source):
-    out=a.output/name;out.mkdir();objects=[]
-    for i,path in enumerate((ROOT/'checks/os-thermal-cadence.c',ROOT/'drivers/thermal/a733_thermal.c',ROOT/'runtime/memory.c')):
-        obj=out/f'{i}.o';objects.append(obj)
-        extra=['-DTHERMAL_SOURCE="'+str(source.resolve())+'"'] if i==0 else []
-        run([*flags,*extra,'-c',path,'-o',obj])
-    elf=out/'cadence.elf'
-    run([LLD,'-Ttext=0x41000000','-Tdata=0x41200000','--entry=cadence_control','--gc-sections',*objects,'-o',elf])
-    return Model(elf)
+    out=a.output/name
+    exe=host_rtos.build(out,['checks/os-thermal-cadence.c','drivers/thermal/a733_thermal.c'],'cadence',
+        defines=DEFINES+['THERMAL_SOURCE="'+str(Path(source).resolve())+'"'],includes=INCLUDES,
+        flags=['-Wno-error','-w','-ffunction-sections','-fdata-sections'],link=['-Wl,--gc-sections'])
+    return Model(exe)
 
 def step(m,at,delay=0,irq=False):
     m.call(4,at,delay)
@@ -82,7 +69,7 @@ def step(m,at,delay=0,irq=False):
 def finish(m,at,success=1):
     m.call(3,at,success);return m.decode()
 
-m=build('fixed',ROOT/'apps/os/thermal.c');cases=[]
+m=build('fixed',a.thermal_source);cases=[]
 m.call(0,1000000);m.call(2,1000010)
 assert report.classify(finish(m,1000020))=='incomplete'
 cases.append('window-ending-before-first-sample')
@@ -170,7 +157,17 @@ for label,op in [('inactive',8),('retaining',6),('rearm-fault',7)]:
     m.call(op,1127000,1);step(m,1127000)
     assert m.state()[0]==before,label
     cases.append('no-cached-publication-'+label)
-(a.output/'result.json').write_text(json.dumps(dict(passed=True,cases=cases,
+controls={}
+if not a.no_control:
+    # Negative control: a read that restarts the 25 ms sensor period from its own completion
+    # drifts the phase; the same cases must fail against that owner.
+    mutant=host_rtos.mutated(a.output,'apps/os/thermal.c','thermal.next_read+=(1+(t-thermal.next_read)/25000)*25000;',
+                             'thermal.next_read=t+25000;','thermal-phase-drift.c')
+    done=subprocess.run([sys.executable,'-B',__file__,'--output',str(a.output/'control'),'--thermal-source',str(mutant),
+                         '--no-control'],capture_output=True,text=True)
+    assert done.returncode!=0,'control passed: sensor phase drift'
+    controls['sensor-phase-drift']='fails'
+(a.output/'result.json').write_text(json.dumps(dict(passed=True,cases=cases,negative_controls=controls,
     period_us=125000,lateness_us=2001,source_sha256=hashlib.sha256((ROOT/'apps/os/thermal.c').read_bytes()).hexdigest(),
     limits='Modeled device/task boundaries; actual owner, policy, writer and v2 classifier.'),indent=2)+'\n')
 print('PASS thermal cadence:',len(cases),'cases')

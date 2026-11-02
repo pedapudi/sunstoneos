@@ -220,7 +220,7 @@ service; the NPU client, which runs at EL1, stays one.
 | `ss_npu_run(model, input, input_bytes, output, output_bytes, timeout_us)` | Submit and poll one image-linked NPU model through ordinary memory and atomics. Identical repeated calls return 0 while pending, 1 after copied output, -2 for refused work, or -1 when unavailable or failed. | NPU runtime slot owned by a privileged service task. |
 | `ss_npu_close()` | Submit and poll CLOSE after the final consumed result. The application must close before finishing. | NPU service CLOSE and bounded stop. |
 | `ss_finish(result, bytes)` | Copies the result into the OS result record and ends the application. A returning lifetime then returns to the host; the resident lifetime keeps the record readable over the host channel. | `os_cpu_return_begin(transcript, used)` |
-| `ss_fail(detail)` | Records the first application failure and ends the session. | `mimus_board_fail` |
+| `ss_fail(detail)` | Records the first application failure and ends the session. In the returning lifetime the board then stops every core and returns to the ROM with the failure record ([failure return](failure-return.md)); other lifetimes end at the watchdog. An application that owns an NPU client closes it when `ss_live()` turns -1. | `mimus_board_fail` |
 
 The NPU service is selected by the image. Application buffers remain borrowed
 until the request completes; a failed request retains them for that session.
@@ -235,7 +235,7 @@ owner, failure-race and privilege checks and their physical limits.
 
 `ss_fail()` calls `board_fail_at()` with the application failure group,
 the detail and the caller's return address. SVC `0x5c0e` preserves that record
-through watchdog reset. [The watchdog record](../watchdog.md#rtc-words-retain-progress-and-the-first-failure)
+through watchdog reset and through the failure return. [The watchdog record](../watchdog.md#rtc-words-retain-progress-and-the-first-failure)
 defines the fields. `checks/harness.py` steps over that SVC in function-level
 models without exception vectors.
 
