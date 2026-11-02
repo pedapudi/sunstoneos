@@ -55,7 +55,7 @@ def expectation(sizes):
     words = []
     for value in words64:
         words += [ANY, ANY] if value is None else [value & 0xffffffff, value >> 32]
-    return {'mode': 'u32le', 'words': words}
+    return {'schema': 'sunstone-board-expect-u32-v1', 'words': words}
 
 
 def freeze_decoder(destination, names, sizes):
