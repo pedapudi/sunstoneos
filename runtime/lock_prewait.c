@@ -16,6 +16,7 @@
  * enabled waits. An interrupt handler, a nested critical section and an EL0 task
  * go straight to the real function with their existing mask. */
 #include <stdint.h>
+#include "FreeRTOS.h"
 
 static inline uint64_t pw_now(void) { uint64_t t; __asm__ volatile("mrs %0, cntvct_el0" : "=r"(t)); return t; }
 static inline uint32_t pw_arm(const volatile uint32_t *word)
@@ -37,7 +38,6 @@ static inline uint32_t pw_arm(const volatile uint32_t *word)
 #define SUNSTONE_PREWAIT_US 100u
 #endif
 #define TASK_LOCK 1u        /* index in xPortLocks; the first word of each 64-byte entry is the ticket word */
-#define PMR_OPEN 0xffu
 #define EL1_BIT 56u
 #define CORE_SHIFT 48u
 #define TCB_MASK UINT64_C(0xffffffffffff)
@@ -53,7 +53,9 @@ void ss_lock_prewait(void)
     __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(task));
     if (!((task >> EL1_BIT) & 1u) || !(task & TCB_MASK)) return;
     __asm__ volatile("mrs %0, icc_pmr_el1\n mrs %1, daif" : "=r"(pmr), "=r"(daif));
-    if (pmr != PMR_OPEN || (daif & 0x80u)) return;
+    /* The mask reads back in the Non-secure view (a733_gic_priority.h), so test it as the port does: open is any
+     * value above the API mask, not the 0xff that was written. */
+    if (pmr <= portMAX_API_PRIORITY_MASK || (daif & 0x80u)) return;
     const volatile uint32_t *word = &xPortLocks[TASK_LOCK][0];
     uint32_t value = *word;
     if (ss_prewait_depth(value) <= SUNSTONE_PREWAIT_DEPTH) return;
