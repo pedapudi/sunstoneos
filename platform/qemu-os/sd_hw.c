@@ -9,10 +9,14 @@
 #include "sd_hw.h"
 #include "a733_storage_bounds.h"
 #include <string.h>
+#include <stdatomic.h>
 #include "FreeRTOS.h"
 #include "task.h"
 #include "qemu_os.h"
+#include "sunstone_deadline.h"
 
+#include "a733_platform_locks.h"
+#include "../../apps/board/application.h"
 void os_application_usb_changed(void);               /* apps/os/application.c: xTaskNotifyGive(main_task), a real default-index hint */
 
 #define DISK ((uint8_t *)(uintptr_t)0x48000000)
@@ -49,6 +53,17 @@ static int bounds_read(void *unused, uint64_t sector, uint8_t *out)
 static int allocation_unit(uint32_t *sectors) { *sectors = 8192; return 1; }
 static int enable_writes(const uint8_t *blob, size_t bytes)
 {
+    if (qemu_os_scenario()->fault == QEMU_OS_FAULT_LOCK_RETAINED) {
+        /* A failed controller transaction retains the shared register lock (a733_mmc_platform_retain): no task can reach registers
+         * again, the thermal service among them. The enable goes on waiting, as a stuck owner would. */
+        if (a733_platform_lock_enter(&providers.shared.locks, A733_PLATFORM_REGISTER_LOCK, sunstone_deadline_now_us() + 1000000) != 1 ||
+            a733_platform_lock_retain(&providers.shared.locks, A733_PLATFORM_REGISTER_LOCK) != 1) return 0;
+        vTaskDelay(pdMS_TO_TICKS(9000));
+    }
+    if (qemu_os_scenario()->fault == QEMU_OS_FAULT_CLOCKS_FAILED) {
+        atomic_store_explicit(&providers.shared.clocks.failed, 1, memory_order_release);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
     if (!blob || !bytes) return DIAG(20, 0);
     if (bytes > sizeof blob_copy) return DIAG(21, bytes);
     memcpy(blob_copy, blob, bytes);

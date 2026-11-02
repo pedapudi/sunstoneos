@@ -882,6 +882,20 @@ def main():
     c.clean()
     d = decode_result(c)
     c.require(d['status'] == 1 and d['diag0'] == 11, 'the earlier owner wait survived the stray notification: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
+    # A retained platform register lock (what a failed controller transaction leaves): the thermal service cannot read its sensors
+    # and, after the five seconds without a reading, ends the session as CRITICAL for lack of a reading, with the stale marker and
+    # the channel in the record (nothing in the SD path is at fault in this record).
+    c = run_case('storage-write-lock-retained', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms, fault=11, limit_ms=14000),
+                 [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
+    c.failed_with('THERMAL')
+    word = int(c.failure['value'], 16)
+    c.require(word >> 31 == 1 and word >> 30 & 1, 'the stop record %#x does not mark a channel lost for lack of a reading' % word)
+    # A failed clock provider ends the thermal owner's liveness: the record names the term (bit 2) and not a reading.
+    c = run_case('storage-write-clocks-failed', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms, fault=12, limit_ms=8000),
+                 [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
+    c.failed_with('THERMAL')
+    word = int(c.failure['value'], 16)
+    c.require(word >> 29 == 1 and word >> 2 & 1, 'the stop record %#x does not name the failed clock provider' % word)
     c = run_case('storage-write-enable-backup-changed', storage_write_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, mode4], '512M',
                  [(RAMDISK_ADDRESS, card_image(corrupt=32770))])
     c.clean()
