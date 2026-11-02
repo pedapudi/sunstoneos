@@ -202,7 +202,8 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
         if (s->desired.dead) {
             (void)route_close(s);
             if (!c->ops.apply(c->ops.context, slot, task, &s->desired)) {
-                hint(c, cpu, slot); unlock(c, s); return;
+                if (!c->ops.deferred || !c->ops.deferred(c->ops.context, slot)) hint(c, cpu, slot);
+                unlock(c, s); return;
             }
             atomic_store_explicit(&s->applied, s->desired.sequence, memory_order_release);
             s->phase = 0; s->retained = false; put = true;
@@ -228,7 +229,7 @@ static void consume(struct ss_control *c, unsigned cpu, unsigned slot)
                     s->desired.offcpu_sequence = 0;
                     atomic_store_explicit(&s->applied, s->desired.sequence, memory_order_release);
                 }
-                else hint(c, cpu, slot);
+                else if (!c->ops.deferred || !c->ops.deferred(c->ops.context, slot)) hint(c, cpu, slot);
                 if (s->phase == 3) {
                     /* The acknowledgment follows old-epoch closure, reader
                      * retirement and a fresh owner drain. New-route publishers

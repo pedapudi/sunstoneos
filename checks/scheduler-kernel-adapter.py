@@ -93,6 +93,7 @@ def main():
          '-i', ROOT / 'patches/freertos-partitioned-objects.patch'])
     common = [args.cc, '-std=c11', '-O1', '-g', '-ffunction-sections', '-fdata-sections',
               '-DconfigSS_PARTITIONED_SCHEDULER=1', '-DSUNSTONE_SMP_CORES=8',
+              '-DSS_KERNEL_TEST_ADMIN_ENTER',
               '-I' + str(build / 'include'), '-I' + str(build),
               '-I' + str(ROOT / 'platform/qemu-smp'), '-I' + str(ROOT / 'include'),
               '-I' + str(ROOT / 'kernel/scheduler'), '-I' + str(args.freertos / 'include')]
