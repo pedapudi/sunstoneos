@@ -4,6 +4,9 @@ Driver and fixture authors follow [completion and timing validation](driver-vali
 wait for documented completion before verification, preserve vendor barriers and
 inter-write delays, and model delayed completion with stale readback.
 
+Record every board result with `tools/evidence.py add`, as [the evidence rules](evidence.md)
+describe, instead of writing prose; `checks/progress.py` validates the records.
+
 Before a test batch, state the changed behavior, credible failure risk, and
 smallest check that resolves that risk. Run focused checks during iteration.
 Broaden testing when a shared dependency changes, a failure reveals wider impact,

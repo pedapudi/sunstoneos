@@ -236,6 +236,9 @@ def status_record(path, text, fragment=None):
 def software_evidence(text):
     """Classify affirmative software evidence without admitting physical results."""
     evidence = set()
+    # An explicit declaration, `**Software evidence:** host, source.`, needs no sentence inference.
+    for line in re.findall(r'^\*\*Software evidence:\*\* ([^\n]+)$', text, re.M):
+        evidence.update(name for name in re.findall(r'[a-z]+', line) if name in ('host', 'emulator', 'source'))
     plain = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
     for sentence in re.split(r'(?<=[.!?])\s+', plain):
         positive = re.search(r'\b(?:pass(?:es|ed)?|match(?:es|ed)?|covers?|evidence)\b|\*\*tested\*\*', sentence, re.I)

@@ -2,7 +2,8 @@
 
 This inventory covers usable onboard hardware independently of application
 requirements. The [subsystem files](handoff.md) hold present status, evidence
-and remaining work. Update those files when support changes.
+and remaining work, and `docs/evidence/` holds the board results as
+[records](evidence.md). Update those files when support changes.
 
 The [A733 device tree and datasheet](reference-index.md) define the SoC
 inventory. The [V1.2 schematic](board-wiring.md) defines routed functions.

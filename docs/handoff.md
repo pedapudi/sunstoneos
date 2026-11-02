@@ -4,7 +4,10 @@ SunstoneOS runs FreeRTOS on the Orange Pi Zero 3W/A733. The
 [accepted objective](goal.md) requires complete usable hardware and native
 applications. No subsystem has complete physical qualification.
 [The hardware inventory](hardware.md) defines required functions independently
-of application use. Update current state in the subsystem files below.
+of application use. Update current state in the subsystem files below. Each
+subsystem file is a short summary whose board results are machine-readable
+records in `docs/evidence/`; [the evidence rules](evidence.md) give the one-command
+workflow, and `docs/history/` holds the superseded prose.
 
 <a id="board-state-and-recovery"></a>
 <a id="coordinator-launch-and-capture"></a>

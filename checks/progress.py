@@ -486,6 +486,42 @@ class Check(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_evidence_records_and_claims(self):
+        spec = importlib.util.spec_from_file_location('evidence', ROOT / 'tools/evidence.py')
+        evidence = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(evidence)
+        queue = evidence.DEFAULT_QUEUE if evidence.DEFAULT_QUEUE.exists() else None
+        self.assertEqual(evidence.validate_records(ROOT, queue), [])
+        self.assertEqual(evidence.claim_problems(ROOT), [])
+        # The same checks reject a malformed record, a stale table and an uncited entry.
+        (self.root / 'docs/evidence').mkdir()
+        (self.root / 'docs/evidence/schema.json').write_bytes((ROOT / 'docs/evidence/schema.json').read_bytes())
+        good = {'id': 'fixture-1', 'subsystem': 'cpu', 'hypothesis': 'h', 'outcome': 'returned',
+                'verdict': 'passed', 'measurements': [{'name': 'rtt_p50', 'value': 1.5, 'unit': 'us'}],
+                'conditions': {}, 'evidence': ['x']}
+        records = self.root / 'docs/evidence/cpu.jsonl'
+        records.write_text(json.dumps(good) + '\n')
+        self.assertEqual(evidence.validate_records(self.root), [])
+        bad = dict(good, id='fixture-2', verdict='great', measurements=[{'name': 'Bad Name', 'value': 'x', 'unit': ''}])
+        records.write_text(json.dumps(good) + '\n' + json.dumps(bad) + '\n' + json.dumps(good) + '\n')
+        problems = evidence.validate_records(self.root)
+        self.assertTrue(any('verdict' in item for item in problems), problems)
+        self.assertTrue(any('measurements[0].name' in item for item in problems), problems)
+        self.assertTrue(any('duplicate id' in item for item in problems), problems)
+        status = self.root / 'docs/status/cpu.md'
+        status.write_text('# CPU\n\n**Status: implemented.**\n\n**Board-qualified scope:** None.\n\n'
+                          + evidence.render_block('cpu', [good]) + '\n')
+        records.write_text(json.dumps(good) + '\n')
+        def cpu_problems():
+            # The fixture copies every status file but only the CPU records.
+            return [item for item in evidence.claim_problems(self.root) if item.startswith('docs/status/cpu.md')]
+
+        self.assertEqual(cpu_problems(), [])
+        status.write_text(status.read_text().replace('fixture-1', 'fixture-9'))
+        self.assertTrue(any('does not match' in item for item in cpu_problems()))
+        status.write_text(status.read_text().replace('fixture-9', 'fixture-1') + 'Cites 1793513595977482947-679bf1ea.\n')
+        self.assertTrue(any('no evidence record' in item for item in cpu_problems()))
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
