@@ -566,3 +566,46 @@ wrapper before this change. The microSD boot path runs boot0 itself and already 
    signature passes, `apps/memtest`) returns status 0 with no address failure, no signature mismatch and no beacon, and its scan
    and signature times stay within 5 percent of the earlier record, because the words did not change CPU-only reads and the DRAM
    decode does not depend on them.
+
+## CPU memory latency under device load
+
+Robot control code needs a bounded worst-case memory latency while the NPU, DMA engines and the other cores load the
+memory system. `apps/dram-qos/` measures it, with the priority of the CPU initiator ports as the variable. Worker tasks run
+at EL1. For each of three settings the image runs three probes, each with the load running:
+
+- **Pointer chase on an A76 core (7) and on an A55 core (0).** A random cycle through 262,144 nodes of 64 bytes (16 MiB,
+  far above the 1 MiB L3 cache). Every dependent load is timed with the cycle counter between `isb` and `dsb ld` barriers; the
+  timing sequence's own cost is measured on an L1 hit and reported as the overhead. 0.6 s per probe.
+- **Control-loop proxy on the A76 core (7).** Every 100 microseconds (10 kHz), after the release time, a fixed routine of 16
+  dependent loads along the same cycle from a pseudo-random node, timed in cycles. 1.2 s, 12,000 iterations. A miss is an
+  iteration that ends after the next release.
+
+Settings: **0** as found (all 21 initiator ports at priority 0), **1** the CPU ports (19 and 20, `cpu0` and `cpu1`) at
+priority 3 (`+0x14` bits 3:0 = `0xf`), **2** setting 1 plus the high-priority read bit (`+0xc` bit 16). The writes are inside the
+run; the inherited words are written back at its end and a watchdog reset restores them in any case. Loads: **none**; **cores**
+(streaming reads of 5 MiB slots on all other worker cores, 5 or 6 streams); **NPU** (the OS NPU service runs
+`shufflenet-v2-published` jobs back to back from the controller on core 6); **DMA** (the OS DMA0 service, 4 KiB RAM-to-RAM
+copies issued back to back from the controller; the catalogue limits one copy to 4 KiB, so this is far from the engine's
+maximum rate and the image reports the rate it reaches). The images carry the board's boot0 interconnect words from the
+adopted wrapper. The histogram resolution is 4 cycles below 256 and 16 sub-bins per octave above; the maximum is exact.
+The percentile is the upper edge of its bin.
+
+### Predictions, written before the runs
+
+1. **Idle.** The A76 chase has a median of 110 to 160 ns and a 99.99th percentile below 1 µs; the maximum stays below 5
+   µs. The A55 chase is 20 to 60 percent slower at the median. The control loop (16 dependent misses) takes about 2 to 3 µs
+   and misses no deadline. The three settings agree within 5 percent: with no other master, priority has nothing to arbitrate.
+2. **Cores streaming.** The median chase latency rises to 300 to 800 ns (Little's law with the earlier stall fractions) and
+   the 99.99th percentile to several µs. Raising the CPU ports changes it by less than 10 percent, because every competitor is
+   itself a CPU port at the same raised priority. This is the control for the NPU and DMA runs.
+3. **NPU.** The NPU job stream raises the A76 chase's 99.99th percentile and maximum above idle. If the interconnect arbitrates
+   CPU against NPU requests at the port priorities, setting 1 lowers the 99.99th percentile and the maximum by at least 20
+   percent against setting 0, and setting 2 does not lower them further by more than 10 percent. The NPU job time grows by
+   at most 10 percent. If the controller's own queue dominates, the three settings agree within 10 percent and the knob is
+   ineffective for this load.
+4. **DMA.** The 4 KiB copy loop reaches at most a few hundred MB/s and changes the chase by less than 10 percent against idle
+   in all settings.
+5. **Control loop.** No deadline is missed in any condition: the worst iteration, 16 loads at the loaded latency of the
+   streaming case, is below 30 µs, a third of the period.
+6. **Decision rule.** Raising the CPU priority is proposed as the robot default only if it lowers the 99.99th percentile and
+   the maximum of the chase under the NPU load by at least 20 percent and raises the NPU job time by at most 10 percent.
