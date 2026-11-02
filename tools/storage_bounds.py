@@ -13,13 +13,18 @@ Read-only images and images without an SD core pass unchanged. A write-capable i
 - every range lies inside the partition, from the card's own tables in the backup the record names: at or
   after the start of the MBR's FAT32 entry (type 0x0B or 0x0C) and below that start plus BPB_TotSec32 of the
   boot sector at the start; the backup must therefore hold sector 0 and that boot sector;
-- the first input of the run is the encoding of those bounds (encode_input), checked again after the
+- the backup is explicit: the descriptor and the record list the backup ranges (sorted, disjoint, each inside the
+  partition or exactly sector 0), the backup file holds exactly those sectors in increasing order, and every written
+  sector is backed up unless the record's data_ranges exempt it; a data range must lie inside a write range and in the
+  data area (after the boot sector's reserved sectors and FATs), so the boot, FSInfo and FAT sectors are never exempt;
+- the first input of the run is the version 2 encoding of those bounds (encode_input), checked again after the
   runner has frozen its inputs (verify_delivered).
 The record limits what one run writes. The image re-reads the backed-up sectors before its first
 write and refuses to write when their SHA-256 differs from the input's hash.
 
-Backup file: records of a u64 little-endian absolute sector followed by its 512 bytes; its SHA-256 is
-the record's backup_sha256.
+Backup file: records of a u64 little-endian absolute sector followed by its 512 bytes, in increasing sector order;
+its SHA-256 is the descriptor's and record's backup_sha256, and the image computes the same hash over the same
+sectors, read in that order, before its first write.
 """
 import hashlib
 import io
@@ -29,7 +34,7 @@ from pathlib import Path
 import re
 import struct
 
-MAGIC = b'SSBW0001'
+MAGIC = b'SSBW0002'
 ROOT = Path(__file__).resolve().parents[1]
 APPROVALS = Path(os.environ.get('SUNSTONE_STORAGE_APPROVALS') or Path.home() / '.cache/sunstoneos/coordinator-1031/approvals')
 ANY_IMAGE = 'any-image-from-tree'
@@ -121,11 +126,15 @@ def _scan_module():
     return module
 
 
-def encode_input(ranges, backup_sha256):
-    """MAGIC, count (u32), reserved (u32), backup SHA-256 (32 bytes), then (first sector, sectors) as u64 pairs."""
+def encode_input(ranges, backup_ranges, backup_sha256):
+    """Version 2: MAGIC, write range count (u32), backup range count (u32), backup SHA-256 (32 bytes), the write
+    ranges, then the backup ranges, each (first sector, sector count) as little-endian u64 pairs. The hash is over
+    the backup records in sector order: u64 sector, then its 512 bytes. The image re-reads exactly the backup
+    sectors in that order and refuses to write unless it computes the same hash."""
     digest = bytes.fromhex(backup_sha256)
     require(len(digest) == 32, 'The backup hash must be 64 hexadecimal digits.')
-    return MAGIC + struct.pack('<II', len(ranges), 0) + digest + b''.join(struct.pack('<QQ', a, n) for a, n in ranges)
+    return (MAGIC + struct.pack('<II', len(ranges), len(backup_ranges)) + digest +
+            b''.join(struct.pack('<QQ', a, n) for a, n in list(ranges) + list(backup_ranges)))
 
 
 def approval_path(blob, root=None):
@@ -133,13 +142,15 @@ def approval_path(blob, root=None):
 
 
 def parse_backup(path, expected_sha256):
+    """The backup file's sectors, which must be listed in increasing sector order; returns {sector: 512 bytes}."""
     raw = Path(path).read_bytes()
     require(hashlib.sha256(raw).hexdigest() == expected_sha256, 'The backup file differs from the approved hash.')
     require(len(raw) % 520 == 0 and raw, 'The backup file is not a list of sector records.')
-    sectors = {}
+    sectors, previous = {}, -1
     for o in range(0, len(raw), 520):
         sector = struct.unpack_from('<Q', raw, o)[0]
-        require(sector not in sectors, 'The backup lists a sector twice.')
+        require(sector > previous, 'The backup must list its sectors in increasing order, once each.')
+        previous = sector
         sectors[sector] = raw[o + 8:o + 520]
     return sectors
 
@@ -161,17 +172,59 @@ def partition_bounds(backup_sectors):
     return start, start + total
 
 
-def validate(ranges, backup_sha256, start, end):
-    require(isinstance(ranges, list) and ranges, 'The approval needs at least one range.')
-    previous_end = start
-    for item in ranges:
-        require(isinstance(item, list) and len(item) == 2 and all(type(v) is int for v in item), 'A range is [first sector, sector count].')
-        first, count = item
-        require(count > 0 and first >= previous_end, 'Ranges must be sorted, disjoint, nonempty and inside the partition.')
+def _pairs(items, what):
+    require(isinstance(items, list) and all(isinstance(r, list) and len(r) == 2 and all(type(v) is int and v >= 0 for v in r) for r in items),
+            f'{what} must be a list of [first sector, sector count].')
+    return [tuple(r) for r in items]
+
+
+def _sorted_disjoint(pairs, low, what):
+    previous_end = low
+    for first, count in pairs:
+        require(count > 0 and first >= previous_end, f'{what} must be sorted, disjoint, nonempty and inside the partition.')
         previous_end = first + count
-        require(previous_end <= end, 'A range extends past the end of the partition.')
+    return previous_end
+
+
+def _covered(pairs, sector):
+    return any(first <= sector < first + count for first, count in pairs)
+
+
+def data_start(boot, start):
+    """First sector of the data area from the boot sector: reserved sectors plus the FATs after the partition start."""
+    reserved, fats = struct.unpack_from('<H', boot, 14)[0], boot[16]
+    fat_size = struct.unpack_from('<I', boot, 36)[0]
+    require(reserved > 0 and 1 <= fats <= 2 and fat_size > 0, 'The boot sector is not a FAT32 boot sector.')
+    return start + reserved + fats * fat_size
+
+
+def validate(ranges, backup_ranges, data_ranges, backup_sha256, sectors, start, end):
+    """Check the write ranges, the backup ranges and the data exemption against the backup's own tables."""
+    require(ranges, 'The approval needs at least one write range.')
+    require(backup_ranges, 'The approval needs at least one backup range.')
+    require(_sorted_disjoint(ranges, start, 'Write ranges') <= end, 'A range extends past the end of the partition.')
+    # A backup range lies in the partition, or is exactly sector 0.
+    require(all(c > 0 for _, c in backup_ranges), 'A backup range is empty.')
+    for first, count in backup_ranges:
+        require((first, count) == (0, 1) or (start <= first and first + count <= end), 'A backup range lies outside the partition.')
+    require(all(backup_ranges[i][0] + backup_ranges[i][1] <= backup_ranges[i + 1][0] for i in range(len(backup_ranges) - 1)),
+            'Backup ranges must be sorted and disjoint.')
+    # The backup file holds exactly the listed sectors.
+    listed = {x for first, count in backup_ranges for x in range(first, first + count)}
+    require(listed == set(sectors), 'The backup file does not hold exactly the listed backup sectors.')
     require(isinstance(backup_sha256, str) and re.fullmatch(r'[0-9a-f]{64}', backup_sha256), 'The backup hash must be 64 lowercase hexadecimal digits.')
-    return [tuple(r) for r in ranges]
+    # Data exemption: inside the data area, inside the write ranges; everything else that is written is backed up.
+    boot = sectors[start]
+    first_data = data_start(boot, start)
+    require(_sorted_disjoint(data_ranges, start, 'Data ranges') <= end if data_ranges else True, 'Data ranges are outside the partition.')
+    for first, count in data_ranges:
+        require(first >= first_data, 'A data range lies in the boot, FSInfo or FAT area, which are metadata.')
+        require(any(w0 <= first and first + count <= w0 + wn for w0, wn in ranges), 'A data range is not inside a write range.')
+    for first, count in ranges:
+        for sector in range(first, first + count):
+            if not _covered(data_ranges, sector):
+                require(_covered(backup_ranges, sector), f'Metadata sector {sector} is written but not backed up.')
+    return ranges
 
 
 def admit(descriptor, args, image_sha256, approvals=None):
@@ -180,20 +233,23 @@ def admit(descriptor, args, image_sha256, approvals=None):
             'a coordinator approval record and descriptor storage_bounds.')
     require(args.port == '3-1', 'Storage write runs on port 3-1 only.')
     bounds = descriptor.get('storage_bounds')
-    require(isinstance(bounds, dict) and set(bounds) == {'ranges', 'backup_sha256'}, 'Storage write requires descriptor storage_bounds with ranges and backup_sha256.')
-    require(isinstance(bounds['ranges'], list) and all(isinstance(r, list) and len(r) == 2 and all(type(v) is int and v >= 0 for v in r) for r in bounds['ranges']) and
-            isinstance(bounds['backup_sha256'], str) and re.fullmatch(r'[0-9a-f]{64}', bounds['backup_sha256']), 'Invalid storage_bounds.')
-    blob = encode_input([tuple(r) for r in bounds['ranges']], bounds['backup_sha256'])
+    require(isinstance(bounds, dict) and set(bounds) == {'ranges', 'backup_ranges', 'backup_sha256'},
+            'Storage write requires descriptor storage_bounds with ranges, backup_ranges and backup_sha256.')
+    ranges, backup_ranges = _pairs(bounds['ranges'], 'ranges'), _pairs(bounds['backup_ranges'], 'backup_ranges')
+    require(isinstance(bounds['backup_sha256'], str) and re.fullmatch(r'[0-9a-f]{64}', bounds['backup_sha256']), 'Invalid storage_bounds.')
+    blob = encode_input(ranges, backup_ranges, bounds['backup_sha256'])
     require(args.input and Path(args.input[0]).read_bytes() == blob, 'The first input must be the encoding of storage_bounds.')
     record_path = approval_path(blob, approvals)
     require(record_path.is_file(), f'No coordinator approval record for these bounds ({record_path.name}).')
     record = json.loads(record_path.read_text())
-    require(record.get('ranges') == bounds['ranges'] and record.get('backup_sha256') == bounds['backup_sha256'],
-            'The approval record differs from storage_bounds.')
+    require(record.get('ranges') == bounds['ranges'] and record.get('backup_ranges') == bounds['backup_ranges'] and
+            record.get('backup_sha256') == bounds['backup_sha256'], 'The approval record differs from storage_bounds.')
     require(record.get('port') == args.port, 'The approval record is for another port.')
     require(record.get('image') in (ANY_IMAGE, image_sha256), 'The approval record does not name this image.')
-    start, end = partition_bounds(parse_backup(record.get('backup', ''), bounds['backup_sha256']))
-    validate(bounds['ranges'], bounds['backup_sha256'], start, end)
+    data_ranges = _pairs(record.get('data_ranges', []), 'data_ranges')
+    sectors = parse_backup(record.get('backup', ''), bounds['backup_sha256'])
+    start, end = partition_bounds(sectors)
+    validate(ranges, backup_ranges, data_ranges, bounds['backup_sha256'], sectors, start, end)
     args.storage_admission = hashlib.sha256(blob).hexdigest()
     return blob
 
