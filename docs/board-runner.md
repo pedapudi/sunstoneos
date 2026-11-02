@@ -221,6 +221,14 @@ session lifetime. Every upload is read back and compared. WDT0 supervises DRAM
 helpers, rail normalization and the submitted image. The returned watchdog state
 and retained RTC breadcrumbs are classified before any DRAM result read.
 
+The post-ROM rail helper (`--restore-rails`, the default) is built to take DCDC5 from the 1000 mV an image left it at to
+800 mV, and refuses ("CPU supplies") a board whose rails are not at that entry point. An image that never raised the rails
+(the NPU loader tests) leaves them at 800 mV, which is the restore target. The runner treats that refusal as a verified no-op
+when the helper's own readbacks show it refused before any operation, DCDC5 and DCDC3 at 800 mV, and the three boot clock
+rows; the result records `rail_restore.outcome` as `already-at-target` (or `restored`). Any other refusal leaves the application's
+outcome as it was, records `rails_restored` false, `rails_unrestored` true and the helper's facts, and pauses the port until
+someone checks the rails.
+
 ## Interpret the result and recovery state
 
 | Outcome | Meaning |

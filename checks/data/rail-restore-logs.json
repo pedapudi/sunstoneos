@@ -1,0 +1,38 @@
+{
+ "refused": {
+  "1793658100400649402-10e2ca3c": {
+   "log": "MBUS 0x84000000 0x81000000 0\nBEGIN board bundle 33: DCDC5 restored to 800 mV with DCDC3 already at 800 mV and all boot clock words, cores 6 and 7 off\nTEMP set=0 level=0 cpub_mc=38688 ddr_mc=39184 npu_mc=38998 cpul_mc=39184 gpu_mc=38750\nCPU-L before pll=0xf8802600 mux=0x3010000 mhz=494 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nCPU-B before pll=0xf8802700 mux=0x3000000 mhz=1014 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nDSU before pll=0xf8802600 mux=0x3010105 mhz=494 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nSUPPLY dcdc5_uv=800000 dcdc3_uv=800000 sid=0x495 bin=4 dcxo_hz=26000000\nREFUSED board bundle 33: CPU supplies\n",
+   "values": [
+    1397441874,
+    5,
+    1
+   ]
+  },
+  "1793658132997079733-4f56db5e": {
+   "log": "MBUS 0x84000000 0x81000000 0\nBEGIN board bundle 33: DCDC5 restored to 800 mV with DCDC3 already at 800 mV and all boot clock words, cores 6 and 7 off\nTEMP set=0 level=0 cpub_mc=39928 ddr_mc=41106 npu_mc=41168 cpul_mc=40176 gpu_mc=40734\nCPU-L before pll=0xf8802600 mux=0x3010000 mhz=494 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nCPU-B before pll=0xf8802700 mux=0x3000000 mhz=1014 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nDSU before pll=0xf8802600 mux=0x3010105 mhz=494 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nSUPPLY dcdc5_uv=800000 dcdc3_uv=800000 sid=0x496 bin=4 dcxo_hz=26000000\nREFUSED board bundle 33: CPU supplies\n",
+   "values": [
+    1397441874,
+    5,
+    1
+   ]
+  },
+  "1793658232392271857-b57f9e54": {
+   "log": "MBUS 0x84000000 0x81000000 0\nBEGIN board bundle 33: DCDC5 restored to 800 mV with DCDC3 already at 800 mV and all boot clock words, cores 6 and 7 off\nTEMP set=0 level=0 cpub_mc=39556 ddr_mc=40982 npu_mc=40734 cpul_mc=39866 gpu_mc=40238\nCPU-L before pll=0xf8802600 mux=0x3010000 mhz=494 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nCPU-B before pll=0xf8802700 mux=0x3000000 mhz=1014 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nDSU before pll=0xf8802600 mux=0x3010105 mhz=494 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nSUPPLY dcdc5_uv=800000 dcdc3_uv=800000 sid=0x496 bin=4 dcxo_hz=26000000\nREFUSED board bundle 33: CPU supplies\n",
+   "values": [
+    1397441874,
+    5,
+    1
+   ]
+  }
+ },
+ "restored": {
+  "entry": "1793658436156145783-497a6a46",
+  "log": "MBUS 0x84000000 0x81000000 0\nBEGIN board bundle 33: DCDC5 restored to 800 mV with DCDC3 already at 800 mV and all boot clock words, cores 6 and 7 off\nTEMP set=0 level=0 cpub_mc=40858 ddr_mc=41912 npu_mc=41354 cpul_mc=40548 gpu_mc=40858\nCPU-L before pll=0xf8802600 mux=0x3010000 mhz=494 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nCPU-B before pll=0xf8802700 mux=0x3000000 mhz=1014 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nDSU before pll=0xf8802600 mux=0x3010105 mhz=494 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nSUPPLY dcdc5_uv=1000000 dcdc3_uv=800000 sid=0x496 bin=4 dcxo_hz=26000000\nVOLT dcdc5_selector=0x9e dcdc5_uv=800000\nCPU-L after pll=0xf8802600 mux=0x3010000 mhz=494 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nCPU-B after pll=0xf8802700 mux=0x3000000 mhz=1014 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nDSU after pll=0xf8802600 mux=0x3010105 mhz=494 pat0=0x0 pat1=0x30000000 lfm=0x40000001\nTEMP set=1 level=0 cpub_mc=40734 ddr_mc=42036 npu_mc=41540 cpul_mc=40920 gpu_mc=40920\nCOMPLETE board bundle 33: DCDC5 restored to 800 mV with DCDC3 already at 800 mV and all boot clock words\n",
+  "values": [
+   1397441874,
+   5,
+   0
+  ]
+ },
+ "source": "~/.cache/sunstoneos/board-queue/entries/<entry>/run/restore-rails/{rail.log,rail-result.bin}, runner cf1eb469 / 393dbe7e / 4a92ccd0"
+}

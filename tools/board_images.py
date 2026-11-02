@@ -4,6 +4,7 @@ import io
 import sys
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import shutil
@@ -820,6 +821,59 @@ def rail_result(values, log):
         "result": dict(zip(("magic","stage","status"), values[:3]))}, log)
     require(result["complete"], "Rail helper refused or did not complete normally: "+result.get("reason", ""))
     return dict(result, boot_clock_domains=3, already_normalized=not result["written"])
+
+
+class RailRestoreRefused(ValueError):
+    """The post-ROM rail helper refused or did not complete, and the rails are not shown to be at the restore target."""
+
+    def __init__(self, message, record):
+        super().__init__(message)
+        self.record = record
+
+
+def rail_log_facts(log):
+    """The supplies and clock rows the helper printed from its own readbacks: {'supply': {...}, 'rows': {...}}."""
+    supply = re.findall(r'^SUPPLY (.+)$', log, re.M)
+    fields = dict(x.split('=') for x in supply[0].split()) if len(supply) == 1 else {}
+    return {'supply': {k: int(v, 0) for k, v in fields.items()}, 'refused': re.findall(r'^REFUSED (.+)$', log, re.M),
+            'operations': len(re.findall(r'^VOLT ', log, re.M))}
+
+
+def post_rail_refused_at_target(values, log):
+    """Record of a refusal that is a verified no-op, or None.
+
+    The post-ROM helper is built to take DCDC5 from the 1000 mV an image left it at to 800 mV, and refuses ("CPU supplies") a
+    board whose rails are not at that entry point. A board whose rails are already at the restore target (an image that never
+    raised them, such as an NPU loader test) is in the state the helper would have produced. The helper's own readbacks show
+    it: it refused before any operation (no VOLT line, no COMPLETE), it printed DCDC5 and DCDC3 at 800 mV from the PMIC, and
+    the three CPU clock rows it read are the boot words. Nothing else is accepted as a no-op."""
+    facts = rail_log_facts(log)
+    supply = facts['supply']
+    if not (values[0] == 0x534b4552 and facts['refused'] == ['board bundle 33: CPU supplies'] and not facts['operations'] and
+            supply.get('dcdc5_uv') == 800000 and supply.get('dcdc3_uv') == 800000 and supply.get('bin') == 4 and
+            supply.get('dcxo_hz') == 26000000 and 'COMPLETE' not in log and not re.search(r'^(?:FAIL|STOPPED)\b', log, re.M)):
+        return None
+    for name, pll, mux, mhz in (('CPU-L', 0xf8802600, 0x03010000, 494), ('CPU-B', 0xf8802700, 0x03000000, 1014),
+                                ('DSU', 0xf8802600, 0x03010105, 494)):
+        rows = re.findall(r'^' + name + r' before (.+)$', log, re.M)
+        if len(rows) != 1:
+            return None
+        f = {k: int(v, 0) for k, v in (x.split('=') for x in rows[0].split())}
+        if not (f['pll'] == pll and f['mux'] == mux and f['mhz'] == mhz):
+            return None
+    return {'outcome': 'already-at-target', 'helper': 'refused: CPU supplies (entry point differs from the restore target)',
+            'dcdc5_uv': 800000, 'dcdc3_uv': 800000, 'written': False}
+
+
+def post_rail_outcome(values, log):
+    """Restored, or a verified no-op; otherwise RailRestoreRefused with the helper's facts."""
+    try:
+        return dict(post_rail_result(values, log), outcome='restored')
+    except ValueError as error:
+        noop = post_rail_refused_at_target(values, log)
+        if noop:
+            return noop
+        raise RailRestoreRefused(str(error), {'outcome': 'refused', 'reason': str(error), 'facts': rail_log_facts(log)})
 
 
 def post_rail_result(values, log):

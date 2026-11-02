@@ -630,7 +630,13 @@ class Live:
         log = data[256:256+values[3]].decode(errors='replace')
         (evidence/'rail.log').write_text(log)
         # The helper performs all boot-clock, speed-bin and PMIC readbacks.
-        self.record['rails'] = images.post_rail_result(values, log) if post else images.rail_result(values, log)
+        refusal = None
+        try:
+            self.record['rails'] = images.post_rail_outcome(values, log) if post else images.rail_result(values, log)
+        except images.RailRestoreRefused as error:
+            # The helper's DRAM is still restored below; the refusal is raised afterwards, with its record.
+            refusal = error
+            self.record['rails'] = error.record
         run['image_sha256'] = expected
         run['rails'] = self.record['rails']
         if save:
@@ -638,6 +644,8 @@ class Live:
             self.record.update(dram_restored=True, dram_dirty=False)
             run['dram_restored'] = True
         self.journal()
+        if refusal:
+            raise refusal
 
     def live_state(self, finite_npu=False):
         words = images.load('npu_live_words', (self.args.host_tree or ROOT)/'apps/npu-finite/development.py').WORDS if finite_npu else state.WORDS
@@ -989,8 +997,17 @@ def run_image(args, backend=Live):
                         require(not state.boot_clocks(after['words']),
                                 'CPU clocks differ from boot words before rail restoration.')
                         # Mandatory retirement and RAM restoration precede optional result validation.
-                        timed('restore-rails', lambda: owner.rails('restore-rails'))
-                        result['rails_restored'] = True
+                        # The application's result is valid whatever the helper says: record the helper's outcome
+                        # beside it. A refusal that leaves the rails not shown to be at the target pauses the port
+                        # (the daemon reads rails_unrestored); a board already at the target is a verified no-op.
+                        try:
+                            timed('restore-rails', lambda: owner.rails('restore-rails'))
+                            result['rails_restored'] = True
+                        except images.RailRestoreRefused as error:
+                            result['rails_restored'] = False
+                            result['rails_unrestored'] = True
+                            result['first_failure_rails'] = str(error)
+                        result['rail_restore'] = owner.record.get('rails')
                     matched = captured['valid']
                     if expected:
                         matched &= matches_expectation(expected, payload)
@@ -1459,6 +1476,8 @@ class Queue:
             history = [j for j in state['jobs'] if j.get('assigned_port')==port and j['state']=='done']
             if len(history)>=2 and all(j['result'].get('stage')=='dram' and j['result']['outcome']!='returned' for j in history[-2:]):
                 self.pause(state,port,'Two consecutive DRAM bring-ups failed.')
+            if result.get('rails_unrestored'):
+                self.pause(state,port,'The CPU rails were not restored and are not shown to be at 800 mV; check them before resuming.')
             failure = result.get('first_failure')
             if failure and result['outcome'] not in ('returned','refused-before-launch'):
                 matches = [j for j in history if j['hypothesis']==job['hypothesis'] and
