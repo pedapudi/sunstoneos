@@ -2,13 +2,14 @@
 #define SUNSTONE_LARGE_H
 /* Large application regions (docs/designs/large-app-regions.md): the record an application declares
  * in the optional section "sunstone_large_regions", and the status the SDK reports. The record is
- * little-endian data of 112 bytes; the section holds an array of them in index order, aligned to 8 bytes.
+ * little-endian data of 320 bytes; the section holds an array of them in index order, aligned to 8 bytes.
  * An application declares as many as it needs; the bound is the upper memory itself (each region takes at
  * least one 2 MiB block, and the regions of one application together fit in it). */
 #include <stddef.h>
 #include <stdint.h>
 
-#define SS_LARGE_PATH_BYTES 48u
+/* FAT32 names hold at most 255 characters (FAT32_NAME_MAX, long file names); the path field takes 255 and a NUL. */
+#define SS_LARGE_PATH_BYTES 256u
 enum {
     SS_LARGE_WRITE = 1u << 0,    /* the application may write the region at EL0 */
     SS_LARGE_EXTENT = 1u << 1,   /* the source is a raw card extent (first_sector), not a file */
@@ -25,7 +26,7 @@ struct ss_large_region {
     uint8_t sha256[32];          /* digest of the source bytes; all zero: the loader does not hash and READY follows the last byte */
     char path[SS_LARGE_PATH_BYTES];   /* file path from the root, NUL-padded; empty for an extent */
 };
-_Static_assert(sizeof(struct ss_large_region) == 112 && offsetof(struct ss_large_region, bytes) == 8 &&
+_Static_assert(sizeof(struct ss_large_region) == 320 && offsetof(struct ss_large_region, bytes) == 8 &&
                offsetof(struct ss_large_region, sha256) == 32 && offsetof(struct ss_large_region, path) == 64,
                "ss_large_region layout");
 

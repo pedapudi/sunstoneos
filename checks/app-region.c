@@ -281,8 +281,8 @@ static void large_cases(void)
     REFUSE(strcpy(r[0].path, "relative.bin"));
     REFUSE(strcpy(r[0].path, "/bad name.bin"));
     REFUSE(strcpy(r[0].path, ""));
-    REFUSE(memset(r[0].path, 'a', 48); r[0].path[0] = '/');   /* no terminator */
-    REFUSE(r[0].path[45] = 'x');                              /* data after the terminator */
+    REFUSE(memset(r[0].path, 'a', sizeof r[0].path); r[0].path[0] = '/');   /* no terminator */
+    REFUSE(r[0].path[sizeof r[0].path - 3] = 'x');                              /* data after the terminator */
     REFUSE(r[0].first_sector = 7);                            /* a file with a sector */
     REFUSE(strcpy(r[1].path, "/x"));                          /* an extent with a path */
     REFUSE(r[1].first_sector = 0);                            /* an extent at the partition table */

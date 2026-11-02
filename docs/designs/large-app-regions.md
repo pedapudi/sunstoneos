@@ -195,7 +195,7 @@ layout of 552 bytes does not change.
 | `source_bytes` | 8 | Exact length of the source |
 | `first_sector` | 8 | Raw extent only |
 | `sha256` | 32 | Digest of the source bytes |
-| `path` | 48 | File path, NUL-padded |
+| `path` | 256 | File path of at most 255 characters (the FAT32 long-name limit, `FAT32_NAME_MAX`), NUL-padded |
 
 Calls, all plain function calls that are safe at EL0 like the other `ss_*`
 calls (the EL1 loader task does the privileged work):

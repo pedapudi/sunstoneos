@@ -277,9 +277,10 @@ def load(path, resident=False):
     return m
 
 
-LARGE = struct.Struct('<IIQQQ32s48s')
-assert LARGE.size == 112
+LARGE = struct.Struct('<IIQQQ32s256s')
+assert LARGE.size == 320
 LARGE_GIB = 11 << 30      # the upper memory; the only bound on the number and total size of large regions
+LARGE_PATH_MAX = 255     # FAT32 long names hold 255 characters (FAT32_NAME_MAX); the record field adds a NUL
 LARGE_PATH = re.compile(r'/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*')
 
 
@@ -311,8 +312,8 @@ def load_large(name, items):
         require((file is None) != (sector is None), where + ': name a file or a first_sector, not both')
         flags = 1 if 'write' in access else 0
         if file is not None:
-            require(isinstance(file, str) and len(file) <= 47 and LARGE_PATH.fullmatch(file) is not None,
-                    where + ': file is an absolute path of at most 47 characters [A-Za-z0-9._/-]')
+            require(isinstance(file, str) and len(file) <= LARGE_PATH_MAX and LARGE_PATH.fullmatch(file) is not None,
+                    where + ': file is an absolute path of at most 255 characters [A-Za-z0-9._/-]')
             sector = 0
         else:
             flags |= 2

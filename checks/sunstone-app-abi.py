@@ -199,7 +199,7 @@ large_refused(lambda v: v[0].update(bytes=(1 << 30) + 4096), 'multiple of 2 MiB'
 large_refused(lambda v: v[0].update(source_bytes=(1 << 30) + 1), 'outside 1..')
 large_refused(lambda v: v[0].update(sha256='A' * 64), 'sha256 is 64 lowercase hex digits')
 large_refused(lambda v: v[0].update(file='relative/path.bin'), 'absolute path')
-large_refused(lambda v: v[0].update(file='/' + 'a' * 47), 'at most 47 characters')
+large_refused(lambda v: v[0].update(file='/' + 'a' * 255), 'at most 255 characters')
 large_refused(lambda v: v[0].update(file='/bad name.bin'), 'absolute path')
 large_refused(lambda v: v[0].update(first_sector=5), 'not both')
 large_refused(lambda v: v[0].pop('file'), 'not both')

@@ -258,9 +258,9 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_ex
             assert section[3] == bounds[0], 'section start differs: ' + name
         admitted[name] = raw
     large = admitted['sunstone_large_regions']
-    assert len(large) % 112 == 0 and len(large) <= 4 * 112, 'large region records extent'
+    assert len(large) % 320 == 0, 'large region records extent'
     large_records = [dict(zip(('index', 'flags', 'bytes', 'source_bytes', 'first_sector', 'sha256', 'path'),
-                              struct.unpack_from('<IIQQQ32s48s', large, 112 * i))) for i in range(len(large) // 112)]
+                              struct.unpack_from('<IIQQQ32s256s', large, 320 * i))) for i in range(len(large) // 320)]
     for i, record in enumerate(large_records):
         flags = record['flags']
         assert record['index'] == i and not flags & ~15 and record['bytes'] % 0x200000 == 0 and \
