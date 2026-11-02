@@ -1,7 +1,9 @@
 # Sustained DRAM read bandwidth
 
 Status: implemented as a returning measurement application. The board
-result is recorded in `docs/evidence/memory-dma.jsonl` once the run completes.
+results are recorded in `docs/evidence/memory-dma.jsonl`. The first measurement is
+superseded for the Cortex-A76 sets by the fixed-window study at the end of this
+document (`apps/dram-scaling/`).
 
 The application in `apps/dram-bandwidth/` measures how many bytes per second a
 set of cores reads from DRAM when the data does not fit in any cache. Speech
@@ -288,3 +290,108 @@ cores, one and two A76 cores, four A55 with both A76 and all eight cores; the st
 A55, two A76 and eight cores; and the three access patterns of modes 1 to 3 for one A55, one
 A76, six A55, two A76 and eight cores. Each variant reads one warm-up window and three timed
 windows of 12 ms.
+
+### Board measurements of the scaling study
+
+Conditions: port 3-1, development DRAM mode, CPU-L 1794 MHz, CPU-B 2002 MHz, DSU 1274 MHz,
+MBUS 600 MHz, buffer base `0x44000000`, DDR 40 to 45 degrees Celsius at the start and 45
+degrees at the end. Each figure is the median of three 12 ms windows of the sum of the
+per-core rates. Three images (the first, plus one with a software-prefetch pattern and one with
+the shared-stream patterns) repeated the base variants; the three runs agree within 2 percent.
+The records are in `docs/evidence/memory-dma.jsonl`.
+
+| Cores reading, sequential 64 KiB chunks | Run 1 GB/s | Run 2 GB/s | Run 3 GB/s | Share of 16.32 GB/s |
+| --- | --- | --- | --- | --- |
+| One A55 | 5.50 | 5.46 | 5.49 | 34 percent |
+| Two A55 | 10.05 | 10.02 | 10.01 | 61 percent |
+| Four A55 | 10.77 | 10.76 | 10.82 | 66 percent |
+| Six A55 | 9.06 | 9.07 | 9.07 | 56 percent |
+| One A76 | 14.83 | 14.81 | 14.86 | 91 percent |
+| Two A76 | 14.02 | 14.15 | 14.08 | 86 percent |
+| Four A55 and two A76 | 9.36 | 9.34 | 9.36 | 57 percent |
+| All eight | 8.24 | 8.27 | 8.25 | 51 percent |
+
+Per-core rates at eight cores: 0.86 to 1.04 GB/s for each A55 core and 1.29 and 1.46 GB/s for the A76
+cores. When four A55 cores join the two A76 cores, the A76 cores fall from 7.0 to 2.0 GB/s each.
+
+Other variants (run 1 unless stated; sums in GB/s for six A55, two A76, eight cores):
+
+| Variant | Six A55 | Two A76 | Eight |
+| --- | --- | --- | --- |
+| Sequential, stagger 0 (reference) | 9.06 | 14.02 | 8.24 |
+| Stagger 4 KiB, 64 KiB, 256 KiB between cores | 9.06, 9.01, 9.06 | 13.82, 13.36, 12.87 | 8.24, 8.23, 8.25 |
+| Sequential, 4 KiB chunks | 9.05 | 13.28 | 8.22 |
+| Two streams per core | 8.64 | 13.44 | 7.91 |
+| Page-sized strides | 5.76 | 8.53 | 5.74 |
+| Software prefetch into the L2 cache (run 2) | 8.36 | 13.75 | 7.94 |
+| One shared stream, barrier per 16 KiB round (run 3) | 7.22 | 11.75 | 7.45 |
+| Own regions, same barrier (run 3) | 5.93 | 11.30 | 5.84 |
+
+### What the measurements show
+
+1. **The earlier aggregate was partly an artifact for the A76 sets.** The sum of the per-core
+   rates equals the bytes over the slowest core's time within 0.1 percent for every set, so the tail
+   of fast cores is not the cause for the all-eight set. The earlier pass-based figures of
+   12.69 GB/s for one A76 core and 11.37 GB/s for two were 14 and 19 percent below the
+   fixed-window rates (14.83 and 14.08 GB/s): a pass of 5 MiB lasts 0.4 ms for an A76 core, and
+   its start-up costs a visible share. The A55 sets agree (9.06 against 9.03, 8.25 against 8.44).
+   One A76 core reaches 91 percent of the pin rate, so the interface, the clocks and the
+   controller timing deliver at least 14.8 GB/s.
+2. **The total depends on the number of cores reading and not on what each core does.** Two A76
+   cores read 14.1 GB/s. Two A55 cores read 10.0, four 10.8, six 9.1 and all eight 8.25 GB/s. Four A55
+   cores added to two A76 cores lower the total from 14.1 to 9.4 GB/s. Staggering the start offsets, reading 4 KiB chunks,
+   issuing two streams per core and prefetching explicitly into the L2 cache change the six-core
+   and eight-core totals by at most 8 percent; the stagger lowers the two-A76 total by up to 8
+   percent, the opposite of what a conflict between aligned streams would cause.
+   The L3 fill path of the A55 prefetchers is therefore not the limit: explicit L2 prefetches
+   lower the totals. The hardware prefetchers matter for the shape of the stream: page-sized
+   strides cut one A76 core from 14.7 to 6.7 GB/s.
+3. **Neighbouring streams read faster than distant ones.** With the same barrier per 16 KiB
+   round, six A55 cores that read neighbouring chunks of one stream reach 7.22 GB/s, and the same
+   cores on separate regions 5.93 GB/s: 22 percent more. For eight cores the figures are
+   7.45 and 5.84 GB/s, 28 percent more. The barrier itself costs a third of the rate of the free-running
+   cores (5.93 against 9.07 GB/s), so the shared-stream total does not exceed the free-running one.
+   The direction shows that the rate depends on how far apart the concurrent streams are in
+   the address space, which a cluster-side limit would not.
+
+### Cause
+
+The evidence supports the first hypothesis of the ranking (loss of row-buffer and bank
+locality when several independent streams reach the controller), with these limits:
+
+- The controller is configured by boot0's own code and parameter set, so its scheduling, page
+  policy and address mapping equal the vendor's. A vendor kernel on the same board meets the
+  same loss with eight independent streams.
+- The Cortex-A76 and Cortex-A55 prefetchers, the DSU clock and the MBUS clock equal the vendor's or
+  its top point, and the loss does not respond to the software prefetch variant.
+- The one difference from the vendor that remains is the nine NSI port words that boot0 writes
+  after DRAM initialization and that the FEL wrapper skips. Their meaning is not documented, and
+  no measurement so far tests them. The shared-stream result does not exclude an arbitration
+  effect, because arbitration between the 21 initiators and the CPU direct channel sits in the
+  same path.
+
+The loss is therefore a property of the memory system under many independent streams, not a
+SunstoneOS configuration error that the data identifies. The test of the remaining difference
+needs an interconnect register write and waits for approval (next subsection).
+
+### Plan awaiting approval
+
+1. **Read the nine NSI words** (`0x02023a14`, `0x02023c14`, `0x02023e14`, `0x02024014`,
+   `0x02024214`, `0x0202446c`, `0x0202466c`, `0x0202200c`, `0x0202220c`) at EL1 in an image built on
+   the existing memory-bus priority hook (`drivers/dram/a733_dram.c`). A read changes nothing, but
+   Non-secure access to the NSI is unproven and an abort ends the image. Prediction: the words read
+   reset values, not the vendor values `0x3f`, `0x7f`, `0xf`, `0xf1`, `0xf1`, `0x40a05`, `0x40a05`, `1`, `1`.
+2. **Write the vendor values** with boot0's own order and barriers (`dmb sy` between writes,
+   routine `0x48f38`), read them back, then run the scaling image. Prediction: if these words
+   affect CPU traffic, the eight-core total rises above 8.25 GB/s; if the loss is the locality loss
+   of the controller, the totals stay within 3 percent of the table above. Either result is
+   informative, and the second ends the search for a configuration difference.
+3. **Application-side remedy that needs no register write**: weight-streaming kernels read
+   neighbouring blocks of one weight matrix on all cores in the same period, rather than one
+   contiguous slice per core. The shared-stream result shows 22 to 28 percent against separate
+   regions at equal synchronization cost; a cheaper synchronization than a barrier per 16 KiB is
+   needed to turn that into a gain over the free-running 8.25 GB/s. This belongs to the
+   application (mimus), not to the OS.
+4. **Not proposed**: a change of the DRAM clock to the 2400 MHz parameter set (19.2 GB/s pin
+   rate) needs a clock and voltage decision, and a change of the A55 prefetch registers
+   (`CPUECTLR`, L1 and L3 prefetch limits) would test over-fetching but is not a vendor setting.
