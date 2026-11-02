@@ -112,17 +112,19 @@ def main():
     synced = len(data)
 
     # derived: with no GUARD_US the guard is CLOSE_RESERVE_US before the session's own deadline (grant->finish_by_us); a deadline
-    # 10 ms after the start and a 1 ms close reserve stop the write about 9 ms in, and no deadline means no guard
+    # 40 ms after the start (on the model's virtual clock, which advances by the 1.5 ms per write call) and a 20 ms close reserve
+    # stop the write about 20 ms in and leave time to close, and no deadline means no guard
     derived = out / 'guard-derived'
-    r = subprocess.run([c for c in cc[:-1] if not c.startswith('-DGUARD_US')] + ['-DCLOSE_RESERVE_US=1000', '-o', str(derived)],
+    r = subprocess.run([c for c in cc[:-2] if not c.startswith('-DGUARD_US')] + ['-DCLOSE_RESERVE_US=20000', '-o', str(derived)],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     derived_img = out / 'derived.img'; make_image(derived_img)
     r = subprocess.run([str(derived), str(derived_img), str(BASE), str(PART), '0', str(out / 'derived.result'), '1500'],
-                       capture_output=True, text=True, env={**harness.environment(), 'FINISH_AFTER_US': '10000'})
+                       capture_output=True, text=True, env={**harness.environment(), 'FINISH_AFTER_US': '40000'})
     assert r.returncode == 0, f'model exited {r.returncode}: {r.stdout}{r.stderr}'
     d8 = host.decode((out / 'derived.result').read_bytes())
     assert d8['status'] == 11 and 0 < d8['written_bytes'] < FILE and d8['detail'] == d8['written_bytes'], d8
+    assert 0 < d8['total_ticks'] / 24 <= 40000, d8['total_ticks']      # the write stopped and closed inside the session's 40 ms deadline (virtual clock)
     fsck_clean(derived_img)
     data8, clean8 = volume_state(derived_img)
     assert clean8 and data8 == stream(len(data8)) and len(data8) <= d8['written_bytes'], 'derived-guard file differs from the stream prefix'
