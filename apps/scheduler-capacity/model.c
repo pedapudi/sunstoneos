@@ -15,7 +15,7 @@ int main(void)
     for(unsigned core=0;core<CAPACITY_CORES;++core){
         struct capacity_core *c=&r.core[core];c->observed_core=core;c->readiness=15;
         struct ss_cpu_observation *o=&c->observation;
-        o->core=core;o->mpidr=UINT64_C(0x80000000)|(core<<8);
+        o->core=core;o->mpidr=UINT64_C(0x81000000)|(core<<8);
         o->midr=core<6?0x412fd050:0x414fd0b1;o->isar0=2<<20;
         o->flags=15;o->atomic=2;o->clidr=3|(4<<3)|(4<<6);o->cache_count=4;
         for(unsigned i=0;i<4;++i){

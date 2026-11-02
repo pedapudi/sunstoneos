@@ -188,6 +188,11 @@ int ss_cpu_topology_info(struct ss_cpu_topology_info *out);
 int ss_cpu_topology(struct ss_cpu_info *out, size_t capacity, size_t *count);
 int ss_work_split(uint64_t units, uint64_t cpu_mask, uint32_t quantum,
                   struct ss_work_range *out, size_t capacity, size_t *count);
+/* Explicitly use the calibration's maximum-capacity weights. This helper
+ * does not observe current clocks; a caller comparing execution at that point
+ * must verify the operating state across its workload. */
+int ss_work_split_max(uint64_t units, uint64_t cpu_mask, uint32_t quantum,
+                      struct ss_work_range *out, size_t capacity, size_t *count);
 int ss_cpu_observations(unsigned core, struct ss_cpu_observation *out);
 /* Mark the bounded application operation observed by thermal reports.
  * Both calls publish atomic counters; success is 0 or 1. */

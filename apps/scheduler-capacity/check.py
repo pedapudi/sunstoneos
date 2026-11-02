@@ -23,6 +23,9 @@ result = host.decode(payload)
 assert result['digest'] == host.expected_digest()
 assert len(payload) == host.RESULT_BYTES == 10976
 assert len(expect.discovery_expectation()['words']) * 4 == len(payload)
+discovery = expect.discovery_expectation()['words']
+for value, wanted in zip(struct.unpack('<' + 'I' * len(discovery), payload), discovery):
+    assert wanted['min'] <= value <= wanted['max'] if isinstance(wanted, dict) else value == wanted
 expected = expect.expectation(payload)['words']
 assert sum(isinstance(word, dict) for word in expected) == 8 * 2 * host.REPS
 for offset, replacement in ((0, 0), (32 + 40, 7), (32 + 624, 1),
