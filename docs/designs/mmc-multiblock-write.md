@@ -55,3 +55,27 @@ descriptor flag, the programming wait and the PIO-only data check each fail the 
 - `checks/sd-read-only.py` passes with CMD24 and CMD25 absent from the read-only set; `--elf` passes on the
   linked large-region image.
 - A boundary check proves no byte outside the requested range is written (the model compares the whole card).
+
+## Register filter for the bounded writer
+
+The native adapter (`drivers/storage/a733_mmc_platform_native.c`) admits a CMD25 command-register write, and the write
+threshold register, only in a write-capable build and only for an SD card, while a verified bounds object
+(`a733_storage_bounds.h`) is bound to it. The rule for the command word is exact: start, wait for previous data, automatic
+stop, write, data, CRC, response and index 25, with no other bit; the block-size register holds 512; the byte count is a
+whole number of 1 to 256 blocks; and the argument register, read at the moment of the write, starts a range that lies wholly
+inside one admitted write range. The bounds object keeps a pointer to the frozen first input and walks its ranges in place,
+so the number of ranges is limited only by the input.
+
+Binding is refused unless the platform that owns the adapter has identified an SD card addressed by sector, because the rule
+reads the argument as a sector number. The test is made inside `a733_mmc_platform_native_bind_bounds` from the platform's
+own card record, so no caller can skip it.
+
+A hole in the first version of this filter is closed. The adapter's command filter skipped its index switch for any word
+with the clock-update bit set, because a clock update is not a card command. A word with index 25, the write bit and the
+clock-update bit set therefore reached the controller without the bounded rule. Every word with index 25 now passes the
+rule first, and the exact word excludes the clock-update bit. `checks/a733-mmc-native-filter.py` runs the real filter on
+the host (the AArch64 task test and the register accesses sit behind hooks under `A733_MMC_NATIVE_HOST_TEST`) and covers the
+hole: it changes each of the 32 bits of the exact word in turn and requires every changed word to be refused, adds the
+clock-update form directly, and fails if the first-version behavior is restored. It also covers block size and count, range
+edges and straddles, the unbound, unverified, closed, eMMC and foreign-task states, byte-addressed and unidentified cards at
+the binding, and a read-only build that refuses CMD25 and the threshold write even when a verified object is forced into it.

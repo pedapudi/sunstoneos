@@ -94,6 +94,8 @@ static inline int a733_mmc_platform_native_fifo_allowed(enum sunxi_mmc_kind kind
 int a733_mmc_platform_native_bind_update(struct a733_mmc_platform_native *,struct a733_storage_update *);
 /* Bind once the runner-admitted bounds object (a733_storage_bounds.h). CMD25 and the write threshold register are
  * then writable, each only while the object is verified and the command's whole sector range lies in a write range.
- * SD only; absent from the read-only build. */
-int a733_mmc_platform_native_bind_bounds(struct a733_mmc_platform_native *,const struct a733_storage_bounds *);
+ * The binding refuses unless the platform that owns this adapter has identified an SD card addressed by sector: the
+ * test is made here, from the platform's card, and cannot be skipped. SD only; absent from the read-only build. */
+int a733_mmc_platform_native_bind_bounds(struct a733_mmc_platform_native *,const struct a733_mmc_platform *,
+                                         const struct a733_storage_bounds *);
 #endif

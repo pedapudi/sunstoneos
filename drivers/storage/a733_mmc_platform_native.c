@@ -238,9 +238,14 @@ int a733_mmc_platform_native_init(struct a733_mmc_platform_native *n,
 {return a733_mmc_platform_native_init_selected(n,locks,task,kind,A733_MMC_EMMC_SDC2,admission,cookie);}
 
 #ifndef SUNXI_MMC_READ_ONLY
-int a733_mmc_platform_native_bind_bounds(struct a733_mmc_platform_native *n,const struct a733_storage_bounds *b)
+int a733_mmc_platform_native_bind_bounds(struct a733_mmc_platform_native *n,const struct a733_mmc_platform *p,
+                                         const struct a733_storage_bounds *b)
 {
-    if(!n||!n->initialized||n->bounds||n->kind!=SUNXI_MMC_SD||!b||b->state!=A733_BOUNDS_VERIFIED||!current(n))return 0;
+    /* The card test is made here, from the platform's own identified card, so no caller can skip or misstate it:
+     * an SD card addressed by sector, behind this very binding, with a verified bounds object. */
+    if(!n||!n->initialized||n->bounds||n->kind!=SUNXI_MMC_SD||!b||b->state!=A733_BOUNDS_VERIFIED||!current(n)||
+       !p||p->cookie!=n||p->config.kind!=n->kind||!p->core.card.sectors||
+       !a733_storage_bounds_card_ok(b,p->config.kind==SUNXI_MMC_SD,p->core.card.sector_addressed))return 0;
     n->bounds=b;return 1;
 }
 int a733_mmc_platform_native_bind_update(struct a733_mmc_platform_native *n,struct a733_storage_update *u)

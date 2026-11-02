@@ -59,6 +59,13 @@ static void make_blob(void)
 static struct a733_platform_locks locks;
 static struct a733_mmc_platform_native n;
 static struct a733_storage_bounds bounds;
+static struct a733_mmc_platform platform;                    /* only the fields the binding reads */
+static void card(unsigned sector_addressed, uint64_t sectors, enum sunxi_mmc_kind kind)
+{
+    memset(&platform, 0, sizeof platform);
+    platform.cookie = &n; platform.config.kind = kind;
+    platform.core.card.sectors = sectors; platform.core.card.sector_addressed = (uint8_t)sector_addressed;
+}
 static int admission(void *c, const struct a733_mmc_platform_config *cfg, const struct a733_clock_token *t) { (void)c; (void)cfg; (void)t; return 1; }
 
 static void fresh(enum sunxi_mmc_kind kind, enum sunxi_mmc_sd_profile profile, int verified)
@@ -71,6 +78,7 @@ static void fresh(enum sunxi_mmc_kind kind, enum sunxi_mmc_sd_profile profile, i
     assert(a733_mmc_platform_native_init_selected(&n, &locks, &dummy_task, kind, A733_MMC_EMMC_SDC2, admission, NULL));
     n.sd_profile = profile;
     assert(n.operations.enter(&n, 1000));
+    card(1, 1u << 20, kind);
     assert(a733_storage_bounds_parse(&bounds, blob, sizeof blob));
     if (verified) assert(a733_storage_bounds_verify(&bounds, read_card, NULL));
 }
@@ -92,8 +100,8 @@ int main(void)
     fresh(SUNXI_MMC_SD, SUNXI_MMC_SD_HIGH_SPEED4, 1);
     assert(!command(EXACT, 1000, 512, 512 * 100));                      /* unbound */
     assert(!w(SUNXI_SMHC_THLD, 0x02000004u) && !thld_stores);
-    assert(a733_mmc_platform_native_bind_bounds(&n, &bounds));
-    assert(!a733_mmc_platform_native_bind_bounds(&n, &bounds));         /* once */
+    assert(a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds));
+    assert(!a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds));         /* once */
     /* The accepted cases and the edges. */
     assert(command(EXACT, 1000, 512, 512 * 100));
     assert(command(EXACT, 1099, 512, 512));
@@ -127,18 +135,32 @@ int main(void)
     assert(!command(EXACT, 1000, 512, 512) && !w(SUNXI_SMHC_THLD, 4));
     /* Binding refusals: unverified, closed, eMMC, wrong task. */
     fresh(SUNXI_MMC_SD, SUNXI_MMC_SD_HIGH_SPEED4, 0);
-    assert(!a733_mmc_platform_native_bind_bounds(&n, &bounds) && !command(EXACT, 1000, 512, 512) && !w(SUNXI_SMHC_THLD, 4));
+    assert(!a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds) && !command(EXACT, 1000, 512, 512) && !w(SUNXI_SMHC_THLD, 4));
     fresh(SUNXI_MMC_EMMC, SUNXI_MMC_SD_LEGACY, 1);
-    assert(!a733_mmc_platform_native_bind_bounds(&n, &bounds) && !command(EXACT, 1000, 512, 512));
+    assert(!a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds) && !command(EXACT, 1000, 512, 512));
     n.bounds = &bounds;                                                  /* even a forced binding is refused for eMMC */
     assert(!command(EXACT, 1000, 512, 512) && !w(SUNXI_SMHC_THLD, 4));
     fresh(SUNXI_MMC_SD, SUNXI_MMC_SD_HIGH_SPEED4, 1);
-    task_ok = 0; assert(!a733_mmc_platform_native_bind_bounds(&n, &bounds)); task_ok = 1;
-    assert(a733_mmc_platform_native_bind_bounds(&n, &bounds));
+    task_ok = 0; assert(!a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds)); task_ok = 1;
+    assert(a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds));
     /* The card test the image applies before binding. */
     assert(a733_storage_bounds_card_ok(&bounds, 1, 1));
     assert(!a733_storage_bounds_card_ok(&bounds, 1, 0));                 /* byte-addressed card */
     assert(!a733_storage_bounds_card_ok(&bounds, 0, 1));                 /* eMMC */
+    /* The binding makes the card test itself: byte-addressed, unidentified, eMMC and foreign-platform cards are refused. */
+    fresh(SUNXI_MMC_SD, SUNXI_MMC_SD_HIGH_SPEED4, 1);
+    card(0, 1u << 20, SUNXI_MMC_SD);
+    assert(!a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds) && !n.bounds && !command(EXACT, 1000, 512, 512));
+    assert(!w(SUNXI_SMHC_THLD, 4));
+    card(1, 0, SUNXI_MMC_SD);                                            /* no card identified yet */
+    assert(!a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds));
+    card(1, 1u << 20, SUNXI_MMC_EMMC);
+    assert(!a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds));
+    card(1, 1u << 20, SUNXI_MMC_SD); platform.cookie = &locks;           /* a platform that does not own this adapter */
+    assert(!a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds));
+    assert(!a733_mmc_platform_native_bind_bounds(&n, NULL, &bounds));
+    card(1, 1u << 20, SUNXI_MMC_SD);
+    assert(a733_mmc_platform_native_bind_bounds(&n, &platform, &bounds) && command(EXACT, 1000, 512, 512));   /* and the sector-addressed card binds */
     struct a733_storage_bounds raw = {0};
     assert(!a733_storage_bounds_card_ok(&raw, 1, 1) && !a733_storage_bounds_card_ok(NULL, 1, 1));
     puts("PASS: write-capable filter: CMD25 accepted only for the exact word, 512-byte blocks, 1 to 256 blocks inside one admitted range; "
