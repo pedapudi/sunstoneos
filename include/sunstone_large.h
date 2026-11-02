@@ -2,11 +2,12 @@
 #define SUNSTONE_LARGE_H
 /* Large application regions (docs/designs/large-app-regions.md): the record an application declares
  * in the optional section "sunstone_large_regions", and the status the SDK reports. The record is
- * little-endian data of 112 bytes; the section holds an array of them, aligned to 8 bytes. */
+ * little-endian data of 112 bytes; the section holds an array of them in index order, aligned to 8 bytes.
+ * An application declares as many as it needs; the bound is the upper memory itself (each region takes at
+ * least one 2 MiB block, and the regions of one application together fit in it). */
 #include <stddef.h>
 #include <stdint.h>
 
-#define SS_LARGE_REGIONS 4u
 #define SS_LARGE_PATH_BYTES 48u
 enum {
     SS_LARGE_WRITE = 1u << 0,    /* the application may write the region at EL0 */
@@ -30,7 +31,7 @@ struct ss_large_status {
     uint64_t loaded, total, elapsed_us;
 };
 
-/* Validate the records of one application: at most SS_LARGE_REGIONS, indexes 0..count-1 each once, sizes
- * and digests, path characters and the source kind. 1 when every record is well formed. */
+/* Validate the records of one application: record i has index i, sizes that are 2 MiB multiples whose total
+ * fits the upper memory, a digest, path characters and one source kind. 1 when every record is well formed. */
 int ss_large_records_valid(const struct ss_large_region *records, unsigned count);
 #endif

@@ -31,7 +31,11 @@ enum qemu_os_fault {
     QEMU_OS_FAULT_THERMAL_CLOCK,       /* the sensor clock gate is closed */
     QEMU_OS_FAULT_PMIC_BUS,            /* the PMIC bus's data line is held low */
     QEMU_OS_FAULT_USB_SILENT,          /* the USB transport task starts and reports nothing */
-    QEMU_OS_FAULT_USB_STALL            /* the USB transport reports ready, then stops reporting */
+    QEMU_OS_FAULT_USB_STALL,           /* the USB transport reports ready, then stops reporting */
+    QEMU_OS_FAULT_DISK_MOUNT,          /* the block device refuses every read of the first 64 sectors */
+    QEMU_OS_FAULT_DISK_SUBMIT,         /* the block device refuses to start a streamed request */
+    QEMU_OS_FAULT_DISK_MIDWAY,         /* the block device fails the fifth streamed request */
+    QEMU_OS_FAULT_DISK_ABSENT          /* the board offers no block device */
 };
 /* The scenario is data, written by the check. Times are microseconds of
  * guest time after the board's start. */

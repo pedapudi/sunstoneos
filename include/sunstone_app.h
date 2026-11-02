@@ -175,8 +175,9 @@ void *ss_large_base(unsigned index, size_t *bytes);
 int ss_large_status(unsigned index, struct ss_large_status *out);
 /* Block until the region is ready or failed or timeout_us passes: 1 ready, -1 failed, 0 timeout. */
 int ss_large_wait(unsigned index, uint64_t timeout_us);
-/* Take and load a region after start with the same record; 0 or a negative app_region_status. */
-int ss_large_request(const struct ss_large_region *record);
+/* Put a task of the application (a worker it created) in the application's address space; the OS does this
+ * for the main task. Call it before the task first runs, or from the task itself before it uses a region. */
+void ss_large_attach(void *task);
 /* 1 live with the granted devices ready, 0 not ready yet, -1 ended. */
 int ss_live(void);
 /* One atomic store: this application's supervision record. */

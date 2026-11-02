@@ -238,9 +238,8 @@ int ss_large_status(unsigned index, struct ss_large_status *out);
  * Returns 1 ready, -1 failed, 0 timeout. Woken by task notification. */
 int ss_large_wait(unsigned index, uint64_t timeout_us);
 
-/* Request a region after start with the same record. Returns 0 on success
- * or a negative app_region_status; the call returns after the load begins. */
-int ss_large_request(const struct ss_large_region *record);
+/* Put a task of the application, such as a worker it created, in the application's address space. */
+void ss_large_attach(void *task);
 ```
 
 At admission the OS acquires every declared region before the main task
@@ -419,17 +418,62 @@ execute-never bits). The model aborts on a descriptor bit it does not model
 
 ## Status of the OS integration
 
-- **Admission (implemented, host- and QEMU-checked).** `tools/sunstone-manifest.py` takes `large_regions` in
-  `manifest.json` (a file or a raw extent, a size that is a multiple of 2 MiB, the source length and its SHA-256)
-  and emits the section `sunstone_large_regions` beside the manifest. `apps/os/large.c` runs in
-  `os_application_prepare()`, before any task exists: it derives the usable upper memory from the installed kernel
-  table (each level-1 slot that holds the EL1-only non-global block, which the table builder writes only when the
-  decode check passed), takes every record from the ledger all or nothing, and builds the application's space. A
-  refusal stops the start. `checks/qemu-os-boot.py` boots an application that declares a 1 GiB file region and a
-  64 MiB extent region on a 4 GiB virtual board: both are placed (`0x8000_0000`, `0xc000_0000`), the application
-  runs, and an application whose regions exceed the upper memory never starts.
-- **Not yet implemented:** the task-switch hook that selects the space, the `ss_large_*` calls, the loader task and
-  the 1 GiB test application with its bandwidth measurement at the approved top points.
+All four steps are implemented in the OS image and checked on the host and in QEMU; none has run on a board.
+[The status page](../status/large-regions.md) lists what is open.
+
+- **Counts.** No tuning constant bounds a count. The usable upper memory is 11 level-1 slots, which bounds the
+  usable ranges and the pages of a space (`APP_SPACE_PAGES` = the root and one level-2 table per slot = 12). The
+  number of regions is bounded by the memory (each takes a 2 MiB block) and their total by 11 GiB. The ledger
+  takes caller storage for as many regions as the manifest declares; the generated tables size it, the loaded
+  slots and the waiter list (one entry per task of the application, which is its workers plus the main task).
+- **Admission** (`apps/os/large.c`) runs in `os_application_prepare()`. The usable memory is read from the
+  installed kernel table, so an image whose decode check failed has none and the application does not start.
+- **Task switch.** `traceTASK_SWITCHED_IN()`, defined in the OS `FreeRTOSConfig.h` files only, calls
+  `os_space_switch_in()` (`include/os_space.h`). A task carries its space's TTBR0 value in its application tag
+  (the OS tags the main task; `ss_large_attach` tags a worker). The hook reads the core's TTBR0, compares it with
+  the task's and writes it when they differ. It issues no barrier and no TLB invalidate: the kernel's mappings
+  are the same in every space, every upper-memory entry carries an ASID, and the exception return that resumes
+  the task is a context synchronization event. Neither kernel needs a change: the default `tasks.c` and the
+  partitioned `freertos.c` both expand the macro with names they already have (`pxCurrentTCBs`,
+  `portGET_CORE_ID`, the task tag), and both build and boot in the QEMU check.
+- **Cost of the hook.** Compiled, the hook is 6 instructions while no space is installed, about 20 when a space is
+  installed and the table does not change, and one more (the `MSR`) when it changes. QEMU's instruction time
+  (`-icount shift=0`) for 20,000 notification round trips between two tasks of one core is 289.16 ticks per
+  round trip in one space and 289.34 with a TTBR0 write at each switch: 0.18 ticks (7.5 ns) per round trip, 3.8 ns per
+  switch, four instructions' time. This is not hardware time. The OS test application runs the same benchmark, so
+  the figure on the board is one run away.
+- **SDK.** `ss_large_wait`, `ss_large_base`, `ss_large_status` and `ss_large_attach`. There is no call to take a
+  region after start: the ledger and the tables are sized from the manifest at build time, so run-time requests
+  are backlog (see the status page for what they need).
+- **ASIDs.** An ASID comes from `app_asid_alloc()` (`kernel/appmem/app_region.c`), which hands out 1 to 255 once each
+  and never takes one back. Today the OS has one application and nothing tears a space down, so there is no reuse
+  path; the pool refuses (returns 0) when it is exhausted. A teardown that wanted to reuse an ASID would first clear
+  the space's tables and execute `DSB ISH; TLBI ASIDE1IS, (asid << 48); DSB ISH`; without that the old space's
+  translations would stay live in the TLBs under the number.
+- **Kernel mappings.** Every per-application root is a copy of the boot root: slot 0 (MMIO) is copied and slot 1
+  points to the same level-2 table, so the code, data, stacks and devices that EL1 runs on between the `MSR` and the
+  `ERET` are the same global (nG = 0) entries in every table, while the upper-memory slots carry nG = 1 and an ASID
+  and are touched by EL1 only in the loader and drivers, never in the scheduler.
+- **Loader** (`apps/os/large_load.c`): one EL1 task reads each region's FAT32 file (or raw extent) in 128 KiB
+  requests through two buffers, copies into the region through the kernel table, hashes, and sets READY only when
+  the digest matches; the application's waiters are woken by task notification. A missing file, a failing device
+  and a digest mismatch set FAILED with the loader's status, and the application returns normally.
+- **Device.** The board supplies `os_large_device()`, which runs in the loader task. On the A733 it is
+  `apps/os/large_sd.c`: the OS's shared providers (`providers.shared`: counter, locks, clock leases, pins, rails and
+  the PMIC that the board-pmic task serves), the read-only SD core (`SUNXI_MMC_READ_ONLY`, so no write or erase command
+  is reachable; `checks/sd-read-only.py --elf` passes on the image) and the descriptor DMA of `a733_mmc_platform`
+  with its 33 descriptors in a lease of the uncached pool. `os_large_sd_pins()` authorizes PF0 to PF6 at boot when the
+  image declares regions. The loader task owns the platform, identifies the card in profile 2, and
+  `os_large_device_close()` restores the clock, the pins and the rail lease after the last region. A failure at any step
+  retains the platform and returns no device. The QEMU board supplies a RAM disk and four device faults.
+- **Checks.** `checks/qemu-os-boot.py` cases: loaded (the region reads back at EL0 as the file), file absent
+  (reported, normal return), one flipped bit (digest mismatch, normal return), a task outside the space faults at the
+  region base with a level 1 permission fault, a device that is present and fails (metadata, request start, mid-stream,
+  absent), switch cost, and regions beyond the board's memory (no start).
+- **Test application** `apps/large-region-test` (`SUNSTONE_APPLICATION=large-region-test`, needs
+  `-DSUNSTONE_A733_DRAM_DECODE_PROBE=ON`): a 1 GiB region loaded from `/sunstone-test/sunstone-region-test.bin`, the
+  switch benchmark, and read passes with the vector loads of `apps/dram-bandwidth/kernel.c` (a 40 MiB window ten times and
+  the full gigabyte three times), timed with the 24 MHz counter. Without the file it reports why and returns.
 
 ## Prerequisites and changes outside this design's files
 
