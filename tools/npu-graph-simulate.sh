@@ -17,6 +17,8 @@ for index, (name, spec) in enumerate(meta['Inputs'].items()):
         codes = np.clip(np.rint(x * 2.0 ** q['fl']), -32768, 32767).astype(np.int64)
         Path('sim-input%d.qnt.tensor' % index).write_text('\n'.join(str(int(v)) for v in codes.ravel()) + '\n')
     else:
+        # The device takes the half-precision values; give the simulator exactly those values, not its own rounding of them.
+        x = x.astype(np.float16).astype(np.float64)
         Path('sim-input%d.tensor' % index).write_text('\n'.join(repr(float(v)) for v in x.ravel()) + '\n')
 PY
 export VSIMULATOR_SHADER_CORE_COUNT=1

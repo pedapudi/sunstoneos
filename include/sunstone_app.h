@@ -303,6 +303,12 @@ int ss_npu_model_find(const char *name,unsigned *index);
 #define SS_NPU_MAX_TENSOR_BYTES (1024u * 1024u)
 int ss_npu_run(unsigned model,const void *input,size_t input_bytes,
                void *output,size_t output_bytes,uint64_t timeout_us);
+/* ss_npu_run returns -3 when this job failed with an NPU MMU exception and the NPU was reset: the output is not
+ * valid and the session remains usable. ss_npu_last_fault then describes the fault: the MMU status (+0x384), the
+ * faulting device address (+0x380), the CRC-32 of a test image's canary buffer (zero elsewhere), the service's
+ * progress marks and the wait window in milliseconds. It returns 1 once per fault and 0 when there is none. */
+struct ss_npu_fault_info { uint32_t mmu_status, mmu_address, canary_crc, marks, window_ms, reserved; };
+int ss_npu_last_fault(struct ss_npu_fault_info *);
 /* After the final run, repeat until 1 (slot closed), or a negative failure.
  * Successful CLOSE is terminal for this session. */
 int ss_npu_close(void);

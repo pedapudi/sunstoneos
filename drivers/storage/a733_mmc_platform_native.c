@@ -204,6 +204,7 @@ int a733_mmc_platform_native_init(struct a733_mmc_platform_native *n,
     int (*admission)(void *,const struct a733_mmc_platform_config *,const struct a733_clock_token *),void *cookie)
 {return a733_mmc_platform_native_init_selected(n,locks,task,kind,A733_MMC_EMMC_SDC2,admission,cookie);}
 
+#ifndef SUNXI_MMC_READ_ONLY
 int a733_mmc_platform_native_bind_update(struct a733_mmc_platform_native *n,struct a733_storage_update *u)
 {
     if(!n||!n->initialized||n->update||!u||!current(n)||!a733_storage_update_owned(u,u->platform)||
@@ -212,3 +213,4 @@ int a733_mmc_platform_native_bind_update(struct a733_mmc_platform_native *n,stru
        u->platform->config.kind!=n->kind||u->platform->config.emmc_host!=n->emmc_host)return 0;
     n->update=u;return 1;
 }
+#endif

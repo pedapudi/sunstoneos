@@ -436,6 +436,10 @@ void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 void kernel_main(void)
 {
     platform_init();
+    /* The check can delay the primary core by a loaded count of loop turns before it creates any
+     * task. Different delays shift every later interleaving on the deterministic clock; zero
+     * (the default) is no delay. checks/scheduler-partitioned-qemu.py --skew loads the word. */
+    for (volatile uint32_t turns = *(volatile uint32_t *)0x47ff0000UL * 61u; turns; --turns) {}
     replies = xQueueCreateStatic(32, sizeof(uint32_t), reply_storage, &reply_state);
     empty = xQueueCreateStatic(1, sizeof(uint32_t), timeout_storage, &timeout_state);
     configASSERT(replies && empty);

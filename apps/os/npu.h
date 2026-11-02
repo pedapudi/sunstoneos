@@ -30,6 +30,10 @@ int os_npu_open(void);
 int os_npu_load(unsigned entry);
 int os_npu_tensor(enum nbg_section_id,unsigned index,struct npu_runtime_tensor *);
 int os_npu_submit(uint64_t timeout_us);
+/* os_npu_submit returns 2 when the job failed with an NPU MMU exception and the NPU was recovered: the session is
+ * usable, the outputs are not valid, and this record describes the fault (zero fields where a build lacks them). */
+struct os_npu_fault_info { uint32_t mmu_status, mmu_address, canary_crc, marks, window_ms, reserved; };
+extern struct os_npu_fault_info os_npu_last_fault;
 int os_npu_close(void);
 int os_npu_stopping(void);
 unsigned os_npu_stopped(void);

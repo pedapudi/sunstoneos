@@ -30,6 +30,13 @@ set(a733_sources
   platform/a733-smp-cached/memory.c
   platform/a733-smp-cached/continue.c platform/a733-smp-cached/continue.S
   runtime/memory.c runtime/memmove.c checks/fp-context.S)
+# The address-test definition of the DRAM decode check
+# (drivers/dram/a733_dram_decode_probe.c). Without it the table builder keeps its
+# refusal, and no image maps DRAM above the boot image.
+option(SUNSTONE_A733_DRAM_DECODE_PROBE "Cached images map the upper DRAM after the address-test decode check passes" OFF)
+if(SUNSTONE_A733_DRAM_DECODE_PROBE)
+  list(APPEND a733_sources drivers/dram/a733_dram_decode_probe.c)
+endif()
 list(TRANSFORM a733_sources PREPEND "${a733_root}/")
 apply_build_patch("${a733_build}/continue-core.c" "${a733_root}/platform/a733/cpu_continue.c"
   "${a733_root}/platform/a733-smp-cached/continuation-core.patch")

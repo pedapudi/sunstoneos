@@ -23,10 +23,13 @@ import ctypes as c
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CATALOGUE = ROOT / 'tools/npu-session-models.json'
+# The list of described models. SUNSTONE_NPU_MODEL_DB names another list, for an application's own graphs: the entries
+# only describe tensors and locate files; the OS runtime admits a graph by its structure, not by being listed.
+CATALOGUE = Path(os.environ.get('SUNSTONE_NPU_MODEL_DB', ROOT / 'tools/npu-session-models.json'))
 MAX_TENSORS = 8
 
 

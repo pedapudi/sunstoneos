@@ -1,6 +1,9 @@
 #ifndef SUNSTONE_LATENCY_H
 #define SUNSTONE_LATENCY_H
 #include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 enum ss_latency_region {
     SS_LAT_IRQ, SS_LAT_MASKED, SS_LAT_LOCK_WAIT0, SS_LAT_LOCK_HOLD0,
@@ -45,6 +48,24 @@ struct ss_latency_site_pmu {
 };
 /* Rows of the exported tail: the busy phase and the aggregate. */
 #define SS_LAT_PMU_ROWS 2U
+
+/* Optional sweep of every masked-span pair (SUNSTONE_LATENCY_SWEEP). */
+#define SS_LAT_SWEEP_ENTRIES 64u
+#define SS_LAT_SWEEP_BINS 22u
+struct ss_latency_sweep {
+    uintptr_t open, close;
+    uint64_t count;
+    uint32_t core, max_us, bins[SS_LAT_SWEEP_BINS];
+    uint32_t wait_in_max_us, max_wait_us; /* lock wait inside the longest span; longest lock wait in any span */
+    uint64_t long_count, long_span_us, long_wait_us; /* spans above 5 us: count, total length, total lock wait */
+};
+/* reject: not an EL1 task, mask closed, interrupts disabled, core holds the lock, queue shallow, other */
+struct ss_latency_prewait { uint64_t count, timed_out, max_us, total_us, reject[6]; uint32_t core; };
+#ifdef SUNSTONE_LATENCY_SWEEP
+unsigned ss_latency_prewait_read(unsigned core, struct ss_latency_prewait *out);
+unsigned ss_latency_sweep_read(unsigned index, struct ss_latency_sweep *out);
+unsigned ss_latency_sweep_overflow(unsigned core);
+#endif
 
 #ifdef SUNSTONE_LATENCY
 static inline uint64_t ss_latency_now(void)
@@ -121,5 +142,8 @@ void ss_latency_task_ready(void *task);
 #define SS_LATENCY_GPU_ARM() ((void)0)
 #define SS_LATENCY_GPU_POST(client) ((void)0)
 #define SS_LATENCY_GPU_RECEIVED(client) ((void)0)
+#endif
+#ifdef __cplusplus
+}
 #endif
 #endif

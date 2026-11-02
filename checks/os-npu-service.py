@@ -39,8 +39,6 @@ generated = out / 'generated'; generated.mkdir()
 subprocess.run([python, str(ROOT / 'apps/os/npu-catalogue.py'), '--artifacts', str(ARTIFACTS),
                 '--models', str(ROOT / 'apps/os/npu-models.json'), '--model', '0', '--model-name',
                 'shufflenet-v2-published', '--output', str(generated / 'npu-models.c')], check=True)
-subprocess.run([python, str(ROOT / 'tools/npu-session-catalogue.py'), 'generate', '--application',
-                str(ROOT / 'apps/os/npu-models.json'), '--output', str(generated / 'npu_admitted_models.c')], check=True)
 NETWORK = CACHE / 'sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source'
 includes = [ROOT / 'apps/os', generated, ROOT / 'apps/board', ROOT / 'platform/a733-storage-update',
             ROOT / 'platform/a733-smp-cached', ROOT / 'drivers/usb', ROOT / 'network/include',
@@ -49,7 +47,7 @@ includes = [ROOT / 'apps/os', generated, ROOT / 'apps/board', ROOT / 'platform/a
 
 def build(name, wrapper=None):
     defines = DEFINES + (['OS_NPU_SOURCE="%s"' % wrapper] if wrapper else [])
-    sources = [*UNITS, generated / 'npu-models.c', generated / 'npu_admitted_models.c']
+    sources = [*UNITS, generated / 'npu-models.c']
     return host_rtos.build(out / name, sources, 'os-npu-service', defines=defines, includes=includes,
                            flags=['-Wno-error', '-w', '-ffunction-sections', '-fdata-sections'],
                            link=['-Wl,--gc-sections'])
@@ -65,6 +63,12 @@ for case in CASES:
     (out / ('case-%d.log' % case)).write_text(done.stdout + done.stderr)
     assert done.returncode == 0, (case, done.returncode, done.stdout[-400:], done.stderr[-600:])
     print('case', case, ' '.join(done.stdout.split('\n')[:2]))
+# Case 26: far more jobs than the former quota, in a session whose job field is 1. A session never fails because it has
+# run a number of jobs.
+done = run(exe, 26)
+(out / 'case-26.log').write_text(done.stdout + done.stderr)
+assert done.returncode == 0, (26, done.returncode, done.stdout[-400:], done.stderr[-600:])
+print('case 26', done.stdout.strip().splitlines()[-1])
 if not args.no_negative_control:
     # The wrapper before the OPEN fix: the reply to OPEN must be READY.
     old = (ROOT / 'apps/os/npu.c').read_text()
@@ -77,4 +81,13 @@ if not args.no_negative_control:
         done = run(control, case)
         assert done.returncode != 0, ('the wrapper before the OPEN fix passed case', case)
         print('case', case, 'fails on the wrapper before the OPEN fix, as required')
+    # The wrapper with the lifetime quota of the session's job field: case 26 must fail.
+    quota = (ROOT / 'apps/os/npu.c').read_text()
+    guard = '!s||!claim())return 0;'
+    assert quota.count(guard) == 1
+    quota_wrapper = out / 'npu-with-quota.c'
+    quota_wrapper.write_text(quota.replace(guard, '!s||npu.jobs>=s->npu.jobs||!claim())return 0;'))
+    quota_control = build('with-quota', wrapper=str(quota_wrapper))
+    assert run(quota_control, 26).returncode != 0, 'the wrapper with the job quota passed case 26'
+    print('case 26 fails on the wrapper with the job quota, as required')
 print('PASS OS NPU wrapper on the real runtime and service: %d cases and a negative control' % len(CASES))

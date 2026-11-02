@@ -255,10 +255,16 @@ def negative_host_cases(args):
  symbols={v.name:(i,v) for i,v in enumerate(table.iter_symbols()) if v['st_shndx']!='SHN_UNDEF'}
  mark=symbols['sunstone_probe_marker'][1];section=elf.get_section(mark['st_shndx'])
  offset=section['sh_offset']+mark['st_value']-section['sh_addr']
- for variant,reason in [('version','Unsupported'),('power-removal','power removal'),('payload-mmio','outside admitted RAM'),('input-mmio','image-RAM'),('input-unloaded','load coverage')]:
+ for variant,reason in [('version','Unsupported'),('power-removal','power removal'),('payload-mmio','outside admitted RAM'),('input-mmio','image-RAM'),('input-unloaded','load coverage'),('read-only-without-sd-core','write-path scan'),('read-only-with-write-call','call to next_write')]:
   data=bytearray(original)
   if variant=='version':struct.pack_into('<Q',data,offset+8,99)
   elif variant=='power-removal':struct.pack_into('<Q',data,offset+13*8,2)
+  elif variant=='read-only-without-sd-core':struct.pack_into('<Q',data,offset+13*8,5)
+  elif variant=='read-only-with-write-call':
+   # A called function of the image takes the write path's name; the scan must find the call.
+   struct.pack_into('<Q',data,offset+13*8,5)
+   string=elf.get_section(table['sh_link']);at=string['sh_offset']+symbols['memtest_scan'][1]['st_name']
+   assert bytes(data[at:at+13])==b'memtest_scan\0';data[at:at+11]=b'next_write\0'
   elif variant=='payload-mmio':struct.pack_into('<Q',data,offset+9*8,0x02050000)
   else:
    address=0x02050000 if variant=='input-mmio' else 0x41efff00
