@@ -425,9 +425,16 @@ until their acknowledgments complete. ISR APIs never wait for owner progress:
 they commit their specified logical state under bounded object/control protection,
 publish a hint and return the required local-yield indication.
 
+Schedulable waits retain permanent slot/incarnation/sequence cookies, rather
+than lifetime pins on a task stack that deletion can abandon. Deferred critical
+commands move into task-owned cookie banks before interrupts are restored, so
+migration cannot strand another CPU's completion records. The 128 fixed banks
+reserve 260 KiB separately from hot task and owner metadata.
+
 | Public/internal transition | Mutation and linearization | Completion, return and first live series |
 | --- | --- | --- |
 | Static create, affinity create | Initialize stack/TCB outside shared exclusion; register descriptor and release-publish initial READY request | Handle valid after publication; creation failure returns NULL on exhausted static registry; B |
+| Dynamic create, affinity create | Use upstream stack/TCB allocation, then the same owner admission | Allocation/admission failure clears the output handle and unwinds TLS, port, stack and TCB resources; B |
 | Notify, indexed notify, query/clear/take/wait and ISR variants | Notification protocol above; one matched word transaction or gated commit | Preserve all action results and previous values; ISR yield flag concerns local preemption, remote delivery sends its own SGI; B |
 | Delay, periodic delay and owner timeout helpers | Install/remove owner deadline and wait generation | Repeated API waits preserve absolute deadlines and upstream wrap rules; B |
 | Suspend/resume and ISR resume | Under control and active-object protection commit logical suspend state or resumed generation; release-publish desired state | Remote task-context suspend waits for owner-applied/off-CPU acknowledgment before return, with interrupts enabled and no lock held. Self-suspend returns only after resume. ISR resume returns immediately; repeated resume of a nonsuspended task does not wake it; B |
@@ -533,6 +540,26 @@ Task deletion marks DEAD, cancels local links, detaches object waiters and
 collects owner/publication acknowledgments before slot reuse or stack cleanup.
 It runs as a slow path. Every latched scheduler fault records the first
 transition, task slot, owner, generation and incoming command inputs.
+
+Owner entry completes compatibility-object and timeout maintenance before
+selection. New work arriving during selection requests a continuation; selection
+does not acquire the global task, ISR or administration locks. Resource
+destruction runs in task context without these locks or control-drain exclusion.
+Idle tasks collect self-deletions; a nonself delete caller can perform cleanup
+and observe its permanent completion before reusing static storage.
+
+A task executing a destructor defers its own destructive control requests,
+including admission closure and allocator-wait abort. Its cleanup shield allows
+blocking, migration and priority donation. Releasing the shield requests owner
+service once. Retirement similarly waits for the final reference's event instead
+of renewing SGIs while that reference is live.
+
+Cleanup removes the closed handle mapping before freeing recyclable memory,
+while reserving the old descriptor slot until destruction completes. A new task
+can therefore map the same allocated address to another slot. Final retirement
+of the old slot cannot remove that new mapping. Permanent completion generations
+survive slot reuse, and static construction rejects a buffer whose old cleanup
+is still pending.
 
 Queue wakes are retry permission, not an item/space reservation. A woken task
 rechecks the queue under its object lock and can reblock with a new wait

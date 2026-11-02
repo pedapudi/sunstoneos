@@ -460,3 +460,90 @@ Its summary under `integration/gate-scheduler-b-round9-control-full/` records
 its outcome separately. Even a passing control gate does not qualify the
 unfinished fork. No board run is submitted, no board image is prepared and no
 new voltage, clock or storage approval is pending during this round.
+
+## Round 10: configured owner fork and prepared CPU comparison
+
+Integration starts from coordinator revision `8a69bd0f`; lock comparison records
+remain solely in the scheduler-locks subsystem. The fork stays OFF by default.
+Its CPU image selects the same latency application, clock service, existing
+operating points, sample counts and memory workload as the earlier control.
+Topology placement stays OFF for that comparison.
+
+The mixed-affinity timeout occurs after the first deleted victim. A lifetime
+reference remains on the interrupted caller's stack while all owners renew SGIs
+for its retirement. Waiting for the existing final-put event removes the storm.
+Subsequent tests expose task cleanup under administration/IRQ exclusion and an
+address-reuse gap in the real heap. Resource destruction now runs in task
+context, admission removal precedes recyclable memory release, and the old
+registry slot remains reserved until cleanup completes.
+
+Deferred completion cookies belong to tasks across migration, with no lifetime
+pins left on schedulable command stacks. A cleanup shield defers destructive
+control while allowing allocator blocking and priority donation. Owner entry
+handles compatibility repairs and timeout metadata; selection defers newly
+arriving work to an event-driven continuation. The design describes these
+invariants. Source commits include `e0464c32`, `428934a7`, `918f8653`,
+`20dc6310` and `7fa9be24`; the root integrates them at `ce162e1e`.
+
+Evidence below is relative to
+`~/.cache/sunstoneos/build/scheduler-rt-1101/`:
+
+- `round10/adapter-unmap.log`: the author-run AArch64 and linked ASan/UBSan
+  check passes 83 selected task API routes. Cases include dynamic allocation
+  failure, admission exhaustion, immediate static reuse, outer-unlock migration
+  and cleanup-shield deletion/donation. Raw author artifacts use the same root.
+- `round10/registry-unmap.log`: the actual rejected-pin and address-reuse
+  regression plus concurrent registry readers pass. Old retirement cannot remove
+  the newly registered mapping for the same address.
+- `round10/control-final.log`, `round10/route-final.log` and
+  `round10/model-final/results.json`: control, routing and 52 model cases pass;
+  17 negative controls fail as expected. The models remain partial abstractions,
+  rather than a proof of the complete AArch64 kernel.
+- `round10/unmap-heap/cortex-a76-report.json`: real upstream heap4 allocation,
+  eight nonself deletions, sixteen static-buffer reuses, eight self-delete
+  cleanups and allocation failure pass. The fixture executes heap4 scheduler
+  suspend/resume; it does not allocate native TLS resources.
+- `round10/unmap-other/cortex-a76-report.json`: original two-core kernel,
+  eight-core soak and 64-round mixed-affinity stress pass. Each of eight cores
+  reports zero global task/ISR/administration acquisitions throughout selection;
+  232 administration acquisitions outside selection show that the hook is live.
+  Per-task control/notification gates are separate from this global-lock metric.
+- The same report records 64 local wake completions over 64 ticks at 1 kHz with
+  zero global locks. In sixteen controlled withholding windows, all sixteen
+  observations have a ready task behind higher-priority work on its home core
+  and an idle permitted peer. All sixteen complete on the home after release.
+  This demonstrates absent idle pull; it is not a natural workload frequency
+  estimate or a physical latency/throughput measurement.
+- `round10/diagnostic/abi-unmap.log`, `round10/native-final.log` and
+  `round10/cpu-image.log`: real newlib C/C++ task storage, selected native
+  dynamic API compilation, CPU-control OS objects and the final image link pass.
+  The final ELF contains owner exception hooks and no legacy ready/delayed-list
+  symbols or test-counter hooks.
+- `round10/review/report.md`: independent scoped source review passes through
+  `7fa9be24`, with supplied allocator/concurrent/kernel/soak logs inspected.
+  SHA-256: `2872fd411bc109cc284f04f7930beca1ecee1671823ca91edf3d4354929ebd90`.
+  The reviewer runs no executable test and claims no physical qualification.
+- `round10/expectation-check/result.json`: the full runner expectation permits
+  absent lock samples while preserving all other words and strict timing
+  budgets. All 7,211 fixed/bounded-word mutations and payload-length violations
+  are rejected. Optimized Python is refused before creating output.
+
+### Prepared image; coordinator submits it
+
+Path: `~/.cache/sunstoneos/build/scheduler-rt-1101/round10/native-check/sunstone-a733-os-latency.elf`.
+SHA-256: `a8fcb1064226c8169e1eadfae9d099f2b38213ebcd1458b5cbc0694ce318a43c`.
+Exact `--expect`: `~/.cache/sunstoneos/build/scheduler-rt-1101/round10/expectation-check/expect.json`
+(SHA-256 `b55066d609f32956eb833f650db9aa3511ea5de2378a529dd37a0dc9b4635dd0`).
+The complete submit command is `round10/submit-command.txt`; its concrete
+README is `round10/native-check/os-image/sunstone-a733-os-latency/README.md`.
+It uses `bringup/tools/board.py submit`, kind `cpu-return`, port `3-3` and worker
+`scheduler-rt-1101`. Expected output covers the complete native report, normal
+ROM return and strict timing budgets. A timing mismatch remains a measurement;
+a nonreturn is not retried unchanged. No board run is submitted by this worker.
+No new voltage, clock or storage approval is required.
+
+The full gate label is `scheduler-b-round10-full`, with its authoritative
+summary under `integration/gate-scheduler-b-round10-full/`. Its control builds
+remain distinct from the configured fork checks above. Board wake quantiles,
+lock timing and masked duration remain unmeasured for this fork until the
+coordinator runs the prepared image.
