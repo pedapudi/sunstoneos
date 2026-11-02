@@ -144,8 +144,22 @@ only (10,484, 10,452 and 5,629 elements; at most 132, 98 and 30 steps of 1/128) 
 elements, while rows 106 to 183 equal the simulator in every run. Against the float result of the same graph the board output
 and the simulator output are equally far (RMS 1.116 and 1.116, the quantization of the proof graph; the two differ by 0.026
 RMS). The segmented stream ran 300 jobs without a fault and its late rows, computed by commands after both links, are exact,
-so the front end follows the links. The cause of the run-to-run differences is not known; the 92-frame layers, which have no
-pool traffic, were byte-exact in every run.
+so the front end follows the links. The 92-frame layers, which have no pool traffic, were byte-exact in every run.
+
+The same layers with the attention computed for blocks of 92 query rows (so that the scores stay in VIP SRAM) differ:
+
+| Frames | Operations | Board job (ms) | Output |
+| --- | --- | --- | --- |
+| 184 | 320 | 4.83 | byte-exact against the simulator after 300 jobs |
+| 276 | 502 | 8.00 | byte-exact after 300 jobs |
+| 368 | 598 | 14.77 | three identical jobs differ from one another in 19,000 to 24,000 of 129,536 bytes |
+| 460 | 5,482 | 47.8 | three identical jobs differ in 30,000 of 161,920 bytes |
+| 512 | 3,719 | 45.3 | three identical jobs differ in 23,000 to 52,000 of 180,224 bytes |
+
+The cause of the run-to-run differences (graphs of 184 frames with whole-length attention, and of 368 frames and more in any
+form) is not known. Mapping the regions with 64 KiB pages (build parameter `A733_NPU_MAP_SHIFT`, not landed) was meant to test
+whether address translation explains the slow whole-length layers; its image stopped in the OS start with a pool of 20 MiB and
+was not examined further.
 
 ## Open work
 
