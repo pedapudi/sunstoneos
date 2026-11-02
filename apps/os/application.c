@@ -3,6 +3,7 @@
 #include "os.h"
 #include "application.h"
 #include "os_space.h"
+#include "sunstone_notify.h"
 #include "../board/application.h"
 #include "../board/session.h"
 #include "a733_mapping_check.h"
@@ -77,9 +78,15 @@ void os_application_failed(const struct ss_failure *failure,uint64_t epoch,uint6
     r->status=SS_RESULT_FAILED;
     atomic_store_explicit(&finished,1,memory_order_release);
 }
-/* The OS's wake-ups of an application task (docs/notifications.md): a notification at the task's own index 0
- * reaches it only while it sleeps in an OS wait that registered here, so that no application wait on index 0, such
- * as the deadline wait, ends because of an OS event. Sized by the generated tables: one entry per application task. */
+/* The OS's wake-ups of an application task (docs/notifications.md): they use the runtime's index, never the
+ * application's index 0, and reach the task only while it sleeps in an OS wait that registered here, so that a
+ * deadline wait of the application does not end because of an OS event. Sized by the generated tables: one entry per
+ * application task. */
+unsigned sunstone_deadline_notify_index(void)
+{
+    /* An application task, tagged when the application starts, waits on the runtime's index; an OS service task on its own. */
+    return xTaskGetApplicationTaskTag(NULL)?SS_NOTIFY_DEADLINE:SS_NOTIFY_OWN;
+}
 extern const unsigned os_wake_capacity;
 extern TaskHandle_t os_wake_task[];
 extern unsigned os_wake_gave[];
@@ -87,7 +94,7 @@ static void os_wake(TaskHandle_t task)
 {
     if(!task)return;
     taskENTER_CRITICAL();
-    for(unsigned i=0;i<os_wake_capacity;++i)if(os_wake_task[i]==task){os_wake_gave[i]=1;xTaskNotifyGive(task);}
+    for(unsigned i=0;i<os_wake_capacity;++i)if(os_wake_task[i]==task){os_wake_gave[i]=1;xTaskNotifyGiveIndexed(task,SS_NOTIFY_DEADLINE);}
     taskEXIT_CRITICAL();
 }
 static unsigned os_wait_begin(TaskHandle_t task)
@@ -104,7 +111,7 @@ static void os_wait_end(unsigned slot)
     taskENTER_CRITICAL();
     os_wake_task[slot]=NULL;
     /* What the OS gave after the wait returned would end the application's next wait on index 0. */
-    if(os_wake_gave[slot])(void)ulTaskNotifyTake(pdTRUE,0);
+    if(os_wake_gave[slot])(void)ulTaskNotifyTakeIndexed(SS_NOTIFY_DEADLINE,pdTRUE,0);
     os_wake_gave[slot]=0;
     taskEXIT_CRITICAL();
 }

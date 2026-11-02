@@ -292,6 +292,21 @@ def main():
     # tensor of large values has a negative one (-2 is a step of 4). No value is refused.
     for position in (-2, -16, -100, 31, 100, -2 ** 31):
         admitted_case('a dynamic fixed point tensor with position %d' % position, 'relu', [(INPUT, 40, struct.pack('<i', position))])
+    # 9. A graph output that a later operation reads again (a tensor that is both an intermediate and a result of the graph,
+    # such as the residual stream the entry graph of a tiled layer exports): an input patched with source 2, the graph output.
+    # Mutations of graphs whose operation does not write that output (the first operation of `deep`, the second of `mm`).
+    SOURCE2_OFF = [('nbg_assembly.c', '(p.source != 1 && p.source != 2 && p.source != 3 && p.source != 6 && p.source != 8) || p.transformed) return 0;',
+                    '(p.source != 1 && p.source != 3 && p.source != 6 && p.source != 8) || p.transformed) return 0;'),
+                   ('nbg_assembly.c', 'p.source != 8 && p.source != 1 && p.source != 2 && p.source != 3 &&', 'p.source != 8 && p.source != 1 && p.source != 3 &&')]
+    old_rule = build(args.output, 'source2-off', SOURCE2_OFF)
+    for label, graph, op, destination in (('a first input read from a graph output (source 2)', 'deep', 1, 24),
+                                          ('a second input read from a graph output (source 2)', 'mm', 2, 136)):
+        edit = [(PATCH, g[graph].patch_offset(op, destination) + 8, u32(2))]
+        admitted_case(label, graph, edit)
+        mutated = g[graph]
+        for section, offset, raw in edit:
+            mutated = mutated.with_bytes(section, offset, raw)
+        assert not admit(old_rule, mutated.data), label + ': the loader without the rule still admitted it'
     print('PASS %d graphs, %d unseen programs admitted and %d refusal cases' % (len(GRAPHS), len(admitted), len(results)))
 
 

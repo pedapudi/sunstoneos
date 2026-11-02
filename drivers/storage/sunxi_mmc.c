@@ -170,6 +170,12 @@ int sunxi_mmc_init(struct sunxi_mmc *h, const struct sunxi_mmc_config *c)
     struct sunxi_mmc fresh = {0};
     fresh.config = *c; fresh.initialized = 1; *h = fresh; return 1;
 }
+int sunxi_mmc_observe_s18(struct sunxi_mmc *h)
+{
+    if (!h || !h->initialized || h->entered || h->state != SUNXI_MMC_COLD || h->config.kind != SUNXI_MMC_SD || h->config.sd_profile == UHS) return 0;
+    h->observe_s18 = 1; return 1;
+}
+
 int sunxi_mmc_open(struct sunxi_mmc *h, uint64_t deadline)
 {
     if (!h || !h->initialized || h->entered || h->state != SUNXI_MMC_COLD ||
@@ -992,7 +998,7 @@ static void protocol(struct sunxi_mmc *h)
                 fault(h, SUNXI_MMC_IO); return;
             }
             h->card.uhs_caps = (uint8_t)caps; h->s18r = !!(caps & SUNXI_MMC_SIGNAL_1V8);
-        }
+        } else if (h->observe_s18) h->s18r = 1;
         queue(h, P_SD_APP, 55u | RESP | CRC, 0, 0, 0); return;
     case P_SD_APP:
         if (!card_response(h)) return;
@@ -1017,7 +1023,7 @@ static void protocol(struct sunxi_mmc *h)
         h->card.ocr = r; h->card.sector_addressed = !!(r & (1u << 30));
         /* S18A requests CMD11 before CMD2. Like the pinned Linux core, the
          * switch does not also require CCS. */
-        if (UHS_ON && !mmc && h->s18r && (r & S18R)) {
+        if (UHS_ON && !mmc && h->s18r && h->config.sd_profile == UHS && (r & S18R)) {
             h->signal_window = 1;
             queue(h, P_SD_VOLTAGE, 11u | RESP | CRC | VSW, 0, 0, 0); return;
         }

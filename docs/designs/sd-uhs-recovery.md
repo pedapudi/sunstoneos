@@ -8,35 +8,111 @@ The OS reads the card at 21.7 MB/s in High Speed mode, which is the ceiling of 5
 until its supply is cycled. The board is powered from the USB cable and nobody can handle it, so a card left at 1.8 V is
 a problem unless software can recover it. This note answers three questions from the sources.
 
-## 1. The card supply can be switched in software, but it is shared
+## 1. The card supply: a software switch may exist, and the documents disagree on what it powers
 
-The card's VDD is the net `VCC-CARD`, fed through R51 (1 ohm) from the PMIC output DC1SW2 (schematic revision 1.2, sheet 12;
-the power-tree sheet lists `VCC-IO / VCC-3V3 / VCC-SENSOR / VCC-eMMC / VCC-CARD / VCC-PH / VCC-USB-2 / VCC33-18-USB-2`
-on DC-DC1->SW2, 3.3 V, 1 A). There is no load switch and no GPIO that gates the card: the socket has VDD, the five signals
-and the detect switch, and C236/C237 (100 nF, 10 uF) at the pin. The vendor tree's commented `card-pwr-gpios` property
-(`sun60i-a733-orangepi-zero3w.dts:1630`) has no hardware behind it on this board.
+**The board documents conflict about which PMIC output feeds `VCC-CARD`, and about what else DC1SW2 powers. No cycle of DC1SW2
+should be run until that is settled, because one reading makes the cycle useless and the other makes it unrecoverable.**
 
-- **Rail and control:** the PMIC is the AXP8191 at address `0x36`. DC1SW2 is enabled by register `0x11` bit 4
-  (`AXP8191_DCDC_CTL2`, `AXP_DESC_SW(AXP8191, DC1SW2, ...)` in the board kernel's `axp2101-regulator.c`; our provider reads
-  the same bit, [pmic-runtime.md](../pmic-runtime.md)). Its output voltage is the shared DCDC1 selector at `0x12`.
-- **Vendor `vmmc` handling:** the SDC0 node sets `vmmc-supply`, `vqmmc33sw-supply` and `vdmmc33sw-supply` to `reg_dc1sw2`
-  (`dts:1646-1648`), and `reg_dc1sw2` is `regulator-always-on` (`dts:2397`). `sunxi_mmc_set_ios` calls
-  `regulator_disable` on it for `MMC_POWER_OFF` (`sunxi-mmc.c:2078-2080`), and Linux's `mmc_power_cycle` is power off,
-  at least 1 ms, power on (`core.c:1388-1393`). The always-on flag turns the disable into a no-op, and the fan, two TWI
-  buses and the Ethernet node share the regulator (`dts:1531`, `1864`, `1942`, `3314`). The vendor kernel therefore
-  never power-cycles the card on this board; it has the same limitation we have.
-- **What else loses power:** SoC bank `VCC-IO` (PB0-PB10, the FEL and JTAG-SEL pads, WREQIN), `VCC-PH`, the USB2 host PHY
-  supplies (`VCC-USB-2`, `VCC33-18-USB-2`), the 3.3 V header rail, the fan and eMMC. It does not touch USB0, the FEL
-  path (`VCC33-USB` is on ALDO1), the PMIC's I2C (VCC-PL, ALDO1), the DRAM, the CPU rails or the PF bank's 1.8 V supply
-  (CLDO5). The datasheet's power-down figure (5.10.2, an image) must be read before relying on `VCC-IO` going down alone;
-  the text says nothing about it.
-- **Requirement to meet:** the specification wants VDD below 0.5 V for at least 1 ms, and DAT, CMD and CLK driven low or
-  disconnected meanwhile (section 6.4.1.3 and 6.4.1.5). Nothing on the board discharges the rail actively that we have
-  found, so the hold time is set by the loads and is unmeasured. A hold is proven long enough only by the card resetting
-  (below).
+The card's VDD is the net `VCC-CARD` through R51 (1 ohm), with C236 and C237 (100 nF, 10 uF) at the socket (sheet 12). There is
+no load switch and no GPIO that gates it: the commented `card-pwr-gpios` property (`sun60i-a733-orangepi-zero3w.dts:1630`) has
+no hardware behind it. The PMIC (AXP8191, address `0x36`; the drawing calls it AXP318) enables DC1SW2 with register `0x11` bit 4
+(`AXP8191_DCDC_CTL2`; [pmic-runtime.md](../pmic-runtime.md)); its voltage is the shared DCDC1 selector at `0x12`. DC1SW2 is
+enabled now (`0x11` reads `0x17`; DC1SW1 is off).
 
-So yes: a software power cycle of the card exists (DC1SW2 off, wait, on), at the cost of dropping the rail the other
-consumers share. That is a rail change and needs the coordinator's approval. It is the fallback, not the first plan.
+Three sources, read for one question, which net each rail name is on:
+
+| Source | `VCC-CARD` | `VCC-IO` | `VCC-PL` (PMIC I2C pads) | USB0 supply `VCC33-USB` | `VCC-PE` |
+| --- | --- | --- | --- | --- | --- |
+| Sheet 2, power sequence | DC1SW2 | DC1SW2 | ALDO1 | ALDO1 | BLDO1 |
+| Vendor device tree | DC1SW2 (`vmmc-supply`, `dts:1646`) | not stated | not stated | not stated | BLDO1 (`dts:3628`) |
+| Sheet 6, the PMIC drawing | **DCDC1 itself** (alias stub under `DCDC1`) | DC1SW2 (`SWOUT2` stub) | **DC1SW2** | **DC1SW2** | DC1SW2 |
+
+Sheet 6 lists the rail names on each PMIC output as stubs. Its `SWOUT2` group holds `VCC33-18-USB`, `VCC33-USB`,
+`VCC33-18-USB-2`, `VCC33-USB-2`, `VCC-PD`, `VCC-PL`, `VCC-IO` and `VCC-PE`; its `DCDC1` group holds `VCC-3V3-WIFI`,
+`VCC_3V3_EXT`, `VCC_3V3_CSI`, `VCC-CARD`, `VCC_3V3_EMMC` and `VCC-LCD`. Sheet 2 and the vendor tree agree with each other and
+not with that drawing. The stub list on sheet 6 also contradicts itself: it puts PD, PL, IO and PE, which sheet 2 gives four
+different outputs (BLDO2, ALDO1, DC1SW2, BLDO1, of which two are 1.8 V and two 3.3 V), on one net. An earlier note
+([pcie.md](../pcie.md)) read the same stub group as BLDO1. I read sheet 6 as unreliable for this question and sheets 2 and the
+vendor tree as likely, but nothing in the documents settles it, and the only physical check is the rail itself.
+
+What each reading means for a DC1SW2 cycle:
+
+- **Sheet 2 and the vendor tree are right:** DC1SW2 powers the card, so a cycle can reset it. It also drops `VCC-IO` (the PB bank, the
+  FEL and JTAG-SEL pads, WREQIN), `VCC-PH`, the USB2 host PHY supplies, the 3.3 V header rail, the fan and eMMC.
+- **Sheet 6 is right:** the card is on DCDC1 and does not lose power; the cycle does nothing for the card, and it drops the
+  supply of the PMIC's own I2C pads (`VCC-PL`: the S_TWI0 pins PL0 and PL1), the USB0 and USB2 analog supplies, and `VCC-IO`, `VCC-PD`
+  and `VCC-PE`. With the I2C pads unpowered the software cannot re-enable the rail, and with USB0 unpowered the FEL link is
+  gone, so the board would need power removal.
+
+### What each consumer does when DC1SW2 drops
+
+| Consumer (net) | What it is on this board | Effect of the drop | Source |
+| --- | --- | --- | --- |
+| `VCC-CARD`, the socket | the microSD card | card loses VDD; resets once VDD is below 0.5 V for 1 ms | sheets 2, 12; vendor tree |
+| SoC `VCC-IO`: PB0-PB10 | UART0 on PB9 and PB10 (the console header), I2S0, TWI0, TWI1 on PB pins | pins lose their supply; UART0 and the header GPIOs go dead; the runner does not use them (FEL is over USB0) | datasheet pin table 2311-2343; sheet 9 |
+| SoC `VCC-IO`: FEL pad (1W1), JTAG-SEL (1W2), WREQIN (1T24) | boot strap inputs with pull-ups from `VCC-IO` | with `VCC-IO` off the FEL pad no longer reads its pulled-up value; the ROM selects FEL on four low samples, so a reset during the off time is benign | datasheet 3305-3307, 2280; `boot-rom-and-boot0.md` |
+| SoC `VCC-IO`: PF0-PF6 | SDC0 and card detect, supplied from `VCC-IO` or `VCC18-PF` by the adaptive selector | the bank follows CLDO5 (1.8 V) while `VCC-IO` is off, so the card's pins see 1.8 V logic while its supply is off | datasheet 2535-2561; sd-uhs.md |
+| SoC `VCC-PH` | PH0-PH16, including `BOARD-ID-SEL-GPIO` (PH15) and `DDR-PARA-SEL-GPIO` (PH16) | pins unpowered; only boot0 reads the two straps, not our FEL path | sheet 9 |
+| USB2 PHY (`VCC-USB-2`, `VCC33-18-USB-2`) | the USB host port (webcam, serial, radio when on USB) | the host link drops and the devices re-enumerate on return; the OS's USB2 task must be idle | sheets 2, 6 |
+| 3.3 V header, `VCC-SENSOR`, `VCC-3V3` | the 40-pin header supply and the SoC sensor supply (also fed by CLDO5 per sheet 2) | header devices lose power | sheet 2 |
+| Fan (`fan-supply`, PWM on PD5) | cooling fan | stops; the thermal controller must not rely on it during the hold | `dts:1531` |
+| `VCC-eMMC` | no eMMC fitted | none | handoff |
+| TWI pull-ups (`twi-supply`), GMAC 3.3 V | TWI5 and TWI12 nodes (disabled) and GMAC0 (disabled) | none | `dts:1864`, `1942`, `3314` |
+| Under sheet 6 only: `VCC-PL`, `VCC33-USB`, `VCC-PD`, `VCC-PE` | PMIC I2C pads, USB0 analog, PD and PE banks | PMIC link and FEL link lost | sheet 6 |
+
+The PMIC interrupt (`PMU-IRQ`) and the PMIC bus (`PMU-SDA`, `PMU-SCK`) are on PL pins, so their safety depends entirely on which
+output `VCC-PL` is on (ALDO1 by sheet 2, DC1SW2 by sheet 6). The watchdog is inside the SoC and does not use a pad. The runner
+uses USB0 only.
+
+### Whether the board comes back
+
+- **Hold and re-enable need the PMIC link.** The cycle writes register `0x11` over S_TWI0 on PL0 and PL1. If `VCC-PL` is on
+  ALDO1 the link is untouched and the re-enable is a normal write. If it is on DC1SW2 the write cannot reach the PMIC.
+- **A reset during the hold.** The PMIC keeps its rail registers across a watchdog reset (the CPU rails do), so DC1SW2 would stay
+  off. The ROM then runs its FEL sample on a pad whose supply is off (reads as FEL), and the FEL path needs only USB0, which is on
+  ALDO1 by sheet 2 and on DC1SW2 by sheet 6. Under sheet 2 the runner reaches FEL and the next image re-enables the rail (the
+  rail normalisation would need the DC1SW2 bit added); under sheet 6 it does not.
+- **Does anything in the boot or FEL path depend on `VCC-IO`?** The FEL pad and the PF bank (the ROM's SD probe) do, and both fail
+  safe (FEL on a low pad, a failed probe falls to FEL). DRAM, the CPU rails and the PMIC link do not, by sheet 2.
+- **Verdict.** The risk that the board does not return is the sheet 6 risk, and the documents cannot exclude it.
+
+### How long the hold must be
+
+The hold is set by the capacitance on the switched net and the loads that discharge it. From the schematic, on the sheet 2
+reading: the card side has 10.1 uF at the socket; the SoC's VCC-IO, VCC-PH, VCC-PD, VCC-PE and VCC-PL pins each have 100 nF to
+1 uF and one 10 uF part (C183 to C197, about 12 uF); the USB supply pins have four pairs of 1 uF and 100 nF (about 5 uF); the
+header, sensor and fan supplies are not drawn with values. The total is on the order of 30 to 50 uF. No active discharge is
+known: the PMIC's switch pull-down bit is not in the sources.
+
+With no pull-down the decay is through the loads. The card's own idle current is the largest known load (about 0.2 to 1 mA at
+3.3 V, falling as VDD falls), so an effective resistance of 3 to 16 kohm; with 40 uF that is a time constant of 0.13 to 0.65 s,
+and falling from 3.3 V to 0.5 V takes 1.9 time constants: 0.25 to 1.2 s. Leakage from the SoC pins, the PHYs and the
+sensor supply only slows the tail. So **300 ms is below the likely time and gives no margin; a hold of 3 s would cover the
+whole range, and is checked by the card resetting, not assumed.** A figure measured on the board would replace this estimate;
+nothing here measures it.
+
+## 1b. A smaller test first
+
+The rail cycle answers one question, how to return a card that is stuck at 1.8 V. It is needed only if the card cannot be
+re-initialised at 1.8 V. That is the question to ask first, and it needs no rail change:
+
+1. **Stage 1, done** (below): S18A is set, so the switch is available.
+2. **Re-entry at 1.8 V, with no cycle.** One lifetime on one board: the normal switch, SDR25 reads at 1.8 V, then CMD0 and
+   a full re-initialisation at 1.8 V (CMD8, ACMD41, CMD2 to CMD7, ACMD6, CMD6, a read), SDR104 if the card reports it. The
+   lifetime ends with a normal CPU-local return, which enters forced FEL and never runs the ROM's storage probe. The
+   run leaves the card at 1.8 V, which is the state under test.
+   - **If the card re-initialises** the algorithm of section 3 is proved on this card, nothing in the OS needs power removal, and the
+     supply cycle is never needed for reading. It is still needed for autonomous boot from the card (below).
+   - **If it does not,** the card stays at 1.8 V until power removal. The cost is that this board's SD is unusable until the user
+     can replug; FEL, DRAM and the CPU work are unaffected, because a normal return does not touch the card and the only ROM path
+     that probes the card is a watchdog reset. Running it first on the board whose card matters less (port 3-3, 32 GB, quarantined
+     today) limits that cost to that board.
+3. **Only then** consider the DC1SW2 cycle, and only after the net it powers is established (section 1), because an experiment
+   that settles the net is itself the cycle. The decision is the user's, with the two readings and their outcomes above.
+
+A card at 1.8 V and the ROM: a watchdog reset runs the ROM's SMHC0 probe at 3.3 V against it. The probe can only fail and fall to
+FEL, as it does with no card, but that is inferred from the dispatch and not measured with a 1.8 V card. Any lifetime that
+leaves the card at 1.8 V must therefore end in a normal return and avoid a deliberate watchdog reset afterwards.
 
 ## 2. A card at 1.8 V can be re-initialised at 1.8 V
 
@@ -96,37 +172,66 @@ hold exceeds the discharge time, as expected. Replacing the 1.8 V probe or probi
 The existing admission refuses a bank that does not read 3.3 V before any card command. The path needs a narrowly scoped
 exception: the 1.8 V bank is admitted only for the probe in step 3 and the continuation after it.
 
+## Stage 1 prediction (written before the run)
+
+The probe (`apps/sd-backup-probe`, now with `observe_s18`) runs the identification in profile 2 as before, with S18R in every
+ACMD41 and no CMD11, and reports the CMD6 response of the high-speed switch. One run on port 3-1, no card write, the card stays at
+3.3 V. Predicted from the card's earlier identification (CID `2750485344363447606832ea2f01a61d`, OCR `0xc0ff8000`, SCR `0x83848502`,
+Class 10, U3, V30, A1, 4 MiB allocation unit):
+
+- **S18A set:** OCR `0xc1ff8000` (bit 24 added). A U3 card must be UHS-I capable.
+- **Group 1 support bits:** `0x001f`, that is SDR12, SDR25, SDR50, SDR104 and DDR50. SDR104 is the bit that matters; DDR50 is the
+  least certain. The function selected by the switch is 1 (high speed).
+- **Identity:** manufacturer id `0x27` (Phison), OEM `PH`, product `SD64G`, revision 6.0, serial `6832ea2f`, made June 2026.
+- **Allocation unit:** 8,192 sectors (4 MiB), and no restoration word changed.
+
+What would refute it: S18A clear (the card then has nothing to gain from the switch), SDR104 absent, or any change in the
+reported identity.
+
+## Stage 1 result
+
+Entry `1793639891731890732-2700d966`, port 3-1, image `01b10763` (the probe built from this branch), returned normally: 1 sector
+read, no restoration word changed, card clock stopped, PMIC parked. The queue marks it `result-mismatch` because its text
+expectation is the older probe's; the report is complete and decodes.
+
+| Item | Predicted | Measured |
+| --- | --- | --- |
+| S18A (OCR bit 24, ACMD41 with S18R, no CMD11) | set | **set**; OCR `0xc1ff8000` (CCS set) |
+| CMD6 group 1 support field | `0x001f` | **`0x8003`**: functions 0 and 1 only (SDR12 and SDR25), bit 15 is the marker |
+| Selected function | 1 | 1 |
+| Manufacturer, OEM, product, revision, serial, date | `0x27`, `PH`, `SD64G`, 6.0, `6832ea2f`, 2026-06 | the same; CID `2750485344363447606832ea2f01a61d` |
+| Allocation unit | 8,192 sectors | 8,192 (`AU_SIZE` and `UHS_AU_SIZE`) |
+| Restoration words | unchanged | unchanged |
+
+The group 1 prediction was wrong, and the specification says why: "If the card is initialized in 3.3V signal level, Default Speed
+and High Speed are assigned to function 0 and 1. Then support bits of function 2 to 4 (SDR50, SDR104 and DDR50) are set to 0"
+(Table 4-11 text, `spec.txt:5634`). SDR104 support is therefore not visible at 3.3 V and is established only after the switch.
+What the card does show: it accepts the switch (S18A), it is a Phison `SD64G`, SCR says SD 4.xx or later, SD Status says speed
+class 10, UHS speed grade 3 (U3), video class 30, 4 MiB allocation unit, and CMD6 reports 50 mA maximum. A U3 card must support
+UHS-I, but whether it supports SDR104 rather than SDR50 stays open until a lifetime at 1.8 V reads the field there.
+
+The decoder (`apps/sd-backup-probe/input.py`) now says so: `bus_speed_support` is meaningful only at 1.8 V.
+
 ## Board plan
 
-Each stage has one hypothesis, every failure branch ends in a state the next stage's algorithm resolves, and nothing runs
-without the coordinator's approval. Stages 1 and 2 are read-only; there is no card write anywhere.
+Each stage has one hypothesis. Nothing runs without the coordinator's approval and none writes to the card. Stage 2 below is the
+first that changes the card's state, and it is the user's decision (section 1b).
 
-1. **Capability probe at 3.3 V (no state change).** ACMD41 with S18R, read S18A and the CMD6 check-mode support bits for
-   group 1 (SDR50, SDR104, DDR50) and group 4, without CMD11. Hypothesis: the 62.5 GB Class 10 / U3 card reports S18A and SDR104.
-   Failure ends at CMD0 in a 3.3 V card, as every High Speed lifetime does today. If S18A is clear, stop: there is nothing
-   to gain.
-2. **Supply-cycle rehearsal at 3.3 V (rail change: AXP8191 register `0x11` bit 4, DC1SW2 off then on).** Identify the card
-   to the transfer state with an RCA, drive PF pins and clock low, hold DC1SW2 off for 300 ms, enable it, wait for the
-   PMIC read-back, then CMD13 to the old RCA. A timeout and a clean CMD0 and ACMD41 mean the card lost power, which
-   proves the hold; an answer means it did not, so repeat with a doubled hold (600 ms, 1.2 s) in later runs. The check
-   also shows that USB0/FEL, the PMIC link and the runner survive the rail drop. Failure branches: DC1SW2 does not
-   come back (retry the write; a watchdog reset leaves the rail as the PMIC holds it, and the runner's normalisation
-   step re-enables it before the next run; the worst case needs power removal, which is why this stage is first and
-   gets its own approval); the card does not reset (card still at 3.3 V, recoverable).
-3. **The switch with in-session recovery, then the cycle.** Resolution algorithm, CMD11, SDR25 reads, SDR104 tuning and reads.
-   Then, still in the session, CMD0 at 1.8 V, CMD8, ACMD41, CMD2 onward, SDR104 and a read, which proves re-entry on this
-   card. Then the stage-2 cycle with the proven hold, and a CMD0 and ACMD41 at 3.3 V, which proves the card is back
-   at 3.3 V. Failure branches by where the session ends: every row of the table above resolves in the next session by the
-   algorithm; if re-entry at 1.8 V fails, the same session runs the cycle, and if the cycle fails the board needs power
-   removal. That last branch needs two independent failures (a card that violates the CMD0 rule and a hold that does not
-   reset it), and stage 2 has retired the second.
-4. **Adopt.** Only after stage 3: the OS runs SDR104 by default, restores 3.3 V before any intentional reset, and every session
-   starts with the resolution algorithm. The read-only `ss_storage_open_read` path gets it first; the write path follows
-   with its own admission.
+1. **Capability probe at 3.3 V (done).** S18A set. The CMD6 support field cannot show SDR104 at 3.3 V.
+2. **Switch and in-session re-entry, no cycle (section 1b).** Resolution algorithm, CMD11, SDR25 reads, the SDR104 field and tuning
+   if present, then CMD0 at 1.8 V and a full re-initialisation with a read, then a normal return. The card is left at 1.8 V.
+   Failure branches by where the session ends: every row of the table in section 3 resolves in the next session by the algorithm.
+   If the re-initialisation at 1.8 V fails, the card stays at 1.8 V until power removal, and only the SD is affected. Hypothesis:
+   the card re-initialises at 1.8 V.
+3. **Supply-cycle rehearsal at 3.3 V (rail change: AXP8191 register `0x11` bit 4, DC1SW2).** Not before the user has seen sections
+   1 and 1b and the net is settled. It would hold DC1SW2 off for 3 s with PF pins and the clock low, enable it, and test the card
+   with CMD13 to its old RCA.
+4. **Adopt.** The OS runs SDR104 by default only after stage 2 proves re-entry; any intentional reset while the card is at 1.8 V
+   needs the supply cycle (stage 3) if autonomous boot from the card is a requirement.
 
-Marker for the card's level: a byte that outlives a watchdog reset and not a power removal would let a session skip step 2
-of the algorithm. The AXP8191's `BUFFER0` (`0x04`) is used by the vendor boot flow for the reboot mode, so it is not taken
-without a decision. The algorithm does not depend on a marker.
+Marker for the card's level: a byte that outlives a watchdog reset and not a power removal would let a session skip step 2 of the
+algorithm. The AXP8191's `BUFFER0` (`0x04`) is used by the vendor boot flow for the reboot mode, so it is not taken without a
+decision. The algorithm does not depend on a marker.
 
 ## Sources
 

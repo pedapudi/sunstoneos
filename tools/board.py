@@ -145,12 +145,17 @@ def reference_text(record):
 
 class Live:
     """The only FEL owner. Every request verifies the selected current instance."""
-    def __init__(self, args, evidence, record, access=None, process=None, now=None, sleep=None, elapsed_now=None):
+    def __init__(self, args, evidence, record, access=None, process=None, now=None, sleep=None, elapsed_now=None,
+                 wall_now=None, instance_created=None):
         self.args, self.evidence, self.record = args, evidence, record
         self.access = access or images.load('board_access', ROOT/'tools/usb-access.py')
         self.process = process or subprocess.run
         self.now, self.sleep = now or time.monotonic, sleep or time.sleep
         self.elapsed_now = elapsed_now or (now if now is not None else lambda: time.clock_gettime(time.CLOCK_BOOTTIME))
+        # The wall clock stamps what the host did; instance_created(node) is the kernel's creation time of the device
+        # node of the adopted FEL instance (the same clock), or None when it cannot be read.
+        self.wall_now = wall_now or time.time
+        self.instance_created = instance_created or self.node_created
         self.node = self.identity = None
         self.failed = False
         self.quarantined = False
@@ -162,6 +167,30 @@ class Live:
         self.recovery_deadline = None
         self.recovering = False
         self.dma_binding = None
+
+    @staticmethod
+    def watchdog_reset_seen(before):
+        """An image disarms WDT0 on its only normal return, so a returned instance with WDT0 still enabled was reset by it.
+        (The 40 recorded watchdog-reset results of 2026-11-02 read the mode as 1; the normal returns read 0.)"""
+        return bool(before & 1)
+
+    @staticmethod
+    def node_created(node):
+        """When the kernel created the device node of a USB instance (statx birth time, which devtmpfs sets when the node
+        is made and which later permission and ACL changes by udev or logind do not move; the modification time does move),
+        in the wall clock, or None. Metadata only: the node is not opened."""
+        import ctypes
+        buffer = ctypes.create_string_buffer(256)
+        try:
+            libc = ctypes.CDLL(None, use_errno=True)
+            if libc.statx(-100, os.fsencode(str(node)), 0, 0x800, buffer) != 0:      # AT_FDCWD, STATX_BTIME
+                return None
+            if not struct.unpack_from('<I', buffer, 0)[0] & 0x800:
+                return None
+            seconds, nanoseconds = struct.unpack_from('<qI', buffer, 0x50)             # stx_btime
+        except (OSError, AttributeError, TypeError, ValueError):
+            return None
+        return seconds+nanoseconds/1e9
 
     def journal(self):
         try:
@@ -362,10 +391,13 @@ class Live:
         old = self.identity if old is None else old
         deadline = self.now() + seconds
         self.deadline = deadline
+        enumerated_at = None
         while True:
             try:
                 node = self.access.discover(self.args.port)
                 current = self.access.identity(node)
+                if current != old:
+                    enumerated_at = self.now() if enumerated_at is None else enumerated_at
                 if current != old and os.access(node, os.R_OK | os.W_OK):
                     # Do not send a request before udev grants the new node.
                     self.adopt(node)
@@ -374,7 +406,9 @@ class Live:
                     return
             except (FileNotFoundError, PermissionError, ValueError):
                 pass
-            if self.now() >= deadline:
+            # A new instance has enumerated, so the board did return: only udev's permission grant is late, which a loaded
+            # host delays. Give it a further 30 s instead of reporting no return.
+            if self.now() >= deadline and not (enumerated_at is not None and self.now() < enumerated_at+30):
                 break
             self.sleep(.05)
         raise NoReturn(f'No accessible new FEL instance within {seconds:g} seconds.')
@@ -560,17 +594,33 @@ class Live:
         # interval b counts 512k cycles (14.769 s at raw 26 MHz). Complete
         # return/disarm strictly before 14 s; never infer live DDR after that.
         # BOOTTIME includes host suspend, unlike monotonic().
-        armed_at = self.elapsed_now()
+        armed_at, armed_wall = self.elapsed_now(), self.wall_now()
         self.arm(0xb1,configuration=0x101)
         self.tx('reset64', '0x41000000')
         self.wait(26)
         before, after, words = self.returned()
         elapsed = self.elapsed_now()-armed_at
-        self.record['rail_return'] = {'seconds':elapsed,'watchdog_configuration':0x101,
+        # The host's elapsed time includes its own scheduling: under load a normal run measured 16.8 s against a usual 2 s,
+        # and a refusal on it quarantined a healthy instance. The countdown ran on the board, so the decision rests on
+        # what the board and the kernel report:
+        #  * the helper returned the board to FEL, which enumerated a new instance whose device node the kernel created at
+        #    that moment (instance_created); its distance from the host's stamp before the arm bounds the board's time from
+        #    arming to return, from above (the countdown starts inside the arm transaction, after the stamp);
+        #  * the WDT0 mode read on that instance still held the armed value and the disarm that followed read back clear;
+        #  * the host talked to that same instance until the disarm, and a watchdog expiry in between would have removed
+        #    its node, so the transactions would have failed (tx verifies the node's identity before every request).
+        # A return later than the cutoff by the kernel's clock, or one the kernel cannot date, falls back to the host's
+        # elapsed time.
+        created = self.instance_created(self.node)
+        enumerated = created-armed_wall if created is not None else None
+        usable = enumerated is not None and 0 <= enumerated < 3600
+        basis, deciding = ('kernel', enumerated) if usable else ('host', elapsed)
+        self.record['rail_return'] = {'seconds':elapsed,'enumerated_seconds':enumerated,'decided_by':basis,
+            'watchdog_configuration':0x101,
             'source_hz':26000000/750,'mode_before_disarm':before,'mode_after_disarm':after,'cutoff_seconds':14}
         run = {'return': self.record['rail_return'], 'evidence': str(evidence)}
         self.record.setdefault('rail_runs', {})[phase] = run
-        if not (before&0xffff==0xb1 and not after&1 and 0<=elapsed<14):
+        if not (before&0xffff==0xb1 and not after&1 and 0<=deciding<14):
             self.record.update(dram_lost=True,setup_watchdog_reset=True)
             raise ValueError('Rail helper possible watchdog reset; no DRAM result read; rails were not normalized.')
         usb_power.enforce(self)
@@ -675,7 +725,7 @@ class Live:
         save(self.evidence/'breadcrumbs.json', decoded)
         require(not after & 1, 'WDT0 did not disarm after return.')
         self.record['rom_returned'] = True
-        if before & 1:
+        if self.watchdog_reset_seen(before):
             self.record['dram_lost'] = True
             return 'watchdog-reset'
         # An image that links the failure return may return after its first
@@ -1050,10 +1100,43 @@ def check_image(args):
     report = {'admitted': True, 'physical_access': False, 'image_sha256': images.sha(args.image),
               'watchdog': plan['watchdog'],
               'uploads': [{'address': a, 'file': str(p), 'sha256': images.sha(p)} for a, p in plan['uploads']]}
-    report.update({k: plan[k] for k in ('epoch', 'generation', 'lease', 'marker') if k in plan})
+    report.update({k: plan[k] for k in ('epoch', 'generation', 'lease', 'marker', 'host_admission') if k in plan})
     save(evidence/'admission.json', report)
     print(json.dumps(report, indent=2))
     return 0
+
+
+def preflight_submission(args, source, directory):
+    """Run the image's own EL3 admission on the session the runner will send, before the submission is queued.
+
+    Builds the session as the runner does (from the frozen inputs and template, with captured board words in place of
+    a live read) and runs the admission code compiled with the image's definitions (tools/host_admission.py). A refusal
+    names the failing term and refuses the submission; a gap in what can be checked without the board is reported and
+    leaves the submission to the runner's own checks."""
+    descriptor = args.descriptor or Path(str(source)+'.board.json')
+    try:
+        info = images.inspect(source, args.kind, json.loads(descriptor.read_text()) if descriptor.exists() else None,
+                              args.host_tree)
+    except (ValueError, OSError, KeyError) as error:
+        return {'admitted': None, 'unavailable': 'image not inspectable: %s' % error}
+    if not info.get('generic') or info.get('finite_npu') or info.get('native_probe'):
+        return {'admitted': None, 'unavailable': 'not a typed-session OS image'}
+    words = images.offline_words()
+    if words is None:
+        return {'admitted': None, 'unavailable': 'no captured board words on this machine'}
+    frozen = argparse.Namespace(**vars(args))
+    frozen.image = source
+    frozen.input = [directory/f'input-{i}.bin' for i, _ in enumerate(args.input)]
+    frozen.template = directory/'template' if (directory/'template').is_dir() else args.template
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='preflight-', dir=CACHE) as scratch:
+        try:
+            plan = images.prepare(frozen, info, {'words': words}, Path(scratch)/'bundle', dma_binding=None)
+        except images.AdmissionRefusal:
+            raise
+        except (ValueError, OSError, KeyError) as error:
+            return {'admitted': None, 'unavailable': 'session not built offline: %s' % error}
+    return plan.get('host_admission') or {'admitted': None, 'unavailable': 'no host admission in the plan'}
 
 
 def application_inputs(args, info, evidence):
@@ -1291,6 +1374,17 @@ class Queue:
                 if (template/'dma-authority.json').is_file():
                     shutil.copy2(template/'dma-authority.json', destination/'dma-authority.json')
             options['template'] = str(directory/'template')
+        # The image's own admission, on the exact session and contract, before the board could be touched.
+        try:
+            preflight = preflight_submission(args, source, directory)
+        except images.AdmissionRefusal:
+            # Nothing was queued: move the half-built entry directory out of the queue (never delete it).
+            trash = CACHE/'trash'/f'refused-submit-{identifier}'
+            trash.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(directory), str(trash))
+            raise
+        if preflight.get('unavailable'):
+            print('pre-flight not run: %s' % preflight['unavailable'], file=sys.stderr)
         exp = expectation(args.expect)
         if exp:
             target = directory/'expect.json'
@@ -1304,7 +1398,8 @@ class Queue:
         job = {'id': identifier, 'submitted': time.time(), 'image': str(image),
                'image_sha256': hashlib.sha256(data).hexdigest(), 'port': args.port, 'kind': args.kind,
                'worker': args.worker, 'hypothesis': args.hypothesis.strip(), 'state': 'queued', 'reference': reference,
-               'directory': str(directory), 'result_path': str(directory/'run/result.json'), 'options': options, 'frozen': frozen}
+               'directory': str(directory), 'result_path': str(directory/'run/result.json'), 'options': options, 'frozen': frozen,
+               'preflight': preflight}
         with self.locked() as state:
             history = state['jobs']
             repeated = next((j for j in history if j['worker'] == job['worker'] and
@@ -1375,6 +1470,30 @@ class Queue:
                 path.rename(archive/f'{time.time_ns()}-{port}.json')
             self.event('resumed',port=port)
 
+    @staticmethod
+    def refused_before_launch_is_safe(result, access, node):
+        """True when a run refused before launch left DRAM ownership with nobody, and the instance is a live FEL one.
+
+        Why the quarantine is safe to clear in this case: no image was launched, so nothing the run promised or the
+        image owned lives in DRAM. The only DRAM the run wrote is the rail helper's two runner-owned regions (its load
+        region and its 16 KiB result page), with their host-side backups; the helper's writes are residue that the next
+        run's DRAM stage overwrites when it initializes DRAM from the training record before any later stage depends on
+        it. The watchdog is the one hazard that outlives the run: it must be disarmed on this instance (the helper's
+        return record shows the disarm read back clear, and the run then reset to a fresh instance, `fresh_fel`), the
+        current instance's ROM descriptor must be the verified A733 service, and no transport or cleanup failure may
+        have been recorded. A run that launched an image, or whose disarm or FEL state is unverified, still needs a
+        power cycle."""
+        if result.get('outcome')!='refused-before-launch' or result.get('launch_attempted') is not False:
+            return False
+        returned = ((result.get('rail_runs') or {}).get('rails') or {}).get('return') or result.get('rail_return') or {}
+        if not (result.get('fresh_fel') is True and result.get('setup_watchdog_reset') is True and
+                returned.get('mode_before_disarm',0)&0xffff==0xb1 and returned.get('mode_after_disarm',1)&1==0):
+            return False
+        try:
+            return (access.target(node)/'bcdDevice').read_text().strip()=='02b3'
+        except (OSError,ValueError):
+            return False
+
     def release(self, port, reason, access=None):
         """Coordinator only: clear the DRAM-ownership quarantine of a fresh instance after a watchdog reset.
 
@@ -1397,8 +1516,11 @@ class Queue:
         run = next((j for j in reversed(jobs) if (j['result'].get('instances') or [{}])[-1].get('identity')==observed),None)
         require(run is not None,'No finished run on this port ended on the quarantined instance.')
         result = run['result']
-        require(result.get('outcome')=='watchdog-reset' and result.get('rom_returned') is True and result.get('dram_lost') is True,
-                'The run did not end in a watchdog reset with a verified ROM return; a replug is required.')
+        reset = (result.get('outcome')=='watchdog-reset' and result.get('rom_returned') is True and result.get('dram_lost') is True)
+        refused = self.refused_before_launch_is_safe(result, access, node)
+        require(reset or refused,
+                'The run did not end in a watchdog reset with a verified ROM return, nor was it refused before any launch with '
+                'its watchdog disarmed on a verified FEL instance; a replug is required.')
         require(not any(result.get(key) for key in ('cleanup_failure','usb_vbus_cleanup_failure','transport_recovered')),
                 'The run recorded a cleanup or transport failure; a replug is required.')
         trash = CACHE/'trash/recovery-required-released'

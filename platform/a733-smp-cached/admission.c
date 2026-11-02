@@ -1,4 +1,5 @@
 #include "boot.h"
+#include "a733_admission_refusal.h"
 #include <stddef.h>
 #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
 #include "a733_device_memory_layout.h"
@@ -6,46 +7,75 @@
 #else
 #define CONTRACT_VERSION 1u
 #endif
-int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
+/* Zero when the contract is admitted, otherwise the named refusal of include/a733_admission_refusal.h. */
+unsigned a733_smp_contract_refusal(const struct a733_smp_contract *c,uint64_t now)
 {
-    if(!c || c->magic!=A733_SMP_CONTRACT_MAGIC || c->version!=CONTRACT_VERSION ||
-       c->bytes!=sizeof(*c) || !c->epoch || !c->generation ||
-       c->inverse_generation!=~c->generation || !c->lease)return 0;
-    for(unsigned i=0;i<32;++i)if(c->build_id[i]!=a733_smp_build_id[i])return 0;
+    if(!c)return A733_REFUSAL(A733_REFUSAL_CONTRACT_FIELD,0);
+    if(c->magic!=A733_SMP_CONTRACT_MAGIC)return A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_MAGIC);
+    if(c->version!=CONTRACT_VERSION)return A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_VERSION);
+    if(c->bytes!=sizeof(*c))return A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_SIZE);
+    if(!c->epoch || !c->generation || c->inverse_generation!=~c->generation || !c->lease)
+        return A733_REFUSAL(A733_REFUSAL_CONTRACT_FIELD,A733_FIELD_IDENTITY);
+    for(unsigned i=0;i<32;++i)if(c->build_id[i]!=a733_smp_build_id[i])return A733_REFUSAL(A733_REFUSAL_BUILD_ID,0);
 #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
     const struct a733_device_memory_layout layout = { A733_DEVICE_MEMORY_LAYOUT,
         A733_DEVICE_WB_START, A733_DEVICE_WB_END, A733_DEVICE_NC_START, A733_DEVICE_NC_END };
-    if(!a733_device_memory_handoff_valid(&layout,c->reserved))return 0;
+    if(!a733_device_memory_handoff_valid(&layout,c->reserved))return A733_REFUSAL(A733_REFUSAL_DEVICE_MEMORY,0);
 #else
-    for(unsigned i=0;i<6;++i)if(c->reserved[i])return 0;
+    for(unsigned i=0;i<6;++i)if(c->reserved[i])return A733_REFUSAL(A733_REFUSAL_DEVICE_MEMORY,0);
 #endif
 #ifdef SUNSTONE_A733_RESIDENT
     /* Resident lifetime: no diagnostic deadline and no FEL return. The armed
      * four-second watchdog is the bounded-failure mechanism, so its first
      * window must end after startup; a supervising task renews it only while
      * every service progresses. Startup keeps the one-second bound. */
-    if(c->armed_at>now || now>=c->startup_deadline ||
-       c->startup_deadline-now>A733_SMP_COUNTER_HZ ||
-       c->diagnostic_deadline!=A733_SMP_NO_DEADLINE ||
-       c->expires_at-c->armed_at!=4*A733_SMP_COUNTER_HZ ||
-       c->startup_deadline>=c->expires_at)return 0;
+    if(c->armed_at>now)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_ARMED);
+    if(now>=c->startup_deadline || c->startup_deadline-now>A733_SMP_COUNTER_HZ)
+        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_STARTUP);
+    if(c->diagnostic_deadline!=A733_SMP_NO_DEADLINE)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_DIAGNOSTIC);
+    if(c->expires_at-c->armed_at!=4*A733_SMP_COUNTER_HZ || c->startup_deadline>=c->expires_at)
+        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_EXPIRY);
     if(c->watchdog_mode!=0x41 || c->watchdog_configuration!=1 ||
        c->watchdog_output!=2 || c->fel_flag || c->redirect_flag ||
-       c->redirect_entry || c->alternate_flag)return 0;
-    return 1;
+       c->redirect_entry || c->alternate_flag)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_WATCHDOG_FIELDS);
+    return 0;
 #endif
     /* Limit one immutable watchdog lease to the documented four-second mode.
      * Deadlines reserve at least one second for reset after diagnostic stop. */
-    if(c->armed_at>now || now>=c->startup_deadline ||
-       c->startup_deadline>=c->diagnostic_deadline ||
-       c->diagnostic_deadline>=c->expires_at ||
-       c->expires_at-c->armed_at!=4*A733_SMP_COUNTER_HZ ||
-       c->expires_at-c->diagnostic_deadline<A733_SMP_COUNTER_HZ ||
-       c->startup_deadline-now>A733_SMP_COUNTER_HZ)return 0;
+    if(c->armed_at>now)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_ARMED);
+    if(now>=c->startup_deadline || c->startup_deadline-now>A733_SMP_COUNTER_HZ)
+        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_STARTUP);
+    if(c->startup_deadline>=c->diagnostic_deadline || c->diagnostic_deadline>=c->expires_at ||
+       c->expires_at-c->diagnostic_deadline<A733_SMP_COUNTER_HZ)
+        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_DIAGNOSTIC);
+    if(c->expires_at-c->armed_at!=4*A733_SMP_COUNTER_HZ)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_EXPIRY);
     if(c->watchdog_mode!=0x41 || c->watchdog_configuration!=1 ||
        c->watchdog_output!=2 || c->fel_flag!=UINT64_C(0x5aa5a55a) ||
-       c->redirect_flag!=UINT64_C(0xfa50392f) || c->redirect_entry!=0x20 || c->alternate_flag)return 0;
-    return 1;
+       c->redirect_flag!=UINT64_C(0xfa50392f) || c->redirect_entry!=0x20 || c->alternate_flag)
+        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_WATCHDOG_FIELDS);
+    return 0;
+}
+/* What the last admission check decided, for the stop that follows it (a733_smp_refusal_detail, used by boot.c). The
+ * monitor section is EL3 memory. */
+static struct {uint64_t magic,generation;unsigned state,why;} refusal __attribute__((section(".bss.a733_smp_monitor")));
+int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
+{
+    unsigned why=a733_smp_contract_refusal(c,now);
+    refusal.state=why?2:1;refusal.why=why;
+    if(c){refusal.magic=c->magic;refusal.generation=c->generation;}
+    return !why;
+}
+/* The unnamed admission stop (1, 1) names the refused term, a boot state that kept the check from running, or a staged
+ * contract that changed after the check passed. Any other stop keeps its detail. */
+uint64_t a733_smp_refusal_detail(unsigned status,uint64_t detail)
+{
+    if(status!=1||detail!=1)return detail;
+    if(refusal.state==2)return refusal.why;
+    if(refusal.state==0)return A733_REFUSAL(A733_REFUSAL_BOOT_STATE,0);
+    const volatile struct a733_smp_contract *source=(const void *)A733_SMP_CONTRACT_ADDRESS;
+    if(source->magic!=refusal.magic||source->generation!=refusal.generation)
+        return A733_REFUSAL(A733_REFUSAL_STALE_RESULT,A733_STALE_SOURCE);
+    return A733_REFUSAL(A733_REFUSAL_STALE_RESULT,A733_STALE_RESULT);
 }
 int a733_smp_power_address(unsigned core,uintptr_t address,int write)
 {

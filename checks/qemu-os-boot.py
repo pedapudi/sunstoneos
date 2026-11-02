@@ -583,6 +583,16 @@ def main():
                                         ROOT / 'apps/storage-write-test/manifest.json')
         return image.build(application)
 
+    def build_storage_write_space():
+        """The storage-write image with the upper memory mapped, so that the application has an address space and its
+        main task a tag; the owner is started by that task's call."""
+        image = Image(out / 'build-storage-write-space', extra_defines=['-DQEMU_OS_UPPER=1', '-DQEMU_OS_SD_OWNER=1'],
+                      extra_sources=['apps/os/sd_owner.c', 'platform/qemu-os/sd_hw.c', 'drivers/storage/a733_storage_bounds.c'])
+        application = image.application('storage-write', ['apps/storage-write-test/main.c', 'drivers/storage/fat32_rw.c',
+                                                           'apps/storage-write-test/sha256_ce.S'],
+                                        ROOT / 'apps/storage-write-test/manifest.json')
+        return image.build(application)
+
     def build_notify():
         """An application that is given the OS's notifications while it waits (docs/notifications.md)."""
         image = Image(out / 'build-notify')
@@ -647,6 +657,7 @@ def main():
         slot1_elf = pool.submit(build_slot1).result()
         heap_elf, heap_big_elf, heap_early_elf = heap_elf.result(), heap_big_elf.result(), heap_early.result()
         notify_elf = pool.submit(build_notify).result()
+        storage_write_space_elf = pool.submit(build_storage_write_space).result()
         (out / 'build-reverted-owner').mkdir()
         reverted_owner_elf = pool.submit(build_storage_write, reverted_owner(out / 'build-reverted-owner'))
         large_elf, large_big_elf, large_6g_elf, large_nodigest_elf = large_elf.result(), large_big_elf.result(), large_6g_elf.result(), large_nodigest_elf.result()
@@ -969,6 +980,23 @@ def main():
     tag, wait, e1, recv, e2 = struct.unpack('<5q', bytes.fromhex(c.finished['result']))
     c.require(wait == 1 and e1 >= 30000, 'the deadline wait ended with status %d after %d us, expected expiry after 30000 us' % (wait, e1))
     c.require(recv == 0 and e2 >= 30000, 'ss_host_recv returned %d after %d us, expected the timeout (0) after 30000 us' % (recv, e2))
+    # Index 0 belongs to the application: its own give during an OS wait, and during a deadline wait, is still there afterwards.
+    c = run_case('application-give-survives-os-wait', notify_elf, scenario(usb_ready_ms=usb_delay_ms), struct.pack('<Q', 1) + bytes(4088))
+    c.clean()
+    tag, recv, e, take = struct.unpack('<4q', bytes.fromhex(c.finished['result']))
+    c.require(recv == 0 and e >= 30000 and take == 1,
+              'ss_host_recv returned %d after %d us and the application find %d notifications at index 0; expected the timeout and its own give' % (recv, e, take))
+    c = run_case('application-give-does-not-end-deadline-wait', notify_elf, scenario(usb_ready_ms=usb_delay_ms), struct.pack('<Q', 2) + bytes(4088))
+    c.clean()
+    tag, wait, e, take = struct.unpack('<4q', bytes.fromhex(c.finished['result']))
+    c.require(wait == 1 and e >= 30000 and take == 1,
+              'the deadline wait ended with status %d after %d us, take %d; expected expiry after 30000 us and the give still pending' % (wait, e, take))
+    # A device hint ends the deadline wait early; nothing of it may end the application's next wait on index 0.
+    c = run_case('deadline-hint-leaves-index-0-alone', notify_elf, scenario(usb_ready_ms=usb_delay_ms), struct.pack('<Q', 3) + bytes(4088))
+    c.clean()
+    tag, wait, e, take, e3 = struct.unpack('<5q', bytes.fromhex(c.finished['result']))
+    c.require(wait == 0 and e < 20000, 'the hint did not end the deadline wait early: status %d after %d us' % (wait, e))
+    c.require(take == 0 and e3 >= 38000, 'the next wait on index 0 ended after %d us with %d notifications; expected the 40 ms timeout' % (e3, take))
 
     # 12. The storage-write application through ss_storage_enable on the write-capable owner (apps/os/sd_owner.c), over a RAM-disk
     # card that holds the real card's 395 backup sectors at their sector numbers and the runner's bounds blob. The software path
@@ -1000,6 +1028,17 @@ def main():
     c.require(c.finished is not None, 'the application did not finish')
     d = decode_result(c)
     c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'enable did not succeed: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
+    # The SD owner is started by the application's own call, from a task that has an address space: the owner is an OS task
+    # and must end up with no application tag, so that it runs in the kernel's space (include/os_space.h, traceTASK_CREATE
+    # gives a new task its creator's tag; apps/os/sd_owner.c clears it). The main task, by contrast, is tagged.
+    c = run_case('storage-write-owner-in-kernel-space', storage_write_space_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, mode4], '4G',
+                 [(RAMDISK_ADDRESS, card_image())])
+    c.clean()
+    d = decode_result(c)
+    c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'enable did not succeed with an address space: status %d' % d['status'])
+    space = lines(c.output, 'TASK-SPACE')
+    c.require(len(space) == 1 and space[0].get('main') == '1' and space[0].get('sdowner') == '0',
+              'the application main task must be tagged and the SD owner untagged: %s' % (space,))
     # A hint on the application's default notification index during the owner's open (a USB-change event, as application.c sends
     # them) must not end the wait: enable succeeds. The owner as the fourth board submission had it (one sleep on that index)
     # returns early with stage 11, which is the control.

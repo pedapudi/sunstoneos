@@ -93,6 +93,7 @@ compiled; the section is the authority for a linked image.
 | `audio` | Rate, channels, sample bits, and the minimum and maximum frames of one capture, when a capture device is listed. |
 | `run_deadline_us` | Longest time from the start of `<name>_main` to `ss_finish`. Zero means the session deadline less the return reserve bounds the run. |
 | `return_reserve_us` | Time between the latest permitted `ss_finish` and the session deadline, which the return path uses. |
+| (lifetime) | The OS image derives its session lifetime from `run_deadline_us` and `return_reserve_us` ([os-image.md](../os-image.md#the-session-lifetime-follows-the-manifest)); no manifest can exceed it. |
 | `progress_window_us` | Longest permitted gap between `ss_progress` calls from any task of the application. |
 | `output_limit` | Maximum bytes of the `ss_finish` result. |
 | `host_op_first`, `host_op_count` | The application's host-channel operation numbers, inside `0x00`–`0x7f` and outside `0x05`–`0x08`. The OS owns `0x05`–`0x08` and `0x80`–`0xff`. |

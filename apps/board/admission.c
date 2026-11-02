@@ -1,6 +1,7 @@
 #include "a733_board_application.h"
 #include "boot.h"
 #include "a733_storage_digest.h"
+#include "a733_admission_refusal.h"
 #include <string.h>
 static int present(const uint8_t *p,size_t n)
 {unsigned v=0;for(size_t i=0;i<n;++i)v|=p[i];return v!=0;}
@@ -78,39 +79,62 @@ int a733_board_session_valid(const struct a733_board_session *s,uint64_t now)
     for(unsigned i=0;i<3;++i)if(!s->fabric_hz[i])return 0;
     return 1;
 }
-int a733_board_contract_valid(const struct a733_smp_contract *c,const struct a733_board_session *s,
+/* Zero when the contract binds this session; otherwise the named refusal (include/a733_admission_refusal.h),
+ * checked in the order of the stop detail's terms. */
+unsigned a733_board_contract_refusal(const struct a733_smp_contract *c,const struct a733_board_session *s,
     const uint8_t id[32],uint64_t now)
 {
     uint8_t digest[32];
-    if(!c||!a733_board_session_valid(s,now)||c->magic!=A733_BOARD_CONTRACT_MAGIC||
-       c->version!=A733_BOARD_CONTRACT_VERSION||c->bytes!=sizeof(*c)||c->epoch!=s->epoch||c->generation!=s->generation||
-       c->inverse_generation!=~c->generation||c->lease!=s->lease||memcmp(c->build_id,id,32)||
-       c->reserved[0]!=A733_BOARD_SESSION_ADDRESS||c->reserved[1]!=sizeof(*s)||
+    if(!c||!s)return A733_REFUSAL(A733_REFUSAL_CONTRACT_FIELD,0);
+    if(!a733_board_session_valid(s,now))return A733_REFUSAL(A733_REFUSAL_SESSION_BIND,A733_BIND_BOARD_PREFIX);
+    if(c->magic!=A733_BOARD_CONTRACT_MAGIC)return A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_MAGIC);
+    if(c->version!=A733_BOARD_CONTRACT_VERSION)return A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_VERSION);
+    if(c->bytes!=sizeof(*c))return A733_REFUSAL(A733_REFUSAL_MAGIC_VERSION,A733_MAGIC_SIZE);
+    if(c->epoch!=s->epoch||c->generation!=s->generation||c->inverse_generation!=~c->generation||c->lease!=s->lease)
+        return A733_REFUSAL(A733_REFUSAL_CONTRACT_FIELD,A733_FIELD_IDENTITY);
+    if(memcmp(c->build_id,id,32))return A733_REFUSAL(A733_REFUSAL_BUILD_ID,0);
+    if(c->reserved[0]!=A733_BOARD_SESSION_ADDRESS||c->reserved[1]!=sizeof(*s))
+        return A733_REFUSAL(A733_REFUSAL_SESSION_BIND,A733_BIND_CONTRACT);
 #ifndef SUNSTONE_BOARD_SUPERVISED
-       c->armed_at!=s->reload_before_ticks||c->armed_at>UINT64_MAX-A733_SMP_COUNTER_HZ||
-       c->startup_deadline!=c->armed_at+A733_SMP_COUNTER_HZ||now>=c->startup_deadline||
-       c->startup_deadline>=c->diagnostic_deadline||c->diagnostic_deadline!=s->deadline_us*24||
-       c->expires_at!=s->reset_by_us*24||c->watchdog_mode!=0x41||c->watchdog_configuration!=1||
-       c->watchdog_output!=2||c->fel_flag!=0x5aa5a55a||c->redirect_flag!=0xfa50392f||
-       c->redirect_entry!=0x20||c->alternate_flag)return 0;
+    if(c->armed_at!=s->reload_before_ticks||c->armed_at>UINT64_MAX-A733_SMP_COUNTER_HZ)
+        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_ARMED);
+    if(c->startup_deadline!=c->armed_at+A733_SMP_COUNTER_HZ||now>=c->startup_deadline)
+        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_STARTUP);
+    if(c->startup_deadline>=c->diagnostic_deadline||c->diagnostic_deadline!=s->deadline_us*24)
+        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_DIAGNOSTIC);
+    if(c->expires_at!=s->reset_by_us*24)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_EXPIRY);
+    if(c->watchdog_mode!=0x41||c->watchdog_configuration!=1||c->watchdog_output!=2||c->fel_flag!=0x5aa5a55a||
+       c->redirect_flag!=0xfa50392f||c->redirect_entry!=0x20||c->alternate_flag)
+        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_WATCHDOG_FIELDS);
 #elif defined(SUNSTONE_BOARD_RESIDENT)
-       /* The stage-2 loader armed the four-second watchdog at armed_at. The
-        * watchdog is the only hang bound: no diagnostic deadline, no FEL return. */
-       c->armed_at>now||c->armed_at>UINT64_MAX-4*A733_SMP_COUNTER_HZ||
-       c->startup_deadline!=c->armed_at+A733_BOARD_STARTUP_SECONDS*A733_SMP_COUNTER_HZ||now>=c->startup_deadline||
-       c->diagnostic_deadline!=A733_SMP_NO_DEADLINE||c->expires_at!=c->armed_at+4*A733_SMP_COUNTER_HZ||
-       c->watchdog_mode!=0x41||c->watchdog_configuration!=1||c->watchdog_output!=2||
-       c->fel_flag||c->redirect_flag||c->redirect_entry||c->alternate_flag)return 0;
+    /* The stage-2 loader armed the four-second watchdog at armed_at. The
+     * watchdog is the only hang bound: no diagnostic deadline, no FEL return. */
+    if(c->armed_at>now||c->armed_at>UINT64_MAX-4*A733_SMP_COUNTER_HZ)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_ARMED);
+    if(c->startup_deadline!=c->armed_at+A733_BOARD_STARTUP_SECONDS*A733_SMP_COUNTER_HZ||now>=c->startup_deadline)
+        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_STARTUP);
+    if(c->diagnostic_deadline!=A733_SMP_NO_DEADLINE)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_DIAGNOSTIC);
+    if(c->expires_at!=c->armed_at+4*A733_SMP_COUNTER_HZ)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_EXPIRY);
+    if(c->watchdog_mode!=0x41||c->watchdog_configuration!=1||c->watchdog_output!=2||
+       c->fel_flag||c->redirect_flag||c->redirect_entry||c->alternate_flag)
+        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_WATCHDOG_FIELDS);
 #else
-       c->armed_at>now||c->armed_at>UINT64_MAX-A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ||
-       c->startup_deadline!=c->armed_at+A733_BOARD_STARTUP_SECONDS*A733_SMP_COUNTER_HZ||now>=c->startup_deadline||
-       c->diagnostic_deadline!=c->armed_at+A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ||
-       c->expires_at!=c->diagnostic_deadline||c->watchdog_mode||c->watchdog_configuration||
-       c->watchdog_output||c->fel_flag||c->redirect_flag||c->redirect_entry||c->alternate_flag)return 0;
+    if(c->armed_at>now||c->armed_at>UINT64_MAX-A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ)
+        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_ARMED);
+    if(c->startup_deadline!=c->armed_at+A733_BOARD_STARTUP_SECONDS*A733_SMP_COUNTER_HZ||now>=c->startup_deadline)
+        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_STARTUP);
+    if(c->diagnostic_deadline!=c->armed_at+A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ)
+        return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_DIAGNOSTIC);
+    if(c->expires_at!=c->diagnostic_deadline)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_EXPIRY);
+    if(c->watchdog_mode||c->watchdog_configuration||c->watchdog_output||c->fel_flag||c->redirect_flag||
+       c->redirect_entry||c->alternate_flag)return A733_REFUSAL(A733_REFUSAL_TIMING,A733_TIMING_WATCHDOG_FIELDS);
 #endif
     storage_digest_bytes(s,sizeof(*s),digest);
-    return !memcmp(digest,&c->reserved[2],32);
+    if(memcmp(digest,&c->reserved[2],32))return A733_REFUSAL(A733_REFUSAL_SESSION_BIND,A733_BIND_DIGEST);
+    return 0;
 }
+int a733_board_contract_valid(const struct a733_smp_contract *c,const struct a733_board_session *s,
+    const uint8_t id[32],uint64_t now)
+{return !a733_board_contract_refusal(c,s,id,now);}
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
 {return a733_board_contract_valid(c,(const void *)A733_BOARD_SESSION_ADDRESS,a733_smp_build_id,now);}
 /* Existing fixed secondary-core power allowlist; no application device authority. */

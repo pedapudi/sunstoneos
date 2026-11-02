@@ -7,7 +7,7 @@ from pathlib import Path
 import struct
 from harness import refused
 ROOT=Path(__file__).resolve().parents[1]
-CHECK_INPUTS=['apps/os/thermal-report.py','apps/os/cpu-return-thermal.py','apps/os/thermal-report.h','include/FreeRTOSConfig.h']
+CHECK_INPUTS=['tools/session_lifetime.py','apps/os/thermal-report.py','apps/os/cpu-return-thermal.py','apps/os/thermal-report.h','include/FreeRTOSConfig.h']
 def load(name,path):
  spec=importlib.util.spec_from_file_location(name,path);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 report=load('report_cadence',ROOT/'apps/os/thermal-report.py')
@@ -42,6 +42,7 @@ x=fixture();x['begin_us']=x['scheduled_first_us']+report.PERIOD_US+report.LATENE
 for change,expected in ((lambda x:x.update(overflow=1),'overflow'),(lambda x:x.update(recognition_ok=0),'recognition-failed'),(lambda x:x['readings'][1].update(level=2),'thermal-stop'),(lambda x:x['readings'][1].update(stale=1),'incomplete'),(lambda x:x['readings'][1].update(age_us=[1000001]*5),'incomplete')):
  x=fixture();change(x);assert classify(x)==expected
 cases.append('overflow-failure-critical-and-freshness-rules')
+ROWS=report.lifetime.thermal_rows(60)    # the buffer of a 60 s image; images size it from their own lifetime
 # Both transport paths receive the same real header bytes and must classify alike.
 for version in (1,2):
  x=fixture(version=version);raw=encode(x)
@@ -52,8 +53,8 @@ for version in (1,2):
  usb=report.decode(report.capture(exchange,11,12),11,12)
  head=report.HEADER_BYTES if version==2 else report.LEGACY_HEADER_BYTES
  w=raw[:head]+struct.pack('<3I4x',0,1,1)
- r=raw[head:]+bytes((report.MAX_ROWS-len(x['readings']))*report.ROW_BYTES)+struct.pack('<2I',len(x['readings']),0)+struct.pack('<Q',2000000)
- layout={'window':dict(bytes=len(w),members=dict(header=0,first=head,collecting=head+4,ready=head+8)),'readings':dict(bytes=len(r),members=dict(rows=0,count=report.MAX_ROWS*report.ROW_BYTES,overflow=report.MAX_ROWS*report.ROW_BYTES+4,next=report.MAX_ROWS*report.ROW_BYTES+8))}
+ r=raw[head:]+bytes((ROWS-len(x['readings']))*report.ROW_BYTES)+struct.pack('<2I',len(x['readings']),0)+struct.pack('<Q',2000000)
+ layout={'window':dict(bytes=len(w),members=dict(header=0,first=head,collecting=head+4,ready=head+8)),'readings':dict(bytes=len(r),members=dict(rows=0,count=ROWS*report.ROW_BYTES,overflow=ROWS*report.ROW_BYTES+4,next=ROWS*report.ROW_BYTES+8))}
  native=returned.decode(layout,{'thermal-window':w,'thermal-readings':r},11,12)
  assert report.classify(usb)==native['classification']=='complete'
  cases.append('usb-and-returned-version-'+str(version))
