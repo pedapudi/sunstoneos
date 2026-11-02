@@ -311,7 +311,17 @@ static int dr_poll(void *c)
 }
 static enum sunxi_mmc_wait dr_hint(void *c, uint32_t *us) { (void)c; return sunxi_mmc_wait_hint(&platform.core, us); }
 static uint64_t dr_now(void *c) { (void)c; return now_us(); }
-static void dr_sleep(void *c, uint64_t until) { (void)c; (void)sunstone_deadline_wait_until(until); }
+static _Atomic uint64_t sleep_us, sleep_count;
+static void dr_sleep(void *c, uint64_t until)
+{
+    (void)c;
+    uint64_t from = now_us();
+    (void)sunstone_deadline_wait_until(until);
+    atomic_fetch_add(&sleep_us, now_us() - from);
+    atomic_fetch_add(&sleep_count, 1);
+}
+static uint64_t hw_owner_sleep_us(void) { return atomic_load(&sleep_us); }
+static uint64_t hw_owner_wakes(void) { return atomic_load(&sleep_count); }
 static int dr_live(void *c) { (void)c; return board_live(NULL); }
 static enum a733_mmc_platform_result drive_platform(uint64_t deadline)
 {
@@ -405,7 +415,7 @@ const struct os_sd_hw *os_sd_open_owner(void)
     if (sunstone_deadline_register() != 1 || !sunxi_mmc_set_irq(&platform.core, irq_taken, NULL)) return 0;
     irq_live = 1;
     hw = (struct os_sd_hw){d, card.sectors, card.sector_addressed, hw_allocation_unit, hw_enable_writes, hw_write_piece, hw_live,
-                           hw_set_write_region, hw_wait_async};
+                           hw_set_write_region, hw_wait_async, hw_owner_sleep_us, hw_owner_wakes};
     return &hw;
 }
 void os_sd_close_owner(void) { irq_live = 0; os_sd_close_owner_device(); }

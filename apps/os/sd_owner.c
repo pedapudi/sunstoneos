@@ -13,6 +13,8 @@
 #include "task.h"
 #include "sd_hw.h"
 #include "fat32_rw.h"
+#include "sunstone_deadline.h"
+#include "sunstone_storage.h"
 #include <stdatomic.h>
 #include <string.h>
 
@@ -40,6 +42,7 @@ static StackType_t owner_stack[OWNER_STACK_WORDS];
 static const struct os_sd_hw *hw;
 static atomic_int ready;           /* 0 starting, 1 open, -1 failed */
 static uint32_t unit_sectors;
+static _Atomic uint64_t idle_us, wake_count, first_us;
 static struct os_large_device proxy;
 
 static void finish(struct request *r, int ok)
@@ -72,11 +75,15 @@ static void owner_main(void *unused)
 {
     (void)unused;
     hw = os_sd_open_owner();
+    atomic_store(&first_us, sunstone_deadline_now_us());
     atomic_store(&ready, hw ? 1 : -1);
     if (ready_waiter) xTaskNotifyGive(ready_waiter);
     if (!hw) vTaskSuspend(NULL);
     for (;;) {
+        uint64_t slept_from = sunstone_deadline_now_us();
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        atomic_fetch_add(&idle_us, sunstone_deadline_now_us() - slept_from);
+        atomic_fetch_add(&wake_count, 1);
         for (;;) {
             struct request *r = atomic_exchange(&loader_slot, NULL);        /* reads first */
             if (r) { serve(r); continue; }
@@ -162,7 +169,7 @@ static int writer_write(void *c, uint64_t sector, uint32_t count, const uint8_t 
     return post(&writer_slot, &writer_request, 1);
 }
 /* Admit the writes: the runner-delivered bounds blob (the first input, kept unchanged), verified against the card. */
-int os_sd_writes_enable(const uint8_t *blob, size_t bytes)
+static int writes_enable(const uint8_t *blob, size_t bytes)
 {
     if (!start()) return 0;
     writer_request = (struct request){.kind = K_ENABLE, .source = blob, .bytes = bytes};
@@ -173,17 +180,30 @@ int os_sd_writes_enable(const uint8_t *blob, size_t bytes)
     return 1;
 }
 /* Register the application's flush buffer so the FAT32 service flushes from it straight into the controller. */
-int os_sd_write_region(uint8_t *base, size_t bytes)
+static int write_region(uint8_t *base, size_t bytes)
 {
     if (!start()) return 0;
     writer_request = (struct request){.kind = K_REGION, .buffer = base, .bytes = bytes};
     return post(&writer_slot, &writer_request, 1);
 }
 /* The block device for the FAT32 write service; call after os_sd_writes_enable. */
-int os_sd_writer_device(struct fwr_device *d)
+static int writer_device(struct fwr_device *d)
 {
     if (!hw || atomic_load(&ready) != 1) return 0;
     *d = (struct fwr_device){.context = NULL, .read = writer_read, .write = writer_write, .yield = NULL, .sectors = hw->sectors,
                              .au_sectors = unit_sectors, .max_write_sectors = OS_SD_WRITE_PIECE_SECTORS};
+    return 1;
+}
+
+/* --- the application kit (include/sunstone_storage.h) ------------------------------------------------------------------- */
+int ss_storage_enable(const void *bounds, size_t bytes) { return writes_enable(bounds, bytes); }
+int ss_storage_region(void *base, size_t bytes) { return write_region(base, bytes); }
+int ss_storage_device(struct fwr_device *d) { return writer_device(d); }
+int ss_storage_owner_stats(struct ss_storage_owner_stats *out)
+{
+    if (!out || !hw) return 0;
+    uint64_t now = sunstone_deadline_now_us();
+    uint64_t slept = atomic_load(&idle_us) + hw->owner_sleep_us();
+    *out = (struct ss_storage_owner_stats){now - first_us, slept, atomic_load(&wake_count) + hw->owner_wakes()};
     return 1;
 }

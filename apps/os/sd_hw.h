@@ -27,6 +27,9 @@ struct os_sd_hw {
     int (*set_write_region)(uint8_t *base, size_t bytes);
     /* Wait for the loader's submitted read to finish (interrupt or one-shot timer), then leave it for async.poll to take. */
     int (*wait_async)(void);
+    /* Time the owner has spent asleep in the interrupt and timer waits of a transfer, and how many times it woke there. */
+    uint64_t (*owner_sleep_us)(void);
+    uint64_t (*owner_wakes)(void);
 };
 /* Open the card in the calling task (it becomes the owner) and return the hardware operations; NULL on failure. */
 const struct os_sd_hw *os_sd_open_owner(void);
@@ -34,9 +37,4 @@ void os_sd_close_owner(void);
 /* The read-only open and close under their write-image names (large_sd.c). */
 const struct os_large_device *os_sd_open_owner_device(void);
 void os_sd_close_owner_device(void);
-/* sd_owner.c: the writer's entry points; both run in a task other than the owner. */
-struct fwr_device;
-int os_sd_writes_enable(const uint8_t *blob, size_t bytes);
-int os_sd_writer_device(struct fwr_device *);
-int os_sd_write_region(uint8_t *base, size_t bytes);
 #endif

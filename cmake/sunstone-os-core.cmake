@@ -202,7 +202,7 @@ set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/servic
   drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c platform/a733/fault.S platform/a733/fault.c)
 if(SUNSTONE_A733_OS_SD_WRITE)
   # One SD0 owner task serves the loader's reads and the FAT32 write service (apps/os/sd_owner.c); the SD core is built with its write path.
-  list(APPEND os_added apps/os/sd_owner.c drivers/storage/a733_storage_bounds.c drivers/storage/a733_storage_update.c drivers/storage/storage_wait.c drivers/storage/fat32_rw.c drivers/storage/sunstone_fs.c)
+  list(APPEND os_added apps/os/sd_owner.c drivers/storage/a733_storage_bounds.c drivers/storage/a733_storage_update.c drivers/storage/storage_wait.c)
 endif()
 set(os_patches "${os_root}/apps/os/boot.patch")
 if(SUNSTONE_A733_OS_USB_CLASSES)
