@@ -489,6 +489,10 @@ A host check is worth its cost when it tests our own logic, reaches a path that 
 2. Where both sides of an interface are our code, the check links the real code instead of a stand-in.
 3. A mock refuses any operation or register access that it does not model. Use the strict register model and the host link described below, and the GIC model of `tools/hw_facts.py` for interrupt priorities.
 4. Every bug fix adds a case that fails on the pre-fix code, and the commit message names the case.
+5. The board is ground truth. When a board run fails where a host check passed, the model behind that check is wrong. The fix corrects the model and adds a case built from the board record, in the same change as the code fix.
+6. A modeled behavior that the board can read back has a conformance case against a recorded board reading, as `checks/hw-facts.py` does for the GIC model. Where neither a measurement nor a reference exists, the check does not model the behavior; a board run tests it.
+
+A strict model refuses accesses it does not cover, and a citation makes a modeling error traceable, but neither makes a modeled behavior correct. Only agreement with board readings does.
 
 A Non-secure view of the GIC differs from the stored one: a priority stored as 0xd8 reads 0xb0 at Non-secure EL1. Compare priorities only through `include/a733_gic_priority.h` or `GicModel`; QEMU runs with one security state and cannot show a view error.
 
@@ -498,12 +502,11 @@ A Non-secure view of the GIC differs from the stored one: a priority stored as 0
 
 ### Checks pending re-qualification
 
-The checks below keep their files and run by hand, but the full gate lists them as pending (`REQUALIFICATION` in `checks/check-index.py`) because their models include behaviors that cite neither a measurement nor a reference. They return to the gate when each uncited behavior is replaced by a measured or cited one.
+`a733-xhci-detach` and `a733-xhci-dma` returned to the gate after their three uncited behaviors (port power at start, port reset duration and completion, TR Dequeue Pointer while running) were replaced by xHCI 1.2 behaviors that carry line citations in `checks/a733-xhci-detach.c`; the reset duration is a stimulus and not a claim. The checks below keep their files and run by hand, but the full gate lists them as pending (`REQUALIFICATION` in `checks/check-index.py`) because their models include behaviors that cite neither a measurement nor a reference. They return to the gate when each uncited behavior is replaced by a measured or cited one.
 
 | Check | Uncited behaviors |
 | --- | --- |
 | `a733-pcie-trace`, `pcie-qemu` | ATU, PHY lock, link-up and speed-change latencies; NVMe ready delay and controller model; PCI power-management D3 behavior; link loss after PERST. No PCIe board run exists. |
-| `a733-xhci-detach`, `a733-xhci-dma` | Port Power at start, port reset latency and TR Dequeue Pointer updates while an endpoint runs (three behaviors; the other 21 to 26 each cite the xHCI 1.2 specification). |
 | `io-native-ordering` | TWI status sequence, reset values and the 30 microsecond flag delay; initial WDT0 values; posted-store completion at a DSB. |
 | `memtest-machine` | SCTLR_EL1 reset, translation walk and PAR_EL1 format, DC ZVA, counter step and cache geometry. |
 | `power-write-order` | PMIC bus event latency and the status after START (the model returns 0x18 where a START gives 0x08), USB reset minimums, initial register values. |

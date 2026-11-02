@@ -51,7 +51,7 @@ class Timer(cached.Machine):
             if access==UC_MEM_WRITE:
                 self.mmio_writes.append((address,size,value))
                 if address==self.rdist[c]+0x1041e:
-                    value&=0xf0
+                    value=cached.GIC.ns_read(cached.GIC.ns_write(value))
                     if self.drop=='priority':return
                 if address==self.rdist[c]+0x10100 and self.drop=='enable':return
             return super().memory(u,access,address,size,value,c)

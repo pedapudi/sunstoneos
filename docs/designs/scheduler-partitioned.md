@@ -675,6 +675,61 @@ CPU, publishes the new consumer and unmasks. Device-specific owners perform
 this slow path through existing IRQ APIs. Scheduler placement cannot reroute a
 live device autonomously.
 
+### Idle pull moves a waiting task to an idle eligible CPU
+
+The fork implements the pull of the previous section for tasks that wait behind
+a running task of equal or higher priority. Each owner publishes the set of
+CPUs that its queued tasks may run on (`pull_targets`, the union of their
+affinity masks, computed from at most eight entries per priority) and a global
+bitmap marks the CPUs that run only their idle task. At the end of a service
+entry an owner that keeps running its current task takes every target that is
+idle or has asked (`pull_requests`), picks the highest-priority waiting task
+that may run there and publishes a move control for it. The ordinary
+acknowledged transfer then detaches the queued task here and the target adopts
+it; no CPU edits a foreign queue. A CPU that selects its idle task sets its idle
+bit and asks, with one coalesced bit and one SGI, each owner whose targets
+include it. A task that would preempt the running one is not pulled, and neither
+is one while its core's current task is blocking, suspending or deleted.
+Placement moves with the task: its owner becomes the target, and an affinity
+change moves it back.
+
+Prediction, from the previous stranding measurement (16 of 16 forced rounds
+left a ready receiver waiting 1 ms on a busy home while the eligible peer idled):
+with idle pull the receiver completes on the peer within the same millisecond in
+16 of 16 rounds and no round strands, and the pinned-latency and loaded-wake
+distributions of the eight-core CPU control stay within the noise of the
+previous control, because a CPU that is not idle never pulls.
+
+### The recorded recognition decides whether the fork is kept
+
+The CPU recognition image (the external mimus application, eight workers, the
+recorded 3.59 s clip) is built twice from one tree, with the fork off and on.
+Each variant runs twice on port 3-3 at the approved CPU points. Both must
+reproduce the recorded result exactly: `feat_crc=ac657a3b`, `lp_crc=a7ade80e`
+and the text `FORMATTED There was silence.`. The application pins one worker
+per core and has no wake-latency instrumentation, so the comparison measures
+compute time per recording and the real-time factor (compute time over audio
+time, 57,440 samples at 16 kHz).
+
+Prediction: the pinned workers rarely wake each other, so the fork changes the
+real-time factor by less than 1% in either direction, and no variant regresses
+by more than 1%. The fork is kept and enabled by default only if the output is
+exact, the real-time factor improves by at least 2%, and nothing regresses by
+more than 1%; otherwise it stays off. No audio or recognition task wake latency
+is compared, because the image has no instrumentation for it that costs nothing
+when disabled.
+
+Result, port 3-3, two runs per variant, development mode: both variants returned
+the exact result (`feat_crc=ac657a3b`, `lp_crc=a7ade80e`, `FORMATTED There was
+silence.`). Compute time per recording is 348.7 ms (real-time factor 0.0971) with
+the fork off and 366.4 ms (0.1021) with the fork on, repeatable to 0.04% within
+each variant. The fork is 5.1% slower, which is a regression of more than 1%
+against a predicted change of less than 1%. The prediction fails and the rule
+decides: the fork stays off by default. The recognition application is pinned
+and compute-bound, so the extra cost per kernel entry (the stalled masked spans
+measured above) is paid without a placement gain. The fork remains an option
+for workloads with unpinned tasks; the comparison found no workload that needs it.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag

@@ -251,6 +251,10 @@ def test_models():
     assert gic.pmr_ns_read(gic.pmr_ns_write(0xf8, 0xff)) == facts.value('gic.cpuif.icc_pmr_el1.readback_after_write_ff', 0)
     assert gic.pmr_ns_write(0x00, 0xff) == 0x00 and gic.pmr_ns_read(0x00) == 0
     assert gic.ns_read(gic.ns_write(facts.value('config.intid27.stored_priority_written_ns'))) == facts.value('gic.redist.intid27.priority_after_write', 0)
+    # The priority-write path of checks/cpu-local-timer.py: a Non-secure write reads back through the same pair.
+    assert gic.ns_read(gic.ns_write(facts.value('config.intid27.stored_priority_written_ns'))) == facts.value('gic.redist.intid27.priority_after_write', 0)
+    intid30 = next(f for f in facts.document['facts'] if f['name'] == 'gic.redist.intid30.priority_after_write' and f['core'] == 0)
+    assert gic.ns_read(gic.ns_write(intid30['written'])) == intid30['value'], 'INTID 30 written 0xe0 reads back 0xe0'
     assert gic.ns_read(facts.value('config.spi97.stored_priority')) == facts.value('gic.dist.spi97.priority', 0), 'the stored route priority of INTID 97 as Non-secure EL1 reads it'
     # A table that reads 0xf8 selects the unshifted view; one that fits neither is a contradiction.
     plain = hw.GicModel(variant(0xf8))

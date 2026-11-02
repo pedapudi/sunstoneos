@@ -100,7 +100,7 @@ static unsigned in_switch[8], worker_round[8], mover_round[2], mover_mask[2], vi
 /* These symbols also identify the stopped workload in a QEMU GDB snapshot. */
 static volatile unsigned control_round, control_phase;
 static unsigned isolated_local, selected_idle[8];
-static unsigned withholding, blocker_release;
+static unsigned withholding, blocker_release, withhold_cores;
 static uint64_t withholding_completed, withholding_observations, withholding_ticks;
 static uint64_t local_phase_locks, local_wakes, local_completed, local_ticks, peer_idle_samples;
 void ss_kernel_test_admin_enter(unsigned cpu)
@@ -205,11 +205,13 @@ static void local_receive(void *unused)
     (void)unused;
     for (;;) {
         configASSERT(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
-        configASSERT(portGET_CORE_ID() == 1);
         if (__atomic_load_n(&withholding, __ATOMIC_ACQUIRE)) {
+            /* Pulled by the idle eligible peer while the home core runs the blocker. */
+            __atomic_fetch_or(&withhold_cores, 1U << portGET_CORE_ID(), __ATOMIC_RELAXED);
             ++withholding_completed;
             xTaskNotifyGive(controller);
         } else {
+            configASSERT(portGET_CORE_ID() == 1);
             __atomic_fetch_add(&local_completed, 1, __ATOMIC_RELAXED);
             xTaskNotifyGive(local_sender);
         }
@@ -369,16 +371,18 @@ static void control(void *unused)
         TickType_t start = xTaskGetTickCount();
         xTaskNotifyGive(local_receiver);
         vTaskDelay(1);
-        /* One counted opportunity requires all three states simultaneously:
-         * receiver READY, higher-priority home blocker CURRENT, allowed peer idle. */
-        configASSERT(eTaskGetState(local_receiver) == eReady);
+        /* The receiver waits behind its higher-priority home blocker while an allowed
+         * peer idles: idle pull must have moved it, and it has run on that peer. */
+        if (eTaskGetState(local_receiver) == eReady && __atomic_load_n(&selected_idle[2], __ATOMIC_RELAXED))
+            ++withholding_observations; /* stranded */
         configASSERT(xTaskGetCurrentTaskHandleForCore(1) == home_blocker);
-        configASSERT(__atomic_load_n(&selected_idle[2], __ATOMIC_RELAXED));
-        ++withholding_observations;
-        configASSERT(withholding_completed == i);
-        __atomic_store_n(&blocker_release, 1, __ATOMIC_RELEASE);
+        configASSERT(withholding_completed == i + 1);
         configASSERT(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000)) == 1);
+        __atomic_store_n(&blocker_release, 1, __ATOMIC_RELEASE);
         withholding_ticks += xTaskGetTickCount() - start;
+        /* Return the receiver to its home owner for the next round. */
+        vTaskCoreAffinitySet(local_receiver, 2);
+        vTaskCoreAffinitySet(local_receiver, 6);
     }
     platform_puts("withheld-ready opportunities="); platform_hex(WITHHOLD_ROUNDS);
     platform_puts(" stranded-observations="); platform_hex(withholding_observations);
@@ -388,7 +392,8 @@ static void control(void *unused)
     platform_puts(" blocker-priority="); platform_hex(5);
     platform_puts(" receiver-priority="); platform_hex(4);
     platform_puts("\n");
-    configASSERT(withholding_observations == WITHHOLD_ROUNDS && withholding_completed == WITHHOLD_ROUNDS);
+    configASSERT(withholding_observations == 0 && withholding_completed == WITHHOLD_ROUNDS);
+    configASSERT(withhold_cores == (1U << 2)); /* every receiver completion ran on the idle peer */
     for (unsigned id = 0; id < 8; ++id) {
         configASSERT(__atomic_load_n(&worker_round[id], __ATOMIC_RELAXED) == ROUNDS);
         configASSERT(__atomic_load_n(&busy[id], __ATOMIC_RELAXED) > 0);

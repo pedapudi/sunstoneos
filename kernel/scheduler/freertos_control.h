@@ -21,6 +21,9 @@ struct ss_control_state {
     uint64_t sequence, incarnation, affinity, resume_generation, abort_generation;
     uint64_t offcpu_sequence; /* outstanding suspend fence survives resume */
     unsigned priority, effective_priority;
+    /* Idle pull: 1 + the CPU that should adopt this ready task, or 0. The owner clears it
+     * when it starts the acknowledged transfer. */
+    unsigned move_to_plus_one;
     bool suspended, dead, preemption_disabled;
 };
 struct ss_control_transfer {
