@@ -125,7 +125,7 @@ Status: **host evidence only; the simulator is the instrument.** The facts below
 contain 66 shader operations and 31 distinct programs, compiled for the target of the board (`VIP9000NANODI_PLUS_PID0X1000003B`,
 one shader core, 16-bit fixed-point quantization, half-precision graph tensors), and from 49 mutation checks in the SDK
 simulator (`tools/npu-shader-probe.py`). The grammar below is checked against every one of the 66 operations by
-`tools/npu-shader-state.py`, which also holds 31 single-change variants that break one rule each.
+`tools/npu-shader-state.py`, which also holds 33 single-change cases that break one rule each.
 
 ### Operations that compile to shader operations
 
@@ -172,8 +172,9 @@ The state stream (load-state table, 472 to 1136 bytes) is a sequence of packets.
 | Rule | Statement | Evidence |
 | --- | --- | --- |
 | S1 | Packets are load-state (header bits 31:27 equal 1, bit 26 clear, operand count 1 to 64 in bits 25:16, register in bits 15:0), stall (`0x48000000` and one token word) and pad words. A load-state packet of header plus an odd number of operands is followed by one pad word; the stream length is a multiple of 8 bytes. The pad word is `0x18000000` or `0xdeadbeef` and is not read | 66 of 66. Overwriting the 18 pad words of a floor shader with `0xdeadbeef` changes no output byte |
-| S2 | The register sequence is: optional prologue (`0x5580`, `0x0e02`, stall); then the body `0x02a4 0x0420 0x0416 0x0409 0x021f 0x0424 0x040a 0x5580 0x021a 0x0425 0x0427 0x0402 (3 operands) 0x0228 0x028c 0x0e07 0x040c 0x020c 0x0201 0x02aa 0x0e22 0x0412 0x0e27 0x0240 0x0249 0x022e 0x0247 0x024b 0x024d 0x024f 0x0256 0x0257 0x0258 0x0250 (6 operands) 0x0248`; then the epilogue `0x0e03`, `0x0e02`, stall. Uniform packets (S4) may stand anywhere after the prologue | 66 of 66. The prologue is on the first shader operation of a graph and absent on the later ones (also after neural-network operations) |
-| S3 | Operands that equal one value in every operation: `0x5580` = 2, `0x0e02` = `0x701`, stall token `0x701`, `0x0e03` = `0x24`, `0x0248` = `0xbadabeeb`, and `0x0201`, `0x020c`, `0x021a`, `0x021f`, `0x0228`, `0x022e`, `0x0249`, `0x024b`, `0x024d`, `0x024f`, `0x02aa`, `0x0404`, `0x0409`, `0x040c`, `0x0412`, `0x0416`, `0x0427`, `0x0e22`, `0x0e27` (values in the source of the tool) | 66 of 66 |
+| S2 | **Observed order, not an admission rule** (the admission rule is S2a below). The register sequence is: optional prologue (`0x5580`, `0x0e02`, stall); then the body `0x02a4 0x0420 0x0416 0x0409 0x021f 0x0424 0x040a 0x5580 0x021a 0x0425 0x0427 0x0402 (3 operands) 0x0228 0x028c 0x0e07 0x040c 0x020c 0x0201 0x02aa 0x0e22 0x0412 0x0e27 0x0240 0x0249 0x022e 0x0247 0x024b 0x024d 0x024f 0x0256 0x0257 0x0258 0x0250 (6 operands) 0x0248`; then the epilogue `0x0e03`, `0x0e02`, stall. Uniform packets (S4) may stand anywhere after the prologue | 66 of 66. The prologue is on the first shader operation of a graph and absent on the later ones (also after neural-network operations) |
+| S3 | **Observed values, not admission rules** except for the two flush-related registers named in S2a. Operands that equal one value in every operation: `0x5580` = 2, `0x0e02` = `0x701`, stall token `0x701`, `0x0e03` = `0x24`, `0x0248` = `0xbadabeeb`, and `0x0201`, `0x020c`, `0x021a`, `0x021f`, `0x0228`, `0x022e`, `0x0249`, `0x024b`, `0x024d`, `0x024f`, `0x02aa`, `0x0404`, `0x0409`, `0x040c`, `0x0412`, `0x0416`, `0x0427`, `0x0e22`, `0x0e27` (values in the source of the tool) | 66 of 66 |
+| S2a | **Admission rule derived from S2: register-set membership.** A shader state stream may write only the registers in the observed set (the 43 operand words of the register table below, that is 36 registers) and the uniform bank `0xd800` to `0xd8ff`. Order, count and operand values of those registers are not checked, except that `0x0e02` must be `0x701`, the stall token `0x701` and `0x0e03` `0x24` (the loader-owned flush and synchronization writes). An unlisted register could control the MMU or command fetch | Set of 36 registers in 66 of 66 |
 | S4 | The uniform bank is the register range `0xd800` to `0xd8ff`. Packets of 1 to 4 operands; no word is written twice | Highest word written: `0xd883` |
 | S5 | `0x0424` is the instruction count, `0x0425` the count minus one, and 16 times the count equals the length of the program table entry | 66 of 66 |
 | S6 | The patch list holds exactly one source-0 patch, on the `0x040a` operand with index -1, source offset 0 and transformed field 0; every other patch is a kind-0 patch on an operand word of a uniform packet; no word is patched twice | 66 of 66 |
@@ -182,6 +183,17 @@ The state stream (load-state table, 472 to 1136 bytes) is a sequence of packets.
 | S9 | The shader table entry exists, names a program row, the parameter row is 0, and the program lies inside the program section | 66 of 66 |
 
 ### Registers outside the uniform bank
+
+**Registers a graph must never write.** The MMU configuration, the cache flush and synchronization registers and the
+command-fetch registers belong to the driver. From the vendor driver (`vip2/vip_drv_hardware.c`, byte addresses of the
+same register space, load-state register = byte address / 4): MMU control and status `0x388` (state-stream register `0x00e2`) and
+its neighbours `0x38c` to `0x394` (`0x00e3` to `0x00e5`), command-fetch size and control `0x3a4`, `0x3a8`, `0x3b4` (`0x00e9`, `0x00ea`,
+`0x00ed`), command-fetch address `0x654` (`0x0195`), and the control, idle, interrupt and reset registers `0x000` to `0x03c`
+(`0x0000` to `0x000f`). From the etnaviv register database (recalled, not in the pinned sources): the MMU registers near byte `0x180`
+(`0x0060` to `0x006c`), the front-end registers from byte `0x600` (`0x0180` to `0x01ff`), and the flush and semaphore registers
+`0x0e03` and `0x0e02`. Checked against the observed set: none of the MMU, command-fetch, control or front-end registers is in it.
+Two members of the flush family are: `0x0e03` (cache flush, always `0x24`) and `0x0e02` (semaphore, always `0x701`); S2a pins their values,
+so a graph cannot select other flush bits or tokens. The loader must reject any other write to these ranges.
 
 The table names each operand of the state stream once (43 operand words and the stall token). "Sensitive" means that
 zeroing the operand or flipping its low bit changed the simulator output (`tools/npu-shader-probe.py`, experiment
@@ -257,8 +269,9 @@ concatenation rule and from the existing assembly of the relative-shift model (`
 ### Loader specification (shader operations)
 
 1. Admit kind 1 only for graphs whose digest is in the reviewed catalogue, as for the other kinds.
-2. Parse the shader table, program table and state stream by rules S1 to S9. Refuse a graph that breaks one. Do not refuse a
-   graph for an unknown value of an operand that S3 does not list, a constant of the uniform bank, or an element format word.
+2. Parse the shader table, program table and state stream by rules S1, S2a and S4 to S9. S2 and S3 are observations: do not refuse a
+   graph for register order or for the value of an operand other than those S2a pins, for a constant of the uniform bank, or for an
+   element format word. Refuse any write to a register outside the S2a set.
 3. Resolve the program as `program[ shader_table[ operation.index ].program_row ]`; write `0x040a` with the program section
    device address plus the table offset (a multiple of 256) and ignore the patch offset. The program section must be
    readable by the engine and 256-byte aligned.
@@ -271,16 +284,23 @@ concatenation rule and from the existing assembly of the relative-shift model (`
 6. Write the pad word `0x18000000` into every pad position.
 7. Copy the stream into the command buffer at an 8-byte aligned position. The state length is at most 1136 bytes in the
    graphs examined; refuse a stream longer than 4096 bytes.
-8. Do not edit, reorder or drop registers. Do not interpret the program.
+8. Do not edit, reorder or drop registers other than pad words and patched words. Do not interpret the program.
 9. Keep the programs and the uniform constants inside the digest of rule 1. The 31 program digests of the graphs examined
    can seed a program catalogue as for kind 6.
 10. A graph with a parameter section, a nonzero parameter row, a source-6 patch with a transformed field other than 0 or 14,
     or a patch of kind 1 on a shader operation is refused until a graph presents it.
 
-Reference check for the rules: `tools/npu-shader-state.py --check GRAPH...`; its self-test lists 31 cases that fail on the
+Reference check for the rules: `tools/npu-shader-state.py --check GRAPH...`; its self-test lists 33 cases (30 rule breaks and 3 controls) around the
 pre-change stream.
 
 ### Limits
+
+- **The shader path honouring the page tables is untested.** Everything above is host evidence from the simulator, which models
+  an MMU, but no board run has shown that the engine's shader, program-fetch and descriptor paths go through the page tables.
+  Two board cases would test it: (1) a data descriptor (S7) whose address word, patched at load, points at an unmapped canary
+  address, expecting an MMU exception and a healthy recovery with the canary untouched; (2) a program address (source 0,
+  register `0x040a`) pointing at an unmapped canary address, expecting a fetch fault. Both need the fault-recovery approval named in
+  [the loader design](../designs/npu-loader-admission.md).
 
 - The program words are opaque. The pinned Mesa tree holds only the four neural-network source files named in its manifest, so
   no instruction encoding is available to decode the 16-byte instructions, and the vendor toolkit exposes none. The loader

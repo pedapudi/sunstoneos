@@ -73,7 +73,11 @@ def packets(w):
     return out
 
 
-def check_stream(w, patches, io, view):
+ALLOWED = {r for r, _ in PROLOGUE + BODY + EPILOGUE}
+PINNED = {0x0e02: 0x701, 0x0e03: 0x24}              # rule S2a: loader-owned flush and synchronization writes
+
+
+def check_stream(w, patches, io, view, strict=False):
     """Check one shader operation. w: state words. patches: list of 10-tuples of nbg patch fields (kind, destination,
     source, index, source_offset, transformed, ...). io: dict with 'inputs', 'outputs' (lists of logical byte sizes),
     'pool', 'vip_sram', 'coeff' (row lengths), 'dyna' (row lengths), 'ppu_len' (length of the program span of this
@@ -97,21 +101,29 @@ def check_stream(w, patches, io, view):
             written |= set(range(reg, reg + len(data))); uni.append(p)
         else:
             seq.append((reg, len(data))); regpos[reg] = p
+    for p in loads:
+        for reg, v in PINNED.items():
+            if p[2] == reg and p[3][0] != v: raise Violation('S2a register %04x is %x, must be %x' % (reg, p[3][0], v))
+        if not UNIFORM_FIRST <= p[2] < UNIFORM_END and p[2] not in ALLOWED:
+            raise Violation('S2a register %04x is not in the observed set' % p[2])
+    if any(p[0] == 'stall' and p[2] != 0x701 for p in pk): raise Violation('S2a stall token must be 0x701')
     want = BODY + EPILOGUE
     if seq[:2] == PROLOGUE:
         # prologue: the two loads, then a stall
         if 1 not in stall_after: raise Violation('S2 prologue without stall')
         seq = seq[2:]; stall_after = {k - 2: v for k, v in stall_after.items() if k != 1}
         regpos[0x5580] = None
-    if seq != want:
+    if strict and seq != want:
         have = [r for r, _ in seq]
         raise Violation('S2 register sequence differs from the grammar: %s' % ' '.join('%04x' % r for r in have))
-    if stall_after.get(len(seq) - 1, (0, 0, 0))[2] != 0x701:
+    if strict and stall_after.get(len(seq) - 1, (0, 0, 0))[2] != 0x701:
         raise Violation('S2 stream does not end with a stall on token 0x701')
-    for reg, value in FIXED.items():
+    for reg, value in (FIXED.items() if strict else ()):
         for p in loads:
             if p[2] <= reg < p[2] + len(p[3]) and p[3][reg - p[2]] != value:
                 raise Violation('S3 register %04x is %x, observed value is %x' % (reg, p[3][reg - p[2]], value))
+    for r in (0x0424, 0x0425, 0x040a):
+        if r not in regpos: raise Violation('S5 register %04x missing' % r)
     def reg_value(r): return regpos[r][3][0]
     # S5: program length
     count = reg_value(0x0424)
@@ -269,12 +281,12 @@ def self_test():
     cases = []
     def case(name, rule, fn):
         cases.append((name, rule, fn))
-    def mutate(edit):
+    def mutate(edit, strict=False):
         def run():
             w, pt, io = list(FIXTURE), copy.deepcopy(FIXTURE_PATCHES), copy.deepcopy(FIXTURE_IO)
             r = edit(w, pt, io)
             if r is not None: w = r
-            return check_stream(w, pt, io, None)
+            return check_stream(w, pt, io, None, strict)
         return run
     def setw(i, v):
         def e(w, pt, io): w[i] = v
@@ -286,13 +298,15 @@ def self_test():
     case('S1: count runs past the stream end', 'S1', mutate(setw(len(FIXTURE) - 4, 0x08050e02)))
     case('S1: pad word removed', 'S1', mutate(lambda w, pt, io: w[:at[0x0804d800] + 5] + w[at[0x0804d800] + 6:]))
     case('S1: stream of an odd word count', 'S1', mutate(lambda w, pt, io: w + [NOP]))
-    case('S2: register 0427 removed', 'S2', mutate(lambda w, pt, io: w[:at[0x08010424] + 6] + [0x08010425, 0x0c] + w[at[0x08010425] + 4:]))
-    case('S2: unknown register 0x0430 inserted', 'S2', mutate(lambda w, pt, io: w[:at[0x08010248]] + [0x08010430, 0] + w[at[0x08010248]:]))
-    case('S2: registers 0257 and 0248 swapped', 'S2', mutate(lambda w, pt, io: w[:at[0x08010257]] + [0x08010248, 0xbadabeeb] + w[at[0x08010257] + 2:at[0x08010248]] + [0x08010257, 1] + w[at[0x08010248] + 2:]))
-    case('S2: final stall token changed', 'S2', mutate(setw(len(FIXTURE) - 1, 0x700)))
-    case('S3: kick value changed', 'S3', mutate(setw(at[0x08010248] + 1, 0xbadabeea)))
-    case('S3: cache flush value changed', 'S3', mutate(setw(at[0x08010e03] + 1, 0x7f)))
-    case('S2: register above the uniform bank', 'S2', mutate(setw(at[0x0804d840], 0x0804da00)))
+    case('S2 (observed order): register 0427 removed', 'S2', mutate(lambda w, pt, io: w[:at[0x08010424] + 6] + [0x08010425, 0x0c] + w[at[0x08010425] + 4:], True))
+    case('S2a: unknown register 0x0430 inserted', 'S2a', mutate(lambda w, pt, io: w[:at[0x08010248]] + [0x08010430, 0] + w[at[0x08010248]:]))
+    case('S2 (observed order): registers 0257 and 0248 swapped', 'S2', mutate(lambda w, pt, io: w[:at[0x08010257]] + [0x08010248, 0xbadabeeb] + w[at[0x08010257] + 2:at[0x08010248]] + [0x08010257, 1] + w[at[0x08010248] + 2:], True))
+    case('control: swapped registers are admitted without the observed-order check', None, mutate(lambda w, pt, io: w[:at[0x08010257]] + [0x08010248, 0xbadabeeb] + w[at[0x08010257] + 2:at[0x08010248]] + [0x08010257, 1] + w[at[0x08010248] + 2:]))
+    case('S2a: final stall token changed', 'S2a', mutate(setw(len(FIXTURE) - 1, 0x700)))
+    case('S3 (observed value): kick value changed', 'S3', mutate(setw(at[0x08010248] + 1, 0xbadabeea), True))
+    case('control: changed kick value is admitted without the observed-value check', None, mutate(setw(at[0x08010248] + 1, 0xbadabeea)))
+    case('S2a: cache flush value changed', 'S2a', mutate(setw(at[0x08010e03] + 1, 0x7f)))
+    case('S2a: register above the uniform bank', 'S2a', mutate(setw(at[0x0804d840], 0x0804da00)))
     case('S4: a uniform word written twice', 'S4', mutate(setw(at[0x0804d840], 0x0804d800)))
     case('S4: uniform packet beyond four words', 'S4', mutate(lambda w, pt, io: w[:at[0x0804d840]] + [0x0805d840] + w[at[0x0804d840] + 1:at[0x0804d840] + 5] + [0] + w[at[0x0804d840] + 6:]))
     case('S5: end counter not count minus one', 'S5', mutate(setw(at[0x08010425] + 1, 0x0d)))
