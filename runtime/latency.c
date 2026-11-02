@@ -250,9 +250,6 @@ void ss_latency_mask_close(unsigned core, uintptr_t site)
 void ss_latency_lock_acquired(unsigned core, unsigned lock, uint64_t start, uintptr_t site)
 {
     if (!enabled(core) || lock >= 2) return;
-    ++acquisitions[core][lock];
-    unsigned p = interval_phase(start, 0);
-    if (p < SS_LAT_PHASES) ++phase_acquisitions[p][core][lock];
     struct local_state *l = &local[core];
     /* Ownership already belongs to this core. Do not charge subsequent
      * acquisition counters or phase lookup to contention wait. */
