@@ -17,6 +17,9 @@
 #include "task.h"
 #include <stdlib.h>
 
+#ifndef HEAP_TEST_NOTIFY_WAIT
+#define HEAP_TEST_NOTIFY_WAIT 0
+#endif
 #ifndef HEAP_TEST_MODE
 #define HEAP_TEST_MODE 0
 #endif
@@ -70,6 +73,9 @@ static void worker(void *unused)
     worker_core_id = portGET_CORE_ID();
     worker_tag = (uintptr_t)xTaskGetApplicationTaskTag(NULL);
     worker_flag = 1;
+#if HEAP_TEST_NOTIFY_WAIT
+    xTaskNotifyGive(main_handle);
+#endif
     for (;;) vTaskDelay(1000);
 }
 
@@ -95,8 +101,14 @@ void heap_test_main(const struct ss_grant *grant)
     main_handle = xTaskGetCurrentTaskHandle();
     (void)xTaskCreateStaticAffinitySet(worker, "worker", 512, NULL, 3, worker_stack, &worker_state,
                                        (UBaseType_t)(grant->worker_cores & -grant->worker_cores));
+#if HEAP_TEST_NOTIFY_WAIT
+    /* The wait that mode 3 first used: the worker's notification to the main task, at index 0. The OS's own wake-ups
+     * of the main task must not end it (docs/notifications.md). */
+    (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
+#else
     /* Wait on the flag the worker sets. */
     for (unsigned waited = 0; !worker_flag && waited < 2000; ++waited) vTaskDelay(1);
+#endif
     r.notify_count = worker_flag;
     const uint64_t main_tag = (uintptr_t)xTaskGetApplicationTaskTag(NULL);
     r.worker_ran = worker_flag;

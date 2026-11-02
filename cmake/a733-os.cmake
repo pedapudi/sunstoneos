@@ -48,7 +48,9 @@ elseif(SUNSTONE_APPLICATION STREQUAL "heap-test")
   add_sunstone_application(heap-test
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/heap-test/main.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/heap-test/manifest.json")
-  target_compile_definitions(heap-test PRIVATE HEAP_TEST_MODE=${SUNSTONE_HEAP_TEST_MODE})
+  set(SUNSTONE_HEAP_TEST_NOTIFY_WAIT "0" CACHE STRING "1: mode 3 waits for the worker's task notification, not its flag")
+  target_compile_definitions(heap-test PRIVATE HEAP_TEST_MODE=${SUNSTONE_HEAP_TEST_MODE}
+    HEAP_TEST_NOTIFY_WAIT=${SUNSTONE_HEAP_TEST_NOTIFY_WAIT})
   add_sunstone_image(sunstone-a733-os-heap-test LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION heap-test)
 elseif(SUNSTONE_APPLICATION STREQUAL "storage-write-test")
