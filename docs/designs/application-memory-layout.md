@@ -85,7 +85,7 @@ region below it.
 | Consumer | Bound on a buffer's physical address | Other bound |
 | --- | --- | --- |
 | CPU at EL0 and EL1 | the installed memory; the 39-bit input range of TCR_EL1 covers 512 GiB | none |
-| FEL upload and stage-2 loader | below 4 GiB (FEL commands carry a 32-bit address; confirmed only by reading the tool, no board run) | none |
+| FEL upload and stage-2 loader | below 4 GiB. The FEL request record has a 32-bit address and a 32-bit length (`struct aw_fel_request` in `fel_lib.c` of the pinned sunxi-tools revision `b92f4ed3`, whose 16-byte request has no room for more), and `fel.c` takes `uint32_t` offsets. Upper memory is reachable only by code that runs on the board | none |
 | GPU | below 2^36 (`platform/a733/gpu_vm_memory.c:7`) | 40-bit GPU virtual addresses |
 | NPU | below 2^40 | device addresses are 32 bits, so the tensors of one graph lie in one 4 GiB device span; the MMU image does not cross a 4 GiB boundary |
 | IOMMU masters (display, G2D, codecs, camera) | below 2^34 | IOVA below 2^32 |
@@ -251,14 +251,41 @@ service task writes them with cacheable stores followed by `DSB ISH`.
 level-2 pages while its tasks run on other cores.
 
 - **Acquire.** The entries covered are invalid, so no earlier translation can be in a TLB. The task writes the new level-2 page contents, then the level-1 entry that points to it, executes `DSB ISH`, and replies. The requesting core executes an `ISB` before it first touches the memory. Another core that faults on an address that was invalid retries and finds the entry.
-- **Release.** Break before make: write the entry invalid, `DSB ISH`, `TLBI ASIDE1IS` (the entries are non-global, so the ASID selects exactly the application's translations and the broadcast reaches the other cluster), `DSB ISH`, and free the extent only after that. A release of a region with a device grant is refused.
-- **Change of permission or size.** The same sequence as release followed by a new acquire into the same extent, with the old entry written invalid first. No call changes a live mapping in place.
-- **TLB cost.** `TLBI ASIDE1IS` drops every entry of the application on every core. For one or two blocks the service task issues `TLBI VAE1IS` per block instead, and uses the ASID form above a count of blocks that the board measurement sets.
+- **Release.** Break before make: write the entry invalid and `DSB ISH`. The extent stays reserved in the ledger until the invalidation described under "Real-time cost of the broadcast invalidation" has completed for every core that could hold an entry, which for the preferred form is until teardown. A release of a region with a device grant is refused.
+- **Change of mapping other than acquire.** None exists. Resizing in place and changing permissions are not offered.
 
-**Fragmentation.** The mapping is identity, so a request needs contiguous
-physical memory. First fit with 1 GiB alignment for large requests keeps large
-gaps whole. A request that fails for fragmentation reports the largest free
-extent so that the application can retry with less.
+### Real-time cost of the broadcast invalidation
+
+`TLBI ...IS` is broadcast to every core of the inner shareable domain, and the
+receiving cores stall their translations until it completes. The robots run
+control loops above 1 kHz with a highest-priority wake latency target of 10 µs
+or less and a control-path jitter target of 5% of the period, so the design
+limits when one can be issued:
+
+- **When one can happen.** Only inside `ss_memory_release()` and
+  `ss_memory_acquire()` calls of the application itself, executed by the service task. No interrupt handler, context switch, driver, fault handler or timer issues one. A context switch writes TTBR0 and needs no invalidation because every entry is non-global and carries an ASID. The static path (regions granted before the main task starts) issues none after boot.
+- **Never on a hot path.** The SDK documents both calls as setup and teardown operations. An application's control loop acquires its memory before it enters the loop and releases it after it leaves.
+- **Acquire needs none.** The entries are invalid before the call, and Armv8 does not cache invalid entries, so acquire needs `DSB ISH` only.
+- **Release prefers the weaker forms**, in this order:
+  1. The kernel does not need the invalidation until the extent is reused, because the extent stays reserved in the ledger. The service task therefore keeps a released extent reserved, with its entries invalid, until the application's teardown or until another request needs the space. The application's own tasks have stopped using it by the release contract, and a stale entry can only be reached by a bug of the application, which then reads memory that still belongs to it.
+  2. When the extent must be reused before teardown, the task invalidates locally with `TLBI ASIDE1` (not broadcast) on each core that runs a task of the application, by an inter-processor request to exactly those cores, and skips the cores that run other applications. The cores are known from the application's affinity masks in the manifest.
+  3. The broadcast form `TLBI ASIDE1IS` or `TLBI VAE1IS` is the fallback if the local form cannot be shown correct.
+- **Measurement before it is relied on.** The board step that first issues a broadcast invalidation (step 7 below) measures its effect on the control path with the existing scheduler latency harness (`apps/latency`, metrics `wake_idle` and `wake_busy`, and the workload of eight pinned tasks released by the CPU0 timer). The run uses a 10 kHz release period, issues a release every 100 ms from the A55 cluster while the harness runs on the A76 cores, and reports the worst case and the 99.9th percentile of both wake metrics against a run without releases. The result decides between the three forms above; a measurable cost (more than 5% of the 100 µs period at the 99.9th percentile, or any worst case above 10 µs) selects the local form or the deferred reuse.
+
+**Fragmentation.** The mapping stays identity for now, because device DMA uses
+physical addresses and a CPU-visible address must equal the address a master
+sees. A request therefore needs contiguous physical memory. First fit with
+1 GiB alignment for large requests keeps large gaps whole. A request that
+fails for fragmentation reports the largest free extent so that the
+application can retry with less. The remedy, when fragmentation shows in
+practice, is to separate virtual from physical addresses for CPU-only memory:
+the tables then map discontiguous 2 MiB extents at consecutive virtual
+addresses. Memory that a master reads or writes stays identity mapped, or is
+reached by the masters that sit behind the IOMMU (display, G2D, codecs and the
+camera) through IOVA mappings, which already give them a contiguous view of
+scattered pages. Masters without an IOMMU (the NPU through its own MMU aside, DMA0, xHCI
+and the PCIe endpoint) need physical contiguity or a per-transfer scatter list.
+This step is not scheduled.
 
 **Zeroing.** The service task zeroes a granted extent in 2 MiB steps at a
 priority below the application's and before it signals the reply. At 5 GB/s,
@@ -302,11 +329,11 @@ step 1 and on the tables of step 3.
 ## Risks and open questions
 
 - **Decode check coverage.** The check proves linear decode, not that the memory firewall passes Non-secure accesses or that no other master writes. Upper memory above `0x4800_0000` has the board-recorded result for the address test only; a bus error there resets the board through the watchdog. Step 1's board run is also the first OS-image run of it.
-- **FEL address width.** The 4 GiB reach rests on a 32-bit address in the FEL commands, read from the tool and not measured on this ROM. The runner check in step 4 refuses higher addresses regardless.
+- **FEL address width.** The protocol limit is verified on the host from the pinned tool source (see the bounds table); whether this ROM implements a wider private extension is irrelevant, because the tool cannot send one. The runner check in step 4 refuses higher addresses.
 - **Upload time.** An initialized image above tens of megabytes costs minutes per run at 0.55 MB/s. Data of that size belongs in INPUT or large regions.
 - **Stale memory.** Every extent handed out must be zeroed, and boot-time zeroing of the heap and bss has to be measured against the supervision window.
 - **EL1 execution of application text.** The kernel tables must map it, and the application's EL1 worker functions have to be listed in the layout record. A function at an unmapped address faults at EL1.
 - **Branch thunks and code model.** The thunk check must run for the application's real size. An application that places more than 4 GiB of bss in link-time symbols is outside the code model; it uses the heap or a region instead.
 - **Fragmentation of an identity-mapped space.** No remapping exists, so a long-running application can fail a large request that enough free memory in total could serve.
 - **ASIDs.** The pool hands out 255 and never returns one ([large-regions status](../status/large-regions.md), items 7 and 8). Release of an application space is out of scope here.
-- **Run-time cost on real-time paths.** The request and release latency and the effect of `TLBI ASIDE1IS` on the other cores' worst-case latency are unmeasured; step 7 measures them under a camera and lidar load before the call is documented as usable in a loop.
+- **Real-time cost of invalidation.** The effect of a TLB invalidation on other cores' worst-case latency is unmeasured. Step 7 measures it at 10 kHz with the scheduler latency harness before any broadcast form is used (see the subsection on the real-time cost).
