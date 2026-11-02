@@ -2,7 +2,7 @@
 
 **Status: implemented.**
 
-The PowerVR firmware lifecycle, queues, compute jobs, local memory and recovery paths have software evidence. Recognition on the GPU is slower than on the CPU alone.
+The PowerVR firmware lifecycle, queues, compute jobs, local memory and recovery paths have software evidence. Recognition on the GPU is slower than on the CPU alone, and splitting each linear call between the GPU and the eight CPU cores is predicted to gain under 3 percent.
 
 **Software evidence:** host, emulator, source.
 
@@ -12,14 +12,16 @@ generic local-memory GEMMs pass on port 3-1. A zero-element vector shader
 completes 20,064 jobs per measured input on port 3-3 (submission median 3.833 us
 on the admitted ring). General GPU coverage remains unqualified.
 
-Recognition takes 327.476 ms against 135.474 ms CPU-only.
+Recognition takes 327.476 ms against 135.474 ms CPU-only. That run places 33.5 percent of the linear work on the GPU.
+
+**CPU and GPU overlap: no board run.** The GPU integer shader computes 2.61 GMAC/s against 30.4 GMAC/s for the eight CPU cores (ratio 0.086). With each dependent call split to equalize the two shares, the predicted saving is 4.08 ms (3.0 percent) with no overhead and 2.78 ms (2.0 percent) with the measured 153 us dispatch interval, against a 5 percent threshold. CPU-only stays selected. The inputs and the table are in the mimus `docs/status/sunstoneos-gpu.md`, section Overlap prediction, on `work/gpu-overlap-1101`.
 
 ## Open work
 
 1. Correct the queue-add submission expectation to schema `sunstone-board-expect-u32-v1` (12 output words and bounds), check it without USB, and request one new queued entry. Keep the failed entry as it is.
 2. Run the built recognition image with the same model, input and placement as the 154-job baseline, then compare recognition time against the pinned baseline.
 3. Calibrate the GPU-master traffic counters (`SUNSTONE_GPU_NSI_PMU`; host-checked, no board result) before reporting measured bytes.
-4. Measure a small explicit CPU and GPU split with 224-row CPU producers; qualify the selected sums first.
+4. Revisit the CPU and GPU split only if a shader reaches about 0.3 times the CPU rate per multiply-accumulate or the dispatch interval falls below 20 us; the current prediction is under 3 percent.
 5. Select the fastest qualified shader; the shared byte-split screen is rejected (8,368 bytes against the 8,128-byte limit).
 6. Explain the 104 us dispatch interval and the 118 us notification tail before changing timing budgets.
 7. Qualify sustained concurrent workloads, arbitrary stuck-device recovery, thermal throttling, critical-temperature protection and graphics.
