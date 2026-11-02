@@ -23,7 +23,7 @@ static int result_space(const struct nbg_model *m, const void *out, size_t bytes
 }
 static uint32_t buffer_count(const struct nbg_assembly_layout *p)
 {
-    return NBG_ALLOC_INPUT + p->inputs + p->outputs;
+    return nbg_layout_buffers(p);
 }
 static int requirement(struct nbg_allocation_requirement *r, uint32_t payload,
                         uint64_t minimum)
@@ -33,6 +33,19 @@ static int requirement(struct nbg_allocation_requirement *r, uint32_t payload,
     *r = (struct nbg_allocation_requirement){payload, (uint32_t)minimum,
                                             (uint32_t)allocation};
     return 1;
+}
+/* A stream-processor state is 0x08010e5b and its operand, 1..16 pairs of 0x08010e5c and 0x08010e5d
+ * words, then the 32-byte tail of the other kinds (see operation()). */
+#define MAX_STATE_BYTES (8u + 16u * 16u + 32u)
+/* A 16-bit signed tensor in dynamic fixed point: values are the integers scaled by 2^-fixed_position. */
+static int dynamic_fixed_point(const struct nbg_tensor *t)
+{
+    return t->quantization == 1 && t->format == 5 && t->fixed_position >= 0 && t->fixed_position <= 15;
+}
+/* A 16-bit floating-point tensor without quantization (the compiler keeps some graph inputs in this form). */
+static int half_float(const struct nbg_tensor *t)
+{
+    return t->quantization == 0 && t->format == 1 && !t->fixed_position && !t->zero_point && !t->scale_bits;
 }
 static int patch_fields(const struct nbg_patch *p)
 {
@@ -62,6 +75,9 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p, int
         case NBG_INPUT: case NBG_OUTPUT: case NBG_LAYER: case NBG_OPERATION:
         case NBG_NN: case NBG_PATCH: case NBG_LOAD_STATES:
         case NBG_COEFF_TABLE: case NBG_COEFF: case NBG_LOAD_STATES_TABLE: break;
+        case NBG_DYNA_IO: case NBG_DYNA_IO_TABLE:
+            if (!directory && m->sections[i].bytes) return 0;
+            break;
         case NBG_NETWORK_INFO: case NBG_MEMORY_POOL: case NBG_VIP_SRAM:
         case NBG_AXI_SRAM: case NBG_SECTION_CHECKSUM:
             if (!directory && m->sections[i].bytes) return 0;
@@ -79,7 +95,7 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p, int
     uint64_t body = sizeof(prefix);
     for (uint32_t i = 1; i <= p->nn_operations; ++i) {
         struct nbg_span state_span;
-        if (!nbg_model_table(m, NBG_LOAD_STATES_TABLE, i, &state_span) || state_span.bytes > 32)
+        if (!nbg_model_table(m, NBG_LOAD_STATES_TABLE, i, &state_span) || state_span.bytes > MAX_STATE_BYTES)
             return 0;
         body += state_span.bytes;
     }
@@ -89,8 +105,9 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p, int
     if (fetch < command_bytes) fetch = command_bytes;
     if (!requirement(&p->buffers[NBG_ALLOC_NN], m->sections[NBG_NN].bytes,
                      m->sections[NBG_NN].bytes) ||
-        !requirement(&p->buffers[NBG_ALLOC_COEFF], m->sections[NBG_COEFF].bytes,
-                     (uint64_t)m->sections[NBG_COEFF].bytes + 128) ||
+        /* A graph without coefficients (an element-wise or activation-free graph) has an empty slot. */
+        (m->sections[NBG_COEFF].bytes && !requirement(&p->buffers[NBG_ALLOC_COEFF], m->sections[NBG_COEFF].bytes,
+                     (uint64_t)m->sections[NBG_COEFF].bytes + 128)) ||
         (h->pool_bytes && !requirement(&p->buffers[NBG_ALLOC_POOL], h->pool_bytes, h->pool_bytes)) ||
         !requirement(&p->buffers[NBG_ALLOC_COMMAND], command_bytes, fetch)) return 0;
     /* Affine UINT8, INT8 and INT16 tensors, in model order: inputs, then outputs. */
@@ -98,10 +115,16 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p, int
         struct nbg_tensor t;
         int output = i >= p->inputs;
         if (!nbg_model_tensor(m, output ? NBG_OUTPUT : NBG_INPUT, output ? i - p->inputs : i, &t) ||
-            (t.format != 2 && t.format != 3 && t.format != 5) || t.buffer_type != 0 ||
-            t.quantization != 2 ||
+            (t.format != 1 && t.format != 2 && t.format != 3 && t.format != 5) || t.buffer_type != 0 ||
+            (t.quantization != 2 && !dynamic_fixed_point(&t) && !half_float(&t)) ||
             !requirement(&p->buffers[NBG_ALLOC_INPUT + i], t.logical_bytes,
                          (((uint64_t)t.logical_bytes + 63) & ~UINT64_C(63)) + 64)) return 0;
+    }
+    if (m->sections[NBG_DYNA_IO].bytes || m->sections[NBG_DYNA_IO_TABLE].bytes) {
+        if (!directory || !m->sections[NBG_DYNA_IO].bytes || !m->sections[NBG_DYNA_IO_TABLE].bytes) return 0;
+        p->dynamic = 1;
+        if (!requirement(&p->buffers[nbg_layout_dynamic_index(p)], m->sections[NBG_DYNA_IO].bytes,
+                         (uint64_t)m->sections[NBG_DYNA_IO].bytes + 128)) return 0;
     }
     uint64_t total = 0;
     for (unsigned i = 0; i < buffer_count(p); ++i) total += p->buffers[i].allocation_bytes;
@@ -125,19 +148,26 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p, int
 
 /* Each scratch descriptor is private. A later operation's refusal therefore
  * cannot leave an earlier caller-owned descriptor partially assembled. */
-struct operation_image { unsigned char nn[192], command[32]; uint32_t command_bytes; };
+struct operation_image { unsigned char nn[192], command[MAX_STATE_BYTES]; uint32_t command_bytes; };
 
 /* Slots identify the observed pointer fields, not arbitrary patch destinations.
  * Circular sizes and ends are in 64-byte units in both the Mesa NN layout and
  * the pinned HAL transpose encoder. Checking the encoded ring does not prove
  * that all device accesses (including prefetch) remain within it. */
-enum pointer_slot { WEIGHTS, INPUT, OUTPUT, OUTPUT_END, INPUT_END, POINTER_COUNT };
+enum pointer_slot { WEIGHTS, INPUT, OUTPUT, OUTPUT_END, INPUT_END, INPUT2, INPUT2_END, POINTER_COUNT };
 static int ring(const unsigned char *descriptor, struct nbg_relocation *nn,
                 const uint32_t *slot, const uint32_t *source, unsigned tensor,
                 unsigned end_slot, unsigned size_word)
 {
-    if (slot[tensor] == UINT32_MAX) return 0;
     uint64_t size = (uint64_t)(word(descriptor + size_word * 4) & 0x03ffffff) << 6;
+    if (slot[tensor] == UINT32_MAX) {
+        /* An operation without this tensor (a stream-processor step that only computes on its program
+         * and constants) keeps an unpatched pointer word inside the first page, which the page tables
+         * never map (device addresses of buffers are at least 4096), and the ring disabled. */
+        return slot[end_slot] == UINT32_MAX && !size &&
+            word(descriptor + (size_word == 20 ? 24 : 28)) < 0x1000 &&
+            (word(descriptor + (size_word + 1) * 4) & 0x03ffffff) == 0x03ffffff;
+    }
     if (!size)
         return slot[end_slot] == UINT32_MAX &&
             (word(descriptor + (size_word + 1) * 4) & 0x03ffffff) == 0x03ffffff;
@@ -162,28 +192,57 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
     struct nbg_operation op;
     struct nbg_span span;
     int directory = m->header.version == NBG_MODEL_DIRECTORY_VERSION;
-    /* Kind 2 is a neural-network operation; kind 8, a neural-transpose step
-     * (observed only in the directory format), uses the same 192-byte
-     * descriptor and pointer fields without coefficients. */
-    if (!nbg_model_operation(m, number, &op) || (op.kind != 2 && !(op.kind == 8 && directory)) ||
+    /* Kind 2 is a neural-network operation. Observed only in the directory format: kind 8, a neural
+     * transpose step, and kind 7, a neural-network step with an activation table in the weight slot,
+     * use the same 192-byte descriptor and pointer fields (kind 8 without coefficients); kind 6, a
+     * stream-processor step, precedes the same tail with a program (docs/designs/npu-encoder-loader.md). */
+    if (!nbg_model_operation(m, number, &op)) return 0;
+    const int engine = op.kind == 2 || (directory && (op.kind == 8 || op.kind == 7 || op.kind == 6));
+    if (!engine ||
         op.index != number - 1 ||
         op.state != number || op.first_patch != first || !op.patch_count ||
         op.patch_count > POINTER_COUNT + 1 || op.auxiliary[0] ||
         !nbg_model_table(m, NBG_LOAD_STATES_TABLE, op.state, &span)) return 0;
     int last = number == plan->nn_operations;
-    /* The 24-byte state sets word 5 and runs straight into the next
-     * operation. The 32-byte state clears it and appends a second pair; the
-     * compiler emits it for the last operation and, in the directory format,
-     * for every operation of graphs that contain transpose steps. */
-    if (span.bytes != 32 && (last || span.bytes != 24)) return 0;
-    if (span.bytes == 32 && !last && !directory) return 0;
+    /* Whether the descriptor has a second input: both of its pointer fields are patched. */
+    int second = 0;
+    for (uint32_t i = 0; i < op.patch_count; ++i) {
+        struct nbg_patch q;
+        if (!nbg_model_patch(m, first + i, &q)) return 0;
+        if (q.kind == 1 && q.destination == 136) second = 1;
+    }
+    uint32_t tail = 0, command_destination = 20;
+    if (op.kind == 6) {
+        /* Program: 0x08010e5b and its operand, then alternating 0x08010e5c and 0x08010e5d words,
+         * then the 32-byte tail. The pair words are the program; no other register is written. */
+        if (!directory || span.bytes < 8 + 16 + 32 || span.bytes > MAX_STATE_BYTES || (span.bytes & 15) != 8 ||
+            word(span.data) != 0x08010e5b) return 0;
+        tail = (uint32_t)span.bytes - 32;
+        for (uint32_t at = 8; at < tail; at += 8)
+            if (word(span.data + at) != (((at - 8) & 8) ? 0x08010e5d : 0x08010e5c)) return 0;
+        if (((tail - 8) / 8) & 1) return 0; /* complete pairs */
+        command_destination = tail + 20;
+    } else {
+        /* The 24-byte state sets word 5 and runs straight into the next operation. The 32-byte state
+         * clears it and appends a second pair; the compiler emits it for the last operation and, in
+         * the directory format, for every operation of graphs that contain transpose steps. */
+        if (span.bytes != 32 && (last || span.bytes != 24)) return 0;
+        if (span.bytes == 32 && !last && !directory) return 0;
+    }
     image->command_bytes = (uint32_t)span.bytes;
-    for (unsigned i = 0; i < span.bytes / 4; ++i) {
-        uint32_t expected = i == 5 && span.bytes == 32 ? 0 : state[i];
+    const unsigned tail_words = op.kind == 6 ? 8 : (unsigned)span.bytes / 4;
+    for (unsigned i = 0; i < tail_words; ++i) {
+        uint32_t expected = i == 5 && (span.bytes == 32 || op.kind == 6) ? 0 : state[i];
         // The observed directory profile changes bit 17 of this state value.
         // Its hardware meaning remains unresolved; require the captured bytes.
-        if (i == 1 && m->header.version == NBG_MODEL_DIRECTORY_VERSION) expected = 0x0493e040;
-        if (word(span.data + i * 4) != expected) return 0;
+        // The 16-bit graphs set bit 21 and a second input sets bit 12 (observed, not documented).
+        if (i == 1 && directory) {
+            const uint32_t seen = word(span.data + tail + 4);
+            if (seen != 0x0493e040 && seen != 0x04b3e040 && seen != 0x04b3f040) return 0;
+            if (!!(seen & 0x1000) != second) return 0;
+            expected = seen;
+        }
+        if (word(span.data + tail + i * 4) != expected) return 0;
     }
     memcpy(image->command, span.data, span.bytes);
     memcpy(image->nn, m->data + m->sections[NBG_NN].offset + op.index * 192, 192);
@@ -197,20 +256,31 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
         struct nbg_relocation r = {0};
         if (p.kind == 0) {
             if (command_count || p.source || p.index || p.source_offset ||
-                p.destination != 20 || p.transformed != 1) return 0;
+                p.destination != command_destination || p.transformed != 1) return 0;
             command = (struct nbg_relocation){plan->buffers[NBG_ALLOC_NN].payload_bytes,
                 192, buffers ? buffers[NBG_ALLOC_NN].device : 0x1000,
-                op.index * 192, 20, NBG_ADDRESS_FLAGS6};
+                op.index * 192, command_destination, NBG_ADDRESS_FLAGS6};
             ++command_count;
         } else {
             if (p.kind != 1 || nn_count == POINTER_COUNT) return 0;
             unsigned field;
             switch (p.destination) {
             case 20:
-                if (op.kind != 2 || p.source != 5 || p.transformed != 1) return 0;
+                /* Weights (kind 2), the activation table (kind 7) or the stream-processor constants (kind 6). */
+                if ((op.kind != 2 && op.kind != 7 && op.kind != 6) || p.source != 5 || p.transformed != 1) return 0;
                 field = WEIGHTS; break;
+            case 136: case 140:
+                /* Second input and its end: observed only in VIP SRAM (source 8), 17 kind 2 and 1 kind 6
+                 * operations of the layer graph; the end is an address shifted by 6 as for the first input. */
+                /* A graph input (source 1) or a dynamic input (source 6, kind 6) has no end field; an
+                 * input in VIP SRAM (source 8) has one. */
+                if (p.destination == 136 ? (p.source != 8 && p.source != 1 && !(p.source == 6 && op.kind == 6)) :
+                    p.source != 8) return 0;
+                if (p.transformed != (p.destination == 140)) return 0;
+                field = p.destination == 136 ? INPUT2 : INPUT2_END; break;
             case 24:
-                if ((p.source != 1 && p.source != 3 && p.source != 8) || p.transformed) return 0;
+                if ((p.source != 1 && p.source != 3 && p.source != 6 && p.source != 8) || p.transformed) return 0;
+                if (p.source == 6 && op.kind != 6) return 0;
                 field = INPUT; break;
             case 28:
                 if ((p.source != 2 && p.source != 3 && p.source != 8) || p.transformed) return 0;
@@ -247,6 +317,18 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
                 r.source_bytes = span.bytes;
                 break;
             }
+            case 6: {
+                /* Dynamic input: one table record of the model's dynamic-input section, copied into
+                 * the last allocation. The record bounds the reference. */
+                if (!plan->dynamic || p.index < 0 ||
+                    !nbg_model_table(m, NBG_DYNA_IO_TABLE, (uint32_t)p.index, &span)) return 0;
+                uint64_t offset = (uint64_t)(span.data - (m->data + m->sections[NBG_DYNA_IO].offset));
+                uint64_t base = buffers ? buffers[nbg_layout_dynamic_index(plan)].device : 0x1000;
+                if (base + offset > UINT32_MAX) return 0;
+                r.source_device = (uint32_t)(base + offset);
+                r.source_bytes = span.bytes;
+                break;
+            }
             case 8:
                 if (p.index != -1) return 0;
                 r.source_device = 0x400000;
@@ -262,6 +344,17 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
             nn[nn_count++] = r;
         }
     }
+    /* A second input has both fields, and its end lies after its start in the same region. The ring
+     * size word of the second input is not identified, so no size is checked (docs/designs/
+     * npu-encoder-loader.md, limit 3). */
+    if (second != (slot[INPUT2] != UINT32_MAX)) return 0;
+    if (second) {
+        const int sram = source[slot[INPUT2]] == 8;
+        if (sram != (slot[INPUT2_END] != UINT32_MAX)) return 0;
+        if (sram && nn[slot[INPUT2_END]].source_offset <= nn[slot[INPUT2]].source_offset) return 0;
+    }
+    if ((slot[WEIGHTS] == UINT32_MAX && word(image->nn + 20) >= 0x1000) ||
+        (slot[INPUT2] == UINT32_MAX && word(image->nn + 136) >= 0x1000)) return 0;
     if (!ring(image->nn, nn, slot, source, INPUT, INPUT_END, 20) ||
         !ring(image->nn, nn, slot, source, OUTPUT, OUTPUT_END, 18) ||
         command_count != 1 || !nbg_relocate(image->command, image->command_bytes, &command, 1) ||
@@ -336,8 +429,12 @@ int nbg_assemble_layout(const struct nbg_model *m, const struct nbg_assembly_buf
      * metadata make the repeated operation construction infallible here. */
     for (unsigned i = 0; i < count; ++i)
         if (b[i].bytes) memset(b[i].cpu, 0, b[i].bytes);
-    memcpy(b[NBG_ALLOC_COEFF].cpu, m->data + m->sections[NBG_COEFF].offset,
-           p.buffers[NBG_ALLOC_COEFF].payload_bytes);
+    if (p.buffers[NBG_ALLOC_COEFF].payload_bytes)
+        memcpy(b[NBG_ALLOC_COEFF].cpu, m->data + m->sections[NBG_COEFF].offset,
+               p.buffers[NBG_ALLOC_COEFF].payload_bytes);
+    if (p.dynamic)
+        memcpy(b[nbg_layout_dynamic_index(&p)].cpu, m->data + m->sections[NBG_DYNA_IO].offset,
+               p.buffers[nbg_layout_dynamic_index(&p)].payload_bytes);
     unsigned char *commands = b[NBG_ALLOC_COMMAND].cpu;
     for (size_t i = 0; i < b[NBG_ALLOC_COMMAND].bytes; i += 8) put(commands + i, 0x10000000);
     words(commands, prefix, sizeof(prefix) / 4);
