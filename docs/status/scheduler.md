@@ -173,7 +173,7 @@ Mimus. The instrumented sweep images showed the fork 6.8% faster (127.2 against 
 Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-35 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+36 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -212,4 +212,5 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793605129875013399-cf0da02e` | 2026-11-02 | 3-3 | `5863e0cde9bb` | returned | passed | run_total 86.704 s, control_latency_max_4khz 3 us |
 | `1793605217849580518-3247bc18` | 2026-11-02 | 3-3 | `1f8c64639e22` | returned | passed | run_total 106.288 s, recognition_time 109.629 ms |
 | `1793605330258102733-1624632e` | 2026-11-02 | 3-3 | `e6995c5f33fc` | returned | passed | run_total 79.197 s, recognition_time 110.178 ms |
+| `1793608348858278119-8f8e4282` | 2026-11-02 | 3-3 | `0e7b99d86e01` | watchdog-reset | failed | run_total 94.975 s, panic_line 1846 |
 <!-- evidence-table:end -->
