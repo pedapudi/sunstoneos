@@ -829,6 +829,15 @@ service does the same for an MMU exception during a SUBMIT in runtime mode (`run
 The faulted job's output is not valid and is not used. A controller fault of any other kind, or a recovery that
 fails, still retains the controller and the image ends at the watchdog.
 
+**The cancel handshake against the vendor's.** The register sequence is the same step by step: read `+0x3a8`, write it
+with bit 3 set (`vip_drv_hardware.c:1136-1147`), wait 100 us, read it again, write it with bit 3 cleared
+(`:1161-1172`), then wait 100 us and read `+0x3a8` up to 200 times for bit 4, the completion bit (`:1174-1183`); this
+repository's `a733_npu_recover` does exactly that, and its job cancel (`a733_npu_cancel`, `a733_npu_advance`) tests the
+same bit 4 with the same pulse. The trigger, the bit and the poll count therefore match. On the board the bit never
+appeared in 200 polls after an MMU exception (five faults, 3-1). That is recorded as the behaviour of this NPU after an
+MMU exception, not as a wrong trigger; the bounded 20 ms wait stays, the reset follows either way, and the mark
+"cancel completion seen" tells whether a later run differs.
+
 **Reply-path marks.** The failure record of a missing reply and the fault record of the application carry marks, one bit
 for each step: captured (0), progress pass returned (1), settle step took the fault (2), finished hook returned (3),
 reply posted to the client queue (4), cancel completion seen (5), reset and initial command started (6), NPU ready again
