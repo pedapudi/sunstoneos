@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Host side of storage-write-test: the second input (the mode) and the decoder of its 512-byte result.
 
-Modes: 0 creates the 512 MiB region test file (no read-back; a 40 s guard stops the write, closes cleanly and reports status 11);
+Modes: 0 creates the 512 MiB region test file (no read-back; a guard six seconds before the session deadline stops the write, closes cleanly and reports status 11);
 3 reads the whole file back against the stream; 1 is the interruption test, first lifetime (the application
 stops reporting progress after `cut_bytes` so the watchdog resets the board mid-flush); 2 is its second lifetime (mount,
 recover, read back what the volume holds)."""

@@ -5,6 +5,7 @@
 #include "app_large.h"
 #include "os_space.h"
 #include "app_region.h"
+#include "sunstone_notify.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -130,7 +131,9 @@ const uint64_t *os_large_tag(void) { return admitted ? &owner_ttbr : 0; }
 
 void ss_large_attach(void *task)
 {
-    if (admitted && task) vTaskSetApplicationTaskTag((TaskHandle_t)task, (TaskHookFunction_t)(uintptr_t)&owner_ttbr);
+    /* Every task of the application carries the tag, with or without a space: it tells the runtime that index 0 of
+     * the task is the application's, and the task-switch hook acts on it only once a space is installed. */
+    if (task) vTaskSetApplicationTaskTag((TaskHandle_t)task, (TaskHookFunction_t)(uintptr_t)&owner_ttbr);
 }
 
 static unsigned state_of(unsigned i) { return __atomic_load_n(&slots[i].state, __ATOMIC_ACQUIRE); }
@@ -164,7 +167,7 @@ void os_large_finish(unsigned index, unsigned state, uint32_t error)
     for (unsigned i = 0; i < os_large_waiter_capacity; ++i)
         if (os_large_waiter_task[i] && (os_large_waiter_region[i] & ~WAITER_GAVE) == index) {
             os_large_waiter_region[i] |= WAITER_GAVE;
-            xTaskNotifyGive(os_large_waiter_task[i]);
+            xTaskNotifyGiveIndexed(os_large_waiter_task[i], SS_NOTIFY_DEADLINE);
         }
     taskEXIT_CRITICAL();
 }
@@ -187,12 +190,12 @@ int ss_large_wait(unsigned index, uint64_t timeout_us)
         if (state == SS_LARGE_FAILED) { result = -1; break; }
         TickType_t used = xTaskGetTickCount() - start;
         if (used >= ticks) break;
-        (void)ulTaskNotifyTake(pdTRUE, ticks - used);
+        (void)ulTaskNotifyTakeIndexed(SS_NOTIFY_DEADLINE, pdTRUE, ticks - used);
     }
     taskENTER_CRITICAL();
     os_large_waiter_task[entry] = 0;
     /* A notification the loader gave after the wait returned would end the application's next wait on index 0. */
-    if (os_large_waiter_region[entry] & WAITER_GAVE) (void)ulTaskNotifyTake(pdTRUE, 0);
+    if (os_large_waiter_region[entry] & WAITER_GAVE) (void)ulTaskNotifyTakeIndexed(SS_NOTIFY_DEADLINE, pdTRUE, 0);
     taskEXIT_CRITICAL();
     return result;
 }

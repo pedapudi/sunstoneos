@@ -22,6 +22,7 @@ def module(name, path):
 
 
 manifest_tool = module('ss_host_manifest', ROOT / 'tools/sunstone-manifest.py')
+session_lifetime = module('ss_host_session_lifetime', ROOT / 'tools/session_lifetime.py')
 PREFIX_BYTES, MAX_BYTES = 592, 4096
 SESSION_MAGIC, SESSION_VERSION = 0x324e4f4953534553, 1
 BIND_SID = 1
@@ -362,7 +363,7 @@ def watchdog_marker(image):
     require(section['sh_type'] == 'SHT_PROGBITS' and len(data) == 40, 'Watchdog marker has no image bytes.')
     magic, version, mode, rtc, seconds = struct.unpack('<5Q', data)
     require((magic, version, rtc) == (WATCHDOG_MARKER, WATCHDOG_VERSION, CRUMB_RTC) and mode & 0xff0f == 1 and
-            1 <= mode >> 4 <= 11 and 1 <= seconds <= 600, 'Watchdog marker differs.')
+            1 <= mode >> 4 <= 11 and 1 <= seconds <= session_lifetime.MAX_SECONDS, 'Watchdog marker differs.')
     return {'mode': mode, 'session_seconds': seconds}
 
 

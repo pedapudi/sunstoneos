@@ -123,10 +123,30 @@ def check(image, manifest=None, application=None):
     if application is None:
         application = application_manifest(elf)['name'] if sections and sections[0][5] else 'none'
     names_defined = {symbol['name'] for symbol in defined}
+    watchdog_seconds = None
+    if application != 'none' and 'os_cpu_return_watchdog' in names_defined:
+        # The EL3 admission decodes the session with apps/os/session.c, which refuses a manifest whose run deadline
+        # ends later than the lifetime minus return_reserve_us; the board then stops before the application runs
+        # (a733_smp_stop(1, A733_REFUSAL(SESSION_DECODE, ...))). The image's lifetime is the compiled
+        # A733_BOARD_SUPERVISED_SECONDS of its watchdog marker; the build derives it from the same manifest
+        # (tools/session_lifetime.py), and a marker that differs from that derivation is a stale or mixed build.
+        lifetime = module('session_lifetime', Path(__file__).resolve().parents[1] / 'tools/session_lifetime.py')
+        marker = struct.unpack_from('<5Q', read('os_cpu_return_watchdog'))
+        seconds = marker[4]
+        manifest_fields = application_manifest(elf)
+        try:
+            lifetime.check(manifest_fields['run_deadline_us'], manifest_fields['return_reserve_us'], seconds)
+        except lifetime.LifetimeError as error:
+            raise AssertionError('session lifetime (%s): %s' % (error.term, error))
+        derived = lifetime.derive({'run_deadline_us': manifest_fields['run_deadline_us'],
+                                   'return_reserve_us': manifest_fields['return_reserve_us']})
+        assert seconds == derived, \
+            'session lifetime: the watchdog marker says %d s but the manifest derives %d s; rebuild the image' % (seconds, derived)
+        watchdog_seconds = seconds
     features = {'audio': 'os_audio_stream_open', 'radio': 'os_radio_start', 'headset': 'os_headset_start',
                 'npu': 'os_npu_start', 'gpu_queue': 'os_gpu_queue_start',
                 'cpu_clock': 'os_cpu_clock_step', 'perf_modes': 'os_perf_boot_mode'}
-    result = {'interrupts': routes, 'applications': starts, 'application': application,
+    result = {'interrupts': routes, 'applications': starts, 'application': application, 'watchdog_seconds': watchdog_seconds,
               **{name: symbol in names_defined for name, symbol in features.items()},
               'build_id': read('a733_smp_build_id').hex(),
               'image_sha256': hashlib.sha256(image.read_bytes()).hexdigest()}
@@ -264,19 +284,29 @@ def main():
     parser.add_argument('--application-library', type=Path, action='append', default=[])
     parser.add_argument('--runtime-library', type=Path, action='append', default=[])
     parser.add_argument('--nm', default='nm')
+    parser.add_argument('--session-seconds', type=int, help='the session lifetime the build compiled (A733_BOARD_SUPERVISED_SECONDS)')
     args = parser.parse_args()
     try:
         result = check(args.image, args.manifest, args.application)
         assert result['build_id'] == args.build_id.read_text().strip(), 'linked build identity differs from generated identity'
         if args.lifetime in ('supervised', 'return') and result.get('manifest'):
-            # OS session admission (apps/os/session.c) refuses a manifest whose run deadline plus return reserve exceeds the
-            # supervised session; the EL3 monitor then stops the board before the image runs.
-            header = (Path(__file__).resolve().parents[1] / 'include/a733_board_application.h').read_text()
-            seconds = int(re.search(r'#define A733_BOARD_SUPERVISED_SECONDS (\d+)u', header).group(1))
-            lifetime_us, manifest = seconds * 1000000, result['manifest']
-            assert manifest['return_reserve_us'] < lifetime_us and manifest['run_deadline_us'] <= lifetime_us - manifest['return_reserve_us'], \
-                (f"manifest run_us {manifest['run_deadline_us']} plus return_reserve_us {manifest['return_reserve_us']} exceeds the "
-                 f'{seconds} s supervised session; session admission would refuse it')
+            # OS session admission (apps/os/session.c) refuses a manifest whose run deadline ends later than the session
+            # lifetime minus the return reserve; the EL3 monitor then stops the board before the image runs. The build passes
+            # the lifetime it compiled (derived from the manifest by tools/session_lifetime.py); check() compares a returning
+            # image's own watchdog marker with it.
+            lifetime = module('session_lifetime', Path(__file__).resolve().parents[1] / 'tools/session_lifetime.py')
+            manifest = result['manifest']
+            seconds = args.session_seconds
+            if seconds is None:
+                header = (Path(__file__).resolve().parents[1] / 'include/a733_board_application.h').read_text()
+                seconds = int(re.search(r'#define A733_BOARD_SUPERVISED_SECONDS (\d+)u', header).group(1))
+            try:
+                lifetime.check(manifest['run_deadline_us'], manifest['return_reserve_us'], seconds)
+            except lifetime.LifetimeError as error:
+                raise AssertionError('session lifetime (%s): %s' % (error.term, error))
+            if result.get('watchdog_seconds') is not None:
+                assert result['watchdog_seconds'] == seconds, \
+                    'session lifetime: the watchdog marker says %d s but the build compiled %d s' % (result['watchdog_seconds'], seconds)
         owner = subprocess.run([args.nm, '--defined-only', str(args.image)], capture_output=True, text=True).stdout
         if ' ss_storage_enable' in owner:
             # The SD owner reads the CCU and drives SMHC0. The application's EL0 task creates it on first use, so the scheduler

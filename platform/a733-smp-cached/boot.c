@@ -47,6 +47,12 @@ static int power_write(void *ctx,uintptr_t a,uint32_t value)
 static int power_barrier(void *ctx) {(void)ctx;if(!boot_state())return 0;barrier();return 1;}
 static int now_us(void *ctx,uint64_t *out)
 {(void)ctx;if(!out || !boot_state())return 0;*out=a733_smp_counter()/24;return 1;}
+/* Name the admission stop. A refused contract stops with a733_smp_stop(1, 1); every stop below passes its detail through
+ * a733_smp_refusal_detail, which turns that one into the refused term of include/a733_admission_refusal.h
+ * (0x100 | term << 4 | sub). An image whose admission records no refusal keeps its detail. The macro follows the
+ * definition of a733_smp_stop so the function itself, and its callers' symbol, are unchanged. */
+__attribute__((weak)) uint64_t a733_smp_refusal_detail(unsigned status,uint64_t detail){(void)status;return detail;}
+#define a733_smp_stop(status,detail) a733_smp_stop((status),a733_smp_refusal_detail((status),(detail)))
 void a733_cached_boot_check(void)
 {
     static uint64_t last __attribute__((section(".bss.a733_smp_monitor")));

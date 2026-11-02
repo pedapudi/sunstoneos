@@ -64,7 +64,7 @@ static uint64_t fresh_until(void)
     return until+1000000;
 }
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
-/* The supervised lifetime is 60 s. One owner appends at most 8 rows/s plus
+/* The buffer holds the image's lifetime (tools/session_lifetime.py). One owner appends at most 8 rows/s plus
  * an initial and terminal row. Readers acquire the count; published rows
  * never change. No allocation, I/O, wait or additional THS read occurs here. */
 #define THERMAL_RECORDS (A733_BOARD_SUPERVISED_SECONDS*10u+2u)

@@ -42,6 +42,35 @@ def header():
     return defines, stages
 
 
+REFUSAL_HEADER = ROOT / 'include/a733_admission_refusal.h'
+
+
+def refusal_terms():
+    """({term number: name}, {term number: {sub number: name}}) from include/a733_admission_refusal.h.
+
+    EL3 admission stops with a733_smp_stop(1, 0x100 | term << 4 | sub); the image and this decoder share the table."""
+    text = REFUSAL_HEADER.read_text()
+    terms = {int(m[2]): m[1].lower() for m in re.finditer(r'A733_REFUSAL_([A-Z_]+) = (\d+),', text)}
+    family = {'TIMING': 5, 'DECODE': 6, 'BIND': 7, 'STALE': 8, 'MAGIC': 2, 'FIELD': 9}
+    subs = {number: {} for number in terms}
+    for m in re.finditer(r'A733_(TIMING|DECODE|BIND|STALE|MAGIC|FIELD)_([A-Z_]+) = (\d+)', text):
+        subs[family[m[1]]][int(m[3])] = m[2].lower()
+    return terms, subs
+
+
+def refusal_detail(detail):
+    """Name an EL3 admission stop detail: {'detail', 'term', 'sub', 'meaning'}, or None for another stop."""
+    if not 0x100 <= detail <= 0x1ff:
+        return None
+    terms, subs = refusal_terms()
+    term, sub = detail >> 4 & 15, detail & 15
+    named = {'detail': hex(detail), 'term': terms.get(term, 'unknown term %d' % term)}
+    if sub:
+        named['sub'] = subs.get(term, {}).get(sub, 'unknown sub-term %d' % sub)
+    named['meaning'] = named['term'] + (' (%s)' % named['sub'] if 'sub' in named else '')
+    return named
+
+
 def interval(mode):
     return INTERVALS[(mode >> 4) & 15]
 
@@ -283,6 +312,14 @@ def decode(words, epoch, elf=None):
             v = result['last']['value']
             result['last']['status'] = v >> 12 if v >> 12 < 15 else '15 or more'
             result['last']['detail'] = hex(v & 0xfff)
+            if v >> 12 == 1:
+                legacy = {1: 'unnamed admission refusal (an image built before the refusal names)',
+                          2: 'watchdog or reset-redirect state differs from the admitted profile'}
+                named = refusal_detail(v & 0xfff)
+                if named:
+                    result['last']['admission_refusal'] = named
+                elif v & 0xfff in legacy:
+                    result['last']['admission_refusal'] = {'detail': hex(v & 0xfff), 'meaning': legacy[v & 0xfff]}
     if fault >> 24 == defines['FAULT_MAGIC'] and (fault >> 16) & 15 == FAIL_LEVEL:
         result['board_failure'] = board_failure(words, defines, elf)
     elif fault >> 24 == defines['FAULT_MAGIC']:
@@ -303,6 +340,8 @@ def decode(words, epoch, elf=None):
         parts.append(f"last stage {r['name']} ({r['stage']:#06x}) value {r['value']:#x} on core {r['core']}")
     else:
         parts.append('tagged at EL3 entry; no later stage')
+    if result.get('last', {}).get('admission_refusal'):
+        parts.append('EL3 admission refused the session: ' + result['last']['admission_refusal']['meaning'])
     if result.get('last', {}).get('clock_return'):
         r = result['last']['clock_return']
         parts.append('CPU clock return ' + r['step'] + ', owner %s, cluster %d, driver state %d' %
