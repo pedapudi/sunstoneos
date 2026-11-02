@@ -74,4 +74,8 @@ _Noreturn void platform_panic(const char *file, unsigned line);
 #define INCLUDE_vTaskDelay 1
 #define INCLUDE_vTaskSuspend 1
 
+/* Measurement: the kernel's list integrity values, checked on every list operation (needs -DSUNSTONE_LIST_CHECK=1). */
+#ifdef SUNSTONE_LIST_CHECK
+#define configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES 1
+#endif
 #endif
