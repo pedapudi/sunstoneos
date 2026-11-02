@@ -39,7 +39,8 @@ def render(manifest, image=None, *, kind=None, expected=None, first_failure=None
     command = [str(Path.home()/'.cache/sunstoneos/venv/bin/python3'), '-B', str(ROOT/'tools/board.py'),
                'submit', str(image), '--kind', kind, '--port', launch.get('port', 'PORT'),
                '--worker', 'image-builder', '--hypothesis', launch.get('hypothesis', expected),
-               '--expect', launch.get('expect', 'EXPECTED_OUTPUT')]
+               '--expect', launch.get('expect', 'EXPECTED_OUTPUT'),
+               '--reference', launch.get('reference', 'docs/SUBSYSTEM.md#ANCHOR')]
     if launch.get('template'):
         command += ['--template', manifest_path(launch['template'])]
     for path in launch.get('inputs', []):
