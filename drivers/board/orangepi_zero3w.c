@@ -46,8 +46,12 @@ static const struct sunstone_usb_port usb[] = {
      .sda_bank=A733_PIN_L,.sda_pin=13,.i2c_function=3,
      .supplies={A733_RAIL_DCDC1,A733_RAIL_DC1SW2},.supply_uv=3300000}
 };
+const struct ss_cpu_policy sunstone_orangepi_zero3w_cpu_policy = {
+    .admitted=0xff,.reserved=0,.service=0xff,.application=0xff,.irq=0xff
+};
 static const struct sunstone_board_description board = {
     .name="Orange Pi Zero 3W V1.2",
+    .cpu_policy=&sunstone_orangepi_zero3w_cpu_policy,
     .camera=cameras,.camera_count=sizeof(cameras)/sizeof(cameras[0]),
     .camera_sensors=sensors,.camera_sensor_count=sizeof(sensors)/sizeof(sensors[0]),
     .display_ports=displays,.display_port_count=sizeof(displays)/sizeof(displays[0]),

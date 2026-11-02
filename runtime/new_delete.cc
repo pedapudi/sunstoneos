@@ -3,11 +3,14 @@
 #include <malloc.h>
 #include <new>
 
+/* Console output is optional, as in the C syscall adapter. */
+extern "C" void platform_puts(const char *text) __attribute__((weak));
+
 namespace {
 void *Required(void *memory)
 {
     if (!memory) {
-        platform_puts("FAIL C++ allocation exhausted\n");
+        if (platform_puts) platform_puts("FAIL C++ allocation exhausted\n");
         platform_exit(1);
     }
     return memory;
