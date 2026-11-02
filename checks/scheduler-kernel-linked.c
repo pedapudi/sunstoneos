@@ -5,6 +5,21 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+static size_t fixture_allocations, fixture_frees, fixture_live;
+static long fixture_fail_after = -1;
+void *pvPortMalloc(size_t size)
+{
+    if (fixture_fail_after == 0) return NULL;
+    if (fixture_fail_after > 0) --fixture_fail_after;
+    void *result = malloc(size);
+    if (result) { ++fixture_allocations; ++fixture_live; }
+    return result;
+}
+void vPortFree(void *memory)
+{
+    if (memory) { assert(fixture_live); --fixture_live; ++fixture_frees; }
+    free(memory);
+}
 static unsigned fixture_cpu, fixture_sgi[configNUMBER_OF_CORES], fixture_locks;
 static unsigned fixture_cleanup, fixture_task_masks, fixture_isr_masks;
 static UBaseType_t fixture_api_mask[configNUMBER_OF_CORES];
@@ -237,9 +252,77 @@ static int fixture_retirement_pin(void)
     puts("linked FreeRTOS retirement: a retained caller pin emits no repeated owner hints; final release completes retirement");
     return 0;
 }
+static void fixture_dynamic_delete(TaskHandle_t task)
+{
+    fixture_cpu = 0;
+    vTaskDelete(task);
+    for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
+        fixture_cpu = c;
+        ssKernelControlDrain();
+    }
+    fixture_cpu = 0;
+}
+static int fixture_dynamic(void)
+{
+    TaskHandle_t handle;
+    for (long allocation = 0; allocation < 2; ++allocation) {
+        fixture_fail_after = allocation;
+        handle = (TaskHandle_t)(uintptr_t)1;
+        assert(xTaskCreate(fixture_entry, "alloc-fail", configMINIMAL_STACK_SIZE,
+            NULL, 1, &handle) == errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY);
+        assert(!handle && !fixture_live && !fixture_cleanup && !fixture_tls_deleted);
+        fixture_fail_after = allocation;
+        handle = (TaskHandle_t)(uintptr_t)1;
+        assert(xTaskCreateAffinitySet(fixture_entry, "alloc-fail", configMINIMAL_STACK_SIZE,
+            NULL, 1, 1, &handle) == errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY);
+        assert(!handle && !fixture_live && !fixture_cleanup && !fixture_tls_deleted);
+    }
+    fixture_fail_after = -1;
+    handle = (TaskHandle_t)(uintptr_t)1;
+    assert(xTaskCreateAffinitySet(fixture_entry, "invalid", configMINIMAL_STACK_SIZE,
+        NULL, 1, 0, &handle) == errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY);
+    assert(!handle && !fixture_live && fixture_cleanup == 1 && fixture_tls_deleted == 1);
+    assert(xTaskCreate(fixture_entry, "ordinary", configMINIMAL_STACK_SIZE,
+        NULL, 1, &handle) == pdPASS && handle);
+    assert(((TCB_t *)handle)->ucStaticallyAllocated == tskDYNAMICALLY_ALLOCATED_STACK_AND_TCB);
+    assert(fixture_live == 2);
+    fixture_dynamic_delete(handle);
+    assert(!fixture_live && !uxTaskGetNumberOfTasks());
+    assert(xTaskCreateAffinitySet(fixture_entry, "nohandle", configMINIMAL_STACK_SIZE,
+        NULL, 1, 1, NULL) == pdPASS);
+    handle = xTaskGetHandle("nohandle");
+    assert(handle);
+    fixture_dynamic_delete(handle);
+    TaskHandle_t tasks[SS_OWNER_SLOTS];
+    for (unsigned n = 0; n < SS_OWNER_SLOTS; ++n)
+        assert(xTaskCreateAffinitySet(fixture_entry, "dynamic", configMINIMAL_STACK_SIZE,
+            NULL, 1, 1, &tasks[n]) == pdPASS);
+    assert(uxTaskGetNumberOfTasks() == SS_OWNER_SLOTS);
+    unsigned cleaned = fixture_cleanup, deleted = fixture_tls_deleted;
+    handle = (TaskHandle_t)(uintptr_t)1;
+    assert(xTaskCreate(fixture_entry, "full", configMINIMAL_STACK_SIZE,
+        NULL, 1, &handle) == errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY);
+    assert(!handle);
+    handle = (TaskHandle_t)(uintptr_t)1;
+    assert(xTaskCreateAffinitySet(fixture_entry, "full", configMINIMAL_STACK_SIZE,
+        NULL, 1, 1, &handle) == errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY);
+    assert(!handle && fixture_live == 2 * SS_OWNER_SLOTS);
+    assert(fixture_cleanup == cleaned + 2 && fixture_tls_deleted == deleted + 2);
+    unsigned slot = ((TCB_t *)tasks[0])->uxOwnerSlot;
+    fixture_dynamic_delete(tasks[0]);
+    assert(xTaskCreateAffinitySet(fixture_entry, "reuse", configMINIMAL_STACK_SIZE,
+        NULL, 1, 1, &tasks[0]) == pdPASS);
+    assert(((TCB_t *)tasks[0])->uxOwnerSlot == slot);
+    for (unsigned n = 0; n < SS_OWNER_SLOTS; ++n) fixture_dynamic_delete(tasks[n]);
+    assert(!uxTaskGetNumberOfTasks() && !fixture_live);
+    assert(fixture_allocations == fixture_frees);
+    puts("linked FreeRTOS dynamic creation: allocation failures, invalid affinity, admission exhaustion, slot reuse and deletion balance stack/TCB allocations and TLS/port cleanup");
+    return 0;
+}
 int main(int argc, char **argv)
 {
     (void)argv;
+    if (argc > 1 && !strcmp(argv[1], "dynamic")) return fixture_dynamic();
     if (argc > 1 && !strcmp(argv[1], "retirement")) return fixture_retirement_pin();
     if (argc > 1 && !strcmp(argv[1], "admission")) return fixture_admission();
     if (argc > 1 && !strcmp(argv[1], "slice")) return fixture_slices();

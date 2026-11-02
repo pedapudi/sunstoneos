@@ -13,9 +13,9 @@
 
 /* The private fork rejects optional configurations whose API branches have
  * not been converted. No enabled public API may fall through to legacy lists.
- * Tickless scheduling belongs to series D. The current OS uses static tasks
- * and the non-MPU AArch64 port. */
-#if ( configSUPPORT_DYNAMIC_ALLOCATION == 1 ) || ( portUSING_MPU_WRAPPERS != 0 ) || \
+ * Tickless scheduling belongs to series D. Restricted creation requires MPU
+ * conversion; ordinary static and dynamic tasks use the native port ABI. */
+#if ( portUSING_MPU_WRAPPERS != 0 ) || \
     ( configUSE_TICKLESS_IDLE != 0 ) || ( configUSE_STATS_FORMATTING_FUNCTIONS > 0 )
 #error "partitioned scheduler: optional API configuration is not converted"
 #endif
@@ -268,15 +268,12 @@ static void ssKernelBootstrap(void)
     }
 }
 
-/* Static construction already initialized TLS and the port stack. Failed
- * registry admission must unwind those resources without retiring a slot. */
+/* Upstream construction initializes TLS, allocation ownership and the port
+ * frame. Its destructor also handles admission failure before slot ownership. */
 static bool ssKernelAdmitTask(TCB_t *task)
 {
     if (ssKernelAddTask(task)) return true;
-    portCLEAN_UP_TCB(task);
-#if ( configUSE_C_RUNTIME_TLS_SUPPORT == 1 )
-    configDEINIT_TLS_BLOCK(task->xTLSBlock);
-#endif
+    prvDeleteTCB(task);
     return false;
 }
 static void ssKernelControlDrain(void);
