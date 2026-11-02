@@ -287,6 +287,7 @@ int os_application_deadline(void)
     uint64_t limit=atomic_load_explicit(&finish_by,memory_order_acquire);
     return !limit||os_application_finished()||a733_smp_counter()/24<limit;
 }
+int os_large_prepare(void);
 int os_application_prepare(void)
 {
     const struct os_session *s=os_session_admitted();const struct ss_manifest *m=ss_application.manifest;
@@ -332,6 +333,8 @@ int os_application_prepare(void)
         if(grant.capture_frames>m->audio.max_frames)return 0;
     }
 #endif
+    /* Large regions come from the ledger before any task exists; a refusal stops the application. */
+    if(!os_large_prepare())return 0;
 #ifndef SUNSTONE_BOARD_RESIDENT
     /* board.session holds the contract-derived absolute deadline. The
      * sealed session returned by os_session_admitted retains zero times. */

@@ -21,7 +21,7 @@ def main():
     commands = [
         ['clang-21', '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
          '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I' + str(ROOT / 'include'),
-         str(ROOT / 'checks/app-region.c'), str(ROOT / 'kernel/appmem/app_region.c'), '-o', str(binary)],
+         str(ROOT / 'checks/app-region.c'), str(ROOT / 'kernel/appmem/app_region.c'), str(ROOT / 'kernel/appmem/large_admit.c'), '-o', str(binary)],
         [str(binary)],
     ]
     results = []

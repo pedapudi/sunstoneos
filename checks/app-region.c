@@ -5,6 +5,7 @@
  * clear, no hierarchical table attributes). The model refuses any descriptor
  * bit it does not model. */
 #include "app_region.h"
+#include "app_large.h"
 #include "a733_device_memory_layout.h"
 #include <assert.h>
 #include <stdio.h>
@@ -144,6 +145,77 @@ static unsigned count_leaves(uint64_t ttbr0, uint64_t base, uint64_t bytes, uint
         va = (va & ~(r.leaf - 1)) + r.leaf;
     }
     return n;
+}
+
+static struct ss_large_region record(unsigned index, uint64_t bytes, const char *path)
+{
+    struct ss_large_region r = {.index = index, .bytes = bytes, .source_bytes = bytes};
+    memset(r.sha256, 0x5a, 32);
+    strncpy(r.path, path, sizeof r.path);
+    return r;
+}
+
+/* Large-region records: validation and all-or-nothing admission through the ledger. */
+static void large_cases(void)
+{
+    struct app_region_range all[] = {{APP_REGION_BASE, APP_REGION_LIMIT - APP_REGION_BASE}};
+    struct app_region_ledger l;
+    struct large_slot slots[SS_LARGE_REGIONS];
+    struct ss_large_region ok[2] = {record(0, GIB, "/sunstone-test/sunstone-region-test.bin"), record(1, 4 * MIB, "")};
+    ok[0].source_bytes = 512 * MIB;
+    ok[1].flags = SS_LARGE_WRITE | SS_LARGE_EXTENT; ok[1].first_sector = 40960;
+    assert(ss_large_records_valid(ok, 2) && ss_large_records_valid(0, 0));
+    assert(app_region_ledger_init(&l, all, 1) == 0);
+    assert(large_admit(&l, 3, ok, 2, slots) == APP_REGION_OK);
+    assert(slots[0].base == 0x80000000 && slots[0].bytes == GIB && slots[0].state == SS_LARGE_PENDING && slots[0].index == 0);
+    assert(slots[1].bytes == 4 * MIB && slots[1].flags == (SS_LARGE_WRITE | SS_LARGE_EXTENT) && slots[1].base == 0xc0000000);
+    assert(app_region_owner_of(&l, slots[0].base) == 3 && app_region_owner_of(&l, slots[1].base + 4 * MIB - 1) == 3);
+    assert(app_region_free_bytes(&l) == 11 * GIB - GIB - 4 * MIB);
+    /* The records may arrive in any order; slots are indexed by the record's index. */
+    struct ss_large_region swapped[2] = {ok[1], ok[0]};
+    assert(app_region_ledger_init(&l, all, 1) == 0 && large_admit(&l, 4, swapped, 2, slots) == APP_REGION_OK);
+    assert(slots[0].bytes == GIB && slots[1].bytes == 4 * MIB);
+
+    /* All or nothing: a second region that does not fit releases the first and changes nothing. */
+    struct ss_large_region big[2] = {record(0, 8 * GIB, "/a.bin"), record(1, 8 * GIB, "/b.bin")};
+    assert(app_region_ledger_init(&l, all, 1) == 0);
+    struct app_region_ledger before = l;
+    assert(large_admit(&l, 5, big, 2, slots) == APP_REGION_NO_SPACE);
+    assert(!memcmp(&l, &before, sizeof l) && !slots[0].bytes && !slots[1].bytes);
+    struct app_region_range none[1];
+    struct app_region_ledger empty;
+    assert(app_region_ledger_init(&empty, none, 0) == 0 && large_admit(&empty, 5, ok, 2, slots) == APP_REGION_NO_SPACE);
+    /* The owner quota is the number of records. */
+    struct ss_large_region four[4] = {record(0, 2 * MIB, "/a"), record(1, 2 * MIB, "/b"), record(2, 2 * MIB, "/c"), record(3, 2 * MIB, "/d")};
+    assert(app_region_ledger_init(&l, all, 1) == 0 && large_admit(&l, 6, four, 4, slots) == APP_REGION_OK);
+    assert(app_region_ledger_init(&l, all, 1) == 0);
+    struct ss_large_region five[5] = {four[0], four[1], four[2], four[3], record(4, 2 * MIB, "/e")};
+    assert(!ss_large_records_valid(five, 5) && large_admit(&l, 6, five, 5, slots) == APP_REGION_INVALID);
+
+    /* Malformed records are refused whatever the ledger holds. */
+    struct ss_large_region r[2];
+    int refusals = 0;
+#define REFUSE(edit) do { memcpy(r, ok, sizeof r); edit; assert(!ss_large_records_valid(r, 2)); \
+        assert(large_admit(&l, 6, r, 2, slots) == APP_REGION_INVALID); ++refusals; } while (0)
+    assert(app_region_ledger_init(&l, all, 1) == 0);
+    REFUSE(r[1].index = 0);                                  /* duplicate index */
+    REFUSE(r[1].index = 2);                                  /* index beyond the count */
+    REFUSE(r[0].flags = 4);                                  /* unknown flag */
+    REFUSE(r[0].bytes = GIB + 4096);                         /* not a multiple of 2 MiB */
+    REFUSE(r[0].bytes = 0);
+    REFUSE(r[0].bytes = 12 * GIB);                           /* beyond upper memory */
+    REFUSE(r[0].source_bytes = GIB + 1);
+    REFUSE(r[0].source_bytes = 0);
+    REFUSE(memset(r[0].sha256, 0, 32));
+    REFUSE(strcpy(r[0].path, "relative.bin"));
+    REFUSE(strcpy(r[0].path, "/bad name.bin"));
+    REFUSE(strcpy(r[0].path, ""));
+    REFUSE(memset(r[0].path, 'a', 48); r[0].path[0] = '/');   /* no terminator */
+    REFUSE(r[0].path[45] = 'x');                              /* data after the terminator */
+    REFUSE(r[0].first_sector = 7);                            /* a file with a sector */
+    REFUSE(strcpy(r[1].path, "/x"));                          /* an extent with a path */
+    REFUSE(r[1].first_sector = 0);                            /* an extent at the partition table */
+    assert(refusals == 17 && app_region_free_bytes(&l) == 11 * GIB);
 }
 
 int main(void)
@@ -308,6 +380,24 @@ int main(void)
     assert(tlb_conflict);
     memcpy(base_l1, saved, sizeof saved);
 
+    /* A board that maps less upper memory leaves later slots invalid; a region cannot cover an invalid slot. */
+    {
+        uint64_t saved_slot[13];
+        memcpy(saved_slot, base_l1, sizeof saved_slot);
+        for (unsigned slot = 6; slot < 13; ++slot) base_l1[slot] = 0;
+        struct app_space partial;
+        struct app_table_arena scratch_arena = {arena_pages, arena_pa, 16, 0};
+        assert(app_space_build(&partial, &scratch_arena, base_l1, &l, 1) == 0);          /* A's 3 GiB lies in slots 2-4 */
+        scratch_arena.used = 0;
+        assert(app_space_build(&partial, &scratch_arena, base_l1, &l, 3) == APP_REGION_INVALID && scratch_arena.used == 0);   /* C reaches slot 6 */
+        base_l1[3] = 0;
+        scratch_arena.used = 0;
+        assert(app_space_build(&partial, &scratch_arena, base_l1, &l, 1) == APP_REGION_INVALID);   /* a covered slot unmapped */
+        base_l1[3] = base_l1[3] | 0x4000000000000000ull;                                          /* neither zero nor the block */
+        assert(app_space_build(&partial, &scratch_arena, base_l1, &l, 9) == APP_REGION_INVALID);
+        memcpy(base_l1, saved_slot, sizeof saved_slot);
+    }
+
     /* Exhaustion: the largest gap is granted whole, the next request is refused, release restores it. */
     uint64_t free_before = app_region_free_bytes(&l), dbase, dbytes;
     struct app_region_ledger snapshot = l;
@@ -354,6 +444,7 @@ int main(void)
     EXPECT(walk(app_space_ttbr0(&se), abase, 0), FAULT_PERMISSION);
     EXPECT(walk(app_space_ttbr0(&se), abase, 2), FAULT_NONE);
     assert(app_space_build(&se, &arena, base_l1, &l, 0) == APP_REGION_INVALID);
+    large_cases();
     puts("app-region host check passed");
     return 0;
 }

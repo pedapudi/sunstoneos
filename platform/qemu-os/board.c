@@ -288,3 +288,19 @@ void kernel_main(void)
         &monitor_task, 1u << 1));
     a733_smp_diagnostic_start();
 }
+
+#ifdef QEMU_OS_UPPER
+#include "app_large.h"
+void os_large_report(const struct large_slot *slot, const struct app_space *space)
+{
+    struct line l = {.used = 0};
+    put(&l, "LARGE-ADMITTED index="); put_dec(&l, slot->index);
+    put(&l, " base="); put_hex(&l, slot->base);
+    put(&l, " bytes="); put_hex(&l, slot->bytes);
+    put(&l, " flags="); put_dec(&l, slot->flags);
+    put(&l, " state="); put_dec(&l, slot->state);
+    put(&l, " tables="); put_dec(&l, space->tables);
+    put(&l, " asid="); put_dec(&l, space->asid);
+    flush(&l);
+}
+#endif

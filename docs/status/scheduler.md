@@ -22,6 +22,7 @@ qualification.
 
 ## Open work
 
+0c. Known limits of the unmasked task-lock wait (`runtime/lock_prewait.c`): (1) an EL0 task cannot read the interrupt mask, so it infers an open mask from a zero critical nesting count and the absence of the task lock; a bare `portSET_INTERRUPT_MASK` outside a critical section, which does not take the task lock, can therefore wait with the mask raised, for at most the 100 us limit; (2) the 100 us limit is checked only when an event wakes the core, so a wait behind a long holder can last as long as the holder (914 us once, on the fork, core 3); the wait is unmasked either way.
 0b. Step 2 of the measure-first plan: fix the spans in the sweep table longest first on both kernels, each with a
    before and after span and a model-time check against 2%; then the above-mask control path, the robot workload and
    the tickless comparison. The sweep under the mimus load is below.
@@ -144,12 +145,34 @@ Result. The wait halves the time spent in long masked spans on both kernels and 
 
 Convoy. The lock is the task lock (`xPortLocks[1]`), the same one every kernel call takes. Lock wait in the long spans by caller before and after (ms, all cores): stock `xTaskGetSchedulerState` 33.5 to 14.3, `xQueueReceive` 26.4 to 10.9, `xQueueGenericSend` 14.2 to 5.4, `vTaskYieldWithinAPI` 12.4 to 10.2, `vTaskSuspendAll` 10.9 to 6.5. Fork `ssKernelObjectEnter` 42.2 to 18.2, `ssKernelObjectSuspend` 13.2 to 6.0, `vTaskEnterCritical` 2.0 to 1.4. On the fork the contended object is the global task lock taken by every object enter and suspend, not a per-owner object. The next fixes are shorter holds (each hold is about 3.5 us of dependent DRAM refills) or less sharing: per-queue or per-owner locking in place of the task lock, and an abortable queue lock so a waiter can take its place in line with the mask open.
 
+## Robot table: control path and task path, same image and load
+
+One board run per kernel on port 3-3 (queue entries `1793605058169799359-f2420456` stock and `1793605129875013399-cf0da02e` fork), the mimus OS image with the control interrupts (`SUNSTONE_CONTROL_IRQ`), engine bcaf39ff5, eight workers under the recognition, output exact. On cores 1 to 5 the two paths run at the same time at 1, 2, 4, 8 and 10 kHz, one rate per core. Design: [control interrupts above the API mask](../designs/scheduler-partitioned.md#control-interrupts-above-the-api-mask-do-not-wait-for-kernel-spans). Latency is the handler or task start minus the programmed deadline; jitter is the error of the interval between starts against the periods that passed. Each cell is the maximum in microseconds; the 99.99th percentile equals the maximum because a core sees 200 to 2000 periods in the 0.2 s recognition, so it supports no tighter tail than that (the 10^6-period runs were not made). No sample was dropped, no sequence gap, no missed period in either path on either kernel.
+
+| Rate | Jitter bound (5%) | Control path latency stock / fork | Control path jitter stock / fork | Task path latency stock / fork | Task path jitter stock / fork |
+| --- | --- | --- | --- | --- | --- |
+| 1 kHz | 50 | 1.5 / 0.5 | 1.2 / 0.2 | 15.9 / 8.2 | 12.5 / 4.2 |
+| 2 kHz | 25 | 1.5 / 0.7 | 1.3 / 0.3 | 28.6 / 11.4 | 25.8 / 7.6 |
+| 4 kHz | 12.5 | 6.1 / 3.0 | 5.8 / 2.7 | 23.8 / 30.9 | 19.3 / 27.2 |
+| 8 kHz | 6.25 | 5.3 / 2.5 | 5.0 / 2.2 | 28.9 / 17.2 | 25.5 / 13.7 |
+| 10 kHz | 5 | 3.5 / 2.5 | 3.2 / 2.2 | 32.0 / 12.0 | 26.5 / 8.4 |
+
+| | Stock | Fork |
+| --- | --- | --- |
+| Recognition time, image with control interrupts | 114.838 ms | 113.398 ms |
+| Recognition time, plain image (no recorder, no interrupts) | 109.629 ms | 110.178 ms (+0.50%) |
+| Longest masked span (sweep image, with the recorder) | 30 us | 35 us (30 us with the unmasked task-lock wait) |
+
+Result. The control path meets the 10 us wake target and the 5% jitter bound at every rate on both kernels, including 10 kHz (3.2 us stock, 2.2 us fork against 5 us). The task path meets neither on either kernel: wake latency 8 to 32 us, and jitter 4 to 27 us against the bound, which at 4 kHz (12.5 us) is missed by both (19.3 and 27.2 us). The task path's latency tracks the longest masked span and the task-lock convoy; the control path does not. The fork's task path is better at four of five rates and worse at 4 kHz, and neither is near the target, so the fork does not change which path serves a 4 kHz loop: the control path does.
+
+Mimus. The instrumented sweep images showed the fork 6.8% faster (127.2 against 136.4 ms); the plain images show the fork 0.50% slower (110.178 against 109.629 ms), as in the speed stream. The span recorder explains the difference: it adds 26 ms to the stock recognition and 17 ms to the fork's. The control interrupts add 4.7 ms (4.4%) to stock and 3.2 ms (2.9%) to the fork while five handlers run at up to 10 kHz.
+
 ## Evidence
 
 Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`, added with `tools/evidence.py add`. Results cited by path, and earlier prose evidence, are in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-31 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+35 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -184,4 +207,8 @@ Board results with a queue entry are records in `docs/evidence/scheduler.jsonl`,
 | `1793602023862614320-8f9bd37f` | 2026-11-02 | 3-3 | `06a4747c4deb` | returned | passed | run_total 70.245 s, masked_span_max 34 us, lock_wait_share_of_long_spans 82 -96% |
 | `1793603800991531488-e4485ccd` | 2026-11-02 | 3-3 | `09bbd24cff47` | returned | passed | run_total 69.982 s, masked_span_max 30 us |
 | `1793603872067351594-076593c9` | 2026-11-02 | 3-3 | `6340760b1c30` | returned | passed | run_total 69.989 s, masked_span_max 30 us |
+| `1793605058169799359-f2420456` | 2026-11-02 | 3-3 | `cb1356333b6e` | returned | passed | run_total 71.133 s, control_latency_max_4khz 6.1 us |
+| `1793605129875013399-cf0da02e` | 2026-11-02 | 3-3 | `5863e0cde9bb` | returned | passed | run_total 86.704 s, control_latency_max_4khz 3 us |
+| `1793605217849580518-3247bc18` | 2026-11-02 | 3-3 | `1f8c64639e22` | returned | passed | run_total 106.288 s, recognition_time 109.629 ms |
+| `1793605330258102733-1624632e` | 2026-11-02 | 3-3 | `e6995c5f33fc` | returned | passed | run_total 79.197 s, recognition_time 110.178 ms |
 <!-- evidence-table:end -->
