@@ -243,6 +243,8 @@ int ss_storage_owner_stats(struct ss_storage_owner_stats *out)
     uint64_t now = sunstone_deadline_now_us();
     uint64_t slept = atomic_load(&idle_us) + hw->owner_sleep_us();
     *out = (struct ss_storage_owner_stats){now - first_us, slept, atomic_load(&wake_count) + hw->owner_wakes(),
-                                                     hw->irq_cores(), atomic_load(&owner_core_mask), atomic_load(&caller_core_mask)};
+                                                     0, atomic_load(&owner_core_mask), atomic_load(&caller_core_mask)};
+    hw->irq_counts(out->irq_entries, &out->irq_stray);
+    for (unsigned c = 0; c < 8; ++c) if (out->irq_entries[c]) out->irq_cores |= 1u << c;
     return 1;
 }

@@ -116,7 +116,7 @@ struct result {
     uint64_t owner_elapsed_us, owner_asleep_us, owner_wakes;
     uint64_t mismatches, first_mismatch, volume_size, recoveries, recovered_clusters;
     uint64_t histogram[FWR_HIST];
-    uint64_t app_core, irq_cores, owner_cores, caller_cores, sha_ce, guard_us;
+    uint64_t app_core, irq_cores, owner_cores, caller_cores, sha_ce, irq_counts;   /* irq_cores: mask | stray entries << 32; irq_counts: per-core handler entries, a byte each, saturating */
     uint64_t diag[4], isar0, observed;               /* where an open or enable stopped (ss_storage_diagnostic); the core's ISAR0 */
 };
 _Static_assert(sizeof(struct result) == 512, "result is the manifest's output_limit");
@@ -197,7 +197,8 @@ static void collect(void)
     struct ss_storage_owner_stats s;
     if (ss_storage_owner_stats(&s)) {
         r.owner_elapsed_us = s.elapsed_us; r.owner_asleep_us = s.asleep_us; r.owner_wakes = s.wakes;
-        r.irq_cores = s.irq_cores; r.owner_cores = s.owner_cores; r.caller_cores = s.caller_cores;
+        r.irq_cores = s.irq_cores | (uint64_t)s.irq_stray << 32; r.owner_cores = s.owner_cores; r.caller_cores = s.caller_cores;
+        for (unsigned c = 0; c < 8; ++c) r.irq_counts |= (uint64_t)(s.irq_entries[c] > 255 ? 255 : s.irq_entries[c]) << (8 * c);
     }
 }
 
@@ -212,7 +213,7 @@ void storage_write_main(const struct ss_grant *grant)
     uint64_t cut_bytes = 0;
     for (unsigned i = 0; i < 8; ++i) cut_bytes |= (uint64_t)m[8 + i] << (8 * i);
     r.mode = mode_id;
-    r.app_core = grant->main_core; r.guard_us = GUARD_US;
+    r.app_core = grant->main_core;
     {
         /* The boot snapshot of ID_AA64ISAR0_EL1 (EL0 cannot read it): the application's core if it was observed, else the first observed
          * Cortex-A76 core (part 0xd0b), which has the same implementation. `observed` holds a bit per observed core and, from bit 32,

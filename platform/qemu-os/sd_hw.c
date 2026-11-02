@@ -88,7 +88,7 @@ static int set_write_region(uint8_t *base, size_t bytes)
 static int wait_async(void) { return 1; }
 static uint64_t owner_sleep_us(void) { return 0; }
 static uint64_t owner_wakes(void) { return 0; }
-static uint32_t irq_cores(void) { return 0; }
+static void irq_counts(uint32_t entries[8], uint32_t *stray) { for (unsigned c = 0; c < 8; ++c) entries[c] = 0; *stray = 0; }
 void os_sd_close_owner(void) {}
 
 static struct os_large_device device;
@@ -106,7 +106,7 @@ const struct os_sd_hw *os_sd_open_owner(void)
     }
     device = (struct os_large_device){{0, ram_read, CARD_SECTORS}, {0, ram_submit, ram_poll}, 0, 0, buffers};
     hw = (struct os_sd_hw){&device, CARD_SECTORS, 1, allocation_unit, enable_writes, write_piece, live, set_write_region, wait_async,
-                           owner_sleep_us, owner_wakes, irq_cores, os_sd_close_owner};
+                           owner_sleep_us, owner_wakes, irq_counts, os_sd_close_owner};
     return &hw;
 }
 

@@ -12,7 +12,7 @@ FIELDS = ('tag mode status detail file_bytes written_bytes au_sectors cpu_hz cpu
           'wear_bytes wear_data_bytes wear_metadata_bytes wear_writes wear_aligned wear_unaligned wear_syncs wear_flushes '
           'owner_elapsed_us owner_asleep_us owner_wakes mismatches first_mismatch volume_size recoveries recovered_clusters').split()
 HIST = 16
-TAIL = ('app_core irq_cores owner_cores caller_cores sha_ce guard_us diag0 diag1 diag2 diag3 isar0 observed').split()
+TAIL = ('app_core irq_cores owner_cores caller_cores sha_ce irq_counts diag0 diag1 diag2 diag3 isar0 observed').split()
 TAG = 0x5357544553544f4b
 COUNTER_HZ = 24_000_000
 
@@ -31,6 +31,9 @@ def decode(payload):
     out.update(zip(TAIL, values[len(FIELDS) + HIST:]))
     if out['tag'] != TAG:
         raise ValueError('storage-write result has the wrong tag.')
+    out['irq_stray'] = out['irq_cores'] >> 32
+    out['irq_cores'] &= 0xffffffff
+    out['irq_entries'] = [out['irq_counts'] >> (8 * c) & 255 for c in range(8)]
     sec = lambda ticks: ticks / COUNTER_HZ
     out['cpu_mhz'] = out['cpu_hz'] / 1e6
     if out['flush_ticks']:

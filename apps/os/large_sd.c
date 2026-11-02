@@ -27,6 +27,7 @@
 #include <string.h>
 #ifdef OS_SD_WRITE
 #include "sd_hw.h"
+#include "gicv3_spi.h"
 #include "a733_storage_bounds.h"
 #include "storage_wait.h"
 #include "sunstone_deadline.h"
@@ -121,7 +122,7 @@ static int dma_sync(void *cookie, uint8_t *b, size_t n, unsigned phase)
 /* Where an open or an enable stopped, for the application's report (ss_storage_diagnostic): [0] the stage, [1] a detail, [2] the first
  * failed bounds read (sector + 1), [3] the bounds reads made. Stages: 1 declared or already open, 2 PMIC service, 3 descriptor memory,
  * 4 configure, 5 native binding, 6 platform init, 7 identification (detail: result), 8 card query (result), 9 interrupt and timer
- * registration, 20 enable preconditions, 21 blob copy, 22 blob parse, 23 bounds verify (detail: object state), 24 write binding. */
+ * registration or irq arming (detail 1 platform, 2 or 3 GIC rearm), 10 owner task creation (sd_owner.c), 11 owner wait (sd_owner.c), 12 GIC mask before the baseline, 20 enable preconditions, 21 blob copy, 22 blob parse, 23 bounds verify (detail: object state), 24 write binding. */
 uint64_t os_sd_diag[4];
 #define DIAG(stage, detail) (os_sd_diag[0] = (stage), os_sd_diag[1] = (uint64_t)(detail), 0)
 #define DIAGP(stage, detail) ((void)DIAG(stage, detail), (const struct os_large_device *)0)
@@ -170,6 +171,7 @@ static int configure(void)
 /* One request at a time into dma, to completion or failure; the loader's metadata reads. */
 #ifdef OS_SD_WRITE
 static enum a733_mmc_platform_result drive_platform(uint64_t deadline);
+static int sd_irq_mask_settled(void);
 #endif
 static int read_blocking(uint64_t sector, uint32_t count, uint8_t *dma)
 {
@@ -232,6 +234,9 @@ const struct os_large_device *os_large_device(void)
     struct device_memory_extent extent;
     if (!pool || device_memory_acquire(pool, UINT64_C(0x53443044), 4096, &descriptor_lease, &extent) != 1) return DIAGP(3, 0);
     descriptors = (volatile struct sunxi_mmc_dma_descriptor *)extent.cpu;
+#ifdef OS_SD_WRITE
+    if (!sd_irq_mask_settled()) return DIAGP(12, 0);        /* the route table enabled INTID 193 at boot; the platform's baseline wants it masked */
+#endif
     if (!configure()) return DIAGP(4, 0);
     if (!a733_mmc_platform_native_init_selected(&native, &providers.shared.locks, xTaskGetCurrentTaskHandle(), SUNXI_MMC_SD,
             A733_MMC_EMMC_SDC2, admit, &platform)) return DIAGP(5, 0);
@@ -294,18 +299,36 @@ static uint8_t *blob_copy;                       /* sized from the input at enab
 static TaskHandle_t owner_task;
 static _Atomic uint32_t irq_bits;
 static volatile int irq_live;
-static _Atomic uint32_t irq_core_mask;
+static _Atomic uint32_t irq_entry_count[8], irq_stray_count;
+/* SMHC0 is GIC SPI 161 (INTID 193). The platform core wants it masked from the open on (a733_mmc_platform.c: masked()), so the owner masks
+ * it before the platform's baseline check and unmasks it only once irq completion is on; the route table enables it at boot. */
+static const struct gicv3_spi sd_gic = {0x03400000u, 193u};
 void os_sd_irq(void)
 {
-    if (!irq_live) return;
+    atomic_fetch_add_explicit(&irq_entry_count[portGET_CORE_ID() & 7u], 1, memory_order_relaxed);
+    if (!irq_live) {                                       /* not ours to serve yet: mask the source, never leave a level line unserved */
+        atomic_fetch_add_explicit(&irq_stray_count, 1, memory_order_relaxed);
+        (void)gicv3_spi_mask(&sd_gic);
+        return;
+    }
     uint32_t mista = *(volatile uint32_t *)(uintptr_t)(SMHC0 + 0x34);
     if (!mista) return;
-    atomic_fetch_or_explicit(&irq_core_mask, 1u << portGET_CORE_ID(), memory_order_relaxed);
     atomic_fetch_or_explicit(&irq_bits, mista, memory_order_release);
     *(volatile uint32_t *)(uintptr_t)(SMHC0 + 0x38) = mista;
     BaseType_t woken = pdFALSE;
     vTaskNotifyGiveFromISR(owner_task, &woken);
     portYIELD_FROM_ISR(woken);
+}
+/* Mask INTID 193 in the distributor and wait, bounded, until it reports masked. */
+static int sd_irq_mask_settled(void)
+{
+    if (!gicv3_spi_mask(&sd_gic)) return 0;
+    for (unsigned tries = 0; tries < 100; ++tries) {
+        int r = gicv3_spi_masked(&sd_gic);
+        if (r) return r > 0;
+        vTaskDelay(1);
+    }
+    return 0;
 }
 static uint32_t irq_taken(void *unused) { (void)unused; return atomic_exchange_explicit(&irq_bits, 0, memory_order_acquire); }
 
@@ -331,7 +354,11 @@ static void dr_sleep(void *c, uint64_t until)
 }
 static uint64_t hw_owner_sleep_us(void) { return atomic_load(&sleep_us); }
 static uint64_t hw_owner_wakes(void) { return atomic_load(&sleep_count); }
-static uint32_t hw_irq_cores(void) { return atomic_load(&irq_core_mask); }
+static void hw_irq_counts(uint32_t entries[8], uint32_t *stray)
+{
+    for (unsigned c = 0; c < 8; ++c) entries[c] = atomic_load(&irq_entry_count[c]);
+    *stray = atomic_load(&irq_stray_count);
+}
 static int dr_live(void *c) { (void)c; return board_live(NULL); }
 static enum a733_mmc_platform_result drive_platform(uint64_t deadline)
 {
@@ -436,10 +463,24 @@ const struct os_sd_hw *os_sd_open_owner(void)
     /* The owner task sleeps on the controller interrupt and on one-shot timers (sunstone_deadline), never on the tick. */
     owner_task = xTaskGetCurrentTaskHandle();
     if (sunstone_deadline_register() != 1 || !sunxi_mmc_set_irq(&platform.core, irq_taken, NULL)) { (void)DIAG(9, 0); return 0; }
+    if (!a733_mmc_platform_irq(&platform, 1)) { (void)DIAG(9, 1); return 0; }
     irq_live = 1;
+    int armed = 0;
+    for (unsigned tries = 0; tries < 100 && !armed; ++tries) {
+        int r = gicv3_spi_rearm(&sd_gic);
+        if (r < 0) { irq_live = 0; (void)DIAG(9, 2); return 0; }
+        if (r) armed = 1; else vTaskDelay(1);
+    }
+    if (!armed) { irq_live = 0; (void)DIAG(9, 3); return 0; }
     hw = (struct os_sd_hw){d, card.sectors, card.sector_addressed, hw_allocation_unit, hw_enable_writes, hw_write_piece, hw_live,
-                           hw_set_write_region, hw_wait_async, hw_owner_sleep_us, hw_owner_wakes, hw_irq_cores, os_sd_close_owner};
+                           hw_set_write_region, hw_wait_async, hw_owner_sleep_us, hw_owner_wakes, hw_irq_counts, os_sd_close_owner};
     return &hw;
 }
-void os_sd_close_owner(void) { irq_live = 0; os_sd_close_owner_device(); }
+void os_sd_close_owner(void)
+{
+    irq_live = 0;
+    (void)sd_irq_mask_settled();
+    (void)a733_mmc_platform_irq(&platform, 0);
+    os_sd_close_owner_device();
+}
 #endif

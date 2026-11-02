@@ -175,6 +175,14 @@ static int masked(struct a733_mmc_platform *p)
     if(!rd(p,GIC+0x218,&v))return -1;
     return (v&mask)?-1:1; /* Preserve an unexplained inherited pending interrupt. */
 }
+/* The controller's interrupt as the running checks want it: masked, or, once the owner completes by interrupt, enabled with the
+ * distributor settled. */
+static int gic_ok(struct a733_mmc_platform *p)
+{
+    if(!p->irq_mode)return masked(p);
+    uint32_t v;
+    return rd(p,GIC,&v)&&!(v&BIT(31))?1:-1;
+}
 static int live(struct a733_mmc_platform *p)
 {
     enum a733_clock_result c=a733_clock_token_status(p->clocks,&p->clock);
@@ -447,7 +455,7 @@ static enum a733_mmc_platform_result metadata(struct a733_mmc_platform *p)
 static int running(struct a733_mmc_platform *p)
 {
     uint32_t module,bus,ndma;
-    if(p->pins->failed||!profile(p)||!voltage(p,0)||masked(p)!=1||
+    if(p->pins->failed||!profile(p)||!voltage(p,0)||gic_ok(p)!=1||
        !rd(p,p->module,&module)||(module&0x87001f1fu)!=p->running_module||
        !rd(p,p->bus,&bus)||(bus&0x10001u)!=0x10001u)return 0;
     return p->config.kind!=SUNXI_MMC_EMMC||p->config.emmc_host!=A733_MMC_EMMC_SDC3||
@@ -687,6 +695,12 @@ static int close_idle(struct a733_mmc_platform *p)
         rd(p,p->base+SUNXI_SMHC_STATUS,&v)&&!(v&SUNXI_SMHC_STATUS_BUSY)&&
         rd(p,p->base+SUNXI_SMHC_RINT,&v)&&!(v&SUNXI_SMHC_MMC_ERRORS);
 }
+int a733_mmc_platform_irq(struct a733_mmc_platform *p,int enable)
+{
+    if(!p||!p->initialized||p->update||p->config.kind!=SUNXI_MMC_SD||p->stage!=READY||p->fault||
+       p->core.state!=SUNXI_MMC_READY||p->core.borrowed||p->ops.current(p->cookie)!=1)return 0;
+    p->irq_mode=enable?1u:0u;return 1;
+}
 enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *p,uint64_t deadline)
 {
     if(!p||!p->initialized||p->update||p->config.kind!=SUNXI_MMC_SD||
@@ -694,6 +708,7 @@ enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *
        deadline>p->config.lifetime_deadline_us)return A733_MMC_INVALID;
     if(!enter_api(p))return A733_MMC_BUSY;
     if(p->fault)return finish(p,fail(p));
+    if(p->irq_mode)return finish(p,A733_MMC_INVALID);          /* the owner masks the interrupt and clears irq mode first */
     if(p->ops.current(p->cookie)!=1||p->signal||p->stage<READY||p->stage==CLOSED||
        p->core.state!=SUNXI_MMC_READY||p->core.borrowed||p->core.result.write_started||
        p->core.result.error!=SUNXI_MMC_OK||!p->core.result.received||

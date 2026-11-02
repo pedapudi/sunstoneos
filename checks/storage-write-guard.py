@@ -102,7 +102,7 @@ def main():
     d = run(binary, slow_img, 0, out / 'slow.result', 1500)
     assert d['status'] == 11, d
     assert 0 < d['written_bytes'] < FILE and d['detail'] == d['written_bytes'], d
-    assert d['guard_us'] == 50000 and d['mismatches'] == 0, d
+    assert d['mismatches'] == 0, d
     fsck_clean(slow_img)
     data, clean = volume_state(slow_img)
     assert clean, 'volume left with the dirty flag set'
