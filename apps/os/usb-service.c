@@ -6,15 +6,27 @@
 #ifdef SUNSTONE_USB_APP_ALIAS
 #include "a733_usb_memory.h"
 #endif
-#define SLOTS 4u
-#define EVENTS 1024u
+#include "sunstone_usb_serial.h"
+#include "sunstone_usb_uvc.h"
+/* Lease tables follow the drivers that fill them: every receive buffer of
+ * every serial port can be leased at once, and the camera holds its frame ring
+ * plus the frame being assembled. A frame has at most SUNSTONE_UVC_SLICES
+ * pages, one per shared data page. The input queue is a depth, not a format
+ * limit: build with -DSS_USB_INPUT_EVENTS=N to size it for the report rate
+ * and the longest the application can be away from ss_input_event. */
+#define serial_SLOTS (SS_USB_SERIAL_PORTS*SS_USB_SERIAL_SLOTS)
+#define camera_SLOTS (SUNSTONE_UVC_FRAMES+1u)
+#ifndef SS_USB_INPUT_EVENTS
+#define SS_USB_INPUT_EVENTS 1024u
+#endif
+#define EVENTS SS_USB_INPUT_EVENTS
 struct lease { atomic_uint state; uint64_t token; }; /* free, ready, held, release */
-static struct { struct lease lease; struct ss_usb_serial_buffer value; } serial[SLOTS];
+static struct { struct lease lease; struct ss_usb_serial_buffer value; } serial[serial_SLOTS];
 static struct { struct lease lease; struct ss_usb_camera_frame value;
 #ifdef SUNSTONE_USB_APP_ALIAS
-    struct ss_usb_frame_slice slices[1024];
+    struct ss_usb_frame_slice slices[SUNSTONE_UVC_SLICES];
 #endif
-} camera[SLOTS];
+} camera[camera_SLOTS];
 static struct { atomic_uint write,read; struct ss_input_event value[EVENTS]; } input;
 static struct { atomic_uint state; uint64_t sequence; const void *data; size_t bytes,actual; int status; } tx;
 static struct {atomic_uint state;uint64_t sequence;struct ss_usb_serial_line line;int result;} config;
@@ -39,7 +51,7 @@ void os_usb_service_disconnected(unsigned devices)
     atomic_fetch_and_explicit(&connected,~devices,memory_order_release);
     if(devices&SS_DEVICE_USB_KEYBOARD)atomic_fetch_add_explicit(&input_epoch[0],1,memory_order_release);
     if(devices&SS_DEVICE_USB_MOUSE)atomic_fetch_add_explicit(&input_epoch[1],1,memory_order_release);
-    for(unsigned i=0;i<SLOTS;++i){unsigned ready=1;
+    for(unsigned i=0;i<serial_SLOTS;++i){unsigned ready=1;
         if(devices&SS_DEVICE_USB_SERIAL)atomic_compare_exchange_strong_explicit(&serial[i].lease.state,&ready,3,memory_order_acq_rel,memory_order_acquire);
         ready=1;if(devices&SS_DEVICE_USB_CAMERA)atomic_compare_exchange_strong_explicit(&camera[i].lease.state,&ready,3,memory_order_acq_rel,memory_order_acquire);
     }
@@ -81,7 +93,7 @@ static int serial_prepare(unsigned i)
 static int camera_prepare(unsigned i)
 {
     struct ss_usb_camera_frame *v=&camera[i].value;size_t total=0;
-    if(!v->slices||!v->slice_count||v->slice_count>1024||!v->bytes)return 0;
+    if(!v->slices||!v->slice_count||v->slice_count>SUNSTONE_UVC_SLICES||!v->bytes)return 0;
     for(size_t n=0;n<v->slice_count;++n){const struct ss_usb_frame_slice *slice=&v->slices[n];
         if(!slice->data||!slice->bytes||slice->bytes>v->bytes-total)return 0;
         total+=slice->bytes;
@@ -101,8 +113,8 @@ int os_usb_service_##name(const struct type *v) \
 { \
     if(atomic_load_explicit(&retiring,memory_order_acquire))return 0; \
     if(!v||!v->token||v->token<=name##_token||!(atomic_load_explicit(&connected,memory_order_acquire)&device))return -1; \
-    for(unsigned i=0;i<SLOTS;++i)if(atomic_load_explicit(&name[i].lease.state,memory_order_acquire)&&name[i].lease.token==v->token)return -1; \
-    for(unsigned i=0;i<SLOTS;++i)if(!atomic_load_explicit(&name[i].lease.state,memory_order_acquire)){ \
+    for(unsigned i=0;i<name##_SLOTS;++i)if(atomic_load_explicit(&name[i].lease.state,memory_order_acquire)&&name[i].lease.token==v->token)return -1; \
+    for(unsigned i=0;i<name##_SLOTS;++i)if(!atomic_load_explicit(&name[i].lease.state,memory_order_acquire)){ \
         name[i].value=*v;if(!name##_prepare(i))return -1;name##_token=v->token;name[i].lease.token=v->token;atomic_store_explicit(&name[i].lease.state,1,memory_order_release);changed();return 1;} \
     return 0; \
 } \
@@ -110,14 +122,14 @@ int ss_usb_##name##_acquire(struct type *v) \
 { \
     if(!v||!allowed(device))return -1; \
     if(!(atomic_load_explicit(&connected,memory_order_acquire)&device))return atomic_load_explicit(&disconnected,memory_order_acquire)&device?-1:0; \
-    for(unsigned i=0;i<SLOTS;++i){unsigned ready=1;if(atomic_compare_exchange_strong_explicit(&name[i].lease.state,&ready,2,memory_order_acq_rel,memory_order_acquire)){ \
+    for(unsigned i=0;i<name##_SLOTS;++i){unsigned ready=1;if(atomic_compare_exchange_strong_explicit(&name[i].lease.state,&ready,2,memory_order_acq_rel,memory_order_acquire)){ \
         *v=name[i].value;return 1;}} \
     return 0; \
 } \
 int ss_usb_##name##_release(uint64_t token) \
 { \
     const struct ss_grant *g=ss_grant();if(!token||!g||!(g->devices&device))return -1; \
-    for(unsigned i=0;i<SLOTS;++i)if(atomic_load_explicit(&name[i].lease.state,memory_order_acquire)==2&&name[i].lease.token==token){ \
+    for(unsigned i=0;i<name##_SLOTS;++i)if(atomic_load_explicit(&name[i].lease.state,memory_order_acquire)==2&&name[i].lease.token==token){ \
         atomic_store_explicit(&name[i].lease.state,3,memory_order_release);wake();return 1;} \
     return -1; \
 }
@@ -127,14 +139,14 @@ int os_usb_service_frame(const struct ss_usb_camera_frame *v){return os_usb_serv
 int os_usb_service_camera_pin(uint64_t token,struct ss_usb_camera_frame *frame)
 {
     if(!frame||!token)return 0;
-    for(unsigned i=0;i<SLOTS;++i){unsigned held=2;
+    for(unsigned i=0;i<camera_SLOTS;++i){unsigned held=2;
         if(camera[i].lease.token==token&&atomic_compare_exchange_strong_explicit(&camera[i].lease.state,&held,4,memory_order_acq_rel,memory_order_acquire)){
             *frame=camera[i].value;return 1;}}
     return 0;
 }
 void os_usb_service_camera_unpin(uint64_t token)
 {
-    for(unsigned i=0;i<SLOTS;++i)if(camera[i].lease.token==token&&atomic_load_explicit(&camera[i].lease.state,memory_order_acquire)==4)
+    for(unsigned i=0;i<camera_SLOTS;++i)if(camera[i].lease.token==token&&atomic_load_explicit(&camera[i].lease.state,memory_order_acquire)==4)
         atomic_store_explicit(&camera[i].lease.state,2,memory_order_release);
 }
 int ss_usb_serial_write(uint64_t sequence,const void *data,size_t bytes)
@@ -196,8 +208,8 @@ int os_usb_service_idle(void)
     unsigned state=atomic_load_explicit(&tx.state,memory_order_acquire);
     if(state==1||state==2)return 0;
     state=atomic_load_explicit(&config.state,memory_order_acquire);if(state==1||state==2)return 0;
-    for(unsigned i=0;i<SLOTS;++i)if(atomic_load_explicit(&serial[i].lease.state,memory_order_acquire)||
-       atomic_load_explicit(&camera[i].lease.state,memory_order_acquire))return 0;
+    for(unsigned i=0;i<serial_SLOTS;++i)if(atomic_load_explicit(&serial[i].lease.state,memory_order_acquire))return 0;
+    for(unsigned i=0;i<camera_SLOTS;++i)if(atomic_load_explicit(&camera[i].lease.state,memory_order_acquire))return 0;
     return 1;
 }
 void os_usb_service_dispatch(void)
@@ -206,17 +218,23 @@ void os_usb_service_dispatch(void)
         unsigned state=atomic_load_explicit(&tx.state,memory_order_acquire);
         if(state==1){tx.status=-1;tx.actual=0;atomic_store_explicit(&tx.state,3,memory_order_release);state=3;}
         /* A borrowed receive buffer may also be the pending transmit buffer. */
-        if(state!=2)for(unsigned i=0;i<SLOTS;++i){
-            unsigned held=atomic_load_explicit(&serial[i].lease.state,memory_order_acquire);
-            if(held==1||held==2)atomic_store_explicit(&serial[i].lease.state,3,memory_order_release);
-            held=atomic_load_explicit(&camera[i].lease.state,memory_order_acquire);
-            if(held==1||held==2)atomic_store_explicit(&camera[i].lease.state,3,memory_order_release);
+        if(state!=2){
+            for(unsigned i=0;i<serial_SLOTS;++i){
+                unsigned held=atomic_load_explicit(&serial[i].lease.state,memory_order_acquire);
+                if(held==1||held==2)atomic_store_explicit(&serial[i].lease.state,3,memory_order_release);
+            }
+            for(unsigned i=0;i<camera_SLOTS;++i){
+                unsigned held=atomic_load_explicit(&camera[i].lease.state,memory_order_acquire);
+                if(held==1||held==2)atomic_store_explicit(&camera[i].lease.state,3,memory_order_release);
+            }
         }
     }
-    for(unsigned i=0;i<SLOTS;++i){
+    for(unsigned i=0;i<serial_SLOTS;++i){
         if(atomic_load_explicit(&serial[i].lease.state,memory_order_acquire)==3){
             if(ops.release)ops.release(context,SS_DEVICE_USB_SERIAL,serial[i].lease.token);
             atomic_store_explicit(&serial[i].lease.state,0,memory_order_release);}
+    }
+    for(unsigned i=0;i<camera_SLOTS;++i){
         if(atomic_load_explicit(&camera[i].lease.state,memory_order_acquire)==3){
             if(ops.release)ops.release(context,SS_DEVICE_USB_CAMERA,camera[i].lease.token);
             atomic_store_explicit(&camera[i].lease.state,0,memory_order_release);}

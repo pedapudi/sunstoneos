@@ -4,16 +4,32 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#define SS_USB_SERIAL_PORTS 4
+#include "a733_xhci.h"
+/* Each serial port is a function of one attached device, so the ports follow
+ * the host's device records (A733_XHCI_DEVICES). A receive buffer is one
+ * retained controller page, A733_XHCI_TRANSFER_BYTES; a single bulk TRB could
+ * carry up to 64 KiB - 1 (xHCI 1.2 section 6.4.1.1 gives 17 bits), so the page
+ * is the bound. Slots are the receive buffers a port rotates among: one owned
+ * by the controller, one holding data, and the rest leased to the application.
+ * Build with -DSS_USB_SERIAL_SLOTS=N for another depth. */
+#ifndef SS_USB_SERIAL_PORTS
+#define SS_USB_SERIAL_PORTS A733_XHCI_DEVICES
+#endif
+#ifndef SS_USB_SERIAL_SLOTS
 #define SS_USB_SERIAL_SLOTS 4
-#define SS_USB_SERIAL_BUFFER 4096
+#endif
+#ifndef SS_USB_SERIAL_BUFFER
+#define SS_USB_SERIAL_BUFFER A733_XHCI_TRANSFER_BYTES
+#endif
+_Static_assert(SS_USB_SERIAL_PORTS>=1&&SS_USB_SERIAL_PORTS<=A733_XHCI_DEVICES&&SS_USB_SERIAL_SLOTS>=2&&
+    SS_USB_SERIAL_BUFFER>=1024&&SS_USB_SERIAL_BUFFER<=A733_XHCI_TRANSFER_BYTES,"serial geometry");
 /* All calls execute in the USB owner task. A service marshals application calls.
  * A lease remains valid through disconnect until its explicit release. */
 struct ss_usb_serial_view { const uint8_t *data; size_t size; uint64_t token; };
 struct ss_usb_serial_stats {
  uint64_t received, released, backpressure, dropped, errors, stale;
 };
-/* Supply four disjoint, 4096-byte DMA mappings retained until every lease and
+/* Supply SS_USB_SERIAL_SLOTS disjoint, SS_USB_SERIAL_BUFFER-byte DMA mappings retained until every lease and
  * controller transfer is released. The adapter validates NC/device translation. */
 struct ss_usb_serial_buffer_ops {
  int (*acquire)(void *, unsigned, uint8_t **, size_t *, uint64_t *);
