@@ -221,6 +221,16 @@ def check_pools(record, images):
                         '%s: the %s [%#x, %#x) lies in the slot 1 area' % (path, start, symbols[start], symbols[end]))
 
 
+def check_el3_regions():
+    """The return cleans each work and output region at EL3, so a region above the EL3-mapped 0x48000000 has EL3 entries."""
+    terminal = (ROOT / 'apps/os/cpu-return/terminal.patch').read_text()
+    require('.Lregion' in terminal and 'cmp w2, #2' in terminal and 'cmp w2, #3' in terminal,
+            'the return no longer cleans the work and output regions at EL3; revisit the EL3 entries of slot 1 regions')
+    memory = (ROOT / 'platform/a733-smp-cached/memory.c').read_text()
+    require('SS_REGION_WORK' in memory and 'SS_REGION_OUTPUT' in memory and 'a733_cached_el3_l2[(a - UINT64_C(0x40000000)) >> 21]' in memory,
+            'memory.c does not map the EL3 blocks of a work or output region in slot 1, which the return cleans at EL3')
+
+
 def load_elf(path):
     from elftools.elf.elffile import ELFFile
     return ELFFile(open(path, 'rb'))
@@ -266,6 +276,7 @@ def main():
     check_consumers(record)
     check_placement(record)
     check_pools(record, args.image)
+    check_el3_regions()
     for image in args.image:
         check_image(image, record)
     if args.output:

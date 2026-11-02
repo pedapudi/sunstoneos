@@ -3,7 +3,7 @@
 #include "a733_cpu_coherence.h"
 #include "a733_cpu_start.h"
 #include "a733_device_memory_layout.h"
-#ifdef SUNSTONE_A733_OS_GPU
+#if defined(SUNSTONE_A733_OS_GPU) || defined(SUNSTONE_A733_OS)
 #include "../../apps/os/application.h"
 #endif
 #if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
@@ -179,7 +179,7 @@ int a733_cached_memory_prepare(void)
      * only when this boot's decode is linear there with no protected region.
      * EL3 entries stay invalid: EL3 does not access that range. */
 #if !defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
-    if (a733_dram_decode_check(dram_map, DRAM_MAP_RANGES) == 1)
+    if (a733_dram_decode_check(dram_map, DRAM_MAP_RANGES) == 1) {
         for (unsigned r = 0; r < DRAM_MAP_RANGES; ++r) {
             uint64_t base = dram_map[r].base, level1 = base >= UINT64_C(0x80000000);
             uint64_t step = level1 ? UINT64_C(1) << 30 : UINT64_C(1) << 21;
@@ -188,6 +188,23 @@ int a733_cached_memory_prepare(void)
             for (uint64_t v = A733_EL1_DRAM_BLOCK(base), end = v + dram_map[r].size; v < end; v += step)
                 *entry++ = v;
         }
+#if defined(SUNSTONE_A733_OS)
+        /* The return cleans every work and output region of the manifest at EL3 before the board goes back to the ROM
+         * (apps/os/cpu-return/terminal.patch), and it parks on a block that its table does not map as normal
+         * write-back memory. A region that the build placed in level-1 slot 1 above the EL0 window therefore needs the
+         * EL3 entries of its blocks; the rest of the upper memory stays unmapped at EL3. */
+        const struct ss_manifest *placed = ss_application.manifest;
+        for (unsigned r = 0; placed && r < placed->region_count; ++r) {
+            const struct ss_region *region = &placed->regions[r];
+            if ((region->kind != SS_REGION_WORK && region->kind != SS_REGION_OUTPUT) ||
+                region->address < UINT64_C(0x48000000) || region->address >= UINT64_C(0x80000000)) continue;
+            for (uint64_t a = region->address & ~UINT64_C(0x1fffff); a < region->address + region->bytes; a += 0x200000) {
+                uint64_t common = a | BIT(54) | BIT(10) | (UINT64_C(3) << 8) | 4 | 1;
+                a733_cached_el3_l2[(a - UINT64_C(0x40000000)) >> 21] = common | BIT(5) | BIT(6);
+            }
+        }
+#endif
+    }
 #endif
 #if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
     /* One immutable NC physical view in both regimes. Controller metadata,
