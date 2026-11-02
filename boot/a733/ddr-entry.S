@@ -101,6 +101,11 @@ _start:
     cmp r0, #0
     bne restore_failed
 .endif
+    // boot0's main calls routine 0x49050 right after init_DRAM: it stores the nine NSI interconnect
+    // words of routine 0x48f38 in order with a dmb sy between stores, then a barrier helper
+    // (docs/designs/dram-bandwidth.md, "Interconnect words"). It returns 0.
+    ldr r3, =0x49051
+    blx r3
     mov r0, #4
     str r0, [r11, #4]
 finish:
