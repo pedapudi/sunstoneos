@@ -61,6 +61,8 @@ static StaticTask_t tasks[2];
 static StackType_t stacks[2][4096];
 
 enum { CONSTRUCT, IDENTIFY, CARD, STATUS, READ, POLL, TAKE, CAPTURE, FAT, REGION };
+static uint32_t pf_ready[3];
+static uint64_t stop_word;               /* what a failed lifetime publishes in the fault record, kept in the report too */             /* GPIO_POW_VAL and GPIO_POW_VAL_SET_CTL when the card was identified */
 static uint8_t status_copy[64];
 static uint64_t status_us, status_result;
 static struct {
@@ -214,6 +216,11 @@ static int setup(void)
         .kind = SUNXI_MMC_SD, .voltage_mask = 0x00300000, .sd_profile = SUNXI_MMC_SD_HIGH_SPEED4, .dma = DESCRIPTORS,
         .observe_s18 = 1};          /* ACMD41 carries S18R and the card's S18A is kept in the OCR; CMD11 is never sent */
     if (!s.config.topology) return 0;
+    if (c->uhs_mode > 2) return 0;
+    if (c->uhs_mode) {              /* a UHS-I lifetime: the profile that moves the bank, SDR25 only, no S18A observation */
+        s.config.sd_profile = SUNXI_MMC_SD_UHS_SDR104; s.config.observe_s18 = 0; s.config.sdr25_only = 1;
+        s.config.start_1v8 = c->uhs_mode == 2;
+    }
     /* Establish entry state, do not require it: the pins carry whatever the boot ROM and the runner left
      * (the provider accepts the passive and the ROM JTAG patterns). The inherited fields are read here,
      * recorded in the report's restoration words, and handed to the provider as the state to replace.
@@ -388,7 +395,9 @@ static int step(void)
         r = a733_mmc_platform_card(&s.platform, &s.card, s.config.deadline_us);
         if (r == A733_MMC_BUSY) return 0;
         if (r != A733_MMC_READY) return stop(4);
-        s.card_valid = 1; s.identified_us = now_us() - s.start; s.stage = STATUS; return 2;
+        s.card_valid = 1; s.identified_us = now_us() - s.start; s.stage = STATUS;
+        pf_ready[0] = *(volatile uint32_t *)0x02000048; pf_ready[1] = *(volatile uint32_t *)0x02000070;
+        pf_ready[2] = *(volatile uint32_t *)0x02000040; return 2;
     case STATUS: {
         /* ACMD13 (CMD55, then CMD13 with a 64-byte block): a read, in the read-only command set. */
         static uint8_t st[SUNXI_MMC_SD_STATUS_BYTES] __attribute__((aligned(64)));
@@ -495,7 +504,7 @@ static void report(int outcome)
 {
     volatile struct sdp_report *o = REPORT;
     memset((void *)o, 0, sizeof *o);
-    o->magic = SDP_REPORT_MAGIC; o->version = 1;
+    o->magic = SDP_REPORT_MAGIC; o->version = 2;
     o->stage = s.stage; o->reason = outcome ? s.reason : 0; o->done = s.done; o->planned = s.input.reads;
     o->identified_us = s.identified_us; o->elapsed_us = now_us() - s.start;
     if (s.done) { o->read_window_ticks = s.last_done - s.first_start; o->bytes = (uint64_t)s.done * s.input.blocks * 512u; }
@@ -505,7 +514,7 @@ static void report(int outcome)
         o->ocr = c->ocr; o->rca = c->rca; o->sectors = c->sectors;
         for (unsigned i = 0; i < 8; ++i) o->scr[i / 4] |= (uint64_t)c->scr[i] << (8 * (i % 4));
         uint32_t divisor = (c->module_divisor & 0x7fu) | ((c->module_divisor & SUNXI_MMC_MODULE_300M) ? 0x80u : 0u);
-        o->mode = (uint64_t)SUNXI_MMC_SD_HIGH_SPEED4 | ((uint64_t)c->bus_width << 8) | ((uint64_t)c->timing << 16) |
+        o->mode = (uint64_t)s.config.sd_profile | ((uint64_t)c->bus_width << 8) | ((uint64_t)c->timing << 16) |
             ((uint64_t)divisor << 24);
         o->card_hz = c->card_hz;
     }
@@ -521,6 +530,13 @@ static void report(int outcome)
     memcpy((void *)&o->region, &region, sizeof region);
     memcpy((void *)o->sd_status, status_copy, sizeof status_copy);
     if (s.card_valid) memcpy((void *)o->switch_status, c->switch_status, sizeof o->switch_status);
+    o->uhs[0] = s.input.uhs_mode; o->uhs[1] = s.card_valid ? c->signal_1v8 : 0; o->uhs[2] = s.card_valid ? c->uhs_outcome : 0;
+    o->uhs[3] = s.card_valid ? c->reentered : 0; o->uhs[4] = pf_ready[0]; o->uhs[5] = pf_ready[1];
+    o->uhs[6] = *(volatile uint32_t *)0x02000048; o->uhs[7] = *(volatile uint32_t *)0x02000070;
+    o->uhs[8] = pf_ready[2]; o->uhs[9] = *(volatile uint32_t *)0x02000040;
+    o->uhs[10] = (uint64_t)s.platform.fault_line | (uint64_t)s.platform.fault_why << 16 | (uint64_t)s.platform.stage << 24 |
+        (uint64_t)s.platform.fault << 32;
+    o->uhs[11] = stop_word;
     o->status_result = status_result; o->status_us = status_us;
     if (status_result) { o->au_sectors = sunxi_mmc_au_sectors(status_copy, 0); o->au_sectors_uhs = sunxi_mmc_au_sectors(status_copy, 1); }
     __asm__ volatile("dsb sy" ::: "memory");
@@ -565,13 +581,22 @@ static void sd_task(void *unused)
     if (r > 0 && !quiet()) { s.reason = 10; r = -1; }
     if (r > 0 && !close_card()) { s.reason = 11; r = -1; }
     s.closed = r > 0;
+    /* The stop word of a lifetime that cannot return: the SD platform's fault line, why, stage, the S18A answer, the bank's speed-mode
+     * support bits, whether the card signals 1.8 V and a fold of the read CRCs, so a failure after the reads still carries its site and
+     * the result (the fault record's esr holds 32 bits; its site byte holds the reason). */
+    {
+        uint32_t crc8 = 0, line = s.platform.fault_line > 1023 ? 1023 : s.platform.fault_line;
+        for (unsigned i = 0; i < s.done; ++i) crc8 ^= crcs[i] ^ (crcs[i] >> 8) ^ (crcs[i] >> 16) ^ (crcs[i] >> 24);
+        stop_word = (uint64_t)((line << 22) | ((s.platform.fault_why & 3u) << 20) | ((s.platform.stage & 31u) << 15) |
+            ((s.card_valid && (s.card.ocr >> 24 & 1) ? 1u : 0u) << 14) | ((s.card_valid ? (s.card.switch_status[13] & 31u) : 0u) << 9) |
+            ((s.card_valid && s.card.signal_1v8 ? 1u : 0u) << 8) | (crc8 & 255u));
+    }
     report(r > 0 ? 0 : 1);
     /* With the platform constructed and not closed, the lifetime cannot return. The fault record then
      * carries the stop: the line field is the reason, the detail is platform fault, platform stage, task
      * stage and completed reads. */
     if (r <= 0 && s.platform.initialized)
-        platform_panic((const char *)(uintptr_t)(((uint64_t)s.platform.fault << 24) | ((uint64_t)s.platform.stage << 16) |
-                       ((uint64_t)s.stage << 8) | (s.done & 255)), s.reason);
+        platform_panic((const char *)(uintptr_t)stop_word, s.reason);
     platform_exit(r > 0 ? 0 : 1);
 }
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name) { (void)task; platform_panic(name, 0); }

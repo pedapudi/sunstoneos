@@ -27,7 +27,8 @@ enum sunxi_mmc_sd_profile { SUNXI_MMC_SD_LEGACY=0, SUNXI_MMC_SD_DEFAULT4=1,
  * SDR25 at 1.8 V after it completed. */
 enum sunxi_mmc_uhs_outcome { SUNXI_MMC_UHS_NONE, SUNXI_MMC_UHS_SDR104,
     SUNXI_MMC_UHS_HOST, SUNXI_MMC_UHS_DECLINED, SUNXI_MMC_UHS_NO_SDR104,
-    SUNXI_MMC_UHS_NO_WINDOW };
+    SUNXI_MMC_UHS_NO_WINDOW,
+    SUNXI_MMC_UHS_LIMITED };   /* SDR25 at 1.8 V by request: SDR104 was never tried (sunxi_mmc_sdr25_only) */
 /* sd_signal operations and QUERY capability bits. */
 #define SUNXI_MMC_SIGNAL_QUERY 0u
 #define SUNXI_MMC_SIGNAL_SET 1u
@@ -123,6 +124,7 @@ struct sunxi_mmc_card {
      * decode register configuration and do not measure frequency. timing is
      * the CMD6 access mode: 0 default, 1 high speed or SDR25, 3 SDR104. */
     uint8_t signal_1v8, uhs_outcome, uhs_caps, sample_delay, tuning_start, tuning_width;
+    uint8_t reentered; /* identified at 1.8 V with no CMD11 (sunxi_mmc_reenter) */
     uint64_t tuning_map; /* Bit d set: every CMD19 at sample delay d matched. */
 };
 struct sunxi_mmc_result {
@@ -192,7 +194,7 @@ struct sunxi_mmc {
     /* UHS-I switch and tuning progress. */
     uint64_t signal_us;
     unsigned sd_sig, tune_delay, tune_repeat, tune_recover;
-    uint8_t s18r, signal_window, tuning, tune_failed, after_clock, observe_s18;
+    uint8_t s18r, signal_window, tuning, tune_failed, after_clock, observe_s18, reenter, sdr25_only;
     uint8_t tuning_block[64];
 };
 /* Zero storage before its first use. Single task owner; no concurrent ISR or
@@ -207,6 +209,13 @@ int sunxi_mmc_open(struct sunxi_mmc *, uint64_t absolute_deadline_us);
  * kept (card.ocr bit 24 is S18A), but CMD11 is never sent, so the card stays at 3.3 V signalling. A read-only capability
  * observation. Returns 0 for eMMC, for the UHS-I profile and for a core already opened. */
 int sunxi_mmc_observe_s18(struct sunxi_mmc *);
+/* After init and before open, UHS-I profile only. The platform has already put the bank at 1.8 V and the card still signals 1.8 V
+ * from an earlier lifetime: ACMD41 carries S18R, the answer is not required, CMD11 is never sent (the card would not answer it), and
+ * the card is taken as signalling 1.8 V (card.signal_1v8, card.reentered). Returns 0 outside the UHS-I profile or after open. */
+int sunxi_mmc_reenter(struct sunxi_mmc *);
+/* After init and before open, UHS-I profile only: after identification at 1.8 V run SDR25 at 50 MHz and never try SDR104 or tuning
+ * (card.uhs_outcome is SUNXI_MMC_UHS_LIMITED). The CMD6 response of the switch still reports every function group's support bits. */
+int sunxi_mmc_sdr25_only(struct sunxi_mmc *);
 /* Entire range and byte/sector command argument are validated before MMIO.
  * Borrowed storage must remain exclusive through DONE or terminal FAULT.
  */

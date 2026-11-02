@@ -12,6 +12,13 @@ Two card behaviours are not in the simplified specification (its sections 4.2.4.
 unmeasured, so every case runs for both values:
   K1  a host at 3.3 V reads a card that signals at 1.8 V (the card's high level is within the host's input range);
   K2  a card that already signals at 1.8 V answers ACMD41 with S18R set with S18A set.
+Session count: every cut point of the lifetime (the 15 steps from CMD0 to the reads, then the close's two steps) x K1 x K2 x whether the
+reset restores the bank to 3.3 V, 18 x 8 = 144 sessions. An earlier version had a fourth dimension, whether the image put the bank back
+at 3.3 V before it ended, and counted 16 x 16 = 256; that dimension only ever differed at the last cut point, so 120 of the 256 were
+repeats of another, and the 136 distinct cases are all among the 144 now: the two states it distinguished (a session that ends with
+the bank still at 1.8 V, and one that ends with it restored) are the cuts after `reads` and after the close's last step, and the new
+cut between the close's two steps (clock off, bank not yet restored) is new.
+
 A card that does not honour CMD0 at 1.8 V ("stuck" below) is the one the algorithm cannot recover; the model shows that the
 card supply cycle (DC1SW2) does, when the supply is held off long enough to discharge, and when it is not, the card is
 unchanged and the next hold is longer.
@@ -141,6 +148,9 @@ def switch_steps():
         ('CMD6 SDR104', lambda h: (h.cmd('CMD6'), setattr(h.card, 'timing', 'sdr104'))),
         ('CMD19 sweep', lambda h: h.cmd('CMD19')),
         ('reads', lambda h: h.cmd('CMD17')),
+        # the close (platform close stage CLOSE_BANK): the card clock off, then the bank back at 3.3 V; the card stays at 1.8 V
+        ('close: clock off', lambda h: h.gate(10)),
+        ('close: bank to 3.3 V', lambda h: h.set_bank(V33)),
     ]
     return steps
 
@@ -257,7 +267,8 @@ def run():
     steps = switch_steps()
     cases = unresolved_stuck = 0
     outcomes = {}
-    for k1, k2, bank_resets, end_bank_restored in itertools.product((True, False), (True, False), (True, False), (True, False)):
+    for k1, k2, bank_resets in itertools.product((True, False), (True, False), (True, False)):
+        end_bank_restored = False                       # the close is now part of the steps
         for cut in range(len(steps) + 1):
             card = Card()
             h = Host(card, k1, k2)
@@ -306,7 +317,7 @@ def run():
         assert card.sig == V33 and card.state == 'idle'
         h = Host(card, k1, k2)
         assert resolve(h) == 'C' and card.sig == V18       # a fresh 3.3 V card takes the normal switch
-    print(f'PASS sd-uhs recovery model: {cases} sessions cut at every step of the switch lifetime x K1 x K2 x reset behaviour x end bank, '
+    print(f'PASS sd-uhs recovery model: {cases} sessions cut at every step of the switch lifetime x K1 x K2 x reset behaviour (the close, with the bank back at 3.3 V, is the last two steps), '
           f'outcomes {outcomes}, no command with the bank at 1.8 V and the card at 3.3 V; {unresolved_stuck} stuck-card cases are '
           f'unresolved by software and cleared by the supply cycle once the hold exceeds the discharge time')
     return 0
