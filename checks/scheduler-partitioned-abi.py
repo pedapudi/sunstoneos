@@ -65,7 +65,13 @@ def main():
                     str(translation)], check=True, env=env)
     subprocess.run([str(args.cc), '-std=c++23', '-I' + str(native), *flags,
                     str(application)], check=True, env=env)
-    print('PASS native board/network task layout with dynamic selector; dynamic task execution remains gated')
+    dynamic = native / 'dynamic.c'
+    dynamic.write_text('#include "' + str(private / 'tasks.c') + '"\n'
+        '_Static_assert(configSUPPORT_DYNAMIC_ALLOCATION == 1, "native dynamic APIs selected");\n'
+        '_Static_assert(configSS_PARTITIONED_SCHEDULER == 1, "private dynamic admission selected");\n')
+    subprocess.run([str(args.cc), '-std=c11', '-I' + str(native), *flags,
+                    str(dynamic)], check=True, env=env)
+    print('PASS native board/network task layout and complete dynamic task API translation')
     print('PASS partitioned ABI: native and QEMU TCB size/alignment, owner slot, real newlib TLS and external C++ storage')
 
 

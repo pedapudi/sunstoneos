@@ -8,11 +8,12 @@ _Static_assert(configSS_PARTITIONED_SCHEDULER == 1, "exercise the private fork")
 _Static_assert(configNUMBER_OF_CORES == 8, "exercise every owner");
 #define ROUNDS 64U
 #define VICTIMS 32U
+#define WITHHOLD_ROUNDS 16U
 static StaticTask_t worker_state[8], busy_state[8], mover_state[2], control_state, victim_state[VICTIMS];
 static StackType_t worker_stack[8][2048], busy_stack[8][1024], mover_stack[2][2048], control_stack[4096], victim_stack[VICTIMS][1024];
-static TaskHandle_t workers[8], movers[2], backgrounds[8], controller, local_sender, local_receiver;
-static StaticTask_t local_state[2];
-static StackType_t local_stack[2][2048];
+static TaskHandle_t workers[8], movers[2], backgrounds[8], controller, local_sender, local_receiver, home_blocker;
+static StaticTask_t local_state[3];
+static StackType_t local_stack[3][2048];
 static StaticQueue_t reply_state, timeout_state;
 static uint8_t reply_storage[32 * sizeof(uint32_t)], timeout_storage[sizeof(uint32_t)];
 static QueueHandle_t replies, empty;
@@ -20,6 +21,8 @@ static uint64_t busy[8], switches[8], idle_selected[8], scheduling_locks[8];
 static unsigned in_switch[8], worker_round[8], mover_round[2], mover_mask[2], victim_runs;
 /* These symbols also identify the stopped workload in a QEMU GDB snapshot. */
 static unsigned control_round, control_phase, isolated_local, selected_idle[8];
+static unsigned withholding, blocker_release;
+static uint64_t withholding_completed, withholding_observations, withholding_ticks;
 static uint64_t local_phase_locks, local_wakes, local_completed, local_ticks, peer_idle_samples;
 extern BaseType_t __real_xTaskGenericNotify(TaskHandle_t, UBaseType_t, uint32_t, eNotifyAction, uint32_t *);
 BaseType_t __wrap_xTaskGenericNotify(TaskHandle_t task, UBaseType_t index, uint32_t value,
@@ -108,8 +111,13 @@ static void local_receive(void *unused)
     for (;;) {
         configASSERT(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
         configASSERT(portGET_CORE_ID() == 1);
-        __atomic_fetch_add(&local_completed, 1, __ATOMIC_RELAXED);
-        xTaskNotifyGive(local_sender);
+        if (__atomic_load_n(&withholding, __ATOMIC_ACQUIRE)) {
+            ++withholding_completed;
+            xTaskNotifyGive(controller);
+        } else {
+            __atomic_fetch_add(&local_completed, 1, __ATOMIC_RELAXED);
+            xTaskNotifyGive(local_sender);
+        }
     }
 }
 static void local_send(void *unused)
@@ -141,6 +149,17 @@ static void local_send(void *unused)
     xTaskNotifyGive(controller);
     vTaskSuspend(NULL);
     for (;;) {}
+}
+static void withhold_home(void *unused)
+{
+    (void)unused;
+    for (;;) {
+        configASSERT(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
+        configASSERT(portGET_CORE_ID() == 1);
+        xTaskNotifyGive(controller);
+        while (!__atomic_load_n(&blocker_release, __ATOMIC_ACQUIRE))
+            __asm__ volatile("yield");
+    }
 }
 static void control(void *unused)
 {
@@ -198,7 +217,39 @@ static void control(void *unused)
     configASSERT(local_wakes == ROUNDS && local_completed == ROUNDS);
     configASSERT(peer_idle_samples == ROUNDS && busy_delta > 0);
     configASSERT(local_ticks >= ROUNDS && local_ticks < pdMS_TO_TICKS(1000));
-    control_phase = 4;
+    control_phase = 6;
+    configASSERT(local_phase_locks == 0);
+    home_blocker = xTaskCreateStaticAffinitySet(withhold_home, "home-blocker", 2048,
+        NULL, 5, local_stack[2], &local_state[2], 2);
+    configASSERT(home_blocker);
+    __atomic_store_n(&withholding, 1, __ATOMIC_RELEASE);
+    for (unsigned i = 0; i < WITHHOLD_ROUNDS; ++i) {
+        __atomic_store_n(&blocker_release, 0, __ATOMIC_RELEASE);
+        xTaskNotifyGive(home_blocker);
+        configASSERT(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000)) == 1);
+        TickType_t start = xTaskGetTickCount();
+        xTaskNotifyGive(local_receiver);
+        vTaskDelay(1);
+        /* One counted opportunity requires all three states simultaneously:
+         * receiver READY, higher-priority home blocker CURRENT, allowed peer idle. */
+        configASSERT(eTaskGetState(local_receiver) == eReady);
+        configASSERT(xTaskGetCurrentTaskHandleForCore(1) == home_blocker);
+        configASSERT(__atomic_load_n(&selected_idle[2], __ATOMIC_RELAXED));
+        ++withholding_observations;
+        configASSERT(withholding_completed == i);
+        __atomic_store_n(&blocker_release, 1, __ATOMIC_RELEASE);
+        configASSERT(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000)) == 1);
+        withholding_ticks += xTaskGetTickCount() - start;
+    }
+    platform_puts("withheld-ready opportunities="); platform_hex(WITHHOLD_ROUNDS);
+    platform_puts(" stranded-observations="); platform_hex(withholding_observations);
+    platform_puts(" home-completions="); platform_hex(withholding_completed);
+    platform_puts(" elapsed-ticks="); platform_hex(withholding_ticks);
+    platform_puts(" home-mask="); platform_hex(6);
+    platform_puts(" blocker-priority="); platform_hex(5);
+    platform_puts(" receiver-priority="); platform_hex(4);
+    platform_puts("\n");
+    configASSERT(withholding_observations == WITHHOLD_ROUNDS && withholding_completed == WITHHOLD_ROUNDS);
     for (unsigned id = 0; id < 8; ++id) {
         configASSERT(__atomic_load_n(&worker_round[id], __ATOMIC_RELAXED) == ROUNDS);
         configASSERT(__atomic_load_n(&busy[id], __ATOMIC_RELAXED) > 0);
@@ -214,7 +265,7 @@ static void control(void *unused)
     configASSERT(local_phase_locks == 0);
     for (unsigned id = 0; id < 8; ++id)
         configASSERT(__atomic_load_n(&scheduling_locks[id], __ATOMIC_RELAXED) == 0);
-    control_phase = 6;
+    control_phase = 7;
     platform_puts("PASS partitioned concurrent: 8 owners, pinned and multiple-affinity priorities, notification/block/timeout, FP migration, pending delete, zero isolated local-wake/switch global locks\n");
     platform_exit(0);
 }

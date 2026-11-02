@@ -65,6 +65,10 @@ def main():
                 owners.append(dict(zip(('cpu', 'switches', 'idle_selections', 'busy_progress', 'switch_path_global_locks'),
                     (int(value, 16) for value in row.groups()))))
             local = re.search(r'local-wake attempts=(0x[0-9a-f]+) completions=(0x[0-9a-f]+) ticks=(0x[0-9a-f]+) tick-hz=(0x[0-9a-f]+) busy-home-progress=(0x[0-9a-f]+) idle-peer-samples=(0x[0-9a-f]+) all-global-locks=(0x[0-9a-f]+)', log)
+            withheld = re.search(r'withheld-ready opportunities=(0x[0-9a-f]+) stranded-observations=(0x[0-9a-f]+) home-completions=(0x[0-9a-f]+) elapsed-ticks=(0x[0-9a-f]+) home-mask=(0x[0-9a-f]+) blocker-priority=(0x[0-9a-f]+) receiver-priority=(0x[0-9a-f]+)', log)
+            if withheld:
+                counters['withheld_ready'] = dict(zip(('opportunities', 'stranded_observations', 'home_completions', 'elapsed_ticks', 'allowed_mask', 'blocker_priority', 'receiver_priority'),
+                    (int(value, 16) for value in withheld.groups())))
             counters['owners'] = owners
             if local:
                 counters['local'] = dict(zip(('attempts', 'completions', 'ticks', 'tick_hz', 'busy_home_progress', 'idle_peer_samples', 'all_global_locks'),
@@ -73,7 +77,7 @@ def main():
                 counters['local']['completions_per_second'] = (
                     measured['completions'] * measured['tick_hz'] / measured['ticks']
                     if measured['ticks'] else None)
-            passed = passed and len(owners) == 8 and local is not None
+            passed = passed and len(owners) == 8 and local is not None and withheld is not None
             passed = passed and all(owner['switch_path_global_locks'] == 0 for owner in owners)
             if local:
                 passed = passed and measured['all_global_locks'] == 0 and measured['ticks'] > 0
