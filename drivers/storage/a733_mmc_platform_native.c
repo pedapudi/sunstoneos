@@ -248,6 +248,8 @@ int a733_mmc_platform_native_bind_bounds(struct a733_mmc_platform_native *n,cons
        !a733_storage_bounds_card_ok(b,p->config.kind==SUNXI_MMC_SD,p->core.card.sector_addressed))return 0;
     n->bounds=b;return 1;
 }
+#endif
+#ifndef SUNXI_MMC_READ_ONLY
 int a733_mmc_platform_native_bind_update(struct a733_mmc_platform_native *n,struct a733_storage_update *u)
 {
     if(!n||!n->initialized||n->update||!u||!current(n)||!a733_storage_update_owned(u,u->platform)||
