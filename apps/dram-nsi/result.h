@@ -38,7 +38,7 @@ struct dn_variant { uint32_t mask, mode, stagger; };
 #define DN_EXTRA 13u
 struct dn_core_sample { uint32_t chunks; uint32_t ticks; };
 /* Counters of one window for the target-agent ports 32 and 33. */
-struct dn_counters { uint32_t ticks; uint32_t rq_rd[2], rq_wr[2], dt_rd[2], dt_wr[2], la_rd[2]; };
+struct dn_counters { uint32_t ticks, clear_polls; uint32_t rq_rd[2], rq_wr[2], dt_rd[2], dt_wr[2], la_rd[2]; };
 struct dn_config {
     uint32_t mask, mode, stagger, reserved;
     struct dn_core_sample sample[DN_REPS][DN_CORES];
@@ -50,6 +50,7 @@ struct dn_probe {
     uint32_t words_written[DN_WORDS];       /* read back after the write; zero when the image does not write */
     uint32_t extra[DN_EXTRA];
     uint32_t write_enabled, reserved[2];
+    uint32_t diag[12];                      /* counter start diagnostic of NSI port 32, see main.c */
 };
 struct dn_result {
     char magic[8];

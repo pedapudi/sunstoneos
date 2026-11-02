@@ -23,9 +23,9 @@ SHARED_CHUNKS = 2048
 CLOCK = 256
 HEAD = struct.Struct('<8sQQ4I5i5i')
 FILL = struct.Struct('<' + 'Q' * CORES)
-CONFIG = struct.Struct('<4I' + 'II' * (REPS * CORES) + 'I' * (REPS * 11) + '4x' + 'Q' * CORES)
+CONFIG = struct.Struct('<4I' + 'II' * (REPS * CORES) + 'I' * (REPS * 12) + 'Q' * CORES)
 WORDS, EXTRA, PHASES = 9, 13, 2
-PROBE = struct.Struct('<' + 'I' * (2 * WORDS + EXTRA + 3))
+PROBE = struct.Struct('<' + 'I' * (2 * WORDS + EXTRA + 3 + 12))
 WORD_ADDRESSES = (0x0202446c, 0x0202466c, 0x02023a14, 0x02023c14, 0x02023e14, 0x02024014, 0x02024214, 0x0202200c, 0x0202220c)
 WORD_VALUES = (0x40a05, 0x40a05, 0x3f, 0x7f, 0xf, 0xf1, 0xf1, 1, 1)
 VARIANTS = [(m, 0, 0) for m in (0x01, 0x03, 0x0f, 0x3f, 0x40, 0xc0, 0xcf, 0xff)]
@@ -73,8 +73,8 @@ def decode_phase(payload, base_offset, words, readiness, window, hz):
             raise ValueError(f'configuration {c} differs from the variant table')
         cores = [k for k in range(CORES) if mask >> k & 1]
         samples = values[4:4 + 2 * REPS * CORES]
-        digests = values[4 + 2 * REPS * CORES + 11 * REPS:]
-        counters = values[4 + 2 * REPS * CORES:4 + 2 * REPS * CORES + 11 * REPS]
+        digests = values[4 + 2 * REPS * CORES + 12 * REPS:]
+        counters = values[4 + 2 * REPS * CORES:4 + 2 * REPS * CORES + 12 * REPS]
         if any(digests[k] for k in range(CORES) if k not in cores):
             raise ValueError(f'configuration {c} carries a digest for a core outside its set')
         cb = chunk_bytes(mode)
@@ -109,11 +109,10 @@ def decode_phase(payload, base_offset, words, readiness, window, hz):
                     want = int(np.bitwise_xor.reduce(chunk_digest[visits == 1], initial=np.uint64(0)))
                     if digests[k] != want:
                         raise ValueError(f'configuration {c} core {k} digest differs from the data written')
-            cv = counters[11 * rep:11 * rep + 11]
-            if not any(cv[1:]):
-                raise ValueError(f'configuration {c} rep {rep} has no counter values')
+            cv = counters[12 * rep:12 * rep + 12]
+            cv = cv[:1] + cv[2:] + cv[1:2]         # ticks, then the ten counters, then the clear polls
             ta = dict(read_requests=cv[1] + cv[2], write_requests=cv[3] + cv[4], read_units=cv[5] + cv[6],
-                      write_units=cv[7] + cv[8], read_latency_sum=cv[9] + cv[10], read_cost_ticks=cv[0])
+                      write_units=cv[7] + cv[8], read_latency_sum=cv[9] + cv[10], read_cost_ticks=cv[0], clear_polls=cv[11])
             ta['mean_read_latency'] = ta['read_latency_sum'] / ta['read_requests'] if ta['read_requests'] else 0.0
             ta['read_bytes_16'] = ta['read_units'] * 16
             ta['consumed_bytes'] = bytes_all
@@ -154,7 +153,8 @@ def decode(payload):
     offset += PROBE.size
     probe = dict(words_before=dict(zip(map(hex, WORD_ADDRESSES), pv[:WORDS])),
                  words_written=dict(zip(map(hex, WORD_ADDRESSES), pv[WORDS:2 * WORDS])),
-                 extra=pv[2 * WORDS:2 * WORDS + EXTRA], write_enabled=pv[2 * WORDS + EXTRA])
+                 extra=pv[2 * WORDS:2 * WORDS + EXTRA], write_enabled=pv[2 * WORDS + EXTRA],
+                 diag=[hex(x) for x in pv[2 * WORDS + EXTRA + 3:]])
     if probe['write_enabled'] and tuple(pv[WORDS:2 * WORDS]) != WORD_VALUES:
         probe['write_mismatch'] = True
     phases = []

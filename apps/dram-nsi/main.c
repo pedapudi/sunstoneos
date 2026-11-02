@@ -68,13 +68,51 @@ static void probe_extra(uint32_t *x)
 /* Counter sequence of __nsi_pmu_timer_store_v2: period, enable off, clear, enable on. */
 static void counters_start(void)
 {
+    unsigned polls = 0;
     for (unsigned t = 0; t < 2; ++t) {
         const uint32_t b = DN_TA_PORT(32 + t);
         dn_reg_write(b + 0xc0, 0);
         dn_reg_write(b + 0xc8, 0x7fffffffu);
         dn_reg_write(b + 0xc4, 1);
+        /* Whether the clear bit clears itself is unproven: wait for it, then clear it by hand. */
+        while (dn_reg_read(b + 0xc4) & 1u && polls < 1000u) ++polls;
+        if (dn_reg_read(b + 0xc4) & 1u) dn_reg_write(b + 0xc4, 0);
         dn_reg_write(b + 0xc0, 1);
     }
+    job.ctr.clear_polls = polls;
+    dn_dmb();
+}
+/* Diagnostic of the counter sequence on port 32, run once by the probe job before the windows: each step is
+ * followed by a read of the clear word, and 1 MiB of buffer is read between the readings so that the target
+ * agent sees traffic. diag: [0] clear word at entry, [1] after the clear write, [2] after enable, [3] read
+ * requests, [4] read data, [5] period word, [6] clear word after writing zero, [7] read requests, [8] read data,
+ * [9] latency sum, [10] enable word, [11] write requests. */
+static void counters_diagnostic(uint32_t *d)
+{
+    const uint32_t b = DN_TA_PORT(32);
+    d[0] = dn_reg_read(b + 0xc4);
+    dn_reg_write(b + 0xc0, 0);
+    dn_reg_write(b + 0xc8, 0x7fffffffu);
+    dn_reg_write(b + 0xc4, 1);
+    dn_dmb();
+    d[1] = dn_reg_read(b + 0xc4);
+    dn_reg_write(b + 0xc0, 1);
+    dn_dmb();
+    (void)dn_read(buffer, 1u << 20);
+    d[2] = dn_reg_read(b + 0xc4);
+    d[3] = dn_reg_read(b + 0xcc);
+    d[4] = dn_reg_read(b + 0xd4);
+    d[5] = dn_reg_read(b + 0xc8);
+    dn_reg_write(b + 0xc4, 0);
+    dn_dmb();
+    (void)dn_read(buffer + (1u << 20) / 8, 1u << 20);
+    d[6] = dn_reg_read(b + 0xc4);
+    d[7] = dn_reg_read(b + 0xcc);
+    d[8] = dn_reg_read(b + 0xd4);
+    d[9] = dn_reg_read(b + 0xdc);
+    d[10] = dn_reg_read(b + 0xc0);
+    d[11] = dn_reg_read(b + 0xd0);
+    dn_reg_write(b + 0xc0, 0);
     dn_dmb();
 }
 static void counters_read(void)
@@ -108,6 +146,7 @@ void dram_nsi_worker(void *arg)
         if (job.fill == 2) {                /* probe job: one core touches the interconnect */
             probe_read(job.probe.words_before);
             probe_extra(job.probe.extra);
+            if (!job.write) counters_diagnostic(job.probe.diag);
             if (job.write) {
                 probe_write();
                 probe_read(job.probe.words_written);
