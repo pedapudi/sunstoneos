@@ -246,6 +246,19 @@ Port 3-3, approved operating points, restored rails requested.
 | `1793576493129223154-47e61f61` | `c8b67e0dd9e4bec0f3dc1a0712ed42b5bdf538ec5af651b269cf63cc219de6ac` | CPU-only control, passed. Normal return, image-bound decoder accepted all eight matrix-product digests, zero NPU jobs, RAM restored, both CPU rails at 800 mV. Wall time 133.5 s. |
 | `1793576635217632637-5879361e` | `e574d622a9465cccece1a26222b9d2157a9aba5fc758a427bbd84ca6a5a579d3` | Concurrency image, watchdog reset, DRAM lost. Startup panic `board application startup` (`apps/board/main.c:399`, detail 11): one OS application start hook returned failure before the scheduler. No NPU job ran. |
 
+Host reproduction of the concurrency image's startup refusal uses
+`checks/os-npu-start.py`, which runs the linked `board_application_start`
+against the exact `session.bin` of entry `1793576635217632637-5879361e`, with
+the image's interrupt table routed and the shared providers set as the board
+main leaves them. Every start hook accepts that session, so the host does not
+reproduce the refusal. The check models translation, the thermal construction
+and the interrupt controller state; the refusal must come from one of those or
+from hardware state at entry. Each start hook, the CPU return start and each
+refusal inside the NPU start now record their own site (the hook index and
+address, or the source line in `apps/os/npu.c`) before the panic. Cases that
+the check refuses by hook: an unrouted NPU interrupt (NPU hook, line 434) and a
+wrong catalogue digest (application preparation).
+
 A failed application check now returns a 1728-byte failure record through the
 normal finish path, with the thermal status (cause bits, five temperatures in
 millidegrees Celsius, freshness deadline and counter, time since workload
