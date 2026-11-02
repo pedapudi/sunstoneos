@@ -139,7 +139,7 @@ class Fat32:
         for o, e in zip(free[start:], entries):
             self.img[o:o + 32] = e
 
-    def populate(self, tree, layout, slots=None):
+    def populate(self, tree, layout, slots=None, parent=0):
         slots = slots or self.root_slots()
         used, info = set(), {}
         for name, value in tree.items():
@@ -148,10 +148,10 @@ class Fat32:
                 self.chain(c)
                 o = self.sector(c[0]) * SECTOR
                 self.img[o:o + self.csize] = bytes(self.csize)
-                inner = [self.raw(b'.          ', 0x10, 0, c[0], 0), self.raw(b'..         ', 0x10, 0, 0, 0)]
+                inner = [self.raw(b'.          ', 0x10, 0, c[0], 0), self.raw(b'..         ', 0x10, 0, parent, 0)]
                 self.img[o:o + 64] = b''.join(inner)
                 sub = [o + 64 + 32 * i for i in range(self.csize // 32 - 2)]
-                sub_info = self.populate(value, layout, sub)
+                sub_info = self.populate(value, layout, sub, c[0])
                 info[name] = {'dir': c[0], 'children': sub_info}
                 self.place(slots, self.entries(name, 0x10, c[0], 0, used))
             else:

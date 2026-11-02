@@ -10,8 +10,7 @@ with Python 3 and no other dependency, and any byte range can be recomputed from
     python3 tools/region_test_file.py digest            # SHA-256 of the stream, without writing it
     python3 tools/region_test_file.py verify sunstone-region-test.bin
 
-Copy the file to the root directory of the card's FAT32 volume (for example with the PC's file
-manager) under the name sunstone-region-test.bin.
+The loader reads the file at /sunstone-test/sunstone-region-test.bin on the card's FAT32 volume.
 """
 import argparse
 import hashlib
