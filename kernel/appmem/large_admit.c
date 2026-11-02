@@ -39,7 +39,7 @@ int ss_large_records_valid(const struct ss_large_region *r, unsigned count)
     return 1;
 }
 
-int large_admit(struct app_region_ledger *l, uint8_t owner, const struct ss_large_region *r, unsigned count,
+int large_admit(struct app_region_ledger *l, uint16_t owner, const struct ss_large_region *r, unsigned count,
                 struct large_slot *out, unsigned out_capacity)
 {
     if (out_capacity) memset(out, 0, sizeof(struct large_slot) * out_capacity);
