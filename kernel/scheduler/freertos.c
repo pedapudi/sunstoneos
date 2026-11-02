@@ -50,6 +50,7 @@ struct ssKernelCPU {
     struct ss_deadline_heap deadlines;
     unsigned preempt, object_depth, critical_depth, suspend_depth, isr_depth;
     UBaseType_t object_mask;
+    _Atomic uint64_t slice_deadline;
     bool yield_tail, reschedule, irq_drained;
     uint64_t publication[2];
     uint64_t repair[2];
@@ -110,6 +111,7 @@ static bool ssKernelDispatch(void *, unsigned);
 static void ssKernelInspect(void *, unsigned, unsigned);
 static void ssKernelExpired(void *, const struct ss_deadline_result *);
 static void ssKernelPublishReference(struct ss_kernel_pin);
+static void ssKernelSliceRefresh(unsigned, bool);
 static void ssKernelRetirement(void *context, unsigned slot, unsigned coordinator)
 {
     (void)context; (void)coordinator;
@@ -131,6 +133,7 @@ static void ssKernelInitialize(void)
     for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
         ss_owner_init(&ssKernelCPUs[c].run, c, &ssKernelBackend);
         ss_deadline_init(&ssKernelCPUs[c].deadlines);
+        atomic_init(&ssKernelCPUs[c].slice_deadline, UINT64_MAX);
     }
     atomic_init(&ssKernelTime, configINITIAL_TICK_COUNT);
     atomic_init(&ssKernelAdminNext, 0);
@@ -213,6 +216,7 @@ static bool ssKernelAddTask(TCB_t *t)
             cpu->reschedule = true;
             portYIELD();
         }
+        if (owner == ssKernelCPUId()) ssKernelSliceRefresh(owner, false);
     }
     return slot < SS_OWNER_SLOTS;
 }
@@ -380,6 +384,35 @@ static void ssKernelCancel(struct ssKernelTask *s)
         configASSERT(ss_deadline_cancel(&ssKernelCPUs[c].deadlines,
                                         &s->deadline, s->generation));
 }
+/* Only the owner inspects its queues/current task. CPU0 samples this published
+ * deadline without reading a remote task or queue. The first equal peer arms
+ * a slice immediately, including local wakes that need no scheduler IRQ. */
+static void ssKernelSliceRefresh(unsigned c, bool reset)
+{
+    struct ssKernelCPU *cpu = &ssKernelCPUs[c];
+    configASSERT(c == ssKernelCPUId());
+    bool eligible = false;
+#if ( configUSE_TIME_SLICING == 1 )
+    struct ss_owner_task *current = cpu->run.current;
+    if (current) {
+        TCB_t *t = current->context;
+        eligible = !(t->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) &&
+            atomic_load_explicit(&ssKernelTasks[current->slot].execution, memory_order_acquire) == SS_K_RUNNING &&
+            cpu->run.ready[current->priority].head != NULL;
+#if ( configUSE_TASK_PREEMPTION_DISABLE == 1 )
+        eligible = eligible && !t->xPreemptionDisable;
+#endif
+    }
+#endif
+    uint64_t deadline = atomic_load_explicit(&cpu->slice_deadline, memory_order_relaxed);
+    if (!eligible) deadline = UINT64_MAX;
+    else if (reset || deadline == UINT64_MAX) {
+        uint64_t now = ssKernelNow();
+        configASSERT(now < UINT64_MAX - 1);
+        deadline = now + 1;
+    }
+    atomic_store_explicit(&cpu->slice_deadline, deadline, memory_order_release);
+}
 static void ssKernelMakeReady(struct ssKernelTask *s)
 {
     unsigned c = ssKernelCPUId();
@@ -392,6 +425,7 @@ static void ssKernelMakeReady(struct ssKernelTask *s)
         configASSERT(ss_owner_enqueue(&cpu->run, &s->ready, false));
     if (!cpu->run.current || s->ready.priority > cpu->run.current->priority)
         cpu->reschedule = true;
+    ssKernelSliceRefresh(c, false);
 }
 static void ssKernelBlock(TickType_t ticks, bool indefinite, unsigned kind)
 {
@@ -484,6 +518,12 @@ static void ssKernelService(void)
     ss_owner_drain(&cpu->run, ssKernelInspect, NULL);
     ss_deadline_expire(&cpu->deadlines, ssKernelNow(), SS_DEADLINE_BATCH,
                        ssKernelExpired, NULL);
+    ssKernelSliceRefresh(c, false);
+    if (atomic_load_explicit(&cpu->slice_deadline, memory_order_relaxed) <= ssKernelNow()) {
+        cpu->yield_tail = true;
+        cpu->reschedule = true;
+        atomic_store_explicit(&cpu->slice_deadline, UINT64_MAX, memory_order_release);
+    }
     uint64_t next;
     if ((ss_deadline_next(&cpu->deadlines, &next) && next <= ssKernelNow()) ||
         ss_owner_has_pending(&cpu->run)) ssKernelForce(c);
@@ -558,6 +598,7 @@ static void ssKernelSwitch(unsigned c)
     s->off_cpu = false;
     pxCurrentTCBs[c] = selected->context;
     pxCurrentTCBs[c]->xTaskRunState = (BaseType_t)c;
+    ssKernelSliceRefresh(c, true);
     traceTASK_SWITCHED_IN();
     portTASK_SWITCH_HOOK(pxCurrentTCBs[c]);
 #if ( configUSE_POSIX_ERRNO == 1 )
@@ -596,6 +637,8 @@ static BaseType_t ssKernelTick(void)
         uint64_t next;
         enum ss_deadline_state state = ss_deadline_snapshot(&ssKernelCPUs[c].deadlines.published, &next);
         if (state == SS_DEADLINE_UNKNOWN || (state == SS_DEADLINE_VALUE && next <= now))
+            ssKernelForce(c);
+        else if (atomic_load_explicit(&ssKernelCPUs[c].slice_deadline, memory_order_acquire) <= now)
             ssKernelForce(c);
     }
     return ssKernelOwnerIRQExit();
@@ -916,8 +959,10 @@ static bool ssKernelCommand(TaskHandle_t handle, enum ssKernelCommand command,
         configASSERT(false); /* Deleted tasks cannot regain execution. */
         return changed;
     }
-    if (atomic_load_explicit(&ssKernelTasks[slot].owner, memory_order_acquire) == ssKernelCPUId())
+    if (atomic_load_explicit(&ssKernelTasks[slot].owner, memory_order_acquire) == ssKernelCPUId()) {
         ss_control_drain(&ssKernelControl, ssKernelCPUId());
+        ssKernelSliceRefresh(ssKernelCPUId(), false);
+    }
     if (!from_isr && changed && self && command == SS_K_SUSPEND) {
         /* No reference is kept on a stack that can remain suspended forever.
          * Returning here requires that this same task was resumed alive. */

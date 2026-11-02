@@ -446,3 +446,70 @@ static void fixture_no_idle_pull(TaskHandle_t task)
     fixture_cpu = 0;
     printf("linked FreeRTOS placement: %u checkpoint observations of ready work on a busy owner beside an idle core; no idle pull\n", imbalance_observations);
 }
+
+static int fixture_slices(void)
+{
+    vTaskResetState();
+    vTaskStartScheduler();
+    for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) enter(cpu);
+    static StaticTask_t slice_tcb[2];
+    static StackType_t slice_stack[2][configMINIMAL_STACK_SIZE];
+    fixture_cpu = 2;
+    TaskHandle_t first = xTaskCreateStaticAffinitySet(fixture_entry, "slice-a", configMINIMAL_STACK_SIZE,
+        NULL, 4, slice_stack[0], &slice_tcb[0], 1u << 2);
+    enter(2);
+    assert(pxCurrentTCBs[2] == first);
+    unsigned idle_sgi = fixture_sgi[3];
+    assert(atomic_load(&ssKernelCPUs[2].slice_deadline) == UINT64_MAX);
+    unsigned single_sgi = fixture_sgi[2];
+    fixture_cpu = 0;
+    (void)xTaskIncrementTick();
+    assert(fixture_sgi[2] == single_sgi);
+    fixture_cpu = 2;
+    TaskHandle_t second = xTaskCreateStaticAffinitySet(fixture_entry, "slice-b", configMINIMAL_STACK_SIZE,
+        NULL, 4, slice_stack[1], &slice_tcb[1], 1u << 2);
+    assert(pxCurrentTCBs[2] == first && second);
+    assert(ssKernelCPUs[2].deadlines.count == 0);
+    /* Local creation arms the first peer without an intervening owner IRQ. */
+    assert(atomic_load(&ssKernelCPUs[2].slice_deadline) == ssKernelNow() + 1);
+    for (unsigned slice = 0; slice < 6; ++slice) {
+        unsigned before = fixture_sgi[2];
+        fixture_cpu = 0;
+        (void)xTaskIncrementTick();
+        assert(fixture_sgi[2] == before + 1);
+        fixture_cpu = 2;
+        assert(ssKernelOwnerIRQExit());
+        enter(2);
+        assert(pxCurrentTCBs[2] == ((slice & 1) ? first : second));
+        assert(!ssKernelCPUs[2].deadlines.count);
+    }
+    fixture_cpu = 2;
+    vTaskPreemptionDisable(first);
+    assert(atomic_load(&ssKernelCPUs[2].slice_deadline) == UINT64_MAX);
+    unsigned disabled_sgi = fixture_sgi[2];
+    for (unsigned tick = 0; tick < 3; ++tick) {
+        fixture_cpu = 0;
+        (void)xTaskIncrementTick();
+        assert(fixture_sgi[2] == disabled_sgi);
+    }
+    fixture_cpu = 2;
+    vTaskPreemptionEnable(first);
+    assert(atomic_load(&ssKernelCPUs[2].slice_deadline) == ssKernelNow() + 1);
+    /* Removing the only peer disarms rather than sending idle-period SGIs. */
+    vTaskSuspend(second);
+    assert(atomic_load(&ssKernelCPUs[2].slice_deadline) == UINT64_MAX);
+    unsigned lone_sgi = fixture_sgi[2];
+    fixture_cpu = 0;
+    (void)xTaskIncrementTick();
+    assert(fixture_sgi[2] == lone_sgi);
+    fixture_cpu = 2;
+    vTaskResume(second);
+    assert(atomic_load(&ssKernelCPUs[2].slice_deadline) == ssKernelNow() + 1);
+    vTaskPrioritySet(second, 3);
+    assert(atomic_load(&ssKernelCPUs[2].slice_deadline) == UINT64_MAX);
+    vTaskPrioritySet(second, 4);
+    assert(atomic_load(&ssKernelCPUs[2].slice_deadline) == ssKernelNow() + 1);
+    assert(fixture_sgi[3] == idle_sgi);
+    printf("linked FreeRTOS slicing: secondary equal-priority FIFO rotation without timeout deadlines; single/disabled owners receive no slice SGIs\n");
+    return 0;
+}

@@ -65,6 +65,7 @@ static void invariant(void)
 int main(int argc, char **argv)
 {
     (void)argv;
+    if (argc > 1 && !strcmp(argv[1], "slice")) return fixture_slices();
     if (argc > 1) {
         int result = fixture_startup();
         if (!strcmp(argv[1], "end")) vTaskEndScheduler();

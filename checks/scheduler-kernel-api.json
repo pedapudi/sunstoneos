@@ -607,7 +607,8 @@
     "configGENERATE_RUN_TIME_STATS": 1,
     "configUSE_TASK_PREEMPTION_DISABLE": 1,
     "configUSE_C_RUNTIME_TLS_SUPPORT": 1,
-    "configUSE_POSIX_ERRNO": 1
+    "configUSE_POSIX_ERRNO": 1,
+    "configUSE_TIME_SLICING": 1
   },
   "validation_commands": [
     "checks/scheduler-kernel-adapter.py --freertos FREERTOS --build-dir BUILD --sysroot SYSROOT",
@@ -625,5 +626,6 @@
     "configUSE_TICKLESS_IDLE": "nonzero; series D",
     "configUSE_STATS_FORMATTING_FUNCTIONS": "positive"
   },
-  "placement_validation": "A host checkpoint fixture records one observation of ready work waiting on its busy owner beside an idle core. This confirms no idle pull in series B; it is not a concurrent imbalance measurement."
+  "placement_validation": "A host checkpoint fixture records one observation of ready work waiting on its busy owner beside an idle core. This confirms no idle pull in series B; it is not a concurrent imbalance measurement.",
+  "slice_validation": "A separate linked process uses public CPU0 ticks, owner IRQ exit and explicit saved-frame checkpoints to rotate two equal-priority CPU-bound tasks on CPU2 for six slices with no timeout deadlines. It checks immediate local first-peer admission, resume and priority-change rearming, and no slice SGIs for a single task, a preemption-disabled task or an idle owner."
 }
