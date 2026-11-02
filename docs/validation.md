@@ -86,8 +86,7 @@ gate and the check index once before the final integration report; reuse their
 results while relevant inputs remain unchanged.
 
 Each invocation uses a new label under `~/.cache/sunstoneos/build/gate-LABEL`.
-It records the selection, reason, revision, commands and logs, and stops at the
-first failure. The builds use one directory per source checkout,
+It records the selection, reason, revision, commands and logs. The builds use one directory per source checkout,
 `gate-central-NAME-HASH`, `gate-APPLICATION-NAME-HASH` and
 `gate-os-VARIANT-NAME-HASH`, where NAME is the
 checkout's directory name and HASH is the first ten hexadecimal digits of the
@@ -103,10 +102,60 @@ summary comes from the same reading. The gate reads the revision, status,
 diff and untracked files again after taking the lock and after its last step,
 and writes a FAIL line and fails if any of them changed or could not be read,
 for example an unreadable untracked file. There are no automatic retries, including for emulator timeouts.
-Diagnose a failure and run only the affected work with a new label; reuse the
+Diagnose the failures and run only the affected work with a new label; reuse the
 successful evidence from the earlier invocation. The soak defaults to one
 trial; `--trials N` declares a repeatability sample in advance and needs a
 reason for that sample count. It does not retry failures.
+
+### Failure handling, parallelism and prose checks
+
+`--full` keeps going. It runs every selected step, writes one `PASS`, `WARN`,
+`FAIL` or `SKIP` line per step to `summary.txt`, and exits with status 1 when any
+step failed or was skipped. A step is skipped, and counts as a failure, when a
+build it needs did not pass: the kernel and soak checks need `central-build`,
+and an application check needs its application build. A failed configure step
+skips only its own build. The last lines of the summary count the steps and
+name every failure; the line `PASS selected integration checks` appears only
+when none failed. `--fail-fast` restores the earlier behavior: the steps run one
+at a time in their fixed order, the gate stops at the first failure and writes
+`Stopped at first failure`. The targeted selections (`--target`, `--variant`,
+`--check`, `--affected`, `--changed`) are fail-fast unless `--keep-going` is
+given.
+
+Builds run one at a time and finish before any check starts. A keep-going gate
+then runs the checks in parallel. `--jobs N` bounds the workers (default 8). The
+gate starts no new check while `MemAvailable` is below `--min-available-gb`
+(default 32); a check that cannot start within `--memory-wait` seconds
+(default 3600) fails as not started. `--check-timeout` bounds each check
+(default 3600 seconds). A check that runs QEMU or times a result runs alone,
+after the parallel group finishes: the kernel and soak checks, every external
+application check, and the indexed checks named in `SERIAL_CHECKS` in
+[checks/check-index.py](../checks/check-index.py). The index reports the
+choice as the `serial` field of each entry.
+
+Every check runs from the source directory with standard input closed and one
+environment: the process environment, `PYTHONDONTWRITEBYTECODE=1`,
+`SUNSTONEOS_DIR` set to the source, and the cached LLVM 21 `bin` directory first
+on `PATH`. The gate records it in `environment.txt`. A check does not source
+`cfg.sh`; only the configure steps use it. `checks/check-index.py --run` uses the
+same variables, so a check that passes in one place passes in the other.
+`timing.txt` lists the steps by duration.
+
+A check whose failure can come from documentation prose alone reports a `WARN`
+line and does not fail the gate. The index entry `prose` marks them:
+`docs-links.py` in full, and `progress.py` for the two test cases that read the
+repository's status records and hardware inventory (`PROSE_CHECKS`). A failure
+in any other case of `progress.py`, a crash, or a timeout is a `FAIL`. Code,
+build, test and runner checks always fail the gate. `--strict-docs` turns every
+`WARN` into a `FAIL`; the integration milestone runs with it.
+
+A check that matches the device-access text scan but opens no device is listed
+in `HOST_ONLY` in the index and runs in the gate. These are `board-runner.py`
+(a fake FEL and board under `--out`), `usb-disconnect.py` and
+`usb-access-discover.py` (fixture sysfs trees). The entry `output_option` names
+the option that receives each check's new output directory. Every other check
+that reaches a device keeps its USB classification and is reported as PENDING;
+a name in `HOST_ONLY` that is not pure-host fails `check-index.py --verify`.
 
 The host's existing `~/.cache/sunstoneos/bin/integration-gate.sh SOURCE LABEL`
 command delegates to this repository tool and accepts the same selection
@@ -273,9 +322,9 @@ separate string segments is not found. An empty selection therefore does not
 show that no check covers the change.
 
 `--verify`, which the integration gate runs as its `check-index` check, fails
-when a check does not parse, when the tool's list of checks that cannot be
-pure-host (`NOT_PURE`) names a check that no longer exists, or when
-`checks/index.json` is tracked again.
+when a check does not parse, when `NOT_PURE`, `HOST_ONLY`, `PROSE_CHECKS` or
+`SERIAL_CHECKS` names a check that no longer exists, when a `HOST_ONLY` check is
+not pure-host, or when `checks/index.json` is tracked again.
 
 ## Scan outgoing commits before a push
 
