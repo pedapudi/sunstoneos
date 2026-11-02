@@ -1037,8 +1037,8 @@ def main():
     d = decode_result(c)
     c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'enable did not succeed with an address space: status %d' % d['status'])
     space = lines(c.output, 'TASK-SPACE')
-    c.require(len(space) == 1 and space[0].get('main') == '1' and space[0].get('sdowner') == '0',
-              'the application main task must be tagged and the SD owner untagged: %s' % (space,))
+    c.require(len(space) == 1 and space[0].get('main') == '1' and space[0].get('sdowner') == '0' and space[0].get('sdentry') == '0',
+              'the application main task must be tagged and the SD owner untagged, and in the kernel\'s table at its first instruction: %s' % (space,))
     # A hint on the application's default notification index during the owner's open (a USB-change event, as application.c sends
     # them) must not end the wait: enable succeeds. The owner as the fourth board submission had it (one sleep on that index)
     # returns early with stage 11, which is the control.
