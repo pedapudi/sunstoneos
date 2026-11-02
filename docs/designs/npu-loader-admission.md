@@ -103,3 +103,13 @@ a correct computation.
    relocated base and the sizes the descriptor states are checked.
 4. **No isolation between slots.** The page-table flush between jobs is unqualified
    (`docs/designs/npu-breadth.md`), so a job could read the previous job's data in the SRAM.
+
+## Tensor representation: the fixed position of a dynamic-fixed-point tensor
+
+A 16-bit signed dynamic-fixed-point graph tensor carries a fixed position in its record: the values are the codes scaled by
+2^-position. The field is host-side metadata (the engine's descriptors hold their own scales and shifts; the loader never
+derives anything from it), and a tensor whose values are large has a negative position: the output of the convolution module
+of a conformer layer compiled for 368 frames has position -2, a step of 4. The loader admits positions from -16 to 31 and
+refuses beyond (`checks/nbg-graph-admission.py` admits -2 and -16 and refuses -17 and 32, with controls). A board run of that
+convolution module (three consecutive jobs, one slot) returned the simulator's output byte for byte and the same bytes in every
+job, so the engine runs the representation as compiled.
