@@ -261,6 +261,39 @@ The test fails, and nothing is retried, when:
 - lifetime 2 stops at identification (`reason` 3): the card did not answer at 1.8 V, so it refuses CMD0 re-entry, and the SD on this
   board stays unusable until power is removed.
 
+### Lifetime 1 on 3-3 (entry `1793648082135831049-05f70d50`): everything ran, the close failed
+
+The lifetime did not return. Its fault record decodes, through the probe's stop word, as: reason 11 (the close failed), platform fault 1, platform
+stage 18 (`CLOSE_WAIT`), probe stage 8 (the end of the plan), 32 reads done. So identification, the switch, 32 SDR25 reads and the capture
+all completed, the card was switched (it is taken to be at 1.8 V), the card clock was stopped, the bank was written back to 3.3 V and seen
+to report it (`CLOSE_BANK` finished), and the next stage failed a check. The report was written to RAM and lost, because a lifetime that cannot
+close cannot return.
+
+Host reproduction. The lifetimes model now takes the bank's answer after the write back to 3.3 V as a parameter (`PF_RESTORE`): the modeled
+two-read lag, an immediate answer, the bank flipping back to 1.8 V, the selector reading back unchanged, and the withstand mode
+(`GPIO_POW_MOD_SEL`) changing with the supply. The last reproduces the board's stop exactly (platform stage 18, fault set, bank released);
+the others stop at other stages. `voltage()` required the withstand mode to equal the one read at the start in every stage, including the
+close stages after the bank was confirmed at 3.3 V. The platform now stops checking the bank and the mode once the close has confirmed 3.3 V
+(`bank_released`); the probe's own restoration words judge the end state. The board's actual mode word is not known: the next run reports it
+(`uhs[8]`, `uhs[9]`).
+
+A failed lifetime now carries its site. The stop word published in the fault record's esr is the platform's fault line (10 bits), why (2),
+platform stage (5), S18A, the five speed-mode support bits, whether the card signals 1.8 V, and a fold of the 32 read CRCs; the site byte is the
+probe's reason. `apps/sd-backup-probe/input.py stop --site N --esr W` decodes it. The report keeps the same word and the platform's fault line,
+why, stage and the withstand mode word at identification and after the close. A lifetime that has not closed cannot return its report, by
+design: the SD controller, pins and bank are still held. So the stop word is what a failed close can publish, and it is made to hold the results.
+
+Prediction for lifetime 2 (written before the run; the card is taken to be at 1.8 V and the bank at 3.3 V after the watchdog reset):
+
+- The platform moves the bank to 1.8 V first (`ENTER_1V8`), the core identifies without CMD11, and CMD0, CMD8, ACMD41 with S18R, CMD2 to CMD7
+  and ACMD6 succeed at 1.8 V and 400 kHz. A refusal of re-entry shows as a stop at identification (probe reason 3).
+- S18A in the last ACMD41 is set, or clear without stopping the test; the card is identified as the same 3-3 card; its CMD6 group 1 field at 1.8 V is
+  at least `0x8007`, probably `0x801f`.
+- 32 reads of 128 KiB at SDR25, 50 MHz, about 21 MB/s, no CRC or timeout.
+- The close writes the selector to 3.3 V, the bank reports 3.3 V, the later close stages pass, and the lifetime returns normally, leaving the card
+  at 1.8 V with the bank at 3.3 V (`GPIO_POW_VAL` bits 11:10 = 2, selector 1). If the close fails again, the stop word says where, and it holds
+  S18A, the support bits and the read CRC fold.
+
 ## Board plan
 
 Each stage has one hypothesis. Nothing runs without the coordinator's approval and none writes to the card. Stage 2 below is the

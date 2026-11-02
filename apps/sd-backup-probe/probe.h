@@ -96,8 +96,9 @@ struct sdp_report {
      * modes: bit 0 SDR12, 1 SDR25, 2 SDR50, 3 SDR104, 4 DDR50) and the function the switch selected (byte 16 low nibble). */
     uint8_t switch_status[64];
     /* UHS-I lifetimes: [0] mode, [1] the card signals 1.8 V, [2] outcome (sunxi_mmc_uhs_outcome), [3] identified by re-entry, [4] GPIO_POW_VAL and
-     * [5] GPIO_POW_VAL_SET_CTL when the card was identified, [6] and [7] the same after the close. */
-    uint64_t uhs[8];
+     * [5] GPIO_POW_VAL_SET_CTL when the card was identified, [6] and [7] the same after the close, [8] and [9] GPIO_POW_MOD_SEL then and after,
+     * [10] the platform's fault: source line | why << 16 | stage << 24 | fault << 32, [11] the stop word the probe published on a failed lifetime. */
+    uint64_t uhs[12];
 };
 _Static_assert(sizeof(struct sdp_input) == 160 - 6 * 4 + 4 * SDP_MAX_CAPTURE, "input wire size");
 

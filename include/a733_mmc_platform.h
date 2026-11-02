@@ -118,6 +118,7 @@ struct a733_mmc_platform {
     uint16_t fault_line, fault_why, refused;
     unsigned irq_mode;               /* the owner has unmasked the controller's GIC interrupt (a733_mmc_platform_irq) */
     unsigned signal; /* PF bank: 0 at 3.3 V, 1 selector written, 2 reports 1.8 V, 3 restore written at close (reads 1.8 V or 3.3 V). */
+    unsigned bank_released;          /* the close put the bank back at 3.3 V and saw it report so: no later close stage checks the bank or the withstand mode */
     uint64_t signal_since;           /* when the selector was last written or the bank last reported its new level */
 };
 /* Zero once. All managers, adapter storage and physical authority have platform

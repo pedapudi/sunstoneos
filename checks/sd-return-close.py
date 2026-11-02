@@ -55,7 +55,16 @@ def main():
         inputs.append(dict(path=str(source), sha256=sha, snapshot=str(dest.relative_to(e))))
     (e / 'inputs.json').write_text(json.dumps(inputs, indent=2)+'\n')
     run(flags+sources+['-o', str(e / 'close')], 'build')
-    print(run([str(e / 'close')]+(['--admission'] if a.admission else ['--lifetimes'] if a.lifetimes else ['--failures-only'] if a.failures_only else []), 'run'), end='')
+    if a.lifetimes:
+        # the bank's answer after the write back to 3.3 V: as modeled, at once, and with the withstand mode changing (the board stopped there)
+        import os
+        for scenario in ('0', '1', '4'):
+            os.environ['PF_RESTORE'] = scenario
+            print(f'PF restore scenario {scenario}: ', end='')
+            print(run([str(e / 'close'), '--lifetimes'], 'run-' + scenario), end='')
+        os.environ.pop('PF_RESTORE')
+    else:
+        print(run([str(e / 'close')]+(['--admission'] if a.admission else ['--failures-only'] if a.failures_only else []), 'run'), end='')
     assert all(hashlib.sha256(Path(r['path']).read_bytes()).hexdigest()==r['sha256'] for r in inputs)
     (e / 'result.json').write_text(json.dumps(dict(result='pass', physical=False,
         scope='actual provider close under ASan/UBSan; existing card/PMIC model, no protocol suite replay'), indent=2)+'\n')

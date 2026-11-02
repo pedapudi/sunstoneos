@@ -6,6 +6,7 @@
 #define PERI400 ((1u << 11) | (1u << 2) | (1u << 1))
 #define PERI300 ((1u << 11) | (1u << 9) | (1u << 5) | (1u << 4))
 static struct uhs u;
+static unsigned pf_flip;
 static unsigned pf_settle, pf_writes, module_writes, restore_settle, restore_writes, cfg_sdr25, cfg_start18, commands_at_mismatch;
 static uint32_t last_module;
 static void live(struct storage_model *s)
@@ -27,10 +28,18 @@ static int uhs_platform_read(void *v, uintptr_t a, uint32_t *out)
         uint32_t *w = pmic_model_word(&s->power, a); *w = (*w & ~(3u << 10)) | (3u << 10);
         u.bank = 2; u.restarted = s->power.now;
     }
-    if (a == 0x02000048 && u.bank == 3 && restore_settle && !--restore_settle) {
-        uint32_t *w = pmic_model_word(&s->power, a); *w = (*w & ~(3u << 10)) | (2u << 10);
-        u.bank = 0;
+    /* How the board's bank may answer after the write back to 3.3 V: 0 two reads of 1.8 V then 3.3 V; 1 3.3 V at once; 2 3.3 V once,
+     * then 1.8 V again; 3 3.3 V but the selector reads back as written 1.8 V; 4 3.3 V but the withstand mode changes to manual. */
+    if (a == 0x02000048 && u.bank == 3 && restore_settle) {
+        unsigned scenario = getenv("PF_RESTORE") ? (unsigned)atoi(getenv("PF_RESTORE")) : 0;
+        uint32_t *w = pmic_model_word(&s->power, a);
+        if (scenario == 1 || !--restore_settle) { *w = (*w & ~(3u << 10)) | (2u << 10); u.bank = 0; restore_settle = 0;
+            if (scenario == 4) *pmic_model_word(&s->power, 0x02000040) = (*pmic_model_word(&s->power, 0x02000040) & ~(3u << 10)) | (2u << 10);
+            if (scenario == 3) *pmic_model_word(&s->power, 0x02000070) = 0;
+            if (scenario == 2) pf_flip = 1; }
     }
+    if (a == 0x02000048 && pf_flip == 2) { uint32_t *w = pmic_model_word(&s->power, a); *w = (*w & ~(3u << 10)) | (3u << 10); }
+    if (a == 0x02000048 && pf_flip == 1) pf_flip = 2;
     *out = *pmic_model_word(&s->power, a); return 1;
 }
 static int uhs_platform_write(void *v, uintptr_t a, uint32_t value)
@@ -70,7 +79,7 @@ static int uhs_platform_write(void *v, uintptr_t a, uint32_t value)
 static void begin(unsigned pf_mode, unsigned fast, unsigned caps)
 {
     memset(&m, 0, sizeof(m)); memset(&u, 0, sizeof(u));
-    pf_settle = 3; pf_writes = module_writes = restore_writes = restore_settle = commands_at_mismatch = 0; last_module = 0;
+    pf_flip = 0; pf_settle = 3; pf_writes = module_writes = restore_writes = restore_settle = commands_at_mismatch = 0; last_module = 0;
     pmic_model_setup(&m.power); seed(&u.base, &m.platform.core, SUNXI_MMC_SD, 1);
     field(u.base.csd, 84, 12, 5 | (1u << 10)); field(u.base.csd, 96, 8, 0x32); u.scr[0] = 2; u.scr[1] = 5;
     u.caps = caps; u.s18a = 1; u.sdr104 = 1; u.fatal_delay = 99; u.window[0][0] = 20; u.window[0][1] = 24;

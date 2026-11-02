@@ -19,7 +19,7 @@ OFFSET = dict(magic=0, stage=16, reason=24, done=32, planned=40, identified_us=4
               rca=152, sectors=160, scr=168, mode=184, card_hz=192, baseline_start=200, baseline_end=328, clock_off=456,
               pmic_parked=464, capture_done=472, sector=3296, sd_status=272848, status_result=272912, au_sectors=272920,
               au_sectors_uhs=272928, status_us=272936, switch_status=272944, uhs=273008)
-REPORT_BYTES = 273072
+REPORT_BYTES = 273104
 
 
 def pack_input(sectors, uhs_mode=0, reads=1, blocks=8):
@@ -29,6 +29,13 @@ def pack_input(sectors, uhs_mode=0, reads=1, blocks=8):
     raw += struct.pack('<2Q', 0, 0) + struct.pack('<QII48s32s', 0, 0, uhs_mode, b'', bytes(32))
     assert len(raw) == INPUT_BYTES
     return raw
+
+
+def stop_fields(w):
+    """The stop word of a failed lifetime (esr of the fault record): fault line 10 bits, why 2, platform stage 5, S18A 1, support bits 5,
+    card at 1.8 V 1, fold of the read CRCs 8."""
+    return dict(fault_line=w >> 22 & 1023, why=w >> 20 & 3, platform_stage=w >> 15 & 31, s18a=w >> 14 & 1, group1_support_bits=hex(w >> 9 & 31),
+                card_at_1v8=w >> 8 & 1, crc_fold=hex(w & 255))
 
 
 UHS_OUTCOMES = ('none', 'sdr104', 'host', 'declined', 'no_sdr104', 'no_window', 'limited_to_sdr25')
@@ -69,12 +76,15 @@ def decode(raw, requested):
                clock_off=q('clock_off')[0], pmic_parked=q('pmic_parked')[0], captured=captured,
                status_result=q('status_result')[0], au_sectors=q('au_sectors')[0], au_sectors_uhs=q('au_sectors_uhs')[0],
                status_us=q('status_us')[0], sd_status=raw[OFFSET['sd_status']:OFFSET['sd_status'] + 64].hex(),
-               switch_status=raw[OFFSET['switch_status']:OFFSET['switch_status'] + 64].hex(), uhs=list(q('uhs', 8)))
+               switch_status=raw[OFFSET['switch_status']:OFFSET['switch_status'] + 64].hex(), uhs=list(q('uhs', 12)))
     out.update(capabilities(out['ocr'], out['cid'], bytes.fromhex(out['switch_status'])))
     u = out['uhs']
     out['uhs_report'] = dict(mode=u[0], card_signals_1v8=bool(u[1]), outcome=UHS_OUTCOMES[u[2]] if u[2] < len(UHS_OUTCOMES) else u[2],
                              reentered=bool(u[3]), bank_at_ready=dict(pow_val=hex(u[4]), pf_bank_mv=bank_level(u[4]), selector=hex(u[5])),
-                             bank_after_close=dict(pow_val=hex(u[6]), pf_bank_mv=bank_level(u[6]), selector=hex(u[7])))
+                             bank_after_close=dict(pow_val=hex(u[6]), pf_bank_mv=bank_level(u[6]), selector=hex(u[7])),
+                             withstand_mode=dict(at_ready=hex(u[8]), after_close=hex(u[9])),
+                             platform_fault=dict(line=u[10] & 0xffff, why=(u[10] >> 16) & 0xff, stage=(u[10] >> 24) & 0xff, fault=(u[10] >> 32) & 0xff),
+                             stop_word=hex(u[11]), stop_word_fields=stop_fields(u[11]))
     if captured != len(requested):
         raise SystemExit(f'captured {captured} of {len(requested)} sectors; stage {out["stage"]} reason {out["reason"]}')
     records = b''.join(struct.pack('<Q', s) + raw[OFFSET['sector'] + 512 * i:OFFSET['sector'] + 512 * (i + 1)] for i, s in enumerate(requested))
@@ -94,7 +104,12 @@ def main():
     d.add_argument('--report', type=Path, required=True)
     d.add_argument('--ranges', nargs='+', required=True)
     d.add_argument('--backup', type=Path, required=True, help='the backup file to write')
+    k = sub.add_parser('stop', help='decode the fault record of a lifetime that stopped (site byte and esr word)')
+    k.add_argument('--site', type=lambda x: int(x, 0), required=True, help='the fault word low byte: the probe reason')
+    k.add_argument('--esr', type=lambda x: int(x, 0), required=True)
     a = p.parse_args()
+    if a.cmd == 'stop':
+        print(json.dumps(dict(reason=a.site, **stop_fields(a.esr)), indent=1)); return
     sectors = sorted({s for r in a.ranges for s in range(int(r.split(':')[0]), int(r.split(':')[0]) + int(r.split(':')[1]))})
     if a.cmd == 'input':
         with a.output.open('xb') as f:

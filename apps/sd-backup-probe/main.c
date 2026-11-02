@@ -61,7 +61,8 @@ static StaticTask_t tasks[2];
 static StackType_t stacks[2][4096];
 
 enum { CONSTRUCT, IDENTIFY, CARD, STATUS, READ, POLL, TAKE, CAPTURE, FAT, REGION };
-static uint32_t pf_ready[2];             /* GPIO_POW_VAL and GPIO_POW_VAL_SET_CTL when the card was identified */
+static uint32_t pf_ready[3];
+static uint64_t stop_word;               /* what a failed lifetime publishes in the fault record, kept in the report too */             /* GPIO_POW_VAL and GPIO_POW_VAL_SET_CTL when the card was identified */
 static uint8_t status_copy[64];
 static uint64_t status_us, status_result;
 static struct {
@@ -395,7 +396,8 @@ static int step(void)
         if (r == A733_MMC_BUSY) return 0;
         if (r != A733_MMC_READY) return stop(4);
         s.card_valid = 1; s.identified_us = now_us() - s.start; s.stage = STATUS;
-        pf_ready[0] = *(volatile uint32_t *)0x02000048; pf_ready[1] = *(volatile uint32_t *)0x02000070; return 2;
+        pf_ready[0] = *(volatile uint32_t *)0x02000048; pf_ready[1] = *(volatile uint32_t *)0x02000070;
+        pf_ready[2] = *(volatile uint32_t *)0x02000040; return 2;
     case STATUS: {
         /* ACMD13 (CMD55, then CMD13 with a 64-byte block): a read, in the read-only command set. */
         static uint8_t st[SUNXI_MMC_SD_STATUS_BYTES] __attribute__((aligned(64)));
@@ -531,6 +533,10 @@ static void report(int outcome)
     o->uhs[0] = s.input.uhs_mode; o->uhs[1] = s.card_valid ? c->signal_1v8 : 0; o->uhs[2] = s.card_valid ? c->uhs_outcome : 0;
     o->uhs[3] = s.card_valid ? c->reentered : 0; o->uhs[4] = pf_ready[0]; o->uhs[5] = pf_ready[1];
     o->uhs[6] = *(volatile uint32_t *)0x02000048; o->uhs[7] = *(volatile uint32_t *)0x02000070;
+    o->uhs[8] = pf_ready[2]; o->uhs[9] = *(volatile uint32_t *)0x02000040;
+    o->uhs[10] = (uint64_t)s.platform.fault_line | (uint64_t)s.platform.fault_why << 16 | (uint64_t)s.platform.stage << 24 |
+        (uint64_t)s.platform.fault << 32;
+    o->uhs[11] = stop_word;
     o->status_result = status_result; o->status_us = status_us;
     if (status_result) { o->au_sectors = sunxi_mmc_au_sectors(status_copy, 0); o->au_sectors_uhs = sunxi_mmc_au_sectors(status_copy, 1); }
     __asm__ volatile("dsb sy" ::: "memory");
@@ -575,13 +581,22 @@ static void sd_task(void *unused)
     if (r > 0 && !quiet()) { s.reason = 10; r = -1; }
     if (r > 0 && !close_card()) { s.reason = 11; r = -1; }
     s.closed = r > 0;
+    /* The stop word of a lifetime that cannot return: the SD platform's fault line, why, stage, the S18A answer, the bank's speed-mode
+     * support bits, whether the card signals 1.8 V and a fold of the read CRCs, so a failure after the reads still carries its site and
+     * the result (the fault record's esr holds 32 bits; its site byte holds the reason). */
+    {
+        uint32_t crc8 = 0, line = s.platform.fault_line > 1023 ? 1023 : s.platform.fault_line;
+        for (unsigned i = 0; i < s.done; ++i) crc8 ^= crcs[i] ^ (crcs[i] >> 8) ^ (crcs[i] >> 16) ^ (crcs[i] >> 24);
+        stop_word = (uint64_t)((line << 22) | ((s.platform.fault_why & 3u) << 20) | ((s.platform.stage & 31u) << 15) |
+            ((s.card_valid && (s.card.ocr >> 24 & 1) ? 1u : 0u) << 14) | ((s.card_valid ? (s.card.switch_status[13] & 31u) : 0u) << 9) |
+            ((s.card_valid && s.card.signal_1v8 ? 1u : 0u) << 8) | (crc8 & 255u));
+    }
     report(r > 0 ? 0 : 1);
     /* With the platform constructed and not closed, the lifetime cannot return. The fault record then
      * carries the stop: the line field is the reason, the detail is platform fault, platform stage, task
      * stage and completed reads. */
     if (r <= 0 && s.platform.initialized)
-        platform_panic((const char *)(uintptr_t)(((uint64_t)s.platform.fault << 24) | ((uint64_t)s.platform.stage << 16) |
-                       ((uint64_t)s.stage << 8) | (s.done & 255)), s.reason);
+        platform_panic((const char *)(uintptr_t)stop_word, s.reason);
     platform_exit(r > 0 ? 0 : 1);
 }
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name) { (void)task; platform_panic(name, 0); }

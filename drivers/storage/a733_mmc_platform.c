@@ -168,6 +168,10 @@ static int voltage(struct a733_mmc_platform *p,unsigned initial)
 {
     uint32_t mode,value,select;
     unsigned shift=p->config.kind==SUNXI_MMC_SD?10:4;
+    /* After the close has confirmed the bank at 3.3 V, the card clock is off and nothing in flight depends on it: the withstand mode
+     * and the selector are not re-verified by the remaining stages (the board's mode word may change with the supply; the probe's
+     * own restoration words judge the end state). */
+    if(p->bank_released)return 1;
     if(!rd(p,PIO+0x40,&mode)||!rd(p,PIO+0x48,&value))return 0;
     mode=(mode>>shift)&3;value=(value>>shift)&3;
     if(p->config.kind==SUNXI_MMC_SD) {
@@ -812,7 +816,7 @@ enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *
             }else if(p->signal==3){
                 if(!rd(p,PIO+0x48,&v))return finish(p,fail(p));
                 v=(v>>10)&3;
-                if(v==2)p->signal=0;
+                if(v==2){p->signal=0;p->bank_released=1;}
                 else if(v!=3||p->last_now-p->signal_since>=10000)return finish(p,fail(p));
             }
             if(p->signal&&!voltage(p,0))return finish(p,fail(p));

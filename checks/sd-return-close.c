@@ -53,7 +53,9 @@ static int run_lifetime(unsigned start18,int cut)
     for(unsigned i=0;i<400&&r!=A733_MMC_COMPLETE;++i){TICK();r=uhs_step();assert(r!=A733_MMC_RETAINED);}
     assert(r==A733_MMC_COMPLETE&&a733_mmc_platform_take(&m.platform,&result,9000000)==A733_MMC_READY&&result.received==4096);
     m.platform.ops.write=close_write;closing=1;
-    for(unsigned i=0;i<40&&r!=A733_MMC_CLOSED;++i){TICK();r=close_step();assert(r==A733_MMC_PENDING||r==A733_MMC_CLOSED);}
+    for(unsigned i=0;i<40&&r!=A733_MMC_CLOSED;++i){TICK();r=close_step();
+        if(r!=A733_MMC_PENDING&&r!=A733_MMC_CLOSED&&getenv("PF_RESTORE"))fprintf(stderr,"close retained: stage %u fault line %u why %u signal %u\n",m.platform.stage,m.platform.fault_line,m.platform.fault_why,m.platform.signal);
+        assert(r==A733_MMC_PENDING||r==A733_MMC_CLOSED);}
     assert(r==A733_MMC_CLOSED&&gate_order==4&&!m.platform.pin.id&&!m.platform.rail.id&&!m.platform.clock.id);
     assert(restore_writes==1&&m.platform.signal==0&&(*pmic_model_word(&m.power,0x02000070)&1)==1&&
            ((*pmic_model_word(&m.power,0x02000048)>>10)&3)==2&&u.phase==3&&u.bank==0&&pf_writes==1);
