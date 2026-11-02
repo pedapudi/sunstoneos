@@ -120,7 +120,8 @@ and retained RTC breadcrumbs are classified before any DRAM result read.
 | Outcome | Meaning |
 | --- | --- |
 | `returned` | Matching return breadcrumbs, valid retirement report and matching output. This does not qualify the device's complete functionality. |
-| `result-mismatch` | Uploaded bytes, the native report or the returned output differ from the required values. |
+| `failure-return` | The image linked the [failure return](designs/failure-return.md) and returned normally after its first failure. Retirement is valid and DRAM is restored; the breadcrumbs and the returned `ss_failure` record describe the failure. The result is failed (exit status 1) and `first_failure` holds the record. The port is not quarantined and not paused. |
+| `result-mismatch` | Uploaded bytes, the native report or the returned output differ from the required values. A failure return whose record differs from `--expect` is also reported here, after DRAM restoration. |
 | `watchdog-reset` | A new permitted FEL instance returned with WDT0 still enabled. Breadcrumbs identify the last stage and any first fault. DRAM is lost. |
 | `no-return` | No accessible new FEL instance appeared within the watchdog window and margin. Recovery is unresolved. |
 | `refused-before-launch` | Image, session, helper or prerequisite validation stopped the submitted image before launch. Earlier setup helpers may have run. |

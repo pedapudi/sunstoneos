@@ -84,11 +84,32 @@ SS_STATIC_ASSERT(sizeof(struct ss_host_frame) == 64 && offsetof(struct ss_host_f
 /* OS-owned result record that ss_finish writes; the payload follows. */
 #define SS_RESULT_MAGIC UINT64_C(0x31544c5553455241) /* "ARESULT1" */
 #define SS_RESULT_VERSION 1u
-enum { SS_RESULT_FINISHED = 1 };
+enum { SS_RESULT_FINISHED = 1, SS_RESULT_FAILED = 2 };
 struct ss_result {
     uint64_t magic, version, bytes;  /* bytes: header plus payload capacity */
     uint64_t epoch, generation, status, payload_bytes;
 };
 SS_STATIC_ASSERT(sizeof(struct ss_result) == 56 && offsetof(struct ss_result, status) == 40 &&
     offsetof(struct ss_result, payload_bytes) == 48, "ss_result layout");
+
+/* The payload of a result whose status is SS_RESULT_FAILED. The OS writes it
+ * once, for the first failure, before a failure return to the boot ROM. Site,
+ * value and caller are the words of the first-failure breadcrumb
+ * (sunstone_crumb.h), so the RTC record and this record describe one event.
+ * Context is 1 for a failure after the scheduler started, 2 for a failure
+ * before it and 3 for a software-detected fault. Generation is zero when the
+ * failure precedes the sealed session. */
+#define SS_FAILURE_MAGIC UINT64_C(0x3130454c49414653) /* "SFAILE01" */
+#define SS_FAILURE_VERSION 1u
+enum { SS_FAILURE_RUNNING = 1, SS_FAILURE_STARTUP = 2, SS_FAILURE_FAULT = 3 };
+struct ss_failure {
+    uint64_t magic;
+    uint32_t version, context;
+    uint32_t site, value;
+    uint64_t caller;
+    uint32_t core, reserved;
+    uint64_t counter;                /* generic counter ticks at the failure */
+};
+SS_STATIC_ASSERT(sizeof(struct ss_failure) == 48 && offsetof(struct ss_failure, caller) == 24 &&
+    offsetof(struct ss_failure, counter) == 40, "ss_failure layout");
 #endif

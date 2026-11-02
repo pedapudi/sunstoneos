@@ -34,7 +34,7 @@ POST_RAIL_HELPER = CACHE/'evidence/sol-cpu-normal-return-1028/rails-800/probe.bi
 POST_RAIL_HELPER_SHA256 = 'f48a6be72b336c8990a124fd608bba5fddb5c8617ec62eac5642b2d50fb27c75'
 # Linked __heap_end from ELF SHA-256 ae00ce1d4a1f82b77ab1e016dc1a08f795e56c9c6f4c92d166f6434d75590098.
 POST_RAIL_HELPER_DRAM = (0x41000000, 0x47300)
-OUTCOMES = ('returned', 'result-mismatch', 'watchdog-reset', 'no-return', 'refused-before-launch', 'host-error')
+OUTCOMES = ('returned', 'failure-return', 'result-mismatch', 'watchdog-reset', 'no-return', 'refused-before-launch', 'host-error')
 crumbs = images.load('board_crumbs', ROOT/'tools/a733-crumbs.py')
 import board_state as state
 import board_usb_power as usb_power
@@ -556,7 +556,9 @@ class Live:
         live = {} if info.get('native_probe') or self.args.kind=='probe' else self.live_state(info.get('finite_npu',False))
         if images.npu_on_required(info):
             live['words'].update(self.npu_on_state())
-        return images.prepare(self.args, info, live, self.evidence/'bundle', dma_binding=self.dma_binding)
+        plan = images.prepare(self.args, info, live, self.evidence/'bundle', dma_binding=self.dma_binding)
+        plan['failure_return'] = bool(info.get('failure_return'))
+        return plan
 
     def launch(self, plan):
         if plan.get('format') == 'generic':
@@ -595,9 +597,14 @@ class Live:
         if before & 1:
             self.record['dram_lost'] = True
             return 'watchdog-reset'
+        # An image that links the failure return may return after its first
+        # failure; the record is then in the breadcrumbs and in its result.
+        # Any other return that carries a failure record stays unresolved.
         if not (decoded['session'] and decoded.get('last',{}).get('stage') == crumbs.RETURN_ROM and
-                decoded['last']['value'] == 0 and not decoded.get('fault') and not decoded.get('board_failure')):
+                decoded['last']['value'] == 0 and not decoded.get('fault') and
+                (not decoded.get('board_failure') or plan.get('failure_return'))):
             raise UnresolvedReturn('Return lacks the matching RETURN_ROM breadcrumb.')
+        self.record['failure_return'] = bool(decoded.get('board_failure'))
         self.record['normal_return'] = True
         usb_power.enforce(self)
         return 'returned'
@@ -832,6 +839,21 @@ def run_image(args, backend=Live):
                     matched = captured['valid']
                     if expected:
                         matched &= matches_expectation(expected, payload)
+                    if owner.record.get('failure_return'):
+                        # A normal return that carries a failure record is a
+                        # failed result. Retirement, DRAM and rails are already
+                        # restored, so the port stays usable and unpaused.
+                        origin = result['breadcrumbs']['board_failure']
+                        result['first_failure'] = dict(origin, native_site=origin['site'],
+                            site=f"{origin['group']}:{origin['site']}:{origin['caller']}",
+                            detail=result['breadcrumbs'].get('summary', 'Failure return'),
+                            record=captured['report'].get('failure'))
+                        result['outcome'] = 'failure-return'
+                        if expected and not matches_expectation(expected, payload):
+                            raise Mismatch('Failure record differs from expectation.')
+                        if owner.journal_error is not None:
+                            raise owner.journal_error
+                        return finish_result(result, evidence, started, stage)
                     if not matched:
                         raise Mismatch('Returned result differs from expectation.')
                     if getattr(args, 'decoder', None):
