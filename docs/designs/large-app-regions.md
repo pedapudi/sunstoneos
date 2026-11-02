@@ -319,6 +319,19 @@ failure appears as a recorded alias (an address decode fault), as a bus error
 that resets the board through the watchdog (a firewall-protected range), or as
 a run that exhausts its budget.
 
+## Predicted FAT32 volume inspection
+
+Condition: the read-only SD probe mounts the card's only partition (FAT32, first sector
+32768, 122,105,856 sectors, from the layout read) with the read-only FAT32 reader, counts the
+free clusters by reading the whole FAT, and lists the root directory, in profile 2 on port 3-1.
+
+Prediction: the mount succeeds with 512-byte sectors and a power-of-two cluster size (a
+partition of 58 GiB formatted by a PC has 32 KiB clusters, so about 1.9 million clusters and
+a FAT of about 15,000 sectors); the free-cluster count is within the volume and agrees with
+the FSInfo hint when the PC left the hint current; the root directory lists no more than 64
+entries, each with a size below 4 GiB; the FAT scan and listing finish within one second of
+identification at the measured 21.9 MB/s; and no restoration word changes.
+
 ## Host checks
 
 `checks/app-region.py` compiles the ledger and the table builder with the

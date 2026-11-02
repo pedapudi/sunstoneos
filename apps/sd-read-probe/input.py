@@ -44,6 +44,24 @@ def decode(raw, plan_blocks):
         out['per_read_MBps'] = sorted(plan_blocks * 512 / elapsed[i] for i in range(done) if elapsed[i])
     out['timing'] = timing[:min(done, TIMED)]
     out['sectors'] = [s.hex() for s in sectors[:out['captured']]]
+    fat_at = sector_at + 512 * MAX_CAPTURE
+    if len(raw) >= fat_at + 4952:
+        f = raw[fat_at:fat_at + 4952]
+        names = ('mount_status', 'free_status', 'list_status')
+        fat = dict(zip(names, struct.unpack_from('<3i', f, 0)))
+        keys = ('sectors_per_cluster', 'reserved_sectors', 'fats', 'fat_sectors', 'root_cluster', 'clusters',
+                'volume_id', 'hint_free', 'hint_next', 'counted_free')
+        fat.update(zip(keys, struct.unpack_from('<10I', f, 12)))
+        fat['data_start'], fat['partition_first'], fat['partition_sectors'] = struct.unpack_from('<3Q', f, 56)
+        count, seen = struct.unpack_from('<2I', f, 80)
+        fat['entries_seen'] = seen
+        fat['entries'] = []
+        for i in range(count):
+            e = f[88 + 76 * i:88 + 76 * (i + 1)]
+            size, first = struct.unpack_from('<2I', e, 64)
+            fat['entries'].append({'name': e[:64].split(b'\0')[0].decode('ascii', 'replace'), 'size': size,
+                                   'first_cluster': first, 'attributes': e[72], 'long_name': e[73], 'truncated': e[74]})
+        out['fat'] = fat
     return out, sectors[:out['captured']]
 
 
@@ -56,14 +74,16 @@ def main():
     i.add_argument('--blocks', type=int, default=256)
     i.add_argument('--first', type=int, default=0)
     i.add_argument('--capture', type=int, nargs='*', default=[])
+    i.add_argument('--fat-first', type=int, default=0, help='first sector of a FAT32 partition to inspect')
+    i.add_argument('--fat-sectors', type=int, default=0, help='sectors of that partition; zero: no inspection')
     d = sub.add_parser('decode')
     d.add_argument('--report', type=Path, required=True)
     d.add_argument('--blocks', type=int, default=256)
     a = p.parse_args()
     if a.cmd == 'input':
-        raw = struct.pack('<Q4I6I', INPUT_MAGIC, a.reads, a.blocks, a.first, len(a.capture),
-                          *(list(a.capture) + [0] * (MAX_CAPTURE - len(a.capture))))
-        assert len(raw) == 48
+        raw = struct.pack('<Q4I6I2Q', INPUT_MAGIC, a.reads, a.blocks, a.first, len(a.capture),
+                          *(list(a.capture) + [0] * (MAX_CAPTURE - len(a.capture))), a.fat_first, a.fat_sectors)
+        assert len(raw) == 64
         with a.output.open('xb') as f:
             f.write(raw)
         print(a.output)
