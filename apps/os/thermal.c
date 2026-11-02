@@ -264,13 +264,24 @@ static uint32_t critical_reading(void)
     if(c>0xffffff)c=0xffffff;
     return 0x80000000u|((thermal.policy.stale&(1u<<i))?0x40000000u:0)|((uint32_t)i<<24)|(uint32_t)c;
 }
+/* The session left the thermal owner's liveness (owner() false) without a reading or a driver fault behind it. The value word then holds
+ * 0x20000000 | which terms of live() failed: bit 0 board_live, 1 the application deadline, 2 the clock provider failed, 3 the thermal
+ * service failed, 4 the reading deadline passed, 5 the platform register lock is retained; bits 10:8 board_live_refusal() >> 28
+ * (board fatal, service window, session deadline). */
+static uint32_t lost_liveness(void)
+{
+    return 0x20000000u|(board_live(NULL)?0u:1u)|(os_application_deadline()?0u:2u)|
+        (atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)?4u:0u)|
+        (atomic_load_explicit(&thermal.failed,memory_order_acquire)?8u:0u)|(a733_smp_counter()/24<deadline()?0u:16u)|
+        ((atomic_load_explicit(&providers.shared.locks.retained,memory_order_acquire)&1u)?32u:0u)|((board_live_refusal()>>28&7u)<<8);
+}
 static int fault_from(uint32_t site,const void *here)
 {cancel_from(site,here);thermal.retaining=1;(void)mask();return -1;}
 #define fault() fault_from(SUNSTONE_CRUMB_FAIL_SITE(THERMAL),SUNSTONE_CRUMB_HERE())
 /* Owner task only. 1 after a completed bounded step, -1 once failed. */
 static int step(void)
 {
-    if(!owner()&&!thermal.retaining){cancel();thermal.retaining=1;}
+    if(!owner()&&!thermal.retaining){thermal.critical_word=lost_liveness();cancel();thermal.retaining=1;}
     if(thermal.retaining){
         (void)mask();
         if(thermal.retaining==1&&a733_clock_retain(&providers.shared.clocks,&thermal.token)!=A733_CLOCK_BUSY)thermal.retaining=2;

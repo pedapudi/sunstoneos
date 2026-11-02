@@ -184,6 +184,12 @@ def board_failure(words, defines, elf):
         # apps/os/thermal.c critical_reading(): the reading behind a CRITICAL stop.
         record['thermal_reading'] = {'channel': value >> 24 & 7, 'celsius': (value & 0xffffff) / 1000,
                                      'stale': bool(value >> 30 & 1)}
+    if record['group'] == 'thermal' and value >> 29 == 1:
+        # apps/os/thermal.c lost_liveness(): the thermal owner left liveness; which terms of live() failed.
+        names = ('board_live', 'application_deadline', 'clock_provider_failed', 'thermal_failed', 'reading_deadline_passed',
+                 'register_lock_retained')
+        record['thermal_liveness_lost'] = [n for i, n in enumerate(names) if value >> i & 1]
+        record['board_live_refusal_bits'] = value >> 8 & 7
     if record['group'] == 'cpu_return' and record['site'] == BOUNDED:
         record['deadline_seconds'] = record['aux']
         record['refusal'] = [text for bit, text in LIVE_REFUSAL if value >> bit & 1]

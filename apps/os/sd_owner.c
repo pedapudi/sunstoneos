@@ -12,6 +12,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "sd_hw.h"
+#include "../board/application.h"
+#include "sunstone_crumb.h"
 #include "fat32_rw.h"
 #include "sunstone_deadline.h"
 #include "sunstone_storage.h"
@@ -81,7 +83,13 @@ static void owner_main(void *unused)
     atomic_store(&first_us, sunstone_deadline_now_us());
     atomic_store(&ready, hw ? 1 : -1);
     if (ready_waiter) xTaskNotifyGiveIndexed(ready_waiter, WAIT_INDEX);
-    if (!hw) vTaskSuspend(NULL);
+    if (!hw) {
+        /* A failed open leaves the controller's state uncertain and the platform register lock retained, which the thermal service
+         * then reports as its own failure. Note the open's stage first so that the record names the SD0 binding (the diagnostic
+         * word: stage in bits 7:0, its detail above). */
+        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(APPLICATION), (uint32_t)os_sd_diag[0] | (uint32_t)os_sd_diag[1] << 8, SUNSTONE_CRUMB_HERE());
+        vTaskSuspend(NULL);
+    }
     for (;;) {
         uint64_t slept_from = sunstone_deadline_now_us();
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
