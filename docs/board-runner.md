@@ -27,16 +27,85 @@ A second daemon refuses the daemon lock. Every device command uses the existing
 per-port lock and checks the selected instance; an outside runner holding that
 lock leaves queued work pending.
 
+## Choose the DRAM mode
+
+Every run resets the board and initializes DRAM from the training record before
+the first upload (the `reset` and `dram` stages). Nothing that a run leaves in
+DRAM survives into the next run, and no later stage reads bytes that a saved
+copy would restore: the post-ROM rail helper uploads its own image and result
+buffer, and the host decodes only the reports it copied out of DRAM after the
+return. Saving the image's DRAM before launch and writing it back after
+retirement therefore serves only a claim that the run leaves DRAM as it found
+it. A development run makes no such claim.
+
+A development run is the default. It skips the DRAM save before launch, the
+restoration after retirement and the restoration readback. It keeps every proof
+of retirement: the CPU return report, the native NPU stop report, the output
+capture, the breadcrumbs, the watchdog handling, the USB source checks and, with
+`--restore-rails`, the post-ROM rail helper. The pre-launch rail helper still
+saves and restores its own two regions (the helper load region and its result
+buffer, about 0.3 MB), because it writes into the region the image is about to
+load and the image should start on the DRAM that initialization produced, not on
+helper residue. The post-ROM helper saves and restores nothing in a development
+run. The result records `dram_mode` as `development`, `dram_unsaved` as true and
+`dram_restored` as false. A development run never quarantines for DRAM
+ownership: no DRAM was promised, so no run leaves it unresolved. A run still
+quarantines when native retirement is unproven, when a transfer fails, or when no
+instance returns.
+
+`--preserve-dram` selects the qualification mode, which saves and restores the
+DRAM as described below and records `dram_mode` as `preserved`. A run is a
+qualification run, and requires the flag, when any of these holds:
+
+- Its claim includes that the returning lifetime leaves DRAM as it found it,
+  for example a qualification of the returning CPU or accelerator lifetime.
+  Other passing records come from development runs; each record states its
+  `dram_mode`.
+- It exercises the save, restoration, readback or quarantine path itself, such as
+  the helper DRAM preservation and the return chain.
+- It stores state in DRAM for a later image on the same boot, or is followed by a
+  storage write that depends on DRAM contents.
+- The coordinator asks for it.
+
+Any other run, including iterations on an image under development, a hypothesis
+probe and a run that only reads hardware facts, uses the default. The mode is
+frozen in the queue entry (`preserve_dram`).
+
+Measured on 2026-11-01 for a generic image that preserves 27,262,976 bytes in
+seven regions, a preserving run takes about 171 seconds. Reading the backup takes
+about 47 seconds of the 52-second `launch` stage. Restoration takes about 101
+seconds of the `capture` stage: about half writing and half verifying the
+readback, at about 0.55 MB/s in each direction. The remaining stages take about
+23 seconds in total, and a development run omits the two transfers.
+
 ## Submit a frozen image and hypothesis
 
 ```sh
 $board submit /absolute/image.elf --kind cpu-return --port any \
   --worker cpu-integration \
   --hypothesis 'The corrected cache cleanup permits all cores to retire' \
+  --reference docs/cpu-clock.md#operating-points-come-from-the-26-mhz-table-columns \
   --expect /absolute/expected-output.bin
 $board status
 $board watch
 ```
+
+`--reference PATH#ANCHOR` is required. PATH is a file under `docs/` that is
+tracked in the host tree (`--host-tree`, otherwise this checkout), as an absolute
+path or relative to that tree's root. ANCHOR is the anchor GitHub derives from a
+heading in that file: the heading text in lowercase, with punctuation removed,
+spaces replaced by hyphens, and `-1`, `-2` appended to repeated headings. The
+heading holds the subsystem's vendor sequence and the diff of our code against
+it, so the run tests only predictions from that diff. `submit` refuses a missing
+flag, a missing or untracked file, a file outside `docs/` and an unknown anchor,
+before it creates an entry. The entry and the result record the reference
+(`reference`, with the file's SHA-256 in the entry), and `tools/evidence.py add`
+copies it into the evidence record.
+
+`--reference none` exempts a run whose purpose is to read hardware facts, such as
+an image that only reports register values. It is accepted only with
+`--approved-by coordinator` and a nonempty `--reference-reason`; the reason is
+stored with the entry and the result.
 
 `submit` copies the image, inputs, session template and expectation into
 `~/.cache/sunstoneos/board-queue/entries/`. It blocks until a result exists and
@@ -219,7 +288,7 @@ operations remain in the existing backup-first update path and must meet
 both the returning watchdog contract and the linked OS NPU service, and use
 typed service sessions. `--host-tree` selects their geometry, session producer
 and return validators; submission hashes that source tree as well as the runner.
-Before image uploads, the runner saves the image and monitor DRAM, manifest WORK
+With `--preserve-dram`, before image uploads the runner saves the image and monitor DRAM, manifest WORK
 and OUTPUT regions, uploaded INPUT spans and the linked NPU pool. It merges
 overlapping preservation spans and refuses uploads outside protected DRAM or
 the launcher SRAM reservation. Backups use chunks of at most four MiB with
@@ -227,8 +296,8 @@ SHA-256 hashes.
 
 After a matching normal return without a retained fault, the runner copies the
 CPU return report, application output, native NPU stop report and optional
-telemetry. Mandatory CPU and NPU retirement proofs authorize DRAM restoration.
-It validates every backup and its complete range inventory before writing any
+telemetry. Mandatory CPU and NPU retirement proofs authorize DRAM restoration
+and, in both modes, the post-ROM rail helper. A preserving run validates every backup and its complete range inventory before writing any
 saved bytes, then verifies each restoration by readback. The returning ROM owns
 SRAM. Missing retirement, uncertain return or incomplete restoration quarantines
 the instance and prevents the post-ROM rail helper. Malformed application output
@@ -338,12 +407,13 @@ The runner checks the image, manifest and template before opening the board.
 The finite adapter initializes DDR through the shared queue path, captures the
 NPU system-register set and rebinds the native session through the existing NPU
 preparation helper. Before each NPU run, the pinned rail helper confirms DCDC3 and DCDC5 at
-800 mV. The helper preserves its own DRAM uploads. Before image uploads it saves
-the complete 18 MiB NPU DRAM reservation. Immediately before watchdog arming it
+800 mV. The helper preserves its own DRAM uploads. With `--preserve-dram`, before
+image uploads the runner saves the complete 18 MiB NPU DRAM reservation; a
+development run does not. Immediately before watchdog arming it
 checks the reviewed ROM instructions and native NPU entry state again.
 
 After normal return, the interrupt-profile parser validates the monitor,
-platform log and cleanup receipt before restoring the saved DRAM. Numerical
+platform log and cleanup receipt before restoring the saved DRAM, if one exists. Numerical
 mismatch still permits restoration after validated retirement and remains a
 failed result. An invalid receipt or incomplete restoration quarantines the
 instance. The new ROM retains ownership of SRAM; the adapter never restores

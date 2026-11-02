@@ -169,6 +169,7 @@ def admission(out):
     args = args_for(image, out/'unused', True)
     args.worker, args.hypothesis = 'host-model', 'Native probe route freezes no CPU template'
     args.expect = 'class output'
+    args.reference = 'docs/board-probe-contract.md#'+board.heading_anchors((ROOT/'docs/board-probe-contract.md').read_text())[0]
     job = board.Queue(out/'queue').submit(args)
     assert job['options']['kind'] == 'usb-class' and 'template' not in job['options']
     passed('queue-native-contract-without-CPU-template')
