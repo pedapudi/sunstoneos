@@ -42,7 +42,7 @@ struct app_region_range { uint64_t base, bytes; };
 
 struct app_region_entry {
     uint64_t base, bytes;
-    uint8_t owner;               /* ASID of the owning application; 0: slot free */
+    uint16_t owner;               /* ASID of the owning application; 0: slot free */
     uint8_t access;              /* APP_REGION_READ | APP_REGION_WRITE */
 };
 
@@ -64,21 +64,27 @@ int app_region_ledger_init(struct app_region_ledger *, struct app_region_range *
 /* Reserve bytes (rounded up to 2 MiB) for owner (ASID 1..255). Regions of
  * 1 GiB or more are placed on a 1 GiB boundary when a free one exists;
  * smaller regions take the smallest free gap. */
-int app_region_acquire(struct app_region_ledger *, uint8_t owner, uint64_t bytes, unsigned access,
+int app_region_acquire(struct app_region_ledger *, uint16_t owner, uint64_t bytes, unsigned access,
                        uint64_t *base_out, uint64_t *bytes_out);
-int app_region_release(struct app_region_ledger *, uint8_t owner, uint64_t base);
+int app_region_release(struct app_region_ledger *, uint16_t owner, uint64_t base);
 /* Owner (ASID) of the byte at pa, or 0 when no application holds it. A DMA
  * master's grant check asks this before it maps the extent. */
-uint8_t app_region_owner_of(const struct app_region_ledger *, uint64_t pa);
+uint16_t app_region_owner_of(const struct app_region_ledger *, uint64_t pa);
 uint64_t app_region_free_bytes(const struct app_region_ledger *);
 
-/* ASIDs. TCR_EL1.AS is 0, so an ASID is 8 bits and 0 is the kernel's. The pool hands each of 1..255 out once and
- * never takes one back: nothing tears a space down today (an application runs until the session ends and the board
- * resets), so no ASID is ever reused. A teardown that returned an ASID to the pool would have to clear the space's
- * tables and execute `DSB ISH; TLBI ASIDE1IS, <asid << 48>; DSB ISH` on every core's behalf before the number
- * could name another space; until that exists, exhaustion is the refusal (app_asid_alloc returns 0). */
-struct app_asid_pool { unsigned next; };
-uint8_t app_asid_alloc(struct app_asid_pool *);
+/* ASIDs. Their width is the hardware's: ID_AA64MMFR0_EL1.ASIDBits (bits 7:4) reads 0 for 8 bits and 2 for 16 bits, and
+ * TCR_EL1.AS (bit 36) selects 16 bits in the translation regime. The pool hands out 1 to 65535 only when the
+ * hardware has 16 bits and TCR_EL1.AS is set; otherwise 1 to 255, because with AS clear the hardware ignores the
+ * upper byte of the ASID field and two spaces would share a number. 0 is the kernel's. The pool gives each number
+ * out once and never takes one back: nothing tears a space down today (an application runs until the session ends and
+ * the board resets), so no ASID is reused. A teardown that returned a number would have to clear the space's tables
+ * and execute `DSB ISH; TLBI ASIDE1IS, <asid << 48>; DSB ISH` before the number could name another space; until that
+ * exists, exhaustion is the refusal (app_asid_alloc returns 0). */
+struct app_asid_pool { unsigned next, limit; };
+#define APP_ID_AA64MMFR0_ASIDBITS(v) (((v) >> 4) & 15u)
+#define APP_TCR_AS(v) (((v) >> 36) & 1u)
+void app_asid_pool_init(struct app_asid_pool *, uint64_t id_aa64mmfr0_el1, uint64_t tcr_el1);
+uint16_t app_asid_alloc(struct app_asid_pool *);
 
 /* Stage-1 descriptor words. */
 #define APP_PTE_VALID UINT64_C(1)
@@ -103,7 +109,7 @@ struct app_table_arena {
 struct app_space {
     uint64_t *root;              /* a page of the arena */
     uint64_t root_physical;
-    uint8_t asid;
+    uint16_t asid;
     unsigned tables;             /* pages used, root included */
 };
 
@@ -115,13 +121,13 @@ struct app_space {
  * slots it touches point to a level-2 table of 2 MiB blocks. On any refusal
  * the arena and the space are as before. */
 int app_space_build(struct app_space *, struct app_table_arena *, const uint64_t base_l1[512],
-                    const struct app_region_ledger *, uint8_t asid);
+                    const struct app_region_ledger *, uint16_t asid);
 /* The same with a separate view: the space carries the ASID asid and exposes the regions that
  * owner holds. APP_SPACE_NO_GIB_BLOCKS maps every slot with 2 MiB blocks even when a region covers it
  * whole, to measure what the 1 GiB blocks save in TLB entries. */
 #define APP_SPACE_NO_GIB_BLOCKS 1u
 int app_space_build_view(struct app_space *, struct app_table_arena *, const uint64_t base_l1[512],
-                         const struct app_region_ledger *, uint8_t owner, uint8_t asid, unsigned flags);
+                         const struct app_region_ledger *, uint16_t owner, uint16_t asid, unsigned flags);
 /* The TTBR0_EL1 word that installs the space: table base and ASID in bits 63:48. */
 static inline uint64_t app_space_ttbr0(const struct app_space *s)
 { return s->root_physical | ((uint64_t)s->asid << 48); }

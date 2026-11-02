@@ -445,11 +445,18 @@ All four steps are implemented in the OS image and checked on the host and in QE
 - **SDK.** `ss_large_wait`, `ss_large_base`, `ss_large_status` and `ss_large_attach`. There is no call to take a
   region after start: the ledger and the tables are sized from the manifest at build time, so run-time requests
   are backlog (see the status page for what they need).
-- **ASIDs.** An ASID comes from `app_asid_alloc()` (`kernel/appmem/app_region.c`), which hands out 1 to 255 once each
-  and never takes one back. Today the OS has one application and nothing tears a space down, so there is no reuse
-  path; the pool refuses (returns 0) when it is exhausted. A teardown that wanted to reuse an ASID would first clear
-  the space's tables and execute `DSB ISH; TLBI ASIDE1IS, (asid << 48); DSB ISH`; without that the old space's
-  translations would stay live in the TLBs under the number.
+- **ASIDs.** An ASID comes from `app_asid_alloc()` (`kernel/appmem/app_region.c`), which gives each number out once and
+  never takes one back. The bound comes from the hardware: `app_asid_pool_init()` reads `ID_AA64MMFR0_EL1.ASIDBits`
+  (bits 7:4; 0 is 8 bits and 2 is 16 bits) and `TCR_EL1.AS` (bit 36). The pool hands out 1 to 65535 only when the
+  hardware has 16 bits and AS is set, and 1 to 255 otherwise, because with AS clear the hardware ignores the upper
+  byte of the TTBR0 ASID field and two spaces would share a number. The Cortex-A55 and A76 support 16 bits, but the
+  boot code installs TCR_EL1 with AS clear (`A733_CPU_COHERENCE_TCR_*`, pinned by the boot-chain checks), so the OS
+  hands out 1 to 255 today; setting AS there is a change to those boot constants, and the pool then widens by itself.
+  Today the OS has one application and nothing tears a space down, so there is no reuse path; the pool refuses
+  (returns 0) when it is exhausted. A teardown that wanted to reuse an ASID would first clear the space's tables and
+  execute `DSB ISH; TLBI ASIDE1IS, (asid << 48); DSB ISH`; without that the old space's translations would stay
+  live in the TLBs under the number. `checks/app-region.py` covers both widths, the cases where the register and
+  TCR disagree, and exhaustion.
 - **Kernel mappings.** Every per-application root is a copy of the boot root: slot 0 (MMIO) is copied and slot 1
   points to the same level-2 table, so the code, data, stacks and devices that EL1 runs on between the `MSR` and the
   `ERET` are the same global (nG = 0) entries in every table, while the upper-memory slots carry nG = 1 and an ASID
