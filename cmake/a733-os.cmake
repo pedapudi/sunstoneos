@@ -38,6 +38,19 @@ elseif(SUNSTONE_APPLICATION STREQUAL "large-region-test")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/large-region-test/manifest.json")
   add_sunstone_image(sunstone-a733-os-large-region-test LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION large-region)
+elseif(SUNSTONE_APPLICATION STREQUAL "heap-test")
+  # The heap is a region of upper memory (step 1 of docs/designs/application-memory-layout.md); the table builder
+  # maps upper memory only after the address-test decode check (cmake/a733-smp-cached.cmake).
+  if(NOT SUNSTONE_A733_DRAM_DECODE_PROBE)
+    message(FATAL_ERROR "heap-test needs -DSUNSTONE_A733_DRAM_DECODE_PROBE=ON")
+  endif()
+  set(SUNSTONE_HEAP_TEST_MODE "0" CACHE STRING "0: use the heap; 1: read it from a task in no space; 2: read the byte after it; 3: share it with a worker")
+  add_sunstone_application(heap-test
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/heap-test/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/heap-test/manifest.json")
+  target_compile_definitions(heap-test PRIVATE HEAP_TEST_MODE=${SUNSTONE_HEAP_TEST_MODE})
+  add_sunstone_image(sunstone-a733-os-heap-test LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION heap-test)
 elseif(SUNSTONE_APPLICATION STREQUAL "storage-write-test")
   # Creates the region test file through the FAT32 write service; the image is write-capable, so the runner needs the
   # coordinator's approval record for its bounds (tools/storage_bounds.py).

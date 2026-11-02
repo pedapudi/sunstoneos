@@ -1,0 +1,8 @@
+{
+  "name": "heap-test",
+  "devices": {"required": [], "optional": []},
+  "cpu": {"cluster": "a55", "workers": 1, "priority": 2, "stack_bytes": 16384, "heap_bytes": 1072693248},
+  "regions": [{"name": "scratch", "kind": "work", "access": ["read", "write"], "bytes": 4096}],
+  "deadlines": {"run_us": 60000000, "return_reserve_us": 5000000, "progress_window_us": 2000000},
+  "output_limit": 128
+}
