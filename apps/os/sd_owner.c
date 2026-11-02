@@ -23,7 +23,7 @@
 #define READY_TIMEOUT_TICKS 8000u
 #define WAIT_INDEX 1u              /* notification index a caller sleeps on; index 0 is the owner's */
 
-enum kind { K_READ, K_ASYNC_READ, K_WRITE, K_ENABLE, K_UNIT, K_REGION };
+enum kind { K_READ, K_ASYNC_READ, K_WRITE, K_ENABLE, K_UNIT, K_REGION, K_CLOSE };
 struct request {
     enum kind kind;
     uint64_t sector;
@@ -40,7 +40,7 @@ static TaskHandle_t owner, ready_waiter;
 static StaticTask_t owner_tcb;
 static StackType_t owner_stack[OWNER_STACK_WORDS];
 static const struct os_sd_hw *hw;
-static atomic_int ready;           /* 0 starting, 1 open, -1 failed */
+static atomic_int ready, closed;           /* 0 starting, 1 open, -1 failed */
 static uint32_t unit_sectors;
 static _Atomic uint64_t idle_us, wake_count, first_us;
 static struct os_large_device proxy;
@@ -66,6 +66,7 @@ static void serve(struct request *r)
     case K_ENABLE: ok = hw->enable_writes(r->source, r->bytes); break;
     case K_UNIT: ok = hw->allocation_unit(&r->value); break;
     case K_REGION: ok = hw->set_write_region(r->buffer, r->bytes); break;
+    case K_CLOSE: hw->close(); atomic_store(&closed, 1); ok = 1; break;
     }
     /* A failed async read reports -1 from poll; the proxy's poll reads the stored result. */
     finish(r, ok);
@@ -96,6 +97,7 @@ static void owner_main(void *unused)
 
 static int post(_Atomic(struct request *) *slot, struct request *r, int wait)
 {
+    if (atomic_load(&closed)) return 0;                                 /* the card is closed: no request is served */
     atomic_init(&r->done, 0);
     r->waiter = wait ? xTaskGetCurrentTaskHandle() : NULL;
     struct request *none = NULL;
@@ -199,6 +201,12 @@ static int writer_device(struct fwr_device *d)
 int ss_storage_enable(const void *bounds, size_t bytes) { return writes_enable(bounds, bytes); }
 int ss_storage_region(void *base, size_t bytes) { return write_region(base, bytes); }
 int ss_storage_device(struct fwr_device *d) { return writer_device(d); }
+int ss_storage_close(void)
+{
+    if (!hw) return 0;
+    writer_request = (struct request){.kind = K_CLOSE};
+    return post(&writer_slot, &writer_request, 1);
+}
 int ss_storage_owner_stats(struct ss_storage_owner_stats *out)
 {
     if (!out || !hw) return 0;

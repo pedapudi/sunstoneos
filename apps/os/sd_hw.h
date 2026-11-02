@@ -30,6 +30,8 @@ struct os_sd_hw {
     /* Time the owner has spent asleep in the interrupt and timer waits of a transfer, and how many times it woke there. */
     uint64_t (*owner_sleep_us)(void);
     uint64_t (*owner_wakes)(void);
+    /* Restore the clock, the pins and the rail leases; the card is not used afterwards. */
+    void (*close)(void);
 };
 /* Open the card in the calling task (it becomes the owner) and return the hardware operations; NULL on failure. */
 const struct os_sd_hw *os_sd_open_owner(void);

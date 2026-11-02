@@ -407,6 +407,7 @@ static int hw_write_piece(uint64_t sector, uint32_t count, const uint8_t *src)
     do { r = a733_mmc_platform_take(&platform, &result, config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
     return r == A733_MMC_READY && result.error == SUNXI_MMC_OK && result.confirmed_blocks == count;
 }
+void os_sd_close_owner(void);
 static struct os_sd_hw hw;
 const struct os_sd_hw *os_sd_open_owner(void)
 {
@@ -417,7 +418,7 @@ const struct os_sd_hw *os_sd_open_owner(void)
     if (sunstone_deadline_register() != 1 || !sunxi_mmc_set_irq(&platform.core, irq_taken, NULL)) return 0;
     irq_live = 1;
     hw = (struct os_sd_hw){d, card.sectors, card.sector_addressed, hw_allocation_unit, hw_enable_writes, hw_write_piece, hw_live,
-                           hw_set_write_region, hw_wait_async, hw_owner_sleep_us, hw_owner_wakes};
+                           hw_set_write_region, hw_wait_async, hw_owner_sleep_us, hw_owner_wakes, os_sd_close_owner};
     return &hw;
 }
 void os_sd_close_owner(void) { irq_live = 0; os_sd_close_owner_device(); }

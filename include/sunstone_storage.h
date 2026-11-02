@@ -15,6 +15,9 @@ int ss_storage_enable(const void *bounds, size_t bytes);
 int ss_storage_region(void *base, size_t bytes);
 /* Fill the block device (read, write, sector count, allocation unit, largest single write) for fwr_mount. */
 int ss_storage_device(struct fwr_device *);
+/* Restore the card's clock, pins and rail leases, as a returning image must before it finishes. Call after the volume is
+ * unmounted; every later request fails. */
+int ss_storage_close(void);
 /* CPU time of the SD owner task: wall time since the first call, time spent asleep (waiting for the interrupt, a timer or
  * a request), and the number of wakes. Busy time is the difference; preemption by other tasks counts as busy. */
 struct ss_storage_owner_stats { uint64_t elapsed_us, asleep_us, wakes; };

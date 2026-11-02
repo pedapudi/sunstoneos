@@ -95,6 +95,12 @@ struct result {
 _Static_assert(sizeof(struct result) == 512, "result is the manifest's output_limit");
 static struct result r;
 
+static int card_open;
+static void finish_report(void)
+{
+    if (card_open) { (void)ss_storage_close(); card_open = 0; }
+    ss_finish(&r, sizeof r);
+}
 enum { OK = 0, E_BOUNDS = 1, E_REGION = 2, E_DEVICE = 3, E_MBR = 4, E_MOUNT = 5, E_DIR = 6, E_OPEN = 7, E_WRITE = 8, E_CLOSE = 9, E_READ = 10 };
 
 static uint32_t flush_ticks[MAX_FLUSHES];
@@ -177,28 +183,29 @@ void storage_write_main(const struct ss_grant *grant)
     r.mode = mode_id;
     r.cpu_hz = cpu_cycles_per_second(&r.cpu_calibration_ticks);
     ss_progress();
-    if (!ss_storage_enable(bounds->base, bounds->bytes)) { r.status = E_BOUNDS; ss_finish(&r, sizeof r); }
-    if (!ss_storage_region(flush->base, flush->bytes)) { r.status = E_REGION; ss_finish(&r, sizeof r); }
-    if (!ss_storage_device(&device)) { r.status = E_DEVICE; ss_finish(&r, sizeof r); }
+    card_open = 1;                                             /* enabling opens the card in the owner task, even if it then refuses */
+    if (!ss_storage_enable(bounds->base, bounds->bytes)) { r.status = E_BOUNDS; finish_report(); }
+    if (!ss_storage_region(flush->base, flush->bytes)) { r.status = E_REGION; finish_report(); }
+    if (!ss_storage_device(&device)) { r.status = E_DEVICE; finish_report(); }
     r.au_sectors = device.au_sectors;
     uint64_t base, sectors;
-    if (!mbr_partition(&base, &sectors)) { r.status = E_MBR; ss_finish(&r, sizeof r); }
+    if (!mbr_partition(&base, &sectors)) { r.status = E_MBR; finish_report(); }
     uint64_t t_start = ss_counter_ticks();
     int rc = mount(base, sectors);
-    if (rc) { r.status = E_MOUNT; r.detail = (uint64_t)-rc; ss_finish(&r, sizeof r); }
+    if (rc) { r.status = E_MOUNT; r.detail = (uint64_t)-rc; finish_report(); }
     if (mode_id == 2) {                                              /* the interruption test, second lifetime */
         uint64_t size = 0; int dir = 0;
         if (fwr_exists(&volume, PATH, &size, &dir) == FWR_OK) { r.volume_size = size; verify(size); }
         else r.status = E_OPEN;
         collect(); r.total_ticks = ss_counter_ticks() - t_start;
         (void)fwr_unmount(&volume);
-        ss_finish(&r, sizeof r);
+        finish_report();
     }
     int d = fwr_mkdir(&volume, "/sunstone-test");
-    if (d && d != FWR_EXISTS) { r.status = E_DIR; r.detail = (uint64_t)-d; ss_finish(&r, sizeof r); }
+    if (d && d != FWR_EXISTS) { r.status = E_DIR; r.detail = (uint64_t)-d; finish_report(); }
     uint64_t t0 = ss_counter_ticks();
     rc = fwr_open(&volume, &file, PATH, mode_id == 1 ? (FWR_O_CREATE | FWR_O_APPEND) : FWR_O_CREATE, FILE_BYTES, flush->base, flush->bytes);
-    if (rc) { r.status = E_OPEN; r.detail = (uint64_t)-rc; ss_finish(&r, sizeof r); }
+    if (rc) { r.status = E_OPEN; r.detail = (uint64_t)-rc; finish_report(); }
     r.create_ticks = ss_counter_ticks() - t0;
     unsigned flushes = 0;
     uint64_t synced = 0;
@@ -214,18 +221,18 @@ void storage_write_main(const struct ss_grant *grant)
             uint64_t f0 = ss_counter_ticks();
             int64_t fl = fwr_service(&file, 0);
             uint64_t dt = ss_counter_ticks() - f0;
-            if (fl < 0) { r.status = E_WRITE; r.detail = (uint64_t)-fl; r.written_bytes = off + put; collect(); ss_finish(&r, sizeof r); }
+            if (fl < 0) { r.status = E_WRITE; r.detail = (uint64_t)-fl; r.written_bytes = off + put; collect(); finish_report(); }
             if (fl > 0) { r.flush_ticks += dt; if (flushes < MAX_FLUSHES) flush_ticks[flushes] = (uint32_t)dt; ++flushes; }
             ss_progress();
         }
         uint64_t f0 = ss_counter_ticks();
         int64_t fl = fwr_service(&file, 0);
         uint64_t dt = ss_counter_ticks() - f0;
-        if (fl < 0) { r.status = E_WRITE; r.detail = (uint64_t)-fl; r.written_bytes = off + CHUNK; collect(); ss_finish(&r, sizeof r); }
+        if (fl < 0) { r.status = E_WRITE; r.detail = (uint64_t)-fl; r.written_bytes = off + CHUNK; collect(); finish_report(); }
         if (fl > 0) { r.flush_ticks += dt; if (flushes < MAX_FLUSHES) flush_ticks[flushes] = (uint32_t)dt; ++flushes; }
         r.written_bytes = off + CHUNK;
         if (mode_id == 1 && r.written_bytes - synced >= SYNC_EVERY) {
-            if (fwr_sync(&file)) { r.status = E_WRITE; r.detail = 0xffff; ss_finish(&r, sizeof r); }
+            if (fwr_sync(&file)) { r.status = E_WRITE; r.detail = 0xffff; finish_report(); }
             synced = r.written_bytes;
         }
         if (mode_id == 1 && r.written_bytes >= cut_bytes) {
@@ -239,7 +246,7 @@ void storage_write_main(const struct ss_grant *grant)
     rc = fwr_close(&file);
     if (!rc) rc = fwr_unmount(&volume);
     r.close_ticks = ss_counter_ticks() - c0;
-    if (rc) { r.status = E_CLOSE; r.detail = (uint64_t)-rc; collect(); ss_finish(&r, sizeof r); }
+    if (rc) { r.status = E_CLOSE; r.detail = (uint64_t)-rc; collect(); finish_report(); }
     r.total_ticks = ss_counter_ticks() - t_start;
     unsigned n = flushes < MAX_FLUSHES ? flushes : MAX_FLUSHES;
     r.flushes = flushes;
@@ -248,5 +255,5 @@ void storage_write_main(const struct ss_grant *grant)
     /* Read the file back against the stream (mount again: the unmount above left the volume clean). */
     rc = mount(base, sectors);
     if (!rc) { verify(FILE_BYTES); (void)fwr_unmount(&volume); } else { r.status = E_MOUNT; r.detail = (uint64_t)-rc; }
-    ss_finish(&r, sizeof r);
+    finish_report();
 }
