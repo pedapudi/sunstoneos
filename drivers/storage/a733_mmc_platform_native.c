@@ -120,7 +120,12 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
     if(a==base+SUNXI_SMHC_FIFO) {
         if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;
     } else if(a==base+SUNXI_SMHC_THLD) {
+#ifndef SUNXI_MMC_READ_ONLY
+        /* The SDR104 read threshold, or the write threshold of a verified bounded writer. */
+        if(!uhs&&!(n->kind==SUNXI_MMC_SD&&a733_storage_bounds_threshold_ok(n->bounds)))return 0;
+#else
         if(!uhs)return 0; /* The SDR104 read threshold; no other profile writes it. */
+#endif
     } else if(a==0x03400198) {
         if(v!=A733_MMC_GIC_BIT(slot))return 0;
     } else if(a==module||a==A733_MMC_BUS(slot)) {
@@ -144,7 +149,7 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
         }
     } else if(a==base+SUNXI_SMHC_CMD) {
         if((v&SUNXI_SMHC_CMD_VOLTAGE_SWITCH)&&(!uhs||(!(v&SUNXI_SMHC_CMD_UPDATE_CLOCK)&&(v&SUNXI_SMHC_CMD_INDEX)!=11)))return 0;
-        if(v&SUNXI_SMHC_CMD_WRITE) {
+        if((v&SUNXI_SMHC_CMD_WRITE)&&(v&SUNXI_SMHC_CMD_INDEX)!=25u) {   /* CMD25 has its own bounded rule below */
             if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;
         }
         if(!(v&SUNXI_SMHC_CMD_UPDATE_CLOCK))switch(v&SUNXI_SMHC_CMD_INDEX) {
@@ -171,6 +176,14 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
              else return 0;}
             break;
         case 24:if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;break;
+#ifndef SUNXI_MMC_READ_ONLY
+        case 25:
+            /* The descriptor-DMA write: only SD, only with a verified bounds object, and only for a range it admits. */
+            if(n->kind!=SUNXI_MMC_SD||!n->bounds||
+               !a733_storage_bounds_cmd25_ok(n->bounds,v,*(volatile const uint32_t *)(base+SUNXI_SMHC_ARG),
+                    *(volatile const uint32_t *)(base+SUNXI_SMHC_BLKSZ),*(volatile const uint32_t *)(base+SUNXI_SMHC_BCNT)))return 0;
+            break;
+#endif
         default:return 0;
         }
     }
@@ -196,7 +209,7 @@ int a733_mmc_platform_native_init_selected(struct a733_mmc_platform_native *n,
     n->emmc_host=host;n->kind=kind;n->locks=locks;n->owner_task=task;n->admit=admission;n->admission_cookie=cookie;
     n->operations=(struct a733_mmc_platform_ops){now,current,admit,enter,leave,retain,read32,write32,barrier,outside,
         read_fifo,write_fifo,NULL};
-    n->update=NULL;n->holding=0;n->initialized=1;return 1;
+    n->update=NULL;n->bounds=NULL;n->holding=0;n->initialized=1;return 1;
 }
 
 int a733_mmc_platform_native_init(struct a733_mmc_platform_native *n,
@@ -205,6 +218,11 @@ int a733_mmc_platform_native_init(struct a733_mmc_platform_native *n,
 {return a733_mmc_platform_native_init_selected(n,locks,task,kind,A733_MMC_EMMC_SDC2,admission,cookie);}
 
 #ifndef SUNXI_MMC_READ_ONLY
+int a733_mmc_platform_native_bind_bounds(struct a733_mmc_platform_native *n,const struct a733_storage_bounds *b)
+{
+    if(!n||!n->initialized||n->bounds||n->kind!=SUNXI_MMC_SD||!b||b->state!=A733_BOUNDS_VERIFIED||!current(n))return 0;
+    n->bounds=b;return 1;
+}
 int a733_mmc_platform_native_bind_update(struct a733_mmc_platform_native *n,struct a733_storage_update *u)
 {
     if(!n||!n->initialized||n->update||!u||!current(n)||!a733_storage_update_owned(u,u->platform)||

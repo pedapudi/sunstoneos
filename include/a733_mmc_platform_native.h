@@ -2,6 +2,7 @@
 #define SUNSTONE_A733_MMC_PLATFORM_NATIVE_H
 #include "a733_mmc_platform.h"
 #include "a733_storage_update.h"
+#include "a733_storage_bounds.h"
 struct a733_platform_locks;
 struct a733_mmc_platform_native {
     struct a733_mmc_platform_ops operations;
@@ -11,6 +12,7 @@ struct a733_mmc_platform_native {
     enum sunxi_mmc_kind kind;
     enum a733_mmc_emmc_host emmc_host;
     struct a733_storage_update *update;
+    const struct a733_storage_bounds *bounds; /* Bounded descriptor-DMA writer; write-capable builds only. */
     unsigned initialized;
     unsigned holding; /* Register mutex entered by this binding, until leave or retain. */
     enum sunxi_mmc_sd_profile sd_profile; /* Set by successful actual platform admission. */
@@ -90,4 +92,8 @@ static inline int a733_mmc_platform_native_fifo_allowed(enum sunxi_mmc_kind kind
 /* Bind once after the actual service owns this exact platform. Existing native
  * initialization and address helper remain read-only until this binding. */
 int a733_mmc_platform_native_bind_update(struct a733_mmc_platform_native *,struct a733_storage_update *);
+/* Bind once the runner-admitted bounds object (a733_storage_bounds.h). CMD25 and the write threshold register are
+ * then writable, each only while the object is verified and the command's whole sector range lies in a write range.
+ * SD only; absent from the read-only build. */
+int a733_mmc_platform_native_bind_bounds(struct a733_mmc_platform_native *,const struct a733_storage_bounds *);
 #endif

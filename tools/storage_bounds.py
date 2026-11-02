@@ -35,6 +35,7 @@ import re
 import struct
 
 MAGIC = b'SSBW0002'
+MAX_PAIRS = 32                     # ranges of each kind the image's bounds object (a733_storage_bounds.h) holds
 ROOT = Path(__file__).resolve().parents[1]
 APPROVALS = Path(os.environ.get('SUNSTONE_STORAGE_APPROVALS') or Path.home() / '.cache/sunstoneos/coordinator-1031/approvals')
 ANY_IMAGE = 'any-image-from-tree'
@@ -200,7 +201,8 @@ def data_start(boot, start):
 
 def validate(ranges, backup_ranges, data_ranges, backup_sha256, sectors, start, end):
     """Check the write ranges, the backup ranges and the data exemption against the backup's own tables."""
-    require(ranges, 'The approval needs at least one write range.')
+    require(ranges and len(ranges) <= MAX_PAIRS and len(backup_ranges) <= MAX_PAIRS,
+            f'The approval needs between 1 and {MAX_PAIRS} write ranges and no more backup ranges.')
     require(backup_ranges, 'The approval needs at least one backup range.')
     require(_sorted_disjoint(ranges, start, 'Write ranges') <= end, 'A range extends past the end of the partition.')
     # A backup range lies in the partition, or is exactly sector 0.
