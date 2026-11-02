@@ -126,4 +126,15 @@ assert rows['clock']['before']['little_mhz'] == 0 and rows['clock']['after']['co
 assert rows['queue'][8] == {'link': True, 'pair_us': 20.0, 'wrong_output_bytes': 0, 'status': 'match'}
 expected = graphs_host.queue_expectation(depths, 1000)['words']
 assert len(expected) == 2 * 216 and expected[0:2] == [graphs_host.MAGIC & 0xffffffff, graphs_host.MAGIC >> 32]
+# The chain study's result (apps/npu-graphs, NPU_GRAPHS_CHAIN): the decoder reads the statistics, the times and the tokens.
+chain = bytearray(graphs_host.CHAIN_BYTES)
+struct.pack_into('<8Q', chain, 0, graphs_host.CHAIN_MAGIC, 1, 18, 2, 1, 4, 100, 100 + 24 * 50000)
+for k in range(2):
+    struct.pack_into('<Q', chain, 112 + 8 * k, 24 * (1000 + k))                     # record ticks
+struct.pack_into('<5q', chain, 112 + 8 * 4 * graphs_host.CHAIN_MAX_RECORDS, 1 << 40, 1 << 40, 1 << 40, 3 << 8, 8)
+tokens_at = 112 + 8 * 4 * graphs_host.CHAIN_MAX_RECORDS + 40 * graphs_host.CHAIN_MAX_STAT_RECORDS * graphs_host.CHAIN_MAX_GRAPHS
+struct.pack_into('<4H', chain, tokens_at, 5, 5, 1024, 7)
+decoded = graphs_host.chain_decode(bytes(chain))
+assert decoded['us']['record'] == [1000.0, 1001.0] and decoded['stats'][0][0]['cosine'] == 1.0 and decoded['stats'][0][0]['max_abs'] == 3.0
+assert decoded['tokens'][0] == [5, 5, 1024, 7] and len(graphs_host.chain_expectation()['words']) == graphs_host.CHAIN_BYTES // 4
 print('PASS %d graphs through the real OS NPU runtime and service (%s)' % (sum(n for _, n in ran), ', '.join('%s: %d' % r for r in ran)))

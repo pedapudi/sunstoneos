@@ -230,3 +230,18 @@ parked unless the NPU pool was exactly 8 MiB at `0x47400000`; it accepts a sized
   EL0 reaches in the cached profile; the DRAM above it is mapped for EL1 only. The pool therefore ends at `0x47000000` or
   `0x47c00000` and cannot exceed 48 MiB. Moving the pool and the tensor windows to upper memory, mapped through the
   per-application tables of the large-region work, would bound the pool by the installed DRAM instead. Not started.
+
+## Chains of graphs
+
+A network compiled as several graphs runs as a chain: graph g takes the output of graph g - 1 as its first input. Each graph
+has its own fixed-point position for its input and output (16-bit dynamic fixed point), so the application rescales between
+two graphs: code o at position f_out becomes code round(o * 2^(f_in - f_out)) at position f_in, clamped to 16 bits. The
+rescale runs on the CPU (a shift for each element); a graph that did it would cost a job. The application of the chain
+study (`apps/npu-graphs`, `NPU_GRAPHS_CHAIN`; the format of its data region is `chain.h`) registers a handle for every
+graph, writes the first graph's input, submits graph after graph, reads each output once the job and its cache
+maintenance are done, rescales it into the next input, and takes one greedy token for each frame of the last output. For the
+first records it also compares every graph's output with a reference. It measures, for each record, the whole chain, the
+jobs with their handshakes, the rescales and the decode. Measured for 18 graphs of 92 frames (16 attention layers between a
+convolutional subsampling and a linear head), on the Cortex-A55 core at 1794 MHz with the NPU at 852 MHz: 24.63 ms for a
+chain, of which 23.19 ms for the 18 jobs one after another with the SDK handshake (the batch of 18 jobs without the
+handshake takes 22.75 ms), 1.10 ms for the 17 rescales and 0.32 ms for the decode.
