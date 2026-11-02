@@ -34,6 +34,7 @@ static StackType_t intruder_stack[512], worker_stack[512], helper_stack[512], gr
 static volatile uint8_t *heap_base;
 static size_t heap_bytes;
 static TaskHandle_t main_handle;
+static volatile uintptr_t writer_tag;      /* the address-space tag of the task that wrote the heap */
 
 static void intruder(void *unused)
 {
@@ -56,6 +57,7 @@ static void grandchild(void *unused)
     (void)unused;
     volatile uint64_t *words = (volatile uint64_t *)(heap_base + 4 * MIB);
     for (unsigned i = 0; i < 4096; ++i) words[i] = UINT64_C(0x9e3779b97f4a7c15) * (i + 1);
+    writer_tag = (uintptr_t)xTaskGetApplicationTaskTag(NULL);
     xTaskNotifyGive(main_handle);
     for (;;) vTaskDelay(1000);
 }
@@ -72,6 +74,7 @@ static void worker(void *unused)
     (void)unused;
     volatile uint64_t *words = (volatile uint64_t *)(heap_base + 2 * MIB);
     for (unsigned i = 0; i < 4096; ++i) words[i] = UINT64_C(0x9e3779b97f4a7c15) * (i + 1);
+    writer_tag = (uintptr_t)xTaskGetApplicationTaskTag(NULL);
     xTaskNotifyGive(main_handle);
     for (;;) vTaskDelay(1000);
 }
@@ -109,7 +112,7 @@ void heap_test_main(const struct ss_grant *grant)
         volatile const uint64_t *words = (volatile const uint64_t *)(base + 2 * MIB);
         uint64_t fold = 0;
         for (unsigned i = 0; i < 4096; ++i) fold ^= words[i];
-        finish(TAG_OK, (uintptr_t)base, capacity, 0, fold);
+        finish(TAG_OK, (uintptr_t)base, capacity, writer_tag && writer_tag == (uintptr_t)xTaskGetApplicationTaskTag(NULL), fold);
     }
 
     if (mode == 4) {
@@ -120,7 +123,7 @@ void heap_test_main(const struct ss_grant *grant)
         volatile const uint64_t *words = (volatile const uint64_t *)(base + 4 * MIB);
         uint64_t fold = 0;
         for (unsigned i = 0; i < 4096; ++i) fold ^= words[i];
-        finish(TAG_OK, (uintptr_t)base, capacity, 0, fold);
+        finish(TAG_OK, (uintptr_t)base, capacity, writer_tag && writer_tag == (uintptr_t)xTaskGetApplicationTaskTag(NULL), fold);
     }
 
     /* The allocator's view: the first sbrk(0) is the region's base. */

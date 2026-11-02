@@ -15,9 +15,9 @@ import sys
 
 import numpy
 
-RESULT = struct.Struct('<10Q')
+RESULT = struct.Struct('<16Q')
 FIELDS = ('tag', 'mode', 'base', 'bytes', 'in_range', 'nonzero_words', 'fold_written', 'fold_read', 'out_of_memory',
-          'reused')
+          'reused', 'worker_ran', 'worker_core', 'same_tag', 'main_tag_set', 'notify_count', 'worker_readback')
 TAG_OK = 0x48454150544f4b
 PATTERN = 0x9e3779b97f4a7c15
 BASE, BYTES = 0x80000000, 1 << 30
@@ -42,10 +42,10 @@ def expected(mode):
         values = (TAG_OK, 0, BASE, BYTES, 1, 0, value, value, 1, 1)
     elif mode == 3:
         value = fold(4096)
-        values = (TAG_OK, 3, BASE, BYTES, 0, 0, value, value, 0, 0)
+        values = (TAG_OK, 3, BASE, BYTES, 0, 0, value, value, 0, 0, 1, 3, 1, 1, 1, value)
     else:
         raise ValueError('mode %d ends in a fault and has no result' % mode)
-    return RESULT.pack(*values) + bytes(128 - RESULT.size)
+    return RESULT.pack(*values + (0,) * (16 - len(values))) + bytes(128 - RESULT.size)
 
 
 def decode(payload):

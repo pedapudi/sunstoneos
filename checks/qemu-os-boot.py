@@ -848,12 +848,12 @@ def main():
     expected_fold = 0
     for i in range(4096):
         expected_fold ^= (0x9e3779b97f4a7c15 * (i + 1)) & (2 ** 64 - 1)
-    c.require(tag == 0x48454150204f4b and fold == expected_fold, 'worker result %#x fold %#x, expected %#x' % (tag, fold, expected_fold))
+    c.require(tag == 0x48454150204f4b and fold == expected_fold and peak == 1, 'worker result %#x fold %#x, expected %#x; writer shares the main task tag: %d' % (tag, fold, expected_fold, peak))
     # A task of a task of the application creates a task that writes the heap: no call puts any of them in the space.
     c = run_case('heap-grandchild-shares', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(4), '4G', [(0x80000000, stale)])
     c.clean()
     tag, base, size, peak, fold = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
-    c.require(tag == 0x48454150204f4b and fold == expected_fold, 'grandchild result %#x fold %#x, expected %#x' % (tag, fold, expected_fold))
+    c.require(tag == 0x48454150204f4b and fold == expected_fold and peak == 1, 'grandchild result %#x fold %#x, expected %#x; writer shares the main task tag: %d' % (tag, fold, expected_fold, peak))
     # The linked heap has handed out a byte before the admission, as a static constructor that calls malloc would
     # make it: the heap of the ledger cannot replace it, so the application does not start.
     c = run_case('heap-after-early-sbrk', heap_early_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x80000000, stale)])

@@ -33,7 +33,14 @@ struct heap_test_result {
     uint64_t fold_written, fold_read;
     uint64_t out_of_memory;       /* 1 when a request beyond the remaining heap returned NULL */
     uint64_t reused;              /* 1 when the block freed and allocated again was usable and in range */
-    uint64_t reserved[128 / 8 - 10];
+    /* Mode 3 only: what the worker and the main task saw, so that one run separates a worker that never ran from one
+     * whose stores the main task did not see. */
+    uint64_t worker_ran;          /* 1 when the worker set its flag before it notified the main task */
+    uint64_t worker_core;         /* the core the worker ran on */
+    uint64_t same_tag;            /* 1 when the worker's address-space tag equals the main task's */
+    uint64_t main_tag_set;        /* 1 when the main task has an address-space tag */
+    uint64_t notify_count;        /* what the main task's wait returned: 1 for the worker's notification, 0 for the timeout */
+    uint64_t worker_readback;     /* the fold of the words the worker read back after it wrote them */
 };
 _Static_assert(sizeof(struct heap_test_result) == 128, "result is the manifest's output_limit");
 
@@ -50,11 +57,19 @@ static void intruder(void *unused)
     ss_fail(0x1e02);
 }
 
+static volatile uint64_t worker_flag, worker_core_id, worker_tag, worker_fold;
+
 static void worker(void *unused)
 {
     (void)unused;
     volatile uint64_t *words = (volatile uint64_t *)(region_base + 2 * MIB);
     for (unsigned i = 0; i < 4096; ++i) words[i] = PATTERN * (i + 1);
+    uint64_t fold = 0;
+    for (unsigned i = 0; i < 4096; ++i) fold ^= words[i];
+    worker_fold = fold;
+    worker_core_id = portGET_CORE_ID();
+    worker_tag = (uintptr_t)xTaskGetApplicationTaskTag(NULL);
+    worker_flag = 1;
     xTaskNotifyGive(main_handle);
     for (;;) vTaskDelay(1000);
 }
@@ -81,7 +96,13 @@ void heap_test_main(const struct ss_grant *grant)
     main_handle = xTaskGetCurrentTaskHandle();
     (void)xTaskCreateStaticAffinitySet(worker, "worker", 512, NULL, 3, worker_stack, &worker_state,
                                        (UBaseType_t)(grant->worker_cores & -grant->worker_cores));
-    (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
+    r.notify_count = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
+    const uint64_t main_tag = (uintptr_t)xTaskGetApplicationTaskTag(NULL);
+    r.worker_ran = worker_flag;
+    r.worker_core = worker_core_id;
+    r.main_tag_set = main_tag != 0;
+    r.same_tag = worker_flag && worker_tag == main_tag;
+    r.worker_readback = worker_fold;
     volatile const uint64_t *check = (volatile const uint64_t *)(base + 2 * MIB);
     for (unsigned i = 0; i < 4096; ++i) r.fold_read ^= check[i];
     for (unsigned i = 0; i < 4096; ++i) r.fold_written ^= PATTERN * (i + 1);
