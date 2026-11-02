@@ -27,6 +27,22 @@ elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
   add_sunstone_image(sunstone-a733-os-hello LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION hello-compute)
+elseif(SUNSTONE_APPLICATION STREQUAL "latency-cost")
+  include("${SUNSTONE_SOURCE_ROOT}/apps/latency-cost/cmake/application.cmake")
+  add_sunstone_image(sunstone-a733-os-latency-cost LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION latency-cost)
+  target_sources(sunstone-a733-os-latency-cost PRIVATE
+    "${SUNSTONE_SOURCE_ROOT}/apps/latency-cost/switch.c" "${SUNSTONE_SOURCE_ROOT}/apps/latency-cost/irq.c")
+  target_link_options(sunstone-a733-os-latency-cost PRIVATE
+    -Wl,--wrap=vTaskSwitchContext -Wl,--wrap=vApplicationIRQHandler)
+  if(SUNSTONE_LATENCY)
+    set_property(SOURCE "${SUNSTONE_SOURCE_ROOT}/runtime/latency_irq.c"
+      TARGET_DIRECTORY sunstone-a733-os-core APPEND PROPERTY COMPILE_DEFINITIONS
+      __wrap_vApplicationIRQHandler=latency_cost_inner_irq)
+    target_compile_definitions(sunstone-a733-os-latency-cost PRIVATE SUNSTONE_LATENCY=1)
+  endif()
+  set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/apps/latency-cost/switch.c"
+    "${SUNSTONE_SOURCE_ROOT}/apps/latency-cost/irq.c" PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
 elseif(SUNSTONE_APPLICATION MATCHES "^latency(-dma)?$")
   if(NOT SUNSTONE_LATENCY)
     message(FATAL_ERROR "The latency diagnostic requires SUNSTONE_LATENCY=ON")
@@ -37,6 +53,13 @@ elseif(SUNSTONE_APPLICATION MATCHES "^latency(-dma)?$")
   include("${SUNSTONE_SOURCE_ROOT}/apps/latency/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-${SUNSTONE_APPLICATION} LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION ${SUNSTONE_APPLICATION})
+elseif(SUNSTONE_APPLICATION STREQUAL "cpu-capacity")
+  if(NOT SUNSTONE_A733_CPU_TOPOLOGY)
+    message(FATAL_ERROR "CPU capacity observations require SUNSTONE_A733_CPU_TOPOLOGY=ON")
+  endif()
+  include("${SUNSTONE_SOURCE_ROOT}/apps/scheduler-capacity/cmake/application.cmake")
+  add_sunstone_image(sunstone-a733-os-cpu-capacity LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION cpu-capacity)
 elseif(SUNSTONE_APPLICATION MATCHES "^queue-(add|gemm)$")
   add_sunstone_application(${SUNSTONE_APPLICATION}
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/${SUNSTONE_APPLICATION}/main.c"

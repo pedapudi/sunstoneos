@@ -3,6 +3,7 @@
 #define SUNSTONE_BOARD_H
 #include <stddef.h>
 #include <stdint.h>
+#include "sunstone_cpu_topology.h"
 struct camera_sensor_bus;
 struct sunstone_display_port;
 /* Wiring and module selection describe a board configuration. They do not
@@ -17,6 +18,7 @@ struct sunstone_usb_port {
 };
 struct sunstone_board_description {
     const char *name;
+    const struct ss_cpu_policy *cpu_policy;
     const struct camera_sensor_bus *camera;
     size_t camera_count;
     const char *const *camera_sensors;
@@ -26,5 +28,6 @@ struct sunstone_board_description {
     const struct sunstone_usb_port *usb_ports;
     size_t usb_port_count;
 };
+extern const struct ss_cpu_policy sunstone_orangepi_zero3w_cpu_policy;
 const struct sunstone_board_description *sunstone_board_orangepi_zero3w(void);
 #endif

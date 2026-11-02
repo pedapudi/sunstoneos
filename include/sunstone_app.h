@@ -12,6 +12,8 @@
 #include <stdint.h>
 #include "gpu_queue.h"
 #include "sunstone_npu_queue.h"
+#include "sunstone_cpu_topology.h"
+#include "sunstone_cpu_observation.h"
 #ifdef __cplusplus
 #define SS_STATIC_ASSERT static_assert
 #define SS_NORETURN [[noreturn]]
@@ -178,6 +180,15 @@ int ss_throttled(void);
 /* 1 once the CPU clock owner has finished the session grant's requests,
  * whatever their result, or when the image grants no CPU operating points. */
 int ss_clock_ready(void);
+/* Read-only CPU topology and boot observations. Queries copy bounded records;
+ * compute loops can retain them. SS_TOPOLOGY_UNCALIBRATED never infers a
+ * capacity ratio from clock rates. Work ranges are half-open and quantum-aligned
+ * except for the final tail. No partial ranges are written on insufficient space. */
+int ss_cpu_topology_info(struct ss_cpu_topology_info *out);
+int ss_cpu_topology(struct ss_cpu_info *out, size_t capacity, size_t *count);
+int ss_work_split(uint64_t units, uint64_t cpu_mask, uint32_t quantum,
+                  struct ss_work_range *out, size_t capacity, size_t *count);
+int ss_cpu_observations(unsigned core, struct ss_cpu_observation *out);
 /* Mark the bounded application operation observed by thermal reports.
  * Both calls publish atomic counters; success is 0 or 1. */
 void ss_activity_begin(void);

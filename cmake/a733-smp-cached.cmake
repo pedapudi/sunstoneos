@@ -1,3 +1,4 @@
+include("${CMAKE_CURRENT_LIST_DIR}/scheduler-partitioned.cmake")
 # Separate cached eight-core A733 diagnostic.
 if(NOT DEFINED SUNSTONE_SOURCE_ROOT)
   set(SUNSTONE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -18,6 +19,9 @@ apply_build_patch("${a733_build}/portmacro.h" "${a733_port}/portmacro.h"
   "${a733_root}/patches/freertos-smp-macro.patch")
 apply_build_patch("${a733_build}/tasks.c" "${FREERTOS_DIR}/tasks.c"
   "${a733_root}/patches/freertos-smp-tasks.patch")
+if(SUNSTONE_PARTITIONED_SCHEDULER)
+  sunstone_scheduler_partitioned_prepare("${a733_build}" "${a733_build}/tasks.c")
+endif()
 set(a733_sources
   platform/a733-smp-cached/start.S platform/a733-smp-cached/boot.c platform/a733-smp-cached/admission.c
   platform/a733-smp-cached/platform.c platform/a733-smp-cached/diagnostic.c
@@ -34,6 +38,9 @@ list(APPEND a733_sources "${a733_build}/continue-core.c")
 option(SUNSTONE_A733_PERF_SESSION "Cached eight-core images with the multicore performance session measurements" OFF)
 if(SUNSTONE_A733_PERF_SESSION)
   list(APPEND a733_sources "${a733_root}/platform/a733-smp-cached/perf_session.c")
+endif()
+if(SUNSTONE_PARTITIONED_SCHEDULER)
+  sunstone_scheduler_partitioned_sources(a733_sources "${a733_build}")
 endif()
 # This is a build-input identity, not the final ELF digest. The host records both.
 set(a733_identity_inputs ${a733_sources}
@@ -53,6 +60,18 @@ file(GLOB a733_kernel_headers "${FREERTOS_DIR}/include/*.h")
 list(APPEND a733_identity_inputs ${a733_kernel_headers}
   "${a733_root}/include/platform.h" "${a733_root}/runtime/include/string.h")
 set(a733_identity "${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};armv8-a;O2;WBWA;Device-monitor;8")
+if(SUNSTONE_PARTITIONED_SCHEDULER)
+  file(GLOB a733_owner_headers "${a733_root}/kernel/scheduler/*.h"
+    "${a733_build}/include/*.h")
+  set(a733_owner_inputs ${a733_owner_headers}
+    "${a733_root}/kernel/scheduler/freertos.c"
+    "${a733_root}/cmake/scheduler-partitioned.cmake")
+  foreach(name queue event_groups stream_buffer timers)
+    list(APPEND a733_owner_inputs "${a733_build}/${name}.c")
+  endforeach()
+  list(APPEND a733_identity_inputs ${a733_owner_inputs})
+  string(APPEND a733_identity ";partitioned")
+endif()
 if(SUNSTONE_A733_PERF_SESSION)
   list(APPEND a733_identity_inputs "${a733_root}/platform/a733-smp-cached/perf_session.h")
   string(APPEND a733_identity ";perf-session")
@@ -93,3 +112,7 @@ target_link_options(a733-smp-cached-diagnostic PRIVATE -nostdlib -static -Wl,--g
   "-Wl,-T,${a733_root}/platform/a733-smp-cached/link.ld" "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/a733-smp-cached-diagnostic.map")
 set_target_properties(a733-smp-cached-diagnostic PROPERTIES SUFFIX ".elf"
   LINK_DEPENDS "${a733_root}/platform/a733-smp-cached/link.ld")
+
+if(SUNSTONE_PARTITIONED_SCHEDULER)
+  sunstone_scheduler_partitioned_bind(a733-smp-cached-diagnostic "${a733_build}")
+endif()

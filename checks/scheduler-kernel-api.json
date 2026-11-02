@@ -1,0 +1,905 @@
+{
+  "scope": "Private series-B API fork; not admitted into live CMake chain.",
+  "source_revision": "97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+  "production_chain": [
+    "freertos-smp-tasks.patch",
+    "freertos-partitioned-tasks.patch"
+  ],
+  "private_check_chain": [
+    "freertos-smp-tasks.patch",
+    "freertos-partitioned-tasks.patch",
+    "freertos-partitioned-api.patch",
+    "freertos-partitioned-objects.patch"
+  ],
+  "enablement_blockers": [
+    "The private checker selects 81 routed public functions and none pending. Remaining optional APIs are rejected by compile-time guards; enabling those configurations requires their conversion.",
+    "Complete port IRQ-exit and voluntary-yield wiring. Linked transitions cover trace, runtime, errno, synthetic TLS and task-switch hooks; concurrent saved-frame execution remains untested.",
+    "Run concurrent eight-core QEMU task/object/timer/deletion/migration stress after complete API conversion; no board admission before review."
+  ],
+  "validation_limits": "Host fixture links actual FreeRTOS tasks/list/object code. It advances owner checkpoints explicitly and does not execute task stacks concurrently. Clang AST audit checks selected function definitions and their reachable task translation-unit functions for legacy scheduler-list references.",
+  "apis": [
+    {
+      "name": "eTaskConfirmSleepModeStatus",
+      "state": "pending",
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
+    },
+    {
+      "name": "eTaskGetState",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_eTaskGetState( xTask );",
+      "definition_helpers": [
+        "ssKernelState"
+      ]
+    },
+    {
+      "name": "pcTaskGetName",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_pcTaskGetName( xTaskToQuery );",
+      "definition_helpers": [
+        "ssKernelPin"
+      ]
+    },
+    {
+      "name": "pvTaskGetThreadLocalStoragePointer",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_pvTaskGetThreadLocalStoragePointer( xTaskToQuery, xIndex );",
+      "definition_helpers": [
+        "ssKernelObjectEnterFromISR",
+        "ssKernelObjectExitFromISR",
+        "ssKernelPin"
+      ]
+    },
+    {
+      "name": "pvTaskIncrementMutexHeldCount",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_pvTaskIncrementMutexHeldCount();",
+      "definition_helpers": [
+        "ssKernelMutexTaken"
+      ]
+    },
+    {
+      "name": "ulTaskGenericNotifyTake",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_ulTaskGenericNotifyTake( uxIndexToWaitOn, xClearCountOnExit, xTicksToWait );",
+      "definition_helpers": [
+        "ssKernelNotifyWait"
+      ]
+    },
+    {
+      "name": "ulTaskGenericNotifyValueClear",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_ulTaskGenericNotifyValueClear( xTask, uxIndexToClear, ulBitsToClear );",
+      "definition_helpers": [
+        "ssKernelNotifyClear"
+      ]
+    },
+    {
+      "name": "ulTaskGetIdleRunTimeCounter",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_ulTaskGetIdleRunTimeCounter();",
+      "definition_helpers": [
+        "ssKernelResumeAll",
+        "ssKernelRuntime",
+        "ssKernelSuspendAll"
+      ]
+    },
+    {
+      "name": "ulTaskGetIdleRunTimePercent",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_ulTaskGetIdleRunTimePercent();",
+      "definition_helpers": [
+        "ssKernelRuntimeNow"
+      ]
+    },
+    {
+      "name": "ulTaskGetRunTimeCounter",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_ulTaskGetRunTimeCounter( xTask );",
+      "definition_helpers": [
+        "ssKernelRuntime"
+      ]
+    },
+    {
+      "name": "ulTaskGetRunTimePercent",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_ulTaskGetRunTimePercent( xTask );",
+      "definition_helpers": [
+        "ssKernelRuntime",
+        "ssKernelRuntimeNow"
+      ]
+    },
+    {
+      "name": "uxTaskBasePriorityGet",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_uxTaskBasePriorityGet( xTask );",
+      "definition_helpers": [
+        "ssKernelPriority"
+      ]
+    },
+    {
+      "name": "uxTaskBasePriorityGetFromISR",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_uxTaskBasePriorityGetFromISR( xTask );",
+      "definition_helpers": [
+        "ssKernelPriority"
+      ]
+    },
+    {
+      "name": "uxTaskCallForEachTask",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "configASSERT(pxCallbackFunction);",
+      "definition_helpers": [
+        "ssKernelForEach",
+        "ssKernelResumeAll",
+        "ssKernelSuspendAll"
+      ]
+    },
+    {
+      "name": "uxTaskGetNumberOfTasks",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_uxTaskGetNumberOfTasks();",
+      "definition_helpers": []
+    },
+    {
+      "name": "uxTaskGetStackHighWaterMark",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_uxTaskGetStackHighWaterMark( xTask );",
+      "definition_helpers": [
+        "ssKernelPin"
+      ]
+    },
+    {
+      "name": "uxTaskGetStackHighWaterMark2",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_uxTaskGetStackHighWaterMark2( xTask );",
+      "definition_helpers": [
+        "ssKernelPin"
+      ]
+    },
+    {
+      "name": "uxTaskGetSystemState",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_uxTaskGetSystemState( pxTaskStatusArray, uxArraySize, pulTotalRunTime );",
+      "definition_helpers": [
+        "ssKernelForEach",
+        "ssKernelResumeAll",
+        "ssKernelSuspendAll"
+      ]
+    },
+    {
+      "name": "uxTaskGetTaskNumber",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_uxTaskGetTaskNumber( xTask );",
+      "definition_helpers": [
+        "ssKernelObjectEnterFromISR",
+        "ssKernelObjectExitFromISR",
+        "ssKernelPin"
+      ]
+    },
+    {
+      "name": "uxTaskPriorityGet",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_uxTaskPriorityGet( xTask );",
+      "definition_helpers": [
+        "ssKernelPriority"
+      ]
+    },
+    {
+      "name": "uxTaskPriorityGetFromISR",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_uxTaskPriorityGetFromISR( xTask );",
+      "definition_helpers": [
+        "ssKernelPriority"
+      ]
+    },
+    {
+      "name": "uxTaskResetEventItemValue",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_uxTaskResetEventItemValue();",
+      "definition_helpers": [
+        "ssKernelCurrent",
+        "ssKernelObjectEnterFromISR",
+        "ssKernelObjectExitFromISR",
+        "ssKernelSelf"
+      ]
+    },
+    {
+      "name": "vTaskAllocateMPURegions",
+      "state": "pending",
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
+    },
+    {
+      "name": "vTaskCoreAffinityGet",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskCoreAffinityGet( xTask );",
+      "definition_helpers": [
+        "ssKernelPin"
+      ]
+    },
+    {
+      "name": "vTaskCoreAffinitySet",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskCoreAffinitySet( xTask, uxCoreAffinityMask );",
+      "definition_helpers": [
+        "ssKernelCommand"
+      ]
+    },
+    {
+      "name": "vTaskDelay",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskDelay( xTicksToDelay );",
+      "definition_helpers": [
+        "ssKernelBlock",
+        "ssKernelCPUId"
+      ]
+    },
+    {
+      "name": "vTaskDelete",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskDelete( xTaskToDelete );",
+      "definition_helpers": [
+        "ssKernelCommand"
+      ]
+    },
+    {
+      "name": "vTaskEndScheduler",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_vTaskEndScheduler();",
+      "definition_helpers": []
+    },
+    {
+      "name": "vTaskEnterCritical",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskEnterCritical();",
+      "definition_helpers": [
+        "ssKernelCPUId",
+        "ssKernelObjectEnter"
+      ]
+    },
+    {
+      "name": "vTaskEnterCriticalFromISR",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskEnterCriticalFromISR();",
+      "definition_helpers": [
+        "ssKernelCPUId",
+        "ssKernelObjectEnterFromISR"
+      ]
+    },
+    {
+      "name": "vTaskExitCritical",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskExitCritical();",
+      "definition_helpers": [
+        "ssKernelCPUId",
+        "ssKernelObjectExit"
+      ]
+    },
+    {
+      "name": "vTaskExitCriticalFromISR",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskExitCriticalFromISR( uxSavedInterruptStatus );",
+      "definition_helpers": [
+        "ssKernelCPUId",
+        "ssKernelObjectExitFromISR"
+      ]
+    },
+    {
+      "name": "vTaskGenericNotifyGiveFromISR",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_vTaskGenericNotifyGiveFromISR( xTaskToNotify, uxIndexToNotify, pxHigherPriorityTaskWoken );",
+      "definition_helpers": [
+        "ssKernelNotify"
+      ]
+    },
+    {
+      "name": "vTaskGetInfo",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskGetInfo( xTask, pxTaskStatus, xGetFreeStackSpace, eState );",
+      "definition_helpers": [
+        "ssKernelInfo"
+      ]
+    },
+    {
+      "name": "vTaskGetRunTimeStatistics",
+      "state": "pending",
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
+    },
+    {
+      "name": "vTaskInternalSetTimeOutState",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskInternalSetTimeOutState( pxTimeOut );",
+      "definition_helpers": [
+        "ssKernelNow"
+      ]
+    },
+    {
+      "name": "vTaskListTasks",
+      "state": "pending",
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
+    },
+    {
+      "name": "vTaskMissedYield",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_vTaskMissedYield();",
+      "definition_helpers": [
+        "ssKernelMissedYield"
+      ]
+    },
+    {
+      "name": "vTaskPlaceOnEventList",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskPlaceOnEventList( pxEventList, xTicksToWait );",
+      "definition_helpers": [
+        "ssKernelEventBlock"
+      ]
+    },
+    {
+      "name": "vTaskPlaceOnEventListRestricted",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_vTaskPlaceOnEventListRestricted( pxEventList, xTicksToWait, xWaitIndefinitely );",
+      "definition_helpers": [
+        "ssKernelEventBlock"
+      ]
+    },
+    {
+      "name": "vTaskPlaceOnUnorderedEventList",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_vTaskPlaceOnUnorderedEventList( pxEventList, xItemValue, xTicksToWait );",
+      "definition_helpers": [
+        "ssKernelEventBlock"
+      ]
+    },
+    {
+      "name": "vTaskPreemptionDisable",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskPreemptionDisable( xTask );",
+      "definition_helpers": [
+        "ssKernelCommand"
+      ]
+    },
+    {
+      "name": "vTaskPreemptionEnable",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskPreemptionEnable( xTask );",
+      "definition_helpers": [
+        "ssKernelCommand"
+      ]
+    },
+    {
+      "name": "vTaskPriorityDisinheritAfterTimeout",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskPriorityDisinheritAfterTimeout( pxMutexHolder, uxHighestPriorityWaitingTask );",
+      "definition_helpers": [
+        "ssKernelDisinherit"
+      ]
+    },
+    {
+      "name": "vTaskPrioritySet",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskPrioritySet( xTask, uxNewPriority );",
+      "definition_helpers": [
+        "ssKernelCommand"
+      ]
+    },
+    {
+      "name": "vTaskRemoveFromUnorderedEventList",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_vTaskRemoveFromUnorderedEventList( pxEventListItem, xItemValue );",
+      "definition_helpers": [
+        "ssKernelEventWake"
+      ]
+    },
+    {
+      "name": "vTaskResetState",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "configASSERT(!xSchedulerRunning);",
+      "definition_helpers": []
+    },
+    {
+      "name": "vTaskResume",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_vTaskResume( xTaskToResume );",
+      "definition_helpers": [
+        "ssKernelCommand"
+      ]
+    },
+    {
+      "name": "vTaskSetApplicationTaskTag",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskSetApplicationTaskTag( xTask, pxHookFunction );",
+      "definition_helpers": [
+        "ssKernelObjectEnterFromISR",
+        "ssKernelObjectExitFromISR",
+        "ssKernelPin"
+      ]
+    },
+    {
+      "name": "vTaskSetTaskNumber",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskSetTaskNumber( xTask, uxHandle );",
+      "definition_helpers": [
+        "ssKernelObjectEnterFromISR",
+        "ssKernelObjectExitFromISR",
+        "ssKernelPin"
+      ]
+    },
+    {
+      "name": "vTaskSetThreadLocalStoragePointer",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskSetThreadLocalStoragePointer( xTaskToSet, xIndex, pvValue );",
+      "definition_helpers": [
+        "ssKernelObjectEnterFromISR",
+        "ssKernelObjectExitFromISR",
+        "ssKernelPin"
+      ]
+    },
+    {
+      "name": "vTaskSetTimeOutState",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskSetTimeOutState( pxTimeOut );",
+      "definition_helpers": [
+        "ssKernelNow"
+      ]
+    },
+    {
+      "name": "vTaskStartScheduler",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskStartScheduler();",
+      "definition_helpers": [
+        "ssKernelBootstrap",
+        "ssKernelSelf"
+      ]
+    },
+    {
+      "name": "vTaskStepTick",
+      "state": "pending",
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
+    },
+    {
+      "name": "vTaskSuspend",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_vTaskSuspend( xTaskToSuspend );",
+      "definition_helpers": [
+        "ssKernelCommand"
+      ]
+    },
+    {
+      "name": "vTaskSuspendAll",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_vTaskSuspendAll();",
+      "definition_helpers": [
+        "ssKernelSuspendAll"
+      ]
+    },
+    {
+      "name": "vTaskSwitchContext",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_vTaskSwitchContext();",
+      "definition_helpers": [
+        "ssKernelSwitch"
+      ]
+    },
+    {
+      "name": "vTaskYieldWithinAPI",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_vTaskYieldWithinAPI();",
+      "definition_helpers": [
+        "ssKernelOwnerYield"
+      ]
+    },
+    {
+      "name": "xTaskAbortDelay",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_xTaskAbortDelay( xTask );",
+      "definition_helpers": [
+        "ssKernelCommand"
+      ]
+    },
+    {
+      "name": "xTaskCallApplicationTaskHook",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskCallApplicationTaskHook( xTask, pvParameter );",
+      "definition_helpers": []
+    },
+    {
+      "name": "xTaskCatchUpTicks",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_xTaskCatchUpTicks( xTicksToCatchUp );",
+      "definition_helpers": [
+        "ssKernelCPUId",
+        "ssKernelForce",
+        "ssKernelService"
+      ]
+    },
+    {
+      "name": "xTaskCheckForTimeOut",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskCheckForTimeOut( pxTimeOut, pxTicksToWait );",
+      "definition_helpers": [
+        "ssKernelNow",
+        "ssKernelSelf"
+      ]
+    },
+    {
+      "name": "xTaskCreate",
+      "state": "pending",
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
+    },
+    {
+      "name": "xTaskCreateAffinitySet",
+      "state": "pending",
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
+    },
+    {
+      "name": "xTaskCreateRestricted",
+      "state": "pending",
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
+    },
+    {
+      "name": "xTaskCreateRestrictedAffinitySet",
+      "state": "pending",
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
+    },
+    {
+      "name": "xTaskCreateRestrictedStatic",
+      "state": "pending",
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
+    },
+    {
+      "name": "xTaskCreateRestrictedStaticAffinitySet",
+      "state": "pending",
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
+    },
+    {
+      "name": "xTaskCreateStatic",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskCreateStatic( pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer );",
+      "definition_helpers": [
+        "ssKernelAdmitTask"
+      ]
+    },
+    {
+      "name": "xTaskCreateStaticAffinitySet",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskCreateStaticAffinitySet( pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer, uxCoreAffinityMask );",
+      "definition_helpers": [
+        "ssKernelAdmitTask"
+      ]
+    },
+    {
+      "name": "xTaskDelayUntil",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_xTaskDelayUntil( pxPreviousWakeTime, xTimeIncrement );",
+      "definition_helpers": [
+        "ssKernelNow"
+      ]
+    },
+    {
+      "name": "xTaskGenericNotify",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_xTaskGenericNotify( xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue );",
+      "definition_helpers": [
+        "ssKernelCPUId",
+        "ssKernelNotify"
+      ]
+    },
+    {
+      "name": "xTaskGenericNotifyFromISR",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskGenericNotifyFromISR( xTaskToNotify, uxIndexToNotify, ulValue, eAction, pulPreviousNotificationValue, pxHigherPriorityTaskWoken );",
+      "definition_helpers": [
+        "ssKernelNotify"
+      ]
+    },
+    {
+      "name": "xTaskGenericNotifyStateClear",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_xTaskGenericNotifyStateClear( xTask, uxIndexToClear );",
+      "definition_helpers": [
+        "ssKernelNotifyClear"
+      ]
+    },
+    {
+      "name": "xTaskGenericNotifyWait",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_xTaskGenericNotifyWait( uxIndexToWaitOn, ulBitsToClearOnEntry, ulBitsToClearOnExit, pulNotificationValue, xTicksToWait );",
+      "definition_helpers": [
+        "ssKernelNotifyWait"
+      ]
+    },
+    {
+      "name": "xTaskGetApplicationTaskTag",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskGetApplicationTaskTag( xTask );",
+      "definition_helpers": [
+        "ssKernelObjectEnterFromISR",
+        "ssKernelObjectExitFromISR",
+        "ssKernelPin"
+      ]
+    },
+    {
+      "name": "xTaskGetApplicationTaskTagFromISR",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskGetApplicationTaskTagFromISR( xTask );",
+      "definition_helpers": [
+        "ssKernelObjectEnterFromISR",
+        "ssKernelObjectExitFromISR",
+        "ssKernelPin"
+      ]
+    },
+    {
+      "name": "xTaskGetCurrentTaskHandle",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskGetCurrentTaskHandle();",
+      "definition_helpers": [
+        "ssKernelSelf"
+      ]
+    },
+    {
+      "name": "xTaskGetCurrentTaskHandleForCore",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskGetCurrentTaskHandleForCore( xCoreID );",
+      "definition_helpers": [
+        "ssKernelCurrentSnapshot"
+      ]
+    },
+    {
+      "name": "xTaskGetHandle",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskGetHandle( pcNameToQuery );",
+      "definition_helpers": [
+        "ssKernelPin",
+        "ssKernelResumeAll",
+        "ssKernelSuspendAll"
+      ]
+    },
+    {
+      "name": "xTaskGetIdleTaskHandle",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_xTaskGetIdleTaskHandle();",
+      "definition_helpers": []
+    },
+    {
+      "name": "xTaskGetIdleTaskHandleForCore",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskGetIdleTaskHandleForCore( xCoreID );",
+      "definition_helpers": []
+    },
+    {
+      "name": "xTaskGetMPUSettings",
+      "state": "pending",
+      "validation": "none",
+      "configuration": "compile-time rejected in the private owner fork"
+    },
+    {
+      "name": "xTaskGetSchedulerState",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskGetSchedulerState();",
+      "definition_helpers": [
+        "ssKernelSchedulerState"
+      ]
+    },
+    {
+      "name": "xTaskGetStaticBuffers",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskGetStaticBuffers( xTask, ppuxStackBuffer, ppxTaskBuffer );",
+      "definition_helpers": [
+        "ssKernelPin"
+      ]
+    },
+    {
+      "name": "xTaskGetTickCount",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_xTaskGetTickCount();",
+      "definition_helpers": [
+        "ssKernelNow"
+      ]
+    },
+    {
+      "name": "xTaskGetTickCountFromISR",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_xTaskGetTickCountFromISR();",
+      "definition_helpers": [
+        "ssKernelNow"
+      ]
+    },
+    {
+      "name": "xTaskIncrementTick",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskIncrementTick();",
+      "definition_helpers": [
+        "ssKernelTick"
+      ]
+    },
+    {
+      "name": "xTaskPeriodicDelay",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskPeriodicDelay( pxPreviousWakeTime, xTimeIncrement );",
+      "definition_helpers": [
+        "ssKernelNow"
+      ]
+    },
+    {
+      "name": "xTaskPriorityDisinherit",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskPriorityDisinherit( pxMutexHolder );",
+      "definition_helpers": [
+        "ssKernelDisinherit"
+      ]
+    },
+    {
+      "name": "xTaskPriorityInherit",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskPriorityInherit( pxMutexHolder );",
+      "definition_helpers": [
+        "ssKernelInherit"
+      ]
+    },
+    {
+      "name": "xTaskRemoveFromEventList",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskRemoveFromEventList( pxEventList );",
+      "definition_helpers": [
+        "ssKernelEventWake"
+      ]
+    },
+    {
+      "name": "xTaskResumeAll",
+      "state": "routed-private",
+      "validation": "linked-transition",
+      "definition_route": "traceENTER_xTaskResumeAll();",
+      "definition_helpers": [
+        "ssKernelResumeAll"
+      ]
+    },
+    {
+      "name": "xTaskResumeFromISR",
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "traceENTER_xTaskResumeFromISR( xTaskToResume );",
+      "definition_helpers": [
+        "ssKernelCommand",
+        "ssKernelOwnerIRQExit"
+      ]
+    }
+  ],
+  "private_helpers": [
+    "prvAddNewTaskToReadyList",
+    "prvCheckTasksWaitingTermination"
+  ],
+  "validation_flags": {
+    "configSS_PARTITIONED_SCHEDULER": 1,
+    "SUNSTONE_SMP_CORES": 8,
+    "configUSE_TIMERS": 1,
+    "INCLUDE_xTaskDelayUntil": 1,
+    "INCLUDE_eTaskGetState": 1,
+    "INCLUDE_uxTaskPriorityGet": 1,
+    "INCLUDE_vTaskPrioritySet": 1,
+    "INCLUDE_xTaskAbortDelay": 1,
+    "INCLUDE_xTaskResumeFromISR": 1,
+    "configUSE_TRACE_FACILITY": 1,
+    "configUSE_APPLICATION_TASK_TAG": 1,
+    "configNUM_THREAD_LOCAL_STORAGE_POINTERS": 2,
+    "INCLUDE_uxTaskGetStackHighWaterMark": 1,
+    "INCLUDE_uxTaskGetStackHighWaterMark2": 1,
+    "INCLUDE_xTaskGetHandle": 1,
+    "INCLUDE_xTaskGetIdleTaskHandle": 1,
+    "configGENERATE_RUN_TIME_STATS": 1,
+    "configUSE_TASK_PREEMPTION_DISABLE": 1,
+    "configUSE_C_RUNTIME_TLS_SUPPORT": 1,
+    "configUSE_POSIX_ERRNO": 1,
+    "configUSE_TIME_SLICING": 1
+  },
+  "validation_commands": [
+    "checks/scheduler-kernel-adapter.py --freertos FREERTOS --build-dir BUILD --sysroot SYSROOT",
+    "checks/scheduler-kernel-registry.py --build-dir BUILD",
+    "checks/scheduler-control.py --build-dir BUILD"
+  ],
+  "object_validation": "Real queue empty-receive retry, event wait/set/clear, stream wait/send and timer command enqueue with explicit host owner checkpoints; no concurrent stacks or timer callback execution.",
+  "critical_scope": "Public task critical sections retain compatibility task/ISR locks, local IRQ masking and local preemption exclusion. Public ISR critical sections retain the ISR lock and local exclusion. Other owner schedulers continue dispatching; global scheduler suspension remains a separate gate.",
+  "unsupported_api_contracts": {
+    "vTaskEndScheduler": "Routes directly to vPortEndScheduler. The pinned upstream ARM_CR82 port explicitly asserts because scheduler stop is unsupported; it does not run legacy idle-task deletion. A linked subprocess verifies the unsupported port entry is reached with idle/timer tasks intact."
+  },
+  "excluded_optional_configurations": {
+    "configSUPPORT_DYNAMIC_ALLOCATION": 1,
+    "portUSING_MPU_WRAPPERS": "nonzero",
+    "configUSE_TICKLESS_IDLE": "nonzero; series D",
+    "configUSE_STATS_FORMATTING_FUNCTIONS": "positive"
+  },
+  "placement_validation": "A host checkpoint fixture records one observation of ready work waiting on its busy owner beside an idle core. This confirms no idle pull in series B; it is not a concurrent imbalance measurement.",
+  "slice_validation": "A separate linked process uses public CPU0 ticks, owner IRQ exit and explicit saved-frame checkpoints to rotate two equal-priority CPU-bound tasks on CPU2 for six slices with no timeout deadlines. It checks immediate local first-peer admission, resume and priority-change rearming, and no slice SGIs for a single task, a preemption-disabled task or an idle owner.",
+  "ready_trace_validation": "The selected ready-hook fixture checks the waker CPU, committed notification payload and hook completion before the destination SGI. Repeated notification, owner consumption, timeout followed by late notification, repeated resume and both abort/notification orderings each retain one ready hook per logical wake. Queue and event-group wake hooks retain caller origin. Current-task queries use a nonblocking atomic snapshot.",
+  "ready_trace_limits": "The notification ready hook runs immediately after the successful payload transition and before that producer admits a route or publishes an activation/SGI. An independent owner entry can run between payload linearization and the caller hook. Concurrent QEMU trace fidelity remains required before board latency measurements.",
+  "api_trace_validation": "Selected entry/return macros count successful and early-return notification/getter paths and global suspend calls. A value-changing notification operation and its previous-value/output checks verify single evaluation; a compile assertion verifies the trace-return value retains BaseType_t. Public routed branches preserve the original entry arguments and emit return hooks after evaluating the declared return value once."
+}

@@ -42,3 +42,10 @@ target_link_libraries(smp-runtime-model PRIVATE
   "${NEWLIB_ROOT}/lib/gcc/aarch64-none-elf/14.3.1/libgcc.a")
 set_target_properties(smp-runtime-model PROPERTIES SUFFIX ".elf"
   LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/runtime.ld")
+
+if(SUNSTONE_PARTITIONED_SCHEDULER)
+  get_target_property(runtime_sources smp-runtime-model SOURCES)
+  list(TRANSFORM runtime_sources REPLACE "^${FREERTOS_DIR}/tasks\\.c$" "${smp_build}/tasks.c")
+  set_property(TARGET smp-runtime-model PROPERTY SOURCES "${runtime_sources}")
+  sunstone_scheduler_partitioned_bind(smp-runtime-model "${smp_build}")
+endif()
