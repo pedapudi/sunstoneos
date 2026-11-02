@@ -269,19 +269,29 @@ all completed, the card was switched (it is taken to be at 1.8 V), the card cloc
 to report it (`CLOSE_BANK` finished), and the next stage failed a check. The report was written to RAM and lost, because a lifetime that cannot
 close cannot return.
 
-Host reproduction. The lifetimes model now takes the bank's answer after the write back to 3.3 V as a parameter (`PF_RESTORE`): the modeled
-two-read lag, an immediate answer, the bank flipping back to 1.8 V, the selector reading back unchanged, and the withstand mode
-(`GPIO_POW_MOD_SEL`) changing with the supply. The last reproduces the board's stop exactly (platform stage 18, fault set, bank released);
-the others stop at other stages. `voltage()` required the withstand mode to equal the one read at the start in every stage, including the
-close stages after the bank was confirmed at 3.3 V. The platform now stops checking the bank and the mode once the close has confirmed 3.3 V
-(`bank_released`); the probe's own restoration words judge the end state. The board's actual mode word is not known: the next run reports it
-(`uhs[8]`, `uhs[9]`).
+Cause, found from lifetime 2's stop word (entry `1793649204965774597-d1ed3e86`, below): the native adapter's register filter refused the close's
+last write, the restore of the inherited module setting. Its terminal-close exception named the high-speed profile only; in the UHS-I profile the
+setting had to be one of the three running settings, so `update()` failed in `CLOSE_WAIT` (platform source line 838, stage 18). The platform
+models write registers through their own hook, not the adapter's filter, so no host check applied the rule: the same gap as the first CMD25
+(see "A class of host-coverage gap" in the storage status). The rule is now one pure function (`a733_mmc_platform_native_module_write_allowed`)
+that the adapter and the models both apply: the close restore is admitted for the high-speed and UHS-I profiles only with the module off and the bus
+in reset. `checks/sd-return-close.c` asserts it on every module write of a close, and `checks/a733-mmc-native-filter.c` tests it directly; the
+old rule fails both. A first hypothesis, that the withstand-mode word changes with the supply, also stopped the model in `CLOSE_WAIT`; I added a
+relaxation for it and removed it when the real cause was found, because nothing showed the board does that.
 
 A failed lifetime now carries its site. The stop word published in the fault record's esr is the platform's fault line (10 bits), why (2),
 platform stage (5), S18A, the five speed-mode support bits, whether the card signals 1.8 V, and a fold of the 32 read CRCs; the site byte is the
 probe's reason. `apps/sd-backup-probe/input.py stop --site N --esr W` decodes it. The report keeps the same word and the platform's fault line,
 why, stage and the withstand mode word at identification and after the close. A lifetime that has not closed cannot return its report, by
 design: the SD controller, pins and bank are still held. So the stop word is what a failed close can publish, and it is made to hold the results.
+
+### Lifetime 2 (entry `1793649204965774597-d1ed3e86`): the card re-entered at 1.8 V; the close failed the same way
+
+Stop word `0xd1893f5d`, site 11, decoded with `input.py stop`: the card signals 1.8 V, the last ACMD41 answered **S18A clear**, the CMD6 group 1 support
+field read at 1.8 V is **`0x1f`** (SDR12, SDR25, SDR50, SDR104 and DDR50), the 32 reads completed (CRC fold `0x5d`), and the close stopped at
+platform stage 18, source line 838: the adapter's module restore, as above. So the card accepts CMD0, CMD8 and ACMD41 at 1.8 V from a host that moved the
+bank to 1.8 V first, identifies and reads at SDR25, and it supports SDR104. Lifetime 1 never reported its S18A or support bits, and its stop word
+carried no fault line; lifetime 2's data are the ones that exist.
 
 Prediction for lifetime 2 (written before the run; the card is taken to be at 1.8 V and the bank at 3.3 V after the watchdog reset):
 

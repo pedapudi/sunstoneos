@@ -1,5 +1,6 @@
 /* Existing card/PMIC fixture, with HIGH_SPEED4 selected at construction. */
 #include "a733_mmc_platform.h"
+#include "a733_mmc_platform_native.h"
 static enum sunxi_mmc_sd_profile selected_profile=SUNXI_MMC_SD_HIGH_SPEED4;
 #include "mmc-high-speed-fixture.h"
 #include "sunxi_smhc.h"
@@ -7,6 +8,10 @@ static unsigned closing,stall_update,fail_gate,gate_order;
 static int close_write(void *v,uintptr_t a,uint32_t value)
 {
     if(closing&&a==m.platform.module){
+        /* The native adapter's own rule for this write (include/a733_mmc_platform_native.h), applied to the model's registers: the board's
+         * adapter refused the UHS-I close's restore of the inherited module setting, which the platform's checks did not see. */
+        assert(a733_mmc_platform_native_module_write_allowed(SUNXI_MMC_SD,m.platform.config.sd_profile,*pmic_model_word(&m.power,a),value,
+                                                            *pmic_model_word(&m.power,m.platform.bus)));
         assert(!(value&(1u<<31)));
         if(!gate_order){assert(value==0x01000003);gate_order=1;}
         else {assert(gate_order==3&&value==0);gate_order=4;}

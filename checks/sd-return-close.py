@@ -56,9 +56,9 @@ def main():
     (e / 'inputs.json').write_text(json.dumps(inputs, indent=2)+'\n')
     run(flags+sources+['-o', str(e / 'close')], 'build')
     if a.lifetimes:
-        # the bank's answer after the write back to 3.3 V: as modeled, at once, and with the withstand mode changing (the board stopped there)
+        # the bank's answer after the write back to 3.3 V: as modeled, and at once
         import os
-        for scenario in ('0', '1', '4'):
+        for scenario in ('0', '1'):
             os.environ['PF_RESTORE'] = scenario
             print(f'PF restore scenario {scenario}: ', end='')
             print(run([str(e / 'close'), '--lifetimes'], 'run-' + scenario), end='')

@@ -90,6 +90,26 @@ static inline int a733_mmc_platform_native_fifo_allowed(enum sunxi_mmc_kind kind
         a733_storage_update_fifo(u,a,count);
 #endif
 }
+/* The adapter's rule for a write of `v` to the SMHC module register whose current value is `old`, with the controller bus register at
+ * `bus`: only the module's own fields change; the running settings of the profile are admitted; and the terminal close, which restores
+ * the inherited setting, is admitted for the high-speed and UHS-I profiles only once the module is off (neither value has bit 31) and the
+ * bus reset is asserted (bus bits 0 and 16 clear). A pure function so that the adapter and the host models of the platform apply the
+ * same rule. */
+static inline int a733_mmc_platform_native_module_write_allowed(enum sunxi_mmc_kind kind,enum sunxi_mmc_sd_profile profile,
+    uint32_t old,uint32_t v,uint32_t bus)
+{
+    const uint32_t mask=UINT32_C(0x87001f1f);
+    if((old^v)&~mask)return 0;
+    unsigned uhs=kind==SUNXI_MMC_SD&&profile==SUNXI_MMC_SD_UHS_SDR104;
+    uint32_t setting=v&(mask&~UINT32_C(0x80000000));
+    if(setting==29)return 1;
+    if(kind!=SUNXI_MMC_SD||!profile)return 0;
+    int running=uhs?(setting==UINT32_C(0x01000003)||setting==UINT32_C(0x01000001)||setting==UINT32_C(0x02000000)):
+        ((setting&~31u)==UINT32_C(0x01000000)&&(profile==SUNXI_MMC_SD_DEFAULT4?(setting&31u)>=7:(setting&31u)==3));
+    if(running)return 1;
+    /* Terminal close: the exact inherited factors, only after module and bus are off with reset asserted. */
+    return (profile==SUNXI_MMC_SD_HIGH_SPEED4||uhs)&&!((old|v)&UINT32_C(0x80000000))&&!(bus&UINT32_C(0x10001));
+}
 /* Bind once after the actual service owns this exact platform. Existing native
  * initialization and address helper remain read-only until this binding. */
 int a733_mmc_platform_native_bind_update(struct a733_mmc_platform_native *,struct a733_storage_update *);
