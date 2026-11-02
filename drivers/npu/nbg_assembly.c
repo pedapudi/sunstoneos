@@ -46,6 +46,15 @@ static int requirement(struct nbg_allocation_requirement *r, uint32_t payload,
  * segment (the vendor's cmd_link, vip_drv_hardware.c; the vendor's linker libNBGlinker.so inserts the same command to
  * split a big command buffer, "nbglk_insert_link"). The next segment starts on a 64-byte boundary of the same
  * allocation; the bytes between the link and it are END words. */
+/* The reason of the last refusal that has one, for a message (advisory: it is not synchronized, and a caller that runs
+ * admissions concurrently may read another's). */
+static uint32_t refusal_reason, refusal_operation;
+static void refused(uint32_t reason, uint32_t operation) { refusal_reason = reason; refusal_operation = operation; }
+uint32_t nbg_assembly_refusal(uint32_t *operation)
+{
+    if (operation) *operation = refusal_operation;
+    return refusal_reason;
+}
 #define LINK_BYTES 8u
 #define SEGMENT_ALIGN 64u
 /* The longest segment, link included. A test build lowers it to split small graphs (checks/nbg-command-link.py). */
@@ -468,17 +477,20 @@ static int shader_operation(const struct nbg_model *m, uint32_t number, uint32_t
                 shader_packet_at(state.data, n, reg + 4, 4, &next)) {
                 const uint32_t stride = word(state.data + 4 * (packet.first + 1)), hw = word(state.data + 4 * (packet.first + 2));
                 const uint32_t plane = word(state.data + 4 * next.first), depth = word(state.data + 4 * (next.first + 1));
-                /* The channel stride is the row stride times the height. The word hw holds the height in its high half and
-                 * the width in its low half, but the compiler computes width + (height << 16) in 32 bits without
-                 * masking: a width of 65,536 or more carries into the height (a flat tensor of T * (2T - 1) positions
-                 * in four rows has width 67,528 for T = 184 and hw 0x000507c8), and a height of 65,536 or more is cut
-                 * (T * T = 76,176 index rows of one element have hw 0x29900001). The height is therefore the channel
-                 * stride over the row stride, and hw must be that height shifted left 16 plus a width, modulo 2^32,
-                 * that does not exceed the row stride in bytes. Below 65,536 this is hw >> 16 == height. */
+                /* The channel stride is the row stride times the height, and the word hw holds the width in its low
+                 * half and the height in its high half. The compiler computes width + (height << 16) in 32 bits without
+                 * masking, so a tensor with a width or a height of 65,536 or more has a word that reads as another shape
+                 * (T = 184 whole-length attention: width 67,528 and four rows give 0x000507c8, which the shader reads as
+                 * width 1,992 and height 5). The engine's shader reads 16-bit fields, so it cannot run such a tensor
+                 * correctly and the output depends on what the pool held. The SDK simulator computes with the 32-bit
+                 * values and agrees with the compiler, so its agreement does not cover this. The height is the channel
+                 * stride over the row stride; the loader refuses a width or height of 65,536 or more with the reason
+                 * NBG_REFUSED_DIMENSION, and below that requires hw >> 16 to be the height. */
                 if (!stride || !depth || plane % stride) return 0;
                 const uint64_t height = plane / stride;
                 const uint32_t width = hw - (uint32_t)(height << 16);
                 if (!height || width > stride) return 0;
+                if (height >= 65536 || width >= 65536) { refused(NBG_REFUSED_DIMENSION, number); return 0; }
                 const uint64_t extent = (uint64_t)plane * depth;
                 if ((uint64_t)p.source_offset + extent > region) return 0;
                 r.referenced_bytes = extent ? extent : 1;
@@ -803,6 +815,7 @@ static int inspect(const struct nbg_model *m, const struct nbg_assembly_buffer *
 int nbg_assembly_layout(const struct nbg_model *m, struct nbg_assembly_layout *out)
 {
     struct nbg_assembly_layout p;
+    refusal_reason = NBG_REFUSED_NONE; refusal_operation = 0;
     if (!result_space(m, out, sizeof(*out)) || !profile(m, &p, 1) || !inspect(m, NULL, &p)) return 0;
     *out = p;
     return 1;

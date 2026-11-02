@@ -198,7 +198,7 @@ The state stream (load-state table, 472 to 1136 bytes) is a sequence of packets.
 | S4 | The uniform bank is the register range `0xd800` to `0xd8ff`. Packets of 1 to 4 operands; no word is written twice | Highest word written: `0xd883` |
 | S5 | `0x0424` is the instruction count, `0x0425` the count minus one, and 16 times the count equals the length of the program table entry | 66 of 66 |
 | S6 | The patch list holds exactly one source-0 patch, on the `0x040a` operand with index -1, source offset 0 and transformed field 0; every other patch is a kind-0 patch on an operand word of a uniform packet; no word is patched twice | 66 of 66 |
-| S7 | A patched word that opens a 4-operand uniform packet at a register that is a multiple of 4 from `0xd800`, followed by a 4-operand packet at the next register, starts a tensor descriptor (below): channel stride = row stride x height, with height = channel stride / row stride a whole number, depth not zero, and word 2 equal to height x 65,536 + width modulo 2^32 for a width in elements that does not exceed the row stride in bytes | 641 of 652 descriptors of 337 graphs (623 under the earlier rule `word 2 >> 16 = height`, the 18 more are the long tensors of the encoder layers); the other 11 are listed below |
+| S7 | A patched word that opens a 4-operand uniform packet at a register that is a multiple of 4 from `0xd800`, followed by a 4-operand packet at the next register, starts a tensor descriptor (below): channel stride = row stride x height, with height = channel stride / row stride a whole number, depth not zero, and word 2 equal to height x 65,536 plus the width, for a width in elements that does not exceed the row stride in bytes. **A width or a height of 65,536 or more is refused** (reason `NBG_REFUSED_DIMENSION`): the engine's shader reads 16-bit fields (next paragraph) | 623 of 652 descriptors of 337 graphs satisfy the former rule `word 2 >> 16 = height`; the 18 that need the carry are the whole-length attention layers of 184 frames and more, which are now refused; the other 11 are listed below |
 | S8 | Offset plus the descriptor extent (channel stride x depth) is at most the size of the region the patch names | 160 of 160 |
 | S9 | The shader table entry exists, names a program row, the parameter row is 0, and the program lies inside the program section | 66 of 66 |
 
@@ -286,26 +286,37 @@ the next operation. The first shader operation of a graph carries the prologue; 
 neural-network and transpose operations that surround a shader keep their own rules. Class: Inferred from the vendor
 concatenation rule and from the existing assembly of the relative-shift model (`nbg_sh_nt.c`); no board run qualifies it.
 
-**Long tensors (S7, derived from the layer artifacts of the encoder at 184, 276, 368, 460 and 512 frames).** The relative-shift
-gather of an attention layer reads the position-score table `bd`, four heads of T x (2T - 1) 16-bit elements, as one flat tensor
-of four rows, and its constant index table holds T x T 32-bit indices. Both exceed 16 bits in a field of word 2:
+**Long tensors (S7): the hardware cannot run a dimension of 65,536 or more.** The relative-shift gather of an attention layer reads
+the position-score table, `rows` x (2T - 1) 16-bit elements per head, as one flat tensor, and its constant index table holds
+`rows` x T 32-bit indices, where `rows` is T for whole-length attention or the number of query rows in a block. The compiler
+writes word 2 as width + (height << 16) in 32 bits without masking:
 
-| T | Descriptor | Row stride | Word 2 | Channel stride | Tensor | Reading |
-| --- | --- | --- | --- | --- | --- | --- |
-| 184 | scores | 135,056 | `0x000507c8` | 540,224 | 4 x 184 x 367 x 2 bytes = 540,224 | width 67,528 = 0x107c8 carries one into the height field: 4 x 65,536 + 67,528 |
-| 276 | scores | 304,152 | `0x0006520c` | 1,216,608 | 4 x 276 x 551 x 2 bytes | width 152,076 = 0x2520c: 4 x 65,536 + 152,076 |
-| 276 | indices | 4 | `0x29900001` | 304,704 | 276 x 276 x 4 bytes | height 76,176 = 0x12990 cut to 0x2990 at 32 bits, width 1 |
+| Graph | Descriptor | Row stride | Word 2 | Width x height | Low and high 16 bits of word 2 |
+| --- | --- | --- | --- | --- | --- |
+| 184 frames, whole length | scores | 135,056 | `0x000507c8` | 67,528 x 4 | width 1,992, height 5 |
+| 276 frames, whole length | scores | 304,152 | `0x0006520c` | 152,076 x 4 | width 21,004, height 6 |
+| 276 frames, whole length | indices | 4 | `0x29900001` | 1 x 76,176 | width 1, height 10,640 |
 
-In every case the channel stride equals the product of the tensor's dimensions and its element size, which is the size the
-compiler gives the tensor in the pool, and word 2 is the wrapped sum. The loader therefore takes the height from the strides
-(channel stride / row stride, which must divide exactly) and requires word 2 to equal height x 65,536 plus a width
-(modulo 2^32) that does not exceed the row stride. A width below 65,536 gives the earlier rule, word 2 >> 16 = height; the
-five descriptors of the corpus that the earlier rule refused for other reasons are still refused (their widths exceed their
-strides). The 11 descriptors of the corpus that satisfy neither rule are the descriptors of mutated shader experiments (`rn_a`: the
-height halved or doubled, the stride doubled) and two compiled graphs (an einsum and a scatter) whose channel stride is not the product of the row stride and the height
-field; the loader refuses them, as before. Whether the shader's clamp uses the wrapped fields is
-a property of the engine that the layer runs on the board settle: [the board results](../status/npu.md) record the layers at
-T = 184 and 276 against the simulator.
+The board separates the graphs by this dimension (one layer, 300 jobs or three consecutive jobs, one slot). The mechanism, that the
+shader reads the 16-bit fields, is the inference that fits this table; no board run has varied the field alone:
+
+| Graph | Widest flat dimension | Board output |
+| --- | --- | --- |
+| 92 frames, whole length | 16,836 | byte-exact with the simulator |
+| 184 frames, 92-row blocks | 33,764 | byte-exact |
+| 276 frames, 92-row blocks | 50,692 (index rows 25,392) | byte-exact |
+| 184 frames, whole length | 67,528 | different in every run |
+| 368 frames, 92-row blocks | 67,620 | different in every run |
+| 460 and 512 frames, 92-row blocks | 84,548 and 94,116 | different in every run |
+| 276 frames, whole length | 152,076 (index rows 76,176) | wrong by up to 305 steps |
+
+The SDK simulator computes with the 32-bit values and returned the compiler's intended result for every one of these graphs, so
+agreement with the simulator does not cover this limit. The loader therefore refuses a descriptor whose width or height, taken
+from the strides, is 65,536 or more; a layer must be compiled with every flat shader dimension below that (for the
+relative shift, query blocks of at most 65,535 / (2T - 1) rows: 64 rows up to 512 frames). The 11 descriptors of the corpus that
+satisfy neither the old nor the new rule are mutated shader experiments (`rn_a`: the height halved or doubled, the stride
+doubled) and two compiled graphs (an einsum and a scatter) whose channel stride is not the product of the row stride and the
+height field; the loader refuses them, as before.
 
 ### Command segments
 

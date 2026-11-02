@@ -125,41 +125,29 @@ the loader specification). See [the resources design](../designs/npu-resources.m
 
 ## Long attention layers (2026-11-02)
 
-The loader admits compiled conformer layers of 184 to 512 frames, which it refused before: the descriptor of the relative-shift
-gather (S7: width carried into the height field, height cut at 32 bits), a matrix product whose second input lies in the pool,
-the operation count (no fixed limit) and the shader stream length (no fixed limit); a command stream longer than one fetch is cut
-into segments joined by LINK commands (`docs/hardware/npu-command-formats.md`, "Long tensors" and "Command segments"). The
-layers are the proof graphs of the mimus encoder study (176 channels, one layer, own quantization), run through the OS NPU
-service in queue mode on port 3-3 at 852 MHz and 800 mV, one slot, 100 jobs at queue depth 1, 2 and 4.
+The loader admits compiled conformer layers of 184 to 512 frames, which it refused before, with these limits lifted: the second
+input of a matrix product may lie in the pool, the operation count and the shader stream length have no fixed limit, and a
+command stream longer than one fetch is cut into segments joined by LINK commands (`docs/hardware/npu-command-formats.md`,
+"Command segments"). It refuses a shader tensor descriptor whose width or height is 65,536 or more (`NBG_REFUSED_DIMENSION`), because the
+engine's shape fields are 16 bits wide; see "Long tensors" there. The layers are the proof graphs of the mimus encoder study
+(176 channels, one layer, own quantization), run through the OS NPU service in queue mode on port 3-3 at 852 MHz and 800 mV, one
+slot, 100 jobs at queue depth 1, 2 and 4.
 
-| Frames | Operations | Stream (bytes) | Layer (MB) | Pool of the slot (MB) | Compiler estimate (ms) | Board job (ms) | Output against the simulator |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 184 | 450 | 33,856 | 1.09 | 1.07 | 6.5 | 5.81 | 10,484 of 32,384 elements differ, at most 132 steps, rows 0 to 105 only |
-| 276 | 643 | 42,464 | 1.34 | 2.22 | 11.5 | 35.6 | 15,786 of 48,576 elements differ by more than 8 steps, at most 305 |
-| 368 | 1,167 | 78,184 | 1.81 | 3.77 | 23 | 63.3 | 10,814 of 64,768 elements differ by more than 8 steps, at most 438 |
+| Frames | Attention | Widest flat dimension | Operations | Board job (ms) | Output |
+| --- | --- | --- | --- | --- | --- |
+| 92 | whole | 16,836 | 153 | 1.26 | byte-exact |
+| 184 | 92-row blocks | 33,764 | 320 | 4.83 | byte-exact after 300 jobs |
+| 276 | 92-row blocks | 50,692 | 502 | 8.00 | byte-exact after 300 jobs |
+| 184 | whole | 67,528 | 450 | 5.81 | different in every run (refused now) |
+| 276 | whole | 152,076 | 643 | 35.6 | wrong by up to 305 steps (refused now) |
+| 368 | 92-row blocks | 67,620 | 598 | 14.77 | different in every run (refused now) |
+| 460, 512 | 92-row blocks | 84,548, 94,116 | 5,482, 3,719 | 47.8, 45.3 | different in every run (refused now) |
 
-The 184-frame layer's output is not the same in two runs: the unsplit stream (entry `e48806ba`), the same stream in three
-segments (entry `a693df6c`) and a single job after loading (entry `d254a3f2`) each differ from the simulator in rows 0 to 105
-only (10,484, 10,452 and 5,629 elements; at most 132, 98 and 30 steps of 1/128) and differ from one another in 10,000 to 12,000
-elements, while rows 106 to 183 equal the simulator in every run. Against the float result of the same graph the board output
-and the simulator output are equally far (RMS 1.116 and 1.116, the quantization of the proof graph; the two differ by 0.026
-RMS). The segmented stream ran 300 jobs without a fault and its late rows, computed by commands after both links, are exact,
-so the front end follows the links. The 92-frame layers, which have no pool traffic, were byte-exact in every run.
-
-The same layers with the attention computed for blocks of 92 query rows (so that the scores stay in VIP SRAM) differ:
-
-| Frames | Operations | Board job (ms) | Output |
-| --- | --- | --- | --- |
-| 184 | 320 | 4.83 | byte-exact against the simulator after 300 jobs |
-| 276 | 502 | 8.00 | byte-exact after 300 jobs |
-| 368 | 598 | 14.77 | three identical jobs differ from one another in 19,000 to 24,000 of 129,536 bytes |
-| 460 | 5,482 | 47.8 | three identical jobs differ in 30,000 of 161,920 bytes |
-| 512 | 3,719 | 45.3 | three identical jobs differ in 23,000 to 52,000 of 180,224 bytes |
-
-The cause of the run-to-run differences (graphs of 184 frames with whole-length attention, and of 368 frames and more in any
-form) is not known. Mapping the regions with 64 KiB pages (build parameter `A733_NPU_MAP_SHIFT`, not landed) was meant to test
-whether address translation explains the slow whole-length layers; its image stopped in the OS start with a pool of 20 MiB and
-was not examined further.
+Identical jobs of the failing graphs return different bytes (four consecutive jobs of the 184-frame whole-length layer differ from
+one another in about 9,000 of 64,768 bytes, and the first job after load is already wrong), the differences are confined to
+the early rows and are not tied to pages or cache lines, and the 16 KiB segmented stream of that layer behaves like the unsplit
+one (300 jobs without a fault; rows computed after both links equal the simulator). The segmented run shows that the front end follows the
+links.
 
 ## Open work
 

@@ -133,6 +133,11 @@ int nbg_assemble_layout(const struct nbg_model *, const struct nbg_assembly_buff
  * else: coefficients, END pairs after the stream, padding and the tensor and
  * pool allocations are the caller's, and a refusal can leave earlier
  * operations written, so the caller discards the whole assembly. */
+/* Why the last refusal that has a named reason happened, and the number of the operation. NBG_REFUSED_NONE until one has.
+ * NBG_REFUSED_DIMENSION: a shader tensor descriptor has a width or a height of 65,536 or more, which the engine's 16-bit
+ * fields cannot hold. Advisory and unsynchronized: for the message of the caller that was just refused. */
+enum nbg_refusal { NBG_REFUSED_NONE, NBG_REFUSED_DIMENSION };
+uint32_t nbg_assembly_refusal(uint32_t *operation);
 struct nbg_assembly_cursor { uint32_t operation, patch, offset, segment, slot; };
 int nbg_assembly_begin(const struct nbg_model *, const struct nbg_assembly_buffer *, size_t count,
                        struct nbg_assembly_layout *, struct nbg_assembly_cursor *);
