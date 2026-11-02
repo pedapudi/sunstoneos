@@ -80,6 +80,17 @@ def main():
             print('%-6s %4d  core %d  %s -> %s' % (kind, ops, core, enter, leave))
         assert rows[0][0] <= bound, \
             'a masked span executes %d atomic %s, above %d: %s' % (rows[0][0], kind, bound, rows[0][2])
+    # The board image's PMU capture: the model must run it at EL0 and EL1 without a fault and count.
+    image = args.build_dir / 'latency-partitioned-pmu-model.elf'
+    log = subprocess.run([str(args.qemu), '-M', 'virt,gic-version=3,virtualization=off', '-cpu', 'cortex-a76',
+                          '-smp', '8', '-m', '2G', '-nographic', '-monitor', 'none',
+                          '-semihosting-config', 'enable=on,target=native', '-accel', 'tcg,thread=single',
+                          '-icount', 'shift=0,sleep=off', '-kernel', str(image)],
+                         text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=environment(), timeout=120)
+    assert log.returncode == 0 and 'PASS latency model' in log.stdout, log.stdout[-1500:]
+    counted = [int(m[1], 16) for m in re.finditer(r'site_pmu instructions=(0x\w+)', log.stdout)]
+    assert any(counted), 'the PMU capture counted no instructions'
+    (args.output / 'pmu.log').write_text(log.stdout)
     (args.output / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
     print('PASS owner scheduler masked spans: at most %d atomic writes and %d atomic loads per span' % (WRITES, LOADS))
 

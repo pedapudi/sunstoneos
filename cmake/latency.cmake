@@ -74,11 +74,18 @@ function(sunstone_latency_partitioned_model target metric)
     "${latency_root}/platform/qemu-smp" "${latency_root}/include"
     "${latency_root}/runtime/include" "${latency_root}/apps/latency"
     "${FREERTOS_DIR}/include" "${smp_build}")
-  target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY=1 SUNSTONE_LATENCY_MODEL=1 SUNSTONE_LATENCY_CPU_ONLY=1 SS_LATENCY_OPS=${metric}
+  target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY=1 SUNSTONE_LATENCY_MODEL=1 SUNSTONE_LATENCY_CPU_ONLY=1
     SUNSTONE_SMP_CORES=8 configIDLE_AFFINITY=1
     INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1)
+  if(metric)
+    target_compile_definitions(${target} PRIVATE SS_LATENCY_OPS=${metric})
+    target_compile_options(${target} PRIVATE
+      "$<$<COMPILE_LANGUAGE:C>:SHELL:-include ${latency_root}/checks/latency-ops.h>")
+  else()
+    # Real counter time with the PMU capture of the board image (QEMU counts instructions only).
+    target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_PMU=1)
+  endif()
   target_compile_options(${target} PRIVATE ${SUNSTONE_KERNEL_FLAGS}
-    "$<$<COMPILE_LANGUAGE:C>:SHELL:-include ${latency_root}/checks/latency-ops.h>"
     "$<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>")
   target_link_options(${target} PRIVATE -nostdlib -static -Wl,--gc-sections
     -Wl,--defsym=SUNSTONE_SMP_STACKS=8 -Wl,--wrap=vApplicationIRQHandler
@@ -93,4 +100,5 @@ endfunction()
 if(SUNSTONE_PARTITIONED_SCHEDULER)
   sunstone_latency_partitioned_model(latency-partitioned-writes-model 1)
   sunstone_latency_partitioned_model(latency-partitioned-loads-model 2)
+  sunstone_latency_partitioned_model(latency-partitioned-pmu-model 0)
 endif()

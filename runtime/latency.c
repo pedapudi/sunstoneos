@@ -145,31 +145,48 @@ struct local_state {
     uint64_t ops_start, waits_start;
     uint64_t mask_start, mask_site, lock_start[2], lock_site[2];
     unsigned mask_active, lock_depth[2], frozen;
+#ifdef SUNSTONE_LATENCY_PMU
+    unsigned pmu_state, pmu_span; /* state: 0 not tried, 1 counting, 2 unavailable */
+    struct ss_latency_site_pmu pmu_start;
+#endif
 } __attribute__((aligned(64)));
 static struct local_state local[8];
 struct site_table {
     struct ss_latency_site sample[SS_LAT_SITE_SLOTS];
+#ifdef SUNSTONE_LATENCY_PMU
+    struct ss_latency_site_pmu pmu[SS_LAT_SITE_SLOTS];
+#endif
     unsigned minimum;
 } __attribute__((aligned(64)));
 static struct site_table sites[SS_LAT_PHASES + 1][8][SS_LAT_SITE_KINDS];
 
-static void site_insert(struct site_table *table, struct ss_latency_site sample)
+#ifdef SUNSTONE_LATENCY_PMU
+#define PMU_PARAMETER , struct ss_latency_site_pmu pmu
+#define PMU_ARGUMENT , pmu
+#else
+#define PMU_PARAMETER
+#define PMU_ARGUMENT
+#endif
+static void site_insert(struct site_table *table, struct ss_latency_site sample PMU_PARAMETER)
 {
     if (sample.ticks <= table->sample[table->minimum].ticks) return;
     table->sample[table->minimum] = sample;
+#ifdef SUNSTONE_LATENCY_PMU
+    table->pmu[table->minimum] = pmu;
+#endif
     /* Fixed three-entry scan only when a new duration enters the table. */
     for (unsigned i = 0; i < SS_LAT_SITE_SLOTS; ++i)
         if (table->sample[i].ticks < table->sample[table->minimum].ticks)
             table->minimum = i;
 }
 static void site_record(unsigned core, unsigned kind, uint64_t start,
-                        uint64_t end, uintptr_t enter_site, uintptr_t exit_site)
+                        uint64_t end, uintptr_t enter_site, uintptr_t exit_site PMU_PARAMETER)
 {
     if (end <= start || !enter_site || !exit_site) return;
     struct ss_latency_site sample = {end - start, start, enter_site, exit_site};
-    site_insert(&sites[SS_LAT_PHASES][core][kind], sample);
+    site_insert(&sites[SS_LAT_PHASES][core][kind], sample PMU_ARGUMENT);
     unsigned phase = interval_phase(start, end - start);
-    if (phase < SS_LAT_PHASES) site_insert(&sites[phase][core][kind], sample);
+    if (phase < SS_LAT_PHASES) site_insert(&sites[phase][core][kind], sample PMU_ARGUMENT);
 }
 void ss_latency_sites_snapshot(struct ss_latency_site out[SS_LAT_PHASES + 1][8][SS_LAT_SITE_KINDS][SS_LAT_SITE_SLOTS])
 {
@@ -190,6 +207,76 @@ void ss_latency_sites_snapshot(struct ss_latency_site out[SS_LAT_PHASES + 1][8][
                 }
             }
 }
+#ifdef SUNSTONE_LATENCY_PMU
+void ss_latency_site_pmu_snapshot(struct ss_latency_site_pmu out[SS_LAT_PHASES + 1][8][SS_LAT_SITE_SLOTS])
+{
+    /* The same bounded insertion sort as ss_latency_sites_snapshot, over pairs,
+     * so slot i describes the same span in both tables. */
+    for (unsigned p = 0; p <= SS_LAT_PHASES; ++p)
+        for (unsigned c = 0; c < 8; ++c) {
+            struct ss_latency_site key[SS_LAT_SITE_SLOTS];
+            for (unsigned i = 0; i < SS_LAT_SITE_SLOTS; ++i) {
+                key[i] = sites[p][c][0].sample[i];
+                out[p][c][i] = sites[p][c][0].pmu[i];
+            }
+            for (unsigned i = 1; i < SS_LAT_SITE_SLOTS; ++i) {
+                struct ss_latency_site sample = key[i];
+                struct ss_latency_site_pmu counts = out[p][c][i];
+                unsigned j = i;
+                while (j && key[j - 1].ticks < sample.ticks) {
+                    key[j] = key[j - 1];
+                    out[p][c][j] = out[p][c][j - 1];
+                    --j;
+                }
+                key[j] = sample;
+                out[p][c][j] = counts;
+            }
+        }
+}
+#define SYSREG_READ(name) ({ uint64_t v_; __asm__ volatile("mrs %0, " #name : "=r"(v_) :: "memory"); v_; })
+#define SYSREG_WRITE(name, v) __asm__ volatile("msr " #name ", %0" :: "r"((uint64_t)(v)) : "memory")
+/* Counters 0 to 2 count INST_RETIRED (0x08), L1D_CACHE_REFILL (0x03) and
+ * L2D_CACHE_REFILL (0x17) at EL0 and EL1 with the cycle counter; the register
+ * sequence and event numbers are those of platform/a733/cpu_pmu.c. PMUSERENR
+ * lets the EL0 tasks that open and close masked spans read them. Reads only:
+ * counters are never reset, and no clock, voltage or interrupt changes. */
+void ss_latency_pmu_enable(void)
+{
+    uint64_t core = SYSREG_READ(tpidr_el1);
+    if (core >= 8 || local[core].pmu_state) return;
+    local[core].pmu_state = 2;
+    static const unsigned events[3] = {0x08, 0x03, 0x17};
+    const uint64_t pmcr = SYSREG_READ(pmcr_el0), ceid0 = SYSREG_READ(pmceid0_el0);
+    unsigned used = 0;
+    for (unsigned i = 0; i < 3; ++i) used |= (unsigned)((ceid0 >> events[i]) & 1u) << i;
+    /* An event the core does not implement stays at zero; INST_RETIRED must exist. */
+    if (((pmcr >> 11) & 31u) < 3 || !(used & 1u)) return;
+    const uint64_t enable = used | (UINT64_C(1) << 31);
+    if (used & 1u) SYSREG_WRITE(pmevtyper0_el0, events[0]);
+    if (used & 2u) SYSREG_WRITE(pmevtyper1_el0, events[1]);
+    if (used & 4u) SYSREG_WRITE(pmevtyper2_el0, events[2]);
+    SYSREG_WRITE(pmccfiltr_el0, 0);
+    SYSREG_WRITE(pmintenclr_el1, 7u | (UINT64_C(1) << 31));
+    SYSREG_WRITE(pmcntenset_el0, enable);
+    SYSREG_WRITE(pmuserenr_el0, 0xd); /* EN, CR, ER: EL0 reads, no EL0 writes */
+    SYSREG_WRITE(pmcr_el0, (pmcr | 1u | (1u << 6)) & ~((1u << 1) | (1u << 2) | (1u << 3)));
+    __asm__ volatile("isb" ::: "memory");
+    if ((!(used & 1u) || SYSREG_READ(pmevtyper0_el0) == events[0]) &&
+        (!(used & 2u) || SYSREG_READ(pmevtyper1_el0) == events[1]) &&
+        (!(used & 4u) || SYSREG_READ(pmevtyper2_el0) == events[2]) &&
+        (SYSREG_READ(pmcr_el0) & 1u) && (SYSREG_READ(pmcntenset_el0) & enable) == enable)
+        local[core].pmu_state = 1;
+}
+static inline struct ss_latency_site_pmu pmu_read(void)
+{
+    struct ss_latency_site_pmu v;
+    uint64_t i, l1, l2, c;
+    __asm__ volatile("mrs %0, pmevcntr0_el0\n mrs %1, pmevcntr1_el0\n mrs %2, pmevcntr2_el0\n mrs %3, pmccntr_el0"
+                     : "=r"(i), "=r"(l1), "=r"(l2), "=r"(c) :: "memory");
+    v.instructions = (uint32_t)i; v.l1d_refills = (uint32_t)l1; v.l2d_refills = (uint32_t)l2; v.cycles = (uint32_t)c;
+    return v;
+}
+#endif
 static int enabled(unsigned core)
 {
     return core < 8 && __atomic_load_n(&ss_latency_frequency, __ATOMIC_ACQUIRE) &&
@@ -247,6 +334,10 @@ void ss_latency_mask_open(unsigned core, uint64_t start, uintptr_t site)
         local[core].waits_start = ss_ops_wait[core];
 #endif
         local[core].mask_site = site;
+#ifdef SUNSTONE_LATENCY_PMU
+        local[core].pmu_span = local[core].pmu_state == 1;
+        if (local[core].pmu_span) local[core].pmu_start = pmu_read();
+#endif
         local[core].mask_active = 1;
     }
 }
@@ -262,7 +353,17 @@ void ss_latency_mask_close(unsigned core, uintptr_t site)
         if (enabled(core)) {
 #endif
             ss_latency_record_at(core, SS_LAT_MASKED, local[core].mask_start, end, local[core].mask_site);
+#ifdef SUNSTONE_LATENCY_PMU
+            struct ss_latency_site_pmu counts = {0, 0, 0, 0};
+            if (local[core].pmu_span) {
+                const struct ss_latency_site_pmu stop = pmu_read(), begin = local[core].pmu_start;
+                counts = (struct ss_latency_site_pmu){stop.instructions - begin.instructions, stop.cycles - begin.cycles,
+                    stop.l1d_refills - begin.l1d_refills, stop.l2d_refills - begin.l2d_refills};
+            }
+            site_record(core, 0, local[core].mask_start, end, local[core].mask_site, site, counts);
+#else
             site_record(core, 0, local[core].mask_start, end, local[core].mask_site, site);
+#endif
         }
         local[core].mask_active = 0;
     }
@@ -291,7 +392,13 @@ void ss_latency_lock_releasing(unsigned core, unsigned lock, uintptr_t site)
         const uint64_t end = ss_latency_now();
         ss_latency_record_at(core, SS_LAT_LOCK_HOLD0 + 2 * lock,
                              l->lock_start[lock], end, l->lock_site[lock]);
-        if (lock == 1) site_record(core, 1, l->lock_start[lock], end, l->lock_site[lock], site);
+        if (lock == 1) {
+#ifdef SUNSTONE_LATENCY_PMU
+            site_record(core, 1, l->lock_start[lock], end, l->lock_site[lock], site, (struct ss_latency_site_pmu){0, 0, 0, 0});
+#else
+            site_record(core, 1, l->lock_start[lock], end, l->lock_site[lock], site);
+#endif
+        }
     }
 }
 static unsigned current_core(void)

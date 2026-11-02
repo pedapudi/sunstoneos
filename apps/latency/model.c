@@ -79,6 +79,14 @@ static void controller(void *argument)
                         configASSERT(s->start < result.phase_bounds[p][1]);
                         configASSERT(s->ticks <= result.phase_bounds[p][1] - s->start);
                     }
+#ifdef SUNSTONE_LATENCY_PMU
+                    if (k == 0) {
+                        const struct ss_latency_site_pmu *q = &result.site_pmu[p][c][i];
+                        number("site_pmu instructions=", q->instructions); number(" cycles=", q->cycles);
+                        number(" l1d_refills=", q->l1d_refills); number(" l2d_refills=", q->l2d_refills);
+                        platform_puts("\n");
+                    }
+#endif
                     number("site_phase=", p); number(" kind=", k); number(" slot=", i);
                     number(" ticks=", s->ticks); number(" start=", s->start);
                     number(" enter_site=", s->enter_site); number(" exit_site=", s->exit_site);

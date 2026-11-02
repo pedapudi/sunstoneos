@@ -832,6 +832,15 @@ that its core executed. A span that waits for another core is excluded. It
 bounds both counts. The counts do not convert to time: on the A733 the cost of a
 span is dominated by cache misses that the emulator does not have.
 
+The CPU control with `SUNSTONE_LATENCY_PMU` records, for each core's three
+longest masked spans per phase, the instructions retired, cycles, L1D refills and
+L2D refills inside the span. Prediction: after the cache-line grouping, every
+span in the measured phases retires at most 1,500 instructions (the sum of the
+rows above for the longest entry), and a span longer than 15 µs at these
+instruction counts shows at least 100 L1D refills, that is, its time is miss
+time. A long span with few refills contradicts the prediction and points to a
+wait. The counters are read only; no event interrupt, clock or voltage changes.
+
 Linked-kernel tests replace budget rows with instruction counts before board
 submission. Board samples add cycles/counter duration, p50, p99 and maximum.
 PMU instrumentation is optional and compiles out completely when disabled.
