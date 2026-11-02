@@ -20,7 +20,7 @@
     "slots": 31,
     "in_flight": 64,
     "graphs": 31,
-    "links": 0,
+    "links": 1,
     "graph_bytes": 262144,
     "tensor_bytes": 262144
   },

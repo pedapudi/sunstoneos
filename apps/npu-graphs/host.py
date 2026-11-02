@@ -51,6 +51,7 @@ def decode(raw, names=None, sizes=None, faults=(), queue=False):
     require(completed <= count and matched <= completed, 'The receipt counts disagree.')
     if queue:
         result['queue'] = queue_rows(result)
+        result['clock'] = clock_of(words[9:16])
     result['passed'] = (matched == count - len(faults) and completed == matched and closed == 1 and
                         all(g['status'] == ('fault' if g['index'] in faults else 'match') for g in graphs))
     return result
@@ -84,6 +85,16 @@ def expectation(sizes, faults=None):
     return {'schema': 'sunstone-board-expect-u32-v1', 'words': words}
 
 
+def clock_of(r):
+    """The CPU clock record that the queue image read before and after the sweep (apps/npu-graphs/main.c clock_words):
+    applied points of the little (Cortex-A55) and big clusters in MHz, their rails in mV, the DSU point, the transitions
+    made and the core of the submitting task."""
+    def one(a, b):
+        return {'little_mhz': a & 0xffff, 'big_mhz': a >> 16 & 0xffff, 'core': a >> 32 & 0xff, 'transitions': a >> 40,
+                'little_mv': b & 0xffff, 'big_mv': b >> 16 & 0xffff, 'dsu_mhz': b >> 32 & 0xffff}
+    return {'before': one(r[0], r[1]), 'after': one(r[3], r[4])}
+
+
 def queue_rows(result):
     """The backpressure study (NPU_GRAPHS_QUEUE): record i holds the in-flight limit k in input_bytes, the jobs in
     output_bytes, the counter ticks of all jobs in first_difference and the submit refusals in observed. The rows give
@@ -91,6 +102,12 @@ def queue_rows(result):
     bytes after the last job."""
     rows = []
     for g in result['graphs']:
+        if g['input_bytes'] == 1 and g['output_bytes'] == 1 and g is result['graphs'][-1]:
+            # The link row: one link chosen at open, one pair of jobs; the output of the second handle is the reference
+            # only if the first handle's output reached its input.
+            rows.append({'link': True, 'pair_us': g['first_difference'] / 24, 'wrong_output_bytes': g['differing_bytes'],
+                         'status': g['status']})
+            continue
         total_us = g['first_difference'] / 24
         rows.append({'k': g['input_bytes'], 'jobs': g['output_bytes'], 'refusals': g['observed'], 'total_us': total_us,
                      'us_per_job': total_us / g['output_bytes'], 'jobs_per_s': g['output_bytes'] / (total_us / 1e6),
@@ -98,13 +115,15 @@ def queue_rows(result):
     return rows
 
 
-def queue_expectation(depths, jobs):
+def queue_expectation(depths, jobs, link=True):
     """The queue-mode receipt as u32 words: the counts and the output check are exact; the times and the refusals,
     which the study measures, are not."""
-    n = len(depths)
-    words64 = [MAGIC, 1, BYTES, n, n, n, 1, None, None] + [0] * 7
+    n = len(depths) + (1 if link else 0)
+    words64 = [MAGIC, 1, BYTES, n, n, n, 1, None, None] + [None] * 6 + [0]   # the clock words are measured
     for i, k in enumerate(depths):
         words64 += [i, k, jobs, 0, None, None, 0, None]
+    if link:  # one link, one pair; the pair's time is measured, its output must equal the reference
+        words64 += [len(depths), 1, 1, 0, None, 0, 0, None]
     words64 += [0] * (BYTES // 8 - len(words64))
     words = []
     for value in words64:

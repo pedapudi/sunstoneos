@@ -36,6 +36,9 @@ struct ss_npu_queue {
     void *context;
     uintptr_t producer;
     unsigned depth, handles, edges_admitted;
+    /* Edges the application asked for at open (ss_npu_queue_open_linked); the backend copies and checks them. */
+    size_t requested_links;
+    struct ss_npu_queue_edge requested[SS_NPU_QUEUE_MAX_HANDLES * SS_NPU_QUEUE_MAX_TENSORS];
     atomic_uint state, active;
     atomic_uint_fast64_t published, completed, released, waiter;
     uint64_t consuming, job_limit;

@@ -493,6 +493,12 @@ unsigned os_npu_in_flight(void)
     const struct os_session *s=os_session();
     return s?s->npu.in_flight:0;
 }
+/* The tensor links the session declares: the most edges the application may choose at run time (ss_npu_queue_open_linked). */
+unsigned os_npu_links(void)
+{
+    const struct os_session *s=os_session();
+    return s?s->npu.links:0;
+}
 /* A refused declaration leaves its reason in the first-failure record, as the value of a record in group NPU. */
 static enum npu_declaration_result refused_declaration(enum npu_declaration_result r)
 {

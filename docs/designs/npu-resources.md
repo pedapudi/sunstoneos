@@ -1,6 +1,6 @@
 # NPU resources: declared, admitted and reserved
 
-Status: **the lifetime job quota is removed and declarations are admitted and reserved (items 1 and 2 of the plan); graphs from the graph, backpressure measurements and linking after the scheduler starts are not built.** This document covers how an
+Status: **built and run on the board: the lifetime job quota is removed, declarations are admitted and reserved, graphs load at run time, 31 slots run with a ring of depth 64 and backpressure, and tensors link after the scheduler starts. Results are in [the NPU status](../status/npu.md).** This document covers how an
 application states what it needs from the NPU, how the operating system admits that against what the NPU and
 the memory really offer, and which numbers in the code are limits of the hardware and which are choices of a
 fixed array. It also fixes the end state for graphs: an application loads a graph that it hands over at run

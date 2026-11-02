@@ -902,11 +902,9 @@ int npu_runtime_register(struct npu_runtime *rt, const void *model, size_t bytes
     *index = n;
     return 1;
 }
-int npu_runtime_link_tensor(struct npu_runtime *rt, unsigned producer, unsigned output,
-                            unsigned consumer, unsigned input)
+static int link_checked(struct npu_runtime *rt, unsigned producer, unsigned output, unsigned consumer, unsigned input)
 {
-    if (!good(rt) || rt->bound || producer >= rt->slots || consumer >= rt->slots ||
-        producer == consumer || xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
+    if (producer >= rt->slots || consumer >= rt->slots || producer == consumer) return 0;
     struct npu_runtime_slot *p = &rt->slot[producer], *s = &rt->slot[consumer];
     if (state(p) != NPU_RUNTIME_READY || state(s) != NPU_RUNTIME_READY ||
         output >= p->layout.outputs || input >= s->layout.inputs) return 0;
@@ -942,6 +940,27 @@ int npu_runtime_link_tensor(struct npu_runtime *rt, unsigned producer, unsigned 
     while (!npu_runtime_reference_step(rt, s)) { }
     return maintain(rt, AARCH64_CACHE_CLEAN, s->constant.cpu, s->constant.bytes) &&
         maintain(rt, AARCH64_CACHE_CLEAN, s->command.cpu, s->command.bytes);
+}
+int npu_runtime_link_tensor(struct npu_runtime *rt, unsigned producer, unsigned output,
+                            unsigned consumer, unsigned input)
+{
+    if (!good(rt) || rt->bound || xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
+    return link_checked(rt, producer, output, consumer, input);
+}
+/* Linking after the scheduler has started. The same re-assembly as before the start, allowed only while nothing can use
+ * the slots: the runtime is bound for a resident client, the caller is its client task, the service is open and has no
+ * request, no direct queue owner and no deferred work, the controller is idle, and every slot is loaded and idle. Those are
+ * the conditions npu_runtime_queue_claim needs next, so a queue open links first and claims after. */
+int npu_runtime_link_tensor_running(struct npu_runtime *rt, unsigned producer, unsigned output,
+                                    unsigned consumer, unsigned input)
+{
+    if (!good(rt) || !rt->bound || !rt->resident || !rt->service.runtime || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING ||
+        xTaskGetCurrentTaskHandle() != rt->slot[0].client || !rt->slot[0].opened || rt->slot[0].closed ||
+        rt->slot[0].pending || rt->service.direct || rt->service.direct_request || rt->service.has_deferred ||
+        rt->service.controller.state != A733_NPU_READY) return 0;
+    for (unsigned i = 0; i < rt->slots; ++i)
+        if (rt->slot[i].pending || state(&rt->slot[i]) != NPU_RUNTIME_READY) return 0;
+    return link_checked(rt, producer, output, consumer, input);
 }
 int npu_runtime_bind_irq(struct npu_runtime *rt, const struct npu_service_irq_ops *ops, void *cookie,
                          UBaseType_t route, unsigned idle_hint)

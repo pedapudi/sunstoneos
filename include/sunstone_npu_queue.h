@@ -33,6 +33,12 @@ enum ss_npu_tensor_kind { SS_NPU_INPUT, SS_NPU_OUTPUT };
  * (ready), 0 (pending), or -1 (refused/retained). depth is fixed at open.
  * Prepared entries and their DMA allocations are admitted by the image. */
 int ss_npu_queue_open(unsigned depth, struct ss_npu_queue **);
+/* The same open, with tensor links chosen at run time instead of the image's constant table: after the scheduler has
+ * started, the application passes up to its declared npu.links edges (manifest, docs/designs/npu-resources.md). The OS
+ * copies the table once, checks every edge against the loaded graphs (same representation and size, one producer for each
+ * consumer input) and links them before the ring becomes ready. A refused table refuses the open (-1). The table is read
+ * only on the first call; later calls poll. */
+int ss_npu_queue_open_linked(unsigned depth, const struct ss_npu_queue_edge *, size_t count, struct ss_npu_queue **);
 /* Slow lookup of an image-prepared resident entry; handles remain immutable.
  * 1 success, 0 unknown index. No command stream or device address is exposed. */
 int ss_npu_queue_register(struct ss_npu_queue *, unsigned prepared_entry, ss_npu_handle *);
