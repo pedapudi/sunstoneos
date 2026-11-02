@@ -176,9 +176,26 @@ int sunxi_mmc_open(struct sunxi_mmc *h, uint64_t deadline)
         deadline <= h->last_us) return 0;
     h->deadline_us = deadline; h->state = SUNXI_MMC_IDENTIFY; return 1;
 }
+#ifdef SUNXI_MMC_READ_ONLY
+/* Present only in a read-only core; the runner requires it of an image that
+ * declares SUNSTONE_PROBE_STORAGE_READ_ONLY (tools/board_probe.py). */
+__attribute__((used,retain)) const uint32_t sunxi_mmc_read_only_build = UINT32_C(0x52444f4e);
+/* A read-only image: queue() is the only function that sets h->command, and
+ * it refuses every command index outside this set, so CMD24, CMD25 and CMD38
+ * (single-block write, multiple-block write, erase) never reach the controller
+ * whatever the caller passes. checks/sd-read-only.py proves both facts on the
+ * linked image. The set is CMD0, 1, 2, 3, 6, 7, 8, 9, 11, 13, 16, 17, 18, 19,
+ * 41, 51 and 55; CMD12 is the automatic stop that the read command carries. */
+#define READ_ONLY_COMMANDS ((UINT64_C(1)<<0)|(UINT64_C(1)<<1)|(UINT64_C(1)<<2)|(UINT64_C(1)<<3)|(UINT64_C(1)<<6)| \
+    (UINT64_C(1)<<7)|(UINT64_C(1)<<8)|(UINT64_C(1)<<9)|(UINT64_C(1)<<11)|(UINT64_C(1)<<13)|(UINT64_C(1)<<16)| \
+    (UINT64_C(1)<<17)|(UINT64_C(1)<<18)|(UINT64_C(1)<<19)|(UINT64_C(1)<<41)|(UINT64_C(1)<<51)|(UINT64_C(1)<<55))
+#endif
 static void queue(struct sunxi_mmc *h, unsigned protocol, uint32_t cmd, uint32_t arg,
                   uint8_t *data, size_t bytes)
 {
+#ifdef SUNXI_MMC_READ_ONLY
+    if (!((READ_ONLY_COMMANDS >> (cmd & 63u)) & 1u)) { fault(h, SUNXI_MMC_ADMISSION); return; }
+#endif
     h->protocol = (uint16_t)protocol; h->command = cmd | START;
     h->argument = arg; h->data = data; h->data_bytes = bytes; h->position = 0;
     h->command_step = 0; h->seen = 0; h->response_seen = 0;
@@ -212,6 +229,7 @@ int sunxi_mmc_read(struct sunxi_mmc *h, uint64_t first, uint32_t blocks,
           arg, buffer, bytes);
     return 1;
 }
+#ifndef SUNXI_MMC_READ_ONLY
 static int same_card(const struct sunxi_mmc_card *a,const struct sunxi_mmc_card *b)
 {
     for(unsigned i=0;i<4;++i)if(a->cid[i]!=b->cid[i]||a->csd[i]!=b->csd[i])return 0;
@@ -281,6 +299,7 @@ int sunxi_mmc_write(struct sunxi_mmc *h,const struct sunxi_mmc_write_request *r,
     queue(h,P_WRITE_PRE,13u|RESP|CRC|WAIT,(uint32_t)h->card.rca<<16,0,0);
     return 1;
 }
+#endif /* SUNXI_MMC_READ_ONLY */
 static int interrupts(struct sunxi_mmc *h)
 {
     uint32_t v;
@@ -604,6 +623,7 @@ static int ready_except(struct sunxi_mmc *h, uint32_t ignored)
     return 1;
 }
 static int ready(struct sunxi_mmc *h) { return ready_except(h, 0); }
+#ifndef SUNXI_MMC_READ_ONLY
 static void next_write(struct sunxi_mmc *h)
 {
     uint64_t first=h->write_request.first_sector+h->result.confirmed_blocks;
@@ -611,6 +631,7 @@ static void next_write(struct sunxi_mmc *h)
     queue(h,P_WRITE,24u|RESP|CRC|DATA|WRITE|WAIT,arg,
           h->write_payload+h->result.confirmed_blocks*512u,512);
 }
+#endif
 /* SD v2 capability data is read at the admitted identification clock. No
  * capability probe failure permits a mode fallback or repeated switch command. */
 static void sd_modes(struct sunxi_mmc *h)
@@ -1012,6 +1033,7 @@ static void protocol(struct sunxi_mmc *h)
         /* The same end-of-card rule covers a status bit not yet cleared. */
         if (ready_except(h, h->read_tail ? OUT_OF_RANGE : 0)) h->state = SUNXI_MMC_DONE;
         return;
+#ifndef SUNXI_MMC_READ_ONLY
     case P_WRITE_PRE:
         if(ready(h))next_write(h);
         return;
@@ -1029,6 +1051,7 @@ static void protocol(struct sunxi_mmc *h)
             ready_status(h,P_WRITE_STATUS);
         } else fault(h,SUNXI_MMC_CARD);
         return;
+#endif
     default: fault(h, SUNXI_MMC_CARD); return;
     }
 }
@@ -1041,7 +1064,9 @@ void sunxi_mmc_poll(struct sunxi_mmc *h)
     if (h->admitted && h->config.ops.retained(h->config.context, h->config.token) != 1) {
         fault(h, SUNXI_MMC_ADMISSION); goto out;
     }
+#ifndef SUNXI_MMC_READ_ONLY
     if(h->writing&&(!write_admitted(h)||!time_ok(h)))goto out;
+#endif
     if (h->state == SUNXI_MMC_READING) ++h->result.polls;
     if (h->setup < 6) setup(h);
     else if(h->protocol==P_SD_CLOCK)sd_clock(h);

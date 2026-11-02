@@ -69,15 +69,23 @@ int a733_mmc_platform_native_init_selected(struct a733_mmc_platform_native *,
 static inline int a733_mmc_platform_native_transfer_allowed(enum sunxi_mmc_kind kind,
     enum a733_mmc_emmc_host host,const struct a733_storage_update *u,uintptr_t a,uint32_t v)
 {
+#ifdef SUNXI_MMC_READ_ONLY
+    (void)kind;(void)host;(void)u;(void)a;(void)v;return 0; /* A read-only core links no write boundary. */
+#else
     return u&&u->platform&&u->platform->config.kind==kind&&u->platform->config.emmc_host==host&&
         a733_storage_update_mmio(u,a,v);
+#endif
 }
 /* The same boundary for one FIFO write burst of count words. */
 static inline int a733_mmc_platform_native_fifo_allowed(enum sunxi_mmc_kind kind,
     enum a733_mmc_emmc_host host,const struct a733_storage_update *u,uintptr_t a,unsigned count)
 {
+#ifdef SUNXI_MMC_READ_ONLY
+    (void)kind;(void)host;(void)u;(void)a;(void)count;return 0;
+#else
     return u&&u->platform&&u->platform->config.kind==kind&&u->platform->config.emmc_host==host&&
         a733_storage_update_fifo(u,a,count);
+#endif
 }
 /* Bind once after the actual service owns this exact platform. Existing native
  * initialization and address helper remain read-only until this binding. */

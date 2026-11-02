@@ -12,6 +12,9 @@
 #define SUNSTONE_PROBE_RESULT_ADDRESS UINT64_C(0x42000080)
 #define SUNSTONE_PROBE_RETURNABLE 1u
 #define SUNSTONE_PROBE_POWER_REMOVAL 2u
+/* Set with RETURNABLE by an image whose SD core is built with SUNXI_MMC_READ_ONLY. The runner
+ * refuses the image if it links any card write symbol or lacks sunxi_mmc_read_only_build. */
+#define SUNSTONE_PROBE_STORAGE_READ_ONLY 4u
 #define SUNSTONE_PROBE_WDT_MODE 0xb1u
 struct sunstone_probe_marker {
     uint64_t magic,version,bytes,watchdog_mode,seconds;
@@ -29,12 +32,14 @@ struct sunstone_probe_result {
 _Static_assert(sizeof(struct sunstone_probe_marker)==112,"probe marker ABI");
 _Static_assert(sizeof(struct sunstone_probe_session)==128,"probe session ABI");
 _Static_assert(sizeof(struct sunstone_probe_result)==128,"probe result ABI");
-#define SUNSTONE_PROBE_IMAGE(payload,capacity,input,length,seconds_) \
+#define SUNSTONE_PROBE_IMAGE_FLAGS(payload,capacity,input,length,seconds_,flags_) \
     __attribute__((used,retain,section(".probe_marker"))) \
     const struct sunstone_probe_marker sunstone_probe_marker = { \
         SUNSTONE_PROBE_MAGIC,1,112,SUNSTONE_PROBE_WDT_MODE,seconds_, \
         SUNSTONE_PROBE_SESSION_ADDRESS,128,SUNSTONE_PROBE_RESULT_ADDRESS,128, \
-        payload,capacity,input,length,SUNSTONE_PROBE_RETURNABLE }
+        payload,capacity,input,length,flags_ }
+#define SUNSTONE_PROBE_IMAGE(payload,capacity,input,length,seconds_) \
+    SUNSTONE_PROBE_IMAGE_FLAGS(payload,capacity,input,length,seconds_,SUNSTONE_PROBE_RETURNABLE)
 extern const struct sunstone_probe_marker sunstone_probe_marker;
 /* Strong image-owned implementation. Retire DMA/IRQs/workers and restore
  * resources before returning READY. A failure must return another value. */

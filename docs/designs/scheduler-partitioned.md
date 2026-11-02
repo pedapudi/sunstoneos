@@ -975,6 +975,26 @@ entry. Each reduces to moving the work that waits on refills (the drain, the wak
 publication, the slice refresh) out of the masked section, or splitting it into
 bounded steps that unmask between them.
 
+### The span sweep lists every masked pair before any span is fixed
+
+Earlier rounds measured the three longest spans per kernel. Fixing spans one at a time from that list risks leaving a longer span unmeasured, so the sweep records all of them first.
+
+The recorder keeps one entry per distinct pair of call sites, the call that raised the interrupt priority mask and the call that restored it, on each core. An entry holds the span count, the longest span and a 22-bin histogram with edges from 1 to 500 microseconds. The 99.99th percentile is the upper edge of the bin that holds that rank, and the longest span when fewer than 10^4 spans were seen. Writes are per core, so the recorder adds no shared line to the measured path. The table has 64 entries per core and counts overflow separately, so a full table is visible in the report. The image build shrinks the recorder's full histograms to 17 bins because the sweep image has no free space for them; the sweep table replaces them.
+
+The image is the mimus OS image with the OS services and drivers linked, run under the mimus load (eight workers, three recorded inputs), once with the stock kernel and once with the partitioned fork. Pairs whose longest span exceeds 5 microseconds are listed with their symbols from the image.
+
+Prediction. Pairs that touch the scheduler lists or a ticket lock are held open by dependent DRAM refills, so their length follows the number of distinct cache lines touched rather than instructions. On the stock kernel the longest pairs are the suspend-all spans and the notify-take spans, which walk shared lists under the task lock, at 95 to 206 microseconds as measured before. On the fork they are the kernel command, the critical section that ends in an object exit, and the service pass, at 22 to 47 microseconds. The sweep may add pairs that the earlier three-site capture could not see; any such pair above 5 microseconds is a defect under the 10 microsecond wake target and joins the fix list in length order.
+
+### Lock wait or held work: each span is split before it is fixed
+
+A span that does almost no work, such as the scheduler-state query on the stock kernel (31 us) or the object enter and exit pair on the fork (33 us), is probably held open by waiting for a contended kernel lock with the interrupt mask already raised, not by memory work under the lock. The two causes have different fixes. If the wait dominates, the lock is taken with the mask lowered: spin unmasked, raise the mask, try the lock, and lower the mask and retry on failure. If the held work dominates, the memory touched under the lock is reduced or moved outside the masked region.
+
+The recorder therefore adds the time each core spent acquiring a kernel lock (the task lock and the interrupt lock) between the mask opening and the mask closing to the pair's entry. Per pair it keeps the lock wait inside the longest span, the longest lock wait in any span, and, for spans above 5 us, their count, total length and total lock wait, so the wait share of the long spans is a ratio of two sums.
+
+Prediction. For the pairs listed above 25 us on both kernels, lock wait is at least 70% of the long-span time, because 8 cores take the same task lock and a holder's own span is itself 10 to 30 us. Pairs on core 6 that run the mimus dispatch (`board_service_progress` to `dispatch` and the yield hook) are the exception: they hold the lock rather than wait for it, and their wait share is under 30%. If both hold, the fix for the wait-dominated pairs is the unmasked spin on both kernels, and the held pairs go to the memory fixes. If the wait share is under 30% everywhere, the earlier DRAM-latency account stands and the fix is the memory work.
+
+Dependency. How long a span stays open when several cores read memory depends on how DRAM bandwidth falls as more cores read, which the DRAM-scaling study in [DRAM bandwidth](dram-bandwidth.md) is investigating. This design does not change that study's files; its result sets how much of a held span can be removed by reducing lines touched, and a change in the interconnect settings would change the held-span lengths measured here.
+
 ## Capacity hints guide placement without weakening priorities or affinity
 
 Application-kit task attributes add a class, allowed CPU mask, migratable flag

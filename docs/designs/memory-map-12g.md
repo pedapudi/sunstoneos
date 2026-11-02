@@ -76,6 +76,24 @@ in `a733_dram.h`, so their types match. An image that links the driver file
 replaces the weak definition with it. The capacity check reads each built
 image's symbol table and reports which definition was linked.
 
+**Address-test definition.** `drivers/dram/a733_dram_decode_probe.c` defines
+the check by an address test and links into cached images when the CMake
+option `SUNSTONE_A733_DRAM_DECODE_PROBE` is on. The memory qualification
+image's run on port 3-1 passed its window scan over 6,258,688 words and its
+page signature over 3,129,344 pages in `0x4400_0000`–`0x3_4000_0000`, with no
+page holding another page's signature (an alias) and no beacon; the training
+records of both boards report 12,288 MiB. The definition refuses a range
+outside that tested map. On the core 0 EL3 path it then writes a distinct token
+to the first and last word of each range, to every 2 MiB step of the first
+gigabyte, to each power-of-two offset from 2 MiB to 8 GiB and to each gigabyte
+boundary, issues one `DSB SY`, and reads every token back. About 600 probes
+cover the 11 GiB range. An aliased, wrapped, stuck or absent address returns
+another value and the check returns 0. The test runs with the MMU off, so it
+shows decode, not Non-secure firewall access; the qualification run showed
+that for the tested map. The host check `checks/dram-decode-probe.py` runs the
+real definition against a memory model with seven decode faults. The
+definition in `a733_dram_decode.c` stays for a controller register source.
+
 **Launch evidence the gate does not cover.** A decode check that returns 1
 shows that the controller decodes the range and the firewall admits
 Non-secure access. It does not show that no boot0 payload, remote firmware

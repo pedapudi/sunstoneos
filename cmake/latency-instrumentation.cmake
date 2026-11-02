@@ -1,5 +1,6 @@
 include_guard(GLOBAL)
 option(SUNSTONE_LATENCY "Record maximum kernel and device response times" OFF)
+option(SUNSTONE_LATENCY_SWEEP "Keep every distinct masked-span pair with count, maximum and histogram (needs SUNSTONE_LATENCY)" OFF)
 option(SUNSTONE_LATENCY_PMU "Add per-span instruction and cache-refill counts to the latency report (read-only PMU use)" OFF)
 set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/runtime/latency.c"
   "${SUNSTONE_SOURCE_ROOT}/runtime/latency_irq.c" PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
