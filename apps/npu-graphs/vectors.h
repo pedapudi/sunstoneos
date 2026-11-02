@@ -12,4 +12,12 @@ struct npu_graph_vector {
 };
 extern const struct npu_graph_vector npu_graph_vectors[];
 extern const unsigned npu_graph_count;
+/* A graph handed to the OS at run time: its compiled bytes, which no list of the OS image names, and its vectors. */
+struct npu_graph_runtime {
+    struct npu_graph_vector vector;
+    const uint8_t *model;
+    size_t model_bytes;
+};
+extern const struct npu_graph_runtime npu_graph_runtime[];
+extern const unsigned npu_graph_runtime_count;
 #endif

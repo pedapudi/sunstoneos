@@ -32,9 +32,13 @@ struct npu_runtime_model { const void *data; size_t bytes; };
  * aligned in CPU and physical addresses, write-back cached and mapped at EL1.
  * The catalogue models stay outside it, live and unchanged for the runtime's
  * lifetime; LOAD authenticates each copy it makes. */
+/* Graphs loaded after preparation (npu_runtime_register): capacity more catalogue entries, each model at most graph_bytes
+ * long with no tensor larger than tensor_bytes. The reservation covers them, so a registered graph cannot fail on memory. */
+struct npu_runtime_bounds { unsigned capacity; size_t graph_bytes, tensor_bytes; };
 struct npu_runtime_config {
     const struct npu_runtime_model *models; /* count entries; the caller keeps them alive until prepare returns */
     unsigned count, slots;
+    struct npu_runtime_bounds bounds;
     uintptr_t cpu;
     uint64_t physical;
     size_t bytes;
@@ -106,7 +110,8 @@ struct npu_runtime {
     struct nbg_assembly_layout *plans;
     unsigned char (*model_digest)[32];
     struct a733_npu_buffer buffers[1 + 4 * NPU_RUNTIME_SLOTS]; /* the registered NPU buffers, built by prepare */
-    unsigned count, slots;
+    atomic_uint count;   /* catalogue entries in use; register publishes the next one with release order */
+    unsigned capacity, slots;
     size_t constant_bytes, read_bytes, write_bytes, staging_bytes;
     uintptr_t parent_cpu, staging;
     size_t parent_bytes;
@@ -142,10 +147,19 @@ struct npu_runtime {
 /* The memory a declaration of slots reserves for these graphs: 0 with the result NPU_DECLARATION_OK and the size in
  * *bytes, or the resource that does not fit (a graph that is not admissible, the NPU's 32-bit address space, the
  * pool). Hashes each model, so it is a start-up call. */
+enum npu_declaration_result npu_runtime_reservation_with(const struct npu_runtime_model *models, unsigned count,
+                                                        unsigned slots, size_t pool_bytes, size_t *bytes,
+                                                        const struct npu_runtime_bounds *);
+/* Add a graph after preparation: any task that owns the runtime, one at a time. The model must stay alive and unchanged;
+ * it is admitted like the linked ones (structure and addresses), must fit the bounds the reservation was made for, and
+ * its SHA-256 taken here is the reference for LOAD's copy. Returns 1 and its catalogue index, or 0. */
+int npu_runtime_register(struct npu_runtime *, const void *model, size_t bytes, unsigned *index);
 enum npu_declaration_result npu_runtime_reservation(const struct npu_runtime_model *models, unsigned count, unsigned slots, size_t pool_bytes,
                             size_t *bytes);
 /* The bytes at the start of a reservation for the per-graph tables of count graphs (a multiple of 64). */
 size_t npu_runtime_tables_bytes(unsigned count);
+size_t npu_runtime_requirements_with(const struct npu_runtime_model *, unsigned count, unsigned slots,
+                                    const struct npu_runtime_bounds *);
 size_t npu_runtime_requirements(const struct npu_runtime_model *, unsigned count, unsigned slots);
 
 /* EL1, before scheduling, zero storage once. Authenticates and plans every

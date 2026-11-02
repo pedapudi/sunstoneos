@@ -11,10 +11,12 @@ extern "C" {
 #ifndef SS_NPU_QUEUE_MAX_DEPTH
 #define SS_NPU_QUEUE_MAX_DEPTH 64u
 #endif
-/* One handle for each of the 31 slots a command mask allows; one graph has at most 8 inputs and 8 outputs (the loader's
- * NBG_ASSEMBLY_MAX_TENSORS). */
+/* One handle for each of the 31 slots a command mask allows. The tensors of a handle are as many as the loader admits for
+ * a graph (NBG_ASSEMBLY_MAX_TENSORS, include/nbg_assembly.h: the loader's own choice, set at build). */
 #define SS_NPU_QUEUE_MAX_HANDLES 31u
+#ifndef SS_NPU_QUEUE_MAX_TENSORS
 #define SS_NPU_QUEUE_MAX_TENSORS 8u
+#endif
 /* Optional immutable image composition. Prepared-entry and tensor indices
  * are zero based. Every declared output/input pair has identical shape and
  * representation. Connected handles share one buffer lease. The OS copies and admits this table before scheduling. */

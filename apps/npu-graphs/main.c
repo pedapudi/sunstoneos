@@ -27,17 +27,31 @@ void npu_graphs_main(const struct ss_grant *grant)
         vTaskDelay(1);
     }
     if (npu_graph_count == 0 || npu_graph_count > NPU_GRAPHS_MAX) fault(STAGE_CATALOGUE, 0, npu_graph_count);
-    receipt.count = npu_graph_count;
+    const unsigned total = npu_graph_count + npu_graph_runtime_count;
+    if (total > NPU_GRAPHS_MAX) fault(STAGE_CATALOGUE, 0, total);
+    receipt.count = total;
     receipt.start = ss_counter_ticks();
     unsigned failed = 0;
-    for (unsigned i = 0; i < npu_graph_count; ++i) {
-        const struct npu_graph_vector *v = &npu_graph_vectors[i];
+    for (unsigned i = 0; i < total; ++i) {
+        const int at_run_time = i >= npu_graph_count;
+        const struct npu_graph_vector *v = at_run_time ? &npu_graph_runtime[i - npu_graph_count].vector : &npu_graph_vectors[i];
         struct npu_graph_record *r = &receipt.graph[i];
         unsigned model;
         struct ss_npu_model info;
         r->index = i; r->input_bytes = v->input_bytes; r->output_bytes = v->reference_bytes; r->status = NPU_GRAPH_NOT_RUN;
         if (failed) continue;
-        if (ss_npu_model_find(v->name, &model) != 1 || ss_npu_model_info(model, &info) != 1 ||
+        if (at_run_time) {
+            /* A graph that no list of the OS image names: hand its bytes to the OS, which admits them and gives the index. */
+            const struct npu_graph_runtime *g = &npu_graph_runtime[i - npu_graph_count];
+            int registered;
+            const uint64_t t = ss_counter_ticks();
+            while ((registered = ss_npu_register_graph(g->model, g->model_bytes, &model)) == 0) {
+                if (ss_live() < 0 || (ss_counter_ticks() - t) / 24 > GRAPH_TIMEOUT_US) { registered = -1; break; }
+                ss_progress(); vTaskDelay(1);
+            }
+            if (registered != 1) { r->status = registered == -2 ? NPU_GRAPH_REFUSED : NPU_GRAPH_FAILED; failed = registered != -2; continue; }
+            if (v->reference_bytes > sizeof(output)) fault(STAGE_CATALOGUE, i, model);
+        } else if (ss_npu_model_find(v->name, &model) != 1 || ss_npu_model_info(model, &info) != 1 ||
             info.input_bytes != v->input_bytes || info.output_bytes != v->reference_bytes ||
             v->reference_bytes > sizeof(output)) fault(STAGE_CATALOGUE, i, model);
         memset(output, 0xa5, v->reference_bytes);

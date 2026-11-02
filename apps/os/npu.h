@@ -27,6 +27,9 @@ extern const unsigned os_npu_client_model,os_npu_input_count,os_npu_output_count
  * After thermal STOP, only OPEN (for accepted startup) and CLOSE remain.
  * An abandoned caller retains all resources at the fixed drain deadline. */
 int os_npu_open(void);
+/* Add a graph after start: 1 and its entry for LOAD, or 0 (not admissible, beyond the declared bounds or capacity). The caller
+ * keeps the bytes alive and unchanged; LOAD refuses a copy that differs from what this admitted. */
+int os_npu_register(const void *model,size_t bytes,unsigned *entry);
 int os_npu_load(unsigned entry);
 int os_npu_tensor(enum nbg_section_id,unsigned index,struct npu_runtime_tensor *);
 int os_npu_submit(uint64_t timeout_us);

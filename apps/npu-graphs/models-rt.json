@@ -1,0 +1,8 @@
+{
+ "npu_models": [
+  "graph-relu",
+  "graph-sh-exp",
+  "graph-sh-gather",
+  "graph-sh-pad"
+ ]
+}

@@ -18,7 +18,14 @@ struct nbg_assembly_plan {
 /* General plan: NN, COEFF, POOL and COMMAND as above, then one allocation per
  * input tensor in model order, then one per output tensor. With one input
  * and one output this is the six-slot plan order. */
+/* The most inputs, and the most outputs, of one graph. The format does not bound them (the header counts are 32-bit
+ * fields, and the vendor sources show no limit); this is the loader's own choice, fixed by the size of
+ * struct nbg_assembly_layout (24 bytes a tensor, kept in the per-graph table) and by the queue handle. An image is built
+ * for the largest graph its application declares (cmake -DSUNSTONE_OS_NPU_MAX_TENSORS=N); 8 is the default of an image
+ * built without a declaration. A graph beyond it is refused by name at admission. */
+#ifndef NBG_ASSEMBLY_MAX_TENSORS
 #define NBG_ASSEMBLY_MAX_TENSORS 8u
+#endif
 #define NBG_LAYOUT_MAX_BUFFERS (NBG_ALLOC_INPUT + 2u * NBG_ASSEMBLY_MAX_TENSORS + 1u)
 struct nbg_assembly_layout {
     struct nbg_allocation_requirement buffers[NBG_LAYOUT_MAX_BUFFERS];

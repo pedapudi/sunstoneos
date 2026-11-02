@@ -116,13 +116,15 @@ def load(path):
     # the session record carries it (npu_word, apps/os/host.py), and the operating system admits it against capacity.
     if 'npu' in raw:
         n = raw['npu']
-        require(set(n) <= {'slots', 'in_flight', 'graphs', 'links'}, name + ': unknown npu keys')
+        require(set(n) <= {'slots', 'in_flight', 'graphs', 'links', 'graph_bytes', 'tensor_bytes'}, name + ': unknown npu keys')
         require({'slots', 'in_flight', 'graphs'} <= set(n), name + ': npu declares slots, in_flight and graphs')
 
         def count(value, label, low):
             return integer(len(value) if isinstance(value, list) else value, name + ' npu ' + label, low, (1 << 32) - 1)
         m['npu'] = {'slots': count(n['slots'], 'slots', 1), 'in_flight': count(n['in_flight'], 'in_flight', 1),
-                    'graphs': count(n['graphs'], 'graphs', 1), 'links': count(n.get('links', 0), 'links', 0)}
+                    'graphs': count(n['graphs'], 'graphs', 1), 'links': count(n.get('links', 0), 'links', 0),
+                    'graph_bytes': count(n.get('graph_bytes', 0), 'graph_bytes', 0),
+                    'tensor_bytes': count(n.get('tensor_bytes', 0), 'tensor_bytes', 0)}
     audio = raw.get('audio')
     if audio is not None or (required | optional) & CAPTURE:
         require(audio is not None, name + ': a capture device needs an audio format')
