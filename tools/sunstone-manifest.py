@@ -145,7 +145,7 @@ def integer(value, where, low=0, high=(1 << 64) - 1):
 def load(path, resident=False):
     """manifest.json -> normalized dict with integer fields."""
     raw = json.loads(Path(path).read_text())
-    known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'deadlines', 'output_limit', 'host_ops', 'npu'}
+    known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'deadlines', 'output_limit', 'host_ops', 'npu', 'gpu'}
     require(set(raw) <= known, '%s: unknown keys %s' % (path, sorted(set(raw) - known)))
     name = raw['name']
     require(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9-]{0,14}', name) is not None,
@@ -216,6 +216,7 @@ def load(path, resident=False):
         if 'graph_region' in n:
             require(isinstance(n['graph_region'], str), name + ': npu graph_region is the name of an input region')
             m['npu_graph_region_name'] = n['graph_region']
+    m['gpu'] = load_gpu(name, raw.get('gpu'), required)
     audio = raw.get('audio')
     if audio is not None or (required | optional) & CAPTURE:
         require(audio is not None, name + ': a capture device needs an audio format')
@@ -279,6 +280,29 @@ def load(path, resident=False):
     add_heap_region(name, m)
     return m
 
+
+GPU_KEYS = ('job_us', 'clients', 'depth', 'leases', 'bindings', 'argument_bytes', 'program_bytes')
+# The queue's layout bounds (include/gpu_queue.h, include/pvr_compute_fast.h): the program is at most the
+# two 4 KiB program pages less one cache line, and the record fields for leases, bindings and arguments are 16 bits.
+GPU_PROGRAM_BYTES = 2 * 4096 - 64
+
+
+def load_gpu(name, gpu, required):
+    """The gpu section of manifest.json: what the application needs of the GPU compute queue.
+
+    job_us bounds each job from its kick to its timeline update and is the OS's reply window; the counts are checked
+    against the build's capacities (GPU_QUEUE_*) when the image links. It is not part of the packed binary."""
+    if gpu is None:
+        require(not required & DEVICES['gpu'], name + ': a required gpu device needs a gpu section declaring job_us')
+        return None
+    require(isinstance(gpu, dict) and set(gpu) <= set(GPU_KEYS), '%s: gpu keys are %s' % (name, ', '.join(GPU_KEYS)))
+    require('job_us' in gpu, name + ': gpu declares job_us')
+    g = {'job_us': integer(gpu['job_us'], name + ' gpu job_us', 1, (1 << 62) - 1)}
+    for key, high in (('clients', 255), ('depth', 255), ('leases', 0xffff), ('bindings', 0xffff), ('argument_bytes', 0xffff)):
+        g[key] = integer(gpu.get(key, 0), '%s gpu %s' % (name, key), 0, high)
+    g['program_bytes'] = integer(gpu.get('program_bytes', 0), name + ' gpu program_bytes', 0, GPU_PROGRAM_BYTES)
+    require(g['argument_bytes'] % 4 == 0, name + ': gpu argument_bytes is a multiple of 4')
+    return g
 
 LARGE = struct.Struct('<IIQQQ32s256s')
 assert LARGE.size == 320
@@ -542,6 +566,8 @@ def c_tables(m):
         m={'name':'os-core','stack_bytes':16,'output_limit':0,'progress_window_us':1,
            'devices_required':0,'devices_optional':0,'audio':{'max_frames':0,'channels':0,'bits':0}}
     c = cname(m['name'])
+    gpu = m.get('gpu')
+    gpu_us = gpu['job_us'] if gpu else 0
     lines = ['/* Fixed image composition from the application manifest. */',
              '#include "os.h"', '#include "application.h"', '#include "irq_table.h"',
              '#include "%s-app.h"' % c,
@@ -595,8 +621,10 @@ def c_tables(m):
              '#ifdef SUNSTONE_A733_HW_FACTS', '    {97,0,0xd8,os_hw_facts_irq},{143,0,0xd8,os_hw_facts_irq},{95,0,0xd8,os_hw_facts_irq},', '#endif', '};',
              'const unsigned a733_irq_route_count=sizeof(a733_irq_routes)/sizeof(a733_irq_routes[0]);',
              '#ifdef SUNSTONE_A733_OS_GPU', '#include "gpu-runtime.h"',
+             '/* The declared job bound; an image without GPU use replies within the open window. */',
+             '__attribute__((used,retain)) const uint64_t os_gpu_job_us=UINT64_C(%d);' % gpu_us,
              '__attribute__((used,retain)) const uint32_t os_gpu_configuration[8]={',
-             '    1,OS_GPU_REPLY_US,OS_GPU_OPEN_US,OS_GPU_WAIT_TICKS,OS_GPU_PRIORITY,',
+             '    1,(uint32_t)(2*(os_gpu_job_us?os_gpu_job_us:OS_GPU_OPEN_US)),OS_GPU_OPEN_US,OS_GPU_WAIT_TICKS,OS_GPU_PRIORITY,',
              ('    A733_SMP_APPLICATION_CORE,' if m.get('cluster', 0) else '    2,'),
              '    A733_GPU_CORE_HZ,A733_GPU_SUPPLY_UV};', '#endif', '']
     if m.get('npu'):
@@ -610,6 +638,13 @@ def c_tables(m):
         lines=[line for line in lines if not any(key in line for key in ('os_core-app.h','os_core_init','app_stack','app_task','{\"os-core\",os_application'))]
         lines.insert(4,'const struct ss_application ss_application={0};')
     lines.insert(4, '#include "a733_smp_placement.h"')
+    if gpu:
+        # The application needs no more than the build provides; an omitted value asks for nothing beyond it.
+        for key, macro in (('clients', 'CLIENTS'), ('depth', 'DEPTH'), ('leases', 'LEASES'), ('bindings', 'BINDINGS'),
+                           ('argument_bytes', 'ARGUMENT_BYTES'), ('program_bytes', 'PROGRAM_BYTES')):
+            if gpu[key]:
+                lines.append('_Static_assert(%du <= GPU_QUEUE_%s, "%s declares gpu %s above the build capacity '
+                             '(SUNSTONE_GPU_QUEUE_%s)");' % (gpu[key], macro, m['name'], key, macro))
     return '\n'.join(lines)
 
 

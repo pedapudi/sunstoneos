@@ -43,6 +43,8 @@ unsupported.
   runs the image. Its default image is hello-compute built with the CPU-return
   lifetime.
 
+An application that uses the queue declares `job_us` and its other needs in the `gpu` section of `manifest.json` ([capacities](gpu-compute-queue.md#capacities-come-from-the-applications-declaration)). The section is image-table data, not part of the packed manifest, so `ss_manifest` and its version are unchanged.
+
 ## The manifest declares what an application needs
 
 Each application has a `manifest.json`. At configure time,

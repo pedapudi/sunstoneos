@@ -31,8 +31,9 @@ struct pvr_gpu_service_config;
  * - 128-191: PDS dispatch program, written at creation;
  * - 192-255: fence PDS program, written at creation;
  * - 256-315: CDM stream, per job;
- * - 320-407: argument block, per job (at most 24 bytes of binding addresses,
- *   then at most 64 argument bytes).
+ * - 320-: argument block, per job (8 bytes for each binding after the first,
+ *   then at most GPU_QUEUE_ARGUMENT_BYTES argument bytes; the slot ends at
+ *   PVR_COMPUTE_FAST_STRIDE).
  * One clean from byte 256 to the end of the argument block covers each job:
  * 2 lines for a 32-byte block, at most 3. Changed PDS lines add maintenance. */
 #define PVR_COMPUTE_QUEUE_PDS_DATA 0u

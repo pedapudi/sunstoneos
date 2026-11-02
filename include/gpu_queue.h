@@ -3,15 +3,16 @@
 /* The GPU compute queue: the application interface of the OS GPU compute
  * service (docs/designs/gpu-compute-queue.md).
  *
- * An application creates one context with one program and up to four
- * leases of its own manifest regions. The native path retains up to four
- * jobs across both clients and returns one completion record per job. A job binds leased ranges in place, gives
+ * An application creates one context with one program and up to
+ * GPU_QUEUE_LEASES leases of its own manifest regions. The native path retains
+ * up to GPU_QUEUE_DEPTH jobs across all clients and returns one completion
+ * record per job. A job binds leased ranges in place, gives
  * a grid of workgroups and a small argument block, and carries the
  * application's sequence number. The queue copies the job description, never
  * buffer contents. It never computes a job on the CPU; REFUSED and FAULT
  * records leave that choice to the application.
  *
- * Immutable image admission binds at most two client tasks before scheduling.
+ * Immutable image admission binds at most GPU_QUEUE_CLIENTS client tasks before scheduling.
  * Each context handle belongs to its registered task. The owner creates the
  * context and controls its device lifetime; the peer joins the shared map.
  * Every call runs in task context. Plain C with no FreeRTOS types, so host
@@ -25,15 +26,41 @@ extern "C" {
 #define GPU_QUEUE_STATIC_ASSERT _Static_assert
 #endif
 
-#define GPU_QUEUE_CONTEXTS 1u
-#define GPU_QUEUE_CLIENTS 2u
-#define GPU_QUEUE_DEPTH 4u
-#define GPU_QUEUE_PROGRAMS 1u
-#define GPU_QUEUE_LEASES 4u
-#define GPU_QUEUE_BINDINGS 4u
-#define GPU_QUEUE_ARGUMENT_BYTES 64u
-#define GPU_QUEUE_PROGRAM_BYTES 8128u  /* USC code: two 4 KiB pages less one cache line */
-#define GPU_QUEUE_MAX_JOB_US UINT64_C(1000000)
+/* Capacities of the build. Each is a build parameter (CMake cache variable
+ * SUNSTONE_GPU_QUEUE_<NAME>, passed as a compile definition to the OS and the
+ * application alike). The application declares the capacity it needs in the
+ * "gpu" section of its manifest and the image build refuses a declaration
+ * above the build's capacity (tools/sunstone-manifest.py,
+ * docs/designs/gpu-compute-queue.md). The defaults below are the smallest
+ * values that the in-tree applications declare, not a limit of the design.
+ * A context and a program are one each: the firmware compute context and the
+ * program pages are single objects of the queue. */
+#ifndef GPU_QUEUE_CLIENTS
+#define GPU_QUEUE_CLIENTS 2u      /* caller tasks that own a job slot and a completion queue */
+#endif
+#ifndef GPU_QUEUE_DEPTH
+#define GPU_QUEUE_DEPTH 4u        /* jobs retained across all clients */
+#endif
+#ifndef GPU_QUEUE_LEASES
+#define GPU_QUEUE_LEASES 4u       /* leases of manifest regions per context */
+#endif
+#ifndef GPU_QUEUE_BINDINGS
+#define GPU_QUEUE_BINDINGS 4u     /* bound ranges per job */
+#endif
+#ifndef GPU_QUEUE_ARGUMENT_BYTES
+#define GPU_QUEUE_ARGUMENT_BYTES 64u /* argument bytes per job */
+#endif
+/* USC code: the two 4 KiB program pages of the payload, less one cache line.
+ * This is the payload layout (platform/a733/gpu_queue.c: PROGRAM_GPU maps two
+ * pages), not a free parameter. */
+#define GPU_QUEUE_PROGRAM_PAGES 2u
+#define GPU_QUEUE_PROGRAM_BYTES (GPU_QUEUE_PROGRAM_PAGES * 4096u - 64u)
+GPU_QUEUE_STATIC_ASSERT(GPU_QUEUE_CLIENTS >= 1 && GPU_QUEUE_DEPTH >= 1 && GPU_QUEUE_LEASES >= 1 &&
+    GPU_QUEUE_BINDINGS >= 1 && GPU_QUEUE_ARGUMENT_BYTES % 4 == 0, "GPU queue capacities");
+/* A binding and a lease index are 16-bit fields of the job record; the
+ * argument and binding counts are 16-bit fields. */
+GPU_QUEUE_STATIC_ASSERT(GPU_QUEUE_LEASES <= 0xffffu && GPU_QUEUE_BINDINGS <= 0xffffu &&
+    GPU_QUEUE_ARGUMENT_BYTES <= 0xffffu, "GPU queue record fields");
 #define GPU_QUEUE_WAIT_FOREVER UINT32_MAX
 #define GPU_QUEUE_LEASE_ALIGN (UINT64_C(2) << 20)
 
@@ -128,7 +155,7 @@ struct gpu_queue_lease_info {
  * afterwards. job_us bounds each job from its kick to its timeline update;
  * a job that exceeds it faults the service. */
 struct gpu_queue_context_config {
-    uint64_t job_us;           /* 1 .. GPU_QUEUE_MAX_JOB_US */
+    uint64_t job_us;           /* 1 .. the "gpu" job_us the manifest declares */
     const struct gpu_queue_program *program;
     uint32_t lease_count, reserved;
     struct gpu_queue_lease_request lease[GPU_QUEUE_LEASES];
@@ -170,7 +197,8 @@ struct gpu_queue_job {
     struct gpu_queue_binding binding[GPU_QUEUE_BINDINGS];
     unsigned char arguments[GPU_QUEUE_ARGUMENT_BYTES];
 };
-GPU_QUEUE_STATIC_ASSERT(sizeof(struct gpu_queue_job) == 160, "job record");
+GPU_QUEUE_STATIC_ASSERT(sizeof(struct gpu_queue_job) == 32 + 16 * GPU_QUEUE_BINDINGS + GPU_QUEUE_ARGUMENT_BYTES,
+    "job record: 32-byte header, the bindings and the arguments");
 
 /* kick_to_done_us covers command publication through the interrupt's
  * acquisition of the completed timeline, in microseconds. */

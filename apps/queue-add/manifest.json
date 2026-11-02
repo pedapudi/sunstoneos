@@ -6,6 +6,7 @@
     {"name": "input", "kind": "work", "access": ["read", "write", "gpu-read"], "bytes": 4096},
     {"name": "output", "kind": "work", "access": ["read", "gpu-write"], "bytes": 4096}
   ],
+  "gpu": {"job_us": 200000, "clients": 1, "depth": 1, "leases": 2, "bindings": 2, "argument_bytes": 4},
   "deadlines": {"run_us": 2000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
   "output_limit": 48
 }

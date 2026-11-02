@@ -22,20 +22,34 @@ Final application completion drains work and seals the context before the CPU re
 
 The fixed sharing composition is defined in [the application interface](app-abi.md). The second application ([`apps/gpu-queue-peer`](../../apps/gpu-queue-peer/README.md)) uses independent mutable ranges. Separate application address spaces and GPU programs are outside the shared-context implementation. The vendor power, voltage, operating point and firmware-start sequence are unchanged.
 
-## One context serves two caller slots with one active job
+## Capacities come from the application's declaration
 
-| Capacity | Value | Why |
+The application declares what it needs in the `gpu` section of its
+`manifest.json`; `tools/sunstone-manifest.py` validates it and generates the
+image tables that carry it.
+
+| Quantity | Manifest key | Where it is bounded |
 | --- | --- | --- |
-| Contexts | 1 | Two trusted applications explicitly share the program and map |
-| Caller tasks | 2 | Each caller owns one copied job slot and completion queue |
-| Jobs in flight per context | 1 | mimus jobs share the output region; the client ring allows one KICK outstanding (`include/pvr_cccb.h`, `pvr_cccb_begin`) |
-| Programs per context | 1 | mimus has one kernel |
-| Leases per context | 4 | mimus maps its output region, two model files and its arena |
-| Bindings per job | 4 | mimus binds three ranges |
-| Argument bytes per job | 64 | mimus passes 16 |
-| Job record | 160 bytes | 32-byte header, 4 bindings of 16 bytes, 64 argument bytes |
+| Job time | `job_us` (required) | The declaration itself. Context creation refuses a larger `job_us`; the hang bound, the reply window and the ring-staging bound derive from it |
+| Caller tasks | `clients` | Build capacity `GPU_QUEUE_CLIENTS` |
+| Jobs retained | `depth` | Build capacity `GPU_QUEUE_DEPTH`; the job slots share the 4 KiB job page, so `depth` times `PVR_COMPUTE_FAST_STRIDE` is at most 4,096 |
+| Leases per context | `leases` | Build capacity `GPU_QUEUE_LEASES`, at most 65,535 (a 16-bit field of the binding record) |
+| Bindings per job | `bindings` | Build capacity `GPU_QUEUE_BINDINGS`, at most 65,535 (a 16-bit field of the job record) |
+| Argument bytes per job | `argument_bytes` | Build capacity `GPU_QUEUE_ARGUMENT_BYTES`; the slot grows to hold them |
+| Program bytes | `program_bytes` | The two 4 KiB program pages of the payload less one cache line (`GPU_QUEUE_PROGRAM_BYTES`); this is the payload layout |
 
-Each limit is a constant in `include/gpu_queue.h`. A consumer that needs another capacity raises the constant and, for more contexts or a deeper queue, adds the per-context and per-slot storage these limits leave out.
+The build capacities are CMake cache variables, `SUNSTONE_GPU_QUEUE_CLIENTS`,
+`_DEPTH`, `_LEASES`, `_BINDINGS` and `_ARGUMENT_BYTES`, passed as compile
+definitions to the OS and every application. An empty value keeps the header
+default (2, 4, 4, 4 and 64, the smallest values the in-tree applications
+declare). A declaration above the capacity fails the image build through a
+static assertion in the generated tables, naming the variable to raise. The job
+record is `32 + 16 * bindings + argument_bytes` bytes, 160 at the defaults.
+
+One context and one program remain: the firmware compute context, the memory
+context and the program pages are single objects of the queue, and nothing in
+the code counts them. A second context needs its own firmware objects and
+payload pages and is not a capacity change.
 
 ## The application interface
 
@@ -43,7 +57,7 @@ The interface is plain C without FreeRTOS types, so host checks and applications
 
 ### Creation opens the device, maps the leases and loads the program
 
-`gpu_queue_context_create` takes one `struct gpu_queue_context_config`: the job bound `job_us`, the program descriptor and up to four lease requests. It travels through the GPU service ticket path (`pvr_gpu_service_send_epoch` and `pvr_gpu_service_collect`) and waits at most `wait_ticks`. A reply that arrives after the wait stays with the client's pending ticket, and the next call collects it.
+`gpu_queue_context_create` takes one `struct gpu_queue_context_config`: the job bound `job_us`, the program descriptor and up to `GPU_QUEUE_LEASES` lease requests. It travels through the GPU service ticket path (`pvr_gpu_service_send_epoch` and `pvr_gpu_service_collect`) and waits at most `wait_ticks`. A reply that arrives after the wait stays with the client's pending ticket, and the next call collects it.
 
 The worker, with the device COLD:
 
@@ -115,7 +129,7 @@ The queue never computes a job on the CPU. Results follow section 1.8 of [the pe
 
 ### Each context has a hang bound, and each job may have a kick deadline
 
-- **Job bound:** `job_us`, 1 µs to 1 s, from the kick to the timeline update.
+- **Job bound:** `job_us`, 1 µs up to the manifest's declared `job_us`, from the kick to the timeline update.
 - **Kick deadline:** `not_after_us`, optional. A job still in the slot at that time, for example during a performance hold, gets a REFUSED record with `DEADLINE`. A recognizer with a fixed service window uses it to bound GPU work it would otherwise wait for.
 - **Creation and close:** each takes `wait_ticks`.
 
@@ -236,7 +250,7 @@ The mimus GPU glue lives in mimus (`apps/mimus/gpu_linear.c`, `gpu_linear_job.h`
 
 ### Setup at the start of recognition
 
-1. `mimus_gpu_context` fills the configuration: `job_us` = 1,000,000 (`OS_GPU_MAX_JOB_US`, `apps/os/gpu.c`), the linear-layer program and the four leases above.
+1. `mimus_gpu_context` fills the configuration: `job_us` = the manifest's declared `job_us`, the linear-layer program and the four leases above.
 2. `gpu_queue_context_create` opens the device and returns the lease addresses.
 3. Tensor admission over the placement table checks each weight extent against its model lease.
 

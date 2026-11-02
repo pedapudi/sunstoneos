@@ -42,6 +42,7 @@ RICH = {
     'name': 'abi-fixture',
     'devices': {'required': ['usb-storage'],
                 'optional': ['usb-keyboard', 'audio-i2s', 'audio-headset', 'gpu']},
+    'gpu': {'job_us': 250000, 'clients': 2, 'depth': 4, 'leases': 4, 'bindings': 3, 'argument_bytes': 16},
     'cpu': {'cluster': 'a76', 'workers': 7, 'priority': 7,
             'stack_bytes': 65536, 'heap_bytes': 1048576},
     'regions': [
@@ -138,6 +139,7 @@ for target, compiler, flags in [('host', a.cc, []),
         described = json.loads((gen / 'manifest.json').read_text())
         for entry in described:
             entry.pop('large_regions')      # the manifest section does not carry them; decode-large does
+            entry.pop('gpu')                # the gpu declaration goes to the image tables, not the packed manifest
         assert decoded == described, name + ' decoder differs'
     include = ['-I', ROOT / 'include', '-I', generated['hello_compute']]
     main = out / 'main.o'
