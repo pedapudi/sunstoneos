@@ -29,28 +29,35 @@
 #include "sunstone_probe.h"
 #include "probe.h"
 #include "fat32_ro.h"
+#include "region.h"
+#include "a733_storage_digest.h"
 #include <stdatomic.h>
 #include <string.h>
 
 struct sdp_input sunstone_probe_input __attribute__((section(".data.sdp_probe_input")));
 SUNSTONE_PROBE_IMAGE_FLAGS(0x42000100, sizeof(struct sdp_report), (uintptr_t)&sunstone_probe_input,
-    sizeof(sunstone_probe_input), 20, SUNSTONE_PROBE_RETURNABLE | SUNSTONE_PROBE_STORAGE_READ_ONLY);
+    sizeof(sunstone_probe_input), 90, SUNSTONE_PROBE_RETURNABLE | SUNSTONE_PROBE_STORAGE_READ_ONLY);
 #define REPORT ((volatile struct sdp_report *)(uintptr_t)0x42000100)
 
 /* Deadlines in microseconds after the start of kernel_main(); the session allows 20 s. */
 #define IDENTIFY_US 3000000u
-#define PLAN_END_US 12000000u
 #define READ_US 200000u
-#define LIFETIME_US 14000000u
-#define END_US 15000000u
+/* The plan window and the lifetime grow when the probe loads a file (setup sets them). */
+static uint32_t plan_end_us = 12000000u, lifetime_us = 14000000u, end_us = 15000000u;
+#define PLAN_END_US plan_end_us
+#define LIFETIME_US lifetime_us
+#define END_US end_us
 #define PMIC_OWNER 2u
 
-static uint8_t buffer[SUNXI_MMC_MAX_DMA_BLOCKS * 512u] __attribute__((aligned(4096)));
+/* Three 128 KiB DMA buffers: the plan and the loader's two (double buffering), and one for the
+ * FAT reader's synchronous reads, which must not touch a buffer that a request or the sink holds. */
+#define DMA_BUFFER (SUNXI_MMC_MAX_DMA_BLOCKS * 512u)
+static uint8_t buffer[3 * DMA_BUFFER] __attribute__((aligned(4096)));
 #define DESCRIPTORS ((volatile struct sunxi_mmc_dma_descriptor *)(uintptr_t)UINT64_C(0x42100000))
 static StaticTask_t tasks[2];
 static StackType_t stacks[2][4096];
 
-enum { CONSTRUCT, IDENTIFY, CARD, READ, POLL, TAKE, CAPTURE, FAT };
+enum { CONSTRUCT, IDENTIFY, CARD, READ, POLL, TAKE, CAPTURE, FAT, REGION };
 static struct {
     struct a733_counter_clock counter;
     struct a733_platform_locks locks;
@@ -79,6 +86,9 @@ static uint32_t elapsed[SDP_MAX_READS], crcs[SDP_MAX_READS];
 static struct sdp_timing timing[SDP_TIMED];
 static uint8_t sectors[SDP_MAX_CAPTURE][512];
 static struct sdp_fat fat;
+static struct sdp_region region;
+static struct region_state region_state;
+extern int platform_upper_mapped;
 static uint8_t fat_scratch[256 * 512] __attribute__((aligned(64)));
 
 /* Words that the lifetime must leave as it found them (the restoration guard of
@@ -173,6 +183,7 @@ static int setup(void)
     if (c->magic != SDP_INPUT_MAGIC || !c->reads || c->reads > SDP_MAX_READS || !c->blocks ||
         c->blocks > sizeof(buffer) / 512 || c->capture_count > SDP_MAX_CAPTURE) return 0;
     volatile const struct sunstone_probe_session *session = (const void *)(uintptr_t)SUNSTONE_PROBE_SESSION_ADDRESS;
+    if (c->region_bytes && (c->region_flags & SDP_REGION_LOAD)) { plan_end_us = 70000000u; lifetime_us = 80000000u; end_us = 85000000u; }
     uint64_t generation = session->generation | 1, owner = session->epoch | 1, handoff = session->lease | 1;
     if (owner == PMIC_OWNER || !generation) return 0;
     atomic_init(&s.failed, 0); atomic_init(&s.pmic_stop, 0); atomic_init(&s.pmic_parked, 0);
@@ -230,26 +241,29 @@ static int fat_read(void *unused, uint64_t sector, uint32_t count, uint8_t *out)
     if (!count || count > SUNXI_MMC_MAX_DMA_BLOCKS) return 0;
     sunstone_probe_progress();
     enum a733_mmc_platform_result r;
-    do { r = a733_mmc_platform_read(&s.platform, sector, count, buffer, count * 512u, now_us() + READ_US); }
+    uint8_t *dma = buffer + 2 * DMA_BUFFER;
+    do { r = a733_mmc_platform_read(&s.platform, sector, count, dma, count * 512u, now_us() + READ_US); }
     while (r == A733_MMC_BUSY && live(NULL));
     if (r != A733_MMC_PENDING) return 0;
     do { r = a733_mmc_platform_poll(&s.platform); } while ((r == A733_MMC_PENDING || r == A733_MMC_BUSY) && live(NULL));
     if (r != A733_MMC_COMPLETE) return 0;
     do { r = a733_mmc_platform_take(&s.platform, &s.result, s.config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
     if (r != A733_MMC_READY || s.result.error != SUNXI_MMC_OK || s.result.received != count * 512u) return 0;
-    memcpy(out, buffer, count * 512u);
+    memcpy(out, dma, count * 512u);
     return 1;
 }
 /* The volume's free space and its root directory, read only. A failed read stops the probe; any
  * other refusal of the reader is a result and is reported. */
+static struct fat32 f;
+static int fat_mounted;
 static int inspect_fat(void)
 {
-    static struct fat32 f;
     struct fat32_device dev = {NULL, fat_read, s.card.sectors};
     fat.partition_first = s.input.fat_first; fat.partition_sectors = s.input.fat_sectors;
     fat.mount_status = fat32_mount(&f, &dev, s.input.fat_first, s.input.fat_sectors);
     if (fat.mount_status == FAT32_IO) return 0;
     if (fat.mount_status) return 1;
+    fat_mounted = 1;
     fat.sectors_per_cluster = f.sectors_per_cluster; fat.reserved_sectors = f.reserved; fat.fats = f.fats;
     fat.fat_sectors = f.fat_sectors; fat.root_cluster = f.root_cluster; fat.clusters = f.clusters;
     fat.volume_id = f.volume_id; fat.hint_free = f.fsinfo_free; fat.hint_next = f.fsinfo_next;
@@ -268,6 +282,77 @@ static int inspect_fat(void)
     }
     fat.list_status = r;
     return r != FAT32_IO;
+}
+
+/* The loader's device: one request in flight on the SD platform. */
+static uint32_t async_blocks;
+static int async_submit(void *unused, uint64_t sector, uint32_t count, uint8_t *dma)
+{
+    (void)unused;
+    enum a733_mmc_platform_result r;
+    do { r = a733_mmc_platform_read(&s.platform, sector, count, dma, count * 512u, now_us() + READ_US); }
+    while (r == A733_MMC_BUSY && live(NULL));
+    async_blocks = count;
+    ++region.load_requests;
+    return r == A733_MMC_PENDING;
+}
+static int async_poll(void *unused)
+{
+    (void)unused;
+    enum a733_mmc_platform_result r = a733_mmc_platform_poll(&s.platform);
+    if (r == A733_MMC_PENDING || r == A733_MMC_BUSY) return live(NULL) ? 0 : -1;
+    if (r != A733_MMC_COMPLETE) return -1;
+    do { r = a733_mmc_platform_take(&s.platform, &s.result, s.config.lifetime_deadline_us); } while (r == A733_MMC_BUSY);
+    return r == A733_MMC_READY && s.result.error == SUNXI_MMC_OK && s.result.received == async_blocks * 512u ? 1 : -1;
+}
+static struct storage_digest load_digest;
+static int load_consume(void *unused, const uint8_t *data, uint64_t bytes, uint64_t offset)
+{
+    (void)unused;
+    uint64_t *dst = (uint64_t *)(uintptr_t)(region_state.base + offset);
+    const uint64_t *src = (const uint64_t *)(const void *)data;
+    for (uint64_t i = 0; i < bytes / 8; ++i) dst[i] = src[i];
+    for (uint64_t i = bytes & ~7ull; i < bytes; ++i) ((uint8_t *)dst)[i] = data[i];
+    storage_digest_add(&load_digest, data, bytes);
+    sunstone_probe_progress();
+    return 1;
+}
+/* Take the region, load the named file into it and exercise it. Returns 0 only when a device read failed. */
+static int run_region(void)
+{
+    struct sdp_region *r = &region;
+    memcpy(r->expected, s.input.file_sha256, 32);
+    if (!platform_upper_mapped) { r->status = 20; return 1; }
+    r->flags |= SDP_RT_UPPER_MAPPED;
+    if (region_prepare(&region_state, r, s.input.region_bytes)) return 1;
+    if (s.input.region_flags & SDP_REGION_LOAD) {
+        struct fat32_entry e; struct fat32_file file;
+        char name[48]; memcpy(name, s.input.file_name, 48); name[47] = 0;
+        r->file_status = fat_mounted ? fat32_lookup(&f, name, &e) : FAT32_BAD_BOOT;
+        if (r->file_status == FAT32_OK) r->file_status = fat32_open(&f, &e, &file);
+        if (r->file_status == FAT32_NOT_FOUND) r->flags |= SDP_RT_FILE_ABSENT;
+        else if (r->file_status == FAT32_IO) return 0;
+        else if (r->file_status == FAT32_OK) {
+            r->file_bytes = file.size;
+            if (file.size > region_state.bytes) r->load_status = FAT32_INVALID;
+            else {
+                struct fat32_async a = {NULL, async_submit, async_poll};
+                struct fat32_sink sink = {NULL, load_consume};
+                storage_digest_init(&load_digest);
+                uint64_t t0 = counter();
+                r->load_status = fat32_stream(&f, &file, &a, buffer, buffer + DMA_BUFFER, SUNXI_MMC_MAX_DMA_BLOCKS, &sink);
+                r->load_ticks = counter() - t0;
+                if (r->load_status == FAT32_IO) return 0;
+                if (r->load_status == FAT32_OK) {
+                    r->flags |= SDP_RT_LOADED;
+                    storage_digest_end(&load_digest, r->digest);
+                    if (!memcmp(r->digest, r->expected, 32)) r->flags |= SDP_RT_DIGEST_OK;
+                }
+            }
+        }
+    }
+    r->status = region_exercise(&region_state, r, 0);
+    return 1;
 }
 
 static int stop(unsigned reason) { s.reason = reason; fail(NULL); return -1; }
@@ -352,7 +437,11 @@ static int step(void)
     }
     case FAT:
         if (!s.input.fat_sectors) return 1;
-        return inspect_fat() ? 1 : stop(14);
+        if (!inspect_fat()) return stop(14);
+        if (!s.input.region_bytes) return 1;
+        s.stage = REGION; return 2;
+    case REGION:
+        return run_region() ? 1 : stop(15);
     default: return stop(9);
     }
 }
@@ -405,6 +494,7 @@ static void report(int outcome)
     for (unsigned i = 0; i < SDP_TIMED; ++i) o->timing[i] = timing[i];
     memcpy((void *)o->sector, sectors, sizeof sectors);
     memcpy((void *)&o->fat, &fat, sizeof fat);
+    memcpy((void *)&o->region, &region, sizeof region);
     __asm__ volatile("dsb sy" ::: "memory");
 }
 

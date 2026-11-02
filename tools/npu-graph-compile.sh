@@ -5,7 +5,8 @@
 #   docker run --rm --network none --memory 12g --memory-swap 12g -v WORK:/work -v $PWD/tools:/tools:ro IMAGE \
 #       bash /tools/npu-graph-compile.sh /work/frags/NAME
 #
-# Each stage logs into the graph directory; a failing stage ends the script with its name on the last line.
+# Environment NPU_TARGET (default VIP9000NANODI_PLUS_PID0X1000003B) and NPU_SHADER_CORES (default 1) select the simulated target;
+# pass them to the container with docker run -e. Each stage logs into the graph directory; a failing stage ends the script with its name on the last line.
 set -uo pipefail
 dir=$(realpath "$1"); compiler=/root/acuity-toolkit-whl-6.30.22/bin/pegasus.py
 sdk=/root/Vivante_IDE/VivanteIDE5.11.0/cmdtools
@@ -30,7 +31,7 @@ p.write_text(yaml.safe_dump(meta, sort_keys=False))
 PY
 timeout 900 python3 "$compiler" quantize --model f.json --model-data f.data --device CPU --with-input-meta inputmeta.yml \
     --model-quantize f.quantize --quantizer dynamic_fixed_point --qtype int16 > quantize.log 2>&1 || { echo "FAILED quantize"; exit 1; }
-export VSIMULATOR_SHADER_CORE_COUNT=1 VSIMULATOR_CONFIG=VIP9000NANODI_PLUS_PID0X1000003B
+export VSIMULATOR_SHADER_CORE_COUNT=${NPU_SHADER_CORES:-1} VSIMULATOR_CONFIG=${NPU_TARGET:-VIP9000NANODI_PLUS_PID0X1000003B}
 timeout 1800 python3 "$compiler" export ovxlib --model f.json --model-data f.data --model-quantize f.quantize \
     --dtype quantized --with-input-meta inputmeta.yml --target-ide-project linux64 --pack-nbg-unify \
     --optimize "$VSIMULATOR_CONFIG" --viv-sdk "$sdk" --output-path export/f > export.log 2>&1 || { echo "FAILED export"; exit 1; }

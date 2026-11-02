@@ -131,8 +131,12 @@ static unsigned covered(const struct app_region_ledger *l, uint8_t owner, uint64
 
 int app_space_build(struct app_space *s, struct app_table_arena *a, const uint64_t base_l1[512],
                     const struct app_region_ledger *l, uint8_t asid)
+{ return app_space_build_view(s, a, base_l1, l, asid, asid, 0); }
+
+int app_space_build_view(struct app_space *s, struct app_table_arena *a, const uint64_t base_l1[512],
+                         const struct app_region_ledger *l, uint8_t owner, uint8_t asid, unsigned flags)
 {
-    if (!s || !a || !base_l1 || !l || !asid || !a->page) return APP_REGION_INVALID;
+    if (!s || !a || !base_l1 || !l || !asid || !owner || !a->page || (flags & ~APP_SPACE_NO_GIB_BLOCKS)) return APP_REGION_INVALID;
     for (unsigned slot = SLOT_FIRST; slot < SLOT_END; ++slot) {
         uint64_t want = KERNEL_BLOCK(UINT64_C(0x40000000) * slot);
         if (base_l1[slot] != want) return APP_REGION_INVALID;    /* block, EL1-only, nG set */
@@ -141,7 +145,7 @@ int app_space_build(struct app_space *s, struct app_table_arena *a, const uint64
     for (unsigned slot = SLOT_FIRST; slot < SLOT_END; ++slot) {
         uint64_t lo = APP_REGION_GIB * slot;
         int whole;
-        if (covered(l, asid, lo, lo + APP_REGION_GIB, &whole) && !whole) ++need;
+        if (covered(l, owner, lo, lo + APP_REGION_GIB, &whole) && (!whole || (flags & APP_SPACE_NO_GIB_BLOCKS))) ++need;
     }
     if (a->capacity - a->used < need) return APP_REGION_NO_TABLES;
 
@@ -151,9 +155,9 @@ int app_space_build(struct app_space *s, struct app_table_arena *a, const uint64
     for (unsigned slot = SLOT_FIRST; slot < SLOT_END; ++slot) {
         uint64_t lo = APP_REGION_GIB * slot;
         int whole;
-        unsigned access = covered(l, asid, lo, lo + APP_REGION_GIB, &whole);
+        unsigned access = covered(l, owner, lo, lo + APP_REGION_GIB, &whole);
         if (!access) continue;
-        if (whole) {
+        if (whole && !(flags & APP_SPACE_NO_GIB_BLOCKS)) {
             (*root)[slot] = KERNEL_BLOCK(lo) & ~APP_PTE_AP_RO;
             (*root)[slot] |= ap_bits(access);
             continue;
@@ -164,7 +168,7 @@ int app_space_build(struct app_space *s, struct app_table_arena *a, const uint64
         for (unsigned j = 0; j < BLOCKS_PER_SLOT; ++j) {
             uint64_t pa = lo + (uint64_t)j * APP_REGION_BLOCK, e = KERNEL_BLOCK(pa);
             int unused;
-            unsigned block_access = covered(l, asid, pa, pa + APP_REGION_BLOCK, &unused);
+            unsigned block_access = covered(l, owner, pa, pa + APP_REGION_BLOCK, &unused);
             if (block_access) e |= ap_bits(block_access);
             (*l2)[j] = e;
         }
