@@ -550,6 +550,13 @@ def main():
         application = image.application('large-test', ['checks/qemu-os/large-main.c'], manifest)
         return image.build(application)
 
+    def build_heap(name, manifest):
+        """An application whose heap is above the linked limit, so that the ledger serves it (step 1 of
+        docs/designs/application-memory-layout.md). The C library's sbrk is linked in; its allocator is not."""
+        image = Image(out / name, extra_defines=['-DQEMU_OS_UPPER=1'], extra_sources=['runtime/newlib.c'])
+        application = image.application('heap-test', ['checks/qemu-os/heap-main.c'], manifest)
+        return image.build(application)
+
     def build_facts():
         image = Image(out / 'build-hw-facts', extra_defines=['-DSUNSTONE_A733_HW_FACTS=1'],
                       extra_sources=['platform/a733/hw_facts.c'])
@@ -576,7 +583,10 @@ def main():
         facts_elf = pool.submit(build_facts)
         large_elf = pool.submit(build_large, 'build-large', large_manifest_path(out / 'large-manifest.json', LARGE_DIGEST, LARGE_FILE))
         large_big_elf = pool.submit(build_large, 'build-large-too-big', ROOT / 'checks/qemu-os/large-too-big-manifest.json')
+        heap_elf = pool.submit(build_heap, 'build-heap', ROOT / 'checks/qemu-os/heap-manifest.json')
+        heap_big_elf = pool.submit(build_heap, 'build-heap-too-big', ROOT / 'checks/qemu-os/heap-too-big-manifest.json')
         large_elf, large_big_elf = large_elf.result(), large_big_elf.result()
+        heap_elf, heap_big_elf = heap_elf.result(), heap_big_elf.result()
         os_elf, control_elf, latency_elf, resident_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
             os_elf.result(), control_elf.result(), latency_elf.result(), resident_elf.result(), el0_elf.result(),
             partitioned_elf.result(), partitioned_latency_elf.result(), prestart_elf.result(), facts_elf.result())
@@ -798,6 +808,42 @@ def main():
     c = run_case('large-regions-too-big', large_big_elf, scenario(usb_ready_ms=usb_delay_ms), memory='4G')
     c.require(c.main is None and not lines(c.output, 'LARGE-ADMITTED'), 'the application started although the ledger refused its regions')
     c.require(c.failure is not None, 'the refusal left no failure record')
+
+    # A heap above the linked limit is a ledger region (step 1 of docs/designs/application-memory-layout.md). The
+    # memory behind it holds a pattern before the boot; the heap must reach the application zeroed.
+    stale = bytes([0xa5]) * (8 << 20)
+    heap_input = lambda mode: struct.pack('<Q', mode) + bytes(4088)
+    c = run_case('heap-from-ledger', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G', [(0x80000000, stale)])
+    c.clean()
+    admitted = lines(c.output, 'LARGE-ADMITTED')
+    c.require(len(admitted) == 1 and (int(admitted[0]['base'], 16), int(admitted[0]['bytes'], 16)) == (0x80000000, 8 << 20)
+              and admitted[0]['state'] == '2' and admitted[0]['asid'] == '1',
+              'heap admission differs: %s' % [a['line'] for a in admitted])
+    c.require(c.finished is not None and c.finished['status'] == '1', 'the heap application did not finish')
+    tag, base, size, peak, error = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
+    c.require(tag == 0x48454150204f4b and base == 0x80000000 and size == 8 << 20 and peak == 8 << 20 and error == 12,
+              'heap result tag %#x base %#x bytes %#x peak %#x errno %d' % (tag, base, size, peak, error))
+    # A task in no application space reads the heap: a permission fault at its first byte.
+    c = run_case('heap-other-space-faults', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(1), '4G', [(0x80000000, stale)])
+    c.failed_with('APPLICATION', 0xe24)
+    c.require(int(c.failure['value'], 16) == 0x80000000 and int(c.failure['site'], 16) == 0x800d4e24,
+              'heap fault address %s, site %s' % (c.failure['value'], c.failure['site']))
+    # The application's own space ends at the heap: the next byte is a kernel block, a permission fault.
+    c = run_case('heap-end-faults', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(2), '4G', [(0x80000000, stale)])
+    c.failed_with('APPLICATION', 0xe24)
+    c.require(int(c.failure['value'], 16) == 0x80800000, 'the byte after the heap faults at %s' % c.failure['value'])
+    # A worker attached to the application's space writes the heap and the main task reads it.
+    c = run_case('heap-worker-shares', heap_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(3), '4G', [(0x80000000, stale)])
+    c.clean()
+    tag, base, size, peak, fold = struct.unpack('<5Q', bytes.fromhex(c.finished['result']))
+    expected_fold = 0
+    for i in range(4096):
+        expected_fold ^= (0x9e3779b97f4a7c15 * (i + 1)) & (2 ** 64 - 1)
+    c.require(tag == 0x48454150204f4b and fold == expected_fold, 'worker result %#x fold %#x, expected %#x' % (tag, fold, expected_fold))
+    # A heap that the ledger cannot hold stops the start before any task runs.
+    c = run_case('heap-too-big', heap_big_elf, scenario(usb_ready_ms=usb_delay_ms), heap_input(0), '4G')
+    c.require(c.main is None and not lines(c.output, 'LARGE-ADMITTED'), 'the application started although the ledger refused its heap')
+    c.require(c.failure is not None, 'the heap refusal left no failure record')
 
     elapsed = time.monotonic() - started
     summary = {'large_region_switch_cost': switch_cost, 'passed': True, 'physical_access': False, 'seconds': round(elapsed, 2), 'build_seconds': round(built, 2),

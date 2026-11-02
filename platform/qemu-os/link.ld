@@ -37,5 +37,8 @@ SECTIONS {
         __exception_stacks = .;
         . += 8 * 32768;
     } > RAM
+    /* The C library's linked heap (runtime/newlib.c), empty on the virtual board. */
+    __heap_start = ALIGN(16);
+    __heap_end = __heap_start;
     /DISCARD/ : { *(.comment) *(.eh_frame*) *(.note*) }
 }
