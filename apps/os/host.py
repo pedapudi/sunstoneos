@@ -30,7 +30,11 @@ EXTENT = struct.Struct('<II')
 INPUT = struct.Struct('<Q32s')
 THERMAL, AUDIO, NPU, CPU_GRANT, JPEG, USB_MEMORY, INPUTS = 1, 2, 3, 4, 5, 6, 16
 DMA = 7
-SERVICE_BYTES = {THERMAL: 216, AUDIO: 184, NPU: 272, CPU_GRANT: 96, DMA: 160}
+SERVICE_BYTES = {THERMAL: 216, AUDIO: 184, NPU: 288, CPU_GRANT: 96, DMA: 160}
+# The NPU record is version 2: it carries the application's declaration of NPU resources (apps/os/npu-session.h).
+SERVICE_VERSION = {NPU: 2}
+NPU_V1_BYTES = 272
+NPU_DECLARATION_OFFSET = 272  # slots, in_flight, graphs, links: four u32
 SERVICE_MAGIC = {THERMAL: 0x415337334f534131, AUDIO: 0x415337334f415531,
                  NPU: 0x415337334f4e5031, CPU_GRANT: 0x4153373343505531,
                  DMA: 0x41533733444d4131}
@@ -71,6 +75,33 @@ def regions(manifest, kinds):
     return [dict(r) for r in (manifest or {}).get('regions', []) if r['kind'] in kinds]
 
 
+def npu_declaration(manifest_path):
+    """The declaration of the manifest's npu section (tools/sunstone-manifest.py): slots, in_flight, graphs, links."""
+    m = manifest_tool.load(manifest_path)
+    require('npu' in m, 'The manifest declares no NPU resources.')
+    n = m['npu']
+    return (n['slots'], n['in_flight'], n['graphs'], n['links'])
+
+
+def upgrade_services(extents, declaration):
+    """Services with the NPU record in version 2 carrying declaration, and the thermal record's size field updated.
+
+    extents is the dictionary session_decode(..., legacy=True) returns; a version 1 NPU record gains the declaration, a
+    version 2 record has it replaced."""
+    require(len(declaration) == 4 and all(isinstance(x, int) and 0 <= x < 1 << 32 for x in declaration),
+            'The declaration is four 32-bit values.')
+    require(declaration[0] and declaration[1] and declaration[2], 'The declaration needs slots, depth and graphs.')
+    services = {k: v for k, v in extents.items() if k != INPUTS}
+    npu = bytearray(services[NPU][:NPU_V1_BYTES]) + bytearray(16)
+    struct.pack_into('<QQ', npu, 8, SERVICE_VERSION[NPU], SERVICE_BYTES[NPU])
+    struct.pack_into('<4I', npu, NPU_DECLARATION_OFFSET, *declaration)
+    services[NPU] = bytes(npu)
+    thermal = bytearray(services[THERMAL])
+    struct.pack_into('<Q', thermal, 16, PREFIX_BYTES + sum(SERVICE_BYTES[k] for k in services if k in SERVICE_BYTES))
+    services[THERMAL] = bytes(thermal)
+    return services
+
+
 def input_facts(manifest, inputs):
     declared = regions(manifest, (manifest_tool.KIND['input'],))
     require(len(inputs) == len(declared), 'Input count differs from manifest.')
@@ -88,7 +119,9 @@ def input_facts(manifest, inputs):
     return bytes(facts), uploads
 
 
-def session_decode(raw, manifest=None, manifest_sha256=None):
+def session_decode(raw, manifest=None, manifest_sha256=None, legacy=False):
+    """Decode a typed session. legacy accepts an NPU record of version 1 (272 bytes, no declaration) so that it can be
+    upgraded with upgrade_services; the operating system admits version 2 only."""
     raw = bytes(raw)
     require(PREFIX_BYTES + HEADER.size <= len(raw) <= MAX_BYTES, 'Invalid typed session size.')
     magic, version, size, count, devices, flags, digest = HEADER.unpack_from(raw, PREFIX_BYTES)
@@ -106,15 +139,23 @@ def session_decode(raw, manifest=None, manifest_sha256=None):
         offsets[kind], extents[kind] = offset, raw[offset:offset + size]
         offset += padded
     require(offset == len(raw), 'Unconsumed typed session bytes.')
-    for kind, size in SERVICE_BYTES.items():
+    sizes = dict(SERVICE_BYTES)
+    versions = {kind: SERVICE_VERSION.get(kind, 1) for kind in SERVICE_BYTES}
+    if legacy and NPU in extents and len(extents[NPU]) == NPU_V1_BYTES:
+        sizes[NPU], versions[NPU] = NPU_V1_BYTES, 1
+    for kind, size in sizes.items():
         require(kind not in extents or len(extents[kind]) == size, 'Invalid service extent size.')
     require(THERMAL in extents, 'Missing thermal service extent.')
-    legacy_bytes = PREFIX_BYTES + sum(SERVICE_BYTES[kind] for kind in extents if kind in SERVICE_BYTES)
-    for kind in SERVICE_BYTES:
+    legacy_bytes = PREFIX_BYTES + sum(sizes[kind] for kind in extents if kind in sizes)
+    for kind in sizes:
         if kind in extents:
-            size = legacy_bytes if kind == THERMAL else SERVICE_BYTES[kind]
-            require(struct.unpack_from('<3Q', extents[kind]) == (SERVICE_MAGIC[kind], 1, size),
+            size = legacy_bytes if kind == THERMAL else sizes[kind]
+            require(struct.unpack_from('<3Q', extents[kind]) == (SERVICE_MAGIC[kind], versions[kind], size),
                     'Invalid service record header.')
+    if NPU in extents and sizes[NPU] == SERVICE_BYTES[NPU]:
+        declaration = struct.unpack_from('<4I', extents[NPU], NPU_DECLARATION_OFFSET)
+        require(declaration[0] and declaration[1] and declaration[2],
+                'The NPU record declares no slots, in-flight depth or graphs.')
     if USB_MEMORY in extents:
         value=extents[USB_MEMORY]
         require(len(value)==64 and struct.unpack_from('<4Q',value)==(1,0x42200000,0x800000,0x7a000000),

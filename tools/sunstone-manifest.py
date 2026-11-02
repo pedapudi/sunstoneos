@@ -75,7 +75,7 @@ def integer(value, where, low=0, high=(1 << 64) - 1):
 def load(path):
     """manifest.json -> normalized dict with integer fields."""
     raw = json.loads(Path(path).read_text())
-    known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'deadlines', 'output_limit', 'host_ops'}
+    known = {'name', 'devices', 'cpu', 'regions', 'large_regions', 'audio', 'deadlines', 'output_limit', 'host_ops', 'npu'}
     require(set(raw) <= known, '%s: unknown keys %s' % (path, sorted(set(raw) - known)))
     name = raw['name']
     require(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9-]{0,14}', name) is not None,
@@ -112,6 +112,17 @@ def load(path):
     require(not count or first + count <= OS_REPORTS[0] or OS_REPORTS[1] <= first,
             name + ': host operations overlap the OS reports 0x05..0x08')
     require(count or not first, name + ': an empty host range starts at 0')
+    # What the application declares of the NPU (docs/designs/npu-resources.md). It is not part of the packed binary:
+    # the session record carries it (npu_word, apps/os/host.py), and the operating system admits it against capacity.
+    if 'npu' in raw:
+        n = raw['npu']
+        require(set(n) <= {'slots', 'in_flight', 'graphs', 'links'}, name + ': unknown npu keys')
+        require({'slots', 'in_flight', 'graphs'} <= set(n), name + ': npu declares slots, in_flight and graphs')
+
+        def count(value, label, low):
+            return integer(len(value) if isinstance(value, list) else value, name + ' npu ' + label, low, (1 << 32) - 1)
+        m['npu'] = {'slots': count(n['slots'], 'slots', 1), 'in_flight': count(n['in_flight'], 'in_flight', 1),
+                    'graphs': count(n['graphs'], 'graphs', 1), 'links': count(n.get('links', 0), 'links', 0)}
     audio = raw.get('audio')
     if audio is not None or (required | optional) & CAPTURE:
         require(audio is not None, name + ': a capture device needs an audio format')

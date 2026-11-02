@@ -70,9 +70,9 @@ int os_session_valid(const struct os_session *s)
 #endif
 #ifdef SUNSTONE_A733_OS_NPU
     const struct os_npu_session *n=&s->npu;
-    if(n->magic!=OS_NPU_SESSION_MAGIC||n->version!=1||n->bytes!=sizeof(*n)||!n->owner||
+    if(n->magic!=OS_NPU_SESSION_MAGIC||n->version!=OS_NPU_SESSION_VERSION||n->bytes!=sizeof(*n)||!n->owner||
        !n->command_admission||!n->supervisor||n->pck_client>=16||n->pck_client==s->board.pck_client||
-       n->client_model!=os_npu_client_model||n->reserved||
+       n->client_model!=os_npu_client_model||n->reserved||os_npu_declaration_admitted(n)!=NPU_DECLARATION_OK||
        n->pool_start!=OS_NPU_POOL_START||n->pool_bytes!=OS_NPU_POOL_BYTES||
        memcmp(n->catalogue,os_npu_catalogue_digest,32)||!present(n->admission,32)||
        !present(n->clock,32)||!present(n->power,32)||!present(n->supervision,32)||!present(n->ddr,32)||

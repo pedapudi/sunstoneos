@@ -48,6 +48,12 @@ int os_npu_task_privileged(void (*)(void *),void *);
 struct a733_pin_handoff;
 int os_npu_pins(struct a733_pin_handoff *);
 int os_npu_start(void);
+struct os_npu_session;
+/* The session's NPU declaration checked against what this image links and holds. NPU_DECLARATION_OK admits it; the
+ * memory it reserves is checked at start. A session without a declaration is refused. */
+enum npu_declaration_result os_npu_declaration_admitted(const struct os_npu_session *);
+/* The in-flight depth the session declares: the deepest queue the application may open. */
+unsigned os_npu_in_flight(void);
 int os_npu_never_ran(void);
 void os_npu_report_unstarted(uint64_t epoch,uint64_t generation);
 #ifdef SUNSTONE_A733_OS_NPU_QUEUE
