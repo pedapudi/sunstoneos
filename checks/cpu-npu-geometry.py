@@ -13,12 +13,16 @@ p=argparse.ArgumentParser(description=__doc__);p.add_argument('elf',type=Path);p
 returns=module('cpu_npu_geometry_return',ROOT/'apps/os/cpu-return-host.py')
 receipt=module('cpu_npu_geometry_receipt',ROOT/'apps/cpu-npu-concurrency/host.py')
 geometry=returns.geometry(a.elf)
-assert geometry['npu_pool']==dict(address=0x47400000,bytes=0x800000) and geometry['npu_stop']['bytes']==104
-results=[dict(case='exact-symbol-derived-eight-MiB-pool-and-stop',passed=True)]
+pool=geometry['npu_pool']
+# The pool is the one the image links: valid by the host rule (legacy 8 MiB, or sized and ending at 0x47000000) and equal to its symbols.
+assert returns.npu_pool_extent_valid(pool['address'],pool['address']+pool['bytes']) and geometry['npu_stop']['bytes']==104
+results=[dict(case='exact-symbol-derived-pool-and-stop',passed=True,pool=pool)]
 symbols=returns.linked_symbols(a.elf);original_symbols=returns.linked_symbols
-for case in ['partial-pool','wrong-end','missing-stop','stop-outside-image','monitor-collision']:
+for case in ['partial-pool','wrong-end','missing-stop','stop-outside-image','monitor-collision','pool-ends-above-top','pool-too-big']:
  changed=dict(symbols)
  if case=='partial-pool':changed.pop('__os_npu_pool_end')
+ if case=='pool-ends-above-top':changed['__os_npu_pool_start']=(0x45c00000,0);changed['__os_npu_pool_end']=(0x47200000,0)
+ if case=='pool-too-big':changed['__os_npu_pool_start']=(0x43e00000,0);changed['__os_npu_pool_end']=(0x47000000,0)
  if case=='wrong-end':changed['__os_npu_pool_end']=(0x47a00000,0)
  if case=='missing-stop':changed.pop('os_npu_published_report')
  if case=='stop-outside-image':changed['os_npu_published_report']=(0x47400000,104)
@@ -27,6 +31,20 @@ for case in ['partial-pool','wrong-end','missing-stop','stop-outside-image','mon
  try:message=refused(lambda:returns.geometry(a.elf),'')
  finally:returns.linked_symbols=original_symbols
  results.append(dict(case=case,passed=True,refusal=message))
+# A pool sized from the declaration: 22 MiB ending at 0x47000000. The geometry is derived from the symbols, the backup extent
+# is the whole pool, and an application region inside it is refused.
+sized=dict(symbols);sized['__os_npu_pool_start']=(0x45a00000,0);sized['__os_npu_pool_end']=(0x47000000,0)
+returns.linked_symbols=lambda path:sized
+try:
+ grown=returns.geometry(a.elf)
+ assert grown['npu_pool']==dict(address=0x45a00000,bytes=22<<20),grown['npu_pool']
+ results.append(dict(case='sized-pool-22-MiB',passed=True,pool=grown['npu_pool']))
+ original_manifest=returns.host.image_manifest;manifest=original_manifest(a.elf);manifest['manifest']['regions'].append(dict(address=0x45a01000,bytes=4096,kind=1))
+ returns.host.image_manifest=lambda image,manifest=manifest:manifest
+ try:message=refused(lambda:returns.geometry(a.elf),'overlaps')
+ finally:returns.host.image_manifest=original_manifest
+ results.append(dict(case='region-inside-sized-pool',passed=True,refusal=message))
+finally:returns.linked_symbols=original_symbols
 original_manifest=returns.host.image_manifest
 for kind in [1,2,3]:
  manifest=original_manifest(a.elf);manifest['manifest']['regions'].append(dict(address=0x47401000,bytes=4096,kind=kind))

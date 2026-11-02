@@ -40,6 +40,22 @@ IMAGE_RAM = (0x41000000, 0x1200000)
 OUTPUT = 'recorded-output'
 
 
+
+# The NPU pool (docs/designs/npu-resources.md, "The pool"). Either the extent every image has had so far, 8 MiB at
+# 0x47400000, or a pool sized from the session's declaration: a multiple of 2 MiB between 10 and 48 MiB that ends at
+# 0x47000000, the bottom of the monitor interval. Both lie in the write-back RAM that EL0 reaches (0x40000000 to
+# 0x48000000), above the application regions' lowest address 0x44000000, and clear of the image RAM below 0x42200000.
+NPU_POOL_LEGACY = (0x47400000, 0x47c00000)
+NPU_POOL_TOP, NPU_POOL_MIN, NPU_POOL_MAX, NPU_POOL_BLOCK = 0x47000000, 0xa00000, 0x3000000, 0x200000
+
+
+def npu_pool_extent_valid(low, high):
+    """True for the legacy extent and for a sized one."""
+    if (low, high) == NPU_POOL_LEGACY:
+        return True
+    size = high - low
+    return high == NPU_POOL_TOP and NPU_POOL_MIN <= size <= NPU_POOL_MAX and size % NPU_POOL_BLOCK == 0
+
 def linked_symbols(image):
     """Defined global symbols of the image: name -> (address, bytes)."""
     elf = ELFFile(io.BytesIO(Path(image).read_bytes()))
@@ -102,7 +118,7 @@ def geometry(image):
     require(present[0] == present[1], 'Partial NPU pool geometry.')
     if all(present):
         low, high = [symbols[name][0] for name in pool_names]
-        require((low, high) == (0x47400000, 0x47c00000), 'NPU pool extent differs.')
+        require(npu_pool_extent_valid(low, high), 'NPU pool extent differs.')
         manifest = host.image_manifest(image)['manifest']
         for region in manifest['regions'] if manifest else []:
             a, n = region['address'], region['bytes']
@@ -236,7 +252,7 @@ def run_once(tx, launch, ready, bundle, p, evidence, record, journal, *, extents
         extents = [(r['address'], r['bytes']) for r in q['application_regions']]
     if 'npu_pool' in q:
         pool = q['npu_pool']
-        require(pool == {'address': 0x47400000, 'bytes': 0x800000}, 'NPU backup extent differs.')
+        require(npu_pool_extent_valid(pool['address'], pool['address'] + pool['bytes']), 'NPU backup extent differs.')
         extents = [*extents, (pool['address'], pool['bytes'])]
     extents = [IMAGE_RAM, *extents] + [(item['address'], item['bytes']) for item in p['_inputs']]
     backups = []

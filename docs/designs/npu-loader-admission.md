@@ -42,6 +42,9 @@ comes from the page tables (see "Memory containment"). Admission is layered:
    is admitted and that one of `0x100000` is refused (with a control that removes the rule). If the engine uses such a
    word as an address, the access faults in the page tables and the job fails (the MMU exception of the board runs); it
    cannot reach another client's memory. If it uses it as an offset in its own scratch, no access leaves the engine.
+   **What the engine does with these words is unknown**: no source states it, and the board run that completed these
+   graphs shows only that no fault occurred. The rule does not depend on the answer, because the page tables contain
+   either outcome.
 
 Fields that the loader does not interpret (program words, shader state, some descriptor words) are listed in the
 [command formats](../hardware/npu-command-formats.md) as unknown. They can steer the engine only inside the job's

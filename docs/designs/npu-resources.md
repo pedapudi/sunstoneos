@@ -202,3 +202,10 @@ grants, with a bounded wait for the lower priorities. This is the next step afte
    names, loaded after the scheduler has started.
 4. Backpressure measurements and the default depth.
 5. Linking after the scheduler has started, from declared links.
+
+## Backlog
+
+- **The pool and the EL0 tensor windows are limited to the 128 MiB below `0x48000000`.** That is the write-back RAM that
+  EL0 reaches in the cached profile; the DRAM above it is mapped for EL1 only. The pool therefore ends at `0x47000000` or
+  `0x47c00000` and cannot exceed 48 MiB. Moving the pool and the tensor windows to upper memory, mapped through the
+  per-application tables of the large-region work, would bound the pool by the installed DRAM instead. Not started.

@@ -105,6 +105,36 @@ def upgrade_services(extents, declaration):
     return services
 
 
+NPU_POOL_OFFSET = 64  # pool_start, pool_bytes: two u64 after the owner words and the four u32 (apps/os/npu-session.h)
+
+
+def npu_pool_symbols(image):
+    """(start, end) of the NPU pool that the image links, or None for an image without one."""
+    elf = ELFFile(io.BytesIO(Path(image).read_bytes() if isinstance(image, (str, Path)) else bytes(image)))
+    table = elf.get_section_by_name('.symtab')
+    found = {s.name: s['st_value'] for s in table.iter_symbols() if s.name in ('__os_npu_pool_start', '__os_npu_pool_end')}
+    require(len(found) in (0, 2), 'Partial NPU pool geometry.')
+    return (found['__os_npu_pool_start'], found['__os_npu_pool_end']) if found else None
+
+
+def bind_npu_pool(image, services):
+    """The services with the NPU record's pool_start and pool_bytes set from the pool the image links.
+
+    The session names the pool and the image refuses a session that differs (apps/os/admission.c), so the two are made
+    from one source: the linker symbols. An image without an NPU pool, or a session without an NPU record, is unchanged."""
+    pool = npu_pool_symbols(image)
+    if pool is None or NPU not in services:
+        return services
+    start, end = pool
+    require(0x40000000 <= start < end <= 0x48000000 and not (start | end) & 0x1fffff,
+            'The NPU pool must be whole 2 MiB blocks inside the write-back RAM that EL0 reaches.')
+    services = dict(services)
+    npu = bytearray(services[NPU])
+    struct.pack_into('<QQ', npu, NPU_POOL_OFFSET, start, end - start)
+    services[NPU] = bytes(npu)
+    return services
+
+
 def input_facts(manifest, inputs):
     declared = regions(manifest, (manifest_tool.KIND['input'],))
     require(len(inputs) == len(declared), 'Input count differs from manifest.')

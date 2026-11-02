@@ -60,7 +60,7 @@ class Model(prior.Model):
             end = min((start + 0x200000) & ~0x1fffff, self.gpr('x25'))
             assert end > start and (end - start) % 64 == 0
             self.ranges[self.core].append((start, end))
-            if self.pool_deadline and start >= 0x47400000:
+            if self.pool_deadline and start >= self.image.symbols.get('__os_npu_pool_start', 0x47400000):
                 self.put64(self.report + 32, self.time)
             # Execute the real next-loop arithmetic/branch at the end of a
             # modeled contiguous cache-maintenance batch.
@@ -164,6 +164,12 @@ def main():
         cases += ('wrong-region-alias',)
     if '__os_npu_pool_start' in image.symbols:
         cases += ('wrong-npu-pool-alias', 'npu-pool-deadline', 'npu-late-irq')
+        # The pool is the legacy 8 MiB or one sized from the declaration (22 MiB in the encoder timing image): the host rule
+        # of the normal return accepts exactly those, and every case below uses the image's own pool symbols.
+        host_spec = importlib.util.spec_from_file_location('os_return_host_rule', ROOT / 'apps/os/cpu-return-host.py')
+        host_rule = importlib.util.module_from_spec(host_spec); host_spec.loader.exec_module(host_rule)
+        assert host_rule.npu_pool_extent_valid(image.symbols['__os_npu_pool_start'], image.symbols['__os_npu_pool_end']), \
+            'the image links a pool that the normal return does not accept'
     if 'os_gpu_return_report' in image.symbols:
         cases += ('gpu-active','gpu-spi-restore-readback','wrong-pool-alias')
     if args.case:
@@ -249,7 +255,7 @@ def main():
             (args.out / 'return-report.bin').write_bytes(raw)
         rows.append({'name': case, 'outcome': outcome, 'instructions': model.count,
                      'cache_batches': [len(x) for x in model.ranges],
-                     'npu_pool_lines_per_core': [sum((hi-lo)//64 for lo,hi in ranges if 0x47400000 <= lo < 0x47c00000) for ranges in model.ranges]})
+                     'npu_pool_lines_per_core': [sum((hi-lo)//64 for lo,hi in ranges if image.symbols.get('__os_npu_pool_start', 0x47400000) <= lo < image.symbols.get('__os_npu_pool_end', 0x47c00000)) for ranges in model.ranges]})
     save(args.out / 'results.json', {'physical_access': False, 'cases': rows,
          'image_sha256': hashlib.sha256(args.elf.read_bytes()).hexdigest(),
          'checker_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
