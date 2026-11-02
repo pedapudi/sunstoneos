@@ -303,6 +303,23 @@ The first user-space open runs `do_init()` (`vip2/vip_drv_interface.c:81-250`):
   SoC (`check_smc_set_freq()` for `CONFIG_ARCH_SUN60IW2`,
   `vip_drv_device_platform.c:654-686`, reads only the device tree).
 
+## Command allocation sized by the graph
+The vendor driver writes `+0x3a4 = 0x1ffff` at every trigger (the maximum fetch count, `vipdMAX_CMD_SIZE` >> 3 with the
+valid bit), because its command buffers are that large. SunstoneOS maps only the registered command allocation for the
+NPU, with an unmapped page after it, so the front end must not fetch beyond it. Each slot's allocation is therefore the
+graph's stream and one END pair rounded to a page, and the word written is `0x10000 | (allocation >> 3)`, which is
+`0x1ffff` only for an allocation of 524,280 bytes or more. The bytes after the stream are END pairs, as before. The
+earlier board runs qualified the word `0x1ffff` with a window of 524,288 bytes; the word for smaller windows is first
+exercised by the queue image described next, and a job that completes with the reference output and no MMU exception is
+the evidence that the front end stops at the END pair and does not need the full count.
+
+## EL0 queue backpressure on the board
+Image: the OS with `SUNSTONE_A733_OS_NPU_QUEUE`, one reviewed graph (`graph-add`) resident in 31 slots under 31 names
+(`apps/npu-graphs/queue-aliases.py`), ring depth 64, the application declares 31 slots and 64 jobs in flight. The
+application opens the ring on the routed core (a Cortex-A55), registers handle 1, and for k = 1, 2, 4 ... 64 submits
+1,000 jobs while keeping at most k in flight; a refused submission (the ring is full) is counted. The receipt rows give
+k, the jobs, the counter ticks, the refusals and the wrong output bytes after the last job (`apps/npu-graphs/host.py`).
+
 ## Divergences between SunstoneOS and the vendor sequence
 
 Rows are ranked by the likelihood that the divergence stalls a bus access or

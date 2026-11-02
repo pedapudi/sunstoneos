@@ -26,10 +26,10 @@ void npu_graphs_init(void) {}
  * most k jobs in flight, for k = 1, 2, 4 ... up to the ring. The submit call answers 0 when the ring is full; each such
  * answer is counted. Record i holds k (input_bytes), the jobs (output_bytes), the counter ticks for all of them
  * (first_difference), the submit refusals (observed) and a check of the output at the end (status). */
-#define QUEUE_JOBS 2000u
+#define QUEUE_JOBS 1000u
 #define QUEUE_TIMEOUT_US 1000000u
 static void queue_fault(unsigned stage, uint32_t value) { ss_fail_value((0xb0u << 8) | stage, value); }
-static void npu_graphs_queue_main(void)
+static _Noreturn void npu_graphs_queue_main(void)
 {
     const struct npu_graph_vector *v = &npu_graph_vectors[0];
     struct ss_npu_queue *q = NULL;
@@ -115,10 +115,12 @@ void npu_graphs_main(const struct ss_grant *grant)
         if (ss_counter_ticks() - begin > 240000000) fault(STAGE_CLOCK, 0, 1);
         vTaskDelay(1);
     }
-    if (npu_graph_count == 0 || npu_graph_count > NPU_GRAPHS_MAX) fault(STAGE_CATALOGUE, 0, npu_graph_count);
 #ifdef NPU_GRAPHS_QUEUE
+    /* One graph is aliased under many names, one resident slot each, so the list is longer than the receipt. */
+    if (npu_graph_count == 0) fault(STAGE_CATALOGUE, 0, npu_graph_count);
     npu_graphs_queue_main();
 #endif
+    if (npu_graph_count == 0 || npu_graph_count > NPU_GRAPHS_MAX) fault(STAGE_CATALOGUE, 0, npu_graph_count);
     const unsigned total = npu_graph_count + npu_graph_runtime_count;
     if (total > NPU_GRAPHS_MAX) fault(STAGE_CATALOGUE, 0, total);
     receipt.count = total;

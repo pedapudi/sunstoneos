@@ -957,7 +957,7 @@ static int initialize(struct npu_service *s, const struct a733_npu_ops *ops, voi
     ops=&saved_ops;image=&saved_image;commands=saved_commands;
     for (unsigned i = 0; i < count; ++i) {
         const struct a733_npu_command *c = &commands[i];
-        if (!c->device || (c->device & 63) || !c->token || c->readable_bytes < A733_NPU_FETCH_BYTES ||
+        if (!c->device || (c->device & 63) || !c->token || c->readable_bytes < A733_NPU_MIN_COMMAND_BYTES || (c->readable_bytes & 7) ||
             c->readable_bytes > (UINT64_C(1) << 32) - c->device) return 0;
         for (unsigned j = 0; j < i; ++j)
             if (commands[j].token == c->token || commands[j].device == c->device) return 0;
