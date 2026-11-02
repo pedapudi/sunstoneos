@@ -26,8 +26,8 @@ _Noreturn void platform_panic(const char *file, unsigned line);
 #endif
 
 #define configUSE_PREEMPTION 1
-/* The private fork is under conversion. Production targets keep the control
- * kernel until every enabled task API and the owner port hooks are admitted. */
+/* CMake selects the private header, task/object sources and port hooks as a
+ * unit. Direct consumers retain the control scheduler unless explicitly set. */
 #ifndef configSS_PARTITIONED_SCHEDULER
 #define configSS_PARTITIONED_SCHEDULER 0
 #endif

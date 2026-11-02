@@ -118,3 +118,7 @@ target_link_options(${storage_target} PRIVATE -nostdlib -static -Wl,--gc-section
   -Wl,--defsym=__uncached_pool_size=2097152
   "-Wl,-T,${storage_build}/link.ld" "-Wl,-Map,${storage_build}/image.map")
 set_target_properties(${storage_target} PROPERTIES SUFFIX ".elf" LINK_DEPENDS "${storage_build}/link.ld")
+
+if(SUNSTONE_PARTITIONED_SCHEDULER)
+  sunstone_scheduler_partitioned_bind(${storage_target} "${storage_base}")
+endif()
