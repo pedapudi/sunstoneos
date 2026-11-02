@@ -347,7 +347,8 @@ static void report(int outcome)
  * and the words that restoration must return equal their values at start. */
 uint64_t sunstone_probe_quiesce(void)
 {
-    if (!s.closed) return 0;
+    /* A failure before the SD platform exists leaves every word unchanged and may return its report. */
+    if (!s.closed && s.platform.initialized) return 0;
     uint32_t now[16]; sample(now);
     for (unsigned i = 0; i < 16; ++i) if (now[i] != s.baseline[i]) return 0;
     return SUNSTONE_PROBE_READY;
@@ -382,6 +383,12 @@ static void sd_task(void *unused)
     if (r > 0 && !close_card()) { s.reason = 11; r = -1; }
     s.closed = r > 0;
     report(r > 0 ? 0 : 1);
+    /* With the platform constructed and not closed, the lifetime cannot return. The fault record then
+     * carries the stop: the line field is the reason, the detail is platform fault, platform stage, task
+     * stage and completed reads. */
+    if (r <= 0 && s.platform.initialized)
+        platform_panic((const char *)(uintptr_t)(((uint64_t)s.platform.fault << 24) | ((uint64_t)s.platform.stage << 16) |
+                       ((uint64_t)s.stage << 8) | (s.done & 255)), s.reason);
     platform_exit(r > 0 ? 0 : 1);
 }
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name) { (void)task; platform_panic(name, 0); }
