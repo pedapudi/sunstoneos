@@ -11,7 +11,8 @@
  *   mode 4: the main task creates a task that creates a task that writes the heap; no call puts either in the
  *           application's space, and the main task reads what the grandchild wrote.
  *   mode 2: read the byte after the region from the application's own space: it must fault.
- *   mode 3: a worker task of the application writes the heap that the main task reads; no call attaches it. */
+ *   mode 3: a worker task of the application writes the heap that the main task reads; no call attaches it. The
+ *           main task waits on a flag the worker sets: a task notification to the main task can come from the OS. */
 #include "heap_test-app.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -34,7 +35,8 @@ static StackType_t intruder_stack[512], worker_stack[512], helper_stack[512], gr
 static volatile uint8_t *heap_base;
 static size_t heap_bytes;
 static TaskHandle_t main_handle;
-static volatile uintptr_t writer_tag;      /* the address-space tag of the task that wrote the heap */
+static volatile uintptr_t writer_tag;
+static volatile uint64_t writer_done;      /* the address-space tag of the task that wrote the heap */
 
 static void intruder(void *unused)
 {
@@ -58,7 +60,7 @@ static void grandchild(void *unused)
     volatile uint64_t *words = (volatile uint64_t *)(heap_base + 4 * MIB);
     for (unsigned i = 0; i < 4096; ++i) words[i] = UINT64_C(0x9e3779b97f4a7c15) * (i + 1);
     writer_tag = (uintptr_t)xTaskGetApplicationTaskTag(NULL);
-    xTaskNotifyGive(main_handle);
+    writer_done = 1;
     for (;;) vTaskDelay(1000);
 }
 
@@ -75,7 +77,7 @@ static void worker(void *unused)
     volatile uint64_t *words = (volatile uint64_t *)(heap_base + 2 * MIB);
     for (unsigned i = 0; i < 4096; ++i) words[i] = UINT64_C(0x9e3779b97f4a7c15) * (i + 1);
     writer_tag = (uintptr_t)xTaskGetApplicationTaskTag(NULL);
-    xTaskNotifyGive(main_handle);
+    writer_done = 1;
     for (;;) vTaskDelay(1000);
 }
 
@@ -108,7 +110,7 @@ void heap_test_main(const struct ss_grant *grant)
         TaskHandle_t w = xTaskCreateStaticAffinitySet(worker, "worker", 512, NULL, 3, worker_stack, &worker_state,
                                                       (UBaseType_t)(grant->worker_cores & -grant->worker_cores));
         (void)w;
-        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
+        for (unsigned waited = 0; !writer_done && waited < 2000; ++waited) vTaskDelay(1);
         volatile const uint64_t *words = (volatile const uint64_t *)(base + 2 * MIB);
         uint64_t fold = 0;
         for (unsigned i = 0; i < 4096; ++i) fold ^= words[i];
@@ -119,7 +121,7 @@ void heap_test_main(const struct ss_grant *grant)
         main_handle = xTaskGetCurrentTaskHandle();
         xTaskCreateStaticAffinitySet(middle, "middle", 512, NULL, 3, worker_stack, &worker_state,
                                      (UBaseType_t)(grant->worker_cores & -grant->worker_cores));
-        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
+        for (unsigned waited = 0; !writer_done && waited < 2000; ++waited) vTaskDelay(1);
         volatile const uint64_t *words = (volatile const uint64_t *)(base + 4 * MIB);
         uint64_t fold = 0;
         for (unsigned i = 0; i < 4096; ++i) fold ^= words[i];

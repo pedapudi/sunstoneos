@@ -39,7 +39,7 @@ struct heap_test_result {
     uint64_t worker_core;         /* the core the worker ran on */
     uint64_t same_tag;            /* 1 when the worker's address-space tag equals the main task's */
     uint64_t main_tag_set;        /* 1 when the main task has an address-space tag */
-    uint64_t notify_count;        /* what the main task's wait returned: 1 for the worker's notification, 0 for the timeout */
+    uint64_t notify_count;        /* 1 when the main task saw the worker's flag within 2 s, 0 for the timeout */
     uint64_t worker_readback;     /* the fold of the words the worker read back after it wrote them */
 };
 _Static_assert(sizeof(struct heap_test_result) == 128, "result is the manifest's output_limit");
@@ -70,7 +70,6 @@ static void worker(void *unused)
     worker_core_id = portGET_CORE_ID();
     worker_tag = (uintptr_t)xTaskGetApplicationTaskTag(NULL);
     worker_flag = 1;
-    xTaskNotifyGive(main_handle);
     for (;;) vTaskDelay(1000);
 }
 
@@ -96,7 +95,11 @@ void heap_test_main(const struct ss_grant *grant)
     main_handle = xTaskGetCurrentTaskHandle();
     (void)xTaskCreateStaticAffinitySet(worker, "worker", 512, NULL, 3, worker_stack, &worker_state,
                                        (UBaseType_t)(grant->worker_cores & -grant->worker_cores));
-    r.notify_count = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
+    /* Wait on the worker's own flag. A notification to the main task is not the worker's: the OS notifies the main
+     * task when the session's live state changes (os_application_host_observed), so a wait on the task notification
+     * can end before the worker has run. */
+    for (unsigned waited = 0; !worker_flag && waited < 2000; ++waited) vTaskDelay(1);
+    r.notify_count = worker_flag;
     const uint64_t main_tag = (uintptr_t)xTaskGetApplicationTaskTag(NULL);
     r.worker_ran = worker_flag;
     r.worker_core = worker_core_id;
