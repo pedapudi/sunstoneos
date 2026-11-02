@@ -29,6 +29,10 @@ struct nbg_assembly_layout {
      * nothing and cannot make it read-only; the runtime places it after the coefficients in the slot's constant
      * region, which the NPU page tables map read-only (a733_npu_runtime.c targets(); checks/os-npu-service.c). */
     uint32_t dynamic;
+    /* The dynamic-input allocation also holds the program section of a graph with shader operations: the program
+     * section is copied at program_offset (a multiple of 256) of that allocation, program_bytes long (zero when the
+     * graph has no shader operation). The allocation then exists whenever either section does. */
+    uint32_t program_offset, program_bytes;
 };
 /* The number of allocations of a layout, in plan order: the four fixed ones, the inputs, the outputs
  * and the dynamic-input allocation when present. */
