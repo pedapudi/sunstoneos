@@ -20,8 +20,10 @@ FAT32 volume read-only (32 KiB clusters, 1,907,436 clusters free, empty root dir
 1. Qualify physical installation, autonomous OS boot, cold controller and supply state, reset retirement and power-loss recovery.
 2. Qualify SDR104 at 150 MHz (implemented and host-modeled): the lifetime needs whole-board power removal after success or a post-CMD11 failure, so it is blocked without physical recovery.
 3. Measure sustained throughput on broader extents and cards, and qualify card replacement, removal and recovery, and voltage timing.
-4. Implement SDR50 and DDR50; add GPT, multiple volumes and clients, and filesystem writes.
-5. Resolve packer licensing and exact source equivalence.
+4. Implement SDR50 and DDR50; add GPT, multiple volumes and clients.
+5. Connect the [FAT32 write service](../designs/storage-write.md) (host-checked with a power-loss sweep) to the card: CMD25 with descriptor DMA, ACMD13 for the allocation unit, a read-over-write arbiter, bounded-write admission in the runner, and the board rate, latency and interruption measurements.
+6. Images that link the SD core without `SUNXI_MMC_READ_ONLY` (the earlier driver probes) are write-capable to the runner and need a rebuild with that definition, or a coordinator approval record, before they run again.
+7. Resolve packer licensing and exact source equivalence.
 
 Any physical card write needs its full host backup and the approved target-bound path in [goal section 4](../goal.md).
 

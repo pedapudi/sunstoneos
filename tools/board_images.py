@@ -272,11 +272,12 @@ def policy(info, args, session=None):
     if info.get('usb_class'):
         require(approved, 'USB class launch requires --approved-by coordinator after review of source and current-cutoff evidence.')
     storage = d.get('storage_write') or args.storage_write
-    require(not storage or approved, 'Storage write requires --approved-by coordinator.')
-    if storage:
-        # Existing session producers own backup-first partition/slot grants.
-        # This runner cannot authorize a raw probe by a command-line boolean.
-        require(False, 'Storage writes require the existing backup-first storage runner and session grant.')
+    # Bounded card writes (tools/storage_bounds.py): classification is default-deny. A read-only image
+    # and an image without an SD core pass unchanged; any other image, and any write request, needs
+    # the coordinator's approval record for the exact bounds.
+    bounds = load('storage_bounds', ROOT/'tools/storage_bounds.py')
+    if storage or bounds.classify(args.image) == 'write-capable':
+        bounds.admit(d, args, sha(args.image))
     reviewed = {'cpu-l': (1794, 1000), 'cpu-b': (2002, 1050),
                 'gpu': (1008, 960), 'npu': (852, 800), 'rails': (0, 800)}
     for point in d.get('operating_points', []):
